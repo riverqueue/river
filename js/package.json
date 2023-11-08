@@ -1,6 +1,6 @@
 {
   "name": "riverqueue",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "A fast job queue for Go.",
   "main": "index.js",
   "scripts": {
@@ -11,7 +11,7 @@
     "url": "git+https://github.com/riverqueue/river-js.git"
   },
   "author": "Brandur Leach",
-  "license": "GPL-3.0",
+  "license": "LGPL3+",
   "bugs": {
     "url": "https://github.com/riverqueue/river-js/issues"
   },
