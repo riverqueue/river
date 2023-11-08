@@ -1,0 +1,93 @@
+issues:
+  exclude:
+    - 'Error return value of .(\w+\.Rollback(.*)). is not checked'
+
+linters:
+  presets:
+    - bugs
+    - comment
+    - format
+    - performance
+    - style
+    - test
+    - unused
+
+  disable:
+    # disabled, but which we should enable with discussion
+    - wrapcheck # checks that errors are wrapped; currently not done anywhere
+
+    # disabled because we're not compliant, but which we should think about
+    - exhaustruct # checks that properties in structs are exhaustively defined; may be a good idea
+    - testpackage # requires tests in test packages like `river_test`
+
+    # disabled because they're annoying/bad
+    - interfacebloat # we do in fact want >10 methods on the Adapter interface or wherever we see fit.
+    - godox # bans TODO statements; total non-starter at the moment
+    - goerr113 # wants all errors to be defined as variables at the package level; quite obnoxious
+    - gomnd # detects "magic numbers", which it defines as any number; annoying
+    - ireturn # bans returning interfaces; questionable as is, but also buggy as hell; very, very annoying
+    - lll # restricts maximum line length; annoying
+    - nlreturn # requires a blank line before returns; annoying
+    - wsl # a bunch of style/whitespace stuff; annoying
+
+linters-settings:
+  depguard:
+    rules:
+      all:
+        files: ["$all"]
+        allow:
+        deny:
+          - desc: "Use `github.com/google/uuid` package for UUIDs instead."
+            pkg: "github.com/xtgo/uuid"
+      not-test:
+        files: ["!$test"]
+        deny:
+          - desc: "Don't use `dbadaptertest` package outside of test environments."
+            pkg: "github.com/riverqueue/river/internal/dbadaptertest"
+          - desc: "Don't use `riverinternaltest` package outside of test environments."
+            pkg: "github.com/riverqueue/river/internal/riverinternaltest"
+
+  forbidigo:
+    forbid:
+      - msg: "Use `require` variants instead."
+        p: '^assert\.'
+      - msg: "Use `Func` suffix for function variables instead."
+        p: 'Fn\b'
+      - msg: "Use built-in `max` function instead."
+        p: '\bmath\.Max\b'
+      - msg: "Use built-in `min` function instead."
+        p: '\bmath\.Min\b'
+
+  gci:
+    sections:
+      - Standard
+      - Default
+      - Prefix(github.com/riverqueue)
+
+  gosec:
+    excludes:
+      - G404 # use of non-crypto random; overly broad for our use case
+
+  revive:
+    rules:
+      - name: unused-parameter
+        disabled: true
+
+  tagliatelle:
+    case:
+      rules:
+        json: snake
+
+  varnamelen:
+    ignore-names:
+      - db
+      - eg
+      - f
+      - i
+      - id
+      - j
+      - mu
+      - t
+      - tt # common convention for table tests
+      - tx
+      - wg

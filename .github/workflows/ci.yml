@@ -1,0 +1,212 @@
+name: CI
+
+env:
+  # Database to connect to that can create other databases with `CREATE DATABASE`.
+  ADMIN_DATABASE_URL: postgres://postgres:postgres@localhost:5432
+
+  # Just a common place for steps to put binaries they need and which is added
+  # to GITHUB_PATH/PATH.
+  BIN_PATH: /home/runner/bin
+
+  # A suitable URL for non-test database.
+  DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/river_dev?sslmode=disable
+
+on:
+  - push
+
+jobs:
+  build_and_test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version:
+          - "1.21"
+    timeout-minutes: 5
+
+    services:
+      postgres:
+        image: postgres
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Go ${{ matrix.go-version }}
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Display Go version
+        run: go version
+
+      - name: Install dependencies
+        run: |
+          echo "::group::go get"
+          go get -t ./...
+          echo "::endgroup::"
+
+      - name: Set up test DBs
+        run: go run ./internal/cmd/testdbman create
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGSSLMODE: disable
+
+      - name: Test
+        run: go test -p 1 -race ./...
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/river_testdb?sslmode=disable
+
+  cli:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    services:
+      postgres:
+        image: postgres
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/setup-go@v4
+        with:
+          go-version: "stable"
+          check-latest: true
+
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Build CLI
+        run: go build ./cmd/river
+
+      - name: Create database
+        run: psql --echo-errors --quiet -c '\timing off' -c "CREATE DATABASE river_dev;" ${ADMIN_DATABASE_URL}
+
+      - name: river migrate-up
+        run: ./river migrate-up --database-url $DATABASE_URL
+
+      - name: river migrate-down
+        run: ./river migrate-down --database-url $DATABASE_URL --max-steps 100
+
+  golangci:
+    name: lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # allow read access to pull request. Use with `only-new-issues` option.
+      pull-requests: read
+    steps:
+      - uses: actions/setup-go@v4
+        with:
+          go-version: "stable"
+          check-latest: true
+
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v3
+        with:
+          # Optional: show only new issues if it's a pull request. The default value is `false`.
+          only-new-issues: true
+
+          version: v1.54.2
+
+  producer_sample:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    services:
+      postgres:
+        image: postgres
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Go ${{ matrix.go-version }}
+        uses: actions/setup-go@v4
+        with:
+          go-version: "stable"
+          check-latest: true
+
+      - name: Display Go version
+        run: go version
+
+      - name: Install dependencies
+        run: |
+          echo "::group::go get"
+          go get -t ./...
+          echo "::endgroup::"
+
+      - name: Build CLI
+        run: go build ./cmd/river
+
+      - name: Create database
+        run: psql --echo-errors --quiet -c '\timing off' -c "CREATE DATABASE river_dev;" ${ADMIN_DATABASE_URL}
+
+      - name: river migrate-up
+        run: ./river migrate-up --database-url $DATABASE_URL
+
+      - name: Build producersample
+        run: go build ./internal/cmd/producersample
+
+      - name: Run producersample
+        run: |
+          ( sleep 5 && killall -SIGTERM producersample ) &
+          ./producersample
+
+  sqlc_generates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    env:
+      SQLC_VERSION: 1.22.0
+
+    steps:
+      - name: Create BIN_PATH and add to PATH
+        run: |
+          mkdir -p "$BIN_PATH"
+          echo "$BIN_PATH" >> $GITHUB_PATH
+
+      - name: Install sqlc
+        run: |
+          curl -L https://github.com/kyleconroy/sqlc/releases/download/v${{ env.SQLC_VERSION }}/sqlc_${{ env.SQLC_VERSION }}_linux_amd64.tar.gz | tar -xz -C $BIN_PATH
+          chmod +x $BIN_PATH/sqlc
+
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Run sqlc
+        run: make generate
+
+      - name: Check git diff
+        working-directory: ./internal/dbsqlc
+        run: |
+          echo "Please make sure that all sqlc changes are checked in!"
+          git diff --exit-code .
