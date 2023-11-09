@@ -13,6 +13,8 @@ import (
 	"github.com/riverqueue/river/internal/dbadapter"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobstats"
+	"github.com/riverqueue/river/internal/workunit"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // UnknownJobKindError is returned when a Client fetches and attempts to
@@ -104,9 +106,9 @@ type jobExecutor struct {
 	Completer              jobcompleter.JobCompleter
 	ClientRetryPolicy      ClientRetryPolicy
 	ErrorHandler           ErrorHandler
-	InformProducerDoneFunc func(jobRow *JobRow)
-	JobRow                 *JobRow
-	WorkUnit               workUnit
+	InformProducerDoneFunc func(jobRow *rivertype.JobRow)
+	JobRow                 *rivertype.JobRow
+	WorkUnit               workunit.WorkUnit
 
 	// Meant to be used from within the job executor only.
 	result *jobExecutorResult
@@ -267,7 +269,7 @@ func (e *jobExecutor) reportError(ctx context.Context) {
 		}
 	}
 
-	attemptErr := AttemptError{
+	attemptErr := rivertype.AttemptError{
 		At:    e.start,
 		Error: errorStr,
 		Num:   e.JobRow.Attempt,

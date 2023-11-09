@@ -11,16 +11,17 @@ import (
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/util/slogutil"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
 )
 
 type CustomErrorHandler struct{}
 
-func (*CustomErrorHandler) HandleError(ctx context.Context, job *river.JobRow, err error) *river.ErrorHandlerResult {
+func (*CustomErrorHandler) HandleError(ctx context.Context, job *rivertype.JobRow, err error) *river.ErrorHandlerResult {
 	fmt.Printf("Job errored with: %s\n", err)
 	return nil
 }
 
-func (*CustomErrorHandler) HandlePanic(ctx context.Context, job *river.JobRow, panicVal any) *river.ErrorHandlerResult {
+func (*CustomErrorHandler) HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any) *river.ErrorHandlerResult {
 	fmt.Printf("Job panicked with: %v\n", panicVal)
 
 	// Either function can also set the job to be immediately cancelled.

@@ -1,8 +1,8 @@
-package river
+package maintenance
 
 import (
 	"context"
-	"sync"
+	"math"
 	"testing"
 	"time"
 
@@ -10,32 +10,46 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/util/ptrutil"
+	"github.com/riverqueue/river/internal/util/timeutil"
+	"github.com/riverqueue/river/internal/workunit"
+	"github.com/riverqueue/river/rivertype"
 )
 
-type rescuerTestArgs struct{}
-
-func (rescuerTestArgs) Kind() string {
-	return "RescuerTest"
+// callbackWorkUnitFactory wraps a Worker to implement workUnitFactory.
+type callbackWorkUnitFactory struct {
+	Callback func(ctx context.Context, jobRow *rivertype.JobRow) error
 }
 
-type rescuerTestWorker struct {
-	WorkerDefaults[rescuerTestArgs]
+func (w *callbackWorkUnitFactory) MakeUnit(jobRow *rivertype.JobRow) workunit.WorkUnit {
+	return &callbackWorkUnit{callback: w.Callback, jobRow: jobRow}
 }
 
-func (w *rescuerTestWorker) Work(context.Context, *Job[rescuerTestArgs]) error {
-	return nil
+// callbackWorkUnit implements workUnit for a job and Worker.
+type callbackWorkUnit struct {
+	callback func(ctx context.Context, jobRow *rivertype.JobRow) error
+	jobRow   *rivertype.JobRow
 }
 
-func (w *rescuerTestWorker) NextRetry(*Job[rescuerTestArgs]) time.Time {
-	return time.Now().Add(30 * time.Second)
+func (w *callbackWorkUnit) NextRetry() time.Time           { return time.Now().Add(30 * time.Second) }
+func (w *callbackWorkUnit) Timeout() time.Duration         { return 0 }
+func (w *callbackWorkUnit) Work(ctx context.Context) error { return w.callback(ctx, w.jobRow) }
+func (w *callbackWorkUnit) UnmarshalJob() error            { return nil }
+
+type SimpleClientRetryPolicy struct{}
+
+func (p *SimpleClientRetryPolicy) NextRetry(job *rivertype.JobRow) time.Time {
+	errorCount := len(job.Errors) + 1
+	retrySeconds := math.Pow(float64(errorCount), 4)
+	return job.AttemptedAt.Add(timeutil.SecondsAsDuration(retrySeconds))
 }
 
 func TestRescuer(t *testing.T) {
 	t.Parallel()
+
+	const rescuerJobKind = "rescuer"
 
 	var (
 		ctx     = context.Background()
@@ -59,7 +73,7 @@ func TestRescuer(t *testing.T) {
 			Attempt:     params.Attempt,
 			AttemptedAt: params.AttemptedAt,
 			Args:        []byte("{}"),
-			Kind:        (&rescuerTestArgs{}).Kind(),
+			Kind:        rescuerJobKind,
 			MaxAttempts: 5,
 			Priority:    int16(rivercommon.DefaultPriority),
 			Queue:       rivercommon.DefaultQueue,
@@ -69,53 +83,58 @@ func TestRescuer(t *testing.T) {
 		return job
 	}
 
-	setup := func(t *testing.T) (*rescuer, *testBundle) {
+	setup := func(t *testing.T) (*Rescuer, *testBundle) {
 		t.Helper()
 
 		bundle := &testBundle{
-			rescueHorizon: time.Now().Add(-defaultRescueAfter),
+			rescueHorizon: time.Now().Add(-DefaultRescueAfter),
 			tx:            riverinternaltest.TestTx(ctx, t),
 		}
 
-		workers := NewWorkers()
-		AddWorker(workers, &rescuerTestWorker{})
-
-		cleaner := newRescuer(
+		rescuer := NewRescuer(
 			riverinternaltest.BaseServiceArchetype(t),
-			&rescuerConfig{
-				ClientRetryPolicy: &DefaultClientRetryPolicy{},
-				Interval:          defaultRescuerInterval,
-				RescueAfter:       defaultRescueAfter,
-				Workers:           workers,
+			&RescuerConfig{
+				ClientRetryPolicy: &SimpleClientRetryPolicy{},
+				Interval:          DefaultRescuerInterval,
+				RescueAfter:       DefaultRescueAfter,
+				WorkUnitFactoryFunc: func(kind string) workunit.WorkUnitFactory {
+					if kind == rescuerJobKind {
+						return &callbackWorkUnitFactory{Callback: func(ctx context.Context, jobRow *rivertype.JobRow) error { return nil }}
+					}
+					panic("unhandled kind: " + kind)
+				},
 			},
 			bundle.tx)
-		cleaner.TestSignals.Init()
-		t.Cleanup(cleaner.Stop)
+		rescuer.TestSignals.Init()
+		t.Cleanup(rescuer.Stop)
 
-		return cleaner, bundle
+		return rescuer, bundle
 	}
 
 	t.Run("Defaults", func(t *testing.T) {
 		t.Parallel()
 
-		cleaner := newRescuer(
+		cleaner := NewRescuer(
 			riverinternaltest.BaseServiceArchetype(t),
-			&rescuerConfig{ClientRetryPolicy: &DefaultClientRetryPolicy{}, Workers: NewWorkers()},
+			&RescuerConfig{
+				ClientRetryPolicy:   &SimpleClientRetryPolicy{},
+				WorkUnitFactoryFunc: func(kind string) workunit.WorkUnitFactory { return nil },
+			},
 			nil,
 		)
 
-		require.Equal(t, cleaner.Config.RescueAfter, defaultRescueAfter)
-		require.Equal(t, cleaner.Config.Interval, defaultRescuerInterval)
+		require.Equal(t, cleaner.Config.RescueAfter, DefaultRescueAfter)
+		require.Equal(t, cleaner.Config.Interval, DefaultRescuerInterval)
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {
 		t.Parallel()
 
-		cleaner, _ := setup(t)
-		cleaner.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
-		cleaner.TestSignals = rescuerTestSignals{}       // deinit so channels don't fill
+		rescuer, _ := setup(t)
+		rescuer.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
+		rescuer.TestSignals = RescuerTestSignals{}       // deinit so channels don't fill
 
-		runStartStopStress(ctx, t, cleaner)
+		runStartStopStress(ctx, t, rescuer)
 	})
 
 	t.Run("RescuesStuckJobs", func(t *testing.T) {
@@ -278,24 +297,4 @@ func TestRescuer(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, dbsqlc.JobStateDiscarded, job2After.State)
 	})
-}
-
-// copied from maintenance package tests because there's no good place to expose it:.
-func runStartStopStress(ctx context.Context, tb testing.TB, svc maintenance.Service) {
-	tb.Helper()
-
-	var wg sync.WaitGroup
-
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func() {
-			for j := 0; j < 50; j++ {
-				require.NoError(tb, svc.Start(ctx))
-				svc.Stop()
-			}
-			wg.Done()
-		}()
-	}
-
-	wg.Wait()
 }

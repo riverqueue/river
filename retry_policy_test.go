@@ -10,6 +10,7 @@ import (
 
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/util/timeutil"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // Just proves that DefaultRetryPolicy implements the RetryPolicy interface.
@@ -25,10 +26,10 @@ func TestDefaultClientRetryPolicy_NextRetry(t *testing.T) {
 		retrySecondsWithoutJitter := retryPolicy.retrySecondsWithoutJitter(attempt)
 		allowedDelta := timeutil.SecondsAsDuration(retrySecondsWithoutJitter * 0.2)
 
-		nextRetryAt := retryPolicy.NextRetry(&JobRow{
+		nextRetryAt := retryPolicy.NextRetry(&rivertype.JobRow{
 			Attempt:     attempt,
 			AttemptedAt: &now,
-			Errors:      make([]AttemptError, attempt-1),
+			Errors:      make([]rivertype.AttemptError, attempt-1),
 		})
 		require.WithinDuration(t, now.Add(timeutil.SecondsAsDuration(retrySecondsWithoutJitter)), nextRetryAt, allowedDelta)
 	}

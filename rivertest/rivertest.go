@@ -17,6 +17,7 @@ import (
 	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // dbtx is a database-like executor which is implemented by all of pgxpool.Pool,
@@ -72,7 +73,7 @@ type RequireInsertedOpts struct {
 	// State is the expected state of the inserted job.
 	//
 	// No assertion is made if left the zero value.
-	State river.JobState
+	State rivertype.JobState
 
 	// Tags are the expected tags of the inserted job.
 	//
@@ -160,7 +161,7 @@ func requireInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.Jo
 		return nil, nil //nolint:nilnil
 	}
 
-	jobRow := jobRowFromInternal(dbJobs[0])
+	jobRow := dbsqlc.JobRowFromInternal(dbJobs[0])
 
 	var actualArgs TArgs
 	if err := json.Unmarshal(jobRow.EncodedArgs, &actualArgs); err != nil {
@@ -207,12 +208,12 @@ type ExpectedJob struct {
 // the number specified, and will fail in case this expectation isn't met. So if
 // a job of a certain kind is emitted multiple times, it must be expected
 // multiple times.
-func RequireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, tb testing.TB, driver TDriver, expectedJobs []ExpectedJob) []*river.JobRow {
+func RequireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, tb testing.TB, driver TDriver, expectedJobs []ExpectedJob) []*rivertype.JobRow {
 	tb.Helper()
 	return requireManyInserted(ctx, tb, driver, expectedJobs)
 }
 
-func requireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, driver TDriver, expectedJobs []ExpectedJob) []*river.JobRow {
+func requireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, driver TDriver, expectedJobs []ExpectedJob) []*rivertype.JobRow {
 	actualArgs, err := requireManyInsertedErr[TDriver](ctx, t, driver.GetDBPool(), expectedJobs)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
@@ -240,14 +241,14 @@ func requireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.C
 // the number specified, and will fail in case this expectation isn't met. So if
 // a job of a certain kind is emitted multiple times, it must be expected
 // multiple times.
-func RequireManyInsertedTx[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, tb testing.TB, tx TTx, expectedJobs []ExpectedJob) []*river.JobRow {
+func RequireManyInsertedTx[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, tb testing.TB, tx TTx, expectedJobs []ExpectedJob) []*rivertype.JobRow {
 	tb.Helper()
 	return requireManyInsertedTx[TDriver](ctx, tb, tx, expectedJobs)
 }
 
 // Internal function used by the tests so that the exported version can take
 // `testing.TB` instead of `testing.T`.
-func requireManyInsertedTx[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, tx TTx, expectedJobs []ExpectedJob) []*river.JobRow {
+func requireManyInsertedTx[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, tx TTx, expectedJobs []ExpectedJob) []*rivertype.JobRow {
 	var driver TDriver
 	actualArgs, err := requireManyInsertedErr[TDriver](ctx, t, driver.UnwrapTx(tx), expectedJobs)
 	if err != nil {
@@ -256,7 +257,7 @@ func requireManyInsertedTx[TDriver riverdriver.Driver[TTx], TTx any](ctx context
 	return actualArgs
 }
 
-func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, db dbtx, expectedJobs []ExpectedJob) ([]*river.JobRow, error) {
+func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, db dbtx, expectedJobs []ExpectedJob) ([]*rivertype.JobRow, error) {
 	queries := dbsqlc.New()
 
 	expectedArgsKinds := sliceutil.Map(expectedJobs, func(j ExpectedJob) string { return j.Args.Kind() })
@@ -275,7 +276,7 @@ func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx contex
 		return nil, nil
 	}
 
-	jobRows := sliceutil.Map(dbJobs, jobRowFromInternal)
+	jobRows := sliceutil.Map(dbJobs, dbsqlc.JobRowFromInternal)
 
 	for i, jobRow := range jobRows {
 		if expectedJobs[i].Opts != nil {
@@ -290,7 +291,7 @@ func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx contex
 
 const rfc3339Micro = "2006-01-02T15:04:05.999999Z07:00"
 
-func compareJobToInsertOpts(t testingT, jobRow *river.JobRow, expectedOpts RequireInsertedOpts, index int) bool {
+func compareJobToInsertOpts(t testingT, jobRow *rivertype.JobRow, expectedOpts RequireInsertedOpts, index int) bool {
 	// Adds an index position for the case of multiple expected jobs. Wrapped in
 	// a function so that the string is only marshaled if needed.
 	positionStr := func() string {
@@ -357,48 +358,4 @@ func failure(t testingT, format string, a ...any) {
 // and footer common to all failure messages.
 func failureString(format string, a ...any) string {
 	return "\n    River assertion failure:\n    " + fmt.Sprintf(format, a...) + "\n"
-}
-
-// WARNING!!!!!
-//
-// !!! When updating this function, the equivalent in `./job.go` must also be
-// updated!!!
-//
-// This is obviously not ideal, but since JobRow is at the top-level package,
-// there's no way to put a helper in a shared package that can produce one,
-// which is why we have this copy/pasta. There are some potential alternatives
-// to this, but none of them are great.
-func jobRowFromInternal(internal *dbsqlc.RiverJob) *river.JobRow {
-	tags := internal.Tags
-	if tags == nil {
-		tags = []string{}
-	}
-	return &river.JobRow{
-		ID:          internal.ID,
-		Attempt:     max(int(internal.Attempt), 0),
-		AttemptedAt: internal.AttemptedAt,
-		AttemptedBy: internal.AttemptedBy,
-		CreatedAt:   internal.CreatedAt,
-		EncodedArgs: internal.Args,
-		Errors:      sliceutil.Map(internal.Errors, func(e dbsqlc.AttemptError) river.AttemptError { return attemptErrorFromInternal(&e) }),
-		FinalizedAt: internal.FinalizedAt,
-		Kind:        internal.Kind,
-		MaxAttempts: max(int(internal.MaxAttempts), 0),
-		Priority:    max(int(internal.Priority), 0),
-		Queue:       internal.Queue,
-		ScheduledAt: internal.ScheduledAt.UTC(), // TODO(brandur): Very weird this is the only place a UTC conversion happens.
-		State:       river.JobState(internal.State),
-		Tags:        tags,
-
-		// metadata: internal.Metadata,
-	}
-}
-
-func attemptErrorFromInternal(e *dbsqlc.AttemptError) river.AttemptError {
-	return river.AttemptError{
-		At:    e.At,
-		Error: e.Error,
-		Num:   int(e.Num),
-		Trace: e.Trace,
-	}
 }
