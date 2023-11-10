@@ -15,8 +15,6 @@ package riverdriver
 import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/riverqueue/river/internal"
 )
 
 // Driver provides a database driver for use with river.Client.
@@ -35,11 +33,6 @@ type Driver[TTx any] interface {
 	// GetDBPool returns a database pool.This doesn't make sense in a world
 	// where multiple drivers are supported and is subject to change.
 	GetDBPool() *pgxpool.Pool
-
-	// GetSentinel returns a sentinal value of a type that's internal to River.
-	// Its purpose is to prevent public code from implementing this interface
-	// because it's not meant to be used externally at this time.
-	GetSentinel() internal.Sentinel
 
 	// UnwrapTx turns a generically typed transaction into a pgx.Tx for use with
 	// internal infrastructure. This doesn't make sense in a world where

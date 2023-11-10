@@ -8,9 +8,6 @@ package riverpgxv5
 import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/riverqueue/river/internal"
-	"github.com/riverqueue/river/riverdriver"
 )
 
 // Driver is an implementation of riverdriver.Driver for Pgx v5.
@@ -25,10 +22,9 @@ type Driver struct {
 //
 // The pool must not be closed while the associated client is running (not until
 // graceful shutdown has completed).
-func New(dbPool *pgxpool.Pool) riverdriver.Driver[pgx.Tx] {
+func New(dbPool *pgxpool.Pool) *Driver {
 	return &Driver{dbPool: dbPool}
 }
 
-func (d *Driver) GetDBPool() *pgxpool.Pool       { return d.dbPool }
-func (d *Driver) GetSentinel() internal.Sentinel { return internal.Sentinel{} }
-func (d *Driver) UnwrapTx(tx pgx.Tx) pgx.Tx      { return tx }
+func (d *Driver) GetDBPool() *pgxpool.Pool  { return d.dbPool }
+func (d *Driver) UnwrapTx(tx pgx.Tx) pgx.Tx { return tx }
