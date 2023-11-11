@@ -722,6 +722,18 @@ func Test_Client_InsertMany(t *testing.T) {
 		})
 		require.NoError(t, err)
 	})
+
+	t.Run("ErrorsOnInsertOptsUniqueOpts", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		count, err := client.InsertMany(ctx, []InsertManyParams{
+			{Args: noOpArgs{}, InsertOpts: &InsertOpts{UniqueOpts: UniqueOpts{ByArgs: true}}},
+		})
+		require.EqualError(t, err, "UniqueOpts are not supported for batch inserts")
+		require.Equal(t, int64(0), count)
+	})
 }
 
 func Test_Client_InsertManyTx(t *testing.T) {
@@ -808,6 +820,18 @@ func Test_Client_InsertManyTx(t *testing.T) {
 			{Args: unregisteredJobArgs{}},
 		})
 		require.NoError(t, err)
+	})
+
+	t.Run("ErrorsOnInsertOptsUniqueOpts", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		count, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{
+			{Args: noOpArgs{}, InsertOpts: &InsertOpts{UniqueOpts: UniqueOpts{ByArgs: true}}},
+		})
+		require.EqualError(t, err, "UniqueOpts are not supported for batch inserts")
+		require.Equal(t, int64(0), count)
 	})
 }
 

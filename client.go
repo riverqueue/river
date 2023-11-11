@@ -1059,21 +1059,9 @@ type InsertManyParams struct {
 //		// handle error
 //	}
 func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams) (int64, error) {
-	if len(params) < 1 {
-		return 0, errors.New("no jobs to insert")
-	}
-
-	insertParams := make([]*dbadapter.JobInsertParams, len(params))
-	for i, param := range params {
-		if err := c.validateJobArgs(param.Args); err != nil {
-			return 0, err
-		}
-
-		var err error
-		insertParams[i], err = insertParamsFromArgsAndOptions(param.Args, param.InsertOpts)
-		if err != nil {
-			return 0, err
-		}
+	insertParams, err := c.insertManyParams(params)
+	if err != nil {
+		return 0, err
 	}
 
 	return c.adapter.JobInsertMany(ctx, insertParams)
@@ -1099,24 +1087,44 @@ func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams)
 // changes. An inserted job isn't visible to be worked until the transaction
 // commits, and if the transaction rolls back, so too is the inserted job.
 func (c *Client[TTx]) InsertManyTx(ctx context.Context, tx TTx, params []InsertManyParams) (int64, error) {
+	insertParams, err := c.insertManyParams(params)
+	if err != nil {
+		return 0, err
+	}
+
+	return c.adapter.JobInsertManyTx(ctx, c.driver.UnwrapTx(tx), insertParams)
+}
+
+// Validates input parameters for an a batch insert operation and generates a
+// set of batch insert parameters.
+func (c *Client[TTx]) insertManyParams(params []InsertManyParams) ([]*dbadapter.JobInsertParams, error) {
 	if len(params) < 1 {
-		return 0, errors.New("no jobs to insert")
+		return nil, errors.New("no jobs to insert")
 	}
 
 	insertParams := make([]*dbadapter.JobInsertParams, len(params))
 	for i, param := range params {
 		if err := c.validateJobArgs(param.Args); err != nil {
-			return 0, err
+			return nil, err
+		}
+
+		if param.InsertOpts != nil {
+			// UniqueOpts aren't support for batch inserts because they use PG
+			// advisory locks to work, and taking many locks simultaneously
+			// could easily lead to contention and deadlocks.
+			if !param.InsertOpts.UniqueOpts.isEmpty() {
+				return nil, errors.New("UniqueOpts are not supported for batch inserts")
+			}
 		}
 
 		var err error
 		insertParams[i], err = insertParamsFromArgsAndOptions(param.Args, param.InsertOpts)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 	}
 
-	return c.adapter.JobInsertManyTx(ctx, c.driver.UnwrapTx(tx), insertParams)
+	return insertParams, nil
 }
 
 // Validates job args prior to insertion. Currently, verifies that a worker to
