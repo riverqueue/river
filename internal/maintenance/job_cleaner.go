@@ -17,10 +17,10 @@ import (
 )
 
 const (
-	DefaultCancelledJobRetentionTime = 24 * time.Hour
-	DefaultCompletedJobRetentionTime = 24 * time.Hour
-	DefaultDiscardedJobRetentionTime = 7 * 24 * time.Hour
-	DefaultJobCleanerInterval        = 30 * time.Second
+	DefaultCancelledJobRetentionPeriod = 24 * time.Hour
+	DefaultCompletedJobRetentionPeriod = 24 * time.Hour
+	DefaultDiscardedJobRetentionPeriod = 7 * 24 * time.Hour
+	DefaultJobCleanerInterval          = 30 * time.Second
 )
 
 // Test-only properties.
@@ -33,31 +33,31 @@ func (ts *JobCleanerTestSignals) Init() {
 }
 
 type JobCleanerConfig struct {
-	// CancelledJobRetentionTime is the amount of time to keep cancelled jobs
+	// CancelledJobRetentionPeriod is the amount of time to keep cancelled jobs
 	// around before they're removed permanently.
-	CancelledJobRetentionTime time.Duration
+	CancelledJobRetentionPeriod time.Duration
 
-	// CompletedJobRetentionTime is the amount of time to keep completed jobs
+	// CompletedJobRetentionPeriod is the amount of time to keep completed jobs
 	// around before they're removed permanently.
-	CompletedJobRetentionTime time.Duration
+	CompletedJobRetentionPeriod time.Duration
 
-	// DiscardedJobRetentionTime is the amount of time to keep cancelled jobs
+	// DiscardedJobRetentionPeriod is the amount of time to keep cancelled jobs
 	// around before they're removed permanently.
-	DiscardedJobRetentionTime time.Duration
+	DiscardedJobRetentionPeriod time.Duration
 
 	// Interval is the amount of time to wait between runs of the cleaner.
 	Interval time.Duration
 }
 
 func (c *JobCleanerConfig) mustValidate() *JobCleanerConfig {
-	if c.CancelledJobRetentionTime <= 0 {
-		panic("JobCleanerConfig.CancelledJobRetentionTime must be above zero")
+	if c.CancelledJobRetentionPeriod <= 0 {
+		panic("JobCleanerConfig.CancelledJobRetentionPeriod must be above zero")
 	}
-	if c.CompletedJobRetentionTime <= 0 {
-		panic("JobCleanerConfig.CompletedJobRetentionTime must be above zero")
+	if c.CompletedJobRetentionPeriod <= 0 {
+		panic("JobCleanerConfig.CompletedJobRetentionPeriod must be above zero")
 	}
-	if c.DiscardedJobRetentionTime <= 0 {
-		panic("JobCleanerConfig.DiscardedJobRetentionTime must be above zero")
+	if c.DiscardedJobRetentionPeriod <= 0 {
+		panic("JobCleanerConfig.DiscardedJobRetentionPeriod must be above zero")
 	}
 	if c.Interval <= 0 {
 		panic("JobCleanerConfig.Interval must be above zero")
@@ -84,10 +84,10 @@ type JobCleaner struct {
 func NewJobCleaner(archetype *baseservice.Archetype, config *JobCleanerConfig, executor dbutil.Executor) *JobCleaner {
 	return baseservice.Init(archetype, &JobCleaner{
 		Config: (&JobCleanerConfig{
-			CancelledJobRetentionTime: valutil.ValOrDefault(config.CancelledJobRetentionTime, DefaultCancelledJobRetentionTime),
-			CompletedJobRetentionTime: valutil.ValOrDefault(config.CompletedJobRetentionTime, DefaultCompletedJobRetentionTime),
-			DiscardedJobRetentionTime: valutil.ValOrDefault(config.DiscardedJobRetentionTime, DefaultDiscardedJobRetentionTime),
-			Interval:                  valutil.ValOrDefault(config.Interval, DefaultJobCleanerInterval),
+			CancelledJobRetentionPeriod: valutil.ValOrDefault(config.CancelledJobRetentionPeriod, DefaultCancelledJobRetentionPeriod),
+			CompletedJobRetentionPeriod: valutil.ValOrDefault(config.CompletedJobRetentionPeriod, DefaultCompletedJobRetentionPeriod),
+			DiscardedJobRetentionPeriod: valutil.ValOrDefault(config.DiscardedJobRetentionPeriod, DefaultDiscardedJobRetentionPeriod),
+			Interval:                    valutil.ValOrDefault(config.Interval, DefaultJobCleanerInterval),
 		}).mustValidate(),
 
 		batchSize:  DefaultBatchSize,
@@ -153,9 +153,9 @@ func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, err
 			defer cancelFunc()
 
 			numDeleted, err := s.queries.JobDeleteBefore(ctx, s.dbExecutor, dbsqlc.JobDeleteBeforeParams{
-				CancelledFinalizedAtHorizon: time.Now().Add(-s.Config.CancelledJobRetentionTime),
-				CompletedFinalizedAtHorizon: time.Now().Add(-s.Config.CompletedJobRetentionTime),
-				DiscardedFinalizedAtHorizon: time.Now().Add(-s.Config.DiscardedJobRetentionTime),
+				CancelledFinalizedAtHorizon: time.Now().Add(-s.Config.CancelledJobRetentionPeriod),
+				CompletedFinalizedAtHorizon: time.Now().Add(-s.Config.CompletedJobRetentionPeriod),
+				DiscardedFinalizedAtHorizon: time.Now().Add(-s.Config.DiscardedJobRetentionPeriod),
 				Max:                         s.batchSize,
 			})
 			if err != nil {
