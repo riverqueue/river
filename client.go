@@ -321,8 +321,30 @@ var (
 // NewClient creates a new Client with the given database driver and
 // configuration.
 //
-// Currently only one driver is supported, which is Pgx V5. See package
+// Currently only one driver is supported, which is Pgx v5. See package
 // riverpgxv5.
+//
+// The function takes a generic parameter TTx representing a transaction type,
+// but it can be omitted because it'll generally always be inferred from the
+// driver. For example:
+//
+//	import "github.com/riverqueue/river"
+//	import "github.com/riverqueue/river/riverdriver/riverpgxv5"
+//
+//	...
+//
+//	dbPool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
+//	if err != nil {
+//		// handle error
+//	}
+//	defer dbPool.Close()
+//
+//	riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
+//		...
+//	})
+//	if err != nil {
+//		// handle error
+//	}
 func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client[TTx], error) {
 	if driver == nil {
 		return nil, errMissingDriver
