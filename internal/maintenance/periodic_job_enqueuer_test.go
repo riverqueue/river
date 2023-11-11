@@ -112,13 +112,13 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		requireNJobs(t, bundle.dbPool, "periodic_job_1500ms", 1)
 	})
 
-	t.Run("RunImmediately", func(t *testing.T) {
+	t.Run("RunOnStart", func(t *testing.T) {
 		t.Parallel()
 
 		svc, bundle := setup(t)
 
 		svc.periodicJobs = []*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s"), RunImmediately: true},
+			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s"), RunOnStart: true},
 		}
 
 		start := time.Now()
@@ -138,7 +138,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc.periodicJobs = []*PeriodicJob{
 			// skip this insert when it returns nil:
-			{ScheduleFunc: periodicIntervalSchedule(time.Second), ConstructorFunc: func() (*dbadapter.JobInsertParams, error) { return nil, ErrNoJobToInsert }, RunImmediately: true},
+			{ScheduleFunc: periodicIntervalSchedule(time.Second), ConstructorFunc: func() (*dbadapter.JobInsertParams, error) { return nil, ErrNoJobToInsert }, RunOnStart: true},
 		}
 
 		require.NoError(t, svc.Start(ctx))

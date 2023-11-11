@@ -55,7 +55,7 @@ func Example_periodicJob() {
 				func() (river.JobArgs, *river.InsertOpts) {
 					return PeriodicJobArgs{}, nil
 				},
-				&river.PeriodicJobOpts{RunImmediately: true},
+				&river.PeriodicJobOpts{RunOnStart: true},
 			),
 		},
 		Queues: map[string]river.QueueConfig{
