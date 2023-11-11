@@ -62,7 +62,7 @@ func Example_cronJob() {
 				func() (river.JobArgs, *river.InsertOpts) {
 					return CronJobArgs{}, nil
 				},
-				&river.PeriodicJobOpts{RunImmediately: true},
+				&river.PeriodicJobOpts{RunOnStart: true},
 			),
 		},
 		Queues: map[string]river.QueueConfig{

@@ -487,8 +487,8 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 					ConstructorFunc: func() (*dbadapter.JobInsertParams, error) {
 						return insertParamsFromArgsAndOptions(periodicJob.constructorFunc())
 					},
-					RunImmediately: opts.RunImmediately,
-					ScheduleFunc:   periodicJob.scheduleFunc.Next,
+					RunOnStart:   opts.RunOnStart,
+					ScheduleFunc: periodicJob.scheduleFunc.Next,
 				})
 			}
 

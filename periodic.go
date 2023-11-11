@@ -29,11 +29,11 @@ type PeriodicJob struct {
 
 // PeriodicJobOpts are options for a periodic job.
 type PeriodicJobOpts struct {
-	// RunImmediately can be used to indicate that a periodic job should insert
-	// an initial job as a new scheduler is started. This can be used as a hedge
+	// RunOnStart can be used to indicate that a periodic job should insert an
+	// initial job as a new scheduler is started. This can be used as a hedge
 	// for jobs with longer scheduled durations that may not get to expiry
 	// before a new scheduler is elected.
-	RunImmediately bool
+	RunOnStart bool
 }
 
 // NewPeriodicJob returns a new PeriodicJob given a schedule and a constructor
@@ -53,7 +53,7 @@ type PeriodicJobOpts struct {
 // are scheduled each time a job's target run time is reached and a new job
 // inserted. However, each scheduler only retains in-memory state, so anytime a
 // process quits or a new leader is elected, the whole process starts over
-// without regard for the state of the last scheduler. The RunImmediately option
+// without regard for the state of the last scheduler. The RunOnStart option
 // can be used as a hedge to make sure that jobs with long run durations are
 // guaranteed to occasionally run.
 func NewPeriodicJob(scheduleFunc PeriodicSchedule, constructorFunc PeriodicJobConstructor, opts *PeriodicJobOpts) *PeriodicJob {

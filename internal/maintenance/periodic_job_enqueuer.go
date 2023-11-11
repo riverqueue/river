@@ -34,7 +34,7 @@ func (ts *PeriodicJobEnqueuerTestSignals) Init() {
 // subpackage.
 type PeriodicJob struct {
 	ConstructorFunc func() (*dbadapter.JobInsertParams, error)
-	RunImmediately  bool
+	RunOnStart      bool
 	ScheduleFunc    func(time.Time) time.Time
 
 	nextRunAt time.Time // set on service start
@@ -120,7 +120,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 
 				periodicJob.nextRunAt = periodicJob.ScheduleFunc(now)
 
-				if periodicJob.RunImmediately {
+				if periodicJob.RunOnStart {
 					if insertParams, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc); ok {
 						insertParamsMany = append(insertParamsMany, insertParams)
 					}

@@ -1038,7 +1038,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		config.PeriodicJobs = []*PeriodicJob{
 			NewPeriodicJob(cron.Every(15*time.Minute), func() (JobArgs, *InsertOpts) {
 				return periodicJobArgs{}, nil
-			}, &PeriodicJobOpts{RunImmediately: true}),
+			}, &PeriodicJobOpts{RunOnStart: true}),
 		}
 
 		client := runNewTestClient(ctx, t, config)
@@ -1070,7 +1070,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		svc := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
 		svc.TestSignals.EnteredLoop.WaitOrTimeout()
 
-		// No jobs yet because the RunImmediately option was not specified.
+		// No jobs yet because the RunOnStart option was not specified.
 		jobs, err := queries.JobGetByKind(ctx, client.driver.GetDBPool(), (periodicJobArgs{}).Kind())
 		require.NoError(t, err)
 		require.Len(t, jobs, 0)
