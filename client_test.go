@@ -1000,13 +1000,13 @@ func Test_Client_Maintenance(t *testing.T) {
 		t.Parallel()
 
 		config := newTestConfig(t, nil)
-		config.CancelledJobRetentionTime = 1 * time.Hour
-		config.CompletedJobRetentionTime = 1 * time.Hour
-		config.DiscardedJobRetentionTime = 1 * time.Hour
+		config.CancelledJobRetentionPeriod = 1 * time.Hour
+		config.CompletedJobRetentionPeriod = 1 * time.Hour
+		config.DiscardedJobRetentionPeriod = 1 * time.Hour
 
 		client := newTestClient(ctx, t, config)
 
-		deleteHorizon := time.Now().Add(-config.CompletedJobRetentionTime)
+		deleteHorizon := time.Now().Add(-config.CompletedJobRetentionPeriod)
 
 		// Take care to insert jobs before starting the client because otherwise
 		// there's a race condition where the cleaner could run its initial
@@ -1988,9 +1988,9 @@ func Test_NewClient_Defaults(t *testing.T) {
 	require.Zero(t, client.adapter.(*dbadapter.StandardAdapter).Config.AdvisoryLockPrefix) //nolint:forcetypeassert
 
 	jobCleaner := maintenance.GetService[*maintenance.JobCleaner](client.queueMaintainer)
-	require.Equal(t, maintenance.DefaultCancelledJobRetentionTime, jobCleaner.Config.CancelledJobRetentionTime)
-	require.Equal(t, maintenance.DefaultCompletedJobRetentionTime, jobCleaner.Config.CompletedJobRetentionTime)
-	require.Equal(t, maintenance.DefaultDiscardedJobRetentionTime, jobCleaner.Config.DiscardedJobRetentionTime)
+	require.Equal(t, maintenance.DefaultCancelledJobRetentionPeriod, jobCleaner.Config.CancelledJobRetentionPeriod)
+	require.Equal(t, maintenance.DefaultCompletedJobRetentionPeriod, jobCleaner.Config.CompletedJobRetentionPeriod)
+	require.Equal(t, maintenance.DefaultDiscardedJobRetentionPeriod, jobCleaner.Config.DiscardedJobRetentionPeriod)
 
 	require.Nil(t, client.config.ErrorHandler)
 	require.Equal(t, DefaultFetchCooldown, client.config.FetchCooldown)
@@ -2018,29 +2018,29 @@ func Test_NewClient_Overrides(t *testing.T) {
 	retryPolicy := &DefaultClientRetryPolicy{}
 
 	client, err := NewClient(riverpgxv5.New(dbPool), &Config{
-		AdvisoryLockPrefix:        123_456,
-		CancelledJobRetentionTime: 1 * time.Hour,
-		CompletedJobRetentionTime: 2 * time.Hour,
-		DiscardedJobRetentionTime: 3 * time.Hour,
-		ErrorHandler:              errorHandler,
-		FetchCooldown:             123 * time.Millisecond,
-		FetchPollInterval:         124 * time.Millisecond,
-		JobTimeout:                125 * time.Millisecond,
-		Logger:                    logger,
-		Queues:                    map[string]QueueConfig{DefaultQueue: {MaxWorkers: 1}},
-		RetryPolicy:               retryPolicy,
-		Schema:                    "custom_schema",
-		Workers:                   workers,
-		disableSleep:              true,
+		AdvisoryLockPrefix:          123_456,
+		CancelledJobRetentionPeriod: 1 * time.Hour,
+		CompletedJobRetentionPeriod: 2 * time.Hour,
+		DiscardedJobRetentionPeriod: 3 * time.Hour,
+		ErrorHandler:                errorHandler,
+		FetchCooldown:               123 * time.Millisecond,
+		FetchPollInterval:           124 * time.Millisecond,
+		JobTimeout:                  125 * time.Millisecond,
+		Logger:                      logger,
+		Queues:                      map[string]QueueConfig{DefaultQueue: {MaxWorkers: 1}},
+		RetryPolicy:                 retryPolicy,
+		Schema:                      "custom_schema",
+		Workers:                     workers,
+		disableSleep:                true,
 	})
 	require.NoError(t, err)
 
 	require.Equal(t, int32(123_456), client.adapter.(*dbadapter.StandardAdapter).Config.AdvisoryLockPrefix) //nolint:forcetypeassert
 
 	jobCleaner := maintenance.GetService[*maintenance.JobCleaner](client.queueMaintainer)
-	require.Equal(t, 1*time.Hour, jobCleaner.Config.CancelledJobRetentionTime)
-	require.Equal(t, 2*time.Hour, jobCleaner.Config.CompletedJobRetentionTime)
-	require.Equal(t, 3*time.Hour, jobCleaner.Config.DiscardedJobRetentionTime)
+	require.Equal(t, 1*time.Hour, jobCleaner.Config.CancelledJobRetentionPeriod)
+	require.Equal(t, 2*time.Hour, jobCleaner.Config.CompletedJobRetentionPeriod)
+	require.Equal(t, 3*time.Hour, jobCleaner.Config.DiscardedJobRetentionPeriod)
 
 	require.Equal(t, errorHandler, client.config.ErrorHandler)
 	require.Equal(t, 123*time.Millisecond, client.config.FetchCooldown)
@@ -2081,9 +2081,9 @@ func Test_NewClient_Validations(t *testing.T) {
 		validateResult func(*testing.T, *Client[pgx.Tx])
 	}{
 		{
-			name:       "CompletedJobRetentionTime cannot be less than zero",
-			configFunc: func(config *Config) { config.CompletedJobRetentionTime = -1 * time.Second },
-			wantErr:    errors.New("CompletedJobRetentionTime cannot be less than zero"),
+			name:       "CompletedJobRetentionPeriod cannot be less than zero",
+			configFunc: func(config *Config) { config.CompletedJobRetentionPeriod = -1 * time.Second },
+			wantErr:    errors.New("CompletedJobRetentionPeriod cannot be less than zero"),
 		},
 		{
 			name:       "FetchCooldown cannot be less than MinFetchCooldown",

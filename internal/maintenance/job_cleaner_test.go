@@ -51,19 +51,19 @@ func TestJobCleaner(t *testing.T) {
 		t.Helper()
 
 		bundle := &testBundle{
-			cancelledDeleteHorizon: time.Now().Add(-DefaultCancelledJobRetentionTime),
-			completedDeleteHorizon: time.Now().Add(-DefaultCompletedJobRetentionTime),
-			discardedDeleteHorizon: time.Now().Add(-DefaultDiscardedJobRetentionTime),
+			cancelledDeleteHorizon: time.Now().Add(-DefaultCancelledJobRetentionPeriod),
+			completedDeleteHorizon: time.Now().Add(-DefaultCompletedJobRetentionPeriod),
+			discardedDeleteHorizon: time.Now().Add(-DefaultDiscardedJobRetentionPeriod),
 			tx:                     riverinternaltest.TestTx(ctx, t),
 		}
 
 		cleaner := NewJobCleaner(
 			riverinternaltest.BaseServiceArchetype(t),
 			&JobCleanerConfig{
-				CancelledJobRetentionTime: DefaultCancelledJobRetentionTime,
-				CompletedJobRetentionTime: DefaultCompletedJobRetentionTime,
-				DiscardedJobRetentionTime: DefaultDiscardedJobRetentionTime,
-				Interval:                  DefaultJobCleanerInterval,
+				CancelledJobRetentionPeriod: DefaultCancelledJobRetentionPeriod,
+				CompletedJobRetentionPeriod: DefaultCompletedJobRetentionPeriod,
+				DiscardedJobRetentionPeriod: DefaultDiscardedJobRetentionPeriod,
+				Interval:                    DefaultJobCleanerInterval,
 			},
 			bundle.tx)
 		cleaner.TestSignals.Init()
@@ -77,9 +77,9 @@ func TestJobCleaner(t *testing.T) {
 
 		cleaner := NewJobCleaner(riverinternaltest.BaseServiceArchetype(t), &JobCleanerConfig{}, nil)
 
-		require.Equal(t, cleaner.Config.CancelledJobRetentionTime, DefaultCancelledJobRetentionTime)
-		require.Equal(t, cleaner.Config.CompletedJobRetentionTime, DefaultCompletedJobRetentionTime)
-		require.Equal(t, cleaner.Config.DiscardedJobRetentionTime, DefaultDiscardedJobRetentionTime)
+		require.Equal(t, cleaner.Config.CancelledJobRetentionPeriod, DefaultCancelledJobRetentionPeriod)
+		require.Equal(t, cleaner.Config.CompletedJobRetentionPeriod, DefaultCompletedJobRetentionPeriod)
+		require.Equal(t, cleaner.Config.DiscardedJobRetentionPeriod, DefaultDiscardedJobRetentionPeriod)
 		require.Equal(t, cleaner.Config.Interval, DefaultJobCleanerInterval)
 	})
 

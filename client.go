@@ -63,23 +63,23 @@ type Config struct {
 	// internally conflicting River-generated keys more likely.
 	AdvisoryLockPrefix int32
 
-	// CancelledJobRetentionTime is the amount of time to keep cancelled jobs
+	// CancelledJobRetentionPeriod is the amount of time to keep cancelled jobs
 	// around before they're removed permanently.
 	//
 	// Defaults to 24 hours.
-	CancelledJobRetentionTime time.Duration
+	CancelledJobRetentionPeriod time.Duration
 
-	// CompletedJobRetentionTime is the amount of time to keep completed jobs
+	// CompletedJobRetentionPeriod is the amount of time to keep completed jobs
 	// around before they're removed permanently.
 	//
 	// Defaults to 24 hours.
-	CompletedJobRetentionTime time.Duration
+	CompletedJobRetentionPeriod time.Duration
 
-	// DiscardedJobRetentionTime is the amount of time to keep cancelled jobs
+	// DiscardedJobRetentionPeriod is the amount of time to keep cancelled jobs
 	// around before they're removed permanently.
 	//
 	// Defaults to 7 days.
-	DiscardedJobRetentionTime time.Duration
+	DiscardedJobRetentionPeriod time.Duration
 
 	// ErrorHandler can be configured to be invoked in case of an error or panic
 	// occurring in a job. This is often useful for logging and exception
@@ -173,14 +173,14 @@ type Config struct {
 }
 
 func (c *Config) validate() error {
-	if c.CancelledJobRetentionTime < 0 {
-		return fmt.Errorf("CancelledJobRetentionTime time cannot be less than zero")
+	if c.CancelledJobRetentionPeriod < 0 {
+		return fmt.Errorf("CancelledJobRetentionPeriod time cannot be less than zero")
 	}
-	if c.CompletedJobRetentionTime < 0 {
-		return fmt.Errorf("CompletedJobRetentionTime cannot be less than zero")
+	if c.CompletedJobRetentionPeriod < 0 {
+		return fmt.Errorf("CompletedJobRetentionPeriod cannot be less than zero")
 	}
-	if c.DiscardedJobRetentionTime < 0 {
-		return fmt.Errorf("DiscardedJobRetentionTime cannot be less than zero")
+	if c.DiscardedJobRetentionPeriod < 0 {
+		return fmt.Errorf("DiscardedJobRetentionPeriod cannot be less than zero")
 	}
 	if c.FetchCooldown < MinFetchCooldown {
 		return fmt.Errorf("FetchCooldown must be at least %s", MinFetchCooldown)
@@ -377,23 +377,23 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	// original object, so everything that we care about must be initialized
 	// here, even if it's only carrying over the original value.
 	config = &Config{
-		AdvisoryLockPrefix:        config.AdvisoryLockPrefix,
-		CancelledJobRetentionTime: valutil.ValOrDefault(config.CancelledJobRetentionTime, maintenance.DefaultCancelledJobRetentionTime),
-		CompletedJobRetentionTime: valutil.ValOrDefault(config.CompletedJobRetentionTime, maintenance.DefaultCompletedJobRetentionTime),
-		DiscardedJobRetentionTime: valutil.ValOrDefault(config.DiscardedJobRetentionTime, maintenance.DefaultDiscardedJobRetentionTime),
-		ErrorHandler:              config.ErrorHandler,
-		FetchCooldown:             valutil.ValOrDefault(config.FetchCooldown, DefaultFetchCooldown),
-		FetchPollInterval:         valutil.ValOrDefault(config.FetchPollInterval, DefaultFetchPollInterval),
-		JobTimeout:                valutil.ValOrDefault(config.JobTimeout, DefaultJobTimeout),
-		Logger:                    logger,
-		PeriodicJobs:              config.PeriodicJobs,
-		Queues:                    config.Queues,
-		ReindexerSchedule:         config.ReindexerSchedule,
-		RescueStuckJobsAfter:      valutil.ValOrDefault(config.RescueStuckJobsAfter, rescueAfter),
-		RetryPolicy:               retryPolicy,
-		Schema:                    valutil.ValOrDefault(config.Schema, DefaultSchema),
-		Workers:                   config.Workers,
-		disableSleep:              config.disableSleep,
+		AdvisoryLockPrefix:          config.AdvisoryLockPrefix,
+		CancelledJobRetentionPeriod: valutil.ValOrDefault(config.CancelledJobRetentionPeriod, maintenance.DefaultCancelledJobRetentionPeriod),
+		CompletedJobRetentionPeriod: valutil.ValOrDefault(config.CompletedJobRetentionPeriod, maintenance.DefaultCompletedJobRetentionPeriod),
+		DiscardedJobRetentionPeriod: valutil.ValOrDefault(config.DiscardedJobRetentionPeriod, maintenance.DefaultDiscardedJobRetentionPeriod),
+		ErrorHandler:                config.ErrorHandler,
+		FetchCooldown:               valutil.ValOrDefault(config.FetchCooldown, DefaultFetchCooldown),
+		FetchPollInterval:           valutil.ValOrDefault(config.FetchPollInterval, DefaultFetchPollInterval),
+		JobTimeout:                  valutil.ValOrDefault(config.JobTimeout, DefaultJobTimeout),
+		Logger:                      logger,
+		PeriodicJobs:                config.PeriodicJobs,
+		Queues:                      config.Queues,
+		ReindexerSchedule:           config.ReindexerSchedule,
+		RescueStuckJobsAfter:        valutil.ValOrDefault(config.RescueStuckJobsAfter, rescueAfter),
+		RetryPolicy:                 retryPolicy,
+		Schema:                      valutil.ValOrDefault(config.Schema, DefaultSchema),
+		Workers:                     config.Workers,
+		disableSleep:                config.disableSleep,
 	}
 
 	if err := config.validate(); err != nil {
@@ -464,9 +464,9 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 
 		{
 			jobCleaner := maintenance.NewJobCleaner(archetype, &maintenance.JobCleanerConfig{
-				CancelledJobRetentionTime: config.CancelledJobRetentionTime,
-				CompletedJobRetentionTime: config.CompletedJobRetentionTime,
-				DiscardedJobRetentionTime: config.DiscardedJobRetentionTime,
+				CancelledJobRetentionPeriod: config.CancelledJobRetentionPeriod,
+				CompletedJobRetentionPeriod: config.CompletedJobRetentionPeriod,
+				DiscardedJobRetentionPeriod: config.DiscardedJobRetentionPeriod,
 			}, driver.GetDBPool())
 			maintenanceServices = append(maintenanceServices, jobCleaner)
 			client.testSignals.jobCleaner = &jobCleaner.TestSignals
