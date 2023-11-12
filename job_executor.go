@@ -232,7 +232,7 @@ func (e *jobExecutor) reportError(ctx context.Context) {
 		if e.ErrorHandler != nil {
 			fnName = "HandleError"
 			errorHandler = func() *ErrorHandlerResult {
-				return e.ErrorHandler.HandleError(e.JobRow, e.result.Err)
+				return e.ErrorHandler.HandleError(ctx, e.JobRow, e.result.Err)
 			}
 		}
 
@@ -243,7 +243,7 @@ func (e *jobExecutor) reportError(ctx context.Context) {
 		if e.ErrorHandler != nil {
 			fnName = "HandlePanic"
 			errorHandler = func() *ErrorHandlerResult {
-				return e.ErrorHandler.HandlePanic(e.JobRow, e.result.PanicVal)
+				return e.ErrorHandler.HandlePanic(ctx, e.JobRow, e.result.PanicVal)
 			}
 		}
 	}

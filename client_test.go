@@ -871,7 +871,7 @@ func Test_Client_ErrorHandler(t *testing.T) {
 
 		var errorHandlerCalled bool
 		config.ErrorHandler = &testErrorHandler{
-			HandleErrorFunc: func(job *JobRow, err error) *ErrorHandlerResult {
+			HandleErrorFunc: func(ctx context.Context, job *JobRow, err error) *ErrorHandlerResult {
 				require.Equal(t, handlerErr, err)
 				errorHandlerCalled = true
 				return &ErrorHandlerResult{}
@@ -893,7 +893,7 @@ func Test_Client_ErrorHandler(t *testing.T) {
 
 		var errorHandlerCalled bool
 		config.ErrorHandler = &testErrorHandler{
-			HandleErrorFunc: func(job *JobRow, err error) *ErrorHandlerResult {
+			HandleErrorFunc: func(ctx context.Context, job *JobRow, err error) *ErrorHandlerResult {
 				var unknownJobKindErr *UnknownJobKindError
 				require.ErrorAs(t, err, &unknownJobKindErr)
 				require.Equal(t, *unknownJobKindErr, UnknownJobKindError{Kind: "RandomWorkerNameThatIsNeverRegistered"})
@@ -925,7 +925,7 @@ func Test_Client_ErrorHandler(t *testing.T) {
 
 		var panicHandlerCalled bool
 		config.ErrorHandler = &testErrorHandler{
-			HandlePanicFunc: func(job *JobRow, panicVal any) *ErrorHandlerResult {
+			HandlePanicFunc: func(ctx context.Context, job *JobRow, panicVal any) *ErrorHandlerResult {
 				require.Equal(t, "panic val", panicVal)
 				panicHandlerCalled = true
 				return &ErrorHandlerResult{}
