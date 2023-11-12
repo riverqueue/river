@@ -41,13 +41,13 @@ type Worker[T JobArgs] interface {
 	// Note that this method on a worker overrides any client-level retry policy.
 	// To use the client-level retry policy, return an empty `time.Time{}` or
 	// include WorkerDefaults to do this for you.
-	NextRetry(j *Job[T]) time.Time
+	NextRetry(job *Job[T]) time.Time
 
 	// Timeout is the maximum amount of time the job is allowed to run before
 	// its context is cancelled. A timeout of zero (the default) means the job
 	// will inherit the Client-level timeout. A timeout of -1 means the job's
 	// context will never time out.
-	Timeout(*Job[T]) time.Duration
+	Timeout(job *Job[T]) time.Duration
 
 	// Work performs the job and returns an error if the job failed. The context
 	// will be configured with a timeout according to the worker settings and may
@@ -60,7 +60,7 @@ type Worker[T JobArgs] interface {
 	// the client to respond to shutdown requests; there is no way to cancel a
 	// running job that does not respect context cancellation, other than
 	// terminating the process.
-	Work(context.Context, *Job[T]) error
+	Work(ctx context.Context, job *Job[T]) error
 }
 
 // WorkerDefaults is an empty struct that can be embedded in your worker
