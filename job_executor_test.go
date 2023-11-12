@@ -86,28 +86,28 @@ func (p *retryPolicyNoJitter) NextRetry(job *JobRow) time.Time {
 
 type testErrorHandler struct {
 	HandleErrorCalled bool
-	HandleErrorFunc   func(job *JobRow, err error) *ErrorHandlerResult
+	HandleErrorFunc   func(ctx context.Context, job *JobRow, err error) *ErrorHandlerResult
 
 	HandlePanicCalled bool
-	HandlePanicFunc   func(job *JobRow, panicVal any) *ErrorHandlerResult
+	HandlePanicFunc   func(ctx context.Context, job *JobRow, panicVal any) *ErrorHandlerResult
 }
 
 // Test handler with no-ops for both error handling functions.
 func newTestErrorHandler() *testErrorHandler {
 	return &testErrorHandler{
-		HandleErrorFunc: func(job *JobRow, err error) *ErrorHandlerResult { return nil },
-		HandlePanicFunc: func(job *JobRow, panicVal any) *ErrorHandlerResult { return nil },
+		HandleErrorFunc: func(ctx context.Context, job *JobRow, err error) *ErrorHandlerResult { return nil },
+		HandlePanicFunc: func(ctx context.Context, job *JobRow, panicVal any) *ErrorHandlerResult { return nil },
 	}
 }
 
-func (h *testErrorHandler) HandleError(job *JobRow, err error) *ErrorHandlerResult {
+func (h *testErrorHandler) HandleError(ctx context.Context, job *JobRow, err error) *ErrorHandlerResult {
 	h.HandleErrorCalled = true
-	return h.HandleErrorFunc(job, err)
+	return h.HandleErrorFunc(ctx, job, err)
 }
 
-func (h *testErrorHandler) HandlePanic(job *JobRow, panicVal any) *ErrorHandlerResult {
+func (h *testErrorHandler) HandlePanic(ctx context.Context, job *JobRow, panicVal any) *ErrorHandlerResult {
 	h.HandlePanicCalled = true
-	return h.HandlePanicFunc(job, panicVal)
+	return h.HandlePanicFunc(ctx, job, panicVal)
 }
 
 func TestJobExecutor_Execute(t *testing.T) {
@@ -173,12 +173,9 @@ func TestJobExecutor_Execute(t *testing.T) {
 		job = jobs[0]
 
 		bundle := &testBundle{
-			adapter:   adapter,
-			completer: completer,
-			errorHandler: &testErrorHandler{
-				HandleErrorFunc: func(job *JobRow, err error) *ErrorHandlerResult { return nil },
-				HandlePanicFunc: func(job *JobRow, panicVal any) *ErrorHandlerResult { return nil },
-			},
+			adapter:           adapter,
+			completer:         completer,
+			errorHandler:      newTestErrorHandler(),
 			getUpdatesAndStop: getJobUpdates,
 			jobRow:            jobRowFromInternal(job),
 			tx:                tx,
@@ -396,7 +393,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		workerErr := fmt.Errorf("job error")
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
-		bundle.errorHandler.HandleErrorFunc = func(job *JobRow, err error) *ErrorHandlerResult {
+		bundle.errorHandler.HandleErrorFunc = func(ctx context.Context, job *JobRow, err error) *ErrorHandlerResult {
 			require.Equal(t, workerErr, err)
 			return nil
 		}
@@ -418,7 +415,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		workerErr := fmt.Errorf("job error")
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
-		bundle.errorHandler.HandleErrorFunc = func(job *JobRow, err error) *ErrorHandlerResult {
+		bundle.errorHandler.HandleErrorFunc = func(ctx context.Context, job *JobRow, err error) *ErrorHandlerResult {
 			return &ErrorHandlerResult{SetCancelled: true}
 		}
 
@@ -439,7 +436,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		workerErr := fmt.Errorf("job error")
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
-		bundle.errorHandler.HandleErrorFunc = func(job *JobRow, err error) *ErrorHandlerResult {
+		bundle.errorHandler.HandleErrorFunc = func(ctx context.Context, job *JobRow, err error) *ErrorHandlerResult {
 			panic("error handled panicked!")
 		}
 
@@ -513,7 +510,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor, bundle := setup(t)
 
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { panic("panic val") }, nil).MakeUnit(bundle.jobRow)
-		bundle.errorHandler.HandlePanicFunc = func(job *JobRow, panicVal any) *ErrorHandlerResult {
+		bundle.errorHandler.HandlePanicFunc = func(ctx context.Context, job *JobRow, panicVal any) *ErrorHandlerResult {
 			require.Equal(t, "panic val", panicVal)
 			return nil
 		}
@@ -534,7 +531,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor, bundle := setup(t)
 
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { panic("panic val") }, nil).MakeUnit(bundle.jobRow)
-		bundle.errorHandler.HandlePanicFunc = func(job *JobRow, panicVal any) *ErrorHandlerResult {
+		bundle.errorHandler.HandlePanicFunc = func(ctx context.Context, job *JobRow, panicVal any) *ErrorHandlerResult {
 			return &ErrorHandlerResult{SetCancelled: true}
 		}
 
@@ -554,7 +551,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor, bundle := setup(t)
 
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { panic("panic val") }, nil).MakeUnit(bundle.jobRow)
-		bundle.errorHandler.HandlePanicFunc = func(job *JobRow, panicVal any) *ErrorHandlerResult {
+		bundle.errorHandler.HandlePanicFunc = func(ctx context.Context, job *JobRow, panicVal any) *ErrorHandlerResult {
 			panic("panic handler panicked!")
 		}
 

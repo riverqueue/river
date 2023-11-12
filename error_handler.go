@@ -1,14 +1,22 @@
 package river
 
+import "context"
+
 // ErrorHandler provides an interface that will be invoked in case of an error
 // or panic occurring in the job. This is often useful for logging and exception
 // tracking, but can also be used to customize retry behavior.
 type ErrorHandler interface {
 	// HandleError is invoked in case of an error occurring in a job.
-	HandleError(job *JobRow, err error) *ErrorHandlerResult
+	//
+	// Context is descended from the one used to start the River client that
+	// worked the job.
+	HandleError(ctx context.Context, job *JobRow, err error) *ErrorHandlerResult
 
 	// HandlePanic is invoked in case of a panic occurring in a job.
-	HandlePanic(job *JobRow, panicVal any) *ErrorHandlerResult
+	//
+	// Context is descended from the one used to start the River client that
+	// worked the job.
+	HandlePanic(ctx context.Context, job *JobRow, panicVal any) *ErrorHandlerResult
 }
 
 type ErrorHandlerResult struct {
