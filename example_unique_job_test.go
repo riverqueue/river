@@ -97,13 +97,15 @@ func Example_uniqueJob() {
 		panic(err)
 	}
 
+	// First job insertion for account 1.
 	_, err = riverClient.Insert(ctx, ReconcileAccountArgs{AccountID: 1}, nil)
 	if err != nil {
 		panic(err)
 	}
 
 	// Job is inserted a second time, but it doesn't matter because its unique
-	// args ensure that it'll only run once per account per 24 hour period.
+	// args cause the insertion to be skipped because it's meant to only run
+	// once per account per 24 hour period.
 	_, err = riverClient.Insert(ctx, ReconcileAccountArgs{AccountID: 1}, nil)
 	if err != nil {
 		panic(err)
