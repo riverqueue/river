@@ -18,8 +18,8 @@ const (
 
 	// EventKindJobFailed occurs when a job fails. Occurs both when a job fails
 	// and will be retried and when a job fails for the last time and will be
-	// discarded. Callers can use job-specific fields like `Attempt` and
-	// `Status` to differentiate each type of occurrence.
+	// discarded. Callers can use job fields like `Attempt` and `State` to
+	// differentiate each type of occurrence.
 	EventKindJobFailed EventKind = "job_failed"
 
 	// EventKindJobSnoozed occurs when a job is snoozed.
