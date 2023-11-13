@@ -44,7 +44,6 @@ const (
 	DefaultMaxAttempts = rivercommon.DefaultMaxAttempts
 	DefaultQueue       = rivercommon.DefaultQueue
 	DefaultPriority    = rivercommon.DefaultPriority
-	DefaultSchema      = "public"
 )
 
 // Config is the configuration for a Client.
@@ -154,10 +153,6 @@ type Config struct {
 	//
 	// Defaults to DefaultRetryPolicy.
 	RetryPolicy ClientRetryPolicy
-
-	// Schema is the name of the database schema to use for this Client. If
-	// unspecified, it defaults to DefaultSchema.
-	Schema string
 
 	// Workers is a bundle of registered job workers.
 	//
@@ -391,7 +386,6 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		ReindexerSchedule:           config.ReindexerSchedule,
 		RescueStuckJobsAfter:        valutil.ValOrDefault(config.RescueStuckJobsAfter, rescueAfter),
 		RetryPolicy:                 retryPolicy,
-		Schema:                      valutil.ValOrDefault(config.Schema, DefaultSchema),
 		Workers:                     config.Workers,
 		disableSleep:                config.disableSleep,
 	}

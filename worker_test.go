@@ -87,7 +87,7 @@ func TestWorkFunc(t *testing.T) {
 		t.Helper()
 
 		client := newTestClient(ctx, t, newTestConfig(t, nil))
-		runClient(ctx, t, client)
+		startClient(ctx, t, client)
 
 		return client, &testBundle{}
 	}
