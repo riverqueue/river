@@ -12,7 +12,7 @@ Raise test databases:
 
 Run tests:
 
-    go test ./...
+    go test ./... -p 1
 
 ### Run lint
 
