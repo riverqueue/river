@@ -51,9 +51,9 @@ A few details to notice:
     reference to their args type. This allows them to inherit defaults for the
     [Worker] interface, and helps futureproof in case its ever expanded.
 
-  - Each worker implements [Worker].Work, which is where the async heavy-lifting
-    for a background job is done. Work implementations receive a generic like
-    river.Job[SortArgs] for easy access to job arguments.
+- Each worker implements [Worker].Work, which is where the async heavy-lifting
+for a background job is done. Work implementations receive a generic like
+river.Job[SortArgs] for easy access to job arguments.
 
 # Registering workers
 
