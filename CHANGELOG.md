@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3] - 2023-11-13
+
+### Changed
+
+- Fix license detection issues with riverdriver/riverpgxv5 submodule.
+- Ensure that river requires the riverpgxv5 module with the same version.
+
 ## [0.0.2] - 2023-11-13
 
 ### Changed
