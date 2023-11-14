@@ -138,7 +138,9 @@ See the [`InsertAndWork` example] for complete code.
 
   - [Work functions] for simplified worker implementation.
 
-See also [developing River].
+## Development
+
+See [developing River].
 
 [`Client`]: https://pkg.go.dev/github.com/riverqueue/river#Client
 [`Client.InsertTx`]: https://pkg.go.dev/github.com/riverqueue/river#Client.InsertTx
