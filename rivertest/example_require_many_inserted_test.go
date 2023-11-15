@@ -72,17 +72,23 @@ func Example_requireManyInserted() {
 		panic(err)
 	}
 
-	_, err = riverClient.Insert(ctx, FirstRequiredArgs{Message: "Hello from first."}, nil)
+	tx, err := dbPool.Begin(ctx)
+	if err != nil {
+		panic(err)
+	}
+	defer tx.Rollback(ctx)
+
+	_, err = riverClient.InsertTx(ctx, tx, &FirstRequiredArgs{Message: "Hello from first."}, nil)
 	if err != nil {
 		panic(err)
 	}
 
-	_, err = riverClient.Insert(ctx, SecondRequiredArgs{Message: "Hello from second."}, nil)
+	_, err = riverClient.InsertTx(ctx, tx, &SecondRequiredArgs{Message: "Hello from second."}, nil)
 	if err != nil {
 		panic(err)
 	}
 
-	_, err = riverClient.Insert(ctx, FirstRequiredArgs{Message: "Hello from first (again)."}, nil)
+	_, err = riverClient.InsertTx(ctx, tx, &FirstRequiredArgs{Message: "Hello from first (again)."}, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -91,7 +97,7 @@ func Example_requireManyInserted() {
 	// *testing.T that comes from a test's argument.
 	t := &testing.T{}
 
-	jobs := rivertest.RequireManyInserted(ctx, t, dbPool, []rivertest.ExpectedJob{
+	jobs := rivertest.RequireManyInsertedTx[*riverpgxv5.Driver](ctx, t, tx, []rivertest.ExpectedJob{
 		{Args: &FirstRequiredArgs{}},
 		{Args: &SecondRequiredArgs{}},
 		{Args: &FirstRequiredArgs{}},
@@ -102,11 +108,20 @@ func Example_requireManyInserted() {
 
 	// Verify again, and this time that the second job was inserted at the
 	// default priority and default queue.
-	_ = rivertest.RequireManyInserted(ctx, t, dbPool, []rivertest.ExpectedJob{
+	_ = rivertest.RequireManyInsertedTx[*riverpgxv5.Driver](ctx, t, tx, []rivertest.ExpectedJob{
 		{Args: &SecondRequiredArgs{}, Opts: &rivertest.RequireInsertedOpts{
 			Priority: 1,
 			Queue:    river.DefaultQueue,
 		}},
+	})
+
+	// Insert and verify one on a pool instead of transaction.
+	_, err = riverClient.Insert(ctx, &FirstRequiredArgs{Message: "Hello from pool."}, nil)
+	if err != nil {
+		panic(err)
+	}
+	_ = rivertest.RequireManyInserted(ctx, t, riverpgxv5.New(dbPool), []rivertest.ExpectedJob{
+		{Args: &FirstRequiredArgs{}},
 	})
 
 	// Output:

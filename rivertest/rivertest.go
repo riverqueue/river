@@ -16,12 +16,13 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/util/sliceutil"
+	"github.com/riverqueue/river/riverdriver"
 )
 
-// DBTX is a database-like executor which is implemented by all of pgxpool.Pool,
-// pgx.Conn, and pgx.Tx. It's used to let this package's assertions be as
-// flexible as possible in what database argument they can take.
-type DBTX interface {
+// dbtx is a database-like executor which is implemented by all of pgxpool.Pool,
+// pgx.Conn, and pgx.Tx. It's used to let package functions share code with a
+// common implementation that takes one of these.
+type dbtx interface {
 	CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error)
 	Exec(context.Context, string, ...interface{}) (pgconn.CommandTag, error)
 	Query(context.Context, string, ...interface{}) (pgx.Rows, error)
@@ -79,14 +80,14 @@ type RequireInsertedOpts struct {
 	Tags []string
 }
 
-// RequireInserted is a test helper that verifies that a job of the given kind was
-// inserted for work, failing the test if it wasn't. The dbtx argument can be
-// any of a Pgx connection pool, connection, or transaction. If found, the
-// inserted job is returned so that further assertions can be made against it.
+// RequireInserted is a test helper that verifies that a job of the given kind
+// was inserted for work, failing the test if it wasn't. If found, the inserted
+// job is returned so that further assertions can be made against it.
 //
-//	func TestInsert(t *testing.T) {
-//		job := RequireInserted(ctx, t, poolOrConnOrTx, &Job1Args{}, nil)
-//		...
+//	job := RequireInserted(ctx, t, riverpgxv5.New(dbPool), &Job1Args{}, nil)
+//
+// This variant takes a driver that wraps a database pool. See also
+// RequireManyInsertedTx which takes a transaction.
 //
 // A RequireInsertedOpts struct can be provided as the last argument, and if it is,
 // its properties (e.g. max attempts, priority, queue name) will act as required
@@ -95,26 +96,56 @@ type RequireInsertedOpts struct {
 // The assertion will fail if more than one job of the given kind was found
 // because at that point the job to return is ambiguous. Use RequireManyInserted
 // to cover that case instead.
-func RequireInserted[T river.JobArgs](ctx context.Context, tb testing.TB, dbtx DBTX, expectedJob T, opts *RequireInsertedOpts) *river.Job[T] {
+func RequireInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, tb testing.TB, driver TDriver, expectedJob TArgs, opts *RequireInsertedOpts) *river.Job[TArgs] {
 	tb.Helper()
-	return requireInserted(ctx, tb, dbtx, expectedJob, opts)
+	return requireInserted(ctx, tb, driver, expectedJob, opts)
 }
 
-// Internal function used by the tests so that the exported version can take
-// `testing.TB` instead of `testing.T`.
-func requireInserted[T river.JobArgs](ctx context.Context, t testingT, dbtx DBTX, expectedJob T, opts *RequireInsertedOpts) *river.Job[T] {
-	actualArgs, err := requireInsertedErr(ctx, t, dbtx, expectedJob, opts)
+func requireInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, driver TDriver, expectedJob TArgs, opts *RequireInsertedOpts) *river.Job[TArgs] {
+	actualArgs, err := requireInsertedErr[TDriver](ctx, t, driver.GetDBPool(), expectedJob, opts)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
 	}
 	return actualArgs
 }
 
-func requireInsertedErr[T river.JobArgs](ctx context.Context, t testingT, dbtx DBTX, expectedJob T, opts *RequireInsertedOpts) (*river.Job[T], error) {
+// RequireInsertedTx is a test helper that verifies that a job of the given kind
+// was inserted for work, failing the test if it wasn't. If found, the inserted
+// job is returned so that further assertions can be made against it.
+//
+//	job := RequireInsertedTx[*riverpgxv5.Driver](ctx, t, tx, &Job1Args{}, nil)
+//
+// This variant takes a transaction. See also RequireInserted which takes a
+// driver that wraps a database pool.
+//
+// A RequireInsertedOpts struct can be provided as the last argument, and if it is,
+// its properties (e.g. max attempts, priority, queue name) will act as required
+// assertions in the inserted job row. UniqueOpts is ignored.
+//
+// The assertion will fail if more than one job of the given kind was found
+// because at that point the job to return is ambiguous. Use RequireManyInserted
+// to cover that case instead.
+func RequireInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, tb testing.TB, tx TTx, expectedJob TArgs, opts *RequireInsertedOpts) *river.Job[TArgs] {
+	tb.Helper()
+	return requireInsertedTx[TDriver](ctx, tb, tx, expectedJob, opts)
+}
+
+// Internal function used by the tests so that the exported version can take
+// `testing.TB` instead of `testing.T`.
+func requireInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, tx TTx, expectedJob TArgs, opts *RequireInsertedOpts) *river.Job[TArgs] {
+	var driver TDriver
+	actualArgs, err := requireInsertedErr[TDriver](ctx, t, driver.UnwrapTx(tx), expectedJob, opts)
+	if err != nil {
+		failure(t, "Internal failure: %s", err)
+	}
+	return actualArgs
+}
+
+func requireInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, db dbtx, expectedJob TArgs, opts *RequireInsertedOpts) (*river.Job[TArgs], error) {
 	queries := dbsqlc.New()
 
 	// Returned ordered by ID.
-	dbJobs, err := queries.JobGetByKind(ctx, dbtx, expectedJob.Kind())
+	dbJobs, err := queries.JobGetByKind(ctx, db, expectedJob.Kind())
 	if err != nil {
 		return nil, fmt.Errorf("error querying jobs: %w", err)
 	}
@@ -131,7 +162,7 @@ func requireInsertedErr[T river.JobArgs](ctx context.Context, t testingT, dbtx D
 
 	jobRow := jobRowFromInternal(dbJobs[0])
 
-	var actualArgs T
+	var actualArgs TArgs
 	if err := json.Unmarshal(jobRow.EncodedArgs, &actualArgs); err != nil {
 		return nil, fmt.Errorf("error unmarshaling job args: %w", err)
 	}
@@ -142,7 +173,7 @@ func requireInsertedErr[T river.JobArgs](ctx context.Context, t testingT, dbtx D
 		}
 	}
 
-	return &river.Job[T]{JobRow: jobRow, Args: actualArgs}, nil
+	return &river.Job[TArgs]{JobRow: jobRow, Args: actualArgs}, nil
 }
 
 // ExpectedJob is a single job to expect encapsulating job args and possible
@@ -156,17 +187,17 @@ type ExpectedJob struct {
 	Opts *RequireInsertedOpts
 }
 
-// RequireManyInserted is a test helper that verifies that jobs of the given kinds
-// were inserted for work, failing the test if they weren't, or were inserted in
-// the wrong order. The dbtx argument can be any of a Pgx connection pool,
-// connection, or transaction. If found, the inserted jobs are returned so that
+// RequireManyInserted is a test helper that verifies that jobs of the given
+// kinds were inserted for work, failing the test if they weren't, or were
+// inserted in the wrong order. If found, the inserted jobs are returned so that
 // further assertions can be made against them.
 //
-//	func TestInsertMany(t *testing.T) {
-//		job := RequireManyInserted(ctx, t, poolOrConnOrTx, []river.JobArgs{
-//			&Job1Args{},
-//		})
-//		...
+//	job := RequireManyInserted(ctx, t, riverpgxv5.New(dbPool), []river.JobArgs{
+//		&Job1Args{},
+//	})
+//
+// This variant takes a driver that wraps a database pool. See also
+// RequireManyInsertedTx which takes a transaction.
 //
 // A RequireInsertedOpts struct can be provided for each expected job, and if it is,
 // its properties (e.g. max attempts, priority, queue name) will act as required
@@ -176,28 +207,62 @@ type ExpectedJob struct {
 // the number specified, and will fail in case this expectation isn't met. So if
 // a job of a certain kind is emitted multiple times, it must be expected
 // multiple times.
-func RequireManyInserted(ctx context.Context, tb testing.TB, dbtx DBTX, expectedJobs []ExpectedJob) []*river.JobRow {
+func RequireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, tb testing.TB, driver TDriver, expectedJobs []ExpectedJob) []*river.JobRow {
 	tb.Helper()
-	return requireManyInserted(ctx, tb, dbtx, expectedJobs)
+	return requireManyInserted(ctx, tb, driver, expectedJobs)
 }
 
-// Internal function used by the tests so that the exported version can take
-// `testing.TB` instead of `testing.T`.
-func requireManyInserted(ctx context.Context, t testingT, dbtx DBTX, expectedJobs []ExpectedJob) []*river.JobRow {
-	actualArgs, err := requireManyInsertedErr(ctx, t, dbtx, expectedJobs)
+func requireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, driver TDriver, expectedJobs []ExpectedJob) []*river.JobRow {
+	actualArgs, err := requireManyInsertedErr[TDriver](ctx, t, driver.GetDBPool(), expectedJobs)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
 	}
 	return actualArgs
 }
 
-func requireManyInsertedErr(ctx context.Context, t testingT, dbtx DBTX, expectedJobs []ExpectedJob) ([]*river.JobRow, error) {
+// RequireManyInsertedTx is a test helper that verifies that jobs of the given
+// kinds were inserted for work, failing the test if they weren't, or were
+// inserted in the wrong order. If found, the inserted jobs are returned so that
+// further assertions can be made against them.
+//
+//	job := RequireManyInsertedTx[*riverpgxv5.Driver](ctx, t, tx, []river.JobArgs{
+//		&Job1Args{},
+//	})
+//
+// This variant takes a transaction. See also RequireManyInserted which takes a
+// driver that wraps a database pool.
+//
+// A RequireInsertedOpts struct can be provided for each expected job, and if it is,
+// its properties (e.g. max attempts, priority, queue name) will act as required
+// assertions for the corresponding inserted job row. UniqueOpts is ignored.
+//
+// The assertion expects emitted jobs to have occurred exactly in the order and
+// the number specified, and will fail in case this expectation isn't met. So if
+// a job of a certain kind is emitted multiple times, it must be expected
+// multiple times.
+func RequireManyInsertedTx[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, tb testing.TB, tx TTx, expectedJobs []ExpectedJob) []*river.JobRow {
+	tb.Helper()
+	return requireManyInsertedTx[TDriver](ctx, tb, tx, expectedJobs)
+}
+
+// Internal function used by the tests so that the exported version can take
+// `testing.TB` instead of `testing.T`.
+func requireManyInsertedTx[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, tx TTx, expectedJobs []ExpectedJob) []*river.JobRow {
+	var driver TDriver
+	actualArgs, err := requireManyInsertedErr[TDriver](ctx, t, driver.UnwrapTx(tx), expectedJobs)
+	if err != nil {
+		failure(t, "Internal failure: %s", err)
+	}
+	return actualArgs
+}
+
+func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, db dbtx, expectedJobs []ExpectedJob) ([]*river.JobRow, error) {
 	queries := dbsqlc.New()
 
 	expectedArgsKinds := sliceutil.Map(expectedJobs, func(j ExpectedJob) string { return j.Args.Kind() })
 
 	// Returned ordered by ID.
-	dbJobs, err := queries.JobGetByKindMany(ctx, dbtx, expectedArgsKinds)
+	dbJobs, err := queries.JobGetByKindMany(ctx, db, expectedArgsKinds)
 	if err != nil {
 		return nil, fmt.Errorf("error querying jobs: %w", err)
 	}
