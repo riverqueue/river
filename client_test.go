@@ -168,7 +168,10 @@ func Test_Client(t *testing.T) {
 
 	ctx := context.Background()
 
-	type testBundle struct{}
+	type testBundle struct {
+		queries       *dbsqlc.Queries
+		subscribeChan <-chan *Event
+	}
 
 	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
 		t.Helper()
@@ -176,7 +179,16 @@ func Test_Client(t *testing.T) {
 		config := newTestConfig(t, nil)
 		client := newTestClient(ctx, t, config)
 
-		return client, &testBundle{}
+		subscribeChan, _ := client.Subscribe(
+			EventKindJobCancelled,
+			EventKindJobCompleted,
+			EventKindJobFailed,
+			EventKindJobSnoozed,
+		)
+
+		return client, &testBundle{
+			subscribeChan: subscribeChan,
+		}
 	}
 
 	t.Run("StartInsertAndWork", func(t *testing.T) {
@@ -201,6 +213,64 @@ func Test_Client(t *testing.T) {
 		require.NoError(t, err)
 
 		rivertest.WaitOrTimeout(t, workedChan)
+	})
+
+	t.Run("JobCancel", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			return JobCancel(fmt.Errorf("a persisted internal error"))
+		}))
+
+		startClient(ctx, t, client)
+
+		insertedJob, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		event := rivertest.WaitOrTimeout(t, bundle.subscribeChan)
+		require.Equal(t, EventKindJobCancelled, event.Kind)
+		require.Equal(t, JobStateCancelled, event.Job.State)
+		require.WithinDuration(t, time.Now(), *event.Job.FinalizedAt, 2*time.Second)
+
+		updatedJob, err := bundle.queries.JobGetByID(ctx, client.driver.GetDBPool(), insertedJob.ID)
+		require.NoError(t, err)
+		require.Equal(t, dbsqlc.JobStateCancelled, updatedJob.State)
+		require.WithinDuration(t, time.Now(), *updatedJob.FinalizedAt, 2*time.Second)
+	})
+
+	t.Run("JobSnooze", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			return JobSnooze(15 * time.Minute)
+		}))
+
+		startClient(ctx, t, client)
+
+		insertedJob, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		event := rivertest.WaitOrTimeout(t, bundle.subscribeChan)
+		require.Equal(t, EventKindJobSnoozed, event.Kind)
+		require.Equal(t, JobStateScheduled, event.Job.State)
+		require.WithinDuration(t, time.Now().Add(15*time.Minute), event.Job.ScheduledAt, 2*time.Second)
+
+		updatedJob, err := bundle.queries.JobGetByID(ctx, client.driver.GetDBPool(), insertedJob.ID)
+		require.NoError(t, err)
+		require.Equal(t, dbsqlc.JobStateScheduled, updatedJob.State)
+		require.WithinDuration(t, time.Now().Add(15*time.Minute), updatedJob.ScheduledAt, 2*time.Second)
 	})
 
 	t.Run("AlternateSchema", func(t *testing.T) {
