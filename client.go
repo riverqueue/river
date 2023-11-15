@@ -309,8 +309,9 @@ func (ts *clientTestSignals) Init() {
 }
 
 var (
-	errMissingConfig = errors.New("missing config")
-	errMissingDriver = errors.New("missing database driver (try wrapping a Pgx pool with river/riverdriver/riverpgxv5.New)")
+	errMissingConfig                 = errors.New("missing config")
+	errMissingDatabasePoolWithQueues = errors.New("must have a non-nil database pool to execute jobs (either use a driver with database pool or don't configure Queues)")
+	errMissingDriver                 = errors.New("missing database driver (try wrapping a Pgx pool with river/riverdriver/riverpgxv5.New)")
 )
 
 // NewClient creates a new Client with the given database driver and
@@ -434,6 +435,10 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	// we're actually going to be working jobs (as opposed to just enqueueing
 	// them):
 	if config.willExecuteJobs() {
+		if driver.GetDBPool() == nil {
+			return nil, errMissingDatabasePoolWithQueues
+		}
+
 		// TODO: for now we only support a single instance per database/schema.
 		// If we want to provide isolation within a single database/schema,
 		// we'll need to add a config for this.
@@ -967,6 +972,8 @@ func insertParamsFromArgsAndOptions(args JobArgs, insertOpts *InsertOpts) (*dbad
 	return insertParams, nil
 }
 
+var errInsertNoDriverDBPool = fmt.Errorf("driver must have non-nil database pool to use Insert and InsertMany (try InsertTx or InsertManyTx instead")
+
 // Insert inserts a new job with the provided args. Job opts can be used to
 // override any defaults that may have been provided by an implementation of
 // JobArgsWithInsertOpts.InsertOpts, as well as any global defaults. The
@@ -978,6 +985,10 @@ func insertParamsFromArgsAndOptions(args JobArgs, insertOpts *InsertOpts) (*dbad
 //		// handle error
 //	}
 func (c *Client[TTx]) Insert(ctx context.Context, args JobArgs, opts *InsertOpts) (*JobRow, error) {
+	if c.driver.GetDBPool() == nil {
+		return nil, errInsertNoDriverDBPool
+	}
+
 	if err := c.validateJobArgs(args); err != nil {
 		return nil, err
 	}
@@ -1053,6 +1064,10 @@ type InsertManyParams struct {
 //		// handle error
 //	}
 func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams) (int64, error) {
+	if c.driver.GetDBPool() == nil {
+		return 0, errInsertNoDriverDBPool
+	}
+
 	insertParams, err := c.insertManyParams(params)
 	if err != nil {
 		return 0, err
