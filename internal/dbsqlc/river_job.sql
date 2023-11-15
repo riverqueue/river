@@ -458,32 +458,22 @@ updated_job AS (
     updated_job
 ) ORDER BY scheduled_at DESC NULLS LAST LIMIT 1;
 
--- name: JobUpdateStuckForDiscard :exec
-UPDATE river_job
-SET
-  errors = array_append(errors, updated_job.error),
-  state = updated_job.state,
-  finalized_at = now()
-FROM (
-  SELECT
-    unnest(@id::bigint[]) AS id,
-    unnest(@errors::jsonb[]) AS error,
-    'discarded'::river_job_state AS state
-) AS updated_job
-WHERE river_job.id = updated_job.id;
 
--- name: JobUpdateStuckForRetry :exec
+-- Run by the rescuer to queue for retry or discard depending on job state.
+-- name: JobRescueMany :exec
 UPDATE river_job
 SET
   errors = array_append(errors, updated_job.error),
+  finalized_at = updated_job.finalized_at,
   scheduled_at = updated_job.scheduled_at,
   state = updated_job.state
 FROM (
   SELECT
     unnest(@id::bigint[]) AS id,
+    unnest(@error::jsonb[]) AS error,
+    nullif(unnest(@finalized_at::timestamptz[]), '0001-01-01 00:00:00 +0000') AS finalized_at,
     unnest(@scheduled_at::timestamptz[]) AS scheduled_at,
-    unnest(@errors::jsonb[]) AS error,
-    'retryable'::river_job_state AS state
+    unnest(@state::text[])::river_job_state AS state
 ) AS updated_job
 WHERE river_job.id = updated_job.id;
 

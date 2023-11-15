@@ -1101,26 +1101,27 @@ func Test_Client_Maintenance(t *testing.T) {
 		// with the number of errors that corresponds to its attempt count. Without
 		// that, the rescued/errored jobs can retry immediately with no backoff and
 		// cause flakiness as they quickly get picked back up again.
-		var errors []AttemptError
 		errorCount := int(params.Attempt - 1)
 		if params.Attempt == 0 {
 			errorCount = int(params.Attempt)
 		}
+
+		errorsBytes := make([][]byte, errorCount)
 		for i := 0; i < errorCount; i++ {
-			errors = append(errors, AttemptError{
+			var err error
+			errorsBytes[i], err = json.Marshal(AttemptError{
 				At:    time.Now(),
 				Error: "mocked error",
 				Num:   i + 1,
 				Trace: "none",
 			})
+			require.NoError(t, err)
 		}
-		errorBytes, err := marshalAllErrors(errors)
-		require.NoError(t, err)
 
 		job, err := queries.JobInsert(ctx, dbtx, dbsqlc.JobInsertParams{
 			Attempt:     valutil.FirstNonZero(params.Attempt, int16(1)),
 			AttemptedAt: params.AttemptedAt,
-			Errors:      errorBytes,
+			Errors:      errorsBytes,
 			FinalizedAt: params.FinalizedAt,
 			Kind:        valutil.FirstNonZero(params.Kind, "test_kind"),
 			MaxAttempts: valutil.FirstNonZero(params.MaxAttempts, int16(rivercommon.DefaultMaxAttempts)),
@@ -1288,10 +1289,8 @@ func Test_Client_Maintenance(t *testing.T) {
 
 		client.testSignals.electedLeader.WaitOrTimeout()
 		svc := maintenance.GetService[*rescuer](client.queueMaintainer)
-		// We should both schedule retries and discard jobs:
 		svc.TestSignals.FetchedBatch.WaitOrTimeout()
-		svc.TestSignals.RetriedJobs.WaitOrTimeout()
-		svc.TestSignals.DiscardedJobs.WaitOrTimeout()
+		svc.TestSignals.UpdatedBatch.WaitOrTimeout()
 
 		requireJobHasState := func(jobID int64, state dbsqlc.JobState) {
 			t.Helper()

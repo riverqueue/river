@@ -25,15 +25,13 @@ const (
 
 // Test-only properties.
 type rescuerTestSignals struct {
-	DiscardedJobs rivercommon.TestSignal[struct{}] // notifies when runOnce has discarded jobs from the batch
-	FetchedBatch  rivercommon.TestSignal[struct{}] // notifies when runOnce has fetched a batch of jobs
-	RetriedJobs   rivercommon.TestSignal[struct{}] // notifies when runOnce has retried jobs from the batch
+	FetchedBatch rivercommon.TestSignal[struct{}] // notifies when runOnce has fetched a batch of jobs
+	UpdatedBatch rivercommon.TestSignal[struct{}] // notifies when runOnce has updated rescued jobs from a batch
 }
 
 func (ts *rescuerTestSignals) Init() {
-	ts.DiscardedJobs.Init()
 	ts.FetchedBatch.Init()
-	ts.RetriedJobs.Init()
+	ts.UpdatedBatch.Init()
 }
 
 type rescuerConfig struct {
@@ -79,7 +77,7 @@ type rescuer struct {
 	Config      *rescuerConfig
 	TestSignals rescuerTestSignals
 
-	batchSize  int32 // configurable for test purposes
+	batchSize  int // configurable for test purposes
 	dbExecutor dbutil.Executor
 	queries    *dbsqlc.Queries
 }
@@ -133,7 +131,7 @@ func (s *rescuer) Start(ctx context.Context) error {
 
 			s.Logger.InfoContext(ctx, s.Name+": Ran successfully",
 				slog.Int64("num_jobs_discarded", res.NumJobsDiscarded),
-				slog.Int64("num_jobs_retry_scheduled", res.NumJobsRetryScheduled),
+				slog.Int64("num_jobs_retry_scheduled", res.NumJobsRetried),
 			)
 		}
 	}()
@@ -142,8 +140,8 @@ func (s *rescuer) Start(ctx context.Context) error {
 }
 
 type rescuerRunOnceResult struct {
-	NumJobsRetryScheduled int64
-	NumJobsDiscarded      int64
+	NumJobsDiscarded int64
+	NumJobsRetried   int64
 }
 
 func (s *rescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error) {
@@ -157,86 +155,63 @@ func (s *rescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error) {
 
 		s.TestSignals.FetchedBatch.Signal(struct{}{})
 
-		jobIDsToDiscard := make([]int64, 0, len(stuckJobs))
-		attemptErrorsForDiscard := make([]AttemptError, 0, len(stuckJobs))
-
-		jobIDsToRetry := make([]int64, 0, len(stuckJobs))
-		attemptErrorsForRetry := make([]AttemptError, 0, len(stuckJobs))
-		timestampsForRetry := make([]time.Time, 0, len(stuckJobs))
+		// Return quickly in case there's no work to do.
+		if len(stuckJobs) < 1 {
+			return res, nil
+		}
 
 		now := time.Now().UTC()
 
-		for _, job := range stuckJobs {
+		rescueManyParams := dbsqlc.JobRescueManyParams{
+			ID:          make([]int64, len(stuckJobs)),
+			Error:       make([][]byte, len(stuckJobs)),
+			FinalizedAt: make([]time.Time, len(stuckJobs)),
+			ScheduledAt: make([]time.Time, len(stuckJobs)),
+			State:       make([]string, len(stuckJobs)),
+		}
+
+		for i, job := range stuckJobs {
+			rescueManyParams.ID[i] = job.ID
+
+			rescueManyParams.Error[i], err = json.Marshal(AttemptError{
+				At:    now,
+				Error: "Stuck job rescued by Rescuer",
+				Num:   max(int(job.Attempt), 0),
+				Trace: "TODO",
+			})
+			if err != nil {
+				return nil, fmt.Errorf("error marshaling error JSON: %w", err)
+			}
+
 			shouldRetry, retryAt := s.makeRetryDecision(ctx, job)
 			if shouldRetry {
-				jobIDsToRetry = append(jobIDsToRetry, job.ID)
-				timestampsForRetry = append(timestampsForRetry, retryAt)
-				attemptError := AttemptError{
-					At:    now,
-					Error: "Stuck job rescued by Rescuer",
-					Num:   max(int(job.Attempt), 0),
-					Trace: "TODO",
-				}
-				attemptErrorsForRetry = append(attemptErrorsForRetry, attemptError)
+				res.NumJobsRetried++
+				rescueManyParams.ScheduledAt[i] = retryAt
+				rescueManyParams.State[i] = string(dbsqlc.JobStateRetryable)
 			} else {
-				jobIDsToDiscard = append(jobIDsToDiscard, job.ID)
-				attemptError := AttemptError{
-					At:    now,
-					Error: "Stuck job rescued by Rescuer",
-					Num:   max(int(job.Attempt), 0),
-					Trace: "TODO",
-				}
-				attemptErrorsForDiscard = append(attemptErrorsForDiscard, attemptError)
+				res.NumJobsDiscarded++
+				rescueManyParams.FinalizedAt[i] = now
+				rescueManyParams.ScheduledAt[i] = job.ScheduledAt // reuse previous value
+				rescueManyParams.State[i] = string(dbsqlc.JobStateDiscarded)
 			}
 		}
 
-		if len(jobIDsToRetry) > 0 {
-			marshaledRetryErrors, err := marshalAllErrors(attemptErrorsForRetry)
-			if err != nil {
-				return nil, fmt.Errorf("error marshaling retry errors: %w", err)
-			}
-
-			err = s.queries.JobUpdateStuckForRetry(ctx, s.dbExecutor, dbsqlc.JobUpdateStuckForRetryParams{
-				ID:          jobIDsToRetry,
-				ScheduledAt: timestampsForRetry,
-				Errors:      marshaledRetryErrors,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("error updating stuck jobs for retry: %w", err)
-			}
-			s.TestSignals.RetriedJobs.Signal(struct{}{})
+		err = s.queries.JobRescueMany(ctx, s.dbExecutor, rescueManyParams)
+		if err != nil {
+			return nil, fmt.Errorf("error rescuing stuck jobs: %w", err)
 		}
 
-		if len(jobIDsToDiscard) > 0 {
-			marshaledDiscardErrors, err := marshalAllErrors(attemptErrorsForDiscard)
-			if err != nil {
-				return nil, fmt.Errorf("error marshaling discard errors: %w", err)
-			}
-
-			err = s.queries.JobUpdateStuckForDiscard(ctx, s.dbExecutor, dbsqlc.JobUpdateStuckForDiscardParams{
-				ID:     jobIDsToDiscard,
-				Errors: marshaledDiscardErrors,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("error updating stuck jobs for discard: %w", err)
-			}
-			s.TestSignals.DiscardedJobs.Signal(struct{}{})
-		}
-
-		numDiscarded := int64(len(jobIDsToDiscard))
-		numRetried := int64(len(jobIDsToRetry))
-		res.NumJobsDiscarded += numDiscarded
-		res.NumJobsRetryScheduled += numRetried
+		s.TestSignals.UpdatedBatch.Signal(struct{}{})
 
 		// Number of rows fetched was less than query `LIMIT` which means work is
 		// done for this round:
-		if int32(len(stuckJobs)) < s.batchSize {
+		if len(stuckJobs) < s.batchSize {
 			break
 		}
 
 		s.Logger.InfoContext(ctx, s.Name+": Rescued batch of jobs",
-			slog.Int64("num_jobs_discarded", numDiscarded),
-			slog.Int64("num_jobs_retried", numRetried),
+			slog.Int64("num_jobs_discarded", res.NumJobsDiscarded),
+			slog.Int64("num_jobs_retried", res.NumJobsRetried),
 		)
 
 		s.CancellableSleepRandomBetween(ctx, maintenance.BatchBackoffMin, maintenance.BatchBackoffMax)
@@ -253,7 +228,7 @@ func (s *rescuer) getStuckJobs(ctx context.Context) ([]*dbsqlc.RiverJob, error) 
 
 	return s.queries.JobGetStuck(ctx, s.dbExecutor, dbsqlc.JobGetStuckParams{
 		StuckHorizon: stuckHorizon,
-		LimitCount:   s.batchSize,
+		LimitCount:   int32(s.batchSize),
 	})
 }
 
@@ -279,18 +254,4 @@ func (s *rescuer) makeRetryDecision(ctx context.Context, internalJob *dbsqlc.Riv
 		nextRetry = s.Config.ClientRetryPolicy.NextRetry(job)
 	}
 	return job.Attempt < max(int(internalJob.MaxAttempts), 0), nextRetry
-}
-
-func marshalAllErrors(errors []AttemptError) ([][]byte, error) {
-	results := make([][]byte, len(errors))
-
-	for i, attemptErr := range errors {
-		payload, err := json.Marshal(attemptErr)
-		if err != nil {
-			return nil, err
-		}
-		results[i] = payload
-	}
-
-	return results, nil
 }

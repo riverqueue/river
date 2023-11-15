@@ -549,6 +549,44 @@ type JobInsertManyParams struct {
 	Tags        []string
 }
 
+const jobRescueMany = `-- name: JobRescueMany :exec
+UPDATE river_job
+SET
+  errors = array_append(errors, updated_job.error),
+  finalized_at = updated_job.finalized_at,
+  scheduled_at = updated_job.scheduled_at,
+  state = updated_job.state
+FROM (
+  SELECT
+    unnest($1::bigint[]) AS id,
+    unnest($2::jsonb[]) AS error,
+    nullif(unnest($3::timestamptz[]), '0001-01-01 00:00:00 +0000') AS finalized_at,
+    unnest($4::timestamptz[]) AS scheduled_at,
+    unnest($5::text[])::river_job_state AS state
+) AS updated_job
+WHERE river_job.id = updated_job.id
+`
+
+type JobRescueManyParams struct {
+	ID          []int64
+	Error       [][]byte
+	FinalizedAt []time.Time
+	ScheduledAt []time.Time
+	State       []string
+}
+
+// Run by the rescuer to queue for retry or discard depending on job state.
+func (q *Queries) JobRescueMany(ctx context.Context, db DBTX, arg JobRescueManyParams) error {
+	_, err := db.Exec(ctx, jobRescueMany,
+		arg.ID,
+		arg.Error,
+		arg.FinalizedAt,
+		arg.ScheduledAt,
+		arg.State,
+	)
+	return err
+}
+
 const jobSchedule = `-- name: JobSchedule :one
 WITH jobs_to_schedule AS (
   SELECT id
@@ -1076,58 +1114,6 @@ func (q *Queries) JobUpdate(ctx context.Context, db DBTX, arg JobUpdateParams) (
 		&i.Tags,
 	)
 	return &i, err
-}
-
-const jobUpdateStuckForDiscard = `-- name: JobUpdateStuckForDiscard :exec
-UPDATE river_job
-SET
-  errors = array_append(errors, updated_job.error),
-  state = updated_job.state,
-  finalized_at = now()
-FROM (
-  SELECT
-    unnest($1::bigint[]) AS id,
-    unnest($2::jsonb[]) AS error,
-    'discarded'::river_job_state AS state
-) AS updated_job
-WHERE river_job.id = updated_job.id
-`
-
-type JobUpdateStuckForDiscardParams struct {
-	ID     []int64
-	Errors [][]byte
-}
-
-func (q *Queries) JobUpdateStuckForDiscard(ctx context.Context, db DBTX, arg JobUpdateStuckForDiscardParams) error {
-	_, err := db.Exec(ctx, jobUpdateStuckForDiscard, arg.ID, arg.Errors)
-	return err
-}
-
-const jobUpdateStuckForRetry = `-- name: JobUpdateStuckForRetry :exec
-UPDATE river_job
-SET
-  errors = array_append(errors, updated_job.error),
-  scheduled_at = updated_job.scheduled_at,
-  state = updated_job.state
-FROM (
-  SELECT
-    unnest($1::bigint[]) AS id,
-    unnest($2::timestamptz[]) AS scheduled_at,
-    unnest($3::jsonb[]) AS error,
-    'retryable'::river_job_state AS state
-) AS updated_job
-WHERE river_job.id = updated_job.id
-`
-
-type JobUpdateStuckForRetryParams struct {
-	ID          []int64
-	ScheduledAt []time.Time
-	Errors      [][]byte
-}
-
-func (q *Queries) JobUpdateStuckForRetry(ctx context.Context, db DBTX, arg JobUpdateStuckForRetryParams) error {
-	_, err := db.Exec(ctx, jobUpdateStuckForRetry, arg.ID, arg.ScheduledAt, arg.Errors)
-	return err
 }
 
 const pGAdvisoryXactLock = `-- name: PGAdvisoryXactLock :exec
