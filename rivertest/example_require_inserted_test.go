@@ -54,7 +54,13 @@ func Example_requireInserted() {
 		panic(err)
 	}
 
-	_, err = riverClient.Insert(ctx, RequiredArgs{
+	tx, err := dbPool.Begin(ctx)
+	if err != nil {
+		panic(err)
+	}
+	defer tx.Rollback(ctx)
+
+	_, err = riverClient.InsertTx(ctx, tx, &RequiredArgs{
 		Message: "Hello.",
 	}, nil)
 	if err != nil {
@@ -65,15 +71,22 @@ func Example_requireInserted() {
 	// *testing.T that comes from a test's argument.
 	t := &testing.T{}
 
-	job := rivertest.RequireInserted(ctx, t, dbPool, &RequiredArgs{}, nil)
+	job := rivertest.RequireInsertedTx[*riverpgxv5.Driver](ctx, t, tx, &RequiredArgs{}, nil)
 	fmt.Printf("Test passed with message: %s\n", job.Args.Message)
 
 	// Verify the same job again, and this time that it was inserted at the
 	// default priority and default queue.
-	_ = rivertest.RequireInserted(ctx, t, dbPool, &RequiredArgs{}, &rivertest.RequireInsertedOpts{
+	_ = rivertest.RequireInsertedTx[*riverpgxv5.Driver](ctx, t, tx, &RequiredArgs{}, &rivertest.RequireInsertedOpts{
 		Priority: 1,
 		Queue:    river.DefaultQueue,
 	})
+
+	// Insert and verify one on a pool instead of transaction.
+	_, err = riverClient.Insert(ctx, &RequiredArgs{Message: "Hello from pool."}, nil)
+	if err != nil {
+		panic(err)
+	}
+	_ = rivertest.RequireInserted(ctx, t, riverpgxv5.New(dbPool), &RequiredArgs{}, nil)
 
 	// Output:
 	// Test passed with message: Hello.

@@ -43,6 +43,8 @@ type Job2Worker struct {
 
 func (w *Job2Worker) Work(ctx context.Context, j *river.Job[Job2Args]) error { return nil }
 
+// The tests for this function are quite minimal because it uses the same
+// implementation as the `*Tx` variant, so most of the test happens below.
 func TestRequireInserted(t *testing.T) {
 	t.Parallel()
 
@@ -88,7 +90,64 @@ func TestRequireInserted(t *testing.T) {
 		_, err := riverClient.Insert(ctx, Job1Args{String: "foo"}, nil)
 		require.NoError(t, err)
 
-		job := requireInserted(ctx, bundle.mockT, bundle.dbPool, &Job1Args{}, nil)
+		job := requireInserted(ctx, t, riverpgxv5.New(bundle.dbPool), &Job1Args{}, nil)
+		require.False(t, bundle.mockT.Failed)
+		require.Equal(t, "foo", job.Args.String)
+	})
+}
+
+func TestRequireInsertedTx(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		dbPool *pgxpool.Pool
+		mockT  *MockT
+		tx     pgx.Tx
+	}
+
+	setup := func(t *testing.T) (*river.Client[pgx.Tx], *testBundle) { //nolint:dupl
+		t.Helper()
+
+		dbPool := riverinternaltest.TestDB(ctx, t)
+
+		workers := river.NewWorkers()
+		river.AddWorker(workers, &Job1Worker{})
+		river.AddWorker(workers, &Job2Worker{})
+
+		riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
+			Queues: map[string]river.QueueConfig{
+				river.DefaultQueue: {MaxWorkers: 100},
+			},
+			Workers: workers,
+		})
+		require.NoError(t, err)
+
+		err = riverClient.Start(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, riverClient.Stop(ctx)) })
+
+		tx, err := dbPool.Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { tx.Rollback(ctx) })
+
+		return riverClient, &testBundle{
+			dbPool: dbPool,
+			mockT:  NewMockT(t),
+			tx:     tx,
+		}
+	}
+
+	t.Run("VerifiesInsert", func(t *testing.T) {
+		t.Parallel()
+
+		riverClient, bundle := setup(t)
+
+		_, err := riverClient.Insert(ctx, Job1Args{String: "foo"}, nil)
+		require.NoError(t, err)
+
+		job := requireInsertedTx[*riverpgxv5.Driver](ctx, t, bundle.tx, &Job1Args{}, nil)
 		require.False(t, bundle.mockT.Failed)
 		require.Equal(t, "foo", job.Args.String)
 	})
@@ -104,34 +163,35 @@ func TestRequireInserted(t *testing.T) {
 		_, err = riverClient.Insert(ctx, Job2Args{Int: 123}, nil)
 		require.NoError(t, err)
 
-		job1 := requireInserted(ctx, bundle.mockT, bundle.dbPool, &Job1Args{}, nil)
+		job1 := requireInsertedTx[*riverpgxv5.Driver](ctx, t, bundle.tx, &Job1Args{}, nil)
 		require.False(t, bundle.mockT.Failed)
 		require.Equal(t, "foo", job1.Args.String)
 
-		job2 := requireInserted(ctx, bundle.mockT, bundle.dbPool, &Job2Args{}, nil)
+		job2 := requireInsertedTx[*riverpgxv5.Driver](ctx, t, bundle.tx, &Job2Args{}, nil)
 		require.False(t, bundle.mockT.Failed)
 		require.Equal(t, 123, job2.Args.Int)
 	})
 
-	t.Run("VerifiesTransaction", func(t *testing.T) {
+	t.Run("TransactionVisibility", func(t *testing.T) {
 		t.Parallel()
 
 		riverClient, bundle := setup(t)
 
+		// Start a second transaction with different visibility.
 		tx, err := bundle.dbPool.Begin(ctx)
 		require.NoError(t, err)
 		t.Cleanup(func() { tx.Rollback(ctx) })
 
-		_, err = riverClient.InsertTx(ctx, tx, Job1Args{String: "foo"}, nil)
+		_, err = riverClient.InsertTx(ctx, bundle.tx, Job1Args{String: "foo"}, nil)
 		require.NoError(t, err)
 
-		job := requireInserted(ctx, bundle.mockT, tx, &Job1Args{}, nil)
+		// Visible in the original transaction.
+		job := requireInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, &Job1Args{}, nil)
 		require.False(t, bundle.mockT.Failed)
 		require.Equal(t, "foo", job.Args.String)
 
-		// Fails on the connection pool because the job isn't visible outside of
-		// the transaction.
-		_ = requireInserted(ctx, bundle.mockT, bundle.dbPool, &Job1Args{}, nil)
+		// Not visible in the second transaction.
+		_ = requireInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, tx, &Job1Args{}, nil)
 		require.True(t, bundle.mockT.Failed)
 	})
 
@@ -144,7 +204,7 @@ func TestRequireInserted(t *testing.T) {
 		_, err := riverClient.Insert(ctx, Job1Args{String: "foo"}, nil)
 		require.NoError(t, err)
 
-		_ = requireInserted(ctx, bundle.mockT, bundle.dbPool, &Job1Args{}, &RequireInsertedOpts{
+		_ = requireInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, &Job1Args{}, &RequireInsertedOpts{
 			MaxAttempts: river.DefaultMaxAttempts,
 			Priority:    1,
 			Queue:       river.DefaultQueue,
@@ -161,7 +221,7 @@ func TestRequireInserted(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		_ = requireInserted(ctx, bundle.mockT, bundle.dbPool, &Job2Args{}, &RequireInsertedOpts{
+		_ = requireInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, &Job2Args{}, &RequireInsertedOpts{
 			MaxAttempts: 78,
 			Priority:    2,
 			Queue:       "another-queue",
@@ -179,7 +239,7 @@ func TestRequireInserted(t *testing.T) {
 		_, err := riverClient.Insert(ctx, Job1Args{String: "foo"}, nil)
 		require.NoError(t, err)
 
-		_ = requireInserted(ctx, bundle.mockT, bundle.dbPool, &Job2Args{}, nil)
+		_ = requireInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, &Job2Args{}, nil)
 		require.True(t, bundle.mockT.Failed)
 		require.Equal(t,
 			failureString("No jobs found with kind: job2")+"\n",
@@ -197,7 +257,7 @@ func TestRequireInserted(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		_ = requireInserted(ctx, bundle.mockT, bundle.dbPool, &Job1Args{}, nil)
+		_ = requireInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, &Job1Args{}, nil)
 		require.True(t, bundle.mockT.Failed)
 		require.Equal(t,
 			failureString("More than one job found with kind: job1 (you might want RequireManyInserted instead)")+"\n",
@@ -209,7 +269,7 @@ func TestRequireInserted(t *testing.T) {
 
 		_, bundle := setup(t)
 
-		_ = requireInserted(ctx, bundle.mockT, bundle.dbPool, &Job1Args{}, nil)
+		_ = requireInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, &Job1Args{}, nil)
 		require.True(t, bundle.mockT.Failed)
 		require.Equal(t,
 			failureString("No jobs found with kind: job1")+"\n",
@@ -234,7 +294,7 @@ func TestRequireInserted(t *testing.T) {
 		// Max attempts
 		{
 			mockT := NewMockT(t)
-			_ = requireInserted(ctx, mockT, bundle.dbPool, &Job2Args{}, &RequireInsertedOpts{
+			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, &RequireInsertedOpts{
 				MaxAttempts: 77,
 				Priority:    2,
 				Queue:       "another-queue",
@@ -251,7 +311,7 @@ func TestRequireInserted(t *testing.T) {
 		// Priority
 		{
 			mockT := NewMockT(t)
-			_ = requireInserted(ctx, mockT, bundle.dbPool, &Job2Args{}, &RequireInsertedOpts{
+			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, &RequireInsertedOpts{
 				MaxAttempts: 78,
 				Priority:    3,
 				Queue:       "another-queue",
@@ -268,7 +328,7 @@ func TestRequireInserted(t *testing.T) {
 		// Queue
 		{
 			mockT := NewMockT(t)
-			_ = requireInserted(ctx, mockT, bundle.dbPool, &Job2Args{}, &RequireInsertedOpts{
+			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, &RequireInsertedOpts{
 				MaxAttempts: 78,
 				Priority:    2,
 				Queue:       "wrong-queue",
@@ -285,7 +345,7 @@ func TestRequireInserted(t *testing.T) {
 		// Scheduled at
 		{
 			mockT := NewMockT(t)
-			_ = requireInserted(ctx, mockT, bundle.dbPool, &Job2Args{}, &RequireInsertedOpts{
+			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, &RequireInsertedOpts{
 				MaxAttempts: 78,
 				Priority:    2,
 				Queue:       "another-queue",
@@ -302,7 +362,7 @@ func TestRequireInserted(t *testing.T) {
 		// State
 		{
 			mockT := NewMockT(t)
-			_ = requireInserted(ctx, mockT, bundle.dbPool, &Job2Args{}, &RequireInsertedOpts{
+			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, &RequireInsertedOpts{
 				MaxAttempts: 78,
 				Priority:    2,
 				Queue:       "another-queue",
@@ -319,7 +379,7 @@ func TestRequireInserted(t *testing.T) {
 		// Tags
 		{
 			mockT := NewMockT(t)
-			_ = requireInserted(ctx, mockT, bundle.dbPool, &Job2Args{}, &RequireInsertedOpts{
+			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, &RequireInsertedOpts{
 				MaxAttempts: 78,
 				Priority:    2,
 				Queue:       "another-queue",
@@ -335,6 +395,8 @@ func TestRequireInserted(t *testing.T) {
 	})
 }
 
+// The tests for this function are quite minimal because it uses the same
+// implementation as the `*Tx` variant, so most of the test happens below.
 func TestRequireManyInserted(t *testing.T) {
 	t.Parallel()
 
@@ -380,34 +442,94 @@ func TestRequireManyInserted(t *testing.T) {
 		_, err := riverClient.Insert(ctx, Job1Args{String: "foo"}, nil)
 		require.NoError(t, err)
 
-		jobs := requireManyInserted(ctx, bundle.mockT, bundle.dbPool, []ExpectedJob{
+		jobs := requireManyInserted(ctx, bundle.mockT, riverpgxv5.New(bundle.dbPool), []ExpectedJob{
+			{Args: &Job1Args{}},
+		})
+		require.False(t, bundle.mockT.Failed)
+		require.Equal(t, "job1", jobs[0].Kind)
+	})
+}
+
+func TestRequireManyInsertedTx(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		dbPool *pgxpool.Pool
+		mockT  *MockT
+		tx     pgx.Tx
+	}
+
+	setup := func(t *testing.T) (*river.Client[pgx.Tx], *testBundle) { //nolint:dupl
+		t.Helper()
+
+		dbPool := riverinternaltest.TestDB(ctx, t)
+
+		workers := river.NewWorkers()
+		river.AddWorker(workers, &Job1Worker{})
+		river.AddWorker(workers, &Job2Worker{})
+
+		riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
+			Queues: map[string]river.QueueConfig{
+				river.DefaultQueue: {MaxWorkers: 100},
+			},
+			Workers: workers,
+		})
+		require.NoError(t, err)
+
+		err = riverClient.Start(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, riverClient.Stop(ctx)) })
+
+		tx, err := dbPool.Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { tx.Rollback(ctx) })
+
+		return riverClient, &testBundle{
+			dbPool: dbPool,
+			mockT:  NewMockT(t),
+			tx:     tx,
+		}
+	}
+
+	t.Run("VerifiesInsert", func(t *testing.T) {
+		t.Parallel()
+
+		riverClient, bundle := setup(t)
+
+		_, err := riverClient.Insert(ctx, Job1Args{String: "foo"}, nil)
+		require.NoError(t, err)
+
+		jobs := requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
 			{Args: &Job1Args{}},
 		})
 		require.False(t, bundle.mockT.Failed)
 		require.Equal(t, "job1", jobs[0].Kind)
 	})
 
-	t.Run("VerifiesTransaction", func(t *testing.T) {
+	t.Run("TransactionVisibility", func(t *testing.T) {
 		t.Parallel()
 
 		riverClient, bundle := setup(t)
 
+		// Start a second transaction with different visibility.
 		tx, err := bundle.dbPool.Begin(ctx)
 		require.NoError(t, err)
 		t.Cleanup(func() { tx.Rollback(ctx) })
 
-		_, err = riverClient.InsertTx(ctx, tx, Job1Args{String: "foo"}, nil)
+		_, err = riverClient.InsertTx(ctx, bundle.tx, Job1Args{String: "foo"}, nil)
 		require.NoError(t, err)
 
-		jobs := requireManyInserted(ctx, bundle.mockT, tx, []ExpectedJob{
+		// Visible in the original transaction.
+		jobs := requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
 			{Args: &Job1Args{}},
 		})
 		require.False(t, bundle.mockT.Failed)
 		require.Equal(t, "job1", jobs[0].Kind)
 
-		// Fails on the connection pool because the job isn't visible outside of
-		// the transaction.
-		_ = requireManyInserted(ctx, bundle.mockT, bundle.dbPool, []ExpectedJob{
+		// Not visible in the second transaction.
+		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, tx, []ExpectedJob{
 			{Args: &Job1Args{}},
 		})
 		require.True(t, bundle.mockT.Failed)
@@ -424,7 +546,7 @@ func TestRequireManyInserted(t *testing.T) {
 		_, err = riverClient.Insert(ctx, Job2Args{Int: 123}, nil)
 		require.NoError(t, err)
 
-		jobs := requireManyInserted(ctx, bundle.mockT, bundle.dbPool, []ExpectedJob{
+		jobs := requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
 			{Args: &Job1Args{}},
 			{Args: &Job2Args{}},
 		})
@@ -444,7 +566,7 @@ func TestRequireManyInserted(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		jobs := requireManyInserted(ctx, bundle.mockT, bundle.dbPool, []ExpectedJob{
+		jobs := requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
 			{Args: &Job1Args{}},
 			{Args: &Job1Args{}},
 		})
@@ -467,7 +589,7 @@ func TestRequireManyInserted(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		jobs := requireManyInserted(ctx, bundle.mockT, bundle.dbPool, []ExpectedJob{
+		jobs := requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
 			{Args: &Job1Args{}},
 			{Args: &Job1Args{}},
 			{Args: &Job2Args{}},
@@ -491,7 +613,7 @@ func TestRequireManyInserted(t *testing.T) {
 		_, err := riverClient.Insert(ctx, Job1Args{String: "foo"}, nil)
 		require.NoError(t, err)
 
-		_ = requireManyInserted(ctx, bundle.mockT, bundle.dbPool, []ExpectedJob{
+		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
 			{
 				Args: &Job1Args{},
 				Opts: &RequireInsertedOpts{
@@ -513,7 +635,7 @@ func TestRequireManyInserted(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		_ = requireManyInserted(ctx, bundle.mockT, bundle.dbPool, []ExpectedJob{
+		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
 			{
 				Args: &Job2Args{},
 				Opts: &RequireInsertedOpts{
@@ -533,7 +655,7 @@ func TestRequireManyInserted(t *testing.T) {
 
 		_, bundle := setup(t)
 
-		_ = requireManyInserted(ctx, bundle.mockT, bundle.dbPool, []ExpectedJob{
+		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
 			{Args: &Job1Args{}},
 		})
 		require.True(t, bundle.mockT.Failed)
@@ -553,7 +675,7 @@ func TestRequireManyInserted(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		_ = requireManyInserted(ctx, bundle.mockT, bundle.dbPool, []ExpectedJob{
+		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
 			{Args: &Job1Args{}},
 		})
 		require.True(t, bundle.mockT.Failed)
@@ -573,7 +695,7 @@ func TestRequireManyInserted(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		_ = requireManyInserted(ctx, bundle.mockT, bundle.dbPool, []ExpectedJob{
+		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
 			{Args: &Job1Args{}},
 			{Args: &Job2Args{}},
 		})
@@ -597,7 +719,7 @@ func TestRequireManyInserted(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		_ = requireManyInserted(ctx, bundle.mockT, bundle.dbPool, []ExpectedJob{
+		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
 			{Args: &Job1Args{}},
 			{Args: &Job1Args{}},
 			{Args: &Job2Args{}},
@@ -628,7 +750,7 @@ func TestRequireManyInserted(t *testing.T) {
 		// Max attempts
 		{
 			mockT := NewMockT(t)
-			_ = requireManyInserted(ctx, mockT, bundle.dbPool, []ExpectedJob{
+			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, []ExpectedJob{
 				{
 					Args: &Job2Args{},
 					Opts: &RequireInsertedOpts{
@@ -650,7 +772,7 @@ func TestRequireManyInserted(t *testing.T) {
 		// Priority
 		{
 			mockT := NewMockT(t)
-			_ = requireManyInserted(ctx, mockT, bundle.dbPool, []ExpectedJob{
+			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, []ExpectedJob{
 				{
 					Args: &Job2Args{},
 					Opts: &RequireInsertedOpts{
@@ -672,7 +794,7 @@ func TestRequireManyInserted(t *testing.T) {
 		// Queue
 		{
 			mockT := NewMockT(t)
-			_ = requireManyInserted(ctx, mockT, bundle.dbPool, []ExpectedJob{
+			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, []ExpectedJob{
 				{
 					Args: &Job2Args{},
 					Opts: &RequireInsertedOpts{
@@ -694,7 +816,7 @@ func TestRequireManyInserted(t *testing.T) {
 		// Scheduled at
 		{
 			mockT := NewMockT(t)
-			_ = requireManyInserted(ctx, mockT, bundle.dbPool, []ExpectedJob{
+			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, []ExpectedJob{
 				{
 					Args: &Job2Args{},
 					Opts: &RequireInsertedOpts{
@@ -716,7 +838,7 @@ func TestRequireManyInserted(t *testing.T) {
 		// State
 		{
 			mockT := NewMockT(t)
-			_ = requireManyInserted(ctx, mockT, bundle.dbPool, []ExpectedJob{
+			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, []ExpectedJob{
 				{
 					Args: &Job2Args{},
 					Opts: &RequireInsertedOpts{
@@ -738,7 +860,7 @@ func TestRequireManyInserted(t *testing.T) {
 		// Tags
 		{
 			mockT := NewMockT(t)
-			_ = requireManyInserted(ctx, mockT, bundle.dbPool, []ExpectedJob{
+			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, []ExpectedJob{
 				{
 					Args: &Job2Args{},
 					Opts: &RequireInsertedOpts{
