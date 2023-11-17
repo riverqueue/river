@@ -134,7 +134,7 @@ func newTestClient(ctx context.Context, t *testing.T, config *Config) *Client[pg
 
 	dbPool := riverinternaltest.TestDB(ctx, t)
 
-	client, err := NewClient[pgx.Tx](riverpgxv5.New(dbPool), config)
+	client, err := NewClient(riverpgxv5.New(dbPool), config)
 	require.NoError(t, err)
 
 	client.testSignals.Init()
@@ -610,6 +610,20 @@ func Test_Client_Insert(t *testing.T) {
 		require.Equal(t, []string{"custom"}, jobRow.Tags)
 	})
 
+	t.Run("ErrorsOnDriverWithoutPool", func(t *testing.T) {
+		t.Parallel()
+
+		_, _ = setup(t)
+
+		client, err := NewClient(riverpgxv5.New(nil), &Config{
+			Logger: riverinternaltest.Logger(t),
+		})
+		require.NoError(t, err)
+
+		_, err = client.Insert(ctx, &noOpArgs{}, nil)
+		require.ErrorIs(t, err, errInsertNoDriverDBPool)
+	})
+
 	t.Run("ErrorsOnUnknownJobKindWithWorkers", func(t *testing.T) {
 		t.Parallel()
 
@@ -697,6 +711,22 @@ func Test_Client_InsertTx(t *testing.T) {
 		require.Equal(t, []string{"custom"}, jobRow.Tags)
 	})
 
+	// A client's allowed to send nil to their driver so they can, for example,
+	// easily use test transactions in their test suite.
+	t.Run("WithDriverWithoutPool", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		client, err := NewClient(riverpgxv5.New(nil), &Config{
+			Logger: riverinternaltest.Logger(t),
+		})
+		require.NoError(t, err)
+
+		_, err = client.InsertTx(ctx, bundle.tx, &noOpArgs{}, nil)
+		require.NoError(t, err)
+	})
+
 	t.Run("ErrorsOnUnknownJobKindWithWorkers", func(t *testing.T) {
 		t.Parallel()
 
@@ -755,6 +785,23 @@ func Test_Client_InsertMany(t *testing.T) {
 		jobs, err := bundle.queries.JobGetByKind(ctx, client.driver.GetDBPool(), (noOpArgs{}).Kind())
 		require.NoError(t, err)
 		require.Len(t, jobs, 2, fmt.Sprintf("Expected to find exactly two jobs of kind: %s", (noOpArgs{}).Kind()))
+	})
+
+	t.Run("ErrorsOnDriverWithoutPool", func(t *testing.T) {
+		t.Parallel()
+
+		_, _ = setup(t)
+
+		client, err := NewClient(riverpgxv5.New(nil), &Config{
+			Logger: riverinternaltest.Logger(t),
+		})
+		require.NoError(t, err)
+
+		count, err := client.InsertMany(ctx, []InsertManyParams{
+			{Args: noOpArgs{}},
+		})
+		require.ErrorIs(t, err, errInsertNoDriverDBPool)
+		require.Equal(t, int64(0), count)
 	})
 
 	t.Run("ErrorsWithZeroJobs", func(t *testing.T) {
@@ -854,6 +901,25 @@ func Test_Client_InsertManyTx(t *testing.T) {
 		jobs, err = bundle.queries.JobGetByKind(ctx, client.driver.GetDBPool(), (noOpArgs{}).Kind())
 		require.NoError(t, err)
 		require.Len(t, jobs, 2, fmt.Sprintf("Expected to find exactly two jobs of kind: %s", (noOpArgs{}).Kind()))
+	})
+
+	// A client's allowed to send nil to their driver so they can, for example,
+	// easily use test transactions in their test suite.
+	t.Run("WithDriverWithoutPool", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		client, err := NewClient(riverpgxv5.New(nil), &Config{
+			Logger: riverinternaltest.Logger(t),
+		})
+		require.NoError(t, err)
+
+		count, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{
+			{Args: noOpArgs{}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, int64(1), count)
 	})
 
 	t.Run("ErrorsWithZeroJobs", func(t *testing.T) {
@@ -2136,6 +2202,13 @@ func Test_NewClient_MissingParameters(t *testing.T) {
 
 		_, err := NewClient[pgx.Tx](riverpgxv5.New(nil), nil)
 		require.ErrorIs(t, err, errMissingConfig)
+	})
+
+	t.Run("ErrorOnDriverWithNoDatabasePoolAndQueues", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewClient[pgx.Tx](riverpgxv5.New(nil), newTestConfig(t, nil))
+		require.ErrorIs(t, err, errMissingDatabasePoolWithQueues)
 	})
 }
 

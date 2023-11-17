@@ -67,6 +67,10 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/river_testdb?sslmode=disable
 
+      - name: Test riverpgxv5
+        working-directory: ./riverdriver/riverpgxv5
+        run: go test -race ./...
+
   cli:
     runs-on: ubuntu-latest
     timeout-minutes: 3
