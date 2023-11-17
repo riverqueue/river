@@ -139,8 +139,7 @@ func TestRescuer(t *testing.T) {
 		require.NoError(cleaner.Start(ctx))
 
 		cleaner.TestSignals.FetchedBatch.WaitOrTimeout()
-		cleaner.TestSignals.DiscardedJobs.WaitOrTimeout()
-		cleaner.TestSignals.RetriedJobs.WaitOrTimeout()
+		cleaner.TestSignals.UpdatedBatch.WaitOrTimeout()
 
 		confirmRetried := func(jobBefore *dbsqlc.RiverJob) {
 			jobAfter, err := queries.JobGetByID(ctx, bundle.tx, jobBefore.ID)
@@ -186,7 +185,7 @@ func TestRescuer(t *testing.T) {
 
 		jobs := make([]*dbsqlc.RiverJob, numJobs)
 
-		for i := 0; i < int(numJobs); i++ {
+		for i := 0; i < numJobs; i++ {
 			job := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateRunning, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour))})
 			jobs[i] = job
 		}
@@ -195,9 +194,9 @@ func TestRescuer(t *testing.T) {
 
 		// See comment above. Exactly two batches are expected.
 		cleaner.TestSignals.FetchedBatch.WaitOrTimeout()
-		cleaner.TestSignals.RetriedJobs.WaitOrTimeout()
+		cleaner.TestSignals.UpdatedBatch.WaitOrTimeout()
 		cleaner.TestSignals.FetchedBatch.WaitOrTimeout()
-		cleaner.TestSignals.RetriedJobs.WaitOrTimeout() // need to wait until after this for the conn to be free
+		cleaner.TestSignals.UpdatedBatch.WaitOrTimeout() // need to wait until after this for the conn to be free
 
 		for _, job := range jobs {
 			jobUpdated, err := queries.JobGetByID(ctx, bundle.tx, job.ID)
@@ -261,7 +260,7 @@ func TestRescuer(t *testing.T) {
 		require.NoError(t, rescuer.Start(ctx))
 
 		rescuer.TestSignals.FetchedBatch.WaitOrTimeout()
-		rescuer.TestSignals.DiscardedJobs.WaitOrTimeout()
+		rescuer.TestSignals.UpdatedBatch.WaitOrTimeout()
 
 		rescuer.Stop()
 
@@ -270,7 +269,7 @@ func TestRescuer(t *testing.T) {
 		require.NoError(t, rescuer.Start(ctx))
 
 		rescuer.TestSignals.FetchedBatch.WaitOrTimeout()
-		rescuer.TestSignals.DiscardedJobs.WaitOrTimeout()
+		rescuer.TestSignals.UpdatedBatch.WaitOrTimeout()
 
 		job1After, err := queries.JobGetByID(ctx, bundle.tx, job1.ID)
 		require.NoError(t, err)
