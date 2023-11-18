@@ -1310,6 +1310,7 @@ func Test_Client_Maintenance(t *testing.T) {
 
 	t.Run("Reindexer", func(t *testing.T) {
 		t.Parallel()
+		t.Skip("Reindexer is disabled for further development")
 
 		config := newTestConfig(t, nil)
 		config.ReindexerSchedule = cron.Every(time.Second)
