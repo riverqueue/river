@@ -235,7 +235,7 @@ func (s *rescuer) getStuckJobs(ctx context.Context) ([]*dbsqlc.RiverJob, error) 
 // makeRetryDecision decides whether or not a rescued job should be retried, and if so,
 // when.
 func (s *rescuer) makeRetryDecision(ctx context.Context, internalJob *dbsqlc.RiverJob) (bool, time.Time) {
-	job := jobRowFromInternal(internalJob)
+	job := (*JobRow)(dbsqlc.JobRowFromInternal(internalJob))
 	workerInfo, ok := s.Config.Workers.workersMap[job.Kind]
 	if !ok {
 		s.Logger.ErrorContext(ctx, s.Name+": Attempted to rescue unhandled job kind, discarding",

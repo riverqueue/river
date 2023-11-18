@@ -292,7 +292,10 @@ func Test_Producer_Run(t *testing.T) {
 		{
 			job := findJob((&callbackArgs{}).Kind())
 			require.Equal(t, dbsqlc.JobStateRetryable, job.State)
-			require.Equal(t, (&UnknownJobKindError{Kind: (&callbackArgs{}).Kind()}).Error(), job.Errors[0].Error)
+			var attemptError AttemptError
+			err := json.Unmarshal(job.Errors[0], &attemptError)
+			require.NoError(t, err)
+			require.Equal(t, (&UnknownJobKindError{Kind: (&callbackArgs{}).Kind()}).Error(), attemptError.Error)
 		}
 		{
 			job := findJob((&noOpArgs{}).Kind())

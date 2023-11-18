@@ -98,12 +98,12 @@ type UniqueOpts struct {
 	// Unlike other unique options, ByState gets a default when it's not set for
 	// user convenience. The default is equivalent to:
 	//
-	// 	ByState: []river.JobState{river.JobStateAvailable, river.JobStateCompleted, river.JobStateRunning, river.JobStateRetryable, river.JobStateScheduled}
+	// 	ByState: []string{river.JobStateAvailable, river.JobStateCompleted, river.JobStateRunning, river.JobStateRetryable, river.JobStateScheduled}
 	//
 	// With this setting, any jobs of the same kind that have been completed or
 	// discarded, but not yet cleaned out by the system, won't count towards the
 	// uniqueness of a new insert.
-	ByState []JobState
+	ByState []string
 }
 
 // isEmpty returns true for an empty, uninitialized options struct.

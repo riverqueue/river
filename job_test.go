@@ -14,7 +14,7 @@ func TestJobUniqueOpts_isEmpty(t *testing.T) {
 	require.False(t, (&UniqueOpts{ByArgs: true}).isEmpty())
 	require.False(t, (&UniqueOpts{ByPeriod: 1 * time.Nanosecond}).isEmpty())
 	require.False(t, (&UniqueOpts{ByQueue: true}).isEmpty())
-	require.False(t, (&UniqueOpts{ByState: []JobState{JobStateAvailable}}).isEmpty())
+	require.False(t, (&UniqueOpts{ByState: []string{JobStateAvailable}}).isEmpty())
 }
 
 func TestJobUniqueOpts_validate(t *testing.T) {
@@ -25,9 +25,9 @@ func TestJobUniqueOpts_validate(t *testing.T) {
 		ByArgs:   true,
 		ByPeriod: 1 * time.Second,
 		ByQueue:  true,
-		ByState:  []JobState{JobStateAvailable},
+		ByState:  []string{JobStateAvailable},
 	}).validate())
 
 	require.EqualError(t, (&UniqueOpts{ByPeriod: 1 * time.Millisecond}).validate(), "JobUniqueOpts.ByPeriod should not be less than 1 second")
-	require.EqualError(t, (&UniqueOpts{ByState: []JobState{JobState("invalid")}}).validate(), `JobUniqueOpts.ByState contains invalid state "invalid"`)
+	require.EqualError(t, (&UniqueOpts{ByState: []string{"invalid"}}).validate(), `JobUniqueOpts.ByState contains invalid state "invalid"`)
 }

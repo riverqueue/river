@@ -2,6 +2,7 @@ package river
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -177,7 +178,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 			completer:         completer,
 			errorHandler:      newTestErrorHandler(),
 			getUpdatesAndStop: getJobUpdates,
-			jobRow:            jobRowFromInternal(job),
+			jobRow:            (*JobRow)(dbsqlc.JobRowFromInternal(job)),
 			tx:                tx,
 		}
 
@@ -240,11 +241,15 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.NoError(t, err)
 		require.WithinDuration(t, executor.ClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
 		require.Equal(t, dbsqlc.JobStateRetryable, job.State)
+
 		require.Len(t, job.Errors, 1)
-		require.Equal(t, baselineTime, job.Errors[0].At)
-		require.Equal(t, uint16(1), job.Errors[0].Num)
-		require.Equal(t, "job error", job.Errors[0].Error)
-		require.Equal(t, job.Errors[0].Trace, "")
+		var attemptError AttemptError
+		err = json.Unmarshal(job.Errors[0], &attemptError)
+		require.NoError(t, err)
+		require.Equal(t, baselineTime, attemptError.At)
+		require.Equal(t, 1, attemptError.Num)
+		require.Equal(t, "job error", attemptError.Error)
+		require.Equal(t, attemptError.Trace, "")
 	})
 
 	t.Run("ErrorAgainAfterRetry", func(t *testing.T) {
@@ -304,10 +309,13 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.WithinDuration(t, time.Now(), *job.FinalizedAt, 2*time.Second)
 		require.Equal(t, dbsqlc.JobStateCancelled, job.State)
 		require.Len(t, job.Errors, 1)
-		require.WithinDuration(t, time.Now(), job.Errors[0].At, 2*time.Second)
-		require.Equal(t, "throw away this job", job.Errors[0].Error)
-		require.Equal(t, uint16(1), job.Errors[0].Num)
-		require.Equal(t, "", job.Errors[0].Trace)
+		var attemptError AttemptError
+		err = json.Unmarshal(job.Errors[0], &attemptError)
+		require.NoError(t, err)
+		require.WithinDuration(t, time.Now(), attemptError.At, 2*time.Second)
+		require.Equal(t, "throw away this job", attemptError.Error)
+		require.Equal(t, 1, attemptError.Num)
+		require.Equal(t, "", attemptError.Trace)
 	})
 
 	t.Run("JobSnoozeErrorReschedulesJobAndIncrementsMaxAttempts", func(t *testing.T) {
@@ -464,8 +472,11 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.WithinDuration(t, executor.ClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
 		require.Equal(t, dbsqlc.JobStateRetryable, job.State)
 		require.Len(t, job.Errors, 1)
+		var attemptError AttemptError
+		err = json.Unmarshal(job.Errors[0], &attemptError)
+		require.NoError(t, err)
 		// Sufficient enough to ensure that the stack trace is included:
-		require.Contains(t, job.Errors[0].Trace, "river/job_executor.go")
+		require.Contains(t, attemptError.Trace, "river/job_executor.go")
 	})
 
 	t.Run("PanicAgainAfterRetry", func(t *testing.T) {

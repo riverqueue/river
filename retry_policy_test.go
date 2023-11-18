@@ -28,7 +28,7 @@ func TestDefaultClientRetryPolicy_NextRetry(t *testing.T) {
 		nextRetryAt := retryPolicy.NextRetry(&JobRow{
 			Attempt:     attempt,
 			AttemptedAt: &now,
-			Errors:      make([]AttemptError, attempt-1),
+			Errors:      make([][]byte, attempt-1),
 		})
 		require.WithinDuration(t, now.Add(timeutil.SecondsAsDuration(retrySecondsWithoutJitter)), nextRetryAt, allowedDelta)
 	}

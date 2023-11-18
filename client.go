@@ -809,7 +809,7 @@ func (c *Client[TTx]) distributeJobCompleterCallback(update jobcompleter.Complet
 		c.statsNumJobs++
 	}()
 
-	c.distributeJob(jobRowFromInternal(update.Job), jobStatisticsFromInternal(update.JobStats))
+	c.distributeJob((*JobRow)(dbsqlc.JobRowFromInternal(update.Job)), jobStatisticsFromInternal(update.JobStats))
 }
 
 // Dump aggregate stats from job completions to logs periodically.  These
@@ -963,7 +963,7 @@ func insertParamsFromArgsAndOptions(args JobArgs, insertOpts *InsertOpts) (*dbad
 		insertParams.UniqueByArgs = uniqueOpts.ByArgs
 		insertParams.UniqueByQueue = uniqueOpts.ByQueue
 		insertParams.UniqueByPeriod = uniqueOpts.ByPeriod
-		insertParams.UniqueByState = sliceutil.Map(uniqueOpts.ByState, func(s JobState) dbsqlc.JobState { return dbsqlc.JobState(s) })
+		insertParams.UniqueByState = sliceutil.Map(uniqueOpts.ByState, func(s string) dbsqlc.JobState { return dbsqlc.JobState(s) })
 	}
 
 	if !insertOpts.ScheduledAt.IsZero() {
@@ -1005,7 +1005,7 @@ func (c *Client[TTx]) Insert(ctx context.Context, args JobArgs, opts *InsertOpts
 		return nil, err
 	}
 
-	return jobRowFromInternal(res.Job), nil
+	return (*JobRow)(dbsqlc.JobRowFromInternal(res.Job)), nil
 }
 
 // InsertTx inserts a new job with the provided args on the given transaction.
@@ -1037,7 +1037,7 @@ func (c *Client[TTx]) InsertTx(ctx context.Context, tx TTx, args JobArgs, opts *
 		return nil, err
 	}
 
-	return jobRowFromInternal(res.Job), nil
+	return (*JobRow)(dbsqlc.JobRowFromInternal(res.Job)), nil
 }
 
 // InsertManyParams encapsulates a single job combined with insert options for

@@ -11,6 +11,7 @@ import (
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/componentstatus"
 	"github.com/riverqueue/river/internal/dbadapter"
+	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/util/chanutil"
@@ -269,7 +270,7 @@ func (p *producer) dispatchWork(count int32, jobsFetchedCh chan<- producerFetchR
 		jobsFetchedCh <- producerFetchResult{err: err}
 		return
 	}
-	jobs := sliceutil.Map(internalJobs, jobRowFromInternal)
+	jobs := sliceutil.Map(internalJobs, func(r *dbsqlc.RiverJob) *JobRow { return (*JobRow)(dbsqlc.JobRowFromInternal(r)) })
 	jobsFetchedCh <- producerFetchResult{jobs: jobs}
 }
 

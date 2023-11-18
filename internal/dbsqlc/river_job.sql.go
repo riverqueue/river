@@ -539,7 +539,7 @@ func (q *Queries) JobInsert(ctx context.Context, db DBTX, arg JobInsertParams) (
 
 type JobInsertManyParams struct {
 	Args        []byte
-	Errors      []AttemptError
+	Errors      [][]byte
 	Kind        string
 	MaxAttempts int16
 	Metadata    []byte

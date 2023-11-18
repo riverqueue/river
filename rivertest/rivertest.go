@@ -71,8 +71,12 @@ type RequireInsertedOpts struct {
 
 	// State is the expected state of the inserted job.
 	//
+	// For example:
+	//
+	// 	State: river.JobStateScheduled
+	//
 	// No assertion is made if left the zero value.
-	State river.JobState
+	State string
 
 	// Tags are the expected tags of the inserted job.
 	//
@@ -160,7 +164,7 @@ func requireInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.Jo
 		return nil, nil //nolint:nilnil
 	}
 
-	jobRow := jobRowFromInternal(dbJobs[0])
+	jobRow := (*river.JobRow)(dbsqlc.JobRowFromInternal(dbJobs[0]))
 
 	var actualArgs TArgs
 	if err := json.Unmarshal(jobRow.EncodedArgs, &actualArgs); err != nil {
@@ -275,7 +279,7 @@ func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx contex
 		return nil, nil
 	}
 
-	jobRows := sliceutil.Map(dbJobs, jobRowFromInternal)
+	jobRows := sliceutil.Map(dbJobs, func(r *dbsqlc.RiverJob) *river.JobRow { return (*river.JobRow)(dbsqlc.JobRowFromInternal(r)) })
 
 	for i, jobRow := range jobRows {
 		if expectedJobs[i].Opts != nil {
@@ -357,48 +361,4 @@ func failure(t testingT, format string, a ...any) {
 // and footer common to all failure messages.
 func failureString(format string, a ...any) string {
 	return "\n    River assertion failure:\n    " + fmt.Sprintf(format, a...) + "\n"
-}
-
-// WARNING!!!!!
-//
-// !!! When updating this function, the equivalent in `./job.go` must also be
-// updated!!!
-//
-// This is obviously not ideal, but since JobRow is at the top-level package,
-// there's no way to put a helper in a shared package that can produce one,
-// which is why we have this copy/pasta. There are some potential alternatives
-// to this, but none of them are great.
-func jobRowFromInternal(internal *dbsqlc.RiverJob) *river.JobRow {
-	tags := internal.Tags
-	if tags == nil {
-		tags = []string{}
-	}
-	return &river.JobRow{
-		ID:          internal.ID,
-		Attempt:     max(int(internal.Attempt), 0),
-		AttemptedAt: internal.AttemptedAt,
-		AttemptedBy: internal.AttemptedBy,
-		CreatedAt:   internal.CreatedAt,
-		EncodedArgs: internal.Args,
-		Errors:      sliceutil.Map(internal.Errors, func(e dbsqlc.AttemptError) river.AttemptError { return attemptErrorFromInternal(&e) }),
-		FinalizedAt: internal.FinalizedAt,
-		Kind:        internal.Kind,
-		MaxAttempts: max(int(internal.MaxAttempts), 0),
-		Priority:    max(int(internal.Priority), 0),
-		Queue:       internal.Queue,
-		ScheduledAt: internal.ScheduledAt.UTC(), // TODO(brandur): Very weird this is the only place a UTC conversion happens.
-		State:       river.JobState(internal.State),
-		Tags:        tags,
-
-		// metadata: internal.Metadata,
-	}
-}
-
-func attemptErrorFromInternal(e *dbsqlc.AttemptError) river.AttemptError {
-	return river.AttemptError{
-		At:    e.At,
-		Error: e.Error,
-		Num:   int(e.Num),
-		Trace: e.Trace,
-	}
 }
