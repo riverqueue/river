@@ -39,7 +39,7 @@ const (
 	DefaultFetchPollInterval = 1 * time.Second
 	MinFetchPollInterval     = 1 * time.Millisecond
 
-	DefaultJobTimeout = time.Minute
+	DefaultJobTimeout = 1 * time.Minute
 
 	DefaultMaxAttempts = rivercommon.DefaultMaxAttempts
 	DefaultQueue       = rivercommon.DefaultQueue
@@ -106,6 +106,8 @@ type Config struct {
 	// context is cancelled. A timeout of zero means DefaultJobTimeout will be
 	// used, whereas a value of -1 means the job's context will not be cancelled
 	// unless the Client is shutting down.
+	//
+	// Defaults to 1 minute.
 	JobTimeout time.Duration
 
 	// Logger is the structured logger to use for logging purposes. If none is
