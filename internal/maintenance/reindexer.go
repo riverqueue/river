@@ -19,7 +19,7 @@ const (
 	DefaultTimeout           = 15 * time.Second
 )
 
-var defaultIndexNames = []string{"river_job_metadata_index", "river_job_args_index"} //nolint:gochecknoglobals
+var defaultIndexNames = []string{} //nolint:gochecknoglobals
 
 // Test-only properties.
 type ReindexerTestSignals struct {
@@ -43,9 +43,6 @@ type ReindexerConfig struct {
 }
 
 func (c *ReindexerConfig) mustValidate() *ReindexerConfig {
-	if len(c.IndexNames) < 1 {
-		panic("ReindexerConfig.IndexNames must have at least one entry")
-	}
 	if c.ScheduleFunc == nil {
 		panic("ReindexerConfig.ScheduleFunc must be set")
 	}
