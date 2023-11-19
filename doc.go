@@ -132,7 +132,7 @@ See [developing River].
 
 [`Client`]: https://pkg.go.dev/github.com/riverqueue/river#Client
 [`Client.InsertTx`]: https://pkg.go.dev/github.com/riverqueue/river#Client.InsertTx
-[`InsertAndWork` example]: https://pkg.go.dev/github.com/riverqueue/river#example-package-CustomInsertOpts
+[`InsertAndWork` example]: https://pkg.go.dev/github.com/riverqueue/river#example-package-InsertAndWork
 [`JobArgs`]: https://pkg.go.dev/github.com/riverqueue/river#JobArgs
 [`Worker`]: https://pkg.go.dev/github.com/riverqueue/river#Worker
 [Batch job insertion]: https://riverqueue.com/docs/batch-job-insertion
