@@ -2,7 +2,7 @@ module github.com/riverqueue/river
 
 go 1.21.0
 
-replace github.com/riverqueue/river/riverdriver/riverpgxv5 => ./riverdriver/riverpgxv5
+// replace github.com/riverqueue/river/riverdriver/riverpgxv5 => ./riverdriver/riverpgxv5
 
 require (
 	github.com/jackc/pgerrcode v0.0.0-20220416144525-469b46aa5efa

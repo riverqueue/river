@@ -64,9 +64,6 @@ linters-settings:
       - Default
       - Prefix(github.com/riverqueue)
 
-  gomoddirectives:
-    replace-local: true
-
   gosec:
     excludes:
       - G404 # use of non-crypto random; overly broad for our use case
