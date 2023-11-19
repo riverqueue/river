@@ -109,6 +109,79 @@ jobs:
       - name: river migrate-down
         run: ./river migrate-down --database-url $DATABASE_URL --max-steps 100
 
+  cli_installable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - uses: actions/setup-go@v4
+        with:
+          go-version: "stable"
+          check-latest: true
+
+      #
+      # For Go Module
+      #
+      # This seems like a good idea because it'd get the same version of the CLI
+      # as the Go module uses for its River dependency, but has the considerable
+      # downside of requiring a project to add the CLI's dependencies for it to
+      # work (e.g. Cobra).
+      #
+
+      - name: Make Go Module directory
+        run: mkdir go_module
+
+      - name: Initialize Go module
+        run: go mod init github.com/riverqueue/rivertest
+        working-directory: go_module
+
+      - name: Add River as dependency
+        run: go get github.com/riverqueue/river@${GITHUB_REF#refs/heads/}
+        working-directory: go_module
+
+      # The CLI's dependencies need to be part of the project for this to work
+      # unfortunately.
+      - name: Add CLI dependencies
+        run: go get github.com/spf13/cobra
+        working-directory: go_module
+
+      # To make sure that `go mod tidy` below doesn't blow away the River dep.
+      - name: Add simple Go file
+        run: |
+          cat << EOF > main.go
+          package main
+
+          import (
+              "github.com/spf13/cobra"
+              "github.com/riverqueue/river"
+          )
+
+          func main() {
+              _ = &cobra.Command{}
+              _ = river.NewWorkers()
+          }
+          EOF
+        working-directory: go_module
+
+      - name: Tidy
+        run: go mod tidy
+        working-directory: go_module
+
+      - name: Install in Go module
+        run: go install github.com/riverqueue/river/cmd/river
+        working-directory: go_module
+
+      #
+      # For _not_Go Module
+      #
+
+      - name: Make not Go Module directory
+        run: mkdir not_go_module
+
+      - name: Install in _not_ Go module (with ref)
+        run: go install github.com/riverqueue/river/cmd/river@${GITHUB_REF#refs/heads/}
+        working-directory: not_go_module
+
   golangci:
     name: lint
     runs-on: ubuntu-latest
