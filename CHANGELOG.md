@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5] - 2023-11-19
+
+### Changed
+
+- Remove `replace` directive from the project's `go.mod` so that it's possible to install River CLI with `@latest`.
+
 ## [0.0.4] - 2023-11-17
 
 ### Changed
