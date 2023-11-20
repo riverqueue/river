@@ -1181,10 +1181,10 @@ func Test_Client_Maintenance(t *testing.T) {
 		for i := 0; i < errorCount; i++ {
 			var err error
 			errorsBytes[i], err = json.Marshal(rivertype.AttemptError{
-				At:    time.Now(),
-				Error: "mocked error",
-				Num:   i + 1,
-				Trace: "none",
+				At:      time.Now(),
+				Attempt: i + 1,
+				Error:   "mocked error",
+				Trace:   "none",
 			})
 			require.NoError(t, err)
 		}

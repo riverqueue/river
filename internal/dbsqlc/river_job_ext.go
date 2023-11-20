@@ -33,9 +33,9 @@ func JobRowFromInternal(internal *RiverJob) *rivertype.JobRow {
 
 func AttemptErrorFromInternal(e *AttemptError) rivertype.AttemptError {
 	return rivertype.AttemptError{
-		At:    e.At,
-		Error: e.Error,
-		Num:   int(e.Num),
-		Trace: e.Trace,
+		At:      e.At,
+		Attempt: int(e.Attempt),
+		Error:   e.Error,
+		Trace:   e.Trace,
 	}
 }

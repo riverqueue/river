@@ -270,10 +270,10 @@ func (e *jobExecutor) reportError(ctx context.Context) {
 	}
 
 	attemptErr := rivertype.AttemptError{
-		At:    e.start,
-		Error: errorStr,
-		Num:   e.JobRow.Attempt,
-		Trace: string(e.result.PanicTrace),
+		At:      e.start,
+		Attempt: e.JobRow.Attempt,
+		Error:   errorStr,
+		Trace:   string(e.result.PanicTrace),
 	}
 
 	errData, err := json.Marshal(attemptErr)

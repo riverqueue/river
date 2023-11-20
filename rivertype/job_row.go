@@ -96,6 +96,8 @@ type JobRow struct {
 	// metadata []byte
 }
 
+// JobState is the state of a job. Jobs start as `available` or `scheduled`, and
+// if all goes well eventually transition to `completed` as they're worked.
 type JobState string
 
 const (
@@ -108,9 +110,21 @@ const (
 	JobStateScheduled JobState = "scheduled"
 )
 
+// AttemptError is an error from a single job attempt that failed due to an
+// error or a panic.
 type AttemptError struct {
-	At    time.Time `json:"at"`
-	Error string    `json:"error"`
-	Num   int       `json:"num"`
-	Trace string    `json:"trace"`
+	// At is the time at which the error occurred.
+	At time.Time `json:"at"`
+
+	// Attempt is the attempt number on which the error occurred (maps to
+	// Attempt on a job row).
+	Attempt int `json:"attempt"`
+
+	// Error contains the stringified error of an error returned from a job or a
+	// panic value in case of a panic.
+	Error string `json:"error"`
+
+	// Trace contains a stack trace from a job that panicked. The trace is
+	// produced by invoking `debug.Trace()`.
+	Trace string `json:"trace"`
 }

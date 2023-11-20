@@ -611,7 +611,7 @@ func Test_StandardAdapter_JobSetErroredIfRunning(t *testing.T) {
 		tNow := time.Now()
 
 		errPayload, err := json.Marshal(dbsqlc.AttemptError{
-			Num: 1, At: tNow.UTC(), Error: "fake error", Trace: "foo.go:123\nbar.go:456",
+			Attempt: 1, At: tNow.UTC(), Error: "fake error", Trace: "foo.go:123\nbar.go:456",
 		})
 
 		require.NoError(t, err)
@@ -655,7 +655,7 @@ func Test_StandardAdapter_JobSetErroredIfRunning(t *testing.T) {
 		// validate error payload:
 		require.Len(t, jAfter.Errors, 1)
 		require.Equal(t, bundle.baselineTime.UTC(), jAfter.Errors[0].At)
-		require.Equal(t, uint16(1), jAfter.Errors[0].Num)
+		require.Equal(t, uint16(1), jAfter.Errors[0].Attempt)
 		require.Equal(t, "fake error", jAfter.Errors[0].Error)
 		require.Equal(t, "foo.go:123\nbar.go:456", jAfter.Errors[0].Trace)
 	})
