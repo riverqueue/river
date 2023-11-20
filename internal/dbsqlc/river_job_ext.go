@@ -6,10 +6,6 @@ import (
 )
 
 func JobRowFromInternal(internal *RiverJob) *rivertype.JobRow {
-	tags := internal.Tags
-	if tags == nil {
-		tags = []string{}
-	}
 	return &rivertype.JobRow{
 		ID:          internal.ID,
 		Attempt:     max(int(internal.Attempt), 0),
@@ -25,7 +21,7 @@ func JobRowFromInternal(internal *RiverJob) *rivertype.JobRow {
 		Queue:       internal.Queue,
 		ScheduledAt: internal.ScheduledAt.UTC(), // TODO(brandur): Very weird this is the only place a UTC conversion happens.
 		State:       rivertype.JobState(internal.State),
-		Tags:        tags,
+		Tags:        internal.Tags,
 
 		// metadata: internal.Metadata,
 	}
