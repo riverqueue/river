@@ -57,7 +57,7 @@ func prepareAndRunBenchmark(ctx context.Context, logger *slog.Logger) error {
 		FetchPollInterval: fetchInterval,
 		Logger:            logger,
 		Queues: map[string]river.QueueConfig{
-			river.DefaultQueue: {MaxWorkers: workerCount},
+			river.QueueDefault: {MaxWorkers: workerCount},
 		},
 		Workers: workers,
 	})

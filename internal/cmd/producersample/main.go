@@ -67,7 +67,7 @@ func (p *producerSample) produce(ctx context.Context) error {
 	client, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
 		FetchCooldown: 2 * time.Millisecond,
 		Logger:        p.logger,
-		Queues:        map[string]river.QueueConfig{river.DefaultQueue: {MaxWorkers: numWorkers}},
+		Queues:        map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: numWorkers}},
 		Workers:       workers,
 	})
 	if err != nil {

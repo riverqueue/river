@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	DefaultSchedulerInterval = 5 * time.Second
-	DefaultSchedulerLimit    = 10000
+	SchedulerIntervalDefault = 5 * time.Second
+	SchedulerLimitDefault    = 10_000
 )
 
 // Test-only properties.
@@ -69,8 +69,8 @@ type Scheduler struct {
 func NewScheduler(archetype *baseservice.Archetype, config *SchedulerConfig, executor dbutil.Executor) *Scheduler {
 	return baseservice.Init(archetype, &Scheduler{
 		config: (&SchedulerConfig{
-			Interval: valutil.ValOrDefault(config.Interval, DefaultSchedulerInterval),
-			Limit:    valutil.ValOrDefault(config.Limit, DefaultSchedulerLimit),
+			Interval: valutil.ValOrDefault(config.Interval, SchedulerIntervalDefault),
+			Limit:    valutil.ValOrDefault(config.Limit, SchedulerLimitDefault),
 		}).mustValidate(),
 
 		// TODO(bgentry): should Adapter be moved to a shared internal package

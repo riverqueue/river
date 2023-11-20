@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	DefaultReindexerInterval = 24 * time.Hour
-	DefaultTimeout           = 15 * time.Second
+	ReindexerIntervalDefault = 24 * time.Hour
+	ReindexerTimeoutDefault  = 15 * time.Second
 )
 
 var defaultIndexNames = []string{} //nolint:gochecknoglobals
@@ -82,10 +82,10 @@ func NewReindexer(archetype *baseservice.Archetype, config *ReindexerConfig, dbE
 		Config: (&ReindexerConfig{
 			IndexNames:   indexNames,
 			ScheduleFunc: scheduleFunc,
-			Timeout:      valutil.ValOrDefault(config.Timeout, DefaultTimeout),
+			Timeout:      valutil.ValOrDefault(config.Timeout, ReindexerTimeoutDefault),
 		}).mustValidate(),
 
-		batchSize:  DefaultBatchSize,
+		batchSize:  BatchSizeDefault,
 		dbExecutor: dbExecutor,
 	})
 }

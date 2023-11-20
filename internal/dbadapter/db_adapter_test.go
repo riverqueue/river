@@ -70,7 +70,7 @@ func Test_StandardAdapter_Insert(t *testing.T) {
 		require.NotEqual(t, 0, res.Job.ID, "expected job ID to be set, got %d", res.Job.ID)
 		require.WithinDuration(t, time.Now(), res.Job.ScheduledAt, 1*time.Second)
 
-		jobs, err := adapter.JobGetAvailable(ctx, rivercommon.DefaultQueue, maxJobsToFetch)
+		jobs, err := adapter.JobGetAvailable(ctx, rivercommon.QueueDefault, maxJobsToFetch)
 		require.NoError(t, err)
 		require.Len(t, jobs, 1,
 			"inserted 1 job but fetched %d jobs:\n%+v", len(jobs), jobs)
@@ -82,7 +82,7 @@ func Test_StandardAdapter_Insert(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		jobs, err = adapter.JobGetAvailable(ctx, rivercommon.DefaultQueue, maxJobsToFetch)
+		jobs, err = adapter.JobGetAvailable(ctx, rivercommon.QueueDefault, maxJobsToFetch)
 		require.NoError(t, err)
 		require.Len(t, jobs, maxJobsToFetch,
 			"inserted 9 more jobs and expected to fetch max of %d jobs but fetched %d jobs:\n%+v", maxJobsToFetch, len(jobs), jobs)
@@ -91,7 +91,7 @@ func Test_StandardAdapter_Insert(t *testing.T) {
 				"expected selected job to be in running state, got %q", j.State)
 		}
 
-		jobs, err = adapter.JobGetAvailable(ctx, rivercommon.DefaultQueue, maxJobsToFetch)
+		jobs, err = adapter.JobGetAvailable(ctx, rivercommon.QueueDefault, maxJobsToFetch)
 		require.NoError(t, err)
 		require.Len(t, jobs, 1,
 			"expected to fetch 1 remaining job but fetched %d jobs:\n%+v", len(jobs), jobs)
@@ -449,7 +449,7 @@ func Test_Adapter_JobInsertMany(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, len(insertParams), int(count))
 
-	jobsAfter, err := adapter.JobGetAvailable(ctx, rivercommon.DefaultQueue, int32(len(insertParams)))
+	jobsAfter, err := adapter.JobGetAvailable(ctx, rivercommon.QueueDefault, int32(len(insertParams)))
 	require.NoError(t, err)
 	require.Len(t, jobsAfter, len(insertParams))
 }
@@ -474,7 +474,7 @@ func Test_StandardAdapter_FetchIsPrioritized(t *testing.T) {
 	}
 
 	// We should fetch the 2 highest priority jobs first in order (priority 1, then 2):
-	jobs, err := adapter.JobGetAvailable(ctx, rivercommon.DefaultQueue, 2)
+	jobs, err := adapter.JobGetAvailable(ctx, rivercommon.QueueDefault, 2)
 	require.NoError(t, err)
 	require.Len(t, jobs, 2, "expected to fetch exactly 2 jobs")
 
@@ -489,7 +489,7 @@ func Test_StandardAdapter_FetchIsPrioritized(t *testing.T) {
 	require.Equal(t, int16(2), jobs[1].Priority, "expected second job to have priority 2")
 
 	// Should fetch the one remaining job on the next attempt:
-	jobs, err = adapter.JobGetAvailable(ctx, rivercommon.DefaultQueue, 1)
+	jobs, err = adapter.JobGetAvailable(ctx, rivercommon.QueueDefault, 1)
 	require.NoError(t, err)
 	require.Len(t, jobs, 1, "expected to fetch exactly 1 job")
 	require.Equal(t, int16(3), jobs[0].Priority, "expected final job to have priority 2")
@@ -694,11 +694,11 @@ func Test_StandardAdapter_LeadershipAttemptElect_CannotElectTwiceInARow(t *testi
 	defer cancel()
 
 	adapter := NewStandardAdapter(riverinternaltest.BaseServiceArchetype(t), testAdapterConfig(tx))
-	won, err := adapter.LeadershipAttemptElect(ctx, false, rivercommon.DefaultQueue, "fakeWorker0", 30*time.Second)
+	won, err := adapter.LeadershipAttemptElect(ctx, false, rivercommon.QueueDefault, "fakeWorker0", 30*time.Second)
 	require.NoError(t, err)
 	require.True(t, won)
 
-	won, err = adapter.LeadershipAttemptElect(ctx, false, rivercommon.DefaultQueue, "fakeWorker0", 30*time.Second)
+	won, err = adapter.LeadershipAttemptElect(ctx, false, rivercommon.QueueDefault, "fakeWorker0", 30*time.Second)
 	require.NoError(t, err)
 	require.False(t, won)
 }
@@ -761,7 +761,7 @@ func Benchmark_StandardAdapter_Fetch_100(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		if _, err := adapter.JobGetAvailable(ctx, rivercommon.DefaultQueue, 100); err != nil {
+		if _, err := adapter.JobGetAvailable(ctx, rivercommon.QueueDefault, 100); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -787,7 +787,7 @@ func Benchmark_StandardAdapter_Fetch_100_Parallelized(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			if _, err := adapter.JobGetAvailable(ctx, rivercommon.DefaultQueue, 100); err != nil {
+			if _, err := adapter.JobGetAvailable(ctx, rivercommon.QueueDefault, 100); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -806,10 +806,10 @@ func makeFakeJobInsertParams(i int) *JobInsertParams {
 	return &JobInsertParams{
 		EncodedArgs: []byte(fmt.Sprintf(`{"job_num":%d}`, i)),
 		Kind:        "fake_job",
-		MaxAttempts: rivercommon.DefaultMaxAttempts,
+		MaxAttempts: rivercommon.MaxAttemptsDefault,
 		Metadata:    []byte("{}"),
-		Priority:    rivercommon.DefaultPriority,
-		Queue:       rivercommon.DefaultQueue,
+		Priority:    rivercommon.PriorityDefault,
+		Queue:       rivercommon.QueueDefault,
 		State:       dbsqlc.JobStateAvailable,
 	}
 }

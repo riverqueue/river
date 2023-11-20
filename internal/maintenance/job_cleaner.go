@@ -17,10 +17,10 @@ import (
 )
 
 const (
-	DefaultCancelledJobRetentionPeriod = 24 * time.Hour
-	DefaultCompletedJobRetentionPeriod = 24 * time.Hour
-	DefaultDiscardedJobRetentionPeriod = 7 * 24 * time.Hour
-	DefaultJobCleanerInterval          = 30 * time.Second
+	CancelledJobRetentionPeriodDefault = 24 * time.Hour
+	CompletedJobRetentionPeriodDefault = 24 * time.Hour
+	DiscardedJobRetentionPeriodDefault = 7 * 24 * time.Hour
+	JobCleanerIntervalDefault          = 30 * time.Second
 )
 
 // Test-only properties.
@@ -84,13 +84,13 @@ type JobCleaner struct {
 func NewJobCleaner(archetype *baseservice.Archetype, config *JobCleanerConfig, executor dbutil.Executor) *JobCleaner {
 	return baseservice.Init(archetype, &JobCleaner{
 		Config: (&JobCleanerConfig{
-			CancelledJobRetentionPeriod: valutil.ValOrDefault(config.CancelledJobRetentionPeriod, DefaultCancelledJobRetentionPeriod),
-			CompletedJobRetentionPeriod: valutil.ValOrDefault(config.CompletedJobRetentionPeriod, DefaultCompletedJobRetentionPeriod),
-			DiscardedJobRetentionPeriod: valutil.ValOrDefault(config.DiscardedJobRetentionPeriod, DefaultDiscardedJobRetentionPeriod),
-			Interval:                    valutil.ValOrDefault(config.Interval, DefaultJobCleanerInterval),
+			CancelledJobRetentionPeriod: valutil.ValOrDefault(config.CancelledJobRetentionPeriod, CancelledJobRetentionPeriodDefault),
+			CompletedJobRetentionPeriod: valutil.ValOrDefault(config.CompletedJobRetentionPeriod, CompletedJobRetentionPeriodDefault),
+			DiscardedJobRetentionPeriod: valutil.ValOrDefault(config.DiscardedJobRetentionPeriod, DiscardedJobRetentionPeriodDefault),
+			Interval:                    valutil.ValOrDefault(config.Interval, JobCleanerIntervalDefault),
 		}).mustValidate(),
 
-		batchSize:  DefaultBatchSize,
+		batchSize:  BatchSizeDefault,
 		dbExecutor: executor,
 		queries:    dbsqlc.New(),
 	})

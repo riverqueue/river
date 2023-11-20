@@ -78,7 +78,7 @@ func Example_requireInserted() {
 	// default priority and default queue.
 	_ = rivertest.RequireInsertedTx[*riverpgxv5.Driver](ctx, t, tx, &RequiredArgs{}, &rivertest.RequireInsertedOpts{
 		Priority: 1,
-		Queue:    river.DefaultQueue,
+		Queue:    river.QueueDefault,
 	})
 
 	// Insert and verify one on a pool instead of transaction.

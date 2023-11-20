@@ -38,9 +38,9 @@ func TestJobCleaner(t *testing.T) {
 		job, err := queries.JobInsert(ctx, dbtx, dbsqlc.JobInsertParams{
 			FinalizedAt: params.FinalizedAt,
 			Kind:        "test_kind",
-			MaxAttempts: int16(rivercommon.DefaultMaxAttempts),
-			Priority:    int16(rivercommon.DefaultPriority),
-			Queue:       rivercommon.DefaultQueue,
+			MaxAttempts: int16(rivercommon.MaxAttemptsDefault),
+			Priority:    int16(rivercommon.PriorityDefault),
+			Queue:       rivercommon.QueueDefault,
 			State:       params.State,
 		})
 		require.NoError(t, err)
@@ -51,19 +51,19 @@ func TestJobCleaner(t *testing.T) {
 		t.Helper()
 
 		bundle := &testBundle{
-			cancelledDeleteHorizon: time.Now().Add(-DefaultCancelledJobRetentionPeriod),
-			completedDeleteHorizon: time.Now().Add(-DefaultCompletedJobRetentionPeriod),
-			discardedDeleteHorizon: time.Now().Add(-DefaultDiscardedJobRetentionPeriod),
+			cancelledDeleteHorizon: time.Now().Add(-CancelledJobRetentionPeriodDefault),
+			completedDeleteHorizon: time.Now().Add(-CompletedJobRetentionPeriodDefault),
+			discardedDeleteHorizon: time.Now().Add(-DiscardedJobRetentionPeriodDefault),
 			tx:                     riverinternaltest.TestTx(ctx, t),
 		}
 
 		cleaner := NewJobCleaner(
 			riverinternaltest.BaseServiceArchetype(t),
 			&JobCleanerConfig{
-				CancelledJobRetentionPeriod: DefaultCancelledJobRetentionPeriod,
-				CompletedJobRetentionPeriod: DefaultCompletedJobRetentionPeriod,
-				DiscardedJobRetentionPeriod: DefaultDiscardedJobRetentionPeriod,
-				Interval:                    DefaultJobCleanerInterval,
+				CancelledJobRetentionPeriod: CancelledJobRetentionPeriodDefault,
+				CompletedJobRetentionPeriod: CompletedJobRetentionPeriodDefault,
+				DiscardedJobRetentionPeriod: DiscardedJobRetentionPeriodDefault,
+				Interval:                    JobCleanerIntervalDefault,
 			},
 			bundle.tx)
 		cleaner.TestSignals.Init()
@@ -77,10 +77,10 @@ func TestJobCleaner(t *testing.T) {
 
 		cleaner := NewJobCleaner(riverinternaltest.BaseServiceArchetype(t), &JobCleanerConfig{}, nil)
 
-		require.Equal(t, cleaner.Config.CancelledJobRetentionPeriod, DefaultCancelledJobRetentionPeriod)
-		require.Equal(t, cleaner.Config.CompletedJobRetentionPeriod, DefaultCompletedJobRetentionPeriod)
-		require.Equal(t, cleaner.Config.DiscardedJobRetentionPeriod, DefaultDiscardedJobRetentionPeriod)
-		require.Equal(t, cleaner.Config.Interval, DefaultJobCleanerInterval)
+		require.Equal(t, cleaner.Config.CancelledJobRetentionPeriod, CancelledJobRetentionPeriodDefault)
+		require.Equal(t, cleaner.Config.CompletedJobRetentionPeriod, CompletedJobRetentionPeriodDefault)
+		require.Equal(t, cleaner.Config.DiscardedJobRetentionPeriod, DiscardedJobRetentionPeriodDefault)
+		require.Equal(t, cleaner.Config.Interval, JobCleanerIntervalDefault)
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {

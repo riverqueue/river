@@ -40,7 +40,7 @@ func TestDefaultRetryPolicy_retrySeconds(t *testing.T) {
 
 	retryPolicy := &DefaultClientRetryPolicy{}
 
-	for attempt := 1; attempt < rivercommon.DefaultMaxAttempts; attempt++ {
+	for attempt := 1; attempt < rivercommon.MaxAttemptsDefault; attempt++ {
 		retrySecondsWithoutJitter := retryPolicy.retrySecondsWithoutJitter(attempt)
 
 		// Jitter is number of seconds +/- 10%.

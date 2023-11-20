@@ -56,7 +56,7 @@ func Example_jobSnooze() { //nolint:dupl
 	riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
 		Logger: slog.New(&slogutil.SlogMessageOnlyHandler{Level: slog.LevelWarn}),
 		Queues: map[string]river.QueueConfig{
-			river.DefaultQueue: {MaxWorkers: 10},
+			river.QueueDefault: {MaxWorkers: 10},
 		},
 		Workers: workers,
 	})

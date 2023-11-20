@@ -157,9 +157,9 @@ func TestJobExecutor_Execute(t *testing.T) {
 			Attempt:     0,
 			AttemptedAt: ptrutil.Ptr(archetype.TimeNowUTC()),
 			Kind:        (callbackArgs{}).Kind(),
-			MaxAttempts: int16(rivercommon.DefaultMaxAttempts),
-			Priority:    int16(rivercommon.DefaultPriority),
-			Queue:       rivercommon.DefaultQueue,
+			MaxAttempts: int16(rivercommon.MaxAttemptsDefault),
+			Priority:    int16(rivercommon.PriorityDefault),
+			Queue:       rivercommon.QueueDefault,
 			State:       dbsqlc.JobStateAvailable,
 		})
 		require.NoError(t, err)
@@ -167,7 +167,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		// Fetch the job to make sure it's marked as running:
 		jobs, err := queries.JobGetAvailable(ctx, tx, dbsqlc.JobGetAvailableParams{
 			LimitCount: 1,
-			Queue:      rivercommon.DefaultQueue,
+			Queue:      rivercommon.QueueDefault,
 		})
 		require.NoError(t, err)
 		require.Len(t, jobs, 1)
