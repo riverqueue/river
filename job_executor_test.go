@@ -244,7 +244,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.Equal(t, dbsqlc.JobStateRetryable, job.State)
 		require.Len(t, job.Errors, 1)
 		require.Equal(t, baselineTime, job.Errors[0].At)
-		require.Equal(t, uint16(1), job.Errors[0].Num)
+		require.Equal(t, uint16(1), job.Errors[0].Attempt)
 		require.Equal(t, "job error", job.Errors[0].Error)
 		require.Equal(t, job.Errors[0].Trace, "")
 	})
@@ -307,8 +307,8 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.Equal(t, dbsqlc.JobStateCancelled, job.State)
 		require.Len(t, job.Errors, 1)
 		require.WithinDuration(t, time.Now(), job.Errors[0].At, 2*time.Second)
+		require.Equal(t, uint16(1), job.Errors[0].Attempt)
 		require.Equal(t, "throw away this job", job.Errors[0].Error)
-		require.Equal(t, uint16(1), job.Errors[0].Num)
 		require.Equal(t, "", job.Errors[0].Trace)
 	})
 
