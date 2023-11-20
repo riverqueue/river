@@ -35,9 +35,9 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			return &dbadapter.JobInsertParams{
 				EncodedArgs: []byte("{}"),
 				Kind:        name,
-				MaxAttempts: rivercommon.DefaultMaxAttempts,
-				Priority:    rivercommon.DefaultPriority,
-				Queue:       rivercommon.DefaultQueue,
+				MaxAttempts: rivercommon.MaxAttemptsDefault,
+				Priority:    rivercommon.PriorityDefault,
+				Queue:       rivercommon.QueueDefault,
 				State:       dbsqlc.JobStateAvailable,
 			}, nil
 		}

@@ -66,7 +66,7 @@ func Example_cronJob() {
 			),
 		},
 		Queues: map[string]river.QueueConfig{
-			river.DefaultQueue: {MaxWorkers: 100},
+			river.QueueDefault: {MaxWorkers: 100},
 		},
 		Workers: workers,
 	})

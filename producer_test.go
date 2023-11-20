@@ -77,10 +77,10 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 		// Fetch constantly to more aggressively trigger the potential data race:
 		FetchCooldown:     time.Millisecond,
 		FetchPollInterval: time.Millisecond,
-		JobTimeout:        DefaultJobTimeout,
+		JobTimeout:        JobTimeoutDefault,
 		MaxWorkerCount:    1000,
 		Notifier:          notifier,
-		QueueName:         rivercommon.DefaultQueue,
+		QueueName:         rivercommon.QueueDefault,
 		RetryPolicy:       &DefaultClientRetryPolicy{},
 		WorkerName:        "fakeWorkerNameTODO",
 		Workers:           workers,
@@ -174,12 +174,12 @@ func Test_Producer_Run(t *testing.T) {
 
 		config := &producerConfig{
 			ErrorHandler:      newTestErrorHandler(),
-			FetchCooldown:     DefaultFetchCooldown,
+			FetchCooldown:     FetchCooldownDefault,
 			FetchPollInterval: 50 * time.Millisecond, // more aggressive than normal so in case we miss the event, tests still pass quickly
-			JobTimeout:        DefaultJobTimeout,
+			JobTimeout:        JobTimeoutDefault,
 			MaxWorkerCount:    1000,
 			Notifier:          notifier,
-			QueueName:         rivercommon.DefaultQueue,
+			QueueName:         rivercommon.QueueDefault,
 			RetryPolicy:       &DefaultClientRetryPolicy{},
 			WorkerName:        "fakeWorkerNameTODO",
 			Workers:           workers,

@@ -74,7 +74,7 @@ func Example_customInsertOpts() {
 	riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
 		Logger: slog.New(&slogutil.SlogMessageOnlyHandler{Level: slog.LevelWarn}),
 		Queues: map[string]river.QueueConfig{
-			river.DefaultQueue: {MaxWorkers: 100},
+			river.QueueDefault: {MaxWorkers: 100},
 			"high_priority":    {MaxWorkers: 100},
 		},
 		Workers: workers,

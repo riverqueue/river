@@ -59,7 +59,7 @@ func Example_periodicJob() {
 			),
 		},
 		Queues: map[string]river.QueueConfig{
-			river.DefaultQueue: {MaxWorkers: 100},
+			river.QueueDefault: {MaxWorkers: 100},
 		},
 		Workers: workers,
 	})

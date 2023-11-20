@@ -76,7 +76,7 @@ func Example_completeJobWithinTx() {
 	riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
 		Logger: slog.New(&slogutil.SlogMessageOnlyHandler{Level: slog.LevelWarn}),
 		Queues: map[string]river.QueueConfig{
-			river.DefaultQueue: {MaxWorkers: 100},
+			river.QueueDefault: {MaxWorkers: 100},
 		},
 		Workers: workers,
 	})

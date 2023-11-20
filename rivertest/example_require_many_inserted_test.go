@@ -111,7 +111,7 @@ func Example_requireManyInserted() {
 	_ = rivertest.RequireManyInsertedTx[*riverpgxv5.Driver](ctx, t, tx, []rivertest.ExpectedJob{
 		{Args: &SecondRequiredArgs{}, Opts: &rivertest.RequireInsertedOpts{
 			Priority: 1,
-			Queue:    river.DefaultQueue,
+			Queue:    river.QueueDefault,
 		}},
 	})
 

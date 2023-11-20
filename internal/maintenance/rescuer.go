@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	DefaultRescueAfter     = time.Hour
-	DefaultRescuerInterval = 30 * time.Second
+	RescueAfterDefault     = time.Hour
+	RescuerIntervalDefault = 30 * time.Second
 )
 
 type ClientRetryPolicy interface {
@@ -90,12 +90,12 @@ func NewRescuer(archetype *baseservice.Archetype, config *RescuerConfig, executo
 	return baseservice.Init(archetype, &Rescuer{
 		Config: (&RescuerConfig{
 			ClientRetryPolicy:   config.ClientRetryPolicy,
-			Interval:            valutil.ValOrDefault(config.Interval, DefaultRescuerInterval),
-			RescueAfter:         valutil.ValOrDefault(config.RescueAfter, DefaultRescueAfter),
+			Interval:            valutil.ValOrDefault(config.Interval, RescuerIntervalDefault),
+			RescueAfter:         valutil.ValOrDefault(config.RescueAfter, RescueAfterDefault),
 			WorkUnitFactoryFunc: config.WorkUnitFactoryFunc,
 		}).mustValidate(),
 
-		batchSize:  DefaultBatchSize,
+		batchSize:  BatchSizeDefault,
 		dbExecutor: executor,
 		queries:    dbsqlc.New(),
 	})

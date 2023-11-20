@@ -40,8 +40,8 @@ func TestScheduler(t *testing.T) {
 	insertJob := func(ctx context.Context, dbtx dbsqlc.DBTX, params insertJobParams) *dbsqlc.RiverJob {
 		job, err := queries.JobInsert(ctx, dbtx, dbsqlc.JobInsertParams{
 			Kind:        "test_kind",
-			MaxAttempts: int16(rivercommon.DefaultMaxAttempts),
-			Priority:    int16(rivercommon.DefaultPriority),
+			MaxAttempts: int16(rivercommon.MaxAttemptsDefault),
+			Priority:    int16(rivercommon.PriorityDefault),
 			Queue:       valutil.ValOrDefault(params.Queue, "default"),
 			ScheduledAt: params.ScheduledAt,
 			State:       params.State,
@@ -60,7 +60,7 @@ func TestScheduler(t *testing.T) {
 		scheduler := NewScheduler(
 			riverinternaltest.BaseServiceArchetype(t),
 			&SchedulerConfig{
-				Interval: DefaultSchedulerInterval,
+				Interval: SchedulerIntervalDefault,
 				Limit:    10,
 			},
 			bundle.ex)
@@ -95,8 +95,8 @@ func TestScheduler(t *testing.T) {
 
 		scheduler := NewScheduler(riverinternaltest.BaseServiceArchetype(t), &SchedulerConfig{}, nil)
 
-		require.Equal(t, scheduler.config.Interval, DefaultSchedulerInterval)
-		require.Equal(t, scheduler.config.Limit, DefaultSchedulerLimit)
+		require.Equal(t, scheduler.config.Interval, SchedulerIntervalDefault)
+		require.Equal(t, scheduler.config.Limit, SchedulerLimitDefault)
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {

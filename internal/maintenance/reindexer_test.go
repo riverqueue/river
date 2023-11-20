@@ -113,7 +113,7 @@ func TestReindexer(t *testing.T) {
 		svc = NewReindexer(&svc.Archetype, &ReindexerConfig{}, bundle.dbPool)
 
 		require.Equal(t, defaultIndexNames, svc.Config.IndexNames)
-		require.Equal(t, DefaultTimeout, svc.Config.Timeout)
+		require.Equal(t, ReindexerTimeoutDefault, svc.Config.Timeout)
 		require.Equal(t, svc.Config.ScheduleFunc(bundle.now), (&defaultReindexerSchedule{}).Next(bundle.now))
 	})
 }

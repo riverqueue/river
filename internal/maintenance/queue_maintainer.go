@@ -24,7 +24,7 @@ const (
 	// progress, but not so large as to make the operation overstay its welcome.
 	// For now it's not configurable because we can likely pick a number that's
 	// suitable for almost everyone.
-	DefaultBatchSize = 1_000
+	BatchSizeDefault = 1_000
 
 	JitterMin = 0 * time.Second
 	JitterMax = 1 * time.Second

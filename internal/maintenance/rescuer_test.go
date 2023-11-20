@@ -75,8 +75,8 @@ func TestRescuer(t *testing.T) {
 			Args:        []byte("{}"),
 			Kind:        rescuerJobKind,
 			MaxAttempts: 5,
-			Priority:    int16(rivercommon.DefaultPriority),
-			Queue:       rivercommon.DefaultQueue,
+			Priority:    int16(rivercommon.PriorityDefault),
+			Queue:       rivercommon.QueueDefault,
 			State:       params.State,
 		})
 		require.NoError(t, err)
@@ -87,7 +87,7 @@ func TestRescuer(t *testing.T) {
 		t.Helper()
 
 		bundle := &testBundle{
-			rescueHorizon: time.Now().Add(-DefaultRescueAfter),
+			rescueHorizon: time.Now().Add(-RescueAfterDefault),
 			tx:            riverinternaltest.TestTx(ctx, t),
 		}
 
@@ -95,8 +95,8 @@ func TestRescuer(t *testing.T) {
 			riverinternaltest.BaseServiceArchetype(t),
 			&RescuerConfig{
 				ClientRetryPolicy: &SimpleClientRetryPolicy{},
-				Interval:          DefaultRescuerInterval,
-				RescueAfter:       DefaultRescueAfter,
+				Interval:          RescuerIntervalDefault,
+				RescueAfter:       RescueAfterDefault,
 				WorkUnitFactoryFunc: func(kind string) workunit.WorkUnitFactory {
 					if kind == rescuerJobKind {
 						return &callbackWorkUnitFactory{Callback: func(ctx context.Context, jobRow *rivertype.JobRow) error { return nil }}
@@ -123,8 +123,8 @@ func TestRescuer(t *testing.T) {
 			nil,
 		)
 
-		require.Equal(t, cleaner.Config.RescueAfter, DefaultRescueAfter)
-		require.Equal(t, cleaner.Config.Interval, DefaultRescuerInterval)
+		require.Equal(t, cleaner.Config.RescueAfter, RescueAfterDefault)
+		require.Equal(t, cleaner.Config.Interval, RescuerIntervalDefault)
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {

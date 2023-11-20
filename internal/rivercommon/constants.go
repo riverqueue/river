@@ -4,7 +4,7 @@ package rivercommon
 // by internal packages, but the top-level river package re-exports them, and
 // all user code must use that set instead.
 const (
-	DefaultMaxAttempts = 25
-	DefaultPriority    = 1
-	DefaultQueue       = "default"
+	MaxAttemptsDefault = 25
+	PriorityDefault    = 1
+	QueueDefault       = "default"
 )

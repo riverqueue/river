@@ -66,7 +66,7 @@ func TestRequireInserted(t *testing.T) {
 
 		riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
 			Queues: map[string]river.QueueConfig{
-				river.DefaultQueue: {MaxWorkers: 100},
+				river.QueueDefault: {MaxWorkers: 100},
 			},
 			Workers: workers,
 		})
@@ -118,7 +118,7 @@ func TestRequireInsertedTx(t *testing.T) {
 
 		riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
 			Queues: map[string]river.QueueConfig{
-				river.DefaultQueue: {MaxWorkers: 100},
+				river.QueueDefault: {MaxWorkers: 100},
 			},
 			Workers: workers,
 		})
@@ -205,9 +205,9 @@ func TestRequireInsertedTx(t *testing.T) {
 		require.NoError(t, err)
 
 		_ = requireInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, &Job1Args{}, &RequireInsertedOpts{
-			MaxAttempts: river.DefaultMaxAttempts,
+			MaxAttempts: river.MaxAttemptsDefault,
 			Priority:    1,
-			Queue:       river.DefaultQueue,
+			Queue:       river.QueueDefault,
 		})
 		require.False(t, bundle.mockT.Failed)
 
@@ -418,7 +418,7 @@ func TestRequireManyInserted(t *testing.T) {
 
 		riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
 			Queues: map[string]river.QueueConfig{
-				river.DefaultQueue: {MaxWorkers: 100},
+				river.QueueDefault: {MaxWorkers: 100},
 			},
 			Workers: workers,
 		})
@@ -472,7 +472,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 
 		riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
 			Queues: map[string]river.QueueConfig{
-				river.DefaultQueue: {MaxWorkers: 100},
+				river.QueueDefault: {MaxWorkers: 100},
 			},
 			Workers: workers,
 		})
@@ -617,9 +617,9 @@ func TestRequireManyInsertedTx(t *testing.T) {
 			{
 				Args: &Job1Args{},
 				Opts: &RequireInsertedOpts{
-					MaxAttempts: river.DefaultMaxAttempts,
+					MaxAttempts: river.MaxAttemptsDefault,
 					Priority:    1,
-					Queue:       river.DefaultQueue,
+					Queue:       river.QueueDefault,
 				},
 			},
 		})

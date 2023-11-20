@@ -78,7 +78,7 @@ func Example_errorHandler() {
 		ErrorHandler: &CustomErrorHandler{},
 		Logger:       slog.New(&slogutil.SlogMessageOnlyHandler{Level: 9}), // Suppress logging so example output is cleaner (9 > slog.LevelError).
 		Queues: map[string]river.QueueConfig{
-			river.DefaultQueue: {MaxWorkers: 10},
+			river.QueueDefault: {MaxWorkers: 10},
 		},
 		Workers: workers,
 	})

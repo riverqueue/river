@@ -124,7 +124,7 @@ func newTestConfig(t *testing.T, callback callbackFunc) *Config {
 		FetchCooldown:     20 * time.Millisecond,
 		FetchPollInterval: 50 * time.Millisecond,
 		Logger:            riverinternaltest.Logger(t),
-		Queues:            map[string]QueueConfig{DefaultQueue: {MaxWorkers: 50}},
+		Queues:            map[string]QueueConfig{QueueDefault: {MaxWorkers: 50}},
 		Workers:           workers,
 		disableSleep:      true,
 	}
@@ -654,10 +654,10 @@ func Test_Client_Insert(t *testing.T) {
 		jobRow, err := client.Insert(ctx, &noOpArgs{}, nil)
 		require.NoError(t, err)
 		require.Equal(t, 0, jobRow.Attempt)
-		require.Equal(t, rivercommon.DefaultMaxAttempts, jobRow.MaxAttempts)
+		require.Equal(t, rivercommon.MaxAttemptsDefault, jobRow.MaxAttempts)
 		require.Equal(t, (&noOpArgs{}).Kind(), jobRow.Kind)
-		require.Equal(t, DefaultPriority, jobRow.Priority)
-		require.Equal(t, DefaultQueue, jobRow.Queue)
+		require.Equal(t, PriorityDefault, jobRow.Priority)
+		require.Equal(t, QueueDefault, jobRow.Queue)
 		require.Equal(t, []string{}, jobRow.Tags)
 	})
 
@@ -751,10 +751,10 @@ func Test_Client_InsertTx(t *testing.T) {
 		jobRow, err := client.InsertTx(ctx, bundle.tx, &noOpArgs{}, nil)
 		require.NoError(t, err)
 		require.Equal(t, 0, jobRow.Attempt)
-		require.Equal(t, rivercommon.DefaultMaxAttempts, jobRow.MaxAttempts)
+		require.Equal(t, rivercommon.MaxAttemptsDefault, jobRow.MaxAttempts)
 		require.Equal(t, (&noOpArgs{}).Kind(), jobRow.Kind)
-		require.Equal(t, DefaultPriority, jobRow.Priority)
-		require.Equal(t, DefaultQueue, jobRow.Queue)
+		require.Equal(t, PriorityDefault, jobRow.Priority)
+		require.Equal(t, QueueDefault, jobRow.Queue)
 		require.Equal(t, []string{}, jobRow.Tags)
 
 		// Job is not visible outside of the transaction.
@@ -1195,9 +1195,9 @@ func Test_Client_Maintenance(t *testing.T) {
 			Errors:      errorsBytes,
 			FinalizedAt: params.FinalizedAt,
 			Kind:        valutil.FirstNonZero(params.Kind, "test_kind"),
-			MaxAttempts: valutil.FirstNonZero(params.MaxAttempts, int16(rivercommon.DefaultMaxAttempts)),
-			Priority:    int16(rivercommon.DefaultPriority),
-			Queue:       DefaultQueue,
+			MaxAttempts: valutil.FirstNonZero(params.MaxAttempts, int16(rivercommon.MaxAttemptsDefault)),
+			Priority:    int16(rivercommon.PriorityDefault),
+			Queue:       QueueDefault,
 			ScheduledAt: params.ScheduledAt,
 			State:       params.State,
 		})
@@ -1473,11 +1473,11 @@ func Test_Client_RetryPolicy(t *testing.T) {
 		subscribeChan, cancel := client.Subscribe(EventKindJobCompleted, EventKindJobFailed)
 		t.Cleanup(cancel)
 
-		originalJobs := make([]*dbsqlc.RiverJob, rivercommon.DefaultMaxAttempts)
+		originalJobs := make([]*dbsqlc.RiverJob, rivercommon.MaxAttemptsDefault)
 		for i := 0; i < len(originalJobs); i++ {
 			job := requireInsert(ctx, client)
 			// regression protection to ensure we're testing the right number of jobs:
-			require.Equal(t, rivercommon.DefaultMaxAttempts, job.MaxAttempts)
+			require.Equal(t, rivercommon.MaxAttemptsDefault, job.MaxAttempts)
 
 			updatedJob, err := queries.JobUpdate(ctx, client.driver.GetDBPool(), dbsqlc.JobUpdateParams{
 				ID:                  job.ID,
@@ -1820,7 +1820,7 @@ func Test_Client_InsertTriggersImmediateWork(t *testing.T) {
 	config := newTestConfig(t, makeAwaitCallback(startedCh, doneCh))
 	config.FetchCooldown = 20 * time.Millisecond
 	config.FetchPollInterval = 20 * time.Second // essentially disable polling
-	config.Queues = map[string]QueueConfig{DefaultQueue: {MaxWorkers: 2}}
+	config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: 2}}
 
 	client := newTestClient(ctx, t, config)
 	statusUpdateCh := client.monitor.RegisterUpdates()
@@ -2188,7 +2188,7 @@ func Test_NewClient_Defaults(t *testing.T) {
 	AddWorker(workers, &noOpWorker{})
 
 	client, err := NewClient(riverpgxv5.New(dbPool), &Config{
-		Queues:  map[string]QueueConfig{DefaultQueue: {MaxWorkers: 1}},
+		Queues:  map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}},
 		Workers: workers,
 	})
 	require.NoError(t, err)
@@ -2196,14 +2196,14 @@ func Test_NewClient_Defaults(t *testing.T) {
 	require.Zero(t, client.adapter.(*dbadapter.StandardAdapter).Config.AdvisoryLockPrefix) //nolint:forcetypeassert
 
 	jobCleaner := maintenance.GetService[*maintenance.JobCleaner](client.queueMaintainer)
-	require.Equal(t, maintenance.DefaultCancelledJobRetentionPeriod, jobCleaner.Config.CancelledJobRetentionPeriod)
-	require.Equal(t, maintenance.DefaultCompletedJobRetentionPeriod, jobCleaner.Config.CompletedJobRetentionPeriod)
-	require.Equal(t, maintenance.DefaultDiscardedJobRetentionPeriod, jobCleaner.Config.DiscardedJobRetentionPeriod)
+	require.Equal(t, maintenance.CancelledJobRetentionPeriodDefault, jobCleaner.Config.CancelledJobRetentionPeriod)
+	require.Equal(t, maintenance.CompletedJobRetentionPeriodDefault, jobCleaner.Config.CompletedJobRetentionPeriod)
+	require.Equal(t, maintenance.DiscardedJobRetentionPeriodDefault, jobCleaner.Config.DiscardedJobRetentionPeriod)
 
 	require.Nil(t, client.config.ErrorHandler)
-	require.Equal(t, DefaultFetchCooldown, client.config.FetchCooldown)
-	require.Equal(t, DefaultFetchPollInterval, client.config.FetchPollInterval)
-	require.Equal(t, DefaultJobTimeout, client.config.JobTimeout)
+	require.Equal(t, FetchCooldownDefault, client.config.FetchCooldown)
+	require.Equal(t, FetchPollIntervalDefault, client.config.FetchPollInterval)
+	require.Equal(t, JobTimeoutDefault, client.config.JobTimeout)
 	require.NotZero(t, client.baseService.Logger)
 	require.IsType(t, &DefaultClientRetryPolicy{}, client.config.RetryPolicy)
 	require.False(t, client.baseService.DisableSleep)
@@ -2234,7 +2234,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 		FetchPollInterval:           124 * time.Millisecond,
 		JobTimeout:                  125 * time.Millisecond,
 		Logger:                      logger,
-		Queues:                      map[string]QueueConfig{DefaultQueue: {MaxWorkers: 1}},
+		Queues:                      map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}},
 		RetryPolicy:                 retryPolicy,
 		Workers:                     workers,
 		disableSleep:                true,
@@ -2298,7 +2298,7 @@ func Test_NewClient_Validations(t *testing.T) {
 			wantErr:    errors.New("CompletedJobRetentionPeriod cannot be less than zero"),
 		},
 		{
-			name:       "FetchCooldown cannot be less than MinFetchCooldown",
+			name:       "FetchCooldown cannot be less than FetchCooldownMin",
 			configFunc: func(config *Config) { config.FetchCooldown = time.Millisecond - 1 },
 			wantErr:    errors.New("FetchCooldown must be at least 1ms"),
 		},
@@ -2308,11 +2308,11 @@ func Test_NewClient_Validations(t *testing.T) {
 			wantErr:    errors.New("FetchCooldown must be at least 1ms"),
 		},
 		{
-			name:       "FetchCooldown defaults to DefaultFetchCooldown",
+			name:       "FetchCooldown defaults to FetchCooldownDefault",
 			configFunc: func(config *Config) { config.FetchCooldown = 0 },
 			wantErr:    nil,
 			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
-				require.Equal(t, DefaultFetchCooldown, client.config.FetchCooldown)
+				require.Equal(t, FetchCooldownDefault, client.config.FetchCooldown)
 			},
 		},
 		{
@@ -2338,7 +2338,7 @@ func Test_NewClient_Validations(t *testing.T) {
 			configFunc: func(config *Config) { config.FetchPollInterval = 0 },
 			wantErr:    nil,
 			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
-				require.Equal(t, DefaultFetchPollInterval, client.config.FetchPollInterval)
+				require.Equal(t, FetchPollIntervalDefault, client.config.FetchPollInterval)
 			},
 		},
 		{
@@ -2364,7 +2364,7 @@ func Test_NewClient_Validations(t *testing.T) {
 			},
 			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
 				// A client config value of zero gets interpreted as the default timeout:
-				require.Equal(t, DefaultJobTimeout, client.config.JobTimeout)
+				require.Equal(t, JobTimeoutDefault, client.config.JobTimeout)
 			},
 		},
 		{
@@ -2396,7 +2396,7 @@ func Test_NewClient_Validations(t *testing.T) {
 				config.JobTimeout = 23 * time.Hour
 			},
 			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
-				require.Equal(t, 23*time.Hour+maintenance.DefaultRescueAfter, client.config.RescueStuckJobsAfter)
+				require.Equal(t, 23*time.Hour+maintenance.RescueAfterDefault, client.config.RescueStuckJobsAfter)
 			},
 		},
 		{
@@ -2419,16 +2419,16 @@ func Test_NewClient_Validations(t *testing.T) {
 		{
 			name: "Queues MaxWorkers can't be negative",
 			configFunc: func(config *Config) {
-				config.Queues = map[string]QueueConfig{DefaultQueue: {MaxWorkers: -1}}
+				config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: -1}}
 			},
 			wantErr: fmt.Errorf("invalid number of workers for queue \"default\": -1"),
 		},
 		{
 			name: "Queues can't have limits larger than MaxQueueNumWorkers",
 			configFunc: func(config *Config) {
-				config.Queues = map[string]QueueConfig{DefaultQueue: {MaxWorkers: MaxQueueNumWorkers + 1}}
+				config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: QueueNumWorkersMax + 1}}
 			},
-			wantErr: fmt.Errorf("invalid number of workers for queue \"default\": %d", MaxQueueNumWorkers+1),
+			wantErr: fmt.Errorf("invalid number of workers for queue \"default\": %d", QueueNumWorkersMax+1),
 		},
 		{
 			name: "Queues queue names can't be empty",
@@ -2493,7 +2493,7 @@ func Test_NewClient_Validations(t *testing.T) {
 			AddWorker(workers, &noOpWorker{})
 
 			config := &Config{
-				Queues:  map[string]QueueConfig{DefaultQueue: {MaxWorkers: 1}},
+				Queues:  map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}},
 				Workers: workers,
 			}
 			tt.configFunc(config)
@@ -2564,7 +2564,7 @@ func TestClient_JobTimeout(t *testing.T) {
 			name:             "DefaultJobTimeoutIsUsedIfBothAreZero",
 			jobArgTimeout:    0,
 			clientJobTimeout: 0,
-			wantDuration:     DefaultJobTimeout,
+			wantDuration:     JobTimeoutDefault,
 		},
 		{
 			name:             "NoJobTimeoutIfClientIsNegativeOneAndJobArgIsZero",
@@ -2594,7 +2594,7 @@ func TestClient_JobTimeout(t *testing.T) {
 
 			config := newTestConfig(t, nil)
 			config.JobTimeout = tt.clientJobTimeout
-			config.Queues = map[string]QueueConfig{DefaultQueue: {MaxWorkers: 1}}
+			config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}}
 			config.Workers = workers
 
 			client := runNewTestClient(ctx, t, config)
@@ -2622,9 +2622,9 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, `{"name":""}`, string(insertParams.EncodedArgs))
 		require.Equal(t, (noOpArgs{}).Kind(), insertParams.Kind)
-		require.Equal(t, rivercommon.DefaultMaxAttempts, insertParams.MaxAttempts)
-		require.Equal(t, rivercommon.DefaultPriority, insertParams.Priority)
-		require.Equal(t, DefaultQueue, insertParams.Queue)
+		require.Equal(t, rivercommon.MaxAttemptsDefault, insertParams.MaxAttempts)
+		require.Equal(t, rivercommon.PriorityDefault, insertParams.Priority)
+		require.Equal(t, QueueDefault, insertParams.Queue)
 		require.Equal(t, time.Time{}, insertParams.ScheduledAt)
 		require.Equal(t, []string(nil), insertParams.Tags)
 		require.False(t, insertParams.Unique)
@@ -2718,7 +2718,7 @@ func TestInsert(t *testing.T) {
 
 	config := &Config{
 		FetchCooldown: 2 * time.Millisecond,
-		Queues:        map[string]QueueConfig{DefaultQueue: {MaxWorkers: 1}},
+		Queues:        map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}},
 		Workers:       workers,
 	}
 
@@ -2786,7 +2786,7 @@ func TestInsert(t *testing.T) {
 				require.Equal(JobStateAvailable, insertedJob.State)
 				require.Equal("noOp", insertedJob.Kind)
 				// default state:
-				require.Equal(DefaultQueue, insertedJob.Queue)
+				require.Equal(QueueDefault, insertedJob.Queue)
 				require.Equal(1, insertedJob.Priority)
 				// Default comes from database now(), and we can't know the exact value:
 				require.WithinDuration(time.Now(), insertedJob.ScheduledAt, 2*time.Second)

@@ -23,12 +23,12 @@ type InsertOpts struct {
 	// fetched. Note that if your workers are swamped with more high-priority jobs
 	// then they can handle, lower priority jobs may not be fetched.
 	//
-	// Defaults to DefaultPriority.
+	// Defaults to PriorityDefault.
 	Priority int
 
 	// Queue is the name of the job queue in which to insert the job.
 	//
-	// Defaults to DefaultQueue.
+	// Defaults to QueueDefault.
 	Queue string
 
 	// ScheduledAt is a time in future at which to schedule the job (i.e. in

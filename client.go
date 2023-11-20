@@ -33,19 +33,17 @@ import (
 )
 
 const (
-	MaxQueueNumWorkers = 10_000
+	FetchCooldownDefault = 100 * time.Millisecond
+	FetchCooldownMin     = 1 * time.Millisecond
 
-	DefaultFetchCooldown = 100 * time.Millisecond
-	MinFetchCooldown     = 1 * time.Millisecond
+	FetchPollIntervalDefault = 1 * time.Second
+	FetchPollIntervalMin     = 1 * time.Millisecond
 
-	DefaultFetchPollInterval = 1 * time.Second
-	MinFetchPollInterval     = 1 * time.Millisecond
-
-	DefaultJobTimeout = 1 * time.Minute
-
-	DefaultMaxAttempts = rivercommon.DefaultMaxAttempts
-	DefaultQueue       = rivercommon.DefaultQueue
-	DefaultPriority    = rivercommon.DefaultPriority
+	JobTimeoutDefault  = 1 * time.Minute
+	MaxAttemptsDefault = rivercommon.MaxAttemptsDefault
+	PriorityDefault    = rivercommon.PriorityDefault
+	QueueDefault       = rivercommon.QueueDefault
+	QueueNumWorkersMax = 10_000
 )
 
 // Config is the configuration for a Client.
@@ -105,7 +103,7 @@ type Config struct {
 	FetchPollInterval time.Duration
 
 	// JobTimeout is the maximum amount of time a job is allowed to run before its
-	// context is cancelled. A timeout of zero means DefaultJobTimeout will be
+	// context is cancelled. A timeout of zero means JobTimeoutDefault will be
 	// used, whereas a value of -1 means the job's context will not be cancelled
 	// unless the Client is shutting down.
 	//
@@ -181,11 +179,11 @@ func (c *Config) validate() error {
 	if c.DiscardedJobRetentionPeriod < 0 {
 		return fmt.Errorf("DiscardedJobRetentionPeriod cannot be less than zero")
 	}
-	if c.FetchCooldown < MinFetchCooldown {
-		return fmt.Errorf("FetchCooldown must be at least %s", MinFetchCooldown)
+	if c.FetchCooldown < FetchCooldownMin {
+		return fmt.Errorf("FetchCooldown must be at least %s", FetchCooldownMin)
 	}
-	if c.FetchPollInterval < MinFetchPollInterval {
-		return fmt.Errorf("FetchPollInterval must be at least %s", MinFetchPollInterval)
+	if c.FetchPollInterval < FetchPollIntervalMin {
+		return fmt.Errorf("FetchPollInterval must be at least %s", FetchPollIntervalMin)
 	}
 	if c.FetchPollInterval < c.FetchCooldown {
 		return fmt.Errorf("FetchPollInterval cannot be shorter than FetchCooldown (%s)", c.FetchCooldown)
@@ -201,7 +199,7 @@ func (c *Config) validate() error {
 	}
 
 	for queue, queueConfig := range c.Queues {
-		if queueConfig.MaxWorkers < 1 || queueConfig.MaxWorkers > MaxQueueNumWorkers {
+		if queueConfig.MaxWorkers < 1 || queueConfig.MaxWorkers > QueueNumWorkersMax {
 			return fmt.Errorf("invalid number of workers for queue %q: %d", queue, queueConfig.MaxWorkers)
 		}
 		if err := validateQueueName(queue); err != nil {
@@ -368,9 +366,9 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	// For convenience, in case the user's specified a large JobTimeout but no
 	// RescueStuckJobsAfter, since RescueStuckJobsAfter must be greater than
 	// JobTimeout, set a reasonable default value that's longer thah JobTimeout.
-	rescueAfter := maintenance.DefaultRescueAfter
+	rescueAfter := maintenance.RescueAfterDefault
 	if config.JobTimeout > 0 && config.RescueStuckJobsAfter < 1 && config.JobTimeout > config.RescueStuckJobsAfter {
-		rescueAfter = config.JobTimeout + maintenance.DefaultRescueAfter
+		rescueAfter = config.JobTimeout + maintenance.RescueAfterDefault
 	}
 
 	// Create a new version of config with defaults filled in. This replaces the
@@ -378,13 +376,13 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	// here, even if it's only carrying over the original value.
 	config = &Config{
 		AdvisoryLockPrefix:          config.AdvisoryLockPrefix,
-		CancelledJobRetentionPeriod: valutil.ValOrDefault(config.CancelledJobRetentionPeriod, maintenance.DefaultCancelledJobRetentionPeriod),
-		CompletedJobRetentionPeriod: valutil.ValOrDefault(config.CompletedJobRetentionPeriod, maintenance.DefaultCompletedJobRetentionPeriod),
-		DiscardedJobRetentionPeriod: valutil.ValOrDefault(config.DiscardedJobRetentionPeriod, maintenance.DefaultDiscardedJobRetentionPeriod),
+		CancelledJobRetentionPeriod: valutil.ValOrDefault(config.CancelledJobRetentionPeriod, maintenance.CancelledJobRetentionPeriodDefault),
+		CompletedJobRetentionPeriod: valutil.ValOrDefault(config.CompletedJobRetentionPeriod, maintenance.CompletedJobRetentionPeriodDefault),
+		DiscardedJobRetentionPeriod: valutil.ValOrDefault(config.DiscardedJobRetentionPeriod, maintenance.DiscardedJobRetentionPeriodDefault),
 		ErrorHandler:                config.ErrorHandler,
-		FetchCooldown:               valutil.ValOrDefault(config.FetchCooldown, DefaultFetchCooldown),
-		FetchPollInterval:           valutil.ValOrDefault(config.FetchPollInterval, DefaultFetchPollInterval),
-		JobTimeout:                  valutil.ValOrDefault(config.JobTimeout, DefaultJobTimeout),
+		FetchCooldown:               valutil.ValOrDefault(config.FetchCooldown, FetchCooldownDefault),
+		FetchPollInterval:           valutil.ValOrDefault(config.FetchPollInterval, FetchPollIntervalDefault),
+		JobTimeout:                  valutil.ValOrDefault(config.JobTimeout, JobTimeoutDefault),
 		Logger:                      logger,
 		PeriodicJobs:                config.PeriodicJobs,
 		Queues:                      config.Queues,
@@ -933,9 +931,9 @@ func insertParamsFromArgsAndOptions(args JobArgs, insertOpts *InsertOpts) (*dbad
 		jobInsertOpts = argsWithOpts.InsertOpts()
 	}
 
-	maxAttempts := valutil.FirstNonZero(insertOpts.MaxAttempts, jobInsertOpts.MaxAttempts, rivercommon.DefaultMaxAttempts)
-	priority := valutil.FirstNonZero(insertOpts.Priority, jobInsertOpts.Priority, rivercommon.DefaultPriority)
-	queue := valutil.FirstNonZero(insertOpts.Queue, jobInsertOpts.Queue, rivercommon.DefaultQueue)
+	maxAttempts := valutil.FirstNonZero(insertOpts.MaxAttempts, jobInsertOpts.MaxAttempts, rivercommon.MaxAttemptsDefault)
+	priority := valutil.FirstNonZero(insertOpts.Priority, jobInsertOpts.Priority, rivercommon.PriorityDefault)
+	queue := valutil.FirstNonZero(insertOpts.Queue, jobInsertOpts.Queue, rivercommon.QueueDefault)
 
 	tags := insertOpts.Tags
 	if insertOpts.Tags == nil {
