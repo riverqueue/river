@@ -11,10 +11,13 @@ import (
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/componentstatus"
 	"github.com/riverqueue/river/internal/dbadapter"
+	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/util/chanutil"
 	"github.com/riverqueue/river/internal/util/sliceutil"
+	"github.com/riverqueue/river/internal/workunit"
+	"github.com/riverqueue/river/rivertype"
 )
 
 type producerConfig struct {
@@ -61,7 +64,7 @@ type producer struct {
 
 	// Receives completed jobs from workers. Written by completed workers, only
 	// read from main goroutine.
-	jobResultCh chan *JobRow
+	jobResultCh chan *rivertype.JobRow
 
 	jobTimeout time.Duration
 
@@ -115,7 +118,7 @@ func newProducer(archetype *baseservice.Archetype, adapter dbadapter.Adapter, co
 		completer:    completer,
 		config:       config,
 		errorHandler: config.ErrorHandler,
-		jobResultCh:  make(chan *JobRow, config.MaxWorkerCount),
+		jobResultCh:  make(chan *rivertype.JobRow, config.MaxWorkerCount),
 		jobTimeout:   config.JobTimeout,
 		retryPolicy:  config.RetryPolicy,
 		workers:      config.Workers,
@@ -269,7 +272,7 @@ func (p *producer) dispatchWork(count int32, jobsFetchedCh chan<- producerFetchR
 		jobsFetchedCh <- producerFetchResult{err: err}
 		return
 	}
-	jobs := sliceutil.Map(internalJobs, jobRowFromInternal)
+	jobs := sliceutil.Map(internalJobs, dbsqlc.JobRowFromInternal)
 	jobsFetchedCh <- producerFetchResult{jobs: jobs}
 }
 
@@ -292,11 +295,11 @@ func (p *producer) heartbeatLogLoop(ctx context.Context) {
 	}
 }
 
-func (p *producer) startNewExecutors(workCtx context.Context, jobs []*JobRow) {
+func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.JobRow) {
 	for _, job := range jobs {
 		workInfo, ok := p.workers.workersMap[job.Kind]
 
-		var workUnit workUnit
+		var workUnit workunit.WorkUnit
 		if ok {
 			workUnit = workInfo.workUnitFactory.MakeUnit(job)
 		}
@@ -328,11 +331,11 @@ func (p *producer) maxJobsToFetch() int32 {
 	return int32(p.config.MaxWorkerCount) - p.numJobsActive.Load()
 }
 
-func (p *producer) handleWorkerDone(job *JobRow) {
+func (p *producer) handleWorkerDone(job *rivertype.JobRow) {
 	p.jobResultCh <- job
 }
 
 type producerFetchResult struct {
-	jobs []*JobRow
+	jobs []*rivertype.JobRow
 	err  error
 }

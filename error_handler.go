@@ -1,6 +1,10 @@
 package river
 
-import "context"
+import (
+	"context"
+
+	"github.com/riverqueue/river/rivertype"
+)
 
 // ErrorHandler provides an interface that will be invoked in case of an error
 // or panic occurring in the job. This is often useful for logging and exception
@@ -10,13 +14,13 @@ type ErrorHandler interface {
 	//
 	// Context is descended from the one used to start the River client that
 	// worked the job.
-	HandleError(ctx context.Context, job *JobRow, err error) *ErrorHandlerResult
+	HandleError(ctx context.Context, job *rivertype.JobRow, err error) *ErrorHandlerResult
 
 	// HandlePanic is invoked in case of a panic occurring in a job.
 	//
 	// Context is descended from the one used to start the River client that
 	// worked the job.
-	HandlePanic(ctx context.Context, job *JobRow, panicVal any) *ErrorHandlerResult
+	HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any) *ErrorHandlerResult
 }
 
 type ErrorHandlerResult struct {

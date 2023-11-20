@@ -18,6 +18,8 @@ import (
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/internal/util/timeutil"
+	"github.com/riverqueue/river/internal/workunit"
+	"github.com/riverqueue/river/rivertype"
 )
 
 type customRetryPolicyWorker struct {
@@ -39,7 +41,7 @@ func (w *customRetryPolicyWorker) Work(ctx context.Context, j *Job[callbackArgs]
 
 // Makes a workerInfo using the real workerWrapper with a job that uses a
 // callback Work func and allows for customizable maxAttempts and nextRetry.
-func newWorkUnitFactoryWithCustomRetry(f func() error, nextRetry func() time.Time) workUnitFactory {
+func newWorkUnitFactoryWithCustomRetry(f func() error, nextRetry func() time.Time) workunit.WorkUnitFactory {
 	return &workUnitFactoryWrapper[callbackArgs]{worker: &customRetryPolicyWorker{
 		f:         f,
 		nextRetry: nextRetry,
@@ -51,7 +53,7 @@ type retryPolicyCustom struct {
 	DefaultClientRetryPolicy
 }
 
-func (p *retryPolicyCustom) NextRetry(job *JobRow) time.Time {
+func (p *retryPolicyCustom) NextRetry(job *rivertype.JobRow) time.Time {
 	var backoffDuration time.Duration
 	switch job.Attempt {
 	case 1:
@@ -72,7 +74,7 @@ type retryPolicyInvalid struct {
 	DefaultClientRetryPolicy
 }
 
-func (p *retryPolicyInvalid) NextRetry(job *JobRow) time.Time { return time.Time{} }
+func (p *retryPolicyInvalid) NextRetry(job *rivertype.JobRow) time.Time { return time.Time{} }
 
 // Identical to default retry policy except that it leaves off the jitter to
 // make checking against it more convenient.
@@ -80,32 +82,32 @@ type retryPolicyNoJitter struct {
 	DefaultClientRetryPolicy
 }
 
-func (p *retryPolicyNoJitter) NextRetry(job *JobRow) time.Time {
+func (p *retryPolicyNoJitter) NextRetry(job *rivertype.JobRow) time.Time {
 	return job.AttemptedAt.Add(timeutil.SecondsAsDuration(p.retrySecondsWithoutJitter(job.Attempt)))
 }
 
 type testErrorHandler struct {
 	HandleErrorCalled bool
-	HandleErrorFunc   func(ctx context.Context, job *JobRow, err error) *ErrorHandlerResult
+	HandleErrorFunc   func(ctx context.Context, job *rivertype.JobRow, err error) *ErrorHandlerResult
 
 	HandlePanicCalled bool
-	HandlePanicFunc   func(ctx context.Context, job *JobRow, panicVal any) *ErrorHandlerResult
+	HandlePanicFunc   func(ctx context.Context, job *rivertype.JobRow, panicVal any) *ErrorHandlerResult
 }
 
 // Test handler with no-ops for both error handling functions.
 func newTestErrorHandler() *testErrorHandler {
 	return &testErrorHandler{
-		HandleErrorFunc: func(ctx context.Context, job *JobRow, err error) *ErrorHandlerResult { return nil },
-		HandlePanicFunc: func(ctx context.Context, job *JobRow, panicVal any) *ErrorHandlerResult { return nil },
+		HandleErrorFunc: func(ctx context.Context, job *rivertype.JobRow, err error) *ErrorHandlerResult { return nil },
+		HandlePanicFunc: func(ctx context.Context, job *rivertype.JobRow, panicVal any) *ErrorHandlerResult { return nil },
 	}
 }
 
-func (h *testErrorHandler) HandleError(ctx context.Context, job *JobRow, err error) *ErrorHandlerResult {
+func (h *testErrorHandler) HandleError(ctx context.Context, job *rivertype.JobRow, err error) *ErrorHandlerResult {
 	h.HandleErrorCalled = true
 	return h.HandleErrorFunc(ctx, job, err)
 }
 
-func (h *testErrorHandler) HandlePanic(ctx context.Context, job *JobRow, panicVal any) *ErrorHandlerResult {
+func (h *testErrorHandler) HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any) *ErrorHandlerResult {
 	h.HandlePanicCalled = true
 	return h.HandlePanicFunc(ctx, job, panicVal)
 }
@@ -123,7 +125,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		completer         *jobcompleter.InlineJobCompleter
 		errorHandler      *testErrorHandler
 		getUpdatesAndStop func() []jobcompleter.CompleterJobUpdated
-		jobRow            *JobRow
+		jobRow            *rivertype.JobRow
 		tx                pgx.Tx
 	}
 
@@ -177,7 +179,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 			completer:         completer,
 			errorHandler:      newTestErrorHandler(),
 			getUpdatesAndStop: getJobUpdates,
-			jobRow:            jobRowFromInternal(job),
+			jobRow:            dbsqlc.JobRowFromInternal(job),
 			tx:                tx,
 		}
 
@@ -186,7 +188,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 			ClientRetryPolicy:      &retryPolicyNoJitter{},
 			Completer:              bundle.completer,
 			ErrorHandler:           bundle.errorHandler,
-			InformProducerDoneFunc: func(job *JobRow) {},
+			InformProducerDoneFunc: func(job *rivertype.JobRow) {},
 			JobRow:                 bundle.jobRow,
 			WorkUnit:               workUnitFactory.MakeUnit(bundle.jobRow),
 		})
@@ -393,7 +395,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		workerErr := fmt.Errorf("job error")
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
-		bundle.errorHandler.HandleErrorFunc = func(ctx context.Context, job *JobRow, err error) *ErrorHandlerResult {
+		bundle.errorHandler.HandleErrorFunc = func(ctx context.Context, job *rivertype.JobRow, err error) *ErrorHandlerResult {
 			require.Equal(t, workerErr, err)
 			return nil
 		}
@@ -415,7 +417,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		workerErr := fmt.Errorf("job error")
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
-		bundle.errorHandler.HandleErrorFunc = func(ctx context.Context, job *JobRow, err error) *ErrorHandlerResult {
+		bundle.errorHandler.HandleErrorFunc = func(ctx context.Context, job *rivertype.JobRow, err error) *ErrorHandlerResult {
 			return &ErrorHandlerResult{SetCancelled: true}
 		}
 
@@ -436,7 +438,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		workerErr := fmt.Errorf("job error")
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
-		bundle.errorHandler.HandleErrorFunc = func(ctx context.Context, job *JobRow, err error) *ErrorHandlerResult {
+		bundle.errorHandler.HandleErrorFunc = func(ctx context.Context, job *rivertype.JobRow, err error) *ErrorHandlerResult {
 			panic("error handled panicked!")
 		}
 
@@ -510,7 +512,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor, bundle := setup(t)
 
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { panic("panic val") }, nil).MakeUnit(bundle.jobRow)
-		bundle.errorHandler.HandlePanicFunc = func(ctx context.Context, job *JobRow, panicVal any) *ErrorHandlerResult {
+		bundle.errorHandler.HandlePanicFunc = func(ctx context.Context, job *rivertype.JobRow, panicVal any) *ErrorHandlerResult {
 			require.Equal(t, "panic val", panicVal)
 			return nil
 		}
@@ -531,7 +533,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor, bundle := setup(t)
 
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { panic("panic val") }, nil).MakeUnit(bundle.jobRow)
-		bundle.errorHandler.HandlePanicFunc = func(ctx context.Context, job *JobRow, panicVal any) *ErrorHandlerResult {
+		bundle.errorHandler.HandlePanicFunc = func(ctx context.Context, job *rivertype.JobRow, panicVal any) *ErrorHandlerResult {
 			return &ErrorHandlerResult{SetCancelled: true}
 		}
 
@@ -551,7 +553,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor, bundle := setup(t)
 
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { panic("panic val") }, nil).MakeUnit(bundle.jobRow)
-		bundle.errorHandler.HandlePanicFunc = func(ctx context.Context, job *JobRow, panicVal any) *ErrorHandlerResult {
+		bundle.errorHandler.HandlePanicFunc = func(ctx context.Context, job *rivertype.JobRow, panicVal any) *ErrorHandlerResult {
 			panic("panic handler panicked!")
 		}
 

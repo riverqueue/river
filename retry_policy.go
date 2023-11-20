@@ -8,6 +8,7 @@ import (
 
 	"github.com/riverqueue/river/internal/util/randutil"
 	"github.com/riverqueue/river/internal/util/timeutil"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // ClientRetryPolicy is an interface that can be implemented to provide a retry
@@ -23,7 +24,7 @@ type ClientRetryPolicy interface {
 	// given when it was last attempted and its number of attempts, or any other
 	// of the job's properties a user-configured retry policy might want to
 	// consider.
-	NextRetry(job *JobRow) time.Time
+	NextRetry(job *rivertype.JobRow) time.Time
 }
 
 // River's default retry policy.
@@ -42,7 +43,7 @@ type DefaultClientRetryPolicy struct {
 // used instead of the attempt count. This means that snoozing a job (even
 // repeatedly) will not lead to a future error having a longer than expected
 // retry delay.
-func (p *DefaultClientRetryPolicy) NextRetry(job *JobRow) time.Time {
+func (p *DefaultClientRetryPolicy) NextRetry(job *rivertype.JobRow) time.Time {
 	// For the purposes of calculating the backoff, we can look solely at the
 	// number of errors. If we were to use the raw attempt count, this would be
 	// incemented and influenced by snoozes. However the use case for snoozing is

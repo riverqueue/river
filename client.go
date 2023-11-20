@@ -27,7 +27,9 @@ import (
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/internal/util/valutil"
+	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivertype"
 )
 
 const (
@@ -286,7 +288,7 @@ type clientTestSignals struct {
 	jobCleaner          *maintenance.JobCleanerTestSignals
 	periodicJobEnqueuer *maintenance.PeriodicJobEnqueuerTestSignals
 	reindexer           *maintenance.ReindexerTestSignals
-	rescuer             *rescuerTestSignals
+	rescuer             *maintenance.RescuerTestSignals
 	scheduler           *maintenance.SchedulerTestSignals
 }
 
@@ -366,9 +368,9 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	// For convenience, in case the user's specified a large JobTimeout but no
 	// RescueStuckJobsAfter, since RescueStuckJobsAfter must be greater than
 	// JobTimeout, set a reasonable default value that's longer thah JobTimeout.
-	rescueAfter := defaultRescueAfter
+	rescueAfter := maintenance.DefaultRescueAfter
 	if config.JobTimeout > 0 && config.RescueStuckJobsAfter < 1 && config.JobTimeout > config.RescueStuckJobsAfter {
-		rescueAfter = config.JobTimeout + defaultRescueAfter
+		rescueAfter = config.JobTimeout + maintenance.DefaultRescueAfter
 	}
 
 	// Create a new version of config with defaults filled in. This replaces the
@@ -512,10 +514,15 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		}
 
 		{
-			rescuer := newRescuer(archetype, &rescuerConfig{
+			rescuer := maintenance.NewRescuer(archetype, &maintenance.RescuerConfig{
 				ClientRetryPolicy: retryPolicy,
 				RescueAfter:       config.RescueStuckJobsAfter,
-				Workers:           config.Workers,
+				WorkUnitFactoryFunc: func(kind string) workunit.WorkUnitFactory {
+					if workerInfo, ok := config.Workers.workersMap[kind]; ok {
+						return workerInfo.workUnitFactory
+					}
+					return nil
+				},
 			}, driver.GetDBPool())
 			maintenanceServices = append(maintenanceServices, rescuer)
 			client.testSignals.rescuer = &rescuer.TestSignals
@@ -758,7 +765,7 @@ func (c *Client[TTx]) Subscribe(kinds ...EventKind) (<-chan *Event, func()) {
 }
 
 // Distribute a single job into any listening subscriber channels.
-func (c *Client[TTx]) distributeJob(job *JobRow, stats *JobStatistics) {
+func (c *Client[TTx]) distributeJob(job *rivertype.JobRow, stats *JobStatistics) {
 	c.subscriptionsMu.Lock()
 	defer c.subscriptionsMu.Unlock()
 
@@ -809,7 +816,7 @@ func (c *Client[TTx]) distributeJobCompleterCallback(update jobcompleter.Complet
 		c.statsNumJobs++
 	}()
 
-	c.distributeJob(jobRowFromInternal(update.Job), jobStatisticsFromInternal(update.JobStats))
+	c.distributeJob(dbsqlc.JobRowFromInternal(update.Job), jobStatisticsFromInternal(update.JobStats))
 }
 
 // Dump aggregate stats from job completions to logs periodically.  These
@@ -963,7 +970,7 @@ func insertParamsFromArgsAndOptions(args JobArgs, insertOpts *InsertOpts) (*dbad
 		insertParams.UniqueByArgs = uniqueOpts.ByArgs
 		insertParams.UniqueByQueue = uniqueOpts.ByQueue
 		insertParams.UniqueByPeriod = uniqueOpts.ByPeriod
-		insertParams.UniqueByState = sliceutil.Map(uniqueOpts.ByState, func(s JobState) dbsqlc.JobState { return dbsqlc.JobState(s) })
+		insertParams.UniqueByState = sliceutil.Map(uniqueOpts.ByState, func(s rivertype.JobState) dbsqlc.JobState { return dbsqlc.JobState(s) })
 	}
 
 	if !insertOpts.ScheduledAt.IsZero() {
@@ -986,7 +993,7 @@ var errInsertNoDriverDBPool = fmt.Errorf("driver must have non-nil database pool
 //	if err != nil {
 //		// handle error
 //	}
-func (c *Client[TTx]) Insert(ctx context.Context, args JobArgs, opts *InsertOpts) (*JobRow, error) {
+func (c *Client[TTx]) Insert(ctx context.Context, args JobArgs, opts *InsertOpts) (*rivertype.JobRow, error) {
 	if c.driver.GetDBPool() == nil {
 		return nil, errInsertNoDriverDBPool
 	}
@@ -1005,7 +1012,7 @@ func (c *Client[TTx]) Insert(ctx context.Context, args JobArgs, opts *InsertOpts
 		return nil, err
 	}
 
-	return jobRowFromInternal(res.Job), nil
+	return dbsqlc.JobRowFromInternal(res.Job), nil
 }
 
 // InsertTx inserts a new job with the provided args on the given transaction.
@@ -1022,7 +1029,7 @@ func (c *Client[TTx]) Insert(ctx context.Context, args JobArgs, opts *InsertOpts
 // This variant lets a caller insert jobs atomically alongside other database
 // changes. An inserted job isn't visible to be worked until the transaction
 // commits, and if the transaction rolls back, so too is the inserted job.
-func (c *Client[TTx]) InsertTx(ctx context.Context, tx TTx, args JobArgs, opts *InsertOpts) (*JobRow, error) {
+func (c *Client[TTx]) InsertTx(ctx context.Context, tx TTx, args JobArgs, opts *InsertOpts) (*rivertype.JobRow, error) {
 	if err := c.validateJobArgs(args); err != nil {
 		return nil, err
 	}
@@ -1037,7 +1044,7 @@ func (c *Client[TTx]) InsertTx(ctx context.Context, tx TTx, args JobArgs, opts *
 		return nil, err
 	}
 
-	return jobRowFromInternal(res.Job), nil
+	return dbsqlc.JobRowFromInternal(res.Job), nil
 }
 
 // InsertManyParams encapsulates a single job combined with insert options for

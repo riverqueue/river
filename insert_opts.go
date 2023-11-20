@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"github.com/riverqueue/river/rivertype"
 )
 
 // InsertOpts are optional settings for a new job which can be provided at job
@@ -103,7 +105,7 @@ type UniqueOpts struct {
 	// With this setting, any jobs of the same kind that have been completed or
 	// discarded, but not yet cleaned out by the system, won't count towards the
 	// uniqueness of a new insert.
-	ByState []JobState
+	ByState []rivertype.JobState
 }
 
 // isEmpty returns true for an empty, uninitialized options struct.

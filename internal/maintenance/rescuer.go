@@ -1,4 +1,4 @@
-package river
+package maintenance
 
 import (
 	"context"
@@ -10,31 +10,36 @@ import (
 
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/internal/util/timeutil"
 	"github.com/riverqueue/river/internal/util/valutil"
+	"github.com/riverqueue/river/internal/workunit"
+	"github.com/riverqueue/river/rivertype"
 )
 
 const (
-	defaultRescueAfter     = time.Hour
-	defaultRescuerInterval = 30 * time.Second
+	DefaultRescueAfter     = time.Hour
+	DefaultRescuerInterval = 30 * time.Second
 )
 
+type ClientRetryPolicy interface {
+	NextRetry(job *rivertype.JobRow) time.Time
+}
+
 // Test-only properties.
-type rescuerTestSignals struct {
+type RescuerTestSignals struct {
 	FetchedBatch rivercommon.TestSignal[struct{}] // notifies when runOnce has fetched a batch of jobs
 	UpdatedBatch rivercommon.TestSignal[struct{}] // notifies when runOnce has updated rescued jobs from a batch
 }
 
-func (ts *rescuerTestSignals) Init() {
+func (ts *RescuerTestSignals) Init() {
 	ts.FetchedBatch.Init()
 	ts.UpdatedBatch.Init()
 }
 
-type rescuerConfig struct {
+type RescuerConfig struct {
 	// ClientRetryPolicy is the default retry policy to use for workers that don't
 	// overide NextRetry.
 	ClientRetryPolicy ClientRetryPolicy
@@ -46,11 +51,10 @@ type rescuerConfig struct {
 	// considered stuck and should be rescued.
 	RescueAfter time.Duration
 
-	// Workers is the bundle of workers for
-	Workers *Workers
+	WorkUnitFactoryFunc func(kind string) workunit.WorkUnitFactory
 }
 
-func (c *rescuerConfig) mustValidate() *rescuerConfig {
+func (c *RescuerConfig) mustValidate() *RescuerConfig {
 	if c.ClientRetryPolicy == nil {
 		panic("RescuerConfig.ClientRetryPolicy must be set")
 	}
@@ -60,44 +64,44 @@ func (c *rescuerConfig) mustValidate() *rescuerConfig {
 	if c.RescueAfter <= 0 {
 		panic("RescuerConfig.JobDuration must be above zero")
 	}
-	if c.Workers == nil {
-		panic("RescuerConfig.Workers must be set")
+	if c.WorkUnitFactoryFunc == nil {
+		panic("RescuerConfig.WorkUnitFactoryFunc must be set")
 	}
 
 	return c
 }
 
-// rescuer periodically rescues jobs that have been executing for too long
+// Rescuer periodically rescues jobs that have been executing for too long
 // and are considered to be "stuck".
-type rescuer struct {
+type Rescuer struct {
 	baseservice.BaseService
 	startstop.BaseStartStop
 
 	// exported for test purposes
-	Config      *rescuerConfig
-	TestSignals rescuerTestSignals
+	Config      *RescuerConfig
+	TestSignals RescuerTestSignals
 
 	batchSize  int // configurable for test purposes
 	dbExecutor dbutil.Executor
 	queries    *dbsqlc.Queries
 }
 
-func newRescuer(archetype *baseservice.Archetype, config *rescuerConfig, executor dbutil.Executor) *rescuer {
-	return baseservice.Init(archetype, &rescuer{
-		Config: (&rescuerConfig{
-			ClientRetryPolicy: config.ClientRetryPolicy,
-			Interval:          valutil.ValOrDefault(config.Interval, defaultRescuerInterval),
-			RescueAfter:       valutil.ValOrDefault(config.RescueAfter, defaultRescueAfter),
-			Workers:           config.Workers,
+func NewRescuer(archetype *baseservice.Archetype, config *RescuerConfig, executor dbutil.Executor) *Rescuer {
+	return baseservice.Init(archetype, &Rescuer{
+		Config: (&RescuerConfig{
+			ClientRetryPolicy:   config.ClientRetryPolicy,
+			Interval:            valutil.ValOrDefault(config.Interval, DefaultRescuerInterval),
+			RescueAfter:         valutil.ValOrDefault(config.RescueAfter, DefaultRescueAfter),
+			WorkUnitFactoryFunc: config.WorkUnitFactoryFunc,
 		}).mustValidate(),
 
-		batchSize:  maintenance.DefaultBatchSize,
+		batchSize:  DefaultBatchSize,
 		dbExecutor: executor,
 		queries:    dbsqlc.New(),
 	})
 }
 
-func (s *rescuer) Start(ctx context.Context) error {
+func (s *Rescuer) Start(ctx context.Context) error {
 	ctx, shouldStart, stopped := s.StartInit(ctx)
 	if !shouldStart {
 		return nil
@@ -105,7 +109,7 @@ func (s *rescuer) Start(ctx context.Context) error {
 
 	// Jitter start up slightly so services don't all perform their first run at
 	// exactly the same time.
-	s.CancellableSleepRandomBetween(ctx, maintenance.JitterMin, maintenance.JitterMax)
+	s.CancellableSleepRandomBetween(ctx, JitterMin, JitterMax)
 
 	go func() {
 		s.Logger.InfoContext(ctx, s.Name+": Run loop started")
@@ -144,7 +148,7 @@ type rescuerRunOnceResult struct {
 	NumJobsRetried   int64
 }
 
-func (s *rescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error) {
+func (s *Rescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error) {
 	res := &rescuerRunOnceResult{}
 
 	for {
@@ -154,11 +158,6 @@ func (s *rescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error) {
 		}
 
 		s.TestSignals.FetchedBatch.Signal(struct{}{})
-
-		// Return quickly in case there's no work to do.
-		if len(stuckJobs) < 1 {
-			return res, nil
-		}
 
 		now := time.Now().UTC()
 
@@ -173,7 +172,7 @@ func (s *rescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error) {
 		for i, job := range stuckJobs {
 			rescueManyParams.ID[i] = job.ID
 
-			rescueManyParams.Error[i], err = json.Marshal(AttemptError{
+			rescueManyParams.Error[i], err = json.Marshal(rivertype.AttemptError{
 				At:    now,
 				Error: "Stuck job rescued by Rescuer",
 				Num:   max(int(job.Attempt), 0),
@@ -214,13 +213,13 @@ func (s *rescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error) {
 			slog.Int64("num_jobs_retried", res.NumJobsRetried),
 		)
 
-		s.CancellableSleepRandomBetween(ctx, maintenance.BatchBackoffMin, maintenance.BatchBackoffMax)
+		s.CancellableSleepRandomBetween(ctx, BatchBackoffMin, BatchBackoffMax)
 	}
 
 	return res, nil
 }
 
-func (s *rescuer) getStuckJobs(ctx context.Context) ([]*dbsqlc.RiverJob, error) {
+func (s *Rescuer) getStuckJobs(ctx context.Context) ([]*dbsqlc.RiverJob, error) {
 	ctx, cancelFunc := context.WithTimeout(ctx, 30*time.Second)
 	defer cancelFunc()
 
@@ -234,16 +233,17 @@ func (s *rescuer) getStuckJobs(ctx context.Context) ([]*dbsqlc.RiverJob, error) 
 
 // makeRetryDecision decides whether or not a rescued job should be retried, and if so,
 // when.
-func (s *rescuer) makeRetryDecision(ctx context.Context, internalJob *dbsqlc.RiverJob) (bool, time.Time) {
-	job := jobRowFromInternal(internalJob)
-	workerInfo, ok := s.Config.Workers.workersMap[job.Kind]
-	if !ok {
+func (s *Rescuer) makeRetryDecision(ctx context.Context, internalJob *dbsqlc.RiverJob) (bool, time.Time) {
+	job := dbsqlc.JobRowFromInternal(internalJob)
+
+	workUnitFactory := s.Config.WorkUnitFactoryFunc(job.Kind)
+	if workUnitFactory == nil {
 		s.Logger.ErrorContext(ctx, s.Name+": Attempted to rescue unhandled job kind, discarding",
 			slog.String("job_kind", job.Kind), slog.Int64("job_id", job.ID))
 		return false, time.Time{}
 	}
 
-	workUnit := workerInfo.workUnitFactory.MakeUnit(job)
+	workUnit := workUnitFactory.MakeUnit(job)
 	if err := workUnit.UnmarshalJob(); err != nil {
 		s.Logger.ErrorContext(ctx, s.Name+": Error unmarshaling job args: %s"+err.Error(),
 			slog.String("job_kind", job.Kind), slog.Int64("job_id", job.ID))

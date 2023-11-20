@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/riverqueue/river/internal/workunit"
 )
 
 // Worker is an interface that can perform a job with args of type T. A typical
@@ -122,7 +124,7 @@ type Workers struct {
 // in a Workers bundle.
 type workerInfo struct {
 	jobArgs         JobArgs
-	workUnitFactory workUnitFactory
+	workUnitFactory workunit.WorkUnitFactory
 }
 
 // NewWorkers initializes a new registry of available job workers.
@@ -135,7 +137,7 @@ func NewWorkers() *Workers {
 	}
 }
 
-func (w Workers) add(jobArgs JobArgs, workUnitFactory workUnitFactory) error {
+func (w Workers) add(jobArgs JobArgs, workUnitFactory workunit.WorkUnitFactory) error {
 	kind := jobArgs.Kind()
 
 	if _, ok := w.workersMap[kind]; ok {

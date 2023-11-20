@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/jobstats"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // EventKind is a kind of event to subscribe to from a client.
@@ -45,7 +46,7 @@ type Event struct {
 	Kind EventKind
 
 	// Job contains job-related information.
-	Job *JobRow
+	Job *rivertype.JobRow
 
 	// JobStats are statistics about the run of a job.
 	JobStats *JobStatistics
