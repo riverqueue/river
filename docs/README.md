@@ -142,6 +142,16 @@ See the [`InsertAndWork` example] for complete code.
 
 See [developing River].
 
+## Thank you
+
+River was in large part inspired by our experiences with other background job libaries over the years, most notably:
+
+- [Oban](https://github.com/sorentwo/oban) in Elixir
+- [que](https://github.com/que-rb/que), [sidekiq](https://github.com/sidekiq/sidekiq), [delayed_job](https://github.com/collectiveidea/delayed_job), and [GoodJob](https://github.com/bensheldon/good_job) in Ruby
+- [Hangfire](https://www.hangfire.io/) in .NET
+
+Thank you for driving the software ecosystem forward.
+
 [`Client`]: https://pkg.go.dev/github.com/riverqueue/river#Client
 [`Client.InsertTx`]: https://pkg.go.dev/github.com/riverqueue/river#Client.InsertTx
 [`InsertAndWork` example]: https://pkg.go.dev/github.com/riverqueue/river#example-package-InsertAndWork
