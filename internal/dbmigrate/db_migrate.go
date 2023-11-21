@@ -33,6 +33,12 @@ var (
 
 	//go:embed 002_initial_schema.up.sql
 	sql002InitialSchemaUp string
+
+	//go:embed 003_river_job_tags_non_null.down.sql
+	sql003RiverJobTagsNonNullDown string
+
+	//go:embed 003_river_job_tags_non_null.up.sql
+	sql003RiverJobTagsNonNullUp string
 )
 
 type migrationBundle struct {
@@ -46,6 +52,7 @@ var (
 	riverMigrations = []*migrationBundle{
 		{Version: 1, Up: sql001CreateRiverMigrationUp, Down: sql001CreateRiverMigrationDown},
 		{Version: 2, Up: sql002InitialSchemaUp, Down: sql002InitialSchemaDown},
+		{Version: 3, Up: sql003RiverJobTagsNonNullUp, Down: sql003RiverJobTagsNonNullDown},
 	}
 
 	riverMigrationsMap = validateAndInit(riverMigrations)

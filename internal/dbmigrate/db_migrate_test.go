@@ -86,7 +86,7 @@ func TestMigrator(t *testing.T) {
 		{
 			res, err := migrator.Down(ctx, bundle.tx, &MigrateOptions{})
 			require.NoError(t, err)
-			require.Equal(t, seqToOne(2), res.Versions)
+			require.Equal(t, seqToOne(3), res.Versions)
 
 			err = dbExecError(ctx, bundle.tx, "SELECT * FROM river_migration")
 			require.Error(t, err)

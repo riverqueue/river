@@ -477,7 +477,7 @@ INSERT INTO river_job(
   $11::text,
   coalesce($12::timestamptz, now()),
   $13::river_job_state,
-  $14::varchar(255)[]
+  coalesce($14::varchar(255)[], '{}')
 ) RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
 `
 
