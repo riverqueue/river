@@ -19,13 +19,14 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
+        postgres-version: [16, 15, 14]
         go-version:
           - "1.21"
     timeout-minutes: 5
 
     services:
       postgres:
-        image: postgres
+        image: postgres:${{ matrix.postgres-version }}
         env:
           POSTGRES_PASSWORD: postgres
         options: >-
