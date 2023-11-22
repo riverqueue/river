@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8] - 2023-11-21
+
 ### Changed
 
+- License changed from LGPLv3 to MPL-2.0.
 - **DATABASE MIGRATION**: Database schema v3, alter river_job tags column to set a default of `[]` and add not null constraint.
 
 ## [0.0.7] - 2023-11-20
