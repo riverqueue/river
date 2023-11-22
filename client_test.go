@@ -658,7 +658,7 @@ func Test_Client_Insert(t *testing.T) {
 		require.Equal(t, (&noOpArgs{}).Kind(), jobRow.Kind)
 		require.Equal(t, PriorityDefault, jobRow.Priority)
 		require.Equal(t, QueueDefault, jobRow.Queue)
-		require.Equal(t, []string(nil), jobRow.Tags)
+		require.Equal(t, []string{}, jobRow.Tags)
 	})
 
 	t.Run("WithInsertOpts", func(t *testing.T) {
@@ -755,7 +755,7 @@ func Test_Client_InsertTx(t *testing.T) {
 		require.Equal(t, (&noOpArgs{}).Kind(), jobRow.Kind)
 		require.Equal(t, PriorityDefault, jobRow.Priority)
 		require.Equal(t, QueueDefault, jobRow.Queue)
-		require.Equal(t, []string(nil), jobRow.Tags)
+		require.Equal(t, []string{}, jobRow.Tags)
 
 		// Job is not visible outside of the transaction.
 		_, err = bundle.queries.JobGetByID(ctx, client.driver.GetDBPool(), jobRow.ID)
@@ -2790,7 +2790,7 @@ func TestInsert(t *testing.T) {
 				require.Equal(1, insertedJob.Priority)
 				// Default comes from database now(), and we can't know the exact value:
 				require.WithinDuration(time.Now(), insertedJob.ScheduledAt, 2*time.Second)
-				require.Equal([]string(nil), insertedJob.Tags)
+				require.Equal([]string{}, insertedJob.Tags)
 				// require.Equal([]byte("{}"), insertedJob.metadata)
 			},
 		},

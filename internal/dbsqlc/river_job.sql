@@ -24,7 +24,7 @@ CREATE TABLE river_job(
   queue text NOT NULL DEFAULT 'default' ::text,
   state river_job_state NOT NULL DEFAULT 'available' ::river_job_state,
   scheduled_at timestamptz NOT NULL DEFAULT NOW(),
-  tags varchar(255)[],
+  tags varchar(255)[] NOT NULL DEFAULT '{}' ::varchar(255)[],
   CONSTRAINT finalized_or_finalized_at_null CHECK ((state IN ('cancelled', 'completed', 'discarded') AND finalized_at IS NOT NULL) OR finalized_at IS NULL),
   CONSTRAINT priority_in_range CHECK (priority >= 1 AND priority <= 4),
   CONSTRAINT queue_length CHECK (char_length(queue) > 0 AND char_length(queue) < 128),
@@ -184,7 +184,7 @@ INSERT INTO river_job(
   @queue::text,
   coalesce(sqlc.narg('scheduled_at')::timestamptz, now()),
   @state::river_job_state,
-  @tags::varchar(255)[]
+  coalesce(@tags::varchar(255)[], '{}')
 ) RETURNING *;
 
 -- name: JobInsertMany :copyfrom
