@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"strconv"
 	"time"
@@ -11,9 +10,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 
-	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/dbmigrate"
-	"github.com/riverqueue/river/internal/util/slogutil"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivermigrate"
 )
 
 func main() {
@@ -57,7 +55,7 @@ Provides command line facilities for the River job queue.
 Run down migrations to reverse the River database schema changes.
 
 Defaults to running a single down migration. This behavior can be changed with
---max-steps.
+--max-steps or --target-version.
 	`,
 			Run: func(cmd *cobra.Command, args []string) {
 				execHandlingError(func() error { return migrateDown(ctx, &opts) })
@@ -65,6 +63,7 @@ Defaults to running a single down migration. This behavior can be changed with
 		}
 		cmd.Flags().StringVar(&opts.DatabaseURL, "database-url", "", "URL of the database to migrate (should look like `postgres://...`")
 		cmd.Flags().IntVar(&opts.MaxSteps, "max-steps", 1, "Maximum number of steps to migrate")
+		cmd.Flags().IntVar(&opts.TargetVersion, "target-version", 0, "Target version to migrate to (final state includes this version, but none after it)")
 		mustMarkFlagRequired(cmd, "database-url")
 		rootCmd.AddCommand(cmd)
 	}
@@ -80,26 +79,20 @@ Defaults to running a single down migration. This behavior can be changed with
 Run up migrations to raise the database schema necessary to run River.
 
 Defaults to running all up migrations that aren't yet run. This behavior can be
-restricted with --max-steps.
+restricted with --max-steps or --target-version.
 	`,
 			Run: func(cmd *cobra.Command, args []string) {
 				execHandlingError(func() error { return migrateUp(ctx, &opts) })
 			},
 		}
 		cmd.Flags().StringVar(&opts.DatabaseURL, "database-url", "", "URL of the database to migrate (should look like `postgres://...`")
-		cmd.Flags().IntVar(&opts.MaxSteps, "max-steps", -1, "Maximum number of steps to migrate")
+		cmd.Flags().IntVar(&opts.MaxSteps, "max-steps", 0, "Maximum number of steps to migrate")
+		cmd.Flags().IntVar(&opts.TargetVersion, "target-version", 0, "Target version to migrate to (final state includes this version)")
 		mustMarkFlagRequired(cmd, "database-url")
 		rootCmd.AddCommand(cmd)
 	}
 
 	execHandlingError(rootCmd.Execute)
-}
-
-func baseServiceArchetype() *baseservice.Archetype {
-	return &baseservice.Archetype{
-		Logger:     slog.New(&slogutil.SlogMessageOnlyHandler{Level: slog.LevelInfo}),
-		TimeNowUTC: func() time.Time { return time.Now().UTC() },
-	}
 }
 
 func openDBPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
@@ -136,8 +129,9 @@ func setParamIfUnset(runtimeParams map[string]string, name, val string) {
 }
 
 type migrateDownOpts struct {
-	DatabaseURL string
-	MaxSteps    int
+	DatabaseURL   string
+	MaxSteps      int
+	TargetVersion int
 }
 
 func (o *migrateDownOpts) validate() error {
@@ -159,17 +153,19 @@ func migrateDown(ctx context.Context, opts *migrateDownOpts) error {
 	}
 	defer dbPool.Close()
 
-	migrator := dbmigrate.NewMigrator(baseServiceArchetype())
+	migrator := rivermigrate.New(riverpgxv5.New(dbPool), nil)
 
-	_, err = migrator.Down(ctx, dbPool, &dbmigrate.MigrateOptions{
-		MaxSteps: &opts.MaxSteps,
+	_, err = migrator.Migrate(ctx, rivermigrate.DirectionDown, &rivermigrate.MigrateOpts{
+		MaxSteps:      opts.MaxSteps,
+		TargetVersion: opts.TargetVersion,
 	})
 	return err
 }
 
 type migrateUpOpts struct {
-	DatabaseURL string
-	MaxSteps    int
+	DatabaseURL   string
+	MaxSteps      int
+	TargetVersion int
 }
 
 func (o *migrateUpOpts) validate() error {
@@ -191,10 +187,11 @@ func migrateUp(ctx context.Context, opts *migrateUpOpts) error {
 	}
 	defer dbPool.Close()
 
-	migrator := dbmigrate.NewMigrator(baseServiceArchetype())
+	migrator := rivermigrate.New(riverpgxv5.New(dbPool), nil)
 
-	_, err = migrator.Up(ctx, dbPool, &dbmigrate.MigrateOptions{
-		MaxSteps: &opts.MaxSteps,
+	_, err = migrator.Migrate(ctx, rivermigrate.DirectionUp, &rivermigrate.MigrateOpts{
+		MaxSteps:      opts.MaxSteps,
+		TargetVersion: opts.TargetVersion,
 	})
 	return err
 }

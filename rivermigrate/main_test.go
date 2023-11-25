@@ -1,4 +1,4 @@
-package dbmigrate
+package rivermigrate_test
 
 import (
 	"testing"
