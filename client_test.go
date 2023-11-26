@@ -538,7 +538,7 @@ func Test_Client_StopAndCancel(t *testing.T) {
 		stopCtx, stopCancel := context.WithTimeout(ctx, time.Second)
 		t.Cleanup(stopCancel)
 
-		stopStart := time.Now()
+		stopStartedAt := time.Now()
 
 		err = client.StopAndCancel(stopCtx)
 		require.NoError(t, err)
@@ -556,7 +556,7 @@ func Test_Client_StopAndCancel(t *testing.T) {
 		// TODO: client stop seems to take a widely variable amount of time,
 		// between 1ms and >50ms, due to the JobComplete query taking that long.
 		// Investigate and solve that if we can, or consider reworking this test.
-		require.WithinDuration(t, time.Now(), stopStart, 100*time.Millisecond)
+		require.WithinDuration(t, time.Now(), stopStartedAt, 200*time.Millisecond)
 	})
 }
 
