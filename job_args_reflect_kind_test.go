@@ -13,7 +13,7 @@ import "reflect"
 //		Message `json:"message"`
 //	}
 //
-//	AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, j *Job[WorkFuncArgs]) error {
+//	AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[WorkFuncArgs]) error {
 //		...
 //
 // Its major downside compared to a normal JobArgs implementation is that it's

@@ -214,10 +214,10 @@ type MyJobWorker struct {
 	logger        *slog.Logger
 }
 
-func (w *MyJobWorker) Work(ctx context.Context, j *river.Job[MyJobArgs]) error {
+func (w *MyJobWorker) Work(ctx context.Context, job *river.Job[MyJobArgs]) error {
 	atomic.AddUint64(&w.jobsPerformed, 1)
-	// fmt.Printf("performing job %d with args %+v\n", j.ID, j.Args)
-	if j.ID%1000 == 0 {
+	// fmt.Printf("performing job %d with args %+v\n", job.ID, job.Args)
+	if job.ID%1000 == 0 {
 		w.logger.Info("simulating stalled job, blocked on ctx.Done()")
 		<-ctx.Done()
 		w.logger.Info("stalled job exiting")

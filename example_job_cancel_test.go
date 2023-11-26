@@ -23,8 +23,8 @@ type CancellingWorker struct {
 	river.WorkerDefaults[CancellingArgs]
 }
 
-func (w *CancellingWorker) Work(ctx context.Context, j *river.Job[CancellingArgs]) error {
-	if j.Args.ShouldCancel {
+func (w *CancellingWorker) Work(ctx context.Context, job *river.Job[CancellingArgs]) error {
+	if job.Args.ShouldCancel {
 		fmt.Println("cancelling job")
 		return river.JobCancel(fmt.Errorf("this wrapped error message will be persisted to DB"))
 	}

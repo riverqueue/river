@@ -37,8 +37,8 @@ func Example_workFunc() {
 	}
 
 	workers := river.NewWorkers()
-	river.AddWorker(workers, river.WorkFunc(func(ctx context.Context, j *river.Job[WorkFuncArgs]) error {
-		fmt.Printf("Message: %s", j.Args.Message)
+	river.AddWorker(workers, river.WorkFunc(func(ctx context.Context, job *river.Job[WorkFuncArgs]) error {
+		fmt.Printf("Message: %s", job.Args.Message)
 		return nil
 	}))
 

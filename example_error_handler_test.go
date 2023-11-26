@@ -45,11 +45,11 @@ type ErroringWorker struct {
 	river.WorkerDefaults[ErroringArgs]
 }
 
-func (w *ErroringWorker) Work(ctx context.Context, j *river.Job[ErroringArgs]) error {
+func (w *ErroringWorker) Work(ctx context.Context, job *river.Job[ErroringArgs]) error {
 	switch {
-	case j.Args.ShouldError:
+	case job.Args.ShouldError:
 		return fmt.Errorf("this job errored")
-	case j.Args.ShouldPanic:
+	case job.Args.ShouldPanic:
 		panic("this job panicked")
 	}
 	return nil

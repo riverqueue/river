@@ -29,7 +29,7 @@ type Job1Worker struct {
 	river.WorkerDefaults[Job1Args]
 }
 
-func (w *Job1Worker) Work(ctx context.Context, j *river.Job[Job1Args]) error { return nil }
+func (w *Job1Worker) Work(ctx context.Context, job *river.Job[Job1Args]) error { return nil }
 
 type Job2Args struct {
 	Int int `json:"int"`
@@ -41,7 +41,7 @@ type Job2Worker struct {
 	river.WorkerDefaults[Job2Args]
 }
 
-func (w *Job2Worker) Work(ctx context.Context, j *river.Job[Job2Args]) error { return nil }
+func (w *Job2Worker) Work(ctx context.Context, job *river.Job[Job2Args]) error { return nil }
 
 // The tests for this function are quite minimal because it uses the same
 // implementation as the `*Tx` variant, so most of the test happens below.

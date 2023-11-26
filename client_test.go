@@ -63,7 +63,7 @@ type noOpWorker struct {
 	WorkerDefaults[noOpArgs]
 }
 
-func (w *noOpWorker) Work(ctx context.Context, j *Job[noOpArgs]) error { return nil }
+func (w *noOpWorker) Work(ctx context.Context, job *Job[noOpArgs]) error { return nil }
 
 type periodicJobArgs struct{}
 
@@ -73,18 +73,18 @@ type periodicJobWorker struct {
 	WorkerDefaults[periodicJobArgs]
 }
 
-func (w *periodicJobWorker) Work(ctx context.Context, j *Job[periodicJobArgs]) error {
+func (w *periodicJobWorker) Work(ctx context.Context, job *Job[periodicJobArgs]) error {
 	return nil
 }
 
 type callbackFunc func(context.Context, *Job[callbackArgs]) error
 
 func makeAwaitCallback(startedCh chan<- int64, doneCh chan struct{}) callbackFunc {
-	return func(ctx context.Context, j *Job[callbackArgs]) error {
+	return func(ctx context.Context, job *Job[callbackArgs]) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case startedCh <- j.ID:
+		case startedCh <- job.ID:
 		}
 
 		// await done signal, or context cancellation:
@@ -108,8 +108,8 @@ type callbackWorker struct {
 	fn callbackFunc
 }
 
-func (w *callbackWorker) Work(ctx context.Context, j *Job[callbackArgs]) error {
-	return w.fn(ctx, j)
+func (w *callbackWorker) Work(ctx context.Context, job *Job[callbackArgs]) error {
+	return w.fn(ctx, job)
 }
 
 func newTestConfig(t *testing.T, callback callbackFunc) *Config {
@@ -397,11 +397,11 @@ func Test_Client_Stop(t *testing.T) {
 		jobDoneChan := make(chan struct{})
 		jobStartedChan := make(chan int64)
 
-		callbackFunc := func(ctx context.Context, j *Job[callbackArgs]) error {
+		callbackFunc := func(ctx context.Context, job *Job[callbackArgs]) error {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case jobStartedChan <- j.ID:
+			case jobStartedChan <- job.ID:
 			}
 
 			select {
@@ -446,9 +446,9 @@ func Test_Client_Stop(t *testing.T) {
 		t.Parallel()
 
 		startedCh := make(chan int64)
-		callbackFunc := func(ctx context.Context, j *Job[callbackArgs]) error {
+		callbackFunc := func(ctx context.Context, job *Job[callbackArgs]) error {
 			select {
-			case startedCh <- j.ID:
+			case startedCh <- job.ID:
 			default:
 			}
 			return nil
@@ -473,7 +473,7 @@ func Test_Client_Stop(t *testing.T) {
 	t.Run("WithSubscriber", func(t *testing.T) {
 		t.Parallel()
 
-		callbackFunc := func(ctx context.Context, j *Job[callbackArgs]) error { return nil }
+		callbackFunc := func(ctx context.Context, job *Job[callbackArgs]) error { return nil }
 
 		client := runNewTestClient(ctx, t, newTestConfig(t, callbackFunc))
 
@@ -503,14 +503,14 @@ func Test_Client_StopAndCancel(t *testing.T) {
 		jobDoneChan := make(chan struct{})
 		jobStartedChan := make(chan int64)
 
-		callbackFunc := func(ctx context.Context, j *Job[callbackArgs]) error {
+		callbackFunc := func(ctx context.Context, job *Job[callbackArgs]) error {
 			defer close(jobDoneChan)
 
 			// indicate the job has started, unless context is already done:
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case jobStartedChan <- j.ID:
+			case jobStartedChan <- job.ID:
 			}
 
 			t.Logf("Job waiting for context cancellation")
@@ -571,12 +571,12 @@ type callbackWorkerWithCustomTimeout struct {
 	fn func(context.Context, *Job[callbackWithCustomTimeoutArgs]) error
 }
 
-func (w *callbackWorkerWithCustomTimeout) Work(ctx context.Context, j *Job[callbackWithCustomTimeoutArgs]) error {
-	return w.fn(ctx, j)
+func (w *callbackWorkerWithCustomTimeout) Work(ctx context.Context, job *Job[callbackWithCustomTimeoutArgs]) error {
+	return w.fn(ctx, job)
 }
 
-func (w *callbackWorkerWithCustomTimeout) Timeout(j *Job[callbackWithCustomTimeoutArgs]) time.Duration {
-	return j.Args.TimeoutValue
+func (w *callbackWorkerWithCustomTimeout) Timeout(job *Job[callbackWithCustomTimeoutArgs]) time.Duration {
+	return job.Args.TimeoutValue
 }
 
 func Test_Client_JobContextInheritsFromProvidedContext(t *testing.T) {
@@ -589,7 +589,7 @@ func Test_Client_JobContextInheritsFromProvidedContext(t *testing.T) {
 	doneCh := make(chan struct{})
 	close(doneCh)
 
-	callbackFunc := func(ctx context.Context, j *Job[callbackWithCustomTimeoutArgs]) error {
+	callbackFunc := func(ctx context.Context, job *Job[callbackWithCustomTimeoutArgs]) error {
 		// indicate the job has started, unless context is already done:
 		select {
 		case <-ctx.Done():
@@ -1073,7 +1073,7 @@ func Test_Client_ErrorHandler(t *testing.T) {
 		t.Parallel()
 
 		handlerErr := fmt.Errorf("job error")
-		config := newTestConfig(t, func(ctx context.Context, j *Job[callbackArgs]) error {
+		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
 			return handlerErr
 		})
 
@@ -1127,7 +1127,7 @@ func Test_Client_ErrorHandler(t *testing.T) {
 	t.Run("PanicHandler", func(t *testing.T) {
 		t.Parallel()
 
-		config := newTestConfig(t, func(ctx context.Context, j *Job[callbackArgs]) error {
+		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
 			panic("panic val")
 		})
 
@@ -1459,7 +1459,7 @@ func Test_Client_RetryPolicy(t *testing.T) {
 	t.Run("RetryUntilDiscarded", func(t *testing.T) {
 		t.Parallel()
 
-		config := newTestConfig(t, func(ctx context.Context, j *Job[callbackArgs]) error {
+		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
 			return fmt.Errorf("job error")
 		})
 
@@ -1583,8 +1583,8 @@ func Test_Client_Subscribe(t *testing.T) {
 
 		// Fail/succeed jobs based on their name so we can get a mix of both to
 		// verify.
-		config := newTestConfig(t, func(ctx context.Context, j *Job[callbackArgs]) error {
-			if strings.HasPrefix(j.Args.Name, "failed") {
+		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+			if strings.HasPrefix(job.Args.Name, "failed") {
 				return fmt.Errorf("job error")
 			}
 			return nil
@@ -1649,8 +1649,8 @@ func Test_Client_Subscribe(t *testing.T) {
 	t.Run("CompletedOnly", func(t *testing.T) {
 		t.Parallel()
 
-		config := newTestConfig(t, func(ctx context.Context, j *Job[callbackArgs]) error {
-			if strings.HasPrefix(j.Args.Name, "failed") {
+		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+			if strings.HasPrefix(job.Args.Name, "failed") {
 				return fmt.Errorf("job error")
 			}
 			return nil
@@ -1690,8 +1690,8 @@ func Test_Client_Subscribe(t *testing.T) {
 	t.Run("FailedOnly", func(t *testing.T) {
 		t.Parallel()
 
-		config := newTestConfig(t, func(ctx context.Context, j *Job[callbackArgs]) error {
-			if strings.HasPrefix(j.Args.Name, "failed") {
+		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+			if strings.HasPrefix(job.Args.Name, "failed") {
 				return fmt.Errorf("job error")
 			}
 			return nil
@@ -1731,7 +1731,7 @@ func Test_Client_Subscribe(t *testing.T) {
 	t.Run("EventsDropWithNoListeners", func(t *testing.T) {
 		t.Parallel()
 
-		config := newTestConfig(t, func(ctx context.Context, j *Job[callbackArgs]) error {
+		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
 			return nil
 		})
 
@@ -1775,7 +1775,7 @@ func Test_Client_Subscribe(t *testing.T) {
 	t.Run("PanicOnUnknownKind", func(t *testing.T) {
 		t.Parallel()
 
-		config := newTestConfig(t, func(ctx context.Context, j *Job[callbackArgs]) error {
+		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
 			return nil
 		})
 
@@ -1789,7 +1789,7 @@ func Test_Client_Subscribe(t *testing.T) {
 	t.Run("SubscriptionCancellation", func(t *testing.T) {
 		t.Parallel()
 
-		config := newTestConfig(t, func(ctx context.Context, j *Job[callbackArgs]) error {
+		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
 			return nil
 		})
 
@@ -1883,7 +1883,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		t.Parallel()
 
 		require := require.New(t)
-		config := newTestConfig(t, func(ctx context.Context, j *Job[callbackArgs]) error {
+		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
 			return nil
 		})
 
@@ -1909,8 +1909,8 @@ func Test_Client_JobCompletion(t *testing.T) {
 		require := require.New(t)
 		var dbPool *pgxpool.Pool
 		now := time.Now().UTC()
-		config := newTestConfig(t, func(ctx context.Context, j *Job[callbackArgs]) error {
-			_, err := queries.JobSetCompleted(ctx, dbPool, dbsqlc.JobSetCompletedParams{ID: j.ID, FinalizedAt: now})
+		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+			_, err := queries.JobSetCompleted(ctx, dbPool, dbsqlc.JobSetCompletedParams{ID: job.ID, FinalizedAt: now})
 			require.NoError(err)
 			return nil
 		})
@@ -1936,7 +1936,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		t.Parallel()
 
 		require := require.New(t)
-		config := newTestConfig(t, func(ctx context.Context, j *Job[callbackArgs]) error {
+		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
 			return errors.New("oops")
 		})
 
@@ -1961,7 +1961,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		t.Parallel()
 
 		require := require.New(t)
-		config := newTestConfig(t, func(ctx context.Context, j *Job[callbackArgs]) error {
+		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
 			return JobCancel(errors.New("oops"))
 		})
 
@@ -1988,9 +1988,9 @@ func Test_Client_JobCompletion(t *testing.T) {
 		require := require.New(t)
 		var dbPool *pgxpool.Pool
 		now := time.Now().UTC()
-		config := newTestConfig(t, func(ctx context.Context, j *Job[callbackArgs]) error {
+		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
 			_, err := queries.JobSetDiscarded(ctx, dbPool, dbsqlc.JobSetDiscardedParams{
-				ID:          j.ID,
+				ID:          job.ID,
 				Error:       []byte("{\"error\": \"oops\"}"),
 				FinalizedAt: now,
 			})
@@ -2023,11 +2023,11 @@ func Test_Client_JobCompletion(t *testing.T) {
 		now := time.Now().UTC()
 		var updatedJob *Job[callbackArgs]
 
-		config := newTestConfig(t, func(ctx context.Context, j *Job[callbackArgs]) error {
+		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
 			tx, err := dbPool.Begin(ctx)
 			require.NoError(err)
 
-			updatedJob, err = JobCompleteTx[*riverpgxv5.Driver](ctx, tx, j)
+			updatedJob, err = JobCompleteTx[*riverpgxv5.Driver](ctx, tx, job)
 			require.NoError(err)
 
 			return tx.Commit(ctx)
@@ -2150,8 +2150,8 @@ func Test_NewClient_ClientIDWrittenToJobAttemptedByWhenFetched(t *testing.T) {
 	doneCh := make(chan struct{})
 	startedCh := make(chan *Job[callbackArgs])
 
-	callback := func(ctx context.Context, j *Job[callbackArgs]) error {
-		startedCh <- j
+	callback := func(ctx context.Context, job *Job[callbackArgs]) error {
+		startedCh <- job
 		<-doneCh
 		return nil
 	}
@@ -2529,8 +2529,8 @@ type timeoutTestWorker struct {
 	doneCh chan testWorkerDeadline
 }
 
-func (w *timeoutTestWorker) Timeout(j *Job[timeoutTestArgs]) time.Duration {
-	return j.Args.TimeoutValue
+func (w *timeoutTestWorker) Timeout(job *Job[timeoutTestArgs]) time.Duration {
+	return job.Args.TimeoutValue
 }
 
 func (w *timeoutTestWorker) Work(ctx context.Context, job *Job[timeoutTestArgs]) error {
