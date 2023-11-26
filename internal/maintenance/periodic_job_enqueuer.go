@@ -132,15 +132,18 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 
 		s.TestSignals.EnteredLoop.Signal(struct{}{})
 
-		tickerUntilNextRun := time.NewTicker(1 * time.Hour) // duration is Reset immediately below
-		defer tickerUntilNextRun.Stop()
+		timerUntilNextRun := time.NewTimer(0) // duration is Reset immediately below
+		<-timerUntilNextRun.C
 
 	loop:
 		for {
-			tickerUntilNextRun.Reset(s.timeUntilNextRun())
+			// We know it is safe to directly call Reset because the only way we can
+			// get to this line is if the timer has already fired and been received
+			// from:
+			timerUntilNextRun.Reset(s.timeUntilNextRun())
 
 			select {
-			case <-tickerUntilNextRun.C:
+			case <-timerUntilNextRun.C:
 				var insertParamsMany []*dbadapter.JobInsertParams
 
 				now := s.TimeNowUTC()
@@ -165,6 +168,12 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 				s.insertBatch(ctx, insertParamsMany)
 
 			case <-ctx.Done():
+				// Clean up timer resources. We know it has _not_ received from the
+				// timer since its last reset because that would have led us to the case
+				// above instead of here.
+				if !timerUntilNextRun.Stop() {
+					<-timerUntilNextRun.C
+				}
 				break loop
 			}
 		}
@@ -213,9 +222,9 @@ func (s *PeriodicJobEnqueuer) timeUntilNextRun() time.Duration {
 	)
 
 	for _, periodicJob := range s.periodicJobs {
-		// In case we detect a job that should've run before now, immediately
-		// short circuit with a zero. In addition to being marginally faster, it
-		// prevents us accidentally returning a negative number below.
+		// In case we detect a job that should've run before now, immediately short
+		// circuit with a 0 duration. This avoids needlessly iterating through the
+		// rest of the loop when we already know we're overdue for the next job.
 		if periodicJob.nextRunAt.Before(now) {
 			return 0
 		}
@@ -225,5 +234,5 @@ func (s *PeriodicJobEnqueuer) timeUntilNextRun() time.Duration {
 		}
 	}
 
-	return firstNextRunAt.Sub(s.TimeNowUTC())
+	return firstNextRunAt.Sub(now)
 }
