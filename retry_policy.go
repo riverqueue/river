@@ -29,8 +29,9 @@ type ClientRetryPolicy interface {
 
 // River's default retry policy.
 type DefaultClientRetryPolicy struct {
-	rand   *rand.Rand
-	randMu sync.RWMutex
+	rand        *rand.Rand
+	randMu      sync.RWMutex
+	timeNowFunc func() time.Time
 }
 
 // NextRetry gets the next retry given for the given job, accounting for when it
@@ -52,7 +53,15 @@ func (p *DefaultClientRetryPolicy) NextRetry(job *rivertype.JobRow) time.Time {
 	// Note that we explicitly add 1 here, because the error hasn't been appended
 	// yet at the time this is called (that happens in the completer).
 	errorCount := len(job.Errors) + 1
-	return job.AttemptedAt.Add(timeutil.SecondsAsDuration(p.retrySeconds(errorCount)))
+	return p.timeNowUTC().Add(timeutil.SecondsAsDuration(p.retrySeconds(errorCount)))
+}
+
+func (p *DefaultClientRetryPolicy) timeNowUTC() time.Time {
+	if p.timeNowFunc != nil {
+		return p.timeNowFunc()
+	}
+
+	return time.Now().UTC()
 }
 
 // Lazily marshals a random source. Written this way instead of using a

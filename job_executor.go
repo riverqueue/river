@@ -309,10 +309,12 @@ func (e *jobExecutor) reportError(ctx context.Context) {
 	if nextRetryScheduledAt.IsZero() {
 		nextRetryScheduledAt = e.ClientRetryPolicy.NextRetry(e.JobRow)
 	}
-	if nextRetryScheduledAt.Before(time.Now()) {
+	now := time.Now()
+	if nextRetryScheduledAt.Before(now) {
 		e.Logger.WarnContext(ctx,
 			e.Name+": Retry policy returned invalid next retry before current time; using default retry policy instead",
 			slog.Time("next_retry_scheduled_at", nextRetryScheduledAt),
+			slog.Time("now", now),
 		)
 		nextRetryScheduledAt = (&DefaultClientRetryPolicy{}).NextRetry(e.JobRow)
 	}
