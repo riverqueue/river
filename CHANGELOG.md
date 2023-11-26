@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **DATABASE MIGRATION**: Database schema v3 was introduced in v0.0.8 and contained an obvious flaw preventing it from running against existing tables. This migration was altered to execute the migration in multiple steps.
 
+### Changed
+
+- `DefaultClientRetryPolicy`: calculate the next attempt based on the current time instead of the time the prior attempt began.
+
 ## [0.0.8] - 2023-11-21
 
 ### Changed

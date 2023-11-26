@@ -19,8 +19,9 @@ var _ ClientRetryPolicy = &DefaultClientRetryPolicy{}
 func TestDefaultClientRetryPolicy_NextRetry(t *testing.T) {
 	t.Parallel()
 
-	now := time.Now()
-	retryPolicy := &DefaultClientRetryPolicy{}
+	now := time.Now().UTC()
+	timeNowFunc := func() time.Time { return now }
+	retryPolicy := &DefaultClientRetryPolicy{timeNowFunc: timeNowFunc}
 
 	for attempt := 1; attempt < 10; attempt++ {
 		retrySecondsWithoutJitter := retryPolicy.retrySecondsWithoutJitter(attempt)
