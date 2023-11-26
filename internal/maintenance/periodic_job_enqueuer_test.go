@@ -218,6 +218,38 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		require.Equal(t, 7*24*time.Hour, svc.timeUntilNextRun())
 	})
 
+	// To ensure we are protected against runs that are supposed to have already happened,
+	// this test uses a totally-not-safe schedule to enqueue every 0.5ms.
+	t.Run("RapidScheduling", func(t *testing.T) {
+		t.Parallel()
+
+		svc, _ := setup(t)
+
+		svc.periodicJobs = []*PeriodicJob{
+			{ScheduleFunc: periodicIntervalSchedule(time.Microsecond), ConstructorFunc: jobConstructorFunc("periodic_job_1us")},
+		}
+		// make a longer list of jobs so the loop has to run for longer
+		for i := 1; i < 100; i++ {
+			svc.periodicJobs = append(svc.periodicJobs,
+				&PeriodicJob{
+					ScheduleFunc:    periodicIntervalSchedule(time.Duration(i) * time.Hour),
+					ConstructorFunc: jobConstructorFunc(fmt.Sprintf("periodic_job_%dh", i)),
+				},
+			)
+		}
+
+		require.NoError(t, svc.Start(ctx))
+
+		svc.TestSignals.EnteredLoop.WaitOrTimeout()
+
+		periodicJobs := make([]*PeriodicJob, len(svc.periodicJobs))
+		copy(periodicJobs, svc.periodicJobs)
+
+		for i := 0; i < 100; i++ {
+			svc.TestSignals.InsertedJobs.WaitOrTimeout()
+		}
+	})
+
 	t.Run("NoJobsConfigured", func(t *testing.T) {
 		t.Parallel()
 
