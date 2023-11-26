@@ -114,6 +114,9 @@ See the [`InsertAndWork` example] for complete code.
 
   - [Periodic and cron jobs].
 
+  - [Scheduled jobs] that run automatically at their scheduled time in the
+    future.
+
   - [Snoozing jobs] from inside a work function.
 
   - [Subscriptions] to queue activity and statistics, providing easy hooks for
@@ -139,6 +142,7 @@ See [developing River].
 [Cancelling jobs]: https://riverqueue.com/docs/cancelling-jobs
 [Error and panic handling]: https://riverqueue.com/docs/error-handling
 [Periodic and cron jobs]: https://riverqueue.com/docs/periodic-jobs
+[Scheduled jobs]: https://riverqueue.com/docs/scheduled-jobs
 [Snoozing jobs]: https://riverqueue.com/docs/snoozing-jobs
 [Subscriptions]: https://riverqueue.com/docs/subscriptions
 [Transactional job completion]: https://riverqueue.com/docs/transactional-job-completion

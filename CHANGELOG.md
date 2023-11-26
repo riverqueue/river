@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10] - 2023-11-26
+
+### Added
+
+- Added `Example_scheduledJob`, demonstrating how to schedule a job to be run in the future.
+
 ### Fixed
 
 - Fixed a panic in the periodic job enqueuer caused by sometimes trying to reset a `time.Ticker` with a negative or zero duration. Fixed in PR #73.
