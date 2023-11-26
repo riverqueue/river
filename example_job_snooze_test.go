@@ -24,8 +24,8 @@ type SnoozingWorker struct {
 	river.WorkerDefaults[SnoozingArgs]
 }
 
-func (w *SnoozingWorker) Work(ctx context.Context, j *river.Job[SnoozingArgs]) error {
-	if j.Args.ShouldSnooze {
+func (w *SnoozingWorker) Work(ctx context.Context, job *river.Job[SnoozingArgs]) error {
+	if job.Args.ShouldSnooze {
 		fmt.Println("snoozing job for 5 minutes")
 		return river.JobSnooze(5 * time.Minute)
 	}

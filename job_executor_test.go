@@ -35,7 +35,7 @@ func (w *customRetryPolicyWorker) NextRetry(job *Job[callbackArgs]) time.Time {
 	return time.Time{}
 }
 
-func (w *customRetryPolicyWorker) Work(ctx context.Context, j *Job[callbackArgs]) error {
+func (w *customRetryPolicyWorker) Work(ctx context.Context, job *Job[callbackArgs]) error {
 	return w.f()
 }
 

@@ -172,8 +172,8 @@ func (wf *workFunc[T]) Work(ctx context.Context, job *Job[T]) error {
 //
 // For example:
 //
-//	river.AddWorker(workers, river.WorkFunc(func(ctx context.Context, j *river.Job[WorkFuncArgs]) error {
-//		fmt.Printf("Message: %s", j.Args.Message)
+//	river.AddWorker(workers, river.WorkFunc(func(ctx context.Context, job *river.Job[WorkFuncArgs]) error {
+//		fmt.Printf("Message: %s", job.Args.Message)
 //		return nil
 //	}))
 func WorkFunc[T JobArgs](f func(context.Context, *Job[T]) error) Worker[T] {

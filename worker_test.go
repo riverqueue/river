@@ -22,7 +22,7 @@ func TestWork(t *testing.T) {
 		AddWorker(workers, &noOpWorker{})
 	})
 
-	fn := func(ctx context.Context, j *Job[callbackArgs]) error { return nil }
+	fn := func(ctx context.Context, job *Job[callbackArgs]) error { return nil }
 	ch := callbackWorker{fn: fn}
 
 	// function worker
@@ -43,7 +43,7 @@ type configurableWorker struct {
 	WorkerDefaults[configurableArgs]
 }
 
-func (w *configurableWorker) Work(ctx context.Context, j *Job[configurableArgs]) error {
+func (w *configurableWorker) Work(ctx context.Context, job *Job[configurableArgs]) error {
 	return nil
 }
 
@@ -71,7 +71,7 @@ type StructWithFunc struct {
 	WorkChan chan struct{}
 }
 
-func (s *StructWithFunc) Work(ctx context.Context, j *Job[WorkFuncArgs]) error {
+func (s *StructWithFunc) Work(ctx context.Context, job *Job[WorkFuncArgs]) error {
 	s.WorkChan <- struct{}{}
 	return nil
 }
@@ -98,7 +98,7 @@ func TestWorkFunc(t *testing.T) {
 		client, _ := setup(t)
 
 		workChan := make(chan struct{})
-		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, j *Job[WorkFuncArgs]) error {
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[WorkFuncArgs]) error {
 			workChan <- struct{}{}
 			return nil
 		}))
@@ -136,7 +136,7 @@ func TestWorkFunc(t *testing.T) {
 		}
 
 		workChan := make(chan struct{})
-		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, j *Job[InFuncWorkFuncArgs]) error {
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[InFuncWorkFuncArgs]) error {
 			workChan <- struct{}{}
 			return nil
 		}))
