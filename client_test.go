@@ -437,8 +437,8 @@ func Test_Client_Stop(t *testing.T) {
 
 		select {
 		case <-jobDoneChan:
+			require.FailNow(t, "Expected Stop to return before job was done")
 		default:
-			require.FailNow(t, "Expected job to be done before stop returns")
 		}
 	})
 
