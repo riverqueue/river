@@ -67,6 +67,12 @@ type InsertOpts struct {
 // single instance is allowed for each combination of args and queues. If either
 // args or queue is changed on a new job, it's allowed to be inserted as a new
 // job.
+//
+// Uniquenes is checked at insert time by taking a Postgres advisory lock, doing
+// a look up for an equivalent row, and inserting only if none was found.
+// There's no database-level mechanism that guarantees jobs stay unique, so if
+// an equivalent row is inserted out of band (or batch inserted, where a unique
+// check doesn't occur), it's conceivable that duplicates could coexist.
 type UniqueOpts struct {
 	// ByArgs indicates that uniqueness should be enforced for any specific
 	// instance of encoded args for a job.
@@ -93,14 +99,14 @@ type UniqueOpts struct {
 
 	// ByState indicates that uniqueness should be enforced across any of the
 	// states in the given set. For example, if the given states were
-	// `(scheduled, running)` then a new job inserted as `scheduled` would be
-	// not be inserted by virtue of it being not unique, but a new job marked as
-	// `available` could be inserted.
+	// `(scheduled, running)` then a new job could be inserted even if one of
+	// the same kind was already being worked by the queue (new jobs are
+	// inserted as `available`).
 	//
 	// Unlike other unique options, ByState gets a default when it's not set for
 	// user convenience. The default is equivalent to:
 	//
-	// 	ByState: []river.JobState{river.JobStateAvailable, river.JobStateCompleted, river.JobStateRunning, river.JobStateRetryable, river.JobStateScheduled}
+	// 	ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCompleted, rivertype.JobStateRunning, rivertype.JobStateRetryable, rivertype.JobStateScheduled}
 	//
 	// With this setting, any jobs of the same kind that have been completed or
 	// discarded, but not yet cleaned out by the system, won't count towards the
