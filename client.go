@@ -668,7 +668,8 @@ func (c *Client[TTx]) signalStopComplete(ctx context.Context) {
 
 // Stop performs a graceful shutdown of the Client. It signals all producers
 // to stop fetching new jobs and waits for any fetched or in-progress jobs to
-// complete before exiting.
+// complete before exiting. If the provided context is done before shutdown has
+// completed, Stop will return immediately with the context's error.
 //
 // There's no need to call this method if a hard stop has already been initiated
 // by cancelling the context passed to Start or by calling StopAndCancel.
@@ -679,22 +680,20 @@ func (c *Client[TTx]) Stop(ctx context.Context) error {
 }
 
 func (c *Client[TTx]) awaitStop(ctx context.Context) error {
-	<-c.stopComplete
-
-	// If context was cancelled, return that error.
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	default:
+	case <-c.stopComplete:
+		return nil
 	}
-
-	return nil
 }
 
 // StopAndCancel shuts down the client and cancels all work in progress. It is a
-// more aggressive stop than Stop because the contexts for any
-// in-progress jobs are cancelled. However, it still waits for jobs to complete
-// before returning, even though their contexts are cancelled.
+// more aggressive stop than Stop because the contexts for any in-progress jobs
+// are cancelled. However, it still waits for jobs to complete before returning,
+// even though their contexts are cancelled. If the provided context is done
+// before shutdown has completed, Stop will return immediately with the
+// context's error.
 //
 // This can also be initiated by cancelling the context passed to Run. There is
 // no need to call this method if the context passed to Run is cancelled

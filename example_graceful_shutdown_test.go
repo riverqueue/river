@@ -105,52 +105,40 @@ func Example_gracefulShutdown() {
 		<-sigintOrTerm
 		fmt.Printf("Received SIGINT/SIGTERM; initiating soft stop (try to wait for jobs to finish)\n")
 
-		softStopSucceeded := make(chan struct{})
+		softStopCtx, softStopCtxCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer softStopCtxCancel()
+
 		go func() {
-			if err := riverClient.Stop(ctx); err != nil {
-				if !errors.Is(err, context.Canceled) {
-					panic(err)
-				}
+			select {
+			case <-sigintOrTerm:
+				fmt.Printf("Received SIGINT/SIGTERM again; initiating hard stop (cancel everything)\n")
+				softStopCtxCancel()
+			case <-softStopCtx.Done():
+				fmt.Printf("Soft stop timeout; initiating hard stop (cancel everything)\n")
 			}
-			close(softStopSucceeded)
 		}()
 
-		// Wait for soft stop to succeed, or another SIGINT/SIGTERM.
-		select {
-		case <-sigintOrTerm:
-			fmt.Printf("Received SIGINT/SIGTERM again; initiating hard stop (cancel everything)\n")
-
-		case <-time.After(10 * time.Second):
-			fmt.Printf("Soft stop timeout; initiating hard stop (cancel everything)\n")
-
-		case <-softStopSucceeded:
-			// Will never be reached in this example.
-			return
+		if err := riverClient.Stop(softStopCtx); err != nil {
+			if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+				panic(err)
+			}
 		}
 
-		hardStopSucceeded := make(chan struct{})
-		go func() {
-			if err := riverClient.StopAndCancel(ctx); err != nil {
-				if !errors.Is(err, context.Canceled) {
-					panic(err)
-				}
-			}
-			close(hardStopSucceeded)
-		}()
+		hardStopCtx, hardStopCtxCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer hardStopCtxCancel()
 
 		// As long as all jobs respect context cancellation, StopAndCancel will
 		// always work. However, in the case of a bug where a job blocks despite
 		// being cancelled, it may be necessary to either ignore River's stop
 		// result (what's shown here) or have a supervisor kill the process.
-		select {
-		case <-sigintOrTerm:
-			fmt.Printf("Received SIGINT/SIGTERM again; ignoring stop procedure and exiting unsafely\n")
-
-		case <-time.After(10 * time.Second):
+		err = riverClient.StopAndCancel(hardStopCtx)
+		if err != nil && errors.Is(err, context.DeadlineExceeded) {
 			fmt.Printf("Hard stop timeout; ignoring stop procedure and exiting unsafely\n")
-
-		case <-hardStopSucceeded:
+		} else if err != nil {
+			panic(err)
 		}
+
+		// hard stop succeeded
 	}()
 
 	// Make sure our job starts being worked before doing anything else.
