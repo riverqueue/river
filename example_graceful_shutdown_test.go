@@ -118,10 +118,13 @@ func Example_gracefulShutdown() {
 			}
 		}()
 
-		if err := riverClient.Stop(softStopCtx); err != nil {
-			if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
-				panic(err)
-			}
+		err := riverClient.Stop(softStopCtx)
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+			panic(err)
+		}
+		if err == nil {
+			fmt.Printf("Soft stop succeeded\n")
+			return
 		}
 
 		hardStopCtx, hardStopCtxCancel := context.WithTimeout(ctx, 10*time.Second)
