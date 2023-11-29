@@ -191,28 +191,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
 
-    env:
-      SQLC_VERSION: 1.22.0
-
     steps:
-      - name: Create BIN_PATH and add to PATH
-        run: |
-          mkdir -p "$BIN_PATH"
-          echo "$BIN_PATH" >> $GITHUB_PATH
-
-      - name: Install sqlc
-        run: |
-          curl -L https://github.com/kyleconroy/sqlc/releases/download/v${{ env.SQLC_VERSION }}/sqlc_${{ env.SQLC_VERSION }}_linux_amd64.tar.gz | tar -xz -C $BIN_PATH
-          chmod +x $BIN_PATH/sqlc
-
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Run sqlc
-        run: make generate
+      - name: Setup sqlc
+        uses: sqlc-dev/setup-sqlc@v4
+        with:
+          sqlc-version: '1.22.0'
 
-      - name: Check git diff
+      - name: Run sqlc diff
         working-directory: ./internal/dbsqlc
         run: |
           echo "Please make sure that all sqlc changes are checked in!"
-          git diff --exit-code .
+          sqlc diff
