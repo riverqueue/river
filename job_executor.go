@@ -133,8 +133,9 @@ func (e *jobExecutor) Execute(ctx context.Context) {
 func (e *jobExecutor) execute(ctx context.Context) {
 	defer func() {
 		if recovery := recover(); recovery != nil {
-			e.Logger.ErrorContext(ctx, e.Name+": jobExecutor panic recovery; possible bug with Worker",
+			e.Logger.ErrorContext(ctx, e.Name+": panic recovery; possible bug with Worker",
 				slog.Int64("job_id", e.JobRow.ID),
+				slog.String("kind", e.JobRow.Kind),
 				slog.String("panic_val", fmt.Sprintf("%v", recovery)),
 			)
 
