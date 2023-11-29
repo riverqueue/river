@@ -83,7 +83,7 @@ func Example_customInsertOpts() {
 		panic(err)
 	}
 
-	// Out of example scope, but used to make wait until a job is worked.
+	// Out of example scope, but used to wait until a job is worked.
 	subscribeChan, subscribeCancel := riverClient.Subscribe(river.EventKindJobCompleted)
 	defer subscribeCancel()
 
