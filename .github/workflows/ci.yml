@@ -12,7 +12,10 @@ env:
   DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/river_dev?sslmode=disable
 
 on:
-  - push
+  push:
+    branches:
+      - master
+  pull_request:
 
 jobs:
   build_and_test:
