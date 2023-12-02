@@ -7,7 +7,6 @@ import (
 
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/dbadapter"
-	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/rivercommon"
 )
@@ -72,7 +71,6 @@ type PeriodicJobEnqueuer struct {
 
 	dbAdapter    dbadapter.Adapter
 	periodicJobs []*PeriodicJob
-	queries      *dbsqlc.Queries
 }
 
 func NewPeriodicJobEnqueuer(archetype *baseservice.Archetype, config *PeriodicJobEnqueuerConfig, dbAdapter dbadapter.Adapter) *PeriodicJobEnqueuer {
@@ -83,7 +81,6 @@ func NewPeriodicJobEnqueuer(archetype *baseservice.Archetype, config *PeriodicJo
 
 		dbAdapter:    dbAdapter,
 		periodicJobs: config.PeriodicJobs,
-		queries:      dbsqlc.New(),
 	})
 
 	return svc
