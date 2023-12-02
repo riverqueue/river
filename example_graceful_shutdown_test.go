@@ -172,5 +172,5 @@ func Example_gracefulShutdown() {
 	// Received SIGINT/SIGTERM; initiating soft stop (try to wait for jobs to finish)
 	// Received SIGINT/SIGTERM again; initiating hard stop (cancel everything)
 	// Job cancelled
-	// jobExecutor: Job failed
+	// jobExecutor: Job errored
 }
