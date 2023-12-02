@@ -112,8 +112,8 @@ func (s *Rescuer) Start(ctx context.Context) error {
 	s.CancellableSleepRandomBetween(ctx, JitterMin, JitterMax)
 
 	go func() {
-		s.Logger.InfoContext(ctx, s.Name+": Run loop started")
-		defer s.Logger.InfoContext(ctx, s.Name+": Run loop stopped")
+		s.Logger.InfoContext(ctx, s.Name+logPrefixRunLoopStarted)
+		defer s.Logger.InfoContext(ctx, s.Name+logPrefixRunLoopStopped)
 
 		defer close(stopped)
 
@@ -133,7 +133,7 @@ func (s *Rescuer) Start(ctx context.Context) error {
 				continue
 			}
 
-			s.Logger.InfoContext(ctx, s.Name+": Ran successfully",
+			s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
 				slog.Int64("num_jobs_discarded", res.NumJobsDiscarded),
 				slog.Int64("num_jobs_retry_scheduled", res.NumJobsRetried),
 			)

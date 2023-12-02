@@ -28,6 +28,10 @@ const (
 
 	JitterMin = 0 * time.Second
 	JitterMax = 1 * time.Second
+
+	logPrefixRanSuccessfully = ": Ran successfully"
+	logPrefixRunLoopStarted  = ": Run loop started"
+	logPrefixRunLoopStopped  = ": Run loop stopped"
 )
 
 // QueueMaintainer runs regular maintenance operations against job queues, like

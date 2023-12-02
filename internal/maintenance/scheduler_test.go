@@ -95,8 +95,8 @@ func TestScheduler(t *testing.T) {
 
 		scheduler := NewScheduler(riverinternaltest.BaseServiceArchetype(t), &SchedulerConfig{}, nil)
 
-		require.Equal(t, scheduler.config.Interval, SchedulerIntervalDefault)
-		require.Equal(t, scheduler.config.Limit, SchedulerLimitDefault)
+		require.Equal(t, SchedulerIntervalDefault, scheduler.config.Interval)
+		require.Equal(t, SchedulerLimitDefault, scheduler.config.Limit)
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {

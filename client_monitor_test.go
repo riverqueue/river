@@ -63,7 +63,7 @@ func Test_Monitor(t *testing.T) {
 
 		monitor.SetElectorStatus(componentstatus.ElectorLeader)
 		update := awaitSnapshot(t, snapshotCh)
-		require.Len(update.Producers, 0)
+		require.Empty(update.Producers)
 		require.Equal(componentstatus.ElectorLeader, update.Elector)
 		require.Equal(componentstatus.Uninitialized, update.Notifier)
 
@@ -79,7 +79,7 @@ func Test_Monitor(t *testing.T) {
 
 		monitor.SetNotifierStatus(componentstatus.Initializing)
 		update := awaitSnapshot(t, snapshotCh)
-		require.Len(update.Producers, 0)
+		require.Empty(update.Producers)
 		require.Equal(componentstatus.ElectorNonLeader, update.Elector)
 		require.Equal(componentstatus.Initializing, update.Notifier)
 

@@ -246,7 +246,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.Equal(t, baselineTime, job.Errors[0].At)
 		require.Equal(t, uint16(1), job.Errors[0].Attempt)
 		require.Equal(t, "job error", job.Errors[0].Error)
-		require.Equal(t, job.Errors[0].Trace, "")
+		require.Equal(t, "", job.Errors[0].Trace)
 	})
 
 	t.Run("ErrorAgainAfterRetry", func(t *testing.T) {
@@ -329,7 +329,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.Equal(t, dbsqlc.JobStateScheduled, job.State)
 		require.WithinDuration(t, time.Now().Add(30*time.Minute), job.ScheduledAt, 2*time.Second)
 		require.Equal(t, maxAttemptsBefore+1, int(job.MaxAttempts))
-		require.Len(t, job.Errors, 0)
+		require.Empty(t, job.Errors)
 	})
 
 	t.Run("ErrorWithCustomRetryPolicy", func(t *testing.T) {
@@ -579,7 +579,7 @@ func TestUnknownJobKindError_As(t *testing.T) {
 
 		err1 := &UnknownJobKindError{Kind: "MyJobArgs"}
 		var err2 *UnknownJobKindError
-		require.True(t, errors.As(err1, &err2))
+		require.ErrorAs(t, err1, &err2)
 		require.Equal(t, err1, err2)
 		require.Equal(t, err1.Kind, err2.Kind)
 	})
@@ -599,14 +599,14 @@ func TestUnknownJobKindError_Is(t *testing.T) {
 		t.Parallel()
 
 		err1 := &UnknownJobKindError{Kind: "MyJobArgs"}
-		require.True(t, errors.Is(err1, &UnknownJobKindError{}))
+		require.ErrorIs(t, err1, &UnknownJobKindError{})
 	})
 
 	t.Run("ReturnsFalseForADifferentError", func(t *testing.T) {
 		t.Parallel()
 
 		err1 := &UnknownJobKindError{Kind: "MyJobArgs"}
-		require.False(t, errors.Is(err1, fmt.Errorf("some other error")))
+		require.NotErrorIs(t, err1, fmt.Errorf("some other error"))
 	})
 }
 
@@ -616,12 +616,12 @@ func TestJobCancel(t *testing.T) {
 	t.Run("ErrorsIsReturnsTrueForAnotherErrorOfSameType", func(t *testing.T) {
 		t.Parallel()
 		err1 := JobCancel(errors.New("some message"))
-		require.True(t, errors.Is(err1, JobCancel(errors.New("another message"))))
+		require.ErrorIs(t, err1, JobCancel(errors.New("another message")))
 	})
 
 	t.Run("ErrorsIsReturnsFalseForADifferentErrorType", func(t *testing.T) {
 		t.Parallel()
 		err1 := JobCancel(errors.New("some message"))
-		require.False(t, errors.Is(err1, &UnknownJobKindError{Kind: "MyJobArgs"}))
+		require.NotErrorIs(t, err1, &UnknownJobKindError{Kind: "MyJobArgs"})
 	})
 }

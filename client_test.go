@@ -1146,7 +1146,7 @@ func Test_Client_ErrorHandler(t *testing.T) {
 			HandleErrorFunc: func(ctx context.Context, job *rivertype.JobRow, err error) *ErrorHandlerResult {
 				var unknownJobKindErr *UnknownJobKindError
 				require.ErrorAs(t, err, &unknownJobKindErr)
-				require.Equal(t, *unknownJobKindErr, UnknownJobKindError{Kind: "RandomWorkerNameThatIsNeverRegistered"})
+				require.Equal(t, UnknownJobKindError{Kind: "RandomWorkerNameThatIsNeverRegistered"}, *unknownJobKindErr)
 				errorHandlerCalled = true
 				return &ErrorHandlerResult{}
 			},
@@ -1348,7 +1348,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		// No jobs yet because the RunOnStart option was not specified.
 		jobs, err := queries.JobGetByKind(ctx, client.driver.GetDBPool(), (periodicJobArgs{}).Kind())
 		require.NoError(t, err)
-		require.Len(t, jobs, 0)
+		require.Empty(t, jobs)
 	})
 
 	t.Run("Reindexer", func(t *testing.T) {
@@ -2133,7 +2133,7 @@ func Test_Client_UnknownJobKindErrorsTheJob(t *testing.T) {
 
 	event := riverinternaltest.WaitOrTimeout(t, subscribeChan)
 	require.Equal(insertRes.Job.ID, event.Job.ID)
-	require.Equal(insertRes.Job.Kind, "RandomWorkerNameThatIsNeverRegistered")
+	require.Equal("RandomWorkerNameThatIsNeverRegistered", insertRes.Job.Kind)
 	require.Len(event.Job.Errors, 1)
 	require.Equal((&UnknownJobKindError{Kind: "RandomWorkerNameThatIsNeverRegistered"}).Error(), event.Job.Errors[0].Error)
 	require.Equal(JobStateRetryable, event.Job.State)
@@ -2552,7 +2552,7 @@ func Test_NewClient_Validations(t *testing.T) {
 
 			client, err := NewClient(riverpgxv5.New(dbPool), config)
 			if tt.wantErr != nil {
-				require.NotNil(err)
+				require.Error(err)
 				require.ErrorContains(err, tt.wantErr.Error())
 				return
 			}

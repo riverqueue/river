@@ -16,7 +16,7 @@ import (
 // `riverinternaltest_test`, except that the test below uses internal variables
 // like `dbPool`.
 type Executor interface {
-	Exec(context.Context, string, ...interface{}) (pgconn.CommandTag, error)
+	Exec(ctx context.Context, query string, args ...interface{}) (pgconn.CommandTag, error)
 }
 
 func TestTestTx(t *testing.T) {

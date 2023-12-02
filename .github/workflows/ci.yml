@@ -136,7 +136,7 @@ jobs:
           # Optional: show only new issues if it's a pull request. The default value is `false`.
           only-new-issues: true
 
-          version: v1.54.2
+          version: v1.55.2
 
   producer_sample:
     runs-on: ubuntu-latest
@@ -201,7 +201,7 @@ jobs:
       - name: Setup sqlc
         uses: sqlc-dev/setup-sqlc@v4
         with:
-          sqlc-version: '1.22.0'
+          sqlc-version: "1.22.0"
 
       - name: Run sqlc diff
         working-directory: ./internal/dbsqlc

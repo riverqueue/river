@@ -447,7 +447,7 @@ func Test_Adapter_JobInsertMany(t *testing.T) {
 
 	count, err := adapter.JobInsertMany(ctx, insertParams)
 	require.NoError(t, err)
-	require.Equal(t, len(insertParams), int(count))
+	require.Len(t, insertParams, int(count))
 
 	jobsAfter, err := adapter.JobGetAvailable(ctx, rivercommon.QueueDefault, int32(len(insertParams)))
 	require.NoError(t, err)
