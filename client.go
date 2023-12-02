@@ -705,6 +705,14 @@ func (c *Client[TTx]) StopAndCancel(ctx context.Context) error {
 	return c.awaitStop(ctx)
 }
 
+// Stopped returns a channel that will be closed when the Client has stopped.
+// It can be used to wait for a graceful shutdown to complete.
+//
+// It is not affected by any contexts passed to Stop or StopAndCancel.
+func (c *Client[TTx]) Stopped() <-chan struct{} {
+	return c.stopComplete
+}
+
 // Subscribe subscribes to the provided kinds of events that occur within the
 // client, like EventKindJobCompleted for when a job completes.
 //

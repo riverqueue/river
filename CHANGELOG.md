@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Added `Example_scheduledJob`, demonstrating how to schedule a job to be run in the future.
+- Added `Stopped` method to `Client` to make it easier to wait for graceful shutdown to complete.
 
 ### Fixed
 
