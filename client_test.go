@@ -2121,6 +2121,17 @@ func Test_Client_Start_Error(t *testing.T) {
 		require.EqualError(t, err, "client Queues and Workers must be configured for a client to start working")
 	})
 
+	t.Run("NoRegisteredWorkers", func(t *testing.T) {
+		t.Parallel()
+
+		config := newTestConfig(t, nil)
+		config.Workers = NewWorkers() // initialized, but empty
+
+		client := newTestClient(ctx, t, config)
+		err := client.Start(ctx)
+		require.EqualError(t, err, "at least one Worker must be added to the Workers bundle")
+	})
+
 	t.Run("DatabaseError", func(t *testing.T) {
 		t.Parallel()
 
@@ -2465,18 +2476,17 @@ func Test_NewClient_Validations(t *testing.T) {
 			},
 		},
 		{
+			name: "Workers can be empty", // but notably, not allowed to be empty if started
+			configFunc: func(config *Config) {
+				config.Workers = NewWorkers()
+			},
+		},
+		{
 			name: "Workers cannot be empty if Queues is set",
 			configFunc: func(config *Config) {
 				config.Workers = nil
 			},
 			wantErr: errors.New("Workers must be set if Queues is set"),
-		},
-		{
-			name: "Workers must contain at least one worker",
-			configFunc: func(config *Config) {
-				config.Workers = NewWorkers()
-			},
-			wantErr: errors.New("at least one Worker must be added to the Workers bundle"),
 		},
 	}
 

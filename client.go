@@ -210,9 +210,6 @@ func (c *Config) validate() error {
 	if c.Workers == nil && c.Queues != nil {
 		return errors.New("Workers must be set if Queues is set")
 	}
-	if c.Workers != nil && len(c.Workers.workersMap) < 1 {
-		return errors.New("at least one Worker must be added to the Workers bundle")
-	}
 
 	return nil
 }
@@ -553,6 +550,9 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 func (c *Client[TTx]) Start(ctx context.Context) error {
 	if !c.config.willExecuteJobs() {
 		return fmt.Errorf("client Queues and Workers must be configured for a client to start working")
+	}
+	if c.config.Workers != nil && len(c.config.Workers.workersMap) < 1 {
+		return errors.New("at least one Worker must be added to the Workers bundle")
 	}
 
 	// We use separate contexts for fetching and working to allow for a graceful
