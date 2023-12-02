@@ -87,8 +87,6 @@ func Example_gracefulShutdown() {
 		panic(err)
 	}
 
-	riverClientStopped := make(chan struct{})
-
 	sigintOrTerm := make(chan os.Signal, 1)
 	signal.Notify(sigintOrTerm, syscall.SIGINT, syscall.SIGTERM)
 
@@ -100,8 +98,6 @@ func Example_gracefulShutdown() {
 	// case that doesn't work, a third SIGINT/SIGTERM ignores River's stop procedure
 	// completely and exits uncleanly.
 	go func() {
-		defer close(riverClientStopped)
-
 		<-sigintOrTerm
 		fmt.Printf("Received SIGINT/SIGTERM; initiating soft stop (try to wait for jobs to finish)\n")
 
@@ -157,14 +153,14 @@ func Example_gracefulShutdown() {
 	// respects context cancellation, but wait a short amount of time to give it
 	// a chance. After it elapses, send another SIGTERM to initiate a hard stop.
 	select {
-	case <-riverClientStopped:
+	case <-riverClient.Stopped():
 		// Will never be reached in this example because our job will only ever
 		// finish on context cancellation.
 		fmt.Printf("Soft stop succeeded\n")
 
 	case <-time.After(100 * time.Millisecond):
 		sigintOrTerm <- syscall.SIGTERM
-		<-riverClientStopped
+		<-riverClient.Stopped()
 	}
 
 	// Output:

@@ -302,6 +302,48 @@ func Test_Client(t *testing.T) {
 		// neither contain a useful value in this case.
 		require.Equal(t, `relation "river_job" does not exist`, pgErr.Message)
 	})
+
+	t.Run("Stopped", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+		jobStartedChan := make(chan int64)
+		jobDoneChan := make(chan struct{})
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			jobStartedChan <- job.ID
+			<-ctx.Done()
+			close(jobDoneChan)
+			return nil
+		}))
+
+		startClient(ctx, t, client)
+
+		insertedJob, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		startedJobID := riverinternaltest.WaitOrTimeout(t, jobStartedChan)
+		require.Equal(t, insertedJob.ID, startedJobID)
+
+		select {
+		case <-client.Stopped():
+			t.Fatal("expected client to not be stopped yet")
+		default:
+		}
+
+		stopCtx, stopCancel := context.WithTimeout(ctx, 5*time.Second)
+		t.Cleanup(stopCancel)
+
+		if err := client.StopAndCancel(stopCtx); err != nil {
+			t.Fatal(err)
+		}
+
+		riverinternaltest.WaitOrTimeout(t, client.Stopped())
+	})
 }
 
 func Test_Client_Stop(t *testing.T) {
