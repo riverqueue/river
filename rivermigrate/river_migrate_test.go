@@ -80,28 +80,29 @@ func TestMigrator(t *testing.T) {
 		return migrator, bundle
 	}
 
-	t.Run("MigrateDown", func(t *testing.T) {
+	t.Run("MigrateDownDefault", func(t *testing.T) {
 		t.Parallel()
 
 		migrator, bundle := setup(t)
 
-		// Run an initial time
+		// Run an initial time. Defaults to only running one step when moving in
+		// the down direction.
 		{
 			res, err := migrator.MigrateTx(ctx, bundle.tx, DirectionDown, &MigrateOpts{})
 			require.NoError(t, err)
-			require.Equal(t, seqToOne(3), sliceutil.Map(res.Versions, migrateVersionToInt))
+			require.Equal(t, []int{3}, sliceutil.Map(res.Versions, migrateVersionToInt))
 
-			err = dbExecError(ctx, bundle.tx, "SELECT * FROM river_migration")
-			require.Error(t, err)
+			err = dbExecError(ctx, bundle.tx, "SELECT * FROM river_job")
+			require.NoError(t, err)
 		}
 
-		// Run once more to verify idempotency
+		// Run once more to go down one more step
 		{
 			res, err := migrator.MigrateTx(ctx, bundle.tx, DirectionDown, &MigrateOpts{})
 			require.NoError(t, err)
-			require.Equal(t, []int{}, sliceutil.Map(res.Versions, migrateVersionToInt))
+			require.Equal(t, []int{2}, sliceutil.Map(res.Versions, migrateVersionToInt))
 
-			err = dbExecError(ctx, bundle.tx, "SELECT * FROM river_migration")
+			err = dbExecError(ctx, bundle.tx, "SELECT * FROM river_job")
 			require.Error(t, err)
 		}
 	})
@@ -116,10 +117,7 @@ func TestMigrator(t *testing.T) {
 
 		res, err := migrator.MigrateTx(ctx, bundle.tx, DirectionDown, &MigrateOpts{})
 		require.NoError(t, err)
-		require.Equal(t, seqToOne(riverMigrationsWithTestVersionsMaxVersion), sliceutil.Map(res.Versions, migrateVersionToInt))
-
-		err = dbExecError(ctx, bundle.tx, "SELECT * FROM river_migration")
-		require.Error(t, err)
+		require.Equal(t, []int{riverMigrationsWithTestVersionsMaxVersion}, sliceutil.Map(res.Versions, migrateVersionToInt))
 	})
 
 	t.Run("MigrateDownWithMaxSteps", func(t *testing.T) {
@@ -130,14 +128,14 @@ func TestMigrator(t *testing.T) {
 		_, err := migrator.MigrateTx(ctx, bundle.tx, DirectionUp, &MigrateOpts{})
 		require.NoError(t, err)
 
-		res, err := migrator.MigrateTx(ctx, bundle.tx, DirectionDown, &MigrateOpts{MaxSteps: 1})
+		res, err := migrator.MigrateTx(ctx, bundle.tx, DirectionDown, &MigrateOpts{MaxSteps: 2})
 		require.NoError(t, err)
-		require.Equal(t, []int{riverMigrationsWithTestVersionsMaxVersion},
+		require.Equal(t, []int{riverMigrationsWithTestVersionsMaxVersion, riverMigrationsWithTestVersionsMaxVersion - 1},
 			sliceutil.Map(res.Versions, migrateVersionToInt))
 
 		migrations, err := queries.RiverMigrationGetAll(ctx, bundle.tx)
 		require.NoError(t, err)
-		require.Equal(t, seqOneTo(riverMigrationsWithTestVersionsMaxVersion-1),
+		require.Equal(t, seqOneTo(riverMigrationsWithTestVersionsMaxVersion-2),
 			sliceutil.Map(migrations, riverMigrationToInt))
 
 		err = dbExecError(ctx, bundle.tx, "SELECT name FROM test_table")
@@ -184,6 +182,23 @@ func TestMigrator(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	t.Run("MigrateDownWithTargetVersionMinusOne", func(t *testing.T) {
+		t.Parallel()
+
+		migrator, bundle := setup(t)
+
+		_, err := migrator.MigrateTx(ctx, bundle.tx, DirectionUp, &MigrateOpts{})
+		require.NoError(t, err)
+
+		res, err := migrator.MigrateTx(ctx, bundle.tx, DirectionDown, &MigrateOpts{TargetVersion: -1})
+		require.NoError(t, err)
+		require.Equal(t, seqToOne(5),
+			sliceutil.Map(res.Versions, migrateVersionToInt))
+
+		err = dbExecError(ctx, bundle.tx, "SELECT name FROM river_migrate")
+		require.Error(t, err)
+	})
+
 	t.Run("MigrateDownWithTargetVersionInvalid", func(t *testing.T) {
 		t.Parallel()
 
@@ -212,7 +227,7 @@ func TestMigrator(t *testing.T) {
 		require.Equal(t, []int{4, 5}, sliceutil.Map(res.Versions, migrateVersionToInt))
 	})
 
-	t.Run("MigrateUp", func(t *testing.T) {
+	t.Run("MigrateUpDefault", func(t *testing.T) {
 		t.Parallel()
 
 		migrator, bundle := setup(t)

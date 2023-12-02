@@ -116,14 +116,16 @@ func New[TTx any](driver riverdriver.Driver[TTx], config *Config) *Migrator[TTx]
 // MigrateOpts are options for a migrate operation.
 type MigrateOpts struct {
 	// MaxSteps is the maximum number of migrations to apply either up or down.
-	// Leave zero for an unlimited number. Set to -1 to apply no migrations (for
-	// testing/checking purposes).
+	// When migrating in the up direction, migrates an unlimited number of steps
+	// by default. When migrating in the down direction, migrates only a single
+	// step by default (set TargetVersion to -1 to apply unlimited steps down).
+	// Set to -1 to apply no migrations (for testing/checking purposes).
 	MaxSteps int
 
 	// TargetVersion is a specific migration version to apply migrations to. The
 	// version must exist and it must be in the possible list of migrations to
-	// apply. e.g. If requesting an up migration with version 3, version 3 not
-	// already be applied.
+	// apply. e.g. If requesting an up migration with version 3, version 3 must
+	// not already be applied.
 	//
 	// When applying migrations up, migrations are applied including the target
 	// version, so when starting at version 0 and requesting version 3, versions
@@ -131,6 +133,9 @@ type MigrateOpts struct {
 	// migrations are applied excluding the target version, so when starting at
 	// version 5 an requesting version 3, down migrations for versions 5 and 4
 	// would be applied, leaving the final schema at version 3.
+	//
+	// When migrating down, TargetVersion can be set to the special value of -1
+	// to apply all down migrations (i.e. River schema is removed completely).
 	TargetVersion int
 }
 
@@ -160,12 +165,12 @@ const (
 // Migrate migrates the database in the given direction (up or down). The opts
 // parameter may be omitted for convenience.
 //
-// By default, applies all outstanding migrations possible in either direction.
-// When migrating up all outstanding migrations are applied, and when migrating
-// down all existing migrations are unapplied.
-//
-// When migrating down, use with caution. MigrateOpts.MaxSteps should be set to
-// 1 to only migrate down one step.
+// By default, applies all outstanding migrations when moving in the up
+// direction, but for safety, only one step when moving in the down direction.
+// To migrate more than one step down, MigrateOpts.MaxSteps or
+// MigrateOpts.TargetVersion are available. Setting MigrateOpts.TargetVersion to
+// -1 will apply every available downstep so that River's schema is removed
+// completely.
 //
 //	res, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil)
 //	if err != nil {
@@ -187,12 +192,12 @@ func (m *Migrator[TTx]) Migrate(ctx context.Context, direction Direction, opts *
 // Migrate migrates the database in the given direction (up or down). The opts
 // parameter may be omitted for convenience.
 //
-// By default, applies all outstanding migrations possible in either direction.
-// When migrating up all outstanding migrations are applied, and when migrating
-// down all existing migrations are unapplied.
-//
-// When migrating down, use with caution. MigrateOpts.MaxSteps should be set to
-// 1 to only migrate down one step.
+// By default, applies all outstanding migrations when moving in the up
+// direction, but for safety, only one step when moving in the down direction.
+// To migrate more than one step down, MigrateOpts.MaxSteps or
+// MigrateOpts.TargetVersion are available. Setting MigrateOpts.TargetVersion to
+// -1 will apply every available downstep so that River's schema is removed
+// completely.
 //
 //	res, err := migrator.MigrateTx(ctx, tx, rivermigrate.DirectionUp, nil)
 //	if err != nil {
@@ -292,11 +297,19 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, tx pgx.Tx, directio
 		opts = &MigrateOpts{}
 	}
 
+	var maxSteps int
 	switch {
-	case opts.MaxSteps < 0:
+	case opts.MaxSteps != 0:
+		maxSteps = opts.MaxSteps
+	case direction == DirectionDown && opts.TargetVersion == 0:
+		maxSteps = 1
+	}
+
+	switch {
+	case maxSteps < 0:
 		sortedTargetMigrations = []*migrationBundle{}
-	case opts.MaxSteps > 0:
-		sortedTargetMigrations = sortedTargetMigrations[0:min(opts.MaxSteps, len(sortedTargetMigrations))]
+	case maxSteps > 0:
+		sortedTargetMigrations = sortedTargetMigrations[0:min(maxSteps, len(sortedTargetMigrations))]
 	}
 
 	if opts.TargetVersion > 0 {
