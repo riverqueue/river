@@ -67,7 +67,7 @@ goroutines at a time:
 ```go
 riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
     Queues: map[string]river.QueueConfig{
-        river.DefaultQueue: {MaxWorkers: 100},
+        river.QueueDefault: {MaxWorkers: 100},
     },
     Workers: workers,
 })
