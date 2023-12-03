@@ -19,3 +19,19 @@ func TestPtr(t *testing.T) {
 		require.Equal(t, &v, Ptr(7))
 	}
 }
+
+func TestValOrDefault(t *testing.T) {
+	t.Parallel()
+
+	val := "val"
+	require.Equal(t, val, ValOrDefault(&val, "default"))
+	require.Equal(t, "default", ValOrDefault((*string)(nil), "default"))
+}
+
+func TestValOrDefaultFunc(t *testing.T) {
+	t.Parallel()
+
+	val := "val"
+	require.Equal(t, val, ValOrDefaultFunc(&val, func() string { return "default" }))
+	require.Equal(t, "default", ValOrDefaultFunc((*string)(nil), func() string { return "default" }))
+}

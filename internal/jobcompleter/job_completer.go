@@ -16,20 +16,9 @@ import (
 )
 
 type JobCompleter interface {
-	// JobSetCancelled marks a job as cancelled.
-	JobSetCancelled(id int64, stats *jobstats.JobStatistics, finalizedAt time.Time, errData []byte) error
-
-	// JobSetCompleted marks a job as completed.
-	JobSetCompleted(id int64, stats *jobstats.JobStatistics, finalizedAt time.Time) error
-
-	// JobSetDiscarded marks a job as discarded.
-	JobSetDiscarded(id int64, stats *jobstats.JobStatistics, finalizedAt time.Time, errData []byte) error
-
-	// JobSetErrored marks a job as errored (but retryable).
-	JobSetErrored(id int64, stats *jobstats.JobStatistics, scheduledAt time.Time, errData []byte) error
-
-	// JobSetSnoozed reschedules a job for the future and increments its max attempts.
-	JobSetSnoozed(id int64, stats *jobstats.JobStatistics, scheduledAt time.Time) error
+	// JobSetState sets a new state for the given job, as long as it's
+	// still running (i.e. its state has not changed to something else already).
+	JobSetStateIfRunning(stats *jobstats.JobStatistics, params *dbadapter.JobSetStateIfRunningParams) error
 
 	// Subscribe injects a callback which will be invoked whenever a job is
 	// updated.
@@ -66,33 +55,9 @@ func NewInlineCompleter(archetype *baseservice.Archetype, adapter dbadapter.Adap
 	})
 }
 
-func (c *InlineJobCompleter) JobSetCancelled(id int64, stats *jobstats.JobStatistics, finalizedAt time.Time, errData []byte) error {
+func (c *InlineJobCompleter) JobSetStateIfRunning(stats *jobstats.JobStatistics, params *dbadapter.JobSetStateIfRunningParams) error {
 	return c.doOperation(stats, func(ctx context.Context) (*dbsqlc.RiverJob, error) {
-		return c.adapter.JobSetCancelledIfRunning(ctx, id, finalizedAt, errData)
-	})
-}
-
-func (c *InlineJobCompleter) JobSetCompleted(id int64, stats *jobstats.JobStatistics, finalizedAt time.Time) error {
-	return c.doOperation(stats, func(ctx context.Context) (*dbsqlc.RiverJob, error) {
-		return c.adapter.JobSetCompletedIfRunning(ctx, dbadapter.JobToComplete{ID: id, FinalizedAt: finalizedAt})
-	})
-}
-
-func (c *InlineJobCompleter) JobSetDiscarded(id int64, stats *jobstats.JobStatistics, finalizedAt time.Time, errData []byte) error {
-	return c.doOperation(stats, func(ctx context.Context) (*dbsqlc.RiverJob, error) {
-		return c.adapter.JobSetDiscardedIfRunning(ctx, id, finalizedAt, errData)
-	})
-}
-
-func (c *InlineJobCompleter) JobSetErrored(id int64, stats *jobstats.JobStatistics, scheduledAt time.Time, errData []byte) error {
-	return c.doOperation(stats, func(ctx context.Context) (*dbsqlc.RiverJob, error) {
-		return c.adapter.JobSetErroredIfRunning(ctx, id, scheduledAt, errData)
-	})
-}
-
-func (c *InlineJobCompleter) JobSetSnoozed(id int64, stats *jobstats.JobStatistics, scheduledAt time.Time) error {
-	return c.doOperation(stats, func(ctx context.Context) (*dbsqlc.RiverJob, error) {
-		return c.adapter.JobSetSnoozedIfRunning(ctx, id, scheduledAt)
+		return c.adapter.JobSetStateIfRunning(ctx, params)
 	})
 }
 
@@ -154,33 +119,9 @@ func NewAsyncCompleter(archetype *baseservice.Archetype, adapter dbadapter.Adapt
 	})
 }
 
-func (c *AsyncJobCompleter) JobSetCancelled(id int64, stats *jobstats.JobStatistics, finalizedAt time.Time, errData []byte) error {
+func (c *AsyncJobCompleter) JobSetStateIfRunning(stats *jobstats.JobStatistics, params *dbadapter.JobSetStateIfRunningParams) error {
 	return c.doOperation(stats, func(ctx context.Context) (*dbsqlc.RiverJob, error) {
-		return c.adapter.JobSetCancelledIfRunning(ctx, id, finalizedAt, errData)
-	})
-}
-
-func (c *AsyncJobCompleter) JobSetCompleted(id int64, stats *jobstats.JobStatistics, finalizedAt time.Time) error {
-	return c.doOperation(stats, func(ctx context.Context) (*dbsqlc.RiverJob, error) {
-		return c.adapter.JobSetCompletedIfRunning(ctx, dbadapter.JobToComplete{ID: id, FinalizedAt: finalizedAt})
-	})
-}
-
-func (c *AsyncJobCompleter) JobSetDiscarded(id int64, stats *jobstats.JobStatistics, finalizedAt time.Time, errData []byte) error {
-	return c.doOperation(stats, func(ctx context.Context) (*dbsqlc.RiverJob, error) {
-		return c.adapter.JobSetDiscardedIfRunning(ctx, id, finalizedAt, errData)
-	})
-}
-
-func (c *AsyncJobCompleter) JobSetErrored(id int64, stats *jobstats.JobStatistics, scheduledAt time.Time, errData []byte) error {
-	return c.doOperation(stats, func(ctx context.Context) (*dbsqlc.RiverJob, error) {
-		return c.adapter.JobSetErroredIfRunning(ctx, id, scheduledAt, errData)
-	})
-}
-
-func (c *AsyncJobCompleter) JobSetSnoozed(id int64, stats *jobstats.JobStatistics, scheduledAt time.Time) error {
-	return c.doOperation(stats, func(ctx context.Context) (*dbsqlc.RiverJob, error) {
-		return c.adapter.JobSetSnoozedIfRunning(ctx, id, scheduledAt)
+		return c.adapter.JobSetStateIfRunning(ctx, params)
 	})
 }
 

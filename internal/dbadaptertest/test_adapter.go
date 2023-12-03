@@ -18,59 +18,25 @@ type TestAdapter struct {
 	fallthroughAdapter dbadapter.Adapter
 	mu                 sync.Mutex
 
-	JobCompleteManyCalled          bool
-	JobCompleteManyTxCalled        bool
-	JobInsertCalled                bool
-	JobInsertTxCalled              bool
-	JobInsertManyCalled            bool
-	JobInsertManyTxCalled          bool
-	JobGetAvailableCalled          bool
-	JobGetAvailableTxCalled        bool
-	JobSetCancelledIfRunningCalled bool
-	JobSetCompletedIfRunningCalled bool
-	JobSetCompletedTxCalled        bool
-	JobSetDiscardedIfRunningCalled bool
-	JobSetErroredIfRunningCalled   bool
-	JobSetSnoozedIfRunningCalled   bool
-	LeadershipAttemptElectCalled   bool
-	LeadershipResignedCalled       bool
+	JobInsertCalled              bool
+	JobInsertTxCalled            bool
+	JobInsertManyCalled          bool
+	JobInsertManyTxCalled        bool
+	JobGetAvailableCalled        bool
+	JobGetAvailableTxCalled      bool
+	JobSetStateIfRunningCalled   bool
+	LeadershipAttemptElectCalled bool
+	LeadershipResignedCalled     bool
 
-	JobCompleteManyFunc          func(ctx context.Context, jobs ...dbadapter.JobToComplete) error
-	JobCompleteManyTxFunc        func(ctx context.Context, tx pgx.Tx, jobs ...dbadapter.JobToComplete) error
-	JobInsertFunc                func(ctx context.Context, params *dbadapter.JobInsertParams) (*dbadapter.JobInsertResult, error)
-	JobInsertTxFunc              func(ctx context.Context, tx pgx.Tx, params *dbadapter.JobInsertParams) (*dbadapter.JobInsertResult, error)
-	JobInsertManyFunc            func(ctx context.Context, params []*dbadapter.JobInsertParams) (int64, error)
-	JobInsertManyTxFunc          func(ctx context.Context, tx pgx.Tx, params []*dbadapter.JobInsertParams) (int64, error)
-	JobGetAvailableFunc          func(ctx context.Context, queueName string, limit int32) ([]*dbsqlc.RiverJob, error)
-	JobGetAvailableTxFunc        func(ctx context.Context, tx pgx.Tx, queueName string, limit int32) ([]*dbsqlc.RiverJob, error)
-	JobSetCancelledIfRunningFunc func(ctx context.Context, id int64, finalizedAt time.Time, err []byte) (*dbsqlc.RiverJob, error)
-	JobSetCompletedIfRunningFunc func(ctx context.Context, job dbadapter.JobToComplete) (*dbsqlc.RiverJob, error)
-	JobSetCompletedTxFunc        func(ctx context.Context, tx pgx.Tx, id int64, completedAt time.Time) (*dbsqlc.RiverJob, error)
-	JobSetDiscardedIfRunningFunc func(ctx context.Context, id int64, finalizedAt time.Time, err []byte) (*dbsqlc.RiverJob, error)
-	JobSetErroredIfRunningFunc   func(ctx context.Context, id int64, scheduledAt time.Time, err []byte) (*dbsqlc.RiverJob, error)
-	JobSetSnoozedIfRunningFunc   func(ctx context.Context, id int64, scheduledAt time.Time) (*dbsqlc.RiverJob, error)
-	LeadershipAttemptElectFunc   func(ctx context.Context) (bool, error)
-	LeadershipResignFunc         func(ctx context.Context, name string, leaderID string) error
-}
-
-func (ta *TestAdapter) JobCompleteMany(ctx context.Context, jobs ...dbadapter.JobToComplete) error {
-	ta.atomicSetBoolTrue(&ta.JobCompleteManyCalled)
-
-	if ta.JobCompleteManyFunc != nil {
-		return ta.JobCompleteManyFunc(ctx, jobs...)
-	}
-
-	return ta.fallthroughAdapter.JobCompleteMany(ctx, jobs...)
-}
-
-func (ta *TestAdapter) JobCompleteManyTx(ctx context.Context, tx pgx.Tx, jobs ...dbadapter.JobToComplete) error {
-	ta.atomicSetBoolTrue(&ta.JobCompleteManyTxCalled)
-
-	if ta.JobCompleteManyTxFunc != nil {
-		return ta.JobCompleteManyTxFunc(ctx, tx, jobs...)
-	}
-
-	return ta.fallthroughAdapter.JobCompleteManyTx(ctx, tx, jobs...)
+	JobInsertFunc              func(ctx context.Context, params *dbadapter.JobInsertParams) (*dbadapter.JobInsertResult, error)
+	JobInsertTxFunc            func(ctx context.Context, tx pgx.Tx, params *dbadapter.JobInsertParams) (*dbadapter.JobInsertResult, error)
+	JobInsertManyFunc          func(ctx context.Context, params []*dbadapter.JobInsertParams) (int64, error)
+	JobInsertManyTxFunc        func(ctx context.Context, tx pgx.Tx, params []*dbadapter.JobInsertParams) (int64, error)
+	JobGetAvailableFunc        func(ctx context.Context, queueName string, limit int32) ([]*dbsqlc.RiverJob, error)
+	JobGetAvailableTxFunc      func(ctx context.Context, tx pgx.Tx, queueName string, limit int32) ([]*dbsqlc.RiverJob, error)
+	JobSetStateIfRunningFunc   func(ctx context.Context, params *dbadapter.JobSetStateIfRunningParams) (*dbsqlc.RiverJob, error)
+	LeadershipAttemptElectFunc func(ctx context.Context) (bool, error)
+	LeadershipResignFunc       func(ctx context.Context, name string, leaderID string) error
 }
 
 func (ta *TestAdapter) JobInsert(ctx context.Context, params *dbadapter.JobInsertParams) (*dbadapter.JobInsertResult, error) {
@@ -133,64 +99,14 @@ func (ta *TestAdapter) JobGetAvailableTx(ctx context.Context, tx pgx.Tx, queueNa
 	return ta.fallthroughAdapter.JobGetAvailableTx(ctx, tx, queueName, limit)
 }
 
-func (ta *TestAdapter) JobSetCancelledIfRunning(ctx context.Context, id int64, finalizedAt time.Time, err []byte) (*dbsqlc.RiverJob, error) {
-	ta.atomicSetBoolTrue(&ta.JobSetCancelledIfRunningCalled)
+func (ta *TestAdapter) JobSetStateIfRunning(ctx context.Context, params *dbadapter.JobSetStateIfRunningParams) (*dbsqlc.RiverJob, error) {
+	ta.atomicSetBoolTrue(&ta.JobSetStateIfRunningCalled)
 
-	if ta.JobSetCancelledIfRunningFunc != nil {
-		return ta.JobSetCancelledIfRunningFunc(ctx, id, finalizedAt, err)
+	if ta.JobSetStateIfRunningFunc != nil {
+		return ta.JobSetStateIfRunningFunc(ctx, params)
 	}
 
-	return ta.fallthroughAdapter.JobSetCancelledIfRunning(ctx, id, finalizedAt, err)
-}
-
-func (ta *TestAdapter) JobSetCompletedIfRunning(ctx context.Context, job dbadapter.JobToComplete) (*dbsqlc.RiverJob, error) {
-	ta.atomicSetBoolTrue(&ta.JobSetCompletedIfRunningCalled)
-
-	if ta.JobSetCompletedIfRunningFunc != nil {
-		return ta.JobSetCompletedIfRunningFunc(ctx, job)
-	}
-
-	return ta.fallthroughAdapter.JobSetCompletedIfRunning(ctx, job)
-}
-
-func (ta *TestAdapter) JobSetCompletedTx(ctx context.Context, tx pgx.Tx, id int64, completedAt time.Time) (*dbsqlc.RiverJob, error) {
-	ta.atomicSetBoolTrue(&ta.JobSetCompletedTxCalled)
-
-	if ta.JobSetCompletedTxFunc != nil {
-		return ta.JobSetCompletedTxFunc(ctx, tx, id, completedAt)
-	}
-
-	return ta.fallthroughAdapter.JobSetCompletedTx(ctx, tx, id, completedAt)
-}
-
-func (ta *TestAdapter) JobSetDiscardedIfRunning(ctx context.Context, id int64, finalizedAt time.Time, err []byte) (*dbsqlc.RiverJob, error) {
-	ta.atomicSetBoolTrue(&ta.JobSetDiscardedIfRunningCalled)
-
-	if ta.JobSetDiscardedIfRunningFunc != nil {
-		return ta.JobSetDiscardedIfRunningFunc(ctx, id, finalizedAt, err)
-	}
-
-	return ta.fallthroughAdapter.JobSetDiscardedIfRunning(ctx, id, finalizedAt, err)
-}
-
-func (ta *TestAdapter) JobSetErroredIfRunning(ctx context.Context, id int64, scheduledAt time.Time, err []byte) (*dbsqlc.RiverJob, error) {
-	ta.atomicSetBoolTrue(&ta.JobSetErroredIfRunningCalled)
-
-	if ta.JobSetErroredIfRunningFunc != nil {
-		return ta.JobSetErroredIfRunningFunc(ctx, id, scheduledAt, err)
-	}
-
-	return ta.fallthroughAdapter.JobSetErroredIfRunning(ctx, id, scheduledAt, err)
-}
-
-func (ta *TestAdapter) JobSetSnoozedIfRunning(ctx context.Context, id int64, scheduledAt time.Time) (*dbsqlc.RiverJob, error) {
-	ta.atomicSetBoolTrue(&ta.JobSetSnoozedIfRunningCalled)
-
-	if ta.JobSetErroredIfRunningFunc != nil {
-		return ta.JobSetSnoozedIfRunningFunc(ctx, id, scheduledAt)
-	}
-
-	return ta.fallthroughAdapter.JobSetSnoozedIfRunning(ctx, id, scheduledAt)
+	return ta.fallthroughAdapter.JobSetStateIfRunning(ctx, params)
 }
 
 func (ta *TestAdapter) LeadershipAttemptElect(ctx context.Context, alreadyElected bool, name, leaderID string, ttl time.Duration) (bool, error) {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/dbsqlc"
+	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -59,7 +60,12 @@ func JobCompleteTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs](ctx 
 		queries = &dbsqlc.Queries{}
 	)
 
-	internal, err := queries.JobSetCompleted(ctx, driver.UnwrapTx(tx), dbsqlc.JobSetCompletedParams{ID: job.ID, FinalizedAt: time.Now()})
+	internal, err := queries.JobSetState(ctx, driver.UnwrapTx(tx), dbsqlc.JobSetStateParams{
+		ID:                  job.ID,
+		FinalizedAtDoUpdate: true,
+		FinalizedAt:         ptrutil.Ptr(time.Now()),
+		State:               dbsqlc.JobStateCompleted,
+	})
 	if err != nil {
 		return nil, err
 	}

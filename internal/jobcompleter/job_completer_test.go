@@ -21,8 +21,8 @@ func TestInlineJobCompleter_Complete(t *testing.T) {
 	var attempt int
 	expectedErr := errors.New("an error from the completer")
 	adapter := &dbadaptertest.TestAdapter{
-		JobSetCompletedIfRunningFunc: func(ctx context.Context, job dbadapter.JobToComplete) (*dbsqlc.RiverJob, error) {
-			require.Equal(t, int64(1), job.ID)
+		JobSetStateIfRunningFunc: func(ctx context.Context, params *dbadapter.JobSetStateIfRunningParams) (*dbsqlc.RiverJob, error) {
+			require.Equal(t, int64(1), params.ID)
 			attempt++
 			return nil, expectedErr
 		},
@@ -31,12 +31,12 @@ func TestInlineJobCompleter_Complete(t *testing.T) {
 	completer := NewInlineCompleter(riverinternaltest.BaseServiceArchetype(t), adapter)
 	t.Cleanup(completer.Wait)
 
-	err := completer.JobSetCompleted(1, &jobstats.JobStatistics{}, time.Now())
+	err := completer.JobSetStateIfRunning(&jobstats.JobStatistics{}, dbadapter.JobSetStateCompleted(1, time.Now()))
 	if !errors.Is(err, expectedErr) {
 		t.Errorf("expected %v, got %v", expectedErr, err)
 	}
 
-	require.True(t, adapter.JobSetCompletedIfRunningCalled)
+	require.True(t, adapter.JobSetStateIfRunningCalled)
 	require.Equal(t, numRetries, attempt)
 }
 
@@ -76,8 +76,8 @@ func TestAsyncJobCompleter_Complete(t *testing.T) {
 	}()
 
 	adapter := &dbadaptertest.TestAdapter{
-		JobSetCompletedIfRunningFunc: func(ctx context.Context, job dbadapter.JobToComplete) (*dbsqlc.RiverJob, error) {
-			inputCh <- jobInput{ctx: ctx, jobID: job.ID}
+		JobSetStateIfRunningFunc: func(ctx context.Context, params *dbadapter.JobSetStateIfRunningParams) (*dbsqlc.RiverJob, error) {
+			inputCh <- jobInput{ctx: ctx, jobID: params.ID}
 			err := <-resultCh
 			return nil, err
 		},
@@ -87,14 +87,14 @@ func TestAsyncJobCompleter_Complete(t *testing.T) {
 
 	// launch 4 completions, only 2 can be inline due to the concurrency limit:
 	for i := int64(0); i < 2; i++ {
-		if err := completer.JobSetCompleted(i, &jobstats.JobStatistics{}, time.Now()); err != nil {
+		if err := completer.JobSetStateIfRunning(&jobstats.JobStatistics{}, dbadapter.JobSetStateCompleted(i, time.Now())); err != nil {
 			t.Errorf("expected nil err, got %v", err)
 		}
 	}
 	bgCompletionsStarted := make(chan struct{})
 	go func() {
 		for i := int64(2); i < 4; i++ {
-			if err := completer.JobSetCompleted(i, &jobstats.JobStatistics{}, time.Now()); err != nil {
+			if err := completer.JobSetStateIfRunning(&jobstats.JobStatistics{}, dbadapter.JobSetStateCompleted(i, time.Now())); err != nil {
 				t.Errorf("expected nil err, got %v", err)
 			}
 		}
@@ -161,7 +161,7 @@ func testCompleterSubscribe(t *testing.T, constructor func(dbadapter.Adapter) Jo
 	t.Helper()
 
 	adapter := &dbadaptertest.TestAdapter{
-		JobSetCompletedIfRunningFunc: func(ctx context.Context, job dbadapter.JobToComplete) (*dbsqlc.RiverJob, error) {
+		JobSetStateIfRunningFunc: func(ctx context.Context, params *dbadapter.JobSetStateIfRunningParams) (*dbsqlc.RiverJob, error) {
 			return &dbsqlc.RiverJob{
 				State: dbsqlc.JobStateCompleted,
 			}, nil
@@ -176,7 +176,7 @@ func testCompleterSubscribe(t *testing.T, constructor func(dbadapter.Adapter) Jo
 	})
 
 	for i := 0; i < 4; i++ {
-		require.NoError(t, completer.JobSetCompleted(int64(i), &jobstats.JobStatistics{}, time.Now()))
+		require.NoError(t, completer.JobSetStateIfRunning(&jobstats.JobStatistics{}, dbadapter.JobSetStateCompleted(int64(i), time.Now())))
 	}
 
 	completer.Wait()
@@ -193,7 +193,7 @@ func testCompleterWait(t *testing.T, constructor func(dbadapter.Adapter) JobComp
 	resultCh := make(chan error)
 	completeStartedCh := make(chan struct{})
 	adapter := &dbadaptertest.TestAdapter{
-		JobSetCompletedIfRunningFunc: func(ctx context.Context, job dbadapter.JobToComplete) (*dbsqlc.RiverJob, error) {
+		JobSetStateIfRunningFunc: func(ctx context.Context, params *dbadapter.JobSetStateIfRunningParams) (*dbsqlc.RiverJob, error) {
 			completeStartedCh <- struct{}{}
 			err := <-resultCh
 			return nil, err
@@ -206,7 +206,7 @@ func testCompleterWait(t *testing.T, constructor func(dbadapter.Adapter) JobComp
 	for i := 0; i < 4; i++ {
 		i := i
 		go func() {
-			require.NoError(t, completer.JobSetCompleted(int64(i), &jobstats.JobStatistics{}, time.Now()))
+			require.NoError(t, completer.JobSetStateIfRunning(&jobstats.JobStatistics{}, dbadapter.JobSetStateCompleted(int64(i), time.Now())))
 		}()
 		<-completeStartedCh // wait for func to actually start
 	}

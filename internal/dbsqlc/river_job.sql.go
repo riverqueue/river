@@ -10,30 +10,6 @@ import (
 	"time"
 )
 
-const jobCompleteMany = `-- name: JobCompleteMany :exec
-UPDATE river_job
-SET
-  finalized_at = updated.finalized_at,
-  state = updated.state
-FROM (
-  SELECT
-    unnest($1::bigint[]) AS id,
-    unnest($2::timestamptz[]) AS finalized_at,
-    'completed'::river_job_state AS state
-) AS updated
-WHERE river_job.id = updated.id
-`
-
-type JobCompleteManyParams struct {
-	ID          []int64
-	FinalizedAt []time.Time
-}
-
-func (q *Queries) JobCompleteMany(ctx context.Context, db DBTX, arg JobCompleteManyParams) error {
-	_, err := db.Exec(ctx, jobCompleteMany, arg.ID, arg.FinalizedAt)
-	return err
-}
-
 const jobCountRunning = `-- name: JobCountRunning :one
 SELECT
   count(*)
@@ -628,95 +604,43 @@ func (q *Queries) JobSchedule(ctx context.Context, db DBTX, arg JobScheduleParam
 	return count, err
 }
 
-const jobSetCancelledIfRunning = `-- name: JobSetCancelledIfRunning :one
-WITH job_to_update AS (
-  SELECT
-    id,
-    finalized_at,
-    state
-  FROM
-    river_job
-  WHERE
-    id = $1::bigint
-  FOR UPDATE
-),
-updated_job AS (
-  UPDATE
-    river_job
-  SET
-    finalized_at = $2::timestamptz,
-    errors = array_append(errors, $3::jsonb),
-    state = 'cancelled'::river_job_state
-  FROM
-    job_to_update
-  WHERE
-    river_job.id = job_to_update.id
-    AND river_job.state = 'running'::river_job_state
-  RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
-)
-(
-  SELECT
-    river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
-  FROM
-    river_job
-  WHERE
-    river_job.id = $1::bigint
-  UNION
-  SELECT
-    updated_job.id, updated_job.args, updated_job.attempt, updated_job.attempted_at, updated_job.attempted_by, updated_job.created_at, updated_job.errors, updated_job.finalized_at, updated_job.kind, updated_job.max_attempts, updated_job.metadata, updated_job.priority, updated_job.queue, updated_job.state, updated_job.scheduled_at, updated_job.tags
-  FROM
-    updated_job
-) ORDER BY finalized_at DESC NULLS LAST LIMIT 1
-`
-
-type JobSetCancelledIfRunningParams struct {
-	ID          int64
-	FinalizedAt time.Time
-	Error       []byte
-}
-
-func (q *Queries) JobSetCancelledIfRunning(ctx context.Context, db DBTX, arg JobSetCancelledIfRunningParams) (*RiverJob, error) {
-	row := db.QueryRow(ctx, jobSetCancelledIfRunning, arg.ID, arg.FinalizedAt, arg.Error)
-	var i RiverJob
-	err := row.Scan(
-		&i.ID,
-		&i.Args,
-		&i.Attempt,
-		&i.AttemptedAt,
-		&i.AttemptedBy,
-		&i.CreatedAt,
-		&i.Errors,
-		&i.FinalizedAt,
-		&i.Kind,
-		&i.MaxAttempts,
-		&i.Metadata,
-		&i.Priority,
-		&i.Queue,
-		&i.State,
-		&i.ScheduledAt,
-		&i.Tags,
-	)
-	return &i, err
-}
-
-const jobSetCompleted = `-- name: JobSetCompleted :one
-UPDATE
-  river_job
-SET
-  finalized_at = $1::timestamptz,
-  state = 'completed'::river_job_state
-WHERE
-  id = $2::bigint
+const jobSetState = `-- name: JobSetState :one
+UPDATE river_job
+SET errors       = CASE WHEN $1::boolean        THEN array_append(errors, $2::jsonb) ELSE errors       END,
+    finalized_at = CASE WHEN $3::boolean THEN $4                       ELSE finalized_at END,
+    max_attempts = CASE WHEN $5::boolean    THEN $6                       ELSE max_attempts END,
+    scheduled_at = CASE WHEN $7::boolean THEN $8                       ELSE scheduled_at END,
+    state = $9
+WHERE id = $10
 RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
 `
 
-type JobSetCompletedParams struct {
-	FinalizedAt time.Time
-	ID          int64
+type JobSetStateParams struct {
+	ErrorDoUpdate       bool
+	Error               []byte
+	FinalizedAtDoUpdate bool
+	FinalizedAt         *time.Time
+	MaxAttemptsUpdate   bool
+	MaxAttempts         int16
+	ScheduledAtDoUpdate bool
+	ScheduledAt         time.Time
+	State               JobState
+	ID                  int64
 }
 
-func (q *Queries) JobSetCompleted(ctx context.Context, db DBTX, arg JobSetCompletedParams) (*RiverJob, error) {
-	row := db.QueryRow(ctx, jobSetCompleted, arg.FinalizedAt, arg.ID)
+func (q *Queries) JobSetState(ctx context.Context, db DBTX, arg JobSetStateParams) (*RiverJob, error) {
+	row := db.QueryRow(ctx, jobSetState,
+		arg.ErrorDoUpdate,
+		arg.Error,
+		arg.FinalizedAtDoUpdate,
+		arg.FinalizedAt,
+		arg.MaxAttemptsUpdate,
+		arg.MaxAttempts,
+		arg.ScheduledAtDoUpdate,
+		arg.ScheduledAt,
+		arg.State,
+		arg.ID,
+	)
 	var i RiverJob
 	err := row.Scan(
 		&i.ID,
@@ -739,307 +663,60 @@ func (q *Queries) JobSetCompleted(ctx context.Context, db DBTX, arg JobSetComple
 	return &i, err
 }
 
-const jobSetCompletedIfRunning = `-- name: JobSetCompletedIfRunning :one
+const jobSetStateIfRunning = `-- name: JobSetStateIfRunning :one
 WITH job_to_update AS (
-  SELECT
-    id,
-    finalized_at,
-    state
-  FROM
-    river_job
-  WHERE
-    id = $1::bigint
-  FOR UPDATE
+    SELECT id
+    FROM river_job
+    WHERE id = $1::bigint
+    FOR UPDATE
 ),
 updated_job AS (
-  UPDATE
-    river_job
-  SET
-    finalized_at = $2::timestamptz,
-    state = 'completed'::river_job_state
-  FROM
-    job_to_update
-  WHERE
-    river_job.id = job_to_update.id
-    AND river_job.state = 'running'::river_job_state
-  RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
+    UPDATE river_job
+    SET errors       = CASE WHEN $2::boolean        THEN array_append(errors, $3::jsonb) ELSE errors       END,
+        finalized_at = CASE WHEN $4::boolean THEN $5                       ELSE finalized_at END,
+        max_attempts = CASE WHEN $6::boolean    THEN $7                       ELSE max_attempts END,
+        scheduled_at = CASE WHEN $8::boolean THEN $9                       ELSE scheduled_at END,
+        state = $10
+    FROM job_to_update
+    WHERE river_job.id = job_to_update.id
+        AND river_job.state = 'running'::river_job_state
+    RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
 )
-(
-  SELECT
-    river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
-  FROM
-    river_job
-  WHERE
-    river_job.id = $1::bigint
-  UNION
-  SELECT
-    updated_job.id, updated_job.args, updated_job.attempt, updated_job.attempted_at, updated_job.attempted_by, updated_job.created_at, updated_job.errors, updated_job.finalized_at, updated_job.kind, updated_job.max_attempts, updated_job.metadata, updated_job.priority, updated_job.queue, updated_job.state, updated_job.scheduled_at, updated_job.tags
-  FROM
-    updated_job
-) ORDER BY finalized_at DESC NULLS LAST LIMIT 1
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+FROM river_job
+WHERE id = $1::bigint
+    AND id NOT IN (SELECT id FROM updated_job)
+UNION
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+FROM updated_job
 `
 
-type JobSetCompletedIfRunningParams struct {
-	ID          int64
-	FinalizedAt time.Time
+type JobSetStateIfRunningParams struct {
+	ID                  int64
+	ErrorDoUpdate       bool
+	Error               []byte
+	FinalizedAtDoUpdate bool
+	FinalizedAt         *time.Time
+	MaxAttemptsUpdate   bool
+	MaxAttempts         int16
+	ScheduledAtDoUpdate bool
+	ScheduledAt         time.Time
+	State               JobState
 }
 
-func (q *Queries) JobSetCompletedIfRunning(ctx context.Context, db DBTX, arg JobSetCompletedIfRunningParams) (*RiverJob, error) {
-	row := db.QueryRow(ctx, jobSetCompletedIfRunning, arg.ID, arg.FinalizedAt)
-	var i RiverJob
-	err := row.Scan(
-		&i.ID,
-		&i.Args,
-		&i.Attempt,
-		&i.AttemptedAt,
-		&i.AttemptedBy,
-		&i.CreatedAt,
-		&i.Errors,
-		&i.FinalizedAt,
-		&i.Kind,
-		&i.MaxAttempts,
-		&i.Metadata,
-		&i.Priority,
-		&i.Queue,
-		&i.State,
-		&i.ScheduledAt,
-		&i.Tags,
+func (q *Queries) JobSetStateIfRunning(ctx context.Context, db DBTX, arg JobSetStateIfRunningParams) (*RiverJob, error) {
+	row := db.QueryRow(ctx, jobSetStateIfRunning,
+		arg.ID,
+		arg.ErrorDoUpdate,
+		arg.Error,
+		arg.FinalizedAtDoUpdate,
+		arg.FinalizedAt,
+		arg.MaxAttemptsUpdate,
+		arg.MaxAttempts,
+		arg.ScheduledAtDoUpdate,
+		arg.ScheduledAt,
+		arg.State,
 	)
-	return &i, err
-}
-
-const jobSetDiscarded = `-- name: JobSetDiscarded :one
-UPDATE
-  river_job
-SET
-  finalized_at = $1::timestamptz,
-  errors = array_append(errors, $2::jsonb),
-  state = 'discarded'::river_job_state
-WHERE
-  id = $3::bigint
-RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
-`
-
-type JobSetDiscardedParams struct {
-	FinalizedAt time.Time
-	Error       []byte
-	ID          int64
-}
-
-func (q *Queries) JobSetDiscarded(ctx context.Context, db DBTX, arg JobSetDiscardedParams) (*RiverJob, error) {
-	row := db.QueryRow(ctx, jobSetDiscarded, arg.FinalizedAt, arg.Error, arg.ID)
-	var i RiverJob
-	err := row.Scan(
-		&i.ID,
-		&i.Args,
-		&i.Attempt,
-		&i.AttemptedAt,
-		&i.AttemptedBy,
-		&i.CreatedAt,
-		&i.Errors,
-		&i.FinalizedAt,
-		&i.Kind,
-		&i.MaxAttempts,
-		&i.Metadata,
-		&i.Priority,
-		&i.Queue,
-		&i.State,
-		&i.ScheduledAt,
-		&i.Tags,
-	)
-	return &i, err
-}
-
-const jobSetDiscardedIfRunning = `-- name: JobSetDiscardedIfRunning :one
-WITH job_to_update AS (
-  SELECT
-    id,
-    finalized_at,
-    state
-  FROM
-    river_job
-  WHERE
-    id = $1::bigint
-  FOR UPDATE
-),
-updated_job AS (
-  UPDATE
-    river_job
-  SET
-    finalized_at = $2::timestamptz,
-    errors = array_append(errors, $3::jsonb),
-    state = 'discarded'::river_job_state
-  FROM
-    job_to_update
-  WHERE
-    river_job.id = job_to_update.id
-    AND river_job.state = 'running'::river_job_state
-  RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
-)
-(
-  SELECT
-    river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
-  FROM
-    river_job
-  WHERE
-    river_job.id = $1::bigint
-  UNION
-  SELECT
-    updated_job.id, updated_job.args, updated_job.attempt, updated_job.attempted_at, updated_job.attempted_by, updated_job.created_at, updated_job.errors, updated_job.finalized_at, updated_job.kind, updated_job.max_attempts, updated_job.metadata, updated_job.priority, updated_job.queue, updated_job.state, updated_job.scheduled_at, updated_job.tags
-  FROM
-    updated_job
-) ORDER BY finalized_at DESC NULLS LAST LIMIT 1
-`
-
-type JobSetDiscardedIfRunningParams struct {
-	ID          int64
-	FinalizedAt time.Time
-	Error       []byte
-}
-
-func (q *Queries) JobSetDiscardedIfRunning(ctx context.Context, db DBTX, arg JobSetDiscardedIfRunningParams) (*RiverJob, error) {
-	row := db.QueryRow(ctx, jobSetDiscardedIfRunning, arg.ID, arg.FinalizedAt, arg.Error)
-	var i RiverJob
-	err := row.Scan(
-		&i.ID,
-		&i.Args,
-		&i.Attempt,
-		&i.AttemptedAt,
-		&i.AttemptedBy,
-		&i.CreatedAt,
-		&i.Errors,
-		&i.FinalizedAt,
-		&i.Kind,
-		&i.MaxAttempts,
-		&i.Metadata,
-		&i.Priority,
-		&i.Queue,
-		&i.State,
-		&i.ScheduledAt,
-		&i.Tags,
-	)
-	return &i, err
-}
-
-const jobSetErroredIfRunning = `-- name: JobSetErroredIfRunning :one
-WITH job_to_update AS (
-  SELECT
-    id,
-    finalized_at,
-    state
-  FROM
-    river_job
-  WHERE
-    id = $1::bigint
-  FOR UPDATE
-),
-updated_job AS (
-  UPDATE
-    river_job
-  SET
-    scheduled_at = $2::timestamptz,
-    errors = array_append(errors, $3::jsonb),
-    state = 'retryable'::river_job_state
-  FROM
-    job_to_update
-  WHERE
-    river_job.id = job_to_update.id
-    AND river_job.state = 'running'::river_job_state
-  RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
-)
-(
-  SELECT
-    river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
-  FROM
-    river_job
-  WHERE
-    river_job.id = $1::bigint
-  UNION
-  SELECT
-    updated_job.id, updated_job.args, updated_job.attempt, updated_job.attempted_at, updated_job.attempted_by, updated_job.created_at, updated_job.errors, updated_job.finalized_at, updated_job.kind, updated_job.max_attempts, updated_job.metadata, updated_job.priority, updated_job.queue, updated_job.state, updated_job.scheduled_at, updated_job.tags
-  FROM
-    updated_job
-) ORDER BY scheduled_at DESC NULLS LAST LIMIT 1
-`
-
-type JobSetErroredIfRunningParams struct {
-	ID          int64
-	ScheduledAt time.Time
-	Error       []byte
-}
-
-func (q *Queries) JobSetErroredIfRunning(ctx context.Context, db DBTX, arg JobSetErroredIfRunningParams) (*RiverJob, error) {
-	row := db.QueryRow(ctx, jobSetErroredIfRunning, arg.ID, arg.ScheduledAt, arg.Error)
-	var i RiverJob
-	err := row.Scan(
-		&i.ID,
-		&i.Args,
-		&i.Attempt,
-		&i.AttemptedAt,
-		&i.AttemptedBy,
-		&i.CreatedAt,
-		&i.Errors,
-		&i.FinalizedAt,
-		&i.Kind,
-		&i.MaxAttempts,
-		&i.Metadata,
-		&i.Priority,
-		&i.Queue,
-		&i.State,
-		&i.ScheduledAt,
-		&i.Tags,
-	)
-	return &i, err
-}
-
-const jobSetSnoozedIfRunning = `-- name: JobSetSnoozedIfRunning :one
-WITH job_to_update AS (
-  SELECT
-    id,
-    finalized_at,
-    state
-  FROM
-    river_job
-  WHERE
-    id = $1::bigint
-  FOR UPDATE
-),
-updated_job AS (
-  UPDATE
-    river_job
-  SET
-    scheduled_at = $2::timestamptz,
-    state = 'scheduled'::river_job_state,
-    max_attempts = max_attempts + 1
-  FROM
-    job_to_update
-  WHERE
-    river_job.id = job_to_update.id
-    AND river_job.state = 'running'::river_job_state
-  RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
-)
-(
-  SELECT
-    river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
-  FROM
-    river_job
-  WHERE
-    river_job.id = $1::bigint
-  UNION
-  SELECT
-    updated_job.id, updated_job.args, updated_job.attempt, updated_job.attempted_at, updated_job.attempted_by, updated_job.created_at, updated_job.errors, updated_job.finalized_at, updated_job.kind, updated_job.max_attempts, updated_job.metadata, updated_job.priority, updated_job.queue, updated_job.state, updated_job.scheduled_at, updated_job.tags
-  FROM
-    updated_job
-) ORDER BY scheduled_at DESC NULLS LAST LIMIT 1
-`
-
-type JobSetSnoozedIfRunningParams struct {
-	ID          int64
-	ScheduledAt time.Time
-}
-
-func (q *Queries) JobSetSnoozedIfRunning(ctx context.Context, db DBTX, arg JobSetSnoozedIfRunningParams) (*RiverJob, error) {
-	row := db.QueryRow(ctx, jobSetSnoozedIfRunning, arg.ID, arg.ScheduledAt)
 	var i RiverJob
 	err := row.Scan(
 		&i.ID,
