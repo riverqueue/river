@@ -10,7 +10,7 @@ import (
 type PeriodicSchedule interface {
 	// Next returns the next time at which the job should be run given the
 	// current time.
-	Next(time.Time) time.Time
+	Next(current time.Time) time.Time
 }
 
 // PeriodicJobConstructor is a function that gets called each time the paired

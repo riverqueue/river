@@ -77,10 +77,10 @@ func TestJobCleaner(t *testing.T) {
 
 		cleaner := NewJobCleaner(riverinternaltest.BaseServiceArchetype(t), &JobCleanerConfig{}, nil)
 
-		require.Equal(t, cleaner.Config.CancelledJobRetentionPeriod, CancelledJobRetentionPeriodDefault)
-		require.Equal(t, cleaner.Config.CompletedJobRetentionPeriod, CompletedJobRetentionPeriodDefault)
-		require.Equal(t, cleaner.Config.DiscardedJobRetentionPeriod, DiscardedJobRetentionPeriodDefault)
-		require.Equal(t, cleaner.Config.Interval, JobCleanerIntervalDefault)
+		require.Equal(t, CancelledJobRetentionPeriodDefault, cleaner.Config.CancelledJobRetentionPeriod)
+		require.Equal(t, CompletedJobRetentionPeriodDefault, cleaner.Config.CompletedJobRetentionPeriod)
+		require.Equal(t, DiscardedJobRetentionPeriodDefault, cleaner.Config.DiscardedJobRetentionPeriod)
+		require.Equal(t, JobCleanerIntervalDefault, cleaner.Config.Interval)
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {

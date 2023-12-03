@@ -105,8 +105,8 @@ func (s *Reindexer) Start(ctx context.Context) error {
 		// races.
 		defer close(stopped)
 
-		s.Logger.InfoContext(ctx, s.Name+": Run loop started")
-		defer s.Logger.InfoContext(ctx, s.Name+": Run loop stopped")
+		s.Logger.InfoContext(ctx, s.Name+logPrefixRunLoopStarted)
+		defer s.Logger.InfoContext(ctx, s.Name+logPrefixRunLoopStopped)
 
 		// On each run, we calculate the new schedule based on the previous run's
 		// start time. This ensures that we don't accidentally skip a run as time
@@ -135,7 +135,7 @@ func (s *Reindexer) Start(ctx context.Context) error {
 				s.TestSignals.Reindexed.Signal(struct{}{})
 			}
 			// TODO: maybe we should log differently if some of these fail?
-			s.Logger.InfoContext(ctx, s.Name+": Ran successfully", slog.Int("num_reindexes_initiated", len(s.Config.IndexNames)))
+			s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully, slog.Int("num_reindexes_initiated", len(s.Config.IndexNames)))
 		}
 	}()
 

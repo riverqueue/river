@@ -15,12 +15,12 @@ func TestGroupBy(t *testing.T) {
 		return i % 3
 	})
 
-	require.Equal(t, len(result1), 3)
-	require.Equal(t, result1, map[int][]int{
+	require.Len(t, result1, 3)
+	require.Equal(t, map[int][]int{
 		0: {0, 3},
 		1: {1, 4},
 		2: {2, 5},
-	})
+	}, result1)
 }
 
 func TestKeyBy(t *testing.T) {
@@ -70,8 +70,8 @@ func TestMap(t *testing.T) {
 		return strconv.FormatInt(x, 10)
 	})
 
-	require.Equal(t, len(result1), 4)
-	require.Equal(t, len(result2), 4)
-	require.Equal(t, result1, []string{"Hello", "Hello", "Hello", "Hello"})
-	require.Equal(t, result2, []string{"1", "2", "3", "4"})
+	require.Len(t, result1, 4)
+	require.Len(t, result2, 4)
+	require.Equal(t, []string{"Hello", "Hello", "Hello", "Hello"}, result1)
+	require.Equal(t, []string{"1", "2", "3", "4"}, result2)
 }

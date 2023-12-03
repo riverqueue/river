@@ -123,8 +123,8 @@ func TestRescuer(t *testing.T) {
 			nil,
 		)
 
-		require.Equal(t, cleaner.Config.RescueAfter, RescueAfterDefault)
-		require.Equal(t, cleaner.Config.Interval, RescuerIntervalDefault)
+		require.Equal(t, RescueAfterDefault, cleaner.Config.RescueAfter)
+		require.Equal(t, RescuerIntervalDefault, cleaner.Config.Interval)
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {
