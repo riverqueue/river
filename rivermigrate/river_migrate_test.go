@@ -90,6 +90,7 @@ func TestMigrator(t *testing.T) {
 		{
 			res, err := migrator.MigrateTx(ctx, bundle.tx, DirectionDown, &MigrateOpts{})
 			require.NoError(t, err)
+			require.Equal(t, DirectionDown, res.Direction)
 			require.Equal(t, []int{3}, sliceutil.Map(res.Versions, migrateVersionToInt))
 
 			err = dbExecError(ctx, bundle.tx, "SELECT * FROM river_job")
@@ -100,6 +101,7 @@ func TestMigrator(t *testing.T) {
 		{
 			res, err := migrator.MigrateTx(ctx, bundle.tx, DirectionDown, &MigrateOpts{})
 			require.NoError(t, err)
+			require.Equal(t, DirectionDown, res.Direction)
 			require.Equal(t, []int{2}, sliceutil.Map(res.Versions, migrateVersionToInt))
 
 			err = dbExecError(ctx, bundle.tx, "SELECT * FROM river_job")
@@ -236,6 +238,7 @@ func TestMigrator(t *testing.T) {
 		{
 			res, err := migrator.MigrateTx(ctx, bundle.tx, DirectionUp, &MigrateOpts{})
 			require.NoError(t, err)
+			require.Equal(t, DirectionUp, res.Direction)
 			require.Equal(t, []int{riverMigrationsWithTestVersionsMaxVersion - 1, riverMigrationsWithTestVersionsMaxVersion},
 				sliceutil.Map(res.Versions, migrateVersionToInt))
 
@@ -252,6 +255,7 @@ func TestMigrator(t *testing.T) {
 		{
 			res, err := migrator.MigrateTx(ctx, bundle.tx, DirectionUp, &MigrateOpts{})
 			require.NoError(t, err)
+			require.Equal(t, DirectionUp, res.Direction)
 			require.Equal(t, []int{}, sliceutil.Map(res.Versions, migrateVersionToInt))
 
 			migrations, err := queries.RiverMigrationGetAll(ctx, bundle.tx)

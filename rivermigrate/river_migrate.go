@@ -141,6 +141,9 @@ type MigrateOpts struct {
 
 // MigrateResult is the result of a migrate operation.
 type MigrateResult struct {
+	// Direction is the direction that migration occurred (up or down).
+	Direction Direction
+
 	// Versions are migration versions that were added (for up migrations) or
 	// removed (for down migrations) for this run.
 	Versions []MigrateVersion
@@ -333,7 +336,7 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, tx pgx.Tx, directio
 		}
 	}
 
-	res := &MigrateResult{Versions: make([]MigrateVersion, 0, len(sortedTargetMigrations))}
+	res := &MigrateResult{Direction: direction, Versions: make([]MigrateVersion, 0, len(sortedTargetMigrations))}
 
 	// Short circuit early if there's nothing to do.
 	if len(sortedTargetMigrations) < 1 {
