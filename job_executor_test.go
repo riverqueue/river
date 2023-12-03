@@ -308,7 +308,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.Len(t, job.Errors, 1)
 		require.WithinDuration(t, time.Now(), job.Errors[0].At, 2*time.Second)
 		require.Equal(t, uint16(1), job.Errors[0].Attempt)
-		require.Equal(t, "throw away this job", job.Errors[0].Error)
+		require.Equal(t, "jobCancelError: throw away this job", job.Errors[0].Error)
 		require.Equal(t, "", job.Errors[0].Trace)
 	})
 
