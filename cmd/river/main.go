@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -136,7 +137,7 @@ type migrateDownOpts struct {
 
 func (o *migrateDownOpts) validate() error {
 	if o.DatabaseURL == "" {
-		return fmt.Errorf("database URL cannot be empty")
+		return errors.New("database URL cannot be empty")
 	}
 
 	return nil
@@ -170,7 +171,7 @@ type migrateUpOpts struct {
 
 func (o *migrateUpOpts) validate() error {
 	if o.DatabaseURL == "" {
-		return fmt.Errorf("database URL cannot be empty")
+		return errors.New("database URL cannot be empty")
 	}
 
 	return nil

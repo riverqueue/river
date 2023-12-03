@@ -2,6 +2,7 @@ package river_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -26,7 +27,7 @@ type CancellingWorker struct {
 func (w *CancellingWorker) Work(ctx context.Context, job *river.Job[CancellingArgs]) error {
 	if job.Args.ShouldCancel {
 		fmt.Println("cancelling job")
-		return river.JobCancel(fmt.Errorf("this wrapped error message will be persisted to DB"))
+		return river.JobCancel(errors.New("this wrapped error message will be persisted to DB"))
 	}
 	return nil
 }

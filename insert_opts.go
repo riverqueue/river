@@ -1,6 +1,7 @@
 package river
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -133,7 +134,7 @@ func (o *UniqueOpts) validate() error {
 	}
 
 	if o.ByPeriod != time.Duration(0) && o.ByPeriod < 1*time.Second {
-		return fmt.Errorf("JobUniqueOpts.ByPeriod should not be less than 1 second")
+		return errors.New("JobUniqueOpts.ByPeriod should not be less than 1 second")
 	}
 
 	// Job states are typed, but since the underlying type is a string, users

@@ -232,7 +232,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		baselineTime := riverinternaltest.StubTime(&executor.Archetype, time.Now())
 
-		workerErr := fmt.Errorf("job error")
+		workerErr := errors.New("job error")
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
@@ -256,7 +256,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		bundle.jobRow.Attempt = 2
 
-		workerErr := fmt.Errorf("job error")
+		workerErr := errors.New("job error")
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
@@ -275,7 +275,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		bundle.jobRow.Attempt = bundle.jobRow.MaxAttempts
 
-		workerErr := fmt.Errorf("job error")
+		workerErr := errors.New("job error")
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
@@ -295,7 +295,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		// ensure we still have remaining attempts:
 		require.Greater(t, bundle.jobRow.MaxAttempts, bundle.jobRow.Attempt)
 
-		cancelErr := JobCancel(fmt.Errorf("throw away this job"))
+		cancelErr := JobCancel(errors.New("throw away this job"))
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return cancelErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
@@ -338,7 +338,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor, bundle := setup(t)
 		executor.ClientRetryPolicy = &retryPolicyCustom{}
 
-		workerErr := fmt.Errorf("job error")
+		workerErr := errors.New("job error")
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
@@ -355,7 +355,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		executor, bundle := setup(t)
 
-		workerErr := fmt.Errorf("job error")
+		workerErr := errors.New("job error")
 		nextRetryAt := time.Now().Add(1 * time.Hour).UTC()
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, func() time.Time {
 			return nextRetryAt
@@ -376,7 +376,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor, bundle := setup(t)
 		executor.ClientRetryPolicy = &retryPolicyInvalid{}
 
-		workerErr := fmt.Errorf("job error")
+		workerErr := errors.New("job error")
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
@@ -393,7 +393,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		executor, bundle := setup(t)
 
-		workerErr := fmt.Errorf("job error")
+		workerErr := errors.New("job error")
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 		bundle.errorHandler.HandleErrorFunc = func(ctx context.Context, job *rivertype.JobRow, err error) *ErrorHandlerResult {
 			require.Equal(t, workerErr, err)
@@ -415,7 +415,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		executor, bundle := setup(t)
 
-		workerErr := fmt.Errorf("job error")
+		workerErr := errors.New("job error")
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 		bundle.errorHandler.HandleErrorFunc = func(ctx context.Context, job *rivertype.JobRow, err error) *ErrorHandlerResult {
 			return &ErrorHandlerResult{SetCancelled: true}
@@ -436,7 +436,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		executor, bundle := setup(t)
 
-		workerErr := fmt.Errorf("job error")
+		workerErr := errors.New("job error")
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 		bundle.errorHandler.HandleErrorFunc = func(ctx context.Context, job *rivertype.JobRow, err error) *ErrorHandlerResult {
 			panic("error handled panicked!")
@@ -588,7 +588,7 @@ func TestUnknownJobKindError_As(t *testing.T) {
 		t.Parallel()
 
 		var err *UnknownJobKindError
-		require.False(t, errors.As(fmt.Errorf("some other error"), &err))
+		require.False(t, errors.As(errors.New("some other error"), &err))
 	})
 }
 
@@ -606,7 +606,7 @@ func TestUnknownJobKindError_Is(t *testing.T) {
 		t.Parallel()
 
 		err1 := &UnknownJobKindError{Kind: "MyJobArgs"}
-		require.NotErrorIs(t, err1, fmt.Errorf("some other error"))
+		require.NotErrorIs(t, err1, errors.New("some other error"))
 	})
 }
 

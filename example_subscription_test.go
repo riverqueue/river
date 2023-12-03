@@ -2,6 +2,7 @@ package river_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -29,9 +30,9 @@ type SubscriptionWorker struct {
 func (w *SubscriptionWorker) Work(ctx context.Context, job *river.Job[SubscriptionArgs]) error {
 	switch {
 	case job.Args.Cancel:
-		return river.JobCancel(fmt.Errorf("cancelling job"))
+		return river.JobCancel(errors.New("cancelling job"))
 	case job.Args.Fail:
-		return fmt.Errorf("failing job")
+		return errors.New("failing job")
 	}
 	return nil
 }

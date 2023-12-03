@@ -37,7 +37,7 @@ func attemptDropDB(ctx context.Context, mgmtConn *pgx.Conn, dbNameToDelete strin
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	if _, err := mgmtConn.Exec(ctx, fmt.Sprintf("DROP DATABASE %s", dbNameToDelete)); err != nil {
+	if _, err := mgmtConn.Exec(ctx, "DROP DATABASE "+dbNameToDelete); err != nil {
 		if ignoreNonExistent && strings.Contains(err.Error(), fmt.Sprintf("database %q does not exist", dbNameToDelete)) {
 			fmt.Printf("Database %s does not exist, ignoring reset\n", dbNameToDelete)
 			return nil

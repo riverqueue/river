@@ -226,7 +226,7 @@ func Test_Client(t *testing.T) {
 		}
 
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
-			return JobCancel(fmt.Errorf("a persisted internal error"))
+			return JobCancel(errors.New("a persisted internal error"))
 		}))
 
 		startClient(ctx, t, client)
@@ -897,7 +897,7 @@ func Test_Client_InsertMany(t *testing.T) {
 
 		jobs, err := bundle.queries.JobGetByKind(ctx, client.driver.GetDBPool(), (noOpArgs{}).Kind())
 		require.NoError(t, err)
-		require.Len(t, jobs, 2, fmt.Sprintf("Expected to find exactly two jobs of kind: %s", (noOpArgs{}).Kind()))
+		require.Len(t, jobs, 2, "Expected to find exactly two jobs of kind: "+(noOpArgs{}).Kind()) //nolint:goconst
 	})
 
 	t.Run("ErrorsOnDriverWithoutPool", func(t *testing.T) {
@@ -1006,14 +1006,14 @@ func Test_Client_InsertManyTx(t *testing.T) {
 
 		jobs, err := bundle.queries.JobGetByKind(ctx, bundle.tx, (noOpArgs{}).Kind())
 		require.NoError(t, err)
-		require.Len(t, jobs, 2, fmt.Sprintf("Expected to find exactly two jobs of kind: %s", (noOpArgs{}).Kind()))
+		require.Len(t, jobs, 2, "Expected to find exactly two jobs of kind: "+(noOpArgs{}).Kind())
 
 		require.NoError(t, bundle.tx.Commit(ctx))
 
 		// Ensure the jobs are visible outside the transaction:
 		jobs, err = bundle.queries.JobGetByKind(ctx, client.driver.GetDBPool(), (noOpArgs{}).Kind())
 		require.NoError(t, err)
-		require.Len(t, jobs, 2, fmt.Sprintf("Expected to find exactly two jobs of kind: %s", (noOpArgs{}).Kind()))
+		require.Len(t, jobs, 2, "Expected to find exactly two jobs of kind: "+(noOpArgs{}).Kind())
 	})
 
 	// A client's allowed to send nil to their driver so they can, for example,
@@ -1114,7 +1114,7 @@ func Test_Client_ErrorHandler(t *testing.T) {
 	t.Run("ErrorHandler", func(t *testing.T) {
 		t.Parallel()
 
-		handlerErr := fmt.Errorf("job error")
+		handlerErr := errors.New("job error")
 		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
 			return handlerErr
 		})
@@ -1324,7 +1324,7 @@ func Test_Client_Maintenance(t *testing.T) {
 
 		jobs, err := queries.JobGetByKind(ctx, client.driver.GetDBPool(), (periodicJobArgs{}).Kind())
 		require.NoError(t, err)
-		require.Len(t, jobs, 1, fmt.Sprintf("Expected to find exactly one job of kind: %s", (periodicJobArgs{}).Kind()))
+		require.Len(t, jobs, 1, "Expected to find exactly one job of kind: "+(periodicJobArgs{}).Kind())
 	})
 
 	t.Run("PeriodicJobEnqueuerNoOpts", func(t *testing.T) {
@@ -1502,7 +1502,7 @@ func Test_Client_RetryPolicy(t *testing.T) {
 		t.Parallel()
 
 		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
-			return fmt.Errorf("job error")
+			return errors.New("job error")
 		})
 
 		// The default policy would work too, but this takes some variability
@@ -1627,7 +1627,7 @@ func Test_Client_Subscribe(t *testing.T) {
 		// verify.
 		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
 			if strings.HasPrefix(job.Args.Name, "failed") {
-				return fmt.Errorf("job error")
+				return errors.New("job error")
 			}
 			return nil
 		})
@@ -1693,7 +1693,7 @@ func Test_Client_Subscribe(t *testing.T) {
 
 		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
 			if strings.HasPrefix(job.Args.Name, "failed") {
-				return fmt.Errorf("job error")
+				return errors.New("job error")
 			}
 			return nil
 		})
@@ -1734,7 +1734,7 @@ func Test_Client_Subscribe(t *testing.T) {
 
 		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
 			if strings.HasPrefix(job.Args.Name, "failed") {
-				return fmt.Errorf("job error")
+				return errors.New("job error")
 			}
 			return nil
 		})
@@ -2441,7 +2441,7 @@ func Test_NewClient_Validations(t *testing.T) {
 				config.JobTimeout = 7 * time.Hour
 				config.RescueStuckJobsAfter = 6 * time.Hour
 			},
-			wantErr: fmt.Errorf("RescueStuckJobsAfter cannot be less than JobTimeout"),
+			wantErr: errors.New("RescueStuckJobsAfter cannot be less than JobTimeout"),
 		},
 		{
 			name: "RescueStuckJobsAfter increased automatically on a high JobTimeout when not set explicitly",
@@ -2474,7 +2474,7 @@ func Test_NewClient_Validations(t *testing.T) {
 			configFunc: func(config *Config) {
 				config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: -1}}
 			},
-			wantErr: fmt.Errorf("invalid number of workers for queue \"default\": -1"),
+			wantErr: errors.New("invalid number of workers for queue \"default\": -1"),
 		},
 		{
 			name: "Queues can't have limits larger than MaxQueueNumWorkers",
@@ -2502,7 +2502,7 @@ func Test_NewClient_Validations(t *testing.T) {
 			configFunc: func(config *Config) {
 				config.Queues = map[string]QueueConfig{"no-hyphens": {MaxWorkers: 1}}
 			},
-			wantErr: fmt.Errorf("queue name is invalid, see documentation: \"no-hyphens\""),
+			wantErr: errors.New("queue name is invalid, see documentation: \"no-hyphens\""),
 		},
 		{
 			name: "Queues queue names can be letters and numbers joined by underscores",
