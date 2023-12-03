@@ -3,7 +3,6 @@ package maintenance
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -146,7 +145,7 @@ func (s *Reindexer) reindexOne(ctx context.Context, indexName string) error {
 	ctx, cancel := context.WithTimeout(ctx, s.Config.Timeout)
 	defer cancel()
 
-	_, err := s.dbExecutor.Exec(ctx, fmt.Sprintf("REINDEX INDEX CONCURRENTLY %s", indexName))
+	_, err := s.dbExecutor.Exec(ctx, "REINDEX INDEX CONCURRENTLY "+indexName)
 	if err != nil {
 		return err
 	}

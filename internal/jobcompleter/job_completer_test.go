@@ -3,7 +3,6 @@ package jobcompleter
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
@@ -20,7 +19,7 @@ func TestInlineJobCompleter_Complete(t *testing.T) {
 	t.Parallel()
 
 	var attempt int
-	expectedErr := fmt.Errorf("an error from the completer")
+	expectedErr := errors.New("an error from the completer")
 	adapter := &dbadaptertest.TestAdapter{
 		JobSetCompletedIfRunningFunc: func(ctx context.Context, job dbadapter.JobToComplete) (*dbsqlc.RiverJob, error) {
 			require.Equal(t, int64(1), job.ID)
@@ -69,7 +68,7 @@ func TestAsyncJobCompleter_Complete(t *testing.T) {
 	inputCh := make(chan jobInput)
 	resultCh := make(chan error)
 
-	expectedErr := fmt.Errorf("an error from the completer")
+	expectedErr := errors.New("an error from the completer")
 
 	go func() {
 		riverinternaltest.WaitOrTimeout(t, inputCh)

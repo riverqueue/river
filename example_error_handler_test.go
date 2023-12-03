@@ -2,6 +2,7 @@ package river_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -48,7 +49,7 @@ type ErroringWorker struct {
 func (w *ErroringWorker) Work(ctx context.Context, job *river.Job[ErroringArgs]) error {
 	switch {
 	case job.Args.ShouldError:
-		return fmt.Errorf("this job errored")
+		return errors.New("this job errored")
 	case job.Args.ShouldPanic:
 		panic("this job panicked")
 	}

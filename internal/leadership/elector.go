@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -201,7 +200,7 @@ func (e *Elector) keepLeadership(ctx context.Context, leadershipNotificationChan
 				continue
 			}
 			if !reelected {
-				return fmt.Errorf("lost leadership with no error")
+				return errors.New("lost leadership with no error")
 			}
 			reelectionErrCount = 0
 		}

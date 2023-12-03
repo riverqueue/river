@@ -45,7 +45,7 @@ runtime.NumCPU() (a choice that comes from pgx's default connection pool size).
 			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
 
-			if _, err := mgmtConn.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", dbName)); err != nil {
+			if _, err := mgmtConn.Exec(ctx, "CREATE DATABASE "+dbName); err != nil {
 				return fmt.Errorf("error running `CREATE DATABASE %s`: %w", dbName, err)
 			}
 			fmt.Printf("Created database %s.\n", dbName)
@@ -93,5 +93,5 @@ func dbURL(dbName string) string {
 	if dbName == "" {
 		return "postgres:///postgres"
 	}
-	return fmt.Sprintf("postgres:///%s", dbName)
+	return "postgres:///" + dbName
 }

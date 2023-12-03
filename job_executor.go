@@ -27,7 +27,7 @@ type UnknownJobKindError struct {
 
 // Error returns the error string.
 func (e *UnknownJobKindError) Error() string {
-	return fmt.Sprintf("job kind is not registered in the client's Workers bundle: %s", e.Kind)
+	return "job kind is not registered in the client's Workers bundle: " + e.Kind
 }
 
 // Is implements the interface used by errors.Is to determine if errors are
@@ -54,7 +54,7 @@ type jobCancelError struct {
 
 func (e *jobCancelError) Error() string {
 	// should not ever be called, but add a prefix just in case:
-	return fmt.Sprintf("jobCancelError: %s", e.err.Error())
+	return "jobCancelError: " + e.err.Error()
 }
 
 func (e *jobCancelError) Is(target error) bool {

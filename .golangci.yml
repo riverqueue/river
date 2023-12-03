@@ -78,6 +78,11 @@ linters-settings:
       rules:
         json: snake
 
+  testifylint:
+    enable-all: true
+    disable:
+      - go-require
+
   varnamelen:
     ignore-names:
       - db

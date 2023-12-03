@@ -171,13 +171,13 @@ type Config struct {
 
 func (c *Config) validate() error {
 	if c.CancelledJobRetentionPeriod < 0 {
-		return fmt.Errorf("CancelledJobRetentionPeriod time cannot be less than zero")
+		return errors.New("CancelledJobRetentionPeriod time cannot be less than zero")
 	}
 	if c.CompletedJobRetentionPeriod < 0 {
-		return fmt.Errorf("CompletedJobRetentionPeriod cannot be less than zero")
+		return errors.New("CompletedJobRetentionPeriod cannot be less than zero")
 	}
 	if c.DiscardedJobRetentionPeriod < 0 {
-		return fmt.Errorf("DiscardedJobRetentionPeriod cannot be less than zero")
+		return errors.New("DiscardedJobRetentionPeriod cannot be less than zero")
 	}
 	if c.FetchCooldown < FetchCooldownMin {
 		return fmt.Errorf("FetchCooldown must be at least %s", FetchCooldownMin)
@@ -549,7 +549,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 // using StopAndCancel, there's no need to also call Stop.
 func (c *Client[TTx]) Start(ctx context.Context) error {
 	if !c.config.willExecuteJobs() {
-		return fmt.Errorf("client Queues and Workers must be configured for a client to start working")
+		return errors.New("client Queues and Workers must be configured for a client to start working")
 	}
 	if c.config.Workers != nil && len(c.config.Workers.workersMap) < 1 {
 		return errors.New("at least one Worker must be added to the Workers bundle")
@@ -986,7 +986,7 @@ func insertParamsFromArgsAndOptions(args JobArgs, insertOpts *InsertOpts) (*dbad
 	return insertParams, nil
 }
 
-var errInsertNoDriverDBPool = fmt.Errorf("driver must have non-nil database pool to use Insert and InsertMany (try InsertTx or InsertManyTx instead")
+var errInsertNoDriverDBPool = errors.New("driver must have non-nil database pool to use Insert and InsertMany (try InsertTx or InsertManyTx instead")
 
 // Insert inserts a new job with the provided args. Job opts can be used to
 // override any defaults that may have been provided by an implementation of
