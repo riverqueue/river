@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.12] - 2023-12-02
+
+### Added
+
+- Added `river/rivermigrate` package to enable migrations from Go code as an alternative to using the CLI. PR #67.
+
 ## [0.0.11] - 2023-12-02
 
 ### Added

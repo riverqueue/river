@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"runtime"
 	"time"
@@ -12,8 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 
-	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/dbmigrate"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivermigrate"
 )
 
 func init() { //nolint:gochecknoinits
@@ -57,16 +56,9 @@ runtime.NumCPU() (a choice that comes from pgx's default connection pool size).
 			}
 			defer dbPool.Close()
 
-			archetype := &baseservice.Archetype{
-				Logger: slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-					Level: slog.LevelWarn,
-				})),
-				TimeNowUTC: func() time.Time { return time.Now().UTC() },
-			}
+			migrator := rivermigrate.New(riverpgxv5.New(dbPool), nil)
 
-			migrator := dbmigrate.NewMigrator(archetype)
-
-			if _, err = migrator.Up(ctx, dbPool, &dbmigrate.MigrateOptions{}); err != nil {
+			if _, err = migrator.Migrate(ctx, rivermigrate.DirectionUp, &rivermigrate.MigrateOpts{}); err != nil {
 				return err
 			}
 			fmt.Printf("Loaded schema in %s.\n", dbName)
