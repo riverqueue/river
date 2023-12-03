@@ -32,7 +32,9 @@ queries. After changing an sqlc `.sql` file, generate Go with:
 ```shell
 git checkout master && git pull --rebase
 VERSION=v0.0.x
+git tag riverdriver/VERSION -m "release riverdriver/VERSION"
 git tag riverdriver/riverpgxv5/$VERSION -m "release riverdriver/riverpgxv5/$VERSION"
+git tag riverdriver/riverdatabasesql/$VERSION -m "release riverdriver/riverdatabasesql/$VERSION"
 git tag $VERSION
 git push --tags
 ```

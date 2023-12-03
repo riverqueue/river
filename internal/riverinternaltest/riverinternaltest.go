@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"net/url"
 	"os"
 	"runtime"
 	"sync"
@@ -62,17 +63,37 @@ func BaseServiceArchetype(tb testing.TB) *baseservice.Archetype {
 }
 
 func DatabaseConfig(databaseName string) *pgxpool.Config {
-	databaseURL := valutil.ValOrDefault(os.Getenv("TEST_DATABASE_URL"), "postgres:///river_testdb?sslmode=disable")
-
-	config, err := pgxpool.ParseConfig(databaseURL)
+	config, err := pgxpool.ParseConfig(DatabaseURL(databaseName))
 	if err != nil {
 		panic(fmt.Sprintf("error parsing database URL: %v", err))
 	}
 	config.MaxConns = dbPoolMaxConns
 	config.ConnConfig.ConnectTimeout = 10 * time.Second
-	config.ConnConfig.Database = databaseName
 	config.ConnConfig.RuntimeParams["timezone"] = "UTC"
 	return config
+}
+
+// DatabaseURL gets a test database URL from TEST_DATABASE_URL or falls back on
+// a default pointing to `river_testdb`. If databaseName is set, it replaces the
+// database in the URL, although the host and other parameters are preserved.
+//
+// Most of the time DatabaseConfig should be used instead of this function, but
+// it may be useful in non-pgx situations like for examples showing the use of
+// `database/sql`.
+func DatabaseURL(databaseName string) string {
+	u, err := url.Parse(valutil.ValOrDefault(
+		os.Getenv("TEST_DATABASE_URL"),
+		"postgres://localhost/river_testdb?sslmode=disable"),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	if databaseName != "" {
+		u.Path = databaseName
+	}
+
+	return u.String()
 }
 
 // DiscardContinuously drains continuously out of the given channel and discards

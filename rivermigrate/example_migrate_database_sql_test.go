@@ -2,34 +2,35 @@ package rivermigrate_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/riverqueue/river/rivermigrate"
 )
 
-// Example_migrate demonstrates the use of River's Go migration API by migrating
-// up and down.
-func Example_migrate() {
+// Example_migrateDatabaseSQL demonstrates the use of River's Go migration API
+// through Go's built-in database/sql package.
+func Example_migrateDatabaseSQL() {
 	ctx := context.Background()
 
-	dbPool, err := pgxpool.NewWithConfig(ctx, riverinternaltest.DatabaseConfig("river_testdb_example"))
+	dbPool, err := sql.Open("pgx", riverinternaltest.DatabaseURL("river_testdb_example"))
 	if err != nil {
 		panic(err)
 	}
 	defer dbPool.Close()
 
-	tx, err := dbPool.Begin(ctx)
+	tx, err := dbPool.BeginTx(ctx, nil)
 	if err != nil {
 		panic(err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 
-	migrator := rivermigrate.New(riverpgxv5.New(dbPool), nil)
+	migrator := rivermigrate.New(riverdatabasesql.New(dbPool), nil)
 
 	// Our test database starts with a full River schema. Drop it so that we can
 	// demonstrate working migrations. This isn't necessary outside this test.
@@ -68,13 +69,4 @@ func Example_migrate() {
 	// Migrated [DOWN] version 3
 	// Migrated [DOWN] version 2
 	// Migrated [DOWN] version 1
-}
-
-func dropRiverSchema[TTx any](ctx context.Context, migrator *rivermigrate.Migrator[TTx], tx TTx) {
-	_, err := migrator.MigrateTx(ctx, tx, rivermigrate.DirectionDown, &rivermigrate.MigrateOpts{
-		TargetVersion: -1,
-	})
-	if err != nil {
-		panic(err)
-	}
 }

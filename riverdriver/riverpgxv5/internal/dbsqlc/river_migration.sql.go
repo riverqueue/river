@@ -9,17 +9,30 @@ import (
 	"context"
 )
 
-const riverMigrationDeleteByVersionMany = `-- name: RiverMigrationDeleteByVersionMany :one
+const riverMigrationDeleteByVersionMany = `-- name: RiverMigrationDeleteByVersionMany :many
 DELETE FROM river_migration
 WHERE version = any($1::bigint[])
 RETURNING id, created_at, version
 `
 
-func (q *Queries) RiverMigrationDeleteByVersionMany(ctx context.Context, db DBTX, version []int64) (*RiverMigration, error) {
-	row := db.QueryRow(ctx, riverMigrationDeleteByVersionMany, version)
-	var i RiverMigration
-	err := row.Scan(&i.ID, &i.CreatedAt, &i.Version)
-	return &i, err
+func (q *Queries) RiverMigrationDeleteByVersionMany(ctx context.Context, db DBTX, version []int64) ([]*RiverMigration, error) {
+	rows, err := db.Query(ctx, riverMigrationDeleteByVersionMany, version)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverMigration
+	for rows.Next() {
+		var i RiverMigration
+		if err := rows.Scan(&i.ID, &i.CreatedAt, &i.Version); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const riverMigrationGetAll = `-- name: RiverMigrationGetAll :many
@@ -90,4 +103,16 @@ func (q *Queries) RiverMigrationInsertMany(ctx context.Context, db DBTX, version
 		return nil, err
 	}
 	return items, nil
+}
+
+const tableExists = `-- name: TableExists :one
+SELECT CASE WHEN to_regclass($1) IS NULL THEN false
+            ELSE true END
+`
+
+func (q *Queries) TableExists(ctx context.Context, db DBTX, tableName string) (bool, error) {
+	row := db.QueryRow(ctx, tableExists, tableName)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
 }

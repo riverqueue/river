@@ -5,7 +5,7 @@ CREATE TABLE river_migration(
   CONSTRAINT version CHECK (version >= 1)
 );
 
--- name: RiverMigrationDeleteByVersionMany :one
+-- name: RiverMigrationDeleteByVersionMany :many
 DELETE FROM river_migration
 WHERE version = any(@version::bigint[])
 RETURNING *;
@@ -29,3 +29,7 @@ INSERT INTO river_migration (
 SELECT
   unnest(@version::bigint[])
 RETURNING *;
+
+-- name: TableExists :one
+SELECT CASE WHEN to_regclass(@table_name) IS NULL THEN false
+            ELSE true END;

@@ -1,0 +1,24 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    queries:
+      - ../../../riverpgxv5/internal/dbsqlc/river_migration.sql
+    schema:
+      - ../../../riverpgxv5/internal/dbsqlc/river_migration.sql
+    gen:
+      go:
+        package: "dbsqlc"
+        sql_package: "database/sql"
+        out: "."
+        emit_exact_table_names: true
+        emit_methods_with_db_argument: true
+        emit_result_struct_pointers: true
+
+        overrides:
+          - db_type: "timestamptz"
+            go_type: "time.Time"
+          - db_type: "timestamptz"
+            go_type:
+              type: "time.Time"
+              pointer: true
+            nullable: true
