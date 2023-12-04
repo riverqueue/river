@@ -9,7 +9,7 @@ require (
 	github.com/jackc/pgx/v5 v5.5.0
 	github.com/jackc/puddle/v2 v2.2.1
 	github.com/oklog/ulid/v2 v2.1.0
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.0.10
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.0.12
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cobra v1.8.0
 	github.com/stretchr/testify v1.8.4
