@@ -26,6 +26,14 @@ func JobRowFromInternal(internal *RiverJob) *rivertype.JobRow {
 	}
 }
 
+func JobRowsFromInternal(internal []*RiverJob) []*rivertype.JobRow {
+	rows := make([]*rivertype.JobRow, len(internal))
+	for i, j := range internal {
+		rows[i] = JobRowFromInternal(j)
+	}
+	return rows
+}
+
 func AttemptErrorFromInternal(e *AttemptError) rivertype.AttemptError {
 	return rivertype.AttemptError{
 		At:      e.At,

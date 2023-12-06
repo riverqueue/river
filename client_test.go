@@ -1262,6 +1262,219 @@ func Test_Client_InsertManyTx(t *testing.T) {
 	})
 }
 
+func Test_Client_JobList(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx     = context.Background()
+		queries = dbsqlc.New()
+	)
+
+	type insertJobParams struct {
+		AttemptedAt *time.Time
+		FinalizedAt *time.Time
+		Kind        string
+		Queue       string
+		ScheduledAt *time.Time
+		State       dbsqlc.JobState
+	}
+
+	insertJob := func(ctx context.Context, dbtx dbsqlc.DBTX, params insertJobParams) *dbsqlc.RiverJob {
+		job, err := queries.JobInsert(ctx, dbtx, dbsqlc.JobInsertParams{
+			Attempt:     1,
+			AttemptedAt: params.AttemptedAt,
+			FinalizedAt: params.FinalizedAt,
+			Kind:        valutil.FirstNonZero(params.Kind, "test_kind"),
+			MaxAttempts: rivercommon.MaxAttemptsDefault,
+			Priority:    rivercommon.PriorityDefault,
+			Queue:       QueueDefault,
+			ScheduledAt: params.ScheduledAt,
+			State:       valutil.FirstNonZero(params.State, dbsqlc.JobStateAvailable),
+		})
+		require.NoError(t, err)
+		return job
+	}
+
+	type testBundle struct{}
+
+	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+		t.Helper()
+
+		config := newTestConfig(t, nil)
+		client := newTestClient(ctx, t, config)
+
+		return client, &testBundle{}
+	}
+
+	t.Run("FiltersByState", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		job1 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateAvailable})
+		job2 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateAvailable})
+		job3 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateRunning})
+
+		jobs, err := client.JobList(ctx, NewJobListParams().State(JobStateAvailable))
+		require.NoError(t, err)
+		require.Len(t, jobs, 2)
+		// jobs ordered by ScheduledAt ASC by default
+		require.Equal(t, job1.ID, jobs[0].ID)
+		require.Equal(t, job2.ID, jobs[1].ID)
+
+		jobs, err = client.JobList(ctx, NewJobListParams().State(JobStateRunning))
+		require.NoError(t, err)
+		require.Len(t, jobs, 1)
+		require.Equal(t, job3.ID, jobs[0].ID)
+	})
+
+	t.Run("SortsAvailableRetryableAndScheduledJobsByScheduledAt", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		now := time.Now().UTC()
+
+		states := map[rivertype.JobState]dbsqlc.JobState{
+			JobStateAvailable: dbsqlc.JobStateAvailable,
+			JobStateRetryable: dbsqlc.JobStateRetryable,
+			JobStateScheduled: dbsqlc.JobStateScheduled,
+		}
+		for state, dbState := range states {
+			job1 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbState, ScheduledAt: ptrutil.Ptr(now)})
+			job2 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbState, ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
+
+			jobs, err := client.JobList(ctx, NewJobListParams().State(state))
+			require.NoError(t, err)
+			require.Len(t, jobs, 2)
+			require.Equal(t, job2.ID, jobs[0].ID)
+			require.Equal(t, job1.ID, jobs[1].ID)
+
+			jobs, err = client.JobList(ctx, NewJobListParams().State(state).OrderBy(JobListOrderByTime, SortOrderDesc))
+			require.NoError(t, err)
+			require.Len(t, jobs, 2)
+			require.Equal(t, job1.ID, jobs[0].ID)
+			require.Equal(t, job2.ID, jobs[1].ID)
+		}
+	})
+
+	t.Run("SortsCancelledCompletedAndDiscardedJobsByFinalizedAt", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		now := time.Now().UTC()
+
+		states := map[rivertype.JobState]dbsqlc.JobState{
+			JobStateCancelled: dbsqlc.JobStateCancelled,
+			JobStateCompleted: dbsqlc.JobStateCompleted,
+			JobStateDiscarded: dbsqlc.JobStateDiscarded,
+		}
+		for state, dbState := range states {
+			job1 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbState, FinalizedAt: ptrutil.Ptr(now.Add(-10 * time.Second))})
+			job2 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbState, FinalizedAt: ptrutil.Ptr(now.Add(-15 * time.Second))})
+
+			jobs, err := client.JobList(ctx, NewJobListParams().State(state))
+			require.NoError(t, err)
+			require.Len(t, jobs, 2)
+			require.Equal(t, job2.ID, jobs[0].ID)
+			require.Equal(t, job1.ID, jobs[1].ID)
+
+			jobs, err = client.JobList(ctx, NewJobListParams().State(state).OrderBy(JobListOrderByTime, SortOrderDesc))
+			require.NoError(t, err)
+			require.Len(t, jobs, 2)
+			require.Equal(t, job1.ID, jobs[0].ID)
+			require.Equal(t, job2.ID, jobs[1].ID)
+		}
+	})
+
+	t.Run("SortsRunningJobsByAttemptedAt", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		now := time.Now().UTC()
+		job1 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateRunning, AttemptedAt: ptrutil.Ptr(now)})
+		job2 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateRunning, AttemptedAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
+
+		jobs, err := client.JobList(ctx, NewJobListParams().State(JobStateRunning))
+		require.NoError(t, err)
+		require.Len(t, jobs, 2)
+		require.Equal(t, job2.ID, jobs[0].ID)
+		require.Equal(t, job1.ID, jobs[1].ID)
+
+		jobs, err = client.JobList(ctx, NewJobListParams().State(JobStateRunning).OrderBy(JobListOrderByTime, SortOrderDesc))
+		require.NoError(t, err)
+		require.Len(t, jobs, 2)
+		// Sort order was explicitly reversed:
+		require.Equal(t, job1.ID, jobs[0].ID)
+		require.Equal(t, job2.ID, jobs[1].ID)
+	})
+
+	t.Run("WithNilParamsFiltersToAvailableByDefault", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		now := time.Now().UTC()
+		job1 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateAvailable, ScheduledAt: ptrutil.Ptr(now)})
+		job2 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateAvailable, ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
+		_ = insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateRunning})
+
+		jobs, err := client.JobList(ctx, nil)
+		require.NoError(t, err)
+		require.Len(t, jobs, 2)
+		// sort order is switched by ScheduledAt values:
+		require.Equal(t, job2.ID, jobs[0].ID)
+		require.Equal(t, job1.ID, jobs[1].ID)
+	})
+
+	t.Run("PaginatesWithAfter", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		now := time.Now().UTC()
+		job1 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateAvailable, ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
+		job2 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateAvailable, ScheduledAt: ptrutil.Ptr(now)})
+		job3 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateRunning, AttemptedAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
+		job4 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateRunning, AttemptedAt: ptrutil.Ptr(now)})
+		job5 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateCompleted, FinalizedAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
+		job6 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateCompleted, FinalizedAt: ptrutil.Ptr(now)})
+		jobRow1 := dbsqlc.JobRowFromInternal(job1)
+		jobRow3 := dbsqlc.JobRowFromInternal(job3)
+		jobRow5 := dbsqlc.JobRowFromInternal(job5)
+
+		jobs, err := client.JobList(ctx, NewJobListParams().After(JobListPaginationCursorFromJob(jobRow1)))
+		require.NoError(t, err)
+		require.Len(t, jobs, 1)
+		require.Equal(t, job2.ID, jobs[0].ID)
+
+		jobs, err = client.JobList(ctx, NewJobListParams().State(rivertype.JobStateRunning).After(JobListPaginationCursorFromJob(jobRow3)))
+		require.NoError(t, err)
+		require.Len(t, jobs, 1)
+		require.Equal(t, job4.ID, jobs[0].ID)
+
+		jobs, err = client.JobList(ctx, NewJobListParams().State(rivertype.JobStateCompleted).After(JobListPaginationCursorFromJob(jobRow5)))
+		require.NoError(t, err)
+		require.Len(t, jobs, 1)
+		require.Equal(t, job6.ID, jobs[0].ID)
+	})
+
+	t.Run("WithCancelledContext", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		ctx, cancel := context.WithCancel(ctx)
+		cancel() // cancel immediately
+
+		jobs, err := client.JobList(ctx, NewJobListParams().State(JobStateRunning))
+		require.ErrorIs(t, context.Canceled, err)
+		require.Empty(t, jobs)
+	})
+}
+
 func Test_Client_ErrorHandler(t *testing.T) {
 	t.Parallel()
 

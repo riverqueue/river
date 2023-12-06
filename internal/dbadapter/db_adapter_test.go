@@ -18,7 +18,9 @@ import (
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/internal/util/ptrutil"
+	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivertype"
 )
 
 func Test_StandardAdapter_JobCancel(t *testing.T) {
@@ -727,6 +729,142 @@ func Test_StandardAdapter_FetchIsPrioritized(t *testing.T) {
 	require.Equal(t, int16(3), jobs[0].Priority, "expected final job to have priority 2")
 }
 
+func Test_StandardAdapter_JobList_and_JobListTx(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		baselineTime time.Time // baseline time frozen at now when setup is called
+		ex           dbutil.Executor
+		tx           pgx.Tx
+		jobs         []*dbsqlc.RiverJob
+	}
+
+	setup := func(t *testing.T, tx pgx.Tx) (*StandardAdapter, *testBundle) {
+		t.Helper()
+
+		bundle := &testBundle{
+			baselineTime: time.Now(),
+			ex:           tx,
+			tx:           tx,
+		}
+
+		adapter := NewStandardAdapter(riverinternaltest.BaseServiceArchetype(t), testAdapterConfig(bundle.ex))
+		adapter.TimeNowUTC = func() time.Time { return bundle.baselineTime }
+
+		params := makeFakeJobInsertParams(1, &makeFakeJobInsertParamsOpts{Queue: ptrutil.Ptr("priority")})
+		job1, err := adapter.JobInsert(ctx, params)
+		require.NoError(t, err)
+
+		params = makeFakeJobInsertParams(2, nil)
+		job2, err := adapter.JobInsert(ctx, params)
+		require.NoError(t, err)
+
+		params = makeFakeJobInsertParams(3, nil)
+		job3, err := adapter.JobInsert(ctx, params)
+		require.NoError(t, err)
+
+		params = makeFakeJobInsertParams(4, &makeFakeJobInsertParamsOpts{State: ptrutil.Ptr(dbsqlc.JobStateRunning)})
+		job4, err := adapter.JobInsert(ctx, params)
+		require.NoError(t, err)
+
+		bundle.jobs = []*dbsqlc.RiverJob{job1.Job, job2.Job, job3.Job, job4.Job}
+
+		return adapter, bundle
+	}
+
+	setupTx := func(t *testing.T) (*StandardAdapter, *testBundle) {
+		t.Helper()
+		return setup(t, riverinternaltest.TestTx(ctx, t))
+	}
+
+	type testListFunc func(jobs []*dbsqlc.RiverJob, err error)
+
+	execTest := func(ctx context.Context, t *testing.T, adapter *StandardAdapter, params JobListParams, tx pgx.Tx, testFunc testListFunc) {
+		t.Helper()
+		t.Logf("testing JobList")
+		jobs, err := adapter.JobList(ctx, params)
+		testFunc(jobs, err)
+
+		t.Logf("testing JobListTx")
+		// use a sub-transaction in case it's rolled back or errors:
+		subTx, err := tx.Begin(ctx)
+		require.NoError(t, err)
+		defer subTx.Rollback(ctx)
+		jobs, err = adapter.JobListTx(ctx, subTx, params)
+		testFunc(jobs, err)
+	}
+
+	t.Run("Minimal", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, bundle := setupTx(t)
+
+		params := JobListParams{
+			LimitCount: 2,
+			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderDesc}},
+			State:      rivertype.JobStateAvailable,
+		}
+
+		execTest(ctx, t, adapter, params, bundle.tx, func(jobs []*dbsqlc.RiverJob, err error) {
+			require.NoError(t, err)
+
+			// job 1 is excluded due to pagination limit of 2, while job 4 is excluded
+			// due to its state:
+			job2 := bundle.jobs[1]
+			job3 := bundle.jobs[2]
+
+			returnedIDs := sliceutil.Map(jobs, func(j *dbsqlc.RiverJob) int64 { return j.ID })
+			require.Equal(t, []int64{job3.ID, job2.ID}, returnedIDs)
+		})
+	})
+
+	t.Run("ComplexConditionsWithNamedArgs", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, bundle := setupTx(t)
+
+		params := JobListParams{
+			Conditions: "jsonb_extract_path(args, VARIADIC @paths1::text[]) = @value1::jsonb",
+			LimitCount: 2,
+			NamedArgs:  map[string]any{"paths1": []string{"job_num"}, "value1": 2},
+			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderDesc}},
+			State:      rivertype.JobStateAvailable,
+		}
+
+		execTest(ctx, t, adapter, params, bundle.tx, func(jobs []*dbsqlc.RiverJob, err error) {
+			require.NoError(t, err)
+
+			job2 := bundle.jobs[1]
+			returnedIDs := sliceutil.Map(jobs, func(j *dbsqlc.RiverJob) int64 { return j.ID })
+			require.Equal(t, []int64{job2.ID}, returnedIDs)
+		})
+	})
+
+	t.Run("ConditionsWithQueues", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, bundle := setupTx(t)
+
+		params := JobListParams{
+			Conditions: "finalized_at IS NULL",
+			LimitCount: 2,
+			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderDesc}},
+			Queues:     []string{"priority"},
+			State:      rivertype.JobStateAvailable,
+		}
+
+		execTest(ctx, t, adapter, params, bundle.tx, func(jobs []*dbsqlc.RiverJob, err error) {
+			require.NoError(t, err)
+
+			job1 := bundle.jobs[0]
+			returnedIDs := sliceutil.Map(jobs, func(j *dbsqlc.RiverJob) int64 { return j.ID })
+			require.Equal(t, []int64{job1.ID}, returnedIDs)
+		})
+	})
+}
+
 func Test_StandardAdapter_JobSetStateCompleted(t *testing.T) {
 	t.Parallel()
 
@@ -1048,6 +1186,7 @@ func testAdapterConfig(ex dbutil.Executor) *StandardAdapterConfig {
 type makeFakeJobInsertParamsOpts struct {
 	Queue       *string
 	ScheduledAt *time.Time
+	State       *dbsqlc.JobState
 }
 
 func makeFakeJobInsertParams(i int, opts *makeFakeJobInsertParamsOpts) *JobInsertParams {
@@ -1063,6 +1202,6 @@ func makeFakeJobInsertParams(i int, opts *makeFakeJobInsertParamsOpts) *JobInser
 		Priority:    rivercommon.PriorityDefault,
 		Queue:       ptrutil.ValOrDefault(opts.Queue, rivercommon.QueueDefault),
 		ScheduledAt: ptrutil.ValOrDefault(opts.ScheduledAt, time.Time{}),
-		State:       dbsqlc.JobStateAvailable,
+		State:       ptrutil.ValOrDefault(opts.State, dbsqlc.JobStateAvailable),
 	}
 }
