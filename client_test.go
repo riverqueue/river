@@ -1952,7 +1952,12 @@ func Test_Client_JobCompletion(t *testing.T) {
 		var dbPool *pgxpool.Pool
 		now := time.Now().UTC()
 		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
-			_, err := queries.JobSetCompleted(ctx, dbPool, dbsqlc.JobSetCompletedParams{ID: job.ID, FinalizedAt: now})
+			_, err := queries.JobSetState(ctx, dbPool, dbsqlc.JobSetStateParams{
+				ID:                  job.ID,
+				FinalizedAtDoUpdate: true,
+				FinalizedAt:         &now,
+				State:               dbsqlc.JobStateCompleted,
+			})
 			require.NoError(err)
 			return nil
 		})
@@ -2031,10 +2036,13 @@ func Test_Client_JobCompletion(t *testing.T) {
 		var dbPool *pgxpool.Pool
 		now := time.Now().UTC()
 		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
-			_, err := queries.JobSetDiscarded(ctx, dbPool, dbsqlc.JobSetDiscardedParams{
-				ID:          job.ID,
-				Error:       []byte("{\"error\": \"oops\"}"),
-				FinalizedAt: now,
+			_, err := queries.JobSetState(ctx, dbPool, dbsqlc.JobSetStateParams{
+				ID:                  job.ID,
+				ErrorDoUpdate:       true,
+				Error:               []byte("{\"error\": \"oops\"}"),
+				FinalizedAtDoUpdate: true,
+				FinalizedAt:         &now,
+				State:               dbsqlc.JobStateDiscarded,
 			})
 			require.NoError(err)
 			return errors.New("oops")

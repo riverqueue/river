@@ -495,7 +495,7 @@ func Test_StandardAdapter_FetchIsPrioritized(t *testing.T) {
 	require.Equal(t, int16(3), jobs[0].Priority, "expected final job to have priority 2")
 }
 
-func Test_StandardAdapter_JobSetCompletedIfRunning(t *testing.T) {
+func Test_StandardAdapter_JobSetStateCompleted(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -535,7 +535,7 @@ func Test_StandardAdapter_JobSetCompletedIfRunning(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, dbsqlc.JobStateRunning, res.Job.State)
 
-		jAfter, err := adapter.JobSetCompletedIfRunning(ctx, JobToComplete{ID: res.Job.ID, FinalizedAt: bundle.baselineTime})
+		jAfter, err := adapter.JobSetStateIfRunning(ctx, JobSetStateCompleted(res.Job.ID, bundle.baselineTime))
 		require.NoError(t, err)
 		require.Equal(t, dbsqlc.JobStateCompleted, jAfter.State)
 		require.WithinDuration(t, bundle.baselineTime, *jAfter.FinalizedAt, time.Microsecond)
@@ -556,7 +556,7 @@ func Test_StandardAdapter_JobSetCompletedIfRunning(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, dbsqlc.JobStateRetryable, res.Job.State)
 
-		jAfter, err := adapter.JobSetCompletedIfRunning(ctx, JobToComplete{ID: res.Job.ID, FinalizedAt: bundle.baselineTime})
+		jAfter, err := adapter.JobSetStateIfRunning(ctx, JobSetStateCompleted(res.Job.ID, bundle.baselineTime))
 		require.NoError(t, err)
 		require.Equal(t, dbsqlc.JobStateRetryable, jAfter.State)
 		require.Nil(t, jAfter.FinalizedAt)
@@ -567,34 +567,7 @@ func Test_StandardAdapter_JobSetCompletedIfRunning(t *testing.T) {
 	})
 }
 
-func Test_StandardAdapter_JobCompleteMany(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	tx := riverinternaltest.TestTx(ctx, t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	adapter := NewStandardAdapter(riverinternaltest.BaseServiceArchetype(t), testAdapterConfig(tx))
-	now := time.Now()
-	jobsToComplete := make([]JobToComplete, 3)
-	for i := 0; i < len(jobsToComplete); i++ {
-		res, err := adapter.JobInsert(ctx, makeFakeJobInsertParams(i))
-		require.NoError(t, err)
-		jobsToComplete[i] = JobToComplete{ID: res.Job.ID, FinalizedAt: now.Add(time.Duration(i) * time.Second)}
-	}
-
-	require.NoError(t, adapter.JobCompleteMany(ctx, jobsToComplete...))
-	for i := 0; i < len(jobsToComplete); i++ {
-		job, err := adapter.queries.JobGetByID(ctx, tx, jobsToComplete[i].ID)
-		require.NoError(t, err)
-		require.Equal(t, dbsqlc.JobStateCompleted, job.State)
-		require.WithinDuration(t, jobsToComplete[i].FinalizedAt, *job.FinalizedAt, time.Microsecond)
-	}
-}
-
-func Test_StandardAdapter_JobSetErroredIfRunning(t *testing.T) {
+func Test_StandardAdapter_JobSetStateErrored(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -643,7 +616,7 @@ func Test_StandardAdapter_JobSetErroredIfRunning(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, dbsqlc.JobStateRunning, res.Job.State)
 
-		jAfter, err := adapter.JobSetErroredIfRunning(ctx, res.Job.ID, bundle.baselineTime, bundle.errPayload)
+		jAfter, err := adapter.JobSetStateIfRunning(ctx, JobSetStateErrored(res.Job.ID, bundle.baselineTime, bundle.errPayload))
 		require.NoError(t, err)
 		require.Equal(t, dbsqlc.JobStateRetryable, jAfter.State)
 		require.WithinDuration(t, bundle.baselineTime, jAfter.ScheduledAt, time.Microsecond)
@@ -672,7 +645,7 @@ func Test_StandardAdapter_JobSetErroredIfRunning(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, dbsqlc.JobStateRetryable, res.Job.State)
 
-		jAfter, err := adapter.JobSetErroredIfRunning(ctx, res.Job.ID, bundle.baselineTime, bundle.errPayload)
+		jAfter, err := adapter.JobSetStateIfRunning(ctx, JobSetStateErrored(res.Job.ID, bundle.baselineTime, bundle.errPayload))
 		require.NoError(t, err)
 		require.Equal(t, dbsqlc.JobStateRetryable, jAfter.State)
 		require.WithinDuration(t, params.ScheduledAt, jAfter.ScheduledAt, time.Microsecond)

@@ -31,19 +31,6 @@ CREATE TABLE river_job(
   CONSTRAINT kind_length CHECK (char_length(kind) > 0 AND char_length(kind) < 128)
 );
 
--- name: JobCompleteMany :exec
-UPDATE river_job
-SET
-  finalized_at = updated.finalized_at,
-  state = updated.state
-FROM (
-  SELECT
-    unnest(@id::bigint[]) AS id,
-    unnest(@finalized_at::timestamptz[]) AS finalized_at,
-    'completed'::river_job_state AS state
-) AS updated
-WHERE river_job.id = updated.id;
-
 -- name: JobCountRunning :one
 SELECT
   count(*)
@@ -238,226 +225,42 @@ FROM (
 SELECT pg_notify('river_insert', json_build_object('queue', queue)::text)
 FROM river_job_scheduled) AS notifications_sent;
 
--- name: JobSetCancelledIfRunning :one
-WITH job_to_update AS (
-  SELECT
-    id,
-    finalized_at,
-    state
-  FROM
-    river_job
-  WHERE
-    id = @id::bigint
-  FOR UPDATE
-),
-updated_job AS (
-  UPDATE
-    river_job
-  SET
-    finalized_at = @finalized_at::timestamptz,
-    errors = array_append(errors, @error::jsonb),
-    state = 'cancelled'::river_job_state
-  FROM
-    job_to_update
-  WHERE
-    river_job.id = job_to_update.id
-    AND river_job.state = 'running'::river_job_state
-  RETURNING river_job.*
-)
-(
-  SELECT
-    river_job.*
-  FROM
-    river_job
-  WHERE
-    river_job.id = @id::bigint
-  UNION
-  SELECT
-    updated_job.*
-  FROM
-    updated_job
-) ORDER BY finalized_at DESC NULLS LAST LIMIT 1;
-
--- name: JobSetCompleted :one
-UPDATE
-  river_job
-SET
-  finalized_at = @finalized_at::timestamptz,
-  state = 'completed'::river_job_state
-WHERE
-  id = @id::bigint
+-- name: JobSetState :one
+UPDATE river_job
+SET errors       = CASE WHEN @error_do_update::boolean        THEN array_append(errors, @error::jsonb) ELSE errors       END,
+    finalized_at = CASE WHEN @finalized_at_do_update::boolean THEN @finalized_at                       ELSE finalized_at END,
+    max_attempts = CASE WHEN @max_attempts_update::boolean    THEN @max_attempts                       ELSE max_attempts END,
+    scheduled_at = CASE WHEN @scheduled_at_do_update::boolean THEN @scheduled_at                       ELSE scheduled_at END,
+    state = @state
+WHERE id = @id
 RETURNING *;
 
--- name: JobSetCompletedIfRunning :one
+-- name: JobSetStateIfRunning :one
 WITH job_to_update AS (
-  SELECT
-    id,
-    finalized_at,
-    state
-  FROM
-    river_job
-  WHERE
-    id = @id::bigint
-  FOR UPDATE
+    SELECT id
+    FROM river_job
+    WHERE id = @id::bigint
+    FOR UPDATE
 ),
 updated_job AS (
-  UPDATE
-    river_job
-  SET
-    finalized_at = @finalized_at::timestamptz,
-    state = 'completed'::river_job_state
-  FROM
-    job_to_update
-  WHERE
-    river_job.id = job_to_update.id
-    AND river_job.state = 'running'::river_job_state
-  RETURNING river_job.*
+    UPDATE river_job
+    SET errors       = CASE WHEN @error_do_update::boolean        THEN array_append(errors, @error::jsonb) ELSE errors       END,
+        finalized_at = CASE WHEN @finalized_at_do_update::boolean THEN @finalized_at                       ELSE finalized_at END,
+        max_attempts = CASE WHEN @max_attempts_update::boolean    THEN @max_attempts                       ELSE max_attempts END,
+        scheduled_at = CASE WHEN @scheduled_at_do_update::boolean THEN @scheduled_at                       ELSE scheduled_at END,
+        state = @state
+    FROM job_to_update
+    WHERE river_job.id = job_to_update.id
+        AND river_job.state = 'running'::river_job_state
+    RETURNING river_job.*
 )
-(
-  SELECT
-    river_job.*
-  FROM
-    river_job
-  WHERE
-    river_job.id = @id::bigint
-  UNION
-  SELECT
-    updated_job.*
-  FROM
-    updated_job
-) ORDER BY finalized_at DESC NULLS LAST LIMIT 1;
-
--- name: JobSetDiscarded :one
-UPDATE
-  river_job
-SET
-  finalized_at = @finalized_at::timestamptz,
-  errors = array_append(errors, @error::jsonb),
-  state = 'discarded'::river_job_state
-WHERE
-  id = @id::bigint
-RETURNING *;
-
--- name: JobSetDiscardedIfRunning :one
-WITH job_to_update AS (
-  SELECT
-    id,
-    finalized_at,
-    state
-  FROM
-    river_job
-  WHERE
-    id = @id::bigint
-  FOR UPDATE
-),
-updated_job AS (
-  UPDATE
-    river_job
-  SET
-    finalized_at = @finalized_at::timestamptz,
-    errors = array_append(errors, @error::jsonb),
-    state = 'discarded'::river_job_state
-  FROM
-    job_to_update
-  WHERE
-    river_job.id = job_to_update.id
-    AND river_job.state = 'running'::river_job_state
-  RETURNING river_job.*
-)
-(
-  SELECT
-    river_job.*
-  FROM
-    river_job
-  WHERE
-    river_job.id = @id::bigint
-  UNION
-  SELECT
-    updated_job.*
-  FROM
-    updated_job
-) ORDER BY finalized_at DESC NULLS LAST LIMIT 1;
-
--- name: JobSetErroredIfRunning :one
-WITH job_to_update AS (
-  SELECT
-    id,
-    finalized_at,
-    state
-  FROM
-    river_job
-  WHERE
-    id = @id::bigint
-  FOR UPDATE
-),
-updated_job AS (
-  UPDATE
-    river_job
-  SET
-    scheduled_at = @scheduled_at::timestamptz,
-    errors = array_append(errors, @error::jsonb),
-    state = 'retryable'::river_job_state
-  FROM
-    job_to_update
-  WHERE
-    river_job.id = job_to_update.id
-    AND river_job.state = 'running'::river_job_state
-  RETURNING river_job.*
-)
-(
-  SELECT
-    river_job.*
-  FROM
-    river_job
-  WHERE
-    river_job.id = @id::bigint
-  UNION
-  SELECT
-    updated_job.*
-  FROM
-    updated_job
-) ORDER BY scheduled_at DESC NULLS LAST LIMIT 1;
-
--- name: JobSetSnoozedIfRunning :one
-WITH job_to_update AS (
-  SELECT
-    id,
-    finalized_at,
-    state
-  FROM
-    river_job
-  WHERE
-    id = @id::bigint
-  FOR UPDATE
-),
-updated_job AS (
-  UPDATE
-    river_job
-  SET
-    scheduled_at = @scheduled_at::timestamptz,
-    state = 'scheduled'::river_job_state,
-    max_attempts = max_attempts + 1
-  FROM
-    job_to_update
-  WHERE
-    river_job.id = job_to_update.id
-    AND river_job.state = 'running'::river_job_state
-  RETURNING river_job.*
-)
-(
-  SELECT
-    river_job.*
-  FROM
-    river_job
-  WHERE
-    river_job.id = @id::bigint
-  UNION
-  SELECT
-    updated_job.*
-  FROM
-    updated_job
-) ORDER BY scheduled_at DESC NULLS LAST LIMIT 1;
-
+SELECT *
+FROM river_job
+WHERE id = @id::bigint
+    AND id NOT IN (SELECT id FROM updated_job)
+UNION
+SELECT *
+FROM updated_job;
 
 -- Run by the rescuer to queue for retry or discard depending on job state.
 -- name: JobRescueMany :exec

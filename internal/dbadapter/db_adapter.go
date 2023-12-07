@@ -81,9 +81,6 @@ type JobInsertResult struct {
 // expedience, but this should be converted to a more stable API if Adapter
 // would be exported.
 type Adapter interface {
-	JobCompleteMany(ctx context.Context, jobs ...JobToComplete) error
-	// TODO: should all dbsqlc need to implement this? Or is it a pro feature?
-	JobCompleteManyTx(ctx context.Context, tx pgx.Tx, jobs ...JobToComplete) error
 	JobInsert(ctx context.Context, params *JobInsertParams) (*JobInsertResult, error)
 	JobInsertTx(ctx context.Context, tx pgx.Tx, params *JobInsertParams) (*JobInsertResult, error)
 
@@ -94,12 +91,10 @@ type Adapter interface {
 	JobGetAvailable(ctx context.Context, queueName string, limit int32) ([]*dbsqlc.RiverJob, error)
 	JobGetAvailableTx(ctx context.Context, tx pgx.Tx, queueName string, limit int32) ([]*dbsqlc.RiverJob, error)
 
-	JobSetCancelledIfRunning(ctx context.Context, id int64, cancelledAt time.Time, err []byte) (*dbsqlc.RiverJob, error)
-	JobSetCompletedIfRunning(ctx context.Context, job JobToComplete) (*dbsqlc.RiverJob, error)
-	JobSetCompletedTx(ctx context.Context, tx pgx.Tx, id int64, completedAt time.Time) (*dbsqlc.RiverJob, error)
-	JobSetDiscardedIfRunning(ctx context.Context, id int64, discardedAt time.Time, err []byte) (*dbsqlc.RiverJob, error)
-	JobSetErroredIfRunning(ctx context.Context, id int64, scheduledAt time.Time, err []byte) (*dbsqlc.RiverJob, error)
-	JobSetSnoozedIfRunning(ctx context.Context, id int64, scheduledAt time.Time) (*dbsqlc.RiverJob, error)
+	// JobSetStateIfRunning sets the state of a currently running job. Jobs which are not
+	// running (i.e. which have already have had their state set to something
+	// new through an explicit snooze or cancellation), are ignored.
+	JobSetStateIfRunning(ctx context.Context, params *JobSetStateIfRunningParams) (*dbsqlc.RiverJob, error)
 
 	// LeadershipAttemptElect attempts to elect a leader for the given name. The
 	// bool alreadyElected indicates whether this is a potential reelection of
@@ -322,26 +317,6 @@ func (a *StandardAdapter) JobInsertManyTx(ctx context.Context, tx pgx.Tx, params
 	return numInserted, nil
 }
 
-func (a *StandardAdapter) JobCompleteMany(ctx context.Context, jobs ...JobToComplete) error {
-	ctx, cancel := context.WithTimeout(ctx, a.deadlineTimeout)
-	defer cancel()
-
-	return a.queries.JobCompleteMany(ctx, a.executor, dbsqlc.JobCompleteManyParams{
-		ID:          sliceutil.Map(jobs, func(j JobToComplete) int64 { return j.ID }),
-		FinalizedAt: sliceutil.Map(jobs, func(j JobToComplete) time.Time { return j.FinalizedAt.UTC() }),
-	})
-}
-
-func (a *StandardAdapter) JobCompleteManyTx(ctx context.Context, tx pgx.Tx, jobs ...JobToComplete) error {
-	ctx, cancel := context.WithTimeout(ctx, a.deadlineTimeout)
-	defer cancel()
-
-	return a.queries.JobCompleteMany(ctx, tx, dbsqlc.JobCompleteManyParams{
-		ID:          sliceutil.Map(jobs, func(j JobToComplete) int64 { return j.ID }),
-		FinalizedAt: sliceutil.Map(jobs, func(j JobToComplete) time.Time { return j.FinalizedAt.UTC() }),
-	})
-}
-
 func (a *StandardAdapter) JobGetAvailable(ctx context.Context, queueName string, limit int32) ([]*dbsqlc.RiverJob, error) {
 	ctx, cancel := context.WithTimeout(ctx, a.deadlineTimeout)
 	defer cancel()
@@ -377,66 +352,53 @@ func (a *StandardAdapter) JobGetAvailableTx(ctx context.Context, tx pgx.Tx, queu
 	return jobs, nil
 }
 
-func (a *StandardAdapter) JobSetCancelledIfRunning(ctx context.Context, id int64, finalizedAt time.Time, err []byte) (*dbsqlc.RiverJob, error) {
-	ctx, cancel := context.WithTimeout(ctx, a.deadlineTimeout)
-	defer cancel()
-
-	return a.queries.JobSetCancelledIfRunning(ctx, a.executor, dbsqlc.JobSetCancelledIfRunningParams{
-		ID:          id,
-		Error:       err,
-		FinalizedAt: finalizedAt,
-	})
+// JobSetStateIfRunningParams are parameters to update the state of a currently running
+// job. Use one of the constructors below to ensure a correct combination of
+// parameters.
+type JobSetStateIfRunningParams struct {
+	ID          int64
+	errData     []byte
+	finalizedAt *time.Time
+	maxAttempts *int
+	scheduledAt *time.Time
+	state       dbsqlc.JobState
 }
 
-func (a *StandardAdapter) JobSetCompletedIfRunning(ctx context.Context, job JobToComplete) (*dbsqlc.RiverJob, error) {
-	ctx, cancel := context.WithTimeout(ctx, a.deadlineTimeout)
-	defer cancel()
-
-	return a.queries.JobSetCompletedIfRunning(ctx, a.executor, dbsqlc.JobSetCompletedIfRunningParams{
-		ID:          job.ID,
-		FinalizedAt: job.FinalizedAt.UTC(),
-	})
+func JobSetStateCancelled(id int64, finalizedAt time.Time, errData []byte) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{ID: id, errData: errData, finalizedAt: &finalizedAt, state: dbsqlc.JobStateCancelled}
 }
 
-func (a *StandardAdapter) JobSetCompletedTx(ctx context.Context, tx pgx.Tx, id int64, completedAt time.Time) (*dbsqlc.RiverJob, error) {
-	ctx, cancel := context.WithTimeout(ctx, a.deadlineTimeout)
-	defer cancel()
-
-	return a.queries.JobSetCompleted(ctx, tx, dbsqlc.JobSetCompletedParams{
-		ID:          id,
-		FinalizedAt: completedAt.UTC(),
-	})
+func JobSetStateCompleted(id int64, finalizedAt time.Time) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{ID: id, finalizedAt: &finalizedAt, state: dbsqlc.JobStateCompleted}
 }
 
-func (a *StandardAdapter) JobSetDiscardedIfRunning(ctx context.Context, id int64, finalizedAt time.Time, err []byte) (*dbsqlc.RiverJob, error) {
-	ctx, cancel := context.WithTimeout(ctx, a.deadlineTimeout)
-	defer cancel()
-
-	return a.queries.JobSetDiscardedIfRunning(ctx, a.executor, dbsqlc.JobSetDiscardedIfRunningParams{
-		ID:          id,
-		Error:       err,
-		FinalizedAt: finalizedAt,
-	})
+func JobSetStateDiscarded(id int64, finalizedAt time.Time, errData []byte) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{ID: id, errData: errData, finalizedAt: &finalizedAt, state: dbsqlc.JobStateDiscarded}
 }
 
-func (a *StandardAdapter) JobSetErroredIfRunning(ctx context.Context, id int64, scheduledAt time.Time, err []byte) (*dbsqlc.RiverJob, error) {
-	ctx, cancel := context.WithTimeout(ctx, a.deadlineTimeout)
-	defer cancel()
-
-	return a.queries.JobSetErroredIfRunning(ctx, a.executor, dbsqlc.JobSetErroredIfRunningParams{
-		ID:          id,
-		Error:       err,
-		ScheduledAt: scheduledAt,
-	})
+func JobSetStateErrored(id int64, scheduledAt time.Time, errData []byte) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{ID: id, errData: errData, scheduledAt: &scheduledAt, state: dbsqlc.JobStateRetryable}
 }
 
-func (a *StandardAdapter) JobSetSnoozedIfRunning(ctx context.Context, id int64, scheduledAt time.Time) (*dbsqlc.RiverJob, error) {
+func JobSetStateSnoozed(id int64, scheduledAt time.Time, maxAttempts int) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{ID: id, maxAttempts: &maxAttempts, scheduledAt: &scheduledAt, state: dbsqlc.JobStateScheduled}
+}
+
+func (a *StandardAdapter) JobSetStateIfRunning(ctx context.Context, params *JobSetStateIfRunningParams) (*dbsqlc.RiverJob, error) {
 	ctx, cancel := context.WithTimeout(ctx, a.deadlineTimeout)
 	defer cancel()
 
-	return a.queries.JobSetSnoozedIfRunning(ctx, a.executor, dbsqlc.JobSetSnoozedIfRunningParams{
-		ID:          id,
-		ScheduledAt: scheduledAt,
+	return a.queries.JobSetStateIfRunning(ctx, a.executor, dbsqlc.JobSetStateIfRunningParams{
+		ID:                  params.ID,
+		ErrorDoUpdate:       params.errData != nil,
+		Error:               params.errData,
+		FinalizedAtDoUpdate: params.finalizedAt != nil,
+		FinalizedAt:         params.finalizedAt,
+		MaxAttemptsUpdate:   params.maxAttempts != nil,
+		MaxAttempts:         int16(ptrutil.ValOrDefault(params.maxAttempts, 0)), // default never used
+		ScheduledAtDoUpdate: params.scheduledAt != nil,
+		ScheduledAt:         ptrutil.ValOrDefault(params.scheduledAt, time.Time{}), // default never used
+		State:               params.state,
 	})
 }
 

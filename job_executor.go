@@ -232,7 +232,7 @@ func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 			slog.Duration("duration", snoozeErr.duration),
 		)
 		nextAttemptScheduledAt := time.Now().Add(snoozeErr.duration)
-		if err := e.Completer.JobSetSnoozed(e.JobRow.ID, e.stats, nextAttemptScheduledAt); err != nil {
+		if err := e.Completer.JobSetStateIfRunning(e.stats, dbadapter.JobSetStateSnoozed(e.JobRow.ID, nextAttemptScheduledAt, e.JobRow.MaxAttempts+1)); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Error snoozing job",
 				slog.Int64("job_id", e.JobRow.ID),
 			)
@@ -245,7 +245,7 @@ func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 		return
 	}
 
-	if err := e.Completer.JobSetCompleted(e.JobRow.ID, e.stats, e.TimeNowUTC()); err != nil {
+	if err := e.Completer.JobSetStateIfRunning(e.stats, dbadapter.JobSetStateCompleted(e.JobRow.ID, e.TimeNowUTC())); err != nil {
 		e.Logger.ErrorContext(ctx, e.Name+": Error completing job",
 			slog.String("err", err.Error()),
 			slog.Int64("job_id", e.JobRow.ID),
@@ -293,15 +293,17 @@ func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
 		return
 	}
 
+	now := time.Now()
+
 	if cancelJob {
-		if err := e.Completer.JobSetCancelled(e.JobRow.ID, e.stats, time.Now(), errData); err != nil {
+		if err := e.Completer.JobSetStateIfRunning(e.stats, dbadapter.JobSetStateCancelled(e.JobRow.ID, now, errData)); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Failed to cancel job and report error", logAttrs...)
 		}
 		return
 	}
 
 	if e.JobRow.Attempt >= e.JobRow.MaxAttempts {
-		if err := e.Completer.JobSetDiscarded(e.JobRow.ID, e.stats, time.Now(), errData); err != nil {
+		if err := e.Completer.JobSetStateIfRunning(e.stats, dbadapter.JobSetStateDiscarded(e.JobRow.ID, now, errData)); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Failed to discard job and report error", logAttrs...)
 		}
 		return
@@ -314,7 +316,6 @@ func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
 	if nextRetryScheduledAt.IsZero() {
 		nextRetryScheduledAt = e.ClientRetryPolicy.NextRetry(e.JobRow)
 	}
-	now := time.Now()
 	if nextRetryScheduledAt.Before(now) {
 		e.Logger.WarnContext(ctx,
 			e.Name+": Retry policy returned invalid next retry before current time; using default retry policy instead",
@@ -324,7 +325,7 @@ func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
 		nextRetryScheduledAt = (&DefaultClientRetryPolicy{}).NextRetry(e.JobRow)
 	}
 
-	if err := e.Completer.JobSetErrored(e.JobRow.ID, e.stats, nextRetryScheduledAt, errData); err != nil {
+	if err := e.Completer.JobSetStateIfRunning(e.stats, dbadapter.JobSetStateErrored(e.JobRow.ID, nextRetryScheduledAt, errData)); err != nil {
 		e.Logger.ErrorContext(ctx, e.Name+": Failed to report error for job", logAttrs...)
 	}
 }
