@@ -15,6 +15,7 @@ import (
 	"github.com/riverqueue/river/internal/dbadapter"
 	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/jobcompleter"
+	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
@@ -82,6 +83,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 		Notifier:          notifier,
 		QueueName:         rivercommon.QueueDefault,
 		RetryPolicy:       &DefaultClientRetryPolicy{},
+		SchedulerInterval: maintenance.SchedulerIntervalDefault,
 		WorkerName:        "fakeWorkerNameTODO",
 		Workers:           workers,
 	}
@@ -181,6 +183,7 @@ func Test_Producer_Run(t *testing.T) {
 			Notifier:          notifier,
 			QueueName:         rivercommon.QueueDefault,
 			RetryPolicy:       &DefaultClientRetryPolicy{},
+			SchedulerInterval: riverinternaltest.SchedulerShortInterval,
 			WorkerName:        "fakeWorkerNameTODO",
 			Workers:           workers,
 		}

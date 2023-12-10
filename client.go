@@ -167,6 +167,10 @@ type Config struct {
 	// Test-only property that allows sleep statements to be disable. Only
 	// functions in cases where the CancellableSleep helper is used to sleep.
 	disableSleep bool
+
+	// Scheduler run interval. Shared between the scheduler and producer/job
+	// executors, but not currently exposed for configuration.
+	schedulerInterval time.Duration
 }
 
 func (c *Config) validate() error {
@@ -388,6 +392,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		RetryPolicy:                 retryPolicy,
 		Workers:                     config.Workers,
 		disableSleep:                config.disableSleep,
+		schedulerInterval:           valutil.ValOrDefault(config.schedulerInterval, maintenance.SchedulerIntervalDefault),
 	}
 
 	if err := config.validate(); err != nil {
@@ -524,7 +529,9 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		}
 
 		{
-			scheduler := maintenance.NewScheduler(archetype, &maintenance.SchedulerConfig{}, driver.GetDBPool())
+			scheduler := maintenance.NewScheduler(archetype, &maintenance.SchedulerConfig{
+				Interval: config.schedulerInterval,
+			}, driver.GetDBPool())
 			maintenanceServices = append(maintenanceServices, scheduler)
 			client.testSignals.scheduler = &scheduler.TestSignals
 		}
@@ -898,6 +905,7 @@ func (c *Client[TTx]) provisionProducers() error {
 			Notifier:          c.notifier,
 			QueueName:         queue,
 			RetryPolicy:       c.config.RetryPolicy,
+			SchedulerInterval: c.config.schedulerInterval,
 			WorkerName:        c.id,
 			Workers:           c.config.Workers,
 		}

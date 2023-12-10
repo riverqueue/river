@@ -190,6 +190,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 			ErrorHandler:           bundle.errorHandler,
 			InformProducerDoneFunc: func(job *rivertype.JobRow) {},
 			JobRow:                 bundle.jobRow,
+			SchedulerInterval:      riverinternaltest.SchedulerShortInterval,
 			WorkUnit:               workUnitFactory.MakeUnit(bundle.jobRow),
 		})
 
@@ -266,6 +267,45 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.NoError(t, err)
 		require.WithinDuration(t, executor.ClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
 		require.Equal(t, dbsqlc.JobStateRetryable, job.State)
+	})
+
+	t.Run("ErrorSetsJobAvailableBelowSchedulerIntervalThreshold", func(t *testing.T) {
+		t.Parallel()
+
+		executor, bundle := setup(t)
+
+		executor.SchedulerInterval = 3 * time.Second
+
+		workerErr := errors.New("job error")
+		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
+
+		{
+			executor.Execute(ctx)
+			executor.Completer.Wait()
+
+			job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+			require.NoError(t, err)
+			require.WithinDuration(t, executor.ClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
+			require.Equal(t, dbsqlc.JobStateAvailable, job.State)
+		}
+
+		_, err := queries.JobSetState(ctx, bundle.tx, dbsqlc.JobSetStateParams{
+			ID:    bundle.jobRow.ID,
+			State: dbsqlc.JobStateRunning,
+		})
+		require.NoError(t, err)
+
+		bundle.jobRow.Attempt = 2
+
+		{
+			executor.Execute(ctx)
+			executor.Completer.Wait()
+
+			job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+			require.NoError(t, err)
+			require.WithinDuration(t, executor.ClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 16*time.Second)
+			require.Equal(t, dbsqlc.JobStateRetryable, job.State)
+		}
 	})
 
 	t.Run("ErrorDiscardsJobAfterTooManyAttempts", func(t *testing.T) {

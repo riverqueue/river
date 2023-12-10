@@ -72,6 +72,7 @@ WITH locked_jobs AS (
   WHERE
     state = 'available'::river_job_state
     AND queue = @queue::text
+    AND scheduled_at <= now()
   ORDER BY
     priority ASC,
     scheduled_at ASC,
@@ -84,7 +85,7 @@ UPDATE
 SET
   state = 'running'::river_job_state,
   attempt = river_job.attempt + 1,
-  attempted_at = NOW(),
+  attempted_at = now(),
   attempted_by = array_append(river_job.attempted_by, @worker::text)
 FROM
   locked_jobs

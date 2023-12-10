@@ -17,9 +17,99 @@ import (
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/util/dbutil"
+	"github.com/riverqueue/river/internal/util/ptrutil"
 )
 
-func Test_StandardAdapter_Insert(t *testing.T) {
+func Test_StandardAdapter_JobGetAvailable(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		baselineTime time.Time // baseline time frozen at now when setup is called
+		tx           pgx.Tx
+	}
+
+	setup := func(t *testing.T) (*StandardAdapter, *testBundle) {
+		t.Helper()
+
+		bundle := &testBundle{
+			baselineTime: time.Now(),
+			tx:           riverinternaltest.TestTx(ctx, t),
+		}
+
+		adapter := NewStandardAdapter(riverinternaltest.BaseServiceArchetype(t), testAdapterConfig(bundle.tx))
+		adapter.TimeNowUTC = func() time.Time { return bundle.baselineTime }
+
+		return adapter, bundle
+	}
+
+	t.Run("Success", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, bundle := setup(t)
+
+		_, err := adapter.JobInsertTx(ctx, bundle.tx, makeFakeJobInsertParams(0, nil))
+		require.NoError(t, err)
+
+		jobRows, err := adapter.JobGetAvailableTx(ctx, bundle.tx, rivercommon.QueueDefault, 100)
+		require.NoError(t, err)
+		require.Len(t, jobRows, 1)
+
+		jobRow := jobRows[0]
+		require.Equal(t, []string{adapter.workerName}, jobRow.AttemptedBy)
+	})
+
+	t.Run("ConstrainedToLimit", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, bundle := setup(t)
+
+		_, err := adapter.JobInsertTx(ctx, bundle.tx, makeFakeJobInsertParams(0, nil))
+		require.NoError(t, err)
+		_, err = adapter.JobInsertTx(ctx, bundle.tx, makeFakeJobInsertParams(1, nil))
+		require.NoError(t, err)
+
+		// Two rows inserted but only one found because of the added limit.
+		jobRows, err := adapter.JobGetAvailableTx(ctx, bundle.tx, rivercommon.QueueDefault, 1)
+		require.NoError(t, err)
+		require.Len(t, jobRows, 1)
+	})
+
+	t.Run("ConstrainedToQueue", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, bundle := setup(t)
+
+		_, err := adapter.JobInsertTx(ctx, bundle.tx, makeFakeJobInsertParams(0, &makeFakeJobInsertParamsOpts{
+			Queue: ptrutil.Ptr("other-queue"),
+		}))
+		require.NoError(t, err)
+
+		// Job is in a non-default queue so it's not found.
+		jobRows, err := adapter.JobGetAvailableTx(ctx, bundle.tx, rivercommon.QueueDefault, 1)
+		require.NoError(t, err)
+		require.Empty(t, jobRows)
+	})
+
+	t.Run("ConstrainedToScheduledAtBeforeNow", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, bundle := setup(t)
+
+		_, err := adapter.JobInsertTx(ctx, bundle.tx, makeFakeJobInsertParams(0, &makeFakeJobInsertParamsOpts{
+			ScheduledAt: ptrutil.Ptr(time.Now().Add(1 * time.Minute)),
+		}))
+		require.NoError(t, err)
+
+		// Job is scheduled a while from now so it's not found.
+		jobRows, err := adapter.JobGetAvailableTx(ctx, bundle.tx, rivercommon.QueueDefault, 1)
+		require.NoError(t, err)
+		require.Empty(t, jobRows)
+	})
+}
+
+func Test_StandardAdapter_JobInsert(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -53,7 +143,7 @@ func Test_StandardAdapter_Insert(t *testing.T) {
 
 		adapter, _ := setupTx(t)
 
-		insertParams := makeFakeJobInsertParams(0)
+		insertParams := makeFakeJobInsertParams(0, nil)
 		_, err := adapter.JobInsert(ctx, insertParams)
 		require.NoError(t, err)
 	})
@@ -65,7 +155,7 @@ func Test_StandardAdapter_Insert(t *testing.T) {
 
 		const maxJobsToFetch = 8
 
-		res, err := adapter.JobInsert(ctx, makeFakeJobInsertParams(0))
+		res, err := adapter.JobInsert(ctx, makeFakeJobInsertParams(0, nil))
 		require.NoError(t, err)
 		require.NotEqual(t, 0, res.Job.ID, "expected job ID to be set, got %d", res.Job.ID)
 		require.WithinDuration(t, time.Now(), res.Job.ScheduledAt, 1*time.Second)
@@ -78,7 +168,7 @@ func Test_StandardAdapter_Insert(t *testing.T) {
 			"expected selected job to be in running state, got %q", jobs[0].State)
 
 		for i := 1; i < 10; i++ {
-			_, err := adapter.JobInsert(ctx, makeFakeJobInsertParams(i))
+			_, err := adapter.JobInsert(ctx, makeFakeJobInsertParams(i, nil))
 			require.NoError(t, err)
 		}
 
@@ -102,7 +192,7 @@ func Test_StandardAdapter_Insert(t *testing.T) {
 
 		adapter, _ := setupTx(t)
 
-		insertParams := makeFakeJobInsertParams(0)
+		insertParams := makeFakeJobInsertParams(0, nil)
 		insertParams.Unique = true
 		insertParams.UniqueByArgs = true
 
@@ -133,7 +223,7 @@ func Test_StandardAdapter_Insert(t *testing.T) {
 
 		adapter, bundle := setupTx(t)
 
-		insertParams := makeFakeJobInsertParams(0)
+		insertParams := makeFakeJobInsertParams(0, nil)
 		insertParams.Unique = true
 		insertParams.UniqueByPeriod = 15 * time.Minute
 
@@ -164,7 +254,7 @@ func Test_StandardAdapter_Insert(t *testing.T) {
 
 		adapter, _ := setupTx(t)
 
-		insertParams := makeFakeJobInsertParams(0)
+		insertParams := makeFakeJobInsertParams(0, nil)
 		insertParams.Unique = true
 		insertParams.UniqueByQueue = true
 
@@ -195,7 +285,7 @@ func Test_StandardAdapter_Insert(t *testing.T) {
 
 		adapter, bundle := setupTx(t)
 
-		insertParams := makeFakeJobInsertParams(0)
+		insertParams := makeFakeJobInsertParams(0, nil)
 		insertParams.Unique = true
 		insertParams.UniqueByState = []dbsqlc.JobState{dbsqlc.JobStateAvailable, dbsqlc.JobStateRunning}
 
@@ -246,7 +336,7 @@ func Test_StandardAdapter_Insert(t *testing.T) {
 
 		adapter, bundle := setupTx(t)
 
-		insertParams := makeFakeJobInsertParams(0)
+		insertParams := makeFakeJobInsertParams(0, nil)
 		insertParams.Unique = true
 		insertParams.UniqueByQueue = true
 
@@ -306,7 +396,7 @@ func Test_StandardAdapter_Insert(t *testing.T) {
 
 		adapter, bundle := setupTx(t)
 
-		insertParams := makeFakeJobInsertParams(0)
+		insertParams := makeFakeJobInsertParams(0, nil)
 		insertParams.Unique = true
 		insertParams.UniqueByArgs = true
 		insertParams.UniqueByPeriod = 15 * time.Minute
@@ -388,7 +478,7 @@ func Test_StandardAdapter_Insert(t *testing.T) {
 
 		adapter, bundle := setup(t, riverinternaltest.TestDB(ctx, t))
 
-		insertParams := makeFakeJobInsertParams(0)
+		insertParams := makeFakeJobInsertParams(0, nil)
 		insertParams.Unique = true
 		insertParams.UniqueByPeriod = 15 * time.Minute
 
@@ -442,7 +532,7 @@ func Test_Adapter_JobInsertMany(t *testing.T) {
 
 	insertParams := make([]*JobInsertParams, 10)
 	for i := 0; i < len(insertParams); i++ {
-		insertParams[i] = makeFakeJobInsertParams(i)
+		insertParams[i] = makeFakeJobInsertParams(i, nil)
 	}
 
 	count, err := adapter.JobInsertMany(ctx, insertParams)
@@ -467,7 +557,7 @@ func Test_StandardAdapter_FetchIsPrioritized(t *testing.T) {
 
 	for i := 3; i > 0; i-- {
 		// Insert jobs with decreasing priority numbers (3, 2, 1) which means increasing priority.
-		insertParams := makeFakeJobInsertParams(i)
+		insertParams := makeFakeJobInsertParams(i, nil)
 		insertParams.Priority = i
 		_, err := adapter.JobInsert(ctx, insertParams)
 		require.NoError(t, err)
@@ -529,7 +619,7 @@ func Test_StandardAdapter_JobSetStateCompleted(t *testing.T) {
 
 		adapter, bundle := setupTx(t)
 
-		params := makeFakeJobInsertParams(0)
+		params := makeFakeJobInsertParams(0, nil)
 		params.State = dbsqlc.JobStateRunning
 		res, err := adapter.JobInsert(ctx, params)
 		require.NoError(t, err)
@@ -550,7 +640,7 @@ func Test_StandardAdapter_JobSetStateCompleted(t *testing.T) {
 
 		adapter, bundle := setupTx(t)
 
-		params := makeFakeJobInsertParams(0)
+		params := makeFakeJobInsertParams(0, nil)
 		params.State = dbsqlc.JobStateRetryable
 		res, err := adapter.JobInsert(ctx, params)
 		require.NoError(t, err)
@@ -610,13 +700,13 @@ func Test_StandardAdapter_JobSetStateErrored(t *testing.T) {
 
 		adapter, bundle := setupTx(t)
 
-		params := makeFakeJobInsertParams(0)
+		params := makeFakeJobInsertParams(0, nil)
 		params.State = dbsqlc.JobStateRunning
 		res, err := adapter.JobInsert(ctx, params)
 		require.NoError(t, err)
 		require.Equal(t, dbsqlc.JobStateRunning, res.Job.State)
 
-		jAfter, err := adapter.JobSetStateIfRunning(ctx, JobSetStateErrored(res.Job.ID, bundle.baselineTime, bundle.errPayload))
+		jAfter, err := adapter.JobSetStateIfRunning(ctx, JobSetStateErrorRetryable(res.Job.ID, bundle.baselineTime, bundle.errPayload))
 		require.NoError(t, err)
 		require.Equal(t, dbsqlc.JobStateRetryable, jAfter.State)
 		require.WithinDuration(t, bundle.baselineTime, jAfter.ScheduledAt, time.Microsecond)
@@ -638,14 +728,14 @@ func Test_StandardAdapter_JobSetStateErrored(t *testing.T) {
 
 		adapter, bundle := setupTx(t)
 
-		params := makeFakeJobInsertParams(0)
+		params := makeFakeJobInsertParams(0, nil)
 		params.State = dbsqlc.JobStateRetryable
 		params.ScheduledAt = bundle.baselineTime.Add(10 * time.Second)
 		res, err := adapter.JobInsert(ctx, params)
 		require.NoError(t, err)
 		require.Equal(t, dbsqlc.JobStateRetryable, res.Job.State)
 
-		jAfter, err := adapter.JobSetStateIfRunning(ctx, JobSetStateErrored(res.Job.ID, bundle.baselineTime, bundle.errPayload))
+		jAfter, err := adapter.JobSetStateIfRunning(ctx, JobSetStateErrorRetryable(res.Job.ID, bundle.baselineTime, bundle.errPayload))
 		require.NoError(t, err)
 		require.Equal(t, dbsqlc.JobStateRetryable, jAfter.State)
 		require.WithinDuration(t, params.ScheduledAt, jAfter.ScheduledAt, time.Microsecond)
@@ -687,7 +777,7 @@ func Benchmark_StandardAdapter_Insert(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		if _, err := adapter.JobInsert(ctx, makeFakeJobInsertParams(i)); err != nil {
+		if _, err := adapter.JobInsert(ctx, makeFakeJobInsertParams(i, nil)); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -706,7 +796,7 @@ func Benchmark_StandardAdapter_Insert_Parallelized(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			if _, err := adapter.JobInsert(ctx, makeFakeJobInsertParams(i)); err != nil {
+			if _, err := adapter.JobInsert(ctx, makeFakeJobInsertParams(i, nil)); err != nil {
 				b.Fatal(err)
 			}
 			i++
@@ -725,7 +815,7 @@ func Benchmark_StandardAdapter_Fetch_100(b *testing.B) {
 	adapter := NewStandardAdapter(riverinternaltest.BaseServiceArchetype(b), testAdapterConfig(dbPool))
 
 	for i := 0; i < b.N*100; i++ {
-		insertParams := makeFakeJobInsertParams(i)
+		insertParams := makeFakeJobInsertParams(i, nil)
 		if _, err := adapter.JobInsert(ctx, insertParams); err != nil {
 			b.Fatal(err)
 		}
@@ -750,7 +840,7 @@ func Benchmark_StandardAdapter_Fetch_100_Parallelized(b *testing.B) {
 	adapter := NewStandardAdapter(riverinternaltest.BaseServiceArchetype(b), testAdapterConfig(dbPool))
 
 	for i := 0; i < b.N*100*runtime.NumCPU(); i++ {
-		insertParams := makeFakeJobInsertParams(i)
+		insertParams := makeFakeJobInsertParams(i, nil)
 		if _, err := adapter.JobInsert(ctx, insertParams); err != nil {
 			b.Fatal(err)
 		}
@@ -775,14 +865,24 @@ func testAdapterConfig(ex dbutil.Executor) *StandardAdapterConfig {
 	}
 }
 
-func makeFakeJobInsertParams(i int) *JobInsertParams {
+type makeFakeJobInsertParamsOpts struct {
+	Queue       *string
+	ScheduledAt *time.Time
+}
+
+func makeFakeJobInsertParams(i int, opts *makeFakeJobInsertParamsOpts) *JobInsertParams {
+	if opts == nil {
+		opts = &makeFakeJobInsertParamsOpts{}
+	}
+
 	return &JobInsertParams{
 		EncodedArgs: []byte(fmt.Sprintf(`{"job_num":%d}`, i)),
 		Kind:        "fake_job",
 		MaxAttempts: rivercommon.MaxAttemptsDefault,
 		Metadata:    []byte("{}"),
 		Priority:    rivercommon.PriorityDefault,
-		Queue:       rivercommon.QueueDefault,
+		Queue:       ptrutil.ValOrDefault(opts.Queue, rivercommon.QueueDefault),
+		ScheduledAt: ptrutil.ValOrDefault(opts.ScheduledAt, time.Time{}),
 		State:       dbsqlc.JobStateAvailable,
 	}
 }

@@ -129,7 +129,7 @@ func Example_subscription() {
 
 	// Output:
 	// Got job with state: completed
-	// Got job with state: retryable
+	// Got job with state: available
 	// Got job with state: cancelled
 	// Client stopped
 	// Channel is closed
