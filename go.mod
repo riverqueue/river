@@ -6,7 +6,7 @@ go 1.21.0
 
 require (
 	github.com/jackc/pgerrcode v0.0.0-20220416144525-469b46aa5efa
-	github.com/jackc/pgx/v5 v5.5.0
+	github.com/jackc/pgx/v5 v5.5.1
 	github.com/jackc/puddle/v2 v2.2.1
 	github.com/oklog/ulid/v2 v2.1.0
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.0.12
