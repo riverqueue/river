@@ -122,6 +122,7 @@ type jobExecutor struct {
 	ErrorHandler           ErrorHandler
 	InformProducerDoneFunc func(jobRow *rivertype.JobRow)
 	JobRow                 *rivertype.JobRow
+	SchedulerInterval      time.Duration
 	WorkUnit               workunit.WorkUnit
 
 	// Meant to be used from within the job executor only.
@@ -325,7 +326,19 @@ func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
 		nextRetryScheduledAt = (&DefaultClientRetryPolicy{}).NextRetry(e.JobRow)
 	}
 
-	if err := e.Completer.JobSetStateIfRunning(e.stats, dbadapter.JobSetStateErrored(e.JobRow.ID, nextRetryScheduledAt, errData)); err != nil {
+	// Normally, errored jobs are set `retryable` for the future and it's the
+	// scheduler's job to set them back to `available` so they can be reworked.
+	// This isn't friendly for smaller retry times though because it means that
+	// effectively no retry time smaller than the scheduler's run interval is
+	// respected. Here, we offset that with a branch that makes jobs immediately
+	// `available` if their retry was smaller than the scheduler's run interval.
+	var params *dbadapter.JobSetStateIfRunningParams
+	if nextRetryScheduledAt.Sub(e.TimeNowUTC()) <= e.SchedulerInterval {
+		params = dbadapter.JobSetStateErrorAvailable(e.JobRow.ID, nextRetryScheduledAt, errData)
+	} else {
+		params = dbadapter.JobSetStateErrorRetryable(e.JobRow.ID, nextRetryScheduledAt, errData)
+	}
+	if err := e.Completer.JobSetStateIfRunning(e.stats, params); err != nil {
 		e.Logger.ErrorContext(ctx, e.Name+": Failed to report error for job", logAttrs...)
 	}
 }

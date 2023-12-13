@@ -34,13 +34,14 @@ type producerConfig struct {
 	// LISTEN/NOTIFY, but this provides a fallback.
 	FetchPollInterval time.Duration
 
-	JobTimeout     time.Duration
-	MaxWorkerCount uint16
-	Notifier       *notifier.Notifier
-	QueueName      string
-	RetryPolicy    ClientRetryPolicy
-	WorkerName     string
-	Workers        *Workers
+	JobTimeout        time.Duration
+	MaxWorkerCount    uint16
+	Notifier          *notifier.Notifier
+	QueueName         string
+	RetryPolicy       ClientRetryPolicy
+	SchedulerInterval time.Duration
+	WorkerName        string
+	Workers           *Workers
 }
 
 // producer manages a fleet of Workers up to a maximum size. It periodically fetches jobs
@@ -104,6 +105,9 @@ func newProducer(archetype *baseservice.Archetype, adapter dbadapter.Adapter, co
 	}
 	if config.RetryPolicy == nil {
 		return nil, errors.New("RetryPolicy is required")
+	}
+	if config.SchedulerInterval == 0 {
+		return nil, errors.New("SchedulerInterval is required")
 	}
 	if config.WorkerName == "" {
 		return nil, errors.New("WorkerName is required")
@@ -312,6 +316,7 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 			ErrorHandler:           p.errorHandler,
 			InformProducerDoneFunc: p.handleWorkerDone,
 			JobRow:                 job,
+			SchedulerInterval:      p.config.SchedulerInterval,
 			WorkUnit:               workUnit,
 		})
 		p.addActiveJob(job.ID, executor)

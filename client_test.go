@@ -127,6 +127,7 @@ func newTestConfig(t *testing.T, callback callbackFunc) *Config {
 		Queues:            map[string]QueueConfig{QueueDefault: {MaxWorkers: 50}},
 		Workers:           workers,
 		disableSleep:      true,
+		schedulerInterval: riverinternaltest.SchedulerShortInterval,
 	}
 }
 
