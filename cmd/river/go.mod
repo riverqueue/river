@@ -2,18 +2,18 @@ module github.com/riverqueue/river/cmd/river
 
 go 1.21.4
 
-replace github.com/riverqueue/river => ../..
+// replace github.com/riverqueue/river => ../..
 
-replace github.com/riverqueue/river/riverdriver => ../../riverdriver
+// replace github.com/riverqueue/river/riverdriver => ../../riverdriver
 
-replace github.com/riverqueue/river/riverdriver/riverdatabasesql => ../../riverdriver/riverdatabasesql
+// replace github.com/riverqueue/river/riverdriver/riverdatabasesql => ../../riverdriver/riverdatabasesql
 
-replace github.com/riverqueue/river/riverdriver/riverpgxv5 => ../../riverdriver/riverpgxv5
+// replace github.com/riverqueue/river/riverdriver/riverpgxv5 => ../../riverdriver/riverpgxv5
 
 require (
 	github.com/jackc/pgx/v5 v5.5.1
-	github.com/riverqueue/river v0.0.12
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.0.12
+	github.com/riverqueue/river v0.0.13
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.0.13
 	github.com/spf13/cobra v1.8.0
 )
 
