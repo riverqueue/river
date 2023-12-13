@@ -72,7 +72,15 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/river_testdb?sslmode=disable
 
-      - name: Test riverpgxv5
+      - name: Test riverdriver
+        working-directory: ./riverdriver
+        run: go test -race ./...
+
+      - name: Test riverdriver/riverdatabasesql
+        working-directory: ./riverdriver/riverdatabasesql
+        run: go test -race ./...
+
+      - name: Test riverdriver/riverpgxv5
         working-directory: ./riverdriver/riverpgxv5
         run: go test -race ./...
 
@@ -117,10 +125,13 @@ jobs:
   golangci:
     name: lint
     runs-on: ubuntu-latest
+    env:
+      GOLANGCI_LINT_VERSION: v1.55.2
     permissions:
       contents: read
       # allow read access to pull request. Use with `only-new-issues` option.
       pull-requests: read
+
     steps:
       - uses: actions/setup-go@v4
         with:
@@ -130,13 +141,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: golangci-lint
+      - name: Lint
         uses: golangci/golangci-lint-action@v3
         with:
-          # Optional: show only new issues if it's a pull request. The default value is `false`.
-          only-new-issues: true
+          only-new-issues: true # Optional: show only new issues if it's a pull request. The default value is `false`.
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          working-directory: .
 
-          version: v1.55.2
+      - name: Lint riverdriver
+        uses: golangci/golangci-lint-action@v3
+        with:
+          only-new-issues: true # Optional: show only new issues if it's a pull request. The default value is `false`.
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          working-directory: ./riverdriver
+
+      - name: Lint riverdriver/riverdatabasesql
+        uses: golangci/golangci-lint-action@v3
+        with:
+          only-new-issues: true # Optional: show only new issues if it's a pull request. The default value is `false`.
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          working-directory: ./riverdriver/riverdatabasesql
+
+      - name: Lint riverdriver/riverpgxv5
+        uses: golangci/golangci-lint-action@v3
+        with:
+          only-new-issues: true # Optional: show only new issues if it's a pull request. The default value is `false`.
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          working-directory: ./riverdriver/riverpgxv5
 
   producer_sample:
     runs-on: ubuntu-latest
@@ -204,7 +235,6 @@ jobs:
           sqlc-version: "1.22.0"
 
       - name: Run sqlc diff
-        working-directory: ./internal/dbsqlc
         run: |
           echo "Please make sure that all sqlc changes are checked in!"
-          sqlc diff
+          make verify

@@ -1,18 +1,17 @@
-package riverpgxv5
+package riverdatabasesql
 
 import (
+	"database/sql"
 	"errors"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/riverdriver"
 )
 
 // Verify interface compliance.
-var _ riverdriver.Driver[pgx.Tx] = New(nil)
+var _ riverdriver.Driver[*sql.Tx] = New(nil)
 
 func TestNew(t *testing.T) {
 	t.Parallel()
@@ -20,7 +19,7 @@ func TestNew(t *testing.T) {
 	t.Run("AllowsNilDatabasePool", func(t *testing.T) {
 		t.Parallel()
 
-		dbPool := &pgxpool.Pool{}
+		dbPool := &sql.DB{}
 		driver := New(dbPool)
 		require.Equal(t, dbPool, driver.dbPool)
 	})
@@ -37,6 +36,6 @@ func TestInterpretError(t *testing.T) {
 	t.Parallel()
 
 	require.EqualError(t, interpretError(errors.New("an error")), "an error")
-	require.ErrorIs(t, interpretError(pgx.ErrNoRows), riverdriver.ErrNoRows)
+	require.ErrorIs(t, interpretError(sql.ErrNoRows), riverdriver.ErrNoRows)
 	require.NoError(t, interpretError(nil))
 }

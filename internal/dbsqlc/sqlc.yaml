@@ -4,11 +4,9 @@ sql:
     queries:
       - river_job.sql
       - river_leader.sql
-      - river_migration.sql
     schema:
       - river_job.sql
       - river_leader.sql
-      - river_migration.sql
     gen:
       go:
         package: "dbsqlc"

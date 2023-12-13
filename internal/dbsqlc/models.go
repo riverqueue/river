@@ -82,9 +82,3 @@ type RiverLeader struct {
 	LeaderID  string
 	Name      string
 }
-
-type RiverMigration struct {
-	ID        int64
-	CreatedAt time.Time
-	Version   int64
-}

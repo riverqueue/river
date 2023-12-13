@@ -5,7 +5,6 @@ package rivermigrate
 import (
 	"context"
 	"embed"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -16,10 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/jackc/pgerrcode"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/dbsqlc"
@@ -67,8 +62,9 @@ type Migrator[TTx any] struct {
 // New returns a new migrator with the given database driver and configuration.
 // The config parameter may be omitted as nil.
 //
-// Currently only one driver is supported, which is Pgx v5. See package
-// riverpgxv5.
+// Two drivers are supported for migrations, one for Pgx v5 and one for the
+// built-in database/sql package for use with migration frameworks like Goose.
+// See packages riverpgxv5 and riverdatabasesql respectively.
 //
 // The function takes a generic parameter TTx representing a transaction type,
 // but it can be omitted because it'll generally always be inferred from the
@@ -155,8 +151,7 @@ type MigrateVersion struct {
 	Version int
 }
 
-func migrateVersionToInt(version MigrateVersion) int     { return version.Version }
-func migrateVersionToInt64(version MigrateVersion) int64 { return int64(version.Version) }
+func migrateVersionToInt(version MigrateVersion) int { return version.Version }
 
 type Direction string
 
@@ -180,12 +175,12 @@ const (
 //		// handle error
 //	}
 func (m *Migrator[TTx]) Migrate(ctx context.Context, direction Direction, opts *MigrateOpts) (*MigrateResult, error) {
-	return dbutil.WithTxV(ctx, m.driver.GetDBPool(), func(ctx context.Context, tx pgx.Tx) (*MigrateResult, error) {
+	return dbutil.WithExecutorTxV(ctx, m.driver.GetExecutor(), func(ctx context.Context, tx riverdriver.ExecutorTx) (*MigrateResult, error) {
 		switch direction {
 		case DirectionDown:
-			return m.migrateDownTx(ctx, tx, direction, opts)
+			return m.migrateDown(ctx, tx, direction, opts)
 		case DirectionUp:
-			return m.migrateUpTx(ctx, tx, direction, opts)
+			return m.migrateUp(ctx, tx, direction, opts)
 		}
 
 		panic("invalid direction: " + direction)
@@ -213,22 +208,22 @@ func (m *Migrator[TTx]) Migrate(ctx context.Context, direction Direction, opts *
 func (m *Migrator[TTx]) MigrateTx(ctx context.Context, tx TTx, direction Direction, opts *MigrateOpts) (*MigrateResult, error) {
 	switch direction {
 	case DirectionDown:
-		return m.migrateDownTx(ctx, m.driver.UnwrapTx(tx), direction, opts)
+		return m.migrateDown(ctx, m.driver.UnwrapExecutor(tx), direction, opts)
 	case DirectionUp:
-		return m.migrateUpTx(ctx, m.driver.UnwrapTx(tx), direction, opts)
+		return m.migrateUp(ctx, m.driver.UnwrapExecutor(tx), direction, opts)
 	}
 
 	panic("invalid direction: " + direction)
 }
 
-// migrateDownTx runs down migrations.
-func (m *Migrator[TTx]) migrateDownTx(ctx context.Context, tx pgx.Tx, direction Direction, opts *MigrateOpts) (*MigrateResult, error) {
-	existingMigrations, err := m.existingMigrations(ctx, tx)
+// migrateDown runs down migrations.
+func (m *Migrator[TTx]) migrateDown(ctx context.Context, exec riverdriver.Executor, direction Direction, opts *MigrateOpts) (*MigrateResult, error) {
+	existingMigrations, err := m.existingMigrations(ctx, exec)
 	if err != nil {
 		return nil, err
 	}
 	existingMigrationsMap := sliceutil.KeyBy(existingMigrations,
-		func(m *dbsqlc.RiverMigration) (int, struct{}) { return int(m.Version), struct{}{} })
+		func(m *riverdriver.Migration) (int, struct{}) { return m.Version, struct{}{} })
 
 	targetMigrations := maps.Clone(m.migrations)
 	for version := range targetMigrations {
@@ -240,7 +235,7 @@ func (m *Migrator[TTx]) migrateDownTx(ctx context.Context, tx pgx.Tx, direction 
 	sortedTargetMigrations := maputil.Values(targetMigrations)
 	slices.SortFunc(sortedTargetMigrations, func(a, b *migrationBundle) int { return b.Version - a.Version }) // reverse order
 
-	res, err := m.applyMigrations(ctx, tx, direction, opts, sortedTargetMigrations)
+	res, err := m.applyMigrations(ctx, exec, direction, opts, sortedTargetMigrations)
 	if err != nil {
 		return nil, err
 	}
@@ -259,34 +254,34 @@ func (m *Migrator[TTx]) migrateDownTx(ctx context.Context, tx pgx.Tx, direction 
 		return res, nil
 	}
 
-	if _, err := m.queries.RiverMigrationDeleteByVersionMany(ctx, tx, sliceutil.Map(res.Versions, migrateVersionToInt64)); err != nil {
+	if _, err := exec.MigrationDeleteByVersionMany(ctx, sliceutil.Map(res.Versions, migrateVersionToInt)); err != nil {
 		return nil, fmt.Errorf("error deleting migration rows for versions %+v: %w", res.Versions, err)
 	}
 
 	return res, nil
 }
 
-// migrateUpTx runs up migrations.
-func (m *Migrator[TTx]) migrateUpTx(ctx context.Context, tx pgx.Tx, direction Direction, opts *MigrateOpts) (*MigrateResult, error) {
-	existingMigrations, err := m.existingMigrations(ctx, tx)
+// migrateUp runs up migrations.
+func (m *Migrator[TTx]) migrateUp(ctx context.Context, exec riverdriver.Executor, direction Direction, opts *MigrateOpts) (*MigrateResult, error) {
+	existingMigrations, err := m.existingMigrations(ctx, exec)
 	if err != nil {
 		return nil, err
 	}
 
 	targetMigrations := maps.Clone(m.migrations)
 	for _, migrateRow := range existingMigrations {
-		delete(targetMigrations, int(migrateRow.Version))
+		delete(targetMigrations, migrateRow.Version)
 	}
 
 	sortedTargetMigrations := maputil.Values(targetMigrations)
 	slices.SortFunc(sortedTargetMigrations, func(a, b *migrationBundle) int { return a.Version - b.Version })
 
-	res, err := m.applyMigrations(ctx, tx, direction, opts, sortedTargetMigrations)
+	res, err := m.applyMigrations(ctx, exec, direction, opts, sortedTargetMigrations)
 	if err != nil {
 		return nil, err
 	}
 
-	if _, err := m.queries.RiverMigrationInsertMany(ctx, tx, sliceutil.Map(res.Versions, migrateVersionToInt64)); err != nil {
+	if _, err := exec.MigrationInsertMany(ctx, sliceutil.Map(res.Versions, migrateVersionToInt)); err != nil {
 		return nil, fmt.Errorf("error inserting migration rows for versions %+v: %w", res.Versions, err)
 	}
 
@@ -295,7 +290,7 @@ func (m *Migrator[TTx]) migrateUpTx(ctx context.Context, tx pgx.Tx, direction Di
 
 // Common code shared between the up and down migration directions that walks
 // through each target migration and applies it, logging appropriately.
-func (m *Migrator[TTx]) applyMigrations(ctx context.Context, tx pgx.Tx, direction Direction, opts *MigrateOpts, sortedTargetMigrations []*migrationBundle) (*MigrateResult, error) {
+func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Executor, direction Direction, opts *MigrateOpts, sortedTargetMigrations []*migrationBundle) (*MigrateResult, error) {
 	if opts == nil {
 		opts = &MigrateOpts{}
 	}
@@ -355,7 +350,7 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, tx pgx.Tx, directio
 			slog.Int("version", versionBundle.Version),
 		)
 
-		_, err := tx.Exec(ctx, sql)
+		_, err := exec.Exec(ctx, sql)
 		if err != nil {
 			return nil, fmt.Errorf("error applying version %03d [%s]: %w",
 				versionBundle.Version, strings.ToUpper(string(direction)), err)
@@ -377,26 +372,18 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, tx pgx.Tx, directio
 // the `river_migration` table not existing yet. (The subtransaction is needed
 // because otherwise the existing transaction would become aborted on an
 // unsuccessful `river_migration` check.)
-func (m *Migrator[TTx]) existingMigrations(ctx context.Context, tx pgx.Tx) ([]*dbsqlc.RiverMigration, error) {
-	// We start another inner transaction here because in case this is the first
-	// ever migration run, the transaction may become aborted if `river_migration`
-	// doesn't exist, a condition which we must handle gracefully.
-	migrations, err := dbutil.WithTxV(ctx, tx, func(ctx context.Context, tx pgx.Tx) ([]*dbsqlc.RiverMigration, error) {
-		migrations, err := m.queries.RiverMigrationGetAll(ctx, tx)
-		if err != nil {
-			return nil, fmt.Errorf("error getting current migrate rows: %w", err)
-		}
-		return migrations, nil
-	})
+func (m *Migrator[TTx]) existingMigrations(ctx context.Context, exec riverdriver.Executor) ([]*riverdriver.Migration, error) {
+	exists, err := exec.TableExists(ctx, "river_migration")
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			if pgErr.Code == pgerrcode.UndefinedTable && strings.Contains(pgErr.Message, "river_migration") {
-				return nil, nil
-			}
-		}
+		return nil, fmt.Errorf("error checking if `%s` exists: %w", "river_migration", err)
+	}
+	if !exists {
+		return nil, nil
+	}
 
-		return nil, err
+	migrations, err := exec.MigrationGetAll(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error getting existing migrations: %w", err)
 	}
 
 	return migrations, nil
