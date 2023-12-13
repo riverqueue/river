@@ -13,9 +13,9 @@ require (
 	github.com/jackc/pgx/v5 v5.5.1
 	github.com/jackc/puddle/v2 v2.2.1
 	github.com/oklog/ulid/v2 v2.1.0
-	github.com/riverqueue/river/riverdriver v0.0.0-00010101000000-000000000000
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.0.12
-	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.0.0-00010101000000-000000000000
+	github.com/riverqueue/river/riverdriver v0.0.13
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.0.13
+	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.0.13
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cobra v1.8.0
 	github.com/stretchr/testify v1.8.4
