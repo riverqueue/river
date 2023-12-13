@@ -151,35 +151,30 @@ jobs:
       - name: Lint
         uses: golangci/golangci-lint-action@v3
         with:
-          only-new-issues: true # Optional: show only new issues if it's a pull request. The default value is `false`.
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           working-directory: .
 
       - name: Lint cmd/river
         uses: golangci/golangci-lint-action@v3
         with:
-          only-new-issues: true # Optional: show only new issues if it's a pull request. The default value is `false`.
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           working-directory: ./cmd/river
 
       - name: Lint riverdriver
         uses: golangci/golangci-lint-action@v3
         with:
-          only-new-issues: true # Optional: show only new issues if it's a pull request. The default value is `false`.
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           working-directory: ./riverdriver
 
       - name: Lint riverdriver/riverdatabasesql
         uses: golangci/golangci-lint-action@v3
         with:
-          only-new-issues: true # Optional: show only new issues if it's a pull request. The default value is `false`.
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           working-directory: ./riverdriver/riverdatabasesql
 
       - name: Lint riverdriver/riverpgxv5
         uses: golangci/golangci-lint-action@v3
         with:
-          only-new-issues: true # Optional: show only new issues if it's a pull request. The default value is `false`.
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           working-directory: ./riverdriver/riverpgxv5
 
