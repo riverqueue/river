@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.14] - 2023-12-13
+
+### Fixed
+
+- River CLI `go.sum` entries fixed for 0.0.13 release.
+
 ## [0.0.13] - 2023-12-12
 
 ### Added
