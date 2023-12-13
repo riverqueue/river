@@ -81,7 +81,7 @@ func DatabaseConfig(databaseName string) *pgxpool.Config {
 // it may be useful in non-pgx situations like for examples showing the use of
 // `database/sql`.
 func DatabaseURL(databaseName string) string {
-	u, err := url.Parse(valutil.ValOrDefault(
+	parsedURL, err := url.Parse(valutil.ValOrDefault(
 		os.Getenv("TEST_DATABASE_URL"),
 		"postgres://localhost/river_testdb?sslmode=disable"),
 	)
@@ -90,10 +90,10 @@ func DatabaseURL(databaseName string) string {
 	}
 
 	if databaseName != "" {
-		u.Path = databaseName
+		parsedURL.Path = databaseName
 	}
 
-	return u.String()
+	return parsedURL.String()
 }
 
 // DiscardContinuously drains continuously out of the given channel and discards
