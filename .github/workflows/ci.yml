@@ -85,6 +85,10 @@ jobs:
         working-directory: ./riverdriver/riverpgxv5
         run: go test -race ./...
 
+      - name: Test rivertype
+        working-directory: ./rivertype
+        run: go test -race ./...
+
   cli:
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -186,6 +190,12 @@ jobs:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           working-directory: ./riverdriver/riverpgxv5
 
+      - name: Lint rivertype
+        uses: golangci/golangci-lint-action@v3
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          working-directory: ./rivertype
+
   producer_sample:
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -250,7 +260,7 @@ jobs:
       - name: Setup sqlc
         uses: sqlc-dev/setup-sqlc@v4
         with:
-          sqlc-version: "1.24.0"
+          sqlc-version: "1.25.0"
 
       - name: Run sqlc diff
         run: |

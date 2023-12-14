@@ -120,7 +120,7 @@ func TestMigrator(t *testing.T) {
 			require.Equal(t, DirectionDown, res.Direction)
 			require.Equal(t, []int{3}, sliceutil.Map(res.Versions, migrateVersionToInt))
 
-			err = dbExecError(ctx, bundle.tx, "SELECT * FROM river_job")
+			err = dbExecError(ctx, bundle.driver.UnwrapExecutor(bundle.tx), "SELECT * FROM river_job")
 			require.NoError(t, err)
 		}
 
@@ -131,7 +131,7 @@ func TestMigrator(t *testing.T) {
 			require.Equal(t, DirectionDown, res.Direction)
 			require.Equal(t, []int{2}, sliceutil.Map(res.Versions, migrateVersionToInt))
 
-			err = dbExecError(ctx, bundle.tx, "SELECT * FROM river_job")
+			err = dbExecError(ctx, bundle.driver.UnwrapExecutor(bundle.tx), "SELECT * FROM river_job")
 			require.Error(t, err)
 		}
 	})
@@ -167,7 +167,7 @@ func TestMigrator(t *testing.T) {
 		require.Equal(t, seqOneTo(riverMigrationsWithTestVersionsMaxVersion-2),
 			sliceutil.Map(migrations, migrationToInt))
 
-		err = dbExecError(ctx, bundle.tx, "SELECT name FROM test_table")
+		err = dbExecError(ctx, bundle.driver.UnwrapExecutor(bundle.tx), "SELECT name FROM test_table")
 		require.Error(t, err)
 	})
 
@@ -223,7 +223,7 @@ func TestMigrator(t *testing.T) {
 		require.Equal(t, seqOneTo(3),
 			sliceutil.Map(migrations, migrationToInt))
 
-		err = dbExecError(ctx, bundle.tx, "SELECT name FROM test_table")
+		err = dbExecError(ctx, bundle.driver.UnwrapExecutor(bundle.tx), "SELECT name FROM test_table")
 		require.Error(t, err)
 	})
 
@@ -240,7 +240,7 @@ func TestMigrator(t *testing.T) {
 		require.Equal(t, seqToOne(5),
 			sliceutil.Map(res.Versions, migrateVersionToInt))
 
-		err = dbExecError(ctx, bundle.tx, "SELECT name FROM river_migrate")
+		err = dbExecError(ctx, bundle.driver.UnwrapExecutor(bundle.tx), "SELECT name FROM river_migrate")
 		require.Error(t, err)
 	})
 
@@ -327,7 +327,7 @@ func TestMigrator(t *testing.T) {
 			sliceutil.Map(migrations, migrationToInt))
 
 		// Column `name` is only added in the second test version.
-		err = dbExecError(ctx, bundle.tx, "SELECT name FROM test_table")
+		err = dbExecError(ctx, bundle.driver.UnwrapExecutor(bundle.tx), "SELECT name FROM test_table")
 		require.Error(t, err)
 
 		var pgErr *pgconn.PgError
@@ -432,9 +432,9 @@ func TestMigrator(t *testing.T) {
 // A command returning an error aborts the transaction. This is a shortcut to
 // execute a command in a subtransaction so that we can verify an error, but
 // continue to use the original transaction.
-func dbExecError(ctx context.Context, executor dbutil.Executor, sql string) error {
-	return dbutil.WithTx(ctx, executor, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, sql)
+func dbExecError(ctx context.Context, exec riverdriver.Executor, sql string) error {
+	return dbutil.WithTx(ctx, exec, func(ctx context.Context, exec riverdriver.ExecutorTx) error {
+		_, err := exec.Exec(ctx, sql)
 		return err
 	})
 }

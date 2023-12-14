@@ -3,21 +3,15 @@ package notifier
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
-	"strconv"
 	"sync"
 	"time"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/componentstatus"
 	"github.com/riverqueue/river/internal/rivercommon"
+	"github.com/riverqueue/river/riverdriver"
 )
-
-const statementTimeout = 5 * time.Second
 
 type NotificationTopic string
 
@@ -52,8 +46,8 @@ type subscriptionChange struct {
 type Notifier struct {
 	baseservice.BaseService
 
-	connConfig       *pgx.ConnConfig
-	notificationBuf  chan *pgconn.Notification
+	listener         riverdriver.Listener
+	notificationBuf  chan *riverdriver.Notification
 	statusChangeFunc func(componentstatus.Status)
 	logger           *slog.Logger
 
@@ -63,20 +57,16 @@ type Notifier struct {
 	subChangeCh  chan *subscriptionChange
 }
 
-func New(archetype *baseservice.Archetype, connConfig *pgx.ConnConfig, statusChangeFunc func(componentstatus.Status), logger *slog.Logger) *Notifier {
-	copiedConfig := connConfig.Copy()
-	// Rely on an overall statement timeout instead of setting identical context timeouts on every query:
-	copiedConfig.RuntimeParams["statement_timeout"] = strconv.Itoa(int(statementTimeout.Milliseconds()))
+func New(archetype *baseservice.Archetype, listener riverdriver.Listener, statusChangeFunc func(componentstatus.Status), logger *slog.Logger) *Notifier {
 	notifier := baseservice.Init(archetype, &Notifier{
-		connConfig:       copiedConfig,
-		notificationBuf:  make(chan *pgconn.Notification, 1000),
+		listener:         listener,
+		notificationBuf:  make(chan *riverdriver.Notification, 1000),
 		statusChangeFunc: statusChangeFunc,
 		logger:           logger.WithGroup("notifier"),
 
 		subs:        make(map[NotificationTopic][]*Subscription),
 		subChangeCh: make(chan *subscriptionChange, 1000),
 	})
-	copiedConfig.OnNotification = notifier.handleNotification
 	return notifier
 }
 
@@ -116,18 +106,18 @@ func (n *Notifier) deliverNotifications(ctx context.Context) {
 	}
 }
 
-func (n *Notifier) deliverNotification(notif *pgconn.Notification) {
+func (n *Notifier) deliverNotification(notif *riverdriver.Notification) {
 	n.mu.Lock()
 
-	fns := make([]NotifyFunc, len(n.subs[NotificationTopic(notif.Channel)]))
-	for i, sub := range n.subs[NotificationTopic(notif.Channel)] {
+	fns := make([]NotifyFunc, len(n.subs[NotificationTopic(notif.Topic)]))
+	for i, sub := range n.subs[NotificationTopic(notif.Topic)] {
 		fns[i] = sub.notifyFunc
 	}
 	n.mu.Unlock()
 
 	for _, fn := range fns {
 		// TODO: panic recovery on delivery attempts
-		fn(NotificationTopic(notif.Channel), notif.Payload)
+		fn(NotificationTopic(notif.Topic), notif.Payload)
 	}
 }
 
@@ -135,8 +125,7 @@ func (n *Notifier) getConnAndRun(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	conn, err := n.establishConn(ctx)
-	if err != nil {
+	if err := n.listener.Connect(ctx); err != nil {
 		if !errors.Is(context.Cause(ctx), rivercommon.ErrShutdown) {
 			n.logger.Error("error establishing connection from pool", "err", err)
 		}
@@ -146,7 +135,10 @@ func (n *Notifier) getConnAndRun(ctx context.Context) {
 		// use an already-canceled context here so conn.Close() does not block the run loop
 		ctx, cancel := context.WithDeadline(ctx, time.Now())
 		defer cancel()
-		conn.Close(ctx)
+
+		if err := n.listener.Close(ctx); err != nil {
+			n.logger.Error("error closing listener", "err", err)
+		}
 	}()
 
 	startingTopics := n.setConnActive()
@@ -156,7 +148,7 @@ func (n *Notifier) getConnAndRun(ctx context.Context) {
 	// active = false) just to ensure nobody is blocking on sending to it
 
 	for _, topic := range startingTopics {
-		if err := n.execListen(ctx, conn, topic); err != nil {
+		if err := n.listener.Listen(ctx, string(topic)); err != nil {
 			// TODO: log?
 			return
 		}
@@ -173,7 +165,7 @@ func (n *Notifier) getConnAndRun(ctx context.Context) {
 		default:
 		}
 
-		err := n.runOnce(ctx, conn)
+		err := n.runOnce(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				n.statusChangeFunc(componentstatus.ShuttingDown)
@@ -185,15 +177,26 @@ func (n *Notifier) getConnAndRun(ctx context.Context) {
 	}
 }
 
-func (n *Notifier) runOnce(ctx context.Context, conn *pgx.Conn) error {
+func (n *Notifier) runOnce(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	errCh := make(chan error)
 
 	go func() {
-		err := conn.PgConn().WaitForNotification(ctx)
-		errCh <- err
+		for {
+			notif, err := n.listener.WaitForNotification(ctx)
+			if err != nil {
+				errCh <- err
+				return
+			}
+
+			select {
+			case n.notificationBuf <- notif:
+			default:
+				n.logger.Warn("dropping notification due to full buffer", "payload", notif.Payload)
+			}
+		}
 	}()
 
 	drainErrCh := func() error {
@@ -227,7 +230,7 @@ func (n *Notifier) runOnce(ctx context.Context, conn *pgx.Conn) error {
 			return err
 		}
 		// Ping the conn to see if it's still alive
-		if err := conn.Ping(ctx); err != nil {
+		if err := n.listener.Ping(ctx); err != nil {
 			return err
 		}
 	case err := <-errCh:
@@ -244,26 +247,12 @@ func (n *Notifier) runOnce(ctx context.Context, conn *pgx.Conn) error {
 		}
 		// Apply the subscription change
 		if subChange.isNewTopic {
-			return n.execListen(ctx, conn, subChange.topic)
+			return n.listener.Listen(ctx, string(subChange.topic))
 		} else {
-			return n.execUnlisten(ctx, conn, subChange.topic)
+			return n.listener.Unlisten(ctx, string(subChange.topic))
 		}
 	}
 	return nil
-}
-
-func (n *Notifier) execListen(ctx context.Context, conn *pgx.Conn, topic NotificationTopic) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	_, err := conn.Exec(ctx, fmt.Sprintf("LISTEN %s", topic))
-	return err
-}
-
-func (n *Notifier) execUnlisten(ctx context.Context, conn *pgx.Conn, topic NotificationTopic) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	_, err := conn.Exec(ctx, fmt.Sprintf("UNLISTEN %s", topic))
-	return err
 }
 
 func (n *Notifier) setConnActive() []NotificationTopic {
@@ -291,21 +280,6 @@ func (n *Notifier) setConnInactive() {
 		default:
 			return
 		}
-	}
-}
-
-func (n *Notifier) establishConn(ctx context.Context) (*pgx.Conn, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	return pgx.ConnectConfig(ctx, n.connConfig)
-}
-
-func (n *Notifier) handleNotification(conn *pgconn.PgConn, notification *pgconn.Notification) {
-	select {
-	case n.notificationBuf <- notification:
-	default:
-		n.logger.Warn("dropping notification due to full buffer", "payload", notification.Payload)
 	}
 }
 

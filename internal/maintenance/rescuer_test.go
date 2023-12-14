@@ -7,15 +7,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/internal/riverinternaltest/testfactory"
 	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/internal/util/timeutil"
 	"github.com/riverqueue/river/internal/workunit"
+	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -52,46 +52,20 @@ func TestRescuer(t *testing.T) {
 
 	const rescuerJobKind = "rescuer"
 
-	var (
-		ctx     = context.Background()
-		queries = dbsqlc.New()
-	)
+	ctx := context.Background()
 
 	type testBundle struct {
+		exec          riverdriver.Executor
 		rescueHorizon time.Time
-		tx            pgx.Tx
-	}
-
-	type insertJobParams struct {
-		Attempt     int16
-		AttemptedAt *time.Time
-		MaxAttempts int16
-		Metadata    []byte
-		State       dbsqlc.JobState
-	}
-
-	insertJob := func(ctx context.Context, dbtx dbsqlc.DBTX, params insertJobParams) *dbsqlc.RiverJob {
-		job, err := queries.JobInsert(ctx, dbtx, dbsqlc.JobInsertParams{
-			Attempt:     params.Attempt,
-			AttemptedAt: params.AttemptedAt,
-			Args:        []byte("{}"),
-			Kind:        rescuerJobKind,
-			MaxAttempts: 5,
-			Metadata:    params.Metadata,
-			Priority:    int16(rivercommon.PriorityDefault),
-			Queue:       rivercommon.QueueDefault,
-			State:       params.State,
-		})
-		require.NoError(t, err)
-		return job
 	}
 
 	setup := func(t *testing.T) (*Rescuer, *testBundle) {
 		t.Helper()
 
+		tx := riverinternaltest.TestTx(ctx, t)
 		bundle := &testBundle{
+			exec:          riverpgxv5.New(nil).UnwrapExecutor(tx),
 			rescueHorizon: time.Now().Add(-RescueAfterDefault),
-			tx:            riverinternaltest.TestTx(ctx, t),
 		}
 
 		rescuer := NewRescuer(
@@ -107,7 +81,7 @@ func TestRescuer(t *testing.T) {
 					panic("unhandled kind: " + kind)
 				},
 			},
-			bundle.tx)
+			bundle.exec)
 		rescuer.TestSignals.Init()
 		t.Cleanup(rescuer.Stop)
 
@@ -146,71 +120,71 @@ func TestRescuer(t *testing.T) {
 
 		cleaner, bundle := setup(t)
 
-		stuckToRetryJob1 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateRunning, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour))})
-		stuckToRetryJob2 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateRunning, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Minute))})
-		stuckToRetryJob3 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateRunning, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(1 * time.Minute))}) // won't be rescued
+		stuckToRetryJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+		stuckToRetryJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)})
+		stuckToRetryJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(1 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)}) // won't be rescued
 
 		// Already at max attempts:
-		stuckToDiscardJob1 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateRunning, Attempt: 5, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour))})
-		stuckToDiscardJob2 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateRunning, Attempt: 5, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(1 * time.Minute))}) // won't be rescued
+		stuckToDiscardJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), Attempt: ptrutil.Ptr(5), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+		stuckToDiscardJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), Attempt: ptrutil.Ptr(5), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(1 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)}) // won't be rescued
 
 		// Marked as cancelled by query:
 		cancelTime := time.Now().UTC().Format(time.RFC3339Nano)
-		stuckToCancelJob1 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateRunning, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), Metadata: []byte(fmt.Sprintf(`{"cancel_attempted_at": %q}`, cancelTime))})
-		stuckToCancelJob2 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateRunning, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(1 * time.Minute)), Metadata: []byte(fmt.Sprintf(`{"cancel_attempted_at": %q}`, cancelTime))}) // won't be rescued
+		stuckToCancelJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), Metadata: []byte(fmt.Sprintf(`{"cancel_attempted_at": %q}`, cancelTime)), MaxAttempts: ptrutil.Ptr(5)})
+		stuckToCancelJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(1 * time.Minute)), Metadata: []byte(fmt.Sprintf(`{"cancel_attempted_at": %q}`, cancelTime)), MaxAttempts: ptrutil.Ptr(5)}) // won't be rescued
 
 		// these aren't touched:
-		notRunningJob1 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateCompleted, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour))})
-		notRunningJob2 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateDiscarded, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour))})
-		notRunningJob3 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateCancelled, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour))})
+		notRunningJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateCompleted), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+		notRunningJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateDiscarded), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+		notRunningJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateCancelled), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
 
 		require.NoError(cleaner.Start(ctx))
 
 		cleaner.TestSignals.FetchedBatch.WaitOrTimeout()
 		cleaner.TestSignals.UpdatedBatch.WaitOrTimeout()
 
-		confirmRetried := func(jobBefore *dbsqlc.RiverJob) {
-			jobAfter, err := queries.JobGetByID(ctx, bundle.tx, jobBefore.ID)
+		confirmRetried := func(jobBefore *rivertype.JobRow) {
+			jobAfter, err := bundle.exec.JobGetByID(ctx, jobBefore.ID)
 			require.NoError(err)
-			require.Equal(dbsqlc.JobStateRetryable, jobAfter.State)
+			require.Equal(rivertype.JobStateRetryable, jobAfter.State)
 		}
 
 		var err error
 		confirmRetried(stuckToRetryJob1)
 		confirmRetried(stuckToRetryJob2)
-		job3After, err := queries.JobGetByID(ctx, bundle.tx, stuckToRetryJob3.ID)
+		job3After, err := bundle.exec.JobGetByID(ctx, stuckToRetryJob3.ID)
 		require.NoError(err)
 		require.Equal(stuckToRetryJob3.State, job3After.State) // not rescued
 
-		discard1After, err := queries.JobGetByID(ctx, bundle.tx, stuckToDiscardJob1.ID)
+		discard1After, err := bundle.exec.JobGetByID(ctx, stuckToDiscardJob1.ID)
 		require.NoError(err)
-		require.Equal(dbsqlc.JobStateDiscarded, discard1After.State)
+		require.Equal(rivertype.JobStateDiscarded, discard1After.State)
 		require.WithinDuration(time.Now(), *discard1After.FinalizedAt, 5*time.Second)
 		require.Len(discard1After.Errors, 1)
 
-		discard2After, err := queries.JobGetByID(ctx, bundle.tx, stuckToDiscardJob2.ID)
+		discard2After, err := bundle.exec.JobGetByID(ctx, stuckToDiscardJob2.ID)
 		require.NoError(err)
-		require.Equal(dbsqlc.JobStateRunning, discard2After.State)
+		require.Equal(rivertype.JobStateRunning, discard2After.State)
 		require.Nil(discard2After.FinalizedAt)
 
-		cancel1After, err := queries.JobGetByID(ctx, bundle.tx, stuckToCancelJob1.ID)
+		cancel1After, err := bundle.exec.JobGetByID(ctx, stuckToCancelJob1.ID)
 		require.NoError(err)
-		require.Equal(dbsqlc.JobStateCancelled, cancel1After.State)
+		require.Equal(rivertype.JobStateCancelled, cancel1After.State)
 		require.WithinDuration(time.Now(), *cancel1After.FinalizedAt, 5*time.Second)
 		require.Len(cancel1After.Errors, 1)
 
-		cancel2After, err := queries.JobGetByID(ctx, bundle.tx, stuckToCancelJob2.ID)
+		cancel2After, err := bundle.exec.JobGetByID(ctx, stuckToCancelJob2.ID)
 		require.NoError(err)
-		require.Equal(dbsqlc.JobStateRunning, cancel2After.State)
+		require.Equal(rivertype.JobStateRunning, cancel2After.State)
 		require.Nil(cancel2After.FinalizedAt)
 
-		notRunning1After, err := queries.JobGetByID(ctx, bundle.tx, notRunningJob1.ID)
+		notRunning1After, err := bundle.exec.JobGetByID(ctx, notRunningJob1.ID)
 		require.NoError(err)
 		require.Equal(notRunning1After.State, notRunningJob1.State)
-		notRunning2After, err := queries.JobGetByID(ctx, bundle.tx, notRunningJob2.ID)
+		notRunning2After, err := bundle.exec.JobGetByID(ctx, notRunningJob2.ID)
 		require.NoError(err)
 		require.Equal(notRunning2After.State, notRunningJob2.State)
-		notRunning3After, err := queries.JobGetByID(ctx, bundle.tx, notRunningJob3.ID)
+		notRunning3After, err := bundle.exec.JobGetByID(ctx, notRunningJob3.ID)
 		require.NoError(err)
 		require.Equal(notRunning3After.State, notRunningJob3.State)
 	})
@@ -225,10 +199,10 @@ func TestRescuer(t *testing.T) {
 		// one extra batch, ensuring that we've tested working multiple.
 		numJobs := cleaner.batchSize + 1
 
-		jobs := make([]*dbsqlc.RiverJob, numJobs)
+		jobs := make([]*rivertype.JobRow, numJobs)
 
 		for i := 0; i < numJobs; i++ {
-			job := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateRunning, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour))})
+			job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
 			jobs[i] = job
 		}
 
@@ -241,9 +215,9 @@ func TestRescuer(t *testing.T) {
 		cleaner.TestSignals.UpdatedBatch.WaitOrTimeout() // need to wait until after this for the conn to be free
 
 		for _, job := range jobs {
-			jobUpdated, err := queries.JobGetByID(ctx, bundle.tx, job.ID)
+			jobUpdated, err := bundle.exec.JobGetByID(ctx, job.ID)
 			require.NoError(t, err)
-			require.Equal(t, dbsqlc.JobStateRetryable, jobUpdated.State)
+			require.Equal(t, rivertype.JobStateRetryable, jobUpdated.State)
 		}
 	})
 
@@ -297,7 +271,7 @@ func TestRescuer(t *testing.T) {
 		rescuer, bundle := setup(t)
 		rescuer.Config.Interval = time.Minute // should only trigger once for the initial run
 
-		job1 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateRunning, Attempt: 5, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour))})
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), Attempt: ptrutil.Ptr(5), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
 
 		require.NoError(t, rescuer.Start(ctx))
 
@@ -306,18 +280,18 @@ func TestRescuer(t *testing.T) {
 
 		rescuer.Stop()
 
-		job2 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateRunning, Attempt: 5, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Minute))})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), Attempt: ptrutil.Ptr(5), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)})
 
 		require.NoError(t, rescuer.Start(ctx))
 
 		rescuer.TestSignals.FetchedBatch.WaitOrTimeout()
 		rescuer.TestSignals.UpdatedBatch.WaitOrTimeout()
 
-		job1After, err := queries.JobGetByID(ctx, bundle.tx, job1.ID)
+		job1After, err := bundle.exec.JobGetByID(ctx, job1.ID)
 		require.NoError(t, err)
-		require.Equal(t, dbsqlc.JobStateDiscarded, job1After.State)
-		job2After, err := queries.JobGetByID(ctx, bundle.tx, job2.ID)
+		require.Equal(t, rivertype.JobStateDiscarded, job1After.State)
+		job2After, err := bundle.exec.JobGetByID(ctx, job2.ID)
 		require.NoError(t, err)
-		require.Equal(t, dbsqlc.JobStateDiscarded, job2After.State)
+		require.Equal(t, rivertype.JobStateDiscarded, job2After.State)
 	})
 }

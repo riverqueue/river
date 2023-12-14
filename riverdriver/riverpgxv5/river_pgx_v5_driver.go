@@ -8,12 +8,17 @@ package riverpgxv5
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math"
+	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5/internal/dbsqlc"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // Driver is an implementation of riverdriver.Driver for Pgx v5.
@@ -38,10 +43,13 @@ func New(dbPool *pgxpool.Pool) *Driver {
 	return &Driver{dbPool: dbPool, queries: dbsqlc.New()}
 }
 
-func (d *Driver) GetDBPool() *pgxpool.Pool                      { return d.dbPool }
-func (d *Driver) GetExecutor() riverdriver.Executor             { return &Executor{d.dbPool, dbsqlc.New()} }
-func (d *Driver) UnwrapExecutor(tx pgx.Tx) riverdriver.Executor { return &Executor{tx, dbsqlc.New()} }
-func (d *Driver) UnwrapTx(tx pgx.Tx) pgx.Tx                     { return tx }
+func (d *Driver) GetExecutor() riverdriver.Executor { return &Executor{d.dbPool, dbsqlc.New()} }
+func (d *Driver) GetListener() riverdriver.Listener { return &Listener{dbPool: d.dbPool} }
+func (d *Driver) HasPool() bool                     { return d.dbPool != nil }
+
+func (d *Driver) UnwrapExecutor(tx pgx.Tx) riverdriver.ExecutorTx {
+	return &ExecutorTx{Executor: Executor{tx, dbsqlc.New()}, tx: tx}
+}
 
 type Executor struct {
 	dbtx interface {
@@ -64,21 +72,375 @@ func (e *Executor) Exec(ctx context.Context, sql string) (struct{}, error) {
 	return struct{}{}, interpretError(err)
 }
 
+func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error) {
+	cancelledAt, err := params.CancelAttemptedAt.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+
+	job, err := e.queries.JobCancel(ctx, e.dbtx, dbsqlc.JobCancelParams{
+		ID:                params.ID,
+		CancelAttemptedAt: cancelledAt,
+		JobControlTopic:   params.JobControlTopic,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return jobRowFromInternal(job), nil
+}
+
+func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobDeleteBeforeParams) (int, error) {
+	numDeleted, err := e.queries.JobDeleteBefore(ctx, e.dbtx, dbsqlc.JobDeleteBeforeParams{
+		CancelledFinalizedAtHorizon: params.CancelledFinalizedAtHorizon,
+		CompletedFinalizedAtHorizon: params.CompletedFinalizedAtHorizon,
+		DiscardedFinalizedAtHorizon: params.DiscardedFinalizedAtHorizon,
+		Max:                         int64(params.Max),
+	})
+	return int(numDeleted), interpretError(err)
+}
+
+func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
+	jobs, err := e.queries.JobGetAvailable(ctx, e.dbtx, dbsqlc.JobGetAvailableParams{
+		AttemptedBy: params.AttemptedBy,
+		Max:         int32(params.Max),
+		Queue:       params.Queue,
+	})
+	return mapSlice(jobs, jobRowFromInternal), interpretError(err)
+}
+
+func (e *Executor) JobGetByID(ctx context.Context, id int64) (*rivertype.JobRow, error) {
+	job, err := e.queries.JobGetByID(ctx, e.dbtx, id)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return jobRowFromInternal(job), nil
+}
+
+func (e *Executor) JobGetByIDMany(ctx context.Context, id []int64) ([]*rivertype.JobRow, error) {
+	jobs, err := e.queries.JobGetByIDMany(ctx, e.dbtx, id)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return mapSlice(jobs, jobRowFromInternal), nil
+}
+
+func (e *Executor) JobGetByKindAndUniqueProperties(ctx context.Context, params *riverdriver.JobGetByKindAndUniquePropertiesParams) (*rivertype.JobRow, error) {
+	job, err := e.queries.JobGetByKindAndUniqueProperties(ctx, e.dbtx, dbsqlc.JobGetByKindAndUniquePropertiesParams(*params))
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return jobRowFromInternal(job), nil
+}
+
+func (e *Executor) JobGetByKindMany(ctx context.Context, kind []string) ([]*rivertype.JobRow, error) {
+	jobs, err := e.queries.JobGetByKindMany(ctx, e.dbtx, kind)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return mapSlice(jobs, jobRowFromInternal), nil
+}
+
+func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error) {
+	jobs, err := e.queries.JobGetStuck(ctx, e.dbtx, dbsqlc.JobGetStuckParams{Max: int32(params.Max), StuckHorizon: params.StuckHorizon})
+	return mapSlice(jobs, jobRowFromInternal), interpretError(err)
+}
+
+func (e *Executor) JobInsertFast(ctx context.Context, params *riverdriver.JobInsertFastParams) (*rivertype.JobRow, error) {
+	job, err := e.queries.JobInsertFast(ctx, e.dbtx, dbsqlc.JobInsertFastParams{
+		Args:        params.EncodedArgs,
+		Kind:        params.Kind,
+		MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)),
+		Metadata:    params.Metadata,
+		Priority:    int16(min(params.Priority, math.MaxInt16)),
+		Queue:       params.Queue,
+		ScheduledAt: params.ScheduledAt,
+		State:       dbsqlc.JobState(params.State),
+		Tags:        params.Tags,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return jobRowFromInternal(job), nil
+}
+
+func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.JobInsertFastParams) (int64, error) {
+	insertJobsParams := make([]dbsqlc.JobInsertManyParams, len(params))
+	now := time.Now()
+
+	for i := 0; i < len(params); i++ {
+		params := params[i]
+
+		metadata := params.Metadata
+		if metadata == nil {
+			metadata = []byte("{}")
+		}
+
+		scheduledAt := now
+		if params.ScheduledAt != nil {
+			scheduledAt = *params.ScheduledAt
+		}
+
+		tags := params.Tags
+		if tags == nil {
+			tags = []string{}
+		}
+
+		insertJobsParams[i] = dbsqlc.JobInsertManyParams{
+			Args:        params.EncodedArgs,
+			Kind:        params.Kind,
+			MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)),
+			Metadata:    metadata,
+			Priority:    int16(min(params.Priority, math.MaxInt16)),
+			Queue:       params.Queue,
+			ScheduledAt: scheduledAt,
+			State:       dbsqlc.JobState(params.State),
+			Tags:        tags,
+		}
+	}
+
+	numInserted, err := e.queries.JobInsertMany(ctx, e.dbtx, insertJobsParams)
+	if err != nil {
+		return 0, fmt.Errorf("error inserting many jobs: %w", err)
+	}
+
+	return numInserted, nil
+}
+
+func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobInsertFullParams) (*rivertype.JobRow, error) {
+	job, err := e.queries.JobInsertFull(ctx, e.dbtx, dbsqlc.JobInsertFullParams{
+		Attempt:     int16(params.Attempt),
+		AttemptedAt: params.AttemptedAt,
+		Args:        params.EncodedArgs,
+		CreatedAt:   params.CreatedAt,
+		Errors:      params.Errors,
+		FinalizedAt: params.FinalizedAt,
+		Kind:        params.Kind,
+		MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)),
+		Metadata:    params.Metadata,
+		Priority:    int16(min(params.Priority, math.MaxInt16)),
+		Queue:       params.Queue,
+		ScheduledAt: params.ScheduledAt,
+		State:       dbsqlc.JobState(params.State),
+		Tags:        params.Tags,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return jobRowFromInternal(job), nil
+}
+
+func (e *Executor) JobList(ctx context.Context, sql string, namedArgs map[string]any) ([]*rivertype.JobRow, error) {
+	rows, err := e.dbtx.Query(ctx, sql, pgx.NamedArgs(namedArgs))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []*dbsqlc.RiverJob
+	for rows.Next() {
+		var i dbsqlc.RiverJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Args,
+			&i.Attempt,
+			&i.AttemptedAt,
+			&i.AttemptedBy,
+			&i.CreatedAt,
+			&i.Errors,
+			&i.FinalizedAt,
+			&i.Kind,
+			&i.MaxAttempts,
+			&i.Metadata,
+			&i.Priority,
+			&i.Queue,
+			&i.State,
+			&i.ScheduledAt,
+			&i.Tags,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, interpretError(err)
+	}
+
+	return mapSlice(items, jobRowFromInternal), nil
+}
+
+func (e *Executor) JobListFields() string {
+	return "id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags"
+}
+
+func (e *Executor) JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, error) {
+	job, err := e.queries.JobRetry(ctx, e.dbtx, id)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return jobRowFromInternal(job), nil
+}
+
+func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRescueManyParams) (*struct{}, error) {
+	err := e.queries.JobRescueMany(ctx, e.dbtx, dbsqlc.JobRescueManyParams(*params))
+	return &struct{}{}, interpretError(err)
+}
+
+func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobScheduleParams) (int, error) {
+	numScheduled, err := e.queries.JobSchedule(ctx, e.dbtx, dbsqlc.JobScheduleParams{
+		InsertTopic: params.InsertTopic,
+		Max:         int64(params.Max),
+		Now:         params.Now,
+	})
+	return int(numScheduled), interpretError(err)
+}
+
+func (e *Executor) JobSetStateIfRunning(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
+	var maxAttempts int16
+	if params.MaxAttempts != nil {
+		maxAttempts = int16(*params.MaxAttempts)
+	}
+
+	job, err := e.queries.JobSetStateIfRunning(ctx, e.dbtx, dbsqlc.JobSetStateIfRunningParams{
+		ID:                  params.ID,
+		ErrorDoUpdate:       params.ErrData != nil,
+		Error:               params.ErrData,
+		FinalizedAtDoUpdate: params.FinalizedAt != nil,
+		FinalizedAt:         params.FinalizedAt,
+		MaxAttemptsUpdate:   params.MaxAttempts != nil,
+		MaxAttempts:         maxAttempts,
+		ScheduledAtDoUpdate: params.ScheduledAt != nil,
+		ScheduledAt:         params.ScheduledAt,
+		State:               dbsqlc.JobState(params.State),
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return jobRowFromInternal(job), nil
+}
+
+func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateParams) (*rivertype.JobRow, error) {
+	job, err := e.queries.JobUpdate(ctx, e.dbtx, dbsqlc.JobUpdateParams{
+		ID:                  params.ID,
+		AttemptedAtDoUpdate: params.AttemptedAtDoUpdate,
+		AttemptedAt:         params.AttemptedAt,
+		AttemptDoUpdate:     params.AttemptDoUpdate,
+		Attempt:             int16(params.Attempt),
+		ErrorsDoUpdate:      params.ErrorsDoUpdate,
+		Errors:              params.Errors,
+		FinalizedAtDoUpdate: params.FinalizedAtDoUpdate,
+		FinalizedAt:         params.FinalizedAt,
+		StateDoUpdate:       params.StateDoUpdate,
+		State:               dbsqlc.JobState(params.State),
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+
+	return jobRowFromInternal(job), nil
+}
+
+func (e *Executor) LeaderAttemptElect(ctx context.Context, params *riverdriver.LeaderElectParams) (bool, error) {
+	numElectionsWon, err := e.queries.LeaderAttemptElect(ctx, e.dbtx, dbsqlc.LeaderAttemptElectParams{
+		Name:     params.Name,
+		LeaderID: params.LeaderID,
+		TTL:      params.TTL,
+	})
+	if err != nil {
+		return false, interpretError(err)
+	}
+	return numElectionsWon > 0, nil
+}
+
+func (e *Executor) LeaderAttemptReelect(ctx context.Context, params *riverdriver.LeaderElectParams) (bool, error) {
+	numElectionsWon, err := e.queries.LeaderAttemptReelect(ctx, e.dbtx, dbsqlc.LeaderAttemptReelectParams{
+		Name:     params.Name,
+		LeaderID: params.LeaderID,
+		TTL:      params.TTL,
+	})
+	if err != nil {
+		return false, interpretError(err)
+	}
+	return numElectionsWon > 0, nil
+}
+
+func (e *Executor) LeaderDeleteExpired(ctx context.Context, name string) (int, error) {
+	numDeleted, err := e.queries.LeaderDeleteExpired(ctx, e.dbtx, name)
+	if err != nil {
+		return 0, interpretError(err)
+	}
+	return int(numDeleted), nil
+}
+
+func (e *Executor) LeaderGetElectedLeader(ctx context.Context, name string) (*riverdriver.Leader, error) {
+	leader, err := e.queries.LeaderGetElectedLeader(ctx, e.dbtx, name)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return leaderFromInternal(leader), nil
+}
+
+func (e *Executor) LeaderInsert(ctx context.Context, params *riverdriver.LeaderInsertParams) (*riverdriver.Leader, error) {
+	leader, err := e.queries.LeaderInsert(ctx, e.dbtx, dbsqlc.LeaderInsertParams{
+		ElectedAt: params.ElectedAt,
+		ExpiresAt: params.ExpiresAt,
+		LeaderID:  params.LeaderID,
+		Name:      params.Name,
+		TTL:       params.TTL,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return leaderFromInternal(leader), nil
+}
+
+func (e *Executor) LeaderResign(ctx context.Context, params *riverdriver.LeaderResignParams) (bool, error) {
+	numResigned, err := e.queries.LeaderResign(ctx, e.dbtx, dbsqlc.LeaderResignParams{
+		LeaderID:        params.LeaderID,
+		LeadershipTopic: params.LeadershipTopic,
+		Name:            params.Name,
+	})
+	if err != nil {
+		return false, interpretError(err)
+	}
+	return numResigned > 0, nil
+}
+
 func (e *Executor) MigrationDeleteByVersionMany(ctx context.Context, versions []int) ([]*riverdriver.Migration, error) {
 	migrations, err := e.queries.RiverMigrationDeleteByVersionMany(ctx, e.dbtx,
 		mapSlice(versions, func(v int) int64 { return int64(v) }))
-	return mapMigrations(migrations), interpretError(err)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return mapSlice(migrations, migrationFromInternal), nil
 }
 
 func (e *Executor) MigrationGetAll(ctx context.Context) ([]*riverdriver.Migration, error) {
 	migrations, err := e.queries.RiverMigrationGetAll(ctx, e.dbtx)
-	return mapMigrations(migrations), interpretError(err)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return mapSlice(migrations, migrationFromInternal), nil
 }
 
 func (e *Executor) MigrationInsertMany(ctx context.Context, versions []int) ([]*riverdriver.Migration, error) {
 	migrations, err := e.queries.RiverMigrationInsertMany(ctx, e.dbtx,
 		mapSlice(versions, func(v int) int64 { return int64(v) }))
-	return mapMigrations(migrations), interpretError(err)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return mapSlice(migrations, migrationFromInternal), nil
+}
+
+func (e *Executor) Notify(ctx context.Context, topic string, payload string) error {
+	return e.queries.PGNotify(ctx, e.dbtx, dbsqlc.PGNotifyParams{
+		Payload: payload,
+		Topic:   topic,
+	})
+}
+
+func (e *Executor) PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}, error) {
+	err := e.queries.PGAdvisoryXactLock(ctx, e.dbtx, key)
+	return &struct{}{}, interpretError(err)
 }
 
 func (e *Executor) TableExists(ctx context.Context, tableName string) (bool, error) {
@@ -99,29 +461,147 @@ func (t *ExecutorTx) Rollback(ctx context.Context) error {
 	return t.tx.Rollback(ctx)
 }
 
+type Listener struct {
+	conn   *pgxpool.Conn
+	dbPool *pgxpool.Pool
+	mu     sync.RWMutex
+}
+
+func (l *Listener) Close(ctx context.Context) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.conn == nil {
+		return nil
+	}
+
+	if err := l.conn.Conn().Close(ctx); err != nil {
+		return err
+	}
+	l.conn.Release()
+	l.conn = nil
+	return nil
+}
+
+func (l *Listener) Connect(ctx context.Context) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.conn != nil {
+		return errors.New("connection already established")
+	}
+
+	conn, err := l.dbPool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+
+	l.conn = conn
+	return nil
+}
+
+func (l *Listener) Listen(ctx context.Context, topic string) error {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	_, err := l.conn.Exec(ctx, "LISTEN "+topic)
+	return err
+}
+
+func (l *Listener) Ping(ctx context.Context) error {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	return l.conn.Ping(ctx)
+}
+
+func (l *Listener) Unlisten(ctx context.Context, topic string) error {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	_, err := l.conn.Exec(ctx, "UNLISTEN "+topic)
+	return err
+}
+
+func (l *Listener) WaitForNotification(ctx context.Context) (*riverdriver.Notification, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	notification, err := l.conn.Conn().WaitForNotification(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &riverdriver.Notification{
+		Topic:   notification.Channel,
+		Payload: notification.Payload,
+	}, nil
+}
+
+func attemptErrorFromInternal(e *dbsqlc.AttemptError) rivertype.AttemptError {
+	return rivertype.AttemptError{
+		At:      e.At.UTC(),
+		Attempt: int(e.Attempt),
+		Error:   e.Error,
+		Trace:   e.Trace,
+	}
+}
+
 func interpretError(err error) error {
 	if errors.Is(err, pgx.ErrNoRows) {
-		return riverdriver.ErrNoRows
+		return rivertype.ErrNotFound
 	}
 	return err
 }
 
-func mapMigrations(migrations []*dbsqlc.RiverMigration) []*riverdriver.Migration {
-	if migrations == nil {
-		return nil
+func jobRowFromInternal(internal *dbsqlc.RiverJob) *rivertype.JobRow {
+	var attemptedAt *time.Time
+	if internal.AttemptedAt != nil {
+		t := internal.AttemptedAt.UTC()
+		attemptedAt = &t
 	}
 
-	return mapSlice(migrations, func(m *dbsqlc.RiverMigration) *riverdriver.Migration {
-		return &riverdriver.Migration{
-			ID:        int(m.ID),
-			CreatedAt: m.CreatedAt,
-			Version:   int(m.Version),
-		}
-	})
+	var finalizedAt *time.Time
+	if internal.FinalizedAt != nil {
+		t := internal.FinalizedAt.UTC()
+		finalizedAt = &t
+	}
+
+	return &rivertype.JobRow{
+		ID:          internal.ID,
+		Attempt:     max(int(internal.Attempt), 0),
+		AttemptedAt: attemptedAt,
+		AttemptedBy: internal.AttemptedBy,
+		CreatedAt:   internal.CreatedAt.UTC(),
+		EncodedArgs: internal.Args,
+		Errors:      mapSlice(internal.Errors, func(e dbsqlc.AttemptError) rivertype.AttemptError { return attemptErrorFromInternal(&e) }),
+		FinalizedAt: finalizedAt,
+		Kind:        internal.Kind,
+		MaxAttempts: max(int(internal.MaxAttempts), 0),
+		Metadata:    internal.Metadata,
+		Priority:    max(int(internal.Priority), 0),
+		Queue:       internal.Queue,
+		ScheduledAt: internal.ScheduledAt.UTC(),
+		State:       rivertype.JobState(internal.State),
+		Tags:        internal.Tags,
+	}
+}
+
+func leaderFromInternal(internal *dbsqlc.RiverLeader) *riverdriver.Leader {
+	return &riverdriver.Leader{
+		ElectedAt: internal.ElectedAt.UTC(),
+		ExpiresAt: internal.ExpiresAt.UTC(),
+		LeaderID:  internal.LeaderID,
+		Name:      internal.Name,
+	}
 }
 
 // mapSlice manipulates a slice and transforms it to a slice of another type.
 func mapSlice[T any, R any](collection []T, mapFunc func(T) R) []R {
+	if collection == nil {
+		return nil
+	}
+
 	result := make([]R, len(collection))
 
 	for i, item := range collection {
@@ -129,4 +609,12 @@ func mapSlice[T any, R any](collection []T, mapFunc func(T) R) []R {
 	}
 
 	return result
+}
+
+func migrationFromInternal(internal *dbsqlc.RiverMigration) *riverdriver.Migration {
+	return &riverdriver.Migration{
+		ID:        int(internal.ID),
+		CreatedAt: internal.CreatedAt.UTC(),
+		Version:   int(internal.Version),
+	}
 }

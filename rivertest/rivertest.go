@@ -10,25 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
 )
-
-// dbtx is a database-like executor which is implemented by all of pgxpool.Pool,
-// pgx.Conn, and pgx.Tx. It's used to let package functions share code with a
-// common implementation that takes one of these.
-type dbtx interface {
-	CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error)
-	Exec(ctx context.Context, query string, args ...interface{}) (pgconn.CommandTag, error)
-	Query(ctx context.Context, query string, args ...interface{}) (pgx.Rows, error)
-	QueryRow(ctx context.Context, query string, args ...interface{}) pgx.Row
-}
 
 // testingT is an interface wrapper around *testing.T that's implemented by all
 // of *testing.T, *testing.F, and *testing.B.
@@ -104,7 +90,7 @@ func RequireInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobAr
 
 func requireInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, driver TDriver, expectedJob TArgs, opts *RequireInsertedOpts) *river.Job[TArgs] {
 	t.Helper()
-	actualArgs, err := requireInsertedErr[TDriver](ctx, t, driver.GetDBPool(), expectedJob, opts)
+	actualArgs, err := requireInsertedErr[TDriver](ctx, t, driver.GetExecutor(), expectedJob, opts)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
 	}
@@ -137,34 +123,33 @@ func RequireInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.Job
 func requireInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, tx TTx, expectedJob TArgs, opts *RequireInsertedOpts) *river.Job[TArgs] {
 	t.Helper()
 	var driver TDriver
-	actualArgs, err := requireInsertedErr[TDriver](ctx, t, driver.UnwrapTx(tx), expectedJob, opts)
+	actualArgs, err := requireInsertedErr[TDriver](ctx, t, driver.UnwrapExecutor(tx), expectedJob, opts)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
 	}
 	return actualArgs
 }
 
-func requireInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, db dbtx, expectedJob TArgs, opts *RequireInsertedOpts) (*river.Job[TArgs], error) {
+func requireInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, exec riverdriver.Executor, expectedJob TArgs, opts *RequireInsertedOpts) (*river.Job[TArgs], error) {
 	t.Helper()
-	queries := dbsqlc.New()
 
 	// Returned ordered by ID.
-	dbJobs, err := queries.JobGetByKind(ctx, db, expectedJob.Kind())
+	jobRows, err := exec.JobGetByKindMany(ctx, []string{expectedJob.Kind()})
 	if err != nil {
 		return nil, fmt.Errorf("error querying jobs: %w", err)
 	}
 
-	if len(dbJobs) < 1 {
+	if len(jobRows) < 1 {
 		failure(t, "No jobs found with kind: %s", expectedJob.Kind())
 		return nil, nil //nolint:nilnil
 	}
 
-	if len(dbJobs) > 1 {
+	if len(jobRows) > 1 {
 		failure(t, "More than one job found with kind: %s (you might want RequireManyInserted instead)", expectedJob.Kind())
 		return nil, nil //nolint:nilnil
 	}
 
-	jobRow := dbsqlc.JobRowFromInternal(dbJobs[0])
+	jobRow := jobRows[0]
 
 	var actualArgs TArgs
 	if err := json.Unmarshal(jobRow.EncodedArgs, &actualArgs); err != nil {
@@ -218,7 +203,7 @@ func RequireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.C
 
 func requireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, driver TDriver, expectedJobs []ExpectedJob) []*rivertype.JobRow {
 	t.Helper()
-	actualArgs, err := requireManyInsertedErr[TDriver](ctx, t, driver.GetDBPool(), expectedJobs)
+	actualArgs, err := requireManyInsertedErr[TDriver](ctx, t, driver.GetExecutor(), expectedJobs)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
 	}
@@ -255,34 +240,31 @@ func RequireManyInsertedTx[TDriver riverdriver.Driver[TTx], TTx any](ctx context
 func requireManyInsertedTx[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, tx TTx, expectedJobs []ExpectedJob) []*rivertype.JobRow {
 	t.Helper()
 	var driver TDriver
-	actualArgs, err := requireManyInsertedErr[TDriver](ctx, t, driver.UnwrapTx(tx), expectedJobs)
+	actualArgs, err := requireManyInsertedErr[TDriver](ctx, t, driver.UnwrapExecutor(tx), expectedJobs)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
 	}
 	return actualArgs
 }
 
-func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, db dbtx, expectedJobs []ExpectedJob) ([]*rivertype.JobRow, error) {
+func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, exec riverdriver.Executor, expectedJobs []ExpectedJob) ([]*rivertype.JobRow, error) {
 	t.Helper()
-	queries := dbsqlc.New()
 
 	expectedArgsKinds := sliceutil.Map(expectedJobs, func(j ExpectedJob) string { return j.Args.Kind() })
 
 	// Returned ordered by ID.
-	dbJobs, err := queries.JobGetByKindMany(ctx, db, expectedArgsKinds)
+	jobRows, err := exec.JobGetByKindMany(ctx, expectedArgsKinds)
 	if err != nil {
 		return nil, fmt.Errorf("error querying jobs: %w", err)
 	}
 
-	actualArgsKinds := sliceutil.Map(dbJobs, func(j *dbsqlc.RiverJob) string { return j.Kind })
+	actualArgsKinds := sliceutil.Map(jobRows, func(j *rivertype.JobRow) string { return j.Kind })
 
 	if !slices.Equal(expectedArgsKinds, actualArgsKinds) {
 		failure(t, "Inserted jobs didn't match expectation; expected: %+v, actual: %+v",
 			expectedArgsKinds, actualArgsKinds)
 		return nil, nil
 	}
-
-	jobRows := sliceutil.Map(dbJobs, dbsqlc.JobRowFromInternal)
 
 	for i, jobRow := range jobRows {
 		if expectedJobs[i].Opts != nil {

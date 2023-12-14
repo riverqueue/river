@@ -86,7 +86,9 @@ func TestWorkFunc(t *testing.T) {
 	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
 		t.Helper()
 
-		client := newTestClient(ctx, t, newTestConfig(t, nil))
+		dbPool := riverinternaltest.TestDB(ctx, t)
+
+		client := newTestClient(t, dbPool, newTestConfig(t, nil))
 		startClient(ctx, t, client)
 
 		return client, &testBundle{}

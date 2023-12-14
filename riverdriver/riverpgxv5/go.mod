@@ -1,12 +1,15 @@
 module github.com/riverqueue/river/riverdriver/riverpgxv5
 
-go 1.21
+go 1.21.4
 
 replace github.com/riverqueue/river/riverdriver => ../
+
+replace github.com/riverqueue/river/rivertype => ../../rivertype
 
 require (
 	github.com/jackc/pgx/v5 v5.5.0
 	github.com/riverqueue/river/riverdriver v0.0.22
+	github.com/riverqueue/river/rivertype v0.0.22
 	github.com/stretchr/testify v1.8.1
 )
 

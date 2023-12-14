@@ -1,8 +1,8 @@
 CREATE TABLE river_migration(
-  id bigserial PRIMARY KEY,
-  created_at timestamptz NOT NULL DEFAULT NOW(),
-  version bigint NOT NULL,
-  CONSTRAINT version CHECK (version >= 1)
+    id bigserial PRIMARY KEY,
+    created_at timestamptz NOT NULL DEFAULT NOW(),
+    version bigint NOT NULL,
+    CONSTRAINT version CHECK (version >= 1)
 );
 
 -- name: RiverMigrationDeleteByVersionMany :many
@@ -17,17 +17,17 @@ ORDER BY version;
 
 -- name: RiverMigrationInsert :one
 INSERT INTO river_migration (
-  version
+    version
 ) VALUES (
-  @version
+    @version
 ) RETURNING *;
 
 -- name: RiverMigrationInsertMany :many
 INSERT INTO river_migration (
-  version
+    version
 )
 SELECT
-  unnest(@version::bigint[])
+    unnest(@version::bigint[])
 RETURNING *;
 
 -- name: TableExists :one

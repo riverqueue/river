@@ -5,10 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
 func TestReindexer(t *testing.T) {
@@ -17,16 +18,17 @@ func TestReindexer(t *testing.T) {
 	ctx := context.Background()
 
 	type testBundle struct {
-		now    time.Time
-		dbPool *pgxpool.Pool
+		exec riverdriver.Executor
+		now  time.Time
 	}
 
 	setup := func(t *testing.T) (*Reindexer, *testBundle) {
 		t.Helper()
 
+		dbPool := riverinternaltest.TestDB(ctx, t)
 		bundle := &testBundle{
-			now:    time.Now(),
-			dbPool: riverinternaltest.TestDB(ctx, t),
+			exec: riverpgxv5.New(dbPool).GetExecutor(),
+			now:  time.Now(),
 		}
 
 		archetype := riverinternaltest.BaseServiceArchetype(t)
@@ -38,7 +40,9 @@ func TestReindexer(t *testing.T) {
 			}
 		}
 
-		svc := NewReindexer(archetype, &ReindexerConfig{ScheduleFunc: fromNow(500 * time.Millisecond)}, bundle.dbPool)
+		svc := NewReindexer(archetype, &ReindexerConfig{
+			ScheduleFunc: fromNow(500 * time.Millisecond),
+		}, bundle.exec)
 		svc.TestSignals.Init()
 		t.Cleanup(svc.Stop)
 
@@ -110,7 +114,7 @@ func TestReindexer(t *testing.T) {
 		t.Parallel()
 
 		svc, bundle := setup(t)
-		svc = NewReindexer(&svc.Archetype, &ReindexerConfig{}, bundle.dbPool)
+		svc = NewReindexer(&svc.Archetype, &ReindexerConfig{}, bundle.exec)
 
 		require.Equal(t, defaultIndexNames, svc.Config.IndexNames)
 		require.Equal(t, ReindexerTimeoutDefault, svc.Config.Timeout)

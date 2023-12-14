@@ -7,18 +7,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/dbadapter"
-	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/internal/util/timeutil"
 	"github.com/riverqueue/river/internal/workunit"
+	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -115,18 +113,14 @@ func (h *testErrorHandler) HandlePanic(ctx context.Context, job *rivertype.JobRo
 func TestJobExecutor_Execute(t *testing.T) {
 	t.Parallel()
 
-	var (
-		ctx     = context.Background()
-		queries = dbsqlc.New()
-	)
+	ctx := context.Background()
 
 	type testBundle struct {
-		adapter           *dbadapter.StandardAdapter
 		completer         *jobcompleter.InlineJobCompleter
+		exec              riverdriver.Executor
 		errorHandler      *testErrorHandler
 		getUpdatesAndStop func() []jobcompleter.CompleterJobUpdated
 		jobRow            *rivertype.JobRow
-		tx                pgx.Tx
 	}
 
 	setup := func(t *testing.T) (*jobExecutor, *testBundle) {
@@ -135,8 +129,8 @@ func TestJobExecutor_Execute(t *testing.T) {
 		var (
 			tx        = riverinternaltest.TestTx(ctx, t)
 			archetype = riverinternaltest.BaseServiceArchetype(t)
-			adapter   = dbadapter.NewStandardAdapter(archetype, &dbadapter.StandardAdapterConfig{Executor: tx})
-			completer = jobcompleter.NewInlineCompleter(archetype, adapter)
+			exec      = riverpgxv5.New(nil).UnwrapExecutor(tx)
+			completer = jobcompleter.NewInlineCompleter(archetype, exec)
 		)
 
 		var updates []jobcompleter.CompleterJobUpdated
@@ -152,22 +146,20 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		workUnitFactory := newWorkUnitFactoryWithCustomRetry(func() error { return nil }, nil)
 
-		job, err := queries.JobInsert(ctx, tx, dbsqlc.JobInsertParams{
-			Args:        []byte("{}"),
-			Attempt:     0,
-			AttemptedAt: ptrutil.Ptr(archetype.TimeNowUTC()),
+		job, err := exec.JobInsertFast(ctx, &riverdriver.JobInsertFastParams{
+			EncodedArgs: []byte("{}"),
 			Kind:        (callbackArgs{}).Kind(),
-			MaxAttempts: int16(rivercommon.MaxAttemptsDefault),
-			Priority:    int16(rivercommon.PriorityDefault),
+			MaxAttempts: rivercommon.MaxAttemptsDefault,
+			Priority:    rivercommon.PriorityDefault,
 			Queue:       rivercommon.QueueDefault,
-			State:       dbsqlc.JobStateAvailable,
+			State:       rivertype.JobStateAvailable,
 		})
 		require.NoError(t, err)
 
 		// Fetch the job to make sure it's marked as running:
-		jobs, err := queries.JobGetAvailable(ctx, tx, dbsqlc.JobGetAvailableParams{
-			LimitCount: 1,
-			Queue:      rivercommon.QueueDefault,
+		jobs, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+			Max:   1,
+			Queue: rivercommon.QueueDefault,
 		})
 		require.NoError(t, err)
 		require.Len(t, jobs, 1)
@@ -175,16 +167,14 @@ func TestJobExecutor_Execute(t *testing.T) {
 		job = jobs[0]
 
 		bundle := &testBundle{
-			adapter:           adapter,
 			completer:         completer,
+			exec:              exec,
 			errorHandler:      newTestErrorHandler(),
 			getUpdatesAndStop: getJobUpdates,
-			jobRow:            dbsqlc.JobRowFromInternal(job),
-			tx:                tx,
+			jobRow:            job,
 		}
 
 		executor := baseservice.Init(archetype, &jobExecutor{
-			Adapter:                bundle.adapter,
 			ClientRetryPolicy:      &retryPolicyNoJitter{},
 			Completer:              bundle.completer,
 			ErrorHandler:           bundle.errorHandler,
@@ -213,9 +203,9 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		executor.Completer.Wait()
 
-		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
-		require.Equal(t, dbsqlc.JobStateCompleted, job.State)
+		require.Equal(t, rivertype.JobStateCompleted, job.State)
 
 		jobUpdates := bundle.getUpdatesAndStop()
 		require.Len(t, jobUpdates, 1)
@@ -239,13 +229,13 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		executor.Completer.Wait()
 
-		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
 		require.WithinDuration(t, executor.ClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
-		require.Equal(t, dbsqlc.JobStateRetryable, job.State)
+		require.Equal(t, rivertype.JobStateRetryable, job.State)
 		require.Len(t, job.Errors, 1)
 		require.Equal(t, baselineTime, job.Errors[0].At)
-		require.Equal(t, uint16(1), job.Errors[0].Attempt)
+		require.Equal(t, 1, job.Errors[0].Attempt)
 		require.Equal(t, "job error", job.Errors[0].Error)
 		require.Equal(t, "", job.Errors[0].Trace)
 	})
@@ -263,10 +253,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		executor.Completer.Wait()
 
-		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
 		require.WithinDuration(t, executor.ClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
-		require.Equal(t, dbsqlc.JobStateRetryable, job.State)
+		require.Equal(t, rivertype.JobStateRetryable, job.State)
 	})
 
 	t.Run("ErrorSetsJobAvailableBelowSchedulerIntervalThreshold", func(t *testing.T) {
@@ -283,15 +273,16 @@ func TestJobExecutor_Execute(t *testing.T) {
 			executor.Execute(ctx)
 			executor.Completer.Wait()
 
-			job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+			job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 			require.NoError(t, err)
 			require.WithinDuration(t, executor.ClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
-			require.Equal(t, dbsqlc.JobStateAvailable, job.State)
+			require.Equal(t, rivertype.JobStateAvailable, job.State)
 		}
 
-		_, err := queries.JobSetState(ctx, bundle.tx, dbsqlc.JobSetStateParams{
-			ID:    bundle.jobRow.ID,
-			State: dbsqlc.JobStateRunning,
+		_, err := bundle.exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+			ID:            bundle.jobRow.ID,
+			StateDoUpdate: true,
+			State:         rivertype.JobStateRunning,
 		})
 		require.NoError(t, err)
 
@@ -301,10 +292,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 			executor.Execute(ctx)
 			executor.Completer.Wait()
 
-			job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+			job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 			require.NoError(t, err)
 			require.WithinDuration(t, executor.ClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 16*time.Second)
-			require.Equal(t, dbsqlc.JobStateRetryable, job.State)
+			require.Equal(t, rivertype.JobStateRetryable, job.State)
 		}
 	})
 
@@ -321,10 +312,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		executor.Completer.Wait()
 
-		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
 		require.WithinDuration(t, time.Now(), *job.FinalizedAt, 1*time.Second)
-		require.Equal(t, dbsqlc.JobStateDiscarded, job.State)
+		require.Equal(t, rivertype.JobStateDiscarded, job.State)
 	})
 
 	t.Run("JobCancelErrorCancelsJobEvenWithRemainingAttempts", func(t *testing.T) {
@@ -341,13 +332,13 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		executor.Completer.Wait()
 
-		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
 		require.WithinDuration(t, time.Now(), *job.FinalizedAt, 2*time.Second)
-		require.Equal(t, dbsqlc.JobStateCancelled, job.State)
+		require.Equal(t, rivertype.JobStateCancelled, job.State)
 		require.Len(t, job.Errors, 1)
 		require.WithinDuration(t, time.Now(), job.Errors[0].At, 2*time.Second)
-		require.Equal(t, uint16(1), job.Errors[0].Attempt)
+		require.Equal(t, 1, job.Errors[0].Attempt)
 		require.Equal(t, "jobCancelError: throw away this job", job.Errors[0].Error)
 		require.Equal(t, "", job.Errors[0].Trace)
 	})
@@ -364,11 +355,11 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		executor.Completer.Wait()
 
-		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
-		require.Equal(t, dbsqlc.JobStateScheduled, job.State)
+		require.Equal(t, rivertype.JobStateScheduled, job.State)
 		require.WithinDuration(t, time.Now().Add(30*time.Minute), job.ScheduledAt, 2*time.Second)
-		require.Equal(t, maxAttemptsBefore+1, int(job.MaxAttempts))
+		require.Equal(t, maxAttemptsBefore+1, job.MaxAttempts)
 		require.Empty(t, job.Errors)
 	})
 
@@ -384,11 +375,11 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		executor.Completer.Wait()
 
-		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
-		require.Equal(t, dbsqlc.JobStateAvailable, job.State)
+		require.Equal(t, rivertype.JobStateAvailable, job.State)
 		require.WithinDuration(t, time.Now(), job.ScheduledAt, 2*time.Second)
-		require.Equal(t, maxAttemptsBefore+1, int(job.MaxAttempts))
+		require.Equal(t, maxAttemptsBefore+1, job.MaxAttempts)
 		require.Empty(t, job.Errors)
 	})
 
@@ -404,10 +395,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		executor.Completer.Wait()
 
-		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
 		require.WithinDuration(t, executor.ClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
-		require.Equal(t, dbsqlc.JobStateRetryable, job.State)
+		require.Equal(t, rivertype.JobStateRetryable, job.State)
 	})
 
 	t.Run("ErrorWithCustomNextRetryReturnedFromWorker", func(t *testing.T) {
@@ -424,9 +415,9 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		executor.Completer.Wait()
 
-		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
-		require.Equal(t, dbsqlc.JobStateRetryable, job.State)
+		require.Equal(t, rivertype.JobStateRetryable, job.State)
 		require.WithinDuration(t, nextRetryAt, job.ScheduledAt, time.Microsecond)
 	})
 
@@ -442,10 +433,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		executor.Completer.Wait()
 
-		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
 		require.WithinDuration(t, (&DefaultClientRetryPolicy{}).NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
-		require.Equal(t, dbsqlc.JobStateRetryable, job.State)
+		require.Equal(t, rivertype.JobStateRetryable, job.State)
 	})
 
 	t.Run("ErrorWithErrorHandler", func(t *testing.T) {
@@ -463,9 +454,9 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		executor.Completer.Wait()
 
-		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
-		require.Equal(t, dbsqlc.JobStateRetryable, job.State)
+		require.Equal(t, rivertype.JobStateRetryable, job.State)
 
 		require.True(t, bundle.errorHandler.HandleErrorCalled)
 	})
@@ -484,9 +475,9 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		executor.Completer.Wait()
 
-		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
-		require.Equal(t, dbsqlc.JobStateCancelled, job.State)
+		require.Equal(t, rivertype.JobStateCancelled, job.State)
 
 		require.True(t, bundle.errorHandler.HandleErrorCalled)
 	})
@@ -505,9 +496,9 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		executor.Completer.Wait()
 
-		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
-		require.Equal(t, dbsqlc.JobStateRetryable, job.State)
+		require.Equal(t, rivertype.JobStateRetryable, job.State)
 
 		require.True(t, bundle.errorHandler.HandleErrorCalled)
 	})
@@ -521,10 +512,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		executor.Completer.Wait()
 
-		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
 		require.WithinDuration(t, executor.ClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
-		require.Equal(t, dbsqlc.JobStateRetryable, job.State)
+		require.Equal(t, rivertype.JobStateRetryable, job.State)
 		require.Len(t, job.Errors, 1)
 		// Sufficient enough to ensure that the stack trace is included:
 		require.Contains(t, job.Errors[0].Trace, "river/job_executor.go")
@@ -542,10 +533,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		executor.Completer.Wait()
 
-		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
 		require.WithinDuration(t, executor.ClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
-		require.Equal(t, dbsqlc.JobStateRetryable, job.State)
+		require.Equal(t, rivertype.JobStateRetryable, job.State)
 	})
 
 	t.Run("PanicDiscardsJobAfterTooManyAttempts", func(t *testing.T) {
@@ -560,10 +551,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		executor.Completer.Wait()
 
-		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
 		require.WithinDuration(t, time.Now(), *job.FinalizedAt, 1*time.Second)
-		require.Equal(t, dbsqlc.JobStateDiscarded, job.State)
+		require.Equal(t, rivertype.JobStateDiscarded, job.State)
 	})
 
 	t.Run("PanicWithPanicHandler", func(t *testing.T) {
@@ -580,9 +571,9 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		executor.Completer.Wait()
 
-		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
-		require.Equal(t, dbsqlc.JobStateRetryable, job.State)
+		require.Equal(t, rivertype.JobStateRetryable, job.State)
 
 		require.True(t, bundle.errorHandler.HandlePanicCalled)
 	})
@@ -600,9 +591,9 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		executor.Completer.Wait()
 
-		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
-		require.Equal(t, dbsqlc.JobStateCancelled, job.State)
+		require.Equal(t, rivertype.JobStateCancelled, job.State)
 
 		require.True(t, bundle.errorHandler.HandlePanicCalled)
 	})
@@ -620,14 +611,14 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		executor.Completer.Wait()
 
-		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
-		require.Equal(t, dbsqlc.JobStateRetryable, job.State)
+		require.Equal(t, rivertype.JobStateRetryable, job.State)
 
 		require.True(t, bundle.errorHandler.HandlePanicCalled)
 	})
 
-	runCancelTest := func(t *testing.T, returnErr error) *dbsqlc.RiverJob { //nolint:thelper
+	runCancelTest := func(t *testing.T, returnErr error) *rivertype.JobRow { //nolint:thelper
 		executor, bundle := setup(t)
 
 		// ensure we still have remaining attempts:
@@ -653,9 +644,9 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(workCtx)
 		executor.Completer.Wait()
 
-		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		jobRow, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
-		return job
+		return jobRow
 	}
 
 	t.Run("RemoteCancellationViaCancel", func(t *testing.T) {
@@ -664,10 +655,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		job := runCancelTest(t, errors.New("a non-nil error"))
 
 		require.WithinDuration(t, time.Now(), *job.FinalizedAt, 2*time.Second)
-		require.Equal(t, dbsqlc.JobStateCancelled, job.State)
+		require.Equal(t, rivertype.JobStateCancelled, job.State)
 		require.Len(t, job.Errors, 1)
 		require.WithinDuration(t, time.Now(), job.Errors[0].At, 2*time.Second)
-		require.Equal(t, uint16(1), job.Errors[0].Attempt)
+		require.Equal(t, 1, job.Errors[0].Attempt)
 		require.Equal(t, "jobCancelError: job cancelled remotely", job.Errors[0].Error)
 		require.Equal(t, ErrJobCancelledRemotely.Error(), job.Errors[0].Error)
 		require.Equal(t, "", job.Errors[0].Trace)
@@ -679,7 +670,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		job := runCancelTest(t, nil)
 
 		require.WithinDuration(t, time.Now(), *job.FinalizedAt, 2*time.Second)
-		require.Equal(t, dbsqlc.JobStateCompleted, job.State)
+		require.Equal(t, rivertype.JobStateCompleted, job.State)
 		require.Empty(t, job.Errors)
 	})
 }

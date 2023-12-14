@@ -1,4 +1,4 @@
-package dbadapter
+package dbunique
 
 import (
 	"testing"

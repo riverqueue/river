@@ -9,16 +9,16 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/dbadapter"
-	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/jobstats"
 	"github.com/riverqueue/river/internal/util/timeutil"
+	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivertype"
 )
 
 type JobCompleter interface {
 	// JobSetState sets a new state for the given job, as long as it's
 	// still running (i.e. its state has not changed to something else already).
-	JobSetStateIfRunning(stats *jobstats.JobStatistics, params *dbadapter.JobSetStateIfRunningParams) error
+	JobSetStateIfRunning(stats *jobstats.JobStatistics, params *riverdriver.JobSetStateIfRunningParams) error
 
 	// Subscribe injects a callback which will be invoked whenever a job is
 	// updated.
@@ -30,14 +30,21 @@ type JobCompleter interface {
 }
 
 type CompleterJobUpdated struct {
-	Job      *dbsqlc.RiverJob
+	Job      *rivertype.JobRow
 	JobStats *jobstats.JobStatistics
+}
+
+// PartialExecutor is always a riverdriver.Executor under normal circumstances,
+// but is a minimal interface with the functions needed for completers to work
+// to more easily facilitate mocking.
+type PartialExecutor interface {
+	JobSetStateIfRunning(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error)
 }
 
 type InlineJobCompleter struct {
 	baseservice.BaseService
 
-	adapter         dbadapter.Adapter
+	exec            PartialExecutor
 	subscribeFunc   func(update CompleterJobUpdated)
 	subscribeFuncMu sync.Mutex
 
@@ -49,15 +56,15 @@ type InlineJobCompleter struct {
 	wg sync.WaitGroup
 }
 
-func NewInlineCompleter(archetype *baseservice.Archetype, adapter dbadapter.Adapter) *InlineJobCompleter {
+func NewInlineCompleter(archetype *baseservice.Archetype, exec PartialExecutor) *InlineJobCompleter {
 	return baseservice.Init(archetype, &InlineJobCompleter{
-		adapter: adapter,
+		exec: exec,
 	})
 }
 
-func (c *InlineJobCompleter) JobSetStateIfRunning(stats *jobstats.JobStatistics, params *dbadapter.JobSetStateIfRunningParams) error {
-	return c.doOperation(stats, func(ctx context.Context) (*dbsqlc.RiverJob, error) {
-		return c.adapter.JobSetStateIfRunning(ctx, params)
+func (c *InlineJobCompleter) JobSetStateIfRunning(stats *jobstats.JobStatistics, params *riverdriver.JobSetStateIfRunningParams) error {
+	return c.doOperation(stats, func(ctx context.Context) (*rivertype.JobRow, error) {
+		return c.exec.JobSetStateIfRunning(ctx, params)
 	})
 }
 
@@ -72,7 +79,7 @@ func (c *InlineJobCompleter) Wait() {
 	c.wg.Wait()
 }
 
-func (c *InlineJobCompleter) doOperation(stats *jobstats.JobStatistics, f func(ctx context.Context) (*dbsqlc.RiverJob, error)) error {
+func (c *InlineJobCompleter) doOperation(stats *jobstats.JobStatistics, f func(ctx context.Context) (*rivertype.JobRow, error)) error {
 	c.wg.Add(1)
 	defer c.wg.Done()
 
@@ -100,32 +107,32 @@ func (c *InlineJobCompleter) doOperation(stats *jobstats.JobStatistics, f func(c
 type AsyncJobCompleter struct {
 	baseservice.BaseService
 
-	adapter         dbadapter.Adapter
 	concurrency     uint32
+	exec            PartialExecutor
 	eg              *errgroup.Group
 	subscribeFunc   func(update CompleterJobUpdated)
 	subscribeFuncMu sync.Mutex
 }
 
-func NewAsyncCompleter(archetype *baseservice.Archetype, adapter dbadapter.Adapter, concurrency uint32) *AsyncJobCompleter {
+func NewAsyncCompleter(archetype *baseservice.Archetype, exec PartialExecutor, concurrency uint32) *AsyncJobCompleter {
 	eg := &errgroup.Group{}
 	// TODO: int concurrency may feel more natural than uint32
 	eg.SetLimit(int(concurrency))
 
 	return baseservice.Init(archetype, &AsyncJobCompleter{
-		adapter:     adapter,
+		exec:        exec,
 		concurrency: concurrency,
 		eg:          eg,
 	})
 }
 
-func (c *AsyncJobCompleter) JobSetStateIfRunning(stats *jobstats.JobStatistics, params *dbadapter.JobSetStateIfRunningParams) error {
-	return c.doOperation(stats, func(ctx context.Context) (*dbsqlc.RiverJob, error) {
-		return c.adapter.JobSetStateIfRunning(ctx, params)
+func (c *AsyncJobCompleter) JobSetStateIfRunning(stats *jobstats.JobStatistics, params *riverdriver.JobSetStateIfRunningParams) error {
+	return c.doOperation(stats, func(ctx context.Context) (*rivertype.JobRow, error) {
+		return c.exec.JobSetStateIfRunning(ctx, params)
 	})
 }
 
-func (c *AsyncJobCompleter) doOperation(stats *jobstats.JobStatistics, f func(ctx context.Context) (*dbsqlc.RiverJob, error)) error {
+func (c *AsyncJobCompleter) doOperation(stats *jobstats.JobStatistics, f func(ctx context.Context) (*rivertype.JobRow, error)) error {
 	c.eg.Go(func() error {
 		start := c.TimeNowUTC()
 
@@ -167,7 +174,7 @@ func (c *AsyncJobCompleter) Wait() {
 // may want to rethink these numbers and strategy.
 const numRetries = 3
 
-func withRetries(c *baseservice.BaseService, f func(ctx context.Context) (*dbsqlc.RiverJob, error)) (*dbsqlc.RiverJob, error) { //nolint:varnamelen
+func withRetries(c *baseservice.BaseService, f func(ctx context.Context) (*rivertype.JobRow, error)) (*rivertype.JobRow, error) { //nolint:varnamelen
 	retrySecondsWithoutJitter := func(attempt int) float64 {
 		// Uses a different algorithm (2 ** N) compared to retry policies (4 **
 		// N) so we can get more retries sooner: 1, 2, 4, 8
@@ -183,7 +190,7 @@ func withRetries(c *baseservice.BaseService, f func(ctx context.Context) (*dbsql
 		return retrySeconds
 	}
 
-	tryOnce := func() (*dbsqlc.RiverJob, error) {
+	tryOnce := func() (*rivertype.JobRow, error) {
 		ctx := context.Background()
 
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)

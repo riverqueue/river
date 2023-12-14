@@ -9,8 +9,8 @@ import (
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/internal/util/valutil"
+	"github.com/riverqueue/river/riverdriver"
 )
 
 const (
@@ -62,11 +62,11 @@ type Reindexer struct {
 	Config      *ReindexerConfig
 	TestSignals ReindexerTestSignals
 
-	batchSize  int64 // configurable for test purposes
-	dbExecutor dbutil.Executor
+	batchSize int64 // configurable for test purposes
+	exec      riverdriver.Executor
 }
 
-func NewReindexer(archetype *baseservice.Archetype, config *ReindexerConfig, dbExecutor dbutil.Executor) *Reindexer {
+func NewReindexer(archetype *baseservice.Archetype, config *ReindexerConfig, exec riverdriver.Executor) *Reindexer {
 	indexNames := defaultIndexNames
 	if config.IndexNames != nil {
 		indexNames = config.IndexNames
@@ -84,8 +84,8 @@ func NewReindexer(archetype *baseservice.Archetype, config *ReindexerConfig, dbE
 			Timeout:      valutil.ValOrDefault(config.Timeout, ReindexerTimeoutDefault),
 		}).mustValidate(),
 
-		batchSize:  BatchSizeDefault,
-		dbExecutor: dbExecutor,
+		batchSize: BatchSizeDefault,
+		exec:      exec,
 	})
 }
 
@@ -145,7 +145,7 @@ func (s *Reindexer) reindexOne(ctx context.Context, indexName string) error {
 	ctx, cancel := context.WithTimeout(ctx, s.Config.Timeout)
 	defer cancel()
 
-	_, err := s.dbExecutor.Exec(ctx, "REINDEX INDEX CONCURRENTLY "+indexName)
+	_, err := s.exec.Exec(ctx, "REINDEX INDEX CONCURRENTLY "+indexName)
 	if err != nil {
 		return err
 	}

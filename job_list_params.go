@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/riverqueue/river/internal/dbadapter"
+	"github.com/riverqueue/river/internal/dblist"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -105,6 +105,7 @@ const (
 //	params := NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).First(100)
 type JobListParams struct {
 	after            *JobListCursor
+	kinds            []string
 	metadataFragment string
 	paginationCount  int32
 	queues           []string
@@ -127,6 +128,7 @@ func NewJobListParams() *JobListParams {
 func (p *JobListParams) copy() *JobListParams {
 	return &JobListParams{
 		after:            p.after,
+		kinds:            append([]string(nil), p.kinds...),
 		metadataFragment: p.metadataFragment,
 		paginationCount:  p.paginationCount,
 		queues:           append([]string(nil), p.queues...),
@@ -136,18 +138,18 @@ func (p *JobListParams) copy() *JobListParams {
 	}
 }
 
-func (p *JobListParams) toDBParams() (*dbadapter.JobListParams, error) {
+func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 	conditionsBuilder := &strings.Builder{}
 	conditions := make([]string, 0, 10)
 	namedArgs := make(map[string]any)
-	orderBy := []dbadapter.JobListOrderBy{}
+	orderBy := []dblist.JobListOrderBy{}
 
-	var sortOrder dbadapter.SortOrder
+	var sortOrder dblist.SortOrder
 	switch p.sortOrder {
 	case SortOrderAsc:
-		sortOrder = dbadapter.SortOrderAsc
+		sortOrder = dblist.SortOrderAsc
 	case SortOrderDesc:
-		sortOrder = dbadapter.SortOrderDesc
+		sortOrder = dblist.SortOrderDesc
 	default:
 		return nil, errors.New("invalid sort order")
 	}
@@ -156,7 +158,7 @@ func (p *JobListParams) toDBParams() (*dbadapter.JobListParams, error) {
 		return nil, errors.New("invalid sort field")
 	}
 	timeField := jobListTimeFieldForState(p.state)
-	orderBy = append(orderBy, []dbadapter.JobListOrderBy{
+	orderBy = append(orderBy, []dblist.JobListOrderBy{
 		{Expr: timeField, Order: sortOrder},
 		{Expr: "id", Order: sortOrder},
 	}...)
@@ -167,7 +169,7 @@ func (p *JobListParams) toDBParams() (*dbadapter.JobListParams, error) {
 	}
 
 	if p.after != nil {
-		if sortOrder == dbadapter.SortOrderAsc {
+		if sortOrder == dblist.SortOrderAsc {
 			conditions = append(conditions, fmt.Sprintf(`("%s" > @cursor_time OR ("%s" = @cursor_time AND "id" > @after_id))`, timeField, timeField))
 		} else {
 			conditions = append(conditions, fmt.Sprintf(`("%s" < @cursor_time OR ("%s" = @cursor_time AND "id" < @after_id))`, timeField, timeField))
@@ -183,8 +185,9 @@ func (p *JobListParams) toDBParams() (*dbadapter.JobListParams, error) {
 		conditionsBuilder.WriteString(condition)
 	}
 
-	dbParams := &dbadapter.JobListParams{
+	dbParams := &dblist.JobListParams{
 		Conditions: conditionsBuilder.String(),
+		Kinds:      p.kinds,
 		LimitCount: p.paginationCount,
 		NamedArgs:  namedArgs,
 		OrderBy:    orderBy,
@@ -220,6 +223,15 @@ func (p *JobListParams) First(count int) *JobListParams {
 	return result
 }
 
+// Kinds returns an updated filter set that will only return jobs of the given
+// kinds.
+func (p *JobListParams) Kinds(kinds ...string) *JobListParams {
+	result := p.copy()
+	result.kinds = make([]string, len(kinds))
+	copy(result.kinds, kinds)
+	return result
+}
+
 func (p *JobListParams) Metadata(json string) *JobListParams {
 	result := p.copy()
 	result.metadataFragment = json
@@ -230,7 +242,7 @@ func (p *JobListParams) Metadata(json string) *JobListParams {
 // given queues.
 func (p *JobListParams) Queues(queues ...string) *JobListParams {
 	result := p.copy()
-	result.queues = make([]string, 0, len(queues))
+	result.queues = make([]string, len(queues))
 	copy(result.queues, queues)
 	return result
 }

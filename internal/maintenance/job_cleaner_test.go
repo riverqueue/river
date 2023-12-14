@@ -5,56 +5,37 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/internal/riverinternaltest/testfactory"
 	"github.com/riverqueue/river/internal/util/ptrutil"
+	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
 )
 
 func TestJobCleaner(t *testing.T) {
 	t.Parallel()
 
-	var (
-		ctx     = context.Background()
-		queries = dbsqlc.New()
-	)
+	ctx := context.Background()
 
 	type testBundle struct {
 		cancelledDeleteHorizon time.Time
 		completedDeleteHorizon time.Time
+		exec                   riverdriver.Executor
 		discardedDeleteHorizon time.Time
-		tx                     pgx.Tx
-	}
-
-	type insertJobParams struct {
-		FinalizedAt *time.Time
-		State       dbsqlc.JobState
-	}
-
-	insertJob := func(ctx context.Context, dbtx dbsqlc.DBTX, params insertJobParams) *dbsqlc.RiverJob {
-		job, err := queries.JobInsert(ctx, dbtx, dbsqlc.JobInsertParams{
-			FinalizedAt: params.FinalizedAt,
-			Kind:        "test_kind",
-			MaxAttempts: int16(rivercommon.MaxAttemptsDefault),
-			Priority:    int16(rivercommon.PriorityDefault),
-			Queue:       rivercommon.QueueDefault,
-			State:       params.State,
-		})
-		require.NoError(t, err)
-		return job
 	}
 
 	setup := func(t *testing.T) (*JobCleaner, *testBundle) {
 		t.Helper()
 
+		tx := riverinternaltest.TestTx(ctx, t)
 		bundle := &testBundle{
 			cancelledDeleteHorizon: time.Now().Add(-CancelledJobRetentionPeriodDefault),
 			completedDeleteHorizon: time.Now().Add(-CompletedJobRetentionPeriodDefault),
+			exec:                   riverpgxv5.New(nil).UnwrapExecutor(tx),
 			discardedDeleteHorizon: time.Now().Add(-DiscardedJobRetentionPeriodDefault),
-			tx:                     riverinternaltest.TestTx(ctx, t),
 		}
 
 		cleaner := NewJobCleaner(
@@ -65,7 +46,7 @@ func TestJobCleaner(t *testing.T) {
 				DiscardedJobRetentionPeriod: DiscardedJobRetentionPeriodDefault,
 				Interval:                    JobCleanerIntervalDefault,
 			},
-			bundle.tx)
+			bundle.exec)
 		cleaner.TestSignals.Init()
 		t.Cleanup(cleaner.Stop)
 
@@ -99,54 +80,54 @@ func TestJobCleaner(t *testing.T) {
 		cleaner, bundle := setup(t)
 
 		// none of these get removed
-		job1 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateAvailable})
-		job2 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateRunning})
-		job3 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateScheduled})
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
+		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled)})
 
-		cancelledJob1 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateCancelled, FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
-		cancelledJob2 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateCancelled, FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(-1 * time.Minute))})
-		cancelledJob3 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateCancelled, FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(1 * time.Minute))}) // won't be deleted
+		cancelledJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
+		cancelledJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(-1 * time.Minute))})
+		cancelledJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(1 * time.Minute))}) // won't be deleted
 
-		completedJob1 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateCompleted, FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
-		completedJob2 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateCompleted, FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Minute))})
-		completedJob3 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateCompleted, FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(1 * time.Minute))}) // won't be deleted
+		completedJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
+		completedJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Minute))})
+		completedJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(1 * time.Minute))}) // won't be deleted
 
-		discardedJob1 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateDiscarded, FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
-		discardedJob2 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateDiscarded, FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(-1 * time.Minute))})
-		discardedJob3 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateDiscarded, FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(1 * time.Minute))}) // won't be deleted
+		discardedJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
+		discardedJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(-1 * time.Minute))})
+		discardedJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(1 * time.Minute))}) // won't be deleted
 
 		require.NoError(t, cleaner.Start(ctx))
 
 		cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
 
 		var err error
-		_, err = queries.JobGetByID(ctx, bundle.tx, job1.ID)
-		require.NotErrorIs(t, err, pgx.ErrNoRows) // still there
-		_, err = queries.JobGetByID(ctx, bundle.tx, job2.ID)
-		require.NotErrorIs(t, err, pgx.ErrNoRows) // still there
-		_, err = queries.JobGetByID(ctx, bundle.tx, job3.ID)
-		require.NotErrorIs(t, err, pgx.ErrNoRows) // still there
+		_, err = bundle.exec.JobGetByID(ctx, job1.ID)
+		require.NotErrorIs(t, err, rivertype.ErrNotFound) // still there
+		_, err = bundle.exec.JobGetByID(ctx, job2.ID)
+		require.NotErrorIs(t, err, rivertype.ErrNotFound) // still there
+		_, err = bundle.exec.JobGetByID(ctx, job3.ID)
+		require.NotErrorIs(t, err, rivertype.ErrNotFound) // still there
 
-		_, err = queries.JobGetByID(ctx, bundle.tx, cancelledJob1.ID)
-		require.ErrorIs(t, err, pgx.ErrNoRows)
-		_, err = queries.JobGetByID(ctx, bundle.tx, cancelledJob2.ID)
-		require.ErrorIs(t, err, pgx.ErrNoRows)
-		_, err = queries.JobGetByID(ctx, bundle.tx, cancelledJob3.ID)
-		require.NotErrorIs(t, err, pgx.ErrNoRows) // still there
+		_, err = bundle.exec.JobGetByID(ctx, cancelledJob1.ID)
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = bundle.exec.JobGetByID(ctx, cancelledJob2.ID)
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = bundle.exec.JobGetByID(ctx, cancelledJob3.ID)
+		require.NotErrorIs(t, err, rivertype.ErrNotFound) // still there
 
-		_, err = queries.JobGetByID(ctx, bundle.tx, completedJob1.ID)
-		require.ErrorIs(t, err, pgx.ErrNoRows)
-		_, err = queries.JobGetByID(ctx, bundle.tx, completedJob2.ID)
-		require.ErrorIs(t, err, pgx.ErrNoRows)
-		_, err = queries.JobGetByID(ctx, bundle.tx, completedJob3.ID)
-		require.NotErrorIs(t, err, pgx.ErrNoRows) // still there
+		_, err = bundle.exec.JobGetByID(ctx, completedJob1.ID)
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = bundle.exec.JobGetByID(ctx, completedJob2.ID)
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = bundle.exec.JobGetByID(ctx, completedJob3.ID)
+		require.NotErrorIs(t, err, rivertype.ErrNotFound) // still there
 
-		_, err = queries.JobGetByID(ctx, bundle.tx, discardedJob1.ID)
-		require.ErrorIs(t, err, pgx.ErrNoRows)
-		_, err = queries.JobGetByID(ctx, bundle.tx, discardedJob2.ID)
-		require.ErrorIs(t, err, pgx.ErrNoRows)
-		_, err = queries.JobGetByID(ctx, bundle.tx, discardedJob3.ID)
-		require.NotErrorIs(t, err, pgx.ErrNoRows) // still there
+		_, err = bundle.exec.JobGetByID(ctx, discardedJob1.ID)
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = bundle.exec.JobGetByID(ctx, discardedJob2.ID)
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = bundle.exec.JobGetByID(ctx, discardedJob3.ID)
+		require.NotErrorIs(t, err, rivertype.ErrNotFound) // still there
 	})
 
 	t.Run("DeletesInBatches", func(t *testing.T) {
@@ -159,10 +140,10 @@ func TestJobCleaner(t *testing.T) {
 		// one extra batch, ensuring that we've tested working multiple.
 		numJobs := cleaner.batchSize + 1
 
-		jobs := make([]*dbsqlc.RiverJob, numJobs)
+		jobs := make([]*rivertype.JobRow, numJobs)
 
-		for i := 0; i < int(numJobs); i++ {
-			job := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateCompleted, FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
+		for i := 0; i < numJobs; i++ {
+			job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
 			jobs[i] = job
 		}
 
@@ -173,8 +154,8 @@ func TestJobCleaner(t *testing.T) {
 		cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
 
 		for _, job := range jobs {
-			_, err := queries.JobGetByID(ctx, bundle.tx, job.ID)
-			require.ErrorIs(t, err, pgx.ErrNoRows)
+			_, err := bundle.exec.JobGetByID(ctx, job.ID)
+			require.ErrorIs(t, err, rivertype.ErrNotFound)
 		}
 	})
 
@@ -228,7 +209,7 @@ func TestJobCleaner(t *testing.T) {
 		cleaner, bundle := setup(t)
 		cleaner.Config.Interval = time.Minute // should only trigger once for the initial run
 
-		job1 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateCompleted, FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
 
 		require.NoError(t, cleaner.Start(ctx))
 
@@ -236,16 +217,16 @@ func TestJobCleaner(t *testing.T) {
 
 		cleaner.Stop()
 
-		job2 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateCompleted, FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Minute))})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Minute))})
 
 		require.NoError(t, cleaner.Start(ctx))
 
 		cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
 
 		var err error
-		_, err = queries.JobGetByID(ctx, bundle.tx, job1.ID)
-		require.ErrorIs(t, err, pgx.ErrNoRows)
-		_, err = queries.JobGetByID(ctx, bundle.tx, job2.ID)
-		require.ErrorIs(t, err, pgx.ErrNoRows)
+		_, err = bundle.exec.JobGetByID(ctx, job1.ID)
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = bundle.exec.JobGetByID(ctx, job2.ID)
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
 	})
 }

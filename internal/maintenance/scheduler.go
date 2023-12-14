@@ -8,13 +8,12 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/internal/util/timeutil"
 	"github.com/riverqueue/river/internal/util/valutil"
+	"github.com/riverqueue/river/riverdriver"
 )
 
 const (
@@ -62,25 +61,17 @@ type Scheduler struct {
 	// exported for test purposes
 	TestSignals SchedulerTestSignals
 
-	config     *SchedulerConfig
-	dbExecutor dbutil.Executor
-	queries    *dbsqlc.Queries
+	config *SchedulerConfig
+	exec   riverdriver.Executor
 }
 
-func NewScheduler(archetype *baseservice.Archetype, config *SchedulerConfig, executor dbutil.Executor) *Scheduler {
+func NewScheduler(archetype *baseservice.Archetype, config *SchedulerConfig, exec riverdriver.Executor) *Scheduler {
 	return baseservice.Init(archetype, &Scheduler{
 		config: (&SchedulerConfig{
 			Interval: valutil.ValOrDefault(config.Interval, SchedulerIntervalDefault),
 			Limit:    valutil.ValOrDefault(config.Limit, SchedulerLimitDefault),
 		}).mustValidate(),
-
-		// TODO(bgentry): should Adapter be moved to a shared internal package
-		// (rivercommon) so that it can be accessed from here, instead of needing
-		// the Pool + Queries separately? The intention was to allocate the Adapter
-		// once and use it everywhere. This is particularly important for Pro stuff
-		// where we won't have direct access to its internal queries package.
-		dbExecutor: executor,
-		queries:    dbsqlc.New(),
+		exec: exec,
 	})
 }
 
@@ -118,7 +109,7 @@ func (s *Scheduler) Start(ctx context.Context) error { //nolint:dupl
 				continue
 			}
 			s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
-				slog.Int64("num_jobs_scheduled", res.NumCompletedJobsScheduled),
+				slog.Int("num_jobs_scheduled", res.NumCompletedJobsScheduled),
 			)
 		}
 	}()
@@ -127,7 +118,7 @@ func (s *Scheduler) Start(ctx context.Context) error { //nolint:dupl
 }
 
 type schedulerRunOnceResult struct {
-	NumCompletedJobsScheduled int64
+	NumCompletedJobsScheduled int
 }
 
 func (s *Scheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, error) {
@@ -135,17 +126,17 @@ func (s *Scheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, error
 
 	for {
 		// Wrapped in a function so that defers run as expected.
-		numScheduled, err := func() (int64, error) {
+		numScheduled, err := func() (int, error) {
 			ctx, cancelFunc := context.WithTimeout(ctx, 30*time.Second)
 			defer cancelFunc()
 
-			numScheduled, err := s.queries.JobSchedule(ctx, s.dbExecutor, dbsqlc.JobScheduleParams{
+			numScheduled, err := s.exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
 				InsertTopic: string(notifier.NotificationTopicInsert),
-				Max:         int64(s.config.Limit),
+				Max:         s.config.Limit,
 				Now:         s.TimeNowUTC(),
 			})
 			if err != nil {
-				return 0, fmt.Errorf("error deleting completed jobs: %w", err)
+				return 0, fmt.Errorf("error scheduling jobs: %w", err)
 			}
 
 			return numScheduled, nil
@@ -158,12 +149,12 @@ func (s *Scheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, error
 
 		res.NumCompletedJobsScheduled += numScheduled
 		// Scheduled was less than query `LIMIT` which means work is done.
-		if int(numScheduled) < s.config.Limit {
+		if numScheduled < s.config.Limit {
 			break
 		}
 
 		s.Logger.InfoContext(ctx, s.Name+": Scheduled batch of jobs",
-			slog.Int64("num_completed_jobs_scheduled", numScheduled),
+			slog.Int("num_completed_jobs_scheduled", numScheduled),
 		)
 
 		s.CancellableSleepRandomBetween(ctx, BatchBackoffMin, BatchBackoffMax)

@@ -12,13 +12,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/componentstatus"
-	"github.com/riverqueue/river/internal/dbadapter"
-	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
 )
 
 func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
@@ -43,12 +44,11 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 
 	archetype := riverinternaltest.BaseServiceArchetype(t)
 
-	adapter := dbadapter.NewStandardAdapter(archetype, &dbadapter.StandardAdapterConfig{
-		Executor:   dbPool,
-		WorkerName: "producer_test_worker",
-	})
+	dbDriver := riverpgxv5.New(dbPool)
+	exec := dbDriver.GetExecutor()
+	listener := dbDriver.GetListener()
 
-	completer := jobcompleter.NewInlineCompleter(archetype, adapter)
+	completer := jobcompleter.NewInlineCompleter(archetype, exec)
 	t.Cleanup(completer.Wait)
 
 	type WithJobNumArgs struct {
@@ -71,7 +71,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	}))
 
 	ignoreNotifierStatusUpdates := func(componentstatus.Status) {}
-	notifier := notifier.New(archetype, dbPool.Config().ConnConfig, ignoreNotifierStatusUpdates, riverinternaltest.Logger(t))
+	notifier := notifier.New(archetype, listener, ignoreNotifierStatusUpdates, riverinternaltest.Logger(t))
 
 	config := &producerConfig{
 		ErrorHandler: newTestErrorHandler(),
@@ -81,18 +81,18 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 		JobTimeout:        JobTimeoutDefault,
 		MaxWorkerCount:    1000,
 		Notifier:          notifier,
-		QueueName:         rivercommon.QueueDefault,
+		Queue:             rivercommon.QueueDefault,
 		RetryPolicy:       &DefaultClientRetryPolicy{},
 		SchedulerInterval: maintenance.SchedulerIntervalDefault,
-		WorkerName:        "fakeWorkerNameTODO",
+		ClientID:          "fakeWorkerNameTODO",
 		Workers:           workers,
 	}
-	producer, err := newProducer(archetype, adapter, completer, config)
+	producer, err := newProducer(archetype, exec, completer, config)
 	require.NoError(err)
 
-	params := make([]*dbadapter.JobInsertParams, maxJobCount)
+	params := make([]*riverdriver.JobInsertFastParams, maxJobCount)
 	for i := range params {
-		insertParams, err := insertParamsFromArgsAndOptions(WithJobNumArgs{JobNum: i}, nil)
+		insertParams, _, err := insertParamsFromArgsAndOptions(WithJobNumArgs{JobNum: i}, nil)
 		require.NoError(err)
 
 		params[i] = insertParams
@@ -117,7 +117,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 		}
 	}()
 
-	_, err = adapter.JobInsertMany(ctx, params)
+	_, err = exec.JobInsertFastMany(ctx, params)
 	require.NoError(err)
 
 	ignoreStatusUpdates := func(queue string, status componentstatus.Status) {}
@@ -145,8 +145,8 @@ func Test_Producer_Run(t *testing.T) {
 	ctx := context.Background()
 
 	type testBundle struct {
-		adapter    *dbadapter.StandardAdapter
 		completer  jobcompleter.JobCompleter
+		exec       riverdriver.Executor
 		jobUpdates chan jobcompleter.CompleterJobUpdated
 		workers    *Workers
 	}
@@ -155,15 +155,13 @@ func Test_Producer_Run(t *testing.T) {
 		t.Helper()
 
 		dbPool := riverinternaltest.TestDB(ctx, t)
+		driver := riverpgxv5.New(dbPool)
+		exec := driver.GetExecutor()
+		listener := driver.GetListener()
 
 		archetype := riverinternaltest.BaseServiceArchetype(t)
 
-		adapter := dbadapter.NewStandardAdapter(archetype, &dbadapter.StandardAdapterConfig{
-			Executor:   dbPool,
-			WorkerName: "producer_test_worker",
-		})
-
-		completer := jobcompleter.NewInlineCompleter(archetype, adapter)
+		completer := jobcompleter.NewInlineCompleter(archetype, exec)
 
 		jobUpdates := make(chan jobcompleter.CompleterJobUpdated, 10)
 		completer.Subscribe(func(update jobcompleter.CompleterJobUpdated) {
@@ -172,7 +170,7 @@ func Test_Producer_Run(t *testing.T) {
 
 		workers := NewWorkers()
 
-		notifier := notifier.New(archetype, dbPool.Config().ConnConfig, func(componentstatus.Status) {}, riverinternaltest.Logger(t))
+		notifier := notifier.New(archetype, listener, func(componentstatus.Status) {}, riverinternaltest.Logger(t))
 
 		config := &producerConfig{
 			ErrorHandler:      newTestErrorHandler(),
@@ -181,30 +179,30 @@ func Test_Producer_Run(t *testing.T) {
 			JobTimeout:        JobTimeoutDefault,
 			MaxWorkerCount:    1000,
 			Notifier:          notifier,
-			QueueName:         rivercommon.QueueDefault,
+			Queue:             rivercommon.QueueDefault,
 			RetryPolicy:       &DefaultClientRetryPolicy{},
 			SchedulerInterval: riverinternaltest.SchedulerShortInterval,
-			WorkerName:        "fakeWorkerNameTODO",
+			ClientID:          "fakeWorkerNameTODO",
 			Workers:           workers,
 		}
-		producer, err := newProducer(archetype, adapter, completer, config)
+		producer, err := newProducer(archetype, exec, completer, config)
 		require.NoError(t, err)
 
 		return producer, &testBundle{
-			adapter:    adapter,
 			completer:  completer,
+			exec:       exec,
 			jobUpdates: jobUpdates,
 			workers:    workers,
 		}
 	}
 
-	mustInsert := func(ctx context.Context, t *testing.T, adapter dbadapter.Adapter, args JobArgs) {
+	mustInsert := func(ctx context.Context, t *testing.T, exec riverdriver.Executor, args JobArgs) {
 		t.Helper()
 
-		insertParams, err := insertParamsFromArgsAndOptions(args, nil)
+		insertParams, _, err := insertParamsFromArgsAndOptions(args, nil)
 		require.NoError(t, err)
 
-		_, err = adapter.JobInsert(ctx, insertParams)
+		_, err = exec.JobInsertFast(ctx, insertParams)
 		require.NoError(t, err)
 	}
 
@@ -247,10 +245,10 @@ func Test_Producer_Run(t *testing.T) {
 		t.Cleanup(wg.Wait)
 		t.Cleanup(fetchCtxDone)
 
-		mustInsert(ctx, t, bundle.adapter, &noOpArgs{})
+		mustInsert(ctx, t, bundle.exec, &noOpArgs{})
 
 		update := riverinternaltest.WaitOrTimeout(t, bundle.jobUpdates)
-		require.Equal(t, dbsqlc.JobStateCompleted, update.Job.State)
+		require.Equal(t, rivertype.JobStateCompleted, update.Job.State)
 	})
 
 	t.Run("UnknownJobKind", func(t *testing.T) {
@@ -274,8 +272,8 @@ func Test_Producer_Run(t *testing.T) {
 		t.Cleanup(wg.Wait)
 		t.Cleanup(fetchCtxDone)
 
-		mustInsert(ctx, t, bundle.adapter, &noOpArgs{})
-		mustInsert(ctx, t, bundle.adapter, &callbackArgs{}) // not registered
+		mustInsert(ctx, t, bundle.exec, &noOpArgs{})
+		mustInsert(ctx, t, bundle.exec, &callbackArgs{}) // not registered
 
 		updates := riverinternaltest.WaitOrTimeoutN(t, bundle.jobUpdates, 2)
 
@@ -286,7 +284,7 @@ func Test_Producer_Run(t *testing.T) {
 
 		// Order jobs come back in is not guaranteed, which is why this is
 		// written somewhat strangely.
-		findJob := func(kind string) *dbsqlc.RiverJob {
+		findJob := func(kind string) *rivertype.JobRow {
 			index := slices.IndexFunc(updates, func(u jobcompleter.CompleterJobUpdated) bool { return u.Job.Kind == kind })
 			require.NotEqualf(t, -1, index, "Job update not found", "Job update not found for kind: %s", kind)
 			return updates[index].Job
@@ -294,12 +292,12 @@ func Test_Producer_Run(t *testing.T) {
 
 		{
 			job := findJob((&callbackArgs{}).Kind())
-			require.Equal(t, dbsqlc.JobStateRetryable, job.State)
+			require.Equal(t, rivertype.JobStateRetryable, job.State)
 			require.Equal(t, (&UnknownJobKindError{Kind: (&callbackArgs{}).Kind()}).Error(), job.Errors[0].Error)
 		}
 		{
 			job := findJob((&noOpArgs{}).Kind())
-			require.Equal(t, dbsqlc.JobStateCompleted, job.State)
+			require.Equal(t, rivertype.JobStateCompleted, job.State)
 		}
 	})
 }

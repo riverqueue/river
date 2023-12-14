@@ -5,11 +5,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/componentstatus"
-	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
 func expectReceiveStatus(t *testing.T, statusCh <-chan componentstatus.Status, expected componentstatus.Status) {
@@ -27,14 +28,15 @@ func TestNotifierReceivesNotification(t *testing.T) {
 
 	ctx := context.Background()
 	require := require.New(t)
-	db := riverinternaltest.TestDB(ctx, t)
+	dbPool := riverinternaltest.TestDB(ctx, t)
+	listener := riverpgxv5.New(dbPool).GetListener()
 
 	statusUpdateCh := make(chan componentstatus.Status, 10)
 	statusUpdate := func(status componentstatus.Status) {
 		statusUpdateCh <- status
 	}
 
-	notifier := New(riverinternaltest.BaseServiceArchetype(t), db.Config().ConnConfig, statusUpdate, riverinternaltest.Logger(t))
+	notifier := New(riverinternaltest.BaseServiceArchetype(t), listener, statusUpdate, riverinternaltest.Logger(t))
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -55,7 +57,7 @@ func TestNotifierReceivesNotification(t *testing.T) {
 	expectReceiveStatus(t, statusUpdateCh, componentstatus.Initializing)
 	expectReceiveStatus(t, statusUpdateCh, componentstatus.Healthy)
 
-	sendNotification(t, db, string(NotificationTopicInsert), "a_queue_name")
+	sendNotification(t, dbPool, string(NotificationTopicInsert), "a_queue_name")
 
 	select {
 	case payload := <-sub1Ch:
@@ -73,7 +75,7 @@ func TestNotifierReceivesNotification(t *testing.T) {
 	sub2 := notifier.Listen(NotificationTopicInsert, fn2)
 	defer sub2.Unlisten()
 
-	sendNotification(t, db, string(NotificationTopicInsert), "a_queue_name_b")
+	sendNotification(t, dbPool, string(NotificationTopicInsert), "a_queue_name_b")
 
 	receivedOn1 := false
 	receivedOn2 := false
@@ -100,7 +102,7 @@ Loop:
 
 	// remove a subscription:
 	sub1.Unlisten()
-	sendNotification(t, db, string(NotificationTopicInsert), "a_queue_name_b")
+	sendNotification(t, dbPool, string(NotificationTopicInsert), "a_queue_name_b")
 
 	select {
 	case payload := <-sub2Ch:
@@ -115,16 +117,18 @@ Loop:
 	case <-time.After(20 * time.Millisecond):
 	}
 
+	t.Log("Canceling context")
 	cancel()
+
 	expectReceiveStatus(t, statusUpdateCh, componentstatus.ShuttingDown)
 	expectReceiveStatus(t, statusUpdateCh, componentstatus.Stopped)
 }
 
-func sendNotification(t *testing.T, db dbsqlc.DBTX, topic string, payload string) {
+func sendNotification(t *testing.T, dbPool *pgxpool.Pool, topic string, payload string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	_, err := db.Exec(ctx, "SELECT pg_notify($1, $2)", topic, payload)
+	_, err := dbPool.Exec(ctx, "SELECT pg_notify($1, $2)", topic, payload)
 	require.NoError(t, err)
 }

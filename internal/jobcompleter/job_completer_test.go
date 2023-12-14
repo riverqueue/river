@@ -3,25 +3,39 @@ package jobcompleter
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/dbadapter"
-	"github.com/riverqueue/river/internal/dbadaptertest"
-	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/jobstats"
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivertype"
 )
+
+type executorMock struct {
+	JobSetStateIfRunningCalled bool
+	JobSetStateIfRunningFunc   func(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error)
+	mu                         sync.Mutex
+}
+
+func (m *executorMock) JobSetStateIfRunning(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
+	m.mu.Lock()
+	m.JobSetStateIfRunningCalled = true
+	m.mu.Unlock()
+
+	return m.JobSetStateIfRunningFunc(ctx, params)
+}
 
 func TestInlineJobCompleter_Complete(t *testing.T) {
 	t.Parallel()
 
 	var attempt int
 	expectedErr := errors.New("an error from the completer")
-	adapter := &dbadaptertest.TestAdapter{
-		JobSetStateIfRunningFunc: func(ctx context.Context, params *dbadapter.JobSetStateIfRunningParams) (*dbsqlc.RiverJob, error) {
+	adapter := &executorMock{
+		JobSetStateIfRunningFunc: func(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
 			require.Equal(t, int64(1), params.ID)
 			attempt++
 			return nil, expectedErr
@@ -31,7 +45,7 @@ func TestInlineJobCompleter_Complete(t *testing.T) {
 	completer := NewInlineCompleter(riverinternaltest.BaseServiceArchetype(t), adapter)
 	t.Cleanup(completer.Wait)
 
-	err := completer.JobSetStateIfRunning(&jobstats.JobStatistics{}, dbadapter.JobSetStateCompleted(1, time.Now()))
+	err := completer.JobSetStateIfRunning(&jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(1, time.Now()))
 	if !errors.Is(err, expectedErr) {
 		t.Errorf("expected %v, got %v", expectedErr, err)
 	}
@@ -43,16 +57,16 @@ func TestInlineJobCompleter_Complete(t *testing.T) {
 func TestInlineJobCompleter_Subscribe(t *testing.T) {
 	t.Parallel()
 
-	testCompleterSubscribe(t, func(a dbadapter.Adapter) JobCompleter {
-		return NewInlineCompleter(riverinternaltest.BaseServiceArchetype(t), a)
+	testCompleterSubscribe(t, func(exec PartialExecutor) JobCompleter {
+		return NewInlineCompleter(riverinternaltest.BaseServiceArchetype(t), exec)
 	})
 }
 
 func TestInlineJobCompleter_Wait(t *testing.T) {
 	t.Parallel()
 
-	testCompleterWait(t, func(a dbadapter.Adapter) JobCompleter {
-		return NewInlineCompleter(riverinternaltest.BaseServiceArchetype(t), a)
+	testCompleterWait(t, func(exec PartialExecutor) JobCompleter {
+		return NewInlineCompleter(riverinternaltest.BaseServiceArchetype(t), exec)
 	})
 }
 
@@ -75,8 +89,8 @@ func TestAsyncJobCompleter_Complete(t *testing.T) {
 		resultCh <- expectedErr
 	}()
 
-	adapter := &dbadaptertest.TestAdapter{
-		JobSetStateIfRunningFunc: func(ctx context.Context, params *dbadapter.JobSetStateIfRunningParams) (*dbsqlc.RiverJob, error) {
+	adapter := &executorMock{
+		JobSetStateIfRunningFunc: func(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
 			inputCh <- jobInput{ctx: ctx, jobID: params.ID}
 			err := <-resultCh
 			return nil, err
@@ -87,14 +101,14 @@ func TestAsyncJobCompleter_Complete(t *testing.T) {
 
 	// launch 4 completions, only 2 can be inline due to the concurrency limit:
 	for i := int64(0); i < 2; i++ {
-		if err := completer.JobSetStateIfRunning(&jobstats.JobStatistics{}, dbadapter.JobSetStateCompleted(i, time.Now())); err != nil {
+		if err := completer.JobSetStateIfRunning(&jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(i, time.Now())); err != nil {
 			t.Errorf("expected nil err, got %v", err)
 		}
 	}
 	bgCompletionsStarted := make(chan struct{})
 	go func() {
 		for i := int64(2); i < 4; i++ {
-			if err := completer.JobSetStateIfRunning(&jobstats.JobStatistics{}, dbadapter.JobSetStateCompleted(i, time.Now())); err != nil {
+			if err := completer.JobSetStateIfRunning(&jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(i, time.Now())); err != nil {
 				t.Errorf("expected nil err, got %v", err)
 			}
 		}
@@ -144,31 +158,31 @@ func TestAsyncJobCompleter_Complete(t *testing.T) {
 func TestAsyncJobCompleter_Subscribe(t *testing.T) {
 	t.Parallel()
 
-	testCompleterSubscribe(t, func(a dbadapter.Adapter) JobCompleter {
-		return NewAsyncCompleter(riverinternaltest.BaseServiceArchetype(t), a, 4)
+	testCompleterSubscribe(t, func(exec PartialExecutor) JobCompleter {
+		return NewAsyncCompleter(riverinternaltest.BaseServiceArchetype(t), exec, 4)
 	})
 }
 
 func TestAsyncJobCompleter_Wait(t *testing.T) {
 	t.Parallel()
 
-	testCompleterWait(t, func(a dbadapter.Adapter) JobCompleter {
-		return NewAsyncCompleter(riverinternaltest.BaseServiceArchetype(t), a, 4)
+	testCompleterWait(t, func(exec PartialExecutor) JobCompleter {
+		return NewAsyncCompleter(riverinternaltest.BaseServiceArchetype(t), exec, 4)
 	})
 }
 
-func testCompleterSubscribe(t *testing.T, constructor func(dbadapter.Adapter) JobCompleter) {
+func testCompleterSubscribe(t *testing.T, constructor func(PartialExecutor) JobCompleter) {
 	t.Helper()
 
-	adapter := &dbadaptertest.TestAdapter{
-		JobSetStateIfRunningFunc: func(ctx context.Context, params *dbadapter.JobSetStateIfRunningParams) (*dbsqlc.RiverJob, error) {
-			return &dbsqlc.RiverJob{
-				State: dbsqlc.JobStateCompleted,
+	exec := &executorMock{
+		JobSetStateIfRunningFunc: func(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
+			return &rivertype.JobRow{
+				State: rivertype.JobStateCompleted,
 			}, nil
 		},
 	}
 
-	completer := constructor(adapter)
+	completer := constructor(exec)
 
 	jobUpdates := make(chan CompleterJobUpdated, 10)
 	completer.Subscribe(func(update CompleterJobUpdated) {
@@ -176,37 +190,37 @@ func testCompleterSubscribe(t *testing.T, constructor func(dbadapter.Adapter) Jo
 	})
 
 	for i := 0; i < 4; i++ {
-		require.NoError(t, completer.JobSetStateIfRunning(&jobstats.JobStatistics{}, dbadapter.JobSetStateCompleted(int64(i), time.Now())))
+		require.NoError(t, completer.JobSetStateIfRunning(&jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(int64(i), time.Now())))
 	}
 
 	completer.Wait()
 
 	updates := riverinternaltest.WaitOrTimeoutN(t, jobUpdates, 4)
 	for i := 0; i < 4; i++ {
-		require.Equal(t, dbsqlc.JobStateCompleted, updates[0].Job.State)
+		require.Equal(t, rivertype.JobStateCompleted, updates[0].Job.State)
 	}
 }
 
-func testCompleterWait(t *testing.T, constructor func(dbadapter.Adapter) JobCompleter) {
+func testCompleterWait(t *testing.T, constructor func(PartialExecutor) JobCompleter) {
 	t.Helper()
 
 	resultCh := make(chan error)
 	completeStartedCh := make(chan struct{})
-	adapter := &dbadaptertest.TestAdapter{
-		JobSetStateIfRunningFunc: func(ctx context.Context, params *dbadapter.JobSetStateIfRunningParams) (*dbsqlc.RiverJob, error) {
+	exec := &executorMock{
+		JobSetStateIfRunningFunc: func(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
 			completeStartedCh <- struct{}{}
 			err := <-resultCh
 			return nil, err
 		},
 	}
 
-	completer := constructor(adapter)
+	completer := constructor(exec)
 
 	// launch 4 completions:
 	for i := 0; i < 4; i++ {
 		i := i
 		go func() {
-			require.NoError(t, completer.JobSetStateIfRunning(&jobstats.JobStatistics{}, dbadapter.JobSetStateCompleted(int64(i), time.Now())))
+			require.NoError(t, completer.JobSetStateIfRunning(&jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(int64(i), time.Now())))
 		}()
 		<-completeStartedCh // wait for func to actually start
 	}

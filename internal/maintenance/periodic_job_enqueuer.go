@@ -6,9 +6,10 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/dbadapter"
+	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/rivercommon"
+	"github.com/riverqueue/river/riverdriver"
 )
 
 // ErrNoJobToInsert can be returned by a PeriodicJob's JobToInsertFunc to
@@ -32,7 +33,7 @@ func (ts *PeriodicJobEnqueuerTestSignals) Init() {
 // river.PeriodicJobArgs, but needs a separate type because the enqueuer is in a
 // subpackage.
 type PeriodicJob struct {
-	ConstructorFunc func() (*dbadapter.JobInsertParams, error)
+	ConstructorFunc func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error)
 	RunOnStart      bool
 	ScheduleFunc    func(time.Time) time.Time
 
@@ -51,6 +52,8 @@ func (j *PeriodicJob) mustValidate() *PeriodicJob {
 }
 
 type PeriodicJobEnqueuerConfig struct {
+	AdvisoryLockPrefix int32
+
 	// PeriodicJobs are the periodic jobs with which to configure the enqueuer.
 	PeriodicJobs []*PeriodicJob
 }
@@ -69,21 +72,29 @@ type PeriodicJobEnqueuer struct {
 	Config      *PeriodicJobEnqueuerConfig
 	TestSignals PeriodicJobEnqueuerTestSignals
 
-	dbAdapter    dbadapter.Adapter
-	periodicJobs []*PeriodicJob
+	exec           riverdriver.Executor
+	periodicJobs   []*PeriodicJob
+	uniqueInserter *dbunique.UniqueInserter
 }
 
-func NewPeriodicJobEnqueuer(archetype *baseservice.Archetype, config *PeriodicJobEnqueuerConfig, dbAdapter dbadapter.Adapter) *PeriodicJobEnqueuer {
+func NewPeriodicJobEnqueuer(archetype *baseservice.Archetype, config *PeriodicJobEnqueuerConfig, exec riverdriver.Executor) *PeriodicJobEnqueuer {
 	svc := baseservice.Init(archetype, &PeriodicJobEnqueuer{
 		Config: (&PeriodicJobEnqueuerConfig{
-			PeriodicJobs: config.PeriodicJobs,
+			AdvisoryLockPrefix: config.AdvisoryLockPrefix,
+			PeriodicJobs:       config.PeriodicJobs,
 		}).mustValidate(),
 
-		dbAdapter:    dbAdapter,
-		periodicJobs: config.PeriodicJobs,
+		exec:           exec,
+		periodicJobs:   config.PeriodicJobs,
+		uniqueInserter: baseservice.Init(archetype, &dbunique.UniqueInserter{AdvisoryLockPrefix: config.AdvisoryLockPrefix}),
 	})
 
 	return svc
+}
+
+type insertParamsAndUniqueOpts struct {
+	InsertParams *riverdriver.JobInsertFastParams
+	UniqueOpts   *dbunique.UniqueOpts
 }
 
 func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
@@ -108,8 +119,8 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 		// queues any jobs that should run immediately.
 		{
 			var (
-				insertParamsMany   []*dbadapter.JobInsertParams
-				insertParamsUnique []*dbadapter.JobInsertParams
+				insertParamsMany   []*riverdriver.JobInsertFastParams
+				insertParamsUnique []*insertParamsAndUniqueOpts
 			)
 			now := s.TimeNowUTC()
 
@@ -121,9 +132,9 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 				periodicJob.nextRunAt = periodicJob.ScheduleFunc(now)
 
 				if periodicJob.RunOnStart {
-					if insertParams, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc); ok {
-						if insertParams.Unique {
-							insertParamsUnique = append(insertParamsUnique, insertParams)
+					if insertParams, uniqueOpts, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc); ok {
+						if !uniqueOpts.IsEmpty() {
+							insertParamsUnique = append(insertParamsUnique, &insertParamsAndUniqueOpts{insertParams, uniqueOpts})
 						} else {
 							insertParamsMany = append(insertParamsMany, insertParams)
 						}
@@ -149,8 +160,8 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 			select {
 			case <-timerUntilNextRun.C:
 				var (
-					insertParamsMany   []*dbadapter.JobInsertParams
-					insertParamsUnique []*dbadapter.JobInsertParams
+					insertParamsMany   []*riverdriver.JobInsertFastParams
+					insertParamsUnique []*insertParamsAndUniqueOpts
 				)
 
 				now := s.TimeNowUTC()
@@ -167,9 +178,9 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 
 					periodicJob.nextRunAt = periodicJob.ScheduleFunc(now)
 
-					if insertParams, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc); ok {
-						if insertParams.Unique {
-							insertParamsUnique = append(insertParamsUnique, insertParams)
+					if insertParams, uniqueOpts, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc); ok {
+						if !uniqueOpts.IsEmpty() {
+							insertParamsUnique = append(insertParamsUnique, &insertParamsAndUniqueOpts{insertParams, uniqueOpts})
 						} else {
 							insertParamsMany = append(insertParamsMany, insertParams)
 						}
@@ -193,9 +204,9 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany, insertParamsUnique []*dbadapter.JobInsertParams) {
+func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany []*riverdriver.JobInsertFastParams, insertParamsUnique []*insertParamsAndUniqueOpts) {
 	if len(insertParamsMany) > 0 {
-		if _, err := s.dbAdapter.JobInsertMany(ctx, insertParamsMany); err != nil {
+		if _, err := s.exec.JobInsertFastMany(ctx, insertParamsMany); err != nil {
 			s.Logger.ErrorContext(ctx, s.Name+": Error inserting periodic jobs",
 				"error", err.Error(), "num_jobs", len(insertParamsMany))
 		}
@@ -206,10 +217,10 @@ func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany,
 	// so we still maintain an insert many fast path above for programs that
 	// aren't inserting any unique jobs periodically (which we expect is most).
 	if len(insertParamsUnique) > 0 {
-		for _, insertParams := range insertParamsUnique {
-			if _, err := s.dbAdapter.JobInsert(ctx, insertParams); err != nil {
+		for _, params := range insertParamsUnique {
+			if _, err := s.uniqueInserter.JobInsert(ctx, s.exec, params.InsertParams, params.UniqueOpts); err != nil {
 				s.Logger.ErrorContext(ctx, s.Name+": Error inserting unique periodic job",
-					"error", err.Error(), "kind", insertParams.Kind)
+					"error", err.Error(), "kind", params.InsertParams.Kind)
 			}
 		}
 	}
@@ -219,19 +230,19 @@ func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany,
 	}
 }
 
-func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, constructorFunc func() (*dbadapter.JobInsertParams, error)) (*dbadapter.JobInsertParams, bool) {
-	job, err := constructorFunc()
+func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, constructorFunc func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error)) (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, bool) {
+	insertParams, uniqueOpts, err := constructorFunc()
 	if err != nil {
 		if errors.Is(err, ErrNoJobToInsert) {
 			s.Logger.InfoContext(ctx, s.Name+": nil returned from periodic job constructor, skipping")
 			s.TestSignals.SkippedJob.Signal(struct{}{})
-			return nil, false
+			return nil, nil, false
 		}
 		s.Logger.ErrorContext(ctx, s.Name+": Internal error generating periodic job", "error", err.Error())
-		return nil, false
+		return nil, nil, false
 	}
 
-	return job, true
+	return insertParams, uniqueOpts, true
 }
 
 func (s *PeriodicJobEnqueuer) timeUntilNextRun() time.Duration {

@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/internal/util/maputil"
 	"github.com/riverqueue/river/internal/util/sliceutil"
@@ -56,7 +55,6 @@ type Migrator[TTx any] struct {
 
 	driver     riverdriver.Driver[TTx]
 	migrations map[int]*migrationBundle // allows us to inject test migrations
-	queries    *dbsqlc.Queries
 }
 
 // New returns a new migrator with the given database driver and configuration.
@@ -102,7 +100,6 @@ func New[TTx any](driver riverdriver.Driver[TTx], config *Config) *Migrator[TTx]
 	return baseservice.Init(archetype, &Migrator[TTx]{
 		driver:     driver,
 		migrations: riverMigrationsMap,
-		queries:    dbsqlc.New(),
 	})
 }
 
@@ -172,7 +169,7 @@ const (
 //		// handle error
 //	}
 func (m *Migrator[TTx]) Migrate(ctx context.Context, direction Direction, opts *MigrateOpts) (*MigrateResult, error) {
-	return dbutil.WithExecutorTxV(ctx, m.driver.GetExecutor(), func(ctx context.Context, tx riverdriver.ExecutorTx) (*MigrateResult, error) {
+	return dbutil.WithTxV(ctx, m.driver.GetExecutor(), func(ctx context.Context, tx riverdriver.ExecutorTx) (*MigrateResult, error) {
 		switch direction {
 		case DirectionDown:
 			return m.migrateDown(ctx, tx, direction, opts)
@@ -227,7 +224,7 @@ type ValidateResult struct {
 // validation and usable message in case there are migrations that haven't yet
 // been applied.
 func (m *Migrator[TTx]) Validate(ctx context.Context) (*ValidateResult, error) {
-	return dbutil.WithExecutorTxV(ctx, m.driver.GetExecutor(), func(ctx context.Context, tx riverdriver.ExecutorTx) (*ValidateResult, error) {
+	return dbutil.WithTxV(ctx, m.driver.GetExecutor(), func(ctx context.Context, tx riverdriver.ExecutorTx) (*ValidateResult, error) {
 		return m.validate(ctx, tx)
 	})
 }
