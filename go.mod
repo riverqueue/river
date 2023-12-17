@@ -13,9 +13,9 @@ require (
 	github.com/jackc/pgx/v5 v5.5.1
 	github.com/jackc/puddle/v2 v2.2.1
 	github.com/oklog/ulid/v2 v2.1.0
-	github.com/riverqueue/river/riverdriver v0.0.14
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.0.14
-	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.0.14
+	github.com/riverqueue/river/riverdriver v0.0.15
+	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.0.15
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.0.15
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cobra v1.8.0
 	github.com/stretchr/testify v1.8.4
@@ -33,6 +33,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	golang.org/x/crypto v0.15.0 // indirect
+	golang.org/x/mod v0.14.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
