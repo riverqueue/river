@@ -74,7 +74,7 @@ type Config struct {
 	// Defaults to 24 hours.
 	CompletedJobRetentionPeriod time.Duration
 
-	// DiscardedJobRetentionPeriod is the amount of time to keep cancelled jobs
+	// DiscardedJobRetentionPeriod is the amount of time to keep discarded jobs
 	// around before they're removed permanently.
 	//
 	// Defaults to 7 days.
