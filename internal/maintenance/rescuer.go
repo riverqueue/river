@@ -112,10 +112,12 @@ func (s *Rescuer) Start(ctx context.Context) error {
 	s.CancellableSleepRandomBetween(ctx, JitterMin, JitterMax)
 
 	go func() {
+		// This defer should come first so that it's last out, thereby avoiding
+		// races.
+		defer close(stopped)
+
 		s.Logger.InfoContext(ctx, s.Name+logPrefixRunLoopStarted)
 		defer s.Logger.InfoContext(ctx, s.Name+logPrefixRunLoopStopped)
-
-		defer close(stopped)
 
 		ticker := timeutil.NewTickerWithInitialTick(ctx, s.Config.Interval)
 		for {
