@@ -967,11 +967,16 @@ func insertParamsFromArgsAndOptions(args JobArgs, insertOpts *InsertOpts) (*dbad
 		return nil, err
 	}
 
+	metadata := insertOpts.Metadata
+	if len(metadata) == 0 {
+		metadata = []byte("{}")
+	}
+
 	insertParams := &dbadapter.JobInsertParams{
 		EncodedArgs: encodedArgs,
 		Kind:        args.Kind(),
 		MaxAttempts: maxAttempts,
-		Metadata:    []byte("{}"),
+		Metadata:    metadata,
 		Priority:    priority,
 		Queue:       queue,
 		State:       dbsqlc.JobState(JobStateAvailable),

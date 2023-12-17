@@ -17,13 +17,12 @@ func JobRowFromInternal(internal *RiverJob) *rivertype.JobRow {
 		FinalizedAt: internal.FinalizedAt,
 		Kind:        internal.Kind,
 		MaxAttempts: max(int(internal.MaxAttempts), 0),
+		Metadata:    internal.Metadata,
 		Priority:    max(int(internal.Priority), 0),
 		Queue:       internal.Queue,
 		ScheduledAt: internal.ScheduledAt.UTC(), // TODO(brandur): Very weird this is the only place a UTC conversion happens.
 		State:       rivertype.JobState(internal.State),
 		Tags:        internal.Tags,
-
-		// metadata: internal.Metadata,
 	}
 }
 
