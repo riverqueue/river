@@ -25,7 +25,6 @@ import (
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/rivertest"
 	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/internal/util/valutil"
@@ -214,7 +213,7 @@ func Test_Client(t *testing.T) {
 		_, err := client.Insert(ctx, &JobArgs{}, nil)
 		require.NoError(t, err)
 
-		rivertest.WaitOrTimeout(t, workedChan)
+		riverinternaltest.WaitOrTimeout(t, workedChan)
 	})
 
 	t.Run("JobCancel", func(t *testing.T) {
@@ -235,7 +234,7 @@ func Test_Client(t *testing.T) {
 		insertedJob, err := client.Insert(ctx, &JobArgs{}, nil)
 		require.NoError(t, err)
 
-		event := rivertest.WaitOrTimeout(t, bundle.subscribeChan)
+		event := riverinternaltest.WaitOrTimeout(t, bundle.subscribeChan)
 		require.Equal(t, EventKindJobCancelled, event.Kind)
 		require.Equal(t, JobStateCancelled, event.Job.State)
 		require.WithinDuration(t, time.Now(), *event.Job.FinalizedAt, 2*time.Second)
@@ -264,7 +263,7 @@ func Test_Client(t *testing.T) {
 		insertedJob, err := client.Insert(ctx, &JobArgs{}, nil)
 		require.NoError(t, err)
 
-		event := rivertest.WaitOrTimeout(t, bundle.subscribeChan)
+		event := riverinternaltest.WaitOrTimeout(t, bundle.subscribeChan)
 		require.Equal(t, EventKindJobSnoozed, event.Kind)
 		require.Equal(t, JobStateScheduled, event.Job.State)
 		require.WithinDuration(t, time.Now().Add(15*time.Minute), event.Job.ScheduledAt, 2*time.Second)
