@@ -305,6 +305,7 @@ func (a *StandardAdapter) JobInsertManyTx(ctx context.Context, tx pgx.Tx, params
 			Priority:    int16(min(params.Priority, math.MaxInt16)),
 			Queue:       params.Queue,
 			State:       params.State,
+			ScheduledAt: params.ScheduledAt,
 			Tags:        tags,
 		}
 	}

@@ -522,6 +522,7 @@ type JobInsertManyParams struct {
 	Metadata    []byte
 	Priority    int16
 	Queue       string
+	ScheduledAt time.Time
 	State       JobState
 	Tags        []string
 }
