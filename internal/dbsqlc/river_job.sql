@@ -184,6 +184,7 @@ INSERT INTO river_job(
   metadata,
   priority,
   queue,
+  scheduled_at,
   state,
   tags
 ) VALUES (
@@ -194,6 +195,7 @@ INSERT INTO river_job(
   @metadata,
   @priority,
   @queue,
+  @scheduled_at,
   @state,
   @tags
 );

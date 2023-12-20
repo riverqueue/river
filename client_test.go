@@ -1016,6 +1016,24 @@ func Test_Client_InsertManyTx(t *testing.T) {
 		require.Len(t, jobs, 2, "Expected to find exactly two jobs of kind: "+(noOpArgs{}).Kind())
 	})
 
+	t.Run("SupportsScheduledJobs", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		startClient(ctx, t, client)
+
+		count, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{{noOpArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(time.Minute)}}})
+		require.NoError(t, err)
+		require.Equal(t, int64(1), count)
+
+		insertedJobs, err := bundle.queries.JobGetByKind(ctx, bundle.tx, noOpArgs{}.Kind())
+		require.NoError(t, err)
+		require.Len(t, insertedJobs, 1)
+		require.Equal(t, dbsqlc.JobStateScheduled, insertedJobs[0].State)
+		require.WithinDuration(t, time.Now().Add(time.Minute), insertedJobs[0].ScheduledAt, 2*time.Second)
+	})
+
 	// A client's allowed to send nil to their driver so they can, for example,
 	// easily use test transactions in their test suite.
 	t.Run("WithDriverWithoutPool", func(t *testing.T) {
