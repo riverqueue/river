@@ -81,10 +81,7 @@ type Migrator[TTx any] struct {
 //	}
 //	defer dbPool.Close()
 //
-//	migrator, err := rivermigrate.New(riverpgxv5.New(dbPool), nil)
-//	if err != nil {
-//		// handle error
-//	}
+//	migrator := rivermigrate.New(riverpgxv5.New(dbPool), nil)
 func New[TTx any](driver riverdriver.Driver[TTx], config *Config) *Migrator[TTx] {
 	if config == nil {
 		config = &Config{}
