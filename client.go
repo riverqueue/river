@@ -647,6 +647,11 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 
 		c.wg.Add(2)
 		go func() {
+			// TODO(bgentry): is this the wrong context? Should the notifier actually
+			// use the `workCtx` so that it doesn't get shut down before existing jobs
+			// have finished / had their contexts cancelled? This would preserve the
+			// ability to cancel an individual job's context during the initial
+			// shutdown phase.
 			c.notifier.Run(fetchNewWorkCtx)
 			c.wg.Done()
 		}()
