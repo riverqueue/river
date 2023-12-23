@@ -542,6 +542,35 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	return client, nil
 }
 
+// pgIdentifierRegexp matches all valid PostgreSQL identifier names:
+var pgIdentifierRegexp = regexp.MustCompile("^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+// Listen subscribes to a notification topic. The notifyFunc will be called for
+// any notification that is received on the topic. The returned subscription must be
+// closed with Unlisten when no longer needed.
+//
+// The provided notifyFunc should be fast and not block to avoid dropping other
+// notifications and potentially causing internal issues within River.
+//
+// It returns an error if the specified topic is not a valid Postgres
+// identifier. Panics if notifyFunc is nil.
+func (c *Client[TTx]) Listen(topic string, notifyFunc NotifyFunc) (*ListenSubscription, error) {
+	// Validate that the topic is a valid Postgres identifier:
+	if valid := pgIdentifierRegexp.MatchString(topic); !valid {
+		return nil, fmt.Errorf("invalid topic name %q")
+	}
+	if notifyFunc == nil {
+		panic("notifyFunc is required")
+	}
+
+	wrapperFunc := func(topic notifier.NotificationTopic, payload string) {
+		notifyFunc(string(topic), payload)
+	}
+	return &ListenSubscription{
+		Subscription: c.notifier.Listen(notifier.NotificationTopic(topic), wrapperFunc),
+	}, nil
+}
+
 // Start starts the client's job fetching and working loops. Once this is called,
 // the client will run in a background goroutine until stopped. All jobs are
 // run with a context inheriting from the provided context, but with a timeout
