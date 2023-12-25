@@ -1,4 +1,4 @@
-package dbsqlc
+package db
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
+	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 )
 
@@ -18,10 +19,9 @@ func TestJobList(t *testing.T) {
 
 		ctx := context.Background()
 		tx := riverinternaltest.TestTx(ctx, t)
-		queries := New()
 
-		_, err := queries.JobList(ctx, tx, JobListParams{
-			State:      JobStateCompleted,
+		_, err := JobList(ctx, tx, JobListParams{
+			State:      dbsqlc.JobStateCompleted,
 			LimitCount: 1,
 			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderAsc}},
 		})
@@ -33,12 +33,11 @@ func TestJobList(t *testing.T) {
 
 		ctx := context.Background()
 		tx := riverinternaltest.TestTx(ctx, t)
-		queries := New()
 
-		_, err := queries.JobList(ctx, tx, JobListParams{
+		_, err := JobList(ctx, tx, JobListParams{
 			Conditions: "queue = 'test' AND priority = 1 AND args->>'foo' = @foo",
 			NamedArgs:  pgx.NamedArgs{"foo": "bar"},
-			State:      JobStateCompleted,
+			State:      dbsqlc.JobStateCompleted,
 			LimitCount: 1,
 			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderAsc}},
 		})

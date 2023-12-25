@@ -1445,17 +1445,17 @@ func Test_Client_JobList(t *testing.T) {
 		jobRow3 := dbsqlc.JobRowFromInternal(job3)
 		jobRow5 := dbsqlc.JobRowFromInternal(job5)
 
-		jobs, err := client.JobList(ctx, NewJobListParams().After(JobListPaginationCursorFromJob(jobRow1)))
+		jobs, err := client.JobList(ctx, NewJobListParams().After(JobListCursorFromJob(jobRow1)))
 		require.NoError(t, err)
 		require.Len(t, jobs, 1)
 		require.Equal(t, job2.ID, jobs[0].ID)
 
-		jobs, err = client.JobList(ctx, NewJobListParams().State(rivertype.JobStateRunning).After(JobListPaginationCursorFromJob(jobRow3)))
+		jobs, err = client.JobList(ctx, NewJobListParams().State(rivertype.JobStateRunning).After(JobListCursorFromJob(jobRow3)))
 		require.NoError(t, err)
 		require.Len(t, jobs, 1)
 		require.Equal(t, job4.ID, jobs[0].ID)
 
-		jobs, err = client.JobList(ctx, NewJobListParams().State(rivertype.JobStateCompleted).After(JobListPaginationCursorFromJob(jobRow5)))
+		jobs, err = client.JobList(ctx, NewJobListParams().State(rivertype.JobStateCompleted).After(JobListCursorFromJob(jobRow5)))
 		require.NoError(t, err)
 		require.Len(t, jobs, 1)
 		require.Equal(t, job6.ID, jobs[0].ID)

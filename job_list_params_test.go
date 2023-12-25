@@ -12,7 +12,7 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-func Test_JobListPaginationCursor_JobListPaginationCursorFromJob(t *testing.T) {
+func Test_JobListCursor_JobListCursorFromJob(t *testing.T) {
 	t.Parallel()
 
 	for i, state := range []rivertype.JobState{
@@ -35,7 +35,7 @@ func Test_JobListPaginationCursor_JobListPaginationCursorFromJob(t *testing.T) {
 				ScheduledAt: now.Add(-10 * time.Second),
 			}
 
-			cursor := JobListPaginationCursorFromJob(jobRow)
+			cursor := JobListCursorFromJob(jobRow)
 			require.Equal(t, jobRow.ID, cursor.id)
 			require.Equal(t, jobRow.Kind, cursor.kind)
 			require.Equal(t, jobRow.Queue, cursor.queue)
@@ -65,7 +65,7 @@ func Test_JobListPaginationCursor_JobListPaginationCursorFromJob(t *testing.T) {
 				ScheduledAt: now.Add(-10 * time.Second),
 			}
 
-			cursor := JobListPaginationCursorFromJob(jobRow)
+			cursor := JobListCursorFromJob(jobRow)
 			require.Equal(t, jobRow.ID, cursor.id)
 			require.Equal(t, jobRow.Kind, cursor.kind)
 			require.Equal(t, jobRow.Queue, cursor.queue)
@@ -87,7 +87,7 @@ func Test_JobListPaginationCursor_JobListPaginationCursorFromJob(t *testing.T) {
 			ScheduledAt: now.Add(-10 * time.Second),
 		}
 
-		cursor := JobListPaginationCursorFromJob(jobRow)
+		cursor := JobListCursorFromJob(jobRow)
 		require.Equal(t, jobRow.ID, cursor.id)
 		require.Equal(t, jobRow.Kind, cursor.kind)
 		require.Equal(t, jobRow.Queue, cursor.queue)
@@ -107,7 +107,7 @@ func Test_JobListPaginationCursor_JobListPaginationCursorFromJob(t *testing.T) {
 			ScheduledAt: now.Add(-10 * time.Second),
 		}
 
-		cursor := JobListPaginationCursorFromJob(jobRow)
+		cursor := JobListCursorFromJob(jobRow)
 		require.Equal(t, jobRow.ID, cursor.id)
 		require.Equal(t, jobRow.Kind, cursor.kind)
 		require.Equal(t, jobRow.Queue, cursor.queue)
@@ -115,14 +115,14 @@ func Test_JobListPaginationCursor_JobListPaginationCursorFromJob(t *testing.T) {
 	})
 }
 
-func Test_JobListPaginationCursor_MarshalJSON(t *testing.T) {
+func Test_JobListCursor_MarshalJSON(t *testing.T) {
 	t.Parallel()
 
 	t.Run("CanMarshalAndUnmarshal", func(t *testing.T) {
 		t.Parallel()
 
 		now := time.Now().UTC()
-		params := &JobListPaginationCursor{
+		params := &JobListCursor{
 			id:    4,
 			kind:  "test_kind",
 			queue: "test_queue",
@@ -133,7 +133,7 @@ func Test_JobListPaginationCursor_MarshalJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.NotEqual(t, "", text)
 
-		unmarshaledParams := &JobListPaginationCursor{}
+		unmarshaledParams := &JobListCursor{}
 		require.NoError(t, json.Unmarshal(text, unmarshaledParams))
 
 		require.Equal(t, params, unmarshaledParams)

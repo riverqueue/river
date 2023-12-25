@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/riverqueue/river/internal/baseservice"
+	"github.com/riverqueue/river/internal/db"
 	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/util/dbutil"
@@ -441,11 +442,11 @@ func (a *StandardAdapter) JobListTx(ctx context.Context, tx pgx.Tx, params JobLi
 
 	var conditionsBuilder strings.Builder
 
-	orderBy := make([]dbsqlc.JobListOrderBy, len(params.OrderBy))
+	orderBy := make([]db.JobListOrderBy, len(params.OrderBy))
 	for i, o := range params.OrderBy {
-		orderBy[i] = dbsqlc.JobListOrderBy{
+		orderBy[i] = db.JobListOrderBy{
 			Expr:  o.Expr,
-			Order: dbsqlc.SortOrder(o.Order),
+			Order: db.SortOrder(o.Order),
 		}
 	}
 
@@ -466,7 +467,7 @@ func (a *StandardAdapter) JobListTx(ctx context.Context, tx pgx.Tx, params JobLi
 		conditionsBuilder.WriteString(params.Conditions)
 	}
 
-	jobs, err := a.queries.JobList(ctx, tx, dbsqlc.JobListParams{
+	jobs, err := db.JobList(ctx, tx, db.JobListParams{
 		Conditions: conditionsBuilder.String(),
 		LimitCount: params.LimitCount,
 		NamedArgs:  namedArgs,

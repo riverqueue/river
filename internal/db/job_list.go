@@ -1,4 +1,4 @@
-package dbsqlc
+package db
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/riverqueue/river/internal/dbsqlc"
 )
 
 const jobList = `-- name: JobList :many
@@ -35,7 +37,7 @@ type JobListOrderBy struct {
 }
 
 type JobListParams struct {
-	State      JobState
+	State      dbsqlc.JobState
 	Priorities []int16
 	Conditions string
 	OrderBy    []JobListOrderBy
@@ -43,7 +45,7 @@ type JobListParams struct {
 	LimitCount int32
 }
 
-func (q *Queries) JobList(ctx context.Context, db DBTX, arg JobListParams) ([]*RiverJob, error) {
+func JobList(ctx context.Context, tx pgx.Tx, arg JobListParams) ([]*dbsqlc.RiverJob, error) {
 	namedArgs := make(pgx.NamedArgs)
 	for k, v := range arg.NamedArgs {
 		namedArgs[k] = v
@@ -81,14 +83,14 @@ func (q *Queries) JobList(ctx context.Context, db DBTX, arg JobListParams) ([]*R
 	}
 
 	query := fmt.Sprintf(jobList, conditions, orderByBuilder.String())
-	rows, err := db.Query(ctx, query, namedArgs)
+	rows, err := tx.Query(ctx, query, namedArgs)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []*RiverJob
+	var items []*dbsqlc.RiverJob
 	for rows.Next() {
-		var i RiverJob
+		var i dbsqlc.RiverJob
 		if err := rows.Scan(
 			&i.ID,
 			&i.Args,

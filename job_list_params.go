@@ -12,18 +12,18 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-// JobListPaginationCursor is used to specify a starting point for a paginated
+// JobListCursor is used to specify a starting point for a paginated
 // job list query.
-type JobListPaginationCursor struct {
+type JobListCursor struct {
 	id    int64
 	kind  string
 	queue string
 	time  time.Time
 }
 
-// JobListPaginationCursorFromJob creates a JobListPaginationCursor from a JobRow.
-func JobListPaginationCursorFromJob(job *rivertype.JobRow) *JobListPaginationCursor {
-	return &JobListPaginationCursor{
+// JobListCursorFromJob creates a JobListCursor from a JobRow.
+func JobListCursorFromJob(job *rivertype.JobRow) *JobListCursor {
+	return &JobListCursor{
 		id:    job.ID,
 		kind:  job.Kind,
 		queue: job.Queue,
@@ -33,7 +33,7 @@ func JobListPaginationCursorFromJob(job *rivertype.JobRow) *JobListPaginationCur
 
 // UnmarshalText implements encoding.TextUnmarshaler to decode the cursor from
 // a previously marshaled string.
-func (c *JobListPaginationCursor) UnmarshalText(text []byte) error {
+func (c *JobListCursor) UnmarshalText(text []byte) error {
 	dst := make([]byte, base64.StdEncoding.DecodedLen(len(text)))
 	n, err := base64.StdEncoding.Decode(dst, text)
 	if err != nil {
@@ -45,7 +45,7 @@ func (c *JobListPaginationCursor) UnmarshalText(text []byte) error {
 	if err := json.Unmarshal(dst, &wrapperValue); err != nil {
 		return err
 	}
-	*c = JobListPaginationCursor{
+	*c = JobListCursor{
 		id:    wrapperValue.ID,
 		kind:  wrapperValue.Kind,
 		queue: wrapperValue.Queue,
@@ -56,7 +56,7 @@ func (c *JobListPaginationCursor) UnmarshalText(text []byte) error {
 
 // MarshalText implements encoding.TextMarshaler to encode the cursor as an
 // opaque string.
-func (c JobListPaginationCursor) MarshalText() ([]byte, error) {
+func (c JobListCursor) MarshalText() ([]byte, error) {
 	wrapperValue := jobListPaginationCursorJSON{
 		ID:    c.id,
 		Kind:  c.kind,
@@ -104,7 +104,7 @@ const (
 //
 //	params := NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).First(100)
 type JobListParams struct {
-	after           *JobListPaginationCursor
+	after           *JobListCursor
 	paginationCount int32
 	queues          []string
 	sortField       JobListOrderByField
@@ -188,7 +188,7 @@ func (p *JobListParams) toDBParams() (*dbadapter.JobListParams, error) {
 
 // After returns an updated filter set that will only return jobs
 // after the given cursor.
-func (p *JobListParams) After(cursor *JobListPaginationCursor) *JobListParams {
+func (p *JobListParams) After(cursor *JobListCursor) *JobListParams {
 	result := p.copy()
 	result.after = cursor
 	return result
