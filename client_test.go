@@ -893,7 +893,7 @@ func Test_Client_Insert(t *testing.T) {
 		require.NoError(t, err)
 
 		_, err = client.Insert(ctx, &noOpArgs{}, nil)
-		require.ErrorIs(t, err, errInsertNoDriverDBPool)
+		require.ErrorIs(t, err, errNoDriverDBPool)
 	})
 
 	t.Run("ErrorsOnUnknownJobKindWithWorkers", func(t *testing.T) {
@@ -1072,7 +1072,7 @@ func Test_Client_InsertMany(t *testing.T) {
 		count, err := client.InsertMany(ctx, []InsertManyParams{
 			{Args: noOpArgs{}},
 		})
-		require.ErrorIs(t, err, errInsertNoDriverDBPool)
+		require.ErrorIs(t, err, errNoDriverDBPool)
 		require.Equal(t, int64(0), count)
 	})
 
