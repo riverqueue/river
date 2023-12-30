@@ -146,8 +146,13 @@ func (s *Rescuer) Start(ctx context.Context) error {
 }
 
 type rescuerRunOnceResult struct {
+	NumJobsCancelled int64
 	NumJobsDiscarded int64
 	NumJobsRetried   int64
+}
+
+type metadataWithCancelAttemptedAt struct {
+	CancelAttemptedAt time.Time `json:"cancel_attempted_at"`
 }
 
 func (s *Rescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error) {
@@ -174,6 +179,11 @@ func (s *Rescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error) {
 		for i, job := range stuckJobs {
 			rescueManyParams.ID[i] = job.ID
 
+			var metadata metadataWithCancelAttemptedAt
+			if err := json.Unmarshal(job.Metadata, &metadata); err != nil {
+				return nil, fmt.Errorf("error unmarshaling job metadata: %w", err)
+			}
+
 			rescueManyParams.Error[i], err = json.Marshal(rivertype.AttemptError{
 				At:      now,
 				Attempt: max(int(job.Attempt), 0),
@@ -184,6 +194,13 @@ func (s *Rescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error) {
 				return nil, fmt.Errorf("error marshaling error JSON: %w", err)
 			}
 
+			if !metadata.CancelAttemptedAt.IsZero() {
+				res.NumJobsCancelled++
+				rescueManyParams.FinalizedAt[i] = now
+				rescueManyParams.ScheduledAt[i] = job.ScheduledAt // reuse previous value
+				rescueManyParams.State[i] = string(dbsqlc.JobStateCancelled)
+				continue
+			}
 			shouldRetry, retryAt := s.makeRetryDecision(ctx, job)
 			if shouldRetry {
 				res.NumJobsRetried++

@@ -63,6 +63,10 @@ type producer struct {
 	errorHandler ErrorHandler
 	workers      *Workers
 
+	// Receives job IDs to cancel. Written by notifier goroutine, only read from
+	// main goroutine.
+	cancelCh chan int64
+
 	// Receives completed jobs from workers. Written by completed workers, only
 	// read from main goroutine.
 	jobResultCh chan *rivertype.JobRow
@@ -119,6 +123,7 @@ func newProducer(archetype *baseservice.Archetype, adapter dbadapter.Adapter, co
 	return baseservice.Init(archetype, &producer{
 		activeJobs:   make(map[int64]*jobExecutor),
 		adapter:      adapter,
+		cancelCh:     make(chan int64, 1000),
 		completer:    completer,
 		config:       config,
 		errorHandler: config.ErrorHandler,
@@ -150,10 +155,45 @@ func (p *producer) Run(fetchCtx, workCtx context.Context, statusFunc producerSta
 	// TODO: fetcher should have some jitter in it to avoid stampeding issues.
 	fetchLimiter := chanutil.NewDebouncedChan(fetchCtx, p.config.FetchCooldown)
 
+	handleJobControlNotification := func(topic notifier.NotificationTopic, payload string) {
+		var decoded jobControlPayload
+		if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+			p.Logger.ErrorContext(workCtx, p.Name+": Failed to unmarshal job control notification payload", slog.String("err", err.Error()))
+			return
+		}
+		if string(decoded.Action) == string(jobControlActionCancel) && decoded.Queue == p.config.QueueName && decoded.JobID > 0 {
+			select {
+			case p.cancelCh <- decoded.JobID:
+			default:
+				p.Logger.WarnContext(workCtx, p.Name+": Job cancel notification dropped due to full buffer", slog.Int64("job_id", decoded.JobID))
+			}
+			return
+		}
+		p.Logger.DebugContext(workCtx, p.Name+": Received job control notification with unknown action or other queue",
+			slog.String("action", string(decoded.Action)),
+			slog.Int64("job_id", decoded.JobID),
+			slog.String("queue", decoded.Queue),
+		)
+	}
+	sub := p.config.Notifier.Listen(notifier.NotificationTopicJobControl, handleJobControlNotification)
+	defer sub.Unlisten()
+
 	p.fetchAndRunLoop(fetchCtx, workCtx, fetchLimiter, statusFunc)
 	statusFunc(p.config.QueueName, componentstatus.ShuttingDown)
 	p.executorShutdownLoop()
 	statusFunc(p.config.QueueName, componentstatus.Stopped)
+}
+
+type jobControlAction string
+
+const (
+	jobControlActionCancel jobControlAction = "cancel"
+)
+
+type jobControlPayload struct {
+	Action jobControlAction `json:"action"`
+	JobID  int64            `json:"job_id"`
+	Queue  string           `json:"queue"`
 }
 
 type insertPayload struct {
@@ -237,6 +277,8 @@ func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan pr
 			return
 		case result := <-p.jobResultCh:
 			p.removeActiveJob(result.ID)
+		case jobID := <-p.cancelCh:
+			p.maybeCancelJob(jobID)
 		}
 	}
 }
@@ -262,6 +304,14 @@ func (p *producer) removeActiveJob(id int64) {
 	delete(p.activeJobs, id)
 	p.numJobsActive.Add(-1)
 	p.numJobsRan.Add(1)
+}
+
+func (p *producer) maybeCancelJob(id int64) {
+	executor, ok := p.activeJobs[id]
+	if !ok {
+		return
+	}
+	executor.Cancel()
 }
 
 func (p *producer) dispatchWork(count int32, jobsFetchedCh chan<- producerFetchResult) {
@@ -308,8 +358,11 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 			workUnit = workInfo.workUnitFactory.MakeUnit(job)
 		}
 
+		jobCtx, jobCancel := context.WithCancelCause(workCtx)
+
 		executor := baseservice.Init(&p.Archetype, &jobExecutor{
 			Adapter:                p.adapter,
+			CancelFunc:             jobCancel,
 			ClientJobTimeout:       p.jobTimeout,
 			ClientRetryPolicy:      p.retryPolicy,
 			Completer:              p.completer,
@@ -321,7 +374,7 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 		})
 		p.addActiveJob(job.ID, executor)
 
-		go executor.Execute(workCtx)
+		go executor.Execute(jobCtx)
 		// TODO:
 		// Errors can be recorded synchronously before the Executor slot is considered
 		// available.

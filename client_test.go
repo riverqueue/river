@@ -216,7 +216,7 @@ func Test_Client(t *testing.T) {
 		riverinternaltest.WaitOrTimeout(t, workedChan)
 	})
 
-	t.Run("JobCancel", func(t *testing.T) {
+	t.Run("JobCancelErrorReturned", func(t *testing.T) {
 		t.Parallel()
 
 		client, bundle := setup(t)
@@ -245,7 +245,7 @@ func Test_Client(t *testing.T) {
 		require.WithinDuration(t, time.Now(), *updatedJob.FinalizedAt, 2*time.Second)
 	})
 
-	t.Run("JobSnooze", func(t *testing.T) {
+	t.Run("JobSnoozeErrorReturned", func(t *testing.T) {
 		t.Parallel()
 
 		client, bundle := setup(t)
@@ -272,6 +272,128 @@ func Test_Client(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, dbsqlc.JobStateScheduled, updatedJob.State)
 		require.WithinDuration(t, time.Now().Add(15*time.Minute), updatedJob.ScheduledAt, 2*time.Second)
+	})
+
+	// This helper is used to test cancelling a job both _in_ a transaction and
+	// _outside of_ a transaction. The exact same test logic applies to each case,
+	// the only difference is a different cancelFunc provided by the specific
+	// subtest.
+	cancelRunningJobTestHelper := func(t *testing.T, cancelFunc func(ctx context.Context, client *Client[pgx.Tx], jobID int64) (*rivertype.JobRow, error)) { //nolint:thelper
+		client, bundle := setup(t)
+
+		jobStartedChan := make(chan int64)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			jobStartedChan <- job.ID
+			<-ctx.Done()
+			return ctx.Err()
+		}))
+
+		startClient(ctx, t, client)
+
+		insertedJob, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		startedJobID := riverinternaltest.WaitOrTimeout(t, jobStartedChan)
+		require.Equal(t, insertedJob.ID, startedJobID)
+
+		// Cancel the job:
+		updatedJob, err := cancelFunc(ctx, client, insertedJob.ID)
+		require.NoError(t, err)
+		require.NotNil(t, updatedJob)
+		// Job is still actively running at this point because the query wouldn't
+		// modify that column for a running job:
+		require.Equal(t, rivertype.JobStateRunning, updatedJob.State)
+
+		event := riverinternaltest.WaitOrTimeout(t, bundle.subscribeChan)
+		require.Equal(t, EventKindJobCancelled, event.Kind)
+		require.Equal(t, JobStateCancelled, event.Job.State)
+		require.WithinDuration(t, time.Now(), *event.Job.FinalizedAt, 2*time.Second)
+
+		jobAfterCancel, err := bundle.queries.JobGetByID(ctx, client.driver.GetDBPool(), insertedJob.ID)
+		require.NoError(t, err)
+		require.Equal(t, dbsqlc.JobStateCancelled, jobAfterCancel.State)
+		require.WithinDuration(t, time.Now(), *jobAfterCancel.FinalizedAt, 2*time.Second)
+	}
+
+	t.Run("CancelRunningJob", func(t *testing.T) {
+		t.Parallel()
+
+		cancelRunningJobTestHelper(t, func(ctx context.Context, client *Client[pgx.Tx], jobID int64) (*rivertype.JobRow, error) {
+			return client.Cancel(ctx, jobID)
+		})
+	})
+
+	t.Run("CancelRunningJobInTx", func(t *testing.T) {
+		t.Parallel()
+
+		cancelRunningJobTestHelper(t, func(ctx context.Context, client *Client[pgx.Tx], jobID int64) (*rivertype.JobRow, error) {
+			var (
+				job *rivertype.JobRow
+				err error
+			)
+			txErr := pgx.BeginFunc(ctx, client.driver.GetDBPool(), func(tx pgx.Tx) error {
+				job, err = client.CancelTx(ctx, tx, jobID)
+				return err
+			})
+			require.NoError(t, txErr)
+			return job, err
+		})
+	})
+
+	t.Run("CancelScheduledJob", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		jobStartedChan := make(chan int64)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			jobStartedChan <- job.ID
+			<-ctx.Done()
+			return ctx.Err()
+		}))
+
+		startClient(ctx, t, client)
+
+		insertedJob, err := client.Insert(ctx, &JobArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(5 * time.Minute)})
+		require.NoError(t, err)
+
+		// Cancel the job:
+		updatedJob, err := client.Cancel(ctx, insertedJob.ID)
+		require.NoError(t, err)
+		require.NotNil(t, updatedJob)
+		require.Equal(t, rivertype.JobStateCancelled, updatedJob.State)
+		require.WithinDuration(t, time.Now(), *updatedJob.FinalizedAt, 2*time.Second)
+	})
+
+	t.Run("CancelNonExistentJob", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+		startClient(ctx, t, client)
+
+		// Cancel an unknown job ID:
+		jobAfter, err := client.Cancel(ctx, 0)
+		require.ErrorIs(t, err, ErrNotFound)
+		require.Nil(t, jobAfter)
+
+		// Cancel an unknown job ID, within a transaction:
+		err = pgx.BeginFunc(ctx, client.driver.GetDBPool(), func(tx pgx.Tx) error {
+			jobAfter, err := client.CancelTx(ctx, tx, 0)
+			require.ErrorIs(t, err, ErrNotFound)
+			require.Nil(t, jobAfter)
+			return nil
+		})
+		require.NoError(t, err)
 	})
 
 	t.Run("AlternateSchema", func(t *testing.T) {

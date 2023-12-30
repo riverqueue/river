@@ -31,6 +31,51 @@ CREATE TABLE river_job(
   CONSTRAINT kind_length CHECK (char_length(kind) > 0 AND char_length(kind) < 128)
 );
 
+-- name: JobCancel :one
+WITH locked_job AS (
+  SELECT
+    id, queue, state, finalized_at
+  FROM river_job
+  WHERE
+    river_job.id = @id
+  FOR UPDATE
+),
+
+notification AS (
+  SELECT
+    id,
+    pg_notify(@job_control_topic, json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text)
+  FROM
+    locked_job
+  WHERE
+    state NOT IN ('cancelled', 'completed', 'discarded')
+    AND finalized_at IS NULL
+),
+
+updated_job AS (
+  UPDATE river_job
+  SET
+    -- If the job is actively running, we want to let its current client and
+    -- producer handle the cancellation. Otherwise, immediately cancel it.
+    state = CASE WHEN state = 'running'::river_job_state THEN state ELSE 'cancelled'::river_job_state END,
+    finalized_at = CASE WHEN state = 'running'::river_job_state THEN finalized_at ELSE now() END,
+    -- Mark the job as cancelled by query so that the rescuer knows not to
+    -- rescue it, even if it gets stuck in the running state:
+    metadata = jsonb_set(metadata, '{cancel_attempted_at}'::text[], @cancel_attempted_at::jsonb, true)
+  FROM notification
+  WHERE
+    river_job.id = notification.id
+  RETURNING river_job.*
+)
+
+SELECT *
+FROM river_job
+WHERE id = @id::bigint
+    AND id NOT IN (SELECT id FROM updated_job)
+UNION
+SELECT *
+FROM updated_job;
+
 -- name: JobCountRunning :one
 SELECT
   count(*)
@@ -240,18 +285,27 @@ RETURNING *;
 
 -- name: JobSetStateIfRunning :one
 WITH job_to_update AS (
-    SELECT id
+    SELECT
+      id,
+      @state::river_job_state IN ('retryable'::river_job_state, 'scheduled'::river_job_state) AND metadata ? 'cancel_attempted_at' AS should_cancel
     FROM river_job
     WHERE id = @id::bigint
     FOR UPDATE
 ),
 updated_job AS (
     UPDATE river_job
-    SET errors       = CASE WHEN @error_do_update::boolean        THEN array_append(errors, @error::jsonb) ELSE errors       END,
-        finalized_at = CASE WHEN @finalized_at_do_update::boolean THEN @finalized_at                       ELSE finalized_at END,
-        max_attempts = CASE WHEN @max_attempts_update::boolean    THEN @max_attempts                       ELSE max_attempts END,
-        scheduled_at = CASE WHEN @scheduled_at_do_update::boolean THEN @scheduled_at                       ELSE scheduled_at END,
-        state = @state
+    SET
+      state        = CASE WHEN should_cancel                                          THEN 'cancelled'::river_job_state
+                          ELSE @state::river_job_state END,
+      finalized_at = CASE WHEN should_cancel                                          THEN now()
+                          WHEN @finalized_at_do_update::boolean                       THEN @finalized_at
+                          ELSE finalized_at END,
+      errors       = CASE WHEN @error_do_update::boolean                              THEN array_append(errors, @error::jsonb)
+                          ELSE errors       END,
+      max_attempts = CASE WHEN NOT should_cancel AND @max_attempts_update::boolean    THEN @max_attempts
+                          ELSE max_attempts END,
+      scheduled_at = CASE WHEN NOT should_cancel AND @scheduled_at_do_update::boolean THEN @scheduled_at
+                          ELSE scheduled_at END
     FROM job_to_update
     WHERE river_job.id = job_to_update.id
         AND river_job.state = 'running'::river_job_state
@@ -290,6 +344,7 @@ UPDATE river_job
 SET
   attempt = CASE WHEN @attempt_do_update::boolean THEN @attempt ELSE attempt END,
   attempted_at = CASE WHEN @attempted_at_do_update::boolean THEN @attempted_at ELSE attempted_at END,
+  finalized_at = CASE WHEN @finalized_at_do_update::boolean THEN @finalized_at ELSE finalized_at END,
   state = CASE WHEN @state_do_update::boolean THEN @state ELSE state END
 WHERE id = @id
 RETURNING *;

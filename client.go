@@ -312,6 +312,11 @@ func (ts *clientTestSignals) Init() {
 }
 
 var (
+	// ErrNotFound is returned when a query by ID does not match any existing
+	// rows. For example, attempting to cancel a job that doesn't exist will
+	// return this error.
+	ErrNotFound = errors.New("not found")
+
 	errMissingConfig                 = errors.New("missing config")
 	errMissingDatabasePoolWithQueues = errors.New("must have a non-nil database pool to execute jobs (either use a driver with database pool or don't configure Queues)")
 	errMissingDriver                 = errors.New("missing database driver (try wrapping a Pgx pool with river/riverdriver/riverpgxv5.New)")
@@ -933,6 +938,106 @@ func (c *Client[TTx]) runProducers(fetchNewWorkCtx, workCtx context.Context) {
 			producer.Run(fetchNewWorkCtx, workCtx, c.monitor.SetProducerStatus)
 		}()
 	}
+}
+
+// Cancel cancels the job with the given ID. If possible, the job is cancelled
+// immediately and will not be retried. The provided context is used for the
+// underlying Postgres update and can be used to cancel the operation or apply a
+// timeout.
+//
+// If the job is still in the queue (available, scheduled, or retryable), it is
+// immediately marked as cancelled and will not be retried.
+//
+// If the job is already finalized (cancelled, completed, or discarded), no
+// changes are made.
+//
+// If the job is currently running, it is not immediately cancelled, but is
+// instead marked for cancellation. The client running the job will also be
+// notified (via LISTEN/NOTIFY) to cancel the running job's context. Although
+// the job's context will be cancelled, since Go does not provide a mechanism to
+// interrupt a running goroutine the job will continue running until it returns.
+// As always, it is important for workers to respect context cancellation and
+// return promptly when the job context is done.
+//
+// Once the cancellation signal is received by the client running the job, any
+// error returned by that job will result in it being cancelled permanently and
+// not retried. However if the job returns no error, it will be completed as
+// usual.
+//
+// In the event the running job finishes executing _before_ the cancellation
+// signal is received but _after_ this update was made, the behavior depends
+// on which state the job is being transitioned into:
+//
+//   - If the job completed successfully, was cancelled from within, or was
+//     discarded due to exceeding its max attempts, the job will be updated as
+//     usual.
+//   - If the job was snoozed to run again later or encountered a retryable error,
+//     the job will be marked as cancelled and will not be attempted again.
+//
+// Returns the up-to-date JobRow for the specified jobID if it exists. Returns
+// ErrNotFound if the job doesn't exist.
+func (c *Client[TTx]) Cancel(ctx context.Context, jobID int64) (*rivertype.JobRow, error) {
+	job, err := c.adapter.JobCancel(ctx, jobID)
+	if err != nil {
+		if errors.Is(err, riverdriver.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+
+	return dbsqlc.JobRowFromInternal(job), nil
+}
+
+// CancelTx cancels the job with the given ID within the specified transaction.
+// This variant lets a caller cancel a job atomically alongside other database
+// changes. An cancelled job doesn't take effect until the transaction commits,
+// and if the transaction rolls back, so too is the cancelled job.
+//
+// If possible, the job is cancelled immediately and will not be retried. The
+// provided context is used for the underlying Postgres update and can be used
+// to cancel the operation or apply a timeout.
+//
+// If the job is still in the queue (available, scheduled, or retryable), it is
+// immediately marked as cancelled and will not be retried.
+//
+// If the job is already finalized (cancelled, completed, or discarded), no
+// changes are made.
+//
+// If the job is currently running, it is not immediately cancelled, but is
+// instead marked for cancellation. The client running the job will also be
+// notified (via LISTEN/NOTIFY) to cancel the running job's context. Although
+// the job's context will be cancelled, since Go does not provide a mechanism to
+// interrupt a running goroutine the job will continue running until it returns.
+// As always, it is important for workers to respect context cancellation and
+// return promptly when the job context is done.
+//
+// Once the cancellation signal is received by the client running the job, any
+// error returned by that job will result in it being cancelled permanently and
+// not retried. However if the job returns no error, it will be completed as
+// usual.
+//
+// In the event the running job finishes executing _before_ the cancellation
+// signal is received but _after_ this update was made, the behavior depends
+// on which state the job is being transitioned into:
+//
+//   - If the job completed successfully, was cancelled from within, or was
+//     discarded due to exceeding its max attempts, the job will be updated as
+//     usual.
+//   - If the job was snoozed to run again later or encountered a retryable error,
+//     the job will be marked as cancelled and will not be attempted again.
+//
+// Returns the up-to-date JobRow for the specified jobID if it exists. Returns
+// ErrNotFound if the job doesn't exist.
+func (c *Client[TTx]) CancelTx(ctx context.Context, tx TTx, jobID int64) (*rivertype.JobRow, error) {
+	job, err := c.adapter.JobCancelTx(ctx, c.driver.UnwrapTx(tx), jobID)
+	if errors.Is(err, riverdriver.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return dbsqlc.JobRowFromInternal(job), nil
 }
 
 func insertParamsFromArgsAndOptions(args JobArgs, insertOpts *InsertOpts) (*dbadapter.JobInsertParams, error) {
