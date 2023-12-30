@@ -144,8 +144,28 @@ func Test_StandardAdapter_JobInsert(t *testing.T) {
 		adapter, _ := setupTx(t)
 
 		insertParams := makeFakeJobInsertParams(0, nil)
-		_, err := adapter.JobInsert(ctx, insertParams)
+		res, err := adapter.JobInsert(ctx, insertParams)
 		require.NoError(t, err)
+
+		// Sanity check, following assertion depends on this:
+		require.True(t, insertParams.ScheduledAt.IsZero())
+
+		require.Greater(t, res.Job.ID, int64(0), "expected job ID to be set, got %d", res.Job.ID)
+		require.JSONEq(t, string(insertParams.EncodedArgs), string(res.Job.Args))
+		require.Equal(t, int16(0), res.Job.Attempt)
+		require.Nil(t, res.Job.AttemptedAt)
+		require.Empty(t, res.Job.AttemptedBy)
+		require.WithinDuration(t, time.Now(), res.Job.CreatedAt, 2*time.Second)
+		require.Empty(t, res.Job.Errors)
+		require.Nil(t, res.Job.FinalizedAt)
+		require.Equal(t, insertParams.Kind, res.Job.Kind)
+		require.Equal(t, int16(insertParams.MaxAttempts), res.Job.MaxAttempts)
+		require.Equal(t, insertParams.Metadata, res.Job.Metadata)
+		require.Equal(t, int16(insertParams.Priority), res.Job.Priority)
+		require.Equal(t, insertParams.Queue, res.Job.Queue)
+		require.Equal(t, dbsqlc.JobStateAvailable, res.Job.State)
+		require.WithinDuration(t, time.Now(), res.Job.ScheduledAt, 2*time.Second)
+		require.Empty(t, res.Job.Tags)
 	})
 
 	t.Run("InsertAndFetch", func(t *testing.T) {
