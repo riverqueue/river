@@ -34,6 +34,10 @@ var defaultUniqueStates = []string{ //nolint:gochecknoglobals
 	string(dbsqlc.JobStateScheduled),
 }
 
+type JobCancelResult struct {
+	Cancelled bool
+}
+
 type JobToComplete struct {
 	ID          int64
 	FinalizedAt time.Time
@@ -82,6 +86,8 @@ type JobInsertResult struct {
 // expedience, but this should be converted to a more stable API if Adapter
 // would be exported.
 type Adapter interface {
+	JobCancel(ctx context.Context, id int64) (*JobCancelResult, error)
+
 	JobInsert(ctx context.Context, params *JobInsertParams) (*JobInsertResult, error)
 	JobInsertTx(ctx context.Context, tx pgx.Tx, params *JobInsertParams) (*JobInsertResult, error)
 
@@ -152,6 +158,21 @@ func NewStandardAdapter(archetype *baseservice.Archetype, config *StandardAdapte
 		queries:         dbsqlc.New(),
 		workerName:      config.WorkerName,
 	})
+}
+
+func (a *StandardAdapter) JobCancel(ctx context.Context, id int64) (*JobCancelResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, a.deadlineTimeout)
+	defer cancel()
+
+	tag, err := a.queries.JobCancel(ctx, a.executor, dbsqlc.JobCancelParams{
+		ID:              id,
+		JobControlTopic: string(notifier.NotificationTopicJobControl),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &JobCancelResult{Cancelled: tag.RowsAffected() > 0}, nil
 }
 
 func (a *StandardAdapter) JobInsert(ctx context.Context, params *JobInsertParams) (*JobInsertResult, error) {

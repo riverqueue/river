@@ -8,7 +8,52 @@ package dbsqlc
 import (
 	"context"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+const jobCancel = `-- name: JobCancel :execresult
+WITH locked_job AS (
+  SELECT
+    id, queue, state, finalized_at
+  FROM river_job
+  WHERE
+    river_job.id = $1
+    AND state NOT IN ('cancelled', 'completed', 'discarded')
+    AND finalized_at IS NULL
+  FOR UPDATE
+),
+
+notification AS (
+  SELECT
+    id,
+    pg_notify($2, json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text)
+  FROM
+    locked_job
+)
+
+UPDATE river_job
+SET
+  -- If the job is actively running, we want to let its current client and
+  -- producer handle the cancellation. Otherwise, immediately cancel it.
+  state = CASE WHEN state = 'running'::river_job_state THEN state ELSE 'cancelled'::river_job_state END,
+  finalized_at = CASE WHEN state = 'running'::river_job_state THEN finalized_at ELSE now() END,
+  -- Mark the job as cancelled by query so that the rescuer knows not to
+  -- rescue it, even if it gets stuck in the running state:
+  metadata = jsonb_set(metadata, '{cancelled_by_query}'::text[], 'true'::jsonb, true)
+FROM notification
+WHERE
+  river_job.id = notification.id
+`
+
+type JobCancelParams struct {
+	ID              int64
+	JobControlTopic string
+}
+
+func (q *Queries) JobCancel(ctx context.Context, db DBTX, arg JobCancelParams) (pgconn.CommandTag, error) {
+	return db.Exec(ctx, jobCancel, arg.ID, arg.JobControlTopic)
+}
 
 const jobCountRunning = `-- name: JobCountRunning :one
 SELECT
@@ -747,8 +792,9 @@ UPDATE river_job
 SET
   attempt = CASE WHEN $1::boolean THEN $2 ELSE attempt END,
   attempted_at = CASE WHEN $3::boolean THEN $4 ELSE attempted_at END,
-  state = CASE WHEN $5::boolean THEN $6 ELSE state END
-WHERE id = $7
+  finalized_at = CASE WHEN $5::boolean THEN $6 ELSE finalized_at END,
+  state = CASE WHEN $7::boolean THEN $8 ELSE state END
+WHERE id = $9
 RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
 `
 
@@ -757,6 +803,8 @@ type JobUpdateParams struct {
 	Attempt             int16
 	AttemptedAtDoUpdate bool
 	AttemptedAt         *time.Time
+	FinalizedAtDoUpdate bool
+	FinalizedAt         *time.Time
 	StateDoUpdate       bool
 	State               JobState
 	ID                  int64
@@ -770,6 +818,8 @@ func (q *Queries) JobUpdate(ctx context.Context, db DBTX, arg JobUpdateParams) (
 		arg.Attempt,
 		arg.AttemptedAtDoUpdate,
 		arg.AttemptedAt,
+		arg.FinalizedAtDoUpdate,
+		arg.FinalizedAt,
 		arg.StateDoUpdate,
 		arg.State,
 		arg.ID,

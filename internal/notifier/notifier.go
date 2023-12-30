@@ -23,6 +23,7 @@ type NotificationTopic string
 const (
 	NotificationTopicInsert     NotificationTopic = "river_insert"
 	NotificationTopicLeadership NotificationTopic = "river_leadership"
+	NotificationTopicJobControl NotificationTopic = "river_job_control"
 )
 
 type NotifyFunc func(topic NotificationTopic, payload string)

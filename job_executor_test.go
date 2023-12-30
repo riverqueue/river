@@ -606,6 +606,62 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		require.True(t, bundle.errorHandler.HandlePanicCalled)
 	})
+
+	runCancelTest := func(t *testing.T, returnErr error) *dbsqlc.RiverJob { //nolint:thelper
+		executor, bundle := setup(t)
+
+		// ensure we still have remaining attempts:
+		require.Greater(t, bundle.jobRow.MaxAttempts, bundle.jobRow.Attempt)
+
+		jobStarted := make(chan struct{})
+		haveCancelled := make(chan struct{})
+		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error {
+			close(jobStarted)
+			<-haveCancelled
+			return returnErr
+		}, nil).MakeUnit(bundle.jobRow)
+
+		go func() {
+			<-jobStarted
+			executor.Cancel()
+			close(haveCancelled)
+		}()
+
+		workCtx, cancelFunc := context.WithCancelCause(ctx)
+		executor.CancelFunc = cancelFunc
+
+		executor.Execute(workCtx)
+		executor.Completer.Wait()
+
+		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		require.NoError(t, err)
+		return job
+	}
+
+	t.Run("RemoteCancellationViaCancel", func(t *testing.T) {
+		t.Parallel()
+
+		job := runCancelTest(t, errors.New("a non-nil error"))
+
+		require.WithinDuration(t, time.Now(), *job.FinalizedAt, 2*time.Second)
+		require.Equal(t, dbsqlc.JobStateCancelled, job.State)
+		require.Len(t, job.Errors, 1)
+		require.WithinDuration(t, time.Now(), job.Errors[0].At, 2*time.Second)
+		require.Equal(t, uint16(1), job.Errors[0].Attempt)
+		require.Equal(t, "jobCancelError: job cancelled remotely", job.Errors[0].Error)
+		require.Equal(t, ErrJobCancelledRemotely.Error(), job.Errors[0].Error)
+		require.Equal(t, "", job.Errors[0].Trace)
+	})
+
+	t.Run("RemoteCancellationJobNotCancelledIfNoErrorReturned", func(t *testing.T) {
+		t.Parallel()
+
+		job := runCancelTest(t, nil)
+
+		require.WithinDuration(t, time.Now(), *job.FinalizedAt, 2*time.Second)
+		require.Equal(t, dbsqlc.JobStateCompleted, job.State)
+		require.Empty(t, job.Errors)
+	})
 }
 
 func TestUnknownJobKindError_As(t *testing.T) {

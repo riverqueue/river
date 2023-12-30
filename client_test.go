@@ -216,7 +216,7 @@ func Test_Client(t *testing.T) {
 		riverinternaltest.WaitOrTimeout(t, workedChan)
 	})
 
-	t.Run("JobCancel", func(t *testing.T) {
+	t.Run("JobCancelErrorReturned", func(t *testing.T) {
 		t.Parallel()
 
 		client, bundle := setup(t)
@@ -245,7 +245,7 @@ func Test_Client(t *testing.T) {
 		require.WithinDuration(t, time.Now(), *updatedJob.FinalizedAt, 2*time.Second)
 	})
 
-	t.Run("JobSnooze", func(t *testing.T) {
+	t.Run("JobSnoozeErrorReturned", func(t *testing.T) {
 		t.Parallel()
 
 		client, bundle := setup(t)
@@ -272,6 +272,94 @@ func Test_Client(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, dbsqlc.JobStateScheduled, updatedJob.State)
 		require.WithinDuration(t, time.Now().Add(15*time.Minute), updatedJob.ScheduledAt, 2*time.Second)
+	})
+
+	t.Run("CancelRunningJob", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		jobStartedChan := make(chan int64)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			jobStartedChan <- job.ID
+			<-ctx.Done()
+			return ctx.Err()
+		}))
+
+		startClient(ctx, t, client)
+
+		insertedJob, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		startedJobID := riverinternaltest.WaitOrTimeout(t, jobStartedChan)
+		require.Equal(t, insertedJob.ID, startedJobID)
+
+		// Cancel the job:
+		cancelled, err := client.Cancel(ctx, insertedJob.ID)
+		require.NoError(t, err)
+		require.True(t, cancelled)
+
+		event := riverinternaltest.WaitOrTimeout(t, bundle.subscribeChan)
+		require.Equal(t, EventKindJobCancelled, event.Kind)
+		require.Equal(t, JobStateCancelled, event.Job.State)
+		require.WithinDuration(t, time.Now(), *event.Job.FinalizedAt, 2*time.Second)
+
+		updatedJob, err := bundle.queries.JobGetByID(ctx, client.driver.GetDBPool(), insertedJob.ID)
+		require.NoError(t, err)
+		require.Equal(t, dbsqlc.JobStateCancelled, updatedJob.State)
+		require.WithinDuration(t, time.Now(), *updatedJob.FinalizedAt, 2*time.Second)
+	})
+
+	t.Run("CancelScheduledJob", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		jobStartedChan := make(chan int64)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			jobStartedChan <- job.ID
+			<-ctx.Done()
+			return ctx.Err()
+		}))
+
+		startClient(ctx, t, client)
+
+		insertedJob, err := client.Insert(ctx, &JobArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(5 * time.Minute)})
+		require.NoError(t, err)
+
+		// Cancel the job:
+		cancelled, err := client.Cancel(ctx, insertedJob.ID)
+		require.NoError(t, err)
+		require.True(t, cancelled)
+
+		updatedJob, err := bundle.queries.JobGetByID(ctx, client.driver.GetDBPool(), insertedJob.ID)
+		require.NoError(t, err)
+		require.Equal(t, dbsqlc.JobStateCancelled, updatedJob.State)
+		require.WithinDuration(t, time.Now(), *updatedJob.FinalizedAt, 2*time.Second)
+	})
+
+	t.Run("CancelNonExistentJob", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+		startClient(ctx, t, client)
+
+		// Cancel an unknown job ID:
+		cancelled, err := client.Cancel(ctx, 0)
+		// TODO(bgentry): should we try to make this return an error even though the
+		// query was successfully a no-op? or is it fine that it returns false, nil?
+		require.NoError(t, err)
+		require.False(t, cancelled)
 	})
 
 	t.Run("AlternateSchema", func(t *testing.T) {

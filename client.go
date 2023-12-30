@@ -935,6 +935,46 @@ func (c *Client[TTx]) runProducers(fetchNewWorkCtx, workCtx context.Context) {
 	}
 }
 
+// Cancel cancels the job with the given ID. If possible, the job is cancelled
+// immediately and will not be retried. The provided context is used for the
+// underlying Postgres update and can be used to cancel the operation or apply a
+// timeout.
+//
+// If the job is still in the queue (available, scheduled, or retryable), it is
+// immediately marked as cancelled and will not be retried.
+//
+// If the job is already finalized (cancelled, completed, or discarded), no
+// changes are made.
+//
+// If the job is currently running, it is not immediately cancelled, but is
+// instead marked for cancellation. The client running the job will also be
+// notified (via LISTEN/NOTIFY) to cancel the running job's context. Although
+// the job's context will be cancelled, since Go does not provide a mechanism to
+// interrupt a running goroutine the job will continue running until it returns.
+// As always, it is important for workers to respect context cancellation and
+// return promptly when the job context is done.
+//
+// Once the cancellation signal is received by the client running the job, any
+// error returned by that job will result in it being cancelled permanently and
+// not retried. However if the job returns no error, it will be completed as
+// usual.
+//
+// In the event the running job finishes executing _before_ the cancellation
+// signal is received, the job will be completed or retried as usual without
+// regard to the cancellation. TODO: fix this w/ smarter completion query that
+// uses metadata value?
+//
+// Returns true if the job was cancelled or cancellation was initiated, and
+// false if this was a no-op because the job was already finalized.
+func (c *Client[TTx]) Cancel(ctx context.Context, jobID int64) (bool, error) {
+	result, err := c.adapter.JobCancel(ctx, jobID)
+	if err != nil {
+		return false, err
+	}
+
+	return result.Cancelled, nil
+}
+
 func insertParamsFromArgsAndOptions(args JobArgs, insertOpts *InsertOpts) (*dbadapter.JobInsertParams, error) {
 	encodedArgs, err := json.Marshal(args)
 	if err != nil {
