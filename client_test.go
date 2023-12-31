@@ -389,6 +389,15 @@ func Test_Client_Stop(t *testing.T) {
 		}
 	}
 
+	t.Run("not started", func(t *testing.T) {
+		t.Parallel()
+		client := newTestClient(ctx, t, newTestConfig(t, nil))
+
+		err := client.Stop(ctx)
+		require.Error(t, err)
+		require.Equal(t, "client not started", err.Error())
+	})
+
 	t.Run("no jobs in progress", func(t *testing.T) {
 		t.Parallel()
 		client := runNewTestClient(ctx, t, newTestConfig(t, nil))
