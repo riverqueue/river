@@ -25,9 +25,8 @@ queries. After changing an sqlc `.sql` file, generate Go with:
 
 ## Releasing a new version
 
-1. First, prepare a PR with a `CHANGELOG.md` update describing the changes, and update the root `go.mod` to point to the `riverpgxv5` version that is about to be released.
-2. Merge the above PR.
-3. Next, fetch the repo locally, bump dependency versions, tag each submodule, and push those tags:
+1. Prepare a PR with a `CHANGELOG.md` update describing the changes. Have it reviewed and merged.
+2. Next, fetch the repo locally, bump dependency versions, tag each submodule, and push those tags:
 
 ```shell
 git checkout master && git pull --rebase
