@@ -682,6 +682,10 @@ func (c *Client[TTx]) signalStopComplete(ctx context.Context) {
 // by cancelling the context passed to Start or by calling StopAndCancel.
 func (c *Client[TTx]) Stop(ctx context.Context) error {
 	c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Stop started")
+	if c.fetchNewWorkCancel != nil {
+		return errors.New("client not started")
+	}
+
 	c.fetchNewWorkCancel()
 	return c.awaitStop(ctx)
 }
