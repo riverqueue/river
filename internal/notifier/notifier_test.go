@@ -2,6 +2,7 @@ package notifier
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/riverqueue/river/internal/componentstatus"
 	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/internal/util/slogutil"
 )
 
 func expectReceiveStatus(t *testing.T, statusCh <-chan componentstatus.Status, expected componentstatus.Status) {
@@ -34,7 +36,7 @@ func TestNotifierReceivesNotification(t *testing.T) {
 		statusUpdateCh <- status
 	}
 
-	notifier := New(riverinternaltest.BaseServiceArchetype(t), db.Config().ConnConfig, statusUpdate)
+	notifier := New(riverinternaltest.BaseServiceArchetype(t), db.Config().ConnConfig, statusUpdate, slog.New(&slogutil.SlogMessageOnlyHandler{Level: slog.LevelWarn}))
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
