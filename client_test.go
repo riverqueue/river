@@ -706,6 +706,7 @@ func Test_Client_Insert(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 0, jobRow.Attempt)
 		require.Equal(t, rivercommon.MaxAttemptsDefault, jobRow.MaxAttempts)
+		require.JSONEq(t, "{}", string(jobRow.Metadata))
 		require.Equal(t, (&noOpArgs{}).Kind(), jobRow.Kind)
 		require.Equal(t, PriorityDefault, jobRow.Priority)
 		require.Equal(t, QueueDefault, jobRow.Queue)
@@ -719,6 +720,7 @@ func Test_Client_Insert(t *testing.T) {
 
 		jobRow, err := client.Insert(ctx, &noOpArgs{}, &InsertOpts{
 			MaxAttempts: 17,
+			Metadata:    []byte(`{"foo": "bar"}`),
 			Priority:    3,
 			Queue:       "custom",
 			Tags:        []string{"custom"},
@@ -727,6 +729,7 @@ func Test_Client_Insert(t *testing.T) {
 		require.Equal(t, 0, jobRow.Attempt)
 		require.Equal(t, 17, jobRow.MaxAttempts)
 		require.Equal(t, (&noOpArgs{}).Kind(), jobRow.Kind)
+		require.JSONEq(t, `{"foo": "bar"}`, string(jobRow.Metadata))
 		require.Equal(t, 3, jobRow.Priority)
 		require.Equal(t, "custom", jobRow.Queue)
 		require.Equal(t, []string{"custom"}, jobRow.Tags)

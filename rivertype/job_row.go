@@ -60,6 +60,11 @@ type JobRow struct {
 	// or from a client's default value.
 	MaxAttempts int
 
+	// Metadata is a field for storing arbitrary metadata on a job. It should
+	// always be a valid JSON object payload, and users should not overwrite or
+	// remove anything stored in this field by River.
+	Metadata []byte
+
 	// Priority is the priority of the job, with 1 being the highest priority and
 	// 4 being the lowest. When fetching available jobs to work, the highest
 	// priority jobs will always be fetched before any lower priority jobs are
@@ -89,11 +94,6 @@ type JobRow struct {
 	// functional behavior and are meant entirely as a user-specified construct
 	// to help group and categorize jobs.
 	Tags []string
-
-	// metadata is a field that'll eventually be used to store arbitrary data on
-	// a job for flexible use and use with plugins. It's currently unexported
-	// until we get a chance to more fully flesh out this feature.
-	// metadata []byte
 }
 
 // JobState is the state of a job. Jobs start as `available` or `scheduled`, and

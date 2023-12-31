@@ -18,6 +18,11 @@ type InsertOpts struct {
 	// discarded.
 	MaxAttempts int
 
+	// Metadata is a JSON object blob of arbitrary data that will be stored with
+	// the job. Users should not overwrite or remove anything stored in this
+	// field by River.
+	Metadata []byte
+
 	// Priority is the priority of the job, with 1 being the highest priority and
 	// 4 being the lowest. When fetching available jobs to work, the highest
 	// priority jobs will always be fetched before any lower priority jobs are
