@@ -10,6 +10,7 @@ import (
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/maintenance/startstop"
+	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/internal/util/timeutil"
@@ -139,8 +140,9 @@ func (s *Scheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, error
 			defer cancelFunc()
 
 			numScheduled, err := s.queries.JobSchedule(ctx, s.dbExecutor, dbsqlc.JobScheduleParams{
-				Max: int64(s.config.Limit),
-				Now: s.TimeNowUTC(),
+				InsertTopic: string(notifier.NotificationTopicInsert),
+				Max:         int64(s.config.Limit),
+				Now:         s.TimeNowUTC(),
 			})
 			if err != nil {
 				return 0, fmt.Errorf("error deleting completed jobs: %w", err)

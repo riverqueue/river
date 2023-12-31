@@ -573,12 +573,12 @@ WITH jobs_to_schedule AS (
     state IN ('scheduled', 'retryable')
     AND queue IS NOT NULL
     AND priority >= 0
-    AND scheduled_at <= $1::timestamptz
+    AND scheduled_at <= $2::timestamptz
   ORDER BY
     priority,
     scheduled_at,
     id
-  LIMIT $2::bigint
+  LIMIT $3::bigint
   FOR UPDATE
 ),
 river_job_scheduled AS (
@@ -590,17 +590,18 @@ river_job_scheduled AS (
 )
 SELECT count(*)
 FROM (
-SELECT pg_notify('river_insert', json_build_object('queue', queue)::text)
+SELECT pg_notify($1, json_build_object('queue', queue)::text)
 FROM river_job_scheduled) AS notifications_sent
 `
 
 type JobScheduleParams struct {
-	Now time.Time
-	Max int64
+	InsertTopic string
+	Now         time.Time
+	Max         int64
 }
 
 func (q *Queries) JobSchedule(ctx context.Context, db DBTX, arg JobScheduleParams) (int64, error) {
-	row := db.QueryRow(ctx, jobSchedule, arg.Now, arg.Max)
+	row := db.QueryRow(ctx, jobSchedule, arg.InsertTopic, arg.Now, arg.Max)
 	var count int64
 	err := row.Scan(&count)
 	return count, err

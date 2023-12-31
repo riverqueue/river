@@ -80,7 +80,7 @@ WITH currently_held_leaders AS (
 ),
 notified_resignations AS (
   SELECT
-    pg_notify('river_leadership', json_build_object('name', name, 'leader_id', leader_id, 'action', 'resigned')::text),
+    pg_notify($3, json_build_object('name', name, 'leader_id', leader_id, 'action', 'resigned')::text),
     currently_held_leaders.name
   FROM
     currently_held_leaders)
@@ -89,11 +89,12 @@ WHERE river_leader.name = notified_resignations.name
 `
 
 type LeadershipResignParams struct {
-	Name     string
-	LeaderID string
+	Name            string
+	LeaderID        string
+	LeadershipTopic string
 }
 
 func (q *Queries) LeadershipResign(ctx context.Context, db DBTX, arg LeadershipResignParams) error {
-	_, err := db.Exec(ctx, leadershipResign, arg.Name, arg.LeaderID)
+	_, err := db.Exec(ctx, leadershipResign, arg.Name, arg.LeaderID, arg.LeadershipTopic)
 	return err
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/dbsqlc"
+	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/internal/util/hashutil"
 	"github.com/riverqueue/river/internal/util/ptrutil"
@@ -446,7 +447,8 @@ func (a *StandardAdapter) LeadershipResign(ctx context.Context, name, leaderID s
 	defer cancel()
 
 	return a.queries.LeadershipResign(ctx, a.executor, dbsqlc.LeadershipResignParams{
-		LeaderID: leaderID,
-		Name:     name,
+		LeaderID:        leaderID,
+		LeadershipTopic: string(notifier.NotificationTopicLeadership),
+		Name:            name,
 	})
 }

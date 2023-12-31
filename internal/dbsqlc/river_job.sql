@@ -225,7 +225,7 @@ river_job_scheduled AS (
 )
 SELECT count(*)
 FROM (
-SELECT pg_notify('river_insert', json_build_object('queue', queue)::text)
+SELECT pg_notify(@insert_topic, json_build_object('queue', queue)::text)
 FROM river_job_scheduled) AS notifications_sent;
 
 -- name: JobSetState :one
