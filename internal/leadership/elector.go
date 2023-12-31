@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -47,6 +47,7 @@ type Elector struct {
 	interval time.Duration
 	name     string
 	notifier *notifier.Notifier
+	logger   *slog.Logger
 
 	mu            sync.Mutex
 	isLeader      bool
@@ -56,7 +57,7 @@ type Elector struct {
 // NewElector returns an Elector using the given adapter. The name should correspond
 // to the name of the database + schema combo and should be shared across all Clients
 // running with that combination. The id should be unique to the Client.
-func NewElector(adapter dbadapter.Adapter, notifier *notifier.Notifier, name, id string, interval time.Duration) (*Elector, error) {
+func NewElector(adapter dbadapter.Adapter, notifier *notifier.Notifier, name, id string, interval time.Duration, logger *slog.Logger) (*Elector, error) {
 	// TODO: validate name + id length/format, interval, etc
 	return &Elector{
 		adapter:  adapter,
@@ -64,6 +65,7 @@ func NewElector(adapter dbadapter.Adapter, notifier *notifier.Notifier, name, id
 		interval: interval,
 		name:     name,
 		notifier: notifier,
+		logger:   logger.WithGroup("elector"),
 	}, nil
 }
 
@@ -82,12 +84,12 @@ func (e *Elector) Run(ctx context.Context) {
 	handleNotification := func(topic notifier.NotificationTopic, payload string) {
 		if topic != notifier.NotificationTopicLeadership {
 			// This should not happen unless the notifier is broken.
-			log.Printf("Elector received unexpected notification on topic %q: %q\n", topic, payload)
+			e.logger.Error("received unexpected notification", "topic", topic, "payload", payload)
 			return
 		}
 		notification := pgNotification{}
 		if err := json.Unmarshal([]byte(payload), &notification); err != nil {
-			log.Printf("Elector unable to unmarshal leadership notification: %v\n", err)
+			e.logger.Error("unable to unmarshal leadership notification", "err", err)
 			return
 		}
 
@@ -114,7 +116,7 @@ func (e *Elector) Run(ctx context.Context) {
 				return
 			default:
 				// TODO: proper backoff
-				log.Println("gainLeadership returned unexpectedly, waiting to try again")
+				e.logger.Error("gainLeadership returned unexpectedly, waiting to try again")
 				time.Sleep(time.Second)
 				continue
 			}
@@ -131,7 +133,7 @@ func (e *Elector) Run(ctx context.Context) {
 				return
 			default:
 				// TODO: backoff
-				log.Printf("error keeping leadership: %v\n", err)
+				e.logger.Error("error keeping leadership", "err", err)
 				continue
 			}
 		}
@@ -142,7 +144,7 @@ func (e *Elector) gainLeadership(ctx context.Context, leadershipNotificationChan
 	for {
 		success, err := e.attemptElect(ctx)
 		if err != nil && !errors.Is(err, context.Canceled) {
-			log.Printf("error attempting to elect: %v\n", err)
+			e.logger.Error("error attempting to elect", "err", err)
 		}
 		if success {
 			return true
@@ -196,7 +198,7 @@ func (e *Elector) keepLeadership(ctx context.Context, leadershipNotificationChan
 				if reelectionErrCount > 5 {
 					return err
 				}
-				log.Printf("error attempting reelection: %v\n", err)
+				e.logger.Error("error attempting reelection", "err", err)
 				continue
 			}
 			if !reelected {
@@ -211,7 +213,7 @@ func (e *Elector) keepLeadership(ctx context.Context, leadershipNotificationChan
 func (e *Elector) giveUpLeadership() {
 	for i := 0; i < 10; i++ {
 		if err := e.attemptResign(i); err != nil {
-			log.Printf("error attempting to resign: %v\n", err)
+			e.logger.Error("error attempting to resign", "err", err)
 			// TODO: exponential backoff? wait longer than ~1s total?
 			time.Sleep(100 * time.Millisecond)
 			continue
