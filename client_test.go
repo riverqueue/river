@@ -17,7 +17,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/robfig/cron/v3"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/componentstatus"
@@ -396,7 +395,7 @@ func Test_Client_Stop(t *testing.T) {
 
 		err := client.Stop(ctx)
 		require.Error(t, err)
-		assert.Equal(t, "client not started", err.Error())
+		require.Equal(t, "client not started", err.Error())
 	})
 
 	t.Run("no jobs in progress", func(t *testing.T) {
