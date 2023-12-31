@@ -87,7 +87,7 @@ func (m *Manager) allocatePool(ctx context.Context) (*poolWithDBName, error) {
 	nextDBNum := m.getNextDBNum()
 	dbName := fmt.Sprintf("%s_%d", m.baseConfig.ConnConfig.Database, nextDBNum)
 
-	slog.Debug("Using test database", "name", dbName)
+	m.logger.Debug("Using test database", "name", dbName)
 
 	newPoolConfig := m.baseConfig.Copy()
 	newPoolConfig.ConnConfig.Database = dbName

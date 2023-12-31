@@ -137,7 +137,7 @@ func (n *Notifier) getConnAndRun(ctx context.Context) {
 		if errors.Is(err, context.Canceled) {
 			return
 		}
-		slog.Error("error establishing connection from pool", "err", err)
+		n.logger.Error("error establishing connection from pool", "err", err)
 		return
 	}
 	defer func() {
@@ -200,7 +200,7 @@ func (n *Notifier) runOnce(ctx context.Context, conn *pgx.Conn) error {
 		err := <-errCh
 		if err != nil && !errors.Is(err, context.Canceled) {
 			// A non-cancel error means something went wrong with the conn, so we should bail.
-			slog.Error("error on draining notification wait", "err", err)
+			n.logger.Error("error on draining notification wait", "err", err)
 			return err
 		}
 		// If we got a context cancellation error, it means we successfully
@@ -232,7 +232,7 @@ func (n *Notifier) runOnce(ctx context.Context, conn *pgx.Conn) error {
 			return nil
 		}
 		if err != nil {
-			slog.Error("error from notification wait", "err", err)
+			n.logger.Error("error from notification wait", "err", err)
 			return err
 		}
 	case subChange := <-n.subChangeCh:
@@ -302,7 +302,7 @@ func (n *Notifier) handleNotification(conn *pgconn.PgConn, notification *pgconn.
 	select {
 	case n.notificationBuf <- notification:
 	default:
-		slog.Warn("dropping notification due to full buffer", "payload", notification.Payload)
+		n.logger.Warn("dropping notification due to full buffer", "payload", notification.Payload)
 	}
 }
 
