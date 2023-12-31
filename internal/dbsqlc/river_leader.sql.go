@@ -80,7 +80,7 @@ WITH currently_held_leaders AS (
 ),
 notified_resignations AS (
   SELECT
-    pg_notify('river_leaderhip', json_build_object('name', name, 'leader_id', leader_id, 'action', 'resigned')::text),
+    pg_notify('river_leadership', json_build_object('name', name, 'leader_id', leader_id, 'action', 'resigned')::text),
     currently_held_leaders.name
   FROM
     currently_held_leaders)
