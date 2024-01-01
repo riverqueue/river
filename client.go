@@ -681,6 +681,7 @@ func (c *Client[TTx]) signalStopComplete(ctx context.Context) {
 // There's no need to call this method if a hard stop has already been initiated
 // by cancelling the context passed to Start or by calling StopAndCancel.
 func (c *Client[TTx]) Stop(ctx context.Context) error {
+	// c.baseService.Logger.Error("client stopping")
 	c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Stop started")
 	c.fetchNewWorkCancel()
 	return c.awaitStop(ctx)

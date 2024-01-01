@@ -95,6 +95,7 @@ func (n *Notifier) Run(ctx context.Context) {
 		case <-ctx.Done():
 			wg.Wait()
 			n.statusChangeFunc(componentstatus.Stopped)
+			// n.logger.Error("notifier stopped")
 			return
 		default:
 			// TODO: exponential backoff
@@ -129,15 +130,17 @@ func (n *Notifier) deliverNotification(notif *pgconn.Notification) {
 }
 
 func (n *Notifier) getConnAndRun(ctx context.Context) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
 	conn, err := n.establishConn(ctx)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return
 		}
-		n.logger.Error("error establishing connection from pool", "err", err)
+		select {
+		case <-ctx.Done():
+			n.logger.Info("error establishing connection from pool: "+err.Error(), "err", err)
+		default:
+			n.logger.Error("error establishing connection from pool: "+err.Error(), "err", err)
+		}
 		return
 	}
 	defer func() {
