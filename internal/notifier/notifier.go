@@ -137,7 +137,17 @@ func (n *Notifier) getConnAndRun(ctx context.Context) {
 		if errors.Is(err, context.Canceled) {
 			return
 		}
-		n.logger.Error("error establishing connection from pool", "err", err)
+		// Log at a lower verbosity level in case an error is received when the
+		// context is already done (probably because the client is stopping).
+		// Example tests can finish before the notifier connects and starts
+		// listening, and on client stop may produce a connection error that
+		// would otherwise pollute output and fail the test.
+		select {
+		case <-ctx.Done():
+			n.logger.Info("error establishing connection from pool", "err", err)
+		default:
+			n.logger.Error("error establishing connection from pool", "err", err)
+		}
 		return
 	}
 	defer func() {

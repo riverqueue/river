@@ -3,7 +3,6 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"sort"
 	"testing"
 	"time"
@@ -17,7 +16,6 @@ import (
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/internal/util/ptrutil"
-	"github.com/riverqueue/river/internal/util/slogutil"
 	"github.com/riverqueue/river/internal/util/valutil"
 )
 
@@ -267,7 +265,7 @@ func TestScheduler(t *testing.T) {
 		statusUpdate := func(status componentstatus.Status) {
 			statusUpdateCh <- status
 		}
-		notify := notifier.New(&scheduler.Archetype, dbPool.Config().ConnConfig, statusUpdate, slog.New(&slogutil.SlogMessageOnlyHandler{Level: slog.LevelWarn}))
+		notify := notifier.New(&scheduler.Archetype, dbPool.Config().ConnConfig, statusUpdate, riverinternaltest.Logger(t))
 
 		// Scope in so we can reuse ctx without the cancel embedded.
 		{
