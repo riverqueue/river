@@ -761,7 +761,7 @@ func Test_StandardAdapter_JobList_and_JobListTx(t *testing.T) {
 		job2, err := adapter.JobInsert(ctx, params)
 		require.NoError(t, err)
 
-		params = makeFakeJobInsertParams(3, nil)
+		params = makeFakeJobInsertParams(3, &makeFakeJobInsertParamsOpts{Metadata: []byte(`{"some_key": "some_value"}`)})
 		job3, err := adapter.JobInsert(ctx, params)
 		require.NoError(t, err)
 
@@ -861,6 +861,27 @@ func Test_StandardAdapter_JobList_and_JobListTx(t *testing.T) {
 			job1 := bundle.jobs[0]
 			returnedIDs := sliceutil.Map(jobs, func(j *dbsqlc.RiverJob) int64 { return j.ID })
 			require.Equal(t, []int64{job1.ID}, returnedIDs)
+		})
+	})
+
+	t.Run("WithMetadataAndNoStateFilter", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, bundle := setupTx(t)
+
+		params := JobListParams{
+			Conditions: "metadata @> @metadata_filter::jsonb",
+			LimitCount: 2,
+			NamedArgs:  map[string]any{"metadata_filter": `{"some_key": "some_value"}`},
+			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderDesc}},
+		}
+
+		execTest(ctx, t, adapter, params, bundle.tx, func(jobs []*dbsqlc.RiverJob, err error) {
+			require.NoError(t, err)
+
+			job3 := bundle.jobs[2]
+			returnedIDs := sliceutil.Map(jobs, func(j *dbsqlc.RiverJob) int64 { return j.ID })
+			require.Equal(t, []int64{job3.ID}, returnedIDs)
 		})
 	})
 }
@@ -1184,6 +1205,7 @@ func testAdapterConfig(ex dbutil.Executor) *StandardAdapterConfig {
 }
 
 type makeFakeJobInsertParamsOpts struct {
+	Metadata    []byte
 	Queue       *string
 	ScheduledAt *time.Time
 	State       *dbsqlc.JobState
@@ -1194,11 +1216,16 @@ func makeFakeJobInsertParams(i int, opts *makeFakeJobInsertParamsOpts) *JobInser
 		opts = &makeFakeJobInsertParamsOpts{}
 	}
 
+	metadata := []byte("{}")
+	if len(opts.Metadata) > 0 {
+		metadata = opts.Metadata
+	}
+
 	return &JobInsertParams{
 		EncodedArgs: []byte(fmt.Sprintf(`{"job_num":%d}`, i)),
 		Kind:        "fake_job",
 		MaxAttempts: rivercommon.MaxAttemptsDefault,
-		Metadata:    []byte("{}"),
+		Metadata:    metadata,
 		Priority:    rivercommon.PriorityDefault,
 		Queue:       ptrutil.ValOrDefault(opts.Queue, rivercommon.QueueDefault),
 		ScheduledAt: ptrutil.ValOrDefault(opts.ScheduledAt, time.Time{}),

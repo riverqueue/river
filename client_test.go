@@ -1274,6 +1274,7 @@ func Test_Client_JobList(t *testing.T) {
 		AttemptedAt *time.Time
 		FinalizedAt *time.Time
 		Kind        string
+		Metadata    []byte
 		Queue       string
 		ScheduledAt *time.Time
 		State       dbsqlc.JobState
@@ -1286,6 +1287,7 @@ func Test_Client_JobList(t *testing.T) {
 			FinalizedAt: params.FinalizedAt,
 			Kind:        valutil.FirstNonZero(params.Kind, "test_kind"),
 			MaxAttempts: rivercommon.MaxAttemptsDefault,
+			Metadata:    params.Metadata,
 			Priority:    rivercommon.PriorityDefault,
 			Queue:       QueueDefault,
 			ScheduledAt: params.ScheduledAt,
@@ -1317,15 +1319,12 @@ func Test_Client_JobList(t *testing.T) {
 
 		jobs, err := client.JobList(ctx, NewJobListParams().State(JobStateAvailable))
 		require.NoError(t, err)
-		require.Len(t, jobs, 2)
 		// jobs ordered by ScheduledAt ASC by default
-		require.Equal(t, job1.ID, jobs[0].ID)
-		require.Equal(t, job2.ID, jobs[1].ID)
+		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
 		jobs, err = client.JobList(ctx, NewJobListParams().State(JobStateRunning))
 		require.NoError(t, err)
-		require.Len(t, jobs, 1)
-		require.Equal(t, job3.ID, jobs[0].ID)
+		require.Equal(t, []int64{job3.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 	})
 
 	t.Run("SortsAvailableRetryableAndScheduledJobsByScheduledAt", func(t *testing.T) {
@@ -1346,15 +1345,11 @@ func Test_Client_JobList(t *testing.T) {
 
 			jobs, err := client.JobList(ctx, NewJobListParams().State(state))
 			require.NoError(t, err)
-			require.Len(t, jobs, 2)
-			require.Equal(t, job2.ID, jobs[0].ID)
-			require.Equal(t, job1.ID, jobs[1].ID)
+			require.Equal(t, []int64{job2.ID, job1.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
 			jobs, err = client.JobList(ctx, NewJobListParams().State(state).OrderBy(JobListOrderByTime, SortOrderDesc))
 			require.NoError(t, err)
-			require.Len(t, jobs, 2)
-			require.Equal(t, job1.ID, jobs[0].ID)
-			require.Equal(t, job2.ID, jobs[1].ID)
+			require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 		}
 	})
 
@@ -1376,15 +1371,11 @@ func Test_Client_JobList(t *testing.T) {
 
 			jobs, err := client.JobList(ctx, NewJobListParams().State(state))
 			require.NoError(t, err)
-			require.Len(t, jobs, 2)
-			require.Equal(t, job2.ID, jobs[0].ID)
-			require.Equal(t, job1.ID, jobs[1].ID)
+			require.Equal(t, []int64{job2.ID, job1.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
 			jobs, err = client.JobList(ctx, NewJobListParams().State(state).OrderBy(JobListOrderByTime, SortOrderDesc))
 			require.NoError(t, err)
-			require.Len(t, jobs, 2)
-			require.Equal(t, job1.ID, jobs[0].ID)
-			require.Equal(t, job2.ID, jobs[1].ID)
+			require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 		}
 	})
 
@@ -1399,16 +1390,12 @@ func Test_Client_JobList(t *testing.T) {
 
 		jobs, err := client.JobList(ctx, NewJobListParams().State(JobStateRunning))
 		require.NoError(t, err)
-		require.Len(t, jobs, 2)
-		require.Equal(t, job2.ID, jobs[0].ID)
-		require.Equal(t, job1.ID, jobs[1].ID)
+		require.Equal(t, []int64{job2.ID, job1.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
 		jobs, err = client.JobList(ctx, NewJobListParams().State(JobStateRunning).OrderBy(JobListOrderByTime, SortOrderDesc))
 		require.NoError(t, err)
-		require.Len(t, jobs, 2)
 		// Sort order was explicitly reversed:
-		require.Equal(t, job1.ID, jobs[0].ID)
-		require.Equal(t, job2.ID, jobs[1].ID)
+		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 	})
 
 	t.Run("WithNilParamsFiltersToAvailableByDefault", func(t *testing.T) {
@@ -1423,10 +1410,8 @@ func Test_Client_JobList(t *testing.T) {
 
 		jobs, err := client.JobList(ctx, nil)
 		require.NoError(t, err)
-		require.Len(t, jobs, 2)
 		// sort order is switched by ScheduledAt values:
-		require.Equal(t, job2.ID, jobs[0].ID)
-		require.Equal(t, job1.ID, jobs[1].ID)
+		require.Equal(t, []int64{job2.ID, job1.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 	})
 
 	t.Run("PaginatesWithAfter", func(t *testing.T) {
@@ -1447,18 +1432,34 @@ func Test_Client_JobList(t *testing.T) {
 
 		jobs, err := client.JobList(ctx, NewJobListParams().After(JobListCursorFromJob(jobRow1)))
 		require.NoError(t, err)
-		require.Len(t, jobs, 1)
-		require.Equal(t, job2.ID, jobs[0].ID)
+		require.Equal(t, []int64{job2.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
 		jobs, err = client.JobList(ctx, NewJobListParams().State(rivertype.JobStateRunning).After(JobListCursorFromJob(jobRow3)))
 		require.NoError(t, err)
-		require.Len(t, jobs, 1)
-		require.Equal(t, job4.ID, jobs[0].ID)
+		require.Equal(t, []int64{job4.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
 		jobs, err = client.JobList(ctx, NewJobListParams().State(rivertype.JobStateCompleted).After(JobListCursorFromJob(jobRow5)))
 		require.NoError(t, err)
-		require.Len(t, jobs, 1)
-		require.Equal(t, job6.ID, jobs[0].ID)
+		require.Equal(t, []int64{job6.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+	})
+
+	t.Run("MetadataOnly", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		job1 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{Metadata: []byte(`{"foo": "bar"}`)})
+		job2 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{Metadata: []byte(`{"baz": "value"}`)})
+		job3 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{Metadata: []byte(`{"baz": "value"}`)})
+
+		jobs, err := client.JobList(ctx, NewJobListParams().State("").Metadata(`{"foo": "bar"}`))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job1.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		jobs, err = client.JobList(ctx, NewJobListParams().State("").Metadata(`{"baz": "value"}`).OrderBy(JobListOrderByTime, SortOrderDesc))
+		require.NoError(t, err)
+		// Sort order was explicitly reversed:
+		require.Equal(t, []int64{job3.ID, job2.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 	})
 
 	t.Run("WithCancelledContext", func(t *testing.T) {

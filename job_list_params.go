@@ -104,12 +104,13 @@ const (
 //
 //	params := NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).First(100)
 type JobListParams struct {
-	after           *JobListCursor
-	paginationCount int32
-	queues          []string
-	sortField       JobListOrderByField
-	sortOrder       SortOrder
-	state           rivertype.JobState
+	after            *JobListCursor
+	metadataFragment string
+	paginationCount  int32
+	queues           []string
+	sortField        JobListOrderByField
+	sortOrder        SortOrder
+	state            rivertype.JobState
 }
 
 // NewJobListParams creates a new JobListParams to return available jobs sorted
@@ -125,17 +126,19 @@ func NewJobListParams() *JobListParams {
 
 func (p *JobListParams) copy() *JobListParams {
 	return &JobListParams{
-		after:           p.after,
-		paginationCount: p.paginationCount,
-		queues:          append([]string(nil), p.queues...),
-		sortField:       p.sortField,
-		sortOrder:       p.sortOrder,
-		state:           p.state,
+		after:            p.after,
+		metadataFragment: p.metadataFragment,
+		paginationCount:  p.paginationCount,
+		queues:           append([]string(nil), p.queues...),
+		sortField:        p.sortField,
+		sortOrder:        p.sortOrder,
+		state:            p.state,
 	}
 }
 
 func (p *JobListParams) toDBParams() (*dbadapter.JobListParams, error) {
-	conditions := &strings.Builder{}
+	conditionsBuilder := &strings.Builder{}
+	conditions := make([]string, 0, 10)
 	namedArgs := make(map[string]any)
 	orderBy := []dbadapter.JobListOrderBy{}
 
@@ -159,22 +162,30 @@ func (p *JobListParams) toDBParams() (*dbadapter.JobListParams, error) {
 		{Expr: "id", Order: sortOrder},
 	}...)
 
+	if p.metadataFragment != "" {
+		conditions = append(conditions, `metadata @> @metadata_fragment::jsonb`)
+		namedArgs["metadata_fragment"] = p.metadataFragment
+	}
+
 	if p.after != nil {
 		if sortOrder == dbadapter.SortOrderAsc {
-			fmt.Fprintf(conditions, `("%s" > @cursor_time OR ("%s" = @cursor_time AND "id" > @after_id))`, timeField, timeField)
+			conditions = append(conditions, fmt.Sprintf(`("%s" > @cursor_time OR ("%s" = @cursor_time AND "id" > @after_id))`, timeField, timeField))
 		} else {
-			fmt.Fprintf(conditions, `("%s" < @cursor_time OR ("%s" = @cursor_time AND "id" < @after_id))`, timeField, timeField)
+			conditions = append(conditions, fmt.Sprintf(`("%s" < @cursor_time OR ("%s" = @cursor_time AND "id" < @after_id))`, timeField, timeField))
 		}
 		namedArgs["cursor_time"] = p.after.time
 		namedArgs["after_id"] = p.after.id
 	}
 
-	if p.state == "" {
-		return nil, errors.New("missing required argument 'State' in JobList")
+	for i, condition := range conditions {
+		if i > 0 {
+			conditionsBuilder.WriteString("\n  AND ")
+		}
+		conditionsBuilder.WriteString(condition)
 	}
 
 	dbParams := &dbadapter.JobListParams{
-		Conditions: conditions.String(),
+		Conditions: conditionsBuilder.String(),
 		LimitCount: p.paginationCount,
 		NamedArgs:  namedArgs,
 		OrderBy:    orderBy,
@@ -207,6 +218,12 @@ func (p *JobListParams) First(count int) *JobListParams {
 	}
 	result := p.copy()
 	result.paginationCount = int32(count)
+	return result
+}
+
+func (p *JobListParams) Metadata(json string) *JobListParams {
+	result := p.copy()
+	result.metadataFragment = json
 	return result
 }
 
