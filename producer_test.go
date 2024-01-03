@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"slices"
 	"sync"
 	"testing"
@@ -20,7 +19,6 @@ import (
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/util/slogutil"
 )
 
 func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
@@ -174,7 +172,7 @@ func Test_Producer_Run(t *testing.T) {
 
 		workers := NewWorkers()
 
-		notifier := notifier.New(archetype, dbPool.Config().ConnConfig, func(componentstatus.Status) {}, slog.New(&slogutil.SlogMessageOnlyHandler{Level: slog.LevelWarn}))
+		notifier := notifier.New(archetype, dbPool.Config().ConnConfig, func(componentstatus.Status) {}, riverinternaltest.Logger(t))
 
 		config := &producerConfig{
 			ErrorHandler:      newTestErrorHandler(),
