@@ -94,6 +94,11 @@ type JobRow struct {
 	// functional behavior and are meant entirely as a user-specified construct
 	// to help group and categorize jobs.
 	Tags []string
+
+	// UniqueSkippedAsDuplicate indicates that the insert didn't occur because
+	// it was a unique job, and another unique job within the unique parameters
+	// was already in the database.
+	UniqueSkippedAsDuplicate bool
 }
 
 // JobState is the state of a job. Jobs start as `available` or `scheduled`, and
