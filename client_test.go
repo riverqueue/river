@@ -274,9 +274,11 @@ func Test_Client(t *testing.T) {
 		require.WithinDuration(t, time.Now().Add(15*time.Minute), updatedJob.ScheduledAt, 2*time.Second)
 	})
 
-	t.Run("CancelRunningJob", func(t *testing.T) {
-		t.Parallel()
-
+	// This helper is used to test cancelling a job both _in_ a transaction and
+	// _outside of_ a transaction. The exact same test logic applies to each case,
+	// the only difference is a different cancelFunc provided by the specific
+	// subtest.
+	cancelRunningJobTestHelper := func(t *testing.T, cancelFunc func(ctx context.Context, client *Client[pgx.Tx], jobID int64) (bool, error)) { //nolint:thelper
 		client, bundle := setup(t)
 
 		jobStartedChan := make(chan int64)
@@ -300,7 +302,7 @@ func Test_Client(t *testing.T) {
 		require.Equal(t, insertedJob.ID, startedJobID)
 
 		// Cancel the job:
-		cancelled, err := client.Cancel(ctx, insertedJob.ID)
+		cancelled, err := cancelFunc(ctx, client, insertedJob.ID)
 		require.NoError(t, err)
 		require.True(t, cancelled)
 
@@ -313,6 +315,31 @@ func Test_Client(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, dbsqlc.JobStateCancelled, updatedJob.State)
 		require.WithinDuration(t, time.Now(), *updatedJob.FinalizedAt, 2*time.Second)
+	}
+
+	t.Run("CancelRunningJob", func(t *testing.T) {
+		t.Parallel()
+
+		cancelRunningJobTestHelper(t, func(ctx context.Context, client *Client[pgx.Tx], jobID int64) (bool, error) {
+			return client.Cancel(ctx, jobID)
+		})
+	})
+
+	t.Run("CancelRunningJobInTx", func(t *testing.T) {
+		t.Parallel()
+
+		cancelRunningJobTestHelper(t, func(ctx context.Context, client *Client[pgx.Tx], jobID int64) (bool, error) {
+			var (
+				cancelled bool
+				err       error
+			)
+			txErr := pgx.BeginFunc(ctx, client.driver.GetDBPool(), func(tx pgx.Tx) error {
+				cancelled, err = client.CancelTx(ctx, tx, jobID)
+				return err
+			})
+			require.NoError(t, txErr)
+			return cancelled, err
+		})
 	})
 
 	t.Run("CancelScheduledJob", func(t *testing.T) {

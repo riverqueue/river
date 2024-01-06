@@ -87,6 +87,7 @@ type JobInsertResult struct {
 // would be exported.
 type Adapter interface {
 	JobCancel(ctx context.Context, id int64) (*JobCancelResult, error)
+	JobCancelTx(ctx context.Context, tx pgx.Tx, id int64) (*JobCancelResult, error)
 
 	JobInsert(ctx context.Context, params *JobInsertParams) (*JobInsertResult, error)
 	JobInsertTx(ctx context.Context, tx pgx.Tx, params *JobInsertParams) (*JobInsertResult, error)
@@ -161,6 +162,12 @@ func NewStandardAdapter(archetype *baseservice.Archetype, config *StandardAdapte
 }
 
 func (a *StandardAdapter) JobCancel(ctx context.Context, id int64) (*JobCancelResult, error) {
+	return dbutil.WithTxV(ctx, a.executor, func(ctx context.Context, tx pgx.Tx) (*JobCancelResult, error) {
+		return a.JobCancelTx(ctx, tx, id)
+	})
+}
+
+func (a *StandardAdapter) JobCancelTx(ctx context.Context, tx pgx.Tx, id int64) (*JobCancelResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, a.deadlineTimeout)
 	defer cancel()
 
