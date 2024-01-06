@@ -34,7 +34,7 @@ func TestNotifierReceivesNotification(t *testing.T) {
 		statusUpdateCh <- status
 	}
 
-	notifier := New(riverinternaltest.BaseServiceArchetype(t), db.Config().ConnConfig, statusUpdate)
+	notifier := New(riverinternaltest.BaseServiceArchetype(t), db.Config().ConnConfig, statusUpdate, riverinternaltest.Logger(t))
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

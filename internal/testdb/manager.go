@@ -3,7 +3,6 @@ package testdb
 import (
 	"context"
 	"fmt"
-	"log"
 	"log/slog"
 	"os"
 	"sync"
@@ -88,7 +87,7 @@ func (m *Manager) allocatePool(ctx context.Context) (*poolWithDBName, error) {
 	nextDBNum := m.getNextDBNum()
 	dbName := fmt.Sprintf("%s_%d", m.baseConfig.ConnConfig.Database, nextDBNum)
 
-	log.Printf("Using test database: %s", dbName)
+	m.logger.Debug("Using test database", "name", dbName)
 
 	newPoolConfig := m.baseConfig.Copy()
 	newPoolConfig.ConnConfig.Database = dbName

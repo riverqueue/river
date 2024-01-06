@@ -71,7 +71,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	}))
 
 	ignoreNotifierStatusUpdates := func(componentstatus.Status) {}
-	notifier := notifier.New(archetype, dbPool.Config().ConnConfig, ignoreNotifierStatusUpdates)
+	notifier := notifier.New(archetype, dbPool.Config().ConnConfig, ignoreNotifierStatusUpdates, riverinternaltest.Logger(t))
 
 	config := &producerConfig{
 		ErrorHandler: newTestErrorHandler(),
@@ -172,7 +172,7 @@ func Test_Producer_Run(t *testing.T) {
 
 		workers := NewWorkers()
 
-		notifier := notifier.New(archetype, dbPool.Config().ConnConfig, func(componentstatus.Status) {})
+		notifier := notifier.New(archetype, dbPool.Config().ConnConfig, func(componentstatus.Status) {}, riverinternaltest.Logger(t))
 
 		config := &producerConfig{
 			ErrorHandler:      newTestErrorHandler(),

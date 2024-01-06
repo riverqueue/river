@@ -265,7 +265,7 @@ func TestScheduler(t *testing.T) {
 		statusUpdate := func(status componentstatus.Status) {
 			statusUpdateCh <- status
 		}
-		notify := notifier.New(&scheduler.Archetype, dbPool.Config().ConnConfig, statusUpdate)
+		notify := notifier.New(&scheduler.Archetype, dbPool.Config().ConnConfig, statusUpdate, riverinternaltest.Logger(t))
 
 		// Scope in so we can reuse ctx without the cancel embedded.
 		{

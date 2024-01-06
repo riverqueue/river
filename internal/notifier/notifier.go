@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"strconv"
 	"sync"
 	"time"
@@ -53,6 +53,7 @@ type Notifier struct {
 	connConfig       *pgx.ConnConfig
 	notificationBuf  chan *pgconn.Notification
 	statusChangeFunc func(componentstatus.Status)
+	logger           *slog.Logger
 
 	mu           sync.Mutex
 	isConnActive bool
@@ -60,7 +61,7 @@ type Notifier struct {
 	subChangeCh  chan *subscriptionChange
 }
 
-func New(archetype *baseservice.Archetype, connConfig *pgx.ConnConfig, statusChangeFunc func(componentstatus.Status)) *Notifier {
+func New(archetype *baseservice.Archetype, connConfig *pgx.ConnConfig, statusChangeFunc func(componentstatus.Status), logger *slog.Logger) *Notifier {
 	copiedConfig := connConfig.Copy()
 	// Rely on an overall statement timeout instead of setting identical context timeouts on every query:
 	copiedConfig.RuntimeParams["statement_timeout"] = strconv.Itoa(int(statementTimeout.Milliseconds()))
@@ -68,6 +69,7 @@ func New(archetype *baseservice.Archetype, connConfig *pgx.ConnConfig, statusCha
 		connConfig:       copiedConfig,
 		notificationBuf:  make(chan *pgconn.Notification, 1000),
 		statusChangeFunc: statusChangeFunc,
+		logger:           logger.WithGroup("notifier"),
 
 		subs:        make(map[NotificationTopic][]*Subscription),
 		subChangeCh: make(chan *subscriptionChange, 1000),
@@ -135,7 +137,17 @@ func (n *Notifier) getConnAndRun(ctx context.Context) {
 		if errors.Is(err, context.Canceled) {
 			return
 		}
-		log.Printf("error establishing connection from pool: %v", err)
+		// Log at a lower verbosity level in case an error is received when the
+		// context is already done (probably because the client is stopping).
+		// Example tests can finish before the notifier connects and starts
+		// listening, and on client stop may produce a connection error that
+		// would otherwise pollute output and fail the test.
+		select {
+		case <-ctx.Done():
+			n.logger.Info("error establishing connection from pool", "err", err)
+		default:
+			n.logger.Error("error establishing connection from pool", "err", err)
+		}
 		return
 	}
 	defer func() {
@@ -198,7 +210,7 @@ func (n *Notifier) runOnce(ctx context.Context, conn *pgx.Conn) error {
 		err := <-errCh
 		if err != nil && !errors.Is(err, context.Canceled) {
 			// A non-cancel error means something went wrong with the conn, so we should bail.
-			log.Printf("error on draining notification wait: %v", err)
+			n.logger.Error("error on draining notification wait", "err", err)
 			return err
 		}
 		// If we got a context cancellation error, it means we successfully
@@ -230,7 +242,7 @@ func (n *Notifier) runOnce(ctx context.Context, conn *pgx.Conn) error {
 			return nil
 		}
 		if err != nil {
-			log.Printf("error from notification wait: %v", err)
+			n.logger.Error("error from notification wait", "err", err)
 			return err
 		}
 	case subChange := <-n.subChangeCh:
@@ -300,7 +312,7 @@ func (n *Notifier) handleNotification(conn *pgconn.PgConn, notification *pgconn.
 	select {
 	case n.notificationBuf <- notification:
 	default:
-		log.Printf("dropping notification due to full buffer: %s", notification.Payload)
+		n.logger.Warn("dropping notification due to full buffer", "payload", notification.Payload)
 	}
 }
 
