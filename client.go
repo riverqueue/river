@@ -1066,7 +1066,9 @@ func (c *Client[TTx]) InsertTx(ctx context.Context, tx TTx, args JobArgs, opts *
 		return nil, err
 	}
 
-	return dbsqlc.JobRowFromInternal(res.Job), nil
+	jobRow := dbsqlc.JobRowFromInternal(res.Job)
+	jobRow.UniqueSkippedAsDuplicate = res.UniqueSkippedAsDuplicate
+	return jobRow, nil
 }
 
 // InsertManyParams encapsulates a single job combined with insert options for
