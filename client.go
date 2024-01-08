@@ -1307,19 +1307,19 @@ func validateQueueName(queueName string) error {
 // provided context is used for the underlying Postgres query and can be used to
 // cancel the operation or apply a timeout.
 //
-//	params := river.JobListParams{}.WithLimit(10).State(river.JobStateCompleted)
+//	params := river.NewJobListParams().WithLimit(10).State(river.JobStateCompleted)
 //	jobRows, err := client.JobList(ctx, params)
 //	if err != nil {
 //		// handle error
 //	}
 func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) ([]*rivertype.JobRow, error) {
-	if params == nil {
-		params = NewJobListParams()
-	}
 	if c.driver.GetDBPool() == nil {
 		return nil, errNoDriverDBPool
 	}
 
+	if params == nil {
+		params = NewJobListParams()
+	}
 	dbParams, err := params.toDBParams()
 	if err != nil {
 		return nil, err
@@ -1336,12 +1336,15 @@ func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) ([]*ri
 // provided context is used for the underlying Postgres query and can be used to
 // cancel the operation or apply a timeout.
 //
-//	params := river.JobListParams{}.WithLimit(10).State(river.JobStateCompleted)
+//	params := river.NewJobListParams().WithLimit(10).State(river.JobStateCompleted)
 //	jobRows, err := client.JobListTx(ctx, tx, params)
 //	if err != nil {
 //		// handle error
 //	}
-func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params JobListParams) ([]*rivertype.JobRow, error) {
+func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListParams) ([]*rivertype.JobRow, error) {
+	if params == nil {
+		params = NewJobListParams()
+	}
 	dbParams, err := params.toDBParams()
 	if err != nil {
 		return nil, err
@@ -1350,10 +1353,6 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params JobListParam
 	internalJobs, err := c.adapter.JobListTx(ctx, c.driver.UnwrapTx(tx), *dbParams)
 	if err != nil {
 		return nil, err
-	}
-	jobs := make([]*rivertype.JobRow, len(internalJobs))
-	for i, internalJob := range internalJobs {
-		jobs[i] = dbsqlc.JobRowFromInternal(internalJob)
 	}
 	return dbsqlc.JobRowsFromInternal(internalJobs), nil
 }

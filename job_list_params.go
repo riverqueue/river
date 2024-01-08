@@ -152,11 +152,10 @@ func (p *JobListParams) toDBParams() (*dbadapter.JobListParams, error) {
 		return nil, errors.New("invalid sort order")
 	}
 
-	timeField := jobListTimeFieldForState(p.state)
-
 	if p.sortField != JobListOrderByTime {
 		return nil, errors.New("invalid sort field")
 	}
+	timeField := jobListTimeFieldForState(p.state)
 	orderBy = append(orderBy, []dbadapter.JobListOrderBy{
 		{Expr: timeField, Order: sortOrder},
 		{Expr: "id", Order: sortOrder},
