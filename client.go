@@ -964,15 +964,15 @@ func (c *Client[TTx]) runProducers(fetchNewWorkCtx, workCtx context.Context) {
 // regard to the cancellation. TODO: fix this w/ smarter completion query that
 // uses metadata value?
 //
-// Returns true if the job was cancelled or cancellation was initiated, and
-// false if this was a no-op because the job was already finalized.
-func (c *Client[TTx]) Cancel(ctx context.Context, jobID int64) (bool, error) {
-	result, err := c.adapter.JobCancel(ctx, jobID)
+// Returns the up-to-date JobRow for the specified jobID if it exists. Returns
+// ErrNoRows if the job doesn't exist.
+func (c *Client[TTx]) Cancel(ctx context.Context, jobID int64) (*rivertype.JobRow, error) {
+	job, err := c.adapter.JobCancel(ctx, jobID)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
-	return result.Cancelled, nil
+	return dbsqlc.JobRowFromInternal(job), nil
 }
 
 // CancelTx cancels the job with the given ID within the specified transaction.
@@ -1008,15 +1008,15 @@ func (c *Client[TTx]) Cancel(ctx context.Context, jobID int64) (bool, error) {
 // regard to the cancellation. TODO: fix this w/ smarter completion query that
 // uses metadata value?
 //
-// Returns true if the job was cancelled or cancellation was initiated, and
-// false if this was a no-op because the job was already finalized.
-func (c *Client[TTx]) CancelTx(ctx context.Context, tx TTx, jobID int64) (bool, error) {
-	result, err := c.adapter.JobCancelTx(ctx, c.driver.UnwrapTx(tx), jobID)
+// Returns the up-to-date JobRow for the specified jobID if it exists. Returns
+// ErrNoRows if the job doesn't exist.
+func (c *Client[TTx]) CancelTx(ctx context.Context, tx TTx, jobID int64) (*rivertype.JobRow, error) {
+	job, err := c.adapter.JobCancelTx(ctx, c.driver.UnwrapTx(tx), jobID)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
-	return result.Cancelled, nil
+	return dbsqlc.JobRowFromInternal(job), nil
 }
 
 func insertParamsFromArgsAndOptions(args JobArgs, insertOpts *InsertOpts) (*dbadapter.JobInsertParams, error) {

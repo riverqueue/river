@@ -31,15 +31,13 @@ CREATE TABLE river_job(
   CONSTRAINT kind_length CHECK (char_length(kind) > 0 AND char_length(kind) < 128)
 );
 
--- name: JobCancel :execresult
+-- name: JobCancel :one
 WITH locked_job AS (
   SELECT
     id, queue, state, finalized_at
   FROM river_job
   WHERE
     river_job.id = @id
-    AND state NOT IN ('cancelled', 'completed', 'discarded')
-    AND finalized_at IS NULL
   FOR UPDATE
 ),
 
@@ -49,20 +47,34 @@ notification AS (
     pg_notify(@job_control_topic, json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text)
   FROM
     locked_job
+  WHERE
+    state NOT IN ('cancelled', 'completed', 'discarded')
+    AND finalized_at IS NULL
+),
+
+updated_job AS (
+  UPDATE river_job
+  SET
+    -- If the job is actively running, we want to let its current client and
+    -- producer handle the cancellation. Otherwise, immediately cancel it.
+    state = CASE WHEN state = 'running'::river_job_state THEN state ELSE 'cancelled'::river_job_state END,
+    finalized_at = CASE WHEN state = 'running'::river_job_state THEN finalized_at ELSE now() END,
+    -- Mark the job as cancelled by query so that the rescuer knows not to
+    -- rescue it, even if it gets stuck in the running state:
+    metadata = jsonb_set(metadata, '{cancelled_by_query}'::text[], 'true'::jsonb, true)
+  FROM notification
+  WHERE
+    river_job.id = notification.id
+  RETURNING river_job.*
 )
 
-UPDATE river_job
-SET
-  -- If the job is actively running, we want to let its current client and
-  -- producer handle the cancellation. Otherwise, immediately cancel it.
-  state = CASE WHEN state = 'running'::river_job_state THEN state ELSE 'cancelled'::river_job_state END,
-  finalized_at = CASE WHEN state = 'running'::river_job_state THEN finalized_at ELSE now() END,
-  -- Mark the job as cancelled by query so that the rescuer knows not to
-  -- rescue it, even if it gets stuck in the running state:
-  metadata = jsonb_set(metadata, '{cancelled_by_query}'::text[], 'true'::jsonb, true)
-FROM notification
-WHERE
-  river_job.id = notification.id;
+SELECT *
+FROM river_job
+WHERE id = @id::bigint
+    AND id NOT IN (SELECT id FROM updated_job)
+UNION
+SELECT *
+FROM updated_job;
 
 -- name: JobCountRunning :one
 SELECT

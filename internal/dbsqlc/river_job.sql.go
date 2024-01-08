@@ -8,19 +8,15 @@ package dbsqlc
 import (
 	"context"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
-const jobCancel = `-- name: JobCancel :execresult
+const jobCancel = `-- name: JobCancel :one
 WITH locked_job AS (
   SELECT
     id, queue, state, finalized_at
   FROM river_job
   WHERE
     river_job.id = $1
-    AND state NOT IN ('cancelled', 'completed', 'discarded')
-    AND finalized_at IS NULL
   FOR UPDATE
 ),
 
@@ -30,20 +26,34 @@ notification AS (
     pg_notify($2, json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text)
   FROM
     locked_job
+  WHERE
+    state NOT IN ('cancelled', 'completed', 'discarded')
+    AND finalized_at IS NULL
+),
+
+updated_job AS (
+  UPDATE river_job
+  SET
+    -- If the job is actively running, we want to let its current client and
+    -- producer handle the cancellation. Otherwise, immediately cancel it.
+    state = CASE WHEN state = 'running'::river_job_state THEN state ELSE 'cancelled'::river_job_state END,
+    finalized_at = CASE WHEN state = 'running'::river_job_state THEN finalized_at ELSE now() END,
+    -- Mark the job as cancelled by query so that the rescuer knows not to
+    -- rescue it, even if it gets stuck in the running state:
+    metadata = jsonb_set(metadata, '{cancelled_by_query}'::text[], 'true'::jsonb, true)
+  FROM notification
+  WHERE
+    river_job.id = notification.id
+  RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
 )
 
-UPDATE river_job
-SET
-  -- If the job is actively running, we want to let its current client and
-  -- producer handle the cancellation. Otherwise, immediately cancel it.
-  state = CASE WHEN state = 'running'::river_job_state THEN state ELSE 'cancelled'::river_job_state END,
-  finalized_at = CASE WHEN state = 'running'::river_job_state THEN finalized_at ELSE now() END,
-  -- Mark the job as cancelled by query so that the rescuer knows not to
-  -- rescue it, even if it gets stuck in the running state:
-  metadata = jsonb_set(metadata, '{cancelled_by_query}'::text[], 'true'::jsonb, true)
-FROM notification
-WHERE
-  river_job.id = notification.id
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+FROM river_job
+WHERE id = $1::bigint
+    AND id NOT IN (SELECT id FROM updated_job)
+UNION
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+FROM updated_job
 `
 
 type JobCancelParams struct {
@@ -51,8 +61,28 @@ type JobCancelParams struct {
 	JobControlTopic string
 }
 
-func (q *Queries) JobCancel(ctx context.Context, db DBTX, arg JobCancelParams) (pgconn.CommandTag, error) {
-	return db.Exec(ctx, jobCancel, arg.ID, arg.JobControlTopic)
+func (q *Queries) JobCancel(ctx context.Context, db DBTX, arg JobCancelParams) (*RiverJob, error) {
+	row := db.QueryRow(ctx, jobCancel, arg.ID, arg.JobControlTopic)
+	var i RiverJob
+	err := row.Scan(
+		&i.ID,
+		&i.Args,
+		&i.Attempt,
+		&i.AttemptedAt,
+		&i.AttemptedBy,
+		&i.CreatedAt,
+		&i.Errors,
+		&i.FinalizedAt,
+		&i.Kind,
+		&i.MaxAttempts,
+		&i.Metadata,
+		&i.Priority,
+		&i.Queue,
+		&i.State,
+		&i.ScheduledAt,
+		&i.Tags,
+	)
+	return &i, err
 }
 
 const jobCountRunning = `-- name: JobCountRunning :one

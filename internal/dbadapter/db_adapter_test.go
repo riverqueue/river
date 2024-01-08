@@ -18,6 +18,7 @@ import (
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/internal/util/ptrutil"
+	"github.com/riverqueue/river/riverdriver"
 )
 
 func Test_StandardAdapter_JobCancel(t *testing.T) {
@@ -55,46 +56,41 @@ func Test_StandardAdapter_JobCancel(t *testing.T) {
 
 		t.Run(fmt.Sprintf("CancelsJobIn%sState", startingState), func(t *testing.T) {
 			t.Parallel()
-			adapter, bundle := setupTx(t)
+			adapter, _ := setupTx(t)
 
 			params := makeFakeJobInsertParams(0, nil)
 			params.State = startingState
-			res, err := adapter.JobInsert(ctx, params)
+			insertResult, err := adapter.JobInsert(ctx, params)
 			require.NoError(t, err)
-			require.Equal(t, startingState, res.Job.State)
+			require.Equal(t, startingState, insertResult.Job.State)
 
-			cancelResult, err := adapter.JobCancel(ctx, res.Job.ID)
+			jobAfter, err := adapter.JobCancel(ctx, insertResult.Job.ID)
 			require.NoError(t, err)
-			require.True(t, cancelResult.Cancelled)
+			require.NotNil(t, jobAfter)
 
-			j, err := adapter.queries.JobGetByID(ctx, bundle.ex, res.Job.ID)
-			require.NoError(t, err)
-			require.Equal(t, dbsqlc.JobStateCancelled, j.State)
-			require.WithinDuration(t, time.Now(), *j.FinalizedAt, 2*time.Second)
-			require.JSONEq(t, `{"cancelled_by_query":true}`, string(j.Metadata))
+			require.Equal(t, dbsqlc.JobStateCancelled, jobAfter.State)
+			require.WithinDuration(t, time.Now(), *jobAfter.FinalizedAt, 2*time.Second)
+			require.JSONEq(t, `{"cancelled_by_query":true}`, string(jobAfter.Metadata))
 		})
 	}
 
 	t.Run("RunningJobIsNotImmediatelyCancelled", func(t *testing.T) {
 		t.Parallel()
 
-		adapter, bundle := setupTx(t)
+		adapter, _ := setupTx(t)
 
 		params := makeFakeJobInsertParams(0, nil)
 		params.State = dbsqlc.JobStateRunning
-		res, err := adapter.JobInsert(ctx, params)
+		insertResult, err := adapter.JobInsert(ctx, params)
 		require.NoError(t, err)
-		require.Equal(t, dbsqlc.JobStateRunning, res.Job.State)
+		require.Equal(t, dbsqlc.JobStateRunning, insertResult.Job.State)
 
-		cancelResult, err := adapter.JobCancel(ctx, res.Job.ID)
+		jobAfter, err := adapter.JobCancel(ctx, insertResult.Job.ID)
 		require.NoError(t, err)
-		require.True(t, cancelResult.Cancelled)
-
-		j, err := adapter.queries.JobGetByID(ctx, bundle.ex, res.Job.ID)
-		require.NoError(t, err)
-		require.Equal(t, dbsqlc.JobStateRunning, j.State)
-		require.Nil(t, j.FinalizedAt)
-		require.JSONEq(t, `{"cancelled_by_query":true}`, string(j.Metadata))
+		require.NotNil(t, jobAfter)
+		require.Equal(t, dbsqlc.JobStateRunning, jobAfter.State)
+		require.Nil(t, jobAfter.FinalizedAt)
+		require.JSONEq(t, `{"cancelled_by_query":true}`, string(jobAfter.Metadata))
 	})
 
 	for _, startingState := range []dbsqlc.JobState{
@@ -121,17 +117,23 @@ func Test_StandardAdapter_JobCancel(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			cancelResult, err := adapter.JobCancel(ctx, res.ID)
+			jobAfter, err := adapter.JobCancel(ctx, res.ID)
 			require.NoError(t, err)
-			require.False(t, cancelResult.Cancelled)
-
-			j, err := adapter.queries.JobGetByID(ctx, bundle.ex, res.ID)
-			require.NoError(t, err)
-			require.Equal(t, startingState, j.State)
-			require.WithinDuration(t, *res.FinalizedAt, *j.FinalizedAt, time.Microsecond)
-			require.JSONEq(t, `{}`, string(j.Metadata))
+			require.Equal(t, startingState, jobAfter.State)
+			require.WithinDuration(t, *res.FinalizedAt, *jobAfter.FinalizedAt, time.Microsecond)
+			require.JSONEq(t, `{}`, string(jobAfter.Metadata))
 		})
 	}
+
+	t.Run("ReturnsErrNoRowsIfJobDoesNotExist", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, _ := setupTx(t)
+
+		jobAfter, err := adapter.JobCancel(ctx, 1234567890)
+		require.ErrorIs(t, err, riverdriver.ErrNoRows)
+		require.Nil(t, jobAfter)
+	})
 }
 
 func Test_StandardAdapter_JobGetAvailable(t *testing.T) {
