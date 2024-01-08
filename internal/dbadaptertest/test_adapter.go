@@ -18,6 +18,8 @@ type TestAdapter struct {
 	fallthroughAdapter dbadapter.Adapter
 	mu                 sync.Mutex
 
+	JobCancelCalled              bool
+	JobCancelTxCalled            bool
 	JobInsertCalled              bool
 	JobInsertTxCalled            bool
 	JobInsertManyCalled          bool
@@ -28,6 +30,8 @@ type TestAdapter struct {
 	LeadershipAttemptElectCalled bool
 	LeadershipResignedCalled     bool
 
+	JobCancelFunc              func(ctx context.Context, id int64) (*dbsqlc.RiverJob, error)
+	JobCancelTxFunc            func(ctx context.Context, tx pgx.Tx, id int64) (*dbsqlc.RiverJob, error)
 	JobInsertFunc              func(ctx context.Context, params *dbadapter.JobInsertParams) (*dbadapter.JobInsertResult, error)
 	JobInsertTxFunc            func(ctx context.Context, tx pgx.Tx, params *dbadapter.JobInsertParams) (*dbadapter.JobInsertResult, error)
 	JobInsertManyFunc          func(ctx context.Context, params []*dbadapter.JobInsertParams) (int64, error)
@@ -37,6 +41,26 @@ type TestAdapter struct {
 	JobSetStateIfRunningFunc   func(ctx context.Context, params *dbadapter.JobSetStateIfRunningParams) (*dbsqlc.RiverJob, error)
 	LeadershipAttemptElectFunc func(ctx context.Context) (bool, error)
 	LeadershipResignFunc       func(ctx context.Context, name string, leaderID string) error
+}
+
+func (ta *TestAdapter) JobCancel(ctx context.Context, id int64) (*dbsqlc.RiverJob, error) {
+	ta.atomicSetBoolTrue(&ta.JobCancelCalled)
+
+	if ta.JobCancelFunc != nil {
+		return ta.JobCancelFunc(ctx, id)
+	}
+
+	return ta.fallthroughAdapter.JobCancel(ctx, id)
+}
+
+func (ta *TestAdapter) JobCancelTx(ctx context.Context, tx pgx.Tx, id int64) (*dbsqlc.RiverJob, error) {
+	ta.atomicSetBoolTrue(&ta.JobCancelTxCalled)
+
+	if ta.JobCancelTxFunc != nil {
+		return ta.JobCancelTxFunc(ctx, tx, id)
+	}
+
+	return ta.fallthroughAdapter.JobCancel(ctx, id)
 }
 
 func (ta *TestAdapter) JobInsert(ctx context.Context, params *dbadapter.JobInsertParams) (*dbadapter.JobInsertResult, error) {
