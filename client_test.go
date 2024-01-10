@@ -293,7 +293,9 @@ func Test_Client(t *testing.T) {
 			return ctx.Err()
 		}))
 
+		statusUpdateCh := client.monitor.RegisterUpdates()
 		startClient(ctx, t, client)
+		waitForClientHealthy(ctx, t, statusUpdateCh)
 
 		insertedJob, err := client.Insert(ctx, &JobArgs{}, nil)
 		require.NoError(t, err)

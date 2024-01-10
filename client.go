@@ -965,8 +965,8 @@ func (c *Client[TTx]) runProducers(fetchNewWorkCtx, workCtx context.Context) {
 // usual.
 //
 // In the event the running job finishes executing _before_ the cancellation
-// signal is received but _after_ this update was made, the behavior depends
-// on which state the job is being transitioned into:
+// signal is received but _after_ this update was made, the behavior depends on
+// which state the job is being transitioned into (based on its return error):
 //
 //   - If the job completed successfully, was cancelled from within, or was
 //     discarded due to exceeding its max attempts, the job will be updated as
@@ -1017,8 +1017,8 @@ func (c *Client[TTx]) Cancel(ctx context.Context, jobID int64) (*rivertype.JobRo
 // usual.
 //
 // In the event the running job finishes executing _before_ the cancellation
-// signal is received but _after_ this update was made, the behavior depends
-// on which state the job is being transitioned into:
+// signal is received but _after_ this update was made, the behavior depends on
+// which state the job is being transitioned into (based on its return error):
 //
 //   - If the job completed successfully, was cancelled from within, or was
 //     discarded due to exceeding its max attempts, the job will be updated as
