@@ -567,7 +567,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 	// cancelled a more aggressive stop will be initiated.
 	fetchNewWorkCtx, fetchNewWorkCancel := context.WithCancel(ctx)
 	c.fetchNewWorkCancel = fetchNewWorkCancel
-	workCtx, workCancel := context.WithCancel(ctx)
+	workCtx, workCancel := context.WithCancel(withClient[TTx](ctx, c))
 	c.workCancel = workCancel
 
 	// Before doing anything else, make an initial connection to the database to
