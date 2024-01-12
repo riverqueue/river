@@ -1,4 +1,4 @@
-# River [![Build Status](https://github.com/riverqueue/river/workflows/CI/badge.svg?branch=master)](https://github.com/riverqueue/river/actions) [![Go Reference](https://pkg.go.dev/badge/github.com/riverqueue/river.svg)](https://pkg.go.dev/github.com/riverqueue/river)
+# River [![Build Status](https://github.com/riverqueue/river/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/riverqueue/river/actions) [![Go Reference](https://pkg.go.dev/badge/github.com/riverqueue/river.svg)](https://pkg.go.dev/github.com/riverqueue/river)
 
 River is a robust high-performance job processing system for Go and Postgres.
 
