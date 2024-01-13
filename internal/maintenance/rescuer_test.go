@@ -2,6 +2,7 @@ package maintenance
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -65,6 +66,7 @@ func TestRescuer(t *testing.T) {
 		Attempt     int16
 		AttemptedAt *time.Time
 		MaxAttempts int16
+		Metadata    []byte
 		State       dbsqlc.JobState
 	}
 
@@ -75,6 +77,7 @@ func TestRescuer(t *testing.T) {
 			Args:        []byte("{}"),
 			Kind:        rescuerJobKind,
 			MaxAttempts: 5,
+			Metadata:    params.Metadata,
 			Priority:    int16(rivercommon.PriorityDefault),
 			Queue:       rivercommon.QueueDefault,
 			State:       params.State,
@@ -151,9 +154,15 @@ func TestRescuer(t *testing.T) {
 		stuckToDiscardJob1 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateRunning, Attempt: 5, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour))})
 		stuckToDiscardJob2 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateRunning, Attempt: 5, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(1 * time.Minute))}) // won't be rescued
 
+		// Marked as cancelled by query:
+		cancelTime := time.Now().UTC().Format(time.RFC3339Nano)
+		stuckToCancelJob1 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateRunning, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), Metadata: []byte(fmt.Sprintf(`{"cancel_attempted_at": %q}`, cancelTime))})
+		stuckToCancelJob2 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateRunning, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(1 * time.Minute)), Metadata: []byte(fmt.Sprintf(`{"cancel_attempted_at": %q}`, cancelTime))}) // won't be rescued
+
 		// these aren't touched:
 		notRunningJob1 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateCompleted, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour))})
 		notRunningJob2 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateDiscarded, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour))})
+		notRunningJob3 := insertJob(ctx, bundle.tx, insertJobParams{State: dbsqlc.JobStateCancelled, AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour))})
 
 		require.NoError(cleaner.Start(ctx))
 
@@ -184,12 +193,26 @@ func TestRescuer(t *testing.T) {
 		require.Equal(dbsqlc.JobStateRunning, discard2After.State)
 		require.Nil(discard2After.FinalizedAt)
 
+		cancel1After, err := queries.JobGetByID(ctx, bundle.tx, stuckToCancelJob1.ID)
+		require.NoError(err)
+		require.Equal(dbsqlc.JobStateCancelled, cancel1After.State)
+		require.WithinDuration(time.Now(), *cancel1After.FinalizedAt, 5*time.Second)
+		require.Len(cancel1After.Errors, 1)
+
+		cancel2After, err := queries.JobGetByID(ctx, bundle.tx, stuckToCancelJob2.ID)
+		require.NoError(err)
+		require.Equal(dbsqlc.JobStateRunning, cancel2After.State)
+		require.Nil(cancel2After.FinalizedAt)
+
 		notRunning1After, err := queries.JobGetByID(ctx, bundle.tx, notRunningJob1.ID)
 		require.NoError(err)
 		require.Equal(notRunning1After.State, notRunningJob1.State)
 		notRunning2After, err := queries.JobGetByID(ctx, bundle.tx, notRunningJob2.ID)
 		require.NoError(err)
 		require.Equal(notRunning2After.State, notRunningJob2.State)
+		notRunning3After, err := queries.JobGetByID(ctx, bundle.tx, notRunningJob3.ID)
+		require.NoError(err)
+		require.Equal(notRunning3After.State, notRunningJob3.State)
 	})
 
 	t.Run("RescuesInBatches", func(t *testing.T) {

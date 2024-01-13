@@ -10,6 +10,82 @@ import (
 	"time"
 )
 
+const jobCancel = `-- name: JobCancel :one
+WITH locked_job AS (
+  SELECT
+    id, queue, state, finalized_at
+  FROM river_job
+  WHERE
+    river_job.id = $1
+  FOR UPDATE
+),
+
+notification AS (
+  SELECT
+    id,
+    pg_notify($2, json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text)
+  FROM
+    locked_job
+  WHERE
+    state NOT IN ('cancelled', 'completed', 'discarded')
+    AND finalized_at IS NULL
+),
+
+updated_job AS (
+  UPDATE river_job
+  SET
+    -- If the job is actively running, we want to let its current client and
+    -- producer handle the cancellation. Otherwise, immediately cancel it.
+    state = CASE WHEN state = 'running'::river_job_state THEN state ELSE 'cancelled'::river_job_state END,
+    finalized_at = CASE WHEN state = 'running'::river_job_state THEN finalized_at ELSE now() END,
+    -- Mark the job as cancelled by query so that the rescuer knows not to
+    -- rescue it, even if it gets stuck in the running state:
+    metadata = jsonb_set(metadata, '{cancel_attempted_at}'::text[], $3::jsonb, true)
+  FROM notification
+  WHERE
+    river_job.id = notification.id
+  RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
+)
+
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+FROM river_job
+WHERE id = $1::bigint
+    AND id NOT IN (SELECT id FROM updated_job)
+UNION
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+FROM updated_job
+`
+
+type JobCancelParams struct {
+	ID                int64
+	JobControlTopic   string
+	CancelAttemptedAt []byte
+}
+
+func (q *Queries) JobCancel(ctx context.Context, db DBTX, arg JobCancelParams) (*RiverJob, error) {
+	row := db.QueryRow(ctx, jobCancel, arg.ID, arg.JobControlTopic, arg.CancelAttemptedAt)
+	var i RiverJob
+	err := row.Scan(
+		&i.ID,
+		&i.Args,
+		&i.Attempt,
+		&i.AttemptedAt,
+		&i.AttemptedBy,
+		&i.CreatedAt,
+		&i.Errors,
+		&i.FinalizedAt,
+		&i.Kind,
+		&i.MaxAttempts,
+		&i.Metadata,
+		&i.Priority,
+		&i.Queue,
+		&i.State,
+		&i.ScheduledAt,
+		&i.Tags,
+	)
+	return &i, err
+}
+
 const jobCountRunning = `-- name: JobCountRunning :one
 SELECT
   count(*)
@@ -668,18 +744,27 @@ func (q *Queries) JobSetState(ctx context.Context, db DBTX, arg JobSetStateParam
 
 const jobSetStateIfRunning = `-- name: JobSetStateIfRunning :one
 WITH job_to_update AS (
-    SELECT id
+    SELECT
+      id,
+      $1::river_job_state IN ('retryable'::river_job_state, 'scheduled'::river_job_state) AND metadata ? 'cancel_attempted_at' AS should_cancel
     FROM river_job
-    WHERE id = $1::bigint
+    WHERE id = $2::bigint
     FOR UPDATE
 ),
 updated_job AS (
     UPDATE river_job
-    SET errors       = CASE WHEN $2::boolean        THEN array_append(errors, $3::jsonb) ELSE errors       END,
-        finalized_at = CASE WHEN $4::boolean THEN $5                       ELSE finalized_at END,
-        max_attempts = CASE WHEN $6::boolean    THEN $7                       ELSE max_attempts END,
-        scheduled_at = CASE WHEN $8::boolean THEN $9                       ELSE scheduled_at END,
-        state = $10
+    SET
+      state        = CASE WHEN should_cancel                                          THEN 'cancelled'::river_job_state
+                          ELSE $1::river_job_state END,
+      finalized_at = CASE WHEN should_cancel                                          THEN now()
+                          WHEN $3::boolean                       THEN $4
+                          ELSE finalized_at END,
+      errors       = CASE WHEN $5::boolean                              THEN array_append(errors, $6::jsonb)
+                          ELSE errors       END,
+      max_attempts = CASE WHEN NOT should_cancel AND $7::boolean    THEN $8
+                          ELSE max_attempts END,
+      scheduled_at = CASE WHEN NOT should_cancel AND $9::boolean THEN $10
+                          ELSE scheduled_at END
     FROM job_to_update
     WHERE river_job.id = job_to_update.id
         AND river_job.state = 'running'::river_job_state
@@ -687,7 +772,7 @@ updated_job AS (
 )
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
 FROM river_job
-WHERE id = $1::bigint
+WHERE id = $2::bigint
     AND id NOT IN (SELECT id FROM updated_job)
 UNION
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
@@ -695,30 +780,30 @@ FROM updated_job
 `
 
 type JobSetStateIfRunningParams struct {
+	State               JobState
 	ID                  int64
-	ErrorDoUpdate       bool
-	Error               []byte
 	FinalizedAtDoUpdate bool
 	FinalizedAt         *time.Time
+	ErrorDoUpdate       bool
+	Error               []byte
 	MaxAttemptsUpdate   bool
 	MaxAttempts         int16
 	ScheduledAtDoUpdate bool
 	ScheduledAt         time.Time
-	State               JobState
 }
 
 func (q *Queries) JobSetStateIfRunning(ctx context.Context, db DBTX, arg JobSetStateIfRunningParams) (*RiverJob, error) {
 	row := db.QueryRow(ctx, jobSetStateIfRunning,
+		arg.State,
 		arg.ID,
-		arg.ErrorDoUpdate,
-		arg.Error,
 		arg.FinalizedAtDoUpdate,
 		arg.FinalizedAt,
+		arg.ErrorDoUpdate,
+		arg.Error,
 		arg.MaxAttemptsUpdate,
 		arg.MaxAttempts,
 		arg.ScheduledAtDoUpdate,
 		arg.ScheduledAt,
-		arg.State,
 	)
 	var i RiverJob
 	err := row.Scan(
@@ -747,8 +832,9 @@ UPDATE river_job
 SET
   attempt = CASE WHEN $1::boolean THEN $2 ELSE attempt END,
   attempted_at = CASE WHEN $3::boolean THEN $4 ELSE attempted_at END,
-  state = CASE WHEN $5::boolean THEN $6 ELSE state END
-WHERE id = $7
+  finalized_at = CASE WHEN $5::boolean THEN $6 ELSE finalized_at END,
+  state = CASE WHEN $7::boolean THEN $8 ELSE state END
+WHERE id = $9
 RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
 `
 
@@ -757,6 +843,8 @@ type JobUpdateParams struct {
 	Attempt             int16
 	AttemptedAtDoUpdate bool
 	AttemptedAt         *time.Time
+	FinalizedAtDoUpdate bool
+	FinalizedAt         *time.Time
 	StateDoUpdate       bool
 	State               JobState
 	ID                  int64
@@ -770,6 +858,8 @@ func (q *Queries) JobUpdate(ctx context.Context, db DBTX, arg JobUpdateParams) (
 		arg.Attempt,
 		arg.AttemptedAtDoUpdate,
 		arg.AttemptedAt,
+		arg.FinalizedAtDoUpdate,
+		arg.FinalizedAt,
 		arg.StateDoUpdate,
 		arg.State,
 		arg.ID,

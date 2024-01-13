@@ -91,6 +91,8 @@ func (e *jobSnoozeError) Is(target error) bool {
 	return ok
 }
 
+var ErrJobCancelledRemotely = JobCancel(errors.New("job cancelled remotely"))
+
 type jobExecutorResult struct {
 	Err        error
 	NextRetry  time.Time
@@ -116,6 +118,7 @@ type jobExecutor struct {
 	baseservice.BaseService
 
 	Adapter                dbadapter.Adapter
+	CancelFunc             context.CancelCauseFunc
 	ClientJobTimeout       time.Duration
 	Completer              jobcompleter.JobCompleter
 	ClientRetryPolicy      ClientRetryPolicy
@@ -130,6 +133,11 @@ type jobExecutor struct {
 	stats *jobstats.JobStatistics // initialized by the executor, and handed off to completer
 }
 
+func (e *jobExecutor) Cancel() {
+	e.Logger.Warn(e.Name+": job cancelled remotely", slog.Int64("job_id", e.JobRow.ID))
+	e.CancelFunc(ErrJobCancelledRemotely)
+}
+
 func (e *jobExecutor) Execute(ctx context.Context) {
 	e.start = e.TimeNowUTC()
 	e.stats = &jobstats.JobStatistics{
@@ -137,6 +145,9 @@ func (e *jobExecutor) Execute(ctx context.Context) {
 	}
 
 	res := e.execute(ctx)
+	if res.Err != nil && errors.Is(context.Cause(ctx), ErrJobCancelledRemotely) {
+		res.Err = context.Cause(ctx)
+	}
 
 	e.reportResult(ctx, res)
 

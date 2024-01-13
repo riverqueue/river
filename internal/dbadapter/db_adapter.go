@@ -19,6 +19,7 @@ import (
 	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/internal/util/valutil"
+	"github.com/riverqueue/river/riverdriver"
 )
 
 // When a job has specified unique options, but has not set the ByState
@@ -82,6 +83,9 @@ type JobInsertResult struct {
 // expedience, but this should be converted to a more stable API if Adapter
 // would be exported.
 type Adapter interface {
+	JobCancel(ctx context.Context, id int64) (*dbsqlc.RiverJob, error)
+	JobCancelTx(ctx context.Context, tx pgx.Tx, id int64) (*dbsqlc.RiverJob, error)
+
 	JobInsert(ctx context.Context, params *JobInsertParams) (*JobInsertResult, error)
 	JobInsertTx(ctx context.Context, tx pgx.Tx, params *JobInsertParams) (*JobInsertResult, error)
 
@@ -152,6 +156,36 @@ func NewStandardAdapter(archetype *baseservice.Archetype, config *StandardAdapte
 		queries:         dbsqlc.New(),
 		workerName:      config.WorkerName,
 	})
+}
+
+func (a *StandardAdapter) JobCancel(ctx context.Context, id int64) (*dbsqlc.RiverJob, error) {
+	return dbutil.WithTxV(ctx, a.executor, func(ctx context.Context, tx pgx.Tx) (*dbsqlc.RiverJob, error) {
+		return a.JobCancelTx(ctx, tx, id)
+	})
+}
+
+func (a *StandardAdapter) JobCancelTx(ctx context.Context, tx pgx.Tx, id int64) (*dbsqlc.RiverJob, error) {
+	ctx, cancel := context.WithTimeout(ctx, a.deadlineTimeout)
+	defer cancel()
+
+	cancelledAt, err := a.TimeNowUTC().MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+
+	job, err := a.queries.JobCancel(ctx, a.executor, dbsqlc.JobCancelParams{
+		CancelAttemptedAt: cancelledAt,
+		ID:                id,
+		JobControlTopic:   string(notifier.NotificationTopicJobControl),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, riverdriver.ErrNoRows
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return job, nil
 }
 
 func (a *StandardAdapter) JobInsert(ctx context.Context, params *JobInsertParams) (*JobInsertResult, error) {

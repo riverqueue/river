@@ -18,7 +18,129 @@ import (
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/internal/util/ptrutil"
+	"github.com/riverqueue/river/riverdriver"
 )
+
+func Test_StandardAdapter_JobCancel(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		baselineTime time.Time // baseline time frozen at now when setup is called
+		ex           dbutil.Executor
+	}
+
+	setup := func(t *testing.T, ex dbutil.Executor) (*StandardAdapter, *testBundle) {
+		t.Helper()
+
+		bundle := &testBundle{
+			baselineTime: time.Now().UTC(),
+			ex:           ex,
+		}
+
+		adapter := NewStandardAdapter(riverinternaltest.BaseServiceArchetype(t), testAdapterConfig(bundle.ex))
+		adapter.TimeNowUTC = func() time.Time { return bundle.baselineTime }
+
+		return adapter, bundle
+	}
+
+	setupTx := func(t *testing.T) (*StandardAdapter, *testBundle) {
+		t.Helper()
+		return setup(t, riverinternaltest.TestTx(ctx, t))
+	}
+
+	for _, startingState := range []dbsqlc.JobState{
+		dbsqlc.JobStateAvailable,
+		dbsqlc.JobStateRetryable,
+		dbsqlc.JobStateScheduled,
+	} {
+		startingState := startingState
+
+		t.Run(fmt.Sprintf("CancelsJobIn%sState", startingState), func(t *testing.T) {
+			t.Parallel()
+
+			adapter, bundle := setupTx(t)
+			timeNowString := bundle.baselineTime.Format(time.RFC3339Nano)
+
+			params := makeFakeJobInsertParams(0, nil)
+			params.State = startingState
+			insertResult, err := adapter.JobInsert(ctx, params)
+			require.NoError(t, err)
+			require.Equal(t, startingState, insertResult.Job.State)
+
+			jobAfter, err := adapter.JobCancel(ctx, insertResult.Job.ID)
+			require.NoError(t, err)
+			require.NotNil(t, jobAfter)
+
+			require.Equal(t, dbsqlc.JobStateCancelled, jobAfter.State)
+			require.WithinDuration(t, time.Now(), *jobAfter.FinalizedAt, 2*time.Second)
+			require.JSONEq(t, fmt.Sprintf(`{"cancel_attempted_at":%q}`, timeNowString), string(jobAfter.Metadata))
+		})
+	}
+
+	t.Run("RunningJobIsNotImmediatelyCancelled", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, bundle := setupTx(t)
+		timeNowString := bundle.baselineTime.Format(time.RFC3339Nano)
+
+		params := makeFakeJobInsertParams(0, nil)
+		params.State = dbsqlc.JobStateRunning
+		insertResult, err := adapter.JobInsert(ctx, params)
+		require.NoError(t, err)
+		require.Equal(t, dbsqlc.JobStateRunning, insertResult.Job.State)
+
+		jobAfter, err := adapter.JobCancel(ctx, insertResult.Job.ID)
+		require.NoError(t, err)
+		require.NotNil(t, jobAfter)
+		require.Equal(t, dbsqlc.JobStateRunning, jobAfter.State)
+		require.Nil(t, jobAfter.FinalizedAt)
+		require.JSONEq(t, fmt.Sprintf(`{"cancel_attempted_at":%q}`, timeNowString), string(jobAfter.Metadata))
+	})
+
+	for _, startingState := range []dbsqlc.JobState{
+		dbsqlc.JobStateCancelled,
+		dbsqlc.JobStateCompleted,
+		dbsqlc.JobStateDiscarded,
+	} {
+		startingState := startingState
+
+		t.Run(fmt.Sprintf("DoesNotAlterFinalizedJobIn%sState", startingState), func(t *testing.T) {
+			t.Parallel()
+			adapter, bundle := setupTx(t)
+
+			params := makeFakeJobInsertParams(0, nil)
+			initialRes, err := adapter.JobInsert(ctx, params)
+			require.NoError(t, err)
+
+			res, err := adapter.queries.JobUpdate(ctx, bundle.ex, dbsqlc.JobUpdateParams{
+				ID:                  initialRes.Job.ID,
+				FinalizedAtDoUpdate: true,
+				FinalizedAt:         ptrutil.Ptr(time.Now()),
+				StateDoUpdate:       true,
+				State:               startingState,
+			})
+			require.NoError(t, err)
+
+			jobAfter, err := adapter.JobCancel(ctx, res.ID)
+			require.NoError(t, err)
+			require.Equal(t, startingState, jobAfter.State)
+			require.WithinDuration(t, *res.FinalizedAt, *jobAfter.FinalizedAt, time.Microsecond)
+			require.JSONEq(t, `{}`, string(jobAfter.Metadata))
+		})
+	}
+
+	t.Run("ReturnsErrNoRowsIfJobDoesNotExist", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, _ := setupTx(t)
+
+		jobAfter, err := adapter.JobCancel(ctx, 1234567890)
+		require.ErrorIs(t, err, riverdriver.ErrNoRows)
+		require.Nil(t, jobAfter)
+	})
+}
 
 func Test_StandardAdapter_JobGetAvailable(t *testing.T) {
 	t.Parallel()
@@ -763,6 +885,44 @@ func Test_StandardAdapter_JobSetStateErrored(t *testing.T) {
 		j, err := adapter.queries.JobGetByID(ctx, bundle.ex, res.Job.ID)
 		require.NoError(t, err)
 		require.Equal(t, dbsqlc.JobStateRetryable, j.State)
+		require.WithinDuration(t, params.ScheduledAt, jAfter.ScheduledAt, time.Microsecond)
+	})
+
+	t.Run("SetsAJobWithCancelAttemptedAtToCancelled", func(t *testing.T) {
+		// If a job has cancel_attempted_at in its metadata, it means that the user
+		// tried to cancel the job with the Cancel API but that the job
+		// finished/errored before the producer received the cancel notification.
+		//
+		// In this case, we want to move the job to cancelled instead of retryable
+		// so that the job is not retried.
+		t.Parallel()
+
+		adapter, bundle := setupTx(t)
+
+		params := makeFakeJobInsertParams(0, &makeFakeJobInsertParamsOpts{
+			ScheduledAt: ptrutil.Ptr(bundle.baselineTime.Add(-10 * time.Second)),
+		})
+		params.State = dbsqlc.JobStateRunning
+		params.Metadata = []byte(fmt.Sprintf(`{"cancel_attempted_at":"%s"}`, time.Now().UTC().Format(time.RFC3339)))
+		res, err := adapter.JobInsert(ctx, params)
+		require.NoError(t, err)
+
+		jAfter, err := adapter.JobSetStateIfRunning(ctx, JobSetStateErrorRetryable(res.Job.ID, bundle.baselineTime, bundle.errPayload))
+		require.NoError(t, err)
+		require.Equal(t, dbsqlc.JobStateCancelled, jAfter.State)
+		require.NotNil(t, jAfter.FinalizedAt)
+		// Loose assertion against FinalizedAt just to make sure it was set (it uses
+		// the database's now() instead of a passed-in time):
+		require.WithinDuration(t, time.Now().UTC(), *jAfter.FinalizedAt, 2*time.Second)
+		// ScheduledAt should not be touched:
+		require.WithinDuration(t, params.ScheduledAt, jAfter.ScheduledAt, time.Microsecond)
+		// Errors should still be appended to:
+		require.Len(t, jAfter.Errors, 1)
+		require.Contains(t, jAfter.Errors[0].Error, "fake error")
+
+		j, err := adapter.queries.JobGetByID(ctx, bundle.ex, res.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, dbsqlc.JobStateCancelled, j.State)
 		require.WithinDuration(t, params.ScheduledAt, jAfter.ScheduledAt, time.Microsecond)
 	})
 }
