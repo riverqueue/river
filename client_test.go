@@ -681,6 +681,29 @@ func Test_Client_JobContextInheritsFromProvidedContext(t *testing.T) {
 	require.Equal(deadline, jobDeadline, "job should have the same deadline as the client context (shorter than the job's timeout)")
 }
 
+func Test_Client_ClientFromContext(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	var clientResult *Client[pgx.Tx]
+	jobDoneChan := make(chan struct{})
+	config := newTestConfig(t, func(ctx context.Context, j *Job[callbackArgs]) error {
+		clientResult = ClientFromContext[pgx.Tx](ctx)
+		close(jobDoneChan)
+		return nil
+	})
+	client := runNewTestClient(ctx, t, config)
+
+	_, err := client.Insert(ctx, callbackArgs{}, nil)
+	require.NoError(t, err)
+
+	riverinternaltest.WaitOrTimeout(t, jobDoneChan)
+
+	require.NotNil(t, clientResult)
+	require.Equal(t, client, clientResult)
+}
+
 func Test_Client_Insert(t *testing.T) {
 	t.Parallel()
 
