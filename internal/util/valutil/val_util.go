@@ -14,7 +14,7 @@ func ValOrDefault[T constraints.Integer | string](val, defaultVal T) T {
 
 // FirstNonZero returns the first argument that is non-zero, or the zero value if
 // all are zero.
-func FirstNonZero[T constraints.Integer | string](values ...T) T {
+func FirstNonZero[T constraints.Integer | ~string](values ...T) T {
 	var zero T
 	for _, val := range values {
 		if val != zero {

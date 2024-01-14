@@ -26,6 +26,8 @@ type TestAdapter struct {
 	JobInsertManyTxCalled        bool
 	JobGetAvailableCalled        bool
 	JobGetAvailableTxCalled      bool
+	JobListCalled                bool
+	JobListTxCalled              bool
 	JobSetStateIfRunningCalled   bool
 	LeadershipAttemptElectCalled bool
 	LeadershipResignedCalled     bool
@@ -38,6 +40,8 @@ type TestAdapter struct {
 	JobInsertManyTxFunc        func(ctx context.Context, tx pgx.Tx, params []*dbadapter.JobInsertParams) (int64, error)
 	JobGetAvailableFunc        func(ctx context.Context, queueName string, limit int32) ([]*dbsqlc.RiverJob, error)
 	JobGetAvailableTxFunc      func(ctx context.Context, tx pgx.Tx, queueName string, limit int32) ([]*dbsqlc.RiverJob, error)
+	JobListFunc                func(ctx context.Context, params dbadapter.JobListParams) ([]*dbsqlc.RiverJob, error)
+	JobListTxFunc              func(ctx context.Context, tx pgx.Tx, params dbadapter.JobListParams) ([]*dbsqlc.RiverJob, error)
 	JobSetStateIfRunningFunc   func(ctx context.Context, params *dbadapter.JobSetStateIfRunningParams) (*dbsqlc.RiverJob, error)
 	LeadershipAttemptElectFunc func(ctx context.Context) (bool, error)
 	LeadershipResignFunc       func(ctx context.Context, name string, leaderID string) error
@@ -121,6 +125,26 @@ func (ta *TestAdapter) JobGetAvailableTx(ctx context.Context, tx pgx.Tx, queueNa
 	}
 
 	return ta.fallthroughAdapter.JobGetAvailableTx(ctx, tx, queueName, limit)
+}
+
+func (ta *TestAdapter) JobList(ctx context.Context, params dbadapter.JobListParams) ([]*dbsqlc.RiverJob, error) {
+	ta.atomicSetBoolTrue(&ta.JobListCalled)
+
+	if ta.JobListFunc != nil {
+		return ta.JobListFunc(ctx, params)
+	}
+
+	return ta.fallthroughAdapter.JobList(ctx, params)
+}
+
+func (ta *TestAdapter) JobListTx(ctx context.Context, tx pgx.Tx, params dbadapter.JobListParams) ([]*dbsqlc.RiverJob, error) {
+	ta.atomicSetBoolTrue(&ta.JobListTxCalled)
+
+	if ta.JobListTxFunc != nil {
+		return ta.JobListTxFunc(ctx, tx, params)
+	}
+
+	return ta.fallthroughAdapter.JobListTx(ctx, tx, params)
 }
 
 func (ta *TestAdapter) JobSetStateIfRunning(ctx context.Context, params *dbadapter.JobSetStateIfRunningParams) (*dbsqlc.RiverJob, error) {

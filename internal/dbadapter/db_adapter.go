@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/riverqueue/river/internal/baseservice"
+	"github.com/riverqueue/river/internal/dblist"
 	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/util/dbutil"
@@ -20,6 +21,7 @@ import (
 	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/internal/util/valutil"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // When a job has specified unique options, but has not set the ByState
@@ -73,6 +75,29 @@ type JobInsertResult struct {
 	UniqueSkippedAsDuplicate bool
 }
 
+type SortOrder int
+
+const (
+	SortOrderUnspecified SortOrder = iota
+	SortOrderAsc
+	SortOrderDesc
+)
+
+type JobListOrderBy struct {
+	Expr  string
+	Order SortOrder
+}
+
+type JobListParams struct {
+	Conditions string
+	LimitCount int32
+	NamedArgs  map[string]any
+	OrderBy    []JobListOrderBy
+	Priorities []int16
+	Queues     []string
+	State      rivertype.JobState
+}
+
 // Adapter is an interface to the various database-level operations which River
 // needs to operate. It's quite non-generic for the moment, but the idea is that
 // it'd give us a way to implement access to non-Postgres databases, and may be
@@ -95,6 +120,9 @@ type Adapter interface {
 
 	JobGetAvailable(ctx context.Context, queueName string, limit int32) ([]*dbsqlc.RiverJob, error)
 	JobGetAvailableTx(ctx context.Context, tx pgx.Tx, queueName string, limit int32) ([]*dbsqlc.RiverJob, error)
+
+	JobList(ctx context.Context, params JobListParams) ([]*dbsqlc.RiverJob, error)
+	JobListTx(ctx context.Context, tx pgx.Tx, params JobListParams) ([]*dbsqlc.RiverJob, error)
 
 	// JobSetStateIfRunning sets the state of a currently running job. Jobs which are not
 	// running (i.e. which have already have had their state set to something
@@ -381,6 +409,71 @@ func (a *StandardAdapter) JobGetAvailableTx(ctx context.Context, tx pgx.Tx, queu
 		LimitCount: limit,
 		Queue:      queueName,
 		Worker:     a.workerName,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return jobs, nil
+}
+
+func (a *StandardAdapter) JobList(ctx context.Context, params JobListParams) ([]*dbsqlc.RiverJob, error) {
+	ctx, cancel := context.WithTimeout(ctx, a.deadlineTimeout)
+	defer cancel()
+
+	tx, err := a.executor.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	jobs, err := a.JobListTx(ctx, tx, params)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return jobs, nil
+}
+
+func (a *StandardAdapter) JobListTx(ctx context.Context, tx pgx.Tx, params JobListParams) ([]*dbsqlc.RiverJob, error) {
+	ctx, cancel := context.WithTimeout(ctx, a.deadlineTimeout)
+	defer cancel()
+
+	var conditionsBuilder strings.Builder
+
+	orderBy := make([]dblist.JobListOrderBy, len(params.OrderBy))
+	for i, o := range params.OrderBy {
+		orderBy[i] = dblist.JobListOrderBy{
+			Expr:  o.Expr,
+			Order: dblist.SortOrder(o.Order),
+		}
+	}
+
+	namedArgs := params.NamedArgs
+	if namedArgs == nil {
+		namedArgs = make(map[string]any)
+	}
+
+	if len(params.Queues) > 0 {
+		namedArgs["queues"] = params.Queues
+		conditionsBuilder.WriteString("queue = any(@queues::text[])")
+		if params.Conditions != "" {
+			conditionsBuilder.WriteString("\n  AND ")
+		}
+	}
+
+	if params.Conditions != "" {
+		conditionsBuilder.WriteString(params.Conditions)
+	}
+
+	jobs, err := dblist.JobList(ctx, tx, dblist.JobListParams{
+		Conditions: conditionsBuilder.String(),
+		LimitCount: params.LimitCount,
+		NamedArgs:  namedArgs,
+		OrderBy:    orderBy,
+		Priorities: params.Priorities,
+		State:      dbsqlc.JobState(params.State),
 	})
 	if err != nil {
 		return nil, err

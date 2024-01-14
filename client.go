@@ -1108,7 +1108,7 @@ func insertParamsFromArgsAndOptions(args JobArgs, insertOpts *InsertOpts) (*dbad
 	return insertParams, nil
 }
 
-var errInsertNoDriverDBPool = errors.New("driver must have non-nil database pool to use Insert and InsertMany (try InsertTx or InsertManyTx instead")
+var errNoDriverDBPool = errors.New("driver must have non-nil database pool to use non-transactional methods like Insert and InsertMany (try InsertTx or InsertManyTx instead")
 
 // Insert inserts a new job with the provided args. Job opts can be used to
 // override any defaults that may have been provided by an implementation of
@@ -1122,7 +1122,7 @@ var errInsertNoDriverDBPool = errors.New("driver must have non-nil database pool
 //	}
 func (c *Client[TTx]) Insert(ctx context.Context, args JobArgs, opts *InsertOpts) (*rivertype.JobRow, error) {
 	if c.driver.GetDBPool() == nil {
-		return nil, errInsertNoDriverDBPool
+		return nil, errNoDriverDBPool
 	}
 
 	if err := c.validateJobArgs(args); err != nil {
@@ -1201,7 +1201,7 @@ type InsertManyParams struct {
 //	}
 func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams) (int64, error) {
 	if c.driver.GetDBPool() == nil {
-		return 0, errInsertNoDriverDBPool
+		return 0, errNoDriverDBPool
 	}
 
 	insertParams, err := c.insertManyParams(params)
@@ -1301,4 +1301,58 @@ func validateQueueName(queueName string) error {
 		return fmt.Errorf("queue name is invalid, see documentation: %q", queueName)
 	}
 	return nil
+}
+
+// JobList returns a paginated list of jobs matching the provided filters. The
+// provided context is used for the underlying Postgres query and can be used to
+// cancel the operation or apply a timeout.
+//
+//	params := river.NewJobListParams().WithLimit(10).State(river.JobStateCompleted)
+//	jobRows, err := client.JobList(ctx, params)
+//	if err != nil {
+//		// handle error
+//	}
+func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) ([]*rivertype.JobRow, error) {
+	if c.driver.GetDBPool() == nil {
+		return nil, errNoDriverDBPool
+	}
+
+	if params == nil {
+		params = NewJobListParams()
+	}
+	dbParams, err := params.toDBParams()
+	if err != nil {
+		return nil, err
+	}
+
+	internalJobs, err := c.adapter.JobList(ctx, *dbParams)
+	if err != nil {
+		return nil, err
+	}
+	return dbsqlc.JobRowsFromInternal(internalJobs), nil
+}
+
+// JobListTx returns a paginated list of jobs matching the provided filters. The
+// provided context is used for the underlying Postgres query and can be used to
+// cancel the operation or apply a timeout.
+//
+//	params := river.NewJobListParams().WithLimit(10).State(river.JobStateCompleted)
+//	jobRows, err := client.JobListTx(ctx, tx, params)
+//	if err != nil {
+//		// handle error
+//	}
+func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListParams) ([]*rivertype.JobRow, error) {
+	if params == nil {
+		params = NewJobListParams()
+	}
+	dbParams, err := params.toDBParams()
+	if err != nil {
+		return nil, err
+	}
+
+	internalJobs, err := c.adapter.JobListTx(ctx, c.driver.UnwrapTx(tx), *dbParams)
+	if err != nil {
+		return nil, err
+	}
+	return dbsqlc.JobRowsFromInternal(internalJobs), nil
 }
