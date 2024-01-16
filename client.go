@@ -940,10 +940,10 @@ func (c *Client[TTx]) runProducers(fetchNewWorkCtx, workCtx context.Context) {
 	}
 }
 
-// Cancel cancels the job with the given ID. If possible, the job is cancelled
-// immediately and will not be retried. The provided context is used for the
-// underlying Postgres update and can be used to cancel the operation or apply a
-// timeout.
+// JobCancel cancels the job with the given ID. If possible, the job is
+// cancelled immediately and will not be retried. The provided context is used
+// for the underlying Postgres update and can be used to cancel the operation or
+// apply a timeout.
 //
 // If the job is still in the queue (available, scheduled, or retryable), it is
 // immediately marked as cancelled and will not be retried.
@@ -976,7 +976,7 @@ func (c *Client[TTx]) runProducers(fetchNewWorkCtx, workCtx context.Context) {
 //
 // Returns the up-to-date JobRow for the specified jobID if it exists. Returns
 // ErrNotFound if the job doesn't exist.
-func (c *Client[TTx]) Cancel(ctx context.Context, jobID int64) (*rivertype.JobRow, error) {
+func (c *Client[TTx]) JobCancel(ctx context.Context, jobID int64) (*rivertype.JobRow, error) {
 	job, err := c.adapter.JobCancel(ctx, jobID)
 	if err != nil {
 		if errors.Is(err, riverdriver.ErrNoRows) {
@@ -988,10 +988,11 @@ func (c *Client[TTx]) Cancel(ctx context.Context, jobID int64) (*rivertype.JobRo
 	return dbsqlc.JobRowFromInternal(job), nil
 }
 
-// CancelTx cancels the job with the given ID within the specified transaction.
-// This variant lets a caller cancel a job atomically alongside other database
-// changes. An cancelled job doesn't take effect until the transaction commits,
-// and if the transaction rolls back, so too is the cancelled job.
+// JobCancelTx cancels the job with the given ID within the specified
+// transaction. This variant lets a caller cancel a job atomically alongside
+// other database changes. An cancelled job doesn't take effect until the
+// transaction commits, and if the transaction rolls back, so too is the
+// cancelled job.
 //
 // If possible, the job is cancelled immediately and will not be retried. The
 // provided context is used for the underlying Postgres update and can be used
@@ -1028,7 +1029,7 @@ func (c *Client[TTx]) Cancel(ctx context.Context, jobID int64) (*rivertype.JobRo
 //
 // Returns the up-to-date JobRow for the specified jobID if it exists. Returns
 // ErrNotFound if the job doesn't exist.
-func (c *Client[TTx]) CancelTx(ctx context.Context, tx TTx, jobID int64) (*rivertype.JobRow, error) {
+func (c *Client[TTx]) JobCancelTx(ctx context.Context, tx TTx, jobID int64) (*rivertype.JobRow, error) {
 	job, err := c.adapter.JobCancelTx(ctx, c.driver.UnwrapTx(tx), jobID)
 	if errors.Is(err, riverdriver.ErrNoRows) {
 		return nil, ErrNotFound
