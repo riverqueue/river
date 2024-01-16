@@ -877,9 +877,22 @@ func Test_Client_Insert(t *testing.T) {
 		require.Equal(t, 17, jobRow.MaxAttempts)
 		require.Equal(t, (&noOpArgs{}).Kind(), jobRow.Kind)
 		require.JSONEq(t, `{"foo": "bar"}`, string(jobRow.Metadata))
+		require.WithinDuration(t, time.Now(), jobRow.ScheduledAt, 2*time.Second)
 		require.Equal(t, 3, jobRow.Priority)
 		require.Equal(t, "custom", jobRow.Queue)
 		require.Equal(t, []string{"custom"}, jobRow.Tags)
+	})
+
+	t.Run("WithInsertOptsScheduledAtZeroTime", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		jobRow, err := client.Insert(ctx, &noOpArgs{}, &InsertOpts{
+			ScheduledAt: time.Time{},
+		})
+		require.NoError(t, err)
+		require.WithinDuration(t, time.Now(), jobRow.ScheduledAt, 2*time.Second)
 	})
 
 	t.Run("ErrorsOnDriverWithoutPool", func(t *testing.T) {
@@ -1057,6 +1070,24 @@ func Test_Client_InsertMany(t *testing.T) {
 		jobs, err := bundle.queries.JobGetByKind(ctx, client.driver.GetDBPool(), (noOpArgs{}).Kind())
 		require.NoError(t, err)
 		require.Len(t, jobs, 2, "Expected to find exactly two jobs of kind: "+(noOpArgs{}).Kind()) //nolint:goconst
+	})
+
+	t.Run("WithInsertOptsScheduledAtZeroTime", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		count, err := client.InsertMany(ctx, []InsertManyParams{
+			{Args: &noOpArgs{}, InsertOpts: &InsertOpts{ScheduledAt: time.Time{}}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, int64(1), count)
+
+		jobs, err := bundle.queries.JobGetByKind(ctx, client.driver.GetDBPool(), (noOpArgs{}).Kind())
+		require.NoError(t, err)
+		require.Len(t, jobs, 1, "Expected to find exactly one job of kind: "+(noOpArgs{}).Kind())
+		jobRow := jobs[0]
+		require.WithinDuration(t, time.Now(), jobRow.ScheduledAt, 2*time.Second)
 	})
 
 	t.Run("ErrorsOnDriverWithoutPool", func(t *testing.T) {

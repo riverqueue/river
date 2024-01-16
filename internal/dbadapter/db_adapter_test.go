@@ -666,6 +666,12 @@ func Test_StandardAdapter_JobInsert(t *testing.T) {
 func Test_Adapter_JobInsertMany(t *testing.T) {
 	t.Parallel()
 
+	// This test needs to use a time from before the transaction begins, otherwise
+	// the newly-scheduled jobs won't yet show as available because their
+	// scheduled_at (which gets a default value from time.Now() in code) will be
+	// after the start of the transaction.
+	now := time.Now().UTC().Add(-1 * time.Minute)
+
 	ctx := context.Background()
 	tx := riverinternaltest.TestTx(ctx, t)
 
@@ -673,6 +679,7 @@ func Test_Adapter_JobInsertMany(t *testing.T) {
 	defer cancel()
 
 	adapter := NewStandardAdapter(riverinternaltest.BaseServiceArchetype(t), testAdapterConfig(tx))
+	adapter.TimeNowUTC = func() time.Time { return now }
 
 	insertParams := make([]*JobInsertParams, 10)
 	for i := 0; i < len(insertParams); i++ {
