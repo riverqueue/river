@@ -2626,6 +2626,16 @@ func Test_Client_Start_Error(t *testing.T) {
 	})
 }
 
+func Test_NewClient_BaseServiceName(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	client := newTestClient(ctx, t, newTestConfig(t, nil))
+	// Ensure we get the clean name "Client" instead of the fully qualified name
+	// with generic type param:
+	require.Equal(t, "Client", client.baseService.Name)
+}
+
 func Test_NewClient_ClientIDWrittenToJobAttemptedByWhenFetched(t *testing.T) {
 	t.Parallel()
 	require := require.New(t)

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"reflect"
 	"regexp"
 	"sync"
 	"time"
@@ -438,7 +437,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	}
 
 	baseservice.Init(archetype, &client.baseService)
-	client.baseService.Name = reflect.TypeOf(Client[TTx]{}).Name() // Have to correct the name because base service isn't embedded like it usually is
+	client.baseService.Name = "Client" // Have to correct the name because base service isn't embedded like it usually is
 
 	// There are a number of internal components that are only needed/desired if
 	// we're actually going to be working jobs (as opposed to just enqueueing
