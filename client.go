@@ -912,6 +912,8 @@ func (c *Client[TTx]) distributeJob(job *rivertype.JobRow, stats *JobStatistics)
 		event = &Event{Kind: EventKindJobSnoozed, Job: job, JobStats: stats}
 	case rivertype.JobStateAvailable, rivertype.JobStateDiscarded, rivertype.JobStateRetryable, rivertype.JobStateRunning:
 		event = &Event{Kind: EventKindJobFailed, Job: job, JobStats: stats}
+	case rivertype.JobStatePending:
+		panic("completion subscriber unexpectedly received job in pending state, river bug")
 	default:
 		// linter exhaustive rule prevents this from being reached
 		panic("unreachable state to distribute, river bug")
@@ -1256,6 +1258,10 @@ func insertParamsFromArgsAndOptions(args JobArgs, insertOpts *InsertOpts) (*rive
 	if !insertOpts.ScheduledAt.IsZero() {
 		insertParams.ScheduledAt = &insertOpts.ScheduledAt
 		insertParams.State = rivertype.JobStateScheduled
+	}
+
+	if insertOpts.Pending {
+		insertParams.State = rivertype.JobStatePending
 	}
 
 	return insertParams, (*dbunique.UniqueOpts)(&uniqueOpts), nil

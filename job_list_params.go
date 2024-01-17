@@ -395,7 +395,7 @@ func (p *JobListParams) States(states ...rivertype.JobState) *JobListParams {
 func jobListTimeFieldForState(state rivertype.JobState) string {
 	// Don't include a `default` so `exhaustive` lint can detect omissions.
 	switch state {
-	case rivertype.JobStateAvailable, rivertype.JobStateRetryable, rivertype.JobStateScheduled:
+	case rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRetryable, rivertype.JobStateScheduled:
 		return "scheduled_at"
 	case rivertype.JobStateRunning:
 		return "attempted_at"
@@ -409,7 +409,7 @@ func jobListTimeFieldForState(state rivertype.JobState) string {
 func jobListTimeValue(job *rivertype.JobRow) time.Time {
 	// Don't include a `default` so `exhaustive` lint can detect omissions.
 	switch job.State {
-	case rivertype.JobStateAvailable, rivertype.JobStateRetryable, rivertype.JobStateScheduled:
+	case rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRetryable, rivertype.JobStateScheduled:
 		return job.ScheduledAt
 
 	case rivertype.JobStateRunning:

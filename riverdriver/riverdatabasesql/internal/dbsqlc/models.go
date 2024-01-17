@@ -18,6 +18,7 @@ const (
 	RiverJobStateCancelled JobState = "cancelled"
 	RiverJobStateCompleted JobState = "completed"
 	RiverJobStateDiscarded JobState = "discarded"
+	RiverJobStatePending   JobState = "pending"
 	RiverJobStateRetryable JobState = "retryable"
 	RiverJobStateRunning   JobState = "running"
 	RiverJobStateScheduled JobState = "scheduled"

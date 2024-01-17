@@ -143,6 +143,11 @@ const (
 	// amount of time (default 7 days).
 	JobStateDiscarded JobState = "discarded"
 
+	// JobStatePending is a state for jobs to be parked while waiting for some
+	// external action before they can be worked. Jobs in pending will never be
+	// worked or deleted unless moved out of this state by the user.
+	JobStatePending JobState = "pending"
+
 	// JobStateRetryable is the state for jobs that have errored, but will be
 	// retried.
 	//
@@ -178,6 +183,7 @@ func JobStates() []JobState {
 		JobStateCancelled,
 		JobStateCompleted,
 		JobStateDiscarded,
+		JobStatePending,
 		JobStateRetryable,
 		JobStateRunning,
 		JobStateScheduled,
