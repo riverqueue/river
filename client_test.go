@@ -326,7 +326,7 @@ func Test_Client(t *testing.T) {
 		t.Parallel()
 
 		cancelRunningJobTestHelper(t, func(ctx context.Context, client *Client[pgx.Tx], jobID int64) (*rivertype.JobRow, error) {
-			return client.Cancel(ctx, jobID)
+			return client.JobCancel(ctx, jobID)
 		})
 	})
 
@@ -339,7 +339,7 @@ func Test_Client(t *testing.T) {
 				err error
 			)
 			txErr := pgx.BeginFunc(ctx, client.driver.GetDBPool(), func(tx pgx.Tx) error {
-				job, err = client.CancelTx(ctx, tx, jobID)
+				job, err = client.JobCancelTx(ctx, tx, jobID)
 				return err
 			})
 			require.NoError(t, txErr)
@@ -370,7 +370,7 @@ func Test_Client(t *testing.T) {
 		require.NoError(t, err)
 
 		// Cancel the job:
-		updatedJob, err := client.Cancel(ctx, insertedJob.ID)
+		updatedJob, err := client.JobCancel(ctx, insertedJob.ID)
 		require.NoError(t, err)
 		require.NotNil(t, updatedJob)
 		require.Equal(t, rivertype.JobStateCancelled, updatedJob.State)
@@ -384,13 +384,13 @@ func Test_Client(t *testing.T) {
 		startClient(ctx, t, client)
 
 		// Cancel an unknown job ID:
-		jobAfter, err := client.Cancel(ctx, 0)
+		jobAfter, err := client.JobCancel(ctx, 0)
 		require.ErrorIs(t, err, ErrNotFound)
 		require.Nil(t, jobAfter)
 
 		// Cancel an unknown job ID, within a transaction:
 		err = pgx.BeginFunc(ctx, client.driver.GetDBPool(), func(tx pgx.Tx) error {
-			jobAfter, err := client.CancelTx(ctx, tx, 0)
+			jobAfter, err := client.JobCancelTx(ctx, tx, 0)
 			require.ErrorIs(t, err, ErrNotFound)
 			require.Nil(t, jobAfter)
 			return nil
@@ -2624,6 +2624,16 @@ func Test_Client_Start_Error(t *testing.T) {
 		require.ErrorAs(t, err, &pgErr)
 		require.Equal(t, pgerrcode.InvalidCatalogName, pgErr.Code)
 	})
+}
+
+func Test_NewClient_BaseServiceName(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	client := newTestClient(ctx, t, newTestConfig(t, nil))
+	// Ensure we get the clean name "Client" instead of the fully qualified name
+	// with generic type param:
+	require.Equal(t, "Client", client.baseService.Name)
 }
 
 func Test_NewClient_ClientIDWrittenToJobAttemptedByWhenFetched(t *testing.T) {
