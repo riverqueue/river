@@ -3,6 +3,7 @@ CREATE TYPE river_job_state AS ENUM(
     'cancelled',
     'completed',
     'discarded',
+    'pending',
     'retryable',
     'running',
     'scheduled'
@@ -10,7 +11,7 @@ CREATE TYPE river_job_state AS ENUM(
 
 CREATE TABLE river_job(
     id bigserial PRIMARY KEY,
-    args jsonb,
+    args jsonb NOT NULL,
     attempt smallint NOT NULL DEFAULT 0,
     attempted_at timestamptz,
     attempted_by text[],

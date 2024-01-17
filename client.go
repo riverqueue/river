@@ -1261,6 +1261,10 @@ func insertParamsFromArgsAndOptions(args JobArgs, insertOpts *InsertOpts) (*rive
 		insertParams.State = rivertype.JobStateScheduled
 	}
 
+	if insertOpts.Pending {
+		insertParams.State = rivertype.JobState(JobStatePending)
+	}
+
 	return insertParams, (*dbunique.UniqueOpts)(&uniqueOpts), nil
 }
 

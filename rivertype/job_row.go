@@ -107,6 +107,7 @@ const (
 	JobStateCancelled JobState = "cancelled"
 	JobStateCompleted JobState = "completed"
 	JobStateDiscarded JobState = "discarded"
+	JobStatePending   JobState = "pending"
 	JobStateRetryable JobState = "retryable"
 	JobStateRunning   JobState = "running"
 	JobStateScheduled JobState = "scheduled"

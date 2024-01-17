@@ -9,6 +9,7 @@ const (
 	JobStateCancelled = rivertype.JobStateCancelled
 	JobStateCompleted = rivertype.JobStateCompleted
 	JobStateDiscarded = rivertype.JobStateDiscarded
+	JobStatePending   = rivertype.JobStatePending
 	JobStateRetryable = rivertype.JobStateRetryable
 	JobStateRunning   = rivertype.JobStateRunning
 	JobStateScheduled = rivertype.JobStateScheduled

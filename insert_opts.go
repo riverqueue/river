@@ -23,6 +23,9 @@ type InsertOpts struct {
 	// field by River.
 	Metadata []byte
 
+	// Pending indicates that the job should be inserted in the `pending` state.
+	Pending bool
+
 	// Priority is the priority of the job, with 1 being the highest priority and
 	// 4 being the lowest. When fetching available jobs to work, the highest
 	// priority jobs will always be fetched before any lower priority jobs are
@@ -138,6 +141,7 @@ var jobStateAll = []rivertype.JobState{ //nolint:gochecknoglobals
 	rivertype.JobStateCancelled,
 	rivertype.JobStateCompleted,
 	rivertype.JobStateDiscarded,
+	rivertype.JobStatePending,
 	rivertype.JobStateRetryable,
 	rivertype.JobStateRunning,
 	rivertype.JobStateScheduled,

@@ -121,13 +121,13 @@ func TestMigrator(t *testing.T) {
 
 		migrator, bundle := setup(t)
 
-		// Run an initial time. Defaults to only running one step when moving in
-		// the down direction.
-		{
+		// Run two initial times to get to the version before river_job is dropped.
+		// Defaults to only running one step when moving in the down direction.
+		for i := 0; i < 2; i++ {
 			res, err := migrator.MigrateTx(ctx, bundle.tx, DirectionDown, &MigrateOpts{})
 			require.NoError(t, err)
 			require.Equal(t, DirectionDown, res.Direction)
-			require.Equal(t, []int{3}, sliceutil.Map(res.Versions, migrateVersionToInt))
+			require.Equal(t, []int{4 - i}, sliceutil.Map(res.Versions, migrateVersionToInt))
 
 			err = dbExecError(ctx, bundle.driver.UnwrapExecutor(bundle.tx), "SELECT * FROM river_job")
 			require.NoError(t, err)
@@ -194,7 +194,7 @@ func TestMigrator(t *testing.T) {
 
 		migrations, err := bundle.driver.UnwrapExecutor(bundle.tx).MigrationGetAll(ctx)
 		require.NoError(t, err)
-		require.Equal(t, seqOneTo(3),
+		require.Equal(t, seqOneTo(4),
 			sliceutil.Map(migrations, driverMigrationToInt))
 	})
 
@@ -206,11 +206,11 @@ func TestMigrator(t *testing.T) {
 
 		res, err := migrator.MigrateTx(ctx, tx, DirectionDown, &MigrateOpts{MaxSteps: 1})
 		require.NoError(t, err)
-		require.Equal(t, []int{3}, sliceutil.Map(res.Versions, migrateVersionToInt))
+		require.Equal(t, []int{4}, sliceutil.Map(res.Versions, migrateVersionToInt))
 
 		migrations, err := migrator.driver.UnwrapExecutor(tx).MigrationGetAll(ctx)
 		require.NoError(t, err)
-		require.Equal(t, seqOneTo(2),
+		require.Equal(t, seqOneTo(3),
 			sliceutil.Map(migrations, driverMigrationToInt))
 	})
 
@@ -222,14 +222,14 @@ func TestMigrator(t *testing.T) {
 		_, err := migrator.MigrateTx(ctx, bundle.tx, DirectionUp, &MigrateOpts{})
 		require.NoError(t, err)
 
-		res, err := migrator.MigrateTx(ctx, bundle.tx, DirectionDown, &MigrateOpts{TargetVersion: 3})
+		res, err := migrator.MigrateTx(ctx, bundle.tx, DirectionDown, &MigrateOpts{TargetVersion: 4})
 		require.NoError(t, err)
-		require.Equal(t, []int{5, 4},
+		require.Equal(t, []int{6, 5},
 			sliceutil.Map(res.Versions, migrateVersionToInt))
 
 		migrations, err := bundle.driver.UnwrapExecutor(bundle.tx).MigrationGetAll(ctx)
 		require.NoError(t, err)
-		require.Equal(t, seqOneTo(3),
+		require.Equal(t, seqOneTo(4),
 			sliceutil.Map(migrations, driverMigrationToInt))
 
 		err = dbExecError(ctx, bundle.driver.UnwrapExecutor(bundle.tx), "SELECT name FROM test_table")
@@ -246,7 +246,7 @@ func TestMigrator(t *testing.T) {
 
 		res, err := migrator.MigrateTx(ctx, bundle.tx, DirectionDown, &MigrateOpts{TargetVersion: -1})
 		require.NoError(t, err)
-		require.Equal(t, seqToOne(5),
+		require.Equal(t, seqToOne(6),
 			sliceutil.Map(res.Versions, migrateVersionToInt))
 
 		err = dbExecError(ctx, bundle.driver.UnwrapExecutor(bundle.tx), "SELECT name FROM river_migrate")
@@ -266,8 +266,8 @@ func TestMigrator(t *testing.T) {
 
 		// migration exists but not one that's applied
 		{
-			_, err := migrator.MigrateTx(ctx, bundle.tx, DirectionDown, &MigrateOpts{TargetVersion: 4})
-			require.EqualError(t, err, "version 4 is not in target list of valid migrations to apply")
+			_, err := migrator.MigrateTx(ctx, bundle.tx, DirectionDown, &MigrateOpts{TargetVersion: 5})
+			require.EqualError(t, err, "version 5 is not in target list of valid migrations to apply")
 		}
 	})
 
@@ -317,7 +317,7 @@ func TestMigrator(t *testing.T) {
 
 		res, err := migrator.MigrateTx(ctx, bundle.tx, DirectionUp, nil)
 		require.NoError(t, err)
-		require.Equal(t, []int{4, 5}, sliceutil.Map(res.Versions, migrateVersionToInt))
+		require.Equal(t, []int{5, 6}, sliceutil.Map(res.Versions, migrateVersionToInt))
 	})
 
 	t.Run("MigrateUpDefault", func(t *testing.T) {
@@ -397,7 +397,7 @@ func TestMigrator(t *testing.T) {
 
 		migrations, err := bundle.driver.UnwrapExecutor(bundle.tx).MigrationGetAll(ctx)
 		require.NoError(t, err)
-		require.Equal(t, seqOneTo(3),
+		require.Equal(t, seqOneTo(4),
 			sliceutil.Map(migrations, driverMigrationToInt))
 	})
 
@@ -422,14 +422,14 @@ func TestMigrator(t *testing.T) {
 
 		migrator, bundle := setup(t)
 
-		res, err := migrator.MigrateTx(ctx, bundle.tx, DirectionUp, &MigrateOpts{TargetVersion: 5})
+		res, err := migrator.MigrateTx(ctx, bundle.tx, DirectionUp, &MigrateOpts{TargetVersion: 6})
 		require.NoError(t, err)
-		require.Equal(t, []int{4, 5},
+		require.Equal(t, []int{5, 6},
 			sliceutil.Map(res.Versions, migrateVersionToInt))
 
 		migrations, err := bundle.driver.UnwrapExecutor(bundle.tx).MigrationGetAll(ctx)
 		require.NoError(t, err)
-		require.Equal(t, seqOneTo(5), sliceutil.Map(migrations, driverMigrationToInt))
+		require.Equal(t, seqOneTo(6), sliceutil.Map(migrations, driverMigrationToInt))
 	})
 
 	t.Run("MigrateUpWithTargetVersionInvalid", func(t *testing.T) {
