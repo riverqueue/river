@@ -8,10 +8,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/util/ptrutil"
+	"weavelab.xyz/river/internal/dbsqlc"
+	"weavelab.xyz/river/internal/rivercommon"
+	"weavelab.xyz/river/internal/riverinternaltest"
+	"weavelab.xyz/river/internal/util/ptrutil"
 )
 
 func TestJobCleaner(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/riverqueue/river/internal/util/randutil"
+	"weavelab.xyz/river/internal/util/randutil"
 )
 
 // Archetype contains the set of base service properties that are immutable, or

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/riverqueue/river/internal/dbadapter"
-	"github.com/riverqueue/river/rivertype"
+	"weavelab.xyz/river/internal/dbadapter"
+	"weavelab.xyz/river/rivertype"
 )
 
 // JobListCursor is used to specify a starting point for a paginated

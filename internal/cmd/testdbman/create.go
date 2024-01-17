@@ -11,8 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 
-	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	"github.com/riverqueue/river/rivermigrate"
+	"weavelab.xyz/river/riverdriver/riverpgxv5"
+	"weavelab.xyz/river/rivermigrate"
 )
 
 func init() { //nolint:gochecknoinits
@@ -80,7 +80,7 @@ runtime.NumCPU() (a choice that comes from pgx's default connection pool size).
 		// when not specified -- either 4 or the number of CPUs, whichever is
 		// greater. If changing this number, also change the similar value in
 		// `riverinternaltest` where it's duplicated.
-		numDBs := max(4, runtime.NumCPU())
+		numDBs := valutil.Max(4, runtime.NumCPU())
 
 		for i := 0; i < numDBs; i++ {
 			mustCreateDBAndLoadSchema(ctx, fmt.Sprintf("river_testdb_%d", i))

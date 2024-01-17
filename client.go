@@ -15,21 +15,21 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/componentstatus"
-	"github.com/riverqueue/river/internal/dbadapter"
-	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/jobcompleter"
-	"github.com/riverqueue/river/internal/jobstats"
-	"github.com/riverqueue/river/internal/leadership"
-	"github.com/riverqueue/river/internal/maintenance"
-	"github.com/riverqueue/river/internal/notifier"
-	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/util/sliceutil"
-	"github.com/riverqueue/river/internal/util/valutil"
-	"github.com/riverqueue/river/internal/workunit"
-	"github.com/riverqueue/river/riverdriver"
-	"github.com/riverqueue/river/rivertype"
+	"weavelab.xyz/river/internal/baseservice"
+	"weavelab.xyz/river/internal/componentstatus"
+	"weavelab.xyz/river/internal/dbadapter"
+	"weavelab.xyz/river/internal/dbsqlc"
+	"weavelab.xyz/river/internal/jobcompleter"
+	"weavelab.xyz/river/internal/jobstats"
+	"weavelab.xyz/river/internal/leadership"
+	"weavelab.xyz/river/internal/maintenance"
+	"weavelab.xyz/river/internal/notifier"
+	"weavelab.xyz/river/internal/rivercommon"
+	"weavelab.xyz/river/internal/util/sliceutil"
+	"weavelab.xyz/river/internal/util/valutil"
+	"weavelab.xyz/river/internal/workunit"
+	"weavelab.xyz/river/riverdriver"
+	"weavelab.xyz/river/rivertype"
 )
 
 const (
@@ -332,8 +332,8 @@ var (
 // but it can be omitted because it'll generally always be inferred from the
 // driver. For example:
 //
-//	import "github.com/riverqueue/river"
-//	import "github.com/riverqueue/river/riverdriver/riverpgxv5"
+//	import "weavelab.xyz/river"
+//	import "weavelab.xyz/river/riverdriver/riverpgxv5"
 //
 //	...
 //

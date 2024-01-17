@@ -9,11 +9,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/util/slogutil"
-	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"weavelab.xyz/river"
+	"weavelab.xyz/river/internal/rivercommon"
+	"weavelab.xyz/river/internal/riverinternaltest"
+	"weavelab.xyz/river/internal/util/slogutil"
+	"weavelab.xyz/river/riverdriver/riverpgxv5"
 )
 
 type SubscriptionArgs struct {

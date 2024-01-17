@@ -16,12 +16,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/util/dbutil"
-	"github.com/riverqueue/river/internal/util/maputil"
-	"github.com/riverqueue/river/internal/util/sliceutil"
-	"github.com/riverqueue/river/riverdriver"
+	"weavelab.xyz/river/internal/baseservice"
+	"weavelab.xyz/river/internal/dbsqlc"
+	"weavelab.xyz/river/internal/util/dbutil"
+	"weavelab.xyz/river/internal/util/maputil"
+	"weavelab.xyz/river/internal/util/sliceutil"
+	"weavelab.xyz/river/riverdriver"
 )
 
 // A bundled migration containing a version (1, 2, 3), and SQL for up and down
@@ -70,8 +70,8 @@ type Migrator[TTx any] struct {
 // but it can be omitted because it'll generally always be inferred from the
 // driver. For example:
 //
-//	import "github.com/riverqueue/river/riverdriver/riverpgxv5"
-//	import "github.com/riverqueue/rivermigrate"
+//	import "weavelab.xyz/river/riverdriver/riverpgxv5"
+//	import "weavelab.xyz/rivermigrate"
 //
 //	...
 //
@@ -304,7 +304,7 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Ex
 	case maxSteps < 0:
 		sortedTargetMigrations = []*migrationBundle{}
 	case maxSteps > 0:
-		sortedTargetMigrations = sortedTargetMigrations[0:min(maxSteps, len(sortedTargetMigrations))]
+		sortedTargetMigrations = sortedTargetMigrations[0:valutil.Min(maxSteps, len(sortedTargetMigrations))]
 	}
 
 	if opts.TargetVersion > 0 {

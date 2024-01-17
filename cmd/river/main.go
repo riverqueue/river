@@ -11,8 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 
-	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	"github.com/riverqueue/river/rivermigrate"
+	"weavelab.xyz/river/riverdriver/riverpgxv5"
+	"weavelab.xyz/river/rivermigrate"
 )
 
 func main() {

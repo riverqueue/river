@@ -2,3 +2,5 @@
 /internal/cmd/riverbench/riverbench
 /internal/cmd/producersample/producersample
 /internal/cmd/testdbman/testdbman
+
+.idea

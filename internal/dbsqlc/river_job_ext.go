@@ -1,14 +1,15 @@
 package dbsqlc
 
 import (
-	"github.com/riverqueue/river/internal/util/sliceutil"
-	"github.com/riverqueue/river/rivertype"
+	"weavelab.xyz/river/internal/util/sliceutil"
+	"weavelab.xyz/river/internal/util/valutil"
+	"weavelab.xyz/river/rivertype"
 )
 
 func JobRowFromInternal(internal *RiverJob) *rivertype.JobRow {
 	return &rivertype.JobRow{
 		ID:          internal.ID,
-		Attempt:     max(int(internal.Attempt), 0),
+		Attempt:     valutil.Max(int(internal.Attempt), 0),
 		AttemptedAt: internal.AttemptedAt,
 		AttemptedBy: internal.AttemptedBy,
 		CreatedAt:   internal.CreatedAt,
@@ -16,9 +17,9 @@ func JobRowFromInternal(internal *RiverJob) *rivertype.JobRow {
 		Errors:      sliceutil.Map(internal.Errors, func(e AttemptError) rivertype.AttemptError { return AttemptErrorFromInternal(&e) }),
 		FinalizedAt: internal.FinalizedAt,
 		Kind:        internal.Kind,
-		MaxAttempts: max(int(internal.MaxAttempts), 0),
+		MaxAttempts: valutil.Max(int(internal.MaxAttempts), 0),
 		Metadata:    internal.Metadata,
-		Priority:    max(int(internal.Priority), 0),
+		Priority:    valutil.Max(int(internal.Priority), 0),
 		Queue:       internal.Queue,
 		ScheduledAt: internal.ScheduledAt.UTC(), // TODO(brandur): Very weird this is the only place a UTC conversion happens.
 		State:       rivertype.JobState(internal.State),

@@ -10,20 +10,20 @@ import (
 	"golang.org/x/mod/module"
 )
 
-const sampleGoMod = `module github.com/riverqueue/river
+const sampleGoMod = `module weavelab.xyz/river
 
-go 1.21.4
+go 1.20
 
-replace github.com/riverqueue/river/riverdriver => ./riverdriver
+replace weavelab.xyz/river/riverdriver => ./riverdriver
 
-replace github.com/riverqueue/river/riverdriver/riverpgxv5 => ./riverdriver/riverpgxv5
+replace weavelab.xyz/river/riverdriver/riverpgxv5 => ./riverdriver/riverpgxv5
 
-replace github.com/riverqueue/river/riverdriver/riverdatabasesql => ./riverdriver/riverdatabasesql
+replace weavelab.xyz/river/riverdriver/riverdatabasesql => ./riverdriver/riverdatabasesql
 
 require (
-	github.com/riverqueue/river/riverdriver v0.0.0-00010101000000-000000000000
-	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.0.0-00010101000000-000000000000
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.0.12
+	weavelab.xyz/river/riverdriver v0.0.0-00010101000000-000000000000
+	weavelab.xyz/river/riverdriver/riverdatabasesql v0.0.0-00010101000000-000000000000
+	weavelab.xyz/river/riverdriver/riverpgxv5 v0.0.12
 )`
 
 func TestParseAndUpdateGoModFile(t *testing.T) {
@@ -51,7 +51,7 @@ func TestParseAndUpdateGoModFile(t *testing.T) {
 
 	versions := make([]module.Version, 0, len(modFile.Require))
 	for _, require := range modFile.Require {
-		if require.Indirect || !strings.HasPrefix(require.Mod.Path, "github.com/riverqueue/river") {
+		if require.Indirect || !strings.HasPrefix(require.Mod.Path, "weavelab.xyz/river") {
 			continue
 		}
 
@@ -59,9 +59,9 @@ func TestParseAndUpdateGoModFile(t *testing.T) {
 	}
 
 	require.Equal(t, []module.Version{
-		{Path: "github.com/riverqueue/river/riverdriver", Version: "v0.0.13"},
-		{Path: "github.com/riverqueue/river/riverdriver/riverdatabasesql", Version: "v0.0.13"},
-		{Path: "github.com/riverqueue/river/riverdriver/riverpgxv5", Version: "v0.0.13"},
+		{Path: "weavelab.xyz/river/riverdriver", Version: "v0.0.13"},
+		{Path: "weavelab.xyz/river/riverdriver/riverdatabasesql", Version: "v0.0.13"},
+		{Path: "weavelab.xyz/river/riverdriver/riverpgxv5", Version: "v0.0.13"},
 	}, versions)
 
 	// Running again is allowed and should be idempontent. This time it'll

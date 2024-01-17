@@ -8,15 +8,15 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/maintenance/startstop"
-	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/util/dbutil"
-	"github.com/riverqueue/river/internal/util/timeutil"
-	"github.com/riverqueue/river/internal/util/valutil"
-	"github.com/riverqueue/river/internal/workunit"
-	"github.com/riverqueue/river/rivertype"
+	"weavelab.xyz/river/internal/baseservice"
+	"weavelab.xyz/river/internal/dbsqlc"
+	"weavelab.xyz/river/internal/maintenance/startstop"
+	"weavelab.xyz/river/internal/rivercommon"
+	"weavelab.xyz/river/internal/util/dbutil"
+	"weavelab.xyz/river/internal/util/timeutil"
+	"weavelab.xyz/river/internal/util/valutil"
+	"weavelab.xyz/river/internal/workunit"
+	"weavelab.xyz/river/rivertype"
 )
 
 const (
@@ -186,7 +186,7 @@ func (s *Rescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error) {
 
 			rescueManyParams.Error[i], err = json.Marshal(rivertype.AttemptError{
 				At:      now,
-				Attempt: max(int(job.Attempt), 0),
+				Attempt: valutil.Max(int(job.Attempt), 0),
 				Error:   "Stuck job rescued by Rescuer",
 				Trace:   "TODO",
 			})
@@ -272,5 +272,5 @@ func (s *Rescuer) makeRetryDecision(ctx context.Context, internalJob *dbsqlc.Riv
 	if nextRetry.IsZero() {
 		nextRetry = s.Config.ClientRetryPolicy.NextRetry(job)
 	}
-	return job.Attempt < max(int(internalJob.MaxAttempts), 0), nextRetry
+	return job.Attempt < valutil.Max(int(internalJob.MaxAttempts), 0), nextRetry
 }

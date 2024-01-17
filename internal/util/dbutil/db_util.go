@@ -6,8 +6,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/riverdriver"
+	"weavelab.xyz/river/internal/dbsqlc"
+	"weavelab.xyz/river/riverdriver"
 )
 
 // Executor is an interface for a type that can begin a transaction and also

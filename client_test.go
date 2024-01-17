@@ -19,17 +19,17 @@ import (
 	"github.com/robfig/cron/v3"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/componentstatus"
-	"github.com/riverqueue/river/internal/dbadapter"
-	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/maintenance"
-	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/util/ptrutil"
-	"github.com/riverqueue/river/internal/util/sliceutil"
-	"github.com/riverqueue/river/internal/util/valutil"
-	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	"github.com/riverqueue/river/rivertype"
+	"weavelab.xyz/river/internal/componentstatus"
+	"weavelab.xyz/river/internal/dbadapter"
+	"weavelab.xyz/river/internal/dbsqlc"
+	"weavelab.xyz/river/internal/maintenance"
+	"weavelab.xyz/river/internal/rivercommon"
+	"weavelab.xyz/river/internal/riverinternaltest"
+	"weavelab.xyz/river/internal/util/ptrutil"
+	"weavelab.xyz/river/internal/util/sliceutil"
+	"weavelab.xyz/river/internal/util/valutil"
+	"weavelab.xyz/river/riverdriver/riverpgxv5"
+	"weavelab.xyz/river/rivertype"
 )
 
 func waitForClientHealthy(ctx context.Context, t *testing.T, statusUpdateCh <-chan componentstatus.ClientSnapshot) {

@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/riverqueue/river/riverdriver"
-	"github.com/riverqueue/river/riverdriver/riverpgxv5/internal/dbsqlc"
+	"weavelab.xyz/river/riverdriver"
+	"weavelab.xyz/river/riverdriver/riverpgxv5/internal/dbsqlc"
 )
 
 // Driver is an implementation of riverdriver.Driver for Pgx v5.

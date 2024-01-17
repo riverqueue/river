@@ -8,8 +8,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/util/ptrutil"
-	"github.com/riverqueue/river/rivertype"
+	"weavelab.xyz/river/internal/util/ptrutil"
+	"weavelab.xyz/river/rivertype"
 )
 
 func Test_JobListCursor_JobListCursorFromJob(t *testing.T) {

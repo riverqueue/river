@@ -13,8 +13,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/riverqueue/river/riverdriver"
-	"github.com/riverqueue/river/riverdriver/riverdatabasesql/internal/dbsqlc"
+	"weavelab.xyz/river/riverdriver"
+	"weavelab.xyz/river/riverdriver/riverdatabasesql/internal/dbsqlc"
 )
 
 // Driver is an implementation of riverdriver.Driver for database/sql.

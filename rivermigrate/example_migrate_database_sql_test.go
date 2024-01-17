@@ -8,9 +8,9 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
-	"github.com/riverqueue/river/rivermigrate"
+	"weavelab.xyz/river/internal/riverinternaltest"
+	"weavelab.xyz/river/riverdriver/riverdatabasesql"
+	"weavelab.xyz/river/rivermigrate"
 )
 
 // Example_migrateDatabaseSQL demonstrates the use of River's Go migration API

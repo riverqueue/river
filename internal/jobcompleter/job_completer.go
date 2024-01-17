@@ -8,11 +8,11 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/dbadapter"
-	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/jobstats"
-	"github.com/riverqueue/river/internal/util/timeutil"
+	"weavelab.xyz/river/internal/baseservice"
+	"weavelab.xyz/river/internal/dbadapter"
+	"weavelab.xyz/river/internal/dbsqlc"
+	"weavelab.xyz/river/internal/jobstats"
+	"weavelab.xyz/river/internal/util/timeutil"
 )
 
 type JobCompleter interface {

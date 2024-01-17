@@ -43,9 +43,9 @@ linters-settings:
         files: ["!$test"]
         deny:
           - desc: "Don't use `dbadaptertest` package outside of test environments."
-            pkg: "github.com/riverqueue/river/internal/dbadaptertest"
+            pkg: "weavelab.xyz/river/internal/dbadaptertest"
           - desc: "Don't use `riverinternaltest` package outside of test environments."
-            pkg: "github.com/riverqueue/river/internal/riverinternaltest"
+            pkg: "weavelab.xyz/river/internal/riverinternaltest"
 
   forbidigo:
     forbid:
@@ -62,7 +62,7 @@ linters-settings:
     sections:
       - Standard
       - Default
-      - Prefix(github.com/riverqueue)
+      - Prefix(weavelab.xyz)
 
   gomoddirectives:
     replace-local: true

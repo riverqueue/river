@@ -11,17 +11,17 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/dblist"
-	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/notifier"
-	"github.com/riverqueue/river/internal/util/dbutil"
-	"github.com/riverqueue/river/internal/util/hashutil"
-	"github.com/riverqueue/river/internal/util/ptrutil"
-	"github.com/riverqueue/river/internal/util/sliceutil"
-	"github.com/riverqueue/river/internal/util/valutil"
-	"github.com/riverqueue/river/riverdriver"
-	"github.com/riverqueue/river/rivertype"
+	"weavelab.xyz/river/internal/baseservice"
+	"weavelab.xyz/river/internal/dblist"
+	"weavelab.xyz/river/internal/dbsqlc"
+	"weavelab.xyz/river/internal/notifier"
+	"weavelab.xyz/river/internal/util/dbutil"
+	"weavelab.xyz/river/internal/util/hashutil"
+	"weavelab.xyz/river/internal/util/ptrutil"
+	"weavelab.xyz/river/internal/util/sliceutil"
+	"weavelab.xyz/river/internal/util/valutil"
+	"weavelab.xyz/river/riverdriver"
+	"weavelab.xyz/river/rivertype"
 )
 
 // When a job has specified unique options, but has not set the ByState
@@ -321,9 +321,9 @@ func (a *StandardAdapter) JobInsertTx(ctx context.Context, tx pgx.Tx, params *Jo
 		Args:        params.EncodedArgs,
 		CreatedAt:   ptrutil.Ptr(a.TimeNowUTC()),
 		Kind:        params.Kind,
-		MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)),
+		MaxAttempts: int16(valutil.Min(params.MaxAttempts, math.MaxInt16)),
 		Metadata:    params.Metadata,
-		Priority:    int16(min(params.Priority, math.MaxInt16)),
+		Priority:    int16(valutil.Min(params.Priority, math.MaxInt16)),
 		Queue:       params.Queue,
 		ScheduledAt: scheduledAt,
 		State:       params.State,
@@ -370,9 +370,9 @@ func (a *StandardAdapter) JobInsertManyTx(ctx context.Context, tx pgx.Tx, params
 		insertJobsParams[i] = dbsqlc.JobInsertManyParams{
 			Args:        params.EncodedArgs,
 			Kind:        params.Kind,
-			MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)),
+			MaxAttempts: int16(valutil.Min(params.MaxAttempts, math.MaxInt16)),
 			Metadata:    metadata,
-			Priority:    int16(min(params.Priority, math.MaxInt16)),
+			Priority:    int16(valutil.Min(params.Priority, math.MaxInt16)),
 			Queue:       params.Queue,
 			State:       params.State,
 			ScheduledAt: scheduledAt,

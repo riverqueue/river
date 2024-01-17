@@ -9,7 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/riverqueue/river/internal/testdb"
+	"weavelab.xyz/river/internal/testdb"
 )
 
 func getTestDatabaseURL() string {

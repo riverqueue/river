@@ -8,11 +8,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/dbadapter"
-	"github.com/riverqueue/river/internal/dbadaptertest"
-	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/jobstats"
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"weavelab.xyz/river/internal/dbadapter"
+	"weavelab.xyz/river/internal/dbadaptertest"
+	"weavelab.xyz/river/internal/dbsqlc"
+	"weavelab.xyz/river/internal/jobstats"
+	"weavelab.xyz/river/internal/riverinternaltest"
 )
 
 func TestInlineJobCompleter_Complete(t *testing.T) {

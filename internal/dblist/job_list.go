@@ -8,7 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/riverqueue/river/internal/dbsqlc"
+	"weavelab.xyz/river/internal/dbsqlc"
 )
 
 const jobList = `-- name: JobList :many

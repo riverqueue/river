@@ -7,8 +7,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/riverqueue/river/internal/dbadapter"
-	"github.com/riverqueue/river/internal/dbsqlc"
+	"weavelab.xyz/river/internal/dbadapter"
+	"weavelab.xyz/river/internal/dbsqlc"
 )
 
 // TestAdapter is an Adapter that allows any of its methods to be overridden,

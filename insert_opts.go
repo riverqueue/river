@@ -6,7 +6,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/riverqueue/river/rivertype"
+	"weavelab.xyz/river/rivertype"
 )
 
 // InsertOpts are optional settings for a new job which can be provided at job

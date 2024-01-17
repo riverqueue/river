@@ -20,11 +20,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
-	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/riverinternaltest/slogtest" //nolint:depguard
-	"github.com/riverqueue/river/internal/testdb"
-	"github.com/riverqueue/river/internal/util/valutil"
+	"weavelab.xyz/river/internal/baseservice"
+	"weavelab.xyz/river/internal/rivercommon"
+	"weavelab.xyz/river/internal/riverinternaltest/slogtest" //nolint:depguard
+	"weavelab.xyz/river/internal/testdb"
+	"weavelab.xyz/river/internal/util/valutil"
 )
 
 // SchedulerShortInterval is an artificially short interval for the scheduler
@@ -46,7 +46,7 @@ var (
 	// rely on implicit knowledge of pgxpool implementation details that could
 	// change in the future. If changing this value, also change the number of
 	// databases to create in `testdbman`.
-	dbPoolMaxConns = int32(max(4, runtime.NumCPU())) //nolint:gochecknoglobals
+	dbPoolMaxConns = int32(valutil.Max(4, runtime.NumCPU())) //nolint:gochecknoglobals
 )
 
 // BaseServiceArchetype returns a new base service suitable for use in tests.

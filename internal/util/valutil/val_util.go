@@ -23,3 +23,27 @@ func FirstNonZero[T constraints.Integer | ~string](values ...T) T {
 	}
 	return zero
 }
+
+func Min(vars ...int) int {
+	min := vars[0]
+
+	for _, i := range vars {
+		if min > i {
+			min = i
+		}
+	}
+
+	return min
+}
+
+func Max(vars ...int) int {
+	max := vars[0]
+
+	for _, i := range vars {
+		if max < i {
+			max = i
+		}
+	}
+
+	return max
+}

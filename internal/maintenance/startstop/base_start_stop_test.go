@@ -7,8 +7,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"weavelab.xyz/river/internal/baseservice"
+	"weavelab.xyz/river/internal/riverinternaltest"
 )
 
 type testService struct {

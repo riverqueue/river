@@ -9,12 +9,12 @@ import (
 	"github.com/robfig/cron/v3"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/dbadapter"
-	"github.com/riverqueue/river/internal/maintenance/startstop"
-	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/riverinternaltest/sharedtx"
+	"weavelab.xyz/river/internal/baseservice"
+	"weavelab.xyz/river/internal/dbadapter"
+	"weavelab.xyz/river/internal/maintenance/startstop"
+	"weavelab.xyz/river/internal/rivercommon"
+	"weavelab.xyz/river/internal/riverinternaltest"
+	"weavelab.xyz/river/internal/riverinternaltest/sharedtx"
 )
 
 type testService struct {

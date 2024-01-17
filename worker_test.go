@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"weavelab.xyz/river/internal/riverinternaltest"
 )
 
 func TestWork(t *testing.T) {

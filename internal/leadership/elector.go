@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/riverqueue/river/internal/dbadapter"
-	"github.com/riverqueue/river/internal/notifier"
+	"weavelab.xyz/river/internal/dbadapter"
+	"weavelab.xyz/river/internal/notifier"
 )
 
 type pgNotification struct {

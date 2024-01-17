@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/riverqueue/river/rivertype"
+	"weavelab.xyz/river/rivertype"
 )
 
 // WorkUnit provides an interface to a struct that wraps a job to be done

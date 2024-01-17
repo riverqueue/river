@@ -9,12 +9,12 @@ import (
 	"runtime/debug"
 	"time"
 
-	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/dbadapter"
-	"github.com/riverqueue/river/internal/jobcompleter"
-	"github.com/riverqueue/river/internal/jobstats"
-	"github.com/riverqueue/river/internal/workunit"
-	"github.com/riverqueue/river/rivertype"
+	"weavelab.xyz/river/internal/baseservice"
+	"weavelab.xyz/river/internal/dbadapter"
+	"weavelab.xyz/river/internal/jobcompleter"
+	"weavelab.xyz/river/internal/jobstats"
+	"weavelab.xyz/river/internal/workunit"
+	"weavelab.xyz/river/rivertype"
 )
 
 // UnknownJobKindError is returned when a Client fetches and attempts to

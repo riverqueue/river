@@ -10,13 +10,13 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/util/ptrutil"
-	"github.com/riverqueue/river/internal/util/timeutil"
-	"github.com/riverqueue/river/internal/workunit"
-	"github.com/riverqueue/river/rivertype"
+	"weavelab.xyz/river/internal/dbsqlc"
+	"weavelab.xyz/river/internal/rivercommon"
+	"weavelab.xyz/river/internal/riverinternaltest"
+	"weavelab.xyz/river/internal/util/ptrutil"
+	"weavelab.xyz/river/internal/util/timeutil"
+	"weavelab.xyz/river/internal/workunit"
+	"weavelab.xyz/river/rivertype"
 )
 
 // callbackWorkUnitFactory wraps a Worker to implement workUnitFactory.

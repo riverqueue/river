@@ -1,13 +1,13 @@
-module github.com/riverqueue/river/riverdriver/riverpgxv5
+module weavelab.xyz/river/riverdriver/riverpgxv5
 
-go 1.21.4
+go 1.20
 
-replace github.com/riverqueue/river/riverdriver => ../
+replace weavelab.xyz/river/riverdriver => ../
 
 require (
 	github.com/jackc/pgx/v5 v5.5.0
-	github.com/riverqueue/river/riverdriver v0.0.15
 	github.com/stretchr/testify v1.8.1
+	weavelab.xyz/river/riverdriver v0.0.15
 )
 
 require (

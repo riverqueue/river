@@ -14,12 +14,12 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/util/dbutil"
-	"github.com/riverqueue/river/internal/util/sliceutil"
-	"github.com/riverqueue/river/riverdriver"
-	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
-	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"weavelab.xyz/river/internal/riverinternaltest"
+	"weavelab.xyz/river/internal/util/dbutil"
+	"weavelab.xyz/river/internal/util/sliceutil"
+	"weavelab.xyz/river/riverdriver"
+	"weavelab.xyz/river/riverdriver/riverdatabasesql"
+	"weavelab.xyz/river/riverdriver/riverpgxv5"
 )
 
 //nolint:gochecknoglobals

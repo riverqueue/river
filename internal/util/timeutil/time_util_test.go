@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"weavelab.xyz/river/internal/riverinternaltest"
 )
 
 func TestSecondsAsDuration(t *testing.T) {

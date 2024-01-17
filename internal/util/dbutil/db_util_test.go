@@ -7,9 +7,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/riverdriver"
-	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"weavelab.xyz/river/internal/riverinternaltest"
+	"weavelab.xyz/river/riverdriver"
+	"weavelab.xyz/river/riverdriver/riverpgxv5"
 )
 
 func TestWithTx(t *testing.T) {

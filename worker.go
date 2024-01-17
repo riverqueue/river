@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/riverqueue/river/internal/workunit"
+	"weavelab.xyz/river/internal/workunit"
 )
 
 // Worker is an interface that can perform a job with args of type T. A typical

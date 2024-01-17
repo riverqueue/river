@@ -8,9 +8,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/util/timeutil"
-	"github.com/riverqueue/river/rivertype"
+	"weavelab.xyz/river/internal/rivercommon"
+	"weavelab.xyz/river/internal/util/timeutil"
+	"weavelab.xyz/river/rivertype"
 )
 
 // Just proves that DefaultRetryPolicy implements the RetryPolicy interface.

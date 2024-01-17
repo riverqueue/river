@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/riverqueue/river/internal/workunit"
-	"github.com/riverqueue/river/rivertype"
+	"weavelab.xyz/river/internal/workunit"
+	"weavelab.xyz/river/rivertype"
 )
 
 // workUnitFactoryWrapper wraps a Worker to implement workUnitFactory.

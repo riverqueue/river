@@ -7,9 +7,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	"github.com/riverqueue/river/rivermigrate"
+	"weavelab.xyz/river/internal/riverinternaltest"
+	"weavelab.xyz/river/riverdriver/riverpgxv5"
+	"weavelab.xyz/river/rivermigrate"
 )
 
 // Example_migrate demonstrates the use of River's Go migration API by migrating

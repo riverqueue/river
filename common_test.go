@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/internal/rivercommon"
+	"weavelab.xyz/river"
+	"weavelab.xyz/river/internal/rivercommon"
 )
 
 //

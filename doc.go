@@ -133,11 +133,11 @@ See the [`InsertAndWork` example] for complete code.
 
 See [developing River].
 
-[`Client`]: https://pkg.go.dev/github.com/riverqueue/river#Client
-[`Client.InsertTx`]: https://pkg.go.dev/github.com/riverqueue/river#Client.InsertTx
-[`InsertAndWork` example]: https://pkg.go.dev/github.com/riverqueue/river#example-package-InsertAndWork
-[`JobArgs`]: https://pkg.go.dev/github.com/riverqueue/river#JobArgs
-[`Worker`]: https://pkg.go.dev/github.com/riverqueue/river#Worker
+[`Client`]: https://pkg.go.dev/weavelab.xyz/river#Client
+[`Client.InsertTx`]: https://pkg.go.dev/weavelab.xyz/river#Client.InsertTx
+[`InsertAndWork` example]: https://pkg.go.dev/weavelab.xyz/river#example-package-InsertAndWork
+[`JobArgs`]: https://pkg.go.dev/weavelab.xyz/river#JobArgs
+[`Worker`]: https://pkg.go.dev/weavelab.xyz/river#Worker
 [Batch job insertion]: https://riverqueue.com/docs/batch-job-insertion
 [Cancelling jobs]: https://riverqueue.com/docs/cancelling-jobs
 [Error and panic handling]: https://riverqueue.com/docs/error-handling
@@ -149,9 +149,9 @@ See [developing River].
 [Unique jobs]: https://riverqueue.com/docs/unique-jobs
 [Work functions]: https://riverqueue.com/docs/work-functions
 [docs]: https://riverqueue.com/docs
-[developing River]: https://github.com/riverqueue/river/blob/master/docs/development.md
+[developing River]: https://weavelab.xyz/river/blob/master/docs/development.md
 [driver]: https://riverqueue.com/docs/database-drivers
-[godoc]: https://pkg.go.dev/github.com/riverqueue/river
+[godoc]: https://pkg.go.dev/weavelab.xyz/river
 [graceful shutdown]: https://riverqueue.com/docs/graceful-shutdown
 [homepage]: https://riverqueue.com
 [maintenance services]: https://riverqueue.com/docs/maintenance-services

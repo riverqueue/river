@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/riverqueue/river/internal/util/dbutil"
+	"weavelab.xyz/river/internal/util/dbutil"
 )
 
 // SharedTx can be used to wrap a test transaction in cases where multiple

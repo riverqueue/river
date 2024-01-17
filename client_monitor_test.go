@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/componentstatus"
+	"weavelab.xyz/river/internal/componentstatus"
 )
 
 func Test_Monitor_Shutdown(t *testing.T) {

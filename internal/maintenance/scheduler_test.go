@@ -9,14 +9,14 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/componentstatus"
-	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/notifier"
-	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/util/dbutil"
-	"github.com/riverqueue/river/internal/util/ptrutil"
-	"github.com/riverqueue/river/internal/util/valutil"
+	"weavelab.xyz/river/internal/componentstatus"
+	"weavelab.xyz/river/internal/dbsqlc"
+	"weavelab.xyz/river/internal/notifier"
+	"weavelab.xyz/river/internal/rivercommon"
+	"weavelab.xyz/river/internal/riverinternaltest"
+	"weavelab.xyz/river/internal/util/dbutil"
+	"weavelab.xyz/river/internal/util/ptrutil"
+	"weavelab.xyz/river/internal/util/valutil"
 )
 
 func TestScheduler(t *testing.T) {

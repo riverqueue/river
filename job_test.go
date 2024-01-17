@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/rivertype"
+	"weavelab.xyz/river/rivertype"
 )
 
 func TestJobUniqueOpts_isEmpty(t *testing.T) {

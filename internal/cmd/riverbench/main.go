@@ -11,9 +11,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/internal/riverinternaltest" //nolint:depguard
-	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"weavelab.xyz/river"
+	"weavelab.xyz/river/internal/riverinternaltest" //nolint:depguard
+	"weavelab.xyz/river/riverdriver/riverpgxv5"
 )
 
 func main() {

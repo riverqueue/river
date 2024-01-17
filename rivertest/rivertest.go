@@ -13,11 +13,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/util/sliceutil"
-	"github.com/riverqueue/river/riverdriver"
-	"github.com/riverqueue/river/rivertype"
+	"weavelab.xyz/river"
+	"weavelab.xyz/river/internal/dbsqlc"
+	"weavelab.xyz/river/internal/util/sliceutil"
+	"weavelab.xyz/river/riverdriver"
+	"weavelab.xyz/river/rivertype"
 )
 
 // dbtx is a database-like executor which is implemented by all of pgxpool.Pool,

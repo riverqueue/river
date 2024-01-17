@@ -11,14 +11,14 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/componentstatus"
-	"github.com/riverqueue/river/internal/dbadapter"
-	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/jobcompleter"
-	"github.com/riverqueue/river/internal/maintenance"
-	"github.com/riverqueue/river/internal/notifier"
-	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"weavelab.xyz/river/internal/componentstatus"
+	"weavelab.xyz/river/internal/dbadapter"
+	"weavelab.xyz/river/internal/dbsqlc"
+	"weavelab.xyz/river/internal/jobcompleter"
+	"weavelab.xyz/river/internal/maintenance"
+	"weavelab.xyz/river/internal/notifier"
+	"weavelab.xyz/river/internal/rivercommon"
+	"weavelab.xyz/river/internal/riverinternaltest"
 )
 
 func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {

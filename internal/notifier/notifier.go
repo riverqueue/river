@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/componentstatus"
+	"weavelab.xyz/river/internal/baseservice"
+	"weavelab.xyz/river/internal/componentstatus"
 )
 
 const statementTimeout = 5 * time.Second

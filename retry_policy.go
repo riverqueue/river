@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/riverqueue/river/internal/util/randutil"
-	"github.com/riverqueue/river/internal/util/timeutil"
-	"github.com/riverqueue/river/rivertype"
+	"weavelab.xyz/river/internal/util/randutil"
+	"weavelab.xyz/river/internal/util/timeutil"
+	"weavelab.xyz/river/rivertype"
 )
 
 // ClientRetryPolicy is an interface that can be implemented to provide a retry

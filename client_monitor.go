@@ -3,7 +3,7 @@ package river
 import (
 	"sync"
 
-	"github.com/riverqueue/river/internal/componentstatus"
+	"weavelab.xyz/river/internal/componentstatus"
 )
 
 type clientMonitor struct {

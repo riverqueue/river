@@ -6,10 +6,10 @@ import (
 	"errors"
 	"time"
 
-	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/util/ptrutil"
-	"github.com/riverqueue/river/riverdriver"
-	"github.com/riverqueue/river/rivertype"
+	"weavelab.xyz/river/internal/dbsqlc"
+	"weavelab.xyz/river/internal/util/ptrutil"
+	"weavelab.xyz/river/riverdriver"
+	"weavelab.xyz/river/rivertype"
 )
 
 // Job represents a single unit of work, holding both the arguments and

@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/riverdriver"
+	"weavelab.xyz/river/riverdriver"
 )
 
 // Verify interface compliance.

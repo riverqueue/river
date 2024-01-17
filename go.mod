@@ -1,21 +1,18 @@
-module github.com/riverqueue/river
+module weavelab.xyz/river
 
-go 1.21.4
+go 1.20
 
-replace github.com/riverqueue/river/riverdriver => ./riverdriver
+replace weavelab.xyz/river/riverdriver => ./riverdriver
 
-replace github.com/riverqueue/river/riverdriver/riverpgxv5 => ./riverdriver/riverpgxv5
+replace weavelab.xyz/river/riverdriver/riverpgxv5 => ./riverdriver/riverpgxv5
 
-replace github.com/riverqueue/river/riverdriver/riverdatabasesql => ./riverdriver/riverdatabasesql
+replace weavelab.xyz/river/riverdriver/riverdatabasesql => ./riverdriver/riverdatabasesql
 
 require (
 	github.com/jackc/pgerrcode v0.0.0-20220416144525-469b46aa5efa
 	github.com/jackc/pgx/v5 v5.5.2
 	github.com/jackc/puddle/v2 v2.2.1
 	github.com/oklog/ulid/v2 v2.1.0
-	github.com/riverqueue/river/riverdriver v0.0.15
-	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.0.15
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.0.15
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cobra v1.8.0
 	github.com/stretchr/testify v1.8.4
@@ -23,6 +20,9 @@ require (
 	golang.org/x/exp v0.0.0-20230522175609-2e198f4a06a1
 	golang.org/x/mod v0.14.0
 	golang.org/x/sync v0.6.0
+	weavelab.xyz/river/riverdriver v0.0.15
+	weavelab.xyz/river/riverdriver/riverdatabasesql v0.0.15
+	weavelab.xyz/river/riverdriver/riverpgxv5 v0.0.15
 )
 
 require (

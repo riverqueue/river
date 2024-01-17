@@ -5,8 +5,8 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/maintenance/startstop"
+	"weavelab.xyz/river/internal/baseservice"
+	"weavelab.xyz/river/internal/maintenance/startstop"
 )
 
 const (

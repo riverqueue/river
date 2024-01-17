@@ -7,8 +7,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"weavelab.xyz/river/internal/dbsqlc"
+	"weavelab.xyz/river/internal/riverinternaltest"
 )
 
 func TestJobList(t *testing.T) {

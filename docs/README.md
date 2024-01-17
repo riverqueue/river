@@ -1,4 +1,4 @@
-# River [![Build Status](https://github.com/riverqueue/river/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/riverqueue/river/actions) [![Go Reference](https://pkg.go.dev/badge/github.com/riverqueue/river.svg)](https://pkg.go.dev/github.com/riverqueue/river)
+# River [![Build Status](https://weavelab.xyz/river/actions/workflows/ci.yml/badge.svg?branch=master)](https://weavelab.xyz/river/actions) [![Go Reference](https://pkg.go.dev/badge/weavelab.xyz/river.svg)](https://pkg.go.dev/weavelab.xyz/river)
 
 River is a robust high-performance job processing system for Go and Postgres.
 
@@ -155,11 +155,11 @@ River was in large part inspired by our experiences with other background job li
 
 Thank you for driving the software ecosystem forward.
 
-[`Client`]: https://pkg.go.dev/github.com/riverqueue/river#Client
-[`Client.InsertTx`]: https://pkg.go.dev/github.com/riverqueue/river#Client.InsertTx
-[`InsertAndWork` example]: https://pkg.go.dev/github.com/riverqueue/river#example-package-InsertAndWork
-[`JobArgs`]: https://pkg.go.dev/github.com/riverqueue/river#JobArgs
-[`Worker`]: https://pkg.go.dev/github.com/riverqueue/river#Worker
+[`Client`]: https://pkg.go.dev/weavelab.xyz/river#Client
+[`Client.InsertTx`]: https://pkg.go.dev/weavelab.xyz/river#Client.InsertTx
+[`InsertAndWork` example]: https://pkg.go.dev/weavelab.xyz/river#example-package-InsertAndWork
+[`JobArgs`]: https://pkg.go.dev/weavelab.xyz/river#JobArgs
+[`Worker`]: https://pkg.go.dev/weavelab.xyz/river#Worker
 [Batch job insertion]: https://riverqueue.com/docs/batch-job-insertion
 [Cancelling jobs]: https://riverqueue.com/docs/cancelling-jobs
 [Error and panic handling]: https://riverqueue.com/docs/error-handling
@@ -170,10 +170,10 @@ Thank you for driving the software ecosystem forward.
 [Transactional job completion]: https://riverqueue.com/docs/transactional-job-completion
 [Unique jobs]: https://riverqueue.com/docs/unique-jobs
 [Work functions]: https://riverqueue.com/docs/work-functions
-[developing River]: https://github.com/riverqueue/river/blob/master/docs/development.md
+[developing River]: https://weavelab.xyz/river/blob/master/docs/development.md
 [docs]: https://riverqueue.com/docs
 [driver]: https://riverqueue.com/docs/database-drivers
-[godoc]: https://pkg.go.dev/github.com/riverqueue/river
+[godoc]: https://pkg.go.dev/weavelab.xyz/river
 [graceful shutdown]: https://riverqueue.com/docs/graceful-shutdown
 [homepage]: https://riverqueue.com
 [maintenance services]: https://riverqueue.com/docs/maintenance-services

@@ -7,9 +7,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/componentstatus"
-	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"weavelab.xyz/river/internal/componentstatus"
+	"weavelab.xyz/river/internal/dbsqlc"
+	"weavelab.xyz/river/internal/riverinternaltest"
 )
 
 func expectReceiveStatus(t *testing.T, statusCh <-chan componentstatus.Status, expected componentstatus.Status) {

@@ -8,16 +8,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/componentstatus"
-	"github.com/riverqueue/river/internal/dbadapter"
-	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/jobcompleter"
-	"github.com/riverqueue/river/internal/notifier"
-	"github.com/riverqueue/river/internal/util/chanutil"
-	"github.com/riverqueue/river/internal/util/sliceutil"
-	"github.com/riverqueue/river/internal/workunit"
-	"github.com/riverqueue/river/rivertype"
+	"weavelab.xyz/river/internal/baseservice"
+	"weavelab.xyz/river/internal/componentstatus"
+	"weavelab.xyz/river/internal/dbadapter"
+	"weavelab.xyz/river/internal/dbsqlc"
+	"weavelab.xyz/river/internal/jobcompleter"
+	"weavelab.xyz/river/internal/notifier"
+	"weavelab.xyz/river/internal/util/chanutil"
+	"weavelab.xyz/river/internal/util/sliceutil"
+	"weavelab.xyz/river/internal/workunit"
+	"weavelab.xyz/river/rivertype"
 )
 
 type producerConfig struct {
