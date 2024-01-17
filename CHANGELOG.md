@@ -9,31 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added `Cancel` and `CancelTx` to the `Client` to enable cancellation of jobs. [PR #141](https://weavelab.xyz/river/pull/141).
-- Added `ClientFromContext` and `ClientWithContextSafely` helpers to extract the `Client` from the worker's context where it is now available to workers. This simplifies making the River client available within your workers for i.e. enqueueing additional jobs. [PR #145](https://weavelab.xyz/river/pull/145).
-- Add `JobList` API for listing jobs. [PR #117](https://weavelab.xyz/river/pull/117).
+- Added `Cancel` and `CancelTx` to the `Client` to enable cancellation of jobs. [PR #141](https://github.com/riverqueue/river/pull/141).
+- Added `ClientFromContext` and `ClientWithContextSafely` helpers to extract the `Client` from the worker's context where it is now available to workers. This simplifies making the River client available within your workers for i.e. enqueueing additional jobs. [PR #145](https://github.com/riverqueue/river/pull/145).
+- Add `JobList` API for listing jobs. [PR #117](https://github.com/riverqueue/river/pull/117).
 
 ### Fixed
 
-- Fixed incorrect default value handling for `ScheduledAt` option with `InsertMany` / `InsertManyTx`. [PR #149](https://weavelab.xyz/river/pull/149).
+- Fixed incorrect default value handling for `ScheduledAt` option with `InsertMany` / `InsertManyTx`. [PR #149](https://github.com/riverqueue/river/pull/149).
 
 ## [0.0.16] - 2024-01-06
 
 ### Changed
 
-- Calls to `Stop` error if the client hasn't been started yet. [PR #138](https://weavelab.xyz/river/pull/138).
+- Calls to `Stop` error if the client hasn't been started yet. [PR #138](https://github.com/riverqueue/river/pull/138).
 
 ### Fixed
 
-- Fix typo in leadership resignation query to ensure faster new leader takeover. [PR #134](https://weavelab.xyz/river/pull/134).
-- Elector now uses the same `log/slog` instance configured by its parent client. [PR #137](https://weavelab.xyz/river/pull/137).
-- Notifier now uses the same `log/slog` instance configured by its parent client. [PR #140](https://weavelab.xyz/river/pull/140).
+- Fix typo in leadership resignation query to ensure faster new leader takeover. [PR #134](https://github.com/riverqueue/river/pull/134).
+- Elector now uses the same `log/slog` instance configured by its parent client. [PR #137](https://github.com/riverqueue/river/pull/137).
+- Notifier now uses the same `log/slog` instance configured by its parent client. [PR #140](https://github.com/riverqueue/river/pull/140).
 
 ## [0.0.15] - 2023-12-21
 
 ### Fixed
 
-- Ensure `ScheduledAt` is respected on `InsertManyTx`. [PR #121](https://weavelab.xyz/river/pull/121).
+- Ensure `ScheduledAt` is respected on `InsertManyTx`. [PR #121](https://github.com/riverqueue/river/pull/121).
 
 ## [0.0.14] - 2023-12-13
 
@@ -45,13 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added `riverdriver/riverdatabasesql` driver to enable River Go migrations through Go's built in `database/sql` package. [PR #98](https://weavelab.xyz/river/pull/98).
+- Added `riverdriver/riverdatabasesql` driver to enable River Go migrations through Go's built in `database/sql` package. [PR #98](https://github.com/riverqueue/river/pull/98).
 
 ### Changed
 
-- Errored jobs that have a very short duration before their next retry (<5 seconds) are set to `available` immediately instead of being made `scheduled` and having to wait for the scheduler to make a pass to make them workable. [PR #105](https://weavelab.xyz/river/pull/105).
-- `riverdriver` becomes its own submodule. It contains types that `riverdriver/riverdatabasesql` and `riverdriver/riverpgxv5` need to reference. [PR #98](https://weavelab.xyz/river/pull/98).
-- The `river/cmd/river` CLI has been made its own Go module. This is possible now that it uses the exported `river/rivermigrate` API, and will help with project maintainability. [PR #107](https://weavelab.xyz/river/pull/107).
+- Errored jobs that have a very short duration before their next retry (<5 seconds) are set to `available` immediately instead of being made `scheduled` and having to wait for the scheduler to make a pass to make them workable. [PR #105](https://github.com/riverqueue/river/pull/105).
+- `riverdriver` becomes its own submodule. It contains types that `riverdriver/riverdatabasesql` and `riverdriver/riverpgxv5` need to reference. [PR #98](https://github.com/riverqueue/river/pull/98).
+- The `river/cmd/river` CLI has been made its own Go module. This is possible now that it uses the exported `river/rivermigrate` API, and will help with project maintainability. [PR #107](https://github.com/riverqueue/river/pull/107).
 
 ## [0.0.12] - 2023-12-02
 
