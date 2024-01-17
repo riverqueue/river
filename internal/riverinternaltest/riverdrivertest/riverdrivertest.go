@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
@@ -791,6 +793,86 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			requireEqualTime(t, now, job.ScheduledAt)
 			require.Equal(t, rivertype.JobStateCompleted, job.State)
 			require.Equal(t, []string{"tag"}, job.Tags)
+		})
+
+		t.Run("JobFinalizedAtConstraint", func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+
+			capitalizeJobState := func(state rivertype.JobState) string {
+				return cases.Title(language.English, cases.NoLower).String(string(state))
+			}
+
+			for _, state := range []rivertype.JobState{
+				rivertype.JobStateCancelled,
+				rivertype.JobStateCompleted,
+				rivertype.JobStateDiscarded,
+			} {
+				state := state // capture range variable
+
+				t.Run(fmt.Sprintf("CannotSetState%sWithoutFinalizedAt", capitalizeJobState(state)), func(t *testing.T) {
+					t.Parallel()
+
+					exec, _ := setupExecutor(ctx, t, driver, beginTx)
+					// Create a job with the target state but without a finalized_at,
+					// expect an error:
+					_, err := exec.JobInsertFull(ctx, testfactory.Job_Build(t, &testfactory.JobOpts{
+						State: &state,
+					}))
+					require.ErrorContains(t, err, "violates check constraint \"finalized_or_finalized_at_null\"")
+				})
+
+				t.Run(fmt.Sprintf("CanSetState%sWithFinalizedAt", capitalizeJobState(state)), func(t *testing.T) {
+					t.Parallel()
+
+					exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+					// Create a job with the target state but with a finalized_at, expect
+					// no error:
+					_, err := exec.JobInsertFull(ctx, testfactory.Job_Build(t, &testfactory.JobOpts{
+						FinalizedAt: ptrutil.Ptr(time.Now()),
+						State:       &state,
+					}))
+					require.NoError(t, err)
+				})
+			}
+
+			for _, state := range []rivertype.JobState{
+				rivertype.JobStateAvailable,
+				rivertype.JobStateRetryable,
+				rivertype.JobStateRunning,
+				rivertype.JobStateScheduled,
+			} {
+				state := state // capture range variable
+
+				t.Run(fmt.Sprintf("CanSetState%sWithoutFinalizedAt", capitalizeJobState(state)), func(t *testing.T) {
+					t.Parallel()
+
+					exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+					// Create a job with the target state but without a finalized_at,
+					// expect no error:
+					_, err := exec.JobInsertFull(ctx, testfactory.Job_Build(t, &testfactory.JobOpts{
+						State: &state,
+					}))
+					require.NoError(t, err)
+				})
+
+				t.Run(fmt.Sprintf("CannotSetState%sWithFinalizedAt", capitalizeJobState(state)), func(t *testing.T) {
+					t.Parallel()
+
+					exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+					// Create a job with the target state but with a finalized_at, expect
+					// an error:
+					_, err := exec.JobInsertFull(ctx, testfactory.Job_Build(t, &testfactory.JobOpts{
+						FinalizedAt: ptrutil.Ptr(time.Now()),
+						State:       &state,
+					}))
+					require.ErrorContains(t, err, "violates check constraint \"finalized_or_finalized_at_null\"")
+				})
+			}
 		})
 	})
 
