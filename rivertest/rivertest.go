@@ -103,6 +103,7 @@ func RequireInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobAr
 }
 
 func requireInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, driver TDriver, expectedJob TArgs, opts *RequireInsertedOpts) *river.Job[TArgs] {
+	t.Helper()
 	actualArgs, err := requireInsertedErr[TDriver](ctx, t, driver.GetDBPool(), expectedJob, opts)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
@@ -134,6 +135,7 @@ func RequireInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.Job
 // Internal function used by the tests so that the exported version can take
 // `testing.TB` instead of `testing.T`.
 func requireInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, tx TTx, expectedJob TArgs, opts *RequireInsertedOpts) *river.Job[TArgs] {
+	t.Helper()
 	var driver TDriver
 	actualArgs, err := requireInsertedErr[TDriver](ctx, t, driver.UnwrapTx(tx), expectedJob, opts)
 	if err != nil {
@@ -143,6 +145,7 @@ func requireInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.Job
 }
 
 func requireInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, db dbtx, expectedJob TArgs, opts *RequireInsertedOpts) (*river.Job[TArgs], error) {
+	t.Helper()
 	queries := dbsqlc.New()
 
 	// Returned ordered by ID.
@@ -214,6 +217,7 @@ func RequireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.C
 }
 
 func requireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, driver TDriver, expectedJobs []ExpectedJob) []*rivertype.JobRow {
+	t.Helper()
 	actualArgs, err := requireManyInsertedErr[TDriver](ctx, t, driver.GetDBPool(), expectedJobs)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
@@ -249,6 +253,7 @@ func RequireManyInsertedTx[TDriver riverdriver.Driver[TTx], TTx any](ctx context
 // Internal function used by the tests so that the exported version can take
 // `testing.TB` instead of `testing.T`.
 func requireManyInsertedTx[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, tx TTx, expectedJobs []ExpectedJob) []*rivertype.JobRow {
+	t.Helper()
 	var driver TDriver
 	actualArgs, err := requireManyInsertedErr[TDriver](ctx, t, driver.UnwrapTx(tx), expectedJobs)
 	if err != nil {
@@ -258,6 +263,7 @@ func requireManyInsertedTx[TDriver riverdriver.Driver[TTx], TTx any](ctx context
 }
 
 func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, db dbtx, expectedJobs []ExpectedJob) ([]*rivertype.JobRow, error) {
+	t.Helper()
 	queries := dbsqlc.New()
 
 	expectedArgsKinds := sliceutil.Map(expectedJobs, func(j ExpectedJob) string { return j.Args.Kind() })
@@ -292,6 +298,8 @@ func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx contex
 const rfc3339Micro = "2006-01-02T15:04:05.999999Z07:00"
 
 func compareJobToInsertOpts(t testingT, jobRow *rivertype.JobRow, expectedOpts RequireInsertedOpts, index int) bool {
+	t.Helper()
+
 	// Adds an index position for the case of multiple expected jobs. Wrapped in
 	// a function so that the string is only marshaled if needed.
 	positionStr := func() string {
@@ -350,6 +358,7 @@ func compareJobToInsertOpts(t testingT, jobRow *rivertype.JobRow, expectedOpts R
 // failure takes a printf-style directive and is a shortcut for failing an
 // assertion.
 func failure(t testingT, format string, a ...any) {
+	t.Helper()
 	t.Log(failureString(format, a...))
 	t.FailNow()
 }
