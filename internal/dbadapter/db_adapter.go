@@ -348,6 +348,8 @@ func (a *StandardAdapter) JobInsertManyTx(ctx context.Context, tx pgx.Tx, params
 
 	insertJobsParams := make([]dbsqlc.JobInsertManyParams, len(params))
 
+	now := a.TimeNowUTC()
+
 	for i := 0; i < len(params); i++ {
 		params := params[i]
 
@@ -360,6 +362,11 @@ func (a *StandardAdapter) JobInsertManyTx(ctx context.Context, tx pgx.Tx, params
 		if tags == nil {
 			tags = []string{}
 		}
+		scheduledAt := now
+		if !params.ScheduledAt.IsZero() {
+			scheduledAt = params.ScheduledAt.UTC()
+		}
+
 		insertJobsParams[i] = dbsqlc.JobInsertManyParams{
 			Args:        params.EncodedArgs,
 			Kind:        params.Kind,
@@ -368,7 +375,7 @@ func (a *StandardAdapter) JobInsertManyTx(ctx context.Context, tx pgx.Tx, params
 			Priority:    int16(min(params.Priority, math.MaxInt16)),
 			Queue:       params.Queue,
 			State:       params.State,
-			ScheduledAt: params.ScheduledAt,
+			ScheduledAt: scheduledAt,
 			Tags:        tags,
 		}
 	}

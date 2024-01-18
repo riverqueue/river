@@ -33,9 +33,9 @@ func (w *SleepingWorker) Work(ctx context.Context, job *river.Job[CancellingArgs
 	return ctx.Err()
 }
 
-// Example_cancelJobFromClient demonstrates how to permanently cancel a job from
-// any Client using Cancel.
-func Example_cancelJobFromClient() {
+// Example_jobCancelFromClient demonstrates how to permanently cancel a job from
+// any Client using JobCancel.
+func Example_jobCancelFromClient() {
 	ctx := context.Background()
 
 	dbPool, err := pgxpool.NewWithConfig(ctx, riverinternaltest.DatabaseConfig("river_testdb_example"))
@@ -88,7 +88,7 @@ func Example_cancelJobFromClient() {
 	// cancellation signal.
 	time.Sleep(500 * time.Millisecond)
 
-	if _, err = riverClient.Cancel(ctx, job.ID); err != nil {
+	if _, err = riverClient.JobCancel(ctx, job.ID); err != nil {
 		panic(err)
 	}
 	waitForNJobs(subscribeChan, 1)
