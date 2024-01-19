@@ -244,7 +244,19 @@ func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 			slog.Duration("duration", snoozeErr.duration),
 		)
 		nextAttemptScheduledAt := time.Now().Add(snoozeErr.duration)
-		if err := e.Completer.JobSetStateIfRunning(e.stats, dbadapter.JobSetStateSnoozed(e.JobRow.ID, nextAttemptScheduledAt, e.JobRow.MaxAttempts+1)); err != nil {
+
+		// Normally, snoozed jobs are set `scheduled` for the future and it's the
+		// scheduler's job to set them back to `available` so they can be reworked.
+		// Just as with retryable jobs, this isn't friendly for short snooze times
+		// so we instead make the job immediately `available` if the snooze time is
+		// smaller than the scheduler's run interval.
+		var params *dbadapter.JobSetStateIfRunningParams
+		if nextAttemptScheduledAt.Sub(e.TimeNowUTC()) <= e.SchedulerInterval {
+			params = dbadapter.JobSetStateSnoozedAvailable(e.JobRow.ID, nextAttemptScheduledAt, e.JobRow.MaxAttempts+1)
+		} else {
+			params = dbadapter.JobSetStateSnoozed(e.JobRow.ID, nextAttemptScheduledAt, e.JobRow.MaxAttempts+1)
+		}
+		if err := e.Completer.JobSetStateIfRunning(e.stats, params); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Error snoozing job",
 				slog.Int64("job_id", e.JobRow.ID),
 			)
