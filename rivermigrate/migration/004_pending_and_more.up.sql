@@ -9,3 +9,5 @@ ALTER TABLE river_job ADD CONSTRAINT finalized_or_finalized_at_null CHECK (
     (finalized_at IS NULL AND state NOT IN ('cancelled', 'completed', 'discarded')) OR
     (finalized_at IS NOT NULL AND state IN ('cancelled', 'completed', 'discarded'))
 );
+
+-- TODO: schema-prefixed notification topics, functions, etc.
