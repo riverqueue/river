@@ -372,6 +372,26 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.Empty(t, job.Errors)
 	})
 
+	t.Run("JobSnoozeErrorInNearFutureMakesJobAvailableAndIncrementsMaxAttempts", func(t *testing.T) {
+		t.Parallel()
+
+		executor, bundle := setup(t)
+		maxAttemptsBefore := bundle.jobRow.MaxAttempts
+
+		cancelErr := JobSnooze(time.Millisecond)
+		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return cancelErr }, nil).MakeUnit(bundle.jobRow)
+
+		executor.Execute(ctx)
+		executor.Completer.Wait()
+
+		job, err := queries.JobGetByID(ctx, bundle.tx, bundle.jobRow.ID)
+		require.NoError(t, err)
+		require.Equal(t, dbsqlc.JobStateAvailable, job.State)
+		require.WithinDuration(t, time.Now(), job.ScheduledAt, 2*time.Second)
+		require.Equal(t, maxAttemptsBefore+1, int(job.MaxAttempts))
+		require.Empty(t, job.Errors)
+	})
+
 	t.Run("ErrorWithCustomRetryPolicy", func(t *testing.T) {
 		t.Parallel()
 

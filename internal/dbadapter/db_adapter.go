@@ -524,6 +524,10 @@ func JobSetStateSnoozed(id int64, scheduledAt time.Time, maxAttempts int) *JobSe
 	return &JobSetStateIfRunningParams{ID: id, maxAttempts: &maxAttempts, scheduledAt: &scheduledAt, state: dbsqlc.JobStateScheduled}
 }
 
+func JobSetStateSnoozedAvailable(id int64, scheduledAt time.Time, maxAttempts int) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{ID: id, maxAttempts: &maxAttempts, scheduledAt: &scheduledAt, state: dbsqlc.JobStateAvailable}
+}
+
 func (a *StandardAdapter) JobSetStateIfRunning(ctx context.Context, params *JobSetStateIfRunningParams) (*dbsqlc.RiverJob, error) {
 	ctx, cancel := context.WithTimeout(ctx, a.deadlineTimeout)
 	defer cancel()
