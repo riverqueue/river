@@ -3192,6 +3192,7 @@ func (w *customInsertOptsJobArgs) Kind() string { return "customInsertOpts" }
 func (w *customInsertOptsJobArgs) InsertOpts() InsertOpts {
 	return InsertOpts{
 		MaxAttempts: 42,
+		Metadata:    []byte(`{"default":"should not be used"}`),
 		Priority:    2,
 		Queue:       "other",
 		Tags:        []string{"tag1", "tag2"},
@@ -3239,6 +3240,7 @@ func TestInsert(t *testing.T) {
 			name: "all options specified",
 			args: noOpArgs{Name: "testJob"},
 			opts: &InsertOpts{
+				Metadata: []byte(`{"foo":"bar"}`),
 				Queue:    "other",
 				Priority: 2, // TODO: enforce a range on priority
 				// TODO: comprehensive timezone testing
@@ -3251,6 +3253,7 @@ func TestInsert(t *testing.T) {
 				require := require.New(t)
 				// specified by inputs:
 				requireEqualArgs(t, args, insertedJob.EncodedArgs)
+				require.JSONEq(`{"foo":"bar"}`, string(insertedJob.Metadata))
 				require.Equal("other", insertedJob.Queue)
 				require.Equal(2, insertedJob.Priority)
 				// Postgres timestamptz only stores microsecond precision so we need to
@@ -3283,7 +3286,8 @@ func TestInsert(t *testing.T) {
 				// Default comes from database now(), and we can't know the exact value:
 				require.WithinDuration(time.Now(), insertedJob.ScheduledAt, 2*time.Second)
 				require.Equal([]string{}, insertedJob.Tags)
-				// require.Equal([]byte("{}"), insertedJob.metadata)
+				// Metadata from JobArgsWithInsertOpts should not be used:
+				require.JSONEq(`{}`, string(insertedJob.Metadata))
 			},
 		},
 	}

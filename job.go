@@ -34,6 +34,8 @@ type JobArgs interface {
 type JobArgsWithInsertOpts interface {
 	// InsertOpts returns options for all jobs of this job type, overriding any
 	// system defaults. These can also be overridden at insertion time.
+	//
+	// The Metadata field specified here will not be used.
 	InsertOpts() InsertOpts
 }
 
