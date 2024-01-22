@@ -213,6 +213,34 @@ func (m *Migrator[TTx]) MigrateTx(ctx context.Context, tx TTx, direction Directi
 	panic("invalid direction: " + direction)
 }
 
+// ValidateResult is the result of a validation operation.
+type ValidateResult struct {
+	// Messages contain informational messages of what wasn't valid in case of a
+	// failed validation. Always empty if OK is true.
+	Messages []string
+
+	// OK is true if validation completed with no problems.
+	OK bool
+}
+
+// Validate validates the current state of migrations, returning an unsuccessful
+// validation and usable message in case there are migrations that haven't yet
+// been applied.
+func (m *Migrator[TTx]) Validate(ctx context.Context) (*ValidateResult, error) {
+	return dbutil.WithExecutorTxV(ctx, m.driver.GetExecutor(), func(ctx context.Context, tx riverdriver.ExecutorTx) (*ValidateResult, error) {
+		return m.validate(ctx, tx)
+	})
+}
+
+// Validate validates the current state of migrations, returning an unsuccessful
+// validation and usable message in case there are migrations that haven't yet
+// been applied.
+//
+// This variant lets a caller validate within a transaction.
+func (m *Migrator[TTx]) ValidateTx(ctx context.Context, tx TTx) (*ValidateResult, error) {
+	return m.validate(ctx, m.driver.UnwrapExecutor(tx))
+}
+
 // migrateDown runs down migrations.
 func (m *Migrator[TTx]) migrateDown(ctx context.Context, exec riverdriver.Executor, direction Direction, opts *MigrateOpts) (*MigrateResult, error) {
 	existingMigrations, err := m.existingMigrations(ctx, exec)
@@ -283,6 +311,33 @@ func (m *Migrator[TTx]) migrateUp(ctx context.Context, exec riverdriver.Executor
 	}
 
 	return res, nil
+}
+
+// validate validates current migration state.
+func (m *Migrator[TTx]) validate(ctx context.Context, exec riverdriver.Executor) (*ValidateResult, error) {
+	existingMigrations, err := m.existingMigrations(ctx, exec)
+	if err != nil {
+		return nil, err
+	}
+
+	targetMigrations := maps.Clone(m.migrations)
+	for _, migrateRow := range existingMigrations {
+		delete(targetMigrations, migrateRow.Version)
+	}
+
+	notOKWithMessage := func(message string) *ValidateResult {
+		m.Logger.InfoContext(ctx, m.Name+": "+message)
+		return &ValidateResult{Messages: []string{message}}
+	}
+
+	if len(targetMigrations) > 0 {
+		sortedTargetMigrations := maputil.Keys(targetMigrations)
+		slices.Sort(sortedTargetMigrations)
+
+		return notOKWithMessage(fmt.Sprintf("Unapplied migrations: %v", sortedTargetMigrations)), nil
+	}
+
+	return &ValidateResult{OK: true}, nil
 }
 
 // Common code shared between the up and down migration directions that walks
