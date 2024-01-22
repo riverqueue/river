@@ -25,13 +25,22 @@ queries. After changing an sqlc `.sql` file, generate Go with:
 
 ## Releasing a new version
 
-1. Prepare a PR with a `CHANGELOG.md` update describing the changes. Have it reviewed and merged.
-2. Next, fetch the repo locally, bump dependency versions, tag each submodule, and push those tags:
+1. Fetch changes to the repo and any new tags. Export `VERSION` by incrementing the last tag. Execute `update-submodule-versions` to add it the project's `go.mod` files:
 
 ```shell
 git checkout master && git pull --rebase
 export VERSION=v0.0.x
 go run ./internal/cmd/update-submodule-versions/main.go
+```
+
+2. Prepare a PR with the changes, updating `CHANGELOG.md` with any necessary additions at the same time. Have it reviewed and merged.
+
+    Unfortunately, the build will fail because the version in the updated `go.mod` files isn't yet available.
+
+3. Upon merge, pull down the changes, tag each module with the new version, and push the new tags:
+
+```shell
+git pull origin master
 git tag cmd/river/$VERSION -m "release cmd/river/$VERSION"
 git tag riverdriver/$VERSION -m "release riverdriver/$VERSION"
 git tag riverdriver/riverpgxv5/$VERSION -m "release riverdriver/riverpgxv5/$VERSION"
