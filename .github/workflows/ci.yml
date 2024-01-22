@@ -125,8 +125,19 @@ jobs:
         run: ./river migrate-up --database-url $DATABASE_URL
         working-directory: ./cmd/river
 
+      - name: river validate
+        run: ./river validate --database-url $DATABASE_URL
+        working-directory: ./cmd/river
+
       - name: river migrate-down
         run: ./river migrate-down --database-url $DATABASE_URL --max-steps 100
+        working-directory: ./cmd/river
+
+      - name: river validate (expect failure)
+        run: |
+          if ./river validate --database-url $DATABASE_URL; then
+            echo "expected non-zero exit code" && exit 1
+          fi
         working-directory: ./cmd/river
 
   golangci:

@@ -3,6 +3,7 @@ package rivermigrate
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"slices"
 	"testing"
@@ -399,6 +400,32 @@ func TestMigrator(t *testing.T) {
 			_, err := migrator.MigrateTx(ctx, bundle.tx, DirectionUp, &MigrateOpts{TargetVersion: 3})
 			require.EqualError(t, err, "version 3 is not in target list of valid migrations to apply")
 		}
+	})
+
+	t.Run("ValidateSuccess", func(t *testing.T) {
+		t.Parallel()
+
+		migrator, bundle := setup(t)
+
+		// Migrate all the way up.
+		_, err := migrator.MigrateTx(ctx, bundle.tx, DirectionUp, &MigrateOpts{})
+		require.NoError(t, err)
+
+		res, err := migrator.ValidateTx(ctx, bundle.tx)
+		require.NoError(t, err)
+		require.Equal(t, &ValidateResult{OK: true}, res)
+	})
+
+	t.Run("ValidateUnappliedMigrations", func(t *testing.T) {
+		t.Parallel()
+
+		migrator, bundle := setup(t)
+
+		res, err := migrator.ValidateTx(ctx, bundle.tx)
+		require.NoError(t, err)
+		require.Equal(t, &ValidateResult{
+			Messages: []string{fmt.Sprintf("Unapplied migrations: [%d %d]", riverMigrationsMaxVersion+1, riverMigrationsMaxVersion+2)},
+		}, res)
 	})
 }
 

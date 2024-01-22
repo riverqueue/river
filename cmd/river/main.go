@@ -29,10 +29,12 @@ Provides command line facilities for the River job queue.
 
 	ctx := context.Background()
 
-	execHandlingError := func(f func() error) {
-		err := f()
+	execHandlingError := func(f func() (bool, error)) {
+		ok, err := f()
 		if err != nil {
 			fmt.Printf("failed: %s\n", err)
+		}
+		if err != nil || !ok {
 			os.Exit(1)
 		}
 	}
@@ -59,7 +61,7 @@ Defaults to running a single down migration. This behavior can be changed with
 --max-steps or --target-version.
 	`,
 			Run: func(cmd *cobra.Command, args []string) {
-				execHandlingError(func() error { return migrateDown(ctx, &opts) })
+				execHandlingError(func() (bool, error) { return migrateDown(ctx, &opts) })
 			},
 		}
 		cmd.Flags().StringVar(&opts.DatabaseURL, "database-url", "", "URL of the database to migrate (should look like `postgres://...`")
@@ -83,7 +85,7 @@ Defaults to running all up migrations that aren't yet run. This behavior can be
 restricted with --max-steps or --target-version.
 	`,
 			Run: func(cmd *cobra.Command, args []string) {
-				execHandlingError(func() error { return migrateUp(ctx, &opts) })
+				execHandlingError(func() (bool, error) { return migrateUp(ctx, &opts) })
 			},
 		}
 		cmd.Flags().StringVar(&opts.DatabaseURL, "database-url", "", "URL of the database to migrate (should look like `postgres://...`")
@@ -93,7 +95,27 @@ restricted with --max-steps or --target-version.
 		rootCmd.AddCommand(cmd)
 	}
 
-	execHandlingError(rootCmd.Execute)
+	// validate
+	{
+		var opts validateOpts
+
+		cmd := &cobra.Command{
+			Use:   "validate",
+			Short: "Validate River schema",
+			Long: `
+Validates the current River schema, exiting with a non-zero status in case there
+are outstanding migrations that still need to be run.
+	`,
+			Run: func(cmd *cobra.Command, args []string) {
+				execHandlingError(func() (bool, error) { return validate(ctx, &opts) })
+			},
+		}
+		cmd.Flags().StringVar(&opts.DatabaseURL, "database-url", "", "URL of the database to validate (should look like `postgres://...`")
+		mustMarkFlagRequired(cmd, "database-url")
+		rootCmd.AddCommand(cmd)
+	}
+
+	execHandlingError(func() (bool, error) { return true, rootCmd.Execute() })
 }
 
 func openDBPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
@@ -143,14 +165,14 @@ func (o *migrateDownOpts) validate() error {
 	return nil
 }
 
-func migrateDown(ctx context.Context, opts *migrateDownOpts) error {
+func migrateDown(ctx context.Context, opts *migrateDownOpts) (bool, error) {
 	if err := opts.validate(); err != nil {
-		return err
+		return false, err
 	}
 
 	dbPool, err := openDBPool(ctx, opts.DatabaseURL)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer dbPool.Close()
 
@@ -160,7 +182,11 @@ func migrateDown(ctx context.Context, opts *migrateDownOpts) error {
 		MaxSteps:      opts.MaxSteps,
 		TargetVersion: opts.TargetVersion,
 	})
-	return err
+	if err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 type migrateUpOpts struct {
@@ -177,14 +203,14 @@ func (o *migrateUpOpts) validate() error {
 	return nil
 }
 
-func migrateUp(ctx context.Context, opts *migrateUpOpts) error {
+func migrateUp(ctx context.Context, opts *migrateUpOpts) (bool, error) {
 	if err := opts.validate(); err != nil {
-		return err
+		return false, err
 	}
 
 	dbPool, err := openDBPool(ctx, opts.DatabaseURL)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer dbPool.Close()
 
@@ -194,5 +220,42 @@ func migrateUp(ctx context.Context, opts *migrateUpOpts) error {
 		MaxSteps:      opts.MaxSteps,
 		TargetVersion: opts.TargetVersion,
 	})
-	return err
+	if err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+type validateOpts struct {
+	DatabaseURL string
+}
+
+func (o *validateOpts) validate() error {
+	if o.DatabaseURL == "" {
+		return errors.New("database URL cannot be empty")
+	}
+
+	return nil
+}
+
+func validate(ctx context.Context, opts *validateOpts) (bool, error) {
+	if err := opts.validate(); err != nil {
+		return false, err
+	}
+
+	dbPool, err := openDBPool(ctx, opts.DatabaseURL)
+	if err != nil {
+		return false, err
+	}
+	defer dbPool.Close()
+
+	migrator := rivermigrate.New(riverpgxv5.New(dbPool), nil)
+
+	res, err := migrator.Validate(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	return res.OK, nil
 }
