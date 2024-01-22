@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Fixed incorrect default value handling for `ScheduledAt` option with `InsertMany` / `InsertManyTx`. [PR #149](https://github.com/riverqueue/river/pull/149).
+- Fixed problem where job uniqueness wasn't being respected when used in conjuction with periodic jobs. [PR #168](https://github.com/riverqueue/river/pull/168).
 
 ### Fixed
 

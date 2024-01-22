@@ -3,6 +3,7 @@ package maintenance
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/riverqueue/river/internal/baseservice"
@@ -107,7 +108,10 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 		// An initial loop to assign next runs for every configured job and
 		// queues any jobs that should run immediately.
 		{
-			var insertParamsMany []*dbadapter.JobInsertParams
+			var (
+				insertParamsMany   []*dbadapter.JobInsertParams
+				insertParamsUnique []*dbadapter.JobInsertParams
+			)
 			now := s.TimeNowUTC()
 
 			for _, periodicJob := range s.periodicJobs {
@@ -119,12 +123,16 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 
 				if periodicJob.RunOnStart {
 					if insertParams, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc); ok {
-						insertParamsMany = append(insertParamsMany, insertParams)
+						if insertParams.Unique {
+							insertParamsUnique = append(insertParamsUnique, insertParams)
+						} else {
+							insertParamsMany = append(insertParamsMany, insertParams)
+						}
 					}
 				}
 			}
 
-			s.insertBatch(ctx, insertParamsMany)
+			s.insertBatch(ctx, insertParamsMany, insertParamsUnique)
 		}
 
 		s.TestSignals.EnteredLoop.Signal(struct{}{})
@@ -141,7 +149,10 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 
 			select {
 			case <-timerUntilNextRun.C:
-				var insertParamsMany []*dbadapter.JobInsertParams
+				var (
+					insertParamsMany   []*dbadapter.JobInsertParams
+					insertParamsUnique []*dbadapter.JobInsertParams
+				)
 
 				now := s.TimeNowUTC()
 
@@ -158,11 +169,15 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 					periodicJob.nextRunAt = periodicJob.ScheduleFunc(now)
 
 					if insertParams, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc); ok {
-						insertParamsMany = append(insertParamsMany, insertParams)
+						if insertParams.Unique {
+							insertParamsUnique = append(insertParamsUnique, insertParams)
+						} else {
+							insertParamsMany = append(insertParamsMany, insertParams)
+						}
 					}
 				}
 
-				s.insertBatch(ctx, insertParamsMany)
+				s.insertBatch(ctx, insertParamsMany, insertParamsUnique)
 
 			case <-ctx.Done():
 				// Clean up timer resources. We know it has _not_ received from the
@@ -179,16 +194,32 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany []*dbadapter.JobInsertParams) {
-	if len(insertParamsMany) < 1 {
-		return
+func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany, insertParamsUnique []*dbadapter.JobInsertParams) {
+	if len(insertParamsMany) > 0 {
+		if _, err := s.dbAdapter.JobInsertMany(ctx, insertParamsMany); err != nil {
+			s.Logger.ErrorContext(ctx, s.Name+": Error inserting periodic jobs",
+				"error", err.Error(), "num_jobs", len(insertParamsMany))
+		}
 	}
 
-	if _, err := s.dbAdapter.JobInsertMany(ctx, insertParamsMany); err != nil {
-		s.Logger.ErrorContext(ctx, s.Name+": Error inserting periodic jobs",
-			"error", err.Error(), "num_jobs", len(insertParamsMany))
+	// Unique periodic jobs must be inserted one at a time because bulk insert
+	// doesn't respect uniqueness. Unique jobs are rare compared to non-unique,
+	// so we still maintain an insert many fast path above for programs that
+	// aren't inserting any unique jobs periodically (which we expect is most).
+	if len(insertParamsUnique) > 0 {
+		for _, insertParams := range insertParamsUnique {
+			fmt.Printf("--- %+v\n\n", "inserting unique")
+
+			if _, err := s.dbAdapter.JobInsert(ctx, insertParams); err != nil {
+				s.Logger.ErrorContext(ctx, s.Name+": Error inserting unique periodic job",
+					"error", err.Error(), "kind", insertParams.Kind)
+			}
+		}
 	}
-	s.TestSignals.InsertedJobs.Signal(struct{}{})
+
+	if len(insertParamsMany) > 0 || len(insertParamsUnique) > 0 {
+		s.TestSignals.InsertedJobs.Signal(struct{}{})
+	}
 }
 
 func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, constructorFunc func() (*dbadapter.JobInsertParams, error)) (*dbadapter.JobInsertParams, bool) {

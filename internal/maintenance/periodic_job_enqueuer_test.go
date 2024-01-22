@@ -30,7 +30,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		waitChan chan (struct{})
 	}
 
-	jobConstructorFunc := func(name string) func() (*dbadapter.JobInsertParams, error) {
+	jobConstructorFunc := func(name string, unique bool) func() (*dbadapter.JobInsertParams, error) {
 		return func() (*dbadapter.JobInsertParams, error) {
 			return &dbadapter.JobInsertParams{
 				EncodedArgs: []byte("{}"),
@@ -39,6 +39,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 				Priority:    rivercommon.PriorityDefault,
 				Queue:       rivercommon.QueueDefault,
 				State:       dbsqlc.JobStateAvailable,
+				Unique:      unique,
 			}, nil
 		}
 	}
@@ -63,8 +64,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			archetype,
 			&PeriodicJobEnqueuerConfig{
 				PeriodicJobs: []*PeriodicJob{
-					{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms")},
-					{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_1500ms")},
+					{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
+					{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false)},
 				},
 			}, dbadapter.NewStandardAdapter(archetype, &dbadapter.StandardAdapterConfig{Executor: bundle.dbPool}))
 		svc.TestSignals.Init()
@@ -112,13 +113,40 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		requireNJobs(t, bundle.dbPool, "periodic_job_1500ms", 1)
 	})
 
+	t.Run("RespectsJobUniqueness", func(t *testing.T) {
+		t.Parallel()
+
+		svc, bundle := setup(t)
+
+		svc.periodicJobs = []*PeriodicJob{
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("unique_periodic_job_500ms", true)},
+		}
+
+		require.NoError(t, svc.Start(ctx))
+
+		// Should be no jobs to start.
+		requireNJobs(t, bundle.dbPool, "unique_periodic_job_500ms", 0)
+
+		svc.TestSignals.InsertedJobs.WaitOrTimeout()
+		requireNJobs(t, bundle.dbPool, "unique_periodic_job_500ms", 1)
+
+		// Another insert was attempted, but there's still only one job due to
+		// uniqueness conditions.
+		svc.TestSignals.InsertedJobs.WaitOrTimeout()
+		requireNJobs(t, bundle.dbPool, "unique_periodic_job_500ms", 1)
+
+		svc.TestSignals.InsertedJobs.WaitOrTimeout()
+		requireNJobs(t, bundle.dbPool, "unique_periodic_job_500ms", 1)
+	})
+
 	t.Run("RunOnStart", func(t *testing.T) {
 		t.Parallel()
 
 		svc, bundle := setup(t)
 
 		svc.periodicJobs = []*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s"), RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s", false), RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("unique_periodic_job_5s", true), RunOnStart: true},
 		}
 
 		start := time.Now()
@@ -126,6 +154,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
 		requireNJobs(t, bundle.dbPool, "periodic_job_5s", 1)
+		requireNJobs(t, bundle.dbPool, "unique_periodic_job_5s", 1)
 
 		// Should've happened quite quickly.
 		require.WithinDuration(t, time.Now(), start, 1*time.Second)
@@ -155,12 +184,12 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		svc.TimeNowUTC = func() time.Time { return now }
 
 		svc.periodicJobs = []*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms")},
-			{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_1500ms")},
-			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s")},
-			{ScheduleFunc: periodicIntervalSchedule(15 * time.Minute), ConstructorFunc: jobConstructorFunc("periodic_job_15m")},
-			{ScheduleFunc: periodicIntervalSchedule(3 * time.Hour), ConstructorFunc: jobConstructorFunc("periodic_job_3h")},
-			{ScheduleFunc: periodicIntervalSchedule(7 * 24 * time.Hour), ConstructorFunc: jobConstructorFunc("periodic_job_7d")},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
+			{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false)},
+			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s", false)},
+			{ScheduleFunc: periodicIntervalSchedule(15 * time.Minute), ConstructorFunc: jobConstructorFunc("periodic_job_15m", false)},
+			{ScheduleFunc: periodicIntervalSchedule(3 * time.Hour), ConstructorFunc: jobConstructorFunc("periodic_job_3h", false)},
+			{ScheduleFunc: periodicIntervalSchedule(7 * 24 * time.Hour), ConstructorFunc: jobConstructorFunc("periodic_job_7d", false)},
 		}
 
 		// Randomize the order of jobs so that we can make sure that scheduling
@@ -226,14 +255,14 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		svc, _ := setup(t)
 
 		svc.periodicJobs = []*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(time.Microsecond), ConstructorFunc: jobConstructorFunc("periodic_job_1us")},
+			{ScheduleFunc: periodicIntervalSchedule(time.Microsecond), ConstructorFunc: jobConstructorFunc("periodic_job_1us", false)},
 		}
 		// make a longer list of jobs so the loop has to run for longer
 		for i := 1; i < 100; i++ {
 			svc.periodicJobs = append(svc.periodicJobs,
 				&PeriodicJob{
 					ScheduleFunc:    periodicIntervalSchedule(time.Duration(i) * time.Hour),
-					ConstructorFunc: jobConstructorFunc(fmt.Sprintf("periodic_job_%dh", i)),
+					ConstructorFunc: jobConstructorFunc(fmt.Sprintf("periodic_job_%dh", i), false),
 				},
 			)
 		}
