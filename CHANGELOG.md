@@ -23,11 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Fixed incorrect default value handling for `ScheduledAt` option with `InsertMany` / `InsertManyTx`. [PR #149](https://github.com/riverqueue/river/pull/149).
-- Fixed problem where job uniqueness wasn't being respected when used in conjuction with periodic jobs. [PR #168](https://github.com/riverqueue/river/pull/168).
-
-### Fixed
-
 - Add missing `t.Helper()` calls in `rivertest` internal functions that caused it to report itself as the site of a test failure. [PR #151](https://github.com/riverqueue/river/pull/151).
+- Fixed problem where job uniqueness wasn't being respected when used in conjuction with periodic jobs. [PR #168](https://github.com/riverqueue/river/pull/168).
 
 ## [0.0.16] - 2024-01-06
 
