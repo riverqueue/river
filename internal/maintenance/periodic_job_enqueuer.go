@@ -3,7 +3,6 @@ package maintenance
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/riverqueue/river/internal/baseservice"
@@ -208,8 +207,6 @@ func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany,
 	// aren't inserting any unique jobs periodically (which we expect is most).
 	if len(insertParamsUnique) > 0 {
 		for _, insertParams := range insertParamsUnique {
-			fmt.Printf("--- %+v\n\n", "inserting unique")
-
 			if _, err := s.dbAdapter.JobInsert(ctx, insertParams); err != nil {
 				s.Logger.ErrorContext(ctx, s.Name+": Error inserting unique periodic job",
 					"error", err.Error(), "kind", insertParams.Kind)
