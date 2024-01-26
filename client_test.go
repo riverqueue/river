@@ -2229,11 +2229,6 @@ func Test_Client_Subscribe(t *testing.T) {
 		startClient(ctx, t, client)
 
 		wg.Wait()
-
-		// for i := 0; i < subscribeChanSize+1; i++ {
-		// 	x := riverinternaltest.WaitOrTimeout(t, subscribeChan)
-		// 	fmt.Printf("--- received: %+v\n\n", string(x.Job.EncodedArgs))
-		// }
 	})
 
 	t.Run("PanicOnUnknownKind", func(t *testing.T) {
