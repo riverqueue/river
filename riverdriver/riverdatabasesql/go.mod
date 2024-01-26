@@ -7,7 +7,7 @@ replace github.com/riverqueue/river/riverdriver => ../
 require (
 	github.com/jackc/pgx/v5 v5.5.0
 	github.com/lib/pq v1.10.9
-	github.com/riverqueue/river/riverdriver v0.0.17
+	github.com/riverqueue/river/riverdriver v0.0.18
 	github.com/stretchr/testify v1.8.1
 )
 
