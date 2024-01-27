@@ -257,7 +257,7 @@ type Client[TTx any] struct {
 	// fetchNewWorkCancel cancels the context used for fetching new work. This
 	// will be used to stop fetching new work whenever stop is initiated, or
 	// when the context provided to Run is itself cancelled.
-	fetchNewWorkCancel context.CancelFunc
+	fetchNewWorkCancel context.CancelCauseFunc
 
 	id                   string
 	monitor              *clientMonitor
@@ -276,7 +276,7 @@ type Client[TTx any] struct {
 
 	// workCancel cancels the context used for all work goroutines. Normal Stop
 	// does not cancel that context.
-	workCancel context.CancelFunc
+	workCancel context.CancelCauseFunc
 }
 
 // Test-only signals.
@@ -569,9 +569,9 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 	// We use separate contexts for fetching and working to allow for a graceful
 	// stop. However, both inherit from the provided context so if it is
 	// cancelled a more aggressive stop will be initiated.
-	fetchNewWorkCtx, fetchNewWorkCancel := context.WithCancel(ctx)
+	fetchNewWorkCtx, fetchNewWorkCancel := context.WithCancelCause(ctx)
 	c.fetchNewWorkCancel = fetchNewWorkCancel
-	workCtx, workCancel := context.WithCancel(withClient[TTx](ctx, c))
+	workCtx, workCancel := context.WithCancelCause(withClient[TTx](ctx, c))
 	c.workCancel = workCancel
 
 	// Before doing anything else, make an initial connection to the database to
@@ -690,7 +690,7 @@ func (c *Client[TTx]) Stop(ctx context.Context) error {
 	}
 
 	c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Stop started")
-	c.fetchNewWorkCancel()
+	c.fetchNewWorkCancel(rivercommon.ErrShutdown)
 	return c.awaitStop(ctx)
 }
 
@@ -715,8 +715,8 @@ func (c *Client[TTx]) awaitStop(ctx context.Context) error {
 // instead.
 func (c *Client[TTx]) StopAndCancel(ctx context.Context) error {
 	c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Hard stop started; cancelling all work")
-	c.fetchNewWorkCancel()
-	c.workCancel()
+	c.fetchNewWorkCancel(rivercommon.ErrShutdown)
+	c.workCancel(rivercommon.ErrShutdown)
 	return c.awaitStop(ctx)
 }
 
