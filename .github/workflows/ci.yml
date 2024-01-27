@@ -4,10 +4,6 @@ env:
   # Database to connect to that can create other databases with `CREATE DATABASE`.
   ADMIN_DATABASE_URL: postgres://postgres:postgres@localhost:5432
 
-  # Just a common place for steps to put binaries they need and which is added
-  # to GITHUB_PATH/PATH.
-  BIN_PATH: /home/runner/bin
-
   # A suitable URL for non-test database.
   DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/river_dev?sslmode=disable
 
