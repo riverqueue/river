@@ -14,6 +14,7 @@ import (
 
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/componentstatus"
+	"github.com/riverqueue/river/internal/rivercommon"
 )
 
 const statementTimeout = 5 * time.Second
@@ -135,18 +136,7 @@ func (n *Notifier) getConnAndRun(ctx context.Context) {
 
 	conn, err := n.establishConn(ctx)
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return
-		}
-		// Log at a lower verbosity level in case an error is received when the
-		// context is already done (probably because the client is stopping).
-		// Example tests can finish before the notifier connects and starts
-		// listening, and on client stop may produce a connection error that
-		// would otherwise pollute output and fail the test.
-		select {
-		case <-ctx.Done():
-			n.logger.Info("error establishing connection from pool", "err", err)
-		default:
+		if !errors.Is(context.Cause(ctx), rivercommon.ErrShutdown) {
 			n.logger.Error("error establishing connection from pool", "err", err)
 		}
 		return
