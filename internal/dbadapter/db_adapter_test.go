@@ -144,6 +144,66 @@ func Test_StandardAdapter_JobCancel(t *testing.T) {
 	})
 }
 
+func Test_StandardAdapter_JobGet(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		baselineTime time.Time // baseline time frozen at now when setup is called
+		ex           dbutil.Executor
+	}
+
+	setup := func(t *testing.T, ex dbutil.Executor) (*StandardAdapter, *testBundle) {
+		t.Helper()
+
+		bundle := &testBundle{
+			baselineTime: time.Now().UTC(),
+			ex:           ex,
+		}
+
+		adapter := NewStandardAdapter(riverinternaltest.BaseServiceArchetype(t), testAdapterConfig(bundle.ex))
+		adapter.TimeNowUTC = func() time.Time { return bundle.baselineTime }
+
+		return adapter, bundle
+	}
+
+	setupTx := func(t *testing.T) (*StandardAdapter, *testBundle) {
+		t.Helper()
+		return setup(t, riverinternaltest.TestTx(ctx, t))
+	}
+
+	t.Run("FetchesAnExistingJob", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, bundle := setupTx(t)
+
+		params := makeFakeJobInsertParams(0, nil)
+		insertResult, err := adapter.JobInsert(ctx, params)
+		require.NoError(t, err)
+
+		job, err := adapter.JobGet(ctx, insertResult.Job.ID)
+		require.NoError(t, err)
+		require.NotNil(t, job)
+
+		require.Equal(t, insertResult.Job.ID, job.ID)
+		require.Equal(t, dbsqlc.JobStateAvailable, job.State)
+		require.WithinDuration(t, bundle.baselineTime, job.CreatedAt, time.Millisecond)
+		require.WithinDuration(t, bundle.baselineTime, job.ScheduledAt, time.Millisecond)
+	})
+
+	t.Run("ReturnsErrNoRowsIfJobDoesntExist", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, _ := setupTx(t)
+
+		job, err := adapter.JobGet(ctx, 99999)
+		require.NotNil(t, err)
+		require.ErrorIs(t, err, riverdriver.ErrNoRows)
+		require.Nil(t, job)
+	})
+}
+
 func Test_StandardAdapter_JobGetAvailable(t *testing.T) {
 	t.Parallel()
 

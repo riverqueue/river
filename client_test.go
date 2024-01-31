@@ -1310,6 +1310,50 @@ func Test_Client_InsertManyTx(t *testing.T) {
 	})
 }
 
+func Test_Client_JobGet(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct{}
+
+	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+		t.Helper()
+
+		config := newTestConfig(t, nil)
+		client := newTestClient(ctx, t, config)
+
+		return client, &testBundle{}
+	}
+
+	t.Run("FetchesAnExistingJob", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		newJob, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		job, err := client.JobGet(ctx, newJob.ID)
+		require.NoError(t, err)
+		require.NotNil(t, job)
+
+		require.Equal(t, newJob.ID, job.ID)
+		require.Equal(t, rivertype.JobState(newJob.State), job.State)
+	})
+
+	t.Run("ReturnsErrNotFoundIfJobDoesNotExist", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		job, err := client.JobGet(ctx, 999999)
+		require.NotNil(t, err)
+		require.ErrorIs(t, err, ErrNotFound)
+		require.Nil(t, job)
+	})
+}
+
 func Test_Client_JobList(t *testing.T) {
 	t.Parallel()
 

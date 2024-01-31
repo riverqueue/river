@@ -118,6 +118,8 @@ type Adapter interface {
 	JobInsertMany(ctx context.Context, params []*JobInsertParams) (int64, error)
 	JobInsertManyTx(ctx context.Context, tx pgx.Tx, params []*JobInsertParams) (int64, error)
 
+	JobGet(ctx context.Context, id int64) (*dbsqlc.RiverJob, error)
+	JobGetTx(ctx context.Context, tx pgx.Tx, id int64) (*dbsqlc.RiverJob, error)
 	JobGetAvailable(ctx context.Context, queueName string, limit int32) ([]*dbsqlc.RiverJob, error)
 	JobGetAvailableTx(ctx context.Context, tx pgx.Tx, queueName string, limit int32) ([]*dbsqlc.RiverJob, error)
 
@@ -386,6 +388,27 @@ func (a *StandardAdapter) JobInsertManyTx(ctx context.Context, tx pgx.Tx, params
 	}
 
 	return numInserted, nil
+}
+
+func (a *StandardAdapter) JobGet(ctx context.Context, id int64) (*dbsqlc.RiverJob, error) {
+	return dbutil.WithTxV(ctx, a.executor, func(ctx context.Context, tx pgx.Tx) (*dbsqlc.RiverJob, error) {
+		return a.JobGetTx(ctx, tx, id)
+	})
+}
+
+func (a *StandardAdapter) JobGetTx(ctx context.Context, tx pgx.Tx, id int64) (*dbsqlc.RiverJob, error) {
+	ctx, cancel := context.WithTimeout(ctx, a.deadlineTimeout)
+	defer cancel()
+
+	job, err := a.queries.JobGetByID(ctx, tx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, riverdriver.ErrNoRows
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return job, nil
 }
 
 func (a *StandardAdapter) JobGetAvailable(ctx context.Context, queueName string, limit int32) ([]*dbsqlc.RiverJob, error) {

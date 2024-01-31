@@ -24,6 +24,8 @@ type TestAdapter struct {
 	JobInsertTxCalled            bool
 	JobInsertManyCalled          bool
 	JobInsertManyTxCalled        bool
+	JobGetCalled                 bool
+	JobGetTxCalled               bool
 	JobGetAvailableCalled        bool
 	JobGetAvailableTxCalled      bool
 	JobListCalled                bool
@@ -38,6 +40,8 @@ type TestAdapter struct {
 	JobInsertTxFunc            func(ctx context.Context, tx pgx.Tx, params *dbadapter.JobInsertParams) (*dbadapter.JobInsertResult, error)
 	JobInsertManyFunc          func(ctx context.Context, params []*dbadapter.JobInsertParams) (int64, error)
 	JobInsertManyTxFunc        func(ctx context.Context, tx pgx.Tx, params []*dbadapter.JobInsertParams) (int64, error)
+	JobGetFunc                 func(ctx context.Context, id int64) (*dbsqlc.RiverJob, error)
+	JobGetTxFunc               func(ctx context.Context, tx pgx.Tx, id int64) (*dbsqlc.RiverJob, error)
 	JobGetAvailableFunc        func(ctx context.Context, queueName string, limit int32) ([]*dbsqlc.RiverJob, error)
 	JobGetAvailableTxFunc      func(ctx context.Context, tx pgx.Tx, queueName string, limit int32) ([]*dbsqlc.RiverJob, error)
 	JobListFunc                func(ctx context.Context, params dbadapter.JobListParams) ([]*dbsqlc.RiverJob, error)
@@ -107,6 +111,25 @@ func (ta *TestAdapter) JobInsertManyTx(ctx context.Context, tx pgx.Tx, params []
 	return ta.fallthroughAdapter.JobInsertManyTx(ctx, tx, params)
 }
 
+func (ta *TestAdapter) JobGet(ctx context.Context, id int64) (*dbsqlc.RiverJob, error) {
+	ta.atomicSetBoolTrue(&ta.JobGetCalled)
+
+	if ta.JobGetFunc != nil {
+		return ta.JobGetFunc(ctx, id)
+	}
+
+	return ta.fallthroughAdapter.JobGet(ctx, id)
+}
+
+func (ta *TestAdapter) JobGetTx(ctx context.Context, tx pgx.Tx, id int64) (*dbsqlc.RiverJob, error) {
+	ta.atomicSetBoolTrue(&ta.JobGetTxCalled)
+
+	if ta.JobCancelTxFunc != nil {
+		return ta.JobCancelTxFunc(ctx, tx, id)
+	}
+
+	return ta.fallthroughAdapter.JobGet(ctx, id)
+}
 func (ta *TestAdapter) JobGetAvailable(ctx context.Context, queueName string, limit int32) ([]*dbsqlc.RiverJob, error) {
 	ta.atomicSetBoolTrue(&ta.JobGetAvailableCalled)
 

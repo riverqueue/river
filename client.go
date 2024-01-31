@@ -1040,6 +1040,35 @@ func (c *Client[TTx]) JobCancelTx(ctx context.Context, tx TTx, jobID int64) (*ri
 	return dbsqlc.JobRowFromInternal(job), nil
 }
 
+// JobGet fetches a single job by its ID. Returns the up-to-date JobRow for the
+// specified jobID if it exists. Returns ErrNotFound if the job doesn't exist.
+func (c *Client[TTx]) JobGet(ctx context.Context, jobID int64) (*rivertype.JobRow, error) {
+	job, err := c.adapter.JobGet(ctx, jobID)
+	if err != nil {
+		if errors.Is(err, riverdriver.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+
+	return dbsqlc.JobRowFromInternal(job), nil
+}
+
+// JobGetTx fetches a single job by its ID, within a transaction. Returns the
+// up-to-date JobRow for the specified jobID if it exists. Returns ErrNotFound
+// if the job doesn't exist.
+func (c *Client[TTx]) JobGetTx(ctx context.Context, tx TTx, jobID int64) (*rivertype.JobRow, error) {
+	job, err := c.adapter.JobGetTx(ctx, c.driver.UnwrapTx(tx), jobID)
+	if errors.Is(err, riverdriver.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return dbsqlc.JobRowFromInternal(job), nil
+}
+
 func insertParamsFromArgsAndOptions(args JobArgs, insertOpts *InsertOpts) (*dbadapter.JobInsertParams, error) {
 	encodedArgs, err := json.Marshal(args)
 	if err != nil {
