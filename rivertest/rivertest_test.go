@@ -215,7 +215,7 @@ func TestRequireInsertedTx(t *testing.T) {
 		_, err = riverClient.Insert(ctx, Job2Args{Int: 123}, &river.InsertOpts{
 			MaxAttempts: 78,
 			Priority:    2,
-			Queue:       "another-queue",
+			Queue:       "another_queue",
 			ScheduledAt: testTime,
 			Tags:        []string{"tag1"},
 		})
@@ -224,7 +224,7 @@ func TestRequireInsertedTx(t *testing.T) {
 		_ = requireInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, &Job2Args{}, &RequireInsertedOpts{
 			MaxAttempts: 78,
 			Priority:    2,
-			Queue:       "another-queue",
+			Queue:       "another_queue",
 			ScheduledAt: testTime,
 			Tags:        []string{"tag1"},
 		})
@@ -285,7 +285,7 @@ func TestRequireInsertedTx(t *testing.T) {
 		_, err := riverClient.Insert(ctx, Job2Args{Int: 123}, &river.InsertOpts{
 			MaxAttempts: 78,
 			Priority:    2,
-			Queue:       "another-queue",
+			Queue:       "another_queue",
 			ScheduledAt: testTime,
 			Tags:        []string{"tag1"},
 		})
@@ -297,7 +297,7 @@ func TestRequireInsertedTx(t *testing.T) {
 			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, &RequireInsertedOpts{
 				MaxAttempts: 77,
 				Priority:    2,
-				Queue:       "another-queue",
+				Queue:       "another_queue",
 				ScheduledAt: testTime,
 				State:       river.JobStateScheduled,
 				Tags:        []string{"tag1"},
@@ -314,7 +314,7 @@ func TestRequireInsertedTx(t *testing.T) {
 			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, &RequireInsertedOpts{
 				MaxAttempts: 78,
 				Priority:    3,
-				Queue:       "another-queue",
+				Queue:       "another_queue",
 				ScheduledAt: testTime,
 				State:       river.JobStateScheduled,
 				Tags:        []string{"tag1"},
@@ -338,7 +338,7 @@ func TestRequireInsertedTx(t *testing.T) {
 			})
 			require.True(t, mockT.Failed)
 			require.Equal(t,
-				failureString("Job with kind 'job2' queue 'another-queue' not equal to expected 'wrong-queue'")+"\n",
+				failureString("Job with kind 'job2' queue 'another_queue' not equal to expected 'wrong-queue'")+"\n",
 				mockT.LogOutput())
 		}
 
@@ -348,7 +348,7 @@ func TestRequireInsertedTx(t *testing.T) {
 			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, &RequireInsertedOpts{
 				MaxAttempts: 78,
 				Priority:    2,
-				Queue:       "another-queue",
+				Queue:       "another_queue",
 				ScheduledAt: testTime.Add(3*time.Minute + 23*time.Second + 123*time.Microsecond),
 				State:       river.JobStateScheduled,
 				Tags:        []string{"tag1"},
@@ -365,7 +365,7 @@ func TestRequireInsertedTx(t *testing.T) {
 			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, &RequireInsertedOpts{
 				MaxAttempts: 78,
 				Priority:    2,
-				Queue:       "another-queue",
+				Queue:       "another_queue",
 				ScheduledAt: testTime,
 				State:       river.JobStateCancelled,
 				Tags:        []string{"tag1"},
@@ -382,7 +382,7 @@ func TestRequireInsertedTx(t *testing.T) {
 			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, &RequireInsertedOpts{
 				MaxAttempts: 78,
 				Priority:    2,
-				Queue:       "another-queue",
+				Queue:       "another_queue",
 				ScheduledAt: testTime,
 				State:       river.JobStateScheduled,
 				Tags:        []string{"tag2"},
@@ -629,7 +629,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 		_, err = riverClient.Insert(ctx, Job2Args{Int: 123}, &river.InsertOpts{
 			MaxAttempts: 78,
 			Priority:    2,
-			Queue:       "another-queue",
+			Queue:       "another_queue",
 			ScheduledAt: testTime,
 			Tags:        []string{"tag1"},
 		})
@@ -641,7 +641,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 				Opts: &RequireInsertedOpts{
 					MaxAttempts: 78,
 					Priority:    2,
-					Queue:       "another-queue",
+					Queue:       "another_queue",
 					ScheduledAt: testTime,
 					Tags:        []string{"tag1"},
 				},
@@ -741,7 +741,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 		_, err := riverClient.Insert(ctx, Job2Args{Int: 123}, &river.InsertOpts{
 			MaxAttempts: 78,
 			Priority:    2,
-			Queue:       "another-queue",
+			Queue:       "another_queue",
 			ScheduledAt: testTime,
 			Tags:        []string{"tag1"},
 		})
@@ -756,7 +756,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 					Opts: &RequireInsertedOpts{
 						MaxAttempts: 77,
 						Priority:    2,
-						Queue:       "another-queue",
+						Queue:       "another_queue",
 						ScheduledAt: testTime,
 						State:       river.JobStateScheduled,
 						Tags:        []string{"tag1"},
@@ -778,7 +778,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 					Opts: &RequireInsertedOpts{
 						MaxAttempts: 78,
 						Priority:    3,
-						Queue:       "another-queue",
+						Queue:       "another_queue",
 						ScheduledAt: testTime,
 						State:       river.JobStateScheduled,
 						Tags:        []string{"tag1"},
@@ -809,7 +809,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 			})
 			require.True(t, mockT.Failed)
 			require.Equal(t,
-				failureString("Job with kind 'job2' (expected job slice index 0) queue 'another-queue' not equal to expected 'wrong-queue'")+"\n",
+				failureString("Job with kind 'job2' (expected job slice index 0) queue 'another_queue' not equal to expected 'wrong-queue'")+"\n",
 				mockT.LogOutput())
 		}
 
@@ -822,7 +822,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 					Opts: &RequireInsertedOpts{
 						MaxAttempts: 78,
 						Priority:    2,
-						Queue:       "another-queue",
+						Queue:       "another_queue",
 						ScheduledAt: testTime.Add(3*time.Minute + 23*time.Second + 123*time.Microsecond),
 						State:       river.JobStateScheduled,
 						Tags:        []string{"tag1"},
@@ -844,7 +844,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 					Opts: &RequireInsertedOpts{
 						MaxAttempts: 78,
 						Priority:    2,
-						Queue:       "another-queue",
+						Queue:       "another_queue",
 						State:       river.JobStateCancelled,
 						ScheduledAt: testTime,
 						Tags:        []string{"tag1"},
@@ -866,7 +866,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 					Opts: &RequireInsertedOpts{
 						MaxAttempts: 78,
 						Priority:    2,
-						Queue:       "another-queue",
+						Queue:       "another_queue",
 						ScheduledAt: testTime,
 						State:       river.JobStateScheduled,
 						Tags:        []string{"tag2"},

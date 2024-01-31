@@ -891,6 +891,15 @@ func Test_Client_Insert(t *testing.T) {
 		require.WithinDuration(t, time.Now(), jobRow.ScheduledAt, 2*time.Second)
 	})
 
+	t.Run("ErrorsOnInvalidQueueName", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		_, err := client.Insert(ctx, &noOpArgs{}, &InsertOpts{Queue: "invalid*queue"})
+		require.ErrorContains(t, err, "queue name is invalid")
+	})
+
 	t.Run("ErrorsOnDriverWithoutPool", func(t *testing.T) {
 		t.Parallel()
 
@@ -1084,6 +1093,18 @@ func Test_Client_InsertMany(t *testing.T) {
 		require.Len(t, jobs, 1, "Expected to find exactly one job of kind: "+(noOpArgs{}).Kind())
 		jobRow := jobs[0]
 		require.WithinDuration(t, time.Now(), jobRow.ScheduledAt, 2*time.Second)
+	})
+
+	t.Run("ErrorsOnInvalidQueueName", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		count, err := client.InsertMany(ctx, []InsertManyParams{
+			{Args: &noOpArgs{}, InsertOpts: &InsertOpts{Queue: "invalid*queue"}},
+		})
+		require.ErrorContains(t, err, "queue name is invalid")
+		require.Equal(t, int64(0), count)
 	})
 
 	t.Run("ErrorsOnDriverWithoutPool", func(t *testing.T) {
@@ -1864,7 +1885,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		// pass before our insertion is complete.
 		ineligibleJob1 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateAvailable})
 		ineligibleJob2 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateRunning})
-		ineligibleJob3 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateCompleted})
+		ineligibleJob3 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateCompleted, FinalizedAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
 
 		jobInPast1 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateScheduled, ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
 		jobInPast2 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateScheduled, ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Minute))})
@@ -2929,16 +2950,22 @@ func Test_NewClient_Validations(t *testing.T) {
 			wantErr: errors.New("queue name cannot be longer than 64 characters"),
 		},
 		{
-			name: "Queues queue names can't have hyphens",
+			name: "Queues queue names can't have asterisks",
 			configFunc: func(config *Config) {
-				config.Queues = map[string]QueueConfig{"no-hyphens": {MaxWorkers: 1}}
+				config.Queues = map[string]QueueConfig{"no*hyphens": {MaxWorkers: 1}}
 			},
-			wantErr: errors.New("queue name is invalid, see documentation: \"no-hyphens\""),
+			wantErr: errors.New("queue name is invalid, expected letters and numbers separated by underscores or hyphens: \"no*hyphens\""),
 		},
 		{
 			name: "Queues queue names can be letters and numbers joined by underscores",
 			configFunc: func(config *Config) {
 				config.Queues = map[string]QueueConfig{"some_awesome_3rd_queue_namezzz": {MaxWorkers: 1}}
+			},
+		},
+		{
+			name: "Queues queue names can be letters and numbers joined by hyphens",
+			configFunc: func(config *Config) {
+				config.Queues = map[string]QueueConfig{"some-awesome-3rd-queue-namezzz": {MaxWorkers: 1}}
 			},
 		},
 		{
