@@ -891,6 +891,15 @@ func Test_Client_Insert(t *testing.T) {
 		require.WithinDuration(t, time.Now(), jobRow.ScheduledAt, 2*time.Second)
 	})
 
+	t.Run("ErrorsOnInvalidQueueName", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		_, err := client.Insert(ctx, &noOpArgs{}, &InsertOpts{Queue: "invalid-queue"})
+		require.ErrorContains(t, err, "queue name is invalid")
+	})
+
 	t.Run("ErrorsOnDriverWithoutPool", func(t *testing.T) {
 		t.Parallel()
 
@@ -1084,6 +1093,18 @@ func Test_Client_InsertMany(t *testing.T) {
 		require.Len(t, jobs, 1, "Expected to find exactly one job of kind: "+(noOpArgs{}).Kind())
 		jobRow := jobs[0]
 		require.WithinDuration(t, time.Now(), jobRow.ScheduledAt, 2*time.Second)
+	})
+
+	t.Run("ErrorsOnInvalidQueueName", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		count, err := client.InsertMany(ctx, []InsertManyParams{
+			{Args: &noOpArgs{}, InsertOpts: &InsertOpts{Queue: "invalid-queue"}},
+		})
+		require.ErrorContains(t, err, "queue name is invalid")
+		require.Equal(t, int64(0), count)
 	})
 
 	t.Run("ErrorsOnDriverWithoutPool", func(t *testing.T) {

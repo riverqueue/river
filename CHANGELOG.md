@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Validate queue name on job insertion. [PR #184](https://github.com/riverqueue/rive/pull/184).
+
 ## [0.0.18] - 2024-01-25
 
 ### Fixed

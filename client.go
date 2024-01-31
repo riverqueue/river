@@ -1059,6 +1059,10 @@ func insertParamsFromArgsAndOptions(args JobArgs, insertOpts *InsertOpts) (*dbad
 	priority := valutil.FirstNonZero(insertOpts.Priority, jobInsertOpts.Priority, rivercommon.PriorityDefault)
 	queue := valutil.FirstNonZero(insertOpts.Queue, jobInsertOpts.Queue, rivercommon.QueueDefault)
 
+	if err := validateQueueName(queue); err != nil {
+		return nil, err
+	}
+
 	tags := insertOpts.Tags
 	if insertOpts.Tags == nil {
 		tags = jobInsertOpts.Tags
@@ -1298,7 +1302,7 @@ func validateQueueName(queueName string) error {
 		return errors.New("queue name cannot be longer than 64 characters")
 	}
 	if !nameRegex.MatchString(queueName) {
-		return fmt.Errorf("queue name is invalid, see documentation: %q", queueName)
+		return fmt.Errorf("queue name is invalid, expected letters and numbers separated by underscore: %q", queueName)
 	}
 	return nil
 }
