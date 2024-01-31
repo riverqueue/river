@@ -1885,7 +1885,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		// pass before our insertion is complete.
 		ineligibleJob1 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateAvailable})
 		ineligibleJob2 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateRunning})
-		ineligibleJob3 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateCompleted})
+		ineligibleJob3 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateCompleted, FinalizedAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
 
 		jobInPast1 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateScheduled, ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
 		jobInPast2 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateScheduled, ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Minute))})
