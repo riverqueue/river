@@ -896,7 +896,7 @@ func Test_Client_Insert(t *testing.T) {
 
 		client, _ := setup(t)
 
-		_, err := client.Insert(ctx, &noOpArgs{}, &InsertOpts{Queue: "invalid-queue"})
+		_, err := client.Insert(ctx, &noOpArgs{}, &InsertOpts{Queue: "invalid*queue"})
 		require.ErrorContains(t, err, "queue name is invalid")
 	})
 
@@ -1101,7 +1101,7 @@ func Test_Client_InsertMany(t *testing.T) {
 		client, _ := setup(t)
 
 		count, err := client.InsertMany(ctx, []InsertManyParams{
-			{Args: &noOpArgs{}, InsertOpts: &InsertOpts{Queue: "invalid-queue"}},
+			{Args: &noOpArgs{}, InsertOpts: &InsertOpts{Queue: "invalid*queue"}},
 		})
 		require.ErrorContains(t, err, "queue name is invalid")
 		require.Equal(t, int64(0), count)
@@ -2950,16 +2950,22 @@ func Test_NewClient_Validations(t *testing.T) {
 			wantErr: errors.New("queue name cannot be longer than 64 characters"),
 		},
 		{
-			name: "Queues queue names can't have hyphens",
+			name: "Queues queue names can't have asterisks",
 			configFunc: func(config *Config) {
-				config.Queues = map[string]QueueConfig{"no-hyphens": {MaxWorkers: 1}}
+				config.Queues = map[string]QueueConfig{"no*hyphens": {MaxWorkers: 1}}
 			},
-			wantErr: errors.New("queue name is invalid, see documentation: \"no-hyphens\""),
+			wantErr: errors.New("queue name is invalid, expected letters and numbers separated by underscores or hyphens: \"no*hyphens\""),
 		},
 		{
 			name: "Queues queue names can be letters and numbers joined by underscores",
 			configFunc: func(config *Config) {
 				config.Queues = map[string]QueueConfig{"some_awesome_3rd_queue_namezzz": {MaxWorkers: 1}}
+			},
+		},
+		{
+			name: "Queues queue names can be letters and numbers joined by hyphens",
+			configFunc: func(config *Config) {
+				config.Queues = map[string]QueueConfig{"some-awesome-3rd-queue-namezzz": {MaxWorkers: 1}}
 			},
 		},
 		{

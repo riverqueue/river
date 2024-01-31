@@ -1292,7 +1292,7 @@ func (c *Client[TTx]) validateJobArgs(args JobArgs) error {
 	return nil
 }
 
-var nameRegex = regexp.MustCompile(`^(?:[a-z0-9])+(?:_?[a-z0-9]+)*$`)
+var nameRegex = regexp.MustCompile(`^(?:[a-z0-9])+(?:[_|\-]?[a-z0-9]+)*$`)
 
 func validateQueueName(queueName string) error {
 	if queueName == "" {
@@ -1302,7 +1302,7 @@ func validateQueueName(queueName string) error {
 		return errors.New("queue name cannot be longer than 64 characters")
 	}
 	if !nameRegex.MatchString(queueName) {
-		return fmt.Errorf("queue name is invalid, expected letters and numbers separated by underscore: %q", queueName)
+		return fmt.Errorf("queue name is invalid, expected letters and numbers separated by underscores or hyphens: %q", queueName)
 	}
 	return nil
 }
