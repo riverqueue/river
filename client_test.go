@@ -942,8 +942,7 @@ func Test_Client_InsertTx(t *testing.T) {
 	ctx := context.Background()
 
 	type testBundle struct {
-		queries *dbsqlc.Queries
-		tx      pgx.Tx
+		tx pgx.Tx
 	}
 
 	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
@@ -1338,7 +1337,7 @@ func Test_Client_JobGet(t *testing.T) {
 		require.NotNil(t, job)
 
 		require.Equal(t, newJob.ID, job.ID)
-		require.Equal(t, rivertype.JobState(newJob.State), job.State)
+		require.Equal(t, newJob.State, job.State)
 	})
 
 	t.Run("ReturnsErrNotFoundIfJobDoesNotExist", func(t *testing.T) {
@@ -1347,7 +1346,7 @@ func Test_Client_JobGet(t *testing.T) {
 		client, _ := setup(t)
 
 		job, err := client.JobGet(ctx, 999999)
-		require.NotNil(t, err)
+		require.Error(t, err)
 		require.ErrorIs(t, err, ErrNotFound)
 		require.Nil(t, job)
 	})

@@ -198,7 +198,7 @@ func Test_StandardAdapter_JobGet(t *testing.T) {
 		adapter, _ := setupTx(t)
 
 		job, err := adapter.JobGet(ctx, 99999)
-		require.NotNil(t, err)
+		require.Error(t, err)
 		require.ErrorIs(t, err, riverdriver.ErrNoRows)
 		require.Nil(t, job)
 	})

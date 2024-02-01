@@ -130,6 +130,7 @@ func (ta *TestAdapter) JobGetTx(ctx context.Context, tx pgx.Tx, id int64) (*dbsq
 
 	return ta.fallthroughAdapter.JobGet(ctx, id)
 }
+
 func (ta *TestAdapter) JobGetAvailable(ctx context.Context, queueName string, limit int32) ([]*dbsqlc.RiverJob, error) {
 	ta.atomicSetBoolTrue(&ta.JobGetAvailableCalled)
 
