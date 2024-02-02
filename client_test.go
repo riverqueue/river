@@ -170,7 +170,6 @@ func Test_Client(t *testing.T) {
 	ctx := context.Background()
 
 	type testBundle struct {
-		queries       *dbsqlc.Queries
 		subscribeChan <-chan *Event
 	}
 
@@ -239,9 +238,9 @@ func Test_Client(t *testing.T) {
 		require.Equal(t, JobStateCancelled, event.Job.State)
 		require.WithinDuration(t, time.Now(), *event.Job.FinalizedAt, 2*time.Second)
 
-		updatedJob, err := bundle.queries.JobGetByID(ctx, client.driver.GetDBPool(), insertedJob.ID)
+		updatedJob, err := client.JobGet(ctx, insertedJob.ID)
 		require.NoError(t, err)
-		require.Equal(t, dbsqlc.JobStateCancelled, updatedJob.State)
+		require.Equal(t, rivertype.JobStateCancelled, updatedJob.State)
 		require.WithinDuration(t, time.Now(), *updatedJob.FinalizedAt, 2*time.Second)
 	})
 
@@ -268,9 +267,9 @@ func Test_Client(t *testing.T) {
 		require.Equal(t, JobStateScheduled, event.Job.State)
 		require.WithinDuration(t, time.Now().Add(15*time.Minute), event.Job.ScheduledAt, 2*time.Second)
 
-		updatedJob, err := bundle.queries.JobGetByID(ctx, client.driver.GetDBPool(), insertedJob.ID)
+		updatedJob, err := client.JobGet(ctx, insertedJob.ID)
 		require.NoError(t, err)
-		require.Equal(t, dbsqlc.JobStateScheduled, updatedJob.State)
+		require.Equal(t, rivertype.JobStateScheduled, updatedJob.State)
 		require.WithinDuration(t, time.Now().Add(15*time.Minute), updatedJob.ScheduledAt, 2*time.Second)
 	})
 
@@ -316,9 +315,9 @@ func Test_Client(t *testing.T) {
 		require.Equal(t, JobStateCancelled, event.Job.State)
 		require.WithinDuration(t, time.Now(), *event.Job.FinalizedAt, 2*time.Second)
 
-		jobAfterCancel, err := bundle.queries.JobGetByID(ctx, client.driver.GetDBPool(), insertedJob.ID)
+		jobAfterCancel, err := client.JobGet(ctx, insertedJob.ID)
 		require.NoError(t, err)
-		require.Equal(t, dbsqlc.JobStateCancelled, jobAfterCancel.State)
+		require.Equal(t, rivertype.JobStateCancelled, jobAfterCancel.State)
 		require.WithinDuration(t, time.Now(), *jobAfterCancel.FinalizedAt, 2*time.Second)
 	}
 
@@ -943,8 +942,7 @@ func Test_Client_InsertTx(t *testing.T) {
 	ctx := context.Background()
 
 	type testBundle struct {
-		queries *dbsqlc.Queries
-		tx      pgx.Tx
+		tx pgx.Tx
 	}
 
 	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
@@ -977,8 +975,8 @@ func Test_Client_InsertTx(t *testing.T) {
 		require.Equal(t, []string{}, jobRow.Tags)
 
 		// Job is not visible outside of the transaction.
-		_, err = bundle.queries.JobGetByID(ctx, client.driver.GetDBPool(), jobRow.ID)
-		require.ErrorIs(t, err, pgx.ErrNoRows)
+		_, err = client.JobGet(ctx, jobRow.ID)
+		require.ErrorIs(t, err, ErrNotFound)
 	})
 
 	t.Run("WithInsertOpts", func(t *testing.T) {
@@ -1307,6 +1305,50 @@ func Test_Client_InsertManyTx(t *testing.T) {
 		})
 		require.EqualError(t, err, "UniqueOpts are not supported for batch inserts")
 		require.Equal(t, int64(0), count)
+	})
+}
+
+func Test_Client_JobGet(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct{}
+
+	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+		t.Helper()
+
+		config := newTestConfig(t, nil)
+		client := newTestClient(ctx, t, config)
+
+		return client, &testBundle{}
+	}
+
+	t.Run("FetchesAnExistingJob", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		newJob, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		job, err := client.JobGet(ctx, newJob.ID)
+		require.NoError(t, err)
+		require.NotNil(t, job)
+
+		require.Equal(t, newJob.ID, job.ID)
+		require.Equal(t, newJob.State, job.State)
+	})
+
+	t.Run("ReturnsErrNotFoundIfJobDoesNotExist", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		job, err := client.JobGet(ctx, 999999)
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrNotFound)
+		require.Nil(t, job)
 	})
 }
 
@@ -1721,26 +1763,26 @@ func Test_Client_Maintenance(t *testing.T) {
 		jc.TestSignals.DeletedBatch.WaitOrTimeout()
 
 		var err error
-		_, err = queries.JobGetByID(ctx, client.driver.GetDBPool(), ineligibleJob1.ID)
-		require.NotErrorIs(t, err, pgx.ErrNoRows) // still there
-		_, err = queries.JobGetByID(ctx, client.driver.GetDBPool(), ineligibleJob2.ID)
-		require.NotErrorIs(t, err, pgx.ErrNoRows) // still there
-		_, err = queries.JobGetByID(ctx, client.driver.GetDBPool(), ineligibleJob3.ID)
-		require.NotErrorIs(t, err, pgx.ErrNoRows) // still there
+		_, err = client.JobGet(ctx, ineligibleJob1.ID)
+		require.NotErrorIs(t, err, ErrNotFound) // still there
+		_, err = client.JobGet(ctx, ineligibleJob2.ID)
+		require.NotErrorIs(t, err, ErrNotFound) // still there
+		_, err = client.JobGet(ctx, ineligibleJob3.ID)
+		require.NotErrorIs(t, err, ErrNotFound) // still there
 
-		_, err = queries.JobGetByID(ctx, client.driver.GetDBPool(), jobBeyondHorizon1.ID)
-		require.ErrorIs(t, err, pgx.ErrNoRows)
-		_, err = queries.JobGetByID(ctx, client.driver.GetDBPool(), jobBeyondHorizon2.ID)
-		require.ErrorIs(t, err, pgx.ErrNoRows)
-		_, err = queries.JobGetByID(ctx, client.driver.GetDBPool(), jobBeyondHorizon3.ID)
-		require.ErrorIs(t, err, pgx.ErrNoRows)
+		_, err = client.JobGet(ctx, jobBeyondHorizon1.ID)
+		require.ErrorIs(t, err, ErrNotFound)
+		_, err = client.JobGet(ctx, jobBeyondHorizon2.ID)
+		require.ErrorIs(t, err, ErrNotFound)
+		_, err = client.JobGet(ctx, jobBeyondHorizon3.ID)
+		require.ErrorIs(t, err, ErrNotFound)
 
-		_, err = queries.JobGetByID(ctx, client.driver.GetDBPool(), jobWithinHorizon1.ID)
-		require.NotErrorIs(t, err, pgx.ErrNoRows) // still there
-		_, err = queries.JobGetByID(ctx, client.driver.GetDBPool(), jobWithinHorizon2.ID)
-		require.NotErrorIs(t, err, pgx.ErrNoRows) // still there
-		_, err = queries.JobGetByID(ctx, client.driver.GetDBPool(), jobWithinHorizon3.ID)
-		require.NotErrorIs(t, err, pgx.ErrNoRows) // still there
+		_, err = client.JobGet(ctx, jobWithinHorizon1.ID)
+		require.NotErrorIs(t, err, ErrNotFound) // still there
+		_, err = client.JobGet(ctx, jobWithinHorizon2.ID)
+		require.NotErrorIs(t, err, ErrNotFound) // still there
+		_, err = client.JobGet(ctx, jobWithinHorizon3.ID)
+		require.NotErrorIs(t, err, ErrNotFound) // still there
 	})
 
 	t.Run("PeriodicJobEnqueuerWithOpts", func(t *testing.T) {
@@ -2372,10 +2414,10 @@ func Test_Client_JobCompletion(t *testing.T) {
 		require.Equal(job.ID, event.Job.ID)
 		require.Equal(JobStateCompleted, event.Job.State)
 
-		reloadedJob, err := queries.JobGetByID(ctx, client.driver.GetDBPool(), job.ID)
+		reloadedJob, err := client.JobGet(ctx, job.ID)
 		require.NoError(err)
 
-		require.Equal(dbsqlc.JobStateCompleted, reloadedJob.State)
+		require.Equal(rivertype.JobStateCompleted, reloadedJob.State)
 		require.WithinDuration(time.Now(), *reloadedJob.FinalizedAt, 2*time.Second)
 	})
 
@@ -2406,10 +2448,10 @@ func Test_Client_JobCompletion(t *testing.T) {
 		require.Equal(job.ID, event.Job.ID)
 		require.Equal(JobStateCompleted, event.Job.State)
 
-		reloadedJob, err := queries.JobGetByID(ctx, client.driver.GetDBPool(), job.ID)
+		reloadedJob, err := client.JobGet(ctx, job.ID)
 		require.NoError(err)
 
-		require.Equal(dbsqlc.JobStateCompleted, reloadedJob.State)
+		require.Equal(rivertype.JobStateCompleted, reloadedJob.State)
 		require.WithinDuration(now, *reloadedJob.FinalizedAt, time.Microsecond)
 	})
 
@@ -2430,10 +2472,10 @@ func Test_Client_JobCompletion(t *testing.T) {
 		require.Equal(job.ID, event.Job.ID)
 		require.Equal(JobStateRetryable, event.Job.State)
 
-		reloadedJob, err := queries.JobGetByID(ctx, client.driver.GetDBPool(), job.ID)
+		reloadedJob, err := client.JobGet(ctx, job.ID)
 		require.NoError(err)
 
-		require.Equal(dbsqlc.JobStateRetryable, reloadedJob.State)
+		require.Equal(rivertype.JobStateRetryable, reloadedJob.State)
 		require.WithinDuration(time.Now(), reloadedJob.ScheduledAt, 2*time.Second)
 		require.Nil(reloadedJob.FinalizedAt)
 	})
@@ -2455,10 +2497,10 @@ func Test_Client_JobCompletion(t *testing.T) {
 		require.Equal(job.ID, event.Job.ID)
 		require.Equal(JobStateCancelled, event.Job.State)
 
-		reloadedJob, err := queries.JobGetByID(ctx, client.driver.GetDBPool(), job.ID)
+		reloadedJob, err := client.JobGet(ctx, job.ID)
 		require.NoError(err)
 
-		require.Equal(dbsqlc.JobStateCancelled, reloadedJob.State)
+		require.Equal(rivertype.JobStateCancelled, reloadedJob.State)
 		require.NotNil(reloadedJob.FinalizedAt)
 		require.WithinDuration(time.Now(), *reloadedJob.FinalizedAt, 2*time.Second)
 	})
@@ -2492,10 +2534,10 @@ func Test_Client_JobCompletion(t *testing.T) {
 		require.Equal(job.ID, event.Job.ID)
 		require.Equal(JobStateDiscarded, event.Job.State)
 
-		reloadedJob, err := queries.JobGetByID(ctx, client.driver.GetDBPool(), job.ID)
+		reloadedJob, err := client.JobGet(ctx, job.ID)
 		require.NoError(err)
 
-		require.Equal(dbsqlc.JobStateDiscarded, reloadedJob.State)
+		require.Equal(rivertype.JobStateDiscarded, reloadedJob.State)
 		require.NotNil(reloadedJob.FinalizedAt)
 	})
 
@@ -2538,10 +2580,10 @@ func Test_Client_JobCompletion(t *testing.T) {
 		// updated job inside the txn:
 		require.WithinDuration(*updatedJob.FinalizedAt, *event.Job.FinalizedAt, time.Microsecond)
 
-		reloadedJob, err := queries.JobGetByID(ctx, client.driver.GetDBPool(), job.ID)
+		reloadedJob, err := client.JobGet(ctx, job.ID)
 		require.NoError(err)
 
-		require.Equal(dbsqlc.JobStateCompleted, reloadedJob.State)
+		require.Equal(rivertype.JobStateCompleted, reloadedJob.State)
 		require.Equal(updatedJob.FinalizedAt, reloadedJob.FinalizedAt)
 	})
 }
