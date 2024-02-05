@@ -1069,6 +1069,51 @@ func (c *Client[TTx]) JobGetTx(ctx context.Context, tx TTx, jobID int64) (*river
 	return dbsqlc.JobRowFromInternal(job), nil
 }
 
+// JobRetry updates the job with the given ID to make it immediately available
+// to be retried. Jobs in the running state are not touched, while jobs in any
+// other state are made available. To prevent jobs already waiting in the queue
+// from being set back in line, the job's scheduled_at field is set to the
+// current time only if it's not already in the past.
+//
+// MaxAttempts is also incremented by one if the job has already exhausted its
+// max attempts.
+func (c *Client[TTx]) JobRetry(ctx context.Context, jobID int64) (*rivertype.JobRow, error) {
+	job, err := c.adapter.JobRetryImmediately(ctx, jobID)
+	if err != nil {
+		if errors.Is(err, riverdriver.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+
+	return dbsqlc.JobRowFromInternal(job), nil
+}
+
+// JobRetryTx updates the job with the given ID to make it immediately available
+// to be retried, within the specified transaction. This variant lets a caller
+// retry a job atomically alongside other database changes. A retried job isn't
+// visible to be worked until the transaction commits, and if the transaction
+// rolls back, so too is the retried job.
+//
+// Jobs in the running state are not touched, while jobs in any other state are
+// made available. To prevent jobs already waiting in the queue from being set
+// back in line, the job's scheduled_at field is set to the current time only if
+// it's not already in the past.
+//
+// MaxAttempts is also incremented by one if the job has already exhausted its
+// max attempts.
+func (c *Client[TTx]) JobRetryTx(ctx context.Context, tx TTx, jobID int64) (*rivertype.JobRow, error) {
+	job, err := c.adapter.JobRetryImmediatelyTx(ctx, c.driver.UnwrapTx(tx), jobID)
+	if errors.Is(err, riverdriver.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return dbsqlc.JobRowFromInternal(job), nil
+}
+
 func insertParamsFromArgsAndOptions(args JobArgs, insertOpts *InsertOpts) (*dbadapter.JobInsertParams, error) {
 	encodedArgs, err := json.Marshal(args)
 	if err != nil {

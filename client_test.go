@@ -1566,6 +1566,74 @@ func Test_Client_JobList(t *testing.T) {
 	})
 }
 
+func Test_Client_JobRetry(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct{}
+
+	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+		t.Helper()
+
+		config := newTestConfig(t, nil)
+		client := newTestClient(ctx, t, config)
+
+		return client, &testBundle{}
+	}
+
+	t.Run("UpdatesAJobScheduledInTheFutureToBeImmediatelyAvailable", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		newJob, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(time.Hour)})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateScheduled, newJob.State)
+
+		job, err := client.JobRetry(ctx, newJob.ID)
+		require.NoError(t, err)
+		require.NotNil(t, job)
+
+		require.Equal(t, rivertype.JobStateAvailable, job.State)
+		require.WithinDuration(t, time.Now().UTC(), job.ScheduledAt, 5*time.Second)
+	})
+
+	t.Run("TxVariantAlsoUpdatesJobToAvailable", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		newJob, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(time.Hour)})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateScheduled, newJob.State)
+
+		var jobAfter *rivertype.JobRow
+
+		err = pgx.BeginFunc(ctx, client.driver.GetDBPool(), func(tx pgx.Tx) error {
+			var err error
+			jobAfter, err = client.JobRetryTx(ctx, tx, newJob.ID)
+			return err
+		})
+		require.NoError(t, err)
+		require.NotNil(t, jobAfter)
+
+		require.Equal(t, rivertype.JobStateAvailable, jobAfter.State)
+		require.WithinDuration(t, time.Now().UTC(), jobAfter.ScheduledAt, 5*time.Second)
+	})
+
+	t.Run("ReturnsErrNotFoundIfJobDoesNotExist", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		job, err := client.JobRetry(ctx, 999999)
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrNotFound)
+		require.Nil(t, job)
+	})
+}
+
 func Test_Client_ErrorHandler(t *testing.T) {
 	t.Parallel()
 
