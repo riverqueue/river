@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"slices"
 	"sort"
 	"sync"
 	"testing"
@@ -950,6 +951,141 @@ func Test_StandardAdapter_JobList_and_JobListTx(t *testing.T) {
 			returnedIDs := sliceutil.Map(jobs, func(j *dbsqlc.RiverJob) int64 { return j.ID })
 			require.Equal(t, []int64{job3.ID}, returnedIDs)
 		})
+	})
+}
+
+func Test_StandardAdapter_JobRetryImmediately(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		baselineTime time.Time // baseline time frozen at now when setup is called
+		ex           dbutil.Executor
+	}
+
+	setup := func(t *testing.T, ex dbutil.Executor) (*StandardAdapter, *testBundle) {
+		t.Helper()
+
+		bundle := &testBundle{
+			baselineTime: time.Now(),
+			ex:           ex,
+		}
+
+		adapter := NewStandardAdapter(riverinternaltest.BaseServiceArchetype(t), testAdapterConfig(bundle.ex))
+		adapter.TimeNowUTC = func() time.Time { return bundle.baselineTime }
+
+		return adapter, bundle
+	}
+
+	setupTx := func(t *testing.T) (*StandardAdapter, *testBundle) {
+		t.Helper()
+		return setup(t, riverinternaltest.TestTx(ctx, t))
+	}
+
+	t.Run("DoesNotUpdateARunningJob", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, bundle := setupTx(t)
+
+		params := makeFakeJobInsertParams(0, nil)
+		params.State = dbsqlc.JobStateRunning
+		res, err := adapter.JobInsert(ctx, params)
+		require.NoError(t, err)
+		require.Equal(t, dbsqlc.JobStateRunning, res.Job.State)
+
+		jAfter, err := adapter.JobRetryImmediately(ctx, res.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, dbsqlc.JobStateRunning, jAfter.State)
+		require.WithinDuration(t, res.Job.ScheduledAt, jAfter.ScheduledAt, time.Microsecond)
+
+		j, err := adapter.queries.JobGetByID(ctx, bundle.ex, res.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, dbsqlc.JobStateRunning, j.State)
+	})
+
+	for _, state := range []dbsqlc.JobState{
+		dbsqlc.JobStateAvailable,
+		dbsqlc.JobStateCancelled,
+		dbsqlc.JobStateCompleted,
+		dbsqlc.JobStateDiscarded,
+		// TODO(bgentry): add Pending to this list when it's added:
+		dbsqlc.JobStateRetryable,
+		dbsqlc.JobStateScheduled,
+	} {
+		state := state
+
+		t.Run(fmt.Sprintf("UpdatesA_%s_JobToBeScheduledImmediately", state), func(t *testing.T) {
+			t.Parallel()
+
+			adapter, bundle := setupTx(t)
+
+			params := makeFakeJobInsertParams(0, nil)
+			// As long as the job is scheduled for any time in the future, it
+			// scheduled_at should be updated to now:
+			params.ScheduledAt = bundle.baselineTime.Add(time.Hour)
+			res, err := adapter.JobInsert(ctx, params)
+			require.NoError(t, err)
+
+			// Finalized states require a FinalizedAt. JobInsert doesn't allow setting
+			// FinalizedAt so do it with a subsequent update after insert:
+			setFinalized := slices.Contains([]dbsqlc.JobState{
+				dbsqlc.JobStateCancelled,
+				dbsqlc.JobStateCompleted,
+				dbsqlc.JobStateDiscarded,
+			}, state)
+			_, err = adapter.queries.JobUpdate(ctx, bundle.ex, dbsqlc.JobUpdateParams{
+				FinalizedAtDoUpdate: setFinalized,
+				FinalizedAt:         &bundle.baselineTime,
+				ID:                  res.Job.ID,
+				StateDoUpdate:       true,
+				State:               state,
+			})
+			require.NoError(t, err)
+
+			jAfter, err := adapter.JobRetryImmediately(ctx, res.Job.ID)
+			require.NoError(t, err)
+			require.Equal(t, dbsqlc.JobStateAvailable, jAfter.State)
+			require.WithinDuration(t, time.Now().UTC(), jAfter.ScheduledAt, 100*time.Millisecond)
+
+			j, err := adapter.queries.JobGetByID(ctx, bundle.ex, res.Job.ID)
+			require.NoError(t, err)
+			require.Equal(t, dbsqlc.JobStateAvailable, j.State)
+			require.Nil(t, j.FinalizedAt)
+		})
+	}
+
+	t.Run("DoesNotAlterScheduledAtIfInThePast", func(t *testing.T) {
+		// We don't want to update ScheduledAt if the job was already scheduled
+		// because doing so can make it lose its place in line.
+		t.Parallel()
+
+		adapter, bundle := setupTx(t)
+
+		params := makeFakeJobInsertParams(0, nil)
+		params.ScheduledAt = bundle.baselineTime.Add(-1 * time.Hour)
+		params.State = dbsqlc.JobStateScheduled
+		res, err := adapter.JobInsert(ctx, params)
+		require.NoError(t, err)
+
+		jAfter, err := adapter.JobRetryImmediately(ctx, res.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, dbsqlc.JobStateAvailable, jAfter.State)
+		require.WithinDuration(t, params.ScheduledAt, jAfter.ScheduledAt, time.Microsecond)
+
+		j, err := adapter.queries.JobGetByID(ctx, bundle.ex, res.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, dbsqlc.JobStateAvailable, j.State)
+	})
+
+	t.Run("ReturnsErrNoRowsIfJobNotFound", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, _ := setupTx(t)
+
+		_, err := adapter.JobRetryImmediately(ctx, 999999)
+		require.Error(t, err)
+		require.ErrorIs(t, err, riverdriver.ErrNoRows)
 	})
 }
 

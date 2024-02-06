@@ -245,6 +245,41 @@ INSERT INTO river_job(
   @tags
 );
 
+-- name: JobRetryImmediately :one
+WITH job_to_update AS (
+  SELECT
+    id
+  FROM
+    river_job
+  WHERE
+    river_job.id = @id
+  FOR UPDATE
+),
+
+updated_job AS (
+  UPDATE river_job
+  SET
+    state = 'available'::river_job_state,
+    scheduled_at = CASE WHEN scheduled_at < now() THEN scheduled_at ELSE now() END,
+    max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END,
+    finalized_at = NULL
+  FROM job_to_update
+  WHERE river_job.id = job_to_update.id
+    -- Do not touch running jobs:
+    AND river_job.state != 'running'::river_job_state
+    -- If the job is already available with a prior scheduled_at, leave it alone.
+    AND NOT (river_job.state = 'available'::river_job_state AND river_job.scheduled_at < now())
+  RETURNING river_job.*
+)
+
+SELECT *
+FROM river_job
+WHERE id = @id::bigint
+    AND id NOT IN (SELECT id FROM updated_job)
+UNION
+SELECT *
+FROM updated_job;
+
 -- name: JobSchedule :one
 WITH jobs_to_schedule AS (
   SELECT id

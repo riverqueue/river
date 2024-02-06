@@ -126,6 +126,13 @@ type Adapter interface {
 	JobList(ctx context.Context, params JobListParams) ([]*dbsqlc.RiverJob, error)
 	JobListTx(ctx context.Context, tx pgx.Tx, params JobListParams) ([]*dbsqlc.RiverJob, error)
 
+	// JobRetryImmediately makes a job available to run immediately, but only if
+	// it's not already running.
+	JobRetryImmediately(ctx context.Context, id int64) (*dbsqlc.RiverJob, error)
+	// JobRetryImmediatelyTx makes a job available to run immediately, but only if
+	// it's not already running.
+	JobRetryImmediatelyTx(ctx context.Context, tx pgx.Tx, id int64) (*dbsqlc.RiverJob, error)
+
 	// JobSetStateIfRunning sets the state of a currently running job. Jobs which are not
 	// running (i.e. which have already have had their state set to something
 	// new through an explicit snooze or cancellation), are ignored.
@@ -509,6 +516,27 @@ func (a *StandardAdapter) JobListTx(ctx context.Context, tx pgx.Tx, params JobLi
 		return nil, err
 	}
 	return jobs, nil
+}
+
+func (a *StandardAdapter) JobRetryImmediately(ctx context.Context, id int64) (*dbsqlc.RiverJob, error) {
+	return dbutil.WithTxV(ctx, a.executor, func(ctx context.Context, tx pgx.Tx) (*dbsqlc.RiverJob, error) {
+		return a.JobRetryImmediatelyTx(ctx, tx, id)
+	})
+}
+
+func (a *StandardAdapter) JobRetryImmediatelyTx(ctx context.Context, tx pgx.Tx, id int64) (*dbsqlc.RiverJob, error) {
+	ctx, cancel := context.WithTimeout(ctx, a.deadlineTimeout)
+	defer cancel()
+
+	job, err := a.queries.JobRetryImmediately(ctx, a.executor, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, riverdriver.ErrNoRows
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return job, nil
 }
 
 // JobSetStateIfRunningParams are parameters to update the state of a currently running
