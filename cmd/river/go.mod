@@ -2,6 +2,8 @@ module github.com/riverqueue/river/cmd/river
 
 go 1.21.4
 
+toolchain go1.21.6
+
 // replace github.com/riverqueue/river => ../..
 
 // replace github.com/riverqueue/river/riverdriver => ../../riverdriver
