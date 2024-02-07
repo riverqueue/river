@@ -18,10 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        postgres-version: [16, 15, 14]
         go-version:
           - "1.22"
           - "1.21"
+        postgres-version: [16, 15, 14]
       fail-fast: false
     timeout-minutes: 5
 
