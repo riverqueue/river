@@ -21,7 +21,7 @@ jobs:
         go-version:
           - "1.22"
           - "1.21"
-        postgres-version: [16, 15, 14]
+        postgres-version: [16, 14]
       fail-fast: false
     timeout-minutes: 5
 
@@ -206,7 +206,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Go ${{ matrix.go-version }}
+      - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: "stable"
