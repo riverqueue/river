@@ -12,7 +12,7 @@ import (
 
 const sampleGoMod = `module github.com/riverqueue/river
 
-go 1.21.4
+go 1.21.0
 
 replace github.com/riverqueue/river/riverdriver => ./riverdriver
 

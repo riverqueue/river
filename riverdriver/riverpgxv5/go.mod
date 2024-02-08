@@ -1,6 +1,6 @@
 module github.com/riverqueue/river/riverdriver/riverpgxv5
 
-go 1.21.4
+go 1.21
 
 replace github.com/riverqueue/river/riverdriver => ../
 
