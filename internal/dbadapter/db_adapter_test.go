@@ -566,10 +566,17 @@ func Test_StandardAdapter_JobInsert(t *testing.T) {
 			dbsqlc.JobStateRetryable,
 			dbsqlc.JobStateScheduled,
 		} {
+			var finalizedAt *time.Time
+			if defaultState == dbsqlc.JobStateCompleted {
+				finalizedAt = ptrutil.Ptr(bundle.baselineTime)
+			}
+
 			_, err = adapter.queries.JobUpdate(ctx, bundle.ex, dbsqlc.JobUpdateParams{
-				ID:            res0.Job.ID,
-				StateDoUpdate: true,
-				State:         defaultState,
+				ID:                  res0.Job.ID,
+				FinalizedAt:         finalizedAt,
+				FinalizedAtDoUpdate: true,
+				StateDoUpdate:       true,
+				State:               defaultState,
 			})
 			require.NoError(t, err)
 
@@ -581,9 +588,11 @@ func Test_StandardAdapter_JobInsert(t *testing.T) {
 		}
 
 		_, err = adapter.queries.JobUpdate(ctx, bundle.ex, dbsqlc.JobUpdateParams{
-			ID:            res0.Job.ID,
-			StateDoUpdate: true,
-			State:         dbsqlc.JobStateDiscarded,
+			ID:                  res0.Job.ID,
+			FinalizedAt:         ptrutil.Ptr(bundle.baselineTime),
+			FinalizedAtDoUpdate: true,
+			StateDoUpdate:       true,
+			State:               dbsqlc.JobStateDiscarded,
 		})
 		require.NoError(t, err)
 
