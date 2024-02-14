@@ -1289,6 +1289,21 @@ func Test_StandardAdapter_JobSetStateErrored(t *testing.T) {
 	})
 }
 
+func getLeadershipExpiresAt(ctx context.Context, t *testing.T, tx pgx.Tx) time.Time {
+	t.Helper()
+	var expiresAt time.Time
+	err := tx.QueryRow(ctx, "SELECT expires_at FROM river_leader WHERE name = $1", rivercommon.QueueDefault).Scan(&expiresAt)
+	require.NoError(t, err)
+	return expiresAt
+}
+
+func electLeader(ctx context.Context, t *testing.T, adapter *StandardAdapter, name string, ttl time.Duration) {
+	t.Helper()
+	won, err := adapter.LeadershipAttemptElect(ctx, false, rivercommon.QueueDefault, name, ttl)
+	require.NoError(t, err)
+	require.True(t, won)
+}
+
 func Test_StandardAdapter_LeadershipAttemptElect_CannotElectTwiceInARow(t *testing.T) {
 	t.Parallel()
 
@@ -1299,13 +1314,77 @@ func Test_StandardAdapter_LeadershipAttemptElect_CannotElectTwiceInARow(t *testi
 	defer cancel()
 
 	adapter := NewStandardAdapter(riverinternaltest.BaseServiceArchetype(t), testAdapterConfig(tx))
-	won, err := adapter.LeadershipAttemptElect(ctx, false, rivercommon.QueueDefault, "fakeWorker0", 30*time.Second)
-	require.NoError(t, err)
-	require.True(t, won)
+	electLeader(ctx, t, adapter, "fakeWorker0", 10*time.Second)
 
-	won, err = adapter.LeadershipAttemptElect(ctx, false, rivercommon.QueueDefault, "fakeWorker0", 30*time.Second)
+	expiresAt := getLeadershipExpiresAt(ctx, t, tx)
+	require.NotZero(t, expiresAt)
+
+	won, err := adapter.LeadershipAttemptElect(ctx, false, rivercommon.QueueDefault, "fakeWorker1", 30*time.Second)
 	require.NoError(t, err)
 	require.False(t, won)
+
+	// The time should not have changed because we specified that we were not
+	// already elected, and the elect query is a no-op if there's already a
+	// leader:
+	expiresAtAfter := getLeadershipExpiresAt(ctx, t, tx)
+	require.Equal(t, expiresAt, expiresAtAfter)
+}
+
+func Test_StandardAdapter_LeadershipAttemptElect_SuccessfullyReElectsSameLeader(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tx := riverinternaltest.TestTx(ctx, t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	adapter := NewStandardAdapter(riverinternaltest.BaseServiceArchetype(t), testAdapterConfig(tx))
+	electLeader(ctx, t, adapter, "fakeWorker0", 10*time.Second)
+
+	expiresAt := getLeadershipExpiresAt(ctx, t, tx)
+	require.NotZero(t, expiresAt)
+
+	// Re-elect the same leader. Use a larger TTL to see if time is updated,
+	// because we are in a test transaction and the time is frozen at the start of
+	// the transaction.
+	won, err := adapter.LeadershipAttemptElect(ctx, true, rivercommon.QueueDefault, "fakeWorker0", 30*time.Second)
+	require.NoError(t, err)
+	require.True(t, won) // won re-election
+
+	// expires_at should be incremented because this is the same leader that won
+	// previously and we specified that we're already elected:
+	expiresAtAfter := getLeadershipExpiresAt(ctx, t, tx)
+	require.Greater(t, expiresAtAfter, expiresAt)
+}
+
+func Test_StandardAdapter_LeadershipAttemptReelect_CannotReElectNonLeader(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tx := riverinternaltest.TestTx(ctx, t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	adapter := NewStandardAdapter(riverinternaltest.BaseServiceArchetype(t), testAdapterConfig(tx))
+	electLeader(ctx, t, adapter, "fakeWorker0", 10*time.Second)
+
+	// read the expiration time from the database to make sure it's set to the
+	// future and won't be changed by the next LeadershipAttemptElect:
+	expiresAt := getLeadershipExpiresAt(ctx, t, tx)
+	require.NotZero(t, expiresAt)
+
+	// Attempt to re-elect a *different* leader. Use a larger TTL to see if time
+	// is updated, because we are in a test transaction and the time is frozen at
+	// the start of the transaction.
+	won, err := adapter.LeadershipAttemptElect(ctx, true, rivercommon.QueueDefault, "fakeWorker1", 30*time.Second)
+	require.NoError(t, err)
+	require.False(t, won)
+
+	// The time should not be altered because this was a different leader:
+	expiresAtAfter := getLeadershipExpiresAt(ctx, t, tx)
+	require.Equal(t, expiresAt, expiresAtAfter)
 }
 
 func Benchmark_StandardAdapter_Insert(b *testing.B) {
