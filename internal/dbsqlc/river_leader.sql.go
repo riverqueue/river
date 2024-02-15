@@ -39,7 +39,7 @@ ON CONFLICT (name)
   DO UPDATE SET
     expires_at = now() + $3::interval
   WHERE
-    EXCLUDED.leader_id = $2::text
+    river_leader.leader_id = $2::text
 `
 
 type LeadershipAttemptReelectParams struct {

@@ -20,7 +20,7 @@ ON CONFLICT (name)
   DO UPDATE SET
     expires_at = now() + @ttl::interval
   WHERE
-    EXCLUDED.leader_id = @leader_id::text;
+    river_leader.leader_id = @leader_id::text;
 
 -- name: LeadershipDeleteExpired :exec
 DELETE FROM river_leader

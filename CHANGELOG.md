@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix a leadership re-election query bug that would cause past leaders to think they were continuing to win elections. [PR #199].
+
 ## [0.0.19] - 2024-02-10
 
 ### Added
