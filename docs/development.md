@@ -49,6 +49,8 @@ git tag $VERSION
 git push --tags
 ```
 
+4. Cut a new GitHub release by visiting [new release](https://github.com/riverqueue/river/releases/new), selecting the new tag, and copying in the version's `CHANGELOG.md` content as the release body.
+
 ### Releasing River CLI
 
 The CLI (`./cmd/river`) is different than other River submodules in that it doesn't use any `replace` directives so that it can stay installable with `go install ...@latest`.
