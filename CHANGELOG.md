@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.20] - 2024-02-14
+
 ### Fixed
 
-- Fix a leadership re-election query bug that would cause past leaders to think they were continuing to win elections. [PR #199].
+- Fix a leadership re-election query bug that would cause past leaders to think they were continuing to win elections. [PR #199](https://github.com/riverqueue/river/pull/199).
 
 ## [0.0.19] - 2024-02-10
 
