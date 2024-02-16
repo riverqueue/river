@@ -101,6 +101,15 @@ type Config struct {
 	// Defaults to 1 second.
 	FetchPollInterval time.Duration
 
+	// ID is the unique identifier for this client. If not set, a random ULID will
+	// be generated.
+	//
+	// This is used to identify the client in job attempts and for leader election.
+	// This value must be unique across all clients in the same database and
+	// schema and there must not be more than one process running with the same
+	// ID at the same time.
+	ID string
+
 	// JobTimeout is the maximum amount of time a job is allowed to run before its
 	// context is cancelled. A timeout of zero means JobTimeoutDefault will be
 	// used, whereas a value of -1 means the job's context will not be cancelled
@@ -191,6 +200,9 @@ func (c *Config) validate() error {
 	if c.FetchPollInterval < c.FetchCooldown {
 		return fmt.Errorf("FetchPollInterval cannot be shorter than FetchCooldown (%s)", c.FetchCooldown)
 	}
+	if len(c.ID) > 100 {
+		return errors.New("ID cannot be longer than 100 characters")
+	}
 	if c.JobTimeout < -1 {
 		return errors.New("JobTimeout cannot be negative, except for -1 (infinite)")
 	}
@@ -259,7 +271,6 @@ type Client[TTx any] struct {
 	// when the context provided to Run is itself cancelled.
 	fetchNewWorkCancel context.CancelCauseFunc
 
-	id                   string
 	monitor              *clientMonitor
 	notifier             *notifier.Notifier
 	producersByQueueName map[string]*producer
@@ -387,6 +398,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		ErrorHandler:                config.ErrorHandler,
 		FetchCooldown:               valutil.ValOrDefault(config.FetchCooldown, FetchCooldownDefault),
 		FetchPollInterval:           valutil.ValOrDefault(config.FetchPollInterval, FetchPollIntervalDefault),
+		ID:                          config.ID,
 		JobTimeout:                  valutil.ValOrDefault(config.JobTimeout, JobTimeoutDefault),
 		Logger:                      logger,
 		PeriodicJobs:                config.PeriodicJobs,
@@ -399,12 +411,16 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		schedulerInterval:           valutil.ValOrDefault(config.schedulerInterval, maintenance.SchedulerIntervalDefault),
 	}
 
-	if err := config.validate(); err != nil {
-		return nil, err
+	if config.ID == "" {
+		// Generate a random ULID for the client ID.
+		clientID, err := ulid.New(ulid.Now(), rand.Reader)
+		if err != nil {
+			return nil, err
+		}
+		config.ID = clientID.String()
 	}
 
-	clientID, err := ulid.New(ulid.Now(), rand.Reader)
-	if err != nil {
+	if err := config.validate(); err != nil {
 		return nil, err
 	}
 
@@ -418,7 +434,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		AdvisoryLockPrefix: config.AdvisoryLockPrefix,
 		DeadlineTimeout:    5 * time.Second, // not exposed in client configuration for now, but we may want to do so
 		Executor:           driver.GetDBPool(),
-		WorkerName:         clientID.String(),
+		WorkerName:         config.ID,
 	})
 
 	completer := jobcompleter.NewAsyncCompleter(archetype, adapter, 100)
@@ -428,7 +444,6 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		completer:            completer,
 		config:               config,
 		driver:               driver,
-		id:                   clientID.String(),
 		monitor:              newClientMonitor(),
 		producersByQueueName: make(map[string]*producer),
 		stopComplete:         make(chan struct{}),
@@ -454,7 +469,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 
 		client.notifier = notifier.New(archetype, driver.GetDBPool().Config().ConnConfig, client.monitor.SetNotifierStatus, logger)
 		var err error
-		client.elector, err = leadership.NewElector(client.adapter, client.notifier, instanceName, client.id, 5*time.Second, logger)
+		client.elector, err = leadership.NewElector(client.adapter, client.notifier, instanceName, client.ID(), 5*time.Second, logger)
 		if err != nil {
 			return nil, err
 		}
@@ -634,7 +649,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 	c.runProducers(fetchNewWorkCtx, workCtx)
 	go c.signalStopComplete(workCtx)
 
-	c.baseService.Logger.InfoContext(workCtx, "River client successfully started", slog.String("client_id", c.id))
+	c.baseService.Logger.InfoContext(workCtx, "River client successfully started", slog.String("client_id", c.ID()))
 
 	return nil
 }
@@ -914,7 +929,7 @@ func (c *Client[TTx]) provisionProducers() error {
 			QueueName:         queue,
 			RetryPolicy:       c.config.RetryPolicy,
 			SchedulerInterval: c.config.schedulerInterval,
-			WorkerName:        c.id,
+			WorkerName:        c.config.ID,
 			Workers:           c.config.Workers,
 		}
 		producer, err := newProducer(&c.baseService.Archetype, c.adapter, c.completer, config)
@@ -1112,6 +1127,12 @@ func (c *Client[TTx]) JobRetryTx(ctx context.Context, tx TTx, jobID int64) (*riv
 	}
 
 	return dbsqlc.JobRowFromInternal(job), nil
+}
+
+// ID returns the unique ID of this client as set in its config or
+// auto-generated if not specified.
+func (c *Client[TTx]) ID() string {
+	return c.config.ID
 }
 
 func insertParamsFromArgsAndOptions(args JobArgs, insertOpts *InsertOpts) (*dbadapter.JobInsertParams, error) {
