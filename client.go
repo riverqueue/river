@@ -634,7 +634,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 	c.runProducers(fetchNewWorkCtx, workCtx)
 	go c.signalStopComplete(workCtx)
 
-	c.baseService.Logger.InfoContext(workCtx, "River client successfully started")
+	c.baseService.Logger.InfoContext(workCtx, "River client successfully started", slog.String("client_id", c.id))
 
 	return nil
 }
