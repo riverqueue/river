@@ -25,11 +25,7 @@ type JobRow struct {
 	// on a new insert.
 	AttemptedAt *time.Time
 
-	// AttemptedBy is the set of worker IDs that have worked this job. A worker
-	// ID differs between different programs, but is shared by all executors
-	// within any given one. (i.e. Different Go processes have different IDs,
-	// but IDs are shared within any given process.) A process generates a new
-	// ULID (an ordered UUID) worker ID when it starts up.
+	// AttemptedBy is the set of client IDs that have worked this job.
 	AttemptedBy []string
 
 	// CreatedAt is when the job record was created.

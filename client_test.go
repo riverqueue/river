@@ -2785,7 +2785,7 @@ func Test_NewClient_ClientIDWrittenToJobAttemptedByWhenFetched(t *testing.T) {
 	var startedJob *Job[callbackArgs]
 	select {
 	case startedJob = <-startedCh:
-		require.Equal([]string{client.id}, startedJob.AttemptedBy)
+		require.Equal([]string{client.ID()}, startedJob.AttemptedBy)
 		require.NotNil(startedJob.AttemptedAt)
 		require.WithinDuration(time.Now().UTC(), *startedJob.AttemptedAt, 2*time.Second)
 	case <-time.After(5 * time.Second):
@@ -2955,6 +2955,14 @@ func Test_NewClient_Validations(t *testing.T) {
 			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
 				require.Equal(t, FetchPollIntervalDefault, client.config.FetchPollInterval)
 			},
+		},
+		{
+			name: "ID cannot be longer than 100 characters",
+			// configFunc: func(config *Config) { config.ID = strings.Repeat("a", 101) },
+			configFunc: func(config *Config) {
+				config.ID = strings.Repeat("a", 101)
+			},
+			wantErr: errors.New("ID cannot be longer than 100 characters"),
 		},
 		{
 			name: "JobTimeout can be -1 (infinite)",
@@ -3310,6 +3318,25 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		)
 		require.EqualError(t, err, "JobUniqueOpts.ByPeriod should not be less than 1 second")
 		require.Nil(t, insertParams)
+	})
+}
+
+func TestID(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("IsGeneratedWhenNotSpecifiedInConfig", func(t *testing.T) {
+		t.Parallel()
+		client := newTestClient(ctx, t, newTestConfig(t, nil))
+		require.NotEmpty(t, client.ID())
+	})
+
+	t.Run("IsGeneratedWhenNotSpecifiedInConfig", func(t *testing.T) {
+		t.Parallel()
+		config := newTestConfig(t, nil)
+		config.ID = "my-client-id"
+		client := newTestClient(ctx, t, config)
+		require.Equal(t, "my-client-id", client.ID())
 	})
 }
 
