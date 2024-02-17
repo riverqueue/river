@@ -101,13 +101,20 @@ type Config struct {
 	// Defaults to 1 second.
 	FetchPollInterval time.Duration
 
-	// ID is the unique identifier for this client. If not set, a random ULID will
-	// be generated.
+	// ID is the unique identifier for this client. If not set, a random
+	// identifier will be generated.
 	//
 	// This is used to identify the client in job attempts and for leader election.
 	// This value must be unique across all clients in the same database and
 	// schema and there must not be more than one process running with the same
 	// ID at the same time.
+	//
+	// A client ID should differ between different programs and must be unique
+	// across all clients in the same database and schema. There must not be more
+	// than one process running with the same ID at the same time.  However, the
+	// client ID is shared by all executors within any given client. (i.e.
+	// different Go processes have different IDs, but IDs are shared within any
+	// given process.)
 	ID string
 
 	// JobTimeout is the maximum amount of time a job is allowed to run before its
