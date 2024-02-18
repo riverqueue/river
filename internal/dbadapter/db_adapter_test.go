@@ -1064,8 +1064,37 @@ func Test_StandardAdapter_JobRetryImmediately(t *testing.T) {
 		})
 	}
 
-	t.Run("DoesNotAlterScheduledAtIfInThePast", func(t *testing.T) {
-		// We don't want to update ScheduledAt if the job was already scheduled
+	t.Run("AltersScheduledAtForAlreadyCompletedJob", func(t *testing.T) {
+		// A job which has already completed will have a ScheduledAt that could be
+		// long in the past. Now that we're re-scheduling it, we should update that
+		// to the current time to slot it in alongside other recently-scheduled jobs
+		// and not skip the line; also, its wait duration can't be calculated
+		// accurately if we don't reset the scheduled_at.
+		t.Parallel()
+
+		adapter, bundle := setupTx(t)
+
+		params := makeFakeJobInsertParams(0, nil)
+		params.ScheduledAt = bundle.baselineTime.Add(-1 * time.Hour)
+		res, err := adapter.JobInsert(ctx, params)
+		require.NoError(t, err)
+		_, err = adapter.queries.JobUpdate(ctx, bundle.ex, dbsqlc.JobUpdateParams{
+			FinalizedAtDoUpdate: true,
+			FinalizedAt:         &bundle.baselineTime,
+			ID:                  res.Job.ID,
+			StateDoUpdate:       true,
+			State:               dbsqlc.JobStateCompleted,
+		})
+		require.NoError(t, err)
+
+		jAfter, err := adapter.JobRetryImmediately(ctx, res.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, dbsqlc.JobStateAvailable, jAfter.State)
+		require.WithinDuration(t, time.Now().UTC(), jAfter.ScheduledAt, 5*time.Second)
+	})
+
+	t.Run("DoesNotAlterScheduledAtIfInThePastAndJobAlreadyAvailable", func(t *testing.T) {
+		// We don't want to update ScheduledAt if the job was already available
 		// because doing so can make it lose its place in line.
 		t.Parallel()
 
@@ -1073,7 +1102,6 @@ func Test_StandardAdapter_JobRetryImmediately(t *testing.T) {
 
 		params := makeFakeJobInsertParams(0, nil)
 		params.ScheduledAt = bundle.baselineTime.Add(-1 * time.Hour)
-		params.State = dbsqlc.JobStateScheduled
 		res, err := adapter.JobInsert(ctx, params)
 		require.NoError(t, err)
 

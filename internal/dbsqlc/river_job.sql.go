@@ -656,7 +656,7 @@ updated_job AS (
   UPDATE river_job
   SET
     state = 'available'::river_job_state,
-    scheduled_at = CASE WHEN scheduled_at < now() THEN scheduled_at ELSE now() END,
+    scheduled_at = now(),
     max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END,
     finalized_at = NULL
   FROM job_to_update
