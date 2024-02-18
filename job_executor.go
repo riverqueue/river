@@ -305,7 +305,7 @@ func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
 	}
 
 	attemptErr := rivertype.AttemptError{
-		At:      e.start,
+		At:      e.start.Add(e.stats.RunDuration),
 		Attempt: e.JobRow.Attempt,
 		Error:   res.ErrorStr(),
 		Trace:   string(res.PanicTrace),
