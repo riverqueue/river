@@ -2412,10 +2412,11 @@ func Test_Client_InsertTriggersImmediateWork(t *testing.T) {
 	client := newTestClient(t, dbPool, config)
 	statusUpdateCh := client.monitor.RegisterUpdates()
 
+	startClient(ctx, t, client)
+	waitForClientHealthy(ctx, t, statusUpdateCh)
+
 	insertedJob, err := client.Insert(ctx, callbackArgs{}, nil)
 	require.NoError(err)
-
-	startClient(ctx, t, client)
 
 	// Wait for the client to be ready by waiting for a job to be executed:
 	select {
@@ -2424,7 +2425,6 @@ func Test_Client_InsertTriggersImmediateWork(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for warmup job to start")
 	}
-	waitForClientHealthy(ctx, t, statusUpdateCh)
 
 	// Now that we've run one job, we shouldn't take longer than the cooldown to
 	// fetch another after insertion. LISTEN/NOTIFY should ensure we find out
