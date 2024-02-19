@@ -7,11 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.0.21] - 2024-02-19
+## [0.0.22] - 2024-02-19
 
 ### Fixed
 
 - Brings in another leadership election fix similar to #217 in which a TTL equal to the elector's run interval plus a configured TTL padding is also used for the initial attempt to gain leadership (#217 brought it in for reelection only). [PR #219](https://github.com/riverqueue/river/pull/219).
+
+## [0.0.21] - 2024-02-19
 
 ### Changed
 
