@@ -42,13 +42,13 @@ func (s *Subscription) Unlisten() {
 }
 
 type Elector struct {
-	adapter    dbadapter.Adapter
-	id         string
-	interval   time.Duration
-	logger     *slog.Logger
-	name       string
-	notifier   *notifier.Notifier
-	ttlPadding time.Duration
+	adapter  dbadapter.Adapter
+	id       string
+	interval time.Duration
+	logger   *slog.Logger
+	name     string
+	notifier *notifier.Notifier
+	ttl      time.Duration
 
 	mu            sync.Mutex
 	isLeader      bool
@@ -58,16 +58,21 @@ type Elector struct {
 // NewElector returns an Elector using the given adapter. The name should correspond
 // to the name of the database + schema combo and should be shared across all Clients
 // running with that combination. The id should be unique to the Client.
-func NewElector(adapter dbadapter.Adapter, notifier *notifier.Notifier, name, id string, interval, padding time.Duration, logger *slog.Logger) (*Elector, error) {
+func NewElector(adapter dbadapter.Adapter, notifier *notifier.Notifier, name, id string, interval, ttlPadding time.Duration, logger *slog.Logger) (*Elector, error) {
 	// TODO: validate name + id length/format, interval, etc
 	return &Elector{
-		adapter:    adapter,
-		id:         id,
-		interval:   interval,
-		logger:     logger.WithGroup("elector"),
-		name:       name,
-		notifier:   notifier,
-		ttlPadding: padding,
+		adapter:  adapter,
+		id:       id,
+		interval: interval,
+		logger:   logger.WithGroup("elector"),
+		name:     name,
+		notifier: notifier,
+
+		// TTL is at least the relect run interval used by clients to try and
+		// gain leadership or reelect themselves as leader, plus a little
+		// padding to account to give the leader a little breathing room in its
+		// reelection loop.
+		ttl: interval + ttlPadding,
 	}, nil
 }
 
@@ -165,7 +170,7 @@ func (e *Elector) gainLeadership(ctx context.Context, leadershipNotificationChan
 }
 
 func (e *Elector) attemptElect(ctx context.Context) (bool, error) {
-	elected, err := e.adapter.LeadershipAttemptElect(ctx, false, e.name, e.id, e.interval)
+	elected, err := e.adapter.LeadershipAttemptElect(ctx, false, e.name, e.id, e.ttl)
 	if err != nil {
 		return false, err
 	}
@@ -183,7 +188,6 @@ func (e *Elector) attemptElect(ctx context.Context) (bool, error) {
 
 func (e *Elector) keepLeadership(ctx context.Context, leadershipNotificationChan <-chan struct{}) error {
 	reelectionErrCount := 0
-	ttl := e.interval + e.ttlPadding
 	for {
 		select {
 		case <-ctx.Done():
@@ -192,7 +196,7 @@ func (e *Elector) keepLeadership(ctx context.Context, leadershipNotificationChan
 			// We don't care about notifications when we know we're the leader, do we?
 		case <-time.After(e.interval):
 			// TODO: this leaks timers if we're receiving notifications
-			reelected, err := e.adapter.LeadershipAttemptElect(ctx, true, e.name, e.id, ttl)
+			reelected, err := e.adapter.LeadershipAttemptElect(ctx, true, e.name, e.id, e.ttl)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
 					return err
