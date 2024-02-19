@@ -96,6 +96,7 @@ func (n *Notifier) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			wg.Wait()
+			n.logger.Info(n.Name + ": Notifier stopped")
 			n.statusChangeFunc(componentstatus.Stopped)
 			return
 		default:
@@ -161,6 +162,7 @@ func (n *Notifier) getConnAndRun(ctx context.Context) {
 		}
 	}
 
+	n.logger.Info(n.Name + ": Notifier started")
 	n.statusChangeFunc(componentstatus.Healthy)
 	for {
 		// If context is already done, don't bother waiting for notifications:
