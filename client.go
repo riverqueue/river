@@ -476,7 +476,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 
 		client.notifier = notifier.New(archetype, driver.GetDBPool().Config().ConnConfig, client.monitor.SetNotifierStatus, logger)
 		var err error
-		client.elector, err = leadership.NewElector(client.adapter, client.notifier, instanceName, client.ID(), 5*time.Second, logger)
+		client.elector, err = leadership.NewElector(client.adapter, client.notifier, instanceName, client.ID(), 5*time.Second, 10*time.Second, logger)
 		if err != nil {
 			return nil, err
 		}
