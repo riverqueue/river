@@ -903,7 +903,8 @@ func (c *Client[TTx]) logStatsLoop(ctx context.Context) {
 }
 
 func (c *Client[TTx]) handleLeadershipChange(ctx context.Context, notification *leadership.Notification) {
-	c.baseService.Logger.InfoContext(ctx, "Election change received", slog.Bool("is_leader", notification.IsLeader))
+	c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Election change received",
+		slog.String("client_id", c.config.ID), slog.Bool("is_leader", notification.IsLeader))
 
 	leaderStatus := componentstatus.ElectorNonLeader
 	if notification.IsLeader {
