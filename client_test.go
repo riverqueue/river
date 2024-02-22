@@ -40,6 +40,7 @@ func waitForClientHealthy(ctx context.Context, t *testing.T, statusUpdateCh <-ch
 	for {
 		select {
 		case status := <-statusUpdateCh:
+			t.Logf("Client status: elector=%d notifier=%d producers=%+v", status.Elector, status.Notifier, status.Producers)
 			if status.Healthy() {
 				return
 			}
