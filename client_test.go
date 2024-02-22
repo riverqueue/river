@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -82,7 +83,7 @@ type callbackFunc func(context.Context, *Job[callbackArgs]) error
 func makeAwaitCallback(startedCh chan<- int64, doneCh chan struct{}) callbackFunc {
 	return func(ctx context.Context, job *Job[callbackArgs]) error {
 		client := ClientFromContext[pgx.Tx](ctx)
-		client.config.Logger.InfoContext(ctx, "callback job started with id="+fmt.Sprint(job.ID))
+		client.config.Logger.InfoContext(ctx, "callback job started with id="+strconv.FormatInt(job.ID, 10))
 
 		select {
 		case <-ctx.Done():
