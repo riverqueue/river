@@ -125,18 +125,13 @@ func TestDebouncedChan_ContinuousOperation(t *testing.T) {
 	}
 
 	// Expect number of signals equal to number of cooldown periods that fit
-	// into our total test time, multiplied by two, because the debounced chan
-	// fires at the beginning and end of a bounce period. +1 for the last period
-	// that fires on the leading edge, but which we don't give time for the
-	// timer to fully expire. (We've chosen numbers so that test time doesn't
-	// divide by cooldown perfectly.)
+	// into our total test time, and +1 for an initial fire.
 	//
-	// This usually lands right on the expected number, but allow a delta of
-	// +/-4 to allow the channel to be off by two cycles (again, one cycle
-	// signals once at leading edge of the period and once at trailing, so 2
-	// cycles * 2 signals = 4) in either direction. By running at `-count 1000`
-	// or so I can usually reproduce an off-by-one-or-two cycle.
-	expectedNumSignal := int(math.Round(float64(testTime)/float64(cooldown)))*2 + 1
+	// This almost always lands right on the expected number, but allow a delta
+	// of +/-2 to allow the channel to be off by two cycles in either direction.
+	// By running at `-count 1000` I can usually reproduce an off-by-one-or-two
+	// cycle.
+	expectedNumSignal := int(math.Round(float64(testTime)/float64(cooldown))) + 1
 	t.Logf("Expected: %d, actual: %d", expectedNumSignal, numSignals)
-	require.InDelta(t, expectedNumSignal, numSignals, 4)
+	require.InDelta(t, expectedNumSignal, numSignals, 2)
 }

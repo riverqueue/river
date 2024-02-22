@@ -34,7 +34,8 @@ func NewDebouncedChan(ctx context.Context, cooldown time.Duration) *DebouncedCha
 
 // C is the debounced channel. Multiple invocations to Call during the cooldown
 // period will deduplicate to a single emission on this channel on the period's
-// leading edge, and one more on the trailing edge.
+// leading edge, and one more on the trailing edge for as many periods as
+// invocations continue to come in.
 func (d *DebouncedChan) C() <-chan struct{} {
 	return d.c
 }
@@ -42,7 +43,10 @@ func (d *DebouncedChan) C() <-chan struct{} {
 // Call invokes the debounced channel, and is the call which will be debounced.
 // If multiple invocations of this function are made during the cooldown period,
 // they'll be debounced to a single emission on C on the period's leading edge,
-// and one more on the trailing edge.
+// and then one fire on the trailing edge of each period for as long as Call
+// continues to be invoked. If a timer period elapses without an invocation on
+// Call, the timer is stopped and behavior resets the next time Call is invoked
+// again.
 func (d *DebouncedChan) Call() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -69,7 +73,7 @@ func (d *DebouncedChan) Call() {
 	}
 	d.timerDone = false
 
-	go d.waitForTimer()
+	go d.waitForTimerLoop()
 }
 
 func (d *DebouncedChan) nonBlockingSendOnC() {
@@ -79,25 +83,53 @@ func (d *DebouncedChan) nonBlockingSendOnC() {
 	}
 }
 
-func (d *DebouncedChan) waitForTimer() {
+// Waits for the timer to be fired, and loops as long as Call invocations come
+// in. If a period elapses without a new Call coming in, the loop returns, and
+// DebouncedChan returns to its initial state, waiting for a new Call.
+//
+// The loop also stops if context becomes done.
+func (d *DebouncedChan) waitForTimerLoop() {
+	for {
+		if stopLoop := d.waitForTimerOnce(); stopLoop {
+			break
+		}
+	}
+}
+
+// Waits for the timer to fire once or context becomes done. Returns true if the
+// caller should stop looping (i.e. don't wait on the timer again), and false
+// otherwise.
+func (d *DebouncedChan) waitForTimerOnce() bool {
 	select {
 	case <-d.ctxDone:
 		d.mu.Lock()
 		defer d.mu.Unlock()
+
 		if d.timer != nil {
 			if !d.timer.Stop() {
 				<-d.timer.C
 			}
-			d.timerDone = true
 		}
+
+		d.timerDone = true
 
 	case <-d.timer.C:
 		d.mu.Lock()
 		defer d.mu.Unlock()
+
 		if d.sendOnTimerExpired {
+			d.sendOnTimerExpired = false
 			d.nonBlockingSendOnC()
+
+			// Wait for another timer expiry, which will fire again if another
+			// Call comes in during that time. If no Call comes in, the timer
+			// will stop on the next cycle and we return to initial state.
+			d.timer.Reset(d.cooldown)
+			return false // do _not_ stop looping
 		}
+
 		d.timerDone = true
-		d.sendOnTimerExpired = false
 	}
+
+	return true // stop looping
 }
