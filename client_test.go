@@ -81,6 +81,9 @@ type callbackFunc func(context.Context, *Job[callbackArgs]) error
 
 func makeAwaitCallback(startedCh chan<- int64, doneCh chan struct{}) callbackFunc {
 	return func(ctx context.Context, job *Job[callbackArgs]) error {
+		client := ClientFromContext[pgx.Tx](ctx)
+		client.config.Logger.InfoContext(ctx, "callback job started with id="+fmt.Sprint(job.ID))
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
