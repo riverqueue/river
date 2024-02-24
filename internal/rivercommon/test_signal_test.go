@@ -44,7 +44,7 @@ func TestTestSignal(t *testing.T) {
 }
 
 // Marked as non-parallel because `t.Setenv` is not compatible with `t.Parallel`.
-func TestWaitTimeout(t *testing.T) { //nolint:paralleltest
+func TestWaitTimeout(t *testing.T) {
 	t.Setenv("GITHUB_ACTIONS", "")
 	require.Equal(t, 3*time.Second, WaitTimeout())
 

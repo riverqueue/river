@@ -141,7 +141,7 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     env:
-      GOLANGCI_LINT_VERSION: v1.55.2
+      GOLANGCI_LINT_VERSION: v1.56
     permissions:
       contents: read
       # allow read access to pull request. Use with `only-new-issues` option.
@@ -157,31 +157,31 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v3
+        uses: golangci/golangci-lint-action@v4
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           working-directory: .
 
       - name: Lint cmd/river
-        uses: golangci/golangci-lint-action@v3
+        uses: golangci/golangci-lint-action@v4
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           working-directory: ./cmd/river
 
       - name: Lint riverdriver
-        uses: golangci/golangci-lint-action@v3
+        uses: golangci/golangci-lint-action@v4
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           working-directory: ./riverdriver
 
       - name: Lint riverdriver/riverdatabasesql
-        uses: golangci/golangci-lint-action@v3
+        uses: golangci/golangci-lint-action@v4
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           working-directory: ./riverdriver/riverdatabasesql
 
       - name: Lint riverdriver/riverpgxv5
-        uses: golangci/golangci-lint-action@v3
+        uses: golangci/golangci-lint-action@v4
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           working-directory: ./riverdriver/riverpgxv5
