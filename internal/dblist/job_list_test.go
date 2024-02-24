@@ -7,7 +7,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 )
 
@@ -21,7 +20,6 @@ func TestJobList(t *testing.T) {
 		tx := riverinternaltest.TestTx(ctx, t)
 
 		_, err := JobList(ctx, tx, JobListParams{
-			State:      dbsqlc.JobStateCompleted,
 			LimitCount: 1,
 			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderAsc}},
 		})
@@ -37,7 +35,6 @@ func TestJobList(t *testing.T) {
 		_, err := JobList(ctx, tx, JobListParams{
 			Conditions: "queue = 'test' AND priority = 1 AND args->>'foo' = @foo",
 			NamedArgs:  pgx.NamedArgs{"foo": "bar"},
-			State:      dbsqlc.JobStateCompleted,
 			LimitCount: 1,
 			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderAsc}},
 		})

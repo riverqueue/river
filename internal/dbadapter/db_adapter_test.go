@@ -21,7 +21,6 @@ import (
 	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
-	"github.com/riverqueue/river/rivertype"
 )
 
 func Test_StandardAdapter_JobCancel(t *testing.T) {
@@ -881,7 +880,6 @@ func Test_StandardAdapter_JobList_and_JobListTx(t *testing.T) {
 		params := JobListParams{
 			LimitCount: 2,
 			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderDesc}},
-			State:      rivertype.JobStateAvailable,
 		}
 
 		execTest(ctx, t, adapter, params, bundle.tx, func(jobs []*dbsqlc.RiverJob, err error) {
@@ -907,7 +905,6 @@ func Test_StandardAdapter_JobList_and_JobListTx(t *testing.T) {
 			LimitCount: 2,
 			NamedArgs:  map[string]any{"paths1": []string{"job_num"}, "value1": 2},
 			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderDesc}},
-			State:      rivertype.JobStateAvailable,
 		}
 
 		execTest(ctx, t, adapter, params, bundle.tx, func(jobs []*dbsqlc.RiverJob, err error) {
@@ -929,7 +926,6 @@ func Test_StandardAdapter_JobList_and_JobListTx(t *testing.T) {
 			LimitCount: 2,
 			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderDesc}},
 			Queues:     []string{"priority"},
-			State:      rivertype.JobStateAvailable,
 		}
 
 		execTest(ctx, t, adapter, params, bundle.tx, func(jobs []*dbsqlc.RiverJob, err error) {

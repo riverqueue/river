@@ -36,7 +36,6 @@ type JobListOrderBy struct {
 }
 
 type JobListParams struct {
-	State      dbsqlc.JobState
 	Priorities []int16
 	Conditions string
 	OrderBy    []JobListOrderBy
@@ -73,10 +72,7 @@ func JobList(ctx context.Context, tx pgx.Tx, arg JobListParams) ([]*dbsqlc.River
 	}
 
 	var conditions []string
-	if arg.State != "" {
-		conditions = append(conditions, "state = @state::river_job_state")
-		namedArgs["state"] = arg.State
-	}
+
 	if arg.Conditions != "" {
 		conditions = append(conditions, arg.Conditions)
 	}

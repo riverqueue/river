@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lib/pq"
 	"github.com/riverqueue/river/internal/dbadapter"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -90,12 +91,19 @@ const (
 )
 
 // JobListOrderByField specifies the field to sort by.
-type JobListOrderByField int
+type JobListOrderByField string
 
 const (
-	// JobListOrderByTime specifies that the sort should be by time. The specific
-	// time field used will vary by job state.
-	JobListOrderByTime JobListOrderByField = iota
+	// JobListOrderByTime specifies that the sort should be inferred from the job state.
+	JobListOrderByTime JobListOrderByField = "time"
+	// JobListOrderByCreatedAt specifies that the sort should be by the time the job was created.
+	JobListOrderByCreatedAt JobListOrderByField = "created_at"
+	// JobListOrderByScheduledAt specifies that the sort should be by the time the job was scheduled.
+	JobListOrderByScheduledAt JobListOrderByField = "scheduled_at"
+	// JobListOrderByAttemptedAt specifies that the sort should be by the last time the job was attempted.
+	JobListOrderByAttemptedAt JobListOrderByField = "attempted_at"
+	// JobListOrderByFinalizedAt specifies that the sort should be by the time the job was finalized.
+	JobListOrderByFinalizedAt JobListOrderByField = "finalized_at"
 )
 
 // JobListParams specifies the parameters for a JobList query. It must be
@@ -110,7 +118,8 @@ type JobListParams struct {
 	queues           []string
 	sortField        JobListOrderByField
 	sortOrder        SortOrder
-	state            rivertype.JobState
+	kinds            []string
+	states           []rivertype.JobState
 }
 
 // NewJobListParams creates a new JobListParams to return available jobs sorted
@@ -120,7 +129,7 @@ func NewJobListParams() *JobListParams {
 		paginationCount: 100,
 		sortField:       JobListOrderByTime,
 		sortOrder:       SortOrderAsc,
-		state:           rivertype.JobStateAvailable,
+		states:          []rivertype.JobState{rivertype.JobStateAvailable},
 	}
 }
 
@@ -132,7 +141,8 @@ func (p *JobListParams) copy() *JobListParams {
 		queues:           append([]string(nil), p.queues...),
 		sortField:        p.sortField,
 		sortOrder:        p.sortOrder,
-		state:            p.state,
+		states:           p.states,
+		kinds:            p.kinds,
 	}
 }
 
@@ -152,10 +162,12 @@ func (p *JobListParams) toDBParams() (*dbadapter.JobListParams, error) {
 		return nil, errors.New("invalid sort order")
 	}
 
-	if p.sortField != JobListOrderByTime {
-		return nil, errors.New("invalid sort field")
+	timeField := "created_at"
+	if p.sortField == JobListOrderByTime {
+		timeField = jobListTimeFieldForState(p.states[0])
+	} else {
+		timeField = string(p.sortField)
 	}
-	timeField := jobListTimeFieldForState(p.state)
 	orderBy = append(orderBy, []dbadapter.JobListOrderBy{
 		{Expr: timeField, Order: sortOrder},
 		{Expr: "id", Order: sortOrder},
@@ -164,6 +176,15 @@ func (p *JobListParams) toDBParams() (*dbadapter.JobListParams, error) {
 	if p.metadataFragment != "" {
 		conditions = append(conditions, `metadata @> @metadata_fragment::jsonb`)
 		namedArgs["metadata_fragment"] = p.metadataFragment
+	}
+
+	if len(p.kinds) > 0 {
+		conditions = append(conditions, `"kind" = ANY(@kinds)`)
+		namedArgs["kinds"] = pq.Array(p.kinds)
+	}
+	if len(p.states) > 0 {
+		conditions = append(conditions, "state = ANY(@states)")
+		namedArgs["states"] = pq.Array(p.states)
 	}
 
 	if p.after != nil {
@@ -190,7 +211,6 @@ func (p *JobListParams) toDBParams() (*dbadapter.JobListParams, error) {
 		OrderBy:    orderBy,
 		Priorities: nil,
 		Queues:     p.queues,
-		State:      p.state,
 	}
 
 	return dbParams, nil
@@ -246,9 +266,19 @@ func (p *JobListParams) OrderBy(field JobListOrderByField, direction SortOrder) 
 
 // State returns an updated filter set that will only return jobs in the given
 // state.
-func (p *JobListParams) State(state rivertype.JobState) *JobListParams {
+func (p *JobListParams) States(states ...rivertype.JobState) *JobListParams {
 	result := p.copy()
-	result.state = state
+	result.states = make([]rivertype.JobState, 0, len(p.states))
+	copy(result.states, p.states)
+	return result
+}
+
+// Kinds returns an updated filter set that will only return jobs of the given
+// kinds.
+func (p *JobListParams) Kinds(kinds ...string) *JobListParams {
+	result := p.copy()
+	result.kinds = make([]string, 0, len(kinds))
+	copy(result.kinds, kinds)
 	return result
 }
 

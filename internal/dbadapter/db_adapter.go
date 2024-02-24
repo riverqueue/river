@@ -21,7 +21,6 @@ import (
 	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/internal/util/valutil"
 	"github.com/riverqueue/river/riverdriver"
-	"github.com/riverqueue/river/rivertype"
 )
 
 // When a job has specified unique options, but has not set the ByState
@@ -95,7 +94,6 @@ type JobListParams struct {
 	OrderBy    []JobListOrderBy
 	Priorities []int16
 	Queues     []string
-	State      rivertype.JobState
 }
 
 // Adapter is an interface to the various database-level operations which River
@@ -510,7 +508,6 @@ func (a *StandardAdapter) JobListTx(ctx context.Context, tx pgx.Tx, params JobLi
 		NamedArgs:  namedArgs,
 		OrderBy:    orderBy,
 		Priorities: params.Priorities,
-		State:      dbsqlc.JobState(params.State),
 	})
 	if err != nil {
 		return nil, err

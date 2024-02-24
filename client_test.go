@@ -1407,12 +1407,12 @@ func Test_Client_JobList(t *testing.T) {
 		job2 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateAvailable})
 		job3 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateRunning})
 
-		jobs, err := client.JobList(ctx, NewJobListParams().State(JobStateAvailable))
+		jobs, err := client.JobList(ctx, NewJobListParams().States(JobStateAvailable))
 		require.NoError(t, err)
 		// jobs ordered by ScheduledAt ASC by default
 		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
-		jobs, err = client.JobList(ctx, NewJobListParams().State(JobStateRunning))
+		jobs, err = client.JobList(ctx, NewJobListParams().States(JobStateRunning))
 		require.NoError(t, err)
 		require.Equal(t, []int64{job3.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 	})
@@ -1433,11 +1433,11 @@ func Test_Client_JobList(t *testing.T) {
 			job1 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbState, ScheduledAt: ptrutil.Ptr(now)})
 			job2 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbState, ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
 
-			jobs, err := client.JobList(ctx, NewJobListParams().State(state))
+			jobs, err := client.JobList(ctx, NewJobListParams().States(state))
 			require.NoError(t, err)
 			require.Equal(t, []int64{job2.ID, job1.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
-			jobs, err = client.JobList(ctx, NewJobListParams().State(state).OrderBy(JobListOrderByTime, SortOrderDesc))
+			jobs, err = client.JobList(ctx, NewJobListParams().States(state).OrderBy(JobListOrderByTime, SortOrderDesc))
 			require.NoError(t, err)
 			require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 		}
@@ -1459,11 +1459,11 @@ func Test_Client_JobList(t *testing.T) {
 			job1 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbState, FinalizedAt: ptrutil.Ptr(now.Add(-10 * time.Second))})
 			job2 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbState, FinalizedAt: ptrutil.Ptr(now.Add(-15 * time.Second))})
 
-			jobs, err := client.JobList(ctx, NewJobListParams().State(state))
+			jobs, err := client.JobList(ctx, NewJobListParams().States(state))
 			require.NoError(t, err)
 			require.Equal(t, []int64{job2.ID, job1.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
-			jobs, err = client.JobList(ctx, NewJobListParams().State(state).OrderBy(JobListOrderByTime, SortOrderDesc))
+			jobs, err = client.JobList(ctx, NewJobListParams().States(state).OrderBy(JobListOrderByTime, SortOrderDesc))
 			require.NoError(t, err)
 			require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 		}
@@ -1478,11 +1478,11 @@ func Test_Client_JobList(t *testing.T) {
 		job1 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateRunning, AttemptedAt: ptrutil.Ptr(now)})
 		job2 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{State: dbsqlc.JobStateRunning, AttemptedAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
 
-		jobs, err := client.JobList(ctx, NewJobListParams().State(JobStateRunning))
+		jobs, err := client.JobList(ctx, NewJobListParams().States(JobStateRunning))
 		require.NoError(t, err)
 		require.Equal(t, []int64{job2.ID, job1.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
-		jobs, err = client.JobList(ctx, NewJobListParams().State(JobStateRunning).OrderBy(JobListOrderByTime, SortOrderDesc))
+		jobs, err = client.JobList(ctx, NewJobListParams().States(JobStateRunning).OrderBy(JobListOrderByTime, SortOrderDesc))
 		require.NoError(t, err)
 		// Sort order was explicitly reversed:
 		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
@@ -1524,11 +1524,11 @@ func Test_Client_JobList(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []int64{job2.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
-		jobs, err = client.JobList(ctx, NewJobListParams().State(rivertype.JobStateRunning).After(JobListCursorFromJob(jobRow3)))
+		jobs, err = client.JobList(ctx, NewJobListParams().States(rivertype.JobStateRunning).After(JobListCursorFromJob(jobRow3)))
 		require.NoError(t, err)
 		require.Equal(t, []int64{job4.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
-		jobs, err = client.JobList(ctx, NewJobListParams().State(rivertype.JobStateCompleted).After(JobListCursorFromJob(jobRow5)))
+		jobs, err = client.JobList(ctx, NewJobListParams().States(rivertype.JobStateCompleted).After(JobListCursorFromJob(jobRow5)))
 		require.NoError(t, err)
 		require.Equal(t, []int64{job6.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 	})
@@ -1542,11 +1542,11 @@ func Test_Client_JobList(t *testing.T) {
 		job2 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{Metadata: []byte(`{"baz": "value"}`)})
 		job3 := insertJob(ctx, client.driver.GetDBPool(), insertJobParams{Metadata: []byte(`{"baz": "value"}`)})
 
-		jobs, err := client.JobList(ctx, NewJobListParams().State("").Metadata(`{"foo": "bar"}`))
+		jobs, err := client.JobList(ctx, NewJobListParams().States("").Metadata(`{"foo": "bar"}`))
 		require.NoError(t, err)
 		require.Equal(t, []int64{job1.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
-		jobs, err = client.JobList(ctx, NewJobListParams().State("").Metadata(`{"baz": "value"}`).OrderBy(JobListOrderByTime, SortOrderDesc))
+		jobs, err = client.JobList(ctx, NewJobListParams().States("").Metadata(`{"baz": "value"}`).OrderBy(JobListOrderByTime, SortOrderDesc))
 		require.NoError(t, err)
 		// Sort order was explicitly reversed:
 		require.Equal(t, []int64{job3.ID, job2.ID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
@@ -1560,7 +1560,7 @@ func Test_Client_JobList(t *testing.T) {
 		ctx, cancel := context.WithCancel(ctx)
 		cancel() // cancel immediately
 
-		jobs, err := client.JobList(ctx, NewJobListParams().State(JobStateRunning))
+		jobs, err := client.JobList(ctx, NewJobListParams().States(JobStateRunning))
 		require.ErrorIs(t, context.Canceled, err)
 		require.Empty(t, jobs)
 	})
