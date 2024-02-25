@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/dbsqlc"
@@ -21,6 +22,7 @@ import (
 	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivertype"
 )
 
 func Test_StandardAdapter_JobCancel(t *testing.T) {
@@ -880,11 +882,12 @@ func Test_StandardAdapter_JobList_and_JobListTx(t *testing.T) {
 		params := JobListParams{
 			LimitCount: 2,
 			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderDesc}},
+			Conditions: "state = any(@states)",
+			NamedArgs:  map[string]any{"states": pq.Array([]rivertype.JobState{rivertype.JobStateAvailable})},
 		}
 
 		execTest(ctx, t, adapter, params, bundle.tx, func(jobs []*dbsqlc.RiverJob, err error) {
 			require.NoError(t, err)
-
 			// job 1 is excluded due to pagination limit of 2, while job 4 is excluded
 			// due to its state:
 			job2 := bundle.jobs[1]
