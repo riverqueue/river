@@ -22,13 +22,6 @@ sql:
 
         rename:
           river_job_state: "JobState"
-          river_job_state_available: "JobStateAvailable"
-          river_job_state_cancelled: "JobStateCancelled"
-          river_job_state_completed: "JobStateCompleted"
-          river_job_state_discarded: "JobStateDiscarded"
-          river_job_state_retryable: "JobStateRetryable"
-          river_job_state_running: "JobStateRunning"
-          river_job_state_scheduled: "JobStateScheduled"
           ttl: "TTL"
 
         overrides:

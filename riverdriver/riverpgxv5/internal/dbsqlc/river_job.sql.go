@@ -458,7 +458,7 @@ type JobInsertFastParams struct {
 	Priority    int16
 	Queue       string
 	ScheduledAt *time.Time
-	State       JobState
+	State       RiverJobState
 	Tags        []string
 }
 
@@ -544,7 +544,7 @@ type JobInsertFullParams struct {
 	Priority    int16
 	Queue       string
 	ScheduledAt *time.Time
-	State       JobState
+	State       RiverJobState
 	Tags        []string
 }
 
@@ -761,7 +761,7 @@ FROM updated_job
 `
 
 type JobSetStateIfRunningParams struct {
-	State               JobState
+	State               RiverJobState
 	ID                  int64
 	FinalizedAtDoUpdate bool
 	FinalizedAt         *time.Time
@@ -830,7 +830,7 @@ type JobUpdateParams struct {
 	FinalizedAtDoUpdate bool
 	FinalizedAt         *time.Time
 	StateDoUpdate       bool
-	State               JobState
+	State               RiverJobState
 	ID                  int64
 }
 
