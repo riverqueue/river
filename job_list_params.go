@@ -141,8 +141,8 @@ func (p *JobListParams) copy() *JobListParams {
 		queues:           append([]string(nil), p.queues...),
 		sortField:        p.sortField,
 		sortOrder:        p.sortOrder,
-		states:           p.states,
-		kinds:            p.kinds,
+		states:           append([]rivertype.JobState(nil), p.states...),
+		kinds:            append([]string(nil), p.kinds...),
 	}
 }
 
