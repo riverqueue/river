@@ -163,38 +163,18 @@ jobs:
       - name: Lint
         uses: golangci/golangci-lint-action@v4
         with:
+          # golangci-lint needs to be run separately for every Go module, and
+          # its GitHub Action doesn't provide any way to do that. Have it fetch
+          # the golangci-lint binary, trick it into not running by sending only
+          # `--help`, then run the full set of lints below. DO NOT run separate
+          # modules as separate golangci-lint-action steps. Its post run caching
+          # can be extremely slow, and that's amplified in a very painful way if
+          # it needs to be run multiple times.
+          args: --help
           version: ${{ env.GOLANGCI_LINT_VERSION }}
-          working-directory: .
 
-      - name: Lint cmd/river
-        uses: golangci/golangci-lint-action@v4
-        with:
-          version: ${{ env.GOLANGCI_LINT_VERSION }}
-          working-directory: ./cmd/river
-
-      - name: Lint riverdriver
-        uses: golangci/golangci-lint-action@v4
-        with:
-          version: ${{ env.GOLANGCI_LINT_VERSION }}
-          working-directory: ./riverdriver
-
-      - name: Lint riverdriver/riverdatabasesql
-        uses: golangci/golangci-lint-action@v4
-        with:
-          version: ${{ env.GOLANGCI_LINT_VERSION }}
-          working-directory: ./riverdriver/riverdatabasesql
-
-      - name: Lint riverdriver/riverpgxv5
-        uses: golangci/golangci-lint-action@v4
-        with:
-          version: ${{ env.GOLANGCI_LINT_VERSION }}
-          working-directory: ./riverdriver/riverpgxv5
-
-      - name: Lint rivertype
-        uses: golangci/golangci-lint-action@v3
-        with:
-          version: ${{ env.GOLANGCI_LINT_VERSION }}
-          working-directory: ./rivertype
+      - name: Run lint
+        run: make lint
 
   producer_sample:
     runs-on: ubuntu-latest
