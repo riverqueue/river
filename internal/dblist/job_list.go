@@ -72,7 +72,6 @@ func JobList(ctx context.Context, tx pgx.Tx, arg JobListParams) ([]*dbsqlc.River
 	}
 
 	var conditions []string
-
 	if arg.Conditions != "" {
 		conditions = append(conditions, arg.Conditions)
 	}

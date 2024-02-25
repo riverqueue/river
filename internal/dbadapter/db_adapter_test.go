@@ -831,7 +831,7 @@ func Test_StandardAdapter_JobList_and_JobListTx(t *testing.T) {
 		adapter := NewStandardAdapter(riverinternaltest.BaseServiceArchetype(t), testAdapterConfig(bundle.ex))
 		adapter.TimeNowUTC = func() time.Time { return bundle.baselineTime }
 
-		params := makeFakeJobInsertParams(1, &makeFakeJobInsertParamsOpts{Queue: ptrutil.Ptr("priority")})
+		params := makeFakeJobInsertParams(1, &makeFakeJobInsertParamsOpts{Queue: ptrutil.Ptr("priority"), Kind: ptrutil.Ptr("different_kind"), ScheduledAt: ptrutil.Ptr(time.Now().Add(2 * time.Second))})
 		job1, err := adapter.JobInsert(ctx, params)
 		require.NoError(t, err)
 
@@ -843,7 +843,7 @@ func Test_StandardAdapter_JobList_and_JobListTx(t *testing.T) {
 		job3, err := adapter.JobInsert(ctx, params)
 		require.NoError(t, err)
 
-		params = makeFakeJobInsertParams(4, &makeFakeJobInsertParamsOpts{State: ptrutil.Ptr(dbsqlc.JobStateRunning)})
+		params = makeFakeJobInsertParams(4, &makeFakeJobInsertParamsOpts{State: ptrutil.Ptr(dbsqlc.JobStateRunning), ScheduledAt: ptrutil.Ptr(time.Now().Add(1 * time.Second))})
 		job4, err := adapter.JobInsert(ctx, params)
 		require.NoError(t, err)
 
@@ -958,6 +958,47 @@ func Test_StandardAdapter_JobList_and_JobListTx(t *testing.T) {
 			job3 := bundle.jobs[2]
 			returnedIDs := sliceutil.Map(jobs, func(j *dbsqlc.RiverJob) int64 { return j.ID })
 			require.Equal(t, []int64{job3.ID}, returnedIDs)
+		})
+	})
+
+	t.Run("WithKindFilter", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, bundle := setupTx(t)
+
+		params := JobListParams{
+			Conditions: "kind = @kind",
+			LimitCount: 2,
+			NamedArgs:  map[string]any{"kind": "different_kind"},
+			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderDesc}},
+		}
+
+		execTest(ctx, t, adapter, params, bundle.tx, func(jobs []*dbsqlc.RiverJob, err error) {
+			require.NoError(t, err)
+
+			job1 := bundle.jobs[0]
+			returnedIDs := sliceutil.Map(jobs, func(j *dbsqlc.RiverJob) int64 { return j.ID })
+			require.Equal(t, []int64{job1.ID}, returnedIDs)
+		})
+	})
+
+	t.Run("WithSpecificTimeTypeSort", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, bundle := setupTx(t)
+
+		params := JobListParams{
+			LimitCount: 2,
+			OrderBy:    []JobListOrderBy{{Expr: "scheduled_at", Order: SortOrderDesc}},
+		}
+
+		execTest(ctx, t, adapter, params, bundle.tx, func(jobs []*dbsqlc.RiverJob, err error) {
+			require.NoError(t, err)
+			// Job 1 is scheduled 2 seconds later, job 4 is scheduled 1 second later
+			job1 := bundle.jobs[0]
+			job4 := bundle.jobs[3]
+			returnedIDs := sliceutil.Map(jobs, func(j *dbsqlc.RiverJob) int64 { return j.ID })
+			require.Equal(t, []int64{job1.ID, job4.ID}, returnedIDs)
 		})
 	})
 }
@@ -1523,6 +1564,7 @@ func testAdapterConfig(ex dbutil.Executor) *StandardAdapterConfig {
 }
 
 type makeFakeJobInsertParamsOpts struct {
+	Kind        *string
 	Metadata    []byte
 	Queue       *string
 	ScheduledAt *time.Time
@@ -1541,7 +1583,7 @@ func makeFakeJobInsertParams(i int, opts *makeFakeJobInsertParamsOpts) *JobInser
 
 	return &JobInsertParams{
 		EncodedArgs: []byte(fmt.Sprintf(`{"job_num":%d}`, i)),
-		Kind:        "fake_job",
+		Kind:        ptrutil.ValOrDefault(opts.Kind, "fake_job"),
 		MaxAttempts: rivercommon.MaxAttemptsDefault,
 		Metadata:    metadata,
 		Priority:    rivercommon.PriorityDefault,
