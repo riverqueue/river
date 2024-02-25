@@ -11,7 +11,7 @@ import (
 
 // iteratorForJobInsertMany implements pgx.CopyFromSource.
 type iteratorForJobInsertMany struct {
-	rows                 []JobInsertManyParams
+	rows                 []*JobInsertManyParams
 	skippedFirstNextCall bool
 }
 
@@ -46,6 +46,6 @@ func (r iteratorForJobInsertMany) Err() error {
 	return nil
 }
 
-func (q *Queries) JobInsertMany(ctx context.Context, db DBTX, arg []JobInsertManyParams) (int64, error) {
+func (q *Queries) JobInsertMany(ctx context.Context, db DBTX, arg []*JobInsertManyParams) (int64, error) {
 	return db.CopyFrom(ctx, []string{"river_job"}, []string{"args", "finalized_at", "kind", "max_attempts", "metadata", "priority", "queue", "scheduled_at", "state", "tags"}, &iteratorForJobInsertMany{rows: arg})
 }

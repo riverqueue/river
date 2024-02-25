@@ -78,7 +78,7 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 		return nil, err
 	}
 
-	job, err := e.queries.JobCancel(ctx, e.dbtx, dbsqlc.JobCancelParams{
+	job, err := e.queries.JobCancel(ctx, e.dbtx, &dbsqlc.JobCancelParams{
 		ID:                params.ID,
 		CancelAttemptedAt: cancelledAt,
 		JobControlTopic:   params.JobControlTopic,
@@ -90,7 +90,7 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 }
 
 func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobDeleteBeforeParams) (int, error) {
-	numDeleted, err := e.queries.JobDeleteBefore(ctx, e.dbtx, dbsqlc.JobDeleteBeforeParams{
+	numDeleted, err := e.queries.JobDeleteBefore(ctx, e.dbtx, &dbsqlc.JobDeleteBeforeParams{
 		CancelledFinalizedAtHorizon: params.CancelledFinalizedAtHorizon,
 		CompletedFinalizedAtHorizon: params.CompletedFinalizedAtHorizon,
 		DiscardedFinalizedAtHorizon: params.DiscardedFinalizedAtHorizon,
@@ -100,7 +100,7 @@ func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobD
 }
 
 func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
-	jobs, err := e.queries.JobGetAvailable(ctx, e.dbtx, dbsqlc.JobGetAvailableParams{
+	jobs, err := e.queries.JobGetAvailable(ctx, e.dbtx, &dbsqlc.JobGetAvailableParams{
 		AttemptedBy: params.AttemptedBy,
 		Max:         int32(params.Max),
 		Queue:       params.Queue,
@@ -125,7 +125,7 @@ func (e *Executor) JobGetByIDMany(ctx context.Context, id []int64) ([]*rivertype
 }
 
 func (e *Executor) JobGetByKindAndUniqueProperties(ctx context.Context, params *riverdriver.JobGetByKindAndUniquePropertiesParams) (*rivertype.JobRow, error) {
-	job, err := e.queries.JobGetByKindAndUniqueProperties(ctx, e.dbtx, dbsqlc.JobGetByKindAndUniquePropertiesParams(*params))
+	job, err := e.queries.JobGetByKindAndUniqueProperties(ctx, e.dbtx, (*dbsqlc.JobGetByKindAndUniquePropertiesParams)(params))
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -141,12 +141,12 @@ func (e *Executor) JobGetByKindMany(ctx context.Context, kind []string) ([]*rive
 }
 
 func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error) {
-	jobs, err := e.queries.JobGetStuck(ctx, e.dbtx, dbsqlc.JobGetStuckParams{Max: int32(params.Max), StuckHorizon: params.StuckHorizon})
+	jobs, err := e.queries.JobGetStuck(ctx, e.dbtx, &dbsqlc.JobGetStuckParams{Max: int32(params.Max), StuckHorizon: params.StuckHorizon})
 	return mapSlice(jobs, jobRowFromInternal), interpretError(err)
 }
 
 func (e *Executor) JobInsertFast(ctx context.Context, params *riverdriver.JobInsertFastParams) (*rivertype.JobRow, error) {
-	job, err := e.queries.JobInsertFast(ctx, e.dbtx, dbsqlc.JobInsertFastParams{
+	job, err := e.queries.JobInsertFast(ctx, e.dbtx, &dbsqlc.JobInsertFastParams{
 		Args:        params.EncodedArgs,
 		Kind:        params.Kind,
 		MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)),
@@ -164,7 +164,7 @@ func (e *Executor) JobInsertFast(ctx context.Context, params *riverdriver.JobIns
 }
 
 func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.JobInsertFastParams) (int64, error) {
-	insertJobsParams := make([]dbsqlc.JobInsertManyParams, len(params))
+	insertJobsParams := make([]*dbsqlc.JobInsertManyParams, len(params))
 	now := time.Now()
 
 	for i := 0; i < len(params); i++ {
@@ -185,7 +185,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 			tags = []string{}
 		}
 
-		insertJobsParams[i] = dbsqlc.JobInsertManyParams{
+		insertJobsParams[i] = &dbsqlc.JobInsertManyParams{
 			Args:        params.EncodedArgs,
 			Kind:        params.Kind,
 			MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)),
@@ -207,7 +207,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 }
 
 func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobInsertFullParams) (*rivertype.JobRow, error) {
-	job, err := e.queries.JobInsertFull(ctx, e.dbtx, dbsqlc.JobInsertFullParams{
+	job, err := e.queries.JobInsertFull(ctx, e.dbtx, &dbsqlc.JobInsertFullParams{
 		Attempt:     int16(params.Attempt),
 		AttemptedAt: params.AttemptedAt,
 		Args:        params.EncodedArgs,
@@ -281,12 +281,12 @@ func (e *Executor) JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, e
 }
 
 func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRescueManyParams) (*struct{}, error) {
-	err := e.queries.JobRescueMany(ctx, e.dbtx, dbsqlc.JobRescueManyParams(*params))
+	err := e.queries.JobRescueMany(ctx, e.dbtx, (*dbsqlc.JobRescueManyParams)(params))
 	return &struct{}{}, interpretError(err)
 }
 
 func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobScheduleParams) (int, error) {
-	numScheduled, err := e.queries.JobSchedule(ctx, e.dbtx, dbsqlc.JobScheduleParams{
+	numScheduled, err := e.queries.JobSchedule(ctx, e.dbtx, &dbsqlc.JobScheduleParams{
 		InsertTopic: params.InsertTopic,
 		Max:         int64(params.Max),
 		Now:         params.Now,
@@ -300,7 +300,7 @@ func (e *Executor) JobSetStateIfRunning(ctx context.Context, params *riverdriver
 		maxAttempts = int16(*params.MaxAttempts)
 	}
 
-	job, err := e.queries.JobSetStateIfRunning(ctx, e.dbtx, dbsqlc.JobSetStateIfRunningParams{
+	job, err := e.queries.JobSetStateIfRunning(ctx, e.dbtx, &dbsqlc.JobSetStateIfRunningParams{
 		ID:                  params.ID,
 		ErrorDoUpdate:       params.ErrData != nil,
 		Error:               params.ErrData,
@@ -319,7 +319,7 @@ func (e *Executor) JobSetStateIfRunning(ctx context.Context, params *riverdriver
 }
 
 func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateParams) (*rivertype.JobRow, error) {
-	job, err := e.queries.JobUpdate(ctx, e.dbtx, dbsqlc.JobUpdateParams{
+	job, err := e.queries.JobUpdate(ctx, e.dbtx, &dbsqlc.JobUpdateParams{
 		ID:                  params.ID,
 		AttemptedAtDoUpdate: params.AttemptedAtDoUpdate,
 		AttemptedAt:         params.AttemptedAt,
@@ -340,7 +340,7 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 }
 
 func (e *Executor) LeaderAttemptElect(ctx context.Context, params *riverdriver.LeaderElectParams) (bool, error) {
-	numElectionsWon, err := e.queries.LeaderAttemptElect(ctx, e.dbtx, dbsqlc.LeaderAttemptElectParams{
+	numElectionsWon, err := e.queries.LeaderAttemptElect(ctx, e.dbtx, &dbsqlc.LeaderAttemptElectParams{
 		Name:     params.Name,
 		LeaderID: params.LeaderID,
 		TTL:      params.TTL,
@@ -352,7 +352,7 @@ func (e *Executor) LeaderAttemptElect(ctx context.Context, params *riverdriver.L
 }
 
 func (e *Executor) LeaderAttemptReelect(ctx context.Context, params *riverdriver.LeaderElectParams) (bool, error) {
-	numElectionsWon, err := e.queries.LeaderAttemptReelect(ctx, e.dbtx, dbsqlc.LeaderAttemptReelectParams{
+	numElectionsWon, err := e.queries.LeaderAttemptReelect(ctx, e.dbtx, &dbsqlc.LeaderAttemptReelectParams{
 		Name:     params.Name,
 		LeaderID: params.LeaderID,
 		TTL:      params.TTL,
@@ -380,7 +380,7 @@ func (e *Executor) LeaderGetElectedLeader(ctx context.Context, name string) (*ri
 }
 
 func (e *Executor) LeaderInsert(ctx context.Context, params *riverdriver.LeaderInsertParams) (*riverdriver.Leader, error) {
-	leader, err := e.queries.LeaderInsert(ctx, e.dbtx, dbsqlc.LeaderInsertParams{
+	leader, err := e.queries.LeaderInsert(ctx, e.dbtx, &dbsqlc.LeaderInsertParams{
 		ElectedAt: params.ElectedAt,
 		ExpiresAt: params.ExpiresAt,
 		LeaderID:  params.LeaderID,
@@ -394,7 +394,7 @@ func (e *Executor) LeaderInsert(ctx context.Context, params *riverdriver.LeaderI
 }
 
 func (e *Executor) LeaderResign(ctx context.Context, params *riverdriver.LeaderResignParams) (bool, error) {
-	numResigned, err := e.queries.LeaderResign(ctx, e.dbtx, dbsqlc.LeaderResignParams{
+	numResigned, err := e.queries.LeaderResign(ctx, e.dbtx, &dbsqlc.LeaderResignParams{
 		LeaderID:        params.LeaderID,
 		LeadershipTopic: params.LeadershipTopic,
 		Name:            params.Name,
@@ -432,7 +432,7 @@ func (e *Executor) MigrationInsertMany(ctx context.Context, versions []int) ([]*
 }
 
 func (e *Executor) Notify(ctx context.Context, topic string, payload string) error {
-	return e.queries.PGNotify(ctx, e.dbtx, dbsqlc.PGNotifyParams{
+	return e.queries.PGNotify(ctx, e.dbtx, &dbsqlc.PGNotifyParams{
 		Payload: payload,
 		Topic:   topic,
 	})

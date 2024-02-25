@@ -23,7 +23,7 @@ type LeaderAttemptElectParams struct {
 	TTL      time.Duration
 }
 
-func (q *Queries) LeaderAttemptElect(ctx context.Context, db DBTX, arg LeaderAttemptElectParams) (int64, error) {
+func (q *Queries) LeaderAttemptElect(ctx context.Context, db DBTX, arg *LeaderAttemptElectParams) (int64, error) {
 	result, err := db.Exec(ctx, leaderAttemptElect, arg.Name, arg.LeaderID, arg.TTL)
 	if err != nil {
 		return 0, err
@@ -47,7 +47,7 @@ type LeaderAttemptReelectParams struct {
 	TTL      time.Duration
 }
 
-func (q *Queries) LeaderAttemptReelect(ctx context.Context, db DBTX, arg LeaderAttemptReelectParams) (int64, error) {
+func (q *Queries) LeaderAttemptReelect(ctx context.Context, db DBTX, arg *LeaderAttemptReelectParams) (int64, error) {
 	result, err := db.Exec(ctx, leaderAttemptReelect, arg.Name, arg.LeaderID, arg.TTL)
 	if err != nil {
 		return 0, err
@@ -109,7 +109,7 @@ type LeaderInsertParams struct {
 	Name      string
 }
 
-func (q *Queries) LeaderInsert(ctx context.Context, db DBTX, arg LeaderInsertParams) (*RiverLeader, error) {
+func (q *Queries) LeaderInsert(ctx context.Context, db DBTX, arg *LeaderInsertParams) (*RiverLeader, error) {
 	row := db.QueryRow(ctx, leaderInsert,
 		arg.ElectedAt,
 		arg.ExpiresAt,
@@ -152,7 +152,7 @@ type LeaderResignParams struct {
 	LeadershipTopic string
 }
 
-func (q *Queries) LeaderResign(ctx context.Context, db DBTX, arg LeaderResignParams) (int64, error) {
+func (q *Queries) LeaderResign(ctx context.Context, db DBTX, arg *LeaderResignParams) (int64, error) {
 	result, err := db.Exec(ctx, leaderResign, arg.Name, arg.LeaderID, arg.LeadershipTopic)
 	if err != nil {
 		return 0, err
