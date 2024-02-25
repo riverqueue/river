@@ -179,7 +179,7 @@ func (p *JobListParams) toDBParams() (*dbadapter.JobListParams, error) {
 	}
 
 	if len(p.kinds) > 0 {
-		conditions = append(conditions, `"kind = ANY(@kinds)`)
+		conditions = append(conditions, `kind = ANY(@kinds)`)
 		namedArgs["kinds"] = pq.Array(p.kinds)
 	}
 	if len(p.states) > 0 {
