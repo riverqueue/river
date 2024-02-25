@@ -24,8 +24,7 @@ type Archetype struct {
 	// `BaseService`'s `CancellableSleep` functions. This is meant to provide a
 	// convenient way to disable sleep in one place and which will automatically
 	// propagate from a parent into its subcomponents as they initialize
-	// themselves from its archetype. `riverinternaltest.BaseServiceArchetype`
-	// returns an archetype with sleep disabled.
+	// themselves from its archetype.
 	DisableSleep bool
 
 	// Logger is a structured logger.
@@ -36,6 +35,14 @@ type Archetype struct {
 	// injection. Services should try to use this function instead of the
 	// vanilla ones from the `time` package for testing purposes.
 	TimeNowUTC func() time.Time
+}
+
+// WithSleepDisabled disables sleep in services that are using `BaseService`'s
+// `CancellableSleep` functions and returns the archetype for convenience. Use
+// of this is only appropriate in tests.
+func (a *Archetype) WithSleepDisabled() *Archetype {
+	a.DisableSleep = true
+	return a
 }
 
 // BaseService is a struct that's meant to be embedded on "service-like" objects

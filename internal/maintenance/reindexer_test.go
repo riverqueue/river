@@ -31,7 +31,7 @@ func TestReindexer(t *testing.T) {
 			now:  time.Now(),
 		}
 
-		archetype := riverinternaltest.BaseServiceArchetype(t)
+		archetype := riverinternaltest.BaseServiceArchetype(t).WithSleepDisabled()
 		archetype.TimeNowUTC = func() time.Time { return bundle.now }
 
 		fromNow := func(d time.Duration) func(time.Time) time.Time {
