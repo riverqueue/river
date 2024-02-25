@@ -250,7 +250,7 @@ func (p *JobListParams) Metadata(json string) *JobListParams {
 // given queues.
 func (p *JobListParams) Queues(queues ...string) *JobListParams {
 	result := p.copy()
-	result.queues = make([]string, 0, len(queues))
+	result.queues = make([]string, len(queues))
 	copy(result.queues, queues)
 	return result
 }
@@ -268,7 +268,7 @@ func (p *JobListParams) OrderBy(field JobListOrderByField, direction SortOrder) 
 // state.
 func (p *JobListParams) States(states ...rivertype.JobState) *JobListParams {
 	result := p.copy()
-	result.states = make([]rivertype.JobState, 0, len(states))
+	result.states = make([]rivertype.JobState, len(states))
 	copy(result.states, states)
 	return result
 }
@@ -277,7 +277,7 @@ func (p *JobListParams) States(states ...rivertype.JobState) *JobListParams {
 // kinds.
 func (p *JobListParams) Kinds(kinds ...string) *JobListParams {
 	result := p.copy()
-	result.kinds = make([]string, 0, len(kinds))
+	result.kinds = make([]string, len(kinds))
 	copy(result.kinds, kinds)
 	return result
 }
