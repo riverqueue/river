@@ -105,8 +105,8 @@ func (n *Notifier) Start(ctx context.Context) error {
 	go func() {
 		defer close(stopped)
 
-		n.Logger.InfoContext(ctx, n.Name+": Notifier started")
-		defer n.Logger.InfoContext(ctx, n.Name+": Notifier stopped")
+		n.Logger.InfoContext(ctx, n.Name+": Run loop started")
+		defer n.Logger.InfoContext(ctx, n.Name+": Run loop stopped")
 
 		n.withLock(func() { n.isStarted = true })
 		defer n.withLock(func() { n.isStarted = false })
@@ -442,6 +442,8 @@ func (n *Notifier) Listen(ctx context.Context, topic NotificationTopic, notifyFu
 	}
 	n.subscriptions[topic] = append(existingSubs, sub)
 
+	n.Logger.DebugContext(ctx, n.Name+": Added subscription", "new_num_subscriptions", len(n.subscriptions[topic]), "topic", topic)
+
 	// We add the new subscription to the subscription list optimistically, and
 	// it needs to be done this way in case of a restart after an interrupt
 	// below has been run, but after a return to this function (say we were to
@@ -450,15 +452,7 @@ func (n *Notifier) Listen(ctx context.Context, topic NotificationTopic, notifyFu
 	//
 	// By the time this function is run (i.e. after an interrupt), a lock on
 	// `n.mu` has been reacquired, and modifying subscription state is safe.
-	removeSub := func() {
-		n.subscriptions[sub.topic] = slices.DeleteFunc(n.subscriptions[sub.topic], func(s *Subscription) bool {
-			return s == sub
-		})
-
-		if len(n.subscriptions[sub.topic]) <= 1 {
-			delete(n.subscriptions, sub.topic)
-		}
-	}
+	removeSub := func() { n.removeSubscription(ctx, sub) }
 
 	if !existingTopic {
 		// If already waiting, send an interrupt to the wait function to run a
@@ -528,15 +522,22 @@ func (n *Notifier) unlisten(ctx context.Context, sub *Subscription) error {
 		}
 	}
 
-	n.subscriptions[sub.topic] = slices.DeleteFunc(subs, func(s *Subscription) bool {
+	n.removeSubscription(ctx, sub)
+
+	return nil
+}
+
+// This function requires that the caller already has a lock on `n.mu`.
+func (n *Notifier) removeSubscription(ctx context.Context, sub *Subscription) {
+	n.subscriptions[sub.topic] = slices.DeleteFunc(n.subscriptions[sub.topic], func(s *Subscription) bool {
 		return s == sub
 	})
 
-	if len(subs) <= 1 {
+	if len(n.subscriptions[sub.topic]) < 1 {
 		delete(n.subscriptions, sub.topic)
 	}
 
-	return nil
+	n.Logger.DebugContext(ctx, n.Name+": Removed subscription", "new_num_subscriptions", len(n.subscriptions[sub.topic]), "topic", sub.topic)
 }
 
 func (n *Notifier) withLock(lockedFunc func()) {

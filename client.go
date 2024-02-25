@@ -464,11 +464,8 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		client.notifier = notifier.New(archetype, driver.GetListener(), client.monitor.SetNotifierStatus)
 		client.services = append(client.services, client.notifier)
 
-		var err error
-		client.elector, err = leadership.NewElector(archetype, driver.GetExecutor(), client.notifier, instanceName, client.ID(), 5*time.Second, 10*time.Second, logger)
-		if err != nil {
-			return nil, err
-		}
+		client.elector = leadership.NewElector(archetype, driver.GetExecutor(), client.notifier, instanceName, client.ID())
+		client.services = append(client.services, client.elector)
 
 		if err := client.provisionProducers(); err != nil {
 			return nil, err
@@ -636,14 +633,6 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		}
 	}
 
-	if c.elector != nil {
-		c.wg.Add(1)
-		go func() {
-			c.elector.Run(fetchNewWorkCtx)
-			c.wg.Done()
-		}()
-	}
-
 	c.runProducers(fetchNewWorkCtx, workCtx)
 	go c.signalStopComplete(workCtx)
 
@@ -654,10 +643,11 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 
 // ctx is used only for logging, not for lifecycle.
 func (c *Client[TTx]) signalStopComplete(ctx context.Context) {
-	// Wait for producers and elector to exit:
+	// Wait for producers to exit:
 	c.wg.Wait()
 
-	// Stop all mainline services where stop order isn't important.
+	// Stop all mainline services where stop order isn't important. Contains the
+	// elector and notifier, amongst others.
 	startstop.StopAllParallel(c.services)
 
 	// Once the producers have all finished, we know that completers have at least
@@ -667,8 +657,6 @@ func (c *Client[TTx]) signalStopComplete(ctx context.Context) {
 	// complete. We probably need a timeout or way to move on in those cases.
 	c.completer.Wait()
 
-	// Will only be started if this client was leader, but can tolerate a stop
-	// without having been started.
 	c.queueMaintainer.Stop()
 
 	c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": All services stopped")
