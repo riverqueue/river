@@ -154,7 +154,7 @@ func (e *Executor) JobInsertFast(ctx context.Context, params *riverdriver.JobIns
 		Priority:    int16(min(params.Priority, math.MaxInt16)),
 		Queue:       params.Queue,
 		ScheduledAt: params.ScheduledAt,
-		State:       dbsqlc.JobState(params.State),
+		State:       dbsqlc.RiverJobState(params.State),
 		Tags:        params.Tags,
 	})
 	if err != nil {
@@ -193,7 +193,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 			Priority:    int16(min(params.Priority, math.MaxInt16)),
 			Queue:       params.Queue,
 			ScheduledAt: scheduledAt,
-			State:       dbsqlc.JobState(params.State),
+			State:       dbsqlc.RiverJobState(params.State),
 			Tags:        tags,
 		}
 	}
@@ -220,7 +220,7 @@ func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobIns
 		Priority:    int16(min(params.Priority, math.MaxInt16)),
 		Queue:       params.Queue,
 		ScheduledAt: params.ScheduledAt,
-		State:       dbsqlc.JobState(params.State),
+		State:       dbsqlc.RiverJobState(params.State),
 		Tags:        params.Tags,
 	})
 	if err != nil {
@@ -310,7 +310,7 @@ func (e *Executor) JobSetStateIfRunning(ctx context.Context, params *riverdriver
 		MaxAttempts:         maxAttempts,
 		ScheduledAtDoUpdate: params.ScheduledAt != nil,
 		ScheduledAt:         params.ScheduledAt,
-		State:               dbsqlc.JobState(params.State),
+		State:               dbsqlc.RiverJobState(params.State),
 	})
 	if err != nil {
 		return nil, interpretError(err)
@@ -330,7 +330,7 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 		FinalizedAtDoUpdate: params.FinalizedAtDoUpdate,
 		FinalizedAt:         params.FinalizedAt,
 		StateDoUpdate:       params.StateDoUpdate,
-		State:               dbsqlc.JobState(params.State),
+		State:               dbsqlc.RiverJobState(params.State),
 	})
 	if err != nil {
 		return nil, interpretError(err)

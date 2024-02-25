@@ -14,13 +14,13 @@ import (
 type JobState string
 
 const (
-	JobStateAvailable JobState = "available"
-	JobStateCancelled JobState = "cancelled"
-	JobStateCompleted JobState = "completed"
-	JobStateDiscarded JobState = "discarded"
-	JobStateRetryable JobState = "retryable"
-	JobStateRunning   JobState = "running"
-	JobStateScheduled JobState = "scheduled"
+	RiverJobStateAvailable JobState = "available"
+	RiverJobStateCancelled JobState = "cancelled"
+	RiverJobStateCompleted JobState = "completed"
+	RiverJobStateDiscarded JobState = "discarded"
+	RiverJobStateRetryable JobState = "retryable"
+	RiverJobStateRunning   JobState = "running"
+	RiverJobStateScheduled JobState = "scheduled"
 )
 
 func (e *JobState) Scan(src interface{}) error {

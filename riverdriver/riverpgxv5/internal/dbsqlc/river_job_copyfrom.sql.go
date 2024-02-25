@@ -18,6 +18,6 @@ type JobInsertManyParams struct {
 	Priority    int16
 	Queue       string
 	ScheduledAt time.Time
-	State       JobState
+	State       RiverJobState
 	Tags        []string
 }

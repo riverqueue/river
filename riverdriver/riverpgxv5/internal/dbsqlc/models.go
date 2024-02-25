@@ -10,51 +10,51 @@ import (
 	"time"
 )
 
-type JobState string
+type RiverJobState string
 
 const (
-	JobStateAvailable JobState = "available"
-	JobStateCancelled JobState = "cancelled"
-	JobStateCompleted JobState = "completed"
-	JobStateDiscarded JobState = "discarded"
-	JobStateRetryable JobState = "retryable"
-	JobStateRunning   JobState = "running"
-	JobStateScheduled JobState = "scheduled"
+	RiverJobStateAvailable RiverJobState = "available"
+	RiverJobStateCancelled RiverJobState = "cancelled"
+	RiverJobStateCompleted RiverJobState = "completed"
+	RiverJobStateDiscarded RiverJobState = "discarded"
+	RiverJobStateRetryable RiverJobState = "retryable"
+	RiverJobStateRunning   RiverJobState = "running"
+	RiverJobStateScheduled RiverJobState = "scheduled"
 )
 
-func (e *JobState) Scan(src interface{}) error {
+func (e *RiverJobState) Scan(src interface{}) error {
 	switch s := src.(type) {
 	case []byte:
-		*e = JobState(s)
+		*e = RiverJobState(s)
 	case string:
-		*e = JobState(s)
+		*e = RiverJobState(s)
 	default:
-		return fmt.Errorf("unsupported scan type for JobState: %T", src)
+		return fmt.Errorf("unsupported scan type for RiverJobState: %T", src)
 	}
 	return nil
 }
 
-type NullJobState struct {
-	JobState JobState
-	Valid    bool // Valid is true if JobState is not NULL
+type NullRiverJobState struct {
+	RiverJobState RiverJobState
+	Valid         bool // Valid is true if RiverJobState is not NULL
 }
 
 // Scan implements the Scanner interface.
-func (ns *NullJobState) Scan(value interface{}) error {
+func (ns *NullRiverJobState) Scan(value interface{}) error {
 	if value == nil {
-		ns.JobState, ns.Valid = "", false
+		ns.RiverJobState, ns.Valid = "", false
 		return nil
 	}
 	ns.Valid = true
-	return ns.JobState.Scan(value)
+	return ns.RiverJobState.Scan(value)
 }
 
 // Value implements the driver Valuer interface.
-func (ns NullJobState) Value() (driver.Value, error) {
+func (ns NullRiverJobState) Value() (driver.Value, error) {
 	if !ns.Valid {
 		return nil, nil
 	}
-	return string(ns.JobState), nil
+	return string(ns.RiverJobState), nil
 }
 
 type RiverJob struct {
@@ -71,7 +71,7 @@ type RiverJob struct {
 	Metadata    []byte
 	Priority    int16
 	Queue       string
-	State       JobState
+	State       RiverJobState
 	ScheduledAt time.Time
 	Tags        []string
 }
