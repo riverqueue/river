@@ -47,7 +47,7 @@ func (p *SimpleClientRetryPolicy) NextRetry(job *rivertype.JobRow) time.Time {
 	return job.AttemptedAt.Add(timeutil.SecondsAsDuration(retrySeconds))
 }
 
-func TestRescuer(t *testing.T) {
+func TestJobRescuer(t *testing.T) {
 	t.Parallel()
 
 	const rescuerJobKind = "rescuer"
@@ -59,21 +59,21 @@ func TestRescuer(t *testing.T) {
 		rescueHorizon time.Time
 	}
 
-	setup := func(t *testing.T) (*Rescuer, *testBundle) {
+	setup := func(t *testing.T) (*JobRescuer, *testBundle) {
 		t.Helper()
 
 		tx := riverinternaltest.TestTx(ctx, t)
 		bundle := &testBundle{
 			exec:          riverpgxv5.New(nil).UnwrapExecutor(tx),
-			rescueHorizon: time.Now().Add(-RescueAfterDefault),
+			rescueHorizon: time.Now().Add(-JobRescuerRescueAfterDefault),
 		}
 
 		rescuer := NewRescuer(
 			riverinternaltest.BaseServiceArchetype(t),
-			&RescuerConfig{
+			&JobRescuerConfig{
 				ClientRetryPolicy: &SimpleClientRetryPolicy{},
-				Interval:          RescuerIntervalDefault,
-				RescueAfter:       RescueAfterDefault,
+				Interval:          JobRescuerIntervalDefault,
+				RescueAfter:       JobRescuerRescueAfterDefault,
 				WorkUnitFactoryFunc: func(kind string) workunit.WorkUnitFactory {
 					if kind == rescuerJobKind {
 						return &callbackWorkUnitFactory{Callback: func(ctx context.Context, jobRow *rivertype.JobRow) error { return nil }}
@@ -93,15 +93,15 @@ func TestRescuer(t *testing.T) {
 
 		cleaner := NewRescuer(
 			riverinternaltest.BaseServiceArchetype(t),
-			&RescuerConfig{
+			&JobRescuerConfig{
 				ClientRetryPolicy:   &SimpleClientRetryPolicy{},
 				WorkUnitFactoryFunc: func(kind string) workunit.WorkUnitFactory { return nil },
 			},
 			nil,
 		)
 
-		require.Equal(t, RescueAfterDefault, cleaner.Config.RescueAfter)
-		require.Equal(t, RescuerIntervalDefault, cleaner.Config.Interval)
+		require.Equal(t, JobRescuerRescueAfterDefault, cleaner.Config.RescueAfter)
+		require.Equal(t, JobRescuerIntervalDefault, cleaner.Config.Interval)
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {
@@ -109,7 +109,7 @@ func TestRescuer(t *testing.T) {
 
 		rescuer, _ := setup(t)
 		rescuer.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
-		rescuer.TestSignals = RescuerTestSignals{}       // deinit so channels don't fill
+		rescuer.TestSignals = JobRescuerTestSignals{}    // deinit so channels don't fill
 
 		runStartStopStress(ctx, t, rescuer)
 	})

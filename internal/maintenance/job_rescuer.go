@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	RescueAfterDefault     = time.Hour
-	RescuerIntervalDefault = 30 * time.Second
+	JobRescuerRescueAfterDefault = time.Hour
+	JobRescuerIntervalDefault    = 30 * time.Second
 )
 
 type ClientRetryPolicy interface {
@@ -28,17 +28,17 @@ type ClientRetryPolicy interface {
 }
 
 // Test-only properties.
-type RescuerTestSignals struct {
+type JobRescuerTestSignals struct {
 	FetchedBatch rivercommon.TestSignal[struct{}] // notifies when runOnce has fetched a batch of jobs
 	UpdatedBatch rivercommon.TestSignal[struct{}] // notifies when runOnce has updated rescued jobs from a batch
 }
 
-func (ts *RescuerTestSignals) Init() {
+func (ts *JobRescuerTestSignals) Init() {
 	ts.FetchedBatch.Init()
 	ts.UpdatedBatch.Init()
 }
 
-type RescuerConfig struct {
+type JobRescuerConfig struct {
 	// ClientRetryPolicy is the default retry policy to use for workers that don't
 	// overide NextRetry.
 	ClientRetryPolicy ClientRetryPolicy
@@ -53,7 +53,7 @@ type RescuerConfig struct {
 	WorkUnitFactoryFunc func(kind string) workunit.WorkUnitFactory
 }
 
-func (c *RescuerConfig) mustValidate() *RescuerConfig {
+func (c *JobRescuerConfig) mustValidate() *JobRescuerConfig {
 	if c.ClientRetryPolicy == nil {
 		panic("RescuerConfig.ClientRetryPolicy must be set")
 	}
@@ -70,26 +70,26 @@ func (c *RescuerConfig) mustValidate() *RescuerConfig {
 	return c
 }
 
-// Rescuer periodically rescues jobs that have been executing for too long
+// JobRescuer periodically rescues jobs that have been executing for too long
 // and are considered to be "stuck".
-type Rescuer struct {
+type JobRescuer struct {
 	baseservice.BaseService
 	startstop.BaseStartStop
 
 	// exported for test purposes
-	Config      *RescuerConfig
-	TestSignals RescuerTestSignals
+	Config      *JobRescuerConfig
+	TestSignals JobRescuerTestSignals
 
 	batchSize int // configurable for test purposes
 	exec      riverdriver.Executor
 }
 
-func NewRescuer(archetype *baseservice.Archetype, config *RescuerConfig, exec riverdriver.Executor) *Rescuer {
-	return baseservice.Init(archetype, &Rescuer{
-		Config: (&RescuerConfig{
+func NewRescuer(archetype *baseservice.Archetype, config *JobRescuerConfig, exec riverdriver.Executor) *JobRescuer {
+	return baseservice.Init(archetype, &JobRescuer{
+		Config: (&JobRescuerConfig{
 			ClientRetryPolicy:   config.ClientRetryPolicy,
-			Interval:            valutil.ValOrDefault(config.Interval, RescuerIntervalDefault),
-			RescueAfter:         valutil.ValOrDefault(config.RescueAfter, RescueAfterDefault),
+			Interval:            valutil.ValOrDefault(config.Interval, JobRescuerIntervalDefault),
+			RescueAfter:         valutil.ValOrDefault(config.RescueAfter, JobRescuerRescueAfterDefault),
 			WorkUnitFactoryFunc: config.WorkUnitFactoryFunc,
 		}).mustValidate(),
 
@@ -98,7 +98,7 @@ func NewRescuer(archetype *baseservice.Archetype, config *RescuerConfig, exec ri
 	})
 }
 
-func (s *Rescuer) Start(ctx context.Context) error {
+func (s *JobRescuer) Start(ctx context.Context) error {
 	ctx, shouldStart, stopped := s.StartInit(ctx)
 	if !shouldStart {
 		return nil
@@ -152,7 +152,7 @@ type metadataWithCancelAttemptedAt struct {
 	CancelAttemptedAt time.Time `json:"cancel_attempted_at"`
 }
 
-func (s *Rescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error) {
+func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error) {
 	res := &rescuerRunOnceResult{}
 
 	for {
@@ -235,7 +235,7 @@ func (s *Rescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error) {
 	return res, nil
 }
 
-func (s *Rescuer) getStuckJobs(ctx context.Context) ([]*rivertype.JobRow, error) {
+func (s *JobRescuer) getStuckJobs(ctx context.Context) ([]*rivertype.JobRow, error) {
 	ctx, cancelFunc := context.WithTimeout(ctx, 30*time.Second)
 	defer cancelFunc()
 
@@ -249,7 +249,7 @@ func (s *Rescuer) getStuckJobs(ctx context.Context) ([]*rivertype.JobRow, error)
 
 // makeRetryDecision decides whether or not a rescued job should be retried, and if so,
 // when.
-func (s *Rescuer) makeRetryDecision(ctx context.Context, job *rivertype.JobRow) (bool, time.Time) {
+func (s *JobRescuer) makeRetryDecision(ctx context.Context, job *rivertype.JobRow) (bool, time.Time) {
 	workUnitFactory := s.Config.WorkUnitFactoryFunc(job.Kind)
 	if workUnitFactory == nil {
 		s.Logger.ErrorContext(ctx, s.Name+": Attempted to rescue unhandled job kind, discarding",

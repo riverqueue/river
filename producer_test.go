@@ -83,7 +83,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 		Notifier:          notifier,
 		Queue:             rivercommon.QueueDefault,
 		RetryPolicy:       &DefaultClientRetryPolicy{},
-		SchedulerInterval: maintenance.SchedulerIntervalDefault,
+		SchedulerInterval: maintenance.JobSchedulerIntervalDefault,
 		ClientID:          "fakeWorkerNameTODO",
 		Workers:           workers,
 	}

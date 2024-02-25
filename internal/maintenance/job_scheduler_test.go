@@ -19,7 +19,7 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-func TestScheduler(t *testing.T) {
+func TestJobScheduler(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -28,7 +28,7 @@ func TestScheduler(t *testing.T) {
 		exec riverdriver.Executor
 	}
 
-	setup := func(t *testing.T, ex riverdriver.Executor) (*Scheduler, *testBundle) {
+	setup := func(t *testing.T, ex riverdriver.Executor) (*JobScheduler, *testBundle) {
 		t.Helper()
 
 		bundle := &testBundle{
@@ -37,8 +37,8 @@ func TestScheduler(t *testing.T) {
 
 		scheduler := NewScheduler(
 			riverinternaltest.BaseServiceArchetype(t),
-			&SchedulerConfig{
-				Interval: SchedulerIntervalDefault,
+			&JobSchedulerConfig{
+				Interval: JobSchedulerIntervalDefault,
 				Limit:    10,
 			},
 			bundle.exec)
@@ -48,7 +48,7 @@ func TestScheduler(t *testing.T) {
 		return scheduler, bundle
 	}
 
-	setupTx := func(t *testing.T) (*Scheduler, *testBundle) {
+	setupTx := func(t *testing.T) (*JobScheduler, *testBundle) {
 		t.Helper()
 		tx := riverinternaltest.TestTx(ctx, t)
 		return setup(t, riverpgxv5.New(nil).UnwrapExecutor(tx))
@@ -72,10 +72,10 @@ func TestScheduler(t *testing.T) {
 	t.Run("Defaults", func(t *testing.T) {
 		t.Parallel()
 
-		scheduler := NewScheduler(riverinternaltest.BaseServiceArchetype(t), &SchedulerConfig{}, nil)
+		scheduler := NewScheduler(riverinternaltest.BaseServiceArchetype(t), &JobSchedulerConfig{}, nil)
 
-		require.Equal(t, SchedulerIntervalDefault, scheduler.config.Interval)
-		require.Equal(t, SchedulerLimitDefault, scheduler.config.Limit)
+		require.Equal(t, JobSchedulerIntervalDefault, scheduler.config.Interval)
+		require.Equal(t, JobSchedulerLimitDefault, scheduler.config.Limit)
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {
@@ -83,7 +83,7 @@ func TestScheduler(t *testing.T) {
 
 		scheduler, _ := setupTx(t)
 		scheduler.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
-		scheduler.TestSignals = SchedulerTestSignals{}     // deinit so channels don't fill
+		scheduler.TestSignals = JobSchedulerTestSignals{}  // deinit so channels don't fill
 
 		runStartStopStress(ctx, t, scheduler)
 	})

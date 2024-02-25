@@ -1823,6 +1823,131 @@ func Test_Client_Maintenance(t *testing.T) {
 		require.NotErrorIs(t, err, ErrNotFound) // still there
 	})
 
+	t.Run("JobRescuer", func(t *testing.T) {
+		t.Parallel()
+
+		dbPool := riverinternaltest.TestDB(ctx, t)
+
+		config := newTestConfig(t, nil)
+		config.RescueStuckJobsAfter = 5 * time.Minute
+
+		client := newTestClient(t, dbPool, config)
+		exec := client.driver.GetExecutor()
+
+		now := time.Now()
+
+		// Take care to insert jobs before starting the client because otherwise
+		// there's a race condition where the rescuer could run its initial
+		// pass before our insertion is complete.
+		ineligibleJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(time.Minute))})
+		ineligibleJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(time.Minute))})
+		ineligibleJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(now.Add(-time.Minute))})
+
+		// large attempt number ensures these don't immediately start executing again:
+		jobStuckToRetry1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRunning), Attempt: ptrutil.Ptr(20), AttemptedAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
+		jobStuckToRetry2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRunning), Attempt: ptrutil.Ptr(20), AttemptedAt: ptrutil.Ptr(now.Add(-30 * time.Minute))})
+		jobStuckToDiscard := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+			State:       ptrutil.Ptr(rivertype.JobStateRunning),
+			Attempt:     ptrutil.Ptr(20),
+			AttemptedAt: ptrutil.Ptr(now.Add(-5*time.Minute - time.Second)),
+			MaxAttempts: ptrutil.Ptr(1),
+		})
+
+		// Will not be rescued.
+		jobNotYetStuck1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(now.Add(-4 * time.Minute))})
+		jobNotYetStuck2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(now.Add(-1 * time.Minute))})
+		jobNotYetStuck3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(now.Add(-10 * time.Second))})
+
+		startClient(ctx, t, client)
+
+		client.testSignals.electedLeader.WaitOrTimeout()
+		svc := maintenance.GetService[*maintenance.JobRescuer](client.queueMaintainer)
+		svc.TestSignals.FetchedBatch.WaitOrTimeout()
+		svc.TestSignals.UpdatedBatch.WaitOrTimeout()
+
+		requireJobHasState := func(jobID int64, state rivertype.JobState) {
+			t.Helper()
+			job, err := exec.JobGetByID(ctx, jobID)
+			require.NoError(t, err)
+			require.Equal(t, state, job.State)
+		}
+
+		// unchanged
+		requireJobHasState(ineligibleJob1.ID, ineligibleJob1.State)
+		requireJobHasState(ineligibleJob2.ID, ineligibleJob2.State)
+		requireJobHasState(ineligibleJob3.ID, ineligibleJob3.State)
+
+		// Jobs to retry should be retryable:
+		requireJobHasState(jobStuckToRetry1.ID, rivertype.JobStateRetryable)
+		requireJobHasState(jobStuckToRetry2.ID, rivertype.JobStateRetryable)
+
+		// This one should be discarded because it's already at MaxAttempts:
+		requireJobHasState(jobStuckToDiscard.ID, rivertype.JobStateDiscarded)
+
+		// not eligible for rescue, not stuck long enough yet:
+		requireJobHasState(jobNotYetStuck1.ID, jobNotYetStuck1.State)
+		requireJobHasState(jobNotYetStuck2.ID, jobNotYetStuck2.State)
+		requireJobHasState(jobNotYetStuck3.ID, jobNotYetStuck3.State)
+	})
+
+	t.Run("JobScheduler", func(t *testing.T) {
+		t.Parallel()
+
+		dbPool := riverinternaltest.TestDB(ctx, t)
+
+		config := newTestConfig(t, nil)
+		config.Queues = map[string]QueueConfig{"another_queue": {MaxWorkers: 1}} // don't work jobs on the default queue we're using in this test
+
+		client := newTestClient(t, dbPool, config)
+		exec := client.driver.GetExecutor()
+
+		now := time.Now()
+
+		// Take care to insert jobs before starting the client because otherwise
+		// there's a race condition where the scheduler could run its initial
+		// pass before our insertion is complete.
+		ineligibleJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+		ineligibleJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
+		ineligibleJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
+
+		jobInPast1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
+		jobInPast2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Minute))})
+		jobInPast3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
+
+		// Will not be scheduled.
+		jobInFuture1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(now.Add(1 * time.Hour))})
+		jobInFuture2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(now.Add(1 * time.Minute))})
+		jobInFuture3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(now.Add(10 * time.Second))})
+
+		startClient(ctx, t, client)
+
+		client.testSignals.electedLeader.WaitOrTimeout()
+		scheduler := maintenance.GetService[*maintenance.JobScheduler](client.queueMaintainer)
+		scheduler.TestSignals.ScheduledBatch.WaitOrTimeout()
+
+		requireJobHasState := func(jobID int64, state rivertype.JobState) {
+			t.Helper()
+			job, err := client.JobGet(ctx, jobID)
+			require.NoError(t, err)
+			require.Equal(t, state, job.State)
+		}
+
+		// unchanged
+		requireJobHasState(ineligibleJob1.ID, ineligibleJob1.State)
+		requireJobHasState(ineligibleJob2.ID, ineligibleJob2.State)
+		requireJobHasState(ineligibleJob3.ID, ineligibleJob3.State)
+
+		// Jobs with past timestamps should be now be made available:
+		requireJobHasState(jobInPast1.ID, rivertype.JobStateAvailable)
+		requireJobHasState(jobInPast2.ID, rivertype.JobStateAvailable)
+		requireJobHasState(jobInPast3.ID, rivertype.JobStateAvailable)
+
+		// not scheduled, still in future
+		requireJobHasState(jobInFuture1.ID, jobInFuture1.State)
+		requireJobHasState(jobInFuture2.ID, jobInFuture2.State)
+		requireJobHasState(jobInFuture3.ID, jobInFuture3.State)
+	})
+
 	t.Run("PeriodicJobEnqueuerWithOpts", func(t *testing.T) {
 		t.Parallel()
 
@@ -1886,131 +2011,6 @@ func Test_Client_Maintenance(t *testing.T) {
 		// There are two indexes to reindex by default:
 		svc.TestSignals.Reindexed.WaitOrTimeout()
 		svc.TestSignals.Reindexed.WaitOrTimeout()
-	})
-
-	t.Run("Rescuer", func(t *testing.T) {
-		t.Parallel()
-
-		dbPool := riverinternaltest.TestDB(ctx, t)
-
-		config := newTestConfig(t, nil)
-		config.RescueStuckJobsAfter = 5 * time.Minute
-
-		client := newTestClient(t, dbPool, config)
-		exec := client.driver.GetExecutor()
-
-		now := time.Now()
-
-		// Take care to insert jobs before starting the client because otherwise
-		// there's a race condition where the rescuer could run its initial
-		// pass before our insertion is complete.
-		ineligibleJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(time.Minute))})
-		ineligibleJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(time.Minute))})
-		ineligibleJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(now.Add(-time.Minute))})
-
-		// large attempt number ensures these don't immediately start executing again:
-		jobStuckToRetry1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRunning), Attempt: ptrutil.Ptr(20), AttemptedAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
-		jobStuckToRetry2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRunning), Attempt: ptrutil.Ptr(20), AttemptedAt: ptrutil.Ptr(now.Add(-30 * time.Minute))})
-		jobStuckToDiscard := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-			State:       ptrutil.Ptr(rivertype.JobStateRunning),
-			Attempt:     ptrutil.Ptr(20),
-			AttemptedAt: ptrutil.Ptr(now.Add(-5*time.Minute - time.Second)),
-			MaxAttempts: ptrutil.Ptr(1),
-		})
-
-		// Will not be rescued.
-		jobNotYetStuck1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(now.Add(-4 * time.Minute))})
-		jobNotYetStuck2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(now.Add(-1 * time.Minute))})
-		jobNotYetStuck3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(now.Add(-10 * time.Second))})
-
-		startClient(ctx, t, client)
-
-		client.testSignals.electedLeader.WaitOrTimeout()
-		svc := maintenance.GetService[*maintenance.Rescuer](client.queueMaintainer)
-		svc.TestSignals.FetchedBatch.WaitOrTimeout()
-		svc.TestSignals.UpdatedBatch.WaitOrTimeout()
-
-		requireJobHasState := func(jobID int64, state rivertype.JobState) {
-			t.Helper()
-			job, err := exec.JobGetByID(ctx, jobID)
-			require.NoError(t, err)
-			require.Equal(t, state, job.State)
-		}
-
-		// unchanged
-		requireJobHasState(ineligibleJob1.ID, ineligibleJob1.State)
-		requireJobHasState(ineligibleJob2.ID, ineligibleJob2.State)
-		requireJobHasState(ineligibleJob3.ID, ineligibleJob3.State)
-
-		// Jobs to retry should be retryable:
-		requireJobHasState(jobStuckToRetry1.ID, rivertype.JobStateRetryable)
-		requireJobHasState(jobStuckToRetry2.ID, rivertype.JobStateRetryable)
-
-		// This one should be discarded because it's already at MaxAttempts:
-		requireJobHasState(jobStuckToDiscard.ID, rivertype.JobStateDiscarded)
-
-		// not eligible for rescue, not stuck long enough yet:
-		requireJobHasState(jobNotYetStuck1.ID, jobNotYetStuck1.State)
-		requireJobHasState(jobNotYetStuck2.ID, jobNotYetStuck2.State)
-		requireJobHasState(jobNotYetStuck3.ID, jobNotYetStuck3.State)
-	})
-
-	t.Run("Scheduler", func(t *testing.T) {
-		t.Parallel()
-
-		dbPool := riverinternaltest.TestDB(ctx, t)
-
-		config := newTestConfig(t, nil)
-		config.Queues = map[string]QueueConfig{"another_queue": {MaxWorkers: 1}} // don't work jobs on the default queue we're using in this test
-
-		client := newTestClient(t, dbPool, config)
-		exec := client.driver.GetExecutor()
-
-		now := time.Now()
-
-		// Take care to insert jobs before starting the client because otherwise
-		// there's a race condition where the scheduler could run its initial
-		// pass before our insertion is complete.
-		ineligibleJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-		ineligibleJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
-		ineligibleJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
-
-		jobInPast1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
-		jobInPast2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Minute))})
-		jobInPast3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
-
-		// Will not be scheduled.
-		jobInFuture1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(now.Add(1 * time.Hour))})
-		jobInFuture2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(now.Add(1 * time.Minute))})
-		jobInFuture3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(now.Add(10 * time.Second))})
-
-		startClient(ctx, t, client)
-
-		client.testSignals.electedLeader.WaitOrTimeout()
-		scheduler := maintenance.GetService[*maintenance.Scheduler](client.queueMaintainer)
-		scheduler.TestSignals.ScheduledBatch.WaitOrTimeout()
-
-		requireJobHasState := func(jobID int64, state rivertype.JobState) {
-			t.Helper()
-			job, err := client.JobGet(ctx, jobID)
-			require.NoError(t, err)
-			require.Equal(t, state, job.State)
-		}
-
-		// unchanged
-		requireJobHasState(ineligibleJob1.ID, ineligibleJob1.State)
-		requireJobHasState(ineligibleJob2.ID, ineligibleJob2.State)
-		requireJobHasState(ineligibleJob3.ID, ineligibleJob3.State)
-
-		// Jobs with past timestamps should be now be made available:
-		requireJobHasState(jobInPast1.ID, rivertype.JobStateAvailable)
-		requireJobHasState(jobInPast2.ID, rivertype.JobStateAvailable)
-		requireJobHasState(jobInPast3.ID, rivertype.JobStateAvailable)
-
-		// not scheduled, still in future
-		requireJobHasState(jobInFuture1.ID, jobInFuture1.State)
-		requireJobHasState(jobInFuture2.ID, jobInFuture2.State)
-		requireJobHasState(jobInFuture3.ID, jobInFuture3.State)
 	})
 }
 
@@ -3034,7 +3034,7 @@ func Test_NewClient_Validations(t *testing.T) {
 				config.JobTimeout = 23 * time.Hour
 			},
 			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
-				require.Equal(t, 23*time.Hour+maintenance.RescueAfterDefault, client.config.RescueStuckJobsAfter)
+				require.Equal(t, 23*time.Hour+maintenance.JobRescuerRescueAfterDefault, client.config.RescueStuckJobsAfter)
 			},
 		},
 		{

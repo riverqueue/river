@@ -301,10 +301,10 @@ type clientTestSignals struct {
 	electedLeader rivercommon.TestSignal[struct{}] // notifies when elected leader
 
 	jobCleaner          *maintenance.JobCleanerTestSignals
+	jobRescuer          *maintenance.JobRescuerTestSignals
+	jobScheduler        *maintenance.JobSchedulerTestSignals
 	periodicJobEnqueuer *maintenance.PeriodicJobEnqueuerTestSignals
 	reindexer           *maintenance.ReindexerTestSignals
-	rescuer             *maintenance.RescuerTestSignals
-	scheduler           *maintenance.SchedulerTestSignals
 }
 
 func (ts *clientTestSignals) Init() {
@@ -313,17 +313,17 @@ func (ts *clientTestSignals) Init() {
 	if ts.jobCleaner != nil {
 		ts.jobCleaner.Init()
 	}
+	if ts.jobRescuer != nil {
+		ts.jobRescuer.Init()
+	}
+	if ts.jobScheduler != nil {
+		ts.jobScheduler.Init()
+	}
 	if ts.periodicJobEnqueuer != nil {
 		ts.periodicJobEnqueuer.Init()
 	}
 	if ts.reindexer != nil {
 		ts.reindexer.Init()
-	}
-	if ts.rescuer != nil {
-		ts.rescuer.Init()
-	}
-	if ts.scheduler != nil {
-		ts.scheduler.Init()
 	}
 }
 
@@ -388,9 +388,9 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	// For convenience, in case the user's specified a large JobTimeout but no
 	// RescueStuckJobsAfter, since RescueStuckJobsAfter must be greater than
 	// JobTimeout, set a reasonable default value that's longer thah JobTimeout.
-	rescueAfter := maintenance.RescueAfterDefault
+	rescueAfter := maintenance.JobRescuerRescueAfterDefault
 	if config.JobTimeout > 0 && config.RescueStuckJobsAfter < 1 && config.JobTimeout > config.RescueStuckJobsAfter {
-		rescueAfter = config.JobTimeout + maintenance.RescueAfterDefault
+		rescueAfter = config.JobTimeout + maintenance.JobRescuerRescueAfterDefault
 	}
 
 	// Create a new version of config with defaults filled in. This replaces the
@@ -414,7 +414,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		RetryPolicy:                 retryPolicy,
 		Workers:                     config.Workers,
 		disableSleep:                config.disableSleep,
-		schedulerInterval:           valutil.ValOrDefault(config.schedulerInterval, maintenance.SchedulerIntervalDefault),
+		schedulerInterval:           valutil.ValOrDefault(config.schedulerInterval, maintenance.JobSchedulerIntervalDefault),
 	}
 
 	if config.ID == "" {
@@ -497,6 +497,29 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		}
 
 		{
+			jobRescuer := maintenance.NewRescuer(archetype, &maintenance.JobRescuerConfig{
+				ClientRetryPolicy: retryPolicy,
+				RescueAfter:       config.RescueStuckJobsAfter,
+				WorkUnitFactoryFunc: func(kind string) workunit.WorkUnitFactory {
+					if workerInfo, ok := config.Workers.workersMap[kind]; ok {
+						return workerInfo.workUnitFactory
+					}
+					return nil
+				},
+			}, driver.GetExecutor())
+			maintenanceServices = append(maintenanceServices, jobRescuer)
+			client.testSignals.jobRescuer = &jobRescuer.TestSignals
+		}
+
+		{
+			jobScheduler := maintenance.NewScheduler(archetype, &maintenance.JobSchedulerConfig{
+				Interval: config.schedulerInterval,
+			}, driver.GetExecutor())
+			maintenanceServices = append(maintenanceServices, jobScheduler)
+			client.testSignals.jobScheduler = &jobScheduler.TestSignals
+		}
+
+		{
 			emptyOpts := PeriodicJobOpts{}
 			periodicJobs := make([]*maintenance.PeriodicJob, 0, len(config.PeriodicJobs))
 			for _, periodicJob := range config.PeriodicJobs {
@@ -533,29 +556,6 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			reindexer := maintenance.NewReindexer(archetype, &maintenance.ReindexerConfig{ScheduleFunc: scheduleFunc}, driver.GetExecutor())
 			maintenanceServices = append(maintenanceServices, reindexer)
 			client.testSignals.reindexer = &reindexer.TestSignals
-		}
-
-		{
-			rescuer := maintenance.NewRescuer(archetype, &maintenance.RescuerConfig{
-				ClientRetryPolicy: retryPolicy,
-				RescueAfter:       config.RescueStuckJobsAfter,
-				WorkUnitFactoryFunc: func(kind string) workunit.WorkUnitFactory {
-					if workerInfo, ok := config.Workers.workersMap[kind]; ok {
-						return workerInfo.workUnitFactory
-					}
-					return nil
-				},
-			}, driver.GetExecutor())
-			maintenanceServices = append(maintenanceServices, rescuer)
-			client.testSignals.rescuer = &rescuer.TestSignals
-		}
-
-		{
-			scheduler := maintenance.NewScheduler(archetype, &maintenance.SchedulerConfig{
-				Interval: config.schedulerInterval,
-			}, driver.GetExecutor())
-			maintenanceServices = append(maintenanceServices, scheduler)
-			client.testSignals.scheduler = &scheduler.TestSignals
 		}
 
 		client.queueMaintainer = maintenance.NewQueueMaintainer(archetype, maintenanceServices)
