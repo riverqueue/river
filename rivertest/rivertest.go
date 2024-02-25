@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,8 +30,18 @@ type testingT interface {
 	Logf(format string, args ...any)
 }
 
-// Options for RequireInserted or RequireManyInserted including expectations for
-// various queuing properties that stem from InsertOpts.
+// Options for RequireInserted functions including expectations for various
+// queuing properties that stem from InsertOpts.
+//
+// Multiple properties set on this struct increase the specifity on a job to
+// match, acting like an AND condition on each.
+//
+// In the case of RequireInserted or RequireInsertedMany, if multiple properties
+// are set, a job must match all of them to be considered a successful match.
+//
+// In the case of RequireNotInserted, if multiple properties are set, a test
+// failure is triggered only if all match. If any one of them was different, an
+// inserted job isn't considered a match, and RequireNotInserted succeeds.
 type RequireInsertedOpts struct {
 	// MaxAttempts is the expected maximum number of total attempts for the
 	// inserted job.
@@ -78,7 +89,7 @@ type RequireInsertedOpts struct {
 //
 // A RequireInsertedOpts struct can be provided as the last argument, and if it is,
 // its properties (e.g. max attempts, priority, queue name) will act as required
-// assertions in the inserted job row. UniqueOpts is ignored.
+// assertions in the inserted job row.
 //
 // The assertion will fail if more than one job of the given kind was found
 // because at that point the job to return is ambiguous. Use RequireManyInserted
@@ -108,7 +119,7 @@ func requireInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobAr
 //
 // A RequireInsertedOpts struct can be provided as the last argument, and if it is,
 // its properties (e.g. max attempts, priority, queue name) will act as required
-// assertions in the inserted job row. UniqueOpts is ignored.
+// assertions in the inserted job row.
 //
 // The assertion will fail if more than one job of the given kind was found
 // because at that point the job to return is ambiguous. Use RequireManyInserted
@@ -157,12 +168,111 @@ func requireInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.Jo
 	}
 
 	if opts != nil {
-		if !compareJobToInsertOpts(t, jobRow, *opts, -1) {
+		if !compareJobToInsertOpts(t, jobRow, opts, -1, false) {
 			return nil, nil //nolint:nilnil
 		}
 	}
 
 	return &river.Job[TArgs]{JobRow: jobRow, Args: actualArgs}, nil
+}
+
+// RequireNotInserted is a test helper that verifies that a job of the given
+// kind was not inserted for work, failing the test if one was.
+//
+//	job := RequireNotInserted(ctx, t, riverpgxv5.New(dbPool), &Job1Args{}, nil)
+//
+// This variant takes a driver that wraps a database pool. See also
+// RequireNotInsertedTx which takes a transaction.
+//
+// A RequireInsertedOpts struct can be provided as the last argument, and if it
+// is, its properties (e.g. max attempts, priority, queue name) will act as
+// requirements on a found row. If any fields are set, then the test will fail
+// if a job is found that maches all of them. If any property doesn't match a
+// found row, the row isn't considered a match, and the assertion doesn't fail.
+//
+// If more rows than one were found, the assertion fails if any of them match
+// the given opts.
+func RequireNotInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, tb testing.TB, driver TDriver, expectedJob TArgs, opts *RequireInsertedOpts) {
+	tb.Helper()
+	requireNotInserted(ctx, tb, driver, expectedJob, opts)
+}
+
+func requireNotInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, driver TDriver, expectedJob TArgs, opts *RequireInsertedOpts) {
+	t.Helper()
+	err := requireNotInsertedErr[TDriver](ctx, t, driver.GetExecutor(), expectedJob, opts)
+	if err != nil {
+		failure(t, "Internal failure: %s", err)
+	}
+}
+
+// RequireInsertedTx is a test helper that verifies that a job of the given kind
+// was inserted for work, failing the test if it wasn't. If found, the inserted
+// job is returned so that further assertions can be made against it.
+//
+//	job := RequireInsertedTx[*riverpgxv5.Driver](ctx, t, tx, &Job1Args{}, nil)
+//
+// This variant takes a transaction. See also RequireNotInserted which takes a
+// driver that wraps a database pool.
+//
+// A RequireInsertedOpts struct can be provided as the last argument, and if it
+// is, its properties (e.g. max attempts, priority, queue name) will act as
+// requirements on a found row. If any fields are set, then the test will fail
+// if a job is found that maches all of them. If any property doesn't match a
+// found row, the row isn't considered a match, and the assertion doesn't fail.
+//
+// If more rows than one were found, the assertion fails if any of them match
+// the given opts.
+func RequireNotInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, tb testing.TB, tx TTx, expectedJob TArgs, opts *RequireInsertedOpts) {
+	tb.Helper()
+	requireNotInsertedTx[TDriver](ctx, tb, tx, expectedJob, opts)
+}
+
+// Internal function used by the tests so that the exported version can take
+// `testing.TB` instead of `testing.T`.
+func requireNotInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, tx TTx, expectedJob TArgs, opts *RequireInsertedOpts) {
+	t.Helper()
+	var driver TDriver
+	err := requireNotInsertedErr[TDriver](ctx, t, driver.UnwrapExecutor(tx), expectedJob, opts)
+	if err != nil {
+		failure(t, "Internal failure: %s", err)
+	}
+}
+
+func requireNotInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, exec riverdriver.Executor, expectedJob TArgs, opts *RequireInsertedOpts) error {
+	t.Helper()
+
+	// Returned ordered by ID.
+	jobRows, err := exec.JobGetByKindMany(ctx, []string{expectedJob.Kind()})
+	if err != nil {
+		return fmt.Errorf("error querying jobs: %w", err)
+	}
+
+	if len(jobRows) < 1 {
+		return nil
+	}
+
+	if len(jobRows) > 0 && opts == nil {
+		failure(t, "%d jobs found with kind, but expected to find none: %s", len(jobRows), expectedJob.Kind())
+		return nil
+	}
+
+	// If any of these job rows failed assertions against opts, then the test
+	// fails, but if they all succeed, then we consider no matching jobs to have
+	// been inserted, and the test succeeds.
+	for _, jobRow := range jobRows {
+		var actualArgs TArgs
+		if err := json.Unmarshal(jobRow.EncodedArgs, &actualArgs); err != nil {
+			return fmt.Errorf("error unmarshaling job args: %w", err)
+		}
+
+		if opts != nil {
+			if !compareJobToInsertOpts(t, jobRow, opts, -1, true) {
+				return nil
+			}
+		}
+	}
+
+	return nil
 }
 
 // ExpectedJob is a single job to expect encapsulating job args and possible
@@ -190,7 +300,7 @@ type ExpectedJob struct {
 //
 // A RequireInsertedOpts struct can be provided for each expected job, and if it is,
 // its properties (e.g. max attempts, priority, queue name) will act as required
-// assertions for the corresponding inserted job row. UniqueOpts is ignored.
+// assertions for the corresponding inserted job row.
 //
 // The assertion expects emitted jobs to have occurred exactly in the order and
 // the number specified, and will fail in case this expectation isn't met. So if
@@ -224,7 +334,7 @@ func requireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.C
 //
 // A RequireInsertedOpts struct can be provided for each expected job, and if it is,
 // its properties (e.g. max attempts, priority, queue name) will act as required
-// assertions for the corresponding inserted job row. UniqueOpts is ignored.
+// assertions for the corresponding inserted job row.
 //
 // The assertion expects emitted jobs to have occurred exactly in the order and
 // the number specified, and will fail in case this expectation isn't met. So if
@@ -268,7 +378,7 @@ func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx contex
 
 	for i, jobRow := range jobRows {
 		if expectedJobs[i].Opts != nil {
-			if !compareJobToInsertOpts(t, jobRow, *expectedJobs[i].Opts, i) {
+			if !compareJobToInsertOpts(t, jobRow, expectedJobs[i].Opts, i, false) {
 				return nil, nil
 			}
 		}
@@ -279,7 +389,20 @@ func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx contex
 
 const rfc3339Micro = "2006-01-02T15:04:05.999999Z07:00"
 
-func compareJobToInsertOpts(t testingT, jobRow *rivertype.JobRow, expectedOpts RequireInsertedOpts, index int) bool {
+// The last boolean indicates whether the function's being invoked for
+// RequireInserted versus RequireNotInserted. Each need to perform similar
+// equality checks (thereby using a single helper), but their semantics for
+// succeeds versus failure are orthogonal.
+//
+// RequireInserted only succeeds if every property is equal. In case any is not
+// equal, a set of failures is built up, and a final failure message of them all
+// combined emitted at the end.
+//
+// RequireNotInserted succeeds if any property is not equal. In case of any
+// inequality, it returns early and passes the calling test. If case of any
+// equality, a set of failures is built up, and a final failure message of them
+// all combined emitted at the end.
+func compareJobToInsertOpts(t testingT, jobRow *rivertype.JobRow, expectedOpts *RequireInsertedOpts, index int, requireNotInserted bool) bool {
 	t.Helper()
 
 	// Adds an index position for the case of multiple expected jobs. Wrapped in
@@ -291,22 +414,48 @@ func compareJobToInsertOpts(t testingT, jobRow *rivertype.JobRow, expectedOpts R
 		return fmt.Sprintf(" (expected job slice index %d)", index)
 	}
 
-	if expectedOpts.MaxAttempts != 0 && jobRow.MaxAttempts != expectedOpts.MaxAttempts {
-		failure(t, "Job with kind '%s'%s max attempts %d not equal to expected %d",
-			jobRow.Kind, positionStr(), jobRow.MaxAttempts, expectedOpts.MaxAttempts)
-		return false
+	var failures []string
+
+	if expectedOpts.MaxAttempts != 0 {
+		if jobRow.MaxAttempts == expectedOpts.MaxAttempts {
+			if requireNotInserted {
+				failures = append(failures, fmt.Sprintf("max attempts equal to excluded %d", expectedOpts.MaxAttempts))
+			}
+		} else {
+			if requireNotInserted {
+				return true // any one property doesn't match; assertion passes
+			} else {
+				failures = append(failures, fmt.Sprintf("max attempts %d not equal to expected %d", jobRow.MaxAttempts, expectedOpts.MaxAttempts))
+			}
+		}
 	}
 
-	if expectedOpts.Queue != "" && jobRow.Queue != expectedOpts.Queue {
-		failure(t, "Job with kind '%s'%s queue '%s' not equal to expected '%s'",
-			jobRow.Kind, positionStr(), jobRow.Queue, expectedOpts.Queue)
-		return false
+	if expectedOpts.Priority != 0 {
+		if jobRow.Priority == expectedOpts.Priority {
+			if requireNotInserted {
+				failures = append(failures, fmt.Sprintf("priority equal to excluded %d", expectedOpts.Priority))
+			}
+		} else {
+			if requireNotInserted {
+				return true // any one property doesn't match; assertion passes
+			} else {
+				failures = append(failures, fmt.Sprintf("priority %d not equal to expected %d", jobRow.Priority, expectedOpts.Priority))
+			}
+		}
 	}
 
-	if expectedOpts.Priority != 0 && jobRow.Priority != expectedOpts.Priority {
-		failure(t, "Job with kind '%s'%s priority %d not equal to expected %d",
-			jobRow.Kind, positionStr(), jobRow.Priority, expectedOpts.Priority)
-		return false
+	if expectedOpts.Queue != "" {
+		if jobRow.Queue == expectedOpts.Queue {
+			if requireNotInserted {
+				failures = append(failures, fmt.Sprintf("queue equal to excluded '%s'", expectedOpts.Queue))
+			}
+		} else {
+			if requireNotInserted {
+				return true // any one property doesn't match; assertion passes
+			} else {
+				failures = append(failures, fmt.Sprintf("queue '%s' not equal to expected '%s'", jobRow.Queue, expectedOpts.Queue))
+			}
+		}
 	}
 
 	// We have to be more careful when comparing times because Postgres only
@@ -316,25 +465,62 @@ func compareJobToInsertOpts(t testingT, jobRow *rivertype.JobRow, expectedOpts R
 		actualScheduledAt   = jobRow.ScheduledAt.Truncate(time.Microsecond)
 		expectedScheduledAt = expectedOpts.ScheduledAt.Truncate(time.Microsecond)
 	)
-	if expectedOpts.ScheduledAt != (time.Time{}) && !actualScheduledAt.Equal(expectedScheduledAt) {
-		failure(t, "Job with kind '%s'%s scheduled at %s not equal to expected %s",
-			jobRow.Kind, positionStr(), actualScheduledAt.Format(rfc3339Micro), expectedScheduledAt.Format(rfc3339Micro))
-		return false
+	if expectedOpts.ScheduledAt != (time.Time{}) {
+		if actualScheduledAt.Equal(expectedScheduledAt) {
+			if requireNotInserted {
+				failures = append(failures, fmt.Sprintf("scheduled at equal to excluded %s", expectedScheduledAt.Format(rfc3339Micro))) //nolint:perfsprint
+			}
+		} else {
+			if requireNotInserted {
+				return true // any one property doesn't match; assertion passes
+			} else {
+				failures = append(failures, fmt.Sprintf("scheduled at %s not equal to expected %s", actualScheduledAt.Format(rfc3339Micro), expectedScheduledAt.Format(rfc3339Micro)))
+			}
+		}
 	}
 
-	if expectedOpts.State != "" && jobRow.State != expectedOpts.State {
-		failure(t, "Job with kind '%s'%s state '%s' not equal to expected '%s'",
-			jobRow.Kind, positionStr(), jobRow.State, expectedOpts.State)
-		return false
+	if expectedOpts.State != "" {
+		if jobRow.State == expectedOpts.State {
+			if requireNotInserted {
+				failures = append(failures, fmt.Sprintf("state equal to excluded '%s'", expectedOpts.State))
+			}
+		} else {
+			if requireNotInserted {
+				return true // any one property doesn't match; assertion passes
+			} else {
+				failures = append(failures, fmt.Sprintf("state '%s' not equal to expected '%s'", jobRow.State, expectedOpts.State))
+			}
+		}
 	}
 
-	if len(expectedOpts.Tags) > 0 && !slices.Equal(jobRow.Tags, expectedOpts.Tags) {
-		failure(t, "Job with kind '%s'%s tags attempts %+v not equal to expected %+v",
-			jobRow.Kind, positionStr(), jobRow.Tags, expectedOpts.Tags)
-		return false
+	if len(expectedOpts.Tags) > 0 {
+		if slices.Equal(jobRow.Tags, expectedOpts.Tags) {
+			if requireNotInserted {
+				failures = append(failures, fmt.Sprintf("tags equal to excluded %+v", expectedOpts.Tags))
+			}
+		} else {
+			if requireNotInserted {
+				return true // any one property doesn't match; assertion passes
+			} else {
+				failures = append(failures, fmt.Sprintf("tags %+v not equal to expected %+v", jobRow.Tags, expectedOpts.Tags))
+			}
+		}
 	}
 
-	return true
+	if len(failures) < 1 {
+		return true
+	}
+
+	// In the case of RequireInserted, we'll have built up failures for all
+	// properties that failed, and are ready to emit a final failure message.
+	//
+	// In the case of RequireNotInserted, we'll have returned early already if
+	// any property did not match (meaning a job was inserted but it overall did
+	// not match all requested conditions, so the RequireNotInserted will not
+	// fail). If all properties matched, then like with RequireInserted, we'll
+	// have built up failures and are ready to emit a final failure message.
+	failure(t, "Job with kind '%s'%s %s", jobRow.Kind, positionStr(), strings.Join(failures, ", "))
+	return false
 }
 
 // failure takes a printf-style directive and is a shortcut for failing an
