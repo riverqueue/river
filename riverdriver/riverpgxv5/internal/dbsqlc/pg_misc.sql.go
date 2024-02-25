@@ -27,7 +27,7 @@ type PGNotifyParams struct {
 	Payload string
 }
 
-func (q *Queries) PGNotify(ctx context.Context, db DBTX, arg PGNotifyParams) error {
+func (q *Queries) PGNotify(ctx context.Context, db DBTX, arg *PGNotifyParams) error {
 	_, err := db.Exec(ctx, pGNotify, arg.Topic, arg.Payload)
 	return err
 }

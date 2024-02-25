@@ -19,6 +19,7 @@ sql:
         out: "."
         emit_exact_table_names: true
         emit_methods_with_db_argument: true
+        emit_params_struct_pointers: true
         emit_result_struct_pointers: true
 
         rename:

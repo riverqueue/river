@@ -60,7 +60,7 @@ type JobCancelParams struct {
 	CancelAttemptedAt json.RawMessage
 }
 
-func (q *Queries) JobCancel(ctx context.Context, db DBTX, arg JobCancelParams) (*RiverJob, error) {
+func (q *Queries) JobCancel(ctx context.Context, db DBTX, arg *JobCancelParams) (*RiverJob, error) {
 	row := db.QueryRowContext(ctx, jobCancel, arg.ID, arg.JobControlTopic, arg.CancelAttemptedAt)
 	var i RiverJob
 	err := row.Scan(
@@ -110,7 +110,7 @@ type JobDeleteBeforeParams struct {
 	Max                         int64
 }
 
-func (q *Queries) JobDeleteBefore(ctx context.Context, db DBTX, arg JobDeleteBeforeParams) (int64, error) {
+func (q *Queries) JobDeleteBefore(ctx context.Context, db DBTX, arg *JobDeleteBeforeParams) (int64, error) {
 	row := db.QueryRowContext(ctx, jobDeleteBefore,
 		arg.CancelledFinalizedAtHorizon,
 		arg.CompletedFinalizedAtHorizon,
@@ -161,7 +161,7 @@ type JobGetAvailableParams struct {
 	Max         int32
 }
 
-func (q *Queries) JobGetAvailable(ctx context.Context, db DBTX, arg JobGetAvailableParams) ([]*RiverJob, error) {
+func (q *Queries) JobGetAvailable(ctx context.Context, db DBTX, arg *JobGetAvailableParams) ([]*RiverJob, error) {
 	rows, err := db.QueryContext(ctx, jobGetAvailable, arg.AttemptedBy, arg.Queue, arg.Max)
 	if err != nil {
 		return nil, err
@@ -302,7 +302,7 @@ type JobGetByKindAndUniquePropertiesParams struct {
 	State          []string
 }
 
-func (q *Queries) JobGetByKindAndUniqueProperties(ctx context.Context, db DBTX, arg JobGetByKindAndUniquePropertiesParams) (*RiverJob, error) {
+func (q *Queries) JobGetByKindAndUniqueProperties(ctx context.Context, db DBTX, arg *JobGetByKindAndUniquePropertiesParams) (*RiverJob, error) {
 	row := db.QueryRowContext(ctx, jobGetByKindAndUniqueProperties,
 		arg.Kind,
 		arg.ByArgs,
@@ -398,7 +398,7 @@ type JobGetStuckParams struct {
 	Max          int32
 }
 
-func (q *Queries) JobGetStuck(ctx context.Context, db DBTX, arg JobGetStuckParams) ([]*RiverJob, error) {
+func (q *Queries) JobGetStuck(ctx context.Context, db DBTX, arg *JobGetStuckParams) ([]*RiverJob, error) {
 	rows, err := db.QueryContext(ctx, jobGetStuck, arg.StuckHorizon, arg.Max)
 	if err != nil {
 		return nil, err
@@ -477,7 +477,7 @@ type JobInsertFastParams struct {
 	Tags        []string
 }
 
-func (q *Queries) JobInsertFast(ctx context.Context, db DBTX, arg JobInsertFastParams) (*RiverJob, error) {
+func (q *Queries) JobInsertFast(ctx context.Context, db DBTX, arg *JobInsertFastParams) (*RiverJob, error) {
 	row := db.QueryRowContext(ctx, jobInsertFast,
 		arg.Args,
 		arg.FinalizedAt,
@@ -563,7 +563,7 @@ type JobInsertFullParams struct {
 	Tags        []string
 }
 
-func (q *Queries) JobInsertFull(ctx context.Context, db DBTX, arg JobInsertFullParams) (*RiverJob, error) {
+func (q *Queries) JobInsertFull(ctx context.Context, db DBTX, arg *JobInsertFullParams) (*RiverJob, error) {
 	row := db.QueryRowContext(ctx, jobInsertFull,
 		arg.Args,
 		arg.Attempt,
@@ -629,7 +629,7 @@ type JobRescueManyParams struct {
 }
 
 // Run by the rescuer to queue for retry or discard depending on job state.
-func (q *Queries) JobRescueMany(ctx context.Context, db DBTX, arg JobRescueManyParams) error {
+func (q *Queries) JobRescueMany(ctx context.Context, db DBTX, arg *JobRescueManyParams) error {
 	_, err := db.ExecContext(ctx, jobRescueMany,
 		pq.Array(arg.ID),
 		pq.Array(arg.Error),
@@ -731,7 +731,7 @@ type JobScheduleParams struct {
 	Max         int64
 }
 
-func (q *Queries) JobSchedule(ctx context.Context, db DBTX, arg JobScheduleParams) (int64, error) {
+func (q *Queries) JobSchedule(ctx context.Context, db DBTX, arg *JobScheduleParams) (int64, error) {
 	row := db.QueryRowContext(ctx, jobSchedule, arg.InsertTopic, arg.Now, arg.Max)
 	var count int64
 	err := row.Scan(&count)
@@ -788,7 +788,7 @@ type JobSetStateIfRunningParams struct {
 	ScheduledAt         *time.Time
 }
 
-func (q *Queries) JobSetStateIfRunning(ctx context.Context, db DBTX, arg JobSetStateIfRunningParams) (*RiverJob, error) {
+func (q *Queries) JobSetStateIfRunning(ctx context.Context, db DBTX, arg *JobSetStateIfRunningParams) (*RiverJob, error) {
 	row := db.QueryRowContext(ctx, jobSetStateIfRunning,
 		arg.State,
 		arg.ID,
@@ -851,7 +851,7 @@ type JobUpdateParams struct {
 
 // A generalized update for any property on a job. This brings in a large number
 // of parameters and therefore may be more suitable for testing than production.
-func (q *Queries) JobUpdate(ctx context.Context, db DBTX, arg JobUpdateParams) (*RiverJob, error) {
+func (q *Queries) JobUpdate(ctx context.Context, db DBTX, arg *JobUpdateParams) (*RiverJob, error) {
 	row := db.QueryRowContext(ctx, jobUpdate,
 		arg.AttemptDoUpdate,
 		arg.Attempt,
