@@ -4,8 +4,14 @@
 package rivertype
 
 import (
+	"errors"
 	"time"
 )
+
+// ErrNotFound is returned when a query by ID does not match any existing
+// rows. For example, attempting to cancel a job that doesn't exist will
+// return this error.
+var ErrNotFound = errors.New("not found")
 
 // JobRow contains the properties of a job that are persisted to the database.
 // Use of `Job[T]` will generally be preferred in user-facing code like worker

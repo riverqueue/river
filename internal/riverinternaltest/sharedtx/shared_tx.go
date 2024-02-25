@@ -7,8 +7,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-
-	"github.com/riverqueue/river/internal/util/dbutil"
 )
 
 // SharedTx can be used to wrap a test transaction in cases where multiple
@@ -28,7 +26,7 @@ import (
 // encountered by use of concurrent accesses will be more difficult to debug
 // than otherwise, so it's better to not go there at all if it can be avoided.
 type SharedTx struct {
-	inner dbutil.Executor
+	inner pgx.Tx
 	wait  chan struct{}
 }
 
@@ -94,6 +92,19 @@ func (e *SharedTx) QueryRow(ctx context.Context, query string, args ...any) pgx.
 
 	// executor is unlocked when row is scanned
 	return &SharedTxRow{sharedTxDerivative{sharedTx: e}, row}
+}
+
+// These are all implemented so that a SharedTx can be used as a pgx.Tx, but are
+// all non-functional.
+func (e *SharedTx) Conn() *pgx.Conn                  { panic("not implemented") }
+func (e *SharedTx) Commit(ctx context.Context) error { panic("not implemented") }
+func (e *SharedTx) LargeObjects() pgx.LargeObjects   { panic("not implemented") }
+func (e *SharedTx) Prepare(ctx context.Context, name, sql string) (*pgconn.StatementDescription, error) {
+	panic("not implemented")
+}
+func (e *SharedTx) Rollback(ctx context.Context) error { panic("not implemented") }
+func (e *SharedTx) SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults {
+	panic("not implemented")
 }
 
 func (e *SharedTx) lock() {

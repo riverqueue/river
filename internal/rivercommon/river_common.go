@@ -1,6 +1,8 @@
 package rivercommon
 
-import "errors"
+import (
+	"errors"
+)
 
 // These constants are made available in rivercommon so that they're accessible
 // by internal packages, but the top-level river package re-exports them, and

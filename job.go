@@ -6,8 +6,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/riverqueue/river/internal/dbsqlc"
-	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -55,22 +53,13 @@ func JobCompleteTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs](ctx 
 		return nil, errors.New("job must be running")
 	}
 
-	var (
-		driver  TDriver
-		queries = &dbsqlc.Queries{}
-	)
-
-	internal, err := queries.JobSetState(ctx, driver.UnwrapTx(tx), dbsqlc.JobSetStateParams{
-		ID:                  job.ID,
-		FinalizedAtDoUpdate: true,
-		FinalizedAt:         ptrutil.Ptr(time.Now()),
-		State:               dbsqlc.JobStateCompleted,
-	})
+	var driver TDriver
+	jobRow, err := driver.UnwrapExecutor(tx).JobSetStateIfRunning(ctx, riverdriver.JobSetStateCompleted(job.ID, time.Now()))
 	if err != nil {
 		return nil, err
 	}
 
-	updatedJob := &Job[TArgs]{JobRow: dbsqlc.JobRowFromInternal(internal)}
+	updatedJob := &Job[TArgs]{JobRow: jobRow}
 
 	if err := json.Unmarshal(updatedJob.EncodedArgs, &updatedJob.Args); err != nil {
 		return nil, err
@@ -88,13 +77,3 @@ const (
 	JobStateRunning   = rivertype.JobStateRunning
 	JobStateScheduled = rivertype.JobStateScheduled
 )
-
-var jobStateAll = []rivertype.JobState{ //nolint:gochecknoglobals
-	JobStateAvailable,
-	JobStateCancelled,
-	JobStateCompleted,
-	JobStateDiscarded,
-	JobStateRetryable,
-	JobStateRunning,
-	JobStateScheduled,
-}

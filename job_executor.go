@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/dbadapter"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobstats"
 	"github.com/riverqueue/river/internal/workunit"
+	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -117,7 +117,6 @@ func (r *jobExecutorResult) ErrorStr() string {
 type jobExecutor struct {
 	baseservice.BaseService
 
-	Adapter                dbadapter.Adapter
 	CancelFunc             context.CancelCauseFunc
 	ClientJobTimeout       time.Duration
 	Completer              jobcompleter.JobCompleter
@@ -250,11 +249,11 @@ func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 		// Just as with retryable jobs, this isn't friendly for short snooze times
 		// so we instead make the job immediately `available` if the snooze time is
 		// smaller than the scheduler's run interval.
-		var params *dbadapter.JobSetStateIfRunningParams
+		var params *riverdriver.JobSetStateIfRunningParams
 		if nextAttemptScheduledAt.Sub(e.TimeNowUTC()) <= e.SchedulerInterval {
-			params = dbadapter.JobSetStateSnoozedAvailable(e.JobRow.ID, nextAttemptScheduledAt, e.JobRow.MaxAttempts+1)
+			params = riverdriver.JobSetStateSnoozedAvailable(e.JobRow.ID, nextAttemptScheduledAt, e.JobRow.MaxAttempts+1)
 		} else {
-			params = dbadapter.JobSetStateSnoozed(e.JobRow.ID, nextAttemptScheduledAt, e.JobRow.MaxAttempts+1)
+			params = riverdriver.JobSetStateSnoozed(e.JobRow.ID, nextAttemptScheduledAt, e.JobRow.MaxAttempts+1)
 		}
 		if err := e.Completer.JobSetStateIfRunning(e.stats, params); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Error snoozing job",
@@ -269,7 +268,7 @@ func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 		return
 	}
 
-	if err := e.Completer.JobSetStateIfRunning(e.stats, dbadapter.JobSetStateCompleted(e.JobRow.ID, e.TimeNowUTC())); err != nil {
+	if err := e.Completer.JobSetStateIfRunning(e.stats, riverdriver.JobSetStateCompleted(e.JobRow.ID, e.TimeNowUTC())); err != nil {
 		e.Logger.ErrorContext(ctx, e.Name+": Error completing job",
 			slog.String("err", err.Error()),
 			slog.Int64("job_id", e.JobRow.ID),
@@ -320,14 +319,14 @@ func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
 	now := time.Now()
 
 	if cancelJob {
-		if err := e.Completer.JobSetStateIfRunning(e.stats, dbadapter.JobSetStateCancelled(e.JobRow.ID, now, errData)); err != nil {
+		if err := e.Completer.JobSetStateIfRunning(e.stats, riverdriver.JobSetStateCancelled(e.JobRow.ID, now, errData)); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Failed to cancel job and report error", logAttrs...)
 		}
 		return
 	}
 
 	if e.JobRow.Attempt >= e.JobRow.MaxAttempts {
-		if err := e.Completer.JobSetStateIfRunning(e.stats, dbadapter.JobSetStateDiscarded(e.JobRow.ID, now, errData)); err != nil {
+		if err := e.Completer.JobSetStateIfRunning(e.stats, riverdriver.JobSetStateDiscarded(e.JobRow.ID, now, errData)); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Failed to discard job and report error", logAttrs...)
 		}
 		return
@@ -355,11 +354,11 @@ func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
 	// effectively no retry time smaller than the scheduler's run interval is
 	// respected. Here, we offset that with a branch that makes jobs immediately
 	// `available` if their retry was smaller than the scheduler's run interval.
-	var params *dbadapter.JobSetStateIfRunningParams
+	var params *riverdriver.JobSetStateIfRunningParams
 	if nextRetryScheduledAt.Sub(e.TimeNowUTC()) <= e.SchedulerInterval {
-		params = dbadapter.JobSetStateErrorAvailable(e.JobRow.ID, nextRetryScheduledAt, errData)
+		params = riverdriver.JobSetStateErrorAvailable(e.JobRow.ID, nextRetryScheduledAt, errData)
 	} else {
-		params = dbadapter.JobSetStateErrorRetryable(e.JobRow.ID, nextRetryScheduledAt, errData)
+		params = riverdriver.JobSetStateErrorRetryable(e.JobRow.ID, nextRetryScheduledAt, errData)
 	}
 	if err := e.Completer.JobSetStateIfRunning(e.stats, params); err != nil {
 		e.Logger.ErrorContext(ctx, e.Name+": Failed to report error for job", logAttrs...)

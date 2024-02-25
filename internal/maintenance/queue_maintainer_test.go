@@ -10,11 +10,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/dbadapter"
+	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/sharedtx"
+	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
 type testService struct {
@@ -94,19 +96,23 @@ func TestQueueMaintainer(t *testing.T) {
 		archetype := riverinternaltest.BaseServiceArchetype(t)
 		archetype.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
 
+		driver := riverpgxv5.New(nil).UnwrapExecutor(sharedTx)
+
 		// Use realistic services in this one so we can verify stress not only
 		// on the queue maintainer, but it and all its subservices together.
 		maintainer := setup(t, []Service{
-			NewJobCleaner(archetype, &JobCleanerConfig{}, sharedTx),
+			NewJobCleaner(archetype, &JobCleanerConfig{}, driver),
 			NewPeriodicJobEnqueuer(archetype, &PeriodicJobEnqueuerConfig{
 				PeriodicJobs: []*PeriodicJob{
 					{
-						ConstructorFunc: func() (*dbadapter.JobInsertParams, error) { return nil, ErrNoJobToInsert },
-						ScheduleFunc:    cron.Every(15 * time.Minute).Next,
+						ConstructorFunc: func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
+							return nil, nil, ErrNoJobToInsert
+						},
+						ScheduleFunc: cron.Every(15 * time.Minute).Next,
 					},
 				},
-			}, dbadapter.NewStandardAdapter(archetype, &dbadapter.StandardAdapterConfig{Executor: sharedTx})),
-			NewScheduler(archetype, &SchedulerConfig{}, sharedTx),
+			}, driver),
+			NewScheduler(archetype, &SchedulerConfig{}, driver),
 		})
 		maintainer.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
 		runStartStopStress(ctx, t, maintainer)

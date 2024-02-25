@@ -2,8 +2,14 @@ version: "2"
 sql:
   - engine: "postgresql"
     queries:
+      - ../../../riverpgxv5/internal/dbsqlc/pg_misc.sql
+      - ../../../riverpgxv5/internal/dbsqlc/river_job.sql
+      - ../../../riverpgxv5/internal/dbsqlc/river_leader.sql
       - ../../../riverpgxv5/internal/dbsqlc/river_migration.sql
     schema:
+      - ../../../riverpgxv5/internal/dbsqlc/pg_misc.sql
+      - ../../../riverpgxv5/internal/dbsqlc/river_job.sql
+      - ../../../riverpgxv5/internal/dbsqlc/river_leader.sql
       - ../../../riverpgxv5/internal/dbsqlc/river_migration.sql
     gen:
       go:
@@ -14,11 +20,40 @@ sql:
         emit_methods_with_db_argument: true
         emit_result_struct_pointers: true
 
+        rename:
+          river_job_state: "JobState"
+          river_job_state_available: "JobStateAvailable"
+          river_job_state_cancelled: "JobStateCancelled"
+          river_job_state_completed: "JobStateCompleted"
+          river_job_state_discarded: "JobStateDiscarded"
+          river_job_state_retryable: "JobStateRetryable"
+          river_job_state_running: "JobStateRunning"
+          river_job_state_scheduled: "JobStateScheduled"
+          ttl: "TTL"
+
         overrides:
+          - db_type: "pg_catalog.interval"
+            go_type: "time.Duration"
+
           - db_type: "timestamptz"
             go_type: "time.Time"
+
           - db_type: "timestamptz"
             go_type:
               type: "time.Time"
               pointer: true
             nullable: true
+
+          # specific columns
+
+          # This one is necessary because `args` is nullable (this seems to have
+          # been an oversight, but one we're determined isn't worth correcting
+          # for now), and the `database/sql` variant of sqlc will give it a
+          # crazy type by default, so here we give it something more reasonable.
+          - column: "river_job.args"
+            go_type:
+              type: "[]byte"
+
+          - column: "river_job.errors"
+            go_type:
+              type: "[]AttemptError"

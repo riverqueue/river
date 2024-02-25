@@ -10,17 +10,16 @@ import (
 
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/componentstatus"
-	"github.com/riverqueue/river/internal/dbadapter"
-	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/util/chanutil"
-	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/internal/workunit"
+	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
 )
 
 type producerConfig struct {
+	ClientID     string
 	ErrorHandler ErrorHandler
 
 	// FetchCooldown is the minimum amount of time to wait between fetches of new
@@ -37,10 +36,9 @@ type producerConfig struct {
 	JobTimeout        time.Duration
 	MaxWorkerCount    uint16
 	Notifier          *notifier.Notifier
-	QueueName         string
+	Queue             string
 	RetryPolicy       ClientRetryPolicy
 	SchedulerInterval time.Duration
-	WorkerName        string
 	Workers           *Workers
 }
 
@@ -57,9 +55,9 @@ type producer struct {
 	// Jobs which are currently being worked. Only used by main goroutine.
 	activeJobs map[int64]*jobExecutor
 
-	adapter      dbadapter.Adapter
 	completer    jobcompleter.JobCompleter
 	config       *producerConfig
+	exec         riverdriver.Executor
 	errorHandler ErrorHandler
 	workers      *Workers
 
@@ -81,14 +79,16 @@ type producer struct {
 	retryPolicy ClientRetryPolicy
 }
 
-func newProducer(archetype *baseservice.Archetype, adapter dbadapter.Adapter, completer jobcompleter.JobCompleter, config *producerConfig) (*producer, error) {
-	if adapter == nil {
-		return nil, errors.New("Adapter is required") //nolint:stylecheck
+func newProducer(archetype *baseservice.Archetype, exec riverdriver.Executor, completer jobcompleter.JobCompleter, config *producerConfig) (*producer, error) {
+	if exec == nil {
+		return nil, errors.New("exec is required")
 	}
 	if completer == nil {
 		return nil, errors.New("Completer is required") //nolint:stylecheck
 	}
-
+	if config.ClientID == "" {
+		return nil, errors.New("ClientName is required")
+	}
 	if config.FetchCooldown <= 0 {
 		return nil, errors.New("FetchCooldown must be great than zero")
 	}
@@ -104,8 +104,8 @@ func newProducer(archetype *baseservice.Archetype, adapter dbadapter.Adapter, co
 	if config.Notifier == nil {
 		return nil, errors.New("Notifier is required") //nolint:stylecheck
 	}
-	if config.QueueName == "" {
-		return nil, errors.New("QueueName is required")
+	if config.Queue == "" {
+		return nil, errors.New("Queue is required") //nolint:stylecheck
 	}
 	if config.RetryPolicy == nil {
 		return nil, errors.New("RetryPolicy is required")
@@ -113,19 +113,16 @@ func newProducer(archetype *baseservice.Archetype, adapter dbadapter.Adapter, co
 	if config.SchedulerInterval == 0 {
 		return nil, errors.New("SchedulerInterval is required")
 	}
-	if config.WorkerName == "" {
-		return nil, errors.New("WorkerName is required")
-	}
 	if config.Workers == nil {
 		return nil, errors.New("Workers is required")
 	}
 
 	return baseservice.Init(archetype, &producer{
 		activeJobs:   make(map[int64]*jobExecutor),
-		adapter:      adapter,
 		cancelCh:     make(chan int64, 1000),
 		completer:    completer,
 		config:       config,
+		exec:         exec,
 		errorHandler: config.ErrorHandler,
 		jobResultCh:  make(chan *rivertype.JobRow, config.MaxWorkerCount),
 		jobTimeout:   config.JobTimeout,
@@ -144,14 +141,14 @@ type producerStatusUpdateFunc func(queue string, status componentstatus.Status)
 // jobs. When workCtx is cancelled, any in-progress jobs will have their
 // contexts cancelled too.
 func (p *producer) Run(fetchCtx, workCtx context.Context, statusFunc producerStatusUpdateFunc) {
-	p.Logger.InfoContext(workCtx, p.Name+": Producer started", slog.String("queue", p.config.QueueName))
+	p.Logger.InfoContext(workCtx, p.Name+": Producer started", slog.String("queue", p.config.Queue))
 	defer func() {
-		p.Logger.InfoContext(workCtx, p.Name+": Producer stopped", slog.String("queue", p.config.QueueName), slog.Uint64("num_completed_jobs", p.numJobsRan.Load()))
+		p.Logger.InfoContext(workCtx, p.Name+": Producer stopped", slog.String("queue", p.config.Queue), slog.Uint64("num_completed_jobs", p.numJobsRan.Load()))
 	}()
 
 	go p.heartbeatLogLoop(fetchCtx)
 
-	statusFunc(p.config.QueueName, componentstatus.Initializing)
+	statusFunc(p.config.Queue, componentstatus.Initializing)
 	// TODO: fetcher should have some jitter in it to avoid stampeding issues.
 	fetchLimiter := chanutil.NewDebouncedChan(fetchCtx, p.config.FetchCooldown)
 
@@ -161,7 +158,7 @@ func (p *producer) Run(fetchCtx, workCtx context.Context, statusFunc producerSta
 			p.Logger.ErrorContext(workCtx, p.Name+": Failed to unmarshal job control notification payload", slog.String("err", err.Error()))
 			return
 		}
-		if string(decoded.Action) == string(jobControlActionCancel) && decoded.Queue == p.config.QueueName && decoded.JobID > 0 {
+		if string(decoded.Action) == string(jobControlActionCancel) && decoded.Queue == p.config.Queue && decoded.JobID > 0 {
 			select {
 			case p.cancelCh <- decoded.JobID:
 			default:
@@ -179,9 +176,9 @@ func (p *producer) Run(fetchCtx, workCtx context.Context, statusFunc producerSta
 	defer sub.Unlisten()
 
 	p.fetchAndRunLoop(fetchCtx, workCtx, fetchLimiter, statusFunc)
-	statusFunc(p.config.QueueName, componentstatus.ShuttingDown)
+	statusFunc(p.config.Queue, componentstatus.ShuttingDown)
 	p.executorShutdownLoop()
-	statusFunc(p.config.QueueName, componentstatus.Stopped)
+	statusFunc(p.config.Queue, componentstatus.Stopped)
 }
 
 type jobControlAction string
@@ -214,7 +211,7 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 			p.Logger.ErrorContext(workCtx, p.Name+": Failed to unmarshal insert notification payload", slog.String("err", err.Error()))
 			return
 		}
-		if decoded.Queue != p.config.QueueName {
+		if decoded.Queue != p.config.Queue {
 			return
 		}
 		p.Logger.DebugContext(workCtx, p.Name+": Received insert notification", slog.String("queue", decoded.Queue))
@@ -240,7 +237,7 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 		}
 	}()
 
-	statusFunc(p.config.QueueName, componentstatus.Healthy)
+	statusFunc(p.config.Queue, componentstatus.Healthy)
 
 	fetchResultCh := make(chan producerFetchResult)
 	for {
@@ -263,8 +260,8 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 }
 
 func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan producerFetchResult) {
-	count := p.maxJobsToFetch()
-	go p.dispatchWork(count, fetchResultCh) //nolint:contextcheck
+	limit := p.maxJobsToFetch()
+	go p.dispatchWork(limit, fetchResultCh) //nolint:contextcheck
 
 	for {
 		select {
@@ -314,19 +311,22 @@ func (p *producer) maybeCancelJob(id int64) {
 	executor.Cancel()
 }
 
-func (p *producer) dispatchWork(count int32, jobsFetchedCh chan<- producerFetchResult) {
+func (p *producer) dispatchWork(count int, jobsFetchedCh chan<- producerFetchResult) {
 	// This intentionally uses a background context because we don't want it to
 	// get cancelled if the producer is asked to shut down. In that situation, we
 	// want to finish fetching any jobs we are in the midst of fetching, work
 	// them, and then stop. Otherwise we'd have a risk of shutting down when we
 	// had already fetched jobs in the database, leaving those jobs stranded. We'd
 	// then potentially have to release them back to the queue.
-	internalJobs, err := p.adapter.JobGetAvailable(context.Background(), p.config.QueueName, count)
+	jobs, err := p.exec.JobGetAvailable(context.Background(), &riverdriver.JobGetAvailableParams{
+		AttemptedBy: p.config.ClientID,
+		Max:         count,
+		Queue:       p.config.Queue,
+	})
 	if err != nil {
 		jobsFetchedCh <- producerFetchResult{err: err}
 		return
 	}
-	jobs := sliceutil.Map(internalJobs, dbsqlc.JobRowFromInternal)
 	jobsFetchedCh <- producerFetchResult{jobs: jobs}
 }
 
@@ -343,7 +343,7 @@ func (p *producer) heartbeatLogLoop(ctx context.Context) {
 			p.Logger.InfoContext(ctx, p.Name+": Heartbeat",
 				slog.Uint64("num_completed_jobs", p.numJobsRan.Load()),
 				slog.Int("num_jobs_running", int(p.numJobsActive.Load())),
-				slog.String("queue", p.config.QueueName),
+				slog.String("queue", p.config.Queue),
 			)
 		}
 	}
@@ -361,7 +361,6 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 		jobCtx, jobCancel := context.WithCancelCause(workCtx)
 
 		executor := baseservice.Init(&p.Archetype, &jobExecutor{
-			Adapter:                p.adapter,
 			CancelFunc:             jobCancel,
 			ClientJobTimeout:       p.jobTimeout,
 			ClientRetryPolicy:      p.retryPolicy,
@@ -385,8 +384,8 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 	}
 }
 
-func (p *producer) maxJobsToFetch() int32 {
-	return int32(p.config.MaxWorkerCount) - p.numJobsActive.Load()
+func (p *producer) maxJobsToFetch() int {
+	return int(p.config.MaxWorkerCount) - int(p.numJobsActive.Load())
 }
 
 func (p *producer) handleWorkerDone(job *rivertype.JobRow) {

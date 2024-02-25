@@ -1,12 +1,14 @@
 module github.com/riverqueue/river
 
-go 1.21
+go 1.21.4
 
 replace github.com/riverqueue/river/riverdriver => ./riverdriver
 
 replace github.com/riverqueue/river/riverdriver/riverpgxv5 => ./riverdriver/riverpgxv5
 
 replace github.com/riverqueue/river/riverdriver/riverdatabasesql => ./riverdriver/riverdatabasesql
+
+replace github.com/riverqueue/river/rivertype => ./rivertype
 
 require (
 	github.com/jackc/pgerrcode v0.0.0-20220416144525-469b46aa5efa
@@ -16,6 +18,7 @@ require (
 	github.com/riverqueue/river/riverdriver v0.0.22
 	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.0.22
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.0.22
+	github.com/riverqueue/river/rivertype v0.0.22
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cobra v1.8.0
 	github.com/stretchr/testify v1.8.4

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // Verify interface compliance.
@@ -36,6 +37,6 @@ func TestInterpretError(t *testing.T) {
 	t.Parallel()
 
 	require.EqualError(t, interpretError(errors.New("an error")), "an error")
-	require.ErrorIs(t, interpretError(sql.ErrNoRows), riverdriver.ErrNoRows)
+	require.ErrorIs(t, interpretError(sql.ErrNoRows), rivertype.ErrNotFound)
 	require.NoError(t, interpretError(nil))
 }

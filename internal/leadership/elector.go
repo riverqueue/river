@@ -8,8 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/riverqueue/river/internal/dbadapter"
 	"github.com/riverqueue/river/internal/notifier"
+	"github.com/riverqueue/river/internal/util/dbutil"
+	"github.com/riverqueue/river/riverdriver"
 )
 
 type pgNotification struct {
@@ -42,7 +43,7 @@ func (s *Subscription) Unlisten() {
 }
 
 type Elector struct {
-	adapter  dbadapter.Adapter
+	exec     riverdriver.Executor
 	id       string
 	interval time.Duration
 	logger   *slog.Logger
@@ -58,15 +59,15 @@ type Elector struct {
 // NewElector returns an Elector using the given adapter. The name should correspond
 // to the name of the database + schema combo and should be shared across all Clients
 // running with that combination. The id should be unique to the Client.
-func NewElector(adapter dbadapter.Adapter, notifier *notifier.Notifier, name, id string, interval, ttlPadding time.Duration, logger *slog.Logger) (*Elector, error) {
+func NewElector(exec riverdriver.Executor, notifier *notifier.Notifier, name, id string, interval, ttlPadding time.Duration, logger *slog.Logger) (*Elector, error) {
 	// TODO: validate name + id length/format, interval, etc
 	return &Elector{
-		adapter:  adapter,
+		exec:     exec,
 		id:       id,
 		interval: interval,
-		logger:   logger.WithGroup("elector"),
 		name:     name,
 		notifier: notifier,
+		logger:   logger.WithGroup("elector"),
 
 		// TTL is at least the relect run interval used by clients to try and
 		// gain leadership or reelect themselves as leader, plus a little
@@ -170,7 +171,11 @@ func (e *Elector) gainLeadership(ctx context.Context, leadershipNotificationChan
 }
 
 func (e *Elector) attemptElect(ctx context.Context) (bool, error) {
-	elected, err := e.adapter.LeadershipAttemptElect(ctx, false, e.name, e.id, e.ttl)
+	elected, err := attemptElectOrReelect(ctx, e.exec, false, &riverdriver.LeaderElectParams{
+		LeaderID: e.id,
+		Name:     e.name,
+		TTL:      e.ttl,
+	})
 	if err != nil {
 		return false, err
 	}
@@ -196,7 +201,11 @@ func (e *Elector) keepLeadership(ctx context.Context, leadershipNotificationChan
 			// We don't care about notifications when we know we're the leader, do we?
 		case <-time.After(e.interval):
 			// TODO: this leaks timers if we're receiving notifications
-			reelected, err := e.adapter.LeadershipAttemptElect(ctx, true, e.name, e.id, e.ttl)
+			reelected, err := attemptElectOrReelect(ctx, e.exec, true, &riverdriver.LeaderElectParams{
+				LeaderID: e.id,
+				Name:     e.name,
+				TTL:      e.ttl,
+			})
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
 					return err
@@ -229,6 +238,8 @@ func (e *Elector) giveUpLeadership() {
 	}
 }
 
+// attemptResign attempts to resign any currently held leaderships for the
+// elector's name and leader ID.
 func (e *Elector) attemptResign(attempt int) error {
 	// Wait one second longer each time we try to resign:
 	timeout := time.Duration(attempt+1) * time.Second
@@ -237,7 +248,12 @@ func (e *Elector) attemptResign(attempt int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	return e.adapter.LeadershipResign(ctx, e.name, e.id)
+	_, err := e.exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
+		LeaderID:        e.id,
+		LeadershipTopic: string(notifier.NotificationTopicLeadership),
+		Name:            e.name,
+	})
+	return err
 }
 
 func (e *Elector) Listen() *Subscription {
@@ -296,4 +312,40 @@ func (e *Elector) notifySubscribers(isLeader bool) {
 			Timestamp: notifyTime,
 		}
 	}
+}
+
+const deadlineTimeout = 5 * time.Second
+
+// attemptElectOrReelect attempts to elect a leader for the given name. The
+// bool alreadyElected indicates whether this is a potential reelection of
+// an already-elected leader. If the election is successful because there is
+// no leader or the previous leader expired, the provided leaderID will be
+// set as the new leader with a TTL of ttl.
+//
+// Returns whether this leader was successfully elected or an error if one
+// occurred.
+func attemptElectOrReelect(ctx context.Context, exec riverdriver.Executor, alreadyElected bool, params *riverdriver.LeaderElectParams) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, deadlineTimeout)
+	defer cancel()
+
+	return dbutil.WithTxV(ctx, exec, func(ctx context.Context, exec riverdriver.ExecutorTx) (bool, error) {
+		if _, err := exec.LeaderDeleteExpired(ctx, params.Name); err != nil {
+			return false, err
+		}
+
+		var (
+			elected bool
+			err     error
+		)
+		if alreadyElected {
+			elected, err = exec.LeaderAttemptReelect(ctx, params)
+		} else {
+			elected, err = exec.LeaderAttemptElect(ctx, params)
+		}
+		if err != nil {
+			return false, err
+		}
+
+		return elected, nil
+	})
 }

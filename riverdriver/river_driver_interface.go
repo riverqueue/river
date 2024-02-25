@@ -17,13 +17,11 @@ import (
 	"errors"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river/rivertype"
 )
 
 var (
 	ErrNotImplemented    = errors.New("driver does not implement this functionality")
-	ErrNoRows            = errors.New("no rows found")
 	ErrSubTxNotSupported = errors.New("subtransactions not supported for this driver")
 )
 
@@ -39,70 +37,89 @@ var (
 // require it to change substantially, and therefore it should not be
 // implemented or invoked by user code. Changes to this interface WILL NOT be
 // considered breaking changes for purposes of River's semantic versioning.
+//
+// API is not stable. DO NOT IMPLEMENT.
 type Driver[TTx any] interface {
-	// GetDBPool returns a database pool.This doesn't make sense in a world
-	// where multiple drivers are supported and is subject to change.
-	//
-	// API is not stable. DO NOT USE.
-	GetDBPool() *pgxpool.Pool
-
 	// GetExecutor gets an executor for the driver.
 	//
 	// API is not stable. DO NOT USE.
 	GetExecutor() Executor
 
+	// GetListener gets a listener for purposes of receiving notifications.
+	//
+	// API is not stable. DO NOT USE.
+	GetListener() Listener
+
+	// HasPool returns true if the driver is configured with a database pool.
+	//
+	// API is not stable. DO NOT USE.
+	HasPool() bool
+
 	// UnwrapExecutor gets unwraps executor from a driver transaction.
 	//
 	// API is not stable. DO NOT USE.
-	UnwrapExecutor(tx TTx) Executor
-
-	// UnwrapTx turns a generically typed transaction into a pgx.Tx for use with
-	// internal infrastructure. This doesn't make sense in a world where
-	// multiple drivers are supported and is subject to change.
-	//
-	// API is not stable. DO NOT USE.
-	UnwrapTx(tx TTx) pgx.Tx
+	UnwrapExecutor(tx TTx) ExecutorTx
 }
 
 // Executor provides River operations against a database. It may be a database
 // pool or transaction.
+//
+// API is not stable. DO NOT IMPLEMENT.
 type Executor interface {
 	// Begin begins a new subtransaction. ErrSubTxNotSupported may be returned
 	// if the executor is a transaction and the driver doesn't support
 	// subtransactions (like riverdriver/riverdatabasesql for database/sql).
-	//
-	// API is not stable. DO NOT USE.
 	Begin(ctx context.Context) (ExecutorTx, error)
 
 	// Exec executes raw SQL. Used for migrations.
-	//
-	// API is not stable. DO NOT USE.
 	Exec(ctx context.Context, sql string) (struct{}, error)
 
+	JobCancel(ctx context.Context, params *JobCancelParams) (*rivertype.JobRow, error)
+	JobDeleteBefore(ctx context.Context, params *JobDeleteBeforeParams) (int, error)
+	JobGetAvailable(ctx context.Context, params *JobGetAvailableParams) ([]*rivertype.JobRow, error)
+	JobGetByID(ctx context.Context, id int64) (*rivertype.JobRow, error)
+	JobGetByIDMany(ctx context.Context, id []int64) ([]*rivertype.JobRow, error)
+	JobGetByKindAndUniqueProperties(ctx context.Context, params *JobGetByKindAndUniquePropertiesParams) (*rivertype.JobRow, error)
+	JobGetByKindMany(ctx context.Context, kind []string) ([]*rivertype.JobRow, error)
+	JobGetStuck(ctx context.Context, params *JobGetStuckParams) ([]*rivertype.JobRow, error)
+	JobInsertFast(ctx context.Context, params *JobInsertFastParams) (*rivertype.JobRow, error)
+	JobInsertFastMany(ctx context.Context, params []*JobInsertFastParams) (int64, error)
+	JobInsertFull(ctx context.Context, params *JobInsertFullParams) (*rivertype.JobRow, error)
+	JobList(ctx context.Context, sql string, namedArgs map[string]any) ([]*rivertype.JobRow, error)
+	JobListFields() string
+	JobRescueMany(ctx context.Context, params *JobRescueManyParams) (*struct{}, error)
+	JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, error)
+	JobSchedule(ctx context.Context, params *JobScheduleParams) (int, error)
+	JobSetStateIfRunning(ctx context.Context, params *JobSetStateIfRunningParams) (*rivertype.JobRow, error)
+	JobUpdate(ctx context.Context, params *JobUpdateParams) (*rivertype.JobRow, error)
+	LeaderAttemptElect(ctx context.Context, params *LeaderElectParams) (bool, error)
+	LeaderAttemptReelect(ctx context.Context, params *LeaderElectParams) (bool, error)
+	LeaderDeleteExpired(ctx context.Context, name string) (int, error)
+	LeaderGetElectedLeader(ctx context.Context, name string) (*Leader, error)
+	LeaderInsert(ctx context.Context, params *LeaderInsertParams) (*Leader, error)
+	LeaderResign(ctx context.Context, params *LeaderResignParams) (bool, error)
+
 	// MigrationDeleteByVersionMany deletes many migration versions.
-	//
-	// API is not stable. DO NOT USE.
 	MigrationDeleteByVersionMany(ctx context.Context, versions []int) ([]*Migration, error)
 
 	// MigrationGetAll gets all currently applied migrations.
-	//
-	// API is not stable. DO NOT USE.
 	MigrationGetAll(ctx context.Context) ([]*Migration, error)
 
 	// MigrationInsertMany inserts many migration versions.
-	//
-	// API is not stable. DO NOT USE.
 	MigrationInsertMany(ctx context.Context, versions []int) ([]*Migration, error)
+
+	Notify(ctx context.Context, topic string, payload string) error
+	PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}, error)
 
 	// TableExists checks whether a table exists for the schema in the current
 	// search schema.
-	//
-	// API is not stable. DO NOT USE.
 	TableExists(ctx context.Context, tableName string) (bool, error)
 }
 
 // ExecutorTx is an executor which is a transaction. In addition to standard
 // Executor operations, it may be committed or rolled back.
+//
+// API is not stable. DO NOT IMPLEMENT.
 type ExecutorTx interface {
 	Executor
 
@@ -117,7 +134,191 @@ type ExecutorTx interface {
 	Rollback(ctx context.Context) error
 }
 
+// Listener listens for notifications. In Postgres, this is a database
+// connection where `LISTEN` has been run.
+//
+// API is not stable. DO NOT IMPLEMENT.
+type Listener interface {
+	Close(ctx context.Context) error
+	Connect(ctx context.Context) error
+	Listen(ctx context.Context, topic string) error
+	Ping(ctx context.Context) error
+	Unlisten(ctx context.Context, topic string) error
+	WaitForNotification(ctx context.Context) (*Notification, error)
+}
+
+type Notification struct {
+	Payload string
+	Topic   string
+}
+
+type JobCancelParams struct {
+	ID                int64
+	CancelAttemptedAt time.Time
+	JobControlTopic   string
+}
+
+type JobDeleteBeforeParams struct {
+	CancelledFinalizedAtHorizon time.Time
+	CompletedFinalizedAtHorizon time.Time
+	DiscardedFinalizedAtHorizon time.Time
+	Max                         int
+}
+
+type JobGetAvailableParams struct {
+	AttemptedBy string
+	Max         int
+	Queue       string
+}
+
+type JobGetByKindAndUniquePropertiesParams struct {
+	Kind           string
+	ByArgs         bool
+	Args           []byte
+	ByCreatedAt    bool
+	CreatedAtBegin time.Time
+	CreatedAtEnd   time.Time
+	ByQueue        bool
+	Queue          string
+	ByState        bool
+	State          []string
+}
+
+type JobGetStuckParams struct {
+	Max          int
+	StuckHorizon time.Time
+}
+
+type JobInsertFastParams struct {
+	EncodedArgs []byte
+	Kind        string
+	MaxAttempts int
+	Metadata    []byte
+	Priority    int
+	Queue       string
+	ScheduledAt *time.Time
+	State       rivertype.JobState
+	Tags        []string
+}
+
+type JobInsertFullParams struct {
+	Attempt     int
+	AttemptedAt *time.Time
+	CreatedAt   *time.Time
+	EncodedArgs []byte
+	Errors      [][]byte
+	FinalizedAt *time.Time
+	Kind        string
+	MaxAttempts int
+	Metadata    []byte
+	Priority    int
+	Queue       string
+	ScheduledAt *time.Time
+	State       rivertype.JobState
+	Tags        []string
+}
+
+type JobRescueManyParams struct {
+	ID          []int64
+	Error       [][]byte
+	FinalizedAt []time.Time
+	ScheduledAt []time.Time
+	State       []string
+}
+
+type JobScheduleParams struct {
+	InsertTopic string
+	Max         int
+	Now         time.Time
+}
+
+// JobSetStateIfRunningParams are parameters to update the state of a currently running
+// job. Use one of the constructors below to ensure a correct combination of
+// parameters.
+type JobSetStateIfRunningParams struct {
+	ID          int64
+	ErrData     []byte
+	FinalizedAt *time.Time
+	MaxAttempts *int
+	ScheduledAt *time.Time
+	State       rivertype.JobState
+}
+
+func JobSetStateCancelled(id int64, finalizedAt time.Time, errData []byte) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{ID: id, ErrData: errData, FinalizedAt: &finalizedAt, State: rivertype.JobStateCancelled}
+}
+
+func JobSetStateCompleted(id int64, finalizedAt time.Time) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{ID: id, FinalizedAt: &finalizedAt, State: rivertype.JobStateCompleted}
+}
+
+func JobSetStateDiscarded(id int64, finalizedAt time.Time, errData []byte) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{ID: id, ErrData: errData, FinalizedAt: &finalizedAt, State: rivertype.JobStateDiscarded}
+}
+
+func JobSetStateErrorAvailable(id int64, scheduledAt time.Time, errData []byte) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{ID: id, ErrData: errData, ScheduledAt: &scheduledAt, State: rivertype.JobStateAvailable}
+}
+
+func JobSetStateErrorRetryable(id int64, scheduledAt time.Time, errData []byte) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{ID: id, ErrData: errData, ScheduledAt: &scheduledAt, State: rivertype.JobStateRetryable}
+}
+
+func JobSetStateSnoozed(id int64, scheduledAt time.Time, maxAttempts int) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{ID: id, MaxAttempts: &maxAttempts, ScheduledAt: &scheduledAt, State: rivertype.JobStateScheduled}
+}
+
+func JobSetStateSnoozedAvailable(id int64, scheduledAt time.Time, maxAttempts int) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{ID: id, MaxAttempts: &maxAttempts, ScheduledAt: &scheduledAt, State: rivertype.JobStateAvailable}
+}
+
+type JobUpdateParams struct {
+	ID                  int64
+	AttemptDoUpdate     bool
+	Attempt             int
+	AttemptedAtDoUpdate bool
+	AttemptedAt         *time.Time
+	ErrorsDoUpdate      bool
+	Errors              [][]byte
+	FinalizedAtDoUpdate bool
+	FinalizedAt         *time.Time
+	StateDoUpdate       bool
+	State               rivertype.JobState
+}
+
+// Leader represents a River leader.
+//
+// API is not stable. DO NOT USE.
+type Leader struct {
+	ElectedAt time.Time
+	ExpiresAt time.Time
+	Name      string
+	LeaderID  string
+}
+
+type LeaderInsertParams struct {
+	ElectedAt *time.Time
+	ExpiresAt *time.Time
+	Name      string
+	LeaderID  string
+	TTL       time.Duration
+}
+
+type LeaderElectParams struct {
+	Name     string
+	LeaderID string
+	TTL      time.Duration
+}
+
+type LeaderResignParams struct {
+	LeaderID        string
+	LeadershipTopic string
+	Name            string
+}
+
 // Migration represents a River migration.
+//
+// API is not stable. DO NOT USE.
 type Migration struct {
 	// ID is an automatically generated primary key for the migration.
 	//

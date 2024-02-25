@@ -8,39 +8,36 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/dbadapter"
-	"github.com/riverqueue/river/internal/dbsqlc"
+	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
 )
 
 func TestPeriodicJobEnqueuer(t *testing.T) {
 	t.Parallel()
 
-	var (
-		ctx     = context.Background()
-		queries = dbsqlc.New()
-	)
+	ctx := context.Background()
 
 	type testBundle struct {
-		dbPool   *pgxpool.Pool
+		exec     riverdriver.Executor
 		waitChan chan (struct{})
 	}
 
-	jobConstructorFunc := func(name string, unique bool) func() (*dbadapter.JobInsertParams, error) {
-		return func() (*dbadapter.JobInsertParams, error) {
-			return &dbadapter.JobInsertParams{
+	jobConstructorFunc := func(name string, unique bool) func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
+		return func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
+			return &riverdriver.JobInsertFastParams{
 				EncodedArgs: []byte("{}"),
 				Kind:        name,
 				MaxAttempts: rivercommon.MaxAttemptsDefault,
 				Priority:    rivercommon.PriorityDefault,
 				Queue:       rivercommon.QueueDefault,
-				State:       dbsqlc.JobStateAvailable,
-				Unique:      unique,
-			}, nil
+				State:       rivertype.JobStateAvailable,
+			}, &dbunique.UniqueOpts{ByArgs: unique}, nil
 		}
 	}
 
@@ -54,7 +51,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		t.Helper()
 
 		bundle := &testBundle{
-			dbPool:   riverinternaltest.TestDB(ctx, t),
+			exec:     riverpgxv5.New(riverinternaltest.TestDB(ctx, t)).GetExecutor(),
 			waitChan: make(chan struct{}),
 		}
 
@@ -67,17 +64,17 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 					{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
 					{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false)},
 				},
-			}, dbadapter.NewStandardAdapter(archetype, &dbadapter.StandardAdapterConfig{Executor: bundle.dbPool}))
+			}, bundle.exec)
 		svc.TestSignals.Init()
 		t.Cleanup(svc.Stop)
 
 		return svc, bundle
 	}
 
-	requireNJobs := func(t *testing.T, pool *pgxpool.Pool, kind string, n int) {
+	requireNJobs := func(t *testing.T, exec riverdriver.Executor, kind string, n int) {
 		t.Helper()
 
-		jobs, err := queries.JobGetByKind(ctx, pool, kind)
+		jobs, err := exec.JobGetByKindMany(ctx, []string{kind})
 		require.NoError(t, err)
 		require.Len(t, jobs, n, fmt.Sprintf("Expected to find exactly %d job(s) of kind: %s, but found %d", n, kind, len(jobs)))
 	}
@@ -100,17 +97,17 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		require.NoError(t, svc.Start(ctx))
 
 		// Should be no jobs to start.
-		requireNJobs(t, bundle.dbPool, "periodic_job_500ms", 0)
+		requireNJobs(t, bundle.exec, "periodic_job_500ms", 0)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.dbPool, "periodic_job_500ms", 1)
+		requireNJobs(t, bundle.exec, "periodic_job_500ms", 1)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.dbPool, "periodic_job_500ms", 2)
+		requireNJobs(t, bundle.exec, "periodic_job_500ms", 2)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.dbPool, "periodic_job_500ms", 3)
-		requireNJobs(t, bundle.dbPool, "periodic_job_1500ms", 1)
+		requireNJobs(t, bundle.exec, "periodic_job_500ms", 3)
+		requireNJobs(t, bundle.exec, "periodic_job_1500ms", 1)
 	})
 
 	t.Run("RespectsJobUniqueness", func(t *testing.T) {
@@ -125,18 +122,18 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		require.NoError(t, svc.Start(ctx))
 
 		// Should be no jobs to start.
-		requireNJobs(t, bundle.dbPool, "unique_periodic_job_500ms", 0)
+		requireNJobs(t, bundle.exec, "unique_periodic_job_500ms", 0)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.dbPool, "unique_periodic_job_500ms", 1)
+		requireNJobs(t, bundle.exec, "unique_periodic_job_500ms", 1)
 
 		// Another insert was attempted, but there's still only one job due to
 		// uniqueness conditions.
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.dbPool, "unique_periodic_job_500ms", 1)
+		requireNJobs(t, bundle.exec, "unique_periodic_job_500ms", 1)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.dbPool, "unique_periodic_job_500ms", 1)
+		requireNJobs(t, bundle.exec, "unique_periodic_job_500ms", 1)
 	})
 
 	t.Run("RunOnStart", func(t *testing.T) {
@@ -153,8 +150,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		require.NoError(t, svc.Start(ctx))
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.dbPool, "periodic_job_5s", 1)
-		requireNJobs(t, bundle.dbPool, "unique_periodic_job_5s", 1)
+		requireNJobs(t, bundle.exec, "periodic_job_5s", 1)
+		requireNJobs(t, bundle.exec, "unique_periodic_job_5s", 1)
 
 		// Should've happened quite quickly.
 		require.WithinDuration(t, time.Now(), start, 1*time.Second)
@@ -167,7 +164,9 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc.periodicJobs = []*PeriodicJob{
 			// skip this insert when it returns nil:
-			{ScheduleFunc: periodicIntervalSchedule(time.Second), ConstructorFunc: func() (*dbadapter.JobInsertParams, error) { return nil, ErrNoJobToInsert }, RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(time.Second), ConstructorFunc: func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
+				return nil, nil, ErrNoJobToInsert
+			}, RunOnStart: true},
 		}
 
 		require.NoError(t, svc.Start(ctx))

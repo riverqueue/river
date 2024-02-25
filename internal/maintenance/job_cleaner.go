@@ -8,12 +8,11 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/internal/util/timeutil"
 	"github.com/riverqueue/river/internal/util/valutil"
+	"github.com/riverqueue/river/riverdriver"
 )
 
 const (
@@ -76,12 +75,11 @@ type JobCleaner struct {
 	Config      *JobCleanerConfig
 	TestSignals JobCleanerTestSignals
 
-	batchSize  int64 // configurable for test purposes
-	dbExecutor dbutil.Executor
-	queries    *dbsqlc.Queries
+	batchSize int // configurable for test purposes
+	exec      riverdriver.Executor
 }
 
-func NewJobCleaner(archetype *baseservice.Archetype, config *JobCleanerConfig, executor dbutil.Executor) *JobCleaner {
+func NewJobCleaner(archetype *baseservice.Archetype, config *JobCleanerConfig, exec riverdriver.Executor) *JobCleaner {
 	return baseservice.Init(archetype, &JobCleaner{
 		Config: (&JobCleanerConfig{
 			CancelledJobRetentionPeriod: valutil.ValOrDefault(config.CancelledJobRetentionPeriod, CancelledJobRetentionPeriodDefault),
@@ -90,9 +88,8 @@ func NewJobCleaner(archetype *baseservice.Archetype, config *JobCleanerConfig, e
 			Interval:                    valutil.ValOrDefault(config.Interval, JobCleanerIntervalDefault),
 		}).mustValidate(),
 
-		batchSize:  BatchSizeDefault,
-		dbExecutor: executor,
-		queries:    dbsqlc.New(),
+		batchSize: BatchSizeDefault,
+		exec:      exec,
 	})
 }
 
@@ -131,7 +128,7 @@ func (s *JobCleaner) Start(ctx context.Context) error { //nolint:dupl
 			}
 
 			s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
-				slog.Int64("num_jobs_deleted", res.NumJobsDeleted),
+				slog.Int("num_jobs_deleted", res.NumJobsDeleted),
 			)
 		}
 	}()
@@ -140,7 +137,7 @@ func (s *JobCleaner) Start(ctx context.Context) error { //nolint:dupl
 }
 
 type jobCleanerRunOnceResult struct {
-	NumJobsDeleted int64
+	NumJobsDeleted int
 }
 
 func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, error) {
@@ -148,11 +145,11 @@ func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, err
 
 	for {
 		// Wrapped in a function so that defers run as expected.
-		numDeleted, err := func() (int64, error) {
+		numDeleted, err := func() (int, error) {
 			ctx, cancelFunc := context.WithTimeout(ctx, 30*time.Second)
 			defer cancelFunc()
 
-			numDeleted, err := s.queries.JobDeleteBefore(ctx, s.dbExecutor, dbsqlc.JobDeleteBeforeParams{
+			numDeleted, err := s.exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
 				CancelledFinalizedAtHorizon: time.Now().Add(-s.Config.CancelledJobRetentionPeriod),
 				CompletedFinalizedAtHorizon: time.Now().Add(-s.Config.CompletedJobRetentionPeriod),
 				DiscardedFinalizedAtHorizon: time.Now().Add(-s.Config.DiscardedJobRetentionPeriod),
@@ -177,7 +174,7 @@ func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, err
 		}
 
 		s.Logger.InfoContext(ctx, s.Name+": Deleted batch of jobs",
-			slog.Int64("num_jobs_deleted", numDeleted),
+			slog.Int("num_jobs_deleted", numDeleted),
 		)
 
 		s.CancellableSleepRandomBetween(ctx, BatchBackoffMin, BatchBackoffMax)

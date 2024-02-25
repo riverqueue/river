@@ -9,13 +9,12 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/dbsqlc"
 	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/internal/util/timeutil"
 	"github.com/riverqueue/river/internal/util/valutil"
 	"github.com/riverqueue/river/internal/workunit"
+	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -81,12 +80,11 @@ type Rescuer struct {
 	Config      *RescuerConfig
 	TestSignals RescuerTestSignals
 
-	batchSize  int // configurable for test purposes
-	dbExecutor dbutil.Executor
-	queries    *dbsqlc.Queries
+	batchSize int // configurable for test purposes
+	exec      riverdriver.Executor
 }
 
-func NewRescuer(archetype *baseservice.Archetype, config *RescuerConfig, executor dbutil.Executor) *Rescuer {
+func NewRescuer(archetype *baseservice.Archetype, config *RescuerConfig, exec riverdriver.Executor) *Rescuer {
 	return baseservice.Init(archetype, &Rescuer{
 		Config: (&RescuerConfig{
 			ClientRetryPolicy:   config.ClientRetryPolicy,
@@ -95,9 +93,8 @@ func NewRescuer(archetype *baseservice.Archetype, config *RescuerConfig, executo
 			WorkUnitFactoryFunc: config.WorkUnitFactoryFunc,
 		}).mustValidate(),
 
-		batchSize:  BatchSizeDefault,
-		dbExecutor: executor,
-		queries:    dbsqlc.New(),
+		batchSize: BatchSizeDefault,
+		exec:      exec,
 	})
 }
 
@@ -168,7 +165,7 @@ func (s *Rescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error) {
 
 		now := time.Now().UTC()
 
-		rescueManyParams := dbsqlc.JobRescueManyParams{
+		rescueManyParams := riverdriver.JobRescueManyParams{
 			ID:          make([]int64, len(stuckJobs)),
 			Error:       make([][]byte, len(stuckJobs)),
 			FinalizedAt: make([]time.Time, len(stuckJobs)),
@@ -186,7 +183,7 @@ func (s *Rescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error) {
 
 			rescueManyParams.Error[i], err = json.Marshal(rivertype.AttemptError{
 				At:      now,
-				Attempt: max(int(job.Attempt), 0),
+				Attempt: max(job.Attempt, 0),
 				Error:   "Stuck job rescued by Rescuer",
 				Trace:   "TODO",
 			})
@@ -198,23 +195,23 @@ func (s *Rescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error) {
 				res.NumJobsCancelled++
 				rescueManyParams.FinalizedAt[i] = now
 				rescueManyParams.ScheduledAt[i] = job.ScheduledAt // reuse previous value
-				rescueManyParams.State[i] = string(dbsqlc.JobStateCancelled)
+				rescueManyParams.State[i] = string(rivertype.JobStateCancelled)
 				continue
 			}
 			shouldRetry, retryAt := s.makeRetryDecision(ctx, job)
 			if shouldRetry {
 				res.NumJobsRetried++
 				rescueManyParams.ScheduledAt[i] = retryAt
-				rescueManyParams.State[i] = string(dbsqlc.JobStateRetryable)
+				rescueManyParams.State[i] = string(rivertype.JobStateRetryable)
 			} else {
 				res.NumJobsDiscarded++
 				rescueManyParams.FinalizedAt[i] = now
 				rescueManyParams.ScheduledAt[i] = job.ScheduledAt // reuse previous value
-				rescueManyParams.State[i] = string(dbsqlc.JobStateDiscarded)
+				rescueManyParams.State[i] = string(rivertype.JobStateDiscarded)
 			}
 		}
 
-		err = s.queries.JobRescueMany(ctx, s.dbExecutor, rescueManyParams)
+		_, err = s.exec.JobRescueMany(ctx, &rescueManyParams)
 		if err != nil {
 			return nil, fmt.Errorf("error rescuing stuck jobs: %w", err)
 		}
@@ -238,23 +235,21 @@ func (s *Rescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error) {
 	return res, nil
 }
 
-func (s *Rescuer) getStuckJobs(ctx context.Context) ([]*dbsqlc.RiverJob, error) {
+func (s *Rescuer) getStuckJobs(ctx context.Context) ([]*rivertype.JobRow, error) {
 	ctx, cancelFunc := context.WithTimeout(ctx, 30*time.Second)
 	defer cancelFunc()
 
 	stuckHorizon := time.Now().Add(-s.Config.RescueAfter)
 
-	return s.queries.JobGetStuck(ctx, s.dbExecutor, dbsqlc.JobGetStuckParams{
+	return s.exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
+		Max:          s.batchSize,
 		StuckHorizon: stuckHorizon,
-		LimitCount:   int32(s.batchSize),
 	})
 }
 
 // makeRetryDecision decides whether or not a rescued job should be retried, and if so,
 // when.
-func (s *Rescuer) makeRetryDecision(ctx context.Context, internalJob *dbsqlc.RiverJob) (bool, time.Time) {
-	job := dbsqlc.JobRowFromInternal(internalJob)
-
+func (s *Rescuer) makeRetryDecision(ctx context.Context, job *rivertype.JobRow) (bool, time.Time) {
 	workUnitFactory := s.Config.WorkUnitFactoryFunc(job.Kind)
 	if workUnitFactory == nil {
 		s.Logger.ErrorContext(ctx, s.Name+": Attempted to rescue unhandled job kind, discarding",
@@ -272,5 +267,5 @@ func (s *Rescuer) makeRetryDecision(ctx context.Context, internalJob *dbsqlc.Riv
 	if nextRetry.IsZero() {
 		nextRetry = s.Config.ClientRetryPolicy.NextRetry(job)
 	}
-	return job.Attempt < max(int(internalJob.MaxAttempts), 0), nextRetry
+	return job.Attempt < max(job.MaxAttempts, 0), nextRetry
 }
