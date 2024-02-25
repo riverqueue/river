@@ -268,8 +268,8 @@ func (p *JobListParams) OrderBy(field JobListOrderByField, direction SortOrder) 
 // state.
 func (p *JobListParams) States(states ...rivertype.JobState) *JobListParams {
 	result := p.copy()
-	result.states = make([]rivertype.JobState, 0, len(p.states))
-	copy(result.states, p.states)
+	result.states = make([]rivertype.JobState, 0, len(states))
+	copy(result.states, states)
 	return result
 }
 
