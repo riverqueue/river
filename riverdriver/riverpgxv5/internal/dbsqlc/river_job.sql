@@ -174,7 +174,7 @@ INSERT INTO river_job(
     @finalized_at,
     @kind::text,
     @max_attempts::smallint,
-    coalesce(@metadata::jsonb, '{}'),
+    coalesce(sqlc.narg('metadata')::jsonb, '{}'),
     @priority::smallint,
     @queue::text,
     coalesce(sqlc.narg('scheduled_at')::timestamptz, now()),
@@ -199,7 +199,7 @@ INSERT INTO river_job(
     state,
     tags
 ) VALUES (
-    @args::jsonb,
+    @args,
     coalesce(@attempt::smallint, 0),
     @attempted_at,
     coalesce(sqlc.narg('created_at')::timestamptz, now()),

@@ -57,7 +57,7 @@ func TestListener_Close(t *testing.T) {
 
 		var connStub *connStub
 
-		config := testPoolConfig()
+		var config *pgxpool.Config = testPoolConfig()
 		config.ConnConfig.DialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {
 			// Dialer settings come from pgx's default internal one (not exported unfortunately).
 			conn, err := (&net.Dialer{KeepAlive: 5 * time.Minute}).Dial(network, addr)

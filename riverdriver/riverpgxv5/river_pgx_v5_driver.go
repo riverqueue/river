@@ -80,7 +80,7 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 
 	job, err := e.queries.JobCancel(ctx, e.dbtx, &dbsqlc.JobCancelParams{
 		ID:                params.ID,
-		CancelAttemptedAt: cancelledAt,
+		CancelAttemptedAt: string(cancelledAt),
 		JobControlTopic:   params.JobControlTopic,
 	})
 	if err != nil {
@@ -125,7 +125,24 @@ func (e *Executor) JobGetByIDMany(ctx context.Context, id []int64) ([]*rivertype
 }
 
 func (e *Executor) JobGetByKindAndUniqueProperties(ctx context.Context, params *riverdriver.JobGetByKindAndUniquePropertiesParams) (*rivertype.JobRow, error) {
-	job, err := e.queries.JobGetByKindAndUniqueProperties(ctx, e.dbtx, (*dbsqlc.JobGetByKindAndUniquePropertiesParams)(params))
+	var args *string
+	if params.Args != nil {
+		s := string(params.Args)
+		args = &s
+	}
+
+	job, err := e.queries.JobGetByKindAndUniqueProperties(ctx, e.dbtx, &dbsqlc.JobGetByKindAndUniquePropertiesParams{
+		Kind:           params.Kind,
+		ByArgs:         params.ByArgs,
+		Args:           args,
+		ByCreatedAt:    params.ByCreatedAt,
+		CreatedAtBegin: params.CreatedAtBegin,
+		CreatedAtEnd:   params.CreatedAtEnd,
+		ByQueue:        params.ByQueue,
+		Queue:          params.Queue,
+		ByState:        params.ByState,
+		State:          params.State,
+	})
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -146,11 +163,20 @@ func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetSt
 }
 
 func (e *Executor) JobInsertFast(ctx context.Context, params *riverdriver.JobInsertFastParams) (*rivertype.JobRow, error) {
+	var metadata *string
+	if params.Metadata == nil {
+		s := "{}"
+		metadata = &s
+	} else {
+		s := string(params.Metadata)
+		metadata = &s
+	}
+
 	job, err := e.queries.JobInsertFast(ctx, e.dbtx, &dbsqlc.JobInsertFastParams{
-		Args:        params.EncodedArgs,
+		Args:        string(params.EncodedArgs),
 		Kind:        params.Kind,
 		MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)),
-		Metadata:    params.Metadata,
+		Metadata:    metadata,
 		Priority:    int16(min(params.Priority, math.MaxInt16)),
 		Queue:       params.Queue,
 		ScheduledAt: params.ScheduledAt,
@@ -170,9 +196,17 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 	for i := 0; i < len(params); i++ {
 		params := params[i]
 
-		metadata := params.Metadata
-		if metadata == nil {
-			metadata = []byte("{}")
+		var args *string
+		if params.EncodedArgs != nil {
+			s := string(params.EncodedArgs)
+			args = &s
+		}
+
+		var metadata string
+		if params.Metadata == nil {
+			metadata = "{}"
+		} else {
+			metadata = string(params.Metadata)
 		}
 
 		scheduledAt := now
@@ -186,7 +220,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 		}
 
 		insertJobsParams[i] = &dbsqlc.JobInsertManyParams{
-			Args:        params.EncodedArgs,
+			Args:        args,
 			Kind:        params.Kind,
 			MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)),
 			Metadata:    metadata,
@@ -207,16 +241,29 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 }
 
 func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobInsertFullParams) (*rivertype.JobRow, error) {
+	var args *string
+	if params.EncodedArgs != nil {
+		s := string(params.EncodedArgs)
+		args = &s
+	}
+
+	var metadata string
+	if params.Metadata == nil {
+		metadata = "{}"
+	} else {
+		metadata = string(params.Metadata)
+	}
+
 	job, err := e.queries.JobInsertFull(ctx, e.dbtx, &dbsqlc.JobInsertFullParams{
 		Attempt:     int16(params.Attempt),
 		AttemptedAt: params.AttemptedAt,
-		Args:        params.EncodedArgs,
+		Args:        args,
 		CreatedAt:   params.CreatedAt,
-		Errors:      params.Errors,
+		Errors:      mapSlice(params.Errors, func(e []byte) string { return string(e) }),
 		FinalizedAt: params.FinalizedAt,
 		Kind:        params.Kind,
 		MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)),
-		Metadata:    params.Metadata,
+		Metadata:    metadata,
 		Priority:    int16(min(params.Priority, math.MaxInt16)),
 		Queue:       params.Queue,
 		ScheduledAt: params.ScheduledAt,
@@ -281,7 +328,13 @@ func (e *Executor) JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, e
 }
 
 func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRescueManyParams) (*struct{}, error) {
-	err := e.queries.JobRescueMany(ctx, e.dbtx, (*dbsqlc.JobRescueManyParams)(params))
+	err := e.queries.JobRescueMany(ctx, e.dbtx, &dbsqlc.JobRescueManyParams{
+		ID:          params.ID,
+		Error:       mapSlice(params.Error, func(e []byte) string { return string(e) }),
+		FinalizedAt: params.FinalizedAt,
+		ScheduledAt: params.ScheduledAt,
+		State:       params.State,
+	})
 	return &struct{}{}, interpretError(err)
 }
 
@@ -295,6 +348,13 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 }
 
 func (e *Executor) JobSetStateIfRunning(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
+	var errData string
+	if params.ErrData == nil {
+		errData = `{}`
+	} else {
+		errData = string(params.ErrData)
+	}
+
 	var maxAttempts int16
 	if params.MaxAttempts != nil {
 		maxAttempts = int16(*params.MaxAttempts)
@@ -303,7 +363,7 @@ func (e *Executor) JobSetStateIfRunning(ctx context.Context, params *riverdriver
 	job, err := e.queries.JobSetStateIfRunning(ctx, e.dbtx, &dbsqlc.JobSetStateIfRunningParams{
 		ID:                  params.ID,
 		ErrorDoUpdate:       params.ErrData != nil,
-		Error:               params.ErrData,
+		Error:               errData,
 		FinalizedAtDoUpdate: params.FinalizedAt != nil,
 		FinalizedAt:         params.FinalizedAt,
 		MaxAttemptsUpdate:   params.MaxAttempts != nil,
@@ -326,7 +386,7 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 		AttemptDoUpdate:     params.AttemptDoUpdate,
 		Attempt:             int16(params.Attempt),
 		ErrorsDoUpdate:      params.ErrorsDoUpdate,
-		Errors:              params.Errors,
+		Errors:              mapSlice(params.Errors, func(e []byte) string { return string(e) }),
 		FinalizedAtDoUpdate: params.FinalizedAtDoUpdate,
 		FinalizedAt:         params.FinalizedAt,
 		StateDoUpdate:       params.StateDoUpdate,
@@ -567,6 +627,11 @@ func jobRowFromInternal(internal *dbsqlc.RiverJob) *rivertype.JobRow {
 		attemptedAt = &t
 	}
 
+	var encodedArgs []byte
+	if internal.Args != nil {
+		encodedArgs = []byte(*internal.Args)
+	}
+
 	var finalizedAt *time.Time
 	if internal.FinalizedAt != nil {
 		t := internal.FinalizedAt.UTC()
@@ -579,12 +644,12 @@ func jobRowFromInternal(internal *dbsqlc.RiverJob) *rivertype.JobRow {
 		AttemptedAt: attemptedAt,
 		AttemptedBy: internal.AttemptedBy,
 		CreatedAt:   internal.CreatedAt.UTC(),
-		EncodedArgs: internal.Args,
+		EncodedArgs: encodedArgs,
 		Errors:      mapSlice(internal.Errors, func(e dbsqlc.AttemptError) rivertype.AttemptError { return attemptErrorFromInternal(&e) }),
 		FinalizedAt: finalizedAt,
 		Kind:        internal.Kind,
 		MaxAttempts: max(int(internal.MaxAttempts), 0),
-		Metadata:    internal.Metadata,
+		Metadata:    []byte(internal.Metadata),
 		Priority:    max(int(internal.Priority), 0),
 		Queue:       internal.Queue,
 		ScheduledAt: internal.ScheduledAt.UTC(),

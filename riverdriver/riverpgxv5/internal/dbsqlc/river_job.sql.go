@@ -54,7 +54,7 @@ FROM updated_job
 type JobCancelParams struct {
 	ID                int64
 	JobControlTopic   string
-	CancelAttemptedAt []byte
+	CancelAttemptedAt string
 }
 
 func (q *Queries) JobCancel(ctx context.Context, db DBTX, arg *JobCancelParams) (*RiverJob, error) {
@@ -283,7 +283,7 @@ WHERE kind = $1
 type JobGetByKindAndUniquePropertiesParams struct {
 	Kind           string
 	ByArgs         bool
-	Args           []byte
+	Args           *string
 	ByCreatedAt    bool
 	CreatedAtBegin time.Time
 	CreatedAtEnd   time.Time
@@ -450,11 +450,11 @@ INSERT INTO river_job(
 `
 
 type JobInsertFastParams struct {
-	Args        []byte
+	Args        string
 	FinalizedAt *time.Time
 	Kind        string
 	MaxAttempts int16
-	Metadata    []byte
+	Metadata    *string
 	Priority    int16
 	Queue       string
 	ScheduledAt *time.Time
@@ -514,7 +514,7 @@ INSERT INTO river_job(
     state,
     tags
 ) VALUES (
-    $1::jsonb,
+    $1,
     coalesce($2::smallint, 0),
     $3,
     coalesce($4::timestamptz, now()),
@@ -532,15 +532,15 @@ INSERT INTO river_job(
 `
 
 type JobInsertFullParams struct {
-	Args        []byte
+	Args        *string
 	Attempt     int16
 	AttemptedAt *time.Time
 	CreatedAt   *time.Time
-	Errors      [][]byte
+	Errors      []string
 	FinalizedAt *time.Time
 	Kind        string
 	MaxAttempts int16
-	Metadata    []byte
+	Metadata    string
 	Priority    int16
 	Queue       string
 	ScheduledAt *time.Time
@@ -607,7 +607,7 @@ WHERE river_job.id = updated_job.id
 
 type JobRescueManyParams struct {
 	ID          []int64
-	Error       [][]byte
+	Error       []string
 	FinalizedAt []time.Time
 	ScheduledAt []time.Time
 	State       []string
@@ -766,7 +766,7 @@ type JobSetStateIfRunningParams struct {
 	FinalizedAtDoUpdate bool
 	FinalizedAt         *time.Time
 	ErrorDoUpdate       bool
-	Error               []byte
+	Error               string
 	MaxAttemptsUpdate   bool
 	MaxAttempts         int16
 	ScheduledAtDoUpdate bool
@@ -826,7 +826,7 @@ type JobUpdateParams struct {
 	AttemptedAtDoUpdate bool
 	AttemptedAt         *time.Time
 	ErrorsDoUpdate      bool
-	Errors              [][]byte
+	Errors              []string
 	FinalizedAtDoUpdate bool
 	FinalizedAt         *time.Time
 	StateDoUpdate       bool

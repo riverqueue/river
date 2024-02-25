@@ -73,6 +73,7 @@ func DatabaseConfig(databaseName string) *pgxpool.Config {
 	// are unlikely to succeed even with more time:
 	config.ConnConfig.ConnectTimeout = 2 * time.Second
 	config.ConnConfig.RuntimeParams["timezone"] = "UTC"
+	config.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
 	return config
 }
 

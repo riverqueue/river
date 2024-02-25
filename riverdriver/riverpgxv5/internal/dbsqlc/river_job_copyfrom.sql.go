@@ -10,11 +10,11 @@ import (
 )
 
 type JobInsertManyParams struct {
-	Args        []byte
+	Args        *string
 	FinalizedAt *time.Time
 	Kind        string
 	MaxAttempts int16
-	Metadata    []byte
+	Metadata    string
 	Priority    int16
 	Queue       string
 	ScheduledAt time.Time

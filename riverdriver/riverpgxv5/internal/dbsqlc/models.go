@@ -59,7 +59,7 @@ func (ns NullRiverJobState) Value() (driver.Value, error) {
 
 type RiverJob struct {
 	ID          int64
-	Args        []byte
+	Args        *string
 	Attempt     int16
 	AttemptedAt *time.Time
 	AttemptedBy []string
@@ -68,7 +68,7 @@ type RiverJob struct {
 	FinalizedAt *time.Time
 	Kind        string
 	MaxAttempts int16
-	Metadata    []byte
+	Metadata    string
 	Priority    int16
 	Queue       string
 	State       RiverJobState

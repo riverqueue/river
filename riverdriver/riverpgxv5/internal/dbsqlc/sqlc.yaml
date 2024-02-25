@@ -29,6 +29,15 @@ sql:
           - db_type: "pg_catalog.interval"
             go_type: "time.Duration"
 
+          - db_type: "jsonb"
+            go_type: "string"
+
+          - db_type: "jsonb"
+            go_type:
+              type: "string"
+              pointer: true
+            nullable: true
+
           - db_type: "timestamptz"
             go_type: "time.Time"
 

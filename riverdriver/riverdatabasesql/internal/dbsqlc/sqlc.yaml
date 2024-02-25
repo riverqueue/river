@@ -26,6 +26,15 @@ sql:
           ttl: "TTL"
 
         overrides:
+          - db_type: "jsonb"
+            go_type: "string"
+
+          - db_type: "jsonb"
+            go_type:
+              type: "string"
+              pointer: true
+            nullable: true
+
           - db_type: "pg_catalog.interval"
             go_type: "time.Duration"
 
@@ -39,14 +48,6 @@ sql:
             nullable: true
 
           # specific columns
-
-          # This one is necessary because `args` is nullable (this seems to have
-          # been an oversight, but one we're determined isn't worth correcting
-          # for now), and the `database/sql` variant of sqlc will give it a
-          # crazy type by default, so here we give it something more reasonable.
-          - column: "river_job.args"
-            go_type:
-              type: "[]byte"
 
           - column: "river_job.errors"
             go_type:
