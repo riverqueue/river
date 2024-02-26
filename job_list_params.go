@@ -38,6 +38,9 @@ func JobListCursorFromJob(job *rivertype.JobRow, sortField JobListOrderByField) 
 		}
 	case JobListOrderByScheduledAt:
 		time = job.ScheduledAt
+	case JobListOrderByCreatedAt:
+	default:
+		// stick with created_at
 	}
 	return &JobListCursor{
 		id:        job.ID,
@@ -190,7 +193,7 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 		return nil, errors.New("invalid sort order")
 	}
 
-	timeField := "created_at"
+	var timeField string
 	if len(p.states) > 0 && p.sortField == JobListOrderByTime {
 		timeField = jobListTimeFieldForState(p.states[0])
 	} else {

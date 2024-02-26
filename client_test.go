@@ -1538,23 +1538,23 @@ func Test_Client_JobList(t *testing.T) {
 		res, err := client.JobList(ctx, NewJobListParams().States(rivertype.JobStateAvailable).After(JobListCursorFromJob(job1, JobListOrderByTime)))
 		require.NoError(t, err)
 		require.Equal(t, []int64{job2.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
-		require.Equal(t, res.Cursor.id, job2.ID)
+		require.Equal(t, job2.ID, res.Cursor.id)
 
 		res, err = client.JobList(ctx, NewJobListParams().States(rivertype.JobStateRunning).After(JobListCursorFromJob(job3, JobListOrderByTime)))
 		require.NoError(t, err)
 		require.Equal(t, []int64{job4.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
-		require.Equal(t, res.Cursor.id, job4.ID)
+		require.Equal(t, job4.ID, res.Cursor.id)
 
 		res, err = client.JobList(ctx, NewJobListParams().States(rivertype.JobStateCompleted).After(JobListCursorFromJob(job5, JobListOrderByTime)))
 		require.NoError(t, err)
 		require.Equal(t, []int64{job6.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
-		require.Equal(t, res.Cursor.id, job6.ID)
+		require.Equal(t, job6.ID, res.Cursor.id)
 
 		res, err = client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByScheduledAt, SortOrderAsc).After(JobListCursorFromJob(job4, JobListOrderByScheduledAt)))
 		require.NoError(t, err)
 		require.Equal(t, []int64{job1.ID, job3.ID, job2.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
-		require.Equal(t, res.Cursor.sortField, JobListOrderByScheduledAt)
-		require.Equal(t, res.Cursor.id, job2.ID)
+		require.Equal(t, JobListOrderByScheduledAt, res.Cursor.sortField)
+		require.Equal(t, job2.ID, res.Cursor.id)
 	})
 
 	t.Run("MetadataOnly", func(t *testing.T) {
