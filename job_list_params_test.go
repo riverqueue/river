@@ -35,7 +35,7 @@ func Test_JobListCursor_JobListCursorFromJob(t *testing.T) {
 				ScheduledAt: now.Add(-10 * time.Second),
 			}
 
-			cursor := JobListCursorFromJob(jobRow)
+			cursor := JobListCursorFromJob(jobRow, JobListOrderByTime)
 			require.Equal(t, jobRow.ID, cursor.id)
 			require.Equal(t, jobRow.Kind, cursor.kind)
 			require.Equal(t, jobRow.Queue, cursor.queue)
@@ -65,7 +65,7 @@ func Test_JobListCursor_JobListCursorFromJob(t *testing.T) {
 				ScheduledAt: now.Add(-10 * time.Second),
 			}
 
-			cursor := JobListCursorFromJob(jobRow)
+			cursor := JobListCursorFromJob(jobRow, JobListOrderByTime)
 			require.Equal(t, jobRow.ID, cursor.id)
 			require.Equal(t, jobRow.Kind, cursor.kind)
 			require.Equal(t, jobRow.Queue, cursor.queue)
@@ -87,7 +87,7 @@ func Test_JobListCursor_JobListCursorFromJob(t *testing.T) {
 			ScheduledAt: now.Add(-10 * time.Second),
 		}
 
-		cursor := JobListCursorFromJob(jobRow)
+		cursor := JobListCursorFromJob(jobRow, JobListOrderByTime)
 		require.Equal(t, jobRow.ID, cursor.id)
 		require.Equal(t, jobRow.Kind, cursor.kind)
 		require.Equal(t, jobRow.Queue, cursor.queue)
@@ -107,7 +107,7 @@ func Test_JobListCursor_JobListCursorFromJob(t *testing.T) {
 			ScheduledAt: now.Add(-10 * time.Second),
 		}
 
-		cursor := JobListCursorFromJob(jobRow)
+		cursor := JobListCursorFromJob(jobRow, JobListOrderByTime)
 		require.Equal(t, jobRow.ID, cursor.id)
 		require.Equal(t, jobRow.Kind, cursor.kind)
 		require.Equal(t, jobRow.Queue, cursor.queue)
