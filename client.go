@@ -1351,6 +1351,13 @@ func validateQueueName(queueName string) error {
 	return nil
 }
 
+// JobListResult is the result of a job list operation. It contains a list of
+// jobs and a cursor for fetching the next page of results.
+type JobListResult struct {
+	Jobs   []*rivertype.JobRow
+	Cursor *JobListCursor
+}
+
 // JobList returns a paginated list of jobs matching the provided filters. The
 // provided context is used for the underlying Postgres query and can be used to
 // cancel the operation or apply a timeout.
@@ -1360,9 +1367,9 @@ func validateQueueName(queueName string) error {
 //	if err != nil {
 //		// handle error
 //	}
-func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) ([]*rivertype.JobRow, *JobListCursor, error) {
+func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) (*JobListResult, error) {
 	if !c.driver.HasPool() {
-		return nil, nil, errNoDriverDBPool
+		return nil, errNoDriverDBPool
 	}
 
 	if params == nil {
@@ -1370,17 +1377,18 @@ func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) ([]*ri
 	}
 	dbParams, err := params.toDBParams()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	res, err := dblist.JobList(ctx, c.driver.GetExecutor(), dbParams)
+	jobs, err := dblist.JobList(ctx, c.driver.GetExecutor(), dbParams)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	if len(res) > 0 {
-		return res, JobListCursorFromJob(res[len(res)-1], params.sortField), nil
+	res := &JobListResult{Jobs: jobs}
+	if len(jobs) > 0 {
+		res.Cursor = JobListCursorFromJob(jobs[len(jobs)-1], params.sortField)
 	}
-	return res, nil, nil
+	return res, nil
 }
 
 // JobListTx returns a paginated list of jobs matching the provided filters. The
@@ -1392,22 +1400,23 @@ func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) ([]*ri
 //	if err != nil {
 //		// handle error
 //	}
-func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListParams) ([]*rivertype.JobRow, *JobListCursor, error) {
+func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListParams) (*JobListResult, error) {
 	if params == nil {
 		params = NewJobListParams()
 	}
 
 	dbParams, err := params.toDBParams()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	res, err := dblist.JobList(ctx, c.driver.UnwrapExecutor(tx), dbParams)
+	jobs, err := dblist.JobList(ctx, c.driver.UnwrapExecutor(tx), dbParams)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	if len(res) > 0 {
-		return res, JobListCursorFromJob(res[len(res)-1], params.sortField), nil
+	res := &JobListResult{Jobs: jobs}
+	if len(jobs) > 0 {
+		res.Cursor = JobListCursorFromJob(jobs[len(jobs)-1], params.sortField)
 	}
-	return res, nil, nil
+	return res, nil
 }
