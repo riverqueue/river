@@ -40,7 +40,7 @@ func TestJobListNoJobs(t *testing.T) {
 		bundle := setup()
 
 		_, err := JobList(ctx, bundle.exec, &JobListParams{
-			State:      rivertype.JobStateCompleted,
+			States:     []rivertype.JobState{rivertype.JobStateCompleted},
 			LimitCount: 1,
 			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderAsc}},
 		})
@@ -55,7 +55,7 @@ func TestJobListNoJobs(t *testing.T) {
 		_, err := JobList(ctx, bundle.exec, &JobListParams{
 			Conditions: "queue = 'test' AND priority = 1 AND args->>'foo' = @foo",
 			NamedArgs:  pgx.NamedArgs{"foo": "bar"},
-			State:      rivertype.JobStateCompleted,
+			States:     []rivertype.JobState{rivertype.JobStateCompleted},
 			LimitCount: 1,
 			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderAsc}},
 		})
@@ -123,7 +123,7 @@ func TestJobListWithJobs(t *testing.T) {
 		params := &JobListParams{
 			LimitCount: 3,
 			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderDesc}},
-			State:      rivertype.JobStateAvailable,
+			States:     []rivertype.JobState{rivertype.JobStateAvailable},
 		}
 
 		execTest(ctx, t, bundle, params, func(jobs []*rivertype.JobRow, err error) {
@@ -150,7 +150,7 @@ func TestJobListWithJobs(t *testing.T) {
 			LimitCount: 2,
 			NamedArgs:  map[string]any{"paths1": []string{"job_num"}, "value1": 2},
 			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderDesc}},
-			State:      rivertype.JobStateAvailable,
+			States:     []rivertype.JobState{rivertype.JobStateAvailable},
 		}
 
 		execTest(ctx, t, bundle, params, func(jobs []*rivertype.JobRow, err error) {
@@ -172,7 +172,7 @@ func TestJobListWithJobs(t *testing.T) {
 			LimitCount: 2,
 			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderDesc}},
 			Kinds:      []string{"alternate_kind"},
-			State:      rivertype.JobStateAvailable,
+			States:     []rivertype.JobState{rivertype.JobStateAvailable},
 		}
 
 		execTest(ctx, t, bundle, params, func(jobs []*rivertype.JobRow, err error) {
@@ -194,7 +194,7 @@ func TestJobListWithJobs(t *testing.T) {
 			LimitCount: 2,
 			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderDesc}},
 			Queues:     []string{"priority"},
-			State:      rivertype.JobStateAvailable,
+			States:     []rivertype.JobState{rivertype.JobStateAvailable},
 		}
 
 		execTest(ctx, t, bundle, params, func(jobs []*rivertype.JobRow, err error) {

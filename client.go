@@ -1455,9 +1455,9 @@ func validateQueueName(queueName string) error {
 //	if err != nil {
 //		// handle error
 //	}
-func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) ([]*rivertype.JobRow, error) {
+func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) ([]*rivertype.JobRow, *JobListCursor, error) {
 	if !c.driver.HasPool() {
-		return nil, errNoDriverDBPool
+		return nil, nil, errNoDriverDBPool
 	}
 
 	if params == nil {
@@ -1465,10 +1465,17 @@ func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) ([]*ri
 	}
 	dbParams, err := params.toDBParams()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return dblist.JobList(ctx, c.driver.GetExecutor(), dbParams)
+	res, err := dblist.JobList(ctx, c.driver.GetExecutor(), dbParams)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(res) > 0 {
+		return res, JobListCursorFromJob(res[len(res)-1], params.sortField), nil
+	}
+	return res, nil, nil
 }
 
 // JobListTx returns a paginated list of jobs matching the provided filters. The
@@ -1480,16 +1487,24 @@ func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) ([]*ri
 //	if err != nil {
 //		// handle error
 //	}
-func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListParams) ([]*rivertype.JobRow, error) {
+func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListParams) ([]*rivertype.JobRow, *JobListCursor, error) {
 	if params == nil {
 		params = NewJobListParams()
 	}
+
 	dbParams, err := params.toDBParams()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return dblist.JobList(ctx, c.driver.UnwrapExecutor(tx), dbParams)
+	res, err := dblist.JobList(ctx, c.driver.UnwrapExecutor(tx), dbParams)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(res) > 0 {
+		return res, JobListCursorFromJob(res[len(res)-1], params.sortField), nil
+	}
+	return res, nil, nil
 }
 
 // PeriodicJobs returns the currently configured set of periodic jobs for the

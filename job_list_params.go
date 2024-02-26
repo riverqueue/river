@@ -15,19 +15,36 @@ import (
 // JobListCursor is used to specify a starting point for a paginated
 // job list query.
 type JobListCursor struct {
-	id    int64
-	kind  string
-	queue string
-	time  time.Time
+	id        int64
+	kind      string
+	queue     string
+	sortField JobListOrderByField
+	time      time.Time
 }
 
 // JobListCursorFromJob creates a JobListCursor from a JobRow.
-func JobListCursorFromJob(job *rivertype.JobRow) *JobListCursor {
+func JobListCursorFromJob(job *rivertype.JobRow, sortField JobListOrderByField) *JobListCursor {
+	time := job.CreatedAt
+	switch sortField {
+	case JobListOrderByTime:
+		time = jobListTimeValue(job)
+	case JobListOrderByAttemptedAt:
+		if job.AttemptedAt != nil {
+			time = *job.AttemptedAt
+		}
+	case JobListOrderByFinalizedAt:
+		if job.FinalizedAt != nil {
+			time = *job.FinalizedAt
+		}
+	case JobListOrderByScheduledAt:
+		time = job.ScheduledAt
+	}
 	return &JobListCursor{
-		id:    job.ID,
-		kind:  job.Kind,
-		queue: job.Queue,
-		time:  jobListTimeValue(job),
+		id:        job.ID,
+		kind:      job.Kind,
+		queue:     job.Queue,
+		sortField: sortField,
+		time:      time,
 	}
 }
 
@@ -46,10 +63,11 @@ func (c *JobListCursor) UnmarshalText(text []byte) error {
 		return err
 	}
 	*c = JobListCursor{
-		id:    wrapperValue.ID,
-		kind:  wrapperValue.Kind,
-		queue: wrapperValue.Queue,
-		time:  wrapperValue.Time,
+		id:        wrapperValue.ID,
+		kind:      wrapperValue.Kind,
+		queue:     wrapperValue.Queue,
+		sortField: JobListOrderByField(wrapperValue.SortField),
+		time:      wrapperValue.Time,
 	}
 	return nil
 }
@@ -58,10 +76,11 @@ func (c *JobListCursor) UnmarshalText(text []byte) error {
 // opaque string.
 func (c JobListCursor) MarshalText() ([]byte, error) {
 	wrapperValue := jobListPaginationCursorJSON{
-		ID:    c.id,
-		Kind:  c.kind,
-		Queue: c.queue,
-		Time:  c.time,
+		ID:        c.id,
+		Kind:      c.kind,
+		Queue:     c.queue,
+		SortField: string(c.sortField),
+		Time:      c.time,
 	}
 	data, err := json.Marshal(wrapperValue)
 	if err != nil {
@@ -73,10 +92,11 @@ func (c JobListCursor) MarshalText() ([]byte, error) {
 }
 
 type jobListPaginationCursorJSON struct {
-	ID    int64     `json:"id"`
-	Kind  string    `json:"kind"`
-	Queue string    `json:"queue"`
-	Time  time.Time `json:"time"`
+	ID        int64     `json:"id"`
+	Kind      string    `json:"kind"`
+	Queue     string    `json:"queue"`
+	SortField string    `json:"sort_field"`
+	Time      time.Time `json:"time"`
 }
 
 // SortOrder specifies the direction of a sort.
@@ -90,12 +110,20 @@ const (
 )
 
 // JobListOrderByField specifies the field to sort by.
-type JobListOrderByField int
+type JobListOrderByField string
 
 const (
 	// JobListOrderByTime specifies that the sort should be by time. The specific
-	// time field used will vary by job state.
-	JobListOrderByTime JobListOrderByField = iota
+	// time field used will vary by the first specified job state.
+	JobListOrderByTime JobListOrderByField = "time"
+	// JobListOrderByCreatedAt specifies that the sort should be by created_at.
+	JobListOrderByCreatedAt JobListOrderByField = "created_at"
+	// JobListOrderByScheduledAt specifies that the sort should be by scheduled_at.
+	JobListOrderByScheduledAt JobListOrderByField = "scheduled_at"
+	// JobListOrderByAttemptedAt specifies that the sort should be by attempted_at.
+	JobListOrderByAttemptedAt JobListOrderByField = "attempted_at"
+	// JobListOrderByFinalizedAt specifies that the sort should be by finalized_at.
+	JobListOrderByFinalizedAt JobListOrderByField = "finalized_at"
 )
 
 // JobListParams specifies the parameters for a JobList query. It must be
@@ -111,7 +139,7 @@ type JobListParams struct {
 	queues           []string
 	sortField        JobListOrderByField
 	sortOrder        SortOrder
-	state            rivertype.JobState
+	states           []rivertype.JobState
 }
 
 // NewJobListParams creates a new JobListParams to return available jobs sorted
@@ -121,7 +149,15 @@ func NewJobListParams() *JobListParams {
 		paginationCount: 100,
 		sortField:       JobListOrderByTime,
 		sortOrder:       SortOrderAsc,
-		state:           rivertype.JobStateAvailable,
+		states: []rivertype.JobState{
+			JobStateAvailable,
+			JobStateCancelled,
+			JobStateCompleted,
+			JobStateDiscarded,
+			JobStateRetryable,
+			JobStateRunning,
+			JobStateScheduled,
+		},
 	}
 }
 
@@ -134,7 +170,7 @@ func (p *JobListParams) copy() *JobListParams {
 		queues:           append([]string(nil), p.queues...),
 		sortField:        p.sortField,
 		sortOrder:        p.sortOrder,
-		state:            p.state,
+		states:           append([]rivertype.JobState(nil), p.states...),
 	}
 }
 
@@ -154,10 +190,13 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 		return nil, errors.New("invalid sort order")
 	}
 
-	if p.sortField != JobListOrderByTime {
-		return nil, errors.New("invalid sort field")
+	timeField := "created_at"
+	if len(p.states) > 0 && p.sortField == JobListOrderByTime {
+		timeField = jobListTimeFieldForState(p.states[0])
+	} else {
+		timeField = string(p.sortField)
 	}
-	timeField := jobListTimeFieldForState(p.state)
+
 	orderBy = append(orderBy, []dblist.JobListOrderBy{
 		{Expr: timeField, Order: sortOrder},
 		{Expr: "id", Order: sortOrder},
@@ -193,7 +232,7 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 		OrderBy:    orderBy,
 		Priorities: nil,
 		Queues:     p.queues,
-		State:      p.state,
+		States:     p.states,
 	}
 
 	return dbParams, nil
@@ -251,16 +290,23 @@ func (p *JobListParams) Queues(queues ...string) *JobListParams {
 // specified field and direction.
 func (p *JobListParams) OrderBy(field JobListOrderByField, direction SortOrder) *JobListParams {
 	result := p.copy()
+	switch field {
+	case JobListOrderByTime, JobListOrderByCreatedAt, JobListOrderByScheduledAt, JobListOrderByAttemptedAt, JobListOrderByFinalizedAt:
+		result.sortField = field
+	default:
+		panic("invalid order by field")
+	}
 	result.sortField = field
 	result.sortOrder = direction
 	return result
 }
 
-// State returns an updated filter set that will only return jobs in the given
-// state.
-func (p *JobListParams) State(state rivertype.JobState) *JobListParams {
+// States returns an updated filter set that will only return jobs in the given
+// states.
+func (p *JobListParams) States(states ...rivertype.JobState) *JobListParams {
 	result := p.copy()
-	result.state = state
+	result.states = make([]rivertype.JobState, len(states))
+	copy(result.states, states)
 	return result
 }
 
