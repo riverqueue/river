@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/lib/pq"
+
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
 )
