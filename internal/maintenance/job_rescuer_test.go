@@ -69,7 +69,7 @@ func TestJobRescuer(t *testing.T) {
 		}
 
 		rescuer := NewRescuer(
-			riverinternaltest.BaseServiceArchetype(t),
+			riverinternaltest.BaseServiceArchetype(t).WithSleepDisabled(),
 			&JobRescuerConfig{
 				ClientRetryPolicy: &SimpleClientRetryPolicy{},
 				Interval:          JobRescuerIntervalDefault,
@@ -92,7 +92,7 @@ func TestJobRescuer(t *testing.T) {
 		t.Parallel()
 
 		cleaner := NewRescuer(
-			riverinternaltest.BaseServiceArchetype(t),
+			riverinternaltest.BaseServiceArchetype(t).WithSleepDisabled(),
 			&JobRescuerConfig{
 				ClientRetryPolicy:   &SimpleClientRetryPolicy{},
 				WorkUnitFactoryFunc: func(kind string) workunit.WorkUnitFactory { return nil },

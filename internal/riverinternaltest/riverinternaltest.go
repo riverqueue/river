@@ -56,9 +56,8 @@ func BaseServiceArchetype(tb testing.TB) *baseservice.Archetype {
 	tb.Helper()
 
 	return &baseservice.Archetype{
-		DisableSleep: true,
-		Logger:       Logger(tb),
-		TimeNowUTC:   func() time.Time { return time.Now().UTC() },
+		Logger:     Logger(tb),
+		TimeNowUTC: func() time.Time { return time.Now().UTC() },
 	}
 }
 
