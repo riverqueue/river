@@ -10,6 +10,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestArchetype_WithSleepDisabled(t *testing.T) {
+	t.Parallel()
+
+	archetype := (&Archetype{}).WithSleepDisabled()
+	require.True(t, archetype.DisableSleep)
+}
+
 func TestInit(t *testing.T) {
 	t.Parallel()
 

@@ -29,7 +29,7 @@ type testService struct {
 func newTestService(tb testing.TB) *testService {
 	tb.Helper()
 
-	testSvc := baseservice.Init(riverinternaltest.BaseServiceArchetype(tb), &testService{})
+	testSvc := baseservice.Init(riverinternaltest.BaseServiceArchetype(tb).WithSleepDisabled(), &testService{})
 	testSvc.testSignals.Init()
 
 	return testSvc
@@ -70,7 +70,7 @@ func TestQueueMaintainer(t *testing.T) {
 	setup := func(t *testing.T, services []Service) *QueueMaintainer {
 		t.Helper()
 
-		maintainer := NewQueueMaintainer(riverinternaltest.BaseServiceArchetype(t), services)
+		maintainer := NewQueueMaintainer(riverinternaltest.BaseServiceArchetype(t).WithSleepDisabled(), services)
 
 		return maintainer
 	}
@@ -93,7 +93,7 @@ func TestQueueMaintainer(t *testing.T) {
 		tx := riverinternaltest.TestTx(ctx, t)
 		sharedTx := sharedtx.NewSharedTx(tx)
 
-		archetype := riverinternaltest.BaseServiceArchetype(t)
+		archetype := riverinternaltest.BaseServiceArchetype(t).WithSleepDisabled()
 		archetype.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
 
 		driver := riverpgxv5.New(nil).UnwrapExecutor(sharedTx)

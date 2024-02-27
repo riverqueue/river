@@ -55,7 +55,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			waitChan: make(chan struct{}),
 		}
 
-		archetype := riverinternaltest.BaseServiceArchetype(t)
+		archetype := riverinternaltest.BaseServiceArchetype(t).WithSleepDisabled()
 
 		svc := NewPeriodicJobEnqueuer(
 			archetype,

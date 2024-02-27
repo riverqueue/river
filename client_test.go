@@ -125,7 +125,6 @@ func newTestConfig(t *testing.T, callback callbackFunc) *Config {
 		Logger:            riverinternaltest.Logger(t),
 		Queues:            map[string]QueueConfig{QueueDefault: {MaxWorkers: 50}},
 		Workers:           workers,
-		disableSleep:      true,
 		schedulerInterval: riverinternaltest.SchedulerShortInterval,
 	}
 }
@@ -1781,6 +1780,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		config.CancelledJobRetentionPeriod = 1 * time.Hour
 		config.CompletedJobRetentionPeriod = 1 * time.Hour
 		config.DiscardedJobRetentionPeriod = 1 * time.Hour
+		config.disableSleep = true
 
 		client := newTestClient(t, dbPool, config)
 		exec := client.driver.GetExecutor()
@@ -1839,6 +1839,7 @@ func Test_Client_Maintenance(t *testing.T) {
 
 		config := newTestConfig(t, nil)
 		config.RescueStuckJobsAfter = 5 * time.Minute
+		config.disableSleep = true
 
 		client := newTestClient(t, dbPool, config)
 		exec := client.driver.GetExecutor()
@@ -1906,6 +1907,7 @@ func Test_Client_Maintenance(t *testing.T) {
 
 		config := newTestConfig(t, nil)
 		config.Queues = map[string]QueueConfig{"another_queue": {MaxWorkers: 1}} // don't work jobs on the default queue we're using in this test
+		config.disableSleep = true
 
 		client := newTestClient(t, dbPool, config)
 		exec := client.driver.GetExecutor()
@@ -1961,6 +1963,8 @@ func Test_Client_Maintenance(t *testing.T) {
 		t.Parallel()
 
 		config := newTestConfig(t, nil)
+		config.disableSleep = true
+
 		worker := &periodicJobWorker{}
 		AddWorker(config.Workers, worker)
 		config.PeriodicJobs = []*PeriodicJob{
@@ -1985,6 +1989,8 @@ func Test_Client_Maintenance(t *testing.T) {
 		t.Parallel()
 
 		config := newTestConfig(t, nil)
+		config.disableSleep = true
+
 		worker := &periodicJobWorker{}
 		AddWorker(config.Workers, worker)
 		config.PeriodicJobs = []*PeriodicJob{
@@ -2012,6 +2018,7 @@ func Test_Client_Maintenance(t *testing.T) {
 
 		config := newTestConfig(t, nil)
 		config.ReindexerSchedule = cron.Every(time.Second)
+		config.disableSleep = true
 
 		client := runNewTestClient(ctx, t, config)
 
