@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/riverqueue/river/internal/util/randutil"
 )
 
 func TestArchetype_WithSleepDisabled(t *testing.T) {
@@ -69,6 +71,7 @@ func archetype() *Archetype {
 	return &Archetype{
 		DisableSleep: true,
 		Logger:       slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		Rand:         randutil.NewCryptoSeededConcurrentSafeRand(),
 		TimeNowUTC:   func() time.Time { return time.Now().UTC() },
 	}
 }

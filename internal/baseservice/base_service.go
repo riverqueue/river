@@ -30,6 +30,15 @@ type Archetype struct {
 	// Logger is a structured logger.
 	Logger *slog.Logger
 
+	// Rand is a random source safe for concurrent access and seeded with a
+	// cryptographically random seed to ensure good distribution between nodes
+	// and services. The random source itself is _not_ cryptographically secure,
+	// and therefore should not be used anywhere security-related. This is a
+	// deliberate choice because Go's non-crypto rand source is about twenty
+	// times faster, and so far none of our uses of random require cryptographic
+	// secure randomness.
+	Rand *rand.Rand
+
 	// TimeNowUTC returns the current time as UTC. Normally it's implemented as
 	// a call to `time.Now().UTC()`, but may be overridden in tests for time
 	// injection. Services should try to use this function instead of the
@@ -116,7 +125,7 @@ func Init[TService withBaseService](archetype *Archetype, service TService) TSer
 	baseService.DisableSleep = archetype.DisableSleep
 	baseService.Logger = archetype.Logger
 	baseService.Name = reflect.TypeOf(service).Elem().Name()
-	baseService.Rand = randutil.NewCryptoSeededConcurrentSafeRand()
+	baseService.Rand = archetype.Rand
 	baseService.TimeNowUTC = archetype.TimeNowUTC
 
 	return service
