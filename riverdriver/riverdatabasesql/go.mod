@@ -8,8 +8,8 @@ replace github.com/riverqueue/river/rivertype => ../../rivertype
 
 require (
 	github.com/lib/pq v1.10.9
-	github.com/riverqueue/river/riverdriver v0.0.22
-	github.com/riverqueue/river/rivertype v0.0.22
+	github.com/riverqueue/river/riverdriver v0.0.23
+	github.com/riverqueue/river/rivertype v0.0.23
 	github.com/stretchr/testify v1.8.1
 )
 
