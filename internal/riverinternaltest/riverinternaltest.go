@@ -24,6 +24,7 @@ import (
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest/slogtest" //nolint:depguard
 	"github.com/riverqueue/river/internal/testdb"
+	"github.com/riverqueue/river/internal/util/randutil"
 	"github.com/riverqueue/river/internal/util/valutil"
 )
 
@@ -57,6 +58,7 @@ func BaseServiceArchetype(tb testing.TB) *baseservice.Archetype {
 
 	return &baseservice.Archetype{
 		Logger:     Logger(tb),
+		Rand:       randutil.NewCryptoSeededConcurrentSafeRand(),
 		TimeNowUTC: func() time.Time { return time.Now().UTC() },
 	}
 }

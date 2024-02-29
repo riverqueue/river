@@ -24,6 +24,7 @@ import (
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
+	"github.com/riverqueue/river/internal/util/randutil"
 	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/internal/util/valutil"
 	"github.com/riverqueue/river/internal/workunit"
@@ -433,6 +434,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	archetype := &baseservice.Archetype{
 		DisableSleep: config.disableSleep,
 		Logger:       config.Logger,
+		Rand:         randutil.NewCryptoSeededConcurrentSafeRand(),
 		TimeNowUTC:   func() time.Time { return time.Now().UTC() },
 	}
 
