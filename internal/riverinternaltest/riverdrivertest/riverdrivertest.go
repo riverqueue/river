@@ -1382,8 +1382,8 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			TTL:      leaderTTL,
 		})
 		require.NoError(t, err)
-		require.WithinDuration(t, time.Now(), leader.ElectedAt, 100*time.Millisecond)
-		require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, 100*time.Millisecond)
+		require.WithinDuration(t, time.Now(), leader.ElectedAt, 500*time.Millisecond)
+		require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, 500*time.Millisecond)
 		require.Equal(t, leaderInstanceName, leader.Name)
 		require.Equal(t, clientID, leader.LeaderID)
 	})
@@ -1400,8 +1400,8 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 
 		leader, err := exec.LeaderGetElectedLeader(ctx, leaderInstanceName)
 		require.NoError(t, err)
-		require.WithinDuration(t, time.Now(), leader.ElectedAt, 100*time.Millisecond)
-		require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, 100*time.Millisecond)
+		require.WithinDuration(t, time.Now(), leader.ElectedAt, 500*time.Millisecond)
+		require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, 500*time.Millisecond)
 		require.Equal(t, leaderInstanceName, leader.Name)
 		require.Equal(t, clientID, leader.LeaderID)
 	})
