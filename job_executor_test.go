@@ -174,7 +174,12 @@ func TestJobExecutor_Execute(t *testing.T) {
 			jobRow:            job,
 		}
 
+		// allocate this context just so we can set the CancelFunc:
+		_, cancel := context.WithCancelCause(ctx)
+		t.Cleanup(func() { cancel(nil) })
+
 		executor := baseservice.Init(archetype, &jobExecutor{
+			CancelFunc:             cancel,
 			ClientRetryPolicy:      &retryPolicyNoJitter{},
 			Completer:              bundle.completer,
 			ErrorHandler:           bundle.errorHandler,
@@ -618,6 +623,22 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.True(t, bundle.errorHandler.HandlePanicCalled)
 	})
 
+	t.Run("CancelFuncCleanedUpEvenWithoutCancel", func(t *testing.T) {
+		t.Parallel()
+
+		executor, bundle := setup(t)
+
+		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return nil }, nil).MakeUnit(bundle.jobRow)
+
+		workCtx, cancelFunc := context.WithCancelCause(ctx)
+		executor.CancelFunc = cancelFunc
+
+		executor.Execute(workCtx)
+		executor.Completer.Wait()
+
+		require.ErrorIs(t, context.Cause(workCtx), errExecutorDefaultCancel)
+	})
+
 	runCancelTest := func(t *testing.T, returnErr error) *rivertype.JobRow { //nolint:thelper
 		executor, bundle := setup(t)
 
@@ -640,6 +661,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		workCtx, cancelFunc := context.WithCancelCause(ctx)
 		executor.CancelFunc = cancelFunc
+		t.Cleanup(func() { cancelFunc(nil) })
 
 		executor.Execute(workCtx)
 		executor.Completer.Wait()
