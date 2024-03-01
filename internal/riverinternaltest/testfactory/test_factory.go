@@ -36,6 +36,14 @@ type JobOpts struct {
 func Job(ctx context.Context, tb testing.TB, exec riverdriver.Executor, opts *JobOpts) *rivertype.JobRow {
 	tb.Helper()
 
+	job, err := exec.JobInsertFull(ctx, Job_Build(tb, opts))
+	require.NoError(tb, err)
+	return job
+}
+
+func Job_Build(tb testing.TB, opts *JobOpts) *riverdriver.JobInsertFullParams { //nolint:stylecheck
+	tb.Helper()
+
 	encodedArgs := opts.EncodedArgs
 	if opts.EncodedArgs == nil {
 		encodedArgs = []byte("{}")
@@ -51,7 +59,7 @@ func Job(ctx context.Context, tb testing.TB, exec riverdriver.Executor, opts *Jo
 		tags = []string{}
 	}
 
-	job, err := exec.JobInsertFull(ctx, &riverdriver.JobInsertFullParams{
+	return &riverdriver.JobInsertFullParams{
 		Attempt:     ptrutil.ValOrDefault(opts.Attempt, 0),
 		AttemptedAt: opts.AttemptedAt,
 		CreatedAt:   opts.CreatedAt,
@@ -66,9 +74,7 @@ func Job(ctx context.Context, tb testing.TB, exec riverdriver.Executor, opts *Jo
 		ScheduledAt: opts.ScheduledAt,
 		State:       ptrutil.ValOrDefault(opts.State, rivertype.JobStateAvailable),
 		Tags:        tags,
-	})
-	require.NoError(tb, err)
-	return job
+	}
 }
 
 type LeaderOpts struct {
