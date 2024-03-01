@@ -623,6 +623,22 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.True(t, bundle.errorHandler.HandlePanicCalled)
 	})
 
+	t.Run("CancelFuncCleanedUpEvenWithoutCancel", func(t *testing.T) {
+		t.Parallel()
+
+		executor, bundle := setup(t)
+
+		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return nil }, nil).MakeUnit(bundle.jobRow)
+
+		workCtx, cancelFunc := context.WithCancelCause(ctx)
+		executor.CancelFunc = cancelFunc
+
+		executor.Execute(workCtx)
+		executor.Completer.Wait()
+
+		require.ErrorIs(t, context.Cause(workCtx), errExecutorDefaultCancel)
+	})
+
 	runCancelTest := func(t *testing.T, returnErr error) *rivertype.JobRow { //nolint:thelper
 		executor, bundle := setup(t)
 

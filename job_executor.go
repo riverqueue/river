@@ -17,6 +17,10 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
+// Error used in CancelFunc in cases where the job was not cancelled for
+// purposes of resource cleanup. Should never be user visible.
+var errExecutorDefaultCancel = errors.New("context cancelled as executor finished")
+
 // UnknownJobKindError is returned when a Client fetches and attempts to
 // work a job that has not been registered on the Client's Workers bundle (using
 // AddWorker).
@@ -139,7 +143,7 @@ func (e *jobExecutor) Cancel() {
 
 func (e *jobExecutor) Execute(ctx context.Context) {
 	// Ensure that the context is cancelled no matter what, or it will leak:
-	defer e.CancelFunc(nil)
+	defer e.CancelFunc(errExecutorDefaultCancel)
 
 	e.start = e.TimeNowUTC()
 	e.stats = &jobstats.JobStatistics{
