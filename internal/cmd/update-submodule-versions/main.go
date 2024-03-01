@@ -24,6 +24,7 @@ var allProjectModules = []string{ //nolint:gochecknoglobals
 	"./riverdriver",
 	"./riverdriver/riverdatabasesql",
 	"./riverdriver/riverpgxv5",
+	"./rivertype",
 }
 
 func main() {
