@@ -358,6 +358,7 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 			workUnit = workInfo.workUnitFactory.MakeUnit(job)
 		}
 
+		// jobCancel will always be called by the executor to prevent leaks.
 		jobCtx, jobCancel := context.WithCancelCause(workCtx)
 
 		executor := baseservice.Init(&p.Archetype, &jobExecutor{

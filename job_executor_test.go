@@ -174,7 +174,12 @@ func TestJobExecutor_Execute(t *testing.T) {
 			jobRow:            job,
 		}
 
+		// allocate this context just so we can set the CancelFunc:
+		_, cancel := context.WithCancelCause(ctx)
+		t.Cleanup(func() { cancel(nil) })
+
 		executor := baseservice.Init(archetype, &jobExecutor{
+			CancelFunc:             cancel,
 			ClientRetryPolicy:      &retryPolicyNoJitter{},
 			Completer:              bundle.completer,
 			ErrorHandler:           bundle.errorHandler,
@@ -640,6 +645,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		workCtx, cancelFunc := context.WithCancelCause(ctx)
 		executor.CancelFunc = cancelFunc
+		t.Cleanup(func() { cancelFunc(nil) })
 
 		executor.Execute(workCtx)
 		executor.Completer.Wait()

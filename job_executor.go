@@ -138,6 +138,9 @@ func (e *jobExecutor) Cancel() {
 }
 
 func (e *jobExecutor) Execute(ctx context.Context) {
+	// Ensure that the context is cancelled no matter what, or it will leak:
+	defer e.CancelFunc(nil)
+
 	e.start = e.TimeNowUTC()
 	e.stats = &jobstats.JobStatistics{
 		QueueWaitDuration: e.start.Sub(e.JobRow.ScheduledAt),
