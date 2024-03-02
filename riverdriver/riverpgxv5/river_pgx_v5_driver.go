@@ -475,10 +475,14 @@ func (l *Listener) Close(ctx context.Context) error {
 		return nil
 	}
 
+	// Release below would take care of cleanup and potentially put the
+	// connection back into rotation, but in case a Listen was invoked without a
+	// subsequent Unlisten on the same tpic, close the connection explicitly to
+	// guarantee no other caller will receive a partially tainted connection.
 	err := l.conn.Conn().Close(ctx)
 
-	// Regardless of the error state returned above, always release and unset
-	// the listener's local connection.
+	// Even in the event of an error, make sure conn is set back to nil so that
+	// the listener can be reused.
 	l.conn.Release()
 	l.conn = nil
 

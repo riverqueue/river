@@ -7,6 +7,9 @@ env:
   # A suitable URL for non-test database.
   DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/river_dev?sslmode=disable
 
+  # Test database.
+  TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/river_testdb?sslmode=disable
+
 on:
   push:
     branches:
@@ -65,9 +68,8 @@ jobs:
           PGSSLMODE: disable
 
       - name: Test
+        working-directory: .
         run: go test -p 1 -race ./...
-        env:
-          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/river_testdb?sslmode=disable
 
       - name: Test cmd/river
         working-directory: ./cmd/river
