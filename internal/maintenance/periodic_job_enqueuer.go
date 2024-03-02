@@ -147,16 +147,10 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 
 		s.TestSignals.EnteredLoop.Signal(struct{}{})
 
-		timerUntilNextRun := time.NewTimer(0) // duration is Reset immediately below
-		<-timerUntilNextRun.C
+		timerUntilNextRun := time.NewTimer(s.timeUntilNextRun())
 
 	loop:
 		for {
-			// We know it is safe to directly call Reset because the only way we can
-			// get to this line is if the timer has already fired and been received
-			// from:
-			timerUntilNextRun.Reset(s.timeUntilNextRun())
-
 			select {
 			case <-timerUntilNextRun.C:
 				var (
@@ -188,6 +182,10 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 				}
 
 				s.insertBatch(ctx, insertParamsMany, insertParamsUnique)
+
+				// Reset the timer after the insert loop has finished so it's
+				// paused during work. Makes its firing more deterministic.
+				timerUntilNextRun.Reset(s.timeUntilNextRun())
 
 			case <-ctx.Done():
 				// Clean up timer resources. We know it has _not_ received from the
