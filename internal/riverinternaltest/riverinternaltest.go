@@ -69,7 +69,9 @@ func DatabaseConfig(databaseName string) *pgxpool.Config {
 		panic(fmt.Sprintf("error parsing database URL: %v", err))
 	}
 	config.MaxConns = dbPoolMaxConns
-	config.ConnConfig.ConnectTimeout = 10 * time.Second
+	// Use a short conn timeout here to attempt to quickly cancel attempts that
+	// are unlikely to succeed even with more time:
+	config.ConnConfig.ConnectTimeout = 2 * time.Second
 	config.ConnConfig.RuntimeParams["timezone"] = "UTC"
 	return config
 }
