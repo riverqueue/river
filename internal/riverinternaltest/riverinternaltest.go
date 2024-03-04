@@ -101,7 +101,7 @@ func DatabaseURL(databaseName string) string {
 
 // DiscardContinuously drains continuously out of the given channel and discards
 // anything that comes out of it. Returns a stop function that should be invoked
-// to stop draining.  Stop must be invoked before tests finish to stop an
+// to stop draining. Stop must be invoked before tests finish to stop an
 // internal goroutine.
 func DiscardContinuously[T any](drainChan <-chan T) func() {
 	var (

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/internal/riverinternaltest/testfactory"
 	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/internal/util/timeutil"
@@ -111,7 +112,7 @@ func TestJobRescuer(t *testing.T) {
 		rescuer.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
 		rescuer.TestSignals = JobRescuerTestSignals{}    // deinit so channels don't fill
 
-		runStartStopStress(ctx, t, rescuer)
+		startstoptest.Stress(ctx, t, rescuer)
 	})
 
 	t.Run("RescuesStuckJobs", func(t *testing.T) {

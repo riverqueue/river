@@ -12,6 +12,7 @@ import (
 	"github.com/riverqueue/river/internal/componentstatus"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/internal/riverinternaltest/testfactory"
 	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/riverdriver"
@@ -85,7 +86,7 @@ func TestJobScheduler(t *testing.T) {
 		scheduler.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
 		scheduler.TestSignals = JobSchedulerTestSignals{}  // deinit so channels don't fill
 
-		runStartStopStress(ctx, t, scheduler)
+		startstoptest.Stress(ctx, t, scheduler)
 	})
 
 	t.Run("SchedulesScheduledAndRetryableJobs", func(t *testing.T) {
@@ -248,14 +249,10 @@ func TestJobScheduler(t *testing.T) {
 		statusUpdate := func(status componentstatus.Status) {
 			statusUpdateCh <- status
 		}
-		notify := notifier.New(&scheduler.Archetype, listener, statusUpdate, riverinternaltest.Logger(t))
 
-		// Scope in so we can reuse ctx without the cancel embedded.
-		{
-			ctx, cancel := context.WithCancel(ctx)
-			defer cancel()
-			go notify.Run(ctx)
-		}
+		notify := notifier.New(&scheduler.Archetype, listener, statusUpdate)
+		require.NoError(t, notify.Start(ctx))
+		t.Cleanup(notify.Stop)
 
 		type insertPayload struct {
 			Queue string `json:"queue"`
@@ -270,8 +267,9 @@ func TestJobScheduler(t *testing.T) {
 			require.NoError(t, json.Unmarshal([]byte(payload), &notif.payload))
 			notifyCh <- notif
 		}
-		sub := notify.Listen(notifier.NotificationTopicInsert, handleNotification)
-		defer sub.Unlisten()
+		sub, err := notify.Listen(ctx, notifier.NotificationTopicInsert, handleNotification)
+		require.NoError(t, err)
+		defer sub.Unlisten(ctx)
 
 		for {
 			status := riverinternaltest.WaitOrTimeout(t, statusUpdateCh)

@@ -13,6 +13,7 @@ import (
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivertype"
@@ -86,7 +87,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		svc.Logger = riverinternaltest.LoggerWarn(t)       // loop started/stop log is very noisy; suppress
 		svc.TestSignals = PeriodicJobEnqueuerTestSignals{} // deinit so channels don't fill
 
-		runStartStopStress(ctx, t, svc)
+		startstoptest.Stress(ctx, t, svc)
 	})
 
 	t.Run("EnqueuesPeriodicJobs", func(t *testing.T) {

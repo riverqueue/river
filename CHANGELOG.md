@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Changed default client IDs to be a combination of hostname and the time which the client started. This can still be changed by specifying `Config.ID`. [PR #255](https://github.com/riverqueue/river/pull/255).
+- Notifier refactored for better robustness and testability. [PR #253](https://github.com/riverqueue/river/pull/253).
 
 ## [0.0.25] - 2024-03-01
 

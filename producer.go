@@ -172,8 +172,13 @@ func (p *producer) Run(fetchCtx, workCtx context.Context, statusFunc producerSta
 			slog.String("queue", decoded.Queue),
 		)
 	}
-	sub := p.config.Notifier.Listen(notifier.NotificationTopicJobControl, handleJobControlNotification)
-	defer sub.Unlisten()
+	sub, err := notifier.ListenRetryLoop(fetchCtx, &p.BaseService, p.config.Notifier, notifier.NotificationTopicJobControl, handleJobControlNotification)
+	if err != nil { //nolint:staticcheck
+		// TODO(brandur): Propagate this after refactor.
+	}
+	if sub != nil {
+		defer sub.Unlisten(fetchCtx)
+	}
 
 	p.fetchAndRunLoop(fetchCtx, workCtx, fetchLimiter, statusFunc)
 	statusFunc(p.config.Queue, componentstatus.ShuttingDown)
@@ -217,8 +222,13 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 		p.Logger.DebugContext(workCtx, p.Name+": Received insert notification", slog.String("queue", decoded.Queue))
 		fetchLimiter.Call()
 	}
-	sub := p.config.Notifier.Listen(notifier.NotificationTopicInsert, handleInsertNotification)
-	defer sub.Unlisten()
+	sub, err := notifier.ListenRetryLoop(fetchCtx, &p.BaseService, p.config.Notifier, notifier.NotificationTopicInsert, handleInsertNotification)
+	if err != nil { //nolint:staticcheck
+		// TODO(brandur): Propagate this after refactor.
+	}
+	if sub != nil {
+		defer sub.Unlisten(fetchCtx)
+	}
 
 	fetchPollTimer := time.NewTimer(p.config.FetchPollInterval)
 	go func() {
