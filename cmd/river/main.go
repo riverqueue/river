@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 
+	"github.com/riverqueue/river/cmd/river/riverbench"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
 )
@@ -39,12 +41,44 @@ Provides command line facilities for the River job queue.
 		}
 	}
 
-	mustMarkFlagRequired := func(cmd *cobra.Command, name string) {
+	mustMarkFlagRequired := func(cmd *cobra.Command, name string) { //nolint:unparam
 		// We just panic here because this will never happen outside of an error
 		// in development.
 		if err := cmd.MarkFlagRequired(name); err != nil {
 			panic(err)
 		}
+	}
+
+	// bench
+	{
+		var opts benchOpts
+
+		cmd := &cobra.Command{
+			Use:   "bench",
+			Short: "Run River benchmark",
+			Long: `
+Run a River benchmark which inserts and works jobs continually, giving a rough
+idea of jobs per second and time to work a single job.
+
+By default, the benchmark will continuously insert and work jobs in perpetuity
+until interrupted by SIGINT (Ctrl^C). It can alternatively take a maximum run
+duration with --duration, which takes a Go-style duration string like 1m.
+Lastly, it can take --num-total-jobs, which inserts the given number of jobs
+before starting the client, and works until all jobs are finished.
+
+The database in --database-url will have its jobs table truncated, so make sure
+to use a development database only.
+	`,
+			Run: func(cmd *cobra.Command, args []string) {
+				execHandlingError(func() (bool, error) { return bench(ctx, &opts) })
+			},
+		}
+		cmd.Flags().StringVar(&opts.DatabaseURL, "database-url", "", "URL of the database to benchmark (should look like `postgres://...`")
+		cmd.Flags().DurationVar(&opts.Duration, "duration", 0, "duration after which to stop benchmark, accepting Go-style durations like 1m, 5m30s")
+		cmd.Flags().IntVarP(&opts.NumTotalJobs, "num-total-jobs", "n", 0, "number of jobs to insert before starting and which are worked down until finish")
+		cmd.Flags().BoolVarP(&opts.Verbose, "verbose", "v", false, "output additional logging verbosity")
+		mustMarkFlagRequired(cmd, "database-url")
+		rootCmd.AddCommand(cmd)
 	}
 
 	// migrate-down
@@ -65,8 +99,8 @@ Defaults to running a single down migration. This behavior can be changed with
 			},
 		}
 		cmd.Flags().StringVar(&opts.DatabaseURL, "database-url", "", "URL of the database to migrate (should look like `postgres://...`")
-		cmd.Flags().IntVar(&opts.MaxSteps, "max-steps", 1, "Maximum number of steps to migrate")
-		cmd.Flags().IntVar(&opts.TargetVersion, "target-version", 0, "Target version to migrate to (final state includes this version, but none after it)")
+		cmd.Flags().IntVar(&opts.MaxSteps, "max-steps", 1, "maximum number of steps to migrate")
+		cmd.Flags().IntVar(&opts.TargetVersion, "target-version", 0, "target version to migrate to (final state includes this version, but none after it)")
 		mustMarkFlagRequired(cmd, "database-url")
 		rootCmd.AddCommand(cmd)
 	}
@@ -89,8 +123,8 @@ restricted with --max-steps or --target-version.
 			},
 		}
 		cmd.Flags().StringVar(&opts.DatabaseURL, "database-url", "", "URL of the database to migrate (should look like `postgres://...`")
-		cmd.Flags().IntVar(&opts.MaxSteps, "max-steps", 0, "Maximum number of steps to migrate")
-		cmd.Flags().IntVar(&opts.TargetVersion, "target-version", 0, "Target version to migrate to (final state includes this version)")
+		cmd.Flags().IntVar(&opts.MaxSteps, "max-steps", 0, "maximum number of steps to migrate")
+		cmd.Flags().IntVar(&opts.TargetVersion, "target-version", 0, "target version to migrate to (final state includes this version)")
 		mustMarkFlagRequired(cmd, "database-url")
 		rootCmd.AddCommand(cmd)
 	}
@@ -149,6 +183,48 @@ func setParamIfUnset(runtimeParams map[string]string, name, val string) {
 	}
 
 	runtimeParams[name] = val
+}
+
+type benchOpts struct {
+	DatabaseURL  string
+	Duration     time.Duration
+	NumTotalJobs int
+	Verbose      bool
+}
+
+func (o *benchOpts) validate() error {
+	if o.DatabaseURL == "" {
+		return errors.New("database URL cannot be empty")
+	}
+
+	return nil
+}
+
+func bench(ctx context.Context, opts *benchOpts) (bool, error) {
+	if err := opts.validate(); err != nil {
+		return false, err
+	}
+
+	dbPool, err := openDBPool(ctx, opts.DatabaseURL)
+	if err != nil {
+		return false, err
+	}
+	defer dbPool.Close()
+
+	var logger *slog.Logger
+	if opts.Verbose {
+		logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
+	} else {
+		logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	}
+
+	benchmarker := riverbench.NewBenchmarker(riverpgxv5.New(dbPool), logger, opts.Duration, opts.NumTotalJobs)
+
+	if err := benchmarker.Run(ctx); err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 type migrateDownOpts struct {
