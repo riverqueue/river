@@ -15,3 +15,13 @@ func TestValOrDefault(t *testing.T) {
 	require.Equal(t, "default", ValOrDefault("", "default"))
 	require.Equal(t, "hello", ValOrDefault("hello", "default"))
 }
+
+func TestValOrDefaultFunc(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, 1, ValOrDefaultFunc(0, func() int { return 1 }))
+	require.Equal(t, 5, ValOrDefaultFunc(5, func() int { return 1 }))
+
+	require.Equal(t, "default", ValOrDefaultFunc("", func() string { return "default" }))
+	require.Equal(t, "hello", ValOrDefaultFunc("hello", func() string { return "default" }))
+}
