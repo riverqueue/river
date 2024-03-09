@@ -11,9 +11,10 @@ import (
 // subsequent calls are delayed until the cooldown period has elapsed and are
 // also coalesced into a single call.
 type DebouncedChan struct {
-	c        chan struct{}
-	cooldown time.Duration
-	ctxDone  <-chan struct{}
+	c           chan struct{}
+	cooldown    time.Duration
+	ctxDone     <-chan struct{}
+	sendLeading bool
 
 	// mu protects variables in group below
 	mu                 sync.Mutex
@@ -24,29 +25,34 @@ type DebouncedChan struct {
 
 // NewDebouncedChan returns a new DebouncedChan which sends on the channel no
 // more often than the cooldown period.
-func NewDebouncedChan(ctx context.Context, cooldown time.Duration) *DebouncedChan {
+//
+// If sendLeading is true, the channel will signal once on C the first time it
+// receives a signal, then again once per cooldown period. If sendLeading is
+// false, the initial signal isn't sent.
+func NewDebouncedChan(ctx context.Context, cooldown time.Duration, sendLeading bool) *DebouncedChan {
 	return &DebouncedChan{
-		ctxDone:  ctx.Done(),
-		c:        make(chan struct{}, 1),
-		cooldown: cooldown,
+		ctxDone:     ctx.Done(),
+		c:           make(chan struct{}, 1),
+		cooldown:    cooldown,
+		sendLeading: sendLeading,
 	}
 }
 
 // C is the debounced channel. Multiple invocations to Call during the cooldown
 // period will deduplicate to a single emission on this channel on the period's
-// leading edge, and one more on the trailing edge for as many periods as
-// invocations continue to come in.
+// leading edge (if sendLeading was enabled), and one more on the trailing edge
+// for as many periods as invocations continue to come in.
 func (d *DebouncedChan) C() <-chan struct{} {
 	return d.c
 }
 
 // Call invokes the debounced channel, and is the call which will be debounced.
 // If multiple invocations of this function are made during the cooldown period,
-// they'll be debounced to a single emission on C on the period's leading edge,
-// and then one fire on the trailing edge of each period for as long as Call
-// continues to be invoked. If a timer period elapses without an invocation on
-// Call, the timer is stopped and behavior resets the next time Call is invoked
-// again.
+// they'll be debounced to a single emission on C on the period's leading edge
+// (if sendLeading is enabled), and then one fire on the trailing edge of each
+// period for as long as Call continues to be invoked. If a timer period elapses
+// without an invocation on Call, the timer is stopped and behavior resets the
+// next time Call is invoked again.
 func (d *DebouncedChan) Call() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -59,9 +65,13 @@ func (d *DebouncedChan) Call() {
 	}
 
 	// No timer had been started yet, or the last one running was expired and
-	// will be reset. Send immediately. (i.e. On the leading edge of the
-	// debounce period.)
-	d.nonBlockingSendOnC()
+	// will be reset. Send immediately (i.e. n the leading edge of the
+	// debounce period), if sendLeading is enabled.
+	if d.sendLeading {
+		d.nonBlockingSendOnC()
+	} else {
+		d.sendOnTimerExpired = true
+	}
 
 	// Next, start the timer, during which we'll monitor for additional calls,
 	// and send at the end of the period if any came in. Create a new timer if

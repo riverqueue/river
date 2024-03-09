@@ -73,6 +73,10 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 	return nil, riverdriver.ErrNotImplemented
 }
 
+func (e *Executor) JobCountByState(ctx context.Context, state rivertype.JobState) (int, error) {
+	return 0, riverdriver.ErrNotImplemented
+}
+
 func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobDeleteBeforeParams) (int, error) {
 	return 0, riverdriver.ErrNotImplemented
 }
@@ -131,6 +135,10 @@ func (e *Executor) JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, e
 
 func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobScheduleParams) (int, error) {
 	return 0, riverdriver.ErrNotImplemented
+}
+
+func (e *Executor) JobSetCompleteIfRunningMany(ctx context.Context, params *riverdriver.JobSetCompleteIfRunningManyParams) ([]*rivertype.JobRow, error) {
+	return nil, riverdriver.ErrNotImplemented
 }
 
 func (e *Executor) JobSetStateIfRunning(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {

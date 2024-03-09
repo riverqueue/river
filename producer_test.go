@@ -52,7 +52,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	listener := dbDriver.GetListener()
 
 	completer := jobcompleter.NewInlineCompleter(archetype, exec)
-	t.Cleanup(completer.Wait)
+	t.Cleanup(completer.Stop)
 
 	type WithJobNumArgs struct {
 		JobArgsReflectKind[WithJobNumArgs]

@@ -15,7 +15,7 @@ func TestDebouncedChan_TriggersImmediately(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	debouncedChan := NewDebouncedChan(ctx, 200*time.Millisecond)
+	debouncedChan := NewDebouncedChan(ctx, 200*time.Millisecond, true)
 	go debouncedChan.Call()
 
 	select {
@@ -62,7 +62,7 @@ func TestDebouncedChan_OnlyBuffersOneEvent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	debouncedChan := NewDebouncedChan(ctx, 100*time.Millisecond)
+	debouncedChan := NewDebouncedChan(ctx, 100*time.Millisecond, true)
 	debouncedChan.Call()
 	time.Sleep(150 * time.Millisecond)
 	debouncedChan.Call()
@@ -81,6 +81,30 @@ func TestDebouncedChan_OnlyBuffersOneEvent(t *testing.T) {
 	}
 }
 
+func TestDebouncedChan_SendLeadingDisabled(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	debouncedChan := NewDebouncedChan(ctx, 100*time.Millisecond, false)
+	debouncedChan.Call()
+
+	// Expect nothing right away because sendLeading is disabled.
+	select {
+	case <-debouncedChan.C():
+		t.Fatal("received from debounced chan unexpectedly")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	select {
+	case <-debouncedChan.C():
+	case <-time.After(20 * time.Millisecond):
+		t.Fatal("timed out waiting for debounced chan to trigger")
+	}
+}
+
 func TestDebouncedChan_ContinuousOperation(t *testing.T) {
 	t.Parallel()
 
@@ -94,7 +118,7 @@ func TestDebouncedChan_ContinuousOperation(t *testing.T) {
 	)
 
 	var (
-		debouncedChan = NewDebouncedChan(ctx, cooldown)
+		debouncedChan = NewDebouncedChan(ctx, cooldown, true)
 		goroutineDone = make(chan struct{})
 		numSignals    int
 	)

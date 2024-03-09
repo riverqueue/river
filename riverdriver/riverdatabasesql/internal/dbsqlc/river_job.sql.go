@@ -84,6 +84,19 @@ func (q *Queries) JobCancel(ctx context.Context, db DBTX, arg *JobCancelParams) 
 	return &i, err
 }
 
+const jobCountByState = `-- name: JobCountByState :one
+SELECT count(*)
+FROM river_job
+WHERE state = $1
+`
+
+func (q *Queries) JobCountByState(ctx context.Context, db DBTX, state JobState) (int64, error) {
+	row := db.QueryRowContext(ctx, jobCountByState, state)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const jobDeleteBefore = `-- name: JobDeleteBefore :one
 WITH deleted_jobs AS (
     DELETE FROM river_job
@@ -738,11 +751,86 @@ func (q *Queries) JobSchedule(ctx context.Context, db DBTX, arg *JobSchedulePara
 	return count, err
 }
 
+const jobSetCompleteIfRunningMany = `-- name: JobSetCompleteIfRunningMany :many
+WITH job_to_finalized_at AS (
+    SELECT
+        unnest($1::bigint[]) AS id,
+        unnest($2::timestamptz[]) AS finalized_at
+),
+job_to_update AS (
+    SELECT river_job.id, job_to_finalized_at.finalized_at
+    FROM river_job, job_to_finalized_at
+    WHERE river_job.id = job_to_finalized_at.id
+        AND river_job.state = 'running'::river_job_state
+    FOR UPDATE
+),
+updated_job AS (
+    UPDATE river_job
+    SET
+        finalized_at = job_to_update.finalized_at,
+        state = 'completed'
+    FROM job_to_update
+    WHERE river_job.id = job_to_update.id
+    RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
+)
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+FROM river_job
+WHERE id IN (SELECT id FROM job_to_finalized_at EXCEPT SELECT id FROM updated_job)
+UNION
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+FROM updated_job
+`
+
+type JobSetCompleteIfRunningManyParams struct {
+	ID          []int64
+	FinalizedAt []time.Time
+}
+
+func (q *Queries) JobSetCompleteIfRunningMany(ctx context.Context, db DBTX, arg *JobSetCompleteIfRunningManyParams) ([]*RiverJob, error) {
+	rows, err := db.QueryContext(ctx, jobSetCompleteIfRunningMany, pq.Array(arg.ID), pq.Array(arg.FinalizedAt))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverJob
+	for rows.Next() {
+		var i RiverJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Args,
+			&i.Attempt,
+			&i.AttemptedAt,
+			pq.Array(&i.AttemptedBy),
+			&i.CreatedAt,
+			pq.Array(&i.Errors),
+			&i.FinalizedAt,
+			&i.Kind,
+			&i.MaxAttempts,
+			&i.Metadata,
+			&i.Priority,
+			&i.Queue,
+			&i.State,
+			&i.ScheduledAt,
+			pq.Array(&i.Tags),
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const jobSetStateIfRunning = `-- name: JobSetStateIfRunning :one
 WITH job_to_update AS (
     SELECT
-      id,
-      $1::river_job_state IN ('retryable'::river_job_state, 'scheduled'::river_job_state) AND metadata ? 'cancel_attempted_at' AS should_cancel
+        id,
+        $1::river_job_state IN ('retryable'::river_job_state, 'scheduled'::river_job_state) AND metadata ? 'cancel_attempted_at' AS should_cancel
     FROM river_job
     WHERE id = $2::bigint
     FOR UPDATE
@@ -750,17 +838,17 @@ WITH job_to_update AS (
 updated_job AS (
     UPDATE river_job
     SET
-      state        = CASE WHEN should_cancel                                          THEN 'cancelled'::river_job_state
-                          ELSE $1::river_job_state END,
-      finalized_at = CASE WHEN should_cancel                                          THEN now()
-                          WHEN $3::boolean                       THEN $4
-                          ELSE finalized_at END,
-      errors       = CASE WHEN $5::boolean                              THEN array_append(errors, $6::jsonb)
-                          ELSE errors       END,
-      max_attempts = CASE WHEN NOT should_cancel AND $7::boolean    THEN $8
-                          ELSE max_attempts END,
-      scheduled_at = CASE WHEN NOT should_cancel AND $9::boolean THEN $10::timestamptz
-                          ELSE scheduled_at END
+        state        = CASE WHEN should_cancel                                          THEN 'cancelled'::river_job_state
+                            ELSE $1::river_job_state END,
+        finalized_at = CASE WHEN should_cancel                                          THEN now()
+                            WHEN $3::boolean                       THEN $4
+                            ELSE finalized_at END,
+        errors       = CASE WHEN $5::boolean                              THEN array_append(errors, $6::jsonb)
+                            ELSE errors       END,
+        max_attempts = CASE WHEN NOT should_cancel AND $7::boolean    THEN $8
+                            ELSE max_attempts END,
+        scheduled_at = CASE WHEN NOT should_cancel AND $9::boolean THEN $10::timestamptz
+                            ELSE scheduled_at END
     FROM job_to_update
     WHERE river_job.id = job_to_update.id
         AND river_job.state = 'running'::river_job_state

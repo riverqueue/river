@@ -222,8 +222,9 @@ func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
 			}
 
 			numErrors++
-			e.Logger.Error(e.Name+": Error attempting to elect", "client_id", e.clientID, "err", err, "num_errors", numErrors)
-			e.CancellableSleepExponentialBackoff(ctx, numErrors-1, baseservice.MaxAttemptsBeforeResetDefault)
+			sleepDuration := e.ExponentialBackoff(numErrors, baseservice.MaxAttemptsBeforeResetDefault)
+			e.Logger.Error(e.Name+": Error attempting to elect", "client_id", e.clientID, "err", err, "num_errors", numErrors, "sleep_duration", sleepDuration)
+			e.CancellableSleep(ctx, sleepDuration)
 			continue
 		}
 		if elected {
@@ -323,8 +324,10 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 				return err
 			}
 
-			e.Logger.Error(e.Name+": Error attempting reelection", "client_id", e.clientID, "err", err)
-			e.CancellableSleepExponentialBackoff(ctx, numErrors-1, baseservice.MaxAttemptsBeforeResetDefault)
+			sleepDuration := e.ExponentialBackoff(numErrors, baseservice.MaxAttemptsBeforeResetDefault)
+			e.Logger.Error(e.Name+": Error attempting reelection",
+				"client_id", e.clientID, "err", err, "sleep_duration", sleepDuration)
+			e.CancellableSleep(ctx, sleepDuration)
 			continue
 		}
 		if !reelected {
@@ -361,7 +364,10 @@ func (e *Elector) attemptResignLoop(ctx context.Context) {
 		if err := e.attemptResign(ctx, attempt); err != nil { //nolint:contextcheck
 			e.Logger.Error(e.Name+": Error attempting to resign", "attempt", attempt, "client_id", e.clientID, "err", err)
 
-			e.CancellableSleepExponentialBackoff(ctx, attempt-1, baseservice.MaxAttemptsBeforeResetDefault) //nolint:contextcheck
+			sleepDuration := e.ExponentialBackoff(attempt, baseservice.MaxAttemptsBeforeResetDefault)
+			e.Logger.Error(e.Name+": Error attempting to resign",
+				"client_id", e.clientID, "err", err, "num_errors", attempt, "sleep_duration", sleepDuration)
+			e.CancellableSleep(ctx, sleepDuration) //nolint:contextcheck
 
 			continue
 		}

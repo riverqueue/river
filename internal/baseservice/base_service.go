@@ -143,24 +143,27 @@ func (s *BaseService) CancellableSleepRandomBetweenC(ctx context.Context, sleepD
 // another value instead, but shouldn't unless there's a good reason to do so.
 const MaxAttemptsBeforeResetDefault = 10
 
-// CancellableSleepExponentialBackoff sleeps for a reasonable exponential
-// backoff interval for a service based on the given attempt number. Uses a 2**N
-// second algorithm, +/- 10% random jitter. Sleep is cancelled if the given
-// context is cancelled.
-func (s *BaseService) CancellableSleepExponentialBackoff(ctx context.Context, attempt, maxAttemptsBeforeReset int) {
-	s.CancellableSleep(ctx, timeutil.SecondsAsDuration(s.exponentialBackoffSeconds(attempt, maxAttemptsBeforeReset)))
-}
-
-func (s *BaseService) exponentialBackoffSeconds(attempt, maxAttemptsBeforeReset int) float64 {
+// ExponentialBackoff returns a duration for a reasonable exponential backoff
+// interval for a service based on the given attempt number, which can then be
+// fed into CancellableSleep to perform the sleep. Uses a 2**N second algorithm,
+// +/- 10% random jitter. Sleep is cancelled if the given context is cancelled.
+//
+// Attempt should start at one for the first backoff/failure.
+func (s *BaseService) ExponentialBackoff(attempt, maxAttemptsBeforeReset int) time.Duration {
 	retrySeconds := s.exponentialBackoffSecondsWithoutJitter(attempt, maxAttemptsBeforeReset)
 
 	// Jitter number of seconds +/- 10%.
 	retrySeconds += retrySeconds * (s.Rand.Float64()*0.2 - 0.1)
 
-	return retrySeconds
+	return timeutil.SecondsAsDuration(retrySeconds)
 }
 
 func (s *BaseService) exponentialBackoffSecondsWithoutJitter(attempt, maxAttemptsBeforeReset int) float64 {
+	// It's easier for callers and more intuitive if attempt starts at one, but
+	// subtract one before sending it the exponent so we start at only one
+	// second of sleep instead of two.
+	attempt--
+
 	// We use a different exponential backoff algorithm here compared to the
 	// default retry policy (2**N versus N**4) because it results in more
 	// retries sooner. When it comes to exponential backoffs in services we

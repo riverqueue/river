@@ -33,8 +33,8 @@ type JobOpts struct {
 	Tags        []string
 }
 
-func Job(ctx context.Context, t *testing.T, exec riverdriver.Executor, opts *JobOpts) *rivertype.JobRow {
-	t.Helper()
+func Job(ctx context.Context, tb testing.TB, exec riverdriver.Executor, opts *JobOpts) *rivertype.JobRow {
+	tb.Helper()
 
 	encodedArgs := opts.EncodedArgs
 	if opts.EncodedArgs == nil {
@@ -67,7 +67,7 @@ func Job(ctx context.Context, t *testing.T, exec riverdriver.Executor, opts *Job
 		State:       ptrutil.ValOrDefault(opts.State, rivertype.JobStateAvailable),
 		Tags:        tags,
 	})
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	return job
 }
 
@@ -78,8 +78,8 @@ type LeaderOpts struct {
 	Name      *string
 }
 
-func Leader(ctx context.Context, t *testing.T, exec riverdriver.Executor, opts *LeaderOpts) *riverdriver.Leader {
-	t.Helper()
+func Leader(ctx context.Context, tb testing.TB, exec riverdriver.Executor, opts *LeaderOpts) *riverdriver.Leader {
+	tb.Helper()
 
 	leader, err := exec.LeaderInsert(ctx, &riverdriver.LeaderInsertParams{
 		ElectedAt: opts.ElectedAt,
@@ -88,7 +88,7 @@ func Leader(ctx context.Context, t *testing.T, exec riverdriver.Executor, opts *
 		Name:      ptrutil.ValOrDefault(opts.Name, "default"),
 		TTL:       10 * time.Second,
 	})
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	return leader
 }
 
@@ -96,13 +96,13 @@ type MigrationOpts struct {
 	Version *int
 }
 
-func Migration(ctx context.Context, t *testing.T, exec riverdriver.Executor, opts *MigrationOpts) *riverdriver.Migration {
-	t.Helper()
+func Migration(ctx context.Context, tb testing.TB, exec riverdriver.Executor, opts *MigrationOpts) *riverdriver.Migration {
+	tb.Helper()
 
 	migration, err := exec.MigrationInsertMany(ctx, []int{
 		ptrutil.ValOrDefaultFunc(opts.Version, nextSeq),
 	})
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	return migration[0]
 }
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/puddle/v2"
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5/internal/dbsqlc"
@@ -87,6 +88,14 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 		return nil, interpretError(err)
 	}
 	return jobRowFromInternal(job), nil
+}
+
+func (e *Executor) JobCountByState(ctx context.Context, state rivertype.JobState) (int, error) {
+	numJobs, err := e.queries.JobCountByState(ctx, e.dbtx, dbsqlc.RiverJobState(state))
+	if err != nil {
+		return 0, err
+	}
+	return int(numJobs), nil
 }
 
 func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobDeleteBeforeParams) (int, error) {
@@ -292,6 +301,17 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 		Now:         params.Now,
 	})
 	return int(numScheduled), interpretError(err)
+}
+
+func (e *Executor) JobSetCompleteIfRunningMany(ctx context.Context, params *riverdriver.JobSetCompleteIfRunningManyParams) ([]*rivertype.JobRow, error) {
+	jobs, err := e.queries.JobSetCompleteIfRunningMany(ctx, e.dbtx, &dbsqlc.JobSetCompleteIfRunningManyParams{
+		ID:          params.ID,
+		FinalizedAt: params.FinalizedAt,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return mapSlice(jobs, jobRowFromInternal), nil
 }
 
 func (e *Executor) JobSetStateIfRunning(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
@@ -554,6 +574,9 @@ func attemptErrorFromInternal(e *dbsqlc.AttemptError) rivertype.AttemptError {
 }
 
 func interpretError(err error) error {
+	if errors.Is(err, puddle.ErrClosedPool) {
+		return riverdriver.ErrClosedPool
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return rivertype.ErrNotFound
 	}

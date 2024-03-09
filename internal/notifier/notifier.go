@@ -129,11 +129,11 @@ func (n *Notifier) Start(ctx context.Context) error {
 					break
 				}
 
+				sleepDuration := n.ExponentialBackoff(attempt, baseservice.MaxAttemptsBeforeResetDefault)
 				n.Logger.ErrorContext(ctx, n.Name+": Error running listener (will attempt reconnect after backoff)",
-					"attempt", attempt, "err", err)
+					"attempt", attempt, "err", err, "sleep_duration", sleepDuration)
 				n.testSignals.BackoffError.Signal(err)
-
-				n.CancellableSleepExponentialBackoff(ctx, attempt, baseservice.MaxAttemptsBeforeResetDefault)
+				n.CancellableSleep(ctx, sleepDuration)
 			}
 		}
 
@@ -566,9 +566,10 @@ func ListenRetryLoop(ctx context.Context, baseService *baseservice.BaseService, 
 				return nil, err
 			}
 
-			baseService.Logger.ErrorContext(ctx, baseService.Name+": Error listening for on topic; will retry after backoff", "attempt", attempt, "err", err, "topic", topic)
-
-			baseService.CancellableSleepExponentialBackoff(ctx, attempt-1, baseservice.MaxAttemptsBeforeResetDefault)
+			sleepDuration := baseService.ExponentialBackoff(attempt, baseservice.MaxAttemptsBeforeResetDefault)
+			baseService.Logger.ErrorContext(ctx, baseService.Name+": Error listening for on topic; will retry after backoff",
+				"attempt", attempt, "err", err, "topic", topic, "sleep_duration", sleepDuration)
+			baseService.CancellableSleep(ctx, sleepDuration)
 			continue
 		}
 
