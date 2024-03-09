@@ -2,17 +2,15 @@ package river
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
-
-	"github.com/oklog/ulid/v2"
 
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/componentstatus"
@@ -405,7 +403,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		ErrorHandler:                config.ErrorHandler,
 		FetchCooldown:               valutil.ValOrDefault(config.FetchCooldown, FetchCooldownDefault),
 		FetchPollInterval:           valutil.ValOrDefault(config.FetchPollInterval, FetchPollIntervalDefault),
-		ID:                          config.ID,
+		ID:                          valutil.ValOrDefaultFunc(config.ID, func() string { return defaultClientID(time.Now().UTC()) }),
 		JobTimeout:                  valutil.ValOrDefault(config.JobTimeout, JobTimeoutDefault),
 		Logger:                      logger,
 		PeriodicJobs:                config.PeriodicJobs,
@@ -416,15 +414,6 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		Workers:                     config.Workers,
 		disableSleep:                config.disableSleep,
 		schedulerInterval:           valutil.ValOrDefault(config.schedulerInterval, maintenance.JobSchedulerIntervalDefault),
-	}
-
-	if config.ID == "" {
-		// Generate a random ULID for the client ID.
-		clientID, err := ulid.New(ulid.Now(), rand.Reader)
-		if err != nil {
-			return nil, err
-		}
-		config.ID = clientID.String()
 	}
 
 	if err := config.validate(); err != nil {
@@ -1397,4 +1386,32 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 	}
 
 	return dblist.JobList(ctx, c.driver.UnwrapExecutor(tx), dbParams)
+}
+
+// Generates a default client ID using the current hostname and time.
+func defaultClientID(startedAt time.Time) string {
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "unknown_host"
+	}
+
+	return defaultClientIDWithHost(startedAt, host)
+}
+
+// Same as the above, but allows host injection for testability.
+func defaultClientIDWithHost(startedAt time.Time, host string) string {
+	const maxHostLength = 60
+
+	// Truncate degenerately long host names.
+	host = strings.ReplaceAll(host, ".", "_")
+	if len(host) > maxHostLength {
+		host = host[0:maxHostLength]
+	}
+
+	// Dots, hyphens, and colons aren't particularly friendly for double click
+	// to select (depends on application and configuration), so avoid them all
+	// in favor of underscores.
+	const rfc3339Compact = "2006_01_02T15_04_05"
+
+	return host + "_" + startedAt.Format(rfc3339Compact)
 }
