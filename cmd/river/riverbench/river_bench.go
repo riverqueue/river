@@ -89,7 +89,7 @@ func (b *Benchmarker[TTx]) Run(ctx context.Context) error {
 
 	client, err := river.NewClient(b.driver, &river.Config{
 		// When benchmarking to maximize job throughput these numbers have an
-		// outside effect on results. The ones chosen here could possibly be
+		// outsized effect on results. The ones chosen here could possibly be
 		// optimized further, but based on my tests of throwing a lot of random
 		// values against the wall, they perform quite well. Much better than
 		// the client's default values at any rate.
@@ -101,7 +101,7 @@ func (b *Benchmarker[TTx]) Run(ctx context.Context) error {
 			// This could probably use more refinement, but in my quick and
 			// dirty tests I found that roughly 1k workers was most optimal. 500
 			// and 2,000 performed a little more poorly, and jumping up to the
-			// 10k performed considerably less well (scheduler contention?).
+			// maximum of 10k performed quite badly (scheduler contention?).
 			// There may be a more optimal number than 1,000, but it seems close
 			// enough to target for now.
 			river.QueueDefault: {MaxWorkers: 1_000},
