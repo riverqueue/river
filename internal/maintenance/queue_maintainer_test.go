@@ -2,7 +2,6 @@ package maintenance
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/sharedtx"
+	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
@@ -67,7 +67,7 @@ func TestQueueMaintainer(t *testing.T) {
 
 	ctx := context.Background()
 
-	setup := func(t *testing.T, services []Service) *QueueMaintainer {
+	setup := func(t *testing.T, services []startstop.Service) *QueueMaintainer {
 		t.Helper()
 
 		maintainer := NewQueueMaintainer(riverinternaltest.BaseServiceArchetype(t).WithSleepDisabled(), services)
@@ -79,7 +79,7 @@ func TestQueueMaintainer(t *testing.T) {
 		t.Parallel()
 
 		testSvc := newTestService(t)
-		maintainer := setup(t, []Service{testSvc})
+		maintainer := setup(t, []startstop.Service{testSvc})
 
 		require.NoError(t, maintainer.Start(ctx))
 		testSvc.testSignals.started.WaitOrTimeout()
@@ -100,7 +100,7 @@ func TestQueueMaintainer(t *testing.T) {
 
 		// Use realistic services in this one so we can verify stress not only
 		// on the queue maintainer, but it and all its subservices together.
-		maintainer := setup(t, []Service{
+		maintainer := setup(t, []startstop.Service{
 			NewJobCleaner(archetype, &JobCleanerConfig{}, driver),
 			NewPeriodicJobEnqueuer(archetype, &PeriodicJobEnqueuerConfig{
 				PeriodicJobs: []*PeriodicJob{
@@ -115,14 +115,14 @@ func TestQueueMaintainer(t *testing.T) {
 			NewScheduler(archetype, &JobSchedulerConfig{}, driver),
 		})
 		maintainer.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
-		runStartStopStress(ctx, t, maintainer)
+		startstoptest.Stress(ctx, t, maintainer)
 	})
 
 	t.Run("StopWithoutHavingBeenStarted", func(t *testing.T) {
 		t.Parallel()
 
 		testSvc := newTestService(t)
-		maintainer := setup(t, []Service{testSvc})
+		maintainer := setup(t, []startstop.Service{testSvc})
 
 		// Tolerate being stopped without having been started, without blocking:
 		maintainer.Stop()
@@ -136,7 +136,7 @@ func TestQueueMaintainer(t *testing.T) {
 		t.Parallel()
 
 		testSvc := newTestService(t)
-		maintainer := setup(t, []Service{testSvc})
+		maintainer := setup(t, []startstop.Service{testSvc})
 
 		runOnce := func() {
 			require.NoError(t, maintainer.Start(ctx))
@@ -154,7 +154,7 @@ func TestQueueMaintainer(t *testing.T) {
 		t.Parallel()
 
 		testSvc := newTestService(t)
-		maintainer := setup(t, []Service{testSvc})
+		maintainer := setup(t, []startstop.Service{testSvc})
 
 		ctx, cancelFunc := context.WithCancel(ctx)
 
@@ -174,7 +174,7 @@ func TestQueueMaintainer(t *testing.T) {
 
 		testSvc := newTestService(t)
 
-		maintainer := setup(t, []Service{testSvc})
+		maintainer := setup(t, []startstop.Service{testSvc})
 
 		require.NoError(t, maintainer.Start(ctx))
 		testSvc.testSignals.started.WaitOrTimeout()
@@ -187,26 +187,4 @@ func TestQueueMaintainer(t *testing.T) {
 		maintainer.Stop()
 		testSvc.testSignals.returning.WaitOrTimeout()
 	})
-}
-
-// Test helper that puts stress on a service's start and stop functions so that
-// we can detect any data races that it might have due to improper use of
-// BaseStopStart.
-func runStartStopStress(ctx context.Context, tb testing.TB, svc Service) {
-	tb.Helper()
-
-	var wg sync.WaitGroup
-
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func() {
-			for j := 0; j < 50; j++ {
-				require.NoError(tb, svc.Start(ctx))
-				svc.Stop()
-			}
-			wg.Done()
-		}()
-	}
-
-	wg.Wait()
 }

@@ -5,6 +5,23 @@ import (
 	"sync"
 )
 
+// Service is a generalized interface for a service that starts and stops,
+// usually one backed by embedding BaseStartStop.
+type Service interface {
+	// Start starts a service. Services are responsible for backgrounding
+	// themselves, so this function should be invoked synchronously. Services
+	// may return an error if they have trouble starting up, so the caller
+	// should wait and respond to the error if necessary.
+	Start(ctx context.Context) error
+
+	// Stop stops a service. Services are responsible for making sure their stop
+	// is complete before returning so a caller can wait on this invocation
+	// synchronously and be guaranteed the service is fully stopped. Services
+	// are expected to be able to tolerate (1) being stopped without having been
+	// started, and (2) being double-stopped.
+	Stop()
+}
+
 // BaseStartStop is a helper that can be embedded on a queue maintenance service
 // and which will provide the basic necessities to safely implement the Service
 // interface in a way that's not racy and can tolerate a number of edge cases.
@@ -74,8 +91,8 @@ func (s *BaseStartStop) Stop() {
 }
 
 // Stopped returns a channel that can be waited on for the service to be
-// stopped. This function is only safe to invoke after successfully waiting on
-// a service's Start.
+// stopped. This function is only safe to invoke after successfully waiting on a
+// service's Start, and a reference to it must be taken _before_ invoking Stop.
 func (s *BaseStartStop) Stopped() <-chan struct{} {
 	return s.stopped
 }

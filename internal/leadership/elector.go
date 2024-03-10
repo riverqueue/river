@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/riverdriver"
@@ -43,6 +44,8 @@ func (s *Subscription) Unlisten() {
 }
 
 type Elector struct {
+	baseservice.BaseService
+
 	exec     riverdriver.Executor
 	id       string
 	interval time.Duration
@@ -59,9 +62,9 @@ type Elector struct {
 // NewElector returns an Elector using the given adapter. The name should correspond
 // to the name of the database + schema combo and should be shared across all Clients
 // running with that combination. The id should be unique to the Client.
-func NewElector(exec riverdriver.Executor, notifier *notifier.Notifier, name, id string, interval, ttlPadding time.Duration, logger *slog.Logger) (*Elector, error) {
+func NewElector(archetype *baseservice.Archetype, exec riverdriver.Executor, notifier *notifier.Notifier, name, id string, interval, ttlPadding time.Duration, logger *slog.Logger) (*Elector, error) {
 	// TODO: validate name + id length/format, interval, etc
-	return &Elector{
+	return baseservice.Init(archetype, &Elector{
 		exec:     exec,
 		id:       id,
 		interval: interval,
@@ -74,7 +77,7 @@ func NewElector(exec riverdriver.Executor, notifier *notifier.Notifier, name, id
 		// padding to account to give the leader a little breathing room in its
 		// reelection loop.
 		ttl: interval + ttlPadding,
-	}, nil
+	}), nil
 }
 
 func (e *Elector) Run(ctx context.Context) {
@@ -114,8 +117,13 @@ func (e *Elector) Run(ctx context.Context) {
 		}
 	}
 
-	subscription := e.notifier.Listen(notifier.NotificationTopicLeadership, handleNotification)
-	defer subscription.Unlisten()
+	sub, err := notifier.ListenRetryLoop(ctx, &e.BaseService, e.notifier, notifier.NotificationTopicLeadership, handleNotification)
+	if err != nil { //nolint:staticcheck
+		// TODO(brandur): Propagate this after refactor.
+	}
+	if sub != nil {
+		defer sub.Unlisten(ctx)
+	}
 
 	for {
 		if success := e.gainLeadership(ctx, leadershipNotificationChan); !success {
@@ -257,7 +265,7 @@ func (e *Elector) attemptResign(attempt int) error {
 }
 
 func (e *Elector) Listen() *Subscription {
-	subscription := &Subscription{
+	sub := &Subscription{
 		creationTime: time.Now().UTC(),
 		ch:           make(chan *Notification, 1),
 		e:            e,
@@ -269,12 +277,12 @@ func (e *Elector) Listen() *Subscription {
 
 	initialNotification := &Notification{
 		IsLeader:  e.isLeader,
-		Timestamp: subscription.creationTime,
+		Timestamp: sub.creationTime,
 	}
-	subscription.ch <- initialNotification
+	sub.ch <- initialNotification
 
-	e.subscriptions = append(e.subscriptions, subscription)
-	return subscription
+	e.subscriptions = append(e.subscriptions, sub)
+	return sub
 }
 
 func (e *Elector) unlisten(sub *Subscription) {

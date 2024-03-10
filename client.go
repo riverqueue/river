@@ -20,6 +20,7 @@ import (
 	"github.com/riverqueue/river/internal/jobstats"
 	"github.com/riverqueue/river/internal/leadership"
 	"github.com/riverqueue/river/internal/maintenance"
+	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/util/randutil"
@@ -459,10 +460,9 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		// we'll need to add a config for this.
 		instanceName := "default"
 
-		client.notifier = notifier.New(archetype, driver.GetListener(), client.monitor.SetNotifierStatus, logger)
-
+		client.notifier = notifier.New(archetype, driver.GetListener(), client.monitor.SetNotifierStatus)
 		var err error
-		client.elector, err = leadership.NewElector(driver.GetExecutor(), client.notifier, instanceName, client.ID(), 5*time.Second, 10*time.Second, logger)
+		client.elector, err = leadership.NewElector(archetype, driver.GetExecutor(), client.notifier, instanceName, client.ID(), 5*time.Second, 10*time.Second, logger)
 		if err != nil {
 			return nil, err
 		}
@@ -475,7 +475,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		// Maintenance services
 		//
 
-		maintenanceServices := []maintenance.Service{}
+		maintenanceServices := []startstop.Service{}
 
 		{
 			jobCleaner := maintenance.NewJobCleaner(archetype, &maintenance.JobCleanerConfig{
@@ -629,11 +629,15 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 			}
 		}()
 
-		c.wg.Add(2)
-		go func() {
-			c.notifier.Run(fetchNewWorkCtx)
-			c.wg.Done()
-		}()
+		if err := c.notifier.Start(fetchNewWorkCtx); err != nil {
+			if !errors.Is(context.Cause(ctx), rivercommon.ErrShutdown) {
+				return nil
+			}
+
+			return err
+		}
+
+		c.wg.Add(1)
 		go func() {
 			c.elector.Run(fetchNewWorkCtx)
 			c.wg.Done()
@@ -660,6 +664,7 @@ func (c *Client[TTx]) signalStopComplete(ctx context.Context) {
 	// complete. We probably need a timeout or way to move on in those cases.
 	c.completer.Wait()
 
+	c.notifier.Stop()
 	c.queueMaintainer.Stop()
 
 	c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": All services stopped")
