@@ -22,6 +22,18 @@ type Service interface {
 	Stop()
 }
 
+// ServiceWithStopped is a Service that can also return a Stopped channel. I've
+// kept this as a separate interface for the time being because I'm not sure
+// this is strictly necessary to be part of startstop.
+type serviceWithStopped interface {
+	Service
+
+	// Stopped returns a channel that can be waited on for the service to be
+	// stopped. This function is only safe to invoke after successfully waiting on a
+	// service's Start, and a reference to it must be taken _before_ invoking Stop.
+	Stopped() <-chan struct{}
+}
+
 // BaseStartStop is a helper that can be embedded on a queue maintenance service
 // and which will provide the basic necessities to safely implement the Service
 // interface in a way that's not racy and can tolerate a number of edge cases.
@@ -95,4 +107,39 @@ func (s *BaseStartStop) Stop() {
 // service's Start, and a reference to it must be taken _before_ invoking Stop.
 func (s *BaseStartStop) Stopped() <-chan struct{} {
 	return s.stopped
+}
+
+type startStopFunc struct {
+	BaseStartStop
+	startFunc func(ctx context.Context, shouldStart bool, stopped chan struct{}) error
+}
+
+// StartStopFunc produces a `startstop.Service` from a function. It's useful for
+// very small services that don't necessarily need a whole struct defined for
+// them.
+func StartStopFunc(startFunc func(ctx context.Context, shouldStart bool, stopped chan struct{}) error) *startStopFunc {
+	return &startStopFunc{
+		startFunc: startFunc,
+	}
+}
+
+func (s *startStopFunc) Start(ctx context.Context) error {
+	return s.startFunc(s.StartInit(ctx))
+}
+
+// StopAllParallel stops all the given services in parallel and waits until
+// they've all stopped successfully.
+func StopAllParallel(services []Service) {
+	var wg sync.WaitGroup
+	wg.Add(len(services))
+
+	for i := range services {
+		service := services[i]
+		go func() {
+			defer wg.Done()
+			service.Stop()
+		}()
+	}
+
+	wg.Wait()
 }

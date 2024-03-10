@@ -280,6 +280,7 @@ type Client[TTx any] struct {
 	notifier             *notifier.Notifier
 	producersByQueueName map[string]*producer
 	queueMaintainer      *maintenance.QueueMaintainer
+	services             []startstop.Service
 	subscriptions        map[int]*eventSubscription
 	subscriptionsMu      sync.Mutex
 	subscriptionsSeq     int // used for generating simple IDs
@@ -461,6 +462,8 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		instanceName := "default"
 
 		client.notifier = notifier.New(archetype, driver.GetListener(), client.monitor.SetNotifierStatus)
+		client.services = append(client.services, client.notifier)
+
 		var err error
 		client.elector, err = leadership.NewElector(archetype, driver.GetExecutor(), client.notifier, instanceName, client.ID(), 5*time.Second, 10*time.Second, logger)
 		if err != nil {
@@ -470,6 +473,12 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		if err := client.provisionProducers(); err != nil {
 			return nil, err
 		}
+
+		client.services = append(client.services,
+			startstop.StartStopFunc(client.logStatsLoop))
+
+		client.services = append(client.services,
+			startstop.StartStopFunc(client.handleLeadershipChangeLoop))
 
 		//
 		// Maintenance services
@@ -549,6 +558,8 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			client.testSignals.reindexer = &reindexer.TestSignals
 		}
 
+		// Not added to the main services list because the queue maintainer is
+		// started conditionally based on whether the client is the leader.
 		client.queueMaintainer = maintenance.NewQueueMaintainer(archetype, maintenanceServices)
 	}
 
@@ -598,45 +609,34 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 	// Monitor should be the first subprocess to start, and the last to stop.
 	// It's not part of the waitgroup because we need to wait for everything else
 	// to shut down prior to closing the monitor.
-	go c.monitor.Run()
+	//
+	// Unlike other services, it's given a background context so that it doesn't
+	// cancel on normal stops.
+	if err := c.monitor.Start(context.Background()); err != nil { //nolint:contextcheck
+		return err
+	}
 
 	// Receives job complete notifications from the completer and distributes
 	// them to any subscriptions.
 	c.completer.Subscribe(c.distributeJobCompleterCallback)
 
-	c.wg.Add(1)
-	go func() {
-		c.logStatsLoop(fetchNewWorkCtx)
-		c.wg.Done()
-	}()
+	for _, service := range c.services {
+		if err := service.Start(fetchNewWorkCtx); err != nil {
+			// In case of error, stop any services that might have started. This
+			// is safe because even services that were never started will still
+			// tolerate being stopped.
+			startstop.StopAllParallel(c.services)
 
-	if c.elector != nil {
-		go func() {
-			sub := c.elector.Listen()
-			defer sub.Unlisten()
+			c.monitor.Stop()
 
-			for {
-				select {
-				case <-c.stopComplete: // stop complete
-					return
-
-				case <-workCtx.Done(): // stop started
-					return
-
-				case notification := <-sub.C():
-					c.handleLeadershipChange(ctx, notification)
-				}
-			}
-		}()
-
-		if err := c.notifier.Start(fetchNewWorkCtx); err != nil {
-			if !errors.Is(context.Cause(ctx), rivercommon.ErrShutdown) {
+			if errors.Is(context.Cause(ctx), rivercommon.ErrShutdown) {
 				return nil
 			}
-
 			return err
 		}
+	}
 
+	if c.elector != nil {
 		c.wg.Add(1)
 		go func() {
 			c.elector.Run(fetchNewWorkCtx)
@@ -654,8 +654,11 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 
 // ctx is used only for logging, not for lifecycle.
 func (c *Client[TTx]) signalStopComplete(ctx context.Context) {
-	// Wait for producers, notifier, and elector to exit:
+	// Wait for producers and elector to exit:
 	c.wg.Wait()
+
+	// Stop all mainline services where stop order isn't important.
+	startstop.StopAllParallel(c.services)
 
 	// Once the producers have all finished, we know that completers have at least
 	// enqueued any remaining work. Wait for the completer to finish.
@@ -664,7 +667,8 @@ func (c *Client[TTx]) signalStopComplete(ctx context.Context) {
 	// complete. We probably need a timeout or way to move on in those cases.
 	c.completer.Wait()
 
-	c.notifier.Stop()
+	// Will only be started if this client was leader, but can tolerate a stop
+	// without having been started.
 	c.queueMaintainer.Stop()
 
 	c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": All services stopped")
@@ -685,7 +689,7 @@ func (c *Client[TTx]) signalStopComplete(ctx context.Context) {
 	}()
 
 	// Shut down the monitor last so it can broadcast final status updates:
-	c.monitor.Shutdown()
+	c.monitor.Stop()
 
 	c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Stop complete")
 	close(c.stopComplete)
@@ -857,7 +861,7 @@ func (c *Client[TTx]) distributeJobCompleterCallback(update jobcompleter.Complet
 // numbers don't mean much in themselves, but can give a rough idea of the
 // proportions of each compared to each other, and may help flag outlying values
 // indicative of a problem.
-func (c *Client[TTx]) logStatsLoop(ctx context.Context) {
+func (c *Client[TTx]) logStatsLoop(ctx context.Context, shouldStart bool, stopped chan struct{}) error {
 	// Handles a potential divide by zero.
 	safeDurationAverage := func(d time.Duration, n int) time.Duration {
 		if n == 0 {
@@ -880,41 +884,80 @@ func (c *Client[TTx]) logStatsLoop(ctx context.Context) {
 		c.statsNumJobs = 0
 	}
 
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-
-		case <-ticker.C:
-			logStats()
-		}
+	if !shouldStart {
+		return nil
 	}
+
+	go func() {
+		// This defer should come first so that it's last out, thereby avoiding
+		// races.
+		defer close(stopped)
+
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+
+			case <-ticker.C:
+				logStats()
+			}
+		}
+	}()
+
+	return nil
 }
 
-func (c *Client[TTx]) handleLeadershipChange(ctx context.Context, notification *leadership.Notification) {
-	c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Election change received",
-		slog.String("client_id", c.config.ID), slog.Bool("is_leader", notification.IsLeader))
+func (c *Client[TTx]) handleLeadershipChangeLoop(ctx context.Context, shouldStart bool, stopped chan struct{}) error {
+	handleLeadershipChange := func(ctx context.Context, notification *leadership.Notification) {
+		c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Election change received",
+			slog.String("client_id", c.config.ID), slog.Bool("is_leader", notification.IsLeader))
 
-	leaderStatus := componentstatus.ElectorNonLeader
-	if notification.IsLeader {
-		leaderStatus = componentstatus.ElectorLeader
-	}
-	c.monitor.SetElectorStatus(leaderStatus)
-
-	switch {
-	case notification.IsLeader:
-		if err := c.queueMaintainer.Start(ctx); err != nil {
-			c.baseService.Logger.ErrorContext(ctx, "Error starting queue maintainer", slog.String("err", err.Error()))
+		leaderStatus := componentstatus.ElectorNonLeader
+		if notification.IsLeader {
+			leaderStatus = componentstatus.ElectorLeader
 		}
+		c.monitor.SetElectorStatus(leaderStatus)
 
-		c.testSignals.electedLeader.Signal(struct{}{})
+		switch {
+		case notification.IsLeader:
+			if err := c.queueMaintainer.Start(ctx); err != nil {
+				c.baseService.Logger.ErrorContext(ctx, "Error starting queue maintainer", slog.String("err", err.Error()))
+			}
 
-	default:
-		c.queueMaintainer.Stop()
+			c.testSignals.electedLeader.Signal(struct{}{})
+
+		default:
+			c.queueMaintainer.Stop()
+		}
 	}
+
+	if !shouldStart {
+		return nil
+	}
+
+	go func() {
+		// This defer should come first so that it's last out,
+		// thereby avoiding races.
+		defer close(stopped)
+
+		sub := c.elector.Listen()
+		defer sub.Unlisten()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+
+			case notification := <-sub.C():
+				handleLeadershipChange(ctx, notification)
+			}
+		}
+	}()
+
+	return nil
 }
 
 func (c *Client[TTx]) provisionProducers() error {

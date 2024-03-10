@@ -1,28 +1,33 @@
 package river
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/componentstatus"
+	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 )
 
-func Test_Monitor_Shutdown(t *testing.T) {
+func Test_Monitor_Stop(t *testing.T) {
 	t.Parallel()
 
-	monitor := newClientMonitor()
-	go monitor.Run()
+	ctx := context.Background()
 
-	shutdownDone := make(chan struct{})
+	monitor := newClientMonitor()
+	require.NoError(t, monitor.Start(ctx))
+
+	stopDone := make(chan struct{})
 	go func() {
-		monitor.Shutdown()
-		close(shutdownDone)
+		monitor.Stop()
+		close(stopDone)
 	}()
 
 	select {
-	case <-shutdownDone:
+	case <-stopDone:
 	case <-time.After(5 * time.Second):
 		t.Fatalf("timeout awaiting monitor shutdown")
 	}
@@ -42,6 +47,8 @@ func awaitSnapshot(t *testing.T, snapshotCh <-chan componentstatus.ClientSnapsho
 func Test_Monitor(t *testing.T) {
 	t.Parallel()
 
+	ctx := context.Background()
+
 	setup := func(t *testing.T, initialProducerQueues ...string) (*clientMonitor, <-chan componentstatus.ClientSnapshot) {
 		t.Helper()
 		monitor := newClientMonitor()
@@ -51,13 +58,15 @@ func Test_Monitor(t *testing.T) {
 			monitor.InitializeProducerStatus(queueName)
 		}
 
-		go monitor.Run()
-		t.Cleanup(monitor.Shutdown)
+		require.NoError(t, monitor.Start(ctx))
+		t.Cleanup(monitor.Stop)
+
 		return monitor, snapshotCh
 	}
 
 	t.Run("ElectorUpdates", func(t *testing.T) {
 		t.Parallel()
+
 		require := require.New(t)
 		monitor, snapshotCh := setup(t)
 
@@ -74,6 +83,7 @@ func Test_Monitor(t *testing.T) {
 
 	t.Run("NotifierUpdates", func(t *testing.T) {
 		t.Parallel()
+
 		require := require.New(t)
 		monitor, snapshotCh := setup(t)
 
@@ -94,6 +104,7 @@ func Test_Monitor(t *testing.T) {
 
 	t.Run("ProducerUpdates", func(t *testing.T) {
 		t.Parallel()
+
 		require := require.New(t)
 		monitor, snapshotCh := setup(t, "queue1", "queue2")
 
@@ -110,5 +121,14 @@ func Test_Monitor(t *testing.T) {
 		require.Len(update.Producers, 2)
 		require.Equal(componentstatus.Uninitialized, update.Producers["queue1"])
 		require.Equal(componentstatus.Healthy, update.Producers["queue2"])
+	})
+
+	t.Run("StartStopStress", func(t *testing.T) {
+		t.Parallel()
+
+		monitor, snapshotCh := setup(t)
+		t.Cleanup(riverinternaltest.DiscardContinuously(snapshotCh))
+
+		startstoptest.Stress(ctx, t, monitor)
 	})
 }

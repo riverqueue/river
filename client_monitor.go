@@ -1,22 +1,22 @@
 package river
 
 import (
+	"context"
 	"sync"
 
 	"github.com/riverqueue/river/internal/componentstatus"
+	"github.com/riverqueue/river/internal/maintenance/startstop"
 )
 
 type clientMonitor struct {
+	startstop.BaseStartStop
+
 	// internal buffer of status updates/snapshots awaiting broadcast
 	snapshotBuffer chan snapshotAndSubscribers
 
 	statusSnapshotMu    sync.Mutex
 	snapshotSubscribers []chan<- componentstatus.ClientSnapshot
 	currentSnapshot     componentstatus.ClientSnapshot
-
-	shutdownOnce *sync.Once
-	shutdownCh   chan struct{}
-	doneCh       chan struct{}
 }
 
 func newClientMonitor() *clientMonitor {
@@ -26,32 +26,31 @@ func newClientMonitor() *clientMonitor {
 		// so that the senders can avoid blocking and to account for some delivery delay.
 		snapshotBuffer:  make(chan snapshotAndSubscribers, 100),
 		currentSnapshot: componentstatus.ClientSnapshot{Producers: make(map[string]componentstatus.Status)},
-
-		shutdownOnce: &sync.Once{},
-		shutdownCh:   make(chan struct{}),
-		doneCh:       make(chan struct{}),
 	}
 }
 
-func (m *clientMonitor) Run() {
-	for {
-		select {
-		case <-m.shutdownCh:
-			close(m.doneCh)
-			return
-		case update := <-m.snapshotBuffer:
-			m.broadcastOneUpdate(update)
+func (m *clientMonitor) Start(ctx context.Context) error {
+	ctx, shouldStart, stopped := m.StartInit(ctx)
+	if !shouldStart {
+		return nil
+	}
+
+	go func() {
+		// This defer should come first so that it's last out, thereby avoiding
+		// races.
+		defer close(stopped)
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case update := <-m.snapshotBuffer:
+				m.broadcastOneUpdate(update)
+			}
 		}
-	}
-}
+	}()
 
-// Shutdown initiates a shutdown of the Monitor and blocks until shutdown has completed.
-func (m *clientMonitor) Shutdown() {
-	m.shutdownOnce.Do(func() {
-		close(m.shutdownCh)
-	})
-	// Wait for done signal:
-	<-m.doneCh
+	return nil
 }
 
 // InititializeProducerStatus sets the status for a new producer to
