@@ -132,6 +132,19 @@ jobs:
         run: ./river validate --database-url $DATABASE_URL
         working-directory: ./cmd/river
 
+      - name: river bench
+        run: |
+          ( sleep 10 && killall -SIGTERM river ) &
+          ./river bench --database-url $DATABASE_URL
+        working-directory: ./cmd/river
+
+      # Bench again in fixed number of jobs mode.
+      - name: river bench
+        run: |
+          ( sleep 10 && killall -SIGTERM river ) &
+          ./river bench --database-url $DATABASE_URL --num-total-jobs 1_234
+        working-directory: ./cmd/river
+
       - name: river migrate-down
         run: ./river migrate-down --database-url $DATABASE_URL --max-steps 100
         working-directory: ./cmd/river
