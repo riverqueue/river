@@ -88,9 +88,23 @@ func (b *Benchmarker[TTx]) Run(ctx context.Context) error {
 	river.AddWorker(workers, &BenchmarkWorker{})
 
 	client, err := river.NewClient(b.driver, &river.Config{
+		// When benchmarking to maximize job throughput these numbers have an
+		// outside effect on results. The ones chosen here could possibly be
+		// optimized further, but based on my tests of throwing a lot of random
+		// values against the wall, they perform quite well. Much better than
+		// the client's default values at any rate.
+		FetchCooldown:     2 * time.Millisecond,
+		FetchPollInterval: 5 * time.Millisecond,
+
 		Logger: slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),
 		Queues: map[string]river.QueueConfig{
-			river.QueueDefault: {MaxWorkers: river.QueueNumWorkersMax},
+			// This could probably use more refinement, but in my quick and
+			// dirty tests I found that roughly 1k workers was most optimal. 500
+			// and 2,000 performed a little more poorly, and jumping up to the
+			// 10k performed considerably less well (scheduler contention?).
+			// There may be a more optimal number than 1,000, but it seems close
+			// enough to target for now.
+			river.QueueDefault: {MaxWorkers: 1_000},
 		},
 		Workers: workers,
 	})
