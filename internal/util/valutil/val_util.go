@@ -1,10 +1,8 @@
 package valutil
 
-import "golang.org/x/exp/constraints"
-
 // ValOrDefault returns the given value if it's non-zero, and otherwise returns
 // the default.
-func ValOrDefault[T constraints.Integer | string](val, defaultVal T) T {
+func ValOrDefault[T comparable](val, defaultVal T) T {
 	var zero T
 	if val != zero {
 		return val
@@ -14,7 +12,7 @@ func ValOrDefault[T constraints.Integer | string](val, defaultVal T) T {
 
 // ValOrDefault returns the given value if it's non-zero, and otherwise invokes
 // defaultFunc to produce a default value.
-func ValOrDefaultFunc[T constraints.Integer | string](val T, defaultFunc func() T) T {
+func ValOrDefaultFunc[T comparable](val T, defaultFunc func() T) T {
 	var zero T
 	if val != zero {
 		return val
@@ -24,7 +22,7 @@ func ValOrDefaultFunc[T constraints.Integer | string](val T, defaultFunc func() 
 
 // FirstNonZero returns the first argument that is non-zero, or the zero value if
 // all are zero.
-func FirstNonZero[T constraints.Integer | ~string](values ...T) T {
+func FirstNonZero[T comparable](values ...T) T {
 	var zero T
 	for _, val := range values {
 		if val != zero {
