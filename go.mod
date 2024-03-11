@@ -12,7 +12,7 @@ replace github.com/riverqueue/river/rivertype => ./rivertype
 
 require (
 	github.com/jackc/pgerrcode v0.0.0-20220416144525-469b46aa5efa
-	github.com/jackc/pgx/v5 v5.5.3
+	github.com/jackc/pgx/v5 v5.5.5
 	github.com/jackc/puddle/v2 v2.2.1
 	github.com/riverqueue/river/riverdriver v0.0.25
 	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.0.25
@@ -22,7 +22,7 @@ require (
 	github.com/spf13/cobra v1.8.0
 	github.com/stretchr/testify v1.9.0
 	go.uber.org/goleak v1.3.0
-	golang.org/x/mod v0.15.0
+	golang.org/x/mod v0.16.0
 	golang.org/x/sync v0.6.0
 )
 
