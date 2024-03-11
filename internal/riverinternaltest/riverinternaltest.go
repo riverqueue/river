@@ -288,6 +288,13 @@ func TestTx(ctx context.Context, tb testing.TB) pgx.Tx {
 			return
 		}
 
+		// Similar to the above, but a newly appeared error that wraps the
+		// above. As far as I can tell, no error variables are available to use
+		// with `errors.Is`.
+		if err.Error() == "failed to deallocate cached statement(s): conn closed" {
+			return
+		}
+
 		require.NoError(tb, err)
 	})
 
