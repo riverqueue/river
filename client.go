@@ -290,7 +290,6 @@ type Client[TTx any] struct {
 	statsNumJobs         int
 	testSignals          clientTestSignals
 	uniqueInserter       *dbunique.UniqueInserter
-	wg                   sync.WaitGroup
 
 	// workCancel cancels the context used for all work goroutines. Normal Stop
 	// does not cancel that context.
@@ -586,7 +585,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 	// We use separate contexts for fetching and working to allow for a graceful
 	// stop. However, both inherit from the provided context so if it is
 	// cancelled a more aggressive stop will be initiated.
-	fetchNewWorkCtx, fetchNewWorkCancel := context.WithCancelCause(ctx)
+	fetchCtx, fetchNewWorkCancel := context.WithCancelCause(ctx)
 	c.fetchNewWorkCancel = fetchNewWorkCancel
 	workCtx, workCancel := context.WithCancelCause(withClient[TTx](ctx, c))
 	c.workCancel = workCancel
@@ -618,7 +617,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 	c.completer.Subscribe(c.distributeJobCompleterCallback)
 
 	for _, service := range c.services {
-		if err := service.Start(fetchNewWorkCtx); err != nil {
+		if err := service.Start(fetchCtx); err != nil {
 			// In case of error, stop any services that might have started. This
 			// is safe because even services that were never started will still
 			// tolerate being stopped.
@@ -633,8 +632,18 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		}
 	}
 
-	c.runProducers(fetchNewWorkCtx, workCtx)
-	go c.signalStopComplete(workCtx)
+	for _, producer := range c.producersByQueueName {
+		producer := producer
+
+		if err := producer.StartWorkContext(fetchCtx, workCtx); err != nil {
+			return err
+		}
+	}
+
+	go func() {
+		<-fetchCtx.Done()
+		c.signalStopComplete(ctx)
+	}()
 
 	c.baseService.Logger.InfoContext(workCtx, "River client successfully started", slog.String("client_id", c.ID()))
 
@@ -643,8 +652,9 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 
 // ctx is used only for logging, not for lifecycle.
 func (c *Client[TTx]) signalStopComplete(ctx context.Context) {
-	// Wait for producers to exit:
-	c.wg.Wait()
+	for _, producer := range c.producersByQueueName {
+		producer.Stop()
+	}
 
 	// Stop all mainline services where stop order isn't important. Contains the
 	// elector and notifier, amongst others.
@@ -950,39 +960,24 @@ func (c *Client[TTx]) handleLeadershipChangeLoop(ctx context.Context, shouldStar
 
 func (c *Client[TTx]) provisionProducers() error {
 	for queue, queueConfig := range c.config.Queues {
-		config := &producerConfig{
+		c.producersByQueueName[queue] = newProducer(&c.baseService.Archetype, c.driver.GetExecutor(), &producerConfig{
 			ClientID:          c.config.ID,
+			Completer:         c.completer,
 			ErrorHandler:      c.config.ErrorHandler,
 			FetchCooldown:     c.config.FetchCooldown,
 			FetchPollInterval: c.config.FetchPollInterval,
 			JobTimeout:        c.config.JobTimeout,
-			MaxWorkerCount:    uint16(queueConfig.MaxWorkers),
+			MaxWorkers:        queueConfig.MaxWorkers,
 			Notifier:          c.notifier,
 			Queue:             queue,
 			RetryPolicy:       c.config.RetryPolicy,
 			SchedulerInterval: c.config.schedulerInterval,
+			StatusFunc:        c.monitor.SetProducerStatus,
 			Workers:           c.config.Workers,
-		}
-		producer, err := newProducer(&c.baseService.Archetype, c.driver.GetExecutor(), c.completer, config)
-		if err != nil {
-			return err
-		}
-		c.producersByQueueName[queue] = producer
+		})
 		c.monitor.InitializeProducerStatus(queue)
 	}
 	return nil
-}
-
-func (c *Client[TTx]) runProducers(fetchNewWorkCtx, workCtx context.Context) {
-	c.wg.Add(len(c.producersByQueueName))
-	for _, producer := range c.producersByQueueName {
-		producer := producer
-
-		go func() {
-			defer c.wg.Done()
-			producer.Run(fetchNewWorkCtx, workCtx, c.monitor.SetProducerStatus)
-		}()
-	}
 }
 
 // JobCancel cancels the job with the given ID. If possible, the job is

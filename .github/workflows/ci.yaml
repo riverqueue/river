@@ -69,7 +69,7 @@ jobs:
 
       - name: Test
         working-directory: .
-        run: go test -p 1 -race ./...
+        run: go test -p 1 -race ./... -timeout 2m
 
       - name: Test cmd/river
         working-directory: ./cmd/river
