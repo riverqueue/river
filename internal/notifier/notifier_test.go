@@ -410,9 +410,14 @@ func TestNotifier(t *testing.T) {
 			notifyChans[i] = make(chan TopicAndPayload, 1000)
 		}
 
+		var wg sync.WaitGroup
+
 		// Start a goroutine to send messages constantly.
 		shutdown := make(chan struct{})
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
+
 			ticker := time.NewTicker(10 * time.Millisecond)
 			defer ticker.Stop()
 
@@ -430,7 +435,6 @@ func TestNotifier(t *testing.T) {
 			}
 		}()
 
-		var wg sync.WaitGroup
 		wg.Add(len(notifyChans))
 		for i := range notifyChans {
 			notifyChan := notifyChans[i]
@@ -443,15 +447,15 @@ func TestNotifier(t *testing.T) {
 					require.NoError(t, err)
 
 					// Pause a random brief amount of time.
-					notifier.BaseService.CancellableSleepRandomBetween(ctx, 5*time.Millisecond, 50*time.Millisecond)
+					notifier.BaseService.CancellableSleepRandomBetween(ctx, 15*time.Millisecond, 50*time.Millisecond)
 
 					sub.Unlisten(ctx)
 				}
 			}()
 		}
 
-		wg.Wait()
 		close(shutdown)
+		wg.Wait()
 		notifier.Stop()
 
 		for i := range notifyChans {
