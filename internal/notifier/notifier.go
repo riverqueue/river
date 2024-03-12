@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -560,12 +561,12 @@ func ListenRetryLoop(ctx context.Context, baseService *baseservice.BaseService, 
 				return nil, err
 			}
 
-			if attempt >= maxListenAttempts {
-				baseService.Logger.Error(baseService.Name+": Error listening for on topic; giving up", "attempt", attempt, "err", err, "topic", topic)
+			if attempt >= maxListenAttempts || strings.HasSuffix(err.Error(), "conn closed") {
+				baseService.Logger.ErrorContext(ctx, baseService.Name+": Error listening for on topic; giving up", "attempt", attempt, "err", err, "topic", topic)
 				return nil, err
 			}
 
-			baseService.Logger.Error(baseService.Name+": Error listening for on topic; will retry after backoff", "attempt", attempt, "err", err, "topic", topic)
+			baseService.Logger.ErrorContext(ctx, baseService.Name+": Error listening for on topic; will retry after backoff", "attempt", attempt, "err", err, "topic", topic)
 
 			baseService.CancellableSleepExponentialBackoff(ctx, attempt-1, baseservice.MaxAttemptsBeforeResetDefault)
 			continue

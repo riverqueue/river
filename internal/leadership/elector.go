@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -149,10 +150,15 @@ func (e *Elector) Start(ctx context.Context) error {
 
 		e.Logger.InfoContext(ctx, e.Name+": Listening for leadership changes", "client_id", e.clientID, "topic", notifier.NotificationTopicLeadership)
 
+		// TODO(brandur): Get rid of this retry loop after refactor.
 		var err error
 		sub, err = notifier.ListenRetryLoop(ctx, &e.BaseService, e.notifier, notifier.NotificationTopicLeadership, handleNotification)
-		if err != nil { //nolint:staticcheck
-			// TODO(brandur): Propagate this after refactor.
+		if err != nil {
+			close(stopped)
+			if strings.HasSuffix(err.Error(), "conn closed") || errors.Is(err, context.Canceled) {
+				return nil
+			}
+			return err
 		}
 	}
 
