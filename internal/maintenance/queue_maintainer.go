@@ -7,6 +7,7 @@ import (
 
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/maintenance/startstop"
+	"github.com/riverqueue/river/internal/util/maputil"
 )
 
 const (
@@ -75,9 +76,7 @@ func (m *QueueMaintainer) Start(ctx context.Context) error {
 
 		<-ctx.Done()
 
-		for _, service := range m.servicesByName {
-			service.Stop()
-		}
+		startstop.StopAllParallel(maputil.Values(m.servicesByName))
 	}()
 
 	return nil
