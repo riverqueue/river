@@ -122,14 +122,11 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 				insertParamsMany   []*riverdriver.JobInsertFastParams
 				insertParamsUnique []*insertParamsAndUniqueOpts
 			)
-			now := s.TimeNowUTC()
 
 			for _, periodicJob := range s.periodicJobs {
 				// Expect client to have validated any user input in a safer way
 				// already, but do a second pass for internal uses.
 				periodicJob.mustValidate()
-
-				periodicJob.nextRunAt = periodicJob.ScheduleFunc(now)
 
 				if periodicJob.RunOnStart {
 					if insertParams, uniqueOpts, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc); ok {
@@ -143,6 +140,11 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 			}
 
 			s.insertBatch(ctx, insertParamsMany, insertParamsUnique)
+
+			now := s.TimeNowUTC()
+			for _, periodicJob := range s.periodicJobs {
+				periodicJob.nextRunAt = periodicJob.ScheduleFunc(now)
+			}
 		}
 
 		s.TestSignals.EnteredLoop.Signal(struct{}{})
@@ -160,15 +162,23 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 
 				now := s.TimeNowUTC()
 
+				s.Logger.InfoContext(ctx, "--- Timer elapsed; scheduling jobs", "now", now)
+
 				// Add a small margin to the current time so we're not only
 				// running jobs that are already ready, but also ones ready at
 				// this exact moment or ready in the very near future.
-				nowWithMargin := now.Add(10 * time.Millisecond)
+				nowWithMargin := now.Add(100 * time.Millisecond)
+				// nowWithMargin := now
 
 				for _, periodicJob := range s.periodicJobs {
+					insertParams, _, _ := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc)
+
 					if !periodicJob.nextRunAt.Before(nowWithMargin) {
+						s.Logger.InfoContext(ctx, "Skipping job because not ready", "kind", insertParams.Kind, "next_run_at", periodicJob.nextRunAt)
 						continue
 					}
+
+					s.Logger.InfoContext(ctx, "Scheduling job because ready to go", "kind", insertParams.Kind, "next_run_at", periodicJob.nextRunAt)
 
 					periodicJob.nextRunAt = periodicJob.ScheduleFunc(now)
 
@@ -186,6 +196,9 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 				// Reset the timer after the insert loop has finished so it's
 				// paused during work. Makes its firing more deterministic.
 				timerUntilNextRun.Reset(s.timeUntilNextRun())
+
+				untilNextRun := s.timeUntilNextRun()
+				s.Logger.InfoContext(ctx, "Timer until next run", "time_until_next_run", untilNextRun, "next_run_at", time.Now().Add(untilNextRun))
 
 			case <-ctx.Done():
 				// Clean up timer resources. We know it has _not_ received from the

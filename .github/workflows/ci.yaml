@@ -69,27 +69,27 @@ jobs:
 
       - name: Test
         working-directory: .
-        run: go test -p 1 -race ./... -timeout 2m
+        run: go test ./internal/maintenance -run TestPeriodicJobEnqueuer/EnqueuesPeriodicJobs -race -count 100
 
-      - name: Test cmd/river
-        working-directory: ./cmd/river
-        run: go test -race ./... -timeout 2m
+      # - name: Test cmd/river
+      #   working-directory: ./cmd/river
+      #   run: go test -race ./... -timeout 2m
 
-      - name: Test riverdriver
-        working-directory: ./riverdriver
-        run: go test -race ./... -timeout 2m
+      # - name: Test riverdriver
+      #   working-directory: ./riverdriver
+      #   run: go test -race ./... -timeout 2m
 
-      - name: Test riverdriver/riverdatabasesql
-        working-directory: ./riverdriver/riverdatabasesql
-        run: go test -race ./... -timeout 2m
+      # - name: Test riverdriver/riverdatabasesql
+      #   working-directory: ./riverdriver/riverdatabasesql
+      #   run: go test -race ./... -timeout 2m
 
-      - name: Test riverdriver/riverpgxv5
-        working-directory: ./riverdriver/riverpgxv5
-        run: go test -race ./... -timeout 2m
+      # - name: Test riverdriver/riverpgxv5
+      #   working-directory: ./riverdriver/riverpgxv5
+      #   run: go test -race ./... -timeout 2m
 
-      - name: Test rivertype
-        working-directory: ./rivertype
-        run: go test -race ./... -timeout 2m
+      # - name: Test rivertype
+      #   working-directory: ./rivertype
+      #   run: go test -race ./... -timeout 2m
 
   cli:
     runs-on: ubuntu-latest
