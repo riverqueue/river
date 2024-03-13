@@ -410,13 +410,13 @@ func TestNotifier(t *testing.T) {
 			notifyChans[i] = make(chan TopicAndPayload, 1000)
 		}
 
-		var wg sync.WaitGroup
-
 		// Start a goroutine to send messages constantly.
-		shutdown := make(chan struct{})
-		wg.Add(1)
+		var (
+			sendNotificationsDone     = make(chan struct{})
+			sendNotificationsShutdown = make(chan struct{})
+		)
 		go func() {
-			defer wg.Done()
+			defer close(sendNotificationsDone)
 
 			ticker := time.NewTicker(10 * time.Millisecond)
 			defer ticker.Stop()
@@ -427,7 +427,7 @@ func TestNotifier(t *testing.T) {
 				select {
 				case <-ctx.Done():
 					return
-				case <-shutdown:
+				case <-sendNotificationsShutdown:
 					return
 				case <-ticker.C:
 					// loop again
@@ -435,6 +435,7 @@ func TestNotifier(t *testing.T) {
 			}
 		}()
 
+		var wg sync.WaitGroup
 		wg.Add(len(notifyChans))
 		for i := range notifyChans {
 			notifyChan := notifyChans[i]
@@ -454,9 +455,9 @@ func TestNotifier(t *testing.T) {
 			}()
 		}
 
-		close(shutdown)
-		wg.Wait()
-		notifier.Stop()
+		wg.Wait()                        // wait for subscribe loops to finish all their work
+		close(sendNotificationsShutdown) // stop sending notifications
+		<-sendNotificationsDone          // wait for notifications goroutine to finish
 
 		for i := range notifyChans {
 			t.Logf("Channel %2d contains %3d message(s)", i, len(notifyChans[i]))
