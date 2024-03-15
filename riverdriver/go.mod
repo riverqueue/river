@@ -4,4 +4,4 @@ go 1.21.4
 
 replace github.com/riverqueue/river/rivertype => ../rivertype
 
-require github.com/riverqueue/river/rivertype v0.0.20
+require github.com/riverqueue/river/rivertype v0.0.25

@@ -3,13 +3,18 @@ package notifier
 import (
 	"context"
 	"errors"
-	"log/slog"
+	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/componentstatus"
+	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/rivercommon"
+	"github.com/riverqueue/river/internal/util/maputil"
+	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
 )
 
@@ -24,75 +29,120 @@ const (
 type NotifyFunc func(topic NotificationTopic, payload string)
 
 type Subscription struct {
-	creationTime time.Time
-	topic        NotificationTopic
 	notifyFunc   NotifyFunc
-
-	unlistenOnce *sync.Once
 	notifier     *Notifier
+	topic        NotificationTopic
+	unlistenOnce sync.Once
 }
 
-func (s *Subscription) Unlisten() {
+func (s *Subscription) Unlisten(ctx context.Context) {
 	s.unlistenOnce.Do(func() {
-		s.notifier.unlisten(s)
+		// Unlisten uses background context in case of cancellation.
+		if err := s.notifier.unlisten(context.Background(), s); err != nil { //nolint:contextcheck
+			s.notifier.Logger.ErrorContext(ctx, s.notifier.Name+": Error unlistening on topic", "err", err, "topic", s.topic)
+		}
 	})
 }
 
-type subscriptionChange struct {
-	isNewTopic bool
-	topic      NotificationTopic
+// Test-only properties.
+type notifierTestSignals struct {
+	BackoffError   rivercommon.TestSignal[error]    // non-cancellation error received by main run loop
+	ListeningBegin rivercommon.TestSignal[struct{}] // notifier has entered a listen loop
+	ListeningEnd   rivercommon.TestSignal[struct{}] // notifier has left a listen loop
+}
+
+func (ts *notifierTestSignals) Init() {
+	ts.BackoffError.Init()
+	ts.ListeningBegin.Init()
+	ts.ListeningEnd.Init()
 }
 
 type Notifier struct {
 	baseservice.BaseService
+	startstop.BaseStartStop
 
-	listener         riverdriver.Listener
-	notificationBuf  chan *riverdriver.Notification
-	statusChangeFunc func(componentstatus.Status)
-	logger           *slog.Logger
+	listener          riverdriver.Listener
+	notificationBuf   chan *riverdriver.Notification
+	statusChangeFunc  func(componentstatus.Status)
+	testSignals       notifierTestSignals
+	waitInterruptChan chan func()
 
-	mu           sync.Mutex
-	isConnActive bool
-	subs         map[NotificationTopic][]*Subscription
-	subChangeCh  chan *subscriptionChange
+	mu            sync.RWMutex
+	isConnected   bool
+	isStarted     bool
+	isWaiting     bool
+	subscriptions map[NotificationTopic][]*Subscription
+	waitCancel    context.CancelFunc
 }
 
-func New(archetype *baseservice.Archetype, listener riverdriver.Listener, statusChangeFunc func(componentstatus.Status), logger *slog.Logger) *Notifier {
+func New(archetype *baseservice.Archetype, listener riverdriver.Listener, statusChangeFunc func(componentstatus.Status)) *Notifier {
 	notifier := baseservice.Init(archetype, &Notifier{
-		listener:         listener,
-		notificationBuf:  make(chan *riverdriver.Notification, 1000),
-		statusChangeFunc: statusChangeFunc,
-		logger:           logger.WithGroup("notifier"),
+		listener:          listener,
+		notificationBuf:   make(chan *riverdriver.Notification, 1000),
+		statusChangeFunc:  statusChangeFunc,
+		waitInterruptChan: make(chan func(), 10),
 
-		subs:        make(map[NotificationTopic][]*Subscription),
-		subChangeCh: make(chan *subscriptionChange, 1000),
+		subscriptions: make(map[NotificationTopic][]*Subscription),
 	})
 	return notifier
 }
 
-func (n *Notifier) Run(ctx context.Context) {
-	n.statusChangeFunc(componentstatus.Initializing)
-	var wg sync.WaitGroup
+func (n *Notifier) Start(ctx context.Context) error {
+	ctx, shouldStart, stopped := n.StartInit(ctx)
+	if !shouldStart {
+		return nil
+	}
 
-	wg.Add(1)
+	// The loop below will connect/close on every iteration, but do one initial
+	// connect so the notifier fails fast in case of an obvious problem.
+	if err := n.listenerConnect(ctx, false); err != nil {
+		close(stopped)
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return err
+	}
+
 	go func() {
-		defer wg.Done()
-		n.deliverNotifications(ctx)
+		defer close(stopped)
+
+		n.Logger.InfoContext(ctx, n.Name+": Run loop started")
+		defer n.Logger.InfoContext(ctx, n.Name+": Run loop stopped")
+
+		n.withLock(func() { n.isStarted = true })
+		defer n.withLock(func() { n.isStarted = false })
+
+		defer n.listenerClose(ctx, false)
+
+		n.statusChangeFunc(componentstatus.Initializing)
+		var wg sync.WaitGroup
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			n.deliverNotifications(ctx)
+		}()
+
+		for attempt := 0; ; attempt++ {
+			if err := n.listenAndWait(ctx); err != nil {
+				if errors.Is(err, context.Canceled) {
+					break
+				}
+
+				n.Logger.ErrorContext(ctx, n.Name+": Error running listener (will attempt reconnect after backoff)",
+					"attempt", attempt, "err", err)
+				n.testSignals.BackoffError.Signal(err)
+
+				n.CancellableSleepExponentialBackoff(ctx, attempt, baseservice.MaxAttemptsBeforeResetDefault)
+			}
+		}
+
+		n.statusChangeFunc(componentstatus.ShuttingDown)
+		wg.Wait()
+		n.statusChangeFunc(componentstatus.Stopped)
 	}()
 
-	for {
-		n.getConnAndRun(ctx)
-
-		select {
-		case <-ctx.Done():
-			wg.Wait()
-			n.logger.Info(n.Name + ": Notifier stopped")
-			n.statusChangeFunc(componentstatus.Stopped)
-			return
-		default:
-			// TODO: exponential backoff
-		}
-	}
+	return nil
 }
 
 func (n *Notifier) deliverNotifications(ctx context.Context) {
@@ -100,113 +150,215 @@ func (n *Notifier) deliverNotifications(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case notif := <-n.notificationBuf:
-			n.deliverNotification(notif)
+
+		case notification := <-n.notificationBuf:
+			notifyFuncs := func() []NotifyFunc {
+				n.mu.RLock()
+				defer n.mu.RUnlock()
+
+				return sliceutil.Map(n.subscriptions[NotificationTopic(notification.Topic)], func(s *Subscription) NotifyFunc { return s.notifyFunc })
+			}()
+
+			for _, notifyFunc := range notifyFuncs {
+				// TODO: panic recovery on delivery attempts
+				notifyFunc(NotificationTopic(notification.Topic), notification.Payload)
+			}
 		}
 	}
 }
 
-func (n *Notifier) deliverNotification(notif *riverdriver.Notification) {
-	n.mu.Lock()
-
-	fns := make([]NotifyFunc, len(n.subs[NotificationTopic(notif.Topic)]))
-	for i, sub := range n.subs[NotificationTopic(notif.Topic)] {
-		fns[i] = sub.notifyFunc
+func (n *Notifier) listenAndWait(ctx context.Context) error {
+	if err := n.listenerConnect(ctx, false); err != nil {
+		return err
 	}
-	n.mu.Unlock()
+	defer n.listenerClose(ctx, false)
 
-	for _, fn := range fns {
-		// TODO: panic recovery on delivery attempts
-		fn(NotificationTopic(notif.Topic), notif.Payload)
-	}
-}
+	topics := func() []NotificationTopic {
+		n.mu.RLock()
+		defer n.mu.RUnlock()
 
-func (n *Notifier) getConnAndRun(ctx context.Context) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	if err := n.listener.Connect(ctx); err != nil {
-		if !errors.Is(context.Cause(ctx), rivercommon.ErrShutdown) {
-			n.logger.Error("error establishing connection from pool", "err", err)
-		}
-		return
-	}
-	defer func() {
-		// use an already-canceled context here so conn.Close() does not block the run loop
-		ctx, cancel := context.WithDeadline(ctx, time.Now())
-		defer cancel()
-
-		if err := n.listener.Close(ctx); err != nil {
-			n.logger.Error("error closing listener", "err", err)
-		}
+		return maputil.Keys(n.subscriptions)
 	}()
 
-	startingTopics := n.setConnActive()
-	defer n.setConnInactive()
-
-	// TODO: need to drain subChangeCh before returning (but after setting conn
-	// active = false) just to ensure nobody is blocking on sending to it
-
-	for _, topic := range startingTopics {
-		if err := n.listener.Listen(ctx, string(topic)); err != nil {
-			// TODO: log?
-			return
+	for _, topic := range topics {
+		if err := n.listenerListen(ctx, topic); err != nil {
+			return err
 		}
 	}
 
-	n.logger.Info(n.Name + ": Notifier started")
+	n.Logger.InfoContext(ctx, n.Name+": Notifier healthy")
 	n.statusChangeFunc(componentstatus.Healthy)
-	for {
-		// If context is already done, don't bother waiting for notifications:
-		select {
-		case <-ctx.Done():
-			n.statusChangeFunc(componentstatus.ShuttingDown)
-			return
-		default:
-		}
 
-		err := n.runOnce(ctx)
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				n.statusChangeFunc(componentstatus.ShuttingDown)
+	n.testSignals.ListeningBegin.Signal(struct{}{})
+	defer n.testSignals.ListeningEnd.Signal(struct{}{})
+
+	drainInterrupts := func() {
+		for {
+			select {
+			case interruptOperation := <-n.waitInterruptChan:
+				interruptOperation()
+			default:
 				return
 			}
+		}
+	}
+
+	// Drain interrupts one last time before leaving to make sure we're not
+	// leaving any goroutines hanging anywhere.
+	defer drainInterrupts()
+
+	for {
+		// Top level context is done, meaning we're shutting down.
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		// Drain any and all interrupt operations before continuing back into a
+		// new wait to give any new subscribers a chance to listen/unlisten.
+		drainInterrupts()
+
+		err := n.waitOnce(ctx)
+		if err != nil {
+			// On cancellation, reenter loop, but the check at the top on
+			// `ctx.Err()` will end it if the service is shutting down.
+			if errors.Is(err, context.Canceled) {
+				continue
+			}
+
+			n.Logger.InfoContext(ctx, n.Name+": Notifier unhealthy")
 			n.statusChangeFunc(componentstatus.Unhealthy)
-			return
+
+			return err
 		}
 	}
 }
 
-func (n *Notifier) runOnce(ctx context.Context) error {
+func (n *Notifier) listenerClose(ctx context.Context, skipLock bool) {
+	if !skipLock {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+	}
+
+	if !n.isConnected {
+		return
+	}
+
+	n.Logger.InfoContext(ctx, n.Name+": Listener closing")
+	if err := n.listener.Close(ctx); err != nil {
+		if !errors.Is(err, context.Canceled) {
+			n.Logger.ErrorContext(ctx, n.Name+": Error closing listener", "err", err)
+		}
+	}
+
+	n.isConnected = false
+}
+
+const listenerTimeout = 10 * time.Second
+
+func (n *Notifier) listenerConnect(ctx context.Context, skipLock bool) error {
+	if !skipLock {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+	}
+
+	if n.isConnected {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, listenerTimeout)
+	defer cancel()
+
+	n.Logger.InfoContext(ctx, n.Name+": Listener connecting")
+	if err := n.listener.Connect(ctx); err != nil {
+		if !errors.Is(err, context.Canceled) {
+			n.Logger.ErrorContext(ctx, n.Name+": Error connecting listener", "err", err)
+		}
+
+		return err
+	}
+
+	n.isConnected = true
+	return nil
+}
+
+// Listens on a topic with an appropriate logging statement. Should be preferred
+// to `listener.Listen` for improved logging/telemetry.
+//
+// Not protected by mutex because it doesn't modify any notifier state and the
+// underlying listener has a mutex around its operations.
+func (n *Notifier) listenerListen(ctx context.Context, topic NotificationTopic) error {
+	ctx, cancel := context.WithTimeout(ctx, listenerTimeout)
+	defer cancel()
+
+	n.Logger.InfoContext(ctx, n.Name+": Listening on topic", "topic", topic)
+	if err := n.listener.Listen(ctx, string(topic)); err != nil {
+		return fmt.Errorf("error listening on topic %q: %w", topic, err)
+	}
+
+	return nil
+}
+
+// Unlistens on a topic with an appropriate logging statement. Should be
+// preferred to `listener.Unlisten` for improved logging/telemetry.
+//
+// Not protected by mutex because it doesn't modify any notifier state and the
+// underlying listener has a mutex around its operations.
+func (n *Notifier) listenerUnlisten(ctx context.Context, topic NotificationTopic) error {
+	ctx, cancel := context.WithTimeout(ctx, listenerTimeout)
+	defer cancel()
+
+	n.Logger.InfoContext(ctx, n.Name+": Unlistening on topic", "topic", topic)
+	if err := n.listener.Unlisten(ctx, string(topic)); err != nil {
+		return fmt.Errorf("error unlistening on topic %q: %w", topic, err)
+	}
+
+	return nil
+}
+
+// Enters a single blocking wait for notifications on the underlying listener.
+// Waiting for a notification locks an underlying connection, so infrastructure
+// elsewhere in the notifier must preempt it by sending to `n.waitInterruptChan`
+// and invoking `n.waitCancel()`. Cancelling the input context (as occurs during
+// shutdown) also unblocks the wait.
+func (n *Notifier) waitOnce(ctx context.Context) error {
+	n.withLock(func() {
+		n.isWaiting = true
+		ctx, n.waitCancel = context.WithCancel(ctx)
+	})
+	defer n.withLock(func() {
+		n.isWaiting = false
+		n.waitCancel()
+	})
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	errCh := make(chan error)
+	errChan := make(chan error)
 
 	go func() {
 		for {
-			notif, err := n.listener.WaitForNotification(ctx)
+			notification, err := n.listener.WaitForNotification(ctx)
 			if err != nil {
-				errCh <- err
+				errChan <- err
 				return
 			}
 
 			select {
-			case n.notificationBuf <- notif:
+			case n.notificationBuf <- notification:
 			default:
-				n.logger.Warn("dropping notification due to full buffer", "payload", notif.Payload)
+				n.Logger.WarnContext(ctx, n.Name+": Dropping notification due to full buffer", "payload", notification.Payload)
 			}
 		}
 	}()
 
-	drainErrCh := func() error {
+	drainErrChan := func() error {
 		cancel()
 
 		// There's a chance we encounter some other error before the context.Canceled comes in:
-		err := <-errCh
+		err := <-errChan
 		if err != nil && !errors.Is(err, context.Canceled) {
 			// A non-cancel error means something went wrong with the conn, so we should bail.
-			n.logger.Error("error on draining notification wait", "err", err)
+			n.Logger.ErrorContext(ctx, n.Name+": Error on draining notification wait", "err", err)
 			return err
 		}
 		// If we got a context cancellation error, it means we successfully
@@ -220,122 +372,206 @@ func (n *Notifier) runOnce(ctx context.Context) error {
 
 	// * Wait for notifications
 	// * Ping conn if 5 seconds have elapsed between notifications to keep it alive
-	// * Manage listens/unlistens on conn
+	// * Manage listens/unlistens on conn (waitInterruptChan)
 	// * If any errors are encountered, return them so we can kill the conn and start over
 	select {
 	case <-ctx.Done():
-		return <-errCh
+		return <-errChan
+
 	case <-needPingCtx.Done():
-		if err := drainErrCh(); err != nil {
+		if err := drainErrChan(); err != nil {
 			return err
 		}
 		// Ping the conn to see if it's still alive
 		if err := n.listener.Ping(ctx); err != nil {
 			return err
 		}
-	case err := <-errCh:
+
+	case err := <-errChan:
 		if errors.Is(err, context.Canceled) {
 			return nil
 		}
 		if err != nil {
-			n.logger.Error("error from notification wait", "err", err)
+			n.Logger.ErrorContext(ctx, n.Name+": Error from notification wait", "err", err)
 			return err
-		}
-	case subChange := <-n.subChangeCh:
-		if err := drainErrCh(); err != nil {
-			return err
-		}
-		// Apply the subscription change
-		if subChange.isNewTopic {
-			return n.listener.Listen(ctx, string(subChange.topic))
-		} else {
-			return n.listener.Unlisten(ctx, string(subChange.topic))
 		}
 	}
+
 	return nil
 }
 
-func (n *Notifier) setConnActive() []NotificationTopic {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.isConnActive = true
-
-	topics := make([]NotificationTopic, 0, len(n.subs))
-	for topic := range n.subs {
-		topics = append(topics, topic)
+// Sends an interrupt operation to the main loop, waits on the result, and
+// returns an error if there was one.
+//
+// MUST be called with the `n.mu` mutex already locked.
+func (n *Notifier) sendInterruptAndReceiveResult(operation func() error) error {
+	errChan := make(chan error)
+	n.waitInterruptChan <- func() {
+		errChan <- operation()
 	}
-	return topics
+
+	n.waitCancel()
+
+	// Notably, these unlock then lock again, the reverse of what you'd normally
+	// expect in a mutex pattern. This is because this function is only expected
+	// to be called with the mutex already locked, but we need to unlock it to
+	// give the main loop a chance to run interrupt operations.
+	n.mu.Unlock()
+	defer n.mu.Lock()
+
+	select {
+	case err := <-errChan:
+		return err
+	case <-time.After(5 * time.Second):
+		return errors.New("timed out waiting for interrupt operation")
+	}
 }
 
-func (n *Notifier) setConnInactive() {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.isConnActive = false
-
-	// drain any pending changes from subChangeCh, because they'll be reflected
-	// automatically when the conn restarts.
-	for {
-		select {
-		case <-n.subChangeCh:
-		default:
-			return
-		}
-	}
-}
-
-func (n *Notifier) Listen(topic NotificationTopic, notifyFunc NotifyFunc) *Subscription {
+func (n *Notifier) Listen(ctx context.Context, topic NotificationTopic, notifyFunc NotifyFunc) (*Subscription, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
 	sub := &Subscription{
-		creationTime: time.Now(),
-		topic:        topic,
-		notifyFunc:   notifyFunc,
-		unlistenOnce: &sync.Once{},
-		notifier:     n,
+		notifyFunc: notifyFunc,
+		topic:      topic,
+		notifier:   n,
 	}
 
-	isNewTopic := false
-
-	subs := n.subs[topic]
-	if subs == nil {
-		isNewTopic = true
-		subs = make([]*Subscription, 0, 10)
+	existingSubs, existingTopic := n.subscriptions[topic]
+	if !existingTopic {
+		existingSubs = make([]*Subscription, 0, 10)
 	}
-	subs = append(subs, sub)
-	n.subs[topic] = subs
+	n.subscriptions[topic] = append(existingSubs, sub)
 
-	if isNewTopic && n.isConnActive {
-		// send to chan
-		n.subChangeCh <- &subscriptionChange{
-			topic:      topic,
-			isNewTopic: isNewTopic,
+	n.Logger.DebugContext(ctx, n.Name+": Added subscription", "new_num_subscriptions", len(n.subscriptions[topic]), "topic", topic)
+
+	// We add the new subscription to the subscription list optimistically, and
+	// it needs to be done this way in case of a restart after an interrupt
+	// below has been run, but after a return to this function (say we were to
+	// add the new sub at the end of this function, it would not be picked
+	// during the restart). But in case of an error subscribing, remove the sub.
+	//
+	// By the time this function is run (i.e. after an interrupt), a lock on
+	// `n.mu` has been reacquired, and modifying subscription state is safe.
+	removeSub := func() { n.removeSubscription(ctx, sub) }
+
+	if !existingTopic {
+		// If already waiting, send an interrupt to the wait function to run a
+		// listen operation. If not, connect and listen directly, returning any
+		// errors as feedback to the caller.
+		if n.isWaiting {
+			if err := n.sendInterruptAndReceiveResult(func() error { return n.listenerListen(ctx, topic) }); err != nil {
+				removeSub()
+				return nil, err
+			}
+		} else {
+			var justConnected bool
+
+			if !n.isConnected {
+				if err := n.listenerConnect(ctx, true); err != nil {
+					removeSub()
+					return nil, err
+				}
+				justConnected = true
+			}
+
+			if err := n.listenerListen(ctx, topic); err != nil {
+				removeSub()
+
+				// If we just connected above and the notifier hasn't started in
+				// the interim, also close the connection so we don't leave any
+				// resources hanging.
+				if justConnected && !n.isStarted {
+					n.listenerClose(ctx, true)
+				}
+
+				return nil, err
+			}
 		}
 	}
 
-	return sub
+	return sub, nil
 }
 
-func (n *Notifier) unlisten(sub *Subscription) {
-	success := n.tryUnlisten(sub)
-	if !success {
-		panic("BUG: tried to unlisten for subscription not in list")
-	}
-}
-
-// needs to be in a separate method so the defer will cleanly unlock the mutex,
-// even if we panic.
-func (n *Notifier) tryUnlisten(sub *Subscription) bool {
+func (n *Notifier) unlisten(ctx context.Context, sub *Subscription) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	sl := n.subs[sub.topic]
-	for i, elem := range sl {
-		if elem == sub {
-			sl = append(sl[:i], sl[i+1:]...)
-			n.subs[sub.topic] = sl
-			return true
+	subs := n.subscriptions[sub.topic]
+
+	// If this is the last subscription on the topic, unlisten if we're connected.
+	if len(subs) <= 1 {
+		// If already waiting, send an interrupt to the wait function to run an
+		// unlisten operation. If not, if connected, unlisten directly.
+		if n.isWaiting {
+			if err := n.sendInterruptAndReceiveResult(func() error { return n.listenerUnlisten(ctx, sub.topic) }); err != nil {
+				return err
+			}
+		} else {
+			if n.isConnected {
+				if err := n.listenerUnlisten(ctx, sub.topic); err != nil {
+					return err
+				}
+
+				// If this was the last subscription, we weren't in a wait loop,
+				// and the notifier never started, also clean up by closing the
+				// listener.
+				if !n.isStarted && len(n.subscriptions) <= 1 {
+					n.listenerClose(ctx, true)
+				}
+			}
 		}
 	}
-	return false
+
+	n.removeSubscription(ctx, sub)
+
+	return nil
+}
+
+// This function requires that the caller already has a lock on `n.mu`.
+func (n *Notifier) removeSubscription(ctx context.Context, sub *Subscription) {
+	n.subscriptions[sub.topic] = slices.DeleteFunc(n.subscriptions[sub.topic], func(s *Subscription) bool {
+		return s == sub
+	})
+
+	if len(n.subscriptions[sub.topic]) < 1 {
+		delete(n.subscriptions, sub.topic)
+	}
+
+	n.Logger.DebugContext(ctx, n.Name+": Removed subscription", "new_num_subscriptions", len(n.subscriptions[sub.topic]), "topic", sub.topic)
+}
+
+func (n *Notifier) withLock(lockedFunc func()) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	lockedFunc()
+}
+
+// ListenRetryLoop tries to listen on a notification topic, but with a retry
+// loop in case of an initial failure. This is a stopgap until services like the
+// producer and elector can propagate errors back on start up, and subject to
+// change.
+func ListenRetryLoop(ctx context.Context, baseService *baseservice.BaseService, notifier *Notifier, topic NotificationTopic, notifyFunc NotifyFunc) (*Subscription, error) {
+	const maxListenAttempts = 3
+
+	for attempt := 1; ; attempt++ {
+		sub, err := notifier.Listen(ctx, topic, notifyFunc)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil, err
+			}
+
+			if attempt >= maxListenAttempts || strings.HasSuffix(err.Error(), "conn closed") {
+				baseService.Logger.ErrorContext(ctx, baseService.Name+": Error listening for on topic; giving up", "attempt", attempt, "err", err, "topic", topic)
+				return nil, err
+			}
+
+			baseService.Logger.ErrorContext(ctx, baseService.Name+": Error listening for on topic; will retry after backoff", "attempt", attempt, "err", err, "topic", topic)
+
+			baseService.CancellableSleepExponentialBackoff(ctx, attempt-1, baseservice.MaxAttemptsBeforeResetDefault)
+			continue
+		}
+
+		return sub, nil
+	}
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest/slogtest" //nolint:depguard
 	"github.com/riverqueue/river/internal/testdb"
+	"github.com/riverqueue/river/internal/util/randutil"
 	"github.com/riverqueue/river/internal/util/valutil"
 )
 
@@ -57,6 +58,7 @@ func BaseServiceArchetype(tb testing.TB) *baseservice.Archetype {
 
 	return &baseservice.Archetype{
 		Logger:     Logger(tb),
+		Rand:       randutil.NewCryptoSeededConcurrentSafeRand(),
 		TimeNowUTC: func() time.Time { return time.Now().UTC() },
 	}
 }
@@ -67,7 +69,9 @@ func DatabaseConfig(databaseName string) *pgxpool.Config {
 		panic(fmt.Sprintf("error parsing database URL: %v", err))
 	}
 	config.MaxConns = dbPoolMaxConns
-	config.ConnConfig.ConnectTimeout = 10 * time.Second
+	// Use a short conn timeout here to attempt to quickly cancel attempts that
+	// are unlikely to succeed even with more time:
+	config.ConnConfig.ConnectTimeout = 2 * time.Second
 	config.ConnConfig.RuntimeParams["timezone"] = "UTC"
 	return config
 }
@@ -97,7 +101,7 @@ func DatabaseURL(databaseName string) string {
 
 // DiscardContinuously drains continuously out of the given channel and discards
 // anything that comes out of it. Returns a stop function that should be invoked
-// to stop draining.  Stop must be invoked before tests finish to stop an
+// to stop draining. Stop must be invoked before tests finish to stop an
 // internal goroutine.
 func DiscardContinuously[T any](drainChan <-chan T) func() {
 	var (
@@ -281,6 +285,13 @@ func TestTx(ctx context.Context, tb testing.TB) pgx.Tx {
 		// rollback. Allow this error since it's hard to prevent it in our flows
 		// that use contexts heavily.
 		if err.Error() == "conn closed" {
+			return
+		}
+
+		// Similar to the above, but a newly appeared error that wraps the
+		// above. As far as I can tell, no error variables are available to use
+		// with `errors.Is`.
+		if err.Error() == "failed to deallocate cached statement(s): conn closed" {
 			return
 		}
 

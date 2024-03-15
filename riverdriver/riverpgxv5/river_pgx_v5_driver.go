@@ -464,7 +464,7 @@ func (t *ExecutorTx) Rollback(ctx context.Context) error {
 type Listener struct {
 	conn   *pgxpool.Conn
 	dbPool *pgxpool.Pool
-	mu     sync.RWMutex
+	mu     sync.Mutex
 }
 
 func (l *Listener) Close(ctx context.Context) error {
@@ -475,12 +475,18 @@ func (l *Listener) Close(ctx context.Context) error {
 		return nil
 	}
 
-	if err := l.conn.Conn().Close(ctx); err != nil {
-		return err
-	}
+	// Release below would take care of cleanup and potentially put the
+	// connection back into rotation, but in case a Listen was invoked without a
+	// subsequent Unlisten on the same tpic, close the connection explicitly to
+	// guarantee no other caller will receive a partially tainted connection.
+	err := l.conn.Conn().Close(ctx)
+
+	// Even in the event of an error, make sure conn is set back to nil so that
+	// the listener can be reused.
 	l.conn.Release()
 	l.conn = nil
-	return nil
+
+	return err
 }
 
 func (l *Listener) Connect(ctx context.Context) error {
@@ -501,31 +507,31 @@ func (l *Listener) Connect(ctx context.Context) error {
 }
 
 func (l *Listener) Listen(ctx context.Context, topic string) error {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
 	_, err := l.conn.Exec(ctx, "LISTEN "+topic)
 	return err
 }
 
 func (l *Listener) Ping(ctx context.Context) error {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
 	return l.conn.Ping(ctx)
 }
 
 func (l *Listener) Unlisten(ctx context.Context, topic string) error {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
 	_, err := l.conn.Exec(ctx, "UNLISTEN "+topic)
 	return err
 }
 
 func (l *Listener) WaitForNotification(ctx context.Context) (*riverdriver.Notification, error) {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
 	notification, err := l.conn.Conn().WaitForNotification(ctx)
 	if err != nil {

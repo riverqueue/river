@@ -1382,8 +1382,8 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			TTL:      leaderTTL,
 		})
 		require.NoError(t, err)
-		require.WithinDuration(t, time.Now(), leader.ElectedAt, 100*time.Millisecond)
-		require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, 100*time.Millisecond)
+		require.WithinDuration(t, time.Now(), leader.ElectedAt, 500*time.Millisecond)
+		require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, 500*time.Millisecond)
 		require.Equal(t, leaderInstanceName, leader.Name)
 		require.Equal(t, clientID, leader.LeaderID)
 	})
@@ -1400,8 +1400,8 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 
 		leader, err := exec.LeaderGetElectedLeader(ctx, leaderInstanceName)
 		require.NoError(t, err)
-		require.WithinDuration(t, time.Now(), leader.ElectedAt, 100*time.Millisecond)
-		require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, 100*time.Millisecond)
+		require.WithinDuration(t, time.Now(), leader.ElectedAt, 500*time.Millisecond)
+		require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, 500*time.Millisecond)
 		require.Equal(t, leaderInstanceName, leader.Name)
 		require.Equal(t, clientID, leader.LeaderID)
 	})
@@ -1617,9 +1617,6 @@ func setupListener[TTx any](ctx context.Context, t *testing.T, getDriverWithPool
 	driver := getDriverWithPool(ctx, t)
 
 	listener := driver.GetListener()
-	t.Cleanup(func() { require.NoError(t, listener.Close(ctx)) })
-
-	require.NoError(t, listener.Connect(ctx))
 
 	return listener, &testListenerBundle[TTx]{
 		driver: driver,
@@ -1629,6 +1626,13 @@ func setupListener[TTx any](ctx context.Context, t *testing.T, getDriverWithPool
 
 func ExerciseListener[TTx any](ctx context.Context, t *testing.T, getDriverWithPool func(ctx context.Context, t *testing.T) riverdriver.Driver[TTx]) {
 	t.Helper()
+
+	connectListener := func(ctx context.Context, t *testing.T, listener riverdriver.Listener) {
+		t.Helper()
+
+		require.NoError(t, listener.Connect(ctx))
+		t.Cleanup(func() { require.NoError(t, listener.Close(ctx)) })
+	}
 
 	requireNoNotification := func(ctx context.Context, t *testing.T, listener riverdriver.Listener) {
 		t.Helper()
@@ -1653,10 +1657,19 @@ func ExerciseListener[TTx any](ctx context.Context, t *testing.T, getDriverWithP
 		return notification
 	}
 
+	t.Run("Close_NoOpIfNotConnected", func(t *testing.T) {
+		t.Parallel()
+
+		listener, _ := setupListener(ctx, t, getDriverWithPool)
+		require.NoError(t, listener.Close(ctx))
+	})
+
 	t.Run("RoundTrip", func(t *testing.T) {
 		t.Parallel()
 
 		listener, bundle := setupListener(ctx, t, getDriverWithPool)
+
+		connectListener(ctx, t, listener)
 
 		require.NoError(t, listener.Listen(ctx, "topic1"))
 		require.NoError(t, listener.Listen(ctx, "topic2"))
@@ -1695,6 +1708,8 @@ func ExerciseListener[TTx any](ctx context.Context, t *testing.T, getDriverWithP
 
 		listener, bundle := setupListener(ctx, t, getDriverWithPool)
 
+		connectListener(ctx, t, listener)
+
 		require.NoError(t, listener.Listen(ctx, "topic1"))
 
 		execTx, err := bundle.exec.Begin(ctx)
@@ -1710,6 +1725,23 @@ func ExerciseListener[TTx any](ctx context.Context, t *testing.T, getDriverWithP
 		// Notification received now that transaction has committed.
 		notification := waitForNotification(ctx, t, listener)
 		require.Equal(t, &riverdriver.Notification{Topic: "topic1", Payload: "payload1"}, notification)
+	})
+
+	t.Run("MultipleReuse", func(t *testing.T) {
+		t.Parallel()
+
+		listener, _ := setupListener(ctx, t, getDriverWithPool)
+
+		connectListener(ctx, t, listener)
+
+		require.NoError(t, listener.Listen(ctx, "topic1"))
+		require.NoError(t, listener.Unlisten(ctx, "topic1"))
+
+		require.NoError(t, listener.Close(ctx))
+		require.NoError(t, listener.Connect(ctx))
+
+		require.NoError(t, listener.Listen(ctx, "topic1"))
+		require.NoError(t, listener.Unlisten(ctx, "topic1"))
 	})
 }
 

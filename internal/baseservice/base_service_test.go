@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/riverqueue/river/internal/util/randutil"
 )
 
 func TestArchetype_WithSleepDisabled(t *testing.T) {
@@ -23,7 +25,7 @@ func TestInit(t *testing.T) {
 	archetype := archetype()
 
 	myService := Init(archetype, &MyService{})
-	require.True(t, myService.DisableSleep)
+	require.False(t, myService.DisableSleep)
 	require.NotNil(t, myService.Logger)
 	require.Equal(t, "MyService", myService.Name)
 	require.WithinDuration(t, time.Now().UTC(), myService.TimeNowUTC(), 2*time.Second)
@@ -32,33 +34,136 @@ func TestInit(t *testing.T) {
 func TestBaseService_CancellableSleep(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	testCancellableSleep := func(t *testing.T, startSleepFunc func(ctx context.Context, myService *MyService) <-chan struct{}) {
+		t.Helper()
+
+		ctx := context.Background()
+
+		archetype := archetype()
+		myService := Init(archetype, &MyService{})
+
+		ctx, cancel := context.WithCancel(ctx)
+		t.Cleanup(cancel)
+
+		sleepDone := startSleepFunc(ctx, myService)
+
+		// Wait a very nominal amount of time just to make sure that some sleep is
+		// actually happening.
+		select {
+		case <-sleepDone:
+			require.FailNow(t, "Sleep returned sooner than expected")
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		cancel()
+
+		select {
+		case <-sleepDone:
+		case <-time.After(50 * time.Millisecond):
+			require.FailNow(t, "Timed out waiting for sleep to finish after cancel")
+		}
+
+		archetype.DisableSleep = true
+
+		// Start again with sleep disabled and expect an immediate return.
+		sleepDone = startSleepFunc(ctx, myService)
+
+		select {
+		case <-sleepDone:
+		case <-time.After(50 * time.Millisecond):
+			require.FailNow(t, "Timed out waiting for sleep to finish with sleep disabled")
+		}
+	}
+
+	// Starts sleep for sleep functions that don't return a channel, returning a
+	// channel that's closed when sleep finishes.
+	startSleep := func(sleepFunc func()) <-chan struct{} {
+		sleepDone := make(chan struct{})
+		go func() {
+			defer close(sleepDone)
+			sleepFunc()
+		}()
+		return sleepDone
+	}
+
+	t.Run("CancellableSleep", func(t *testing.T) {
+		t.Parallel()
+
+		testCancellableSleep(t, func(ctx context.Context, myService *MyService) <-chan struct{} {
+			return startSleep(func() {
+				myService.CancellableSleep(ctx, 5*time.Second)
+			})
+		})
+	})
+
+	t.Run("CancellableSleepC", func(t *testing.T) {
+		t.Parallel()
+
+		testCancellableSleep(t, func(ctx context.Context, myService *MyService) <-chan struct{} {
+			return myService.CancellableSleepC(ctx, 5*time.Second)
+		})
+	})
+
+	t.Run("CancellableSleepRandomBetween", func(t *testing.T) {
+		t.Parallel()
+
+		testCancellableSleep(t, func(ctx context.Context, myService *MyService) <-chan struct{} {
+			return startSleep(func() {
+				myService.CancellableSleepRandomBetween(ctx, 5*time.Second, 10*time.Second)
+			})
+		})
+	})
+
+	t.Run("CancellableSleepRandomBetweenC", func(t *testing.T) {
+		t.Parallel()
+
+		testCancellableSleep(t, func(ctx context.Context, myService *MyService) <-chan struct{} {
+			return myService.CancellableSleepRandomBetweenC(ctx, 5*time.Second, 10*time.Second)
+		})
+	})
+
+	t.Run("CancellableSleepExponentialBackoff", func(t *testing.T) {
+		t.Parallel()
+
+		testCancellableSleep(t, func(ctx context.Context, myService *MyService) <-chan struct{} {
+			return startSleep(func() {
+				myService.CancellableSleepExponentialBackoff(ctx, 3, MaxAttemptsBeforeResetDefault)
+			})
+		})
+	})
+}
+
+func TestBaseService_exponentialBackoffSeconds(t *testing.T) {
+	t.Parallel()
 
 	archetype := archetype()
 	myService := Init(archetype, &MyService{})
 
-	// A deadline
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-			require.FailNow(t, "Test case took too long to run (sleep statements should return immediately)")
-		}
-	}()
+	require.InDelta(t, 1.0, myService.exponentialBackoffSeconds(0, MaxAttemptsBeforeResetDefault), 1.0*0.1)
+	require.InDelta(t, 2.0, myService.exponentialBackoffSeconds(1, MaxAttemptsBeforeResetDefault), 2.0*0.1)
+	require.InDelta(t, 4.0, myService.exponentialBackoffSeconds(2, MaxAttemptsBeforeResetDefault), 4.0*0.1)
+	require.InDelta(t, 8.0, myService.exponentialBackoffSeconds(3, MaxAttemptsBeforeResetDefault), 8.0*0.1)
+	require.InDelta(t, 16.0, myService.exponentialBackoffSeconds(4, MaxAttemptsBeforeResetDefault), 16.0*0.1)
+	require.InDelta(t, 32.0, myService.exponentialBackoffSeconds(5, MaxAttemptsBeforeResetDefault), 32.0*0.1)
+}
 
-	// Returns immediately because context is cancelled.
-	{
-		ctx, cancel := context.WithCancel(ctx)
-		cancel()
+func TestBaseService_exponentialBackoffSecondsWithoutJitter(t *testing.T) {
+	t.Parallel()
 
-		myService.CancellableSleep(ctx, 15*time.Second)
-	}
+	archetype := archetype()
+	myService := Init(archetype, &MyService{})
 
-	// Returns immediately because `DisableSleep` flag is on.
-	myService.DisableSleep = true
-	myService.CancellableSleep(ctx, 15*time.Second)
+	require.Equal(t, 1, int(myService.exponentialBackoffSecondsWithoutJitter(0, MaxAttemptsBeforeResetDefault)))
+	require.Equal(t, 2, int(myService.exponentialBackoffSecondsWithoutJitter(1, MaxAttemptsBeforeResetDefault)))
+	require.Equal(t, 4, int(myService.exponentialBackoffSecondsWithoutJitter(2, MaxAttemptsBeforeResetDefault)))
+	require.Equal(t, 8, int(myService.exponentialBackoffSecondsWithoutJitter(3, MaxAttemptsBeforeResetDefault)))
+	require.Equal(t, 16, int(myService.exponentialBackoffSecondsWithoutJitter(4, MaxAttemptsBeforeResetDefault)))
+	require.Equal(t, 32, int(myService.exponentialBackoffSecondsWithoutJitter(5, MaxAttemptsBeforeResetDefault)))
+	require.Equal(t, 64, int(myService.exponentialBackoffSecondsWithoutJitter(6, MaxAttemptsBeforeResetDefault)))
+	require.Equal(t, 128, int(myService.exponentialBackoffSecondsWithoutJitter(7, MaxAttemptsBeforeResetDefault)))
+	require.Equal(t, 256, int(myService.exponentialBackoffSecondsWithoutJitter(8, MaxAttemptsBeforeResetDefault)))
+	require.Equal(t, 512, int(myService.exponentialBackoffSecondsWithoutJitter(9, MaxAttemptsBeforeResetDefault)))
+	require.Equal(t, 1, int(myService.exponentialBackoffSecondsWithoutJitter(10, MaxAttemptsBeforeResetDefault))) // resets
 }
 
 type MyService struct {
@@ -67,8 +172,8 @@ type MyService struct {
 
 func archetype() *Archetype {
 	return &Archetype{
-		DisableSleep: true,
-		Logger:       slog.New(slog.NewTextHandler(os.Stdout, nil)),
-		TimeNowUTC:   func() time.Time { return time.Now().UTC() },
+		Logger:     slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		Rand:       randutil.NewCryptoSeededConcurrentSafeRand(),
+		TimeNowUTC: func() time.Time { return time.Now().UTC() },
 	}
 }

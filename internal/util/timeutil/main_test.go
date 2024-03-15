@@ -1,4 +1,4 @@
-package timeutil
+package timeutil_test
 
 import (
 	"testing"

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
@@ -56,7 +57,7 @@ func TestReindexer(t *testing.T) {
 		svc.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
 		svc.TestSignals = ReindexerTestSignals{}     // deinit so channels don't fill
 
-		runStartStopStress(ctx, t, svc)
+		startstoptest.Stress(ctx, t, svc)
 	})
 
 	t.Run("ReindexesEachIndex", func(t *testing.T) {

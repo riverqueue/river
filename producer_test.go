@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"sync"
 	"testing"
 	"time"
 
@@ -17,10 +16,14 @@ import (
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/internal/riverinternaltest/sharedtx"
+	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivertype"
 )
+
+const testClientID = "test-client-id"
 
 func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	// We have encountered previous data races with the list of active jobs on
@@ -71,24 +74,26 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	}))
 
 	ignoreNotifierStatusUpdates := func(componentstatus.Status) {}
-	notifier := notifier.New(archetype, listener, ignoreNotifierStatusUpdates, riverinternaltest.Logger(t))
+	notifier := notifier.New(archetype, listener, ignoreNotifierStatusUpdates)
 
-	config := &producerConfig{
+	ignoreStatusUpdates := func(queue string, status componentstatus.Status) {}
+
+	producer := newProducer(archetype, exec, &producerConfig{
+		Completer:    completer,
 		ErrorHandler: newTestErrorHandler(),
 		// Fetch constantly to more aggressively trigger the potential data race:
 		FetchCooldown:     time.Millisecond,
 		FetchPollInterval: time.Millisecond,
 		JobTimeout:        JobTimeoutDefault,
-		MaxWorkerCount:    1000,
+		MaxWorkers:        1000,
 		Notifier:          notifier,
 		Queue:             rivercommon.QueueDefault,
 		RetryPolicy:       &DefaultClientRetryPolicy{},
 		SchedulerInterval: maintenance.JobSchedulerIntervalDefault,
-		ClientID:          "fakeWorkerNameTODO",
+		ClientID:          testClientID,
+		StatusFunc:        ignoreStatusUpdates,
 		Workers:           workers,
-	}
-	producer, err := newProducer(archetype, exec, completer, config)
-	require.NoError(err)
+	})
 
 	params := make([]*riverdriver.JobInsertFastParams, maxJobCount)
 	for i := range params {
@@ -111,23 +116,17 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 			default:
 			}
 			numActiveJobs := producer.numJobsActive.Load()
-			if numActiveJobs > int32(config.MaxWorkerCount) {
-				panic(fmt.Sprintf("producer exceeded MaxWorkerCount=%d, actual count=%d", config.MaxWorkerCount, numActiveJobs))
+			if numActiveJobs > int32(producer.config.MaxWorkers) {
+				panic(fmt.Sprintf("producer exceeded MaxWorkerCount=%d, actual count=%d", producer.config.MaxWorkers, numActiveJobs))
 			}
 		}
 	}()
 
-	_, err = exec.JobInsertFastMany(ctx, params)
+	_, err := exec.JobInsertFastMany(ctx, params)
 	require.NoError(err)
 
-	ignoreStatusUpdates := func(queue string, status componentstatus.Status) {}
-
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
-		producer.Run(ctx, ctx, ignoreStatusUpdates)
-		wg.Done()
-	}()
+	require.NoError(producer.StartWorkContext(ctx, ctx))
+	t.Cleanup(producer.Stop)
 
 	select {
 	case <-lastJobRun:
@@ -136,11 +135,88 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	case <-ctx.Done():
 		t.Error("timed out waiting for last job to run")
 	}
-	wg.Wait()
 }
 
-func Test_Producer_Run(t *testing.T) {
+func TestProducer_PollOnly(t *testing.T) {
 	t.Parallel()
+
+	testProducer(t, func(ctx context.Context, t *testing.T) *producer {
+		t.Helper()
+
+		var (
+			archetype = riverinternaltest.BaseServiceArchetype(t)
+			driver    = riverpgxv5.New(nil)
+			tx        = riverinternaltest.TestTx(ctx, t)
+		)
+
+		// Wrap with a shared transaction because the producer fetching jobs may
+		// conflict with jobs being inserted in test cases.
+		tx = sharedtx.NewSharedTx(tx)
+
+		var (
+			exec      = driver.UnwrapExecutor(tx)
+			completer = jobcompleter.NewInlineCompleter(archetype, exec)
+		)
+
+		return newProducer(archetype, exec, &producerConfig{
+			ClientID:          testClientID,
+			Completer:         completer,
+			ErrorHandler:      newTestErrorHandler(),
+			FetchCooldown:     FetchCooldownDefault,
+			FetchPollInterval: 50 * time.Millisecond, // more aggressive than normal because we have no notifier
+			JobTimeout:        JobTimeoutDefault,
+			MaxWorkers:        1_000,
+			Notifier:          nil, // no notifier
+			Queue:             rivercommon.QueueDefault,
+			RetryPolicy:       &DefaultClientRetryPolicy{},
+			SchedulerInterval: riverinternaltest.SchedulerShortInterval,
+			StatusFunc:        func(queue string, status componentstatus.Status) {},
+			Workers:           NewWorkers(),
+		})
+	})
+}
+
+func TestProducer_WithNotifier(t *testing.T) {
+	t.Parallel()
+
+	testProducer(t, func(ctx context.Context, t *testing.T) *producer {
+		t.Helper()
+
+		var (
+			archetype = riverinternaltest.BaseServiceArchetype(t)
+			dbPool    = riverinternaltest.TestDB(ctx, t)
+			driver    = riverpgxv5.New(dbPool)
+			exec      = driver.GetExecutor()
+			listener  = driver.GetListener()
+			completer = jobcompleter.NewInlineCompleter(archetype, exec)
+		)
+
+		notifier := notifier.New(archetype, listener, func(componentstatus.Status) {})
+		{
+			require.NoError(t, notifier.Start(ctx))
+			t.Cleanup(notifier.Stop)
+		}
+
+		return newProducer(archetype, exec, &producerConfig{
+			ClientID:          testClientID,
+			Completer:         completer,
+			ErrorHandler:      newTestErrorHandler(),
+			FetchCooldown:     FetchCooldownDefault,
+			FetchPollInterval: 50 * time.Millisecond, // more aggressive than normal so in case we miss the event, tests still pass quickly
+			JobTimeout:        JobTimeoutDefault,
+			MaxWorkers:        1_000,
+			Notifier:          notifier,
+			Queue:             rivercommon.QueueDefault,
+			RetryPolicy:       &DefaultClientRetryPolicy{},
+			SchedulerInterval: riverinternaltest.SchedulerShortInterval,
+			StatusFunc:        func(queue string, status componentstatus.Status) {},
+			Workers:           NewWorkers(),
+		})
+	})
+}
+
+func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testing.T) *producer) {
+	t.Helper()
 
 	ctx := context.Background()
 
@@ -154,45 +230,19 @@ func Test_Producer_Run(t *testing.T) {
 	setup := func(t *testing.T) (*producer, *testBundle) {
 		t.Helper()
 
-		dbPool := riverinternaltest.TestDB(ctx, t)
-		driver := riverpgxv5.New(dbPool)
-		exec := driver.GetExecutor()
-		listener := driver.GetListener()
-
-		archetype := riverinternaltest.BaseServiceArchetype(t)
-
-		completer := jobcompleter.NewInlineCompleter(archetype, exec)
+		producer := makeProducer(ctx, t)
+		producer.testSignals.Init()
 
 		jobUpdates := make(chan jobcompleter.CompleterJobUpdated, 10)
-		completer.Subscribe(func(update jobcompleter.CompleterJobUpdated) {
+		producer.completer.Subscribe(func(update jobcompleter.CompleterJobUpdated) {
 			jobUpdates <- update
 		})
 
-		workers := NewWorkers()
-
-		notifier := notifier.New(archetype, listener, func(componentstatus.Status) {}, riverinternaltest.Logger(t))
-
-		config := &producerConfig{
-			ErrorHandler:      newTestErrorHandler(),
-			FetchCooldown:     FetchCooldownDefault,
-			FetchPollInterval: 50 * time.Millisecond, // more aggressive than normal so in case we miss the event, tests still pass quickly
-			JobTimeout:        JobTimeoutDefault,
-			MaxWorkerCount:    1000,
-			Notifier:          notifier,
-			Queue:             rivercommon.QueueDefault,
-			RetryPolicy:       &DefaultClientRetryPolicy{},
-			SchedulerInterval: riverinternaltest.SchedulerShortInterval,
-			ClientID:          "fakeWorkerNameTODO",
-			Workers:           workers,
-		}
-		producer, err := newProducer(archetype, exec, completer, config)
-		require.NoError(t, err)
-
 		return producer, &testBundle{
-			completer:  completer,
-			exec:       exec,
+			completer:  producer.completer,
+			exec:       producer.exec,
 			jobUpdates: jobUpdates,
-			workers:    workers,
+			workers:    producer.workers,
 		}
 	}
 
@@ -206,46 +256,30 @@ func Test_Producer_Run(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	startProducer := func(t *testing.T, fetchCtx, workCtx context.Context, producer *producer) {
+		t.Helper()
+
+		require.NoError(t, producer.StartWorkContext(fetchCtx, workCtx))
+		t.Cleanup(producer.Stop)
+	}
+
 	t.Run("NoOp", func(t *testing.T) {
 		t.Parallel()
 
 		producer, _ := setup(t)
 
-		fetchCtx, fetchCtxDone := context.WithCancel(ctx)
-
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			producer.Run(fetchCtx, ctx, func(queue string, status componentstatus.Status) {})
-			wg.Done()
-		}()
-
-		fetchCtxDone()
-		wg.Wait()
+		startProducer(t, ctx, ctx, producer)
 	})
 
 	t.Run("SimpleJob", func(t *testing.T) {
 		t.Parallel()
 
 		producer, bundle := setup(t)
-
-		fetchCtx, fetchCtxDone := context.WithCancel(ctx)
-
 		AddWorker(bundle.workers, &noOpWorker{})
 
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			producer.Run(fetchCtx, ctx, func(queue string, status componentstatus.Status) {})
-			wg.Done()
-		}()
-
-		// LIFO, so guarantee run loop finishes and producer exits, even in the
-		// event of a test failure.
-		t.Cleanup(wg.Wait)
-		t.Cleanup(fetchCtxDone)
-
 		mustInsert(ctx, t, bundle.exec, &noOpArgs{})
+
+		startProducer(t, ctx, ctx, producer)
 
 		update := riverinternaltest.WaitOrTimeout(t, bundle.jobUpdates)
 		require.Equal(t, rivertype.JobStateCompleted, update.Job.State)
@@ -255,25 +289,12 @@ func Test_Producer_Run(t *testing.T) {
 		t.Parallel()
 
 		producer, bundle := setup(t)
-
-		fetchCtx, fetchCtxDone := context.WithCancel(ctx)
-
 		AddWorker(bundle.workers, &noOpWorker{})
-
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			producer.Run(fetchCtx, ctx, func(queue string, status componentstatus.Status) {})
-			wg.Done()
-		}()
-
-		// LIFO, so guarantee run loop finishes and producer exits, even in the
-		// event of a test failure.
-		t.Cleanup(wg.Wait)
-		t.Cleanup(fetchCtxDone)
 
 		mustInsert(ctx, t, bundle.exec, &noOpArgs{})
 		mustInsert(ctx, t, bundle.exec, &callbackArgs{}) // not registered
+
+		startProducer(t, ctx, ctx, producer)
 
 		updates := riverinternaltest.WaitOrTimeoutN(t, bundle.jobUpdates, 2)
 
@@ -299,5 +320,94 @@ func Test_Producer_Run(t *testing.T) {
 			job := findJob((&noOpArgs{}).Kind())
 			require.Equal(t, rivertype.JobStateCompleted, job.State)
 		}
+	})
+
+	t.Run("CancelledWorkContextCancelsJob", func(t *testing.T) {
+		t.Parallel()
+
+		producer, bundle := setup(t)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(bundle.workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			t.Logf("Job started")
+			<-ctx.Done()
+			t.Logf("Job stopped after context cancelled")
+			return ctx.Err()
+		}))
+
+		workCtx, workCancel := context.WithCancel(ctx)
+		defer workCancel()
+
+		mustInsert(ctx, t, bundle.exec, &JobArgs{})
+
+		startProducer(t, ctx, workCtx, producer)
+
+		workCancel()
+
+		update := riverinternaltest.WaitOrTimeout(t, bundle.jobUpdates)
+		require.Equal(t, rivertype.JobStateRetryable, update.Job.State)
+	})
+
+	t.Run("MaxWorkers", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			maxWorkers = 5
+			numJobs    = 10
+		)
+
+		producer, bundle := setup(t)
+		producer.config.MaxWorkers = maxWorkers
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		unpauseWorkers := make(chan struct{})
+		defer close(unpauseWorkers)
+
+		AddWorker(bundle.workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			t.Logf("Job paused")
+			<-unpauseWorkers
+			t.Logf("Job unpaused")
+			return ctx.Err()
+		}))
+
+		for i := 0; i < numJobs; i++ {
+			mustInsert(ctx, t, bundle.exec, &JobArgs{})
+		}
+
+		startProducer(t, ctx, ctx, producer)
+
+		producer.testSignals.StartedExecutors.WaitOrTimeout()
+
+		// Jobs are still paused as we fetch updated job states.
+		updatedJobs, err := bundle.exec.JobGetByKindMany(ctx, []string{(&JobArgs{}).Kind()})
+		require.NoError(t, err)
+
+		jobStateCounts := make(map[rivertype.JobState]int)
+
+		for _, updatedJob := range updatedJobs {
+			jobStateCounts[updatedJob.State]++
+		}
+
+		require.Equal(t, maxWorkers, jobStateCounts[rivertype.JobStateRunning])
+		require.Equal(t, numJobs-maxWorkers, jobStateCounts[rivertype.JobStateAvailable])
+
+		require.Equal(t, maxWorkers, int(producer.numJobsActive.Load()))
+		require.Zero(t, producer.maxJobsToFetch()) // zero because all slots are occupied
+	})
+
+	t.Run("StartStopStress", func(t *testing.T) {
+		t.Parallel()
+
+		producer, _ := setup(t)
+		producer.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
+		producer.testSignals = producerTestSignals{}      // deinit so channels don't fill
+
+		startstoptest.Stress(ctx, t, producer)
 	})
 }

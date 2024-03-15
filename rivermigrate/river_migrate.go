@@ -19,6 +19,7 @@ import (
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/internal/util/maputil"
+	"github.com/riverqueue/river/internal/util/randutil"
 	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
 )
@@ -94,6 +95,7 @@ func New[TTx any](driver riverdriver.Driver[TTx], config *Config) *Migrator[TTx]
 
 	archetype := &baseservice.Archetype{
 		Logger:     logger,
+		Rand:       randutil.NewCryptoSeededConcurrentSafeRand(),
 		TimeNowUTC: func() time.Time { return time.Now().UTC() },
 	}
 

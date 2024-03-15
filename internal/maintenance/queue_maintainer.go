@@ -7,6 +7,7 @@ import (
 
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/maintenance/startstop"
+	"github.com/riverqueue/river/internal/util/maputil"
 )
 
 const (
@@ -43,11 +44,11 @@ type QueueMaintainer struct {
 	baseservice.BaseService
 	startstop.BaseStartStop
 
-	servicesByName map[string]Service
+	servicesByName map[string]startstop.Service
 }
 
-func NewQueueMaintainer(archetype *baseservice.Archetype, services []Service) *QueueMaintainer {
-	servicesByName := make(map[string]Service, len(services))
+func NewQueueMaintainer(archetype *baseservice.Archetype, services []startstop.Service) *QueueMaintainer {
+	servicesByName := make(map[string]startstop.Service, len(services))
 	for _, service := range services {
 		servicesByName[reflect.TypeOf(service).Elem().Name()] = service
 	}
@@ -75,9 +76,7 @@ func (m *QueueMaintainer) Start(ctx context.Context) error {
 
 		<-ctx.Done()
 
-		for _, service := range m.servicesByName {
-			service.Stop()
-		}
+		startstop.StopAllParallel(maputil.Values(m.servicesByName))
 	}()
 
 	return nil
@@ -86,22 +85,7 @@ func (m *QueueMaintainer) Start(ctx context.Context) error {
 // GetService is a convenience method for getting a service by name and casting
 // it to the desired type. It should only be used in tests due to its use of
 // reflection and potential for panics.
-func GetService[T Service](maintainer *QueueMaintainer) T {
+func GetService[T startstop.Service](maintainer *QueueMaintainer) T {
 	var kindPtr T
 	return maintainer.servicesByName[reflect.TypeOf(kindPtr).Elem().Name()].(T) //nolint:forcetypeassert
-}
-
-type Service interface {
-	// Start starts a service. Services are responsible for backgrounding
-	// themselves, so this function should be invoked synchronously. Services
-	// may return an error if they have trouble starting up, so the caller
-	// should wait and respond to the error if necessary.
-	Start(ctx context.Context) error
-
-	// Stop stops a service. Services are responsible for making sure their stop
-	// is complete before returning so a caller can wait on this invocation
-	// synchronously and be guaranteed the service is fully stopped. Services
-	// are expected to be able to tolerate (1) being stopped without having been
-	// started, and (2) being double-stopped.
-	Stop()
 }

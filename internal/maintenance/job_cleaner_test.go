@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/internal/riverinternaltest/testfactory"
 	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/riverdriver"
@@ -71,7 +72,7 @@ func TestJobCleaner(t *testing.T) {
 		cleaner.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
 		cleaner.TestSignals = JobCleanerTestSignals{}    // deinit so channels don't fill
 
-		runStartStopStress(ctx, t, cleaner)
+		startstoptest.Stress(ctx, t, cleaner)
 	})
 
 	t.Run("DeletesCompletedJobs", func(t *testing.T) {

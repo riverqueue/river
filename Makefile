@@ -10,7 +10,7 @@ generate/sqlc:
 .PHONY: lint
 lint:
 	cd . && golangci-lint run --fix
-	# cd cmd/river && golangci-lint run --fix
+	cd cmd/river && golangci-lint run --fix
 	cd riverdriver && golangci-lint run --fix
 	cd riverdriver/riverdatabasesql && golangci-lint run --fix
 	cd riverdriver/riverpgxv5 && golangci-lint run --fix
@@ -19,7 +19,7 @@ lint:
 .PHONY: test
 test:
 	cd . && go test ./... -p 1
-	# cd cmd/river && go test ./...
+	cd cmd/river && go test ./...
 	cd riverdriver && go test ./...
 	cd riverdriver/riverdatabasesql && go test ./...
 	cd riverdriver/riverpgxv5 && go test ./...

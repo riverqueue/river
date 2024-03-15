@@ -2,17 +2,15 @@ package river
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
-
-	"github.com/oklog/ulid/v2"
 
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/componentstatus"
@@ -22,8 +20,10 @@ import (
 	"github.com/riverqueue/river/internal/jobstats"
 	"github.com/riverqueue/river/internal/leadership"
 	"github.com/riverqueue/river/internal/maintenance"
+	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
+	"github.com/riverqueue/river/internal/util/randutil"
 	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/internal/util/valutil"
 	"github.com/riverqueue/river/internal/workunit"
@@ -280,6 +280,7 @@ type Client[TTx any] struct {
 	notifier             *notifier.Notifier
 	producersByQueueName map[string]*producer
 	queueMaintainer      *maintenance.QueueMaintainer
+	services             []startstop.Service
 	subscriptions        map[int]*eventSubscription
 	subscriptionsMu      sync.Mutex
 	subscriptionsSeq     int // used for generating simple IDs
@@ -289,7 +290,6 @@ type Client[TTx any] struct {
 	statsNumJobs         int
 	testSignals          clientTestSignals
 	uniqueInserter       *dbunique.UniqueInserter
-	wg                   sync.WaitGroup
 
 	// workCancel cancels the context used for all work goroutines. Normal Stop
 	// does not cancel that context.
@@ -404,7 +404,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		ErrorHandler:                config.ErrorHandler,
 		FetchCooldown:               valutil.ValOrDefault(config.FetchCooldown, FetchCooldownDefault),
 		FetchPollInterval:           valutil.ValOrDefault(config.FetchPollInterval, FetchPollIntervalDefault),
-		ID:                          config.ID,
+		ID:                          valutil.ValOrDefaultFunc(config.ID, func() string { return defaultClientID(time.Now().UTC()) }),
 		JobTimeout:                  valutil.ValOrDefault(config.JobTimeout, JobTimeoutDefault),
 		Logger:                      logger,
 		PeriodicJobs:                config.PeriodicJobs,
@@ -417,15 +417,6 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		schedulerInterval:           valutil.ValOrDefault(config.schedulerInterval, maintenance.JobSchedulerIntervalDefault),
 	}
 
-	if config.ID == "" {
-		// Generate a random ULID for the client ID.
-		clientID, err := ulid.New(ulid.Now(), rand.Reader)
-		if err != nil {
-			return nil, err
-		}
-		config.ID = clientID.String()
-	}
-
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
@@ -433,6 +424,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	archetype := &baseservice.Archetype{
 		DisableSleep: config.disableSleep,
 		Logger:       config.Logger,
+		Rand:         randutil.NewCryptoSeededConcurrentSafeRand(),
 		TimeNowUTC:   func() time.Time { return time.Now().UTC() },
 	}
 
@@ -468,23 +460,27 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		// we'll need to add a config for this.
 		instanceName := "default"
 
-		client.notifier = notifier.New(archetype, driver.GetListener(), client.monitor.SetNotifierStatus, logger)
+		client.notifier = notifier.New(archetype, driver.GetListener(), client.monitor.SetNotifierStatus)
+		client.services = append(client.services, client.notifier)
 
-		var err error
-		client.elector, err = leadership.NewElector(driver.GetExecutor(), client.notifier, instanceName, client.ID(), 5*time.Second, 10*time.Second, logger)
-		if err != nil {
-			return nil, err
-		}
+		client.elector = leadership.NewElector(archetype, driver.GetExecutor(), client.notifier, instanceName, client.ID())
+		client.services = append(client.services, client.elector)
 
 		if err := client.provisionProducers(); err != nil {
 			return nil, err
 		}
 
+		client.services = append(client.services,
+			startstop.StartStopFunc(client.logStatsLoop))
+
+		client.services = append(client.services,
+			startstop.StartStopFunc(client.handleLeadershipChangeLoop))
+
 		//
 		// Maintenance services
 		//
 
-		maintenanceServices := []maintenance.Service{}
+		maintenanceServices := []startstop.Service{}
 
 		{
 			jobCleaner := maintenance.NewJobCleaner(archetype, &maintenance.JobCleanerConfig{
@@ -558,6 +554,8 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			client.testSignals.reindexer = &reindexer.TestSignals
 		}
 
+		// Not added to the main services list because the queue maintainer is
+		// started conditionally based on whether the client is the leader.
 		client.queueMaintainer = maintenance.NewQueueMaintainer(archetype, maintenanceServices)
 	}
 
@@ -587,7 +585,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 	// We use separate contexts for fetching and working to allow for a graceful
 	// stop. However, both inherit from the provided context so if it is
 	// cancelled a more aggressive stop will be initiated.
-	fetchNewWorkCtx, fetchNewWorkCancel := context.WithCancelCause(ctx)
+	fetchCtx, fetchNewWorkCancel := context.WithCancelCause(ctx)
 	c.fetchNewWorkCancel = fetchNewWorkCancel
 	workCtx, workCancel := context.WithCancelCause(withClient[TTx](ctx, c))
 	c.workCancel = workCancel
@@ -607,50 +605,45 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 	// Monitor should be the first subprocess to start, and the last to stop.
 	// It's not part of the waitgroup because we need to wait for everything else
 	// to shut down prior to closing the monitor.
-	go c.monitor.Run()
+	//
+	// Unlike other services, it's given a background context so that it doesn't
+	// cancel on normal stops.
+	if err := c.monitor.Start(context.Background()); err != nil { //nolint:contextcheck
+		return err
+	}
 
 	// Receives job complete notifications from the completer and distributes
 	// them to any subscriptions.
 	c.completer.Subscribe(c.distributeJobCompleterCallback)
 
-	c.wg.Add(1)
-	go func() {
-		c.logStatsLoop(fetchNewWorkCtx)
-		c.wg.Done()
-	}()
+	for _, service := range c.services {
+		if err := service.Start(fetchCtx); err != nil {
+			// In case of error, stop any services that might have started. This
+			// is safe because even services that were never started will still
+			// tolerate being stopped.
+			startstop.StopAllParallel(c.services)
 
-	if c.elector != nil {
-		go func() {
-			sub := c.elector.Listen()
-			defer sub.Unlisten()
+			c.monitor.Stop()
 
-			for {
-				select {
-				case <-c.stopComplete: // stop complete
-					return
-
-				case <-workCtx.Done(): // stop started
-					return
-
-				case notification := <-sub.C():
-					c.handleLeadershipChange(ctx, notification)
-				}
+			if errors.Is(context.Cause(ctx), rivercommon.ErrShutdown) {
+				return nil
 			}
-		}()
-
-		c.wg.Add(2)
-		go func() {
-			c.notifier.Run(fetchNewWorkCtx)
-			c.wg.Done()
-		}()
-		go func() {
-			c.elector.Run(fetchNewWorkCtx)
-			c.wg.Done()
-		}()
+			return err
+		}
 	}
 
-	c.runProducers(fetchNewWorkCtx, workCtx)
-	go c.signalStopComplete(workCtx)
+	for _, producer := range c.producersByQueueName {
+		producer := producer
+
+		if err := producer.StartWorkContext(fetchCtx, workCtx); err != nil {
+			return err
+		}
+	}
+
+	go func() {
+		<-fetchCtx.Done()
+		c.signalStopComplete(ctx)
+	}()
 
 	c.baseService.Logger.InfoContext(workCtx, "River client successfully started", slog.String("client_id", c.ID()))
 
@@ -659,8 +652,13 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 
 // ctx is used only for logging, not for lifecycle.
 func (c *Client[TTx]) signalStopComplete(ctx context.Context) {
-	// Wait for producers, notifier, and elector to exit:
-	c.wg.Wait()
+	for _, producer := range c.producersByQueueName {
+		producer.Stop()
+	}
+
+	// Stop all mainline services where stop order isn't important. Contains the
+	// elector and notifier, amongst others.
+	startstop.StopAllParallel(c.services)
 
 	// Once the producers have all finished, we know that completers have at least
 	// enqueued any remaining work. Wait for the completer to finish.
@@ -689,7 +687,7 @@ func (c *Client[TTx]) signalStopComplete(ctx context.Context) {
 	}()
 
 	// Shut down the monitor last so it can broadcast final status updates:
-	c.monitor.Shutdown()
+	c.monitor.Stop()
 
 	c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Stop complete")
 	close(c.stopComplete)
@@ -861,7 +859,7 @@ func (c *Client[TTx]) distributeJobCompleterCallback(update jobcompleter.Complet
 // numbers don't mean much in themselves, but can give a rough idea of the
 // proportions of each compared to each other, and may help flag outlying values
 // indicative of a problem.
-func (c *Client[TTx]) logStatsLoop(ctx context.Context) {
+func (c *Client[TTx]) logStatsLoop(ctx context.Context, shouldStart bool, stopped chan struct{}) error {
 	// Handles a potential divide by zero.
 	safeDurationAverage := func(d time.Duration, n int) time.Duration {
 		if n == 0 {
@@ -884,78 +882,102 @@ func (c *Client[TTx]) logStatsLoop(ctx context.Context) {
 		c.statsNumJobs = 0
 	}
 
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-
-		case <-ticker.C:
-			logStats()
-		}
+	if !shouldStart {
+		return nil
 	}
+
+	go func() {
+		// This defer should come first so that it's last out, thereby avoiding
+		// races.
+		defer close(stopped)
+
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+
+			case <-ticker.C:
+				logStats()
+			}
+		}
+	}()
+
+	return nil
 }
 
-func (c *Client[TTx]) handleLeadershipChange(ctx context.Context, notification *leadership.Notification) {
-	c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Election change received",
-		slog.String("client_id", c.config.ID), slog.Bool("is_leader", notification.IsLeader))
+func (c *Client[TTx]) handleLeadershipChangeLoop(ctx context.Context, shouldStart bool, stopped chan struct{}) error {
+	handleLeadershipChange := func(ctx context.Context, notification *leadership.Notification) {
+		c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Election change received",
+			slog.String("client_id", c.config.ID), slog.Bool("is_leader", notification.IsLeader))
 
-	leaderStatus := componentstatus.ElectorNonLeader
-	if notification.IsLeader {
-		leaderStatus = componentstatus.ElectorLeader
-	}
-	c.monitor.SetElectorStatus(leaderStatus)
-
-	switch {
-	case notification.IsLeader:
-		if err := c.queueMaintainer.Start(ctx); err != nil {
-			c.baseService.Logger.ErrorContext(ctx, "Error starting queue maintainer", slog.String("err", err.Error()))
+		leaderStatus := componentstatus.ElectorNonLeader
+		if notification.IsLeader {
+			leaderStatus = componentstatus.ElectorLeader
 		}
+		c.monitor.SetElectorStatus(leaderStatus)
 
-		c.testSignals.electedLeader.Signal(struct{}{})
+		switch {
+		case notification.IsLeader:
+			if err := c.queueMaintainer.Start(ctx); err != nil {
+				c.baseService.Logger.ErrorContext(ctx, "Error starting queue maintainer", slog.String("err", err.Error()))
+			}
 
-	default:
-		c.queueMaintainer.Stop()
+			c.testSignals.electedLeader.Signal(struct{}{})
+
+		default:
+			c.queueMaintainer.Stop()
+		}
 	}
+
+	if !shouldStart {
+		return nil
+	}
+
+	go func() {
+		// This defer should come first so that it's last out,
+		// thereby avoiding races.
+		defer close(stopped)
+
+		sub := c.elector.Listen()
+		defer sub.Unlisten()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+
+			case notification := <-sub.C():
+				handleLeadershipChange(ctx, notification)
+			}
+		}
+	}()
+
+	return nil
 }
 
 func (c *Client[TTx]) provisionProducers() error {
 	for queue, queueConfig := range c.config.Queues {
-		config := &producerConfig{
+		c.producersByQueueName[queue] = newProducer(&c.baseService.Archetype, c.driver.GetExecutor(), &producerConfig{
 			ClientID:          c.config.ID,
+			Completer:         c.completer,
 			ErrorHandler:      c.config.ErrorHandler,
 			FetchCooldown:     c.config.FetchCooldown,
 			FetchPollInterval: c.config.FetchPollInterval,
 			JobTimeout:        c.config.JobTimeout,
-			MaxWorkerCount:    uint16(queueConfig.MaxWorkers),
+			MaxWorkers:        queueConfig.MaxWorkers,
 			Notifier:          c.notifier,
 			Queue:             queue,
 			RetryPolicy:       c.config.RetryPolicy,
 			SchedulerInterval: c.config.schedulerInterval,
+			StatusFunc:        c.monitor.SetProducerStatus,
 			Workers:           c.config.Workers,
-		}
-		producer, err := newProducer(&c.baseService.Archetype, c.driver.GetExecutor(), c.completer, config)
-		if err != nil {
-			return err
-		}
-		c.producersByQueueName[queue] = producer
+		})
 		c.monitor.InitializeProducerStatus(queue)
 	}
 	return nil
-}
-
-func (c *Client[TTx]) runProducers(fetchNewWorkCtx, workCtx context.Context) {
-	c.wg.Add(len(c.producersByQueueName))
-	for _, producer := range c.producersByQueueName {
-		producer := producer
-
-		go func() {
-			defer c.wg.Done()
-			producer.Run(fetchNewWorkCtx, workCtx, c.monitor.SetProducerStatus)
-		}()
-	}
 }
 
 // JobCancel cancels the job with the given ID. If possible, the job is
@@ -1419,4 +1441,32 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 		res.LastCursor = JobListCursorFromJob(jobs[len(jobs)-1], params.sortField)
 	}
 	return res, nil
+}
+
+// Generates a default client ID using the current hostname and time.
+func defaultClientID(startedAt time.Time) string {
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "unknown_host"
+	}
+
+	return defaultClientIDWithHost(startedAt, host)
+}
+
+// Same as the above, but allows host injection for testability.
+func defaultClientIDWithHost(startedAt time.Time, host string) string {
+	const maxHostLength = 60
+
+	// Truncate degenerately long host names.
+	host = strings.ReplaceAll(host, ".", "_")
+	if len(host) > maxHostLength {
+		host = host[0:maxHostLength]
+	}
+
+	// Dots, hyphens, and colons aren't particularly friendly for double click
+	// to select (depends on application and configuration), so avoid them all
+	// in favor of underscores.
+	const rfc3339Compact = "2006_01_02T15_04_05"
+
+	return host + "_" + startedAt.Format(rfc3339Compact)
 }

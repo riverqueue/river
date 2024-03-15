@@ -45,6 +45,7 @@ git tag cmd/river/$VERSION -m "release cmd/river/$VERSION"
 git tag riverdriver/$VERSION -m "release riverdriver/$VERSION"
 git tag riverdriver/riverpgxv5/$VERSION -m "release riverdriver/riverpgxv5/$VERSION"
 git tag riverdriver/riverdatabasesql/$VERSION -m "release riverdriver/riverdatabasesql/$VERSION"
+git tag rivertype/$VERSION -m "release rivertype/$VERSION"
 git tag $VERSION
 git push --tags
 ```
