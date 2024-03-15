@@ -1449,8 +1449,8 @@ func validateQueueName(queueName string) error {
 // JobListResult is the result of a job list operation. It contains a list of
 // jobs and a cursor for fetching the next page of results.
 type JobListResult struct {
-	Jobs   []*rivertype.JobRow
-	Cursor *JobListCursor
+	Jobs       []*rivertype.JobRow
+	LastCursor *JobListCursor
 }
 
 // JobList returns a paginated list of jobs matching the provided filters. The
@@ -1481,7 +1481,7 @@ func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) (*JobL
 	}
 	res := &JobListResult{Jobs: jobs}
 	if len(jobs) > 0 {
-		res.Cursor = JobListCursorFromJob(jobs[len(jobs)-1], params.sortField)
+		res.LastCursor = JobListCursorFromJob(jobs[len(jobs)-1], params.sortField)
 	}
 	return res, nil
 }
@@ -1511,7 +1511,7 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 	}
 	res := &JobListResult{Jobs: jobs}
 	if len(jobs) > 0 {
-		res.Cursor = JobListCursorFromJob(jobs[len(jobs)-1], params.sortField)
+		res.LastCursor = JobListCursorFromJob(jobs[len(jobs)-1], params.sortField)
 	}
 	return res, nil
 }

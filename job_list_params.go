@@ -116,17 +116,17 @@ const (
 type JobListOrderByField string
 
 const (
+	// JobListOrderByAttemptedAt specifies that the sort should be by attempted_at.
+	JobListOrderByAttemptedAt JobListOrderByField = "attempted_at"
+	// JobListOrderByCreatedAt specifies that the sort should be by created_at.
+	JobListOrderByCreatedAt JobListOrderByField = "created_at"
+	// JobListOrderByFinalizedAt specifies that the sort should be by finalized_at.
+	JobListOrderByFinalizedAt JobListOrderByField = "finalized_at"
+	// JobListOrderByScheduledAt specifies that the sort should be by scheduled_at.
+	JobListOrderByScheduledAt JobListOrderByField = "scheduled_at"
 	// JobListOrderByTime specifies that the sort should be by time. The specific
 	// time field used will vary by the first specified job state.
 	JobListOrderByTime JobListOrderByField = "time"
-	// JobListOrderByCreatedAt specifies that the sort should be by created_at.
-	JobListOrderByCreatedAt JobListOrderByField = "created_at"
-	// JobListOrderByScheduledAt specifies that the sort should be by scheduled_at.
-	JobListOrderByScheduledAt JobListOrderByField = "scheduled_at"
-	// JobListOrderByAttemptedAt specifies that the sort should be by attempted_at.
-	JobListOrderByAttemptedAt JobListOrderByField = "attempted_at"
-	// JobListOrderByFinalizedAt specifies that the sort should be by finalized_at.
-	JobListOrderByFinalizedAt JobListOrderByField = "finalized_at"
 )
 
 // JobListParams specifies the parameters for a JobList query. It must be
