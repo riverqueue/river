@@ -24,6 +24,7 @@ import (
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/internal/riverinternaltest/testfactory"
 	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/internal/util/ptrutil"
@@ -114,6 +115,16 @@ type callbackWorker struct {
 
 func (w *callbackWorker) Work(ctx context.Context, job *Job[callbackArgs]) error {
 	return w.fn(ctx, job)
+}
+
+// A small wrapper around Client that gives us a struct that corrects the
+// client's Stop function so that it can implement startstop.Service.
+type clientWithSimpleStop[TTx any] struct {
+	*Client[TTx]
+}
+
+func (c *clientWithSimpleStop[TTx]) Stop() {
+	_ = c.Client.Stop(context.Background())
 }
 
 func newTestConfig(t *testing.T, callback callbackFunc) *Config {
@@ -433,6 +444,16 @@ func Test_Client(t *testing.T) {
 		require.Equal(t, `relation "river_job" does not exist`, pgErr.Message)
 	})
 
+	t.Run("StartStopStress", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		clientWithStop := &clientWithSimpleStop[pgx.Tx]{Client: client}
+
+		startstoptest.StressErr(ctx, t, clientWithStop, rivercommon.ErrShutdown)
+	})
+
 	t.Run("StopAndCancel", func(t *testing.T) {
 		t.Parallel()
 
@@ -514,17 +535,6 @@ func Test_Client_Stop(t *testing.T) {
 			wg.Wait()
 		}
 	}
-
-	t.Run("not started", func(t *testing.T) {
-		t.Parallel()
-
-		dbPool := riverinternaltest.TestDB(ctx, t)
-		client := newTestClient(t, dbPool, newTestConfig(t, nil))
-
-		err := client.Stop(ctx)
-		require.Error(t, err)
-		require.Equal(t, "client not started", err.Error())
-	})
 
 	t.Run("no jobs in progress", func(t *testing.T) {
 		t.Parallel()
