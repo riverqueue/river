@@ -2316,47 +2316,6 @@ func Test_Client_Subscribe(t *testing.T) {
 		require.Equal(t, JobStateRetryable, eventFailed.Job.State)
 	})
 
-	t.Run("EventsDropWithNoListeners", func(t *testing.T) {
-		t.Parallel()
-
-		dbPool := riverinternaltest.TestDB(ctx, t)
-
-		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
-			return nil
-		})
-
-		client := newTestClient(t, dbPool, config)
-
-		// A first channel that we'll use to make sure all the expected jobs are
-		// finished.
-		subscribeChan, cancel := client.Subscribe(EventKindJobCompleted)
-		t.Cleanup(cancel)
-
-		// Another channel with no listeners. Despite no listeners, it shouldn't
-		// block or gum up the client's progress in any way.
-		_, cancel = client.Subscribe(EventKindJobCompleted)
-		t.Cleanup(cancel)
-
-		// Insert more jobs than the maximum channel size. We'll be pulling from
-		// one channel but not the other.
-		for i := 0; i < subscribeChanSize+1; i++ {
-			_ = requireInsert(ctx, client, fmt.Sprintf("job %d", i))
-		}
-
-		// Need to start waiting on events before running the client or the
-		// channel could overflow before we start listening.
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_ = riverinternaltest.WaitOrTimeoutN(t, subscribeChan, subscribeChanSize+1)
-		}()
-
-		startClient(ctx, t, client)
-
-		wg.Wait()
-	})
-
 	t.Run("PanicOnUnknownKind", func(t *testing.T) {
 		t.Parallel()
 
@@ -2391,6 +2350,211 @@ func Test_Client_Subscribe(t *testing.T) {
 		riverinternaltest.WaitOrTimeout(t, subscribeChan)
 
 		require.Empty(t, client.subscriptions)
+	})
+}
+
+// SubscribeConfig uses all the same code as Subscribe, so these are just a
+// minimal set of new tests to make sure that the function also works when used
+// independently.
+func Test_Client_SubscribeConfig(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	keyEventsByName := func(events []*Event) map[string]*Event {
+		return sliceutil.KeyBy(events, func(event *Event) (string, *Event) {
+			var args callbackArgs
+			require.NoError(t, json.Unmarshal(event.Job.EncodedArgs, &args))
+			return args.Name, event
+		})
+	}
+
+	requireInsert := func(ctx context.Context, client *Client[pgx.Tx], jobName string) *rivertype.JobRow {
+		job, err := client.Insert(ctx, callbackArgs{Name: jobName}, nil)
+		require.NoError(t, err)
+		return job
+	}
+
+	t.Run("Success", func(t *testing.T) {
+		t.Parallel()
+
+		dbPool := riverinternaltest.TestDB(ctx, t)
+
+		// Fail/succeed jobs based on their name so we can get a mix of both to
+		// verify.
+		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+			if strings.HasPrefix(job.Args.Name, "failed") {
+				return errors.New("job error")
+			}
+			return nil
+		})
+
+		client := newTestClient(t, dbPool, config)
+
+		subscribeChan, cancel := client.SubscribeConfig(&SubscribeConfig{
+			Kinds: []EventKind{EventKindJobCompleted, EventKindJobFailed},
+		})
+		t.Cleanup(cancel)
+
+		jobCompleted1 := requireInsert(ctx, client, "completed1")
+		jobCompleted2 := requireInsert(ctx, client, "completed2")
+		jobFailed1 := requireInsert(ctx, client, "failed1")
+		jobFailed2 := requireInsert(ctx, client, "failed2")
+
+		expectedJobs := []*rivertype.JobRow{
+			jobCompleted1,
+			jobCompleted2,
+			jobFailed1,
+			jobFailed2,
+		}
+
+		startClient(ctx, t, client)
+
+		events := make([]*Event, len(expectedJobs))
+
+		for i := 0; i < len(expectedJobs); i++ {
+			events[i] = riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		}
+
+		eventsByName := keyEventsByName(events)
+
+		{
+			eventCompleted1 := eventsByName["completed1"]
+			require.Equal(t, EventKindJobCompleted, eventCompleted1.Kind)
+			require.Equal(t, jobCompleted1.ID, eventCompleted1.Job.ID)
+			require.Equal(t, JobStateCompleted, eventCompleted1.Job.State)
+		}
+
+		{
+			eventCompleted2 := eventsByName["completed2"]
+			require.Equal(t, EventKindJobCompleted, eventCompleted2.Kind)
+			require.Equal(t, jobCompleted2.ID, eventCompleted2.Job.ID)
+			require.Equal(t, JobStateCompleted, eventCompleted2.Job.State)
+		}
+
+		{
+			eventFailed1 := eventsByName["failed1"]
+			require.Equal(t, EventKindJobFailed, eventFailed1.Kind)
+			require.Equal(t, jobFailed1.ID, eventFailed1.Job.ID)
+			require.Equal(t, JobStateRetryable, eventFailed1.Job.State)
+		}
+
+		{
+			eventFailed2 := eventsByName["failed2"]
+			require.Equal(t, EventKindJobFailed, eventFailed2.Kind)
+			require.Equal(t, jobFailed2.ID, eventFailed2.Job.ID)
+			require.Equal(t, JobStateRetryable, eventFailed2.Job.State)
+		}
+	})
+
+	t.Run("EventsDropWithNoListeners", func(t *testing.T) {
+		t.Parallel()
+
+		dbPool := riverinternaltest.TestDB(ctx, t)
+
+		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+			return nil
+		})
+
+		client := newTestClient(t, dbPool, config)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			return nil
+		}))
+
+		// A first channel that we'll use to make sure all the expected jobs are
+		// finished.
+		subscribeChan, cancel := client.Subscribe(EventKindJobCompleted)
+		t.Cleanup(cancel)
+
+		// Artificially lowered subscribe channel size so we don't have to try
+		// and process thousands of jobs.
+		const (
+			subscribeChanSize = 100
+			numJobsToInsert   = subscribeChanSize + 1
+		)
+
+		// Another channel with no listeners. Despite no listeners, it shouldn't
+		// block or gum up the client's progress in any way.
+		subscribeChan2, cancel := client.SubscribeConfig(&SubscribeConfig{
+			ChanSize: subscribeChanSize,
+			Kinds:    []EventKind{EventKindJobCompleted},
+		})
+		t.Cleanup(cancel)
+
+		var (
+			insertParams = make([]*riverdriver.JobInsertFastParams, numJobsToInsert)
+			kind         = (&JobArgs{}).Kind()
+		)
+		for i := 0; i < numJobsToInsert; i++ {
+			insertParams[i] = &riverdriver.JobInsertFastParams{
+				EncodedArgs: []byte(`{}`),
+				Kind:        kind,
+				MaxAttempts: rivercommon.MaxAttemptsDefault,
+				Priority:    rivercommon.PriorityDefault,
+				Queue:       rivercommon.QueueDefault,
+				State:       rivertype.JobStateAvailable,
+			}
+		}
+
+		_, err := client.driver.GetExecutor().JobInsertFastMany(ctx, insertParams)
+		require.NoError(t, err)
+
+		// Need to start waiting on events before running the client or the
+		// channel could overflow before we start listening.
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = riverinternaltest.WaitOrTimeoutN(t, subscribeChan, numJobsToInsert)
+		}()
+
+		startClient(ctx, t, client)
+
+		wg.Wait()
+
+		// Filled to maximum.
+		require.Len(t, subscribeChan2, subscribeChanSize)
+	})
+
+	t.Run("PanicOnChanSizeLessThanZero", func(t *testing.T) {
+		t.Parallel()
+
+		dbPool := riverinternaltest.TestDB(ctx, t)
+
+		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+			return nil
+		})
+
+		client := newTestClient(t, dbPool, config)
+
+		require.PanicsWithValue(t, "SubscribeConfig.ChanSize must be greater or equal to 1", func() {
+			_, _ = client.SubscribeConfig(&SubscribeConfig{
+				ChanSize: -1,
+			})
+		})
+	})
+
+	t.Run("PanicOnUnknownKind", func(t *testing.T) {
+		t.Parallel()
+
+		dbPool := riverinternaltest.TestDB(ctx, t)
+
+		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+			return nil
+		})
+
+		client := newTestClient(t, dbPool, config)
+
+		require.PanicsWithError(t, "unknown event kind: does_not_exist", func() {
+			_, _ = client.SubscribeConfig(&SubscribeConfig{
+				Kinds: []EventKind{EventKind("does_not_exist")},
+			})
+		})
 	})
 }
 

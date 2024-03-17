@@ -67,10 +67,6 @@ func jobStatisticsFromInternal(stats *jobstats.JobStatistics) *JobStatistics {
 	}
 }
 
-// The maximum size of the subscribe channel. Events that would overflow it will
-// be dropped.
-const subscribeChanSize = 100
-
 // eventSubscription is an active subscription for events being produced by a
 // client, created with Client.Subscribe.
 type eventSubscription struct {

@@ -21,6 +21,7 @@ import (
 )
 
 var (
+	ErrClosedPool        = errors.New("underlying driver pool is closed")
 	ErrNotImplemented    = errors.New("driver does not implement this functionality")
 	ErrSubTxNotSupported = errors.New("subtransactions not supported for this driver")
 )
@@ -75,6 +76,7 @@ type Executor interface {
 	Exec(ctx context.Context, sql string) (struct{}, error)
 
 	JobCancel(ctx context.Context, params *JobCancelParams) (*rivertype.JobRow, error)
+	JobCountByState(ctx context.Context, state rivertype.JobState) (int, error)
 	JobDeleteBefore(ctx context.Context, params *JobDeleteBeforeParams) (int, error)
 	JobGetAvailable(ctx context.Context, params *JobGetAvailableParams) ([]*rivertype.JobRow, error)
 	JobGetByID(ctx context.Context, id int64) (*rivertype.JobRow, error)
@@ -90,6 +92,7 @@ type Executor interface {
 	JobRescueMany(ctx context.Context, params *JobRescueManyParams) (*struct{}, error)
 	JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, error)
 	JobSchedule(ctx context.Context, params *JobScheduleParams) (int, error)
+	JobSetCompleteIfRunningMany(ctx context.Context, params *JobSetCompleteIfRunningManyParams) ([]*rivertype.JobRow, error)
 	JobSetStateIfRunning(ctx context.Context, params *JobSetStateIfRunningParams) (*rivertype.JobRow, error)
 	JobUpdate(ctx context.Context, params *JobUpdateParams) (*rivertype.JobRow, error)
 	LeaderAttemptElect(ctx context.Context, params *LeaderElectParams) (bool, error)
@@ -232,9 +235,16 @@ type JobScheduleParams struct {
 	Now         time.Time
 }
 
-// JobSetStateIfRunningParams are parameters to update the state of a currently running
-// job. Use one of the constructors below to ensure a correct combination of
-// parameters.
+// JobSetCompleteIfRunningManyParams are parameters to set many running jobs to
+// `complete` all at once for improved throughput and efficiency.
+type JobSetCompleteIfRunningManyParams struct {
+	ID          []int64
+	FinalizedAt []time.Time
+}
+
+// JobSetStateIfRunningParams are parameters to update the state of a currently
+// running job. Use one of the constructors below to ensure a correct
+// combination of parameters.
 type JobSetStateIfRunningParams struct {
 	ID          int64
 	ErrData     []byte

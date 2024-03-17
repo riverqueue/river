@@ -13,14 +13,15 @@ import (
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivertype"
 )
 
 type Benchmarker[TTx any] struct {
-	driver       riverdriver.Driver[TTx]
-	duration     time.Duration
-	logger       *slog.Logger
-	name         string
-	numTotalJobs int
+	driver       riverdriver.Driver[TTx] // database pool wrapped in River driver
+	duration     time.Duration           // duration to run when running or a duration
+	logger       *slog.Logger            // logger, also injected to client
+	name         string                  // name of the service for logging purposes
+	numTotalJobs int                     // total number of jobs to work when in burn down mode
 }
 
 func NewBenchmarker[TTx any](driver riverdriver.Driver[TTx], logger *slog.Logger, duration time.Duration, numTotalJobs int) *Benchmarker[TTx] {
@@ -37,6 +38,7 @@ func NewBenchmarker[TTx any](driver riverdriver.Driver[TTx], logger *slog.Logger
 // when reaching maximum configured run duration.
 func (b *Benchmarker[TTx]) Run(ctx context.Context) error {
 	var (
+		lastJobWorkedAt time.Time
 		numJobsInserted atomic.Int64
 		numJobsLeft     atomic.Int64
 		numJobsWorked   atomic.Int64
@@ -94,9 +96,9 @@ func (b *Benchmarker[TTx]) Run(ctx context.Context) error {
 		// values against the wall, they perform quite well. Much better than
 		// the client's default values at any rate.
 		FetchCooldown:     2 * time.Millisecond,
-		FetchPollInterval: 5 * time.Millisecond,
+		FetchPollInterval: 20 * time.Millisecond,
 
-		Logger: slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),
+		Logger: b.logger,
 		Queues: map[string]river.QueueConfig{
 			// This could probably use more refinement, but in my quick and
 			// dirty tests I found that roughly 1k workers was most optimal. 500
@@ -104,7 +106,7 @@ func (b *Benchmarker[TTx]) Run(ctx context.Context) error {
 			// maximum of 10k performed quite badly (scheduler contention?).
 			// There may be a more optimal number than 1,000, but it seems close
 			// enough to target for now.
-			river.QueueDefault: {MaxWorkers: 1_000},
+			river.QueueDefault: {MaxWorkers: 2_000},
 		},
 		Workers: workers,
 	})
@@ -116,11 +118,23 @@ func (b *Benchmarker[TTx]) Run(ctx context.Context) error {
 	// worked instead of using telemetry from the worker itself because the
 	// subscribe channel accounts for the job moving through the completer while
 	// the worker does not.
-	subscribeChan, subscribeCancel := client.Subscribe(
-		river.EventKindJobCancelled,
-		river.EventKindJobCompleted,
-		river.EventKindJobFailed,
-	)
+	subscribeChan, subscribeCancel := client.SubscribeConfig(&river.SubscribeConfig{
+		// The benchmark may be processing a huge quantity of jobs far in excess
+		// of what River under normal conditions might see, so pick a much
+		// larger than normal subscribe channel size to make sure we don't
+		// accidentally drop any events.
+		//
+		// The subscribe channel is used to determine when jobs finish, so
+		// dropping jobs is very detrimental because it confuses the benchmark's
+		// bookkeeping of how many jobs there are left to work.
+		ChanSize: minJobs,
+
+		Kinds: []river.EventKind{
+			river.EventKindJobCancelled,
+			river.EventKindJobCompleted,
+			river.EventKindJobFailed,
+		},
+	})
 	defer subscribeCancel()
 
 	go func() {
@@ -132,14 +146,60 @@ func (b *Benchmarker[TTx]) Run(ctx context.Context) error {
 			case <-shutdown:
 				return
 
-			case <-subscribeChan:
+			case event := <-subscribeChan:
+				if event == nil { // Closed channel.
+					b.logger.InfoContext(ctx, "Subscription channel closed")
+					return
+				}
+
+				switch {
+				case event.Kind == river.EventKindJobCancelled:
+					b.logger.ErrorContext(ctx, "Job unexpectedly cancelled", "job_id", event.Job.ID)
+
+				case event.Kind == river.EventKindJobCompleted:
+
+				// Only count a job as complete if it failed for the last time.
+				// We don't expect benchmark jobs to ever fail, so this extra
+				// attention to detail is here, but shouldn't be needed.
+				case event.Kind == river.EventKindJobFailed && event.Job.State == rivertype.JobStateDiscarded:
+					b.logger.ErrorContext(ctx, "Job unexpectedly failed and discarded", "job_id", event.Job.ID)
+
+				default:
+					b.logger.ErrorContext(ctx, "Unhandled subscription event kind", "kind", event.Kind)
+				}
+
+				lastJobWorkedAt = time.Now()
 				numJobsLeft.Add(-1)
 				numJobsWorked := numJobsWorked.Add(1)
 
-				const logBatchSize = 5_000
+				const logBatchSize = 10_000
 				if numJobsWorked%logBatchSize == 0 {
-					b.logger.InfoContext(ctx, b.name+": Worked job batch", "num_worked", logBatchSize)
+					b.logger.DebugContext(ctx, b.name+": Worked batch of job(s)", "num_worked", logBatchSize)
 				}
+			}
+		}
+	}()
+
+	// Goroutine that ticks periodically to show how many available jobs there are.
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+
+			case <-shutdown:
+				return
+
+			case <-ticker.C:
+				numJobs, err := b.driver.GetExecutor().JobCountByState(ctx, river.JobStateAvailable)
+				if err != nil {
+					b.logger.ErrorContext(ctx, "Error counting jobs", "err", err)
+					continue
+				}
+				b.logger.InfoContext(ctx, "Available job count", "num_jobs", numJobs)
 			}
 		}
 	}()
@@ -171,7 +231,7 @@ func (b *Benchmarker[TTx]) Run(ctx context.Context) error {
 	case <-shutdown:
 		return nil
 	case <-time.After(5 * time.Second):
-		return errors.New("timed out waiting for minimum starting jobs to be inserted")
+		return errors.New("timed out waiting for starting jobs to be inserted")
 	}
 
 	b.logger.InfoContext(ctx, b.name+": Minimum jobs inserted; starting iteration")
@@ -192,7 +252,9 @@ func (b *Benchmarker[TTx]) Run(ctx context.Context) error {
 	// Prints one last log line before exit summarizing all operations.
 	start := time.Now()
 	defer func() {
-		runPeriod := time.Since(start)
+		// Use timing since the last job worked since even in burn down mode,
+		// the benchmark waits for one last interval before ending.
+		runPeriod := lastJobWorkedAt.Sub(start)
 		jobsPerSecond := float64(numJobsWorked.Load()) / runPeriod.Seconds()
 
 		fmt.Printf("bench: total jobs worked [ %10d ], total jobs inserted [ %10d ], overall job/sec [ %10.1f ], running %s\n",
@@ -256,8 +318,8 @@ func (b *Benchmarker[TTx]) Run(ctx context.Context) error {
 }
 
 const (
-	insertBatchSize = 2_000
-	minJobs         = 50_000
+	insertBatchSize = 5_000
+	minJobs         = 75_000 // max per/sec I've seen it work + 50% head room
 )
 
 // Inserts `b.numTotalJobs` in batches. This variant inserts a bulk of initial
@@ -299,6 +361,7 @@ func (b *Benchmarker[TTx]) insertJobs(
 			insertParamsBatch = insertParamsBatch[0:numLeft]
 		}
 
+		start := time.Now()
 		if _, err := client.InsertMany(ctx, insertParamsBatch); err != nil {
 			b.logger.ErrorContext(ctx, b.name+": Error inserting jobs", "err", err)
 		}
@@ -309,7 +372,7 @@ func (b *Benchmarker[TTx]) insertJobs(
 
 		if numJobsLeft.Load() >= int64(b.numTotalJobs) {
 			b.logger.InfoContext(ctx, b.name+": Finished inserting jobs",
-				"num_inserted", numInsertedThisRound)
+				"duration", time.Since(start), "num_inserted", numInsertedThisRound)
 			return
 		}
 
@@ -353,11 +416,7 @@ func (b *Benchmarker[TTx]) insertJobsContinuously(
 		case <-shutdown:
 			return
 
-		case <-time.After(50 * time.Millisecond):
-		}
-
-		if numJobsLeft.Load() >= minJobs {
-			continue
+		case <-time.After(250 * time.Millisecond):
 		}
 
 		var numInsertedThisRound int

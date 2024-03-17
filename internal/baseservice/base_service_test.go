@@ -121,30 +121,20 @@ func TestBaseService_CancellableSleep(t *testing.T) {
 			return myService.CancellableSleepRandomBetweenC(ctx, 5*time.Second, 10*time.Second)
 		})
 	})
-
-	t.Run("CancellableSleepExponentialBackoff", func(t *testing.T) {
-		t.Parallel()
-
-		testCancellableSleep(t, func(ctx context.Context, myService *MyService) <-chan struct{} {
-			return startSleep(func() {
-				myService.CancellableSleepExponentialBackoff(ctx, 3, MaxAttemptsBeforeResetDefault)
-			})
-		})
-	})
 }
 
-func TestBaseService_exponentialBackoffSeconds(t *testing.T) {
+func TestBaseService_ExponentialBackoff(t *testing.T) {
 	t.Parallel()
 
 	archetype := archetype()
 	myService := Init(archetype, &MyService{})
 
-	require.InDelta(t, 1.0, myService.exponentialBackoffSeconds(0, MaxAttemptsBeforeResetDefault), 1.0*0.1)
-	require.InDelta(t, 2.0, myService.exponentialBackoffSeconds(1, MaxAttemptsBeforeResetDefault), 2.0*0.1)
-	require.InDelta(t, 4.0, myService.exponentialBackoffSeconds(2, MaxAttemptsBeforeResetDefault), 4.0*0.1)
-	require.InDelta(t, 8.0, myService.exponentialBackoffSeconds(3, MaxAttemptsBeforeResetDefault), 8.0*0.1)
-	require.InDelta(t, 16.0, myService.exponentialBackoffSeconds(4, MaxAttemptsBeforeResetDefault), 16.0*0.1)
-	require.InDelta(t, 32.0, myService.exponentialBackoffSeconds(5, MaxAttemptsBeforeResetDefault), 32.0*0.1)
+	require.InDelta(t, 1.0, myService.ExponentialBackoff(1, MaxAttemptsBeforeResetDefault).Seconds(), 1.0*0.1)
+	require.InDelta(t, 2.0, myService.ExponentialBackoff(2, MaxAttemptsBeforeResetDefault).Seconds(), 2.0*0.1)
+	require.InDelta(t, 4.0, myService.ExponentialBackoff(3, MaxAttemptsBeforeResetDefault).Seconds(), 4.0*0.1)
+	require.InDelta(t, 8.0, myService.ExponentialBackoff(4, MaxAttemptsBeforeResetDefault).Seconds(), 8.0*0.1)
+	require.InDelta(t, 16.0, myService.ExponentialBackoff(5, MaxAttemptsBeforeResetDefault).Seconds(), 16.0*0.1)
+	require.InDelta(t, 32.0, myService.ExponentialBackoff(6, MaxAttemptsBeforeResetDefault).Seconds(), 32.0*0.1)
 }
 
 func TestBaseService_exponentialBackoffSecondsWithoutJitter(t *testing.T) {
@@ -153,17 +143,17 @@ func TestBaseService_exponentialBackoffSecondsWithoutJitter(t *testing.T) {
 	archetype := archetype()
 	myService := Init(archetype, &MyService{})
 
-	require.Equal(t, 1, int(myService.exponentialBackoffSecondsWithoutJitter(0, MaxAttemptsBeforeResetDefault)))
-	require.Equal(t, 2, int(myService.exponentialBackoffSecondsWithoutJitter(1, MaxAttemptsBeforeResetDefault)))
-	require.Equal(t, 4, int(myService.exponentialBackoffSecondsWithoutJitter(2, MaxAttemptsBeforeResetDefault)))
-	require.Equal(t, 8, int(myService.exponentialBackoffSecondsWithoutJitter(3, MaxAttemptsBeforeResetDefault)))
-	require.Equal(t, 16, int(myService.exponentialBackoffSecondsWithoutJitter(4, MaxAttemptsBeforeResetDefault)))
-	require.Equal(t, 32, int(myService.exponentialBackoffSecondsWithoutJitter(5, MaxAttemptsBeforeResetDefault)))
-	require.Equal(t, 64, int(myService.exponentialBackoffSecondsWithoutJitter(6, MaxAttemptsBeforeResetDefault)))
-	require.Equal(t, 128, int(myService.exponentialBackoffSecondsWithoutJitter(7, MaxAttemptsBeforeResetDefault)))
-	require.Equal(t, 256, int(myService.exponentialBackoffSecondsWithoutJitter(8, MaxAttemptsBeforeResetDefault)))
-	require.Equal(t, 512, int(myService.exponentialBackoffSecondsWithoutJitter(9, MaxAttemptsBeforeResetDefault)))
-	require.Equal(t, 1, int(myService.exponentialBackoffSecondsWithoutJitter(10, MaxAttemptsBeforeResetDefault))) // resets
+	require.Equal(t, 1, int(myService.exponentialBackoffSecondsWithoutJitter(1, MaxAttemptsBeforeResetDefault)))
+	require.Equal(t, 2, int(myService.exponentialBackoffSecondsWithoutJitter(2, MaxAttemptsBeforeResetDefault)))
+	require.Equal(t, 4, int(myService.exponentialBackoffSecondsWithoutJitter(3, MaxAttemptsBeforeResetDefault)))
+	require.Equal(t, 8, int(myService.exponentialBackoffSecondsWithoutJitter(4, MaxAttemptsBeforeResetDefault)))
+	require.Equal(t, 16, int(myService.exponentialBackoffSecondsWithoutJitter(5, MaxAttemptsBeforeResetDefault)))
+	require.Equal(t, 32, int(myService.exponentialBackoffSecondsWithoutJitter(6, MaxAttemptsBeforeResetDefault)))
+	require.Equal(t, 64, int(myService.exponentialBackoffSecondsWithoutJitter(7, MaxAttemptsBeforeResetDefault)))
+	require.Equal(t, 128, int(myService.exponentialBackoffSecondsWithoutJitter(8, MaxAttemptsBeforeResetDefault)))
+	require.Equal(t, 256, int(myService.exponentialBackoffSecondsWithoutJitter(9, MaxAttemptsBeforeResetDefault)))
+	require.Equal(t, 512, int(myService.exponentialBackoffSecondsWithoutJitter(10, MaxAttemptsBeforeResetDefault)))
+	require.Equal(t, 1, int(myService.exponentialBackoffSecondsWithoutJitter(11, MaxAttemptsBeforeResetDefault))) // resets
 }
 
 type MyService struct {

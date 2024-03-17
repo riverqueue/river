@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/puddle/v2"
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/riverdriver"
@@ -91,6 +92,7 @@ func TestInterpretError(t *testing.T) {
 	t.Parallel()
 
 	require.EqualError(t, interpretError(errors.New("an error")), "an error")
+	require.ErrorIs(t, interpretError(puddle.ErrClosedPool), riverdriver.ErrClosedPool)
 	require.ErrorIs(t, interpretError(pgx.ErrNoRows), rivertype.ErrNotFound)
 	require.NoError(t, interpretError(nil))
 }

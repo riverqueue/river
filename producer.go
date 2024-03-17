@@ -186,7 +186,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 	}
 
 	// TODO: fetcher should have some jitter in it to avoid stampeding issues.
-	fetchLimiter := chanutil.NewDebouncedChan(fetchCtx, p.config.FetchCooldown)
+	fetchLimiter := chanutil.NewDebouncedChan(fetchCtx, p.config.FetchCooldown, true)
 
 	var (
 		insertSub     *notifier.Subscription
@@ -458,6 +458,8 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 
 		go executor.Execute(jobCtx)
 	}
+
+	p.Logger.DebugContext(workCtx, p.Name+": Distributed batch of jobs to executors", "num_jobs", len(jobs))
 
 	p.testSignals.StartedExecutors.Signal(struct{}{})
 }

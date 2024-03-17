@@ -116,7 +116,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 	ctx := context.Background()
 
 	type testBundle struct {
-		completer         *jobcompleter.InlineJobCompleter
+		completer         *jobcompleter.InlineCompleter
 		exec              riverdriver.Executor
 		errorHandler      *testErrorHandler
 		getUpdatesAndStop func() []jobcompleter.CompleterJobUpdated
@@ -139,7 +139,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		})
 
 		getJobUpdates := func() []jobcompleter.CompleterJobUpdated {
-			completer.Wait()
+			completer.Stop()
 			return updates
 		}
 		t.Cleanup(func() { _ = getJobUpdates() })
@@ -206,7 +206,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -232,7 +232,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -256,7 +256,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -276,7 +276,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		{
 			executor.Execute(ctx)
-			executor.Completer.Wait()
+			executor.Completer.Stop()
 
 			job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 			require.NoError(t, err)
@@ -295,7 +295,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		{
 			executor.Execute(ctx)
-			executor.Completer.Wait()
+			executor.Completer.Stop()
 
 			job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 			require.NoError(t, err)
@@ -315,7 +315,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -335,7 +335,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return cancelErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -358,7 +358,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return cancelErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -378,7 +378,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return cancelErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -398,7 +398,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -418,7 +418,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -436,7 +436,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -457,7 +457,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}
 
 		executor.Execute(ctx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -478,7 +478,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}
 
 		executor.Execute(ctx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -499,7 +499,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}
 
 		executor.Execute(ctx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -515,7 +515,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { panic("panic val") }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -536,7 +536,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { panic("panic val") }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -554,7 +554,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { panic("panic val") }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -574,7 +574,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}
 
 		executor.Execute(ctx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -594,7 +594,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}
 
 		executor.Execute(ctx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -614,7 +614,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}
 
 		executor.Execute(ctx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -634,7 +634,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.CancelFunc = cancelFunc
 
 		executor.Execute(workCtx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		require.ErrorIs(t, context.Cause(workCtx), errExecutorDefaultCancel)
 	})
@@ -664,7 +664,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		t.Cleanup(func() { cancelFunc(nil) })
 
 		executor.Execute(workCtx)
-		executor.Completer.Wait()
+		executor.Completer.Stop()
 
 		jobRow, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)

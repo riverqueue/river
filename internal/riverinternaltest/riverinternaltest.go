@@ -48,6 +48,10 @@ var (
 	// change in the future. If changing this value, also change the number of
 	// databases to create in `testdbman`.
 	dbPoolMaxConns = int32(max(4, runtime.NumCPU())) //nolint:gochecknoglobals
+
+	// Shared rand instance for archetypes. Random number generation is rare
+	// enough that it's not likely to produce much contention.
+	rand = randutil.NewCryptoSeededConcurrentSafeRand() //nolint:gochecknoglobals
 )
 
 // BaseServiceArchetype returns a new base service suitable for use in tests.
@@ -58,7 +62,20 @@ func BaseServiceArchetype(tb testing.TB) *baseservice.Archetype {
 
 	return &baseservice.Archetype{
 		Logger:     Logger(tb),
-		Rand:       randutil.NewCryptoSeededConcurrentSafeRand(),
+		Rand:       rand,
+		TimeNowUTC: func() time.Time { return time.Now().UTC() },
+	}
+}
+
+// BaseServiceArchetypeDebug returns a new base service suitable for use in
+// tests with debug logging enabled. Useful for swapping into tests for
+// debugging, where additional context is often useful.
+func BaseServiceArchetypeDebug(tb testing.TB) *baseservice.Archetype {
+	tb.Helper()
+
+	return &baseservice.Archetype{
+		Logger:     LoggerDebug(tb),
+		Rand:       rand,
 		TimeNowUTC: func() time.Time { return time.Now().UTC() },
 	}
 }
@@ -179,6 +196,13 @@ func DrainContinuously[T any](drainChan <-chan T) func() []T {
 func Logger(tb testing.TB) *slog.Logger {
 	tb.Helper()
 	return slogtest.NewLogger(tb, nil)
+}
+
+// Logger returns a logger suitable for use in tests which outputs only at debug
+// or above. Useful when debugging tests where more output would be useful.
+func LoggerDebug(tb testing.TB) *slog.Logger {
+	tb.Helper()
+	return slogtest.NewLogger(tb, &slog.HandlerOptions{Level: slog.LevelDebug})
 }
 
 // Logger returns a logger suitable for use in tests which outputs only at warn
@@ -322,8 +346,8 @@ func TruncateRiverTables(ctx context.Context, pool *pgxpool.Pool) error {
 // and returns it if one does, but times out after a reasonable amount of time.
 // Useful to guarantee that test cases don't hang forever, even in the event of
 // something wrong.
-func WaitOrTimeout[T any](t *testing.T, waitChan <-chan T) T {
-	t.Helper()
+func WaitOrTimeout[T any](tb testing.TB, waitChan <-chan T) T {
+	tb.Helper()
 
 	timeout := rivercommon.WaitTimeout()
 
@@ -331,7 +355,7 @@ func WaitOrTimeout[T any](t *testing.T, waitChan <-chan T) T {
 	case value := <-waitChan:
 		return value
 	case <-time.After(timeout):
-		require.FailNowf(t, "WaitOrTimeout timed out",
+		require.FailNowf(tb, "WaitOrTimeout timed out",
 			"WaitOrTimeout timed out after waiting %s", timeout)
 	}
 	return *new(T) // unreachable
@@ -341,8 +365,8 @@ func WaitOrTimeout[T any](t *testing.T, waitChan <-chan T) T {
 // through, and returns it if they do, but times out after a reasonable amount
 // of time.  Useful to guarantee that test cases don't hang forever, even in the
 // event of something wrong.
-func WaitOrTimeoutN[T any](t *testing.T, waitChan <-chan T, numValues int) []T {
-	t.Helper()
+func WaitOrTimeoutN[T any](tb testing.TB, waitChan <-chan T, numValues int) []T {
+	tb.Helper()
 
 	var (
 		timeout  = rivercommon.WaitTimeout()
@@ -360,7 +384,7 @@ func WaitOrTimeoutN[T any](t *testing.T, waitChan <-chan T, numValues int) []T {
 			}
 
 		case <-time.After(time.Until(deadline)):
-			require.FailNowf(t, "WaitOrTimeout timed out",
+			require.FailNowf(tb, "WaitOrTimeout timed out",
 				"WaitOrTimeout timed out after waiting %s (received %d value(s), wanted %d)", timeout, len(values), numValues)
 			return nil
 		}

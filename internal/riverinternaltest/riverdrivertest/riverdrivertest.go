@@ -169,6 +169,25 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		})
 	})
 
+	t.Run("JobCountByState", func(t *testing.T) {
+		t.Parallel()
+
+		exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+		// Included because they're the queried state.
+		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+
+		// Excluded because they're not.
+		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled)})
+		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
+
+		numJobs, err := exec.JobCountByState(ctx, rivertype.JobStateAvailable)
+		require.NoError(t, err)
+		require.Equal(t, 2, numJobs)
+	})
+
 	t.Run("JobDeleteBefore", func(t *testing.T) {
 		t.Parallel()
 
@@ -1058,6 +1077,129 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		updatedJob3, err := exec.JobGetByID(ctx, job3.ID)
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateAvailable, updatedJob3.State)
+	})
+
+	t.Run("JobSetCompleteIfRunningMany", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("CompletesRunningJobs", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+			finalizedAt1 := time.Now().UTC().Add(-1 * time.Minute)
+			finalizedAt2 := time.Now().UTC().Add(-2 * time.Minute)
+			finalizedAt3 := time.Now().UTC().Add(-3 * time.Minute)
+
+			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
+
+			// Running, but won't be completed.
+			otherJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
+
+			jobsAfter, err := exec.JobSetCompleteIfRunningMany(ctx, &riverdriver.JobSetCompleteIfRunningManyParams{
+				ID:          []int64{job1.ID, job2.ID, job3.ID},
+				FinalizedAt: []time.Time{finalizedAt1, finalizedAt2, finalizedAt3},
+			})
+			require.NoError(t, err)
+			for _, jobAfter := range jobsAfter {
+				require.Equal(t, rivertype.JobStateCompleted, jobAfter.State)
+			}
+
+			job1Updated, err := exec.JobGetByID(ctx, job1.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateCompleted, job1Updated.State)
+			require.WithinDuration(t, finalizedAt1, *job1Updated.FinalizedAt, time.Microsecond)
+
+			job2Updated, err := exec.JobGetByID(ctx, job2.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateCompleted, job2Updated.State)
+			require.WithinDuration(t, finalizedAt2, *job2Updated.FinalizedAt, time.Microsecond)
+
+			job3Updated, err := exec.JobGetByID(ctx, job3.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateCompleted, job3Updated.State)
+			require.WithinDuration(t, finalizedAt3, *job3Updated.FinalizedAt, time.Microsecond)
+
+			otherJobUpdated, err := exec.JobGetByID(ctx, otherJob.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateRunning, otherJobUpdated.State)
+		})
+
+		t.Run("DoesNotCompleteJobsInNonRunningStates", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+			now := time.Now().UTC()
+
+			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRetryable)})
+			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled)})
+
+			jobsAfter, err := exec.JobSetCompleteIfRunningMany(ctx, &riverdriver.JobSetCompleteIfRunningManyParams{
+				ID:          []int64{job1.ID, job2.ID, job3.ID},
+				FinalizedAt: []time.Time{now, now, now},
+			})
+			require.NoError(t, err)
+			for _, jobAfter := range jobsAfter {
+				require.NotEqual(t, rivertype.JobStateCompleted, jobAfter.State)
+				require.Nil(t, jobAfter.FinalizedAt)
+			}
+
+			job1Updated, err := exec.JobGetByID(ctx, job1.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateAvailable, job1Updated.State)
+
+			job2Updated, err := exec.JobGetByID(ctx, job2.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateRetryable, job2Updated.State)
+
+			job3Updated, err := exec.JobGetByID(ctx, job3.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateScheduled, job3Updated.State)
+		})
+
+		t.Run("MixOfRunningAndNotRunningStates", func(t *testing.T) {
+			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+			finalizedAt1 := time.Now().UTC().Add(-1 * time.Minute)
+			finalizedAt2 := time.Now().UTC().Add(-2 * time.Minute) // ignored because job is not running
+			finalizedAt3 := time.Now().UTC().Add(-3 * time.Minute) // ignored because job is not running
+			finalizedAt4 := time.Now().UTC().Add(-3 * time.Minute)
+
+			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)}) // not running
+			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled)}) // not running
+			job4 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
+
+			_, err := exec.JobSetCompleteIfRunningMany(ctx, &riverdriver.JobSetCompleteIfRunningManyParams{
+				ID:          []int64{job1.ID, job2.ID, job3.ID, job4.ID},
+				FinalizedAt: []time.Time{finalizedAt1, finalizedAt2, finalizedAt3, finalizedAt4},
+			})
+			require.NoError(t, err)
+
+			job1Updated, err := exec.JobGetByID(ctx, job1.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateCompleted, job1Updated.State) // changed to completed
+			require.WithinDuration(t, finalizedAt1, *job1Updated.FinalizedAt, time.Microsecond)
+
+			job2Updated, err := exec.JobGetByID(ctx, job2.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateAvailable, job2Updated.State) // still available
+			require.Nil(t, job2Updated.FinalizedAt)
+
+			job3Updated, err := exec.JobGetByID(ctx, job3.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateScheduled, job3Updated.State) // still scheduled
+			require.Nil(t, job3Updated.FinalizedAt)
+
+			job4Updated, err := exec.JobGetByID(ctx, job4.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateCompleted, job4Updated.State) // changed to completed
+			require.WithinDuration(t, finalizedAt4, *job4Updated.FinalizedAt, time.Microsecond)
+		})
 	})
 
 	t.Run("JobSetStateIfRunning_JobSetStateCompleted", func(t *testing.T) {

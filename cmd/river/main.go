@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/lmittmann/tint"
 	"github.com/spf13/cobra"
 
 	"github.com/riverqueue/river/cmd/river/riverbench"
@@ -74,10 +75,12 @@ to use a development database only.
 			},
 		}
 		cmd.Flags().StringVar(&opts.DatabaseURL, "database-url", "", "URL of the database to benchmark (should look like `postgres://...`")
+		cmd.Flags().BoolVar(&opts.Debug, "debug", false, "output maximum logging verbosity (debug level)")
 		cmd.Flags().DurationVar(&opts.Duration, "duration", 0, "duration after which to stop benchmark, accepting Go-style durations like 1m, 5m30s")
 		cmd.Flags().IntVarP(&opts.NumTotalJobs, "num-total-jobs", "n", 0, "number of jobs to insert before starting and which are worked down until finish")
-		cmd.Flags().BoolVarP(&opts.Verbose, "verbose", "v", false, "output additional logging verbosity")
+		cmd.Flags().BoolVarP(&opts.Verbose, "verbose", "v", false, "output additional logging verbosity (info level)")
 		mustMarkFlagRequired(cmd, "database-url")
+		cmd.MarkFlagsMutuallyExclusive("debug", "verbose")
 		rootCmd.AddCommand(cmd)
 	}
 
@@ -187,6 +190,7 @@ func setParamIfUnset(runtimeParams map[string]string, name, val string) {
 
 type benchOpts struct {
 	DatabaseURL  string
+	Debug        bool
 	Duration     time.Duration
 	NumTotalJobs int
 	Verbose      bool
@@ -212,10 +216,13 @@ func bench(ctx context.Context, opts *benchOpts) (bool, error) {
 	defer dbPool.Close()
 
 	var logger *slog.Logger
-	if opts.Verbose {
-		logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
-	} else {
-		logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	switch {
+	case opts.Debug:
+		logger = slog.New(tint.NewHandler(os.Stdout, &tint.Options{Level: slog.LevelDebug}))
+	case opts.Verbose:
+		logger = slog.New(tint.NewHandler(os.Stdout, nil))
+	default:
+		logger = slog.New(tint.NewHandler(os.Stdout, &tint.Options{Level: slog.LevelWarn}))
 	}
 
 	benchmarker := riverbench.NewBenchmarker(riverpgxv5.New(dbPool), logger, opts.Duration, opts.NumTotalJobs)

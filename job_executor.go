@@ -262,7 +262,7 @@ func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 		} else {
 			params = riverdriver.JobSetStateSnoozed(e.JobRow.ID, nextAttemptScheduledAt, e.JobRow.MaxAttempts+1)
 		}
-		if err := e.Completer.JobSetStateIfRunning(e.stats, params); err != nil {
+		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, params); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Error snoozing job",
 				slog.Int64("job_id", e.JobRow.ID),
 			)
@@ -275,7 +275,7 @@ func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 		return
 	}
 
-	if err := e.Completer.JobSetStateIfRunning(e.stats, riverdriver.JobSetStateCompleted(e.JobRow.ID, e.TimeNowUTC())); err != nil {
+	if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateCompleted(e.JobRow.ID, e.TimeNowUTC())); err != nil {
 		e.Logger.ErrorContext(ctx, e.Name+": Error completing job",
 			slog.String("err", err.Error()),
 			slog.Int64("job_id", e.JobRow.ID),
@@ -326,14 +326,14 @@ func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
 	now := time.Now()
 
 	if cancelJob {
-		if err := e.Completer.JobSetStateIfRunning(e.stats, riverdriver.JobSetStateCancelled(e.JobRow.ID, now, errData)); err != nil {
+		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateCancelled(e.JobRow.ID, now, errData)); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Failed to cancel job and report error", logAttrs...)
 		}
 		return
 	}
 
 	if e.JobRow.Attempt >= e.JobRow.MaxAttempts {
-		if err := e.Completer.JobSetStateIfRunning(e.stats, riverdriver.JobSetStateDiscarded(e.JobRow.ID, now, errData)); err != nil {
+		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateDiscarded(e.JobRow.ID, now, errData)); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Failed to discard job and report error", logAttrs...)
 		}
 		return
@@ -367,7 +367,7 @@ func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
 	} else {
 		params = riverdriver.JobSetStateErrorRetryable(e.JobRow.ID, nextRetryScheduledAt, errData)
 	}
-	if err := e.Completer.JobSetStateIfRunning(e.stats, params); err != nil {
+	if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, params); err != nil {
 		e.Logger.ErrorContext(ctx, e.Name+": Failed to report error for job", logAttrs...)
 	}
 }
