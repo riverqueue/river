@@ -30,16 +30,16 @@ var (
 	// numbers so that the tests don't break anytime we add a new one.
 	riverMigrationsMaxVersion = riverMigrations[len(riverMigrations)-1].Version
 
-	testVersions = []*migrationBundle{
+	testVersions = []*Migration{
 		{
 			Version: riverMigrationsMaxVersion + 1,
-			Up:      "CREATE TABLE test_table(id bigserial PRIMARY KEY);",
-			Down:    "DROP TABLE test_table;",
+			SQLUp:   "CREATE TABLE test_table(id bigserial PRIMARY KEY);",
+			SQLDown: "DROP TABLE test_table;",
 		},
 		{
 			Version: riverMigrationsMaxVersion + 2,
-			Up:      "ALTER TABLE test_table ADD COLUMN name varchar(200); CREATE INDEX idx_test_table_name ON test_table(name);",
-			Down:    "DROP INDEX idx_test_table_name; ALTER TABLE test_table DROP COLUMN name;",
+			SQLUp:   "ALTER TABLE test_table ADD COLUMN name varchar(200); CREATE INDEX idx_test_table_name ON test_table(name);",
+			SQLDown: "DROP INDEX idx_test_table_name; ALTER TABLE test_table DROP COLUMN name;",
 		},
 	}
 
@@ -107,6 +107,15 @@ func TestMigrator(t *testing.T) {
 		return migrator, tx
 	}
 
+	t.Run("AllVersions", func(t *testing.T) {
+		t.Parallel()
+
+		migrator, _ := setup(t)
+
+		migrations := migrator.AllVersions()
+		require.Equal(t, seqOneTo(riverMigrationsWithTestVersionsMaxVersion), sliceutil.Map(migrations, migrationToInt))
+	})
+
 	t.Run("MigrateDownDefault", func(t *testing.T) {
 		t.Parallel()
 
@@ -165,7 +174,7 @@ func TestMigrator(t *testing.T) {
 		migrations, err := bundle.driver.UnwrapExecutor(bundle.tx).MigrationGetAll(ctx)
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(riverMigrationsWithTestVersionsMaxVersion-2),
-			sliceutil.Map(migrations, migrationToInt))
+			sliceutil.Map(migrations, driverMigrationToInt))
 
 		err = dbExecError(ctx, bundle.driver.UnwrapExecutor(bundle.tx), "SELECT name FROM test_table")
 		require.Error(t, err)
@@ -186,7 +195,7 @@ func TestMigrator(t *testing.T) {
 		migrations, err := bundle.driver.UnwrapExecutor(bundle.tx).MigrationGetAll(ctx)
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(3),
-			sliceutil.Map(migrations, migrationToInt))
+			sliceutil.Map(migrations, driverMigrationToInt))
 	})
 
 	t.Run("MigrateDownWithDatabaseSQLDriver", func(t *testing.T) {
@@ -202,7 +211,7 @@ func TestMigrator(t *testing.T) {
 		migrations, err := migrator.driver.UnwrapExecutor(tx).MigrationGetAll(ctx)
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(2),
-			sliceutil.Map(migrations, migrationToInt))
+			sliceutil.Map(migrations, driverMigrationToInt))
 	})
 
 	t.Run("MigrateDownWithTargetVersion", func(t *testing.T) {
@@ -221,7 +230,7 @@ func TestMigrator(t *testing.T) {
 		migrations, err := bundle.driver.UnwrapExecutor(bundle.tx).MigrationGetAll(ctx)
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(3),
-			sliceutil.Map(migrations, migrationToInt))
+			sliceutil.Map(migrations, driverMigrationToInt))
 
 		err = dbExecError(ctx, bundle.driver.UnwrapExecutor(bundle.tx), "SELECT name FROM test_table")
 		require.Error(t, err)
@@ -262,6 +271,45 @@ func TestMigrator(t *testing.T) {
 		}
 	})
 
+	t.Run("MigrateDownDryRun", func(t *testing.T) {
+		t.Parallel()
+
+		migrator, bundle := setup(t)
+
+		_, err := migrator.MigrateTx(ctx, bundle.tx, DirectionUp, &MigrateOpts{})
+		require.NoError(t, err)
+
+		res, err := migrator.MigrateTx(ctx, bundle.tx, DirectionDown, &MigrateOpts{DryRun: true})
+		require.NoError(t, err)
+		require.Equal(t, []int{riverMigrationsWithTestVersionsMaxVersion}, sliceutil.Map(res.Versions, migrateVersionToInt))
+
+		// Migrate down returned a result above for a migration that was
+		// removed, but because we're in a dry run, the database still shows
+		// this version.
+		migrations, err := bundle.driver.UnwrapExecutor(bundle.tx).MigrationGetAll(ctx)
+		require.NoError(t, err)
+		require.Equal(t, seqOneTo(riverMigrationsWithTestVersionsMaxVersion),
+			sliceutil.Map(migrations, driverMigrationToInt))
+	})
+
+	t.Run("GetVersion", func(t *testing.T) {
+		t.Parallel()
+
+		migrator, _ := setup(t)
+
+		{
+			migrateVersion, err := migrator.GetVersion(riverMigrationsWithTestVersionsMaxVersion)
+			require.NoError(t, err)
+			require.Equal(t, riverMigrationsWithTestVersionsMaxVersion, migrateVersion.Version)
+		}
+
+		{
+			_, err := migrator.GetVersion(99_999)
+			availableVersions := seqOneTo(riverMigrationsWithTestVersionsMaxVersion)
+			require.EqualError(t, err, fmt.Sprintf("migration %d not found (available versions: %v)", 99_999, availableVersions))
+		}
+	})
+
 	t.Run("MigrateNilOpts", func(t *testing.T) {
 		t.Parallel()
 
@@ -288,7 +336,7 @@ func TestMigrator(t *testing.T) {
 			migrations, err := bundle.driver.UnwrapExecutor(bundle.tx).MigrationGetAll(ctx)
 			require.NoError(t, err)
 			require.Equal(t, seqOneTo(riverMigrationsWithTestVersionsMaxVersion),
-				sliceutil.Map(migrations, migrationToInt))
+				sliceutil.Map(migrations, driverMigrationToInt))
 
 			_, err = bundle.tx.Exec(ctx, "SELECT * FROM test_table")
 			require.NoError(t, err)
@@ -304,7 +352,7 @@ func TestMigrator(t *testing.T) {
 			migrations, err := bundle.driver.UnwrapExecutor(bundle.tx).MigrationGetAll(ctx)
 			require.NoError(t, err)
 			require.Equal(t, seqOneTo(riverMigrationsWithTestVersionsMaxVersion),
-				sliceutil.Map(migrations, migrationToInt))
+				sliceutil.Map(migrations, driverMigrationToInt))
 
 			_, err = bundle.tx.Exec(ctx, "SELECT * FROM test_table")
 			require.NoError(t, err)
@@ -324,7 +372,7 @@ func TestMigrator(t *testing.T) {
 		migrations, err := bundle.driver.UnwrapExecutor(bundle.tx).MigrationGetAll(ctx)
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(riverMigrationsWithTestVersionsMaxVersion-1),
-			sliceutil.Map(migrations, migrationToInt))
+			sliceutil.Map(migrations, driverMigrationToInt))
 
 		// Column `name` is only added in the second test version.
 		err = dbExecError(ctx, bundle.driver.UnwrapExecutor(bundle.tx), "SELECT name FROM test_table")
@@ -350,7 +398,7 @@ func TestMigrator(t *testing.T) {
 		migrations, err := bundle.driver.UnwrapExecutor(bundle.tx).MigrationGetAll(ctx)
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(3),
-			sliceutil.Map(migrations, migrationToInt))
+			sliceutil.Map(migrations, driverMigrationToInt))
 	})
 
 	t.Run("MigrateUpWithDatabaseSQLDriver", func(t *testing.T) {
@@ -366,7 +414,7 @@ func TestMigrator(t *testing.T) {
 		migrations, err := migrator.driver.UnwrapExecutor(tx).MigrationGetAll(ctx)
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(riverMigrationsMaxVersion+1),
-			sliceutil.Map(migrations, migrationToInt))
+			sliceutil.Map(migrations, driverMigrationToInt))
 	})
 
 	t.Run("MigrateUpWithTargetVersion", func(t *testing.T) {
@@ -381,7 +429,7 @@ func TestMigrator(t *testing.T) {
 
 		migrations, err := bundle.driver.UnwrapExecutor(bundle.tx).MigrationGetAll(ctx)
 		require.NoError(t, err)
-		require.Equal(t, seqOneTo(5), sliceutil.Map(migrations, migrationToInt))
+		require.Equal(t, seqOneTo(5), sliceutil.Map(migrations, driverMigrationToInt))
 	})
 
 	t.Run("MigrateUpWithTargetVersionInvalid", func(t *testing.T) {
@@ -400,6 +448,26 @@ func TestMigrator(t *testing.T) {
 			_, err := migrator.MigrateTx(ctx, bundle.tx, DirectionUp, &MigrateOpts{TargetVersion: 3})
 			require.EqualError(t, err, "version 3 is not in target list of valid migrations to apply")
 		}
+	})
+
+	t.Run("MigrateUpDryRun", func(t *testing.T) {
+		t.Parallel()
+
+		migrator, bundle := setup(t)
+
+		res, err := migrator.MigrateTx(ctx, bundle.tx, DirectionUp, &MigrateOpts{DryRun: true})
+		require.NoError(t, err)
+		require.Equal(t, DirectionUp, res.Direction)
+		require.Equal(t, []int{riverMigrationsWithTestVersionsMaxVersion - 1, riverMigrationsWithTestVersionsMaxVersion},
+			sliceutil.Map(res.Versions, migrateVersionToInt))
+
+		// Migrate up returned a result above for migrations that were applied,
+		// but because we're in a dry run, the database still shows the test
+		// migration versions not applied.
+		migrations, err := bundle.driver.UnwrapExecutor(bundle.tx).MigrationGetAll(ctx)
+		require.NoError(t, err)
+		require.Equal(t, seqOneTo(riverMigrationsMaxVersion),
+			sliceutil.Map(migrations, driverMigrationToInt))
 	})
 
 	t.Run("ValidateSuccess", func(t *testing.T) {
@@ -439,7 +507,8 @@ func dbExecError(ctx context.Context, exec riverdriver.Executor, sql string) err
 	})
 }
 
-func migrationToInt(r *riverdriver.Migration) int { return r.Version }
+func driverMigrationToInt(r *riverdriver.Migration) int { return r.Version }
+func migrationToInt(migration Migration) int            { return migration.Version }
 
 func seqOneTo(max int) []int {
 	seq := make([]int, max)

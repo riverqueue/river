@@ -124,6 +124,18 @@ jobs:
       - name: Create database
         run: psql --echo-errors --quiet -c '\timing off' -c "CREATE DATABASE river_dev;" ${ADMIN_DATABASE_URL}
 
+      - run: ./river migrate-get --down --version 3
+        working-directory: ./cmd/river
+
+      - run: ./river migrate-get --up --version 3
+        working-directory: ./cmd/river
+
+      - run: ./river migrate-get --all --exclude-version 1 --down
+        working-directory: ./cmd/river
+
+      - run: ./river migrate-get --all --exclude-version 1 --up
+        working-directory: ./cmd/river
+
       - name: river migrate-up
         run: ./river migrate-up --database-url $DATABASE_URL
         working-directory: ./cmd/river
