@@ -2,8 +2,14 @@ package startstop
 
 import (
 	"context"
+	"errors"
 	"sync"
 )
+
+// ErrStop is an error injected into WithCancelCause when context is canceled
+// because a service is stopping. Makes it possible to differentiate a
+// controlled stop from a context cancellation.
+var ErrStop = errors.New("service stopped")
 
 // Service is a generalized interface for a service that starts and stops,
 // usually one backed by embedding BaseStartStop.
@@ -48,7 +54,7 @@ type serviceWithStopped interface {
 // A Stop implementation is provided automatically and it's not necessary to
 // override it.
 type BaseStartStop struct {
-	cancelFunc context.CancelFunc
+	cancelFunc context.CancelCauseFunc
 	mu         sync.Mutex
 	started    bool
 	stopped    chan struct{}
@@ -69,6 +75,21 @@ type BaseStartStop struct {
 //	     defer close(stopped)
 //
 //	     ...
+//
+// Be careful to also close it in the event of startup errors, otherwise a
+// service that failed to start once will never be able to start up.
+//
+//	ctx, shouldStart, stopped := s.StartInit(ctx)
+//	if !shouldStart {
+//	    return nil
+//	}
+//
+//	if err := possibleStartUpError(); err != nil {
+//	    close(stopped)
+//	    return err
+//	}
+//
+//	...
 func (s *BaseStartStop) StartInit(ctx context.Context) (context.Context, bool, chan struct{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -79,7 +100,7 @@ func (s *BaseStartStop) StartInit(ctx context.Context) (context.Context, bool, c
 
 	s.started = true
 	s.stopped = make(chan struct{})
-	ctx, s.cancelFunc = context.WithCancel(ctx)
+	ctx, s.cancelFunc = context.WithCancelCause(ctx)
 
 	return ctx, true, s.stopped
 }
@@ -87,19 +108,56 @@ func (s *BaseStartStop) StartInit(ctx context.Context) (context.Context, bool, c
 // Stop is an automatically provided implementation for the maintenance Service
 // interface's Stop.
 func (s *BaseStartStop) Stop() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Tolerate being told to stop without having been started.
-	if s.stopped == nil {
+	shouldStop, stopped, finalizeStop := s.StopInit()
+	if !shouldStop {
 		return
 	}
 
-	s.cancelFunc()
+	<-stopped
+	finalizeStop(true)
+}
 
-	<-s.stopped
-	s.started = false
-	s.stopped = nil
+// StopInit provides a way to build a more customized Stop implementation. It
+// should be avoided unless there'a an exceptional reason not to because Stop
+// should be fine in the vast majority of situations.
+//
+// It returns a boolean indicating whether the service should do any additional
+// work to stop (false is returned if the service was never started), a stopped
+// channel to wait on for full stop, and a finalizeStop function that should be
+// deferred in the stop function to ensure that locks are cleaned up and the
+// struct is reset after stopping.
+//
+//	shouldStop, stopped, finalizeStop := s.StartInit(ctx)
+//	if !shouldStop {
+//	    return
+//	}
+//
+//	defer finalizeStop(true)
+//
+//	...
+//
+// finalizeStop takes a boolean which indicates where the service should indeed
+// be considered stopped. This should usually be true, but callers can pass
+// false to cancel the stop action, keeping the service from starting again, and
+// potentially allowing the service to try another stop.
+func (s *BaseStartStop) StopInit() (bool, <-chan struct{}, func(didStop bool)) {
+	s.mu.Lock()
+
+	// Tolerate being told to stop without having been started.
+	if s.stopped == nil {
+		s.mu.Unlock()
+		return false, nil, func(didStop bool) {}
+	}
+
+	s.cancelFunc(ErrStop)
+
+	return true, s.stopped, func(didStop bool) {
+		defer s.mu.Unlock()
+		if didStop {
+			s.started = false
+			s.stopped = nil
+		}
+	}
 }
 
 // Stopped returns a channel that can be waited on for the service to be

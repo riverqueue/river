@@ -49,6 +49,15 @@ func testService(t *testing.T, newService func(t *testing.T) serviceWithStopped)
 		return newService(t), &testBundle{}
 	}
 
+	t.Run("StopAndStart", func(t *testing.T) {
+		t.Parallel()
+
+		service, _ := setup(t)
+
+		require.NoError(t, service.Start(ctx))
+		service.Stop()
+	})
+
 	t.Run("DoubleStop", func(t *testing.T) {
 		t.Parallel()
 
@@ -138,6 +147,119 @@ func TestBaseStartStopFunc(t *testing.T) {
 	}
 
 	testService(t, makeFunc)
+}
+
+func TestErrStop(t *testing.T) {
+	t.Parallel()
+
+	var (
+		workCtx context.Context
+		started = make(chan struct{})
+	)
+
+	startStop := StartStopFunc(func(ctx context.Context, shouldStart bool, stopped chan struct{}) error {
+		if !shouldStart {
+			return nil
+		}
+
+		workCtx = ctx
+
+		go func() {
+			close(started)
+			defer close(stopped)
+			<-ctx.Done()
+		}()
+
+		return nil
+	})
+
+	ctx := context.Background()
+
+	require.NoError(t, startStop.Start(ctx))
+	<-started
+	startStop.Stop()
+	require.ErrorIs(t, context.Cause(workCtx), ErrStop)
+}
+
+// A service with the more unusual case.
+type sampleServiceWithStopInit struct {
+	baseservice.BaseService
+	BaseStartStop
+
+	didStop bool
+
+	// Some simple state in the service which a started service taints. The
+	// purpose of this variable is to allow us to detect a data race allowed by
+	// BaseStartStop.
+	state bool
+}
+
+func (s *sampleServiceWithStopInit) Start(ctx context.Context) error {
+	ctx, shouldStart, stopped := s.StartInit(ctx)
+	if !shouldStart {
+		return nil
+	}
+
+	go func() {
+		defer close(stopped)
+		s.state = true
+		<-ctx.Done()
+	}()
+
+	return nil
+}
+
+func (s *sampleServiceWithStopInit) Stop() {
+	shouldStop, stopped, finalizeStop := s.StopInit()
+	if !shouldStop {
+		return
+	}
+
+	<-stopped
+	finalizeStop(s.didStop)
+}
+
+func TestWithStopInit(t *testing.T) {
+	t.Parallel()
+
+	testService(t, func(t *testing.T) serviceWithStopped { t.Helper(); return &sampleServiceWithStopInit{didStop: true} })
+
+	ctx := context.Background()
+
+	type testBundle struct{}
+
+	setup := func() (*sampleServiceWithStopInit, *testBundle) {
+		return &sampleServiceWithStopInit{}, &testBundle{}
+	}
+
+	t.Run("FinalizeDidStop", func(t *testing.T) {
+		t.Parallel()
+
+		service, _ := setup()
+		service.didStop = true // will set stopped
+
+		require.NoError(t, service.Start(ctx))
+
+		service.Stop()
+
+		require.False(t, service.started)
+		require.Nil(t, service.stopped)
+	})
+
+	t.Run("FinalizeDidNotStop", func(t *testing.T) {
+		t.Parallel()
+
+		service, _ := setup()
+		service.didStop = false // will NOT set stopped
+
+		require.NoError(t, service.Start(ctx))
+
+		service.Stop()
+
+		// service is still started because didStop was set to false
+		require.True(t, service.started)
+		require.NotNil(t, service.stopped)
+	})
 }
 
 func TestStopAllParallel(t *testing.T) {
