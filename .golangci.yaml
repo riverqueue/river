@@ -95,6 +95,7 @@ linters-settings:
       - id
       - j
       - mu
+      - sb # common convention for string builder
       - t
       - tt # common convention for table tests
       - tx
