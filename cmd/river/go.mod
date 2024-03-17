@@ -13,10 +13,10 @@ go 1.21.4
 require (
 	github.com/jackc/pgx/v5 v5.5.5
 	github.com/lmittmann/tint v1.0.4
-	github.com/riverqueue/river v0.0.17
-	github.com/riverqueue/river/riverdriver v0.0.25
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.0.25
-	github.com/riverqueue/river/rivertype v0.0.25
+	github.com/riverqueue/river v0.1.0
+	github.com/riverqueue/river/riverdriver v0.1.0
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.1.0
+	github.com/riverqueue/river/rivertype v0.1.0
 	github.com/spf13/cobra v1.8.0
 	github.com/stretchr/testify v1.9.0
 )
