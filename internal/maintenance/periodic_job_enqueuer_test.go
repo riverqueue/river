@@ -90,6 +90,15 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startstoptest.Stress(ctx, t, svc)
 	})
 
+	// This test run is somewhat susceptible to the "ready margin" applied on
+	// enqueuer loops to find jobs that aren't quite ready yet, but close
+	// enough. The 500 ms/1500 ms job types can have their ready times diverge
+	// slightly as they're enqueued separately. Usually they're ~identical, but
+	// a large enough divergence which can occur with `-race` and a hundred test
+	// iterations can cause the test to fail as an expected job wasn't enqueued
+	// on the expected loop. The ready margin is currently high enough (100 ms)
+	// that this problem won't occur, but in case it's ever substantially
+	// lowered, this test will need to be rewritten.
 	t.Run("EnqueuesPeriodicJobs", func(t *testing.T) {
 		t.Parallel()
 

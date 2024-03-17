@@ -163,7 +163,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 				// Add a small margin to the current time so we're not only
 				// running jobs that are already ready, but also ones ready at
 				// this exact moment or ready in the very near future.
-				nowWithMargin := now.Add(10 * time.Millisecond)
+				nowWithMargin := now.Add(100 * time.Millisecond)
 
 				for _, periodicJob := range s.periodicJobs {
 					if !periodicJob.nextRunAt.Before(nowWithMargin) {
