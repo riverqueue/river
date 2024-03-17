@@ -106,8 +106,8 @@ func (n *Notifier) Start(ctx context.Context) error {
 	go func() {
 		defer close(stopped)
 
-		n.Logger.InfoContext(ctx, n.Name+": Run loop started")
-		defer n.Logger.InfoContext(ctx, n.Name+": Run loop stopped")
+		n.Logger.DebugContext(ctx, n.Name+": Run loop started")
+		defer n.Logger.DebugContext(ctx, n.Name+": Run loop stopped")
 
 		n.withLock(func() { n.isStarted = true })
 		defer n.withLock(func() { n.isStarted = false })
@@ -186,7 +186,7 @@ func (n *Notifier) listenAndWait(ctx context.Context) error {
 		}
 	}
 
-	n.Logger.InfoContext(ctx, n.Name+": Notifier healthy")
+	n.Logger.DebugContext(ctx, n.Name+": Notifier healthy")
 	n.statusChangeFunc(componentstatus.Healthy)
 
 	n.testSignals.ListeningBegin.Signal(struct{}{})

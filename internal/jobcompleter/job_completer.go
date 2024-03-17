@@ -205,8 +205,8 @@ func (c *BatchCompleter) Start(ctx context.Context) error {
 		// races.
 		defer close(stopped)
 
-		c.Logger.InfoContext(ctx, c.Name+": Run loop started")
-		defer c.Logger.InfoContext(ctx, c.Name+": Run loop stopped")
+		c.Logger.DebugContext(ctx, c.Name+": Run loop started")
+		defer c.Logger.DebugContext(ctx, c.Name+": Run loop stopped")
 
 		ticker := time.NewTicker(50 * time.Millisecond)
 		defer ticker.Stop()

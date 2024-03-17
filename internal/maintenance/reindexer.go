@@ -104,8 +104,8 @@ func (s *Reindexer) Start(ctx context.Context) error {
 		// races.
 		defer close(stopped)
 
-		s.Logger.InfoContext(ctx, s.Name+logPrefixRunLoopStarted)
-		defer s.Logger.InfoContext(ctx, s.Name+logPrefixRunLoopStopped)
+		s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStarted)
+		defer s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStopped)
 
 		// On each run, we calculate the new schedule based on the previous run's
 		// start time. This ensures that we don't accidentally skip a run as time

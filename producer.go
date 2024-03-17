@@ -256,9 +256,9 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		// races.
 		defer close(stopped)
 
-		p.Logger.InfoContext(fetchCtx, p.Name+": Run loop started", slog.String("queue", p.config.Queue))
+		p.Logger.DebugContext(fetchCtx, p.Name+": Run loop started", slog.String("queue", p.config.Queue))
 		defer func() {
-			p.Logger.InfoContext(fetchCtx, p.Name+": Run loop stopped", slog.String("queue", p.config.Queue), slog.Uint64("num_completed_jobs", p.numJobsRan.Load()))
+			p.Logger.DebugContext(fetchCtx, p.Name+": Run loop stopped", slog.String("queue", p.config.Queue), slog.Uint64("num_completed_jobs", p.numJobsRan.Load()))
 		}()
 
 		if insertSub != nil {
