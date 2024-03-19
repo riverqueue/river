@@ -55,7 +55,7 @@ func (c *ReindexerConfig) mustValidate() *ReindexerConfig {
 // Reindexer periodically executes a REINDEX command on the important job
 // indexes to rebuild them and fix bloat issues.
 type Reindexer struct {
-	baseservice.BaseService
+	queueMaintainerServiceBase
 	startstop.BaseStartStop
 
 	// exported for test purposes
@@ -95,9 +95,7 @@ func (s *Reindexer) Start(ctx context.Context) error {
 		return nil
 	}
 
-	// Jitter start up slightly so services don't all perform their first run at
-	// exactly the same time.
-	s.CancellableSleepRandomBetween(ctx, JitterMin, JitterMax)
+	s.StaggerStart(ctx)
 
 	go func() {
 		// This defer should come first so that it's last out, thereby avoiding
@@ -114,13 +112,10 @@ func (s *Reindexer) Start(ctx context.Context) error {
 
 		for {
 			nextRunAt := s.Config.ScheduleFunc(lastRunAt)
-			timerCtx, timerCancel := context.WithDeadline(ctx, nextRunAt)
 
-			select {
-			case <-ctx.Done():
-				timerCancel()
+			s.CancellableSleep(ctx, time.Until(nextRunAt))
+			if ctx.Err() != nil {
 				return
-			case <-timerCtx.Done():
 			}
 			lastRunAt = nextRunAt
 
@@ -131,8 +126,8 @@ func (s *Reindexer) Start(ctx context.Context) error {
 					}
 					continue
 				}
-				s.TestSignals.Reindexed.Signal(struct{}{})
 			}
+			s.TestSignals.Reindexed.Signal(struct{}{})
 			// TODO: maybe we should log differently if some of these fail?
 			s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully, slog.Int("num_reindexes_initiated", len(s.Config.IndexNames)))
 		}

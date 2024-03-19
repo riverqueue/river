@@ -56,7 +56,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			waitChan: make(chan struct{}),
 		}
 
-		archetype := riverinternaltest.BaseServiceArchetype(t).WithSleepDisabled()
+		archetype := riverinternaltest.BaseServiceArchetype(t)
 
 		svc := NewPeriodicJobEnqueuer(
 			archetype,
@@ -66,6 +66,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 					{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false)},
 				},
 			}, bundle.exec)
+		svc.StaggerStartupDisable(true)
 		svc.TestSignals.Init()
 		t.Cleanup(svc.Stop)
 

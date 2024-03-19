@@ -12,20 +12,12 @@ import (
 	"github.com/riverqueue/river/internal/util/randutil"
 )
 
-func TestArchetype_WithSleepDisabled(t *testing.T) {
-	t.Parallel()
-
-	archetype := (&Archetype{}).WithSleepDisabled()
-	require.True(t, archetype.DisableSleep)
-}
-
 func TestInit(t *testing.T) {
 	t.Parallel()
 
 	archetype := archetype()
 
 	myService := Init(archetype, &MyService{})
-	require.False(t, myService.DisableSleep)
 	require.NotNil(t, myService.Logger)
 	require.Equal(t, "MyService", myService.Name)
 	require.WithinDuration(t, time.Now().UTC(), myService.TimeNowUTC(), 2*time.Second)
@@ -61,17 +53,6 @@ func TestBaseService_CancellableSleep(t *testing.T) {
 		case <-sleepDone:
 		case <-time.After(50 * time.Millisecond):
 			require.FailNow(t, "Timed out waiting for sleep to finish after cancel")
-		}
-
-		archetype.DisableSleep = true
-
-		// Start again with sleep disabled and expect an immediate return.
-		sleepDone = startSleepFunc(ctx, myService)
-
-		select {
-		case <-sleepDone:
-		case <-time.After(50 * time.Millisecond):
-			require.FailNow(t, "Timed out waiting for sleep to finish with sleep disabled")
 		}
 	}
 

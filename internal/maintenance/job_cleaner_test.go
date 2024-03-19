@@ -40,7 +40,7 @@ func TestJobCleaner(t *testing.T) {
 		}
 
 		cleaner := NewJobCleaner(
-			riverinternaltest.BaseServiceArchetype(t).WithSleepDisabled(),
+			riverinternaltest.BaseServiceArchetype(t),
 			&JobCleanerConfig{
 				CancelledJobRetentionPeriod: CancelledJobRetentionPeriodDefault,
 				CompletedJobRetentionPeriod: CompletedJobRetentionPeriodDefault,
@@ -48,6 +48,7 @@ func TestJobCleaner(t *testing.T) {
 				Interval:                    JobCleanerIntervalDefault,
 			},
 			bundle.exec)
+		cleaner.StaggerStartupDisable(true)
 		cleaner.TestSignals.Init()
 		t.Cleanup(cleaner.Stop)
 
@@ -57,7 +58,7 @@ func TestJobCleaner(t *testing.T) {
 	t.Run("Defaults", func(t *testing.T) {
 		t.Parallel()
 
-		cleaner := NewJobCleaner(riverinternaltest.BaseServiceArchetype(t).WithSleepDisabled(), &JobCleanerConfig{}, nil)
+		cleaner := NewJobCleaner(riverinternaltest.BaseServiceArchetype(t), &JobCleanerConfig{}, nil)
 
 		require.Equal(t, CancelledJobRetentionPeriodDefault, cleaner.Config.CancelledJobRetentionPeriod)
 		require.Equal(t, CompletedJobRetentionPeriodDefault, cleaner.Config.CompletedJobRetentionPeriod)

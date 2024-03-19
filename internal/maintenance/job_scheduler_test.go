@@ -37,7 +37,7 @@ func TestJobScheduler(t *testing.T) {
 		}
 
 		scheduler := NewScheduler(
-			riverinternaltest.BaseServiceArchetype(t).WithSleepDisabled(),
+			riverinternaltest.BaseServiceArchetype(t),
 			&JobSchedulerConfig{
 				Interval: JobSchedulerIntervalDefault,
 				Limit:    10,
@@ -73,7 +73,7 @@ func TestJobScheduler(t *testing.T) {
 	t.Run("Defaults", func(t *testing.T) {
 		t.Parallel()
 
-		scheduler := NewScheduler(riverinternaltest.BaseServiceArchetype(t).WithSleepDisabled(), &JobSchedulerConfig{}, nil)
+		scheduler := NewScheduler(riverinternaltest.BaseServiceArchetype(t), &JobSchedulerConfig{}, nil)
 
 		require.Equal(t, JobSchedulerIntervalDefault, scheduler.config.Interval)
 		require.Equal(t, JobSchedulerLimitDefault, scheduler.config.Limit)

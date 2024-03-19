@@ -180,9 +180,11 @@ type Config struct {
 	// (i.e.  That it wasn't forgotten by accident.)
 	Workers *Workers
 
-	// Test-only property that allows sleep statements to be disable. Only
-	// functions in cases where the CancellableSleep helper is used to sleep.
-	disableSleep bool
+	// Disables the normal random jittered sleep occurring in queue maintenance
+	// services to stagger their startup so they don't all try to work at the
+	// same time. Appropriate for use in tests to make sure that the client can
+	// always be started and stopped again hastily.
+	disableStaggerStart bool
 
 	// Scheduler run interval. Shared between the scheduler and producer/job
 	// executors, but not currently exposed for configuration.
@@ -410,7 +412,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		RescueStuckJobsAfter:        valutil.ValOrDefault(config.RescueStuckJobsAfter, rescueAfter),
 		RetryPolicy:                 retryPolicy,
 		Workers:                     config.Workers,
-		disableSleep:                config.disableSleep,
+		disableStaggerStart:         config.disableStaggerStart,
 		schedulerInterval:           valutil.ValOrDefault(config.schedulerInterval, maintenance.JobSchedulerIntervalDefault),
 	}
 
@@ -419,10 +421,9 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	}
 
 	archetype := &baseservice.Archetype{
-		DisableSleep: config.disableSleep,
-		Logger:       config.Logger,
-		Rand:         randutil.NewCryptoSeededConcurrentSafeRand(),
-		TimeNowUTC:   func() time.Time { return time.Now().UTC() },
+		Logger:     config.Logger,
+		Rand:       randutil.NewCryptoSeededConcurrentSafeRand(),
+		TimeNowUTC: func() time.Time { return time.Now().UTC() },
 	}
 
 	client := &Client[TTx]{
@@ -553,6 +554,10 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		// Not added to the main services list because the queue maintainer is
 		// started conditionally based on whether the client is the leader.
 		client.queueMaintainer = maintenance.NewQueueMaintainer(archetype, maintenanceServices)
+
+		if config.disableStaggerStart {
+			client.queueMaintainer.StaggerStartupDisable(true)
+		}
 	}
 
 	return client, nil

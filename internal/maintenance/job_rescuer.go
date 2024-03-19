@@ -73,7 +73,7 @@ func (c *JobRescuerConfig) mustValidate() *JobRescuerConfig {
 // JobRescuer periodically rescues jobs that have been executing for too long
 // and are considered to be "stuck".
 type JobRescuer struct {
-	baseservice.BaseService
+	queueMaintainerServiceBase
 	startstop.BaseStartStop
 
 	// exported for test purposes
@@ -104,9 +104,7 @@ func (s *JobRescuer) Start(ctx context.Context) error {
 		return nil
 	}
 
-	// Jitter start up slightly so services don't all perform their first run at
-	// exactly the same time.
-	s.CancellableSleepRandomBetween(ctx, JitterMin, JitterMax)
+	s.StaggerStart(ctx)
 
 	go func() {
 		// This defer should come first so that it's last out, thereby avoiding
