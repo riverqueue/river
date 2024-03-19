@@ -112,8 +112,8 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 		// races.
 		defer close(stopped)
 
-		s.Logger.InfoContext(ctx, s.Name+logPrefixRunLoopStarted)
-		defer s.Logger.InfoContext(ctx, s.Name+logPrefixRunLoopStopped)
+		s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStarted)
+		defer s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStopped)
 
 		// An initial loop to assign next runs for every configured job and
 		// queues any jobs that should run immediately.

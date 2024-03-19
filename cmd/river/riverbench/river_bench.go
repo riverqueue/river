@@ -49,7 +49,7 @@ func (b *Benchmarker[TTx]) Run(ctx context.Context) error {
 	// Prevents double-close on shutdown channel.
 	closeShutdown := func() {
 		if !shutdownClosed {
-			b.logger.InfoContext(ctx, "Closing shutdown channel")
+			b.logger.DebugContext(ctx, "Closing shutdown channel")
 			close(shutdown)
 		}
 		shutdownClosed = true
@@ -236,17 +236,14 @@ func (b *Benchmarker[TTx]) Run(ctx context.Context) error {
 
 	b.logger.InfoContext(ctx, b.name+": Minimum jobs inserted; starting iteration")
 
-	b.logger.InfoContext(ctx, b.name+": Client starting")
 	if err := client.Start(ctx); err != nil {
 		return err
 	}
 
 	defer func() {
-		b.logger.InfoContext(ctx, b.name+": Client stopping")
 		if err := client.Stop(ctx); err != nil {
 			b.logger.ErrorContext(ctx, b.name+": Error stopping client", "err", err)
 		}
-		b.logger.InfoContext(ctx, b.name+": Client stopped")
 	}()
 
 	// Prints one last log line before exit summarizing all operations.

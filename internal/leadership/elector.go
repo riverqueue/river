@@ -167,8 +167,8 @@ func (e *Elector) Start(ctx context.Context) error {
 		// races.
 		defer close(stopped)
 
-		e.Logger.InfoContext(ctx, e.Name+": Run loop started")
-		defer e.Logger.InfoContext(ctx, e.Name+": Run loop stopped")
+		e.Logger.DebugContext(ctx, e.Name+": Run loop started")
+		defer e.Logger.DebugContext(ctx, e.Name+": Run loop stopped")
 
 		if sub != nil {
 			defer sub.Unlisten(ctx)

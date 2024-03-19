@@ -108,8 +108,8 @@ func (s *JobCleaner) Start(ctx context.Context) error { //nolint:dupl
 		// races.
 		defer close(stopped)
 
-		s.Logger.InfoContext(ctx, s.Name+logPrefixRunLoopStarted)
-		defer s.Logger.InfoContext(ctx, s.Name+logPrefixRunLoopStopped)
+		s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStarted)
+		defer s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStopped)
 
 		ticker := timeutil.NewTickerWithInitialTick(ctx, s.Config.Interval)
 		for {
