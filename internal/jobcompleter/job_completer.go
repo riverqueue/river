@@ -49,7 +49,8 @@ type InlineCompleter struct {
 	baseservice.BaseService
 	withSubscribe
 
-	exec PartialExecutor
+	disableSleep bool // disable sleep in testing
+	exec         PartialExecutor
 
 	// A waitgroup is not actually needed for the inline completer because as
 	// long as the caller is waiting on each function call, completion is
@@ -71,7 +72,7 @@ func (c *InlineCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobst
 
 	start := c.TimeNowUTC()
 
-	job, err := withRetries(ctx, &c.BaseService, func(ctx context.Context) (*rivertype.JobRow, error) {
+	job, err := withRetries(ctx, &c.BaseService, c.disableSleep, func(ctx context.Context) (*rivertype.JobRow, error) {
 		return c.exec.JobSetStateIfRunning(ctx, params)
 	})
 	if err != nil {
@@ -101,9 +102,10 @@ type AsyncCompleter struct {
 	baseservice.BaseService
 	withSubscribe
 
-	concurrency int
-	errGroup    *errgroup.Group
-	exec        PartialExecutor
+	concurrency  int
+	disableSleep bool // disable sleep in testing
+	errGroup     *errgroup.Group
+	exec         PartialExecutor
 }
 
 func NewAsyncCompleter(archetype *baseservice.Archetype, exec PartialExecutor) *AsyncCompleter {
@@ -127,7 +129,7 @@ func (c *AsyncCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobsta
 	start := c.TimeNowUTC()
 
 	c.errGroup.Go(func() error {
-		job, err := withRetries(ctx, &c.BaseService, func(ctx context.Context) (*rivertype.JobRow, error) {
+		job, err := withRetries(ctx, &c.BaseService, c.disableSleep, func(ctx context.Context) (*rivertype.JobRow, error) {
 			return c.exec.JobSetStateIfRunning(ctx, params)
 		})
 		if err != nil {
@@ -168,6 +170,7 @@ type BatchCompleter struct {
 
 	asyncCompleter       *AsyncCompleter // used for non-complete completions
 	completionMaxSize    int             // configurable for testing purposes; max jobs to complete in single database operation
+	disableSleep         bool            // disable sleep in testing
 	maxBacklog           int             // configurable for testing purposes; max backlog allowed before no more completions accepted
 	exec                 PartialExecutor
 	setStateParams       map[int64]*batchCompleterSetState
@@ -293,7 +296,7 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 			c.Logger.DebugContext(ctx, c.Name+": Completed sub-batch of job(s)", "duration", time.Since(start), "num_jobs", len(batchID))
 		}()
 
-		return withRetries(ctx, &c.BaseService, func(ctx context.Context) ([]*rivertype.JobRow, error) {
+		return withRetries(ctx, &c.BaseService, c.disableSleep, func(ctx context.Context) ([]*rivertype.JobRow, error) {
 			return c.exec.JobSetCompleteIfRunningMany(ctx, &riverdriver.JobSetCompleteIfRunningManyParams{
 				ID:          batchID,
 				FinalizedAt: batchFinalizedAt,
@@ -447,7 +450,7 @@ func (c *BatchCompleter) waitOrInitBacklogChannel(ctx context.Context) {
 // ~37 seconds (7 seconds + 3 * 10 seconds).
 const numRetries = 3
 
-func withRetries[T any](logCtx context.Context, baseService *baseservice.BaseService, retryFunc func(ctx context.Context) (T, error)) (T, error) {
+func withRetries[T any](logCtx context.Context, baseService *baseservice.BaseService, disableSleep bool, retryFunc func(ctx context.Context) (T, error)) (T, error) {
 	uncancelledCtx := context.Background()
 
 	var (
@@ -479,7 +482,9 @@ func withRetries[T any](logCtx context.Context, baseService *baseservice.BaseSer
 			sleepDuration := baseService.ExponentialBackoff(attempt, baseservice.MaxAttemptsBeforeResetDefault)
 			baseService.Logger.ErrorContext(logCtx, baseService.Name+": Completer error (will retry after sleep)",
 				"attempt", attempt, "err", err, "sleep_duration", sleepDuration, "timeout", timeout)
-			baseService.CancellableSleep(logCtx, sleepDuration)
+			if !disableSleep {
+				baseService.CancellableSleep(logCtx, sleepDuration)
+			}
 			continue
 		}
 

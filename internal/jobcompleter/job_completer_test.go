@@ -71,8 +71,9 @@ func TestInlineJobCompleter_Complete(t *testing.T) {
 		},
 	}
 
-	completer := NewInlineCompleter(riverinternaltest.BaseServiceArchetype(t).WithSleepDisabled(), execMock)
+	completer := NewInlineCompleter(riverinternaltest.BaseServiceArchetype(t), execMock)
 	t.Cleanup(completer.Stop)
+	completer.disableSleep = true
 
 	err := completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(1, time.Now()))
 	if !errors.Is(err, expectedErr) {
@@ -87,7 +88,7 @@ func TestInlineJobCompleter_Subscribe(t *testing.T) {
 	t.Parallel()
 
 	testCompleterSubscribe(t, func(exec PartialExecutor) JobCompleter {
-		return NewInlineCompleter(riverinternaltest.BaseServiceArchetype(t).WithSleepDisabled(), exec)
+		return NewInlineCompleter(riverinternaltest.BaseServiceArchetype(t), exec)
 	})
 }
 
@@ -95,7 +96,7 @@ func TestInlineJobCompleter_Wait(t *testing.T) {
 	t.Parallel()
 
 	testCompleterWait(t, func(exec PartialExecutor) JobCompleter {
-		return NewInlineCompleter(riverinternaltest.BaseServiceArchetype(t).WithSleepDisabled(), exec)
+		return NewInlineCompleter(riverinternaltest.BaseServiceArchetype(t), exec)
 	})
 }
 
@@ -127,8 +128,9 @@ func TestAsyncJobCompleter_Complete(t *testing.T) {
 			return nil, err
 		},
 	}
-	completer := newAsyncCompleterWithConcurrency(riverinternaltest.BaseServiceArchetype(t).WithSleepDisabled(), adapter, 2)
+	completer := newAsyncCompleterWithConcurrency(riverinternaltest.BaseServiceArchetype(t), adapter, 2)
 	t.Cleanup(completer.Stop)
+	completer.disableSleep = true
 
 	// launch 4 completions, only 2 can be inline due to the concurrency limit:
 	for i := int64(0); i < 2; i++ {
@@ -190,7 +192,7 @@ func TestAsyncJobCompleter_Subscribe(t *testing.T) {
 	t.Parallel()
 
 	testCompleterSubscribe(t, func(exec PartialExecutor) JobCompleter {
-		return newAsyncCompleterWithConcurrency(riverinternaltest.BaseServiceArchetype(t).WithSleepDisabled(), exec, 4)
+		return newAsyncCompleterWithConcurrency(riverinternaltest.BaseServiceArchetype(t), exec, 4)
 	})
 }
 
@@ -198,7 +200,7 @@ func TestAsyncJobCompleter_Wait(t *testing.T) {
 	t.Parallel()
 
 	testCompleterWait(t, func(exec PartialExecutor) JobCompleter {
-		return newAsyncCompleterWithConcurrency(riverinternaltest.BaseServiceArchetype(t).WithSleepDisabled(), exec, 4)
+		return newAsyncCompleterWithConcurrency(riverinternaltest.BaseServiceArchetype(t), exec, 4)
 	})
 }
 
@@ -302,7 +304,7 @@ func TestAsyncCompleter(t *testing.T) {
 		t.Helper()
 		return NewAsyncCompleter(riverinternaltest.BaseServiceArchetype(t), exec)
 	},
-		func(completer *AsyncCompleter) { completer.DisableSleep = true },
+		func(completer *AsyncCompleter) { completer.disableSleep = true },
 		func(completer *AsyncCompleter, exec PartialExecutor) { completer.exec = exec })
 }
 
@@ -313,7 +315,7 @@ func TestBatchCompleter(t *testing.T) {
 		t.Helper()
 		return NewBatchCompleter(riverinternaltest.BaseServiceArchetype(t), exec)
 	},
-		func(completer *BatchCompleter) { completer.DisableSleep = true },
+		func(completer *BatchCompleter) { completer.disableSleep = true },
 		func(completer *BatchCompleter, exec PartialExecutor) { completer.exec = exec })
 
 	ctx := context.Background()
@@ -397,7 +399,7 @@ func TestInlineCompleter(t *testing.T) {
 		t.Helper()
 		return NewInlineCompleter(riverinternaltest.BaseServiceArchetype(t), exec)
 	},
-		func(completer *InlineCompleter) { completer.DisableSleep = true },
+		func(completer *InlineCompleter) { completer.disableSleep = true },
 		func(completer *InlineCompleter, exec PartialExecutor) { completer.exec = exec })
 }
 

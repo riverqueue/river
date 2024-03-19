@@ -41,6 +41,38 @@ func TestTestSignal(t *testing.T) {
 			signal.WaitOrTimeout()
 		}
 	})
+
+	t.Run("WaitC", func(t *testing.T) {
+		t.Parallel()
+
+		signal := TestSignal[struct{}]{}
+		signal.Init()
+
+		select {
+		case <-signal.WaitC():
+			require.FailNow(t, "Test signal should not have fired")
+		default:
+		}
+
+		signal.Signal(struct{}{})
+
+		select {
+		case <-signal.WaitC():
+		default:
+			require.FailNow(t, "Test signal should have fired")
+		}
+	})
+
+	t.Run("WaitOrTimeout", func(t *testing.T) {
+		t.Parallel()
+
+		signal := TestSignal[struct{}]{}
+		signal.Init()
+
+		signal.Signal(struct{}{})
+
+		signal.WaitOrTimeout()
+	})
 }
 
 // Marked as non-parallel because `t.Setenv` is not compatible with `t.Parallel`.

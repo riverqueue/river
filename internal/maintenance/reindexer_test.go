@@ -32,7 +32,7 @@ func TestReindexer(t *testing.T) {
 			now:  time.Now(),
 		}
 
-		archetype := riverinternaltest.BaseServiceArchetype(t).WithSleepDisabled()
+		archetype := riverinternaltest.BaseServiceArchetype(t)
 		archetype.TimeNowUTC = func() time.Time { return bundle.now }
 
 		fromNow := func(d time.Duration) func(time.Time) time.Time {
@@ -44,10 +44,22 @@ func TestReindexer(t *testing.T) {
 		svc := NewReindexer(archetype, &ReindexerConfig{
 			ScheduleFunc: fromNow(500 * time.Millisecond),
 		}, bundle.exec)
+		svc.StaggerStartupDisable(true)
 		svc.TestSignals.Init()
 		t.Cleanup(svc.Stop)
 
 		return svc, bundle
+	}
+
+	runImmediatelyThenOnceAnHour := func() func(time.Time) time.Time {
+		alreadyRan := false
+		return func(t time.Time) time.Time {
+			if alreadyRan {
+				return t.Add(time.Hour)
+			}
+			alreadyRan = true
+			return t.Add(time.Millisecond)
+		}
 	}
 
 	t.Run("StartStopStress", func(t *testing.T) {
@@ -65,24 +77,21 @@ func TestReindexer(t *testing.T) {
 
 		svc, _ := setup(t)
 
-		alreadyRan := false
-		svc.Config.ScheduleFunc = func(t time.Time) time.Time {
-			if alreadyRan {
-				return t.Add(time.Hour)
-			}
-			alreadyRan = true
-			return t.Add(time.Millisecond)
-		}
 		svc.Config.IndexNames = []string{
 			"river_job_kind",
 			"river_job_prioritized_fetching_index",
 			"river_job_state_and_finalized_at_index",
 		}
+		svc.Config.ScheduleFunc = runImmediatelyThenOnceAnHour()
 
 		require.NoError(t, svc.Start(ctx))
 		svc.TestSignals.Reindexed.WaitOrTimeout()
-		svc.TestSignals.Reindexed.WaitOrTimeout()
-		svc.TestSignals.Reindexed.WaitOrTimeout()
+
+		select {
+		case <-svc.TestSignals.Reindexed.WaitC():
+			require.FailNow(t, "Didn't expect reindexing to occur again")
+		case <-time.After(100 * time.Millisecond):
+		}
 	})
 
 	t.Run("StopsImmediately", func(t *testing.T) {

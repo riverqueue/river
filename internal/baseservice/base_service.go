@@ -22,13 +22,6 @@ import (
 // embedded in BaseService, so these properties are available on services
 // directly.
 type Archetype struct {
-	// DisableSleep disables sleep in services as long as they're sleeping via
-	// `BaseService`'s `CancellableSleep` functions. This is meant to provide a
-	// convenient way to disable sleep in one place and which will automatically
-	// propagate from a parent into its subcomponents as they initialize
-	// themselves from its archetype.
-	DisableSleep bool
-
 	// Logger is a structured logger.
 	Logger *slog.Logger
 
@@ -46,14 +39,6 @@ type Archetype struct {
 	// injection. Services should try to use this function instead of the
 	// vanilla ones from the `time` package for testing purposes.
 	TimeNowUTC func() time.Time
-}
-
-// WithSleepDisabled disables sleep in services that are using `BaseService`'s
-// `CancellableSleep` functions and returns the archetype for convenience. Use
-// of this is only appropriate in tests.
-func (a *Archetype) WithSleepDisabled() *Archetype {
-	a.DisableSleep = true
-	return a
 }
 
 // BaseService is a struct that's meant to be embedded on "service-like" objects
@@ -75,13 +60,8 @@ type BaseService struct {
 }
 
 // CancellableSleep sleeps for the given duration, but returns early if context
-// has been cancelled. If the service's `DisableSleep` option is set (usually
-// appropriate in tests), sleep is skipped automatically.
+// has been cancelled.
 func (s *BaseService) CancellableSleep(ctx context.Context, sleepDuration time.Duration) {
-	if s.DisableSleep {
-		return
-	}
-
 	timer := time.NewTimer(sleepDuration)
 
 	select {
@@ -94,8 +74,7 @@ func (s *BaseService) CancellableSleep(ctx context.Context, sleepDuration time.D
 }
 
 // CancellableSleep sleeps for the given duration, but returns early if context
-// has been cancelled. If the service's `DisableSleep` option is set (usually
-// appropriate in tests), sleep is skipped automatically.
+// has been cancelled.
 //
 // This variant returns a channel that should be waited on and which will be
 // closed when either the sleep or context is done.
@@ -112,16 +91,14 @@ func (s *BaseService) CancellableSleepC(ctx context.Context, sleepDuration time.
 
 // CancellableSleepRandomBetween sleeps for a random duration between the given
 // bounds (max bound is exclusive), but returns early if context has been
-// cancelled. If the service's `DisableSleep` option is set (usually appropriate
-// in tests), sleep is skipped automatically.
+// cancelled.
 func (s *BaseService) CancellableSleepRandomBetween(ctx context.Context, sleepDurationMin, sleepDurationMax time.Duration) {
 	s.CancellableSleep(ctx, time.Duration(randutil.IntBetween(s.Rand, int(sleepDurationMin), int(sleepDurationMax))))
 }
 
 // CancellableSleepRandomBetween sleeps for a random duration between the given
 // bounds (max bound is exclusive), but returns early if context has been
-// cancelled. If the service's `DisableSleep` option is set (usually appropriate
-// in tests), sleep is skipped automatically.
+// cancelled.
 //
 // This variant returns a channel that should be waited on and which will be
 // closed when either the sleep or context is done.
@@ -187,7 +164,6 @@ type withBaseService interface {
 func Init[TService withBaseService](archetype *Archetype, service TService) TService {
 	baseService := service.GetBaseService()
 
-	baseService.DisableSleep = archetype.DisableSleep
 	baseService.Logger = archetype.Logger
 	baseService.Name = reflect.TypeOf(service).Elem().Name()
 	baseService.Rand = archetype.Rand

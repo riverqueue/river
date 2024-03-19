@@ -61,6 +61,7 @@ type Notifier struct {
 	baseservice.BaseService
 	startstop.BaseStartStop
 
+	disableSleep      bool // for tests only; disable sleep on exponential backoff
 	listener          riverdriver.Listener
 	notificationBuf   chan *riverdriver.Notification
 	statusChangeFunc  func(componentstatus.Status)
@@ -133,7 +134,9 @@ func (n *Notifier) Start(ctx context.Context) error {
 				n.Logger.ErrorContext(ctx, n.Name+": Error running listener (will attempt reconnect after backoff)",
 					"attempt", attempt, "err", err, "sleep_duration", sleepDuration)
 				n.testSignals.BackoffError.Signal(err)
-				n.CancellableSleep(ctx, sleepDuration)
+				if !n.disableSleep {
+					n.CancellableSleep(ctx, sleepDuration)
+				}
 			}
 		}
 

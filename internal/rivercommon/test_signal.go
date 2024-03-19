@@ -51,6 +51,16 @@ func (s *TestSignal[T]) Signal(val T) {
 	}
 }
 
+// WaitC returns a channel on which a value from the test signal can be waited
+// upon.
+func (s TestSignal[T]) WaitC() <-chan T {
+	if s.internalChan == nil {
+		panic("test only signal is not initialized; called outside of tests?")
+	}
+
+	return s.internalChan
+}
+
 // WaitOrTimeout waits on the next value injected by Signal. This should only be
 // used in tests, and can only be used if Init has been invoked on the test
 // signal.

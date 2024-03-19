@@ -65,7 +65,7 @@ func (c *PeriodicJobEnqueuerConfig) mustValidate() *PeriodicJobEnqueuerConfig {
 // PeriodicJobEnqueuer inserts jobs configured to run periodically as unique
 // jobs to make sure they'll run as frequently as their period dictates.
 type PeriodicJobEnqueuer struct {
-	baseservice.BaseService
+	queueMaintainerServiceBase
 	startstop.BaseStartStop
 
 	// exported for test purposes
@@ -103,9 +103,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 		return nil
 	}
 
-	// Jitter start up slightly so services don't all perform their first run at
-	// exactly the same time.
-	s.CancellableSleepRandomBetween(ctx, JitterMin, JitterMax)
+	s.StaggerStart(ctx)
 
 	go func() {
 		// This defer should come first so that it's last out, thereby avoiding

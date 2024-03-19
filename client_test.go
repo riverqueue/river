@@ -136,12 +136,13 @@ func newTestConfig(t *testing.T, callback callbackFunc) *Config {
 	AddWorker(workers, &noOpWorker{})
 
 	return &Config{
-		FetchCooldown:     20 * time.Millisecond,
-		FetchPollInterval: 50 * time.Millisecond,
-		Logger:            riverinternaltest.Logger(t),
-		Queues:            map[string]QueueConfig{QueueDefault: {MaxWorkers: 50}},
-		Workers:           workers,
-		schedulerInterval: riverinternaltest.SchedulerShortInterval,
+		FetchCooldown:       20 * time.Millisecond,
+		FetchPollInterval:   50 * time.Millisecond,
+		Logger:              riverinternaltest.Logger(t),
+		Queues:              map[string]QueueConfig{QueueDefault: {MaxWorkers: 50}},
+		Workers:             workers,
+		disableStaggerStart: true, // disables staggered start in maintenance services
+		schedulerInterval:   riverinternaltest.SchedulerShortInterval,
 	}
 }
 
@@ -1786,7 +1787,6 @@ func Test_Client_Maintenance(t *testing.T) {
 		config.CancelledJobRetentionPeriod = 1 * time.Hour
 		config.CompletedJobRetentionPeriod = 1 * time.Hour
 		config.DiscardedJobRetentionPeriod = 1 * time.Hour
-		config.disableSleep = true
 
 		client := newTestClient(t, dbPool, config)
 		exec := client.driver.GetExecutor()
@@ -1845,7 +1845,6 @@ func Test_Client_Maintenance(t *testing.T) {
 
 		config := newTestConfig(t, nil)
 		config.RescueStuckJobsAfter = 5 * time.Minute
-		config.disableSleep = true
 
 		client := newTestClient(t, dbPool, config)
 		exec := client.driver.GetExecutor()
@@ -1913,7 +1912,6 @@ func Test_Client_Maintenance(t *testing.T) {
 
 		config := newTestConfig(t, nil)
 		config.Queues = map[string]QueueConfig{"another_queue": {MaxWorkers: 1}} // don't work jobs on the default queue we're using in this test
-		config.disableSleep = true
 
 		client := newTestClient(t, dbPool, config)
 		exec := client.driver.GetExecutor()
@@ -1969,7 +1967,6 @@ func Test_Client_Maintenance(t *testing.T) {
 		t.Parallel()
 
 		config := newTestConfig(t, nil)
-		config.disableSleep = true
 
 		worker := &periodicJobWorker{}
 		AddWorker(config.Workers, worker)
@@ -1995,7 +1992,6 @@ func Test_Client_Maintenance(t *testing.T) {
 		t.Parallel()
 
 		config := newTestConfig(t, nil)
-		config.disableSleep = true
 
 		worker := &periodicJobWorker{}
 		AddWorker(config.Workers, worker)
@@ -2024,7 +2020,6 @@ func Test_Client_Maintenance(t *testing.T) {
 
 		config := newTestConfig(t, nil)
 		config.ReindexerSchedule = cron.Every(time.Second)
-		config.disableSleep = true
 
 		client := runNewTestClient(ctx, t, config)
 
@@ -3019,8 +3014,7 @@ func Test_NewClient_Defaults(t *testing.T) {
 	require.Equal(t, JobTimeoutDefault, client.config.JobTimeout)
 	require.NotZero(t, client.baseService.Logger)
 	require.IsType(t, &DefaultClientRetryPolicy{}, client.config.RetryPolicy)
-	require.False(t, client.baseService.DisableSleep)
-	require.False(t, client.config.disableSleep)
+	require.False(t, client.config.disableStaggerStart)
 }
 
 func Test_NewClient_Overrides(t *testing.T) {
@@ -3050,7 +3044,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 		Queues:                      map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}},
 		RetryPolicy:                 retryPolicy,
 		Workers:                     workers,
-		disableSleep:                true,
+		disableStaggerStart:         true,
 	})
 	require.NoError(t, err)
 
@@ -3070,8 +3064,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 	require.Equal(t, 125*time.Millisecond, client.config.JobTimeout)
 	require.Equal(t, logger, client.baseService.Logger)
 	require.Equal(t, retryPolicy, client.config.RetryPolicy)
-	require.True(t, client.baseService.DisableSleep)
-	require.True(t, client.config.disableSleep)
+	require.True(t, client.config.disableStaggerStart)
 }
 
 func Test_NewClient_MissingParameters(t *testing.T) {

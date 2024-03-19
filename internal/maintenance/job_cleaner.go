@@ -68,7 +68,7 @@ func (c *JobCleanerConfig) mustValidate() *JobCleanerConfig {
 // JobCleaner periodically removes finalized jobs that are cancelled, completed,
 // or discarded. Each state's retention time can be configured individually.
 type JobCleaner struct {
-	baseservice.BaseService
+	queueMaintainerServiceBase
 	startstop.BaseStartStop
 
 	// exported for test purposes
@@ -99,9 +99,7 @@ func (s *JobCleaner) Start(ctx context.Context) error { //nolint:dupl
 		return nil
 	}
 
-	// Jitter start up slightly so services don't all perform their first run at
-	// exactly the same time.
-	s.CancellableSleepRandomBetween(ctx, JitterMin, JitterMax)
+	s.StaggerStart(ctx)
 
 	go func() {
 		// This defer should come first so that it's last out, thereby avoiding
