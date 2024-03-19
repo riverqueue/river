@@ -105,31 +105,48 @@ func (s *Reindexer) Start(ctx context.Context) error {
 		s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStarted)
 		defer s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStopped)
 
-		// On each run, we calculate the new schedule based on the previous run's
-		// start time. This ensures that we don't accidentally skip a run as time
-		// elapses during the run.
-		lastRunAt := time.Now().UTC()
+		nextRunAt := s.Config.ScheduleFunc(time.Now().UTC())
+
+		s.Logger.InfoContext(ctx, s.Name+": Scheduling first run", slog.Time("next_run_at", nextRunAt))
+
+		timerUntilNextRun := time.NewTimer(time.Until(nextRunAt))
 
 		for {
-			nextRunAt := s.Config.ScheduleFunc(lastRunAt)
+			select {
+			case <-timerUntilNextRun.C:
+				for _, indexName := range s.Config.IndexNames {
+					if err := s.reindexOne(ctx, indexName); err != nil {
+						if !errors.Is(err, context.Canceled) {
+							s.Logger.ErrorContext(ctx, s.Name+": Error reindexing", slog.String("error", err.Error()), slog.String("index_name", indexName))
+						}
+						continue
+					}
+				}
 
-			s.CancellableSleep(ctx, time.Until(nextRunAt))
-			if ctx.Err() != nil {
+				s.TestSignals.Reindexed.Signal(struct{}{})
+
+				// On each run, we calculate the new schedule based on the
+				// previous run's start time. This ensures that we don't
+				// accidentally skip a run as time elapses during the run.
+				nextRunAt = s.Config.ScheduleFunc(nextRunAt)
+
+				// TODO: maybe we should log differently if some of these fail?
+				s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
+					slog.Time("next_run_at", nextRunAt), slog.Int("num_reindexes_initiated", len(s.Config.IndexNames)))
+
+				// Reset the timer after the insert loop has finished so it's
+				// paused during work. Makes its firing more deterministic.
+				timerUntilNextRun.Reset(time.Until(nextRunAt))
+
+			case <-ctx.Done():
+				// Clean up timer resources. We know it has _not_ received from
+				// the timer since its last reset because that would have led us
+				// to the case above instead of here.
+				if !timerUntilNextRun.Stop() {
+					<-timerUntilNextRun.C
+				}
 				return
 			}
-			lastRunAt = nextRunAt
-
-			for _, indexName := range s.Config.IndexNames {
-				if err := s.reindexOne(ctx, indexName); err != nil {
-					if !errors.Is(err, context.Canceled) {
-						s.Logger.ErrorContext(ctx, s.Name+": Error reindexing", slog.String("error", err.Error()), slog.String("index_name", indexName))
-					}
-					continue
-				}
-			}
-			s.TestSignals.Reindexed.Signal(struct{}{})
-			// TODO: maybe we should log differently if some of these fail?
-			s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully, slog.Int("num_reindexes_initiated", len(s.Config.IndexNames)))
 		}
 	}()
 
