@@ -209,8 +209,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 			p.Logger.DebugContext(workCtx, p.Name+": Received insert notification", slog.String("queue", decoded.Queue))
 			fetchLimiter.Call()
 		}
-		// TODO(brandur): Get rid of this retry loop after refactor.
-		insertSub, err = notifier.ListenRetryLoop(fetchCtx, &p.BaseService, p.config.Notifier, notifier.NotificationTopicInsert, handleInsertNotification)
+		insertSub, err = p.config.Notifier.Listen(fetchCtx, notifier.NotificationTopicInsert, handleInsertNotification)
 		if err != nil {
 			close(stopped)
 			if strings.HasSuffix(err.Error(), "conn closed") || errors.Is(err, context.Canceled) {
@@ -240,8 +239,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 				slog.String("queue", decoded.Queue),
 			)
 		}
-		// TODO(brandur): Get rid of this retry loop after refactor.
-		jobControlSub, err = notifier.ListenRetryLoop(fetchCtx, &p.BaseService, p.config.Notifier, notifier.NotificationTopicJobControl, handleJobControlNotification)
+		jobControlSub, err = p.config.Notifier.Listen(fetchCtx, notifier.NotificationTopicJobControl, handleJobControlNotification)
 		if err != nil {
 			close(stopped)
 			if strings.HasSuffix(err.Error(), "conn closed") || errors.Is(err, context.Canceled) {
