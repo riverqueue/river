@@ -36,13 +36,14 @@ func newTestService(tb testing.TB) *testService {
 }
 
 func (s *testService) Start(ctx context.Context) error {
-	ctx, shouldStart, stopped := s.StartInit(ctx)
+	ctx, shouldStart, started, stopped := s.StartInit(ctx)
 	if !shouldStart {
 		return nil
 	}
 
 	go func() {
-		defer close(stopped)
+		started()
+		defer stopped()
 
 		s.testSignals.started.Signal(struct{}{})
 		<-ctx.Done()

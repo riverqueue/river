@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/dbunique"
+	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
@@ -94,6 +95,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		require.NoError(t, svc.Start(ctx))
 		t.Cleanup(svc.Stop)
+
+		riverinternaltest.WaitOrTimeout(t, startstop.WaitAllStartedC(svc))
 	}
 
 	t.Run("StartStopStress", func(t *testing.T) {

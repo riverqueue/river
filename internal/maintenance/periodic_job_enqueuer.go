@@ -202,7 +202,7 @@ type insertParamsAndUniqueOpts struct {
 }
 
 func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
-	ctx, shouldStart, stopped := s.StartInit(ctx)
+	ctx, shouldStart, started, stopped := s.StartInit(ctx)
 	if !shouldStart {
 		return nil
 	}
@@ -210,9 +210,8 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 	s.StaggerStart(ctx)
 
 	go func() {
-		// This defer should come first so that it's last out, thereby avoiding
-		// races.
-		defer close(stopped)
+		started()
+		defer stopped() // this defer should come first so it's last out
 
 		s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStarted)
 		defer s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStopped)

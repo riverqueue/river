@@ -44,15 +44,14 @@ func (sm *subscriptionManager) ResetSubscribeChan(subscribeCh <-chan []jobcomple
 }
 
 func (sm *subscriptionManager) Start(ctx context.Context) error {
-	ctx, shouldStart, stopped := sm.StartInit(ctx)
+	ctx, shouldStart, started, stopped := sm.StartInit(ctx)
 	if !shouldStart {
 		return nil
 	}
 
 	go func() {
-		// This defer should come first so that it's last out, thereby avoiding
-		// races.
-		defer close(stopped)
+		started()
+		defer stopped() // this defer should come first so it's last out
 
 		sm.Logger.DebugContext(ctx, sm.Name+": Run loop started")
 		defer sm.Logger.DebugContext(ctx, sm.Name+": Run loop stopped")

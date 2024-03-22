@@ -30,15 +30,14 @@ func newClientMonitor() *clientMonitor {
 }
 
 func (m *clientMonitor) Start(ctx context.Context) error {
-	ctx, shouldStart, stopped := m.StartInit(ctx)
+	ctx, shouldStart, started, stopped := m.StartInit(ctx)
 	if !shouldStart {
 		return nil
 	}
 
 	go func() {
-		// This defer should come first so that it's last out, thereby avoiding
-		// races.
-		defer close(stopped)
+		started()
+		defer stopped() // this defer should come first so it's last out
 
 		for {
 			select {

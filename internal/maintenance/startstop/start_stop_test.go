@@ -2,6 +2,7 @@ package startstop
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 
@@ -15,6 +16,9 @@ type sampleService struct {
 	baseservice.BaseService
 	BaseStartStop
 
+	// Optional error that may be returned on startup.
+	startErr error
+
 	// Some simple state in the service which a started service taints. The
 	// purpose of this variable is to allow us to detect a data race allowed by
 	// BaseStartStop.
@@ -22,14 +26,23 @@ type sampleService struct {
 }
 
 func (s *sampleService) Start(ctx context.Context) error {
-	ctx, shouldStart, stopped := s.StartInit(ctx)
+	ctx, shouldStart, started, stopped := s.StartInit(ctx)
 	if !shouldStart {
 		return nil
 	}
 
+	if s.startErr != nil {
+		stopped()
+		return s.startErr
+	}
+
 	go func() {
-		defer close(stopped)
+		// Set this before confirming started.
 		s.state = true
+
+		started()
+		defer stopped()
+
 		<-ctx.Done()
 	}()
 
@@ -74,6 +87,16 @@ func testService(t *testing.T, newService func(t *testing.T) serviceWithStopped)
 		service, _ := setup(t)
 
 		service.Stop()
+	})
+
+	t.Run("StartedChannel", func(t *testing.T) {
+		t.Parallel()
+
+		service, _ := setup(t)
+
+		require.NoError(t, service.Start(ctx))
+
+		riverinternaltest.WaitOrTimeout(t, service.Started())
 	})
 
 	t.Run("StoppedChannel", func(t *testing.T) {
@@ -130,13 +153,14 @@ func TestBaseStartStopFunc(t *testing.T) {
 		// BaseStartStop.
 		var state bool
 
-		return StartStopFunc(func(ctx context.Context, shouldStart bool, stopped chan struct{}) error {
+		return StartStopFunc(func(ctx context.Context, shouldStart bool, started, stopped func()) error {
 			if !shouldStart {
 				return nil
 			}
 
 			go func() {
-				defer close(stopped)
+				started()
+				defer stopped()
 				state = true
 				t.Logf("State: %t", state) // here so variable doesn't register as unused
 				<-ctx.Done()
@@ -152,12 +176,9 @@ func TestBaseStartStopFunc(t *testing.T) {
 func TestErrStop(t *testing.T) {
 	t.Parallel()
 
-	var (
-		workCtx context.Context
-		started = make(chan struct{})
-	)
+	var workCtx context.Context
 
-	startStop := StartStopFunc(func(ctx context.Context, shouldStart bool, stopped chan struct{}) error {
+	startStop := StartStopFunc(func(ctx context.Context, shouldStart bool, started, stopped func()) error {
 		if !shouldStart {
 			return nil
 		}
@@ -165,8 +186,8 @@ func TestErrStop(t *testing.T) {
 		workCtx = ctx
 
 		go func() {
-			close(started)
-			defer close(stopped)
+			started()
+			defer stopped()
 			<-ctx.Done()
 		}()
 
@@ -176,9 +197,48 @@ func TestErrStop(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, startStop.Start(ctx))
-	<-started
+	<-startStop.Started()
 	startStop.Stop()
 	require.ErrorIs(t, context.Cause(workCtx), ErrStop)
+}
+
+// BaseStartStop tests that need specific internal implementation (like ones we
+// can add to sampleService) to be able to verify.
+func TestSampleService(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct{}
+
+	setup := func(t *testing.T) (*sampleService, *testBundle) { //nolint:unparam
+		t.Helper()
+
+		return &sampleService{}, &testBundle{}
+	}
+
+	t.Run("StartedChannel", func(t *testing.T) {
+		t.Parallel()
+
+		service, _ := setup(t)
+
+		require.NoError(t, service.Start(ctx))
+
+		riverinternaltest.WaitOrTimeout(t, service.Started())
+		require.True(t, service.state)
+	})
+
+	t.Run("StartError", func(t *testing.T) {
+		t.Parallel()
+
+		service, _ := setup(t)
+		service.startErr = errors.New("error on start")
+
+		require.ErrorIs(t, service.Start(ctx), service.startErr)
+
+		riverinternaltest.WaitOrTimeout(t, service.Started()) // start channel also closed on erroneous start
+		riverinternaltest.WaitOrTimeout(t, service.Stopped())
+	})
 }
 
 // A service with the more unusual case.
@@ -195,13 +255,14 @@ type sampleServiceWithStopInit struct {
 }
 
 func (s *sampleServiceWithStopInit) Start(ctx context.Context) error {
-	ctx, shouldStart, stopped := s.StartInit(ctx)
+	ctx, shouldStart, started, stopped := s.StartInit(ctx)
 	if !shouldStart {
 		return nil
 	}
 
 	go func() {
-		defer close(stopped)
+		started()
+		defer stopped()
 		s.state = true
 		<-ctx.Done()
 	}()
@@ -222,7 +283,10 @@ func (s *sampleServiceWithStopInit) Stop() {
 func TestWithStopInit(t *testing.T) {
 	t.Parallel()
 
-	testService(t, func(t *testing.T) serviceWithStopped { t.Helper(); return &sampleServiceWithStopInit{didStop: true} })
+	testService(t, func(t *testing.T) serviceWithStopped {
+		t.Helper()
+		return &sampleServiceWithStopInit{didStop: true}
+	})
 
 	ctx := context.Background()
 
@@ -242,7 +306,7 @@ func TestWithStopInit(t *testing.T) {
 
 		service.Stop()
 
-		require.False(t, service.started)
+		require.Nil(t, service.started)
 		require.Nil(t, service.stopped)
 	})
 
@@ -257,7 +321,7 @@ func TestWithStopInit(t *testing.T) {
 		service.Stop()
 
 		// service is still started because didStop was set to false
-		require.True(t, service.started)
+		require.NotNil(t, service.started)
 		require.NotNil(t, service.stopped)
 	})
 }
@@ -313,5 +377,89 @@ func TestStopAllParallel(t *testing.T) {
 			service2,
 			service3,
 		})
+	})
+}
+
+func TestWaitAllStarted(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("WaitsForStart", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			service1 = &sampleService{}
+			service2 = &sampleService{}
+			service3 = &sampleService{}
+		)
+
+		require.NoError(t, service1.Start(ctx))
+		require.NoError(t, service2.Start(ctx))
+		require.NoError(t, service3.Start(ctx))
+
+		WaitAllStarted(service1, service2, service3)
+
+		require.True(t, service1.state)
+		require.True(t, service2.state)
+		require.True(t, service3.state)
+	})
+
+	t.Run("WithStartError", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			service1 = &sampleService{}
+			service2 = &sampleService{}
+			service3 = &sampleService{startErr: errors.New("error on start")}
+		)
+
+		require.NoError(t, service1.Start(ctx))
+		require.NoError(t, service2.Start(ctx))
+		require.ErrorIs(t, service3.Start(ctx), service3.startErr)
+
+		WaitAllStarted(service1, service2, service3)
+	})
+}
+
+func TestWaitAllStartedC(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("WaitsForStart", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			service1 = &sampleService{}
+			service2 = &sampleService{}
+			service3 = &sampleService{}
+		)
+
+		require.NoError(t, service1.Start(ctx))
+		require.NoError(t, service2.Start(ctx))
+		require.NoError(t, service3.Start(ctx))
+
+		riverinternaltest.WaitOrTimeout(t, WaitAllStartedC(service1, service2, service3))
+
+		require.True(t, service1.state)
+		require.True(t, service2.state)
+		require.True(t, service3.state)
+	})
+
+	t.Run("WithStartError", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			service1 = &sampleService{}
+			service2 = &sampleService{}
+			service3 = &sampleService{startErr: errors.New("error on start")}
+		)
+
+		require.NoError(t, service1.Start(ctx))
+		require.NoError(t, service2.Start(ctx))
+		require.ErrorIs(t, service3.Start(ctx), service3.startErr)
+
+		riverinternaltest.WaitOrTimeout(t, WaitAllStartedC(service1, service2, service3))
 	})
 }

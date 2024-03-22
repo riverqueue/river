@@ -20,18 +20,19 @@ type MyService struct {
 }
 
 func (s *MyService) Start(ctx context.Context) error {
-	ctx, shouldStart, stopped := s.StartInit(ctx)
+	ctx, shouldStart, started, stopped := s.StartInit(ctx)
 	if !shouldStart {
 		return nil
 	}
 
 	if s.startErr != nil {
-		close(stopped)
+		stopped()
 		return s.startErr
 	}
 
 	go func() {
-		defer close(stopped)
+		started()
+		defer stopped()
 
 		s.logger.InfoContext(ctx, "Service started")
 		defer s.logger.InfoContext(ctx, "Service stopped")

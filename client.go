@@ -321,7 +321,7 @@ type Client[TTx any] struct {
 	queueMaintainer      *maintenance.QueueMaintainer
 	services             []startstop.Service
 	subscriptionManager  *subscriptionManager
-	stopped              chan struct{}
+	stopped              <-chan struct{}
 	testSignals          clientTestSignals
 	uniqueInserter       *dbunique.UniqueInserter
 
@@ -633,17 +633,17 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 // jobs, but will also cancel the context for any currently-running jobs. If
 // using StopAndCancel, there's no need to also call Stop.
 func (c *Client[TTx]) Start(ctx context.Context) error {
-	fetchCtx, shouldStart, stopped := c.baseStartStop.StartInit(ctx)
+	fetchCtx, shouldStart, started, stopped := c.baseStartStop.StartInit(ctx)
 	if !shouldStart {
 		return nil
 	}
 
-	c.stopped = stopped
+	c.stopped = c.baseStartStop.Stopped()
 
-	stopProducers := func() {
-		startstop.StopAllParallel(sliceutil.Map(
+	producersAsServices := func() []startstop.Service {
+		return sliceutil.Map(
 			maputil.Values(c.producersByQueueName),
-			func(p *producer) startstop.Service { return p }),
+			func(p *producer) startstop.Service { return p },
 		)
 	}
 
@@ -723,7 +723,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 			producer := producer
 
 			if err := producer.StartWorkContext(fetchCtx, workCtx); err != nil {
-				stopProducers()
+				startstop.StopAllParallel(producersAsServices())
 				stopServicesOnError()
 				return err
 			}
@@ -731,7 +731,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 
 		return nil
 	}(); err != nil {
-		defer close(stopped)
+		defer stopped()
 		if errors.Is(context.Cause(fetchCtx), startstop.ErrStop) {
 			return rivercommon.ErrShutdown
 		}
@@ -739,7 +739,20 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 	}
 
 	go func() {
-		defer close(stopped)
+		// Wait for all subservices to start up before signaling our own start.
+		// This isn't strictly needed, but gives tests a way to fully confirm
+		// that all goroutines for subservices are spun up before continuing.
+		//
+		// Stop also cancels the "started" channel, so in case of a context
+		// cancellation, this statement will fall through. The client will
+		// briefly start, but then immediately stop again.
+		startstop.WaitAllStarted(append(
+			c.services,
+			producersAsServices()...,
+		)...)
+
+		started()
+		defer stopped()
 
 		c.baseService.Logger.InfoContext(ctx, "River client started", slog.String("client_id", c.ID()))
 		defer c.baseService.Logger.InfoContext(ctx, "River client stopped", slog.String("client_id", c.ID()))
@@ -749,7 +762,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 
 		// On stop, have the producers stop fetching first of all.
 		c.baseService.Logger.DebugContext(ctx, c.baseService.Name+": Stopping producers")
-		stopProducers()
+		startstop.StopAllParallel(producersAsServices())
 		c.baseService.Logger.DebugContext(ctx, c.baseService.Name+": All producers stopped")
 
 		// Stop all mainline services where stop order isn't important.
@@ -887,15 +900,14 @@ func (c *Client[TTx]) SubscribeConfig(config *SubscribeConfig) (<-chan *Event, f
 // numbers don't mean much in themselves, but can give a rough idea of the
 // proportions of each compared to each other, and may help flag outlying values
 // indicative of a problem.
-func (c *Client[TTx]) logStatsLoop(ctx context.Context, shouldStart bool, stopped chan struct{}) error {
+func (c *Client[TTx]) logStatsLoop(ctx context.Context, shouldStart bool, started, stopped func()) error {
 	if !shouldStart {
 		return nil
 	}
 
 	go func() {
-		// This defer should come first so that it's last out, thereby avoiding
-		// races.
-		defer close(stopped)
+		started()
+		defer stopped() // this defer should come first so it's last out
 
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
@@ -914,7 +926,7 @@ func (c *Client[TTx]) logStatsLoop(ctx context.Context, shouldStart bool, stoppe
 	return nil
 }
 
-func (c *Client[TTx]) handleLeadershipChangeLoop(ctx context.Context, shouldStart bool, stopped chan struct{}) error {
+func (c *Client[TTx]) handleLeadershipChangeLoop(ctx context.Context, shouldStart bool, started, stopped func()) error {
 	handleLeadershipChange := func(ctx context.Context, notification *leadership.Notification) {
 		c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Election change received",
 			slog.String("client_id", c.config.ID), slog.Bool("is_leader", notification.IsLeader))
@@ -946,9 +958,8 @@ func (c *Client[TTx]) handleLeadershipChangeLoop(ctx context.Context, shouldStar
 	}
 
 	go func() {
-		// This defer should come first so that it's last out,
-		// thereby avoiding races.
-		defer close(stopped)
+		started()
+		defer stopped() // this defer should come first so it's last out
 
 		sub := c.elector.Listen()
 		defer sub.Unlisten()

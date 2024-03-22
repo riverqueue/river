@@ -88,7 +88,7 @@ func New(archetype *baseservice.Archetype, listener riverdriver.Listener, status
 }
 
 func (n *Notifier) Start(ctx context.Context) error {
-	ctx, shouldStart, stopped := n.StartInit(ctx)
+	ctx, shouldStart, started, stopped := n.StartInit(ctx)
 	if !shouldStart {
 		return nil
 	}
@@ -96,7 +96,7 @@ func (n *Notifier) Start(ctx context.Context) error {
 	// The loop below will connect/close on every iteration, but do one initial
 	// connect so the notifier fails fast in case of an obvious problem.
 	if err := n.listenerConnect(ctx, false); err != nil {
-		close(stopped)
+		stopped()
 		if errors.Is(err, context.Canceled) {
 			return nil
 		}
@@ -104,7 +104,8 @@ func (n *Notifier) Start(ctx context.Context) error {
 	}
 
 	go func() {
-		defer close(stopped)
+		started()
+		defer stopped()
 
 		n.Logger.DebugContext(ctx, n.Name+": Run loop started")
 		defer n.Logger.DebugContext(ctx, n.Name+": Run loop stopped")

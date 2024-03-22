@@ -124,6 +124,10 @@ type clientWithSimpleStop[TTx any] struct {
 	*Client[TTx]
 }
 
+func (c *clientWithSimpleStop[TTx]) Started() <-chan struct{} {
+	return c.baseStartStop.Started()
+}
+
 func (c *clientWithSimpleStop[TTx]) Stop() {
 	_ = c.Client.Stop(context.Background())
 }
@@ -2317,40 +2321,61 @@ func Test_Client_Maintenance(t *testing.T) {
 
 	ctx := context.Background()
 
+	type testBundle struct {
+		exec riverdriver.Executor
+	}
+
+	setup := func(t *testing.T, config *Config) (*Client[pgx.Tx], *testBundle) {
+		t.Helper()
+
+		var (
+			dbPool = riverinternaltest.TestDB(ctx, t)
+			client = newTestClient(t, dbPool, config)
+		)
+
+		return client, &testBundle{exec: client.driver.GetExecutor()}
+	}
+
+	// Starts the client, then waits for it to be elected leader and for the
+	// queue maintainer to start.
+	startAndWaitForQueueMaintainer := func(ctx context.Context, t *testing.T, client *Client[pgx.Tx]) {
+		t.Helper()
+
+		startClient(ctx, t, client)
+		client.testSignals.electedLeader.WaitOrTimeout()
+		riverinternaltest.WaitOrTimeout(t, client.queueMaintainer.Started())
+	}
+
 	t.Run("JobCleaner", func(t *testing.T) {
 		t.Parallel()
-
-		dbPool := riverinternaltest.TestDB(ctx, t)
 
 		config := newTestConfig(t, nil)
 		config.CancelledJobRetentionPeriod = 1 * time.Hour
 		config.CompletedJobRetentionPeriod = 1 * time.Hour
 		config.DiscardedJobRetentionPeriod = 1 * time.Hour
 
-		client := newTestClient(t, dbPool, config)
-		exec := client.driver.GetExecutor()
+		client, bundle := setup(t, config)
 
 		deleteHorizon := time.Now().Add(-config.CompletedJobRetentionPeriod)
 
 		// Take care to insert jobs before starting the client because otherwise
 		// there's a race condition where the cleaner could run its initial
 		// pass before our insertion is complete.
-		ineligibleJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-		ineligibleJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
-		ineligibleJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled)})
+		ineligibleJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+		ineligibleJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
+		ineligibleJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled)})
 
-		jobBeyondHorizon1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
-		jobBeyondHorizon2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
-		jobBeyondHorizon3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
+		jobBeyondHorizon1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
+		jobBeyondHorizon2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
+		jobBeyondHorizon3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
 
 		// Will not be deleted.
-		jobWithinHorizon1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(1 * time.Hour))})
-		jobWithinHorizon2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(1 * time.Hour))})
-		jobWithinHorizon3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(1 * time.Hour))})
+		jobWithinHorizon1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(1 * time.Hour))})
+		jobWithinHorizon2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(1 * time.Hour))})
+		jobWithinHorizon3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(1 * time.Hour))})
 
-		startClient(ctx, t, client)
+		startAndWaitForQueueMaintainer(ctx, t, client)
 
-		client.testSignals.electedLeader.WaitOrTimeout()
 		jc := maintenance.GetService[*maintenance.JobCleaner](client.queueMaintainer)
 		jc.TestSignals.DeletedBatch.WaitOrTimeout()
 
@@ -2380,27 +2405,24 @@ func Test_Client_Maintenance(t *testing.T) {
 	t.Run("JobRescuer", func(t *testing.T) {
 		t.Parallel()
 
-		dbPool := riverinternaltest.TestDB(ctx, t)
-
 		config := newTestConfig(t, nil)
 		config.RescueStuckJobsAfter = 5 * time.Minute
 
-		client := newTestClient(t, dbPool, config)
-		exec := client.driver.GetExecutor()
+		client, bundle := setup(t, config)
 
 		now := time.Now()
 
 		// Take care to insert jobs before starting the client because otherwise
 		// there's a race condition where the rescuer could run its initial
 		// pass before our insertion is complete.
-		ineligibleJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(time.Minute))})
-		ineligibleJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(time.Minute))})
-		ineligibleJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(now.Add(-time.Minute))})
+		ineligibleJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(time.Minute))})
+		ineligibleJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(time.Minute))})
+		ineligibleJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(now.Add(-time.Minute))})
 
 		// large attempt number ensures these don't immediately start executing again:
-		jobStuckToRetry1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRunning), Attempt: ptrutil.Ptr(20), AttemptedAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
-		jobStuckToRetry2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRunning), Attempt: ptrutil.Ptr(20), AttemptedAt: ptrutil.Ptr(now.Add(-30 * time.Minute))})
-		jobStuckToDiscard := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+		jobStuckToRetry1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRunning), Attempt: ptrutil.Ptr(20), AttemptedAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
+		jobStuckToRetry2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRunning), Attempt: ptrutil.Ptr(20), AttemptedAt: ptrutil.Ptr(now.Add(-30 * time.Minute))})
+		jobStuckToDiscard := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
 			State:       ptrutil.Ptr(rivertype.JobStateRunning),
 			Attempt:     ptrutil.Ptr(20),
 			AttemptedAt: ptrutil.Ptr(now.Add(-5*time.Minute - time.Second)),
@@ -2408,20 +2430,19 @@ func Test_Client_Maintenance(t *testing.T) {
 		})
 
 		// Will not be rescued.
-		jobNotYetStuck1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(now.Add(-4 * time.Minute))})
-		jobNotYetStuck2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(now.Add(-1 * time.Minute))})
-		jobNotYetStuck3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(now.Add(-10 * time.Second))})
+		jobNotYetStuck1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(now.Add(-4 * time.Minute))})
+		jobNotYetStuck2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(now.Add(-1 * time.Minute))})
+		jobNotYetStuck3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(now.Add(-10 * time.Second))})
 
-		startClient(ctx, t, client)
+		startAndWaitForQueueMaintainer(ctx, t, client)
 
-		client.testSignals.electedLeader.WaitOrTimeout()
 		svc := maintenance.GetService[*maintenance.JobRescuer](client.queueMaintainer)
 		svc.TestSignals.FetchedBatch.WaitOrTimeout()
 		svc.TestSignals.UpdatedBatch.WaitOrTimeout()
 
 		requireJobHasState := func(jobID int64, state rivertype.JobState) {
 			t.Helper()
-			job, err := exec.JobGetByID(ctx, jobID)
+			job, err := bundle.exec.JobGetByID(ctx, jobID)
 			require.NoError(t, err)
 			require.Equal(t, state, job.State)
 		}
@@ -2447,35 +2468,31 @@ func Test_Client_Maintenance(t *testing.T) {
 	t.Run("JobScheduler", func(t *testing.T) {
 		t.Parallel()
 
-		dbPool := riverinternaltest.TestDB(ctx, t)
-
 		config := newTestConfig(t, nil)
 		config.Queues = map[string]QueueConfig{"another_queue": {MaxWorkers: 1}} // don't work jobs on the default queue we're using in this test
 
-		client := newTestClient(t, dbPool, config)
-		exec := client.driver.GetExecutor()
+		client, bundle := setup(t, config)
 
 		now := time.Now()
 
 		// Take care to insert jobs before starting the client because otherwise
 		// there's a race condition where the scheduler could run its initial
 		// pass before our insertion is complete.
-		ineligibleJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-		ineligibleJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
-		ineligibleJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
+		ineligibleJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+		ineligibleJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
+		ineligibleJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
 
-		jobInPast1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
-		jobInPast2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Minute))})
-		jobInPast3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
+		jobInPast1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
+		jobInPast2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Minute))})
+		jobInPast3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
 
 		// Will not be scheduled.
-		jobInFuture1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(now.Add(1 * time.Hour))})
-		jobInFuture2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(now.Add(1 * time.Minute))})
-		jobInFuture3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(now.Add(10 * time.Second))})
+		jobInFuture1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(now.Add(1 * time.Hour))})
+		jobInFuture2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(now.Add(1 * time.Minute))})
+		jobInFuture3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(now.Add(10 * time.Second))})
 
-		startClient(ctx, t, client)
+		startAndWaitForQueueMaintainer(ctx, t, client)
 
-		client.testSignals.electedLeader.WaitOrTimeout()
 		scheduler := maintenance.GetService[*maintenance.JobScheduler](client.queueMaintainer)
 		scheduler.TestSignals.ScheduledBatch.WaitOrTimeout()
 
@@ -2515,14 +2532,14 @@ func Test_Client_Maintenance(t *testing.T) {
 			}, &PeriodicJobOpts{RunOnStart: true}),
 		}
 
-		client := runNewTestClient(ctx, t, config)
-		exec := client.driver.GetExecutor()
+		client, bundle := setup(t, config)
 
-		client.testSignals.electedLeader.WaitOrTimeout()
+		startAndWaitForQueueMaintainer(ctx, t, client)
+
 		svc := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
 
-		jobs, err := exec.JobGetByKindMany(ctx, []string{(periodicJobArgs{}).Kind()})
+		jobs, err := bundle.exec.JobGetByKindMany(ctx, []string{(periodicJobArgs{}).Kind()})
 		require.NoError(t, err)
 		require.Len(t, jobs, 1, "Expected to find exactly one job of kind: "+(periodicJobArgs{}).Kind())
 	})
@@ -2540,15 +2557,15 @@ func Test_Client_Maintenance(t *testing.T) {
 			}, nil),
 		}
 
-		client := runNewTestClient(ctx, t, config)
-		exec := client.driver.GetExecutor()
+		client, bundle := setup(t, config)
 
-		client.testSignals.electedLeader.WaitOrTimeout()
+		startAndWaitForQueueMaintainer(ctx, t, client)
+
 		svc := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
 		svc.TestSignals.EnteredLoop.WaitOrTimeout()
 
 		// No jobs yet because the RunOnStart option was not specified.
-		jobs, err := exec.JobGetByKindMany(ctx, []string{(periodicJobArgs{}).Kind()})
+		jobs, err := bundle.exec.JobGetByKindMany(ctx, []string{(periodicJobArgs{}).Kind()})
 		require.NoError(t, err)
 		require.Empty(t, jobs)
 	})
@@ -2689,9 +2706,10 @@ func Test_Client_Maintenance(t *testing.T) {
 		config := newTestConfig(t, nil)
 		config.ReindexerSchedule = cron.Every(time.Second)
 
-		client := runNewTestClient(ctx, t, config)
+		client, _ := setup(t, config)
 
-		client.testSignals.electedLeader.WaitOrTimeout()
+		startAndWaitForQueueMaintainer(ctx, t, client)
+
 		svc := maintenance.GetService[*maintenance.Reindexer](client.queueMaintainer)
 		// There are two indexes to reindex by default:
 		svc.TestSignals.Reindexed.WaitOrTimeout()
