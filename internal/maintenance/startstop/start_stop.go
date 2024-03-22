@@ -66,15 +66,22 @@ type BaseStartStop struct {
 // stopped channel. Services should defer a close on the stop channel in their
 // main run loop.
 //
-//	ctx, shouldStart, stopped := s.StartInit(ctx)
-//	if !shouldStart {
+//	func (s *Service) Start(ctx context.Context) error {
+//	    ctx, shouldStart, stopped := s.StartInit(ctx)
+//	    if !shouldStart {
+//	        return nil
+//	    }
+//
+//	    go func() {
+//	        defer close(stopped)
+//
+//	        <-ctx.Done()
+//
+//	        ...
+//	    }()
+//
 //	    return nil
 //	}
-//
-//	go func() {
-//	     defer close(stopped)
-//
-//	     ...
 //
 // Be careful to also close it in the event of startup errors, otherwise a
 // service that failed to start once will never be able to start up.
@@ -127,14 +134,16 @@ func (s *BaseStartStop) Stop() {
 // deferred in the stop function to ensure that locks are cleaned up and the
 // struct is reset after stopping.
 //
-//	shouldStop, stopped, finalizeStop := s.StartInit(ctx)
-//	if !shouldStop {
-//	    return
+//	func (s *Service) Stop(ctx context.Context) error {
+//	    shouldStop, stopped, finalizeStop := s.StopInit(ctx)
+//	    if !shouldStop {
+//	        return
+//	    }
+//
+//	    defer finalizeStop(true)
+//
+//	    ...
 //	}
-//
-//	defer finalizeStop(true)
-//
-//	...
 //
 // finalizeStop takes a boolean which indicates where the service should indeed
 // be considered stopped. This should usually be true, but callers can pass
