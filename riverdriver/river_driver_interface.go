@@ -91,7 +91,7 @@ type Executor interface {
 	JobListFields() string
 	JobRescueMany(ctx context.Context, params *JobRescueManyParams) (*struct{}, error)
 	JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, error)
-	JobSchedule(ctx context.Context, params *JobScheduleParams) (int, error)
+	JobSchedule(ctx context.Context, params *JobScheduleParams) ([]*rivertype.JobRow, error)
 	JobSetCompleteIfRunningMany(ctx context.Context, params *JobSetCompleteIfRunningManyParams) ([]*rivertype.JobRow, error)
 	JobSetStateIfRunning(ctx context.Context, params *JobSetStateIfRunningParams) (*rivertype.JobRow, error)
 	JobUpdate(ctx context.Context, params *JobUpdateParams) (*rivertype.JobRow, error)
@@ -111,7 +111,7 @@ type Executor interface {
 	// MigrationInsertMany inserts many migration versions.
 	MigrationInsertMany(ctx context.Context, versions []int) ([]*Migration, error)
 
-	Notify(ctx context.Context, topic string, payload string) error
+	NotifyMany(ctx context.Context, params *NotifyManyParams) error
 	PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}, error)
 
 	// TableExists checks whether a table exists for the schema in the current
@@ -230,9 +230,13 @@ type JobRescueManyParams struct {
 }
 
 type JobScheduleParams struct {
-	InsertTopic string
-	Max         int
-	Now         time.Time
+	Max int
+	Now time.Time
+}
+
+type JobScheduleResult struct {
+	Queue       string
+	ScheduledAt time.Time
 }
 
 // JobSetCompleteIfRunningManyParams are parameters to set many running jobs to
@@ -344,4 +348,11 @@ type Migration struct {
 	//
 	// API is not stable. DO NOT USE.
 	Version int
+}
+
+// NotifyManyParams are parameters to issue many pubsub notifications all at
+// once for a single topic.
+type NotifyManyParams struct {
+	Topic   string
+	Payload []string
 }

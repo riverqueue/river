@@ -43,7 +43,10 @@ WITH locked_job AS (
 notification AS (
     SELECT
         id,
-        pg_notify(@job_control_topic, json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text)
+        pg_notify(
+            concat(current_schema(), '.', @job_control_topic::text),
+            json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text
+        )
     FROM
         locked_job
     WHERE
@@ -268,7 +271,7 @@ UNION
 SELECT *
 FROM updated_job;
 
--- name: JobSchedule :one
+-- name: JobSchedule :many
 WITH jobs_to_schedule AS (
     SELECT id
     FROM river_job
@@ -276,7 +279,7 @@ WITH jobs_to_schedule AS (
         state IN ('retryable', 'scheduled')
         AND queue IS NOT NULL
         AND priority >= 0
-        AND scheduled_at <= @now::timestamptz
+        AND river_job.scheduled_at <= @now::timestamptz
     ORDER BY
         priority,
         scheduled_at,
@@ -289,13 +292,11 @@ river_job_scheduled AS (
     SET state = 'available'::river_job_state
     FROM jobs_to_schedule
     WHERE river_job.id = jobs_to_schedule.id
-    RETURNING *
+    RETURNING river_job.id
 )
-SELECT count(*)
-FROM (
-    SELECT pg_notify(@insert_topic, json_build_object('queue', queue)::text)
-    FROM river_job_scheduled
-) AS notifications_sent;
+SELECT *
+FROM river_job
+WHERE id IN (SELECT id FROM river_job_scheduled);
 
 -- name: JobSetCompleteIfRunningMany :many
 WITH job_to_finalized_at AS (

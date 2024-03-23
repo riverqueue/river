@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/stretchr/testify/require"
+
+	"github.com/riverqueue/river/internal/riverinternaltest"
 )
 
 type mockableTime struct {
@@ -33,6 +34,8 @@ func (m *mockableTime) SetNow(now time.Time) {
 }
 
 func TestLimiter(t *testing.T) {
+	t.Parallel()
+
 	type testBundle struct {
 		mockTime *mockableTime
 	}
@@ -50,6 +53,8 @@ func TestLimiter(t *testing.T) {
 	}
 
 	t.Run("OnlySendsOncePerWaitDuration", func(t *testing.T) {
+		t.Parallel()
+
 		limiter, bundle := setup()
 		now := time.Now()
 		bundle.mockTime.SetNow(now)
@@ -81,6 +86,8 @@ func TestLimiter(t *testing.T) {
 	})
 
 	t.Run("ConcurrentAccessStressTest", func(t *testing.T) {
+		t.Parallel()
+
 		doneCh := make(chan struct{})
 		t.Cleanup(func() { close(doneCh) })
 

@@ -9,7 +9,6 @@ import (
 
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/maintenance/startstop"
-	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/util/timeutil"
 	"github.com/riverqueue/river/internal/util/valutil"
@@ -23,12 +22,18 @@ const (
 
 // Test-only properties.
 type JobSchedulerTestSignals struct {
+	NotifiedQueues rivercommon.TestSignal[[]string] // notifies when queues are sent an insert notification
 	ScheduledBatch rivercommon.TestSignal[struct{}] // notifies when runOnce finishes a pass
 }
 
 func (ts *JobSchedulerTestSignals) Init() {
+	ts.NotifiedQueues.Init()
 	ts.ScheduledBatch.Init()
 }
+
+// NotifyInsert is a function to call to emit notifications for queues where
+// jobs were scheduled.
+type NotifyInsertFunc func(ctx context.Context, execTx riverdriver.ExecutorTx, queues []string) error
 
 type JobSchedulerConfig struct {
 	// Interval is the amount of time between periodic checks for jobs to
@@ -38,6 +43,10 @@ type JobSchedulerConfig struct {
 	// Limit is the maximum number of jobs to transition at once from
 	// "scheduled" to "available" during periodic scheduling checks.
 	Limit int
+
+	// NotifyInsert is a function to call to emit notifications for queues
+	// where jobs were scheduled.
+	NotifyInsert NotifyInsertFunc
 }
 
 func (c *JobSchedulerConfig) mustValidate() *JobSchedulerConfig {
@@ -68,8 +77,9 @@ type JobScheduler struct {
 func NewScheduler(archetype *baseservice.Archetype, config *JobSchedulerConfig, exec riverdriver.Executor) *JobScheduler {
 	return baseservice.Init(archetype, &JobScheduler{
 		config: (&JobSchedulerConfig{
-			Interval: valutil.ValOrDefault(config.Interval, JobSchedulerIntervalDefault),
-			Limit:    valutil.ValOrDefault(config.Limit, JobSchedulerLimitDefault),
+			Interval:     valutil.ValOrDefault(config.Interval, JobSchedulerIntervalDefault),
+			Limit:        valutil.ValOrDefault(config.Limit, JobSchedulerLimitDefault),
+			NotifyInsert: config.NotifyInsert,
 		}).mustValidate(),
 		exec: exec,
 	})
@@ -128,16 +138,47 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 			ctx, cancelFunc := context.WithTimeout(ctx, 30*time.Second)
 			defer cancelFunc()
 
-			numScheduled, err := s.exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
-				InsertTopic: string(notifier.NotificationTopicInsert),
-				Max:         s.config.Limit,
-				Now:         s.TimeNowUTC(),
+			execTx, err := s.exec.Begin(ctx)
+			if err != nil {
+				return 0, fmt.Errorf("error starting transaction: %w", err)
+			}
+			defer execTx.Rollback(ctx)
+
+			now := s.TimeNowUTC()
+			nowWithLookAhead := now.Add(s.config.Interval)
+
+			scheduledJobs, err := s.exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
+				Max: s.config.Limit,
+				Now: nowWithLookAhead,
 			})
 			if err != nil {
 				return 0, fmt.Errorf("error scheduling jobs: %w", err)
 			}
 
-			return numScheduled, nil
+			queues := make([]string, 0, len(scheduledJobs))
+
+			// Notify about scheduled jobs with a scheduled_at in the past, or just
+			// slightly in the future (this loop, the notify, and tx commit will take
+			// a small amount of time). This isn't going to be perfect, but the goal
+			// is to roughly try to guess when the clients will attempt to fetch jobs.
+			notificationHorizon := s.TimeNowUTC().Add(5 * time.Millisecond)
+
+			for _, job := range scheduledJobs {
+				if job.ScheduledAt.After(notificationHorizon) {
+					continue
+				}
+
+				queues = append(queues, job.Queue)
+			}
+
+			if len(queues) > 0 {
+				if err := s.config.NotifyInsert(ctx, execTx, queues); err != nil {
+					return 0, fmt.Errorf("error notifying insert: %w", err)
+				}
+				s.TestSignals.NotifiedQueues.Signal(queues)
+			}
+
+			return len(scheduledJobs), execTx.Commit(ctx)
 		}()
 		if err != nil {
 			return nil, err

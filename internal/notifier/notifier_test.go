@@ -608,5 +608,5 @@ func sendNotification(ctx context.Context, t *testing.T, exec riverdriver.Execut
 	t.Helper()
 
 	t.Logf("Sending notification on %q: %s", topic, payload)
-	require.NoError(t, exec.Notify(ctx, topic, payload))
+	require.NoError(t, exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{payload}, Topic: topic}))
 }

@@ -133,8 +133,8 @@ func (e *Executor) JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, e
 	return nil, riverdriver.ErrNotImplemented
 }
 
-func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobScheduleParams) (int, error) {
-	return 0, riverdriver.ErrNotImplemented
+func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobScheduleParams) ([]*rivertype.JobRow, error) {
+	return nil, riverdriver.ErrNotImplemented
 }
 
 func (e *Executor) JobSetCompleteIfRunningMany(ctx context.Context, params *riverdriver.JobSetCompleteIfRunningManyParams) ([]*rivertype.JobRow, error) {
@@ -199,7 +199,7 @@ func (e *Executor) MigrationInsertMany(ctx context.Context, versions []int) ([]*
 	return mapSlice(migrations, migrationFromInternal), nil
 }
 
-func (e *Executor) Notify(ctx context.Context, topic string, payload string) error {
+func (e *Executor) NotifyMany(ctx context.Context, params *riverdriver.NotifyManyParams) error {
 	return riverdriver.ErrNotImplemented
 }
 

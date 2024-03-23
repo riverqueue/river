@@ -1132,22 +1132,20 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &afterHorizon, State: ptrutil.Ptr(rivertype.JobStateScheduled)})
 
 		// First two scheduled because of limit.
-		numScheduled, err := exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
-			InsertTopic: string(notifier.NotificationTopicInsert),
-			Max:         2,
-			Now:         horizon,
+		result, err := exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
+			Max: 2,
+			Now: horizon,
 		})
 		require.NoError(t, err)
-		require.Equal(t, 2, numScheduled)
+		require.Len(t, result, 2)
 
 		// And then job3 scheduled.
-		numScheduled, err = exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
-			InsertTopic: string(notifier.NotificationTopicInsert),
-			Max:         2,
-			Now:         horizon,
+		result, err = exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
+			Max: 2,
+			Now: horizon,
 		})
 		require.NoError(t, err)
-		require.Equal(t, 1, numScheduled)
+		require.Len(t, result, 1)
 
 		updatedJob1, err := exec.JobGetByID(ctx, job1.ID)
 		require.NoError(t, err)
@@ -1902,8 +1900,8 @@ func ExerciseListener[TTx any](ctx context.Context, t *testing.T, getDriverWithP
 		require.NoError(t, listener.Ping(ctx)) // still alive
 
 		{
-			require.NoError(t, bundle.exec.Notify(ctx, "topic1", "payload1_1"))
-			require.NoError(t, bundle.exec.Notify(ctx, "topic2", "payload2_1"))
+			require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Topic: "topic1", Payload: []string{"payload1_1"}}))
+			require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Topic: "topic2", Payload: []string{"payload2_1"}}))
 
 			notification := waitForNotification(ctx, t, listener)
 			require.Equal(t, &riverdriver.Notification{Topic: "topic1", Payload: "payload1_1"}, notification)
@@ -1914,8 +1912,8 @@ func ExerciseListener[TTx any](ctx context.Context, t *testing.T, getDriverWithP
 		require.NoError(t, listener.Unlisten(ctx, "topic2"))
 
 		{
-			require.NoError(t, bundle.exec.Notify(ctx, "topic1", "payload1_2"))
-			require.NoError(t, bundle.exec.Notify(ctx, "topic2", "payload2_2"))
+			require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Topic: "topic1", Payload: []string{"payload1_2"}}))
+			require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Topic: "topic2", Payload: []string{"payload2_2"}}))
 
 			notification := waitForNotification(ctx, t, listener)
 			require.Equal(t, &riverdriver.Notification{Topic: "topic1", Payload: "payload1_2"}, notification)
@@ -1940,7 +1938,7 @@ func ExerciseListener[TTx any](ctx context.Context, t *testing.T, getDriverWithP
 		execTx, err := bundle.exec.Begin(ctx)
 		require.NoError(t, err)
 
-		require.NoError(t, execTx.Notify(ctx, "topic1", "payload1"))
+		require.NoError(t, execTx.NotifyMany(ctx, &riverdriver.NotifyManyParams{Topic: "topic1", Payload: []string{"payload1"}}))
 
 		// No notification because the transaction hasn't committed yet.
 		requireNoNotification(ctx, t, listener)

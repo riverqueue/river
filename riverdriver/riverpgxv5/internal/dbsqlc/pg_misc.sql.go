@@ -18,16 +18,25 @@ func (q *Queries) PGAdvisoryXactLock(ctx context.Context, db DBTX, key int64) er
 	return err
 }
 
-const pGNotify = `-- name: PGNotify :exec
-SELECT pg_notify($1, $2)
+const pGNotifyMany = `-- name: PGNotifyMany :exec
+WITH topic_to_notify AS (
+    SELECT
+        concat(current_schema(), '.', $1::text) AS topic,
+        unnest($2::text[]) AS payload
+)
+SELECT pg_notify(
+    topic_to_notify.topic,
+    topic_to_notify.payload
+  )
+FROM topic_to_notify
 `
 
-type PGNotifyParams struct {
+type PGNotifyManyParams struct {
 	Topic   string
-	Payload string
+	Payload []string
 }
 
-func (q *Queries) PGNotify(ctx context.Context, db DBTX, arg *PGNotifyParams) error {
-	_, err := db.Exec(ctx, pGNotify, arg.Topic, arg.Payload)
+func (q *Queries) PGNotifyMany(ctx context.Context, db DBTX, arg *PGNotifyManyParams) error {
+	_, err := db.Exec(ctx, pGNotifyMany, arg.Topic, arg.Payload)
 	return err
 }
