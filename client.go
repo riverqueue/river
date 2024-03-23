@@ -22,6 +22,7 @@ import (
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/notifier"
+	"github.com/riverqueue/river/internal/notifylimiter"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/util/maputil"
 	"github.com/riverqueue/river/internal/util/randutil"
@@ -275,6 +276,7 @@ type Client[TTx any] struct {
 	driver    riverdriver.Driver[TTx]
 	elector   *leadership.Elector
 
+	insertNotifyLimiter  *notifylimiter.Limiter
 	monitor              *clientMonitor
 	notifier             *notifier.Notifier
 	producersByQueueName map[string]*producer
@@ -440,6 +442,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 
 	baseservice.Init(archetype, &client.baseService)
 	client.baseService.Name = "Client" // Have to correct the name because base service isn't embedded like it usually is
+	client.insertNotifyLimiter = notifylimiter.NewLimiter(archetype, config.FetchCooldown)
 
 	// There are a number of internal components that are only needed/desired if
 	// we're actually going to be working jobs (as opposed to just enqueueing
@@ -506,7 +509,8 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 
 		{
 			jobScheduler := maintenance.NewScheduler(archetype, &maintenance.JobSchedulerConfig{
-				Interval: config.schedulerInterval,
+				Interval:     config.schedulerInterval,
+				NotifyInsert: client.maybeNotifyInsertForQueues,
 			}, driver.GetExecutor())
 			maintenanceServices = append(maintenanceServices, jobScheduler)
 			client.testSignals.jobScheduler = &jobScheduler.TestSignals
@@ -534,6 +538,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 
 			periodicJobEnqueuer := maintenance.NewPeriodicJobEnqueuer(archetype, &maintenance.PeriodicJobEnqueuerConfig{
 				AdvisoryLockPrefix: config.AdvisoryLockPrefix,
+				NotifyInsert:       client.maybeNotifyInsertForQueues,
 				PeriodicJobs:       periodicJobs,
 			}, driver.GetExecutor())
 			maintenanceServices = append(maintenanceServices, periodicJobEnqueuer)
@@ -1316,8 +1321,21 @@ func (c *Client[TTx]) insert(ctx context.Context, exec riverdriver.Executor, arg
 		return nil, err
 	}
 
-	jobInsertRes, err := c.uniqueInserter.JobInsert(ctx, exec, params, uniqueOpts)
+	execTx, err := exec.Begin(ctx)
 	if err != nil {
+		return nil, err
+	}
+	defer execTx.Rollback(ctx)
+
+	jobInsertRes, err := c.uniqueInserter.JobInsert(ctx, execTx, params, uniqueOpts)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := c.maybeNotifyInsert(ctx, execTx, params.State, params.Queue); err != nil {
+		return nil, err
+	}
+	if err := execTx.Commit(ctx); err != nil {
 		return nil, err
 	}
 
@@ -1359,7 +1377,25 @@ func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams)
 		return 0, err
 	}
 
-	return c.driver.GetExecutor().JobInsertFastMany(ctx, insertParams)
+	// Wrap in a transaction in case we need to notify about inserts.
+	tx, err := c.driver.GetExecutor().Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	inserted, err := tx.JobInsertFastMany(ctx, insertParams)
+	if err != nil {
+		return inserted, err
+	}
+
+	if err := c.maybeNotifyInsertMany(ctx, tx, insertParams); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return inserted, nil
 }
 
 // InsertManyTx inserts many jobs at once using Postgres' `COPY FROM` mechanism,
@@ -1387,7 +1423,16 @@ func (c *Client[TTx]) InsertManyTx(ctx context.Context, tx TTx, params []InsertM
 		return 0, err
 	}
 
-	return c.driver.UnwrapExecutor(tx).JobInsertFastMany(ctx, insertParams)
+	exec := c.driver.UnwrapExecutor(tx)
+	inserted, err := exec.JobInsertFastMany(ctx, insertParams)
+	if err != nil {
+		return inserted, err
+	}
+
+	if err := c.maybeNotifyInsertMany(ctx, exec, insertParams); err != nil {
+		return 0, err
+	}
+	return inserted, nil
 }
 
 // Validates input parameters for an a batch insert operation and generates a
@@ -1420,6 +1465,66 @@ func (c *Client[TTx]) insertManyParams(params []InsertManyParams) ([]*riverdrive
 	}
 
 	return insertParams, nil
+}
+
+func (c *Client[TTx]) maybeNotifyInsert(ctx context.Context, execTx riverdriver.ExecutorTx, state rivertype.JobState, queue string) error {
+	if state != rivertype.JobStateAvailable {
+		return nil
+	}
+	return c.maybeNotifyInsertForQueues(ctx, execTx, []string{queue})
+}
+
+func (c *Client[TTx]) maybeNotifyInsertMany(ctx context.Context, execTx riverdriver.ExecutorTx, insertParams []*riverdriver.JobInsertFastParams) error {
+	queues := sliceutil.Map(insertParams, func(params *riverdriver.JobInsertFastParams) string { return params.Queue })
+	return c.maybeNotifyInsertForQueues(ctx, execTx, queues)
+}
+
+// Notify the given queues that new jobs are available. The queues list will be
+// deduplicated and each will be checked to see if it is due for an insert
+// notification from this client.
+func (c *Client[TTx]) maybeNotifyInsertForQueues(ctx context.Context, execTx riverdriver.ExecutorTx, queues []string) error {
+	if len(queues) < 1 {
+		return nil
+	}
+
+	queueMap := make(map[string]struct{})
+	queuesDeduped := make([]string, 0, len(queues))
+	payloads := make([]string, 0, len(queues))
+
+	for _, queue := range queues {
+		if _, ok := queueMap[queue]; ok {
+			continue
+		}
+
+		queueMap[queue] = struct{}{}
+		if c.insertNotifyLimiter.ShouldTrigger(queue) {
+			payloads = append(payloads, fmt.Sprintf("{\"queue\": %q}", queue))
+			queuesDeduped = append(queuesDeduped, queue)
+		}
+	}
+
+	if len(payloads) < 1 {
+		return nil
+	}
+
+	return c.notifyInsert(ctx, execTx, queuesDeduped, payloads)
+}
+
+func (c *Client[TTx]) notifyInsert(ctx context.Context, execTx riverdriver.ExecutorTx, queues, payloads []string) error {
+	err := execTx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+		Topic:   "river_insert",
+		Payload: payloads,
+	})
+	if err != nil {
+		c.baseService.Logger.ErrorContext(
+			ctx,
+			c.baseService.Name+": Failed to send job insert notification",
+			slog.String("queues", strings.Join(queues, ",")),
+			slog.String("err", err.Error()),
+		)
+		return err
+	}
+	return nil
 }
 
 // Validates job args prior to insertion. Currently, verifies that a worker to

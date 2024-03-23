@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -294,13 +295,15 @@ func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRes
 	return &struct{}{}, interpretError(err)
 }
 
-func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobScheduleParams) (int, error) {
-	numScheduled, err := e.queries.JobSchedule(ctx, e.dbtx, &dbsqlc.JobScheduleParams{
-		InsertTopic: params.InsertTopic,
-		Max:         int64(params.Max),
-		Now:         params.Now,
+func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobScheduleParams) ([]*riverdriver.JobScheduleResult, error) {
+	rows, err := e.queries.JobSchedule(ctx, e.dbtx, &dbsqlc.JobScheduleParams{
+		Max: int64(params.Max),
+		Now: params.Now,
 	})
-	return int(numScheduled), interpretError(err)
+	fn := func(internal *dbsqlc.JobScheduleRow) *riverdriver.JobScheduleResult {
+		return &riverdriver.JobScheduleResult{Queue: internal.Queue, ScheduledAt: internal.ScheduledAt}
+	}
+	return mapSlice(rows, fn), interpretError(err)
 }
 
 func (e *Executor) JobSetCompleteIfRunningMany(ctx context.Context, params *riverdriver.JobSetCompleteIfRunningManyParams) ([]*rivertype.JobRow, error) {
@@ -451,10 +454,10 @@ func (e *Executor) MigrationInsertMany(ctx context.Context, versions []int) ([]*
 	return mapSlice(migrations, migrationFromInternal), nil
 }
 
-func (e *Executor) Notify(ctx context.Context, topic string, payload string) error {
-	return e.queries.PGNotify(ctx, e.dbtx, &dbsqlc.PGNotifyParams{
-		Payload: payload,
-		Topic:   topic,
+func (e *Executor) NotifyMany(ctx context.Context, params *riverdriver.NotifyManyParams) error {
+	return e.queries.PGNotifyMany(ctx, e.dbtx, &dbsqlc.PGNotifyManyParams{
+		Payload: params.Payload,
+		Topic:   params.Topic,
 	})
 }
 
@@ -484,6 +487,7 @@ func (t *ExecutorTx) Rollback(ctx context.Context) error {
 type Listener struct {
 	conn   *pgxpool.Conn
 	dbPool *pgxpool.Pool
+	prefix string
 	mu     sync.Mutex
 }
 
@@ -522,6 +526,13 @@ func (l *Listener) Connect(ctx context.Context) error {
 		return err
 	}
 
+	var schema string
+	if err := conn.QueryRow(ctx, "SELECT current_schema();").Scan(&schema); err != nil {
+		conn.Release()
+		return err
+	}
+
+	l.prefix = schema + "."
 	l.conn = conn
 	return nil
 }
@@ -530,7 +541,7 @@ func (l *Listener) Listen(ctx context.Context, topic string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	_, err := l.conn.Exec(ctx, "LISTEN "+topic)
+	_, err := l.conn.Exec(ctx, "LISTEN \""+l.prefix+topic+"\"")
 	return err
 }
 
@@ -545,7 +556,7 @@ func (l *Listener) Unlisten(ctx context.Context, topic string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	_, err := l.conn.Exec(ctx, "UNLISTEN "+topic)
+	_, err := l.conn.Exec(ctx, "UNLISTEN \""+l.prefix+topic+"\"")
 	return err
 }
 
@@ -559,7 +570,7 @@ func (l *Listener) WaitForNotification(ctx context.Context) (*riverdriver.Notifi
 	}
 
 	return &riverdriver.Notification{
-		Topic:   notification.Channel,
+		Topic:   strings.TrimPrefix(notification.Channel, l.prefix),
 		Payload: notification.Payload,
 	}, nil
 }

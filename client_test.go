@@ -22,6 +22,7 @@ import (
 
 	"github.com/riverqueue/river/internal/componentstatus"
 	"github.com/riverqueue/river/internal/maintenance"
+	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
@@ -2581,7 +2582,7 @@ func Test_Client_InsertTriggersImmediateWork(t *testing.T) {
 	config := newTestConfig(t, makeAwaitCallback(startedCh, doneCh))
 	config.FetchCooldown = 20 * time.Millisecond
 	config.FetchPollInterval = 20 * time.Second // essentially disable polling
-	config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: 2}}
+	config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}, "another_queue": {MaxWorkers: 1}}
 
 	client := newTestClient(t, dbPool, config)
 	statusUpdateCh := client.monitor.RegisterUpdates()
@@ -2603,7 +2604,10 @@ func Test_Client_InsertTriggersImmediateWork(t *testing.T) {
 	// Now that we've run one job, we shouldn't take longer than the cooldown to
 	// fetch another after insertion. LISTEN/NOTIFY should ensure we find out
 	// about the inserted job much faster than the poll interval.
-	insertedJob2, err := client.Insert(ctx, callbackArgs{}, nil)
+	//
+	// Note: we specifically use a different queue to ensure that the notify
+	// limiter is immediately to fire on this queue.
+	insertedJob2, err := client.Insert(ctx, callbackArgs{}, &InsertOpts{Queue: "another_queue"})
 	require.NoError(err)
 
 	select {
@@ -2616,6 +2620,78 @@ func Test_Client_InsertTriggersImmediateWork(t *testing.T) {
 	}
 
 	require.NoError(client.Stop(ctx))
+}
+
+func Test_Client_InsertNotificationsAreDeduplicatedAndDebounced(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dbPool := riverinternaltest.TestDB(ctx, t)
+	config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+		return nil
+	})
+	config.FetchPollInterval = 20 * time.Second // essentially disable polling
+	config.FetchCooldown = time.Second
+	config.schedulerInterval = 20 * time.Second // quiet scheduler
+	config.Queues = map[string]QueueConfig{"queue1": {MaxWorkers: 1}, "queue2": {MaxWorkers: 1}, "queue3": {MaxWorkers: 1}}
+	client := newTestClient(t, dbPool, config)
+
+	statusUpdateCh := client.monitor.RegisterUpdates()
+	startClient(ctx, t, client)
+	waitForClientHealthy(ctx, t, statusUpdateCh)
+
+	type insertPayload struct {
+		Queue string `json:"queue"`
+	}
+	type notification struct {
+		topic   notifier.NotificationTopic
+		payload insertPayload
+	}
+	notifyCh := make(chan notification, 10)
+	handleNotification := func(topic notifier.NotificationTopic, payload string) {
+		config.Logger.Info("received notification", slog.String("topic", string(topic)), slog.String("payload", payload))
+		notif := notification{topic: topic}
+		require.NoError(t, json.Unmarshal([]byte(payload), &notif.payload))
+		notifyCh <- notif
+	}
+	sub, err := client.notifier.Listen(ctx, notifier.NotificationTopicInsert, handleNotification)
+	require.NoError(t, err)
+	t.Cleanup(func() { sub.Unlisten(ctx) })
+
+	expectImmediateNotification := func(t *testing.T, queue string) {
+		t.Helper()
+		config.Logger.Info("inserting " + queue + " job")
+		_, err = client.Insert(ctx, callbackArgs{}, &InsertOpts{Queue: queue})
+		require.NoError(t, err)
+		notif := riverinternaltest.WaitOrTimeout(t, notifyCh)
+		require.Equal(t, notifier.NotificationTopicInsert, notif.topic)
+		require.Equal(t, queue, notif.payload.Queue)
+	}
+
+	// Immediate first fire on queue1:
+	expectImmediateNotification(t, "queue1")
+	tNotif1 := time.Now()
+
+	for i := 0; i < 5; i++ {
+		config.Logger.Info("inserting queue1 job")
+		_, err = client.Insert(ctx, callbackArgs{}, &InsertOpts{Queue: "queue1"})
+		require.NoError(t, err)
+	}
+	// None of these should fire an insert notification due to debouncing:
+	select {
+	case notification := <-notifyCh:
+		t.Fatalf("received insert notification when it should have been debounced %+v", notification)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	expectImmediateNotification(t, "queue2") // Immediate first fire on queue2
+	expectImmediateNotification(t, "queue3") // Immediate first fire on queue3
+
+	// Wait until the queue1 cooldown period has passed:
+	<-time.After(time.Until(tNotif1.Add(config.FetchCooldown)))
+
+	// Now we should receive an immediate notification again:
+	expectImmediateNotification(t, "queue1")
 }
 
 func Test_Client_JobCompletion(t *testing.T) {

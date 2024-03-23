@@ -56,7 +56,10 @@ WITH currently_held_leaders AS (
 ),
 notified_resignations AS (
   SELECT
-      pg_notify(@leadership_topic, json_build_object('name', name, 'leader_id', leader_id, 'action', 'resigned')::text),
+      pg_notify(
+          concat(current_schema(), '.', @leadership_topic::text),
+          json_build_object('name', name, 'leader_id', leader_id, 'action', 'resigned')::text
+      ),
       currently_held_leaders.name
   FROM currently_held_leaders
 )

@@ -20,11 +20,6 @@ type Limiter struct {
 
 // NewLimiter creates a new Limiter, calling the NotifyFunc no more than once per waitDuration.
 // The function must be fast as it is called within a mutex.
-//
-// TODO NOW NEXT: need to rework this so that it's not calling a _function_, but
-// rather returning a bool IF it's time for that topic to notify. That way the
-// caller can decide if it needs to piggy-back the pg_notify onto the current
-// query.
 func NewLimiter(archetype *baseservice.Archetype, waitDuration time.Duration) *Limiter {
 	return baseservice.Init(archetype, &Limiter{
 		lastSentByTopic: make(map[string]time.Time),

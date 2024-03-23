@@ -21,7 +21,10 @@ WITH locked_job AS (
 notification AS (
     SELECT
         id,
-        pg_notify($2, json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text)
+        pg_notify(
+            concat(current_schema(), '.', $2::text),
+            json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text
+        )
     FROM
         locked_job
     WHERE
@@ -693,7 +696,7 @@ func (q *Queries) JobRetry(ctx context.Context, db DBTX, id int64) (*RiverJob, e
 	return &i, err
 }
 
-const jobSchedule = `-- name: JobSchedule :one
+const jobSchedule = `-- name: JobSchedule :many
 WITH jobs_to_schedule AS (
     SELECT id
     FROM river_job
@@ -701,12 +704,12 @@ WITH jobs_to_schedule AS (
         state IN ('retryable', 'scheduled')
         AND queue IS NOT NULL
         AND priority >= 0
-        AND scheduled_at <= $2::timestamptz
+        AND river_job.scheduled_at <= $1::timestamptz
     ORDER BY
         priority,
         scheduled_at,
         id
-    LIMIT $3::bigint
+    LIMIT $2::bigint
     FOR UPDATE
 ),
 river_job_scheduled AS (
@@ -716,24 +719,40 @@ river_job_scheduled AS (
     WHERE river_job.id = jobs_to_schedule.id
     RETURNING jobs_to_schedule.id, river_job.id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
 )
-SELECT count(*)
-FROM (
-    SELECT pg_notify($1, json_build_object('queue', queue)::text)
-    FROM river_job_scheduled
-) AS notifications_sent
+SELECT
+    queue,
+    scheduled_at
+FROM river_job_scheduled
 `
 
 type JobScheduleParams struct {
-	InsertTopic string
-	Now         time.Time
-	Max         int64
+	Now time.Time
+	Max int64
 }
 
-func (q *Queries) JobSchedule(ctx context.Context, db DBTX, arg *JobScheduleParams) (int64, error) {
-	row := db.QueryRow(ctx, jobSchedule, arg.InsertTopic, arg.Now, arg.Max)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
+type JobScheduleRow struct {
+	Queue       string
+	ScheduledAt time.Time
+}
+
+func (q *Queries) JobSchedule(ctx context.Context, db DBTX, arg *JobScheduleParams) ([]*JobScheduleRow, error) {
+	rows, err := db.Query(ctx, jobSchedule, arg.Now, arg.Max)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*JobScheduleRow
+	for rows.Next() {
+		var i JobScheduleRow
+		if err := rows.Scan(&i.Queue, &i.ScheduledAt); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const jobSetCompleteIfRunningMany = `-- name: JobSetCompleteIfRunningMany :many
