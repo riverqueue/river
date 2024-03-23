@@ -2,6 +2,7 @@ package leadership
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"testing"
 	"time"
@@ -414,5 +415,116 @@ func TestAttemptElectOrReelect(t *testing.T) {
 		updatedLeader, err := bundle.exec.LeaderGetElectedLeader(ctx, leaderInstanceName)
 		require.NoError(t, err)
 		require.Equal(t, leader.ExpiresAt, updatedLeader.ExpiresAt)
+	})
+}
+
+func TestElectorHandleLeadershipNotification(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx    = context.Background()
+		driver = riverpgxv5.New(nil)
+	)
+
+	type testBundle struct{}
+
+	setup := func(t *testing.T) (*Elector, *testBundle) {
+		t.Helper()
+
+		tx := riverinternaltest.TestTx(ctx, t)
+
+		elector := NewElector(
+			riverinternaltest.BaseServiceArchetype(t),
+			driver.UnwrapExecutor(tx),
+			nil,
+			defaultInstanceName,
+			"test-client-id",
+		)
+
+		// This channel is normally only initialized on start, so we need to
+		// create it manually here.
+		elector.leadershipNotificationChan = make(chan struct{}, 1)
+
+		return elector, &testBundle{}
+	}
+
+	mustMarshalJSON := func(t *testing.T, val any) []byte {
+		t.Helper()
+
+		data, err := json.Marshal(val)
+		require.NoError(t, err)
+		return data
+	}
+
+	validLeadershipChange := func() *dbLeadershipNotification {
+		t.Helper()
+
+		return &dbLeadershipNotification{
+			Action:   "resigned",
+			Name:     defaultInstanceName,
+			LeaderID: "other-client-id",
+		}
+	}
+
+	t.Run("SignalsLeadershipChange", func(t *testing.T) {
+		t.Parallel()
+
+		elector, _ := setup(t)
+
+		elector.handleLeadershipNotification(ctx, notifier.NotificationTopicLeadership, string(mustMarshalJSON(t, validLeadershipChange())))
+
+		riverinternaltest.WaitOrTimeout(t, elector.leadershipNotificationChan)
+	})
+
+	t.Run("StopsOnContextDone", func(t *testing.T) {
+		t.Parallel()
+
+		elector, _ := setup(t)
+
+		ctx, cancel := context.WithCancel(ctx)
+		cancel() // cancel immediately
+
+		elector.handleLeadershipNotification(ctx, notifier.NotificationTopicLeadership, string(mustMarshalJSON(t, validLeadershipChange())))
+
+		require.Empty(t, elector.leadershipNotificationChan)
+	})
+
+	t.Run("IgnoresNonResignedAction", func(t *testing.T) {
+		t.Parallel()
+
+		elector, _ := setup(t)
+
+		change := validLeadershipChange()
+		change.Action = "not_resigned"
+
+		elector.handleLeadershipNotification(ctx, notifier.NotificationTopicLeadership, string(mustMarshalJSON(t, change)))
+
+		require.Empty(t, elector.leadershipNotificationChan)
+	})
+
+	t.Run("IgnoresAlternateInstanceName", func(t *testing.T) {
+		t.Parallel()
+
+		elector, _ := setup(t)
+
+		change := validLeadershipChange()
+		change.Name = "alternate_instance_name"
+
+		elector.handleLeadershipNotification(ctx, notifier.NotificationTopicLeadership, string(mustMarshalJSON(t, change)))
+
+		require.Empty(t, elector.leadershipNotificationChan)
+	})
+
+	t.Run("IgnoresSameClientID", func(t *testing.T) {
+		t.Parallel()
+
+		elector, _ := setup(t)
+
+		change := validLeadershipChange()
+		change.LeaderID = elector.clientID
+
+		elector.handleLeadershipNotification(ctx, notifier.NotificationTopicLeadership, string(mustMarshalJSON(t, change)))
+
+		require.Empty(t, elector.leadershipNotificationChan)
 	})
 }

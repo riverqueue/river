@@ -22,7 +22,7 @@ const (
 	electIntervalTTLPadding = 10 * time.Second
 )
 
-type pgNotification struct {
+type dbLeadershipNotification struct {
 	Name     string `json:"name"`
 	LeaderID string `json:"leader_id"`
 	Action   string `json:"action"`
@@ -120,39 +120,13 @@ func (e *Elector) Start(ctx context.Context) error {
 	if e.notifier == nil {
 		e.Logger.InfoContext(ctx, e.Name+": No notifier configured; starting in poll mode", "client_id", e.clientID)
 	} else {
-		handleNotification := func(topic notifier.NotificationTopic, payload string) {
-			if topic != notifier.NotificationTopicLeadership {
-				// This should not happen unless the notifier is broken.
-				e.Logger.Error(e.Name+": Received unexpected notification", "client_id", e.clientID, "topic", topic, "payload", payload)
-				return
-			}
-
-			notification := pgNotification{}
-			if err := json.Unmarshal([]byte(payload), &notification); err != nil {
-				e.Logger.Error(e.Name+": Unable to unmarshal leadership notification", "client_id", e.clientID, "err", err)
-				return
-			}
-
-			e.Logger.InfoContext(ctx, e.Name+": Received notification from notifier", "action", notification.Action, "client_id", e.clientID)
-
-			if notification.Action != "resigned" || notification.Name != e.instanceName {
-				// We only care about resignations because we use them to preempt the
-				// election attempt backoff. And we only care about our own key name.
-				return
-			}
-
-			select {
-			case <-ctx.Done():
-				return
-			case e.leadershipNotificationChan <- struct{}{}:
-			}
-		}
-
 		e.Logger.InfoContext(ctx, e.Name+": Listening for leadership changes", "client_id", e.clientID, "topic", notifier.NotificationTopicLeadership)
 
 		// TODO(brandur): Get rid of this retry loop after refactor.
 		var err error
-		sub, err = notifier.ListenRetryLoop(ctx, &e.BaseService, e.notifier, notifier.NotificationTopicLeadership, handleNotification)
+		sub, err = notifier.ListenRetryLoop(ctx, &e.BaseService, e.notifier, notifier.NotificationTopicLeadership, func(topic notifier.NotificationTopic, payload string) {
+			e.handleLeadershipNotification(ctx, topic, payload)
+		})
 		if err != nil {
 			close(stopped)
 			if strings.HasSuffix(err.Error(), "conn closed") || errors.Is(err, context.Canceled) {
@@ -251,6 +225,45 @@ func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
 			// short random interval (to prevent all clients from bidding at once).
 			e.CancellableSleepRandomBetween(ctx, 0, 50*time.Millisecond)
 		}
+	}
+}
+
+// Handles a leadership notification from the notifier.
+func (e *Elector) handleLeadershipNotification(ctx context.Context, topic notifier.NotificationTopic, payload string) {
+	if topic != notifier.NotificationTopicLeadership {
+		// This should not happen unless the notifier is broken.
+		e.Logger.Error(e.Name+": Received unexpected notification", "client_id", e.clientID, "topic", topic, "payload", payload)
+		return
+	}
+
+	notification := dbLeadershipNotification{}
+	if err := json.Unmarshal([]byte(payload), &notification); err != nil {
+		e.Logger.Error(e.Name+": Unable to unmarshal leadership notification", "client_id", e.clientID, "err", err)
+		return
+	}
+
+	e.Logger.InfoContext(ctx, e.Name+": Received notification from notifier", "action", notification.Action, "client_id", e.clientID)
+
+	if notification.Action != "resigned" || notification.Name != e.instanceName {
+		// We only care about resignations because we use them to preempt the
+		// election attempt backoff. And we only care about our own key name.
+		return
+	}
+
+	// If this a resignation from _this_ client, ignore the change.
+	if notification.LeaderID == e.clientID {
+		return
+	}
+
+	// Do an initial context check so in case context is done, it always takes
+	// precedence over sending a leadership notification.
+	if ctx.Err() != nil {
+		return
+	}
+
+	select {
+	case <-ctx.Done():
+	case e.leadershipNotificationChan <- struct{}{}:
 	}
 }
 
