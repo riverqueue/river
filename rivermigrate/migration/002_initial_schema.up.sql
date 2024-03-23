@@ -80,7 +80,7 @@ LANGUAGE plpgsql;
 CREATE TRIGGER river_notify
   AFTER INSERT ON river_job
   FOR EACH ROW
-  EXECUTE PROCEDURE river_job_notify();
+  EXECUTE FUNCTION river_job_notify();
 
 CREATE UNLOGGED TABLE river_leader(
   -- 8 bytes each (no alignment needed)
