@@ -168,7 +168,11 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 						continue
 					}
 
-					periodicJob.nextRunAt = periodicJob.ScheduleFunc(now)
+					// Although we may have inserted a new job a little
+					// preemptively due to the margin applied above, try to stay
+					// as true as possible to the original schedule by using the
+					// original run time when calculating the next one.
+					periodicJob.nextRunAt = periodicJob.ScheduleFunc(periodicJob.nextRunAt)
 
 					if insertParams, uniqueOpts, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc); ok {
 						if !uniqueOpts.IsEmpty() {

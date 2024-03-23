@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Fixed a bug in the (log-only for now) reindexer service in which it might repeat its work loop multiple times unexpectedly while stopping. [PR #280](https://github.com/riverqueue/river/pull/280).
+- Periodic job enqueuer now bases next run times on each periodic job's last target run time, instead of the time at which the enqueuer is currently running. This is a small difference that will be unnoticeable for most purposes, but makes scheduling of jobs with short cron frequencies a little more accurate. [PR #284](https://github.com/riverqueue/river/pull/284).
 - Fixed a bug in the elector in which it was possible for a resigning, but not completely stopped, elector to reelect despite having just resigned. [PR #286](https://github.com/riverqueue/river/pull/286).
 
 ## [0.1.0] - 2024-03-17
