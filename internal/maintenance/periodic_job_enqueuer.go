@@ -147,7 +147,6 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 
 		timerUntilNextRun := time.NewTimer(s.timeUntilNextRun())
 
-	loop:
 		for {
 			select {
 			case <-timerUntilNextRun.C:
@@ -196,7 +195,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 				if !timerUntilNextRun.Stop() {
 					<-timerUntilNextRun.C
 				}
-				break loop
+				return
 			}
 		}
 	}()
