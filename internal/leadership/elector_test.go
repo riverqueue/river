@@ -58,8 +58,7 @@ func TestElector_PollOnly(t *testing.T) {
 				riverinternaltest.BaseServiceArchetype(t),
 				driver.UnwrapExecutor(electorBundle.tx),
 				nil,
-				defaultInstanceName,
-				"test-client-id",
+				&Config{ClientID: "test_client_id"},
 			)
 		})
 }
@@ -104,8 +103,7 @@ func TestElector_WithNotifier(t *testing.T) {
 				electorBundle.archetype,
 				electorBundle.exec,
 				electorBundle.notifier,
-				defaultInstanceName,
-				"test-client-id",
+				&Config{ClientID: "test_client_id"},
 			)
 		})
 }
@@ -142,7 +140,7 @@ func testElector[TElectorBundle any](
 
 	startElector := func(ctx context.Context, t *testing.T, elector *Elector) {
 		t.Helper()
-		t.Logf("Starting " + elector.clientID)
+		t.Logf("Starting " + elector.config.ClientID)
 		require.NoError(t, elector.Start(ctx))
 		t.Cleanup(elector.Stop)
 	}
@@ -158,7 +156,7 @@ func testElector[TElectorBundle any](
 
 		leader, err := bundle.exec.LeaderGetElectedLeader(ctx, defaultInstanceName)
 		require.NoError(t, err)
-		require.Equal(t, elector.clientID, leader.LeaderID)
+		require.Equal(t, elector.config.ClientID, leader.LeaderID)
 
 		elector.Stop()
 
@@ -230,12 +228,12 @@ func testElector[TElectorBundle any](
 
 		elector.testSignals.GainedLeadership.WaitOrTimeout()
 
-		t.Logf("Force resigning " + elector.clientID)
+		t.Logf("Force resigning " + elector.config.ClientID)
 
 		// Artificially force resign the elector and add a new leader record
 		// so that it can't be elected again.
 		_, err := bundle.exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
-			LeaderID:        elector.clientID,
+			LeaderID:        elector.config.ClientID,
 			LeadershipTopic: string(notifier.NotificationTopicLeadership),
 			Name:            defaultInstanceName,
 		})
@@ -259,23 +257,23 @@ func testElector[TElectorBundle any](
 		t.Parallel()
 
 		elector1, bundle := setup(t)
-		elector1.clientID = "elector1"
+		elector1.config.ClientID = "elector1"
 
 		{
 			startElector(ctx, t, elector1)
 
 			// next to avoid any raciness.
-			t.Logf("Waiting for %s to gain leadership", elector1.clientID)
+			t.Logf("Waiting for %s to gain leadership", elector1.config.ClientID)
 			elector1.testSignals.GainedLeadership.WaitOrTimeout()
 
 			leader, err := bundle.exec.LeaderGetElectedLeader(ctx, defaultInstanceName)
 			require.NoError(t, err)
-			require.Equal(t, elector1.clientID, leader.LeaderID)
+			require.Equal(t, elector1.config.ClientID, leader.LeaderID)
 		}
 
 		// Make another elector and make sure it's using the same executor.
 		elector2 := makeElector(t, bundle.electorBundle)
-		elector2.clientID = "elector2"
+		elector2.config.ClientID = "elector2"
 		elector2.exec = elector1.exec
 		elector2.testSignals.Init()
 
@@ -284,7 +282,7 @@ func testElector[TElectorBundle any](
 
 			elector2.testSignals.DeniedLeadership.WaitOrTimeout()
 
-			t.Logf("Stopping " + elector1.clientID)
+			t.Logf("Stopping " + elector1.config.ClientID)
 			elector1.Stop()
 			elector1.testSignals.ResignedLeadership.WaitOrTimeout()
 
@@ -294,10 +292,10 @@ func testElector[TElectorBundle any](
 				elector2.leadershipNotificationChan <- struct{}{}
 			}
 
-			t.Logf("Waiting for %s to gain leadership", elector2.clientID)
+			t.Logf("Waiting for %s to gain leadership", elector2.config.ClientID)
 			elector2.testSignals.GainedLeadership.WaitOrTimeout()
 
-			t.Logf("Stopping " + elector2.clientID)
+			t.Logf("Stopping " + elector2.config.ClientID)
 			elector2.Stop()
 			elector2.testSignals.ResignedLeadership.WaitOrTimeout()
 		}
@@ -437,8 +435,7 @@ func TestElectorHandleLeadershipNotification(t *testing.T) {
 			riverinternaltest.BaseServiceArchetype(t),
 			driver.UnwrapExecutor(tx),
 			nil,
-			defaultInstanceName,
-			"test-client-id",
+			&Config{ClientID: "test_client_id"},
 		)
 
 		// This channel is normally only initialized on start, so we need to
@@ -521,7 +518,7 @@ func TestElectorHandleLeadershipNotification(t *testing.T) {
 		elector, _ := setup(t)
 
 		change := validLeadershipChange()
-		change.LeaderID = elector.clientID
+		change.LeaderID = elector.config.ClientID
 
 		elector.handleLeadershipNotification(ctx, notifier.NotificationTopicLeadership, string(mustMarshalJSON(t, change)))
 

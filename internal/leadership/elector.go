@@ -13,13 +13,19 @@ import (
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/util/dbutil"
+	"github.com/riverqueue/river/internal/util/valutil"
 	"github.com/riverqueue/river/riverdriver"
 )
 
 const (
-	electInterval           = 5 * time.Second
-	electInteralJitter      = 1 * time.Second
-	electIntervalTTLPadding = 10 * time.Second
+	electIntervalDefault           = 5 * time.Second
+	electIntervalJitterDefault     = 1 * time.Second
+	electIntervalTTLPaddingDefault = 10 * time.Second
+
+	// TODO: for now we only support a single instance per database/schema.
+	// If we want to provide isolation within a single database/schema,
+	// we'll need to add a client config for this.
+	instanceNameDefault = "default"
 )
 
 type dbLeadershipNotification struct {
@@ -68,19 +74,36 @@ func (ts *electorTestSignals) Init() {
 	ts.ResignedLeadership.Init()
 }
 
+type Config struct {
+	ClientID            string
+	ElectInterval       time.Duration // period on which each elector attempts elect even without having received a resignation notification
+	ElectIntervalJitter time.Duration
+	InstanceName        string
+}
+
+func (c *Config) mustValidate() *Config {
+	if c.ClientID == "" {
+		panic("Config.ClientID must be non-empty")
+	}
+	if c.ElectInterval <= 0 {
+		panic("Config.ElectInterval must be above zero")
+	}
+	if c.InstanceName == "" {
+		panic("Config.InstanceName must be non-empty")
+	}
+
+	return c
+}
+
 type Elector struct {
 	baseservice.BaseService
 	startstop.BaseStartStop
 
-	clientID                   string
-	electInterval              time.Duration // period on which each elector attempts elect even without having received a resignation notification
-	electIntervalJitter        time.Duration
+	config                     *Config
 	exec                       riverdriver.Executor
-	instanceName               string
 	leadershipNotificationChan chan struct{}
 	notifier                   *notifier.Notifier
 	testSignals                electorTestSignals
-	ttl                        time.Duration
 
 	mu            sync.Mutex
 	isLeader      bool
@@ -90,20 +113,16 @@ type Elector struct {
 // NewElector returns an Elector using the given adapter. The name should correspond
 // to the name of the database + schema combo and should be shared across all Clients
 // running with that combination. The id should be unique to the Client.
-func NewElector(archetype *baseservice.Archetype, exec riverdriver.Executor, notifier *notifier.Notifier, instanceName, clientID string) *Elector {
+func NewElector(archetype *baseservice.Archetype, exec riverdriver.Executor, notifier *notifier.Notifier, config *Config) *Elector {
 	return baseservice.Init(archetype, &Elector{
-		exec:                exec,
-		clientID:            clientID,
-		electInterval:       electInterval,
-		electIntervalJitter: electInteralJitter,
-		instanceName:        instanceName,
-		notifier:            notifier,
-
-		// TTL is at least the relect run interval used by clients to try and
-		// gain leadership or reelect themselves as leader, plus a little
-		// padding to account to give the leader a little breathing room in its
-		// reelection loop.
-		ttl: electInterval + electIntervalTTLPadding,
+		config: (&Config{
+			ClientID:            config.ClientID,
+			ElectInterval:       valutil.ValOrDefault(config.ElectInterval, electIntervalDefault),
+			ElectIntervalJitter: valutil.ValOrDefault(config.ElectIntervalJitter, electIntervalJitterDefault),
+			InstanceName:        valutil.ValOrDefault(config.InstanceName, instanceNameDefault),
+		}).mustValidate(),
+		exec:     exec,
+		notifier: notifier,
 	})
 }
 
@@ -118,13 +137,11 @@ func (e *Elector) Start(ctx context.Context) error {
 
 	var sub *notifier.Subscription
 	if e.notifier == nil {
-		e.Logger.InfoContext(ctx, e.Name+": No notifier configured; starting in poll mode", "client_id", e.clientID)
+		e.Logger.InfoContext(ctx, e.Name+": No notifier configured; starting in poll mode", "client_id", e.config.ClientID)
 	} else {
-		e.Logger.InfoContext(ctx, e.Name+": Listening for leadership changes", "client_id", e.clientID, "topic", notifier.NotificationTopicLeadership)
-
-		// TODO(brandur): Get rid of this retry loop after refactor.
+		e.Logger.InfoContext(ctx, e.Name+": Listening for leadership changes", "client_id", e.config.ClientID, "topic", notifier.NotificationTopicLeadership)
 		var err error
-		sub, err = notifier.ListenRetryLoop(ctx, &e.BaseService, e.notifier, notifier.NotificationTopicLeadership, func(topic notifier.NotificationTopic, payload string) {
+		sub, err = e.notifier.Listen(ctx, notifier.NotificationTopicLeadership, func(topic notifier.NotificationTopic, payload string) {
 			e.handleLeadershipNotification(ctx, topic, payload)
 		})
 		if err != nil {
@@ -158,7 +175,7 @@ func (e *Elector) Start(ctx context.Context) error {
 				return
 			}
 
-			e.Logger.InfoContext(ctx, e.Name+": Gained leadership", "client_id", e.clientID)
+			e.Logger.InfoContext(ctx, e.Name+": Gained leadership", "client_id", e.config.ClientID)
 			e.testSignals.GainedLeadership.Signal(struct{}{})
 
 			err := e.keepLeadershipLoop(ctx)
@@ -171,7 +188,7 @@ func (e *Elector) Start(ctx context.Context) error {
 					continue // lost leadership reelection; unusual but not a problem; don't log
 				}
 
-				e.Logger.Error(e.Name+": Error keeping leadership", "client_id", e.clientID, "err", err)
+				e.Logger.Error(e.Name+": Error keeping leadership", "client_id", e.config.ClientID, "err", err)
 			}
 		}
 	}()
@@ -183,12 +200,12 @@ func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
 	var numErrors int
 
 	for {
-		e.Logger.InfoContext(ctx, e.Name+": Attempting to gain leadership", "client_id", e.clientID)
+		e.Logger.InfoContext(ctx, e.Name+": Attempting to gain leadership", "client_id", e.config.ClientID)
 
 		elected, err := attemptElectOrReelect(ctx, e.exec, false, &riverdriver.LeaderElectParams{
-			LeaderID: e.clientID,
-			Name:     e.instanceName,
-			TTL:      e.ttl,
+			LeaderID: e.config.ClientID,
+			Name:     e.config.InstanceName,
+			TTL:      e.leaderTTL(),
 		})
 		if err != nil {
 			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
@@ -197,7 +214,7 @@ func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
 
 			numErrors++
 			sleepDuration := e.ExponentialBackoff(numErrors, baseservice.MaxAttemptsBeforeResetDefault)
-			e.Logger.Error(e.Name+": Error attempting to elect", "client_id", e.clientID, "err", err, "num_errors", numErrors, "sleep_duration", sleepDuration)
+			e.Logger.Error(e.Name+": Error attempting to elect", "client_id", e.config.ClientID, "err", err, "num_errors", numErrors, "sleep_duration", sleepDuration)
 			e.CancellableSleep(ctx, sleepDuration)
 			continue
 		}
@@ -207,7 +224,7 @@ func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
 
 		numErrors = 0
 
-		e.Logger.DebugContext(ctx, e.Name+": Leadership bid was unsuccessful (not an error)", "client_id", e.clientID)
+		e.Logger.DebugContext(ctx, e.Name+": Leadership bid was unsuccessful (not an error)", "client_id", e.config.ClientID)
 		e.testSignals.DeniedLeadership.Signal(struct{}{})
 
 		select {
@@ -215,7 +232,7 @@ func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
 		// of resignations. May want to make this reusable & cancel it when retrying?
 		// We may also want to consider a specialized ticker utility that can tick
 		// within a random range.
-		case <-e.CancellableSleepRandomBetweenC(ctx, e.electInterval, e.electInterval+e.electIntervalJitter):
+		case <-e.CancellableSleepRandomBetweenC(ctx, e.config.ElectInterval, e.config.ElectInterval+e.config.ElectIntervalJitter):
 			if ctx.Err() != nil { // context done
 				return ctx.Err()
 			}
@@ -232,26 +249,26 @@ func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
 func (e *Elector) handleLeadershipNotification(ctx context.Context, topic notifier.NotificationTopic, payload string) {
 	if topic != notifier.NotificationTopicLeadership {
 		// This should not happen unless the notifier is broken.
-		e.Logger.Error(e.Name+": Received unexpected notification", "client_id", e.clientID, "topic", topic, "payload", payload)
+		e.Logger.Error(e.Name+": Received unexpected notification", "client_id", e.config.ClientID, "topic", topic, "payload", payload)
 		return
 	}
 
 	notification := dbLeadershipNotification{}
 	if err := json.Unmarshal([]byte(payload), &notification); err != nil {
-		e.Logger.Error(e.Name+": Unable to unmarshal leadership notification", "client_id", e.clientID, "err", err)
+		e.Logger.Error(e.Name+": Unable to unmarshal leadership notification", "client_id", e.config.ClientID, "err", err)
 		return
 	}
 
-	e.Logger.InfoContext(ctx, e.Name+": Received notification from notifier", "action", notification.Action, "client_id", e.clientID)
+	e.Logger.InfoContext(ctx, e.Name+": Received notification from notifier", "action", notification.Action, "client_id", e.config.ClientID)
 
-	if notification.Action != "resigned" || notification.Name != e.instanceName {
+	if notification.Action != "resigned" || notification.Name != e.config.InstanceName {
 		// We only care about resignations because we use them to preempt the
 		// election attempt backoff. And we only care about our own key name.
 		return
 	}
 
 	// If this a resignation from _this_ client, ignore the change.
-	if notification.LeaderID == e.clientID {
+	if notification.LeaderID == e.config.ClientID {
 		return
 	}
 
@@ -299,7 +316,7 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 	<-timer.C
 
 	for {
-		timer.Reset(e.electInterval)
+		timer.Reset(e.config.ElectInterval)
 
 		select {
 		case <-ctx.Done():
@@ -320,12 +337,12 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 			}
 		}
 
-		e.Logger.InfoContext(ctx, e.Name+": Current leader attempting reelect", "client_id", e.clientID)
+		e.Logger.InfoContext(ctx, e.Name+": Current leader attempting reelect", "client_id", e.config.ClientID)
 
 		reelected, err := attemptElectOrReelect(ctx, e.exec, true, &riverdriver.LeaderElectParams{
-			LeaderID: e.clientID,
-			Name:     e.instanceName,
-			TTL:      e.ttl,
+			LeaderID: e.config.ClientID,
+			Name:     e.config.InstanceName,
+			TTL:      e.leaderTTL(),
 		})
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -339,7 +356,7 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 
 			sleepDuration := e.ExponentialBackoff(numErrors, baseservice.MaxAttemptsBeforeResetDefault)
 			e.Logger.Error(e.Name+": Error attempting reelection",
-				"client_id", e.clientID, "err", err, "sleep_duration", sleepDuration)
+				"client_id", e.config.ClientID, "err", err, "sleep_duration", sleepDuration)
 			e.CancellableSleep(ctx, sleepDuration)
 			continue
 		}
@@ -361,7 +378,7 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 // always surrendered in a timely manner so it can be picked up quickly by
 // another client, even in the event of a cancellation.
 func (e *Elector) attemptResignLoop(ctx context.Context) {
-	e.Logger.InfoContext(ctx, e.Name+": Attempting to resign leadership", "client_id", e.clientID)
+	e.Logger.InfoContext(ctx, e.Name+": Attempting to resign leadership", "client_id", e.config.ClientID)
 
 	// Make a good faith attempt to resign, even in the presence of errors, but
 	// don't keep hammering if it doesn't work. In case a resignation failure,
@@ -375,11 +392,11 @@ func (e *Elector) attemptResignLoop(ctx context.Context) {
 
 	for attempt := 1; attempt <= maxNumErrors; attempt++ {
 		if err := e.attemptResign(ctx, attempt); err != nil { //nolint:contextcheck
-			e.Logger.Error(e.Name+": Error attempting to resign", "attempt", attempt, "client_id", e.clientID, "err", err)
+			e.Logger.Error(e.Name+": Error attempting to resign", "attempt", attempt, "client_id", e.config.ClientID, "err", err)
 
 			sleepDuration := e.ExponentialBackoff(attempt, baseservice.MaxAttemptsBeforeResetDefault)
 			e.Logger.Error(e.Name+": Error attempting to resign",
-				"client_id", e.clientID, "err", err, "num_errors", attempt, "sleep_duration", sleepDuration)
+				"client_id", e.config.ClientID, "err", err, "num_errors", attempt, "sleep_duration", sleepDuration)
 			e.CancellableSleep(ctx, sleepDuration) //nolint:contextcheck
 
 			continue
@@ -399,16 +416,16 @@ func (e *Elector) attemptResign(ctx context.Context, attempt int) error {
 	defer cancel()
 
 	resigned, err := e.exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
-		LeaderID:        e.clientID,
+		LeaderID:        e.config.ClientID,
 		LeadershipTopic: string(notifier.NotificationTopicLeadership),
-		Name:            e.instanceName,
+		Name:            e.config.InstanceName,
 	})
 	if err != nil {
 		return err
 	}
 
 	if resigned {
-		e.Logger.InfoContext(ctx, e.Name+": Resigned leadership successfully", "client_id", e.clientID)
+		e.Logger.InfoContext(ctx, e.Name+": Resigned leadership successfully", "client_id", e.config.ClientID)
 		e.testSignals.ResignedLeadership.Signal(struct{}{})
 	}
 
@@ -456,6 +473,13 @@ func (e *Elector) tryUnlisten(sub *Subscription) bool {
 		}
 	}
 	return false
+}
+
+// leaderTTL is at least the relect run interval used by clients to try and gain
+// leadership or reelect themselves as leader, plus a little padding to account
+// to give the leader a little breathing room in its reelection loop.
+func (e *Elector) leaderTTL() time.Duration {
+	return e.config.ElectInterval + electIntervalTTLPaddingDefault
 }
 
 func (e *Elector) notifySubscribers(isLeader bool) {
