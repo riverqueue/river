@@ -268,7 +268,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 		// not included in the unique state set.
 		{
 			insertParams := *insertParams // dup
-			insertParams.State = rivertype.JobStateCompleted
+			insertParams.State = rivertype.JobStatePending
 
 			res2, err := inserter.JobInsert(ctx, bundle.exec, &insertParams, uniqueOpts)
 			require.NoError(t, err)
@@ -280,9 +280,11 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 		// changes to one that's not included in the unique state set.
 		{
 			_, err := bundle.exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
-				ID:            res0.Job.ID,
-				StateDoUpdate: true,
-				State:         rivertype.JobStateCompleted,
+				ID:                  res0.Job.ID,
+				FinalizedAtDoUpdate: true,
+				FinalizedAt:         ptrutil.Ptr(bundle.baselineTime),
+				StateDoUpdate:       true,
+				State:               rivertype.JobStateCompleted,
 			})
 			require.NoError(t, err)
 
@@ -431,7 +433,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 		// With state modified
 		{
 			insertParams := *insertParams // dup
-			insertParams.State = rivertype.JobStateCompleted
+			insertParams.State = rivertype.JobStatePending
 
 			// New job because a unique dimension has changed.
 			res2, err := inserter.JobInsert(ctx, bundle.exec, &insertParams, uniqueOpts)
