@@ -29,8 +29,17 @@ type testingT interface {
 	Logf(format string, args ...any)
 }
 
-// Options for RequireInserted or RequireManyInserted including expectations for
-// various queuing properties that stem from InsertOpts.
+// Options for RequireInserted functions including expectations for various
+// queuing properties that stem from InsertOpts.
+//
+// When used with RequiredInserted or RequireInsertedMany, multiple properties
+// set on this struct increase the specifity on a job to match, acting like an
+// AND condition on each. So if multiple properties are set, a job must match
+// all of them to be considered a successful match.
+//
+// When used with RequireNotInserted, multiple properties act like an OR instead
+// of an AND. If an inserted job is found whose properties match any of the set
+// opts properties, a test failure is triggered.
 type RequireInsertedOpts struct {
 	// MaxAttempts is the expected maximum number of total attempts for the
 	// inserted job.
@@ -78,7 +87,7 @@ type RequireInsertedOpts struct {
 //
 // A RequireInsertedOpts struct can be provided as the last argument, and if it is,
 // its properties (e.g. max attempts, priority, queue name) will act as required
-// assertions in the inserted job row. UniqueOpts is ignored.
+// assertions in the inserted job row.
 //
 // The assertion will fail if more than one job of the given kind was found
 // because at that point the job to return is ambiguous. Use RequireManyInserted
@@ -108,7 +117,7 @@ func requireInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobAr
 //
 // A RequireInsertedOpts struct can be provided as the last argument, and if it is,
 // its properties (e.g. max attempts, priority, queue name) will act as required
-// assertions in the inserted job row. UniqueOpts is ignored.
+// assertions in the inserted job row.
 //
 // The assertion will fail if more than one job of the given kind was found
 // because at that point the job to return is ambiguous. Use RequireManyInserted
@@ -157,12 +166,115 @@ func requireInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.Jo
 	}
 
 	if opts != nil {
-		if !compareJobToInsertOpts(t, jobRow, *opts, -1) {
+		if compareJobToInsertOpts(t, jobRow, opts, -1, false) == compareResCheckFailed {
 			return nil, nil //nolint:nilnil
 		}
 	}
 
 	return &river.Job[TArgs]{JobRow: jobRow, Args: actualArgs}, nil
+}
+
+// RequireNotInserted is a test helper that verifies that a job of the given
+// kind was not inserted for work, failing the test if one was.
+//
+//	job := RequireNotInserted(ctx, t, riverpgxv5.New(dbPool), &Job1Args{}, nil)
+//
+// This variant takes a driver that wraps a database pool. See also
+// RequireNotInsertedTx which takes a transaction.
+//
+// A RequireInsertedOpts struct can be provided as the last argument, and if it
+// is, its properties (e.g. max attempts, priority, queue name) will act as
+// requirements on a found row. If any fields are set, then the test will fail
+// if a job is found that matches any of them (unlike options to RequireInserted
+// which behave like an AND, these are an OR). So for example, if options
+// specify `Priority: 3`, and a joke of the same kind was inserted, but it was
+// `Priority: 2`, RequireNotInserted will not fail. If the inserted job was
+// `Priority: 2` (therefore matching the job), RequireNotInserted does fail.
+func RequireNotInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, tb testing.TB, driver TDriver, expectedJob TArgs, opts *RequireInsertedOpts) {
+	tb.Helper()
+	requireNotInserted(ctx, tb, driver, expectedJob, opts)
+}
+
+func requireNotInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, driver TDriver, expectedJob TArgs, opts *RequireInsertedOpts) {
+	t.Helper()
+	err := requireNotInsertedErr[TDriver](ctx, t, driver.GetExecutor(), expectedJob, opts)
+	if err != nil {
+		failure(t, "Internal failure: %s", err)
+	}
+}
+
+// RequireInsertedTx is a test helper that verifies that a job of the given kind
+// was inserted for work, failing the test if it wasn't. If found, the inserted
+// job is returned so that further assertions can be made against it.
+//
+//	job := RequireInsertedTx[*riverpgxv5.Driver](ctx, t, tx, &Job1Args{}, nil)
+//
+// This variant takes a transaction. See also RequireNotInserted which takes a
+// driver that wraps a database pool.
+//
+// A RequireInsertedOpts struct can be provided as the last argument, and if it
+// is, its properties (e.g. max attempts, priority, queue name) will act as
+// requirements on a found row. If any fields are set, then the test will fail
+// if a job is found that matches any of them (unlike options to RequireInsertedTx
+// which behave like an AND, these are an OR). So for example, if options
+// specify `Priority: 3`, and a joke of the same kind was inserted, but it was
+// `Priority: 2`, RequireNotInsertedTx will not fail. If the inserted job was
+// `Priority: 2` (therefore matching the job), RequireNotInserted does fail.
+func RequireNotInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, tb testing.TB, tx TTx, expectedJob TArgs, opts *RequireInsertedOpts) {
+	tb.Helper()
+	requireNotInsertedTx[TDriver](ctx, tb, tx, expectedJob, opts)
+}
+
+// Internal function used by the tests so that the exported version can take
+// `testing.TB` instead of `testing.T`.
+func requireNotInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, tx TTx, expectedJob TArgs, opts *RequireInsertedOpts) {
+	t.Helper()
+	var driver TDriver
+	err := requireNotInsertedErr[TDriver](ctx, t, driver.UnwrapExecutor(tx), expectedJob, opts)
+	if err != nil {
+		failure(t, "Internal failure: %s", err)
+	}
+}
+
+func requireNotInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, exec riverdriver.Executor, expectedJob TArgs, opts *RequireInsertedOpts) error {
+	t.Helper()
+
+	// Returned ordered by ID.
+	jobRows, err := exec.JobGetByKindMany(ctx, []string{expectedJob.Kind()})
+	if err != nil {
+		return fmt.Errorf("error querying jobs: %w", err)
+	}
+
+	if len(jobRows) < 1 {
+		return nil
+	}
+
+	if len(jobRows) > 1 {
+		failure(t, "%d jobs found with kind, but expected to find none: %s", len(jobRows), expectedJob.Kind())
+		return nil
+	}
+
+	jobRow := jobRows[0]
+
+	var actualArgs TArgs
+	if err := json.Unmarshal(jobRow.EncodedArgs, &actualArgs); err != nil {
+		return fmt.Errorf("error unmarshaling job args: %w", err)
+	}
+
+	if opts != nil {
+		switch compareJobToInsertOpts(t, jobRow, opts, -1, true) {
+		case compareResAllChecksSucceeded:
+			fallthrough
+
+		case compareResCheckFailed:
+			return nil
+
+		case compareResNoChecksMade:
+		}
+	}
+
+	failure(t, "Job found with kind, but expected not to: %s", expectedJob.Kind())
+	return nil
 }
 
 // ExpectedJob is a single job to expect encapsulating job args and possible
@@ -190,7 +302,7 @@ type ExpectedJob struct {
 //
 // A RequireInsertedOpts struct can be provided for each expected job, and if it is,
 // its properties (e.g. max attempts, priority, queue name) will act as required
-// assertions for the corresponding inserted job row. UniqueOpts is ignored.
+// assertions for the corresponding inserted job row.
 //
 // The assertion expects emitted jobs to have occurred exactly in the order and
 // the number specified, and will fail in case this expectation isn't met. So if
@@ -224,7 +336,7 @@ func requireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.C
 //
 // A RequireInsertedOpts struct can be provided for each expected job, and if it is,
 // its properties (e.g. max attempts, priority, queue name) will act as required
-// assertions for the corresponding inserted job row. UniqueOpts is ignored.
+// assertions for the corresponding inserted job row.
 //
 // The assertion expects emitted jobs to have occurred exactly in the order and
 // the number specified, and will fail in case this expectation isn't met. So if
@@ -268,7 +380,7 @@ func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx contex
 
 	for i, jobRow := range jobRows {
 		if expectedJobs[i].Opts != nil {
-			if !compareJobToInsertOpts(t, jobRow, *expectedJobs[i].Opts, i) {
+			if compareJobToInsertOpts(t, jobRow, expectedJobs[i].Opts, i, false) == compareResCheckFailed {
 				return nil, nil
 			}
 		}
@@ -279,7 +391,15 @@ func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx contex
 
 const rfc3339Micro = "2006-01-02T15:04:05.999999Z07:00"
 
-func compareJobToInsertOpts(t testingT, jobRow *rivertype.JobRow, expectedOpts RequireInsertedOpts, index int) bool {
+type compareRes int
+
+const (
+	compareResNoChecksMade compareRes = iota
+	compareResCheckFailed
+	compareResAllChecksSucceeded
+)
+
+func compareJobToInsertOpts(t testingT, jobRow *rivertype.JobRow, expectedOpts *RequireInsertedOpts, index int, failEqual bool) compareRes {
 	t.Helper()
 
 	// Adds an index position for the case of multiple expected jobs. Wrapped in
@@ -291,22 +411,60 @@ func compareJobToInsertOpts(t testingT, jobRow *rivertype.JobRow, expectedOpts R
 		return fmt.Sprintf(" (expected job slice index %d)", index)
 	}
 
-	if expectedOpts.MaxAttempts != 0 && jobRow.MaxAttempts != expectedOpts.MaxAttempts {
-		failure(t, "Job with kind '%s'%s max attempts %d not equal to expected %d",
-			jobRow.Kind, positionStr(), jobRow.MaxAttempts, expectedOpts.MaxAttempts)
-		return false
+	res := compareResNoChecksMade
+
+	if expectedOpts.MaxAttempts != 0 {
+		if jobRow.MaxAttempts == expectedOpts.MaxAttempts {
+			if failEqual {
+				failure(t, "Job with kind '%s'%s max attempts equal to excluded %d",
+					jobRow.Kind, positionStr(), expectedOpts.MaxAttempts)
+				return compareResCheckFailed
+			}
+		} else {
+			if !failEqual {
+				failure(t, "Job with kind '%s'%s max attempts %d not equal to expected %d",
+					jobRow.Kind, positionStr(), jobRow.MaxAttempts, expectedOpts.MaxAttempts)
+				return compareResCheckFailed
+			}
+		}
+
+		res = compareResAllChecksSucceeded
 	}
 
-	if expectedOpts.Queue != "" && jobRow.Queue != expectedOpts.Queue {
-		failure(t, "Job with kind '%s'%s queue '%s' not equal to expected '%s'",
-			jobRow.Kind, positionStr(), jobRow.Queue, expectedOpts.Queue)
-		return false
+	if expectedOpts.Priority != 0 {
+		if jobRow.Priority == expectedOpts.Priority {
+			if failEqual {
+				failure(t, "Job with kind '%s'%s priority equal to excluded %d",
+					jobRow.Kind, positionStr(), expectedOpts.Priority)
+				return compareResCheckFailed
+			}
+		} else {
+			if !failEqual {
+				failure(t, "Job with kind '%s'%s priority %d not equal to expected %d",
+					jobRow.Kind, positionStr(), jobRow.Priority, expectedOpts.Priority)
+				return compareResCheckFailed
+			}
+		}
+
+		res = compareResAllChecksSucceeded
 	}
 
-	if expectedOpts.Priority != 0 && jobRow.Priority != expectedOpts.Priority {
-		failure(t, "Job with kind '%s'%s priority %d not equal to expected %d",
-			jobRow.Kind, positionStr(), jobRow.Priority, expectedOpts.Priority)
-		return false
+	if expectedOpts.Queue != "" {
+		if jobRow.Queue == expectedOpts.Queue {
+			if failEqual {
+				failure(t, "Job with kind '%s'%s queue equal to excluded '%s'",
+					jobRow.Kind, positionStr(), expectedOpts.Queue)
+				return compareResCheckFailed
+			}
+		} else {
+			if !failEqual {
+				failure(t, "Job with kind '%s'%s queue '%s' not equal to expected '%s'",
+					jobRow.Kind, positionStr(), jobRow.Queue, expectedOpts.Queue)
+				return compareResCheckFailed
+			}
+		}
+
+		res = compareResAllChecksSucceeded
 	}
 
 	// We have to be more careful when comparing times because Postgres only
@@ -316,25 +474,61 @@ func compareJobToInsertOpts(t testingT, jobRow *rivertype.JobRow, expectedOpts R
 		actualScheduledAt   = jobRow.ScheduledAt.Truncate(time.Microsecond)
 		expectedScheduledAt = expectedOpts.ScheduledAt.Truncate(time.Microsecond)
 	)
-	if expectedOpts.ScheduledAt != (time.Time{}) && !actualScheduledAt.Equal(expectedScheduledAt) {
-		failure(t, "Job with kind '%s'%s scheduled at %s not equal to expected %s",
-			jobRow.Kind, positionStr(), actualScheduledAt.Format(rfc3339Micro), expectedScheduledAt.Format(rfc3339Micro))
-		return false
+	if expectedOpts.ScheduledAt != (time.Time{}) {
+		if actualScheduledAt.Equal(expectedScheduledAt) {
+			if failEqual {
+				failure(t, "Job with kind '%s'%s scheduled at equal to excluded %s",
+					jobRow.Kind, positionStr(), expectedScheduledAt.Format(rfc3339Micro))
+				return compareResCheckFailed
+			}
+		} else {
+			if !failEqual {
+				failure(t, "Job with kind '%s'%s scheduled at %s not equal to expected %s",
+					jobRow.Kind, positionStr(), actualScheduledAt.Format(rfc3339Micro), expectedScheduledAt.Format(rfc3339Micro))
+				return compareResCheckFailed
+			}
+		}
+
+		res = compareResAllChecksSucceeded
 	}
 
-	if expectedOpts.State != "" && jobRow.State != expectedOpts.State {
-		failure(t, "Job with kind '%s'%s state '%s' not equal to expected '%s'",
-			jobRow.Kind, positionStr(), jobRow.State, expectedOpts.State)
-		return false
+	if expectedOpts.State != "" {
+		if jobRow.State == expectedOpts.State {
+			if failEqual {
+				failure(t, "Job with kind '%s'%s equal to excluded '%s'",
+					jobRow.Kind, positionStr(), expectedOpts.State)
+				return compareResCheckFailed
+			}
+		} else {
+			if !failEqual {
+				failure(t, "Job with kind '%s'%s state '%s' not equal to expected '%s'",
+					jobRow.Kind, positionStr(), jobRow.State, expectedOpts.State)
+				return compareResCheckFailed
+			}
+		}
+
+		res = compareResAllChecksSucceeded
 	}
 
-	if len(expectedOpts.Tags) > 0 && !slices.Equal(jobRow.Tags, expectedOpts.Tags) {
-		failure(t, "Job with kind '%s'%s tags attempts %+v not equal to expected %+v",
-			jobRow.Kind, positionStr(), jobRow.Tags, expectedOpts.Tags)
-		return false
+	if len(expectedOpts.Tags) > 0 {
+		if slices.Equal(jobRow.Tags, expectedOpts.Tags) {
+			if failEqual {
+				failure(t, "Job with kind '%s'%s tags equal to excluded %+v",
+					jobRow.Kind, positionStr(), expectedOpts.Tags)
+				return compareResCheckFailed
+			}
+		} else {
+			if !failEqual {
+				failure(t, "Job with kind '%s'%s tags %+v not equal to expected %+v",
+					jobRow.Kind, positionStr(), jobRow.Tags, expectedOpts.Tags)
+				return compareResCheckFailed
+			}
+		}
+
+		res = compareResAllChecksSucceeded
 	}
 
-	return true
+	return res
 }
 
 // failure takes a printf-style directive and is a shortcut for failing an
