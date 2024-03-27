@@ -520,7 +520,11 @@ func Test_Client_Stop(t *testing.T) {
 					}
 
 					_, err := client.Insert(ctx, callbackArgs{}, nil)
-					if errors.Is(err, context.Canceled) {
+					// A cancelled context may produce a variety of underlying
+					// errors in pgx, so rather than comparing the return error,
+					// first check if context is cancelled, and ignore an error
+					// return if it is.
+					if ctx.Err() != nil {
 						return
 					}
 					require.NoError(t, err)
@@ -648,7 +652,7 @@ func Test_Client_Stop(t *testing.T) {
 		client := runNewTestClient(ctx, t, config)
 
 		finish := doParallelContinualInsertion(ctx, t, client)
-		defer finish()
+		t.Cleanup(finish)
 
 		// Wait for at least one job to start
 		riverinternaltest.WaitOrTimeout(t, startedCh)
