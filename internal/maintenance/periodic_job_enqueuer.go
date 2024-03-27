@@ -3,13 +3,17 @@ package maintenance
 import (
 	"context"
 	"errors"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/rivercommon"
+	"github.com/riverqueue/river/internal/util/maputil"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // ErrNoJobToInsert can be returned by a PeriodicJob's JobToInsertFunc to
@@ -72,24 +76,117 @@ type PeriodicJobEnqueuer struct {
 	Config      *PeriodicJobEnqueuerConfig
 	TestSignals PeriodicJobEnqueuerTestSignals
 
-	exec           riverdriver.Executor
-	periodicJobs   []*PeriodicJob
-	uniqueInserter *dbunique.UniqueInserter
+	exec               riverdriver.Executor
+	mu                 sync.RWMutex
+	nextHandle         rivertype.PeriodicJobHandle
+	periodicJobs       map[rivertype.PeriodicJobHandle]*PeriodicJob
+	recalculateNextRun chan struct{}
+	uniqueInserter     *dbunique.UniqueInserter
 }
 
 func NewPeriodicJobEnqueuer(archetype *baseservice.Archetype, config *PeriodicJobEnqueuerConfig, exec riverdriver.Executor) *PeriodicJobEnqueuer {
+	var (
+		nextHandle   rivertype.PeriodicJobHandle
+		periodicJobs = make(map[rivertype.PeriodicJobHandle]*PeriodicJob, len(config.PeriodicJobs))
+	)
+
+	for _, periodicJob := range config.PeriodicJobs {
+		periodicJob.mustValidate()
+
+		periodicJobs[nextHandle] = periodicJob
+		nextHandle++
+	}
+
 	svc := baseservice.Init(archetype, &PeriodicJobEnqueuer{
 		Config: (&PeriodicJobEnqueuerConfig{
 			AdvisoryLockPrefix: config.AdvisoryLockPrefix,
 			PeriodicJobs:       config.PeriodicJobs,
 		}).mustValidate(),
 
-		exec:           exec,
-		periodicJobs:   config.PeriodicJobs,
-		uniqueInserter: baseservice.Init(archetype, &dbunique.UniqueInserter{AdvisoryLockPrefix: config.AdvisoryLockPrefix}),
+		exec:               exec,
+		nextHandle:         nextHandle,
+		periodicJobs:       periodicJobs,
+		recalculateNextRun: make(chan struct{}, 1),
+		uniqueInserter:     baseservice.Init(archetype, &dbunique.UniqueInserter{AdvisoryLockPrefix: config.AdvisoryLockPrefix}),
 	})
 
 	return svc
+}
+
+// Add adds a new periodic job to the enqueuer. The service's run loop is woken
+// immediately so that the job is scheduled appropriately, and inserted if its
+// RunOnStart flag is set to true.
+func (s *PeriodicJobEnqueuer) Add(periodicJob *PeriodicJob) rivertype.PeriodicJobHandle {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	periodicJob.mustValidate()
+
+	handle := s.nextHandle
+	s.periodicJobs[handle] = periodicJob
+	s.nextHandle++
+
+	select {
+	case s.recalculateNextRun <- struct{}{}:
+	default:
+	}
+
+	return handle
+}
+
+// AddMany adds many new periodic job to the enqueuer. The service's run loop is
+// woken immediately so that the job is scheduled appropriately, and inserted if
+// any RunOnStart flags are set to true.
+func (s *PeriodicJobEnqueuer) AddMany(periodicJobs []*PeriodicJob) []rivertype.PeriodicJobHandle {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	handles := make([]rivertype.PeriodicJobHandle, len(periodicJobs))
+
+	for i, periodicJob := range periodicJobs {
+		periodicJob.mustValidate()
+
+		handles[i] = s.nextHandle
+		s.periodicJobs[handles[i]] = periodicJob
+		s.nextHandle++
+	}
+
+	select {
+	case s.recalculateNextRun <- struct{}{}:
+	default:
+	}
+
+	return handles
+}
+
+// Clear clears all periodic jobs from the enqueuer.
+func (s *PeriodicJobEnqueuer) Clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// `nextHandle` is _not_ reset so that even across multiple generations of
+	// jobs, handles aren't reused.
+	s.periodicJobs = make(map[rivertype.PeriodicJobHandle]*PeriodicJob)
+}
+
+// Remove removes a periodic job from the enqueuer. Its current target run time
+// and all future runs are cancelled.
+func (s *PeriodicJobEnqueuer) Remove(periodicJobHandle rivertype.PeriodicJobHandle) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.periodicJobs, periodicJobHandle)
+}
+
+// RemoveMany removes many periodic jobs from the enqueuer. Their current target
+// run time and all future runs are cancelled.
+func (s *PeriodicJobEnqueuer) RemoveMany(periodicJobHandles []rivertype.PeriodicJobHandle) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, handle := range periodicJobHandles {
+		delete(s.periodicJobs, handle)
+	}
 }
 
 type insertParamsAndUniqueOpts struct {
@@ -113,35 +210,65 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 		s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStarted)
 		defer s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStopped)
 
-		// An initial loop to assign next runs for every configured job and
-		// queues any jobs that should run immediately.
-		{
+		// Drain the signal to recalculate next run if it's been sent (i.e. Add
+		// or AddMany called before Start). We're about to schedule jobs from
+		// scratch, and therefore don't need to immediately do so again.
+		select {
+		case <-s.recalculateNextRun:
+		default:
+		}
+
+		var lastHandleSeen rivertype.PeriodicJobHandle = -1 // so handle 0 is considered
+
+		validateInsertRunOnStartAndScheduleNewlyAdded := func() {
+			s.mu.RLock()
+			defer s.mu.RUnlock()
+
 			var (
 				insertParamsMany   []*riverdriver.JobInsertFastParams
 				insertParamsUnique []*insertParamsAndUniqueOpts
-			)
-			now := s.TimeNowUTC()
 
-			for _, periodicJob := range s.periodicJobs {
-				// Expect client to have validated any user input in a safer way
-				// already, but do a second pass for internal uses.
-				periodicJob.mustValidate()
+				now = s.TimeNowUTC()
+			)
+
+			// Handle periodic jobs in sorted order so we can correctly account
+			// for the most recently added one that we've seen.
+			sortedPeriodicJobHandles := maputil.Keys(s.periodicJobs)
+			slices.Sort(sortedPeriodicJobHandles)
+
+			for _, handle := range sortedPeriodicJobHandles {
+				if handle <= lastHandleSeen {
+					continue
+				}
+
+				lastHandleSeen = handle
+
+				periodicJob := s.periodicJobs[handle].mustValidate()
 
 				periodicJob.nextRunAt = periodicJob.ScheduleFunc(now)
 
-				if periodicJob.RunOnStart {
-					if insertParams, uniqueOpts, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc); ok {
-						if !uniqueOpts.IsEmpty() {
-							insertParamsUnique = append(insertParamsUnique, &insertParamsAndUniqueOpts{insertParams, uniqueOpts})
-						} else {
-							insertParamsMany = append(insertParamsMany, insertParams)
-						}
+				if !periodicJob.RunOnStart {
+					continue
+				}
+
+				if insertParams, uniqueOpts, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc); ok {
+					if !uniqueOpts.IsEmpty() {
+						insertParamsUnique = append(insertParamsUnique, &insertParamsAndUniqueOpts{insertParams, uniqueOpts})
+					} else {
+						insertParamsMany = append(insertParamsMany, insertParams)
 					}
 				}
 			}
 
 			s.insertBatch(ctx, insertParamsMany, insertParamsUnique)
+
+			if len(insertParamsMany) > 0 {
+				s.Logger.DebugContext(ctx, s.Name+": Inserted RunOnStart jobs", "num_jobs", len(insertParamsMany)+len(insertParamsUnique))
+			}
 		}
+
+		// Run any jobs that need to run on start and calculate initial runs.
+		validateInsertRunOnStartAndScheduleNewlyAdded()
 
 		s.TestSignals.EnteredLoop.Signal(struct{}{})
 
@@ -162,31 +289,37 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 				// this exact moment or ready in the very near future.
 				nowWithMargin := now.Add(100 * time.Millisecond)
 
-				for _, periodicJob := range s.periodicJobs {
-					if !periodicJob.nextRunAt.Before(nowWithMargin) {
-						continue
-					}
+				func() {
+					s.mu.RLock()
+					defer s.mu.RUnlock()
 
-					// Although we may have inserted a new job a little
-					// preemptively due to the margin applied above, try to stay
-					// as true as possible to the original schedule by using the
-					// original run time when calculating the next one.
-					periodicJob.nextRunAt = periodicJob.ScheduleFunc(periodicJob.nextRunAt)
+					for _, periodicJob := range s.periodicJobs {
+						if !periodicJob.nextRunAt.Before(nowWithMargin) {
+							continue
+						}
 
-					if insertParams, uniqueOpts, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc); ok {
-						if !uniqueOpts.IsEmpty() {
-							insertParamsUnique = append(insertParamsUnique, &insertParamsAndUniqueOpts{insertParams, uniqueOpts})
-						} else {
-							insertParamsMany = append(insertParamsMany, insertParams)
+						// Although we may have inserted a new job a little
+						// preemptively due to the margin applied above, try to stay
+						// as true as possible to the original schedule by using the
+						// original run time when calculating the next one.
+						periodicJob.nextRunAt = periodicJob.ScheduleFunc(periodicJob.nextRunAt)
+
+						if insertParams, uniqueOpts, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc); ok {
+							if !uniqueOpts.IsEmpty() {
+								insertParamsUnique = append(insertParamsUnique, &insertParamsAndUniqueOpts{insertParams, uniqueOpts})
+							} else {
+								insertParamsMany = append(insertParamsMany, insertParams)
+							}
 						}
 					}
-				}
+				}()
 
 				s.insertBatch(ctx, insertParamsMany, insertParamsUnique)
 
-				// Reset the timer after the insert loop has finished so it's
-				// paused during work. Makes its firing more deterministic.
-				timerUntilNextRun.Reset(s.timeUntilNextRun())
+			case <-s.recalculateNextRun:
+				if !timerUntilNextRun.Stop() {
+					<-timerUntilNextRun.C
+				}
 
 			case <-ctx.Done():
 				// Clean up timer resources. We know it has _not_ received from the
@@ -197,6 +330,14 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 				}
 				return
 			}
+
+			// Insert any RunOnStart initial runs for new jobs that've been
+			// added since the last run loop.
+			validateInsertRunOnStartAndScheduleNewlyAdded()
+
+			// Reset the timer after the insert loop has finished so it's
+			// paused during work. Makes its firing more deterministic.
+			timerUntilNextRun.Reset(s.timeUntilNextRun())
 		}
 	}()
 
@@ -245,6 +386,9 @@ func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, c
 }
 
 func (s *PeriodicJobEnqueuer) timeUntilNextRun() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	// With no configured jobs, just return a big duration for the loop to block
 	// on.
 	if len(s.periodicJobs) < 1 {

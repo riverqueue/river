@@ -277,6 +277,7 @@ type Client[TTx any] struct {
 
 	monitor              *clientMonitor
 	notifier             *notifier.Notifier
+	periodicJobs         *PeriodicJobBundle
 	producersByQueueName map[string]*producer
 	queueMaintainer      *maintenance.QueueMaintainer
 	services             []startstop.Service
@@ -513,31 +514,14 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		}
 
 		{
-			emptyOpts := PeriodicJobOpts{}
-			periodicJobs := make([]*maintenance.PeriodicJob, 0, len(config.PeriodicJobs))
-			for _, periodicJob := range config.PeriodicJobs {
-				periodicJob := periodicJob // capture range var
-
-				opts := &emptyOpts
-				if periodicJob.opts != nil {
-					opts = periodicJob.opts
-				}
-
-				periodicJobs = append(periodicJobs, &maintenance.PeriodicJob{
-					ConstructorFunc: func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
-						return insertParamsFromArgsAndOptions(periodicJob.constructorFunc())
-					},
-					RunOnStart:   opts.RunOnStart,
-					ScheduleFunc: periodicJob.scheduleFunc.Next,
-				})
-			}
-
 			periodicJobEnqueuer := maintenance.NewPeriodicJobEnqueuer(archetype, &maintenance.PeriodicJobEnqueuerConfig{
 				AdvisoryLockPrefix: config.AdvisoryLockPrefix,
-				PeriodicJobs:       periodicJobs,
 			}, driver.GetExecutor())
 			maintenanceServices = append(maintenanceServices, periodicJobEnqueuer)
 			client.testSignals.periodicJobEnqueuer = &periodicJobEnqueuer.TestSignals
+
+			client.periodicJobs = newPeriodicJobBundle(periodicJobEnqueuer)
+			client.periodicJobs.AddMany(config.PeriodicJobs)
 		}
 
 		{
@@ -1494,6 +1478,10 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 
 	return dblist.JobList(ctx, c.driver.UnwrapExecutor(tx), dbParams)
 }
+
+// PeriodicJobs returns the currently configured set of periodic jobs for the
+// client, and can be used to add new ones or remove existing ones.
+func (c *Client[TTx]) PeriodicJobs() *PeriodicJobBundle { return c.periodicJobs }
 
 // Generates a default client ID using the current hostname and time.
 func defaultClientID(startedAt time.Time) string {
