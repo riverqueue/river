@@ -172,7 +172,7 @@ func (e *Executor) JobInsertFast(ctx context.Context, params *riverdriver.JobIns
 	return jobRowFromInternal(job), nil
 }
 
-func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.JobInsertFastParams) (int64, error) {
+func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.JobInsertFastParams) (int, error) {
 	insertJobsParams := make([]*dbsqlc.JobInsertManyParams, len(params))
 	now := time.Now()
 
@@ -212,7 +212,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 		return 0, fmt.Errorf("error inserting many jobs: %w", err)
 	}
 
-	return numInserted, nil
+	return int(numInserted), nil
 }
 
 func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobInsertFullParams) (*rivertype.JobRow, error) {

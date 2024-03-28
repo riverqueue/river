@@ -1134,7 +1134,7 @@ func Test_Client_InsertMany(t *testing.T) {
 			{Args: noOpArgs{}},
 		})
 		require.NoError(t, err)
-		require.Equal(t, int64(2), count)
+		require.Equal(t, 2, count)
 
 		jobs, err := client.driver.GetExecutor().JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
 		require.NoError(t, err)
@@ -1150,7 +1150,7 @@ func Test_Client_InsertMany(t *testing.T) {
 			{Args: &noOpArgs{}, InsertOpts: &InsertOpts{ScheduledAt: time.Time{}}},
 		})
 		require.NoError(t, err)
-		require.Equal(t, int64(1), count)
+		require.Equal(t, 1, count)
 
 		jobs, err := client.driver.GetExecutor().JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
 		require.NoError(t, err)
@@ -1168,7 +1168,7 @@ func Test_Client_InsertMany(t *testing.T) {
 			{Args: &noOpArgs{}, InsertOpts: &InsertOpts{Queue: "invalid*queue"}},
 		})
 		require.ErrorContains(t, err, "queue name is invalid")
-		require.Equal(t, int64(0), count)
+		require.Equal(t, 0, count)
 	})
 
 	t.Run("ErrorsOnDriverWithoutPool", func(t *testing.T) {
@@ -1185,7 +1185,7 @@ func Test_Client_InsertMany(t *testing.T) {
 			{Args: noOpArgs{}},
 		})
 		require.ErrorIs(t, err, errNoDriverDBPool)
-		require.Equal(t, int64(0), count)
+		require.Equal(t, 0, count)
 	})
 
 	t.Run("ErrorsWithZeroJobs", func(t *testing.T) {
@@ -1195,7 +1195,7 @@ func Test_Client_InsertMany(t *testing.T) {
 
 		count, err := client.InsertMany(ctx, []InsertManyParams{})
 		require.EqualError(t, err, "no jobs to insert")
-		require.Equal(t, int64(0), count)
+		require.Equal(t, 0, count)
 	})
 
 	t.Run("ErrorsOnUnknownJobKindWithWorkers", func(t *testing.T) {
@@ -1209,7 +1209,7 @@ func Test_Client_InsertMany(t *testing.T) {
 		var unknownJobKindErr *UnknownJobKindError
 		require.ErrorAs(t, err, &unknownJobKindErr)
 		require.Equal(t, (&unregisteredJobArgs{}).Kind(), unknownJobKindErr.Kind)
-		require.Equal(t, int64(0), count)
+		require.Equal(t, 0, count)
 	})
 
 	t.Run("AllowsUnknownJobKindWithoutWorkers", func(t *testing.T) {
@@ -1234,7 +1234,7 @@ func Test_Client_InsertMany(t *testing.T) {
 			{Args: noOpArgs{}, InsertOpts: &InsertOpts{UniqueOpts: UniqueOpts{ByArgs: true}}},
 		})
 		require.EqualError(t, err, "UniqueOpts are not supported for batch inserts")
-		require.Equal(t, int64(0), count)
+		require.Equal(t, 0, count)
 	})
 }
 
@@ -1273,7 +1273,7 @@ func Test_Client_InsertManyTx(t *testing.T) {
 			{Args: noOpArgs{}},
 		})
 		require.NoError(t, err)
-		require.Equal(t, int64(2), count)
+		require.Equal(t, 2, count)
 
 		jobs, err := client.driver.UnwrapExecutor(bundle.tx).JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
 		require.NoError(t, err)
@@ -1296,7 +1296,7 @@ func Test_Client_InsertManyTx(t *testing.T) {
 
 		count, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{{noOpArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(time.Minute)}}})
 		require.NoError(t, err)
-		require.Equal(t, int64(1), count)
+		require.Equal(t, 1, count)
 
 		insertedJobs, err := client.driver.UnwrapExecutor(bundle.tx).JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
 		require.NoError(t, err)
@@ -1321,7 +1321,7 @@ func Test_Client_InsertManyTx(t *testing.T) {
 			{Args: noOpArgs{}},
 		})
 		require.NoError(t, err)
-		require.Equal(t, int64(1), count)
+		require.Equal(t, 1, count)
 	})
 
 	t.Run("ErrorsWithZeroJobs", func(t *testing.T) {
@@ -1331,7 +1331,7 @@ func Test_Client_InsertManyTx(t *testing.T) {
 
 		count, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{})
 		require.EqualError(t, err, "no jobs to insert")
-		require.Equal(t, int64(0), count)
+		require.Equal(t, 0, count)
 	})
 
 	t.Run("ErrorsOnUnknownJobKindWithWorkers", func(t *testing.T) {
@@ -1345,7 +1345,7 @@ func Test_Client_InsertManyTx(t *testing.T) {
 		var unknownJobKindErr *UnknownJobKindError
 		require.ErrorAs(t, err, &unknownJobKindErr)
 		require.Equal(t, (&unregisteredJobArgs{}).Kind(), unknownJobKindErr.Kind)
-		require.Equal(t, int64(0), count)
+		require.Equal(t, 0, count)
 	})
 
 	t.Run("AllowsUnknownJobKindWithoutWorkers", func(t *testing.T) {
@@ -1370,7 +1370,7 @@ func Test_Client_InsertManyTx(t *testing.T) {
 			{Args: noOpArgs{}, InsertOpts: &InsertOpts{UniqueOpts: UniqueOpts{ByArgs: true}}},
 		})
 		require.EqualError(t, err, "UniqueOpts are not supported for batch inserts")
-		require.Equal(t, int64(0), count)
+		require.Equal(t, 0, count)
 	})
 }
 

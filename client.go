@@ -1342,7 +1342,7 @@ type InsertManyParams struct {
 //	if err != nil {
 //		// handle error
 //	}
-func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams) (int64, error) {
+func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams) (int, error) {
 	if !c.driver.HasPool() {
 		return 0, errNoDriverDBPool
 	}
@@ -1374,7 +1374,7 @@ func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams)
 // This variant lets a caller insert jobs atomically alongside other database
 // changes. An inserted job isn't visible to be worked until the transaction
 // commits, and if the transaction rolls back, so too is the inserted job.
-func (c *Client[TTx]) InsertManyTx(ctx context.Context, tx TTx, params []InsertManyParams) (int64, error) {
+func (c *Client[TTx]) InsertManyTx(ctx context.Context, tx TTx, params []InsertManyParams) (int, error) {
 	insertParams, err := c.insertManyParams(params)
 	if err != nil {
 		return 0, err

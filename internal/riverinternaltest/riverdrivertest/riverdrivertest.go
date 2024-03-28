@@ -701,7 +701,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 
 		count, err := exec.JobInsertFastMany(ctx, insertParams)
 		require.NoError(t, err)
-		require.Len(t, insertParams, int(count))
+		require.Len(t, insertParams, count)
 
 		jobsAfter, err := exec.JobGetByKindMany(ctx, []string{"test_kind"})
 		require.NoError(t, err)
