@@ -72,7 +72,7 @@ func Example_jobCancelFromClient() {
 	if err := riverClient.Start(ctx); err != nil {
 		panic(err)
 	}
-	job, err := riverClient.Insert(ctx, CancellingArgs{ShouldCancel: true}, nil)
+	insertRes, err := riverClient.Insert(ctx, CancellingArgs{ShouldCancel: true}, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -88,7 +88,7 @@ func Example_jobCancelFromClient() {
 	// cancellation signal.
 	time.Sleep(500 * time.Millisecond)
 
-	if _, err = riverClient.JobCancel(ctx, job.ID); err != nil {
+	if _, err = riverClient.JobCancel(ctx, insertRes.Job.ID); err != nil {
 		panic(err)
 	}
 	waitForNJobs(subscribeChan, 1)

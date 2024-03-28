@@ -13,6 +13,19 @@ import (
 // return this error.
 var ErrNotFound = errors.New("not found")
 
+// JobInsertResult is the result of a job insert, containing the inserted job
+// along with some other useful metadata.
+type JobInsertResult struct {
+	// Job is a struct containing the database persisted properties of the
+	// inserted job.
+	Job *JobRow
+
+	// UniqueSkippedAsDuplicate is true if for a unique job, the insertion was
+	// skipped due to an equivalent job matching unique property already being
+	// present.
+	UniqueSkippedAsDuplicate bool
+}
+
 // JobRow contains the properties of a job that are persisted to the database.
 // Use of `Job[T]` will generally be preferred in user-facing code like worker
 // interfaces.

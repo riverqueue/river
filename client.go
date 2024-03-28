@@ -1273,7 +1273,7 @@ var errNoDriverDBPool = errors.New("driver must have non-nil database pool to us
 //	if err != nil {
 //		// handle error
 //	}
-func (c *Client[TTx]) Insert(ctx context.Context, args JobArgs, opts *InsertOpts) (*rivertype.JobRow, error) {
+func (c *Client[TTx]) Insert(ctx context.Context, args JobArgs, opts *InsertOpts) (*rivertype.JobInsertResult, error) {
 	if !c.driver.HasPool() {
 		return nil, errNoDriverDBPool
 	}
@@ -1295,11 +1295,11 @@ func (c *Client[TTx]) Insert(ctx context.Context, args JobArgs, opts *InsertOpts
 // This variant lets a caller insert jobs atomically alongside other database
 // changes. An inserted job isn't visible to be worked until the transaction
 // commits, and if the transaction rolls back, so too is the inserted job.
-func (c *Client[TTx]) InsertTx(ctx context.Context, tx TTx, args JobArgs, opts *InsertOpts) (*rivertype.JobRow, error) {
+func (c *Client[TTx]) InsertTx(ctx context.Context, tx TTx, args JobArgs, opts *InsertOpts) (*rivertype.JobInsertResult, error) {
 	return c.insert(ctx, c.driver.UnwrapExecutor(tx), args, opts)
 }
 
-func (c *Client[TTx]) insert(ctx context.Context, exec riverdriver.Executor, args JobArgs, opts *InsertOpts) (*rivertype.JobRow, error) {
+func (c *Client[TTx]) insert(ctx context.Context, exec riverdriver.Executor, args JobArgs, opts *InsertOpts) (*rivertype.JobInsertResult, error) {
 	if err := c.validateJobArgs(args); err != nil {
 		return nil, err
 	}
@@ -1314,7 +1314,7 @@ func (c *Client[TTx]) insert(ctx context.Context, exec riverdriver.Executor, arg
 		return nil, err
 	}
 
-	return jobInsertRes.Job, nil
+	return jobInsertRes, nil
 }
 
 // InsertManyParams encapsulates a single job combined with insert options for
@@ -1342,6 +1342,10 @@ type InsertManyParams struct {
 //	if err != nil {
 //		// handle error
 //	}
+//
+// Job uniqueness is not respected when using InsertMany due to unique inserts
+// using an internal transaction and advisory lock that might lead to
+// significant lock contention. Insert unique jobs using Insert instead.
 func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams) (int, error) {
 	if !c.driver.HasPool() {
 		return 0, errNoDriverDBPool
@@ -1370,6 +1374,10 @@ func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams)
 //	if err != nil {
 //		// handle error
 //	}
+//
+// Job uniqueness is not respected when using InsertManyTx due to unique inserts
+// using an internal transaction and advisory lock that might lead to
+// significant lock contention. Insert unique jobs using InsertTx instead.
 //
 // This variant lets a caller insert jobs atomically alongside other database
 // changes. An inserted job isn't visible to be worked until the transaction
