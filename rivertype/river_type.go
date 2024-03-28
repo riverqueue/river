@@ -130,3 +130,8 @@ type AttemptError struct {
 	// produced by invoking `debug.Trace()`.
 	Trace string `json:"trace"`
 }
+
+// PeriodicJobHandle is a reference to a dynamically added periodic job
+// (returned by the use of `Client.PeriodicJobs().Add()`) which can be used to
+// subsequently remove the periodic job with `Remove()`.
+type PeriodicJobHandle int

@@ -67,19 +67,6 @@ func BaseServiceArchetype(tb testing.TB) *baseservice.Archetype {
 	}
 }
 
-// BaseServiceArchetypeDebug returns a new base service suitable for use in
-// tests with debug logging enabled. Useful for swapping into tests for
-// debugging, where additional context is often useful.
-func BaseServiceArchetypeDebug(tb testing.TB) *baseservice.Archetype {
-	tb.Helper()
-
-	return &baseservice.Archetype{
-		Logger:     LoggerDebug(tb),
-		Rand:       rand,
-		TimeNowUTC: func() time.Time { return time.Now().UTC() },
-	}
-}
-
 func DatabaseConfig(databaseName string) *pgxpool.Config {
 	config, err := pgxpool.ParseConfig(DatabaseURL(databaseName))
 	if err != nil {
@@ -193,16 +180,17 @@ func DrainContinuously[T any](drainChan <-chan T) func() []T {
 }
 
 // Logger returns a logger suitable for use in tests.
+//
+// Defaults to informational verbosity. If env is set with `RIVER_DEBU=true`,
+// debug level verbosity is activated.
 func Logger(tb testing.TB) *slog.Logger {
 	tb.Helper()
-	return slogtest.NewLogger(tb, nil)
-}
 
-// Logger returns a logger suitable for use in tests which outputs only at debug
-// or above. Useful when debugging tests where more output would be useful.
-func LoggerDebug(tb testing.TB) *slog.Logger {
-	tb.Helper()
-	return slogtest.NewLogger(tb, &slog.HandlerOptions{Level: slog.LevelDebug})
+	if os.Getenv("RIVER_DEBUG") == "1" || os.Getenv("RIVER_DEBUG") == "true" {
+		return slogtest.NewLogger(tb, &slog.HandlerOptions{Level: slog.LevelDebug})
+	}
+
+	return slogtest.NewLogger(tb, nil)
 }
 
 // Logger returns a logger suitable for use in tests which outputs only at warn

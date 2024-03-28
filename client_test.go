@@ -1967,7 +1967,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		requireJobHasState(jobInFuture3.ID, jobInFuture3.State)
 	})
 
-	t.Run("PeriodicJobEnqueuerWithOpts", func(t *testing.T) {
+	t.Run("PeriodicJobEnqueuerWithInsertOpts", func(t *testing.T) {
 		t.Parallel()
 
 		config := newTestConfig(t, nil)
@@ -1992,7 +1992,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		require.Len(t, jobs, 1, "Expected to find exactly one job of kind: "+(periodicJobArgs{}).Kind())
 	})
 
-	t.Run("PeriodicJobEnqueuerNoOpts", func(t *testing.T) {
+	t.Run("PeriodicJobEnqueuerNoInsertOpts", func(t *testing.T) {
 		t.Parallel()
 
 		config := newTestConfig(t, nil)
@@ -2016,6 +2016,90 @@ func Test_Client_Maintenance(t *testing.T) {
 		jobs, err := exec.JobGetByKindMany(ctx, []string{(periodicJobArgs{}).Kind()})
 		require.NoError(t, err)
 		require.Empty(t, jobs)
+	})
+
+	t.Run("PeriodicJobEnqueuerAddDynamically", func(t *testing.T) {
+		t.Parallel()
+
+		config := newTestConfig(t, nil)
+
+		worker := &periodicJobWorker{}
+		AddWorker(config.Workers, worker)
+
+		client := runNewTestClient(ctx, t, config)
+		exec := client.driver.GetExecutor()
+
+		client.testSignals.electedLeader.WaitOrTimeout()
+
+		client.PeriodicJobs().Add(
+			NewPeriodicJob(cron.Every(15*time.Minute), func() (JobArgs, *InsertOpts) {
+				return periodicJobArgs{}, nil
+			}, &PeriodicJobOpts{RunOnStart: true}),
+		)
+
+		svc := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
+		svc.TestSignals.EnteredLoop.WaitOrTimeout()
+		svc.TestSignals.InsertedJobs.WaitOrTimeout()
+
+		// We get a queued job because RunOnStart was specified.
+		jobs, err := exec.JobGetByKindMany(ctx, []string{(periodicJobArgs{}).Kind()})
+		require.NoError(t, err)
+		require.Len(t, jobs, 1)
+	})
+
+	t.Run("PeriodicJobEnqueuerRemoveDynamically", func(t *testing.T) {
+		t.Parallel()
+
+		config := newTestConfig(t, nil)
+
+		worker := &periodicJobWorker{}
+		AddWorker(config.Workers, worker)
+
+		client := newTestClient(t, riverinternaltest.TestDB(ctx, t), config)
+		exec := client.driver.GetExecutor()
+
+		handle := client.PeriodicJobs().Add(
+			NewPeriodicJob(cron.Every(15*time.Minute), func() (JobArgs, *InsertOpts) {
+				return periodicJobArgs{}, nil
+			}, &PeriodicJobOpts{RunOnStart: true}),
+		)
+
+		startClient(ctx, t, client)
+
+		client.testSignals.electedLeader.WaitOrTimeout()
+
+		svc := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
+		svc.TestSignals.EnteredLoop.WaitOrTimeout()
+		svc.TestSignals.InsertedJobs.WaitOrTimeout()
+
+		client.PeriodicJobs().Remove(handle)
+
+		type OtherPeriodicArgs struct {
+			JobArgsReflectKind[OtherPeriodicArgs]
+		}
+
+		client.PeriodicJobs().Add(
+			NewPeriodicJob(cron.Every(15*time.Minute), func() (JobArgs, *InsertOpts) {
+				return OtherPeriodicArgs{}, nil
+			}, &PeriodicJobOpts{RunOnStart: true}),
+		)
+
+		svc.TestSignals.InsertedJobs.WaitOrTimeout()
+
+		// One of each because the first periodic job was inserted on the first
+		// go around due to RunOnStart, but then subsequently removed. The next
+		// periodic job was inserted also due to RunOnStart, but only after the
+		// first was removed.
+		{
+			jobs, err := exec.JobGetByKindMany(ctx, []string{(periodicJobArgs{}).Kind()})
+			require.NoError(t, err)
+			require.Len(t, jobs, 1)
+		}
+		{
+			jobs, err := exec.JobGetByKindMany(ctx, []string{(OtherPeriodicArgs{}).Kind()})
+			require.NoError(t, err)
+			require.Len(t, jobs, 1)
+		}
 	})
 
 	t.Run("Reindexer", func(t *testing.T) {

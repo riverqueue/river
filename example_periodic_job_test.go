@@ -79,6 +79,19 @@ func Example_periodicJob() {
 
 	waitForNJobs(subscribeChan, 1)
 
+	// Periodic jobs can also be configured dynamically after a client has
+	// already started. Added jobs are scheduled for run immediately.
+	riverClient.PeriodicJobs().Clear()
+	riverClient.PeriodicJobs().Add(
+		river.NewPeriodicJob(
+			river.PeriodicInterval(15*time.Minute),
+			func() (river.JobArgs, *river.InsertOpts) {
+				return PeriodicJobArgs{}, nil
+			},
+			nil,
+		),
+	)
+
 	if err := riverClient.Stop(ctx); err != nil {
 		panic(err)
 	}
