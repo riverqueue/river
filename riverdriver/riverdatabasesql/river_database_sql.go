@@ -109,7 +109,7 @@ func (e *Executor) JobInsertFast(ctx context.Context, params *riverdriver.JobIns
 	return nil, riverdriver.ErrNotImplemented
 }
 
-func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.JobInsertFastParams) (int64, error) {
+func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.JobInsertFastParams) (int, error) {
 	return 0, riverdriver.ErrNotImplemented
 }
 

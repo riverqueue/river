@@ -85,7 +85,7 @@ type Executor interface {
 	JobGetByKindMany(ctx context.Context, kind []string) ([]*rivertype.JobRow, error)
 	JobGetStuck(ctx context.Context, params *JobGetStuckParams) ([]*rivertype.JobRow, error)
 	JobInsertFast(ctx context.Context, params *JobInsertFastParams) (*rivertype.JobRow, error)
-	JobInsertFastMany(ctx context.Context, params []*JobInsertFastParams) (int64, error)
+	JobInsertFastMany(ctx context.Context, params []*JobInsertFastParams) (int, error)
 	JobInsertFull(ctx context.Context, params *JobInsertFullParams) (*rivertype.JobRow, error)
 	JobList(ctx context.Context, sql string, namedArgs map[string]any) ([]*rivertype.JobRow, error)
 	JobListFields() string
