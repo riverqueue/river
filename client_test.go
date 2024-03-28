@@ -249,7 +249,7 @@ func Test_Client(t *testing.T) {
 
 		startClient(ctx, t, client)
 
-		insertedJob, err := client.Insert(ctx, &JobArgs{}, nil)
+		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
 		require.NoError(t, err)
 
 		event := riverinternaltest.WaitOrTimeout(t, bundle.subscribeChan)
@@ -257,7 +257,7 @@ func Test_Client(t *testing.T) {
 		require.Equal(t, JobStateCancelled, event.Job.State)
 		require.WithinDuration(t, time.Now(), *event.Job.FinalizedAt, 2*time.Second)
 
-		updatedJob, err := client.JobGet(ctx, insertedJob.ID)
+		updatedJob, err := client.JobGet(ctx, insertRes.Job.ID)
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateCancelled, updatedJob.State)
 		require.WithinDuration(t, time.Now(), *updatedJob.FinalizedAt, 2*time.Second)
@@ -278,7 +278,7 @@ func Test_Client(t *testing.T) {
 
 		startClient(ctx, t, client)
 
-		insertedJob, err := client.Insert(ctx, &JobArgs{}, nil)
+		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
 		require.NoError(t, err)
 
 		event := riverinternaltest.WaitOrTimeout(t, bundle.subscribeChan)
@@ -286,7 +286,7 @@ func Test_Client(t *testing.T) {
 		require.Equal(t, JobStateScheduled, event.Job.State)
 		require.WithinDuration(t, time.Now().Add(15*time.Minute), event.Job.ScheduledAt, 2*time.Second)
 
-		updatedJob, err := client.JobGet(ctx, insertedJob.ID)
+		updatedJob, err := client.JobGet(ctx, insertRes.Job.ID)
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateScheduled, updatedJob.State)
 		require.WithinDuration(t, time.Now().Add(15*time.Minute), updatedJob.ScheduledAt, 2*time.Second)
@@ -315,14 +315,14 @@ func Test_Client(t *testing.T) {
 		startClient(ctx, t, client)
 		waitForClientHealthy(ctx, t, statusUpdateCh)
 
-		insertedJob, err := client.Insert(ctx, &JobArgs{}, nil)
+		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
 		require.NoError(t, err)
 
 		startedJobID := riverinternaltest.WaitOrTimeout(t, jobStartedChan)
-		require.Equal(t, insertedJob.ID, startedJobID)
+		require.Equal(t, insertRes.Job.ID, startedJobID)
 
 		// Cancel the job:
-		updatedJob, err := cancelFunc(ctx, bundle.dbPool, client, insertedJob.ID)
+		updatedJob, err := cancelFunc(ctx, bundle.dbPool, client, insertRes.Job.ID)
 		require.NoError(t, err)
 		require.NotNil(t, updatedJob)
 		// Job is still actively running at this point because the query wouldn't
@@ -334,7 +334,7 @@ func Test_Client(t *testing.T) {
 		require.Equal(t, JobStateCancelled, event.Job.State)
 		require.WithinDuration(t, time.Now(), *event.Job.FinalizedAt, 2*time.Second)
 
-		jobAfterCancel, err := client.JobGet(ctx, insertedJob.ID)
+		jobAfterCancel, err := client.JobGet(ctx, insertRes.Job.ID)
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateCancelled, jobAfterCancel.State)
 		require.WithinDuration(t, time.Now(), *jobAfterCancel.FinalizedAt, 2*time.Second)
@@ -384,11 +384,11 @@ func Test_Client(t *testing.T) {
 
 		startClient(ctx, t, client)
 
-		insertedJob, err := client.Insert(ctx, &JobArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(5 * time.Minute)})
+		insertRes, err := client.Insert(ctx, &JobArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(5 * time.Minute)})
 		require.NoError(t, err)
 
 		// Cancel the job:
-		updatedJob, err := client.JobCancel(ctx, insertedJob.ID)
+		updatedJob, err := client.JobCancel(ctx, insertRes.Job.ID)
 		require.NoError(t, err)
 		require.NotNil(t, updatedJob)
 		require.Equal(t, rivertype.JobStateCancelled, updatedJob.State)
@@ -476,11 +476,11 @@ func Test_Client(t *testing.T) {
 
 		startClient(ctx, t, client)
 
-		insertedJob, err := client.Insert(ctx, &JobArgs{}, nil)
+		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
 		require.NoError(t, err)
 
 		startedJobID := riverinternaltest.WaitOrTimeout(t, jobStartedChan)
-		require.Equal(t, insertedJob.ID, startedJobID)
+		require.Equal(t, insertRes.Job.ID, startedJobID)
 
 		select {
 		case <-client.Stopped():
@@ -564,7 +564,7 @@ func Test_Client_Stop(t *testing.T) {
 		defer cancel()
 
 		// enqueue job:
-		insertedJob, err := client.Insert(ctx, callbackArgs{}, nil)
+		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 		require.NoError(err)
 
 		var startedJobID int64
@@ -573,7 +573,7 @@ func Test_Client_Stop(t *testing.T) {
 		case <-time.After(500 * time.Millisecond):
 			t.Fatal("timed out waiting for job to start")
 		}
-		require.Equal(insertedJob.ID, startedJobID)
+		require.Equal(insertRes.Job.ID, startedJobID)
 
 		// Should not shut down immediately, not until jobs are given the signal to
 		// complete:
@@ -609,11 +609,11 @@ func Test_Client_Stop(t *testing.T) {
 
 		client := runNewTestClient(ctx, t, newTestConfig(t, callbackFunc))
 
-		insertedJob, err := client.Insert(ctx, callbackArgs{}, nil)
+		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 		require.NoError(t, err)
 
 		startedJobID := riverinternaltest.WaitOrTimeout(t, jobStartedChan)
-		require.Equal(t, insertedJob.ID, startedJobID)
+		require.Equal(t, insertRes.Job.ID, startedJobID)
 
 		go func() {
 			<-time.After(100 * time.Millisecond)
@@ -721,11 +721,11 @@ func Test_Client_StopAndCancel(t *testing.T) {
 		config := newTestConfig(t, callbackFunc)
 		client := runNewTestClient(ctx, t, config)
 
-		insertedJob, err := client.Insert(ctx, callbackArgs{}, nil)
+		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 		require.NoError(t, err)
 
 		startedJobID := riverinternaltest.WaitOrTimeout(t, jobStartedChan)
-		require.Equal(t, insertedJob.ID, startedJobID)
+		require.Equal(t, insertRes.Job.ID, startedJobID)
 
 		t.Logf("Initiating hard stop, while jobs are still in progress")
 
@@ -869,8 +869,9 @@ func Test_Client_Insert(t *testing.T) {
 
 		client, _ := setup(t)
 
-		jobRow, err := client.Insert(ctx, &noOpArgs{}, nil)
+		insertRes, err := client.Insert(ctx, &noOpArgs{}, nil)
 		require.NoError(t, err)
+		jobRow := insertRes.Job
 		require.Equal(t, 0, jobRow.Attempt)
 		require.Equal(t, rivercommon.MaxAttemptsDefault, jobRow.MaxAttempts)
 		require.JSONEq(t, "{}", string(jobRow.Metadata))
@@ -885,13 +886,14 @@ func Test_Client_Insert(t *testing.T) {
 
 		client, _ := setup(t)
 
-		jobRow, err := client.Insert(ctx, &noOpArgs{}, &InsertOpts{
+		insertRes, err := client.Insert(ctx, &noOpArgs{}, &InsertOpts{
 			MaxAttempts: 17,
 			Metadata:    []byte(`{"foo": "bar"}`),
 			Priority:    3,
 			Queue:       "custom",
 			Tags:        []string{"custom"},
 		})
+		jobRow := insertRes.Job
 		require.NoError(t, err)
 		require.Equal(t, 0, jobRow.Attempt)
 		require.Equal(t, 17, jobRow.MaxAttempts)
@@ -908,11 +910,11 @@ func Test_Client_Insert(t *testing.T) {
 
 		client, _ := setup(t)
 
-		jobRow, err := client.Insert(ctx, &noOpArgs{}, &InsertOpts{
+		insertRes, err := client.Insert(ctx, &noOpArgs{}, &InsertOpts{
 			ScheduledAt: time.Time{},
 		})
 		require.NoError(t, err)
-		require.WithinDuration(t, time.Now(), jobRow.ScheduledAt, 2*time.Second)
+		require.WithinDuration(t, time.Now(), insertRes.Job.ScheduledAt, 2*time.Second)
 	})
 
 	t.Run("ErrorsOnInvalidQueueName", func(t *testing.T) {
@@ -991,8 +993,9 @@ func Test_Client_InsertTx(t *testing.T) {
 
 		client, bundle := setup(t)
 
-		jobRow, err := client.InsertTx(ctx, bundle.tx, &noOpArgs{}, nil)
+		insertRes, err := client.InsertTx(ctx, bundle.tx, &noOpArgs{}, nil)
 		require.NoError(t, err)
+		jobRow := insertRes.Job
 		require.Equal(t, 0, jobRow.Attempt)
 		require.Equal(t, rivercommon.MaxAttemptsDefault, jobRow.MaxAttempts)
 		require.Equal(t, (&noOpArgs{}).Kind(), jobRow.Kind)
@@ -1010,12 +1013,13 @@ func Test_Client_InsertTx(t *testing.T) {
 
 		client, bundle := setup(t)
 
-		jobRow, err := client.InsertTx(ctx, bundle.tx, &noOpArgs{}, &InsertOpts{
+		insertRes, err := client.InsertTx(ctx, bundle.tx, &noOpArgs{}, &InsertOpts{
 			MaxAttempts: 17,
 			Priority:    3,
 			Queue:       "custom",
 			Tags:        []string{"custom"},
 		})
+		jobRow := insertRes.Job
 		require.NoError(t, err)
 		require.Equal(t, 0, jobRow.Attempt)
 		require.Equal(t, 17, jobRow.MaxAttempts)
@@ -1353,15 +1357,14 @@ func Test_Client_JobGet(t *testing.T) {
 
 		client, _ := setup(t)
 
-		newJob, err := client.Insert(ctx, noOpArgs{}, nil)
+		insertRes, err := client.Insert(ctx, noOpArgs{}, nil)
 		require.NoError(t, err)
 
-		job, err := client.JobGet(ctx, newJob.ID)
+		job, err := client.JobGet(ctx, insertRes.Job.ID)
 		require.NoError(t, err)
-		require.NotNil(t, job)
 
-		require.Equal(t, newJob.ID, job.ID)
-		require.Equal(t, newJob.State, job.State)
+		require.Equal(t, insertRes.Job.ID, job.ID)
+		require.Equal(t, insertRes.Job.State, job.State)
 	})
 
 	t.Run("ReturnsErrNotFoundIfJobDoesNotExist", func(t *testing.T) {
@@ -1624,11 +1627,11 @@ func Test_Client_JobRetry(t *testing.T) {
 
 		client, _ := setup(t)
 
-		newJob, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(time.Hour)})
+		insertRes, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(time.Hour)})
 		require.NoError(t, err)
-		require.Equal(t, rivertype.JobStateScheduled, newJob.State)
+		require.Equal(t, rivertype.JobStateScheduled, insertRes.Job.State)
 
-		job, err := client.JobRetry(ctx, newJob.ID)
+		job, err := client.JobRetry(ctx, insertRes.Job.ID)
 		require.NoError(t, err)
 		require.NotNil(t, job)
 
@@ -1641,15 +1644,15 @@ func Test_Client_JobRetry(t *testing.T) {
 
 		client, bundle := setup(t)
 
-		newJob, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(time.Hour)})
+		insertRes, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(time.Hour)})
 		require.NoError(t, err)
-		require.Equal(t, rivertype.JobStateScheduled, newJob.State)
+		require.Equal(t, rivertype.JobStateScheduled, insertRes.Job.State)
 
 		var jobAfter *rivertype.JobRow
 
 		err = pgx.BeginFunc(ctx, bundle.dbPool, func(tx pgx.Tx) error {
 			var err error
-			jobAfter, err = client.JobRetryTx(ctx, tx, newJob.ID)
+			jobAfter, err = client.JobRetryTx(ctx, tx, insertRes.Job.ID)
 			return err
 		})
 		require.NoError(t, err)
@@ -1692,9 +1695,9 @@ func Test_Client_ErrorHandler(t *testing.T) {
 	}
 
 	requireInsert := func(ctx context.Context, client *Client[pgx.Tx]) *rivertype.JobRow {
-		job, err := client.Insert(ctx, callbackArgs{}, nil)
+		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 		require.NoError(t, err)
-		return job
+		return insertRes.Job
 	}
 
 	t.Run("ErrorHandler", func(t *testing.T) {
@@ -2125,9 +2128,9 @@ func Test_Client_RetryPolicy(t *testing.T) {
 	ctx := context.Background()
 
 	requireInsert := func(ctx context.Context, client *Client[pgx.Tx]) *rivertype.JobRow {
-		job, err := client.Insert(ctx, callbackArgs{}, nil)
+		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 		require.NoError(t, err)
-		return job
+		return insertRes.Job
 	}
 
 	t.Run("RetryUntilDiscarded", func(t *testing.T) {
@@ -2248,9 +2251,9 @@ func Test_Client_Subscribe(t *testing.T) {
 	}
 
 	requireInsert := func(ctx context.Context, client *Client[pgx.Tx], jobName string) *rivertype.JobRow {
-		job, err := client.Insert(ctx, callbackArgs{Name: jobName}, nil)
+		insertRes, err := client.Insert(ctx, callbackArgs{Name: jobName}, nil)
 		require.NoError(t, err)
-		return job
+		return insertRes.Job
 	}
 
 	t.Run("Success", func(t *testing.T) {
@@ -2463,9 +2466,9 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 	}
 
 	requireInsert := func(ctx context.Context, client *Client[pgx.Tx], jobName string) *rivertype.JobRow {
-		job, err := client.Insert(ctx, callbackArgs{Name: jobName}, nil)
+		insertRes, err := client.Insert(ctx, callbackArgs{Name: jobName}, nil)
 		require.NoError(t, err)
-		return job
+		return insertRes.Job
 	}
 
 	t.Run("Success", func(t *testing.T) {
@@ -2677,13 +2680,13 @@ func Test_Client_InsertTriggersImmediateWork(t *testing.T) {
 	startClient(ctx, t, client)
 	waitForClientHealthy(ctx, t, statusUpdateCh)
 
-	insertedJob, err := client.Insert(ctx, callbackArgs{}, nil)
+	insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 	require.NoError(err)
 
 	// Wait for the client to be ready by waiting for a job to be executed:
 	select {
 	case jobID := <-startedCh:
-		require.Equal(insertedJob.ID, jobID)
+		require.Equal(insertRes.Job.ID, jobID)
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for warmup job to start")
 	}
@@ -2691,12 +2694,12 @@ func Test_Client_InsertTriggersImmediateWork(t *testing.T) {
 	// Now that we've run one job, we shouldn't take longer than the cooldown to
 	// fetch another after insertion. LISTEN/NOTIFY should ensure we find out
 	// about the inserted job much faster than the poll interval.
-	insertedJob2, err := client.Insert(ctx, callbackArgs{}, nil)
+	insertRes2, err := client.Insert(ctx, callbackArgs{}, nil)
 	require.NoError(err)
 
 	select {
 	case jobID := <-startedCh:
-		require.Equal(insertedJob2.ID, jobID)
+		require.Equal(insertRes2.Job.ID, jobID)
 	// As long as this is meaningfully shorter than the poll interval, we can be
 	// sure the re-fetch came from listen/notify.
 	case <-time.After(5 * time.Second):
@@ -2742,14 +2745,14 @@ func Test_Client_JobCompletion(t *testing.T) {
 
 		client, bundle := setup(t, config)
 
-		job, err := client.Insert(ctx, callbackArgs{}, nil)
+		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 		require.NoError(err)
 
 		event := riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
-		require.Equal(job.ID, event.Job.ID)
+		require.Equal(insertRes.Job.ID, event.Job.ID)
 		require.Equal(JobStateCompleted, event.Job.State)
 
-		reloadedJob, err := client.JobGet(ctx, job.ID)
+		reloadedJob, err := client.JobGet(ctx, insertRes.Job.ID)
 		require.NoError(err)
 
 		require.Equal(rivertype.JobStateCompleted, reloadedJob.State)
@@ -2777,14 +2780,14 @@ func Test_Client_JobCompletion(t *testing.T) {
 		client, bundle := setup(t, config)
 		exec = client.driver.GetExecutor()
 
-		job, err := client.Insert(ctx, callbackArgs{}, nil)
+		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 		require.NoError(err)
 
 		event := riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
-		require.Equal(job.ID, event.Job.ID)
+		require.Equal(insertRes.Job.ID, event.Job.ID)
 		require.Equal(JobStateCompleted, event.Job.State)
 
-		reloadedJob, err := client.JobGet(ctx, job.ID)
+		reloadedJob, err := client.JobGet(ctx, insertRes.Job.ID)
 		require.NoError(err)
 
 		require.Equal(rivertype.JobStateCompleted, reloadedJob.State)
@@ -2801,14 +2804,14 @@ func Test_Client_JobCompletion(t *testing.T) {
 
 		client, bundle := setup(t, config)
 
-		job, err := client.Insert(ctx, callbackArgs{}, nil)
+		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 		require.NoError(err)
 
 		event := riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
-		require.Equal(job.ID, event.Job.ID)
+		require.Equal(insertRes.Job.ID, event.Job.ID)
 		require.Equal(JobStateRetryable, event.Job.State)
 
-		reloadedJob, err := client.JobGet(ctx, job.ID)
+		reloadedJob, err := client.JobGet(ctx, insertRes.Job.ID)
 		require.NoError(err)
 
 		require.Equal(rivertype.JobStateRetryable, reloadedJob.State)
@@ -2826,14 +2829,14 @@ func Test_Client_JobCompletion(t *testing.T) {
 
 		client, bundle := setup(t, config)
 
-		job, err := client.Insert(ctx, callbackArgs{}, nil)
+		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 		require.NoError(err)
 
 		event := riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
-		require.Equal(job.ID, event.Job.ID)
+		require.Equal(insertRes.Job.ID, event.Job.ID)
 		require.Equal(JobStateCancelled, event.Job.State)
 
-		reloadedJob, err := client.JobGet(ctx, job.ID)
+		reloadedJob, err := client.JobGet(ctx, insertRes.Job.ID)
 		require.NoError(err)
 
 		require.Equal(rivertype.JobStateCancelled, reloadedJob.State)
@@ -2867,14 +2870,14 @@ func Test_Client_JobCompletion(t *testing.T) {
 			return errors.New("oops")
 		}))
 
-		job, err := client.Insert(ctx, JobArgs{}, nil)
+		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
 		require.NoError(err)
 
 		event := riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
-		require.Equal(job.ID, event.Job.ID)
+		require.Equal(insertRes.Job.ID, event.Job.ID)
 		require.Equal(JobStateDiscarded, event.Job.State)
 
-		reloadedJob, err := client.JobGet(ctx, job.ID)
+		reloadedJob, err := client.JobGet(ctx, insertRes.Job.ID)
 		require.NoError(err)
 
 		require.Equal(rivertype.JobStateDiscarded, reloadedJob.State)
@@ -2904,11 +2907,11 @@ func Test_Client_JobCompletion(t *testing.T) {
 			return tx.Commit(ctx)
 		}))
 
-		job, err := client.Insert(ctx, JobArgs{}, nil)
+		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
 		require.NoError(err)
 
 		event := riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
-		require.Equal(job.ID, event.Job.ID)
+		require.Equal(insertRes.Job.ID, event.Job.ID)
 		require.Equal(JobStateCompleted, event.Job.State)
 		require.Equal(JobStateCompleted, updatedJob.State)
 		require.NotNil(updatedJob)
@@ -2922,7 +2925,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		// updated job inside the txn:
 		require.WithinDuration(*updatedJob.FinalizedAt, *event.Job.FinalizedAt, time.Microsecond)
 
-		reloadedJob, err := client.JobGet(ctx, job.ID)
+		reloadedJob, err := client.JobGet(ctx, insertRes.Job.ID)
 		require.NoError(err)
 
 		require.Equal(rivertype.JobStateCompleted, reloadedJob.State)
@@ -3055,10 +3058,10 @@ func Test_NewClient_ClientIDWrittenToJobAttemptedByWhenFetched(t *testing.T) {
 	// enqueue job:
 	insertCtx, insertCancel := context.WithTimeout(ctx, 5*time.Second)
 	t.Cleanup(insertCancel)
-	insertedJob, err := client.Insert(insertCtx, callbackArgs{}, nil)
+	insertRes, err := client.Insert(insertCtx, callbackArgs{}, nil)
 	require.NoError(err)
-	require.Nil(insertedJob.AttemptedAt)
-	require.Empty(insertedJob.AttemptedBy)
+	require.Nil(insertRes.Job.AttemptedAt)
+	require.Empty(insertRes.Job.AttemptedBy)
 
 	var startedJob *Job[callbackArgs]
 	select {
@@ -3759,9 +3762,9 @@ func TestInsert(t *testing.T) {
 			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
 
-			insertedJob, err := client.Insert(ctx, tt.args, tt.opts)
+			insertRes, err := client.Insert(ctx, tt.args, tt.opts)
 			require.NoError(err)
-			tt.assert(t, &tt.args, tt.opts, insertedJob)
+			tt.assert(t, &tt.args, tt.opts, insertRes.Job)
 
 			// Also test InsertTx:
 			tx, err := dbPool.Begin(ctx)
@@ -3770,7 +3773,7 @@ func TestInsert(t *testing.T) {
 
 			insertedJob2, err := client.InsertTx(ctx, tx, tt.args, tt.opts)
 			require.NoError(err)
-			tt.assert(t, &tt.args, tt.opts, insertedJob2)
+			tt.assert(t, &tt.args, tt.opts, insertedJob2.Job)
 		})
 	}
 }
@@ -3804,18 +3807,20 @@ func TestUniqueOpts(t *testing.T) {
 			ByPeriod: 24 * time.Hour,
 		}
 
-		job0, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
+		insertRes0, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
 			UniqueOpts: uniqueOpts,
 		})
 		require.NoError(t, err)
+		require.False(t, insertRes0.UniqueSkippedAsDuplicate)
 
-		job1, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
+		insertRes1, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
 			UniqueOpts: uniqueOpts,
 		})
 		require.NoError(t, err)
+		require.True(t, insertRes1.UniqueSkippedAsDuplicate)
 
 		// Expect the same job to come back.
-		require.Equal(t, job0.ID, job1.ID)
+		require.Equal(t, insertRes0.Job.ID, insertRes1.Job.ID)
 	})
 
 	t.Run("UniqueByState", func(t *testing.T) {
@@ -3828,21 +3833,21 @@ func TestUniqueOpts(t *testing.T) {
 			ByState:  []rivertype.JobState{JobStateAvailable, JobStateCompleted},
 		}
 
-		job0, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
+		insertRes0, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
 			UniqueOpts: uniqueOpts,
 		})
 		require.NoError(t, err)
 
-		job1, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
+		insertRes1, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
 			UniqueOpts: uniqueOpts,
 		})
 		require.NoError(t, err)
 
 		// Expect the same job to come back because the original is either still
 		// `available` or `completed`, both which we deduplicate off of.
-		require.Equal(t, job0.ID, job1.ID)
+		require.Equal(t, insertRes0.Job.ID, insertRes1.Job.ID)
 
-		job2, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
+		insertRes2, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
 			// Use a scheduled time so the job's inserted in state `scheduled`
 			// instead of `available`.
 			ScheduledAt: time.Now().Add(1 * time.Hour),
@@ -3852,7 +3857,7 @@ func TestUniqueOpts(t *testing.T) {
 
 		// This job however is _not_ the same because it's inserted as
 		// `scheduled` which is outside the unique constraints.
-		require.NotEqual(t, job0.ID, job2.ID)
+		require.NotEqual(t, insertRes0.Job.ID, insertRes2.Job.ID)
 	})
 }
 
