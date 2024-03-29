@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking change:** JobList/JobListTx now support querying Jobs by a list of Job Kinds and States. Also allows for filtering by specific timestamp values. Thank you Jos Kraaijeveld (@thatjos)! 🙏🏻 [PR #236](https://github.com/riverqueue/river/pull/236).
+
 ## [0.3.0] - 2024-04-15
 
 ### Added
@@ -46,8 +50,6 @@ Although it comes with a number of improvements, there's nothing particularly no
 - River uses a new job completer that batches up completion work so that large numbers of them can be performed more efficiently. In a purely synthetic (i.e. mostly unrealistic) benchmark, River's job throughput increases ~4.5x. [PR #258](https://github.com/riverqueue/river/pull/258).
 - Changed default client IDs to be a combination of hostname and the time which the client started. This can still be changed by specifying `Config.ID`. [PR #255](https://github.com/riverqueue/river/pull/255).
 - Notifier refactored for better robustness and testability. [PR #253](https://github.com/riverqueue/river/pull/253).
-- JobList/JobListTx now support querying Jobs by a list of Job Kinds and States (breaking change). Also allows for filtering by specific timestamp values. [PR #236](https://github.com/riverqueue/river/pull/236).
-
 
 ## [0.0.25] - 2024-03-01
 

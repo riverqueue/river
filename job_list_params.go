@@ -28,19 +28,14 @@ func JobListCursorFromJob(job *rivertype.JobRow, sortField JobListOrderByField) 
 	switch sortField {
 	case JobListOrderByTime:
 		time = jobListTimeValue(job)
-	case JobListOrderByAttemptedAt:
-		if job.AttemptedAt != nil {
-			time = *job.AttemptedAt
-		}
 	case JobListOrderByFinalizedAt:
 		if job.FinalizedAt != nil {
 			time = *job.FinalizedAt
 		}
 	case JobListOrderByScheduledAt:
 		time = job.ScheduledAt
-	case JobListOrderByCreatedAt:
 	default:
-		// stick with created_at
+		panic("invalid sort field")
 	}
 	return &JobListCursor{
 		id:        job.ID,
@@ -116,11 +111,11 @@ const (
 type JobListOrderByField string
 
 const (
-	// JobListOrderByAttemptedAt specifies that the sort should be by attempted_at.
-	JobListOrderByAttemptedAt JobListOrderByField = "attempted_at"
-	// JobListOrderByCreatedAt specifies that the sort should be by created_at.
-	JobListOrderByCreatedAt JobListOrderByField = "created_at"
-	// JobListOrderByFinalizedAt specifies that the sort should be by finalized_at.
+	// JobListOrderByFinalizedAt specifies that the sort should be by
+	// finalized_at.
+	//
+	// This option must be used in conjunction with filtering by only finalized
+	// job states.
 	JobListOrderByFinalizedAt JobListOrderByField = "finalized_at"
 	// JobListOrderByScheduledAt specifies that the sort should be by scheduled_at.
 	JobListOrderByScheduledAt JobListOrderByField = "scheduled_at"
@@ -138,6 +133,7 @@ type JobListParams struct {
 	after            *JobListCursor
 	kinds            []string
 	metadataFragment string
+	overrodeState    bool
 	paginationCount  int32
 	queues           []string
 	sortField        JobListOrderByField
@@ -169,6 +165,7 @@ func (p *JobListParams) copy() *JobListParams {
 		after:            p.after,
 		kinds:            append([]string(nil), p.kinds...),
 		metadataFragment: p.metadataFragment,
+		overrodeState:    p.overrodeState,
 		paginationCount:  p.paginationCount,
 		queues:           append([]string(nil), p.queues...),
 		sortField:        p.sortField,
@@ -191,6 +188,23 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 		sortOrder = dblist.SortOrderDesc
 	default:
 		return nil, errors.New("invalid sort order")
+	}
+
+	if p.sortField == JobListOrderByFinalizedAt {
+		currentNonFinalizedStates := make([]rivertype.JobState, 0, len(p.states))
+		for _, state := range p.states {
+			//nolint:exhaustive
+			switch state {
+			case JobStateCancelled, JobStateCompleted, JobStateDiscarded:
+			default:
+				currentNonFinalizedStates = append(currentNonFinalizedStates, state)
+			}
+		}
+		// This indicates the user overrode the States list with only non-finalized
+		// states prior to then requesting FinalizedAt ordering.
+		if len(currentNonFinalizedStates) == 0 {
+			return nil, fmt.Errorf("cannot order by finalized_at with non-finalized state filters %+v", currentNonFinalizedStates)
+		}
 	}
 
 	var timeField string
@@ -291,11 +305,23 @@ func (p *JobListParams) Queues(queues ...string) *JobListParams {
 
 // OrderBy returns an updated filter set that will sort the results using the
 // specified field and direction.
+//
+// If ordering by FinalizedAt, the States filter will be set to only include
+// finalized job states unless it has already been overridden.
 func (p *JobListParams) OrderBy(field JobListOrderByField, direction SortOrder) *JobListParams {
 	result := p.copy()
 	switch field {
-	case JobListOrderByTime, JobListOrderByCreatedAt, JobListOrderByScheduledAt, JobListOrderByAttemptedAt, JobListOrderByFinalizedAt:
+	case JobListOrderByTime, JobListOrderByScheduledAt:
 		result.sortField = field
+	case JobListOrderByFinalizedAt:
+		result.sortField = field
+		if !p.overrodeState {
+			result.states = []rivertype.JobState{
+				JobStateCancelled,
+				JobStateCompleted,
+				JobStateDiscarded,
+			}
+		}
 	default:
 		panic("invalid order by field")
 	}
@@ -309,6 +335,7 @@ func (p *JobListParams) OrderBy(field JobListOrderByField, direction SortOrder) 
 func (p *JobListParams) States(states ...rivertype.JobState) *JobListParams {
 	result := p.copy()
 	result.states = make([]rivertype.JobState, len(states))
+	result.overrodeState = true
 	copy(result.states, states)
 	return result
 }
