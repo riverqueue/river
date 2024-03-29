@@ -89,3 +89,11 @@ type RiverMigration struct {
 	CreatedAt time.Time
 	Version   int64
 }
+
+type RiverQueue struct {
+	Name      string
+	CreatedAt time.Time
+	Metadata  []byte
+	PausedAt  *time.Time
+	UpdatedAt time.Time
+}

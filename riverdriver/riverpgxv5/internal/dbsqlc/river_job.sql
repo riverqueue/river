@@ -11,7 +11,7 @@ CREATE TYPE river_job_state AS ENUM(
 
 CREATE TABLE river_job(
     id bigserial PRIMARY KEY,
-    args jsonb NOT NULL,
+    args jsonb NOT NULL DEFAULT '{}'::jsonb,
     attempt smallint NOT NULL DEFAULT 0,
     attempted_at timestamptz,
     attempted_by text[],
@@ -26,7 +26,10 @@ CREATE TABLE river_job(
     state river_job_state NOT NULL DEFAULT 'available' ::river_job_state,
     scheduled_at timestamptz NOT NULL DEFAULT NOW(),
     tags varchar(255)[] NOT NULL DEFAULT '{}' ::varchar(255)[],
-    CONSTRAINT finalized_or_finalized_at_null CHECK ((state IN ('cancelled', 'completed', 'discarded') AND finalized_at IS NOT NULL) OR finalized_at IS NULL),
+    CONSTRAINT finalized_or_finalized_at_null CHECK (
+        (finalized_at IS NULL AND state NOT IN ('cancelled', 'completed', 'discarded')) OR
+        (finalized_at IS NOT NULL AND state IN ('cancelled', 'completed', 'discarded'))
+    ),
     CONSTRAINT priority_in_range CHECK (priority >= 1 AND priority <= 4),
     CONSTRAINT queue_length CHECK (char_length(queue) > 0 AND char_length(queue) < 128),
     CONSTRAINT kind_length CHECK (char_length(kind) > 0 AND char_length(kind) < 128)

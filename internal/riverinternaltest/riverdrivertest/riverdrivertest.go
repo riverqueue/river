@@ -1727,6 +1727,269 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 				require.FailNow(t, "Goroutine didn't finish in a timely manner")
 			}
 		}
+
+		t.Run("QueueCreateOrSetUpdatedAt", func(t *testing.T) {
+			t.Run("InsertsANewQueueWithDefaultUpdatedAt", func(t *testing.T) {
+				t.Parallel()
+
+				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+				metadata := []byte(`{"foo": "bar"}`)
+				queue, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
+					Metadata: metadata,
+					Name:     "new-queue",
+				})
+				require.NoError(t, err)
+				require.WithinDuration(t, time.Now(), queue.CreatedAt, 500*time.Millisecond)
+				require.Equal(t, metadata, queue.Metadata)
+				require.Equal(t, "new-queue", queue.Name)
+				require.Nil(t, queue.PausedAt)
+				require.WithinDuration(t, time.Now(), queue.UpdatedAt, 500*time.Millisecond)
+			})
+
+			t.Run("InsertsANewQueueWithCustomPausedAt", func(t *testing.T) {
+				t.Parallel()
+
+				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+				now := time.Now().Add(-5 * time.Minute)
+				queue, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
+					Name:     "new-queue",
+					PausedAt: ptrutil.Ptr(now),
+				})
+				require.NoError(t, err)
+				require.Equal(t, "new-queue", queue.Name)
+				require.WithinDuration(t, now, *queue.PausedAt, time.Millisecond)
+			})
+
+			t.Run("UpdatesTheUpdatedAtOfExistingQueue", func(t *testing.T) {
+				t.Parallel()
+
+				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+				metadata := []byte(`{"foo": "bar"}`)
+				tBefore := time.Now().UTC()
+				queueBefore, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
+					Metadata:  metadata,
+					Name:      "updateable-queue",
+					UpdatedAt: &tBefore,
+				})
+				require.NoError(t, err)
+				require.WithinDuration(t, tBefore, queueBefore.UpdatedAt, time.Millisecond)
+
+				tAfter := tBefore.Add(2 * time.Second)
+				queueAfter, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
+					Metadata:  []byte(`{"other": "metadata"}`),
+					Name:      "updateable-queue",
+					UpdatedAt: &tAfter,
+				})
+				require.NoError(t, err)
+
+				// unchanged:
+				require.Equal(t, queueBefore.CreatedAt, queueAfter.CreatedAt)
+				require.Equal(t, metadata, queueAfter.Metadata)
+				require.Equal(t, "updateable-queue", queueAfter.Name)
+				require.Nil(t, queueAfter.PausedAt)
+
+				// Timestamp is bumped:
+				require.WithinDuration(t, tAfter, queueAfter.UpdatedAt, time.Millisecond)
+			})
+		})
+
+		t.Run("QueueDeleteExpired", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+			now := time.Now()
+			_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now)})
+			queue2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-25 * time.Hour))})
+			queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-26 * time.Hour))})
+			queue4 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-48 * time.Hour))})
+			_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-23 * time.Hour))})
+
+			horizon := now.Add(-24 * time.Hour)
+			deletedQueueNames, err := exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{Max: 2, UpdatedAtHorizon: horizon})
+			require.NoError(t, err)
+
+			// queue2 and queue3 should be deleted, with queue4 being skipped due to max of 2:
+			require.Equal(t, []string{queue2.Name, queue3.Name}, deletedQueueNames)
+
+			// Try again, make sure queue4 gets deleted this time:
+			deletedQueueNames, err = exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{Max: 2, UpdatedAtHorizon: horizon})
+			require.NoError(t, err)
+
+			require.Equal(t, []string{queue4.Name}, deletedQueueNames)
+		})
+
+		t.Run("QueueGet", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+			queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`)})
+
+			queueFetched, err := exec.QueueGet(ctx, queue.Name)
+			require.NoError(t, err)
+
+			require.WithinDuration(t, queue.CreatedAt, queueFetched.CreatedAt, time.Millisecond)
+			require.Equal(t, queue.Metadata, queueFetched.Metadata)
+			require.Equal(t, queue.Name, queueFetched.Name)
+			require.Nil(t, queueFetched.PausedAt)
+			require.WithinDuration(t, queue.UpdatedAt, queueFetched.UpdatedAt, time.Millisecond)
+
+			queueFetched, err = exec.QueueGet(ctx, "nonexistent-queue")
+			require.ErrorIs(t, err, rivertype.ErrNotFound)
+			require.Nil(t, queueFetched)
+		})
+
+		t.Run("QueueList", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+			requireQueuesEqual := func(t *testing.T, target, actual *rivertype.Queue) {
+				t.Helper()
+				require.WithinDuration(t, target.CreatedAt, actual.CreatedAt, time.Millisecond)
+				require.Equal(t, target.Metadata, actual.Metadata)
+				require.Equal(t, target.Name, actual.Name)
+				if target.PausedAt == nil {
+					require.Nil(t, actual.PausedAt)
+				} else {
+					require.NotNil(t, actual.PausedAt)
+					require.WithinDuration(t, *target.PausedAt, *actual.PausedAt, time.Millisecond)
+				}
+			}
+
+			queues, err := exec.QueueList(ctx, 10)
+			require.NoError(t, err)
+			require.Empty(t, queues)
+
+			// Make queue1, already paused:
+			queue1 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`), PausedAt: ptrutil.Ptr(time.Now())})
+			require.NoError(t, err)
+
+			queue2 := testfactory.Queue(ctx, t, exec, nil)
+			queue3 := testfactory.Queue(ctx, t, exec, nil)
+
+			queues, err = exec.QueueList(ctx, 2)
+			require.NoError(t, err)
+
+			require.Len(t, queues, 2)
+			requireQueuesEqual(t, queue1, queues[0])
+			requireQueuesEqual(t, queue2, queues[1])
+
+			queues, err = exec.QueueList(ctx, 3)
+			require.NoError(t, err)
+
+			require.Len(t, queues, 3)
+			requireQueuesEqual(t, queue3, queues[2])
+		})
+
+		t.Run("QueuePause", func(t *testing.T) {
+			t.Parallel()
+
+			t.Run("ExistingQueue", func(t *testing.T) {
+				t.Parallel()
+
+				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+				queue := testfactory.Queue(ctx, t, exec, nil)
+				require.Nil(t, queue.PausedAt)
+
+				require.NoError(t, exec.QueuePause(ctx, queue.Name))
+
+				queueFetched, err := exec.QueueGet(ctx, queue.Name)
+				require.NoError(t, err)
+				require.NotNil(t, queueFetched.PausedAt)
+				require.WithinDuration(t, time.Now(), *(queueFetched.PausedAt), 500*time.Millisecond)
+			})
+
+			t.Run("NonExistentQueue", func(t *testing.T) {
+				t.Parallel()
+
+				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+				err := exec.QueuePause(ctx, "queue1")
+				require.ErrorIs(t, err, rivertype.ErrNotFound)
+			})
+
+			t.Run("AllQueues", func(t *testing.T) {
+				t.Parallel()
+
+				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+				queue1 := testfactory.Queue(ctx, t, exec, nil)
+				require.Nil(t, queue1.PausedAt)
+				queue2 := testfactory.Queue(ctx, t, exec, nil)
+				require.Nil(t, queue2.PausedAt)
+
+				require.NoError(t, exec.QueuePause(ctx, rivercommon.AllQueuesString))
+
+				now := time.Now()
+
+				queue1Fetched, err := exec.QueueGet(ctx, queue1.Name)
+				require.NoError(t, err)
+				require.NotNil(t, queue1Fetched.PausedAt)
+				require.WithinDuration(t, now, *(queue1Fetched.PausedAt), 500*time.Millisecond)
+
+				queue2Fetched, err := exec.QueueGet(ctx, queue2.Name)
+				require.NoError(t, err)
+				require.NotNil(t, queue2Fetched.PausedAt)
+				require.WithinDuration(t, now, *(queue2Fetched.PausedAt), 500*time.Millisecond)
+			})
+		})
+
+		t.Run("QueueResume", func(t *testing.T) {
+			t.Parallel()
+
+			t.Run("ExistingQueue", func(t *testing.T) {
+				t.Parallel()
+
+				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+				queue := testfactory.Queue(ctx, t, exec, nil)
+				require.Nil(t, queue.PausedAt)
+
+				require.NoError(t, exec.QueuePause(ctx, queue.Name))
+				require.NoError(t, exec.QueueResume(ctx, queue.Name))
+
+				queueFetched, err := exec.QueueGet(ctx, queue.Name)
+				require.NoError(t, err)
+				require.Nil(t, queueFetched.PausedAt)
+			})
+
+			t.Run("NonExistentQueue", func(t *testing.T) {
+				t.Parallel()
+
+				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+				err := exec.QueueResume(ctx, "queue1")
+				require.ErrorIs(t, err, rivertype.ErrNotFound)
+			})
+
+			t.Run("AllQueues", func(t *testing.T) {
+				t.Parallel()
+
+				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+				queue1 := testfactory.Queue(ctx, t, exec, nil)
+				require.Nil(t, queue1.PausedAt)
+				queue2 := testfactory.Queue(ctx, t, exec, nil)
+				require.Nil(t, queue2.PausedAt)
+
+				require.NoError(t, exec.QueuePause(ctx, rivercommon.AllQueuesString))
+				require.NoError(t, exec.QueueResume(ctx, rivercommon.AllQueuesString))
+
+				queue1Fetched, err := exec.QueueGet(ctx, queue1.Name)
+				require.NoError(t, err)
+				require.Nil(t, queue1Fetched.PausedAt)
+
+				queue2Fetched, err := exec.QueueGet(ctx, queue2.Name)
+				require.NoError(t, err)
+				require.Nil(t, queue2Fetched.PausedAt)
+			})
+		})
 	})
 }
 

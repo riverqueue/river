@@ -207,6 +207,30 @@ func (e *Executor) PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}
 	return nil, riverdriver.ErrNotImplemented
 }
 
+func (e *Executor) QueueCreateOrSetUpdatedAt(ctx context.Context, params *riverdriver.QueueCreateOrSetUpdatedAtParams) (*rivertype.Queue, error) {
+	return nil, riverdriver.ErrNotImplemented
+}
+
+func (e *Executor) QueueDeleteExpired(ctx context.Context, parmas *riverdriver.QueueDeleteExpiredParams) ([]string, error) {
+	return nil, riverdriver.ErrNotImplemented
+}
+
+func (e *Executor) QueueGet(ctx context.Context, name string) (*rivertype.Queue, error) {
+	return nil, riverdriver.ErrNotImplemented
+}
+
+func (e *Executor) QueueList(ctx context.Context, limit int) ([]*rivertype.Queue, error) {
+	return nil, riverdriver.ErrNotImplemented
+}
+
+func (e *Executor) QueuePause(ctx context.Context, name string) error {
+	return riverdriver.ErrNotImplemented
+}
+
+func (e *Executor) QueueResume(ctx context.Context, name string) error {
+	return riverdriver.ErrNotImplemented
+}
+
 func (e *Executor) TableExists(ctx context.Context, tableName string) (bool, error) {
 	exists, err := e.queries.TableExists(ctx, e.dbtx, tableName)
 	return exists, interpretError(err)

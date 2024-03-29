@@ -309,6 +309,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		svc := NewPeriodicJobEnqueuer(
 			riverinternaltest.BaseServiceArchetype(t),
 			&PeriodicJobEnqueuerConfig{
+				NotifyInsert: func(ctx context.Context, execTx riverdriver.ExecutorTx, queues []string) error { return nil },
 				PeriodicJobs: []*PeriodicJob{
 					{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), RunOnStart: true},
 					{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false), RunOnStart: true},
@@ -548,7 +549,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			return nil
 		}
 
-		require.NoError(t, svc.Start(ctx))
+		startService(t, svc)
 		svc.TestSignals.EnteredLoop.WaitOrTimeout()
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
@@ -570,7 +571,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			return fmt.Errorf("test error")
 		}
 
-		require.NoError(t, svc.Start(ctx))
+		startService(t, svc)
 		svc.TestSignals.EnteredLoop.WaitOrTimeout()
 
 		// Ensure that no jobs were inserted because the notification errored:

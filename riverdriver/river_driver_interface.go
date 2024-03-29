@@ -114,6 +114,13 @@ type Executor interface {
 	NotifyMany(ctx context.Context, params *NotifyManyParams) error
 	PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}, error)
 
+	QueueCreateOrSetUpdatedAt(ctx context.Context, params *QueueCreateOrSetUpdatedAtParams) (*rivertype.Queue, error)
+	QueueDeleteExpired(ctx context.Context, params *QueueDeleteExpiredParams) ([]string, error)
+	QueueGet(ctx context.Context, name string) (*rivertype.Queue, error)
+	QueueList(ctx context.Context, limit int) ([]*rivertype.Queue, error)
+	QueuePause(ctx context.Context, name string) error
+	QueueResume(ctx context.Context, name string) error
+
 	// TableExists checks whether a table exists for the schema in the current
 	// search schema.
 	TableExists(ctx context.Context, tableName string) (bool, error)
@@ -353,6 +360,18 @@ type Migration struct {
 // NotifyManyParams are parameters to issue many pubsub notifications all at
 // once for a single topic.
 type NotifyManyParams struct {
-	Topic   string
 	Payload []string
+	Topic   string
+}
+
+type QueueCreateOrSetUpdatedAtParams struct {
+	Metadata  []byte
+	Name      string
+	PausedAt  *time.Time
+	UpdatedAt *time.Time
+}
+
+type QueueDeleteExpiredParams struct {
+	Max              int
+	UpdatedAtHorizon time.Time
 }

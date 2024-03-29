@@ -387,16 +387,12 @@ func Test_Client(t *testing.T) {
 
 		client, _ := setup(t)
 
-		jobStartedChan := make(chan int64)
-
 		type JobArgs struct {
 			JobArgsReflectKind[JobArgs]
 		}
 
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
-			jobStartedChan <- job.ID
-			<-ctx.Done()
-			return ctx.Err()
+			return nil
 		}))
 
 		startClient(ctx, t, client)
@@ -460,6 +456,163 @@ func Test_Client(t *testing.T) {
 		// PgError has SchemaName and TableName properties, but unfortunately
 		// neither contain a useful value in this case.
 		require.Equal(t, `relation "river_job" does not exist`, pgErr.Message)
+	})
+
+	t.Run("PauseAndResumeSingleQueue", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		client := newTestClient(t, bundle.dbPool, config)
+
+		jobStartedChan := make(chan int64)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			jobStartedChan <- job.ID
+			return nil
+		}))
+
+		startClient(ctx, t, client)
+
+		client.producersByQueueName[QueueDefault].testSignals.Init()
+
+		insertRes1, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		startedJobID := riverinternaltest.WaitOrTimeout(t, jobStartedChan)
+		require.Equal(t, insertRes1.Job.ID, startedJobID)
+
+		require.NoError(t, client.QueuePause(ctx, QueueDefault, nil))
+		client.producersByQueueName[QueueDefault].testSignals.Paused.WaitOrTimeout()
+
+		insertRes2, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		select {
+		case <-jobStartedChan:
+			t.Fatal("expected job 2 to not start on paused queue")
+		case <-time.After(500 * time.Millisecond):
+		}
+
+		require.NoError(t, client.QueueResume(ctx, QueueDefault, nil))
+		client.producersByQueueName[QueueDefault].testSignals.Resumed.WaitOrTimeout()
+
+		startedJobID = riverinternaltest.WaitOrTimeout(t, jobStartedChan)
+		require.Equal(t, insertRes2.Job.ID, startedJobID)
+	})
+
+	t.Run("PauseAndResumeMultipleQueues", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		config.Queues["alternate"] = QueueConfig{MaxWorkers: 10}
+		client := newTestClient(t, bundle.dbPool, config)
+
+		jobStartedChan := make(chan int64)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			jobStartedChan <- job.ID
+			return nil
+		}))
+
+		startClient(ctx, t, client)
+
+		client.producersByQueueName[QueueDefault].testSignals.Init()
+		client.producersByQueueName["alternate"].testSignals.Init()
+
+		insertRes1, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		startedJobID := riverinternaltest.WaitOrTimeout(t, jobStartedChan)
+		require.Equal(t, insertRes1.Job.ID, startedJobID)
+
+		// Pause only the default queue:
+		require.NoError(t, client.QueuePause(ctx, QueueDefault, nil))
+		client.producersByQueueName[QueueDefault].testSignals.Paused.WaitOrTimeout()
+
+		insertRes2, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		select {
+		case <-jobStartedChan:
+			t.Fatal("expected job 2 to not start on paused queue")
+		case <-time.After(500 * time.Millisecond):
+		}
+
+		// alternate queue should still be running:
+		insertResAlternate1, err := client.Insert(ctx, &JobArgs{}, &InsertOpts{Queue: "alternate"})
+		require.NoError(t, err)
+
+		startedJobID = riverinternaltest.WaitOrTimeout(t, jobStartedChan)
+		require.Equal(t, insertResAlternate1.Job.ID, startedJobID)
+
+		// Pause all queues:
+		require.NoError(t, client.QueuePause(ctx, rivercommon.AllQueuesString, nil))
+		client.producersByQueueName["alternate"].testSignals.Paused.WaitOrTimeout()
+
+		insertResAlternate2, err := client.Insert(ctx, &JobArgs{}, &InsertOpts{Queue: "alternate"})
+		require.NoError(t, err)
+
+		select {
+		case <-jobStartedChan:
+			t.Fatal("expected alternate job 2 to not start on paused queue")
+		case <-time.After(500 * time.Millisecond):
+		}
+
+		// Resume only the alternate queue:
+		require.NoError(t, client.QueueResume(ctx, "alternate", nil))
+		client.producersByQueueName["alternate"].testSignals.Resumed.WaitOrTimeout()
+
+		startedJobID = riverinternaltest.WaitOrTimeout(t, jobStartedChan)
+		require.Equal(t, insertResAlternate2.Job.ID, startedJobID)
+
+		// Resume all queues:
+		require.NoError(t, client.QueueResume(ctx, rivercommon.AllQueuesString, nil))
+		client.producersByQueueName[QueueDefault].testSignals.Resumed.WaitOrTimeout()
+
+		startedJobID = riverinternaltest.WaitOrTimeout(t, jobStartedChan)
+		require.Equal(t, insertRes2.Job.ID, startedJobID)
+	})
+
+	t.Run("PausedBeforeStart", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		jobStartedChan := make(chan int64)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			jobStartedChan <- job.ID
+			return nil
+		}))
+
+		// Ensure queue record exists:
+		queue := testfactory.Queue(ctx, t, client.driver.GetExecutor(), nil)
+
+		// Pause only the default queue:
+		require.NoError(t, client.QueuePause(ctx, queue.Name, nil))
+
+		startClient(ctx, t, client)
+
+		_, err := client.Insert(ctx, &JobArgs{}, &InsertOpts{Queue: queue.Name})
+		require.NoError(t, err)
+
+		select {
+		case <-jobStartedChan:
+			t.Fatal("expected job to not start on paused queue")
+		case <-time.After(500 * time.Millisecond):
+		}
 	})
 
 	t.Run("PollOnly", func(t *testing.T) {
@@ -2340,6 +2493,51 @@ func Test_Client_Maintenance(t *testing.T) {
 		}
 	})
 
+	t.Run("QueueCleaner", func(t *testing.T) {
+		t.Parallel()
+
+		dbPool := riverinternaltest.TestDB(ctx, t)
+
+		config := newTestConfig(t, nil)
+		client := newTestClient(t, dbPool, config)
+		exec := client.driver.GetExecutor()
+
+		deleteHorizon := time.Now().Add(-maintenance.QueueRetentionPeriodDefault)
+
+		// Take care to insert queues before starting the client because otherwise
+		// there's a race condition where the cleaner could run its initial
+		// pass before our insertion is complete.
+		queueBeyondHorizon1 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
+		queueBeyondHorizon2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
+		queueBeyondHorizon3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
+
+		// Will not be deleted.
+		queueWithinHorizon1 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(deleteHorizon.Add(1 * time.Hour))})
+		queueWithinHorizon2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(deleteHorizon.Add(1 * time.Hour))})
+		queueWithinHorizon3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(deleteHorizon.Add(1 * time.Hour))})
+
+		startClient(ctx, t, client)
+
+		client.testSignals.electedLeader.WaitOrTimeout()
+		qc := maintenance.GetService[*maintenance.QueueCleaner](client.queueMaintainer)
+		qc.TestSignals.DeletedBatch.WaitOrTimeout()
+
+		var err error
+		_, err = client.QueueGet(ctx, queueBeyondHorizon1.Name)
+		require.ErrorIs(t, err, ErrNotFound)
+		_, err = client.QueueGet(ctx, queueBeyondHorizon2.Name)
+		require.ErrorIs(t, err, ErrNotFound)
+		_, err = client.QueueGet(ctx, queueBeyondHorizon3.Name)
+		require.ErrorIs(t, err, ErrNotFound)
+
+		_, err = client.QueueGet(ctx, queueWithinHorizon1.Name)
+		require.NotErrorIs(t, err, ErrNotFound) // still there
+		_, err = client.QueueGet(ctx, queueWithinHorizon2.Name)
+		require.NotErrorIs(t, err, ErrNotFound) // still there
+		_, err = client.QueueGet(ctx, queueWithinHorizon3.Name)
+		require.NotErrorIs(t, err, ErrNotFound) // still there
+	})
+
 	t.Run("Reindexer", func(t *testing.T) {
 		t.Parallel()
 		t.Skip("Reindexer is disabled for further development")
@@ -2354,6 +2552,119 @@ func Test_Client_Maintenance(t *testing.T) {
 		// There are two indexes to reindex by default:
 		svc.TestSignals.Reindexed.WaitOrTimeout()
 		svc.TestSignals.Reindexed.WaitOrTimeout()
+	})
+}
+
+func Test_Client_QueueGet(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct{}
+
+	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+		t.Helper()
+
+		dbPool := riverinternaltest.TestDB(ctx, t)
+		config := newTestConfig(t, nil)
+		client := newTestClient(t, dbPool, config)
+
+		return client, &testBundle{}
+	}
+
+	t.Run("FetchesAnExistingQueue", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		now := time.Now().UTC()
+		insertedQueue := testfactory.Queue(ctx, t, client.driver.GetExecutor(), nil)
+
+		queue, err := client.QueueGet(ctx, insertedQueue.Name)
+		require.NoError(t, err)
+		require.NotNil(t, queue)
+
+		require.WithinDuration(t, now, queue.CreatedAt, 2*time.Second)
+		require.WithinDuration(t, insertedQueue.CreatedAt, queue.CreatedAt, time.Millisecond)
+		require.Equal(t, []byte("{}"), queue.Metadata)
+		require.Equal(t, insertedQueue.Name, queue.Name)
+		require.Nil(t, queue.PausedAt)
+	})
+
+	t.Run("ReturnsErrNotFoundIfQueueDoesNotExist", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		queue, err := client.QueueGet(ctx, "a_queue_that_does_not_exist")
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrNotFound)
+		require.Nil(t, queue)
+	})
+}
+
+func Test_Client_QueueList(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct{}
+
+	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+		t.Helper()
+
+		dbPool := riverinternaltest.TestDB(ctx, t)
+		config := newTestConfig(t, nil)
+		client := newTestClient(t, dbPool, config)
+
+		return client, &testBundle{}
+	}
+
+	t.Run("ListsAndPaginatesQueues", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		requireQueuesEqual := func(t *testing.T, target, actual *rivertype.Queue) {
+			t.Helper()
+			require.WithinDuration(t, target.CreatedAt, actual.CreatedAt, time.Millisecond)
+			require.Equal(t, target.Metadata, actual.Metadata)
+			require.Equal(t, target.Name, actual.Name)
+			if target.PausedAt == nil {
+				require.Nil(t, actual.PausedAt)
+			} else {
+				require.NotNil(t, actual.PausedAt)
+				require.WithinDuration(t, *target.PausedAt, *actual.PausedAt, time.Millisecond)
+			}
+		}
+
+		queues, err := client.QueueList(ctx, NewQueueListParams().First(2))
+		require.NoError(t, err)
+		require.Empty(t, queues)
+
+		// Make queue1, pause it, refetch:
+		queue1 := testfactory.Queue(ctx, t, client.driver.GetExecutor(), &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`)})
+		require.NoError(t, client.QueuePause(ctx, queue1.Name, nil))
+		queue1, err = client.QueueGet(ctx, queue1.Name)
+		require.NoError(t, err)
+
+		queue2 := testfactory.Queue(ctx, t, client.driver.GetExecutor(), nil)
+		queue3 := testfactory.Queue(ctx, t, client.driver.GetExecutor(), nil)
+
+		queues, err = client.QueueList(ctx, NewQueueListParams().First(2))
+		require.NoError(t, err)
+		require.Len(t, queues, 2)
+		requireQueuesEqual(t, queue1, queues[0])
+		requireQueuesEqual(t, queue2, queues[1])
+
+		queues, err = client.QueueList(ctx, NewQueueListParams().First(3))
+		require.NoError(t, err)
+		require.Len(t, queues, 3)
+		requireQueuesEqual(t, queue3, queues[2])
+
+		queues, err = client.QueueList(ctx, NewQueueListParams().First(10))
+		require.NoError(t, err)
+		require.Len(t, queues, 3)
 	})
 }
 

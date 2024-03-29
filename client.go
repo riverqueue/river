@@ -320,6 +320,7 @@ type clientTestSignals struct {
 	jobRescuer          *maintenance.JobRescuerTestSignals
 	jobScheduler        *maintenance.JobSchedulerTestSignals
 	periodicJobEnqueuer *maintenance.PeriodicJobEnqueuerTestSignals
+	queueCleaner        *maintenance.QueueCleanerTestSignals
 	reindexer           *maintenance.ReindexerTestSignals
 }
 
@@ -337,6 +338,9 @@ func (ts *clientTestSignals) Init() {
 	}
 	if ts.periodicJobEnqueuer != nil {
 		ts.periodicJobEnqueuer.Init()
+	}
+	if ts.queueCleaner != nil {
+		ts.queueCleaner.Init()
 	}
 	if ts.reindexer != nil {
 		ts.reindexer.Init()
@@ -559,6 +563,14 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 
 			client.periodicJobs = newPeriodicJobBundle(periodicJobEnqueuer)
 			client.periodicJobs.AddMany(config.PeriodicJobs)
+		}
+
+		{
+			queueCleaner := maintenance.NewQueueCleaner(archetype, &maintenance.QueueCleanerConfig{
+				RetentionPeriod: maintenance.QueueRetentionPeriodDefault,
+			}, driver.GetExecutor())
+			maintenanceServices = append(maintenanceServices, queueCleaner)
+			client.testSignals.queueCleaner = &queueCleaner.TestSignals
 		}
 
 		{
@@ -1531,6 +1543,40 @@ func (c *Client[TTx]) maybeNotifyInsertForQueues(ctx context.Context, tx riverdr
 	return nil
 }
 
+// emit a notification about a queue being paused or resumed.
+func (c *Client[TTx]) notifyQueuePauseOrResume(ctx context.Context, tx riverdriver.ExecutorTx, action, queue string, opts *QueuePauseOpts) error {
+	type queueStateChange struct {
+		Action string `json:"action"`
+		Queue  string `json:"queue"`
+	}
+
+	c.baseService.Logger.DebugContext(ctx,
+		c.baseService.Name+": Notifying about queue state change",
+		slog.String("action", action),
+		slog.String("queue", queue),
+		slog.String("opts", fmt.Sprintf("%+v", opts)),
+	)
+
+	payload, err := json.Marshal(queueStateChange{Action: action, Queue: queue})
+	if err != nil {
+		return err
+	}
+
+	err = tx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+		Payload: []string{string(payload)},
+		Topic:   string(notifier.NotificationTopicJobControl),
+	})
+	if err != nil {
+		c.baseService.Logger.ErrorContext(
+			ctx,
+			c.baseService.Name+": Failed to send queue state change notification",
+			slog.String("err", err.Error()),
+		)
+		return err
+	}
+	return nil
+}
+
 // Validates job args prior to insertion. Currently, verifies that a worker to
 // handle the kind is registered in the configured workers bundle. An
 // insert-only client doesn't require a workers bundle be configured though, so
@@ -1606,7 +1652,7 @@ func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) (*JobL
 // provided context is used for the underlying Postgres query and can be used to
 // cancel the operation or apply a timeout.
 //
-//	params := river.NewJobListParams().WithLimit(10).State(rivertype.JobStateCompleted)
+//	params := river.NewJobListParams().First(10).State(river.JobStateCompleted)
 //	jobRows, err := client.JobListTx(ctx, tx, params)
 //	if err != nil {
 //		// handle error
@@ -1635,6 +1681,93 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 // PeriodicJobs returns the currently configured set of periodic jobs for the
 // client, and can be used to add new ones or remove existing ones.
 func (c *Client[TTx]) PeriodicJobs() *PeriodicJobBundle { return c.periodicJobs }
+
+// QueueGet returns the queue with the given name. If the queue has not recently
+// been active or does not exist, returns ErrNotFound.
+//
+// The provided context is used for the underlying Postgres query and can be
+// used to cancel the operation or apply a timeout.
+func (c *Client[TTx]) QueueGet(ctx context.Context, name string) (*rivertype.Queue, error) {
+	return c.driver.GetExecutor().QueueGet(ctx, name)
+}
+
+// QueueList returns a list of all queues that are currently active or were
+// recently active. Limit and offset can be used to paginate the results.
+//
+// The provided context is used for the underlying Postgres query and can be
+// used to cancel the operation or apply a timeout.
+//
+//	params := river.NewQueueListParams().First(10)
+//	queueRows, err := client.QueueListTx(ctx, tx, params)
+//	if err != nil {
+//		// handle error
+//	}
+func (c *Client[TTx]) QueueList(ctx context.Context, params *QueueListParams) ([]*rivertype.Queue, error) {
+	if params == nil {
+		params = NewQueueListParams()
+	}
+
+	return c.driver.GetExecutor().QueueList(ctx, int(params.paginationCount))
+}
+
+// QueuePause pauses the queue with the given name. When a queue is paused,
+// clients will not fetch any more jobs for that particular queue. To pause all
+// queues at once, use the special queue name "*".
+//
+// Clients with a configured notifier should receive a notification about the
+// paused queue(s) within a few milliseconds of the transaction commit. Clients
+// in poll-only mode will pause after their next poll for queue configuration.
+//
+// The provided context is used for the underlying Postgres update and can be
+// used to cancel the operation or apply a timeout. The opts are reserved for
+// future functionality.
+func (c *Client[TTx]) QueuePause(ctx context.Context, queue string, opts *QueuePauseOpts) error {
+	tx, err := c.driver.GetExecutor().Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if err = tx.QueuePause(ctx, queue); err != nil {
+		return err
+	}
+
+	if err = c.notifyQueuePauseOrResume(ctx, tx, "pause", queue, opts); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+// QueueResume resumes the queue with the given name. If the queue was
+// previously paused, any clients configured to work that queue will resume
+// fetching additional jobs. To resume all queues at once, use the special queue
+// name "*".
+//
+// Clients with a configured notifier should receive a notification about the
+// resumed queue(s) within a few milliseconds of the transaction commit. Clients
+// in poll-only mode will resume after their next poll for queue configuration.
+//
+// The provided context is used for the underlying Postgres update and can be
+// used to cancel the operation or apply a timeout. The opts are reserved for
+// future functionality.
+func (c *Client[TTx]) QueueResume(ctx context.Context, queue string, opts *QueuePauseOpts) error {
+	tx, err := c.driver.GetExecutor().Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if err = tx.QueueResume(ctx, queue); err != nil {
+		return err
+	}
+
+	if err = c.notifyQueuePauseOrResume(ctx, tx, "resume", queue, opts); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
 
 // Generates a default client ID using the current hostname and time.
 func defaultClientID(startedAt time.Time) string {

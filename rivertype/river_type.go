@@ -213,3 +213,29 @@ type AttemptError struct {
 // (returned by the use of `Client.PeriodicJobs().Add()`) which can be used to
 // subsequently remove the periodic job with `Remove()`.
 type PeriodicJobHandle int
+
+// Queue is a configuration for a queue that is currently (or recently was) in
+// use by a client.
+type Queue struct {
+	// CreatedAt is the time at which the queue first began being worked by a
+	// client. Unused queues are deleted after a retention period, so this only
+	// reflects the most recent time the queue was created if there was a long
+	// gap.
+	CreatedAt time.Time
+	// Metadata is a field for storing arbitrary metadata on a queue. It is
+	// currently reserved for River's internal use and should not be modified by
+	// users.
+	Metadata []byte
+	// Name is the name of the queue.
+	Name string
+	// PausedAt is the time the queue was paused, if any. When a paused queue is
+	// resumed, this field is set to nil.
+	PausedAt *time.Time
+	// UpdatedAt is the last time the queue was updated. This field is updated
+	// periodically any time an active Client is configured to work the queue,
+	// even if the queue is paused.
+	//
+	// If UpdatedAt has not been updated for awhile, the queue record will be
+	// deleted from the table by a maintenance process.
+	UpdatedAt time.Time
+}

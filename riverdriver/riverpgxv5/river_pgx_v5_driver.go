@@ -463,6 +463,76 @@ func (e *Executor) PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}
 	return &struct{}{}, interpretError(err)
 }
 
+func (e *Executor) QueueCreateOrSetUpdatedAt(ctx context.Context, params *riverdriver.QueueCreateOrSetUpdatedAtParams) (*rivertype.Queue, error) {
+	queue, err := e.queries.QueueCreateOrSetUpdatedAt(ctx, e.dbtx, &dbsqlc.QueueCreateOrSetUpdatedAtParams{
+		Metadata:  params.Metadata,
+		Name:      params.Name,
+		PausedAt:  params.PausedAt,
+		UpdatedAt: params.UpdatedAt,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return queueFromInternal(queue), nil
+}
+
+func (e *Executor) QueueDeleteExpired(ctx context.Context, params *riverdriver.QueueDeleteExpiredParams) ([]string, error) {
+	queues, err := e.queries.QueueDeleteExpired(ctx, e.dbtx, &dbsqlc.QueueDeleteExpiredParams{
+		Max:              int64(params.Max),
+		UpdatedAtHorizon: params.UpdatedAtHorizon,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	queueNames := make([]string, len(queues))
+	for i, q := range queues {
+		queueNames[i] = q.Name
+	}
+	return queueNames, nil
+}
+
+func (e *Executor) QueueGet(ctx context.Context, name string) (*rivertype.Queue, error) {
+	queue, err := e.queries.QueueGet(ctx, e.dbtx, name)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return queueFromInternal(queue), nil
+}
+
+func (e *Executor) QueueList(ctx context.Context, limit int) ([]*rivertype.Queue, error) {
+	internalQueues, err := e.queries.QueueList(ctx, e.dbtx, int32(limit))
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	queues := make([]*rivertype.Queue, len(internalQueues))
+	for i, q := range internalQueues {
+		queues[i] = queueFromInternal(q)
+	}
+	return queues, nil
+}
+
+func (e *Executor) QueuePause(ctx context.Context, name string) error {
+	res, err := e.queries.QueuePause(ctx, e.dbtx, name)
+	if err != nil {
+		return interpretError(err)
+	}
+	if res.RowsAffected() == 0 {
+		return rivertype.ErrNotFound
+	}
+	return nil
+}
+
+func (e *Executor) QueueResume(ctx context.Context, name string) error {
+	res, err := e.queries.QueueResume(ctx, e.dbtx, name)
+	if err != nil {
+		return interpretError(err)
+	}
+	if res.RowsAffected() == 0 {
+		return rivertype.ErrNotFound
+	}
+	return nil
+}
+
 func (e *Executor) TableExists(ctx context.Context, tableName string) (bool, error) {
 	exists, err := e.queries.TableExists(ctx, e.dbtx, tableName)
 	return exists, interpretError(err)
@@ -653,5 +723,20 @@ func migrationFromInternal(internal *dbsqlc.RiverMigration) *riverdriver.Migrati
 		ID:        int(internal.ID),
 		CreatedAt: internal.CreatedAt.UTC(),
 		Version:   int(internal.Version),
+	}
+}
+
+func queueFromInternal(internal *dbsqlc.RiverQueue) *rivertype.Queue {
+	var pausedAt *time.Time
+	if internal.PausedAt != nil {
+		t := internal.PausedAt.UTC()
+		pausedAt = &t
+	}
+	return &rivertype.Queue{
+		CreatedAt: internal.CreatedAt.UTC(),
+		Metadata:  internal.Metadata,
+		Name:      internal.Name,
+		PausedAt:  pausedAt,
+		UpdatedAt: internal.UpdatedAt.UTC(),
 	}
 }

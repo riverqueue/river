@@ -33,3 +33,5 @@ CREATE TRIGGER river_notify
   AFTER INSERT ON river_job
   FOR EACH ROW
   EXECUTE PROCEDURE river_job_notify();
+
+DROP TABLE river_queue;

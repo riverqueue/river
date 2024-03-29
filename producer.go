@@ -21,12 +21,27 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
+const (
+	queuePollIntervalDefault   = 2 * time.Second
+	queueReportIntervalDefault = 10 * time.Minute
+)
+
 // Test-only properties.
 type producerTestSignals struct {
-	StartedExecutors rivercommon.TestSignal[struct{}] // notifies when runOnce finishes a pass
+	DeletedExpiredQueueRecords rivercommon.TestSignal[struct{}] // notifies when the producer deletes expired queue records
+	Paused                     rivercommon.TestSignal[struct{}] // notifies when the producer is paused
+	PolledQueueConfig          rivercommon.TestSignal[struct{}] // notifies when the producer polls for queue settings
+	ReportedQueueStatus        rivercommon.TestSignal[struct{}] // notifies when the producer reports queue status
+	Resumed                    rivercommon.TestSignal[struct{}] // notifies when the producer is resumed
+	StartedExecutors           rivercommon.TestSignal[struct{}] // notifies when runOnce finishes a pass
 }
 
 func (ts *producerTestSignals) Init() {
+	ts.DeletedExpiredQueueRecords.Init()
+	ts.Paused.Init()
+	ts.PolledQueueConfig.Init()
+	ts.ReportedQueueStatus.Init()
+	ts.Resumed.Init()
 	ts.StartedExecutors.Init()
 }
 
@@ -50,14 +65,22 @@ type producerConfig struct {
 	MaxWorkers int
 
 	// Notifier is a notifier for subscribing to new job inserts and job
-	// control. If nil, the producer will operate in poll only mode.
+	// control. If nil, the producer will operate in poll-only mode.
 	Notifier *notifier.Notifier
 
-	Queue             string
-	RetryPolicy       ClientRetryPolicy
-	SchedulerInterval time.Duration
-	StatusFunc        producerStatusUpdateFunc
-	Workers           *Workers
+	Queue string
+
+	// QueuePollInterval is the amount of time between periodic checks for
+	// queue setting changes. This is only used in poll-only mode (when no
+	// notifier is provided).
+	QueuePollInterval time.Duration
+	// QueueReportInterval is the amount of time between periodic reports
+	// of the queue status.
+	QueueReportInterval time.Duration
+	RetryPolicy         ClientRetryPolicy
+	SchedulerInterval   time.Duration
+	StatusFunc          producerStatusUpdateFunc
+	Workers             *Workers
 }
 
 func (c *producerConfig) mustValidate() *producerConfig {
@@ -81,6 +104,18 @@ func (c *producerConfig) mustValidate() *producerConfig {
 	}
 	if c.Queue == "" {
 		panic("producerConfig.Queue is required")
+	}
+	if c.QueuePollInterval == 0 {
+		c.QueuePollInterval = queuePollIntervalDefault
+	}
+	if c.QueuePollInterval <= 0 {
+		panic("producerConfig.QueueSettingsPollInterval must be greater than zero")
+	}
+	if c.QueueReportInterval == 0 {
+		c.QueueReportInterval = queueReportIntervalDefault
+	}
+	if c.QueueReportInterval <= 0 {
+		panic("producerConfig.QueueSettingsReportInterval must be greater than zero")
 	}
 	if c.RetryPolicy == nil {
 		panic("producerConfig.RetryPolicy is required")
@@ -132,9 +167,13 @@ type producer struct {
 	// written to by the main goroutine, but read by the dispatcher.
 	numJobsActive atomic.Int32
 
-	numJobsRan  atomic.Uint64
-	retryPolicy ClientRetryPolicy
-	testSignals producerTestSignals
+	numJobsRan atomic.Uint64
+	paused     bool
+	// Receives control messages from the notifier goroutine. Written by notifier
+	// goroutine, only read from main goroutine.
+	queueControlCh chan *jobControlPayload
+	retryPolicy    ClientRetryPolicy
+	testSignals    producerTestSignals
 }
 
 func newProducer(archetype *baseservice.Archetype, exec riverdriver.Executor, config *producerConfig) *producer {
@@ -146,16 +185,17 @@ func newProducer(archetype *baseservice.Archetype, exec riverdriver.Executor, co
 	}
 
 	return baseservice.Init(archetype, &producer{
-		activeJobs:   make(map[int64]*jobExecutor),
-		cancelCh:     make(chan int64, 1000),
-		completer:    config.Completer,
-		config:       config.mustValidate(),
-		exec:         exec,
-		errorHandler: config.ErrorHandler,
-		jobResultCh:  make(chan *rivertype.JobRow, config.MaxWorkers),
-		jobTimeout:   config.JobTimeout,
-		retryPolicy:  config.RetryPolicy,
-		workers:      config.Workers,
+		activeJobs:     make(map[int64]*jobExecutor),
+		cancelCh:       make(chan int64, 1000),
+		completer:      config.Completer,
+		config:         config.mustValidate(),
+		exec:           exec,
+		errorHandler:   config.ErrorHandler,
+		jobResultCh:    make(chan *rivertype.JobRow, config.MaxWorkers),
+		jobTimeout:     config.JobTimeout,
+		queueControlCh: make(chan *jobControlPayload, 100),
+		retryPolicy:    config.RetryPolicy,
+		workers:        config.Workers,
 	})
 }
 
@@ -185,6 +225,28 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		return nil
 	}
 
+	queue, err := func() (*rivertype.Queue, error) {
+		ctx, cancel := context.WithTimeout(fetchCtx, 10*time.Second)
+		defer cancel()
+
+		p.Logger.DebugContext(ctx, p.Name+": Fetching initial queue settings", slog.String("queue", p.config.Queue))
+		return p.exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
+			Metadata: []byte("{}"),
+			Name:     p.config.Queue,
+		})
+	}()
+	if err != nil {
+		close(stopped)
+		if errors.Is(err, startstop.ErrStop) || strings.HasSuffix(err.Error(), "conn closed") || fetchCtx.Err() != nil {
+			return nil //nolint:nilerr
+		}
+		p.Logger.ErrorContext(fetchCtx, p.Name+": Error fetching initial queue settings", slog.String("err", err.Error()))
+		return err
+	}
+
+	initiallyPaused := queue != nil && (queue.PausedAt != nil)
+	p.paused = initiallyPaused
+
 	// TODO: fetcher should have some jitter in it to avoid stampeding issues.
 	fetchLimiter := chanutil.NewDebouncedChan(fetchCtx, p.config.FetchCooldown, true)
 
@@ -193,7 +255,9 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		jobControlSub *notifier.Subscription
 	)
 	if p.config.Notifier == nil {
-		p.Logger.Info(p.Name+": No notifier configured; starting in poll mode", "client_id", p.config.ClientID)
+		p.Logger.InfoContext(fetchCtx, p.Name+": No notifier configured; starting in poll mode", "client_id", p.config.ClientID)
+
+		go p.pollForSettingChanges(fetchCtx, initiallyPaused)
 	} else {
 		var err error
 
@@ -218,28 +282,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 			return err
 		}
 
-		handleJobControlNotification := func(topic notifier.NotificationTopic, payload string) {
-			var decoded jobControlPayload
-			if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
-				p.Logger.ErrorContext(workCtx, p.Name+": Failed to unmarshal job control notification payload", slog.String("err", err.Error()))
-				return
-			}
-
-			if string(decoded.Action) == string(jobControlActionCancel) && decoded.Queue == p.config.Queue && decoded.JobID > 0 {
-				select {
-				case p.cancelCh <- decoded.JobID:
-				default:
-					p.Logger.WarnContext(workCtx, p.Name+": Job cancel notification dropped due to full buffer", slog.Int64("job_id", decoded.JobID))
-				}
-				return
-			}
-			p.Logger.DebugContext(workCtx, p.Name+": Received job control notification with unknown action or other queue",
-				slog.String("action", string(decoded.Action)),
-				slog.Int64("job_id", decoded.JobID),
-				slog.String("queue", decoded.Queue),
-			)
-		}
-		jobControlSub, err = p.config.Notifier.Listen(fetchCtx, notifier.NotificationTopicJobControl, handleJobControlNotification)
+		jobControlSub, err = p.config.Notifier.Listen(fetchCtx, notifier.NotificationTopicJobControl, p.handleJobControlNotification(workCtx))
 		if err != nil {
 			close(stopped)
 			if strings.HasSuffix(err.Error(), "conn closed") || errors.Is(err, context.Canceled) {
@@ -254,7 +297,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		// races.
 		defer close(stopped)
 
-		p.Logger.DebugContext(fetchCtx, p.Name+": Run loop started", slog.String("queue", p.config.Queue))
+		p.Logger.DebugContext(fetchCtx, p.Name+": Run loop started", slog.String("queue", p.config.Queue), slog.Bool("paused", p.paused))
 		defer func() {
 			p.Logger.DebugContext(fetchCtx, p.Name+": Run loop stopped", slog.String("queue", p.config.Queue), slog.Uint64("num_completed_jobs", p.numJobsRan.Load()))
 		}()
@@ -267,10 +310,14 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 			defer jobControlSub.Unlisten(fetchCtx)
 		}
 
-		go p.heartbeatLogLoop(fetchCtx)
-
+		// TODO(bgentry): this should probably happen even earlier in this start
+		// function, but need to figure out how handle defers and shutdown properly.
 		p.config.StatusFunc(p.config.Queue, componentstatus.Initializing)
+
+		go p.heartbeatLogLoop(fetchCtx)
+		go p.reportQueueStatusLoop(fetchCtx)
 		p.fetchAndRunLoop(fetchCtx, workCtx, fetchLimiter)
+
 		p.config.StatusFunc(p.config.Queue, componentstatus.ShuttingDown)
 		p.executorShutdownLoop()
 		p.config.StatusFunc(p.config.Queue, componentstatus.Stopped)
@@ -279,20 +326,67 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 	return nil
 }
 
-type jobControlAction string
+type controlAction string
 
 const (
-	jobControlActionCancel jobControlAction = "cancel"
+	controlActionCancel controlAction = "cancel"
+	controlActionPause  controlAction = "pause"
+	controlActionResume controlAction = "resume"
 )
 
 type jobControlPayload struct {
-	Action jobControlAction `json:"action"`
-	JobID  int64            `json:"job_id"`
-	Queue  string           `json:"queue"`
+	Action controlAction `json:"action"`
+	JobID  int64         `json:"job_id"`
+	Queue  string        `json:"queue"`
 }
 
 type insertPayload struct {
 	Queue string `json:"queue"`
+}
+
+func (p *producer) handleJobControlNotification(workCtx context.Context) func(notifier.NotificationTopic, string) {
+	return func(topic notifier.NotificationTopic, payload string) {
+		var decoded jobControlPayload
+		if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+			p.Logger.ErrorContext(workCtx, p.Name+": Failed to unmarshal job control notification payload", slog.String("err", err.Error()))
+			return
+		}
+
+		switch decoded.Action {
+		case controlActionPause, controlActionResume:
+			if decoded.Queue != rivercommon.AllQueuesString && decoded.Queue != p.config.Queue {
+				p.Logger.DebugContext(workCtx, p.Name+": Queue control notification for other queue", slog.String("action", string(decoded.Action)))
+				return
+			}
+			select {
+			case <-workCtx.Done():
+			case p.queueControlCh <- &decoded:
+			default:
+				p.Logger.WarnContext(workCtx, p.Name+": Queue control notification dropped due to full buffer", slog.String("action", string(decoded.Action)))
+			}
+		case controlActionCancel:
+			if decoded.Queue != p.config.Queue {
+				p.Logger.DebugContext(workCtx, p.Name+": Received job cancel notification for other queue",
+					slog.String("action", string(decoded.Action)),
+					slog.Int64("job_id", decoded.JobID),
+					slog.String("queue", decoded.Queue),
+				)
+				return
+			}
+			select {
+			case <-workCtx.Done():
+			case p.cancelCh <- decoded.JobID:
+			default:
+				p.Logger.WarnContext(workCtx, p.Name+": Job cancel notification dropped due to full buffer", slog.Int64("job_id", decoded.JobID))
+			}
+		default:
+			p.Logger.DebugContext(workCtx, p.Name+": Received job control notification with unknown action",
+				slog.String("action", string(decoded.Action)),
+				slog.Int64("job_id", decoded.JobID),
+				slog.String("queue", decoded.Queue),
+			)
+		}
+	}
 }
 
 func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimiter *chanutil.DebouncedChan) {
@@ -324,7 +418,32 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 		select {
 		case <-fetchCtx.Done():
 			return
+		case msg := <-p.queueControlCh:
+			switch msg.Action {
+			case controlActionPause:
+				if p.paused {
+					continue
+				}
+				p.paused = true
+				p.Logger.DebugContext(workCtx, p.Name+": Paused", slog.String("queue", p.config.Queue), slog.String("queue_in_message", msg.Queue))
+				p.testSignals.Paused.Signal(struct{}{})
+			case controlActionResume:
+				if !p.paused {
+					continue
+				}
+				p.paused = false
+				p.Logger.DebugContext(workCtx, p.Name+": Resumed", slog.String("queue", p.config.Queue), slog.String("queue_in_message", msg.Queue))
+				p.testSignals.Resumed.Signal(struct{}{})
+			case controlActionCancel:
+				// Separate this case to make linter happy:
+				p.Logger.DebugContext(workCtx, p.Name+": Unhandled queue control action", "action", msg.Action)
+			default:
+				p.Logger.DebugContext(workCtx, p.Name+": Unknown queue control action", "action", msg.Action)
+			}
 		case <-fetchLimiter.C():
+			if p.paused {
+				continue
+			}
 			p.innerFetchLoop(workCtx, fetchResultCh)
 			// Ensure we can't start another fetch when fetchCtx is done, even if
 			// the fetchLimiter is also ready to fire:
@@ -468,6 +587,86 @@ func (p *producer) maxJobsToFetch() int {
 
 func (p *producer) handleWorkerDone(job *rivertype.JobRow) {
 	p.jobResultCh <- job
+}
+
+func (p *producer) pollForSettingChanges(ctx context.Context, lastPaused bool) {
+	ticker := time.NewTicker(p.config.QueuePollInterval)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			updatedQueue, err := p.fetchQueueSettings(ctx)
+			if err != nil {
+				p.Logger.ErrorContext(ctx, p.Name+": Error fetching queue settings", slog.String("err", err.Error()))
+				continue
+			}
+			shouldBePaused := (updatedQueue.PausedAt != nil)
+			if lastPaused != shouldBePaused {
+				action := controlActionPause
+				if !shouldBePaused {
+					action = controlActionResume
+				}
+				payload := &jobControlPayload{
+					Action: action,
+					Queue:  p.config.Queue,
+				}
+				p.Logger.InfoContext(ctx, p.Name+": Queue control state changed from polling",
+					slog.String("queue", p.config.Queue),
+					slog.String("action", string(action)),
+					slog.Bool("paused", shouldBePaused),
+				)
+
+				select {
+				case p.queueControlCh <- payload:
+					lastPaused = shouldBePaused
+				default:
+					p.Logger.WarnContext(ctx, p.Name+": Queue control notification dropped due to full buffer", slog.String("action", string(action)))
+				}
+			}
+			p.testSignals.PolledQueueConfig.Signal(struct{}{})
+		}
+	}
+}
+
+func (p *producer) fetchQueueSettings(ctx context.Context) (*rivertype.Queue, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	return p.exec.QueueGet(ctx, p.config.Queue)
+}
+
+func (p *producer) reportQueueStatusLoop(ctx context.Context) {
+	p.CancellableSleepRandomBetween(ctx, 0, time.Second)
+	reportTicker := time.NewTicker(p.config.QueueReportInterval)
+	for {
+		select {
+		case <-ctx.Done():
+			reportTicker.Stop()
+			return
+		case <-reportTicker.C:
+			p.reportQueueStatusOnce(ctx)
+		}
+	}
+}
+
+func (p *producer) reportQueueStatusOnce(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	p.Logger.DebugContext(ctx, p.Name+": Reporting queue status", slog.String("queue", p.config.Queue))
+	_, err := p.exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
+		Metadata: []byte("{}"),
+		Name:     p.config.Queue,
+	})
+	if err != nil && errors.Is(context.Cause(ctx), startstop.ErrStop) {
+		return
+	}
+	if err != nil {
+		p.Logger.ErrorContext(ctx, p.Name+": Queue status update, error updating in database", slog.String("err", err.Error()))
+		return
+	}
+	p.testSignals.ReportedQueueStatus.Signal(struct{}{})
 }
 
 type producerFetchResult struct {

@@ -22,3 +22,11 @@ ALTER TABLE river_job ADD CONSTRAINT finalized_or_finalized_at_null CHECK (
 
 DROP TRIGGER river_notify ON river_job;
 DROP FUNCTION river_job_notify;
+
+CREATE TABLE river_queue(
+  name text PRIMARY KEY NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT NOW(),
+  metadata jsonb NOT NULL DEFAULT '{}' ::jsonb,
+  paused_at timestamptz,
+  updated_at timestamptz NOT NULL
+);
