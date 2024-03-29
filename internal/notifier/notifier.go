@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -548,34 +547,4 @@ func (n *Notifier) withLock(lockedFunc func()) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	lockedFunc()
-}
-
-// ListenRetryLoop tries to listen on a notification topic, but with a retry
-// loop in case of an initial failure. This is a stopgap until services like the
-// producer and elector can propagate errors back on start up, and subject to
-// change.
-func ListenRetryLoop(ctx context.Context, baseService *baseservice.BaseService, notifier *Notifier, topic NotificationTopic, notifyFunc NotifyFunc) (*Subscription, error) {
-	const maxListenAttempts = 3
-
-	for attempt := 1; ; attempt++ {
-		sub, err := notifier.Listen(ctx, topic, notifyFunc)
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				return nil, err
-			}
-
-			if attempt >= maxListenAttempts || strings.HasSuffix(err.Error(), "conn closed") {
-				baseService.Logger.ErrorContext(ctx, baseService.Name+": Error listening for on topic; giving up", "attempt", attempt, "err", err, "topic", topic)
-				return nil, err
-			}
-
-			sleepDuration := baseService.ExponentialBackoff(attempt, baseservice.MaxAttemptsBeforeResetDefault)
-			baseService.Logger.ErrorContext(ctx, baseService.Name+": Error listening for on topic; will retry after backoff",
-				"attempt", attempt, "err", err, "topic", topic, "sleep_duration", sleepDuration)
-			baseService.CancellableSleep(ctx, sleepDuration)
-			continue
-		}
-
-		return sub, nil
-	}
 }

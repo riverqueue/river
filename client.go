@@ -135,6 +135,21 @@ type Config struct {
 	// in the client.
 	PeriodicJobs []*PeriodicJob
 
+	// PollOnly starts the client in "poll only" mode, which avoids issuing
+	// `LISTEN` statements to wait for events like a leadership resignation or
+	// new job available. The program instead polls periodically to look for
+	// changes (checking for new jobs on the period in FetchPollInterval).
+	//
+	// The downside of this mode of operation is that events will usually be
+	// noticed less quickly. A new job in the queue may have to wait up to
+	// FetchPollInterval to be locked for work. When a leader resigns, it will
+	// be up to five seconds before a new one elects itself.
+	//
+	// The upside is that it makes River compatible with systems where
+	// listen/notify isn't available. For example, PgBouncer in transaction
+	// pooling mode.
+	PollOnly bool
+
 	// Queues is a list of queue names for this client to operate on along with
 	// configuration for the queue like the maximum number of workers to run for
 	// each queue.
@@ -270,13 +285,12 @@ type Client[TTx any] struct {
 	baseService   baseservice.BaseService
 	baseStartStop startstop.BaseStartStop
 
-	completer jobcompleter.JobCompleter
-	config    *Config
-	driver    riverdriver.Driver[TTx]
-	elector   *leadership.Elector
-
+	completer            jobcompleter.JobCompleter
+	config               *Config
+	driver               riverdriver.Driver[TTx]
+	elector              *leadership.Elector
 	monitor              *clientMonitor
-	notifier             *notifier.Notifier
+	notifier             *notifier.Notifier // may be nil in poll-only mode
 	periodicJobs         *PeriodicJobBundle
 	producersByQueueName map[string]*producer
 	queueMaintainer      *maintenance.QueueMaintainer
@@ -408,6 +422,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		JobTimeout:                  valutil.ValOrDefault(config.JobTimeout, JobTimeoutDefault),
 		Logger:                      logger,
 		PeriodicJobs:                config.PeriodicJobs,
+		PollOnly:                    config.PollOnly,
 		Queues:                      config.Queues,
 		ReindexerSchedule:           config.ReindexerSchedule,
 		RescueStuckJobsAfter:        valutil.ValOrDefault(config.RescueStuckJobsAfter, rescueAfter),
@@ -450,22 +465,39 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			return nil, errMissingDatabasePoolWithQueues
 		}
 
-		// TODO: for now we only support a single instance per database/schema.
-		// If we want to provide isolation within a single database/schema,
-		// we'll need to add a config for this.
-		instanceName := "default"
-
 		client.completer = jobcompleter.NewBatchCompleter(archetype, driver.GetExecutor())
 		client.services = append(client.services, client.completer)
 
-		client.notifier = notifier.New(archetype, driver.GetListener(), client.monitor.SetNotifierStatus)
-		client.services = append(client.services, client.notifier)
+		// In poll only mode, we don't try to initialize a notifier that uses
+		// listen/notify. Instead, each service polls for changes it's
+		// interested in. e.g. Elector polls to see if leader has expired.
+		if !config.PollOnly {
+			client.notifier = notifier.New(archetype, driver.GetListener(), client.monitor.SetNotifierStatus)
+			client.services = append(client.services, client.notifier)
+		}
 
-		client.elector = leadership.NewElector(archetype, driver.GetExecutor(), client.notifier, instanceName, client.ID())
+		client.elector = leadership.NewElector(archetype, driver.GetExecutor(), client.notifier, &leadership.Config{
+			ClientID: config.ID,
+		})
 		client.services = append(client.services, client.elector)
 
-		if err := client.provisionProducers(); err != nil {
-			return nil, err
+		for queue, queueConfig := range config.Queues {
+			client.producersByQueueName[queue] = newProducer(archetype, driver.GetExecutor(), &producerConfig{
+				ClientID:          config.ID,
+				Completer:         client.completer,
+				ErrorHandler:      config.ErrorHandler,
+				FetchCooldown:     config.FetchCooldown,
+				FetchPollInterval: config.FetchPollInterval,
+				JobTimeout:        config.JobTimeout,
+				MaxWorkers:        queueConfig.MaxWorkers,
+				Notifier:          client.notifier,
+				Queue:             queue,
+				RetryPolicy:       config.RetryPolicy,
+				SchedulerInterval: config.schedulerInterval,
+				StatusFunc:        client.monitor.SetProducerStatus,
+				Workers:           config.Workers,
+			})
+			client.monitor.InitializeProducerStatus(queue)
 		}
 
 		client.services = append(client.services,
@@ -981,11 +1013,14 @@ func (c *Client[TTx]) handleLeadershipChangeLoop(ctx context.Context, shouldStar
 
 		switch {
 		case notification.IsLeader:
+			// Starting the queue maintainer can take a little time so send to
+			// this test signal _first_ so tests waiting on it can finish,
+			// cancel the queue maintainer start, and overall run much faster.
+			c.testSignals.electedLeader.Signal(struct{}{})
+
 			if err := c.queueMaintainer.Start(ctx); err != nil {
 				c.baseService.Logger.ErrorContext(ctx, "Error starting queue maintainer", slog.String("err", err.Error()))
 			}
-
-			c.testSignals.electedLeader.Signal(struct{}{})
 
 		default:
 			c.queueMaintainer.Stop()
@@ -1015,28 +1050,6 @@ func (c *Client[TTx]) handleLeadershipChangeLoop(ctx context.Context, shouldStar
 		}
 	}()
 
-	return nil
-}
-
-func (c *Client[TTx]) provisionProducers() error {
-	for queue, queueConfig := range c.config.Queues {
-		c.producersByQueueName[queue] = newProducer(&c.baseService.Archetype, c.driver.GetExecutor(), &producerConfig{
-			ClientID:          c.config.ID,
-			Completer:         c.completer,
-			ErrorHandler:      c.config.ErrorHandler,
-			FetchCooldown:     c.config.FetchCooldown,
-			FetchPollInterval: c.config.FetchPollInterval,
-			JobTimeout:        c.config.JobTimeout,
-			MaxWorkers:        queueConfig.MaxWorkers,
-			Notifier:          c.notifier,
-			Queue:             queue,
-			RetryPolicy:       c.config.RetryPolicy,
-			SchedulerInterval: c.config.schedulerInterval,
-			StatusFunc:        c.monitor.SetProducerStatus,
-			Workers:           c.config.Workers,
-		})
-		c.monitor.InitializeProducerStatus(queue)
-	}
 	return nil
 }
 

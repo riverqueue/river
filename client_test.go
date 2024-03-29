@@ -186,28 +186,41 @@ func Test_Client(t *testing.T) {
 	ctx := context.Background()
 
 	type testBundle struct {
-		dbPool        *pgxpool.Pool
-		subscribeChan <-chan *Event
+		config *Config
+		dbPool *pgxpool.Pool
+	}
+
+	// Alternate setup returning only client Config rather than a full Client.
+	setupConfig := func(t *testing.T) (*Config, *testBundle) {
+		t.Helper()
+
+		dbPool := riverinternaltest.TestDB(ctx, t)
+		config := newTestConfig(t, nil)
+
+		return config, &testBundle{
+			config: config,
+			dbPool: dbPool,
+		}
 	}
 
 	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
 		t.Helper()
 
-		dbPool := riverinternaltest.TestDB(ctx, t)
-		config := newTestConfig(t, nil)
-		client := newTestClient(t, dbPool, config)
+		config, bundle := setupConfig(t)
+		return newTestClient(t, bundle.dbPool, config), bundle
+	}
 
-		subscribeChan, _ := client.Subscribe(
+	subscribe := func(t *testing.T, client *Client[pgx.Tx]) <-chan *Event {
+		t.Helper()
+
+		subscribeChan, cancel := client.Subscribe(
 			EventKindJobCancelled,
 			EventKindJobCompleted,
 			EventKindJobFailed,
 			EventKindJobSnoozed,
 		)
-
-		return client, &testBundle{
-			dbPool:        dbPool,
-			subscribeChan: subscribeChan,
-		}
+		t.Cleanup(cancel)
+		return subscribeChan
 	}
 
 	t.Run("StartInsertAndWork", func(t *testing.T) {
@@ -237,7 +250,7 @@ func Test_Client(t *testing.T) {
 	t.Run("JobCancelErrorReturned", func(t *testing.T) {
 		t.Parallel()
 
-		client, bundle := setup(t)
+		client, _ := setup(t)
 
 		type JobArgs struct {
 			JobArgsReflectKind[JobArgs]
@@ -247,12 +260,13 @@ func Test_Client(t *testing.T) {
 			return JobCancel(errors.New("a persisted internal error"))
 		}))
 
+		subscribeChan := subscribe(t, client)
 		startClient(ctx, t, client)
 
 		insertedJob, err := client.Insert(ctx, &JobArgs{}, nil)
 		require.NoError(t, err)
 
-		event := riverinternaltest.WaitOrTimeout(t, bundle.subscribeChan)
+		event := riverinternaltest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCancelled, event.Kind)
 		require.Equal(t, JobStateCancelled, event.Job.State)
 		require.WithinDuration(t, time.Now(), *event.Job.FinalizedAt, 2*time.Second)
@@ -266,7 +280,7 @@ func Test_Client(t *testing.T) {
 	t.Run("JobSnoozeErrorReturned", func(t *testing.T) {
 		t.Parallel()
 
-		client, bundle := setup(t)
+		client, _ := setup(t)
 
 		type JobArgs struct {
 			JobArgsReflectKind[JobArgs]
@@ -276,12 +290,13 @@ func Test_Client(t *testing.T) {
 			return JobSnooze(15 * time.Minute)
 		}))
 
+		subscribeChan := subscribe(t, client)
 		startClient(ctx, t, client)
 
 		insertedJob, err := client.Insert(ctx, &JobArgs{}, nil)
 		require.NoError(t, err)
 
-		event := riverinternaltest.WaitOrTimeout(t, bundle.subscribeChan)
+		event := riverinternaltest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobSnoozed, event.Kind)
 		require.Equal(t, JobStateScheduled, event.Job.State)
 		require.WithinDuration(t, time.Now().Add(15*time.Minute), event.Job.ScheduledAt, 2*time.Second)
@@ -312,6 +327,7 @@ func Test_Client(t *testing.T) {
 		}))
 
 		statusUpdateCh := client.monitor.RegisterUpdates()
+		subscribeChan := subscribe(t, client)
 		startClient(ctx, t, client)
 		waitForClientHealthy(ctx, t, statusUpdateCh)
 
@@ -329,7 +345,7 @@ func Test_Client(t *testing.T) {
 		// modify that column for a running job:
 		require.Equal(t, rivertype.JobStateRunning, updatedJob.State)
 
-		event := riverinternaltest.WaitOrTimeout(t, bundle.subscribeChan)
+		event := riverinternaltest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCancelled, event.Kind)
 		require.Equal(t, JobStateCancelled, event.Job.State)
 		require.WithinDuration(t, time.Now(), *event.Job.FinalizedAt, 2*time.Second)
@@ -429,7 +445,7 @@ func Test_Client(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(dbPool.Close)
 
-		client, err := NewClient(riverpgxv5.New(dbPool), newTestConfig(t, nil))
+		client, err := NewClient(riverpgxv5.New(dbPool), bundle.config)
 		require.NoError(t, err)
 
 		// We don't actually verify that River's functional on another schema so
@@ -443,6 +459,33 @@ func Test_Client(t *testing.T) {
 		// PgError has SchemaName and TableName properties, but unfortunately
 		// neither contain a useful value in this case.
 		require.Equal(t, `relation "river_job" does not exist`, pgErr.Message)
+	})
+
+	t.Run("PollOnly", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		bundle.config.PollOnly = true
+
+		client := newTestClient(t, bundle.dbPool, config)
+
+		// Notifier should not have been initialized at all.
+		require.Nil(t, client.notifier)
+
+		job, err := client.Insert(ctx, &noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		// Despite no notifier, the client should still be able to elect itself
+		// leader.
+		client.testSignals.electedLeader.WaitOrTimeout()
+
+		event := riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, job.ID, event.Job.ID)
+		require.Equal(t, JobStateCompleted, event.Job.State)
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {
