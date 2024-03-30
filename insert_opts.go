@@ -3,11 +3,20 @@ package river
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"time"
 
 	"github.com/riverqueue/river/rivertype"
 )
+
+// Regular expression to which the format of tags must comply. Mainly, no
+// special characters, and with hyphens in the middle.
+//
+// A key property here (in case this is relaxed in the future) is that commas
+// must never be allowed because they're used as a delimiter during batch job
+// insertion for the `riverdatabasesql` driver.
+var tagRE = regexp.MustCompile(`\A[\w][\w\-]+[\w]\z`)
 
 // InsertOpts are optional settings for a new job which can be provided at job
 // insertion time. These will override any default InsertOpts settings provided
@@ -57,6 +66,9 @@ type InsertOpts struct {
 	// Tags are an arbitrary list of keywords to add to the job. They have no
 	// functional behavior and are meant entirely as a user-specified construct
 	// to help group and categorize jobs.
+	//
+	// Tags should conform to the regex `\A[\w][\w\-]+[\w]\z` and be a maximum
+	// of 255 characters long. No special characters are allowed.
 	//
 	// If tags are specified from both a job args override and from options on
 	// Insert, the latter takes precedence. Tags are not merged.

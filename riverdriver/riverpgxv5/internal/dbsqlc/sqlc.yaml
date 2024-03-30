@@ -39,8 +39,3 @@ sql:
               type: "time.Time"
               pointer: true
             nullable: true
-
-          # specific columns
-          - column: "river_job.errors"
-            go_type:
-              type: "[]AttemptError"

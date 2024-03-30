@@ -9,13 +9,13 @@ import (
 	"context"
 )
 
-// iteratorForJobInsertMany implements pgx.CopyFromSource.
-type iteratorForJobInsertMany struct {
-	rows                 []*JobInsertManyParams
+// iteratorForJobInsertFastManyCopyFrom implements pgx.CopyFromSource.
+type iteratorForJobInsertFastManyCopyFrom struct {
+	rows                 []*JobInsertFastManyCopyFromParams
 	skippedFirstNextCall bool
 }
 
-func (r *iteratorForJobInsertMany) Next() bool {
+func (r *iteratorForJobInsertFastManyCopyFrom) Next() bool {
 	if len(r.rows) == 0 {
 		return false
 	}
@@ -27,7 +27,7 @@ func (r *iteratorForJobInsertMany) Next() bool {
 	return len(r.rows) > 0
 }
 
-func (r iteratorForJobInsertMany) Values() ([]interface{}, error) {
+func (r iteratorForJobInsertFastManyCopyFrom) Values() ([]interface{}, error) {
 	return []interface{}{
 		r.rows[0].Args,
 		r.rows[0].FinalizedAt,
@@ -42,10 +42,10 @@ func (r iteratorForJobInsertMany) Values() ([]interface{}, error) {
 	}, nil
 }
 
-func (r iteratorForJobInsertMany) Err() error {
+func (r iteratorForJobInsertFastManyCopyFrom) Err() error {
 	return nil
 }
 
-func (q *Queries) JobInsertMany(ctx context.Context, db DBTX, arg []*JobInsertManyParams) (int64, error) {
-	return db.CopyFrom(ctx, []string{"river_job"}, []string{"args", "finalized_at", "kind", "max_attempts", "metadata", "priority", "queue", "scheduled_at", "state", "tags"}, &iteratorForJobInsertMany{rows: arg})
+func (q *Queries) JobInsertFastManyCopyFrom(ctx context.Context, db DBTX, arg []*JobInsertFastManyCopyFromParams) (int64, error) {
+	return db.CopyFrom(ctx, []string{"river_job"}, []string{"args", "finalized_at", "kind", "max_attempts", "metadata", "priority", "queue", "scheduled_at", "state", "tags"}, &iteratorForJobInsertFastManyCopyFrom{rows: arg})
 }
