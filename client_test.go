@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/robfig/cron/v3"
 	"github.com/stretchr/testify/require"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -164,7 +166,7 @@ func newTestClient(t *testing.T, dbPool *pgxpool.Pool, config *Config) *Client[p
 	return client
 }
 
-func startClient(ctx context.Context, t *testing.T, client *Client[pgx.Tx]) {
+func startClient[TTx any](ctx context.Context, t *testing.T, client *Client[TTx]) {
 	t.Helper()
 
 	if err := client.Start(ctx); err != nil {
@@ -185,6 +187,21 @@ func runNewTestClient(ctx context.Context, t *testing.T, config *Config) *Client
 	client := newTestClient(t, dbPool, config)
 	startClient(ctx, t, client)
 	return client
+}
+
+func subscribe[TTx any](t *testing.T, client *Client[TTx]) <-chan *Event {
+	t.Helper()
+
+	subscribeChan, cancel := client.Subscribe(
+		EventKindJobCancelled,
+		EventKindJobCompleted,
+		EventKindJobFailed,
+		EventKindJobSnoozed,
+		EventKindQueuePaused,
+		EventKindQueueResumed,
+	)
+	t.Cleanup(cancel)
+	return subscribeChan
 }
 
 func Test_Client(t *testing.T) {
@@ -215,21 +232,6 @@ func Test_Client(t *testing.T) {
 
 		config, bundle := setupConfig(t)
 		return newTestClient(t, bundle.dbPool, config), bundle
-	}
-
-	subscribe := func(t *testing.T, client *Client[pgx.Tx]) <-chan *Event {
-		t.Helper()
-
-		subscribeChan, cancel := client.Subscribe(
-			EventKindJobCancelled,
-			EventKindJobCompleted,
-			EventKindJobFailed,
-			EventKindJobSnoozed,
-			EventKindQueuePaused,
-			EventKindQueueResumed,
-		)
-		t.Cleanup(cancel)
-		return subscribeChan
 	}
 
 	t.Run("StartInsertAndWork", func(t *testing.T) {
@@ -640,7 +642,40 @@ func Test_Client(t *testing.T) {
 		}
 	})
 
-	t.Run("PollOnly", func(t *testing.T) {
+	t.Run("PollOnlyDriver", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		bundle.config.PollOnly = true
+
+		stdPool := stdlib.OpenDBFromPool(bundle.dbPool)
+		t.Cleanup(func() { require.NoError(t, stdPool.Close()) })
+
+		client, err := NewClient(riverdatabasesql.New(stdPool), config)
+		require.NoError(t, err)
+
+		client.testSignals.Init()
+
+		// Notifier should not have been initialized at all.
+		require.Nil(t, client.notifier)
+
+		insertRes, err := client.Insert(ctx, &noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		// Despite no notifier, the client should still be able to elect itself
+		// leader.
+		client.testSignals.electedLeader.WaitOrTimeout()
+
+		event := riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+		require.Equal(t, rivertype.JobStateCompleted, event.Job.State)
+	})
+
+	t.Run("PollOnlyOption", func(t *testing.T) {
 		t.Parallel()
 
 		config, bundle := setupConfig(t)
@@ -4490,6 +4525,24 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		require.Equal(t, 2, insertParams.Priority)
 		require.Equal(t, "other", insertParams.Queue)
 		require.Equal(t, []string{"tag1", "tag2"}, insertParams.Tags)
+	})
+
+	t.Run("TagFormatValidated", func(t *testing.T) {
+		t.Parallel()
+
+		{
+			_, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, &customInsertOptsJobArgs{}, &InsertOpts{
+				Tags: []string{strings.Repeat("h", 256)},
+			})
+			require.EqualError(t, err, "tags should be a maximum of 255 characters long")
+		}
+
+		{
+			_, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, &customInsertOptsJobArgs{}, &InsertOpts{
+				Tags: []string{"tag,with,comma"},
+			})
+			require.EqualError(t, err, "tags should match regex "+tagRE.String())
+		}
 	})
 
 	t.Run("UniqueOpts", func(t *testing.T) {

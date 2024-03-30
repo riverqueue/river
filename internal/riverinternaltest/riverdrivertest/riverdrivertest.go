@@ -22,47 +22,152 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-type testBundle struct{}
-
-func setupExecutor[TTx any](ctx context.Context, t *testing.T, driver riverdriver.Driver[TTx], beginTx func(ctx context.Context, t *testing.T) TTx) (riverdriver.Executor, *testBundle) {
+// Exercise fully exercises a driver. The driver's listener is exercised if
+// supported.
+func Exercise[TTx any](ctx context.Context, t *testing.T,
+	driverWithPool func(ctx context.Context, t *testing.T) riverdriver.Driver[TTx],
+	executorWithTx func(ctx context.Context, t *testing.T) riverdriver.Executor,
+) {
 	t.Helper()
 
-	tx := beginTx(ctx, t)
-	return driver.UnwrapExecutor(tx), &testBundle{}
-}
+	if driverWithPool(ctx, t).SupportsListener() {
+		exerciseListener(ctx, t, driverWithPool)
+	} else {
+		t.Logf("Driver does not support listener; skipping listener tests")
+	}
 
-// ExerciseExecutorFull exercises a driver that's expected to provide full
-// functionality.
-func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riverdriver.Driver[TTx], beginTx func(ctx context.Context, t *testing.T) TTx) {
-	t.Helper()
+	type testBundle struct{}
+
+	setup := func(ctx context.Context, t *testing.T) (riverdriver.Executor, *testBundle) {
+		t.Helper()
+		return executorWithTx(ctx, t), &testBundle{}
+	}
 
 	const clientID = "test-client-id"
-
-	// Expect no pool. We'll be using transactions only throughout these tests.
-	require.False(t, driver.HasPool())
-
-	// Encompasses all minimal functionality.
-	ExerciseExecutorMigrationOnly[TTx](ctx, t, driver, beginTx)
 
 	t.Run("Begin", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
+		t.Run("BasicVisibility", func(t *testing.T) {
+			t.Parallel()
 
-		tx, err := exec.Begin(ctx)
+			exec, _ := setup(ctx, t)
+
+			tx, err := exec.Begin(ctx)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+			// Job visible in subtransaction, but not parent.
+			{
+				job := testfactory.Job(ctx, t, tx, &testfactory.JobOpts{})
+
+				_, err = tx.JobGetByID(ctx, job.ID)
+				require.NoError(t, err)
+
+				require.NoError(t, tx.Rollback(ctx))
+
+				_, err = exec.JobGetByID(ctx, job.ID)
+				require.ErrorIs(t, err, rivertype.ErrNotFound)
+			}
+		})
+
+		t.Run("NestedTransactions", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			tx1, err := exec.Begin(ctx)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = tx1.Rollback(ctx) })
+
+			// Job visible in tx1, but not top level executor.
+			{
+				job1 := testfactory.Job(ctx, t, tx1, &testfactory.JobOpts{})
+
+				{
+					tx2, err := tx1.Begin(ctx)
+					require.NoError(t, err)
+					t.Cleanup(func() { _ = tx2.Rollback(ctx) })
+
+					// Job visible in tx2, but not top level executor.
+					{
+						job2 := testfactory.Job(ctx, t, tx2, &testfactory.JobOpts{})
+
+						_, err = tx2.JobGetByID(ctx, job2.ID)
+						require.NoError(t, err)
+
+						require.NoError(t, tx2.Rollback(ctx))
+
+						_, err = tx1.JobGetByID(ctx, job2.ID)
+						require.ErrorIs(t, err, rivertype.ErrNotFound)
+					}
+
+					_, err = tx1.JobGetByID(ctx, job1.ID)
+					require.NoError(t, err)
+				}
+
+				// Repeat the same subtransaction again.
+				{
+					tx2, err := tx1.Begin(ctx)
+					require.NoError(t, err)
+					t.Cleanup(func() { _ = tx2.Rollback(ctx) })
+
+					// Job visible in tx2, but not top level executor.
+					{
+						job2 := testfactory.Job(ctx, t, tx2, &testfactory.JobOpts{})
+
+						_, err = tx2.JobGetByID(ctx, job2.ID)
+						require.NoError(t, err)
+
+						require.NoError(t, tx2.Rollback(ctx))
+
+						_, err = tx1.JobGetByID(ctx, job2.ID)
+						require.ErrorIs(t, err, rivertype.ErrNotFound)
+					}
+
+					_, err = tx1.JobGetByID(ctx, job1.ID)
+					require.NoError(t, err)
+				}
+
+				require.NoError(t, tx1.Rollback(ctx))
+
+				_, err = exec.JobGetByID(ctx, job1.ID)
+				require.ErrorIs(t, err, rivertype.ErrNotFound)
+			}
+		})
+
+		t.Run("RollbackAfterCommit", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			tx1, err := exec.Begin(ctx)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = tx1.Rollback(ctx) })
+
+			tx2, err := tx1.Begin(ctx)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = tx2.Rollback(ctx) })
+
+			job := testfactory.Job(ctx, t, tx2, &testfactory.JobOpts{})
+
+			require.NoError(t, tx2.Commit(ctx))
+			_ = tx2.Rollback(ctx) // "tx is closed" error generally returned, but don't require this
+
+			// Despite rollback being called after commit, the job is still
+			// visible from the outer transaction.
+			_, err = tx1.JobGetByID(ctx, job.ID)
+			require.NoError(t, err)
+		})
+	})
+
+	t.Run("Exec", func(t *testing.T) {
+		t.Parallel()
+
+		exec, _ := setup(ctx, t)
+
+		_, err := exec.Exec(ctx, "SELECT 1 + 2")
 		require.NoError(t, err)
-		t.Cleanup(func() { _ = tx.Rollback(ctx) })
-
-		// Job visible in subtransaction, but not parent.
-		job := testfactory.Job(ctx, t, tx, &testfactory.JobOpts{})
-
-		_, err = tx.JobGetByID(ctx, job.ID)
-		require.NoError(t, err)
-
-		require.NoError(t, tx.Rollback(ctx))
-
-		_, err = exec.JobGetByID(ctx, job.ID)
-		require.ErrorIs(t, err, rivertype.ErrNotFound)
 	})
 
 	t.Run("JobCancel", func(t *testing.T) {
@@ -78,7 +183,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			t.Run(fmt.Sprintf("CancelsJobIn%sState", startingState), func(t *testing.T) {
 				t.Parallel()
 
-				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+				exec, _ := setup(ctx, t)
 
 				now := time.Now().UTC()
 				nowStr := now.Format(time.RFC3339Nano)
@@ -105,7 +210,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("RunningJobIsNotImmediatelyCancelled", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			now := time.Now().UTC()
 			nowStr := now.Format(time.RFC3339Nano)
@@ -137,7 +242,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			t.Run(fmt.Sprintf("DoesNotAlterFinalizedJobIn%sState", startingState), func(t *testing.T) {
 				t.Parallel()
 
-				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+				exec, _ := setup(ctx, t)
 
 				job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 					FinalizedAt: ptrutil.Ptr(time.Now()),
@@ -159,7 +264,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("ReturnsErrNotFoundIfJobDoesNotExist", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			jobAfter, err := exec.JobCancel(ctx, &riverdriver.JobCancelParams{
 				ID:                1234567890,
@@ -174,7 +279,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 	t.Run("JobCountByState", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
+		exec, _ := setup(ctx, t)
 
 		// Included because they're the queried state.
 		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
@@ -197,7 +302,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("DoesNotDeleteARunningJob", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				State: ptrutil.Ptr(rivertype.JobStateRunning),
@@ -226,7 +331,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			t.Run(fmt.Sprintf("DeletesA_%s_Job", state), func(t *testing.T) {
 				t.Parallel()
 
-				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+				exec, _ := setup(ctx, t)
 
 				now := time.Now().UTC()
 
@@ -261,7 +366,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("ReturnsErrNotFoundIfJobDoesNotExist", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			jobAfter, err := exec.JobDelete(ctx, 1234567890)
 			require.ErrorIs(t, err, rivertype.ErrNotFound)
@@ -272,7 +377,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 	t.Run("JobDeleteBefore", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
+		exec, _ := setup(ctx, t)
 
 		var (
 			horizon       = time.Now()
@@ -334,7 +439,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("Success", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
 
@@ -353,7 +458,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("ConstrainedToLimit", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
@@ -371,7 +476,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("ConstrainedToQueue", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				Queue: ptrutil.Ptr("other-queue"),
@@ -390,7 +495,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("ConstrainedToScheduledAtBeforeNow", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				ScheduledAt: ptrutil.Ptr(time.Now().Add(1 * time.Minute)),
@@ -409,7 +514,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("Prioritized", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			// Insert jobs with decreasing priority numbers (3, 2, 1) which means increasing priority.
 			for i := 3; i > 0; i-- {
@@ -455,7 +560,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("FetchesAnExistingJob", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			now := time.Now().UTC()
 
@@ -474,7 +579,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("ReturnsErrNotFoundIfJobDoesNotExist", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			job, err := exec.JobGetByID(ctx, 0)
 			require.Error(t, err)
@@ -486,7 +591,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 	t.Run("JobGetByIDMany", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
+		exec, _ := setup(ctx, t)
 
 		job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
 		job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
@@ -508,7 +613,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("NoOptions", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(uniqueJobKind)})
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("other_kind")})
@@ -528,7 +633,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("ByArgs", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			args := []byte(`{"unique": "args"}`)
 
@@ -554,7 +659,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("ByCreatedAt", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			createdAt := time.Now().UTC()
 
@@ -582,7 +687,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("ByQueue", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			const queue = "unique_queue"
 
@@ -608,7 +713,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("ByState", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			const state = rivertype.JobStateCompleted
 
@@ -635,7 +740,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 	t.Run("JobGetByKindMany", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
+		exec, _ := setup(ctx, t)
 
 		job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("kind1")})
 		job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("kind2")})
@@ -652,7 +757,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 	t.Run("JobGetStuck", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
+		exec, _ := setup(ctx, t)
 
 		var (
 			horizon       = time.Now()
@@ -688,7 +793,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("MinimalArgsWithDefaults", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			now := time.Now().UTC()
 
@@ -720,7 +825,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("AllArgs", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			targetTime := time.Now().UTC().Add(-15 * time.Minute)
 
@@ -757,7 +862,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 	t.Run("JobInsertFastMany", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
+		exec, _ := setup(ctx, t)
 
 		// This test needs to use a time from before the transaction begins, otherwise
 		// the newly-scheduled jobs won't yet show as available because their
@@ -812,7 +917,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("MinimalArgsWithDefaults", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			job, err := exec.JobInsertFull(ctx, &riverdriver.JobInsertFullParams{
 				EncodedArgs: []byte(`{"encoded": "args"}`),
@@ -838,7 +943,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("AllArgs", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			now := time.Now().UTC()
 
@@ -894,7 +999,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 				t.Run(fmt.Sprintf("CannotSetState%sWithoutFinalizedAt", capitalizeJobState(state)), func(t *testing.T) {
 					t.Parallel()
 
-					exec, _ := setupExecutor(ctx, t, driver, beginTx)
+					exec, _ := setup(ctx, t)
 					// Create a job with the target state but without a finalized_at,
 					// expect an error:
 					_, err := exec.JobInsertFull(ctx, testfactory.Job_Build(t, &testfactory.JobOpts{
@@ -906,7 +1011,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 				t.Run(fmt.Sprintf("CanSetState%sWithFinalizedAt", capitalizeJobState(state)), func(t *testing.T) {
 					t.Parallel()
 
-					exec, _ := setupExecutor(ctx, t, driver, beginTx)
+					exec, _ := setup(ctx, t)
 
 					// Create a job with the target state but with a finalized_at, expect
 					// no error:
@@ -929,7 +1034,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 				t.Run(fmt.Sprintf("CanSetState%sWithoutFinalizedAt", capitalizeJobState(state)), func(t *testing.T) {
 					t.Parallel()
 
-					exec, _ := setupExecutor(ctx, t, driver, beginTx)
+					exec, _ := setup(ctx, t)
 
 					// Create a job with the target state but without a finalized_at,
 					// expect no error:
@@ -942,7 +1047,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 				t.Run(fmt.Sprintf("CannotSetState%sWithFinalizedAt", capitalizeJobState(state)), func(t *testing.T) {
 					t.Parallel()
 
-					exec, _ := setupExecutor(ctx, t, driver, beginTx)
+					exec, _ := setup(ctx, t)
 
 					// Create a job with the target state but with a finalized_at, expect
 					// an error:
@@ -959,7 +1064,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 	t.Run("JobList", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
+		exec, _ := setup(ctx, t)
 
 		now := time.Now().UTC()
 
@@ -968,7 +1073,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			AttemptedAt: &now,
 			CreatedAt:   &now,
 			EncodedArgs: []byte(`{"encoded": "args"}`),
-			Errors:      [][]byte{[]byte(`{"error": "message"}`)},
+			Errors:      [][]byte{[]byte(`{"error": "message1"}`), []byte(`{"error": "message2"}`)},
 			FinalizedAt: &now,
 			Metadata:    []byte(`{"meta": "data"}`),
 			ScheduledAt: &now,
@@ -978,8 +1083,8 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 
 		fetchedJobs, err := exec.JobList(
 			ctx,
-			fmt.Sprintf("SELECT %s FROM river_job WHERE id = @job_id", exec.JobListFields()),
-			map[string]any{"job_id": job.ID},
+			fmt.Sprintf("SELECT %s FROM river_job WHERE id = @job_id_123", exec.JobListFields()),
+			map[string]any{"job_id_123": job.ID},
 		)
 		require.NoError(t, err)
 		require.Len(t, fetchedJobs, 1)
@@ -989,7 +1094,8 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		require.Equal(t, job.AttemptedAt, fetchedJob.AttemptedAt)
 		require.Equal(t, job.CreatedAt, fetchedJob.CreatedAt)
 		require.Equal(t, job.EncodedArgs, fetchedJob.EncodedArgs)
-		require.Equal(t, "message", fetchedJob.Errors[0].Error)
+		require.Equal(t, "message1", fetchedJob.Errors[0].Error)
+		require.Equal(t, "message2", fetchedJob.Errors[1].Error)
 		require.Equal(t, job.FinalizedAt, fetchedJob.FinalizedAt)
 		require.Equal(t, job.Kind, fetchedJob.Kind)
 		require.Equal(t, job.MaxAttempts, fetchedJob.MaxAttempts)
@@ -1004,7 +1110,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 	t.Run("JobListFields", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
+		exec, _ := setup(ctx, t)
 
 		require.Equal(t, "id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags",
 			exec.JobListFields())
@@ -1013,7 +1119,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 	t.Run("JobRescueMany", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
+		exec, _ := setup(ctx, t)
 
 		now := time.Now().UTC()
 
@@ -1065,7 +1171,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("DoesNotUpdateARunningJob", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				State: ptrutil.Ptr(rivertype.JobStateRunning),
@@ -1095,7 +1201,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			t.Run(fmt.Sprintf("UpdatesA_%s_JobToBeScheduledImmediately", state), func(t *testing.T) {
 				t.Parallel()
 
-				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+				exec, _ := setup(ctx, t)
 
 				now := time.Now().UTC()
 
@@ -1136,7 +1242,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			// accurately if we don't reset the scheduled_at.
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			now := time.Now().UTC()
 
@@ -1157,7 +1263,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			// because doing so can make it lose its place in line.
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			now := time.Now().UTC()
 
@@ -1178,7 +1284,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("ReturnsErrNotFoundIfJobNotFound", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			_, err := exec.JobRetry(ctx, 0)
 			require.Error(t, err)
@@ -1189,7 +1295,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 	t.Run("JobSchedule", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
+		exec, _ := setup(ctx, t)
 
 		var (
 			horizon       = time.Now()
@@ -1245,7 +1351,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("CompletesRunningJobs", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			finalizedAt1 := time.Now().UTC().Add(-1 * time.Minute)
 			finalizedAt2 := time.Now().UTC().Add(-2 * time.Minute)
@@ -1290,7 +1396,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("DoesNotCompleteJobsInNonRunningStates", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			now := time.Now().UTC()
 
@@ -1322,7 +1428,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		})
 
 		t.Run("MixOfRunningAndNotRunningStates", func(t *testing.T) {
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			finalizedAt1 := time.Now().UTC().Add(-1 * time.Minute)
 			finalizedAt2 := time.Now().UTC().Add(-2 * time.Minute) // ignored because job is not running
@@ -1368,7 +1474,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("CompletesARunningJob", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			now := time.Now().UTC()
 
@@ -1389,7 +1495,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("DoesNotCompleteARetryableJob", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			now := time.Now().UTC()
 
@@ -1424,7 +1530,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("SetsARunningJobToRetryable", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			now := time.Now().UTC()
 
@@ -1452,7 +1558,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("DoesNotTouchAlreadyRetryableJob", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			now := time.Now().UTC()
 
@@ -1481,7 +1587,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			// so that the job is not retried.
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			now := time.Now().UTC()
 
@@ -1514,7 +1620,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 	t.Run("JobUpdate", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
+		exec, _ := setup(ctx, t)
 
 		job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
 
@@ -1527,7 +1633,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			AttemptedAtDoUpdate: true,
 			AttemptedAt:         &now,
 			ErrorsDoUpdate:      true,
-			Errors:              [][]byte{[]byte(`{"error": "message"}`)},
+			Errors:              [][]byte{[]byte(`{"error":"message"}`)},
 			FinalizedAtDoUpdate: true,
 			FinalizedAt:         &now,
 			StateDoUpdate:       true,
@@ -1546,7 +1652,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 	t.Run("LeaderDeleteExpired", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
+		exec, _ := setup(ctx, t)
 
 		now := time.Now().UTC()
 
@@ -1575,7 +1681,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("ElectsLeader", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			elected, err := exec.LeaderAttemptElect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: clientID,
@@ -1593,7 +1699,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("CannotElectTwiceInARow", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 				LeaderID: ptrutil.Ptr(clientID),
@@ -1621,7 +1727,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("ElectsLeader", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			elected, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: clientID,
@@ -1639,7 +1745,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("ReelectsSameLeader", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 				LeaderID: ptrutil.Ptr(clientID),
@@ -1666,7 +1772,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 	t.Run("LeaderInsert", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
+		exec, _ := setup(ctx, t)
 
 		leader, err := exec.LeaderInsert(ctx, &riverdriver.LeaderInsertParams{
 			LeaderID: clientID,
@@ -1681,7 +1787,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 	t.Run("LeaderGetElectedLeader", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
+		exec, _ := setup(ctx, t)
 
 		_ = testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 			LeaderID: ptrutil.Ptr(clientID),
@@ -1700,7 +1806,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("Success", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			{
 				resigned, err := exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
@@ -1728,7 +1834,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("DoesNotResignWithoutLeadership", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			_ = testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 				LeaderID: ptrutil.Ptr("other-client-id"),
@@ -1743,10 +1849,91 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		})
 	})
 
+	// Truncates the migration table so we only have to work with test
+	// migration data.
+	truncateMigrations := func(ctx context.Context, t *testing.T, exec riverdriver.Executor) {
+		t.Helper()
+
+		_, err := exec.Exec(ctx, "TRUNCATE TABLE river_migration")
+		require.NoError(t, err)
+	}
+
+	t.Run("MigrationDeleteByVersionMany", func(t *testing.T) {
+		t.Parallel()
+
+		exec, _ := setup(ctx, t)
+
+		truncateMigrations(ctx, t, exec)
+
+		migration1 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
+		migration2 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
+
+		migrations, err := exec.MigrationDeleteByVersionMany(ctx, []int{
+			migration1.Version,
+			migration2.Version,
+		})
+		require.NoError(t, err)
+		require.Len(t, migrations, 2)
+		slices.SortFunc(migrations, func(a, b *riverdriver.Migration) int { return a.Version - b.Version })
+		require.Equal(t, migration1.Version, migrations[0].Version)
+		require.Equal(t, migration2.Version, migrations[1].Version)
+	})
+
+	t.Run("MigrationGetAll", func(t *testing.T) {
+		t.Parallel()
+
+		exec, _ := setup(ctx, t)
+
+		truncateMigrations(ctx, t, exec)
+
+		migration1 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
+		migration2 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
+
+		migrations, err := exec.MigrationGetAll(ctx)
+		require.NoError(t, err)
+		require.Len(t, migrations, 2)
+		require.Equal(t, migration1.Version, migrations[0].Version)
+		require.Equal(t, migration2.Version, migrations[1].Version)
+
+		// Check the full properties of one of the migrations.
+		migration1Fetched := migrations[0]
+		require.Equal(t, migration1.ID, migration1Fetched.ID)
+		requireEqualTime(t, migration1.CreatedAt, migration1Fetched.CreatedAt)
+		require.Equal(t, migration1.Version, migration1Fetched.Version)
+	})
+
+	t.Run("MigrationInsertMany", func(t *testing.T) {
+		t.Parallel()
+
+		exec, _ := setup(ctx, t)
+
+		truncateMigrations(ctx, t, exec)
+
+		migrations, err := exec.MigrationInsertMany(ctx, []int{1, 2})
+		require.NoError(t, err)
+		require.Len(t, migrations, 2)
+		require.Equal(t, 1, migrations[0].Version)
+		require.Equal(t, 2, migrations[1].Version)
+	})
+
+	t.Run("TableExists", func(t *testing.T) {
+		t.Parallel()
+
+		exec, _ := setup(ctx, t)
+
+		exists, err := exec.TableExists(ctx, "river_job")
+		require.NoError(t, err)
+		require.True(t, exists)
+
+		exists, err = exec.TableExists(ctx, "does_not_exist")
+		require.NoError(t, err)
+		require.False(t, exists)
+	})
+
 	t.Run("PGAdvisoryXactLock", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
+		exec, _ := setup(ctx, t)
 
 		// Acquire the advisory lock.
 		_, err := exec.PGAdvisoryXactLock(ctx, 123456)
@@ -1756,10 +1943,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		// block because the lock can't be acquired. Verify some amount of wait,
 		// cancel the lock acquisition attempt, then verify return.
 		{
-			var (
-				otherTx   = beginTx(ctx, t)
-				otherExec = driver.UnwrapExecutor(otherTx)
-			)
+			otherExec := executorWithTx(ctx, t)
 
 			goroutineDone := make(chan struct{})
 
@@ -1787,79 +1971,79 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 				require.FailNow(t, "Goroutine didn't finish in a timely manner")
 			}
 		}
+	})
 
-		t.Run("QueueCreateOrSetUpdatedAt", func(t *testing.T) {
-			t.Run("InsertsANewQueueWithDefaultUpdatedAt", func(t *testing.T) {
-				t.Parallel()
+	t.Run("QueueCreateOrSetUpdatedAt", func(t *testing.T) {
+		t.Run("InsertsANewQueueWithDefaultUpdatedAt", func(t *testing.T) {
+			t.Parallel()
 
-				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
-				metadata := []byte(`{"foo": "bar"}`)
-				queue, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
-					Metadata: metadata,
-					Name:     "new-queue",
-				})
-				require.NoError(t, err)
-				require.WithinDuration(t, time.Now(), queue.CreatedAt, 500*time.Millisecond)
-				require.Equal(t, metadata, queue.Metadata)
-				require.Equal(t, "new-queue", queue.Name)
-				require.Nil(t, queue.PausedAt)
-				require.WithinDuration(t, time.Now(), queue.UpdatedAt, 500*time.Millisecond)
+			metadata := []byte(`{"foo": "bar"}`)
+			queue, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
+				Metadata: metadata,
+				Name:     "new-queue",
 			})
+			require.NoError(t, err)
+			require.WithinDuration(t, time.Now(), queue.CreatedAt, 500*time.Millisecond)
+			require.Equal(t, metadata, queue.Metadata)
+			require.Equal(t, "new-queue", queue.Name)
+			require.Nil(t, queue.PausedAt)
+			require.WithinDuration(t, time.Now(), queue.UpdatedAt, 500*time.Millisecond)
+		})
 
-			t.Run("InsertsANewQueueWithCustomPausedAt", func(t *testing.T) {
-				t.Parallel()
+		t.Run("InsertsANewQueueWithCustomPausedAt", func(t *testing.T) {
+			t.Parallel()
 
-				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
-				now := time.Now().Add(-5 * time.Minute)
-				queue, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
-					Name:     "new-queue",
-					PausedAt: ptrutil.Ptr(now),
-				})
-				require.NoError(t, err)
-				require.Equal(t, "new-queue", queue.Name)
-				require.WithinDuration(t, now, *queue.PausedAt, time.Millisecond)
+			now := time.Now().Add(-5 * time.Minute)
+			queue, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
+				Name:     "new-queue",
+				PausedAt: ptrutil.Ptr(now),
 			})
+			require.NoError(t, err)
+			require.Equal(t, "new-queue", queue.Name)
+			require.WithinDuration(t, now, *queue.PausedAt, time.Millisecond)
+		})
 
-			t.Run("UpdatesTheUpdatedAtOfExistingQueue", func(t *testing.T) {
-				t.Parallel()
+		t.Run("UpdatesTheUpdatedAtOfExistingQueue", func(t *testing.T) {
+			t.Parallel()
 
-				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
-				metadata := []byte(`{"foo": "bar"}`)
-				tBefore := time.Now().UTC()
-				queueBefore, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
-					Metadata:  metadata,
-					Name:      "updateable-queue",
-					UpdatedAt: &tBefore,
-				})
-				require.NoError(t, err)
-				require.WithinDuration(t, tBefore, queueBefore.UpdatedAt, time.Millisecond)
-
-				tAfter := tBefore.Add(2 * time.Second)
-				queueAfter, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
-					Metadata:  []byte(`{"other": "metadata"}`),
-					Name:      "updateable-queue",
-					UpdatedAt: &tAfter,
-				})
-				require.NoError(t, err)
-
-				// unchanged:
-				require.Equal(t, queueBefore.CreatedAt, queueAfter.CreatedAt)
-				require.Equal(t, metadata, queueAfter.Metadata)
-				require.Equal(t, "updateable-queue", queueAfter.Name)
-				require.Nil(t, queueAfter.PausedAt)
-
-				// Timestamp is bumped:
-				require.WithinDuration(t, tAfter, queueAfter.UpdatedAt, time.Millisecond)
+			metadata := []byte(`{"foo": "bar"}`)
+			tBefore := time.Now().UTC()
+			queueBefore, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
+				Metadata:  metadata,
+				Name:      "updateable-queue",
+				UpdatedAt: &tBefore,
 			})
+			require.NoError(t, err)
+			require.WithinDuration(t, tBefore, queueBefore.UpdatedAt, time.Millisecond)
+
+			tAfter := tBefore.Add(2 * time.Second)
+			queueAfter, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
+				Metadata:  []byte(`{"other": "metadata"}`),
+				Name:      "updateable-queue",
+				UpdatedAt: &tAfter,
+			})
+			require.NoError(t, err)
+
+			// unchanged:
+			require.Equal(t, queueBefore.CreatedAt, queueAfter.CreatedAt)
+			require.Equal(t, metadata, queueAfter.Metadata)
+			require.Equal(t, "updateable-queue", queueAfter.Name)
+			require.Nil(t, queueAfter.PausedAt)
+
+			// Timestamp is bumped:
+			require.WithinDuration(t, tAfter, queueAfter.UpdatedAt, time.Millisecond)
 		})
 
 		t.Run("QueueDeleteExpired", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			now := time.Now()
 			_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now)})
@@ -1885,7 +2069,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("QueueGet", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`)})
 
@@ -1906,7 +2090,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("QueueList", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+			exec, _ := setup(ctx, t)
 
 			requireQueuesEqual := func(t *testing.T, target, actual *rivertype.Queue) {
 				t.Helper()
@@ -1952,7 +2136,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			t.Run("ExistingPausedQueue", func(t *testing.T) {
 				t.Parallel()
 
-				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+				exec, _ := setup(ctx, t)
 
 				queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{
 					PausedAt: ptrutil.Ptr(time.Now()),
@@ -1970,7 +2154,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			t.Run("ExistingUnpausedQueue", func(t *testing.T) {
 				t.Parallel()
 
-				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+				exec, _ := setup(ctx, t)
 
 				queue := testfactory.Queue(ctx, t, exec, nil)
 				require.Nil(t, queue.PausedAt)
@@ -1986,7 +2170,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			t.Run("NonExistentQueue", func(t *testing.T) {
 				t.Parallel()
 
-				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+				exec, _ := setup(ctx, t)
 
 				err := exec.QueuePause(ctx, "queue1")
 				require.ErrorIs(t, err, rivertype.ErrNotFound)
@@ -1995,7 +2179,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			t.Run("AllQueuesExistingQueues", func(t *testing.T) {
 				t.Parallel()
 
-				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+				exec, _ := setup(ctx, t)
 
 				queue1 := testfactory.Queue(ctx, t, exec, nil)
 				require.Nil(t, queue1.PausedAt)
@@ -2020,7 +2204,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			t.Run("AllQueuesNoQueues", func(t *testing.T) {
 				t.Parallel()
 
-				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+				exec, _ := setup(ctx, t)
 
 				require.NoError(t, exec.QueuePause(ctx, rivercommon.AllQueuesString))
 			})
@@ -2032,7 +2216,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			t.Run("ExistingPausedQueue", func(t *testing.T) {
 				t.Parallel()
 
-				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+				exec, _ := setup(ctx, t)
 
 				queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{
 					PausedAt: ptrutil.Ptr(time.Now()),
@@ -2048,7 +2232,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			t.Run("ExistingUnpausedQueue", func(t *testing.T) {
 				t.Parallel()
 
-				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+				exec, _ := setup(ctx, t)
 
 				queue := testfactory.Queue(ctx, t, exec, nil)
 
@@ -2063,7 +2247,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			t.Run("NonExistentQueue", func(t *testing.T) {
 				t.Parallel()
 
-				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+				exec, _ := setup(ctx, t)
 
 				err := exec.QueueResume(ctx, "queue1")
 				require.ErrorIs(t, err, rivertype.ErrNotFound)
@@ -2072,7 +2256,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			t.Run("AllQueuesExistingQueues", func(t *testing.T) {
 				t.Parallel()
 
-				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+				exec, _ := setup(ctx, t)
 
 				queue1 := testfactory.Queue(ctx, t, exec, nil)
 				require.Nil(t, queue1.PausedAt)
@@ -2094,110 +2278,11 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			t.Run("AllQueuesNoQueues", func(t *testing.T) {
 				t.Parallel()
 
-				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+				exec, _ := setup(ctx, t)
 
 				require.NoError(t, exec.QueueResume(ctx, rivercommon.AllQueuesString))
 			})
 		})
-	})
-}
-
-// ExerciseExecutorMigrationOnly exercises a driver that's expected to only be
-// able to perform database migrations, and not full River functionality.
-func ExerciseExecutorMigrationOnly[TTx any](ctx context.Context, t *testing.T, driver riverdriver.Driver[TTx], beginTx func(ctx context.Context, t *testing.T) TTx) {
-	t.Helper()
-
-	// Truncates the migration table so we only have to work with test
-	// migration data.
-	truncateMigrations := func(ctx context.Context, t *testing.T, exec riverdriver.Executor) {
-		t.Helper()
-
-		_, err := exec.Exec(ctx, "TRUNCATE TABLE river_migration")
-		require.NoError(t, err)
-	}
-
-	// Expect no pool. We'll be using transactions only throughout these tests.
-	require.False(t, driver.HasPool())
-
-	t.Run("Exec", func(t *testing.T) {
-		t.Parallel()
-
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
-
-		_, err := exec.Exec(ctx, "SELECT 1 + 2")
-		require.NoError(t, err)
-	})
-
-	t.Run("MigrationDeleteByVersionMany", func(t *testing.T) {
-		t.Parallel()
-
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
-
-		truncateMigrations(ctx, t, exec)
-
-		migration1 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
-		migration2 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
-
-		migrations, err := exec.MigrationDeleteByVersionMany(ctx, []int{
-			migration1.Version,
-			migration2.Version,
-		})
-		require.NoError(t, err)
-		require.Len(t, migrations, 2)
-		slices.SortFunc(migrations, func(a, b *riverdriver.Migration) int { return a.Version - b.Version })
-		require.Equal(t, migration1.Version, migrations[0].Version)
-		require.Equal(t, migration2.Version, migrations[1].Version)
-	})
-
-	t.Run("MigrationGetAll", func(t *testing.T) {
-		t.Parallel()
-
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
-
-		truncateMigrations(ctx, t, exec)
-
-		migration1 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
-		migration2 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
-
-		migrations, err := exec.MigrationGetAll(ctx)
-		require.NoError(t, err)
-		require.Len(t, migrations, 2)
-		require.Equal(t, migration1.Version, migrations[0].Version)
-		require.Equal(t, migration2.Version, migrations[1].Version)
-
-		// Check the full properties of one of the migrations.
-		migration1Fetched := migrations[0]
-		require.Equal(t, migration1.ID, migration1Fetched.ID)
-		requireEqualTime(t, migration1.CreatedAt, migration1Fetched.CreatedAt)
-		require.Equal(t, migration1.Version, migration1Fetched.Version)
-	})
-
-	t.Run("MigrationInsertMany", func(t *testing.T) {
-		t.Parallel()
-
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
-
-		truncateMigrations(ctx, t, exec)
-
-		migrations, err := exec.MigrationInsertMany(ctx, []int{1, 2})
-		require.NoError(t, err)
-		require.Len(t, migrations, 2)
-		require.Equal(t, 1, migrations[0].Version)
-		require.Equal(t, 2, migrations[1].Version)
-	})
-
-	t.Run("TableExists", func(t *testing.T) {
-		t.Parallel()
-
-		exec, _ := setupExecutor(ctx, t, driver, beginTx)
-
-		exists, err := exec.TableExists(ctx, "river_job")
-		require.NoError(t, err)
-		require.True(t, exists)
-
-		exists, err = exec.TableExists(ctx, "does_not_exist")
-		require.NoError(t, err)
-		require.False(t, exists)
 	})
 }
 
@@ -2219,7 +2304,7 @@ func setupListener[TTx any](ctx context.Context, t *testing.T, getDriverWithPool
 	}
 }
 
-func ExerciseListener[TTx any](ctx context.Context, t *testing.T, getDriverWithPool func(ctx context.Context, t *testing.T) riverdriver.Driver[TTx]) {
+func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool func(ctx context.Context, t *testing.T) riverdriver.Driver[TTx]) {
 	t.Helper()
 
 	connectListener := func(ctx context.Context, t *testing.T, listener riverdriver.Listener) {
@@ -2255,14 +2340,14 @@ func ExerciseListener[TTx any](ctx context.Context, t *testing.T, getDriverWithP
 	t.Run("Close_NoOpIfNotConnected", func(t *testing.T) {
 		t.Parallel()
 
-		listener, _ := setupListener(ctx, t, getDriverWithPool)
+		listener, _ := setupListener(ctx, t, driverWithPool)
 		require.NoError(t, listener.Close(ctx))
 	})
 
 	t.Run("RoundTrip", func(t *testing.T) {
 		t.Parallel()
 
-		listener, bundle := setupListener(ctx, t, getDriverWithPool)
+		listener, bundle := setupListener(ctx, t, driverWithPool)
 
 		connectListener(ctx, t, listener)
 
@@ -2301,7 +2386,7 @@ func ExerciseListener[TTx any](ctx context.Context, t *testing.T, getDriverWithP
 	t.Run("TransactionGated", func(t *testing.T) {
 		t.Parallel()
 
-		listener, bundle := setupListener(ctx, t, getDriverWithPool)
+		listener, bundle := setupListener(ctx, t, driverWithPool)
 
 		connectListener(ctx, t, listener)
 
@@ -2325,7 +2410,7 @@ func ExerciseListener[TTx any](ctx context.Context, t *testing.T, getDriverWithP
 	t.Run("MultipleReuse", func(t *testing.T) {
 		t.Parallel()
 
-		listener, _ := setupListener(ctx, t, getDriverWithPool)
+		listener, _ := setupListener(ctx, t, driverWithPool)
 
 		connectListener(ctx, t, listener)
 

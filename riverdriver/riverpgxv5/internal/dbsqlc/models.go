@@ -65,7 +65,7 @@ type RiverJob struct {
 	AttemptedAt *time.Time
 	AttemptedBy []string
 	CreatedAt   time.Time
-	Errors      []AttemptError
+	Errors      [][]byte
 	FinalizedAt *time.Time
 	Kind        string
 	MaxAttempts int16

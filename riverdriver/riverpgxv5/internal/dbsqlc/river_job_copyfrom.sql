@@ -1,4 +1,4 @@
--- name: JobInsertMany :copyfrom
+-- name: JobInsertFastManyCopyFrom :copyfrom
 INSERT INTO river_job(
     args,
     finalized_at,

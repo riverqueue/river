@@ -20,7 +20,7 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-func TestDriverDatabaseSQL_Executor(t *testing.T) {
+func TestDriverDatabaseSQL(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -29,42 +29,41 @@ func TestDriverDatabaseSQL_Executor(t *testing.T) {
 	stdPool := stdlib.OpenDBFromPool(dbPool)
 	t.Cleanup(func() { require.NoError(t, stdPool.Close()) })
 
-	driver := riverdatabasesql.New(nil)
-	riverdrivertest.ExerciseExecutorMigrationOnly(ctx, t, driver, func(ctx context.Context, t *testing.T) *sql.Tx {
-		t.Helper()
+	riverdrivertest.Exercise(ctx, t,
+		func(ctx context.Context, t *testing.T) riverdriver.Driver[*sql.Tx] {
+			t.Helper()
 
-		tx, err := stdPool.BeginTx(ctx, nil)
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = tx.Rollback() })
+			return riverdatabasesql.New(stdPool)
+		},
+		func(ctx context.Context, t *testing.T) riverdriver.Executor {
+			t.Helper()
 
-		return tx
-	})
+			tx, err := stdPool.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = tx.Rollback() })
+
+			return riverdatabasesql.New(nil).UnwrapExecutor(tx)
+		})
 }
 
-func TestDriverRiverPgxV5_Executor(t *testing.T) {
+func TestDriverRiverPgxV5(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 
-	driver := riverpgxv5.New(nil)
-	riverdrivertest.ExerciseExecutorFull(ctx, t, driver, func(ctx context.Context, t *testing.T) pgx.Tx {
-		t.Helper()
+	riverdrivertest.Exercise(ctx, t,
+		func(ctx context.Context, t *testing.T) riverdriver.Driver[pgx.Tx] {
+			t.Helper()
 
-		return riverinternaltest.TestTx(ctx, t)
-	})
-}
+			dbPool := riverinternaltest.TestDB(ctx, t)
+			return riverpgxv5.New(dbPool)
+		},
+		func(ctx context.Context, t *testing.T) riverdriver.Executor {
+			t.Helper()
 
-func TestDriverRiverPgxV5_Listener(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-
-	riverdrivertest.ExerciseListener(ctx, t, func(ctx context.Context, t *testing.T) riverdriver.Driver[pgx.Tx] {
-		t.Helper()
-
-		dbPool := riverinternaltest.TestDB(ctx, t)
-		return riverpgxv5.New(dbPool)
-	})
+			tx := riverinternaltest.TestTx(ctx, t)
+			return riverpgxv5.New(nil).UnwrapExecutor(tx)
+		})
 }
 
 func BenchmarkDriverRiverPgxV5_Executor(b *testing.B) {
