@@ -221,14 +221,29 @@ func TestDB(ctx context.Context, tb testing.TB) *pgxpool.Pool {
 	return testPool.Pool()
 }
 
-// StubTime is a shortcut for stubbing time for a the given archetype at the
-// given time. It returns the time given as argument for convenience.
-func StubTime(archetype *baseservice.Archetype, t time.Time) time.Time {
-	// Strip monotonic portion and make UTC so that comparisons are less fraught.
-	t = t.Round(0).UTC()
+// StubTime returns a pair of function for (getTime, setTime), the former of
+// which is compatible with `TimeNowUTC` found in the service archetype.
+// It's concurrent safe is so that a started service can access its stub
+// time while the test case is setting it, and without the race detector
+// triggering.
+func StubTime(initialTime time.Time) (func() time.Time, func(t time.Time)) {
+	var (
+		mu          sync.RWMutex
+		stubbedTime = &initialTime
+	)
 
-	archetype.TimeNowUTC = func() time.Time { return t }
-	return t
+	getTime := func() time.Time {
+		mu.RLock()
+		defer mu.RUnlock()
+		return *stubbedTime
+	}
+	setTime := func(newTime time.Time) {
+		mu.Lock()
+		defer mu.Unlock()
+		stubbedTime = &newTime
+	}
+
+	return getTime, setTime
 }
 
 // A pool and mutex to protect it, lazily initialized by TestTx. Once open, this
