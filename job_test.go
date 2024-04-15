@@ -16,5 +16,5 @@ func TestJobUniqueOpts_isEmpty(t *testing.T) {
 	require.False(t, (&UniqueOpts{ByArgs: true}).isEmpty())
 	require.False(t, (&UniqueOpts{ByPeriod: 1 * time.Nanosecond}).isEmpty())
 	require.False(t, (&UniqueOpts{ByQueue: true}).isEmpty())
-	require.False(t, (&UniqueOpts{ByState: []rivertype.JobState{JobStateAvailable}}).isEmpty())
+	require.False(t, (&UniqueOpts{ByState: []rivertype.JobState{rivertype.JobStateAvailable}}).isEmpty())
 }

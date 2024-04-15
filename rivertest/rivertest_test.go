@@ -14,6 +14,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // Gives us a nice, stable time to test against.
@@ -251,7 +252,7 @@ func TestRequireInsertedTx(t *testing.T) {
 				Priority:    2,
 				Queue:       "another_queue",
 				ScheduledAt: testTime,
-				State:       river.JobStateScheduled,
+				State:       rivertype.JobStateScheduled,
 				Tags:        []string{"tag1"},
 			})
 			require.True(t, mockT.Failed)
@@ -268,7 +269,7 @@ func TestRequireInsertedTx(t *testing.T) {
 				Priority:    3,
 				Queue:       "another_queue",
 				ScheduledAt: testTime,
-				State:       river.JobStateScheduled,
+				State:       rivertype.JobStateScheduled,
 				Tags:        []string{"tag1"},
 			})
 			require.True(t, mockT.Failed)
@@ -285,7 +286,7 @@ func TestRequireInsertedTx(t *testing.T) {
 				Priority:    2,
 				Queue:       "wrong-queue",
 				ScheduledAt: testTime,
-				State:       river.JobStateScheduled,
+				State:       rivertype.JobStateScheduled,
 				Tags:        []string{"tag1"},
 			})
 			require.True(t, mockT.Failed)
@@ -302,7 +303,7 @@ func TestRequireInsertedTx(t *testing.T) {
 				Priority:    2,
 				Queue:       "another_queue",
 				ScheduledAt: testTime.Add(3*time.Minute + 23*time.Second + 123*time.Microsecond),
-				State:       river.JobStateScheduled,
+				State:       rivertype.JobStateScheduled,
 				Tags:        []string{"tag1"},
 			})
 			require.True(t, mockT.Failed)
@@ -319,7 +320,7 @@ func TestRequireInsertedTx(t *testing.T) {
 				Priority:    2,
 				Queue:       "another_queue",
 				ScheduledAt: testTime,
-				State:       river.JobStateCancelled,
+				State:       rivertype.JobStateCancelled,
 				Tags:        []string{"tag1"},
 			})
 			require.True(t, mockT.Failed)
@@ -336,7 +337,7 @@ func TestRequireInsertedTx(t *testing.T) {
 				Priority:    2,
 				Queue:       "another_queue",
 				ScheduledAt: testTime,
-				State:       river.JobStateScheduled,
+				State:       rivertype.JobStateScheduled,
 				Tags:        []string{"tag2"},
 			})
 			require.True(t, mockT.Failed)
@@ -674,7 +675,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 						Priority:    2,
 						Queue:       "another_queue",
 						ScheduledAt: testTime,
-						State:       river.JobStateScheduled,
+						State:       rivertype.JobStateScheduled,
 						Tags:        []string{"tag1"},
 					},
 				},
@@ -696,7 +697,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 						Priority:    3,
 						Queue:       "another_queue",
 						ScheduledAt: testTime,
-						State:       river.JobStateScheduled,
+						State:       rivertype.JobStateScheduled,
 						Tags:        []string{"tag1"},
 					},
 				},
@@ -718,7 +719,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 						Priority:    2,
 						Queue:       "wrong-queue",
 						ScheduledAt: testTime,
-						State:       river.JobStateScheduled,
+						State:       rivertype.JobStateScheduled,
 						Tags:        []string{"tag1"},
 					},
 				},
@@ -740,7 +741,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 						Priority:    2,
 						Queue:       "another_queue",
 						ScheduledAt: testTime.Add(3*time.Minute + 23*time.Second + 123*time.Microsecond),
-						State:       river.JobStateScheduled,
+						State:       rivertype.JobStateScheduled,
 						Tags:        []string{"tag1"},
 					},
 				},
@@ -761,7 +762,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 						MaxAttempts: 78,
 						Priority:    2,
 						Queue:       "another_queue",
-						State:       river.JobStateCancelled,
+						State:       rivertype.JobStateCancelled,
 						ScheduledAt: testTime,
 						Tags:        []string{"tag1"},
 					},
@@ -784,7 +785,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 						Priority:    2,
 						Queue:       "another_queue",
 						ScheduledAt: testTime,
-						State:       river.JobStateScheduled,
+						State:       rivertype.JobStateScheduled,
 						Tags:        []string{"tag2"},
 					},
 				},

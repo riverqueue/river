@@ -149,13 +149,13 @@ func NewJobListParams() *JobListParams {
 		sortField:       JobListOrderByTime,
 		sortOrder:       SortOrderAsc,
 		states: []rivertype.JobState{
-			JobStateAvailable,
-			JobStateCancelled,
-			JobStateCompleted,
-			JobStateDiscarded,
-			JobStateRetryable,
-			JobStateRunning,
-			JobStateScheduled,
+			rivertype.JobStateAvailable,
+			rivertype.JobStateCancelled,
+			rivertype.JobStateCompleted,
+			rivertype.JobStateDiscarded,
+			rivertype.JobStateRetryable,
+			rivertype.JobStateRunning,
+			rivertype.JobStateScheduled,
 		},
 	}
 }
@@ -195,7 +195,7 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 		for _, state := range p.states {
 			//nolint:exhaustive
 			switch state {
-			case JobStateCancelled, JobStateCompleted, JobStateDiscarded:
+			case rivertype.JobStateCancelled, rivertype.JobStateCompleted, rivertype.JobStateDiscarded:
 			default:
 				currentNonFinalizedStates = append(currentNonFinalizedStates, state)
 			}
@@ -317,9 +317,9 @@ func (p *JobListParams) OrderBy(field JobListOrderByField, direction SortOrder) 
 		result.sortField = field
 		if !p.overrodeState {
 			result.states = []rivertype.JobState{
-				JobStateCancelled,
-				JobStateCompleted,
-				JobStateDiscarded,
+				rivertype.JobStateCancelled,
+				rivertype.JobStateCompleted,
+				rivertype.JobStateDiscarded,
 			}
 		}
 	default:

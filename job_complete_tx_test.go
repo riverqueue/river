@@ -13,6 +13,7 @@ import (
 	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
 )
 
 func TestJobCompleteTx(t *testing.T) {
@@ -46,17 +47,17 @@ func TestJobCompleteTx(t *testing.T) {
 		bundle := setup(t)
 
 		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
-			State: ptrutil.Ptr(JobStateRunning),
+			State: ptrutil.Ptr(rivertype.JobStateRunning),
 		})
 
 		completedJob, err := JobCompleteTx[*riverpgxv5.Driver](ctx, bundle.tx, &Job[JobArgs]{JobRow: job})
 		require.NoError(t, err)
-		require.Equal(t, JobStateCompleted, completedJob.State)
+		require.Equal(t, rivertype.JobStateCompleted, completedJob.State)
 		require.WithinDuration(t, time.Now(), *completedJob.FinalizedAt, 2*time.Second)
 
 		updatedJob, err := bundle.exec.JobGetByID(ctx, job.ID)
 		require.NoError(t, err)
-		require.Equal(t, JobStateCompleted, updatedJob.State)
+		require.Equal(t, rivertype.JobStateCompleted, updatedJob.State)
 	})
 
 	t.Run("ErrorIfNotRunning", func(t *testing.T) {

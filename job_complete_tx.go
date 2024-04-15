@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // JobCompleteTx marks the job as completed as part of transaction tx. If tx is
@@ -23,7 +24,7 @@ import (
 //
 // Returns the updated, completed job.
 func JobCompleteTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs](ctx context.Context, tx TTx, job *Job[TArgs]) (*Job[TArgs], error) {
-	if job.State != JobStateRunning {
+	if job.State != rivertype.JobStateRunning {
 		return nil, errors.New("job must be running")
 	}
 
