@@ -124,6 +124,9 @@ See the [`InsertAndWork` example] for complete code.
 
   - [Error and panic handling].
 
+  - [Multiple queues] to better guarantee job throughput, worker availability,
+    and isolation between components.
+
   - [Periodic and cron jobs].
 
   - [Scheduled jobs] that run automatically at their scheduled time in the
@@ -133,6 +136,8 @@ See the [`InsertAndWork` example] for complete code.
 
   - [Subscriptions] to queue activity and statistics, providing easy hooks for
     telemetry like logging and metrics.
+
+  - [Test helpers] to verify that jobs are inserted as expected.
 
   - [Transactional job completion] to guarantee job completion commits with
     other changes in a transaction.
@@ -149,9 +154,9 @@ See [developing River].
 
 River was in large part inspired by our experiences with other background job libaries over the years, most notably:
 
-- [Oban](https://github.com/sorentwo/oban) in Elixir
-- [que](https://github.com/que-rb/que), [sidekiq](https://github.com/sidekiq/sidekiq), [delayed_job](https://github.com/collectiveidea/delayed_job), and [GoodJob](https://github.com/bensheldon/good_job) in Ruby
-- [Hangfire](https://www.hangfire.io/) in .NET
+- [Oban](https://github.com/sorentwo/oban) in Elixir.
+- [Que](https://github.com/que-rb/que), [Sidekiq](https://github.com/sidekiq/sidekiq), [Delayed::Job](https://github.com/collectiveidea/delayed_job), and [GoodJob](https://github.com/bensheldon/good_job) in Ruby.
+- [Hangfire](https://www.hangfire.io/) in .NET.
 
 Thank you for driving the software ecosystem forward.
 
@@ -163,10 +168,12 @@ Thank you for driving the software ecosystem forward.
 [Batch job insertion]: https://riverqueue.com/docs/batch-job-insertion
 [Cancelling jobs]: https://riverqueue.com/docs/cancelling-jobs
 [Error and panic handling]: https://riverqueue.com/docs/error-handling
+[Multiple queues]: https://riverqueue.com/docs/multiple-queues
 [Periodic and cron jobs]: https://riverqueue.com/docs/periodic-jobs
 [Scheduled jobs]: https://riverqueue.com/docs/scheduled-jobs
 [Snoozing jobs]: https://riverqueue.com/docs/snoozing-jobs
 [Subscriptions]: https://riverqueue.com/docs/subscriptions
+[Test helpers]: https://riverqueue.com/docs/testing
 [Transactional job completion]: https://riverqueue.com/docs/transactional-job-completion
 [Unique jobs]: https://riverqueue.com/docs/unique-jobs
 [Work functions]: https://riverqueue.com/docs/work-functions
