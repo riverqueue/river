@@ -14,10 +14,10 @@ require (
 	github.com/jackc/pgerrcode v0.0.0-20220416144525-469b46aa5efa
 	github.com/jackc/pgx/v5 v5.5.5
 	github.com/jackc/puddle/v2 v2.2.1
-	github.com/riverqueue/river/riverdriver v0.2.0
-	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.2.0
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.2.0
-	github.com/riverqueue/river/rivertype v0.2.0
+	github.com/riverqueue/river/riverdriver v0.3.0
+	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.3.0
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.3.0
+	github.com/riverqueue/river/rivertype v0.3.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.9.0
 	go.uber.org/goleak v1.3.0
