@@ -112,6 +112,19 @@ const (
 	JobStateScheduled JobState = "scheduled"
 )
 
+// JobStates returns all possible job states.
+func JobStates() []JobState {
+	return []JobState{
+		JobStateAvailable,
+		JobStateCancelled,
+		JobStateCompleted,
+		JobStateDiscarded,
+		JobStateRetryable,
+		JobStateRunning,
+		JobStateScheduled,
+	}
+}
+
 // AttemptError is an error from a single job attempt that failed due to an
 // error or a panic.
 type AttemptError struct {
