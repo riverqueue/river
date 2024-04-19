@@ -4,11 +4,44 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
 )
+
+func TestStubTime(t *testing.T) {
+	t.Parallel()
+
+	t.Run("BasicUsage", func(t *testing.T) {
+		t.Parallel()
+
+		initialTime := time.Now()
+
+		getTime, setTime := StubTime(initialTime)
+		require.Equal(t, initialTime, getTime())
+
+		newTime := initialTime.Add(1 * time.Second)
+		setTime(newTime)
+		require.Equal(t, newTime, getTime())
+	})
+
+	t.Run("Stress", func(t *testing.T) {
+		t.Parallel()
+
+		getTime, setTime := StubTime(time.Now())
+
+		for i := 0; i < 10; i++ {
+			go func() {
+				for j := 0; j < 50; j++ {
+					setTime(time.Now())
+					_ = getTime()
+				}
+			}()
+		}
+	})
+}
 
 // Implemented by `pgx.Tx` or `pgxpool.Pool`. Normally we'd use a similar type
 // from `dbsqlc` or `dbutil`, but riverinternaltest is extremely low level and

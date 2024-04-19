@@ -226,7 +226,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		executor, bundle := setup(t)
 
-		baselineTime := riverinternaltest.StubTime(&executor.Archetype, time.Now())
+		executor.Archetype.TimeNowUTC, _ = riverinternaltest.StubTime(time.Now().UTC())
 
 		workerErr := errors.New("job error")
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
@@ -239,7 +239,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.WithinDuration(t, executor.ClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
 		require.Equal(t, rivertype.JobStateRetryable, job.State)
 		require.Len(t, job.Errors, 1)
-		require.Equal(t, baselineTime, job.Errors[0].At)
+		require.Equal(t, executor.Archetype.TimeNowUTC().Truncate(1*time.Microsecond), job.Errors[0].At.Truncate(1*time.Microsecond))
 		require.Equal(t, 1, job.Errors[0].Attempt)
 		require.Equal(t, "job error", job.Errors[0].Error)
 		require.Equal(t, "", job.Errors[0].Trace)
