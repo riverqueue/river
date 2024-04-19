@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/lib/pq"
+
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -42,7 +44,7 @@ type JobListParams struct {
 	OrderBy    []JobListOrderBy
 	Priorities []int16
 	Queues     []string
-	State      rivertype.JobState
+	States     []rivertype.JobState
 }
 
 func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListParams) ([]*rivertype.JobRow, error) {
@@ -81,10 +83,10 @@ func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListPara
 		namedArgs["queues"] = params.Queues
 	}
 
-	if params.State != "" {
+	if len(params.States) > 0 {
 		writeWhereOrAnd()
-		conditionsBuilder.WriteString("state = @state::river_job_state")
-		namedArgs["state"] = params.State
+		conditionsBuilder.WriteString("state = any(@states::river_job_state[])")
+		namedArgs["states"] = pq.Array(params.States)
 	}
 
 	if params.Conditions != "" {
