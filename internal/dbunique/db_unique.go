@@ -47,12 +47,7 @@ type UniqueInserter struct {
 	AdvisoryLockPrefix int32
 }
 
-type JobInsertResult struct {
-	Job                      *rivertype.JobRow
-	UniqueSkippedAsDuplicate bool
-}
-
-func (i *UniqueInserter) JobInsert(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobInsertFastParams, uniqueOpts *UniqueOpts) (*JobInsertResult, error) {
+func (i *UniqueInserter) JobInsert(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobInsertFastParams, uniqueOpts *UniqueOpts) (*rivertype.JobInsertResult, error) {
 	var execTx riverdriver.ExecutorTx
 
 	if uniqueOpts != nil && !uniqueOpts.IsEmpty() {
@@ -147,7 +142,7 @@ func (i *UniqueInserter) JobInsert(ctx context.Context, exec riverdriver.Executo
 
 			if existing != nil {
 				// Insert skipped; returns an existing row.
-				return &JobInsertResult{Job: existing, UniqueSkippedAsDuplicate: true}, nil
+				return &rivertype.JobInsertResult{Job: existing, UniqueSkippedAsDuplicate: true}, nil
 			}
 		}
 	}
@@ -163,5 +158,5 @@ func (i *UniqueInserter) JobInsert(ctx context.Context, exec riverdriver.Executo
 		}
 	}
 
-	return &JobInsertResult{Job: jobRow}, nil
+	return &rivertype.JobInsertResult{Job: jobRow}, nil
 }
