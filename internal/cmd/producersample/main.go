@@ -174,7 +174,7 @@ func (p *producerSample) insertBulkJobs(ctx context.Context, client *river.Clien
 	if err != nil {
 		return fmt.Errorf("error inserting jobs: %w", err)
 	}
-	if int(inserted) != jobCount {
+	if inserted != jobCount {
 		return fmt.Errorf("expected to insert %d jobs, but only inserted %d", jobCount, inserted)
 	}
 
