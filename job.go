@@ -4,17 +4,6 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-const (
-	JobStateAvailable = rivertype.JobStateAvailable
-	JobStateCancelled = rivertype.JobStateCancelled
-	JobStateCompleted = rivertype.JobStateCompleted
-	JobStateDiscarded = rivertype.JobStateDiscarded
-	JobStateRetryable = rivertype.JobStateRetryable
-	JobStateRunning   = rivertype.JobStateRunning
-	JobStateScheduled = rivertype.JobStateScheduled
-)
-
-// Job represents a single unit of work, holding both the arguments and
 // information for a job with args of type T.
 type Job[T JobArgs] struct {
 	*rivertype.JobRow

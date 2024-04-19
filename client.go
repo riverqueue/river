@@ -904,13 +904,13 @@ func (c *Client[TTx]) distributeJob(job *rivertype.JobRow, stats *JobStatistics)
 
 	var event *Event
 	switch job.State {
-	case JobStateCancelled:
+	case rivertype.JobStateCancelled:
 		event = &Event{Kind: EventKindJobCancelled, Job: job, JobStats: stats}
-	case JobStateCompleted:
+	case rivertype.JobStateCompleted:
 		event = &Event{Kind: EventKindJobCompleted, Job: job, JobStats: stats}
-	case JobStateScheduled:
+	case rivertype.JobStateScheduled:
 		event = &Event{Kind: EventKindJobSnoozed, Job: job, JobStats: stats}
-	case JobStateAvailable, JobStateDiscarded, JobStateRetryable, JobStateRunning:
+	case rivertype.JobStateAvailable, rivertype.JobStateDiscarded, rivertype.JobStateRetryable, rivertype.JobStateRunning:
 		event = &Event{Kind: EventKindJobFailed, Job: job, JobStats: stats}
 	default:
 		// linter exhaustive rule prevents this from being reached

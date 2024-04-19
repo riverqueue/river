@@ -268,7 +268,7 @@ func Test_Client(t *testing.T) {
 
 		event := riverinternaltest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCancelled, event.Kind)
-		require.Equal(t, JobStateCancelled, event.Job.State)
+		require.Equal(t, rivertype.JobStateCancelled, event.Job.State)
 		require.WithinDuration(t, time.Now(), *event.Job.FinalizedAt, 2*time.Second)
 
 		updatedJob, err := client.JobGet(ctx, insertedJob.ID)
@@ -298,7 +298,7 @@ func Test_Client(t *testing.T) {
 
 		event := riverinternaltest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobSnoozed, event.Kind)
-		require.Equal(t, JobStateScheduled, event.Job.State)
+		require.Equal(t, rivertype.JobStateScheduled, event.Job.State)
 		require.WithinDuration(t, time.Now().Add(15*time.Minute), event.Job.ScheduledAt, 2*time.Second)
 
 		updatedJob, err := client.JobGet(ctx, insertedJob.ID)
@@ -347,7 +347,7 @@ func Test_Client(t *testing.T) {
 
 		event := riverinternaltest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCancelled, event.Kind)
-		require.Equal(t, JobStateCancelled, event.Job.State)
+		require.Equal(t, rivertype.JobStateCancelled, event.Job.State)
 		require.WithinDuration(t, time.Now(), *event.Job.FinalizedAt, 2*time.Second)
 
 		jobAfterCancel, err := client.JobGet(ctx, insertedJob.ID)
@@ -485,7 +485,7 @@ func Test_Client(t *testing.T) {
 		event := riverinternaltest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCompleted, event.Kind)
 		require.Equal(t, job.ID, event.Job.ID)
-		require.Equal(t, JobStateCompleted, event.Job.State)
+		require.Equal(t, rivertype.JobStateCompleted, event.Job.State)
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {
@@ -702,7 +702,7 @@ func Test_Client_Stop(t *testing.T) {
 
 		require.NoError(t, client.Stop(ctx))
 
-		res, err := client.JobList(ctx, NewJobListParams().States(JobStateRunning))
+		res, err := client.JobList(ctx, NewJobListParams().States(rivertype.JobStateRunning))
 		require.NoError(t, err)
 		require.Empty(t, res.Jobs, "expected no jobs to be left running")
 	})
@@ -1487,12 +1487,12 @@ func Test_Client_JobList(t *testing.T) {
 		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
 		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
 
-		res, err := client.JobList(ctx, NewJobListParams().States(JobStateAvailable))
+		res, err := client.JobList(ctx, NewJobListParams().States(rivertype.JobStateAvailable))
 		require.NoError(t, err)
 		// jobs ordered by ScheduledAt ASC by default
 		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
-		res, err = client.JobList(ctx, NewJobListParams().States(JobStateRunning))
+		res, err = client.JobList(ctx, NewJobListParams().States(rivertype.JobStateRunning))
 		require.NoError(t, err)
 		require.Equal(t, []int64{job3.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 	})
@@ -1504,14 +1504,14 @@ func Test_Client_JobList(t *testing.T) {
 
 		now := time.Now().UTC()
 
-		states := map[rivertype.JobState]rivertype.JobState{
-			JobStateAvailable: rivertype.JobStateAvailable,
-			JobStateRetryable: rivertype.JobStateRetryable,
-			JobStateScheduled: rivertype.JobStateScheduled,
+		states := []rivertype.JobState{
+			rivertype.JobStateAvailable,
+			rivertype.JobStateRetryable,
+			rivertype.JobStateScheduled,
 		}
-		for state, dbState := range states {
-			job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(dbState), ScheduledAt: &now})
-			job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(dbState), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
+		for _, state := range states {
+			job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(state), ScheduledAt: &now})
+			job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(state), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
 
 			res, err := client.JobList(ctx, NewJobListParams().States(state))
 			require.NoError(t, err)
@@ -1530,14 +1530,14 @@ func Test_Client_JobList(t *testing.T) {
 
 		now := time.Now().UTC()
 
-		states := map[rivertype.JobState]rivertype.JobState{
-			JobStateCancelled: rivertype.JobStateCancelled,
-			JobStateCompleted: rivertype.JobStateCompleted,
-			JobStateDiscarded: rivertype.JobStateDiscarded,
+		states := []rivertype.JobState{
+			rivertype.JobStateCancelled,
+			rivertype.JobStateCompleted,
+			rivertype.JobStateDiscarded,
 		}
-		for state, dbState := range states {
-			job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(dbState), FinalizedAt: ptrutil.Ptr(now.Add(-10 * time.Second))})
-			job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(dbState), FinalizedAt: ptrutil.Ptr(now.Add(-15 * time.Second))})
+		for _, state := range states {
+			job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(state), FinalizedAt: ptrutil.Ptr(now.Add(-10 * time.Second))})
+			job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(state), FinalizedAt: ptrutil.Ptr(now.Add(-15 * time.Second))})
 
 			res, err := client.JobList(ctx, NewJobListParams().States(state))
 			require.NoError(t, err)
@@ -1558,11 +1558,11 @@ func Test_Client_JobList(t *testing.T) {
 		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: &now})
 		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
 
-		res, err := client.JobList(ctx, NewJobListParams().States(JobStateRunning))
+		res, err := client.JobList(ctx, NewJobListParams().States(rivertype.JobStateRunning))
 		require.NoError(t, err)
 		require.Equal(t, []int64{job2.ID, job1.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
-		res, err = client.JobList(ctx, NewJobListParams().States(JobStateRunning).OrderBy(JobListOrderByTime, SortOrderDesc))
+		res, err = client.JobList(ctx, NewJobListParams().States(rivertype.JobStateRunning).OrderBy(JobListOrderByTime, SortOrderDesc))
 		require.NoError(t, err)
 		// Sort order was explicitly reversed:
 		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
@@ -1646,7 +1646,7 @@ func Test_Client_JobList(t *testing.T) {
 		ctx, cancel := context.WithCancel(ctx)
 		cancel() // cancel immediately
 
-		res, err := client.JobList(ctx, NewJobListParams().States(JobStateRunning))
+		res, err := client.JobList(ctx, NewJobListParams().States(rivertype.JobStateRunning))
 		require.ErrorIs(t, context.Canceled, err)
 		require.Nil(t, res)
 	})
@@ -2350,28 +2350,28 @@ func Test_Client_Subscribe(t *testing.T) {
 			eventCompleted1 := eventsByName["completed1"]
 			require.Equal(t, EventKindJobCompleted, eventCompleted1.Kind)
 			require.Equal(t, jobCompleted1.ID, eventCompleted1.Job.ID)
-			require.Equal(t, JobStateCompleted, eventCompleted1.Job.State)
+			require.Equal(t, rivertype.JobStateCompleted, eventCompleted1.Job.State)
 		}
 
 		{
 			eventCompleted2 := eventsByName["completed2"]
 			require.Equal(t, EventKindJobCompleted, eventCompleted2.Kind)
 			require.Equal(t, jobCompleted2.ID, eventCompleted2.Job.ID)
-			require.Equal(t, JobStateCompleted, eventCompleted2.Job.State)
+			require.Equal(t, rivertype.JobStateCompleted, eventCompleted2.Job.State)
 		}
 
 		{
 			eventFailed1 := eventsByName["failed1"]
 			require.Equal(t, EventKindJobFailed, eventFailed1.Kind)
 			require.Equal(t, jobFailed1.ID, eventFailed1.Job.ID)
-			require.Equal(t, JobStateRetryable, eventFailed1.Job.State)
+			require.Equal(t, rivertype.JobStateRetryable, eventFailed1.Job.State)
 		}
 
 		{
 			eventFailed2 := eventsByName["failed2"]
 			require.Equal(t, EventKindJobFailed, eventFailed2.Kind)
 			require.Equal(t, jobFailed2.ID, eventFailed2.Job.ID)
-			require.Equal(t, JobStateRetryable, eventFailed2.Job.State)
+			require.Equal(t, rivertype.JobStateRetryable, eventFailed2.Job.State)
 		}
 	})
 
@@ -2412,7 +2412,7 @@ func Test_Client_Subscribe(t *testing.T) {
 		eventCompleted := eventsByName["completed1"]
 		require.Equal(t, EventKindJobCompleted, eventCompleted.Kind)
 		require.Equal(t, jobCompleted.ID, eventCompleted.Job.ID)
-		require.Equal(t, JobStateCompleted, eventCompleted.Job.State)
+		require.Equal(t, rivertype.JobStateCompleted, eventCompleted.Job.State)
 
 		_, ok := eventsByName["failed1"] // filtered out
 		require.False(t, ok)
@@ -2458,7 +2458,7 @@ func Test_Client_Subscribe(t *testing.T) {
 		eventFailed := eventsByName["failed1"]
 		require.Equal(t, EventKindJobFailed, eventFailed.Kind)
 		require.Equal(t, jobFailed.ID, eventFailed.Job.ID)
-		require.Equal(t, JobStateRetryable, eventFailed.Job.State)
+		require.Equal(t, rivertype.JobStateRetryable, eventFailed.Job.State)
 	})
 
 	t.Run("PanicOnUnknownKind", func(t *testing.T) {
@@ -2567,28 +2567,28 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 			eventCompleted1 := eventsByName["completed1"]
 			require.Equal(t, EventKindJobCompleted, eventCompleted1.Kind)
 			require.Equal(t, jobCompleted1.ID, eventCompleted1.Job.ID)
-			require.Equal(t, JobStateCompleted, eventCompleted1.Job.State)
+			require.Equal(t, rivertype.JobStateCompleted, eventCompleted1.Job.State)
 		}
 
 		{
 			eventCompleted2 := eventsByName["completed2"]
 			require.Equal(t, EventKindJobCompleted, eventCompleted2.Kind)
 			require.Equal(t, jobCompleted2.ID, eventCompleted2.Job.ID)
-			require.Equal(t, JobStateCompleted, eventCompleted2.Job.State)
+			require.Equal(t, rivertype.JobStateCompleted, eventCompleted2.Job.State)
 		}
 
 		{
 			eventFailed1 := eventsByName["failed1"]
 			require.Equal(t, EventKindJobFailed, eventFailed1.Kind)
 			require.Equal(t, jobFailed1.ID, eventFailed1.Job.ID)
-			require.Equal(t, JobStateRetryable, eventFailed1.Job.State)
+			require.Equal(t, rivertype.JobStateRetryable, eventFailed1.Job.State)
 		}
 
 		{
 			eventFailed2 := eventsByName["failed2"]
 			require.Equal(t, EventKindJobFailed, eventFailed2.Kind)
 			require.Equal(t, jobFailed2.ID, eventFailed2.Job.ID)
-			require.Equal(t, JobStateRetryable, eventFailed2.Job.State)
+			require.Equal(t, rivertype.JobStateRetryable, eventFailed2.Job.State)
 		}
 	})
 
@@ -2799,7 +2799,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 
 		event := riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
 		require.Equal(job.ID, event.Job.ID)
-		require.Equal(JobStateCompleted, event.Job.State)
+		require.Equal(rivertype.JobStateCompleted, event.Job.State)
 
 		reloadedJob, err := client.JobGet(ctx, job.ID)
 		require.NoError(err)
@@ -2834,7 +2834,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 
 		event := riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
 		require.Equal(job.ID, event.Job.ID)
-		require.Equal(JobStateCompleted, event.Job.State)
+		require.Equal(rivertype.JobStateCompleted, event.Job.State)
 
 		reloadedJob, err := client.JobGet(ctx, job.ID)
 		require.NoError(err)
@@ -2858,7 +2858,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 
 		event := riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
 		require.Equal(job.ID, event.Job.ID)
-		require.Equal(JobStateRetryable, event.Job.State)
+		require.Equal(rivertype.JobStateRetryable, event.Job.State)
 
 		reloadedJob, err := client.JobGet(ctx, job.ID)
 		require.NoError(err)
@@ -2883,7 +2883,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 
 		event := riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
 		require.Equal(job.ID, event.Job.ID)
-		require.Equal(JobStateCancelled, event.Job.State)
+		require.Equal(rivertype.JobStateCancelled, event.Job.State)
 
 		reloadedJob, err := client.JobGet(ctx, job.ID)
 		require.NoError(err)
@@ -2924,7 +2924,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 
 		event := riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
 		require.Equal(job.ID, event.Job.ID)
-		require.Equal(JobStateDiscarded, event.Job.State)
+		require.Equal(rivertype.JobStateDiscarded, event.Job.State)
 
 		reloadedJob, err := client.JobGet(ctx, job.ID)
 		require.NoError(err)
@@ -2961,8 +2961,8 @@ func Test_Client_JobCompletion(t *testing.T) {
 
 		event := riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
 		require.Equal(job.ID, event.Job.ID)
-		require.Equal(JobStateCompleted, event.Job.State)
-		require.Equal(JobStateCompleted, updatedJob.State)
+		require.Equal(rivertype.JobStateCompleted, event.Job.State)
+		require.Equal(rivertype.JobStateCompleted, updatedJob.State)
 		require.NotNil(updatedJob)
 		require.NotNil(event.Job.FinalizedAt)
 		require.NotNil(updatedJob.FinalizedAt)
@@ -3014,7 +3014,7 @@ func Test_Client_UnknownJobKindErrorsTheJob(t *testing.T) {
 	require.Equal("RandomWorkerNameThatIsNeverRegistered", insertedJob.Kind)
 	require.Len(event.Job.Errors, 1)
 	require.Equal((&UnknownJobKindError{Kind: "RandomWorkerNameThatIsNeverRegistered"}).Error(), event.Job.Errors[0].Error)
-	require.Equal(JobStateRetryable, event.Job.State)
+	require.Equal(rivertype.JobStateRetryable, event.Job.State)
 	// Ensure that ScheduledAt was updated with next run time:
 	require.True(event.Job.ScheduledAt.After(insertedJob.ScheduledAt))
 	// It's the 1st attempt that failed. Attempt won't be incremented again until
@@ -3768,7 +3768,7 @@ func TestInsert(t *testing.T) {
 				require.WithinDuration(opts.ScheduledAt.UTC(), insertedJob.ScheduledAt, time.Microsecond)
 				require.Equal([]string{"tag1", "tag2"}, insertedJob.Tags)
 				// derived state:
-				require.Equal(JobStateScheduled, insertedJob.State)
+				require.Equal(rivertype.JobStateScheduled, insertedJob.State)
 				require.Equal("noOp", insertedJob.Kind)
 				// default state:
 				// require.Equal([]byte("{}"), insertedJob.metadata)
@@ -3785,7 +3785,7 @@ func TestInsert(t *testing.T) {
 				// specified by inputs:
 				requireEqualArgs(t, args, insertedJob.EncodedArgs)
 				// derived state:
-				require.Equal(JobStateAvailable, insertedJob.State)
+				require.Equal(rivertype.JobStateAvailable, insertedJob.State)
 				require.Equal("noOp", insertedJob.Kind)
 				// default state:
 				require.Equal(QueueDefault, insertedJob.Queue)
@@ -3877,7 +3877,7 @@ func TestUniqueOpts(t *testing.T) {
 
 		uniqueOpts := UniqueOpts{
 			ByPeriod: 24 * time.Hour,
-			ByState:  []rivertype.JobState{JobStateAvailable, JobStateCompleted},
+			ByState:  []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCompleted},
 		}
 
 		job0, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
