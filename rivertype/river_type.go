@@ -111,17 +111,63 @@ type JobRow struct {
 	Tags []string
 }
 
-// JobState is the state of a job. Jobs start as `available` or `scheduled`, and
-// if all goes well eventually transition to `completed` as they're worked.
+// JobState is the state of a job. Jobs start their lifecycle as either
+// JobStateAvailable or JobStateScheduled, and if all goes well, transition to
+// JobStateCompleted after they're worked.
 type JobState string
 
 const (
+	// JobStateAvailable is the state for jobs that are immediately eligible to
+	// be worked.
 	JobStateAvailable JobState = "available"
+
+	// JobStateCancelled is the state for jobs that have been manually cancelled
+	// by user request.
+	//
+	// Cancelled jobs are reaped by the job cleaner service after a configured
+	// amount of time (default 24 hours).
 	JobStateCancelled JobState = "cancelled"
+
+	// JobStateCompleted is the state for jobs that have successfully run to
+	// completion.
+	//
+	// Completed jobs are reaped by the job cleaner service after a configured
+	// amount of time (default 24 hours).
 	JobStateCompleted JobState = "completed"
+
+	// JobStateDiscarded is the state for jobs that have errored enough times
+	// that they're no longer eligible to be retried. Manual user invention
+	// is required for them to be tried again.
+	//
+	// Discarded jobs are reaped by the job cleaner service after a configured
+	// amount of time (default 7 days).
 	JobStateDiscarded JobState = "discarded"
+
+	// JobStateRetryable is the state for jobs that have errored, but will be
+	// retried.
+	//
+	// The job scheduler service changes them to JobStateAvailable when they're
+	// ready to be worked (their `scheduled_at` timestamp comes due).
+	//
+	// Jobs that will be retried very soon in the future may be changed to
+	// JobStateAvailable immediately instead of JobStateRetryable so that they
+	// don't have to wait for the job scheduler to run.
 	JobStateRetryable JobState = "retryable"
-	JobStateRunning   JobState = "running"
+
+	// JobStateRunning are jobs which are actively running.
+	//
+	// If River can't update state of a running job (in the case of a program
+	// crash, underlying hardware failure, or job that doesn't return from its
+	// Work function), that job will be left as JobStateRunning, and will
+	// require a pass by the job rescuer service to be set back to
+	// JobStateAvailable and be eligible for another run attempt.
+	JobStateRunning JobState = "running"
+
+	// JobStateScheduled is the state for jobs that are scheduled for the
+	// future.
+	//
+	// The job scheduler service changes them to JobStateAvailable when they're
+	// ready to be worked (their `scheduled_at` timestamp comes due).
 	JobStateScheduled JobState = "scheduled"
 )
 
