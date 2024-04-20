@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/dblist"
+	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -16,33 +17,48 @@ import (
 // job list query.
 type JobListCursor struct {
 	id        int64
+	job       *rivertype.JobRow // used for JobListCursorFromJob path; not serialized
 	kind      string
 	queue     string
 	sortField JobListOrderByField
-	time      time.Time
+	time      time.Time // may be empty
 }
 
 // JobListCursorFromJob creates a JobListCursor from a JobRow.
-func JobListCursorFromJob(job *rivertype.JobRow, sortField JobListOrderByField) *JobListCursor {
-	time := job.CreatedAt
-	switch sortField {
+func JobListCursorFromJob(job *rivertype.JobRow) *JobListCursor {
+	// Other fields are initialized when the cursor is used in After below.
+	return &JobListCursor{job: job}
+}
+
+func jobListCursorFromJobAndParams(job *rivertype.JobRow, listParams *JobListParams) *JobListCursor {
+	// A pointer so that we can detect a condition where we accidentally left
+	// this value unset.
+	var cursorTime *time.Time
+
+	// Don't include a `default` so `exhaustive` lint can detect omissions.
+	switch listParams.sortField {
+	case JobListOrderByID:
+		cursorTime = ptrutil.Ptr(time.Time{})
 	case JobListOrderByTime:
-		time = jobListTimeValue(job)
+		cursorTime = ptrutil.Ptr(jobListTimeValue(job))
 	case JobListOrderByFinalizedAt:
 		if job.FinalizedAt != nil {
-			time = *job.FinalizedAt
+			cursorTime = job.FinalizedAt
 		}
 	case JobListOrderByScheduledAt:
-		time = job.ScheduledAt
-	default:
+		cursorTime = &job.ScheduledAt
+	}
+
+	if cursorTime == nil {
 		panic("invalid sort field")
 	}
+
 	return &JobListCursor{
 		id:        job.ID,
 		kind:      job.Kind,
 		queue:     job.Queue,
-		sortField: sortField,
-		time:      time,
+		sortField: listParams.sortField,
+		time:      *cursorTime,
 	}
 }
 
@@ -73,6 +89,10 @@ func (c *JobListCursor) UnmarshalText(text []byte) error {
 // MarshalText implements encoding.TextMarshaler to encode the cursor as an
 // opaque string.
 func (c JobListCursor) MarshalText() ([]byte, error) {
+	if c.job != nil {
+		return nil, errors.New("cursor initialized with only a job can't be marshaled; try a cursor from JobListResult instead")
+	}
+
 	wrapperValue := jobListPaginationCursorJSON{
 		ID:        c.id,
 		Kind:      c.kind,
@@ -103,6 +123,7 @@ type SortOrder int
 const (
 	// SortOrderAsc specifies that the sort should in ascending order.
 	SortOrderAsc SortOrder = iota
+
 	// SortOrderDesc specifies that the sort should in descending order.
 	SortOrderDesc
 )
@@ -111,16 +132,30 @@ const (
 type JobListOrderByField string
 
 const (
+	// JobListOrderByID specifies that the sort should be by job ID.
+	JobListOrderByID JobListOrderByField = "id"
+
 	// JobListOrderByFinalizedAt specifies that the sort should be by
-	// finalized_at.
+	// `finalized_at`.
 	//
 	// This option must be used in conjunction with filtering by only finalized
 	// job states.
 	JobListOrderByFinalizedAt JobListOrderByField = "finalized_at"
-	// JobListOrderByScheduledAt specifies that the sort should be by scheduled_at.
+
+	// JobListOrderByScheduledAt specifies that the sort should be by
+	// `scheduled_at`.
 	JobListOrderByScheduledAt JobListOrderByField = "scheduled_at"
-	// JobListOrderByTime specifies that the sort should be by time. The specific
-	// time field used will vary by the first specified job state.
+
+	// JobListOrderByTime specifies that the sort should be by the "best fit"
+	// time field based on listed state. The best fit is determined by looking
+	// at the first value given to JobListParams.States. If multiple states are
+	// specified, the ones after the first will be ignored.
+	//
+	// The specific time field used for sorting depends on requested state:
+	//
+	// * States `available`, `retryable`, or `scheduled` use `scheduled_at`.
+	// * State `running` uses `attempted_at`.
+	// * States `cancelled`, `completed`, or `discarded` use `finalized_at`.
 	JobListOrderByTime JobListOrderByField = "time"
 )
 
@@ -146,7 +181,7 @@ type JobListParams struct {
 func NewJobListParams() *JobListParams {
 	return &JobListParams{
 		paginationCount: 100,
-		sortField:       JobListOrderByTime,
+		sortField:       JobListOrderByID,
 		sortOrder:       SortOrderAsc,
 		states: []rivertype.JobState{
 			rivertype.JobStateAvailable,
@@ -178,7 +213,7 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 	conditionsBuilder := &strings.Builder{}
 	conditions := make([]string, 0, 10)
 	namedArgs := make(map[string]any)
-	orderBy := []dblist.JobListOrderBy{}
+	orderBy := make([]dblist.JobListOrderBy, 0, 2)
 
 	var sortOrder dblist.SortOrder
 	switch p.sortOrder {
@@ -208,16 +243,20 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 	}
 
 	var timeField string
-	if len(p.states) > 0 && p.sortField == JobListOrderByTime {
+	switch {
+	case p.sortField == JobListOrderByID:
+		// no time field
+
+	case len(p.states) > 0 && p.sortField == JobListOrderByTime:
 		timeField = jobListTimeFieldForState(p.states[0])
-	} else {
+		orderBy = append(orderBy, dblist.JobListOrderBy{Expr: timeField, Order: sortOrder})
+
+	default:
 		timeField = string(p.sortField)
+		orderBy = append(orderBy, dblist.JobListOrderBy{Expr: timeField, Order: sortOrder})
 	}
 
-	orderBy = append(orderBy, []dblist.JobListOrderBy{
-		{Expr: timeField, Order: sortOrder},
-		{Expr: "id", Order: sortOrder},
-	}...)
+	orderBy = append(orderBy, dblist.JobListOrderBy{Expr: "id", Order: sortOrder})
 
 	if p.metadataFragment != "" {
 		conditions = append(conditions, `metadata @> @metadata_fragment::jsonb`)
@@ -225,12 +264,20 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 	}
 
 	if p.after != nil {
-		if sortOrder == dblist.SortOrderAsc {
-			conditions = append(conditions, fmt.Sprintf(`("%s" > @cursor_time OR ("%s" = @cursor_time AND "id" > @after_id))`, timeField, timeField))
+		if p.after.time.IsZero() { // order by ID only
+			if sortOrder == dblist.SortOrderAsc {
+				conditions = append(conditions, "(id > @after_id)")
+			} else {
+				conditions = append(conditions, "(id < @after_id)")
+			}
 		} else {
-			conditions = append(conditions, fmt.Sprintf(`("%s" < @cursor_time OR ("%s" = @cursor_time AND "id" < @after_id))`, timeField, timeField))
+			if sortOrder == dblist.SortOrderAsc {
+				conditions = append(conditions, fmt.Sprintf(`("%s" > @cursor_time OR ("%s" = @cursor_time AND "id" > @after_id))`, timeField, timeField))
+			} else {
+				conditions = append(conditions, fmt.Sprintf(`("%s" < @cursor_time OR ("%s" = @cursor_time AND "id" < @after_id))`, timeField, timeField))
+			}
+			namedArgs["cursor_time"] = p.after.time
 		}
-		namedArgs["cursor_time"] = p.after.time
 		namedArgs["after_id"] = p.after.id
 	}
 
@@ -259,7 +306,12 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 // after the given cursor.
 func (p *JobListParams) After(cursor *JobListCursor) *JobListParams {
 	result := p.copy()
-	result.after = cursor
+
+	if cursor.job == nil {
+		result.after = cursor
+	} else {
+		result.after = jobListCursorFromJobAndParams(cursor.job, result)
+	}
 	return result
 }
 
@@ -311,7 +363,7 @@ func (p *JobListParams) Queues(queues ...string) *JobListParams {
 func (p *JobListParams) OrderBy(field JobListOrderByField, direction SortOrder) *JobListParams {
 	result := p.copy()
 	switch field {
-	case JobListOrderByTime, JobListOrderByScheduledAt:
+	case JobListOrderByID, JobListOrderByTime, JobListOrderByScheduledAt:
 		result.sortField = field
 	case JobListOrderByFinalizedAt:
 		result.sortField = field
@@ -341,6 +393,7 @@ func (p *JobListParams) States(states ...rivertype.JobState) *JobListParams {
 }
 
 func jobListTimeFieldForState(state rivertype.JobState) string {
+	// Don't include a `default` so `exhaustive` lint can detect omissions.
 	switch state {
 	case rivertype.JobStateAvailable, rivertype.JobStateRetryable, rivertype.JobStateScheduled:
 		return "scheduled_at"
@@ -348,28 +401,31 @@ func jobListTimeFieldForState(state rivertype.JobState) string {
 		return "attempted_at"
 	case rivertype.JobStateCancelled, rivertype.JobStateCompleted, rivertype.JobStateDiscarded:
 		return "finalized_at"
-	default:
-		return "created_at" // should never happen
 	}
+
+	return "created_at" // should never happen
 }
 
 func jobListTimeValue(job *rivertype.JobRow) time.Time {
+	// Don't include a `default` so `exhaustive` lint can detect omissions.
 	switch job.State {
 	case rivertype.JobStateAvailable, rivertype.JobStateRetryable, rivertype.JobStateScheduled:
 		return job.ScheduledAt
+
 	case rivertype.JobStateRunning:
 		if job.AttemptedAt == nil {
 			// This should never happen unless a job has been manually manipulated.
 			return job.CreatedAt
 		}
 		return *job.AttemptedAt
+
 	case rivertype.JobStateCancelled, rivertype.JobStateCompleted, rivertype.JobStateDiscarded:
 		if job.FinalizedAt == nil {
 			// This should never happen unless a job has been manually manipulated.
 			return job.CreatedAt
 		}
 		return *job.FinalizedAt
-	default:
-		return job.CreatedAt // should never happen
 	}
+
+	return job.CreatedAt // should never happen
 }
