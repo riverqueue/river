@@ -2,6 +2,7 @@ package maintenance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -568,7 +569,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		})
 
 		svc.Config.NotifyInsert = func(ctx context.Context, execTx riverdriver.ExecutorTx, queues []string) error {
-			return fmt.Errorf("test error")
+			return errors.New("test error")
 		}
 
 		startService(t, svc)

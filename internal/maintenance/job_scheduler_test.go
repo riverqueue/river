@@ -27,13 +27,13 @@ func TestJobScheduler(t *testing.T) {
 		notificationsByQueue map[string]int
 	}
 
-	setup := func(t *testing.T, ex riverdriver.Executor) (*JobScheduler, *testBundle) {
+	setup := func(t *testing.T, exec riverdriver.Executor) (*JobScheduler, *testBundle) {
 		t.Helper()
 
 		archetype := riverinternaltest.BaseServiceArchetype(t)
 
 		bundle := &testBundle{
-			exec:                 ex,
+			exec:                 exec,
 			notificationsByQueue: make(map[string]int),
 		}
 
