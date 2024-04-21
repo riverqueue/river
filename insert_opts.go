@@ -140,16 +140,7 @@ func (o *UniqueOpts) isEmpty() bool {
 		o.ByState == nil
 }
 
-var jobStateAll = []rivertype.JobState{ //nolint:gochecknoglobals
-	rivertype.JobStateAvailable,
-	rivertype.JobStateCancelled,
-	rivertype.JobStateCompleted,
-	rivertype.JobStateDiscarded,
-	rivertype.JobStatePending,
-	rivertype.JobStateRetryable,
-	rivertype.JobStateRunning,
-	rivertype.JobStateScheduled,
-}
+var jobStateAll = rivertype.JobStates() //nolint:gochecknoglobals
 
 func (o *UniqueOpts) validate() error {
 	if o.isEmpty() {
