@@ -856,9 +856,9 @@ func Test_Client_Stop(t *testing.T) {
 
 		require.NoError(t, client.Stop(ctx))
 
-		res, err := client.JobList(ctx, NewJobListParams().States(rivertype.JobStateRunning))
+		listRes, err := client.JobList(ctx, NewJobListParams().States(rivertype.JobStateRunning))
 		require.NoError(t, err)
-		require.Empty(t, res.Jobs, "expected no jobs to be left running")
+		require.Empty(t, listRes.Jobs, "expected no jobs to be left running")
 	})
 
 	t.Run("WithSubscriber", func(t *testing.T) {
@@ -1715,14 +1715,14 @@ func Test_Client_JobList(t *testing.T) {
 		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind_1")})
 		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind_2")})
 
-		res, err := client.JobList(ctx, NewJobListParams().Kinds("test_kind_1"))
+		listRes, err := client.JobList(ctx, NewJobListParams().Kinds("test_kind_1"))
 		require.NoError(t, err)
 		// jobs ordered by ScheduledAt ASC by default
-		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
-		res, err = client.JobList(ctx, NewJobListParams().Kinds("test_kind_2"))
+		listRes, err = client.JobList(ctx, NewJobListParams().Kinds("test_kind_2"))
 		require.NoError(t, err)
-		require.Equal(t, []int64{job3.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Equal(t, []int64{job3.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 	})
 
 	t.Run("FiltersByQueue", func(t *testing.T) { //nolint:dupl
@@ -1734,14 +1734,14 @@ func Test_Client_JobList(t *testing.T) {
 		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue_1")})
 		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue_2")})
 
-		res, err := client.JobList(ctx, NewJobListParams().Queues("queue_1"))
+		listRes, err := client.JobList(ctx, NewJobListParams().Queues("queue_1"))
 		require.NoError(t, err)
 		// jobs ordered by ScheduledAt ASC by default
-		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
-		res, err = client.JobList(ctx, NewJobListParams().Queues("queue_2"))
+		listRes, err = client.JobList(ctx, NewJobListParams().Queues("queue_2"))
 		require.NoError(t, err)
-		require.Equal(t, []int64{job3.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Equal(t, []int64{job3.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 	})
 
 	t.Run("FiltersByState", func(t *testing.T) {
@@ -1753,14 +1753,14 @@ func Test_Client_JobList(t *testing.T) {
 		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
 		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
 
-		res, err := client.JobList(ctx, NewJobListParams().States(rivertype.JobStateAvailable))
+		listRes, err := client.JobList(ctx, NewJobListParams().States(rivertype.JobStateAvailable))
 		require.NoError(t, err)
 		// jobs ordered by ScheduledAt ASC by default
-		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
-		res, err = client.JobList(ctx, NewJobListParams().States(rivertype.JobStateRunning))
+		listRes, err = client.JobList(ctx, NewJobListParams().States(rivertype.JobStateRunning))
 		require.NoError(t, err)
-		require.Equal(t, []int64{job3.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Equal(t, []int64{job3.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 	})
 
 	t.Run("DefaultsToOrderingByID", func(t *testing.T) {
@@ -1771,13 +1771,13 @@ func Test_Client_JobList(t *testing.T) {
 		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{})
 		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{})
 
-		res, err := client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc))
+		listRes, err := client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc))
 		require.NoError(t, err)
-		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
-		res, err = client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderDesc))
+		listRes, err = client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderDesc))
 		require.NoError(t, err)
-		require.Equal(t, []int64{job2.ID, job1.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Equal(t, []int64{job2.ID, job1.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 	})
 
 	t.Run("OrderByTimeSortsAvailableRetryableAndScheduledJobsByScheduledAt", func(t *testing.T) {
@@ -1796,13 +1796,13 @@ func Test_Client_JobList(t *testing.T) {
 			job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(state), ScheduledAt: &now})
 			job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(state), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
 
-			res, err := client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).States(state))
+			listRes, err := client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).States(state))
 			require.NoError(t, err)
-			require.Equal(t, []int64{job2.ID, job1.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+			require.Equal(t, []int64{job2.ID, job1.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
-			res, err = client.JobList(ctx, NewJobListParams().States(state).OrderBy(JobListOrderByTime, SortOrderDesc))
+			listRes, err = client.JobList(ctx, NewJobListParams().States(state).OrderBy(JobListOrderByTime, SortOrderDesc))
 			require.NoError(t, err)
-			require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+			require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 		}
 	})
 
@@ -1822,13 +1822,13 @@ func Test_Client_JobList(t *testing.T) {
 			job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(state), FinalizedAt: ptrutil.Ptr(now.Add(-10 * time.Second))})
 			job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(state), FinalizedAt: ptrutil.Ptr(now.Add(-15 * time.Second))})
 
-			res, err := client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).States(state))
+			listRes, err := client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).States(state))
 			require.NoError(t, err)
-			require.Equal(t, []int64{job2.ID, job1.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+			require.Equal(t, []int64{job2.ID, job1.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
-			res, err = client.JobList(ctx, NewJobListParams().States(state).OrderBy(JobListOrderByTime, SortOrderDesc))
+			listRes, err = client.JobList(ctx, NewJobListParams().States(state).OrderBy(JobListOrderByTime, SortOrderDesc))
 			require.NoError(t, err)
-			require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+			require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 		}
 	})
 
@@ -1841,14 +1841,14 @@ func Test_Client_JobList(t *testing.T) {
 		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: &now})
 		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
 
-		res, err := client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).States(rivertype.JobStateRunning))
+		listRes, err := client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).States(rivertype.JobStateRunning))
 		require.NoError(t, err)
-		require.Equal(t, []int64{job2.ID, job1.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Equal(t, []int64{job2.ID, job1.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
-		res, err = client.JobList(ctx, NewJobListParams().States(rivertype.JobStateRunning).OrderBy(JobListOrderByTime, SortOrderDesc))
+		listRes, err = client.JobList(ctx, NewJobListParams().States(rivertype.JobStateRunning).OrderBy(JobListOrderByTime, SortOrderDesc))
 		require.NoError(t, err)
 		// Sort order was explicitly reversed:
-		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 	})
 
 	t.Run("WithNilParamsFiltersToAllStatesByDefault", func(t *testing.T) {
@@ -1861,10 +1861,10 @@ func Test_Client_JobList(t *testing.T) {
 		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
 		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning), ScheduledAt: ptrutil.Ptr(now.Add(-2 * time.Second))})
 
-		res, err := client.JobList(ctx, nil)
+		listRes, err := client.JobList(ctx, nil)
 		require.NoError(t, err)
 		// sort order defaults to ID
-		require.Equal(t, []int64{job1.ID, job2.ID, job3.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Equal(t, []int64{job1.ID, job2.ID, job3.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 	})
 
 	t.Run("PaginatesWithAfter_JobListOrderByID", func(t *testing.T) {
@@ -1876,24 +1876,24 @@ func Test_Client_JobList(t *testing.T) {
 		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{})
 		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{})
 
-		res, err := client.JobList(ctx, NewJobListParams().After(JobListCursorFromJob(job1)))
+		listRes, err := client.JobList(ctx, NewJobListParams().After(JobListCursorFromJob(job1)))
 		require.NoError(t, err)
-		require.Equal(t, []int64{job2.ID, job3.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
-		require.Equal(t, JobListOrderByID, res.LastCursor.sortField)
-		require.Equal(t, job3.ID, res.LastCursor.id)
+		require.Equal(t, []int64{job2.ID, job3.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Equal(t, JobListOrderByID, listRes.LastCursor.sortField)
+		require.Equal(t, job3.ID, listRes.LastCursor.id)
 
 		// No more results
-		res, err = client.JobList(ctx, NewJobListParams().After(JobListCursorFromJob(job3)))
+		listRes, err = client.JobList(ctx, NewJobListParams().After(JobListCursorFromJob(job3)))
 		require.NoError(t, err)
-		require.Equal(t, []int64{}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
-		require.Nil(t, res.LastCursor)
+		require.Equal(t, []int64{}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Nil(t, listRes.LastCursor)
 
 		// Descending
-		res, err = client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByID, SortOrderDesc).After(JobListCursorFromJob(job3)))
+		listRes, err = client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByID, SortOrderDesc).After(JobListCursorFromJob(job3)))
 		require.NoError(t, err)
-		require.Equal(t, []int64{job2.ID, job1.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
-		require.Equal(t, JobListOrderByID, res.LastCursor.sortField)
-		require.Equal(t, job1.ID, res.LastCursor.id)
+		require.Equal(t, []int64{job2.ID, job1.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Equal(t, JobListOrderByID, listRes.LastCursor.sortField)
+		require.Equal(t, job1.ID, listRes.LastCursor.id)
 	})
 
 	t.Run("PaginatesWithAfter_JobListOrderByScheduledAt", func(t *testing.T) {
@@ -1906,24 +1906,24 @@ func Test_Client_JobList(t *testing.T) {
 		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{ScheduledAt: ptrutil.Ptr(now.Add(1 * time.Second))})
 		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{ScheduledAt: ptrutil.Ptr(now.Add(2 * time.Second))})
 
-		res, err := client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByScheduledAt, SortOrderAsc).After(JobListCursorFromJob(job1)))
+		listRes, err := client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByScheduledAt, SortOrderAsc).After(JobListCursorFromJob(job1)))
 		require.NoError(t, err)
-		require.Equal(t, []int64{job2.ID, job3.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
-		require.Equal(t, JobListOrderByScheduledAt, res.LastCursor.sortField)
-		require.Equal(t, job3.ID, res.LastCursor.id)
+		require.Equal(t, []int64{job2.ID, job3.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Equal(t, JobListOrderByScheduledAt, listRes.LastCursor.sortField)
+		require.Equal(t, job3.ID, listRes.LastCursor.id)
 
 		// No more results
-		res, err = client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByScheduledAt, SortOrderAsc).After(JobListCursorFromJob(job3)))
+		listRes, err = client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByScheduledAt, SortOrderAsc).After(JobListCursorFromJob(job3)))
 		require.NoError(t, err)
-		require.Equal(t, []int64{}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
-		require.Nil(t, res.LastCursor)
+		require.Equal(t, []int64{}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Nil(t, listRes.LastCursor)
 
 		// Descending
-		res, err = client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByScheduledAt, SortOrderDesc).After(JobListCursorFromJob(job3)))
+		listRes, err = client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByScheduledAt, SortOrderDesc).After(JobListCursorFromJob(job3)))
 		require.NoError(t, err)
-		require.Equal(t, []int64{job2.ID, job1.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
-		require.Equal(t, JobListOrderByScheduledAt, res.LastCursor.sortField)
-		require.Equal(t, job1.ID, res.LastCursor.id)
+		require.Equal(t, []int64{job2.ID, job1.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Equal(t, JobListOrderByScheduledAt, listRes.LastCursor.sortField)
+		require.Equal(t, job1.ID, listRes.LastCursor.id)
 	})
 
 	t.Run("PaginatesWithAfter_JobListOrderByTime", func(t *testing.T) {
@@ -1939,23 +1939,23 @@ func Test_Client_JobList(t *testing.T) {
 		job5 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), ScheduledAt: ptrutil.Ptr(now.Add(-7 * time.Second)), FinalizedAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
 		job6 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), ScheduledAt: ptrutil.Ptr(now.Add(-7 * time.Second)), FinalizedAt: &now})
 
-		res, err := client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).States(rivertype.JobStateAvailable).After(JobListCursorFromJob(job1)))
+		listRes, err := client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).States(rivertype.JobStateAvailable).After(JobListCursorFromJob(job1)))
 		require.NoError(t, err)
-		require.Equal(t, []int64{job2.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
-		require.Equal(t, JobListOrderByTime, res.LastCursor.sortField)
-		require.Equal(t, job2.ID, res.LastCursor.id)
+		require.Equal(t, []int64{job2.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Equal(t, JobListOrderByTime, listRes.LastCursor.sortField)
+		require.Equal(t, job2.ID, listRes.LastCursor.id)
 
-		res, err = client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).States(rivertype.JobStateRunning).After(JobListCursorFromJob(job3)))
+		listRes, err = client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).States(rivertype.JobStateRunning).After(JobListCursorFromJob(job3)))
 		require.NoError(t, err)
-		require.Equal(t, []int64{job4.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
-		require.Equal(t, JobListOrderByTime, res.LastCursor.sortField)
-		require.Equal(t, job4.ID, res.LastCursor.id)
+		require.Equal(t, []int64{job4.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Equal(t, JobListOrderByTime, listRes.LastCursor.sortField)
+		require.Equal(t, job4.ID, listRes.LastCursor.id)
 
-		res, err = client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).States(rivertype.JobStateCompleted).After(JobListCursorFromJob(job5)))
+		listRes, err = client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).States(rivertype.JobStateCompleted).After(JobListCursorFromJob(job5)))
 		require.NoError(t, err)
-		require.Equal(t, []int64{job6.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
-		require.Equal(t, JobListOrderByTime, res.LastCursor.sortField)
-		require.Equal(t, job6.ID, res.LastCursor.id)
+		require.Equal(t, []int64{job6.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Equal(t, JobListOrderByTime, listRes.LastCursor.sortField)
+		require.Equal(t, job6.ID, listRes.LastCursor.id)
 	})
 
 	t.Run("MetadataOnly", func(t *testing.T) {
@@ -1967,14 +1967,14 @@ func Test_Client_JobList(t *testing.T) {
 		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Metadata: []byte(`{"baz": "value"}`)})
 		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Metadata: []byte(`{"baz": "value"}`)})
 
-		res, err := client.JobList(ctx, NewJobListParams().Metadata(`{"foo": "bar"}`))
+		listRes, err := client.JobList(ctx, NewJobListParams().Metadata(`{"foo": "bar"}`))
 		require.NoError(t, err)
-		require.Equal(t, []int64{job1.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Equal(t, []int64{job1.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
-		res, err = client.JobList(ctx, NewJobListParams().Metadata(`{"baz": "value"}`).OrderBy(JobListOrderByTime, SortOrderDesc))
+		listRes, err = client.JobList(ctx, NewJobListParams().Metadata(`{"baz": "value"}`).OrderBy(JobListOrderByTime, SortOrderDesc))
 		require.NoError(t, err)
 		// Sort order was explicitly reversed:
-		require.Equal(t, []int64{job3.ID, job2.ID}, sliceutil.Map(res.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+		require.Equal(t, []int64{job3.ID, job2.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 	})
 
 	t.Run("WithCancelledContext", func(t *testing.T) {
@@ -1985,9 +1985,9 @@ func Test_Client_JobList(t *testing.T) {
 		ctx, cancel := context.WithCancel(ctx)
 		cancel() // cancel immediately
 
-		res, err := client.JobList(ctx, NewJobListParams().States(rivertype.JobStateRunning))
+		listRes, err := client.JobList(ctx, NewJobListParams().States(rivertype.JobStateRunning))
 		require.ErrorIs(t, context.Canceled, err)
-		require.Nil(t, res)
+		require.Nil(t, listRes)
 	})
 }
 
