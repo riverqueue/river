@@ -73,10 +73,11 @@ func (e *SharedTx) Exec(ctx context.Context, query string, args ...any) (pgconn.
 
 func (e *SharedTx) Query(ctx context.Context, query string, args ...any) (pgx.Rows, error) {
 	e.lock()
-	// no unlock until rows close
+	// no unlock until rows close or return on error condition
 
 	rows, err := e.inner.Query(ctx, query, args...)
 	if err != nil {
+		e.unlock()
 		return nil, err
 	}
 
