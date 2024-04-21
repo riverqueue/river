@@ -137,4 +137,27 @@ func TestSharedTx(t *testing.T) {
 
 		require.Len(t, sharedTx.wait, 1)
 	})
+
+	// Checks specifically that the shared transaction is unlocked correctly on
+	// the Query function's error path (normally it's unlocked when the returned
+	// rows struct is closed, so an additional unlock operation is required).
+	t.Run("QueryUnlocksOnError", func(t *testing.T) {
+		t.Parallel()
+
+		sharedTx := setup(t)
+
+		{
+			// Roll back the transaction so using it returns an error.
+			require.NoError(t, sharedTx.inner.Rollback(ctx))
+
+			_, err := sharedTx.Query(ctx, "SELECT 1") //nolint:sqlclosecheck
+			require.ErrorIs(t, err, pgx.ErrTxClosed)
+
+			select {
+			case <-sharedTx.wait:
+			default:
+				require.FailNow(t, "Should have been a value in shared transaction's wait channel")
+			}
+		}
+	})
 }
