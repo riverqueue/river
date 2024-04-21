@@ -37,7 +37,7 @@ func TestJobScheduler(t *testing.T) {
 			notificationsByQueue: make(map[string]int),
 		}
 
-		scheduler := NewScheduler(
+		scheduler := NewJobScheduler(
 			archetype,
 			&JobSchedulerConfig{
 				Interval: JobSchedulerIntervalDefault,
@@ -80,7 +80,7 @@ func TestJobScheduler(t *testing.T) {
 	t.Run("Defaults", func(t *testing.T) {
 		t.Parallel()
 
-		scheduler := NewScheduler(riverinternaltest.BaseServiceArchetype(t), &JobSchedulerConfig{}, nil)
+		scheduler := NewJobScheduler(riverinternaltest.BaseServiceArchetype(t), &JobSchedulerConfig{}, nil)
 
 		require.Equal(t, JobSchedulerIntervalDefault, scheduler.config.Interval)
 		require.Equal(t, JobSchedulerLimitDefault, scheduler.config.Limit)

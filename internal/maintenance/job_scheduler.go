@@ -74,7 +74,7 @@ type JobScheduler struct {
 	exec   riverdriver.Executor
 }
 
-func NewScheduler(archetype *baseservice.Archetype, config *JobSchedulerConfig, exec riverdriver.Executor) *JobScheduler {
+func NewJobScheduler(archetype *baseservice.Archetype, config *JobSchedulerConfig, exec riverdriver.Executor) *JobScheduler {
 	return baseservice.Init(archetype, &JobScheduler{
 		config: (&JobSchedulerConfig{
 			Interval:     valutil.ValOrDefault(config.Interval, JobSchedulerIntervalDefault),

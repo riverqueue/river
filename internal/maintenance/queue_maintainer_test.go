@@ -114,7 +114,7 @@ func TestQueueMaintainer(t *testing.T) {
 				},
 			}, driver),
 			NewQueueCleaner(archetype, &QueueCleanerConfig{}, driver),
-			NewScheduler(archetype, &JobSchedulerConfig{}, driver),
+			NewJobScheduler(archetype, &JobSchedulerConfig{}, driver),
 		})
 		maintainer.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
 		startstoptest.Stress(ctx, t, maintainer)
