@@ -194,7 +194,7 @@ func (b *Benchmarker[TTx]) Run(ctx context.Context) error {
 				return
 
 			case <-ticker.C:
-				numJobs, err := b.driver.GetExecutor().JobCountByState(ctx, river.JobStateAvailable)
+				numJobs, err := b.driver.GetExecutor().JobCountByState(ctx, rivertype.JobStateAvailable)
 				if err != nil {
 					b.logger.ErrorContext(ctx, "Error counting jobs", "err", err)
 					continue
