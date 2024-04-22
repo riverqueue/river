@@ -1465,7 +1465,7 @@ type JobListResult struct {
 // provided context is used for the underlying Postgres query and can be used to
 // cancel the operation or apply a timeout.
 //
-//	params := river.NewJobListParams().WithLimit(10).State(river.JobStateCompleted)
+//	params := river.NewJobListParams().WithLimit(10).State(rivertype.JobStateCompleted)
 //	jobRows, err := client.JobList(ctx, params)
 //	if err != nil {
 //		// handle error
@@ -1498,7 +1498,7 @@ func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) (*JobL
 // provided context is used for the underlying Postgres query and can be used to
 // cancel the operation or apply a timeout.
 //
-//	params := river.NewJobListParams().WithLimit(10).State(river.JobStateCompleted)
+//	params := river.NewJobListParams().WithLimit(10).State(rivertype.JobStateCompleted)
 //	jobRows, err := client.JobListTx(ctx, tx, params)
 //	if err != nil {
 //		// handle error
