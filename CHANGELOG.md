@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Update job state references in `./cmd/river` and some documentation to `rivertype`. [PR #315](https://github.com/riverqueue/river/pull/315).
+- Update job state references in `./cmd/river` and some documentation to `rivertype`. Thanks Danny Hermes (@dhermes)! 🙏🏻 [PR #315](https://github.com/riverqueue/river/pull/315).
 
 ## [0.4.0] - 2024-04-20
 
