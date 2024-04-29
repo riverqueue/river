@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+⚠️ Version 0.5.0 contains a new database migration, version 4. This migration is backward compatible with any River installation running the v3 migration. Be sure to run the v4 migration prior to deploying the code from this release.
+
+### Added
+
+- Add `pending` job state. This is currently unused, but will be used to build higher level functionality for staging jobs that are not yet ready to run (for some reason other than their scheduled time being in the future). Pending jobs will never be run or deleted and must first be moved to another state by external code. [PR #301](https://github.com/riverqueue/river/pull/301).
+- Queue status tracking, pause and resume. [PR #301](https://github.com/riverqueue/river/pull/301).
+
+  A useful operational lever is the ability to pause and resume a queue without shutting down clients. In addition to pause/resume being a feature request from [#54](https://github.com/riverqueue/river/pull/54), as part of the work on River's UI it's been useful to list out the active queues so that they can be displayed and manipulated.
+
+  A new `river_queue` table is introduced in the v4 migration for this purpose. Upon startup, every producer in each River `Client` will make an `UPSERT` query to the database to either register the queue as being active, or if it already exists it will instead bump the timestamp to keep it active. This query will be run periodically in each producer as long as the `Client` is alive, even if the queue is paused. A separate query will delete/purge any queues which have not been active in awhile (currently fixed to 24 hours).
+
+  `QueuePause` and `QueueResume` APIs have been introduced to `Client` pause and resume a single queue by name, or _all_ queues using the special `*` value. Each producer will watch for notifications on the relevant `LISTEN/NOTIFY` topic unless operating in poll-only mode, in which case they will periodically poll for changes to their queue record in the database.
+
+### Changed
+
+- Job insert notifications are now handled within application code rather than within the database using triggers. [PR #301](https://github.com/riverqueue/river/pull/301).
+
+  The initial design for River utilized a trigger on job insert that issued notifications (`NOTIFY`) so that listening clients could quickly pick up the work if they were idle. While this is good for lowering latency, it does have the side effect of emitting a large amount of notifications any time there are lots of jobs being inserted. This adds overhead, particularly to high-throughput installations.
+
+  To improve this situation and reduce overhead in high-throughput installations, the notifications have been refactored to be emitted at the application level. A client-level debouncer ensures that these notifications are not emitted more often than they could be useful. If a queue is due for an insert notification (on a particular Postgres schema), the notification is piggy-backed onto the insert query within the transaction. While this has the impact of increasing insert latency for a certain percentage of cases, the effect should be small.
+
+  Additionally, initial releases of River did not properly scope notification topics within the global `LISTEN/NOTIFY` namespace. If two River installations were operating on the same Postgres database but within different schemas (search paths), their notifications would be emitted on a shared topic name. This is no longer the case and all notifications are prefixed with a `{schema_name}.` string.
+
+- Add `NOT NULL` constraints to the database for `river_job.args` and `river_job.metadata`. Normal code paths should never have allowed for null values any way, but this constraint further strengthens the guarantee. [PR #301](https://github.com/riverqueue/river/pull/301).
+- Stricter constraint on `river_job.finalized_at` to ensure it is only set when paired with a finalized state (completed, discarded, cancelled). Normal code paths should never have allowed for invalid values any way, but this constraint further strengthens the guarantee. [PR #301](https://github.com/riverqueue/river/pull/301).
+
 ## [0.4.1] - 2024-04-22
 
 ### Fixed
@@ -19,10 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ⚠️ Version 0.4.0 has a number of small breaking changes which we've decided to release all as part of a single version. More breaking changes in one release is inconvenient, but we've tried to coordinate them in hopes that any future breaking changes will be non-existent or very rare. All changes will get picked up by the Go compiler, and each one should be quite easy to fix. The changes don't apply to any of the most common core APIs, and likely many projects won't have to change any code.
 
-- **Breaking change:**  There are a number of small breaking changes in the job list API using `JobList`/`JobListTx`:
-    - Now support querying jobs by a list of Job Kinds and States. Also allows for filtering by specific timestamp values. Thank you Jos Kraaijeveld (@thatjos)! 🙏🏻 [PR #236](https://github.com/riverqueue/river/pull/236).
-    - Job listing now defaults to ordering by job ID (`JobListOrderByID`) instead of a job timestamp dependent on on requested job state. The previous ordering behavior is still available with `NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc)`. [PR #307](https://github.com/riverqueue/river/pull/307).
-    - The function `JobListCursorFromJob` no longer needs a sort order parameter. Instead, sort order is determined based on the job list parameters that the cursor is subsequently used with. [PR #307](https://github.com/riverqueue/river/pull/307).
+- **Breaking change:** There are a number of small breaking changes in the job list API using `JobList`/`JobListTx`:
+  - Now support querying jobs by a list of Job Kinds and States. Also allows for filtering by specific timestamp values. Thank you Jos Kraaijeveld (@thatjos)! 🙏🏻 [PR #236](https://github.com/riverqueue/river/pull/236).
+  - Job listing now defaults to ordering by job ID (`JobListOrderByID`) instead of a job timestamp dependent on on requested job state. The previous ordering behavior is still available with `NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc)`. [PR #307](https://github.com/riverqueue/river/pull/307).
+  - The function `JobListCursorFromJob` no longer needs a sort order parameter. Instead, sort order is determined based on the job list parameters that the cursor is subsequently used with. [PR #307](https://github.com/riverqueue/river/pull/307).
 - **Breaking change:** Client `Insert` and `InsertTx` functions now return a `JobInsertResult` struct instead of a `JobRow`. This allows the result to include metadata like the new `UniqueSkippedAsDuplicate` property, so callers can tell whether an inserted job was skipped due to unique constraint. [PR #292](https://github.com/riverqueue/river/pull/292).
 - **Breaking change:** Client `InsertMany` and `InsertManyTx` now return number of jobs inserted as `int` instead of `int64`. This change was made to make the type in use a little more idiomatic. [PR #293](https://github.com/riverqueue/river/pull/293).
 - **Breaking change:** `river.JobState*` type aliases have been removed. All job state constants should be accessed through `rivertype.JobState*` instead. [PR #300](https://github.com/riverqueue/river/pull/300).
