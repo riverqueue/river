@@ -542,7 +542,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 func emitQueueNotification(t *testing.T, ctx context.Context, exec riverdriver.Executor, queue, action string) {
 	t.Helper()
 	err := exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{
-		Topic: string(notifier.NotificationTopicJobControl),
+		Topic: string(notifier.NotificationTopicControl),
 		Payload: []string{
 			fmt.Sprintf(`{"queue":"%s","action":"%s"}`, queue, action),
 		},

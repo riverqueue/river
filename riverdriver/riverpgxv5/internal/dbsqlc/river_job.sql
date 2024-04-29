@@ -47,7 +47,7 @@ notification AS (
     SELECT
         id,
         pg_notify(
-            concat(current_schema(), '.', @job_control_topic::text),
+            concat(current_schema(), '.', @control_topic::text),
             json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text
         )
     FROM

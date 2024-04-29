@@ -1161,7 +1161,7 @@ func (c *Client[TTx]) jobCancel(ctx context.Context, exec riverdriver.Executor, 
 	return exec.JobCancel(ctx, &riverdriver.JobCancelParams{
 		ID:                jobID,
 		CancelAttemptedAt: c.baseService.TimeNowUTC(),
-		JobControlTopic:   string(notifier.NotificationTopicJobControl),
+		ControlTopic:      string(notifier.NotificationTopicControl),
 	})
 }
 
@@ -1564,7 +1564,7 @@ func (c *Client[TTx]) notifyQueuePauseOrResume(ctx context.Context, tx riverdriv
 
 	err = tx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
 		Payload: []string{string(payload)},
-		Topic:   string(notifier.NotificationTopicJobControl),
+		Topic:   string(notifier.NotificationTopicControl),
 	})
 	if err != nil {
 		c.baseService.Logger.ErrorContext(

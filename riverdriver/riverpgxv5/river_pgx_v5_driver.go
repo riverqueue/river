@@ -83,7 +83,7 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 	job, err := e.queries.JobCancel(ctx, e.dbtx, &dbsqlc.JobCancelParams{
 		ID:                params.ID,
 		CancelAttemptedAt: cancelledAt,
-		JobControlTopic:   params.JobControlTopic,
+		ControlTopic:      params.ControlTopic,
 	})
 	if err != nil {
 		return nil, interpretError(err)

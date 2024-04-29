@@ -56,12 +56,12 @@ FROM updated_job
 
 type JobCancelParams struct {
 	ID                int64
-	JobControlTopic   string
+	ControlTopic      string
 	CancelAttemptedAt []byte
 }
 
 func (q *Queries) JobCancel(ctx context.Context, db DBTX, arg *JobCancelParams) (*RiverJob, error) {
-	row := db.QueryRow(ctx, jobCancel, arg.ID, arg.JobControlTopic, arg.CancelAttemptedAt)
+	row := db.QueryRow(ctx, jobCancel, arg.ID, arg.ControlTopic, arg.CancelAttemptedAt)
 	var i RiverJob
 	err := row.Scan(
 		&i.ID,

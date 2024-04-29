@@ -251,8 +251,8 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 	fetchLimiter := chanutil.NewDebouncedChan(fetchCtx, p.config.FetchCooldown, true)
 
 	var (
-		insertSub     *notifier.Subscription
-		jobControlSub *notifier.Subscription
+		controlSub *notifier.Subscription
+		insertSub  *notifier.Subscription
 	)
 	if p.config.Notifier == nil {
 		p.Logger.InfoContext(fetchCtx, p.Name+": No notifier configured; starting in poll mode", "client_id", p.config.ClientID)
@@ -282,7 +282,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 			return err
 		}
 
-		jobControlSub, err = p.config.Notifier.Listen(fetchCtx, notifier.NotificationTopicJobControl, p.handleJobControlNotification(workCtx))
+		controlSub, err = p.config.Notifier.Listen(fetchCtx, notifier.NotificationTopicControl, p.handleControlNotification(workCtx))
 		if err != nil {
 			close(stopped)
 			if strings.HasSuffix(err.Error(), "conn closed") || errors.Is(err, context.Canceled) {
@@ -306,8 +306,8 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 			defer insertSub.Unlisten(fetchCtx)
 		}
 
-		if jobControlSub != nil {
-			defer jobControlSub.Unlisten(fetchCtx)
+		if controlSub != nil {
+			defer controlSub.Unlisten(fetchCtx)
 		}
 
 		// TODO(bgentry): this should probably happen even earlier in this start
@@ -344,7 +344,7 @@ type insertPayload struct {
 	Queue string `json:"queue"`
 }
 
-func (p *producer) handleJobControlNotification(workCtx context.Context) func(notifier.NotificationTopic, string) {
+func (p *producer) handleControlNotification(workCtx context.Context) func(notifier.NotificationTopic, string) {
 	return func(topic notifier.NotificationTopic, payload string) {
 		var decoded jobControlPayload
 		if err := json.Unmarshal([]byte(payload), &decoded); err != nil {

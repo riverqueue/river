@@ -91,7 +91,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 				jobAfter, err := exec.JobCancel(ctx, &riverdriver.JobCancelParams{
 					ID:                job.ID,
 					CancelAttemptedAt: now,
-					JobControlTopic:   string(notifier.NotificationTopicJobControl),
+					ControlTopic:      string(notifier.NotificationTopicControl),
 				})
 				require.NoError(t, err)
 				require.NotNil(t, jobAfter)
@@ -118,7 +118,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			jobAfter, err := exec.JobCancel(ctx, &riverdriver.JobCancelParams{
 				ID:                job.ID,
 				CancelAttemptedAt: now,
-				JobControlTopic:   string(notifier.NotificationTopicJobControl),
+				ControlTopic:      string(notifier.NotificationTopicControl),
 			})
 			require.NoError(t, err)
 			require.NotNil(t, jobAfter)
@@ -147,7 +147,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 				jobAfter, err := exec.JobCancel(ctx, &riverdriver.JobCancelParams{
 					ID:                job.ID,
 					CancelAttemptedAt: time.Now(),
-					JobControlTopic:   string(notifier.NotificationTopicJobControl),
+					ControlTopic:      string(notifier.NotificationTopicControl),
 				})
 				require.NoError(t, err)
 				require.Equal(t, startingState, jobAfter.State)
@@ -164,7 +164,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			jobAfter, err := exec.JobCancel(ctx, &riverdriver.JobCancelParams{
 				ID:                1234567890,
 				CancelAttemptedAt: time.Now(),
-				JobControlTopic:   string(notifier.NotificationTopicJobControl),
+				ControlTopic:      string(notifier.NotificationTopicControl),
 			})
 			require.ErrorIs(t, err, rivertype.ErrNotFound)
 			require.Nil(t, jobAfter)
