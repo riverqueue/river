@@ -48,7 +48,7 @@ type UniqueInserter struct {
 }
 
 func (i *UniqueInserter) JobInsert(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobInsertFastParams, uniqueOpts *UniqueOpts) (*rivertype.JobInsertResult, error) {
-	var execTx riverdriver.ExecutorTx
+	var tx riverdriver.ExecutorTx
 
 	if uniqueOpts != nil && !uniqueOpts.IsEmpty() {
 		// For uniqueness checks returns an advisory lock hash to use for lock,
@@ -120,7 +120,7 @@ func (i *UniqueInserter) JobInsert(ctx context.Context, exec riverdriver.Executo
 
 			// Make the subtransaction available at function scope so it can be
 			// committed in cases where we insert a job.
-			execTx = exec
+			tx = exec
 
 			// The wrapping transaction should maintain snapshot consistency
 			// even if we were to only have a SELECT + INSERT, but given that a
@@ -152,8 +152,8 @@ func (i *UniqueInserter) JobInsert(ctx context.Context, exec riverdriver.Executo
 		return nil, err
 	}
 
-	if execTx != nil {
-		if err := execTx.Commit(ctx); err != nil {
+	if tx != nil {
+		if err := tx.Commit(ctx); err != nil {
 			return nil, err
 		}
 	}

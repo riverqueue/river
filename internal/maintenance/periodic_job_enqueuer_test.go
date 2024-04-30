@@ -66,7 +66,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		svc := NewPeriodicJobEnqueuer(
 			riverinternaltest.BaseServiceArchetype(t),
 			&PeriodicJobEnqueuerConfig{
-				NotifyInsert: func(ctx context.Context, execTx riverdriver.ExecutorTx, queues []string) error {
+				NotifyInsert: func(ctx context.Context, tx riverdriver.ExecutorTx, queues []string) error {
 					for _, queue := range queues {
 						bundle.notificationsByQueue[queue]++
 					}
@@ -310,7 +310,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		svc := NewPeriodicJobEnqueuer(
 			riverinternaltest.BaseServiceArchetype(t),
 			&PeriodicJobEnqueuerConfig{
-				NotifyInsert: func(ctx context.Context, execTx riverdriver.ExecutorTx, queues []string) error { return nil },
+				NotifyInsert: func(ctx context.Context, tx riverdriver.ExecutorTx, queues []string) error { return nil },
 				PeriodicJobs: []*PeriodicJob{
 					{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), RunOnStart: true},
 					{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false), RunOnStart: true},
@@ -545,7 +545,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		})
 
 		queueCh := make(chan []string, 1)
-		svc.Config.NotifyInsert = func(ctx context.Context, execTx riverdriver.ExecutorTx, queues []string) error {
+		svc.Config.NotifyInsert = func(ctx context.Context, tx riverdriver.ExecutorTx, queues []string) error {
 			queueCh <- queues
 			return nil
 		}
@@ -568,7 +568,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("unique_periodic_job_500ms", true)},
 		})
 
-		svc.Config.NotifyInsert = func(ctx context.Context, execTx riverdriver.ExecutorTx, queues []string) error {
+		svc.Config.NotifyInsert = func(ctx context.Context, tx riverdriver.ExecutorTx, queues []string) error {
 			return errors.New("test error")
 		}
 

@@ -33,7 +33,7 @@ func (ts *JobSchedulerTestSignals) Init() {
 
 // NotifyInsert is a function to call to emit notifications for queues where
 // jobs were scheduled.
-type NotifyInsertFunc func(ctx context.Context, execTx riverdriver.ExecutorTx, queues []string) error
+type NotifyInsertFunc func(ctx context.Context, tx riverdriver.ExecutorTx, queues []string) error
 
 type JobSchedulerConfig struct {
 	// Interval is the amount of time between periodic checks for jobs to
@@ -138,11 +138,11 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 			ctx, cancelFunc := context.WithTimeout(ctx, 30*time.Second)
 			defer cancelFunc()
 
-			execTx, err := s.exec.Begin(ctx)
+			tx, err := s.exec.Begin(ctx)
 			if err != nil {
 				return 0, fmt.Errorf("error starting transaction: %w", err)
 			}
-			defer execTx.Rollback(ctx)
+			defer tx.Rollback(ctx)
 
 			now := s.TimeNowUTC()
 			nowWithLookAhead := now.Add(s.config.Interval)
@@ -172,13 +172,13 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 			}
 
 			if len(queues) > 0 {
-				if err := s.config.NotifyInsert(ctx, execTx, queues); err != nil {
+				if err := s.config.NotifyInsert(ctx, tx, queues); err != nil {
 					return 0, fmt.Errorf("error notifying insert: %w", err)
 				}
 				s.TestSignals.NotifiedQueues.Signal(queues)
 			}
 
-			return len(scheduledJobs), execTx.Commit(ctx)
+			return len(scheduledJobs), tx.Commit(ctx)
 		}()
 		if err != nil {
 			return nil, err

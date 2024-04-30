@@ -42,7 +42,7 @@ func TestJobScheduler(t *testing.T) {
 			&JobSchedulerConfig{
 				Interval: JobSchedulerIntervalDefault,
 				Limit:    10,
-				NotifyInsert: func(ctx context.Context, execTx riverdriver.ExecutorTx, queues []string) error {
+				NotifyInsert: func(ctx context.Context, tx riverdriver.ExecutorTx, queues []string) error {
 					for _, queue := range queues {
 						bundle.notificationsByQueue[queue]++
 					}
@@ -255,7 +255,7 @@ func TestJobScheduler(t *testing.T) {
 
 		scheduler, _ := setup(t, exec)
 		scheduler.config.Interval = time.Minute // should only trigger once for the initial run
-		scheduler.config.NotifyInsert = func(ctx context.Context, execTx riverdriver.ExecutorTx, queues []string) error {
+		scheduler.config.NotifyInsert = func(ctx context.Context, tx riverdriver.ExecutorTx, queues []string) error {
 			notifyCh <- queues
 			return nil
 		}
