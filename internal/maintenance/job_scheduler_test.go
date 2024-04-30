@@ -2,15 +2,12 @@ package maintenance
 
 import (
 	"context"
-	"encoding/json"
 	"sort"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/componentstatus"
-	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/internal/riverinternaltest/testfactory"
@@ -26,21 +23,31 @@ func TestJobScheduler(t *testing.T) {
 	ctx := context.Background()
 
 	type testBundle struct {
-		exec riverdriver.Executor
+		exec                 riverdriver.Executor
+		notificationsByQueue map[string]int
 	}
 
-	setup := func(t *testing.T, ex riverdriver.Executor) (*JobScheduler, *testBundle) {
+	setup := func(t *testing.T, exec riverdriver.Executor) (*JobScheduler, *testBundle) {
 		t.Helper()
 
+		archetype := riverinternaltest.BaseServiceArchetype(t)
+
 		bundle := &testBundle{
-			exec: ex,
+			exec:                 exec,
+			notificationsByQueue: make(map[string]int),
 		}
 
 		scheduler := NewScheduler(
-			riverinternaltest.BaseServiceArchetype(t),
+			archetype,
 			&JobSchedulerConfig{
 				Interval: JobSchedulerIntervalDefault,
 				Limit:    10,
+				NotifyInsert: func(ctx context.Context, execTx riverdriver.ExecutorTx, queues []string) error {
+					for _, queue := range queues {
+						bundle.notificationsByQueue[queue]++
+					}
+					return nil
+				},
 			},
 			bundle.exec)
 		scheduler.TestSignals.Init()
@@ -93,19 +100,19 @@ func TestJobScheduler(t *testing.T) {
 		t.Parallel()
 
 		scheduler, bundle := setupTx(t)
+		now := time.Now().UTC()
 
 		// none of these should get updated
-		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: ptrutil.Ptr(now), State: ptrutil.Ptr(rivertype.JobStateCompleted)})
 		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
-		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled)})
-		job4 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
+		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: ptrutil.Ptr(now), State: ptrutil.Ptr(rivertype.JobStateCancelled)})
+		job4 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: ptrutil.Ptr(now), State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
 		job5 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-
-		now := time.Now().UTC()
 
 		scheduledJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
 		scheduledJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
-		scheduledJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(30 * time.Second))}) // won't be scheduled
+		scheduledJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(scheduler.config.Interval - time.Millisecond))}) // won't be scheduled
+		scheduledJob4 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(30 * time.Second))})                             // won't be scheduled
 
 		retryableJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
 		retryableJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
@@ -123,7 +130,8 @@ func TestJobScheduler(t *testing.T) {
 
 		requireJobStateAvailable(t, bundle.exec, scheduledJob1)
 		requireJobStateAvailable(t, bundle.exec, scheduledJob2)
-		requireJobStateUnchanged(t, bundle.exec, scheduledJob3) // still scheduled
+		requireJobStateAvailable(t, bundle.exec, scheduledJob3)
+		requireJobStateUnchanged(t, bundle.exec, scheduledJob4) // still scheduled
 
 		requireJobStateAvailable(t, bundle.exec, retryableJob1)
 		requireJobStateAvailable(t, bundle.exec, retryableJob2)
@@ -149,7 +157,11 @@ func TestJobScheduler(t *testing.T) {
 			if i%2 == 0 {
 				jobState = rivertype.JobStateRetryable
 			}
-			job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: &jobState, ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
+			job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+				Queue:       ptrutil.Ptr("scheduler_test"),
+				State:       &jobState,
+				ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour)),
+			})
 			jobs[i] = job
 		}
 
@@ -239,88 +251,55 @@ func TestJobScheduler(t *testing.T) {
 		dbPool := riverinternaltest.TestDB(ctx, t)
 		driver := riverpgxv5.New(dbPool)
 		exec := driver.GetExecutor()
-		listener := driver.GetListener()
+		notifyCh := make(chan []string, 10)
 
 		scheduler, _ := setup(t, exec)
 		scheduler.config.Interval = time.Minute // should only trigger once for the initial run
+		scheduler.config.NotifyInsert = func(ctx context.Context, execTx riverdriver.ExecutorTx, queues []string) error {
+			notifyCh <- queues
+			return nil
+		}
 		now := time.Now().UTC()
-
-		statusUpdateCh := make(chan componentstatus.Status, 10)
-		statusUpdate := func(status componentstatus.Status) {
-			statusUpdateCh <- status
-		}
-
-		notify := notifier.New(&scheduler.Archetype, listener, statusUpdate)
-		require.NoError(t, notify.Start(ctx))
-		t.Cleanup(notify.Stop)
-
-		type insertPayload struct {
-			Queue string `json:"queue"`
-		}
-		type notification struct {
-			topic   notifier.NotificationTopic
-			payload insertPayload
-		}
-		notifyCh := make(chan notification, 10)
-		handleNotification := func(topic notifier.NotificationTopic, payload string) {
-			notif := notification{topic: topic}
-			require.NoError(t, json.Unmarshal([]byte(payload), &notif.payload))
-			notifyCh <- notif
-		}
-		sub, err := notify.Listen(ctx, notifier.NotificationTopicInsert, handleNotification)
-		require.NoError(t, err)
-		defer sub.Unlisten(ctx)
-
-		for {
-			status := riverinternaltest.WaitOrTimeout(t, statusUpdateCh)
-			if status == componentstatus.Healthy {
-				break
-			}
-		}
 
 		addJob := func(queue string, fromNow time.Duration, state rivertype.JobState) {
 			t.Helper()
-			testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: &queue, State: &state, ScheduledAt: ptrutil.Ptr(now.Add(fromNow))})
+			var finalizedAt *time.Time
+			switch state { //nolint:exhaustive
+			case rivertype.JobStateCompleted, rivertype.JobStateCancelled, rivertype.JobStateDiscarded:
+				finalizedAt = ptrutil.Ptr(now.Add(fromNow))
+			}
+			testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				FinalizedAt: finalizedAt,
+				Queue:       &queue,
+				State:       &state,
+				ScheduledAt: ptrutil.Ptr(now.Add(fromNow)),
+			})
 		}
 
 		addJob("queue1", -1*time.Hour, rivertype.JobStateScheduled)
 		addJob("queue2", -1*time.Minute, rivertype.JobStateScheduled)
+		// deduplication is handled in client, so this dupe should appear:
+		addJob("queue2", -5*time.Second, rivertype.JobStateScheduled)
 		addJob("queue3", -30*time.Second, rivertype.JobStateRetryable)
+		// This one is scheduled only a millisecond in the future, so it should
+		// trigger a notification:
+		addJob("queue4", time.Millisecond, rivertype.JobStateRetryable)
 
 		// these shouldn't cause notifications:
-		addJob("queue2", -5*time.Second, rivertype.JobStateScheduled)          // it's a duplicate
-		addJob("future_queue", time.Minute, rivertype.JobStateScheduled)       // it's in the future
+		addJob("future_queue", 2*time.Minute, rivertype.JobStateScheduled)     // it's in the future
 		addJob("other_status_queue", time.Minute, rivertype.JobStateCancelled) // it's cancelled
+		// This one is scheduled in the future, just barely before the next run, so it should
+		// be scheduled but shouldn't trigger a notification:
+		addJob("queue5", scheduler.config.Interval-time.Millisecond, rivertype.JobStateRetryable)
 
 		// Run the scheduler and wait for it to execute once:
 		require.NoError(t, scheduler.Start(ctx))
 		scheduler.TestSignals.ScheduledBatch.WaitOrTimeout()
 
-		expectedQueues := []string{"queue1", "queue2", "queue3"}
-		expectedQueueMap := make(map[string]bool)
-		for _, queue := range expectedQueues {
-			expectedQueueMap[queue] = true
-		}
+		expectedQueues := []string{"queue1", "queue2", "queue2", "queue3", "queue4"}
 
-		receivedQueues := make([]string, 0)
-		for i := 0; i < len(expectedQueues); i++ {
-			notification := riverinternaltest.WaitOrTimeout(t, notifyCh)
-			require.Equal(t, notifier.NotificationTopicInsert, notification.topic)
-			require.NotEmpty(t, notification.payload.Queue)
-
-			_, isExpected := expectedQueueMap[notification.payload.Queue]
-			require.True(t, isExpected, "unexpected queue %s", notification.payload.Queue)
-			t.Logf("received notification for queue %s", notification.payload.Queue)
-			receivedQueues = append(receivedQueues, notification.payload.Queue)
-		}
-
-		select {
-		case notification := <-notifyCh:
-			// no more should have been queued
-			t.Fatalf("unexpected notification %+v", notification)
-		case <-time.After(50 * time.Millisecond):
-		}
-		sort.Strings(receivedQueues)
-		require.Equal(t, expectedQueues, receivedQueues)
+		notifiedQueues := riverinternaltest.WaitOrTimeout(t, notifyCh)
+		sort.Strings(notifiedQueues)
+		require.Equal(t, expectedQueues, notifiedQueues)
 	})
 }

@@ -17,6 +17,7 @@ const (
 	RiverJobStateCancelled RiverJobState = "cancelled"
 	RiverJobStateCompleted RiverJobState = "completed"
 	RiverJobStateDiscarded RiverJobState = "discarded"
+	RiverJobStatePending   RiverJobState = "pending"
 	RiverJobStateRetryable RiverJobState = "retryable"
 	RiverJobStateRunning   RiverJobState = "running"
 	RiverJobStateScheduled RiverJobState = "scheduled"
@@ -87,4 +88,12 @@ type RiverMigration struct {
 	ID        int64
 	CreatedAt time.Time
 	Version   int64
+}
+
+type RiverQueue struct {
+	Name      string
+	CreatedAt time.Time
+	Metadata  []byte
+	PausedAt  *time.Time
+	UpdatedAt time.Time
 }

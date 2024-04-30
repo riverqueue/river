@@ -181,7 +181,7 @@ func DrainContinuously[T any](drainChan <-chan T) func() []T {
 
 // Logger returns a logger suitable for use in tests.
 //
-// Defaults to informational verbosity. If env is set with `RIVER_DEBU=true`,
+// Defaults to informational verbosity. If env is set with `RIVER_DEBUG=true`,
 // debug level verbosity is activated.
 func Logger(tb testing.TB) *slog.Logger {
 	tb.Helper()
@@ -334,7 +334,7 @@ func TruncateRiverTables(ctx context.Context, pool *pgxpool.Pool) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	tables := []string{"river_job", "river_leader"}
+	tables := []string{"river_job", "river_leader", "river_queue"}
 
 	for _, table := range tables {
 		if _, err := pool.Exec(ctx, fmt.Sprintf("TRUNCATE TABLE %s;", table)); err != nil {

@@ -8,6 +8,9 @@ import (
 // by internal packages, but the top-level river package re-exports them, and
 // all user code must use that set instead.
 const (
+	// AllQueuesString is a special string that can be used to indicate all
+	// queues in some operations, particularly pause and resume.
+	AllQueuesString    = "*"
 	MaxAttemptsDefault = 25
 	PriorityDefault    = 1
 	QueueDefault       = "default"

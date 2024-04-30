@@ -133,8 +133,8 @@ func (e *Executor) JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, e
 	return nil, riverdriver.ErrNotImplemented
 }
 
-func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobScheduleParams) (int, error) {
-	return 0, riverdriver.ErrNotImplemented
+func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobScheduleParams) ([]*rivertype.JobRow, error) {
+	return nil, riverdriver.ErrNotImplemented
 }
 
 func (e *Executor) JobSetCompleteIfRunningMany(ctx context.Context, params *riverdriver.JobSetCompleteIfRunningManyParams) ([]*rivertype.JobRow, error) {
@@ -199,12 +199,36 @@ func (e *Executor) MigrationInsertMany(ctx context.Context, versions []int) ([]*
 	return mapSlice(migrations, migrationFromInternal), nil
 }
 
-func (e *Executor) Notify(ctx context.Context, topic string, payload string) error {
+func (e *Executor) NotifyMany(ctx context.Context, params *riverdriver.NotifyManyParams) error {
 	return riverdriver.ErrNotImplemented
 }
 
 func (e *Executor) PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}, error) {
 	return nil, riverdriver.ErrNotImplemented
+}
+
+func (e *Executor) QueueCreateOrSetUpdatedAt(ctx context.Context, params *riverdriver.QueueCreateOrSetUpdatedAtParams) (*rivertype.Queue, error) {
+	return nil, riverdriver.ErrNotImplemented
+}
+
+func (e *Executor) QueueDeleteExpired(ctx context.Context, parmas *riverdriver.QueueDeleteExpiredParams) ([]string, error) {
+	return nil, riverdriver.ErrNotImplemented
+}
+
+func (e *Executor) QueueGet(ctx context.Context, name string) (*rivertype.Queue, error) {
+	return nil, riverdriver.ErrNotImplemented
+}
+
+func (e *Executor) QueueList(ctx context.Context, limit int) ([]*rivertype.Queue, error) {
+	return nil, riverdriver.ErrNotImplemented
+}
+
+func (e *Executor) QueuePause(ctx context.Context, name string) error {
+	return riverdriver.ErrNotImplemented
+}
+
+func (e *Executor) QueueResume(ctx context.Context, name string) error {
+	return riverdriver.ErrNotImplemented
 }
 
 func (e *Executor) TableExists(ctx context.Context, tableName string) (bool, error) {

@@ -3,6 +3,7 @@ CREATE TYPE river_job_state AS ENUM(
     'cancelled',
     'completed',
     'discarded',
+    'pending',
     'retryable',
     'running',
     'scheduled'
@@ -10,7 +11,7 @@ CREATE TYPE river_job_state AS ENUM(
 
 CREATE TABLE river_job(
     id bigserial PRIMARY KEY,
-    args jsonb,
+    args jsonb NOT NULL DEFAULT '{}'::jsonb,
     attempt smallint NOT NULL DEFAULT 0,
     attempted_at timestamptz,
     attempted_by text[],
@@ -25,7 +26,10 @@ CREATE TABLE river_job(
     state river_job_state NOT NULL DEFAULT 'available' ::river_job_state,
     scheduled_at timestamptz NOT NULL DEFAULT NOW(),
     tags varchar(255)[] NOT NULL DEFAULT '{}' ::varchar(255)[],
-    CONSTRAINT finalized_or_finalized_at_null CHECK ((state IN ('cancelled', 'completed', 'discarded') AND finalized_at IS NOT NULL) OR finalized_at IS NULL),
+    CONSTRAINT finalized_or_finalized_at_null CHECK (
+        (finalized_at IS NULL AND state NOT IN ('cancelled', 'completed', 'discarded')) OR
+        (finalized_at IS NOT NULL AND state IN ('cancelled', 'completed', 'discarded'))
+    ),
     CONSTRAINT priority_in_range CHECK (priority >= 1 AND priority <= 4),
     CONSTRAINT queue_length CHECK (char_length(queue) > 0 AND char_length(queue) < 128),
     CONSTRAINT kind_length CHECK (char_length(kind) > 0 AND char_length(kind) < 128)
@@ -42,7 +46,10 @@ WITH locked_job AS (
 notification AS (
     SELECT
         id,
-        pg_notify(@job_control_topic, json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text)
+        pg_notify(
+            concat(current_schema(), '.', @control_topic::text),
+            json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text
+        )
     FROM
         locked_job
     WHERE
@@ -267,7 +274,7 @@ UNION
 SELECT *
 FROM updated_job;
 
--- name: JobSchedule :one
+-- name: JobSchedule :many
 WITH jobs_to_schedule AS (
     SELECT id
     FROM river_job
@@ -275,7 +282,7 @@ WITH jobs_to_schedule AS (
         state IN ('retryable', 'scheduled')
         AND queue IS NOT NULL
         AND priority >= 0
-        AND scheduled_at <= @now::timestamptz
+        AND river_job.scheduled_at <= @now::timestamptz
     ORDER BY
         priority,
         scheduled_at,
@@ -288,13 +295,11 @@ river_job_scheduled AS (
     SET state = 'available'::river_job_state
     FROM jobs_to_schedule
     WHERE river_job.id = jobs_to_schedule.id
-    RETURNING *
+    RETURNING river_job.id
 )
-SELECT count(*)
-FROM (
-    SELECT pg_notify(@insert_topic, json_build_object('queue', queue)::text)
-    FROM river_job_scheduled
-) AS notifications_sent;
+SELECT *
+FROM river_job
+WHERE id IN (SELECT id FROM river_job_scheduled);
 
 -- name: JobSetCompleteIfRunningMany :many
 WITH job_to_finalized_at AS (

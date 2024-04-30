@@ -22,14 +22,16 @@ var ErrNoJobToInsert = errors.New("a nil job was returned, nothing to insert")
 
 // Test-only properties.
 type PeriodicJobEnqueuerTestSignals struct {
-	EnteredLoop  rivercommon.TestSignal[struct{}] // notifies when the enqueuer finishes start up and enters its initial run loop
-	InsertedJobs rivercommon.TestSignal[struct{}] // notifies when a batch of jobs is inserted
-	SkippedJob   rivercommon.TestSignal[struct{}] // notifies when a job is skipped because of nil JobInsertParams
+	EnteredLoop    rivercommon.TestSignal[struct{}] // notifies when the enqueuer finishes start up and enters its initial run loop
+	InsertedJobs   rivercommon.TestSignal[struct{}] // notifies when a batch of jobs is inserted
+	NotifiedQueues rivercommon.TestSignal[[]string] // notifies when queues are sent an insert notification
+	SkippedJob     rivercommon.TestSignal[struct{}] // notifies when a job is skipped because of nil JobInsertParams
 }
 
 func (ts *PeriodicJobEnqueuerTestSignals) Init() {
 	ts.EnteredLoop.Init()
 	ts.InsertedJobs.Init()
+	ts.NotifiedQueues.Init()
 	ts.SkippedJob.Init()
 }
 
@@ -57,6 +59,10 @@ func (j *PeriodicJob) mustValidate() *PeriodicJob {
 
 type PeriodicJobEnqueuerConfig struct {
 	AdvisoryLockPrefix int32
+
+	// NotifyInsert is a function to call to emit notifications for queues
+	// where jobs were scheduled.
+	NotifyInsert NotifyInsertFunc
 
 	// PeriodicJobs are the periodic jobs with which to configure the enqueuer.
 	PeriodicJobs []*PeriodicJob
@@ -100,6 +106,7 @@ func NewPeriodicJobEnqueuer(archetype *baseservice.Archetype, config *PeriodicJo
 	svc := baseservice.Init(archetype, &PeriodicJobEnqueuer{
 		Config: (&PeriodicJobEnqueuerConfig{
 			AdvisoryLockPrefix: config.AdvisoryLockPrefix,
+			NotifyInsert:       config.NotifyInsert,
 			PeriodicJobs:       config.PeriodicJobs,
 		}).mustValidate(),
 
@@ -345,10 +352,27 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 }
 
 func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany []*riverdriver.JobInsertFastParams, insertParamsUnique []*insertParamsAndUniqueOpts) {
+	if len(insertParamsMany) == 0 && len(insertParamsUnique) == 0 {
+		return
+	}
+
+	execTx, err := s.exec.Begin(ctx)
+	if err != nil {
+		s.Logger.ErrorContext(ctx, s.Name+": Error starting transaction", "error", err.Error())
+		return
+	}
+	defer execTx.Rollback(ctx)
+
+	queues := make([]string, 0, len(insertParamsMany)+len(insertParamsUnique))
+
 	if len(insertParamsMany) > 0 {
-		if _, err := s.exec.JobInsertFastMany(ctx, insertParamsMany); err != nil {
+		if _, err := execTx.JobInsertFastMany(ctx, insertParamsMany); err != nil {
 			s.Logger.ErrorContext(ctx, s.Name+": Error inserting periodic jobs",
 				"error", err.Error(), "num_jobs", len(insertParamsMany))
+			return
+		}
+		for _, params := range insertParamsMany {
+			queues = append(queues, params.Queue)
 		}
 	}
 
@@ -358,16 +382,31 @@ func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany 
 	// aren't inserting any unique jobs periodically (which we expect is most).
 	if len(insertParamsUnique) > 0 {
 		for _, params := range insertParamsUnique {
-			if _, err := s.uniqueInserter.JobInsert(ctx, s.exec, params.InsertParams, params.UniqueOpts); err != nil {
+			res, err := s.uniqueInserter.JobInsert(ctx, execTx, params.InsertParams, params.UniqueOpts)
+			if err != nil {
 				s.Logger.ErrorContext(ctx, s.Name+": Error inserting unique periodic job",
 					"error", err.Error(), "kind", params.InsertParams.Kind)
+				continue
+			}
+			if !res.UniqueSkippedAsDuplicate {
+				queues = append(queues, params.InsertParams.Queue)
 			}
 		}
 	}
 
-	if len(insertParamsMany) > 0 || len(insertParamsUnique) > 0 {
-		s.TestSignals.InsertedJobs.Signal(struct{}{})
+	if len(queues) > 0 {
+		if err := s.Config.NotifyInsert(ctx, execTx, queues); err != nil {
+			s.Logger.ErrorContext(ctx, s.Name+": Error notifying insert", "error", err.Error())
+			return
+		}
+		s.TestSignals.NotifiedQueues.Signal(queues)
 	}
+
+	if err := execTx.Commit(ctx); err != nil {
+		s.Logger.ErrorContext(ctx, s.Name+": Error committing transaction", "error", err.Error())
+		return
+	}
+	s.TestSignals.InsertedJobs.Signal(struct{}{})
 }
 
 func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, constructorFunc func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error)) (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, bool) {

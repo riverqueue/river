@@ -18,6 +18,8 @@ import (
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/sharedtx"
 	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
+	"github.com/riverqueue/river/internal/riverinternaltest/testfactory"
+	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivertype"
@@ -79,20 +81,22 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	ignoreStatusUpdates := func(queue string, status componentstatus.Status) {}
 
 	producer := newProducer(archetype, exec, &producerConfig{
+		ClientID:     testClientID,
 		Completer:    completer,
 		ErrorHandler: newTestErrorHandler(),
 		// Fetch constantly to more aggressively trigger the potential data race:
-		FetchCooldown:     time.Millisecond,
-		FetchPollInterval: time.Millisecond,
-		JobTimeout:        JobTimeoutDefault,
-		MaxWorkers:        1000,
-		Notifier:          notifier,
-		Queue:             rivercommon.QueueDefault,
-		RetryPolicy:       &DefaultClientRetryPolicy{},
-		SchedulerInterval: maintenance.JobSchedulerIntervalDefault,
-		ClientID:          testClientID,
-		StatusFunc:        ignoreStatusUpdates,
-		Workers:           workers,
+		FetchCooldown:       time.Millisecond,
+		FetchPollInterval:   time.Millisecond,
+		JobTimeout:          JobTimeoutDefault,
+		MaxWorkers:          1000,
+		Notifier:            notifier,
+		Queue:               rivercommon.QueueDefault,
+		QueuePollInterval:   queuePollIntervalDefault,
+		QueueReportInterval: queueReportIntervalDefault,
+		RetryPolicy:         &DefaultClientRetryPolicy{},
+		SchedulerInterval:   maintenance.JobSchedulerIntervalDefault,
+		StatusFunc:          ignoreStatusUpdates,
+		Workers:             workers,
 	})
 
 	params := make([]*riverdriver.JobInsertFastParams, maxJobCount)
@@ -159,19 +163,21 @@ func TestProducer_PollOnly(t *testing.T) {
 		)
 
 		return newProducer(archetype, exec, &producerConfig{
-			ClientID:          testClientID,
-			Completer:         completer,
-			ErrorHandler:      newTestErrorHandler(),
-			FetchCooldown:     FetchCooldownDefault,
-			FetchPollInterval: 50 * time.Millisecond, // more aggressive than normal because we have no notifier
-			JobTimeout:        JobTimeoutDefault,
-			MaxWorkers:        1_000,
-			Notifier:          nil, // no notifier
-			Queue:             rivercommon.QueueDefault,
-			RetryPolicy:       &DefaultClientRetryPolicy{},
-			SchedulerInterval: riverinternaltest.SchedulerShortInterval,
-			StatusFunc:        func(queue string, status componentstatus.Status) {},
-			Workers:           NewWorkers(),
+			ClientID:            testClientID,
+			Completer:           completer,
+			ErrorHandler:        newTestErrorHandler(),
+			FetchCooldown:       FetchCooldownDefault,
+			FetchPollInterval:   50 * time.Millisecond, // more aggressive than normal because we have no notifier
+			JobTimeout:          JobTimeoutDefault,
+			MaxWorkers:          1_000,
+			Notifier:            nil, // no notifier
+			Queue:               rivercommon.QueueDefault,
+			QueuePollInterval:   queuePollIntervalDefault,
+			QueueReportInterval: queueReportIntervalDefault,
+			RetryPolicy:         &DefaultClientRetryPolicy{},
+			SchedulerInterval:   riverinternaltest.SchedulerShortInterval,
+			StatusFunc:          func(queue string, status componentstatus.Status) {},
+			Workers:             NewWorkers(),
 		})
 	})
 }
@@ -198,19 +204,21 @@ func TestProducer_WithNotifier(t *testing.T) {
 		}
 
 		return newProducer(archetype, exec, &producerConfig{
-			ClientID:          testClientID,
-			Completer:         completer,
-			ErrorHandler:      newTestErrorHandler(),
-			FetchCooldown:     FetchCooldownDefault,
-			FetchPollInterval: 50 * time.Millisecond, // more aggressive than normal so in case we miss the event, tests still pass quickly
-			JobTimeout:        JobTimeoutDefault,
-			MaxWorkers:        1_000,
-			Notifier:          notifier,
-			Queue:             rivercommon.QueueDefault,
-			RetryPolicy:       &DefaultClientRetryPolicy{},
-			SchedulerInterval: riverinternaltest.SchedulerShortInterval,
-			StatusFunc:        func(queue string, status componentstatus.Status) {},
-			Workers:           NewWorkers(),
+			ClientID:            testClientID,
+			Completer:           completer,
+			ErrorHandler:        newTestErrorHandler(),
+			FetchCooldown:       FetchCooldownDefault,
+			FetchPollInterval:   50 * time.Millisecond, // more aggressive than normal so in case we miss the event, tests still pass quickly
+			JobTimeout:          JobTimeoutDefault,
+			MaxWorkers:          1_000,
+			Notifier:            notifier,
+			Queue:               rivercommon.QueueDefault,
+			QueuePollInterval:   queuePollIntervalDefault,
+			QueueReportInterval: queueReportIntervalDefault,
+			RetryPolicy:         &DefaultClientRetryPolicy{},
+			SchedulerInterval:   riverinternaltest.SchedulerShortInterval,
+			StatusFunc:          func(queue string, status componentstatus.Status) {},
+			Workers:             NewWorkers(),
 		})
 	})
 }
@@ -285,6 +293,27 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		require.Equal(t, rivertype.JobStateCompleted, update.Job.State)
 	})
 
+	t.Run("RegistersQueueStatus", func(t *testing.T) {
+		t.Parallel()
+
+		producer, bundle := setup(t)
+		producer.config.QueueReportInterval = 50 * time.Millisecond
+
+		now := time.Now().UTC()
+		startProducer(t, ctx, ctx, producer)
+
+		queue, err := bundle.exec.QueueGet(ctx, rivercommon.QueueDefault)
+		require.NoError(t, err)
+		require.WithinDuration(t, now, queue.CreatedAt, 2*time.Second)
+		require.Equal(t, []byte("{}"), queue.Metadata)
+		require.Equal(t, rivercommon.QueueDefault, queue.Name)
+		require.WithinDuration(t, now, queue.UpdatedAt, 2*time.Second)
+		require.Equal(t, queue.CreatedAt, queue.UpdatedAt)
+
+		// Queue status should be updated quickly:
+		producer.testSignals.ReportedQueueStatus.WaitOrTimeout()
+	})
+
 	t.Run("UnknownJobKind", func(t *testing.T) {
 		t.Parallel()
 
@@ -332,9 +361,9 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		}
 
 		AddWorker(bundle.workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
-			t.Logf("Job started")
+			producer.Logger.InfoContext(ctx, "Job started")
 			<-ctx.Done()
-			t.Logf("Job stopped after context cancelled")
+			producer.Logger.InfoContext(ctx, "Job stopped after context cancelled")
 			return ctx.Err()
 		}))
 
@@ -410,4 +439,113 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 
 		startstoptest.Stress(ctx, t, producer)
 	})
+
+	t.Run("QueuePausedBeforeStart", func(t *testing.T) {
+		t.Parallel()
+
+		producer, bundle := setup(t)
+		AddWorker(bundle.workers, &noOpWorker{})
+
+		testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{
+			Name:     ptrutil.Ptr(rivercommon.QueueDefault),
+			PausedAt: ptrutil.Ptr(time.Now()),
+		})
+
+		mustInsert(ctx, t, bundle.exec, &noOpArgs{})
+
+		startProducer(t, ctx, ctx, producer)
+
+		select {
+		case update := <-bundle.jobUpdates:
+			t.Fatalf("Unexpected job update: job=%+v stats=%+v", update.Job, update.JobStats)
+		case <-time.After(500 * time.Millisecond):
+		}
+	})
+
+	testQueuePause := func(t *testing.T, queueNameToPause string) {
+		t.Helper()
+		t.Parallel()
+
+		producer, bundle := setup(t)
+		producer.config.QueuePollInterval = 50 * time.Millisecond
+		AddWorker(bundle.workers, &noOpWorker{})
+
+		mustInsert(ctx, t, bundle.exec, &noOpArgs{})
+
+		startProducer(t, ctx, ctx, producer)
+
+		// First job should be executed immediately while resumed:
+		update := riverinternaltest.WaitOrTimeout(t, bundle.jobUpdates)
+		require.Equal(t, rivertype.JobStateCompleted, update.Job.State)
+
+		// Pause the queue and wait for confirmation:
+		require.NoError(t, bundle.exec.QueuePause(ctx, queueNameToPause))
+		if producer.config.Notifier != nil {
+			// also emit notification:
+			emitQueueNotification(t, ctx, bundle.exec, queueNameToPause, "pause")
+		}
+		producer.testSignals.Paused.WaitOrTimeout()
+
+		// Job should not be executed while paused:
+		mustInsert(ctx, t, bundle.exec, &noOpArgs{})
+
+		select {
+		case update := <-bundle.jobUpdates:
+			t.Fatalf("Unexpected job update: %+v", update)
+		case <-time.After(500 * time.Millisecond):
+		}
+
+		// Resume the queue and wait for confirmation:
+		require.NoError(t, bundle.exec.QueueResume(ctx, queueNameToPause))
+		if producer.config.Notifier != nil {
+			// also emit notification:
+			emitQueueNotification(t, ctx, bundle.exec, queueNameToPause, "resume")
+		}
+		producer.testSignals.Resumed.WaitOrTimeout()
+
+		// Now the 2nd job should execute:
+		update = riverinternaltest.WaitOrTimeout(t, bundle.jobUpdates)
+		require.Equal(t, rivertype.JobStateCompleted, update.Job.State)
+	}
+
+	t.Run("QueuePausedDuringOperation", func(t *testing.T) {
+		testQueuePause(t, rivercommon.QueueDefault)
+	})
+
+	t.Run("QueuePausedAndResumedDuringOperationUsing*", func(t *testing.T) {
+		testQueuePause(t, rivercommon.AllQueuesString)
+	})
+
+	t.Run("QueueDeletedFromRiverQueueTableDuringOperation", func(t *testing.T) {
+		t.Parallel()
+
+		producer, bundle := setup(t)
+		producer.config.QueuePollInterval = time.Second
+		producer.config.QueueReportInterval = time.Second
+
+		startProducer(t, ctx, ctx, producer)
+
+		// Delete the queue by using a future-dated horizon:
+		_, err := bundle.exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{
+			Max:              100,
+			UpdatedAtHorizon: time.Now().Add(time.Minute),
+		})
+		require.NoError(t, err)
+
+		producer.testSignals.ReportedQueueStatus.WaitOrTimeout()
+		if producer.config.Notifier == nil {
+			producer.testSignals.PolledQueueConfig.WaitOrTimeout()
+		}
+	})
+}
+
+func emitQueueNotification(t *testing.T, ctx context.Context, exec riverdriver.Executor, queue, action string) {
+	t.Helper()
+	err := exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+		Topic: string(notifier.NotificationTopicControl),
+		Payload: []string{
+			fmt.Sprintf(`{"queue":"%s","action":"%s"}`, queue, action),
+		},
+	})
+	require.NoError(t, err)
 }

@@ -4,6 +4,7 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
+// Job represents a single unit of work, holding both the arguments and
 // information for a job with args of type T.
 type Job[T JobArgs] struct {
 	*rivertype.JobRow

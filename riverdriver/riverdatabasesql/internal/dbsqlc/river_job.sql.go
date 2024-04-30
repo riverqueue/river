@@ -24,7 +24,10 @@ WITH locked_job AS (
 notification AS (
     SELECT
         id,
-        pg_notify($2, json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text)
+        pg_notify(
+            concat(current_schema(), '.', $2::text),
+            json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text
+        )
     FROM
         locked_job
     WHERE
@@ -56,12 +59,12 @@ FROM updated_job
 
 type JobCancelParams struct {
 	ID                int64
-	JobControlTopic   string
+	ControlTopic      string
 	CancelAttemptedAt json.RawMessage
 }
 
 func (q *Queries) JobCancel(ctx context.Context, db DBTX, arg *JobCancelParams) (*RiverJob, error) {
-	row := db.QueryRowContext(ctx, jobCancel, arg.ID, arg.JobControlTopic, arg.CancelAttemptedAt)
+	row := db.QueryRowContext(ctx, jobCancel, arg.ID, arg.ControlTopic, arg.CancelAttemptedAt)
 	var i RiverJob
 	err := row.Scan(
 		&i.ID,
@@ -708,7 +711,7 @@ func (q *Queries) JobRetry(ctx context.Context, db DBTX, id int64) (*RiverJob, e
 	return &i, err
 }
 
-const jobSchedule = `-- name: JobSchedule :one
+const jobSchedule = `-- name: JobSchedule :many
 WITH jobs_to_schedule AS (
     SELECT id
     FROM river_job
@@ -716,12 +719,12 @@ WITH jobs_to_schedule AS (
         state IN ('retryable', 'scheduled')
         AND queue IS NOT NULL
         AND priority >= 0
-        AND scheduled_at <= $2::timestamptz
+        AND river_job.scheduled_at <= $1::timestamptz
     ORDER BY
         priority,
         scheduled_at,
         id
-    LIMIT $3::bigint
+    LIMIT $2::bigint
     FOR UPDATE
 ),
 river_job_scheduled AS (
@@ -729,26 +732,56 @@ river_job_scheduled AS (
     SET state = 'available'::river_job_state
     FROM jobs_to_schedule
     WHERE river_job.id = jobs_to_schedule.id
-    RETURNING jobs_to_schedule.id, river_job.id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+    RETURNING river_job.id
 )
-SELECT count(*)
-FROM (
-    SELECT pg_notify($1, json_build_object('queue', queue)::text)
-    FROM river_job_scheduled
-) AS notifications_sent
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+FROM river_job
+WHERE id IN (SELECT id FROM river_job_scheduled)
 `
 
 type JobScheduleParams struct {
-	InsertTopic string
-	Now         time.Time
-	Max         int64
+	Now time.Time
+	Max int64
 }
 
-func (q *Queries) JobSchedule(ctx context.Context, db DBTX, arg *JobScheduleParams) (int64, error) {
-	row := db.QueryRowContext(ctx, jobSchedule, arg.InsertTopic, arg.Now, arg.Max)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
+func (q *Queries) JobSchedule(ctx context.Context, db DBTX, arg *JobScheduleParams) ([]*RiverJob, error) {
+	rows, err := db.QueryContext(ctx, jobSchedule, arg.Now, arg.Max)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverJob
+	for rows.Next() {
+		var i RiverJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Args,
+			&i.Attempt,
+			&i.AttemptedAt,
+			pq.Array(&i.AttemptedBy),
+			&i.CreatedAt,
+			pq.Array(&i.Errors),
+			&i.FinalizedAt,
+			&i.Kind,
+			&i.MaxAttempts,
+			&i.Metadata,
+			&i.Priority,
+			&i.Queue,
+			&i.State,
+			&i.ScheduledAt,
+			pq.Array(&i.Tags),
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const jobSetCompleteIfRunningMany = `-- name: JobSetCompleteIfRunningMany :many

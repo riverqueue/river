@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,7 +83,7 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 	job, err := e.queries.JobCancel(ctx, e.dbtx, &dbsqlc.JobCancelParams{
 		ID:                params.ID,
 		CancelAttemptedAt: cancelledAt,
-		JobControlTopic:   params.JobControlTopic,
+		ControlTopic:      params.ControlTopic,
 	})
 	if err != nil {
 		return nil, interpretError(err)
@@ -294,13 +295,12 @@ func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRes
 	return &struct{}{}, interpretError(err)
 }
 
-func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobScheduleParams) (int, error) {
-	numScheduled, err := e.queries.JobSchedule(ctx, e.dbtx, &dbsqlc.JobScheduleParams{
-		InsertTopic: params.InsertTopic,
-		Max:         int64(params.Max),
-		Now:         params.Now,
+func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobScheduleParams) ([]*rivertype.JobRow, error) {
+	jobs, err := e.queries.JobSchedule(ctx, e.dbtx, &dbsqlc.JobScheduleParams{
+		Max: int64(params.Max),
+		Now: params.Now,
 	})
-	return int(numScheduled), interpretError(err)
+	return mapSlice(jobs, jobRowFromInternal), interpretError(err)
 }
 
 func (e *Executor) JobSetCompleteIfRunningMany(ctx context.Context, params *riverdriver.JobSetCompleteIfRunningManyParams) ([]*rivertype.JobRow, error) {
@@ -451,16 +451,86 @@ func (e *Executor) MigrationInsertMany(ctx context.Context, versions []int) ([]*
 	return mapSlice(migrations, migrationFromInternal), nil
 }
 
-func (e *Executor) Notify(ctx context.Context, topic string, payload string) error {
-	return e.queries.PGNotify(ctx, e.dbtx, &dbsqlc.PGNotifyParams{
-		Payload: payload,
-		Topic:   topic,
+func (e *Executor) NotifyMany(ctx context.Context, params *riverdriver.NotifyManyParams) error {
+	return e.queries.PGNotifyMany(ctx, e.dbtx, &dbsqlc.PGNotifyManyParams{
+		Payload: params.Payload,
+		Topic:   params.Topic,
 	})
 }
 
 func (e *Executor) PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}, error) {
 	err := e.queries.PGAdvisoryXactLock(ctx, e.dbtx, key)
 	return &struct{}{}, interpretError(err)
+}
+
+func (e *Executor) QueueCreateOrSetUpdatedAt(ctx context.Context, params *riverdriver.QueueCreateOrSetUpdatedAtParams) (*rivertype.Queue, error) {
+	queue, err := e.queries.QueueCreateOrSetUpdatedAt(ctx, e.dbtx, &dbsqlc.QueueCreateOrSetUpdatedAtParams{
+		Metadata:  params.Metadata,
+		Name:      params.Name,
+		PausedAt:  params.PausedAt,
+		UpdatedAt: params.UpdatedAt,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return queueFromInternal(queue), nil
+}
+
+func (e *Executor) QueueDeleteExpired(ctx context.Context, params *riverdriver.QueueDeleteExpiredParams) ([]string, error) {
+	queues, err := e.queries.QueueDeleteExpired(ctx, e.dbtx, &dbsqlc.QueueDeleteExpiredParams{
+		Max:              int64(params.Max),
+		UpdatedAtHorizon: params.UpdatedAtHorizon,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	queueNames := make([]string, len(queues))
+	for i, q := range queues {
+		queueNames[i] = q.Name
+	}
+	return queueNames, nil
+}
+
+func (e *Executor) QueueGet(ctx context.Context, name string) (*rivertype.Queue, error) {
+	queue, err := e.queries.QueueGet(ctx, e.dbtx, name)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return queueFromInternal(queue), nil
+}
+
+func (e *Executor) QueueList(ctx context.Context, limit int) ([]*rivertype.Queue, error) {
+	internalQueues, err := e.queries.QueueList(ctx, e.dbtx, int32(limit))
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	queues := make([]*rivertype.Queue, len(internalQueues))
+	for i, q := range internalQueues {
+		queues[i] = queueFromInternal(q)
+	}
+	return queues, nil
+}
+
+func (e *Executor) QueuePause(ctx context.Context, name string) error {
+	res, err := e.queries.QueuePause(ctx, e.dbtx, name)
+	if err != nil {
+		return interpretError(err)
+	}
+	if res.RowsAffected() == 0 {
+		return rivertype.ErrNotFound
+	}
+	return nil
+}
+
+func (e *Executor) QueueResume(ctx context.Context, name string) error {
+	res, err := e.queries.QueueResume(ctx, e.dbtx, name)
+	if err != nil {
+		return interpretError(err)
+	}
+	if res.RowsAffected() == 0 {
+		return rivertype.ErrNotFound
+	}
+	return nil
 }
 
 func (e *Executor) TableExists(ctx context.Context, tableName string) (bool, error) {
@@ -484,6 +554,7 @@ func (t *ExecutorTx) Rollback(ctx context.Context) error {
 type Listener struct {
 	conn   *pgxpool.Conn
 	dbPool *pgxpool.Pool
+	prefix string
 	mu     sync.Mutex
 }
 
@@ -522,6 +593,13 @@ func (l *Listener) Connect(ctx context.Context) error {
 		return err
 	}
 
+	var schema string
+	if err := conn.QueryRow(ctx, "SELECT current_schema();").Scan(&schema); err != nil {
+		conn.Release()
+		return err
+	}
+
+	l.prefix = schema + "."
 	l.conn = conn
 	return nil
 }
@@ -530,7 +608,7 @@ func (l *Listener) Listen(ctx context.Context, topic string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	_, err := l.conn.Exec(ctx, "LISTEN "+topic)
+	_, err := l.conn.Exec(ctx, "LISTEN \""+l.prefix+topic+"\"")
 	return err
 }
 
@@ -545,7 +623,7 @@ func (l *Listener) Unlisten(ctx context.Context, topic string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	_, err := l.conn.Exec(ctx, "UNLISTEN "+topic)
+	_, err := l.conn.Exec(ctx, "UNLISTEN \""+l.prefix+topic+"\"")
 	return err
 }
 
@@ -559,7 +637,7 @@ func (l *Listener) WaitForNotification(ctx context.Context) (*riverdriver.Notifi
 	}
 
 	return &riverdriver.Notification{
-		Topic:   notification.Channel,
+		Topic:   strings.TrimPrefix(notification.Channel, l.prefix),
 		Payload: notification.Payload,
 	}, nil
 }
@@ -645,5 +723,20 @@ func migrationFromInternal(internal *dbsqlc.RiverMigration) *riverdriver.Migrati
 		ID:        int(internal.ID),
 		CreatedAt: internal.CreatedAt.UTC(),
 		Version:   int(internal.Version),
+	}
+}
+
+func queueFromInternal(internal *dbsqlc.RiverQueue) *rivertype.Queue {
+	var pausedAt *time.Time
+	if internal.PausedAt != nil {
+		t := internal.PausedAt.UTC()
+		pausedAt = &t
+	}
+	return &rivertype.Queue{
+		CreatedAt: internal.CreatedAt.UTC(),
+		Metadata:  internal.Metadata,
+		Name:      internal.Name,
+		PausedAt:  pausedAt,
+		UpdatedAt: internal.UpdatedAt.UTC(),
 	}
 }
