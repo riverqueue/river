@@ -49,17 +49,17 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 
 		exec, _ := setupExecutor(ctx, t, driver, beginTx)
 
-		execTx, err := exec.Begin(ctx)
+		tx, err := exec.Begin(ctx)
 		require.NoError(t, err)
-		t.Cleanup(func() { _ = execTx.Rollback(ctx) })
+		t.Cleanup(func() { _ = tx.Rollback(ctx) })
 
 		// Job visible in subtransaction, but not parent.
-		job := testfactory.Job(ctx, t, execTx, &testfactory.JobOpts{})
+		job := testfactory.Job(ctx, t, tx, &testfactory.JobOpts{})
 
-		_, err = execTx.JobGetByID(ctx, job.ID)
+		_, err = tx.JobGetByID(ctx, job.ID)
 		require.NoError(t, err)
 
-		require.NoError(t, execTx.Rollback(ctx))
+		require.NoError(t, tx.Rollback(ctx))
 
 		_, err = exec.JobGetByID(ctx, job.ID)
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
@@ -2198,15 +2198,15 @@ func ExerciseListener[TTx any](ctx context.Context, t *testing.T, getDriverWithP
 
 		require.NoError(t, listener.Listen(ctx, "topic1"))
 
-		execTx, err := bundle.exec.Begin(ctx)
+		tx, err := bundle.exec.Begin(ctx)
 		require.NoError(t, err)
 
-		require.NoError(t, execTx.NotifyMany(ctx, &riverdriver.NotifyManyParams{Topic: "topic1", Payload: []string{"payload1"}}))
+		require.NoError(t, tx.NotifyMany(ctx, &riverdriver.NotifyManyParams{Topic: "topic1", Payload: []string{"payload1"}}))
 
 		// No notification because the transaction hasn't committed yet.
 		requireNoNotification(ctx, t, listener)
 
-		require.NoError(t, execTx.Commit(ctx))
+		require.NoError(t, tx.Commit(ctx))
 
 		// Notification received now that transaction has committed.
 		notification := waitForNotification(ctx, t, listener)

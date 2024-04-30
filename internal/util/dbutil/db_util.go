@@ -21,18 +21,18 @@ func WithTx(ctx context.Context, exec riverdriver.Executor, innerFunc func(ctx c
 func WithTxV[T any](ctx context.Context, exec riverdriver.Executor, innerFunc func(ctx context.Context, exec riverdriver.ExecutorTx) (T, error)) (T, error) {
 	var defaultRes T
 
-	execTx, err := exec.Begin(ctx)
+	tx, err := exec.Begin(ctx)
 	if err != nil {
 		return defaultRes, fmt.Errorf("error beginning transaction: %w", err)
 	}
-	defer execTx.Rollback(ctx)
+	defer tx.Rollback(ctx)
 
-	res, err := innerFunc(ctx, execTx)
+	res, err := innerFunc(ctx, tx)
 	if err != nil {
 		return defaultRes, err
 	}
 
-	if err := execTx.Commit(ctx); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return defaultRes, fmt.Errorf("error committing transaction: %w", err)
 	}
 

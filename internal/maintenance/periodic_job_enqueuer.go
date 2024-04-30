@@ -356,17 +356,17 @@ func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany 
 		return
 	}
 
-	execTx, err := s.exec.Begin(ctx)
+	tx, err := s.exec.Begin(ctx)
 	if err != nil {
 		s.Logger.ErrorContext(ctx, s.Name+": Error starting transaction", "error", err.Error())
 		return
 	}
-	defer execTx.Rollback(ctx)
+	defer tx.Rollback(ctx)
 
 	queues := make([]string, 0, len(insertParamsMany)+len(insertParamsUnique))
 
 	if len(insertParamsMany) > 0 {
-		if _, err := execTx.JobInsertFastMany(ctx, insertParamsMany); err != nil {
+		if _, err := tx.JobInsertFastMany(ctx, insertParamsMany); err != nil {
 			s.Logger.ErrorContext(ctx, s.Name+": Error inserting periodic jobs",
 				"error", err.Error(), "num_jobs", len(insertParamsMany))
 			return
@@ -382,7 +382,7 @@ func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany 
 	// aren't inserting any unique jobs periodically (which we expect is most).
 	if len(insertParamsUnique) > 0 {
 		for _, params := range insertParamsUnique {
-			res, err := s.uniqueInserter.JobInsert(ctx, execTx, params.InsertParams, params.UniqueOpts)
+			res, err := s.uniqueInserter.JobInsert(ctx, tx, params.InsertParams, params.UniqueOpts)
 			if err != nil {
 				s.Logger.ErrorContext(ctx, s.Name+": Error inserting unique periodic job",
 					"error", err.Error(), "kind", params.InsertParams.Kind)
@@ -395,14 +395,14 @@ func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany 
 	}
 
 	if len(queues) > 0 {
-		if err := s.Config.NotifyInsert(ctx, execTx, queues); err != nil {
+		if err := s.Config.NotifyInsert(ctx, tx, queues); err != nil {
 			s.Logger.ErrorContext(ctx, s.Name+": Error notifying insert", "error", err.Error())
 			return
 		}
 		s.TestSignals.NotifiedQueues.Signal(queues)
 	}
 
-	if err := execTx.Commit(ctx); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		s.Logger.ErrorContext(ctx, s.Name+": Error committing transaction", "error", err.Error())
 		return
 	}

@@ -108,10 +108,10 @@ func TestJobListWithJobs(t *testing.T) {
 
 		t.Logf("testing JobListTx")
 		// use a sub-transaction in case it's rolled back or errors:
-		execTx, err := bundle.exec.Begin(ctx)
+		tx, err := bundle.exec.Begin(ctx)
 		require.NoError(t, err)
-		defer execTx.Rollback(ctx)
-		jobs, err = JobList(ctx, execTx, params)
+		defer tx.Rollback(ctx)
+		jobs, err = JobList(ctx, tx, params)
 		testFunc(jobs, err)
 	}
 

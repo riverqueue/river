@@ -1492,11 +1492,11 @@ func (c *Client[TTx]) insertManyParams(params []InsertManyParams) ([]*riverdrive
 	return insertParams, nil
 }
 
-func (c *Client[TTx]) maybeNotifyInsert(ctx context.Context, execTx riverdriver.ExecutorTx, state rivertype.JobState, queue string) error {
+func (c *Client[TTx]) maybeNotifyInsert(ctx context.Context, tx riverdriver.ExecutorTx, state rivertype.JobState, queue string) error {
 	if state != rivertype.JobStateAvailable {
 		return nil
 	}
-	return c.maybeNotifyInsertForQueues(ctx, execTx, []string{queue})
+	return c.maybeNotifyInsertForQueues(ctx, tx, []string{queue})
 }
 
 // Notify the given queues that new jobs are available. The queues list will be
