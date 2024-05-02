@@ -545,7 +545,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		}
 
 		{
-			jobScheduler := maintenance.NewScheduler(archetype, &maintenance.JobSchedulerConfig{
+			jobScheduler := maintenance.NewJobScheduler(archetype, &maintenance.JobSchedulerConfig{
 				Interval:     config.schedulerInterval,
 				NotifyInsert: client.maybeNotifyInsertForQueues,
 			}, driver.GetExecutor())
