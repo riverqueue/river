@@ -23,6 +23,14 @@ type InsertOpts struct {
 	// field by River.
 	Metadata []byte
 
+	// MetadataReconcile defines how, in the presence of multiple InsertOpts
+	// like one from the job itself and another one from a Client.Insert param,
+	// how metadata will be reconciled between the two. For example, two
+	// metadata can be merged together, or one can exclude the other.
+	//
+	// Defaults to MetadataReconcileExclude.
+	MetadataReconcile MetadataReconcile
+
 	// Pending indicates that the job should be inserted in the `pending` state.
 	// Pending jobs are not immediately available to be worked and are never
 	// deleted, but they can be used to indicate work which should be performed in
@@ -66,6 +74,38 @@ type InsertOpts struct {
 	// avoids setting any worker-level unique options.
 	UniqueOpts UniqueOpts
 }
+
+// MetadataReconcile defines how, in the presence of multiple InsertOpts
+// like one from the job itself and another one from a Client.Insert param,
+// how metadata will bereconciled between the two. For example, two metadata
+// can be merged together, or one can exclude the other.
+type MetadataReconcile int
+
+const (
+	// MetadataReconcileExclude prefers the dominant metadata as is. Secondary
+	// metadata is ignored/excluded.
+	//
+	// This most is faster than any other reconciliation mode because no
+	// metadata objects need to be parsed.
+	MetadataReconcileExclude MetadataReconcile = iota
+
+	// MetadataReconcileMerge attempts to do a shallow merge on the dominant
+	// and secondary metadatas. If duplicate values are present, the one from
+	// the dominant metadata is preferred.
+	//
+	// Metadata must be unmarshable to a map with string keys for merging to be
+	// successful.
+	MetadataReconcileMerge
+
+	// MetadataReconcileMergeDeep attempts to do a deep merge on the dominant
+	// and secondary metadatas. Each value in an object is checked to see if
+	// it's an object itself, and if so, merged recursively. If values aren't
+	// subobject, the one from the dominant metadata is preferred.
+	//
+	// Metadata must be unmarshable to a map with string keys for merging to be
+	// successful.
+	MetadataReconcileMergeDeep
+)
 
 // UniqueOpts contains parameters for uniqueness for a job.
 //

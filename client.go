@@ -1278,8 +1278,38 @@ func insertParamsFromArgsAndOptions(args JobArgs, insertOpts *InsertOpts) (*rive
 		return nil, nil, err
 	}
 
-	metadata := insertOpts.Metadata
-	if len(metadata) == 0 {
+	// As with other insertion options, a params metadata from an insert's
+	// InsertOpts will generally take precedence over one coming from a job's
+	// InsertOpts, but metdata may be merged if MetadataReconcile indicates
+	// that they should be.
+	var metadata []byte
+	switch {
+	case len(insertOpts.Metadata) > 0 && len(jobInsertOpts.Metadata) > 0:
+		var deepMerge bool
+
+		switch insertOpts.MetadataReconcile {
+		case MetadataReconcileExclude:
+			metadata = insertOpts.Metadata
+
+		case MetadataReconcileMergeDeep:
+			deepMerge = true
+			fallthrough
+
+		case MetadataReconcileMerge:
+			var err error
+			metadata, err = mergeMetadata(insertOpts.Metadata, jobInsertOpts.Metadata, deepMerge)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+
+	case len(insertOpts.Metadata) > 0:
+		metadata = insertOpts.Metadata
+
+	case len(jobInsertOpts.Metadata) > 0:
+		metadata = jobInsertOpts.Metadata
+
+	default:
 		metadata = []byte("{}")
 	}
 
@@ -1828,4 +1858,56 @@ func defaultClientIDWithHost(startedAt time.Time, host string) string {
 	const rfc3339Compact = "2006_01_02T15_04_05"
 
 	return host + "_" + startedAt.Format(rfc3339Compact)
+}
+
+// Merge two metadata objects (expected to be in JSON) and return the result.
+//
+// Where duplicate keys are present, values from primary metadata supersede
+// those of the secondary. If deepMerge is true,  nested hashes will be further
+// merged.
+func mergeMetadata(primaryMetadata, secondaryMetadata []byte, deepMerge bool) ([]byte, error) {
+	var primaryMetadataMap map[string]any
+	if err := json.Unmarshal(primaryMetadata, &primaryMetadataMap); err != nil {
+		return nil, fmt.Errorf("error unmarshing primary metadata: %w", err)
+	}
+
+	var secondaryMetadataMap map[string]any
+	if err := json.Unmarshal(secondaryMetadata, &secondaryMetadataMap); err != nil {
+		return nil, fmt.Errorf("error unmarshing secondary metadata: %w", err)
+	}
+
+	mergeMetadataMaps(primaryMetadataMap, secondaryMetadataMap, deepMerge)
+
+	mergedMetadata, err := json.Marshal(primaryMetadataMap)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling merged metadata: %w", err)
+	}
+
+	return mergedMetadata, nil
+}
+
+// Merges two unmarshaled metadata maps. The merge is destructive as the primary
+// map is mutated to contain values from the secondary map (if applicable).
+// Returns the primary map for convenience.
+//
+// Where duplicate keys are present, values from primary metadata supersede
+// those of the secondary. If deepMerge is true,  nested hashes will be further
+// merged.
+func mergeMetadataMaps(primaryMetadataMap, secondaryMetadataMap map[string]any, deepMerge bool) map[string]any {
+	for key, secondaryVal := range secondaryMetadataMap {
+		primaryVal, primaryValOK := primaryMetadataMap[key]
+		if primaryValOK && deepMerge {
+			var (
+				primaryValMap, primaryMapOK     = primaryVal.(map[string]any)
+				secondaryValMap, secondaryMapOK = secondaryVal.(map[string]any)
+			)
+
+			if primaryMapOK && secondaryMapOK {
+				mergeMetadataMaps(primaryValMap, secondaryValMap, deepMerge)
+			}
+		} else if !primaryValOK {
+			primaryMetadataMap[key] = secondaryVal
+		}
+	}
+	return primaryMetadataMap
 }
