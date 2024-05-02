@@ -305,14 +305,13 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 // After returns an updated filter set that will only return jobs
 // after the given cursor.
 func (p *JobListParams) After(cursor *JobListCursor) *JobListParams {
-	result := p.copy()
-
+	paramsCopy := p.copy()
 	if cursor.job == nil {
-		result.after = cursor
+		paramsCopy.after = cursor
 	} else {
-		result.after = jobListCursorFromJobAndParams(cursor.job, result)
+		paramsCopy.after = jobListCursorFromJobAndParams(cursor.job, paramsCopy)
 	}
-	return result
+	return paramsCopy
 }
 
 // First returns an updated filter set that will only return the first
@@ -326,33 +325,33 @@ func (p *JobListParams) First(count int) *JobListParams {
 	if count > 10000 {
 		panic("count must be <= 10000")
 	}
-	result := p.copy()
-	result.paginationCount = int32(count)
-	return result
+	paramsCopy := p.copy()
+	paramsCopy.paginationCount = int32(count)
+	return paramsCopy
 }
 
 // Kinds returns an updated filter set that will only return jobs of the given
 // kinds.
 func (p *JobListParams) Kinds(kinds ...string) *JobListParams {
-	result := p.copy()
-	result.kinds = make([]string, len(kinds))
-	copy(result.kinds, kinds)
-	return result
+	paramsCopy := p.copy()
+	paramsCopy.kinds = make([]string, len(kinds))
+	copy(paramsCopy.kinds, kinds)
+	return paramsCopy
 }
 
 func (p *JobListParams) Metadata(json string) *JobListParams {
-	result := p.copy()
-	result.metadataFragment = json
-	return result
+	paramsCopy := p.copy()
+	paramsCopy.metadataFragment = json
+	return paramsCopy
 }
 
 // Queues returns an updated filter set that will only return jobs from the
 // given queues.
 func (p *JobListParams) Queues(queues ...string) *JobListParams {
-	result := p.copy()
-	result.queues = make([]string, len(queues))
-	copy(result.queues, queues)
-	return result
+	paramsCopy := p.copy()
+	paramsCopy.queues = make([]string, len(queues))
+	copy(paramsCopy.queues, queues)
+	return paramsCopy
 }
 
 // OrderBy returns an updated filter set that will sort the results using the
@@ -361,14 +360,14 @@ func (p *JobListParams) Queues(queues ...string) *JobListParams {
 // If ordering by FinalizedAt, the States filter will be set to only include
 // finalized job states unless it has already been overridden.
 func (p *JobListParams) OrderBy(field JobListOrderByField, direction SortOrder) *JobListParams {
-	result := p.copy()
+	paramsCopy := p.copy()
 	switch field {
 	case JobListOrderByID, JobListOrderByTime, JobListOrderByScheduledAt:
-		result.sortField = field
+		paramsCopy.sortField = field
 	case JobListOrderByFinalizedAt:
-		result.sortField = field
+		paramsCopy.sortField = field
 		if !p.overrodeState {
-			result.states = []rivertype.JobState{
+			paramsCopy.states = []rivertype.JobState{
 				rivertype.JobStateCancelled,
 				rivertype.JobStateCompleted,
 				rivertype.JobStateDiscarded,
@@ -377,19 +376,19 @@ func (p *JobListParams) OrderBy(field JobListOrderByField, direction SortOrder) 
 	default:
 		panic("invalid order by field")
 	}
-	result.sortField = field
-	result.sortOrder = direction
-	return result
+	paramsCopy.sortField = field
+	paramsCopy.sortOrder = direction
+	return paramsCopy
 }
 
 // States returns an updated filter set that will only return jobs in the given
 // states.
 func (p *JobListParams) States(states ...rivertype.JobState) *JobListParams {
-	result := p.copy()
-	result.states = make([]rivertype.JobState, len(states))
-	result.overrodeState = true
-	copy(result.states, states)
-	return result
+	paramsCopy := p.copy()
+	paramsCopy.states = make([]rivertype.JobState, len(states))
+	paramsCopy.overrodeState = true
+	copy(paramsCopy.states, states)
+	return paramsCopy
 }
 
 func jobListTimeFieldForState(state rivertype.JobState) string {
