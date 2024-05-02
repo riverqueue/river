@@ -1611,7 +1611,10 @@ func validateQueueName(queueName string) error {
 // JobListResult is the result of a job list operation. It contains a list of
 // jobs and a cursor for fetching the next page of results.
 type JobListResult struct {
-	Jobs       []*rivertype.JobRow
+	// Jobs is a slice of job returned as part of the list operation.
+	Jobs []*rivertype.JobRow
+
+	// LastCursor is a cursor that can be used to list the next page of jobs.
 	LastCursor *JobListCursor
 }
 
@@ -1691,6 +1694,13 @@ func (c *Client[TTx]) QueueGet(ctx context.Context, name string) (*rivertype.Que
 	return c.driver.GetExecutor().QueueGet(ctx, name)
 }
 
+// QueueListResult is the result of a job list operation. It contains a list of
+// jobs and leaves room for future cursor functionality.
+type QueueListResult struct {
+	// Queues is a slice of queues returned as part of the list operation.
+	Queues []*rivertype.Queue
+}
+
 // QueueList returns a list of all queues that are currently active or were
 // recently active. Limit and offset can be used to paginate the results.
 //
@@ -1702,12 +1712,18 @@ func (c *Client[TTx]) QueueGet(ctx context.Context, name string) (*rivertype.Que
 //	if err != nil {
 //		// handle error
 //	}
-func (c *Client[TTx]) QueueList(ctx context.Context, params *QueueListParams) ([]*rivertype.Queue, error) {
+func (c *Client[TTx]) QueueList(ctx context.Context, params *QueueListParams) (*QueueListResult, error) {
 	if params == nil {
 		params = NewQueueListParams()
 	}
 
-	return c.driver.GetExecutor().QueueList(ctx, int(params.paginationCount))
+	queues, err := c.driver.GetExecutor().QueueList(ctx, int(params.paginationCount))
+	if err != nil {
+		return nil, err
+	}
+
+	listRes := &QueueListResult{Queues: queues}
+	return listRes, nil
 }
 
 // QueuePause pauses the queue with the given name. When a queue is paused,
