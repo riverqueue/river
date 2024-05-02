@@ -361,7 +361,6 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 
 func (e *Executor) LeaderAttemptElect(ctx context.Context, params *riverdriver.LeaderElectParams) (bool, error) {
 	numElectionsWon, err := e.queries.LeaderAttemptElect(ctx, e.dbtx, &dbsqlc.LeaderAttemptElectParams{
-		Name:     params.Name,
 		LeaderID: params.LeaderID,
 		TTL:      params.TTL,
 	})
@@ -373,7 +372,6 @@ func (e *Executor) LeaderAttemptElect(ctx context.Context, params *riverdriver.L
 
 func (e *Executor) LeaderAttemptReelect(ctx context.Context, params *riverdriver.LeaderElectParams) (bool, error) {
 	numElectionsWon, err := e.queries.LeaderAttemptReelect(ctx, e.dbtx, &dbsqlc.LeaderAttemptReelectParams{
-		Name:     params.Name,
 		LeaderID: params.LeaderID,
 		TTL:      params.TTL,
 	})
@@ -383,16 +381,16 @@ func (e *Executor) LeaderAttemptReelect(ctx context.Context, params *riverdriver
 	return numElectionsWon > 0, nil
 }
 
-func (e *Executor) LeaderDeleteExpired(ctx context.Context, name string) (int, error) {
-	numDeleted, err := e.queries.LeaderDeleteExpired(ctx, e.dbtx, name)
+func (e *Executor) LeaderDeleteExpired(ctx context.Context) (int, error) {
+	numDeleted, err := e.queries.LeaderDeleteExpired(ctx, e.dbtx)
 	if err != nil {
 		return 0, interpretError(err)
 	}
 	return int(numDeleted), nil
 }
 
-func (e *Executor) LeaderGetElectedLeader(ctx context.Context, name string) (*riverdriver.Leader, error) {
-	leader, err := e.queries.LeaderGetElectedLeader(ctx, e.dbtx, name)
+func (e *Executor) LeaderGetElectedLeader(ctx context.Context) (*riverdriver.Leader, error) {
+	leader, err := e.queries.LeaderGetElectedLeader(ctx, e.dbtx)
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -404,7 +402,6 @@ func (e *Executor) LeaderInsert(ctx context.Context, params *riverdriver.LeaderI
 		ElectedAt: params.ElectedAt,
 		ExpiresAt: params.ExpiresAt,
 		LeaderID:  params.LeaderID,
-		Name:      params.Name,
 		TTL:       params.TTL,
 	})
 	if err != nil {
@@ -417,7 +414,6 @@ func (e *Executor) LeaderResign(ctx context.Context, params *riverdriver.LeaderR
 	numResigned, err := e.queries.LeaderResign(ctx, e.dbtx, &dbsqlc.LeaderResignParams{
 		LeaderID:        params.LeaderID,
 		LeadershipTopic: params.LeadershipTopic,
-		Name:            params.Name,
 	})
 	if err != nil {
 		return false, interpretError(err)
@@ -699,7 +695,6 @@ func leaderFromInternal(internal *dbsqlc.RiverLeader) *riverdriver.Leader {
 		ElectedAt: internal.ElectedAt.UTC(),
 		ExpiresAt: internal.ExpiresAt.UTC(),
 		LeaderID:  internal.LeaderID,
-		Name:      internal.Name,
 	}
 }
 

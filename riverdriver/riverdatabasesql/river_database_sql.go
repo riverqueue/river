@@ -157,11 +157,11 @@ func (e *Executor) LeaderAttemptReelect(ctx context.Context, params *riverdriver
 	return false, riverdriver.ErrNotImplemented
 }
 
-func (e *Executor) LeaderDeleteExpired(ctx context.Context, name string) (int, error) {
+func (e *Executor) LeaderDeleteExpired(ctx context.Context) (int, error) {
 	return 0, riverdriver.ErrNotImplemented
 }
 
-func (e *Executor) LeaderGetElectedLeader(ctx context.Context, name string) (*riverdriver.Leader, error) {
+func (e *Executor) LeaderGetElectedLeader(ctx context.Context) (*riverdriver.Leader, error) {
 	return nil, riverdriver.ErrNotImplemented
 }
 

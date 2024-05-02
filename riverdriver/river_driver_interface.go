@@ -97,8 +97,8 @@ type Executor interface {
 	JobUpdate(ctx context.Context, params *JobUpdateParams) (*rivertype.JobRow, error)
 	LeaderAttemptElect(ctx context.Context, params *LeaderElectParams) (bool, error)
 	LeaderAttemptReelect(ctx context.Context, params *LeaderElectParams) (bool, error)
-	LeaderDeleteExpired(ctx context.Context, name string) (int, error)
-	LeaderGetElectedLeader(ctx context.Context, name string) (*Leader, error)
+	LeaderDeleteExpired(ctx context.Context) (int, error)
+	LeaderGetElectedLeader(ctx context.Context) (*Leader, error)
 	LeaderInsert(ctx context.Context, params *LeaderInsertParams) (*Leader, error)
 	LeaderResign(ctx context.Context, params *LeaderResignParams) (bool, error)
 
@@ -313,20 +313,17 @@ type JobUpdateParams struct {
 type Leader struct {
 	ElectedAt time.Time
 	ExpiresAt time.Time
-	Name      string
 	LeaderID  string
 }
 
 type LeaderInsertParams struct {
 	ElectedAt *time.Time
 	ExpiresAt *time.Time
-	Name      string
 	LeaderID  string
 	TTL       time.Duration
 }
 
 type LeaderElectParams struct {
-	Name     string
 	LeaderID string
 	TTL      time.Duration
 }
@@ -334,7 +331,6 @@ type LeaderElectParams struct {
 type LeaderResignParams struct {
 	LeaderID        string
 	LeadershipTopic string
-	Name            string
 }
 
 // Migration represents a River migration.

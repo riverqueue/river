@@ -1462,10 +1462,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		require.Equal(t, rivertype.JobStateDiscarded, updatedJob.State)
 	})
 
-	const (
-		leaderInstanceName = "default"
-		leaderTTL          = 10 * time.Second
-	)
+	const leaderTTL = 10 * time.Second
 
 	t.Run("LeaderDeleteExpired", func(t *testing.T) {
 		t.Parallel()
@@ -1475,7 +1472,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		now := time.Now().UTC()
 
 		{
-			numDeleted, err := exec.LeaderDeleteExpired(ctx, leaderInstanceName)
+			numDeleted, err := exec.LeaderDeleteExpired(ctx)
 			require.NoError(t, err)
 			require.Zero(t, numDeleted)
 		}
@@ -1484,11 +1481,10 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			ElectedAt: ptrutil.Ptr(now.Add(-2 * time.Hour)),
 			ExpiresAt: ptrutil.Ptr(now.Add(-1 * time.Hour)),
 			LeaderID:  ptrutil.Ptr(clientID),
-			Name:      ptrutil.Ptr(leaderInstanceName),
 		})
 
 		{
-			numDeleted, err := exec.LeaderDeleteExpired(ctx, leaderInstanceName)
+			numDeleted, err := exec.LeaderDeleteExpired(ctx)
 			require.NoError(t, err)
 			require.Equal(t, 1, numDeleted)
 		}
@@ -1504,13 +1500,12 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 
 			elected, err := exec.LeaderAttemptElect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: clientID,
-				Name:     leaderInstanceName,
 				TTL:      leaderTTL,
 			})
 			require.NoError(t, err)
 			require.True(t, elected) // won election
 
-			leader, err := exec.LeaderGetElectedLeader(ctx, leaderInstanceName)
+			leader, err := exec.LeaderGetElectedLeader(ctx)
 			require.NoError(t, err)
 			require.WithinDuration(t, time.Now(), leader.ElectedAt, 100*time.Millisecond)
 			require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, 100*time.Millisecond)
@@ -1523,12 +1518,10 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 
 			leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 				LeaderID: ptrutil.Ptr(clientID),
-				Name:     ptrutil.Ptr(leaderInstanceName),
 			})
 
 			elected, err := exec.LeaderAttemptElect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: "different-client-id",
-				Name:     leaderInstanceName,
 				TTL:      leaderTTL,
 			})
 			require.NoError(t, err)
@@ -1537,7 +1530,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			// The time should not have changed because we specified that we were not
 			// already elected, and the elect query is a no-op if there's already a
 			// updatedLeader:
-			updatedLeader, err := exec.LeaderGetElectedLeader(ctx, leaderInstanceName)
+			updatedLeader, err := exec.LeaderGetElectedLeader(ctx)
 			require.NoError(t, err)
 			require.Equal(t, leader.ExpiresAt, updatedLeader.ExpiresAt)
 		})
@@ -1553,13 +1546,12 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 
 			elected, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: clientID,
-				Name:     leaderInstanceName,
 				TTL:      leaderTTL,
 			})
 			require.NoError(t, err)
 			require.True(t, elected) // won election
 
-			leader, err := exec.LeaderGetElectedLeader(ctx, leaderInstanceName)
+			leader, err := exec.LeaderGetElectedLeader(ctx)
 			require.NoError(t, err)
 			require.WithinDuration(t, time.Now(), leader.ElectedAt, 100*time.Millisecond)
 			require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, 100*time.Millisecond)
@@ -1572,7 +1564,6 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 
 			leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 				LeaderID: ptrutil.Ptr(clientID),
-				Name:     ptrutil.Ptr(leaderInstanceName),
 			})
 
 			// Re-elect the same leader. Use a larger TTL to see if time is updated,
@@ -1580,7 +1571,6 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			// the transaction.
 			elected, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: clientID,
-				Name:     leaderInstanceName,
 				TTL:      30 * time.Second,
 			})
 			require.NoError(t, err)
@@ -1588,7 +1578,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 
 			// expires_at should be incremented because this is the same leader that won
 			// previously and we specified that we're already elected:
-			updatedLeader, err := exec.LeaderGetElectedLeader(ctx, leaderInstanceName)
+			updatedLeader, err := exec.LeaderGetElectedLeader(ctx)
 			require.NoError(t, err)
 			require.Greater(t, updatedLeader.ExpiresAt, leader.ExpiresAt)
 		})
@@ -1601,13 +1591,11 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 
 		leader, err := exec.LeaderInsert(ctx, &riverdriver.LeaderInsertParams{
 			LeaderID: clientID,
-			Name:     leaderInstanceName,
 			TTL:      leaderTTL,
 		})
 		require.NoError(t, err)
 		require.WithinDuration(t, time.Now(), leader.ElectedAt, 500*time.Millisecond)
 		require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, 500*time.Millisecond)
-		require.Equal(t, leaderInstanceName, leader.Name)
 		require.Equal(t, clientID, leader.LeaderID)
 	})
 
@@ -1618,14 +1606,12 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 
 		_ = testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 			LeaderID: ptrutil.Ptr(clientID),
-			Name:     ptrutil.Ptr(leaderInstanceName),
 		})
 
-		leader, err := exec.LeaderGetElectedLeader(ctx, leaderInstanceName)
+		leader, err := exec.LeaderGetElectedLeader(ctx)
 		require.NoError(t, err)
 		require.WithinDuration(t, time.Now(), leader.ElectedAt, 500*time.Millisecond)
 		require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, 500*time.Millisecond)
-		require.Equal(t, leaderInstanceName, leader.Name)
 		require.Equal(t, clientID, leader.LeaderID)
 	})
 
@@ -1641,7 +1627,6 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 				resigned, err := exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
 					LeaderID:        clientID,
 					LeadershipTopic: string(notifier.NotificationTopicLeadership),
-					Name:            leaderInstanceName,
 				})
 				require.NoError(t, err)
 				require.False(t, resigned)
@@ -1649,14 +1634,12 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 
 			_ = testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 				LeaderID: ptrutil.Ptr(clientID),
-				Name:     ptrutil.Ptr(leaderInstanceName),
 			})
 
 			{
 				resigned, err := exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
 					LeaderID:        clientID,
 					LeadershipTopic: string(notifier.NotificationTopicLeadership),
-					Name:            leaderInstanceName,
 				})
 				require.NoError(t, err)
 				require.True(t, resigned)
@@ -1670,13 +1653,11 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 
 			_ = testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 				LeaderID: ptrutil.Ptr("other-client-id"),
-				Name:     ptrutil.Ptr(leaderInstanceName),
 			})
 
 			resigned, err := exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
 				LeaderID:        clientID,
 				LeadershipTopic: string(notifier.NotificationTopicLeadership),
-				Name:            leaderInstanceName,
 			})
 			require.NoError(t, err)
 			require.False(t, resigned)

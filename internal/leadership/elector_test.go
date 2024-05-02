@@ -23,8 +23,6 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-const defaultInstanceName = "default"
-
 func TestElector_PollOnly(t *testing.T) {
 	t.Parallel()
 
@@ -154,7 +152,7 @@ func testElector[TElectorBundle any](
 
 		elector.testSignals.GainedLeadership.WaitOrTimeout()
 
-		leader, err := bundle.exec.LeaderGetElectedLeader(ctx, defaultInstanceName)
+		leader, err := bundle.exec.LeaderGetElectedLeader(ctx)
 		require.NoError(t, err)
 		require.Equal(t, elector.config.ClientID, leader.LeaderID)
 
@@ -162,7 +160,7 @@ func testElector[TElectorBundle any](
 
 		elector.testSignals.ResignedLeadership.WaitOrTimeout()
 
-		_, err = bundle.exec.LeaderGetElectedLeader(ctx, defaultInstanceName)
+		_, err = bundle.exec.LeaderGetElectedLeader(ctx)
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
 	})
 
@@ -235,7 +233,6 @@ func testElector[TElectorBundle any](
 		_, err := bundle.exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
 			LeaderID:        elector.config.ClientID,
 			LeadershipTopic: string(notifier.NotificationTopicLeadership),
-			Name:            defaultInstanceName,
 		})
 		require.NoError(t, err)
 
@@ -266,7 +263,7 @@ func testElector[TElectorBundle any](
 			t.Logf("Waiting for %s to gain leadership", elector1.config.ClientID)
 			elector1.testSignals.GainedLeadership.WaitOrTimeout()
 
-			leader, err := bundle.exec.LeaderGetElectedLeader(ctx, defaultInstanceName)
+			leader, err := bundle.exec.LeaderGetElectedLeader(ctx)
 			require.NoError(t, err)
 			require.Equal(t, elector1.config.ClientID, leader.LeaderID)
 		}
@@ -300,7 +297,7 @@ func testElector[TElectorBundle any](
 			elector2.testSignals.ResignedLeadership.WaitOrTimeout()
 		}
 
-		_, err := bundle.exec.LeaderGetElectedLeader(ctx, defaultInstanceName)
+		_, err := bundle.exec.LeaderGetElectedLeader(ctx)
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
 	})
 
@@ -349,13 +346,12 @@ func TestAttemptElectOrReelect(t *testing.T) {
 
 		elected, err := attemptElectOrReelect(ctx, bundle.exec, false, &riverdriver.LeaderElectParams{
 			LeaderID: clientID,
-			Name:     leaderInstanceName,
 			TTL:      leaderTTL,
 		})
 		require.NoError(t, err)
 		require.True(t, elected) // won election
 
-		leader, err := bundle.exec.LeaderGetElectedLeader(ctx, leaderInstanceName)
+		leader, err := bundle.exec.LeaderGetElectedLeader(ctx)
 		require.NoError(t, err)
 		require.WithinDuration(t, time.Now(), leader.ElectedAt, 100*time.Millisecond)
 		require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, 100*time.Millisecond)
@@ -368,7 +364,6 @@ func TestAttemptElectOrReelect(t *testing.T) {
 
 		leader := testfactory.Leader(ctx, t, bundle.exec, &testfactory.LeaderOpts{
 			LeaderID: ptrutil.Ptr(clientID),
-			Name:     ptrutil.Ptr(leaderInstanceName),
 		})
 
 		// Re-elect the same leader. Use a larger TTL to see if time is updated,
@@ -376,7 +371,6 @@ func TestAttemptElectOrReelect(t *testing.T) {
 		// the transaction.
 		elected, err := attemptElectOrReelect(ctx, bundle.exec, true, &riverdriver.LeaderElectParams{
 			LeaderID: clientID,
-			Name:     leaderInstanceName,
 			TTL:      30 * time.Second,
 		})
 		require.NoError(t, err)
@@ -384,7 +378,7 @@ func TestAttemptElectOrReelect(t *testing.T) {
 
 		// expires_at should be incremented because this is the same leader that won
 		// previously and we specified that we're already elected:
-		updatedLeader, err := bundle.exec.LeaderGetElectedLeader(ctx, leaderInstanceName)
+		updatedLeader, err := bundle.exec.LeaderGetElectedLeader(ctx)
 		require.NoError(t, err)
 		require.Greater(t, updatedLeader.ExpiresAt, leader.ExpiresAt)
 	})
@@ -396,12 +390,10 @@ func TestAttemptElectOrReelect(t *testing.T) {
 
 		leader := testfactory.Leader(ctx, t, bundle.exec, &testfactory.LeaderOpts{
 			LeaderID: ptrutil.Ptr(clientID),
-			Name:     ptrutil.Ptr(leaderInstanceName),
 		})
 
 		elected, err := attemptElectOrReelect(ctx, bundle.exec, true, &riverdriver.LeaderElectParams{
 			LeaderID: "different-client-id",
-			Name:     leaderInstanceName,
 			TTL:      leaderTTL,
 		})
 		require.NoError(t, err)
@@ -410,7 +402,7 @@ func TestAttemptElectOrReelect(t *testing.T) {
 		// The time should not have changed because we specified that we were not
 		// already elected, and the elect query is a no-op if there's already a
 		// updatedLeader:
-		updatedLeader, err := bundle.exec.LeaderGetElectedLeader(ctx, leaderInstanceName)
+		updatedLeader, err := bundle.exec.LeaderGetElectedLeader(ctx)
 		require.NoError(t, err)
 		require.Equal(t, leader.ExpiresAt, updatedLeader.ExpiresAt)
 	})
@@ -458,7 +450,6 @@ func TestElectorHandleLeadershipNotification(t *testing.T) {
 
 		return &dbLeadershipNotification{
 			Action:   "resigned",
-			Name:     defaultInstanceName,
 			LeaderID: "other-client-id",
 		}
 	}
@@ -493,19 +484,6 @@ func TestElectorHandleLeadershipNotification(t *testing.T) {
 
 		change := validLeadershipChange()
 		change.Action = "not_resigned"
-
-		elector.handleLeadershipNotification(ctx, notifier.NotificationTopicLeadership, string(mustMarshalJSON(t, change)))
-
-		require.Empty(t, elector.leadershipNotificationChan)
-	})
-
-	t.Run("IgnoresAlternateInstanceName", func(t *testing.T) {
-		t.Parallel()
-
-		elector, _ := setup(t)
-
-		change := validLeadershipChange()
-		change.Name = "alternate_instance_name"
 
 		elector.handleLeadershipNotification(ctx, notifier.NotificationTopicLeadership, string(mustMarshalJSON(t, change)))
 
