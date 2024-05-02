@@ -35,3 +35,8 @@ CREATE TRIGGER river_notify
   EXECUTE PROCEDURE river_job_notify();
 
 DROP TABLE river_queue;
+
+ALTER TABLE river_leader
+    ALTER COLUMN name DROP DEFAULT,
+    DROP CONSTRAINT name_length,
+    ADD CONSTRAINT name_length CHECK (char_length(name) > 0 AND char_length(name) < 128);

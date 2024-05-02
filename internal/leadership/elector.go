@@ -21,17 +21,11 @@ const (
 	electIntervalDefault           = 5 * time.Second
 	electIntervalJitterDefault     = 1 * time.Second
 	electIntervalTTLPaddingDefault = 10 * time.Second
-
-	// TODO: for now we only support a single instance per database/schema.
-	// If we want to provide isolation within a single database/schema,
-	// we'll need to add a client config for this.
-	instanceNameDefault = "default"
 )
 
 type dbLeadershipNotification struct {
-	Name     string `json:"name"`
-	LeaderID string `json:"leader_id"`
 	Action   string `json:"action"`
+	LeaderID string `json:"leader_id"`
 }
 
 type Notification struct {
@@ -78,7 +72,6 @@ type Config struct {
 	ClientID            string
 	ElectInterval       time.Duration // period on which each elector attempts elect even without having received a resignation notification
 	ElectIntervalJitter time.Duration
-	InstanceName        string
 }
 
 func (c *Config) mustValidate() *Config {
@@ -87,9 +80,6 @@ func (c *Config) mustValidate() *Config {
 	}
 	if c.ElectInterval <= 0 {
 		panic("Config.ElectInterval must be above zero")
-	}
-	if c.InstanceName == "" {
-		panic("Config.InstanceName must be non-empty")
 	}
 
 	return c
@@ -119,7 +109,6 @@ func NewElector(archetype *baseservice.Archetype, exec riverdriver.Executor, not
 			ClientID:            config.ClientID,
 			ElectInterval:       valutil.ValOrDefault(config.ElectInterval, electIntervalDefault),
 			ElectIntervalJitter: valutil.ValOrDefault(config.ElectIntervalJitter, electIntervalJitterDefault),
-			InstanceName:        valutil.ValOrDefault(config.InstanceName, instanceNameDefault),
 		}).mustValidate(),
 		exec:     exec,
 		notifier: notifier,
@@ -204,7 +193,6 @@ func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
 
 		elected, err := attemptElectOrReelect(ctx, e.exec, false, &riverdriver.LeaderElectParams{
 			LeaderID: e.config.ClientID,
-			Name:     e.config.InstanceName,
 			TTL:      e.leaderTTL(),
 		})
 		if err != nil {
@@ -261,9 +249,9 @@ func (e *Elector) handleLeadershipNotification(ctx context.Context, topic notifi
 
 	e.Logger.InfoContext(ctx, e.Name+": Received notification from notifier", "action", notification.Action, "client_id", e.config.ClientID)
 
-	if notification.Action != "resigned" || notification.Name != e.config.InstanceName {
+	if notification.Action != "resigned" {
 		// We only care about resignations because we use them to preempt the
-		// election attempt backoff. And we only care about our own key name.
+		// election attempt backoff.
 		return
 	}
 
@@ -341,7 +329,6 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 
 		reelected, err := attemptElectOrReelect(ctx, e.exec, true, &riverdriver.LeaderElectParams{
 			LeaderID: e.config.ClientID,
-			Name:     e.config.InstanceName,
 			TTL:      e.leaderTTL(),
 		})
 		if err != nil {
@@ -418,7 +405,6 @@ func (e *Elector) attemptResign(ctx context.Context, attempt int) error {
 	resigned, err := e.exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
 		LeaderID:        e.config.ClientID,
 		LeadershipTopic: string(notifier.NotificationTopicLeadership),
-		Name:            e.config.InstanceName,
 	})
 	if err != nil {
 		return err
@@ -512,7 +498,7 @@ func attemptElectOrReelect(ctx context.Context, exec riverdriver.Executor, alrea
 	defer cancel()
 
 	return dbutil.WithTxV(ctx, exec, func(ctx context.Context, exec riverdriver.ExecutorTx) (bool, error) {
-		if _, err := exec.LeaderDeleteExpired(ctx, params.Name); err != nil {
+		if _, err := exec.LeaderDeleteExpired(ctx); err != nil {
 			return false, err
 		}
 

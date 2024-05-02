@@ -30,3 +30,8 @@ CREATE TABLE river_queue(
   paused_at timestamptz,
   updated_at timestamptz NOT NULL
 );
+
+ALTER TABLE river_leader
+    ALTER COLUMN name SET DEFAULT 'default',
+    DROP CONSTRAINT name_length,
+    ADD CONSTRAINT name_length CHECK (name = 'default');
