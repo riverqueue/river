@@ -69,6 +69,9 @@ type producerConfig struct {
 	Notifier *notifier.Notifier
 
 	Queue string
+	// QueueEventCallback gets called when a queue's config changes (such as
+	// pausing or resuming) events can be emitted to subscriptions.
+	QueueEventCallback func(event *Event)
 
 	// QueuePollInterval is the amount of time between periodic checks for
 	// queue setting changes. This is only used in poll-only mode (when no
@@ -427,6 +430,9 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 				p.paused = true
 				p.Logger.DebugContext(workCtx, p.Name+": Paused", slog.String("queue", p.config.Queue), slog.String("queue_in_message", msg.Queue))
 				p.testSignals.Paused.Signal(struct{}{})
+				if p.config.QueueEventCallback != nil {
+					p.config.QueueEventCallback(&Event{Kind: EventKindQueuePaused, Queue: &rivertype.Queue{Name: p.config.Queue}})
+				}
 			case controlActionResume:
 				if !p.paused {
 					continue
@@ -434,6 +440,9 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 				p.paused = false
 				p.Logger.DebugContext(workCtx, p.Name+": Resumed", slog.String("queue", p.config.Queue), slog.String("queue_in_message", msg.Queue))
 				p.testSignals.Resumed.Signal(struct{}{})
+				if p.config.QueueEventCallback != nil {
+					p.config.QueueEventCallback(&Event{Kind: EventKindQueueResumed, Queue: &rivertype.Queue{Name: p.config.Queue}})
+				}
 			case controlActionCancel:
 				// Separate this case to make linter happy:
 				p.Logger.DebugContext(workCtx, p.Name+": Unhandled queue control action", "action", msg.Action)

@@ -499,6 +499,9 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 				MaxWorkers:        queueConfig.MaxWorkers,
 				Notifier:          client.notifier,
 				Queue:             queue,
+				QueueEventCallback: func(event *Event) {
+					client.distributeQueueEvent(event)
+				},
 				RetryPolicy:       config.RetryPolicy,
 				SchedulerInterval: config.schedulerInterval,
 				StatusFunc:        client.monitor.SetProducerStatus,
@@ -909,8 +912,11 @@ func (c *Client[TTx]) SubscribeConfig(config *SubscribeConfig) (<-chan *Event, f
 	return subChan, cancel
 }
 
-// Distribute a single job into any listening subscriber channels.
-func (c *Client[TTx]) distributeJob(job *rivertype.JobRow, stats *JobStatistics) {
+// Distribute a single event into any listening subscriber channels.
+//
+// Job events should specify the job and stats, while queue events should only specify
+// the queue.
+func (c *Client[TTx]) distributeJobEvent(job *rivertype.JobRow, stats *JobStatistics) {
 	c.subscriptionsMu.Lock()
 	defer c.subscriptionsMu.Unlock()
 
@@ -948,6 +954,22 @@ func (c *Client[TTx]) distributeJob(job *rivertype.JobRow, stats *JobStatistics)
 	}
 }
 
+func (c *Client[TTx]) distributeQueueEvent(event *Event) {
+	c.subscriptionsMu.Lock()
+	defer c.subscriptionsMu.Unlock()
+
+	// All subscription channels are non-blocking so this is always fast and
+	// there's no risk of falling behind what producers are sending.
+	for _, sub := range c.subscriptions {
+		if sub.ListensFor(event.Kind) {
+			select {
+			case sub.Chan <- event:
+			default:
+			}
+		}
+	}
+}
+
 // Callback invoked by the completer and which prompts the client to update
 // statistics and distribute jobs into any listening subscriber channels.
 // (Subscriber channels are non-blocking so this should be quite fast.)
@@ -963,7 +985,7 @@ func (c *Client[TTx]) distributeJobCompleterCallback(update jobcompleter.Complet
 		c.statsNumJobs++
 	}()
 
-	c.distributeJob(update.Job, jobStatisticsFromInternal(update.JobStats))
+	c.distributeJobEvent(update.Job, jobStatisticsFromInternal(update.JobStats))
 }
 
 // Dump aggregate stats from job completions to logs periodically.  These
@@ -1544,20 +1566,15 @@ func (c *Client[TTx]) maybeNotifyInsertForQueues(ctx context.Context, tx riverdr
 }
 
 // emit a notification about a queue being paused or resumed.
-func (c *Client[TTx]) notifyQueuePauseOrResume(ctx context.Context, tx riverdriver.ExecutorTx, action, queue string, opts *QueuePauseOpts) error {
-	type queueStateChange struct {
-		Action string `json:"action"`
-		Queue  string `json:"queue"`
-	}
-
+func (c *Client[TTx]) notifyQueuePauseOrResume(ctx context.Context, tx riverdriver.ExecutorTx, action controlAction, queue string, opts *QueuePauseOpts) error {
 	c.baseService.Logger.DebugContext(ctx,
 		c.baseService.Name+": Notifying about queue state change",
-		slog.String("action", action),
+		slog.String("action", string(action)),
 		slog.String("queue", queue),
 		slog.String("opts", fmt.Sprintf("%+v", opts)),
 	)
 
-	payload, err := json.Marshal(queueStateChange{Action: action, Queue: queue})
+	payload, err := json.Marshal(jobControlPayload{Action: action, Queue: queue})
 	if err != nil {
 		return err
 	}
@@ -1737,18 +1754,18 @@ func (c *Client[TTx]) QueueList(ctx context.Context, params *QueueListParams) (*
 // The provided context is used for the underlying Postgres update and can be
 // used to cancel the operation or apply a timeout. The opts are reserved for
 // future functionality.
-func (c *Client[TTx]) QueuePause(ctx context.Context, queue string, opts *QueuePauseOpts) error {
+func (c *Client[TTx]) QueuePause(ctx context.Context, name string, opts *QueuePauseOpts) error {
 	tx, err := c.driver.GetExecutor().Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
 
-	if err = tx.QueuePause(ctx, queue); err != nil {
+	if err := tx.QueuePause(ctx, name); err != nil {
 		return err
 	}
 
-	if err = c.notifyQueuePauseOrResume(ctx, tx, "pause", queue, opts); err != nil {
+	if err := c.notifyQueuePauseOrResume(ctx, tx, controlActionPause, name, opts); err != nil {
 		return err
 	}
 
@@ -1767,18 +1784,18 @@ func (c *Client[TTx]) QueuePause(ctx context.Context, queue string, opts *QueueP
 // The provided context is used for the underlying Postgres update and can be
 // used to cancel the operation or apply a timeout. The opts are reserved for
 // future functionality.
-func (c *Client[TTx]) QueueResume(ctx context.Context, queue string, opts *QueuePauseOpts) error {
+func (c *Client[TTx]) QueueResume(ctx context.Context, name string, opts *QueuePauseOpts) error {
 	tx, err := c.driver.GetExecutor().Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
 
-	if err = tx.QueueResume(ctx, queue); err != nil {
+	if err := tx.QueueResume(ctx, name); err != nil {
 		return err
 	}
 
-	if err = c.notifyQueuePauseOrResume(ctx, tx, "resume", queue, opts); err != nil {
+	if err := c.notifyQueuePauseOrResume(ctx, tx, controlActionResume, name, opts); err != nil {
 		return err
 	}
 
