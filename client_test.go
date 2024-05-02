@@ -2638,9 +2638,9 @@ func Test_Client_QueueList(t *testing.T) {
 			}
 		}
 
-		queues, err := client.QueueList(ctx, NewQueueListParams().First(2))
+		listRes, err := client.QueueList(ctx, NewQueueListParams().First(2))
 		require.NoError(t, err)
-		require.Empty(t, queues)
+		require.Empty(t, listRes.Queues)
 
 		// Make queue1, pause it, refetch:
 		queue1 := testfactory.Queue(ctx, t, client.driver.GetExecutor(), &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`)})
@@ -2651,20 +2651,20 @@ func Test_Client_QueueList(t *testing.T) {
 		queue2 := testfactory.Queue(ctx, t, client.driver.GetExecutor(), nil)
 		queue3 := testfactory.Queue(ctx, t, client.driver.GetExecutor(), nil)
 
-		queues, err = client.QueueList(ctx, NewQueueListParams().First(2))
+		listRes, err = client.QueueList(ctx, NewQueueListParams().First(2))
 		require.NoError(t, err)
-		require.Len(t, queues, 2)
-		requireQueuesEqual(t, queue1, queues[0])
-		requireQueuesEqual(t, queue2, queues[1])
+		require.Len(t, listRes.Queues, 2)
+		requireQueuesEqual(t, queue1, listRes.Queues[0])
+		requireQueuesEqual(t, queue2, listRes.Queues[1])
 
-		queues, err = client.QueueList(ctx, NewQueueListParams().First(3))
+		listRes, err = client.QueueList(ctx, NewQueueListParams().First(3))
 		require.NoError(t, err)
-		require.Len(t, queues, 3)
-		requireQueuesEqual(t, queue3, queues[2])
+		require.Len(t, listRes.Queues, 3)
+		requireQueuesEqual(t, queue3, listRes.Queues[2])
 
-		queues, err = client.QueueList(ctx, NewQueueListParams().First(10))
+		listRes, err = client.QueueList(ctx, NewQueueListParams().First(10))
 		require.NoError(t, err)
-		require.Len(t, queues, 3)
+		require.Len(t, listRes.Queues, 3)
 	})
 }
 
