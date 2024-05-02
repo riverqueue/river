@@ -70,6 +70,11 @@ type producerConfig struct {
 
 	Queue string
 
+	// QueuePausedOrResumed is a callback which will be invoked when the
+	// producer's queue is paused or resumed. Used by Client to distribute
+	// events to subscribers.
+	QueuePausedOrResumed func(event *Event)
+
 	// QueuePollInterval is the amount of time between periodic checks for
 	// queue setting changes. This is only used in poll-only mode (when no
 	// notifier is provided).
@@ -79,8 +84,9 @@ type producerConfig struct {
 	QueueReportInterval time.Duration
 	RetryPolicy         ClientRetryPolicy
 	SchedulerInterval   time.Duration
-	StatusFunc          producerStatusUpdateFunc
-	Workers             *Workers
+
+	StatusFunc producerStatusUpdateFunc
+	Workers    *Workers
 }
 
 func (c *producerConfig) mustValidate() *producerConfig {
@@ -427,6 +433,11 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 				p.paused = true
 				p.Logger.DebugContext(workCtx, p.Name+": Paused", slog.String("queue", p.config.Queue), slog.String("queue_in_message", msg.Queue))
 				p.testSignals.Paused.Signal(struct{}{})
+
+				if p.config.QueuePausedOrResumed != nil {
+					p.config.QueuePausedOrResumed(&Event{Kind: EventKindQueuePaused, Queue: p.config.Queue})
+				}
+
 			case controlActionResume:
 				if !p.paused {
 					continue
@@ -434,9 +445,15 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 				p.paused = false
 				p.Logger.DebugContext(workCtx, p.Name+": Resumed", slog.String("queue", p.config.Queue), slog.String("queue_in_message", msg.Queue))
 				p.testSignals.Resumed.Signal(struct{}{})
+
+				if p.config.QueuePausedOrResumed != nil {
+					p.config.QueuePausedOrResumed(&Event{Kind: EventKindQueueResumed, Queue: p.config.Queue})
+				}
+
 			case controlActionCancel:
 				// Separate this case to make linter happy:
 				p.Logger.DebugContext(workCtx, p.Name+": Unhandled queue control action", "action", msg.Action)
+
 			default:
 				p.Logger.DebugContext(workCtx, p.Name+": Unknown queue control action", "action", msg.Action)
 			}

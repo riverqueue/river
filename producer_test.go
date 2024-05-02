@@ -468,6 +468,12 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 
 		producer, bundle := setup(t)
 		producer.config.QueuePollInterval = 50 * time.Millisecond
+
+		pauseOrResumeEvents := make(chan *Event, 10)
+		producer.config.QueuePausedOrResumed = func(event *Event) {
+			pauseOrResumeEvents <- event
+		}
+
 		AddWorker(bundle.workers, &noOpWorker{})
 
 		mustInsert(ctx, t, bundle.exec, &noOpArgs{})
@@ -486,6 +492,13 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		}
 		producer.testSignals.Paused.WaitOrTimeout()
 
+		pauseEvent := riverinternaltest.WaitOrTimeout(t, pauseOrResumeEvents)
+		if queueNameToPause == rivercommon.AllQueuesString {
+			require.Equal(t, &Event{Kind: EventKindQueuePaused, Queue: rivercommon.QueueDefault}, pauseEvent)
+		} else {
+			require.Equal(t, &Event{Kind: EventKindQueuePaused, Queue: queueNameToPause}, pauseEvent)
+		}
+
 		// Job should not be executed while paused:
 		mustInsert(ctx, t, bundle.exec, &noOpArgs{})
 
@@ -502,6 +515,13 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 			emitQueueNotification(t, ctx, bundle.exec, queueNameToPause, "resume")
 		}
 		producer.testSignals.Resumed.WaitOrTimeout()
+
+		resumeEvent := riverinternaltest.WaitOrTimeout(t, pauseOrResumeEvents)
+		if queueNameToPause == rivercommon.AllQueuesString {
+			require.Equal(t, &Event{Kind: EventKindQueueResumed, Queue: rivercommon.QueueDefault}, resumeEvent)
+		} else {
+			require.Equal(t, &Event{Kind: EventKindQueueResumed, Queue: queueNameToPause}, resumeEvent)
+		}
 
 		// Now the 2nd job should execute:
 		update = riverinternaltest.WaitOrTimeout(t, bundle.jobUpdates)

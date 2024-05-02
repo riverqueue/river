@@ -488,21 +488,33 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		})
 		client.services = append(client.services, client.elector)
 
+		distributedQueueEvents := func(event *Event) {
+			for _, sub := range client.subscriptions {
+				if sub.ListensFor(event.Kind) {
+					select {
+					case sub.Chan <- event:
+					default:
+					}
+				}
+			}
+		}
+
 		for queue, queueConfig := range config.Queues {
 			client.producersByQueueName[queue] = newProducer(archetype, driver.GetExecutor(), &producerConfig{
-				ClientID:          config.ID,
-				Completer:         client.completer,
-				ErrorHandler:      config.ErrorHandler,
-				FetchCooldown:     config.FetchCooldown,
-				FetchPollInterval: config.FetchPollInterval,
-				JobTimeout:        config.JobTimeout,
-				MaxWorkers:        queueConfig.MaxWorkers,
-				Notifier:          client.notifier,
-				Queue:             queue,
-				RetryPolicy:       config.RetryPolicy,
-				SchedulerInterval: config.schedulerInterval,
-				StatusFunc:        client.monitor.SetProducerStatus,
-				Workers:           config.Workers,
+				ClientID:             config.ID,
+				Completer:            client.completer,
+				ErrorHandler:         config.ErrorHandler,
+				FetchCooldown:        config.FetchCooldown,
+				FetchPollInterval:    config.FetchPollInterval,
+				JobTimeout:           config.JobTimeout,
+				MaxWorkers:           queueConfig.MaxWorkers,
+				Notifier:             client.notifier,
+				Queue:                queue,
+				QueuePausedOrResumed: distributedQueueEvents,
+				RetryPolicy:          config.RetryPolicy,
+				SchedulerInterval:    config.schedulerInterval,
+				StatusFunc:           client.monitor.SetProducerStatus,
+				Workers:              config.Workers,
 			})
 			client.monitor.InitializeProducerStatus(queue)
 		}

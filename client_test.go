@@ -464,6 +464,9 @@ func Test_Client(t *testing.T) {
 		config, bundle := setupConfig(t)
 		client := newTestClient(t, bundle.dbPool, config)
 
+		subscribeChan, cancel := client.Subscribe(EventKindQueuePaused, EventKindQueueResumed)
+		t.Cleanup(cancel)
+
 		jobStartedChan := make(chan int64)
 
 		type JobArgs struct {
@@ -488,6 +491,9 @@ func Test_Client(t *testing.T) {
 		require.NoError(t, client.QueuePause(ctx, QueueDefault, nil))
 		client.producersByQueueName[QueueDefault].testSignals.Paused.WaitOrTimeout()
 
+		pauseEvent := riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, &Event{Kind: EventKindQueuePaused, Queue: QueueDefault}, pauseEvent)
+
 		insertRes2, err := client.Insert(ctx, &JobArgs{}, nil)
 		require.NoError(t, err)
 
@@ -500,6 +506,9 @@ func Test_Client(t *testing.T) {
 		require.NoError(t, client.QueueResume(ctx, QueueDefault, nil))
 		client.producersByQueueName[QueueDefault].testSignals.Resumed.WaitOrTimeout()
 
+		resumeEvent := riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, &Event{Kind: EventKindQueueResumed, Queue: QueueDefault}, resumeEvent)
+
 		startedJobID = riverinternaltest.WaitOrTimeout(t, jobStartedChan)
 		require.Equal(t, insertRes2.Job.ID, startedJobID)
 	})
@@ -510,6 +519,9 @@ func Test_Client(t *testing.T) {
 		config, bundle := setupConfig(t)
 		config.Queues["alternate"] = QueueConfig{MaxWorkers: 10}
 		client := newTestClient(t, bundle.dbPool, config)
+
+		subscribeChan, cancel := client.Subscribe(EventKindQueuePaused, EventKindQueueResumed)
+		t.Cleanup(cancel)
 
 		jobStartedChan := make(chan int64)
 
@@ -537,6 +549,9 @@ func Test_Client(t *testing.T) {
 		require.NoError(t, client.QueuePause(ctx, QueueDefault, nil))
 		client.producersByQueueName[QueueDefault].testSignals.Paused.WaitOrTimeout()
 
+		pauseEvent := riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, &Event{Kind: EventKindQueuePaused, Queue: QueueDefault}, pauseEvent)
+
 		insertRes2, err := client.Insert(ctx, &JobArgs{}, nil)
 		require.NoError(t, err)
 
@@ -557,6 +572,9 @@ func Test_Client(t *testing.T) {
 		require.NoError(t, client.QueuePause(ctx, rivercommon.AllQueuesString, nil))
 		client.producersByQueueName["alternate"].testSignals.Paused.WaitOrTimeout()
 
+		pauseEvent = riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, &Event{Kind: EventKindQueuePaused, Queue: "alternate"}, pauseEvent)
+
 		insertResAlternate2, err := client.Insert(ctx, &JobArgs{}, &InsertOpts{Queue: "alternate"})
 		require.NoError(t, err)
 
@@ -570,12 +588,18 @@ func Test_Client(t *testing.T) {
 		require.NoError(t, client.QueueResume(ctx, "alternate", nil))
 		client.producersByQueueName["alternate"].testSignals.Resumed.WaitOrTimeout()
 
+		resumeEvent := riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, &Event{Kind: EventKindQueuePaused, Queue: "alternate"}, resumeEvent)
+
 		startedJobID = riverinternaltest.WaitOrTimeout(t, jobStartedChan)
 		require.Equal(t, insertResAlternate2.Job.ID, startedJobID)
 
 		// Resume all queues:
 		require.NoError(t, client.QueueResume(ctx, rivercommon.AllQueuesString, nil))
 		client.producersByQueueName[QueueDefault].testSignals.Resumed.WaitOrTimeout()
+
+		resumeEvent = riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, &Event{Kind: EventKindQueuePaused, Queue: QueueDefault}, resumeEvent)
 
 		startedJobID = riverinternaltest.WaitOrTimeout(t, jobStartedChan)
 		require.Equal(t, insertRes2.Job.ID, startedJobID)
