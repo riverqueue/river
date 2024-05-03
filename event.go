@@ -25,6 +25,12 @@ const (
 
 	// EventKindJobSnoozed occurs when a job is snoozed.
 	EventKindJobSnoozed EventKind = "job_snoozed"
+
+	// EventKindQueuePaused occurs when a queue is paused.
+	EventKindQueuePaused EventKind = "queue_paused"
+
+	// EventKindQueueResumed occurs when a queue is resumed.
+	EventKindQueueResumed EventKind = "queue_resumed"
 )
 
 // All known event kinds, used to validate incoming kinds. This is purposely not
@@ -35,6 +41,8 @@ var allKinds = map[EventKind]struct{}{ //nolint:gochecknoglobals
 	EventKindJobCompleted: {},
 	EventKindJobFailed:    {},
 	EventKindJobSnoozed:   {},
+	EventKindQueuePaused:  {},
+	EventKindQueueResumed: {},
 }
 
 // Event wraps an event that occurred within a River client, like a job being
@@ -50,6 +58,9 @@ type Event struct {
 
 	// JobStats are statistics about the run of a job.
 	JobStats *JobStatistics
+
+	// Queue contains queue-related information.
+	Queue *rivertype.Queue
 }
 
 // JobStatistics contains information about a single execution of a job.
