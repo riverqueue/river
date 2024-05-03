@@ -147,7 +147,7 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 			now := s.TimeNowUTC()
 			nowWithLookAhead := now.Add(s.config.Interval)
 
-			scheduledJobs, err := s.exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
+			scheduledJobs, err := tx.JobSchedule(ctx, &riverdriver.JobScheduleParams{
 				Max: s.config.Limit,
 				Now: nowWithLookAhead,
 			})
