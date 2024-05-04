@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `RequireNotInserted` test helper (in addition to the existing `RequireInserted`) that verifies that a job with matching conditions was _not_ inserted. [PR #237](https://github.com/riverqueue/river/pull/237).
+
 ## [0.5.0] - 2024-05-03
 
 ⚠️ Version 0.5.0 contains a new database migration, version 4. This migration is backward compatible with any River installation running the v3 migration. Be sure to run the v4 migration prior to deploying the code from this release.
