@@ -6,8 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lib/pq"
-
+	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -86,7 +85,7 @@ func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListPara
 	if len(params.States) > 0 {
 		writeWhereOrAnd()
 		conditionsBuilder.WriteString("state = any(@states::river_job_state[])")
-		namedArgs["states"] = pq.Array(params.States)
+		namedArgs["states"] = sliceutil.Map(params.States, func(s rivertype.JobState) string { return string(s) })
 	}
 
 	if params.Conditions != "" {
