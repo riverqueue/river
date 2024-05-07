@@ -79,12 +79,14 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		return svc, bundle
 	}
 
-	requireNJobs := func(t *testing.T, exec riverdriver.Executor, kind string, n int) {
+	requireNJobs := func(t *testing.T, exec riverdriver.Executor, kind string, n int) []*rivertype.JobRow {
 		t.Helper()
 
 		jobs, err := exec.JobGetByKindMany(ctx, []string{kind})
 		require.NoError(t, err)
 		require.Len(t, jobs, n, fmt.Sprintf("Expected to find exactly %d job(s) of kind: %s, but found %d", n, kind, len(jobs)))
+
+		return jobs
 	}
 
 	startService := func(t *testing.T, svc *PeriodicJobEnqueuer) {
@@ -137,6 +139,33 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
 		requireNJobs(t, bundle.exec, "periodic_job_500ms", 3)
 		requireNJobs(t, bundle.exec, "periodic_job_1500ms", 1)
+	})
+
+	t.Run("SetsScheduledAtAccordingToExpectedNextRunAt", func(t *testing.T) {
+		t.Parallel()
+
+		svc, bundle := setup(t)
+
+		svc.AddMany([]*PeriodicJob{
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), RunOnStart: true},
+		})
+
+		startService(t, svc)
+
+		svc.TestSignals.InsertedJobs.WaitOrTimeout()
+		job1 := requireNJobs(t, bundle.exec, "periodic_job_500ms", 1)[0]
+		require.Equal(t, rivertype.JobStateAvailable, job1.State)
+		require.WithinDuration(t, time.Now(), job1.ScheduledAt, 1*time.Second)
+
+		svc.TestSignals.InsertedJobs.WaitOrTimeout()
+		job2 := requireNJobs(t, bundle.exec, "periodic_job_500ms", 2)[1] // ordered by ID
+
+		// The new `scheduled_at` is *exactly* the original `scheduled_at` plus
+		// 500 milliseconds because the enqueuer used the target next run time
+		// to calculate the new `scheduled_at`.
+		require.Equal(t, job1.ScheduledAt.Add(500*time.Millisecond), job2.ScheduledAt)
+
+		require.Equal(t, rivertype.JobStateAvailable, job2.State)
 	})
 
 	t.Run("RespectsJobUniqueness", func(t *testing.T) {
