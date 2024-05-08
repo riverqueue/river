@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `RequireNotInserted` test helper (in addition to the existing `RequireInserted`) that verifies that a job with matching conditions was _not_ inserted. [PR #237](https://github.com/riverqueue/river/pull/237).
 
+### Changed
+
+- The periodic job enqueuer now sets `scheduled_at` of inserted jobs to the more precise time of when they were scheduled to run, as opposed to when they were inserted. [PR #341](https://github.com/riverqueue/river/pull/341).
+
 ### Fixed
 
 - Remove use of `github.com/lib/pq`, making it once again a test-only dependency. [PR #337](https://github.com/riverqueue/river/pull/337).
