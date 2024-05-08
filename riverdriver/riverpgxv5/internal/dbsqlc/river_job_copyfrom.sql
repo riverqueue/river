@@ -1,5 +1,5 @@
 -- name: JobInsertMany :copyfrom
-INSERT INTO river_job(
+INSERT INTO sqlc_schema_placeholder.river_job(
     args,
     finalized_at,
     kind,

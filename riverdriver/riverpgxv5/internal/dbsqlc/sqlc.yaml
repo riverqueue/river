@@ -23,6 +23,7 @@ sql:
         emit_methods_with_db_argument: true
         emit_params_struct_pointers: true
         emit_result_struct_pointers: true
+        use_schema_placeholder: true
 
         rename:
           ttl: "TTL"
@@ -41,6 +42,6 @@ sql:
             nullable: true
 
           # specific columns
-          - column: "river_job.errors"
+          - column: "sqlc_schema_placeholder.river_job.errors"
             go_type:
               type: "[]AttemptError"

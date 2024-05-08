@@ -1,4 +1,6 @@
-CREATE TYPE river_job_state AS ENUM(
+CREATE SCHEMA sqlc_schema_placeholder;
+
+CREATE TYPE sqlc_schema_placeholder.river_job_state AS ENUM(
     'available',
     'cancelled',
     'completed',
@@ -9,7 +11,7 @@ CREATE TYPE river_job_state AS ENUM(
     'scheduled'
 );
 
-CREATE TABLE river_job(
+CREATE TABLE sqlc_schema_placeholder.river_job(
     id bigserial PRIMARY KEY,
     args jsonb NOT NULL DEFAULT '{}'::jsonb,
     attempt smallint NOT NULL DEFAULT 0,
@@ -23,7 +25,7 @@ CREATE TABLE river_job(
     metadata jsonb NOT NULL DEFAULT '{}' ::jsonb,
     priority smallint NOT NULL DEFAULT 1,
     queue text NOT NULL DEFAULT 'default' ::text,
-    state river_job_state NOT NULL DEFAULT 'available' ::river_job_state,
+    state sqlc_schema_placeholder.river_job_state NOT NULL DEFAULT 'available'::sqlc_schema_placeholder.river_job_state,
     scheduled_at timestamptz NOT NULL DEFAULT NOW(),
     tags varchar(255)[] NOT NULL DEFAULT '{}' ::varchar(255)[],
     CONSTRAINT finalized_or_finalized_at_null CHECK (
@@ -39,7 +41,7 @@ CREATE TABLE river_job(
 WITH locked_job AS (
     SELECT
         id, queue, state, finalized_at
-    FROM river_job
+    FROM sqlc_schema_placeholder.river_job
     WHERE river_job.id = @id
     FOR UPDATE
 ),
@@ -57,12 +59,12 @@ notification AS (
         AND finalized_at IS NULL
 ),
 updated_job AS (
-    UPDATE river_job
+    UPDATE sqlc_schema_placeholder.river_job
     SET
         -- If the job is actively running, we want to let its current client and
         -- producer handle the cancellation. Otherwise, immediately cancel it.
-        state = CASE WHEN state = 'running'::river_job_state THEN state ELSE 'cancelled'::river_job_state END,
-        finalized_at = CASE WHEN state = 'running'::river_job_state THEN finalized_at ELSE now() END,
+        state = CASE WHEN state = 'running'::sqlc_schema_placeholder.river_job_state THEN state ELSE 'cancelled'::sqlc_schema_placeholder.river_job_state END,
+        finalized_at = CASE WHEN state = 'running'::sqlc_schema_placeholder.river_job_state THEN finalized_at ELSE now() END,
         -- Mark the job as cancelled by query so that the rescuer knows not to
         -- rescue it, even if it gets stuck in the running state:
         metadata = jsonb_set(metadata, '{cancel_attempted_at}'::text[], @cancel_attempted_at::jsonb, true)
@@ -71,7 +73,7 @@ updated_job AS (
     RETURNING river_job.*
 )
 SELECT *
-FROM river_job
+FROM sqlc_schema_placeholder.river_job
 WHERE id = @id::bigint
     AND id NOT IN (SELECT id FROM updated_job)
 UNION
@@ -80,15 +82,15 @@ FROM updated_job;
 
 -- name: JobCountByState :one
 SELECT count(*)
-FROM river_job
+FROM sqlc_schema_placeholder.river_job
 WHERE state = @state;
 
 -- name: JobDeleteBefore :one
 WITH deleted_jobs AS (
-    DELETE FROM river_job
+    DELETE FROM sqlc_schema_placeholder.river_job
     WHERE id IN (
         SELECT id
-        FROM river_job
+        FROM sqlc_schema_placeholder.river_job
         WHERE
             (state = 'cancelled' AND finalized_at < @cancelled_finalized_at_horizon::timestamptz) OR
             (state = 'completed' AND finalized_at < @completed_finalized_at_horizon::timestamptz) OR
@@ -106,7 +108,7 @@ WITH locked_jobs AS (
     SELECT
         *
     FROM
-        river_job
+        sqlc_schema_placeholder.river_job
     WHERE
         state = 'available'::river_job_state
         AND queue = @queue::text
@@ -120,12 +122,12 @@ WITH locked_jobs AS (
     SKIP LOCKED
 )
 UPDATE
-    river_job
+    sqlc_schema_placeholder.river_job
 SET
     state = 'running'::river_job_state,
     attempt = river_job.attempt + 1,
     attempted_at = now(),
-    attempted_by = array_append(river_job.attempted_by, @attempted_by::text)
+    attempted_by = array_append( river_job.attempted_by, @attempted_by::text)
 FROM
     locked_jobs
 WHERE
@@ -135,7 +137,7 @@ RETURNING
 
 -- name: JobGetByKindAndUniqueProperties :one
 SELECT *
-FROM river_job
+FROM sqlc_schema_placeholder.river_job
 WHERE kind = @kind
     AND CASE WHEN @by_args::boolean THEN args = @args ELSE true END
     AND CASE WHEN @by_created_at::boolean THEN tstzrange(@created_at_begin::timestamptz, @created_at_end::timestamptz, '[)') @> created_at ELSE true END
@@ -144,32 +146,32 @@ WHERE kind = @kind
 
 -- name: JobGetByKindMany :many
 SELECT *
-FROM river_job
+FROM sqlc_schema_placeholder.river_job
 WHERE kind = any(@kind::text[])
 ORDER BY id;
 
 -- name: JobGetByID :one
 SELECT *
-FROM river_job
+FROM sqlc_schema_placeholder.river_job
 WHERE id = @id
 LIMIT 1;
 
 -- name: JobGetByIDMany :many
 SELECT *
-FROM river_job
+FROM sqlc_schema_placeholder.river_job
 WHERE id = any(@id::bigint[])
 ORDER BY id;
 
 -- name: JobGetStuck :many
 SELECT *
-FROM river_job
+FROM sqlc_schema_placeholder.river_job
 WHERE state = 'running'::river_job_state
     AND attempted_at < @stuck_horizon::timestamptz
 ORDER BY id
 LIMIT @max;
 
 -- name: JobInsertFast :one
-INSERT INTO river_job(
+INSERT INTO sqlc_schema_placeholder.river_job(
     args,
     finalized_at,
     kind,
@@ -194,7 +196,7 @@ INSERT INTO river_job(
 ) RETURNING *;
 
 -- name: JobInsertFull :one
-INSERT INTO river_job(
+INSERT INTO sqlc_schema_placeholder.river_job(
     args,
     attempt,
     attempted_at,
@@ -228,7 +230,7 @@ INSERT INTO river_job(
 
 -- Run by the rescuer to queue for retry or discard depending on job state.
 -- name: JobRescueMany :exec
-UPDATE river_job
+UPDATE sqlc_schema_placeholder.river_job
 SET
     errors = array_append(errors, updated_job.error),
     finalized_at = updated_job.finalized_at,
@@ -247,12 +249,12 @@ WHERE river_job.id = updated_job.id;
 -- name: JobRetry :one
 WITH job_to_update AS (
     SELECT id
-    FROM river_job
+    FROM sqlc_schema_placeholder.river_job
     WHERE river_job.id = @id
     FOR UPDATE
 ),
 updated_job AS (
-    UPDATE river_job
+    UPDATE sqlc_schema_placeholder.river_job
     SET
         state = 'available'::river_job_state,
         scheduled_at = now(),
@@ -267,7 +269,7 @@ updated_job AS (
     RETURNING river_job.*
 )
 SELECT *
-FROM river_job
+FROM sqlc_schema_placeholder.river_job
 WHERE id = @id::bigint
     AND id NOT IN (SELECT id FROM updated_job)
 UNION
@@ -277,7 +279,7 @@ FROM updated_job;
 -- name: JobSchedule :many
 WITH jobs_to_schedule AS (
     SELECT id
-    FROM river_job
+    FROM sqlc_schema_placeholder.river_job
     WHERE
         state IN ('retryable', 'scheduled')
         AND queue IS NOT NULL
@@ -291,14 +293,14 @@ WITH jobs_to_schedule AS (
     FOR UPDATE
 ),
 river_job_scheduled AS (
-    UPDATE river_job
+    UPDATE sqlc_schema_placeholder.river_job
     SET state = 'available'::river_job_state
     FROM jobs_to_schedule
     WHERE river_job.id = jobs_to_schedule.id
     RETURNING river_job.id
 )
 SELECT *
-FROM river_job
+FROM sqlc_schema_placeholder.river_job
 WHERE id IN (SELECT id FROM river_job_scheduled);
 
 -- name: JobSetCompleteIfRunningMany :many
@@ -309,13 +311,13 @@ WITH job_to_finalized_at AS (
 ),
 job_to_update AS (
     SELECT river_job.id, job_to_finalized_at.finalized_at
-    FROM river_job, job_to_finalized_at
+    FROM sqlc_schema_placeholder.river_job, job_to_finalized_at
     WHERE river_job.id = job_to_finalized_at.id
         AND river_job.state = 'running'::river_job_state
     FOR UPDATE
 ),
 updated_job AS (
-    UPDATE river_job
+    UPDATE  sqlc_schema_placeholder.river_job
     SET
         finalized_at = job_to_update.finalized_at,
         state = 'completed'
@@ -324,7 +326,7 @@ updated_job AS (
     RETURNING river_job.*
 )
 SELECT *
-FROM river_job
+FROM sqlc_schema_placeholder.river_job
 WHERE id IN (SELECT id FROM job_to_finalized_at EXCEPT SELECT id FROM updated_job)
 UNION
 SELECT *
@@ -335,12 +337,12 @@ WITH job_to_update AS (
     SELECT
         id,
         @state::river_job_state IN ('retryable'::river_job_state, 'scheduled'::river_job_state) AND metadata ? 'cancel_attempted_at' AS should_cancel
-    FROM river_job
+    FROM sqlc_schema_placeholder.river_job
     WHERE id = @id::bigint
     FOR UPDATE
 ),
 updated_job AS (
-    UPDATE river_job
+    UPDATE sqlc_schema_placeholder.river_job
     SET
         state        = CASE WHEN should_cancel                                          THEN 'cancelled'::river_job_state
                             ELSE @state::river_job_state END,
@@ -359,7 +361,7 @@ updated_job AS (
     RETURNING river_job.*
 )
 SELECT *
-FROM river_job
+FROM sqlc_schema_placeholder.river_job
 WHERE id = @id::bigint
     AND id NOT IN (SELECT id FROM updated_job)
 UNION
@@ -369,7 +371,7 @@ FROM updated_job;
 -- A generalized update for any property on a job. This brings in a large number
 -- of parameters and therefore may be more suitable for testing than production.
 -- name: JobUpdate :one
-UPDATE river_job
+UPDATE sqlc_schema_placeholder.river_job
 SET
     attempt = CASE WHEN @attempt_do_update::boolean THEN @attempt ELSE attempt END,
     attempted_at = CASE WHEN @attempted_at_do_update::boolean THEN @attempted_at ELSE attempted_at END,

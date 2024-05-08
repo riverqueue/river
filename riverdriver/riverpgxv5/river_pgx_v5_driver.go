@@ -42,15 +42,15 @@ type Driver struct {
 // in testing so that inserts can be performed and verified on a test
 // transaction that will be rolled back.
 func New(dbPool *pgxpool.Pool) *Driver {
-	return &Driver{dbPool: dbPool, queries: dbsqlc.New()}
+	return &Driver{dbPool: dbPool, queries: dbsqlc.New("public")}
 }
 
-func (d *Driver) GetExecutor() riverdriver.Executor { return &Executor{d.dbPool, dbsqlc.New()} }
+func (d *Driver) GetExecutor() riverdriver.Executor { return &Executor{d.dbPool, dbsqlc.New("public")} }
 func (d *Driver) GetListener() riverdriver.Listener { return &Listener{dbPool: d.dbPool} }
 func (d *Driver) HasPool() bool                     { return d.dbPool != nil }
 
 func (d *Driver) UnwrapExecutor(tx pgx.Tx) riverdriver.ExecutorTx {
-	return &ExecutorTx{Executor: Executor{tx, dbsqlc.New()}, tx: tx}
+	return &ExecutorTx{Executor: Executor{tx, dbsqlc.New("public")}, tx: tx}
 }
 
 type Executor struct {
