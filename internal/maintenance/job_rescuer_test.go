@@ -23,20 +23,22 @@ import (
 // callbackWorkUnitFactory wraps a Worker to implement workUnitFactory.
 type callbackWorkUnitFactory struct {
 	Callback func(ctx context.Context, jobRow *rivertype.JobRow) error
+	timeout  time.Duration // defaults to 0, which signals default timeout
 }
 
 func (w *callbackWorkUnitFactory) MakeUnit(jobRow *rivertype.JobRow) workunit.WorkUnit {
-	return &callbackWorkUnit{callback: w.Callback, jobRow: jobRow}
+	return &callbackWorkUnit{callback: w.Callback, jobRow: jobRow, timeout: w.timeout}
 }
 
 // callbackWorkUnit implements workUnit for a job and Worker.
 type callbackWorkUnit struct {
 	callback func(ctx context.Context, jobRow *rivertype.JobRow) error
 	jobRow   *rivertype.JobRow
+	timeout  time.Duration // defaults to 0, which signals default timeout
 }
 
 func (w *callbackWorkUnit) NextRetry() time.Time           { return time.Now().Add(30 * time.Second) }
-func (w *callbackWorkUnit) Timeout() time.Duration         { return 0 }
+func (w *callbackWorkUnit) Timeout() time.Duration         { return w.timeout }
 func (w *callbackWorkUnit) Work(ctx context.Context) error { return w.callback(ctx, w.jobRow) }
 func (w *callbackWorkUnit) UnmarshalJob() error            { return nil }
 
@@ -51,9 +53,12 @@ func (p *SimpleClientRetryPolicy) NextRetry(job *rivertype.JobRow) time.Time {
 func TestJobRescuer(t *testing.T) {
 	t.Parallel()
 
-	const rescuerJobKind = "rescuer"
-
 	ctx := context.Background()
+
+	const (
+		rescuerJobKind            = "rescuer"
+		rescuerJobKindLongTimeout = "rescuer_long_timeout"
+	)
 
 	type testBundle struct {
 		exec          riverdriver.Executor
@@ -76,8 +81,13 @@ func TestJobRescuer(t *testing.T) {
 				Interval:          JobRescuerIntervalDefault,
 				RescueAfter:       JobRescuerRescueAfterDefault,
 				WorkUnitFactoryFunc: func(kind string) workunit.WorkUnitFactory {
-					if kind == rescuerJobKind {
-						return &callbackWorkUnitFactory{Callback: func(ctx context.Context, jobRow *rivertype.JobRow) error { return nil }}
+					emptyCallback := func(ctx context.Context, jobRow *rivertype.JobRow) error { return nil }
+
+					switch kind {
+					case rescuerJobKind:
+						return &callbackWorkUnitFactory{Callback: emptyCallback}
+					case rescuerJobKindLongTimeout:
+						return &callbackWorkUnitFactory{Callback: emptyCallback, timeout: JobRescuerRescueAfterDefault + 5*time.Minute}
 					}
 					panic("unhandled kind: " + kind)
 				},
@@ -135,10 +145,17 @@ func TestJobRescuer(t *testing.T) {
 		stuckToCancelJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), Metadata: []byte(fmt.Sprintf(`{"cancel_attempted_at": %q}`, cancelTime)), MaxAttempts: ptrutil.Ptr(5)})
 		stuckToCancelJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(1 * time.Minute)), Metadata: []byte(fmt.Sprintf(`{"cancel_attempted_at": %q}`, cancelTime)), MaxAttempts: ptrutil.Ptr(5)}) // won't be rescued
 
-		// these aren't touched:
+		// these aren't touched because they're in ineligible states
 		notRunningJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), FinalizedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), State: ptrutil.Ptr(rivertype.JobStateCompleted), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
 		notRunningJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), FinalizedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), State: ptrutil.Ptr(rivertype.JobStateDiscarded), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
 		notRunningJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), FinalizedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), State: ptrutil.Ptr(rivertype.JobStateCancelled), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+
+		// Jobs with worker-specific long timeouts. The first isn't rescued
+		// because the difference between its `attempted_at` and now is still
+		// within the timeout threshold. The second _is_ rescued because it
+		// started earlier and even with the longer timeout, has still timed out.
+		longTimeOutJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKindLongTimeout), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)})
+		longTimeOutJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKindLongTimeout), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-6 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)})
 
 		require.NoError(cleaner.Start(ctx))
 
@@ -158,37 +175,44 @@ func TestJobRescuer(t *testing.T) {
 		require.NoError(err)
 		require.Equal(stuckToRetryJob3.State, job3After.State) // not rescued
 
-		discard1After, err := bundle.exec.JobGetByID(ctx, stuckToDiscardJob1.ID)
+		discardJob1After, err := bundle.exec.JobGetByID(ctx, stuckToDiscardJob1.ID)
 		require.NoError(err)
-		require.Equal(rivertype.JobStateDiscarded, discard1After.State)
-		require.WithinDuration(time.Now(), *discard1After.FinalizedAt, 5*time.Second)
-		require.Len(discard1After.Errors, 1)
+		require.Equal(rivertype.JobStateDiscarded, discardJob1After.State)
+		require.WithinDuration(time.Now(), *discardJob1After.FinalizedAt, 5*time.Second)
+		require.Len(discardJob1After.Errors, 1)
 
-		discard2After, err := bundle.exec.JobGetByID(ctx, stuckToDiscardJob2.ID)
+		discardJob2After, err := bundle.exec.JobGetByID(ctx, stuckToDiscardJob2.ID)
 		require.NoError(err)
-		require.Equal(rivertype.JobStateRunning, discard2After.State)
-		require.Nil(discard2After.FinalizedAt)
+		require.Equal(rivertype.JobStateRunning, discardJob2After.State)
+		require.Nil(discardJob2After.FinalizedAt)
 
-		cancel1After, err := bundle.exec.JobGetByID(ctx, stuckToCancelJob1.ID)
+		cancelJob1After, err := bundle.exec.JobGetByID(ctx, stuckToCancelJob1.ID)
 		require.NoError(err)
-		require.Equal(rivertype.JobStateCancelled, cancel1After.State)
-		require.WithinDuration(time.Now(), *cancel1After.FinalizedAt, 5*time.Second)
-		require.Len(cancel1After.Errors, 1)
+		require.Equal(rivertype.JobStateCancelled, cancelJob1After.State)
+		require.WithinDuration(time.Now(), *cancelJob1After.FinalizedAt, 5*time.Second)
+		require.Len(cancelJob1After.Errors, 1)
 
-		cancel2After, err := bundle.exec.JobGetByID(ctx, stuckToCancelJob2.ID)
+		cancelJob2After, err := bundle.exec.JobGetByID(ctx, stuckToCancelJob2.ID)
 		require.NoError(err)
-		require.Equal(rivertype.JobStateRunning, cancel2After.State)
-		require.Nil(cancel2After.FinalizedAt)
+		require.Equal(rivertype.JobStateRunning, cancelJob2After.State)
+		require.Nil(cancelJob2After.FinalizedAt)
 
-		notRunning1After, err := bundle.exec.JobGetByID(ctx, notRunningJob1.ID)
+		notRunningJob1After, err := bundle.exec.JobGetByID(ctx, notRunningJob1.ID)
 		require.NoError(err)
-		require.Equal(notRunning1After.State, notRunningJob1.State)
-		notRunning2After, err := bundle.exec.JobGetByID(ctx, notRunningJob2.ID)
+		require.Equal(notRunningJob1.State, notRunningJob1After.State)
+		notRunningJob2After, err := bundle.exec.JobGetByID(ctx, notRunningJob2.ID)
 		require.NoError(err)
-		require.Equal(notRunning2After.State, notRunningJob2.State)
-		notRunning3After, err := bundle.exec.JobGetByID(ctx, notRunningJob3.ID)
+		require.Equal(notRunningJob2.State, notRunningJob2After.State)
+		notRunningJob3After, err := bundle.exec.JobGetByID(ctx, notRunningJob3.ID)
 		require.NoError(err)
-		require.Equal(notRunning3After.State, notRunningJob3.State)
+		require.Equal(notRunningJob3.State, notRunningJob3After.State)
+
+		notTimedOutJob1After, err := bundle.exec.JobGetByID(ctx, longTimeOutJob1.ID)
+		require.NoError(err)
+		require.Equal(rivertype.JobStateRunning, notTimedOutJob1After.State)
+		notTimedOutJob2After, err := bundle.exec.JobGetByID(ctx, longTimeOutJob2.ID)
+		require.NoError(err)
+		require.Equal(rivertype.JobStateRetryable, notTimedOutJob2After.State)
 	})
 
 	t.Run("RescuesInBatches", func(t *testing.T) {
