@@ -11,6 +11,7 @@ import (
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/rivercommon"
+	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/internal/util/timeutil"
 	"github.com/riverqueue/river/internal/util/valutil"
 	"github.com/riverqueue/river/internal/workunit"
@@ -164,22 +165,20 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 		now := time.Now().UTC()
 
 		rescueManyParams := riverdriver.JobRescueManyParams{
-			ID:          make([]int64, len(stuckJobs)),
-			Error:       make([][]byte, len(stuckJobs)),
-			FinalizedAt: make([]time.Time, len(stuckJobs)),
-			ScheduledAt: make([]time.Time, len(stuckJobs)),
-			State:       make([]string, len(stuckJobs)),
+			ID:          make([]int64, 0, len(stuckJobs)),
+			Error:       make([][]byte, 0, len(stuckJobs)),
+			FinalizedAt: make([]time.Time, 0, len(stuckJobs)),
+			ScheduledAt: make([]time.Time, 0, len(stuckJobs)),
+			State:       make([]string, 0, len(stuckJobs)),
 		}
 
-		for i, job := range stuckJobs {
-			rescueManyParams.ID[i] = job.ID
-
+		for _, job := range stuckJobs {
 			var metadata metadataWithCancelAttemptedAt
 			if err := json.Unmarshal(job.Metadata, &metadata); err != nil {
 				return nil, fmt.Errorf("error unmarshaling job metadata: %w", err)
 			}
 
-			rescueManyParams.Error[i], err = json.Marshal(rivertype.AttemptError{
+			errorData, err := json.Marshal(rivertype.AttemptError{
 				At:      now,
 				Attempt: max(job.Attempt, 0),
 				Error:   "Stuck job rescued by Rescuer",
@@ -189,29 +188,41 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 				return nil, fmt.Errorf("error marshaling error JSON: %w", err)
 			}
 
+			addRescueParam := func(state rivertype.JobState, finalizedAt *time.Time, scheduledAt time.Time) {
+				rescueManyParams.ID = append(rescueManyParams.ID, job.ID)
+				rescueManyParams.Error = append(rescueManyParams.Error, errorData)
+				rescueManyParams.FinalizedAt = append(rescueManyParams.FinalizedAt, ptrutil.ValOrDefault(finalizedAt, time.Time{}))
+				rescueManyParams.ScheduledAt = append(rescueManyParams.ScheduledAt, scheduledAt)
+				rescueManyParams.State = append(rescueManyParams.State, string(state))
+			}
+
 			if !metadata.CancelAttemptedAt.IsZero() {
 				res.NumJobsCancelled++
-				rescueManyParams.FinalizedAt[i] = now
-				rescueManyParams.ScheduledAt[i] = job.ScheduledAt // reuse previous value
-				rescueManyParams.State[i] = string(rivertype.JobStateCancelled)
+				addRescueParam(rivertype.JobStateCancelled, &now, job.ScheduledAt) // reused previous scheduled value
 				continue
 			}
-			shouldRetry, retryAt := s.makeRetryDecision(ctx, job)
-			if shouldRetry {
-				res.NumJobsRetried++
-				rescueManyParams.ScheduledAt[i] = retryAt
-				rescueManyParams.State[i] = string(rivertype.JobStateRetryable)
-			} else {
+
+			retryDecision, retryAt := s.makeRetryDecision(ctx, job, now)
+
+			switch retryDecision {
+			case jobRetryDecisionDiscard:
 				res.NumJobsDiscarded++
-				rescueManyParams.FinalizedAt[i] = now
-				rescueManyParams.ScheduledAt[i] = job.ScheduledAt // reuse previous value
-				rescueManyParams.State[i] = string(rivertype.JobStateDiscarded)
+				addRescueParam(rivertype.JobStateDiscarded, &now, job.ScheduledAt) // reused previous scheduled value
+
+			case jobRetryDecisionIgnore:
+				// job not timed out yet due to kind-specific timeout value; ignore
+
+			case jobRetryDecisionRetry:
+				res.NumJobsRetried++
+				addRescueParam(rivertype.JobStateRetryable, nil, retryAt)
 			}
 		}
 
-		_, err = s.exec.JobRescueMany(ctx, &rescueManyParams)
-		if err != nil {
-			return nil, fmt.Errorf("error rescuing stuck jobs: %w", err)
+		if len(rescueManyParams.ID) > 0 {
+			_, err = s.exec.JobRescueMany(ctx, &rescueManyParams)
+			if err != nil {
+				return nil, fmt.Errorf("error rescuing stuck jobs: %w", err)
+			}
 		}
 
 		s.TestSignals.UpdatedBatch.Signal(struct{}{})
@@ -245,14 +256,24 @@ func (s *JobRescuer) getStuckJobs(ctx context.Context) ([]*rivertype.JobRow, err
 	})
 }
 
+// jobRetryDecision is a signal from makeRetryDecision as to what to do with a
+// particular job that appears to be eligible for rescue.
+type jobRetryDecision int
+
+const (
+	jobRetryDecisionDiscard jobRetryDecision = iota // discard the job
+	jobRetryDecisionIgnore                          // don't retry or discard the job
+	jobRetryDecisionRetry                           // retry the job
+)
+
 // makeRetryDecision decides whether or not a rescued job should be retried, and if so,
 // when.
-func (s *JobRescuer) makeRetryDecision(ctx context.Context, job *rivertype.JobRow) (bool, time.Time) {
+func (s *JobRescuer) makeRetryDecision(ctx context.Context, job *rivertype.JobRow, now time.Time) (jobRetryDecision, time.Time) {
 	workUnitFactory := s.Config.WorkUnitFactoryFunc(job.Kind)
 	if workUnitFactory == nil {
 		s.Logger.ErrorContext(ctx, s.Name+": Attempted to rescue unhandled job kind, discarding",
 			slog.String("job_kind", job.Kind), slog.Int64("job_id", job.ID))
-		return false, time.Time{}
+		return jobRetryDecisionDiscard, time.Time{}
 	}
 
 	workUnit := workUnitFactory.MakeUnit(job)
@@ -261,9 +282,18 @@ func (s *JobRescuer) makeRetryDecision(ctx context.Context, job *rivertype.JobRo
 			slog.String("job_kind", job.Kind), slog.Int64("job_id", job.ID))
 	}
 
+	if workUnit.Timeout() != 0 && now.Sub(*job.AttemptedAt) < workUnit.Timeout() {
+		return jobRetryDecisionIgnore, time.Time{}
+	}
+
 	nextRetry := workUnit.NextRetry()
 	if nextRetry.IsZero() {
 		nextRetry = s.Config.ClientRetryPolicy.NextRetry(job)
 	}
-	return job.Attempt < max(job.MaxAttempts, 0), nextRetry
+
+	if job.Attempt < max(job.MaxAttempts, 0) {
+		return jobRetryDecisionRetry, nextRetry
+	}
+
+	return jobRetryDecisionDiscard, time.Time{}
 }
