@@ -234,10 +234,12 @@ migrations that need to be run, but without running them.
 		rootCmd.AddCommand(cmd)
 	}
 
-	// Cobra will already print an error on an uknown command, and there aren't
-	// really any other important top-level error cases to worry about as far as
-	// I can tell, so ignore a returned error here so we don't double print it.
-	_ = rootCmd.Execute()
+	if err := rootCmd.Execute(); err != nil {
+		// Cobra will already print an error on problems like an unknown command
+		// or missing required flag. Set an exit status of 1 on error, but don't
+		// print it again.
+		os.Exit(1)
+	}
 }
 
 func openDBPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
