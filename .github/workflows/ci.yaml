@@ -168,6 +168,13 @@ jobs:
           fi
         working-directory: ./cmd/river
 
+      - name: river unknown command (expect failure)
+        run: |
+          if ./river not-a-command; then
+            echo "expected non-zero exit code" && exit 1
+          fi
+        working-directory: ./cmd/river
+
   golangci:
     name: lint
     runs-on: ubuntu-latest
