@@ -12,7 +12,7 @@ UPDATE river_job SET metadata = '{}' WHERE metadata IS NULL;
 ALTER TABLE river_job ALTER COLUMN metadata SET NOT NULL;
 
 -- The 'pending' job state will be used for upcoming functionality:
-ALTER TYPE river_job_state ADD VALUE 'pending' AFTER 'discarded';
+ALTER TYPE river_job_state ADD VALUE IF NOT EXISTS 'pending' AFTER 'discarded';
 
 ALTER TABLE river_job DROP CONSTRAINT finalized_or_finalized_at_null;
 ALTER TABLE river_job ADD CONSTRAINT finalized_or_finalized_at_null CHECK (
