@@ -567,6 +567,27 @@ type Listener struct {
 	mu     sync.Mutex
 }
 
+// NewListener returns a Listener that can be used to enable other drivers
+// (notably `riverdatabasesql`) to listen for notifications when their
+// abstraction doesn't allow direct access to pgx connections, even though they
+// are using pgx under the hood. This constructor is not applicable to
+// applications which only use pgx directly.
+//
+// Users of `database/sql` or Bun can use this with the
+// `riverdatabasesql.NewWithListener` constructor to enable listener support in
+// that driver.
+//
+// The dbPool will solely be used for acquiring new connections for `LISTEN`
+// commands. As such, a pool must be provided that supports that command. Users
+// of pgbouncer should ensure that this specific pool is configured with session
+// pooling, even if their main application does not use session pooling.
+//
+// A single Client will never use more than one listener connection at a time,
+// no matter how many topics are being listened to.
+func NewListener(dbPool *pgxpool.Pool) riverdriver.Listener {
+	return &Listener{dbPool: dbPool}
+}
+
 func (l *Listener) Close(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
