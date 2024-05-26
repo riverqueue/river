@@ -623,6 +623,21 @@ func (e *Executor) PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}
 	return &struct{}{}, interpretError(err)
 }
 
+// Query executes raw SQL.
+func (e *Executor) Query(ctx context.Context, sql string, args ...any) (riverdriver.Rows, error) {
+	if len(args) == 0 {
+		args = nil
+	}
+	return e.dbtx.QueryContext(ctx, sql, args...)
+}
+
+func (e *Executor) QueryRow(ctx context.Context, sql string, args ...any) riverdriver.Row {
+	if len(args) == 0 {
+		args = nil
+	}
+	return &rowWrapper{e.dbtx.QueryRowContext(ctx, sql, args...)}
+}
+
 func (e *Executor) QueueCreateOrSetUpdatedAt(ctx context.Context, params *riverdriver.QueueCreateOrSetUpdatedAtParams) (*rivertype.Queue, error) {
 	queue, err := dbsqlc.New().QueueCreateOrSetUpdatedAt(ctx, e.dbtx, &dbsqlc.QueueCreateOrSetUpdatedAtParams{
 		Metadata:  valutil.ValOrDefault(string(params.Metadata), "{}"),
@@ -777,6 +792,14 @@ func (t *ExecutorSubTx) Rollback(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+type rowWrapper struct {
+	*sql.Row
+}
+
+func (r *rowWrapper) Scan(dest ...any) error {
+	return interpretError(r.Row.Scan(dest...))
 }
 
 func interpretError(err error) error {
