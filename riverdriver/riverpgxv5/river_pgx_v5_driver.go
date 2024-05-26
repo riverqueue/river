@@ -586,6 +586,24 @@ func (e *Executor) PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}
 	return &struct{}{}, interpretError(err)
 }
 
+func (e *Executor) Query(ctx context.Context, sql string, args ...any) (riverdriver.Rows, error) {
+	if len(args) == 0 {
+		args = nil
+	}
+	rows, err := e.dbtx.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return &rowsWrapper{rows}, nil
+}
+
+func (e *Executor) QueryRow(ctx context.Context, sql string, args ...any) riverdriver.Row {
+	if len(args) == 0 {
+		args = nil
+	}
+	return &rowWrapper{e.dbtx.QueryRow(ctx, sql, args...)}
+}
+
 func (e *Executor) QueueCreateOrSetUpdatedAt(ctx context.Context, params *riverdriver.QueueCreateOrSetUpdatedAtParams) (*rivertype.Queue, error) {
 	queue, err := dbsqlc.New().QueueCreateOrSetUpdatedAt(ctx, e.dbtx, &dbsqlc.QueueCreateOrSetUpdatedAtParams{
 		Metadata:  params.Metadata,
@@ -763,6 +781,23 @@ func (l *Listener) WaitForNotification(ctx context.Context) (*riverdriver.Notifi
 		Topic:   strings.TrimPrefix(notification.Channel, l.prefix),
 		Payload: notification.Payload,
 	}, nil
+}
+
+type rowWrapper struct {
+	pgx.Row
+}
+
+func (r *rowWrapper) Scan(dest ...any) error {
+	return interpretError(r.Row.Scan(dest...))
+}
+
+type rowsWrapper struct {
+	pgx.Rows
+}
+
+func (r *rowsWrapper) Close() error {
+	r.Rows.Close()
+	return nil
 }
 
 func interpretError(err error) error {
