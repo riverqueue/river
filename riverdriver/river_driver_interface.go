@@ -102,8 +102,8 @@ type Executor interface {
 	// the schema in the current search schema.
 	ColumnExists(ctx context.Context, tableName, columnName string) (bool, error)
 
-	// Exec executes raw SQL. Used for migrations.
-	Exec(ctx context.Context, sql string) (struct{}, error)
+	// Exec executes raw SQL.
+	Exec(ctx context.Context, sql string, args ...any) (ExecResult, error)
 
 	JobCancel(ctx context.Context, params *JobCancelParams) (*rivertype.JobRow, error)
 	JobCountByState(ctx context.Context, state rivertype.JobState) (int, error)
@@ -172,6 +172,10 @@ type Executor interface {
 	// TableExists checks whether a table exists for the schema in the current
 	// search schema.
 	TableExists(ctx context.Context, tableName string) (bool, error)
+}
+
+type ExecResult interface {
+	RowsAffected() int64
 }
 
 // ExecutorTx is an executor which is a transaction. In addition to standard

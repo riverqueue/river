@@ -62,6 +62,18 @@ func (d *Driver) UnwrapExecutor(tx *sql.Tx) riverdriver.ExecutorTx {
 	return &ExecutorTx{Executor: Executor{nil, tx}, tx: tx}
 }
 
+type execResultWrapper struct {
+	sql.Result
+}
+
+func (e *execResultWrapper) RowsAffected() int64 {
+	count, err := e.Result.RowsAffected()
+	if err != nil {
+		return 0
+	}
+	return count
+}
+
 type Executor struct {
 	dbPool *sql.DB
 	dbtx   dbsqlc.DBTX
@@ -83,9 +95,12 @@ func (e *Executor) ColumnExists(ctx context.Context, tableName, columnName strin
 	return exists, interpretError(err)
 }
 
-func (e *Executor) Exec(ctx context.Context, sql string) (struct{}, error) {
-	_, err := e.dbtx.ExecContext(ctx, sql)
-	return struct{}{}, interpretError(err)
+func (e *Executor) Exec(ctx context.Context, sql string, args ...any) (riverdriver.ExecResult, error) {
+	res, err := e.dbtx.ExecContext(ctx, sql, args...)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return &execResultWrapper{res}, interpretError(err)
 }
 
 func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error) {
