@@ -2,6 +2,7 @@ package maintenance
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/util/maputil"
 	"github.com/riverqueue/river/internal/util/sliceutil"
+	"github.com/riverqueue/river/rivertype"
 )
 
 const (
@@ -45,7 +47,7 @@ type QueueMaintainer struct {
 	servicesByName map[string]*maintenanceServiceWrapper
 }
 
-func NewQueueMaintainer(archetype *baseservice.Archetype, services []MaintenanceService) *QueueMaintainer {
+func NewQueueMaintainer(archetype *baseservice.Archetype, services []rivertype.MaintenanceService) *QueueMaintainer {
 	servicesByName := make(map[string]*maintenanceServiceWrapper, len(services))
 	for _, service := range services {
 		servicesByName[reflect.TypeOf(service).Elem().Name()] = baseservice.Init(archetype, &maintenanceServiceWrapper{
@@ -55,6 +57,19 @@ func NewQueueMaintainer(archetype *baseservice.Archetype, services []Maintenance
 	return baseservice.Init(archetype, &QueueMaintainer{
 		servicesByName: servicesByName,
 	})
+}
+
+// AddService adds a new service to the list of services to start and stop.
+// MUST be called before the initial Start.
+func (m *QueueMaintainer) AddService(service rivertype.MaintenanceService) error {
+	svcName := reflect.TypeOf(service).Elem().Name()
+	if _, alreadyExists := m.servicesByName[svcName]; alreadyExists {
+		return fmt.Errorf("service named %q already exists", svcName)
+	}
+	m.servicesByName[svcName] = baseservice.Init(&m.Archetype, &maintenanceServiceWrapper{
+		service: service,
+	})
+	return nil
 }
 
 // StaggerStartupDisable sets whether the short staggered sleep on start up
@@ -96,20 +111,16 @@ func (m *QueueMaintainer) Start(ctx context.Context) error {
 // GetService is a convenience method for getting a service by name and casting
 // it to the desired type. It should only be used in tests due to its use of
 // reflection and potential for panics.
-func GetService[T MaintenanceService](maintainer *QueueMaintainer) T {
+func GetService[T rivertype.MaintenanceService](maintainer *QueueMaintainer) T {
 	var kindPtr T
 	return maintainer.servicesByName[reflect.TypeOf(kindPtr).Elem().Name()].service.(T) //nolint:forcetypeassert
-}
-
-type MaintenanceService interface {
-	Run(ctx context.Context)
 }
 
 type maintenanceServiceWrapper struct {
 	baseservice.BaseService
 	startstop.BaseStartStop
 
-	service                MaintenanceService
+	service                rivertype.MaintenanceService
 	staggerStartupDisabled bool
 }
 
