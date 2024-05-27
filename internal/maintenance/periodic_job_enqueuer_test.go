@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
@@ -73,7 +74,6 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 					return nil
 				},
 			}, bundle.exec)
-		svc.StaggerStartupDisable(true)
 		svc.TestSignals.Init()
 
 		return svc, bundle
@@ -89,13 +89,6 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		return jobs
 	}
 
-	startService := func(t *testing.T, svc *PeriodicJobEnqueuer) {
-		t.Helper()
-
-		require.NoError(t, svc.Start(ctx))
-		t.Cleanup(svc.Stop)
-	}
-
 	t.Run("StartStopStress", func(t *testing.T) {
 		t.Parallel()
 
@@ -103,7 +96,10 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		svc.Logger = riverinternaltest.LoggerWarn(t)       // loop started/stop log is very noisy; suppress
 		svc.TestSignals = PeriodicJobEnqueuerTestSignals{} // deinit so channels don't fill
 
-		startstoptest.Stress(ctx, t, svc)
+		wrapped := baseservice.Init(riverinternaltest.BaseServiceArchetype(t), &maintenanceServiceWrapper{
+			service: svc,
+		})
+		startstoptest.Stress(ctx, t, wrapped)
 	})
 
 	// This test run is somewhat susceptible to the "ready margin" applied on
@@ -125,7 +121,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false)},
 		})
 
-		startService(t, svc)
+		runMaintenanceService(ctx, t, svc)
 
 		// Should be no jobs to start.
 		requireNJobs(t, bundle.exec, "periodic_job_500ms", 0)
@@ -150,7 +146,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), RunOnStart: true},
 		})
 
-		startService(t, svc)
+		runMaintenanceService(ctx, t, svc)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
 		job1 := requireNJobs(t, bundle.exec, "periodic_job_500ms", 1)[0]
@@ -177,7 +173,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("unique_periodic_job_500ms", true)},
 		})
 
-		startService(t, svc)
+		runMaintenanceService(ctx, t, svc)
 
 		// Should be no jobs to start.
 		requireNJobs(t, bundle.exec, "unique_periodic_job_500ms", 0)
@@ -215,7 +211,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		})
 
 		start := time.Now()
-		startService(t, svc)
+		runMaintenanceService(ctx, t, svc)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
 		requireNJobs(t, bundle.exec, "periodic_job_5s", 1)
@@ -237,7 +233,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			}, RunOnStart: true},
 		})
 
-		startService(t, svc)
+		runMaintenanceService(ctx, t, svc)
 
 		svc.TestSignals.SkippedJob.WaitOrTimeout()
 	})
@@ -260,8 +256,14 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			{ScheduleFunc: periodicIntervalSchedule(7 * 24 * time.Hour), ConstructorFunc: jobConstructorFunc("periodic_job_7d", false)},
 		})
 
-		startService(t, svc)
-
+		svcCtx, cancel := context.WithCancel(ctx)
+		stopped := make(chan struct{})
+		go func() {
+			defer close(stopped)
+			svc.Run(svcCtx)
+		}()
+		t.Cleanup(func() { riverinternaltest.WaitOrTimeout(t, stopped) })
+		t.Cleanup(cancel)
 		svc.TestSignals.EnteredLoop.WaitOrTimeout()
 
 		require.Equal(t, now.Add(500*time.Millisecond), svc.periodicJobs[periodicJobHandles[0]].nextRunAt)
@@ -279,11 +281,20 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			// for each job we check, but the alternative is an internal locking
 			// system needed for the tests only because modifying a job while
 			// the service is running will be detected by `-race`.
-			svc.Stop()
+			cancel()
+			riverinternaltest.WaitOrTimeout(t, stopped)
 
 			periodicJob.ScheduleFunc = periodicIntervalSchedule(365 * 24 * time.Hour)
 
-			require.NoError(t, svc.Start(ctx))
+			stopped = make(chan struct{})
+			svcCtx, cancel = context.WithCancel(ctx)
+			t.Cleanup(cancel)
+
+			go func() {
+				defer close(stopped)
+				svc.Run(svcCtx)
+			}()
+
 			svc.TestSignals.EnteredLoop.WaitOrTimeout()
 		}
 
@@ -321,7 +332,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			})
 		}
 
-		startService(t, svc)
+		runMaintenanceService(ctx, t, svc)
 
 		svc.TestSignals.EnteredLoop.WaitOrTimeout()
 
@@ -345,10 +356,9 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 					{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false), RunOnStart: true},
 				},
 			}, bundle.exec)
-		svc.StaggerStartupDisable(true)
 		svc.TestSignals.Init()
 
-		startService(t, svc)
+		runMaintenanceService(ctx, t, svc)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
 		requireNJobs(t, bundle.exec, "periodic_job_500ms", 1)
@@ -360,7 +370,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc, bundle := setup(t)
 
-		startService(t, svc)
+		runMaintenanceService(ctx, t, svc)
 
 		svc.Add(
 			&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
@@ -383,7 +393,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc, bundle := setup(t)
 
-		startService(t, svc)
+		runMaintenanceService(ctx, t, svc)
 
 		svc.AddMany([]*PeriodicJob{
 			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
@@ -404,7 +414,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc, bundle := setup(t)
 
-		startService(t, svc)
+		runMaintenanceService(ctx, t, svc)
 
 		handles := svc.AddMany([]*PeriodicJob{
 			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
@@ -436,7 +446,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc, bundle := setup(t)
 
-		startService(t, svc)
+		runMaintenanceService(ctx, t, svc)
 
 		handles := svc.AddMany([]*PeriodicJob{
 			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
@@ -461,7 +471,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc, bundle := setup(t)
 
-		startService(t, svc)
+		runMaintenanceService(ctx, t, svc)
 
 		handles := svc.AddMany([]*PeriodicJob{
 			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
@@ -529,7 +539,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc, _ := setup(t)
 
-		startService(t, svc)
+		runMaintenanceService(ctx, t, svc)
 
 		svc.TestSignals.EnteredLoop.WaitOrTimeout()
 
@@ -538,28 +548,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 	t.Run("StopsImmediately", func(t *testing.T) {
 		t.Parallel()
-
 		svc, _ := setup(t)
-
-		startService(t, svc)
-		svc.Stop()
-	})
-
-	t.Run("RespectsContextCancellation", func(t *testing.T) {
-		t.Parallel()
-
-		svc, _ := setup(t)
-
-		ctx, cancelFunc := context.WithCancel(ctx)
-		require.NoError(t, svc.Start(ctx))
-
-		// To avoid a potential race, make sure to get a reference to the
-		// service's stopped channel _before_ cancellation as it's technically
-		// possible for the cancel to "win" and remove the stopped channel
-		// before we can start waiting on it.
-		stopped := svc.Stopped()
-		cancelFunc()
-		riverinternaltest.WaitOrTimeout(t, stopped)
+		MaintenanceServiceStopsImmediately(ctx, t, svc)
 	})
 
 	t.Run("TriggersNotificationsOnEachQueueWithNewlyAvailableJobs", func(t *testing.T) {
@@ -579,7 +569,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			return nil
 		}
 
-		startService(t, svc)
+		runMaintenanceService(ctx, t, svc)
 		svc.TestSignals.EnteredLoop.WaitOrTimeout()
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
@@ -601,7 +591,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			return errors.New("test error")
 		}
 
-		startService(t, svc)
+		runMaintenanceService(ctx, t, svc)
 		svc.TestSignals.EnteredLoop.WaitOrTimeout()
 
 		// Ensure that no jobs were inserted because the notification errored:

@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/riverdriver"
@@ -44,9 +45,7 @@ func TestReindexer(t *testing.T) {
 		svc := NewReindexer(archetype, &ReindexerConfig{
 			ScheduleFunc: fromNow(500 * time.Millisecond),
 		}, bundle.exec)
-		svc.StaggerStartupDisable(true)
 		svc.TestSignals.Init()
-		t.Cleanup(svc.Stop)
 
 		return svc, bundle
 	}
@@ -69,7 +68,10 @@ func TestReindexer(t *testing.T) {
 		svc.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
 		svc.TestSignals = ReindexerTestSignals{}     // deinit so channels don't fill
 
-		startstoptest.Stress(ctx, t, svc)
+		wrapped := baseservice.Init(riverinternaltest.BaseServiceArchetype(t), &maintenanceServiceWrapper{
+			service: svc,
+		})
+		startstoptest.Stress(ctx, t, wrapped)
 	})
 
 	t.Run("ReindexesEachIndex", func(t *testing.T) {
@@ -84,7 +86,7 @@ func TestReindexer(t *testing.T) {
 		}
 		svc.Config.ScheduleFunc = runImmediatelyThenOnceAnHour()
 
-		require.NoError(t, svc.Start(ctx))
+		runMaintenanceService(ctx, t, svc)
 		svc.TestSignals.Reindexed.WaitOrTimeout()
 
 		select {
@@ -96,28 +98,8 @@ func TestReindexer(t *testing.T) {
 
 	t.Run("StopsImmediately", func(t *testing.T) {
 		t.Parallel()
-
 		svc, _ := setup(t)
-
-		require.NoError(t, svc.Start(ctx))
-		svc.Stop()
-	})
-
-	t.Run("RespectsContextCancellation", func(t *testing.T) {
-		t.Parallel()
-
-		svc, _ := setup(t)
-
-		ctx, cancelFunc := context.WithCancel(ctx)
-		require.NoError(t, svc.Start(ctx))
-
-		// To avoid a potential race, make sure to get a reference to the
-		// service's stopped channel _before_ cancellation as it's technically
-		// possible for the cancel to "win" and remove the stopped channel
-		// before we can start waiting on it.
-		stopped := svc.Stopped()
-		cancelFunc()
-		riverinternaltest.WaitOrTimeout(t, stopped)
+		MaintenanceServiceStopsImmediately(ctx, t, svc)
 	})
 
 	t.Run("DefaultConfigs", func(t *testing.T) {

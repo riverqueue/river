@@ -8,6 +8,7 @@ import (
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/util/maputil"
+	"github.com/riverqueue/river/internal/util/sliceutil"
 )
 
 const (
@@ -41,13 +42,15 @@ type QueueMaintainer struct {
 	baseservice.BaseService
 	startstop.BaseStartStop
 
-	servicesByName map[string]startstop.Service
+	servicesByName map[string]*maintenanceServiceWrapper
 }
 
-func NewQueueMaintainer(archetype *baseservice.Archetype, services []startstop.Service) *QueueMaintainer {
-	servicesByName := make(map[string]startstop.Service, len(services))
+func NewQueueMaintainer(archetype *baseservice.Archetype, services []MaintenanceService) *QueueMaintainer {
+	servicesByName := make(map[string]*maintenanceServiceWrapper, len(services))
 	for _, service := range services {
-		servicesByName[reflect.TypeOf(service).Elem().Name()] = service
+		servicesByName[reflect.TypeOf(service).Elem().Name()] = baseservice.Init(archetype, &maintenanceServiceWrapper{
+			service: service,
+		})
 	}
 	return baseservice.Init(archetype, &QueueMaintainer{
 		servicesByName: servicesByName,
@@ -59,9 +62,7 @@ func NewQueueMaintainer(archetype *baseservice.Archetype, services []startstop.S
 // staggered start up is not helpful for test run time.
 func (m *QueueMaintainer) StaggerStartupDisable(disabled bool) {
 	for _, svc := range m.servicesByName {
-		if svcWithDisable, ok := svc.(withStaggerStartupDisable); ok {
-			svcWithDisable.StaggerStartupDisable(disabled)
-		}
+		svc.StaggerStartupDisable(disabled)
 	}
 }
 
@@ -84,7 +85,9 @@ func (m *QueueMaintainer) Start(ctx context.Context) error {
 
 		<-ctx.Done()
 
-		startstop.StopAllParallel(maputil.Values(m.servicesByName))
+		startstop.StopAllParallel(sliceutil.Map(maputil.Values(m.servicesByName), func(svc *maintenanceServiceWrapper) startstop.Service {
+			return svc
+		}))
 	}()
 
 	return nil
@@ -93,42 +96,51 @@ func (m *QueueMaintainer) Start(ctx context.Context) error {
 // GetService is a convenience method for getting a service by name and casting
 // it to the desired type. It should only be used in tests due to its use of
 // reflection and potential for panics.
-func GetService[T startstop.Service](maintainer *QueueMaintainer) T {
+func GetService[T MaintenanceService](maintainer *QueueMaintainer) T {
 	var kindPtr T
-	return maintainer.servicesByName[reflect.TypeOf(kindPtr).Elem().Name()].(T) //nolint:forcetypeassert
+	return maintainer.servicesByName[reflect.TypeOf(kindPtr).Elem().Name()].service.(T) //nolint:forcetypeassert
 }
 
-// queueMaintainerServiceBase is a struct that should be embedded on all queue
-// maintainer services. Its main use is to provide a StaggerStart function that
-// should be called on service start to avoid thundering herd problems.
-type queueMaintainerServiceBase struct {
+type MaintenanceService interface {
+	Run(ctx context.Context)
+}
+
+type maintenanceServiceWrapper struct {
 	baseservice.BaseService
+	startstop.BaseStartStop
+
+	service                MaintenanceService
 	staggerStartupDisabled bool
 }
 
 // StaggerStart is called when queue maintainer services start. It jitters by
 // sleeping for a short random period so services don't all perform their first
 // run at exactly the same time.
-func (s *queueMaintainerServiceBase) StaggerStart(ctx context.Context) {
-	if s.staggerStartupDisabled {
+func (m *maintenanceServiceWrapper) StaggerStart(ctx context.Context) {
+	if m.staggerStartupDisabled {
 		return
 	}
 
-	s.CancellableSleepRandomBetween(ctx, 0*time.Second, 1*time.Second)
+	m.CancellableSleepRandomBetween(ctx, 0*time.Second, 1*time.Second)
 }
 
 // StaggerStartupDisable sets whether the short staggered sleep on start up
 // is disabled. This is useful in tests where the extra sleep involved in a
 // staggered start up is not helpful for test run time.
-func (s *queueMaintainerServiceBase) StaggerStartupDisable(disabled bool) {
-	s.staggerStartupDisabled = disabled
+func (m *maintenanceServiceWrapper) StaggerStartupDisable(disabled bool) {
+	m.staggerStartupDisabled = disabled
 }
 
-// withStaggerStartupDisable is an interface to a service whose stagger startup
-// sleep can be disable.
-type withStaggerStartupDisable interface {
-	// StaggerStartupDisable sets whether the short staggered sleep on start up
-	// is disabled. This is useful in tests where the extra sleep involved in a
-	// staggered start up is not helpful for test run time.
-	StaggerStartupDisable(disabled bool)
+func (m *maintenanceServiceWrapper) Start(ctx context.Context) error {
+	ctx, shouldStart, stopped := m.StartInit(ctx)
+	if !shouldStart {
+		return nil
+	}
+
+	m.StaggerStart(ctx)
+	go func() {
+		m.service.Run(ctx)
+		close(stopped)
+	}()
+	return nil
 }

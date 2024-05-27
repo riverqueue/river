@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/internal/util/timeutil"
@@ -74,8 +73,7 @@ func (c *JobRescuerConfig) mustValidate() *JobRescuerConfig {
 // JobRescuer periodically rescues jobs that have been executing for too long
 // and are considered to be "stuck".
 type JobRescuer struct {
-	queueMaintainerServiceBase
-	startstop.BaseStartStop
+	baseservice.BaseService
 
 	// exported for test purposes
 	Config      *JobRescuerConfig
@@ -99,46 +97,31 @@ func NewRescuer(archetype *baseservice.Archetype, config *JobRescuerConfig, exec
 	})
 }
 
-func (s *JobRescuer) Start(ctx context.Context) error {
-	ctx, shouldStart, stopped := s.StartInit(ctx)
-	if !shouldStart {
-		return nil
-	}
+func (s *JobRescuer) Run(ctx context.Context) {
+	s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStarted)
+	defer s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStopped)
 
-	s.StaggerStart(ctx)
-
-	go func() {
-		// This defer should come first so that it's last out, thereby avoiding
-		// races.
-		defer close(stopped)
-
-		s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStarted)
-		defer s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStopped)
-
-		ticker := timeutil.NewTickerWithInitialTick(ctx, s.Config.Interval)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-
-			res, err := s.runOnce(ctx)
-			if err != nil {
-				if !errors.Is(err, context.Canceled) {
-					s.Logger.ErrorContext(ctx, s.Name+": Error rescuing jobs", slog.String("error", err.Error()))
-				}
-				continue
-			}
-
-			s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
-				slog.Int64("num_jobs_discarded", res.NumJobsDiscarded),
-				slog.Int64("num_jobs_retry_scheduled", res.NumJobsRetried),
-			)
+	ticker := timeutil.NewTickerWithInitialTick(ctx, s.Config.Interval)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
-	}()
 
-	return nil
+		res, err := s.runOnce(ctx)
+		if err != nil {
+			if !errors.Is(err, context.Canceled) {
+				s.Logger.ErrorContext(ctx, s.Name+": Error rescuing jobs", slog.String("error", err.Error()))
+			}
+			continue
+		}
+
+		s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
+			slog.Int64("num_jobs_discarded", res.NumJobsDiscarded),
+			slog.Int64("num_jobs_retry_scheduled", res.NumJobsRetried),
+		)
+	}
 }
 
 type rescuerRunOnceResult struct {

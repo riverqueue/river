@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/internal/riverinternaltest/testfactory"
@@ -93,9 +94,7 @@ func TestJobRescuer(t *testing.T) {
 				},
 			},
 			bundle.exec)
-		rescuer.StaggerStartupDisable(true)
 		rescuer.TestSignals.Init()
-		t.Cleanup(rescuer.Stop)
 
 		return rescuer, bundle
 	}
@@ -103,7 +102,7 @@ func TestJobRescuer(t *testing.T) {
 	t.Run("Defaults", func(t *testing.T) {
 		t.Parallel()
 
-		cleaner := NewRescuer(
+		rescuer := NewRescuer(
 			riverinternaltest.BaseServiceArchetype(t),
 			&JobRescuerConfig{
 				ClientRetryPolicy:   &SimpleClientRetryPolicy{},
@@ -112,8 +111,8 @@ func TestJobRescuer(t *testing.T) {
 			nil,
 		)
 
-		require.Equal(t, JobRescuerRescueAfterDefault, cleaner.Config.RescueAfter)
-		require.Equal(t, JobRescuerIntervalDefault, cleaner.Config.Interval)
+		require.Equal(t, JobRescuerRescueAfterDefault, rescuer.Config.RescueAfter)
+		require.Equal(t, JobRescuerIntervalDefault, rescuer.Config.Interval)
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {
@@ -123,14 +122,17 @@ func TestJobRescuer(t *testing.T) {
 		rescuer.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
 		rescuer.TestSignals = JobRescuerTestSignals{}    // deinit so channels don't fill
 
-		startstoptest.Stress(ctx, t, rescuer)
+		wrapped := baseservice.Init(riverinternaltest.BaseServiceArchetype(t), &maintenanceServiceWrapper{
+			service: rescuer,
+		})
+		startstoptest.Stress(ctx, t, wrapped)
 	})
 
 	t.Run("RescuesStuckJobs", func(t *testing.T) {
 		t.Parallel()
 		require := require.New(t)
 
-		cleaner, bundle := setup(t)
+		rescuer, bundle := setup(t)
 
 		stuckToRetryJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
 		stuckToRetryJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)})
@@ -157,10 +159,10 @@ func TestJobRescuer(t *testing.T) {
 		longTimeOutJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKindLongTimeout), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)})
 		longTimeOutJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKindLongTimeout), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-6 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)})
 
-		require.NoError(cleaner.Start(ctx))
+		runMaintenanceService(ctx, t, rescuer)
 
-		cleaner.TestSignals.FetchedBatch.WaitOrTimeout()
-		cleaner.TestSignals.UpdatedBatch.WaitOrTimeout()
+		rescuer.TestSignals.FetchedBatch.WaitOrTimeout()
+		rescuer.TestSignals.UpdatedBatch.WaitOrTimeout()
 
 		confirmRetried := func(jobBefore *rivertype.JobRow) {
 			jobAfter, err := bundle.exec.JobGetByID(ctx, jobBefore.ID)
@@ -218,12 +220,12 @@ func TestJobRescuer(t *testing.T) {
 	t.Run("RescuesInBatches", func(t *testing.T) {
 		t.Parallel()
 
-		cleaner, bundle := setup(t)
-		cleaner.batchSize = 10 // reduced size for test speed
+		rescuer, bundle := setup(t)
+		rescuer.batchSize = 10 // reduced size for test speed
 
 		// Add one to our chosen batch size to get one extra job and therefore
 		// one extra batch, ensuring that we've tested working multiple.
-		numJobs := cleaner.batchSize + 1
+		numJobs := rescuer.batchSize + 1
 
 		jobs := make([]*rivertype.JobRow, numJobs)
 
@@ -232,13 +234,13 @@ func TestJobRescuer(t *testing.T) {
 			jobs[i] = job
 		}
 
-		require.NoError(t, cleaner.Start(ctx))
+		runMaintenanceService(ctx, t, rescuer)
 
 		// See comment above. Exactly two batches are expected.
-		cleaner.TestSignals.FetchedBatch.WaitOrTimeout()
-		cleaner.TestSignals.UpdatedBatch.WaitOrTimeout()
-		cleaner.TestSignals.FetchedBatch.WaitOrTimeout()
-		cleaner.TestSignals.UpdatedBatch.WaitOrTimeout() // need to wait until after this for the conn to be free
+		rescuer.TestSignals.FetchedBatch.WaitOrTimeout()
+		rescuer.TestSignals.UpdatedBatch.WaitOrTimeout()
+		rescuer.TestSignals.FetchedBatch.WaitOrTimeout()
+		rescuer.TestSignals.UpdatedBatch.WaitOrTimeout() // need to wait until after this for the conn to be free
 
 		for _, job := range jobs {
 			jobUpdated, err := bundle.exec.JobGetByID(ctx, job.ID)
@@ -250,45 +252,25 @@ func TestJobRescuer(t *testing.T) {
 	t.Run("CustomizableInterval", func(t *testing.T) {
 		t.Parallel()
 
-		cleaner, _ := setup(t)
-		cleaner.Config.Interval = 1 * time.Microsecond
+		rescuer, _ := setup(t)
+		rescuer.Config.Interval = 1 * time.Microsecond
 
-		require.NoError(t, cleaner.Start(ctx))
+		runMaintenanceService(ctx, t, rescuer)
 
 		// This should trigger ~immediately every time:
 		for i := 0; i < 5; i++ {
 			t.Logf("Iteration %d", i)
-			cleaner.TestSignals.FetchedBatch.WaitOrTimeout()
+			rescuer.TestSignals.FetchedBatch.WaitOrTimeout()
 		}
 	})
 
 	t.Run("StopsImmediately", func(t *testing.T) {
 		t.Parallel()
 
-		cleaner, _ := setup(t)
-		cleaner.Config.Interval = time.Minute // should only trigger once for the initial run
+		rescuer, _ := setup(t)
+		rescuer.Config.Interval = time.Minute // should only trigger once for the initial run
 
-		require.NoError(t, cleaner.Start(ctx))
-		cleaner.Stop()
-	})
-
-	t.Run("RespectsContextCancellation", func(t *testing.T) {
-		t.Parallel()
-
-		cleaner, _ := setup(t)
-		cleaner.Config.Interval = time.Minute // should only trigger once for the initial run
-
-		ctx, cancelFunc := context.WithCancel(ctx)
-
-		require.NoError(t, cleaner.Start(ctx))
-
-		// To avoid a potential race, make sure to get a reference to the
-		// service's stopped channel _before_ cancellation as it's technically
-		// possible for the cancel to "win" and remove the stopped channel
-		// before we can start waiting on it.
-		stopped := cleaner.Stopped()
-		cancelFunc()
-		riverinternaltest.WaitOrTimeout(t, stopped)
+		MaintenanceServiceStopsImmediately(ctx, t, rescuer)
 	})
 
 	t.Run("CanRunMultipleTimes", func(t *testing.T) {
@@ -299,16 +281,31 @@ func TestJobRescuer(t *testing.T) {
 
 		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), Attempt: ptrutil.Ptr(5), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
 
-		require.NoError(t, rescuer.Start(ctx))
+		ctx1, cancel1 := context.WithCancel(ctx)
+		stopCh1 := make(chan struct{})
+		go func() {
+			defer close(stopCh1)
+			rescuer.Run(ctx1)
+		}()
+		t.Cleanup(func() { riverinternaltest.WaitOrTimeout(t, stopCh1) })
+		t.Cleanup(cancel1)
 
 		rescuer.TestSignals.FetchedBatch.WaitOrTimeout()
 		rescuer.TestSignals.UpdatedBatch.WaitOrTimeout()
 
-		rescuer.Stop()
+		cancel1()
+		riverinternaltest.WaitOrTimeout(t, stopCh1)
 
 		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), Attempt: ptrutil.Ptr(5), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)})
 
-		require.NoError(t, rescuer.Start(ctx))
+		ctx2, cancel2 := context.WithCancel(ctx)
+		stopCh2 := make(chan struct{})
+		go func() {
+			defer close(stopCh2)
+			rescuer.Run(ctx2)
+		}()
+		t.Cleanup(func() { riverinternaltest.WaitOrTimeout(t, stopCh2) })
+		t.Cleanup(cancel2)
 
 		rescuer.TestSignals.FetchedBatch.WaitOrTimeout()
 		rescuer.TestSignals.UpdatedBatch.WaitOrTimeout()
