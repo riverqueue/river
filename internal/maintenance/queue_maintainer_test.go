@@ -16,9 +16,10 @@ import (
 	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
 )
 
-func runMaintenanceService(ctx context.Context, t *testing.T, svc MaintenanceService) {
+func runMaintenanceService(ctx context.Context, t *testing.T, svc rivertype.MaintenanceService) {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -71,7 +72,7 @@ func TestQueueMaintainer(t *testing.T) {
 
 	ctx := context.Background()
 
-	setup := func(t *testing.T, services []MaintenanceService) *QueueMaintainer {
+	setup := func(t *testing.T, services []rivertype.MaintenanceService) *QueueMaintainer {
 		t.Helper()
 
 		maintainer := NewQueueMaintainer(riverinternaltest.BaseServiceArchetype(t), services)
@@ -84,7 +85,7 @@ func TestQueueMaintainer(t *testing.T) {
 		t.Parallel()
 
 		testSvc := newTestService(t)
-		maintainer := setup(t, []MaintenanceService{testSvc})
+		maintainer := setup(t, []rivertype.MaintenanceService{testSvc})
 
 		require.NoError(t, maintainer.Start(ctx))
 		testSvc.testSignals.started.WaitOrTimeout()
@@ -105,7 +106,7 @@ func TestQueueMaintainer(t *testing.T) {
 
 		// Use realistic services in this one so we can verify stress not only
 		// on the queue maintainer, but it and all its subservices together.
-		maintainer := setup(t, []MaintenanceService{
+		maintainer := setup(t, []rivertype.MaintenanceService{
 			NewJobCleaner(archetype, &JobCleanerConfig{}, driver),
 			NewPeriodicJobEnqueuer(archetype, &PeriodicJobEnqueuerConfig{
 				PeriodicJobs: []*PeriodicJob{
@@ -128,7 +129,7 @@ func TestQueueMaintainer(t *testing.T) {
 		t.Parallel()
 
 		testSvc := newTestService(t)
-		maintainer := setup(t, []MaintenanceService{testSvc})
+		maintainer := setup(t, []rivertype.MaintenanceService{testSvc})
 
 		// Tolerate being stopped without having been started, without blocking:
 		maintainer.Stop()
@@ -142,7 +143,7 @@ func TestQueueMaintainer(t *testing.T) {
 		t.Parallel()
 
 		testSvc := newTestService(t)
-		maintainer := setup(t, []MaintenanceService{testSvc})
+		maintainer := setup(t, []rivertype.MaintenanceService{testSvc})
 
 		runOnce := func() {
 			require.NoError(t, maintainer.Start(ctx))
@@ -160,7 +161,7 @@ func TestQueueMaintainer(t *testing.T) {
 		t.Parallel()
 
 		testSvc := newTestService(t)
-		maintainer := setup(t, []MaintenanceService{testSvc})
+		maintainer := setup(t, []rivertype.MaintenanceService{testSvc})
 
 		ctx, cancelFunc := context.WithCancel(ctx)
 
@@ -180,7 +181,7 @@ func TestQueueMaintainer(t *testing.T) {
 
 		testSvc := newTestService(t)
 
-		maintainer := setup(t, []MaintenanceService{testSvc})
+		maintainer := setup(t, []rivertype.MaintenanceService{testSvc})
 
 		require.NoError(t, maintainer.Start(ctx))
 		testSvc.testSignals.started.WaitOrTimeout()
@@ -195,7 +196,7 @@ func TestQueueMaintainer(t *testing.T) {
 	})
 }
 
-func MaintenanceServiceStopsImmediately(ctx context.Context, t *testing.T, svc MaintenanceService) {
+func MaintenanceServiceStopsImmediately(ctx context.Context, t *testing.T, svc rivertype.MaintenanceService) {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(ctx)

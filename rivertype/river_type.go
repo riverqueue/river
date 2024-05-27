@@ -4,6 +4,7 @@
 package rivertype
 
 import (
+	"context"
 	"errors"
 	"time"
 )
@@ -211,6 +212,10 @@ type AttemptError struct {
 	// Trace contains a stack trace from a job that panicked. The trace is
 	// produced by invoking `debug.Trace()`.
 	Trace string `json:"trace"`
+}
+
+type MaintenanceService interface {
+	Run(ctx context.Context)
 }
 
 // PeriodicJobHandle is a reference to a dynamically added periodic job

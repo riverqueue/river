@@ -530,7 +530,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		// Maintenance services
 		//
 
-		maintenanceServices := []maintenance.MaintenanceService{}
+		maintenanceServices := []rivertype.MaintenanceService{}
 
 		{
 			jobCleaner := maintenance.NewJobCleaner(archetype, &maintenance.JobCleanerConfig{
@@ -820,6 +820,17 @@ func (c *Client[TTx]) StopAndCancel(ctx context.Context) error {
 // It is not affected by any contexts passed to Stop or StopAndCancel.
 func (c *Client[TTx]) Stopped() <-chan struct{} {
 	return c.stopped
+}
+
+// AddMaintenanceService adds a custom maintenance service to the client.
+// Maintenance services are custom chunks of logic that will be run only on the
+// elected leader client. The service will be run if this client becomes the
+// leader, and stopped if it loses leadership.
+//
+// Must be called before the client is started. Services must immediately exit
+// after context cancellation to avoid impacting other maintenance services.
+func (c *Client[TTx]) AddMaintenanceService(service rivertype.MaintenanceService) {
+	c.queueMaintainer.AddService(service)
 }
 
 // Subscribe subscribes to the provided kinds of events that occur within the
