@@ -668,22 +668,20 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 			return err
 		}
 
-		if c.completer != nil {
-			// The completer is part of the services list below, but although it can
-			// stop gracefully along with all the other services, it needs to be
-			// started with a context that's _not_ fetchCtx. This ensures that even
-			// when fetch is cancelled on shutdown, the completer is still given a
-			// separate opportunity to start stopping only after the producers have
-			// finished up and returned.
-			if err := c.completer.Start(ctx); err != nil {
-				stopServicesOnError()
-				return err
-			}
-
-			// Receives job complete notifications from the completer and
-			// distributes them to any subscriptions.
-			c.completer.Subscribe(c.distributeJobCompleterCallback)
+		// The completer is part of the services list below, but although it can
+		// stop gracefully along with all the other services, it needs to be
+		// started with a context that's _not_ fetchCtx. This ensures that even
+		// when fetch is cancelled on shutdown, the completer is still given a
+		// separate opportunity to start stopping only after the producers have
+		// finished up and returned.
+		if err := c.completer.Start(ctx); err != nil {
+			stopServicesOnError()
+			return err
 		}
+
+		// Receives job complete notifications from the completer and
+		// distributes them to any subscriptions.
+		c.completer.Subscribe(c.distributeJobCompleterCallback)
 
 		// We use separate contexts for fetching and working to allow for a graceful
 		// stop. Both inherit from the provided context, so if it's cancelled, a
