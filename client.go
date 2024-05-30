@@ -490,22 +490,20 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 
 		for queue, queueConfig := range config.Queues {
 			client.producersByQueueName[queue] = newProducer(archetype, driver.GetExecutor(), &producerConfig{
-				ClientID:          config.ID,
-				Completer:         client.completer,
-				ErrorHandler:      config.ErrorHandler,
-				FetchCooldown:     config.FetchCooldown,
-				FetchPollInterval: config.FetchPollInterval,
-				JobTimeout:        config.JobTimeout,
-				MaxWorkers:        queueConfig.MaxWorkers,
-				Notifier:          client.notifier,
-				Queue:             queue,
-				QueueEventCallback: func(event *Event) {
-					client.distributeQueueEvent(event)
-				},
-				RetryPolicy:       config.RetryPolicy,
-				SchedulerInterval: config.schedulerInterval,
-				StatusFunc:        client.monitor.SetProducerStatus,
-				Workers:           config.Workers,
+				ClientID:           config.ID,
+				Completer:          client.completer,
+				ErrorHandler:       config.ErrorHandler,
+				FetchCooldown:      config.FetchCooldown,
+				FetchPollInterval:  config.FetchPollInterval,
+				JobTimeout:         config.JobTimeout,
+				MaxWorkers:         queueConfig.MaxWorkers,
+				Notifier:           client.notifier,
+				Queue:              queue,
+				QueueEventCallback: client.distributeQueueEvent,
+				RetryPolicy:        config.RetryPolicy,
+				SchedulerInterval:  config.schedulerInterval,
+				StatusFunc:         client.monitor.SetProducerStatus,
+				Workers:            config.Workers,
 			})
 			client.monitor.InitializeProducerStatus(queue)
 		}
