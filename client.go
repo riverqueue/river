@@ -810,13 +810,13 @@ func (c *Client[TTx]) Stop(ctx context.Context) error {
 // no need to call this method if the context passed to Run is cancelled
 // instead.
 func (c *Client[TTx]) StopAndCancel(ctx context.Context) error {
+	c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Hard stop started; cancelling all work")
+	c.workCancel(rivercommon.ErrShutdown)
+
 	shouldStop, stopped, finalizeStop := c.baseStartStop.StopInit()
 	if !shouldStop {
 		return nil
 	}
-
-	c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Hard stop started; cancelling all work")
-	c.workCancel(rivercommon.ErrShutdown)
 
 	select {
 	case <-ctx.Done(): // stop context cancelled

@@ -645,39 +645,83 @@ func Test_Client(t *testing.T) {
 	t.Run("StopAndCancel", func(t *testing.T) {
 		t.Parallel()
 
-		client, _ := setup(t)
-		jobStartedChan := make(chan int64)
-		jobDoneChan := make(chan struct{})
-
-		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+		type testBundle struct {
+			jobDoneChan    chan struct{}
+			jobStartedChan chan int64
 		}
 
-		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
-			jobStartedChan <- job.ID
-			<-ctx.Done()
-			require.ErrorIs(t, context.Cause(ctx), rivercommon.ErrShutdown)
-			close(jobDoneChan)
-			return nil
-		}))
+		setupStopAndCancel := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+			t.Helper()
 
-		startClient(ctx, t, client)
+			client, _ := setup(t)
+			jobStartedChan := make(chan int64)
+			jobDoneChan := make(chan struct{})
 
-		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
-		require.NoError(t, err)
+			type JobArgs struct {
+				JobArgsReflectKind[JobArgs]
+			}
 
-		startedJobID := riverinternaltest.WaitOrTimeout(t, jobStartedChan)
-		require.Equal(t, insertRes.Job.ID, startedJobID)
+			AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+				jobStartedChan <- job.ID
+				<-ctx.Done()
+				require.ErrorIs(t, context.Cause(ctx), rivercommon.ErrShutdown)
+				close(jobDoneChan)
+				return nil
+			}))
 
-		select {
-		case <-client.Stopped():
-			t.Fatal("expected client to not be stopped yet")
-		default:
+			startClient(ctx, t, client)
+
+			insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
+			require.NoError(t, err)
+
+			startedJobID := riverinternaltest.WaitOrTimeout(t, jobStartedChan)
+			require.Equal(t, insertRes.Job.ID, startedJobID)
+
+			select {
+			case <-client.Stopped():
+				t.Fatal("expected client to not be stopped yet")
+			default:
+			}
+
+			return client, &testBundle{
+				jobDoneChan:    jobDoneChan,
+				jobStartedChan: jobStartedChan,
+			}
 		}
 
-		require.NoError(t, client.StopAndCancel(ctx))
+		t.Run("OnItsOwn", func(t *testing.T) {
+			t.Parallel()
 
-		riverinternaltest.WaitOrTimeout(t, client.Stopped())
+			client, _ := setupStopAndCancel(t)
+
+			require.NoError(t, client.StopAndCancel(ctx))
+			riverinternaltest.WaitOrTimeout(t, client.Stopped())
+		})
+
+		t.Run("AfterStop", func(t *testing.T) {
+			t.Parallel()
+
+			client, bundle := setupStopAndCancel(t)
+
+			go func() {
+				require.NoError(t, client.Stop(ctx))
+			}()
+
+			select {
+			case <-client.Stopped():
+				t.Fatal("expected client to not be stopped yet")
+			case <-time.After(500 * time.Millisecond):
+			}
+
+			require.NoError(t, client.StopAndCancel(ctx))
+			riverinternaltest.WaitOrTimeout(t, client.Stopped())
+
+			select {
+			case <-bundle.jobDoneChan:
+			default:
+				t.Fatal("expected job to be have exited")
+			}
+		})
 	})
 }
 
