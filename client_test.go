@@ -2957,7 +2957,7 @@ func Test_Client_Subscribe(t *testing.T) {
 		// Drops through immediately because the channel is closed.
 		riverinternaltest.WaitOrTimeout(t, subscribeChan)
 
-		require.Empty(t, client.subscriptions)
+		require.Empty(t, client.subscriptionManager.subscriptions)
 	})
 }
 

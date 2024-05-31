@@ -116,11 +116,11 @@ func TestJobExecutor_Execute(t *testing.T) {
 	ctx := context.Background()
 
 	type testBundle struct {
-		completer         *jobcompleter.InlineCompleter
-		exec              riverdriver.Executor
-		errorHandler      *testErrorHandler
-		getUpdatesAndStop func() []jobcompleter.CompleterJobUpdated
-		jobRow            *rivertype.JobRow
+		completer    *jobcompleter.InlineCompleter
+		exec         riverdriver.Executor
+		errorHandler *testErrorHandler
+		jobRow       *rivertype.JobRow
+		updateCh     <-chan []jobcompleter.CompleterJobUpdated
 	}
 
 	setup := func(t *testing.T) (*jobExecutor, *testBundle) {
@@ -130,19 +130,11 @@ func TestJobExecutor_Execute(t *testing.T) {
 			tx        = riverinternaltest.TestTx(ctx, t)
 			archetype = riverinternaltest.BaseServiceArchetype(t)
 			exec      = riverpgxv5.New(nil).UnwrapExecutor(tx)
-			completer = jobcompleter.NewInlineCompleter(archetype, exec)
+			updateCh  = make(chan []jobcompleter.CompleterJobUpdated, 10)
+			completer = jobcompleter.NewInlineCompleter(archetype, exec, updateCh)
 		)
 
-		var updates []jobcompleter.CompleterJobUpdated
-		completer.Subscribe(func(update jobcompleter.CompleterJobUpdated) {
-			updates = append(updates, update)
-		})
-
-		getJobUpdates := func() []jobcompleter.CompleterJobUpdated {
-			completer.Stop()
-			return updates
-		}
-		t.Cleanup(func() { _ = getJobUpdates() })
+		t.Cleanup(completer.Stop)
 
 		workUnitFactory := newWorkUnitFactoryWithCustomRetry(func() error { return nil }, nil)
 
@@ -167,11 +159,11 @@ func TestJobExecutor_Execute(t *testing.T) {
 		job = jobs[0]
 
 		bundle := &testBundle{
-			completer:         completer,
-			exec:              exec,
-			errorHandler:      newTestErrorHandler(),
-			getUpdatesAndStop: getJobUpdates,
-			jobRow:            job,
+			completer:    completer,
+			exec:         exec,
+			errorHandler: newTestErrorHandler(),
+			jobRow:       job,
+			updateCh:     updateCh,
 		}
 
 		// allocate this context just so we can set the CancelFunc:
@@ -206,19 +198,24 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Stop()
+		jobUpdates := riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateCompleted, job.State)
 
-		jobUpdates := bundle.getUpdatesAndStop()
 		require.Len(t, jobUpdates, 1)
 		jobUpdate := jobUpdates[0]
 		t.Logf("Job statistics: %+v", jobUpdate.JobStats)
 		require.NotZero(t, jobUpdate.JobStats.CompleteDuration)
 		require.NotZero(t, jobUpdate.JobStats.QueueWaitDuration)
 		require.NotZero(t, jobUpdate.JobStats.RunDuration)
+
+		select {
+		case <-bundle.updateCh:
+			t.Fatalf("unexpected job update: %+v", jobUpdate)
+		default:
+		}
 	})
 
 	t.Run("FirstError", func(t *testing.T) {
@@ -232,7 +229,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Stop()
+		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -256,7 +253,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Stop()
+		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -276,7 +273,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		{
 			executor.Execute(ctx)
-			executor.Completer.Stop()
+			riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 			job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 			require.NoError(t, err)
@@ -295,7 +292,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		{
 			executor.Execute(ctx)
-			executor.Completer.Stop()
+			riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 			job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 			require.NoError(t, err)
@@ -315,7 +312,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Stop()
+		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -335,7 +332,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return cancelErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Stop()
+		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -358,7 +355,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return cancelErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Stop()
+		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -378,7 +375,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return cancelErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Stop()
+		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -398,7 +395,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Stop()
+		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -418,7 +415,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Stop()
+		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -436,7 +433,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Stop()
+		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -457,7 +454,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}
 
 		executor.Execute(ctx)
-		executor.Completer.Stop()
+		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -478,7 +475,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}
 
 		executor.Execute(ctx)
-		executor.Completer.Stop()
+		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -499,7 +496,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}
 
 		executor.Execute(ctx)
-		executor.Completer.Stop()
+		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -515,7 +512,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { panic("panic val") }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Stop()
+		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -536,7 +533,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { panic("panic val") }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Stop()
+		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -554,7 +551,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { panic("panic val") }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		executor.Completer.Stop()
+		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -574,7 +571,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}
 
 		executor.Execute(ctx)
-		executor.Completer.Stop()
+		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -594,7 +591,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}
 
 		executor.Execute(ctx)
-		executor.Completer.Stop()
+		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -614,7 +611,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}
 
 		executor.Execute(ctx)
-		executor.Completer.Stop()
+		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -634,7 +631,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.CancelFunc = cancelFunc
 
 		executor.Execute(workCtx)
-		executor.Completer.Stop()
+		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		require.ErrorIs(t, context.Cause(workCtx), errExecutorDefaultCancel)
 	})
@@ -664,7 +661,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		t.Cleanup(func() { cancelFunc(nil) })
 
 		executor.Execute(workCtx)
-		executor.Completer.Stop()
+		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
 
 		jobRow, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
