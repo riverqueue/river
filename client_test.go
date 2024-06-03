@@ -4176,7 +4176,16 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 	t.Run("WorkerInsertOptsOverrides", func(t *testing.T) {
 		t.Parallel()
 
-		insertParams, _, err := insertParamsFromArgsAndOptions(&customInsertOptsJobArgs{}, nil)
+		args := &customInsertOptsJobArgs{
+			insertOpts: InsertOpts{
+				MaxAttempts: 42,
+				Priority:    2,
+				Queue:       "other",
+				Tags:        []string{"tag1", "tag2"},
+			},
+		}
+
+		insertParams, _, err := insertParamsFromArgsAndOptions(args, nil)
 		require.NoError(t, err)
 		// All these come from overrides in customInsertOptsJobArgs's definition:
 		require.Equal(t, 42, insertParams.MaxAttempts)
@@ -4233,6 +4242,164 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		require.EqualError(t, err, "JobUniqueOpts.ByPeriod should not be less than 1 second")
 		require.Nil(t, insertParams)
 	})
+
+	t.Run("MetadataReconcileExclude", func(t *testing.T) {
+		t.Parallel()
+
+		args := &customInsertOptsJobArgs{
+			insertOpts: InsertOpts{
+				Metadata: mustMarshal(t, map[string]any{
+					"key1": map[string]any{
+						"subkey2": "subval2",
+					},
+					"key_ignored": "ignored",
+				}),
+			},
+		}
+
+		insertParams, _, err := insertParamsFromArgsAndOptions(args, &InsertOpts{
+			Metadata: mustMarshal(t, map[string]any{
+				"key1": map[string]any{
+					"subkey1": "subval1",
+				},
+				"key2": "val2",
+			}),
+		})
+		require.NoError(t, err)
+		require.Equal(t, map[string]any{
+			"key1": map[string]any{ // subhash does not merge
+				"subkey1": "subval1",
+			},
+			"key2": "val2",
+		}, mustUnmarshal(t, insertParams.Metadata))
+	})
+
+	t.Run("MetadataReconcileMerge", func(t *testing.T) {
+		t.Parallel()
+
+		args := &customInsertOptsJobArgs{
+			insertOpts: InsertOpts{
+				Metadata: mustMarshal(t, map[string]any{
+					"key1": map[string]any{
+						"subkey2": "subval2",
+					},
+					"key_merged": "merged",
+				}),
+			},
+		}
+
+		insertParams, _, err := insertParamsFromArgsAndOptions(args, &InsertOpts{
+			Metadata: mustMarshal(t, map[string]any{
+				"key1": map[string]any{
+					"subkey1": "subval1",
+				},
+				"key2": "val2",
+			}),
+			MetadataReconcile: MetadataReconcileMerge,
+		})
+		require.NoError(t, err)
+		require.Equal(t, map[string]any{
+			"key1": map[string]any{ // subhash does not merge
+				"subkey1": "subval1",
+			},
+			"key2":       "val2",
+			"key_merged": "merged",
+		}, mustUnmarshal(t, insertParams.Metadata))
+	})
+
+	t.Run("MetadataReconcileMergeDeep", func(t *testing.T) {
+		t.Parallel()
+
+		args := &customInsertOptsJobArgs{
+			insertOpts: InsertOpts{
+				Metadata: mustMarshal(t, map[string]any{
+					"key1": map[string]any{
+						"subkey2": "subval2",
+					},
+					"key_merged": "merged",
+				}),
+			},
+		}
+
+		insertParams, _, err := insertParamsFromArgsAndOptions(args, &InsertOpts{
+			Metadata: mustMarshal(t, map[string]any{
+				"key1": map[string]any{
+					"subkey1": "subval1",
+				},
+				"key2": "val2",
+			}),
+			MetadataReconcile: MetadataReconcileMergeDeep,
+		})
+		require.NoError(t, err)
+		require.Equal(t, map[string]any{
+			"key1": map[string]any{ // subhash does not merge
+				"subkey1": "subval1",
+				"subkey2": "subval2",
+			},
+			"key2":       "val2",
+			"key_merged": "merged",
+		}, mustUnmarshal(t, insertParams.Metadata))
+	})
+
+	t.Run("MetadataFromJobOnly", func(t *testing.T) {
+		t.Parallel()
+
+		args := &customInsertOptsJobArgs{
+			insertOpts: InsertOpts{
+				Metadata: mustMarshal(t, map[string]any{
+					"key1": "key2",
+					"key2": "val2",
+				}),
+			},
+		}
+
+		insertParams, _, err := insertParamsFromArgsAndOptions(args, &InsertOpts{
+			Metadata: nil,
+		})
+		require.NoError(t, err)
+		require.Equal(t, map[string]any{
+			"key1": "key2",
+			"key2": "val2",
+		}, mustUnmarshal(t, insertParams.Metadata))
+	})
+
+	t.Run("MetadataFromParamsOnly", func(t *testing.T) {
+		t.Parallel()
+
+		args := &customInsertOptsJobArgs{
+			insertOpts: InsertOpts{
+				Metadata: nil,
+			},
+		}
+
+		insertParams, _, err := insertParamsFromArgsAndOptions(args, &InsertOpts{
+			Metadata: mustMarshal(t, map[string]any{
+				"key1": "key2",
+				"key2": "val2",
+			}),
+		})
+		require.NoError(t, err)
+		require.Equal(t, map[string]any{
+			"key1": "key2",
+			"key2": "val2",
+		}, mustUnmarshal(t, insertParams.Metadata))
+	})
+
+	t.Run("MetadataDefault", func(t *testing.T) {
+		t.Parallel()
+
+		args := &customInsertOptsJobArgs{
+			insertOpts: InsertOpts{
+				Metadata: nil,
+			},
+		}
+
+		insertParams, _, err := insertParamsFromArgsAndOptions(args, &InsertOpts{
+			Metadata: nil,
+		})
+		require.NoError(t, err)
+		require.Equal(t, map[string]any{}, mustUnmarshal(t, insertParams.Metadata))
+	})
 }
 
 func TestID(t *testing.T) {
@@ -4256,17 +4423,14 @@ func TestID(t *testing.T) {
 	})
 }
 
-type customInsertOptsJobArgs struct{}
+type customInsertOptsJobArgs struct {
+	insertOpts InsertOpts
+}
 
 func (w *customInsertOptsJobArgs) Kind() string { return "customInsertOpts" }
 
 func (w *customInsertOptsJobArgs) InsertOpts() InsertOpts {
-	return InsertOpts{
-		MaxAttempts: 42,
-		Priority:    2,
-		Queue:       "other",
-		Tags:        []string{"tag1", "tag2"},
-	}
+	return w.insertOpts
 }
 
 func (w *customInsertOptsJobArgs) Work(context.Context, *Job[noOpArgs]) error { return nil }
@@ -4499,4 +4663,199 @@ func TestDefaultClientIDWithHost(t *testing.T) {
 	require.Equal(t, strings.Repeat("a", 59)+"_2024_03_07T04_39_12", defaultClientIDWithHost(startedAt, strings.Repeat("a", 59)))
 	require.Equal(t, strings.Repeat("a", 60)+"_2024_03_07T04_39_12", defaultClientIDWithHost(startedAt, strings.Repeat("a", 60)))
 	require.Equal(t, strings.Repeat("a", 60)+"_2024_03_07T04_39_12", defaultClientIDWithHost(startedAt, strings.Repeat("a", 61)))
+}
+
+func TestMergeMetadata(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Simple", func(t *testing.T) {
+		t.Parallel()
+
+		mergedMetadata, err := mergeMetadata(
+			mustMarshal(t, map[string]any{
+				"key1": "val1",
+				"key2": "val2",
+			}), mustMarshal(t, map[string]any{
+				"key3": "val3",
+				"key4": "val4",
+			}), false,
+		)
+		require.NoError(t, err)
+
+		require.Equal(t, map[string]any{
+			"key1": "val1",
+			"key2": "val2",
+			"key3": "val3",
+			"key4": "val4",
+		}, mustUnmarshal(t, mergedMetadata))
+	})
+
+	t.Run("ShallowMerge", func(t *testing.T) {
+		t.Parallel()
+
+		mergedMetadata, err := mergeMetadata(
+			mustMarshal(t, map[string]any{
+				"key1": map[string]any{
+					"subkey1": "subval1",
+				},
+			}), mustMarshal(t, map[string]any{
+				"key1": map[string]any{
+					"subkey2": "subval2",
+				},
+			}), false,
+		)
+		require.NoError(t, err)
+
+		require.Equal(t, map[string]any{
+			"key1": map[string]any{ // subhash does not merge
+				"subkey1": "subval1",
+			},
+		}, mustUnmarshal(t, mergedMetadata))
+	})
+
+	t.Run("DeepMerge", func(t *testing.T) {
+		t.Parallel()
+
+		mergedMetadata, err := mergeMetadata(
+			mustMarshal(t, map[string]any{
+				"key1": map[string]any{
+					"subkey1": "subval1",
+					"subkey2": map[string]any{
+						"subsubkey1": "subsubval1",
+					},
+				},
+				"key2": "val2",
+			}), mustMarshal(t, map[string]any{
+				"key1": map[string]any{
+					"subkey2": map[string]any{
+						"subsubkey2": "subsubval2",
+					},
+					"subkey3": "subval3",
+				},
+			}), true,
+		)
+		require.NoError(t, err)
+
+		require.Equal(t, map[string]any{
+			"key1": map[string]any{
+				"subkey1": "subval1",
+				"subkey2": map[string]any{
+					"subsubkey1": "subsubval1",
+					"subsubkey2": "subsubval2",
+				},
+				"subkey3": "subval3",
+			},
+			"key2": "val2",
+		}, mustUnmarshal(t, mergedMetadata))
+	})
+}
+
+func TestMergeMetadataMaps(t *testing.T) {
+	t.Parallel()
+
+	t.Run("NoConflictingKeys", func(t *testing.T) {
+		t.Parallel()
+
+		require.Equal(t, map[string]any{
+			"key1": "val1",
+			"key2": "val2",
+			"key3": "val3",
+			"key4": "val4",
+		},
+			mergeMetadataMaps(map[string]any{
+				"key1": "val1",
+				"key2": "val2",
+			}, map[string]any{
+				"key3": "val3",
+				"key4": "val4",
+			}, false),
+		)
+	})
+
+	t.Run("PrimaryValuesPreferred", func(t *testing.T) {
+		t.Parallel()
+
+		require.Equal(t, map[string]any{
+			"key1": "val1",
+			"key2": "val2",
+		},
+			mergeMetadataMaps(map[string]any{
+				"key1": "val1",
+				"key2": "val2",
+			}, map[string]any{
+				"key1": "val2_1",
+				"key2": "val2_2",
+			}, false),
+		)
+	})
+
+	t.Run("ShallowMerge", func(t *testing.T) {
+		t.Parallel()
+
+		require.Equal(t, map[string]any{
+			"key1": map[string]any{ // subhash does not merge
+				"subkey1": "subval1",
+			},
+		},
+			mergeMetadataMaps(map[string]any{
+				"key1": map[string]any{
+					"subkey1": "subval1",
+				},
+			}, map[string]any{
+				"key1": map[string]any{
+					"subkey2": "subval2",
+				},
+			}, false),
+		)
+	})
+
+	t.Run("DeepMerge", func(t *testing.T) {
+		t.Parallel()
+
+		require.Equal(t, map[string]any{
+			"key1": map[string]any{
+				"subkey1": "subval1",
+				"subkey2": map[string]any{
+					"subsubkey1": "subsubval1",
+					"subsubkey2": "subsubval2",
+				},
+				"subkey3": "subval3",
+			},
+			"key2": "val2",
+		},
+			mergeMetadataMaps(map[string]any{
+				"key1": map[string]any{
+					"subkey1": "subval1",
+					"subkey2": map[string]any{
+						"subsubkey1": "subsubval1",
+					},
+				},
+				"key2": "val2",
+			}, map[string]any{
+				"key1": map[string]any{
+					"subkey2": map[string]any{
+						"subsubkey2": "subsubval2",
+					},
+					"subkey3": "subval3",
+				},
+			}, true),
+		)
+	})
+}
+
+func mustMarshal(t *testing.T, v any) []byte {
+	t.Helper()
+
+	data, err := json.Marshal(v)
+	require.NoError(t, err)
+	return data
+}
+
+func mustUnmarshal(t *testing.T, data []byte) map[string]any {
+	t.Helper()
+
+	var dataMap map[string]any
+	err := json.Unmarshal(data, &dataMap)
+	require.NoError(t, err)
+	return dataMap
 }
