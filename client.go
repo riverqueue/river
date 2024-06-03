@@ -48,6 +48,12 @@ const (
 )
 
 // Config is the configuration for a Client.
+//
+// Both Queues and Workers are required for a client to work jobs, but an
+// insert-only client can be initialized by omitting Queues, and not calling
+// Start for the client. Workers can also be omitted, but it's better to include
+// it so River can check that inserted job kinds have a worker that can run
+// them.
 type Config struct {
 	// AdvisoryLockPrefix is a configurable 32-bit prefix that River will use
 	// when generating any key to acquire a Postgres advisory lock. All advisory

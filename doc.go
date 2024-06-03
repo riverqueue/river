@@ -64,7 +64,6 @@ goroutines at a time:
 	    },
 	    Workers: workers,
 	})
-
 	if err != nil {
 	    panic(err)
 	}
@@ -73,6 +72,22 @@ goroutines at a time:
 	if err := riverClient.Start(ctx); err != nil {
 	    panic(err)
 	}
+
+## Insert-only clients
+
+It's often desirable to have a client that'll be used for inserting jobs, but
+not working them. This is possible by omitting the `Queues` configuration, and
+skipping the call to `Start`:
+
+	riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
+	    Workers: workers,
+	})
+	if err != nil {
+	    panic(err)
+	}
+
+`Workers` can also be omitted, but it's better to include it so River can check
+that inserted job kinds have a worker that can run them.
 
 ## Stopping
 
@@ -112,6 +127,9 @@ See the [`InsertAndWork` example] for complete code.
 
   - [Error and panic handling].
 
+  - [Multiple queues] to better guarantee job throughput, worker availability,
+    and isolation between components.
+
   - [Periodic and cron jobs].
 
   - [Scheduled jobs] that run automatically at their scheduled time in the
@@ -121,6 +139,8 @@ See the [`InsertAndWork` example] for complete code.
 
   - [Subscriptions] to queue activity and statistics, providing easy hooks for
     telemetry like logging and metrics.
+
+  - [Test helpers] to verify that jobs are inserted as expected.
 
   - [Transactional job completion] to guarantee job completion commits with
     other changes in a transaction.
