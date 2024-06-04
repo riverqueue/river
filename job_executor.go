@@ -247,7 +247,7 @@ func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 	if res.Err != nil && errors.As(res.Err, &snoozeErr) {
 		e.Logger.InfoContext(ctx, e.Name+": Job snoozed",
 			slog.Int64("job_id", e.JobRow.ID),
-		        slog.String("job_kind", e.JobRow.Kind),
+			slog.String("job_kind", e.JobRow.Kind),
 			slog.Duration("duration", snoozeErr.duration),
 		)
 		nextAttemptScheduledAt := time.Now().Add(snoozeErr.duration)

@@ -138,6 +138,14 @@ type Config struct {
 	// or higher.
 	Logger *slog.Logger
 
+	// MaxAttempts is the default number of times a job will be retried before
+	// being discarded. This value is applied to all jobs by default, and can be
+	// overridden on individual job types on the JobArgs or on a per-job basis at
+	// insertion time.
+	//
+	// If not specified, defaults to 25 (MaxAttemptsDefault).
+	MaxAttempts int
+
 	// PeriodicJobs are a set of periodic jobs to run at the specified intervals
 	// in the client.
 	PeriodicJobs []*PeriodicJob
@@ -237,6 +245,9 @@ func (c *Config) validate() error {
 	}
 	if c.JobTimeout < -1 {
 		return errors.New("JobTimeout cannot be negative, except for -1 (infinite)")
+	}
+	if c.MaxAttempts < 0 {
+		return errors.New("MaxAttempts cannot be less than zero")
 	}
 	if c.RescueStuckJobsAfter < 0 {
 		return errors.New("RescueStuckJobsAfter cannot be less than zero")
@@ -433,6 +444,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		ID:                          valutil.ValOrDefaultFunc(config.ID, func() string { return defaultClientID(time.Now().UTC()) }),
 		JobTimeout:                  valutil.ValOrDefault(config.JobTimeout, JobTimeoutDefault),
 		Logger:                      logger,
+		MaxAttempts:                 valutil.ValOrDefault(config.MaxAttempts, MaxAttemptsDefault),
 		PeriodicJobs:                config.PeriodicJobs,
 		PollOnly:                    config.PollOnly,
 		Queues:                      config.Queues,
@@ -568,7 +580,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			maintenanceServices = append(maintenanceServices, periodicJobEnqueuer)
 			client.testSignals.periodicJobEnqueuer = &periodicJobEnqueuer.TestSignals
 
-			client.periodicJobs = newPeriodicJobBundle(periodicJobEnqueuer)
+			client.periodicJobs = newPeriodicJobBundle(client.config, periodicJobEnqueuer)
 			client.periodicJobs.AddMany(config.PeriodicJobs)
 		}
 
@@ -1237,7 +1249,7 @@ func (c *Client[TTx]) ID() string {
 	return c.config.ID
 }
 
-func insertParamsFromArgsAndOptions(args JobArgs, insertOpts *InsertOpts) (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
+func insertParamsFromConfigArgsAndOptions(config *Config, args JobArgs, insertOpts *InsertOpts) (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
 	encodedArgs, err := json.Marshal(args)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error marshaling args to JSON: %w", err)
@@ -1252,7 +1264,7 @@ func insertParamsFromArgsAndOptions(args JobArgs, insertOpts *InsertOpts) (*rive
 		jobInsertOpts = argsWithOpts.InsertOpts()
 	}
 
-	maxAttempts := valutil.FirstNonZero(insertOpts.MaxAttempts, jobInsertOpts.MaxAttempts, rivercommon.MaxAttemptsDefault)
+	maxAttempts := valutil.FirstNonZero(insertOpts.MaxAttempts, jobInsertOpts.MaxAttempts, config.MaxAttempts)
 	priority := valutil.FirstNonZero(insertOpts.Priority, jobInsertOpts.Priority, rivercommon.PriorityDefault)
 	queue := valutil.FirstNonZero(insertOpts.Queue, jobInsertOpts.Queue, rivercommon.QueueDefault)
 
@@ -1351,7 +1363,7 @@ func (c *Client[TTx]) insert(ctx context.Context, exec riverdriver.Executor, arg
 		return nil, err
 	}
 
-	params, uniqueOpts, err := insertParamsFromArgsAndOptions(args, opts)
+	params, uniqueOpts, err := insertParamsFromConfigArgsAndOptions(c.config, args, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -1507,7 +1519,7 @@ func (c *Client[TTx]) insertManyParams(params []InsertManyParams) ([]*riverdrive
 		}
 
 		var err error
-		insertParams[i], _, err = insertParamsFromArgsAndOptions(param.Args, param.InsertOpts)
+		insertParams[i], _, err = insertParamsFromConfigArgsAndOptions(c.config, param.Args, param.InsertOpts)
 		if err != nil {
 			return nil, err
 		}
