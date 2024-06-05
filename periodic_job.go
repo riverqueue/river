@@ -93,11 +93,13 @@ func (s *periodicIntervalSchedule) Next(t time.Time) time.Time {
 // made accessible through Client, where new periodic jobs can be configured,
 // and only ones removed.
 type PeriodicJobBundle struct {
+	clientConfig        *Config
 	periodicJobEnqueuer *maintenance.PeriodicJobEnqueuer
 }
 
-func newPeriodicJobBundle(periodicJobEnqueuer *maintenance.PeriodicJobEnqueuer) *PeriodicJobBundle {
+func newPeriodicJobBundle(config *Config, periodicJobEnqueuer *maintenance.PeriodicJobEnqueuer) *PeriodicJobBundle {
 	return &PeriodicJobBundle{
+		clientConfig:        config,
 		periodicJobEnqueuer: periodicJobEnqueuer,
 	}
 }
@@ -178,10 +180,11 @@ func (b *PeriodicJobBundle) toInternal(periodicJob *PeriodicJob) *maintenance.Pe
 	if periodicJob.opts != nil {
 		opts = periodicJob.opts
 	}
+	args, options := periodicJob.constructorFunc()
 
 	return &maintenance.PeriodicJob{
 		ConstructorFunc: func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
-			return insertParamsFromArgsAndOptions(periodicJob.constructorFunc())
+			return insertParamsFromConfigArgsAndOptions(b.clientConfig, args, options)
 		},
 		RunOnStart:   opts.RunOnStart,
 		ScheduleFunc: periodicJob.scheduleFunc.Next,

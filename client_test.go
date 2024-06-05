@@ -140,6 +140,7 @@ func newTestConfig(t *testing.T, callback callbackFunc) *Config {
 		FetchCooldown:       20 * time.Millisecond,
 		FetchPollInterval:   50 * time.Millisecond,
 		Logger:              riverinternaltest.Logger(t),
+		MaxAttempts:         MaxAttemptsDefault,
 		Queues:              map[string]QueueConfig{QueueDefault: {MaxWorkers: 50}},
 		Workers:             workers,
 		disableStaggerStart: true, // disables staggered start in maintenance services
@@ -2122,7 +2123,7 @@ func Test_Client_ErrorHandler(t *testing.T) {
 
 		// Bypass the normal Insert function because that will error on an
 		// unknown job.
-		insertParams, _, err := insertParamsFromArgsAndOptions(unregisteredJobArgs{}, nil)
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(config, unregisteredJobArgs{}, nil)
 		require.NoError(t, err)
 		_, err = client.driver.GetExecutor().JobInsertFast(ctx, insertParams)
 		require.NoError(t, err)
@@ -3565,7 +3566,7 @@ func Test_Client_UnknownJobKindErrorsTheJob(t *testing.T) {
 	subscribeChan, cancel := client.Subscribe(EventKindJobFailed)
 	t.Cleanup(cancel)
 
-	insertParams, _, err := insertParamsFromArgsAndOptions(unregisteredJobArgs{}, nil)
+	insertParams, _, err := insertParamsFromConfigArgsAndOptions(config, unregisteredJobArgs{}, nil)
 	require.NoError(err)
 	insertedJob, err := client.driver.GetExecutor().JobInsertFast(ctx, insertParams)
 	require.NoError(err)
@@ -3714,6 +3715,7 @@ func Test_NewClient_Defaults(t *testing.T) {
 	require.Equal(t, FetchPollIntervalDefault, client.config.FetchPollInterval)
 	require.Equal(t, JobTimeoutDefault, client.config.JobTimeout)
 	require.NotZero(t, client.baseService.Logger)
+	require.Equal(t, MaxAttemptsDefault, client.config.MaxAttempts)
 	require.IsType(t, &DefaultClientRetryPolicy{}, client.config.RetryPolicy)
 	require.False(t, client.config.disableStaggerStart)
 }
@@ -3742,6 +3744,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 		FetchPollInterval:           124 * time.Millisecond,
 		JobTimeout:                  125 * time.Millisecond,
 		Logger:                      logger,
+		MaxAttempts:                 5,
 		Queues:                      map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}},
 		RetryPolicy:                 retryPolicy,
 		Workers:                     workers,
@@ -3764,6 +3767,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 	require.Equal(t, 124*time.Millisecond, client.config.FetchPollInterval)
 	require.Equal(t, 125*time.Millisecond, client.config.JobTimeout)
 	require.Equal(t, logger, client.baseService.Logger)
+	require.Equal(t, 5, client.config.MaxAttempts)
 	require.Equal(t, retryPolicy, client.config.RetryPolicy)
 	require.True(t, client.config.disableStaggerStart)
 }
@@ -3889,6 +3893,23 @@ func Test_NewClient_Validations(t *testing.T) {
 			name: "JobTimeout can be a large positive value",
 			configFunc: func(config *Config) {
 				config.JobTimeout = 7 * 24 * time.Hour
+			},
+		},
+		{
+			name: "MaxAttempts cannot be less than zero",
+			configFunc: func(config *Config) {
+				config.MaxAttempts = -1
+			},
+			wantErr: errors.New("MaxAttempts cannot be less than zero"),
+		},
+		{
+			name: "MaxAttempts of zero applies DefaultMaxAttempts",
+			configFunc: func(config *Config) {
+				config.MaxAttempts = 0
+			},
+			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
+				// A client config value of zero gets interpreted as the default max attempts:
+				require.Equal(t, MaxAttemptsDefault, client.config.MaxAttempts)
 			},
 		},
 		{
@@ -4138,20 +4159,34 @@ func TestClient_JobTimeout(t *testing.T) {
 func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 	t.Parallel()
 
+	config := newTestConfig(t, nil)
+
 	t.Run("Defaults", func(t *testing.T) {
 		t.Parallel()
 
-		insertParams, uniqueOpts, err := insertParamsFromArgsAndOptions(noOpArgs{}, nil)
+		insertParams, uniqueOpts, err := insertParamsFromConfigArgsAndOptions(config, noOpArgs{}, nil)
 		require.NoError(t, err)
 		require.Equal(t, `{"name":""}`, string(insertParams.EncodedArgs))
 		require.Equal(t, (noOpArgs{}).Kind(), insertParams.Kind)
-		require.Equal(t, rivercommon.MaxAttemptsDefault, insertParams.MaxAttempts)
+		require.Equal(t, config.MaxAttempts, insertParams.MaxAttempts)
 		require.Equal(t, rivercommon.PriorityDefault, insertParams.Priority)
 		require.Equal(t, QueueDefault, insertParams.Queue)
 		require.Nil(t, insertParams.ScheduledAt)
 		require.Equal(t, []string{}, insertParams.Tags)
 
 		require.True(t, uniqueOpts.IsEmpty())
+	})
+
+	t.Run("ConfigOverrides", func(t *testing.T) {
+		t.Parallel()
+
+		overrideConfig := &Config{
+			MaxAttempts: 34,
+		}
+
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(overrideConfig, noOpArgs{}, nil)
+		require.NoError(t, err)
+		require.Equal(t, overrideConfig.MaxAttempts, insertParams.MaxAttempts)
 	})
 
 	t.Run("InsertOptsOverrides", func(t *testing.T) {
@@ -4164,7 +4199,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 			ScheduledAt: time.Now().Add(time.Hour),
 			Tags:        []string{"tag1", "tag2"},
 		}
-		insertParams, _, err := insertParamsFromArgsAndOptions(noOpArgs{}, opts)
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(config, noOpArgs{}, opts)
 		require.NoError(t, err)
 		require.Equal(t, 42, insertParams.MaxAttempts)
 		require.Equal(t, 2, insertParams.Priority)
@@ -4176,7 +4211,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 	t.Run("WorkerInsertOptsOverrides", func(t *testing.T) {
 		t.Parallel()
 
-		insertParams, _, err := insertParamsFromArgsAndOptions(&customInsertOptsJobArgs{}, nil)
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(config, &customInsertOptsJobArgs{}, nil)
 		require.NoError(t, err)
 		// All these come from overrides in customInsertOptsJobArgs's definition:
 		require.Equal(t, 42, insertParams.MaxAttempts)
@@ -4195,7 +4230,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 			ByState:  []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCompleted},
 		}
 
-		_, internalUniqueOpts, err := insertParamsFromArgsAndOptions(noOpArgs{}, &InsertOpts{UniqueOpts: uniqueOpts})
+		_, internalUniqueOpts, err := insertParamsFromConfigArgsAndOptions(config, noOpArgs{}, &InsertOpts{UniqueOpts: uniqueOpts})
 		require.NoError(t, err)
 		require.Equal(t, uniqueOpts.ByArgs, internalUniqueOpts.ByArgs)
 		require.Equal(t, uniqueOpts.ByPeriod, internalUniqueOpts.ByPeriod)
@@ -4206,7 +4241,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 	t.Run("PriorityIsLimitedTo4", func(t *testing.T) {
 		t.Parallel()
 
-		insertParams, _, err := insertParamsFromArgsAndOptions(noOpArgs{}, &InsertOpts{Priority: 5})
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(config, noOpArgs{}, &InsertOpts{Priority: 5})
 		require.ErrorContains(t, err, "priority must be between 1 and 4")
 		require.Nil(t, insertParams)
 	})
@@ -4215,7 +4250,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		t.Parallel()
 
 		args := timeoutTestArgs{TimeoutValue: time.Hour}
-		insertParams, _, err := insertParamsFromArgsAndOptions(args, nil)
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(config, args, nil)
 		require.NoError(t, err)
 		require.Equal(t, `{"timeout_value":3600000000000}`, string(insertParams.EncodedArgs))
 	})
@@ -4226,7 +4261,8 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		// Ensure that unique opts are validated. No need to be exhaustive here
 		// since we already have tests elsewhere for that. Just make sure validation
 		// is running.
-		insertParams, _, err := insertParamsFromArgsAndOptions(
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(
+			config,
 			noOpArgs{},
 			&InsertOpts{UniqueOpts: UniqueOpts{ByPeriod: 1 * time.Millisecond}},
 		)

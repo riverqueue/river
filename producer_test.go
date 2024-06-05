@@ -49,6 +49,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 
 	archetype := riverinternaltest.BaseServiceArchetype(t)
 
+	config := newTestConfig(t, nil)
 	dbDriver := riverpgxv5.New(dbPool)
 	exec := dbDriver.GetExecutor()
 	listener := dbDriver.GetListener()
@@ -101,7 +102,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 
 	params := make([]*riverdriver.JobInsertFastParams, maxJobCount)
 	for i := range params {
-		insertParams, _, err := insertParamsFromArgsAndOptions(WithJobNumArgs{JobNum: i}, nil)
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(config, WithJobNumArgs{JobNum: i}, nil)
 		require.NoError(err)
 
 		params[i] = insertParams
@@ -230,6 +231,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 
 	type testBundle struct {
 		completer  jobcompleter.JobCompleter
+		config     *Config
 		exec       riverdriver.Executor
 		jobUpdates chan jobcompleter.CompleterJobUpdated
 		workers    *Workers
@@ -240,6 +242,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 
 		producer := makeProducer(ctx, t)
 		producer.testSignals.Init()
+		config := newTestConfig(t, nil)
 
 		jobUpdates := make(chan jobcompleter.CompleterJobUpdated, 10)
 		producer.completer.Subscribe(func(update jobcompleter.CompleterJobUpdated) {
@@ -248,19 +251,20 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 
 		return producer, &testBundle{
 			completer:  producer.completer,
+			config:     config,
 			exec:       producer.exec,
 			jobUpdates: jobUpdates,
 			workers:    producer.workers,
 		}
 	}
 
-	mustInsert := func(ctx context.Context, t *testing.T, exec riverdriver.Executor, args JobArgs) {
+	mustInsert := func(ctx context.Context, t *testing.T, bundle *testBundle, args JobArgs) {
 		t.Helper()
 
-		insertParams, _, err := insertParamsFromArgsAndOptions(args, nil)
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(bundle.config, args, nil)
 		require.NoError(t, err)
 
-		_, err = exec.JobInsertFast(ctx, insertParams)
+		_, err = bundle.exec.JobInsertFast(ctx, insertParams)
 		require.NoError(t, err)
 	}
 
@@ -285,7 +289,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		producer, bundle := setup(t)
 		AddWorker(bundle.workers, &noOpWorker{})
 
-		mustInsert(ctx, t, bundle.exec, &noOpArgs{})
+		mustInsert(ctx, t, bundle, &noOpArgs{})
 
 		startProducer(t, ctx, ctx, producer)
 
@@ -320,8 +324,8 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		producer, bundle := setup(t)
 		AddWorker(bundle.workers, &noOpWorker{})
 
-		mustInsert(ctx, t, bundle.exec, &noOpArgs{})
-		mustInsert(ctx, t, bundle.exec, &callbackArgs{}) // not registered
+		mustInsert(ctx, t, bundle, &noOpArgs{})
+		mustInsert(ctx, t, bundle, &callbackArgs{}) // not registered
 
 		startProducer(t, ctx, ctx, producer)
 
@@ -370,7 +374,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		workCtx, workCancel := context.WithCancel(ctx)
 		defer workCancel()
 
-		mustInsert(ctx, t, bundle.exec, &JobArgs{})
+		mustInsert(ctx, t, bundle, &JobArgs{})
 
 		startProducer(t, ctx, workCtx, producer)
 
@@ -406,7 +410,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		}))
 
 		for i := 0; i < numJobs; i++ {
-			mustInsert(ctx, t, bundle.exec, &JobArgs{})
+			mustInsert(ctx, t, bundle, &JobArgs{})
 		}
 
 		startProducer(t, ctx, ctx, producer)
@@ -451,7 +455,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 			PausedAt: ptrutil.Ptr(time.Now()),
 		})
 
-		mustInsert(ctx, t, bundle.exec, &noOpArgs{})
+		mustInsert(ctx, t, bundle, &noOpArgs{})
 
 		startProducer(t, ctx, ctx, producer)
 
@@ -470,7 +474,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		producer.config.QueuePollInterval = 50 * time.Millisecond
 		AddWorker(bundle.workers, &noOpWorker{})
 
-		mustInsert(ctx, t, bundle.exec, &noOpArgs{})
+		mustInsert(ctx, t, bundle, &noOpArgs{})
 
 		startProducer(t, ctx, ctx, producer)
 
@@ -487,7 +491,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		producer.testSignals.Paused.WaitOrTimeout()
 
 		// Job should not be executed while paused:
-		mustInsert(ctx, t, bundle.exec, &noOpArgs{})
+		mustInsert(ctx, t, bundle, &noOpArgs{})
 
 		select {
 		case update := <-bundle.jobUpdates:
