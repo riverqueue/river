@@ -223,6 +223,11 @@ type MaintenanceService interface {
 // subsequently remove the periodic job with `Remove()`.
 type PeriodicJobHandle int
 
+type Plugin interface {
+	MaintenanceServices() []MaintenanceService
+	Services() []Service
+}
+
 // Queue is a configuration for a queue that is currently (or recently was) in
 // use by a client.
 type Queue struct {
@@ -247,4 +252,9 @@ type Queue struct {
 	// If UpdatedAt has not been updated for awhile, the queue record will be
 	// deleted from the table by a maintenance process.
 	UpdatedAt time.Time
+}
+
+type Service interface {
+	Start(ctx context.Context) error
+	Stop()
 }

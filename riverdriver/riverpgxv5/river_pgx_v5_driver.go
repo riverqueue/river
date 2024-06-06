@@ -53,6 +53,11 @@ func (d *Driver) UnwrapExecutor(tx pgx.Tx) riverdriver.ExecutorTx {
 	return &ExecutorTx{Executor: Executor{tx, dbsqlc.New()}, tx: tx}
 }
 
+type DBTX interface {
+	dbsqlc.DBTX
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
 type Executor struct {
 	dbtx interface {
 		dbsqlc.DBTX
