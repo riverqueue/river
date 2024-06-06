@@ -82,6 +82,8 @@ type Driver[TTx any] interface {
 	// API is not stable. DO NOT USE.
 	SupportsListener() bool
 
+	RowsToJobs(rows Rows) ([]*rivertype.JobRow, error)
+
 	// UnwrapExecutor gets an executor from a driver transaction.
 	//
 	// API is not stable. DO NOT USE.
@@ -93,6 +95,8 @@ type Driver[TTx any] interface {
 //
 // API is not stable. DO NOT IMPLEMENT.
 type Executor interface {
+	// High level DB operations:
+
 	// Begin begins a new subtransaction. ErrSubTxNotSupported may be returned
 	// if the executor is a transaction and the driver doesn't support
 	// subtransactions (like riverdriver/riverdatabasesql for database/sql).
@@ -104,6 +108,12 @@ type Executor interface {
 
 	// Exec executes raw SQL.
 	Exec(ctx context.Context, sql string, args ...any) (ExecResult, error)
+	// Query executes raw SQL.
+	Query(ctx context.Context, sql string, args ...any) (Rows, error)
+	// QueryRow executes raw SQL.
+	QueryRow(ctx context.Context, sql string, args ...any) Row
+
+	// Specific queries:
 
 	JobCancel(ctx context.Context, params *JobCancelParams) (*rivertype.JobRow, error)
 	JobCountByState(ctx context.Context, state rivertype.JobState) (int, error)
@@ -161,11 +171,6 @@ type Executor interface {
 
 	NotifyMany(ctx context.Context, params *NotifyManyParams) error
 	PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}, error)
-
-	// Query executes raw SQL.
-	Query(ctx context.Context, sql string, args ...any) (Rows, error)
-	// QueryRow executes raw SQL.
-	QueryRow(ctx context.Context, sql string, args ...any) Row
 
 	QueueCreateOrSetUpdatedAt(ctx context.Context, params *QueueCreateOrSetUpdatedAtParams) (*rivertype.Queue, error)
 	QueueDeleteExpired(ctx context.Context, params *QueueDeleteExpiredParams) ([]string, error)

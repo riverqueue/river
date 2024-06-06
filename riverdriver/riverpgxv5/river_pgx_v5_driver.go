@@ -62,6 +62,38 @@ func (d *Driver) GetMigrationLines() []string { return []string{riverdriver.Migr
 func (d *Driver) HasPool() bool               { return d.dbPool != nil }
 func (d *Driver) SupportsListener() bool      { return true }
 
+func (d *Driver) RowsToJobs(rows riverdriver.Rows) ([]*rivertype.JobRow, error) {
+	var items []*dbsqlc.RiverJob
+	for rows.Next() {
+		var i dbsqlc.RiverJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Args,
+			&i.Attempt,
+			&i.AttemptedAt,
+			&i.AttemptedBy,
+			&i.CreatedAt,
+			&i.Errors,
+			&i.FinalizedAt,
+			&i.Kind,
+			&i.MaxAttempts,
+			&i.Metadata,
+			&i.Priority,
+			&i.Queue,
+			&i.State,
+			&i.ScheduledAt,
+			&i.Tags,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return mapSlice(items, jobRowFromInternal), nil
+}
+
 func (d *Driver) UnwrapExecutor(tx pgx.Tx) riverdriver.ExecutorTx {
 	return &ExecutorTx{Executor: Executor{tx}, tx: tx}
 }
