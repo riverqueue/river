@@ -137,14 +137,14 @@ func newTestConfig(t *testing.T, callback callbackFunc) *Config {
 	AddWorker(workers, &noOpWorker{})
 
 	return &Config{
-		FetchCooldown:       20 * time.Millisecond,
-		FetchPollInterval:   50 * time.Millisecond,
-		Logger:              riverinternaltest.Logger(t),
-		MaxAttempts:         MaxAttemptsDefault,
-		Queues:              map[string]QueueConfig{QueueDefault: {MaxWorkers: 50}},
-		Workers:             workers,
-		disableStaggerStart: true, // disables staggered start in maintenance services
-		schedulerInterval:   riverinternaltest.SchedulerShortInterval,
+		FetchCooldown:     20 * time.Millisecond,
+		FetchPollInterval: 50 * time.Millisecond,
+		Logger:            riverinternaltest.Logger(t),
+		MaxAttempts:       MaxAttemptsDefault,
+		Queues:            map[string]QueueConfig{QueueDefault: {MaxWorkers: 50}},
+		TestOnly:          TestOnlyConfig{DisableStaggerStart: true}, // disables staggered start in maintenance services
+		Workers:           workers,
+		schedulerInterval: riverinternaltest.SchedulerShortInterval,
 	}
 }
 
@@ -3693,7 +3693,7 @@ func Test_NewClient_Defaults(t *testing.T) {
 	require.NotZero(t, client.baseService.Logger)
 	require.Equal(t, MaxAttemptsDefault, client.config.MaxAttempts)
 	require.IsType(t, &DefaultClientRetryPolicy{}, client.config.RetryPolicy)
-	require.False(t, client.config.disableStaggerStart)
+	require.False(t, client.config.TestOnly.DisableStaggerStart)
 }
 
 func Test_NewClient_Overrides(t *testing.T) {
@@ -3723,8 +3723,8 @@ func Test_NewClient_Overrides(t *testing.T) {
 		MaxAttempts:                 5,
 		Queues:                      map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}},
 		RetryPolicy:                 retryPolicy,
+		TestOnly:                    TestOnlyConfig{DisableStaggerStart: true}, // disables staggered start in maintenance services
 		Workers:                     workers,
-		disableStaggerStart:         true,
 	})
 	require.NoError(t, err)
 
@@ -3745,7 +3745,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 	require.Equal(t, logger, client.baseService.Logger)
 	require.Equal(t, 5, client.config.MaxAttempts)
 	require.Equal(t, retryPolicy, client.config.RetryPolicy)
-	require.True(t, client.config.disableStaggerStart)
+	require.True(t, client.config.TestOnly.DisableStaggerStart)
 }
 
 func Test_NewClient_MissingParameters(t *testing.T) {
