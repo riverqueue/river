@@ -200,6 +200,10 @@ type Config struct {
 	// Defaults to DefaultRetryPolicy.
 	RetryPolicy ClientRetryPolicy
 
+	// TestOnly is a configuration for test-only settings that should generally
+	// not be used outside of test suites.
+	TestOnly TestOnlyConfig
+
 	// Workers is a bundle of registered job workers.
 	//
 	// This field may be omitted for a program that's only enqueueing jobs
@@ -207,12 +211,6 @@ type Config struct {
 	// ahead of time that a worker is properly registered for an inserted job.
 	// (i.e.  That it wasn't forgotten by accident.)
 	Workers *Workers
-
-	// Disables the normal random jittered sleep occurring in queue maintenance
-	// services to stagger their startup so they don't all try to work at the
-	// same time. Appropriate for use in tests to make sure that the client can
-	// always be started and stopped again hastily.
-	disableStaggerStart bool
 
 	// Scheduler run interval. Shared between the scheduler and producer/job
 	// executors, but not currently exposed for configuration.
@@ -290,6 +288,16 @@ type QueueConfig struct {
 	//
 	// Requires a minimum of 1, and a maximum of 10,000.
 	MaxWorkers int
+}
+
+// TestOnlyConfig contains test-only settings that should generally not be used
+// outside of test suites.
+type TestOnlyConfig struct {
+	// DisableStaggerStart disables the normal random jittered sleep occurring in
+	// queue maintenance services to stagger their startup so they don't all try
+	// to work at the same time. Appropriate for use in tests to make sure that
+	// the client can always be started and stopped again hastily.
+	DisableStaggerStart bool
 }
 
 // Client is a single isolated instance of River. Your application may use
@@ -445,8 +453,8 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		ReindexerSchedule:           config.ReindexerSchedule,
 		RescueStuckJobsAfter:        valutil.ValOrDefault(config.RescueStuckJobsAfter, rescueAfter),
 		RetryPolicy:                 retryPolicy,
+		TestOnly:                    config.TestOnly,
 		Workers:                     config.Workers,
-		disableStaggerStart:         config.disableStaggerStart,
 		schedulerInterval:           valutil.ValOrDefault(config.schedulerInterval, maintenance.JobSchedulerIntervalDefault),
 	}
 
@@ -619,7 +627,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		// started conditionally based on whether the client is the leader.
 		client.queueMaintainer = maintenance.NewQueueMaintainer(archetype, maintenanceServices)
 
-		if config.disableStaggerStart {
+		if config.TestOnly.DisableStaggerStart {
 			client.queueMaintainer.StaggerStartupDisable(true)
 		}
 	}
