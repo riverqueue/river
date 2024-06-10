@@ -195,7 +195,7 @@ func (c *AsyncCompleter) Start(ctx context.Context) error {
 		<-ctx.Done()
 
 		if err := c.errGroup.Wait(); err != nil {
-			c.Logger.Error("Error waiting on async completer: %s", err)
+			c.Logger.Error("Error waiting on async completer", "err", err)
 		}
 	}()
 
