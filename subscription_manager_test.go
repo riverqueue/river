@@ -9,6 +9,7 @@ import (
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobstats"
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/internal/riverinternaltest/testfactory"
 	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/riverdriver"
@@ -113,7 +114,7 @@ func Test_SubscriptionManager(t *testing.T) {
 
 		subscribeCh := bundle.subscribeCh
 		for i := 0; i < 100; i++ {
-			go func() { close(subscribeCh) }()
+			close(subscribeCh)
 			manager.Stop()
 
 			subscribeCh = make(chan []jobcompleter.CompleterJobUpdated, 1)
@@ -122,5 +123,17 @@ func Test_SubscriptionManager(t *testing.T) {
 			require.NoError(t, manager.Start(ctx))
 		}
 		close(subscribeCh)
+	})
+
+	t.Run("StartStopStress", func(t *testing.T) {
+		t.Parallel()
+
+		svc, bundle := setup(t)
+
+		// Close the subscription channel in advance so that stops can leave
+		// successfully.
+		close(bundle.subscribeCh)
+
+		startstoptest.Stress(ctx, t, svc)
 	})
 }

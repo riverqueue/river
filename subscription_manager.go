@@ -44,7 +44,7 @@ func (sm *subscriptionManager) ResetSubscribeChan(subscribeCh <-chan []jobcomple
 }
 
 func (sm *subscriptionManager) Start(ctx context.Context) error {
-	_, shouldStart, stopped := sm.StartInit(ctx)
+	ctx, shouldStart, stopped := sm.StartInit(ctx)
 	if !shouldStart {
 		return nil
 	}
@@ -54,34 +54,44 @@ func (sm *subscriptionManager) Start(ctx context.Context) error {
 		// races.
 		defer close(stopped)
 
-		for updates := range sm.subscribeCh {
-			sm.distributeJobUpdates(updates)
+		sm.Logger.DebugContext(ctx, sm.Name+": Run loop started")
+		defer sm.Logger.DebugContext(ctx, sm.Name+": Run loop stopped")
+
+		// On shutdown, close and remove all active subscriptions.
+		defer func() {
+			sm.mu.Lock()
+			defer sm.mu.Unlock()
+
+			for subID, sub := range sm.subscriptions {
+				close(sub.Chan)
+				delete(sm.subscriptions, subID)
+			}
+		}()
+
+		for {
+			select {
+			case <-ctx.Done():
+				// Distribute remaining subscriptions until the channel is
+				// closed. This does make the subscription manager a little
+				// problematic in that it requires the subscription channel to
+				// be closed before it will fully stop. This always happens in
+				// the case of a real client by virtue of the completer always
+				// stopping at the same time as the subscription manager, but
+				// one has to be careful in tests.
+				sm.Logger.DebugContext(ctx, sm.Name+": Stopping; distributing subscriptions until channel is closed")
+				for updates := range sm.subscribeCh {
+					sm.distributeJobUpdates(updates)
+				}
+
+				return
+
+			case updates := <-sm.subscribeCh:
+				sm.distributeJobUpdates(updates)
+			}
 		}
 	}()
 
 	return nil
-}
-
-func (sm *subscriptionManager) Stop() {
-	shouldStop, stopped, finalizeStop := sm.StopInit()
-	if !shouldStop {
-		return
-	}
-
-	<-stopped
-
-	// Remove all subscriptions and close corresponding channels.
-	func() {
-		sm.mu.Lock()
-		defer sm.mu.Unlock()
-
-		for subID, sub := range sm.subscriptions {
-			close(sub.Chan)
-			delete(sm.subscriptions, subID)
-		}
-	}()
-
-	finalizeStop(true)
 }
 
 func (sm *subscriptionManager) logStats(ctx context.Context, svcName string) {
