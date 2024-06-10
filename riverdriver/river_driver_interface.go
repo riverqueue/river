@@ -56,7 +56,7 @@ type Driver[TTx any] interface {
 	// API is not stable. DO NOT USE.
 	HasPool() bool
 
-	// UnwrapExecutor gets unwraps executor from a driver transaction.
+	// UnwrapExecutor gets an executor from a driver transaction.
 	//
 	// API is not stable. DO NOT USE.
 	UnwrapExecutor(tx TTx) ExecutorTx

@@ -54,7 +54,10 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	exec := dbDriver.GetExecutor()
 	listener := dbDriver.GetListener()
 
-	completer := jobcompleter.NewInlineCompleter(archetype, exec)
+	subscribeCh := make(chan []jobcompleter.CompleterJobUpdated, 100)
+	t.Cleanup(riverinternaltest.DiscardContinuously(subscribeCh))
+
+	completer := jobcompleter.NewInlineCompleter(archetype, exec, subscribeCh)
 	t.Cleanup(completer.Stop)
 
 	type WithJobNumArgs struct {
@@ -145,7 +148,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 func TestProducer_PollOnly(t *testing.T) {
 	t.Parallel()
 
-	testProducer(t, func(ctx context.Context, t *testing.T) *producer {
+	testProducer(t, func(ctx context.Context, t *testing.T) (*producer, chan []jobcompleter.CompleterJobUpdated) {
 		t.Helper()
 
 		var (
@@ -159,9 +162,15 @@ func TestProducer_PollOnly(t *testing.T) {
 		tx = sharedtx.NewSharedTx(tx)
 
 		var (
-			exec      = driver.UnwrapExecutor(tx)
-			completer = jobcompleter.NewInlineCompleter(archetype, exec)
+			exec       = driver.UnwrapExecutor(tx)
+			jobUpdates = make(chan []jobcompleter.CompleterJobUpdated, 10)
 		)
+
+		completer := jobcompleter.NewInlineCompleter(archetype, exec, jobUpdates)
+		{
+			require.NoError(t, completer.Start(ctx))
+			t.Cleanup(completer.Stop)
+		}
 
 		return newProducer(archetype, exec, &producerConfig{
 			ClientID:            testClientID,
@@ -179,24 +188,30 @@ func TestProducer_PollOnly(t *testing.T) {
 			SchedulerInterval:   riverinternaltest.SchedulerShortInterval,
 			StatusFunc:          func(queue string, status componentstatus.Status) {},
 			Workers:             NewWorkers(),
-		})
+		}), jobUpdates
 	})
 }
 
 func TestProducer_WithNotifier(t *testing.T) {
 	t.Parallel()
 
-	testProducer(t, func(ctx context.Context, t *testing.T) *producer {
+	testProducer(t, func(ctx context.Context, t *testing.T) (*producer, chan []jobcompleter.CompleterJobUpdated) {
 		t.Helper()
 
 		var (
-			archetype = riverinternaltest.BaseServiceArchetype(t)
-			dbPool    = riverinternaltest.TestDB(ctx, t)
-			driver    = riverpgxv5.New(dbPool)
-			exec      = driver.GetExecutor()
-			listener  = driver.GetListener()
-			completer = jobcompleter.NewInlineCompleter(archetype, exec)
+			archetype  = riverinternaltest.BaseServiceArchetype(t)
+			dbPool     = riverinternaltest.TestDB(ctx, t)
+			driver     = riverpgxv5.New(dbPool)
+			exec       = driver.GetExecutor()
+			jobUpdates = make(chan []jobcompleter.CompleterJobUpdated, 10)
+			listener   = driver.GetListener()
 		)
+
+		completer := jobcompleter.NewInlineCompleter(archetype, exec, jobUpdates)
+		{
+			require.NoError(t, completer.Start(ctx))
+			t.Cleanup(completer.Stop)
+		}
 
 		notifier := notifier.New(archetype, listener, func(componentstatus.Status) {})
 		{
@@ -220,11 +235,11 @@ func TestProducer_WithNotifier(t *testing.T) {
 			SchedulerInterval:   riverinternaltest.SchedulerShortInterval,
 			StatusFunc:          func(queue string, status componentstatus.Status) {},
 			Workers:             NewWorkers(),
-		})
+		}), jobUpdates
 	})
 }
 
-func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testing.T) *producer) {
+func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testing.T) (*producer, chan []jobcompleter.CompleterJobUpdated)) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -240,20 +255,24 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 	setup := func(t *testing.T) (*producer, *testBundle) {
 		t.Helper()
 
-		producer := makeProducer(ctx, t)
+		producer, jobUpdates := makeProducer(ctx, t)
 		producer.testSignals.Init()
 		config := newTestConfig(t, nil)
 
-		jobUpdates := make(chan jobcompleter.CompleterJobUpdated, 10)
-		producer.completer.Subscribe(func(update jobcompleter.CompleterJobUpdated) {
-			jobUpdates <- update
-		})
+		jobUpdatesFlattened := make(chan jobcompleter.CompleterJobUpdated, 10)
+		go func() {
+			for updates := range jobUpdates {
+				for _, update := range updates {
+					jobUpdatesFlattened <- update
+				}
+			}
+		}()
 
 		return producer, &testBundle{
 			completer:  producer.completer,
 			config:     config,
 			exec:       producer.exec,
-			jobUpdates: jobUpdates,
+			jobUpdates: jobUpdatesFlattened,
 			workers:    producer.workers,
 		}
 	}
