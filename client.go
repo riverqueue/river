@@ -1047,6 +1047,23 @@ func (c *Client[TTx]) jobCancel(ctx context.Context, exec riverdriver.Executor, 
 	})
 }
 
+// JobDelete deletes the job with the given ID from the database, returning the
+// deleted row if it was deleted. Jobs in the running state are not deleted,
+// instead returning rivertype.ErrJobRunning.
+func (c *Client[TTx]) JobDelete(ctx context.Context, id int64) (*rivertype.JobRow, error) {
+	return c.driver.GetExecutor().JobDelete(ctx, id)
+}
+
+// JobDelete deletes the job with the given ID from the database, returning the
+// deleted row if it was deleted. Jobs in the running state are not deleted,
+// instead returning rivertype.ErrJobRunning. This variant lets a caller retry a
+// job atomically alongside other database changes. A deleted job isn't deleted
+// until the transaction commits, and if the transaction rolls back, so too is
+// the deleted job.
+func (c *Client[TTx]) JobDeleteTx(ctx context.Context, tx TTx, id int64) (*rivertype.JobRow, error) {
+	return c.driver.UnwrapExecutor(tx).JobDelete(ctx, id)
+}
+
 // JobGet fetches a single job by its ID. Returns the up-to-date JobRow for the
 // specified jobID if it exists. Returns ErrNotFound if the job doesn't exist.
 func (c *Client[TTx]) JobGet(ctx context.Context, id int64) (*rivertype.JobRow, error) {

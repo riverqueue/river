@@ -77,6 +77,10 @@ func (e *Executor) JobCountByState(ctx context.Context, state rivertype.JobState
 	return 0, riverdriver.ErrNotImplemented
 }
 
+func (e *Executor) JobDelete(ctx context.Context, id int64) (*rivertype.JobRow, error) {
+	return nil, riverdriver.ErrNotImplemented
+}
+
 func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobDeleteBeforeParams) (int, error) {
 	return 0, riverdriver.ErrNotImplemented
 }

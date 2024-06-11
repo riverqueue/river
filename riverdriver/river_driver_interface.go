@@ -77,6 +77,7 @@ type Executor interface {
 
 	JobCancel(ctx context.Context, params *JobCancelParams) (*rivertype.JobRow, error)
 	JobCountByState(ctx context.Context, state rivertype.JobState) (int, error)
+	JobDelete(ctx context.Context, id int64) (*rivertype.JobRow, error)
 	JobDeleteBefore(ctx context.Context, params *JobDeleteBeforeParams) (int, error)
 	JobGetAvailable(ctx context.Context, params *JobGetAvailableParams) ([]*rivertype.JobRow, error)
 	JobGetByID(ctx context.Context, id int64) (*rivertype.JobRow, error)

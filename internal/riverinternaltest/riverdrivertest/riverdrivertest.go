@@ -191,6 +191,84 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		require.Equal(t, 2, numJobs)
 	})
 
+	t.Run("JobDelete", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("DoesNotDeleteARunningJob", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				State: ptrutil.Ptr(rivertype.JobStateRunning),
+			})
+
+			jobAfter, err := exec.JobDelete(ctx, job.ID)
+			require.ErrorIs(t, err, rivertype.ErrJobRunning)
+			require.Nil(t, jobAfter)
+
+			jobUpdated, err := exec.JobGetByID(ctx, job.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateRunning, jobUpdated.State)
+		})
+
+		for _, state := range []rivertype.JobState{
+			rivertype.JobStateAvailable,
+			rivertype.JobStateCancelled,
+			rivertype.JobStateCompleted,
+			rivertype.JobStateDiscarded,
+			rivertype.JobStatePending,
+			rivertype.JobStateRetryable,
+			rivertype.JobStateScheduled,
+		} {
+			state := state
+
+			t.Run(fmt.Sprintf("DeletesA_%s_Job", state), func(t *testing.T) {
+				t.Parallel()
+
+				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+				now := time.Now().UTC()
+
+				setFinalized := slices.Contains([]rivertype.JobState{
+					rivertype.JobStateCancelled,
+					rivertype.JobStateCompleted,
+					rivertype.JobStateDiscarded,
+				}, state)
+
+				var finalizedAt *time.Time
+				if setFinalized {
+					finalizedAt = &now
+				}
+
+				job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+					FinalizedAt: finalizedAt,
+					ScheduledAt: ptrutil.Ptr(now.Add(1 * time.Hour)),
+					State:       &state,
+				})
+
+				jobAfter, err := exec.JobDelete(ctx, job.ID)
+				require.NoError(t, err)
+				require.NotNil(t, jobAfter)
+				require.Equal(t, job.ID, jobAfter.ID)
+				require.Equal(t, state, jobAfter.State)
+
+				_, err = exec.JobGetByID(ctx, job.ID)
+				require.ErrorIs(t, err, rivertype.ErrNotFound)
+			})
+		}
+
+		t.Run("ReturnsErrNotFoundIfJobDoesNotExist", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+			jobAfter, err := exec.JobDelete(ctx, 1234567890)
+			require.ErrorIs(t, err, rivertype.ErrNotFound)
+			require.Nil(t, jobAfter)
+		})
+	})
+
 	t.Run("JobDeleteBefore", func(t *testing.T) {
 		t.Parallel()
 
@@ -1007,7 +1085,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			rivertype.JobStateCancelled,
 			rivertype.JobStateCompleted,
 			rivertype.JobStateDiscarded,
-			// TODO(bgentry): add Pending to this list when it's added:
+			rivertype.JobStatePending,
 			rivertype.JobStateRetryable,
 			rivertype.JobStateScheduled,
 		} {
