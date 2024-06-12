@@ -1123,7 +1123,9 @@ func Test_Client_Insert(t *testing.T) {
 
 	ctx := context.Background()
 
-	type testBundle struct{}
+	type testBundle struct {
+		dbPool *pgxpool.Pool
+	}
 
 	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
 		t.Helper()
@@ -1132,7 +1134,7 @@ func Test_Client_Insert(t *testing.T) {
 		config := newTestConfig(t, nil)
 		client := newTestClient(t, dbPool, config)
 
-		return client, &testBundle{}
+		return client, &testBundle{dbPool: dbPool}
 	}
 
 	t.Run("Succeeds", func(t *testing.T) {
@@ -1192,7 +1194,13 @@ func Test_Client_Insert(t *testing.T) {
 		t.Parallel()
 
 		ctx := context.Background()
-		client, _ := setup(t)
+
+		_, bundle := setup(t)
+
+		config := newTestConfig(t, nil)
+		config.FetchCooldown = 5 * time.Second
+		config.FetchPollInterval = 5 * time.Second
+		client := newTestClient(t, bundle.dbPool, config)
 		statusUpdateCh := client.monitor.RegisterUpdates()
 
 		startClient(ctx, t, client)
