@@ -99,6 +99,17 @@ func (e *Executor) JobCountByState(ctx context.Context, state rivertype.JobState
 	return int(numJobs), nil
 }
 
+func (e *Executor) JobDelete(ctx context.Context, id int64) (*rivertype.JobRow, error) {
+	job, err := e.queries.JobDelete(ctx, e.dbtx, id)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	if job.State == dbsqlc.RiverJobStateRunning {
+		return nil, rivertype.ErrJobRunning
+	}
+	return jobRowFromInternal(job), nil
+}
+
 func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobDeleteBeforeParams) (int, error) {
 	numDeleted, err := e.queries.JobDeleteBefore(ctx, e.dbtx, &dbsqlc.JobDeleteBeforeParams{
 		CancelledFinalizedAtHorizon: params.CancelledFinalizedAtHorizon,

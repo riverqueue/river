@@ -1010,12 +1010,14 @@ func Test_Client_ClientFromContext(t *testing.T) {
 	require.Equal(t, client, clientResult)
 }
 
-func Test_Client_Insert(t *testing.T) {
+func Test_Client_JobDelete(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 
-	type testBundle struct{}
+	type testBundle struct {
+		dbPool *pgxpool.Pool
+	}
 
 	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
 		t.Helper()
@@ -1024,7 +1026,115 @@ func Test_Client_Insert(t *testing.T) {
 		config := newTestConfig(t, nil)
 		client := newTestClient(t, dbPool, config)
 
-		return client, &testBundle{}
+		return client, &testBundle{dbPool: dbPool}
+	}
+
+	t.Run("DeletesANonRunningJob", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		insertRes, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(time.Hour)})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateScheduled, insertRes.Job.State)
+
+		jobAfter, err := client.JobDelete(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.NotNil(t, jobAfter)
+		require.Equal(t, rivertype.JobStateScheduled, jobAfter.State)
+
+		_, err = client.JobGet(ctx, insertRes.Job.ID)
+		require.ErrorIs(t, err, ErrNotFound)
+	})
+
+	t.Run("DoesNotDeleteARunningJob", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		doneCh := make(chan struct{})
+		startedCh := make(chan int64)
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[callbackArgs]) error {
+			close(startedCh)
+			<-doneCh
+			return nil
+		}))
+
+		require.NoError(t, client.Start(ctx))
+		t.Cleanup(func() { require.NoError(t, client.Stop(ctx)) })
+		t.Cleanup(func() { close(doneCh) }) // must close before stopping client
+
+		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
+		require.NoError(t, err)
+
+		// Wait for the job to start:
+		riverinternaltest.WaitOrTimeout(t, startedCh)
+
+		jobAfter, err := client.JobDelete(ctx, insertRes.Job.ID)
+		require.ErrorIs(t, err, rivertype.ErrJobRunning)
+		require.Nil(t, jobAfter)
+
+		jobFromGet, err := client.JobGet(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, jobFromGet.State)
+	})
+
+	t.Run("TxVariantAlsoDeletesANonRunningJob", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		insertRes, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(time.Hour)})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateScheduled, insertRes.Job.State)
+
+		var jobAfter *rivertype.JobRow
+
+		err = pgx.BeginFunc(ctx, bundle.dbPool, func(tx pgx.Tx) error {
+			var err error
+			jobAfter, err = client.JobDeleteTx(ctx, tx, insertRes.Job.ID)
+			return err
+		})
+		require.NoError(t, err)
+		require.NotNil(t, jobAfter)
+		require.Equal(t, insertRes.Job.ID, jobAfter.ID)
+		require.Equal(t, rivertype.JobStateScheduled, jobAfter.State)
+
+		jobFromGet, err := client.JobGet(ctx, insertRes.Job.ID)
+		require.ErrorIs(t, ErrNotFound, err)
+		require.Nil(t, jobFromGet)
+	})
+
+	t.Run("ReturnsErrNotFoundIfJobDoesNotExist", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		jobAfter, err := client.JobDelete(ctx, 0)
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrNotFound)
+		require.Nil(t, jobAfter)
+	})
+}
+
+func Test_Client_Insert(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		dbPool *pgxpool.Pool
+	}
+
+	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+		t.Helper()
+
+		dbPool := riverinternaltest.TestDB(ctx, t)
+		config := newTestConfig(t, nil)
+		client := newTestClient(t, dbPool, config)
+
+		return client, &testBundle{dbPool: dbPool}
 	}
 
 	t.Run("Succeeds", func(t *testing.T) {
@@ -1084,7 +1194,13 @@ func Test_Client_Insert(t *testing.T) {
 		t.Parallel()
 
 		ctx := context.Background()
-		client, _ := setup(t)
+
+		_, bundle := setup(t)
+
+		config := newTestConfig(t, nil)
+		config.FetchCooldown = 5 * time.Second
+		config.FetchPollInterval = 5 * time.Second
+		client := newTestClient(t, bundle.dbPool, config)
 		statusUpdateCh := client.monitor.RegisterUpdates()
 
 		startClient(ctx, t, client)

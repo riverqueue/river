@@ -97,6 +97,55 @@ func (q *Queries) JobCountByState(ctx context.Context, db DBTX, state RiverJobSt
 	return count, err
 }
 
+const jobDelete = `-- name: JobDelete :one
+WITH job_to_delete AS (
+    SELECT id
+    FROM river_job
+    WHERE river_job.id = $1
+    FOR UPDATE
+),
+deleted_job AS (
+    DELETE
+    FROM river_job
+    USING job_to_delete
+    WHERE river_job.id = job_to_delete.id
+        -- Do not touch running jobs:
+        AND river_job.state != 'running'::river_job_state
+    RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
+)
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+FROM river_job
+WHERE id = $1::bigint
+    AND id NOT IN (SELECT id FROM deleted_job)
+UNION
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+FROM deleted_job
+`
+
+func (q *Queries) JobDelete(ctx context.Context, db DBTX, id int64) (*RiverJob, error) {
+	row := db.QueryRow(ctx, jobDelete, id)
+	var i RiverJob
+	err := row.Scan(
+		&i.ID,
+		&i.Args,
+		&i.Attempt,
+		&i.AttemptedAt,
+		&i.AttemptedBy,
+		&i.CreatedAt,
+		&i.Errors,
+		&i.FinalizedAt,
+		&i.Kind,
+		&i.MaxAttempts,
+		&i.Metadata,
+		&i.Priority,
+		&i.Queue,
+		&i.State,
+		&i.ScheduledAt,
+		&i.Tags,
+	)
+	return &i, err
+}
+
 const jobDeleteBefore = `-- name: JobDeleteBefore :one
 WITH deleted_jobs AS (
     DELETE FROM river_job
