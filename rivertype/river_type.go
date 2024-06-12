@@ -15,7 +15,7 @@ var ErrNotFound = errors.New("not found")
 
 // ErrJobRunning is returned when a job is attempted to be deleted while it's
 // running.
-var ErrJobRunning = errors.New("job is running")
+var ErrJobRunning = errors.New("running jobs cannot be deleted")
 
 // JobInsertResult is the result of a job insert, containing the inserted job
 // along with some other useful metadata.
