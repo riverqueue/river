@@ -1353,7 +1353,13 @@ func Test_Client_InsertMany(t *testing.T) {
 		t.Parallel()
 
 		ctx := context.Background()
-		client, _ := setup(t)
+
+		_, bundle := setup(t)
+
+		config := newTestConfig(t, nil)
+		config.FetchCooldown = 5 * time.Second
+		config.FetchPollInterval = 5 * time.Second
+		client := newTestClient(t, bundle.dbPool, config)
 		statusUpdateCh := client.monitor.RegisterUpdates()
 
 		startClient(ctx, t, client)
