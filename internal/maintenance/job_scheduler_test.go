@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/internal/riverinternaltest/testfactory"
@@ -30,15 +31,13 @@ func TestJobScheduler(t *testing.T) {
 	setup := func(t *testing.T, exec riverdriver.Executor) (*JobScheduler, *testBundle) {
 		t.Helper()
 
-		archetype := riverinternaltest.BaseServiceArchetype(t)
-
 		bundle := &testBundle{
 			exec:                 exec,
 			notificationsByQueue: make(map[string]int),
 		}
 
 		scheduler := NewJobScheduler(
-			archetype,
+			riverinternaltest.BaseServiceArchetype(t),
 			&JobSchedulerConfig{
 				Interval: JobSchedulerIntervalDefault,
 				Limit:    10,
@@ -51,7 +50,6 @@ func TestJobScheduler(t *testing.T) {
 			},
 			bundle.exec)
 		scheduler.TestSignals.Init()
-		t.Cleanup(scheduler.Stop)
 
 		return scheduler, bundle
 	}
@@ -93,7 +91,10 @@ func TestJobScheduler(t *testing.T) {
 		scheduler.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
 		scheduler.TestSignals = JobSchedulerTestSignals{}  // deinit so channels don't fill
 
-		startstoptest.Stress(ctx, t, scheduler)
+		wrapped := baseservice.Init(riverinternaltest.BaseServiceArchetype(t), &maintenanceServiceWrapper{
+			service: scheduler,
+		})
+		startstoptest.Stress(ctx, t, wrapped)
 	})
 
 	t.Run("SchedulesScheduledAndRetryableJobs", func(t *testing.T) {
@@ -118,7 +119,7 @@ func TestJobScheduler(t *testing.T) {
 		retryableJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
 		retryableJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(30 * time.Second))}) // won't be scheduled
 
-		require.NoError(t, scheduler.Start(ctx))
+		runMaintenanceService(ctx, t, scheduler)
 
 		scheduler.TestSignals.ScheduledBatch.WaitOrTimeout()
 
@@ -165,7 +166,7 @@ func TestJobScheduler(t *testing.T) {
 			jobs[i] = job
 		}
 
-		require.NoError(t, scheduler.Start(ctx))
+		runMaintenanceService(ctx, t, scheduler)
 
 		// See comment above. Exactly two batches are expected.
 		scheduler.TestSignals.ScheduledBatch.WaitOrTimeout()
@@ -182,7 +183,7 @@ func TestJobScheduler(t *testing.T) {
 		scheduler, _ := setupTx(t)
 		scheduler.config.Interval = 1 * time.Microsecond
 
-		require.NoError(t, scheduler.Start(ctx))
+		runMaintenanceService(ctx, t, scheduler)
 
 		// This should trigger ~immediately every time:
 		for i := 0; i < 5; i++ {
@@ -197,27 +198,7 @@ func TestJobScheduler(t *testing.T) {
 		scheduler, _ := setupTx(t)
 		scheduler.config.Interval = time.Minute // should only trigger once for the initial run
 
-		require.NoError(t, scheduler.Start(ctx))
-		scheduler.Stop()
-	})
-
-	t.Run("RespectsContextCancellation", func(t *testing.T) {
-		t.Parallel()
-
-		scheduler, _ := setupTx(t)
-		scheduler.config.Interval = time.Minute // should only trigger once for the initial run
-
-		ctx, cancelFunc := context.WithCancel(ctx)
-
-		require.NoError(t, scheduler.Start(ctx))
-
-		// To avoid a potential race, make sure to get a reference to the
-		// service's stopped channel _before_ cancellation as it's technically
-		// possible for the cancel to "win" and remove the stopped channel
-		// before we can start waiting on it.
-		stopped := scheduler.Stopped()
-		cancelFunc()
-		riverinternaltest.WaitOrTimeout(t, stopped)
+		MaintenanceServiceStopsImmediately(ctx, t, scheduler)
 	})
 
 	t.Run("CanRunMultipleTimes", func(t *testing.T) {
@@ -229,15 +210,30 @@ func TestJobScheduler(t *testing.T) {
 
 		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
 
-		require.NoError(t, scheduler.Start(ctx))
+		ctx1, cancel1 := context.WithCancel(ctx)
+		stopCh1 := make(chan struct{})
+		go func() {
+			defer close(stopCh1)
+			scheduler.Run(ctx1)
+		}()
+		t.Cleanup(func() { riverinternaltest.WaitOrTimeout(t, stopCh1) })
+		t.Cleanup(cancel1)
 
 		scheduler.TestSignals.ScheduledBatch.WaitOrTimeout()
 
-		scheduler.Stop()
+		cancel1()
+		riverinternaltest.WaitOrTimeout(t, stopCh1)
 
 		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Minute))})
 
-		require.NoError(t, scheduler.Start(ctx))
+		ctx2, cancel2 := context.WithCancel(ctx)
+		stopCh2 := make(chan struct{})
+		go func() {
+			defer close(stopCh2)
+			scheduler.Run(ctx2)
+		}()
+		t.Cleanup(func() { riverinternaltest.WaitOrTimeout(t, stopCh2) })
+		t.Cleanup(cancel2)
 
 		scheduler.TestSignals.ScheduledBatch.WaitOrTimeout()
 
@@ -293,7 +289,8 @@ func TestJobScheduler(t *testing.T) {
 		addJob("queue5", scheduler.config.Interval-time.Millisecond, rivertype.JobStateRetryable)
 
 		// Run the scheduler and wait for it to execute once:
-		require.NoError(t, scheduler.Start(ctx))
+		runMaintenanceService(ctx, t, scheduler)
+
 		scheduler.TestSignals.ScheduledBatch.WaitOrTimeout()
 
 		expectedQueues := []string{"queue1", "queue2", "queue2", "queue3", "queue4"}

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/util/timeutil"
 	"github.com/riverqueue/river/internal/util/valutil"
@@ -64,8 +63,7 @@ func (c *JobSchedulerConfig) mustValidate() *JobSchedulerConfig {
 // which are ready to run over to `available` so that they're eligible to be
 // worked.
 type JobScheduler struct {
-	queueMaintainerServiceBase
-	startstop.BaseStartStop
+	baseservice.BaseService
 
 	// exported for test purposes
 	TestSignals JobSchedulerTestSignals
@@ -85,44 +83,29 @@ func NewJobScheduler(archetype *baseservice.Archetype, config *JobSchedulerConfi
 	})
 }
 
-func (s *JobScheduler) Start(ctx context.Context) error { //nolint:dupl
-	ctx, shouldStart, stopped := s.StartInit(ctx)
-	if !shouldStart {
-		return nil
-	}
+func (s *JobScheduler) Run(ctx context.Context) {
+	s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStarted)
+	defer s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStopped)
 
-	s.StaggerStart(ctx)
-
-	go func() {
-		// This defer should come first so that it's last out, thereby avoiding
-		// races.
-		defer close(stopped)
-
-		s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStarted)
-		defer s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStopped)
-
-		ticker := timeutil.NewTickerWithInitialTick(ctx, s.config.Interval)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-
-			res, err := s.runOnce(ctx)
-			if err != nil {
-				if !errors.Is(err, context.Canceled) {
-					s.Logger.ErrorContext(ctx, s.Name+": Error scheduling jobs", slog.String("error", err.Error()))
-				}
-				continue
-			}
-			s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
-				slog.Int("num_jobs_scheduled", res.NumCompletedJobsScheduled),
-			)
+	ticker := timeutil.NewTickerWithInitialTick(ctx, s.config.Interval)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
-	}()
 
-	return nil
+		res, err := s.runOnce(ctx)
+		if err != nil {
+			if !errors.Is(err, context.Canceled) {
+				s.Logger.ErrorContext(ctx, s.Name+": Error scheduling jobs", slog.String("error", err.Error()))
+			}
+			continue
+		}
+		s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
+			slog.Int("num_jobs_scheduled", res.NumCompletedJobsScheduled),
+		)
+	}
 }
 
 type schedulerRunOnceResult struct {

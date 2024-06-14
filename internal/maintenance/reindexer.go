@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/util/valutil"
 	"github.com/riverqueue/river/riverdriver"
@@ -55,8 +54,7 @@ func (c *ReindexerConfig) mustValidate() *ReindexerConfig {
 // Reindexer periodically executes a REINDEX command on the important job
 // indexes to rebuild them and fix bloat issues.
 type Reindexer struct {
-	queueMaintainerServiceBase
-	startstop.BaseStartStop
+	baseservice.BaseService
 
 	// exported for test purposes
 	Config      *ReindexerConfig
@@ -89,68 +87,53 @@ func NewReindexer(archetype *baseservice.Archetype, config *ReindexerConfig, exe
 	})
 }
 
-func (s *Reindexer) Start(ctx context.Context) error {
-	ctx, shouldStart, stopped := s.StartInit(ctx)
-	if !shouldStart {
-		return nil
-	}
+func (s *Reindexer) Run(ctx context.Context) {
+	s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStarted)
+	defer s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStopped)
 
-	s.StaggerStart(ctx)
+	nextRunAt := s.Config.ScheduleFunc(time.Now().UTC())
 
-	go func() {
-		// This defer should come first so that it's last out, thereby avoiding
-		// races.
-		defer close(stopped)
+	s.Logger.InfoContext(ctx, s.Name+": Scheduling first run", slog.Time("next_run_at", nextRunAt))
 
-		s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStarted)
-		defer s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStopped)
+	timerUntilNextRun := time.NewTimer(time.Until(nextRunAt))
 
-		nextRunAt := s.Config.ScheduleFunc(time.Now().UTC())
-
-		s.Logger.InfoContext(ctx, s.Name+": Scheduling first run", slog.Time("next_run_at", nextRunAt))
-
-		timerUntilNextRun := time.NewTimer(time.Until(nextRunAt))
-
-		for {
-			select {
-			case <-timerUntilNextRun.C:
-				for _, indexName := range s.Config.IndexNames {
-					if err := s.reindexOne(ctx, indexName); err != nil {
-						if !errors.Is(err, context.Canceled) {
-							s.Logger.ErrorContext(ctx, s.Name+": Error reindexing", slog.String("error", err.Error()), slog.String("index_name", indexName))
-						}
-						continue
+	for {
+		select {
+		case <-timerUntilNextRun.C:
+			for _, indexName := range s.Config.IndexNames {
+				if err := s.reindexOne(ctx, indexName); err != nil {
+					if !errors.Is(err, context.Canceled) {
+						s.Logger.ErrorContext(ctx, s.Name+": Error reindexing", slog.String("error", err.Error()), slog.String("index_name", indexName))
 					}
+					continue
 				}
-
-				s.TestSignals.Reindexed.Signal(struct{}{})
-
-				// On each run, we calculate the new schedule based on the
-				// previous run's start time. This ensures that we don't
-				// accidentally skip a run as time elapses during the run.
-				nextRunAt = s.Config.ScheduleFunc(nextRunAt)
-
-				// TODO: maybe we should log differently if some of these fail?
-				s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
-					slog.Time("next_run_at", nextRunAt), slog.Int("num_reindexes_initiated", len(s.Config.IndexNames)))
-
-				// Reset the timer after the insert loop has finished so it's
-				// paused during work. Makes its firing more deterministic.
-				timerUntilNextRun.Reset(time.Until(nextRunAt))
-
-			case <-ctx.Done():
-				// Clean up timer resources. We know it has _not_ received from
-				// the timer since its last reset because that would have led us
-				// to the case above instead of here.
-				if !timerUntilNextRun.Stop() {
-					<-timerUntilNextRun.C
-				}
-				return
 			}
-		}
-	}()
 
-	return nil
+			s.TestSignals.Reindexed.Signal(struct{}{})
+
+			// On each run, we calculate the new schedule based on the
+			// previous run's start time. This ensures that we don't
+			// accidentally skip a run as time elapses during the run.
+			nextRunAt = s.Config.ScheduleFunc(nextRunAt)
+
+			// TODO: maybe we should log differently if some of these fail?
+			s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
+				slog.Time("next_run_at", nextRunAt), slog.Int("num_reindexes_initiated", len(s.Config.IndexNames)))
+
+			// Reset the timer after the insert loop has finished so it's
+			// paused during work. Makes its firing more deterministic.
+			timerUntilNextRun.Reset(time.Until(nextRunAt))
+
+		case <-ctx.Done():
+			// Clean up timer resources. We know it has _not_ received from
+			// the timer since its last reset because that would have led us
+			// to the case above instead of here.
+			if !timerUntilNextRun.Stop() {
+				<-timerUntilNextRun.C
+			}
+			return
+		}
+	}
 }
 
 func (s *Reindexer) reindexOne(ctx context.Context, indexName string) error {

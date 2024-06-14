@@ -10,7 +10,6 @@ import (
 
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/dbunique"
-	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/sharedtx"
@@ -19,9 +18,25 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
+func runMaintenanceService(ctx context.Context, t *testing.T, svc MaintenanceService) {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(ctx)
+
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		svc.Run(ctx)
+	}()
+
+	t.Cleanup(func() {
+		riverinternaltest.WaitOrTimeout(t, stopped)
+	})
+	t.Cleanup(cancel)
+}
+
 type testService struct {
-	queueMaintainerServiceBase
-	startstop.BaseStartStop
+	baseservice.BaseService
 
 	testSignals testServiceTestSignals
 }
@@ -35,21 +50,10 @@ func newTestService(tb testing.TB) *testService {
 	return testSvc
 }
 
-func (s *testService) Start(ctx context.Context) error {
-	ctx, shouldStart, stopped := s.StartInit(ctx)
-	if !shouldStart {
-		return nil
-	}
-
-	go func() {
-		defer close(stopped)
-
-		s.testSignals.started.Signal(struct{}{})
-		<-ctx.Done()
-		s.testSignals.returning.Signal(struct{}{})
-	}()
-
-	return nil
+func (s *testService) Run(ctx context.Context) {
+	s.testSignals.started.Signal(struct{}{})
+	<-ctx.Done()
+	s.testSignals.returning.Signal(struct{}{})
 }
 
 type testServiceTestSignals struct {
@@ -67,7 +71,7 @@ func TestQueueMaintainer(t *testing.T) {
 
 	ctx := context.Background()
 
-	setup := func(t *testing.T, services []startstop.Service) *QueueMaintainer {
+	setup := func(t *testing.T, services []MaintenanceService) *QueueMaintainer {
 		t.Helper()
 
 		maintainer := NewQueueMaintainer(riverinternaltest.BaseServiceArchetype(t), services)
@@ -80,7 +84,7 @@ func TestQueueMaintainer(t *testing.T) {
 		t.Parallel()
 
 		testSvc := newTestService(t)
-		maintainer := setup(t, []startstop.Service{testSvc})
+		maintainer := setup(t, []MaintenanceService{testSvc})
 
 		require.NoError(t, maintainer.Start(ctx))
 		testSvc.testSignals.started.WaitOrTimeout()
@@ -101,7 +105,7 @@ func TestQueueMaintainer(t *testing.T) {
 
 		// Use realistic services in this one so we can verify stress not only
 		// on the queue maintainer, but it and all its subservices together.
-		maintainer := setup(t, []startstop.Service{
+		maintainer := setup(t, []MaintenanceService{
 			NewJobCleaner(archetype, &JobCleanerConfig{}, driver),
 			NewPeriodicJobEnqueuer(archetype, &PeriodicJobEnqueuerConfig{
 				PeriodicJobs: []*PeriodicJob{
@@ -124,7 +128,7 @@ func TestQueueMaintainer(t *testing.T) {
 		t.Parallel()
 
 		testSvc := newTestService(t)
-		maintainer := setup(t, []startstop.Service{testSvc})
+		maintainer := setup(t, []MaintenanceService{testSvc})
 
 		// Tolerate being stopped without having been started, without blocking:
 		maintainer.Stop()
@@ -138,7 +142,7 @@ func TestQueueMaintainer(t *testing.T) {
 		t.Parallel()
 
 		testSvc := newTestService(t)
-		maintainer := setup(t, []startstop.Service{testSvc})
+		maintainer := setup(t, []MaintenanceService{testSvc})
 
 		runOnce := func() {
 			require.NoError(t, maintainer.Start(ctx))
@@ -156,7 +160,7 @@ func TestQueueMaintainer(t *testing.T) {
 		t.Parallel()
 
 		testSvc := newTestService(t)
-		maintainer := setup(t, []startstop.Service{testSvc})
+		maintainer := setup(t, []MaintenanceService{testSvc})
 
 		ctx, cancelFunc := context.WithCancel(ctx)
 
@@ -176,7 +180,7 @@ func TestQueueMaintainer(t *testing.T) {
 
 		testSvc := newTestService(t)
 
-		maintainer := setup(t, []startstop.Service{testSvc})
+		maintainer := setup(t, []MaintenanceService{testSvc})
 
 		require.NoError(t, maintainer.Start(ctx))
 		testSvc.testSignals.started.WaitOrTimeout()
@@ -189,4 +193,17 @@ func TestQueueMaintainer(t *testing.T) {
 		maintainer.Stop()
 		testSvc.testSignals.returning.WaitOrTimeout()
 	})
+}
+
+func MaintenanceServiceStopsImmediately(ctx context.Context, t *testing.T, svc MaintenanceService) {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(ctx)
+	stopCh := make(chan struct{})
+	go func() {
+		defer close(stopCh)
+		svc.Run(ctx)
+	}()
+	cancel()
+	riverinternaltest.WaitOrTimeout(t, stopCh)
 }

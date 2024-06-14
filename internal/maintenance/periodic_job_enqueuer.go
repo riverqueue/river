@@ -9,7 +9,6 @@ import (
 
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/dbunique"
-	"github.com/riverqueue/river/internal/maintenance/startstop"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/util/maputil"
 	"github.com/riverqueue/river/riverdriver"
@@ -75,8 +74,7 @@ func (c *PeriodicJobEnqueuerConfig) mustValidate() *PeriodicJobEnqueuerConfig {
 // PeriodicJobEnqueuer inserts jobs configured to run periodically as unique
 // jobs to make sure they'll run as frequently as their period dictates.
 type PeriodicJobEnqueuer struct {
-	queueMaintainerServiceBase
-	startstop.BaseStartStop
+	baseservice.BaseService
 
 	// exported for test purposes
 	Config      *PeriodicJobEnqueuerConfig
@@ -201,154 +199,139 @@ type insertParamsAndUniqueOpts struct {
 	UniqueOpts   *dbunique.UniqueOpts
 }
 
-func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
-	ctx, shouldStart, stopped := s.StartInit(ctx)
-	if !shouldStart {
-		return nil
+func (s *PeriodicJobEnqueuer) Run(ctx context.Context) {
+	s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStarted)
+	defer s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStopped)
+
+	// Drain the signal to recalculate next run if it's been sent (i.e. Add
+	// or AddMany called before Start). We're about to schedule jobs from
+	// scratch, and therefore don't need to immediately do so again.
+	select {
+	case <-s.recalculateNextRun:
+	default:
 	}
 
-	s.StaggerStart(ctx)
+	var lastHandleSeen rivertype.PeriodicJobHandle = -1 // so handle 0 is considered
 
-	go func() {
-		// This defer should come first so that it's last out, thereby avoiding
-		// races.
-		defer close(stopped)
+	validateInsertRunOnStartAndScheduleNewlyAdded := func() {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
 
-		s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStarted)
-		defer s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStopped)
+		var (
+			insertParamsMany   []*riverdriver.JobInsertFastParams
+			insertParamsUnique []*insertParamsAndUniqueOpts
 
-		// Drain the signal to recalculate next run if it's been sent (i.e. Add
-		// or AddMany called before Start). We're about to schedule jobs from
-		// scratch, and therefore don't need to immediately do so again.
-		select {
-		case <-s.recalculateNextRun:
-		default:
+			now = s.TimeNowUTC()
+		)
+
+		// Handle periodic jobs in sorted order so we can correctly account
+		// for the most recently added one that we've seen.
+		sortedPeriodicJobHandles := maputil.Keys(s.periodicJobs)
+		slices.Sort(sortedPeriodicJobHandles)
+
+		for _, handle := range sortedPeriodicJobHandles {
+			if handle <= lastHandleSeen {
+				continue
+			}
+
+			lastHandleSeen = handle
+
+			periodicJob := s.periodicJobs[handle].mustValidate()
+
+			periodicJob.nextRunAt = periodicJob.ScheduleFunc(now)
+
+			if !periodicJob.RunOnStart {
+				continue
+			}
+
+			if insertParams, uniqueOpts, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc, now); ok {
+				if !uniqueOpts.IsEmpty() {
+					insertParamsUnique = append(insertParamsUnique, &insertParamsAndUniqueOpts{insertParams, uniqueOpts})
+				} else {
+					insertParamsMany = append(insertParamsMany, insertParams)
+				}
+			}
 		}
 
-		var lastHandleSeen rivertype.PeriodicJobHandle = -1 // so handle 0 is considered
+		s.insertBatch(ctx, insertParamsMany, insertParamsUnique)
 
-		validateInsertRunOnStartAndScheduleNewlyAdded := func() {
-			s.mu.RLock()
-			defer s.mu.RUnlock()
+		if len(insertParamsMany) > 0 {
+			s.Logger.DebugContext(ctx, s.Name+": Inserted RunOnStart jobs", "num_jobs", len(insertParamsMany)+len(insertParamsUnique))
+		}
+	}
 
+	// Run any jobs that need to run on start and calculate initial runs.
+	validateInsertRunOnStartAndScheduleNewlyAdded()
+
+	s.TestSignals.EnteredLoop.Signal(struct{}{})
+
+	timerUntilNextRun := time.NewTimer(s.timeUntilNextRun())
+
+	for {
+		select {
+		case <-timerUntilNextRun.C:
 			var (
 				insertParamsMany   []*riverdriver.JobInsertFastParams
 				insertParamsUnique []*insertParamsAndUniqueOpts
-
-				now = s.TimeNowUTC()
 			)
 
-			// Handle periodic jobs in sorted order so we can correctly account
-			// for the most recently added one that we've seen.
-			sortedPeriodicJobHandles := maputil.Keys(s.periodicJobs)
-			slices.Sort(sortedPeriodicJobHandles)
+			now := s.TimeNowUTC()
 
-			for _, handle := range sortedPeriodicJobHandles {
-				if handle <= lastHandleSeen {
-					continue
-				}
+			// Add a small margin to the current time so we're not only
+			// running jobs that are already ready, but also ones ready at
+			// this exact moment or ready in the very near future.
+			nowWithMargin := now.Add(100 * time.Millisecond)
 
-				lastHandleSeen = handle
+			func() {
+				s.mu.RLock()
+				defer s.mu.RUnlock()
 
-				periodicJob := s.periodicJobs[handle].mustValidate()
-
-				periodicJob.nextRunAt = periodicJob.ScheduleFunc(now)
-
-				if !periodicJob.RunOnStart {
-					continue
-				}
-
-				if insertParams, uniqueOpts, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc, now); ok {
-					if !uniqueOpts.IsEmpty() {
-						insertParamsUnique = append(insertParamsUnique, &insertParamsAndUniqueOpts{insertParams, uniqueOpts})
-					} else {
-						insertParamsMany = append(insertParamsMany, insertParams)
+				for _, periodicJob := range s.periodicJobs {
+					if !periodicJob.nextRunAt.Before(nowWithMargin) {
+						continue
 					}
+
+					if insertParams, uniqueOpts, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc, periodicJob.nextRunAt); ok {
+						if !uniqueOpts.IsEmpty() {
+							insertParamsUnique = append(insertParamsUnique, &insertParamsAndUniqueOpts{insertParams, uniqueOpts})
+						} else {
+							insertParamsMany = append(insertParamsMany, insertParams)
+						}
+					}
+
+					// Although we may have inserted a new job a little
+					// preemptively due to the margin applied above, try to stay
+					// as true as possible to the original schedule by using the
+					// original run time when calculating the next one.
+					periodicJob.nextRunAt = periodicJob.ScheduleFunc(periodicJob.nextRunAt)
 				}
-			}
+			}()
 
 			s.insertBatch(ctx, insertParamsMany, insertParamsUnique)
 
-			if len(insertParamsMany) > 0 {
-				s.Logger.DebugContext(ctx, s.Name+": Inserted RunOnStart jobs", "num_jobs", len(insertParamsMany)+len(insertParamsUnique))
+		case <-s.recalculateNextRun:
+			if !timerUntilNextRun.Stop() {
+				<-timerUntilNextRun.C
 			}
+
+		case <-ctx.Done():
+			// Clean up timer resources. We know it has _not_ received from the
+			// timer since its last reset because that would have led us to the case
+			// above instead of here.
+			if !timerUntilNextRun.Stop() {
+				<-timerUntilNextRun.C
+			}
+			return
 		}
 
-		// Run any jobs that need to run on start and calculate initial runs.
+		// Insert any RunOnStart initial runs for new jobs that've been
+		// added since the last run loop.
 		validateInsertRunOnStartAndScheduleNewlyAdded()
 
-		s.TestSignals.EnteredLoop.Signal(struct{}{})
-
-		timerUntilNextRun := time.NewTimer(s.timeUntilNextRun())
-
-		for {
-			select {
-			case <-timerUntilNextRun.C:
-				var (
-					insertParamsMany   []*riverdriver.JobInsertFastParams
-					insertParamsUnique []*insertParamsAndUniqueOpts
-				)
-
-				now := s.TimeNowUTC()
-
-				// Add a small margin to the current time so we're not only
-				// running jobs that are already ready, but also ones ready at
-				// this exact moment or ready in the very near future.
-				nowWithMargin := now.Add(100 * time.Millisecond)
-
-				func() {
-					s.mu.RLock()
-					defer s.mu.RUnlock()
-
-					for _, periodicJob := range s.periodicJobs {
-						if !periodicJob.nextRunAt.Before(nowWithMargin) {
-							continue
-						}
-
-						if insertParams, uniqueOpts, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc, periodicJob.nextRunAt); ok {
-							if !uniqueOpts.IsEmpty() {
-								insertParamsUnique = append(insertParamsUnique, &insertParamsAndUniqueOpts{insertParams, uniqueOpts})
-							} else {
-								insertParamsMany = append(insertParamsMany, insertParams)
-							}
-						}
-
-						// Although we may have inserted a new job a little
-						// preemptively due to the margin applied above, try to stay
-						// as true as possible to the original schedule by using the
-						// original run time when calculating the next one.
-						periodicJob.nextRunAt = periodicJob.ScheduleFunc(periodicJob.nextRunAt)
-					}
-				}()
-
-				s.insertBatch(ctx, insertParamsMany, insertParamsUnique)
-
-			case <-s.recalculateNextRun:
-				if !timerUntilNextRun.Stop() {
-					<-timerUntilNextRun.C
-				}
-
-			case <-ctx.Done():
-				// Clean up timer resources. We know it has _not_ received from the
-				// timer since its last reset because that would have led us to the case
-				// above instead of here.
-				if !timerUntilNextRun.Stop() {
-					<-timerUntilNextRun.C
-				}
-				return
-			}
-
-			// Insert any RunOnStart initial runs for new jobs that've been
-			// added since the last run loop.
-			validateInsertRunOnStartAndScheduleNewlyAdded()
-
-			// Reset the timer after the insert loop has finished so it's
-			// paused during work. Makes its firing more deterministic.
-			timerUntilNextRun.Reset(s.timeUntilNextRun())
-		}
-	}()
-
-	return nil
+		// Reset the timer after the insert loop has finished so it's
+		// paused during work. Makes its firing more deterministic.
+		timerUntilNextRun.Reset(s.timeUntilNextRun())
+	}
 }
 
 func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany []*riverdriver.JobInsertFastParams, insertParamsUnique []*insertParamsAndUniqueOpts) {

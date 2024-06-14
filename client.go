@@ -530,7 +530,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		// Maintenance services
 		//
 
-		maintenanceServices := []startstop.Service{}
+		maintenanceServices := []maintenance.MaintenanceService{}
 
 		{
 			jobCleaner := maintenance.NewJobCleaner(archetype, &maintenance.JobCleanerConfig{

@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/internal/riverinternaltest/testfactory"
@@ -43,9 +44,7 @@ func TestQueueCleaner(t *testing.T) {
 				RetentionPeriod: QueueRetentionPeriodDefault,
 			},
 			bundle.exec)
-		cleaner.StaggerStartupDisable(true)
 		cleaner.TestSignals.Init()
-		t.Cleanup(cleaner.Stop)
 
 		return cleaner, bundle
 	}
@@ -66,7 +65,10 @@ func TestQueueCleaner(t *testing.T) {
 		cleaner.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
 		cleaner.TestSignals = QueueCleanerTestSignals{}  // deinit so channels don't fill
 
-		startstoptest.Stress(ctx, t, cleaner)
+		wrapped := baseservice.Init(riverinternaltest.BaseServiceArchetype(t), &maintenanceServiceWrapper{
+			service: cleaner,
+		})
+		startstoptest.Stress(ctx, t, wrapped)
 	})
 
 	t.Run("DeletesExpiredQueues", func(t *testing.T) {
@@ -84,7 +86,7 @@ func TestQueueCleaner(t *testing.T) {
 		queue4 := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue4"), UpdatedAt: ptrutil.Ptr(now.Add(-26 * time.Hour))})
 		queue5 := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue5"), UpdatedAt: ptrutil.Ptr(now.Add(-48 * time.Hour))})
 
-		require.NoError(t, cleaner.Start(ctx))
+		runMaintenanceService(ctx, t, cleaner)
 
 		cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
 
@@ -122,7 +124,7 @@ func TestQueueCleaner(t *testing.T) {
 			queues[i] = queue
 		}
 
-		require.NoError(t, cleaner.Start(ctx))
+		runMaintenanceService(ctx, t, cleaner)
 
 		// See comment above. Exactly two batches are expected.
 		cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
@@ -140,7 +142,7 @@ func TestQueueCleaner(t *testing.T) {
 		cleaner, _ := setup(t)
 		cleaner.Config.Interval = 1 * time.Microsecond
 
-		require.NoError(t, cleaner.Start(ctx))
+		runMaintenanceService(ctx, t, cleaner)
 
 		// This should trigger ~immediately every time:
 		for i := 0; i < 5; i++ {
@@ -155,27 +157,7 @@ func TestQueueCleaner(t *testing.T) {
 		cleaner, _ := setup(t)
 		cleaner.Config.Interval = time.Minute // should only trigger once for the initial run
 
-		require.NoError(t, cleaner.Start(ctx))
-		cleaner.Stop()
-	})
-
-	t.Run("RespectsContextCancellation", func(t *testing.T) {
-		t.Parallel()
-
-		cleaner, _ := setup(t)
-		cleaner.Config.Interval = time.Minute // should only trigger once for the initial run
-
-		ctx, cancelFunc := context.WithCancel(ctx)
-
-		require.NoError(t, cleaner.Start(ctx))
-
-		// To avoid a potential race, make sure to get a reference to the
-		// service's stopped channel _before_ cancellation as it's technically
-		// possible for the cancel to "win" and remove the stopped channel
-		// before we can start waiting on it.
-		stopped := cleaner.Stopped()
-		cancelFunc()
-		riverinternaltest.WaitOrTimeout(t, stopped)
+		MaintenanceServiceStopsImmediately(ctx, t, cleaner)
 	})
 
 	t.Run("CanRunMultipleTimes", func(t *testing.T) {
@@ -186,15 +168,30 @@ func TestQueueCleaner(t *testing.T) {
 
 		queue1 := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue1"), UpdatedAt: ptrutil.Ptr(bundle.deleteHorizon.Add(-1 * time.Hour))})
 
-		require.NoError(t, cleaner.Start(ctx))
+		ctx1, cancel1 := context.WithCancel(ctx)
+		stopCh1 := make(chan struct{})
+		go func() {
+			defer close(stopCh1)
+			cleaner.Run(ctx1)
+		}()
+		t.Cleanup(func() { riverinternaltest.WaitOrTimeout(t, stopCh1) })
+		t.Cleanup(cancel1)
 
 		cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
 
-		cleaner.Stop()
+		cancel1()
+		riverinternaltest.WaitOrTimeout(t, stopCh1)
 
 		queue2 := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue2"), UpdatedAt: ptrutil.Ptr(bundle.deleteHorizon.Add(-1 * time.Minute))})
 
-		require.NoError(t, cleaner.Start(ctx))
+		ctx2, cancel2 := context.WithCancel(ctx)
+		stopCh2 := make(chan struct{})
+		go func() {
+			defer close(stopCh2)
+			cleaner.Run(ctx2)
+		}()
+		t.Cleanup(func() { riverinternaltest.WaitOrTimeout(t, stopCh2) })
+		t.Cleanup(cancel2)
 
 		cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
 
