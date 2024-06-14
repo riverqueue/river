@@ -145,7 +145,7 @@ func (e *jobExecutor) Execute(ctx context.Context) {
 	// Ensure that the context is cancelled no matter what, or it will leak:
 	defer e.CancelFunc(errExecutorDefaultCancel)
 
-	e.start = e.TimeNowUTC()
+	e.start = e.Time.NowUTC()
 	e.stats = &jobstats.JobStatistics{
 		QueueWaitDuration: e.start.Sub(e.JobRow.ScheduledAt),
 	}
@@ -179,7 +179,7 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 				PanicVal:   recovery,
 			}
 		}
-		e.stats.RunDuration = e.TimeNowUTC().Sub(e.start)
+		e.stats.RunDuration = e.Time.NowUTC().Sub(e.start)
 	}()
 
 	if e.WorkUnit == nil {
@@ -258,7 +258,7 @@ func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 		// so we instead make the job immediately `available` if the snooze time is
 		// smaller than the scheduler's run interval.
 		var params *riverdriver.JobSetStateIfRunningParams
-		if nextAttemptScheduledAt.Sub(e.TimeNowUTC()) <= e.SchedulerInterval {
+		if nextAttemptScheduledAt.Sub(e.Time.NowUTC()) <= e.SchedulerInterval {
 			params = riverdriver.JobSetStateSnoozedAvailable(e.JobRow.ID, nextAttemptScheduledAt, e.JobRow.MaxAttempts+1)
 		} else {
 			params = riverdriver.JobSetStateSnoozed(e.JobRow.ID, nextAttemptScheduledAt, e.JobRow.MaxAttempts+1)
@@ -276,7 +276,7 @@ func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 		return
 	}
 
-	if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateCompleted(e.JobRow.ID, e.TimeNowUTC())); err != nil {
+	if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateCompleted(e.JobRow.ID, e.Time.NowUTC())); err != nil {
 		e.Logger.ErrorContext(ctx, e.Name+": Error completing job",
 			slog.String("err", err.Error()),
 			slog.Int64("job_id", e.JobRow.ID),
@@ -364,7 +364,7 @@ func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
 	// respected. Here, we offset that with a branch that makes jobs immediately
 	// `available` if their retry was smaller than the scheduler's run interval.
 	var params *riverdriver.JobSetStateIfRunningParams
-	if nextRetryScheduledAt.Sub(e.TimeNowUTC()) <= e.SchedulerInterval {
+	if nextRetryScheduledAt.Sub(e.Time.NowUTC()) <= e.SchedulerInterval {
 		params = riverdriver.JobSetStateErrorAvailable(e.JobRow.ID, nextRetryScheduledAt, errData)
 	} else {
 		params = riverdriver.JobSetStateErrorRetryable(e.JobRow.ID, nextRetryScheduledAt, errData)

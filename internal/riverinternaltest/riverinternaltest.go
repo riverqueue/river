@@ -61,9 +61,9 @@ func BaseServiceArchetype(tb testing.TB) *baseservice.Archetype {
 	tb.Helper()
 
 	return &baseservice.Archetype{
-		Logger:     Logger(tb),
-		Rand:       rand,
-		TimeNowUTC: func() time.Time { return time.Now().UTC() },
+		Logger: Logger(tb),
+		Rand:   rand,
+		Time:   &TimeStub{},
 	}
 }
 
@@ -219,31 +219,6 @@ func TestDB(ctx context.Context, tb testing.TB) *pgxpool.Pool {
 	tb.Cleanup(testPool.Pool().Close)
 
 	return testPool.Pool()
-}
-
-// StubTime returns a pair of function for (getTime, setTime), the former of
-// which is compatible with `TimeNowUTC` found in the service archetype.
-// It's concurrent safe is so that a started service can access its stub
-// time while the test case is setting it, and without the race detector
-// triggering.
-func StubTime(initialTime time.Time) (func() time.Time, func(t time.Time)) {
-	var (
-		mu          sync.RWMutex
-		stubbedTime = &initialTime
-	)
-
-	getTime := func() time.Time {
-		mu.RLock()
-		defer mu.RUnlock()
-		return *stubbedTime
-	}
-	setTime := func(newTime time.Time) {
-		mu.Lock()
-		defer mu.Unlock()
-		stubbedTime = &newTime
-	}
-
-	return getTime, setTime
 }
 
 // A pool and mutex to protect it, lazily initialized by TestTx. Once open, this
@@ -432,4 +407,37 @@ func WrapTestMain(m *testing.M) {
 	}
 
 	os.Exit(status)
+}
+
+// TimeStub implements baseservice.TimeGenerator to allow time to be stubbed in
+// tests.
+type TimeStub struct {
+	mu     sync.RWMutex
+	nowUTC *time.Time
+}
+
+func (t *TimeStub) NowUTC() time.Time {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if t.nowUTC == nil {
+		return time.Now().UTC()
+	}
+
+	return *t.nowUTC
+}
+
+func (t *TimeStub) NowUTCOrNil() *time.Time {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	return t.nowUTC
+}
+
+func (t *TimeStub) StubNowUTC(nowUTC time.Time) time.Time {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.nowUTC = &nowUTC
+	return nowUTC
 }

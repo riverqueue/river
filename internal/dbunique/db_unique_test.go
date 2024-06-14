@@ -41,20 +41,27 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 		)
 
 		bundle := &testBundle{
-			baselineTime: time.Now(),
-			driver:       driver,
-			exec:         driver.UnwrapExecutor(tx),
-			tx:           tx,
+			driver: driver,
+			exec:   driver.UnwrapExecutor(tx),
+			tx:     tx,
 		}
 
 		inserter := baseservice.Init(riverinternaltest.BaseServiceArchetype(t), &UniqueInserter{})
-		inserter.TimeNowUTC = func() time.Time { return bundle.baselineTime }
+
+		// Tests that use ByPeriod below can be sensitive to intermittency if
+		// the tests run at say 14:59:59.998, then it's possible to accidentally
+		// cross a period threshold, even if very unlikely. So here, seed mostly
+		// the current time, but make sure it's nicened up a little to be
+		// roughly in the middle of the hour and well clear of any period
+		// boundaries.
+		bundle.baselineTime = inserter.Time.StubNowUTC(time.Now().UTC().Truncate(1 * time.Hour).Add(37*time.Minute + 23*time.Second + 123*time.Millisecond))
 
 		return inserter, bundle
 	}
 
-	makeInsertParams := func() *riverdriver.JobInsertFastParams {
+	makeInsertParams := func(bundle *testBundle) *riverdriver.JobInsertFastParams {
 		return &riverdriver.JobInsertFastParams{
+			CreatedAt:   &bundle.baselineTime,
 			EncodedArgs: []byte(`{}`),
 			Kind:        "fake_job",
 			MaxAttempts: rivercommon.MaxAttemptsDefault,
@@ -71,7 +78,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 
 		inserter, bundle := setup(t)
 
-		insertParams := makeInsertParams()
+		insertParams := makeInsertParams(bundle)
 		res, err := inserter.JobInsert(ctx, bundle.exec, insertParams, nil)
 		require.NoError(t, err)
 
@@ -83,7 +90,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 		require.Equal(t, 0, res.Job.Attempt)
 		require.Nil(t, res.Job.AttemptedAt)
 		require.Empty(t, res.Job.AttemptedBy)
-		require.WithinDuration(t, time.Now(), res.Job.CreatedAt, 2*time.Second)
+		require.Equal(t, bundle.baselineTime.Truncate(1*time.Microsecond), res.Job.CreatedAt)
 		require.Empty(t, res.Job.Errors)
 		require.Nil(t, res.Job.FinalizedAt)
 		require.Equal(t, insertParams.Kind, res.Job.Kind)
@@ -103,7 +110,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 
 		const maxJobsToFetch = 8
 
-		res, err := inserter.JobInsert(ctx, bundle.exec, makeInsertParams(), nil)
+		res, err := inserter.JobInsert(ctx, bundle.exec, makeInsertParams(bundle), nil)
 		require.NoError(t, err)
 		require.NotEqual(t, 0, res.Job.ID, "expected job ID to be set, got %d", res.Job.ID)
 		require.WithinDuration(t, time.Now(), res.Job.ScheduledAt, 1*time.Second)
@@ -120,7 +127,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 			"expected selected job to be in running state, got %q", jobs[0].State)
 
 		for i := 1; i < 10; i++ {
-			_, err := inserter.JobInsert(ctx, bundle.exec, makeInsertParams(), nil)
+			_, err := inserter.JobInsert(ctx, bundle.exec, makeInsertParams(bundle), nil)
 			require.NoError(t, err)
 		}
 
@@ -152,7 +159,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 
 		inserter, bundle := setup(t)
 
-		insertParams := makeInsertParams()
+		insertParams := makeInsertParams(bundle)
 		uniqueOpts := &UniqueOpts{
 			ByArgs: true,
 		}
@@ -184,7 +191,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 
 		inserter, bundle := setup(t)
 
-		insertParams := makeInsertParams()
+		insertParams := makeInsertParams(bundle)
 		uniqueOpts := &UniqueOpts{
 			ByPeriod: 15 * time.Minute,
 		}
@@ -200,7 +207,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 		require.Equal(t, res0.Job.ID, res1.Job.ID)
 		require.True(t, res1.UniqueSkippedAsDuplicate)
 
-		inserter.TimeNowUTC = func() time.Time { return bundle.baselineTime.Add(uniqueOpts.ByPeriod).Add(1 * time.Second) }
+		inserter.Time.StubNowUTC(bundle.baselineTime.Add(uniqueOpts.ByPeriod).Add(1 * time.Second))
 
 		// Same operation again, except that because we've advanced time passed
 		// the period within unique bounds, another job is allowed to be queued,
@@ -216,7 +223,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 
 		inserter, bundle := setup(t)
 
-		insertParams := makeInsertParams()
+		insertParams := makeInsertParams(bundle)
 		uniqueOpts := &UniqueOpts{
 			ByQueue: true,
 		}
@@ -248,7 +255,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 
 		inserter, bundle := setup(t)
 
-		insertParams := makeInsertParams()
+		insertParams := makeInsertParams(bundle)
 		uniqueOpts := &UniqueOpts{
 			ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateRunning},
 		}
@@ -302,7 +309,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 
 		inserter, bundle := setup(t)
 
-		insertParams := makeInsertParams()
+		insertParams := makeInsertParams(bundle)
 		uniqueOpts := &UniqueOpts{
 			ByQueue: true,
 		}
@@ -372,7 +379,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 
 		inserter, bundle := setup(t)
 
-		insertParams := makeInsertParams()
+		insertParams := makeInsertParams(bundle)
 		uniqueOpts := &UniqueOpts{
 			ByArgs:   true,
 			ByPeriod: 15 * time.Minute,
@@ -406,7 +413,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 		// With period modified
 		{
 			insertParams := *insertParams // dup
-			inserter.TimeNowUTC = func() time.Time { return bundle.baselineTime.Add(uniqueOpts.ByPeriod).Add(1 * time.Second) }
+			inserter.Time.StubNowUTC(bundle.baselineTime.Add(uniqueOpts.ByPeriod).Add(1 * time.Second))
 
 			// New job because a unique dimension has changed.
 			res2, err := inserter.JobInsert(ctx, bundle.exec, &insertParams, uniqueOpts)
@@ -415,7 +422,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 			require.False(t, res2.UniqueSkippedAsDuplicate)
 
 			// Make sure to change timeNow back
-			inserter.TimeNowUTC = func() time.Time { return bundle.baselineTime }
+			inserter.Time.StubNowUTC(bundle.baselineTime)
 		}
 
 		// With queue modified
@@ -451,7 +458,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 		bundle.driver = riverpgxv5.New(riverinternaltest.TestDB(ctx, t))
 		bundle.exec = bundle.driver.GetExecutor()
 
-		insertParams := makeInsertParams()
+		insertParams := makeInsertParams(bundle)
 		uniqueOpts := &UniqueOpts{
 			ByPeriod: 15 * time.Minute,
 		}

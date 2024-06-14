@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/componentstatus"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/maintenance"
@@ -105,7 +106,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 
 	params := make([]*riverdriver.JobInsertFastParams, maxJobCount)
 	for i := range params {
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(config, WithJobNumArgs{JobNum: i}, nil)
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, WithJobNumArgs{JobNum: i}, nil)
 		require.NoError(err)
 
 		params[i] = insertParams
@@ -245,6 +246,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 	ctx := context.Background()
 
 	type testBundle struct {
+		archetype  *baseservice.Archetype
 		completer  jobcompleter.JobCompleter
 		config     *Config
 		exec       riverdriver.Executor
@@ -269,6 +271,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		}()
 
 		return producer, &testBundle{
+			archetype:  &producer.Archetype,
 			completer:  producer.completer,
 			config:     config,
 			exec:       producer.exec,
@@ -280,7 +283,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 	mustInsert := func(ctx context.Context, t *testing.T, bundle *testBundle, args JobArgs) {
 		t.Helper()
 
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(bundle.config, args, nil)
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(bundle.archetype, bundle.config, args, nil)
 		require.NoError(t, err)
 
 		_, err = bundle.exec.JobInsertFast(ctx, insertParams)

@@ -506,6 +506,7 @@ func (q *Queries) JobGetStuck(ctx context.Context, db DBTX, arg *JobGetStuckPara
 const jobInsertFast = `-- name: JobInsertFast :one
 INSERT INTO river_job(
     args,
+    created_at,
     finalized_at,
     kind,
     max_attempts,
@@ -517,20 +518,22 @@ INSERT INTO river_job(
     tags
 ) VALUES (
     $1::jsonb,
-    $2,
-    $3::text,
-    $4::smallint,
-    coalesce($5::jsonb, '{}'),
-    $6::smallint,
-    $7::text,
-    coalesce($8::timestamptz, now()),
-    $9::river_job_state,
-    coalesce($10::varchar(255)[], '{}')
+    coalesce($2::timestamptz, now()),
+    $3,
+    $4::text,
+    $5::smallint,
+    coalesce($6::jsonb, '{}'),
+    $7::smallint,
+    $8::text,
+    coalesce($9::timestamptz, now()),
+    $10::river_job_state,
+    coalesce($11::varchar(255)[], '{}')
 ) RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
 `
 
 type JobInsertFastParams struct {
 	Args        json.RawMessage
+	CreatedAt   *time.Time
 	FinalizedAt *time.Time
 	Kind        string
 	MaxAttempts int16
@@ -545,6 +548,7 @@ type JobInsertFastParams struct {
 func (q *Queries) JobInsertFast(ctx context.Context, db DBTX, arg *JobInsertFastParams) (*RiverJob, error) {
 	row := db.QueryRowContext(ctx, jobInsertFast,
 		arg.Args,
+		arg.CreatedAt,
 		arg.FinalizedAt,
 		arg.Kind,
 		arg.MaxAttempts,

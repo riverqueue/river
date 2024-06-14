@@ -195,6 +195,7 @@ LIMIT @max;
 -- name: JobInsertFast :one
 INSERT INTO river_job(
     args,
+    created_at,
     finalized_at,
     kind,
     max_attempts,
@@ -206,6 +207,7 @@ INSERT INTO river_job(
     tags
 ) VALUES (
     @args::jsonb,
+    coalesce(sqlc.narg('created_at')::timestamptz, now()),
     @finalized_at,
     @kind::text,
     @max_attempts::smallint,

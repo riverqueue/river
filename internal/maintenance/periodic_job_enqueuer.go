@@ -235,7 +235,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 				insertParamsMany   []*riverdriver.JobInsertFastParams
 				insertParamsUnique []*insertParamsAndUniqueOpts
 
-				now = s.TimeNowUTC()
+				now = s.Time.NowUTC()
 			)
 
 			// Handle periodic jobs in sorted order so we can correctly account
@@ -289,7 +289,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 					insertParamsUnique []*insertParamsAndUniqueOpts
 				)
 
-				now := s.TimeNowUTC()
+				now := s.Time.NowUTC()
 
 				// Add a small margin to the current time so we're not only
 				// running jobs that are already ready, but also ones ready at
@@ -440,7 +440,7 @@ func (s *PeriodicJobEnqueuer) timeUntilNextRun() time.Duration {
 
 	var (
 		firstNextRunAt time.Time
-		now            = s.TimeNowUTC()
+		now            = s.Time.NowUTC()
 	)
 
 	for _, periodicJob := range s.periodicJobs {

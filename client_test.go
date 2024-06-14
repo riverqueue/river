@@ -145,6 +145,7 @@ func newTestConfig(t *testing.T, callback callbackFunc) *Config {
 		Workers:             workers,
 		disableStaggerStart: true, // disables staggered start in maintenance services
 		schedulerInterval:   riverinternaltest.SchedulerShortInterval,
+		time:                &riverinternaltest.TimeStub{},
 	}
 }
 
@@ -2221,7 +2222,7 @@ func Test_Client_ErrorHandler(t *testing.T) {
 
 		// Bypass the normal Insert function because that will error on an
 		// unknown job.
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(config, unregisteredJobArgs{}, nil)
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(&client.baseService.Archetype, config, unregisteredJobArgs{}, nil)
 		require.NoError(t, err)
 		_, err = client.driver.GetExecutor().JobInsertFast(ctx, insertParams)
 		require.NoError(t, err)
@@ -3664,7 +3665,7 @@ func Test_Client_UnknownJobKindErrorsTheJob(t *testing.T) {
 	subscribeChan, cancel := client.Subscribe(EventKindJobFailed)
 	t.Cleanup(cancel)
 
-	insertParams, _, err := insertParamsFromConfigArgsAndOptions(config, unregisteredJobArgs{}, nil)
+	insertParams, _, err := insertParamsFromConfigArgsAndOptions(&client.baseService.Archetype, config, unregisteredJobArgs{}, nil)
 	require.NoError(err)
 	insertedJob, err := client.driver.GetExecutor().JobInsertFast(ctx, insertParams)
 	require.NoError(err)
@@ -4257,12 +4258,13 @@ func TestClient_JobTimeout(t *testing.T) {
 func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 	t.Parallel()
 
+	archetype := riverinternaltest.BaseServiceArchetype(t)
 	config := newTestConfig(t, nil)
 
 	t.Run("Defaults", func(t *testing.T) {
 		t.Parallel()
 
-		insertParams, uniqueOpts, err := insertParamsFromConfigArgsAndOptions(config, noOpArgs{}, nil)
+		insertParams, uniqueOpts, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, nil)
 		require.NoError(t, err)
 		require.Equal(t, `{"name":""}`, string(insertParams.EncodedArgs))
 		require.Equal(t, (noOpArgs{}).Kind(), insertParams.Kind)
@@ -4282,7 +4284,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 			MaxAttempts: 34,
 		}
 
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(overrideConfig, noOpArgs{}, nil)
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, overrideConfig, noOpArgs{}, nil)
 		require.NoError(t, err)
 		require.Equal(t, overrideConfig.MaxAttempts, insertParams.MaxAttempts)
 	})
@@ -4297,7 +4299,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 			ScheduledAt: time.Now().Add(time.Hour),
 			Tags:        []string{"tag1", "tag2"},
 		}
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(config, noOpArgs{}, opts)
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, opts)
 		require.NoError(t, err)
 		require.Equal(t, 42, insertParams.MaxAttempts)
 		require.Equal(t, 2, insertParams.Priority)
@@ -4309,7 +4311,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 	t.Run("WorkerInsertOptsOverrides", func(t *testing.T) {
 		t.Parallel()
 
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(config, &customInsertOptsJobArgs{}, nil)
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, &customInsertOptsJobArgs{}, nil)
 		require.NoError(t, err)
 		// All these come from overrides in customInsertOptsJobArgs's definition:
 		require.Equal(t, 42, insertParams.MaxAttempts)
@@ -4328,7 +4330,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 			ByState:  []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCompleted},
 		}
 
-		_, internalUniqueOpts, err := insertParamsFromConfigArgsAndOptions(config, noOpArgs{}, &InsertOpts{UniqueOpts: uniqueOpts})
+		_, internalUniqueOpts, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{UniqueOpts: uniqueOpts})
 		require.NoError(t, err)
 		require.Equal(t, uniqueOpts.ByArgs, internalUniqueOpts.ByArgs)
 		require.Equal(t, uniqueOpts.ByPeriod, internalUniqueOpts.ByPeriod)
@@ -4339,7 +4341,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 	t.Run("PriorityIsLimitedTo4", func(t *testing.T) {
 		t.Parallel()
 
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(config, noOpArgs{}, &InsertOpts{Priority: 5})
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{Priority: 5})
 		require.ErrorContains(t, err, "priority must be between 1 and 4")
 		require.Nil(t, insertParams)
 	})
@@ -4348,7 +4350,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		t.Parallel()
 
 		args := timeoutTestArgs{TimeoutValue: time.Hour}
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(config, args, nil)
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, args, nil)
 		require.NoError(t, err)
 		require.Equal(t, `{"timeout_value":3600000000000}`, string(insertParams.EncodedArgs))
 	})
@@ -4360,6 +4362,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		// since we already have tests elsewhere for that. Just make sure validation
 		// is running.
 		insertParams, _, err := insertParamsFromConfigArgsAndOptions(
+			archetype,
 			config,
 			noOpArgs{},
 			&InsertOpts{UniqueOpts: UniqueOpts{ByPeriod: 1 * time.Millisecond}},
@@ -4538,6 +4541,16 @@ func TestUniqueOpts(t *testing.T) {
 		dbPool := riverinternaltest.TestDB(ctx, t)
 
 		client := newTestClient(t, dbPool, newTestConfig(t, nil))
+
+		// Tests that use ByPeriod below can be sensitive to intermittency if
+		// the tests run at say 23:59:59.998, then it's possible to accidentally
+		// cross a period threshold, even if very unlikely. So here, seed mostly
+		// the current time, but make sure it's nicened up a little to be
+		// roughly in the middle of the hour and well clear of any period
+		// boundaries.
+		client.baseService.Time.StubNowUTC(
+			time.Now().Truncate(1 * time.Hour).Add(37*time.Minute + 23*time.Second + 123*time.Millisecond),
+		)
 
 		return client, &testBundle{}
 	}

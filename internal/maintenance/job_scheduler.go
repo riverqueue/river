@@ -144,7 +144,7 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 			}
 			defer tx.Rollback(ctx)
 
-			now := s.TimeNowUTC()
+			now := s.Time.NowUTC()
 			nowWithLookAhead := now.Add(s.config.Interval)
 
 			scheduledJobs, err := tx.JobSchedule(ctx, &riverdriver.JobScheduleParams{
@@ -161,7 +161,7 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 			// slightly in the future (this loop, the notify, and tx commit will take
 			// a small amount of time). This isn't going to be perfect, but the goal
 			// is to roughly try to guess when the clients will attempt to fetch jobs.
-			notificationHorizon := s.TimeNowUTC().Add(5 * time.Millisecond)
+			notificationHorizon := s.Time.NowUTC().Add(5 * time.Millisecond)
 
 			for _, job := range scheduledJobs {
 				if job.ScheduledAt.After(notificationHorizon) {

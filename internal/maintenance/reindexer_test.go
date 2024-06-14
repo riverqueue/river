@@ -29,11 +29,10 @@ func TestReindexer(t *testing.T) {
 		dbPool := riverinternaltest.TestDB(ctx, t)
 		bundle := &testBundle{
 			exec: riverpgxv5.New(dbPool).GetExecutor(),
-			now:  time.Now(),
 		}
 
 		archetype := riverinternaltest.BaseServiceArchetype(t)
-		archetype.TimeNowUTC = func() time.Time { return bundle.now }
+		bundle.now = archetype.Time.StubNowUTC(time.Now())
 
 		fromNow := func(d time.Duration) func(time.Time) time.Time {
 			return func(t time.Time) time.Time {

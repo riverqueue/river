@@ -169,6 +169,7 @@ func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetSt
 func (e *Executor) JobInsertFast(ctx context.Context, params *riverdriver.JobInsertFastParams) (*rivertype.JobRow, error) {
 	job, err := e.queries.JobInsertFast(ctx, e.dbtx, &dbsqlc.JobInsertFastParams{
 		Args:        params.EncodedArgs,
+		CreatedAt:   params.CreatedAt,
 		Kind:        params.Kind,
 		MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)),
 		Metadata:    params.Metadata,

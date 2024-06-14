@@ -722,23 +722,24 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 
 			exec, _ := setupExecutor(ctx, t, driver, beginTx)
 
-			now := time.Now().UTC()
+			targetTime := time.Now().UTC().Add(-15 * time.Minute)
 
 			job, err := exec.JobInsertFast(ctx, &riverdriver.JobInsertFastParams{
+				CreatedAt:   &targetTime,
 				EncodedArgs: []byte(`{"encoded": "args"}`),
 				Kind:        "test_kind",
 				MaxAttempts: 6,
 				Metadata:    []byte(`{"meta": "data"}`),
 				Priority:    2,
 				Queue:       "queue_name",
-				ScheduledAt: &now,
+				ScheduledAt: &targetTime,
 				State:       rivertype.JobStateRunning,
 				Tags:        []string{"tag"},
 			})
 			require.NoError(t, err)
 			require.Equal(t, 0, job.Attempt)
 			require.Nil(t, job.AttemptedAt)
-			require.WithinDuration(t, time.Now().UTC(), job.CreatedAt, 2*time.Second)
+			requireEqualTime(t, targetTime, job.CreatedAt)
 			require.Equal(t, []byte(`{"encoded": "args"}`), job.EncodedArgs)
 			require.Empty(t, job.Errors)
 			require.Nil(t, job.FinalizedAt)
@@ -747,7 +748,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 			require.Equal(t, []byte(`{"meta": "data"}`), job.Metadata)
 			require.Equal(t, 2, job.Priority)
 			require.Equal(t, "queue_name", job.Queue)
-			requireEqualTime(t, now, job.ScheduledAt)
+			requireEqualTime(t, targetTime, job.ScheduledAt)
 			require.Equal(t, rivertype.JobStateRunning, job.State)
 			require.Equal(t, []string{"tag"}, job.Tags)
 		})

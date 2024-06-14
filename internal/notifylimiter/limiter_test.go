@@ -1,7 +1,6 @@
 package notifylimiter
 
 import (
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,43 +10,16 @@ import (
 	"github.com/riverqueue/river/internal/riverinternaltest"
 )
 
-type mockableTime struct {
-	mu  sync.Mutex // protects now
-	now *time.Time
-}
-
-func (m *mockableTime) Now() time.Time {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.now != nil {
-		return *m.now
-	}
-	return time.Now()
-}
-
-func (m *mockableTime) SetNow(now time.Time) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.now = &now
-}
-
 func TestLimiter(t *testing.T) {
 	t.Parallel()
 
-	type testBundle struct {
-		mockTime *mockableTime
-	}
+	type testBundle struct{}
 
 	setup := func() (*Limiter, *testBundle) {
-		bundle := &testBundle{
-			mockTime: &mockableTime{},
-		}
+		bundle := &testBundle{}
 
 		archetype := riverinternaltest.BaseServiceArchetype(t)
 		limiter := NewLimiter(archetype, 10*time.Millisecond)
-		limiter.TimeNowUTC = bundle.mockTime.Now
 
 		return limiter, bundle
 	}
@@ -55,22 +27,22 @@ func TestLimiter(t *testing.T) {
 	t.Run("OnlySendsOncePerWaitDuration", func(t *testing.T) {
 		t.Parallel()
 
-		limiter, bundle := setup()
+		limiter, _ := setup()
 		now := time.Now()
-		bundle.mockTime.SetNow(now)
+		limiter.Time.StubNowUTC(now)
 
 		require.True(t, limiter.ShouldTrigger("a"))
 		for i := 0; i < 10; i++ {
 			require.False(t, limiter.ShouldTrigger("a"))
 		}
 		// Move the time forward, by just less than waitDuration:
-		bundle.mockTime.SetNow(now.Add(9 * time.Millisecond))
+		limiter.Time.StubNowUTC(now.Add(9 * time.Millisecond))
 		require.False(t, limiter.ShouldTrigger("a"))
 
 		require.True(t, limiter.ShouldTrigger("b")) // First time being triggered on "b"
 
 		// Move the time forward to just past the waitDuration:
-		bundle.mockTime.SetNow(now.Add(11 * time.Millisecond))
+		limiter.Time.StubNowUTC(now.Add(11 * time.Millisecond))
 		require.True(t, limiter.ShouldTrigger("a"))
 		for i := 0; i < 10; i++ {
 			require.False(t, limiter.ShouldTrigger("a"))
@@ -79,7 +51,7 @@ func TestLimiter(t *testing.T) {
 		require.False(t, limiter.ShouldTrigger("b")) // has only been 2ms since last trigger of "b"
 
 		// Move forward by another waitDuration (plus padding):
-		bundle.mockTime.SetNow(now.Add(22 * time.Millisecond))
+		limiter.Time.StubNowUTC(now.Add(22 * time.Millisecond))
 		require.True(t, limiter.ShouldTrigger("a"))
 		require.True(t, limiter.ShouldTrigger("b"))
 		require.False(t, limiter.ShouldTrigger("b"))
@@ -91,9 +63,9 @@ func TestLimiter(t *testing.T) {
 		doneCh := make(chan struct{})
 		t.Cleanup(func() { close(doneCh) })
 
-		limiter, bundle := setup()
+		limiter, _ := setup()
 		now := time.Now()
-		bundle.mockTime.SetNow(now)
+		limiter.Time.StubNowUTC(now)
 
 		counters := make(map[string]*atomic.Int64)
 		for _, topic := range []string{"a", "b", "c"} {
@@ -125,7 +97,7 @@ func TestLimiter(t *testing.T) {
 		require.Equal(t, int64(1), counters["b"].Load())
 		require.Equal(t, int64(1), counters["c"].Load())
 
-		bundle.mockTime.SetNow(now.Add(11 * time.Millisecond))
+		limiter.Time.StubNowUTC(now.Add(11 * time.Millisecond))
 
 		<-time.After(100 * time.Millisecond)
 

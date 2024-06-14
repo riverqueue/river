@@ -78,7 +78,7 @@ func (c *InlineCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobst
 	c.wg.Add(1)
 	defer c.wg.Done()
 
-	start := c.TimeNowUTC()
+	start := c.Time.NowUTC()
 
 	job, err := withRetries(ctx, &c.BaseService, c.disableSleep, func(ctx context.Context) (*rivertype.JobRow, error) {
 		return c.exec.JobSetStateIfRunning(ctx, params)
@@ -87,7 +87,7 @@ func (c *InlineCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobst
 		return err
 	}
 
-	stats.CompleteDuration = c.TimeNowUTC().Sub(start)
+	stats.CompleteDuration = c.Time.NowUTC().Sub(start)
 	c.subscribeCh <- []CompleterJobUpdated{{Job: job, JobStats: stats}}
 
 	return nil
@@ -156,7 +156,7 @@ func newAsyncCompleterWithConcurrency(archetype *baseservice.Archetype, exec Par
 func (c *AsyncCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobstats.JobStatistics, params *riverdriver.JobSetStateIfRunningParams) error {
 	// Start clock outside of goroutine so that the time spent blocking waiting
 	// for an errgroup slot is accurately measured.
-	start := c.TimeNowUTC()
+	start := c.Time.NowUTC()
 
 	c.errGroup.Go(func() error {
 		job, err := withRetries(ctx, &c.BaseService, c.disableSleep, func(ctx context.Context) (*rivertype.JobRow, error) {
@@ -166,7 +166,7 @@ func (c *AsyncCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobsta
 			return err
 		}
 
-		stats.CompleteDuration = c.TimeNowUTC().Sub(start)
+		stats.CompleteDuration = c.Time.NowUTC().Sub(start)
 		c.subscribeCh <- []CompleterJobUpdated{{Job: job, JobStats: stats}}
 
 		return nil
@@ -413,7 +413,7 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 
 	events := sliceutil.Map(jobRows, func(jobRow *rivertype.JobRow) CompleterJobUpdated {
 		setState := setStateBatch[jobRow.ID]
-		setState.Stats.CompleteDuration = c.TimeNowUTC().Sub(*setState.Params.FinalizedAt)
+		setState.Stats.CompleteDuration = c.Time.NowUTC().Sub(*setState.Params.FinalizedAt)
 		return CompleterJobUpdated{Job: jobRow, JobStats: setState.Stats}
 	})
 
