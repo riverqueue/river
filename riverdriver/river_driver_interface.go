@@ -201,6 +201,7 @@ type JobGetStuckParams struct {
 }
 
 type JobInsertFastParams struct {
+	CreatedAt   *time.Time
 	EncodedArgs []byte
 	Kind        string
 	MaxAttempts int

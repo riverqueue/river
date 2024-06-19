@@ -184,7 +184,7 @@ func (b *PeriodicJobBundle) toInternal(periodicJob *PeriodicJob) *maintenance.Pe
 
 	return &maintenance.PeriodicJob{
 		ConstructorFunc: func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
-			return insertParamsFromConfigArgsAndOptions(b.clientConfig, args, options)
+			return insertParamsFromConfigArgsAndOptions(&b.periodicJobEnqueuer.Archetype, b.clientConfig, args, options)
 		},
 		RunOnStart:   opts.RunOnStart,
 		ScheduleFunc: periodicJob.scheduleFunc.Next,

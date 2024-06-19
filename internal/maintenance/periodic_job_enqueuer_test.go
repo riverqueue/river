@@ -247,8 +247,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc, _ := setup(t)
 
-		now := time.Now()
-		svc.TimeNowUTC = func() time.Time { return now }
+		now := svc.Time.StubNowUTC(time.Now())
 
 		svc.periodicJobs = make(map[rivertype.PeriodicJobHandle]*PeriodicJob)
 		periodicJobHandles := svc.AddMany([]*PeriodicJob{

@@ -75,7 +75,7 @@ func (i *UniqueInserter) JobInsert(ctx context.Context, exec riverdriver.Executo
 			}
 
 			if uniqueOpts.ByPeriod != time.Duration(0) {
-				lowerPeriodBound := i.TimeNowUTC().Truncate(uniqueOpts.ByPeriod)
+				lowerPeriodBound := i.Time.NowUTC().Truncate(uniqueOpts.ByPeriod)
 
 				advisoryLockHash.Write([]byte("&period=" + lowerPeriodBound.Format(time.RFC3339)))
 

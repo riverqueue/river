@@ -99,9 +99,9 @@ func New[TTx any](driver riverdriver.Driver[TTx], config *Config) *Migrator[TTx]
 	}
 
 	archetype := &baseservice.Archetype{
-		Logger:     logger,
-		Rand:       randutil.NewCryptoSeededConcurrentSafeRand(),
-		TimeNowUTC: func() time.Time { return time.Now().UTC() },
+		Logger: logger,
+		Rand:   randutil.NewCryptoSeededConcurrentSafeRand(),
+		Time:   &baseservice.UnStubbableTimeGenerator{},
 	}
 
 	return baseservice.Init(archetype, &Migrator[TTx]{

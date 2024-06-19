@@ -34,11 +34,12 @@ type Archetype struct {
 	// secure randomness.
 	Rand *rand.Rand
 
-	// TimeNowUTC returns the current time as UTC. Normally it's implemented as
-	// a call to `time.Now().UTC()`, but may be overridden in tests for time
-	// injection. Services should try to use this function instead of the
-	// vanilla ones from the `time` package for testing purposes.
-	TimeNowUTC func() time.Time
+	// Time returns a time generator to get the current time in UTC. Normally
+	// it's implemented as UnStubbableTimeGenerator which just calls through to
+	// `time.Now().UTC()`, but is riverinternaltest.timeStub in tests to allow
+	// the current time to be stubbed.  Services should try to use this function
+	// instead of the vanilla ones from the `time` package for testing purposes.
+	Time TimeGenerator
 }
 
 // BaseService is a struct that's meant to be embedded on "service-like" objects
@@ -167,7 +168,37 @@ func Init[TService withBaseService](archetype *Archetype, service TService) TSer
 	baseService.Logger = archetype.Logger
 	baseService.Name = reflect.TypeOf(service).Elem().Name()
 	baseService.Rand = archetype.Rand
-	baseService.TimeNowUTC = archetype.TimeNowUTC
+	baseService.Time = archetype.Time
 
 	return service
+}
+
+// TimeGenerator generates a current time in UTC. In test environments it's
+// implemented by riverinternaltest.timeStub which lets the current time be
+// stubbed. Otherwise, it's implemented as UnStubbableTimeGenerator which
+// doesn't allow stubbing.
+type TimeGenerator interface {
+	// NowUTC returns the current time. This may be a stubbed time if the time
+	// has been actively stubbed in a test.
+	NowUTC() time.Time
+
+	// NowUTCOrNil returns if the currently stubbed time _if_ the current time
+	// is stubbed, and returns nil otherwise. This is generally useful in cases
+	// where a component may want to use a stubbed time if the time is stubbed,
+	// but to fall back to a database time default otherwise.
+	NowUTCOrNil() *time.Time
+
+	// StubNowUTC stubs the current time. It will panic if invoked outside of
+	// tests. Returns the same time passed as parameter for convenience.
+	StubNowUTC(nowUTC time.Time) time.Time
+}
+
+// UnStubbableTimeGenerator is a TimeGenerator implementation that can't be
+// stubbed. It's always the generator used outside of tests.
+type UnStubbableTimeGenerator struct{}
+
+func (g *UnStubbableTimeGenerator) NowUTC() time.Time       { return time.Now() }
+func (g *UnStubbableTimeGenerator) NowUTCOrNil() *time.Time { return nil }
+func (g *UnStubbableTimeGenerator) StubNowUTC(nowUTC time.Time) time.Time {
+	panic("time not stubbable outside tests")
 }

@@ -20,7 +20,7 @@ func TestInit(t *testing.T) {
 	myService := Init(archetype, &MyService{})
 	require.NotNil(t, myService.Logger)
 	require.Equal(t, "MyService", myService.Name)
-	require.WithinDuration(t, time.Now().UTC(), myService.TimeNowUTC(), 2*time.Second)
+	require.WithinDuration(t, time.Now().UTC(), myService.Time.NowUTC(), 2*time.Second)
 }
 
 func TestBaseService_CancellableSleep(t *testing.T) {
@@ -143,8 +143,8 @@ type MyService struct {
 
 func archetype() *Archetype {
 	return &Archetype{
-		Logger:     slog.New(slog.NewTextHandler(os.Stdout, nil)),
-		Rand:       randutil.NewCryptoSeededConcurrentSafeRand(),
-		TimeNowUTC: func() time.Time { return time.Now().UTC() },
+		Logger: slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		Rand:   randutil.NewCryptoSeededConcurrentSafeRand(),
+		Time:   &UnStubbableTimeGenerator{},
 	}
 }
