@@ -2,7 +2,7 @@
 
 River is a robust high-performance job processing system for Go and Postgres.
 
-See [homepage], [docs], and [godoc].
+See [homepage], [docs], and [godoc], as well as the [River UI][riverui].
 
 Being built for Postgres, River encourages the use of the same database for
 application data and job queue. By enqueueing jobs transactionally along with
@@ -159,6 +159,8 @@ See the [`InsertAndWork` example] for complete code.
 
   - [Unique jobs] by args, period, queue, and state.
 
+  - [Web UI][riverui] for inspecting and interacting with jobs and queues.
+
   - [Work functions] for simplified worker implementation.
 
 ## Cross language enqueueing
@@ -205,4 +207,5 @@ Thank you for driving the software ecosystem forward.
 [graceful shutdown]: https://riverqueue.com/docs/graceful-shutdown
 [homepage]: https://riverqueue.com
 [maintenance services]: https://riverqueue.com/docs/maintenance-services
+[riverui]: https://github.com/riverqueue/riverui
 [transactional enqueueing]: https://riverqueue.com/docs/transactional-enqueueing
