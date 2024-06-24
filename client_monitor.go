@@ -67,6 +67,13 @@ func (m *clientMonitor) SetProducerStatus(queueName string, status componentstat
 	m.bufferStatusUpdate()
 }
 
+func (m *clientMonitor) RemoveProducerStatus(queueName string) {
+	m.statusSnapshotMu.Lock()
+	defer m.statusSnapshotMu.Unlock()
+	delete(m.currentSnapshot.Producers, queueName)
+	m.bufferStatusUpdate()
+}
+
 func (m *clientMonitor) SetElectorStatus(newStatus componentstatus.ElectorStatus) {
 	m.statusSnapshotMu.Lock()
 	defer m.statusSnapshotMu.Unlock()
