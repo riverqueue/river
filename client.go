@@ -9,6 +9,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/riverqueue/river/internal/baseservice"
@@ -304,22 +305,23 @@ type Client[TTx any] struct {
 	baseService   baseservice.BaseService
 	baseStartStop startstop.BaseStartStop
 
-	completer            jobcompleter.JobCompleter
-	completerSubscribeCh chan []jobcompleter.CompleterJobUpdated
-	config               *Config
-	driver               riverdriver.Driver[TTx]
-	elector              *leadership.Elector
-	insertNotifyLimiter  *notifylimiter.Limiter
-	monitor              *clientMonitor
-	notifier             *notifier.Notifier // may be nil in poll-only mode
-	periodicJobs         *PeriodicJobBundle
-	producersByQueueName map[string]*producer
-	queueMaintainer      *maintenance.QueueMaintainer
-	services             []startstop.Service
-	subscriptionManager  *subscriptionManager
-	stopped              chan struct{}
-	testSignals          clientTestSignals
-	uniqueInserter       *dbunique.UniqueInserter
+	completer              jobcompleter.JobCompleter
+	completerSubscribeCh   chan []jobcompleter.CompleterJobUpdated
+	config                 *Config
+	driver                 riverdriver.Driver[TTx]
+	elector                *leadership.Elector
+	insertNotifyLimiter    *notifylimiter.Limiter
+	monitor                *clientMonitor
+	notifier               *notifier.Notifier // may be nil in poll-only mode
+	periodicJobs           *PeriodicJobBundle
+	producersByQueueNameMu sync.Mutex
+	producersByQueueName   map[string]*producer
+	queueMaintainer        *maintenance.QueueMaintainer
+	services               []startstop.Service
+	subscriptionManager    *subscriptionManager
+	stopped                chan struct{}
+	testSignals            clientTestSignals
+	uniqueInserter         *dbunique.UniqueInserter
 
 	// workCancel cancels the context used for all work goroutines. Normal Stop
 	// does not cancel that context.
@@ -614,6 +616,36 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	}
 
 	return client, nil
+}
+
+func (c *Client[TTx]) AddQueue(queueName string, queueConfig QueueConfig) {
+	c.producersByQueueNameMu.Lock()
+	defer c.producersByQueueNameMu.Unlock()
+	c.producersByQueueName[queueName] = newProducer(&c.baseService.Archetype, c.driver.GetExecutor(), &producerConfig{
+		ClientID:          c.config.ID,
+		Completer:         c.completer,
+		ErrorHandler:      c.config.ErrorHandler,
+		FetchCooldown:     c.config.FetchCooldown,
+		FetchPollInterval: c.config.FetchPollInterval,
+		JobTimeout:        c.config.JobTimeout,
+		MaxWorkers:        queueConfig.MaxWorkers,
+		Notifier:          c.notifier,
+		Queue:             queueName,
+		RetryPolicy:       c.config.RetryPolicy,
+		SchedulerInterval: c.config.schedulerInterval,
+		StatusFunc:        c.monitor.SetProducerStatus,
+		Workers:           c.config.Workers,
+	})
+	c.monitor.InitializeProducerStatus(queueName)
+}
+
+func (c *Client[TTx]) RemoveQueue(queueName string) {
+	c.producersByQueueNameMu.Lock()
+	defer c.producersByQueueNameMu.Unlock()
+	delete(c.producersByQueueName, queueName)
+
+	// Remove queue from currentSnapshot.Producers
+	c.monitor.RemoveProducerStatus(queueName)
 }
 
 // Start starts the client's job fetching and working loops. Once this is called,
