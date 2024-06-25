@@ -337,7 +337,8 @@ type Client[TTx any] struct {
 
 	// workCancel cancels the context used for all work goroutines. Normal Stop
 	// does not cancel that context.
-	workCancel context.CancelCauseFunc
+	workCancel  context.CancelCauseFunc
+	workContext context.Context
 }
 
 // Test-only signals.
@@ -618,14 +619,22 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	return client, nil
 }
 
-func (c *Client[TTx]) AddQueue(queueName string, queueConfig QueueConfig) error {
+func (c *Client[TTx]) AddQueue(ctx context.Context, queueName string, queueConfig QueueConfig) error {
 	if err := queueConfig.validate(queueName); err != nil {
 		return err
 	}
 
+	producerInstance := c.addProducer(queueName, queueConfig)
 	c.producersByQueueNameMu.Lock()
-	defer c.producersByQueueNameMu.Unlock()
-	c.producersByQueueName[queueName] = c.addProducer(queueName, queueConfig)
+	c.producersByQueueName[queueName] = producerInstance
+	c.producersByQueueNameMu.Unlock()
+
+	fetchCtx, started := c.baseStartStop.IsStarted()
+	if started {
+		if err := producerInstance.StartWorkContext(fetchCtx, c.workContext); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -656,8 +665,6 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 			func(p *producer) startstop.Service { return p },
 		)
 	}
-
-	var workCtx context.Context
 
 	// Startup code. Wrapped in a closure so it doesn't have to remember to
 	// close the stopped channel if returning with an error.
@@ -720,7 +727,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		// We use separate contexts for fetching and working to allow for a graceful
 		// stop. Both inherit from the provided context, so if it's cancelled, a
 		// more aggressive stop will be initiated.
-		workCtx, c.workCancel = context.WithCancelCause(withClient[TTx](ctx, c))
+		c.workContext, c.workCancel = context.WithCancelCause(withClient[TTx](ctx, c))
 
 		for _, service := range c.services {
 			if err := service.Start(fetchCtx); err != nil {
@@ -732,7 +739,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		for _, producer := range c.producersByQueueName {
 			producer := producer
 
-			if err := producer.StartWorkContext(fetchCtx, workCtx); err != nil {
+			if err := producer.StartWorkContext(fetchCtx, c.workContext); err != nil {
 				startstop.StopAllParallel(producersAsServices())
 				stopServicesOnError()
 				return err
