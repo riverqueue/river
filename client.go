@@ -259,10 +259,7 @@ func (c *Config) validate() error {
 	}
 
 	for queue, queueConfig := range c.Queues {
-		if queueConfig.MaxWorkers < 1 || queueConfig.MaxWorkers > QueueNumWorkersMax {
-			return fmt.Errorf("invalid number of workers for queue %q: %d", queue, queueConfig.MaxWorkers)
-		}
-		if err := validateQueueName(queue); err != nil {
+		if err := queueConfig.validate(queue); err != nil {
 			return err
 		}
 	}
@@ -294,6 +291,17 @@ type QueueConfig struct {
 	//
 	// Requires a minimum of 1, and a maximum of 10,000.
 	MaxWorkers int
+}
+
+func (c QueueConfig) validate(queueName string) error {
+	if c.MaxWorkers < 1 || c.MaxWorkers > QueueNumWorkersMax {
+		return fmt.Errorf("invalid number of workers for queue %q: %d", queueName, c.MaxWorkers)
+	}
+	if err := validateQueueName(queueName); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Client is a single isolated instance of River. Your application may use
@@ -510,23 +518,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		client.services = append(client.services, client.elector)
 
 		for queue, queueConfig := range config.Queues {
-			client.producersByQueueName[queue] = newProducer(archetype, driver.GetExecutor(), &producerConfig{
-				ClientID:           config.ID,
-				Completer:          client.completer,
-				ErrorHandler:       config.ErrorHandler,
-				FetchCooldown:      config.FetchCooldown,
-				FetchPollInterval:  config.FetchPollInterval,
-				JobTimeout:         config.JobTimeout,
-				MaxWorkers:         queueConfig.MaxWorkers,
-				Notifier:           client.notifier,
-				Queue:              queue,
-				QueueEventCallback: client.subscriptionManager.distributeQueueEvent,
-				RetryPolicy:        config.RetryPolicy,
-				SchedulerInterval:  config.schedulerInterval,
-				StatusFunc:         client.monitor.SetProducerStatus,
-				Workers:            config.Workers,
-			})
-			client.monitor.InitializeProducerStatus(queue)
+			client.producersByQueueName[queue] = client.addProducer(queue, queueConfig)
 		}
 
 		client.services = append(client.services,
@@ -618,34 +610,16 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	return client, nil
 }
 
-func (c *Client[TTx]) AddQueue(queueName string, queueConfig QueueConfig) {
+func (c *Client[TTx]) AddQueue(queueName string, queueConfig QueueConfig) error {
+	if err := queueConfig.validate(queueName); err != nil {
+		return err
+	}
+
 	c.producersByQueueNameMu.Lock()
 	defer c.producersByQueueNameMu.Unlock()
-	c.producersByQueueName[queueName] = newProducer(&c.baseService.Archetype, c.driver.GetExecutor(), &producerConfig{
-		ClientID:          c.config.ID,
-		Completer:         c.completer,
-		ErrorHandler:      c.config.ErrorHandler,
-		FetchCooldown:     c.config.FetchCooldown,
-		FetchPollInterval: c.config.FetchPollInterval,
-		JobTimeout:        c.config.JobTimeout,
-		MaxWorkers:        queueConfig.MaxWorkers,
-		Notifier:          c.notifier,
-		Queue:             queueName,
-		RetryPolicy:       c.config.RetryPolicy,
-		SchedulerInterval: c.config.schedulerInterval,
-		StatusFunc:        c.monitor.SetProducerStatus,
-		Workers:           c.config.Workers,
-	})
-	c.monitor.InitializeProducerStatus(queueName)
-}
+	c.producersByQueueName[queueName] = c.addProducer(queueName, queueConfig)
 
-func (c *Client[TTx]) RemoveQueue(queueName string) {
-	c.producersByQueueNameMu.Lock()
-	defer c.producersByQueueNameMu.Unlock()
-	delete(c.producersByQueueName, queueName)
-
-	// Remove queue from currentSnapshot.Producers
-	c.monitor.RemoveProducerStatus(queueName)
+	return nil
 }
 
 // Start starts the client's job fetching and working loops. Once this is called,
@@ -1535,6 +1509,26 @@ func (c *Client[TTx]) validateJobArgs(args JobArgs) error {
 	}
 
 	return nil
+}
+
+func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) *producer {
+	producerInstance := newProducer(&c.baseService.Archetype, c.driver.GetExecutor(), &producerConfig{
+		ClientID:          c.config.ID,
+		Completer:         c.completer,
+		ErrorHandler:      c.config.ErrorHandler,
+		FetchCooldown:     c.config.FetchCooldown,
+		FetchPollInterval: c.config.FetchPollInterval,
+		JobTimeout:        c.config.JobTimeout,
+		MaxWorkers:        queueConfig.MaxWorkers,
+		Notifier:          c.notifier,
+		Queue:             queueName,
+		RetryPolicy:       c.config.RetryPolicy,
+		SchedulerInterval: c.config.schedulerInterval,
+		StatusFunc:        c.monitor.SetProducerStatus,
+		Workers:           c.config.Workers,
+	})
+	c.monitor.InitializeProducerStatus(queueName)
+	return producerInstance
 }
 
 var nameRegex = regexp.MustCompile(`^(?:[a-z0-9])+(?:[_|\-]?[a-z0-9]+)*$`)
