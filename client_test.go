@@ -252,6 +252,72 @@ func Test_Client(t *testing.T) {
 		riverinternaltest.WaitOrTimeout(t, workedChan)
 	})
 
+	t.Run("StartInsertAndWorkAddQueue_BeforeStart", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		workedChan := make(chan struct{})
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			workedChan <- struct{}{}
+			return nil
+		}))
+
+		queueName := "new_queue"
+		err := client.AddQueue(ctx, queueName, QueueConfig{
+			MaxWorkers: 2,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		startClient(ctx, t, client)
+
+		_, err = client.Insert(ctx, &JobArgs{}, &InsertOpts{
+			Queue: queueName,
+		})
+		require.NoError(t, err)
+
+		riverinternaltest.WaitOrTimeout(t, workedChan)
+	})
+
+	t.Run("StartInsertAndWorkAddQueue_AfterStart", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		workedChan := make(chan struct{})
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			workedChan <- struct{}{}
+			return nil
+		}))
+
+		startClient(ctx, t, client)
+		queueName := "new_queue"
+		err := client.AddQueue(ctx, queueName, QueueConfig{
+			MaxWorkers: 2,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = client.Insert(ctx, &JobArgs{}, &InsertOpts{
+			Queue: queueName,
+		})
+		require.NoError(t, err)
+
+		riverinternaltest.WaitOrTimeout(t, workedChan)
+	})
+
 	t.Run("JobCancelErrorReturned", func(t *testing.T) {
 		t.Parallel()
 
