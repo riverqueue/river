@@ -1607,6 +1607,15 @@ func (c *Client[TTx]) QueueGet(ctx context.Context, name string) (*rivertype.Que
 	return c.driver.GetExecutor().QueueGet(ctx, name)
 }
 
+// QueueGetTx returns the queue with the given name. If the queue has not recently
+// been active or does not exist, returns ErrNotFound.
+//
+// The provided context is used for the underlying Postgres query and can be
+// used to cancel the operation or apply a timeout.
+func (c *Client[TTx]) QueueGetTx(ctx context.Context, tx TTx, name string) (*rivertype.Queue, error) {
+	return c.driver.UnwrapExecutor(tx).QueueGet(ctx, name)
+}
+
 // QueueListResult is the result of a job list operation. It contains a list of
 // jobs and leaves room for future cursor functionality.
 type QueueListResult struct {
@@ -1635,8 +1644,31 @@ func (c *Client[TTx]) QueueList(ctx context.Context, params *QueueListParams) (*
 		return nil, err
 	}
 
-	listRes := &QueueListResult{Queues: queues}
-	return listRes, nil
+	return &QueueListResult{Queues: queues}, nil
+}
+
+// QueueListTx returns a list of all queues that are currently active or were
+// recently active. Limit and offset can be used to paginate the results.
+//
+// The provided context is used for the underlying Postgres query and can be
+// used to cancel the operation or apply a timeout.
+//
+//	params := river.NewQueueListParams().First(10)
+//	queueRows, err := client.QueueListTx(ctx, tx, params)
+//	if err != nil {
+//		// handle error
+//	}
+func (c *Client[TTx]) QueueListTx(ctx context.Context, tx TTx, params *QueueListParams) (*QueueListResult, error) {
+	if params == nil {
+		params = NewQueueListParams()
+	}
+
+	queues, err := c.driver.UnwrapExecutor(tx).QueueList(ctx, int(params.paginationCount))
+	if err != nil {
+		return nil, err
+	}
+
+	return &QueueListResult{Queues: queues}, nil
 }
 
 // QueuePause pauses the queue with the given name. When a queue is paused,
@@ -1668,6 +1700,31 @@ func (c *Client[TTx]) QueuePause(ctx context.Context, name string, opts *QueuePa
 	return tx.Commit(ctx)
 }
 
+// QueuePauseTx pauses the queue with the given name. When a queue is paused,
+// clients will not fetch any more jobs for that particular queue. To pause all
+// queues at once, use the special queue name "*".
+//
+// Clients with a configured notifier should receive a notification about the
+// paused queue(s) within a few milliseconds of the transaction commit. Clients
+// in poll-only mode will pause after their next poll for queue configuration.
+//
+// The provided context is used for the underlying Postgres update and can be
+// used to cancel the operation or apply a timeout. The opts are reserved for
+// future functionality.
+func (c *Client[TTx]) QueuePauseTx(ctx context.Context, tx TTx, name string, opts *QueuePauseOpts) error {
+	executorTx := c.driver.UnwrapExecutor(tx)
+
+	if err := executorTx.QueuePause(ctx, name); err != nil {
+		return err
+	}
+
+	if err := c.notifyQueuePauseOrResume(ctx, executorTx, controlActionPause, name, opts); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // QueueResume resumes the queue with the given name. If the queue was
 // previously paused, any clients configured to work that queue will resume
 // fetching additional jobs. To resume all queues at once, use the special queue
@@ -1696,6 +1753,32 @@ func (c *Client[TTx]) QueueResume(ctx context.Context, name string, opts *QueueP
 	}
 
 	return tx.Commit(ctx)
+}
+
+// QueueResume resumes the queue with the given name. If the queue was
+// previously paused, any clients configured to work that queue will resume
+// fetching additional jobs. To resume all queues at once, use the special queue
+// name "*".
+//
+// Clients with a configured notifier should receive a notification about the
+// resumed queue(s) within a few milliseconds of the transaction commit. Clients
+// in poll-only mode will resume after their next poll for queue configuration.
+//
+// The provided context is used for the underlying Postgres update and can be
+// used to cancel the operation or apply a timeout. The opts are reserved for
+// future functionality.
+func (c *Client[TTx]) QueueResumeTx(ctx context.Context, tx TTx, name string, opts *QueuePauseOpts) error {
+	executorTx := c.driver.UnwrapExecutor(tx)
+
+	if err := executorTx.QueueResume(ctx, name); err != nil {
+		return err
+	}
+
+	if err := c.notifyQueuePauseOrResume(ctx, executorTx, controlActionResume, name, opts); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Generates a default client ID using the current hostname and time.
