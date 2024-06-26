@@ -836,6 +836,31 @@ func Test_Client_Stop(t *testing.T) {
 	})
 }
 
+func Test_Client_Stop_AfterContextCancelled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// doneCh will never close, job will exit due to context cancellation:
+	doneCh := make(chan struct{})
+	startedCh := make(chan int64)
+
+	dbPool := riverinternaltest.TestDB(ctx, t)
+	client := newTestClient(t, dbPool, newTestConfig(t, makeAwaitCallback(startedCh, doneCh)))
+	require.NoError(t, client.Start(ctx))
+	t.Cleanup(func() { require.NoError(t, client.Stop(context.Background())) })
+
+	insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
+	require.NoError(t, err)
+	startedJobID := riverinternaltest.WaitOrTimeout(t, startedCh)
+	require.Equal(t, insertRes.Job.ID, startedJobID)
+
+	cancel()
+
+	require.ErrorIs(t, client.Stop(ctx), context.Canceled)
+}
+
 func Test_Client_StopAndCancel(t *testing.T) {
 	t.Parallel()
 

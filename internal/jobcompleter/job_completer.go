@@ -393,6 +393,7 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 		batchID, batchFinalizedAt = mapIDsAndFinalizedAt(setStateBatch)
 		jobRows                   []*rivertype.JobRow
 	)
+	c.Logger.DebugContext(ctx, c.Name+": Completing batch of job(s)", "num_jobs", len(setStateBatch))
 	if len(setStateBatch) > c.completionMaxSize {
 		jobRows = make([]*rivertype.JobRow, 0, len(setStateBatch))
 		for i := 0; i < len(setStateBatch); i += c.completionMaxSize {
