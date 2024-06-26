@@ -305,7 +305,6 @@ type Client[TTx any] struct {
 	baseStartStop startstop.BaseStartStop
 
 	completer            jobcompleter.JobCompleter
-	completerSubscribeCh chan []jobcompleter.CompleterJobUpdated
 	config               *Config
 	driver               riverdriver.Driver[TTx]
 	elector              *leadership.Elector
@@ -670,9 +669,9 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		// Each time we start, we need a fresh completer subscribe channel to
 		// send job completion events on, because the completer will close it
 		// each time it shuts down.
-		c.completerSubscribeCh = make(chan []jobcompleter.CompleterJobUpdated, 10)
-		c.completer.ResetSubscribeChan(c.completerSubscribeCh)
-		c.subscriptionManager.ResetSubscribeChan(c.completerSubscribeCh)
+		completerSubscribeCh := make(chan []jobcompleter.CompleterJobUpdated, 10)
+		c.completer.ResetSubscribeChan(completerSubscribeCh)
+		c.subscriptionManager.ResetSubscribeChan(completerSubscribeCh)
 
 		// In case of error, stop any services that might have started. This
 		// is safe because even services that were never started will still
@@ -694,11 +693,11 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 
 		// The completer is part of the services list below, but although it can
 		// stop gracefully along with all the other services, it needs to be
-		// started with a context that's _not_ fetchCtx. This ensures that even
-		// when fetch is cancelled on shutdown, the completer is still given a
-		// separate opportunity to start stopping only after the producers have
-		// finished up and returned.
-		if err := c.completer.Start(ctx); err != nil {
+		// started with a context that's _not_ cancelled if the user-provided
+		// context is cancelled.  This ensures that even when fetch is cancelled on
+		// shutdown, the completer is still given a separate opportunity to start
+		// stopping only after the producers have finished up and returned.
+		if err := c.completer.Start(context.WithoutCancel(ctx)); err != nil {
 			stopServicesOnError()
 			return err
 		}
@@ -744,7 +743,9 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		<-fetchCtx.Done()
 
 		// On stop, have the producers stop fetching first of all.
+		c.baseService.Logger.DebugContext(ctx, c.baseService.Name+": Stopping producers")
 		stopProducers()
+		c.baseService.Logger.DebugContext(ctx, c.baseService.Name+": All producers stopped")
 
 		// Stop all mainline services where stop order isn't important.
 		startstop.StopAllParallel(append(

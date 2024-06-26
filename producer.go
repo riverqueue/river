@@ -215,6 +215,12 @@ func (p *producer) Start(ctx context.Context) error {
 	return p.StartWorkContext(ctx, ctx)
 }
 
+func (p *producer) Stop() {
+	p.Logger.Debug(p.Name + ": Stopping")
+	p.BaseStartStop.Stop()
+	p.Logger.Debug(p.Name + ": Stop returned")
+}
+
 // Start starts the producer. It backgrounds a goroutine which is stopped when
 // context is cancelled or Stop is invoked.
 //
