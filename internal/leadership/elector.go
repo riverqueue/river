@@ -291,7 +291,7 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 	// This doesn't use ctx because it runs *after* the ctx is done.
 	defer func() {
 		if !lostLeadership {
-			e.attemptResignLoop(ctx) // will resign using background context, but ctx sent for logging
+			e.attemptResignLoop(ctx) // will resign using WithoutCancel context, but ctx sent for logging
 		}
 	}()
 
@@ -373,9 +373,10 @@ func (e *Elector) attemptResignLoop(ctx context.Context) {
 	// still be elected.
 	const maxNumErrors = 3
 
-	// This does not inherit the parent context because we want to give up leadership
-	// even during a shutdown. There is no way to short-circuit this.
-	ctx = context.Background()
+	// This does not inherit the parent context's cancellation because we want to
+	// give up leadership even during a shutdown. There is no way to short-circuit
+	// this, though there are timeouts per call within attemptResign.
+	ctx = context.WithoutCancel(ctx)
 
 	for attempt := 1; attempt <= maxNumErrors; attempt++ {
 		if err := e.attemptResign(ctx, attempt); err != nil { //nolint:contextcheck
