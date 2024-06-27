@@ -638,6 +638,36 @@ func Test_Client(t *testing.T) {
 		require.Equal(t, insertRes2.Job.ID, event.Job.ID)
 	})
 
+	t.Run("PauseAndResumeSingleQueueTx", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		client := newTestClient(t, bundle.dbPool, config)
+
+		queue := testfactory.Queue(ctx, t, client.driver.GetExecutor(), nil)
+
+		tx, err := bundle.dbPool.Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { tx.Rollback(ctx) })
+
+		require.NoError(t, client.QueuePauseTx(ctx, tx, queue.Name, nil))
+
+		queueRes, err := client.QueueGetTx(ctx, tx, queue.Name)
+		require.NoError(t, err)
+		require.WithinDuration(t, time.Now(), *queueRes.PausedAt, 2*time.Second)
+
+		// Not paused outside transaction.
+		queueRes, err = client.QueueGet(ctx, queue.Name)
+		require.NoError(t, err)
+		require.Nil(t, queueRes.PausedAt)
+
+		require.NoError(t, client.QueueResumeTx(ctx, tx, queue.Name, nil))
+
+		queueRes, err = client.QueueGetTx(ctx, tx, queue.Name)
+		require.NoError(t, err)
+		require.Nil(t, queueRes.PausedAt)
+	})
+
 	t.Run("PausedBeforeStart", func(t *testing.T) {
 		t.Parallel()
 
@@ -900,6 +930,31 @@ func Test_Client_Stop(t *testing.T) {
 
 		require.NoError(t, client.Stop(ctx))
 	})
+}
+
+func Test_Client_Stop_AfterContextCancelled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// doneCh will never close, job will exit due to context cancellation:
+	doneCh := make(chan struct{})
+	startedCh := make(chan int64)
+
+	dbPool := riverinternaltest.TestDB(ctx, t)
+	client := newTestClient(t, dbPool, newTestConfig(t, makeAwaitCallback(startedCh, doneCh)))
+	require.NoError(t, client.Start(ctx))
+	t.Cleanup(func() { require.NoError(t, client.Stop(context.Background())) })
+
+	insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
+	require.NoError(t, err)
+	startedJobID := riverinternaltest.WaitOrTimeout(t, startedCh)
+	require.Equal(t, insertRes.Job.ID, startedJobID)
+
+	cancel()
+
+	require.ErrorIs(t, client.Stop(ctx), context.Canceled)
 }
 
 func Test_Client_StopAndCancel(t *testing.T) {
@@ -2732,18 +2787,15 @@ func Test_Client_QueueGet(t *testing.T) {
 
 		client, _ := setup(t)
 
-		now := time.Now().UTC()
-		insertedQueue := testfactory.Queue(ctx, t, client.driver.GetExecutor(), nil)
+		queue := testfactory.Queue(ctx, t, client.driver.GetExecutor(), nil)
 
-		queue, err := client.QueueGet(ctx, insertedQueue.Name)
+		queueRes, err := client.QueueGet(ctx, queue.Name)
 		require.NoError(t, err)
-		require.NotNil(t, queue)
-
-		require.WithinDuration(t, now, queue.CreatedAt, 2*time.Second)
-		require.WithinDuration(t, insertedQueue.CreatedAt, queue.CreatedAt, time.Millisecond)
-		require.Equal(t, []byte("{}"), queue.Metadata)
-		require.Equal(t, insertedQueue.Name, queue.Name)
-		require.Nil(t, queue.PausedAt)
+		require.WithinDuration(t, time.Now(), queueRes.CreatedAt, 2*time.Second)
+		require.WithinDuration(t, queue.CreatedAt, queueRes.CreatedAt, time.Millisecond)
+		require.Equal(t, []byte("{}"), queueRes.Metadata)
+		require.Equal(t, queue.Name, queueRes.Name)
+		require.Nil(t, queueRes.PausedAt)
 	})
 
 	t.Run("ReturnsErrNotFoundIfQueueDoesNotExist", func(t *testing.T) {
@@ -2751,10 +2803,63 @@ func Test_Client_QueueGet(t *testing.T) {
 
 		client, _ := setup(t)
 
-		queue, err := client.QueueGet(ctx, "a_queue_that_does_not_exist")
+		queueRes, err := client.QueueGet(ctx, "a_queue_that_does_not_exist")
 		require.Error(t, err)
 		require.ErrorIs(t, err, ErrNotFound)
-		require.Nil(t, queue)
+		require.Nil(t, queueRes)
+	})
+}
+
+func Test_Client_QueueGetTx(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		executorTx riverdriver.ExecutorTx
+		tx         pgx.Tx
+	}
+
+	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+		t.Helper()
+
+		dbPool := riverinternaltest.TestDB(ctx, t)
+		config := newTestConfig(t, nil)
+		client := newTestClient(t, dbPool, config)
+
+		tx, err := dbPool.Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { tx.Rollback(ctx) })
+
+		return client, &testBundle{executorTx: client.driver.UnwrapExecutor(tx), tx: tx}
+	}
+
+	t.Run("FetchesAnExistingQueue", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		queue := testfactory.Queue(ctx, t, bundle.executorTx, nil)
+
+		queueRes, err := client.QueueGetTx(ctx, bundle.tx, queue.Name)
+		require.NoError(t, err)
+		require.Equal(t, queue.Name, queueRes.Name)
+
+		// Not visible outside of transaction.
+		_, err = client.QueueGet(ctx, queue.Name)
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrNotFound)
+	})
+
+	t.Run("ReturnsErrNotFoundIfQueueDoesNotExist", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		queueRes, err := client.QueueGet(ctx, "a_queue_that_does_not_exist")
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrNotFound)
+		require.Nil(t, queueRes)
 	})
 }
 
@@ -2820,6 +2925,53 @@ func Test_Client_QueueList(t *testing.T) {
 		listRes, err = client.QueueList(ctx, NewQueueListParams().First(10))
 		require.NoError(t, err)
 		require.Len(t, listRes.Queues, 3)
+	})
+}
+
+func Test_Client_QueueListTx(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		executorTx riverdriver.ExecutorTx
+		tx         pgx.Tx
+	}
+
+	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+		t.Helper()
+
+		dbPool := riverinternaltest.TestDB(ctx, t)
+		config := newTestConfig(t, nil)
+		client := newTestClient(t, dbPool, config)
+
+		tx, err := dbPool.Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { tx.Rollback(ctx) })
+
+		return client, &testBundle{executorTx: client.driver.UnwrapExecutor(tx), tx: tx}
+	}
+
+	t.Run("ListsQueues", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		listRes, err := client.QueueListTx(ctx, bundle.tx, NewQueueListParams())
+		require.NoError(t, err)
+		require.Empty(t, listRes.Queues)
+
+		queue := testfactory.Queue(ctx, t, bundle.executorTx, nil)
+
+		listRes, err = client.QueueListTx(ctx, bundle.tx, NewQueueListParams())
+		require.NoError(t, err)
+		require.Len(t, listRes.Queues, 1)
+		require.Equal(t, queue.Name, listRes.Queues[0].Name)
+
+		// Not visible outside of transaction.
+		listRes, err = client.QueueList(ctx, NewQueueListParams())
+		require.NoError(t, err)
+		require.Empty(t, listRes.Queues)
 	})
 }
 

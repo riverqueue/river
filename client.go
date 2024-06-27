@@ -314,7 +314,6 @@ type Client[TTx any] struct {
 	baseStartStop startstop.BaseStartStop
 
 	completer              jobcompleter.JobCompleter
-	completerSubscribeCh   chan []jobcompleter.CompleterJobUpdated
 	config                 *Config
 	driver                 riverdriver.Driver[TTx]
 	elector                *leadership.Elector
@@ -683,9 +682,9 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		// Each time we start, we need a fresh completer subscribe channel to
 		// send job completion events on, because the completer will close it
 		// each time it shuts down.
-		c.completerSubscribeCh = make(chan []jobcompleter.CompleterJobUpdated, 10)
-		c.completer.ResetSubscribeChan(c.completerSubscribeCh)
-		c.subscriptionManager.ResetSubscribeChan(c.completerSubscribeCh)
+		completerSubscribeCh := make(chan []jobcompleter.CompleterJobUpdated, 10)
+		c.completer.ResetSubscribeChan(completerSubscribeCh)
+		c.subscriptionManager.ResetSubscribeChan(completerSubscribeCh)
 
 		// In case of error, stop any services that might have started. This
 		// is safe because even services that were never started will still
@@ -707,11 +706,11 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 
 		// The completer is part of the services list below, but although it can
 		// stop gracefully along with all the other services, it needs to be
-		// started with a context that's _not_ fetchCtx. This ensures that even
-		// when fetch is cancelled on shutdown, the completer is still given a
-		// separate opportunity to start stopping only after the producers have
-		// finished up and returned.
-		if err := c.completer.Start(ctx); err != nil {
+		// started with a context that's _not_ cancelled if the user-provided
+		// context is cancelled.  This ensures that even when fetch is cancelled on
+		// shutdown, the completer is still given a separate opportunity to start
+		// stopping only after the producers have finished up and returned.
+		if err := c.completer.Start(context.WithoutCancel(ctx)); err != nil {
 			stopServicesOnError()
 			return err
 		}
@@ -757,7 +756,9 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		<-fetchCtx.Done()
 
 		// On stop, have the producers stop fetching first of all.
+		c.baseService.Logger.DebugContext(ctx, c.baseService.Name+": Stopping producers")
 		stopProducers()
+		c.baseService.Logger.DebugContext(ctx, c.baseService.Name+": All producers stopped")
 
 		// Stop all mainline services where stop order isn't important.
 		startstop.StopAllParallel(append(
@@ -1639,6 +1640,15 @@ func (c *Client[TTx]) QueueGet(ctx context.Context, name string) (*rivertype.Que
 	return c.driver.GetExecutor().QueueGet(ctx, name)
 }
 
+// QueueGetTx returns the queue with the given name. If the queue has not recently
+// been active or does not exist, returns ErrNotFound.
+//
+// The provided context is used for the underlying Postgres query and can be
+// used to cancel the operation or apply a timeout.
+func (c *Client[TTx]) QueueGetTx(ctx context.Context, tx TTx, name string) (*rivertype.Queue, error) {
+	return c.driver.UnwrapExecutor(tx).QueueGet(ctx, name)
+}
+
 // QueueListResult is the result of a job list operation. It contains a list of
 // jobs and leaves room for future cursor functionality.
 type QueueListResult struct {
@@ -1667,8 +1677,31 @@ func (c *Client[TTx]) QueueList(ctx context.Context, params *QueueListParams) (*
 		return nil, err
 	}
 
-	listRes := &QueueListResult{Queues: queues}
-	return listRes, nil
+	return &QueueListResult{Queues: queues}, nil
+}
+
+// QueueListTx returns a list of all queues that are currently active or were
+// recently active. Limit and offset can be used to paginate the results.
+//
+// The provided context is used for the underlying Postgres query and can be
+// used to cancel the operation or apply a timeout.
+//
+//	params := river.NewQueueListParams().First(10)
+//	queueRows, err := client.QueueListTx(ctx, tx, params)
+//	if err != nil {
+//		// handle error
+//	}
+func (c *Client[TTx]) QueueListTx(ctx context.Context, tx TTx, params *QueueListParams) (*QueueListResult, error) {
+	if params == nil {
+		params = NewQueueListParams()
+	}
+
+	queues, err := c.driver.UnwrapExecutor(tx).QueueList(ctx, int(params.paginationCount))
+	if err != nil {
+		return nil, err
+	}
+
+	return &QueueListResult{Queues: queues}, nil
 }
 
 // QueuePause pauses the queue with the given name. When a queue is paused,
@@ -1700,6 +1733,31 @@ func (c *Client[TTx]) QueuePause(ctx context.Context, name string, opts *QueuePa
 	return tx.Commit(ctx)
 }
 
+// QueuePauseTx pauses the queue with the given name. When a queue is paused,
+// clients will not fetch any more jobs for that particular queue. To pause all
+// queues at once, use the special queue name "*".
+//
+// Clients with a configured notifier should receive a notification about the
+// paused queue(s) within a few milliseconds of the transaction commit. Clients
+// in poll-only mode will pause after their next poll for queue configuration.
+//
+// The provided context is used for the underlying Postgres update and can be
+// used to cancel the operation or apply a timeout. The opts are reserved for
+// future functionality.
+func (c *Client[TTx]) QueuePauseTx(ctx context.Context, tx TTx, name string, opts *QueuePauseOpts) error {
+	executorTx := c.driver.UnwrapExecutor(tx)
+
+	if err := executorTx.QueuePause(ctx, name); err != nil {
+		return err
+	}
+
+	if err := c.notifyQueuePauseOrResume(ctx, executorTx, controlActionPause, name, opts); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // QueueResume resumes the queue with the given name. If the queue was
 // previously paused, any clients configured to work that queue will resume
 // fetching additional jobs. To resume all queues at once, use the special queue
@@ -1728,6 +1786,32 @@ func (c *Client[TTx]) QueueResume(ctx context.Context, name string, opts *QueueP
 	}
 
 	return tx.Commit(ctx)
+}
+
+// QueueResume resumes the queue with the given name. If the queue was
+// previously paused, any clients configured to work that queue will resume
+// fetching additional jobs. To resume all queues at once, use the special queue
+// name "*".
+//
+// Clients with a configured notifier should receive a notification about the
+// resumed queue(s) within a few milliseconds of the transaction commit. Clients
+// in poll-only mode will resume after their next poll for queue configuration.
+//
+// The provided context is used for the underlying Postgres update and can be
+// used to cancel the operation or apply a timeout. The opts are reserved for
+// future functionality.
+func (c *Client[TTx]) QueueResumeTx(ctx context.Context, tx TTx, name string, opts *QueuePauseOpts) error {
+	executorTx := c.driver.UnwrapExecutor(tx)
+
+	if err := executorTx.QueueResume(ctx, name); err != nil {
+		return err
+	}
+
+	if err := c.notifyQueuePauseOrResume(ctx, executorTx, controlActionResume, name, opts); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Generates a default client ID using the current hostname and time.
