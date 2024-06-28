@@ -2,7 +2,7 @@
 
 River is a robust high-performance job processing system for Go and Postgres.
 
-See [homepage], [docs], and [godoc], as well as the [River UI][riverui].
+See [homepage], [docs], and [godoc], as well as the [River UI],
 
 Being built for Postgres, River encourages the use of the same database for
 application data and job queue. By enqueueing jobs transactionally along with
@@ -159,7 +159,7 @@ See the [`InsertAndWork` example] for complete code.
 
   - [Unique jobs] by args, period, queue, and state.
 
-  - [Web UI][riverui] for inspecting and interacting with jobs and queues.
+  - [Web UI] for inspecting and interacting with jobs and queues.
 
   - [Work functions] for simplified worker implementation.
 
@@ -193,12 +193,14 @@ Thank you for driving the software ecosystem forward.
 [Error and panic handling]: https://riverqueue.com/docs/error-handling
 [Multiple queues]: https://riverqueue.com/docs/multiple-queues
 [Periodic and cron jobs]: https://riverqueue.com/docs/periodic-jobs
+[River UI]: https://github.com/riverqueue/riverui
 [Scheduled jobs]: https://riverqueue.com/docs/scheduled-jobs
 [Snoozing jobs]: https://riverqueue.com/docs/snoozing-jobs
 [Subscriptions]: https://riverqueue.com/docs/subscriptions
 [Test helpers]: https://riverqueue.com/docs/testing
 [Transactional job completion]: https://riverqueue.com/docs/transactional-job-completion
 [Unique jobs]: https://riverqueue.com/docs/unique-jobs
+[Web UI]: https://github.com/riverqueue/riverui
 [Work functions]: https://riverqueue.com/docs/work-functions
 [developing River]: https://github.com/riverqueue/river/blob/master/docs/development.md
 [docs]: https://riverqueue.com/docs
