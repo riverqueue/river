@@ -1949,7 +1949,25 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 		t.Run("QueuePause", func(t *testing.T) {
 			t.Parallel()
 
-			t.Run("ExistingQueue", func(t *testing.T) {
+			t.Run("ExistingPausedQueue", func(t *testing.T) {
+				t.Parallel()
+
+				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+				queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{
+					PausedAt: ptrutil.Ptr(time.Now()),
+				})
+
+				require.NoError(t, exec.QueuePause(ctx, queue.Name))
+
+				queueFetched, err := exec.QueueGet(ctx, queue.Name)
+				require.NoError(t, err)
+				require.NotNil(t, queueFetched.PausedAt)
+				requireEqualTime(t, *queue.PausedAt, *queueFetched.PausedAt) // paused_at stays unchanged
+				requireEqualTime(t, queue.UpdatedAt, queueFetched.UpdatedAt) // updated_at stays unchanged
+			})
+
+			t.Run("ExistingUnpausedQueue", func(t *testing.T) {
 				t.Parallel()
 
 				exec, _ := setupExecutor(ctx, t, driver, beginTx)
@@ -1974,7 +1992,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 				require.ErrorIs(t, err, rivertype.ErrNotFound)
 			})
 
-			t.Run("AllQueues", func(t *testing.T) {
+			t.Run("AllQueuesExistingQueues", func(t *testing.T) {
 				t.Parallel()
 
 				exec, _ := setupExecutor(ctx, t, driver, beginTx)
@@ -1998,25 +2016,48 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 				require.NotNil(t, queue2Fetched.PausedAt)
 				require.WithinDuration(t, now, *(queue2Fetched.PausedAt), 500*time.Millisecond)
 			})
+
+			t.Run("AllQueuesNoQueues", func(t *testing.T) {
+				t.Parallel()
+
+				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+				require.NoError(t, exec.QueuePause(ctx, rivercommon.AllQueuesString))
+			})
 		})
 
 		t.Run("QueueResume", func(t *testing.T) {
 			t.Parallel()
 
-			t.Run("ExistingQueue", func(t *testing.T) {
+			t.Run("ExistingPausedQueue", func(t *testing.T) {
 				t.Parallel()
 
 				exec, _ := setupExecutor(ctx, t, driver, beginTx)
 
-				queue := testfactory.Queue(ctx, t, exec, nil)
-				require.Nil(t, queue.PausedAt)
+				queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{
+					PausedAt: ptrutil.Ptr(time.Now()),
+				})
 
-				require.NoError(t, exec.QueuePause(ctx, queue.Name))
 				require.NoError(t, exec.QueueResume(ctx, queue.Name))
 
 				queueFetched, err := exec.QueueGet(ctx, queue.Name)
 				require.NoError(t, err)
 				require.Nil(t, queueFetched.PausedAt)
+			})
+
+			t.Run("ExistingUnpausedQueue", func(t *testing.T) {
+				t.Parallel()
+
+				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+				queue := testfactory.Queue(ctx, t, exec, nil)
+
+				require.NoError(t, exec.QueueResume(ctx, queue.Name))
+
+				queueFetched, err := exec.QueueGet(ctx, queue.Name)
+				require.NoError(t, err)
+				require.Nil(t, queueFetched.PausedAt)
+				requireEqualTime(t, queue.UpdatedAt, queueFetched.UpdatedAt) // updated_at stays unchanged
 			})
 
 			t.Run("NonExistentQueue", func(t *testing.T) {
@@ -2028,7 +2069,7 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 				require.ErrorIs(t, err, rivertype.ErrNotFound)
 			})
 
-			t.Run("AllQueues", func(t *testing.T) {
+			t.Run("AllQueuesExistingQueues", func(t *testing.T) {
 				t.Parallel()
 
 				exec, _ := setupExecutor(ctx, t, driver, beginTx)
@@ -2048,6 +2089,14 @@ func ExerciseExecutorFull[TTx any](ctx context.Context, t *testing.T, driver riv
 				queue2Fetched, err := exec.QueueGet(ctx, queue2.Name)
 				require.NoError(t, err)
 				require.Nil(t, queue2Fetched.PausedAt)
+			})
+
+			t.Run("AllQueuesNoQueues", func(t *testing.T) {
+				t.Parallel()
+
+				exec, _ := setupExecutor(ctx, t, driver, beginTx)
+
+				require.NoError(t, exec.QueueResume(ctx, rivercommon.AllQueuesString))
 			})
 		})
 	})

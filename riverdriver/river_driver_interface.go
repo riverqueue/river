@@ -20,6 +20,8 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
+const AllQueuesString = "*"
+
 var (
 	ErrClosedPool        = errors.New("underlying driver pool is closed")
 	ErrNotImplemented    = errors.New("driver does not implement this functionality")

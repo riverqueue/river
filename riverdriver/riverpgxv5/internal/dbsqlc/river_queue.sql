@@ -48,32 +48,49 @@ LIMIT @limit_count::integer;
 
 -- name: QueuePause :execresult
 WITH queue_to_update AS (
-    SELECT name
+    SELECT name, paused_at
     FROM river_queue
-    WHERE CASE WHEN @name::text = '*' THEN true ELSE river_queue.name = @name::text END
-      AND paused_at IS NULL
+    WHERE CASE WHEN @name::text = '*' THEN true ELSE name = @name END
     FOR UPDATE
+),
+updated_queue AS (
+    UPDATE river_queue
+    SET
+        paused_at = now(),
+        updated_at = now()
+    FROM queue_to_update
+    WHERE river_queue.name = queue_to_update.name
+        AND river_queue.paused_at IS NULL
+    RETURNING river_queue.*
 )
-
-UPDATE river_queue
-SET
-    paused_at = now(),
-    updated_at = now()
-FROM queue_to_update
-WHERE river_queue.name = queue_to_update.name;
+SELECT *
+FROM river_queue
+WHERE name = @name
+    AND name NOT IN (SELECT name FROM updated_queue)
+UNION
+SELECT *
+FROM updated_queue;
 
 -- name: QueueResume :execresult
 WITH queue_to_update AS (
     SELECT name
     FROM river_queue
     WHERE CASE WHEN @name::text = '*' THEN true ELSE river_queue.name = @name::text END
-      AND paused_at IS NOT NULL
     FOR UPDATE
+),
+updated_queue AS (
+    UPDATE river_queue
+    SET
+        paused_at = NULL,
+        updated_at = now()
+    FROM queue_to_update
+    WHERE river_queue.name = queue_to_update.name
+    RETURNING river_queue.*
 )
-
-UPDATE river_queue
-SET
-    paused_at = NULL,
-    updated_at = now()
-FROM queue_to_update
-WHERE river_queue.name = queue_to_update.name;
+SELECT *
+FROM river_queue
+WHERE name = @name
+    AND name NOT IN (SELECT name FROM updated_queue)
+UNION
+SELECT *
+FROM updated_queue;
