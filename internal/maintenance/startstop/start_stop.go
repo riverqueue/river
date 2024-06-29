@@ -55,7 +55,6 @@ type serviceWithStopped interface {
 // override it.
 type BaseStartStop struct {
 	cancelFunc context.CancelCauseFunc
-	context    context.Context
 	mu         sync.Mutex
 	started    bool
 	stopped    chan struct{}
@@ -108,13 +107,9 @@ func (s *BaseStartStop) StartInit(ctx context.Context) (context.Context, bool, c
 
 	s.started = true
 	s.stopped = make(chan struct{})
-	s.context, s.cancelFunc = context.WithCancelCause(ctx)
+	ctx, s.cancelFunc = context.WithCancelCause(ctx)
 
-	return s.context, true, s.stopped
-}
-
-func (s *BaseStartStop) IsStarted() (context.Context, bool) {
-	return s.context, s.started
+	return ctx, true, s.stopped
 }
 
 // Stop is an automatically provided implementation for the maintenance Service
