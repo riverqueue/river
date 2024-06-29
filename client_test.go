@@ -161,8 +161,6 @@ func newTestClient(t *testing.T, dbPool *pgxpool.Pool, config *Config) *Client[p
 	client, err := NewClient(riverpgxv5.New(dbPool), config)
 	require.NoError(t, err)
 
-	client.testSignals.Init()
-
 	return client
 }
 
@@ -258,7 +256,7 @@ func Test_Client(t *testing.T) {
 		riverinternaltest.WaitOrTimeout(t, workedChan)
 	})
 
-	t.Run("StartInsertAndWorkAddQueue_BeforeStart", func(t *testing.T) {
+	t.Run("Queues_Add_BeforeStart", func(t *testing.T) {
 		t.Parallel()
 
 		client, _ := setup(t)
@@ -275,12 +273,11 @@ func Test_Client(t *testing.T) {
 		}))
 
 		queueName := "new_queue"
-		err := client.AddQueue(ctx, queueName, QueueConfig{
+		err := client.Queues().Add(queueName, QueueConfig{
 			MaxWorkers: 2,
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
+
 		startClient(ctx, t, client)
 
 		_, err = client.Insert(ctx, &JobArgs{}, &InsertOpts{
@@ -291,7 +288,7 @@ func Test_Client(t *testing.T) {
 		riverinternaltest.WaitOrTimeout(t, workedChan)
 	})
 
-	t.Run("StartInsertAndWorkAddQueue_AfterStart", func(t *testing.T) {
+	t.Run("Queues_Add_AfterStart", func(t *testing.T) {
 		t.Parallel()
 
 		client, _ := setup(t)
@@ -307,14 +304,15 @@ func Test_Client(t *testing.T) {
 			return nil
 		}))
 
+		statusUpdateCh := client.monitor.RegisterUpdates()
 		startClient(ctx, t, client)
+		waitForClientHealthy(ctx, t, statusUpdateCh)
+
 		queueName := "new_queue"
-		err := client.AddQueue(ctx, queueName, QueueConfig{
+		err := client.Queues().Add(queueName, QueueConfig{
 			MaxWorkers: 2,
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 
 		_, err = client.Insert(ctx, &JobArgs{}, &InsertOpts{
 			Queue: queueName,
@@ -322,6 +320,53 @@ func Test_Client(t *testing.T) {
 		require.NoError(t, err)
 
 		riverinternaltest.WaitOrTimeout(t, workedChan)
+	})
+
+	t.Run("Queues_Add_Stress", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		var wg sync.WaitGroup
+
+		// Uses a smaller number of workers and iterations than most stress
+		// tests because there's quite a lot of mutex contention so that too
+		// many can make the test run long.
+		for i := 0; i < 3; i++ {
+			wg.Add(1)
+			workerNum := i
+			go func() {
+				defer wg.Done()
+
+				for j := 0; j < 5; j++ {
+					err := client.Queues().Add(fmt.Sprintf("new_queue_%d_%d_before", workerNum, j), QueueConfig{MaxWorkers: 1})
+					require.NoError(t, err)
+
+					err = client.Start(ctx)
+					if !errors.Is(err, rivercommon.ErrShutdown) {
+						require.NoError(t, err)
+					}
+
+					err = client.Queues().Add(fmt.Sprintf("new_queue_%d_%d_after", workerNum, j), QueueConfig{MaxWorkers: 1})
+					require.NoError(t, err)
+
+					stopped := make(chan struct{})
+
+					go func() {
+						defer close(stopped)
+						require.NoError(t, client.Stop(ctx))
+					}()
+
+					select {
+					case <-stopped:
+					case <-time.After(5 * time.Second):
+						require.FailNow(t, "Timed out waiting for service to stop")
+					}
+				}
+			}()
+		}
+
+		wg.Wait()
 	})
 
 	t.Run("JobCancelErrorReturned", func(t *testing.T) {
@@ -748,6 +793,7 @@ func Test_Client(t *testing.T) {
 		bundle.config.PollOnly = true
 
 		client := newTestClient(t, bundle.dbPool, config)
+		client.testSignals.Init()
 
 		// Notifier should not have been initialized at all.
 		require.Nil(t, client.notifier)
@@ -2434,6 +2480,8 @@ func Test_Client_Maintenance(t *testing.T) {
 			client = newTestClient(t, dbPool, config)
 		)
 
+		client.testSignals.Init()
+
 		return client, &testBundle{exec: client.driver.GetExecutor()}
 	}
 
@@ -2679,7 +2727,12 @@ func Test_Client_Maintenance(t *testing.T) {
 		worker := &periodicJobWorker{}
 		AddWorker(config.Workers, worker)
 
-		client := runNewTestClient(ctx, t, config)
+		dbPool := riverinternaltest.TestDB(ctx, t)
+
+		client := newTestClient(t, dbPool, config)
+		client.testSignals.Init()
+		startClient(ctx, t, client)
+
 		exec := client.driver.GetExecutor()
 
 		client.testSignals.electedLeader.WaitOrTimeout()
@@ -2709,6 +2762,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		AddWorker(config.Workers, worker)
 
 		client := newTestClient(t, riverinternaltest.TestDB(ctx, t), config)
+		client.testSignals.Init()
 		exec := client.driver.GetExecutor()
 
 		handle := client.PeriodicJobs().Add(
@@ -2762,6 +2816,7 @@ func Test_Client_Maintenance(t *testing.T) {
 
 		config := newTestConfig(t, nil)
 		client := newTestClient(t, dbPool, config)
+		client.testSignals.Init()
 		exec := client.driver.GetExecutor()
 
 		deleteHorizon := time.Now().Add(-maintenance.QueueRetentionPeriodDefault)
