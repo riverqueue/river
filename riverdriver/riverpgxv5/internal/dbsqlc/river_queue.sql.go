@@ -153,19 +153,28 @@ func (q *Queries) QueueList(ctx context.Context, db DBTX, limitCount int32) ([]*
 
 const queuePause = `-- name: QueuePause :execresult
 WITH queue_to_update AS (
-    SELECT name
+    SELECT name, paused_at
     FROM river_queue
-    WHERE CASE WHEN $1::text = '*' THEN true ELSE river_queue.name = $1::text END
-      AND paused_at IS NULL
+    WHERE CASE WHEN $1::text = '*' THEN true ELSE name = $1 END
     FOR UPDATE
+),
+updated_queue AS (
+    UPDATE river_queue
+    SET
+        paused_at = now(),
+        updated_at = now()
+    FROM queue_to_update
+    WHERE river_queue.name = queue_to_update.name
+        AND river_queue.paused_at IS NULL
+    RETURNING river_queue.name, river_queue.created_at, river_queue.metadata, river_queue.paused_at, river_queue.updated_at
 )
-
-UPDATE river_queue
-SET
-    paused_at = now(),
-    updated_at = now()
-FROM queue_to_update
-WHERE river_queue.name = queue_to_update.name
+SELECT name, created_at, metadata, paused_at, updated_at
+FROM river_queue
+WHERE name = $1
+    AND name NOT IN (SELECT name FROM updated_queue)
+UNION
+SELECT name, created_at, metadata, paused_at, updated_at
+FROM updated_queue
 `
 
 func (q *Queries) QueuePause(ctx context.Context, db DBTX, name string) (pgconn.CommandTag, error) {
@@ -177,16 +186,24 @@ WITH queue_to_update AS (
     SELECT name
     FROM river_queue
     WHERE CASE WHEN $1::text = '*' THEN true ELSE river_queue.name = $1::text END
-      AND paused_at IS NOT NULL
     FOR UPDATE
+),
+updated_queue AS (
+    UPDATE river_queue
+    SET
+        paused_at = NULL,
+        updated_at = now()
+    FROM queue_to_update
+    WHERE river_queue.name = queue_to_update.name
+    RETURNING river_queue.name, river_queue.created_at, river_queue.metadata, river_queue.paused_at, river_queue.updated_at
 )
-
-UPDATE river_queue
-SET
-    paused_at = NULL,
-    updated_at = now()
-FROM queue_to_update
-WHERE river_queue.name = queue_to_update.name
+SELECT name, created_at, metadata, paused_at, updated_at
+FROM river_queue
+WHERE name = $1
+    AND name NOT IN (SELECT name FROM updated_queue)
+UNION
+SELECT name, created_at, metadata, paused_at, updated_at
+FROM updated_queue
 `
 
 func (q *Queries) QueueResume(ctx context.Context, db DBTX, name string) (pgconn.CommandTag, error) {

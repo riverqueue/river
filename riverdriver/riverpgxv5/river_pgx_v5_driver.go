@@ -524,7 +524,7 @@ func (e *Executor) QueuePause(ctx context.Context, name string) error {
 	if err != nil {
 		return interpretError(err)
 	}
-	if res.RowsAffected() == 0 {
+	if res.RowsAffected() == 0 && name != riverdriver.AllQueuesString {
 		return rivertype.ErrNotFound
 	}
 	return nil
@@ -535,7 +535,7 @@ func (e *Executor) QueueResume(ctx context.Context, name string) error {
 	if err != nil {
 		return interpretError(err)
 	}
-	if res.RowsAffected() == 0 {
+	if res.RowsAffected() == 0 && name != riverdriver.AllQueuesString {
 		return rivertype.ErrNotFound
 	}
 	return nil
