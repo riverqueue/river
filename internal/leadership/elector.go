@@ -379,13 +379,13 @@ func (e *Elector) attemptResignLoop(ctx context.Context) {
 	ctx = context.WithoutCancel(ctx)
 
 	for attempt := 1; attempt <= maxNumErrors; attempt++ {
-		if err := e.attemptResign(ctx, attempt); err != nil { //nolint:contextcheck
+		if err := e.attemptResign(ctx, attempt); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Error attempting to resign", "attempt", attempt, "client_id", e.config.ClientID, "err", err)
 
 			sleepDuration := e.ExponentialBackoff(attempt, baseservice.MaxAttemptsBeforeResetDefault)
 			e.Logger.ErrorContext(ctx, e.Name+": Error attempting to resign",
 				"client_id", e.config.ClientID, "err", err, "num_errors", attempt, "sleep_duration", sleepDuration)
-			e.CancellableSleep(ctx, sleepDuration) //nolint:contextcheck
+			e.CancellableSleep(ctx, sleepDuration)
 
 			continue
 		}

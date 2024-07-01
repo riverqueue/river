@@ -91,7 +91,7 @@ func (s *periodicIntervalSchedule) Next(t time.Time) time.Time {
 
 // PeriodicJobBundle is a bundle of currently configured periodic jobs. It's
 // made accessible through Client, where new periodic jobs can be configured,
-// and only ones removed.
+// and old ones removed.
 type PeriodicJobBundle struct {
 	clientConfig        *Config
 	periodicJobEnqueuer *maintenance.PeriodicJobEnqueuer
