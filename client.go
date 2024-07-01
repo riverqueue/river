@@ -9,6 +9,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/riverqueue/river/internal/baseservice"
@@ -258,10 +259,7 @@ func (c *Config) validate() error {
 	}
 
 	for queue, queueConfig := range c.Queues {
-		if queueConfig.MaxWorkers < 1 || queueConfig.MaxWorkers > QueueNumWorkersMax {
-			return fmt.Errorf("invalid number of workers for queue %q: %d", queue, queueConfig.MaxWorkers)
-		}
-		if err := validateQueueName(queue); err != nil {
+		if err := queueConfig.validate(queue); err != nil {
 			return err
 		}
 	}
@@ -295,6 +293,17 @@ type QueueConfig struct {
 	MaxWorkers int
 }
 
+func (c QueueConfig) validate(queueName string) error {
+	if c.MaxWorkers < 1 || c.MaxWorkers > QueueNumWorkersMax {
+		return fmt.Errorf("invalid number of workers for queue %q: %d", queueName, c.MaxWorkers)
+	}
+	if err := validateQueueName(queueName); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // Client is a single isolated instance of River. Your application may use
 // multiple instances operating on different databases or Postgres schemas
 // within a single database.
@@ -304,25 +313,27 @@ type Client[TTx any] struct {
 	baseService   baseservice.BaseService
 	baseStartStop startstop.BaseStartStop
 
-	completer            jobcompleter.JobCompleter
-	config               *Config
-	driver               riverdriver.Driver[TTx]
-	elector              *leadership.Elector
-	insertNotifyLimiter  *notifylimiter.Limiter
-	monitor              *clientMonitor
-	notifier             *notifier.Notifier // may be nil in poll-only mode
-	periodicJobs         *PeriodicJobBundle
-	producersByQueueName map[string]*producer
-	queueMaintainer      *maintenance.QueueMaintainer
-	services             []startstop.Service
-	subscriptionManager  *subscriptionManager
-	stopped              chan struct{}
-	testSignals          clientTestSignals
-	uniqueInserter       *dbunique.UniqueInserter
+	completer              jobcompleter.JobCompleter
+	config                 *Config
+	driver                 riverdriver.Driver[TTx]
+	elector                *leadership.Elector
+	insertNotifyLimiter    *notifylimiter.Limiter
+	monitor                *clientMonitor
+	notifier               *notifier.Notifier // may be nil in poll-only mode
+	periodicJobs           *PeriodicJobBundle
+	producersByQueueNameMu sync.Mutex
+	producersByQueueName   map[string]*producer
+	queueMaintainer        *maintenance.QueueMaintainer
+	services               []startstop.Service
+	subscriptionManager    *subscriptionManager
+	stopped                chan struct{}
+	testSignals            clientTestSignals
+	uniqueInserter         *dbunique.UniqueInserter
 
 	// workCancel cancels the context used for all work goroutines. Normal Stop
 	// does not cancel that context.
-	workCancel context.CancelCauseFunc
+	workCancel  context.CancelCauseFunc
+	workContext context.Context
 }
 
 // Test-only signals.
@@ -507,23 +518,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		client.services = append(client.services, client.elector)
 
 		for queue, queueConfig := range config.Queues {
-			client.producersByQueueName[queue] = newProducer(archetype, driver.GetExecutor(), &producerConfig{
-				ClientID:           config.ID,
-				Completer:          client.completer,
-				ErrorHandler:       config.ErrorHandler,
-				FetchCooldown:      config.FetchCooldown,
-				FetchPollInterval:  config.FetchPollInterval,
-				JobTimeout:         config.JobTimeout,
-				MaxWorkers:         queueConfig.MaxWorkers,
-				Notifier:           client.notifier,
-				Queue:              queue,
-				QueueEventCallback: client.subscriptionManager.distributeQueueEvent,
-				RetryPolicy:        config.RetryPolicy,
-				SchedulerInterval:  config.schedulerInterval,
-				StatusFunc:         client.monitor.SetProducerStatus,
-				Workers:            config.Workers,
-			})
-			client.monitor.InitializeProducerStatus(queue)
+			client.producersByQueueName[queue] = client.addProducer(queue, queueConfig)
 		}
 
 		client.services = append(client.services,
@@ -615,6 +610,26 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	return client, nil
 }
 
+func (c *Client[TTx]) AddQueue(ctx context.Context, queueName string, queueConfig QueueConfig) error {
+	if err := queueConfig.validate(queueName); err != nil {
+		return err
+	}
+
+	producerInstance := c.addProducer(queueName, queueConfig)
+	c.producersByQueueNameMu.Lock()
+	c.producersByQueueName[queueName] = producerInstance
+	c.producersByQueueNameMu.Unlock()
+
+	fetchCtx, started := c.baseStartStop.IsStarted()
+	if started {
+		if err := producerInstance.StartWorkContext(fetchCtx, c.workContext); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // Start starts the client's job fetching and working loops. Once this is called,
 // the client will run in a background goroutine until stopped. All jobs are
 // run with a context inheriting from the provided context, but with a timeout
@@ -641,8 +656,6 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 			func(p *producer) startstop.Service { return p }),
 		)
 	}
-
-	var workCtx context.Context
 
 	// Startup code. Wrapped in a closure so it doesn't have to remember to
 	// close the stopped channel if returning with an error.
@@ -705,7 +718,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		// We use separate contexts for fetching and working to allow for a graceful
 		// stop. Both inherit from the provided context, so if it's cancelled, a
 		// more aggressive stop will be initiated.
-		workCtx, c.workCancel = context.WithCancelCause(withClient[TTx](ctx, c))
+		c.workContext, c.workCancel = context.WithCancelCause(withClient[TTx](ctx, c))
 
 		for _, service := range c.services {
 			if err := service.Start(fetchCtx); err != nil {
@@ -717,7 +730,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		for _, producer := range c.producersByQueueName {
 			producer := producer
 
-			if err := producer.StartWorkContext(fetchCtx, workCtx); err != nil {
+			if err := producer.StartWorkContext(fetchCtx, c.workContext); err != nil {
 				stopProducers()
 				stopServicesOnError()
 				return err
@@ -1504,6 +1517,26 @@ func (c *Client[TTx]) validateJobArgs(args JobArgs) error {
 	}
 
 	return nil
+}
+
+func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) *producer {
+	producerInstance := newProducer(&c.baseService.Archetype, c.driver.GetExecutor(), &producerConfig{
+		ClientID:          c.config.ID,
+		Completer:         c.completer,
+		ErrorHandler:      c.config.ErrorHandler,
+		FetchCooldown:     c.config.FetchCooldown,
+		FetchPollInterval: c.config.FetchPollInterval,
+		JobTimeout:        c.config.JobTimeout,
+		MaxWorkers:        queueConfig.MaxWorkers,
+		Notifier:          c.notifier,
+		Queue:             queueName,
+		RetryPolicy:       c.config.RetryPolicy,
+		SchedulerInterval: c.config.schedulerInterval,
+		StatusFunc:        c.monitor.SetProducerStatus,
+		Workers:           c.config.Workers,
+	})
+	c.monitor.InitializeProducerStatus(queueName)
+	return producerInstance
 }
 
 var nameRegex = regexp.MustCompile(`^(?:[a-z0-9])+(?:[_|\-]?[a-z0-9]+)*$`)
