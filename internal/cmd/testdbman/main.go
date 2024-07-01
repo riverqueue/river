@@ -190,9 +190,7 @@ func dropTestDatabases(ctx context.Context, out io.Writer) error {
 	for _, dbName := range allDBNames {
 		if strings.HasPrefix(dbName, "river_testdb") {
 			if _, err := mgmtConn.Exec(ctx, "DROP DATABASE "+dbName); err != nil {
-				if err != nil {
-					return fmt.Errorf("error dropping database %q: %w", dbName, err)
-				}
+				return fmt.Errorf("error dropping database %q: %w", dbName, err)
 			}
 			fmt.Fprintf(out, "dropped: %s\n", dbName)
 		}
@@ -236,7 +234,7 @@ func NewCommandBundle(use, short, long string) *CommandBundle {
 	if short == "" {
 		panic("short is required")
 	}
-	if short == "" {
+	if long == "" {
 		panic("long is required")
 	}
 
