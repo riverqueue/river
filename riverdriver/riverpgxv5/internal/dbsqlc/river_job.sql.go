@@ -566,6 +566,64 @@ func (q *Queries) JobInsertFast(ctx context.Context, db DBTX, arg *JobInsertFast
 	return &i, err
 }
 
+const jobInsertFastMany = `-- name: JobInsertFastMany :execrows
+INSERT INTO river_job(
+    args,
+    kind,
+    max_attempts,
+    metadata,
+    priority,
+    queue,
+    scheduled_at,
+    state,
+    tags
+) SELECT
+    unnest($1::jsonb[]),
+    unnest($2::text[]),
+    unnest($3::smallint[]),
+    unnest($4::jsonb[]),
+    unnest($5::smallint[]),
+    unnest($6::text[]),
+    unnest($7::timestamptz[]),
+    unnest($8::river_job_state[]),
+
+    -- lib/pq really, REALLY does not play nicely with multi-dimensional arrays,
+    -- so instead we pack each set of tags into a string, send them through,
+    -- then unpack them here into an array to put in each row. This isn't
+    -- necessary in the Pgx driver where copyfrom is used instead.
+    string_to_array(unnest($9::text[]), ',')
+`
+
+type JobInsertFastManyParams struct {
+	Args        [][]byte
+	Kind        []string
+	MaxAttempts []int16
+	Metadata    [][]byte
+	Priority    []int16
+	Queue       []string
+	ScheduledAt []time.Time
+	State       []RiverJobState
+	Tags        []string
+}
+
+func (q *Queries) JobInsertFastMany(ctx context.Context, db DBTX, arg *JobInsertFastManyParams) (int64, error) {
+	result, err := db.Exec(ctx, jobInsertFastMany,
+		arg.Args,
+		arg.Kind,
+		arg.MaxAttempts,
+		arg.Metadata,
+		arg.Priority,
+		arg.Queue,
+		arg.ScheduledAt,
+		arg.State,
+		arg.Tags,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const jobInsertFull = `-- name: JobInsertFull :one
 INSERT INTO river_job(
     args,

@@ -4,6 +4,7 @@ package testfactory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -26,7 +27,7 @@ type JobOpts struct {
 	FinalizedAt *time.Time
 	Kind        *string
 	MaxAttempts *int
-	Metadata    []byte
+	Metadata    json.RawMessage
 	Priority    *int
 	Queue       *string
 	ScheduledAt *time.Time

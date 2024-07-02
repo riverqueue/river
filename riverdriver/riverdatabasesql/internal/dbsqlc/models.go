@@ -6,74 +6,73 @@ package dbsqlc
 
 import (
 	"database/sql/driver"
-	"encoding/json"
 	"fmt"
 	"time"
 )
 
-type JobState string
+type RiverJobState string
 
 const (
-	RiverJobStateAvailable JobState = "available"
-	RiverJobStateCancelled JobState = "cancelled"
-	RiverJobStateCompleted JobState = "completed"
-	RiverJobStateDiscarded JobState = "discarded"
-	RiverJobStatePending   JobState = "pending"
-	RiverJobStateRetryable JobState = "retryable"
-	RiverJobStateRunning   JobState = "running"
-	RiverJobStateScheduled JobState = "scheduled"
+	RiverJobStateAvailable RiverJobState = "available"
+	RiverJobStateCancelled RiverJobState = "cancelled"
+	RiverJobStateCompleted RiverJobState = "completed"
+	RiverJobStateDiscarded RiverJobState = "discarded"
+	RiverJobStatePending   RiverJobState = "pending"
+	RiverJobStateRetryable RiverJobState = "retryable"
+	RiverJobStateRunning   RiverJobState = "running"
+	RiverJobStateScheduled RiverJobState = "scheduled"
 )
 
-func (e *JobState) Scan(src interface{}) error {
+func (e *RiverJobState) Scan(src interface{}) error {
 	switch s := src.(type) {
 	case []byte:
-		*e = JobState(s)
+		*e = RiverJobState(s)
 	case string:
-		*e = JobState(s)
+		*e = RiverJobState(s)
 	default:
-		return fmt.Errorf("unsupported scan type for JobState: %T", src)
+		return fmt.Errorf("unsupported scan type for RiverJobState: %T", src)
 	}
 	return nil
 }
 
-type NullJobState struct {
-	JobState JobState
-	Valid    bool // Valid is true if JobState is not NULL
+type NullRiverJobState struct {
+	RiverJobState RiverJobState
+	Valid         bool // Valid is true if RiverJobState is not NULL
 }
 
 // Scan implements the Scanner interface.
-func (ns *NullJobState) Scan(value interface{}) error {
+func (ns *NullRiverJobState) Scan(value interface{}) error {
 	if value == nil {
-		ns.JobState, ns.Valid = "", false
+		ns.RiverJobState, ns.Valid = "", false
 		return nil
 	}
 	ns.Valid = true
-	return ns.JobState.Scan(value)
+	return ns.RiverJobState.Scan(value)
 }
 
 // Value implements the driver Valuer interface.
-func (ns NullJobState) Value() (driver.Value, error) {
+func (ns NullRiverJobState) Value() (driver.Value, error) {
 	if !ns.Valid {
 		return nil, nil
 	}
-	return string(ns.JobState), nil
+	return string(ns.RiverJobState), nil
 }
 
 type RiverJob struct {
 	ID          int64
-	Args        []byte
+	Args        string
 	Attempt     int16
 	AttemptedAt *time.Time
 	AttemptedBy []string
 	CreatedAt   time.Time
-	Errors      []AttemptError
+	Errors      []string
 	FinalizedAt *time.Time
 	Kind        string
 	MaxAttempts int16
-	Metadata    json.RawMessage
+	Metadata    string
 	Priority    int16
 	Queue       string
-	State       JobState
+	State       RiverJobState
 	ScheduledAt time.Time
 	Tags        []string
 }
@@ -89,4 +88,12 @@ type RiverMigration struct {
 	ID        int64
 	CreatedAt time.Time
 	Version   int64
+}
+
+type RiverQueue struct {
+	Name      string
+	CreatedAt time.Time
+	Metadata  string
+	PausedAt  *time.Time
+	UpdatedAt time.Time
 }
