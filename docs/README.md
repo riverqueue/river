@@ -2,7 +2,7 @@
 
 River is a robust high-performance job processing system for Go and Postgres.
 
-See [homepage], [docs], and [godoc], as well as the [River UI],
+See [homepage], [docs], and [godoc], as well as the [River UI].
 
 Being built for Postgres, River encourages the use of the same database for
 application data and job queue. By enqueueing jobs transactionally along with
