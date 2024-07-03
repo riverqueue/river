@@ -137,15 +137,15 @@ func newTestConfig(t *testing.T, callback callbackFunc) *Config {
 	AddWorker(workers, &noOpWorker{})
 
 	return &Config{
-		FetchCooldown:       20 * time.Millisecond,
-		FetchPollInterval:   50 * time.Millisecond,
-		Logger:              riverinternaltest.Logger(t),
-		MaxAttempts:         MaxAttemptsDefault,
-		Queues:              map[string]QueueConfig{QueueDefault: {MaxWorkers: 50}},
-		Workers:             workers,
-		disableStaggerStart: true, // disables staggered start in maintenance services
-		schedulerInterval:   riverinternaltest.SchedulerShortInterval,
-		time:                &riverinternaltest.TimeStub{},
+		FetchCooldown:     20 * time.Millisecond,
+		FetchPollInterval: 50 * time.Millisecond,
+		Logger:            riverinternaltest.Logger(t),
+		MaxAttempts:       MaxAttemptsDefault,
+		Queues:            map[string]QueueConfig{QueueDefault: {MaxWorkers: 50}},
+		TestOnly:          true, // disables staggered start in maintenance services
+		Workers:           workers,
+		schedulerInterval: riverinternaltest.SchedulerShortInterval,
+		time:              &riverinternaltest.TimeStub{},
 	}
 }
 
@@ -3957,9 +3957,11 @@ func Test_NewClient_Defaults(t *testing.T) {
 	require.Equal(t, maintenance.CancelledJobRetentionPeriodDefault, jobCleaner.Config.CancelledJobRetentionPeriod)
 	require.Equal(t, maintenance.CompletedJobRetentionPeriodDefault, jobCleaner.Config.CompletedJobRetentionPeriod)
 	require.Equal(t, maintenance.DiscardedJobRetentionPeriodDefault, jobCleaner.Config.DiscardedJobRetentionPeriod)
+	require.False(t, jobCleaner.StaggerStartupIsDisabled())
 
 	enqueuer := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
 	require.Zero(t, enqueuer.Config.AdvisoryLockPrefix)
+	require.False(t, enqueuer.StaggerStartupIsDisabled())
 
 	require.Nil(t, client.config.ErrorHandler)
 	require.Equal(t, FetchCooldownDefault, client.config.FetchCooldown)
@@ -3968,7 +3970,6 @@ func Test_NewClient_Defaults(t *testing.T) {
 	require.NotZero(t, client.baseService.Logger)
 	require.Equal(t, MaxAttemptsDefault, client.config.MaxAttempts)
 	require.IsType(t, &DefaultClientRetryPolicy{}, client.config.RetryPolicy)
-	require.False(t, client.config.disableStaggerStart)
 }
 
 func Test_NewClient_Overrides(t *testing.T) {
@@ -3998,8 +3999,8 @@ func Test_NewClient_Overrides(t *testing.T) {
 		MaxAttempts:                 5,
 		Queues:                      map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}},
 		RetryPolicy:                 retryPolicy,
+		TestOnly:                    true, // disables staggered start in maintenance services
 		Workers:                     workers,
-		disableStaggerStart:         true,
 	})
 	require.NoError(t, err)
 
@@ -4009,9 +4010,11 @@ func Test_NewClient_Overrides(t *testing.T) {
 	require.Equal(t, 1*time.Hour, jobCleaner.Config.CancelledJobRetentionPeriod)
 	require.Equal(t, 2*time.Hour, jobCleaner.Config.CompletedJobRetentionPeriod)
 	require.Equal(t, 3*time.Hour, jobCleaner.Config.DiscardedJobRetentionPeriod)
+	require.True(t, jobCleaner.StaggerStartupIsDisabled())
 
 	enqueuer := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
 	require.Equal(t, int32(123_456), enqueuer.Config.AdvisoryLockPrefix)
+	require.True(t, enqueuer.StaggerStartupIsDisabled())
 
 	require.Equal(t, errorHandler, client.config.ErrorHandler)
 	require.Equal(t, 123*time.Millisecond, client.config.FetchCooldown)
@@ -4020,7 +4023,6 @@ func Test_NewClient_Overrides(t *testing.T) {
 	require.Equal(t, logger, client.baseService.Logger)
 	require.Equal(t, 5, client.config.MaxAttempts)
 	require.Equal(t, retryPolicy, client.config.RetryPolicy)
-	require.True(t, client.config.disableStaggerStart)
 }
 
 func Test_NewClient_MissingParameters(t *testing.T) {
