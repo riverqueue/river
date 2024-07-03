@@ -2,6 +2,8 @@ package startstoptest
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +28,25 @@ func StressErr(ctx context.Context, tb testingT, svc startstop.Service, allowedS
 
 	var wg sync.WaitGroup
 
+	isAllowedStartError := func(err error) bool {
+		if allowedStartErr != nil {
+			if errors.Is(err, allowedStartErr) {
+				return true
+			}
+		}
+
+		// Always allow this one because a fairly common intermittent failure is
+		// to produce an I/O timeout while trying to connect to Postgres.
+		//
+		//     write failed: write tcp 127.0.0.1:60976->127.0.0.1:5432: i/o timeout
+		//
+		if strings.HasSuffix(err.Error(), "i/o timeout") {
+			return true
+		}
+
+		return false
+	}
+
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func() {
@@ -33,10 +54,8 @@ func StressErr(ctx context.Context, tb testingT, svc startstop.Service, allowedS
 
 			for j := 0; j < 50; j++ {
 				err := svc.Start(ctx)
-				if allowedStartErr == nil {
+				if err != nil && !isAllowedStartError(err) {
 					require.NoError(tb, err)
-				} else if err != nil {
-					require.ErrorIs(tb, err, allowedStartErr)
 				}
 
 				stopped := make(chan struct{})
