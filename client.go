@@ -200,9 +200,16 @@ type Config struct {
 	// Defaults to DefaultRetryPolicy.
 	RetryPolicy ClientRetryPolicy
 
-	// TestOnly holds configuration for test-only settings that should generally
-	// not be used outside of test suites.
-	TestOnly TestOnlyConfig
+	// TestOnly can be set to true to disable certain features that are useful
+	// in production, but which may be harmful to tests, in ways like having the
+	// effect of making them slower. It should not be used outside of test
+	// suites.
+	//
+	// For example, queue maintenance services normally stagger their startup
+	// with a random jittered sleep so they don't all try to work at the same
+	// time. This is nice in production, but makes starting and stopping the
+	// client in a test case slower.
+	TestOnly bool
 
 	// Workers is a bundle of registered job workers.
 	//
@@ -291,16 +298,6 @@ type QueueConfig struct {
 	//
 	// Requires a minimum of 1, and a maximum of 10,000.
 	MaxWorkers int
-}
-
-// TestOnlyConfig contains test-only settings that should generally not be used
-// outside of test suites.
-type TestOnlyConfig struct {
-	// DisableStaggerStart disables the normal random jittered sleep occurring in
-	// queue maintenance services to stagger their startup so they don't all try
-	// to work at the same time. Appropriate for use in tests to make sure that
-	// the client can always be started and stopped again hastily.
-	DisableStaggerStart bool
 }
 
 // Client is a single isolated instance of River. Your application may use
@@ -615,7 +612,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		// started conditionally based on whether the client is the leader.
 		client.queueMaintainer = maintenance.NewQueueMaintainer(archetype, maintenanceServices)
 
-		if config.TestOnly.DisableStaggerStart {
+		if config.TestOnly {
 			client.queueMaintainer.StaggerStartupDisable(true)
 		}
 	}

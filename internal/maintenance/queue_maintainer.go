@@ -124,6 +124,10 @@ func (s *queueMaintainerServiceBase) StaggerStartupDisable(disabled bool) {
 	s.staggerStartupDisabled = disabled
 }
 
+func (s *queueMaintainerServiceBase) StaggerStartupIsDisabled() bool {
+	return s.staggerStartupDisabled
+}
+
 // withStaggerStartupDisable is an interface to a service whose stagger startup
 // sleep can be disable.
 type withStaggerStartupDisable interface {
