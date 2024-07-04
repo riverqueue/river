@@ -20,7 +20,7 @@ type ErrorHandler interface {
 	//
 	// Context is descended from the one used to start the River client that
 	// worked the job.
-	HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any) *ErrorHandlerResult
+	HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *ErrorHandlerResult
 }
 
 type ErrorHandlerResult struct {

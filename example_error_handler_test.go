@@ -22,7 +22,7 @@ func (*CustomErrorHandler) HandleError(ctx context.Context, job *rivertype.JobRo
 	return nil
 }
 
-func (*CustomErrorHandler) HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any) *river.ErrorHandlerResult {
+func (*CustomErrorHandler) HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *river.ErrorHandlerResult {
 	fmt.Printf("Job panicked with: %v\n", panicVal)
 
 	// Either function can also set the job to be immediately cancelled.
