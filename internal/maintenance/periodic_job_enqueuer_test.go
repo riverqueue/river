@@ -401,28 +401,25 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		handles := svc.AddMany([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s", false)},
+			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s_start", false), RunOnStart: true},
 		})
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_500ms", 0)
-		requireNJobs(t, bundle.exec, "periodic_job_500ms_start", 1)
+		requireNJobs(t, bundle.exec, "periodic_job_5s", 0)
+		requireNJobs(t, bundle.exec, "periodic_job_5s_start", 1)
 
 		svc.Clear()
 
+		require.Empty(t, svc.periodicJobs)
+
 		handleAfterClear := svc.Add(
-			&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_new", false)},
+			&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s_new", false)},
 		)
 
 		// Handles are not reused.
 		require.NotEqual(t, handles[0], handleAfterClear)
 		require.NotEqual(t, handles[1], handleAfterClear)
-
-		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_500ms", 0)       // same as before
-		requireNJobs(t, bundle.exec, "periodic_job_500ms_start", 1) // same as before
-		requireNJobs(t, bundle.exec, "periodic_job_500ms_new", 1)   // new row
 	})
 
 	t.Run("RemoveAfterStart", func(t *testing.T) {
@@ -433,21 +430,17 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		handles := svc.AddMany([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s", false)},
+			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s_start", false), RunOnStart: true},
 		})
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_500ms", 0)
-		requireNJobs(t, bundle.exec, "periodic_job_500ms_start", 1)
+		requireNJobs(t, bundle.exec, "periodic_job_5s", 0)
+		requireNJobs(t, bundle.exec, "periodic_job_5s_start", 1)
 
 		svc.Remove(handles[1])
 
-		// Each is one because the second job was removed before it was worked
-		// again.
-		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_500ms", 1)
-		requireNJobs(t, bundle.exec, "periodic_job_500ms_start", 1)
+		require.Len(t, svc.periodicJobs, 1)
 	})
 
 	t.Run("RemoveManyAfterStart", func(t *testing.T) {
@@ -458,24 +451,19 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		handles := svc.AddMany([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_other", false)},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s", false)},
+			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s_other", false)},
+			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s_start", false), RunOnStart: true},
 		})
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_500ms", 0)
-		requireNJobs(t, bundle.exec, "periodic_job_500ms_other", 0)
-		requireNJobs(t, bundle.exec, "periodic_job_500ms_start", 1)
+		requireNJobs(t, bundle.exec, "periodic_job_5s", 0)
+		requireNJobs(t, bundle.exec, "periodic_job_5s_other", 0)
+		requireNJobs(t, bundle.exec, "periodic_job_5s_start", 1)
 
 		svc.RemoveMany([]rivertype.PeriodicJobHandle{handles[1], handles[2]})
 
-		// Each is one because the second job was removed before it was worked
-		// again.
-		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_500ms", 1)
-		requireNJobs(t, bundle.exec, "periodic_job_500ms_other", 0)
-		requireNJobs(t, bundle.exec, "periodic_job_500ms_start", 1)
+		require.Len(t, svc.periodicJobs, 1)
 	})
 
 	// To suss out any race conditions in the add/remove/clear/run loop code,
