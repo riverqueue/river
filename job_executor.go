@@ -100,7 +100,7 @@ var ErrJobCancelledRemotely = JobCancel(errors.New("job cancelled remotely"))
 type jobExecutorResult struct {
 	Err        error
 	NextRetry  time.Time
-	PanicTrace []byte
+	PanicTrace string
 	PanicVal   any
 }
 
@@ -175,7 +175,7 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 			)
 
 			res = &jobExecutorResult{
-				PanicTrace: debug.Stack(),
+				PanicTrace: string(debug.Stack()),
 				PanicVal:   recovery,
 			}
 		}
@@ -234,7 +234,7 @@ func (e *jobExecutor) invokeErrorHandler(ctx context.Context, res *jobExecutorRe
 
 	case res.PanicVal != nil:
 		errorHandlerRes = invokeAndHandlePanic("HandlePanic", func() *ErrorHandlerResult {
-			return e.ErrorHandler.HandlePanic(ctx, e.JobRow, res.PanicVal)
+			return e.ErrorHandler.HandlePanic(ctx, e.JobRow, res.PanicVal, res.PanicTrace)
 		})
 	}
 
@@ -316,7 +316,7 @@ func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
 		At:      e.start,
 		Attempt: e.JobRow.Attempt,
 		Error:   res.ErrorStr(),
-		Trace:   string(res.PanicTrace),
+		Trace:   res.PanicTrace,
 	}
 
 	errData, err := json.Marshal(attemptErr)

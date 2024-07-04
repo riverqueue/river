@@ -2300,7 +2300,7 @@ func Test_Client_ErrorHandler(t *testing.T) {
 
 		var panicHandlerCalled bool
 		config.ErrorHandler = &testErrorHandler{
-			HandlePanicFunc: func(ctx context.Context, job *rivertype.JobRow, panicVal any) *ErrorHandlerResult {
+			HandlePanicFunc: func(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *ErrorHandlerResult {
 				require.Equal(t, "panic val", panicVal)
 				panicHandlerCalled = true
 				return &ErrorHandlerResult{}

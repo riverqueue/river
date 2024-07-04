@@ -89,14 +89,16 @@ type testErrorHandler struct {
 	HandleErrorFunc   func(ctx context.Context, job *rivertype.JobRow, err error) *ErrorHandlerResult
 
 	HandlePanicCalled bool
-	HandlePanicFunc   func(ctx context.Context, job *rivertype.JobRow, panicVal any) *ErrorHandlerResult
+	HandlePanicFunc   func(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *ErrorHandlerResult
 }
 
 // Test handler with no-ops for both error handling functions.
 func newTestErrorHandler() *testErrorHandler {
 	return &testErrorHandler{
 		HandleErrorFunc: func(ctx context.Context, job *rivertype.JobRow, err error) *ErrorHandlerResult { return nil },
-		HandlePanicFunc: func(ctx context.Context, job *rivertype.JobRow, panicVal any) *ErrorHandlerResult { return nil },
+		HandlePanicFunc: func(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *ErrorHandlerResult {
+			return nil
+		},
 	}
 }
 
@@ -105,9 +107,9 @@ func (h *testErrorHandler) HandleError(ctx context.Context, job *rivertype.JobRo
 	return h.HandleErrorFunc(ctx, job, err)
 }
 
-func (h *testErrorHandler) HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any) *ErrorHandlerResult {
+func (h *testErrorHandler) HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *ErrorHandlerResult {
 	h.HandlePanicCalled = true
-	return h.HandlePanicFunc(ctx, job, panicVal)
+	return h.HandlePanicFunc(ctx, job, panicVal, trace)
 }
 
 func TestJobExecutor_Execute(t *testing.T) {
@@ -565,8 +567,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor, bundle := setup(t)
 
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { panic("panic val") }, nil).MakeUnit(bundle.jobRow)
-		bundle.errorHandler.HandlePanicFunc = func(ctx context.Context, job *rivertype.JobRow, panicVal any) *ErrorHandlerResult {
+		bundle.errorHandler.HandlePanicFunc = func(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *ErrorHandlerResult {
 			require.Equal(t, "panic val", panicVal)
+			require.Contains(t, trace, "runtime/debug.Stack()\n")
+
 			return nil
 		}
 
@@ -586,7 +590,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor, bundle := setup(t)
 
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { panic("panic val") }, nil).MakeUnit(bundle.jobRow)
-		bundle.errorHandler.HandlePanicFunc = func(ctx context.Context, job *rivertype.JobRow, panicVal any) *ErrorHandlerResult {
+		bundle.errorHandler.HandlePanicFunc = func(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *ErrorHandlerResult {
 			return &ErrorHandlerResult{SetCancelled: true}
 		}
 
@@ -606,7 +610,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor, bundle := setup(t)
 
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { panic("panic val") }, nil).MakeUnit(bundle.jobRow)
-		bundle.errorHandler.HandlePanicFunc = func(ctx context.Context, job *rivertype.JobRow, panicVal any) *ErrorHandlerResult {
+		bundle.errorHandler.HandlePanicFunc = func(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *ErrorHandlerResult {
 			panic("panic handler panicked!")
 		}
 

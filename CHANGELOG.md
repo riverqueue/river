@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Config.TestOnly` has been added. It disables various features in the River client like staggered maintenance service start that are useful in production, but may be somewhat harmful in tests because they make start/stop slower. [PR #414](https://github.com/riverqueue/river/pull/414).
 
+### Changed
+
+⚠️ Version 0.9.0 has a small breaking change in `ErrorHandler`. As before, we try never to make breaking changes, but this one was deemed quite important because `ErrorHandler` was fundamentally lacking important functionality.
+
+- **Breaking change:** Add stack trace to `ErrorHandler.HandlePanicFunc`. Fixing code only requires adding a new `trace string` argument to `HandlePanicFunc`. [PR #423](https://github.com/riverqueue/river/pull/423).
+
+    ``` go
+    # before
+    HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any) *ErrorHandlerResult
+
+    # after
+    HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *ErrorHandlerResult
+    ```
+
 ### Fixed
 
 - Pausing or resuming a queue that was already paused or not paused respectively no longer returns `rivertype.ErrNotFound`. The same goes for pausing or resuming using the all queues string (`*`) when no queues are in the database (previously that also returned `rivertype.ErrNotFound`). [PR #408](https://github.com/riverqueue/river/pull/408).
