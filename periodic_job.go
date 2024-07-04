@@ -180,7 +180,6 @@ func (b *PeriodicJobBundle) toInternal(periodicJob *PeriodicJob) *maintenance.Pe
 	if periodicJob.opts != nil {
 		opts = periodicJob.opts
 	}
-
 	return &maintenance.PeriodicJob{
 		ConstructorFunc: func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
 			args, options := periodicJob.constructorFunc()
