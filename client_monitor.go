@@ -5,7 +5,7 @@ import (
 	"sync"
 
 	"github.com/riverqueue/river/internal/componentstatus"
-	"github.com/riverqueue/river/internal/maintenance/startstop"
+	"github.com/riverqueue/river/internal/startstop"
 )
 
 type clientMonitor struct {

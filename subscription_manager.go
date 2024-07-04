@@ -9,7 +9,7 @@ import (
 	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobstats"
-	"github.com/riverqueue/river/internal/maintenance/startstop"
+	"github.com/riverqueue/river/internal/startstop"
 	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
