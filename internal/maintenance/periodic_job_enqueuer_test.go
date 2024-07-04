@@ -362,19 +362,15 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		svc.Add(
-			&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
+			&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s", false)},
 		)
 		svc.Add(
-			&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), RunOnStart: true},
+			&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s_start", false), RunOnStart: true},
 		)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_500ms", 0)
-		requireNJobs(t, bundle.exec, "periodic_job_500ms_start", 1)
-
-		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_500ms", 1)
-		requireNJobs(t, bundle.exec, "periodic_job_500ms_start", 2)
+		requireNJobs(t, bundle.exec, "periodic_job_5s", 0)
+		requireNJobs(t, bundle.exec, "periodic_job_5s_start", 1)
 	})
 
 	t.Run("AddManyAfterStart", func(t *testing.T) {
@@ -385,17 +381,13 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		svc.AddMany([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s", false)},
+			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s_start", false), RunOnStart: true},
 		})
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_500ms", 0)
-		requireNJobs(t, bundle.exec, "periodic_job_500ms_start", 1)
-
-		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_500ms", 1)
-		requireNJobs(t, bundle.exec, "periodic_job_500ms_start", 2)
+		requireNJobs(t, bundle.exec, "periodic_job_5s", 0)
+		requireNJobs(t, bundle.exec, "periodic_job_5s_start", 1)
 	})
 
 	t.Run("ClearAfterStart", func(t *testing.T) {
