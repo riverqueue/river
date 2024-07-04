@@ -20,6 +20,12 @@ type Service interface {
 	// should wait and respond to the error if necessary.
 	Start(ctx context.Context) error
 
+	// Started returns a channel that's closed when a service finishes starting,
+	// or if failed to start and is stopped instead. It can be used in
+	// conjunction with WaitAllStarted to verify startup of a constellation of
+	// services.
+	Started() <-chan struct{}
+
 	// Stop stops a service. Services are responsible for making sure their stop
 	// is complete before returning so a caller can wait on this invocation
 	// synchronously and be guaranteed the service is fully stopped. Services
@@ -56,7 +62,7 @@ type serviceWithStopped interface {
 type BaseStartStop struct {
 	cancelFunc context.CancelCauseFunc
 	mu         sync.Mutex
-	started    bool
+	started    chan struct{}
 	stopped    chan struct{}
 }
 
@@ -97,19 +103,37 @@ type BaseStartStop struct {
 //	}
 //
 //	...
-func (s *BaseStartStop) StartInit(ctx context.Context) (context.Context, bool, chan struct{}) {
+func (s *BaseStartStop) StartInit(ctx context.Context) (context.Context, bool, func(), func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.started {
-		return ctx, false, nil
+	if s.started != nil {
+		return ctx, false, nil, nil
 	}
 
-	s.started = true
+	s.started = make(chan struct{})
 	s.stopped = make(chan struct{})
 	ctx, s.cancelFunc = context.WithCancelCause(ctx)
 
-	return ctx, true, s.stopped
+	closeStartedOnce := sync.OnceFunc(func() { close(s.started) })
+
+	return ctx, true, closeStartedOnce, func() {
+		// Also close the started channel (in case it wasn't already), just in
+		// case `started()` was never invoked and someone is waiting on it.
+		closeStartedOnce()
+
+		close(s.stopped)
+	}
+}
+
+// Started returns a channel that's closed when a service finishes starting, or
+// if failed to start and is stopped instead. It can be used in conjunction with
+// WaitAllStarted to verify startup of a constellation of services.
+func (s *BaseStartStop) Started() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.started
 }
 
 // Stop is an automatically provided implementation for the maintenance Service
@@ -163,7 +187,7 @@ func (s *BaseStartStop) StopInit() (bool, <-chan struct{}, func(didStop bool)) {
 	return true, s.stopped, func(didStop bool) {
 		defer s.mu.Unlock()
 		if didStop {
-			s.started = false
+			s.started = nil
 			s.stopped = nil
 		}
 	}
@@ -172,19 +196,17 @@ func (s *BaseStartStop) StopInit() (bool, <-chan struct{}, func(didStop bool)) {
 // Stopped returns a channel that can be waited on for the service to be
 // stopped. This function is only safe to invoke after successfully waiting on a
 // service's Start, and a reference to it must be taken _before_ invoking Stop.
-func (s *BaseStartStop) Stopped() <-chan struct{} {
-	return s.stopped
-}
+func (s *BaseStartStop) Stopped() <-chan struct{} { return s.stopped }
 
 type startStopFunc struct {
 	BaseStartStop
-	startFunc func(ctx context.Context, shouldStart bool, stopped chan struct{}) error
+	startFunc func(ctx context.Context, shouldStart bool, started, stopped func()) error
 }
 
 // StartStopFunc produces a `startstop.Service` from a function. It's useful for
 // very small services that don't necessarily need a whole struct defined for
 // them.
-func StartStopFunc(startFunc func(ctx context.Context, shouldStart bool, stopped chan struct{}) error) *startStopFunc {
+func StartStopFunc(startFunc func(ctx context.Context, shouldStart bool, started, stopped func()) error) *startStopFunc {
 	return &startStopFunc{
 		startFunc: startFunc,
 	}
@@ -209,4 +231,39 @@ func StopAllParallel(services []Service) {
 	}
 
 	wg.Wait()
+}
+
+// WaitAllStarted waits until all the given services are started (or stopped in
+// a degenerate start scenario, like if context is cancelled while starting up).
+//
+// Unlike StopAllParallel, WaitAllStarted doesn't bother with parallelism
+// because the services themselves have already backgrounded themselves, and we
+// have to wait until the slowest service has started anyway.
+func WaitAllStarted(services ...Service) {
+	<-WaitAllStartedC(services...)
+}
+
+// WaitAllStartedC waits until all the given services are started (or stopped in
+// a degenerate start scenario, like if context is cancelled while starting up).
+//
+// This variant returns a channel so that a caller can apply a timeout branch
+// with `select` if they'd like. For the most part this shouldn't be needed
+// though, as long as each service individually is confirmed to be able to start
+// and stop itself in a healthy way. (i.e. Never dies for any reason before
+// managing to call `started()` or `stopped()`).
+//
+// Unlike StopAllParallel, WaitAllStartedC doesn't bother with parallelism
+// because the services themselves have already background themselves, and we
+// have to wait until the slowest service has started anyway.
+func WaitAllStartedC(services ...Service) <-chan struct{} {
+	allStarted := make(chan struct{})
+
+	go func() {
+		defer close(allStarted)
+		for _, service := range services {
+			<-service.Started()
+		}
+	}()
+
+	return allStarted
 }

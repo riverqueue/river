@@ -66,7 +66,7 @@ func (m *QueueMaintainer) StaggerStartupDisable(disabled bool) {
 }
 
 func (m *QueueMaintainer) Start(ctx context.Context) error {
-	ctx, shouldStart, stopped := m.StartInit(ctx)
+	ctx, shouldStart, started, stopped := m.StartInit(ctx)
 	if !shouldStart {
 		return nil
 	}
@@ -78,9 +78,11 @@ func (m *QueueMaintainer) Start(ctx context.Context) error {
 	}
 
 	go func() {
-		// This defer should come first so that it's last out, thereby avoiding
-		// races.
-		defer close(stopped)
+		// Wait for all subservices to start up before signaling our own start.
+		startstop.WaitAllStarted(maputil.Values(m.servicesByName)...)
+
+		started()
+		defer stopped() // this defer should come first so it's last out
 
 		<-ctx.Done()
 

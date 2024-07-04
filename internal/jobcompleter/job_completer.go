@@ -98,7 +98,7 @@ func (c *InlineCompleter) ResetSubscribeChan(subscribeCh SubscribeChan) {
 }
 
 func (c *InlineCompleter) Start(ctx context.Context) error {
-	ctx, shouldStart, stopped := c.StartInit(ctx)
+	ctx, shouldStart, started, stopped := c.StartInit(ctx)
 	if !shouldStart {
 		return nil
 	}
@@ -108,7 +108,8 @@ func (c *InlineCompleter) Start(ctx context.Context) error {
 	}
 
 	go func() {
-		defer close(stopped)
+		started()
+		defer stopped()
 		defer close(c.subscribeCh)
 
 		<-ctx.Done()
@@ -179,7 +180,7 @@ func (c *AsyncCompleter) ResetSubscribeChan(subscribeCh SubscribeChan) {
 }
 
 func (c *AsyncCompleter) Start(ctx context.Context) error {
-	ctx, shouldStart, stopped := c.StartInit(ctx)
+	ctx, shouldStart, started, stopped := c.StartInit(ctx)
 	if !shouldStart {
 		return nil
 	}
@@ -189,7 +190,8 @@ func (c *AsyncCompleter) Start(ctx context.Context) error {
 	}
 
 	go func() {
-		defer close(stopped)
+		started()
+		defer stopped() // this defer should come first so it's first out
 		defer close(c.subscribeCh)
 
 		<-ctx.Done()
@@ -224,7 +226,6 @@ type BatchCompleter struct {
 	exec                 PartialExecutor
 	setStateParams       map[int64]*batchCompleterSetState
 	setStateParamsMu     sync.RWMutex
-	started              chan struct{}
 	subscribeCh          SubscribeChan
 	waitOnBacklogChan    chan struct{}
 	waitOnBacklogWaiting bool
@@ -252,7 +253,7 @@ func (c *BatchCompleter) ResetSubscribeChan(subscribeCh SubscribeChan) {
 }
 
 func (c *BatchCompleter) Start(ctx context.Context) error {
-	stopCtx, shouldStart, stopped := c.StartInit(ctx)
+	stopCtx, shouldStart, started, stopped := c.StartInit(ctx)
 	if !shouldStart {
 		return nil
 	}
@@ -265,20 +266,15 @@ func (c *BatchCompleter) Start(ctx context.Context) error {
 		return err
 	}
 
-	c.started = make(chan struct{})
-
 	go func() {
-		// This defer should come first so that it's last out, thereby avoiding
-		// races.
-		defer close(stopped)
+		started()
+		defer stopped() // this defer should come first so it's first out
 
 		c.Logger.DebugContext(ctx, c.Name+": Run loop started")
 		defer c.Logger.DebugContext(ctx, c.Name+": Run loop stopped")
 
 		ticker := time.NewTicker(50 * time.Millisecond)
 		defer ticker.Stop()
-
-		close(c.started)
 
 		backlogSize := func() int {
 			c.setStateParamsMu.RLock()
@@ -461,10 +457,6 @@ func (c *BatchCompleter) Stop() {
 	// subscribeCh already closed by asyncCompleter.Stop ^
 }
 
-func (c *BatchCompleter) WaitStarted() <-chan struct{} {
-	return c.started
-}
-
 func (c *BatchCompleter) waitOrInitBacklogChannel(ctx context.Context) {
 	c.setStateParamsMu.RLock()
 	var (
@@ -557,16 +549,4 @@ func withRetries[T any](logCtx context.Context, baseService *baseservice.BaseSer
 	baseService.Logger.ErrorContext(logCtx, baseService.Name+": Too many errors; giving up")
 
 	return defaultVal, lastErr
-}
-
-// withWaitStarted is an additional completer interface that can wait on the
-// completer to full start, and which is used by benchmarks.
-//
-// This is messy, and this should be subsumed into a facility in BaseService
-// instead.
-type withWaitStarted interface {
-	// WaitStarted returns a channel that's closed when the completer has
-	// started. Can't be invoked until after the completer's Start function has
-	// been called.
-	WaitStarted() <-chan struct{}
 }
