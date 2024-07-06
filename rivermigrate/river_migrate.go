@@ -4,13 +4,13 @@ package rivermigrate
 
 import (
 	"context"
-	"embed"
 	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,6 +22,7 @@ import (
 	"github.com/riverqueue/river/rivershared/util/maputil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
+	"github.com/riverqueue/river/rivershared/util/valutil"
 )
 
 // Migration is a bundled migration containing a version (e.g. 1, 2, 3), and SQL
@@ -37,17 +38,14 @@ type Migration struct {
 	Version int
 }
 
-//nolint:gochecknoglobals
-var (
-	//go:embed migration/*.sql
-	migrationFS embed.FS
-
-	riverMigrations    = mustMigrationsFromFS(migrationFS)
-	riverMigrationsMap = validateAndInit(riverMigrations)
-)
-
 // Config contains configuration for Migrator.
 type Config struct {
+	// Line is the migration line to use. Most drivers will only have a single
+	// line, which is `main`.
+	//
+	// Defaults to `main`.
+	Line string
+
 	// Logger is the structured logger to use for logging purposes. If none is
 	// specified, logs will be emitted to STDOUT with messages at warn level
 	// or higher.
@@ -60,7 +58,8 @@ type Migrator[TTx any] struct {
 	baseservice.BaseService
 
 	driver     riverdriver.Driver[TTx]
-	migrations map[int]*Migration // allows us to inject test migrations
+	line       string
+	migrations map[int]Migration // allows us to inject test migrations
 }
 
 // New returns a new migrator with the given database driver and configuration.
@@ -91,6 +90,8 @@ func New[TTx any](driver riverdriver.Driver[TTx], config *Config) *Migrator[TTx]
 		config = &Config{}
 	}
 
+	line := valutil.ValOrDefault(config.Line, riverdriver.MigrationLineMain)
+
 	logger := config.Logger
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -104,9 +105,21 @@ func New[TTx any](driver riverdriver.Driver[TTx], config *Config) *Migrator[TTx]
 		Time:   &baseservice.UnStubbableTimeGenerator{},
 	}
 
+	if !slices.Contains(driver.GetMigrationLines(), line) {
+		panic("migration line does not exist: " + line)
+	}
+
+	riverMigrations, err := migrationsFromFS(driver.GetMigrationFS(line), line)
+	if err != nil {
+		// If there's ever a problem here, it's a very fundamental internal
+		// River one, so it's okay to panic.
+		panic(err)
+	}
+
 	return baseservice.Init(archetype, &Migrator[TTx]{
 		driver:     driver,
-		migrations: riverMigrationsMap,
+		line:       line,
+		migrations: validateAndInit(riverMigrations),
 	})
 }
 
@@ -172,8 +185,8 @@ const (
 // AllVersions gets information on all known migration versions.
 func (m *Migrator[TTx]) AllVersions() []Migration {
 	migrations := maputil.Values(m.migrations)
-	slices.SortFunc(migrations, func(v1, v2 *Migration) int { return v1.Version - v2.Version })
-	return sliceutil.Map(migrations, func(m *Migration) Migration { return *m })
+	slices.SortFunc(migrations, func(v1, v2 Migration) int { return v1.Version - v2.Version })
+	return migrations
 }
 
 // GetVersion gets information about a specific migration version. An error is
@@ -186,7 +199,7 @@ func (m *Migrator[TTx]) GetVersion(version int) (Migration, error) {
 		return Migration{}, fmt.Errorf("migration %d not found (available versions: %v)", version, availableVersions)
 	}
 
-	return *migration, nil
+	return migration, nil
 }
 
 // Migrate migrates the database in the given direction (up or down). The opts
@@ -290,7 +303,7 @@ func (m *Migrator[TTx]) migrateDown(ctx context.Context, exec riverdriver.Execut
 	}
 
 	sortedTargetMigrations := maputil.Values(targetMigrations)
-	slices.SortFunc(sortedTargetMigrations, func(a, b *Migration) int { return b.Version - a.Version }) // reverse order
+	slices.SortFunc(sortedTargetMigrations, func(a, b Migration) int { return b.Version - a.Version }) // reverse order
 
 	res, err := m.applyMigrations(ctx, exec, direction, opts, sortedTargetMigrations)
 	if err != nil {
@@ -333,7 +346,7 @@ func (m *Migrator[TTx]) migrateUp(ctx context.Context, exec riverdriver.Executor
 	}
 
 	sortedTargetMigrations := maputil.Values(targetMigrations)
-	slices.SortFunc(sortedTargetMigrations, func(a, b *Migration) int { return a.Version - b.Version })
+	slices.SortFunc(sortedTargetMigrations, func(a, b Migration) int { return a.Version - b.Version })
 
 	res, err := m.applyMigrations(ctx, exec, direction, opts, sortedTargetMigrations)
 	if err != nil {
@@ -378,7 +391,7 @@ func (m *Migrator[TTx]) validate(ctx context.Context, exec riverdriver.Executor)
 
 // Common code shared between the up and down migration directions that walks
 // through each target migration and applies it, logging appropriately.
-func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Executor, direction Direction, opts *MigrateOpts, sortedTargetMigrations []*Migration) (*MigrateResult, error) {
+func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Executor, direction Direction, opts *MigrateOpts, sortedTargetMigrations []Migration) (*MigrateResult, error) {
 	if opts == nil {
 		opts = &MigrateOpts{}
 	}
@@ -393,7 +406,7 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Ex
 
 	switch {
 	case maxSteps < 0:
-		sortedTargetMigrations = []*Migration{}
+		sortedTargetMigrations = []Migration{}
 	case maxSteps > 0:
 		sortedTargetMigrations = sortedTargetMigrations[0:min(maxSteps, len(sortedTargetMigrations))]
 	}
@@ -403,7 +416,7 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Ex
 			return nil, fmt.Errorf("version %d is not a valid River migration version", opts.TargetVersion)
 		}
 
-		targetIndex := slices.IndexFunc(sortedTargetMigrations, func(b *Migration) bool { return b.Version == opts.TargetVersion })
+		targetIndex := slices.IndexFunc(sortedTargetMigrations, func(b Migration) bool { return b.Version == opts.TargetVersion })
 		if targetIndex == -1 {
 			return nil, fmt.Errorf("version %d is not in target list of valid migrations to apply", opts.TargetVersion)
 		}
@@ -485,13 +498,13 @@ func (m *Migrator[TTx]) existingMigrations(ctx context.Context, exec riverdriver
 
 // Reads a series of migration bundles from a file system, which practically
 // speaking will always be the embedded FS read from the contents of the
-// `migration/` subdirectory.
-func migrationsFromFS(migrationFS fs.FS) ([]*Migration, error) {
+// `migration/<line>/` subdirectory.
+func migrationsFromFS(migrationFS fs.FS, line string) ([]Migration, error) {
 	const subdir = "migration"
 
 	var (
-		bundles    []*Migration
 		lastBundle *Migration
+		migrations []Migration
 	)
 
 	err := fs.WalkDir(migrationFS, subdir, func(path string, entry fs.DirEntry, err error) error {
@@ -499,19 +512,30 @@ func migrationsFromFS(migrationFS fs.FS) ([]*Migration, error) {
 			return fmt.Errorf("error walking FS: %w", err)
 		}
 
-		// Gets called one with the name of the subdirectory. Continue.
-		if path == subdir {
+		// Gets called one with the name of the subdirectories. Continue.
+		if path == subdir || path == filepath.Join(subdir, line) {
 			return nil
 		}
 
+		name := path
+
 		// Invoked with the full path name. Strip `migration/` from the front so
 		// we have a name that we can parse with.
-		if !strings.HasPrefix(path, subdir) {
+		if !strings.HasPrefix(name, subdir) {
 			return fmt.Errorf("expected path %q to start with subdir %q", path, subdir)
 		}
-		name := path[len(subdir)+1:]
+		name = name[len(subdir)+1:]
 
-		versionStr, _, _ := strings.Cut(name, "_")
+		// Ignore any migrations that don't belong to the line we're reading.
+		if !strings.HasPrefix(name, line) {
+			return nil
+		}
+		name = name[len(line)+1:]
+
+		versionStr, _, ok := strings.Cut(name, "_")
+		if !ok {
+			return fmt.Errorf("expected name to start with version string like '001_': %q", name)
+		}
 
 		version, err := strconv.Atoi(versionStr)
 		if err != nil {
@@ -521,8 +545,8 @@ func migrationsFromFS(migrationFS fs.FS) ([]*Migration, error) {
 		// This works because `fs.WalkDir` guarantees lexical order, so all 001*
 		// files always appear before all 002* files, etc.
 		if lastBundle == nil || lastBundle.Version != version {
-			lastBundle = &Migration{Version: version}
-			bundles = append(bundles, lastBundle)
+			migrations = append(migrations, Migration{Version: version})
+			lastBundle = &migrations[len(migrations)-1]
 		}
 
 		file, err := migrationFS.Open(path)
@@ -550,25 +574,20 @@ func migrationsFromFS(migrationFS fs.FS) ([]*Migration, error) {
 		return nil, err
 	}
 
-	return bundles, nil
-}
-
-// Same as the above, but for convenience, panics on an error.
-func mustMigrationsFromFS(migrationFS fs.FS) []*Migration {
-	bundles, err := migrationsFromFS(migrationFS)
-	if err != nil {
-		panic(err)
+	if len(migrations) < 1 {
+		return nil, fmt.Errorf("no migrations found for line: %q", line)
 	}
-	return bundles
+
+	return migrations, nil
 }
 
 // Validates and fully initializes a set of migrations to reduce the probability
 // of configuration problems as new migrations are introduced. e.g. Checks for
 // missing fields or accidentally duplicated version numbers from copy/pasta
 // problems.
-func validateAndInit(versions []*Migration) map[int]*Migration {
+func validateAndInit(versions []Migration) map[int]Migration {
 	lastVersion := 0
-	migrations := make(map[int]*Migration, len(versions))
+	migrations := make(map[int]Migration, len(versions))
 
 	for _, versionBundle := range versions {
 		if versionBundle.SQLDown == "" {

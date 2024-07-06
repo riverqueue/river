@@ -7,8 +7,10 @@ package riverpgxv5
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"math"
 	"strings"
 	"sync"
@@ -23,6 +25,9 @@ import (
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
+
+//go:embed migration/*/*.sql
+var migrationFS embed.FS
 
 // Driver is an implementation of riverdriver.Driver for Pgx v5.
 type Driver struct {
@@ -48,8 +53,15 @@ func New(dbPool *pgxpool.Pool) *Driver {
 
 func (d *Driver) GetExecutor() riverdriver.Executor { return &Executor{d.dbPool, dbsqlc.New()} }
 func (d *Driver) GetListener() riverdriver.Listener { return &Listener{dbPool: d.dbPool} }
-func (d *Driver) HasPool() bool                     { return d.dbPool != nil }
-func (d *Driver) SupportsListener() bool            { return true }
+func (d *Driver) GetMigrationFS(line string) fs.FS {
+	if line == riverdriver.MigrationLineMain {
+		return migrationFS
+	}
+	panic("migration line does not exist: " + line)
+}
+func (d *Driver) GetMigrationLines() []string { return []string{riverdriver.MigrationLineMain} }
+func (d *Driver) HasPool() bool               { return d.dbPool != nil }
+func (d *Driver) SupportsListener() bool      { return true }
 
 func (d *Driver) UnwrapExecutor(tx pgx.Tx) riverdriver.ExecutorTx {
 	return &ExecutorTx{Executor: Executor{tx, dbsqlc.New()}, tx: tx}

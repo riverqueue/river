@@ -1,6 +1,11 @@
 .PHONY: generate
 generate:
+generate: generate/migrations
 generate: generate/sqlc
+
+.PHONY: generate/migrations
+generate/migrations: ## sync changes of pgxv5 migrations to database/sql
+	rsync -au --delete "riverdriver/riverpgxv5/migration/" "riverdriver/riverdatabasesql/migration/"
 
 .PHONY: generate/sqlc
 generate/sqlc:
@@ -38,7 +43,12 @@ tidy:
 
 .PHONY: verify
 verify:
+verify: verify/migrations
 verify: verify/sqlc
+
+.PHONY: verify/migrations
+verify/migrations:
+	diff -qr riverdriver/riverpgxv5/migration riverdriver/riverdatabasesql/migration
 
 .PHONY: verify/sqlc
 verify/sqlc:
