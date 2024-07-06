@@ -56,6 +56,8 @@ func (m *clientMonitor) Start(ctx context.Context) error {
 // uninitialized.  Unlike SetProducerStatus, it does not broadcast the change
 // and is only meant to be used during initial client startup.
 func (m *clientMonitor) InitializeProducerStatus(queueName string) {
+	m.statusSnapshotMu.Lock()
+	defer m.statusSnapshotMu.Unlock()
 	m.currentSnapshot.Producers[queueName] = componentstatus.Uninitialized
 }
 

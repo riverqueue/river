@@ -9,6 +9,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/riverqueue/river/internal/baseservice"
@@ -263,10 +264,7 @@ func (c *Config) validate() error {
 	}
 
 	for queue, queueConfig := range c.Queues {
-		if queueConfig.MaxWorkers < 1 || queueConfig.MaxWorkers > QueueNumWorkersMax {
-			return fmt.Errorf("invalid number of workers for queue %q: %d", queue, queueConfig.MaxWorkers)
-		}
-		if err := validateQueueName(queue); err != nil {
+		if err := queueConfig.validate(queue); err != nil {
 			return err
 		}
 	}
@@ -300,6 +298,17 @@ type QueueConfig struct {
 	MaxWorkers int
 }
 
+func (c QueueConfig) validate(queueName string) error {
+	if c.MaxWorkers < 1 || c.MaxWorkers > QueueNumWorkersMax {
+		return fmt.Errorf("invalid number of workers for queue %q: %d", queueName, c.MaxWorkers)
+	}
+	if err := validateQueueName(queueName); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // Client is a single isolated instance of River. Your application may use
 // multiple instances operating on different databases or Postgres schemas
 // within a single database.
@@ -319,6 +328,7 @@ type Client[TTx any] struct {
 	periodicJobs         *PeriodicJobBundle
 	producersByQueueName map[string]*producer
 	queueMaintainer      *maintenance.QueueMaintainer
+	queues               *QueueBundle
 	services             []startstop.Service
 	subscriptionManager  *subscriptionManager
 	stopped              <-chan struct{}
@@ -481,6 +491,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			AdvisoryLockPrefix: config.AdvisoryLockPrefix,
 		}),
 	}
+	client.queues = &QueueBundle{addProducer: client.addProducer}
 
 	baseservice.Init(archetype, &client.baseService)
 	client.baseService.Name = "Client" // Have to correct the name because base service isn't embedded like it usually is
@@ -516,23 +527,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		client.services = append(client.services, client.elector)
 
 		for queue, queueConfig := range config.Queues {
-			client.producersByQueueName[queue] = newProducer(archetype, driver.GetExecutor(), &producerConfig{
-				ClientID:           config.ID,
-				Completer:          client.completer,
-				ErrorHandler:       config.ErrorHandler,
-				FetchCooldown:      config.FetchCooldown,
-				FetchPollInterval:  config.FetchPollInterval,
-				JobTimeout:         config.JobTimeout,
-				MaxWorkers:         queueConfig.MaxWorkers,
-				Notifier:           client.notifier,
-				Queue:              queue,
-				QueueEventCallback: client.subscriptionManager.distributeQueueEvent,
-				RetryPolicy:        config.RetryPolicy,
-				SchedulerInterval:  config.schedulerInterval,
-				StatusFunc:         client.monitor.SetProducerStatus,
-				Workers:            config.Workers,
-			})
-			client.monitor.InitializeProducerStatus(queue)
+			client.addProducer(queue, queueConfig)
 		}
 
 		client.services = append(client.services,
@@ -642,6 +637,9 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		return nil
 	}
 
+	c.queues.startStopMu.Lock()
+	defer c.queues.startStopMu.Unlock()
+
 	c.stopped = c.baseStartStop.Stopped()
 
 	producersAsServices := func() []startstop.Service {
@@ -650,8 +648,6 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 			func(p *producer) startstop.Service { return p },
 		)
 	}
-
-	var workCtx context.Context
 
 	// Startup code. Wrapped in a closure so it doesn't have to remember to
 	// close the stopped channel if returning with an error.
@@ -714,7 +710,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		// We use separate contexts for fetching and working to allow for a graceful
 		// stop. Both inherit from the provided context, so if it's cancelled, a
 		// more aggressive stop will be initiated.
-		workCtx, c.workCancel = context.WithCancelCause(withClient[TTx](ctx, c))
+		workCtx, workCancel := context.WithCancelCause(withClient[TTx](ctx, c))
 
 		for _, service := range c.services {
 			if err := service.Start(fetchCtx); err != nil {
@@ -733,6 +729,10 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 			}
 		}
 
+		c.queues.fetchCtx = fetchCtx
+		c.queues.workCtx = workCtx
+		c.workCancel = workCancel
+
 		return nil
 	}(); err != nil {
 		defer stopped()
@@ -741,6 +741,11 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		}
 		return err
 	}
+
+	// Generate producer services while c.queues.startStopMu.Lock() is still
+	// held. This is used for WaitAllStarted below, but don't use it elsewhere
+	// because new producers may have been added while the client is running.
+	producerServices := producersAsServices()
 
 	go func() {
 		// Wait for all subservices to start up before signaling our own start.
@@ -752,7 +757,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		// briefly start, but then immediately stop again.
 		startstop.WaitAllStarted(append(
 			c.services,
-			producersAsServices()...,
+			producerServices..., // see comment on this variable
 		)...)
 
 		started()
@@ -763,6 +768,9 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 
 		// The call to Stop cancels this context. Block here until shutdown.
 		<-fetchCtx.Done()
+
+		c.queues.startStopMu.Lock()
+		defer c.queues.startStopMu.Unlock()
 
 		// On stop, have the producers stop fetching first of all.
 		c.baseService.Logger.DebugContext(ctx, c.baseService.Name+": Stopping producers")
@@ -1535,6 +1543,28 @@ func (c *Client[TTx]) validateJobArgs(args JobArgs) error {
 	return nil
 }
 
+func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) *producer {
+	producer := newProducer(&c.baseService.Archetype, c.driver.GetExecutor(), &producerConfig{
+		ClientID:           c.config.ID,
+		Completer:          c.completer,
+		ErrorHandler:       c.config.ErrorHandler,
+		FetchCooldown:      c.config.FetchCooldown,
+		FetchPollInterval:  c.config.FetchPollInterval,
+		JobTimeout:         c.config.JobTimeout,
+		MaxWorkers:         queueConfig.MaxWorkers,
+		Notifier:           c.notifier,
+		Queue:              queueName,
+		QueueEventCallback: c.subscriptionManager.distributeQueueEvent,
+		RetryPolicy:        c.config.RetryPolicy,
+		SchedulerInterval:  c.config.schedulerInterval,
+		StatusFunc:         c.monitor.SetProducerStatus,
+		Workers:            c.config.Workers,
+	})
+	c.monitor.InitializeProducerStatus(queueName)
+	c.producersByQueueName[queueName] = producer
+	return producer
+}
+
 var nameRegex = regexp.MustCompile(`^(?:[a-z0-9])+(?:[_|\-]?[a-z0-9]+)*$`)
 
 func validateQueueName(queueName string) error {
@@ -1626,6 +1656,10 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 // PeriodicJobs returns the currently configured set of periodic jobs for the
 // client, and can be used to add new ones or remove existing ones.
 func (c *Client[TTx]) PeriodicJobs() *PeriodicJobBundle { return c.periodicJobs }
+
+// Queues returns the currently configured set of queues for the client, and can
+// be used to add new ones.
+func (c *Client[TTx]) Queues() *QueueBundle { return c.queues }
 
 // QueueGet returns the queue with the given name. If the queue has not recently
 // been active or does not exist, returns ErrNotFound.
@@ -1805,6 +1839,45 @@ func (c *Client[TTx]) QueueResumeTx(ctx context.Context, tx TTx, name string, op
 
 	if err := c.notifyQueuePauseOrResume(ctx, executorTx, controlActionResume, name, opts); err != nil {
 		return err
+	}
+
+	return nil
+}
+
+// QueueBundle is a bundle for adding additional queues. It's made accessible
+// through Client.Queues.
+type QueueBundle struct {
+	// Function that adds a producer to the associated client.
+	addProducer func(queueName string, queueConfig QueueConfig) *producer
+
+	fetchCtx context.Context //nolint:containedctx
+
+	// Mutex that's acquired when client is starting and stopping and when a
+	// queue is being added so that we can be sure that a client is fully
+	// stopped or fully started when adding a new queue.
+	startStopMu sync.Mutex
+
+	workCtx context.Context //nolint:containedctx
+}
+
+// Add adds a new queue to the client. If the client is already started, a
+// producer for the queue is started. Context is inherited from the one given to
+// Client.Start.
+func (b *QueueBundle) Add(queueName string, queueConfig QueueConfig) error {
+	if err := queueConfig.validate(queueName); err != nil {
+		return err
+	}
+
+	b.startStopMu.Lock()
+	defer b.startStopMu.Unlock()
+
+	producer := b.addProducer(queueName, queueConfig)
+
+	// Start the queue if the client is already started.
+	if b.fetchCtx != nil && b.fetchCtx.Err() == nil {
+		if err := producer.StartWorkContext(b.fetchCtx, b.workCtx); err != nil {
+			return err
+		}
 	}
 
 	return nil
