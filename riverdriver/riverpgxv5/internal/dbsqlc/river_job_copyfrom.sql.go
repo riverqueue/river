@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-type JobInsertManyParams struct {
+type JobInsertFastManyCopyFromParams struct {
 	Args        []byte
 	FinalizedAt *time.Time
 	Kind        string

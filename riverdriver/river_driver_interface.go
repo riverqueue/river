@@ -23,9 +23,8 @@ import (
 const AllQueuesString = "*"
 
 var (
-	ErrClosedPool        = errors.New("underlying driver pool is closed")
-	ErrNotImplemented    = errors.New("driver does not implement this functionality")
-	ErrSubTxNotSupported = errors.New("subtransactions not supported for this driver")
+	ErrClosedPool     = errors.New("underlying driver pool is closed")
+	ErrNotImplemented = errors.New("driver does not implement this functionality")
 )
 
 // Driver provides a database driver for use with river.Client.
@@ -57,6 +56,12 @@ type Driver[TTx any] interface {
 	//
 	// API is not stable. DO NOT USE.
 	HasPool() bool
+
+	// SupportsListener gets whether this driver supports a listener. Drivers
+	// that don't support a listener support poll only mode only.
+	//
+	// API is not stable. DO NOT USE.
+	SupportsListener() bool
 
 	// UnwrapExecutor gets an executor from a driver transaction.
 	//
@@ -90,7 +95,7 @@ type Executor interface {
 	JobInsertFast(ctx context.Context, params *JobInsertFastParams) (*rivertype.JobRow, error)
 	JobInsertFastMany(ctx context.Context, params []*JobInsertFastParams) (int, error)
 	JobInsertFull(ctx context.Context, params *JobInsertFullParams) (*rivertype.JobRow, error)
-	JobList(ctx context.Context, sql string, namedArgs map[string]any) ([]*rivertype.JobRow, error)
+	JobList(ctx context.Context, query string, namedArgs map[string]any) ([]*rivertype.JobRow, error)
 	JobListFields() string
 	JobRescueMany(ctx context.Context, params *JobRescueManyParams) (*struct{}, error)
 	JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, error)

@@ -6,11 +6,13 @@ sql:
       - ../../../riverpgxv5/internal/dbsqlc/river_job.sql
       - ../../../riverpgxv5/internal/dbsqlc/river_leader.sql
       - ../../../riverpgxv5/internal/dbsqlc/river_migration.sql
+      - ../../../riverpgxv5/internal/dbsqlc/river_queue.sql
     schema:
       - ../../../riverpgxv5/internal/dbsqlc/pg_misc.sql
       - ../../../riverpgxv5/internal/dbsqlc/river_job.sql
       - ../../../riverpgxv5/internal/dbsqlc/river_leader.sql
       - ../../../riverpgxv5/internal/dbsqlc/river_migration.sql
+      - ../../../riverpgxv5/internal/dbsqlc/river_queue.sql
     gen:
       go:
         package: "dbsqlc"
@@ -22,10 +24,19 @@ sql:
         emit_result_struct_pointers: true
 
         rename:
-          river_job_state: "JobState"
           ttl: "TTL"
 
         overrides:
+          # `database/sql` really does not play nicely with json/jsonb. If it's
+          # left as `[]byte` or `json.RawMessage`, `database/sql` will try to
+          # encode it as binary (with a \x) which Postgres won't accept as
+          # json/jsonb at all. Using a custom struct crashed and burned, even
+          # with a custom scanner implementation. This is the only way I could
+          # get it to work: strings are compatible with our use of bytes slices,
+          # but Postgres will also accept them as json/jsonb.
+          - db_type: "jsonb"
+            go_type: "string"
+
           - db_type: "pg_catalog.interval"
             go_type: "time.Duration"
 
@@ -37,17 +48,3 @@ sql:
               type: "time.Time"
               pointer: true
             nullable: true
-
-          # specific columns
-
-          # This one is necessary because `args` is nullable (this seems to have
-          # been an oversight, but one we're determined isn't worth correcting
-          # for now), and the `database/sql` variant of sqlc will give it a
-          # crazy type by default, so here we give it something more reasonable.
-          - column: "river_job.args"
-            go_type:
-              type: "[]byte"
-
-          - column: "river_job.errors"
-            go_type:
-              type: "[]AttemptError"
