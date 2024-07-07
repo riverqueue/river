@@ -5,8 +5,8 @@ import (
 
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/maintenance"
-	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
 

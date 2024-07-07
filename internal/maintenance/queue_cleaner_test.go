@@ -9,11 +9,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/internal/riverinternaltest/testfactory"
-	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/startstoptest"
+	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -37,7 +38,7 @@ func TestQueueCleaner(t *testing.T) {
 		}
 
 		cleaner := NewQueueCleaner(
-			riverinternaltest.BaseServiceArchetype(t),
+			riversharedtest.BaseServiceArchetype(t),
 			&QueueCleanerConfig{
 				Interval:        queueCleanerIntervalDefault,
 				RetentionPeriod: QueueRetentionPeriodDefault,
@@ -53,7 +54,7 @@ func TestQueueCleaner(t *testing.T) {
 	t.Run("Defaults", func(t *testing.T) {
 		t.Parallel()
 
-		cleaner := NewQueueCleaner(riverinternaltest.BaseServiceArchetype(t), &QueueCleanerConfig{}, nil)
+		cleaner := NewQueueCleaner(riversharedtest.BaseServiceArchetype(t), &QueueCleanerConfig{}, nil)
 
 		require.Equal(t, QueueRetentionPeriodDefault, cleaner.Config.RetentionPeriod)
 		require.Equal(t, queueCleanerIntervalDefault, cleaner.Config.Interval)
@@ -63,8 +64,8 @@ func TestQueueCleaner(t *testing.T) {
 		t.Parallel()
 
 		cleaner, _ := setup(t)
-		cleaner.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
-		cleaner.TestSignals = QueueCleanerTestSignals{}  // deinit so channels don't fill
+		cleaner.Logger = riversharedtest.LoggerWarn(t)  // loop started/stop log is very noisy; suppress
+		cleaner.TestSignals = QueueCleanerTestSignals{} // deinit so channels don't fill
 
 		startstoptest.Stress(ctx, t, cleaner)
 	})
@@ -175,7 +176,7 @@ func TestQueueCleaner(t *testing.T) {
 		// before we can start waiting on it.
 		stopped := cleaner.Stopped()
 		cancelFunc()
-		riverinternaltest.WaitOrTimeout(t, stopped)
+		riversharedtest.WaitOrTimeout(t, stopped)
 	})
 
 	t.Run("CanRunMultipleTimes", func(t *testing.T) {

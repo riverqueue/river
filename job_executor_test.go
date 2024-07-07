@@ -9,14 +9,15 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/util/timeutil"
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/util/timeutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -130,7 +131,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		var (
 			tx        = riverinternaltest.TestTx(ctx, t)
-			archetype = riverinternaltest.BaseServiceArchetype(t)
+			archetype = riversharedtest.BaseServiceArchetype(t)
 			exec      = riverpgxv5.New(nil).UnwrapExecutor(tx)
 			updateCh  = make(chan []jobcompleter.CompleterJobUpdated, 10)
 			completer = jobcompleter.NewInlineCompleter(archetype, exec, updateCh)
@@ -200,7 +201,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		jobUpdates := riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		jobUpdates := riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -231,7 +232,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -255,7 +256,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -275,7 +276,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		{
 			executor.Execute(ctx)
-			riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+			riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 			job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 			require.NoError(t, err)
@@ -294,7 +295,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		{
 			executor.Execute(ctx)
-			riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+			riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 			job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 			require.NoError(t, err)
@@ -314,7 +315,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -334,7 +335,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return cancelErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -357,7 +358,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return cancelErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -377,7 +378,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return cancelErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -397,7 +398,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -417,7 +418,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -435,7 +436,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -456,7 +457,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}
 
 		executor.Execute(ctx)
-		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -477,7 +478,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}
 
 		executor.Execute(ctx)
-		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -498,7 +499,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}
 
 		executor.Execute(ctx)
-		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -514,7 +515,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { panic("panic val") }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -535,7 +536,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { panic("panic val") }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -553,7 +554,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { panic("panic val") }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
-		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -575,7 +576,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}
 
 		executor.Execute(ctx)
-		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -595,7 +596,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}
 
 		executor.Execute(ctx)
-		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -615,7 +616,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		}
 
 		executor.Execute(ctx)
-		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
@@ -635,7 +636,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.CancelFunc = cancelFunc
 
 		executor.Execute(workCtx)
-		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		require.ErrorIs(t, context.Cause(workCtx), errExecutorDefaultCancel)
 	})
@@ -665,7 +666,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		t.Cleanup(func() { cancelFunc(nil) })
 
 		executor.Execute(workCtx)
-		riverinternaltest.WaitOrTimeout(t, bundle.updateCh)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		jobRow, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)

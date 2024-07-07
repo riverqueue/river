@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/riverqueue/river/rivershared/riversharedtest"
 )
 
 func TestTestSignal(t *testing.T) {
@@ -78,8 +80,8 @@ func TestTestSignal(t *testing.T) {
 // Marked as non-parallel because `t.Setenv` is not compatible with `t.Parallel`.
 func TestWaitTimeout(t *testing.T) {
 	t.Setenv("GITHUB_ACTIONS", "")
-	require.Equal(t, 3*time.Second, WaitTimeout())
+	require.Equal(t, 3*time.Second, riversharedtest.WaitTimeout())
 
 	t.Setenv("GITHUB_ACTIONS", "true")
-	require.Equal(t, 10*time.Second, WaitTimeout())
+	require.Equal(t, 10*time.Second, riversharedtest.WaitTimeout())
 }

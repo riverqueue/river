@@ -8,13 +8,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/startstop"
 	"github.com/riverqueue/river/internal/util/dbutil"
-	"github.com/riverqueue/river/internal/util/valutil"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/startstop"
+	"github.com/riverqueue/river/rivershared/util/valutil"
 )
 
 const (

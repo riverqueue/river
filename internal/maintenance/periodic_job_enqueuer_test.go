@@ -13,11 +13,12 @@ import (
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
-	"github.com/riverqueue/river/internal/startstop"
-	"github.com/riverqueue/river/internal/util/randutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/startstop"
+	"github.com/riverqueue/river/rivershared/startstoptest"
+	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -65,7 +66,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		}
 
 		svc := NewPeriodicJobEnqueuer(
-			riverinternaltest.BaseServiceArchetype(t),
+			riversharedtest.BaseServiceArchetype(t),
 			&PeriodicJobEnqueuerConfig{
 				NotifyInsert: func(ctx context.Context, tx riverdriver.ExecutorTx, queues []string) error {
 					for _, queue := range queues {
@@ -96,14 +97,14 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		require.NoError(t, svc.Start(ctx))
 		t.Cleanup(svc.Stop)
 
-		riverinternaltest.WaitOrTimeout(t, startstop.WaitAllStartedC(svc))
+		riversharedtest.WaitOrTimeout(t, startstop.WaitAllStartedC(svc))
 	}
 
 	t.Run("StartStopStress", func(t *testing.T) {
 		t.Parallel()
 
 		svc, _ := setup(t)
-		svc.Logger = riverinternaltest.LoggerWarn(t)       // loop started/stop log is very noisy; suppress
+		svc.Logger = riversharedtest.LoggerWarn(t)         // loop started/stop log is very noisy; suppress
 		svc.TestSignals = PeriodicJobEnqueuerTestSignals{} // deinit so channels don't fill
 
 		startstoptest.Stress(ctx, t, svc)
@@ -339,7 +340,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		_, bundle := setup(t)
 
 		svc := NewPeriodicJobEnqueuer(
-			riverinternaltest.BaseServiceArchetype(t),
+			riversharedtest.BaseServiceArchetype(t),
 			&PeriodicJobEnqueuerConfig{
 				NotifyInsert: func(ctx context.Context, tx riverdriver.ExecutorTx, queues []string) error { return nil },
 				PeriodicJobs: []*PeriodicJob{
@@ -541,7 +542,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		// before we can start waiting on it.
 		stopped := svc.Stopped()
 		cancelFunc()
-		riverinternaltest.WaitOrTimeout(t, stopped)
+		riversharedtest.WaitOrTimeout(t, stopped)
 	})
 
 	t.Run("TriggersNotificationsOnEachQueueWithNewlyAvailableJobs", func(t *testing.T) {
@@ -567,7 +568,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
 		queues := svc.TestSignals.NotifiedQueues.WaitOrTimeout()
 		require.Equal(t, []string{rivercommon.QueueDefault, "queue2", "unique"}, queues)
-		require.Equal(t, queues, riverinternaltest.WaitOrTimeout(t, queueCh))
+		require.Equal(t, queues, riversharedtest.WaitOrTimeout(t, queueCh))
 	})
 
 	t.Run("RollsBackUponErrorFromNotificationAttempt", func(t *testing.T) {

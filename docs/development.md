@@ -43,6 +43,7 @@ queries. After changing an sqlc `.sql` file, generate Go with:
     git tag riverdriver/$VERSION -m "release riverdriver/$VERSION"
     git tag riverdriver/riverpgxv5/$VERSION -m "release riverdriver/riverpgxv5/$VERSION"
     git tag riverdriver/riverdatabasesql/$VERSION -m "release riverdriver/riverdatabasesql/$VERSION"
+    git tag rivershared/$VERSION -m "release rivershared/$VERSION"
     git tag rivertype/$VERSION -m "release rivertype/$VERSION"
     git tag $VERSION
     ```
@@ -81,6 +82,8 @@ If updates to River dependencies _are_ required, then a second phase of the rele
     go get -u github.com/riverqueue/river/riverdriver@$VERSION
     go get -u github.com/riverqueue/river/riverdriver/riverdatabasesql@$VERSION
     go get -u github.com/riverqueue/river/riverdriver/riverpgxv5@$VERSION
+    go get -u github.com/riverqueue/river/rivershared@$VERSION
+    go get -u github.com/riverqueue/river/rivertype@$VERSION
     ```
 
 4. Run `go mod tidy`:

@@ -7,8 +7,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/util/timeutil"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/util/timeutil"
 )
 
 func TestSecondsAsDuration(t *testing.T) {
@@ -29,7 +29,7 @@ func TestTickerWithInitialTick(t *testing.T) {
 		t.Cleanup(cancel)
 
 		ticker := timeutil.NewTickerWithInitialTick(ctx, 1*time.Hour)
-		riverinternaltest.WaitOrTimeout(t, ticker.C)
+		riversharedtest.WaitOrTimeout(t, ticker.C)
 	})
 
 	t.Run("TicksPeriodically", func(t *testing.T) {
@@ -41,7 +41,7 @@ func TestTickerWithInitialTick(t *testing.T) {
 		ticker := timeutil.NewTickerWithInitialTick(ctx, 100*time.Microsecond)
 		for i := 0; i < 10; i++ {
 			t.Logf("Waiting on tick %d", i)
-			riverinternaltest.WaitOrTimeout(t, ticker.C)
+			riversharedtest.WaitOrTimeout(t, ticker.C)
 		}
 	})
 }

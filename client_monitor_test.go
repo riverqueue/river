@@ -9,7 +9,7 @@ import (
 
 	"github.com/riverqueue/river/internal/componentstatus"
 	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
+	"github.com/riverqueue/river/rivershared/startstoptest"
 )
 
 func Test_Monitor_Stop(t *testing.T) {

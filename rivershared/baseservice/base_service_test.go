@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/util/randutil"
+	"github.com/riverqueue/river/rivershared/util/randutil"
 )
 
 func TestInit(t *testing.T) {

@@ -8,8 +8,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/baseservice"
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
 )
 
 type sampleService struct {
@@ -96,7 +96,7 @@ func testService(t *testing.T, newService func(t *testing.T) serviceWithStopped)
 
 		require.NoError(t, service.Start(ctx))
 
-		riverinternaltest.WaitOrTimeout(t, service.Started())
+		riversharedtest.WaitOrTimeout(t, service.Started())
 	})
 
 	t.Run("StoppedChannel", func(t *testing.T) {
@@ -111,7 +111,7 @@ func testService(t *testing.T, newService func(t *testing.T) serviceWithStopped)
 		// procedure.
 		stopped := service.Stopped()
 		service.Stop()
-		riverinternaltest.WaitOrTimeout(t, stopped)
+		riversharedtest.WaitOrTimeout(t, stopped)
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {
@@ -224,7 +224,7 @@ func TestSampleService(t *testing.T) {
 
 		require.NoError(t, service.Start(ctx))
 
-		riverinternaltest.WaitOrTimeout(t, service.Started())
+		riversharedtest.WaitOrTimeout(t, service.Started())
 		require.True(t, service.state)
 	})
 
@@ -236,8 +236,8 @@ func TestSampleService(t *testing.T) {
 
 		require.ErrorIs(t, service.Start(ctx), service.startErr)
 
-		riverinternaltest.WaitOrTimeout(t, service.Started()) // start channel also closed on erroneous start
-		riverinternaltest.WaitOrTimeout(t, service.Stopped())
+		riversharedtest.WaitOrTimeout(t, service.Started()) // start channel also closed on erroneous start
+		riversharedtest.WaitOrTimeout(t, service.Stopped())
 	})
 }
 
@@ -350,15 +350,15 @@ func TestStopAllParallel(t *testing.T) {
 			stopped3 = service3.Stopped()
 		)
 
-		StopAllParallel([]Service{
+		StopAllParallel(
 			service1,
 			service2,
 			service3,
-		})
+		)
 
-		riverinternaltest.WaitOrTimeout(t, stopped1)
-		riverinternaltest.WaitOrTimeout(t, stopped2)
-		riverinternaltest.WaitOrTimeout(t, stopped3)
+		riversharedtest.WaitOrTimeout(t, stopped1)
+		riversharedtest.WaitOrTimeout(t, stopped2)
+		riversharedtest.WaitOrTimeout(t, stopped3)
 	})
 
 	// We can't use the stopped channels in this case because they're only
@@ -372,11 +372,11 @@ func TestStopAllParallel(t *testing.T) {
 			service3 = &sampleService{}
 		)
 
-		StopAllParallel([]Service{
+		StopAllParallel(
 			service1,
 			service2,
 			service3,
-		})
+		)
 	})
 }
 
@@ -440,7 +440,7 @@ func TestWaitAllStartedC(t *testing.T) {
 		require.NoError(t, service2.Start(ctx))
 		require.NoError(t, service3.Start(ctx))
 
-		riverinternaltest.WaitOrTimeout(t, WaitAllStartedC(service1, service2, service3))
+		riversharedtest.WaitOrTimeout(t, WaitAllStartedC(service1, service2, service3))
 
 		require.True(t, service1.state)
 		require.True(t, service2.state)
@@ -460,6 +460,6 @@ func TestWaitAllStartedC(t *testing.T) {
 		require.NoError(t, service2.Start(ctx))
 		require.ErrorIs(t, service3.Start(ctx), service3.startErr)
 
-		riverinternaltest.WaitOrTimeout(t, WaitAllStartedC(service1, service2, service3))
+		riversharedtest.WaitOrTimeout(t, WaitAllStartedC(service1, service2, service3))
 	})
 }
