@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/riverqueue/river/internal/util/randutil"
-	"github.com/riverqueue/river/internal/util/timeutil"
+	"github.com/riverqueue/river/rivershared/util/randutil"
+	"github.com/riverqueue/river/rivershared/util/timeutil"
 	"github.com/riverqueue/river/rivertype"
 )
 

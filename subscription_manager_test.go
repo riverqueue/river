@@ -11,11 +11,12 @@ import (
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobstats"
 	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/internal/riverinternaltest/testfactory"
-	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/startstoptest"
+	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -37,7 +38,7 @@ func Test_SubscriptionManager(t *testing.T) {
 		exec := riverpgxv5.New(nil).UnwrapExecutor(tx)
 
 		subscribeCh := make(chan []jobcompleter.CompleterJobUpdated, 1)
-		manager := newSubscriptionManager(riverinternaltest.BaseServiceArchetype(t), subscribeCh)
+		manager := newSubscriptionManager(riversharedtest.BaseServiceArchetype(t), subscribeCh)
 
 		require.NoError(t, manager.Start(ctx))
 		t.Cleanup(manager.Stop)
@@ -81,7 +82,7 @@ func Test_SubscriptionManager(t *testing.T) {
 			{Job: job4, JobStats: makeStats(401, 402, 403)}, // snoozed/scheduled, should be sent
 		}
 
-		received := riverinternaltest.WaitOrTimeoutN(t, sub, 2)
+		received := riversharedtest.WaitOrTimeoutN(t, sub, 2)
 		require.Equal(t, job1.ID, received[0].Job.ID)
 		require.Equal(t, rivertype.JobStateCompleted, received[0].Job.State)
 		require.Equal(t, time.Duration(101), received[0].JobStats.CompleteDuration)

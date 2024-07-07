@@ -8,15 +8,16 @@ import (
 	"github.com/robfig/cron/v3"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/sharedtx"
-	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
-	"github.com/riverqueue/river/internal/startstop"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/startstop"
+	"github.com/riverqueue/river/rivershared/startstoptest"
 )
 
 type testService struct {
@@ -29,7 +30,7 @@ type testService struct {
 func newTestService(tb testing.TB) *testService {
 	tb.Helper()
 
-	testSvc := baseservice.Init(riverinternaltest.BaseServiceArchetype(tb), &testService{})
+	testSvc := baseservice.Init(riversharedtest.BaseServiceArchetype(tb), &testService{})
 	testSvc.testSignals.Init()
 
 	return testSvc
@@ -71,7 +72,7 @@ func TestQueueMaintainer(t *testing.T) {
 	setup := func(t *testing.T, services []startstop.Service) *QueueMaintainer {
 		t.Helper()
 
-		maintainer := NewQueueMaintainer(riverinternaltest.BaseServiceArchetype(t), services)
+		maintainer := NewQueueMaintainer(riversharedtest.BaseServiceArchetype(t), services)
 		maintainer.StaggerStartupDisable(true)
 
 		return maintainer
@@ -95,8 +96,8 @@ func TestQueueMaintainer(t *testing.T) {
 		tx := riverinternaltest.TestTx(ctx, t)
 		sharedTx := sharedtx.NewSharedTx(tx)
 
-		archetype := riverinternaltest.BaseServiceArchetype(t)
-		archetype.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
+		archetype := riversharedtest.BaseServiceArchetype(t)
+		archetype.Logger = riversharedtest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
 
 		driver := riverpgxv5.New(nil).UnwrapExecutor(sharedTx)
 
@@ -117,7 +118,7 @@ func TestQueueMaintainer(t *testing.T) {
 			NewQueueCleaner(archetype, &QueueCleanerConfig{}, driver),
 			NewJobScheduler(archetype, &JobSchedulerConfig{}, driver),
 		})
-		maintainer.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
+		maintainer.Logger = riversharedtest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
 		startstoptest.Stress(ctx, t, maintainer)
 	})
 
@@ -169,7 +170,7 @@ func TestQueueMaintainer(t *testing.T) {
 		// before we can start waiting on it.
 		stopped := maintainer.Stopped()
 		cancelFunc()
-		riverinternaltest.WaitOrTimeout(t, stopped)
+		riversharedtest.WaitOrTimeout(t, stopped)
 	})
 
 	t.Run("GetService", func(t *testing.T) {

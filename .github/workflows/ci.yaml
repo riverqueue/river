@@ -87,6 +87,10 @@ jobs:
         working-directory: ./riverdriver/riverpgxv5
         run: go test -race ./... -timeout 2m
 
+      - name: Test rivershared
+        working-directory: ./rivershared
+        run: go test -race ./... -timeout 2m
+
       - name: Test rivertype
         working-directory: ./rivertype
         run: go test -race ./... -timeout 2m

@@ -9,11 +9,11 @@ import (
 	"runtime/debug"
 	"time"
 
-	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobstats"
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivertype"
 )
 

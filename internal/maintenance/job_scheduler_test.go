@@ -9,11 +9,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/internal/riverinternaltest/testfactory"
-	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/startstoptest"
+	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -30,7 +31,7 @@ func TestJobScheduler(t *testing.T) {
 	setup := func(t *testing.T, exec riverdriver.Executor) (*JobScheduler, *testBundle) {
 		t.Helper()
 
-		archetype := riverinternaltest.BaseServiceArchetype(t)
+		archetype := riversharedtest.BaseServiceArchetype(t)
 
 		bundle := &testBundle{
 			exec:                 exec,
@@ -80,7 +81,7 @@ func TestJobScheduler(t *testing.T) {
 	t.Run("Defaults", func(t *testing.T) {
 		t.Parallel()
 
-		scheduler := NewJobScheduler(riverinternaltest.BaseServiceArchetype(t), &JobSchedulerConfig{}, nil)
+		scheduler := NewJobScheduler(riversharedtest.BaseServiceArchetype(t), &JobSchedulerConfig{}, nil)
 
 		require.Equal(t, JobSchedulerIntervalDefault, scheduler.config.Interval)
 		require.Equal(t, JobSchedulerLimitDefault, scheduler.config.Limit)
@@ -90,8 +91,8 @@ func TestJobScheduler(t *testing.T) {
 		t.Parallel()
 
 		scheduler, _ := setupTx(t)
-		scheduler.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
-		scheduler.TestSignals = JobSchedulerTestSignals{}  // deinit so channels don't fill
+		scheduler.Logger = riversharedtest.LoggerWarn(t)  // loop started/stop log is very noisy; suppress
+		scheduler.TestSignals = JobSchedulerTestSignals{} // deinit so channels don't fill
 
 		startstoptest.Stress(ctx, t, scheduler)
 	})
@@ -217,7 +218,7 @@ func TestJobScheduler(t *testing.T) {
 		// before we can start waiting on it.
 		stopped := scheduler.Stopped()
 		cancelFunc()
-		riverinternaltest.WaitOrTimeout(t, stopped)
+		riversharedtest.WaitOrTimeout(t, stopped)
 	})
 
 	t.Run("CanRunMultipleTimes", func(t *testing.T) {
@@ -298,7 +299,7 @@ func TestJobScheduler(t *testing.T) {
 
 		expectedQueues := []string{"queue1", "queue2", "queue2", "queue3", "queue4"}
 
-		notifiedQueues := riverinternaltest.WaitOrTimeout(t, notifyCh)
+		notifiedQueues := riversharedtest.WaitOrTimeout(t, notifyCh)
 		sort.Strings(notifiedQueues)
 		require.Equal(t, expectedQueues, notifiedQueues)
 	})

@@ -19,6 +19,8 @@ import (
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql/internal/dbsqlc"
+	"github.com/riverqueue/river/rivershared/util/sliceutil"
+	"github.com/riverqueue/river/rivershared/util/valutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -147,7 +149,7 @@ func (e *Executor) JobGetByIDMany(ctx context.Context, id []int64) ([]*rivertype
 
 func (e *Executor) JobGetByKindAndUniqueProperties(ctx context.Context, params *riverdriver.JobGetByKindAndUniquePropertiesParams) (*rivertype.JobRow, error) {
 	job, err := e.queries.JobGetByKindAndUniqueProperties(ctx, e.dbtx, &dbsqlc.JobGetByKindAndUniquePropertiesParams{
-		Args:           valOrDefault(string(params.Args), "{}"),
+		Args:           valutil.ValOrDefault(string(params.Args), "{}"),
 		ByArgs:         params.ByArgs,
 		ByCreatedAt:    params.ByCreatedAt,
 		ByQueue:        params.ByQueue,
@@ -186,7 +188,7 @@ func (e *Executor) JobInsertFast(ctx context.Context, params *riverdriver.JobIns
 		CreatedAt:   params.CreatedAt,
 		Kind:        params.Kind,
 		MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)),
-		Metadata:    valOrDefault(string(params.Metadata), "{}"),
+		Metadata:    valutil.ValOrDefault(string(params.Metadata), "{}"),
 		Priority:    int16(min(params.Priority, math.MaxInt16)),
 		Queue:       params.Queue,
 		ScheduledAt: params.ScheduledAt,
@@ -225,10 +227,10 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 			tags = []string{}
 		}
 
-		insertJobsParams.Args[i] = valOrDefault(string(params.EncodedArgs), "{}")
+		insertJobsParams.Args[i] = valutil.ValOrDefault(string(params.EncodedArgs), "{}")
 		insertJobsParams.Kind[i] = params.Kind
 		insertJobsParams.MaxAttempts[i] = int16(min(params.MaxAttempts, math.MaxInt16))
-		insertJobsParams.Metadata[i] = valOrDefault(string(params.Metadata), "{}")
+		insertJobsParams.Metadata[i] = valutil.ValOrDefault(string(params.Metadata), "{}")
 		insertJobsParams.Priority[i] = int16(min(params.Priority, math.MaxInt16))
 		insertJobsParams.Queue[i] = params.Queue
 		insertJobsParams.ScheduledAt[i] = scheduledAt
@@ -250,11 +252,11 @@ func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobIns
 		AttemptedAt: params.AttemptedAt,
 		Args:        string(params.EncodedArgs),
 		CreatedAt:   params.CreatedAt,
-		Errors:      mapSlice(params.Errors, func(e []byte) string { return string(e) }),
+		Errors:      sliceutil.Map(params.Errors, func(e []byte) string { return string(e) }),
 		FinalizedAt: params.FinalizedAt,
 		Kind:        params.Kind,
 		MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)),
-		Metadata:    valOrDefault(string(params.Metadata), "{}"),
+		Metadata:    valutil.ValOrDefault(string(params.Metadata), "{}"),
 		Priority:    int16(min(params.Priority, math.MaxInt16)),
 		Queue:       params.Queue,
 		ScheduledAt: params.ScheduledAt,
@@ -325,7 +327,7 @@ func (e *Executor) JobListFields() string {
 func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRescueManyParams) (*struct{}, error) {
 	err := e.queries.JobRescueMany(ctx, e.dbtx, &dbsqlc.JobRescueManyParams{
 		ID:          params.ID,
-		Error:       mapSlice(params.Error, func(e []byte) string { return string(e) }),
+		Error:       sliceutil.Map(params.Error, func(e []byte) string { return string(e) }),
 		FinalizedAt: params.FinalizedAt,
 		ScheduledAt: params.ScheduledAt,
 		State:       params.State,
@@ -375,7 +377,7 @@ func (e *Executor) JobSetStateIfRunning(ctx context.Context, params *riverdriver
 	job, err := e.queries.JobSetStateIfRunning(ctx, e.dbtx, &dbsqlc.JobSetStateIfRunningParams{
 		ID:                  params.ID,
 		ErrorDoUpdate:       params.ErrData != nil,
-		Error:               valOrDefault(string(params.ErrData), "{}"),
+		Error:               valutil.ValOrDefault(string(params.ErrData), "{}"),
 		FinalizedAtDoUpdate: params.FinalizedAt != nil,
 		FinalizedAt:         params.FinalizedAt,
 		MaxAttemptsUpdate:   params.MaxAttempts != nil,
@@ -398,7 +400,7 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 		AttemptDoUpdate:     params.AttemptDoUpdate,
 		Attempt:             int16(params.Attempt),
 		ErrorsDoUpdate:      params.ErrorsDoUpdate,
-		Errors:              mapSlice(params.Errors, func(e []byte) string { return string(e) }),
+		Errors:              sliceutil.Map(params.Errors, func(e []byte) string { return string(e) }),
 		FinalizedAtDoUpdate: params.FinalizedAtDoUpdate,
 		FinalizedAt:         params.FinalizedAt,
 		StateDoUpdate:       params.StateDoUpdate,
@@ -475,11 +477,11 @@ func (e *Executor) LeaderResign(ctx context.Context, params *riverdriver.LeaderR
 
 func (e *Executor) MigrationDeleteByVersionMany(ctx context.Context, versions []int) ([]*riverdriver.Migration, error) {
 	migrations, err := e.queries.RiverMigrationDeleteByVersionMany(ctx, e.dbtx,
-		mapSlice(versions, func(v int) int64 { return int64(v) }))
+		sliceutil.Map(versions, func(v int) int64 { return int64(v) }))
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	return mapSlice(migrations, migrationFromInternal), nil
+	return sliceutil.Map(migrations, migrationFromInternal), nil
 }
 
 func (e *Executor) MigrationGetAll(ctx context.Context) ([]*riverdriver.Migration, error) {
@@ -487,16 +489,16 @@ func (e *Executor) MigrationGetAll(ctx context.Context) ([]*riverdriver.Migratio
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	return mapSlice(migrations, migrationFromInternal), nil
+	return sliceutil.Map(migrations, migrationFromInternal), nil
 }
 
 func (e *Executor) MigrationInsertMany(ctx context.Context, versions []int) ([]*riverdriver.Migration, error) {
 	migrations, err := e.queries.RiverMigrationInsertMany(ctx, e.dbtx,
-		mapSlice(versions, func(v int) int64 { return int64(v) }))
+		sliceutil.Map(versions, func(v int) int64 { return int64(v) }))
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	return mapSlice(migrations, migrationFromInternal), nil
+	return sliceutil.Map(migrations, migrationFromInternal), nil
 }
 
 func (e *Executor) NotifyMany(ctx context.Context, params *riverdriver.NotifyManyParams) error {
@@ -513,7 +515,7 @@ func (e *Executor) PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}
 
 func (e *Executor) QueueCreateOrSetUpdatedAt(ctx context.Context, params *riverdriver.QueueCreateOrSetUpdatedAtParams) (*rivertype.Queue, error) {
 	queue, err := e.queries.QueueCreateOrSetUpdatedAt(ctx, e.dbtx, &dbsqlc.QueueCreateOrSetUpdatedAtParams{
-		Metadata:  valOrDefault(string(params.Metadata), "{}"),
+		Metadata:  valutil.ValOrDefault(string(params.Metadata), "{}"),
 		Name:      params.Name,
 		PausedAt:  params.PausedAt,
 		UpdatedAt: params.UpdatedAt,
@@ -746,21 +748,6 @@ func leaderFromInternal(internal *dbsqlc.RiverLeader) *riverdriver.Leader {
 	}
 }
 
-// mapSlice manipulates a slice and transforms it to a slice of another type.
-func mapSlice[T any, R any](collection []T, mapFunc func(T) R) []R {
-	if collection == nil {
-		return nil
-	}
-
-	result := make([]R, len(collection))
-
-	for i, item := range collection {
-		result[i] = mapFunc(item)
-	}
-
-	return result
-}
-
 // mapSliceError manipulates a slice and transforms it to a slice of another
 // type, returning the first error that occurred invoking the map function, if
 // there was one.
@@ -803,14 +790,4 @@ func queueFromInternal(internal *dbsqlc.RiverQueue) *rivertype.Queue {
 		PausedAt:  pausedAt,
 		UpdatedAt: internal.UpdatedAt.UTC(),
 	}
-}
-
-// valOrDefault returns the given value if it's non-zero, and otherwise returns
-// the default.
-func valOrDefault[T comparable](val, defaultVal T) T {
-	var zero T
-	if val != zero {
-		return val
-	}
-	return defaultVal
 }

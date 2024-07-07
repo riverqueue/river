@@ -8,11 +8,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/internal/riverinternaltest/testfactory"
-	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/startstoptest"
+	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -40,7 +41,7 @@ func TestJobCleaner(t *testing.T) {
 		}
 
 		cleaner := NewJobCleaner(
-			riverinternaltest.BaseServiceArchetype(t),
+			riversharedtest.BaseServiceArchetype(t),
 			&JobCleanerConfig{
 				CancelledJobRetentionPeriod: CancelledJobRetentionPeriodDefault,
 				CompletedJobRetentionPeriod: CompletedJobRetentionPeriodDefault,
@@ -58,7 +59,7 @@ func TestJobCleaner(t *testing.T) {
 	t.Run("Defaults", func(t *testing.T) {
 		t.Parallel()
 
-		cleaner := NewJobCleaner(riverinternaltest.BaseServiceArchetype(t), &JobCleanerConfig{}, nil)
+		cleaner := NewJobCleaner(riversharedtest.BaseServiceArchetype(t), &JobCleanerConfig{}, nil)
 
 		require.Equal(t, CancelledJobRetentionPeriodDefault, cleaner.Config.CancelledJobRetentionPeriod)
 		require.Equal(t, CompletedJobRetentionPeriodDefault, cleaner.Config.CompletedJobRetentionPeriod)
@@ -70,8 +71,8 @@ func TestJobCleaner(t *testing.T) {
 		t.Parallel()
 
 		cleaner, _ := setup(t)
-		cleaner.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
-		cleaner.TestSignals = JobCleanerTestSignals{}    // deinit so channels don't fill
+		cleaner.Logger = riversharedtest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
+		cleaner.TestSignals = JobCleanerTestSignals{}  // deinit so channels don't fill
 
 		startstoptest.Stress(ctx, t, cleaner)
 	})
@@ -202,7 +203,7 @@ func TestJobCleaner(t *testing.T) {
 		// before we can start waiting on it.
 		stopped := cleaner.Stopped()
 		cancelFunc()
-		riverinternaltest.WaitOrTimeout(t, stopped)
+		riversharedtest.WaitOrTimeout(t, stopped)
 	})
 
 	t.Run("CanRunMultipleTimes", func(t *testing.T) {

@@ -16,12 +16,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/util/dbutil"
-	"github.com/riverqueue/river/internal/util/maputil"
-	"github.com/riverqueue/river/internal/util/randutil"
-	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/util/maputil"
+	"github.com/riverqueue/river/rivershared/util/randutil"
+	"github.com/riverqueue/river/rivershared/util/sliceutil"
 )
 
 // Migration is a bundled migration containing a version (e.g. 1, 2, 3), and SQL

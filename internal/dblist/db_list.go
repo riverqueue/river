@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
 

@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
 

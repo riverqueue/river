@@ -218,7 +218,7 @@ func (s *startStopFunc) Start(ctx context.Context) error {
 
 // StopAllParallel stops all the given services in parallel and waits until
 // they've all stopped successfully.
-func StopAllParallel(services []Service) {
+func StopAllParallel(services ...Service) {
 	var wg sync.WaitGroup
 	wg.Add(len(services))
 

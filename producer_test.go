@@ -10,7 +10,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/componentstatus"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/maintenance"
@@ -18,11 +17,13 @@ import (
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/sharedtx"
-	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/internal/riverinternaltest/testfactory"
-	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/startstoptest"
+	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -48,7 +49,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	// close enough for our purposes here.
 	lastJobRun := make(chan struct{})
 
-	archetype := riverinternaltest.BaseServiceArchetype(t)
+	archetype := riversharedtest.BaseServiceArchetype(t)
 
 	config := newTestConfig(t, nil)
 	dbDriver := riverpgxv5.New(dbPool)
@@ -153,7 +154,7 @@ func TestProducer_PollOnly(t *testing.T) {
 		t.Helper()
 
 		var (
-			archetype = riverinternaltest.BaseServiceArchetype(t)
+			archetype = riversharedtest.BaseServiceArchetype(t)
 			driver    = riverpgxv5.New(nil)
 			tx        = riverinternaltest.TestTx(ctx, t)
 		)
@@ -200,7 +201,7 @@ func TestProducer_WithNotifier(t *testing.T) {
 		t.Helper()
 
 		var (
-			archetype  = riverinternaltest.BaseServiceArchetype(t)
+			archetype  = riversharedtest.BaseServiceArchetype(t)
 			dbPool     = riverinternaltest.TestDB(ctx, t)
 			driver     = riverpgxv5.New(dbPool)
 			exec       = driver.GetExecutor()
@@ -315,7 +316,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 
 		startProducer(t, ctx, ctx, producer)
 
-		update := riverinternaltest.WaitOrTimeout(t, bundle.jobUpdates)
+		update := riversharedtest.WaitOrTimeout(t, bundle.jobUpdates)
 		require.Equal(t, rivertype.JobStateCompleted, update.Job.State)
 	})
 
@@ -351,7 +352,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 
 		startProducer(t, ctx, ctx, producer)
 
-		updates := riverinternaltest.WaitOrTimeoutN(t, bundle.jobUpdates, 2)
+		updates := riversharedtest.WaitOrTimeoutN(t, bundle.jobUpdates, 2)
 
 		// Print updated jobs for debugging.
 		for _, update := range updates {
@@ -402,7 +403,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 
 		workCancel()
 
-		update := riverinternaltest.WaitOrTimeout(t, bundle.jobUpdates)
+		update := riversharedtest.WaitOrTimeout(t, bundle.jobUpdates)
 		require.Equal(t, rivertype.JobStateRetryable, update.Job.State)
 	})
 
@@ -460,8 +461,8 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		t.Parallel()
 
 		producer, _ := setup(t)
-		producer.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
-		producer.testSignals = producerTestSignals{}      // deinit so channels don't fill
+		producer.Logger = riversharedtest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
+		producer.testSignals = producerTestSignals{}    // deinit so channels don't fill
 
 		startstoptest.Stress(ctx, t, producer)
 	})
@@ -501,7 +502,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		startProducer(t, ctx, ctx, producer)
 
 		// First job should be executed immediately while resumed:
-		update := riverinternaltest.WaitOrTimeout(t, bundle.jobUpdates)
+		update := riversharedtest.WaitOrTimeout(t, bundle.jobUpdates)
 		require.Equal(t, rivertype.JobStateCompleted, update.Job.State)
 
 		// Pause the queue and wait for confirmation:
@@ -530,7 +531,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		producer.testSignals.Resumed.WaitOrTimeout()
 
 		// Now the 2nd job should execute:
-		update = riverinternaltest.WaitOrTimeout(t, bundle.jobUpdates)
+		update = riversharedtest.WaitOrTimeout(t, bundle.jobUpdates)
 		require.Equal(t, rivertype.JobStateCompleted, update.Job.State)
 	}
 

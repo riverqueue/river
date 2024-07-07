@@ -26,14 +26,15 @@ import (
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/internal/riverinternaltest/testfactory"
 	"github.com/riverqueue/river/internal/util/dbutil"
-	"github.com/riverqueue/river/internal/util/ptrutil"
-	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/startstoptest"
+	"github.com/riverqueue/river/rivershared/util/ptrutil"
+	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -145,13 +146,13 @@ func newTestConfig(t *testing.T, callback callbackFunc) *Config {
 	return &Config{
 		FetchCooldown:     20 * time.Millisecond,
 		FetchPollInterval: 50 * time.Millisecond,
-		Logger:            riverinternaltest.Logger(t),
+		Logger:            riversharedtest.Logger(t),
 		MaxAttempts:       MaxAttemptsDefault,
 		Queues:            map[string]QueueConfig{QueueDefault: {MaxWorkers: 50}},
 		TestOnly:          true, // disables staggered start in maintenance services
 		Workers:           workers,
 		schedulerInterval: riverinternaltest.SchedulerShortInterval,
-		time:              &riverinternaltest.TimeStub{},
+		time:              &riversharedtest.TimeStub{},
 	}
 }
 
@@ -253,7 +254,7 @@ func Test_Client(t *testing.T) {
 		_, err := client.Insert(ctx, &JobArgs{}, nil)
 		require.NoError(t, err)
 
-		riverinternaltest.WaitOrTimeout(t, workedChan)
+		riversharedtest.WaitOrTimeout(t, workedChan)
 	})
 
 	t.Run("Queues_Add_BeforeStart", func(t *testing.T) {
@@ -285,7 +286,7 @@ func Test_Client(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		riverinternaltest.WaitOrTimeout(t, workedChan)
+		riversharedtest.WaitOrTimeout(t, workedChan)
 	})
 
 	t.Run("Queues_Add_AfterStart", func(t *testing.T) {
@@ -319,7 +320,7 @@ func Test_Client(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		riverinternaltest.WaitOrTimeout(t, workedChan)
+		riversharedtest.WaitOrTimeout(t, workedChan)
 	})
 
 	t.Run("Queues_Add_Stress", func(t *testing.T) {
@@ -388,7 +389,7 @@ func Test_Client(t *testing.T) {
 		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
 		require.NoError(t, err)
 
-		event := riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCancelled, event.Kind)
 		require.Equal(t, rivertype.JobStateCancelled, event.Job.State)
 		require.WithinDuration(t, time.Now(), *event.Job.FinalizedAt, 2*time.Second)
@@ -418,7 +419,7 @@ func Test_Client(t *testing.T) {
 		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
 		require.NoError(t, err)
 
-		event := riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobSnoozed, event.Kind)
 		require.Equal(t, rivertype.JobStateScheduled, event.Job.State)
 		require.WithinDuration(t, time.Now().Add(15*time.Minute), event.Job.ScheduledAt, 2*time.Second)
@@ -456,7 +457,7 @@ func Test_Client(t *testing.T) {
 		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
 		require.NoError(t, err)
 
-		startedJobID := riverinternaltest.WaitOrTimeout(t, jobStartedChan)
+		startedJobID := riversharedtest.WaitOrTimeout(t, jobStartedChan)
 		require.Equal(t, insertRes.Job.ID, startedJobID)
 
 		// Cancel the job:
@@ -467,7 +468,7 @@ func Test_Client(t *testing.T) {
 		// modify that column for a running job:
 		require.Equal(t, rivertype.JobStateRunning, updatedJob.State)
 
-		event := riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCancelled, event.Kind)
 		require.Equal(t, rivertype.JobStateCancelled, event.Job.State)
 		require.WithinDuration(t, time.Now(), *event.Job.FinalizedAt, 2*time.Second)
@@ -591,12 +592,12 @@ func Test_Client(t *testing.T) {
 		insertRes1, err := client.Insert(ctx, &noOpArgs{}, nil)
 		require.NoError(t, err)
 
-		event := riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCompleted, event.Kind)
 		require.Equal(t, insertRes1.Job.ID, event.Job.ID)
 
 		require.NoError(t, client.QueuePause(ctx, QueueDefault, nil))
-		event = riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		event = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, &Event{Kind: EventKindQueuePaused, Queue: &rivertype.Queue{Name: QueueDefault}}, event)
 
 		insertRes2, err := client.Insert(ctx, &noOpArgs{}, nil)
@@ -609,10 +610,10 @@ func Test_Client(t *testing.T) {
 		}
 
 		require.NoError(t, client.QueueResume(ctx, QueueDefault, nil))
-		event = riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		event = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, &Event{Kind: EventKindQueueResumed, Queue: &rivertype.Queue{Name: QueueDefault}}, event)
 
-		event = riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		event = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCompleted, event.Kind)
 		require.Equal(t, insertRes2.Job.ID, event.Job.ID)
 	})
@@ -630,13 +631,13 @@ func Test_Client(t *testing.T) {
 		insertRes1, err := client.Insert(ctx, &noOpArgs{}, nil)
 		require.NoError(t, err)
 
-		event := riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCompleted, event.Kind)
 		require.Equal(t, insertRes1.Job.ID, event.Job.ID)
 
 		// Pause only the default queue:
 		require.NoError(t, client.QueuePause(ctx, QueueDefault, nil))
-		event = riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		event = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, &Event{Kind: EventKindQueuePaused, Queue: &rivertype.Queue{Name: QueueDefault}}, event)
 
 		insertRes2, err := client.Insert(ctx, &noOpArgs{}, nil)
@@ -652,13 +653,13 @@ func Test_Client(t *testing.T) {
 		insertResAlternate1, err := client.Insert(ctx, &noOpArgs{}, &InsertOpts{Queue: "alternate"})
 		require.NoError(t, err)
 
-		event = riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		event = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCompleted, event.Kind)
 		require.Equal(t, insertResAlternate1.Job.ID, event.Job.ID)
 
 		// Pause all queues:
 		require.NoError(t, client.QueuePause(ctx, rivercommon.AllQueuesString, nil))
-		event = riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		event = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, &Event{Kind: EventKindQueuePaused, Queue: &rivertype.Queue{Name: "alternate"}}, event)
 
 		insertResAlternate2, err := client.Insert(ctx, &noOpArgs{}, &InsertOpts{Queue: "alternate"})
@@ -672,19 +673,19 @@ func Test_Client(t *testing.T) {
 
 		// Resume only the alternate queue:
 		require.NoError(t, client.QueueResume(ctx, "alternate", nil))
-		event = riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		event = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, &Event{Kind: EventKindQueueResumed, Queue: &rivertype.Queue{Name: "alternate"}}, event)
 
-		event = riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		event = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCompleted, event.Kind)
 		require.Equal(t, insertResAlternate2.Job.ID, event.Job.ID)
 
 		// Resume all queues:
 		require.NoError(t, client.QueueResume(ctx, rivercommon.AllQueuesString, nil))
-		event = riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		event = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, &Event{Kind: EventKindQueueResumed, Queue: &rivertype.Queue{Name: QueueDefault}}, event)
 
-		event = riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		event = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCompleted, event.Kind)
 		require.Equal(t, insertRes2.Job.ID, event.Job.ID)
 	})
@@ -780,7 +781,7 @@ func Test_Client(t *testing.T) {
 		// leader.
 		client.testSignals.electedLeader.WaitOrTimeout()
 
-		event := riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCompleted, event.Kind)
 		require.Equal(t, insertRes.Job.ID, event.Job.ID)
 		require.Equal(t, rivertype.JobStateCompleted, event.Job.State)
@@ -808,7 +809,7 @@ func Test_Client(t *testing.T) {
 		// leader.
 		client.testSignals.electedLeader.WaitOrTimeout()
 
-		event := riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCompleted, event.Kind)
 		require.Equal(t, insertRes.Job.ID, event.Job.ID)
 		require.Equal(t, rivertype.JobStateCompleted, event.Job.State)
@@ -943,7 +944,7 @@ func Test_Client_Stop(t *testing.T) {
 		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 		require.NoError(t, err)
 
-		startedJobID := riverinternaltest.WaitOrTimeout(t, jobStartedChan)
+		startedJobID := riversharedtest.WaitOrTimeout(t, jobStartedChan)
 		require.Equal(t, insertRes.Job.ID, startedJobID)
 
 		go func() {
@@ -986,7 +987,7 @@ func Test_Client_Stop(t *testing.T) {
 		t.Cleanup(finish)
 
 		// Wait for at least one job to start
-		riverinternaltest.WaitOrTimeout(t, startedCh)
+		riversharedtest.WaitOrTimeout(t, startedCh)
 
 		require.NoError(t, client.Stop(ctx))
 
@@ -1010,7 +1011,7 @@ func Test_Client_Stop(t *testing.T) {
 
 		// Arbitrarily wait for 100 jobs to come through.
 		for i := 0; i < 100; i++ {
-			riverinternaltest.WaitOrTimeout(t, subscribeChan)
+			riversharedtest.WaitOrTimeout(t, subscribeChan)
 		}
 
 		require.NoError(t, client.Stop(ctx))
@@ -1034,7 +1035,7 @@ func Test_Client_Stop_AfterContextCancelled(t *testing.T) {
 
 	insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 	require.NoError(t, err)
-	startedJobID := riverinternaltest.WaitOrTimeout(t, startedCh)
+	startedJobID := riversharedtest.WaitOrTimeout(t, startedCh)
 	require.Equal(t, insertRes.Job.ID, startedJobID)
 
 	cancel()
@@ -1074,7 +1075,7 @@ func Test_Client_StopAndCancel(t *testing.T) {
 		insertRes, err := client.Insert(ctx, &callbackArgs{}, nil)
 		require.NoError(t, err)
 
-		startedJobID := riverinternaltest.WaitOrTimeout(t, jobStartedChan)
+		startedJobID := riversharedtest.WaitOrTimeout(t, jobStartedChan)
 		require.Equal(t, insertRes.Job.ID, startedJobID)
 
 		select {
@@ -1095,7 +1096,7 @@ func Test_Client_StopAndCancel(t *testing.T) {
 		client, _ := setup(t)
 
 		require.NoError(t, client.StopAndCancel(ctx))
-		riverinternaltest.WaitOrTimeout(t, client.Stopped())
+		riversharedtest.WaitOrTimeout(t, client.Stopped())
 	})
 
 	t.Run("AfterStop", func(t *testing.T) {
@@ -1114,7 +1115,7 @@ func Test_Client_StopAndCancel(t *testing.T) {
 		}
 
 		require.NoError(t, client.StopAndCancel(ctx))
-		riverinternaltest.WaitOrTimeout(t, client.Stopped())
+		riversharedtest.WaitOrTimeout(t, client.Stopped())
 
 		select {
 		case <-bundle.jobDoneChan:
@@ -1211,7 +1212,7 @@ func Test_Client_ClientFromContext(t *testing.T) {
 	_, err := client.Insert(ctx, callbackArgs{}, nil)
 	require.NoError(t, err)
 
-	riverinternaltest.WaitOrTimeout(t, jobDoneChan)
+	riversharedtest.WaitOrTimeout(t, jobDoneChan)
 
 	require.NotNil(t, clientResult)
 	require.Equal(t, client, clientResult)
@@ -1276,7 +1277,7 @@ func Test_Client_JobDelete(t *testing.T) {
 		require.NoError(t, err)
 
 		// Wait for the job to start:
-		riverinternaltest.WaitOrTimeout(t, startedCh)
+		riversharedtest.WaitOrTimeout(t, startedCh)
 
 		jobAfter, err := client.JobDelete(ctx, insertRes.Job.ID)
 		require.ErrorIs(t, err, rivertype.ErrJobRunning)
@@ -1443,7 +1444,7 @@ func Test_Client_Insert(t *testing.T) {
 		_, _ = setup(t)
 
 		client, err := NewClient(riverpgxv5.New(nil), &Config{
-			Logger: riverinternaltest.Logger(t),
+			Logger: riversharedtest.Logger(t),
 		})
 		require.NoError(t, err)
 
@@ -1548,7 +1549,7 @@ func Test_Client_InsertTx(t *testing.T) {
 		_, bundle := setup(t)
 
 		client, err := NewClient(riverpgxv5.New(nil), &Config{
-			Logger: riverinternaltest.Logger(t),
+			Logger: riversharedtest.Logger(t),
 		})
 		require.NoError(t, err)
 
@@ -1647,7 +1648,7 @@ func Test_Client_InsertMany(t *testing.T) {
 		require.Equal(t, 2, count)
 
 		// Wait for the client to be ready by waiting for a job to be executed:
-		riverinternaltest.WaitOrTimeoutN(t, startedCh, 2)
+		riversharedtest.WaitOrTimeoutN(t, startedCh, 2)
 
 		// Now that we've run one job, we shouldn't take longer than the cooldown to
 		// fetch another after insertion. LISTEN/NOTIFY should ensure we find out
@@ -1739,7 +1740,7 @@ func Test_Client_InsertMany(t *testing.T) {
 		_, _ = setup(t)
 
 		client, err := NewClient(riverpgxv5.New(nil), &Config{
-			Logger: riverinternaltest.Logger(t),
+			Logger: riversharedtest.Logger(t),
 		})
 		require.NoError(t, err)
 
@@ -1875,7 +1876,7 @@ func Test_Client_InsertManyTx(t *testing.T) {
 		_, bundle := setup(t)
 
 		client, err := NewClient(riverpgxv5.New(nil), &Config{
-			Logger: riverinternaltest.Logger(t),
+			Logger: riversharedtest.Logger(t),
 		})
 		require.NoError(t, err)
 
@@ -2403,7 +2404,7 @@ func Test_Client_ErrorHandler(t *testing.T) {
 		client, bundle := setup(t, config)
 
 		requireInsert(ctx, client)
-		riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
+		riversharedtest.WaitOrTimeout(t, bundle.SubscribeChan)
 
 		require.True(t, errorHandlerCalled)
 	})
@@ -2433,7 +2434,7 @@ func Test_Client_ErrorHandler(t *testing.T) {
 		_, err = client.driver.GetExecutor().JobInsertFast(ctx, insertParams)
 		require.NoError(t, err)
 
-		riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
+		riversharedtest.WaitOrTimeout(t, bundle.SubscribeChan)
 
 		require.True(t, errorHandlerCalled)
 	})
@@ -2457,7 +2458,7 @@ func Test_Client_ErrorHandler(t *testing.T) {
 		client, bundle := setup(t, config)
 
 		requireInsert(ctx, client)
-		riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
+		riversharedtest.WaitOrTimeout(t, bundle.SubscribeChan)
 
 		require.True(t, panicHandlerCalled)
 	})
@@ -2492,7 +2493,7 @@ func Test_Client_Maintenance(t *testing.T) {
 
 		startClient(ctx, t, client)
 		client.testSignals.electedLeader.WaitOrTimeout()
-		riverinternaltest.WaitOrTimeout(t, client.queueMaintainer.Started())
+		riversharedtest.WaitOrTimeout(t, client.queueMaintainer.Started())
 	}
 
 	t.Run("JobCleaner", func(t *testing.T) {
@@ -3141,7 +3142,7 @@ func Test_Client_RetryPolicy(t *testing.T) {
 		// Wait for the expected number of jobs to be finished.
 		for i := 0; i < len(originalJobs); i++ {
 			t.Logf("Waiting on job %d", i)
-			_ = riverinternaltest.WaitOrTimeout(t, subscribeChan)
+			_ = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		}
 
 		finishedJobs, err := client.driver.GetExecutor().JobGetByIDMany(ctx,
@@ -3253,7 +3254,7 @@ func Test_Client_Subscribe(t *testing.T) {
 		events := make([]*Event, len(expectedJobs))
 
 		for i := 0; i < len(expectedJobs); i++ {
-			events[i] = riverinternaltest.WaitOrTimeout(t, subscribeChan)
+			events[i] = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		}
 
 		eventsByName := keyEventsByName(events)
@@ -3316,7 +3317,7 @@ func Test_Client_Subscribe(t *testing.T) {
 		events := make([]*Event, len(expectedJobs))
 
 		for i := 0; i < len(expectedJobs); i++ {
-			events[i] = riverinternaltest.WaitOrTimeout(t, subscribeChan)
+			events[i] = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		}
 
 		eventsByName := keyEventsByName(events)
@@ -3359,7 +3360,7 @@ func Test_Client_Subscribe(t *testing.T) {
 		events := make([]*Event, len(expectedJobs))
 
 		for i := 0; i < len(expectedJobs); i++ {
-			events[i] = riverinternaltest.WaitOrTimeout(t, subscribeChan)
+			events[i] = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		}
 
 		eventsByName := keyEventsByName(events)
@@ -3404,7 +3405,7 @@ func Test_Client_Subscribe(t *testing.T) {
 		cancel()
 
 		// Drops through immediately because the channel is closed.
-		riverinternaltest.WaitOrTimeout(t, subscribeChan)
+		riversharedtest.WaitOrTimeout(t, subscribeChan)
 
 		require.Empty(t, client.subscriptionManager.subscriptions)
 	})
@@ -3470,7 +3471,7 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 		events := make([]*Event, len(expectedJobs))
 
 		for i := 0; i < len(expectedJobs); i++ {
-			events[i] = riverinternaltest.WaitOrTimeout(t, subscribeChan)
+			events[i] = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		}
 
 		eventsByName := keyEventsByName(events)
@@ -3567,7 +3568,7 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = riverinternaltest.WaitOrTimeoutN(t, subscribeChan, numJobsToInsert)
+			_ = riversharedtest.WaitOrTimeoutN(t, subscribeChan, numJobsToInsert)
 		}()
 
 		startClient(ctx, t, client)
@@ -3714,7 +3715,7 @@ func Test_Client_InsertNotificationsAreDeduplicatedAndDebounced(t *testing.T) {
 		config.Logger.Info("inserting " + queue + " job")
 		_, err = client.Insert(ctx, callbackArgs{}, &InsertOpts{Queue: queue})
 		require.NoError(t, err)
-		notif := riverinternaltest.WaitOrTimeout(t, notifyCh)
+		notif := riversharedtest.WaitOrTimeout(t, notifyCh)
 		require.Equal(t, notifier.NotificationTopicInsert, notif.topic)
 		require.Equal(t, queue, notif.payload.Queue)
 	}
@@ -3784,7 +3785,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 		require.NoError(err)
 
-		event := riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
+		event := riversharedtest.WaitOrTimeout(t, bundle.SubscribeChan)
 		require.Equal(insertRes.Job.ID, event.Job.ID)
 		require.Equal(rivertype.JobStateCompleted, event.Job.State)
 
@@ -3819,7 +3820,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 		require.NoError(err)
 
-		event := riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
+		event := riversharedtest.WaitOrTimeout(t, bundle.SubscribeChan)
 		require.Equal(insertRes.Job.ID, event.Job.ID)
 		require.Equal(rivertype.JobStateCompleted, event.Job.State)
 
@@ -3843,7 +3844,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 		require.NoError(err)
 
-		event := riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
+		event := riversharedtest.WaitOrTimeout(t, bundle.SubscribeChan)
 		require.Equal(insertRes.Job.ID, event.Job.ID)
 		require.Equal(rivertype.JobStateRetryable, event.Job.State)
 
@@ -3868,7 +3869,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 		require.NoError(err)
 
-		event := riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
+		event := riversharedtest.WaitOrTimeout(t, bundle.SubscribeChan)
 		require.Equal(insertRes.Job.ID, event.Job.ID)
 		require.Equal(rivertype.JobStateCancelled, event.Job.State)
 
@@ -3909,7 +3910,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
 		require.NoError(err)
 
-		event := riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
+		event := riversharedtest.WaitOrTimeout(t, bundle.SubscribeChan)
 		require.Equal(insertRes.Job.ID, event.Job.ID)
 		require.Equal(rivertype.JobStateDiscarded, event.Job.State)
 
@@ -3946,7 +3947,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
 		require.NoError(err)
 
-		event := riverinternaltest.WaitOrTimeout(t, bundle.SubscribeChan)
+		event := riversharedtest.WaitOrTimeout(t, bundle.SubscribeChan)
 		require.Equal(insertRes.Job.ID, event.Job.ID)
 		require.Equal(rivertype.JobStateCompleted, event.Job.State)
 		require.Equal(rivertype.JobStateCompleted, updatedJob.State)
@@ -3996,7 +3997,7 @@ func Test_Client_UnknownJobKindErrorsTheJob(t *testing.T) {
 	insertedJob, err := client.driver.GetExecutor().JobInsertFast(ctx, insertParams)
 	require.NoError(err)
 
-	event := riverinternaltest.WaitOrTimeout(t, subscribeChan)
+	event := riversharedtest.WaitOrTimeout(t, subscribeChan)
 	require.Equal(insertedJob.ID, event.Job.ID)
 	require.Equal("RandomWorkerNameThatIsNeverRegistered", insertedJob.Kind)
 	require.Len(event.Job.Errors, 1)
@@ -4572,7 +4573,7 @@ func TestClient_JobTimeout(t *testing.T) {
 			_, err := client.Insert(ctx, timeoutTestArgs{TimeoutValue: tt.jobArgTimeout}, nil)
 			require.NoError(err)
 
-			result := riverinternaltest.WaitOrTimeout(t, testWorker.doneCh)
+			result := riversharedtest.WaitOrTimeout(t, testWorker.doneCh)
 			if tt.wantDuration == 0 {
 				require.False(result.ok, "expected no deadline")
 				return
@@ -4586,7 +4587,7 @@ func TestClient_JobTimeout(t *testing.T) {
 func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 	t.Parallel()
 
-	archetype := riverinternaltest.BaseServiceArchetype(t)
+	archetype := riversharedtest.BaseServiceArchetype(t)
 	config := newTestConfig(t, nil)
 
 	t.Run("Defaults", func(t *testing.T) {

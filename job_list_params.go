@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/dblist"
-	"github.com/riverqueue/river/internal/util/ptrutil"
+	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 

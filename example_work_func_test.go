@@ -9,8 +9,8 @@ import (
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/util/slogutil"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/util/slogutil"
 )
 
 type WorkFuncArgs struct {

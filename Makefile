@@ -14,6 +14,7 @@ lint:
 	cd riverdriver && golangci-lint run --fix
 	cd riverdriver/riverdatabasesql && golangci-lint run --fix
 	cd riverdriver/riverpgxv5 && golangci-lint run --fix
+	cd rivershared && golangci-lint run --fix
 	cd rivertype && golangci-lint run --fix
 
 .PHONY: test
@@ -23,7 +24,17 @@ test:
 	cd riverdriver && go test ./...
 	cd riverdriver/riverdatabasesql && go test ./...
 	cd riverdriver/riverpgxv5 && go test ./...
+	cd rivershared && go test ./...
 	cd rivertype && go test ./...
+
+.PHONY: tidy
+tidy:
+	cd . && go mod tidy
+	cd cmd/river && go mod tidy
+	cd riverdriver && go mod tidy
+	cd riverdriver/riverdatabasesql && go mod tidy
+	cd riverdriver/riverpgxv5 && go mod tidy
+	cd rivertype && go mod tidy
 
 .PHONY: verify
 verify:

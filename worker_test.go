@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
 )
 
 func TestWork(t *testing.T) {
@@ -108,7 +109,7 @@ func TestWorkFunc(t *testing.T) {
 		_, err := client.Insert(ctx, &WorkFuncArgs{}, nil)
 		require.NoError(t, err)
 
-		riverinternaltest.WaitOrTimeout(t, workChan)
+		riversharedtest.WaitOrTimeout(t, workChan)
 	})
 
 	t.Run("StructFunction", func(t *testing.T) {
@@ -125,7 +126,7 @@ func TestWorkFunc(t *testing.T) {
 		_, err := client.Insert(ctx, &WorkFuncArgs{}, nil)
 		require.NoError(t, err)
 
-		riverinternaltest.WaitOrTimeout(t, structWithFunc.WorkChan)
+		riversharedtest.WaitOrTimeout(t, structWithFunc.WorkChan)
 	})
 
 	t.Run("JobArgsReflectKind", func(t *testing.T) {
@@ -146,6 +147,6 @@ func TestWorkFunc(t *testing.T) {
 		_, err := client.Insert(ctx, &InFuncWorkFuncArgs{}, nil)
 		require.NoError(t, err)
 
-		riverinternaltest.WaitOrTimeout(t, workChan)
+		riversharedtest.WaitOrTimeout(t, workChan)
 	})
 }
