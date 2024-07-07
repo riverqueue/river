@@ -1,0 +1,1 @@
+DROP TABLE river_migration;

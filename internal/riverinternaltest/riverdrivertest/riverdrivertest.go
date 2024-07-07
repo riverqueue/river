@@ -36,6 +36,25 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		t.Logf("Driver does not support listener; skipping listener tests")
 	}
 
+	t.Run("GetMigrationFS", func(t *testing.T) {
+		driver := driverWithPool(ctx, t)
+
+		for _, line := range driver.GetMigrationLines() {
+			migrationFS := driver.GetMigrationFS(line)
+
+			// Directory for the advertised migration line should exist.
+			_, err := migrationFS.Open("migration/" + line)
+			require.NoError(t, err)
+		}
+	})
+
+	t.Run("GetMigrationLines", func(t *testing.T) {
+		driver := driverWithPool(ctx, t)
+
+		// Should contain at minimum a main migration line.
+		require.Contains(t, driver.GetMigrationLines(), riverdriver.MigrationLineMain)
+	})
+
 	type testBundle struct{}
 
 	setup := func(ctx context.Context, t *testing.T) (riverdriver.Executor, *testBundle) {

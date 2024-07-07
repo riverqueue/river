@@ -15,12 +15,15 @@ package riverdriver
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"time"
 
 	"github.com/riverqueue/river/rivertype"
 )
 
 const AllQueuesString = "*"
+
+const MigrationLineMain = "main"
 
 var (
 	ErrClosedPool     = errors.New("underlying driver pool is closed")
@@ -51,6 +54,22 @@ type Driver[TTx any] interface {
 	//
 	// API is not stable. DO NOT USE.
 	GetListener() Listener
+
+	// GetMigrationFS gets a filesystem containing migrations for the driver.
+	//
+	// Each set of migration files is expected to exist within the filesystem as
+	// `migration/<line>/`. For example:
+	//
+	//     migration/main/001_create_river_migration.up.sql
+	//
+	// API is not stable. DO NOT USE.
+	GetMigrationFS(line string) fs.FS
+
+	// GetMigrationLines gets supported migration lines from the driver. Most
+	// drivers will only support a single line: MigrationLineMain.
+	//
+	// API is not stable. DO NOT USE.
+	GetMigrationLines() []string
 
 	// HasPool returns true if the driver is configured with a database pool.
 	//

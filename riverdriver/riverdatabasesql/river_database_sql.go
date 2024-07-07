@@ -8,9 +8,11 @@ package riverdatabasesql
 import (
 	"context"
 	"database/sql"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"strings"
 	"time"
@@ -23,6 +25,9 @@ import (
 	"github.com/riverqueue/river/rivershared/util/valutil"
 	"github.com/riverqueue/river/rivertype"
 )
+
+//go:embed migration/*/*.sql
+var migrationFS embed.FS
 
 // Driver is an implementation of riverdriver.Driver for database/sql.
 type Driver struct {
@@ -48,8 +53,15 @@ func (d *Driver) GetExecutor() riverdriver.Executor {
 }
 
 func (d *Driver) GetListener() riverdriver.Listener { panic(riverdriver.ErrNotImplemented) }
-func (d *Driver) HasPool() bool                     { return d.dbPool != nil }
-func (d *Driver) SupportsListener() bool            { return false }
+func (d *Driver) GetMigrationFS(line string) fs.FS {
+	if line == riverdriver.MigrationLineMain {
+		return migrationFS
+	}
+	panic("migration line does not exist: " + line)
+}
+func (d *Driver) GetMigrationLines() []string { return []string{riverdriver.MigrationLineMain} }
+func (d *Driver) HasPool() bool               { return d.dbPool != nil }
+func (d *Driver) SupportsListener() bool      { return false }
 
 func (d *Driver) UnwrapExecutor(tx *sql.Tx) riverdriver.ExecutorTx {
 	return &ExecutorTx{Executor: Executor{nil, tx, dbsqlc.New()}, tx: tx}
