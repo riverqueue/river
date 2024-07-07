@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
+	"github.com/riverqueue/rivershared/util/sliceutil"
 )
 
 // testingT is an interface wrapper around *testing.T that's implemented by all

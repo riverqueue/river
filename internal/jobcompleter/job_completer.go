@@ -8,12 +8,12 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/jobstats"
-	"github.com/riverqueue/river/internal/startstop"
-	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
+	"github.com/riverqueue/rivershared/baseservice"
+	"github.com/riverqueue/rivershared/startstop"
+	"github.com/riverqueue/rivershared/util/sliceutil"
 )
 
 // JobCompleter is an interface to a service that "completes" jobs by marking

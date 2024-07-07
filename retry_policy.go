@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/riverqueue/river/internal/util/randutil"
-	"github.com/riverqueue/river/internal/util/timeutil"
 	"github.com/riverqueue/river/rivertype"
+	"github.com/riverqueue/rivershared/util/randutil"
+	"github.com/riverqueue/rivershared/util/timeutil"
 )
 
 // ClientRetryPolicy is an interface that can be implemented to provide a retry

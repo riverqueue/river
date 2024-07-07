@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/maintenance"
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/rivershared/riversharedtest"
 )
 
 func TestPeriodicJobBundle(t *testing.T) {
@@ -20,7 +20,7 @@ func TestPeriodicJobBundle(t *testing.T) {
 		t.Helper()
 
 		periodicJobEnqueuer := maintenance.NewPeriodicJobEnqueuer(
-			riverinternaltest.BaseServiceArchetype(t),
+			riversharedtest.BaseServiceArchetype(t),
 			&maintenance.PeriodicJobEnqueuerConfig{},
 			nil,
 		)

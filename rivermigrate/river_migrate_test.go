@@ -17,10 +17,11 @@ import (
 
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/util/dbutil"
-	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/rivershared/riversharedtest"
+	"github.com/riverqueue/rivershared/util/sliceutil"
 )
 
 //nolint:gochecknoglobals
@@ -79,7 +80,7 @@ func TestMigrator(t *testing.T) {
 		bundle := &testBundle{
 			dbPool: dbPool,
 			driver: riverpgxv5.New(dbPool),
-			logger: riverinternaltest.Logger(t),
+			logger: riversharedtest.Logger(t),
 			tx:     tx,
 		}
 

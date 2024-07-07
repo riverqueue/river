@@ -9,12 +9,12 @@ import (
 	"runtime/debug"
 	"time"
 
-	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobstats"
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
+	"github.com/riverqueue/rivershared/baseservice"
 )
 
 // Error used in CancelFunc in cases where the job was not cancelled for

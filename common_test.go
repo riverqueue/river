@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/internal/rivercommon"
+	"github.com/riverqueue/rivershared/riversharedtest"
 )
 
 //
@@ -17,7 +17,7 @@ import (
 // jobs take too long to be received.
 func waitForNJobs(subscribeChan <-chan *river.Event, numJobs int) {
 	var (
-		timeout  = rivercommon.WaitTimeout()
+		timeout  = riversharedtest.WaitTimeout()
 		deadline = time.Now().Add(timeout)
 		events   = make([]*river.Event, 0, numJobs)
 	)

@@ -8,13 +8,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/componentstatus"
 	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/startstop"
-	"github.com/riverqueue/river/internal/util/maputil"
-	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/rivershared/baseservice"
+	"github.com/riverqueue/rivershared/startstop"
+	"github.com/riverqueue/rivershared/util/maputil"
+	"github.com/riverqueue/rivershared/util/sliceutil"
 )
 
 type NotificationTopic string

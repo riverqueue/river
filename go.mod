@@ -1,6 +1,6 @@
 module github.com/riverqueue/river
 
-go 1.21.4
+go 1.22.5
 
 replace github.com/riverqueue/river/riverdriver => ./riverdriver
 
@@ -18,6 +18,7 @@ require (
 	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.9.0
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.9.0
 	github.com/riverqueue/river/rivertype v0.9.0
+	github.com/riverqueue/rivershared v0.0.0-20240707170519-d0685f5e0a5d
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.9.0
 	go.uber.org/goleak v1.3.0

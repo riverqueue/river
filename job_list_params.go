@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/dblist"
-	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
+	"github.com/riverqueue/rivershared/util/ptrutil"
 )
 
 // JobListCursor is used to specify a starting point for a paginated

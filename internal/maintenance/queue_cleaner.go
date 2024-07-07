@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/startstop"
-	"github.com/riverqueue/river/internal/util/timeutil"
-	"github.com/riverqueue/river/internal/util/valutil"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/rivershared/baseservice"
+	"github.com/riverqueue/rivershared/startstop"
+	"github.com/riverqueue/rivershared/util/timeutil"
+	"github.com/riverqueue/rivershared/util/valutil"
 )
 
 const (

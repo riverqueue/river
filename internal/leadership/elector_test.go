@@ -10,17 +10,18 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/componentstatus"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/sharedtx"
-	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/internal/riverinternaltest/testfactory"
-	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivertype"
+	"github.com/riverqueue/rivershared/baseservice"
+	"github.com/riverqueue/rivershared/riversharedtest"
+	"github.com/riverqueue/rivershared/startstoptest"
+	"github.com/riverqueue/rivershared/util/ptrutil"
 )
 
 func TestElector_PollOnly(t *testing.T) {
@@ -53,7 +54,7 @@ func TestElector_PollOnly(t *testing.T) {
 			t.Helper()
 
 			return NewElector(
-				riverinternaltest.BaseServiceArchetype(t),
+				riversharedtest.BaseServiceArchetype(t),
 				driver.UnwrapExecutor(electorBundle.tx),
 				nil,
 				&Config{ClientID: "test_client_id"},
@@ -77,7 +78,7 @@ func TestElector_WithNotifier(t *testing.T) {
 			t.Helper()
 
 			var (
-				archetype = riverinternaltest.BaseServiceArchetype(t)
+				archetype = riversharedtest.BaseServiceArchetype(t)
 				dbPool    = riverinternaltest.TestDB(ctx, t)
 				driver    = riverpgxv5.New(dbPool)
 			)
@@ -173,21 +174,21 @@ func testElector[TElectorBundle any](
 		t.Cleanup(func() { elector.unlisten(sub) })
 
 		// Drain an initial notification that occurs on Listen.
-		notification := riverinternaltest.WaitOrTimeout(t, sub.ch)
+		notification := riversharedtest.WaitOrTimeout(t, sub.ch)
 		require.False(t, notification.IsLeader)
 
 		startElector(ctx, t, elector)
 
 		elector.testSignals.GainedLeadership.WaitOrTimeout()
 
-		notification = riverinternaltest.WaitOrTimeout(t, sub.ch)
+		notification = riversharedtest.WaitOrTimeout(t, sub.ch)
 		require.True(t, notification.IsLeader)
 
 		elector.Stop()
 
 		elector.testSignals.ResignedLeadership.WaitOrTimeout()
 
-		notification = riverinternaltest.WaitOrTimeout(t, sub.ch)
+		notification = riversharedtest.WaitOrTimeout(t, sub.ch)
 		require.False(t, notification.IsLeader)
 	})
 
@@ -305,8 +306,8 @@ func testElector[TElectorBundle any](
 		t.Parallel()
 
 		elector, _ := setup(t)
-		elector.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
-		elector.testSignals = electorTestSignals{}       // deinit so channels don't fill
+		elector.Logger = riversharedtest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
+		elector.testSignals = electorTestSignals{}     // deinit so channels don't fill
 
 		startstoptest.Stress(ctx, t, elector)
 	})
@@ -335,7 +336,7 @@ func TestAttemptElectOrReelect(t *testing.T) {
 
 		return &testBundle{
 			exec:   driver.UnwrapExecutor(riverinternaltest.TestTx(ctx, t)),
-			logger: riverinternaltest.Logger(t),
+			logger: riversharedtest.Logger(t),
 		}
 	}
 
@@ -424,7 +425,7 @@ func TestElectorHandleLeadershipNotification(t *testing.T) {
 		tx := riverinternaltest.TestTx(ctx, t)
 
 		elector := NewElector(
-			riverinternaltest.BaseServiceArchetype(t),
+			riversharedtest.BaseServiceArchetype(t),
 			driver.UnwrapExecutor(tx),
 			nil,
 			&Config{ClientID: "test_client_id"},
@@ -461,7 +462,7 @@ func TestElectorHandleLeadershipNotification(t *testing.T) {
 
 		elector.handleLeadershipNotification(ctx, notifier.NotificationTopicLeadership, string(mustMarshalJSON(t, validLeadershipChange())))
 
-		riverinternaltest.WaitOrTimeout(t, elector.leadershipNotificationChan)
+		riversharedtest.WaitOrTimeout(t, elector.leadershipNotificationChan)
 	})
 
 	t.Run("StopsOnContextDone", func(t *testing.T) {

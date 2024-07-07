@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
+	"github.com/riverqueue/rivershared/util/sliceutil"
 )
 
 const jobList = `-- name: JobList :many

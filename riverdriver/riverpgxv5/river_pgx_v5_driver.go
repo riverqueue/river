@@ -21,6 +21,7 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5/internal/dbsqlc"
 	"github.com/riverqueue/river/rivertype"
+	"github.com/riverqueue/rivershared/util/sliceutil"
 )
 
 // Driver is an implementation of riverdriver.Driver for Pgx v5.
@@ -448,11 +449,11 @@ func (e *Executor) LeaderResign(ctx context.Context, params *riverdriver.LeaderR
 
 func (e *Executor) MigrationDeleteByVersionMany(ctx context.Context, versions []int) ([]*riverdriver.Migration, error) {
 	migrations, err := e.queries.RiverMigrationDeleteByVersionMany(ctx, e.dbtx,
-		mapSlice(versions, func(v int) int64 { return int64(v) }))
+		sliceutil.Map(versions, func(v int) int64 { return int64(v) }))
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	return mapSlice(migrations, migrationFromInternal), nil
+	return sliceutil.Map(migrations, migrationFromInternal), nil
 }
 
 func (e *Executor) MigrationGetAll(ctx context.Context) ([]*riverdriver.Migration, error) {
@@ -460,16 +461,16 @@ func (e *Executor) MigrationGetAll(ctx context.Context) ([]*riverdriver.Migratio
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	return mapSlice(migrations, migrationFromInternal), nil
+	return sliceutil.Map(migrations, migrationFromInternal), nil
 }
 
 func (e *Executor) MigrationInsertMany(ctx context.Context, versions []int) ([]*riverdriver.Migration, error) {
 	migrations, err := e.queries.RiverMigrationInsertMany(ctx, e.dbtx,
-		mapSlice(versions, func(v int) int64 { return int64(v) }))
+		sliceutil.Map(versions, func(v int) int64 { return int64(v) }))
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	return mapSlice(migrations, migrationFromInternal), nil
+	return sliceutil.Map(migrations, migrationFromInternal), nil
 }
 
 func (e *Executor) NotifyMany(ctx context.Context, params *riverdriver.NotifyManyParams) error {
@@ -719,21 +720,6 @@ func leaderFromInternal(internal *dbsqlc.RiverLeader) *riverdriver.Leader {
 		ExpiresAt: internal.ExpiresAt.UTC(),
 		LeaderID:  internal.LeaderID,
 	}
-}
-
-// mapSlice manipulates a slice and transforms it to a slice of another type.
-func mapSlice[T any, R any](collection []T, mapFunc func(T) R) []R {
-	if collection == nil {
-		return nil
-	}
-
-	result := make([]R, len(collection))
-
-	for i, item := range collection {
-		result[i] = mapFunc(item)
-	}
-
-	return result
 }
 
 // mapSliceError manipulates a slice and transforms it to a slice of another

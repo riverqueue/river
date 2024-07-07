@@ -9,8 +9,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/startstop"
+	"github.com/riverqueue/rivershared/riversharedtest"
+	"github.com/riverqueue/rivershared/startstop"
 )
 
 type MyService struct {
@@ -48,7 +48,7 @@ func TestStress(t *testing.T) {
 
 	ctx := context.Background()
 
-	Stress(ctx, t, &MyService{logger: riverinternaltest.Logger(t)})
+	Stress(ctx, t, &MyService{logger: riversharedtest.Logger(t)})
 }
 
 func TestStressErr(t *testing.T) {
@@ -58,10 +58,10 @@ func TestStressErr(t *testing.T) {
 
 	startErr := errors.New("error returned on start")
 
-	StressErr(ctx, t, &MyService{logger: riverinternaltest.Logger(t), startErr: startErr}, startErr)
+	StressErr(ctx, t, &MyService{logger: riversharedtest.Logger(t), startErr: startErr}, startErr)
 
 	mockT := newMockTestingT(t)
-	StressErr(ctx, mockT, &MyService{logger: riverinternaltest.Logger(t), startErr: errors.New("different error")}, startErr)
+	StressErr(ctx, mockT, &MyService{logger: riversharedtest.Logger(t), startErr: errors.New("different error")}, startErr)
 	require.True(t, mockT.failed.Load())
 }
 

@@ -16,11 +16,12 @@ import (
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/testfactory"
-	"github.com/riverqueue/river/internal/startstop"
-	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivertype"
+	"github.com/riverqueue/rivershared/riversharedtest"
+	"github.com/riverqueue/rivershared/startstop"
+	"github.com/riverqueue/rivershared/util/ptrutil"
 )
 
 type partialExecutorMock struct {
@@ -74,7 +75,7 @@ func TestInlineJobCompleter_Complete(t *testing.T) {
 	subscribeCh := make(chan []CompleterJobUpdated, 10)
 	t.Cleanup(riverinternaltest.DiscardContinuously(subscribeCh))
 
-	completer := NewInlineCompleter(riverinternaltest.BaseServiceArchetype(t), execMock, subscribeCh)
+	completer := NewInlineCompleter(riversharedtest.BaseServiceArchetype(t), execMock, subscribeCh)
 	t.Cleanup(completer.Stop)
 	completer.disableSleep = true
 
@@ -91,7 +92,7 @@ func TestInlineJobCompleter_Subscribe(t *testing.T) {
 	t.Parallel()
 
 	testCompleterSubscribe(t, func(exec PartialExecutor, subscribeCh SubscribeChan) JobCompleter {
-		return NewInlineCompleter(riverinternaltest.BaseServiceArchetype(t), exec, subscribeCh)
+		return NewInlineCompleter(riversharedtest.BaseServiceArchetype(t), exec, subscribeCh)
 	})
 }
 
@@ -99,7 +100,7 @@ func TestInlineJobCompleter_Wait(t *testing.T) {
 	t.Parallel()
 
 	testCompleterWait(t, func(exec PartialExecutor, subscribeChan SubscribeChan) JobCompleter {
-		return NewInlineCompleter(riverinternaltest.BaseServiceArchetype(t), exec, subscribeChan)
+		return NewInlineCompleter(riversharedtest.BaseServiceArchetype(t), exec, subscribeChan)
 	})
 }
 
@@ -120,7 +121,7 @@ func TestAsyncJobCompleter_Complete(t *testing.T) {
 	expectedErr := errors.New("an error from the completer")
 
 	go func() {
-		riverinternaltest.WaitOrTimeout(t, inputCh)
+		riversharedtest.WaitOrTimeout(t, inputCh)
 		resultCh <- expectedErr
 	}()
 
@@ -132,7 +133,7 @@ func TestAsyncJobCompleter_Complete(t *testing.T) {
 		},
 	}
 	subscribeChan := make(chan []CompleterJobUpdated, 10)
-	completer := newAsyncCompleterWithConcurrency(riverinternaltest.BaseServiceArchetype(t), adapter, 2, subscribeChan)
+	completer := newAsyncCompleterWithConcurrency(riversharedtest.BaseServiceArchetype(t), adapter, 2, subscribeChan)
 	completer.disableSleep = true
 	require.NoError(t, completer.Start(ctx))
 	t.Cleanup(completer.Stop)
@@ -197,7 +198,7 @@ func TestAsyncJobCompleter_Subscribe(t *testing.T) {
 	t.Parallel()
 
 	testCompleterSubscribe(t, func(exec PartialExecutor, subscribeCh SubscribeChan) JobCompleter {
-		return newAsyncCompleterWithConcurrency(riverinternaltest.BaseServiceArchetype(t), exec, 4, subscribeCh)
+		return newAsyncCompleterWithConcurrency(riversharedtest.BaseServiceArchetype(t), exec, 4, subscribeCh)
 	})
 }
 
@@ -205,7 +206,7 @@ func TestAsyncJobCompleter_Wait(t *testing.T) {
 	t.Parallel()
 
 	testCompleterWait(t, func(exec PartialExecutor, subscribeCh SubscribeChan) JobCompleter {
-		return newAsyncCompleterWithConcurrency(riverinternaltest.BaseServiceArchetype(t), exec, 4, subscribeCh)
+		return newAsyncCompleterWithConcurrency(riversharedtest.BaseServiceArchetype(t), exec, 4, subscribeCh)
 	})
 }
 
@@ -243,7 +244,7 @@ func testCompleterSubscribe(t *testing.T, constructor func(PartialExecutor, Subs
 
 	completer.Stop() // closes subscribeChan
 
-	updates := riverinternaltest.WaitOrTimeoutN(t, jobUpdateChan, 4)
+	updates := riversharedtest.WaitOrTimeoutN(t, jobUpdateChan, 4)
 	for i := 0; i < 4; i++ {
 		require.Equal(t, rivertype.JobStateCompleted, updates[0].Job.State)
 	}
@@ -321,7 +322,7 @@ func TestAsyncCompleter(t *testing.T) {
 
 	testCompleter(t, func(t *testing.T, exec riverdriver.Executor, subscribeCh chan<- []CompleterJobUpdated) *AsyncCompleter {
 		t.Helper()
-		return NewAsyncCompleter(riverinternaltest.BaseServiceArchetype(t), exec, subscribeCh)
+		return NewAsyncCompleter(riversharedtest.BaseServiceArchetype(t), exec, subscribeCh)
 	},
 		func(completer *AsyncCompleter) { completer.disableSleep = true },
 		func(completer *AsyncCompleter, exec PartialExecutor) { completer.exec = exec })
@@ -332,7 +333,7 @@ func TestBatchCompleter(t *testing.T) {
 
 	testCompleter(t, func(t *testing.T, exec riverdriver.Executor, subscribeCh chan<- []CompleterJobUpdated) *BatchCompleter {
 		t.Helper()
-		return NewBatchCompleter(riverinternaltest.BaseServiceArchetype(t), exec, subscribeCh)
+		return NewBatchCompleter(riversharedtest.BaseServiceArchetype(t), exec, subscribeCh)
 	},
 		func(completer *BatchCompleter) { completer.disableSleep = true },
 		func(completer *BatchCompleter, exec PartialExecutor) { completer.exec = exec })
@@ -351,13 +352,13 @@ func TestBatchCompleter(t *testing.T) {
 			driver      = riverpgxv5.New(riverinternaltest.TestDB(ctx, t))
 			exec        = driver.GetExecutor()
 			subscribeCh = make(chan []CompleterJobUpdated, 10)
-			completer   = NewBatchCompleter(riverinternaltest.BaseServiceArchetype(t), exec, subscribeCh)
+			completer   = NewBatchCompleter(riversharedtest.BaseServiceArchetype(t), exec, subscribeCh)
 		)
 
 		require.NoError(t, completer.Start(ctx))
 		t.Cleanup(completer.Stop)
 
-		riverinternaltest.WaitOrTimeout(t, completer.Started())
+		riversharedtest.WaitOrTimeout(t, completer.Started())
 
 		return completer, &testBundle{
 			exec:        exec,
@@ -386,7 +387,7 @@ func TestBatchCompleter(t *testing.T) {
 		// Wait for some jobs to come through, giving lots of opportunity for
 		// the completer to have pooled some completions and being forced to
 		// work them in sub-batches with our diminished sub-batch size.
-		riverinternaltest.WaitOrTimeoutN(t, jobUpdateChan, 100)
+		riversharedtest.WaitOrTimeoutN(t, jobUpdateChan, 100)
 
 		stopInsertion()
 		go completer.Stop()
@@ -416,7 +417,7 @@ func TestBatchCompleter(t *testing.T) {
 		// Wait for some jobs to come through. Waiting for these jobs to come
 		// through will provide plenty of opportunity for the completer to back
 		// up with our small configured backlog.
-		riverinternaltest.WaitOrTimeoutN(t, jobUpdateChan, 100)
+		riversharedtest.WaitOrTimeoutN(t, jobUpdateChan, 100)
 
 		stopInsertion()
 		go completer.Stop()
@@ -431,7 +432,7 @@ func TestInlineCompleter(t *testing.T) {
 
 	testCompleter(t, func(t *testing.T, exec riverdriver.Executor, subscribeCh chan<- []CompleterJobUpdated) *InlineCompleter {
 		t.Helper()
-		return NewInlineCompleter(riverinternaltest.BaseServiceArchetype(t), exec, subscribeCh)
+		return NewInlineCompleter(riversharedtest.BaseServiceArchetype(t), exec, subscribeCh)
 	},
 		func(completer *InlineCompleter) { completer.disableSleep = true },
 		func(completer *InlineCompleter, exec PartialExecutor) { completer.exec = exec })
@@ -669,7 +670,7 @@ func testCompleter[TCompleter JobCompleter](
 
 		completer.Stop()
 
-		jobUpdate := riverinternaltest.WaitOrTimeout(t, bundle.subscribeCh)
+		jobUpdate := riversharedtest.WaitOrTimeout(t, bundle.subscribeCh)
 		require.Len(t, jobUpdate, 1)
 		require.Equal(t, rivertype.JobStateCompleted, jobUpdate[0].Job.State)
 	})
@@ -841,7 +842,7 @@ func testCompleter[TCompleter JobCompleter](
 
 		var completerInterface JobCompleter = completer
 		if withWait, ok := completerInterface.(startstop.Service); ok {
-			riverinternaltest.WaitOrTimeout(t, withWait.Started())
+			riversharedtest.WaitOrTimeout(t, withWait.Started())
 		}
 	})
 }
@@ -849,28 +850,28 @@ func testCompleter[TCompleter JobCompleter](
 func BenchmarkAsyncCompleter_Concurrency10(b *testing.B) {
 	benchmarkCompleter(b, func(b *testing.B, exec riverdriver.Executor, subscribeCh chan<- []CompleterJobUpdated) JobCompleter {
 		b.Helper()
-		return newAsyncCompleterWithConcurrency(riverinternaltest.BaseServiceArchetype(b), exec, 10, subscribeCh)
+		return newAsyncCompleterWithConcurrency(riversharedtest.BaseServiceArchetype(b), exec, 10, subscribeCh)
 	})
 }
 
 func BenchmarkAsyncCompleter_Concurrency100(b *testing.B) {
 	benchmarkCompleter(b, func(b *testing.B, exec riverdriver.Executor, subscribeCh chan<- []CompleterJobUpdated) JobCompleter {
 		b.Helper()
-		return newAsyncCompleterWithConcurrency(riverinternaltest.BaseServiceArchetype(b), exec, 100, subscribeCh)
+		return newAsyncCompleterWithConcurrency(riversharedtest.BaseServiceArchetype(b), exec, 100, subscribeCh)
 	})
 }
 
 func BenchmarkBatchCompleter(b *testing.B) {
 	benchmarkCompleter(b, func(b *testing.B, exec riverdriver.Executor, subscribeCh chan<- []CompleterJobUpdated) JobCompleter {
 		b.Helper()
-		return NewBatchCompleter(riverinternaltest.BaseServiceArchetype(b), exec, subscribeCh)
+		return NewBatchCompleter(riversharedtest.BaseServiceArchetype(b), exec, subscribeCh)
 	})
 }
 
 func BenchmarkInlineCompleter(b *testing.B) {
 	benchmarkCompleter(b, func(b *testing.B, exec riverdriver.Executor, subscribeCh chan<- []CompleterJobUpdated) JobCompleter {
 		b.Helper()
-		return NewInlineCompleter(riverinternaltest.BaseServiceArchetype(b), exec, subscribeCh)
+		return NewInlineCompleter(riversharedtest.BaseServiceArchetype(b), exec, subscribeCh)
 	})
 }
 
@@ -904,7 +905,7 @@ func benchmarkCompleter(
 		b.Cleanup(completer.Stop)
 
 		if withWait, ok := completer.(startstop.Service); ok {
-			riverinternaltest.WaitOrTimeout(b, withWait.Started())
+			riversharedtest.WaitOrTimeout(b, withWait.Started())
 		}
 
 		insertParams := make([]*riverdriver.JobInsertFastParams, b.N)

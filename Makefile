@@ -25,6 +25,15 @@ test:
 	cd riverdriver/riverpgxv5 && go test ./...
 	cd rivertype && go test ./...
 
+.PHONY: tidy
+tidy:
+	cd . && go mod tidy
+	cd cmd/river && go mod tidy
+	cd riverdriver && go mod tidy
+	cd riverdriver/riverdatabasesql && go mod tidy
+	cd riverdriver/riverpgxv5 && go mod tidy
+	cd rivertype && go mod tidy
+
 .PHONY: verify
 verify:
 verify: verify/sqlc

@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/util/hashutil"
-	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
+	"github.com/riverqueue/rivershared/baseservice"
+	"github.com/riverqueue/rivershared/util/sliceutil"
 )
 
 // When a job has specified unique options, but has not set the ByState

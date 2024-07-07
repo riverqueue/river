@@ -5,9 +5,9 @@ import (
 
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/maintenance"
-	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
+	"github.com/riverqueue/rivershared/util/sliceutil"
 )
 
 // PeriodicSchedule is a schedule for a periodic job. Periodic jobs should

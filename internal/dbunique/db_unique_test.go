@@ -10,14 +10,15 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/util/dbutil"
-	"github.com/riverqueue/river/internal/util/ptrutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivertype"
+	"github.com/riverqueue/rivershared/baseservice"
+	"github.com/riverqueue/rivershared/riversharedtest"
+	"github.com/riverqueue/rivershared/util/ptrutil"
 )
 
 func TestUniqueInserter_JobInsert(t *testing.T) {
@@ -46,7 +47,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 			tx:     tx,
 		}
 
-		inserter := baseservice.Init(riverinternaltest.BaseServiceArchetype(t), &UniqueInserter{})
+		inserter := baseservice.Init(riversharedtest.BaseServiceArchetype(t), &UniqueInserter{})
 
 		// Tests that use ByPeriod below can be sensitive to intermittency if
 		// the tests run at say 14:59:59.998, then it's possible to accidentally

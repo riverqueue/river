@@ -14,10 +14,11 @@ import (
 
 	"github.com/riverqueue/river/internal/componentstatus"
 	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
-	"github.com/riverqueue/river/internal/util/maputil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/rivershared/riversharedtest"
+	"github.com/riverqueue/rivershared/startstoptest"
+	"github.com/riverqueue/rivershared/util/maputil"
 )
 
 func TestNotifier(t *testing.T) {
@@ -46,7 +47,7 @@ func TestNotifier(t *testing.T) {
 			statusUpdateChan = make(chan componentstatus.Status, 10)
 		)
 
-		notifier := New(riverinternaltest.BaseServiceArchetype(t), listener, func(status componentstatus.Status) {
+		notifier := New(riversharedtest.BaseServiceArchetype(t), listener, func(status componentstatus.Status) {
 			statusUpdateChan <- status
 		})
 		notifier.testSignals.Init()
@@ -72,22 +73,22 @@ func TestNotifier(t *testing.T) {
 		start(t, notifier)
 
 		notifier.testSignals.ListeningBegin.WaitOrTimeout()
-		require.Equal(t, componentstatus.Initializing, riverinternaltest.WaitOrTimeout(t, bundle.statusUpdateChan))
-		require.Equal(t, componentstatus.Healthy, riverinternaltest.WaitOrTimeout(t, bundle.statusUpdateChan))
+		require.Equal(t, componentstatus.Initializing, riversharedtest.WaitOrTimeout(t, bundle.statusUpdateChan))
+		require.Equal(t, componentstatus.Healthy, riversharedtest.WaitOrTimeout(t, bundle.statusUpdateChan))
 
 		notifier.Stop()
 
 		notifier.testSignals.ListeningEnd.WaitOrTimeout()
-		require.Equal(t, componentstatus.ShuttingDown, riverinternaltest.WaitOrTimeout(t, bundle.statusUpdateChan))
-		require.Equal(t, componentstatus.Stopped, riverinternaltest.WaitOrTimeout(t, bundle.statusUpdateChan))
+		require.Equal(t, componentstatus.ShuttingDown, riversharedtest.WaitOrTimeout(t, bundle.statusUpdateChan))
+		require.Equal(t, componentstatus.Stopped, riversharedtest.WaitOrTimeout(t, bundle.statusUpdateChan))
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {
 		t.Parallel()
 
 		notifier, bundle := setup(t)
-		notifier.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
-		notifier.testSignals = notifierTestSignals{}      // deinit so channels don't fill
+		notifier.Logger = riversharedtest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
+		notifier.testSignals = notifierTestSignals{}    // deinit so channels don't fill
 
 		t.Cleanup(riverinternaltest.DiscardContinuously(bundle.statusUpdateChan))
 
@@ -154,7 +155,7 @@ func TestNotifier(t *testing.T) {
 
 		sendNotification(ctx, t, bundle.exec, testTopic1, "msg1")
 
-		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riverinternaltest.WaitOrTimeout(t, notifyChan))
+		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riversharedtest.WaitOrTimeout(t, notifyChan))
 
 		sub.Unlisten(ctx)
 
@@ -268,7 +269,7 @@ func TestNotifier(t *testing.T) {
 
 		sendNotification(ctx, t, bundle.exec, testTopic1, "msg1")
 
-		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riverinternaltest.WaitOrTimeout(t, notifyChan))
+		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riversharedtest.WaitOrTimeout(t, notifyChan))
 	})
 
 	t.Run("SingleTopicMultipleSubscribers", func(t *testing.T) {
@@ -287,8 +288,8 @@ func TestNotifier(t *testing.T) {
 
 		sendNotification(ctx, t, bundle.exec, testTopic1, "msg1")
 
-		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riverinternaltest.WaitOrTimeout(t, notifyChan1))
-		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riverinternaltest.WaitOrTimeout(t, notifyChan2))
+		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riversharedtest.WaitOrTimeout(t, notifyChan1))
+		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riversharedtest.WaitOrTimeout(t, notifyChan2))
 
 		sub1.Unlisten(ctx)
 		sub2.Unlisten(ctx)
@@ -320,8 +321,8 @@ func TestNotifier(t *testing.T) {
 		sendNotification(ctx, t, bundle.exec, testTopic1, "msg1_1")
 		sendNotification(ctx, t, bundle.exec, testTopic2, "msg1_2")
 
-		require.Equal(t, TopicAndPayload{testTopic1, "msg1_1"}, riverinternaltest.WaitOrTimeout(t, notifyChan1))
-		require.Equal(t, TopicAndPayload{testTopic2, "msg1_2"}, riverinternaltest.WaitOrTimeout(t, notifyChan2))
+		require.Equal(t, TopicAndPayload{testTopic1, "msg1_1"}, riversharedtest.WaitOrTimeout(t, notifyChan1))
+		require.Equal(t, TopicAndPayload{testTopic2, "msg1_2"}, riversharedtest.WaitOrTimeout(t, notifyChan2))
 
 		sub1.Unlisten(ctx)
 		sub2.Unlisten(ctx)
@@ -355,7 +356,7 @@ func TestNotifier(t *testing.T) {
 		time.Sleep(notificationWaitLeeway)
 
 		// Only the first channel is subscribed.
-		require.Equal(t, TopicAndPayload{testTopic1, "msg1_1"}, riverinternaltest.WaitOrTimeout(t, notifyChan1))
+		require.Equal(t, TopicAndPayload{testTopic1, "msg1_1"}, riversharedtest.WaitOrTimeout(t, notifyChan1))
 		requireNoNotification(t, notifyChan2)
 
 		sub2, err := notifier.Listen(ctx, testTopic2, topicAndPayloadNotifyFunc(notifyChan2))
@@ -365,8 +366,8 @@ func TestNotifier(t *testing.T) {
 		sendNotification(ctx, t, bundle.exec, testTopic2, "msg2_2")
 
 		// Now both subscriptions are active.
-		require.Equal(t, TopicAndPayload{testTopic1, "msg2_1"}, riverinternaltest.WaitOrTimeout(t, notifyChan1))
-		require.Equal(t, TopicAndPayload{testTopic2, "msg2_2"}, riverinternaltest.WaitOrTimeout(t, notifyChan2))
+		require.Equal(t, TopicAndPayload{testTopic1, "msg2_1"}, riversharedtest.WaitOrTimeout(t, notifyChan1))
+		require.Equal(t, TopicAndPayload{testTopic2, "msg2_2"}, riversharedtest.WaitOrTimeout(t, notifyChan2))
 
 		sub1.Unlisten(ctx)
 
@@ -377,7 +378,7 @@ func TestNotifier(t *testing.T) {
 
 		// First channel unsubscribed, but the second remains.
 		requireNoNotification(t, notifyChan1)
-		require.Equal(t, TopicAndPayload{testTopic2, "msg3_2"}, riverinternaltest.WaitOrTimeout(t, notifyChan2))
+		require.Equal(t, TopicAndPayload{testTopic2, "msg3_2"}, riversharedtest.WaitOrTimeout(t, notifyChan2))
 
 		sub2.Unlisten(ctx)
 
@@ -559,7 +560,7 @@ func TestNotifier(t *testing.T) {
 		sendNotification(ctx, t, bundle.exec, testTopic1, "msg1")
 
 		// Subscription should still work.
-		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riverinternaltest.WaitOrTimeout(t, notifyChan))
+		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riversharedtest.WaitOrTimeout(t, notifyChan))
 	})
 }
 

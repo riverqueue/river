@@ -8,9 +8,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/internal/riverinternaltest/startstoptest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/rivershared/riversharedtest"
+	"github.com/riverqueue/rivershared/startstoptest"
 )
 
 func TestReindexer(t *testing.T) {
@@ -31,7 +32,7 @@ func TestReindexer(t *testing.T) {
 			exec: riverpgxv5.New(dbPool).GetExecutor(),
 		}
 
-		archetype := riverinternaltest.BaseServiceArchetype(t)
+		archetype := riversharedtest.BaseServiceArchetype(t)
 		bundle.now = archetype.Time.StubNowUTC(time.Now())
 
 		fromNow := func(d time.Duration) func(time.Time) time.Time {
@@ -65,8 +66,8 @@ func TestReindexer(t *testing.T) {
 		t.Parallel()
 
 		svc, _ := setup(t)
-		svc.Logger = riverinternaltest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
-		svc.TestSignals = ReindexerTestSignals{}     // deinit so channels don't fill
+		svc.Logger = riversharedtest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
+		svc.TestSignals = ReindexerTestSignals{}   // deinit so channels don't fill
 
 		startstoptest.Stress(ctx, t, svc)
 	})
@@ -116,7 +117,7 @@ func TestReindexer(t *testing.T) {
 		// before we can start waiting on it.
 		stopped := svc.Stopped()
 		cancelFunc()
-		riverinternaltest.WaitOrTimeout(t, stopped)
+		riversharedtest.WaitOrTimeout(t, stopped)
 	})
 
 	t.Run("DefaultConfigs", func(t *testing.T) {

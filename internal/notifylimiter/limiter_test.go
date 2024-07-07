@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/rivershared/riversharedtest"
 )
 
 func TestLimiter(t *testing.T) {
@@ -18,7 +18,7 @@ func TestLimiter(t *testing.T) {
 	setup := func() (*Limiter, *testBundle) {
 		bundle := &testBundle{}
 
-		archetype := riverinternaltest.BaseServiceArchetype(t)
+		archetype := riversharedtest.BaseServiceArchetype(t)
 		limiter := NewLimiter(archetype, 10*time.Millisecond)
 
 		return limiter, bundle

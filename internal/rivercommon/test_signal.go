@@ -2,8 +2,9 @@ package rivercommon
 
 import (
 	"fmt"
-	"os"
 	"time"
+
+	"github.com/riverqueue/rivershared/riversharedtest"
 )
 
 // TestSignalWaiter provides an interface for TestSignal which only exposes
@@ -69,7 +70,7 @@ func (s *TestSignal[T]) WaitOrTimeout() T {
 		panic("test only signal is not initialized; called outside of tests?")
 	}
 
-	timeout := WaitTimeout()
+	timeout := riversharedtest.WaitTimeout()
 
 	select {
 	case value := <-s.internalChan:
@@ -77,18 +78,4 @@ func (s *TestSignal[T]) WaitOrTimeout() T {
 	case <-time.After(timeout):
 		panic(fmt.Sprintf("timed out waiting on test signal after %s", timeout))
 	}
-}
-
-// WaitTimeout returns a duration broadly appropriate for waiting on an expected
-// event in a test, and which is used for `TestSignal.WaitOrTimeout` and
-// `riverinternaltest.WaitOrTimeout`. It's main purpose is to allow a little
-// extra leeway in GitHub Actions where we occasionally seem to observe subpar
-// performance which leads to timeouts and test intermittency, while still
-// keeping a tight a timeout for local test runs where this is never a problem.
-func WaitTimeout() time.Duration {
-	if os.Getenv("GITHUB_ACTIONS") == "true" {
-		return 10 * time.Second
-	}
-
-	return 3 * time.Second
 }

@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/riverqueue/river/internal/baseservice"
+	"github.com/riverqueue/rivershared/baseservice"
 )
 
 type NotifyFunc func(name string)

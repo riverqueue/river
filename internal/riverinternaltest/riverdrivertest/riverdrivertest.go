@@ -16,10 +16,10 @@ import (
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest/testfactory" //nolint:depguard
-	"github.com/riverqueue/river/internal/util/ptrutil"
-	"github.com/riverqueue/river/internal/util/sliceutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
+	"github.com/riverqueue/rivershared/util/ptrutil"
+	"github.com/riverqueue/rivershared/util/sliceutil"
 )
 
 // Exercise fully exercises a driver. The driver's listener is exercised if

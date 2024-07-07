@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/riverqueue/river/internal/baseservice"
 	"github.com/riverqueue/river/internal/componentstatus"
 	"github.com/riverqueue/river/internal/dblist"
 	"github.com/riverqueue/river/internal/dbunique"
@@ -22,14 +21,15 @@ import (
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/notifylimiter"
 	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/startstop"
-	"github.com/riverqueue/river/internal/util/maputil"
-	"github.com/riverqueue/river/internal/util/randutil"
-	"github.com/riverqueue/river/internal/util/sliceutil"
-	"github.com/riverqueue/river/internal/util/valutil"
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
+	"github.com/riverqueue/rivershared/baseservice"
+	"github.com/riverqueue/rivershared/startstop"
+	"github.com/riverqueue/rivershared/util/maputil"
+	"github.com/riverqueue/rivershared/util/randutil"
+	"github.com/riverqueue/rivershared/util/sliceutil"
+	"github.com/riverqueue/rivershared/util/valutil"
 )
 
 const (
@@ -682,7 +682,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		// is safe because even services that were never started will still
 		// tolerate being stopped.
 		stopServicesOnError := func() {
-			startstop.StopAllParallel(c.services)
+			startstop.StopAllParallel(c.services...)
 			c.monitor.Stop()
 		}
 
@@ -723,7 +723,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 			producer := producer
 
 			if err := producer.StartWorkContext(fetchCtx, workCtx); err != nil {
-				startstop.StopAllParallel(producersAsServices())
+				startstop.StopAllParallel(producersAsServices()...)
 				stopServicesOnError()
 				return err
 			}
@@ -774,7 +774,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 
 		// On stop, have the producers stop fetching first of all.
 		c.baseService.Logger.DebugContext(ctx, c.baseService.Name+": Stopping producers")
-		startstop.StopAllParallel(producersAsServices())
+		startstop.StopAllParallel(producersAsServices()...)
 		c.baseService.Logger.DebugContext(ctx, c.baseService.Name+": All producers stopped")
 
 		// Stop all mainline services where stop order isn't important.
@@ -791,7 +791,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 			// Will only be started if this client was leader, but can tolerate a
 			// stop without having been started.
 			c.queueMaintainer,
-		))
+		)...)
 
 		// Shut down the monitor last so it can broadcast final status updates:
 		c.monitor.Stop()
