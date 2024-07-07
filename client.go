@@ -497,9 +497,9 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	client.baseService.Name = "Client" // Have to correct the name because base service isn't embedded like it usually is
 	client.insertNotifyLimiter = notifylimiter.NewLimiter(archetype, config.FetchCooldown)
 
-	var plugin rivertype.Plugin
-	if p, ok := driver.(Pluginable[TTx]); ok {
-		plugin = p.Plugin(client, config.Logger)
+	plugin, _ := driver.(driverPlugin[TTx])
+	if plugin != nil {
+		plugin.PluginInit(archetype, client)
 	}
 
 	// There are a number of internal components that are only needed/desired if
@@ -542,11 +542,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			startstop.StartStopFunc(client.handleLeadershipChangeLoop))
 
 		if plugin != nil {
-			// TODO: can just use rivertype.Service for client.Services to avoid this map:
-			pluginServices := sliceutil.Map(plugin.Services(), func(s rivertype.Service) startstop.Service {
-				return startstop.Service(s)
-			})
-			client.services = append(client.services, pluginServices...)
+			client.services = append(client.services, plugin.PluginServices()...)
 		}
 
 		//
@@ -621,11 +617,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		}
 
 		if plugin != nil {
-			// TODO: can just use rivertype.Service for NewQueueMaintainer services to avoid this map:
-			pluginServices := sliceutil.Map(plugin.MaintenanceServices(), func(s rivertype.Service) startstop.Service {
-				return startstop.Service(s)
-			})
-			maintenanceServices = append(maintenanceServices, pluginServices...)
+			maintenanceServices = append(maintenanceServices, plugin.PluginMaintenanceServices()...)
 		}
 
 		// Not added to the main services list because the queue maintainer is

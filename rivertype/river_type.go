@@ -4,7 +4,6 @@
 package rivertype
 
 import (
-	"context"
 	"errors"
 	"time"
 )
@@ -219,11 +218,6 @@ type AttemptError struct {
 // subsequently remove the periodic job with `Remove()`.
 type PeriodicJobHandle int
 
-type Plugin interface {
-	MaintenanceServices() []Service
-	Services() []Service
-}
-
 // Queue is a configuration for a queue that is currently (or recently was) in
 // use by a client.
 type Queue struct {
@@ -248,25 +242,4 @@ type Queue struct {
 	// If UpdatedAt has not been updated for awhile, the queue record will be
 	// deleted from the table by a maintenance process.
 	UpdatedAt time.Time
-}
-
-type Service interface {
-	// Start starts a service. Services are responsible for backgrounding
-	// themselves, so this function should be invoked synchronously. Services
-	// may return an error if they have trouble starting up, so the caller
-	// should wait and respond to the error if necessary.
-	Start(ctx context.Context) error
-
-	// Started returns a channel that's closed when a service finishes starting,
-	// or if failed to start and is stopped instead. It can be used in
-	// conjunction with WaitAllStarted to verify startup of a constellation of
-	// services.
-	Started() <-chan struct{}
-
-	// Stop stops a service. Services are responsible for making sure their stop
-	// is complete before returning so a caller can wait on this invocation
-	// synchronously and be guaranteed the service is fully stopped. Services
-	// are expected to be able to tolerate (1) being stopped without having been
-	// started, and (2) being double-stopped.
-	Stop()
 }
