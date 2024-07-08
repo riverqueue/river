@@ -497,6 +497,11 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	client.baseService.Name = "Client" // Have to correct the name because base service isn't embedded like it usually is
 	client.insertNotifyLimiter = notifylimiter.NewLimiter(archetype, config.FetchCooldown)
 
+	plugin, _ := driver.(driverPlugin[TTx])
+	if plugin != nil {
+		plugin.PluginInit(archetype, client)
+	}
+
 	// There are a number of internal components that are only needed/desired if
 	// we're actually going to be working jobs (as opposed to just enqueueing
 	// them):
@@ -535,6 +540,10 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 
 		client.services = append(client.services,
 			startstop.StartStopFunc(client.handleLeadershipChangeLoop))
+
+		if plugin != nil {
+			client.services = append(client.services, plugin.PluginServices()...)
+		}
 
 		//
 		// Maintenance services
@@ -605,6 +614,10 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			reindexer := maintenance.NewReindexer(archetype, &maintenance.ReindexerConfig{ScheduleFunc: scheduleFunc}, driver.GetExecutor())
 			maintenanceServices = append(maintenanceServices, reindexer)
 			client.testSignals.reindexer = &reindexer.TestSignals
+		}
+
+		if plugin != nil {
+			maintenanceServices = append(maintenanceServices, plugin.PluginMaintenanceServices()...)
 		}
 
 		// Not added to the main services list because the queue maintainer is

@@ -95,6 +95,7 @@ func testService(t *testing.T, newService func(t *testing.T) serviceWithStopped)
 		service, _ := setup(t)
 
 		require.NoError(t, service.Start(ctx))
+		t.Cleanup(service.Stop)
 
 		riversharedtest.WaitOrTimeout(t, service.Started())
 	})
@@ -133,6 +134,20 @@ func testService(t *testing.T, newService func(t *testing.T) serviceWithStopped)
 		}
 
 		wg.Wait()
+	})
+
+	t.Run("StartedPreallocated", func(t *testing.T) {
+		t.Parallel()
+
+		service, _ := setup(t)
+
+		// Make sure we get the start channel before the service is started.
+		started := service.Started()
+
+		require.NoError(t, service.Start(ctx))
+		t.Cleanup(service.Stop)
+
+		riversharedtest.WaitOrTimeout(t, started)
 	})
 }
 
@@ -223,6 +238,7 @@ func TestSampleService(t *testing.T) {
 		service, _ := setup(t)
 
 		require.NoError(t, service.Start(ctx))
+		t.Cleanup(service.Stop)
 
 		riversharedtest.WaitOrTimeout(t, service.Started())
 		require.True(t, service.state)
@@ -398,6 +414,10 @@ func TestWaitAllStarted(t *testing.T) {
 		require.NoError(t, service2.Start(ctx))
 		require.NoError(t, service3.Start(ctx))
 
+		t.Cleanup(service1.Stop)
+		t.Cleanup(service2.Stop)
+		t.Cleanup(service3.Stop)
+
 		WaitAllStarted(service1, service2, service3)
 
 		require.True(t, service1.state)
@@ -417,6 +437,10 @@ func TestWaitAllStarted(t *testing.T) {
 		require.NoError(t, service1.Start(ctx))
 		require.NoError(t, service2.Start(ctx))
 		require.ErrorIs(t, service3.Start(ctx), service3.startErr)
+
+		t.Cleanup(service1.Stop)
+		t.Cleanup(service2.Stop)
+		t.Cleanup(service3.Stop)
 
 		WaitAllStarted(service1, service2, service3)
 	})
@@ -440,6 +464,10 @@ func TestWaitAllStartedC(t *testing.T) {
 		require.NoError(t, service2.Start(ctx))
 		require.NoError(t, service3.Start(ctx))
 
+		t.Cleanup(service1.Stop)
+		t.Cleanup(service2.Stop)
+		t.Cleanup(service3.Stop)
+
 		riversharedtest.WaitOrTimeout(t, WaitAllStartedC(service1, service2, service3))
 
 		require.True(t, service1.state)
@@ -459,6 +487,10 @@ func TestWaitAllStartedC(t *testing.T) {
 		require.NoError(t, service1.Start(ctx))
 		require.NoError(t, service2.Start(ctx))
 		require.ErrorIs(t, service3.Start(ctx), service3.startErr)
+
+		t.Cleanup(service1.Stop)
+		t.Cleanup(service2.Stop)
+		t.Cleanup(service3.Stop)
 
 		riversharedtest.WaitOrTimeout(t, WaitAllStartedC(service1, service2, service3))
 	})

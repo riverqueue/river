@@ -107,11 +107,17 @@ func (s *BaseStartStop) StartInit(ctx context.Context) (context.Context, bool, f
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.started != nil {
+	// Used stopped rather than started to track started state because the
+	// started channel may be preallocated by a call to Started.
+	if s.stopped != nil {
 		return ctx, false, nil, nil
 	}
 
-	s.started = make(chan struct{})
+	// Only allocate a started channel if one was preallocated by Started.
+	if s.started == nil {
+		s.started = make(chan struct{})
+	}
+
 	s.stopped = make(chan struct{})
 	ctx, s.cancelFunc = context.WithCancelCause(ctx)
 
@@ -132,6 +138,14 @@ func (s *BaseStartStop) StartInit(ctx context.Context) (context.Context, bool, f
 func (s *BaseStartStop) Started() <-chan struct{} {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// If the call to Started is before the service was actually started,
+	// preallocate the started channel so that regardless of whether the wait
+	// started before or after the service started, it will still do the right
+	// thing.
+	if s.started == nil {
+		s.started = make(chan struct{})
+	}
 
 	return s.started
 }
