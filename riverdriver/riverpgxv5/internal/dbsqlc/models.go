@@ -87,6 +87,7 @@ type RiverLeader struct {
 type RiverMigration struct {
 	ID        int64
 	CreatedAt time.Time
+	Line      string
 	Version   int64
 }
 

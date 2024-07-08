@@ -81,6 +81,14 @@ func (e *Executor) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
 	return &ExecutorTx{Executor: Executor{nil, tx, e.queries}, tx: tx}, nil
 }
 
+func (e *Executor) ColumnExists(ctx context.Context, tableName, columnName string) (bool, error) {
+	exists, err := e.queries.ColumnExists(ctx, e.dbtx, &dbsqlc.ColumnExistsParams{
+		ColumnName: columnName,
+		TableName:  tableName,
+	})
+	return exists, interpretError(err)
+}
+
 func (e *Executor) Exec(ctx context.Context, sql string) (struct{}, error) {
 	_, err := e.dbtx.ExecContext(ctx, sql)
 	return struct{}{}, interpretError(err)
@@ -487,30 +495,82 @@ func (e *Executor) LeaderResign(ctx context.Context, params *riverdriver.LeaderR
 	return numResigned > 0, nil
 }
 
-func (e *Executor) MigrationDeleteByVersionMany(ctx context.Context, versions []int) ([]*riverdriver.Migration, error) {
-	migrations, err := e.queries.RiverMigrationDeleteByVersionMany(ctx, e.dbtx,
+func (e *Executor) MigrationDeleteAssumingMainMany(ctx context.Context, versions []int) ([]*riverdriver.Migration, error) {
+	migrations, err := e.queries.RiverMigrationDeleteAssumingMainMany(ctx, e.dbtx,
 		sliceutil.Map(versions, func(v int) int64 { return int64(v) }))
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return sliceutil.Map(migrations, func(internal *dbsqlc.RiverMigrationDeleteAssumingMainManyRow) *riverdriver.Migration {
+		return &riverdriver.Migration{
+			ID:        int(internal.ID),
+			CreatedAt: internal.CreatedAt.UTC(),
+			Line:      riverdriver.MigrationLineMain,
+			Version:   int(internal.Version),
+		}
+	}), nil
+}
+
+func (e *Executor) MigrationDeleteByLineAndVersionMany(ctx context.Context, line string, versions []int) ([]*riverdriver.Migration, error) {
+	migrations, err := e.queries.RiverMigrationDeleteByLineAndVersionMany(ctx, e.dbtx, &dbsqlc.RiverMigrationDeleteByLineAndVersionManyParams{
+		Line:    line,
+		Version: sliceutil.Map(versions, func(v int) int64 { return int64(v) }),
+	})
 	if err != nil {
 		return nil, interpretError(err)
 	}
 	return sliceutil.Map(migrations, migrationFromInternal), nil
 }
 
-func (e *Executor) MigrationGetAll(ctx context.Context) ([]*riverdriver.Migration, error) {
-	migrations, err := e.queries.RiverMigrationGetAll(ctx, e.dbtx)
+func (e *Executor) MigrationGetAllAssumingMain(ctx context.Context) ([]*riverdriver.Migration, error) {
+	migrations, err := e.queries.RiverMigrationGetAllAssumingMain(ctx, e.dbtx)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return sliceutil.Map(migrations, func(internal *dbsqlc.RiverMigrationGetAllAssumingMainRow) *riverdriver.Migration {
+		return &riverdriver.Migration{
+			ID:        int(internal.ID),
+			CreatedAt: internal.CreatedAt.UTC(),
+			Line:      riverdriver.MigrationLineMain,
+			Version:   int(internal.Version),
+		}
+	}), nil
+}
+
+func (e *Executor) MigrationGetByLine(ctx context.Context, line string) ([]*riverdriver.Migration, error) {
+	migrations, err := e.queries.RiverMigrationGetByLine(ctx, e.dbtx, line)
 	if err != nil {
 		return nil, interpretError(err)
 	}
 	return sliceutil.Map(migrations, migrationFromInternal), nil
 }
 
-func (e *Executor) MigrationInsertMany(ctx context.Context, versions []int) ([]*riverdriver.Migration, error) {
-	migrations, err := e.queries.RiverMigrationInsertMany(ctx, e.dbtx,
-		sliceutil.Map(versions, func(v int) int64 { return int64(v) }))
+func (e *Executor) MigrationInsertMany(ctx context.Context, line string, versions []int) ([]*riverdriver.Migration, error) {
+	migrations, err := e.queries.RiverMigrationInsertMany(ctx, e.dbtx, &dbsqlc.RiverMigrationInsertManyParams{
+		Line:    line,
+		Version: sliceutil.Map(versions, func(v int) int64 { return int64(v) }),
+	})
 	if err != nil {
 		return nil, interpretError(err)
 	}
 	return sliceutil.Map(migrations, migrationFromInternal), nil
+}
+
+func (e *Executor) MigrationInsertManyAssumingMain(ctx context.Context, versions []int) ([]*riverdriver.Migration, error) {
+	migrations, err := e.queries.RiverMigrationInsertManyAssumingMain(ctx, e.dbtx,
+		sliceutil.Map(versions, func(v int) int64 { return int64(v) }),
+	)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return sliceutil.Map(migrations, func(internal *dbsqlc.RiverMigrationInsertManyAssumingMainRow) *riverdriver.Migration {
+		return &riverdriver.Migration{
+			ID:        int(internal.ID),
+			CreatedAt: internal.CreatedAt.UTC(),
+			Line:      riverdriver.MigrationLineMain,
+			Version:   int(internal.Version),
+		}
+	}), nil
 }
 
 func (e *Executor) NotifyMany(ctx context.Context, params *riverdriver.NotifyManyParams) error {
@@ -785,6 +845,7 @@ func migrationFromInternal(internal *dbsqlc.RiverMigration) *riverdriver.Migrati
 	return &riverdriver.Migration{
 		ID:        int(internal.ID),
 		CreatedAt: internal.CreatedAt.UTC(),
+		Line:      internal.Line,
 		Version:   int(internal.Version),
 	}
 }
