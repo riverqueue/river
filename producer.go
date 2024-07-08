@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/riverqueue/river/internal/componentstatus"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
@@ -82,7 +81,6 @@ type producerConfig struct {
 	QueueReportInterval time.Duration
 	RetryPolicy         ClientRetryPolicy
 	SchedulerInterval   time.Duration
-	StatusFunc          producerStatusUpdateFunc
 	Workers             *Workers
 }
 
@@ -125,9 +123,6 @@ func (c *producerConfig) mustValidate() *producerConfig {
 	}
 	if c.SchedulerInterval == 0 {
 		panic("producerConfig.SchedulerInterval is required")
-	}
-	if c.StatusFunc == nil {
-		panic("producerConfig.StatusFunc is required")
 	}
 	if c.Workers == nil {
 		panic("producerConfig.Workers is required")
@@ -201,8 +196,6 @@ func newProducer(archetype *baseservice.Archetype, exec riverdriver.Executor, co
 		workers:        config.Workers,
 	})
 }
-
-type producerStatusUpdateFunc func(queue string, status componentstatus.Status)
 
 // Start starts the producer. It backgrounds a goroutine which is stopped when
 // context is cancelled or Stop is invoked.
@@ -318,17 +311,11 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 			defer controlSub.Unlisten(fetchCtx)
 		}
 
-		// TODO(bgentry): this should probably happen even earlier in this start
-		// function, but need to figure out how handle defers and shutdown properly.
-		p.config.StatusFunc(p.config.Queue, componentstatus.Initializing)
-
 		go p.heartbeatLogLoop(fetchCtx)
 		go p.reportQueueStatusLoop(fetchCtx)
 		p.fetchAndRunLoop(fetchCtx, workCtx, fetchLimiter)
 
-		p.config.StatusFunc(p.config.Queue, componentstatus.ShuttingDown)
 		p.executorShutdownLoop()
-		p.config.StatusFunc(p.config.Queue, componentstatus.Stopped)
 	}()
 
 	return nil
@@ -418,8 +405,6 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 			}
 		}
 	}()
-
-	p.config.StatusFunc(p.config.Queue, componentstatus.Healthy)
 
 	fetchResultCh := make(chan producerFetchResult)
 	for {

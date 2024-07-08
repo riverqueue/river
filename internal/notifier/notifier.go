@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/riverqueue/river/internal/componentstatus"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -63,7 +62,6 @@ type Notifier struct {
 	disableSleep      bool // for tests only; disable sleep on exponential backoff
 	listener          riverdriver.Listener
 	notificationBuf   chan *riverdriver.Notification
-	statusChangeFunc  func(componentstatus.Status)
 	testSignals       notifierTestSignals
 	waitInterruptChan chan func()
 
@@ -75,11 +73,10 @@ type Notifier struct {
 	waitCancel    context.CancelFunc
 }
 
-func New(archetype *baseservice.Archetype, listener riverdriver.Listener, statusChangeFunc func(componentstatus.Status)) *Notifier {
+func New(archetype *baseservice.Archetype, listener riverdriver.Listener) *Notifier {
 	notifier := baseservice.Init(archetype, &Notifier{
 		listener:          listener,
 		notificationBuf:   make(chan *riverdriver.Notification, 1000),
-		statusChangeFunc:  statusChangeFunc,
 		waitInterruptChan: make(chan func(), 10),
 
 		subscriptions: make(map[NotificationTopic][]*Subscription),
@@ -115,7 +112,6 @@ func (n *Notifier) Start(ctx context.Context) error {
 
 		defer n.listenerClose(ctx, false)
 
-		n.statusChangeFunc(componentstatus.Initializing)
 		var wg sync.WaitGroup
 
 		wg.Add(1)
@@ -140,9 +136,7 @@ func (n *Notifier) Start(ctx context.Context) error {
 			}
 		}
 
-		n.statusChangeFunc(componentstatus.ShuttingDown)
 		wg.Wait()
-		n.statusChangeFunc(componentstatus.Stopped)
 	}()
 
 	return nil
@@ -190,7 +184,6 @@ func (n *Notifier) listenAndWait(ctx context.Context) error {
 	}
 
 	n.Logger.DebugContext(ctx, n.Name+": Notifier healthy")
-	n.statusChangeFunc(componentstatus.Healthy)
 
 	n.testSignals.ListeningBegin.Signal(struct{}{})
 	defer n.testSignals.ListeningEnd.Signal(struct{}{})
@@ -229,7 +222,6 @@ func (n *Notifier) listenAndWait(ctx context.Context) error {
 			}
 
 			n.Logger.InfoContext(ctx, n.Name+": Notifier unhealthy")
-			n.statusChangeFunc(componentstatus.Unhealthy)
 
 			return err
 		}

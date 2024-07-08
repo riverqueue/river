@@ -10,7 +10,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/componentstatus"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/sharedtx"
@@ -83,7 +82,7 @@ func TestElector_WithNotifier(t *testing.T) {
 				driver    = riverpgxv5.New(dbPool)
 			)
 
-			notifier := notifier.New(archetype, driver.GetListener(), func(s componentstatus.Status) {})
+			notifier := notifier.New(archetype, driver.GetListener())
 			{
 				require.NoError(t, notifier.Start(ctx))
 				t.Cleanup(notifier.Stop)

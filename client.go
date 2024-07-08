@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/riverqueue/river/internal/componentstatus"
 	"github.com/riverqueue/river/internal/dblist"
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/jobcompleter"
@@ -323,7 +322,6 @@ type Client[TTx any] struct {
 	driver               riverdriver.Driver[TTx]
 	elector              *leadership.Elector
 	insertNotifyLimiter  *notifylimiter.Limiter
-	monitor              *clientMonitor
 	notifier             *notifier.Notifier // may be nil in poll-only mode
 	periodicJobs         *PeriodicJobBundle
 	producersByQueueName map[string]*producer
@@ -484,7 +482,6 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	client := &Client[TTx]{
 		config:               config,
 		driver:               driver,
-		monitor:              newClientMonitor(),
 		producersByQueueName: make(map[string]*producer),
 		testSignals:          clientTestSignals{},
 		uniqueInserter: baseservice.Init(archetype, &dbunique.UniqueInserter{
@@ -519,7 +516,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			// uses listen/notify. Instead, each service polls for changes it's
 			// interested in. e.g. Elector polls to see if leader has expired.
 			if !config.PollOnly {
-				client.notifier = notifier.New(archetype, driver.GetListener(), client.monitor.SetNotifierStatus)
+				client.notifier = notifier.New(archetype, driver.GetListener())
 				client.services = append(client.services, client.notifier)
 			}
 		} else {
@@ -696,17 +693,6 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		// tolerate being stopped.
 		stopServicesOnError := func() {
 			startstop.StopAllParallel(c.services...)
-			c.monitor.Stop()
-		}
-
-		// Monitor should be the first subprocess to start, and the last to stop.
-		// It's not part of the waitgroup because we need to wait for everything else
-		// to shut down prior to closing the monitor.
-		//
-		// Unlike other services, it's given a background context so that it doesn't
-		// cancel on normal stops.
-		if err := c.monitor.Start(context.Background()); err != nil { //nolint:contextcheck
-			return err
 		}
 
 		// The completer is part of the services list below, but although it can
@@ -805,9 +791,6 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 			// stop without having been started.
 			c.queueMaintainer,
 		)...)
-
-		// Shut down the monitor last so it can broadcast final status updates:
-		c.monitor.Stop()
 	}()
 
 	return nil
@@ -955,12 +938,6 @@ func (c *Client[TTx]) handleLeadershipChangeLoop(ctx context.Context, shouldStar
 	handleLeadershipChange := func(ctx context.Context, notification *leadership.Notification) {
 		c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Election change received",
 			slog.String("client_id", c.config.ID), slog.Bool("is_leader", notification.IsLeader))
-
-		leaderStatus := componentstatus.ElectorNonLeader
-		if notification.IsLeader {
-			leaderStatus = componentstatus.ElectorLeader
-		}
-		c.monitor.SetElectorStatus(leaderStatus)
 
 		switch {
 		case notification.IsLeader:
@@ -1570,10 +1547,8 @@ func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) *pr
 		QueueEventCallback: c.subscriptionManager.distributeQueueEvent,
 		RetryPolicy:        c.config.RetryPolicy,
 		SchedulerInterval:  c.config.schedulerInterval,
-		StatusFunc:         c.monitor.SetProducerStatus,
 		Workers:            c.config.Workers,
 	})
-	c.monitor.InitializeProducerStatus(queueName)
 	c.producersByQueueName[queueName] = producer
 	return producer
 }

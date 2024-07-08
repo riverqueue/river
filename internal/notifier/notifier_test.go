@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/componentstatus"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -32,30 +31,25 @@ func TestNotifier(t *testing.T) {
 	ctx := context.Background()
 
 	type testBundle struct {
-		dbPool           *pgxpool.Pool
-		exec             riverdriver.Executor
-		statusUpdateChan <-chan componentstatus.Status
+		dbPool *pgxpool.Pool
+		exec   riverdriver.Executor
 	}
 
 	setup := func(t *testing.T) (*Notifier, *testBundle) {
 		t.Helper()
 
 		var (
-			dbPool           = riverinternaltest.TestDB(ctx, t)
-			driver           = riverpgxv5.New(dbPool)
-			listener         = driver.GetListener()
-			statusUpdateChan = make(chan componentstatus.Status, 10)
+			dbPool   = riverinternaltest.TestDB(ctx, t)
+			driver   = riverpgxv5.New(dbPool)
+			listener = driver.GetListener()
 		)
 
-		notifier := New(riversharedtest.BaseServiceArchetype(t), listener, func(status componentstatus.Status) {
-			statusUpdateChan <- status
-		})
+		notifier := New(riversharedtest.BaseServiceArchetype(t), listener)
 		notifier.testSignals.Init()
 
 		return notifier, &testBundle{
-			dbPool:           dbPool,
-			exec:             driver.GetExecutor(),
-			statusUpdateChan: statusUpdateChan,
+			dbPool: dbPool,
+			exec:   driver.GetExecutor(),
 		}
 	}
 
@@ -69,28 +63,22 @@ func TestNotifier(t *testing.T) {
 	t.Run("StartsAndStops", func(t *testing.T) {
 		t.Parallel()
 
-		notifier, bundle := setup(t)
+		notifier, _ := setup(t)
 		start(t, notifier)
 
 		notifier.testSignals.ListeningBegin.WaitOrTimeout()
-		require.Equal(t, componentstatus.Initializing, riversharedtest.WaitOrTimeout(t, bundle.statusUpdateChan))
-		require.Equal(t, componentstatus.Healthy, riversharedtest.WaitOrTimeout(t, bundle.statusUpdateChan))
 
 		notifier.Stop()
 
 		notifier.testSignals.ListeningEnd.WaitOrTimeout()
-		require.Equal(t, componentstatus.ShuttingDown, riversharedtest.WaitOrTimeout(t, bundle.statusUpdateChan))
-		require.Equal(t, componentstatus.Stopped, riversharedtest.WaitOrTimeout(t, bundle.statusUpdateChan))
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {
 		t.Parallel()
 
-		notifier, bundle := setup(t)
+		notifier, _ := setup(t)
 		notifier.Logger = riversharedtest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
 		notifier.testSignals = notifierTestSignals{}    // deinit so channels don't fill
-
-		t.Cleanup(riverinternaltest.DiscardContinuously(bundle.statusUpdateChan))
 
 		startstoptest.Stress(ctx, t, notifier)
 	})
