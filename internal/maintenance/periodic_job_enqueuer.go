@@ -268,7 +268,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 
 			s.insertBatch(ctx, insertParamsMany, insertParamsUnique)
 
-			if len(insertParamsMany) > 0 {
+			if len(insertParamsMany) > 0 || len(insertParamsUnique) > 0 {
 				s.Logger.DebugContext(ctx, s.Name+": Inserted RunOnStart jobs", "num_jobs", len(insertParamsMany)+len(insertParamsUnique))
 			}
 		}
@@ -300,7 +300,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 					defer s.mu.RUnlock()
 
 					for _, periodicJob := range s.periodicJobs {
-						if !periodicJob.nextRunAt.Before(nowWithMargin) {
+						if periodicJob.nextRunAt.IsZero() || !periodicJob.nextRunAt.Before(nowWithMargin) {
 							continue
 						}
 
@@ -405,6 +405,7 @@ func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany 
 		s.Logger.ErrorContext(ctx, s.Name+": Error committing transaction", "error", err.Error())
 		return
 	}
+
 	s.TestSignals.InsertedJobs.Signal(struct{}{})
 }
 
@@ -427,6 +428,8 @@ func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, c
 	return insertParams, uniqueOpts, true
 }
 
+const periodicJobEnqueuerVeryLongDuration = 24 * time.Hour
+
 func (s *PeriodicJobEnqueuer) timeUntilNextRun() time.Duration {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -434,7 +437,7 @@ func (s *PeriodicJobEnqueuer) timeUntilNextRun() time.Duration {
 	// With no configured jobs, just return a big duration for the loop to block
 	// on.
 	if len(s.periodicJobs) < 1 {
-		return 24 * time.Hour
+		return periodicJobEnqueuerVeryLongDuration
 	}
 
 	var (
@@ -443,6 +446,14 @@ func (s *PeriodicJobEnqueuer) timeUntilNextRun() time.Duration {
 	)
 
 	for _, periodicJob := range s.periodicJobs {
+		// Jobs may have been added after service start, but before this
+		// function runs for the first time. They're not scheduled properly yet,
+		// but they will be soon, at which point this function will run again.
+		// Skip them for now.
+		if periodicJob.nextRunAt.IsZero() {
+			continue
+		}
+
 		// In case we detect a job that should've run before now, immediately short
 		// circuit with a 0 duration. This avoids needlessly iterating through the
 		// rest of the loop when we already know we're overdue for the next job.
@@ -453,6 +464,12 @@ func (s *PeriodicJobEnqueuer) timeUntilNextRun() time.Duration {
 		if firstNextRunAt.IsZero() || periodicJob.nextRunAt.Before(firstNextRunAt) {
 			firstNextRunAt = periodicJob.nextRunAt
 		}
+	}
+
+	// Only encountered unscheduled jobs (see comment above). Don't schedule
+	// anything for now.
+	if firstNextRunAt.IsZero() {
+		return periodicJobEnqueuerVeryLongDuration
 	}
 
 	return firstNextRunAt.Sub(now)
