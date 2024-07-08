@@ -164,7 +164,7 @@ func DrainContinuously[T any](drainChan <-chan T) func() []T {
 func TestDB(ctx context.Context, tb testing.TB) *pgxpool.Pool {
 	tb.Helper()
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, riversharedtest.WaitTimeout())
 	defer cancel()
 
 	testPool, err := dbManager.Acquire(ctx)
