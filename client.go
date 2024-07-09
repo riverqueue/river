@@ -205,10 +205,17 @@ type Config struct {
 	// effect of making them slower. It should not be used outside of test
 	// suites.
 	//
-	// For example, queue maintenance services normally stagger their startup
-	// with a random jittered sleep so they don't all try to work at the same
-	// time. This is nice in production, but makes starting and stopping the
-	// client in a test case slower.
+	// Specific differences in the client's operation:
+	//
+	// * Queue maintenance services normally stagger their startup with a random
+	//   jittered sleep so they don't all try to work at the same time. This is
+	//   nice in production, but makes starting and stopping the client in a test
+	//   case slower. TestOnly disables this jitter.
+	//
+	// * Jobs are normally completed in batches, with the completer pausing
+	//   briefly on an incoming job in case more completions come in that can be
+	//   added to the batch. The pause adds overhead to test cases waiting for
+	//   jobs to complete, so TestOnly causes completions to run immediately.
 	TestOnly bool
 
 	// Workers is a bundle of registered job workers.
@@ -507,9 +514,22 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			return nil, errMissingDatabasePoolWithQueues
 		}
 
-		client.completer = jobcompleter.NewBatchCompleter(archetype, driver.GetExecutor(), nil)
+		// The batch completer is much faster when completing many jobs, but it
+		// pauses before completing jobs, waiting for more potential completions
+		// to come in which can be added to the batch. This is good for live
+		// environments but not as good for tests, where it adds some delay to
+		// every test case waiting for a job completion. With TestOnly on, use
+		// the async completer instead, which despite its name, starts
+		// incoming completions immediately by doing them in a goroutine.
+		if config.TestOnly {
+			client.completer = jobcompleter.NewAsyncCompleter(archetype, driver.GetExecutor(), nil)
+		} else {
+			client.completer = jobcompleter.NewBatchCompleter(archetype, driver.GetExecutor(), nil)
+		}
+		client.services = append(client.services, client.completer)
+
 		client.subscriptionManager = newSubscriptionManager(archetype, nil)
-		client.services = append(client.services, client.completer, client.subscriptionManager)
+		client.services = append(client.services, client.subscriptionManager)
 
 		if driver.SupportsListener() {
 			// In poll only mode, we don't try to initialize a notifier that
