@@ -21,7 +21,6 @@ import (
 	"github.com/robfig/cron/v3"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/componentstatus"
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
@@ -37,27 +36,6 @@ import (
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
-
-func waitForClientHealthy(ctx context.Context, t *testing.T, statusUpdateCh <-chan componentstatus.ClientSnapshot) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	for {
-		select {
-		case status := <-statusUpdateCh:
-			t.Logf("Client status: elector=%d notifier=%d producers=%+v", status.Elector, status.Notifier, status.Producers)
-			if status.Healthy() {
-				return
-			}
-		case <-ctx.Done():
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				t.Fatal("exceeded deadline waiting for client to become ready")
-			}
-			return
-		}
-	}
-}
 
 type noOpArgs struct {
 	Name string `json:"name"`
@@ -305,9 +283,8 @@ func Test_Client(t *testing.T) {
 			return nil
 		}))
 
-		statusUpdateCh := client.monitor.RegisterUpdates()
 		startClient(ctx, t, client)
-		waitForClientHealthy(ctx, t, statusUpdateCh)
+		riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
 
 		queueName := "new_queue"
 		err := client.Queues().Add(queueName, QueueConfig{
@@ -449,10 +426,9 @@ func Test_Client(t *testing.T) {
 			return ctx.Err()
 		}))
 
-		statusUpdateCh := client.monitor.RegisterUpdates()
 		subscribeChan := subscribe(t, client)
 		startClient(ctx, t, client)
-		waitForClientHealthy(ctx, t, statusUpdateCh)
+		riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
 
 		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
 		require.NoError(t, err)
@@ -1409,10 +1385,9 @@ func Test_Client_Insert(t *testing.T) {
 		config.FetchCooldown = 5 * time.Second
 		config.FetchPollInterval = 5 * time.Second
 		client := newTestClient(t, bundle.dbPool, config)
-		statusUpdateCh := client.monitor.RegisterUpdates()
 
 		startClient(ctx, t, client)
-		waitForClientHealthy(ctx, t, statusUpdateCh)
+		riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
 
 		_, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{Queue: "a", ScheduledAt: time.Now().Add(1 * time.Hour)})
 		require.NoError(t, err)
@@ -1635,10 +1610,9 @@ func Test_Client_InsertMany(t *testing.T) {
 		config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: 2}, "another_queue": {MaxWorkers: 1}}
 
 		client := newTestClient(t, bundle.dbPool, config)
-		statusUpdateCh := client.monitor.RegisterUpdates()
 
 		startClient(ctx, t, client)
-		waitForClientHealthy(ctx, t, statusUpdateCh)
+		riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
 
 		count, err := client.InsertMany(ctx, []InsertManyParams{
 			{Args: callbackArgs{}},
@@ -1684,10 +1658,9 @@ func Test_Client_InsertMany(t *testing.T) {
 		config.FetchCooldown = 5 * time.Second
 		config.FetchPollInterval = 5 * time.Second
 		client := newTestClient(t, bundle.dbPool, config)
-		statusUpdateCh := client.monitor.RegisterUpdates()
 
 		startClient(ctx, t, client)
-		waitForClientHealthy(ctx, t, statusUpdateCh)
+		riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
 
 		count, err := client.InsertMany(ctx, []InsertManyParams{
 			{Args: noOpArgs{}, InsertOpts: &InsertOpts{Queue: "a", ScheduledAt: time.Now().Add(1 * time.Hour)}},
@@ -3637,10 +3610,9 @@ func Test_Client_InsertTriggersImmediateWork(t *testing.T) {
 	config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}, "another_queue": {MaxWorkers: 1}}
 
 	client := newTestClient(t, dbPool, config)
-	statusUpdateCh := client.monitor.RegisterUpdates()
 
 	startClient(ctx, t, client)
-	waitForClientHealthy(ctx, t, statusUpdateCh)
+	riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
 
 	insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 	require.NoError(err)
@@ -3688,9 +3660,8 @@ func Test_Client_InsertNotificationsAreDeduplicatedAndDebounced(t *testing.T) {
 	config.Queues = map[string]QueueConfig{"queue1": {MaxWorkers: 1}, "queue2": {MaxWorkers: 1}, "queue3": {MaxWorkers: 1}}
 	client := newTestClient(t, dbPool, config)
 
-	statusUpdateCh := client.monitor.RegisterUpdates()
 	startClient(ctx, t, client)
-	waitForClientHealthy(ctx, t, statusUpdateCh)
+	riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
 
 	type insertPayload struct {
 		Queue string `json:"queue"`

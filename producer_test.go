@@ -10,7 +10,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/componentstatus"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/notifier"
@@ -81,10 +80,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 		return nil
 	}))
 
-	ignoreNotifierStatusUpdates := func(componentstatus.Status) {}
-	notifier := notifier.New(archetype, listener, ignoreNotifierStatusUpdates)
-
-	ignoreStatusUpdates := func(queue string, status componentstatus.Status) {}
+	notifier := notifier.New(archetype, listener)
 
 	producer := newProducer(archetype, exec, &producerConfig{
 		ClientID:     testClientID,
@@ -101,7 +97,6 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 		QueueReportInterval: queueReportIntervalDefault,
 		RetryPolicy:         &DefaultClientRetryPolicy{},
 		SchedulerInterval:   maintenance.JobSchedulerIntervalDefault,
-		StatusFunc:          ignoreStatusUpdates,
 		Workers:             workers,
 	})
 
@@ -188,7 +183,6 @@ func TestProducer_PollOnly(t *testing.T) {
 			QueueReportInterval: queueReportIntervalDefault,
 			RetryPolicy:         &DefaultClientRetryPolicy{},
 			SchedulerInterval:   riverinternaltest.SchedulerShortInterval,
-			StatusFunc:          func(queue string, status componentstatus.Status) {},
 			Workers:             NewWorkers(),
 		}), jobUpdates
 	})
@@ -215,7 +209,7 @@ func TestProducer_WithNotifier(t *testing.T) {
 			t.Cleanup(completer.Stop)
 		}
 
-		notifier := notifier.New(archetype, listener, func(componentstatus.Status) {})
+		notifier := notifier.New(archetype, listener)
 		{
 			require.NoError(t, notifier.Start(ctx))
 			t.Cleanup(notifier.Stop)
@@ -235,7 +229,6 @@ func TestProducer_WithNotifier(t *testing.T) {
 			QueueReportInterval: queueReportIntervalDefault,
 			RetryPolicy:         &DefaultClientRetryPolicy{},
 			SchedulerInterval:   riverinternaltest.SchedulerShortInterval,
-			StatusFunc:          func(queue string, status componentstatus.Status) {},
 			Workers:             NewWorkers(),
 		}), jobUpdates
 	})
