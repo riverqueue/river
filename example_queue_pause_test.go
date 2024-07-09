@@ -63,7 +63,8 @@ func Example_queuePause() {
 			unreliableQueue: {MaxWorkers: 10},
 			reliableQueue:   {MaxWorkers: 10},
 		},
-		Workers: workers,
+		TestOnly: true, // suitable only for use in tests; remove for live environments
+		Workers:  workers,
 	})
 	if err != nil {
 		panic(err)

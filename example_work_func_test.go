@@ -47,7 +47,8 @@ func Example_workFunc() {
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: 100},
 		},
-		Workers: workers,
+		TestOnly: true, // suitable only for use in tests; remove for live environments
+		Workers:  workers,
 	})
 	if err != nil {
 		panic(err)
