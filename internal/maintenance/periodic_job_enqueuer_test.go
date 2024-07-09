@@ -366,15 +366,15 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		svc.Add(
-			&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s", false)},
+			&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
 		)
 		svc.Add(
-			&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s_start", false), RunOnStart: true},
+			&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), RunOnStart: true},
 		)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_5s", 0)
-		requireNJobs(t, bundle.exec, "periodic_job_5s_start", 1)
+		requireNJobs(t, bundle.exec, "periodic_job_500ms", 0)
+		requireNJobs(t, bundle.exec, "periodic_job_500ms_start", 1)
 	})
 
 	t.Run("AddManyAfterStart", func(t *testing.T) {
@@ -385,13 +385,13 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		svc.AddMany([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s", false)},
-			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s_start", false), RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), RunOnStart: true},
 		})
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_5s", 0)
-		requireNJobs(t, bundle.exec, "periodic_job_5s_start", 1)
+		requireNJobs(t, bundle.exec, "periodic_job_500ms", 0)
+		requireNJobs(t, bundle.exec, "periodic_job_500ms_start", 1)
 	})
 
 	t.Run("ClearAfterStart", func(t *testing.T) {
@@ -402,20 +402,20 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		handles := svc.AddMany([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s", false)},
-			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s_start", false), RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), RunOnStart: true},
 		})
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_5s", 0)
-		requireNJobs(t, bundle.exec, "periodic_job_5s_start", 1)
+		requireNJobs(t, bundle.exec, "periodic_job_500ms", 0)
+		requireNJobs(t, bundle.exec, "periodic_job_500ms_start", 1)
 
 		svc.Clear()
 
 		require.Empty(t, svc.periodicJobs)
 
 		handleAfterClear := svc.Add(
-			&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s_new", false)},
+			&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_new", false)},
 		)
 
 		// Handles are not reused.
@@ -431,13 +431,13 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		handles := svc.AddMany([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s", false)},
-			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s_start", false), RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), RunOnStart: true},
 		})
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_5s", 0)
-		requireNJobs(t, bundle.exec, "periodic_job_5s_start", 1)
+		requireNJobs(t, bundle.exec, "periodic_job_500ms", 0)
+		requireNJobs(t, bundle.exec, "periodic_job_500ms_start", 1)
 
 		svc.Remove(handles[1])
 
@@ -452,15 +452,15 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		handles := svc.AddMany([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s", false)},
-			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s_other", false)},
-			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s_start", false), RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_other", false)},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), RunOnStart: true},
 		})
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_5s", 0)
-		requireNJobs(t, bundle.exec, "periodic_job_5s_other", 0)
-		requireNJobs(t, bundle.exec, "periodic_job_5s_start", 1)
+		requireNJobs(t, bundle.exec, "periodic_job_500ms", 0)
+		requireNJobs(t, bundle.exec, "periodic_job_500ms_other", 0)
+		requireNJobs(t, bundle.exec, "periodic_job_500ms_start", 1)
 
 		svc.RemoveMany([]rivertype.PeriodicJobHandle{handles[1], handles[2]})
 
@@ -596,5 +596,51 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		// Should be no jobs in the DB either:
 		requireNJobs(t, bundle.exec, "unique_periodic_job_500ms", 0)
+	})
+
+	t.Run("TimeUntilNextRun", func(t *testing.T) {
+		t.Parallel()
+
+		svc, _ := setup(t)
+
+		now := svc.Time.StubNowUTC(time.Now())
+
+		// no jobs
+		require.Equal(t, periodicJobEnqueuerVeryLongDuration, svc.timeUntilNextRun())
+
+		svc.periodicJobs = map[rivertype.PeriodicJobHandle]*PeriodicJob{
+			1: {nextRunAt: now.Add(2 * time.Hour)},
+			2: {nextRunAt: now.Add(1 * time.Hour)},
+			3: {nextRunAt: now.Add(3 * time.Hour)},
+		}
+
+		// pick job with soonest next run
+		require.Equal(t, 1*time.Hour, svc.timeUntilNextRun())
+
+		svc.periodicJobs = map[rivertype.PeriodicJobHandle]*PeriodicJob{
+			1: {nextRunAt: now.Add(2 * time.Hour)},
+			2: {nextRunAt: now.Add(-1 * time.Hour)},
+			3: {nextRunAt: now.Add(3 * time.Hour)},
+		}
+
+		// job is already behind so time until next run is 0
+		require.Equal(t, time.Duration(0), svc.timeUntilNextRun())
+
+		svc.periodicJobs = map[rivertype.PeriodicJobHandle]*PeriodicJob{
+			1: {},
+			2: {},
+		}
+
+		// jobs not scheduled yet
+		require.Equal(t, periodicJobEnqueuerVeryLongDuration, svc.timeUntilNextRun())
+
+		svc.periodicJobs = map[rivertype.PeriodicJobHandle]*PeriodicJob{
+			1: {},
+			2: {nextRunAt: now.Add(1 * time.Hour)},
+			3: {},
+		}
+
+		// pick job with soonest next run amongst some not scheduled yet
+		require.Equal(t, 1*time.Hour, svc.timeUntilNextRun())
 	})
 }
