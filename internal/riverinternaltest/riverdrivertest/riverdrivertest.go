@@ -180,6 +180,20 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		})
 	})
 
+	t.Run("ColumnExists", func(t *testing.T) {
+		t.Parallel()
+
+		exec, _ := setup(ctx, t)
+
+		exists, err := exec.ColumnExists(ctx, "river_job", "id")
+		require.NoError(t, err)
+		require.True(t, exists)
+
+		exists, err = exec.ColumnExists(ctx, "river_job", "does_not_exist")
+		require.NoError(t, err)
+		require.False(t, exists)
+	})
+
 	t.Run("Exec", func(t *testing.T) {
 		t.Parallel()
 
@@ -1877,7 +1891,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		require.NoError(t, err)
 	}
 
-	t.Run("MigrationDeleteByVersionMany", func(t *testing.T) {
+	t.Run("MigrationDeleteAssumingMainMany", func(t *testing.T) {
 		t.Parallel()
 
 		exec, _ := setup(ctx, t)
@@ -1887,18 +1901,53 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		migration1 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
 		migration2 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
 
-		migrations, err := exec.MigrationDeleteByVersionMany(ctx, []int{
+		// This query is designed to work before the `line` column was added to
+		// the `river_migration` table. These tests will be operating on a fully
+		// migrated database, so drop the column in this transaction to make
+		// sure we are really checking that this operation works as expected.
+		_, err := exec.Exec(ctx, "ALTER TABLE river_migration DROP COLUMN line")
+		require.NoError(t, err)
+
+		migrations, err := exec.MigrationDeleteAssumingMainMany(ctx, []int{
 			migration1.Version,
 			migration2.Version,
 		})
 		require.NoError(t, err)
 		require.Len(t, migrations, 2)
 		slices.SortFunc(migrations, func(a, b *riverdriver.Migration) int { return a.Version - b.Version })
+		require.Equal(t, riverdriver.MigrationLineMain, migrations[0].Line)
 		require.Equal(t, migration1.Version, migrations[0].Version)
+		require.Equal(t, riverdriver.MigrationLineMain, migrations[1].Line)
 		require.Equal(t, migration2.Version, migrations[1].Version)
 	})
 
-	t.Run("MigrationGetAll", func(t *testing.T) {
+	t.Run("MigrationDeleteByLineAndVersionMany", func(t *testing.T) {
+		t.Parallel()
+
+		exec, _ := setup(ctx, t)
+
+		truncateMigrations(ctx, t, exec)
+
+		// not touched
+		_ = testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
+
+		migration1 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{Line: ptrutil.Ptr("alternate")})
+		migration2 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{Line: ptrutil.Ptr("alternate")})
+
+		migrations, err := exec.MigrationDeleteByLineAndVersionMany(ctx, "alternate", []int{
+			migration1.Version,
+			migration2.Version,
+		})
+		require.NoError(t, err)
+		require.Len(t, migrations, 2)
+		slices.SortFunc(migrations, func(a, b *riverdriver.Migration) int { return a.Version - b.Version })
+		require.Equal(t, "alternate", migrations[0].Line)
+		require.Equal(t, migration1.Version, migrations[0].Version)
+		require.Equal(t, "alternate", migrations[1].Line)
+		require.Equal(t, migration2.Version, migrations[1].Version)
+	})
+
+	t.Run("MigrationGetAllAssumingMain", func(t *testing.T) {
 		t.Parallel()
 
 		exec, _ := setup(ctx, t)
@@ -1908,7 +1957,14 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		migration1 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
 		migration2 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
 
-		migrations, err := exec.MigrationGetAll(ctx)
+		// This query is designed to work before the `line` column was added to
+		// the `river_migration` table. These tests will be operating on a fully
+		// migrated database, so drop the column in this transaction to make
+		// sure we are really checking that this operation works as expected.
+		_, err := exec.Exec(ctx, "ALTER TABLE river_migration DROP COLUMN line")
+		require.NoError(t, err)
+
+		migrations, err := exec.MigrationGetAllAssumingMain(ctx)
 		require.NoError(t, err)
 		require.Len(t, migrations, 2)
 		require.Equal(t, migration1.Version, migrations[0].Version)
@@ -1918,6 +1974,34 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		migration1Fetched := migrations[0]
 		require.Equal(t, migration1.ID, migration1Fetched.ID)
 		requireEqualTime(t, migration1.CreatedAt, migration1Fetched.CreatedAt)
+		require.Equal(t, riverdriver.MigrationLineMain, migration1Fetched.Line)
+		require.Equal(t, migration1.Version, migration1Fetched.Version)
+	})
+
+	t.Run("MigrationGetByLine", func(t *testing.T) {
+		t.Parallel()
+
+		exec, _ := setup(ctx, t)
+
+		truncateMigrations(ctx, t, exec)
+
+		// not returned
+		_ = testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
+
+		migration1 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{Line: ptrutil.Ptr("alternate")})
+		migration2 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{Line: ptrutil.Ptr("alternate")})
+
+		migrations, err := exec.MigrationGetByLine(ctx, "alternate")
+		require.NoError(t, err)
+		require.Len(t, migrations, 2)
+		require.Equal(t, migration1.Version, migrations[0].Version)
+		require.Equal(t, migration2.Version, migrations[1].Version)
+
+		// Check the full properties of one of the migrations.
+		migration1Fetched := migrations[0]
+		require.Equal(t, migration1.ID, migration1Fetched.ID)
+		requireEqualTime(t, migration1.CreatedAt, migration1Fetched.CreatedAt)
+		require.Equal(t, "alternate", migration1Fetched.Line)
 		require.Equal(t, migration1.Version, migration1Fetched.Version)
 	})
 
@@ -1928,10 +2012,35 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 		truncateMigrations(ctx, t, exec)
 
-		migrations, err := exec.MigrationInsertMany(ctx, []int{1, 2})
+		migrations, err := exec.MigrationInsertMany(ctx, "alternate", []int{1, 2})
 		require.NoError(t, err)
 		require.Len(t, migrations, 2)
+		require.Equal(t, "alternate", migrations[0].Line)
 		require.Equal(t, 1, migrations[0].Version)
+		require.Equal(t, "alternate", migrations[1].Line)
+		require.Equal(t, 2, migrations[1].Version)
+	})
+
+	t.Run("MigrationInsertManyAssumingMain", func(t *testing.T) {
+		t.Parallel()
+
+		exec, _ := setup(ctx, t)
+
+		truncateMigrations(ctx, t, exec)
+
+		// This query is designed to work before the `line` column was added to
+		// the `river_migration` table. These tests will be operating on a fully
+		// migrated database, so drop the column in this transaction to make
+		// sure we are really checking that this operation works as expected.
+		_, err := exec.Exec(ctx, "ALTER TABLE river_migration DROP COLUMN line")
+		require.NoError(t, err)
+
+		migrations, err := exec.MigrationInsertManyAssumingMain(ctx, []int{1, 2})
+		require.NoError(t, err)
+		require.Len(t, migrations, 2)
+		require.Equal(t, riverdriver.MigrationLineMain, migrations[0].Line)
+		require.Equal(t, 1, migrations[0].Version)
+		require.Equal(t, riverdriver.MigrationLineMain, migrations[1].Line)
 		require.Equal(t, 2, migrations[1].Version)
 	})
 

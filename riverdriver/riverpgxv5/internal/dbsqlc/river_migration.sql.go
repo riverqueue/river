@@ -7,23 +7,53 @@ package dbsqlc
 
 import (
 	"context"
+	"time"
 )
 
-const riverMigrationDeleteByVersionMany = `-- name: RiverMigrationDeleteByVersionMany :many
-DELETE FROM river_migration
-WHERE version = any($1::bigint[])
-RETURNING id, created_at, version
+const columnExists = `-- name: ColumnExists :one
+SELECT EXISTS (
+    SELECT column_name
+    FROM information_schema.columns 
+    WHERE table_name = $1 and column_name = $2
+)
 `
 
-func (q *Queries) RiverMigrationDeleteByVersionMany(ctx context.Context, db DBTX, version []int64) ([]*RiverMigration, error) {
-	rows, err := db.Query(ctx, riverMigrationDeleteByVersionMany, version)
+type ColumnExistsParams struct {
+	TableName  interface{}
+	ColumnName interface{}
+}
+
+func (q *Queries) ColumnExists(ctx context.Context, db DBTX, arg *ColumnExistsParams) (bool, error) {
+	row := db.QueryRow(ctx, columnExists, arg.TableName, arg.ColumnName)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const riverMigrationDeleteAssumingMainMany = `-- name: RiverMigrationDeleteAssumingMainMany :many
+DELETE FROM river_migration
+WHERE version = any($1::bigint[])
+RETURNING
+    id,
+    created_at,
+    version
+`
+
+type RiverMigrationDeleteAssumingMainManyRow struct {
+	ID        int64
+	CreatedAt time.Time
+	Version   int64
+}
+
+func (q *Queries) RiverMigrationDeleteAssumingMainMany(ctx context.Context, db DBTX, version []int64) ([]*RiverMigrationDeleteAssumingMainManyRow, error) {
+	rows, err := db.Query(ctx, riverMigrationDeleteAssumingMainMany, version)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []*RiverMigration
+	var items []*RiverMigrationDeleteAssumingMainManyRow
 	for rows.Next() {
-		var i RiverMigration
+		var i RiverMigrationDeleteAssumingMainManyRow
 		if err := rows.Scan(&i.ID, &i.CreatedAt, &i.Version); err != nil {
 			return nil, err
 		}
@@ -35,14 +65,20 @@ func (q *Queries) RiverMigrationDeleteByVersionMany(ctx context.Context, db DBTX
 	return items, nil
 }
 
-const riverMigrationGetAll = `-- name: RiverMigrationGetAll :many
-SELECT id, created_at, version
-FROM river_migration
-ORDER BY version
+const riverMigrationDeleteByLineAndVersionMany = `-- name: RiverMigrationDeleteByLineAndVersionMany :many
+DELETE FROM river_migration
+WHERE line = $1
+    AND version = any($2::bigint[])
+RETURNING id, created_at, line, version
 `
 
-func (q *Queries) RiverMigrationGetAll(ctx context.Context, db DBTX) ([]*RiverMigration, error) {
-	rows, err := db.Query(ctx, riverMigrationGetAll)
+type RiverMigrationDeleteByLineAndVersionManyParams struct {
+	Line    string
+	Version []int64
+}
+
+func (q *Queries) RiverMigrationDeleteByLineAndVersionMany(ctx context.Context, db DBTX, arg *RiverMigrationDeleteByLineAndVersionManyParams) ([]*RiverMigration, error) {
+	rows, err := db.Query(ctx, riverMigrationDeleteByLineAndVersionMany, arg.Line, arg.Version)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +86,84 @@ func (q *Queries) RiverMigrationGetAll(ctx context.Context, db DBTX) ([]*RiverMi
 	var items []*RiverMigration
 	for rows.Next() {
 		var i RiverMigration
+		if err := rows.Scan(
+			&i.ID,
+			&i.CreatedAt,
+			&i.Line,
+			&i.Version,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const riverMigrationGetAllAssumingMain = `-- name: RiverMigrationGetAllAssumingMain :many
+SELECT
+    id,
+    created_at,
+    version
+FROM river_migration
+ORDER BY version
+`
+
+type RiverMigrationGetAllAssumingMainRow struct {
+	ID        int64
+	CreatedAt time.Time
+	Version   int64
+}
+
+// This is a compatibility query for getting existing migrations before the
+// `line` column was added to the table in version 005. We need to make sure to
+// only select non-line properties so the query doesn't error on older schemas.
+// (Even if we use `SELECT *` below, sqlc materializes it to a list of column
+// names in the generated query.)
+func (q *Queries) RiverMigrationGetAllAssumingMain(ctx context.Context, db DBTX) ([]*RiverMigrationGetAllAssumingMainRow, error) {
+	rows, err := db.Query(ctx, riverMigrationGetAllAssumingMain)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverMigrationGetAllAssumingMainRow
+	for rows.Next() {
+		var i RiverMigrationGetAllAssumingMainRow
 		if err := rows.Scan(&i.ID, &i.CreatedAt, &i.Version); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const riverMigrationGetByLine = `-- name: RiverMigrationGetByLine :many
+SELECT id, created_at, line, version
+FROM river_migration
+WHERE line = $1
+ORDER BY version
+`
+
+func (q *Queries) RiverMigrationGetByLine(ctx context.Context, db DBTX, line string) ([]*RiverMigration, error) {
+	rows, err := db.Query(ctx, riverMigrationGetByLine, line)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverMigration
+	for rows.Next() {
+		var i RiverMigration
+		if err := rows.Scan(
+			&i.ID,
+			&i.CreatedAt,
+			&i.Line,
+			&i.Version,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)
@@ -63,30 +176,49 @@ func (q *Queries) RiverMigrationGetAll(ctx context.Context, db DBTX) ([]*RiverMi
 
 const riverMigrationInsert = `-- name: RiverMigrationInsert :one
 INSERT INTO river_migration (
+    line,
     version
 ) VALUES (
-    $1
-) RETURNING id, created_at, version
+    $1,
+    $2
+) RETURNING id, created_at, line, version
 `
 
-func (q *Queries) RiverMigrationInsert(ctx context.Context, db DBTX, version int64) (*RiverMigration, error) {
-	row := db.QueryRow(ctx, riverMigrationInsert, version)
+type RiverMigrationInsertParams struct {
+	Line    string
+	Version int64
+}
+
+func (q *Queries) RiverMigrationInsert(ctx context.Context, db DBTX, arg *RiverMigrationInsertParams) (*RiverMigration, error) {
+	row := db.QueryRow(ctx, riverMigrationInsert, arg.Line, arg.Version)
 	var i RiverMigration
-	err := row.Scan(&i.ID, &i.CreatedAt, &i.Version)
+	err := row.Scan(
+		&i.ID,
+		&i.CreatedAt,
+		&i.Line,
+		&i.Version,
+	)
 	return &i, err
 }
 
 const riverMigrationInsertMany = `-- name: RiverMigrationInsertMany :many
 INSERT INTO river_migration (
+    line,
     version
 )
 SELECT
-    unnest($1::bigint[])
-RETURNING id, created_at, version
+    $1,
+    unnest($2::bigint[])
+RETURNING id, created_at, line, version
 `
 
-func (q *Queries) RiverMigrationInsertMany(ctx context.Context, db DBTX, version []int64) ([]*RiverMigration, error) {
-	rows, err := db.Query(ctx, riverMigrationInsertMany, version)
+type RiverMigrationInsertManyParams struct {
+	Line    string
+	Version []int64
+}
+
+func (q *Queries) RiverMigrationInsertMany(ctx context.Context, db DBTX, arg *RiverMigrationInsertManyParams) ([]*RiverMigration, error) {
+	rows, err := db.Query(ctx, riverMigrationInsertMany, arg.Line, arg.Version)
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +226,49 @@ func (q *Queries) RiverMigrationInsertMany(ctx context.Context, db DBTX, version
 	var items []*RiverMigration
 	for rows.Next() {
 		var i RiverMigration
+		if err := rows.Scan(
+			&i.ID,
+			&i.CreatedAt,
+			&i.Line,
+			&i.Version,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const riverMigrationInsertManyAssumingMain = `-- name: RiverMigrationInsertManyAssumingMain :many
+INSERT INTO river_migration (
+    version
+)
+SELECT
+    unnest($1::bigint[])
+RETURNING
+    id,
+    created_at,
+    version
+`
+
+type RiverMigrationInsertManyAssumingMainRow struct {
+	ID        int64
+	CreatedAt time.Time
+	Version   int64
+}
+
+func (q *Queries) RiverMigrationInsertManyAssumingMain(ctx context.Context, db DBTX, version []int64) ([]*RiverMigrationInsertManyAssumingMainRow, error) {
+	rows, err := db.Query(ctx, riverMigrationInsertManyAssumingMain, version)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverMigrationInsertManyAssumingMainRow
+	for rows.Next() {
+		var i RiverMigrationInsertManyAssumingMainRow
 		if err := rows.Scan(&i.ID, &i.CreatedAt, &i.Version); err != nil {
 			return nil, err
 		}

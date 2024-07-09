@@ -4,6 +4,7 @@ package rivermigrate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -24,6 +25,11 @@ import (
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivershared/util/valutil"
 )
+
+// The migrate version where the `line` column was added. Meaningful in that the
+// migrator has to behave a little differently depending on whether it's working
+// with versions before or after this boundary.
+const migrateVersionLineColumnAdded = 5
 
 // Migration is a bundled migration containing a version (e.g. 1, 2, 3), and SQL
 // for up and down directions.
@@ -324,9 +330,21 @@ func (m *Migrator[TTx]) migrateDown(ctx context.Context, exec riverdriver.Execut
 		return res, nil
 	}
 
-	if !opts.DryRun {
-		if _, err := exec.MigrationDeleteByVersionMany(ctx, sliceutil.Map(res.Versions, migrateVersionToInt)); err != nil {
-			return nil, fmt.Errorf("error deleting migration rows for versions %+v: %w", res.Versions, err)
+	if !opts.DryRun && len(res.Versions) > 0 {
+		versions := sliceutil.Map(res.Versions, migrateVersionToInt)
+
+		// Version 005 is hard-coded here because that's the version in which
+		// the migration `line` comes in. If migration to a point equal or above
+		// 005, we can remove migrations with a line included, but otherwise we
+		// must omit the `line` column from queries because it doesn't exist.
+		if m.line == riverdriver.MigrationLineMain && slices.Min(versions) <= migrateVersionLineColumnAdded {
+			if _, err := exec.MigrationDeleteAssumingMainMany(ctx, versions); err != nil {
+				return nil, fmt.Errorf("error inserting migration rows for versions %+v assuming main: %w", res.Versions, err)
+			}
+		} else {
+			if _, err := exec.MigrationDeleteByLineAndVersionMany(ctx, m.line, versions); err != nil {
+				return nil, fmt.Errorf("error deleting migration rows for versions %+v on line %q: %w", res.Versions, m.line, err)
+			}
 		}
 	}
 
@@ -353,9 +371,24 @@ func (m *Migrator[TTx]) migrateUp(ctx context.Context, exec riverdriver.Executor
 		return nil, err
 	}
 
-	if opts == nil || !opts.DryRun {
-		if _, err := exec.MigrationInsertMany(ctx, sliceutil.Map(res.Versions, migrateVersionToInt)); err != nil {
-			return nil, fmt.Errorf("error inserting migration rows for versions %+v: %w", res.Versions, err)
+	if (opts == nil || !opts.DryRun) && len(res.Versions) > 0 {
+		versions := sliceutil.Map(res.Versions, migrateVersionToInt)
+
+		// Version 005 is hard-coded here because that's the version in which
+		// the migration `line` comes in. If migration to a point equal or above
+		// 005, we can insert migrations with a line included, but otherwise we
+		// must omit the `line` column from queries because it doesn't exist.
+		if m.line == riverdriver.MigrationLineMain && slices.Max(versions) < migrateVersionLineColumnAdded {
+			if _, err := exec.MigrationInsertManyAssumingMain(ctx, versions); err != nil {
+				return nil, fmt.Errorf("error inserting migration rows for versions %+v assuming main: %w", res.Versions, err)
+			}
+		} else {
+			if _, err := exec.MigrationInsertMany(ctx,
+				m.line,
+				versions,
+			); err != nil {
+				return nil, fmt.Errorf("error inserting migration rows for versions %+v on line %q: %w", res.Versions, m.line, err)
+			}
 		}
 	}
 
@@ -480,17 +513,39 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Ex
 // because otherwise the existing transaction would become aborted on an
 // unsuccessful `river_migration` check.)
 func (m *Migrator[TTx]) existingMigrations(ctx context.Context, exec riverdriver.Executor) ([]*riverdriver.Migration, error) {
-	exists, err := exec.TableExists(ctx, "river_migration")
+	migrateTableExists, err := exec.TableExists(ctx, "river_migration")
 	if err != nil {
 		return nil, fmt.Errorf("error checking if `%s` exists: %w", "river_migration", err)
 	}
-	if !exists {
+	if !migrateTableExists {
+		if m.line != riverdriver.MigrationLineMain {
+			return nil, errors.New("can't add a non-main migration line until `river_migration` is raised; fully migrate the main migration line and try again")
+		}
+
 		return nil, nil
 	}
 
-	migrations, err := exec.MigrationGetAll(ctx)
+	lineColumnExists, err := exec.ColumnExists(ctx, "river_migration", "line")
 	if err != nil {
-		return nil, fmt.Errorf("error getting existing migrations: %w", err)
+		return nil, fmt.Errorf("error checking if `%s.%s` exists: %w", "river_migration", "line", err)
+	}
+
+	if !lineColumnExists {
+		if m.line != riverdriver.MigrationLineMain {
+			return nil, errors.New("can't add a non-main migration line until `river_migration.line` is raised; fully migrate the main migration line and try again")
+		}
+
+		migrations, err := exec.MigrationGetAllAssumingMain(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("error getting existing migrations: %w", err)
+		}
+
+		return migrations, nil
+	}
+
+	migrations, err := exec.MigrationGetByLine(ctx, m.line)
+	if err != nil {
+		return nil, fmt.Errorf("error getting existing migrations for line %q: %w", m.line, err)
 	}
 
 	return migrations, nil

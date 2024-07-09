@@ -98,6 +98,10 @@ type Executor interface {
 	// subtransactions (like riverdriver/riverdatabasesql for database/sql).
 	Begin(ctx context.Context) (ExecutorTx, error)
 
+	// ColumnExists checks whether a column for a particular table exists for
+	// the schema in the current search schema.
+	ColumnExists(ctx context.Context, tableName, columnName string) (bool, error)
+
 	// Exec executes raw SQL. Used for migrations.
 	Exec(ctx context.Context, sql string) (struct{}, error)
 
@@ -129,14 +133,30 @@ type Executor interface {
 	LeaderInsert(ctx context.Context, params *LeaderInsertParams) (*Leader, error)
 	LeaderResign(ctx context.Context, params *LeaderResignParams) (bool, error)
 
-	// MigrationDeleteByVersionMany deletes many migration versions.
-	MigrationDeleteByVersionMany(ctx context.Context, versions []int) ([]*Migration, error)
+	// MigrationDeleteAssumingMainMany deletes many migrations assuming
+	// everything is on the main line. This is suitable for use in databases on
+	// a version before the `line` column exists.
+	MigrationDeleteAssumingMainMany(ctx context.Context, versions []int) ([]*Migration, error)
 
-	// MigrationGetAll gets all currently applied migrations.
-	MigrationGetAll(ctx context.Context) ([]*Migration, error)
+	// MigrationDeleteByLineAndVersionMany deletes many migration versions on a
+	// particular line.
+	MigrationDeleteByLineAndVersionMany(ctx context.Context, line string, versions []int) ([]*Migration, error)
+
+	// MigrationGetAllAssumingMain gets all migrations assuming everything is on
+	// the main line. This is suitable for use in databases on a version before
+	// the `line` column exists.
+	MigrationGetAllAssumingMain(ctx context.Context) ([]*Migration, error)
+
+	// MigrationGetByLine gets all currently applied migrations.
+	MigrationGetByLine(ctx context.Context, line string) ([]*Migration, error)
 
 	// MigrationInsertMany inserts many migration versions.
-	MigrationInsertMany(ctx context.Context, versions []int) ([]*Migration, error)
+	MigrationInsertMany(ctx context.Context, line string, versions []int) ([]*Migration, error)
+
+	// MigrationInsertManyAssumingMain inserts many migration, assuming they're
+	// on the main line. This operation is necessary for compatibility before
+	// the `line` column was added to the migrations table.
+	MigrationInsertManyAssumingMain(ctx context.Context, versions []int) ([]*Migration, error)
 
 	NotifyMany(ctx context.Context, params *NotifyManyParams) error
 	PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}, error)
@@ -374,6 +394,11 @@ type Migration struct {
 	//
 	// API is not stable. DO NOT USE.
 	CreatedAt time.Time
+
+	// Line is the migration line that the migration belongs to.
+	//
+	// API is not stable. DO NOT USE.
+	Line string
 
 	// Version is the version of the migration.
 	//
