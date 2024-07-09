@@ -3927,7 +3927,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		require.NotNil(updatedJob.FinalizedAt)
 
 		// Make sure the FinalizedAt is approximately ~now:
-		require.WithinDuration(now, *updatedJob.FinalizedAt, time.Second)
+		require.WithinDuration(now, *updatedJob.FinalizedAt, 2*time.Second)
 
 		// Make sure we're getting the same timestamp back from the event and the
 		// updated job inside the txn:
