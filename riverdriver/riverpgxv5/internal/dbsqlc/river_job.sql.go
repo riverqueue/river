@@ -36,8 +36,8 @@ updated_job AS (
     SET
         -- If the job is actively running, we want to let its current client and
         -- producer handle the cancellation. Otherwise, immediately cancel it.
-        state = CASE WHEN state = 'running'::river_job_state THEN state ELSE 'cancelled'::river_job_state END,
-        finalized_at = CASE WHEN state = 'running'::river_job_state THEN finalized_at ELSE now() END,
+        state = CASE WHEN state = 'running' THEN state ELSE 'cancelled' END,
+        finalized_at = CASE WHEN state = 'running' THEN finalized_at ELSE now() END,
         -- Mark the job as cancelled by query so that the rescuer knows not to
         -- rescue it, even if it gets stuck in the running state:
         metadata = jsonb_set(metadata, '{cancel_attempted_at}'::text[], $3::jsonb, true)
@@ -110,7 +110,7 @@ deleted_job AS (
     USING job_to_delete
     WHERE river_job.id = job_to_delete.id
         -- Do not touch running jobs:
-        AND river_job.state != 'running'::river_job_state
+        AND river_job.state != 'running'
     RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
 )
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
@@ -191,7 +191,7 @@ WITH locked_jobs AS (
     FROM
         river_job
     WHERE
-        state = 'available'::river_job_state
+        state = 'available'
         AND queue = $2::text
         AND scheduled_at <= now()
     ORDER BY
@@ -205,7 +205,7 @@ WITH locked_jobs AS (
 UPDATE
     river_job
 SET
-    state = 'running'::river_job_state,
+    state = 'running',
     attempt = river_job.attempt + 1,
     attempted_at = now(),
     attempted_by = array_append(river_job.attempted_by, $1::text)
@@ -440,7 +440,7 @@ func (q *Queries) JobGetByKindMany(ctx context.Context, db DBTX, kind []string) 
 const jobGetStuck = `-- name: JobGetStuck :many
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
 FROM river_job
-WHERE state = 'running'::river_job_state
+WHERE state = 'running'
     AND attempted_at < $1::timestamptz
 ORDER BY id
 LIMIT $2
@@ -502,16 +502,16 @@ INSERT INTO river_job(
     state,
     tags
 ) VALUES (
-    $1::jsonb,
+    $1,
     coalesce($2::timestamptz, now()),
     $3,
-    $4::text,
-    $5::smallint,
+    $4,
+    $5,
     coalesce($6::jsonb, '{}'),
-    $7::smallint,
-    $8::text,
+    $7,
+    $8,
     coalesce($9::timestamptz, now()),
-    $10::river_job_state,
+    $10,
     coalesce($11::varchar(255)[], '{}')
 ) RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
 `
@@ -645,15 +645,15 @@ INSERT INTO river_job(
     coalesce($2::smallint, 0),
     $3,
     coalesce($4::timestamptz, now()),
-    $5::jsonb[],
+    $5,
     $6,
-    $7::text,
+    $7,
     $8::smallint,
     coalesce($9::jsonb, '{}'),
-    $10::smallint,
-    $11::text,
+    $10,
+    $11,
     coalesce($12::timestamptz, now()),
-    $13::river_job_state,
+    $13,
     coalesce($14::varchar(255)[], '{}')
 ) RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
 `
@@ -762,16 +762,16 @@ WITH job_to_update AS (
 updated_job AS (
     UPDATE river_job
     SET
-        state = 'available'::river_job_state,
+        state = 'available',
         scheduled_at = now(),
         max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END,
         finalized_at = NULL
     FROM job_to_update
     WHERE river_job.id = job_to_update.id
         -- Do not touch running jobs:
-        AND river_job.state != 'running'::river_job_state
+        AND river_job.state != 'running'
         -- If the job is already available with a prior scheduled_at, leave it alone.
-        AND NOT (river_job.state = 'available'::river_job_state AND river_job.scheduled_at < now())
+        AND NOT (river_job.state = 'available' AND river_job.scheduled_at < now())
     RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
 )
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
@@ -825,7 +825,7 @@ WITH jobs_to_schedule AS (
 ),
 river_job_scheduled AS (
     UPDATE river_job
-    SET state = 'available'::river_job_state
+    SET state = 'available'
     FROM jobs_to_schedule
     WHERE river_job.id = jobs_to_schedule.id
     RETURNING river_job.id
@@ -887,7 +887,7 @@ job_to_update AS (
     SELECT river_job.id, job_to_finalized_at.finalized_at
     FROM river_job, job_to_finalized_at
     WHERE river_job.id = job_to_finalized_at.id
-        AND river_job.state = 'running'::river_job_state
+        AND river_job.state = 'running'
     FOR UPDATE
 ),
 updated_job AS (
@@ -953,7 +953,7 @@ const jobSetStateIfRunning = `-- name: JobSetStateIfRunning :one
 WITH job_to_update AS (
     SELECT
         id,
-        $1::river_job_state IN ('retryable'::river_job_state, 'scheduled'::river_job_state) AND metadata ? 'cancel_attempted_at' AS should_cancel
+        $1::river_job_state IN ('retryable', 'scheduled') AND metadata ? 'cancel_attempted_at' AS should_cancel
     FROM river_job
     WHERE id = $2::bigint
     FOR UPDATE
@@ -974,7 +974,7 @@ updated_job AS (
                             ELSE scheduled_at END
     FROM job_to_update
     WHERE river_job.id = job_to_update.id
-        AND river_job.state = 'running'::river_job_state
+        AND river_job.state = 'running'
     RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
 )
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags

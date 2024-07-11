@@ -9,18 +9,18 @@ CREATE UNLOGGED TABLE river_leader(
 
 -- name: LeaderAttemptElect :execrows
 INSERT INTO river_leader(leader_id, elected_at, expires_at)
-    VALUES (@leader_id::text, now(), now() + @ttl::interval)
+    VALUES (@leader_id, now(), now() + @ttl::interval)
 ON CONFLICT (name)
     DO NOTHING;
 
 -- name: LeaderAttemptReelect :execrows
 INSERT INTO river_leader(leader_id, elected_at, expires_at)
-    VALUES (@leader_id::text, now(), now() + @ttl::interval)
+    VALUES (@leader_id, now(), now() + @ttl::interval)
 ON CONFLICT (name)
     DO UPDATE SET
-        expires_at = now() + @ttl::interval
+        expires_at = now() + @ttl
     WHERE
-        river_leader.leader_id = @leader_id::text;
+        river_leader.leader_id = @leader_id;
 
 -- name: LeaderDeleteExpired :execrows
 DELETE FROM river_leader

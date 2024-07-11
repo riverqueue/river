@@ -26,6 +26,7 @@ RETURNING *;
 -- only select non-line properties so the query doesn't error on older schemas.
 -- (Even if we use `SELECT *` below, sqlc materializes it to a list of column
 -- names in the generated query.)
+--
 -- name: RiverMigrationGetAllAssumingMain :many
 SELECT
     id,

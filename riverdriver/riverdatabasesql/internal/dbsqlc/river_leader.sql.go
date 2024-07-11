@@ -12,7 +12,7 @@ import (
 
 const leaderAttemptElect = `-- name: LeaderAttemptElect :execrows
 INSERT INTO river_leader(leader_id, elected_at, expires_at)
-    VALUES ($1::text, now(), now() + $2::interval)
+    VALUES ($1, now(), now() + $2::interval)
 ON CONFLICT (name)
     DO NOTHING
 `
@@ -32,12 +32,12 @@ func (q *Queries) LeaderAttemptElect(ctx context.Context, db DBTX, arg *LeaderAt
 
 const leaderAttemptReelect = `-- name: LeaderAttemptReelect :execrows
 INSERT INTO river_leader(leader_id, elected_at, expires_at)
-    VALUES ($1::text, now(), now() + $2::interval)
+    VALUES ($1, now(), now() + $2::interval)
 ON CONFLICT (name)
     DO UPDATE SET
-        expires_at = now() + $2::interval
+        expires_at = now() + $2
     WHERE
-        river_leader.leader_id = $1::text
+        river_leader.leader_id = $1
 `
 
 type LeaderAttemptReelectParams struct {
