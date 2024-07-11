@@ -385,11 +385,6 @@ type LeaderResignParams struct {
 //
 // API is not stable. DO NOT USE.
 type Migration struct {
-	// ID is an automatically generated primary key for the migration.
-	//
-	// API is not stable. DO NOT USE.
-	ID int
-
 	// CreatedAt is when the migration was initially created.
 	//
 	// API is not stable. DO NOT USE.

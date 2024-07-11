@@ -499,7 +499,6 @@ func (e *Executor) MigrationDeleteAssumingMainMany(ctx context.Context, versions
 	}
 	return sliceutil.Map(migrations, func(internal *dbsqlc.RiverMigrationDeleteAssumingMainManyRow) *riverdriver.Migration {
 		return &riverdriver.Migration{
-			ID:        int(internal.ID),
 			CreatedAt: internal.CreatedAt.UTC(),
 			Line:      riverdriver.MigrationLineMain,
 			Version:   int(internal.Version),
@@ -525,7 +524,6 @@ func (e *Executor) MigrationGetAllAssumingMain(ctx context.Context) ([]*riverdri
 	}
 	return sliceutil.Map(migrations, func(internal *dbsqlc.RiverMigrationGetAllAssumingMainRow) *riverdriver.Migration {
 		return &riverdriver.Migration{
-			ID:        int(internal.ID),
 			CreatedAt: internal.CreatedAt.UTC(),
 			Line:      riverdriver.MigrationLineMain,
 			Version:   int(internal.Version),
@@ -561,7 +559,6 @@ func (e *Executor) MigrationInsertManyAssumingMain(ctx context.Context, versions
 	}
 	return sliceutil.Map(migrations, func(internal *dbsqlc.RiverMigrationInsertManyAssumingMainRow) *riverdriver.Migration {
 		return &riverdriver.Migration{
-			ID:        int(internal.ID),
 			CreatedAt: internal.CreatedAt.UTC(),
 			Line:      riverdriver.MigrationLineMain,
 			Version:   int(internal.Version),
@@ -839,7 +836,6 @@ func mapSliceError[T any, R any](collection []T, mapFunc func(T) (R, error)) ([]
 
 func migrationFromInternal(internal *dbsqlc.RiverMigration) *riverdriver.Migration {
 	return &riverdriver.Migration{
-		ID:        int(internal.ID),
 		CreatedAt: internal.CreatedAt.UTC(),
 		Line:      internal.Line,
 		Version:   int(internal.Version),
