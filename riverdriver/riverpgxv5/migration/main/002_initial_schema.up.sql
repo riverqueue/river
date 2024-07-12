@@ -18,7 +18,7 @@ CREATE TABLE river_job(
   -- looking at jobs with `SELECT *` it'll appear first after ID. The other two
   -- fields aren't as important but are kept adjacent to `state` for alignment
   -- to get an 8-byte block.
-  state river_job_state NOT NULL DEFAULT 'available' ::river_job_state,
+  state river_job_state NOT NULL DEFAULT 'available',
   attempt smallint NOT NULL DEFAULT 0,
   max_attempts smallint NOT NULL,
 
@@ -36,8 +36,8 @@ CREATE TABLE river_job(
   attempted_by text[],
   errors jsonb[],
   kind text NOT NULL,
-  metadata jsonb NOT NULL DEFAULT '{}' ::jsonb,
-  queue text NOT NULL DEFAULT 'default' ::text,
+  metadata jsonb NOT NULL DEFAULT '{}',
+  queue text NOT NULL DEFAULT 'default',
   tags varchar(255)[],
 
   CONSTRAINT finalized_or_finalized_at_null CHECK ((state IN ('cancelled', 'completed', 'discarded') AND finalized_at IS NOT NULL) OR finalized_at IS NULL),
