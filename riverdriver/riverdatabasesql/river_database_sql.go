@@ -1,8 +1,8 @@
-// Package riverdatabasesql bundles a River driver for Go's built in
-// database/sql. It's generally still powered under the hood by Pgx because it's
-// the only maintained, fully functional Postgres driver in the Go ecosystem,
-// but it uses some lib/pq constructs internally by virtue of being implemented
-// with Sqlc.
+// Package riverdatabasesql bundles a River driver for Go's built-in
+// database/sql, making it interoperable with ORMs like Bun and GORM. It's
+// generally still powered under the hood by Pgx because it's the only
+// maintained, fully functional Postgres driver in the Go ecosystem, but it uses
+// some lib/pq constructs internally by virtue of being implemented with Sqlc.
 package riverdatabasesql
 
 import (
@@ -40,10 +40,6 @@ type Driver struct {
 // It takes an sql.DB to use for use with River. The pool should already be
 // configured to use the schema specified in the client's Schema field. The pool
 // must not be closed while associated River objects are running.
-//
-// This is _not_ a fully functional driver, and only supports use through
-// rivermigrate for purposes of interacting with migration frameworks like
-// Goose. Using it with a River client will panic.
 func New(dbPool *sql.DB) *Driver {
 	return &Driver{dbPool: dbPool, queries: dbsqlc.New()}
 }
