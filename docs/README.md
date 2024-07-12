@@ -165,8 +165,9 @@ See the [`InsertAndWork` example] for complete code.
 
 ## Cross language enqueueing
 
-River supports inserting jobs in some non-Go languages which are then be worked by Go implementations. This may be desirable in performance sensitive cases so that jobs can take advantage of Go's fast runtime.
+River supports inserting jobs in some non-Go languages which are then worked by Go implementations. This may be desirable in performance sensitive cases so that jobs can take advantage of Go's fast runtime.
 
+  - [Inserting jobs from Python](https://riverqueue.com/docs/python).
   - [Inserting jobs from Ruby](https://riverqueue.com/docs/ruby).
 
 ## Development
