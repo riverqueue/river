@@ -18,7 +18,7 @@ import (
 func Example_migrateDatabaseSQL() {
 	ctx := context.Background()
 
-	dbPool, err := sql.Open("pgx", riverinternaltest.DatabaseURL("river_testdb_example"))
+	dbPool, err := sql.Open("pgx", riverinternaltest.DatabaseURL("river_test_example"))
 	if err != nil {
 		panic(err)
 	}

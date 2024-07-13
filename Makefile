@@ -3,6 +3,21 @@ generate:
 generate: generate/migrations
 generate: generate/sqlc
 
+.PHONY: db/reset
+db/reset: ## drop, create, and migrate dev and test databases
+db/reset: db/reset/dev
+db/reset: db/reset/test
+
+.PHONY: db/reset/dev
+db/reset/dev: ## drop, create, and migrate dev database
+	dropdb river_dev --force --if-exists
+	createdb river_dev
+	cd cmd/river && go run . migrate-up --database-url "postgres://localhost/river_dev"
+
+.PHONY: db/reset/test
+db/reset/test: ## drop, create, and migrate test databases
+	go run ./internal/cmd/testdbman reset
+
 .PHONY: generate/migrations
 generate/migrations: ## sync changes of pgxv5 migrations to database/sql
 	rsync -au --delete "riverdriver/riverpgxv5/migration/" "riverdriver/riverdatabasesql/migration/"

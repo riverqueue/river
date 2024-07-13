@@ -60,7 +60,7 @@ func DatabaseConfig(databaseName string) *pgxpool.Config {
 }
 
 // DatabaseURL gets a test database URL from TEST_DATABASE_URL or falls back on
-// a default pointing to `river_testdb`. If databaseName is set, it replaces the
+// a default pointing to `river_test`. If databaseName is set, it replaces the
 // database in the URL, although the host and other parameters are preserved.
 //
 // Most of the time DatabaseConfig should be used instead of this function, but
@@ -69,7 +69,7 @@ func DatabaseConfig(databaseName string) *pgxpool.Config {
 func DatabaseURL(databaseName string) string {
 	parsedURL, err := url.Parse(valutil.ValOrDefault(
 		os.Getenv("TEST_DATABASE_URL"),
-		"postgres://localhost/river_testdb?sslmode=disable"),
+		"postgres://localhost/river_test?sslmode=disable"),
 	)
 	if err != nil {
 		panic(err)
@@ -215,7 +215,7 @@ func TestTx(ctx context.Context, tb testing.TB) pgx.Tx {
 		}
 
 		var err error
-		dbPool, err = pgxpool.NewWithConfig(ctx, DatabaseConfig("river_testdb"))
+		dbPool, err = pgxpool.NewWithConfig(ctx, DatabaseConfig("river_test"))
 		require.NoError(tb, err)
 
 		return dbPool
@@ -283,7 +283,7 @@ func TruncateRiverTables(ctx context.Context, pool *pgxpool.Pool) error {
 // and checks for no goroutine leaks on teardown.
 func WrapTestMain(m *testing.M) {
 	var err error
-	dbManager, err = testdb.NewManager(DatabaseConfig("river_testdb"), dbPoolMaxConns, nil, TruncateRiverTables)
+	dbManager, err = testdb.NewManager(DatabaseConfig("river_test"), dbPoolMaxConns, nil, TruncateRiverTables)
 	if err != nil {
 		log.Fatal(err)
 	}

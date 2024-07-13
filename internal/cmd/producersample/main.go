@@ -193,7 +193,7 @@ func getDatabaseURL() string {
 	if envURL := os.Getenv("DATABASE_URL"); envURL != "" {
 		return envURL
 	}
-	return "postgres:///river_testdb_example?sslmode=disable"
+	return "postgres:///river_test_example?sslmode=disable"
 }
 
 type MyJobArgs struct {

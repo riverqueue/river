@@ -16,7 +16,7 @@ func getTestDatabaseURL() string {
 	if envURL := os.Getenv("TEST_DATABASE_URL"); envURL != "" {
 		return envURL
 	}
-	return "postgres:///river_testdb?sslmode=disable"
+	return "postgres:///river_test?sslmode=disable"
 }
 
 func testConfig(t *testing.T) *pgxpool.Config {
@@ -47,7 +47,7 @@ func TestManager_AcquireMultiple(t *testing.T) {
 	}
 	defer pool0.Release()
 
-	checkDBNameForPool(ctx, t, pool0, "river_testdb_")
+	checkDBNameForPool(ctx, t, pool0, "river_test_")
 
 	pool1, err := manager.Acquire(ctx)
 	if err != nil {
@@ -55,7 +55,7 @@ func TestManager_AcquireMultiple(t *testing.T) {
 	}
 	defer pool1.Release()
 
-	checkDBNameForPool(ctx, t, pool1, "river_testdb_")
+	checkDBNameForPool(ctx, t, pool1, "river_test_")
 	pool0.Release()
 
 	//  ensure we get db 0 back on subsequent acquire since it was released to the pool:
@@ -65,7 +65,7 @@ func TestManager_AcquireMultiple(t *testing.T) {
 	}
 	defer pool0Again.Release()
 
-	checkDBNameForPool(ctx, t, pool0Again, "river_testdb_")
+	checkDBNameForPool(ctx, t, pool0Again, "river_test_")
 	pool0Again.Release()
 	pool1.Release()
 

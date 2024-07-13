@@ -33,7 +33,7 @@ func (w *BatchInsertWorker) Work(ctx context.Context, job *river.Job[BatchInsert
 func Example_batchInsert() {
 	ctx := context.Background()
 
-	dbPool, err := pgxpool.NewWithConfig(ctx, riverinternaltest.DatabaseConfig("river_testdb_example"))
+	dbPool, err := pgxpool.NewWithConfig(ctx, riverinternaltest.DatabaseConfig("river_test_example"))
 	if err != nil {
 		panic(err)
 	}

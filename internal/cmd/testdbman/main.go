@@ -45,8 +45,8 @@ test run.
 Creates the test databases used by parallel tests and the sample applications.
 Each is migrated with River's current schema.
 
-The sample application DB is named river_testdb, while the DBs for parallel
-tests are named river_testdb_0, river_testdb_1, etc. up to the larger of 4 or
+The sample application DB is named river_test, while the DBs for parallel
+tests are named river_test_0, river_test_1, etc. up to the larger of 4 or
 runtime.NumCPU() (a choice that comes from pgx's default connection pool size).
 `,
 			createTestDatabases,
@@ -60,8 +60,8 @@ runtime.NumCPU() (a choice that comes from pgx's default connection pool size).
 			"Drop test databases",
 			`
 Drops all test databases. Any test database matching the base name
-(river_testdb) or the base name with an underscore followed by any other token
-(river_testdb_example, river_testdb_0, river_testdb_1, etc.) will be dropped.
+(river_test) or the base name with an underscore followed by any other token
+(river_test_example, river_test_0, river_test_1, etc.) will be dropped.
 `,
 			dropTestDatabases,
 		)
@@ -152,12 +152,12 @@ func createTestDatabases(ctx context.Context, out io.Writer) error {
 
 func generateTestDBNames(numDBs int) []string {
 	dbNames := []string{
-		"river_testdb",
-		"river_testdb_example",
+		"river_test",
+		"river_test_example",
 	}
 
 	for i := 0; i < numDBs; i++ {
-		dbNames = append(dbNames, fmt.Sprintf("river_testdb_%d", i))
+		dbNames = append(dbNames, fmt.Sprintf("river_test_%d", i))
 	}
 
 	return dbNames
@@ -188,7 +188,7 @@ func dropTestDatabases(ctx context.Context, out io.Writer) error {
 	rows.Close()
 
 	for _, dbName := range allDBNames {
-		if strings.HasPrefix(dbName, "river_testdb") {
+		if strings.HasPrefix(dbName, "river_test") {
 			if _, err := mgmtConn.Exec(ctx, "DROP DATABASE "+dbName); err != nil {
 				return fmt.Errorf("error dropping database %q: %w", dbName, err)
 			}

@@ -49,7 +49,7 @@ func (w *SecondRequiredWorker) Work(ctx context.Context, job *river.Job[SecondRe
 func Example_requireManyInserted() {
 	ctx := context.Background()
 
-	dbPool, err := pgxpool.NewWithConfig(ctx, riverinternaltest.DatabaseConfig("river_testdb_example"))
+	dbPool, err := pgxpool.NewWithConfig(ctx, riverinternaltest.DatabaseConfig("river_test_example"))
 	if err != nil {
 		panic(err)
 	}

@@ -118,7 +118,7 @@ func (c *connStub) Close() error {
 }
 
 func testPoolConfig() *pgxpool.Config {
-	databaseURL := "postgres://localhost/river_testdb?sslmode=disable"
+	databaseURL := "postgres://localhost/river_test?sslmode=disable"
 	if url := os.Getenv("TEST_DATABASE_URL"); url != "" {
 		databaseURL = url
 	}
