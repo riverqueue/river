@@ -124,9 +124,11 @@ func (s *JobCleaner) Start(ctx context.Context) error { //nolint:dupl
 				continue
 			}
 
-			s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
-				slog.Int("num_jobs_deleted", res.NumJobsDeleted),
-			)
+			if res.NumJobsDeleted > 0 {
+				s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
+					slog.Int("num_jobs_deleted", res.NumJobsDeleted),
+				)
+			}
 		}
 	}()
 
@@ -170,7 +172,7 @@ func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, err
 			break
 		}
 
-		s.Logger.InfoContext(ctx, s.Name+": Deleted batch of jobs",
+		s.Logger.DebugContext(ctx, s.Name+": Deleted batch of jobs",
 			slog.Int("num_jobs_deleted", numDeleted),
 		)
 

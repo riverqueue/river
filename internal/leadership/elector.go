@@ -126,9 +126,9 @@ func (e *Elector) Start(ctx context.Context) error {
 
 	var sub *notifier.Subscription
 	if e.notifier == nil {
-		e.Logger.InfoContext(ctx, e.Name+": No notifier configured; starting in poll mode", "client_id", e.config.ClientID)
+		e.Logger.DebugContext(ctx, e.Name+": No notifier configured; starting in poll mode", "client_id", e.config.ClientID)
 	} else {
-		e.Logger.InfoContext(ctx, e.Name+": Listening for leadership changes", "client_id", e.config.ClientID, "topic", notifier.NotificationTopicLeadership)
+		e.Logger.DebugContext(ctx, e.Name+": Listening for leadership changes", "client_id", e.config.ClientID, "topic", notifier.NotificationTopicLeadership)
 		var err error
 		sub, err = e.notifier.Listen(ctx, notifier.NotificationTopicLeadership, func(topic notifier.NotificationTopic, payload string) {
 			e.handleLeadershipNotification(ctx, topic, payload)
@@ -163,7 +163,7 @@ func (e *Elector) Start(ctx context.Context) error {
 				return
 			}
 
-			e.Logger.InfoContext(ctx, e.Name+": Gained leadership", "client_id", e.config.ClientID)
+			e.Logger.DebugContext(ctx, e.Name+": Gained leadership", "client_id", e.config.ClientID)
 			e.testSignals.GainedLeadership.Signal(struct{}{})
 
 			err := e.keepLeadershipLoop(ctx)
@@ -188,7 +188,7 @@ func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
 	var numErrors int
 
 	for {
-		e.Logger.InfoContext(ctx, e.Name+": Attempting to gain leadership", "client_id", e.config.ClientID)
+		e.Logger.DebugContext(ctx, e.Name+": Attempting to gain leadership", "client_id", e.config.ClientID)
 
 		elected, err := attemptElectOrReelect(ctx, e.exec, false, &riverdriver.LeaderElectParams{
 			LeaderID: e.config.ClientID,
@@ -246,7 +246,7 @@ func (e *Elector) handleLeadershipNotification(ctx context.Context, topic notifi
 		return
 	}
 
-	e.Logger.InfoContext(ctx, e.Name+": Received notification from notifier", "action", notification.Action, "client_id", e.config.ClientID)
+	e.Logger.DebugContext(ctx, e.Name+": Received notification from notifier", "action", notification.Action, "client_id", e.config.ClientID)
 
 	if notification.Action != "resigned" {
 		// We only care about resignations because we use them to preempt the
@@ -324,7 +324,7 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 			}
 		}
 
-		e.Logger.InfoContext(ctx, e.Name+": Current leader attempting reelect", "client_id", e.config.ClientID)
+		e.Logger.DebugContext(ctx, e.Name+": Current leader attempting reelect", "client_id", e.config.ClientID)
 
 		reelected, err := attemptElectOrReelect(ctx, e.exec, true, &riverdriver.LeaderElectParams{
 			LeaderID: e.config.ClientID,
@@ -364,7 +364,7 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 // always surrendered in a timely manner so it can be picked up quickly by
 // another client, even in the event of a cancellation.
 func (e *Elector) attemptResignLoop(ctx context.Context) {
-	e.Logger.InfoContext(ctx, e.Name+": Attempting to resign leadership", "client_id", e.config.ClientID)
+	e.Logger.DebugContext(ctx, e.Name+": Attempting to resign leadership", "client_id", e.config.ClientID)
 
 	// Make a good faith attempt to resign, even in the presence of errors, but
 	// don't keep hammering if it doesn't work. In case a resignation failure,
@@ -411,7 +411,7 @@ func (e *Elector) attemptResign(ctx context.Context, attempt int) error {
 	}
 
 	if resigned {
-		e.Logger.InfoContext(ctx, e.Name+": Resigned leadership successfully", "client_id", e.config.ClientID)
+		e.Logger.DebugContext(ctx, e.Name+": Resigned leadership successfully", "client_id", e.config.ClientID)
 		e.testSignals.ResignedLeadership.Signal(struct{}{})
 	}
 

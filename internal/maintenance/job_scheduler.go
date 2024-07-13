@@ -115,9 +115,12 @@ func (s *JobScheduler) Start(ctx context.Context) error { //nolint:dupl
 				}
 				continue
 			}
-			s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
-				slog.Int("num_jobs_scheduled", res.NumCompletedJobsScheduled),
-			)
+
+			if res.NumCompletedJobsScheduled > 0 {
+				s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
+					slog.Int("num_jobs_scheduled", res.NumCompletedJobsScheduled),
+				)
+			}
 		}
 	}()
 
@@ -190,10 +193,6 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 		if numScheduled < s.config.Limit {
 			break
 		}
-
-		s.Logger.InfoContext(ctx, s.Name+": Scheduled batch of jobs",
-			slog.Int("num_completed_jobs_scheduled", numScheduled),
-		)
 
 		s.CancellableSleepRandomBetween(ctx, BatchBackoffMin, BatchBackoffMax)
 	}

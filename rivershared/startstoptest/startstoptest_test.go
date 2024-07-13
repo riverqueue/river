@@ -34,8 +34,8 @@ func (s *MyService) Start(ctx context.Context) error {
 		started()
 		defer stopped()
 
-		s.logger.InfoContext(ctx, "Service started")
-		defer s.logger.InfoContext(ctx, "Service stopped")
+		s.logger.DebugContext(ctx, "Service started")
+		defer s.logger.DebugContext(ctx, "Service stopped")
 
 		<-ctx.Done()
 	}()

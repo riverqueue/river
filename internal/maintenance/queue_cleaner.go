@@ -106,9 +106,11 @@ func (s *QueueCleaner) Start(ctx context.Context) error {
 				continue
 			}
 
-			s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
-				slog.Int("num_queues_deleted", len(res.QueuesDeleted)),
-			)
+			if len(res.QueuesDeleted) > 0 {
+				s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
+					slog.String("queues_deleted", strings.Join(res.QueuesDeleted, ",")),
+				)
+			}
 		}
 	}()
 
@@ -149,10 +151,6 @@ func (s *QueueCleaner) runOnce(ctx context.Context) (*queueCleanerRunOnceResult,
 		if len(queuesDeleted) < s.batchSize {
 			break
 		}
-
-		s.Logger.InfoContext(ctx, s.Name+": Deleted batch of queues",
-			slog.String("queues_deleted", strings.Join(queuesDeleted, ",")),
-		)
 
 		s.CancellableSleepRandomBetween(ctx, BatchBackoffMin, BatchBackoffMax)
 	}

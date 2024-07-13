@@ -106,7 +106,7 @@ func (s *Reindexer) Start(ctx context.Context) error {
 
 		nextRunAt := s.Config.ScheduleFunc(time.Now().UTC())
 
-		s.Logger.InfoContext(ctx, s.Name+": Scheduling first run", slog.Time("next_run_at", nextRunAt))
+		s.Logger.DebugContext(ctx, s.Name+": Scheduling first run", slog.Time("next_run_at", nextRunAt))
 
 		timerUntilNextRun := time.NewTimer(time.Until(nextRunAt))
 
@@ -130,7 +130,7 @@ func (s *Reindexer) Start(ctx context.Context) error {
 				nextRunAt = s.Config.ScheduleFunc(nextRunAt)
 
 				// TODO: maybe we should log differently if some of these fail?
-				s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
+				s.Logger.DebugContext(ctx, s.Name+logPrefixRanSuccessfully,
 					slog.Time("next_run_at", nextRunAt), slog.Int("num_reindexes_initiated", len(s.Config.IndexNames)))
 
 				// Reset the timer after the insert loop has finished so it's
