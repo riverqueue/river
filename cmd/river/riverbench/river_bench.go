@@ -17,26 +17,22 @@ import (
 )
 
 type Benchmarker[TTx any] struct {
-	driver       riverdriver.Driver[TTx] // database pool wrapped in River driver
-	duration     time.Duration           // duration to run when running or a duration
-	logger       *slog.Logger            // logger, also injected to client
-	name         string                  // name of the service for logging purposes
-	numTotalJobs int                     // total number of jobs to work when in burn down mode
+	driver riverdriver.Driver[TTx] // database pool wrapped in River driver
+	logger *slog.Logger            // logger, also injected to client
+	name   string                  // name of the service for logging purposes
 }
 
-func NewBenchmarker[TTx any](driver riverdriver.Driver[TTx], logger *slog.Logger, duration time.Duration, numTotalJobs int) *Benchmarker[TTx] {
+func NewBenchmarker[TTx any](driver riverdriver.Driver[TTx], logger *slog.Logger) *Benchmarker[TTx] {
 	return &Benchmarker[TTx]{
-		driver:       driver,
-		duration:     duration,
-		logger:       logger,
-		name:         "Benchmarker",
-		numTotalJobs: numTotalJobs,
+		driver: driver,
+		logger: logger,
+		name:   "Benchmarker",
 	}
 }
 
 // Run starts the benchmarking loop. Stops upon receiving SIGINT/SIGTERM, or
 // when reaching maximum configured run duration.
-func (b *Benchmarker[TTx]) Run(ctx context.Context) error {
+func (b *Benchmarker[TTx]) Run(ctx context.Context, duration time.Duration, numTotalJobs int) error {
 	var (
 		lastJobWorkedAt time.Time
 		numJobsInserted atomic.Int64
@@ -206,8 +202,8 @@ func (b *Benchmarker[TTx]) Run(ctx context.Context) error {
 
 	minJobsReady := make(chan struct{})
 
-	if b.numTotalJobs != 0 {
-		b.insertJobs(ctx, client, minJobsReady, &numJobsInserted, &numJobsLeft, shutdown)
+	if numTotalJobs != 0 {
+		b.insertJobs(ctx, client, minJobsReady, &numJobsInserted, &numJobsLeft, numTotalJobs, shutdown)
 	} else {
 		insertJobsFinished := make(chan struct{})
 		defer func() { <-insertJobsFinished }()
@@ -271,7 +267,7 @@ func (b *Benchmarker[TTx]) Run(ctx context.Context) error {
 	for numIterations := 0; ; numIterations++ {
 		// Use iterations multiplied by period time instead of actual elapsed
 		// time to allow a precise, predictable run duration to be specified.
-		if b.duration != 0 && time.Duration(numIterations)*iterationPeriod >= b.duration {
+		if duration != 0 && time.Duration(numIterations)*iterationPeriod >= duration {
 			return nil
 		}
 
@@ -298,7 +294,7 @@ func (b *Benchmarker[TTx]) Run(ctx context.Context) error {
 
 		// If working in the mode where we're burning jobs down and there are no
 		// jobs left, end.
-		if b.numTotalJobs != 0 && numJobsLeft.Load() < 1 {
+		if numTotalJobs != 0 && numJobsLeft.Load() < 1 {
 			return nil
 		}
 
@@ -328,6 +324,7 @@ func (b *Benchmarker[TTx]) insertJobs(
 	minJobsReady chan struct{},
 	numJobsInserted *atomic.Int64,
 	numJobsLeft *atomic.Int64,
+	numTotalJobs int,
 	shutdown chan struct{},
 ) {
 	defer close(minJobsReady)
@@ -353,7 +350,7 @@ func (b *Benchmarker[TTx]) insertJobs(
 			insertParamsBatch[i].Args = jobArgsBatch[i]
 		}
 
-		numLeft := b.numTotalJobs - numInsertedThisRound
+		numLeft := numTotalJobs - numInsertedThisRound
 		if numLeft < insertBatchSize {
 			insertParamsBatch = insertParamsBatch[0:numLeft]
 		}
@@ -367,7 +364,7 @@ func (b *Benchmarker[TTx]) insertJobs(
 		numJobsLeft.Add(int64(len(insertParamsBatch)))
 		numInsertedThisRound += len(insertParamsBatch)
 
-		if numJobsLeft.Load() >= int64(b.numTotalJobs) {
+		if numJobsLeft.Load() >= int64(numTotalJobs) {
 			b.logger.InfoContext(ctx, b.name+": Finished inserting jobs",
 				"duration", time.Since(start), "num_inserted", numInsertedThisRound)
 			return
