@@ -16,12 +16,12 @@ func TestGenerateTestDBNames(t *testing.T) {
 	t.Parallel()
 
 	require.Equal(t, []string{
-		"river_testdb",
-		"river_testdb_example",
-		"river_testdb_0",
-		"river_testdb_1",
-		"river_testdb_2",
-		"river_testdb_3",
+		"river_test",
+		"river_test_example",
+		"river_test_0",
+		"river_test_1",
+		"river_test_2",
+		"river_test_3",
 	}, generateTestDBNames(4))
 }
 
