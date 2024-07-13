@@ -65,6 +65,10 @@ type Config struct {
 	// option then it's recommended to leave it unset because the prefix leaves
 	// only 32 bits of number space for advisory lock hashes, so it makes
 	// internally conflicting River-generated keys more likely.
+	//
+	// Advisory locks are currently only used for the fallback/slow path of
+	// unique job insertion where finalized states are included in a ByState
+	// configuration.
 	AdvisoryLockPrefix int32
 
 	// CancelledJobRetentionPeriod is the amount of time to keep cancelled jobs

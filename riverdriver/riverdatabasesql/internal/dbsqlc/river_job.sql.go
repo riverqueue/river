@@ -42,17 +42,20 @@ updated_job AS (
         finalized_at = CASE WHEN state = 'running' THEN finalized_at ELSE now() END,
         -- Mark the job as cancelled by query so that the rescuer knows not to
         -- rescue it, even if it gets stuck in the running state:
-        metadata = jsonb_set(metadata, '{cancel_attempted_at}'::text[], $3::jsonb, true)
+        metadata = jsonb_set(metadata, '{cancel_attempted_at}'::text[], $3::jsonb, true),
+        -- Similarly, zero a ` + "`" + `unique_key` + "`" + ` if the job is transitioning directly
+        -- to cancelled. Otherwise, it'll be clear the job executor.
+        unique_key = CASE WHEN state = 'running' THEN unique_key ELSE NULL END
     FROM notification
     WHERE river_job.id = notification.id
-    RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
+    RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key
 )
-SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
 FROM river_job
 WHERE id = $1::bigint
     AND id NOT IN (SELECT id FROM updated_job)
 UNION
-SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
 FROM updated_job
 `
 
@@ -82,6 +85,7 @@ func (q *Queries) JobCancel(ctx context.Context, db DBTX, arg *JobCancelParams) 
 		&i.State,
 		&i.ScheduledAt,
 		pq.Array(&i.Tags),
+		&i.UniqueKey,
 	)
 	return &i, err
 }
@@ -113,14 +117,14 @@ deleted_job AS (
     WHERE river_job.id = job_to_delete.id
         -- Do not touch running jobs:
         AND river_job.state != 'running'
-    RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
+    RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key
 )
-SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
 FROM river_job
 WHERE id = $1::bigint
     AND id NOT IN (SELECT id FROM deleted_job)
 UNION
-SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
 FROM deleted_job
 `
 
@@ -144,6 +148,7 @@ func (q *Queries) JobDelete(ctx context.Context, db DBTX, id int64) (*RiverJob, 
 		&i.State,
 		&i.ScheduledAt,
 		pq.Array(&i.Tags),
+		&i.UniqueKey,
 	)
 	return &i, err
 }
@@ -161,7 +166,7 @@ WITH deleted_jobs AS (
         ORDER BY id
         LIMIT $4::bigint
     )
-    RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+    RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
 )
 SELECT count(*)
 FROM deleted_jobs
@@ -189,7 +194,7 @@ func (q *Queries) JobDeleteBefore(ctx context.Context, db DBTX, arg *JobDeleteBe
 const jobGetAvailable = `-- name: JobGetAvailable :many
 WITH locked_jobs AS (
     SELECT
-        id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+        id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
     FROM
         river_job
     WHERE
@@ -216,7 +221,7 @@ FROM
 WHERE
     river_job.id = locked_jobs.id
 RETURNING
-    river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
+    river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key
 `
 
 type JobGetAvailableParams struct {
@@ -251,6 +256,7 @@ func (q *Queries) JobGetAvailable(ctx context.Context, db DBTX, arg *JobGetAvail
 			&i.State,
 			&i.ScheduledAt,
 			pq.Array(&i.Tags),
+			&i.UniqueKey,
 		); err != nil {
 			return nil, err
 		}
@@ -266,7 +272,7 @@ func (q *Queries) JobGetAvailable(ctx context.Context, db DBTX, arg *JobGetAvail
 }
 
 const jobGetByID = `-- name: JobGetByID :one
-SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
 FROM river_job
 WHERE id = $1
 LIMIT 1
@@ -292,12 +298,13 @@ func (q *Queries) JobGetByID(ctx context.Context, db DBTX, id int64) (*RiverJob,
 		&i.State,
 		&i.ScheduledAt,
 		pq.Array(&i.Tags),
+		&i.UniqueKey,
 	)
 	return &i, err
 }
 
 const jobGetByIDMany = `-- name: JobGetByIDMany :many
-SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
 FROM river_job
 WHERE id = any($1::bigint[])
 ORDER BY id
@@ -329,6 +336,7 @@ func (q *Queries) JobGetByIDMany(ctx context.Context, db DBTX, id []int64) ([]*R
 			&i.State,
 			&i.ScheduledAt,
 			pq.Array(&i.Tags),
+			&i.UniqueKey,
 		); err != nil {
 			return nil, err
 		}
@@ -344,7 +352,7 @@ func (q *Queries) JobGetByIDMany(ctx context.Context, db DBTX, id []int64) ([]*R
 }
 
 const jobGetByKindAndUniqueProperties = `-- name: JobGetByKindAndUniqueProperties :one
-SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
 FROM river_job
 WHERE kind = $1
     AND CASE WHEN $2::boolean THEN args = $3 ELSE true END
@@ -397,12 +405,13 @@ func (q *Queries) JobGetByKindAndUniqueProperties(ctx context.Context, db DBTX, 
 		&i.State,
 		&i.ScheduledAt,
 		pq.Array(&i.Tags),
+		&i.UniqueKey,
 	)
 	return &i, err
 }
 
 const jobGetByKindMany = `-- name: JobGetByKindMany :many
-SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
 FROM river_job
 WHERE kind = any($1::text[])
 ORDER BY id
@@ -434,6 +443,7 @@ func (q *Queries) JobGetByKindMany(ctx context.Context, db DBTX, kind []string) 
 			&i.State,
 			&i.ScheduledAt,
 			pq.Array(&i.Tags),
+			&i.UniqueKey,
 		); err != nil {
 			return nil, err
 		}
@@ -449,7 +459,7 @@ func (q *Queries) JobGetByKindMany(ctx context.Context, db DBTX, kind []string) 
 }
 
 const jobGetStuck = `-- name: JobGetStuck :many
-SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
 FROM river_job
 WHERE state = 'running'
     AND attempted_at < $1::timestamptz
@@ -488,6 +498,7 @@ func (q *Queries) JobGetStuck(ctx context.Context, db DBTX, arg *JobGetStuckPara
 			&i.State,
 			&i.ScheduledAt,
 			pq.Array(&i.Tags),
+			&i.UniqueKey,
 		); err != nil {
 			return nil, err
 		}
@@ -527,7 +538,7 @@ INSERT INTO river_job(
     coalesce($9::timestamptz, now()),
     $10,
     coalesce($11::varchar(255)[], '{}')
-) RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+) RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
 `
 
 type JobInsertFastParams struct {
@@ -576,6 +587,7 @@ func (q *Queries) JobInsertFast(ctx context.Context, db DBTX, arg *JobInsertFast
 		&i.State,
 		&i.ScheduledAt,
 		pq.Array(&i.Tags),
+		&i.UniqueKey,
 	)
 	return &i, err
 }
@@ -653,7 +665,8 @@ INSERT INTO river_job(
     queue,
     scheduled_at,
     state,
-    tags
+    tags,
+    unique_key
 ) VALUES (
     $1::jsonb,
     coalesce($2::smallint, 0),
@@ -668,8 +681,9 @@ INSERT INTO river_job(
     $11,
     coalesce($12::timestamptz, now()),
     $13,
-    coalesce($14::varchar(255)[], '{}')
-) RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+    coalesce($14::varchar(255)[], '{}'),
+    $15
+) RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
 `
 
 type JobInsertFullParams struct {
@@ -687,6 +701,7 @@ type JobInsertFullParams struct {
 	ScheduledAt *time.Time
 	State       RiverJobState
 	Tags        []string
+	UniqueKey   []byte
 }
 
 func (q *Queries) JobInsertFull(ctx context.Context, db DBTX, arg *JobInsertFullParams) (*RiverJob, error) {
@@ -705,6 +720,7 @@ func (q *Queries) JobInsertFull(ctx context.Context, db DBTX, arg *JobInsertFull
 		arg.ScheduledAt,
 		arg.State,
 		pq.Array(arg.Tags),
+		arg.UniqueKey,
 	)
 	var i RiverJob
 	err := row.Scan(
@@ -724,6 +740,116 @@ func (q *Queries) JobInsertFull(ctx context.Context, db DBTX, arg *JobInsertFull
 		&i.State,
 		&i.ScheduledAt,
 		pq.Array(&i.Tags),
+		&i.UniqueKey,
+	)
+	return &i, err
+}
+
+const jobInsertUnique = `-- name: JobInsertUnique :one
+INSERT INTO river_job(
+    args,
+    created_at,
+    finalized_at,
+    kind,
+    max_attempts,
+    metadata,
+    priority,
+    queue,
+    scheduled_at,
+    state,
+    tags,
+    unique_key
+) VALUES (
+    $1,
+    coalesce($2::timestamptz, now()),
+    $3,
+    $4,
+    $5,
+    coalesce($6::jsonb, '{}'),
+    $7,
+    $8,
+    coalesce($9::timestamptz, now()),
+    $10,
+    coalesce($11::varchar(255)[], '{}'),
+    $12
+)
+ON CONFLICT (kind, unique_key) WHERE unique_key IS NOT NULL
+    -- Something needs to be updated for a row to be returned on a conflict.
+    DO UPDATE SET kind = EXCLUDED.kind
+RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, (xmax != 0) AS unique_skipped_as_duplicate
+`
+
+type JobInsertUniqueParams struct {
+	Args        string
+	CreatedAt   *time.Time
+	FinalizedAt *time.Time
+	Kind        string
+	MaxAttempts int16
+	Metadata    string
+	Priority    int16
+	Queue       string
+	ScheduledAt *time.Time
+	State       RiverJobState
+	Tags        []string
+	UniqueKey   []byte
+}
+
+type JobInsertUniqueRow struct {
+	ID                       int64
+	Args                     string
+	Attempt                  int16
+	AttemptedAt              *time.Time
+	AttemptedBy              []string
+	CreatedAt                time.Time
+	Errors                   []string
+	FinalizedAt              *time.Time
+	Kind                     string
+	MaxAttempts              int16
+	Metadata                 string
+	Priority                 int16
+	Queue                    string
+	State                    RiverJobState
+	ScheduledAt              time.Time
+	Tags                     []string
+	UniqueKey                []byte
+	UniqueSkippedAsDuplicate bool
+}
+
+func (q *Queries) JobInsertUnique(ctx context.Context, db DBTX, arg *JobInsertUniqueParams) (*JobInsertUniqueRow, error) {
+	row := db.QueryRowContext(ctx, jobInsertUnique,
+		arg.Args,
+		arg.CreatedAt,
+		arg.FinalizedAt,
+		arg.Kind,
+		arg.MaxAttempts,
+		arg.Metadata,
+		arg.Priority,
+		arg.Queue,
+		arg.ScheduledAt,
+		arg.State,
+		pq.Array(arg.Tags),
+		arg.UniqueKey,
+	)
+	var i JobInsertUniqueRow
+	err := row.Scan(
+		&i.ID,
+		&i.Args,
+		&i.Attempt,
+		&i.AttemptedAt,
+		pq.Array(&i.AttemptedBy),
+		&i.CreatedAt,
+		pq.Array(&i.Errors),
+		&i.FinalizedAt,
+		&i.Kind,
+		&i.MaxAttempts,
+		&i.Metadata,
+		&i.Priority,
+		&i.Queue,
+		&i.State,
+		&i.ScheduledAt,
+		pq.Array(&i.Tags),
+		&i.UniqueKey,
+		&i.UniqueSkippedAsDuplicate,
 	)
 	return &i, err
 }
@@ -786,14 +912,14 @@ updated_job AS (
         AND river_job.state != 'running'
         -- If the job is already available with a prior scheduled_at, leave it alone.
         AND NOT (river_job.state = 'available' AND river_job.scheduled_at < now())
-    RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
+    RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key
 )
-SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
 FROM river_job
 WHERE id = $1::bigint
     AND id NOT IN (SELECT id FROM updated_job)
 UNION
-SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
 FROM updated_job
 `
 
@@ -817,6 +943,7 @@ func (q *Queries) JobRetry(ctx context.Context, db DBTX, id int64) (*RiverJob, e
 		&i.State,
 		&i.ScheduledAt,
 		pq.Array(&i.Tags),
+		&i.UniqueKey,
 	)
 	return &i, err
 }
@@ -844,7 +971,7 @@ river_job_scheduled AS (
     WHERE river_job.id = jobs_to_schedule.id
     RETURNING river_job.id
 )
-SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
 FROM river_job
 WHERE id IN (SELECT id FROM river_job_scheduled)
 `
@@ -880,6 +1007,7 @@ func (q *Queries) JobSchedule(ctx context.Context, db DBTX, arg *JobSchedulePara
 			&i.State,
 			&i.ScheduledAt,
 			pq.Array(&i.Tags),
+			&i.UniqueKey,
 		); err != nil {
 			return nil, err
 		}
@@ -914,13 +1042,13 @@ updated_job AS (
         state = 'completed'
     FROM job_to_update
     WHERE river_job.id = job_to_update.id
-    RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
+    RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key
 )
-SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
 FROM river_job
 WHERE id IN (SELECT id FROM job_to_finalized_at EXCEPT SELECT id FROM updated_job)
 UNION
-SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
 FROM updated_job
 `
 
@@ -955,6 +1083,7 @@ func (q *Queries) JobSetCompleteIfRunningMany(ctx context.Context, db DBTX, arg 
 			&i.State,
 			&i.ScheduledAt,
 			pq.Array(&i.Tags),
+			&i.UniqueKey,
 		); err != nil {
 			return nil, err
 		}
@@ -991,18 +1120,20 @@ updated_job AS (
         max_attempts = CASE WHEN NOT should_cancel AND $7::boolean    THEN $8
                             ELSE max_attempts END,
         scheduled_at = CASE WHEN NOT should_cancel AND $9::boolean THEN $10::timestamptz
-                            ELSE scheduled_at END
+                            ELSE scheduled_at END,
+        unique_key   = CASE WHEN $1 IN ('cancelled', 'discarded')                   THEN NULL
+                            ELSE unique_key END
     FROM job_to_update
     WHERE river_job.id = job_to_update.id
         AND river_job.state = 'running'
-    RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags
+    RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key
 )
-SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
 FROM river_job
 WHERE id = $2::bigint
     AND id NOT IN (SELECT id FROM updated_job)
 UNION
-SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
 FROM updated_job
 `
 
@@ -1050,6 +1181,7 @@ func (q *Queries) JobSetStateIfRunning(ctx context.Context, db DBTX, arg *JobSet
 		&i.State,
 		&i.ScheduledAt,
 		pq.Array(&i.Tags),
+		&i.UniqueKey,
 	)
 	return &i, err
 }
@@ -1061,9 +1193,10 @@ SET
     attempted_at = CASE WHEN $3::boolean THEN $4 ELSE attempted_at END,
     errors = CASE WHEN $5::boolean THEN $6::jsonb[] ELSE errors END,
     finalized_at = CASE WHEN $7::boolean THEN $8 ELSE finalized_at END,
-    state = CASE WHEN $9::boolean THEN $10 ELSE state END
-WHERE id = $11
-RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags
+    state = CASE WHEN $9::boolean THEN $10 ELSE state END,
+    unique_key = CASE WHEN $11::boolean THEN $12 ELSE unique_key END
+WHERE id = $13
+RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
 `
 
 type JobUpdateParams struct {
@@ -1077,6 +1210,8 @@ type JobUpdateParams struct {
 	FinalizedAt         *time.Time
 	StateDoUpdate       bool
 	State               RiverJobState
+	UniqueKeyDoUpdate   bool
+	UniqueKey           []byte
 	ID                  int64
 }
 
@@ -1094,6 +1229,8 @@ func (q *Queries) JobUpdate(ctx context.Context, db DBTX, arg *JobUpdateParams) 
 		arg.FinalizedAt,
 		arg.StateDoUpdate,
 		arg.State,
+		arg.UniqueKeyDoUpdate,
+		arg.UniqueKey,
 		arg.ID,
 	)
 	var i RiverJob
@@ -1114,6 +1251,7 @@ func (q *Queries) JobUpdate(ctx context.Context, db DBTX, arg *JobUpdateParams) 
 		&i.State,
 		&i.ScheduledAt,
 		pq.Array(&i.Tags),
+		&i.UniqueKey,
 	)
 	return &i, err
 }

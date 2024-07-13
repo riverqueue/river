@@ -75,6 +75,7 @@ type RiverJob struct {
 	State       RiverJobState
 	ScheduledAt time.Time
 	Tags        []string
+	UniqueKey   []byte
 }
 
 type RiverLeader struct {

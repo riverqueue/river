@@ -14,6 +14,20 @@ go install github.com/riverqueue/river/cmd/river@latest
 river migrate-up --database-url "$DATABASE_URL"
 ```
 
+The migration **includes a new index**. Users with a very large job table may want to consider raising the index separately using `CONCURRENTLY` (which must be run outside of a transaction), then run `river migrate-up` to finalize the process (it will tolerate an index that already exists):
+
+```sql
+ALTER TABLE river_job
+    ADD COLUMN unique_key bytea;
+
+CREATE UNIQUE INDEX CONCURRENTLY river_job_kind_unique_key_idx ON river_job (kind, unique_key) WHERE unique_key IS NOT NULL;
+```
+
+```shell
+go install github.com/riverqueue/river/cmd/river@latest
+river migrate-up --database-url "$DATABASE_URL"
+```
+
 ### Added
 
 - Fully functional driver for `database/sql` for use with packages like Bun and GORM. [PR #351](https://github.com/riverqueue/river/pull/351).

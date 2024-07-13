@@ -192,3 +192,62 @@ func BenchmarkDriverRiverPgxV5_Executor(b *testing.B) {
 		})
 	})
 }
+
+func BenchmarkDriverRiverPgxV5Insert(b *testing.B) {
+	ctx := context.Background()
+
+	type testBundle struct {
+		exec riverdriver.Executor
+		tx   pgx.Tx
+	}
+
+	setup := func(b *testing.B) (*riverpgxv5.Driver, *testBundle) {
+		b.Helper()
+
+		var (
+			driver = riverpgxv5.New(nil)
+			tx     = riverinternaltest.TestTx(ctx, b)
+		)
+
+		bundle := &testBundle{
+			exec: driver.UnwrapExecutor(tx),
+			tx:   tx,
+		}
+
+		return driver, bundle
+	}
+
+	b.Run("InsertFast", func(b *testing.B) {
+		_, bundle := setup(b)
+
+		for n := 0; n < b.N; n++ {
+			_, err := bundle.exec.JobInsertFast(ctx, &riverdriver.JobInsertFastParams{
+				EncodedArgs: []byte(`{"encoded": "args"}`),
+				Kind:        "test_kind",
+				MaxAttempts: rivercommon.MaxAttemptsDefault,
+				Priority:    rivercommon.PriorityDefault,
+				Queue:       rivercommon.QueueDefault,
+				State:       rivertype.JobStateAvailable,
+			})
+			require.NoError(b, err)
+		}
+	})
+
+	b.Run("InsertUnique", func(b *testing.B) {
+		_, bundle := setup(b)
+
+		for n := 0; n < b.N; n++ {
+			_, err := bundle.exec.JobInsertUnique(ctx, &riverdriver.JobInsertUniqueParams{
+				JobInsertFastParams: &riverdriver.JobInsertFastParams{
+					EncodedArgs: []byte(`{"encoded": "args"}`),
+					Kind:        "test_kind",
+					MaxAttempts: rivercommon.MaxAttemptsDefault,
+					Priority:    rivercommon.PriorityDefault,
+					Queue:       rivercommon.QueueDefault,
+					State:       rivertype.JobStateAvailable,
+				},
+			})
+			require.NoError(b, err)
+		}
+	})
+}
