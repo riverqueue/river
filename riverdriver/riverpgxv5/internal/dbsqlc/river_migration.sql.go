@@ -34,13 +34,11 @@ const riverMigrationDeleteAssumingMainMany = `-- name: RiverMigrationDeleteAssum
 DELETE FROM river_migration
 WHERE version = any($1::bigint[])
 RETURNING
-    id,
     created_at,
     version
 `
 
 type RiverMigrationDeleteAssumingMainManyRow struct {
-	ID        int64
 	CreatedAt time.Time
 	Version   int64
 }
@@ -54,7 +52,7 @@ func (q *Queries) RiverMigrationDeleteAssumingMainMany(ctx context.Context, db D
 	var items []*RiverMigrationDeleteAssumingMainManyRow
 	for rows.Next() {
 		var i RiverMigrationDeleteAssumingMainManyRow
-		if err := rows.Scan(&i.ID, &i.CreatedAt, &i.Version); err != nil {
+		if err := rows.Scan(&i.CreatedAt, &i.Version); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)
@@ -69,7 +67,7 @@ const riverMigrationDeleteByLineAndVersionMany = `-- name: RiverMigrationDeleteB
 DELETE FROM river_migration
 WHERE line = $1
     AND version = any($2::bigint[])
-RETURNING id, created_at, line, version
+RETURNING line, version, created_at
 `
 
 type RiverMigrationDeleteByLineAndVersionManyParams struct {
@@ -86,12 +84,7 @@ func (q *Queries) RiverMigrationDeleteByLineAndVersionMany(ctx context.Context, 
 	var items []*RiverMigration
 	for rows.Next() {
 		var i RiverMigration
-		if err := rows.Scan(
-			&i.ID,
-			&i.CreatedAt,
-			&i.Line,
-			&i.Version,
-		); err != nil {
+		if err := rows.Scan(&i.Line, &i.Version, &i.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)
@@ -104,7 +97,6 @@ func (q *Queries) RiverMigrationDeleteByLineAndVersionMany(ctx context.Context, 
 
 const riverMigrationGetAllAssumingMain = `-- name: RiverMigrationGetAllAssumingMain :many
 SELECT
-    id,
     created_at,
     version
 FROM river_migration
@@ -112,7 +104,6 @@ ORDER BY version
 `
 
 type RiverMigrationGetAllAssumingMainRow struct {
-	ID        int64
 	CreatedAt time.Time
 	Version   int64
 }
@@ -131,7 +122,7 @@ func (q *Queries) RiverMigrationGetAllAssumingMain(ctx context.Context, db DBTX)
 	var items []*RiverMigrationGetAllAssumingMainRow
 	for rows.Next() {
 		var i RiverMigrationGetAllAssumingMainRow
-		if err := rows.Scan(&i.ID, &i.CreatedAt, &i.Version); err != nil {
+		if err := rows.Scan(&i.CreatedAt, &i.Version); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)
@@ -143,7 +134,7 @@ func (q *Queries) RiverMigrationGetAllAssumingMain(ctx context.Context, db DBTX)
 }
 
 const riverMigrationGetByLine = `-- name: RiverMigrationGetByLine :many
-SELECT id, created_at, line, version
+SELECT line, version, created_at
 FROM river_migration
 WHERE line = $1
 ORDER BY version
@@ -158,12 +149,7 @@ func (q *Queries) RiverMigrationGetByLine(ctx context.Context, db DBTX, line str
 	var items []*RiverMigration
 	for rows.Next() {
 		var i RiverMigration
-		if err := rows.Scan(
-			&i.ID,
-			&i.CreatedAt,
-			&i.Line,
-			&i.Version,
-		); err != nil {
+		if err := rows.Scan(&i.Line, &i.Version, &i.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)
@@ -181,7 +167,7 @@ INSERT INTO river_migration (
 ) VALUES (
     $1,
     $2
-) RETURNING id, created_at, line, version
+) RETURNING line, version, created_at
 `
 
 type RiverMigrationInsertParams struct {
@@ -192,12 +178,7 @@ type RiverMigrationInsertParams struct {
 func (q *Queries) RiverMigrationInsert(ctx context.Context, db DBTX, arg *RiverMigrationInsertParams) (*RiverMigration, error) {
 	row := db.QueryRow(ctx, riverMigrationInsert, arg.Line, arg.Version)
 	var i RiverMigration
-	err := row.Scan(
-		&i.ID,
-		&i.CreatedAt,
-		&i.Line,
-		&i.Version,
-	)
+	err := row.Scan(&i.Line, &i.Version, &i.CreatedAt)
 	return &i, err
 }
 
@@ -209,7 +190,7 @@ INSERT INTO river_migration (
 SELECT
     $1,
     unnest($2::bigint[])
-RETURNING id, created_at, line, version
+RETURNING line, version, created_at
 `
 
 type RiverMigrationInsertManyParams struct {
@@ -226,12 +207,7 @@ func (q *Queries) RiverMigrationInsertMany(ctx context.Context, db DBTX, arg *Ri
 	var items []*RiverMigration
 	for rows.Next() {
 		var i RiverMigration
-		if err := rows.Scan(
-			&i.ID,
-			&i.CreatedAt,
-			&i.Line,
-			&i.Version,
-		); err != nil {
+		if err := rows.Scan(&i.Line, &i.Version, &i.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)
@@ -249,13 +225,11 @@ INSERT INTO river_migration (
 SELECT
     unnest($1::bigint[])
 RETURNING
-    id,
     created_at,
     version
 `
 
 type RiverMigrationInsertManyAssumingMainRow struct {
-	ID        int64
 	CreatedAt time.Time
 	Version   int64
 }
@@ -269,7 +243,7 @@ func (q *Queries) RiverMigrationInsertManyAssumingMain(ctx context.Context, db D
 	var items []*RiverMigrationInsertManyAssumingMainRow
 	for rows.Next() {
 		var i RiverMigrationInsertManyAssumingMainRow
-		if err := rows.Scan(&i.ID, &i.CreatedAt, &i.Version); err != nil {
+		if err := rows.Scan(&i.CreatedAt, &i.Version); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)

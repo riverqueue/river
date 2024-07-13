@@ -1972,7 +1972,6 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 		// Check the full properties of one of the migrations.
 		migration1Fetched := migrations[0]
-		require.Equal(t, migration1.ID, migration1Fetched.ID)
 		requireEqualTime(t, migration1.CreatedAt, migration1Fetched.CreatedAt)
 		require.Equal(t, riverdriver.MigrationLineMain, migration1Fetched.Line)
 		require.Equal(t, migration1.Version, migration1Fetched.Version)
@@ -1999,7 +1998,6 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 		// Check the full properties of one of the migrations.
 		migration1Fetched := migrations[0]
-		require.Equal(t, migration1.ID, migration1Fetched.ID)
 		requireEqualTime(t, migration1.CreatedAt, migration1Fetched.CreatedAt)
 		require.Equal(t, "alternate", migration1Fetched.Line)
 		require.Equal(t, migration1.Version, migration1Fetched.Version)

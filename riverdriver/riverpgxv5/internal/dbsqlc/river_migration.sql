@@ -1,17 +1,16 @@
 CREATE TABLE river_migration(
-    id bigserial PRIMARY KEY,
-    created_at timestamptz NOT NULL DEFAULT NOW(),
     line TEXT NOT NULL,
     version bigint NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT NOW(),
     CONSTRAINT line_length CHECK (char_length(line) > 0 AND char_length(line) < 128),
-    CONSTRAINT version CHECK (version >= 1)
+    CONSTRAINT version_gte_1 CHECK (version >= 1),
+    PRIMARY KEY (line, version)
 );
 
 -- name: RiverMigrationDeleteAssumingMainMany :many
 DELETE FROM river_migration
 WHERE version = any(@version::bigint[])
 RETURNING
-    id,
     created_at,
     version;
 
@@ -29,7 +28,6 @@ RETURNING *;
 --
 -- name: RiverMigrationGetAllAssumingMain :many
 SELECT
-    id,
     created_at,
     version
 FROM river_migration
@@ -67,7 +65,6 @@ INSERT INTO river_migration (
 SELECT
     unnest(@version::bigint[])
 RETURNING
-    id,
     created_at,
     version;
 
