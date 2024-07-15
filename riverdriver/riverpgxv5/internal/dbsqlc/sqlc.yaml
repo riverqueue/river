@@ -3,6 +3,8 @@ sql:
   - engine: "postgresql"
     queries:
       - pg_misc.sql
+      - river_client.sql
+      - river_client_queue.sql
       - river_job.sql
       - river_job_copyfrom.sql
       - river_leader.sql
@@ -10,6 +12,8 @@ sql:
       - river_queue.sql
     schema:
       - pg_misc.sql
+      - river_client.sql
+      - river_client_queue.sql
       - river_job.sql
       - river_leader.sql
       - river_migration.sql

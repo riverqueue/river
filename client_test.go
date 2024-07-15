@@ -4942,9 +4942,9 @@ func TestDefaultClientID(t *testing.T) {
 	host, _ := os.Hostname()
 	require.NotEmpty(t, host)
 
-	startedAt := time.Date(2024, time.March, 7, 4, 39, 12, 0, time.UTC)
+	startedAt := time.Date(2024, time.March, 7, 4, 39, 12, 123456789, time.UTC)
 
-	require.Equal(t, strings.ReplaceAll(host, ".", "_")+"_2024_03_07T04_39_12", defaultClientID(startedAt)) //nolint:goconst
+	require.Equal(t, strings.ReplaceAll(host, ".", "_")+"_2024_03_07T04_39_12_123456", defaultClientID(startedAt)) //nolint:goconst
 }
 
 func TestDefaultClientIDWithHost(t *testing.T) {
@@ -4953,15 +4953,15 @@ func TestDefaultClientIDWithHost(t *testing.T) {
 	host, _ := os.Hostname()
 	require.NotEmpty(t, host)
 
-	startedAt := time.Date(2024, time.March, 7, 4, 39, 12, 0, time.UTC)
+	startedAt := time.Date(2024, time.March, 7, 4, 39, 12, 123456789, time.UTC)
 
-	require.Equal(t, "example_com_2024_03_07T04_39_12", defaultClientIDWithHost(startedAt,
+	require.Equal(t, "example_com_2024_03_07T04_39_12_123456", defaultClientIDWithHost(startedAt,
 		"example.com"))
-	require.Equal(t, "this_is_a_degenerately_long_host_name_that_will_be_truncated_2024_03_07T04_39_12", defaultClientIDWithHost(startedAt,
+	require.Equal(t, "this_is_a_degenerately_long_host_name_that_will_be_truncated_2024_03_07T04_39_12_123456", defaultClientIDWithHost(startedAt,
 		"this.is.a.degenerately.long.host.name.that.will.be.truncated.so.were.not.storing.massive.strings.to.the.database.com"))
 
 	// Test strings right around the boundary to make sure we don't have some off-by-one slice error.
-	require.Equal(t, strings.Repeat("a", 59)+"_2024_03_07T04_39_12", defaultClientIDWithHost(startedAt, strings.Repeat("a", 59)))
-	require.Equal(t, strings.Repeat("a", 60)+"_2024_03_07T04_39_12", defaultClientIDWithHost(startedAt, strings.Repeat("a", 60)))
-	require.Equal(t, strings.Repeat("a", 60)+"_2024_03_07T04_39_12", defaultClientIDWithHost(startedAt, strings.Repeat("a", 61)))
+	require.Equal(t, strings.Repeat("a", 59)+"_2024_03_07T04_39_12_123456", defaultClientIDWithHost(startedAt, strings.Repeat("a", 59)))
+	require.Equal(t, strings.Repeat("a", 60)+"_2024_03_07T04_39_12_123456", defaultClientIDWithHost(startedAt, strings.Repeat("a", 60)))
+	require.Equal(t, strings.Repeat("a", 60)+"_2024_03_07T04_39_12_123456", defaultClientIDWithHost(startedAt, strings.Repeat("a", 61)))
 }
