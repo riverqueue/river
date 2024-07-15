@@ -31,8 +31,7 @@ var migrationFS embed.FS
 
 // Driver is an implementation of riverdriver.Driver for Pgx v5.
 type Driver struct {
-	dbPool  *pgxpool.Pool
-	queries *dbsqlc.Queries
+	dbPool *pgxpool.Pool
 }
 
 // New returns a new Pgx v5 River driver for use with River.
@@ -48,10 +47,10 @@ type Driver struct {
 // in testing so that inserts can be performed and verified on a test
 // transaction that will be rolled back.
 func New(dbPool *pgxpool.Pool) *Driver {
-	return &Driver{dbPool: dbPool, queries: dbsqlc.New()}
+	return &Driver{dbPool: dbPool}
 }
 
-func (d *Driver) GetExecutor() riverdriver.Executor { return &Executor{d.dbPool, dbsqlc.New()} }
+func (d *Driver) GetExecutor() riverdriver.Executor { return &Executor{d.dbPool} }
 func (d *Driver) GetListener() riverdriver.Listener { return &Listener{dbPool: d.dbPool} }
 func (d *Driver) GetMigrationFS(line string) fs.FS {
 	if line == riverdriver.MigrationLineMain {
@@ -64,7 +63,7 @@ func (d *Driver) HasPool() bool               { return d.dbPool != nil }
 func (d *Driver) SupportsListener() bool      { return true }
 
 func (d *Driver) UnwrapExecutor(tx pgx.Tx) riverdriver.ExecutorTx {
-	return &ExecutorTx{Executor: Executor{tx, dbsqlc.New()}, tx: tx}
+	return &ExecutorTx{Executor: Executor{tx}, tx: tx}
 }
 
 type Executor struct {
@@ -72,7 +71,6 @@ type Executor struct {
 		dbsqlc.DBTX
 		Begin(ctx context.Context) (pgx.Tx, error)
 	}
-	queries *dbsqlc.Queries
 }
 
 func (e *Executor) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
@@ -80,11 +78,11 @@ func (e *Executor) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ExecutorTx{Executor: Executor{tx, e.queries}, tx: tx}, nil
+	return &ExecutorTx{Executor: Executor{tx}, tx: tx}, nil
 }
 
 func (e *Executor) ColumnExists(ctx context.Context, tableName, columnName string) (bool, error) {
-	exists, err := e.queries.ColumnExists(ctx, e.dbtx, &dbsqlc.ColumnExistsParams{
+	exists, err := dbsqlc.New().ColumnExists(ctx, e.dbtx, &dbsqlc.ColumnExistsParams{
 		ColumnName: columnName,
 		TableName:  tableName,
 	})
@@ -102,7 +100,7 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 		return nil, err
 	}
 
-	job, err := e.queries.JobCancel(ctx, e.dbtx, &dbsqlc.JobCancelParams{
+	job, err := dbsqlc.New().JobCancel(ctx, e.dbtx, &dbsqlc.JobCancelParams{
 		ID:                params.ID,
 		CancelAttemptedAt: cancelledAt,
 		ControlTopic:      params.ControlTopic,
@@ -114,7 +112,7 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 }
 
 func (e *Executor) JobCountByState(ctx context.Context, state rivertype.JobState) (int, error) {
-	numJobs, err := e.queries.JobCountByState(ctx, e.dbtx, dbsqlc.RiverJobState(state))
+	numJobs, err := dbsqlc.New().JobCountByState(ctx, e.dbtx, dbsqlc.RiverJobState(state))
 	if err != nil {
 		return 0, err
 	}
@@ -122,7 +120,7 @@ func (e *Executor) JobCountByState(ctx context.Context, state rivertype.JobState
 }
 
 func (e *Executor) JobDelete(ctx context.Context, id int64) (*rivertype.JobRow, error) {
-	job, err := e.queries.JobDelete(ctx, e.dbtx, id)
+	job, err := dbsqlc.New().JobDelete(ctx, e.dbtx, id)
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -133,7 +131,7 @@ func (e *Executor) JobDelete(ctx context.Context, id int64) (*rivertype.JobRow, 
 }
 
 func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobDeleteBeforeParams) (int, error) {
-	numDeleted, err := e.queries.JobDeleteBefore(ctx, e.dbtx, &dbsqlc.JobDeleteBeforeParams{
+	numDeleted, err := dbsqlc.New().JobDeleteBefore(ctx, e.dbtx, &dbsqlc.JobDeleteBeforeParams{
 		CancelledFinalizedAtHorizon: params.CancelledFinalizedAtHorizon,
 		CompletedFinalizedAtHorizon: params.CompletedFinalizedAtHorizon,
 		DiscardedFinalizedAtHorizon: params.DiscardedFinalizedAtHorizon,
@@ -143,7 +141,7 @@ func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobD
 }
 
 func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
-	jobs, err := e.queries.JobGetAvailable(ctx, e.dbtx, &dbsqlc.JobGetAvailableParams{
+	jobs, err := dbsqlc.New().JobGetAvailable(ctx, e.dbtx, &dbsqlc.JobGetAvailableParams{
 		AttemptedBy: params.AttemptedBy,
 		Max:         int32(params.Max),
 		Queue:       params.Queue,
@@ -155,7 +153,7 @@ func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobG
 }
 
 func (e *Executor) JobGetByID(ctx context.Context, id int64) (*rivertype.JobRow, error) {
-	job, err := e.queries.JobGetByID(ctx, e.dbtx, id)
+	job, err := dbsqlc.New().JobGetByID(ctx, e.dbtx, id)
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -163,7 +161,7 @@ func (e *Executor) JobGetByID(ctx context.Context, id int64) (*rivertype.JobRow,
 }
 
 func (e *Executor) JobGetByIDMany(ctx context.Context, id []int64) ([]*rivertype.JobRow, error) {
-	jobs, err := e.queries.JobGetByIDMany(ctx, e.dbtx, id)
+	jobs, err := dbsqlc.New().JobGetByIDMany(ctx, e.dbtx, id)
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -171,7 +169,7 @@ func (e *Executor) JobGetByIDMany(ctx context.Context, id []int64) ([]*rivertype
 }
 
 func (e *Executor) JobGetByKindAndUniqueProperties(ctx context.Context, params *riverdriver.JobGetByKindAndUniquePropertiesParams) (*rivertype.JobRow, error) {
-	job, err := e.queries.JobGetByKindAndUniqueProperties(ctx, e.dbtx, (*dbsqlc.JobGetByKindAndUniquePropertiesParams)(params))
+	job, err := dbsqlc.New().JobGetByKindAndUniqueProperties(ctx, e.dbtx, (*dbsqlc.JobGetByKindAndUniquePropertiesParams)(params))
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -179,7 +177,7 @@ func (e *Executor) JobGetByKindAndUniqueProperties(ctx context.Context, params *
 }
 
 func (e *Executor) JobGetByKindMany(ctx context.Context, kind []string) ([]*rivertype.JobRow, error) {
-	jobs, err := e.queries.JobGetByKindMany(ctx, e.dbtx, kind)
+	jobs, err := dbsqlc.New().JobGetByKindMany(ctx, e.dbtx, kind)
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -187,7 +185,7 @@ func (e *Executor) JobGetByKindMany(ctx context.Context, kind []string) ([]*rive
 }
 
 func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error) {
-	jobs, err := e.queries.JobGetStuck(ctx, e.dbtx, &dbsqlc.JobGetStuckParams{Max: int32(params.Max), StuckHorizon: params.StuckHorizon})
+	jobs, err := dbsqlc.New().JobGetStuck(ctx, e.dbtx, &dbsqlc.JobGetStuckParams{Max: int32(params.Max), StuckHorizon: params.StuckHorizon})
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -195,7 +193,7 @@ func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetSt
 }
 
 func (e *Executor) JobInsertFast(ctx context.Context, params *riverdriver.JobInsertFastParams) (*rivertype.JobRow, error) {
-	job, err := e.queries.JobInsertFast(ctx, e.dbtx, &dbsqlc.JobInsertFastParams{
+	job, err := dbsqlc.New().JobInsertFast(ctx, e.dbtx, &dbsqlc.JobInsertFastParams{
 		Args:        params.EncodedArgs,
 		CreatedAt:   params.CreatedAt,
 		Kind:        params.Kind,
@@ -248,7 +246,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 		}
 	}
 
-	numInserted, err := e.queries.JobInsertFastManyCopyFrom(ctx, e.dbtx, insertJobsParams)
+	numInserted, err := dbsqlc.New().JobInsertFastManyCopyFrom(ctx, e.dbtx, insertJobsParams)
 	if err != nil {
 		return 0, interpretError(err)
 	}
@@ -257,7 +255,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 }
 
 func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobInsertFullParams) (*rivertype.JobRow, error) {
-	job, err := e.queries.JobInsertFull(ctx, e.dbtx, &dbsqlc.JobInsertFullParams{
+	job, err := dbsqlc.New().JobInsertFull(ctx, e.dbtx, &dbsqlc.JobInsertFullParams{
 		Attempt:     int16(params.Attempt),
 		AttemptedAt: params.AttemptedAt,
 		Args:        params.EncodedArgs,
@@ -323,7 +321,7 @@ func (e *Executor) JobListFields() string {
 }
 
 func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRescueManyParams) (*struct{}, error) {
-	err := e.queries.JobRescueMany(ctx, e.dbtx, (*dbsqlc.JobRescueManyParams)(params))
+	err := dbsqlc.New().JobRescueMany(ctx, e.dbtx, (*dbsqlc.JobRescueManyParams)(params))
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -331,7 +329,7 @@ func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRes
 }
 
 func (e *Executor) JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, error) {
-	job, err := e.queries.JobRetry(ctx, e.dbtx, id)
+	job, err := dbsqlc.New().JobRetry(ctx, e.dbtx, id)
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -339,7 +337,7 @@ func (e *Executor) JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, e
 }
 
 func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobScheduleParams) ([]*rivertype.JobRow, error) {
-	jobs, err := e.queries.JobSchedule(ctx, e.dbtx, &dbsqlc.JobScheduleParams{
+	jobs, err := dbsqlc.New().JobSchedule(ctx, e.dbtx, &dbsqlc.JobScheduleParams{
 		Max: int64(params.Max),
 		Now: params.Now,
 	})
@@ -350,7 +348,7 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 }
 
 func (e *Executor) JobSetCompleteIfRunningMany(ctx context.Context, params *riverdriver.JobSetCompleteIfRunningManyParams) ([]*rivertype.JobRow, error) {
-	jobs, err := e.queries.JobSetCompleteIfRunningMany(ctx, e.dbtx, &dbsqlc.JobSetCompleteIfRunningManyParams{
+	jobs, err := dbsqlc.New().JobSetCompleteIfRunningMany(ctx, e.dbtx, &dbsqlc.JobSetCompleteIfRunningManyParams{
 		ID:          params.ID,
 		FinalizedAt: params.FinalizedAt,
 	})
@@ -366,7 +364,7 @@ func (e *Executor) JobSetStateIfRunning(ctx context.Context, params *riverdriver
 		maxAttempts = int16(*params.MaxAttempts)
 	}
 
-	job, err := e.queries.JobSetStateIfRunning(ctx, e.dbtx, &dbsqlc.JobSetStateIfRunningParams{
+	job, err := dbsqlc.New().JobSetStateIfRunning(ctx, e.dbtx, &dbsqlc.JobSetStateIfRunningParams{
 		ID:                  params.ID,
 		ErrorDoUpdate:       params.ErrData != nil,
 		Error:               params.ErrData,
@@ -385,7 +383,7 @@ func (e *Executor) JobSetStateIfRunning(ctx context.Context, params *riverdriver
 }
 
 func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateParams) (*rivertype.JobRow, error) {
-	job, err := e.queries.JobUpdate(ctx, e.dbtx, &dbsqlc.JobUpdateParams{
+	job, err := dbsqlc.New().JobUpdate(ctx, e.dbtx, &dbsqlc.JobUpdateParams{
 		ID:                  params.ID,
 		AttemptedAtDoUpdate: params.AttemptedAtDoUpdate,
 		AttemptedAt:         params.AttemptedAt,
@@ -406,7 +404,7 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 }
 
 func (e *Executor) LeaderAttemptElect(ctx context.Context, params *riverdriver.LeaderElectParams) (bool, error) {
-	numElectionsWon, err := e.queries.LeaderAttemptElect(ctx, e.dbtx, &dbsqlc.LeaderAttemptElectParams{
+	numElectionsWon, err := dbsqlc.New().LeaderAttemptElect(ctx, e.dbtx, &dbsqlc.LeaderAttemptElectParams{
 		LeaderID: params.LeaderID,
 		TTL:      params.TTL,
 	})
@@ -417,7 +415,7 @@ func (e *Executor) LeaderAttemptElect(ctx context.Context, params *riverdriver.L
 }
 
 func (e *Executor) LeaderAttemptReelect(ctx context.Context, params *riverdriver.LeaderElectParams) (bool, error) {
-	numElectionsWon, err := e.queries.LeaderAttemptReelect(ctx, e.dbtx, &dbsqlc.LeaderAttemptReelectParams{
+	numElectionsWon, err := dbsqlc.New().LeaderAttemptReelect(ctx, e.dbtx, &dbsqlc.LeaderAttemptReelectParams{
 		LeaderID: params.LeaderID,
 		TTL:      params.TTL,
 	})
@@ -428,7 +426,7 @@ func (e *Executor) LeaderAttemptReelect(ctx context.Context, params *riverdriver
 }
 
 func (e *Executor) LeaderDeleteExpired(ctx context.Context) (int, error) {
-	numDeleted, err := e.queries.LeaderDeleteExpired(ctx, e.dbtx)
+	numDeleted, err := dbsqlc.New().LeaderDeleteExpired(ctx, e.dbtx)
 	if err != nil {
 		return 0, interpretError(err)
 	}
@@ -436,7 +434,7 @@ func (e *Executor) LeaderDeleteExpired(ctx context.Context) (int, error) {
 }
 
 func (e *Executor) LeaderGetElectedLeader(ctx context.Context) (*riverdriver.Leader, error) {
-	leader, err := e.queries.LeaderGetElectedLeader(ctx, e.dbtx)
+	leader, err := dbsqlc.New().LeaderGetElectedLeader(ctx, e.dbtx)
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -444,7 +442,7 @@ func (e *Executor) LeaderGetElectedLeader(ctx context.Context) (*riverdriver.Lea
 }
 
 func (e *Executor) LeaderInsert(ctx context.Context, params *riverdriver.LeaderInsertParams) (*riverdriver.Leader, error) {
-	leader, err := e.queries.LeaderInsert(ctx, e.dbtx, &dbsqlc.LeaderInsertParams{
+	leader, err := dbsqlc.New().LeaderInsert(ctx, e.dbtx, &dbsqlc.LeaderInsertParams{
 		ElectedAt: params.ElectedAt,
 		ExpiresAt: params.ExpiresAt,
 		LeaderID:  params.LeaderID,
@@ -457,7 +455,7 @@ func (e *Executor) LeaderInsert(ctx context.Context, params *riverdriver.LeaderI
 }
 
 func (e *Executor) LeaderResign(ctx context.Context, params *riverdriver.LeaderResignParams) (bool, error) {
-	numResigned, err := e.queries.LeaderResign(ctx, e.dbtx, &dbsqlc.LeaderResignParams{
+	numResigned, err := dbsqlc.New().LeaderResign(ctx, e.dbtx, &dbsqlc.LeaderResignParams{
 		LeaderID:        params.LeaderID,
 		LeadershipTopic: params.LeadershipTopic,
 	})
@@ -468,7 +466,7 @@ func (e *Executor) LeaderResign(ctx context.Context, params *riverdriver.LeaderR
 }
 
 func (e *Executor) MigrationDeleteAssumingMainMany(ctx context.Context, versions []int) ([]*riverdriver.Migration, error) {
-	migrations, err := e.queries.RiverMigrationDeleteAssumingMainMany(ctx, e.dbtx,
+	migrations, err := dbsqlc.New().RiverMigrationDeleteAssumingMainMany(ctx, e.dbtx,
 		sliceutil.Map(versions, func(v int) int64 { return int64(v) }))
 	if err != nil {
 		return nil, interpretError(err)
@@ -483,7 +481,7 @@ func (e *Executor) MigrationDeleteAssumingMainMany(ctx context.Context, versions
 }
 
 func (e *Executor) MigrationDeleteByLineAndVersionMany(ctx context.Context, line string, versions []int) ([]*riverdriver.Migration, error) {
-	migrations, err := e.queries.RiverMigrationDeleteByLineAndVersionMany(ctx, e.dbtx, &dbsqlc.RiverMigrationDeleteByLineAndVersionManyParams{
+	migrations, err := dbsqlc.New().RiverMigrationDeleteByLineAndVersionMany(ctx, e.dbtx, &dbsqlc.RiverMigrationDeleteByLineAndVersionManyParams{
 		Line:    line,
 		Version: sliceutil.Map(versions, func(v int) int64 { return int64(v) }),
 	})
@@ -494,7 +492,7 @@ func (e *Executor) MigrationDeleteByLineAndVersionMany(ctx context.Context, line
 }
 
 func (e *Executor) MigrationGetAllAssumingMain(ctx context.Context) ([]*riverdriver.Migration, error) {
-	migrations, err := e.queries.RiverMigrationGetAllAssumingMain(ctx, e.dbtx)
+	migrations, err := dbsqlc.New().RiverMigrationGetAllAssumingMain(ctx, e.dbtx)
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -508,7 +506,7 @@ func (e *Executor) MigrationGetAllAssumingMain(ctx context.Context) ([]*riverdri
 }
 
 func (e *Executor) MigrationGetByLine(ctx context.Context, line string) ([]*riverdriver.Migration, error) {
-	migrations, err := e.queries.RiverMigrationGetByLine(ctx, e.dbtx, line)
+	migrations, err := dbsqlc.New().RiverMigrationGetByLine(ctx, e.dbtx, line)
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -516,7 +514,7 @@ func (e *Executor) MigrationGetByLine(ctx context.Context, line string) ([]*rive
 }
 
 func (e *Executor) MigrationInsertMany(ctx context.Context, line string, versions []int) ([]*riverdriver.Migration, error) {
-	migrations, err := e.queries.RiverMigrationInsertMany(ctx, e.dbtx, &dbsqlc.RiverMigrationInsertManyParams{
+	migrations, err := dbsqlc.New().RiverMigrationInsertMany(ctx, e.dbtx, &dbsqlc.RiverMigrationInsertManyParams{
 		Line:    line,
 		Version: sliceutil.Map(versions, func(v int) int64 { return int64(v) }),
 	})
@@ -527,7 +525,7 @@ func (e *Executor) MigrationInsertMany(ctx context.Context, line string, version
 }
 
 func (e *Executor) MigrationInsertManyAssumingMain(ctx context.Context, versions []int) ([]*riverdriver.Migration, error) {
-	migrations, err := e.queries.RiverMigrationInsertManyAssumingMain(ctx, e.dbtx,
+	migrations, err := dbsqlc.New().RiverMigrationInsertManyAssumingMain(ctx, e.dbtx,
 		sliceutil.Map(versions, func(v int) int64 { return int64(v) }),
 	)
 	if err != nil {
@@ -543,19 +541,19 @@ func (e *Executor) MigrationInsertManyAssumingMain(ctx context.Context, versions
 }
 
 func (e *Executor) NotifyMany(ctx context.Context, params *riverdriver.NotifyManyParams) error {
-	return e.queries.PGNotifyMany(ctx, e.dbtx, &dbsqlc.PGNotifyManyParams{
+	return dbsqlc.New().PGNotifyMany(ctx, e.dbtx, &dbsqlc.PGNotifyManyParams{
 		Payload: params.Payload,
 		Topic:   params.Topic,
 	})
 }
 
 func (e *Executor) PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}, error) {
-	err := e.queries.PGAdvisoryXactLock(ctx, e.dbtx, key)
+	err := dbsqlc.New().PGAdvisoryXactLock(ctx, e.dbtx, key)
 	return &struct{}{}, interpretError(err)
 }
 
 func (e *Executor) QueueCreateOrSetUpdatedAt(ctx context.Context, params *riverdriver.QueueCreateOrSetUpdatedAtParams) (*rivertype.Queue, error) {
-	queue, err := e.queries.QueueCreateOrSetUpdatedAt(ctx, e.dbtx, &dbsqlc.QueueCreateOrSetUpdatedAtParams{
+	queue, err := dbsqlc.New().QueueCreateOrSetUpdatedAt(ctx, e.dbtx, &dbsqlc.QueueCreateOrSetUpdatedAtParams{
 		Metadata:  params.Metadata,
 		Name:      params.Name,
 		PausedAt:  params.PausedAt,
@@ -568,7 +566,7 @@ func (e *Executor) QueueCreateOrSetUpdatedAt(ctx context.Context, params *riverd
 }
 
 func (e *Executor) QueueDeleteExpired(ctx context.Context, params *riverdriver.QueueDeleteExpiredParams) ([]string, error) {
-	queues, err := e.queries.QueueDeleteExpired(ctx, e.dbtx, &dbsqlc.QueueDeleteExpiredParams{
+	queues, err := dbsqlc.New().QueueDeleteExpired(ctx, e.dbtx, &dbsqlc.QueueDeleteExpiredParams{
 		Max:              int64(params.Max),
 		UpdatedAtHorizon: params.UpdatedAtHorizon,
 	})
@@ -583,7 +581,7 @@ func (e *Executor) QueueDeleteExpired(ctx context.Context, params *riverdriver.Q
 }
 
 func (e *Executor) QueueGet(ctx context.Context, name string) (*rivertype.Queue, error) {
-	queue, err := e.queries.QueueGet(ctx, e.dbtx, name)
+	queue, err := dbsqlc.New().QueueGet(ctx, e.dbtx, name)
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -591,7 +589,7 @@ func (e *Executor) QueueGet(ctx context.Context, name string) (*rivertype.Queue,
 }
 
 func (e *Executor) QueueList(ctx context.Context, limit int) ([]*rivertype.Queue, error) {
-	internalQueues, err := e.queries.QueueList(ctx, e.dbtx, int32(limit))
+	internalQueues, err := dbsqlc.New().QueueList(ctx, e.dbtx, int32(limit))
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -603,7 +601,7 @@ func (e *Executor) QueueList(ctx context.Context, limit int) ([]*rivertype.Queue
 }
 
 func (e *Executor) QueuePause(ctx context.Context, name string) error {
-	res, err := e.queries.QueuePause(ctx, e.dbtx, name)
+	res, err := dbsqlc.New().QueuePause(ctx, e.dbtx, name)
 	if err != nil {
 		return interpretError(err)
 	}
@@ -614,7 +612,7 @@ func (e *Executor) QueuePause(ctx context.Context, name string) error {
 }
 
 func (e *Executor) QueueResume(ctx context.Context, name string) error {
-	res, err := e.queries.QueueResume(ctx, e.dbtx, name)
+	res, err := dbsqlc.New().QueueResume(ctx, e.dbtx, name)
 	if err != nil {
 		return interpretError(err)
 	}
@@ -625,7 +623,7 @@ func (e *Executor) QueueResume(ctx context.Context, name string) error {
 }
 
 func (e *Executor) TableExists(ctx context.Context, tableName string) (bool, error) {
-	exists, err := e.queries.TableExists(ctx, e.dbtx, tableName)
+	exists, err := dbsqlc.New().TableExists(ctx, e.dbtx, tableName)
 	return exists, interpretError(err)
 }
 
