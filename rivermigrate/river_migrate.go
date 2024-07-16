@@ -34,6 +34,10 @@ const migrateVersionLineColumnAdded = 5
 // Migration is a bundled migration containing a version (e.g. 1, 2, 3), and SQL
 // for up and down directions.
 type Migration struct {
+	// Name is a human-friendly name for the migration derived from its
+	// filename.
+	Name string
+
 	// SQLDown is the s SQL for the migration's down direction.
 	SQLDown string
 
@@ -171,6 +175,10 @@ type MigrateResult struct {
 type MigrateVersion struct {
 	// Duration is the amount of time it took to apply the migration.
 	Duration time.Duration
+
+	// Name is a human-friendly name for the migration derived from its
+	// filename.
+	Name string
 
 	// SQL is the SQL that was applied along with the migration.
 	SQL string
@@ -501,7 +509,7 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Ex
 			slog.Int("version", versionBundle.Version),
 		)
 
-		res.Versions = append(res.Versions, MigrateVersion{Duration: duration, SQL: sql, Version: versionBundle.Version})
+		res.Versions = append(res.Versions, MigrateVersion{Duration: duration, Name: versionBundle.Name, SQL: sql, Version: versionBundle.Version})
 	}
 
 	return res, nil
@@ -572,24 +580,24 @@ func migrationsFromFS(migrationFS fs.FS, line string) ([]Migration, error) {
 			return nil
 		}
 
-		name := path
+		filename := path
 
 		// Invoked with the full path name. Strip `migration/` from the front so
 		// we have a name that we can parse with.
-		if !strings.HasPrefix(name, subdir) {
+		if !strings.HasPrefix(filename, subdir) {
 			return fmt.Errorf("expected path %q to start with subdir %q", path, subdir)
 		}
-		name = name[len(subdir)+1:]
+		filename = filename[len(subdir)+1:]
 
 		// Ignore any migrations that don't belong to the line we're reading.
-		if !strings.HasPrefix(name, line) {
+		if !strings.HasPrefix(filename, line) {
 			return nil
 		}
-		name = name[len(line)+1:]
+		filename = filename[len(line)+1:]
 
-		versionStr, _, ok := strings.Cut(name, "_")
+		versionStr, name, ok := strings.Cut(filename, "_")
 		if !ok {
-			return fmt.Errorf("expected name to start with version string like '001_': %q", name)
+			return fmt.Errorf("expected name to start with version string like '001_': %q", filename)
 		}
 
 		version, err := strconv.Atoi(versionStr)
@@ -597,10 +605,15 @@ func migrationsFromFS(migrationFS fs.FS, line string) ([]Migration, error) {
 			return fmt.Errorf("error parsing version %q: %w", versionStr, err)
 		}
 
+		// Non-version name for the migration. So for `002_initial_schema` it
+		// would be `initial schema`.
+		name, _, _ = strings.Cut(name, ".")
+		name = strings.ReplaceAll(name, "_", " ")
+
 		// This works because `fs.WalkDir` guarantees lexical order, so all 001*
 		// files always appear before all 002* files, etc.
 		if lastBundle == nil || lastBundle.Version != version {
-			migrations = append(migrations, Migration{Version: version})
+			migrations = append(migrations, Migration{Name: name, Version: version})
 			lastBundle = &migrations[len(migrations)-1]
 		}
 
@@ -615,12 +628,12 @@ func migrationsFromFS(migrationFS fs.FS, line string) ([]Migration, error) {
 		}
 
 		switch {
-		case strings.HasSuffix(name, ".down.sql"):
+		case strings.HasSuffix(filename, ".down.sql"):
 			lastBundle.SQLDown = string(contents)
-		case strings.HasSuffix(name, ".up.sql"):
+		case strings.HasSuffix(filename, ".up.sql"):
 			lastBundle.SQLUp = string(contents)
 		default:
-			return fmt.Errorf("file %q should end with either '.down.sql' or '.up.sql'", name)
+			return fmt.Errorf("file %q should end with either '.down.sql' or '.up.sql'", filename)
 		}
 
 		return nil
