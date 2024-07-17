@@ -19,6 +19,7 @@ river migrate-up --database-url "$DATABASE_URL"
 - Fully functional driver for `database/sql` for use with packages like Bun and GORM. [PR #351](https://github.com/riverqueue/river/pull/351).
 - Queues can be added after a client is initialized using `client.Queues().Add(queueName string, queueConfig QueueConfig)`. [PR #410](https://github.com/riverqueue/river/pull/410).
 - Migration that adds a `line` column to the `river_migration` table so that it can support multiple migration lines. [PR #435](https://github.com/riverqueue/river/pull/435).
+- `--line` flag added to the River CLI. [PR #454](https://github.com/riverqueue/river/pull/454).
 
 ### Changed
 
