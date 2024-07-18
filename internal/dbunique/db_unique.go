@@ -23,6 +23,7 @@ import (
 var defaultUniqueStates = []string{ //nolint:gochecknoglobals
 	string(rivertype.JobStateAvailable),
 	string(rivertype.JobStateCompleted),
+	string(rivertype.JobStatePending),
 	string(rivertype.JobStateRunning),
 	string(rivertype.JobStateRetryable),
 	string(rivertype.JobStateScheduled),
