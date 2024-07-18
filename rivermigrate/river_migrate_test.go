@@ -154,6 +154,9 @@ func TestMigrator(t *testing.T) {
 			require.Equal(t, DirectionDown, res.Direction)
 			require.Equal(t, []int{migrateVersionIncludingRiverJob}, sliceutil.Map(res.Versions, migrateVersionToInt))
 
+			version := res.Versions[0]
+			require.Equal(t, "initial schema", version.Name)
+
 			err = dbExecError(ctx, bundle.driver.UnwrapExecutor(bundle.tx), "SELECT * FROM river_job")
 			require.Error(t, err)
 		}
@@ -616,6 +619,11 @@ func TestMigrationsFromFS(t *testing.T) {
 		migrations, err := migrationsFromFS(migrationFS, "main")
 		require.NoError(t, err)
 		require.Equal(t, []int{1, 2}, sliceutil.Map(migrations, migrationToInt))
+
+		migration := migrations[0]
+		require.Equal(t, "first", migration.Name)
+		require.Equal(t, "SELECT 1;\n", migration.SQLDown)
+		require.Equal(t, "SELECT 1;\n", migration.SQLUp)
 	})
 
 	t.Run("Alternate", func(t *testing.T) {
@@ -624,6 +632,11 @@ func TestMigrationsFromFS(t *testing.T) {
 		migrations, err := migrationsFromFS(migrationFS, migrationLineAlternate)
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(migrationLineAlternateMaxVersion), sliceutil.Map(migrations, migrationToInt))
+
+		migration := migrations[0]
+		require.Equal(t, "premier", migration.Name)
+		require.Equal(t, "SELECT 1;\n", migration.SQLDown)
+		require.Equal(t, "SELECT 1;\n", migration.SQLUp)
 	})
 
 	t.Run("DoesNotExist", func(t *testing.T) {

@@ -329,17 +329,33 @@ func (c *migrateDown) Run(ctx context.Context, opts *migrateOpts) (bool, error) 
 	return true, nil
 }
 
+// Rounds a duration so that it doesn't show so much cluttered and not useful
+// precision in printf output.
+func roundDuration(duration time.Duration) time.Duration {
+	switch {
+	case duration > 1*time.Second:
+		return duration.Truncate(10 * time.Millisecond)
+	case duration < 1*time.Millisecond:
+		return duration.Truncate(10 * time.Nanosecond)
+	default:
+		return duration.Truncate(10 * time.Microsecond)
+	}
+}
+
 func migratePrintResult(out io.Writer, opts *migrateOpts, res *rivermigrate.MigrateResult, direction rivermigrate.Direction) {
 	if len(res.Versions) < 1 {
 		fmt.Fprintf(out, "no migrations to apply\n")
 		return
 	}
 
+	versionWithLongestName := slices.MaxFunc(res.Versions,
+		func(v1, v2 rivermigrate.MigrateVersion) int { return len(v1.Name) - len(v2.Name) })
+
 	for _, migrateVersion := range res.Versions {
 		if opts.DryRun {
 			fmt.Fprintf(out, "migration %03d [%s] [DRY RUN]\n", migrateVersion.Version, direction)
 		} else {
-			fmt.Fprintf(out, "applied migration %03d [%s] [%s]\n", migrateVersion.Version, direction, migrateVersion.Duration)
+			fmt.Fprintf(out, "applied migration %03d [%s] %-*s [%s]\n", migrateVersion.Version, direction, len(versionWithLongestName.Name), migrateVersion.Name, roundDuration(migrateVersion.Duration))
 		}
 
 		if opts.ShowSQL {
