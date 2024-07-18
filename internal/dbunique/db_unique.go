@@ -24,6 +24,7 @@ import (
 var defaultUniqueStates = []rivertype.JobState{ //nolint:gochecknoglobals
 	rivertype.JobStateAvailable,
 	rivertype.JobStateCompleted,
+	rivertype.JobStatePending,
 	rivertype.JobStateRetryable,
 	rivertype.JobStateRunning,
 	rivertype.JobStateScheduled,
