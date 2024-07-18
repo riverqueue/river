@@ -936,7 +936,7 @@ func (c *Client[TTx]) logStatsLoop(ctx context.Context, shouldStart bool, starte
 
 func (c *Client[TTx]) handleLeadershipChangeLoop(ctx context.Context, shouldStart bool, started, stopped func()) error {
 	handleLeadershipChange := func(ctx context.Context, notification *leadership.Notification) {
-		c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Election change received",
+		c.baseService.Logger.DebugContext(ctx, c.baseService.Name+": Election change received",
 			slog.String("client_id", c.config.ID), slog.Bool("is_leader", notification.IsLeader))
 
 		switch {

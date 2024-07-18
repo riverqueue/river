@@ -245,7 +245,7 @@ func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 	var snoozeErr *jobSnoozeError
 
 	if res.Err != nil && errors.As(res.Err, &snoozeErr) {
-		e.Logger.InfoContext(ctx, e.Name+": Job snoozed",
+		e.Logger.DebugContext(ctx, e.Name+": Job snoozed",
 			slog.Int64("job_id", e.JobRow.ID),
 			slog.String("job_kind", e.JobRow.Kind),
 			slog.Duration("duration", snoozeErr.duration),
@@ -300,7 +300,7 @@ func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
 	switch {
 	case errors.As(res.Err, &cancelErr):
 		cancelJob = true
-		e.Logger.InfoContext(ctx, e.Name+": Job cancelled explicitly", logAttrs...)
+		e.Logger.DebugContext(ctx, e.Name+": Job cancelled explicitly", logAttrs...)
 	case res.Err != nil:
 		e.Logger.ErrorContext(ctx, e.Name+": Job errored", logAttrs...)
 	case res.PanicVal != nil:

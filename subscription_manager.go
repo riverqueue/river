@@ -97,7 +97,7 @@ func (sm *subscriptionManager) logStats(ctx context.Context, svcName string) {
 	sm.statsMu.Lock()
 	defer sm.statsMu.Unlock()
 
-	sm.Logger.InfoContext(ctx, svcName+": Job stats (since last stats line)",
+	sm.Logger.DebugContext(ctx, svcName+": Job stats (since last stats line)",
 		"num_jobs_run", sm.statsNumJobs,
 		"average_complete_duration", sm.safeDurationAverage(sm.statsAggregate.CompleteDuration, sm.statsNumJobs),
 		"average_queue_wait_duration", sm.safeDurationAverage(sm.statsAggregate.QueueWaitDuration, sm.statsNumJobs),

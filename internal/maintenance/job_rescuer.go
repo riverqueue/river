@@ -130,10 +130,12 @@ func (s *JobRescuer) Start(ctx context.Context) error {
 				continue
 			}
 
-			s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
-				slog.Int64("num_jobs_discarded", res.NumJobsDiscarded),
-				slog.Int64("num_jobs_retry_scheduled", res.NumJobsRetried),
-			)
+			if res.NumJobsDiscarded > 0 || res.NumJobsRetried > 0 {
+				s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
+					slog.Int64("num_jobs_discarded", res.NumJobsDiscarded),
+					slog.Int64("num_jobs_retry_scheduled", res.NumJobsRetried),
+				)
+			}
 		}
 	}()
 
@@ -231,11 +233,6 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 		if len(stuckJobs) < s.batchSize {
 			break
 		}
-
-		s.Logger.InfoContext(ctx, s.Name+": Rescued batch of jobs",
-			slog.Int64("num_jobs_discarded", res.NumJobsDiscarded),
-			slog.Int64("num_jobs_retried", res.NumJobsRetried),
-		)
 
 		s.CancellableSleepRandomBetween(ctx, BatchBackoffMin, BatchBackoffMax)
 	}

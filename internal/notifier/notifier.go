@@ -238,7 +238,7 @@ func (n *Notifier) listenerClose(ctx context.Context, skipLock bool) {
 		return
 	}
 
-	n.Logger.InfoContext(ctx, n.Name+": Listener closing")
+	n.Logger.DebugContext(ctx, n.Name+": Listener closing")
 	if err := n.listener.Close(ctx); err != nil {
 		if !errors.Is(err, context.Canceled) {
 			n.Logger.ErrorContext(ctx, n.Name+": Error closing listener", "err", err)
@@ -263,7 +263,7 @@ func (n *Notifier) listenerConnect(ctx context.Context, skipLock bool) error {
 	ctx, cancel := context.WithTimeout(ctx, listenerTimeout)
 	defer cancel()
 
-	n.Logger.InfoContext(ctx, n.Name+": Listener connecting")
+	n.Logger.DebugContext(ctx, n.Name+": Listener connecting")
 	if err := n.listener.Connect(ctx); err != nil {
 		if !errors.Is(err, context.Canceled) {
 			n.Logger.ErrorContext(ctx, n.Name+": Error connecting listener", "err", err)
@@ -285,7 +285,7 @@ func (n *Notifier) listenerListen(ctx context.Context, topic NotificationTopic) 
 	ctx, cancel := context.WithTimeout(ctx, listenerTimeout)
 	defer cancel()
 
-	n.Logger.InfoContext(ctx, n.Name+": Listening on topic", "topic", topic)
+	n.Logger.DebugContext(ctx, n.Name+": Listening on topic", "topic", topic)
 	if err := n.listener.Listen(ctx, string(topic)); err != nil {
 		return fmt.Errorf("error listening on topic %q: %w", topic, err)
 	}
@@ -302,7 +302,7 @@ func (n *Notifier) listenerUnlisten(ctx context.Context, topic NotificationTopic
 	ctx, cancel := context.WithTimeout(ctx, listenerTimeout)
 	defer cancel()
 
-	n.Logger.InfoContext(ctx, n.Name+": Unlistening on topic", "topic", topic)
+	n.Logger.DebugContext(ctx, n.Name+": Unlistening on topic", "topic", topic)
 	if err := n.listener.Unlisten(ctx, string(topic)); err != nil {
 		return fmt.Errorf("error unlistening on topic %q: %w", topic, err)
 	}

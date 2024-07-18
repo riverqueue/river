@@ -257,7 +257,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		insertSub  *notifier.Subscription
 	)
 	if p.config.Notifier == nil {
-		p.Logger.InfoContext(fetchCtx, p.Name+": No notifier configured; starting in poll mode", "client_id", p.config.ClientID)
+		p.Logger.DebugContext(fetchCtx, p.Name+": No notifier configured; starting in poll mode", "client_id", p.config.ClientID)
 
 		go p.pollForSettingChanges(fetchCtx, initiallyPaused)
 	} else {
@@ -610,7 +610,7 @@ func (p *producer) pollForSettingChanges(ctx context.Context, lastPaused bool) {
 					Action: action,
 					Queue:  p.config.Queue,
 				}
-				p.Logger.InfoContext(ctx, p.Name+": Queue control state changed from polling",
+				p.Logger.DebugContext(ctx, p.Name+": Queue control state changed from polling",
 					slog.String("queue", p.config.Queue),
 					slog.String("action", string(action)),
 					slog.Bool("paused", shouldBePaused),
