@@ -53,7 +53,7 @@ start up so that River knows how to assign jobs to workers:
 ```go
 workers := river.NewWorkers()
 // AddWorker panics if the worker is already registered or invalid:
-river.AddWorker(workers, &SortWorker{})
+river.AddWorker[SortArgs](workers, &SortWorker{})
 ```
 
 ## Starting a client
