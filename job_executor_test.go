@@ -331,6 +331,16 @@ func TestJobExecutor_Execute(t *testing.T) {
 		// ensure we still have remaining attempts:
 		require.Greater(t, bundle.jobRow.MaxAttempts, bundle.jobRow.Attempt)
 
+		// add a unique key so we can verify it's cleared
+		var err error
+		bundle.jobRow, err = bundle.exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+			ID:                bundle.jobRow.ID,
+			State:             rivertype.JobStateAvailable, // required for encoding but ignored
+			UniqueKeyDoUpdate: true,
+			UniqueKey:         []byte("unique-key"),
+		})
+		require.NoError(t, err)
+
 		cancelErr := JobCancel(errors.New("throw away this job"))
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return cancelErr }, nil).MakeUnit(bundle.jobRow)
 
@@ -341,6 +351,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.NoError(t, err)
 		require.WithinDuration(t, time.Now(), *job.FinalizedAt, 2*time.Second)
 		require.Equal(t, rivertype.JobStateCancelled, job.State)
+		require.Nil(t, job.UniqueKey)
 		require.Len(t, job.Errors, 1)
 		require.WithinDuration(t, time.Now(), job.Errors[0].At, 2*time.Second)
 		require.Equal(t, 1, job.Errors[0].Attempt)

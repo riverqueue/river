@@ -136,6 +136,11 @@ type UniqueOpts struct {
 	// With this setting, any jobs of the same kind that have been completed or
 	// discarded, but not yet cleaned out by the system, won't count towards the
 	// uniqueness of a new insert.
+	//
+	// Warning: A non-default slice of states in ByState will force the unique
+	// inserter to fall back to a slower insertion path that takes an advisory
+	// lock and performs a look up before insertion.  For best performance, it's
+	// recommended that the default set of states is used.
 	ByState []rivertype.JobState
 }
 

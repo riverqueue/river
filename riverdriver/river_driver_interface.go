@@ -118,6 +118,7 @@ type Executor interface {
 	JobInsertFast(ctx context.Context, params *JobInsertFastParams) (*rivertype.JobRow, error)
 	JobInsertFastMany(ctx context.Context, params []*JobInsertFastParams) (int, error)
 	JobInsertFull(ctx context.Context, params *JobInsertFullParams) (*rivertype.JobRow, error)
+	JobInsertUnique(ctx context.Context, params *JobInsertUniqueParams) (*JobInsertUniqueResult, error)
 	JobList(ctx context.Context, query string, namedArgs map[string]any) ([]*rivertype.JobRow, error)
 	JobListFields() string
 	JobRescueMany(ctx context.Context, params *JobRescueManyParams) (*struct{}, error)
@@ -259,6 +260,16 @@ type JobInsertFastParams struct {
 	Tags        []string
 }
 
+type JobInsertUniqueParams struct {
+	*JobInsertFastParams
+	UniqueKey []byte
+}
+
+type JobInsertUniqueResult struct {
+	Job                      *rivertype.JobRow
+	UniqueSkippedAsDuplicate bool
+}
+
 type JobInsertFullParams struct {
 	Attempt     int
 	AttemptedAt *time.Time
@@ -274,6 +285,7 @@ type JobInsertFullParams struct {
 	ScheduledAt *time.Time
 	State       rivertype.JobState
 	Tags        []string
+	UniqueKey   []byte
 }
 
 type JobRescueManyParams struct {
@@ -353,6 +365,8 @@ type JobUpdateParams struct {
 	FinalizedAt         *time.Time
 	StateDoUpdate       bool
 	State               rivertype.JobState
+	UniqueKeyDoUpdate   bool
+	UniqueKey           []byte
 }
 
 // Leader represents a River leader.

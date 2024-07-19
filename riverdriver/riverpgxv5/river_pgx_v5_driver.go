@@ -270,11 +270,59 @@ func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobIns
 		ScheduledAt: params.ScheduledAt,
 		State:       dbsqlc.RiverJobState(params.State),
 		Tags:        params.Tags,
+		UniqueKey:   params.UniqueKey,
 	})
 	if err != nil {
 		return nil, interpretError(err)
 	}
 	return jobRowFromInternal(job)
+}
+
+func (e *Executor) JobInsertUnique(ctx context.Context, params *riverdriver.JobInsertUniqueParams) (*riverdriver.JobInsertUniqueResult, error) {
+	insertRes, err := dbsqlc.New().JobInsertUnique(ctx, e.dbtx, &dbsqlc.JobInsertUniqueParams{
+		Args:        params.EncodedArgs,
+		CreatedAt:   params.CreatedAt,
+		Kind:        params.Kind,
+		MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)),
+		Metadata:    params.Metadata,
+		Priority:    int16(min(params.Priority, math.MaxInt16)),
+		Queue:       params.Queue,
+		ScheduledAt: params.ScheduledAt,
+		State:       dbsqlc.RiverJobState(params.State),
+		Tags:        params.Tags,
+		UniqueKey:   params.UniqueKey,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+
+	jobRow, err := jobRowFromInternal(&dbsqlc.RiverJob{
+		ID:          insertRes.ID,
+		Args:        insertRes.Args,
+		Attempt:     insertRes.Attempt,
+		AttemptedAt: insertRes.AttemptedAt,
+		AttemptedBy: insertRes.AttemptedBy,
+		CreatedAt:   insertRes.CreatedAt,
+		Errors:      insertRes.Errors,
+		FinalizedAt: insertRes.FinalizedAt,
+		Kind:        insertRes.Kind,
+		MaxAttempts: insertRes.MaxAttempts,
+		Metadata:    insertRes.Metadata,
+		Priority:    insertRes.Priority,
+		Queue:       insertRes.Queue,
+		ScheduledAt: insertRes.ScheduledAt,
+		State:       insertRes.State,
+		Tags:        insertRes.Tags,
+		UniqueKey:   insertRes.UniqueKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &riverdriver.JobInsertUniqueResult{
+		Job:                      jobRow,
+		UniqueSkippedAsDuplicate: insertRes.UniqueSkippedAsDuplicate,
+	}, nil
 }
 
 func (e *Executor) JobList(ctx context.Context, query string, namedArgs map[string]any) ([]*rivertype.JobRow, error) {
@@ -395,6 +443,8 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 		FinalizedAt:         params.FinalizedAt,
 		StateDoUpdate:       params.StateDoUpdate,
 		State:               dbsqlc.RiverJobState(params.State),
+		UniqueKeyDoUpdate:   params.UniqueKeyDoUpdate,
+		UniqueKey:           params.UniqueKey,
 	})
 	if err != nil {
 		return nil, interpretError(err)
@@ -778,6 +828,7 @@ func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
 		ScheduledAt: internal.ScheduledAt.UTC(),
 		State:       rivertype.JobState(internal.State),
 		Tags:        internal.Tags,
+		UniqueKey:   internal.UniqueKey,
 	}, nil
 }
 

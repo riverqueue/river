@@ -1,5 +1,7 @@
 --
--- If any non-main migration are present, 005 is considered irreversible.
+-- Revert to migration table based only on `(version)`.
+--
+-- If any non-main migrations are present, 005 is considered irreversible.
 --
 
 DO
@@ -34,3 +36,10 @@ SELECT created_at, version
 FROM river_migration_old;
 
 DROP TABLE river_migration_old;
+
+--
+-- Drop `river_job.unique_key`.
+--
+
+ALTER TABLE river_job
+    DROP COLUMN unique_key;

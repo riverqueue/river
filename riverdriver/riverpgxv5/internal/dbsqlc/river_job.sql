@@ -26,6 +26,7 @@ CREATE TABLE river_job(
     state river_job_state NOT NULL DEFAULT 'available',
     scheduled_at timestamptz NOT NULL DEFAULT NOW(),
     tags varchar(255)[] NOT NULL DEFAULT '{}',
+    unique_key bytea,
     CONSTRAINT finalized_or_finalized_at_null CHECK (
         (finalized_at IS NULL AND state NOT IN ('cancelled', 'completed', 'discarded')) OR
         (finalized_at IS NOT NULL AND state IN ('cancelled', 'completed', 'discarded'))
@@ -65,7 +66,10 @@ updated_job AS (
         finalized_at = CASE WHEN state = 'running' THEN finalized_at ELSE now() END,
         -- Mark the job as cancelled by query so that the rescuer knows not to
         -- rescue it, even if it gets stuck in the running state:
-        metadata = jsonb_set(metadata, '{cancel_attempted_at}'::text[], @cancel_attempted_at::jsonb, true)
+        metadata = jsonb_set(metadata, '{cancel_attempted_at}'::text[], @cancel_attempted_at::jsonb, true),
+        -- Similarly, zero a `unique_key` if the job is transitioning directly
+        -- to cancelled. Otherwise, it'll be clear the job executor.
+        unique_key = CASE WHEN state = 'running' THEN unique_key ELSE NULL END
     FROM notification
     WHERE river_job.id = notification.id
     RETURNING river_job.*
@@ -261,7 +265,8 @@ INSERT INTO river_job(
     queue,
     scheduled_at,
     state,
-    tags
+    tags,
+    unique_key
 ) VALUES (
     @args::jsonb,
     coalesce(@attempt::smallint, 0),
@@ -276,8 +281,42 @@ INSERT INTO river_job(
     @queue,
     coalesce(sqlc.narg('scheduled_at')::timestamptz, now()),
     @state,
-    coalesce(@tags::varchar(255)[], '{}')
+    coalesce(@tags::varchar(255)[], '{}'),
+    @unique_key
 ) RETURNING *;
+
+-- name: JobInsertUnique :one
+INSERT INTO river_job(
+    args,
+    created_at,
+    finalized_at,
+    kind,
+    max_attempts,
+    metadata,
+    priority,
+    queue,
+    scheduled_at,
+    state,
+    tags,
+    unique_key
+) VALUES (
+    @args,
+    coalesce(sqlc.narg('created_at')::timestamptz, now()),
+    @finalized_at,
+    @kind,
+    @max_attempts,
+    coalesce(@metadata::jsonb, '{}'),
+    @priority,
+    @queue,
+    coalesce(sqlc.narg('scheduled_at')::timestamptz, now()),
+    @state,
+    coalesce(@tags::varchar(255)[], '{}'),
+    @unique_key
+)
+ON CONFLICT (kind, unique_key) WHERE unique_key IS NOT NULL
+    -- Something needs to be updated for a row to be returned on a conflict.
+    DO UPDATE SET kind = EXCLUDED.kind
+RETURNING *, (xmax != 0) AS unique_skipped_as_duplicate;
 
 -- Run by the rescuer to queue for retry or discard depending on job state.
 -- name: JobRescueMany :exec
@@ -405,7 +444,9 @@ updated_job AS (
         max_attempts = CASE WHEN NOT should_cancel AND @max_attempts_update::boolean    THEN @max_attempts
                             ELSE max_attempts END,
         scheduled_at = CASE WHEN NOT should_cancel AND @scheduled_at_do_update::boolean THEN sqlc.narg('scheduled_at')::timestamptz
-                            ELSE scheduled_at END
+                            ELSE scheduled_at END,
+        unique_key   = CASE WHEN @state IN ('cancelled', 'discarded')                   THEN NULL
+                            ELSE unique_key END
     FROM job_to_update
     WHERE river_job.id = job_to_update.id
         AND river_job.state = 'running'
@@ -428,6 +469,7 @@ SET
     attempted_at = CASE WHEN @attempted_at_do_update::boolean THEN @attempted_at ELSE attempted_at END,
     errors = CASE WHEN @errors_do_update::boolean THEN @errors::jsonb[] ELSE errors END,
     finalized_at = CASE WHEN @finalized_at_do_update::boolean THEN @finalized_at ELSE finalized_at END,
-    state = CASE WHEN @state_do_update::boolean THEN @state ELSE state END
+    state = CASE WHEN @state_do_update::boolean THEN @state ELSE state END,
+    unique_key = CASE WHEN @unique_key_do_update::boolean THEN @unique_key ELSE unique_key END
 WHERE id = @id
 RETURNING *;

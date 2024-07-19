@@ -2,7 +2,9 @@ package dbunique
 
 import (
 	"context"
+	"fmt"
 	"runtime"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +22,30 @@ import (
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
+
+const queueAlternate = "alternate_queue"
+
+func makeInsertParams(createdAt *time.Time) *riverdriver.JobInsertFastParams {
+	return &riverdriver.JobInsertFastParams{
+		CreatedAt:   createdAt,
+		EncodedArgs: []byte(`{}`),
+		Kind:        "fake_job",
+		MaxAttempts: rivercommon.MaxAttemptsDefault,
+		Metadata:    []byte(`{}`),
+		Priority:    rivercommon.PriorityDefault,
+		Queue:       rivercommon.QueueDefault,
+		ScheduledAt: nil,
+		State:       rivertype.JobStateAvailable,
+	}
+}
+
+func TestDefaultUniqueStatesSorted(t *testing.T) {
+	t.Parallel()
+
+	states := slices.Clone(defaultUniqueStates)
+	slices.Sort(states)
+	require.Equal(t, states, defaultUniqueStates, "Default unique states should be sorted")
+}
 
 func TestUniqueInserter_JobInsert(t *testing.T) {
 	t.Parallel()
@@ -60,26 +86,12 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 		return inserter, bundle
 	}
 
-	makeInsertParams := func(bundle *testBundle) *riverdriver.JobInsertFastParams {
-		return &riverdriver.JobInsertFastParams{
-			CreatedAt:   &bundle.baselineTime,
-			EncodedArgs: []byte(`{}`),
-			Kind:        "fake_job",
-			MaxAttempts: rivercommon.MaxAttemptsDefault,
-			Metadata:    []byte(`{}`),
-			Priority:    rivercommon.PriorityDefault,
-			Queue:       rivercommon.QueueDefault,
-			ScheduledAt: nil,
-			State:       rivertype.JobStateAvailable,
-		}
-	}
-
 	t.Run("Success", func(t *testing.T) {
 		t.Parallel()
 
 		inserter, bundle := setup(t)
 
-		insertParams := makeInsertParams(bundle)
+		insertParams := makeInsertParams(&bundle.baselineTime)
 		res, err := inserter.JobInsert(ctx, bundle.exec, insertParams, nil)
 		require.NoError(t, err)
 
@@ -111,7 +123,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 
 		const maxJobsToFetch = 8
 
-		res, err := inserter.JobInsert(ctx, bundle.exec, makeInsertParams(bundle), nil)
+		res, err := inserter.JobInsert(ctx, bundle.exec, makeInsertParams(&bundle.baselineTime), nil)
 		require.NoError(t, err)
 		require.NotEqual(t, 0, res.Job.ID, "expected job ID to be set, got %d", res.Job.ID)
 		require.WithinDuration(t, time.Now(), res.Job.ScheduledAt, 1*time.Second)
@@ -128,7 +140,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 			"expected selected job to be in running state, got %q", jobs[0].State)
 
 		for i := 1; i < 10; i++ {
-			_, err := inserter.JobInsert(ctx, bundle.exec, makeInsertParams(bundle), nil)
+			_, err := inserter.JobInsert(ctx, bundle.exec, makeInsertParams(&bundle.baselineTime), nil)
 			require.NoError(t, err)
 		}
 
@@ -155,18 +167,19 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 			"expected to fetch 1 remaining job but fetched %d jobs:\n%+v", len(jobs), jobs)
 	})
 
-	t.Run("UniqueJobByArgs", func(t *testing.T) {
+	t.Run("UniqueJobByArgsFastPath", func(t *testing.T) {
 		t.Parallel()
 
 		inserter, bundle := setup(t)
 
-		insertParams := makeInsertParams(bundle)
+		insertParams := makeInsertParams(&bundle.baselineTime)
 		uniqueOpts := &UniqueOpts{
 			ByArgs: true,
 		}
 
 		res0, err := inserter.JobInsert(ctx, bundle.exec, insertParams, uniqueOpts)
 		require.NoError(t, err)
+		require.NotNil(t, res0.Job.UniqueKey)
 		require.False(t, res0.UniqueSkippedAsDuplicate)
 
 		// Insert a second job with the same args, but expect that the same job
@@ -187,17 +200,86 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 		require.False(t, res2.UniqueSkippedAsDuplicate)
 	})
 
-	t.Run("UniqueJobByPeriod", func(t *testing.T) {
+	t.Run("UniqueJobByArgsSlowPath", func(t *testing.T) {
 		t.Parallel()
 
 		inserter, bundle := setup(t)
 
-		insertParams := makeInsertParams(bundle)
+		insertParams := makeInsertParams(&bundle.baselineTime)
+		uniqueOpts := &UniqueOpts{
+			ByArgs:  true,
+			ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCancelled}, // use of non-standard states triggers slow path
+		}
+
+		res0, err := inserter.JobInsert(ctx, bundle.exec, insertParams, uniqueOpts)
+		require.NoError(t, err)
+		require.Nil(t, res0.Job.UniqueKey)
+		require.False(t, res0.UniqueSkippedAsDuplicate)
+
+		// Insert a second job with the same args, but expect that the same job
+		// ID to come back because we're still within its unique parameters.
+		res1, err := inserter.JobInsert(ctx, bundle.exec, insertParams, uniqueOpts)
+		require.NoError(t, err)
+		require.Equal(t, res0.Job.ID, res1.Job.ID)
+		require.True(t, res1.UniqueSkippedAsDuplicate)
+
+		insertParams.EncodedArgs = []byte(`{"key":"different"}`)
+
+		// Same operation again, except that because we've modified the unique
+		// dimension, another job is allowed to be queued, so the new ID is
+		// not the same.
+		res2, err := inserter.JobInsert(ctx, bundle.exec, insertParams, uniqueOpts)
+		require.NoError(t, err)
+		require.NotEqual(t, res0.Job.ID, res2.Job.ID)
+		require.False(t, res2.UniqueSkippedAsDuplicate)
+	})
+
+	t.Run("UniqueJobByPeriodFastPath", func(t *testing.T) {
+		t.Parallel()
+
+		inserter, bundle := setup(t)
+
+		insertParams := makeInsertParams(&bundle.baselineTime)
 		uniqueOpts := &UniqueOpts{
 			ByPeriod: 15 * time.Minute,
 		}
 
 		res0, err := inserter.JobInsert(ctx, bundle.exec, insertParams, uniqueOpts)
+		require.NoError(t, err)
+		require.NotNil(t, res0.Job.UniqueKey)
+		require.False(t, res0.UniqueSkippedAsDuplicate)
+
+		// Insert a second job with the same args, but expect that the same job
+		// ID to come back because we're still within its unique parameters.
+		res1, err := inserter.JobInsert(ctx, bundle.exec, insertParams, uniqueOpts)
+		require.NoError(t, err)
+		require.Equal(t, res0.Job.ID, res1.Job.ID)
+		require.True(t, res1.UniqueSkippedAsDuplicate)
+
+		inserter.Time.StubNowUTC(bundle.baselineTime.Add(uniqueOpts.ByPeriod).Add(1 * time.Second))
+
+		// Same operation again, except that because we've advanced time passed
+		// the period within unique bounds, another job is allowed to be queued,
+		// so the new ID is not the same.
+		res2, err := inserter.JobInsert(ctx, bundle.exec, insertParams, uniqueOpts)
+		require.NoError(t, err)
+		require.NotEqual(t, res0.Job.ID, res2.Job.ID)
+		require.False(t, res2.UniqueSkippedAsDuplicate)
+	})
+
+	t.Run("UniqueJobByPeriodSlowPath", func(t *testing.T) {
+		t.Parallel()
+
+		inserter, bundle := setup(t)
+
+		insertParams := makeInsertParams(&bundle.baselineTime)
+		uniqueOpts := &UniqueOpts{
+			ByPeriod: 15 * time.Minute,
+			ByState:  []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCancelled}, // use of non-standard states triggers slow path
+		}
+
+		res0, err := inserter.JobInsert(ctx, bundle.exec, insertParams, uniqueOpts)
+		require.Nil(t, res0.Job.UniqueKey)
 		require.NoError(t, err)
 		require.False(t, res0.UniqueSkippedAsDuplicate)
 
@@ -219,18 +301,19 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 		require.False(t, res2.UniqueSkippedAsDuplicate)
 	})
 
-	t.Run("UniqueJobByQueue", func(t *testing.T) {
+	t.Run("UniqueJobByQueueFastPath", func(t *testing.T) {
 		t.Parallel()
 
 		inserter, bundle := setup(t)
 
-		insertParams := makeInsertParams(bundle)
+		insertParams := makeInsertParams(&bundle.baselineTime)
 		uniqueOpts := &UniqueOpts{
 			ByQueue: true,
 		}
 
 		res0, err := inserter.JobInsert(ctx, bundle.exec, insertParams, uniqueOpts)
 		require.NoError(t, err)
+		require.NotNil(t, res0.Job.UniqueKey)
 		require.False(t, res0.UniqueSkippedAsDuplicate)
 
 		// Insert a second job with the same args, but expect that the same job
@@ -240,7 +323,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 		require.Equal(t, res0.Job.ID, res1.Job.ID)
 		require.True(t, res1.UniqueSkippedAsDuplicate)
 
-		insertParams.Queue = "alternate_queue"
+		insertParams.Queue = queueAlternate
 
 		// Same operation again, except that because we've modified the unique
 		// dimension, another job is allowed to be queued, so the new ID is
@@ -251,18 +334,20 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 		require.False(t, res2.UniqueSkippedAsDuplicate)
 	})
 
-	t.Run("UniqueJobByState", func(t *testing.T) {
+	t.Run("UniqueJobByQueueSlowPath", func(t *testing.T) {
 		t.Parallel()
 
 		inserter, bundle := setup(t)
 
-		insertParams := makeInsertParams(bundle)
+		insertParams := makeInsertParams(&bundle.baselineTime)
 		uniqueOpts := &UniqueOpts{
-			ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateRunning},
+			ByQueue: true,
+			ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCancelled}, // use of non-standard states triggers slow path
 		}
 
 		res0, err := inserter.JobInsert(ctx, bundle.exec, insertParams, uniqueOpts)
 		require.NoError(t, err)
+		require.Nil(t, res0.Job.UniqueKey)
 		require.False(t, res0.UniqueSkippedAsDuplicate)
 
 		// Insert a second job with the same args, but expect that the same job
@@ -272,51 +357,32 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 		require.Equal(t, res0.Job.ID, res1.Job.ID)
 		require.True(t, res1.UniqueSkippedAsDuplicate)
 
-		// A new job is allowed if we're inserting the job with a state that's
-		// not included in the unique state set.
-		{
-			insertParams := *insertParams // dup
-			insertParams.State = rivertype.JobStatePending
+		insertParams.Queue = queueAlternate
 
-			res2, err := inserter.JobInsert(ctx, bundle.exec, &insertParams, uniqueOpts)
-			require.NoError(t, err)
-			require.NotEqual(t, res0.Job.ID, res2.Job.ID)
-			require.False(t, res2.UniqueSkippedAsDuplicate)
-		}
-
-		// A new job is also allowed if the state of the originally inserted job
-		// changes to one that's not included in the unique state set.
-		{
-			_, err := bundle.exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
-				ID:                  res0.Job.ID,
-				FinalizedAtDoUpdate: true,
-				FinalizedAt:         ptrutil.Ptr(bundle.baselineTime),
-				StateDoUpdate:       true,
-				State:               rivertype.JobStateCompleted,
-			})
-			require.NoError(t, err)
-
-			res2, err := inserter.JobInsert(ctx, bundle.exec, insertParams, uniqueOpts)
-			require.NoError(t, err)
-			require.NotEqual(t, res0.Job.ID, res2.Job.ID)
-			require.False(t, res2.UniqueSkippedAsDuplicate)
-		}
+		// Same operation again, except that because we've modified the unique
+		// dimension, another job is allowed to be queued, so the new ID is
+		// not the same.
+		res2, err := inserter.JobInsert(ctx, bundle.exec, insertParams, uniqueOpts)
+		require.NoError(t, err)
+		require.NotEqual(t, res0.Job.ID, res2.Job.ID)
+		require.False(t, res2.UniqueSkippedAsDuplicate)
 	})
 
 	// Unlike other unique options, state gets a default set when it's not
 	// supplied. This test case checks that the default is working as expected.
-	t.Run("UniqueJobByDefaultState", func(t *testing.T) {
+	t.Run("UniqueJobByDefaultStateFastPath", func(t *testing.T) {
 		t.Parallel()
 
 		inserter, bundle := setup(t)
 
-		insertParams := makeInsertParams(bundle)
+		insertParams := makeInsertParams(&bundle.baselineTime)
 		uniqueOpts := &UniqueOpts{
 			ByQueue: true,
 		}
 
 		res0, err := inserter.JobInsert(ctx, bundle.exec, insertParams, uniqueOpts)
 		require.NoError(t, err)
+		require.NotNil(t, res0.Job.UniqueKey) // fast path because states are a subset of defaults
 		require.False(t, res0.UniqueSkippedAsDuplicate)
 
 		// Insert a second job with the same args, but expect that the same job
@@ -363,6 +429,8 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 			FinalizedAt:         ptrutil.Ptr(bundle.baselineTime),
 			StateDoUpdate:       true,
 			State:               rivertype.JobStateDiscarded,
+			UniqueKeyDoUpdate:   true, // `unique_key` is normally NULLed by the client or completer
+			UniqueKey:           nil,
 		})
 		require.NoError(t, err)
 
@@ -375,12 +443,65 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 		require.False(t, res2.UniqueSkippedAsDuplicate)
 	})
 
+	t.Run("UniqueJobByStateSlowPath", func(t *testing.T) {
+		t.Parallel()
+
+		inserter, bundle := setup(t)
+
+		insertParams := makeInsertParams(&bundle.baselineTime)
+		uniqueOpts := &UniqueOpts{
+			ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCancelled},
+		}
+
+		res0, err := inserter.JobInsert(ctx, bundle.exec, insertParams, uniqueOpts)
+		require.NoError(t, err)
+		require.Nil(t, res0.Job.UniqueKey) // slow path because states are *not* a subset of defaults
+		require.False(t, res0.UniqueSkippedAsDuplicate)
+
+		// Insert a second job with the same args, but expect that the same job
+		// ID to come back because we're still within its unique parameters.
+		res1, err := inserter.JobInsert(ctx, bundle.exec, insertParams, uniqueOpts)
+		require.NoError(t, err)
+		require.Equal(t, res0.Job.ID, res1.Job.ID)
+		require.True(t, res1.UniqueSkippedAsDuplicate)
+
+		// A new job is allowed if we're inserting the job with a state that's
+		// not included in the unique state set.
+		{
+			insertParams := *insertParams // dup
+			insertParams.State = rivertype.JobStateRunning
+
+			res2, err := inserter.JobInsert(ctx, bundle.exec, &insertParams, uniqueOpts)
+			require.NoError(t, err)
+			require.NotEqual(t, res0.Job.ID, res2.Job.ID)
+			require.False(t, res2.UniqueSkippedAsDuplicate)
+		}
+
+		// A new job is also allowed if the state of the originally inserted job
+		// changes to one that's not included in the unique state set.
+		{
+			_, err := bundle.exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+				ID:                  res0.Job.ID,
+				FinalizedAtDoUpdate: true,
+				FinalizedAt:         ptrutil.Ptr(bundle.baselineTime),
+				StateDoUpdate:       true,
+				State:               rivertype.JobStateCompleted,
+			})
+			require.NoError(t, err)
+
+			res2, err := inserter.JobInsert(ctx, bundle.exec, insertParams, uniqueOpts)
+			require.NoError(t, err)
+			require.NotEqual(t, res0.Job.ID, res2.Job.ID)
+			require.False(t, res2.UniqueSkippedAsDuplicate)
+		}
+	})
+
 	t.Run("UniqueJobAllOptions", func(t *testing.T) {
 		t.Parallel()
 
 		inserter, bundle := setup(t)
 
-		insertParams := makeInsertParams(bundle)
+		insertParams := makeInsertParams(&bundle.baselineTime)
 		uniqueOpts := &UniqueOpts{
 			ByArgs:   true,
 			ByPeriod: 15 * time.Minute,
@@ -429,7 +550,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 		// With queue modified
 		{
 			insertParams := *insertParams // dup
-			insertParams.Queue = "alternate_queue"
+			insertParams.Queue = queueAlternate
 
 			// New job because a unique dimension has changed.
 			res2, err := inserter.JobInsert(ctx, bundle.exec, &insertParams, uniqueOpts)
@@ -459,7 +580,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 		bundle.driver = riverpgxv5.New(riverinternaltest.TestDB(ctx, t))
 		bundle.exec = bundle.driver.GetExecutor()
 
-		insertParams := makeInsertParams(bundle)
+		insertParams := makeInsertParams(&bundle.baselineTime)
 		uniqueOpts := &UniqueOpts{
 			ByPeriod: 15 * time.Minute,
 		}
@@ -497,6 +618,119 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 		firstJobID := insertedJobs[0].ID
 		for i := 1; i < numContendingJobs; i++ {
 			require.Equal(t, firstJobID, insertedJobs[i].ID)
+		}
+	})
+}
+
+func BenchmarkUniqueInserter(b *testing.B) {
+	ctx := context.Background()
+
+	type testBundle struct {
+		driver riverdriver.Driver[pgx.Tx]
+		exec   riverdriver.Executor
+		tx     pgx.Tx
+	}
+
+	setup := func(b *testing.B) (*UniqueInserter, *testBundle) {
+		b.Helper()
+
+		var (
+			driver = riverpgxv5.New(nil)
+			tx     = riverinternaltest.TestTx(ctx, b)
+		)
+
+		bundle := &testBundle{
+			driver: driver,
+			exec:   driver.UnwrapExecutor(tx),
+			tx:     tx,
+		}
+
+		inserter := baseservice.Init(riversharedtest.BaseServiceArchetype(b), &UniqueInserter{})
+
+		return inserter, bundle
+	}
+
+	// Simulates the case where many existing jobs are in the database already.
+	// Useful as a benchmark because the advisory lock strategy's look up get
+	// slow with many existing jobs.
+	generateManyExistingJobs := func(b *testing.B, inserter *UniqueInserter, bundle *testBundle) {
+		b.Helper()
+
+		insertParams := makeInsertParams(nil)
+
+		for i := 0; i < 10_000; i++ {
+			_, err := inserter.JobInsert(ctx, bundle.exec, insertParams, nil)
+			require.NoError(b, err)
+		}
+	}
+
+	b.Run("FastPathEmptyDatabase", func(b *testing.B) {
+		inserter, bundle := setup(b)
+
+		insertParams := makeInsertParams(nil)
+		uniqueOpts := &UniqueOpts{ByArgs: true}
+
+		b.ResetTimer()
+
+		for n := 0; n < b.N; n++ {
+			insertParams.EncodedArgs = []byte(fmt.Sprintf(`{"job_num":%d}`, n%1000))
+			_, err := inserter.JobInsert(ctx, bundle.exec, insertParams, uniqueOpts)
+			require.NoError(b, err)
+		}
+	})
+
+	b.Run("FastPathManyExistingJobs", func(b *testing.B) {
+		inserter, bundle := setup(b)
+
+		generateManyExistingJobs(b, inserter, bundle)
+
+		insertParams := makeInsertParams(nil)
+		uniqueOpts := &UniqueOpts{ByArgs: true}
+
+		b.ResetTimer()
+
+		for n := 0; n < b.N; n++ {
+			insertParams.EncodedArgs = []byte(fmt.Sprintf(`{"job_num":%d}`, n%1000))
+			_, err := inserter.JobInsert(ctx, bundle.exec, insertParams, uniqueOpts)
+			require.NoError(b, err)
+		}
+	})
+
+	b.Run("SlowPathEmptyDatabase", func(b *testing.B) {
+		inserter, bundle := setup(b)
+
+		insertParams := makeInsertParams(nil)
+		uniqueOpts := &UniqueOpts{
+			ByArgs:  true,
+			ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCancelled}, // use of non-standard states triggers slow path
+		}
+
+		b.ResetTimer()
+
+		for n := 0; n < b.N; n++ {
+			insertParams.EncodedArgs = []byte(fmt.Sprintf(`{"job_num":%d}`, n%1000))
+			_, err := inserter.JobInsert(ctx, bundle.exec, insertParams, uniqueOpts)
+			require.NoError(b, err)
+		}
+	})
+
+	b.Run("SlowPathManyExistingJobs", func(b *testing.B) {
+		inserter, bundle := setup(b)
+
+		generateManyExistingJobs(b, inserter, bundle)
+
+		insertParams := makeInsertParams(nil)
+		uniqueOpts := &UniqueOpts{
+			ByArgs:  true,
+			ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCancelled}, // use of non-standard states triggers slow path
+		}
+
+		b.ResetTimer()
+
+		for n := 0; n < b.N; n++ {
+			insertParams.EncodedArgs = []byte(fmt.Sprintf(`{"job_num":%d}`, n%1000))
+			_, err := inserter.JobInsert(ctx, bundle.exec, insertParams, uniqueOpts)
+			require.NoError(b, err)
 		}
 	})
 }

@@ -33,6 +33,7 @@ type JobOpts struct {
 	ScheduledAt *time.Time
 	State       *rivertype.JobState
 	Tags        []string
+	UniqueKey   []byte
 }
 
 func Job(ctx context.Context, tb testing.TB, exec riverdriver.Executor, opts *JobOpts) *rivertype.JobRow {
@@ -76,6 +77,7 @@ func Job_Build(tb testing.TB, opts *JobOpts) *riverdriver.JobInsertFullParams { 
 		ScheduledAt: opts.ScheduledAt,
 		State:       ptrutil.ValOrDefault(opts.State, rivertype.JobStateAvailable),
 		Tags:        tags,
+		UniqueKey:   opts.UniqueKey,
 	}
 }
 
