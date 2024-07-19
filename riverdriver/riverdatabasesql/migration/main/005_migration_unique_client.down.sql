@@ -43,3 +43,10 @@ DROP TABLE river_migration_old;
 
 ALTER TABLE river_job
     DROP COLUMN unique_key;
+
+--
+-- Drop `river_client` and derivative.
+--
+
+DROP TABLE river_client_queue;
+DROP TABLE river_client;

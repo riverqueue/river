@@ -120,11 +120,15 @@ type Config struct {
 	// ID at the same time.
 	//
 	// A client ID should differ between different programs and must be unique
-	// across all clients in the same database and schema. There must not be more
-	// than one process running with the same ID at the same time.  However, the
-	// client ID is shared by all executors within any given client. (i.e.
-	// different Go processes have different IDs, but IDs are shared within any
-	// given process.)
+	// across all clients in the same database and schema. There must not be
+	// more than one process running with the same ID at the same time.
+	// Duplicate IDs between processes will lead to facilities like leader
+	// election or client statistics to fail in novel ways. However, the client
+	// ID is shared by all executors within any given client. (i.e.  different
+	// Go processes have different IDs, but IDs are shared within any given
+	// process.)
+	//
+	// If in doubt, leave this property empty.
 	ID string
 
 	// JobTimeout is the maximum amount of time a job is allowed to run before its
@@ -1898,7 +1902,10 @@ func defaultClientIDWithHost(startedAt time.Time, host string) string {
 	// Dots, hyphens, and colons aren't particularly friendly for double click
 	// to select (depends on application and configuration), so avoid them all
 	// in favor of underscores.
-	const rfc3339Compact = "2006_01_02T15_04_05"
+	//
+	// Go's time package is really dumb and can't format subseconds without
+	// using a dot. So use the dot, then replace it with an underscore below.
+	const rfc3339Compact = "2006_01_02T15_04_05.000000"
 
-	return host + "_" + startedAt.Format(rfc3339Compact)
+	return host + "_" + strings.Replace(startedAt.Format(rfc3339Compact), ".", "_", 1)
 }
