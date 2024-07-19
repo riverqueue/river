@@ -10,9 +10,9 @@ replace github.com/riverqueue/river/rivertype => ../../rivertype
 
 require (
 	github.com/lib/pq v1.10.9
-	github.com/riverqueue/river/riverdriver v0.9.0
-	github.com/riverqueue/river/rivershared v0.0.0-20240707210043-f9063791ecb1
-	github.com/riverqueue/river/rivertype v0.9.0
+	github.com/riverqueue/river/riverdriver v0.10.0
+	github.com/riverqueue/river/rivershared v0.10.0
+	github.com/riverqueue/river/rivertype v0.10.0
 	github.com/stretchr/testify v1.9.0
 )
 
