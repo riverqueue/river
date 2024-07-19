@@ -398,6 +398,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 		// already been done above.
 		for _, defaultState := range []rivertype.JobState{
 			rivertype.JobStateCompleted,
+			rivertype.JobStatePending,
 			rivertype.JobStateRunning,
 			rivertype.JobStateRetryable,
 			rivertype.JobStateScheduled,
