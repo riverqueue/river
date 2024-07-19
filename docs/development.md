@@ -77,7 +77,7 @@ If updates to River dependencies _are_ required, then a second phase of the rele
 3. From `./cmd/river`, `go get` to upgrade to the main package versions were just released (make sure you're getting `$VERSION` and not thwarted by shenanigans in Go's module proxy):
 
     ```shell
-    cmd ./cmd/river/
+    cd ./cmd/river/
     go get -u github.com/riverqueue/river@$VERSION
     go get -u github.com/riverqueue/river/riverdriver@$VERSION
     go get -u github.com/riverqueue/river/riverdriver/riverdatabasesql@$VERSION
