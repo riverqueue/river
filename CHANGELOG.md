@@ -39,6 +39,7 @@ river migrate-up --database-url "$DATABASE_URL"
 
 - Tags are now limited to 255 characters in length, and should match the regex `\A[\w][\w\-]+[\w]\z` (importantly, they can't contain commas). [PR #351](https://github.com/riverqueue/river/pull/351).
 - Many info logging statements have been demoted to debug level. [PR #452](https://github.com/riverqueue/river/pull/452).
+- `pending` is now part of the default set of unique job states. [PR #461](https://github.com/riverqueue/river/pull/461).
 
 ## [0.9.0] - 2024-07-04
 
