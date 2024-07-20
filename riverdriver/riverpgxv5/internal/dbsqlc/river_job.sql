@@ -316,7 +316,7 @@ INSERT INTO river_job(
 ON CONFLICT (kind, unique_key) WHERE unique_key IS NOT NULL
     -- Something needs to be updated for a row to be returned on a conflict.
     DO UPDATE SET kind = EXCLUDED.kind
-RETURNING *, (xmax != 0) AS unique_skipped_as_duplicate;
+RETURNING sqlc.embed(river_job), (xmax != 0) AS unique_skipped_as_duplicate;
 
 -- Run by the rescuer to queue for retry or discard depending on job state.
 -- name: JobRescueMany :exec

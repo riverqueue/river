@@ -296,25 +296,7 @@ func (e *Executor) JobInsertUnique(ctx context.Context, params *riverdriver.JobI
 		return nil, interpretError(err)
 	}
 
-	jobRow, err := jobRowFromInternal(&dbsqlc.RiverJob{
-		ID:          insertRes.ID,
-		Args:        insertRes.Args,
-		Attempt:     insertRes.Attempt,
-		AttemptedAt: insertRes.AttemptedAt,
-		AttemptedBy: insertRes.AttemptedBy,
-		CreatedAt:   insertRes.CreatedAt,
-		Errors:      insertRes.Errors,
-		FinalizedAt: insertRes.FinalizedAt,
-		Kind:        insertRes.Kind,
-		MaxAttempts: insertRes.MaxAttempts,
-		Metadata:    insertRes.Metadata,
-		Priority:    insertRes.Priority,
-		Queue:       insertRes.Queue,
-		ScheduledAt: insertRes.ScheduledAt,
-		State:       insertRes.State,
-		Tags:        insertRes.Tags,
-		UniqueKey:   insertRes.UniqueKey,
-	})
+	jobRow, err := jobRowFromInternal(&insertRes.RiverJob)
 	if err != nil {
 		return nil, err
 	}
