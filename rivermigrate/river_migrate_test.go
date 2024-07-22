@@ -604,6 +604,42 @@ func TestMigrator(t *testing.T) {
 		_, err = alternateMigrator.MigrateTx(ctx, bundle.tx, DirectionUp, &MigrateOpts{})
 		require.EqualError(t, err, "can't add a non-main migration line until `river_migration` is raised; fully migrate the main migration line and try again")
 	})
+
+	// Demonstrates that even when not using River's internal migration system,
+	// version 005 is still able to run.
+	t.Run("Version005ToleratesRiverMigrateNotPresent", func(t *testing.T) {
+		t.Parallel()
+
+		migrator, bundle := setup(t)
+
+		// The migration version in which `line` is added to `river_migration`.
+		// This is special because it's the first time the table's changed since
+		// version 001.
+		const migrateVersionTarget = 5
+
+		// Migrate down to version 004.
+		for i := migrationsBundle.MaxVersion; i > migrateVersionTarget-1; i-- {
+			res, err := migrator.MigrateTx(ctx, bundle.tx, DirectionDown, &MigrateOpts{})
+			require.NoError(t, err)
+			require.Equal(t, DirectionDown, res.Direction)
+			require.Equal(t, []int{i}, sliceutil.Map(res.Versions, migrateVersionToInt))
+		}
+
+		// Drop `river_migration` table as if version 001 had never originally run.
+		_, err := bundle.tx.Exec(ctx, "DROP TABLE river_migration")
+		require.NoError(t, err)
+
+		// Run version 005 to make sure it can tolerate the absence of
+		// `river_migration`. Note that we have to run the version's SQL
+		// directly because using the migrator will try to interact with
+		// `river_migration`, which is no longer present.
+		_, err = bundle.tx.Exec(ctx, migrationsBundle.WithTestVersionsMap[5].SQLUp)
+		require.NoError(t, err)
+
+		// And the version 005 down migration to verify the same.
+		_, err = bundle.tx.Exec(ctx, migrationsBundle.WithTestVersionsMap[5].SQLDown)
+		require.NoError(t, err)
+	})
 }
 
 // This test uses a custom set of test-only migration files on the file system
