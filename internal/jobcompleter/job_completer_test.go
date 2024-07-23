@@ -592,12 +592,12 @@ func testCompleter[TCompleter JobCompleter](
 		// Signal to stop insertion and wait for the goroutine to return.
 		numInserted := stopInsertion()
 
-		require.Greater(t, numInserted, 0)
+		require.Positive(t, numInserted)
 
 		numCompleted, err := bundle.exec.JobCountByState(ctx, rivertype.JobStateCompleted)
 		require.NoError(t, err)
 		t.Logf("Counted %d jobs as completed", numCompleted)
-		require.Greater(t, numCompleted, 0)
+		require.Positive(t, numCompleted)
 	})
 
 	t.Run("SlowerContinuousCompletion", func(t *testing.T) {
@@ -617,12 +617,12 @@ func testCompleter[TCompleter JobCompleter](
 		// Signal to stop insertion and wait for the goroutine to return.
 		numInserted := stopInsertion()
 
-		require.Greater(t, numInserted, 0)
+		require.Positive(t, numInserted)
 
 		numCompleted, err := bundle.exec.JobCountByState(ctx, rivertype.JobStateCompleted)
 		require.NoError(t, err)
 		t.Logf("Counted %d jobs as completed", numCompleted)
-		require.Greater(t, numCompleted, 0)
+		require.Positive(t, numCompleted)
 	})
 
 	t.Run("AllJobStates", func(t *testing.T) {

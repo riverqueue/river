@@ -13,6 +13,11 @@ linters:
     - unused
 
   disable:
+    # disabled, but which we should enable after dropping support for Go 1.21 as
+    # they're kind of a good idea
+    - copyloopvar # lints to make sure that loop variables are _not_ captured since it's not required in Go 1.22+
+    - intrange # encourages for loops to range over integers like `for i := range(5)` instead of a C-style for
+
     # disabled, but which we should enable with discussion
     - wrapcheck # checks that errors are wrapped; currently not done anywhere
 
@@ -23,8 +28,8 @@ linters:
     # disabled because they're annoying/bad
     - interfacebloat # we do in fact want >10 methods on the Adapter interface or wherever we see fit.
     - godox # bans TODO statements; total non-starter at the moment
-    - goerr113 # wants all errors to be defined as variables at the package level; quite obnoxious
-    - gomnd # detects "magic numbers", which it defines as any number; annoying
+    - err113 # wants all errors to be defined as variables at the package level; quite obnoxious
+    - mnd # detects "magic numbers", which it defines as any number; annoying
     - ireturn # bans returning interfaces; questionable as is, but also buggy as hell; very, very annoying
     - lll # restricts maximum line length; annoying
     - nlreturn # requires a blank line before returns; annoying

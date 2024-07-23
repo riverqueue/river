@@ -1022,8 +1022,6 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		t.Run("JobFinalizedAtConstraint", func(t *testing.T) {
 			t.Parallel()
 
-			ctx := context.Background()
-
 			capitalizeJobState := func(state rivertype.JobState) string {
 				return cases.Title(language.English, cases.NoLower).String(string(state))
 			}

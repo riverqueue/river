@@ -1588,7 +1588,7 @@ func Test_Client_InsertMany(t *testing.T) {
 
 		jobs, err := client.driver.GetExecutor().JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
 		require.NoError(t, err)
-		require.Len(t, jobs, 2, "Expected to find exactly two jobs of kind: "+(noOpArgs{}).Kind()) //nolint:goconst
+		require.Len(t, jobs, 2, "Expected to find exactly two jobs of kind: "+(noOpArgs{}).Kind())
 	})
 
 	t.Run("TriggersImmediateWork", func(t *testing.T) {
@@ -4944,7 +4944,7 @@ func TestDefaultClientID(t *testing.T) {
 
 	startedAt := time.Date(2024, time.March, 7, 4, 39, 12, 123456789, time.UTC)
 
-	require.Equal(t, strings.ReplaceAll(host, ".", "_")+"_2024_03_07T04_39_12_123456", defaultClientID(startedAt)) //nolint:goconst
+	require.Equal(t, strings.ReplaceAll(host, ".", "_")+"_2024_03_07T04_39_12_123456", defaultClientID(startedAt))
 }
 
 func TestDefaultClientIDWithHost(t *testing.T) {
