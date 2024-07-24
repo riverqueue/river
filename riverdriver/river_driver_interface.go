@@ -154,7 +154,7 @@ type Executor interface {
 	// MigrationInsertMany inserts many migration versions.
 	MigrationInsertMany(ctx context.Context, line string, versions []int) ([]*Migration, error)
 
-	// MigrationInsertManyAssumingMain inserts many migration, assuming they're
+	// MigrationInsertManyAssumingMain inserts many migrations, assuming they're
 	// on the main line. This operation is necessary for compatibility before
 	// the `line` column was added to the migrations table.
 	MigrationInsertManyAssumingMain(ctx context.Context, versions []int) ([]*Migration, error)
