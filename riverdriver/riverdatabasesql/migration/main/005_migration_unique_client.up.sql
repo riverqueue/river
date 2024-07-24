@@ -2,24 +2,35 @@
 -- Rebuild the migration table so it's based on `(line, version)`.
 --
 
-ALTER TABLE river_migration
-    RENAME TO river_migration_old;
+DO
+$body$
+BEGIN
+    -- Tolerate users who may be using their own migration system rather than
+    -- River's. If they are, they will have skipped version 001 containing
+    -- `CREATE TABLE river_migration`, so this table won't exist.
+    IF (SELECT to_regclass('river_migration') IS NOT NULL) THEN
+        ALTER TABLE river_migration
+            RENAME TO river_migration_old;
 
-CREATE TABLE river_migration(
-    line TEXT NOT NULL,
-    version bigint NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT NOW(),
-    CONSTRAINT line_length CHECK (char_length(line) > 0 AND char_length(line) < 128),
-    CONSTRAINT version_gte_1 CHECK (version >= 1),
-    PRIMARY KEY (line, version)
-);
+        CREATE TABLE river_migration(
+            line TEXT NOT NULL,
+            version bigint NOT NULL,
+            created_at timestamptz NOT NULL DEFAULT NOW(),
+            CONSTRAINT line_length CHECK (char_length(line) > 0 AND char_length(line) < 128),
+            CONSTRAINT version_gte_1 CHECK (version >= 1),
+            PRIMARY KEY (line, version)
+        );
 
-INSERT INTO river_migration
-    (created_at, line, version)
-SELECT created_at, 'main', version
-FROM river_migration_old;
+        INSERT INTO river_migration
+            (created_at, line, version)
+        SELECT created_at, 'main', version
+        FROM river_migration_old;
 
-DROP TABLE river_migration_old;
+        DROP TABLE river_migration_old;
+    END IF;
+END;
+$body$
+LANGUAGE 'plpgsql'; 
 
 --
 -- Add `river_job.unique_key` and bring up an index on it.

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Migration version 005 has been altered so that it can run even if the `river_migration` table isn't present, making it more friendly for projects that aren't using River's internal migration system. [PR #465](https://github.com/riverqueue/river/pull/465).
+
 ## [0.10.0] - 2024-07-19
 
 ⚠️ Version 0.10.0 contains a new database migration, version 5. See [documentation on running River migrations](https://riverqueue.com/docs/migrations). If migrating with the CLI, make sure to update it to its latest version:
@@ -14,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ```shell
 go install github.com/riverqueue/river/cmd/river@latest
 river migrate-up --database-url "$DATABASE_URL"
+```
+
+If not using River's internal migration system, the raw SQL can alternatively be dumped with:
+
+```shell
+go install github.com/riverqueue/river/cmd/river@latest
+river migrate-get --version 5 --up > river5.up.sql
+river migrate-get --version 5 --down > river5.down.sql
 ```
 
 The migration **includes a new index**. Users with a very large job table may want to consider raising the index separately using `CONCURRENTLY` (which must be run outside of a transaction), then run `river migrate-up` to finalize the process (it will tolerate an index that already exists):
