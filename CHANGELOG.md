@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2024-07-23
+
 ### Fixed
 
 - Migration version 005 has been altered so that it can run even if the `river_migration` table isn't present, making it more friendly for projects that aren't using River's internal migration system. [PR #465](https://github.com/riverqueue/river/pull/465).
