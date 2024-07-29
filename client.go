@@ -1653,6 +1653,9 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 // client, and can be used to add new ones or remove existing ones.
 func (c *Client[TTx]) PeriodicJobs() *PeriodicJobBundle { return c.periodicJobs }
 
+func (c *Client[TTx]) GetExecutor() riverdriver.Executor         { return c.driver.GetExecutor() }
+func (c *Client[TTx]) GetExecutorTx(tx TTx) riverdriver.Executor { return c.driver.UnwrapExecutor(tx) }
+
 // Queues returns the currently configured set of queues for the client, and can
 // be used to add new ones.
 func (c *Client[TTx]) Queues() *QueueBundle { return c.queues }

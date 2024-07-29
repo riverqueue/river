@@ -91,7 +91,16 @@ func (d *Driver) RowsToJobs(rows riverdriver.Rows) ([]*rivertype.JobRow, error) 
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return mapSlice(items, jobRowFromInternal), nil
+
+	jobs := make([]*rivertype.JobRow, len(items))
+	var err error
+	for i, item := range items {
+		jobs[i], err = jobRowFromInternal(item)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return jobs, nil
 }
 
 func (d *Driver) UnwrapExecutor(tx pgx.Tx) riverdriver.ExecutorTx {
