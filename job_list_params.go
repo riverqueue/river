@@ -188,6 +188,7 @@ func NewJobListParams() *JobListParams {
 			rivertype.JobStateCancelled,
 			rivertype.JobStateCompleted,
 			rivertype.JobStateDiscarded,
+			rivertype.JobStatePending,
 			rivertype.JobStateRetryable,
 			rivertype.JobStateRunning,
 			rivertype.JobStateScheduled,

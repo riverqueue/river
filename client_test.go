@@ -2021,6 +2021,7 @@ func Test_Client_JobList(t *testing.T) {
 		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
 		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
 		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
+		job4 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStatePending)})
 
 		listRes, err := client.JobList(ctx, NewJobListParams().States(rivertype.JobStateAvailable))
 		require.NoError(t, err)
@@ -2030,6 +2031,11 @@ func Test_Client_JobList(t *testing.T) {
 		listRes, err = client.JobList(ctx, NewJobListParams().States(rivertype.JobStateRunning))
 		require.NoError(t, err)
 		require.Equal(t, []int64{job3.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		// All by default:
+		listRes, err = client.JobList(ctx, NewJobListParams())
+		require.NoError(t, err)
+		require.Equal(t, []int64{job1.ID, job2.ID, job3.ID, job4.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 	})
 
 	t.Run("DefaultsToOrderingByID", func(t *testing.T) {
