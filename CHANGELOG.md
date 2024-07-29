@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Include `pending` state in `JobListParams` by default so pending jobs are included in `JobList` / `JobListTx` results.
+
 ## [0.10.1] - 2024-07-23
 
 ### Fixed
@@ -69,13 +73,13 @@ river migrate-up --database-url "$DATABASE_URL"
 
 - **Breaking change:** Add stack trace to `ErrorHandler.HandlePanicFunc`. Fixing code only requires adding a new `trace string` argument to `HandlePanicFunc`. [PR #423](https://github.com/riverqueue/river/pull/423).
 
-    ``` go
-    # before
-    HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any) *ErrorHandlerResult
+  ```go
+  # before
+  HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any) *ErrorHandlerResult
 
-    # after
-    HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *ErrorHandlerResult
-    ```
+  # after
+  HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *ErrorHandlerResult
+  ```
 
 ### Fixed
 
