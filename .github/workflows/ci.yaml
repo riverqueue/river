@@ -96,88 +96,94 @@ jobs:
         run: go test -race ./... -timeout 2m
 
   cli:
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
 
-    services:
-      postgres:
-        image: postgres
-        env:
-          POSTGRES_PASSWORD: postgres
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 2s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
 
     steps:
+      - uses: ikalnytskyi/action-setup-postgres@v6
+        with:
+          database: river_dev
+          password: postgres
+
       - uses: actions/setup-go@v5
         with:
           go-version: "stable"
           check-latest: true
 
+      - name: Setup GOBIN (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          echo "GOBIN=$(go env GOPATH)/bin" >> $GITHUB_ENV
+          echo "PATH=$(go env GOPATH)/bin:$PATH" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Setup GOBIN (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          $gobin = "$(go env GOPATH)\bin"
+          echo "GOBIN=$gobin" >> $env:GITHUB_ENV
+          echo $gobin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: pwsh
+
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build CLI
-        run: go build .
-        working-directory: ./cmd/river
+      - name: Prerequisites
+        run: |
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            echo "RIVER_CMD_DIR=./cmd/river" >> $GITHUB_ENV
+          elif [ "$RUNNER_OS" == "Windows" ]; then
+            echo "RIVER_CMD_DIR=.\cmd\river" >> $GITHUB_ENV
+          fi
+        shell: bash
 
-      - name: Create database
-        run: psql --echo-errors --quiet -c '\timing off' -c "CREATE DATABASE river_dev;" ${ADMIN_DATABASE_URL}
+      - name: Build and install CLI
+        run: go install .
+        working-directory: ${{ env.RIVER_CMD_DIR }}
 
-      - run: ./river migrate-get --down --version 3
-        working-directory: ./cmd/river
+      - run: river migrate-get --down --version 3
 
-      - run: ./river migrate-get --up --version 3
-        working-directory: ./cmd/river
+      - run: river migrate-get --up --version 3
 
-      - run: ./river migrate-get --all --exclude-version 1 --down
-        working-directory: ./cmd/river
+      - run: river migrate-get --all --exclude-version 1 --down
 
-      - run: ./river migrate-get --all --exclude-version 1 --up
-        working-directory: ./cmd/river
+      - run: river migrate-get --all --exclude-version 1 --up
 
       - name: river migrate-up
-        run: ./river migrate-up --database-url $DATABASE_URL
-        working-directory: ./cmd/river
+        run: river migrate-up --database-url $DATABASE_URL
 
       - name: river validate
-        run: ./river validate --database-url $DATABASE_URL
-        working-directory: ./cmd/river
+        run: river validate --database-url $DATABASE_URL
 
       - name: river bench
         run: |
           ( sleep 10 && killall -SIGTERM river ) &
-          ./river bench --database-url $DATABASE_URL
-        working-directory: ./cmd/river
+          river bench --database-url $DATABASE_URL
 
       # Bench again in fixed number of jobs mode.
       - name: river bench
         run: |
           ( sleep 10 && killall -SIGTERM river ) &
-          ./river bench --database-url $DATABASE_URL --num-total-jobs 1_234
-        working-directory: ./cmd/river
+          river bench --database-url $DATABASE_URL --num-total-jobs 1_234
 
       - name: river migrate-down
-        run: ./river migrate-down --database-url $DATABASE_URL --max-steps 100
-        working-directory: ./cmd/river
+        run: river migrate-down --database-url $DATABASE_URL --max-steps 100
 
       - name: river validate (expect failure)
         run: |
-          if ./river validate --database-url $DATABASE_URL; then
+          if river validate --database-url $DATABASE_URL; then
             echo "expected non-zero exit code" && exit 1
           fi
-        working-directory: ./cmd/river
 
       - name: river unknown command (expect failure)
         run: |
-          if ./river not-a-command; then
+          if river not-a-command; then
             echo "expected non-zero exit code" && exit 1
           fi
-        working-directory: ./cmd/river
 
   golangci:
     name: lint
@@ -257,7 +263,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Go ${{ matrix.go-version }}
+      - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: "stable"
