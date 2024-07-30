@@ -1206,47 +1206,76 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	t.Run("JobList", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		t.Run("ListsJobs", func(t *testing.T) {
+			exec, _ := setup(ctx, t)
 
-		now := time.Now().UTC()
+			now := time.Now().UTC()
 
-		job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-			Attempt:     ptrutil.Ptr(3),
-			AttemptedAt: &now,
-			CreatedAt:   &now,
-			EncodedArgs: []byte(`{"encoded": "args"}`),
-			Errors:      [][]byte{[]byte(`{"error": "message1"}`), []byte(`{"error": "message2"}`)},
-			FinalizedAt: &now,
-			Metadata:    []byte(`{"meta": "data"}`),
-			ScheduledAt: &now,
-			State:       ptrutil.Ptr(rivertype.JobStateCompleted),
-			Tags:        []string{"tag"},
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Attempt:     ptrutil.Ptr(3),
+				AttemptedAt: &now,
+				CreatedAt:   &now,
+				EncodedArgs: []byte(`{"encoded": "args"}`),
+				Errors:      [][]byte{[]byte(`{"error": "message1"}`), []byte(`{"error": "message2"}`)},
+				FinalizedAt: &now,
+				Metadata:    []byte(`{"meta": "data"}`),
+				ScheduledAt: &now,
+				State:       ptrutil.Ptr(rivertype.JobStateCompleted),
+				Tags:        []string{"tag"},
+			})
+
+			fetchedJobs, err := exec.JobList(
+				ctx,
+				fmt.Sprintf("SELECT %s FROM river_job WHERE id = @job_id_123", exec.JobListFields()),
+				map[string]any{"job_id_123": job.ID},
+			)
+			require.NoError(t, err)
+			require.Len(t, fetchedJobs, 1)
+
+			fetchedJob := fetchedJobs[0]
+			require.Equal(t, job.Attempt, fetchedJob.Attempt)
+			require.Equal(t, job.AttemptedAt, fetchedJob.AttemptedAt)
+			require.Equal(t, job.CreatedAt, fetchedJob.CreatedAt)
+			require.Equal(t, job.EncodedArgs, fetchedJob.EncodedArgs)
+			require.Equal(t, "message1", fetchedJob.Errors[0].Error)
+			require.Equal(t, "message2", fetchedJob.Errors[1].Error)
+			require.Equal(t, job.FinalizedAt, fetchedJob.FinalizedAt)
+			require.Equal(t, job.Kind, fetchedJob.Kind)
+			require.Equal(t, job.MaxAttempts, fetchedJob.MaxAttempts)
+			require.Equal(t, job.Metadata, fetchedJob.Metadata)
+			require.Equal(t, job.Priority, fetchedJob.Priority)
+			require.Equal(t, job.Queue, fetchedJob.Queue)
+			require.Equal(t, job.ScheduledAt, fetchedJob.ScheduledAt)
+			require.Equal(t, job.State, fetchedJob.State)
+			require.Equal(t, job.Tags, fetchedJob.Tags)
 		})
 
-		fetchedJobs, err := exec.JobList(
-			ctx,
-			fmt.Sprintf("SELECT %s FROM river_job WHERE id = @job_id_123", exec.JobListFields()),
-			map[string]any{"job_id_123": job.ID},
-		)
-		require.NoError(t, err)
-		require.Len(t, fetchedJobs, 1)
+		t.Run("HandlesRequiredArgumentTypes", func(t *testing.T) {
+			exec, _ := setup(ctx, t)
 
-		fetchedJob := fetchedJobs[0]
-		require.Equal(t, job.Attempt, fetchedJob.Attempt)
-		require.Equal(t, job.AttemptedAt, fetchedJob.AttemptedAt)
-		require.Equal(t, job.CreatedAt, fetchedJob.CreatedAt)
-		require.Equal(t, job.EncodedArgs, fetchedJob.EncodedArgs)
-		require.Equal(t, "message1", fetchedJob.Errors[0].Error)
-		require.Equal(t, "message2", fetchedJob.Errors[1].Error)
-		require.Equal(t, job.FinalizedAt, fetchedJob.FinalizedAt)
-		require.Equal(t, job.Kind, fetchedJob.Kind)
-		require.Equal(t, job.MaxAttempts, fetchedJob.MaxAttempts)
-		require.Equal(t, job.Metadata, fetchedJob.Metadata)
-		require.Equal(t, job.Priority, fetchedJob.Priority)
-		require.Equal(t, job.Queue, fetchedJob.Queue)
-		require.Equal(t, job.ScheduledAt, fetchedJob.ScheduledAt)
-		require.Equal(t, job.State, fetchedJob.State)
-		require.Equal(t, job.Tags, fetchedJob.Tags)
+			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind1")})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind2")})
+
+			{
+				fetchedJobs, err := exec.JobList(
+					ctx,
+					fmt.Sprintf("SELECT %s FROM river_job WHERE kind = @kind", exec.JobListFields()),
+					map[string]any{"kind": job1.Kind},
+				)
+				require.NoError(t, err)
+				require.Len(t, fetchedJobs, 1)
+			}
+
+			{
+				fetchedJobs, err := exec.JobList(
+					ctx,
+					fmt.Sprintf("SELECT %s FROM river_job WHERE kind = any(@kind::text[])", exec.JobListFields()),
+					map[string]any{"kind": []string{job1.Kind, job2.Kind}},
+				)
+				require.NoError(t, err)
+				require.Len(t, fetchedJobs, 2)
+			}
+		})
 	})
 
 	t.Run("JobListFields", func(t *testing.T) {
