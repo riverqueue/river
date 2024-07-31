@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io/fs"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -314,16 +315,9 @@ func (e *Executor) JobInsertUnique(ctx context.Context, params *riverdriver.JobI
 }
 
 func (e *Executor) JobList(ctx context.Context, query string, namedArgs map[string]any) ([]*rivertype.JobRow, error) {
-	// `database/sql` has an `sql.Named` system that should theoretically work
-	// for named parameters, but neither Pgx or lib/pq implement it, so just use
-	// dumb string replacement given we're only injecting a very basic value
-	// anyway.
-	for name, value := range namedArgs {
-		newQuery := strings.Replace(query, "@"+name, fmt.Sprintf("%v", value), 1)
-		if newQuery == query {
-			return nil, fmt.Errorf("named query parameter @%s not found in query", name)
-		}
-		query = newQuery
+	query, err := replaceNamed(query, namedArgs)
+	if err != nil {
+		return nil, err
 	}
 
 	rows, err := e.dbtx.QueryContext(ctx, query)
@@ -362,6 +356,98 @@ func (e *Executor) JobList(ctx context.Context, query string, namedArgs map[stri
 	}
 
 	return mapSliceError(items, jobRowFromInternal)
+}
+
+func escapeSinglePostgresValue(value any) string {
+	switch typedValue := value.(type) {
+	case bool:
+		return strconv.FormatBool(typedValue)
+	case float32:
+		// The `-1` arg tells Go to represent the number with as few digits as
+		// possible. i.e. No unnecessary trailing zeroes.
+		return strconv.FormatFloat(float64(typedValue), 'f', -1, 32)
+	case float64:
+		// The `-1` arg tells Go to represent the number with as few digits as
+		// possible. i.e. No unnecessary trailing zeroes.
+		return strconv.FormatFloat(typedValue, 'f', -1, 64)
+	case int, int16, int32, int64, uint, uint16, uint32, uint64:
+		return fmt.Sprintf("%d", value)
+	case string:
+		return "'" + strings.ReplaceAll(typedValue, "'", "''") + "'"
+	default:
+		// unreachable as long as new types aren't added to the switch in `replacedNamed` below
+		panic("type not supported")
+	}
+}
+
+func makePostgresArray[T any](values []T) string {
+	var sb strings.Builder
+	sb.WriteString("ARRAY[")
+
+	for i, value := range values {
+		sb.WriteString(escapeSinglePostgresValue(value))
+
+		if i < len(values)-1 {
+			sb.WriteString(",")
+		}
+	}
+
+	sb.WriteString("]")
+	return sb.String()
+}
+
+// `database/sql` has an `sql.Named` system that should theoretically work for
+// named parameters, but neither Pgx or lib/pq implement it, so just use dumb
+// string replacement given we're only injecting a very basic value anyway.
+func replaceNamed(query string, namedArgs map[string]any) (string, error) {
+	for name, value := range namedArgs {
+		var escapedValue string
+
+		switch typedValue := value.(type) {
+		case bool, float32, float64, int, int16, int32, int64, string, uint, uint16, uint32, uint64:
+			escapedValue = escapeSinglePostgresValue(value)
+
+			// This is pretty awkward, but typedValue reverts back to `any` if
+			// any of these conditions are combined together, and that prevents
+			// us from ranging over the slice. Technically only `[]string` is
+			// needed right now, but I included other slice types just so there
+			// isn't a surprise later on.
+		case []bool:
+			escapedValue = makePostgresArray(typedValue)
+		case []float32:
+			escapedValue = makePostgresArray(typedValue)
+		case []float64:
+			escapedValue = makePostgresArray(typedValue)
+		case []int:
+			escapedValue = makePostgresArray(typedValue)
+		case []int16:
+			escapedValue = makePostgresArray(typedValue)
+		case []int32:
+			escapedValue = makePostgresArray(typedValue)
+		case []int64:
+			escapedValue = makePostgresArray(typedValue)
+		case []string:
+			escapedValue = makePostgresArray(typedValue)
+		case []uint:
+			escapedValue = makePostgresArray(typedValue)
+		case []uint16:
+			escapedValue = makePostgresArray(typedValue)
+		case []uint32:
+			escapedValue = makePostgresArray(typedValue)
+		case []uint64:
+			escapedValue = makePostgresArray(typedValue)
+		default:
+			return "", fmt.Errorf("named query parameter @%s is not a supported type", name)
+		}
+
+		newQuery := strings.Replace(query, "@"+name, escapedValue, 1)
+		if newQuery == query {
+			return "", fmt.Errorf("named query parameter @%s not found in query", name)
+		}
+		query = newQuery
+	}
+
+	return query, nil
 }
 
 func (e *Executor) JobListFields() string {
