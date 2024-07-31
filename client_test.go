@@ -4617,13 +4617,29 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 	t.Run("WorkerInsertOptsOverrides", func(t *testing.T) {
 		t.Parallel()
 
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, &customInsertOptsJobArgs{}, nil)
+		nearFuture := time.Now().Add(5 * time.Minute)
+
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, &customInsertOptsJobArgs{
+			ScheduledAt: nearFuture,
+		}, nil)
 		require.NoError(t, err)
 		// All these come from overrides in customInsertOptsJobArgs's definition:
 		require.Equal(t, 42, insertParams.MaxAttempts)
 		require.Equal(t, 2, insertParams.Priority)
 		require.Equal(t, "other", insertParams.Queue)
+		require.NotNil(t, insertParams.ScheduledAt)
+		require.Equal(t, nearFuture, *insertParams.ScheduledAt)
 		require.Equal(t, []string{"tag1", "tag2"}, insertParams.Tags)
+	})
+
+	t.Run("WorkerInsertOptsScheduledAtNotRespectedIfZero", func(t *testing.T) {
+		t.Parallel()
+
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, &customInsertOptsJobArgs{
+			ScheduledAt: time.Time{},
+		}, nil)
+		require.NoError(t, err)
+		require.Nil(t, insertParams.ScheduledAt)
 	})
 
 	t.Run("TagFormatValidated", func(t *testing.T) {
@@ -4717,7 +4733,9 @@ func TestID(t *testing.T) {
 	})
 }
 
-type customInsertOptsJobArgs struct{}
+type customInsertOptsJobArgs struct {
+	ScheduledAt time.Time `json:"scheduled_at"`
+}
 
 func (w *customInsertOptsJobArgs) Kind() string { return "customInsertOpts" }
 
@@ -4726,6 +4744,7 @@ func (w *customInsertOptsJobArgs) InsertOpts() InsertOpts {
 		MaxAttempts: 42,
 		Priority:    2,
 		Queue:       "other",
+		ScheduledAt: w.ScheduledAt,
 		Tags:        []string{"tag1", "tag2"},
 	}
 }
