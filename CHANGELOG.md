@@ -7,11 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.2] - 2024-07-31
+
 ### Fixed
 
 - Include `pending` state in `JobListParams` by default so pending jobs are included in `JobList` / `JobListTx` results. [PR #477](https://github.com/riverqueue/river/pull/477).
 - Quote strings when using `Client.JobList` functions with the `database/sql` driver. [PR #481](https://github.com/riverqueue/river/pull/481).
-- Remove use of filepath for interacting with embedded migration files, fixing the migration CLI for Windows. [PR #485](https://github.com/riverqueue/river/pull/485).
+- Remove use of `filepath` for interacting with embedded migration files, fixing the migration CLI for Windows. [PR #485](https://github.com/riverqueue/river/pull/485).
 - Respect `ScheduledAt` if set to a non-zero value by `JobArgsWithInsertOpts`. This allows for job arg definitions to utilize custom logic at the args level for determining when the job should be scheduled. [PR #487](https://github.com/riverqueue/river/pull/487).
 
 ## [0.10.1] - 2024-07-23
