@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"maps"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -575,8 +574,9 @@ func migrationsFromFS(migrationFS fs.FS, line string) ([]Migration, error) {
 			return fmt.Errorf("error walking FS: %w", err)
 		}
 
-		// Gets called one with the name of the subdirectories. Continue.
-		if path == subdir || path == filepath.Join(subdir, line) {
+		// The WalkDir callback is invoked for each embdedded subdirectory and
+		// file. For our purposes here, we're only interested in files.
+		if entry.IsDir() {
 			return nil
 		}
 
