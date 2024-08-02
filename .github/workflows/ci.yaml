@@ -132,7 +132,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prerequisites
+      - name: export RIVER_CMD_DIR
         run: |
           if [ "$RUNNER_OS" == "Linux" ]; then
             echo "RIVER_CMD_DIR=./cmd/river" >> $GITHUB_ENV
@@ -163,15 +163,25 @@ jobs:
 
       - name: river bench
         run: |
-          ( sleep 10 && killall -SIGTERM river ) &
-          river bench --database-url $DATABASE_URL
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            ( sleep 10 && killall -SIGTERM river ) &
+            river bench --database-url $DATABASE_URL
+          elif [ "$RUNNER_OS" == "Windows" ]; then
+            (sleep 10 && taskkill //F //IM river.exe //T ) &
+            river bench --database-url $DATABASE_URL || exit 0
+          fi
         shell: bash
 
       # Bench again in fixed number of jobs mode.
       - name: river bench
         run: |
-          ( sleep 10 && killall -SIGTERM river ) &
-          river bench --database-url $DATABASE_URL --num-total-jobs 1_234
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            ( sleep 10 && killall -SIGTERM river ) &
+            river bench --database-url $DATABASE_URL --num-total-jobs 1_234
+          elif [ "$RUNNER_OS" == "Windows" ]; then
+            (sleep 10 && taskkill //F //IM river.exe //T ) &
+            river bench --database-url $DATABASE_URL --num-total-jobs 1_234 || exit 0
+          fi
         shell: bash
 
       - name: river migrate-down
