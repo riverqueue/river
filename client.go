@@ -1657,6 +1657,12 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 // client, and can be used to add new ones or remove existing ones.
 func (c *Client[TTx]) PeriodicJobs() *PeriodicJobBundle { return c.periodicJobs }
 
+// InternalExecutorBundle is an accessor for the internal executors of the client.
+// It is not stable for external use and no compatibility guarantees are made.
+func (c *Client[TTx]) InternalExecutorBundle() riverdriver.InternalExecutorBundle[TTx] {
+	return &internalExecutorBundle[TTx]{driver: c.driver}
+}
+
 // Queues returns the currently configured set of queues for the client, and can
 // be used to add new ones.
 func (c *Client[TTx]) Queues() *QueueBundle { return c.queues }
@@ -1842,6 +1848,18 @@ func (c *Client[TTx]) QueueResumeTx(ctx context.Context, tx TTx, name string, op
 	}
 
 	return nil
+}
+
+type internalExecutorBundle[TTx any] struct {
+	driver riverdriver.Driver[TTx]
+}
+
+func (i *internalExecutorBundle[TTx]) Executor() riverdriver.Executor {
+	return i.driver.GetExecutor()
+}
+
+func (i *internalExecutorBundle[TTx]) ExecutorTx(tx TTx) riverdriver.Executor {
+	return i.driver.UnwrapExecutor(tx)
 }
 
 // QueueBundle is a bundle for adding additional queues. It's made accessible

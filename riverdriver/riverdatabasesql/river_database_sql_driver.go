@@ -714,7 +714,15 @@ func (e *Executor) Query(ctx context.Context, sql string, args ...any) (riverdri
 	if len(args) == 0 {
 		args = nil
 	}
-	return e.dbtx.QueryContext(ctx, sql, args...)
+	rows, err := e.dbtx.QueryContext(ctx, sql, args...)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return rows, nil
 }
 
 func (e *Executor) QueryRow(ctx context.Context, sql string, args ...any) riverdriver.Row {
