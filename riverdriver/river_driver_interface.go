@@ -82,6 +82,8 @@ type Driver[TTx any] interface {
 	// API is not stable. DO NOT USE.
 	SupportsListener() bool
 
+	RowsToJobs(rows Rows) ([]*rivertype.JobRow, error)
+
 	// UnwrapExecutor gets an executor from a driver transaction.
 	//
 	// API is not stable. DO NOT USE.

@@ -59,6 +59,53 @@ func (d *Driver) GetMigrationLines() []string { return []string{riverdriver.Migr
 func (d *Driver) HasPool() bool               { return d.dbPool != nil }
 func (d *Driver) SupportsListener() bool      { return false }
 
+// RowsToJobs converts a riverdriver.Rows to a slice of *rivertype.JobRow, using
+// this driver's internal type as an intermediate for safe deserialization.
+//
+// This approach would allow us to use the higher level executor query methods
+// with raw SQL to query the database, and then safely scan the rows with
+// driver-specific details abstracted away.
+func (d *Driver) RowsToJobs(rows riverdriver.Rows) ([]*rivertype.JobRow, error) {
+	var items []*dbsqlc.RiverJob
+	for rows.Next() {
+		var i dbsqlc.RiverJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Args,
+			&i.Attempt,
+			&i.AttemptedAt,
+			&i.AttemptedBy,
+			&i.CreatedAt,
+			&i.Errors,
+			&i.FinalizedAt,
+			&i.Kind,
+			&i.MaxAttempts,
+			&i.Metadata,
+			&i.Priority,
+			&i.Queue,
+			&i.State,
+			&i.ScheduledAt,
+			&i.Tags,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	jobs := make([]*rivertype.JobRow, len(items))
+	var err error
+	for i, item := range items {
+		jobs[i], err = jobRowFromInternal(item)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return jobs, nil
+}
+
 func (d *Driver) UnwrapExecutor(tx *sql.Tx) riverdriver.ExecutorTx {
 	return &ExecutorTx{Executor: Executor{nil, tx}, tx: tx}
 }
