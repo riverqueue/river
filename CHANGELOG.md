@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2024-08-02
+
+### Added
+
+- Expose `Driver` on `Client` for additional River Pro integrations. This is not a stable API and should generally not be used by others. [PR #497](https://github.com/riverqueue/river/pull/497).
+
 ## [0.10.2] - 2024-07-31
 
 ### Fixed
