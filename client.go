@@ -988,6 +988,13 @@ func (c *Client[TTx]) handleLeadershipChangeLoop(ctx context.Context, shouldStar
 	return nil
 }
 
+// Driver exposes the underlying driver used by the client.
+//
+// API is not stable. DO NOT USE.
+func (c *Client[TTx]) Driver() riverdriver.Driver[TTx] {
+	return c.driver
+}
+
 // JobCancel cancels the job with the given ID. If possible, the job is
 // cancelled immediately and will not be retried. The provided context is used
 // for the underlying Postgres update and can be used to cancel the operation or
