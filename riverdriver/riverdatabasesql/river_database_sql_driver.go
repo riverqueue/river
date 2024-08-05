@@ -228,11 +228,12 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 		State:       make([]dbsqlc.RiverJobState, len(params)),
 		Tags:        make([]string, len(params)),
 	}
+	now := time.Now()
 
 	for i := 0; i < len(params); i++ {
 		params := params[i]
 
-		var scheduledAt time.Time
+		scheduledAt := now
 		if params.ScheduledAt != nil {
 			scheduledAt = *params.ScheduledAt
 		}

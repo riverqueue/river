@@ -899,53 +899,85 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	t.Run("JobInsertFastMany", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		t.Run("AllArgs", func(t *testing.T) {
+			exec, _ := setup(ctx, t)
 
-		// This test needs to use a time from before the transaction begins, otherwise
-		// the newly-scheduled jobs won't yet show as available because their
-		// scheduled_at (which gets a default value from time.Now() in code) will be
-		// after the start of the transaction.
-		now := time.Now().UTC().Add(-1 * time.Minute)
+			// This test needs to use a time from before the transaction begins, otherwise
+			// the newly-scheduled jobs won't yet show as available because their
+			// scheduled_at (which gets a default value from time.Now() in code) will be
+			// after the start of the transaction.
+			now := time.Now().UTC().Add(-1 * time.Minute)
 
-		insertParams := make([]*riverdriver.JobInsertFastParams, 10)
-		for i := 0; i < len(insertParams); i++ {
-			insertParams[i] = &riverdriver.JobInsertFastParams{
-				EncodedArgs: []byte(`{"encoded": "args"}`),
-				Kind:        "test_kind",
-				MaxAttempts: rivercommon.MaxAttemptsDefault,
-				Metadata:    []byte(`{"meta": "data"}`),
-				Priority:    rivercommon.PriorityDefault,
-				Queue:       rivercommon.QueueDefault,
-				ScheduledAt: &now,
-				State:       rivertype.JobStateAvailable,
-				Tags:        []string{"tag"},
+			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
+			for i := 0; i < len(insertParams); i++ {
+				insertParams[i] = &riverdriver.JobInsertFastParams{
+					EncodedArgs: []byte(`{"encoded": "args"}`),
+					Kind:        "test_kind",
+					MaxAttempts: rivercommon.MaxAttemptsDefault,
+					Metadata:    []byte(`{"meta": "data"}`),
+					Priority:    rivercommon.PriorityDefault,
+					Queue:       rivercommon.QueueDefault,
+					ScheduledAt: &now,
+					State:       rivertype.JobStateAvailable,
+					Tags:        []string{"tag"},
+				}
+				insertParams[i].ScheduledAt = &now
 			}
-			insertParams[i].ScheduledAt = &now
-		}
 
-		count, err := exec.JobInsertFastMany(ctx, insertParams)
-		require.NoError(t, err)
-		require.Len(t, insertParams, count)
+			count, err := exec.JobInsertFastMany(ctx, insertParams)
+			require.NoError(t, err)
+			require.Len(t, insertParams, count)
 
-		jobsAfter, err := exec.JobGetByKindMany(ctx, []string{"test_kind"})
-		require.NoError(t, err)
-		require.Len(t, jobsAfter, len(insertParams))
-		for _, job := range jobsAfter {
-			require.Equal(t, 0, job.Attempt)
-			require.Nil(t, job.AttemptedAt)
-			require.WithinDuration(t, time.Now().UTC(), job.CreatedAt, 2*time.Second)
-			require.Equal(t, []byte(`{"encoded": "args"}`), job.EncodedArgs)
-			require.Empty(t, job.Errors)
-			require.Nil(t, job.FinalizedAt)
-			require.Equal(t, "test_kind", job.Kind)
-			require.Equal(t, rivercommon.MaxAttemptsDefault, job.MaxAttempts)
-			require.Equal(t, []byte(`{"meta": "data"}`), job.Metadata)
-			require.Equal(t, rivercommon.PriorityDefault, job.Priority)
-			require.Equal(t, rivercommon.QueueDefault, job.Queue)
-			requireEqualTime(t, now, job.ScheduledAt)
-			require.Equal(t, rivertype.JobStateAvailable, job.State)
-			require.Equal(t, []string{"tag"}, job.Tags)
-		}
+			jobsAfter, err := exec.JobGetByKindMany(ctx, []string{"test_kind"})
+			require.NoError(t, err)
+			require.Len(t, jobsAfter, len(insertParams))
+			for _, job := range jobsAfter {
+				require.Equal(t, 0, job.Attempt)
+				require.Nil(t, job.AttemptedAt)
+				require.WithinDuration(t, time.Now().UTC(), job.CreatedAt, 2*time.Second)
+				require.Equal(t, []byte(`{"encoded": "args"}`), job.EncodedArgs)
+				require.Empty(t, job.Errors)
+				require.Nil(t, job.FinalizedAt)
+				require.Equal(t, "test_kind", job.Kind)
+				require.Equal(t, rivercommon.MaxAttemptsDefault, job.MaxAttempts)
+				require.Equal(t, []byte(`{"meta": "data"}`), job.Metadata)
+				require.Equal(t, rivercommon.PriorityDefault, job.Priority)
+				require.Equal(t, rivercommon.QueueDefault, job.Queue)
+				requireEqualTime(t, now, job.ScheduledAt)
+				require.Equal(t, rivertype.JobStateAvailable, job.State)
+				require.Equal(t, []string{"tag"}, job.Tags)
+			}
+		})
+
+		t.Run("MissingScheduledAtDefaultsToNow", func(t *testing.T) {
+			exec, _ := setup(ctx, t)
+
+			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
+			for i := 0; i < len(insertParams); i++ {
+				insertParams[i] = &riverdriver.JobInsertFastParams{
+					EncodedArgs: []byte(`{"encoded": "args"}`),
+					Kind:        "test_kind",
+					MaxAttempts: rivercommon.MaxAttemptsDefault,
+					Metadata:    []byte(`{"meta": "data"}`),
+					Priority:    rivercommon.PriorityDefault,
+					Queue:       rivercommon.QueueDefault,
+					ScheduledAt: nil, // explicit nil
+					State:       rivertype.JobStateAvailable,
+					Tags:        []string{"tag"},
+				}
+			}
+
+			count, err := exec.JobInsertFastMany(ctx, insertParams)
+			require.NoError(t, err)
+			require.Len(t, insertParams, count)
+
+			jobsAfter, err := exec.JobGetByKindMany(ctx, []string{"test_kind"})
+			require.NoError(t, err)
+			require.Len(t, jobsAfter, len(insertParams))
+			for _, job := range jobsAfter {
+				require.WithinDuration(t, time.Now().UTC(), job.ScheduledAt, 2*time.Second)
+			}
+		})
 	})
 
 	t.Run("JobInsertFull", func(t *testing.T) {
