@@ -31,6 +31,7 @@ queries. After changing an sqlc `.sql` file, generate Go with:
     git checkout master && git pull --rebase
     export VERSION=v0.x.y
     go run ./internal/cmd/update-submodule-versions/main.go
+    git checkout -b $USER-$VERSION
     ```
 
 2. Prepare a PR with the changes, updating `CHANGELOG.md` with any necessary additions at the same time. Have it reviewed and merged.
