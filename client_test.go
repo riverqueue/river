@@ -1823,6 +1823,21 @@ func Test_Client_InsertManyTx(t *testing.T) {
 		require.Len(t, jobs, 2, "Expected to find exactly two jobs of kind: "+(noOpArgs{}).Kind())
 	})
 
+	t.Run("SetsScheduledAtToNowByDefault", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		_, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{{noOpArgs{}, nil}})
+		require.NoError(t, err)
+
+		insertedJobs, err := client.driver.UnwrapExecutor(bundle.tx).JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
+		require.NoError(t, err)
+		require.Len(t, insertedJobs, 1)
+		require.Equal(t, rivertype.JobStateAvailable, insertedJobs[0].State)
+		require.WithinDuration(t, time.Now(), insertedJobs[0].ScheduledAt, 2*time.Second)
+	})
+
 	t.Run("SupportsScheduledJobs", func(t *testing.T) {
 		t.Parallel()
 

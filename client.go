@@ -1169,9 +1169,8 @@ func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, conf
 	}
 
 	// If the time is stubbed (in a test), use that for `created_at`. Otherwise,
-	// leave an empty value which will use the database's `now()` value, which
-	// keeps the timestamps of jobs inserted across many different computers
-	// more consistent (i.e. in case of minor time drifts).
+	// leave an empty value which will either use the database's `now()` or be defaulted
+	// by drivers as necessary.
 	createdAt := archetype.Time.NowUTCOrNil()
 
 	maxAttempts := valutil.FirstNonZero(insertOpts.MaxAttempts, jobInsertOpts.MaxAttempts, config.MaxAttempts)
