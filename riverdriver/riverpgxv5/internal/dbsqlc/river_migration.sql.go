@@ -14,13 +14,15 @@ const columnExists = `-- name: ColumnExists :one
 SELECT EXISTS (
     SELECT column_name
     FROM information_schema.columns 
-    WHERE table_name = $1 and column_name = $2
+    WHERE table_name = $1::text
+        AND table_schema = CURRENT_SCHEMA
+        AND column_name = $2::text
 )
 `
 
 type ColumnExistsParams struct {
-	TableName  interface{}
-	ColumnName interface{}
+	TableName  string
+	ColumnName string
 }
 
 func (q *Queries) ColumnExists(ctx context.Context, db DBTX, arg *ColumnExistsParams) (bool, error) {

@@ -192,6 +192,26 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		exists, err = exec.ColumnExists(ctx, "river_job", "does_not_exist")
 		require.NoError(t, err)
 		require.False(t, exists)
+
+		exists, err = exec.ColumnExists(ctx, "does_not_exist", "id")
+		require.NoError(t, err)
+		require.False(t, exists)
+
+		// Will be rolled back by the test transaction.
+		_, err = exec.Exec(ctx, "CREATE SCHEMA another_schema_123")
+		require.NoError(t, err)
+
+		_, err = exec.Exec(ctx, "SET search_path = another_schema_123")
+		require.NoError(t, err)
+
+		// Table with the same name as the main schema, but without the same
+		// columns.
+		_, err = exec.Exec(ctx, "CREATE TABLE river_job (another_id bigint)")
+		require.NoError(t, err)
+
+		exists, err = exec.ColumnExists(ctx, "river_job", "id")
+		require.NoError(t, err)
+		require.False(t, exists)
 	})
 
 	t.Run("Exec", func(t *testing.T) {
@@ -2284,6 +2304,17 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		require.True(t, exists)
 
 		exists, err = exec.TableExists(ctx, "does_not_exist")
+		require.NoError(t, err)
+		require.False(t, exists)
+
+		// Will be rolled back by the test transaction.
+		_, err = exec.Exec(ctx, "CREATE SCHEMA another_schema_123")
+		require.NoError(t, err)
+
+		_, err = exec.Exec(ctx, "SET search_path = another_schema_123")
+		require.NoError(t, err)
+
+		exists, err = exec.TableExists(ctx, "river_job")
 		require.NoError(t, err)
 		require.False(t, exists)
 	})

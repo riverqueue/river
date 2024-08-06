@@ -72,7 +72,9 @@ RETURNING
 SELECT EXISTS (
     SELECT column_name
     FROM information_schema.columns 
-    WHERE table_name = @table_name and column_name = @column_name
+    WHERE table_name = @table_name::text
+        AND table_schema = CURRENT_SCHEMA
+        AND column_name = @column_name::text
 );
 
 -- name: TableExists :one
