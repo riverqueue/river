@@ -506,7 +506,7 @@ func (c *BatchCompleter) waitOrInitBacklogChannel(ctx context.Context) {
 const numRetries = 3
 
 func withRetries[T any](logCtx context.Context, baseService *baseservice.BaseService, disableSleep bool, retryFunc func(ctx context.Context) (T, error)) (T, error) {
-	uncancelledCtx := context.Background()
+	uncancelledCtx := context.WithoutCancel(logCtx)
 
 	var (
 		defaultVal T
