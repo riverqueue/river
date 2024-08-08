@@ -11,6 +11,7 @@ import (
 	"math"
 	"math/rand"
 	"reflect"
+	"regexp"
 	"time"
 
 	"github.com/riverqueue/river/rivershared/util/randutil"
@@ -166,7 +167,7 @@ func Init[TService withBaseService](archetype *Archetype, service TService) TSer
 	baseService := service.GetBaseService()
 
 	baseService.Logger = archetype.Logger
-	baseService.Name = reflect.TypeOf(service).Elem().Name()
+	baseService.Name = simplifyLogName(reflect.TypeOf(service).Elem().Name())
 	baseService.Rand = archetype.Rand
 	baseService.Time = archetype.Time
 
@@ -201,4 +202,19 @@ func (g *UnStubbableTimeGenerator) NowUTC() time.Time       { return time.Now() 
 func (g *UnStubbableTimeGenerator) NowUTCOrNil() *time.Time { return nil }
 func (g *UnStubbableTimeGenerator) StubNowUTC(nowUTC time.Time) time.Time {
 	panic("time not stubbable outside tests")
+}
+
+var stripGenericTypePathRE = regexp.MustCompile(`\[([\[\]\*]*).*/([^/]+)\]`)
+
+// Simplies the name of a Go type that uses generics for cleaner logging output.
+//
+// So this:
+//
+//	QueryCacher[[]*github.com/riverqueue/riverui/internal/dbsqlc.JobCountByStateRow]
+//
+// Becomes this:
+//
+//	QueryCacher[[]*dbsqlc.JobCountByStateRow]
+func simplifyLogName(name string) string {
+	return stripGenericTypePathRE.ReplaceAllString(name, `[$1$2]`)
 }
