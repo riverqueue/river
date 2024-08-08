@@ -9,11 +9,11 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/notifier"
-	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/startstop"
+	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/valutil"
 )
 
@@ -53,11 +53,11 @@ func (s *Subscription) Unlisten() {
 
 // Test-only properties.
 type electorTestSignals struct {
-	DeniedLeadership     rivercommon.TestSignal[struct{}] // notifies when elector fails to gain leadership
-	GainedLeadership     rivercommon.TestSignal[struct{}] // notifies when elector gains leadership
-	LostLeadership       rivercommon.TestSignal[struct{}] // notifies when an elected leader loses leadership
-	MaintainedLeadership rivercommon.TestSignal[struct{}] // notifies when elector maintains leadership
-	ResignedLeadership   rivercommon.TestSignal[struct{}] // notifies when elector resigns leadership
+	DeniedLeadership     testsignal.TestSignal[struct{}] // notifies when elector fails to gain leadership
+	GainedLeadership     testsignal.TestSignal[struct{}] // notifies when elector gains leadership
+	LostLeadership       testsignal.TestSignal[struct{}] // notifies when an elected leader loses leadership
+	MaintainedLeadership testsignal.TestSignal[struct{}] // notifies when elector maintains leadership
+	ResignedLeadership   testsignal.TestSignal[struct{}] // notifies when elector resigns leadership
 }
 
 func (ts *electorTestSignals) Init() {

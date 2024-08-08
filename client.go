@@ -24,6 +24,7 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/startstop"
+	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/maputil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
@@ -348,7 +349,7 @@ type Client[TTx any] struct {
 
 // Test-only signals.
 type clientTestSignals struct {
-	electedLeader rivercommon.TestSignal[struct{}] // notifies when elected leader
+	electedLeader testsignal.TestSignal[struct{}] // notifies when elected leader
 
 	jobCleaner          *maintenance.JobCleanerTestSignals
 	jobRescuer          *maintenance.JobRescuerTestSignals

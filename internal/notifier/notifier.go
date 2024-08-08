@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/startstop"
+	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/maputil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 )
@@ -44,9 +44,9 @@ func (s *Subscription) Unlisten(ctx context.Context) {
 
 // Test-only properties.
 type notifierTestSignals struct {
-	BackoffError   rivercommon.TestSignal[error]    // non-cancellation error received by main run loop
-	ListeningBegin rivercommon.TestSignal[struct{}] // notifier has entered a listen loop
-	ListeningEnd   rivercommon.TestSignal[struct{}] // notifier has left a listen loop
+	BackoffError   testsignal.TestSignal[error]    // non-cancellation error received by main run loop
+	ListeningBegin testsignal.TestSignal[struct{}] // notifier has entered a listen loop
+	ListeningEnd   testsignal.TestSignal[struct{}] // notifier has left a listen loop
 }
 
 func (ts *notifierTestSignals) Init() {

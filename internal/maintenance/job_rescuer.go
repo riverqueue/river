@@ -8,11 +8,11 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/startstop"
+	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
 	"github.com/riverqueue/river/rivershared/util/valutil"
@@ -30,8 +30,8 @@ type ClientRetryPolicy interface {
 
 // Test-only properties.
 type JobRescuerTestSignals struct {
-	FetchedBatch rivercommon.TestSignal[struct{}] // notifies when runOnce has fetched a batch of jobs
-	UpdatedBatch rivercommon.TestSignal[struct{}] // notifies when runOnce has updated rescued jobs from a batch
+	FetchedBatch testsignal.TestSignal[struct{}] // notifies when runOnce has fetched a batch of jobs
+	UpdatedBatch testsignal.TestSignal[struct{}] // notifies when runOnce has updated rescued jobs from a batch
 }
 
 func (ts *JobRescuerTestSignals) Init() {
