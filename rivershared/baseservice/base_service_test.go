@@ -148,3 +148,22 @@ func archetype() *Archetype {
 		Time:   &UnStubbableTimeGenerator{},
 	}
 }
+
+func TestSimplifyLogName(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "NotGeneric", simplifyLogName("NotGeneric"))
+
+	// Simplified for use during debugging. Real generics will tend to have
+	// fully qualified paths and not look like this.
+	require.Equal(t, "Simple[int]", simplifyLogName("Simple[int]"))
+	require.Equal(t, "Simple[*int]", simplifyLogName("Simple[*int]"))
+	require.Equal(t, "Simple[[]int]", simplifyLogName("Simple[[]int]"))
+	require.Equal(t, "Simple[[]*int]", simplifyLogName("Simple[[]*int]"))
+
+	// More realistic examples.
+	require.Equal(t, "QueryCacher[dbsqlc.JobCountByStateRow]", simplifyLogName("QueryCacher[github.com/riverqueue/riverui/internal/dbsqlc.JobCountByStateRow]"))
+	require.Equal(t, "QueryCacher[*dbsqlc.JobCountByStateRow]", simplifyLogName("QueryCacher[*github.com/riverqueue/riverui/internal/dbsqlc.JobCountByStateRow]"))
+	require.Equal(t, "QueryCacher[[]dbsqlc.JobCountByStateRow]", simplifyLogName("QueryCacher[[]github.com/riverqueue/riverui/internal/dbsqlc.JobCountByStateRow]"))
+	require.Equal(t, "QueryCacher[[]*dbsqlc.JobCountByStateRow]", simplifyLogName("QueryCacher[[]*github.com/riverqueue/riverui/internal/dbsqlc.JobCountByStateRow]"))
+}
