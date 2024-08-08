@@ -132,6 +132,52 @@ func New[TTx any](driver riverdriver.Driver[TTx], config *Config) *Migrator[TTx]
 	})
 }
 
+// ExistingVersions gets the existing set of versions that have been migrated in
+// the database, ordered by version.
+func (m *Migrator[TTx]) ExistingVersions(ctx context.Context) ([]Migration, error) {
+	migrations, err := m.existingMigrations(ctx, m.driver.GetExecutor())
+	if err != nil {
+		return nil, err
+	}
+
+	versions, err := m.versionsFromDriver(migrations)
+	if err != nil {
+		return nil, err
+	}
+
+	return versions, nil
+}
+
+// ExistingVersions gets the existing set of versions that have been migrated in
+// the database, ordered by version.
+//
+// This variant checks for existing versions in a transaction.
+func (m *Migrator[TTx]) ExistingVersionsTx(ctx context.Context, tx TTx) ([]Migration, error) {
+	migrations, err := m.existingMigrations(ctx, m.driver.UnwrapExecutor(tx))
+	if err != nil {
+		return nil, err
+	}
+
+	versions, err := m.versionsFromDriver(migrations)
+	if err != nil {
+		return nil, err
+	}
+
+	return versions, nil
+}
+
+func (m *Migrator[TTx]) versionsFromDriver(migrations []*riverdriver.Migration) ([]Migration, error) {
+	versions := make([]Migration, len(migrations))
+	for i, existingMigration := range migrations {
+		migration, ok := m.migrations[existingMigration.Version]
+		if !ok {
+			return nil, fmt.Errorf("migration %d not found in migrator bundle", existingMigration.Version)
+		}
+		versions[i] = migration
+	}
+	return versions, nil
+}
+
 // MigrateOpts are options for a migrate operation.
 type MigrateOpts struct {
 	DryRun bool
