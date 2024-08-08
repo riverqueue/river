@@ -205,9 +205,8 @@ func requireNotInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.Jo
 	}
 }
 
-// RequireInsertedTx is a test helper that verifies that a job of the given kind
-// was inserted for work, failing the test if it wasn't. If found, the inserted
-// job is returned so that further assertions can be made against it.
+// RequireNotInsertedTx is a test helper that verifies that a job of the given
+// kind was not inserted for work, failing the test if one was.
 //
 //	job := RequireInsertedTx[*riverpgxv5.Driver](ctx, t, tx, &Job1Args{}, nil)
 //
