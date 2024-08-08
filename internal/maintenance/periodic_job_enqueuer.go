@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/dbunique"
-	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/startstop"
+	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/maputil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -22,10 +22,10 @@ var ErrNoJobToInsert = errors.New("a nil job was returned, nothing to insert")
 
 // Test-only properties.
 type PeriodicJobEnqueuerTestSignals struct {
-	EnteredLoop    rivercommon.TestSignal[struct{}] // notifies when the enqueuer finishes start up and enters its initial run loop
-	InsertedJobs   rivercommon.TestSignal[struct{}] // notifies when a batch of jobs is inserted
-	NotifiedQueues rivercommon.TestSignal[[]string] // notifies when queues are sent an insert notification
-	SkippedJob     rivercommon.TestSignal[struct{}] // notifies when a job is skipped because of nil JobInsertParams
+	EnteredLoop    testsignal.TestSignal[struct{}] // notifies when the enqueuer finishes start up and enters its initial run loop
+	InsertedJobs   testsignal.TestSignal[struct{}] // notifies when a batch of jobs is inserted
+	NotifiedQueues testsignal.TestSignal[[]string] // notifies when queues are sent an insert notification
+	SkippedJob     testsignal.TestSignal[struct{}] // notifies when a job is skipped because of nil JobInsertParams
 }
 
 func (ts *PeriodicJobEnqueuerTestSignals) Init() {

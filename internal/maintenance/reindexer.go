@@ -6,10 +6,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/startstop"
+	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/valutil"
 )
 
@@ -22,7 +22,7 @@ var defaultIndexNames = []string{} //nolint:gochecknoglobals
 
 // Test-only properties.
 type ReindexerTestSignals struct {
-	Reindexed rivercommon.TestSignal[struct{}] // notifies when a run finishes executing reindexes for all indexes
+	Reindexed testsignal.TestSignal[struct{}] // notifies when a run finishes executing reindexes for all indexes
 }
 
 func (ts *ReindexerTestSignals) Init() {

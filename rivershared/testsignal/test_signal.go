@@ -1,4 +1,4 @@
-package rivercommon
+package testsignal
 
 import (
 	"fmt"

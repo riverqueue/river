@@ -7,10 +7,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/startstop"
+	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
 	"github.com/riverqueue/river/rivershared/util/valutil"
 )
@@ -24,7 +24,7 @@ const (
 
 // Test-only properties.
 type JobCleanerTestSignals struct {
-	DeletedBatch rivercommon.TestSignal[struct{}] // notifies when runOnce finishes a pass
+	DeletedBatch testsignal.TestSignal[struct{}] // notifies when runOnce finishes a pass
 }
 
 func (ts *JobCleanerTestSignals) Init() {

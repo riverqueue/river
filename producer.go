@@ -17,6 +17,7 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/startstop"
+	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -27,12 +28,12 @@ const (
 
 // Test-only properties.
 type producerTestSignals struct {
-	DeletedExpiredQueueRecords rivercommon.TestSignal[struct{}] // notifies when the producer deletes expired queue records
-	Paused                     rivercommon.TestSignal[struct{}] // notifies when the producer is paused
-	PolledQueueConfig          rivercommon.TestSignal[struct{}] // notifies when the producer polls for queue settings
-	ReportedQueueStatus        rivercommon.TestSignal[struct{}] // notifies when the producer reports queue status
-	Resumed                    rivercommon.TestSignal[struct{}] // notifies when the producer is resumed
-	StartedExecutors           rivercommon.TestSignal[struct{}] // notifies when runOnce finishes a pass
+	DeletedExpiredQueueRecords testsignal.TestSignal[struct{}] // notifies when the producer deletes expired queue records
+	Paused                     testsignal.TestSignal[struct{}] // notifies when the producer is paused
+	PolledQueueConfig          testsignal.TestSignal[struct{}] // notifies when the producer polls for queue settings
+	ReportedQueueStatus        testsignal.TestSignal[struct{}] // notifies when the producer reports queue status
+	Resumed                    testsignal.TestSignal[struct{}] // notifies when the producer is resumed
+	StartedExecutors           testsignal.TestSignal[struct{}] // notifies when runOnce finishes a pass
 }
 
 func (ts *producerTestSignals) Init() {

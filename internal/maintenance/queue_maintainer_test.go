@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/dbunique"
-	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/sharedtx"
 	"github.com/riverqueue/river/riverdriver"
@@ -18,6 +17,7 @@ import (
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/startstoptest"
+	"github.com/riverqueue/river/rivershared/testsignal"
 )
 
 type testService struct {
@@ -55,8 +55,8 @@ func (s *testService) Start(ctx context.Context) error {
 }
 
 type testServiceTestSignals struct {
-	returning rivercommon.TestSignal[struct{}]
-	started   rivercommon.TestSignal[struct{}]
+	returning testsignal.TestSignal[struct{}]
+	started   testsignal.TestSignal[struct{}]
 }
 
 func (ts *testServiceTestSignals) Init() {
