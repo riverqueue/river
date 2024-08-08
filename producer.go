@@ -459,7 +459,7 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 
 func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan producerFetchResult) {
 	limit := p.maxJobsToFetch()
-	go p.dispatchWork(limit, fetchResultCh) //nolint:contextcheck
+	go p.dispatchWork(workCtx, limit, fetchResultCh)
 
 	for {
 		select {
@@ -509,14 +509,15 @@ func (p *producer) maybeCancelJob(id int64) {
 	executor.Cancel()
 }
 
-func (p *producer) dispatchWork(count int, fetchResultCh chan<- producerFetchResult) {
-	// This intentionally uses a background context because we don't want it to
-	// get cancelled if the producer is asked to shut down. In that situation, we
-	// want to finish fetching any jobs we are in the midst of fetching, work
-	// them, and then stop. Otherwise we'd have a risk of shutting down when we
-	// had already fetched jobs in the database, leaving those jobs stranded. We'd
-	// then potentially have to release them back to the queue.
-	jobs, err := p.exec.JobGetAvailable(context.Background(), &riverdriver.JobGetAvailableParams{
+func (p *producer) dispatchWork(workCtx context.Context, count int, fetchResultCh chan<- producerFetchResult) {
+	// This intentionally removes any deadlines or cancelleation from the parent
+	// context because we don't want it to get cancelled if the producer is asked
+	// to shut down. In that situation, we want to finish fetching any jobs we are
+	// in the midst of fetching, work them, and then stop. Otherwise we'd have a
+	// risk of shutting down when we had already fetched jobs in the database,
+	// leaving those jobs stranded. We'd then potentially have to release them
+	// back to the queue.
+	jobs, err := p.exec.JobGetAvailable(context.WithoutCancel(workCtx), &riverdriver.JobGetAvailableParams{
 		AttemptedBy: p.config.ClientID,
 		Max:         count,
 		Queue:       p.config.Queue,
