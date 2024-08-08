@@ -43,6 +43,16 @@ type Archetype struct {
 	Time TimeGenerator
 }
 
+// NewArchetype returns a new archetype. This function is most suitable for
+// non-test usage wherein nothing should be stubbed.
+func NewArchetype(logger *slog.Logger) *Archetype {
+	return &Archetype{
+		Logger: logger,
+		Rand:   randutil.NewCryptoSeededConcurrentSafeRand(),
+		Time:   &UnStubbableTimeGenerator{},
+	}
+}
+
 // BaseService is a struct that's meant to be embedded on "service-like" objects
 // (e.g. client, producer, queue maintainer) and which provides a number of
 // convenient properties that are widely needed so that they don't have to be

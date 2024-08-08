@@ -342,6 +342,186 @@ func TestWithStopInit(t *testing.T) {
 	})
 }
 
+func TestStopped(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("AllocatesOnStart", func(t *testing.T) {
+		t.Parallel()
+
+		service := &sampleService{}
+
+		require.Nil(t, service.stopped)
+
+		require.NoError(t, service.Start(ctx))
+		t.Cleanup(service.Stop)
+
+		stopped := service.Stopped()
+		require.NotNil(t, stopped)
+		require.NotNil(t, service.stopped)
+
+		service.Stop()
+
+		riversharedtest.WaitOrTimeout(t, stopped)
+	})
+
+	t.Run("PreallocatesBeforeStart", func(t *testing.T) {
+		t.Parallel()
+
+		service := &sampleService{}
+
+		stopped := service.Stopped()
+
+		require.NotNil(t, stopped)
+		require.NotNil(t, service.stopped)
+
+		require.NoError(t, service.Start(ctx))
+		t.Cleanup(service.Stop)
+
+		service.Stop()
+
+		riversharedtest.WaitOrTimeout(t, stopped)
+	})
+}
+
+func TestStoppedUnsafe(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("AllocatesOnStart", func(t *testing.T) {
+		t.Parallel()
+
+		service := &sampleService{}
+
+		require.Nil(t, service.stopped)
+
+		require.NoError(t, service.Start(ctx))
+		t.Cleanup(service.Stop)
+
+		stopped := service.StoppedUnsafe()
+		require.NotNil(t, stopped)
+		require.NotNil(t, service.stopped)
+
+		service.Stop()
+
+		riversharedtest.WaitOrTimeout(t, stopped)
+	})
+
+	t.Run("NotPreallocatedBeforeStart", func(t *testing.T) {
+		t.Parallel()
+
+		service := &sampleService{}
+
+		require.Nil(t, service.StoppedUnsafe())
+	})
+}
+
+func TestStartAll(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("StartsAllServices", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			service1 = &sampleService{}
+			service2 = &sampleService{}
+			service3 = &sampleService{}
+		)
+
+		t.Cleanup(service1.Stop)
+		t.Cleanup(service2.Stop)
+		t.Cleanup(service3.Stop)
+
+		err := StartAll(ctx, service1, service2, service3)
+		require.NoError(t, err)
+
+		riversharedtest.WaitOrTimeout(t, WaitAllStartedC(service1, service2, service3))
+	})
+
+	t.Run("ReturnsFirstError", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			service1 = &sampleService{}
+			service2 = &sampleService{}
+			service3 = &sampleService{startErr: errors.New("a start error")}
+		)
+
+		t.Cleanup(service1.Stop)
+		t.Cleanup(service2.Stop)
+		t.Cleanup(service3.Stop)
+
+		// References must be invoked before anything is stopped.
+		var (
+			stopped1 = service1.Stopped()
+			stopped2 = service2.Stopped()
+		)
+
+		err := StartAll(ctx, service1, service2, service3)
+		require.EqualError(t, err, "a start error")
+
+		// The first two services should have been stopped after the third
+		// service failed to start.
+		riversharedtest.WaitOrTimeout(t, stopped1)
+		riversharedtest.WaitOrTimeout(t, stopped2)
+	})
+
+	// Same as the above except with only a single service. Exists to make sure
+	// that there's nothing wrong with the way we're indexing a slice of
+	// services when stopping on error.
+	t.Run("ErrorWithOneService", func(t *testing.T) {
+		t.Parallel()
+
+		service := &sampleService{startErr: errors.New("a start error")}
+
+		t.Cleanup(service.Stop)
+
+		err := StartAll(ctx, service)
+		require.EqualError(t, err, "a start error")
+	})
+}
+
+func TestStarted(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("AllocatesOnStart", func(t *testing.T) {
+		t.Parallel()
+
+		service := &sampleService{}
+
+		require.Nil(t, service.started)
+
+		require.NoError(t, service.Start(ctx))
+		t.Cleanup(service.Stop)
+
+		require.NotNil(t, service.started)
+
+		riversharedtest.WaitOrTimeout(t, service.Started())
+	})
+
+	t.Run("PreallocatesBeforeStart", func(t *testing.T) {
+		t.Parallel()
+
+		service := &sampleService{}
+
+		started := service.Started()
+
+		require.NotNil(t, started)
+		require.NotNil(t, service.started)
+
+		require.NoError(t, service.Start(ctx))
+		t.Cleanup(service.Stop)
+
+		riversharedtest.WaitOrTimeout(t, started)
+	})
+}
+
 func TestStopAllParallel(t *testing.T) {
 	t.Parallel()
 
