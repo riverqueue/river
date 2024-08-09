@@ -521,7 +521,7 @@ func withRetries[T any](logCtx context.Context, baseService *baseservice.BaseSer
 		ctx, cancel := context.WithTimeout(uncancelledCtx, timeout)
 		defer cancel()
 
-		retVal, err := retryFunc(ctx) //nolint:contextcheck
+		retVal, err := retryFunc(ctx)
 		if err != nil {
 			// A cancelled context will never succeed, return immediately.
 			if errors.Is(err, context.Canceled) {
