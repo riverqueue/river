@@ -18,6 +18,12 @@ on:
 
 jobs:
   build_and_test:
+    env:
+      # The special value "local" tells Go to use the bundled Go version rather
+      # than trying to fetch one according to a `toolchain` value in `go.mod`.
+      # This ensures that we're really running the Go version in the CI matrix
+      # rather than one that the Go command has upgraded to automatically.
+      GOTOOLCHAIN: local
     runs-on: ubuntu-latest
     strategy:
       matrix:

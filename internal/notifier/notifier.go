@@ -36,7 +36,7 @@ type Subscription struct {
 func (s *Subscription) Unlisten(ctx context.Context) {
 	s.unlistenOnce.Do(func() {
 		// Unlisten strips cancellation from the parent context to ensure it runs:
-		if err := s.notifier.unlisten(context.WithoutCancel(ctx), s); err != nil { //nolint:contextcheck
+		if err := s.notifier.unlisten(context.WithoutCancel(ctx), s); err != nil {
 			s.notifier.Logger.ErrorContext(ctx, s.notifier.Name+": Error unlistening on topic", "err", err, "topic", s.topic)
 		}
 	})

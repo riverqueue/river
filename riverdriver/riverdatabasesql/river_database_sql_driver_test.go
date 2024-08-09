@@ -78,6 +78,8 @@ func TestReplaceNamed(t *testing.T) {
 		{Desc: "SliceUint64", ExpectedSQL: "SELECT ARRAY[123,124]", InputSQL: "SELECT @slice_uint64", InputArgs: map[string]any{"slice_uint64": []uint64{123, 124}}},
 	}
 	for _, tt := range testCases {
+		tt := tt
+
 		t.Run(tt.Desc, func(t *testing.T) {
 			t.Parallel()
 
