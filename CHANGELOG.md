@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
 ## [0.11.2] - 2024-08-08
+
+### Fixed
 
 - Derive all internal contexts from user-provided `Client` context. This includes the job fetch context, notifier unlisten, and completer. [PR #514](https://github.com/riverqueue/river/pull/514).
 - Lowered the `go` directives in `go.mod` to Go 1.21, which River aims to support. A more modern version of Go is specified with the `toolchain` directive. This should provide more flexibility on the minimum required Go version for programs importing River. [PR #522](https://github.com/riverqueue/river/pull/522).
