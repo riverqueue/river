@@ -26,7 +26,6 @@ import (
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/maputil"
-	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivershared/util/valutil"
 	"github.com/riverqueue/river/rivertype"
@@ -338,7 +337,6 @@ type Client[TTx any] struct {
 	queues               *QueueBundle
 	services             []startstop.Service
 	subscriptionManager  *subscriptionManager
-	stopped              <-chan struct{}
 	testSignals          clientTestSignals
 	uniqueInserter       *dbunique.UniqueInserter
 
@@ -479,13 +477,9 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		return nil, err
 	}
 
-	archetype := &baseservice.Archetype{
-		Logger: config.Logger,
-		Rand:   randutil.NewCryptoSeededConcurrentSafeRand(),
-		Time:   config.time,
-	}
-	if archetype.Time == nil {
-		archetype.Time = &baseservice.UnStubbableTimeGenerator{}
+	archetype := baseservice.NewArchetype(config.Logger)
+	if config.time != nil {
+		archetype.Time = config.time
 	}
 
 	client := &Client[TTx]{
@@ -659,8 +653,6 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 	c.queues.startStopMu.Lock()
 	defer c.queues.startStopMu.Unlock()
 
-	c.stopped = c.baseStartStop.Stopped()
-
 	producersAsServices := func() []startstop.Service {
 		return sliceutil.Map(
 			maputil.Values(c.producersByQueueName),
@@ -720,11 +712,9 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		// more aggressive stop will be initiated.
 		workCtx, workCancel := context.WithCancelCause(withClient[TTx](ctx, c))
 
-		for _, service := range c.services {
-			if err := service.Start(fetchCtx); err != nil {
-				stopServicesOnError()
-				return err
-			}
+		if err := startstop.StartAll(fetchCtx, c.services...); err != nil {
+			stopServicesOnError()
+			return err
 		}
 
 		for _, producer := range c.producersByQueueName {
@@ -858,12 +848,14 @@ func (c *Client[TTx]) StopAndCancel(ctx context.Context) error {
 }
 
 // Stopped returns a channel that will be closed when the Client has stopped.
-// It can be used to wait for a graceful shutdown to complete.
+// It can be used to wait for a graceful shutdown to complete. A reference to
+// the channel must be taken _before_ calling Stop or StopAndCancel. The channel
+// is reset after the service is stopped, so if a reference isn't taken before
+// stopping, then the caller might (it's a race) receive a channel intended for
+// use the next time the client is stopped.
 //
 // It is not affected by any contexts passed to Stop or StopAndCancel.
-func (c *Client[TTx]) Stopped() <-chan struct{} {
-	return c.stopped
-}
+func (c *Client[TTx]) Stopped() <-chan struct{} { return c.baseStartStop.Stopped() }
 
 // Subscribe subscribes to the provided kinds of events that occur within the
 // client, like EventKindJobCompleted for when a job completes.

@@ -144,6 +144,8 @@ func Example_gracefulShutdown() {
 	// Make sure our job starts being worked before doing anything else.
 	<-jobStarted
 
+	stopped := riverClient.Stopped()
+
 	// Cheat a little by sending a SIGTERM manually for the purpose of this
 	// example (normally this will be sent by user or supervisory process). The
 	// first SIGTERM tries a soft stop in which jobs are given a chance to
@@ -154,14 +156,14 @@ func Example_gracefulShutdown() {
 	// respects context cancellation, but wait a short amount of time to give it
 	// a chance. After it elapses, send another SIGTERM to initiate a hard stop.
 	select {
-	case <-riverClient.Stopped():
+	case <-stopped:
 		// Will never be reached in this example because our job will only ever
 		// finish on context cancellation.
 		fmt.Printf("Soft stop succeeded\n")
 
 	case <-time.After(100 * time.Millisecond):
 		sigintOrTerm <- syscall.SIGTERM
-		<-riverClient.Stopped()
+		<-stopped
 	}
 
 	// Output:

@@ -1071,14 +1071,20 @@ func Test_Client_StopAndCancel(t *testing.T) {
 
 		client, _ := setup(t)
 
+		// A reference to the stopped channel should be taken before calling Stop.
+		stopped := client.Stopped()
+
 		require.NoError(t, client.StopAndCancel(ctx))
-		riversharedtest.WaitOrTimeout(t, client.Stopped())
+		riversharedtest.WaitOrTimeout(t, stopped)
 	})
 
 	t.Run("AfterStop", func(t *testing.T) {
 		t.Parallel()
 
 		client, bundle := setup(t)
+
+		// A reference to the stopped channel should be taken before calling Stop.
+		stopped := client.Stopped()
 
 		go func() {
 			require.NoError(t, client.Stop(ctx))
@@ -1091,7 +1097,7 @@ func Test_Client_StopAndCancel(t *testing.T) {
 		}
 
 		require.NoError(t, client.StopAndCancel(ctx))
-		riversharedtest.WaitOrTimeout(t, client.Stopped())
+		riversharedtest.WaitOrTimeout(t, stopped)
 
 		select {
 		case <-bundle.jobDoneChan:

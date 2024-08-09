@@ -61,6 +61,7 @@ type serviceWithStopped interface {
 // override it.
 type BaseStartStop struct {
 	cancelFunc context.CancelCauseFunc
+	isRunning  bool
 	mu         sync.Mutex
 	started    chan struct{}
 	stopped    chan struct{}
@@ -107,18 +108,20 @@ func (s *BaseStartStop) StartInit(ctx context.Context) (context.Context, bool, f
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Used stopped rather than started to track started state because the
-	// started channel may be preallocated by a call to Started.
-	if s.stopped != nil {
+	if s.isRunning {
 		return ctx, false, nil, nil
 	}
+
+	s.isRunning = true
 
 	// Only allocate a started channel if one was preallocated by Started.
 	if s.started == nil {
 		s.started = make(chan struct{})
 	}
+	if s.stopped == nil {
+		s.stopped = make(chan struct{})
+	}
 
-	s.stopped = make(chan struct{})
 	ctx, s.cancelFunc = context.WithCancelCause(ctx)
 
 	closeStartedOnce := sync.OnceFunc(func() { close(s.started) })
@@ -191,7 +194,7 @@ func (s *BaseStartStop) StopInit() (bool, <-chan struct{}, func(didStop bool)) {
 	s.mu.Lock()
 
 	// Tolerate being told to stop without having been started.
-	if s.stopped == nil {
+	if !s.isRunning {
 		s.mu.Unlock()
 		return false, nil, func(didStop bool) {}
 	}
@@ -201,6 +204,7 @@ func (s *BaseStartStop) StopInit() (bool, <-chan struct{}, func(didStop bool)) {
 	return true, s.stopped, func(didStop bool) {
 		defer s.mu.Unlock()
 		if didStop {
+			s.isRunning = false
 			s.started = nil
 			s.stopped = nil
 		}
@@ -208,9 +212,23 @@ func (s *BaseStartStop) StopInit() (bool, <-chan struct{}, func(didStop bool)) {
 }
 
 // Stopped returns a channel that can be waited on for the service to be
-// stopped. This function is only safe to invoke after successfully waiting on a
-// service's Start, and a reference to it must be taken _before_ invoking Stop.
-func (s *BaseStartStop) Stopped() <-chan struct{} { return s.stopped }
+// stopped. This function may be used to return a stopped channel before a
+// service is started or while it's running, bu a reference to it must be taken
+// _before_ invoking Stop.
+func (s *BaseStartStop) Stopped() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// If the call to Stopped is before the service was actually started,
+	// preallocate the stopped channel so that regardless of whether the wait
+	// started before or after the service started, it will still do the right
+	// thing.
+	if s.stopped == nil {
+		s.stopped = make(chan struct{})
+	}
+
+	return s.stopped
+}
 
 type startStopFunc struct {
 	BaseStartStop
@@ -228,6 +246,20 @@ func StartStopFunc(startFunc func(ctx context.Context, shouldStart bool, started
 
 func (s *startStopFunc) Start(ctx context.Context) error {
 	return s.startFunc(s.StartInit(ctx))
+}
+
+// StartAll starts all given services. If any service returns an error while
+// being started, that error is returned, and any services that were started
+// successfully up to that point are stopped.
+func StartAll(ctx context.Context, services ...Service) error {
+	for i, service := range services {
+		if err := service.Start(ctx); err != nil {
+			StopAllParallel(services[0:i]...)
+
+			return err
+		}
+	}
+	return nil
 }
 
 // StopAllParallel stops all the given services in parallel and waits until
