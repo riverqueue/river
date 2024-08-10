@@ -26,7 +26,6 @@ import (
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/maputil"
-	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivershared/util/valutil"
 	"github.com/riverqueue/river/rivertype"
@@ -337,8 +336,8 @@ type Client[TTx any] struct {
 	queueMaintainer      *maintenance.QueueMaintainer
 	queues               *QueueBundle
 	services             []startstop.Service
-	subscriptionManager  *subscriptionManager
 	stopped              <-chan struct{}
+	subscriptionManager  *subscriptionManager
 	testSignals          clientTestSignals
 	uniqueInserter       *dbunique.UniqueInserter
 
@@ -479,13 +478,9 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		return nil, err
 	}
 
-	archetype := &baseservice.Archetype{
-		Logger: config.Logger,
-		Rand:   randutil.NewCryptoSeededConcurrentSafeRand(),
-		Time:   config.time,
-	}
-	if archetype.Time == nil {
-		archetype.Time = &baseservice.UnStubbableTimeGenerator{}
+	archetype := baseservice.NewArchetype(config.Logger)
+	if config.time != nil {
+		archetype.Time = config.time
 	}
 
 	client := &Client[TTx]{
@@ -659,7 +654,9 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 	c.queues.startStopMu.Lock()
 	defer c.queues.startStopMu.Unlock()
 
-	c.stopped = c.baseStartStop.Stopped()
+	// BaseStartStop will set its stopped channel to nil after it stops, so make
+	// sure to take a channel reference before finishing stopped.
+	c.stopped = c.baseStartStop.StoppedUnsafe()
 
 	producersAsServices := func() []startstop.Service {
 		return sliceutil.Map(
@@ -720,11 +717,9 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		// more aggressive stop will be initiated.
 		workCtx, workCancel := context.WithCancelCause(withClient[TTx](ctx, c))
 
-		for _, service := range c.services {
-			if err := service.Start(fetchCtx); err != nil {
-				stopServicesOnError()
-				return err
-			}
+		if err := startstop.StartAll(fetchCtx, c.services...); err != nil {
+			stopServicesOnError()
+			return err
 		}
 
 		for _, producer := range c.producersByQueueName {
