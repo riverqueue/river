@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
@@ -534,4 +535,13 @@ func failure(t testingT, format string, a ...any) {
 // and footer common to all failure messages.
 func failureString(format string, a ...any) string {
 	return "\n    River assertion failure:\n    " + fmt.Sprintf(format, a...) + "\n"
+}
+
+// WorkContext returns a realistic context that can be used to test JobArgs.Work
+// implementations.
+//
+// In particual, adds a client to the context so that river.ClientFromContext is
+// usable in the test suite.
+func WorkContext[TTx any](ctx context.Context, client *river.Client[TTx]) context.Context {
+	return context.WithValue(ctx, rivercommon.ContextKeyClient{}, client)
 }

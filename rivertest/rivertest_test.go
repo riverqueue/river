@@ -1059,6 +1059,32 @@ func TestRequireManyInsertedTx(t *testing.T) {
 	})
 }
 
+func TestWorkContext(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct{}
+
+	setup := func(ctx context.Context, t *testing.T) (context.Context, *testBundle) {
+		t.Helper()
+
+		client, err := river.NewClient(riverpgxv5.New(nil), &river.Config{})
+		require.NoError(t, err)
+
+		return WorkContext(ctx, client), &testBundle{}
+	}
+
+	t.Run("ClientFromContext", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, _ := setup(ctx, t)
+
+		client := river.ClientFromContext[pgx.Tx](ctx)
+		require.NotNil(t, client)
+	})
+}
+
 // MockT mocks testingT (or *testing.T). It's used to let us verify our test
 // helpers.
 type MockT struct {
