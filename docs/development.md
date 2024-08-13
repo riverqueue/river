@@ -30,7 +30,7 @@ queries. After changing an sqlc `.sql` file, generate Go with:
     ```shell
     git checkout master && git pull --rebase
     export VERSION=v0.x.y
-    go run ./internal/cmd/update-submodule-versions/main.go
+    make update-mod-version
     git checkout -b $USER-$VERSION
     ```
 

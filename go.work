@@ -1,0 +1,13 @@
+go 1.21
+
+toolchain go1.22.5
+
+use (
+	.
+	./cmd/river
+	./riverdriver
+	./riverdriver/riverdatabasesql
+	./riverdriver/riverpgxv5
+	./rivershared
+	./rivertype
+)

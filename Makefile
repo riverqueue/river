@@ -1,71 +1,87 @@
-.PHONY: generate
-generate:
-generate: generate/migrations
-generate: generate/sqlc
+.DEFAULT_GOAL := help
 
 .PHONY: db/reset
-db/reset: ## drop, create, and migrate dev and test databases
+db/reset: ## Drop, create, and migrate dev and test databases
 db/reset: db/reset/dev
 db/reset: db/reset/test
 
 .PHONY: db/reset/dev
-db/reset/dev: ## drop, create, and migrate dev database
+db/reset/dev: ## Drop, create, and migrate dev database
 	dropdb river_dev --force --if-exists
 	createdb river_dev
 	cd cmd/river && go run . migrate-up --database-url "postgres://localhost/river_dev"
 
 .PHONY: db/reset/test
-db/reset/test: ## drop, create, and migrate test databases
+db/reset/test: ## Drop, create, and migrate test databases
 	go run ./internal/cmd/testdbman reset
 
+.PHONY: generate
+generate: ## Generate generated artifacts
+generate: generate/migrations
+generate: generate/sqlc
+
 .PHONY: generate/migrations
-generate/migrations: ## sync changes of pgxv5 migrations to database/sql
+generate/migrations: ## Sync changes of pgxv5 migrations to database/sql
 	rsync -au --delete "riverdriver/riverpgxv5/migration/" "riverdriver/riverdatabasesql/migration/"
 
 .PHONY: generate/sqlc
-generate/sqlc:
+generate/sqlc: ## Generate sqlc
 	cd riverdriver/riverdatabasesql/internal/dbsqlc && sqlc generate
 	cd riverdriver/riverpgxv5/internal/dbsqlc && sqlc generate
 
+# Looks at comments using ## on targets and uses them to produce a help output.
+.PHONY: help
+help: ALIGN=22
+help: ## Print this message
+	@awk -F '::? .*## ' -- "/^[^':]+::? .*## /"' { printf "'$$(tput bold)'%-$(ALIGN)s'$$(tput sgr0)' %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+
+# Each directory of a submodule in the Go workspace. Go commands provide no
+# built-in way to run for all workspace submodules. Add a new submodule to the
+# workspace with `go work use ./driver/new`.
+submodules := $(shell go list -f '{{.Dir}}' -m)
+
+# Definitions of following tasks look ugly, but they're done this way because to
+# produce the best/most comprehensible output by far (e.g. compared to a shell
+# loop).
 .PHONY: lint
-lint:
-	cd . && golangci-lint run --fix
-	cd cmd/river && golangci-lint run --fix
-	cd riverdriver && golangci-lint run --fix
-	cd riverdriver/riverdatabasesql && golangci-lint run --fix
-	cd riverdriver/riverpgxv5 && golangci-lint run --fix
-	cd rivershared && golangci-lint run --fix
-	cd rivertype && golangci-lint run --fix
+lint:: ## Run linter (golangci-lint) for all submodules
+define lint-target
+    lint:: ; cd $1 && golangci-lint run --fix
+endef
+$(foreach mod,$(submodules),$(eval $(call lint-target,$(mod))))
 
 .PHONY: test
-test:
-	cd . && go test ./... -p 1
-	cd cmd/river && go test ./...
-	cd riverdriver && go test ./...
-	cd riverdriver/riverdatabasesql && go test ./...
-	cd riverdriver/riverpgxv5 && go test ./...
-	cd rivershared && go test ./...
-	cd rivertype && go test ./...
+test:: ## Run test suite for all submodules
+define test-target
+    test:: ; cd $1 && go test ./... -p 1
+endef
+$(foreach mod,$(submodules),$(eval $(call test-target,$(mod))))
 
 .PHONY: tidy
-tidy:
-	cd . && go mod tidy
-	cd cmd/river && go mod tidy
-	cd riverdriver && go mod tidy
-	cd riverdriver/riverdatabasesql && go mod tidy
-	cd riverdriver/riverpgxv5 && go mod tidy
-	cd rivertype && go mod tidy
+tidy:: ## Run `go mod tidy` for all submodules
+define tidy-target
+    tidy:: ; cd $1 && go mod tidy
+endef
+$(foreach mod,$(submodules),$(eval $(call tidy-target,$(mod))))
+
+.PHONY: update-mod-go
+update-mod-go: ## Update `go`/`toolchain` directives in all submodules to match `go.work`
+	go run ./rivershared/cmd/update-mod-go ./go.work
+
+.PHONY: update-mod-version
+update-mod-version: ## Update River packages in all submodules to $VERSION
+	go run ./rivershared/cmd/update-mod-version ./go.work
 
 .PHONY: verify
-verify:
+verify: ## Verify generated artifacts
 verify: verify/migrations
 verify: verify/sqlc
 
 .PHONY: verify/migrations
-verify/migrations:
+verify/migrations: ## Verify synced migrations
 	diff -qr riverdriver/riverpgxv5/migration riverdriver/riverdatabasesql/migration
 
 .PHONY: verify/sqlc
-verify/sqlc:
+verify/sqlc: ## Verify generated sqlc
 	cd riverdriver/riverdatabasesql/internal/dbsqlc && sqlc diff
 	cd riverdriver/riverpgxv5/internal/dbsqlc && sqlc diff

@@ -4,18 +4,6 @@ go 1.21
 
 toolchain go1.22.5
 
-// replace github.com/riverqueue/river => ../..
-
-// replace github.com/riverqueue/river/riverdriver => ../../riverdriver
-
-// replace github.com/riverqueue/river/riverdriver/riverdatabasesql => ../../riverdriver/riverdatabasesql
-
-// replace github.com/riverqueue/river/riverdriver/riverpgxv5 => ../../riverdriver/riverpgxv5
-
-// replace github.com/riverqueue/river/rivershared => ../../rivershared
-
-// replace github.com/riverqueue/river/rivertype => ../../rivertype
-
 require (
 	github.com/jackc/pgx/v5 v5.6.0
 	github.com/lmittmann/tint v1.0.4

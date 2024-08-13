@@ -1,6 +1,10 @@
-// Package main provides a command to help bump the versions of River's internal
-// dependencies in the `go.mod` files of submodules across the project. It's
-// used to make the release process less error prone and less painful.
+// update-mod-version provides a command to help bump the versions of River's
+// internal dependencies in the `go.mod` files of submodules across the project.
+// It's used to make the release process less error prone and less painful.
+//
+// Run it with a make target:
+//
+//	VERSION=v0.x.y make update-mod-version
 package main
 
 import (
@@ -14,23 +18,9 @@ import (
 	"golang.org/x/mod/semver"
 )
 
-// Notably, `./cmd/river` is excluded from this list. Unlike the other modules,
-// it doesn't use `replace` directives so that it can stay installable with `go
-// install ...@latest`. Without `replace`, dependencies need a hard lock in
-// `go.sum`, so any changes to its `go.mod` file would require a `go mod tidy`
-// be run afterwards.
-var allProjectModules = []string{ //nolint:gochecknoglobals
-	".",
-	"./riverdriver",
-	"./riverdriver/riverdatabasesql",
-	"./riverdriver/riverpgxv5",
-	"./rivershared",
-	"./rivertype",
-}
-
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "failure: %s", err)
+		fmt.Fprintf(os.Stderr, "failure: %s\n", err)
 		os.Exit(1)
 	}
 }
@@ -45,8 +35,24 @@ func run() error {
 		return fmt.Errorf("invalid semver version: %s", version)
 	}
 
-	for _, dir := range allProjectModules {
-		if _, err := parseAndUpdateGoModFile(path.Join(dir, "go.mod"), version); err != nil {
+	if len(os.Args) != 2 {
+		return errors.New("expected exactly one arg, which should be the path to a go.work file")
+	}
+
+	workFilename := os.Args[1]
+
+	workFileData, err := os.ReadFile(workFilename)
+	if err != nil {
+		return fmt.Errorf("error reading file %q: %w", workFilename, err)
+	}
+
+	workFile, err := modfile.ParseWork(workFilename, workFileData, nil)
+	if err != nil {
+		return fmt.Errorf("error parsing file %q: %w", workFilename, err)
+	}
+
+	for _, workUse := range workFile.Use {
+		if _, err := parseAndUpdateGoModFile("./"+path.Join(workUse.Path, "go.mod"), version); err != nil {
 			return err
 		}
 	}
