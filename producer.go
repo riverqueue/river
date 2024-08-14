@@ -535,16 +535,25 @@ func (p *producer) dispatchWork(workCtx context.Context, count int, fetchResultC
 func (p *producer) heartbeatLogLoop(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	type jobCount struct {
+		ran    uint64
+		active int
+	}
+	var prevCount jobCount
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			p.Logger.InfoContext(ctx, p.Name+": Heartbeat",
-				slog.Uint64("num_completed_jobs", p.numJobsRan.Load()),
-				slog.Int("num_jobs_running", int(p.numJobsActive.Load())),
-				slog.String("queue", p.config.Queue),
-			)
+			curCount := jobCount{ran: p.numJobsRan.Load(), active: int(p.numJobsActive.Load())}
+			if curCount != prevCount {
+				p.Logger.InfoContext(ctx, p.Name+": Producer job counts",
+					slog.Uint64("num_completed_jobs", curCount.ran),
+					slog.Int("num_jobs_running", curCount.active),
+					slog.String("queue", p.config.Queue),
+				)
+			}
+			prevCount = curCount
 		}
 	}
 }
