@@ -739,21 +739,21 @@ func dbExecError(ctx context.Context, exec riverdriver.Executor, sql string) err
 func driverMigrationToInt(r *riverdriver.Migration) int { return r.Version }
 func migrationToInt(migration Migration) int            { return migration.Version }
 
-// Produces a sequence down to one. Max is included.
-func seqOneTo(max int) []int {
-	seq := make([]int, 0, max)
+// Produces a sequence down to one. UpperLimit is included.
+func seqOneTo(upperLimit int) []int {
+	seq := make([]int, 0, upperLimit)
 
-	for i := 1; i <= max; i++ {
+	for i := 1; i <= upperLimit; i++ {
 		seq = append(seq, i)
 	}
 
 	return seq
 }
 
-func seqDownTo(max, min int) []int {
-	seq := make([]int, 0, max-min+1)
+func seqDownTo(upperLimit, lowerLimit int) []int {
+	seq := make([]int, 0, upperLimit-lowerLimit+1)
 
-	for i := min; i <= max; i++ {
+	for i := lowerLimit; i <= upperLimit; i++ {
 		seq = append(seq, i)
 	}
 
