@@ -356,7 +356,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		// written somewhat strangely.
 		findJob := func(kind string) *rivertype.JobRow {
 			index := slices.IndexFunc(updates, func(u jobcompleter.CompleterJobUpdated) bool { return u.Job.Kind == kind })
-			require.NotEqualf(t, -1, index, "Job update not found", "Job update not found for kind: %s", kind)
+			require.NotEqualf(t, -1, index, "Job update not found for kind: %s", kind)
 			return updates[index].Job
 		}
 

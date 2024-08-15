@@ -138,7 +138,7 @@ func testElector[TElectorBundle any](
 
 	startElector := func(ctx context.Context, t *testing.T, elector *Elector) {
 		t.Helper()
-		t.Logf("Starting " + elector.config.ClientID)
+		t.Logf("Starting %s", elector.config.ClientID)
 		require.NoError(t, elector.Start(ctx))
 		t.Cleanup(elector.Stop)
 	}
@@ -226,7 +226,7 @@ func testElector[TElectorBundle any](
 
 		elector.testSignals.GainedLeadership.WaitOrTimeout()
 
-		t.Logf("Force resigning " + elector.config.ClientID)
+		t.Logf("Force resigning %s", elector.config.ClientID)
 
 		// Artificially force resign the elector and add a new leader record
 		// so that it can't be elected again.
@@ -279,7 +279,7 @@ func testElector[TElectorBundle any](
 
 			elector2.testSignals.DeniedLeadership.WaitOrTimeout()
 
-			t.Logf("Stopping " + elector1.config.ClientID)
+			t.Logf("Stopping %s", elector1.config.ClientID)
 			elector1.Stop()
 			elector1.testSignals.ResignedLeadership.WaitOrTimeout()
 
@@ -292,7 +292,7 @@ func testElector[TElectorBundle any](
 			t.Logf("Waiting for %s to gain leadership", elector2.config.ClientID)
 			elector2.testSignals.GainedLeadership.WaitOrTimeout()
 
-			t.Logf("Stopping " + elector2.config.ClientID)
+			t.Logf("Stopping %s", elector2.config.ClientID)
 			elector2.Stop()
 			elector2.testSignals.ResignedLeadership.WaitOrTimeout()
 		}

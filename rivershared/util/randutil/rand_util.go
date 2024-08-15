@@ -19,9 +19,9 @@ func NewCryptoSeededConcurrentSafeRand() *mathrand.Rand {
 	return mathrand.New(newCryptoSeededConcurrentSafeSource())
 }
 
-// IntBetween generates a random number in the range of [min, max).
-func IntBetween(rand *mathrand.Rand, min, max int) int {
-	return rand.Intn(max-min) + min
+// IntBetween generates a random number in the range of [lowerLimit, upperLimit).
+func IntBetween(rand *mathrand.Rand, lowerLimit, upperLimit int) int {
+	return rand.Intn(upperLimit-lowerLimit) + lowerLimit
 }
 
 func newCryptoSeededConcurrentSafeSource() mathrand.Source {

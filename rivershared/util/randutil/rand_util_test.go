@@ -34,16 +34,16 @@ func TestNewCryptoSeededConcurrentSafeRand(t *testing.T) {
 func TestIntBetween(t *testing.T) {
 	t.Parallel()
 
-	const min, max = 5, 8
+	const lowerLimit, upperLimit = 5, 8
 	rand := NewCryptoSeededConcurrentSafeRand()
 
 	// Not exactly a super exhaustive test, but choose a relatively small range,
 	// generate numbers and check they're within bounds, and run enough times
 	// that we'd expect an offender to be generated if one was likely to be.
-	for i := 0; i < int(max-min)*2; i++ {
-		n := IntBetween(rand, min, max)
-		require.GreaterOrEqual(t, n, min)
-		require.Less(t, n, max)
+	for i := 0; i < int(upperLimit-lowerLimit)*2; i++ {
+		n := IntBetween(rand, lowerLimit, upperLimit)
+		require.GreaterOrEqual(t, n, lowerLimit)
+		require.Less(t, n, upperLimit)
 	}
 }
 
@@ -68,8 +68,8 @@ func BenchmarkConcurrentSafeSource(b *testing.B) {
 }
 
 func BenchmarkCryptoSource(b *testing.B) {
-	intN := func(max int64) int64 {
-		nBig, err := cryptorand.Int(cryptorand.Reader, big.NewInt(max))
+	intN := func(upperLimit int64) int64 {
+		nBig, err := cryptorand.Int(cryptorand.Reader, big.NewInt(upperLimit))
 		if err != nil {
 			panic(err)
 		}

@@ -98,7 +98,7 @@ func TestUniqueInserter_JobInsert(t *testing.T) {
 		// Sanity check, following assertion depends on this:
 		require.Nil(t, insertParams.ScheduledAt)
 
-		require.Greater(t, res.Job.ID, int64(0), "expected job ID to be set, got %d", res.Job.ID)
+		require.Positive(t, res.Job.ID, "expected job ID to be set, got %d", res.Job.ID)
 		require.JSONEq(t, string(insertParams.EncodedArgs), string(res.Job.EncodedArgs))
 		require.Equal(t, 0, res.Job.Attempt)
 		require.Nil(t, res.Job.AttemptedAt)
