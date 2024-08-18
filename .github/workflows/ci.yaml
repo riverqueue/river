@@ -28,9 +28,9 @@ jobs:
     strategy:
       matrix:
         go-version:
-          - "1.22"
           - "1.21"
-        postgres-version: [16, 15, 14]
+          - "1.22"
+        postgres-version: [14, 15, 16]
       fail-fast: false
     timeout-minutes: 5
 
@@ -59,10 +59,7 @@ jobs:
         run: go version
 
       - name: Install dependencies
-        run: |
-          echo "::group::go get"
-          go get -t ./...
-          echo "::endgroup::"
+        run: go get -t ./...
 
       - name: Set up test DBs
         run: go run ./internal/cmd/testdbman create
@@ -265,3 +262,18 @@ jobs:
         run: |
           echo "Make sure that all sqlc changes are checked in"
           make verify/sqlc
+
+  submodule_check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+          check-latest: true
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check all go/toolchain directives match
+        run: CHECK=true make update-mod-go
