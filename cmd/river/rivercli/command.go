@@ -17,11 +17,6 @@ import (
 )
 
 const (
-	// Referencing the offical PostgreSQL documentation, it appears that
-	// `postgresql://` is the default/preferred URI scheme, with `postgres://`
-	// as the fallback. River accepts both.
-	//
-	// See https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING-URIS.
 	uriScheme      = "postgresql://"
 	uriSchemeAlias = "postgres://"
 )
