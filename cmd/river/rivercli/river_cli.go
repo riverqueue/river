@@ -94,7 +94,7 @@ Provides command line facilities for the River job queue.
 	}
 
 	addDatabaseURLFlag := func(cmd *cobra.Command, databaseURL *string) {
-		cmd.Flags().StringVar(databaseURL, "database-url", "", "URL of the database to benchmark (should look like `postgres://...` or `postgresql://...`")
+		cmd.Flags().StringVar(databaseURL, "database-url", "", "URL of the database to benchmark (should look like `postgres://...`")
 		mustMarkFlagRequired(cmd, "database-url")
 	}
 	addLineFlag := func(cmd *cobra.Command, line *string) {
