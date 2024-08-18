@@ -2,7 +2,6 @@ package rivercli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +14,16 @@ import (
 
 	"github.com/riverqueue/river/cmd/river/riverbench"
 	"github.com/riverqueue/river/rivermigrate"
+)
+
+const (
+	// Referencing the offical PostgreSQL documentation, it appears that
+	// `postgresql://` is the default/preferred URI scheme, with `postgres://`
+	// as the fallback. River accepts both.
+	//
+	// See https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING-URIS.
+	uriScheme      = "postgresql://"
+	uriSchemeAlias = "postgres://"
 )
 
 // BenchmarkerInterface is an interface to a Benchmarker. Its reason for
@@ -90,7 +99,8 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 			commandBase.GetBenchmarker = func() BenchmarkerInterface { panic("databaseURL was not set") }
 			commandBase.GetMigrator = func(config *rivermigrate.Config) MigratorInterface { panic("databaseURL was not set") }
 
-		case strings.HasPrefix(*bundle.DatabaseURL, "postgres://"):
+		case strings.HasPrefix(*bundle.DatabaseURL, uriScheme) ||
+			strings.HasPrefix(*bundle.DatabaseURL, uriSchemeAlias):
 			dbPool, err := openPgxV5DBPool(ctx, *bundle.DatabaseURL)
 			if err != nil {
 				return false, err
@@ -103,7 +113,12 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 			commandBase.GetMigrator = func(config *rivermigrate.Config) MigratorInterface { return rivermigrate.New(driver, config) }
 
 		default:
-			return false, errors.New("unsupport database URL; try one with a prefix of `postgres://...`")
+			return false, fmt.Errorf(
+				"unsupported database URL (`%s`); try one with a `%s` or `%s` scheme/prefix",
+				*bundle.DatabaseURL,
+				uriSchemeAlias,
+				uriScheme,
+			)
 		}
 
 		command.SetCommandBase(commandBase)
