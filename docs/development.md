@@ -30,7 +30,7 @@ queries. After changing an sqlc `.sql` file, generate Go with:
     ```shell
     git checkout master && git pull --rebase
     export VERSION=v0.x.y
-    go run ./internal/cmd/update-submodule-versions/main.go
+    make update-mod-version
     git checkout -b $USER-$VERSION
     ```
 
@@ -104,3 +104,11 @@ If updates to River dependencies _are_ required, then a second phase of the rele
     ```
 
     The main `$VERSION` tag and `cmd/river/$VERSION` will point to different commits, and although a little odd, is tolerable.
+
+### Updating Go or toolchain versions in all `go.mod` files
+
+Modify `go.work` so it contains the new desired version in `go` and/or `toolchain` directives, then run `make update-mod-go` to have it reflect the new version(s) into all the workspace's `go.mod` files:
+
+```shell
+make update-mod-go
+```

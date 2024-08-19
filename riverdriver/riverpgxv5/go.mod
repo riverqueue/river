@@ -2,13 +2,7 @@ module github.com/riverqueue/river/riverdriver/riverpgxv5
 
 go 1.21
 
-toolchain go1.22.5
-
-replace github.com/riverqueue/river/riverdriver => ../
-
-replace github.com/riverqueue/river/rivershared => ../../rivershared
-
-replace github.com/riverqueue/river/rivertype => ../../rivertype
+toolchain go1.23.0
 
 require (
 	github.com/jackc/pgx/v5 v5.5.0

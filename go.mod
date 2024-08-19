@@ -2,17 +2,7 @@ module github.com/riverqueue/river
 
 go 1.21
 
-toolchain go1.22.5
-
-replace github.com/riverqueue/river/riverdriver => ./riverdriver
-
-replace github.com/riverqueue/river/riverdriver/riverpgxv5 => ./riverdriver/riverpgxv5
-
-replace github.com/riverqueue/river/riverdriver/riverdatabasesql => ./riverdriver/riverdatabasesql
-
-replace github.com/riverqueue/river/rivershared => ./rivershared
-
-replace github.com/riverqueue/river/rivertype => ./rivertype
+toolchain go1.23.0
 
 require (
 	github.com/jackc/pgerrcode v0.0.0-20220416144525-469b46aa5efa
@@ -26,7 +16,6 @@ require (
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.9.0
 	go.uber.org/goleak v1.3.0
-	golang.org/x/mod v0.20.0
 	golang.org/x/sync v0.8.0
 	golang.org/x/text v0.17.0
 )
