@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.3] - 2024-08-19
+
+### Changed
+
+- Producer's logs are quieter unless jobs are actively being worked. [PR #529](https://github.com/riverqueue/river/pull/529).
+
+### Fixed
+
+- River CLI now accepts `postgresql://` URL schemes in addition to `postgres://`. [PR #532](https://github.com/riverqueue/river/pull/532).
+
 ## [0.11.2] - 2024-08-08
 
 ### Fixed

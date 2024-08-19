@@ -4,4 +4,4 @@ go 1.21
 
 toolchain go1.23.0
 
-require github.com/riverqueue/river/rivertype v0.11.2
+require github.com/riverqueue/river/rivertype v0.11.3
