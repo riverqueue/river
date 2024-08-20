@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+## [0.11.4] - 2024-08-20
 
-- A new `river migrate-list` command is available which lists available migrations and which version a target database is migrated to. [PR #534](https://github.com/riverqueue/river/pull/534).
+### Fixed
+
+- Fixed release script that caused CLI to become uninstallable because its reference to `rivershared` wasn't updated. [PR #541](https://github.com/riverqueue/river/pull/541).
 
 ## [0.11.3] - 2024-08-19
 
