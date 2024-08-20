@@ -75,7 +75,7 @@ func parseAndUpdateGoModFile(filename, version string) (bool, error) {
 	fmt.Printf("%s\n", filename)
 
 	for _, require := range modFile.Require {
-		if require.Indirect || !strings.HasPrefix(require.Mod.Path, "github.com/riverqueue/river") {
+		if !strings.HasPrefix(require.Mod.Path, "github.com/riverqueue/river") {
 			continue
 		}
 
