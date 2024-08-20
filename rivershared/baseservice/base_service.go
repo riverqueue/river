@@ -6,16 +6,13 @@
 package baseservice
 
 import (
-	"context"
 	"log/slog"
-	"math"
 	"math/rand"
 	"reflect"
 	"regexp"
 	"time"
 
 	"github.com/riverqueue/river/rivershared/util/randutil"
-	"github.com/riverqueue/river/rivershared/util/timeutil"
 )
 
 // Archetype contains the set of base service properties that are immutable, or
@@ -33,6 +30,9 @@ type Archetype struct {
 	// deliberate choice because Go's non-crypto rand source is about twenty
 	// times faster, and so far none of our uses of random require cryptographic
 	// secure randomness.
+	//
+	// TODO: When we drop Go 1.21 support, drop this in favor of just using top
+	// level rand functions which are already safe for concurrent use.
 	Rand *rand.Rand
 
 	// Time returns a time generator to get the current time in UTC. Normally
@@ -71,98 +71,7 @@ type BaseService struct {
 	Name string
 }
 
-// CancellableSleep sleeps for the given duration, but returns early if context
-// has been cancelled.
-func (s *BaseService) CancellableSleep(ctx context.Context, sleepDuration time.Duration) {
-	timer := time.NewTimer(sleepDuration)
-
-	select {
-	case <-ctx.Done():
-		if !timer.Stop() {
-			<-timer.C
-		}
-	case <-timer.C:
-	}
-}
-
-// CancellableSleep sleeps for the given duration, but returns early if context
-// has been cancelled.
-//
-// This variant returns a channel that should be waited on and which will be
-// closed when either the sleep or context is done.
-func (s *BaseService) CancellableSleepC(ctx context.Context, sleepDuration time.Duration) <-chan struct{} {
-	doneChan := make(chan struct{})
-
-	go func() {
-		defer close(doneChan)
-		s.CancellableSleep(ctx, sleepDuration)
-	}()
-
-	return doneChan
-}
-
-// CancellableSleepRandomBetween sleeps for a random duration between the given
-// bounds (max bound is exclusive), but returns early if context has been
-// cancelled.
-func (s *BaseService) CancellableSleepRandomBetween(ctx context.Context, sleepDurationMin, sleepDurationMax time.Duration) {
-	s.CancellableSleep(ctx, time.Duration(randutil.IntBetween(s.Rand, int(sleepDurationMin), int(sleepDurationMax))))
-}
-
-// CancellableSleepRandomBetween sleeps for a random duration between the given
-// bounds (max bound is exclusive), but returns early if context has been
-// cancelled.
-//
-// This variant returns a channel that should be waited on and which will be
-// closed when either the sleep or context is done.
-func (s *BaseService) CancellableSleepRandomBetweenC(ctx context.Context, sleepDurationMin, sleepDurationMax time.Duration) <-chan struct{} {
-	doneChan := make(chan struct{})
-
-	go func() {
-		defer close(doneChan)
-		s.CancellableSleep(ctx, time.Duration(randutil.IntBetween(s.Rand, int(sleepDurationMin), int(sleepDurationMax))))
-	}()
-
-	return doneChan
-}
-
-// MaxAttemptsBeforeResetDefault is the number of attempts during exponential
-// backoff after which attempts is reset so that sleep durations aren't flung
-// into a ridiculously distant future. This constant is typically injected into
-// the CancellableSleepExponentialBackoff function. It could technically take
-// another value instead, but shouldn't unless there's a good reason to do so.
-const MaxAttemptsBeforeResetDefault = 10
-
-// ExponentialBackoff returns a duration for a reasonable exponential backoff
-// interval for a service based on the given attempt number, which can then be
-// fed into CancellableSleep to perform the sleep. Uses a 2**N second algorithm,
-// +/- 10% random jitter. Sleep is cancelled if the given context is cancelled.
-//
-// Attempt should start at one for the first backoff/failure.
-func (s *BaseService) ExponentialBackoff(attempt, maxAttemptsBeforeReset int) time.Duration {
-	retrySeconds := s.exponentialBackoffSecondsWithoutJitter(attempt, maxAttemptsBeforeReset)
-
-	// Jitter number of seconds +/- 10%.
-	retrySeconds += retrySeconds * (s.Rand.Float64()*0.2 - 0.1)
-
-	return timeutil.SecondsAsDuration(retrySeconds)
-}
-
-func (s *BaseService) exponentialBackoffSecondsWithoutJitter(attempt, maxAttemptsBeforeReset int) float64 {
-	// It's easier for callers and more intuitive if attempt starts at one, but
-	// subtract one before sending it the exponent so we start at only one
-	// second of sleep instead of two.
-	attempt--
-
-	// We use a different exponential backoff algorithm here compared to the
-	// default retry policy (2**N versus N**4) because it results in more
-	// retries sooner. When it comes to exponential backoffs in services we
-	// never want to sleep for hours/days, unlike with failed jobs.
-	return math.Pow(2, float64(attempt%maxAttemptsBeforeReset))
-}
-
-func (s *BaseService) GetBaseService() *BaseService {
-	return s
-}
+func (s *BaseService) GetBaseService() *BaseService { return s }
 
 // withBaseService is an interface to a struct that embeds BaseService. An
 // implementation is provided automatically by BaseService, and it's largely

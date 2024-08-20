@@ -12,6 +12,7 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/startstop"
+	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -534,11 +535,11 @@ func withRetries[T any](logCtx context.Context, baseService *baseservice.BaseSer
 			}
 
 			lastErr = err
-			sleepDuration := baseService.ExponentialBackoff(attempt, baseservice.MaxAttemptsBeforeResetDefault)
+			sleepDuration := serviceutil.ExponentialBackoff(baseService.Rand, attempt, serviceutil.MaxAttemptsBeforeResetDefault)
 			baseService.Logger.ErrorContext(logCtx, baseService.Name+": Completer error (will retry after sleep)",
 				"attempt", attempt, "err", err, "sleep_duration", sleepDuration, "timeout", timeout)
 			if !disableSleep {
-				baseService.CancellableSleep(logCtx, sleepDuration)
+				serviceutil.CancellableSleep(logCtx, sleepDuration)
 			}
 			continue
 		}

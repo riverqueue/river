@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	mathrand "math/rand"
 	"sync"
+	"time"
 )
 
 // NewCryptoSeededConcurrentSafeSource generates a new pseudo-random source
@@ -19,7 +20,18 @@ func NewCryptoSeededConcurrentSafeRand() *mathrand.Rand {
 	return mathrand.New(newCryptoSeededConcurrentSafeSource())
 }
 
+// DurationBetween generates a random duraiton in the range of [lowerLimit, upperLimit).
+//
+// TODO: When we drop Go 1.21 support, switch to `math/rand/v2` and kill the
+// `rand.Rand` argument.
+func DurationBetween(rand *mathrand.Rand, lowerLimit, upperLimit time.Duration) time.Duration {
+	return time.Duration(IntBetween(rand, int(lowerLimit), int(upperLimit)))
+}
+
 // IntBetween generates a random number in the range of [lowerLimit, upperLimit).
+//
+// TODO: When we drop Go 1.21 support, switch to `math/rand/v2` and kill the
+// `rand.Rand` argument.
 func IntBetween(rand *mathrand.Rand, lowerLimit, upperLimit int) int {
 	return rand.Intn(upperLimit-lowerLimit) + lowerLimit
 }
