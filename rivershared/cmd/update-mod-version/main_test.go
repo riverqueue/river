@@ -20,6 +20,10 @@ require (
 	github.com/riverqueue/river/riverdriver v0.0.0-00010101000000-000000000000
 	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.0.0-00010101000000-000000000000
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.0.12
+)
+
+require (
+	github.com/riverqueue/river/rivershared v0.0.12 // indirect
 )`
 
 func TestParseAndUpdateGoModFile(t *testing.T) {
@@ -60,7 +64,7 @@ func TestParseAndUpdateGoModFile(t *testing.T) {
 
 		versions := make([]module.Version, 0, len(modFile.Require))
 		for _, require := range modFile.Require {
-			if require.Indirect || !strings.HasPrefix(require.Mod.Path, "github.com/riverqueue/river") {
+			if !strings.HasPrefix(require.Mod.Path, "github.com/riverqueue/river") {
 				continue
 			}
 
@@ -71,6 +75,7 @@ func TestParseAndUpdateGoModFile(t *testing.T) {
 			{Path: "github.com/riverqueue/river/riverdriver", Version: "v0.0.13"},
 			{Path: "github.com/riverqueue/river/riverdriver/riverdatabasesql", Version: "v0.0.13"},
 			{Path: "github.com/riverqueue/river/riverdriver/riverpgxv5", Version: "v0.0.13"},
+			{Path: "github.com/riverqueue/river/rivershared", Version: "v0.0.13"},
 		}, versions)
 
 		// Running again is allowed and should be idempontent. This time it'll
