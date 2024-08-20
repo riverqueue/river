@@ -33,6 +33,7 @@ type BenchmarkerInterface interface {
 // around without having to know the transaction type.
 type MigratorInterface interface {
 	AllVersions() []rivermigrate.Migration
+	ExistingVersions(ctx context.Context) ([]rivermigrate.Migration, error)
 	GetVersion(version int) (rivermigrate.Migration, error)
 	Migrate(ctx context.Context, direction rivermigrate.Direction, opts *rivermigrate.MigrateOpts) (*rivermigrate.MigrateResult, error)
 	Validate(ctx context.Context) (*rivermigrate.ValidateResult, error)
@@ -43,6 +44,7 @@ type MigratorInterface interface {
 // CommandBase.
 type Command[TOpts CommandOpts] interface {
 	Run(ctx context.Context, opts TOpts) (bool, error)
+	GetCommandBase() *CommandBase
 	SetCommandBase(b *CommandBase)
 }
 
@@ -57,9 +59,8 @@ type CommandBase struct {
 	GetMigrator    func(config *rivermigrate.Config) MigratorInterface
 }
 
-func (b *CommandBase) SetCommandBase(base *CommandBase) {
-	*b = *base
-}
+func (b *CommandBase) GetCommandBase() *CommandBase     { return b }
+func (b *CommandBase) SetCommandBase(base *CommandBase) { *b = *base }
 
 // CommandOpts are options for a command options. It makes sure that options
 // provide a way of validating themselves.

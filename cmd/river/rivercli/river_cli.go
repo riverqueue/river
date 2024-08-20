@@ -94,7 +94,7 @@ Provides command line facilities for the River job queue.
 	}
 
 	addDatabaseURLFlag := func(cmd *cobra.Command, databaseURL *string) {
-		cmd.Flags().StringVar(databaseURL, "database-url", "", "URL of the database to benchmark (should look like `postgres://...`")
+		cmd.Flags().StringVar(databaseURL, "database-url", "", "URL of the database (should look like `postgres://...`")
 		mustMarkFlagRequired(cmd, "database-url")
 	}
 	addLineFlag := func(cmd *cobra.Command, line *string) {
@@ -215,6 +215,25 @@ framework, which aren't necessary if using an external framework:
 		rootCmd.AddCommand(cmd)
 	}
 
+	// migrate-list
+	{
+		var opts migrateListOpts
+
+		cmd := &cobra.Command{
+			Use:   "migrate-list",
+			Short: "List River schema migrations",
+			Long: strings.TrimSpace(`
+TODO
+	`),
+			Run: func(cmd *cobra.Command, args []string) {
+				RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL), &migrateList{}, &opts)
+			},
+		}
+		addDatabaseURLFlag(cmd, &opts.DatabaseURL)
+		cmd.Flags().StringVar(&opts.Line, "line", "", "migration line to operate on (default: main)")
+		rootCmd.AddCommand(cmd)
+	}
+
 	// migrate-up
 	{
 		var opts migrateOpts
@@ -259,6 +278,7 @@ migrations that need to be run, but without running them.
 			},
 		}
 		addDatabaseURLFlag(cmd, &opts.DatabaseURL)
+		mustMarkFlagRequired(cmd, "database-url")
 		cmd.Flags().StringVar(&opts.Line, "line", "", "migration line to operate on (default: main)")
 		rootCmd.AddCommand(cmd)
 	}
@@ -445,6 +465,47 @@ func (c *migrateGet) Run(_ context.Context, opts *migrateGetOpts) (bool, error) 
 		printedOne = true
 		fmt.Fprintf(c.Out, "%s\n", migrationComment(migration.Version, direction))
 		fmt.Fprintf(c.Out, "%s\n", strings.TrimSpace(sql))
+	}
+
+	return true, nil
+}
+
+type migrateListOpts struct {
+	DatabaseURL string
+	Line        string
+}
+
+func (o *migrateListOpts) Validate() error { return nil }
+
+type migrateList struct {
+	CommandBase
+}
+
+func (c *migrateList) Run(ctx context.Context, opts *migrateListOpts) (bool, error) {
+	migrator := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger})
+
+	allMigrations := migrator.AllVersions()
+
+	existingMigrations, err := migrator.ExistingVersions(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	var maxExistingVersion int
+	if len(existingMigrations) > 0 {
+		maxExistingVersion = existingMigrations[len(existingMigrations)-1].Version
+	}
+
+	for _, migration := range allMigrations {
+		var currentVersionPrefix string
+		switch {
+		case migration.Version == maxExistingVersion:
+			currentVersionPrefix = "* "
+		case maxExistingVersion > 0:
+			currentVersionPrefix = "  "
+		}
+
+		fmt.Fprintf(c.Out, "%s%03d %s\n", currentVersionPrefix, migration.Version, migration.Name)
 	}
 
 	return true, nil

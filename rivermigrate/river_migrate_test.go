@@ -127,6 +127,52 @@ func TestMigrator(t *testing.T) {
 		require.Equal(t, seqOneTo(migrationsBundle.WithTestVersionsMaxVersion), sliceutil.Map(migrations, migrationToInt))
 	})
 
+	t.Run("ExistingMigrationsDefault", func(t *testing.T) {
+		t.Parallel()
+
+		migrator, _ := setup(t)
+
+		migrations, err := migrator.ExistingVersions(ctx)
+		require.NoError(t, err)
+		require.Equal(t, seqOneTo(migrationsBundle.MaxVersion), sliceutil.Map(migrations, migrationToInt))
+	})
+
+	t.Run("ExistingMigrationsTxDefault", func(t *testing.T) {
+		t.Parallel()
+
+		migrator, bundle := setup(t)
+
+		migrations, err := migrator.ExistingVersionsTx(ctx, bundle.tx)
+		require.NoError(t, err)
+		require.Equal(t, seqOneTo(migrationsBundle.MaxVersion), sliceutil.Map(migrations, migrationToInt))
+	})
+
+	t.Run("ExistingMigrationsTxEmpty", func(t *testing.T) {
+		t.Parallel()
+
+		migrator, bundle := setup(t)
+
+		_, err := migrator.MigrateTx(ctx, bundle.tx, DirectionDown, &MigrateOpts{TargetVersion: -1})
+		require.NoError(t, err)
+
+		migrations, err := migrator.ExistingVersionsTx(ctx, bundle.tx)
+		require.NoError(t, err)
+		require.Equal(t, []int{}, sliceutil.Map(migrations, migrationToInt))
+	})
+
+	t.Run("ExistingMigrationsTxFullyMigrated", func(t *testing.T) {
+		t.Parallel()
+
+		migrator, bundle := setup(t)
+
+		_, err := migrator.MigrateTx(ctx, bundle.tx, DirectionUp, &MigrateOpts{})
+		require.NoError(t, err)
+
+		migrations, err := migrator.ExistingVersionsTx(ctx, bundle.tx)
+		require.NoError(t, err)
+		require.Equal(t, seqOneTo(migrationsBundle.WithTestVersionsMaxVersion), sliceutil.Map(migrations, migrationToInt))
+	})
+
 	t.Run("MigrateDownDefault", func(t *testing.T) {
 		t.Parallel()
 
