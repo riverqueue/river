@@ -73,6 +73,7 @@ type RunCommandBundle struct {
 	DatabaseURL    *string
 	DriverProcurer DriverProcurer
 	Logger         *slog.Logger
+	OutStd         io.Writer
 }
 
 // RunCommand bootstraps and runs a River CLI subcommand.
@@ -85,7 +86,7 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 		commandBase := &CommandBase{
 			DriverProcurer: bundle.DriverProcurer,
 			Logger:         bundle.Logger,
-			Out:            os.Stdout,
+			Out:            bundle.OutStd,
 		}
 
 		switch {
@@ -124,7 +125,7 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 
 	ok, err := procureAndRun()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed: %s\n", err)
+		fmt.Fprintf(os.Stdout, "failed: %s\n", err)
 	}
 	if err != nil || !ok {
 		os.Exit(1)

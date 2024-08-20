@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"time"
@@ -23,7 +24,19 @@ import (
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivermigrate"
+	"github.com/riverqueue/river/rivershared/util/valutil"
 )
+
+type Config struct {
+	// DriverProcurer provides a way of procuring drivers for various supported
+	// databases.
+	DriverProcurer DriverProcurer
+
+	// Name is the human-friendly named of the executable, used while showing
+	// version output. Usually this is just "River", but it could be "River
+	// Pro".
+	Name string
+}
 
 // DriverProcurer is an interface that provides a way of procuring drivers for
 // various supported databases.
@@ -34,42 +47,33 @@ type DriverProcurer interface {
 // CLI provides a common base of commands for the River CLI.
 type CLI struct {
 	driverProcurer DriverProcurer
+	name           string
+	out            io.Writer
 }
 
-func NewCLI(driverProcurer DriverProcurer) *CLI {
+func NewCLI(config *Config) *CLI {
 	return &CLI{
-		driverProcurer: driverProcurer,
+		driverProcurer: config.DriverProcurer,
+		name:           config.Name,
+		out:            os.Stdout,
 	}
 }
 
 // BaseCommandSet provides a base River CLI command set which may be further
 // augmented with additional commands.
 func (c *CLI) BaseCommandSet() *cobra.Command {
-	var rootOpts struct {
+	ctx := context.Background()
+
+	var globalOpts struct {
 		Debug   bool
 		Verbose bool
 	}
-	rootCmd := &cobra.Command{
-		Use:   "river",
-		Short: "Provides command line facilities for the River job queue",
-		Long: strings.TrimSpace(`
-Provides command line facilities for the River job queue.
-		`),
-		Run: func(cmd *cobra.Command, args []string) {
-			_ = cmd.Usage()
-		},
-	}
-	rootCmd.PersistentFlags().BoolVar(&rootOpts.Debug, "debug", false, "output maximum logging verbosity (debug level)")
-	rootCmd.PersistentFlags().BoolVarP(&rootOpts.Verbose, "verbose", "v", false, "output additional logging verbosity (info level)")
-	rootCmd.MarkFlagsMutuallyExclusive("debug", "verbose")
-
-	ctx := context.Background()
 
 	makeLogger := func() *slog.Logger {
 		switch {
-		case rootOpts.Debug:
+		case globalOpts.Debug:
 			return slog.New(tint.NewHandler(os.Stdout, &tint.Options{Level: slog.LevelDebug}))
-		case rootOpts.Verbose:
+		case globalOpts.Verbose:
 			return slog.New(tint.NewHandler(os.Stdout, nil))
 		default:
 			return slog.New(tint.NewHandler(os.Stdout, &tint.Options{Level: slog.LevelWarn}))
@@ -82,7 +86,37 @@ Provides command line facilities for the River job queue.
 			DatabaseURL:    databaseURL,
 			DriverProcurer: c.driverProcurer,
 			Logger:         makeLogger(),
+			OutStd:         c.out,
 		}
+	}
+
+	var rootCmd *cobra.Command
+	{
+		var rootOpts struct {
+			Version bool
+		}
+
+		rootCmd = &cobra.Command{
+			Use:   "river",
+			Short: "Provides command line facilities for the River job queue",
+			Long: strings.TrimSpace(`
+Provides command line facilities for the River job queue.
+		`),
+			Run: func(cmd *cobra.Command, args []string) {
+				if rootOpts.Version {
+					RunCommand(ctx, makeCommandBundle(nil), &version{}, &versionOpts{Name: c.name})
+				} else {
+					_ = cmd.Usage()
+				}
+			},
+		}
+		rootCmd.SetOut(c.out)
+
+		rootCmd.PersistentFlags().BoolVar(&globalOpts.Debug, "debug", false, "output maximum logging verbosity (debug level)")
+		rootCmd.PersistentFlags().BoolVarP(&globalOpts.Verbose, "verbose", "v", false, "output additional logging verbosity (info level)")
+		rootCmd.MarkFlagsMutuallyExclusive("debug", "verbose")
+
+		rootCmd.Flags().BoolVar(&rootOpts.Version, "version", false, "print version information")
 	}
 
 	mustMarkFlagRequired := func(cmd *cobra.Command, name string) {
@@ -283,8 +317,26 @@ migrations that need to be run, but without running them.
 		rootCmd.AddCommand(cmd)
 	}
 
+	// version
+	{
+		cmd := &cobra.Command{
+			Use:   "version",
+			Short: "Print version information",
+			Long: strings.TrimSpace(`
+Print River and Go version information.
+	`),
+			Run: func(cmd *cobra.Command, args []string) {
+				RunCommand(ctx, makeCommandBundle(nil), &version{}, &versionOpts{Name: c.name})
+			},
+		}
+		rootCmd.AddCommand(cmd)
+	}
+
 	return rootCmd
 }
+
+// SetOut sets standard output. Should be called before BaseCommandSet.
+func (c *CLI) SetOut(out io.Writer) { c.out = out }
 
 type benchOpts struct {
 	DatabaseURL  string
@@ -554,4 +606,29 @@ func (c *validate) Run(ctx context.Context, opts *validateOpts) (bool, error) {
 	}
 
 	return res.OK, nil
+}
+
+type versionOpts struct {
+	Name string
+}
+
+func (o *versionOpts) Validate() error {
+	if o.Name == "" {
+		return errors.New("name should be set")
+	}
+
+	return nil
+}
+
+type version struct {
+	CommandBase
+}
+
+func (c *version) Run(ctx context.Context, opts *versionOpts) (bool, error) {
+	buildInfo, _ := debug.ReadBuildInfo()
+
+	fmt.Fprintf(c.Out, "%s version %s\n", opts.Name, valutil.ValOrDefault(buildInfo.Main.Version, "(unknown)"))
+	fmt.Fprintf(c.Out, "Built with %s\n", buildInfo.GoVersion)
+
+	return true, nil
 }
