@@ -169,6 +169,10 @@ jobs:
         run: river validate --database-url $DATABASE_URL
         shell: bash
 
+      - name: river version
+        run: river version
+        shell: bash
+
       - name: river bench
         run: |
           if [ "$RUNNER_OS" == "Linux" ]; then
@@ -214,7 +218,7 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     env:
-      GOLANGCI_LINT_VERSION: v1.60
+      GOLANGCI_LINT_VERSION: v1.60.1
     permissions:
       contents: read
       # allow read access to pull request. Use with `only-new-issues` option.

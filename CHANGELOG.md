@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## Added
+
+- A new `river migrate-list` command is available which lists available migrations and which version a target database is migrated to. [PR #534](https://github.com/riverqueue/river/pull/534).
+- `river version` or `river --version` now prints River version information. [PR #537](https://github.com/riverqueue/river/pull/537).
+
 ## [0.11.4] - 2024-08-20
 
 ### Fixed

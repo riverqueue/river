@@ -18,7 +18,10 @@ func (p *DriverProcurer) ProcurePgxV5(pool *pgxpool.Pool) riverdriver.Driver[pgx
 }
 
 func main() {
-	cli := rivercli.NewCLI(&DriverProcurer{})
+	cli := rivercli.NewCLI(&rivercli.Config{
+		DriverProcurer: &DriverProcurer{},
+		Name:           "River",
+	})
 
 	if err := cli.BaseCommandSet().Execute(); err != nil {
 		// Cobra will already print an error on problems like an unknown command

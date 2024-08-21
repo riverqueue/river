@@ -3,12 +3,19 @@ package rivercli
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 
+	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 )
@@ -69,20 +76,102 @@ var (
 	testMigrationAll = []rivermigrate.Migration{testMigration01, testMigration02, testMigration03} //nolint:gochecknoglobals
 )
 
+type TestDriverProcurer struct{}
+
+func (p *TestDriverProcurer) ProcurePgxV5(pool *pgxpool.Pool) riverdriver.Driver[pgx.Tx] {
+	return riverpgxv5.New(pool)
+}
+
+// High level integration tests that operate on the Cobra command directly. This
+// isn't always appropriate because there's no way to inject a test transaction.
+func TestBaseCommandSetIntegration(t *testing.T) {
+	t.Parallel()
+
+	type testBundle struct {
+		out *bytes.Buffer
+	}
+
+	setup := func(t *testing.T) (*cobra.Command, *testBundle) {
+		t.Helper()
+
+		cli := NewCLI(&Config{
+			DriverProcurer: &TestDriverProcurer{},
+			Name:           "River",
+		})
+
+		var out bytes.Buffer
+		cli.SetOut(&out)
+
+		return cli.BaseCommandSet(), &testBundle{
+			out: &out,
+		}
+	}
+
+	t.Run("DebugVerboseMutallyExclusive", func(t *testing.T) {
+		t.Parallel()
+
+		cmd, _ := setup(t)
+
+		cmd.SetArgs([]string{"--debug", "--verbose"})
+		require.EqualError(t, cmd.Execute(), `if any flags in the group [debug verbose] are set none of the others can be; [debug verbose] were all set`)
+	})
+
+	t.Run("MigrateDownMissingDatabaseURL", func(t *testing.T) {
+		t.Parallel()
+
+		cmd, _ := setup(t)
+
+		cmd.SetArgs([]string{"migrate-down"})
+		require.EqualError(t, cmd.Execute(), `required flag(s) "database-url" not set`)
+	})
+
+	t.Run("VersionFlag", func(t *testing.T) {
+		t.Parallel()
+
+		cmd, bundle := setup(t)
+
+		cmd.SetArgs([]string{"--version"})
+		require.NoError(t, cmd.Execute())
+
+		buildInfo, _ := debug.ReadBuildInfo()
+
+		require.Equal(t, strings.TrimSpace(fmt.Sprintf(`
+River version (unknown)
+Built with %s
+		`, buildInfo.GoVersion)), strings.TrimSpace(bundle.out.String()))
+	})
+
+	t.Run("VersionSubcommand", func(t *testing.T) {
+		t.Parallel()
+
+		cmd, bundle := setup(t)
+
+		cmd.SetArgs([]string{"version"})
+		require.NoError(t, cmd.Execute())
+
+		buildInfo, _ := debug.ReadBuildInfo()
+
+		require.Equal(t, strings.TrimSpace(fmt.Sprintf(`
+River version (unknown)
+Built with %s
+		`, buildInfo.GoVersion)), strings.TrimSpace(bundle.out.String()))
+	})
+}
+
 func TestMigrateList(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 
 	type testBundle struct {
-		buf          *bytes.Buffer
 		migratorStub *MigratorStub
+		out          *bytes.Buffer
 	}
 
 	setup := func(t *testing.T) (*migrateList, *testBundle) {
 		t.Helper()
 
-		cmd, buf := withMigrateBase(t, &migrateList{})
+		cmd, out := withCommandBase(t, &migrateList{})
 
 		migratorStub := &MigratorStub{}
 		migratorStub.allVersionsStub = func() []rivermigrate.Migration { return testMigrationAll }
@@ -91,7 +180,7 @@ func TestMigrateList(t *testing.T) {
 		cmd.GetCommandBase().GetMigrator = func(config *rivermigrate.Config) MigratorInterface { return migratorStub }
 
 		return cmd, &testBundle{
-			buf:          buf,
+			out:          out,
 			migratorStub: migratorStub,
 		}
 	}
@@ -99,49 +188,95 @@ func TestMigrateList(t *testing.T) {
 	t.Run("NoExistingMigrations", func(t *testing.T) {
 		t.Parallel()
 
-		migrateList, bundle := setup(t)
+		cmd, bundle := setup(t)
 
-		_, err := migrateList.Run(ctx, &migrateListOpts{})
+		_, err := runCommand(ctx, t, cmd, &migrateListOpts{})
 		require.NoError(t, err)
 
 		require.Equal(t, strings.TrimSpace(`
 001 1st migration
 002 2nd migration
 003 3rd migration
-		`), strings.TrimSpace(bundle.buf.String()))
+		`), strings.TrimSpace(bundle.out.String()))
 	})
 
 	t.Run("WithExistingMigrations", func(t *testing.T) {
 		t.Parallel()
 
-		migrateList, bundle := setup(t)
+		cmd, bundle := setup(t)
 
 		bundle.migratorStub.existingVersionsStub = func(ctx context.Context) ([]rivermigrate.Migration, error) {
 			return []rivermigrate.Migration{testMigration01, testMigration02}, nil
 		}
 
-		_, err := migrateList.Run(ctx, &migrateListOpts{})
+		_, err := runCommand(ctx, t, cmd, &migrateListOpts{})
 		require.NoError(t, err)
 
 		require.Equal(t, strings.TrimSpace(`
   001 1st migration
 * 002 2nd migration
   003 3rd migration
-		`), strings.TrimSpace(bundle.buf.String()))
+		`), strings.TrimSpace(bundle.out.String()))
 	})
 }
 
-func withMigrateBase[TCommand Command[TOpts], TOpts CommandOpts](t *testing.T, cmd TCommand) (TCommand, *bytes.Buffer) {
+func TestVersion(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		buf *bytes.Buffer
+	}
+
+	setup := func(t *testing.T) (*version, *testBundle) {
+		t.Helper()
+
+		cmd, buf := withCommandBase(t, &version{})
+
+		return cmd, &testBundle{
+			buf: buf,
+		}
+	}
+
+	t.Run("PrintsVersion", func(t *testing.T) {
+		t.Parallel()
+
+		cmd, bundle := setup(t)
+
+		_, err := runCommand(ctx, t, cmd, &versionOpts{Name: "River"})
+		require.NoError(t, err)
+
+		buildInfo, _ := debug.ReadBuildInfo()
+
+		require.Equal(t, strings.TrimSpace(fmt.Sprintf(`
+River version (unknown)
+Built with %s
+		`, buildInfo.GoVersion)), strings.TrimSpace(bundle.buf.String()))
+	})
+}
+
+// runCommand runs a CLI command while doing some additional niceties like
+// validating options.
+func runCommand[TCommand Command[TOpts], TOpts CommandOpts](ctx context.Context, t *testing.T, cmd TCommand, opts TOpts) (bool, error) {
 	t.Helper()
 
-	var buf bytes.Buffer
+	require.NoError(t, opts.Validate())
+
+	return cmd.Run(ctx, opts)
+}
+
+func withCommandBase[TCommand Command[TOpts], TOpts CommandOpts](t *testing.T, cmd TCommand) (TCommand, *bytes.Buffer) {
+	t.Helper()
+
+	var out bytes.Buffer
 	cmd.SetCommandBase(&CommandBase{
 		Logger: riversharedtest.Logger(t),
-		Out:    &buf,
+		Out:    &out,
 
 		GetMigrator: func(config *rivermigrate.Config) MigratorInterface { return &MigratorStub{} },
 	})
-	return cmd, &buf
+	return cmd, &out
 }
 
 func TestMigrationComment(t *testing.T) {
