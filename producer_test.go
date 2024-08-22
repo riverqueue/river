@@ -121,7 +121,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 			default:
 			}
 			numActiveJobs := producer.numJobsActive.Load()
-			if numActiveJobs > int32(producer.config.MaxWorkers) {
+			if int(numActiveJobs) > producer.config.MaxWorkers {
 				panic(fmt.Sprintf("producer exceeded MaxWorkerCount=%d, actual count=%d", producer.config.MaxWorkers, numActiveJobs))
 			}
 		}

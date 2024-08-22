@@ -143,7 +143,7 @@ func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobD
 func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
 	jobs, err := dbsqlc.New().JobGetAvailable(ctx, e.dbtx, &dbsqlc.JobGetAvailableParams{
 		AttemptedBy: params.AttemptedBy,
-		Max:         int32(params.Max),
+		Max:         int32(min(params.Max, math.MaxInt32)), //nolint:gosec
 		Queue:       params.Queue,
 	})
 	if err != nil {
@@ -185,7 +185,7 @@ func (e *Executor) JobGetByKindMany(ctx context.Context, kind []string) ([]*rive
 }
 
 func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error) {
-	jobs, err := dbsqlc.New().JobGetStuck(ctx, e.dbtx, &dbsqlc.JobGetStuckParams{Max: int32(params.Max), StuckHorizon: params.StuckHorizon})
+	jobs, err := dbsqlc.New().JobGetStuck(ctx, e.dbtx, &dbsqlc.JobGetStuckParams{Max: int32(min(params.Max, math.MaxInt32)), StuckHorizon: params.StuckHorizon}) //nolint:gosec
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -197,9 +197,9 @@ func (e *Executor) JobInsertFast(ctx context.Context, params *riverdriver.JobIns
 		Args:        params.EncodedArgs,
 		CreatedAt:   params.CreatedAt,
 		Kind:        params.Kind,
-		MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)),
+		MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)), //nolint:gosec
 		Metadata:    params.Metadata,
-		Priority:    int16(min(params.Priority, math.MaxInt16)),
+		Priority:    int16(min(params.Priority, math.MaxInt16)), //nolint:gosec
 		Queue:       params.Queue,
 		ScheduledAt: params.ScheduledAt,
 		State:       dbsqlc.RiverJobState(params.State),
@@ -236,9 +236,9 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 		insertJobsParams[i] = &dbsqlc.JobInsertFastManyCopyFromParams{
 			Args:        params.EncodedArgs,
 			Kind:        params.Kind,
-			MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)),
+			MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)), //nolint:gosec
 			Metadata:    metadata,
-			Priority:    int16(min(params.Priority, math.MaxInt16)),
+			Priority:    int16(min(params.Priority, math.MaxInt16)), //nolint:gosec
 			Queue:       params.Queue,
 			ScheduledAt: scheduledAt,
 			State:       dbsqlc.RiverJobState(params.State),
@@ -256,16 +256,16 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 
 func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobInsertFullParams) (*rivertype.JobRow, error) {
 	job, err := dbsqlc.New().JobInsertFull(ctx, e.dbtx, &dbsqlc.JobInsertFullParams{
-		Attempt:     int16(params.Attempt),
+		Attempt:     int16(min(params.Attempt, math.MaxInt16)), //nolint:gosec
 		AttemptedAt: params.AttemptedAt,
 		Args:        params.EncodedArgs,
 		CreatedAt:   params.CreatedAt,
 		Errors:      params.Errors,
 		FinalizedAt: params.FinalizedAt,
 		Kind:        params.Kind,
-		MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)),
+		MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)), //nolint:gosec
 		Metadata:    params.Metadata,
-		Priority:    int16(min(params.Priority, math.MaxInt16)),
+		Priority:    int16(min(params.Priority, math.MaxInt16)), //nolint:gosec
 		Queue:       params.Queue,
 		ScheduledAt: params.ScheduledAt,
 		State:       dbsqlc.RiverJobState(params.State),
@@ -283,9 +283,9 @@ func (e *Executor) JobInsertUnique(ctx context.Context, params *riverdriver.JobI
 		Args:        params.EncodedArgs,
 		CreatedAt:   params.CreatedAt,
 		Kind:        params.Kind,
-		MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)),
+		MaxAttempts: int16(min(params.MaxAttempts, math.MaxInt16)), //nolint:gosec
 		Metadata:    params.Metadata,
-		Priority:    int16(min(params.Priority, math.MaxInt16)),
+		Priority:    int16(min(params.Priority, math.MaxInt16)), //nolint:gosec
 		Queue:       params.Queue,
 		ScheduledAt: params.ScheduledAt,
 		State:       dbsqlc.RiverJobState(params.State),
@@ -391,7 +391,7 @@ func (e *Executor) JobSetCompleteIfRunningMany(ctx context.Context, params *rive
 func (e *Executor) JobSetStateIfRunning(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
 	var maxAttempts int16
 	if params.MaxAttempts != nil {
-		maxAttempts = int16(*params.MaxAttempts)
+		maxAttempts = int16(min(*params.MaxAttempts, math.MaxInt16)) //nolint:gosec
 	}
 
 	job, err := dbsqlc.New().JobSetStateIfRunning(ctx, e.dbtx, &dbsqlc.JobSetStateIfRunningParams{
@@ -418,7 +418,7 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 		AttemptedAtDoUpdate: params.AttemptedAtDoUpdate,
 		AttemptedAt:         params.AttemptedAt,
 		AttemptDoUpdate:     params.AttemptDoUpdate,
-		Attempt:             int16(params.Attempt),
+		Attempt:             int16(min(params.Attempt, math.MaxInt16)), //nolint:gosec
 		ErrorsDoUpdate:      params.ErrorsDoUpdate,
 		Errors:              params.Errors,
 		FinalizedAtDoUpdate: params.FinalizedAtDoUpdate,
@@ -621,7 +621,7 @@ func (e *Executor) QueueGet(ctx context.Context, name string) (*rivertype.Queue,
 }
 
 func (e *Executor) QueueList(ctx context.Context, limit int) ([]*rivertype.Queue, error) {
-	internalQueues, err := dbsqlc.New().QueueList(ctx, e.dbtx, int32(limit))
+	internalQueues, err := dbsqlc.New().QueueList(ctx, e.dbtx, int32(min(limit, math.MaxInt32))) //nolint:gosec
 	if err != nil {
 		return nil, interpretError(err)
 	}

@@ -35,10 +35,12 @@ func NewAdvisoryLockHash(configuredPrefix int32) *AdvisoryLockHash {
 // functions like `pg_advisory_xact_lock`.
 func (h *AdvisoryLockHash) Key() int64 {
 	if h.configuredPrefix == 0 {
-		return int64(h.hash64.Sum64()) // overflow allowed
+		// Overflow is okay and allowed.
+		return int64(h.hash64.Sum64()) //nolint:gosec
 	}
 
-	return int64(uint64(h.configuredPrefix)<<32 | uint64(h.hash32.Sum32())) // overflow allowed
+	// Overflow is okay and allowed.
+	return int64(uint64(h.configuredPrefix)<<32 | uint64(h.hash32.Sum32())) //nolint:gosec
 }
 
 // Write writes bytes to the underlying hash.
