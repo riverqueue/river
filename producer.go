@@ -18,6 +18,8 @@ import (
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
+	"github.com/riverqueue/river/rivershared/util/randutil"
+	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -647,7 +649,7 @@ func (p *producer) fetchQueueSettings(ctx context.Context) (*rivertype.Queue, er
 }
 
 func (p *producer) reportQueueStatusLoop(ctx context.Context) {
-	p.CancellableSleepRandomBetween(ctx, 0, time.Second)
+	serviceutil.CancellableSleep(ctx, randutil.DurationBetween(p.Rand, 0, time.Second))
 	reportTicker := time.NewTicker(p.config.QueueReportInterval)
 	for {
 		select {

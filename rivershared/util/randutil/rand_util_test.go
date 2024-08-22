@@ -6,6 +6,7 @@ import (
 	mathrand "math/rand"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -29,6 +30,22 @@ func TestNewCryptoSeededConcurrentSafeRand(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestDurationBetween(t *testing.T) {
+	t.Parallel()
+
+	const lowerLimit, upperLimit = 5 * time.Second, 8 * time.Second
+	rand := NewCryptoSeededConcurrentSafeRand()
+
+	// Not exactly a super exhaustive test, but choose a relatively small range,
+	// generate numbers and check they're within bounds, and run enough times
+	// that we'd expect an offender to be generated if one was likely to be.
+	for i := 0; i < int(upperLimit/time.Second-lowerLimit/time.Second)*2; i++ {
+		n := DurationBetween(rand, lowerLimit, upperLimit)
+		require.GreaterOrEqual(t, n, lowerLimit)
+		require.Less(t, n, upperLimit)
+	}
 }
 
 func TestIntBetween(t *testing.T) {

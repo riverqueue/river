@@ -13,6 +13,7 @@ import (
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/maputil"
+	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 )
 
@@ -126,12 +127,12 @@ func (n *Notifier) Start(ctx context.Context) error {
 					break
 				}
 
-				sleepDuration := n.ExponentialBackoff(attempt, baseservice.MaxAttemptsBeforeResetDefault)
+				sleepDuration := serviceutil.ExponentialBackoff(n.Rand, attempt, serviceutil.MaxAttemptsBeforeResetDefault)
 				n.Logger.ErrorContext(ctx, n.Name+": Error running listener (will attempt reconnect after backoff)",
 					"attempt", attempt, "err", err, "sleep_duration", sleepDuration)
 				n.testSignals.BackoffError.Signal(err)
 				if !n.disableSleep {
-					n.CancellableSleep(ctx, sleepDuration)
+					serviceutil.CancellableSleep(ctx, sleepDuration)
 				}
 			}
 		}

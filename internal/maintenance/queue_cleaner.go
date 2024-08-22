@@ -12,6 +12,8 @@ import (
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
+	"github.com/riverqueue/river/rivershared/util/randutil"
+	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
 	"github.com/riverqueue/river/rivershared/util/valutil"
 )
@@ -152,7 +154,7 @@ func (s *QueueCleaner) runOnce(ctx context.Context) (*queueCleanerRunOnceResult,
 			break
 		}
 
-		s.CancellableSleepRandomBetween(ctx, BatchBackoffMin, BatchBackoffMax)
+		serviceutil.CancellableSleep(ctx, randutil.DurationBetween(s.Rand, BatchBackoffMin, BatchBackoffMax))
 	}
 
 	return res, nil

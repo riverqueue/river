@@ -8,6 +8,8 @@ import (
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/util/maputil"
+	"github.com/riverqueue/river/rivershared/util/randutil"
+	"github.com/riverqueue/river/rivershared/util/serviceutil"
 )
 
 const (
@@ -116,7 +118,7 @@ func (s *queueMaintainerServiceBase) StaggerStart(ctx context.Context) {
 		return
 	}
 
-	s.CancellableSleepRandomBetween(ctx, 0*time.Second, 1*time.Second)
+	serviceutil.CancellableSleep(ctx, randutil.DurationBetween(s.Rand, 0*time.Second, 1*time.Second))
 }
 
 // StaggerStartupDisable sets whether the short staggered sleep on start up

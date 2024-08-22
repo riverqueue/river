@@ -59,9 +59,6 @@ jobs:
       - name: Display Go version
         run: go version
 
-      - name: Install dependencies
-        run: go get -t ./...
-
       - name: Set up test DBs
         run: go run ./internal/cmd/testdbman create
         env:

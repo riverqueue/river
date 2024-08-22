@@ -33,6 +33,8 @@ import (
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
+	"github.com/riverqueue/river/rivershared/util/randutil"
+	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -838,7 +840,7 @@ func Test_Client_Stop(t *testing.T) {
 					require.NoError(t, err)
 
 					// Sleep a brief time between inserts.
-					client.baseService.CancellableSleepRandomBetween(ctx, 1*time.Microsecond, 10*time.Millisecond)
+					serviceutil.CancellableSleep(ctx, randutil.DurationBetween(client.baseService.Rand, 1*time.Microsecond, 10*time.Millisecond))
 				}
 			}()
 		}
