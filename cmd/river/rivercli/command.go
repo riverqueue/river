@@ -125,7 +125,7 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 
 	ok, err := procureAndRun()
 	if err != nil {
-		fmt.Fprintf(os.Stdout, "failed: %s\n", err)
+		fmt.Fprintf(os.Stderr, "failed: %s\n", err)
 	}
 	if err != nil || !ok {
 		os.Exit(1)
