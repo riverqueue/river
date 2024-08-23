@@ -35,6 +35,6 @@ func (p *QueueListParams) First(count int) *QueueListParams {
 		panic("count must be <= 10000")
 	}
 	result := p.copy()
-	result.paginationCount = int32(count)
+	result.paginationCount = int32(count) //nolint:gosec
 	return result
 }
