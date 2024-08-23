@@ -491,6 +491,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		uniqueInserter: baseservice.Init(archetype, &dbunique.UniqueInserter{
 			AdvisoryLockPrefix: config.AdvisoryLockPrefix,
 		}),
+		workCancel: func(cause error) {}, // replaced on start, but here in case StopAndCancel is called before start up
 	}
 	client.queues = &QueueBundle{addProducer: client.addProducer}
 
