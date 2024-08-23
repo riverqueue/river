@@ -19,6 +19,7 @@ import (
 	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/levenshtein"
 	"github.com/riverqueue/river/rivershared/util/maputil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
@@ -93,8 +94,11 @@ type Migrator[TTx any] struct {
 //	}
 //	defer dbPool.Close()
 //
-//	migrator := rivermigrate.New(riverpgxv5.New(dbPool), nil)
-func New[TTx any](driver riverdriver.Driver[TTx], config *Config) *Migrator[TTx] {
+//	migrator, err := rivermigrate.New(riverpgxv5.New(dbPool), nil)
+//	if err != nil {
+//		// handle error
+//	}
+func New[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Migrator[TTx], error) {
 	if config == nil {
 		config = &Config{}
 	}
@@ -115,7 +119,24 @@ func New[TTx any](driver riverdriver.Driver[TTx], config *Config) *Migrator[TTx]
 	}
 
 	if !slices.Contains(driver.GetMigrationLines(), line) {
-		panic("migration line does not exist: " + line)
+		const minLevenshteinDistance = 2
+
+		var suggestedLines []string
+		for _, existingLine := range driver.GetMigrationLines() {
+			if distance := levenshtein.ComputeDistance(existingLine, line); distance <= minLevenshteinDistance {
+				suggestedLines = append(suggestedLines, "`"+existingLine+"`")
+			}
+		}
+
+		errorStr := "migration line does not exist: " + line
+		switch {
+		case len(suggestedLines) == 1:
+			errorStr += fmt.Sprintf(" (did you mean %s?)", suggestedLines[0])
+		case len(suggestedLines) > 1:
+			errorStr += fmt.Sprintf(" (did you mean one of %v?)", strings.Join(suggestedLines, ", "))
+		}
+
+		return nil, errors.New(errorStr)
 	}
 
 	riverMigrations, err := migrationsFromFS(driver.GetMigrationFS(line), line)
@@ -129,7 +150,7 @@ func New[TTx any](driver riverdriver.Driver[TTx], config *Config) *Migrator[TTx]
 		driver:     driver,
 		line:       line,
 		migrations: validateAndInit(riverMigrations),
-	})
+	}), nil
 }
 
 // ExistingVersions gets the existing set of versions that have been migrated in

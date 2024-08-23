@@ -48,12 +48,14 @@ func (d *driverWithAlternateLine) GetMigrationFS(line string) fs.FS {
 		return d.Driver.GetMigrationFS(line)
 	case migrationLineAlternate:
 		return migrationFS
+	case migrationLineAlternate + "2":
+		panic(line + " is only meant for testing line suggestions")
 	}
 	panic("migration line does not exist: " + line)
 }
 
 func (d *driverWithAlternateLine) GetMigrationLines() []string {
-	return append(d.Driver.GetMigrationLines(), migrationLineAlternate)
+	return append(d.Driver.GetMigrationLines(), migrationLineAlternate, migrationLineAlternate+"2")
 }
 
 func TestMigrator(t *testing.T) {
@@ -94,7 +96,8 @@ func TestMigrator(t *testing.T) {
 			tx:     tx,
 		}
 
-		migrator := New(bundle.driver, &Config{Logger: bundle.logger})
+		migrator, err := New(bundle.driver, &Config{Logger: bundle.logger})
+		require.NoError(t, err)
 		migrator.migrations = migrationsBundle.WithTestVersionsMap
 
 		return migrator, bundle
@@ -112,11 +115,40 @@ func TestMigrator(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, tx.Rollback()) })
 
 		driver := riverdatabasesql.New(stdPool)
-		migrator := New(driver, &Config{Logger: bundle.logger})
+		migrator, err := New(driver, &Config{Logger: bundle.logger})
+		require.NoError(t, err)
 		migrator.migrations = migrationsBundle.WithTestVersionsMap
 
 		return migrator, tx
 	}
+
+	t.Run("NewUnknownLine", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		_, err := New(bundle.driver, &Config{Line: "unknown_line"})
+		require.EqualError(t, err, "migration line does not exist: unknown_line")
+
+		_, err = New(bundle.driver, &Config{Line: "mai"})
+		require.EqualError(t, err, "migration line does not exist: mai (did you mean `main`?)")
+
+		_, err = New(bundle.driver, &Config{Line: "maim"})
+		require.EqualError(t, err, "migration line does not exist: maim (did you mean `main`?)")
+
+		_, err = New(bundle.driver, &Config{Line: "maine"})
+		require.EqualError(t, err, "migration line does not exist: maine (did you mean `main`?)")
+
+		_, err = New(bundle.driver, &Config{Line: "ma"})
+		require.EqualError(t, err, "migration line does not exist: ma (did you mean `main`?)")
+
+		// Too far off.
+		_, err = New(bundle.driver, &Config{Line: "m"})
+		require.EqualError(t, err, "migration line does not exist: m")
+
+		_, err = New(bundle.driver, &Config{Line: "alternat"})
+		require.EqualError(t, err, "migration line does not exist: alternat (did you mean one of `alternate`, `alternate2`?)")
+	})
 
 	t.Run("AllVersions", func(t *testing.T) {
 		t.Parallel()
@@ -597,10 +629,11 @@ func TestMigrator(t *testing.T) {
 
 		// We have to reinitialize the alternateMigrator because the migrations bundle is
 		// set in the constructor.
-		alternateMigrator := New(bundle.driver, &Config{
+		alternateMigrator, err := New(bundle.driver, &Config{
 			Line:   migrationLineAlternate,
 			Logger: bundle.logger,
 		})
+		require.NoError(t, err)
 
 		res, err := alternateMigrator.MigrateTx(ctx, bundle.tx, DirectionUp, &MigrateOpts{})
 		require.NoError(t, err)
@@ -633,10 +666,11 @@ func TestMigrator(t *testing.T) {
 		_, err := migrator.MigrateTx(ctx, bundle.tx, DirectionDown, &MigrateOpts{TargetVersion: 4})
 		require.NoError(t, err)
 
-		alternateMigrator := New(bundle.driver, &Config{
+		alternateMigrator, err := New(bundle.driver, &Config{
 			Line:   migrationLineAlternate,
 			Logger: bundle.logger,
 		})
+		require.NoError(t, err)
 
 		// Alternate line not allowed because `river_job.line` doesn't exist.
 		_, err = alternateMigrator.MigrateTx(ctx, bundle.tx, DirectionUp, &MigrateOpts{})

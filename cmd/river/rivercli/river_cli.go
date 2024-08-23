@@ -387,7 +387,12 @@ type migrateDown struct {
 }
 
 func (c *migrateDown) Run(ctx context.Context, opts *migrateOpts) (bool, error) {
-	res, err := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger}).Migrate(ctx, rivermigrate.DirectionDown, &rivermigrate.MigrateOpts{
+	migrator, err := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger})
+	if err != nil {
+		return false, err
+	}
+
+	res, err := migrator.Migrate(ctx, rivermigrate.DirectionDown, &rivermigrate.MigrateOpts{
 		DryRun:        opts.DryRun,
 		MaxSteps:      opts.MaxSteps,
 		TargetVersion: opts.TargetVersion,
@@ -470,7 +475,10 @@ func (c *migrateGet) Run(_ context.Context, opts *migrateGetOpts) (bool, error) 
 	// other databases is added in the future. Unlike other migrate commands,
 	// this one doesn't take a `--database-url`, so we'd need a way of
 	// detecting the database type.
-	migrator := rivermigrate.New(c.DriverProcurer.ProcurePgxV5(nil), &rivermigrate.Config{Line: opts.Line, Logger: c.Logger})
+	migrator, err := rivermigrate.New(c.DriverProcurer.ProcurePgxV5(nil), &rivermigrate.Config{Line: opts.Line, Logger: c.Logger})
+	if err != nil {
+		return false, err
+	}
 
 	var migrations []rivermigrate.Migration
 	if opts.All {
@@ -534,7 +542,10 @@ type migrateList struct {
 }
 
 func (c *migrateList) Run(ctx context.Context, opts *migrateListOpts) (bool, error) {
-	migrator := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger})
+	migrator, err := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger})
+	if err != nil {
+		return false, err
+	}
 
 	allMigrations := migrator.AllVersions()
 
@@ -568,7 +579,12 @@ type migrateUp struct {
 }
 
 func (c *migrateUp) Run(ctx context.Context, opts *migrateOpts) (bool, error) {
-	res, err := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger}).Migrate(ctx, rivermigrate.DirectionUp, &rivermigrate.MigrateOpts{
+	migrator, err := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger})
+	if err != nil {
+		return false, err
+	}
+
+	res, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, &rivermigrate.MigrateOpts{
 		DryRun:        opts.DryRun,
 		MaxSteps:      opts.MaxSteps,
 		TargetVersion: opts.TargetVersion,
@@ -600,7 +616,12 @@ type validate struct {
 }
 
 func (c *validate) Run(ctx context.Context, opts *validateOpts) (bool, error) {
-	res, err := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger}).Validate(ctx)
+	migrator, err := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger})
+	if err != nil {
+		return false, err
+	}
+
+	res, err := migrator.Validate(ctx)
 	if err != nil {
 		return false, err
 	}

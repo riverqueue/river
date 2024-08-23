@@ -29,7 +29,10 @@ func Example_migrate() {
 	}
 	defer tx.Rollback(ctx)
 
-	migrator := rivermigrate.New(riverpgxv5.New(dbPool), nil)
+	migrator, err := rivermigrate.New(riverpgxv5.New(dbPool), nil)
+	if err != nil {
+		panic(err)
+	}
 
 	// Our test database starts with a full River schema. Drop it so that we can
 	// demonstrate working migrations. This isn't necessary outside this test.
