@@ -434,18 +434,18 @@ WITH job_to_update AS (
 updated_job AS (
     UPDATE river_job
     SET
-        state        = CASE WHEN should_cancel                                          THEN 'cancelled'::river_job_state
+        state        = CASE WHEN should_cancel                                           THEN 'cancelled'::river_job_state
                             ELSE @state::river_job_state END,
-        finalized_at = CASE WHEN should_cancel                                          THEN now()
-                            WHEN @finalized_at_do_update::boolean                       THEN @finalized_at
+        finalized_at = CASE WHEN should_cancel                                           THEN now()
+                            WHEN @finalized_at_do_update::boolean                        THEN @finalized_at
                             ELSE finalized_at END,
-        errors       = CASE WHEN @error_do_update::boolean                              THEN array_append(errors, @error::jsonb)
+        errors       = CASE WHEN @error_do_update::boolean                               THEN array_append(errors, @error::jsonb)
                             ELSE errors       END,
-        max_attempts = CASE WHEN NOT should_cancel AND @max_attempts_update::boolean    THEN @max_attempts
+        max_attempts = CASE WHEN NOT should_cancel AND @max_attempts_update::boolean     THEN @max_attempts
                             ELSE max_attempts END,
-        scheduled_at = CASE WHEN NOT should_cancel AND @scheduled_at_do_update::boolean THEN sqlc.narg('scheduled_at')::timestamptz
+        scheduled_at = CASE WHEN NOT should_cancel AND @scheduled_at_do_update::boolean  THEN sqlc.narg('scheduled_at')::timestamptz
                             ELSE scheduled_at END,
-        unique_key   = CASE WHEN @state IN ('cancelled', 'discarded')                   THEN NULL
+        unique_key   = CASE WHEN (@state IN ('cancelled', 'discarded') OR should_cancel) THEN NULL
                             ELSE unique_key END
     FROM job_to_update
     WHERE river_job.id = job_to_update.id

@@ -1094,18 +1094,18 @@ WITH job_to_update AS (
 updated_job AS (
     UPDATE river_job
     SET
-        state        = CASE WHEN should_cancel                                          THEN 'cancelled'::river_job_state
+        state        = CASE WHEN should_cancel                                           THEN 'cancelled'::river_job_state
                             ELSE $1::river_job_state END,
-        finalized_at = CASE WHEN should_cancel                                          THEN now()
-                            WHEN $3::boolean                       THEN $4
+        finalized_at = CASE WHEN should_cancel                                           THEN now()
+                            WHEN $3::boolean                        THEN $4
                             ELSE finalized_at END,
-        errors       = CASE WHEN $5::boolean                              THEN array_append(errors, $6::jsonb)
+        errors       = CASE WHEN $5::boolean                               THEN array_append(errors, $6::jsonb)
                             ELSE errors       END,
-        max_attempts = CASE WHEN NOT should_cancel AND $7::boolean    THEN $8
+        max_attempts = CASE WHEN NOT should_cancel AND $7::boolean     THEN $8
                             ELSE max_attempts END,
-        scheduled_at = CASE WHEN NOT should_cancel AND $9::boolean THEN $10::timestamptz
+        scheduled_at = CASE WHEN NOT should_cancel AND $9::boolean  THEN $10::timestamptz
                             ELSE scheduled_at END,
-        unique_key   = CASE WHEN $1 IN ('cancelled', 'discarded')                   THEN NULL
+        unique_key   = CASE WHEN ($1 IN ('cancelled', 'discarded') OR should_cancel) THEN NULL
                             ELSE unique_key END
     FROM job_to_update
     WHERE river_job.id = job_to_update.id
