@@ -1050,18 +1050,6 @@ func Test_Client_StopAndCancel(t *testing.T) {
 
 		client := runNewTestClient(ctx, t, config)
 
-		insertRes, err := client.Insert(ctx, &callbackArgs{}, nil)
-		require.NoError(t, err)
-
-		startedJobID := riversharedtest.WaitOrTimeout(t, jobStartedChan)
-		require.Equal(t, insertRes.Job.ID, startedJobID)
-
-		select {
-		case <-client.Stopped():
-			t.Fatal("expected client to not be stopped yet")
-		default:
-		}
-
 		return client, &testBundle{
 			jobDoneChan:    jobDoneChan,
 			jobStartedChan: jobStartedChan,
@@ -1071,16 +1059,39 @@ func Test_Client_StopAndCancel(t *testing.T) {
 	t.Run("OnItsOwn", func(t *testing.T) {
 		t.Parallel()
 
-		client, _ := setup(t)
+		client, bundle := setup(t)
+
+		startClient(ctx, t, client)
+
+		_, err := client.Insert(ctx, &callbackArgs{}, nil)
+		require.NoError(t, err)
+
+		riversharedtest.WaitOrTimeout(t, bundle.jobStartedChan)
 
 		require.NoError(t, client.StopAndCancel(ctx))
 		riversharedtest.WaitOrTimeout(t, client.Stopped())
+	})
+
+	t.Run("BeforeStart", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		require.NoError(t, client.StopAndCancel(ctx))
+		riversharedtest.WaitOrTimeout(t, client.Stopped()) // this works because Stopped is nil
 	})
 
 	t.Run("AfterStop", func(t *testing.T) {
 		t.Parallel()
 
 		client, bundle := setup(t)
+
+		startClient(ctx, t, client)
+
+		_, err := client.Insert(ctx, &callbackArgs{}, nil)
+		require.NoError(t, err)
+
+		riversharedtest.WaitOrTimeout(t, bundle.jobStartedChan)
 
 		go func() {
 			require.NoError(t, client.Stop(ctx))
