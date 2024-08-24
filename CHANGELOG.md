@@ -12,6 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A new `river migrate-list` command is available which lists available migrations and which version a target database is migrated to. [PR #534](https://github.com/riverqueue/river/pull/534).
 - `river version` or `river --version` now prints River version information. [PR #537](https://github.com/riverqueue/river/pull/537).
 
+### Changed
+
+⚠️ Version 0.12.0 has a small breaking change in `rivermigrate`. As before, we try never to make breaking changes, but this one was deemed worth it because it's quite small and may help avoid panics.
+
+- **Breaking change:** `rivermigrate.New` now returns a possible error along with a migrator. An error may be returned, for example, when a migration line is configured that doesn't exist. [PR #558](https://github.com/riverqueue/river/pull/558).
+
+  ```go
+  # before
+	migrator := rivermigrate.New(riverpgxv5.New(dbPool), nil)
+
+  # after
+	migrator, err := rivermigrate.New(riverpgxv5.New(dbPool), nil)
+  if err != nil {
+      // handle error
+  }
+  ```
+
+- The migrator now produces a better error in case of a non-existent migration line including suggestions for known migration lines that are similar in name to the invalid one. [PR #558](https://github.com/riverqueue/river/pull/558).
+
 ## Fixed
 
 - Fixed a panic that'd occur if `StopAndCancel` was invoked before a client was started. [PR #557](https://github.com/riverqueue/river/pull/557).

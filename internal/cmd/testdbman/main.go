@@ -126,7 +126,11 @@ func createTestDatabases(ctx context.Context, out io.Writer) error {
 		}
 		defer dbPool.Close()
 
-		migrator := rivermigrate.New(riverpgxv5.New(dbPool), nil)
+		migrator, err := rivermigrate.New(riverpgxv5.New(dbPool), nil)
+		if err != nil {
+			return err
+		}
+
 		if _, err = migrator.Migrate(ctx, rivermigrate.DirectionUp, &rivermigrate.MigrateOpts{}); err != nil {
 			return err
 		}

@@ -30,7 +30,10 @@ func Example_migrateDatabaseSQL() {
 	}
 	defer tx.Rollback()
 
-	migrator := rivermigrate.New(riverdatabasesql.New(dbPool), nil)
+	migrator, err := rivermigrate.New(riverdatabasesql.New(dbPool), nil)
+	if err != nil {
+		panic(err)
+	}
 
 	// Our test database starts with a full River schema. Drop it so that we can
 	// demonstrate working migrations. This isn't necessary outside this test.

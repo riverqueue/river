@@ -56,7 +56,7 @@ type CommandBase struct {
 	Out            io.Writer
 
 	GetBenchmarker func() BenchmarkerInterface
-	GetMigrator    func(config *rivermigrate.Config) MigratorInterface
+	GetMigrator    func(config *rivermigrate.Config) (MigratorInterface, error)
 }
 
 func (b *CommandBase) GetCommandBase() *CommandBase     { return b }
@@ -94,7 +94,7 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 		// command doesn't take one.
 		case bundle.DatabaseURL == nil:
 			commandBase.GetBenchmarker = func() BenchmarkerInterface { panic("databaseURL was not set") }
-			commandBase.GetMigrator = func(config *rivermigrate.Config) MigratorInterface { panic("databaseURL was not set") }
+			commandBase.GetMigrator = func(config *rivermigrate.Config) (MigratorInterface, error) { panic("databaseURL was not set") }
 
 		case strings.HasPrefix(*bundle.DatabaseURL, uriScheme) ||
 			strings.HasPrefix(*bundle.DatabaseURL, uriSchemeAlias):
@@ -107,7 +107,7 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 			driver := bundle.DriverProcurer.ProcurePgxV5(dbPool)
 
 			commandBase.GetBenchmarker = func() BenchmarkerInterface { return riverbench.NewBenchmarker(driver, commandBase.Logger) }
-			commandBase.GetMigrator = func(config *rivermigrate.Config) MigratorInterface { return rivermigrate.New(driver, config) }
+			commandBase.GetMigrator = func(config *rivermigrate.Config) (MigratorInterface, error) { return rivermigrate.New(driver, config) }
 
 		default:
 			return false, fmt.Errorf(

@@ -177,7 +177,7 @@ func TestMigrateList(t *testing.T) {
 		migratorStub.allVersionsStub = func() []rivermigrate.Migration { return testMigrationAll }
 		migratorStub.existingVersionsStub = func(ctx context.Context) ([]rivermigrate.Migration, error) { return nil, nil }
 
-		cmd.GetCommandBase().GetMigrator = func(config *rivermigrate.Config) MigratorInterface { return migratorStub }
+		cmd.GetCommandBase().GetMigrator = func(config *rivermigrate.Config) (MigratorInterface, error) { return migratorStub, nil }
 
 		return cmd, &testBundle{
 			out:          out,
@@ -274,7 +274,7 @@ func withCommandBase[TCommand Command[TOpts], TOpts CommandOpts](t *testing.T, c
 		Logger: riversharedtest.Logger(t),
 		Out:    &out,
 
-		GetMigrator: func(config *rivermigrate.Config) MigratorInterface { return &MigratorStub{} },
+		GetMigrator: func(config *rivermigrate.Config) (MigratorInterface, error) { return &MigratorStub{}, nil },
 	})
 	return cmd, &out
 }
