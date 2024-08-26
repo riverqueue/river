@@ -16,6 +16,8 @@ const (
 	QueueDefault       = "default"
 )
 
+type ContextKeyClient struct{}
+
 // ErrShutdown is a special error injected by the client into its fetch and work
 // CancelCauseFuncs when it's stopping. It may be used by components for such
 // cases like avoiding logging an error during a normal shutdown procedure. This
