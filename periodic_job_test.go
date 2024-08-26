@@ -59,6 +59,30 @@ func TestPeriodicJobBundle(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 2, mustUnmarshalJSON[TestJobArgs](t, insertParams2.EncodedArgs).JobNum)
 	})
+
+	t.Run("ReturningNilDoesntInsertNewJob", func(t *testing.T) {
+		t.Parallel()
+
+		periodicJobBundle, _ := setup(t)
+
+		type TestJobArgs struct {
+			JobArgsReflectKind[TestJobArgs]
+		}
+
+		periodicJob := NewPeriodicJob(
+			PeriodicInterval(15*time.Minute),
+			func() (JobArgs, *InsertOpts) {
+				// Returning nil from the constructor function should not insert a new job.
+				return nil, nil
+			},
+			nil,
+		)
+
+		internalPeriodicJob := periodicJobBundle.toInternal(periodicJob)
+
+		_, _, err := internalPeriodicJob.ConstructorFunc()
+		require.ErrorIs(t, err, maintenance.ErrNoJobToInsert)
+	})
 }
 
 func mustUnmarshalJSON[T any](t *testing.T, data []byte) *T {
