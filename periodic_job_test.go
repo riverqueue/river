@@ -65,10 +65,6 @@ func TestPeriodicJobBundle(t *testing.T) {
 
 		periodicJobBundle, _ := setup(t)
 
-		type TestJobArgs struct {
-			JobArgsReflectKind[TestJobArgs]
-		}
-
 		periodicJob := NewPeriodicJob(
 			PeriodicInterval(15*time.Minute),
 			func() (JobArgs, *InsertOpts) {
