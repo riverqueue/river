@@ -1276,8 +1276,11 @@ func (c *Client[TTx]) Insert(ctx context.Context, args JobArgs, opts *InsertOpts
 //	}
 //
 // This variant lets a caller insert jobs atomically alongside other database
-// changes. An inserted job isn't visible to be worked until the transaction
-// commits, and if the transaction rolls back, so too is the inserted job.
+// changes. It's also possible to insert a job outside a transaction, but this
+// usage is recommended to ensure that all data a job needs to run is available
+// by the time it starts. Because of snapshot visibility guarantees across
+// transactions, the job will not be worked until the transaction has committed,
+// and if the transaction rolls back, so too is the inserted job.
 func (c *Client[TTx]) InsertTx(ctx context.Context, tx TTx, args JobArgs, opts *InsertOpts) (*rivertype.JobInsertResult, error) {
 	return c.insert(ctx, c.driver.UnwrapExecutor(tx), args, opts)
 }
