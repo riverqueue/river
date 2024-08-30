@@ -15,6 +15,9 @@ type Job[T JobArgs] struct {
 
 // JobArgs is an interface that represents the arguments for a job of type T.
 // These arguments are serialized into JSON and stored in the database.
+//
+// The struct is serialized using `encoding/json`. All exported fields are
+// serialized, unless skipped with a struct field tag.
 type JobArgs interface {
 	// Kind is a string that uniquely identifies the type of job. This must be
 	// provided on your job arguments struct.

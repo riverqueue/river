@@ -9,9 +9,10 @@ import (
 )
 
 // Worker is an interface that can perform a job with args of type T. A typical
-// Worker implementation will be a struct that embeds WorkerDefaults, implements
-// `Kind()` and `Work()`, and optionally overrides other methods to provide
-// job-specific configuration for all jobs of that type:
+// implementation will be a JSON-serializable `JobArgs` struct that implements
+// `Kind()`, along with a Worker that embeds WorkerDefaults and implements `Work()`.
+// Workers may optionally override other methods to provide job-specific
+// configuration for all jobs of that type:
 //
 //	type SleepArgs struct {
 //		Duration time.Duration `json:"duration"`
