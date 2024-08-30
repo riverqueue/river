@@ -16,7 +16,7 @@ func TestPeriodicJobBundle(t *testing.T) {
 
 	type testBundle struct{}
 
-	setup := func(t *testing.T) (*PeriodicJobBundle, *testBundle) {
+	setup := func(t *testing.T) (*PeriodicJobBundle, *testBundle) { //nolint:unparam
 		t.Helper()
 
 		periodicJobEnqueuer := maintenance.NewPeriodicJobEnqueuer(

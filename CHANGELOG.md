@@ -21,10 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   ```go
   # before
-	migrator := rivermigrate.New(riverpgxv5.New(dbPool), nil)
+  migrator := rivermigrate.New(riverpgxv5.New(dbPool), nil)
 
   # after
-	migrator, err := rivermigrate.New(riverpgxv5.New(dbPool), nil)
+  migrator, err := rivermigrate.New(riverpgxv5.New(dbPool), nil)
   if err != nil {
       // handle error
   }
@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Fixed
 
 - Fixed a panic that'd occur if `StopAndCancel` was invoked before a client was started. [PR #557](https://github.com/riverqueue/river/pull/557).
+- A `PeriodicJobConstructor` should be able to return `nil` `JobArgs` if it wishes to not have any job inserted. However, this was either never working or was broken at some point. It's now fixed. Thanks [@semanser](https://github.com/semanser)! [PR #572](https://github.com/riverqueue/river/pull/572).
 
 ## [0.11.4] - 2024-08-20
 
