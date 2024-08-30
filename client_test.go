@@ -2727,6 +2727,33 @@ func Test_Client_Maintenance(t *testing.T) {
 		require.Empty(t, jobs)
 	})
 
+	t.Run("PeriodicJobConstructorReturningNil", func(t *testing.T) {
+		t.Parallel()
+
+		config := newTestConfig(t, nil)
+
+		worker := &periodicJobWorker{}
+		AddWorker(config.Workers, worker)
+		config.PeriodicJobs = []*PeriodicJob{
+			NewPeriodicJob(cron.Every(15*time.Minute), func() (JobArgs, *InsertOpts) {
+				// Returning nil from the constructor function should not insert a new
+				// job and should be handled cleanly
+				return nil, nil
+			}, &PeriodicJobOpts{RunOnStart: true}),
+		}
+
+		client, bundle := setup(t, config)
+
+		startAndWaitForQueueMaintainer(ctx, t, client)
+
+		svc := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
+		svc.TestSignals.SkippedJob.WaitOrTimeout()
+
+		jobs, err := bundle.exec.JobGetByKindMany(ctx, []string{(periodicJobArgs{}).Kind()})
+		require.NoError(t, err)
+		require.Empty(t, jobs, "Expected to find zero jobs of kind: "+(periodicJobArgs{}).Kind())
+	})
+
 	t.Run("PeriodicJobEnqueuerAddDynamically", func(t *testing.T) {
 		t.Parallel()
 

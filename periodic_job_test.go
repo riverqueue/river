@@ -16,7 +16,7 @@ func TestPeriodicJobBundle(t *testing.T) {
 
 	type testBundle struct{}
 
-	setup := func(t *testing.T) (*PeriodicJobBundle, *testBundle) {
+	setup := func(t *testing.T) (*PeriodicJobBundle, *testBundle) { //nolint:unparam
 		t.Helper()
 
 		periodicJobEnqueuer := maintenance.NewPeriodicJobEnqueuer(
@@ -58,6 +58,26 @@ func TestPeriodicJobBundle(t *testing.T) {
 		insertParams2, _, err := internalPeriodicJob.ConstructorFunc()
 		require.NoError(t, err)
 		require.Equal(t, 2, mustUnmarshalJSON[TestJobArgs](t, insertParams2.EncodedArgs).JobNum)
+	})
+
+	t.Run("ReturningNilDoesntInsertNewJob", func(t *testing.T) {
+		t.Parallel()
+
+		periodicJobBundle, _ := setup(t)
+
+		periodicJob := NewPeriodicJob(
+			PeriodicInterval(15*time.Minute),
+			func() (JobArgs, *InsertOpts) {
+				// Returning nil from the constructor function should not insert a new job.
+				return nil, nil
+			},
+			nil,
+		)
+
+		internalPeriodicJob := periodicJobBundle.toInternal(periodicJob)
+
+		_, _, err := internalPeriodicJob.ConstructorFunc()
+		require.ErrorIs(t, err, maintenance.ErrNoJobToInsert)
 	})
 }
 
