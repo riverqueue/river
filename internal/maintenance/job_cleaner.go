@@ -22,6 +22,7 @@ const (
 	CompletedJobRetentionPeriodDefault = 24 * time.Hour
 	DiscardedJobRetentionPeriodDefault = 7 * 24 * time.Hour
 	JobCleanerIntervalDefault          = 30 * time.Second
+	JobCleanerTimeoutDefault           = 30 * time.Second
 )
 
 // Test-only properties.
@@ -48,6 +49,9 @@ type JobCleanerConfig struct {
 
 	// Interval is the amount of time to wait between runs of the cleaner.
 	Interval time.Duration
+
+	// JobCleanerTimeout is the timeout of the job cleaner runner.
+	JobCleanerTimeout time.Duration
 }
 
 func (c *JobCleanerConfig) mustValidate() *JobCleanerConfig {
@@ -88,6 +92,7 @@ func NewJobCleaner(archetype *baseservice.Archetype, config *JobCleanerConfig, e
 			CompletedJobRetentionPeriod: valutil.ValOrDefault(config.CompletedJobRetentionPeriod, CompletedJobRetentionPeriodDefault),
 			DiscardedJobRetentionPeriod: valutil.ValOrDefault(config.DiscardedJobRetentionPeriod, DiscardedJobRetentionPeriodDefault),
 			Interval:                    valutil.ValOrDefault(config.Interval, JobCleanerIntervalDefault),
+			JobCleanerTimeout:           valutil.ValOrDefault(config.JobCleanerTimeout, JobCleanerTimeoutDefault),
 		}).mustValidate(),
 
 		batchSize: BatchSizeDefault,
