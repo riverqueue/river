@@ -152,7 +152,7 @@ func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, err
 	for {
 		// Wrapped in a function so that defers run as expected.
 		numDeleted, err := func() (int, error) {
-			ctx, cancelFunc := context.WithTimeout(ctx, 30*time.Second)
+			ctx, cancelFunc := context.WithTimeout(ctx, s.Config.JobCleanerTimeout)
 			defer cancelFunc()
 
 			numDeleted, err := s.exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
