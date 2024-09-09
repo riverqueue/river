@@ -1091,9 +1091,11 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 					exec, _ := setup(ctx, t)
 					// Create a job with the target state but without a finalized_at,
 					// expect an error:
-					_, err := exec.JobInsertFull(ctx, testfactory.Job_Build(t, &testfactory.JobOpts{
+					params := testfactory.Job_Build(t, &testfactory.JobOpts{
 						State: &state,
-					}))
+					})
+					params.FinalizedAt = nil
+					_, err := exec.JobInsertFull(ctx, params)
 					require.ErrorContains(t, err, "violates check constraint \"finalized_or_finalized_at_null\"")
 				})
 

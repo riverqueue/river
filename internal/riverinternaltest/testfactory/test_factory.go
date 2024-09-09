@@ -52,6 +52,13 @@ func Job_Build(tb testing.TB, opts *JobOpts) *riverdriver.JobInsertFullParams { 
 		encodedArgs = []byte("{}")
 	}
 
+	finalizedAt := opts.FinalizedAt
+	if finalizedAt == nil && (opts.State != nil && (*opts.State == rivertype.JobStateCompleted ||
+		*opts.State == rivertype.JobStateCancelled ||
+		*opts.State == rivertype.JobStateDiscarded)) {
+		finalizedAt = ptrutil.Ptr(time.Now())
+	}
+
 	metadata := opts.Metadata
 	if opts.Metadata == nil {
 		metadata = []byte("{}")
@@ -68,7 +75,7 @@ func Job_Build(tb testing.TB, opts *JobOpts) *riverdriver.JobInsertFullParams { 
 		CreatedAt:   opts.CreatedAt,
 		EncodedArgs: encodedArgs,
 		Errors:      opts.Errors,
-		FinalizedAt: opts.FinalizedAt,
+		FinalizedAt: finalizedAt,
 		Kind:        ptrutil.ValOrDefault(opts.Kind, "fake_job"),
 		MaxAttempts: ptrutil.ValOrDefault(opts.MaxAttempts, rivercommon.MaxAttemptsDefault),
 		Metadata:    metadata,
