@@ -2888,7 +2888,7 @@ func Test_Client_ErrorHandler(t *testing.T) {
 		// unknown job.
 		insertParams, _, err := insertParamsFromConfigArgsAndOptions(&client.baseService.Archetype, config, unregisteredJobArgs{}, nil)
 		require.NoError(t, err)
-		_, err = client.driver.GetExecutor().JobInsertFast(ctx, insertParams)
+		_, err = client.driver.GetExecutor().JobInsertFast(ctx, (*riverdriver.JobInsertFastParams)(insertParams))
 		require.NoError(t, err)
 
 		riversharedtest.WaitOrTimeout(t, bundle.SubscribeChan)
@@ -4476,7 +4476,7 @@ func Test_Client_UnknownJobKindErrorsTheJob(t *testing.T) {
 
 	insertParams, _, err := insertParamsFromConfigArgsAndOptions(&client.baseService.Archetype, config, unregisteredJobArgs{}, nil)
 	require.NoError(err)
-	insertedJob, err := client.driver.GetExecutor().JobInsertFast(ctx, insertParams)
+	insertedJob, err := client.driver.GetExecutor().JobInsertFast(ctx, (*riverdriver.JobInsertFastParams)(insertParams))
 	require.NoError(err)
 
 	event := riversharedtest.WaitOrTimeout(t, subscribeChan)

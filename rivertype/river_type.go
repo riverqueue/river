@@ -4,6 +4,7 @@
 package rivertype
 
 import (
+	"context"
 	"errors"
 	"time"
 )
@@ -216,6 +217,128 @@ type AttemptError struct {
 	// Trace contains a stack trace from a job that panicked. The trace is
 	// produced by invoking `debug.Trace()`.
 	Trace string `json:"trace"`
+}
+
+type JobInsertParams struct {
+	CreatedAt   *time.Time
+	EncodedArgs []byte
+	Kind        string
+	MaxAttempts int
+	Metadata    []byte
+	Priority    int
+	Queue       string
+	ScheduledAt *time.Time
+	State       JobState
+	Tags        []string
+}
+
+// JobMiddleware provides an interface for middleware that integrations can use
+// to encapsulate common logic around various phases of a job's lifecycle.
+//
+// Implementations should embed river.JobMiddlewareDefaults to inherit default
+// implementations for phases where no custom code is needed, and for forward
+// compatibility in case new functions are added to this interface.
+type JobMiddleware interface {
+	// Insert is invoked around an insert operation. Implementations must always
+	// include a call to doInner to call down the middleware stack and perfom
+	// the insertion, and may run custom code before and after.
+	//
+	// Returning an error from this function will fail the overarching insert
+	// operation, even if the inner insertion originally succeeded.
+	//
+	// Insert is *not* invoked on batch insertions using Client.InsertMany or
+	// Client.InsertManyTx. InsertMany should be implemented separately.
+	Insert(ctx context.Context, params *JobInsertParams, doInner func(ctx context.Context) (*JobInsertResult, error)) (*JobInsertResult, error)
+
+	// InsertMany is invoked around a batch insert operation. Implementations
+	// must always include a call to doInner to call down the middleware stack
+	// and perfom the batch insertion, and may run custom code before and after.
+	//
+	// Returning an error from this function will fail the overarching insert
+	// operation, even if the inner insertion originally succeeded.
+	InsertMany(ctx context.Context, manyParams []*JobInsertParams, doInner func(ctx context.Context) (int, error)) (int, error)
+
+	// Work is invoked around a job's JSON args being unmarshaled and the job
+	// worked. Implementations must always include a call to doInner to call
+	// down the middleware stack and perfom the batch insertion, and may run
+	// custom code before and after.
+	//
+	// Returning an error from this function will fail the overarching work
+	// operation, even if the inner work originally succeeded.
+	Work(ctx context.Context, job *JobRow, doInner func(ctx context.Context) error) error
+
+	//
+	// below this line was an experiment and commented out now
+	//
+
+	// InsertBegin is invoked immediately before doing a job uniqueness check
+	// and (provided there was no duplicate), inserting it to the database. A
+	// lifecycle hook may make modifications to insert params, but should be
+	// careful doing so as it'll fundamentally modify the job.
+	//
+	// Returns a context that'll be used during the insert operation. Hooks that
+	// don't need to modify context should pass through the input ctx.
+	//
+	// InsertBegin is *not* invoked on a batch insertion with InsertMany or
+	// InsertManyTx. Integrations should implement InsertManyBegin separately.
+	// InsertBegin(ctx context.Context, params *JobLifecycleInsertParams) (context.Context, error)
+
+	// InsertEnd is invoked after a successful insertion operation.
+	//
+	// This function is only invoked on a successful insert. Unsuccessful ones
+	// should be handled by checking for an error returned from Insert or
+	// InsertTx.
+	//
+	// Its input context will be descended from one returned by InsertBegin for
+	// the same job.
+	//
+	// If an error is returned, the insert operation will fail and the inserted
+	// row rolled back.
+	// InsertEnd(ctx context.Context, res *JobInsertResult) error
+
+	// InsertManyBegin is invoked immediately before a batch insertion with
+	// InsertMany or InsertManyTx. A lifecycle hook may make modifications to
+	// insert params, but should be careful doing so as it'll fundamentally
+	// modify the jobs.
+	//
+	// Returns a context that'll be used during the insert operation. Hooks that
+	// don't need to modify context should pass through the input ctx.
+	// InsertManyBegin(ctx context.Context, manyParams []*JobLifecycleInsertParams) (context.Context, error)
+
+	// InsertManyEnd is invoked after a successful batch insertion with
+	// InsertMany or InsertManyTx. Batch operations don't return hydrated job
+	// rows for expediency, so unlike InsertEnd, only the original insert
+	// parameters are available.
+	//
+	// This function is only invoked on a successful insert. Unsuccessful ones
+	// should be handled by checking for an error returned from InsertMany or
+	// InsertManyTx.
+	//
+	// Its input context will be descended from one returned by InsertManyBegin
+	// for the same batch of jobs.
+	//
+	// If an error is returned, the insert operation will fail and the inserted
+	// rows rolled back.
+	// InsertManyEnd(ctx context.Context, manyParams []*JobLifecycleInsertParams) error
+
+	// WorkBegin is invoked before unmarshaling a job's args from JSON and
+	// before working it.
+	//
+	// Returns a context that'll be used during the work operation. Hooks that
+	// don't need to modify context should pass through the input ctx.
+	// WorkBegin(ctx context.Context, job *JobRow) (context.Context, error)
+
+	// WorkEnd is invoked after successfully working a job.
+	//
+	// This function is only invoked on a successfully worked job. Unsuccessful
+	// ones should be handled using the river.ErrorHandler interface.
+	//
+	// Its input context will be descended from one returned by WorkBegin for
+	// the same job.
+	//
+	// If an error is returned, the job will be set to failed even if its work
+	// function succeeded.
+	// WorkEnd(ctx context.Context, job *JobRow) error
 }
 
 // PeriodicJobHandle is a reference to a dynamically added periodic job

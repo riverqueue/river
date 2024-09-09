@@ -11,13 +11,13 @@ import (
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/sharedtx"
-	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testsignal"
+	"github.com/riverqueue/river/rivertype"
 )
 
 type testService struct {
@@ -108,7 +108,7 @@ func TestQueueMaintainer(t *testing.T) {
 			NewPeriodicJobEnqueuer(archetype, &PeriodicJobEnqueuerConfig{
 				PeriodicJobs: []*PeriodicJob{
 					{
-						ConstructorFunc: func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
+						ConstructorFunc: func() (*rivertype.JobInsertParams, *dbunique.UniqueOpts, error) {
 							return nil, nil, ErrNoJobToInsert
 						},
 						ScheduleFunc: cron.Every(15 * time.Minute).Next,

@@ -128,6 +128,7 @@ type jobExecutor struct {
 	ErrorHandler           ErrorHandler
 	InformProducerDoneFunc func(jobRow *rivertype.JobRow)
 	JobRow                 *rivertype.JobRow
+	JobMiddleware          []rivertype.JobMiddleware
 	SchedulerInterval      time.Duration
 	WorkUnit               workunit.WorkUnit
 
@@ -190,11 +191,11 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		return &jobExecutorResult{Err: &UnknownJobKindError{Kind: e.JobRow.Kind}}
 	}
 
-	if err := e.WorkUnit.UnmarshalJob(); err != nil {
-		return &jobExecutorResult{Err: err}
-	}
+	doInner := func(ctx context.Context) error {
+		if err := e.WorkUnit.UnmarshalJob(); err != nil {
+			return err
+		}
 
-	{
 		jobTimeout := e.WorkUnit.Timeout()
 		if jobTimeout == 0 {
 			jobTimeout = e.ClientJobTimeout
@@ -207,8 +208,24 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 			defer cancel()
 		}
 
-		return &jobExecutorResult{Err: e.WorkUnit.Work(ctx)}
+		if err := e.WorkUnit.Work(ctx); err != nil {
+			return err
+		}
+
+		return nil
 	}
+
+	if len(e.JobMiddleware) > 0 {
+		// Wrap middlewares in reverse order so the one defined first is wrapped
+		// as the outermost function and is first to receive the operation.
+		for i := len(e.JobMiddleware) - 1; i >= 0; i-- {
+			doInner = func(ctx context.Context) error {
+				return e.JobMiddleware[i].Work(ctx, e.JobRow, doInner)
+			}
+		}
+	}
+
+	return &jobExecutorResult{Err: doInner(ctx)}
 }
 
 func (e *jobExecutor) invokeErrorHandler(ctx context.Context, res *jobExecutorResult) bool {

@@ -33,9 +33,9 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		waitChan             chan (struct{})
 	}
 
-	jobConstructorWithQueueFunc := func(name string, unique bool, queue string) func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
-		return func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
-			return &riverdriver.JobInsertFastParams{
+	jobConstructorWithQueueFunc := func(name string, unique bool, queue string) func() (*rivertype.JobInsertParams, *dbunique.UniqueOpts, error) {
+		return func() (*rivertype.JobInsertParams, *dbunique.UniqueOpts, error) {
+			return &rivertype.JobInsertParams{
 				EncodedArgs: []byte("{}"),
 				Kind:        name,
 				MaxAttempts: rivercommon.MaxAttemptsDefault,
@@ -46,7 +46,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		}
 	}
 
-	jobConstructorFunc := func(name string, unique bool) func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
+	jobConstructorFunc := func(name string, unique bool) func() (*rivertype.JobInsertParams, *dbunique.UniqueOpts, error) {
 		return jobConstructorWithQueueFunc(name, unique, rivercommon.QueueDefault)
 	}
 
@@ -236,7 +236,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc.AddMany([]*PeriodicJob{
 			// skip this insert when it returns nil:
-			{ScheduleFunc: periodicIntervalSchedule(time.Second), ConstructorFunc: func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
+			{ScheduleFunc: periodicIntervalSchedule(time.Second), ConstructorFunc: func() (*rivertype.JobInsertParams, *dbunique.UniqueOpts, error) {
 				return nil, nil, ErrNoJobToInsert
 			}, RunOnStart: true},
 		})

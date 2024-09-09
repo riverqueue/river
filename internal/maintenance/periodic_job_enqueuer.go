@@ -39,7 +39,7 @@ func (ts *PeriodicJobEnqueuerTestSignals) Init() {
 // river.PeriodicJobArgs, but needs a separate type because the enqueuer is in a
 // subpackage.
 type PeriodicJob struct {
-	ConstructorFunc func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error)
+	ConstructorFunc func() (*rivertype.JobInsertParams, *dbunique.UniqueOpts, error)
 	RunOnStart      bool
 	ScheduleFunc    func(time.Time) time.Time
 
@@ -409,7 +409,7 @@ func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany 
 	s.TestSignals.InsertedJobs.Signal(struct{}{})
 }
 
-func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, constructorFunc func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error), scheduledAt time.Time) (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, bool) {
+func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, constructorFunc func() (*rivertype.JobInsertParams, *dbunique.UniqueOpts, error), scheduledAt time.Time) (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, bool) {
 	insertParams, uniqueOpts, err := constructorFunc()
 	if err != nil {
 		if errors.Is(err, ErrNoJobToInsert) {
@@ -425,7 +425,7 @@ func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, c
 		insertParams.ScheduledAt = &scheduledAt
 	}
 
-	return insertParams, uniqueOpts, true
+	return (*riverdriver.JobInsertFastParams)(insertParams), uniqueOpts, true
 }
 
 const periodicJobEnqueuerVeryLongDuration = 24 * time.Hour
