@@ -131,6 +131,10 @@ type Config struct {
 	// If in doubt, leave this property empty.
 	ID string
 
+	// JobMiddleware are optional functions that can be called around different
+	// parts of each job's lifecycle.
+	JobMiddleware []rivertype.JobMiddleware
+
 	// JobTimeout is the maximum amount of time a job is allowed to run before its
 	// context is cancelled. A timeout of zero means JobTimeoutDefault will be
 	// used, whereas a value of -1 means the job's context will not be cancelled
@@ -459,6 +463,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		FetchCooldown:               valutil.ValOrDefault(config.FetchCooldown, FetchCooldownDefault),
 		FetchPollInterval:           valutil.ValOrDefault(config.FetchPollInterval, FetchPollIntervalDefault),
 		ID:                          valutil.ValOrDefaultFunc(config.ID, func() string { return defaultClientID(time.Now().UTC()) }),
+		JobMiddleware:               config.JobMiddleware,
 		JobTimeout:                  valutil.ValOrDefault(config.JobTimeout, JobTimeoutDefault),
 		Logger:                      logger,
 		MaxAttempts:                 valutil.ValOrDefault(config.MaxAttempts, MaxAttemptsDefault),
@@ -1150,7 +1155,7 @@ func (c *Client[TTx]) ID() string {
 	return c.config.ID
 }
 
-func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, config *Config, args JobArgs, insertOpts *InsertOpts) (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
+func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, config *Config, args JobArgs, insertOpts *InsertOpts) (*rivertype.JobInsertParams, *dbunique.UniqueOpts, error) {
 	encodedArgs, err := json.Marshal(args)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error marshaling args to JSON: %w", err)
@@ -1212,12 +1217,12 @@ func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, conf
 		metadata = []byte("{}")
 	}
 
-	insertParams := &riverdriver.JobInsertFastParams{
+	insertParams := &rivertype.JobInsertParams{
 		CreatedAt:   createdAt,
-		EncodedArgs: json.RawMessage(encodedArgs),
+		EncodedArgs: encodedArgs,
 		Kind:        args.Kind(),
 		MaxAttempts: maxAttempts,
-		Metadata:    json.RawMessage(metadata),
+		Metadata:    metadata,
 		Priority:    priority,
 		Queue:       queue,
 		State:       rivertype.JobStateAvailable,
@@ -1295,25 +1300,39 @@ func (c *Client[TTx]) insert(ctx context.Context, exec riverdriver.Executor, arg
 		return nil, err
 	}
 
-	tx, err := exec.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
+	doInner := func(ctx context.Context) (*rivertype.JobInsertResult, error) {
+		tx, err := exec.Begin(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback(ctx)
 
-	jobInsertRes, err := c.uniqueInserter.JobInsert(ctx, tx, params, uniqueOpts)
-	if err != nil {
-		return nil, err
+		jobInsertRes, err := c.uniqueInserter.JobInsert(ctx, tx, (*riverdriver.JobInsertFastParams)(params), uniqueOpts)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := c.maybeNotifyInsert(ctx, tx, params.State, params.Queue); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+
+		return jobInsertRes, nil
 	}
 
-	if err := c.maybeNotifyInsert(ctx, tx, params.State, params.Queue); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
+	if len(c.config.JobMiddleware) > 0 {
+		// Wrap middlewares in reverse order so the one defined first is wrapped
+		// as the outermost function and is first to receive the operation.
+		for i := len(c.config.JobMiddleware) - 1; i >= 0; i-- {
+			doInner = func(ctx context.Context) (*rivertype.JobInsertResult, error) {
+				return c.config.JobMiddleware[i].Insert(ctx, params, doInner)
+			}
+		}
 	}
 
-	return jobInsertRes, nil
+	return doInner(ctx)
 }
 
 // InsertManyParams encapsulates a single job combined with insert options for
@@ -1405,32 +1424,50 @@ func (c *Client[TTx]) InsertManyTx(ctx context.Context, tx TTx, params []InsertM
 	return c.insertFastMany(ctx, exec, insertParams)
 }
 
-func (c *Client[TTx]) insertFastMany(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*riverdriver.JobInsertFastParams) (int, error) {
-	inserted, err := tx.JobInsertFastMany(ctx, insertParams)
-	if err != nil {
-		return inserted, err
+func (c *Client[TTx]) insertFastMany(ctx context.Context, tx riverdriver.ExecutorTx, manyParams []*rivertype.JobInsertParams) (int, error) {
+	doInner := func(ctx context.Context) (int, error) {
+		manyInsertParams := sliceutil.Map(manyParams, func(params *rivertype.JobInsertParams) *riverdriver.JobInsertFastParams {
+			return (*riverdriver.JobInsertFastParams)(params)
+		})
+
+		inserted, err := tx.JobInsertFastMany(ctx, manyInsertParams)
+		if err != nil {
+			return inserted, err
+		}
+
+		queues := make([]string, 0, 10)
+		for _, params := range manyParams {
+			if params.State == rivertype.JobStateAvailable {
+				queues = append(queues, params.Queue)
+			}
+		}
+		if err := c.maybeNotifyInsertForQueues(ctx, tx, queues); err != nil {
+			return 0, err
+		}
+		return inserted, nil
 	}
 
-	queues := make([]string, 0, 10)
-	for _, params := range insertParams {
-		if params.State == rivertype.JobStateAvailable {
-			queues = append(queues, params.Queue)
+	if len(c.config.JobMiddleware) > 0 {
+		// Wrap middlewares in reverse order so the one defined first is wrapped
+		// as the outermost function and is first to receive the operation.
+		for i := len(c.config.JobMiddleware) - 1; i >= 0; i-- {
+			doInner = func(ctx context.Context) (int, error) {
+				return c.config.JobMiddleware[i].InsertMany(ctx, manyParams, doInner)
+			}
 		}
 	}
-	if err := c.maybeNotifyInsertForQueues(ctx, tx, queues); err != nil {
-		return 0, err
-	}
-	return inserted, nil
+
+	return doInner(ctx)
 }
 
 // Validates input parameters for an a batch insert operation and generates a
 // set of batch insert parameters.
-func (c *Client[TTx]) insertManyParams(params []InsertManyParams) ([]*riverdriver.JobInsertFastParams, error) {
+func (c *Client[TTx]) insertManyParams(params []InsertManyParams) ([]*rivertype.JobInsertParams, error) {
 	if len(params) < 1 {
 		return nil, errors.New("no jobs to insert")
 	}
 
-	insertParams := make([]*riverdriver.JobInsertFastParams, len(params))
+	insertParams := make([]*rivertype.JobInsertParams, len(params))
 	for i, param := range params {
 		if err := c.validateJobArgs(param.Args); err != nil {
 			return nil, err
@@ -1558,6 +1595,7 @@ func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) *pr
 		ErrorHandler:       c.config.ErrorHandler,
 		FetchCooldown:      c.config.FetchCooldown,
 		FetchPollInterval:  c.config.FetchPollInterval,
+		JobMiddleware:      c.config.JobMiddleware,
 		JobTimeout:         c.config.JobTimeout,
 		MaxWorkers:         queueConfig.MaxWorkers,
 		Notifier:           c.notifier,
