@@ -211,9 +211,9 @@ type Notification struct {
 }
 
 type JobCancelParams struct {
-	ID                int64
 	CancelAttemptedAt time.Time
 	ControlTopic      string
+	ID                int64
 }
 
 type JobDeleteBeforeParams struct {
