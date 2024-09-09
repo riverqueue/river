@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/workunit"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // Worker is an interface that can perform a job with args of type T. A typical
@@ -36,6 +37,9 @@ import (
 // In addition to fulfilling the Worker interface, workers must be registered
 // with the client using the AddWorker function.
 type Worker[T JobArgs] interface {
+	// Middleware returns the type-specific middleware for this job.
+	Middleware(job *Job[T]) []rivertype.WorkerMiddleware
+
 	// NextRetry calculates when the next retry for a failed job should take
 	// place given when it was last attempted and its number of attempts, or any
 	// other of the job's properties a user-configured retry policy might want
@@ -69,6 +73,8 @@ type Worker[T JobArgs] interface {
 // WorkerDefaults is an empty struct that can be embedded in your worker
 // struct to make it fulfill the Worker interface with default values.
 type WorkerDefaults[T JobArgs] struct{}
+
+func (w WorkerDefaults[T]) Middleware(*Job[T]) []rivertype.WorkerMiddleware { return nil }
 
 // NextRetry returns an empty time.Time{} to avoid setting any job or
 // Worker-specific overrides on the next retry time. This means that the

@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/maintenance"
-	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -180,7 +179,7 @@ func (b *PeriodicJobBundle) toInternal(periodicJob *PeriodicJob) *maintenance.Pe
 		opts = periodicJob.opts
 	}
 	return &maintenance.PeriodicJob{
-		ConstructorFunc: func() (*riverdriver.JobInsertFastParams, error) {
+		ConstructorFunc: func() (*rivertype.JobInsertParams, error) {
 			args, options := periodicJob.constructorFunc()
 			if args == nil {
 				return nil, maintenance.ErrNoJobToInsert

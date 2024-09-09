@@ -131,6 +131,7 @@ type jobExecutor struct {
 	ErrorHandler           ErrorHandler
 	InformProducerDoneFunc func(jobRow *rivertype.JobRow)
 	JobRow                 *rivertype.JobRow
+	GlobalMiddleware       []rivertype.WorkerMiddleware
 	SchedulerInterval      time.Duration
 	WorkUnit               workunit.WorkUnit
 
@@ -197,7 +198,9 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		return &jobExecutorResult{Err: err}
 	}
 
-	{
+	workerMiddleware := e.WorkUnit.Middleware()
+
+	doInner := func(ctx context.Context) error {
 		jobTimeout := e.WorkUnit.Timeout()
 		if jobTimeout == 0 {
 			jobTimeout = e.ClientJobTimeout
@@ -210,8 +213,30 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 			defer cancel()
 		}
 
-		return &jobExecutorResult{Err: e.WorkUnit.Work(ctx)}
+		if err := e.WorkUnit.Work(ctx); err != nil {
+			return err
+		}
+
+		return nil
 	}
+
+	allMiddleware := make([]rivertype.WorkerMiddleware, 0, len(e.GlobalMiddleware)+len(workerMiddleware))
+	allMiddleware = append(allMiddleware, e.GlobalMiddleware...)
+	allMiddleware = append(allMiddleware, workerMiddleware...)
+
+	if len(allMiddleware) > 0 {
+		// Wrap middlewares in reverse order so the one defined first is wrapped
+		// as the outermost function and is first to receive the operation.
+		for i := len(allMiddleware) - 1; i >= 0; i-- {
+			middlewareItem := allMiddleware[i] // capture the current middleware item
+			previousDoInner := doInner         // Capture the current doInner function
+			doInner = func(ctx context.Context) error {
+				return middlewareItem.Work(ctx, e.JobRow, previousDoInner)
+			}
+		}
+	}
+
+	return &jobExecutorResult{Err: doInner(ctx)}
 }
 
 func (e *jobExecutor) invokeErrorHandler(ctx context.Context, res *jobExecutorResult) bool {

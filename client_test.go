@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/robfig/cron/v3"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/sjson"
 
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/maintenance"
@@ -589,6 +590,90 @@ func Test_Client(t *testing.T) {
 		require.Equal(t, `relation "river_job" does not exist`, pgErr.Message)
 	})
 
+	t.Run("WithWorkerMiddleware", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+		middlewareCalled := false
+
+		type privateKey string
+
+		middleware := &overridableJobMiddleware{
+			workFunc: func(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
+				ctx = context.WithValue(ctx, privateKey("middleware"), "called")
+				middlewareCalled = true
+				return doInner(ctx)
+			},
+		}
+		bundle.config.WorkerMiddleware = []rivertype.WorkerMiddleware{middleware}
+
+		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[callbackArgs]) error {
+			require.Equal(t, "called", ctx.Value(privateKey("middleware")))
+			return nil
+		}))
+
+		driver := riverpgxv5.New(bundle.dbPool)
+		client, err := NewClient(driver, bundle.config)
+		require.NoError(t, err)
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		result, err := client.Insert(ctx, callbackArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, result.Job.ID, event.Job.ID)
+		require.True(t, middlewareCalled)
+	})
+
+	t.Run("WithWorkerMiddlewareOnWorker", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+		middlewareCalled := false
+
+		type privateKey string
+
+		worker := &workerWithMiddleware[callbackArgs]{
+			workFunc: func(ctx context.Context, job *Job[callbackArgs]) error {
+				require.Equal(t, "called", ctx.Value(privateKey("middleware")))
+				return nil
+			},
+			middlewareFunc: func(job *Job[callbackArgs]) []rivertype.WorkerMiddleware {
+				require.Equal(t, "middleware_test", job.Args.Name, "JSON should be decoded before middleware is called")
+
+				return []rivertype.WorkerMiddleware{
+					&overridableJobMiddleware{
+						workFunc: func(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
+							ctx = context.WithValue(ctx, privateKey("middleware"), "called")
+							middlewareCalled = true
+							return doInner(ctx)
+						},
+					},
+				}
+			},
+		}
+
+		AddWorker(bundle.config.Workers, worker)
+
+		driver := riverpgxv5.New(bundle.dbPool)
+		client, err := NewClient(driver, bundle.config)
+		require.NoError(t, err)
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		result, err := client.Insert(ctx, callbackArgs{Name: "middleware_test"}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, result.Job.ID, event.Job.ID)
+		require.True(t, middlewareCalled)
+	})
+
 	t.Run("PauseAndResumeSingleQueue", func(t *testing.T) {
 		t.Parallel()
 
@@ -833,6 +918,20 @@ func Test_Client(t *testing.T) {
 
 		startstoptest.StressErr(ctx, t, clientWithStop, rivercommon.ErrShutdown)
 	})
+}
+
+type workerWithMiddleware[T JobArgs] struct {
+	WorkerDefaults[T]
+	workFunc       func(context.Context, *Job[T]) error
+	middlewareFunc func(*Job[T]) []rivertype.WorkerMiddleware
+}
+
+func (w *workerWithMiddleware[T]) Work(ctx context.Context, job *Job[T]) error {
+	return w.workFunc(ctx, job)
+}
+
+func (w *workerWithMiddleware[T]) Middleware(job *Job[T]) []rivertype.WorkerMiddleware {
+	return w.middlewareFunc(job)
 }
 
 func Test_Client_Stop(t *testing.T) {
@@ -2420,6 +2519,48 @@ func Test_Client_InsertManyTx(t *testing.T) {
 		require.Len(t, results, 1)
 	})
 
+	t.Run("WithJobInsertMiddleware", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+		config := newTestConfig(t, nil)
+		config.Queues = nil
+
+		insertCalled := false
+		var innerResults []*rivertype.JobInsertResult
+
+		middleware := &overridableJobMiddleware{
+			insertManyFunc: func(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(ctx context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
+				insertCalled = true
+				var err error
+				for _, params := range manyParams {
+					params.Metadata, err = sjson.SetBytes(params.Metadata, "middleware", "called")
+					require.NoError(t, err)
+				}
+
+				results, err := doInner(ctx)
+				require.NoError(t, err)
+				innerResults = results
+				return results, nil
+			},
+		}
+
+		config.JobInsertMiddleware = []rivertype.JobInsertMiddleware{middleware}
+		driver := riverpgxv5.New(nil)
+		client, err := NewClient(driver, config)
+		require.NoError(t, err)
+
+		results, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{{Args: noOpArgs{}}})
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		require.True(t, insertCalled)
+		require.Len(t, innerResults, 1)
+		require.Len(t, results, 1)
+		require.Equal(t, innerResults[0].Job.ID, results[0].Job.ID)
+		require.JSONEq(t, `{"middleware": "called"}`, string(results[0].Job.Metadata))
+	})
+
 	t.Run("WithUniqueOpts", func(t *testing.T) {
 		t.Parallel()
 
@@ -2998,7 +3139,7 @@ func Test_Client_ErrorHandler(t *testing.T) {
 		// unknown job.
 		insertParams, err := insertParamsFromConfigArgsAndOptions(&client.baseService.Archetype, config, unregisteredJobArgs{}, nil)
 		require.NoError(t, err)
-		_, err = client.driver.GetExecutor().JobInsertFastMany(ctx, []*riverdriver.JobInsertFastParams{insertParams})
+		_, err = client.driver.GetExecutor().JobInsertFastMany(ctx, []*riverdriver.JobInsertFastParams{(*riverdriver.JobInsertFastParams)(insertParams)})
 		require.NoError(t, err)
 
 		riversharedtest.WaitOrTimeout(t, bundle.SubscribeChan)
@@ -4600,7 +4741,7 @@ func Test_Client_UnknownJobKindErrorsTheJob(t *testing.T) {
 
 	insertParams, err := insertParamsFromConfigArgsAndOptions(&client.baseService.Archetype, config, unregisteredJobArgs{}, nil)
 	require.NoError(err)
-	insertedResults, err := client.driver.GetExecutor().JobInsertFastMany(ctx, []*riverdriver.JobInsertFastParams{insertParams})
+	insertedResults, err := client.driver.GetExecutor().JobInsertFastMany(ctx, []*riverdriver.JobInsertFastParams{(*riverdriver.JobInsertFastParams)(insertParams)})
 	require.NoError(err)
 
 	insertedResult := insertedResults[0]
@@ -4770,6 +4911,14 @@ func Test_NewClient_Overrides(t *testing.T) {
 
 	retryPolicy := &DefaultClientRetryPolicy{}
 
+	type noOpInsertMiddleware struct {
+		JobInsertMiddlewareDefaults
+	}
+
+	type noOpWorkerMiddleware struct {
+		WorkerMiddlewareDefaults
+	}
+
 	client, err := NewClient(riverpgxv5.New(dbPool), &Config{
 		AdvisoryLockPrefix:          123_456,
 		CancelledJobRetentionPeriod: 1 * time.Hour,
@@ -4778,6 +4927,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 		ErrorHandler:                errorHandler,
 		FetchCooldown:               123 * time.Millisecond,
 		FetchPollInterval:           124 * time.Millisecond,
+		JobInsertMiddleware:         []rivertype.JobInsertMiddleware{&noOpInsertMiddleware{}},
 		JobTimeout:                  125 * time.Millisecond,
 		Logger:                      logger,
 		MaxAttempts:                 5,
@@ -4785,6 +4935,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 		RetryPolicy:                 retryPolicy,
 		TestOnly:                    true, // disables staggered start in maintenance services
 		Workers:                     workers,
+		WorkerMiddleware:            []rivertype.WorkerMiddleware{&noOpWorkerMiddleware{}},
 	})
 	require.NoError(t, err)
 
@@ -4803,10 +4954,12 @@ func Test_NewClient_Overrides(t *testing.T) {
 	require.Equal(t, errorHandler, client.config.ErrorHandler)
 	require.Equal(t, 123*time.Millisecond, client.config.FetchCooldown)
 	require.Equal(t, 124*time.Millisecond, client.config.FetchPollInterval)
+	require.Len(t, client.config.JobInsertMiddleware, 1)
 	require.Equal(t, 125*time.Millisecond, client.config.JobTimeout)
 	require.Equal(t, logger, client.baseService.Logger)
 	require.Equal(t, 5, client.config.MaxAttempts)
 	require.Equal(t, retryPolicy, client.config.RetryPolicy)
+	require.Len(t, client.config.WorkerMiddleware, 1)
 }
 
 func Test_NewClient_MissingParameters(t *testing.T) {
