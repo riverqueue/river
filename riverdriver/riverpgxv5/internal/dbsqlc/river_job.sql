@@ -285,6 +285,34 @@ INSERT INTO river_job(
     @unique_key
 ) RETURNING *;
 
+-- name: JobInsertManyReturning :many
+INSERT INTO river_job(
+    args,
+    kind,
+    max_attempts,
+    metadata,
+    priority,
+    queue,
+    scheduled_at,
+    state,
+    tags
+) SELECT
+    unnest(@args::jsonb[]),
+    unnest(@kind::text[]),
+    unnest(@max_attempts::smallint[]),
+    unnest(@metadata::jsonb[]),
+    unnest(@priority::smallint[]),
+    unnest(@queue::text[]),
+    unnest(@scheduled_at::timestamptz[]),
+    -- To avoid requiring pgx users to register the OID of the river_job_state[]
+    -- type, we cast the array to text[] and then to river_job_state.
+    unnest(@state::text[])::river_job_state,
+    -- Unnest on a multi-dimensional array will fully flatten the array, so we
+    -- encode the tag list as a comma-separated string and split it in the
+    -- query.
+    string_to_array(unnest(@tags::text[]), ',')
+RETURNING *;
+
 -- name: JobInsertUnique :one
 INSERT INTO river_job(
     args,

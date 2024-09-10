@@ -745,6 +745,98 @@ func (q *Queries) JobInsertFull(ctx context.Context, db DBTX, arg *JobInsertFull
 	return &i, err
 }
 
+const jobInsertManyReturning = `-- name: JobInsertManyReturning :many
+INSERT INTO river_job(
+    args,
+    kind,
+    max_attempts,
+    metadata,
+    priority,
+    queue,
+    scheduled_at,
+    state,
+    tags
+) SELECT
+    unnest($1::jsonb[]),
+    unnest($2::text[]),
+    unnest($3::smallint[]),
+    unnest($4::jsonb[]),
+    unnest($5::smallint[]),
+    unnest($6::text[]),
+    unnest($7::timestamptz[]),
+    -- To avoid requiring pgx users to register the OID of the river_job_state[]
+    -- type, we cast the array to text[] and then to river_job_state.
+    unnest($8::text[])::river_job_state,
+    -- Unnest on a multi-dimensional array will fully flatten the array, so we
+    -- encode the tag list as a comma-separated string and split it in the
+    -- query.
+    string_to_array(unnest($9::text[]), ',')
+RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
+`
+
+type JobInsertManyReturningParams struct {
+	Args        []string
+	Kind        []string
+	MaxAttempts []int16
+	Metadata    []string
+	Priority    []int16
+	Queue       []string
+	ScheduledAt []time.Time
+	State       []string
+	Tags        []string
+}
+
+func (q *Queries) JobInsertManyReturning(ctx context.Context, db DBTX, arg *JobInsertManyReturningParams) ([]*RiverJob, error) {
+	rows, err := db.QueryContext(ctx, jobInsertManyReturning,
+		pq.Array(arg.Args),
+		pq.Array(arg.Kind),
+		pq.Array(arg.MaxAttempts),
+		pq.Array(arg.Metadata),
+		pq.Array(arg.Priority),
+		pq.Array(arg.Queue),
+		pq.Array(arg.ScheduledAt),
+		pq.Array(arg.State),
+		pq.Array(arg.Tags),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverJob
+	for rows.Next() {
+		var i RiverJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Args,
+			&i.Attempt,
+			&i.AttemptedAt,
+			pq.Array(&i.AttemptedBy),
+			&i.CreatedAt,
+			pq.Array(&i.Errors),
+			&i.FinalizedAt,
+			&i.Kind,
+			&i.MaxAttempts,
+			&i.Metadata,
+			&i.Priority,
+			&i.Queue,
+			&i.State,
+			&i.ScheduledAt,
+			pq.Array(&i.Tags),
+			&i.UniqueKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const jobInsertUnique = `-- name: JobInsertUnique :one
 INSERT INTO river_job(
     args,

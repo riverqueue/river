@@ -118,6 +118,7 @@ type Executor interface {
 	JobInsertFast(ctx context.Context, params *JobInsertFastParams) (*rivertype.JobRow, error)
 	JobInsertFastMany(ctx context.Context, params []*JobInsertFastParams) (int, error)
 	JobInsertFull(ctx context.Context, params *JobInsertFullParams) (*rivertype.JobRow, error)
+	JobInsertManyReturning(ctx context.Context, params []*JobInsertFastParams) ([]*rivertype.JobRow, error)
 	JobInsertUnique(ctx context.Context, params *JobInsertUniqueParams) (*JobInsertUniqueResult, error)
 	JobList(ctx context.Context, query string, namedArgs map[string]any) ([]*rivertype.JobRow, error)
 	JobListFields() string

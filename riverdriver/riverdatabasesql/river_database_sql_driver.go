@@ -286,6 +286,108 @@ func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobIns
 	return jobRowFromInternal(job)
 }
 
+const jobInsertManyReturningTemplate = `-- name: JobInsertManyReturningTemplate :execrows
+INSERT INTO river_job(
+    args,
+    kind,
+    max_attempts,
+    metadata,
+    priority,
+    queue,
+    scheduled_at,
+    state,
+    tags
+) VALUES
+%s
+RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
+`
+
+func (e *Executor) JobInsertManyReturning(ctx context.Context, params []*riverdriver.JobInsertFastParams) ([]*rivertype.JobRow, error) {
+	const (
+		placeholderCount    = 9 // number of placeholders per row
+		placeholderFragment = "($%d, $%d, $%d, $%d, $%d, $%d, coalesce($%d, now()), $%d, coalesce($%d, '{}'::text[]))"
+	)
+
+	if len(params) == 0 {
+		return nil, errors.New("no jobs to insert")
+	}
+	if len(params) >= (math.MaxUint16 / placeholderCount) {
+		return nil, errors.New("too many jobs to insert at once")
+	}
+
+	var builder strings.Builder
+	numRows := len(params)
+	args := make([]interface{}, 0, numRows*placeholderCount)
+
+	// Preallocate enough space in the builder to avoid multiple allocations.
+	// With thousands of rows, most placeholders will have 4 digits, so we
+	// just assume there's always 4 even though it will overallocate by a bit in the common case.
+	// Also pad with a fixed 50 bytes for the rest of each placeholder row.
+	builder.Grow(numRows * (40 + placeholderCount*4))
+
+	for i := 0; i < numRows; i++ {
+		if i > 0 {
+			builder.WriteString(",\n")
+		}
+
+		builder.WriteString("    ")
+		fmt.Fprintf(&builder, placeholderFragment,
+			i*placeholderCount+1,
+			i*placeholderCount+2,
+			i*placeholderCount+3,
+			i*placeholderCount+4,
+			i*placeholderCount+5,
+			i*placeholderCount+6,
+			i*placeholderCount+7,
+			i*placeholderCount+8,
+			i*placeholderCount+9,
+		)
+
+		// Append the fields from params to the args slice
+		args = append(args, params[i].EncodedArgs, params[i].Kind, params[i].MaxAttempts, params[i].Metadata, params[i].Priority, params[i].Queue, params[i].ScheduledAt, params[i].State, params[i].Tags)
+	}
+
+	query := fmt.Sprintf(jobInsertManyReturningTemplate, builder.String())
+
+	rows, err := e.dbtx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []*dbsqlc.RiverJob
+	for rows.Next() {
+		var i dbsqlc.RiverJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Args,
+			&i.Attempt,
+			&i.AttemptedAt,
+			pq.Array(&i.AttemptedBy),
+			&i.CreatedAt,
+			pq.Array(&i.Errors),
+			&i.FinalizedAt,
+			&i.Kind,
+			&i.MaxAttempts,
+			&i.Metadata,
+			&i.Priority,
+			&i.Queue,
+			&i.State,
+			&i.ScheduledAt,
+			pq.Array(&i.Tags),
+			&i.UniqueKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return mapSliceError(items, jobRowFromInternal)
+}
+
 func (e *Executor) JobInsertUnique(ctx context.Context, params *riverdriver.JobInsertUniqueParams) (*riverdriver.JobInsertUniqueResult, error) {
 	insertRes, err := dbsqlc.New().JobInsertUnique(ctx, e.dbtx, &dbsqlc.JobInsertUniqueParams{
 		Args:        string(params.EncodedArgs),
