@@ -168,7 +168,7 @@ func TestRequireInsertedTx(t *testing.T) {
 
 		riverClient, bundle := setup(t)
 
-		_, err := riverClient.InsertManyFastTx(ctx, bundle.tx, []river.InsertManyParams{
+		_, err := riverClient.InsertManyTx(ctx, bundle.tx, []river.InsertManyParams{
 			{Args: Job1Args{String: "foo"}},
 			{Args: Job1Args{String: "bar"}},
 		})
@@ -440,7 +440,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 
 		riverClient, bundle := setup(t)
 
-		_, err := riverClient.InsertManyFastTx(ctx, bundle.tx, []river.InsertManyParams{
+		_, err := riverClient.InsertManyTx(ctx, bundle.tx, []river.InsertManyParams{
 			{Args: Job1Args{String: "foo"}},
 			{Args: Job1Args{String: "bar"}},
 		})
@@ -738,7 +738,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 
 		riverClient, bundle := setup(t)
 
-		_, err := riverClient.InsertManyFastTx(ctx, bundle.tx, []river.InsertManyParams{
+		_, err := riverClient.InsertManyTx(ctx, bundle.tx, []river.InsertManyParams{
 			{Args: Job1Args{String: "foo"}},
 			{Args: Job1Args{String: "bar"}},
 		})
@@ -758,7 +758,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 
 		riverClient, bundle := setup(t)
 
-		_, err := riverClient.InsertManyFastTx(ctx, bundle.tx, []river.InsertManyParams{
+		_, err := riverClient.InsertManyTx(ctx, bundle.tx, []river.InsertManyParams{
 			{Args: Job1Args{String: "foo"}},
 			{Args: Job1Args{String: "bar"}},
 			{Args: Job2Args{Int: 123}},
@@ -847,7 +847,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 
 		riverClient, bundle := setup(t)
 
-		_, err := riverClient.InsertManyFastTx(ctx, bundle.tx, []river.InsertManyParams{
+		_, err := riverClient.InsertManyTx(ctx, bundle.tx, []river.InsertManyParams{
 			{Args: Job1Args{String: "foo"}},
 			{Args: Job1Args{String: "bar"}},
 		})
@@ -867,7 +867,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 
 		riverClient, bundle := setup(t)
 
-		_, err := riverClient.InsertManyFastTx(ctx, bundle.tx, []river.InsertManyParams{
+		_, err := riverClient.InsertManyTx(ctx, bundle.tx, []river.InsertManyParams{
 			{Args: Job2Args{Int: 123}},
 			{Args: Job1Args{String: "foo"}},
 		})
@@ -888,7 +888,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 
 		riverClient, bundle := setup(t)
 
-		_, err := riverClient.InsertManyFastTx(ctx, bundle.tx, []river.InsertManyParams{
+		_, err := riverClient.InsertManyTx(ctx, bundle.tx, []river.InsertManyParams{
 			{Args: Job1Args{String: "foo"}},
 			{Args: Job1Args{String: "bar"}},
 			{Args: Job2Args{Int: 123}},
