@@ -8,6 +8,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDefaultIfEmpty(t *testing.T) {
+	t.Parallel()
+
+	result1 := DefaultIfEmpty([]int{1, 2, 3}, []int{4, 5, 6})
+	result2 := DefaultIfEmpty([]int{}, []int{4, 5, 6})
+	result3 := DefaultIfEmpty(nil, []int{4, 5, 6})
+
+	require.Len(t, result1, 3)
+	require.Len(t, result2, 3)
+	require.Len(t, result3, 3)
+	require.Equal(t, []int{1, 2, 3}, result1)
+	require.Equal(t, []int{4, 5, 6}, result2)
+	require.Equal(t, []int{4, 5, 6}, result3)
+}
+
 func TestGroupBy(t *testing.T) {
 	t.Parallel()
 
