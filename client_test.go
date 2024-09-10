@@ -1568,7 +1568,7 @@ func Test_Client_InsertTx(t *testing.T) {
 	})
 }
 
-func Test_Client_InsertMany(t *testing.T) {
+func Test_Client_InsertManyFast(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -1592,7 +1592,7 @@ func Test_Client_InsertMany(t *testing.T) {
 
 		client, _ := setup(t)
 
-		count, err := client.InsertMany(ctx, []InsertManyParams{
+		count, err := client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: noOpArgs{}, InsertOpts: &InsertOpts{Queue: "foo", Priority: 2}},
 			{Args: noOpArgs{}},
 		})
@@ -1627,7 +1627,7 @@ func Test_Client_InsertMany(t *testing.T) {
 		startClient(ctx, t, client)
 		riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
 
-		count, err := client.InsertMany(ctx, []InsertManyParams{
+		count, err := client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: callbackArgs{}},
 			{Args: callbackArgs{}},
 		})
@@ -1643,7 +1643,7 @@ func Test_Client_InsertMany(t *testing.T) {
 		//
 		// Note: we specifically use a different queue to ensure that the notify
 		// limiter is immediately to fire on this queue.
-		count, err = client.InsertMany(ctx, []InsertManyParams{
+		count, err = client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: callbackArgs{}, InsertOpts: &InsertOpts{Queue: "another_queue"}},
 		})
 		require.NoError(t, err)
@@ -1675,7 +1675,7 @@ func Test_Client_InsertMany(t *testing.T) {
 		startClient(ctx, t, client)
 		riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
 
-		count, err := client.InsertMany(ctx, []InsertManyParams{
+		count, err := client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: noOpArgs{}, InsertOpts: &InsertOpts{Queue: "a", ScheduledAt: time.Now().Add(1 * time.Hour)}},
 			{Args: noOpArgs{}, InsertOpts: &InsertOpts{Queue: "b"}},
 		})
@@ -1695,7 +1695,7 @@ func Test_Client_InsertMany(t *testing.T) {
 
 		client, _ := setup(t)
 
-		count, err := client.InsertMany(ctx, []InsertManyParams{
+		count, err := client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: &noOpArgs{}, InsertOpts: &InsertOpts{ScheduledAt: time.Time{}}},
 		})
 		require.NoError(t, err)
@@ -1713,7 +1713,7 @@ func Test_Client_InsertMany(t *testing.T) {
 
 		client, _ := setup(t)
 
-		count, err := client.InsertMany(ctx, []InsertManyParams{
+		count, err := client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: &noOpArgs{}, InsertOpts: &InsertOpts{Queue: "invalid*queue"}},
 		})
 		require.ErrorContains(t, err, "queue name is invalid")
@@ -1730,7 +1730,7 @@ func Test_Client_InsertMany(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		count, err := client.InsertMany(ctx, []InsertManyParams{
+		count, err := client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: noOpArgs{}},
 		})
 		require.ErrorIs(t, err, errNoDriverDBPool)
@@ -1742,7 +1742,7 @@ func Test_Client_InsertMany(t *testing.T) {
 
 		client, _ := setup(t)
 
-		count, err := client.InsertMany(ctx, []InsertManyParams{})
+		count, err := client.InsertManyFast(ctx, []InsertManyParams{})
 		require.EqualError(t, err, "no jobs to insert")
 		require.Equal(t, 0, count)
 	})
@@ -1752,7 +1752,7 @@ func Test_Client_InsertMany(t *testing.T) {
 
 		client, _ := setup(t)
 
-		count, err := client.InsertMany(ctx, []InsertManyParams{
+		count, err := client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: unregisteredJobArgs{}},
 		})
 		var unknownJobKindErr *UnknownJobKindError
@@ -1768,7 +1768,7 @@ func Test_Client_InsertMany(t *testing.T) {
 
 		client.config.Workers = nil
 
-		_, err := client.InsertMany(ctx, []InsertManyParams{
+		_, err := client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: unregisteredJobArgs{}},
 		})
 		require.NoError(t, err)
@@ -1779,7 +1779,7 @@ func Test_Client_InsertMany(t *testing.T) {
 
 		client, _ := setup(t)
 
-		count, err := client.InsertMany(ctx, []InsertManyParams{
+		count, err := client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: noOpArgs{}, InsertOpts: &InsertOpts{UniqueOpts: UniqueOpts{ByArgs: true}}},
 		})
 		require.EqualError(t, err, "UniqueOpts are not supported for batch inserts")
@@ -1787,7 +1787,7 @@ func Test_Client_InsertMany(t *testing.T) {
 	})
 }
 
-func Test_Client_InsertManyTx(t *testing.T) {
+func Test_Client_InsertManyFastTx(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -1817,7 +1817,7 @@ func Test_Client_InsertManyTx(t *testing.T) {
 
 		client, bundle := setup(t)
 
-		count, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{
+		count, err := client.InsertManyFastTx(ctx, bundle.tx, []InsertManyParams{
 			{Args: noOpArgs{}, InsertOpts: &InsertOpts{Queue: "foo", Priority: 2}},
 			{Args: noOpArgs{}},
 		})
@@ -1841,7 +1841,7 @@ func Test_Client_InsertManyTx(t *testing.T) {
 
 		client, bundle := setup(t)
 
-		_, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{{noOpArgs{}, nil}})
+		_, err := client.InsertManyFastTx(ctx, bundle.tx, []InsertManyParams{{noOpArgs{}, nil}})
 		require.NoError(t, err)
 
 		insertedJobs, err := client.driver.UnwrapExecutor(bundle.tx).JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
@@ -1858,7 +1858,7 @@ func Test_Client_InsertManyTx(t *testing.T) {
 
 		startClient(ctx, t, client)
 
-		count, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{{noOpArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(time.Minute)}}})
+		count, err := client.InsertManyFastTx(ctx, bundle.tx, []InsertManyParams{{noOpArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(time.Minute)}}})
 		require.NoError(t, err)
 		require.Equal(t, 1, count)
 
@@ -1881,7 +1881,7 @@ func Test_Client_InsertManyTx(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		count, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{
+		count, err := client.InsertManyFastTx(ctx, bundle.tx, []InsertManyParams{
 			{Args: noOpArgs{}},
 		})
 		require.NoError(t, err)
@@ -1893,7 +1893,7 @@ func Test_Client_InsertManyTx(t *testing.T) {
 
 		client, bundle := setup(t)
 
-		count, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{})
+		count, err := client.InsertManyFastTx(ctx, bundle.tx, []InsertManyParams{})
 		require.EqualError(t, err, "no jobs to insert")
 		require.Equal(t, 0, count)
 	})
@@ -1903,7 +1903,7 @@ func Test_Client_InsertManyTx(t *testing.T) {
 
 		client, bundle := setup(t)
 
-		count, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{
+		count, err := client.InsertManyFastTx(ctx, bundle.tx, []InsertManyParams{
 			{Args: unregisteredJobArgs{}},
 		})
 		var unknownJobKindErr *UnknownJobKindError
@@ -1919,7 +1919,7 @@ func Test_Client_InsertManyTx(t *testing.T) {
 
 		client.config.Workers = nil
 
-		_, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{
+		_, err := client.InsertManyFastTx(ctx, bundle.tx, []InsertManyParams{
 			{Args: unregisteredJobArgs{}},
 		})
 		require.NoError(t, err)
@@ -1930,7 +1930,7 @@ func Test_Client_InsertManyTx(t *testing.T) {
 
 		client, bundle := setup(t)
 
-		count, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{
+		count, err := client.InsertManyFastTx(ctx, bundle.tx, []InsertManyParams{
 			{Args: noOpArgs{}, InsertOpts: &InsertOpts{UniqueOpts: UniqueOpts{ByArgs: true}}},
 		})
 		require.EqualError(t, err, "UniqueOpts are not supported for batch inserts")
