@@ -1326,7 +1326,7 @@ type InsertManyParams struct {
 	InsertOpts *InsertOpts
 }
 
-// InsertMany inserts many jobs at once using Postgres' `COPY FROM` mechanism,
+// InsertManyFast inserts many jobs at once using Postgres' `COPY FROM` mechanism,
 // making the operation quite fast and memory efficient. Each job is inserted as
 // an InsertManyParams tuple, which takes job args along with an optional set of
 // insert options, which override insert options provided by an
@@ -1345,12 +1345,12 @@ type InsertManyParams struct {
 // Job uniqueness is not respected when using InsertMany due to unique inserts
 // using an internal transaction and advisory lock that might lead to
 // significant lock contention. Insert unique jobs using Insert instead.
-func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams) (int, error) {
+func (c *Client[TTx]) InsertManyFast(ctx context.Context, params []InsertManyParams) (int, error) {
 	if !c.driver.HasPool() {
 		return 0, errNoDriverDBPool
 	}
 
-	insertParams, err := c.insertManyParams(params)
+	insertParams, err := c.insertManyFastParams(params)
 	if err != nil {
 		return 0, err
 	}
@@ -1362,7 +1362,7 @@ func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams)
 	}
 	defer tx.Rollback(ctx)
 
-	inserted, err := c.insertFastMany(ctx, tx, insertParams)
+	inserted, err := c.insertManyFast(ctx, tx, insertParams)
 	if err != nil {
 		return 0, err
 	}
@@ -1395,17 +1395,17 @@ func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams)
 // This variant lets a caller insert jobs atomically alongside other database
 // changes. An inserted job isn't visible to be worked until the transaction
 // commits, and if the transaction rolls back, so too is the inserted job.
-func (c *Client[TTx]) InsertManyTx(ctx context.Context, tx TTx, params []InsertManyParams) (int, error) {
-	insertParams, err := c.insertManyParams(params)
+func (c *Client[TTx]) InsertManyFastTx(ctx context.Context, tx TTx, params []InsertManyParams) (int, error) {
+	insertParams, err := c.insertManyFastParams(params)
 	if err != nil {
 		return 0, err
 	}
 
 	exec := c.driver.UnwrapExecutor(tx)
-	return c.insertFastMany(ctx, exec, insertParams)
+	return c.insertManyFast(ctx, exec, insertParams)
 }
 
-func (c *Client[TTx]) insertFastMany(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*riverdriver.JobInsertFastParams) (int, error) {
+func (c *Client[TTx]) insertManyFast(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*riverdriver.JobInsertFastParams) (int, error) {
 	inserted, err := tx.JobInsertFastMany(ctx, insertParams)
 	if err != nil {
 		return inserted, err
@@ -1425,7 +1425,7 @@ func (c *Client[TTx]) insertFastMany(ctx context.Context, tx riverdriver.Executo
 
 // Validates input parameters for an a batch insert operation and generates a
 // set of batch insert parameters.
-func (c *Client[TTx]) insertManyParams(params []InsertManyParams) ([]*riverdriver.JobInsertFastParams, error) {
+func (c *Client[TTx]) insertManyFastParams(params []InsertManyParams) ([]*riverdriver.JobInsertFastParams, error) {
 	if len(params) < 1 {
 		return nil, errors.New("no jobs to insert")
 	}

@@ -67,7 +67,7 @@ func Example_batchInsert() {
 		panic(err)
 	}
 
-	count, err := riverClient.InsertMany(ctx, []river.InsertManyParams{
+	count, err := riverClient.InsertManyFast(ctx, []river.InsertManyParams{
 		{Args: BatchInsertArgs{}},
 		{Args: BatchInsertArgs{}},
 		{Args: BatchInsertArgs{}},
