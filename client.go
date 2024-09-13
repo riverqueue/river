@@ -1403,7 +1403,7 @@ func (c *Client[TTx]) insertMany(ctx context.Context, tx riverdriver.ExecutorTx,
 		return nil, err
 	}
 
-	jobRows, err := tx.JobInsertManyReturning(ctx, insertParams)
+	jobRows, err := tx.JobInsertFastMany(ctx, insertParams)
 	if err != nil {
 		return nil, err
 	}
@@ -1537,7 +1537,7 @@ func (c *Client[TTx]) InsertManyFastTx(ctx context.Context, tx TTx, params []Ins
 }
 
 func (c *Client[TTx]) insertManyFast(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*riverdriver.JobInsertFastParams) (int, error) {
-	inserted, err := tx.JobInsertFastMany(ctx, insertParams)
+	inserted, err := tx.JobInsertFastManyNoReturning(ctx, insertParams)
 	if err != nil {
 		return inserted, err
 	}
