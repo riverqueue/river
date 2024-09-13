@@ -67,7 +67,7 @@ func Example_batchInsert() {
 		panic(err)
 	}
 
-	count, err := riverClient.InsertMany(ctx, []river.InsertManyParams{
+	results, err := riverClient.InsertMany(ctx, []river.InsertManyParams{
 		{Args: BatchInsertArgs{}},
 		{Args: BatchInsertArgs{}},
 		{Args: BatchInsertArgs{}},
@@ -77,7 +77,7 @@ func Example_batchInsert() {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("Inserted %d jobs\n", count)
+	fmt.Printf("Inserted %d jobs\n", len(results))
 
 	waitForNJobs(subscribeChan, 5)
 

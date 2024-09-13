@@ -216,8 +216,56 @@ func (e *Executor) JobInsertFast(ctx context.Context, params *riverdriver.JobIns
 	return jobRowFromInternal(job)
 }
 
-func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.JobInsertFastParams) (int, error) {
+func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.JobInsertFastParams) ([]*rivertype.JobRow, error) {
 	insertJobsParams := &dbsqlc.JobInsertFastManyParams{
+		Args:        make([]string, len(params)),
+		Kind:        make([]string, len(params)),
+		MaxAttempts: make([]int16, len(params)),
+		Metadata:    make([]string, len(params)),
+		Priority:    make([]int16, len(params)),
+		Queue:       make([]string, len(params)),
+		ScheduledAt: make([]time.Time, len(params)),
+		State:       make([]string, len(params)),
+		Tags:        make([]string, len(params)),
+	}
+	now := time.Now()
+
+	for i := 0; i < len(params); i++ {
+		params := params[i]
+
+		scheduledAt := now
+		if params.ScheduledAt != nil {
+			scheduledAt = *params.ScheduledAt
+		}
+
+		tags := params.Tags
+		if tags == nil {
+			tags = []string{}
+		}
+
+		defaultObject := "{}"
+
+		insertJobsParams.Args[i] = valutil.ValOrDefault(string(params.EncodedArgs), defaultObject)
+		insertJobsParams.Kind[i] = params.Kind
+		insertJobsParams.MaxAttempts[i] = int16(min(params.MaxAttempts, math.MaxInt16)) //nolint:gosec
+		insertJobsParams.Metadata[i] = valutil.ValOrDefault(string(params.Metadata), defaultObject)
+		insertJobsParams.Priority[i] = int16(min(params.Priority, math.MaxInt16)) //nolint:gosec
+		insertJobsParams.Queue[i] = params.Queue
+		insertJobsParams.ScheduledAt[i] = scheduledAt
+		insertJobsParams.State[i] = string(params.State)
+		insertJobsParams.Tags[i] = strings.Join(tags, ",")
+	}
+
+	items, err := dbsqlc.New().JobInsertFastMany(ctx, e.dbtx, insertJobsParams)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+
+	return mapSliceError(items, jobRowFromInternal)
+}
+
+func (e *Executor) JobInsertFastManyNoReturning(ctx context.Context, params []*riverdriver.JobInsertFastParams) (int, error) {
+	insertJobsParams := &dbsqlc.JobInsertFastManyNoReturningParams{
 		Args:        make([]string, len(params)),
 		Kind:        make([]string, len(params)),
 		MaxAttempts: make([]int16, len(params)),
@@ -243,10 +291,12 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 			tags = []string{}
 		}
 
-		insertJobsParams.Args[i] = valutil.ValOrDefault(string(params.EncodedArgs), "{}")
+		defaultObject := "{}"
+
+		insertJobsParams.Args[i] = valutil.ValOrDefault(string(params.EncodedArgs), defaultObject)
 		insertJobsParams.Kind[i] = params.Kind
 		insertJobsParams.MaxAttempts[i] = int16(min(params.MaxAttempts, math.MaxInt16)) //nolint:gosec
-		insertJobsParams.Metadata[i] = valutil.ValOrDefault(string(params.Metadata), "{}")
+		insertJobsParams.Metadata[i] = valutil.ValOrDefault(string(params.Metadata), defaultObject)
 		insertJobsParams.Priority[i] = int16(min(params.Priority, math.MaxInt16)) //nolint:gosec
 		insertJobsParams.Queue[i] = params.Queue
 		insertJobsParams.ScheduledAt[i] = scheduledAt
@@ -254,7 +304,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 		insertJobsParams.Tags[i] = strings.Join(tags, ",")
 	}
 
-	numInserted, err := dbsqlc.New().JobInsertFastMany(ctx, e.dbtx, insertJobsParams)
+	numInserted, err := dbsqlc.New().JobInsertFastManyNoReturning(ctx, e.dbtx, insertJobsParams)
 	if err != nil {
 		return 0, interpretError(err)
 	}

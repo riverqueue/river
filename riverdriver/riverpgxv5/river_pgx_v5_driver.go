@@ -211,7 +211,55 @@ func (e *Executor) JobInsertFast(ctx context.Context, params *riverdriver.JobIns
 	return jobRowFromInternal(job)
 }
 
-func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.JobInsertFastParams) (int, error) {
+func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.JobInsertFastParams) ([]*rivertype.JobRow, error) {
+	insertJobsParams := &dbsqlc.JobInsertFastManyParams{
+		Args:        make([][]byte, len(params)),
+		Kind:        make([]string, len(params)),
+		MaxAttempts: make([]int16, len(params)),
+		Metadata:    make([][]byte, len(params)),
+		Priority:    make([]int16, len(params)),
+		Queue:       make([]string, len(params)),
+		ScheduledAt: make([]time.Time, len(params)),
+		State:       make([]string, len(params)),
+		Tags:        make([]string, len(params)),
+	}
+	now := time.Now()
+
+	for i := 0; i < len(params); i++ {
+		params := params[i]
+
+		scheduledAt := now
+		if params.ScheduledAt != nil {
+			scheduledAt = *params.ScheduledAt
+		}
+
+		tags := params.Tags
+		if tags == nil {
+			tags = []string{}
+		}
+
+		defaultObject := []byte("{}")
+
+		insertJobsParams.Args[i] = sliceutil.DefaultIfEmpty(params.EncodedArgs, defaultObject)
+		insertJobsParams.Kind[i] = params.Kind
+		insertJobsParams.MaxAttempts[i] = int16(min(params.MaxAttempts, math.MaxInt16)) //nolint:gosec
+		insertJobsParams.Metadata[i] = sliceutil.DefaultIfEmpty(params.Metadata, defaultObject)
+		insertJobsParams.Priority[i] = int16(min(params.Priority, math.MaxInt16)) //nolint:gosec
+		insertJobsParams.Queue[i] = params.Queue
+		insertJobsParams.ScheduledAt[i] = scheduledAt
+		insertJobsParams.State[i] = string(params.State)
+		insertJobsParams.Tags[i] = strings.Join(tags, ",")
+	}
+
+	items, err := dbsqlc.New().JobInsertFastMany(ctx, e.dbtx, insertJobsParams)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+
+	return mapSliceError(items, jobRowFromInternal)
+}
+
+func (e *Executor) JobInsertFastManyNoReturning(ctx context.Context, params []*riverdriver.JobInsertFastParams) (int, error) {
 	insertJobsParams := make([]*dbsqlc.JobInsertFastManyCopyFromParams, len(params))
 	now := time.Now()
 

@@ -16,7 +16,7 @@ import (
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
-	"github.com/riverqueue/river/rivershared/testfactory" //nolint:depguard
+	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
@@ -922,6 +922,83 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		t.Run("AllArgs", func(t *testing.T) {
 			exec, _ := setup(ctx, t)
 
+			now := time.Now().UTC()
+
+			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
+			for i := 0; i < len(insertParams); i++ {
+				insertParams[i] = &riverdriver.JobInsertFastParams{
+					EncodedArgs: []byte(`{"encoded": "args"}`),
+					Kind:        "test_kind",
+					MaxAttempts: rivercommon.MaxAttemptsDefault,
+					Metadata:    []byte(`{"meta": "data"}`),
+					Priority:    rivercommon.PriorityDefault,
+					Queue:       rivercommon.QueueDefault,
+					ScheduledAt: ptrutil.Ptr(now.Add(time.Duration(i) * time.Minute)),
+					State:       rivertype.JobStateAvailable,
+					Tags:        []string{"tag"},
+				}
+			}
+
+			jobRows, err := exec.JobInsertFastMany(ctx, insertParams)
+			require.NoError(t, err)
+			require.Len(t, jobRows, len(insertParams))
+
+			for i, job := range jobRows {
+				require.Equal(t, 0, job.Attempt)
+				require.Nil(t, job.AttemptedAt)
+				require.Empty(t, job.AttemptedBy)
+				require.WithinDuration(t, now, job.CreatedAt, 2*time.Second)
+				require.Equal(t, []byte(`{"encoded": "args"}`), job.EncodedArgs)
+				require.Empty(t, job.Errors)
+				require.Nil(t, job.FinalizedAt)
+				require.Equal(t, "test_kind", job.Kind)
+				require.Equal(t, rivercommon.MaxAttemptsDefault, job.MaxAttempts)
+				require.Equal(t, []byte(`{"meta": "data"}`), job.Metadata)
+				require.Equal(t, rivercommon.PriorityDefault, job.Priority)
+				require.Equal(t, rivercommon.QueueDefault, job.Queue)
+				requireEqualTime(t, now.Add(time.Duration(i)*time.Minute), job.ScheduledAt)
+				require.Equal(t, rivertype.JobStateAvailable, job.State)
+				require.Equal(t, []string{"tag"}, job.Tags)
+			}
+		})
+
+		t.Run("MissingScheduledAtDefaultsToNow", func(t *testing.T) {
+			exec, _ := setup(ctx, t)
+
+			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
+			for i := 0; i < len(insertParams); i++ {
+				insertParams[i] = &riverdriver.JobInsertFastParams{
+					EncodedArgs: []byte(`{"encoded": "args"}`),
+					Kind:        "test_kind",
+					MaxAttempts: rivercommon.MaxAttemptsDefault,
+					Metadata:    []byte(`{"meta": "data"}`),
+					Priority:    rivercommon.PriorityDefault,
+					Queue:       rivercommon.QueueDefault,
+					ScheduledAt: nil, // explicit nil
+					State:       rivertype.JobStateAvailable,
+					Tags:        []string{"tag"},
+				}
+			}
+
+			results, err := exec.JobInsertFastMany(ctx, insertParams)
+			require.NoError(t, err)
+			require.Len(t, results, len(insertParams))
+
+			jobsAfter, err := exec.JobGetByKindMany(ctx, []string{"test_kind"})
+			require.NoError(t, err)
+			require.Len(t, jobsAfter, len(insertParams))
+			for _, job := range jobsAfter {
+				require.WithinDuration(t, time.Now().UTC(), job.ScheduledAt, 2*time.Second)
+			}
+		})
+	})
+
+	t.Run("JobInsertFastManyNoReturning", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("AllArgs", func(t *testing.T) {
+			exec, _ := setup(ctx, t)
+
 			// This test needs to use a time from before the transaction begins, otherwise
 			// the newly-scheduled jobs won't yet show as available because their
 			// scheduled_at (which gets a default value from time.Now() in code) will be
@@ -944,7 +1021,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				insertParams[i].ScheduledAt = &now
 			}
 
-			count, err := exec.JobInsertFastMany(ctx, insertParams)
+			count, err := exec.JobInsertFastManyNoReturning(ctx, insertParams)
 			require.NoError(t, err)
 			require.Len(t, insertParams, count)
 
@@ -987,7 +1064,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				}
 			}
 
-			count, err := exec.JobInsertFastMany(ctx, insertParams)
+			count, err := exec.JobInsertFastManyNoReturning(ctx, insertParams)
 			require.NoError(t, err)
 			require.Len(t, insertParams, count)
 

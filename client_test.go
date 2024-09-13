@@ -1568,7 +1568,7 @@ func Test_Client_InsertTx(t *testing.T) {
 	})
 }
 
-func Test_Client_InsertMany(t *testing.T) {
+func Test_Client_InsertManyFast(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -1592,7 +1592,7 @@ func Test_Client_InsertMany(t *testing.T) {
 
 		client, _ := setup(t)
 
-		count, err := client.InsertMany(ctx, []InsertManyParams{
+		count, err := client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: noOpArgs{}, InsertOpts: &InsertOpts{Queue: "foo", Priority: 2}},
 			{Args: noOpArgs{}},
 		})
@@ -1627,7 +1627,7 @@ func Test_Client_InsertMany(t *testing.T) {
 		startClient(ctx, t, client)
 		riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
 
-		count, err := client.InsertMany(ctx, []InsertManyParams{
+		count, err := client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: callbackArgs{}},
 			{Args: callbackArgs{}},
 		})
@@ -1643,7 +1643,7 @@ func Test_Client_InsertMany(t *testing.T) {
 		//
 		// Note: we specifically use a different queue to ensure that the notify
 		// limiter is immediately to fire on this queue.
-		count, err = client.InsertMany(ctx, []InsertManyParams{
+		count, err = client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: callbackArgs{}, InsertOpts: &InsertOpts{Queue: "another_queue"}},
 		})
 		require.NoError(t, err)
@@ -1675,7 +1675,7 @@ func Test_Client_InsertMany(t *testing.T) {
 		startClient(ctx, t, client)
 		riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
 
-		count, err := client.InsertMany(ctx, []InsertManyParams{
+		count, err := client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: noOpArgs{}, InsertOpts: &InsertOpts{Queue: "a", ScheduledAt: time.Now().Add(1 * time.Hour)}},
 			{Args: noOpArgs{}, InsertOpts: &InsertOpts{Queue: "b"}},
 		})
@@ -1695,7 +1695,7 @@ func Test_Client_InsertMany(t *testing.T) {
 
 		client, _ := setup(t)
 
-		count, err := client.InsertMany(ctx, []InsertManyParams{
+		count, err := client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: &noOpArgs{}, InsertOpts: &InsertOpts{ScheduledAt: time.Time{}}},
 		})
 		require.NoError(t, err)
@@ -1713,7 +1713,7 @@ func Test_Client_InsertMany(t *testing.T) {
 
 		client, _ := setup(t)
 
-		count, err := client.InsertMany(ctx, []InsertManyParams{
+		count, err := client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: &noOpArgs{}, InsertOpts: &InsertOpts{Queue: "invalid*queue"}},
 		})
 		require.ErrorContains(t, err, "queue name is invalid")
@@ -1730,7 +1730,7 @@ func Test_Client_InsertMany(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		count, err := client.InsertMany(ctx, []InsertManyParams{
+		count, err := client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: noOpArgs{}},
 		})
 		require.ErrorIs(t, err, errNoDriverDBPool)
@@ -1742,7 +1742,7 @@ func Test_Client_InsertMany(t *testing.T) {
 
 		client, _ := setup(t)
 
-		count, err := client.InsertMany(ctx, []InsertManyParams{})
+		count, err := client.InsertManyFast(ctx, []InsertManyParams{})
 		require.EqualError(t, err, "no jobs to insert")
 		require.Equal(t, 0, count)
 	})
@@ -1752,7 +1752,7 @@ func Test_Client_InsertMany(t *testing.T) {
 
 		client, _ := setup(t)
 
-		count, err := client.InsertMany(ctx, []InsertManyParams{
+		count, err := client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: unregisteredJobArgs{}},
 		})
 		var unknownJobKindErr *UnknownJobKindError
@@ -1768,7 +1768,7 @@ func Test_Client_InsertMany(t *testing.T) {
 
 		client.config.Workers = nil
 
-		_, err := client.InsertMany(ctx, []InsertManyParams{
+		_, err := client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: unregisteredJobArgs{}},
 		})
 		require.NoError(t, err)
@@ -1779,11 +1779,424 @@ func Test_Client_InsertMany(t *testing.T) {
 
 		client, _ := setup(t)
 
-		count, err := client.InsertMany(ctx, []InsertManyParams{
+		count, err := client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: noOpArgs{}, InsertOpts: &InsertOpts{UniqueOpts: UniqueOpts{ByArgs: true}}},
 		})
 		require.EqualError(t, err, "UniqueOpts are not supported for batch inserts")
 		require.Equal(t, 0, count)
+	})
+}
+
+func Test_Client_InsertManyFastTx(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		tx pgx.Tx
+	}
+
+	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+		t.Helper()
+
+		dbPool := riverinternaltest.TestDB(ctx, t)
+		config := newTestConfig(t, nil)
+		client := newTestClient(t, dbPool, config)
+
+		tx, err := dbPool.Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { tx.Rollback(ctx) })
+
+		return client, &testBundle{
+			tx: tx,
+		}
+	}
+
+	t.Run("SucceedsWithMultipleJobs", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		count, err := client.InsertManyFastTx(ctx, bundle.tx, []InsertManyParams{
+			{Args: noOpArgs{}, InsertOpts: &InsertOpts{Queue: "foo", Priority: 2}},
+			{Args: noOpArgs{}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 2, count)
+
+		jobs, err := client.driver.UnwrapExecutor(bundle.tx).JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
+		require.NoError(t, err)
+		require.Len(t, jobs, 2, "Expected to find exactly two jobs of kind: "+(noOpArgs{}).Kind())
+
+		require.NoError(t, bundle.tx.Commit(ctx))
+
+		// Ensure the jobs are visible outside the transaction:
+		jobs, err = client.driver.GetExecutor().JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
+		require.NoError(t, err)
+		require.Len(t, jobs, 2, "Expected to find exactly two jobs of kind: "+(noOpArgs{}).Kind())
+	})
+
+	t.Run("SetsScheduledAtToNowByDefault", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		_, err := client.InsertManyFastTx(ctx, bundle.tx, []InsertManyParams{{noOpArgs{}, nil}})
+		require.NoError(t, err)
+
+		insertedJobs, err := client.driver.UnwrapExecutor(bundle.tx).JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
+		require.NoError(t, err)
+		require.Len(t, insertedJobs, 1)
+		require.Equal(t, rivertype.JobStateAvailable, insertedJobs[0].State)
+		require.WithinDuration(t, time.Now(), insertedJobs[0].ScheduledAt, 2*time.Second)
+	})
+
+	t.Run("SupportsScheduledJobs", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		startClient(ctx, t, client)
+
+		count, err := client.InsertManyFastTx(ctx, bundle.tx, []InsertManyParams{{noOpArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(time.Minute)}}})
+		require.NoError(t, err)
+		require.Equal(t, 1, count)
+
+		insertedJobs, err := client.driver.UnwrapExecutor(bundle.tx).JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
+		require.NoError(t, err)
+		require.Len(t, insertedJobs, 1)
+		require.Equal(t, rivertype.JobStateScheduled, insertedJobs[0].State)
+		require.WithinDuration(t, time.Now().Add(time.Minute), insertedJobs[0].ScheduledAt, 2*time.Second)
+	})
+
+	// A client's allowed to send nil to their driver so they can, for example,
+	// easily use test transactions in their test suite.
+	t.Run("WithDriverWithoutPool", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		client, err := NewClient(riverpgxv5.New(nil), &Config{
+			Logger: riversharedtest.Logger(t),
+		})
+		require.NoError(t, err)
+
+		count, err := client.InsertManyFastTx(ctx, bundle.tx, []InsertManyParams{
+			{Args: noOpArgs{}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 1, count)
+	})
+
+	t.Run("ErrorsWithZeroJobs", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		count, err := client.InsertManyFastTx(ctx, bundle.tx, []InsertManyParams{})
+		require.EqualError(t, err, "no jobs to insert")
+		require.Equal(t, 0, count)
+	})
+
+	t.Run("ErrorsOnUnknownJobKindWithWorkers", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		count, err := client.InsertManyFastTx(ctx, bundle.tx, []InsertManyParams{
+			{Args: unregisteredJobArgs{}},
+		})
+		var unknownJobKindErr *UnknownJobKindError
+		require.ErrorAs(t, err, &unknownJobKindErr)
+		require.Equal(t, (&unregisteredJobArgs{}).Kind(), unknownJobKindErr.Kind)
+		require.Equal(t, 0, count)
+	})
+
+	t.Run("AllowsUnknownJobKindWithoutWorkers", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		client.config.Workers = nil
+
+		_, err := client.InsertManyFastTx(ctx, bundle.tx, []InsertManyParams{
+			{Args: unregisteredJobArgs{}},
+		})
+		require.NoError(t, err)
+	})
+
+	t.Run("ErrorsOnInsertOptsUniqueOpts", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		count, err := client.InsertManyFastTx(ctx, bundle.tx, []InsertManyParams{
+			{Args: noOpArgs{}, InsertOpts: &InsertOpts{UniqueOpts: UniqueOpts{ByArgs: true}}},
+		})
+		require.EqualError(t, err, "UniqueOpts are not supported for batch inserts")
+		require.Equal(t, 0, count)
+	})
+}
+
+func Test_Client_InsertMany(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		dbPool *pgxpool.Pool
+	}
+
+	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+		t.Helper()
+
+		dbPool := riverinternaltest.TestDB(ctx, t)
+		config := newTestConfig(t, nil)
+		client := newTestClient(t, dbPool, config)
+
+		return client, &testBundle{dbPool: dbPool}
+	}
+
+	t.Run("SucceedsWithMultipleJobs", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		now := time.Now().UTC()
+
+		results, err := client.InsertMany(ctx, []InsertManyParams{
+			{Args: noOpArgs{Name: "Foo"}, InsertOpts: &InsertOpts{Metadata: []byte(`{"a": "b"}`), Queue: "foo", Priority: 2}},
+			{Args: noOpArgs{}, InsertOpts: &InsertOpts{ScheduledAt: now.Add(time.Minute)}},
+		})
+		require.NoError(t, err)
+		require.Len(t, results, 2)
+
+		require.False(t, results[0].UniqueSkippedAsDuplicate)
+		require.Equal(t, 0, results[0].Job.Attempt)
+		require.Nil(t, results[0].Job.AttemptedAt)
+		require.WithinDuration(t, now, results[0].Job.CreatedAt, 2*time.Second)
+		require.Empty(t, results[0].Job.AttemptedBy)
+		require.Positive(t, results[0].Job.ID)
+		require.JSONEq(t, `{"name": "Foo"}`, string(results[0].Job.EncodedArgs))
+		require.Empty(t, results[0].Job.Errors)
+		require.Nil(t, results[0].Job.FinalizedAt)
+		require.Equal(t, "noOp", results[0].Job.Kind)
+		require.Equal(t, 25, results[0].Job.MaxAttempts)
+		require.JSONEq(t, `{"a": "b"}`, string(results[0].Job.Metadata))
+		require.Equal(t, 2, results[0].Job.Priority)
+		require.Equal(t, "foo", results[0].Job.Queue)
+		require.WithinDuration(t, now, results[0].Job.ScheduledAt, 2*time.Second)
+		require.Equal(t, rivertype.JobStateAvailable, results[0].Job.State)
+		require.Empty(t, results[0].Job.Tags)
+		require.Empty(t, results[0].Job.UniqueKey)
+
+		require.False(t, results[1].UniqueSkippedAsDuplicate)
+		require.Equal(t, 0, results[1].Job.Attempt)
+		require.Nil(t, results[1].Job.AttemptedAt)
+		require.WithinDuration(t, now, results[1].Job.CreatedAt, 2*time.Second)
+		require.Empty(t, results[1].Job.AttemptedBy)
+		require.Positive(t, results[1].Job.ID)
+		require.JSONEq(t, `{"name": ""}`, string(results[1].Job.EncodedArgs))
+		require.Empty(t, results[1].Job.Errors)
+		require.Nil(t, results[1].Job.FinalizedAt)
+		require.Equal(t, "noOp", results[1].Job.Kind)
+		require.Equal(t, 25, results[1].Job.MaxAttempts)
+		require.JSONEq(t, `{}`, string(results[1].Job.Metadata))
+		require.Equal(t, 1, results[1].Job.Priority)
+		require.Equal(t, "default", results[1].Job.Queue)
+		require.WithinDuration(t, now.Add(time.Minute), results[1].Job.ScheduledAt, time.Millisecond)
+		require.Equal(t, rivertype.JobStateScheduled, results[1].Job.State)
+		require.Empty(t, results[1].Job.Tags)
+		require.Empty(t, results[1].Job.UniqueKey)
+
+		require.NotEqual(t, results[0].Job.ID, results[1].Job.ID)
+
+		jobs, err := client.driver.GetExecutor().JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
+		require.NoError(t, err)
+		require.Len(t, jobs, 2, "Expected to find exactly two jobs of kind: "+(noOpArgs{}).Kind())
+	})
+
+	t.Run("TriggersImmediateWork", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		_, bundle := setup(t)
+
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		t.Cleanup(cancel)
+
+		doneCh := make(chan struct{})
+		close(doneCh) // don't need to block any jobs from completing
+		startedCh := make(chan int64)
+
+		config := newTestConfig(t, makeAwaitCallback(startedCh, doneCh))
+		config.FetchCooldown = 20 * time.Millisecond
+		config.FetchPollInterval = 20 * time.Second // essentially disable polling
+		config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: 2}, "another_queue": {MaxWorkers: 1}}
+
+		client := newTestClient(t, bundle.dbPool, config)
+
+		startClient(ctx, t, client)
+		riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
+
+		results, err := client.InsertMany(ctx, []InsertManyParams{
+			{Args: callbackArgs{}},
+			{Args: callbackArgs{}},
+		})
+		require.NoError(t, err)
+		require.Len(t, results, 2)
+
+		// Wait for the client to be ready by waiting for a job to be executed:
+		riversharedtest.WaitOrTimeoutN(t, startedCh, 2)
+
+		// Now that we've run one job, we shouldn't take longer than the cooldown to
+		// fetch another after insertion. LISTEN/NOTIFY should ensure we find out
+		// about the inserted job much faster than the poll interval.
+		//
+		// Note: we specifically use a different queue to ensure that the notify
+		// limiter is immediately to fire on this queue.
+		results, err = client.InsertMany(ctx, []InsertManyParams{
+			{Args: callbackArgs{}, InsertOpts: &InsertOpts{Queue: "another_queue"}},
+		})
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		select {
+		case <-startedCh:
+		// As long as this is meaningfully shorter than the poll interval, we can be
+		// sure the re-fetch came from listen/notify.
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for another_queue job to start")
+		}
+
+		require.NoError(t, client.Stop(ctx))
+	})
+
+	t.Run("DoesNotTriggerInsertNotificationForNonAvailableJob", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+
+		_, bundle := setup(t)
+
+		config := newTestConfig(t, nil)
+		config.FetchCooldown = 5 * time.Second
+		config.FetchPollInterval = 5 * time.Second
+		client := newTestClient(t, bundle.dbPool, config)
+
+		startClient(ctx, t, client)
+		riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
+
+		results, err := client.InsertMany(ctx, []InsertManyParams{
+			{Args: noOpArgs{}, InsertOpts: &InsertOpts{Queue: "a", ScheduledAt: time.Now().Add(1 * time.Hour)}},
+			{Args: noOpArgs{}, InsertOpts: &InsertOpts{Queue: "b"}},
+		})
+		require.NoError(t, err)
+		require.Len(t, results, 2)
+
+		// Queue `a` should be "due" to be triggered because it wasn't triggered above.
+		require.True(t, client.insertNotifyLimiter.ShouldTrigger("a"))
+		// Queue `b` should *not* be "due" to be triggered because it was triggered above.
+		require.False(t, client.insertNotifyLimiter.ShouldTrigger("b"))
+
+		require.NoError(t, client.Stop(ctx))
+	})
+
+	t.Run("WithInsertOptsScheduledAtZeroTime", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		results, err := client.InsertMany(ctx, []InsertManyParams{
+			{Args: &noOpArgs{}, InsertOpts: &InsertOpts{ScheduledAt: time.Time{}}},
+		})
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		jobs, err := client.driver.GetExecutor().JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
+		require.NoError(t, err)
+		require.Len(t, jobs, 1, "Expected to find exactly one job of kind: "+(noOpArgs{}).Kind())
+		jobRow := jobs[0]
+		require.WithinDuration(t, time.Now(), jobRow.ScheduledAt, 2*time.Second)
+	})
+
+	t.Run("ErrorsOnInvalidQueueName", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		results, err := client.InsertMany(ctx, []InsertManyParams{
+			{Args: &noOpArgs{}, InsertOpts: &InsertOpts{Queue: "invalid*queue"}},
+		})
+		require.ErrorContains(t, err, "queue name is invalid")
+		require.Nil(t, results)
+	})
+
+	t.Run("ErrorsOnDriverWithoutPool", func(t *testing.T) {
+		t.Parallel()
+
+		_, _ = setup(t)
+
+		client, err := NewClient(riverpgxv5.New(nil), &Config{
+			Logger: riversharedtest.Logger(t),
+		})
+		require.NoError(t, err)
+
+		results, err := client.InsertMany(ctx, []InsertManyParams{
+			{Args: noOpArgs{}},
+		})
+		require.ErrorIs(t, err, errNoDriverDBPool)
+		require.Nil(t, results)
+	})
+
+	t.Run("ErrorsWithZeroJobs", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		results, err := client.InsertMany(ctx, []InsertManyParams{})
+		require.EqualError(t, err, "no jobs to insert")
+		require.Nil(t, results)
+	})
+
+	t.Run("ErrorsOnUnknownJobKindWithWorkers", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		results, err := client.InsertMany(ctx, []InsertManyParams{
+			{Args: unregisteredJobArgs{}},
+		})
+		var unknownJobKindErr *UnknownJobKindError
+		require.ErrorAs(t, err, &unknownJobKindErr)
+		require.Equal(t, (&unregisteredJobArgs{}).Kind(), unknownJobKindErr.Kind)
+		require.Nil(t, results)
+	})
+
+	t.Run("AllowsUnknownJobKindWithoutWorkers", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		client.config.Workers = nil
+
+		results, err := client.InsertMany(ctx, []InsertManyParams{
+			{Args: unregisteredJobArgs{}},
+		})
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+	})
+
+	t.Run("ErrorsOnInsertOptsUniqueOpts", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		results, err := client.InsertMany(ctx, []InsertManyParams{
+			{Args: noOpArgs{}, InsertOpts: &InsertOpts{UniqueOpts: UniqueOpts{ByArgs: true}}},
+		})
+		require.EqualError(t, err, "UniqueOpts are not supported for batch inserts")
+		require.Empty(t, results)
 	})
 }
 
@@ -1817,21 +2230,56 @@ func Test_Client_InsertManyTx(t *testing.T) {
 
 		client, bundle := setup(t)
 
-		count, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{
-			{Args: noOpArgs{}, InsertOpts: &InsertOpts{Queue: "foo", Priority: 2}},
-			{Args: noOpArgs{}},
+		now := time.Now().UTC()
+
+		results, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{
+			{Args: noOpArgs{Name: "Foo"}, InsertOpts: &InsertOpts{Metadata: []byte(`{"a": "b"}`), Queue: "foo", Priority: 2}},
+			{Args: noOpArgs{}, InsertOpts: &InsertOpts{ScheduledAt: now.Add(time.Minute)}},
 		})
 		require.NoError(t, err)
-		require.Equal(t, 2, count)
+		require.Len(t, results, 2)
+
+		require.False(t, results[0].UniqueSkippedAsDuplicate)
+		require.Equal(t, 0, results[0].Job.Attempt)
+		require.Nil(t, results[0].Job.AttemptedAt)
+		require.WithinDuration(t, now, results[0].Job.CreatedAt, 2*time.Second)
+		require.Empty(t, results[0].Job.AttemptedBy)
+		require.Positive(t, results[0].Job.ID)
+		require.JSONEq(t, `{"name": "Foo"}`, string(results[0].Job.EncodedArgs))
+		require.Empty(t, results[0].Job.Errors)
+		require.Nil(t, results[0].Job.FinalizedAt)
+		require.Equal(t, "noOp", results[0].Job.Kind)
+		require.Equal(t, 25, results[0].Job.MaxAttempts)
+		require.JSONEq(t, `{"a": "b"}`, string(results[0].Job.Metadata))
+		require.Equal(t, 2, results[0].Job.Priority)
+		require.Equal(t, "foo", results[0].Job.Queue)
+		require.WithinDuration(t, now, results[0].Job.ScheduledAt, 2*time.Second)
+		require.Equal(t, rivertype.JobStateAvailable, results[0].Job.State)
+		require.Empty(t, results[0].Job.Tags)
+		require.Empty(t, results[0].Job.UniqueKey)
+
+		require.False(t, results[1].UniqueSkippedAsDuplicate)
+		require.Equal(t, 0, results[1].Job.Attempt)
+		require.Nil(t, results[1].Job.AttemptedAt)
+		require.WithinDuration(t, now, results[1].Job.CreatedAt, 2*time.Second)
+		require.Empty(t, results[1].Job.AttemptedBy)
+		require.Positive(t, results[1].Job.ID)
+		require.JSONEq(t, `{"name": ""}`, string(results[1].Job.EncodedArgs))
+		require.Empty(t, results[1].Job.Errors)
+		require.Nil(t, results[1].Job.FinalizedAt)
+		require.Equal(t, "noOp", results[1].Job.Kind)
+		require.Equal(t, 25, results[1].Job.MaxAttempts)
+		require.JSONEq(t, `{}`, string(results[1].Job.Metadata))
+		require.Equal(t, 1, results[1].Job.Priority)
+		require.Equal(t, "default", results[1].Job.Queue)
+		require.WithinDuration(t, now.Add(time.Minute), results[1].Job.ScheduledAt, time.Millisecond)
+		require.Equal(t, rivertype.JobStateScheduled, results[1].Job.State)
+		require.Empty(t, results[1].Job.Tags)
+		require.Empty(t, results[1].Job.UniqueKey)
+
+		require.NotEqual(t, results[0].Job.ID, results[1].Job.ID)
 
 		jobs, err := client.driver.UnwrapExecutor(bundle.tx).JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
-		require.NoError(t, err)
-		require.Len(t, jobs, 2, "Expected to find exactly two jobs of kind: "+(noOpArgs{}).Kind())
-
-		require.NoError(t, bundle.tx.Commit(ctx))
-
-		// Ensure the jobs are visible outside the transaction:
-		jobs, err = client.driver.GetExecutor().JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
 		require.NoError(t, err)
 		require.Len(t, jobs, 2, "Expected to find exactly two jobs of kind: "+(noOpArgs{}).Kind())
 	})
@@ -1841,8 +2289,12 @@ func Test_Client_InsertManyTx(t *testing.T) {
 
 		client, bundle := setup(t)
 
-		_, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{{noOpArgs{}, nil}})
+		results, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{{noOpArgs{}, nil}})
 		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		require.Equal(t, rivertype.JobStateAvailable, results[0].Job.State)
+		require.WithinDuration(t, time.Now(), results[0].Job.ScheduledAt, 2*time.Second)
 
 		insertedJobs, err := client.driver.UnwrapExecutor(bundle.tx).JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
 		require.NoError(t, err)
@@ -1858,15 +2310,12 @@ func Test_Client_InsertManyTx(t *testing.T) {
 
 		startClient(ctx, t, client)
 
-		count, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{{noOpArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(time.Minute)}}})
+		results, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{{noOpArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(time.Minute)}}})
 		require.NoError(t, err)
-		require.Equal(t, 1, count)
+		require.Len(t, results, 1)
 
-		insertedJobs, err := client.driver.UnwrapExecutor(bundle.tx).JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
-		require.NoError(t, err)
-		require.Len(t, insertedJobs, 1)
-		require.Equal(t, rivertype.JobStateScheduled, insertedJobs[0].State)
-		require.WithinDuration(t, time.Now().Add(time.Minute), insertedJobs[0].ScheduledAt, 2*time.Second)
+		require.Equal(t, rivertype.JobStateScheduled, results[0].Job.State)
+		require.WithinDuration(t, time.Now().Add(time.Minute), results[0].Job.ScheduledAt, 2*time.Second)
 	})
 
 	// A client's allowed to send nil to their driver so they can, for example,
@@ -1881,11 +2330,11 @@ func Test_Client_InsertManyTx(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		count, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{
+		results, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{
 			{Args: noOpArgs{}},
 		})
 		require.NoError(t, err)
-		require.Equal(t, 1, count)
+		require.Len(t, results, 1)
 	})
 
 	t.Run("ErrorsWithZeroJobs", func(t *testing.T) {
@@ -1893,9 +2342,9 @@ func Test_Client_InsertManyTx(t *testing.T) {
 
 		client, bundle := setup(t)
 
-		count, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{})
+		results, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{})
 		require.EqualError(t, err, "no jobs to insert")
-		require.Equal(t, 0, count)
+		require.Nil(t, results)
 	})
 
 	t.Run("ErrorsOnUnknownJobKindWithWorkers", func(t *testing.T) {
@@ -1903,13 +2352,13 @@ func Test_Client_InsertManyTx(t *testing.T) {
 
 		client, bundle := setup(t)
 
-		count, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{
+		results, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{
 			{Args: unregisteredJobArgs{}},
 		})
 		var unknownJobKindErr *UnknownJobKindError
 		require.ErrorAs(t, err, &unknownJobKindErr)
 		require.Equal(t, (&unregisteredJobArgs{}).Kind(), unknownJobKindErr.Kind)
-		require.Equal(t, 0, count)
+		require.Nil(t, results)
 	})
 
 	t.Run("AllowsUnknownJobKindWithoutWorkers", func(t *testing.T) {
@@ -1919,10 +2368,11 @@ func Test_Client_InsertManyTx(t *testing.T) {
 
 		client.config.Workers = nil
 
-		_, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{
+		results, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{
 			{Args: unregisteredJobArgs{}},
 		})
 		require.NoError(t, err)
+		require.Len(t, results, 1)
 	})
 
 	t.Run("ErrorsOnInsertOptsUniqueOpts", func(t *testing.T) {
@@ -1930,11 +2380,11 @@ func Test_Client_InsertManyTx(t *testing.T) {
 
 		client, bundle := setup(t)
 
-		count, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{
+		results, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{
 			{Args: noOpArgs{}, InsertOpts: &InsertOpts{UniqueOpts: UniqueOpts{ByArgs: true}}},
 		})
 		require.EqualError(t, err, "UniqueOpts are not supported for batch inserts")
-		require.Equal(t, 0, count)
+		require.Empty(t, results)
 	})
 }
 

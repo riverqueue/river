@@ -578,7 +578,96 @@ func (q *Queries) JobInsertFast(ctx context.Context, db DBTX, arg *JobInsertFast
 	return &i, err
 }
 
-const jobInsertFastMany = `-- name: JobInsertFastMany :execrows
+const jobInsertFastMany = `-- name: JobInsertFastMany :many
+INSERT INTO river_job(
+    args,
+    kind,
+    max_attempts,
+    metadata,
+    priority,
+    queue,
+    scheduled_at,
+    state,
+    tags
+) SELECT
+    unnest($1::jsonb[]),
+    unnest($2::text[]),
+    unnest($3::smallint[]),
+    unnest($4::jsonb[]),
+    unnest($5::smallint[]),
+    unnest($6::text[]),
+    unnest($7::timestamptz[]),
+    -- To avoid requiring pgx users to register the OID of the river_job_state[]
+    -- type, we cast the array to text[] and then to river_job_state.
+    unnest($8::text[])::river_job_state,
+    -- Unnest on a multi-dimensional array will fully flatten the array, so we
+    -- encode the tag list as a comma-separated string and split it in the
+    -- query.
+    string_to_array(unnest($9::text[]), ',')
+RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key
+`
+
+type JobInsertFastManyParams struct {
+	Args        [][]byte
+	Kind        []string
+	MaxAttempts []int16
+	Metadata    [][]byte
+	Priority    []int16
+	Queue       []string
+	ScheduledAt []time.Time
+	State       []string
+	Tags        []string
+}
+
+func (q *Queries) JobInsertFastMany(ctx context.Context, db DBTX, arg *JobInsertFastManyParams) ([]*RiverJob, error) {
+	rows, err := db.Query(ctx, jobInsertFastMany,
+		arg.Args,
+		arg.Kind,
+		arg.MaxAttempts,
+		arg.Metadata,
+		arg.Priority,
+		arg.Queue,
+		arg.ScheduledAt,
+		arg.State,
+		arg.Tags,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverJob
+	for rows.Next() {
+		var i RiverJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Args,
+			&i.Attempt,
+			&i.AttemptedAt,
+			&i.AttemptedBy,
+			&i.CreatedAt,
+			&i.Errors,
+			&i.FinalizedAt,
+			&i.Kind,
+			&i.MaxAttempts,
+			&i.Metadata,
+			&i.Priority,
+			&i.Queue,
+			&i.State,
+			&i.ScheduledAt,
+			&i.Tags,
+			&i.UniqueKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const jobInsertFastManyNoReturning = `-- name: JobInsertFastManyNoReturning :execrows
 INSERT INTO river_job(
     args,
     kind,
@@ -606,7 +695,7 @@ INSERT INTO river_job(
     string_to_array(unnest($9::text[]), ',')
 `
 
-type JobInsertFastManyParams struct {
+type JobInsertFastManyNoReturningParams struct {
 	Args        [][]byte
 	Kind        []string
 	MaxAttempts []int16
@@ -618,8 +707,8 @@ type JobInsertFastManyParams struct {
 	Tags        []string
 }
 
-func (q *Queries) JobInsertFastMany(ctx context.Context, db DBTX, arg *JobInsertFastManyParams) (int64, error) {
-	result, err := db.Exec(ctx, jobInsertFastMany,
+func (q *Queries) JobInsertFastManyNoReturning(ctx context.Context, db DBTX, arg *JobInsertFastManyNoReturningParams) (int64, error) {
+	result, err := db.Exec(ctx, jobInsertFastManyNoReturning,
 		arg.Args,
 		arg.Kind,
 		arg.MaxAttempts,
