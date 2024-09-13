@@ -52,3 +52,24 @@ func Map[T any, R any](collection []T, mapFunc func(T) R) []R {
 
 	return result
 }
+
+// MapError manipulates a slice and transforms it to a slice of another
+// type, returning the first error that occurred invoking the map function, if
+// there was one.
+func MapError[T any, R any](collection []T, mapFunc func(T) (R, error)) ([]R, error) {
+	if collection == nil {
+		return nil, nil
+	}
+
+	result := make([]R, len(collection))
+
+	for i, item := range collection {
+		var err error
+		result[i], err = mapFunc(item)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return result, nil
+}

@@ -219,7 +219,22 @@ type AttemptError struct {
 	Trace string `json:"trace"`
 }
 
+// JobArgs is an interface that represents the arguments for a job of type T.
+// These arguments are serialized into JSON and stored in the database.
+//
+// The struct is serialized using `encoding/json`. All exported fields are
+// serialized, unless skipped with a struct field tag.
+type JobArgs interface {
+	// Kind is a string that uniquely identifies the type of job. This must be
+	// provided on your job arguments struct.
+	Kind() string
+}
+
 type JobInsertParams struct {
+	// Args are the job's raw arguments. These are serialized into JSON in
+	// EncodedArgs prior to being passed to job middleware, but the original args
+	// are kept available for interface assertions.
+	Args        JobArgs
 	CreatedAt   *time.Time
 	EncodedArgs []byte
 	Kind        string
@@ -240,23 +255,12 @@ type JobInsertParams struct {
 // compatibility in case new functions are added to this interface.
 type JobMiddleware interface {
 	// Insert is invoked around an insert operation. Implementations must always
-	// include a call to doInner to call down the middleware stack and perfom
-	// the insertion, and may run custom code before and after.
+	// include a call to doInner to call down the middleware stack and perfom the
+	// batch insertion, and may run custom code before and after.
 	//
 	// Returning an error from this function will fail the overarching insert
 	// operation, even if the inner insertion originally succeeded.
-	//
-	// Insert is *not* invoked on batch insertions using Client.InsertMany or
-	// Client.InsertManyTx. InsertMany should be implemented separately.
-	Insert(ctx context.Context, params *JobInsertParams, doInner func(ctx context.Context) (*JobInsertResult, error)) (*JobInsertResult, error)
-
-	// InsertMany is invoked around a batch insert operation. Implementations
-	// must always include a call to doInner to call down the middleware stack
-	// and perfom the batch insertion, and may run custom code before and after.
-	//
-	// Returning an error from this function will fail the overarching insert
-	// operation, even if the inner insertion originally succeeded.
-	InsertMany(ctx context.Context, manyParams []*JobInsertParams, doInner func(ctx context.Context) (int, error)) (int, error)
+	Insert(ctx context.Context, params []*JobInsertParams, doInner func(ctx context.Context) ([]*JobInsertResult, error)) ([]*JobInsertResult, error)
 
 	// Work is invoked around a job's JSON args being unmarshaled and the job
 	// worked. Implementations must always include a call to doInner to call

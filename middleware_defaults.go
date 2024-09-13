@@ -12,11 +12,7 @@ import (
 // existing code isn't unexpectedly broken during an upgrade.
 type JobMiddlewareDefaults struct{}
 
-func (l *JobMiddlewareDefaults) Insert(ctx context.Context, params *rivertype.JobInsertParams, doInner func(ctx context.Context) (*rivertype.JobInsertResult, error)) (*rivertype.JobInsertResult, error) {
-	return doInner(ctx)
-}
-
-func (l *JobMiddlewareDefaults) InsertMany(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(ctx context.Context) (int, error)) (int, error) {
+func (l *JobMiddlewareDefaults) Insert(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(ctx context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
 	return doInner(ctx)
 }
 

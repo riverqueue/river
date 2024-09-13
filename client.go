@@ -1218,6 +1218,7 @@ func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, conf
 	}
 
 	insertParams := &rivertype.JobInsertParams{
+		Args:        args,
 		CreatedAt:   createdAt,
 		EncodedArgs: encodedArgs,
 		Kind:        args.Kind(),
@@ -1300,7 +1301,7 @@ func (c *Client[TTx]) insert(ctx context.Context, exec riverdriver.Executor, arg
 		return nil, err
 	}
 
-	doInner := func(ctx context.Context) (*rivertype.JobInsertResult, error) {
+	doInner := func(ctx context.Context) ([]*rivertype.JobInsertResult, error) {
 		tx, err := exec.Begin(ctx)
 		if err != nil {
 			return nil, err
@@ -1319,20 +1320,25 @@ func (c *Client[TTx]) insert(ctx context.Context, exec riverdriver.Executor, arg
 			return nil, err
 		}
 
-		return jobInsertRes, nil
+		return []*rivertype.JobInsertResult{jobInsertRes}, nil
 	}
 
 	if len(c.config.JobMiddleware) > 0 {
 		// Wrap middlewares in reverse order so the one defined first is wrapped
 		// as the outermost function and is first to receive the operation.
 		for i := len(c.config.JobMiddleware) - 1; i >= 0; i-- {
-			doInner = func(ctx context.Context) (*rivertype.JobInsertResult, error) {
-				return c.config.JobMiddleware[i].Insert(ctx, params, doInner)
+			doInner = func(ctx context.Context) ([]*rivertype.JobInsertResult, error) {
+				return c.config.JobMiddleware[i].Insert(ctx, []*rivertype.JobInsertParams{params}, doInner)
 			}
 		}
 	}
 
-	return doInner(ctx)
+	allResults, err := doInner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// TODO: handle zero length results from bad middleware?
+	return allResults[0], nil
 }
 
 // InsertManyParams encapsulates a single job combined with insert options for
@@ -1416,7 +1422,34 @@ func (c *Client[TTx]) InsertManyTx(ctx context.Context, tx TTx, params []InsertM
 	return c.insertMany(ctx, exec, params)
 }
 
-func (c *Client[TTx]) insertManyShared(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams, execute func(context.Context, []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
+func (c *Client[TTx]) insertMany(ctx context.Context, exec riverdriver.ExecutorTx, params []InsertManyParams) ([]*rivertype.JobInsertResult, error) {
+	return c.insertManyShared(ctx, exec, params, func(ctx context.Context, insertParams []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error) {
+		jobRows, err := exec.JobInsertFastMany(ctx, insertParams)
+		if err != nil {
+			return nil, err
+		}
+
+		return sliceutil.Map(jobRows,
+			func(jobRow *rivertype.JobRow) *rivertype.JobInsertResult {
+				return &rivertype.JobInsertResult{Job: jobRow}
+			},
+		), nil
+	})
+}
+
+// The shared code path for all InsertMany methods. It takes a function that
+// executes the actual insert operation and allows for different implementations
+// of the insert query to be passed in, each mapping their results back to a
+// common result type.
+//
+// TODO(bgentry): this isn't yet used for the single insert path. The only thing
+// blocking that is making unique insertions work for bulk inserts.
+func (c *Client[TTx]) insertManyShared(ctx context.Context, tx riverdriver.ExecutorTx, params []InsertManyParams, execute func(context.Context, []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
+	insertParams, err := c.insertManyParams(params)
+	if err != nil {
+		return nil, err
+	}
+
 	doInner := func(ctx context.Context) ([]*rivertype.JobInsertResult, error) {
 		manyInsertParams := sliceutil.Map(insertParams, func(params *rivertype.JobInsertParams) *riverdriver.JobInsertFastParams {
 			return (*riverdriver.JobInsertFastParams)(params)
@@ -1444,44 +1477,12 @@ func (c *Client[TTx]) insertManyShared(ctx context.Context, tx riverdriver.Execu
 		// as the outermost function and is first to receive the operation.
 		for i := len(c.config.JobMiddleware) - 1; i >= 0; i-- {
 			doInner = func(ctx context.Context) ([]*rivertype.JobInsertResult, error) {
-				return c.config.JobMiddleware[i].InsertMany(ctx, insertParams, doInner)
+				return c.config.JobMiddleware[i].Insert(ctx, insertParams, doInner)
 			}
 		}
 	}
 
 	return doInner(ctx)
-}
-
-func (c *Client[TTx]) insertMany(ctx context.Context, tx riverdriver.ExecutorTx, params []InsertManyParams) ([]*rivertype.JobInsertResult, error) {
-	insertParams, err := c.insertManyParams(params)
-	if err != nil {
-		return nil, err
-	}
-
-	manyInsertParams := sliceutil.Map(insertParams, func(params *rivertype.JobInsertParams) *riverdriver.JobInsertFastParams {
-		return (*riverdriver.JobInsertFastParams)(params)
-	})
-
-	jobRows, err := tx.JobInsertFastMany(ctx, manyInsertParams)
-	if err != nil {
-		return nil, err
-	}
-
-	queues := make([]string, 0, 10)
-	for _, params := range insertParams {
-		if params.State == rivertype.JobStateAvailable {
-			queues = append(queues, params.Queue)
-		}
-	}
-	if err := c.maybeNotifyInsertForQueues(ctx, tx, queues); err != nil {
-		return nil, err
-	}
-
-	return sliceutil.Map(jobRows,
-		func(jobRow *rivertype.JobRow) *rivertype.JobInsertResult {
-			return &rivertype.JobInsertResult{Job: jobRow}
-		},
-	), nil
 }
 
 // Validates input parameters for a batch insert operation and generates a set
@@ -1540,11 +1541,6 @@ func (c *Client[TTx]) InsertManyFast(ctx context.Context, params []InsertManyPar
 		return 0, errNoDriverDBPool
 	}
 
-	insertParams, err := c.insertManyFastParams(params)
-	if err != nil {
-		return 0, err
-	}
-
 	// Wrap in a transaction in case we need to notify about inserts.
 	tx, err := c.driver.GetExecutor().Begin(ctx)
 	if err != nil {
@@ -1552,10 +1548,11 @@ func (c *Client[TTx]) InsertManyFast(ctx context.Context, params []InsertManyPar
 	}
 	defer tx.Rollback(ctx)
 
-	inserted, err := c.insertManyFast(ctx, tx, insertParams)
+	inserted, err := c.insertManyFast(ctx, tx, params)
 	if err != nil {
 		return 0, err
 	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
 	}
@@ -1586,81 +1583,28 @@ func (c *Client[TTx]) InsertManyFast(ctx context.Context, params []InsertManyPar
 // changes. An inserted job isn't visible to be worked until the transaction
 // commits, and if the transaction rolls back, so too is the inserted job.
 func (c *Client[TTx]) InsertManyFastTx(ctx context.Context, tx TTx, params []InsertManyParams) (int, error) {
-	insertParams, err := c.insertManyFastParams(params)
+	// insertParams, err := c.insertManyFastParams(params)
+	// if err != nil {
+	// 	return 0, err
+	// }
+
+	exec := c.driver.UnwrapExecutor(tx)
+	return c.insertManyFast(ctx, exec, params)
+}
+
+func (c *Client[TTx]) insertManyFast(ctx context.Context, exec riverdriver.ExecutorTx, params []InsertManyParams) (int, error) {
+	results, err := c.insertManyShared(ctx, exec, params, func(ctx context.Context, insertParams []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error) {
+		count, err := exec.JobInsertFastManyNoReturning(ctx, insertParams)
+		if err != nil {
+			return nil, err
+		}
+
+		return make([]*rivertype.JobInsertResult, count), nil
+	})
 	if err != nil {
 		return 0, err
 	}
-
-	exec := c.driver.UnwrapExecutor(tx)
-	return c.insertManyFast(ctx, exec, insertParams)
-}
-
-func (c *Client[TTx]) insertManyFast(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) (int, error) {
-	doInner := func(ctx context.Context) (int, error) {
-		manyInsertParams := sliceutil.Map(insertParams, func(params *rivertype.JobInsertParams) *riverdriver.JobInsertFastParams {
-			return (*riverdriver.JobInsertFastParams)(params)
-		})
-
-		inserted, err := tx.JobInsertFastManyNoReturning(ctx, manyInsertParams)
-		if err != nil {
-			return inserted, err
-		}
-
-		queues := make([]string, 0, 10)
-		for _, params := range insertParams {
-			if params.State == rivertype.JobStateAvailable {
-				queues = append(queues, params.Queue)
-			}
-		}
-		if err := c.maybeNotifyInsertForQueues(ctx, tx, queues); err != nil {
-			return 0, err
-		}
-		return inserted, nil
-	}
-
-	if len(c.config.JobMiddleware) > 0 {
-		// Wrap middlewares in reverse order so the one defined first is wrapped
-		// as the outermost function and is first to receive the operation.
-		for i := len(c.config.JobMiddleware) - 1; i >= 0; i-- {
-			doInner = func(ctx context.Context) (int, error) {
-				return c.config.JobMiddleware[i].InsertMany(ctx, insertParams, doInner)
-			}
-		}
-	}
-
-	return doInner(ctx)
-}
-
-// Validates input parameters for an a batch insert operation and generates a
-// set of batch insert parameters.
-func (c *Client[TTx]) insertManyFastParams(params []InsertManyParams) ([]*rivertype.JobInsertParams, error) {
-	if len(params) < 1 {
-		return nil, errors.New("no jobs to insert")
-	}
-
-	insertParams := make([]*rivertype.JobInsertParams, len(params))
-	for i, param := range params {
-		if err := c.validateJobArgs(param.Args); err != nil {
-			return nil, err
-		}
-
-		if param.InsertOpts != nil {
-			// UniqueOpts aren't support for batch inserts because they use PG
-			// advisory locks to work, and taking many locks simultaneously
-			// could easily lead to contention and deadlocks.
-			if !param.InsertOpts.UniqueOpts.isEmpty() {
-				return nil, errors.New("UniqueOpts are not supported for batch inserts")
-			}
-		}
-
-		var err error
-		insertParams[i], _, err = insertParamsFromConfigArgsAndOptions(&c.baseService.Archetype, c.config, param.Args, param.InsertOpts)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return insertParams, nil
+	return len(results), nil
 }
 
 func (c *Client[TTx]) maybeNotifyInsert(ctx context.Context, tx riverdriver.ExecutorTx, state rivertype.JobState, queue string) error {

@@ -249,6 +249,7 @@ type JobGetStuckParams struct {
 }
 
 type JobInsertFastParams struct {
+	Args        rivertype.JobArgs
 	CreatedAt   *time.Time
 	EncodedArgs []byte
 	Kind        string
