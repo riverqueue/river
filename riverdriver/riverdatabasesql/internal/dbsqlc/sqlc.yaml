@@ -52,3 +52,23 @@ sql:
               type: "time.Time"
               pointer: true
             nullable: true
+
+          # There doesn't appear to be a good type that's suitable for database/sql other
+          # than the ones in pgtype. It's not great to make the database/sql driver take
+          # a dependency on pgx, but the reality is most users will (or should) be using
+          # pgx anyway.
+          #
+          # Unfortunately due to some sqlc limitations, you can't just use the
+          # pgtype package directly (it tries to use the non-v5 import path and
+          # you end up with duplicate pgtype imports). So there's an alias
+          # package that exposes it indirectly.
+          - db_type: "pg_catalog.bit"
+            go_type:
+              import: "github.com/riverqueue/river/riverdriver/riverdatabasesql/internal/pgtypealias"
+              type: "Bits"
+
+          - db_type: "pg_catalog.bit"
+            go_type:
+              import: "github.com/riverqueue/river/riverdriver/riverdatabasesql/internal/pgtypealias"
+              type: "Bits"
+            nullable: true

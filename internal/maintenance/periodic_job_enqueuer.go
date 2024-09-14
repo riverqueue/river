@@ -231,10 +231,10 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 			defer s.mu.RUnlock()
 
 			var (
-				insertParamsMany   []*riverdriver.JobInsertFastParams
+				insertParamsMany []*riverdriver.JobInsertFastParams
+				// only contains jobs using deprecated v1 unique options:
 				insertParamsUnique []*insertParamsAndUniqueOpts
-
-				now = s.Time.NowUTC()
+				now                = s.Time.NowUTC()
 			)
 
 			// Handle periodic jobs in sorted order so we can correctly account
@@ -258,10 +258,10 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 				}
 
 				if insertParams, uniqueOpts, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc, now); ok {
-					if !uniqueOpts.IsEmpty() {
-						insertParamsUnique = append(insertParamsUnique, &insertParamsAndUniqueOpts{insertParams, uniqueOpts})
-					} else {
+					if uniqueOpts == nil || uniqueOpts.IsEmpty() {
 						insertParamsMany = append(insertParamsMany, insertParams)
+					} else {
+						insertParamsUnique = append(insertParamsUnique, &insertParamsAndUniqueOpts{insertParams, uniqueOpts})
 					}
 				}
 			}
@@ -305,10 +305,10 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 						}
 
 						if insertParams, uniqueOpts, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc, periodicJob.nextRunAt); ok {
-							if !uniqueOpts.IsEmpty() {
-								insertParamsUnique = append(insertParamsUnique, &insertParamsAndUniqueOpts{insertParams, uniqueOpts})
-							} else {
+							if uniqueOpts == nil || uniqueOpts.IsEmpty() {
 								insertParamsMany = append(insertParamsMany, insertParams)
+							} else {
+								insertParamsUnique = append(insertParamsUnique, &insertParamsAndUniqueOpts{insertParams, uniqueOpts})
 							}
 						}
 
@@ -365,13 +365,16 @@ func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany 
 	queues := make([]string, 0, len(insertParamsMany)+len(insertParamsUnique))
 
 	if len(insertParamsMany) > 0 {
-		if _, err := tx.JobInsertFastMany(ctx, insertParamsMany); err != nil {
+		results, err := tx.JobInsertFastMany(ctx, insertParamsMany)
+		if err != nil {
 			s.Logger.ErrorContext(ctx, s.Name+": Error inserting periodic jobs",
 				"error", err.Error(), "num_jobs", len(insertParamsMany))
 			return
 		}
-		for _, params := range insertParamsMany {
-			queues = append(queues, params.Queue)
+		for _, result := range results {
+			if !result.UniqueSkippedAsDuplicate {
+				queues = append(queues, result.Job.Queue)
+			}
 		}
 	}
 

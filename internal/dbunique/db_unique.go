@@ -32,18 +32,109 @@ var defaultUniqueStates = []rivertype.JobState{ //nolint:gochecknoglobals
 
 var defaultUniqueStatesStrings = sliceutil.Map(defaultUniqueStates, func(s rivertype.JobState) string { return string(s) }) //nolint:gochecknoglobals
 
+var jobStateBitPositions = map[rivertype.JobState]uint{ //nolint:gochecknoglobals
+	rivertype.JobStateAvailable: 7,
+	rivertype.JobStateCancelled: 6,
+	rivertype.JobStateCompleted: 5,
+	rivertype.JobStateDiscarded: 4,
+	rivertype.JobStatePending:   3,
+	rivertype.JobStateRetryable: 2,
+	rivertype.JobStateRunning:   1,
+	rivertype.JobStateScheduled: 0,
+}
+
 type UniqueOpts struct {
-	ByArgs   bool
-	ByPeriod time.Duration
-	ByQueue  bool
-	ByState  []rivertype.JobState
+	ByArgs      bool
+	ByPeriod    time.Duration
+	ByQueue     bool
+	ByState     []rivertype.JobState
+	ExcludeKind bool
 }
 
 func (o *UniqueOpts) IsEmpty() bool {
 	return !o.ByArgs &&
 		o.ByPeriod == time.Duration(0) &&
 		!o.ByQueue &&
-		o.ByState == nil
+		o.ByState == nil &&
+		!o.ExcludeKind
+}
+
+func (o *UniqueOpts) StateBitmask() byte {
+	states := defaultUniqueStates
+	if len(o.ByState) > 0 {
+		states = o.ByState
+	}
+	return UniqueStatesToBitmask(states)
+}
+
+func UniqueKey(timeGen baseservice.TimeGenerator, uniqueOpts *UniqueOpts, params *riverdriver.JobInsertFastParams) []byte {
+	uniqueKeyString := buildUniqueKeyString(timeGen, uniqueOpts, params)
+	uniqueKeyHash := sha256.Sum256([]byte(uniqueKeyString))
+	return uniqueKeyHash[:]
+}
+
+// Builds a unique key made up of the unique options in place. The key is hashed
+// to become a value for `unique_key` in the fast insertion path, or hashed and
+// used for an advisory lock on the slow insertion path.
+func buildUniqueKeyString(timeGen baseservice.TimeGenerator, uniqueOpts *UniqueOpts, params *riverdriver.JobInsertFastParams) string {
+	var sb strings.Builder
+
+	if !uniqueOpts.ExcludeKind {
+		sb.WriteString("&kind=" + params.Kind)
+	}
+
+	if uniqueOpts.ByArgs {
+		sb.WriteString("&args=")
+		sb.Write(params.EncodedArgs)
+	}
+
+	if uniqueOpts.ByPeriod != time.Duration(0) {
+		lowerPeriodBound := timeGen.NowUTC().Truncate(uniqueOpts.ByPeriod)
+		sb.WriteString("&period=" + lowerPeriodBound.Format(time.RFC3339))
+	}
+
+	if uniqueOpts.ByQueue {
+		sb.WriteString("&queue=" + params.Queue)
+	}
+
+	stateSet := defaultUniqueStatesStrings
+	if len(uniqueOpts.ByState) > 0 {
+		stateSet = sliceutil.Map(uniqueOpts.ByState, func(s rivertype.JobState) string { return string(s) })
+		slices.Sort(stateSet)
+	}
+
+	sb.WriteString("&state=" + strings.Join(stateSet, ","))
+
+	return sb.String()
+}
+
+func UniqueStatesToBitmask(states []rivertype.JobState) byte {
+	var val byte
+
+	for _, state := range states {
+		bitIndex, exists := jobStateBitPositions[state]
+		if !exists {
+			continue // Ignore unknown states
+		}
+		bitPosition := 7 - (bitIndex % 8)
+		val |= 1 << bitPosition
+	}
+
+	return val
+}
+
+func UniqueBitmaskToStates(mask byte) []rivertype.JobState {
+	var states []rivertype.JobState
+
+	for state, bitIndex := range jobStateBitPositions {
+		bitPosition := 7 - (bitIndex % 8)
+		if mask&(1<<bitPosition) != 0 {
+			states = append(states, state)
+		}
+	}
+
+	slices.Sort(states)
+	return states
 }
 
 type UniqueInserter struct {
@@ -51,14 +142,13 @@ type UniqueInserter struct {
 	AdvisoryLockPrefix int32
 }
 
-func (i *UniqueInserter) JobInsert(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobInsertFastParams, uniqueOpts *UniqueOpts) (*rivertype.JobInsertResult, error) {
-	// With no unique options set, do a normal non-unique insert.
+func (i *UniqueInserter) JobInsert(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobInsertFastParams, uniqueOpts *UniqueOpts) (*riverdriver.JobInsertFastResult, error) {
+	// This should never get called with no unique options going forward.
 	if uniqueOpts == nil || uniqueOpts.IsEmpty() {
-		return insertNonUnique(ctx, exec, params)
+		panic("UniqueInserter.JobInsert called with no unique options")
 	}
 
-	// Build a unique key for use in either the `(kind, unique_key)` index or in
-	// an advisory lock prefix if we end up taking the slow path.
+	// Build a unique key for use in an advisory lock prefix:
 	uniqueKey, doUniqueInsert := i.buildUniqueKey(params, uniqueOpts)
 	if !doUniqueInsert {
 		return insertNonUnique(ctx, exec, params)
@@ -67,26 +157,6 @@ func (i *UniqueInserter) JobInsert(ctx context.Context, exec riverdriver.Executo
 	// Sort so we can more easily compare against default state list.
 	if uniqueOpts.ByState != nil {
 		slices.Sort(uniqueOpts.ByState)
-	}
-
-	// Fast path: as long as uniqueness uses the default set of lifecycle states
-	// we can take the fast path wherein uniqueness is determined based on an
-	// upsert to a unique index on `(kind, unique_key)`. This works because when
-	// cancelling or discarding jobs the executor/completer will zero the job's
-	// `unique_key` field, taking it out of consideration for future inserts
-	// given the same unique opts.
-	if uniqueOpts.ByState == nil || slices.Compare(defaultUniqueStates, uniqueOpts.ByState) == 0 {
-		uniqueKeyHash := sha256.Sum256([]byte(uniqueKey))
-
-		insertRes, err := exec.JobInsertUnique(ctx, &riverdriver.JobInsertUniqueParams{
-			JobInsertFastParams: params,
-			UniqueKey:           uniqueKeyHash[:],
-		})
-		if err != nil {
-			return nil, err
-		}
-
-		return (*rivertype.JobInsertResult)(insertRes), nil
 	}
 
 	// Slow path: open a subtransaction, take an advisory lock, check to see if
@@ -126,10 +196,10 @@ func (i *UniqueInserter) JobInsert(ctx context.Context, exec riverdriver.Executo
 
 	if existing != nil {
 		// Insert skipped; returns an existing row.
-		return &rivertype.JobInsertResult{Job: existing, UniqueSkippedAsDuplicate: true}, nil
+		return &riverdriver.JobInsertFastResult{Job: existing, UniqueSkippedAsDuplicate: true}, nil
 	}
 
-	jobRow, err := subExec.JobInsertFast(ctx, params)
+	result, err := subExec.JobInsertFast(ctx, params)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +208,7 @@ func (i *UniqueInserter) JobInsert(ctx context.Context, exec riverdriver.Executo
 		return nil, err
 	}
 
-	return &rivertype.JobInsertResult{Job: jobRow}, nil
+	return result, nil
 }
 
 // Builds a unique key made up of the unique options in place. The key is hashed
@@ -216,11 +286,10 @@ func (i *UniqueInserter) buildGetParams(params *riverdriver.JobInsertFastParams,
 	return &getParams
 }
 
-// Shared shortcut for inserting a row without uniqueness.
-func insertNonUnique(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobInsertFastParams) (*rivertype.JobInsertResult, error) {
-	jobRow, err := exec.JobInsertFast(ctx, params)
+func insertNonUnique(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobInsertFastParams) (*riverdriver.JobInsertFastResult, error) {
+	result, err := exec.JobInsertFast(ctx, params)
 	if err != nil {
 		return nil, err
 	}
-	return &rivertype.JobInsertResult{Job: jobRow}, nil
+	return result, nil
 }

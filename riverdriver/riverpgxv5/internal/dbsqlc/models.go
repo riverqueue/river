@@ -8,6 +8,8 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type RiverJobState string
@@ -78,23 +80,24 @@ type RiverClientQueue struct {
 }
 
 type RiverJob struct {
-	ID          int64
-	Args        []byte
-	Attempt     int16
-	AttemptedAt *time.Time
-	AttemptedBy []string
-	CreatedAt   time.Time
-	Errors      [][]byte
-	FinalizedAt *time.Time
-	Kind        string
-	MaxAttempts int16
-	Metadata    []byte
-	Priority    int16
-	Queue       string
-	State       RiverJobState
-	ScheduledAt time.Time
-	Tags        []string
-	UniqueKey   []byte
+	ID           int64
+	Args         []byte
+	Attempt      int16
+	AttemptedAt  *time.Time
+	AttemptedBy  []string
+	CreatedAt    time.Time
+	Errors       [][]byte
+	FinalizedAt  *time.Time
+	Kind         string
+	MaxAttempts  int16
+	Metadata     []byte
+	Priority     int16
+	Queue        string
+	State        RiverJobState
+	ScheduledAt  time.Time
+	Tags         []string
+	UniqueKey    []byte
+	UniqueStates pgtype.Bits
 }
 
 type RiverLeader struct {

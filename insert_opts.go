@@ -93,17 +93,32 @@ type InsertOpts struct {
 // args or queue is changed on a new job, it's allowed to be inserted as a new
 // job.
 //
-// Uniquenes is checked at insert time by taking a Postgres advisory lock, doing
-// a look up for an equivalent row, and inserting only if none was found.
-// There's no database-level mechanism that guarantees jobs stay unique, so if
-// an equivalent row is inserted out of band (or batch inserted, where a unique
-// check doesn't occur), it's conceivable that duplicates could coexist.
+// Uniqueness relies on a hash of the job kind and any unique properties along
+// with a database unique constraint. See the note on ByState for more details
+// including about the fallback to a deprecated advisory lock method.
 type UniqueOpts struct {
 	// ByArgs indicates that uniqueness should be enforced for any specific
 	// instance of encoded args for a job.
 	//
 	// Default is false, meaning that as long as any other unique property is
 	// enabled, uniqueness will be enforced for a kind regardless of input args.
+	//
+	// When set to true, the entire encoded args field will be included in the
+	// uniqueness hash, which requires care to ensure that no irrelevant args are
+	// factored into the uniqueness check. It is also possible to use a subset of
+	// the args by indicating on the `JobArgs` struct which fields should be
+	// included in the uniqueness check using struct tags:
+	//
+	// 	type MyJobArgs struct {
+	// 		CustomerID string `json:"customer_id" river:"unique"`
+	// 		TraceID string `json:"trace_id"
+	// 	}
+	//
+	// In this example, only the encoded `customer_id` key will be included in the
+	// uniqueness check and the `trace_id` key will be ignored.
+	//
+	// All keys are sorted alphabetically before hashing to ensure consistent
+	// results.
 	ByArgs bool
 
 	// ByPeriod defines uniqueness within a given period. On an insert time is
@@ -123,25 +138,34 @@ type UniqueOpts struct {
 	ByQueue bool
 
 	// ByState indicates that uniqueness should be enforced across any of the
-	// states in the given set. For example, if the given states were
-	// `(scheduled, running)` then a new job could be inserted even if one of
-	// the same kind was already being worked by the queue (new jobs are
-	// inserted as `available`).
+	// states in the given set. Unlike other unique options, ByState gets a
+	// default when it's not set for user convenience. The default is equivalent
+	// to:
 	//
-	// Unlike other unique options, ByState gets a default when it's not set for
-	// user convenience. The default is equivalent to:
-	//
-	// 	ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCompleted, rivertype.JobStateRunning, rivertype.JobStateRetryable, rivertype.JobStateScheduled}
+	// 	ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCompleted, rivertype.JobStatePending, rivertype.JobStateRunning, rivertype.JobStateRetryable, rivertype.JobStateScheduled}
 	//
 	// With this setting, any jobs of the same kind that have been completed or
-	// discarded, but not yet cleaned out by the system, won't count towards the
-	// uniqueness of a new insert.
+	// discarded, but not yet cleaned out by the system, will still prevent a
+	// duplicate unique job from being inserted. For example, with the default
+	// states, if a unique job is actively `running`, a duplicate cannot be
+	// inserted. Likewise, if a unique job has `completed`, you still can't
+	// insert a duplicate, at least not until the job cleaner maintenance process
+	// eventually removes the completed job from the `river_job` table.
 	//
-	// Warning: A non-default slice of states in ByState will force the unique
-	// inserter to fall back to a slower insertion path that takes an advisory
-	// lock and performs a look up before insertion.  For best performance, it's
-	// recommended that the default set of states is used.
+	// The list may be safely customized to _add_ additional states (`cancelled`
+	// or `discarded`), though only `retryable` may be safely _removed_ from the
+	// list.
+	//
+	// Warning: Removing any states from the default list (other than `retryable`
+	// forces a fallback to a slower insertion path that takes an advisory lock
+	// and performs a look up before insertion. This path is deprecated and should
+	// be avoided if possible.
 	ByState []rivertype.JobState
+
+	// ExcludeKind indicates that the job kind should not be included in the
+	// uniqueness check. This is useful when you want to enforce uniqueness
+	// across all jobs regardless of kind.
+	ExcludeKind bool
 }
 
 // isEmpty returns true for an empty, uninitialized options struct.
@@ -155,6 +179,25 @@ func (o *UniqueOpts) isEmpty() bool {
 		o.ByPeriod == time.Duration(0) &&
 		!o.ByQueue &&
 		o.ByState == nil
+}
+
+func (o *UniqueOpts) isV1() bool {
+	requiredV3states := []rivertype.JobState{
+		rivertype.JobStatePending,
+		rivertype.JobStateScheduled,
+		rivertype.JobStateAvailable,
+		rivertype.JobStateRunning,
+	}
+	if len(o.ByState) == 0 {
+		return false
+	}
+
+	for _, state := range requiredV3states {
+		if !slices.Contains(o.ByState, state) {
+			return true
+		}
+	}
+	return false
 }
 
 var jobStateAll = rivertype.JobStates() //nolint:gochecknoglobals

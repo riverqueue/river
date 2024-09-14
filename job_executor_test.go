@@ -141,7 +141,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		workUnitFactory := newWorkUnitFactoryWithCustomRetry(func() error { return nil }, nil)
 
-		job, err := exec.JobInsertFast(ctx, &riverdriver.JobInsertFastParams{
+		result, err := exec.JobInsertFast(ctx, &riverdriver.JobInsertFastParams{
 			EncodedArgs: []byte("{}"),
 			Kind:        (callbackArgs{}).Kind(),
 			MaxAttempts: rivercommon.MaxAttemptsDefault,
@@ -158,8 +158,8 @@ func TestJobExecutor_Execute(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Len(t, jobs, 1)
-		require.Equal(t, job.ID, jobs[0].ID)
-		job = jobs[0]
+		require.Equal(t, result.Job.ID, jobs[0].ID)
+		job := jobs[0]
 
 		bundle := &testBundle{
 			completer:    completer,
@@ -334,10 +334,8 @@ func TestJobExecutor_Execute(t *testing.T) {
 		// add a unique key so we can verify it's cleared
 		var err error
 		bundle.jobRow, err = bundle.exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
-			ID:                bundle.jobRow.ID,
-			State:             rivertype.JobStateAvailable, // required for encoding but ignored
-			UniqueKeyDoUpdate: true,
-			UniqueKey:         []byte("unique-key"),
+			ID:    bundle.jobRow.ID,
+			State: rivertype.JobStateAvailable, // required for encoding but ignored
 		})
 		require.NoError(t, err)
 

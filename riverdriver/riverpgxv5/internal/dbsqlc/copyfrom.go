@@ -39,6 +39,8 @@ func (r iteratorForJobInsertFastManyCopyFrom) Values() ([]interface{}, error) {
 		r.rows[0].ScheduledAt,
 		r.rows[0].State,
 		r.rows[0].Tags,
+		r.rows[0].UniqueKey,
+		r.rows[0].UniqueStates,
 	}, nil
 }
 
@@ -47,5 +49,5 @@ func (r iteratorForJobInsertFastManyCopyFrom) Err() error {
 }
 
 func (q *Queries) JobInsertFastManyCopyFrom(ctx context.Context, db DBTX, arg []*JobInsertFastManyCopyFromParams) (int64, error) {
-	return db.CopyFrom(ctx, []string{"river_job"}, []string{"args", "finalized_at", "kind", "max_attempts", "metadata", "priority", "queue", "scheduled_at", "state", "tags"}, &iteratorForJobInsertFastManyCopyFrom{rows: arg})
+	return db.CopyFrom(ctx, []string{"river_job"}, []string{"args", "finalized_at", "kind", "max_attempts", "metadata", "priority", "queue", "scheduled_at", "state", "tags", "unique_key", "unique_states"}, &iteratorForJobInsertFastManyCopyFrom{rows: arg})
 }

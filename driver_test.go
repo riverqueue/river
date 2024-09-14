@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"runtime"
+	"strconv"
 	"testing"
 	"time"
 
@@ -233,19 +234,19 @@ func BenchmarkDriverRiverPgxV5Insert(b *testing.B) {
 		}
 	})
 
-	b.Run("InsertUnique", func(b *testing.B) {
+	b.Run("InsertFast_WithUnique", func(b *testing.B) {
 		_, bundle := setup(b)
 
-		for n := 0; n < b.N; n++ {
-			_, err := bundle.exec.JobInsertUnique(ctx, &riverdriver.JobInsertUniqueParams{
-				JobInsertFastParams: &riverdriver.JobInsertFastParams{
-					EncodedArgs: []byte(`{"encoded": "args"}`),
-					Kind:        "test_kind",
-					MaxAttempts: rivercommon.MaxAttemptsDefault,
-					Priority:    rivercommon.PriorityDefault,
-					Queue:       rivercommon.QueueDefault,
-					State:       rivertype.JobStateAvailable,
-				},
+		for i := 0; i < b.N; i++ {
+			_, err := bundle.exec.JobInsertFast(ctx, &riverdriver.JobInsertFastParams{
+				EncodedArgs:  []byte(`{"encoded": "args"}`),
+				Kind:         "test_kind",
+				MaxAttempts:  rivercommon.MaxAttemptsDefault,
+				Priority:     rivercommon.PriorityDefault,
+				Queue:        rivercommon.QueueDefault,
+				State:        rivertype.JobStateAvailable,
+				UniqueKey:    []byte("test_unique_key_" + strconv.Itoa(i)),
+				UniqueStates: 0xFB,
 			})
 			require.NoError(b, err)
 		}

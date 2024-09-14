@@ -46,3 +46,36 @@ func TestJobUniqueOpts_validate(t *testing.T) {
 	require.EqualError(t, (&UniqueOpts{ByPeriod: 1 * time.Millisecond}).validate(), "JobUniqueOpts.ByPeriod should not be less than 1 second")
 	require.EqualError(t, (&UniqueOpts{ByState: []rivertype.JobState{rivertype.JobState("invalid")}}).validate(), `JobUniqueOpts.ByState contains invalid state "invalid"`)
 }
+
+func TestJobUniqueOpts_isV1(t *testing.T) {
+	t.Parallel()
+
+	// Test when ByState is empty
+	require.False(t, (&UniqueOpts{}).isV1())
+
+	// Test when ByState contains none of the required V3 states
+	require.True(t, (&UniqueOpts{ByState: []rivertype.JobState{rivertype.JobStateCompleted}}).isV1())
+
+	// Test when ByState contains some but not all required V3 states
+	require.True(t, (&UniqueOpts{ByState: []rivertype.JobState{rivertype.JobStatePending}}).isV1())
+	require.True(t, (&UniqueOpts{ByState: []rivertype.JobState{rivertype.JobStateScheduled}}).isV1())
+	require.True(t, (&UniqueOpts{ByState: []rivertype.JobState{rivertype.JobStateAvailable}}).isV1())
+	require.True(t, (&UniqueOpts{ByState: []rivertype.JobState{rivertype.JobStateRunning}}).isV1())
+
+	// Test when ByState contains all required V3 states
+	require.False(t, (&UniqueOpts{ByState: []rivertype.JobState{
+		rivertype.JobStatePending,
+		rivertype.JobStateScheduled,
+		rivertype.JobStateAvailable,
+		rivertype.JobStateRunning,
+	}}).isV1())
+
+	// Test when ByState contains more than the required V3 states
+	require.False(t, (&UniqueOpts{ByState: []rivertype.JobState{
+		rivertype.JobStatePending,
+		rivertype.JobStateScheduled,
+		rivertype.JobStateAvailable,
+		rivertype.JobStateRunning,
+		rivertype.JobStateCompleted,
+	}}).isV1())
+}

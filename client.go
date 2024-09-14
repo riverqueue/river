@@ -66,9 +66,9 @@ type Config struct {
 	// only 32 bits of number space for advisory lock hashes, so it makes
 	// internally conflicting River-generated keys more likely.
 	//
-	// Advisory locks are currently only used for the fallback/slow path of
-	// unique job insertion where finalized states are included in a ByState
-	// configuration.
+	// Advisory locks are currently only used for the deprecated fallback/slow
+	// path of unique job insertion when pending, scheduled, available, or running
+	// are omitted from a customized ByState configuration.
 	AdvisoryLockPrefix int32
 
 	// CancelledJobRetentionPeriod is the amount of time to keep cancelled jobs
@@ -346,7 +346,7 @@ type Client[TTx any] struct {
 	stopped              <-chan struct{}
 	subscriptionManager  *subscriptionManager
 	testSignals          clientTestSignals
-	uniqueInserter       *dbunique.UniqueInserter
+	uniqueInserter       *dbunique.UniqueInserter // deprecated fallback path for unique job insertion
 
 	// workCancel cancels the context used for all work goroutines. Normal Stop
 	// does not cancel that context.
@@ -1235,6 +1235,17 @@ func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, conf
 		State:       rivertype.JobStateAvailable,
 		Tags:        tags,
 	}
+	var returnUniqueOpts *dbunique.UniqueOpts
+	if !uniqueOpts.isEmpty() {
+		if uniqueOpts.isV1() {
+			// TODO: block this path if we're within a multirow insert.
+			returnUniqueOpts = (*dbunique.UniqueOpts)(&uniqueOpts)
+		} else {
+			internalUniqueOpts := (*dbunique.UniqueOpts)(&uniqueOpts)
+			insertParams.UniqueKey = dbunique.UniqueKey(archetype.Time, internalUniqueOpts, insertParams)
+			insertParams.UniqueStates = internalUniqueOpts.StateBitmask()
+		}
+	}
 
 	switch {
 	case !insertOpts.ScheduledAt.IsZero():
@@ -1253,7 +1264,7 @@ func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, conf
 		insertParams.State = rivertype.JobStatePending
 	}
 
-	return insertParams, (*dbunique.UniqueOpts)(&uniqueOpts), nil
+	return insertParams, returnUniqueOpts, nil
 }
 
 var errNoDriverDBPool = errors.New("driver must have non-nil database pool to use non-transactional methods like Insert and InsertMany (try InsertTx or InsertManyTx instead")
@@ -1313,9 +1324,19 @@ func (c *Client[TTx]) insert(ctx context.Context, exec riverdriver.Executor, arg
 	}
 	defer tx.Rollback(ctx)
 
-	jobInsertRes, err := c.uniqueInserter.JobInsert(ctx, tx, params, uniqueOpts)
-	if err != nil {
-		return nil, err
+	// TODO: consolidate insertion paths for single + multi, remove deprecated uniqueness design
+	var jobInsertRes *riverdriver.JobInsertFastResult
+	if uniqueOpts == nil {
+		jobInsertRes, err = tx.JobInsertFast(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Old deprecated advisory lock route
+		jobInsertRes, err = c.uniqueInserter.JobInsert(ctx, tx, params, uniqueOpts)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if err := c.maybeNotifyInsert(ctx, tx, params.State, params.Queue); err != nil {
@@ -1325,7 +1346,7 @@ func (c *Client[TTx]) insert(ctx context.Context, exec riverdriver.Executor, arg
 		return nil, err
 	}
 
-	return jobInsertRes, nil
+	return (*rivertype.JobInsertResult)(jobInsertRes), nil
 }
 
 // InsertManyParams encapsulates a single job combined with insert options for
@@ -1431,8 +1452,8 @@ func (c *Client[TTx]) insertMany(ctx context.Context, tx riverdriver.ExecutorTx,
 	}
 
 	return sliceutil.Map(jobRows,
-		func(jobRow *rivertype.JobRow) *rivertype.JobInsertResult {
-			return &rivertype.JobInsertResult{Job: jobRow}
+		func(result *riverdriver.JobInsertFastResult) *rivertype.JobInsertResult {
+			return (*rivertype.JobInsertResult)(result)
 		},
 	), nil
 }
@@ -1450,20 +1471,20 @@ func (c *Client[TTx]) insertManyParams(params []InsertManyParams) ([]*riverdrive
 			return nil, err
 		}
 
-		if param.InsertOpts != nil {
-			// UniqueOpts aren't supported for batch inserts because they use PG
-			// advisory locks to work, and taking many locks simultaneously could
-			// easily lead to contention and deadlocks.
-			if !param.InsertOpts.UniqueOpts.isEmpty() {
-				return nil, errors.New("UniqueOpts are not supported for batch inserts")
-			}
-		}
-
-		var err error
-		insertParams[i], _, err = insertParamsFromConfigArgsAndOptions(&c.baseService.Archetype, c.config, param.Args, param.InsertOpts)
+		insertParamsItem, uniqueOpts, err := insertParamsFromConfigArgsAndOptions(&c.baseService.Archetype, c.config, param.Args, param.InsertOpts)
 		if err != nil {
 			return nil, err
 		}
+
+		if uniqueOpts != nil {
+			// These are returned only for the v1 style advisory lock based uniqueness,
+			// which has never been supported on bulk inserts due to the potential for
+			// contention and deadlocks.
+			//
+			// This can be removed when v1 uniqueness is removed.
+			return nil, errors.New("UniqueOpts are not supported for batch inserts")
+		}
+		insertParams[i] = insertParamsItem
 	}
 
 	return insertParams, nil
@@ -1579,20 +1600,17 @@ func (c *Client[TTx]) insertManyFastParams(params []InsertManyParams) ([]*riverd
 			return nil, err
 		}
 
-		if param.InsertOpts != nil {
-			// UniqueOpts aren't support for batch inserts because they use PG
-			// advisory locks to work, and taking many locks simultaneously
-			// could easily lead to contention and deadlocks.
-			if !param.InsertOpts.UniqueOpts.isEmpty() {
-				return nil, errors.New("UniqueOpts are not supported for batch inserts")
-			}
-		}
-
-		var err error
-		insertParams[i], _, err = insertParamsFromConfigArgsAndOptions(&c.baseService.Archetype, c.config, param.Args, param.InsertOpts)
+		insertParamsItem, uniqueOpts, err := insertParamsFromConfigArgsAndOptions(&c.baseService.Archetype, c.config, param.Args, param.InsertOpts)
 		if err != nil {
 			return nil, err
 		}
+		if uniqueOpts != nil {
+			// UniqueOpts aren't support for batch inserts because they use PG
+			// advisory locks to work, and taking many locks simultaneously
+			// could easily lead to contention and deadlocks.
+			return nil, errors.New("UniqueOpts are not supported for batch inserts")
+		}
+		insertParams[i] = insertParamsItem
 	}
 
 	return insertParams, nil
