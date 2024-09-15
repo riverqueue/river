@@ -115,8 +115,8 @@ func (c *clientWithSimpleStop[TTx]) Stop() {
 	_ = c.Client.Stop(context.Background())
 }
 
-func newTestConfig(t *testing.T, callback callbackFunc) *Config {
-	t.Helper()
+func newTestConfig(tb testing.TB, callback callbackFunc) *Config {
+	tb.Helper()
 	workers := NewWorkers()
 	if callback != nil {
 		AddWorker(workers, &callbackWorker{fn: callback})
@@ -126,7 +126,7 @@ func newTestConfig(t *testing.T, callback callbackFunc) *Config {
 	return &Config{
 		FetchCooldown:     20 * time.Millisecond,
 		FetchPollInterval: 50 * time.Millisecond,
-		Logger:            riversharedtest.Logger(t),
+		Logger:            riversharedtest.Logger(tb),
 		MaxAttempts:       MaxAttemptsDefault,
 		Queues:            map[string]QueueConfig{QueueDefault: {MaxWorkers: 50}},
 		TestOnly:          true, // disables staggered start in maintenance services
@@ -136,11 +136,11 @@ func newTestConfig(t *testing.T, callback callbackFunc) *Config {
 	}
 }
 
-func newTestClient(t *testing.T, dbPool *pgxpool.Pool, config *Config) *Client[pgx.Tx] {
-	t.Helper()
+func newTestClient(tb testing.TB, dbPool *pgxpool.Pool, config *Config) *Client[pgx.Tx] {
+	tb.Helper()
 
 	client, err := NewClient(riverpgxv5.New(dbPool), config)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 
 	return client
 }
@@ -5494,4 +5494,51 @@ func TestDefaultClientIDWithHost(t *testing.T) {
 	require.Equal(t, strings.Repeat("a", 59)+"_2024_03_07T04_39_12_123456", defaultClientIDWithHost(startedAt, strings.Repeat("a", 59)))
 	require.Equal(t, strings.Repeat("a", 60)+"_2024_03_07T04_39_12_123456", defaultClientIDWithHost(startedAt, strings.Repeat("a", 60)))
 	require.Equal(t, strings.Repeat("a", 60)+"_2024_03_07T04_39_12_123456", defaultClientIDWithHost(startedAt, strings.Repeat("a", 61)))
+}
+
+func BenchmarkClient(b *testing.B) {
+	ctx := context.Background()
+
+	type testBundle struct{}
+
+	setup := func(b *testing.B) (*Client[pgx.Tx], *testBundle) {
+		b.Helper()
+
+		dbPool := riverinternaltest.TestDB(ctx, b)
+		config := newTestConfig(b, nil)
+
+		return newTestClient(b, dbPool, config), &testBundle{}
+	}
+
+	b.Run("JobInsertMany", func(b *testing.B) {
+		client, _ := setup(b)
+
+		params := make([]InsertManyParams, 100)
+		for i := range params {
+			params[i].Args = noOpArgs{}
+		}
+
+		b.ResetTimer()
+
+		for i := 0; i < b.N; i++ {
+			_, err := client.InsertMany(ctx, params)
+			require.NoError(b, err)
+		}
+	})
+
+	b.Run("JobInsertManyFast", func(b *testing.B) {
+		client, _ := setup(b)
+
+		params := make([]InsertManyParams, 100)
+		for i := range params {
+			params[i].Args = noOpArgs{}
+		}
+
+		b.ResetTimer()
+
+		for i := 0; i < b.N; i++ {
+			_, err := client.InsertManyFast(ctx, params)
+			require.NoError(b, err)
+		}
+	})
 }
