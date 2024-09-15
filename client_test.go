@@ -4127,6 +4127,7 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 		)
 		for i := 0; i < numJobsToInsert; i++ {
 			insertParams[i] = &riverdriver.JobInsertFastParams{
+				Args:        &JobArgs{},
 				EncodedArgs: []byte(`{}`),
 				Kind:        kind,
 				MaxAttempts: rivercommon.MaxAttemptsDefault,
@@ -5219,6 +5220,14 @@ func TestClient_JobTimeout(t *testing.T) {
 	}
 }
 
+type JobArgsStaticKind struct {
+	kind string
+}
+
+func (a JobArgsStaticKind) Kind() string {
+	return a.kind
+}
+
 func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 	t.Parallel()
 
@@ -5344,7 +5353,8 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 			ExcludeKind: true,
 		}
 
-		expectedKey := dbunique.UniqueKey(archetype.Time, internalUniqueOpts, params)
+		expectedKey, err := dbunique.UniqueKey(archetype.Time, internalUniqueOpts, params)
+		require.NoError(t, err)
 
 		require.Equal(t, expectedKey, params.UniqueKey)
 		require.Equal(t, internalUniqueOpts.StateBitmask(), params.UniqueStates)
@@ -5379,7 +5389,8 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 			ByState:  states,
 		}
 
-		expectedKey := dbunique.UniqueKey(archetype.Time, internalUniqueOpts, params)
+		expectedKey, err := dbunique.UniqueKey(archetype.Time, internalUniqueOpts, params)
+		require.NoError(t, err)
 
 		require.Equal(t, expectedKey, params.UniqueKey)
 		require.Equal(t, internalUniqueOpts.StateBitmask(), params.UniqueStates)
@@ -5412,6 +5423,51 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 
 		require.Nil(t, params.UniqueKey)
 		require.Zero(t, params.UniqueStates)
+	})
+
+	t.Run("UniqueOptsWithPartialArgs", func(t *testing.T) {
+		t.Parallel()
+
+		uniqueOpts := UniqueOpts{ByArgs: true}
+
+		type PartialArgs struct {
+			JobArgsStaticKind
+			Included bool `json:"included" river:"unique"`
+			Excluded bool `json:"excluded"`
+		}
+
+		args := PartialArgs{
+			JobArgsStaticKind: JobArgsStaticKind{kind: "partialArgs"},
+			Included:          true,
+			Excluded:          true,
+		}
+
+		params, resultUniqueOpts, err := insertParamsFromConfigArgsAndOptions(archetype, config, args, &InsertOpts{UniqueOpts: uniqueOpts})
+		require.NoError(t, err)
+		require.Nil(t, resultUniqueOpts)
+		internalUniqueOpts := &dbunique.UniqueOpts{ByArgs: true}
+
+		expectedKey, err := dbunique.UniqueKey(archetype.Time, internalUniqueOpts, params)
+		require.NoError(t, err)
+		require.Equal(t, expectedKey, params.UniqueKey)
+		require.Equal(t, internalUniqueOpts.StateBitmask(), params.UniqueStates)
+
+		argsWithExcludedFalse := PartialArgs{
+			JobArgsStaticKind: JobArgsStaticKind{kind: "partialArgs"},
+			Included:          true,
+			Excluded:          false,
+		}
+
+		params2, resultUniqueOpts2, err := insertParamsFromConfigArgsAndOptions(archetype, config, argsWithExcludedFalse, &InsertOpts{UniqueOpts: uniqueOpts}, true)
+		require.NoError(t, err)
+		require.Nil(t, resultUniqueOpts2)
+		internalUniqueOpts2 := &dbunique.UniqueOpts{ByArgs: true}
+
+		expectedKey2, err := dbunique.UniqueKey(archetype.Time, internalUniqueOpts2, params2)
+		require.NoError(t, err)
+		require.Equal(t, expectedKey2, params2.UniqueKey)
+		require.Equal(t, internalUniqueOpts2.StateBitmask(), params.UniqueStates)
+		require.Equal(t, params.UniqueKey, params2.UniqueKey, "unique keys should be identical because included args are the same, even though others differ")
 	})
 
 	t.Run("PriorityIsLimitedTo4", func(t *testing.T) {

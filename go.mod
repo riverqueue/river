@@ -15,6 +15,8 @@ require (
 	github.com/riverqueue/river/rivertype v0.11.4
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.9.0
+	github.com/tidwall/gjson v1.17.3
+	github.com/tidwall/sjson v1.2.5
 	go.uber.org/goleak v1.3.0
 	golang.org/x/sync v0.8.0
 	golang.org/x/text v0.18.0
@@ -26,6 +28,8 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/lib/pq v1.10.9 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/tidwall/match v1.1.1 // indirect
+	github.com/tidwall/pretty v1.2.0 // indirect
 	golang.org/x/crypto v0.27.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

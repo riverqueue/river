@@ -2,6 +2,7 @@ package dbunique
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"slices"
 	"testing"
 	"time"
@@ -13,202 +14,254 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
+type JobArgsStaticKind struct {
+	kind string
+}
+
+func (a JobArgsStaticKind) Kind() string {
+	return a.kind
+}
+
+func TestUniqueKey(t *testing.T) {
+	t.Parallel()
+
+	// Fixed timestamp for consistency across tests:
+	now := time.Now().UTC()
+	stubSvc := &riversharedtest.TimeStub{}
+	stubSvc.StubNowUTC(now)
+
+	tests := []struct {
+		name         string
+		argsFunc     func() rivertype.JobArgs
+		uniqueOpts   UniqueOpts
+		expectedJSON string
+	}{
+		{
+			name: "ByArgsWithMultipleUniqueStructTagsAndDefaultStates",
+			argsFunc: func() rivertype.JobArgs {
+				type EmailJobArgs struct {
+					JobArgsStaticKind
+					Recipient   string `json:"recipient"    river:"unique"`
+					Subject     string `json:"subject"      river:"unique"`
+					Body        string `json:"body"`
+					TemplateID  int    `json:"template_id"`
+					ScheduledAt string `json:"scheduled_at"`
+				}
+				return EmailJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_1"},
+					Recipient:         "user@example.com",
+					Subject:           "Test Email",
+					Body:              "This is a test email.",
+					TemplateID:        101,
+					ScheduledAt:       "2024-09-15T10:00:00Z",
+				}
+			},
+			uniqueOpts:   UniqueOpts{ByArgs: true},
+			expectedJSON: `&kind=worker_1&args={"recipient":"user@example.com","subject":"Test Email"}`,
+		},
+		{
+			name: "ByArgsWithUniqueFieldsSomeEmpty",
+			argsFunc: func() rivertype.JobArgs {
+				type SMSJobArgs struct {
+					JobArgsStaticKind
+					PhoneNumber string `json:"phone_number"      river:"unique"`
+					Message     string `json:"message,omitempty" river:"unique"`
+					TemplateID  int    `json:"template_id"`
+				}
+				return SMSJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_2"},
+					PhoneNumber:       "555-5678",
+					Message:           "", // Empty unique field, omitted from key
+					TemplateID:        202,
+				}
+			},
+			uniqueOpts:   UniqueOpts{ByArgs: true},
+			expectedJSON: `&kind=worker_2&args={"phone_number":"555-5678"}`,
+		},
+		{
+			name: "ByArgsUniqueWithNoJSONTagsUsesFieldName",
+			argsFunc: func() rivertype.JobArgs {
+				type EmailJobArgs struct {
+					JobArgsStaticKind
+					Recipient  string `river:"unique"`
+					Subject    string `river:"unique"`
+					TemplateID int
+				}
+				return EmailJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_1"},
+					Recipient:         "john@example.com",
+					Subject:           "Another Test Email",
+					TemplateID:        102,
+				}
+			},
+			uniqueOpts:   UniqueOpts{ByArgs: true},
+			expectedJSON: `&kind=worker_1&args={"Recipient":"john@example.com","Subject":"Another Test Email"}`,
+		},
+		{
+			name: "ByArgsWithPointerToStruct",
+			argsFunc: func() rivertype.JobArgs {
+				type EmailJobArgs struct {
+					JobArgsStaticKind
+					Recipient string `json:"recipient" river:"unique"`
+					Subject   string `json:"subject"   river:"unique"`
+					Body      string `json:"body"`
+				}
+				return &EmailJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_1"},
+					Recipient:         "john@example.com",
+					Subject:           "Another Test Email",
+					Body:              "This is another test email.",
+				}
+			},
+			uniqueOpts:   UniqueOpts{ByArgs: true},
+			expectedJSON: `&kind=worker_1&args={"recipient":"john@example.com","subject":"Another Test Email"}`,
+		},
+		{
+			name: "ByArgsWithNoUniqueFields",
+			argsFunc: func() rivertype.JobArgs {
+				type GenericJobArgs struct {
+					JobArgsStaticKind
+					Description string `json:"description"`
+					Count       int    `json:"count"`
+					foo         string // won't be marshaled in JSON
+				}
+				return GenericJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_3"},
+					Description:       "A generic job without unique fields.",
+					Count:             10,
+					foo:               "bar",
+				}
+			},
+			uniqueOpts: UniqueOpts{ByArgs: true},
+			// args JSON should be sorted alphabetically:
+			expectedJSON: `&kind=worker_3&args={"count":10,"description":"A generic job without unique fields."}`,
+		},
+		{
+			name: "ByArgsWithEmptyEncodedArgs",
+			argsFunc: func() rivertype.JobArgs {
+				type EmailJobArgs struct {
+					JobArgsStaticKind
+				}
+
+				return EmailJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_1"},
+				}
+			},
+			uniqueOpts: UniqueOpts{ByArgs: true},
+			// args JSON should be sorted alphabetically:
+			expectedJSON: `&kind=worker_1&args={}`,
+		},
+		{
+			name: "CustomByStateWithPeriod",
+			argsFunc: func() rivertype.JobArgs {
+				type TaskJobArgs struct {
+					JobArgsStaticKind
+					TaskID string
+				}
+				return TaskJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_4"},
+					TaskID:            "task_123",
+				}
+			},
+			uniqueOpts:   UniqueOpts{ByPeriod: time.Hour, ByState: []rivertype.JobState{rivertype.JobStateCompleted}},
+			expectedJSON: "&kind=worker_4&period=" + now.Truncate(time.Hour).Format(time.RFC3339),
+		},
+		{
+			name: "ExcludeKindByArgs",
+			argsFunc: func() rivertype.JobArgs {
+				type TaskJobArgs struct {
+					JobArgsStaticKind
+					TaskID string `json:"task_id"`
+				}
+				return TaskJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_5"},
+					TaskID:            "task_123",
+				}
+			},
+			uniqueOpts:   UniqueOpts{ByArgs: true, ExcludeKind: true},
+			expectedJSON: `&args={"task_id":"task_123"}`,
+		},
+		{
+			name: "ByQueue",
+			argsFunc: func() rivertype.JobArgs {
+				type TaskJobArgs struct {
+					JobArgsStaticKind
+					TaskID string `json:"task_id"`
+				}
+				return TaskJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_6"},
+					TaskID:            "task_123",
+				}
+			},
+			uniqueOpts:   UniqueOpts{ByQueue: true},
+			expectedJSON: `&kind=worker_6&queue=email_queue`,
+		},
+		{
+			name: "EmptyUniqueOpts",
+			argsFunc: func() rivertype.JobArgs {
+				type TaskJobArgs struct {
+					JobArgsStaticKind
+					TaskID string `json:"task_id"`
+				}
+				return TaskJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_7"},
+					TaskID:            "task_123",
+				}
+			},
+			uniqueOpts:   UniqueOpts{},
+			expectedJSON: `&kind=worker_7`,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt // capture range variable
+
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			args := tt.argsFunc()
+
+			encodedArgs, err := json.Marshal(args)
+			require.NoError(t, err)
+
+			states := defaultUniqueStates
+			if len(tt.uniqueOpts.ByState) > 0 {
+				states = tt.uniqueOpts.ByState
+			}
+
+			jobParams := &riverdriver.JobInsertFastParams{
+				Args:         args,
+				CreatedAt:    &now,
+				EncodedArgs:  encodedArgs,
+				Kind:         args.Kind(),
+				Metadata:     []byte(`{"source":"api"}`),
+				Queue:        "email_queue",
+				ScheduledAt:  &now,
+				State:        "Pending",
+				Tags:         []string{"notification", "email"},
+				UniqueStates: UniqueStatesToBitmask(states),
+			}
+
+			uniqueKeyPreHash, err := buildUniqueKeyString(stubSvc, &tt.uniqueOpts, jobParams)
+			require.NoError(t, err)
+			require.Equal(t, tt.expectedJSON, uniqueKeyPreHash)
+			expectedHash := sha256.Sum256([]byte(tt.expectedJSON))
+
+			uniqueKey, err := UniqueKey(stubSvc, &tt.uniqueOpts, jobParams)
+			require.NoError(t, err)
+			require.NotNil(t, uniqueKey)
+
+			require.Equal(t, expectedHash[:], uniqueKey, "UniqueKey hash does not match expected value")
+		})
+	}
+}
+
 func TestDefaultUniqueStatesSorted(t *testing.T) {
 	t.Parallel()
 
 	states := slices.Clone(defaultUniqueStates)
 	slices.Sort(states)
 	require.Equal(t, states, defaultUniqueStates, "Default unique states should be sorted")
-}
-
-func TestUniqueKey(t *testing.T) {
-	t.Parallel()
-
-	// Fixed time for deterministic tests
-	fixedTime := time.Date(2024, 9, 14, 12, 0, 0, 0, time.UTC)
-	// timeGen := &MockTimeGenerator{FixedTime: fixedTime}
-	stubSvc := &riversharedtest.TimeStub{}
-	stubSvc.StubNowUTC(fixedTime)
-
-	// Define test parameters
-	params := &riverdriver.JobInsertFastParams{
-		Kind:        "email",
-		EncodedArgs: []byte(`{"to":"user@example.com","subject":"Test Email"}`),
-		Queue:       "default",
-	}
-
-	shasum := func(s string) []byte {
-		value := sha256.Sum256([]byte(s))
-		return value[:]
-	}
-
-	tests := []struct {
-		name        string
-		uniqueOpts  *UniqueOpts
-		params      *riverdriver.JobInsertFastParams
-		expectedKey []byte
-	}{
-		{
-			name:       "DefaultOptions",
-			uniqueOpts: &UniqueOpts{},
-			params:     params,
-			expectedKey: shasum(
-				"&kind=email&state=Available,Completed,Pending,Retryable,Running,Scheduled",
-			),
-		},
-		{
-			name: "ExcludeKind",
-			uniqueOpts: &UniqueOpts{
-				ExcludeKind: true,
-			},
-			params: params,
-			expectedKey: shasum(
-				"&state=Available,Completed,Pending,Retryable,Running,Scheduled",
-			),
-		},
-		{
-			name: "ByArgs",
-			uniqueOpts: &UniqueOpts{
-				ByArgs: true,
-			},
-			params: params,
-			expectedKey: shasum(
-				"&kind=email&args={\"to\":\"user@example.com\",\"subject\":\"Test Email\"}&state=Available,Completed,Pending,Retryable,Running,Scheduled",
-			),
-		},
-		{
-			name: "ByPeriod",
-			uniqueOpts: &UniqueOpts{
-				ByPeriod: 2 * time.Hour,
-			},
-			params: params,
-			expectedKey: shasum(
-				"&kind=email&period=2024-09-14T12:00:00Z&state=Available,Completed,Pending,Retryable,Running,Scheduled",
-			),
-		},
-		{
-			name: "ByQueue",
-			uniqueOpts: &UniqueOpts{
-				ByQueue: true,
-			},
-			params:      params,
-			expectedKey: shasum("&kind=email&queue=default&state=Available,Completed,Pending,Retryable,Running,Scheduled"),
-		},
-		{
-			name: "ByState",
-			uniqueOpts: &UniqueOpts{
-				ByState: []rivertype.JobState{
-					rivertype.JobStateCancelled,
-					rivertype.JobStateDiscarded,
-				},
-			},
-			params:      params,
-			expectedKey: shasum("&kind=email&state=Cancelled,Discarded"),
-		},
-		{
-			name: "CombinationOptions",
-			uniqueOpts: &UniqueOpts{
-				ByArgs:      true,
-				ByPeriod:    1 * time.Hour,
-				ByQueue:     true,
-				ByState:     []rivertype.JobState{rivertype.JobStateRunning, rivertype.JobStatePending},
-				ExcludeKind: false,
-			},
-			params: params,
-			expectedKey: shasum(
-				"&kind=email&args={\"to\":\"user@example.com\",\"subject\":\"Test Email\"}&period=2024-09-14T12:00:00Z&queue=default&state=Pending,Running",
-			),
-		},
-		{
-			name: "EmptyUniqueOpts",
-			uniqueOpts: &UniqueOpts{
-				ByArgs:   false,
-				ByPeriod: 0,
-				ByQueue:  false,
-				ByState:  nil,
-			},
-			params:      params,
-			expectedKey: shasum("&kind=email&state=Available,Completed,Pending,Retryable,Running,Scheduled"),
-		},
-		{
-			name: "EmptyEncodedArgs",
-			uniqueOpts: &UniqueOpts{
-				ByArgs: true,
-			},
-			params: &riverdriver.JobInsertFastParams{
-				Kind:        "email",
-				EncodedArgs: []byte{},
-				Queue:       "default",
-			},
-			expectedKey: shasum("&kind=email&args=&state=Available,Completed,Pending,Retryable,Running,Scheduled"),
-		},
-		{
-			name: "SpecialCharactersInKindAndQueue",
-			uniqueOpts: &UniqueOpts{
-				ByQueue: true,
-			},
-			params: &riverdriver.JobInsertFastParams{
-				Kind:        "email&notification",
-				EncodedArgs: []byte(`{"to":"user@example.com","subject":"Test Email"}`),
-				Queue:       "default/queue",
-			},
-			expectedKey: shasum(
-				"&kind=email&notification&queue=default/queue&state=Available,Completed,Pending,Retryable,Running,Scheduled",
-			),
-		},
-		{
-			name: "UnknownJobState",
-			uniqueOpts: &UniqueOpts{
-				ByState: []rivertype.JobState{
-					"UnknownState",
-					rivertype.JobStateRunning,
-				},
-			},
-			params:      params,
-			expectedKey: shasum("&kind=email&state=Running"),
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt // capture range variable
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			uniqueKey := UniqueKey(stubSvc, tt.uniqueOpts, tt.params)
-
-			// Compare the generated unique key with the expected hash
-			require.Equal(t, tt.expectedKey, uniqueKey, "UniqueKey hash does not match expected value")
-		})
-	}
-
-	// Additional tests to ensure uniqueness
-	t.Run("DifferentUniqueOptsProduceDifferentKeys", func(t *testing.T) {
-		t.Parallel()
-
-		opts1 := &UniqueOpts{ByArgs: true}
-		opts2 := &UniqueOpts{ByQueue: true}
-
-		key1 := UniqueKey(stubSvc, opts1, params)
-		key2 := UniqueKey(stubSvc, opts2, params)
-
-		require.NotEqual(t, key1, key2, "UniqueKeys should differ for different UniqueOpts")
-	})
-
-	t.Run("SameInputsProduceSameKey", func(t *testing.T) {
-		t.Parallel()
-
-		opts := &UniqueOpts{
-			ByArgs:      true,
-			ByPeriod:    30 * time.Minute,
-			ByQueue:     true,
-			ByState:     []rivertype.JobState{rivertype.JobStateRunning},
-			ExcludeKind: false,
-		}
-		key1 := UniqueKey(stubSvc, opts, params)
-		key2 := UniqueKey(stubSvc, opts, params)
-
-		require.Equal(t, key1, key2, "UniqueKeys should be identical for the same inputs")
-	})
 }
 
 func TestUniqueOptsIsEmpty(t *testing.T) {
@@ -259,5 +312,3 @@ func TestUniqueStatesToBitmask(t *testing.T) {
 		require.Equal(t, byte(1<<(7-position)), bitmask, "Bitmask should be set for single state %s", state)
 	}
 }
-
-// TODO(bgentry): tests for new functions/methods in dbunique

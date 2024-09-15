@@ -22,6 +22,10 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
+type noOpArgs struct{}
+
+func (noOpArgs) Kind() string { return "no_op" }
+
 func TestPeriodicJobEnqueuer(t *testing.T) {
 	t.Parallel()
 
@@ -39,6 +43,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 	jobConstructorWithQueueFunc := func(name string, unique bool, queue string) func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
 		return func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
 			params := &riverdriver.JobInsertFastParams{
+				Args:        noOpArgs{},
 				EncodedArgs: []byte("{}"),
 				Kind:        name,
 				MaxAttempts: rivercommon.MaxAttemptsDefault,
@@ -48,7 +53,12 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			}
 			if unique {
 				uniqueOpts := &dbunique.UniqueOpts{ByArgs: true}
-				params.UniqueKey = dbunique.UniqueKey(stubSvc, uniqueOpts, params)
+				var err error
+				params.UniqueKey, err = dbunique.UniqueKey(stubSvc, uniqueOpts, params)
+				if err != nil {
+					return nil, nil, err
+				}
+
 				params.UniqueStates = uniqueOpts.StateBitmask()
 			}
 

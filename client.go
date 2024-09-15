@@ -1225,6 +1225,7 @@ func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, conf
 	}
 
 	insertParams := &riverdriver.JobInsertFastParams{
+		Args:        args,
 		CreatedAt:   createdAt,
 		EncodedArgs: json.RawMessage(encodedArgs),
 		Kind:        args.Kind(),
@@ -1242,7 +1243,10 @@ func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, conf
 			returnUniqueOpts = (*dbunique.UniqueOpts)(&uniqueOpts)
 		} else {
 			internalUniqueOpts := (*dbunique.UniqueOpts)(&uniqueOpts)
-			insertParams.UniqueKey = dbunique.UniqueKey(archetype.Time, internalUniqueOpts, insertParams)
+			insertParams.UniqueKey, err = dbunique.UniqueKey(archetype.Time, internalUniqueOpts, insertParams)
+			if err != nil {
+				return nil, nil, err
+			}
 			insertParams.UniqueStates = internalUniqueOpts.StateBitmask()
 		}
 	}
