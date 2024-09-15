@@ -327,7 +327,7 @@ func (p *JobListParams) First(count int) *JobListParams {
 		panic("count must be <= 10000")
 	}
 	paramsCopy := p.copy()
-	paramsCopy.paginationCount = int32(count) //nolint:gosec
+	paramsCopy.paginationCount = int32(count)
 	return paramsCopy
 }
 

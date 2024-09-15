@@ -62,7 +62,7 @@ func ComputeDistance(str1, str2 string) int {
 
 	// we start from 1 because index 0 is already 0.
 	for i := 1; i < len(distances); i++ {
-		distances[i] = uint16(i)
+		distances[i] = uint16(i) //nolint:gosec
 	}
 
 	// Make a dummy bounds check to prevent the 2 bounds check down below. The
@@ -71,7 +71,7 @@ func ComputeDistance(str1, str2 string) int {
 
 	// fill in the rest
 	for i := 1; i <= lenRuneSlice2; i++ {
-		prev := uint16(i)
+		prev := uint16(i) //nolint:gosec
 		for j := 1; j <= lenRuneSlice1; j++ {
 			current := distances[j-1] // match
 			if runeSlice2[i-1] != runeSlice1[j-1] {

@@ -319,7 +319,7 @@ func (n *Notifier) listenerUnlisten(ctx context.Context, topic NotificationTopic
 func (n *Notifier) waitOnce(ctx context.Context) error {
 	n.withLock(func() {
 		n.isWaiting = true
-		ctx, n.waitCancel = context.WithCancel(ctx)
+		ctx, n.waitCancel = context.WithCancel(ctx) //nolint:fatcontext
 	})
 	defer n.withLock(func() {
 		n.isWaiting = false
