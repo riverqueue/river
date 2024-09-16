@@ -59,7 +59,7 @@ func TestUnicode(t *testing.T) {
 }
 
 // Benchmarks
-// ----------------------------------------------
+// ----------------------------------------------.
 var sink int //nolint:gochecknoglobals
 
 func BenchmarkSimple(b *testing.B) {

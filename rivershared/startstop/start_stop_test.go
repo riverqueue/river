@@ -198,7 +198,7 @@ func TestErrStop(t *testing.T) {
 			return nil
 		}
 
-		workCtx = ctx
+		workCtx = ctx //nolint:fatcontext
 
 		go func() {
 			started()
