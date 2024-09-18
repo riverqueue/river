@@ -29,8 +29,10 @@ import (
 
 const (
 	// The name of an actual migration line embedded in our test data below.
-	migrationLineAlternate           = "alternate"
-	migrationLineAlternateMaxVersion = 6
+	migrationLineAlternate                = "alternate"
+	migrationLineAlternateMaxVersion      = 6
+	migrationLineCommitRequired           = "commit_required"
+	migrationLineCommitRequiredMaxVersion = 3
 )
 
 //go:embed migration/*/*.sql
@@ -50,12 +52,14 @@ func (d *driverWithAlternateLine) GetMigrationFS(line string) fs.FS {
 		return migrationFS
 	case migrationLineAlternate + "2":
 		panic(line + " is only meant for testing line suggestions")
+	case migrationLineCommitRequired:
+		return migrationFS
 	}
 	panic("migration line does not exist: " + line)
 }
 
 func (d *driverWithAlternateLine) GetMigrationLines() []string {
-	return append(d.Driver.GetMigrationLines(), migrationLineAlternate, migrationLineAlternate+"2")
+	return append(d.Driver.GetMigrationLines(), migrationLineAlternate, migrationLineAlternate+"2", migrationLineCommitRequired)
 }
 
 func TestMigrator(t *testing.T) {
@@ -719,6 +723,42 @@ func TestMigrator(t *testing.T) {
 		// And the version 005 down migration to verify the same.
 		_, err = bundle.tx.Exec(ctx, migrationsBundle.WithTestVersionsMap[5].SQLDown)
 		require.NoError(t, err)
+	})
+
+	t.Run("MigrationsWithCommitRequired", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+		t.Cleanup(func() {
+			tx, err := bundle.dbPool.Begin(ctx)
+			require.NoError(t, err)
+			defer tx.Rollback(ctx)
+
+			// Clean up the types we created.
+			_, err = tx.Exec(ctx, "DROP FUNCTION IF EXISTS foobar_in_bitmask")
+			require.NoError(t, err)
+
+			_, err = tx.Exec(ctx, "DROP TYPE IF EXISTS foobar")
+			require.NoError(t, err)
+
+			_, err = tx.Exec(ctx, "DELETE FROM river_migration WHERE line = $1", migrationLineCommitRequired)
+			require.NoError(t, err)
+
+			require.NoError(t, tx.Commit(ctx))
+		})
+
+		// We have to reinitialize the commitRequiredMigrator because the migrations
+		// bundle is set in the constructor.
+		commitRequiredMigrator, err := New(bundle.driver, &Config{
+			Line:   migrationLineCommitRequired,
+			Logger: bundle.logger,
+		})
+		require.NoError(t, err)
+
+		res, err := commitRequiredMigrator.Migrate(ctx, DirectionUp, nil)
+		require.NoError(t, err)
+		require.Equal(t, DirectionUp, res.Direction)
+		require.Equal(t, []int{1, 2, 3}, sliceutil.Map(res.Versions, migrateVersionToInt))
 	})
 }
 
