@@ -3893,6 +3893,19 @@ func Test_Client_Subscribe(t *testing.T) {
 
 		require.Empty(t, client.subscriptionManager.subscriptions)
 	})
+
+	// Just make sure this doesn't fail on a nil pointer exception.
+	t.Run("SubscribeOnClientWithoutWorkers", func(t *testing.T) {
+		t.Parallel()
+
+		dbPool := riverinternaltest.TestDB(ctx, t)
+
+		client := newTestClient(t, dbPool, &Config{})
+
+		require.PanicsWithValue(t, "created a subscription on a client that will never work jobs (Workers not configured)", func() {
+			_, _ = client.Subscribe(EventKindJobCompleted)
+		})
+	})
 }
 
 // SubscribeConfig uses all the same code as Subscribe, so these are just a
