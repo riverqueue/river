@@ -297,16 +297,15 @@ func (m *Migrator[TTx]) GetVersion(version int) (Migration, error) {
 //		// handle error
 //	}
 func (m *Migrator[TTx]) Migrate(ctx context.Context, direction Direction, opts *MigrateOpts) (*MigrateResult, error) {
-	return dbutil.WithTxV(ctx, m.driver.GetExecutor(), func(ctx context.Context, exec riverdriver.ExecutorTx) (*MigrateResult, error) {
-		switch direction {
-		case DirectionDown:
-			return m.migrateDown(ctx, exec, direction, opts)
-		case DirectionUp:
-			return m.migrateUp(ctx, exec, direction, opts)
-		}
+	exec := m.driver.GetExecutor()
+	switch direction {
+	case DirectionDown:
+		return m.migrateDown(ctx, exec, direction, opts)
+	case DirectionUp:
+		return m.migrateUp(ctx, exec, direction, opts)
+	}
 
-		panic("invalid direction: " + direction)
-	})
+	panic("invalid direction: " + direction)
 }
 
 // Migrate migrates the database in the given direction (up or down). The opts
@@ -560,10 +559,22 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Ex
 
 		if !opts.DryRun {
 			start := time.Now()
-			_, err := exec.Exec(ctx, sql)
+
+			// Similar to ActiveRecord migrations, we wrap each individual migration
+			// in its own transaction.  Without this, certain migrations that require
+			// a commit on a preexisting operation (such as adding an enum value to be
+			// used in an immutable function) cannot succeed.
+			err := dbutil.WithTx(ctx, exec, func(ctx context.Context, exec riverdriver.ExecutorTx) error {
+				_, err := exec.Exec(ctx, sql)
+				if err != nil {
+					return fmt.Errorf("error applying version %03d [%s]: %w",
+						versionBundle.Version, strings.ToUpper(string(direction)), err)
+				}
+				return nil
+			})
+
 			if err != nil {
-				return nil, fmt.Errorf("error applying version %03d [%s]: %w",
-					versionBundle.Version, strings.ToUpper(string(direction)), err)
+				return nil, err
 			}
 			duration = time.Since(start)
 		}
