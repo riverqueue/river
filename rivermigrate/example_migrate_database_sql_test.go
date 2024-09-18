@@ -18,26 +18,27 @@ import (
 func Example_migrateDatabaseSQL() {
 	ctx := context.Background()
 
-	dbPool, err := sql.Open("pgx", riverinternaltest.DatabaseURL("river_test_example"))
+	// Use a dedicated Postgres schema for this example so we can migrate and drop it at will:
+	schemaName := "migration_example_dbsql"
+	url := riverinternaltest.DatabaseURL("river_test_example") + "&search_path=" + schemaName
+	dbPool, err := sql.Open("pgx", url)
 	if err != nil {
 		panic(err)
 	}
 	defer dbPool.Close()
 
-	tx, err := dbPool.BeginTx(ctx, nil)
-	if err != nil {
-		panic(err)
-	}
-	defer tx.Rollback()
-
-	migrator, err := rivermigrate.New(riverdatabasesql.New(dbPool), nil)
+	driver := riverdatabasesql.New(dbPool)
+	migrator, err := rivermigrate.New(driver, nil)
 	if err != nil {
 		panic(err)
 	}
 
-	// Our test database starts with a full River schema. Drop it so that we can
-	// demonstrate working migrations. This isn't necessary outside this test.
-	dropRiverSchema(ctx, migrator, tx)
+	// Create the schema used for this example. Drop it when we're done.
+	// This isn't necessary outside this test.
+	if _, err := dbPool.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+schemaName); err != nil {
+		panic(err)
+	}
+	defer dropRiverSchema(ctx, driver, schemaName)
 
 	printVersions := func(res *rivermigrate.MigrateResult) {
 		for _, version := range res.Versions {
@@ -47,7 +48,7 @@ func Example_migrateDatabaseSQL() {
 
 	// Migrate to version 3. An actual call may want to omit all MigrateOpts,
 	// which will default to applying all available up migrations.
-	res, err := migrator.MigrateTx(ctx, tx, rivermigrate.DirectionUp, &rivermigrate.MigrateOpts{
+	res, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, &rivermigrate.MigrateOpts{
 		TargetVersion: 3,
 	})
 	if err != nil {
@@ -57,7 +58,7 @@ func Example_migrateDatabaseSQL() {
 
 	// Migrate down by three steps. Down migrating defaults to running only one
 	// step unless overridden by an option like MaxSteps or TargetVersion.
-	res, err = migrator.MigrateTx(ctx, tx, rivermigrate.DirectionDown, &rivermigrate.MigrateOpts{
+	res, err = migrator.Migrate(ctx, rivermigrate.DirectionDown, &rivermigrate.MigrateOpts{
 		MaxSteps: 3,
 	})
 	if err != nil {

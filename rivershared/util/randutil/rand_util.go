@@ -3,6 +3,7 @@ package randutil
 import (
 	cryptorand "crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	mathrand "math/rand"
 	"sync"
 	"time"
@@ -26,6 +27,14 @@ func NewCryptoSeededConcurrentSafeRand() *mathrand.Rand {
 // `rand.Rand` argument.
 func DurationBetween(rand *mathrand.Rand, lowerLimit, upperLimit time.Duration) time.Duration {
 	return time.Duration(IntBetween(rand, int(lowerLimit), int(upperLimit)))
+}
+
+func Hex(length int) string {
+	bytes := make([]byte, length)
+	if _, err := cryptorand.Read(bytes); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(bytes)
 }
 
 // IntBetween generates a random number in the range of [lowerLimit, upperLimit).

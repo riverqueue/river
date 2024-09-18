@@ -326,6 +326,9 @@ func (m *Migrator[TTx]) Migrate(ctx context.Context, direction Direction, opts *
 // This variant lets a caller run migrations within a transaction. Postgres DDL
 // is transactional, so migration changes aren't visible until the transaction
 // commits, and are rolled back if the transaction rolls back.
+//
+// Deprecated: Use Migrate instead. Certain migrations cannot be batched together
+// in a single transaction, so this method is not recommended.
 func (m *Migrator[TTx]) MigrateTx(ctx context.Context, tx TTx, direction Direction, opts *MigrateOpts) (*MigrateResult, error) {
 	switch direction {
 	case DirectionDown:
@@ -572,7 +575,6 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Ex
 				}
 				return nil
 			})
-
 			if err != nil {
 				return nil, err
 			}
