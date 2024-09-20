@@ -997,13 +997,13 @@ func (q *Queries) JobRetry(ctx context.Context, db DBTX, id int64) (*RiverJob, e
 
 const jobSchedule = `-- name: JobSchedule :many
 WITH jobs_to_schedule AS (
-    SELECT id
+    SELECT id, unique_key, unique_states
     FROM river_job
     WHERE
         state IN ('retryable', 'scheduled')
         AND queue IS NOT NULL
         AND priority >= 0
-        AND river_job.scheduled_at <= $1::timestamptz
+        AND scheduled_at <= $1::timestamptz
     ORDER BY
         priority,
         scheduled_at,
@@ -1011,16 +1011,38 @@ WITH jobs_to_schedule AS (
     LIMIT $2::bigint
     FOR UPDATE
 ),
-river_job_scheduled AS (
+conflicting_jobs AS (
+    SELECT DISTINCT unique_key
+    FROM river_job
+    WHERE unique_key IN (
+            SELECT unique_key
+            FROM jobs_to_schedule
+            WHERE unique_key IS NOT NULL
+                AND unique_states IS NOT NULL
+        )
+        AND unique_states IS NOT NULL
+        AND river_job_state_in_bitmask(unique_states, state)
+),
+updated_jobs AS (
     UPDATE river_job
-    SET state = 'available'
-    FROM jobs_to_schedule
-    WHERE river_job.id = jobs_to_schedule.id
-    RETURNING river_job.id
+    SET
+        state        = CASE WHEN cj.unique_key IS NULL THEN 'available'::river_job_state
+                            ELSE 'discarded'::river_job_state END,
+        finalized_at = CASE WHEN cj.unique_key IS NULL THEN finalized_at
+                            ELSE $1::timestamptz END,
+        -- Purely for debugging to understand when this code path was used:
+        metadata     = CASE WHEN cj.unique_key IS NULL THEN metadata
+                            ELSE metadata || '{"unique_key_conflict": "scheduler_discarded"}'::jsonb END
+    FROM jobs_to_schedule jts
+    LEFT JOIN conflicting_jobs cj ON jts.unique_key = cj.unique_key
+    WHERE river_job.id = jts.id
+    RETURNING river_job.id, state = 'discarded'::river_job_state AS conflict_discarded
 )
-SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
+SELECT
+    river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states,
+    updated_jobs.conflict_discarded
 FROM river_job
-WHERE id IN (SELECT id FROM river_job_scheduled)
+JOIN updated_jobs ON river_job.id = updated_jobs.id
 `
 
 type JobScheduleParams struct {
@@ -1028,34 +1050,40 @@ type JobScheduleParams struct {
 	Max int64
 }
 
-func (q *Queries) JobSchedule(ctx context.Context, db DBTX, arg *JobScheduleParams) ([]*RiverJob, error) {
+type JobScheduleRow struct {
+	RiverJob          RiverJob
+	ConflictDiscarded bool
+}
+
+func (q *Queries) JobSchedule(ctx context.Context, db DBTX, arg *JobScheduleParams) ([]*JobScheduleRow, error) {
 	rows, err := db.Query(ctx, jobSchedule, arg.Now, arg.Max)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []*RiverJob
+	var items []*JobScheduleRow
 	for rows.Next() {
-		var i RiverJob
+		var i JobScheduleRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.Args,
-			&i.Attempt,
-			&i.AttemptedAt,
-			&i.AttemptedBy,
-			&i.CreatedAt,
-			&i.Errors,
-			&i.FinalizedAt,
-			&i.Kind,
-			&i.MaxAttempts,
-			&i.Metadata,
-			&i.Priority,
-			&i.Queue,
-			&i.State,
-			&i.ScheduledAt,
-			&i.Tags,
-			&i.UniqueKey,
-			&i.UniqueStates,
+			&i.RiverJob.ID,
+			&i.RiverJob.Args,
+			&i.RiverJob.Attempt,
+			&i.RiverJob.AttemptedAt,
+			&i.RiverJob.AttemptedBy,
+			&i.RiverJob.CreatedAt,
+			&i.RiverJob.Errors,
+			&i.RiverJob.FinalizedAt,
+			&i.RiverJob.Kind,
+			&i.RiverJob.MaxAttempts,
+			&i.RiverJob.Metadata,
+			&i.RiverJob.Priority,
+			&i.RiverJob.Queue,
+			&i.RiverJob.State,
+			&i.RiverJob.ScheduledAt,
+			&i.RiverJob.Tags,
+			&i.RiverJob.UniqueKey,
+			&i.RiverJob.UniqueStates,
+			&i.ConflictDiscarded,
 		); err != nil {
 			return nil, err
 		}

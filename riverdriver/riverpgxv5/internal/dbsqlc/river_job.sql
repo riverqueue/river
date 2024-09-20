@@ -406,13 +406,13 @@ FROM updated_job;
 
 -- name: JobSchedule :many
 WITH jobs_to_schedule AS (
-    SELECT id
+    SELECT id, unique_key, unique_states
     FROM river_job
     WHERE
         state IN ('retryable', 'scheduled')
         AND queue IS NOT NULL
         AND priority >= 0
-        AND river_job.scheduled_at <= @now::timestamptz
+        AND scheduled_at <= @now::timestamptz
     ORDER BY
         priority,
         scheduled_at,
@@ -420,16 +420,38 @@ WITH jobs_to_schedule AS (
     LIMIT @max::bigint
     FOR UPDATE
 ),
-river_job_scheduled AS (
+conflicting_jobs AS (
+    SELECT DISTINCT unique_key
+    FROM river_job
+    WHERE unique_key IN (
+            SELECT unique_key
+            FROM jobs_to_schedule
+            WHERE unique_key IS NOT NULL
+                AND unique_states IS NOT NULL
+        )
+        AND unique_states IS NOT NULL
+        AND river_job_state_in_bitmask(unique_states, state)
+),
+updated_jobs AS (
     UPDATE river_job
-    SET state = 'available'
-    FROM jobs_to_schedule
-    WHERE river_job.id = jobs_to_schedule.id
-    RETURNING river_job.id
+    SET
+        state        = CASE WHEN cj.unique_key IS NULL THEN 'available'::river_job_state
+                            ELSE 'discarded'::river_job_state END,
+        finalized_at = CASE WHEN cj.unique_key IS NULL THEN finalized_at
+                            ELSE @now::timestamptz END,
+        -- Purely for debugging to understand when this code path was used:
+        metadata     = CASE WHEN cj.unique_key IS NULL THEN metadata
+                            ELSE metadata || '{"unique_key_conflict": "scheduler_discarded"}'::jsonb END
+    FROM jobs_to_schedule jts
+    LEFT JOIN conflicting_jobs cj ON jts.unique_key = cj.unique_key
+    WHERE river_job.id = jts.id
+    RETURNING river_job.id, state = 'discarded'::river_job_state AS conflict_discarded
 )
-SELECT *
+SELECT
+    sqlc.embed(river_job),
+    updated_jobs.conflict_discarded
 FROM river_job
-WHERE id IN (SELECT id FROM river_job_scheduled);
+JOIN updated_jobs ON river_job.id = updated_jobs.id;
 
 -- name: JobSetCompleteIfRunningMany :many
 WITH job_to_finalized_at AS (

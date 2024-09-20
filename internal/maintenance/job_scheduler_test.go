@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 
+	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -77,6 +79,15 @@ func TestJobScheduler(t *testing.T) {
 		require.Equal(t, rivertype.JobStateAvailable, newJob.State)
 		return newJob
 	}
+	requireJobStateDiscardedWithMeta := func(t *testing.T, exec riverdriver.Executor, job *rivertype.JobRow) *rivertype.JobRow {
+		t.Helper()
+		newJob, err := exec.JobGetByID(ctx, job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateDiscarded, newJob.State)
+		require.NotNil(t, newJob.FinalizedAt)
+		require.Equal(t, "scheduler_discarded", gjson.GetBytes(newJob.Metadata, "unique_key_conflict").String())
+		return newJob
+	}
 
 	t.Run("Defaults", func(t *testing.T) {
 		t.Parallel()
@@ -137,6 +148,50 @@ func TestJobScheduler(t *testing.T) {
 		requireJobStateAvailable(t, bundle.exec, retryableJob1)
 		requireJobStateAvailable(t, bundle.exec, retryableJob2)
 		requireJobStateUnchanged(t, bundle.exec, retryableJob3) // still retryable
+	})
+
+	t.Run("MovesUniqueKeyConflictingJobsToDiscarded", func(t *testing.T) {
+		t.Parallel()
+
+		scheduler, bundle := setupTx(t)
+		now := time.Now().UTC()
+
+		// The list of default states, but without retryable to allow for dupes in that state:
+		uniqueStates := []rivertype.JobState{
+			rivertype.JobStateAvailable,
+			rivertype.JobStateCompleted,
+			rivertype.JobStatePending,
+			rivertype.JobStateRunning,
+			rivertype.JobStateScheduled,
+		}
+		uniqueMap := dbunique.UniqueStatesToBitmask(uniqueStates)
+
+		retryableJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("1"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
+		retryableJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("2"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
+		retryableJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("3"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))}) // dupe
+		retryableJob4 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("4"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))}) // dupe
+		retryableJob5 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("5"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))}) // dupe
+		retryableJob6 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("6"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))}) // dupe
+		retryableJob7 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("7"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))}) // dupe
+
+		// Will cause conflicts with above jobs when retried:
+		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("3"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("4"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("5"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStatePending)})
+		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("6"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("7"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateScheduled)})
+
+		require.NoError(t, scheduler.Start(ctx))
+
+		scheduler.TestSignals.ScheduledBatch.WaitOrTimeout()
+
+		requireJobStateAvailable(t, bundle.exec, retryableJob1)
+		requireJobStateAvailable(t, bundle.exec, retryableJob2)
+		requireJobStateDiscardedWithMeta(t, bundle.exec, retryableJob3)
+		requireJobStateDiscardedWithMeta(t, bundle.exec, retryableJob4)
+		requireJobStateDiscardedWithMeta(t, bundle.exec, retryableJob5)
+		requireJobStateDiscardedWithMeta(t, bundle.exec, retryableJob6)
+		requireJobStateDiscardedWithMeta(t, bundle.exec, retryableJob7)
 	})
 
 	t.Run("SchedulesInBatches", func(t *testing.T) {
