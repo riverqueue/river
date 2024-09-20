@@ -50,8 +50,8 @@ type JobCleanerConfig struct {
 	// Interval is the amount of time to wait between runs of the cleaner.
 	Interval time.Duration
 
-	// JobCleanerTimeout is the timeout of the job cleaner runner.
-	JobCleanerTimeout time.Duration
+	// Timeout of the individual queries in the job cleaner.
+	Timeout time.Duration
 }
 
 func (c *JobCleanerConfig) mustValidate() *JobCleanerConfig {
@@ -66,6 +66,9 @@ func (c *JobCleanerConfig) mustValidate() *JobCleanerConfig {
 	}
 	if c.Interval <= 0 {
 		panic("JobCleanerConfig.Interval must be above zero")
+	}
+	if c.Timeout <= 0 {
+		panic("JobCleanerConfig.Timeout must be above zero")
 	}
 
 	return c
@@ -92,7 +95,7 @@ func NewJobCleaner(archetype *baseservice.Archetype, config *JobCleanerConfig, e
 			CompletedJobRetentionPeriod: valutil.ValOrDefault(config.CompletedJobRetentionPeriod, CompletedJobRetentionPeriodDefault),
 			DiscardedJobRetentionPeriod: valutil.ValOrDefault(config.DiscardedJobRetentionPeriod, DiscardedJobRetentionPeriodDefault),
 			Interval:                    valutil.ValOrDefault(config.Interval, JobCleanerIntervalDefault),
-			JobCleanerTimeout:           valutil.ValOrDefault(config.JobCleanerTimeout, JobCleanerTimeoutDefault),
+			Timeout:                     valutil.ValOrDefault(config.Timeout, JobCleanerTimeoutDefault),
 		}).mustValidate(),
 
 		batchSize: BatchSizeDefault,
@@ -152,7 +155,7 @@ func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, err
 	for {
 		// Wrapped in a function so that defers run as expected.
 		numDeleted, err := func() (int, error) {
-			ctx, cancelFunc := context.WithTimeout(ctx, s.Config.JobCleanerTimeout)
+			ctx, cancelFunc := context.WithTimeout(ctx, s.Config.Timeout)
 			defer cancelFunc()
 
 			numDeleted, err := s.exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{

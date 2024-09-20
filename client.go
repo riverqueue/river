@@ -89,11 +89,6 @@ type Config struct {
 	// Defaults to 7 days.
 	DiscardedJobRetentionPeriod time.Duration
 
-	// JobCleanerTimeout is the timeout of the job cleaner's runner.
-	//
-	// Defaults to 30 seconds.
-	JobCleanerTimeout time.Duration
-
 	// ErrorHandler can be configured to be invoked in case of an error or panic
 	// occurring in a job. This is often useful for logging and exception
 	// tracking, but can also be used to customize retry behavior.
@@ -135,6 +130,13 @@ type Config struct {
 	//
 	// If in doubt, leave this property empty.
 	ID string
+
+	// JobCleanerTimeout is the timeout of the individual queries within the job
+	// cleaner.
+	//
+	// Defaults to 30 seconds, which should be more than enough time for most
+	// deployments.
+	JobCleanerTimeout time.Duration
 
 	// JobTimeout is the maximum amount of time a job is allowed to run before its
 	// context is cancelled. A timeout of zero means JobTimeoutDefault will be
@@ -563,7 +565,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 				CancelledJobRetentionPeriod: config.CancelledJobRetentionPeriod,
 				CompletedJobRetentionPeriod: config.CompletedJobRetentionPeriod,
 				DiscardedJobRetentionPeriod: config.DiscardedJobRetentionPeriod,
-				JobCleanerTimeout:           config.JobCleanerTimeout,
+				Timeout:                     config.JobCleanerTimeout,
 			}, driver.GetExecutor())
 			maintenanceServices = append(maintenanceServices, jobCleaner)
 			client.testSignals.jobCleaner = &jobCleaner.TestSignals

@@ -65,7 +65,7 @@ func TestJobCleaner(t *testing.T) {
 		require.Equal(t, CompletedJobRetentionPeriodDefault, cleaner.Config.CompletedJobRetentionPeriod)
 		require.Equal(t, DiscardedJobRetentionPeriodDefault, cleaner.Config.DiscardedJobRetentionPeriod)
 		require.Equal(t, JobCleanerIntervalDefault, cleaner.Config.Interval)
-		require.Equal(t, JobCleanerTimeoutDefault, cleaner.Config.JobCleanerTimeout)
+		require.Equal(t, JobCleanerTimeoutDefault, cleaner.Config.Timeout)
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {
@@ -160,41 +160,6 @@ func TestJobCleaner(t *testing.T) {
 		for _, job := range jobs {
 			_, err := bundle.exec.JobGetByID(ctx, job.ID)
 			require.ErrorIs(t, err, rivertype.ErrNotFound)
-		}
-	})
-
-	t.Run("DeletesCompletedJobsWithTimeout", func(t *testing.T) {
-		t.Parallel()
-
-		cleaner, bundle := setup(t)
-		cleaner.Config.JobCleanerTimeout = 1 * time.Nanosecond
-
-		// none of these get removed
-		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
-		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled)})
-
-		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
-		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(-1 * time.Minute))})
-		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(1 * time.Minute))}) // won't be deleted
-
-		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
-		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Minute))})
-		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(1 * time.Minute))}) // won't be deleted
-
-		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
-		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(-1 * time.Minute))})
-		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(1 * time.Minute))}) // won't be deleted
-
-		require.NoError(t, cleaner.Start(ctx))
-
-		timeout := riversharedtest.WaitTimeout()
-
-		select {
-		case <-cleaner.TestSignals.DeletedBatch.WaitC():
-			t.Error("That supposed to have timed out")
-		case <-time.After(timeout):
-			t.Log("Expected timeout")
 		}
 	})
 

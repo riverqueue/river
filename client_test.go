@@ -4627,6 +4627,7 @@ func Test_NewClient_Defaults(t *testing.T) {
 	require.Equal(t, maintenance.CancelledJobRetentionPeriodDefault, jobCleaner.Config.CancelledJobRetentionPeriod)
 	require.Equal(t, maintenance.CompletedJobRetentionPeriodDefault, jobCleaner.Config.CompletedJobRetentionPeriod)
 	require.Equal(t, maintenance.DiscardedJobRetentionPeriodDefault, jobCleaner.Config.DiscardedJobRetentionPeriod)
+	require.Equal(t, maintenance.JobCleanerTimeoutDefault, jobCleaner.Config.Timeout)
 	require.False(t, jobCleaner.StaggerStartupIsDisabled())
 
 	enqueuer := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
