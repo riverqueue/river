@@ -131,6 +131,13 @@ type Config struct {
 	// If in doubt, leave this property empty.
 	ID string
 
+	// JobCleanerTimeout is the timeout of the individual queries within the job
+	// cleaner.
+	//
+	// Defaults to 30 seconds, which should be more than enough time for most
+	// deployments.
+	JobCleanerTimeout time.Duration
+
 	// JobTimeout is the maximum amount of time a job is allowed to run before its
 	// context is cancelled. A timeout of zero means JobTimeoutDefault will be
 	// used, whereas a value of -1 means the job's context will not be cancelled
@@ -558,6 +565,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 				CancelledJobRetentionPeriod: config.CancelledJobRetentionPeriod,
 				CompletedJobRetentionPeriod: config.CompletedJobRetentionPeriod,
 				DiscardedJobRetentionPeriod: config.DiscardedJobRetentionPeriod,
+				Timeout:                     config.JobCleanerTimeout,
 			}, driver.GetExecutor())
 			maintenanceServices = append(maintenanceServices, jobCleaner)
 			client.testSignals.jobCleaner = &jobCleaner.TestSignals

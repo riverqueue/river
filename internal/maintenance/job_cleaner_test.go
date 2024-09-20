@@ -65,6 +65,7 @@ func TestJobCleaner(t *testing.T) {
 		require.Equal(t, CompletedJobRetentionPeriodDefault, cleaner.Config.CompletedJobRetentionPeriod)
 		require.Equal(t, DiscardedJobRetentionPeriodDefault, cleaner.Config.DiscardedJobRetentionPeriod)
 		require.Equal(t, JobCleanerIntervalDefault, cleaner.Config.Interval)
+		require.Equal(t, JobCleanerTimeoutDefault, cleaner.Config.Timeout)
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {
