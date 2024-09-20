@@ -102,7 +102,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 
 	params := make([]*riverdriver.JobInsertFastParams, maxJobCount)
 	for i := range params {
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, WithJobNumArgs{JobNum: i}, nil)
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, WithJobNumArgs{JobNum: i}, nil, true)
 		require.NoError(err)
 
 		params[i] = insertParams
@@ -277,7 +277,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 	mustInsert := func(ctx context.Context, t *testing.T, bundle *testBundle, args JobArgs) {
 		t.Helper()
 
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(bundle.archetype, bundle.config, args, nil)
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(bundle.archetype, bundle.config, args, nil, false)
 		require.NoError(t, err)
 
 		_, err = bundle.exec.JobInsertFast(ctx, insertParams)

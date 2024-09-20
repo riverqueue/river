@@ -1162,7 +1162,7 @@ func (c *Client[TTx]) ID() string {
 	return c.config.ID
 }
 
-func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, config *Config, args JobArgs, insertOpts *InsertOpts) (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
+func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, config *Config, args JobArgs, insertOpts *InsertOpts, bulk bool) (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
 	encodedArgs, err := json.Marshal(args)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error marshaling args to JSON: %w", err)
@@ -1239,7 +1239,9 @@ func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, conf
 	var returnUniqueOpts *dbunique.UniqueOpts
 	if !uniqueOpts.isEmpty() {
 		if uniqueOpts.isV1() {
-			// TODO: block this path if we're within a multirow insert.
+			if bulk {
+				return nil, nil, errors.New("bulk inserts do not support advisory lock uniqueness and cannot remove required states")
+			}
 			returnUniqueOpts = (*dbunique.UniqueOpts)(&uniqueOpts)
 		} else {
 			internalUniqueOpts := (*dbunique.UniqueOpts)(&uniqueOpts)
@@ -1288,7 +1290,7 @@ func (c *Client[TTx]) Insert(ctx context.Context, args JobArgs, opts *InsertOpts
 		return nil, errNoDriverDBPool
 	}
 
-	return c.insert(ctx, c.driver.GetExecutor(), args, opts)
+	return c.insert(ctx, c.driver.GetExecutor(), args, opts, false)
 }
 
 // InsertTx inserts a new job with the provided args on the given transaction.
@@ -1309,15 +1311,15 @@ func (c *Client[TTx]) Insert(ctx context.Context, args JobArgs, opts *InsertOpts
 // transactions, the job will not be worked until the transaction has committed,
 // and if the transaction rolls back, so too is the inserted job.
 func (c *Client[TTx]) InsertTx(ctx context.Context, tx TTx, args JobArgs, opts *InsertOpts) (*rivertype.JobInsertResult, error) {
-	return c.insert(ctx, c.driver.UnwrapExecutor(tx), args, opts)
+	return c.insert(ctx, c.driver.UnwrapExecutor(tx), args, opts, false)
 }
 
-func (c *Client[TTx]) insert(ctx context.Context, exec riverdriver.Executor, args JobArgs, opts *InsertOpts) (*rivertype.JobInsertResult, error) {
+func (c *Client[TTx]) insert(ctx context.Context, exec riverdriver.Executor, args JobArgs, opts *InsertOpts, bulk bool) (*rivertype.JobInsertResult, error) {
 	if err := c.validateJobArgs(args); err != nil {
 		return nil, err
 	}
 
-	params, uniqueOpts, err := insertParamsFromConfigArgsAndOptions(&c.baseService.Archetype, c.config, args, opts)
+	params, uniqueOpts, err := insertParamsFromConfigArgsAndOptions(&c.baseService.Archetype, c.config, args, opts, bulk)
 	if err != nil {
 		return nil, err
 	}
@@ -1336,7 +1338,11 @@ func (c *Client[TTx]) insert(ctx context.Context, exec riverdriver.Executor, arg
 			return nil, err
 		}
 	} else {
+		if bulk {
+			return nil, errors.New("bulk inserts do not support advisory lock uniqueness")
+		}
 		// Old deprecated advisory lock route
+		c.baseService.Logger.WarnContext(ctx, "Using deprecated advisory lock uniqueness for job insert")
 		jobInsertRes, err = c.uniqueInserter.JobInsert(ctx, tx, params, uniqueOpts)
 		if err != nil {
 			return nil, err
@@ -1475,19 +1481,11 @@ func (c *Client[TTx]) insertManyParams(params []InsertManyParams) ([]*riverdrive
 			return nil, err
 		}
 
-		insertParamsItem, uniqueOpts, err := insertParamsFromConfigArgsAndOptions(&c.baseService.Archetype, c.config, param.Args, param.InsertOpts)
+		insertParamsItem, _, err := insertParamsFromConfigArgsAndOptions(&c.baseService.Archetype, c.config, param.Args, param.InsertOpts, true)
 		if err != nil {
 			return nil, err
 		}
 
-		if uniqueOpts != nil {
-			// These are returned only for the v1 style advisory lock based uniqueness,
-			// which has never been supported on bulk inserts due to the potential for
-			// contention and deadlocks.
-			//
-			// This can be removed when v1 uniqueness is removed.
-			return nil, errors.New("UniqueOpts are not supported for batch inserts")
-		}
 		insertParams[i] = insertParamsItem
 	}
 
@@ -1604,15 +1602,9 @@ func (c *Client[TTx]) insertManyFastParams(params []InsertManyParams) ([]*riverd
 			return nil, err
 		}
 
-		insertParamsItem, uniqueOpts, err := insertParamsFromConfigArgsAndOptions(&c.baseService.Archetype, c.config, param.Args, param.InsertOpts)
+		insertParamsItem, _, err := insertParamsFromConfigArgsAndOptions(&c.baseService.Archetype, c.config, param.Args, param.InsertOpts, true)
 		if err != nil {
 			return nil, err
-		}
-		if uniqueOpts != nil {
-			// UniqueOpts aren't support for batch inserts because they use PG
-			// advisory locks to work, and taking many locks simultaneously
-			// could easily lead to contention and deadlocks.
-			return nil, errors.New("UniqueOpts are not supported for batch inserts")
 		}
 		insertParams[i] = insertParamsItem
 	}

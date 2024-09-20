@@ -1827,7 +1827,7 @@ func Test_Client_InsertManyFast(t *testing.T) {
 				ByState: []rivertype.JobState{rivertype.JobStateAvailable},
 			}}},
 		})
-		require.EqualError(t, err, "UniqueOpts are not supported for batch inserts")
+		require.EqualError(t, err, "bulk inserts do not support advisory lock uniqueness and cannot remove required states")
 		require.Equal(t, 0, count)
 	})
 }
@@ -1982,7 +1982,7 @@ func Test_Client_InsertManyFastTx(t *testing.T) {
 				ByState: []rivertype.JobState{rivertype.JobStateAvailable},
 			}}},
 		})
-		require.EqualError(t, err, "UniqueOpts are not supported for batch inserts")
+		require.EqualError(t, err, "bulk inserts do not support advisory lock uniqueness and cannot remove required states")
 		require.Equal(t, 0, count)
 	})
 }
@@ -2248,7 +2248,7 @@ func Test_Client_InsertMany(t *testing.T) {
 				ByState: []rivertype.JobState{rivertype.JobStateAvailable},
 			}}},
 		})
-		require.EqualError(t, err, "UniqueOpts are not supported for batch inserts")
+		require.EqualError(t, err, "bulk inserts do not support advisory lock uniqueness and cannot remove required states")
 		require.Empty(t, results)
 	})
 }
@@ -2463,7 +2463,7 @@ func Test_Client_InsertManyTx(t *testing.T) {
 				ByState: []rivertype.JobState{rivertype.JobStateAvailable},
 			}}},
 		})
-		require.EqualError(t, err, "UniqueOpts are not supported for batch inserts")
+		require.EqualError(t, err, "bulk inserts do not support advisory lock uniqueness and cannot remove required states")
 		require.Empty(t, results)
 	})
 }
@@ -2966,7 +2966,7 @@ func Test_Client_ErrorHandler(t *testing.T) {
 
 		// Bypass the normal Insert function because that will error on an
 		// unknown job.
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(&client.baseService.Archetype, config, unregisteredJobArgs{}, nil)
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(&client.baseService.Archetype, config, unregisteredJobArgs{}, nil, false)
 		require.NoError(t, err)
 		_, err = client.driver.GetExecutor().JobInsertFast(ctx, insertParams)
 		require.NoError(t, err)
@@ -4627,7 +4627,7 @@ func Test_Client_UnknownJobKindErrorsTheJob(t *testing.T) {
 	subscribeChan, cancel := client.Subscribe(EventKindJobFailed)
 	t.Cleanup(cancel)
 
-	insertParams, _, err := insertParamsFromConfigArgsAndOptions(&client.baseService.Archetype, config, unregisteredJobArgs{}, nil)
+	insertParams, _, err := insertParamsFromConfigArgsAndOptions(&client.baseService.Archetype, config, unregisteredJobArgs{}, nil, false)
 	require.NoError(err)
 	insertedResult, err := client.driver.GetExecutor().JobInsertFast(ctx, insertParams)
 	require.NoError(err)
@@ -5237,7 +5237,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 	t.Run("Defaults", func(t *testing.T) {
 		t.Parallel()
 
-		insertParams, uniqueOpts, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, nil)
+		insertParams, uniqueOpts, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, `{"name":""}`, string(insertParams.EncodedArgs))
 		require.Equal(t, (noOpArgs{}).Kind(), insertParams.Kind)
@@ -5259,7 +5259,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 			MaxAttempts: 34,
 		}
 
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, overrideConfig, noOpArgs{}, nil)
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, overrideConfig, noOpArgs{}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, overrideConfig.MaxAttempts, insertParams.MaxAttempts)
 	})
@@ -5274,7 +5274,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 			ScheduledAt: time.Now().Add(time.Hour),
 			Tags:        []string{"tag1", "tag2"},
 		}
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, opts)
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, opts, false)
 		require.NoError(t, err)
 		require.Equal(t, 42, insertParams.MaxAttempts)
 		require.Equal(t, 2, insertParams.Priority)
@@ -5290,7 +5290,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 
 		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, &customInsertOptsJobArgs{
 			ScheduledAt: nearFuture,
-		}, nil)
+		}, nil, false)
 		require.NoError(t, err)
 		// All these come from overrides in customInsertOptsJobArgs's definition:
 		require.Equal(t, 42, insertParams.MaxAttempts)
@@ -5306,7 +5306,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 
 		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, &customInsertOptsJobArgs{
 			ScheduledAt: time.Time{},
-		}, nil)
+		}, nil, false)
 		require.NoError(t, err)
 		require.Nil(t, insertParams.ScheduledAt)
 	})
@@ -5317,14 +5317,14 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		{
 			_, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, &customInsertOptsJobArgs{}, &InsertOpts{
 				Tags: []string{strings.Repeat("h", 256)},
-			})
+			}, false)
 			require.EqualError(t, err, "tags should be a maximum of 255 characters long")
 		}
 
 		{
 			_, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, &customInsertOptsJobArgs{}, &InsertOpts{
 				Tags: []string{"tag,with,comma"},
-			})
+			}, false)
 			require.EqualError(t, err, "tags should match regex "+tagRE.String())
 		}
 	})
@@ -5342,7 +5342,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 			ExcludeKind: true,
 		}
 
-		params, resultUniqueOpts, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{UniqueOpts: uniqueOpts})
+		params, resultUniqueOpts, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{UniqueOpts: uniqueOpts}, false)
 		require.NoError(t, err)
 		require.Nil(t, resultUniqueOpts)
 		internalUniqueOpts := &dbunique.UniqueOpts{
@@ -5380,7 +5380,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 			ByState:  states,
 		}
 
-		params, resultUniqueOpts, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{UniqueOpts: uniqueOpts})
+		params, resultUniqueOpts, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{UniqueOpts: uniqueOpts}, true)
 		require.NoError(t, err)
 		require.Nil(t, resultUniqueOpts)
 		internalUniqueOpts := &dbunique.UniqueOpts{
@@ -5410,7 +5410,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 			ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCompleted},
 		}
 
-		params, resultUniqueOpts, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{UniqueOpts: uniqueOpts})
+		params, resultUniqueOpts, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{UniqueOpts: uniqueOpts}, false)
 		require.NoError(t, err)
 		require.NotNil(t, resultUniqueOpts)
 		internalUniqueOpts := &dbunique.UniqueOpts{
@@ -5423,6 +5423,12 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 
 		require.Nil(t, params.UniqueKey)
 		require.Zero(t, params.UniqueStates)
+
+		// In a bulk insert, this should be explicitly blocked:
+		params, resultUniqueOpts, err = insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{UniqueOpts: uniqueOpts}, true)
+		require.ErrorContains(t, err, "bulk inserts do not support advisory lock uniqueness and cannot remove required states")
+		require.Nil(t, params)
+		require.Nil(t, resultUniqueOpts)
 	})
 
 	t.Run("UniqueOptsWithPartialArgs", func(t *testing.T) {
@@ -5442,7 +5448,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 			Excluded:          true,
 		}
 
-		params, resultUniqueOpts, err := insertParamsFromConfigArgsAndOptions(archetype, config, args, &InsertOpts{UniqueOpts: uniqueOpts})
+		params, resultUniqueOpts, err := insertParamsFromConfigArgsAndOptions(archetype, config, args, &InsertOpts{UniqueOpts: uniqueOpts}, true)
 		require.NoError(t, err)
 		require.Nil(t, resultUniqueOpts)
 		internalUniqueOpts := &dbunique.UniqueOpts{ByArgs: true}
@@ -5473,7 +5479,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 	t.Run("PriorityIsLimitedTo4", func(t *testing.T) {
 		t.Parallel()
 
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{Priority: 5})
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{Priority: 5}, false)
 		require.ErrorContains(t, err, "priority must be between 1 and 4")
 		require.Nil(t, insertParams)
 	})
@@ -5482,7 +5488,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		t.Parallel()
 
 		args := timeoutTestArgs{TimeoutValue: time.Hour}
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, args, nil)
+		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, args, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, `{"timeout_value":3600000000000}`, string(insertParams.EncodedArgs))
 	})
@@ -5498,6 +5504,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 			config,
 			noOpArgs{},
 			&InsertOpts{UniqueOpts: UniqueOpts{ByPeriod: 1 * time.Millisecond}},
+			false,
 		)
 		require.EqualError(t, err, "JobUniqueOpts.ByPeriod should not be less than 1 second")
 		require.Nil(t, insertParams)
