@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
 )
@@ -17,26 +18,29 @@ import (
 func Example_migrate() {
 	ctx := context.Background()
 
-	dbPool, err := pgxpool.NewWithConfig(ctx, riverinternaltest.DatabaseConfig("river_test_example"))
+	// Use a dedicated Postgres schema for this example so we can migrate and drop it at will:
+	schemaName := "migration_example"
+	poolConfig := riverinternaltest.DatabaseConfig("river_test_example")
+	poolConfig.ConnConfig.RuntimeParams["search_path"] = schemaName
+
+	dbPool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		panic(err)
 	}
 	defer dbPool.Close()
 
-	tx, err := dbPool.Begin(ctx)
-	if err != nil {
-		panic(err)
-	}
-	defer tx.Rollback(ctx)
-
-	migrator, err := rivermigrate.New(riverpgxv5.New(dbPool), nil)
+	driver := riverpgxv5.New(dbPool)
+	migrator, err := rivermigrate.New(driver, nil)
 	if err != nil {
 		panic(err)
 	}
 
-	// Our test database starts with a full River schema. Drop it so that we can
-	// demonstrate working migrations. This isn't necessary outside this test.
-	dropRiverSchema(ctx, migrator, tx)
+	// Create the schema used for this example. Drop it when we're done.
+	// This isn't necessary outside this test.
+	if _, err := dbPool.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+schemaName); err != nil {
+		panic(err)
+	}
+	defer dropRiverSchema(ctx, driver, schemaName)
 
 	printVersions := func(res *rivermigrate.MigrateResult) {
 		for _, version := range res.Versions {
@@ -46,7 +50,7 @@ func Example_migrate() {
 
 	// Migrate to version 3. An actual call may want to omit all MigrateOpts,
 	// which will default to applying all available up migrations.
-	res, err := migrator.MigrateTx(ctx, tx, rivermigrate.DirectionUp, &rivermigrate.MigrateOpts{
+	res, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, &rivermigrate.MigrateOpts{
 		TargetVersion: 3,
 	})
 	if err != nil {
@@ -56,7 +60,7 @@ func Example_migrate() {
 
 	// Migrate down by three steps. Down migrating defaults to running only one
 	// step unless overridden by an option like MaxSteps or TargetVersion.
-	res, err = migrator.MigrateTx(ctx, tx, rivermigrate.DirectionDown, &rivermigrate.MigrateOpts{
+	res, err = migrator.Migrate(ctx, rivermigrate.DirectionDown, &rivermigrate.MigrateOpts{
 		MaxSteps: 3,
 	})
 	if err != nil {
@@ -73,10 +77,8 @@ func Example_migrate() {
 	// Migrated [DOWN] version 1
 }
 
-func dropRiverSchema[TTx any](ctx context.Context, migrator *rivermigrate.Migrator[TTx], tx TTx) {
-	_, err := migrator.MigrateTx(ctx, tx, rivermigrate.DirectionDown, &rivermigrate.MigrateOpts{
-		TargetVersion: -1,
-	})
+func dropRiverSchema[TTx any](ctx context.Context, driver riverdriver.Driver[TTx], schemaName string) {
+	_, err := driver.GetExecutor().Exec(ctx, "DROP SCHEMA IF EXISTS "+schemaName+" CASCADE;")
 	if err != nil {
 		panic(err)
 	}
