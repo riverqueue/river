@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+⚠️ Version 0.12.0 contains a new database migration, version 6. See [documentation on running River migrations](https://riverqueue.com/docs/migrations). If migrating with the CLI, make sure to update it to its latest version:
+
+```shell
+go install github.com/riverqueue/river/cmd/river@latest
+river migrate-up --database-url "$DATABASE_URL"
+```
+
+If not using River's internal migration system, the raw SQL can alternatively be dumped with:
+
+```shell
+go install github.com/riverqueue/river/cmd/river@latest
+river migrate-get --version 6 --up > river6.up.sql
+river migrate-get --version 6 --down > river6.down.sql
+```
+
+The migration **includes a new index**. Users with a very large job table may want to consider raising the index separately using `CONCURRENTLY` (which must be run outside of a transaction), then run `river migrate-up` to finalize the process (it will tolerate an index that already exists):
+
+```sql
+ALTER TABLE river_job ADD COLUMN unique_states BIT(8);
+
+CREATE UNIQUE INDEX CONCURRENTLY river_job_unique_idx ON river_job (unique_key)
+    WHERE unique_key IS NOT NULL
+      AND unique_states IS NOT NULL
+      AND river_job_state_in_bitmask(unique_states, state);
+```
+
+```shell
+go install github.com/riverqueue/river/cmd/river@latest
+river migrate-up --database-url "$DATABASE_URL"
+```
+
 ## Added
 
 - `rivertest.WorkContext`, a test function that can be used to initialize a context to test a `JobArgs.Work` implementation that will have a client set to context for use with `river.ClientFromContext`. [PR #526](https://github.com/riverqueue/river/pull/526).
@@ -34,6 +65,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       // handle error
   }
   ```
+
+- Unique jobs have been improved to allow bulk insertion of unique jobs via `InsertMany` / `InsertManyTx`, and to allow customizing the `ByState` list to add or remove certain states. This enables users to expand the set of unique states to also include `cancelled` and `discarded` jobs, or to remove `retryable` from uniqueness consideration. This updated implementation maintains the speed advantage of the newer index-backed uniqueness system, while allowing some flexibility in which job states.
+
+  Unique jobs utilizing `ByArgs` can now also opt to have a subset of the job's arguments considered for uniqueness. For example, you could choose to consider only the `customer_id` field while ignoring the `trace_id` field:
+
+  ```go
+  type MyJobArgs {
+    CustomerID string `json:"customer_id" river:"unique`
+    TraceID string `json:"trace_id"`
+  }
+  ```
+
+  Any fields considered in uniqueness are also sorted alphabetically in order to guarantee a consistent result, even if the encoded JSON isn't sorted consistently. For example `encoding/json` encodes struct fields in their defined order, so merely reordering struct fields would previously have been enough to cause a new job to not be considered identical to a pre-existing one with different JSON order.
+
+  The `UniqueOpts` type also gains an `ExcludeKind` option for cases where uniqueness needs to be guaranteed across multiple job types.
+
+  In-flight unique jobs using the previous designs will continue to be executed successfully with these changes, so there should be no need for downtime as part of the migration. However the v6 migration adds a new unique job index while also removing the old one, so users with in-flight unique jobs may also wish to avoid removing the old index until the new River release has been deployed in order to guarantee that jobs aren't duplicated by old River code once that index is removed.
+
+  **Deprecated**: The original unique jobs implementation which relied on advisory locks has been deprecated, but not yet removed. The only way to trigger this old code path is with a single insert (`Insert`/`InsertTx`) and using `UniqueOpts.ByState` with a custom list of states that omits some of the now-required states for unique jobs. Specifically, `pending`, `scheduled`, `available`, and `running` can not be removed from the `ByState` list with the new implementation. These are included in the default list so only the places which customize this attribute need to be updated to opt into the new (much faster) unique jobs. The advisory lock unique implementation will be removed in an upcoming release.
+
+  [PR #590](https://github.com/riverqueue/river/pull/590).
 
 - **Deprecated**: The `MigrateTx` method of `rivermigrate` has been deprecated. It turns out there are certain combinations of schema changes which cannot be run within a single transaction, and the migrator now prefers to run each migration in its own transaction, one-at-a-time. `MigrateTx` will be removed in future version.
 
