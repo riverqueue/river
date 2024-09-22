@@ -151,7 +151,7 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 			now := s.Time.NowUTC()
 			nowWithLookAhead := now.Add(s.config.Interval)
 
-			scheduledJobs, err := tx.JobSchedule(ctx, &riverdriver.JobScheduleParams{
+			scheduledJobResults, err := tx.JobSchedule(ctx, &riverdriver.JobScheduleParams{
 				Max: s.config.Limit,
 				Now: nowWithLookAhead,
 			})
@@ -159,7 +159,7 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 				return 0, fmt.Errorf("error scheduling jobs: %w", err)
 			}
 
-			queues := make([]string, 0, len(scheduledJobs))
+			queues := make([]string, 0, len(scheduledJobResults))
 
 			// Notify about scheduled jobs with a scheduled_at in the past, or just
 			// slightly in the future (this loop, the notify, and tx commit will take
@@ -167,12 +167,12 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 			// is to roughly try to guess when the clients will attempt to fetch jobs.
 			notificationHorizon := s.Time.NowUTC().Add(5 * time.Millisecond)
 
-			for _, job := range scheduledJobs {
-				if job.ScheduledAt.After(notificationHorizon) {
+			for _, result := range scheduledJobResults {
+				if result.Job.ScheduledAt.After(notificationHorizon) {
 					continue
 				}
 
-				queues = append(queues, job.Queue)
+				queues = append(queues, result.Job.Queue)
 			}
 
 			if len(queues) > 0 {
@@ -182,7 +182,7 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 				s.TestSignals.NotifiedQueues.Signal(queues)
 			}
 
-			return len(scheduledJobs), tx.Commit(ctx)
+			return len(scheduledJobResults), tx.Commit(ctx)
 		}()
 		if err != nil {
 			return nil, err

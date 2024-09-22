@@ -115,16 +115,15 @@ type Executor interface {
 	JobGetByKindAndUniqueProperties(ctx context.Context, params *JobGetByKindAndUniquePropertiesParams) (*rivertype.JobRow, error)
 	JobGetByKindMany(ctx context.Context, kind []string) ([]*rivertype.JobRow, error)
 	JobGetStuck(ctx context.Context, params *JobGetStuckParams) ([]*rivertype.JobRow, error)
-	JobInsertFast(ctx context.Context, params *JobInsertFastParams) (*rivertype.JobRow, error)
-	JobInsertFastMany(ctx context.Context, params []*JobInsertFastParams) ([]*rivertype.JobRow, error)
+	JobInsertFast(ctx context.Context, params *JobInsertFastParams) (*JobInsertFastResult, error)
+	JobInsertFastMany(ctx context.Context, params []*JobInsertFastParams) ([]*JobInsertFastResult, error)
 	JobInsertFastManyNoReturning(ctx context.Context, params []*JobInsertFastParams) (int, error)
 	JobInsertFull(ctx context.Context, params *JobInsertFullParams) (*rivertype.JobRow, error)
-	JobInsertUnique(ctx context.Context, params *JobInsertUniqueParams) (*JobInsertUniqueResult, error)
 	JobList(ctx context.Context, query string, namedArgs map[string]any) ([]*rivertype.JobRow, error)
 	JobListFields() string
 	JobRescueMany(ctx context.Context, params *JobRescueManyParams) (*struct{}, error)
 	JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, error)
-	JobSchedule(ctx context.Context, params *JobScheduleParams) ([]*rivertype.JobRow, error)
+	JobSchedule(ctx context.Context, params *JobScheduleParams) ([]*JobScheduleResult, error)
 	JobSetCompleteIfRunningMany(ctx context.Context, params *JobSetCompleteIfRunningManyParams) ([]*rivertype.JobRow, error)
 	JobSetStateIfRunning(ctx context.Context, params *JobSetStateIfRunningParams) (*rivertype.JobRow, error)
 	JobUpdate(ctx context.Context, params *JobUpdateParams) (*rivertype.JobRow, error)
@@ -249,44 +248,46 @@ type JobGetStuckParams struct {
 }
 
 type JobInsertFastParams struct {
-	CreatedAt   *time.Time
-	EncodedArgs []byte
-	Kind        string
-	MaxAttempts int
-	Metadata    []byte
-	Priority    int
-	Queue       string
-	ScheduledAt *time.Time
-	State       rivertype.JobState
-	Tags        []string
+	// Args contains the raw underlying job arguments struct. It has already been
+	// encoded into EncodedArgs, but the original is kept here for to leverage its
+	// struct tags and interfaces, such as for use in unique key generation.
+	Args         rivertype.JobArgs
+	CreatedAt    *time.Time
+	EncodedArgs  []byte
+	Kind         string
+	MaxAttempts  int
+	Metadata     []byte
+	Priority     int
+	Queue        string
+	ScheduledAt  *time.Time
+	State        rivertype.JobState
+	Tags         []string
+	UniqueKey    []byte
+	UniqueStates byte
 }
 
-type JobInsertUniqueParams struct {
-	*JobInsertFastParams
-	UniqueKey []byte
-}
-
-type JobInsertUniqueResult struct {
+type JobInsertFastResult struct {
 	Job                      *rivertype.JobRow
 	UniqueSkippedAsDuplicate bool
 }
 
 type JobInsertFullParams struct {
-	Attempt     int
-	AttemptedAt *time.Time
-	CreatedAt   *time.Time
-	EncodedArgs []byte
-	Errors      [][]byte
-	FinalizedAt *time.Time
-	Kind        string
-	MaxAttempts int
-	Metadata    []byte
-	Priority    int
-	Queue       string
-	ScheduledAt *time.Time
-	State       rivertype.JobState
-	Tags        []string
-	UniqueKey   []byte
+	Attempt      int
+	AttemptedAt  *time.Time
+	CreatedAt    *time.Time
+	EncodedArgs  []byte
+	Errors       [][]byte
+	FinalizedAt  *time.Time
+	Kind         string
+	MaxAttempts  int
+	Metadata     []byte
+	Priority     int
+	Queue        string
+	ScheduledAt  *time.Time
+	State        rivertype.JobState
+	Tags         []string
+	UniqueKey    []byte
+	UniqueStates byte
 }
 
 type JobRescueManyParams struct {
@@ -303,8 +304,8 @@ type JobScheduleParams struct {
 }
 
 type JobScheduleResult struct {
-	Queue       string
-	ScheduledAt time.Time
+	Job               rivertype.JobRow
+	ConflictDiscarded bool
 }
 
 // JobSetCompleteIfRunningManyParams are parameters to set many running jobs to
@@ -366,8 +367,10 @@ type JobUpdateParams struct {
 	FinalizedAt         *time.Time
 	StateDoUpdate       bool
 	State               rivertype.JobState
-	UniqueKeyDoUpdate   bool
-	UniqueKey           []byte
+	// Deprecated and will be removed when advisory lock unique path is removed.
+	UniqueKeyDoUpdate bool
+	// Deprecated and will be removed when advisory lock unique path is removed.
+	UniqueKey []byte
 }
 
 // Leader represents a River leader.

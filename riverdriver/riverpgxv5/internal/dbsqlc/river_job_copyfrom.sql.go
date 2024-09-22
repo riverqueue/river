@@ -7,17 +7,21 @@ package dbsqlc
 
 import (
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type JobInsertFastManyCopyFromParams struct {
-	Args        []byte
-	FinalizedAt *time.Time
-	Kind        string
-	MaxAttempts int16
-	Metadata    []byte
-	Priority    int16
-	Queue       string
-	ScheduledAt time.Time
-	State       RiverJobState
-	Tags        []string
+	Args         []byte
+	FinalizedAt  *time.Time
+	Kind         string
+	MaxAttempts  int16
+	Metadata     []byte
+	Priority     int16
+	Queue        string
+	ScheduledAt  time.Time
+	State        RiverJobState
+	Tags         []string
+	UniqueKey    []byte
+	UniqueStates pgtype.Bits
 }

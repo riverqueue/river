@@ -9,7 +9,9 @@ INSERT INTO river_job(
     queue,
     scheduled_at,
     state,
-    tags
+    tags,
+    unique_key,
+    unique_states
 ) VALUES (
     @args,
     @finalized_at,
@@ -20,5 +22,7 @@ INSERT INTO river_job(
     @queue,
     @scheduled_at,
     @state,
-    @tags
+    @tags,
+    @unique_key,
+    @unique_states
 );

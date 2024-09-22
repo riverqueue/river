@@ -186,7 +186,7 @@ func (b *PeriodicJobBundle) toInternal(periodicJob *PeriodicJob) *maintenance.Pe
 			if args == nil {
 				return nil, nil, maintenance.ErrNoJobToInsert
 			}
-			return insertParamsFromConfigArgsAndOptions(&b.periodicJobEnqueuer.Archetype, b.clientConfig, args, options)
+			return insertParamsFromConfigArgsAndOptions(&b.periodicJobEnqueuer.Archetype, b.clientConfig, args, options, false)
 		},
 		RunOnStart:   opts.RunOnStart,
 		ScheduleFunc: periodicJob.scheduleFunc.Next,

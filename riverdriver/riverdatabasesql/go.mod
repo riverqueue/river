@@ -5,6 +5,7 @@ go 1.21
 toolchain go1.23.0
 
 require (
+	github.com/jackc/pgx/v5 v5.7.1
 	github.com/lib/pq v1.10.9
 	github.com/riverqueue/river/riverdriver v0.11.4
 	github.com/riverqueue/river/rivershared v0.11.4
