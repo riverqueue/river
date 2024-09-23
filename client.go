@@ -1508,9 +1508,9 @@ func (c *Client[TTx]) insertManyParams(params []InsertManyParams) ([]*riverdrive
 //		// handle error
 //	}
 //
-// Job uniqueness is not respected when using InsertMany due to unique inserts
-// using an internal transaction and advisory lock that might lead to
-// significant lock contention. Insert unique jobs using Insert instead.
+// Job uniqueness is supported using this path, but unlike with `InsertMany`
+// unique conflicts cannot be handled gracefully. If a unique constraint is
+// violated, the operation will fail and no jobs will be inserted.
 func (c *Client[TTx]) InsertManyFast(ctx context.Context, params []InsertManyParams) (int, error) {
 	if !c.driver.HasPool() {
 		return 0, errNoDriverDBPool
@@ -1554,13 +1554,13 @@ func (c *Client[TTx]) InsertManyFast(ctx context.Context, params []InsertManyPar
 //		// handle error
 //	}
 //
-// Job uniqueness is not respected when using InsertManyTx due to unique inserts
-// using an internal transaction and advisory lock that might lead to
-// significant lock contention. Insert unique jobs using InsertTx instead.
-//
 // This variant lets a caller insert jobs atomically alongside other database
 // changes. An inserted job isn't visible to be worked until the transaction
 // commits, and if the transaction rolls back, so too is the inserted job.
+//
+// Job uniqueness is supported using this path, but unlike with `InsertManyTx`
+// unique conflicts cannot be handled gracefully. If a unique constraint is
+// violated, the operation will fail and no jobs will be inserted.
 func (c *Client[TTx]) InsertManyFastTx(ctx context.Context, tx TTx, params []InsertManyParams) (int, error) {
 	insertParams, err := c.insertManyFastParams(params)
 	if err != nil {
