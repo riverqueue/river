@@ -40,8 +40,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 	stubSvc := &riversharedtest.TimeStub{}
 	stubSvc.StubNowUTC(time.Now().UTC())
 
-	jobConstructorWithQueueFunc := func(name string, unique bool, queue string) func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
-		return func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
+	jobConstructorWithQueueFunc := func(name string, unique bool, queue string) func() (*riverdriver.JobInsertFastParams, error) {
+		return func() (*riverdriver.JobInsertFastParams, error) {
 			params := &riverdriver.JobInsertFastParams{
 				Args:        noOpArgs{},
 				EncodedArgs: []byte("{}"),
@@ -56,30 +56,17 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 				var err error
 				params.UniqueKey, err = dbunique.UniqueKey(stubSvc, uniqueOpts, params)
 				if err != nil {
-					return nil, nil, err
+					return nil, err
 				}
 
 				params.UniqueStates = uniqueOpts.StateBitmask()
 			}
 
-			return params, nil, nil
+			return params, nil
 		}
 	}
 
-	jobConstructorUniqueV1Func := func(name string) func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
-		return func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
-			return &riverdriver.JobInsertFastParams{
-				EncodedArgs: []byte("{}"),
-				Kind:        name,
-				MaxAttempts: rivercommon.MaxAttemptsDefault,
-				Priority:    rivercommon.PriorityDefault,
-				Queue:       rivercommon.QueueDefault,
-				State:       rivertype.JobStateAvailable,
-			}, &dbunique.UniqueOpts{ByArgs: true}, nil
-		}
-	}
-
-	jobConstructorFunc := func(name string, unique bool) func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
+	jobConstructorFunc := func(name string, unique bool) func() (*riverdriver.JobInsertFastParams, error) {
 		return jobConstructorWithQueueFunc(name, unique, rivercommon.QueueDefault)
 	}
 
@@ -241,42 +228,6 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		}
 	})
 
-	t.Run("RespectsV1JobUniqueness", func(t *testing.T) {
-		t.Parallel()
-
-		svc, bundle := setup(t)
-
-		svc.AddMany([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorUniqueV1Func("unique_periodic_job_500ms")},
-		})
-
-		startService(t, svc)
-
-		// Should be no jobs to start.
-		requireNJobs(t, bundle.exec, "unique_periodic_job_500ms", 0)
-
-		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "unique_periodic_job_500ms", 1)
-		// This initial insert should emit a notification:
-		svc.TestSignals.NotifiedQueues.WaitOrTimeout()
-
-		// Another insert was attempted, but there's still only one job due to
-		// uniqueness conditions.
-		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "unique_periodic_job_500ms", 1)
-
-		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "unique_periodic_job_500ms", 1)
-
-		// Ensure that no notifications were emitted beyond the first one because no
-		// additional jobs were inserted:
-		select {
-		case queues := <-svc.TestSignals.NotifiedQueues.WaitC():
-			t.Fatalf("Expected no notification to be emitted, but got one for queues: %v", queues)
-		case <-time.After(100 * time.Millisecond):
-		}
-	})
-
 	t.Run("RunOnStart", func(t *testing.T) {
 		t.Parallel()
 
@@ -305,8 +256,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc.AddMany([]*PeriodicJob{
 			// skip this insert when it returns nil:
-			{ScheduleFunc: periodicIntervalSchedule(time.Second), ConstructorFunc: func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
-				return nil, nil, ErrNoJobToInsert
+			{ScheduleFunc: periodicIntervalSchedule(time.Second), ConstructorFunc: func() (*riverdriver.JobInsertFastParams, error) {
+				return nil, ErrNoJobToInsert
 			}, RunOnStart: true},
 		})
 

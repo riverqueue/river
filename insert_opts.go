@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/riverqueue/river/rivertype"
@@ -170,8 +171,8 @@ type UniqueOpts struct {
 
 // isEmpty returns true for an empty, uninitialized options struct.
 //
-// This is required because we can't check against `JobUniqueOpts{}` because
-// slices aren't comparable. Unfortunately it makes things a little more brittle
+// This is required because we can't check against `UniqueOpts{}` because slices
+// aren't comparable. Unfortunately it makes things a little more brittle
 // comparatively because any new options must also be considered here for things
 // to work.
 func (o *UniqueOpts) isEmpty() bool {
@@ -179,25 +180,6 @@ func (o *UniqueOpts) isEmpty() bool {
 		o.ByPeriod == time.Duration(0) &&
 		!o.ByQueue &&
 		o.ByState == nil
-}
-
-func (o *UniqueOpts) isV1() bool {
-	requiredV3states := []rivertype.JobState{
-		rivertype.JobStatePending,
-		rivertype.JobStateScheduled,
-		rivertype.JobStateAvailable,
-		rivertype.JobStateRunning,
-	}
-	if len(o.ByState) == 0 {
-		return false
-	}
-
-	for _, state := range requiredV3states {
-		if !slices.Contains(o.ByState, state) {
-			return true
-		}
-	}
-	return false
 }
 
 var jobStateAll = rivertype.JobStates() //nolint:gochecknoglobals
@@ -208,7 +190,7 @@ func (o *UniqueOpts) validate() error {
 	}
 
 	if o.ByPeriod != time.Duration(0) && o.ByPeriod < 1*time.Second {
-		return errors.New("JobUniqueOpts.ByPeriod should not be less than 1 second")
+		return errors.New("UniqueOpts.ByPeriod should not be less than 1 second")
 	}
 
 	// Job states are typed, but since the underlying type is a string, users
@@ -218,8 +200,29 @@ func (o *UniqueOpts) validate() error {
 		// difference for tiny slice sizes is negligible, and map lookup might
 		// even be slower.
 		if !slices.Contains(jobStateAll, state) {
-			return fmt.Errorf("JobUniqueOpts.ByState contains invalid state %q", state)
+			return fmt.Errorf("UniqueOpts.ByState contains invalid state %q", state)
 		}
+	}
+
+	// Skip required states validation if no custom states were provided.
+	if len(o.ByState) == 0 {
+		return nil
+	}
+
+	requiredV3states := []rivertype.JobState{
+		rivertype.JobStateAvailable,
+		rivertype.JobStatePending,
+		rivertype.JobStateRunning,
+		rivertype.JobStateScheduled,
+	}
+	missingStates := []string{}
+	for _, state := range requiredV3states {
+		if !slices.Contains(o.ByState, state) {
+			missingStates = append(missingStates, string(state))
+		}
+	}
+	if len(missingStates) > 0 {
+		return fmt.Errorf("UniqueOpts.ByState must contain all required states, missing: %s", strings.Join(missingStates, ", "))
 	}
 
 	return nil

@@ -102,7 +102,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 
 	params := make([]*riverdriver.JobInsertFastParams, maxJobCount)
 	for i := range params {
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, WithJobNumArgs{JobNum: i}, nil, true)
+		insertParams, err := insertParamsFromConfigArgsAndOptions(archetype, config, WithJobNumArgs{JobNum: i}, nil)
 		require.NoError(err)
 
 		params[i] = insertParams
@@ -240,16 +240,19 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 	ctx := context.Background()
 
 	type testBundle struct {
-		archetype  *baseservice.Archetype
-		completer  jobcompleter.JobCompleter
-		config     *Config
-		exec       riverdriver.Executor
-		jobUpdates chan jobcompleter.CompleterJobUpdated
-		workers    *Workers
+		archetype       *baseservice.Archetype
+		completer       jobcompleter.JobCompleter
+		config          *Config
+		exec            riverdriver.Executor
+		jobUpdates      chan jobcompleter.CompleterJobUpdated
+		timeBeforeStart time.Time
+		workers         *Workers
 	}
 
 	setup := func(t *testing.T) (*producer, *testBundle) {
 		t.Helper()
+
+		timeBeforeStart := time.Now().UTC()
 
 		producer, jobUpdates := makeProducer(ctx, t)
 		producer.testSignals.Init()
@@ -265,22 +268,34 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		}()
 
 		return producer, &testBundle{
-			archetype:  &producer.Archetype,
-			completer:  producer.completer,
-			config:     config,
-			exec:       producer.exec,
-			jobUpdates: jobUpdatesFlattened,
-			workers:    producer.workers,
+			archetype:       &producer.Archetype,
+			completer:       producer.completer,
+			config:          config,
+			exec:            producer.exec,
+			jobUpdates:      jobUpdatesFlattened,
+			timeBeforeStart: timeBeforeStart,
+			workers:         producer.workers,
 		}
 	}
 
 	mustInsert := func(ctx context.Context, t *testing.T, bundle *testBundle, args JobArgs) {
 		t.Helper()
 
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(bundle.archetype, bundle.config, args, nil, false)
+		insertParams, err := insertParamsFromConfigArgsAndOptions(bundle.archetype, bundle.config, args, nil)
 		require.NoError(t, err)
+		if insertParams.ScheduledAt == nil {
+			// Without this, newly inserted jobs will pick up a scheduled_at time
+			// that's the current Go time at the time of insertion. If the test is
+			// using a transaction, this will be after the `now()` time in the
+			// transaction that gets used by default in `JobGetAvailable`, so new jobs
+			// won't be visible.
+			//
+			// To work around this, set all inserted jobs to a time before the start
+			// of the test to ensure they're visible.
+			insertParams.ScheduledAt = &bundle.timeBeforeStart
+		}
 
-		_, err = bundle.exec.JobInsertFast(ctx, insertParams)
+		_, err = bundle.exec.JobInsertFastMany(ctx, []*riverdriver.JobInsertFastParams{insertParams})
 		require.NoError(t, err)
 	}
 

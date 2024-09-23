@@ -1815,7 +1815,7 @@ func Test_Client_InsertManyFast(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("ErrorsOnInsertOptsWithV1UniqueOpts", func(t *testing.T) {
+	t.Run("ErrorsOnInsertOptsWithoutRequiredUniqueStates", func(t *testing.T) {
 		t.Parallel()
 
 		client, _ := setup(t)
@@ -1827,7 +1827,7 @@ func Test_Client_InsertManyFast(t *testing.T) {
 				ByState: []rivertype.JobState{rivertype.JobStateAvailable},
 			}}},
 		})
-		require.EqualError(t, err, "bulk inserts do not support advisory lock uniqueness and cannot remove required states")
+		require.EqualError(t, err, "UniqueOpts.ByState must contain all required states, missing: pending, running, scheduled")
 		require.Equal(t, 0, count)
 	})
 }
@@ -1982,7 +1982,7 @@ func Test_Client_InsertManyFastTx(t *testing.T) {
 				ByState: []rivertype.JobState{rivertype.JobStateAvailable},
 			}}},
 		})
-		require.EqualError(t, err, "bulk inserts do not support advisory lock uniqueness and cannot remove required states")
+		require.EqualError(t, err, "UniqueOpts.ByState must contain all required states, missing: pending, running, scheduled")
 		require.Equal(t, 0, count)
 	})
 }
@@ -2248,7 +2248,7 @@ func Test_Client_InsertMany(t *testing.T) {
 				ByState: []rivertype.JobState{rivertype.JobStateAvailable},
 			}}},
 		})
-		require.EqualError(t, err, "bulk inserts do not support advisory lock uniqueness and cannot remove required states")
+		require.EqualError(t, err, "UniqueOpts.ByState must contain all required states, missing: pending, running, scheduled")
 		require.Empty(t, results)
 	})
 }
@@ -2463,7 +2463,7 @@ func Test_Client_InsertManyTx(t *testing.T) {
 				ByState: []rivertype.JobState{rivertype.JobStateAvailable},
 			}}},
 		})
-		require.EqualError(t, err, "bulk inserts do not support advisory lock uniqueness and cannot remove required states")
+		require.EqualError(t, err, "UniqueOpts.ByState must contain all required states, missing: pending, running, scheduled")
 		require.Empty(t, results)
 	})
 }
@@ -2966,9 +2966,9 @@ func Test_Client_ErrorHandler(t *testing.T) {
 
 		// Bypass the normal Insert function because that will error on an
 		// unknown job.
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(&client.baseService.Archetype, config, unregisteredJobArgs{}, nil, false)
+		insertParams, err := insertParamsFromConfigArgsAndOptions(&client.baseService.Archetype, config, unregisteredJobArgs{}, nil)
 		require.NoError(t, err)
-		_, err = client.driver.GetExecutor().JobInsertFast(ctx, insertParams)
+		_, err = client.driver.GetExecutor().JobInsertFastMany(ctx, []*riverdriver.JobInsertFastParams{insertParams})
 		require.NoError(t, err)
 
 		riversharedtest.WaitOrTimeout(t, bundle.SubscribeChan)
@@ -4322,65 +4322,6 @@ func Test_Client_InsertNotificationsAreDeduplicatedAndDebounced(t *testing.T) {
 	expectImmediateNotification(t, "queue1")
 }
 
-func Test_Client_CanInsertAndWorkV1UniqueJob(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	dbPool := riverinternaltest.TestDB(ctx, t)
-	startedChan := make(chan int64)
-	waitChan := make(chan struct{})
-	config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
-		close(startedChan)
-		<-waitChan
-		return nil
-	})
-	client := newTestClient(t, dbPool, config)
-
-	startClient(ctx, t, client)
-	riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
-
-	// Insert a job, wait for it to start, then insert the same job again. The
-	// second insert should be ignored because the job is already running.
-	insertRes1, err := client.Insert(ctx, callbackArgs{}, &InsertOpts{UniqueOpts: UniqueOpts{ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateRunning}}})
-	require.NoError(t, err)
-	require.False(t, insertRes1.UniqueSkippedAsDuplicate)
-
-	riversharedtest.WaitOrTimeout(t, startedChan)
-
-	insertRes2, err := client.Insert(ctx, callbackArgs{}, &InsertOpts{UniqueOpts: UniqueOpts{ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateRunning}}})
-	require.NoError(t, err)
-	require.True(t, insertRes2.UniqueSkippedAsDuplicate)
-	require.Equal(t, insertRes1.Job.ID, insertRes2.Job.ID)
-
-	close(waitChan)
-}
-
-func Test_Client_CanWorkPreexistingV2UniqueJob(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	dbPool := riverinternaltest.TestDB(ctx, t)
-	config := newTestConfig(t, nil)
-	client := newTestClient(t, dbPool, config)
-
-	subscribeChan, cancel := client.Subscribe(EventKindJobCompleted)
-	t.Cleanup(cancel)
-
-	startClient(ctx, t, client)
-	riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
-
-	job := testfactory.Job(ctx, t, client.driver.GetExecutor(), &testfactory.JobOpts{
-		Kind:         ptrutil.Ptr((&noOpArgs{}).Kind()),
-		State:        ptrutil.Ptr(rivertype.JobStateAvailable),
-		UniqueKey:    []byte("v2_unique_key"),
-		UniqueStates: 0, // will be inserted as null
-	})
-
-	jobWorked := riversharedtest.WaitOrTimeout(t, subscribeChan)
-	require.Equal(t, job.ID, jobWorked.Job.ID)
-	require.Equal(t, rivertype.JobStateCompleted, jobWorked.Job.State)
-}
-
 func Test_Client_JobCompletion(t *testing.T) {
 	t.Parallel()
 
@@ -4627,10 +4568,12 @@ func Test_Client_UnknownJobKindErrorsTheJob(t *testing.T) {
 	subscribeChan, cancel := client.Subscribe(EventKindJobFailed)
 	t.Cleanup(cancel)
 
-	insertParams, _, err := insertParamsFromConfigArgsAndOptions(&client.baseService.Archetype, config, unregisteredJobArgs{}, nil, false)
+	insertParams, err := insertParamsFromConfigArgsAndOptions(&client.baseService.Archetype, config, unregisteredJobArgs{}, nil)
 	require.NoError(err)
-	insertedResult, err := client.driver.GetExecutor().JobInsertFast(ctx, insertParams)
+	insertedResults, err := client.driver.GetExecutor().JobInsertFastMany(ctx, []*riverdriver.JobInsertFastParams{insertParams})
 	require.NoError(err)
+
+	insertedResult := insertedResults[0]
 
 	event := riversharedtest.WaitOrTimeout(t, subscribeChan)
 	require.Equal(insertedResult.Job.ID, event.Job.ID)
@@ -4761,7 +4704,7 @@ func Test_NewClient_Defaults(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Zero(t, client.uniqueInserter.AdvisoryLockPrefix)
+	require.Zero(t, client.config.AdvisoryLockPrefix)
 
 	jobCleaner := maintenance.GetService[*maintenance.JobCleaner](client.queueMaintainer)
 	require.Equal(t, maintenance.CancelledJobRetentionPeriodDefault, jobCleaner.Config.CancelledJobRetentionPeriod)
@@ -4815,7 +4758,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Equal(t, int32(123_456), client.uniqueInserter.AdvisoryLockPrefix)
+	require.Equal(t, int32(123_456), client.config.AdvisoryLockPrefix)
 
 	jobCleaner := maintenance.GetService[*maintenance.JobCleaner](client.queueMaintainer)
 	require.Equal(t, 1*time.Hour, jobCleaner.Config.CancelledJobRetentionPeriod)
@@ -5237,7 +5180,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 	t.Run("Defaults", func(t *testing.T) {
 		t.Parallel()
 
-		insertParams, uniqueOpts, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, nil, false)
+		insertParams, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, nil)
 		require.NoError(t, err)
 		require.Equal(t, `{"name":""}`, string(insertParams.EncodedArgs))
 		require.Equal(t, (noOpArgs{}).Kind(), insertParams.Kind)
@@ -5246,8 +5189,6 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		require.Equal(t, QueueDefault, insertParams.Queue)
 		require.Nil(t, insertParams.ScheduledAt)
 		require.Equal(t, []string{}, insertParams.Tags)
-
-		require.Nil(t, uniqueOpts)
 		require.Empty(t, insertParams.UniqueKey)
 		require.Zero(t, insertParams.UniqueStates)
 	})
@@ -5259,7 +5200,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 			MaxAttempts: 34,
 		}
 
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, overrideConfig, noOpArgs{}, nil, false)
+		insertParams, err := insertParamsFromConfigArgsAndOptions(archetype, overrideConfig, noOpArgs{}, nil)
 		require.NoError(t, err)
 		require.Equal(t, overrideConfig.MaxAttempts, insertParams.MaxAttempts)
 	})
@@ -5274,7 +5215,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 			ScheduledAt: time.Now().Add(time.Hour),
 			Tags:        []string{"tag1", "tag2"},
 		}
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, opts, false)
+		insertParams, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, opts)
 		require.NoError(t, err)
 		require.Equal(t, 42, insertParams.MaxAttempts)
 		require.Equal(t, 2, insertParams.Priority)
@@ -5288,9 +5229,9 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 
 		nearFuture := time.Now().Add(5 * time.Minute)
 
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, &customInsertOptsJobArgs{
+		insertParams, err := insertParamsFromConfigArgsAndOptions(archetype, config, &customInsertOptsJobArgs{
 			ScheduledAt: nearFuture,
-		}, nil, false)
+		}, nil)
 		require.NoError(t, err)
 		// All these come from overrides in customInsertOptsJobArgs's definition:
 		require.Equal(t, 42, insertParams.MaxAttempts)
@@ -5304,9 +5245,9 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 	t.Run("WorkerInsertOptsScheduledAtNotRespectedIfZero", func(t *testing.T) {
 		t.Parallel()
 
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, &customInsertOptsJobArgs{
+		insertParams, err := insertParamsFromConfigArgsAndOptions(archetype, config, &customInsertOptsJobArgs{
 			ScheduledAt: time.Time{},
-		}, nil, false)
+		}, nil)
 		require.NoError(t, err)
 		require.Nil(t, insertParams.ScheduledAt)
 	})
@@ -5315,16 +5256,16 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		t.Parallel()
 
 		{
-			_, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, &customInsertOptsJobArgs{}, &InsertOpts{
+			_, err := insertParamsFromConfigArgsAndOptions(archetype, config, &customInsertOptsJobArgs{}, &InsertOpts{
 				Tags: []string{strings.Repeat("h", 256)},
-			}, false)
+			})
 			require.EqualError(t, err, "tags should be a maximum of 255 characters long")
 		}
 
 		{
-			_, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, &customInsertOptsJobArgs{}, &InsertOpts{
+			_, err := insertParamsFromConfigArgsAndOptions(archetype, config, &customInsertOptsJobArgs{}, &InsertOpts{
 				Tags: []string{"tag,with,comma"},
-			}, false)
+			})
 			require.EqualError(t, err, "tags should match regex "+tagRE.String())
 		}
 	})
@@ -5342,9 +5283,8 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 			ExcludeKind: true,
 		}
 
-		params, resultUniqueOpts, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{UniqueOpts: uniqueOpts}, false)
+		params, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{UniqueOpts: uniqueOpts})
 		require.NoError(t, err)
-		require.Nil(t, resultUniqueOpts)
 		internalUniqueOpts := &dbunique.UniqueOpts{
 			ByArgs:      true,
 			ByPeriod:    10 * time.Second,
@@ -5380,9 +5320,8 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 			ByState:  states,
 		}
 
-		params, resultUniqueOpts, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{UniqueOpts: uniqueOpts}, true)
+		params, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{UniqueOpts: uniqueOpts})
 		require.NoError(t, err)
-		require.Nil(t, resultUniqueOpts)
 		internalUniqueOpts := &dbunique.UniqueOpts{
 			ByPeriod: 10 * time.Second,
 			ByQueue:  true,
@@ -5394,41 +5333,6 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 
 		require.Equal(t, expectedKey, params.UniqueKey)
 		require.Equal(t, internalUniqueOpts.StateBitmask(), params.UniqueStates)
-	})
-
-	t.Run("UniqueOptsV1", func(t *testing.T) {
-		t.Parallel()
-
-		archetype := riversharedtest.BaseServiceArchetype(t)
-		archetype.Time.StubNowUTC(time.Now().UTC())
-
-		uniqueOpts := UniqueOpts{
-			ByArgs:   true,
-			ByPeriod: 10 * time.Second,
-			ByQueue:  true,
-			// This list of custom states (without pending, scheduled, running, etc.) is only valid for v1 unique opts:
-			ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCompleted},
-		}
-
-		params, resultUniqueOpts, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{UniqueOpts: uniqueOpts}, false)
-		require.NoError(t, err)
-		require.NotNil(t, resultUniqueOpts)
-		internalUniqueOpts := &dbunique.UniqueOpts{
-			ByArgs:   true,
-			ByPeriod: 10 * time.Second,
-			ByQueue:  true,
-			ByState:  []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCompleted},
-		}
-		require.Equal(t, internalUniqueOpts, resultUniqueOpts)
-
-		require.Nil(t, params.UniqueKey)
-		require.Zero(t, params.UniqueStates)
-
-		// In a bulk insert, this should be explicitly blocked:
-		params, resultUniqueOpts, err = insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{UniqueOpts: uniqueOpts}, true)
-		require.ErrorContains(t, err, "bulk inserts do not support advisory lock uniqueness and cannot remove required states")
-		require.Nil(t, params)
-		require.Nil(t, resultUniqueOpts)
 	})
 
 	t.Run("UniqueOptsWithPartialArgs", func(t *testing.T) {
@@ -5448,9 +5352,8 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 			Excluded:          true,
 		}
 
-		params, resultUniqueOpts, err := insertParamsFromConfigArgsAndOptions(archetype, config, args, &InsertOpts{UniqueOpts: uniqueOpts}, true)
+		params, err := insertParamsFromConfigArgsAndOptions(archetype, config, args, &InsertOpts{UniqueOpts: uniqueOpts})
 		require.NoError(t, err)
-		require.Nil(t, resultUniqueOpts)
 		internalUniqueOpts := &dbunique.UniqueOpts{ByArgs: true}
 
 		expectedKey, err := dbunique.UniqueKey(archetype.Time, internalUniqueOpts, params)
@@ -5464,9 +5367,8 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 			Excluded:          false,
 		}
 
-		params2, resultUniqueOpts2, err := insertParamsFromConfigArgsAndOptions(archetype, config, argsWithExcludedFalse, &InsertOpts{UniqueOpts: uniqueOpts}, true)
+		params2, err := insertParamsFromConfigArgsAndOptions(archetype, config, argsWithExcludedFalse, &InsertOpts{UniqueOpts: uniqueOpts})
 		require.NoError(t, err)
-		require.Nil(t, resultUniqueOpts2)
 		internalUniqueOpts2 := &dbunique.UniqueOpts{ByArgs: true}
 
 		expectedKey2, err := dbunique.UniqueKey(archetype.Time, internalUniqueOpts2, params2)
@@ -5479,7 +5381,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 	t.Run("PriorityIsLimitedTo4", func(t *testing.T) {
 		t.Parallel()
 
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{Priority: 5}, false)
+		insertParams, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{Priority: 5})
 		require.ErrorContains(t, err, "priority must be between 1 and 4")
 		require.Nil(t, insertParams)
 	})
@@ -5488,7 +5390,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		t.Parallel()
 
 		args := timeoutTestArgs{TimeoutValue: time.Hour}
-		insertParams, _, err := insertParamsFromConfigArgsAndOptions(archetype, config, args, nil, false)
+		insertParams, err := insertParamsFromConfigArgsAndOptions(archetype, config, args, nil)
 		require.NoError(t, err)
 		require.Equal(t, `{"timeout_value":3600000000000}`, string(insertParams.EncodedArgs))
 	})
@@ -5499,19 +5401,15 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		// Ensure that unique opts are validated. No need to be exhaustive here
 		// since we already have tests elsewhere for that. Just make sure validation
 		// is running.
-		insertParams, resultUniqueOpts, err := insertParamsFromConfigArgsAndOptions(
+		insertParams, err := insertParamsFromConfigArgsAndOptions(
 			archetype,
 			config,
 			noOpArgs{},
 			&InsertOpts{UniqueOpts: UniqueOpts{ByPeriod: 1 * time.Millisecond}},
-			false,
 		)
-		require.EqualError(t, err, "JobUniqueOpts.ByPeriod should not be less than 1 second")
+		require.EqualError(t, err, "UniqueOpts.ByPeriod should not be less than 1 second")
 		require.Nil(t, insertParams)
-		require.Nil(t, resultUniqueOpts)
 	})
-
-	// TODO NOW NEXT: validate unique opts for v1 unique opts w/ advisory lock and custom states:
 }
 
 func TestID(t *testing.T) {
@@ -5761,7 +5659,7 @@ func TestUniqueOpts(t *testing.T) {
 		require.NotEqual(t, insertRes0.Job.ID, insertRes2.Job.ID)
 	})
 
-	t.Run("UniqueV1ByCustomStates", func(t *testing.T) {
+	t.Run("ErrorsWithUniqueV1CustomStates", func(t *testing.T) {
 		t.Parallel()
 
 		client, _ := setup(t)
@@ -5771,31 +5669,11 @@ func TestUniqueOpts(t *testing.T) {
 			ByState:  []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCompleted},
 		}
 
-		insertRes0, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
+		insertRes, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
 			UniqueOpts: uniqueOpts,
 		})
-		require.NoError(t, err)
-
-		insertRes1, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
-			UniqueOpts: uniqueOpts,
-		})
-		require.NoError(t, err)
-
-		// Expect the same job to come back because the original is either still
-		// `available` or `completed`, both which we deduplicate off of.
-		require.Equal(t, insertRes0.Job.ID, insertRes1.Job.ID)
-
-		insertRes2, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
-			// Use a scheduled time so the job's inserted in state `scheduled`
-			// instead of `available`.
-			ScheduledAt: time.Now().Add(1 * time.Hour),
-			UniqueOpts:  uniqueOpts,
-		})
-		require.NoError(t, err)
-
-		// This job however is _not_ the same because it's inserted as
-		// `scheduled` which is outside the unique constraints.
-		require.NotEqual(t, insertRes0.Job.ID, insertRes2.Job.ID)
+		require.EqualError(t, err, "UniqueOpts.ByState must contain all required states, missing: pending, running, scheduled")
+		require.Nil(t, insertRes)
 	})
 }
 
