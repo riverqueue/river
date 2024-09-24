@@ -25,25 +25,25 @@ import (
 )
 
 type partialExecutorMock struct {
-	JobSetCompleteIfRunningManyCalled bool
-	JobSetCompleteIfRunningManyFunc   func(ctx context.Context, params *riverdriver.JobSetCompleteIfRunningManyParams) ([]*rivertype.JobRow, error)
-	JobSetStateIfRunningCalled        bool
-	JobSetStateIfRunningFunc          func(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error)
-	mu                                sync.Mutex
+	JobSetStateIfRunningManyCalled bool
+	JobSetStateIfRunningManyFunc   func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
+	JobSetStateIfRunningCalled     bool
+	JobSetStateIfRunningFunc       func(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error)
+	mu                             sync.Mutex
 }
 
 // NewPartialExecutorMock returns a new mock with all mock functions set to call
 // down into the given real executor.
 func NewPartialExecutorMock(exec riverdriver.Executor) *partialExecutorMock {
 	return &partialExecutorMock{
-		JobSetCompleteIfRunningManyFunc: exec.JobSetCompleteIfRunningMany,
-		JobSetStateIfRunningFunc:        exec.JobSetStateIfRunning,
+		JobSetStateIfRunningManyFunc: exec.JobSetStateIfRunningMany,
+		JobSetStateIfRunningFunc:     exec.JobSetStateIfRunning,
 	}
 }
 
-func (m *partialExecutorMock) JobSetCompleteIfRunningMany(ctx context.Context, params *riverdriver.JobSetCompleteIfRunningManyParams) ([]*rivertype.JobRow, error) {
-	m.setCalled(func() { m.JobSetCompleteIfRunningManyCalled = true })
-	return m.JobSetCompleteIfRunningManyFunc(ctx, params)
+func (m *partialExecutorMock) JobSetStateIfRunningMany(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+	m.setCalled(func() { m.JobSetStateIfRunningManyCalled = true })
+	return m.JobSetStateIfRunningManyFunc(ctx, params)
 }
 
 func (m *partialExecutorMock) JobSetStateIfRunning(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
@@ -325,7 +325,8 @@ func TestAsyncCompleter(t *testing.T) {
 		return NewAsyncCompleter(riversharedtest.BaseServiceArchetype(t), exec, subscribeCh)
 	},
 		func(completer *AsyncCompleter) { completer.disableSleep = true },
-		func(completer *AsyncCompleter, exec PartialExecutor) { completer.exec = exec })
+		func(completer *AsyncCompleter, exec PartialExecutor) { completer.exec = exec },
+	)
 }
 
 func TestBatchCompleter(t *testing.T) {
@@ -336,7 +337,8 @@ func TestBatchCompleter(t *testing.T) {
 		return NewBatchCompleter(riversharedtest.BaseServiceArchetype(t), exec, subscribeCh)
 	},
 		func(completer *BatchCompleter) { completer.disableSleep = true },
-		func(completer *BatchCompleter, exec PartialExecutor) { completer.exec = exec })
+		func(completer *BatchCompleter, exec PartialExecutor) { completer.exec = exec },
+	)
 
 	ctx := context.Background()
 
@@ -728,11 +730,11 @@ func testCompleter[TCompleter JobCompleter](
 		}
 
 		execMock := NewPartialExecutorMock(bundle.exec)
-		execMock.JobSetCompleteIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetCompleteIfRunningManyParams) ([]*rivertype.JobRow, error) {
+		execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
 			if err := maybeError(); err != nil {
 				return nil, err
 			}
-			return bundle.exec.JobSetCompleteIfRunningMany(ctx, params)
+			return bundle.exec.JobSetStateIfRunningMany(ctx, params)
 		}
 		execMock.JobSetStateIfRunningFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
 			if err := maybeError(); err != nil {
@@ -751,7 +753,7 @@ func testCompleter[TCompleter JobCompleter](
 		// Make sure our mocks were really called. The specific function called
 		// will depend on the completer under test, so okay as long as one or
 		// the other was.
-		require.True(t, execMock.JobSetCompleteIfRunningManyCalled || execMock.JobSetStateIfRunningCalled)
+		require.True(t, execMock.JobSetStateIfRunningManyCalled || execMock.JobSetStateIfRunningCalled)
 
 		// Job still managed to complete despite the errors.
 		requireState(t, bundle.exec, job.ID, rivertype.JobStateCompleted)
@@ -767,7 +769,7 @@ func testCompleter[TCompleter JobCompleter](
 		disableSleep(completer)
 
 		execMock := NewPartialExecutorMock(bundle.exec)
-		execMock.JobSetCompleteIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetCompleteIfRunningManyParams) ([]*rivertype.JobRow, error) {
+		execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
 			return nil, context.Canceled
 		}
 		execMock.JobSetStateIfRunningFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
@@ -788,7 +790,7 @@ func testCompleter[TCompleter JobCompleter](
 		// Make sure our mocks were really called. The specific function called
 		// will depend on the completer under test, so okay as long as one or
 		// the other was.
-		require.True(t, execMock.JobSetCompleteIfRunningManyCalled || execMock.JobSetStateIfRunningCalled)
+		require.True(t, execMock.JobSetStateIfRunningManyCalled || execMock.JobSetStateIfRunningCalled)
 
 		// Job is still running because the completer is forced to give up
 		// immediately on certain types of errors like where a pool is closed.
@@ -805,7 +807,7 @@ func testCompleter[TCompleter JobCompleter](
 		disableSleep(completer)
 
 		execMock := NewPartialExecutorMock(bundle.exec)
-		execMock.JobSetCompleteIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetCompleteIfRunningManyParams) ([]*rivertype.JobRow, error) {
+		execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
 			return nil, puddle.ErrClosedPool
 		}
 		execMock.JobSetStateIfRunningFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
@@ -826,7 +828,7 @@ func testCompleter[TCompleter JobCompleter](
 		// Make sure our mocks were really called. The specific function called
 		// will depend on the completer under test, so okay as long as one or
 		// the other was.
-		require.True(t, execMock.JobSetCompleteIfRunningManyCalled || execMock.JobSetStateIfRunningCalled)
+		require.True(t, execMock.JobSetStateIfRunningManyCalled || execMock.JobSetStateIfRunningCalled)
 
 		// Job is still running because the completer is forced to give up
 		// immediately on certain types of errors like where a pool is closed.

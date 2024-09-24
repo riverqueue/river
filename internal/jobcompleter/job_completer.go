@@ -48,7 +48,7 @@ type CompleterJobUpdated struct {
 // but is a minimal interface with the functions needed for completers to work
 // to more easily facilitate mocking.
 type PartialExecutor interface {
-	JobSetCompleteIfRunningMany(ctx context.Context, params *riverdriver.JobSetCompleteIfRunningManyParams) ([]*rivertype.JobRow, error)
+	JobSetStateIfRunningMany(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
 	JobSetStateIfRunning(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error)
 }
 
@@ -220,13 +220,13 @@ type BatchCompleter struct {
 	baseservice.BaseService
 	startstop.BaseStartStop
 
-	asyncCompleter       *AsyncCompleter // used for non-complete completions
-	completionMaxSize    int             // configurable for testing purposes; max jobs to complete in single database operation
-	disableSleep         bool            // disable sleep in testing
-	maxBacklog           int             // configurable for testing purposes; max backlog allowed before no more completions accepted
+	completionMaxSize    int  // configurable for testing purposes; max jobs to complete in single database operation
+	disableSleep         bool // disable sleep in testing
+	maxBacklog           int  // configurable for testing purposes; max backlog allowed before no more completions accepted
 	exec                 PartialExecutor
 	setStateParams       map[int64]*batchCompleterSetState
 	setStateParamsMu     sync.RWMutex
+	setStateStartTimes   map[int64]time.Time
 	subscribeCh          SubscribeChan
 	waitOnBacklogChan    chan struct{}
 	waitOnBacklogWaiting bool
@@ -239,18 +239,17 @@ func NewBatchCompleter(archetype *baseservice.Archetype, exec PartialExecutor, s
 	)
 
 	return baseservice.Init(archetype, &BatchCompleter{
-		asyncCompleter:    NewAsyncCompleter(archetype, exec, subscribeCh),
-		completionMaxSize: completionMaxSize,
-		exec:              exec,
-		maxBacklog:        maxBacklog,
-		setStateParams:    make(map[int64]*batchCompleterSetState),
-		subscribeCh:       subscribeCh,
+		completionMaxSize:  completionMaxSize,
+		exec:               exec,
+		maxBacklog:         maxBacklog,
+		setStateParams:     make(map[int64]*batchCompleterSetState),
+		setStateStartTimes: make(map[int64]time.Time),
+		subscribeCh:        subscribeCh,
 	})
 }
 
 func (c *BatchCompleter) ResetSubscribeChan(subscribeCh SubscribeChan) {
 	c.subscribeCh = subscribeCh
-	c.asyncCompleter.subscribeCh = subscribeCh
 }
 
 func (c *BatchCompleter) Start(ctx context.Context) error {
@@ -263,13 +262,10 @@ func (c *BatchCompleter) Start(ctx context.Context) error {
 		panic("subscribeCh must be non-nil")
 	}
 
-	if err := c.asyncCompleter.Start(ctx); err != nil {
-		return err
-	}
-
 	go func() {
 		started()
 		defer stopped() // this defer should come first so it's first out
+		defer close(c.subscribeCh)
 
 		c.Logger.DebugContext(ctx, c.Name+": Run loop started")
 		defer c.Logger.DebugContext(ctx, c.Name+": Run loop stopped")
@@ -327,17 +323,22 @@ func (c *BatchCompleter) Start(ctx context.Context) error {
 }
 
 func (c *BatchCompleter) handleBatch(ctx context.Context) error {
-	var setStateBatch map[int64]*batchCompleterSetState
+	var (
+		setStateBatch      map[int64]*batchCompleterSetState
+		setStateStartTimes map[int64]time.Time
+	)
 	func() {
 		c.setStateParamsMu.Lock()
 		defer c.setStateParamsMu.Unlock()
 
 		setStateBatch = c.setStateParams
+		setStateStartTimes = c.setStateStartTimes
 
 		// Don't bother resetting the map if there's nothing to process,
 		// allowing the completer to idle efficiently.
 		if len(setStateBatch) > 0 {
 			c.setStateParams = make(map[int64]*batchCompleterSetState)
+			c.setStateStartTimes = make(map[int64]time.Time)
 		} else {
 			// Set nil to avoid a data race below in case the map is set as a
 			// new job comes in.
@@ -351,34 +352,39 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 
 	// Complete a sub-batch with retries. Also helps reduce visual noise and
 	// increase readability of loop below.
-	completeSubBatch := func(batchID []int64, batchFinalizedAt []time.Time) ([]*rivertype.JobRow, error) {
+	completeSubBatch := func(batchParams *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
 		start := time.Now()
 		defer func() {
-			c.Logger.DebugContext(ctx, c.Name+": Completed sub-batch of job(s)", "duration", time.Since(start), "num_jobs", len(batchID))
+			c.Logger.DebugContext(ctx, c.Name+": Completed sub-batch of job(s)", "duration", time.Since(start), "num_jobs", len(batchParams.ID))
 		}()
 
 		return withRetries(ctx, &c.BaseService, c.disableSleep, func(ctx context.Context) ([]*rivertype.JobRow, error) {
-			return c.exec.JobSetCompleteIfRunningMany(ctx, &riverdriver.JobSetCompleteIfRunningManyParams{
-				ID:          batchID,
-				FinalizedAt: batchFinalizedAt,
-			})
+			return c.exec.JobSetStateIfRunningMany(ctx, batchParams)
 		})
 	}
 
 	// This could be written more simply using multiple `sliceutil.Map`s, but
 	// it's done this way to allocate as few new slices as necessary.
-	mapIDsAndFinalizedAt := func(setStateBatch map[int64]*batchCompleterSetState) ([]int64, []time.Time) {
-		var (
-			batchIDs         = make([]int64, len(setStateBatch))
-			batchFinalizedAt = make([]time.Time, len(setStateBatch))
-			i                int
-		)
+	mapBatch := func(setStateBatch map[int64]*batchCompleterSetState) *riverdriver.JobSetStateIfRunningManyParams {
+		params := &riverdriver.JobSetStateIfRunningManyParams{
+			ID:          make([]int64, len(setStateBatch)),
+			ErrData:     make([][]byte, len(setStateBatch)),
+			FinalizedAt: make([]*time.Time, len(setStateBatch)),
+			MaxAttempts: make([]*int, len(setStateBatch)),
+			ScheduledAt: make([]*time.Time, len(setStateBatch)),
+			State:       make([]rivertype.JobState, len(setStateBatch)),
+		}
+		var i int
 		for _, setState := range setStateBatch {
-			batchIDs[i] = setState.Params.ID
-			batchFinalizedAt[i] = *setState.Params.FinalizedAt
+			params.ID[i] = setState.Params.ID
+			params.ErrData[i] = setState.Params.ErrData
+			params.FinalizedAt[i] = setState.Params.FinalizedAt
+			params.MaxAttempts[i] = setState.Params.MaxAttempts
+			params.ScheduledAt[i] = setState.Params.ScheduledAt
+			params.State[i] = setState.Params.State
 			i++
 		}
-		return batchIDs, batchFinalizedAt
+		return params
 	}
 
 	// Tease apart enormous batches into sub-batches.
@@ -387,15 +393,23 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 	// doesn't allocate any additional memory in case the entire batch is
 	// smaller than the sub-batch maximum size (which will be the common case).
 	var (
-		batchID, batchFinalizedAt = mapIDsAndFinalizedAt(setStateBatch)
-		jobRows                   []*rivertype.JobRow
+		params  = mapBatch(setStateBatch)
+		jobRows []*rivertype.JobRow
 	)
 	c.Logger.DebugContext(ctx, c.Name+": Completing batch of job(s)", "num_jobs", len(setStateBatch))
 	if len(setStateBatch) > c.completionMaxSize {
 		jobRows = make([]*rivertype.JobRow, 0, len(setStateBatch))
 		for i := 0; i < len(setStateBatch); i += c.completionMaxSize {
-			endIndex := min(i+c.completionMaxSize, len(batchID)) // beginning of next sub-batch or end of slice
-			jobRowsSubBatch, err := completeSubBatch(batchID[i:endIndex], batchFinalizedAt[i:endIndex])
+			endIndex := min(i+c.completionMaxSize, len(params.ID)) // beginning of next sub-batch or end of slice
+			subBatch := &riverdriver.JobSetStateIfRunningManyParams{
+				ID:          params.ID[i:endIndex],
+				ErrData:     params.ErrData[i:endIndex],
+				FinalizedAt: params.FinalizedAt[i:endIndex],
+				MaxAttempts: params.MaxAttempts[i:endIndex],
+				ScheduledAt: params.ScheduledAt[i:endIndex],
+				State:       params.State[i:endIndex],
+			}
+			jobRowsSubBatch, err := completeSubBatch(subBatch)
 			if err != nil {
 				return err
 			}
@@ -403,7 +417,7 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 		}
 	} else {
 		var err error
-		jobRows, err = completeSubBatch(batchID, batchFinalizedAt)
+		jobRows, err = completeSubBatch(params)
 		if err != nil {
 			return err
 		}
@@ -411,7 +425,8 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 
 	events := sliceutil.Map(jobRows, func(jobRow *rivertype.JobRow) CompleterJobUpdated {
 		setState := setStateBatch[jobRow.ID]
-		setState.Stats.CompleteDuration = c.Time.NowUTC().Sub(*setState.Params.FinalizedAt)
+		startTime := setStateStartTimes[jobRow.ID]
+		setState.Stats.CompleteDuration = c.Time.NowUTC().Sub(startTime)
 		return CompleterJobUpdated{Job: jobRow, JobStats: setState.Stats}
 	})
 
@@ -432,13 +447,7 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 }
 
 func (c *BatchCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobstats.JobStatistics, params *riverdriver.JobSetStateIfRunningParams) error {
-	// Send completions other than setting to `complete` to an async completer.
-	// We consider this okay because these are expected to be much more rare, so
-	// only optimizing `complete` will yield huge speed gains.
-	if params.State != rivertype.JobStateCompleted {
-		return c.asyncCompleter.JobSetStateIfRunning(ctx, stats, params)
-	}
-
+	now := c.Time.NowUTC()
 	// If we've built up too much of a backlog because the completer's fallen
 	// behind, block completions until the complete loop's had a chance to catch
 	// up.
@@ -448,14 +457,9 @@ func (c *BatchCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobsta
 	defer c.setStateParamsMu.Unlock()
 
 	c.setStateParams[params.ID] = &batchCompleterSetState{params, stats}
+	c.setStateStartTimes[params.ID] = now
 
 	return nil
-}
-
-func (c *BatchCompleter) Stop() {
-	c.BaseStartStop.Stop()
-	c.asyncCompleter.Stop()
-	// subscribeCh already closed by asyncCompleter.Stop ^
 }
 
 func (c *BatchCompleter) waitOrInitBacklogChannel(ctx context.Context) {

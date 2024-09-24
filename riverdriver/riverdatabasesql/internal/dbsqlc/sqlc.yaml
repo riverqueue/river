@@ -28,6 +28,7 @@ sql:
         emit_result_struct_pointers: true
 
         rename:
+          ids: "IDs"
           ttl: "TTL"
 
         overrides:
