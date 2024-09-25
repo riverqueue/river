@@ -523,6 +523,66 @@ UNION
 SELECT *
 FROM updated_job;
 
+-- name: JobSetStateIfRunningMany :many
+WITH job_input AS (
+    SELECT
+        unnest(@ids::bigint[]) AS id,
+        -- To avoid requiring pgx users to register the OID of the river_job_state[]
+        -- type, we cast the array to text[] and then to river_job_state.
+        unnest(@state::text[])::river_job_state AS state,
+        unnest(@finalized_at_do_update::boolean[]) AS finalized_at_do_update,
+        unnest(@finalized_at::timestamptz[]) AS finalized_at,
+        unnest(@errors_do_update::boolean[]) AS errors_do_update,
+        unnest(@errors::jsonb[]) AS errors,
+        unnest(@max_attempts_do_update::boolean[]) AS max_attempts_do_update,
+        unnest(@max_attempts::int[]) AS max_attempts,
+        unnest(@scheduled_at_do_update::boolean[]) AS scheduled_at_do_update,
+        unnest(@scheduled_at::timestamptz[]) AS scheduled_at
+),
+job_to_update AS (
+    SELECT
+        river_job.id,
+        job_input.state,
+        job_input.finalized_at,
+        job_input.errors,
+        job_input.max_attempts,
+        job_input.scheduled_at,
+        (job_input.state IN ('retryable', 'scheduled') AND river_job.metadata ? 'cancel_attempted_at') AS should_cancel,
+        job_input.finalized_at_do_update,
+        job_input.errors_do_update,
+        job_input.max_attempts_do_update,
+        job_input.scheduled_at_do_update
+    FROM river_job
+    JOIN job_input ON river_job.id = job_input.id
+    WHERE river_job.state = 'running'
+    FOR UPDATE
+),
+updated_job AS (
+    UPDATE river_job
+    SET
+        state        = CASE WHEN job_to_update.should_cancel THEN 'cancelled'::river_job_state
+                            ELSE job_to_update.state END,
+        finalized_at = CASE WHEN job_to_update.should_cancel THEN now()
+                            WHEN job_to_update.finalized_at_do_update THEN job_to_update.finalized_at
+                            ELSE river_job.finalized_at END,
+        errors       = CASE WHEN job_to_update.errors_do_update THEN array_append(river_job.errors, job_to_update.errors)
+                            ELSE river_job.errors END,
+        max_attempts = CASE WHEN NOT job_to_update.should_cancel AND job_to_update.max_attempts_do_update THEN job_to_update.max_attempts
+                            ELSE river_job.max_attempts END,
+        scheduled_at = CASE WHEN NOT job_to_update.should_cancel AND job_to_update.scheduled_at_do_update THEN job_to_update.scheduled_at
+                            ELSE river_job.scheduled_at END
+    FROM job_to_update
+    WHERE river_job.id = job_to_update.id
+    RETURNING river_job.*
+)
+SELECT *
+FROM river_job
+WHERE id IN (SELECT id FROM job_input)
+  AND id NOT IN (SELECT id FROM updated_job)
+UNION
+SELECT *
+FROM updated_job;
+
 -- A generalized update for any property on a job. This brings in a large number
 -- of parameters and therefore may be more suitable for testing than production.
 -- name: JobUpdate :one

@@ -576,6 +576,49 @@ func (e *Executor) JobSetStateIfRunning(ctx context.Context, params *riverdriver
 	return jobRowFromInternal(job)
 }
 
+func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+	setStateParams := &dbsqlc.JobSetStateIfRunningManyParams{
+		IDs:                 params.ID,
+		Errors:              make([]string, len(params.ID)),
+		ErrorsDoUpdate:      make([]bool, len(params.ID)),
+		FinalizedAt:         make([]time.Time, len(params.ID)),
+		FinalizedAtDoUpdate: make([]bool, len(params.ID)),
+		MaxAttempts:         make([]int32, len(params.ID)),
+		MaxAttemptsDoUpdate: make([]bool, len(params.ID)),
+		ScheduledAt:         make([]time.Time, len(params.ID)),
+		ScheduledAtDoUpdate: make([]bool, len(params.ID)),
+		State:               make([]string, len(params.ID)),
+	}
+
+	const defaultObject = "{}"
+
+	for i := 0; i < len(params.ID); i++ {
+		setStateParams.Errors[i] = valutil.ValOrDefault(string(params.ErrData[i]), defaultObject)
+		if params.ErrData[i] != nil {
+			setStateParams.ErrorsDoUpdate[i] = true
+		}
+		if params.FinalizedAt[i] != nil {
+			setStateParams.FinalizedAtDoUpdate[i] = true
+			setStateParams.FinalizedAt[i] = *params.FinalizedAt[i]
+		}
+		if params.MaxAttempts[i] != nil {
+			setStateParams.MaxAttemptsDoUpdate[i] = true
+			setStateParams.MaxAttempts[i] = int32(*params.MaxAttempts[i]) //nolint:gosec
+		}
+		if params.ScheduledAt[i] != nil {
+			setStateParams.ScheduledAtDoUpdate[i] = true
+			setStateParams.ScheduledAt[i] = *params.ScheduledAt[i]
+		}
+		setStateParams.State[i] = string(params.State[i])
+	}
+
+	jobs, err := dbsqlc.New().JobSetStateIfRunningMany(ctx, e.dbtx, setStateParams)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return mapSliceError(jobs, jobRowFromInternal)
+}
+
 func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateParams) (*rivertype.JobRow, error) {
 	job, err := dbsqlc.New().JobUpdate(ctx, e.dbtx, &dbsqlc.JobUpdateParams{
 		ID:                  params.ID,

@@ -126,6 +126,7 @@ type Executor interface {
 	JobSchedule(ctx context.Context, params *JobScheduleParams) ([]*JobScheduleResult, error)
 	JobSetCompleteIfRunningMany(ctx context.Context, params *JobSetCompleteIfRunningManyParams) ([]*rivertype.JobRow, error)
 	JobSetStateIfRunning(ctx context.Context, params *JobSetStateIfRunningParams) (*rivertype.JobRow, error)
+	JobSetStateIfRunningMany(ctx context.Context, params *JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
 	JobUpdate(ctx context.Context, params *JobUpdateParams) (*rivertype.JobRow, error)
 	LeaderAttemptElect(ctx context.Context, params *LeaderElectParams) (bool, error)
 	LeaderAttemptReelect(ctx context.Context, params *LeaderElectParams) (bool, error)
@@ -353,6 +354,18 @@ func JobSetStateSnoozed(id int64, scheduledAt time.Time, maxAttempts int) *JobSe
 
 func JobSetStateSnoozedAvailable(id int64, scheduledAt time.Time, maxAttempts int) *JobSetStateIfRunningParams {
 	return &JobSetStateIfRunningParams{ID: id, MaxAttempts: &maxAttempts, ScheduledAt: &scheduledAt, State: rivertype.JobStateAvailable}
+}
+
+// JobSetStateIfRunningManyParams are parameters to update the state of
+// currently running jobs. Use one of the constructors below to ensure a correct
+// combination of parameters.
+type JobSetStateIfRunningManyParams struct {
+	ID          []int64
+	ErrData     [][]byte
+	FinalizedAt []*time.Time
+	MaxAttempts []*int
+	ScheduledAt []*time.Time
+	State       []rivertype.JobState
 }
 
 type JobUpdateParams struct {

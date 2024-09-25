@@ -1261,6 +1261,130 @@ func (q *Queries) JobSetStateIfRunning(ctx context.Context, db DBTX, arg *JobSet
 	return &i, err
 }
 
+const jobSetStateIfRunningMany = `-- name: JobSetStateIfRunningMany :many
+WITH job_input AS (
+    SELECT
+        unnest($1::bigint[]) AS id,
+        -- To avoid requiring pgx users to register the OID of the river_job_state[]
+        -- type, we cast the array to text[] and then to river_job_state.
+        unnest($2::text[])::river_job_state AS state,
+        unnest($3::boolean[]) AS finalized_at_do_update,
+        unnest($4::timestamptz[]) AS finalized_at,
+        unnest($5::boolean[]) AS errors_do_update,
+        unnest($6::jsonb[]) AS errors,
+        unnest($7::boolean[]) AS max_attempts_do_update,
+        unnest($8::int[]) AS max_attempts,
+        unnest($9::boolean[]) AS scheduled_at_do_update,
+        unnest($10::timestamptz[]) AS scheduled_at
+),
+job_to_update AS (
+    SELECT
+        river_job.id,
+        job_input.state,
+        job_input.finalized_at,
+        job_input.errors,
+        job_input.max_attempts,
+        job_input.scheduled_at,
+        (job_input.state IN ('retryable', 'scheduled') AND river_job.metadata ? 'cancel_attempted_at') AS should_cancel,
+        job_input.finalized_at_do_update,
+        job_input.errors_do_update,
+        job_input.max_attempts_do_update,
+        job_input.scheduled_at_do_update
+    FROM river_job
+    JOIN job_input ON river_job.id = job_input.id
+    WHERE river_job.state = 'running'
+    FOR UPDATE
+),
+updated_job AS (
+    UPDATE river_job
+    SET
+        state        = CASE WHEN job_to_update.should_cancel THEN 'cancelled'::river_job_state
+                            ELSE job_to_update.state END,
+        finalized_at = CASE WHEN job_to_update.should_cancel THEN now()
+                            WHEN job_to_update.finalized_at_do_update THEN job_to_update.finalized_at
+                            ELSE river_job.finalized_at END,
+        errors       = CASE WHEN job_to_update.errors_do_update THEN array_append(river_job.errors, job_to_update.errors)
+                            ELSE river_job.errors END,
+        max_attempts = CASE WHEN NOT job_to_update.should_cancel AND job_to_update.max_attempts_do_update THEN job_to_update.max_attempts
+                            ELSE river_job.max_attempts END,
+        scheduled_at = CASE WHEN NOT job_to_update.should_cancel AND job_to_update.scheduled_at_do_update THEN job_to_update.scheduled_at
+                            ELSE river_job.scheduled_at END
+    FROM job_to_update
+    WHERE river_job.id = job_to_update.id
+    RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states
+)
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
+FROM river_job
+WHERE id IN (SELECT id FROM job_input)
+  AND id NOT IN (SELECT id FROM updated_job)
+UNION
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
+FROM updated_job
+`
+
+type JobSetStateIfRunningManyParams struct {
+	IDs                 []int64
+	State               []string
+	FinalizedAtDoUpdate []bool
+	FinalizedAt         []time.Time
+	ErrorsDoUpdate      []bool
+	Errors              [][]byte
+	MaxAttemptsDoUpdate []bool
+	MaxAttempts         []int32
+	ScheduledAtDoUpdate []bool
+	ScheduledAt         []time.Time
+}
+
+func (q *Queries) JobSetStateIfRunningMany(ctx context.Context, db DBTX, arg *JobSetStateIfRunningManyParams) ([]*RiverJob, error) {
+	rows, err := db.Query(ctx, jobSetStateIfRunningMany,
+		arg.IDs,
+		arg.State,
+		arg.FinalizedAtDoUpdate,
+		arg.FinalizedAt,
+		arg.ErrorsDoUpdate,
+		arg.Errors,
+		arg.MaxAttemptsDoUpdate,
+		arg.MaxAttempts,
+		arg.ScheduledAtDoUpdate,
+		arg.ScheduledAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverJob
+	for rows.Next() {
+		var i RiverJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Args,
+			&i.Attempt,
+			&i.AttemptedAt,
+			&i.AttemptedBy,
+			&i.CreatedAt,
+			&i.Errors,
+			&i.FinalizedAt,
+			&i.Kind,
+			&i.MaxAttempts,
+			&i.Metadata,
+			&i.Priority,
+			&i.Queue,
+			&i.State,
+			&i.ScheduledAt,
+			&i.Tags,
+			&i.UniqueKey,
+			&i.UniqueStates,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const jobUpdate = `-- name: JobUpdate :one
 UPDATE river_job
 SET
