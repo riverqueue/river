@@ -11,6 +11,7 @@ import (
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstop"
 )
@@ -99,6 +100,14 @@ func (d *TestDriverWithPlugin) PluginMaintenanceServices() []startstop.Service {
 	}
 
 	return []startstop.Service{d.maintenanceService}
+}
+
+func (d *TestDriverWithPlugin) PluginPilot() riverpilot.Pilot {
+	if !d.initCalled {
+		panic("expected PluginInit to be called before this function")
+	}
+
+	return nil
 }
 
 func (d *TestDriverWithPlugin) PluginServices() []startstop.Service {

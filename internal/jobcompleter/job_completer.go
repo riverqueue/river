@@ -11,6 +11,7 @@ import (
 	"github.com/riverqueue/river/internal/jobstats"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
@@ -44,20 +45,12 @@ type CompleterJobUpdated struct {
 	JobStats *jobstats.JobStatistics
 }
 
-// PartialExecutor is always a riverdriver.Executor under normal circumstances,
-// but is a minimal interface with the functions needed for completers to work
-// to more easily facilitate mocking.
-type PartialExecutor interface {
-	JobSetStateIfRunningMany(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
-	JobSetStateIfRunning(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error)
-}
-
 type InlineCompleter struct {
 	baseservice.BaseService
 	startstop.BaseStartStop
 
 	disableSleep bool // disable sleep in testing
-	exec         PartialExecutor
+	exec         riverdriver.Executor
 	subscribeCh  SubscribeChan
 
 	// A waitgroup is not actually needed for the inline completer because as
@@ -68,7 +61,7 @@ type InlineCompleter struct {
 	wg sync.WaitGroup
 }
 
-func NewInlineCompleter(archetype *baseservice.Archetype, exec PartialExecutor, subscribeCh SubscribeChan) *InlineCompleter {
+func NewInlineCompleter(archetype *baseservice.Archetype, exec riverdriver.Executor, subscribeCh SubscribeChan) *InlineCompleter {
 	return baseservice.Init(archetype, &InlineCompleter{
 		exec:        exec,
 		subscribeCh: subscribeCh,
@@ -135,15 +128,15 @@ type AsyncCompleter struct {
 	concurrency  int
 	disableSleep bool // disable sleep in testing
 	errGroup     *errgroup.Group
-	exec         PartialExecutor
+	exec         riverdriver.Executor
 	subscribeCh  SubscribeChan
 }
 
-func NewAsyncCompleter(archetype *baseservice.Archetype, exec PartialExecutor, subscribeCh SubscribeChan) *AsyncCompleter {
+func NewAsyncCompleter(archetype *baseservice.Archetype, exec riverdriver.Executor, subscribeCh SubscribeChan) *AsyncCompleter {
 	return newAsyncCompleterWithConcurrency(archetype, exec, asyncCompleterDefaultConcurrency, subscribeCh)
 }
 
-func newAsyncCompleterWithConcurrency(archetype *baseservice.Archetype, exec PartialExecutor, concurrency int, subscribeCh SubscribeChan) *AsyncCompleter {
+func newAsyncCompleterWithConcurrency(archetype *baseservice.Archetype, exec riverdriver.Executor, concurrency int, subscribeCh SubscribeChan) *AsyncCompleter {
 	errGroup := &errgroup.Group{}
 	errGroup.SetLimit(concurrency)
 
@@ -223,7 +216,8 @@ type BatchCompleter struct {
 	completionMaxSize    int  // configurable for testing purposes; max jobs to complete in single database operation
 	disableSleep         bool // disable sleep in testing
 	maxBacklog           int  // configurable for testing purposes; max backlog allowed before no more completions accepted
-	exec                 PartialExecutor
+	exec                 riverdriver.Executor
+	pilot                riverpilot.Pilot
 	setStateParams       map[int64]*batchCompleterSetState
 	setStateParamsMu     sync.RWMutex
 	setStateStartTimes   map[int64]time.Time
@@ -232,7 +226,7 @@ type BatchCompleter struct {
 	waitOnBacklogWaiting bool
 }
 
-func NewBatchCompleter(archetype *baseservice.Archetype, exec PartialExecutor, subscribeCh SubscribeChan) *BatchCompleter {
+func NewBatchCompleter(archetype *baseservice.Archetype, exec riverdriver.Executor, pilot riverpilot.Pilot, subscribeCh SubscribeChan) *BatchCompleter {
 	const (
 		completionMaxSize = 5_000
 		maxBacklog        = 20_000
@@ -242,6 +236,7 @@ func NewBatchCompleter(archetype *baseservice.Archetype, exec PartialExecutor, s
 		completionMaxSize:  completionMaxSize,
 		exec:               exec,
 		maxBacklog:         maxBacklog,
+		pilot:              pilot,
 		setStateParams:     make(map[int64]*batchCompleterSetState),
 		setStateStartTimes: make(map[int64]time.Time),
 		subscribeCh:        subscribeCh,
@@ -359,7 +354,21 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 		}()
 
 		return withRetries(ctx, &c.BaseService, c.disableSleep, func(ctx context.Context) ([]*rivertype.JobRow, error) {
-			return c.exec.JobSetStateIfRunningMany(ctx, batchParams)
+			tx, err := c.exec.Begin(ctx)
+			if err != nil {
+				return nil, err
+			}
+			defer tx.Rollback(ctx)
+
+			rows, err := c.pilot.JobSetStateIfRunningMany(ctx, tx, batchParams)
+			if err != nil {
+				return nil, err
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return nil, err
+			}
+
+			return rows, nil
 		})
 	}
 
