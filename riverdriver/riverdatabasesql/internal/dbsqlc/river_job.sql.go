@@ -1028,16 +1028,19 @@ WITH jobs_to_schedule AS (
     FOR UPDATE
 ),
 conflicting_jobs AS (
-    SELECT DISTINCT unique_key
+    SELECT id, unique_key
     FROM river_job
-    WHERE unique_key IN (
-            SELECT unique_key
-            FROM jobs_to_schedule
-            WHERE unique_key IS NOT NULL
-                AND unique_states IS NOT NULL
-        )
+    WHERE
+        unique_key IS NOT NULL
         AND unique_states IS NOT NULL
         AND river_job_state_in_bitmask(unique_states, state)
+        AND unique_key IN (
+            SELECT unique_key
+            FROM jobs_to_schedule
+            WHERE
+                unique_key IS NOT NULL
+                AND unique_states IS NOT NULL
+        )
 ),
 updated_jobs AS (
     UPDATE river_job
@@ -1050,7 +1053,7 @@ updated_jobs AS (
         metadata     = CASE WHEN cj.unique_key IS NULL THEN metadata
                             ELSE metadata || '{"unique_key_conflict": "scheduler_discarded"}'::jsonb END
     FROM jobs_to_schedule jts
-    LEFT JOIN conflicting_jobs cj ON jts.unique_key = cj.unique_key
+    LEFT JOIN conflicting_jobs cj ON jts.unique_key = cj.unique_key AND jts.id != cj.id
     WHERE river_job.id = jts.id
     RETURNING river_job.id, state = 'discarded'::river_job_state AS conflict_discarded
 )
