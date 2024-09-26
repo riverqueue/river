@@ -1013,7 +1013,12 @@ func (q *Queries) JobRetry(ctx context.Context, db DBTX, id int64) (*RiverJob, e
 
 const jobSchedule = `-- name: JobSchedule :many
 WITH jobs_to_schedule AS (
-    SELECT id, unique_key, unique_states
+    SELECT
+        id,
+        unique_key,
+        unique_states,
+        priority,
+        scheduled_at
     FROM river_job
     WHERE
         state IN ('retryable', 'scheduled')
@@ -1027,32 +1032,59 @@ WITH jobs_to_schedule AS (
     LIMIT $2::bigint
     FOR UPDATE
 ),
-conflicting_jobs AS (
-    SELECT DISTINCT unique_key
+jobs_with_rownum AS (
+    SELECT
+        id, unique_key, unique_states, priority, scheduled_at,
+        CASE
+            WHEN unique_key IS NOT NULL AND unique_states IS NOT NULL THEN
+                ROW_NUMBER() OVER (
+                    PARTITION BY unique_key
+                    ORDER BY priority, scheduled_at, id
+                )
+            ELSE NULL
+        END AS row_num
+    FROM jobs_to_schedule
+),
+unique_conflicts AS (
+    SELECT river_job.unique_key
     FROM river_job
-    WHERE unique_key IN (
-            SELECT unique_key
-            FROM jobs_to_schedule
-            WHERE unique_key IS NOT NULL
-                AND unique_states IS NOT NULL
-        )
-        AND unique_states IS NOT NULL
-        AND river_job_state_in_bitmask(unique_states, state)
+    JOIN jobs_with_rownum
+        ON river_job.unique_key = jobs_with_rownum.unique_key
+        AND river_job.id != jobs_with_rownum.id
+    WHERE
+        river_job.unique_key IS NOT NULL
+        AND river_job.unique_states IS NOT NULL
+        AND river_job_state_in_bitmask(river_job.unique_states, river_job.state)
+),
+job_updates AS (
+    SELECT
+        job.id,
+        job.unique_key,
+        job.unique_states,
+        CASE
+            WHEN job.row_num IS NULL THEN 'available'::river_job_state
+            WHEN uc.unique_key IS NOT NULL THEN 'discarded'::river_job_state
+            WHEN job.row_num = 1 THEN 'available'::river_job_state
+            ELSE 'discarded'::river_job_state
+        END AS new_state,
+        (job.row_num IS NOT NULL AND (uc.unique_key IS NOT NULL OR job.row_num > 1)) AS finalized_at_do_update,
+        (job.row_num IS NOT NULL AND (uc.unique_key IS NOT NULL OR job.row_num > 1)) AS metadata_do_update
+    FROM jobs_with_rownum job
+    LEFT JOIN unique_conflicts uc ON job.unique_key = uc.unique_key
 ),
 updated_jobs AS (
     UPDATE river_job
     SET
-        state        = CASE WHEN cj.unique_key IS NULL THEN 'available'::river_job_state
-                            ELSE 'discarded'::river_job_state END,
-        finalized_at = CASE WHEN cj.unique_key IS NULL THEN finalized_at
-                            ELSE $1::timestamptz END,
-        -- Purely for debugging to understand when this code path was used:
-        metadata     = CASE WHEN cj.unique_key IS NULL THEN metadata
-                            ELSE metadata || '{"unique_key_conflict": "scheduler_discarded"}'::jsonb END
-    FROM jobs_to_schedule jts
-    LEFT JOIN conflicting_jobs cj ON jts.unique_key = cj.unique_key
-    WHERE river_job.id = jts.id
-    RETURNING river_job.id, state = 'discarded'::river_job_state AS conflict_discarded
+        state        = job_updates.new_state,
+        finalized_at = CASE WHEN job_updates.finalized_at_do_update THEN $1::timestamptz
+                            ELSE river_job.finalized_at END,
+        metadata     = CASE WHEN job_updates.metadata_do_update THEN river_job.metadata || '{"unique_key_conflict": "scheduler_discarded"}'::jsonb
+                            ELSE river_job.metadata END
+    FROM job_updates
+    WHERE river_job.id = job_updates.id
+    RETURNING
+        river_job.id,
+        job_updates.new_state = 'discarded'::river_job_state AS conflict_discarded
 )
 SELECT
     river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states,

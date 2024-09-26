@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 
+	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
@@ -1503,54 +1505,191 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	t.Run("JobSchedule", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		t.Run("BasicScheduling", func(t *testing.T) {
+			exec, _ := setup(ctx, t)
 
-		var (
-			horizon       = time.Now()
-			beforeHorizon = horizon.Add(-1 * time.Minute)
-			afterHorizon  = horizon.Add(1 * time.Minute)
-		)
+			var (
+				horizon       = time.Now()
+				beforeHorizon = horizon.Add(-1 * time.Minute)
+				afterHorizon  = horizon.Add(1 * time.Minute)
+			)
 
-		job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRetryable)})
-		job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateScheduled)})
-		job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateScheduled)})
+			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRetryable)})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateScheduled)})
+			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateScheduled)})
 
-		// States that aren't scheduled.
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
+			// States that aren't scheduled.
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
 
-		// Right state, but after horizon.
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &afterHorizon, State: ptrutil.Ptr(rivertype.JobStateRetryable)})
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &afterHorizon, State: ptrutil.Ptr(rivertype.JobStateScheduled)})
+			// Right state, but after horizon.
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &afterHorizon, State: ptrutil.Ptr(rivertype.JobStateRetryable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &afterHorizon, State: ptrutil.Ptr(rivertype.JobStateScheduled)})
 
-		// First two scheduled because of limit.
-		result, err := exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
-			Max: 2,
-			Now: horizon,
+			// First two scheduled because of limit.
+			result, err := exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
+				Max: 2,
+				Now: horizon,
+			})
+			require.NoError(t, err)
+			require.Len(t, result, 2)
+
+			// And then job3 scheduled.
+			result, err = exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
+				Max: 2,
+				Now: horizon,
+			})
+			require.NoError(t, err)
+			require.Len(t, result, 1)
+
+			updatedJob1, err := exec.JobGetByID(ctx, job1.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateAvailable, updatedJob1.State)
+
+			updatedJob2, err := exec.JobGetByID(ctx, job2.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateAvailable, updatedJob2.State)
+
+			updatedJob3, err := exec.JobGetByID(ctx, job3.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateAvailable, updatedJob3.State)
 		})
-		require.NoError(t, err)
-		require.Len(t, result, 2)
 
-		// And then job3 scheduled.
-		result, err = exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
-			Max: 2,
-			Now: horizon,
+		t.Run("HandlesUniqueConflicts", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			var (
+				horizon       = time.Now()
+				beforeHorizon = horizon.Add(-1 * time.Minute)
+			)
+
+			defaultUniqueStates := []rivertype.JobState{
+				rivertype.JobStateAvailable,
+				rivertype.JobStatePending,
+				rivertype.JobStateRetryable,
+				rivertype.JobStateRunning,
+				rivertype.JobStateScheduled,
+			}
+			// The default unique state list, minus retryable to allow for these conflicts:
+			nonRetryableUniqueStates := []rivertype.JobState{
+				rivertype.JobStateAvailable,
+				rivertype.JobStatePending,
+				rivertype.JobStateRunning,
+				rivertype.JobStateScheduled,
+			}
+
+			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				ScheduledAt:  &beforeHorizon,
+				State:        ptrutil.Ptr(rivertype.JobStateRetryable),
+				UniqueKey:    []byte("unique-key-1"),
+				UniqueStates: dbunique.UniqueStatesToBitmask(nonRetryableUniqueStates),
+			})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				ScheduledAt:  &beforeHorizon,
+				State:        ptrutil.Ptr(rivertype.JobStateRetryable),
+				UniqueKey:    []byte("unique-key-2"),
+				UniqueStates: dbunique.UniqueStatesToBitmask(nonRetryableUniqueStates),
+			})
+			// job3 has no conflict (it's the only one with this key), so it should be
+			// scheduled.
+			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				ScheduledAt:  &beforeHorizon,
+				State:        ptrutil.Ptr(rivertype.JobStateRetryable),
+				UniqueKey:    []byte("unique-key-3"),
+				UniqueStates: dbunique.UniqueStatesToBitmask(defaultUniqueStates),
+			})
+
+			// This one is a conflict with job1 because it's already running and has
+			// the same unique properties:
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				ScheduledAt:  &beforeHorizon,
+				State:        ptrutil.Ptr(rivertype.JobStateRunning),
+				UniqueKey:    []byte("unique-key-1"),
+				UniqueStates: dbunique.UniqueStatesToBitmask(nonRetryableUniqueStates),
+			})
+			// This one is *not* a conflict with job2 because it's completed, which
+			// isn't in the unique states:
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				ScheduledAt:  &beforeHorizon,
+				State:        ptrutil.Ptr(rivertype.JobStateCompleted),
+				UniqueKey:    []byte("unique-key-2"),
+				UniqueStates: dbunique.UniqueStatesToBitmask(nonRetryableUniqueStates),
+			})
+
+			result, err := exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
+				Max: 100,
+				Now: horizon,
+			})
+			require.NoError(t, err)
+			require.Len(t, result, 3)
+
+			updatedJob1, err := exec.JobGetByID(ctx, job1.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateDiscarded, updatedJob1.State)
+			require.Equal(t, "scheduler_discarded", gjson.GetBytes(updatedJob1.Metadata, "unique_key_conflict").String())
+
+			updatedJob2, err := exec.JobGetByID(ctx, job2.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateAvailable, updatedJob2.State)
+			require.False(t, gjson.GetBytes(updatedJob2.Metadata, "unique_key_conflict").Exists())
+
+			updatedJob3, err := exec.JobGetByID(ctx, job3.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateAvailable, updatedJob3.State)
+			require.False(t, gjson.GetBytes(updatedJob3.Metadata, "unique_key_conflict").Exists())
 		})
-		require.NoError(t, err)
-		require.Len(t, result, 1)
 
-		updatedJob1, err := exec.JobGetByID(ctx, job1.ID)
-		require.NoError(t, err)
-		require.Equal(t, rivertype.JobStateAvailable, updatedJob1.State)
+		t.Run("SchedulingTwoRetryableJobsThatWillConflictWithEachOther", func(t *testing.T) {
+			t.Parallel()
 
-		updatedJob2, err := exec.JobGetByID(ctx, job2.ID)
-		require.NoError(t, err)
-		require.Equal(t, rivertype.JobStateAvailable, updatedJob2.State)
+			exec, _ := setup(ctx, t)
 
-		updatedJob3, err := exec.JobGetByID(ctx, job3.ID)
-		require.NoError(t, err)
-		require.Equal(t, rivertype.JobStateAvailable, updatedJob3.State)
+			var (
+				horizon       = time.Now()
+				beforeHorizon = horizon.Add(-1 * time.Minute)
+			)
+
+			// The default unique state list, minus retryable to allow for these conflicts:
+			nonRetryableUniqueStates := []rivertype.JobState{
+				rivertype.JobStateAvailable,
+				rivertype.JobStatePending,
+				rivertype.JobStateRunning,
+				rivertype.JobStateScheduled,
+			}
+
+			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				ScheduledAt:  &beforeHorizon,
+				State:        ptrutil.Ptr(rivertype.JobStateRetryable),
+				UniqueKey:    []byte("unique-key-1"),
+				UniqueStates: dbunique.UniqueStatesToBitmask(nonRetryableUniqueStates),
+			})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				ScheduledAt:  &beforeHorizon,
+				State:        ptrutil.Ptr(rivertype.JobStateRetryable),
+				UniqueKey:    []byte("unique-key-1"),
+				UniqueStates: dbunique.UniqueStatesToBitmask(nonRetryableUniqueStates),
+			})
+
+			result, err := exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
+				Max: 100,
+				Now: horizon,
+			})
+			require.NoError(t, err)
+			require.Len(t, result, 2)
+
+			updatedJob1, err := exec.JobGetByID(ctx, job1.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateAvailable, updatedJob1.State)
+			require.False(t, gjson.GetBytes(updatedJob1.Metadata, "unique_key_conflict").Exists())
+
+			updatedJob2, err := exec.JobGetByID(ctx, job2.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateDiscarded, updatedJob2.State)
+			require.Equal(t, "scheduler_discarded", gjson.GetBytes(updatedJob2.Metadata, "unique_key_conflict").String())
+		})
 	})
 
 	t.Run("JobSetCompleteIfRunningMany", func(t *testing.T) {
