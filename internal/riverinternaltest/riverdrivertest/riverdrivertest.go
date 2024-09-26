@@ -1641,6 +1641,55 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			require.Equal(t, rivertype.JobStateAvailable, updatedJob3.State)
 			require.False(t, gjson.GetBytes(updatedJob3.Metadata, "unique_key_conflict").Exists())
 		})
+
+		t.Run("SchedulingTwoRetryableJobsThatWillConflictWithEachOther", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			var (
+				horizon       = time.Now()
+				beforeHorizon = horizon.Add(-1 * time.Minute)
+			)
+
+			// The default unique state list, minus retryable to allow for these conflicts:
+			nonRetryableUniqueStates := []rivertype.JobState{
+				rivertype.JobStateAvailable,
+				rivertype.JobStatePending,
+				rivertype.JobStateRunning,
+				rivertype.JobStateScheduled,
+			}
+
+			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				ScheduledAt:  &beforeHorizon,
+				State:        ptrutil.Ptr(rivertype.JobStateRetryable),
+				UniqueKey:    []byte("unique-key-1"),
+				UniqueStates: dbunique.UniqueStatesToBitmask(nonRetryableUniqueStates),
+			})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				ScheduledAt:  &beforeHorizon,
+				State:        ptrutil.Ptr(rivertype.JobStateRetryable),
+				UniqueKey:    []byte("unique-key-1"),
+				UniqueStates: dbunique.UniqueStatesToBitmask(nonRetryableUniqueStates),
+			})
+
+			result, err := exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
+				Max: 100,
+				Now: horizon,
+			})
+			require.NoError(t, err)
+			require.Len(t, result, 2)
+
+			updatedJob1, err := exec.JobGetByID(ctx, job1.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateAvailable, updatedJob1.State)
+			require.False(t, gjson.GetBytes(updatedJob1.Metadata, "unique_key_conflict").Exists())
+
+			updatedJob2, err := exec.JobGetByID(ctx, job2.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateDiscarded, updatedJob2.State)
+			require.Equal(t, "scheduler_discarded", gjson.GetBytes(updatedJob2.Metadata, "unique_key_conflict").String())
+		})
 	})
 
 	t.Run("JobSetCompleteIfRunningMany", func(t *testing.T) {
