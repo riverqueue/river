@@ -8,7 +8,6 @@ import (
 	"github.com/robfig/cron/v3"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/sharedtx"
 	"github.com/riverqueue/river/riverdriver"
@@ -108,8 +107,8 @@ func TestQueueMaintainer(t *testing.T) {
 			NewPeriodicJobEnqueuer(archetype, &PeriodicJobEnqueuerConfig{
 				PeriodicJobs: []*PeriodicJob{
 					{
-						ConstructorFunc: func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
-							return nil, nil, ErrNoJobToInsert
+						ConstructorFunc: func() (*riverdriver.JobInsertFastParams, error) {
+							return nil, ErrNoJobToInsert
 						},
 						ScheduleFunc: cron.Every(15 * time.Minute).Next,
 					},

@@ -43,15 +43,7 @@ updated_job AS (
         finalized_at = CASE WHEN state = 'running' THEN finalized_at ELSE now() END,
         -- Mark the job as cancelled by query so that the rescuer knows not to
         -- rescue it, even if it gets stuck in the running state:
-        metadata = jsonb_set(metadata, '{cancel_attempted_at}'::text[], $3::jsonb, true),
-        -- Similarly, zero a ` + "`" + `unique_key` + "`" + ` if the job is transitioning directly
-        -- to cancelled. Otherwise, it'll be cleared in the job executor.
-        --
-        -- This is transition code to support existing jobs using the old v2
-        -- uniqueness design. We specifically avoid clearing this value if the
-        -- v3 unique_states field is populated, because the v3 design never
-        -- involves clearing unique_key.
-        unique_key = CASE WHEN (state = 'running' OR unique_states IS NOT NULL) THEN unique_key ELSE NULL END
+        metadata = jsonb_set(metadata, '{cancel_attempted_at}'::text[], $3::jsonb, true)
     FROM notification
     WHERE river_job.id = notification.id
     RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states
@@ -208,12 +200,12 @@ WITH locked_jobs AS (
     WHERE
         state = 'available'
         AND queue = $2::text
-        AND scheduled_at <= now()
+        AND scheduled_at <= coalesce($3::timestamptz, now())
     ORDER BY
         priority ASC,
         scheduled_at ASC,
         id ASC
-    LIMIT $3::integer
+    LIMIT $4::integer
     FOR UPDATE
     SKIP LOCKED
 )
@@ -235,11 +227,17 @@ RETURNING
 type JobGetAvailableParams struct {
 	AttemptedBy string
 	Queue       string
+	Now         *time.Time
 	Max         int32
 }
 
 func (q *Queries) JobGetAvailable(ctx context.Context, db DBTX, arg *JobGetAvailableParams) ([]*RiverJob, error) {
-	rows, err := db.QueryContext(ctx, jobGetAvailable, arg.AttemptedBy, arg.Queue, arg.Max)
+	rows, err := db.QueryContext(ctx, jobGetAvailable,
+		arg.AttemptedBy,
+		arg.Queue,
+		arg.Now,
+		arg.Max,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -525,107 +523,6 @@ func (q *Queries) JobGetStuck(ctx context.Context, db DBTX, arg *JobGetStuckPara
 		return nil, err
 	}
 	return items, nil
-}
-
-const jobInsertFast = `-- name: JobInsertFast :one
-INSERT INTO river_job(
-    args,
-    created_at,
-    finalized_at,
-    kind,
-    max_attempts,
-    metadata,
-    priority,
-    queue,
-    scheduled_at,
-    state,
-    tags,
-    unique_key,
-    unique_states
-) VALUES (
-    $1,
-    coalesce($2::timestamptz, now()),
-    $3,
-    $4,
-    $5,
-    coalesce($6::jsonb, '{}'),
-    $7,
-    $8,
-    coalesce($9::timestamptz, now()),
-    $10,
-    coalesce($11::varchar(255)[], '{}'),
-    $12,
-    $13
-)
-ON CONFLICT (unique_key)
-    WHERE unique_key IS NOT NULL
-      AND unique_states IS NOT NULL
-      AND river_job_state_in_bitmask(unique_states, state)
-    -- Something needs to be updated for a row to be returned on a conflict.
-    DO UPDATE SET kind = EXCLUDED.kind
-RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states, (xmax != 0) AS unique_skipped_as_duplicate
-`
-
-type JobInsertFastParams struct {
-	Args         string
-	CreatedAt    *time.Time
-	FinalizedAt  *time.Time
-	Kind         string
-	MaxAttempts  int16
-	Metadata     string
-	Priority     int16
-	Queue        string
-	ScheduledAt  *time.Time
-	State        RiverJobState
-	Tags         []string
-	UniqueKey    []byte
-	UniqueStates pgtypealias.Bits
-}
-
-type JobInsertFastRow struct {
-	RiverJob                 RiverJob
-	UniqueSkippedAsDuplicate bool
-}
-
-func (q *Queries) JobInsertFast(ctx context.Context, db DBTX, arg *JobInsertFastParams) (*JobInsertFastRow, error) {
-	row := db.QueryRowContext(ctx, jobInsertFast,
-		arg.Args,
-		arg.CreatedAt,
-		arg.FinalizedAt,
-		arg.Kind,
-		arg.MaxAttempts,
-		arg.Metadata,
-		arg.Priority,
-		arg.Queue,
-		arg.ScheduledAt,
-		arg.State,
-		pq.Array(arg.Tags),
-		arg.UniqueKey,
-		arg.UniqueStates,
-	)
-	var i JobInsertFastRow
-	err := row.Scan(
-		&i.RiverJob.ID,
-		&i.RiverJob.Args,
-		&i.RiverJob.Attempt,
-		&i.RiverJob.AttemptedAt,
-		pq.Array(&i.RiverJob.AttemptedBy),
-		&i.RiverJob.CreatedAt,
-		pq.Array(&i.RiverJob.Errors),
-		&i.RiverJob.FinalizedAt,
-		&i.RiverJob.Kind,
-		&i.RiverJob.MaxAttempts,
-		&i.RiverJob.Metadata,
-		&i.RiverJob.Priority,
-		&i.RiverJob.Queue,
-		&i.RiverJob.State,
-		&i.RiverJob.ScheduledAt,
-		pq.Array(&i.RiverJob.Tags),
-		&i.RiverJob.UniqueKey,
-		&i.RiverJob.UniqueStates,
-		&i.UniqueSkippedAsDuplicate,
-	)
-	return &i, err
 }
 
 const jobInsertFastMany = `-- name: JobInsertFastMany :many
@@ -1245,12 +1142,7 @@ updated_job AS (
         max_attempts = CASE WHEN NOT should_cancel AND $7::boolean     THEN $8
                             ELSE max_attempts END,
         scheduled_at = CASE WHEN NOT should_cancel AND $9::boolean  THEN $10::timestamptz
-                            ELSE scheduled_at END,
-        -- This is transitional code for the v2 uniqueness design. We specifically
-        -- avoid clearing this value if the v3 unique_states field is populated,
-        -- because the v3 design never involves clearing unique_key.
-        unique_key   = CASE WHEN (unique_states IS NULL AND ($1 IN ('cancelled', 'discarded') OR should_cancel)) THEN NULL
-                            ELSE unique_key END
+                            ELSE scheduled_at END
     FROM job_to_update
     WHERE river_job.id = job_to_update.id
         AND river_job.state = 'running'
@@ -1449,11 +1341,8 @@ SET
     attempted_at = CASE WHEN $3::boolean THEN $4 ELSE attempted_at END,
     errors = CASE WHEN $5::boolean THEN $6::jsonb[] ELSE errors END,
     finalized_at = CASE WHEN $7::boolean THEN $8 ELSE finalized_at END,
-    state = CASE WHEN $9::boolean THEN $10 ELSE state END,
-    -- Transitional code to support tests for v2 uniqueness design. This field
-    -- is never modified in the v3 design.
-    unique_key = CASE WHEN $11::boolean THEN $12 ELSE unique_key END
-WHERE id = $13
+    state = CASE WHEN $9::boolean THEN $10 ELSE state END
+WHERE id = $11
 RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 `
 
@@ -1468,8 +1357,6 @@ type JobUpdateParams struct {
 	FinalizedAt         *time.Time
 	StateDoUpdate       bool
 	State               RiverJobState
-	UniqueKeyDoUpdate   bool
-	UniqueKey           []byte
 	ID                  int64
 }
 
@@ -1487,8 +1374,6 @@ func (q *Queries) JobUpdate(ctx context.Context, db DBTX, arg *JobUpdateParams) 
 		arg.FinalizedAt,
 		arg.StateDoUpdate,
 		arg.State,
-		arg.UniqueKeyDoUpdate,
-		arg.UniqueKey,
 		arg.ID,
 	)
 	var i RiverJob

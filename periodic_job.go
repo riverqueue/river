@@ -3,7 +3,6 @@ package river
 import (
 	"time"
 
-	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
@@ -181,12 +180,12 @@ func (b *PeriodicJobBundle) toInternal(periodicJob *PeriodicJob) *maintenance.Pe
 		opts = periodicJob.opts
 	}
 	return &maintenance.PeriodicJob{
-		ConstructorFunc: func() (*riverdriver.JobInsertFastParams, *dbunique.UniqueOpts, error) {
+		ConstructorFunc: func() (*riverdriver.JobInsertFastParams, error) {
 			args, options := periodicJob.constructorFunc()
 			if args == nil {
-				return nil, nil, maintenance.ErrNoJobToInsert
+				return nil, maintenance.ErrNoJobToInsert
 			}
-			return insertParamsFromConfigArgsAndOptions(&b.periodicJobEnqueuer.Archetype, b.clientConfig, args, options, false)
+			return insertParamsFromConfigArgsAndOptions(&b.periodicJobEnqueuer.Archetype, b.clientConfig, args, options)
 		},
 		RunOnStart:   opts.RunOnStart,
 		ScheduleFunc: periodicJob.scheduleFunc.Next,

@@ -146,6 +146,7 @@ func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobG
 	jobs, err := dbsqlc.New().JobGetAvailable(ctx, e.dbtx, &dbsqlc.JobGetAvailableParams{
 		AttemptedBy: params.AttemptedBy,
 		Max:         int32(min(params.Max, math.MaxInt32)), //nolint:gosec
+		Now:         params.Now,
 		Queue:       params.Queue,
 	})
 	if err != nil {
@@ -194,31 +195,6 @@ func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetSt
 	return mapSliceError(jobs, jobRowFromInternal)
 }
 
-func (e *Executor) JobInsertFast(ctx context.Context, params *riverdriver.JobInsertFastParams) (*riverdriver.JobInsertFastResult, error) {
-	result, err := dbsqlc.New().JobInsertFast(ctx, e.dbtx, &dbsqlc.JobInsertFastParams{
-		Args:         params.EncodedArgs,
-		CreatedAt:    params.CreatedAt,
-		Kind:         params.Kind,
-		MaxAttempts:  int16(min(params.MaxAttempts, math.MaxInt16)), //nolint:gosec
-		Metadata:     params.Metadata,
-		Priority:     int16(min(params.Priority, math.MaxInt16)), //nolint:gosec
-		Queue:        params.Queue,
-		ScheduledAt:  params.ScheduledAt,
-		State:        dbsqlc.RiverJobState(params.State),
-		Tags:         params.Tags,
-		UniqueKey:    params.UniqueKey,
-		UniqueStates: pgtype.Bits{Bytes: []byte{params.UniqueStates}, Len: 8, Valid: params.UniqueStates != 0},
-	})
-	if err != nil {
-		return nil, interpretError(err)
-	}
-	externalJob, err := jobRowFromInternal(&result.RiverJob)
-	if err != nil {
-		return nil, err
-	}
-	return &riverdriver.JobInsertFastResult{Job: externalJob, UniqueSkippedAsDuplicate: result.UniqueSkippedAsDuplicate}, nil
-}
-
 func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.JobInsertFastParams) ([]*riverdriver.JobInsertFastResult, error) {
 	insertJobsParams := &dbsqlc.JobInsertFastManyParams{
 		Args:         make([][]byte, len(params)),
@@ -233,7 +209,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 		UniqueKey:    make([][]byte, len(params)),
 		UniqueStates: make([]pgtype.Bits, len(params)),
 	}
-	now := time.Now()
+	now := time.Now().UTC()
 
 	for i := 0; i < len(params); i++ {
 		params := params[i]
@@ -279,7 +255,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 
 func (e *Executor) JobInsertFastManyNoReturning(ctx context.Context, params []*riverdriver.JobInsertFastParams) (int, error) {
 	insertJobsParams := make([]*dbsqlc.JobInsertFastManyCopyFromParams, len(params))
-	now := time.Now()
+	now := time.Now().UTC()
 
 	for i := 0; i < len(params); i++ {
 		params := params[i]

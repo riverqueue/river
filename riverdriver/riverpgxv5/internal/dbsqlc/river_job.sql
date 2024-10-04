@@ -67,15 +67,7 @@ updated_job AS (
         finalized_at = CASE WHEN state = 'running' THEN finalized_at ELSE now() END,
         -- Mark the job as cancelled by query so that the rescuer knows not to
         -- rescue it, even if it gets stuck in the running state:
-        metadata = jsonb_set(metadata, '{cancel_attempted_at}'::text[], @cancel_attempted_at::jsonb, true),
-        -- Similarly, zero a `unique_key` if the job is transitioning directly
-        -- to cancelled. Otherwise, it'll be cleared in the job executor.
-        --
-        -- This is transition code to support existing jobs using the old v2
-        -- uniqueness design. We specifically avoid clearing this value if the
-        -- v3 unique_states field is populated, because the v3 design never
-        -- involves clearing unique_key.
-        unique_key = CASE WHEN (state = 'running' OR unique_states IS NOT NULL) THEN unique_key ELSE NULL END
+        metadata = jsonb_set(metadata, '{cancel_attempted_at}'::text[], @cancel_attempted_at::jsonb, true)
     FROM notification
     WHERE river_job.id = notification.id
     RETURNING river_job.*
@@ -144,7 +136,7 @@ WITH locked_jobs AS (
     WHERE
         state = 'available'
         AND queue = @queue::text
-        AND scheduled_at <= now()
+        AND scheduled_at <= coalesce(sqlc.narg('now')::timestamptz, now())
     ORDER BY
         priority ASC,
         scheduled_at ASC,
@@ -201,44 +193,6 @@ WHERE state = 'running'
     AND attempted_at < @stuck_horizon::timestamptz
 ORDER BY id
 LIMIT @max;
-
--- name: JobInsertFast :one
-INSERT INTO river_job(
-    args,
-    created_at,
-    finalized_at,
-    kind,
-    max_attempts,
-    metadata,
-    priority,
-    queue,
-    scheduled_at,
-    state,
-    tags,
-    unique_key,
-    unique_states
-) VALUES (
-    @args,
-    coalesce(sqlc.narg('created_at')::timestamptz, now()),
-    @finalized_at,
-    @kind,
-    @max_attempts,
-    coalesce(@metadata::jsonb, '{}'),
-    @priority,
-    @queue,
-    coalesce(sqlc.narg('scheduled_at')::timestamptz, now()),
-    @state,
-    coalesce(@tags::varchar(255)[], '{}'),
-    @unique_key,
-    @unique_states
-)
-ON CONFLICT (unique_key)
-    WHERE unique_key IS NOT NULL
-      AND unique_states IS NOT NULL
-      AND river_job_state_in_bitmask(unique_states, state)
-    -- Something needs to be updated for a row to be returned on a conflict.
-    DO UPDATE SET kind = EXCLUDED.kind
-RETURNING sqlc.embed(river_job), (xmax != 0) AS unique_skipped_as_duplicate;
 
 -- name: JobInsertFastMany :many
 INSERT INTO river_job(
@@ -536,12 +490,7 @@ updated_job AS (
         max_attempts = CASE WHEN NOT should_cancel AND @max_attempts_update::boolean     THEN @max_attempts
                             ELSE max_attempts END,
         scheduled_at = CASE WHEN NOT should_cancel AND @scheduled_at_do_update::boolean  THEN sqlc.narg('scheduled_at')::timestamptz
-                            ELSE scheduled_at END,
-        -- This is transitional code for the v2 uniqueness design. We specifically
-        -- avoid clearing this value if the v3 unique_states field is populated,
-        -- because the v3 design never involves clearing unique_key.
-        unique_key   = CASE WHEN (unique_states IS NULL AND (@state IN ('cancelled', 'discarded') OR should_cancel)) THEN NULL
-                            ELSE unique_key END
+                            ELSE scheduled_at END
     FROM job_to_update
     WHERE river_job.id = job_to_update.id
         AND river_job.state = 'running'
@@ -624,9 +573,6 @@ SET
     attempted_at = CASE WHEN @attempted_at_do_update::boolean THEN @attempted_at ELSE attempted_at END,
     errors = CASE WHEN @errors_do_update::boolean THEN @errors::jsonb[] ELSE errors END,
     finalized_at = CASE WHEN @finalized_at_do_update::boolean THEN @finalized_at ELSE finalized_at END,
-    state = CASE WHEN @state_do_update::boolean THEN @state ELSE state END,
-    -- Transitional code to support tests for v2 uniqueness design. This field
-    -- is never modified in the v3 design.
-    unique_key = CASE WHEN @unique_key_do_update::boolean THEN @unique_key ELSE unique_key END
+    state = CASE WHEN @state_do_update::boolean THEN @state ELSE state END
 WHERE id = @id
 RETURNING *;

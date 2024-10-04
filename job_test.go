@@ -9,7 +9,7 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-func TestJobUniqueOpts_isEmpty(t *testing.T) {
+func TestUniqueOpts_isEmpty(t *testing.T) {
 	t.Parallel()
 
 	require.True(t, (&UniqueOpts{}).isEmpty())

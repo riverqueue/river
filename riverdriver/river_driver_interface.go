@@ -115,7 +115,6 @@ type Executor interface {
 	JobGetByKindAndUniqueProperties(ctx context.Context, params *JobGetByKindAndUniquePropertiesParams) (*rivertype.JobRow, error)
 	JobGetByKindMany(ctx context.Context, kind []string) ([]*rivertype.JobRow, error)
 	JobGetStuck(ctx context.Context, params *JobGetStuckParams) ([]*rivertype.JobRow, error)
-	JobInsertFast(ctx context.Context, params *JobInsertFastParams) (*JobInsertFastResult, error)
 	JobInsertFastMany(ctx context.Context, params []*JobInsertFastParams) ([]*JobInsertFastResult, error)
 	JobInsertFastManyNoReturning(ctx context.Context, params []*JobInsertFastParams) (int, error)
 	JobInsertFull(ctx context.Context, params *JobInsertFullParams) (*rivertype.JobRow, error)
@@ -227,6 +226,7 @@ type JobDeleteBeforeParams struct {
 type JobGetAvailableParams struct {
 	AttemptedBy string
 	Max         int
+	Now         *time.Time
 	Queue       string
 }
 

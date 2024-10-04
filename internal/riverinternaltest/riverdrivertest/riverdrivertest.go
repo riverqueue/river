@@ -569,6 +569,32 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			require.Empty(t, jobRows)
 		})
 
+		t.Run("ConstrainedToScheduledAtBeforeCustomNowTime", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			now := time.Now().Add(1 * time.Minute)
+			// Job 1 is scheduled after now so it's not found:
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				ScheduledAt: ptrutil.Ptr(now.Add(1 * time.Minute)),
+			})
+			// Job 2 is scheduled just before now so it's found:
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Microsecond)),
+			})
+
+			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+				AttemptedBy: clientID,
+				Max:         100,
+				Now:         ptrutil.Ptr(now),
+				Queue:       rivercommon.QueueDefault,
+			})
+			require.NoError(t, err)
+			require.Len(t, jobRows, 1)
+			require.Equal(t, job2.ID, jobRows[0].ID)
+		})
+
 		t.Run("Prioritized", func(t *testing.T) {
 			t.Parallel()
 
@@ -843,84 +869,6 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		require.NoError(t, err)
 		require.Equal(t, []int64{stuckJob1.ID, stuckJob2.ID},
 			sliceutil.Map(stuckJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
-	})
-
-	t.Run("JobInsertFast", func(t *testing.T) {
-		t.Parallel()
-
-		t.Run("MinimalArgsWithDefaults", func(t *testing.T) {
-			t.Parallel()
-
-			exec, _ := setup(ctx, t)
-
-			now := time.Now().UTC()
-
-			result, err := exec.JobInsertFast(ctx, &riverdriver.JobInsertFastParams{
-				EncodedArgs: []byte(`{"encoded": "args"}`),
-				Kind:        "test_kind",
-				MaxAttempts: rivercommon.MaxAttemptsDefault,
-				Priority:    rivercommon.PriorityDefault,
-				Queue:       rivercommon.QueueDefault,
-				State:       rivertype.JobStateAvailable,
-			})
-			require.NoError(t, err)
-			job := result.Job
-			require.Equal(t, 0, job.Attempt)
-			require.Nil(t, job.AttemptedAt)
-			require.WithinDuration(t, now, job.CreatedAt, 2*time.Second)
-			require.Equal(t, []byte(`{"encoded": "args"}`), job.EncodedArgs)
-			require.Empty(t, job.Errors)
-			require.Nil(t, job.FinalizedAt)
-			require.Equal(t, "test_kind", job.Kind)
-			require.Equal(t, rivercommon.MaxAttemptsDefault, job.MaxAttempts)
-			require.Equal(t, []byte(`{}`), job.Metadata)
-			require.Equal(t, rivercommon.PriorityDefault, job.Priority)
-			require.Equal(t, rivercommon.QueueDefault, job.Queue)
-			require.WithinDuration(t, now, job.ScheduledAt, 2*time.Second)
-			require.Equal(t, rivertype.JobStateAvailable, job.State)
-			require.Equal(t, []string{}, job.Tags)
-		})
-
-		t.Run("AllArgs", func(t *testing.T) {
-			t.Parallel()
-
-			exec, _ := setup(ctx, t)
-
-			targetTime := time.Now().UTC().Add(-15 * time.Minute)
-
-			result, err := exec.JobInsertFast(ctx, &riverdriver.JobInsertFastParams{
-				CreatedAt:    &targetTime,
-				EncodedArgs:  []byte(`{"encoded": "args"}`),
-				Kind:         "test_kind",
-				MaxAttempts:  6,
-				Metadata:     []byte(`{"meta": "data"}`),
-				Priority:     2,
-				Queue:        "queue_name",
-				ScheduledAt:  &targetTime,
-				State:        rivertype.JobStateRunning,
-				Tags:         []string{"tag"},
-				UniqueKey:    []byte("unique-key"),
-				UniqueStates: 0xFF,
-			})
-			require.NoError(t, err)
-
-			require.False(t, result.UniqueSkippedAsDuplicate)
-			job := result.Job
-			require.Equal(t, 0, job.Attempt)
-			require.Nil(t, job.AttemptedAt)
-			requireEqualTime(t, targetTime, job.CreatedAt)
-			require.Equal(t, []byte(`{"encoded": "args"}`), job.EncodedArgs)
-			require.Empty(t, job.Errors)
-			require.Nil(t, job.FinalizedAt)
-			require.Equal(t, "test_kind", job.Kind)
-			require.Equal(t, 6, job.MaxAttempts)
-			require.Equal(t, []byte(`{"meta": "data"}`), job.Metadata)
-			require.Equal(t, 2, job.Priority)
-			require.Equal(t, "queue_name", job.Queue)
-			requireEqualTime(t, targetTime, job.ScheduledAt)
-			require.Equal(t, rivertype.JobStateRunning, job.State)
-			require.Equal(t, []string{"tag"}, job.Tags)
-		})
 	})
 
 	t.Run("JobInsertFastMany", func(t *testing.T) {
@@ -1998,33 +1946,6 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			require.Equal(t, rivertype.JobStateCancelled, jobUpdated.State)
 			require.Equal(t, "unique-key", string(jobUpdated.UniqueKey))
 		})
-
-		t.Run("CancelsARunningV2UniqueJobAndClearsUniqueKey", func(t *testing.T) { //nolint:dupl
-			t.Parallel()
-
-			exec, _ := setup(ctx, t)
-
-			now := time.Now().UTC()
-			// V2 unique jobs (with no UniqueStates) should not have UniqueKey cleared:
-			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				State:     ptrutil.Ptr(rivertype.JobStateRunning),
-				UniqueKey: []byte("unique-key"),
-			})
-			// expclitly null out UniqueStates to simulate an old v2 job:
-			_, err := exec.Exec(ctx, fmt.Sprintf("UPDATE river_job SET unique_states = NULL WHERE id = %d", job.ID))
-			require.NoError(t, err)
-
-			jobAfter, err := exec.JobSetStateIfRunning(ctx, riverdriver.JobSetStateCancelled(job.ID, now, makeErrPayload(t, now)))
-			require.NoError(t, err)
-			require.Equal(t, rivertype.JobStateCancelled, jobAfter.State)
-			require.WithinDuration(t, now, *jobAfter.FinalizedAt, time.Microsecond)
-			require.Nil(t, jobAfter.UniqueKey)
-
-			jobUpdated, err := exec.JobGetByID(ctx, job.ID)
-			require.NoError(t, err)
-			require.Equal(t, rivertype.JobStateCancelled, jobUpdated.State)
-			require.Nil(t, jobUpdated.UniqueKey)
-		})
 	})
 
 	t.Run("JobSetStateIfRunning_JobSetStateDiscarded", func(t *testing.T) {
@@ -2053,33 +1974,6 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			jobUpdated, err := exec.JobGetByID(ctx, job.ID)
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateDiscarded, jobUpdated.State)
-		})
-
-		t.Run("DiscardsARunningV2UniqueJobAndClearsUniqueKey", func(t *testing.T) { //nolint:dupl
-			t.Parallel()
-
-			exec, _ := setup(ctx, t)
-
-			now := time.Now().UTC()
-			// V2 unique jobs (with no UniqueStates) should not have UniqueKey cleared:
-			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				State:     ptrutil.Ptr(rivertype.JobStateRunning),
-				UniqueKey: []byte("unique-key"),
-			})
-			// expclitly null out UniqueStates to simulate an old v2 job:
-			_, err := exec.Exec(ctx, fmt.Sprintf("UPDATE river_job SET unique_states = NULL WHERE id = %d", job.ID))
-			require.NoError(t, err)
-
-			jobAfter, err := exec.JobSetStateIfRunning(ctx, riverdriver.JobSetStateDiscarded(job.ID, now, makeErrPayload(t, now)))
-			require.NoError(t, err)
-			require.Equal(t, rivertype.JobStateDiscarded, jobAfter.State)
-			require.WithinDuration(t, now, *jobAfter.FinalizedAt, time.Microsecond)
-			require.Nil(t, jobAfter.UniqueKey)
-
-			jobUpdated, err := exec.JobGetByID(ctx, job.ID)
-			require.NoError(t, err)
-			require.Equal(t, rivertype.JobStateDiscarded, jobUpdated.State)
-			require.Nil(t, jobUpdated.UniqueKey)
 		})
 	})
 
