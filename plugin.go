@@ -2,6 +2,7 @@ package river
 
 import (
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/startstop"
 )
 
@@ -18,6 +19,8 @@ type driverPlugin[TTx any] interface {
 	// PluginMaintenanceServices returns additional maintenance services (will
 	// only run on an elected leader) for a River client.
 	PluginMaintenanceServices() []startstop.Service
+
+	PluginPilot() riverpilot.Pilot
 
 	// PluginServices returns additional non-maintenance services (will run on
 	// all clients) for a River client.

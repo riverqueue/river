@@ -28,13 +28,28 @@ func JobCompleteTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs](ctx 
 		return nil, errors.New("job must be running")
 	}
 
-	var driver TDriver
-	jobRow, err := driver.UnwrapExecutor(tx).JobSetStateIfRunning(ctx, riverdriver.JobSetStateCompleted(job.ID, time.Now()))
+	client := ClientFromContext[TTx](ctx)
+	if client == nil {
+		return nil, errors.New("client not found in context, can only work within a River worker")
+	}
+
+	driver := client.Driver()
+	pilot := client.Pilot()
+
+	execTx := driver.UnwrapExecutor(tx)
+	params := riverdriver.JobSetStateCompleted(job.ID, time.Now())
+	rows, err := pilot.JobSetStateIfRunningMany(ctx, execTx, &riverdriver.JobSetStateIfRunningManyParams{
+		ID:          []int64{params.ID},
+		ErrData:     [][]byte{params.ErrData},
+		FinalizedAt: []*time.Time{params.FinalizedAt},
+		MaxAttempts: []*int{params.MaxAttempts},
+		ScheduledAt: []*time.Time{params.ScheduledAt},
+		State:       []rivertype.JobState{params.State},
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	updatedJob := &Job[TArgs]{JobRow: jobRow}
+	updatedJob := &Job[TArgs]{JobRow: rows[0]}
 
 	if err := json.Unmarshal(updatedJob.EncodedArgs, &updatedJob.Args); err != nil {
 		return nil, err

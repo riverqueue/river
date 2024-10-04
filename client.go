@@ -23,6 +23,7 @@ import (
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/maputil"
@@ -339,6 +340,7 @@ type Client[TTx any] struct {
 	insertNotifyLimiter  *notifylimiter.Limiter
 	notifier             *notifier.Notifier // may be nil in poll-only mode
 	periodicJobs         *PeriodicJobBundle
+	pilot                riverpilot.Pilot
 	producersByQueueName map[string]*producer
 	queueMaintainer      *maintenance.QueueMaintainer
 	queues               *QueueBundle
@@ -505,7 +507,12 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	plugin, _ := driver.(driverPlugin[TTx])
 	if plugin != nil {
 		plugin.PluginInit(archetype, client)
+		client.pilot = plugin.PluginPilot()
 	}
+	if client.pilot == nil {
+		client.pilot = &riverpilot.StandardPilot{}
+	}
+	client.pilot.PilotInit(archetype)
 
 	// There are a number of internal components that are only needed/desired if
 	// we're actually going to be working jobs (as opposed to just enqueueing
@@ -515,7 +522,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			return nil, errMissingDatabasePoolWithQueues
 		}
 
-		client.completer = jobcompleter.NewBatchCompleter(archetype, driver.GetExecutor(), nil)
+		client.completer = jobcompleter.NewBatchCompleter(archetype, driver.GetExecutor(), client.pilot, nil)
 		client.subscriptionManager = newSubscriptionManager(archetype, nil)
 		client.services = append(client.services, client.completer, client.subscriptionManager)
 
@@ -1409,7 +1416,7 @@ func (c *Client[TTx]) InsertManyTx(ctx context.Context, tx TTx, params []InsertM
 
 func (c *Client[TTx]) insertMany(ctx context.Context, tx riverdriver.ExecutorTx, params []InsertManyParams) ([]*rivertype.JobInsertResult, error) {
 	return c.insertManyShared(ctx, tx, params, func(ctx context.Context, insertParams []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error) {
-		results, err := tx.JobInsertFastMany(ctx, insertParams)
+		results, err := c.pilot.JobInsertMany(ctx, tx, insertParams)
 		if err != nil {
 			return nil, err
 		}
@@ -1762,6 +1769,13 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 // PeriodicJobs returns the currently configured set of periodic jobs for the
 // client, and can be used to add new ones or remove existing ones.
 func (c *Client[TTx]) PeriodicJobs() *PeriodicJobBundle { return c.periodicJobs }
+
+// Driver exposes the underlying pilot used by the client.
+//
+// API is not stable. DO NOT USE.
+func (c *Client[TTx]) Pilot() riverpilot.Pilot {
+	return c.pilot
+}
 
 // Queues returns the currently configured set of queues for the client, and can
 // be used to add new ones.
