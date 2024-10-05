@@ -380,6 +380,36 @@ func Test_Client(t *testing.T) {
 		require.WithinDuration(t, time.Now(), *updatedJob.FinalizedAt, 2*time.Second)
 	})
 
+	t.Run("JobCancelErrorReturnedWithNilErr", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			return JobCancel(nil)
+		}))
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCancelled, event.Kind)
+		require.Equal(t, rivertype.JobStateCancelled, event.Job.State)
+		require.WithinDuration(t, time.Now(), *event.Job.FinalizedAt, 2*time.Second)
+
+		updatedJob, err := client.JobGet(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateCancelled, updatedJob.State)
+		require.WithinDuration(t, time.Now(), *updatedJob.FinalizedAt, 2*time.Second)
+	})
+
 	t.Run("JobSnoozeErrorReturned", func(t *testing.T) {
 		t.Parallel()
 

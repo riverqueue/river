@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking change:** The advisory lock unique jobs implementation which was deprecated in v0.12.0 has been removed. Users of that feature should first upgrade to v0.12.1 to ensure they don't see any warning logs about using the deprecated advisory lock uniqueness. The new, faster unique implementation will be used automatically as long as the `UniqueOpts.ByState` list hasn't been customized to remove [required states](https://riverqueue.com/docs/unique-jobs#unique-by-state) (`pending`, `scheduled`, `available`, and `running`). As of this release, customizing `ByState` without these required states returns an error. [PR #614](https://github.com/riverqueue/river/pull/614).
 - Single job inserts are now unified under the hood to use the `InsertMany` bulk insert query. This should not be noticeable to users, and the unified code path will make it easier to build new features going forward. [PR #614](https://github.com/riverqueue/river/pull/614).
 
+### Fixed
+
+- Allow `river.JobCancel` to accept a `nil` error as input without panicking. [PR #634](https://github.com/riverqueue/river/pull/634).
+
 ## [0.12.1] - 2024-09-26
 
 ### Changed
