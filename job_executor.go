@@ -57,6 +57,9 @@ type jobCancelError struct {
 }
 
 func (e *jobCancelError) Error() string {
+	if e.err == nil {
+		return "jobCancelError: <nil>"
+	}
 	// should not ever be called, but add a prefix just in case:
 	return "jobCancelError: " + e.err.Error()
 }
