@@ -38,10 +38,11 @@ type callbackWorkUnit struct {
 	timeout  time.Duration // defaults to 0, which signals default timeout
 }
 
-func (w *callbackWorkUnit) NextRetry() time.Time           { return time.Now().Add(30 * time.Second) }
-func (w *callbackWorkUnit) Timeout() time.Duration         { return w.timeout }
-func (w *callbackWorkUnit) Work(ctx context.Context) error { return w.callback(ctx, w.jobRow) }
-func (w *callbackWorkUnit) UnmarshalJob() error            { return nil }
+func (w *callbackWorkUnit) Middleware() []rivertype.WorkerMiddleware { return nil }
+func (w *callbackWorkUnit) NextRetry() time.Time                     { return time.Now().Add(30 * time.Second) }
+func (w *callbackWorkUnit) Timeout() time.Duration                   { return w.timeout }
+func (w *callbackWorkUnit) Work(ctx context.Context) error           { return w.callback(ctx, w.jobRow) }
+func (w *callbackWorkUnit) UnmarshalJob() error                      { return nil }
 
 type SimpleClientRetryPolicy struct{}
 

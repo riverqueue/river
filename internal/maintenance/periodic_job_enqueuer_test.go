@@ -40,9 +40,9 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 	stubSvc := &riversharedtest.TimeStub{}
 	stubSvc.StubNowUTC(time.Now().UTC())
 
-	jobConstructorWithQueueFunc := func(name string, unique bool, queue string) func() (*riverdriver.JobInsertFastParams, error) {
-		return func() (*riverdriver.JobInsertFastParams, error) {
-			params := &riverdriver.JobInsertFastParams{
+	jobConstructorWithQueueFunc := func(name string, unique bool, queue string) func() (*rivertype.JobInsertParams, error) {
+		return func() (*rivertype.JobInsertParams, error) {
+			params := &rivertype.JobInsertParams{
 				Args:        noOpArgs{},
 				EncodedArgs: []byte("{}"),
 				Kind:        name,
@@ -66,7 +66,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		}
 	}
 
-	jobConstructorFunc := func(name string, unique bool) func() (*riverdriver.JobInsertFastParams, error) {
+	jobConstructorFunc := func(name string, unique bool) func() (*rivertype.JobInsertParams, error) {
 		return jobConstructorWithQueueFunc(name, unique, rivercommon.QueueDefault)
 	}
 
@@ -256,7 +256,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc.AddMany([]*PeriodicJob{
 			// skip this insert when it returns nil:
-			{ScheduleFunc: periodicIntervalSchedule(time.Second), ConstructorFunc: func() (*riverdriver.JobInsertFastParams, error) {
+			{ScheduleFunc: periodicIntervalSchedule(time.Second), ConstructorFunc: func() (*rivertype.JobInsertParams, error) {
 				return nil, ErrNoJobToInsert
 			}, RunOnStart: true},
 		})

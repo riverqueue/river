@@ -63,8 +63,9 @@ type producerConfig struct {
 	// LISTEN/NOTIFY, but this provides a fallback.
 	FetchPollInterval time.Duration
 
-	JobTimeout time.Duration
-	MaxWorkers int
+	GlobalMiddleware []rivertype.WorkerMiddleware
+	JobTimeout       time.Duration
+	MaxWorkers       int
 
 	// Notifier is a notifier for subscribing to new job inserts and job
 	// control. If nil, the producer will operate in poll-only mode.
@@ -579,6 +580,7 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 			Completer:              p.completer,
 			ErrorHandler:           p.errorHandler,
 			InformProducerDoneFunc: p.handleWorkerDone,
+			GlobalMiddleware:       p.config.GlobalMiddleware,
 			JobRow:                 job,
 			SchedulerInterval:      p.config.SchedulerInterval,
 			WorkUnit:               workUnit,

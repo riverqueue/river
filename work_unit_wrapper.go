@@ -29,6 +29,10 @@ func (w *wrapperWorkUnit[T]) NextRetry() time.Time           { return w.worker.N
 func (w *wrapperWorkUnit[T]) Timeout() time.Duration         { return w.worker.Timeout(w.job) }
 func (w *wrapperWorkUnit[T]) Work(ctx context.Context) error { return w.worker.Work(ctx, w.job) }
 
+func (w *wrapperWorkUnit[T]) Middleware() []rivertype.WorkerMiddleware {
+	return w.worker.Middleware(w.job)
+}
+
 func (w *wrapperWorkUnit[T]) UnmarshalJob() error {
 	w.job = &Job[T]{
 		JobRow: w.jobRow,

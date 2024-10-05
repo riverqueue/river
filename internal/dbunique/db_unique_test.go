@@ -9,7 +9,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -229,7 +228,7 @@ func TestUniqueKey(t *testing.T) {
 				states = tt.uniqueOpts.ByState
 			}
 
-			jobParams := &riverdriver.JobInsertFastParams{
+			jobParams := &rivertype.JobInsertParams{
 				Args:         args,
 				CreatedAt:    &now,
 				EncodedArgs:  encodedArgs,

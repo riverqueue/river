@@ -15,6 +15,7 @@ import (
 //
 // Implemented by river.wrapperWorkUnit.
 type WorkUnit interface {
+	Middleware() []rivertype.WorkerMiddleware
 	NextRetry() time.Time
 	Timeout() time.Duration
 	UnmarshalJob() error

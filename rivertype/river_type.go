@@ -4,6 +4,7 @@
 package rivertype
 
 import (
+	"context"
 	"errors"
 	"time"
 )
@@ -227,6 +228,49 @@ type AttemptError struct {
 	// Trace contains a stack trace from a job that panicked. The trace is
 	// produced by invoking `debug.Trace()`.
 	Trace string `json:"trace"`
+}
+
+type JobInsertParams struct {
+	Args         JobArgs
+	CreatedAt    *time.Time
+	EncodedArgs  []byte
+	Kind         string
+	MaxAttempts  int
+	Metadata     []byte
+	Priority     int
+	Queue        string
+	ScheduledAt  *time.Time
+	State        JobState
+	Tags         []string
+	UniqueKey    []byte
+	UniqueStates byte
+}
+
+// JobInsertMiddleware provides an interface for middleware that integrations can
+// use to encapsulate common logic around job insertion.
+//
+// Implementations should embed river.JobMiddlewareDefaults to inherit default
+// implementations for phases where no custom code is needed, and for forward
+// compatibility in case new functions are added to this interface.
+type JobInsertMiddleware interface {
+	// InsertMany is invoked around a batch insert operation. Implementations
+	// must always include a call to doInner to call down the middleware stack
+	// and perfom the batch insertion, and may run custom code before and after.
+	//
+	// Returning an error from this function will fail the overarching insert
+	// operation, even if the inner insertion originally succeeded.
+	InsertMany(ctx context.Context, manyParams []*JobInsertParams, doInner func(context.Context) ([]*JobInsertResult, error)) ([]*JobInsertResult, error)
+}
+
+type WorkerMiddleware interface {
+	// Work is invoked after a job's JSON args being unmarshaled and before the
+	// job is worked. Implementations must always include a call to doInner to
+	// call down the middleware stack and perfom the batch insertion, and may run
+	// custom code before and after.
+	//
+	// Returning an error from this function will fail the overarching work
+	// operation, even if the inner work originally succeeded.
+	Work(ctx context.Context, job *JobRow, doInner func(context.Context) error) error
 }
 
 // PeriodicJobHandle is a reference to a dynamically added periodic job

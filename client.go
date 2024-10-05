@@ -139,6 +139,10 @@ type Config struct {
 	// deployments.
 	JobCleanerTimeout time.Duration
 
+	// JobInsertMiddleware are optional functions that can be called around job
+	// insertion.
+	JobInsertMiddleware []rivertype.JobInsertMiddleware
+
 	// JobTimeout is the maximum amount of time a job is allowed to run before its
 	// context is cancelled. A timeout of zero means JobTimeoutDefault will be
 	// used, whereas a value of -1 means the job's context will not be cancelled
@@ -234,6 +238,10 @@ type Config struct {
 	// ahead of time that a worker is properly registered for an inserted job.
 	// (i.e.  That it wasn't forgotten by accident.)
 	Workers *Workers
+
+	// WorkerMiddleware are optional functions that can be called around
+	// all job executions.
+	WorkerMiddleware []rivertype.WorkerMiddleware
 
 	// Scheduler run interval. Shared between the scheduler and producer/job
 	// executors, but not currently exposed for configuration.
@@ -467,6 +475,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		FetchCooldown:               valutil.ValOrDefault(config.FetchCooldown, FetchCooldownDefault),
 		FetchPollInterval:           valutil.ValOrDefault(config.FetchPollInterval, FetchPollIntervalDefault),
 		ID:                          valutil.ValOrDefaultFunc(config.ID, func() string { return defaultClientID(time.Now().UTC()) }),
+		JobInsertMiddleware:         config.JobInsertMiddleware,
 		JobTimeout:                  valutil.ValOrDefault(config.JobTimeout, JobTimeoutDefault),
 		Logger:                      logger,
 		MaxAttempts:                 valutil.ValOrDefault(config.MaxAttempts, MaxAttemptsDefault),
@@ -478,6 +487,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		RetryPolicy:                 retryPolicy,
 		TestOnly:                    config.TestOnly,
 		Workers:                     config.Workers,
+		WorkerMiddleware:            config.WorkerMiddleware,
 		schedulerInterval:           valutil.ValOrDefault(config.schedulerInterval, maintenance.JobSchedulerIntervalDefault),
 		time:                        config.time,
 	}
@@ -1165,7 +1175,7 @@ func (c *Client[TTx]) ID() string {
 	return c.config.ID
 }
 
-func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, config *Config, args JobArgs, insertOpts *InsertOpts) (*riverdriver.JobInsertFastParams, error) {
+func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, config *Config, args JobArgs, insertOpts *InsertOpts) (*rivertype.JobInsertParams, error) {
 	encodedArgs, err := json.Marshal(args)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling args to JSON: %w", err)
@@ -1227,13 +1237,13 @@ func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, conf
 		metadata = []byte("{}")
 	}
 
-	insertParams := &riverdriver.JobInsertFastParams{
+	insertParams := &rivertype.JobInsertParams{
 		Args:        args,
 		CreatedAt:   createdAt,
-		EncodedArgs: json.RawMessage(encodedArgs),
+		EncodedArgs: encodedArgs,
 		Kind:        args.Kind(),
 		MaxAttempts: maxAttempts,
-		Metadata:    json.RawMessage(metadata),
+		Metadata:    metadata,
 		Priority:    priority,
 		Queue:       queue,
 		State:       rivertype.JobStateAvailable,
@@ -1436,39 +1446,58 @@ func (c *Client[TTx]) insertMany(ctx context.Context, tx riverdriver.ExecutorTx,
 func (c *Client[TTx]) insertManyShared(
 	ctx context.Context,
 	tx riverdriver.ExecutorTx,
-	params []InsertManyParams,
+	rawParams []InsertManyParams,
 	execute func(context.Context, []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error),
 ) ([]*rivertype.JobInsertResult, error) {
-	insertParams, err := c.insertManyParams(params)
+	insertParams, err := c.insertManyParams(rawParams)
 	if err != nil {
 		return nil, err
 	}
 
-	inserted, err := execute(ctx, insertParams)
-	if err != nil {
-		return inserted, err
+	doInner := func(ctx context.Context) ([]*rivertype.JobInsertResult, error) {
+		finalInsertParams := sliceutil.Map(insertParams, func(params *rivertype.JobInsertParams) *riverdriver.JobInsertFastParams {
+			return (*riverdriver.JobInsertFastParams)(params)
+		})
+		results, err := execute(ctx, finalInsertParams)
+		if err != nil {
+			return results, err
+		}
+
+		queues := make([]string, 0, 10)
+		for _, params := range insertParams {
+			if params.State == rivertype.JobStateAvailable {
+				queues = append(queues, params.Queue)
+			}
+		}
+		if err := c.maybeNotifyInsertForQueues(ctx, tx, queues); err != nil {
+			return nil, err
+		}
+		return results, nil
 	}
 
-	queues := make([]string, 0, 10)
-	for _, params := range insertParams {
-		if params.State == rivertype.JobStateAvailable {
-			queues = append(queues, params.Queue)
+	if len(c.config.JobInsertMiddleware) > 0 {
+		// Wrap middlewares in reverse order so the one defined first is wrapped
+		// as the outermost function and is first to receive the operation.
+		for i := len(c.config.JobInsertMiddleware) - 1; i >= 0; i-- {
+			middlewareItem := c.config.JobInsertMiddleware[i] // capture the current middleware item
+			previousDoInner := doInner                        // Capture the current doInner function
+			doInner = func(ctx context.Context) ([]*rivertype.JobInsertResult, error) {
+				return middlewareItem.InsertMany(ctx, insertParams, previousDoInner)
+			}
 		}
 	}
-	if err := c.maybeNotifyInsertForQueues(ctx, tx, queues); err != nil {
-		return nil, err
-	}
-	return inserted, nil
+
+	return doInner(ctx)
 }
 
 // Validates input parameters for a batch insert operation and generates a set
 // of batch insert parameters.
-func (c *Client[TTx]) insertManyParams(params []InsertManyParams) ([]*riverdriver.JobInsertFastParams, error) {
+func (c *Client[TTx]) insertManyParams(params []InsertManyParams) ([]*rivertype.JobInsertParams, error) {
 	if len(params) < 1 {
 		return nil, errors.New("no jobs to insert")
 	}
 
-	insertParams := make([]*riverdriver.JobInsertFastParams, len(params))
+	insertParams := make([]*rivertype.JobInsertParams, len(params))
 	for i, param := range params {
 		if err := c.validateJobArgs(param.Args); err != nil {
 			return nil, err
@@ -1665,6 +1694,7 @@ func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) *pr
 		ErrorHandler:       c.config.ErrorHandler,
 		FetchCooldown:      c.config.FetchCooldown,
 		FetchPollInterval:  c.config.FetchPollInterval,
+		GlobalMiddleware:   c.config.WorkerMiddleware,
 		JobTimeout:         c.config.JobTimeout,
 		MaxWorkers:         queueConfig.MaxWorkers,
 		Notifier:           c.notifier,
