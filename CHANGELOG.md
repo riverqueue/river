@@ -74,7 +74,7 @@ river migrate-up --database-url "$DATABASE_URL"
 - `rivertest.WorkContext`, a test function that can be used to initialize a context to test a `JobArgs.Work` implementation that will have a client set to context for use with `river.ClientFromContext`. [PR #526](https://github.com/riverqueue/river/pull/526).
 - A new `river migrate-list` command is available which lists available migrations and which version a target database is migrated to. [PR #534](https://github.com/riverqueue/river/pull/534).
 - `river version` or `river --version` now prints River version information. [PR #537](https://github.com/riverqueue/river/pull/537).
-- `Config.JobCleanerTimeout` was added to allow configuration of the job cleaner query timeout. In some deployments with millions of stale jobs, the cleaner may not be able to complete its query within the default 30 seconds.
+- `Config.JobCleanerTimeout` was added to allow configuration of the job cleaner query timeout. In some deployments with millions of stale jobs, the cleaner may not be able to complete its query within the default 30 seconds. [PR #576](https://github.com/riverqueue/river/pull/576).
 
 ### Changed
 
