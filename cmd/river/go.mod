@@ -7,11 +7,11 @@ toolchain go1.23.0
 require (
 	github.com/jackc/pgx/v5 v5.7.1
 	github.com/lmittmann/tint v1.0.4
-	github.com/riverqueue/river v0.13.0-rc.1
-	github.com/riverqueue/river/riverdriver v0.13.0-rc.1
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.13.0-rc.1
-	github.com/riverqueue/river/rivershared v0.13.0-rc.1
-	github.com/riverqueue/river/rivertype v0.13.0-rc.1
+	github.com/riverqueue/river v0.13.0
+	github.com/riverqueue/river/riverdriver v0.13.0
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.13.0
+	github.com/riverqueue/river/rivershared v0.13.0
+	github.com/riverqueue/river/rivertype v0.13.0
 	github.com/spf13/cobra v1.8.0
 	github.com/stretchr/testify v1.9.0
 )
