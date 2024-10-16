@@ -309,7 +309,7 @@ func (c *Config) willExecuteJobs() bool {
 // QueueConfig contains queue-specific configuration.
 type QueueConfig struct {
 	// MaxWorkers is the maximum number of workers to run for the queue, or put
-	// otherwise, the the upper limit on the number of executor goroutines that
+	// otherwise, the upper limit on the number of executor goroutines that
 	// will be spawned for the queue, not counting workers already processing jobs.
 	//
 	// This is the maximum number of workers within this particular client
