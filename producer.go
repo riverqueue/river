@@ -93,7 +93,7 @@ func (c *producerConfig) mustValidate() *producerConfig {
 		panic("producerConfig.Completer is required")
 	}
 	if c.ClientID == "" {
-		panic("producerConfig.ClientName is required")
+		panic("producerConfig.ClientID is required")
 	}
 	if c.FetchCooldown <= 0 {
 		panic("producerConfig.FetchCooldown must be great than zero")
