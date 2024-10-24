@@ -97,7 +97,7 @@ type Config struct {
 
 	// FetchCooldown is the minimum amount of time to wait between fetches of new
 	// jobs. Jobs will only be fetched *at most* this often, but if no new jobs
-	// are coming in via LISTEN/NOTIFY then feches may be delayed as long as
+	// are coming in via LISTEN/NOTIFY then fetches may be delayed as long as
 	// FetchPollInterval.
 	//
 	// Throughput is limited by this value.
@@ -457,7 +457,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 
 	// For convenience, in case the user's specified a large JobTimeout but no
 	// RescueStuckJobsAfter, since RescueStuckJobsAfter must be greater than
-	// JobTimeout, set a reasonable default value that's longer thah JobTimeout.
+	// JobTimeout, set a reasonable default value that's longer than JobTimeout.
 	rescueAfter := maintenance.JobRescuerRescueAfterDefault
 	if config.JobTimeout > 0 && config.RescueStuckJobsAfter < 1 && config.JobTimeout > config.RescueStuckJobsAfter {
 		rescueAfter = config.JobTimeout + maintenance.JobRescuerRescueAfterDefault
@@ -921,7 +921,7 @@ type SubscribeConfig struct {
 	// Requiring that kinds are specified explicitly allows for forward
 	// compatibility in case new kinds of events are added in future versions.
 	// If new event kinds are added, callers will have to explicitly add them to
-	// their requested list and esnure they can be handled correctly.
+	// their requested list and ensure they can be handled correctly.
 	Kinds []EventKind
 }
 
@@ -1059,7 +1059,7 @@ func (c *Client[TTx]) JobCancel(ctx context.Context, jobID int64) (*rivertype.Jo
 
 // JobCancelTx cancels the job with the given ID within the specified
 // transaction. This variant lets a caller cancel a job atomically alongside
-// other database changes. An cancelled job doesn't take effect until the
+// other database changes. A cancelled job doesn't take effect until the
 // transaction commits, and if the transaction rolls back, so too is the
 // cancelled job.
 //

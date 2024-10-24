@@ -480,7 +480,7 @@ func TestNotifier(t *testing.T) {
 
 		start(t, notifier)
 
-		// The service normally sleeps with a exponential backoff after an
+		// The service normally sleeps with an exponential backoff after an
 		// error, but we've disabled sleep above, so we can pull errors out of
 		// the test signal as quickly as we want.
 		require.EqualError(t, notifier.testSignals.BackoffError.WaitOrTimeout(), "error during wait 1")

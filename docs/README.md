@@ -178,7 +178,7 @@ See [developing River].
 
 ## Thank you
 
-River was in large part inspired by our experiences with other background job libaries over the years, most notably:
+River was in large part inspired by our experiences with other background job libraries over the years, most notably:
 
 - [Oban](https://github.com/sorentwo/oban) in Elixir.
 - [Que](https://github.com/que-rb/que), [Sidekiq](https://github.com/sidekiq/sidekiq), [Delayed::Job](https://github.com/collectiveidea/delayed_job), and [GoodJob](https://github.com/bensheldon/good_job) in Ruby.

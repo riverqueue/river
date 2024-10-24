@@ -47,7 +47,7 @@ type DefaultClientRetryPolicy struct {
 func (p *DefaultClientRetryPolicy) NextRetry(job *rivertype.JobRow) time.Time {
 	// For the purposes of calculating the backoff, we can look solely at the
 	// number of errors. If we were to use the raw attempt count, this would be
-	// incemented and influenced by snoozes. However the use case for snoozing is
+	// incremented and influenced by snoozes. However the use case for snoozing is
 	// to try again later *without* counting as an error.
 	//
 	// Note that we explicitly add 1 here, because the error hasn't been appended

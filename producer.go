@@ -54,7 +54,7 @@ type producerConfig struct {
 
 	// FetchCooldown is the minimum amount of time to wait between fetches of new
 	// jobs. Jobs will only be fetched *at most* this often, but if no new jobs
-	// are coming in via LISTEN/NOTIFY then feches may be delayed as long as
+	// are coming in via LISTEN/NOTIFY then fetches may be delayed as long as
 	// FetchPollInterval.
 	FetchCooldown time.Duration
 
@@ -206,7 +206,7 @@ func newProducer(archetype *baseservice.Archetype, exec riverdriver.Executor, co
 //
 // This variant uses a single context as fetchCtx and workCtx, and is here to
 // implement startstop.Service so that the producer can be stored as a service
-// variable and used with various serviec utilties. StartWorkContext below
+// variable and used with various service utilities. StartWorkContext below
 // should be preferred for production use.
 func (p *producer) Start(ctx context.Context) error {
 	return p.StartWorkContext(ctx, ctx)
@@ -514,7 +514,7 @@ func (p *producer) maybeCancelJob(id int64) {
 }
 
 func (p *producer) dispatchWork(workCtx context.Context, count int, fetchResultCh chan<- producerFetchResult) {
-	// This intentionally removes any deadlines or cancelleation from the parent
+	// This intentionally removes any deadlines or cancellation from the parent
 	// context because we don't want it to get cancelled if the producer is asked
 	// to shut down. In that situation, we want to finish fetching any jobs we are
 	// in the midst of fetching, work them, and then stop. Otherwise we'd have a

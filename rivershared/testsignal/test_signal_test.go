@@ -28,7 +28,7 @@ func TestTestSignal(t *testing.T) {
 		signal := TestSignal[struct{}]{}
 		signal.Init()
 
-		// Signal can invoked many times, but not infinitely
+		// Signal can be invoked many times, but not infinitely
 		for i := 0; i < testSignalInternalChanSize; i++ {
 			signal.Signal(struct{}{})
 		}

@@ -29,7 +29,7 @@ import (
 // always end up in a `retryable` state rather than `available`. Normally, the
 // job executor sets `available` if the retry delay is smaller than the
 // scheduler's interval. To simplify things so errors are always `retryable`,
-// this time is picked to be smaller than the any retry delay that the default
+// this time is picked to be smaller than any retry delay that the default
 // retry policy will ever produce. It's shared so we can document/explain it all
 // in one place.
 const SchedulerShortInterval = 500 * time.Millisecond

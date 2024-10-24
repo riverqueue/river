@@ -21,7 +21,7 @@ func NewCryptoSeededConcurrentSafeRand() *mathrand.Rand {
 	return mathrand.New(newCryptoSeededConcurrentSafeSource())
 }
 
-// DurationBetween generates a random duraiton in the range of [lowerLimit, upperLimit).
+// DurationBetween generates a random duration in the range of [lowerLimit, upperLimit).
 //
 // TODO: When we drop Go 1.21 support, switch to `math/rand/v2` and kill the
 // `rand.Rand` argument.

@@ -514,7 +514,7 @@ func (c *BatchCompleter) waitOrInitBacklogChannel(ctx context.Context) {
 	c.Logger.WarnContext(ctx, c.Name+": Hit maximum backlog; completions will wait until below threshold", "max_backlog", c.maxBacklog)
 }
 
-// As configued, total time asleep from initial attempt is ~7 seconds (1 + 2 +
+// As configured, total time asleep from initial attempt is ~7 seconds (1 + 2 +
 // 4) (not including jitter). However, if each attempt times out, that's up to
 // ~37 seconds (7 seconds + 3 * 10 seconds).
 const numRetries = 3

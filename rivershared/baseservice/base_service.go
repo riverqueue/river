@@ -125,7 +125,7 @@ func (g *UnStubbableTimeGenerator) StubNowUTC(nowUTC time.Time) time.Time {
 
 var stripGenericTypePathRE = regexp.MustCompile(`\[([\[\]\*]*).*/([^/]+)\]`)
 
-// Simplies the name of a Go type that uses generics for cleaner logging output.
+// Simplifies the name of a Go type that uses generics for cleaner logging output.
 //
 // So this:
 //

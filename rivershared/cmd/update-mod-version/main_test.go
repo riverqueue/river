@@ -78,7 +78,7 @@ func TestParseAndUpdateGoModFile(t *testing.T) {
 			{Path: "github.com/riverqueue/river/rivershared", Version: "v0.0.13"},
 		}, versions)
 
-		// Running again is allowed and should be idempontent. This time it'll
+		// Running again is allowed and should be idempotent. This time it'll
 		// return that no changes were made.
 		anyChanges, err = parseAndUpdateGoModFile(filename, "v0.0.13")
 		require.NoError(t, err)

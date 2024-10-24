@@ -31,7 +31,7 @@ func TestAdvisoryLockHash(t *testing.T) {
 		// The output hash isn't guaranteed to be larger than MaxInt32 of
 		// course, but given a reasonable hash function like FNV that produces
 		// good distribution, it's far more likely to be than not. We're using a
-		// fixed input in this test, so we know that it always be in this case.
+		// fixed input in this test, so we know that it'll always be in this case.
 		require.Greater(t, int(key), math.MaxInt32)
 	})
 }

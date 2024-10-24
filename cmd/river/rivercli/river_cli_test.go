@@ -107,7 +107,7 @@ func TestBaseCommandSetIntegration(t *testing.T) {
 		}
 	}
 
-	t.Run("DebugVerboseMutallyExclusive", func(t *testing.T) {
+	t.Run("DebugVerboseMutuallyExclusive", func(t *testing.T) {
 		t.Parallel()
 
 		cmd, _ := setup(t)

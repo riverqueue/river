@@ -43,7 +43,7 @@ func (ts *JobRescuerTestSignals) Init() {
 
 type JobRescuerConfig struct {
 	// ClientRetryPolicy is the default retry policy to use for workers that don't
-	// overide NextRetry.
+	// override NextRetry.
 	ClientRetryPolicy ClientRetryPolicy
 
 	// Interval is the amount of time to wait between runs of the rescuer.
