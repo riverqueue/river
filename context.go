@@ -22,6 +22,9 @@ func withClient[TTx any](ctx context.Context, client *Client[TTx]) context.Conte
 //
 // When testing JobArgs.Work implementations, it might be useful to use
 // rivertest.WorkContext to initialize a context that has an available client.
+//
+// The type parameter TTx is the transaction type used by the [Client],
+// pgx.Tx for the pgx driver, and *sql.Tx for the [database/sql] driver.
 func ClientFromContext[TTx any](ctx context.Context) *Client[TTx] {
 	client, err := ClientFromContextSafely[TTx](ctx)
 	if err != nil {
@@ -39,6 +42,9 @@ func ClientFromContext[TTx any](ctx context.Context) *Client[TTx] {
 //
 // When testing JobArgs.Work implementations, it might be useful to use
 // rivertest.WorkContext to initialize a context that has an available client.
+//
+// See the examples for [ClientFromContext] to understand how to use this
+// function.
 func ClientFromContextSafely[TTx any](ctx context.Context) (*Client[TTx], error) {
 	client, exists := ctx.Value(rivercommon.ContextKeyClient{}).(*Client[TTx])
 	if !exists || client == nil {
