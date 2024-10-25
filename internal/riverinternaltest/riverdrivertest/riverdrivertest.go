@@ -2767,7 +2767,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			tBefore := time.Now().UTC()
 			queueBefore, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
 				Metadata:  metadata,
-				Name:      "updateable-queue",
+				Name:      "updatable-queue",
 				UpdatedAt: &tBefore,
 			})
 			require.NoError(t, err)
@@ -2776,7 +2776,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			tAfter := tBefore.Add(2 * time.Second)
 			queueAfter, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
 				Metadata:  []byte(`{"other": "metadata"}`),
-				Name:      "updateable-queue",
+				Name:      "updatable-queue",
 				UpdatedAt: &tAfter,
 			})
 			require.NoError(t, err)
@@ -2784,7 +2784,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			// unchanged:
 			require.Equal(t, queueBefore.CreatedAt, queueAfter.CreatedAt)
 			require.Equal(t, metadata, queueAfter.Metadata)
-			require.Equal(t, "updateable-queue", queueAfter.Name)
+			require.Equal(t, "updatable-queue", queueAfter.Name)
 			require.Nil(t, queueAfter.PausedAt)
 
 			// Timestamp is bumped:

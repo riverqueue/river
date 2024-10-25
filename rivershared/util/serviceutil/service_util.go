@@ -26,7 +26,7 @@ func CancellableSleep(ctx context.Context, sleepDuration time.Duration) {
 // CancellableSleep sleeps for the given duration, but returns early if context
 // has been cancelled.
 //
-// This variant returns a channel that should be waited on and which wll be
+// This variant returns a channel that should be waited on and which will be
 // closed when either the sleep or context is done.
 func CancellableSleepC(ctx context.Context, sleepDuration time.Duration) <-chan struct{} {
 	doneChan := make(chan struct{})

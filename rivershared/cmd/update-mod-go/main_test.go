@@ -66,7 +66,7 @@ func TestParseAndUpdateGoModFile(t *testing.T) {
 		// changes were made.
 		requireDirectives(t, filename, "1.22", "go1.22.6")
 
-		// Running again is allowed and should be idempontent. This time it'll
+		// Running again is allowed and should be idempotent. This time it'll
 		// return that no changes were made.
 		anyMismatch, err = parseAndUpdateGoModFile(false, filename, "go.work", "1.22", "go1.22.6")
 		require.NoError(t, err)

@@ -22,7 +22,7 @@ $$;
 --
 ALTER TABLE river_job ADD COLUMN unique_states BIT(8);
 
--- This statements uses `IF NOT EXISTS` to allow users with a `river_job` table
+-- This statement uses `IF NOT EXISTS` to allow users with a `river_job` table
 -- of non-trivial size to build the index `CONCURRENTLY` out of band of this
 -- migration, then follow by completing the migration.
 CREATE UNIQUE INDEX IF NOT EXISTS river_job_unique_idx ON river_job (unique_key)

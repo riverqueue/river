@@ -34,7 +34,7 @@ type testingT interface {
 // Options for RequireInserted functions including expectations for various
 // queuing properties that stem from InsertOpts.
 //
-// Multiple properties set on this struct increase the specifity on a job to
+// Multiple properties set on this struct increase the specificity on a job to
 // match, acting like an AND condition on each.
 //
 // In the case of RequireInserted or RequireInsertedMany, if multiple properties
@@ -188,7 +188,7 @@ func requireInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.Jo
 // A RequireInsertedOpts struct can be provided as the last argument, and if it
 // is, its properties (e.g. max attempts, priority, queue name) will act as
 // requirements on a found row. If any fields are set, then the test will fail
-// if a job is found that maches all of them. If any property doesn't match a
+// if a job is found that matches all of them. If any property doesn't match a
 // found row, the row isn't considered a match, and the assertion doesn't fail.
 //
 // If more rows than one were found, the assertion fails if any of them match
@@ -217,7 +217,7 @@ func requireNotInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.Jo
 // A RequireInsertedOpts struct can be provided as the last argument, and if it
 // is, its properties (e.g. max attempts, priority, queue name) will act as
 // requirements on a found row. If any fields are set, then the test will fail
-// if a job is found that maches all of them. If any property doesn't match a
+// if a job is found that matches all of them. If any property doesn't match a
 // found row, the row isn't considered a match, and the assertion doesn't fail.
 //
 // If more rows than one were found, the assertion fails if any of them match
@@ -540,7 +540,7 @@ func failureString(format string, a ...any) string {
 // WorkContext returns a realistic context that can be used to test JobArgs.Work
 // implementations.
 //
-// In particual, adds a client to the context so that river.ClientFromContext is
+// In particular, adds a client to the context so that river.ClientFromContext is
 // usable in the test suite.
 func WorkContext[TTx any](ctx context.Context, client *river.Client[TTx]) context.Context {
 	return context.WithValue(ctx, rivercommon.ContextKeyClient{}, client)

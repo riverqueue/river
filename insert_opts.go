@@ -157,7 +157,7 @@ type UniqueOpts struct {
 	// or `discarded`), though only `retryable` may be safely _removed_ from the
 	// list.
 	//
-	// Warning: Removing any states from the default list (other than `retryable`
+	// Warning: Removing any states from the default list (other than `retryable`)
 	// forces a fallback to a slower insertion path that takes an advisory lock
 	// and performs a look up before insertion. This path is deprecated and should
 	// be avoided if possible.

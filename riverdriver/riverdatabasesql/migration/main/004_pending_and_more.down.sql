@@ -18,7 +18,7 @@ DECLARE
   payload json;
 BEGIN
   IF NEW.state = 'available' THEN
-    -- Notify will coalesce duplicate notificiations within a transaction, so
+    -- Notify will coalesce duplicate notifications within a transaction, so
     -- keep these payloads generalized:
     payload = json_build_object('queue', NEW.queue);
     PERFORM

@@ -24,7 +24,7 @@ import "reflect"
 //
 // We're not sure yet whether it's appropriate to expose this publicly, so for
 // now we've localized it to the test suite only. When a test case needs a job
-// type that won't be reused, its preferrable to make use of JobArgsReflectKind
+// type that won't be reused, it's preferable to make use of JobArgsReflectKind
 // so the type doesn't pollute the global namespace.
 type JobArgsReflectKind[TKind any] struct{}
 

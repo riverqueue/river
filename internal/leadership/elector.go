@@ -316,7 +316,7 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 			return ctx.Err()
 
 		case <-timer.C:
-			// Reelect timer expired; attempt releection below.
+			// Reelect timer expired; attempt reelection below.
 
 		case <-e.leadershipNotificationChan:
 			// Used only in tests for force an immediately reelect attempt.
@@ -463,7 +463,7 @@ func (e *Elector) tryUnlisten(sub *Subscription) bool {
 	return false
 }
 
-// leaderTTL is at least the relect run interval used by clients to try and gain
+// leaderTTL is at least the reelect run interval used by clients to try and gain
 // leadership or reelect themselves as leader, plus a little padding to account
 // to give the leader a little breathing room in its reelection loop.
 func (e *Elector) leaderTTL() time.Duration {

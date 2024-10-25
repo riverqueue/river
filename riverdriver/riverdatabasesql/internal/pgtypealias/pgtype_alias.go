@@ -1,4 +1,4 @@
-// package pgtypealias exists to work aronud sqlc bugs with being able to
+// package pgtypealias exists to work around sqlc bugs with being able to
 // reference v5 the pgtype package from within a dbsql package.
 package pgtypealias
 

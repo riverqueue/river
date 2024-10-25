@@ -219,7 +219,7 @@ type MigrateOpts struct {
 	// version, so when starting at version 0 and requesting version 3, versions
 	// 1, 2, and 3 would be applied. When applying migrations down, down
 	// migrations are applied excluding the target version, so when starting at
-	// version 5 an requesting version 3, down migrations for versions 5 and 4
+	// version 5 and requesting version 3, down migrations for versions 5 and 4
 	// would be applied, leaving the final schema at version 3.
 	//
 	// When migrating down, TargetVersion can be set to the special value of -1
@@ -654,7 +654,7 @@ func migrationsFromFS(migrationFS fs.FS, line string) ([]Migration, error) {
 			return fmt.Errorf("error walking FS: %w", err)
 		}
 
-		// The WalkDir callback is invoked for each embdedded subdirectory and
+		// The WalkDir callback is invoked for each embedded subdirectory and
 		// file. For our purposes here, we're only interested in files.
 		if entry.IsDir() {
 			return nil

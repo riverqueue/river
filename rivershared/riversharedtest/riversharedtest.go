@@ -151,7 +151,7 @@ func WaitTimeout() time.Duration {
 }
 
 var IgnoredKnownGoroutineLeaks = []goleak.Option{ //nolint:gochecknoglobals
-	// This goroutine contains a 500 ms uninterruptable sleep that may still be
+	// This goroutine contains a 500 ms uninterruptible sleep that may still be
 	// running by the time the test suite finishes and cause a failure. This
 	// might be something that should be fixed in pgx, but ignore it for the
 	// time being lest we have intermittent tests.

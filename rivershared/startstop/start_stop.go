@@ -167,7 +167,7 @@ func (s *BaseStartStop) Stop() {
 }
 
 // StopInit provides a way to build a more customized Stop implementation. It
-// should be avoided unless there'a an exceptional reason not to because Stop
+// should be avoided unless there's an exceptional reason not to because Stop
 // should be fine in the vast majority of situations.
 //
 // It returns a boolean indicating whether the service should do any additional

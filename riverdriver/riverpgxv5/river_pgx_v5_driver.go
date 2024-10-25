@@ -751,7 +751,7 @@ func (l *Listener) Close(ctx context.Context) error {
 
 	// Release below would take care of cleanup and potentially put the
 	// connection back into rotation, but in case a Listen was invoked without a
-	// subsequent Unlisten on the same tpic, close the connection explicitly to
+	// subsequent Unlisten on the same topic, close the connection explicitly to
 	// guarantee no other caller will receive a partially tainted connection.
 	err := l.conn.Conn().Close(ctx)
 

@@ -255,7 +255,7 @@ type JobInsertParams struct {
 type JobInsertMiddleware interface {
 	// InsertMany is invoked around a batch insert operation. Implementations
 	// must always include a call to doInner to call down the middleware stack
-	// and perfom the batch insertion, and may run custom code before and after.
+	// and perform the batch insertion, and may run custom code before and after.
 	//
 	// Returning an error from this function will fail the overarching insert
 	// operation, even if the inner insertion originally succeeded.
@@ -265,7 +265,7 @@ type JobInsertMiddleware interface {
 type WorkerMiddleware interface {
 	// Work is invoked after a job's JSON args being unmarshaled and before the
 	// job is worked. Implementations must always include a call to doInner to
-	// call down the middleware stack and perfom the batch insertion, and may run
+	// call down the middleware stack and perform the batch insertion, and may run
 	// custom code before and after.
 	//
 	// Returning an error from this function will fail the overarching work
