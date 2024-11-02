@@ -37,7 +37,7 @@ func (w *ContextClientSQLWorker) Work(ctx context.Context, job *river.Job[Contex
 
 // ExampleClientFromContext_databaseSQL demonstrates how to extract the River
 // client from the worker context when using the [database/sql] driver.
-// ([github.com/riverqueue/river/riverdriver/riverdatabasesql])
+// ([github.com/riverqueue/river/riverdriver/riverdatabasesql]).
 func ExampleClientFromContext_databaseSQL() {
 	ctx := context.Background()
 

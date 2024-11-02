@@ -159,6 +159,11 @@ type producer struct {
 	// main goroutine.
 	cancelCh chan int64
 
+	// Set to true when the producer thinks it should trigger another fetch as
+	// soon as slots are available. This is written and read by the main
+	// goroutine.
+	fetchWhenSlotsAreAvailable bool
+
 	// Receives completed jobs from workers. Written by completed workers, only
 	// read from main goroutine.
 	jobResultCh chan *rivertype.JobRow
@@ -447,7 +452,7 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 			if p.paused {
 				continue
 			}
-			p.innerFetchLoop(workCtx, fetchResultCh, fetchLimiter)
+			p.innerFetchLoop(workCtx, fetchResultCh)
 			// Ensure we can't start another fetch when fetchCtx is done, even if
 			// the fetchLimiter is also ready to fire:
 			select {
@@ -457,12 +462,28 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 			}
 		case result := <-p.jobResultCh:
 			p.removeActiveJob(result.ID)
+			if p.fetchWhenSlotsAreAvailable {
+				// If we missed a fetch because all worker slots were full, or if we
+				// fetched the maximum number of jobs on the last attempt, get a little
+				// more aggressive triggering the fetch limiter now that we have a slot
+				// available.
+				p.fetchWhenSlotsAreAvailable = false
+				fetchLimiter.Call()
+			}
 		}
 	}
 }
 
-func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan producerFetchResult, fetchLimiter *chanutil.DebouncedChan) {
+func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan producerFetchResult) {
 	limit := p.maxJobsToFetch()
+	if limit <= 0 {
+		// We have no slots for new jobs, so don't bother fetching. However, since
+		// we knew it was time to fetch, we keep track of what happened so we can
+		// trigger another fetch as soon as we have open slots.
+		p.fetchWhenSlotsAreAvailable = true
+		return
+	}
+
 	go p.dispatchWork(workCtx, limit, fetchResultCh)
 
 	for {
@@ -473,12 +494,10 @@ func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan pr
 			} else if len(result.jobs) > 0 {
 				p.startNewExecutors(workCtx, result.jobs)
 
-				// Fetch returned the maximum number of jobs that were requested
-				// which implies there may be more in the queue so trigger another
-				// fetch right after this one.
-				if len(result.jobs) == limit {
-					fetchLimiter.Call()
-				}
+				// Fetch returned the maximum number of jobs that were requested,
+				// implying there may be more in the queue. Trigger another fetch when
+				// slots are available.
+				p.fetchWhenSlotsAreAvailable = true
 			}
 			return
 		case result := <-p.jobResultCh:

@@ -5643,9 +5643,8 @@ func TestInsert(t *testing.T) {
 	AddWorker(workers, &noOpWorker{})
 
 	config := &Config{
-		FetchCooldown: 2 * time.Millisecond,
-		Queues:        map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}},
-		Workers:       workers,
+		Queues:  map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}},
+		Workers: workers,
 	}
 
 	client, err := NewClient(riverpgxv5.New(dbPool), config)
