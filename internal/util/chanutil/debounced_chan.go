@@ -6,10 +6,10 @@ import (
 	"time"
 )
 
-// DebouncedChan is a function that will only be called once per cooldown
-// period, at the leading edge. If it is called again during the cooldown, the
-// subsequent calls are delayed until the cooldown period has elapsed and are
-// also coalesced into a single call.
+// DebouncedChan is a channel that will only fire once per cooldown period, at
+// the leading edge. If it is called again during the cooldown, the subsequent
+// calls are delayed until the cooldown period has elapsed and are also
+// coalesced into a single call.
 type DebouncedChan struct {
 	c           chan struct{}
 	cooldown    time.Duration

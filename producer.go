@@ -159,6 +159,11 @@ type producer struct {
 	// main goroutine.
 	cancelCh chan int64
 
+	// Set to true when the producer thinks it should trigger another fetch as
+	// soon as slots are available. This is written and read by the main
+	// goroutine.
+	fetchWhenSlotsAreAvailable bool
+
 	// Receives completed jobs from workers. Written by completed workers, only
 	// read from main goroutine.
 	jobResultCh chan *rivertype.JobRow
@@ -457,12 +462,28 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 			}
 		case result := <-p.jobResultCh:
 			p.removeActiveJob(result.ID)
+			if p.fetchWhenSlotsAreAvailable {
+				// If we missed a fetch because all worker slots were full, or if we
+				// fetched the maximum number of jobs on the last attempt, get a little
+				// more aggressive triggering the fetch limiter now that we have a slot
+				// available.
+				p.fetchWhenSlotsAreAvailable = false
+				fetchLimiter.Call()
+			}
 		}
 	}
 }
 
 func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan producerFetchResult) {
 	limit := p.maxJobsToFetch()
+	if limit <= 0 {
+		// We have no slots for new jobs, so don't bother fetching. However, since
+		// we knew it was time to fetch, we keep track of what happened so we can
+		// trigger another fetch as soon as we have open slots.
+		p.fetchWhenSlotsAreAvailable = true
+		return
+	}
+
 	go p.dispatchWork(workCtx, limit, fetchResultCh)
 
 	for {
@@ -472,6 +493,11 @@ func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan pr
 				p.Logger.ErrorContext(workCtx, p.Name+": Error fetching jobs", slog.String("err", result.err.Error()))
 			} else if len(result.jobs) > 0 {
 				p.startNewExecutors(workCtx, result.jobs)
+
+				// Fetch returned the maximum number of jobs that were requested,
+				// implying there may be more in the queue. Trigger another fetch when
+				// slots are available.
+				p.fetchWhenSlotsAreAvailable = true
 			}
 			return
 		case result := <-p.jobResultCh:

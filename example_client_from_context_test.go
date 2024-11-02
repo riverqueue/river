@@ -36,7 +36,7 @@ func (w *ContextClientWorker) Work(ctx context.Context, job *river.Job[ContextCl
 
 // ExampleClientFromContext_pgx demonstrates how to extract the River client
 // from the worker context when using the pgx/v5 driver.
-// ([github.com/riverqueue/river/riverdriver/riverpgxv5])
+// ([github.com/riverqueue/river/riverdriver/riverpgxv5]).
 func ExampleClientFromContext_pgx() {
 	ctx := context.Background()
 
