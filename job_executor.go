@@ -49,27 +49,30 @@ func (e *UnknownJobKindError) Is(target error) bool {
 // the job at the end of execution. Regardless of whether or not the job has any
 // remaining attempts, this will ensure the job does not execute again.
 func JobCancel(err error) error {
-	return &jobCancelError{err: err}
+	return &JobCancelError{err: err}
 }
 
-type jobCancelError struct {
+// JobCancelError is the error type returned by JobCancel. It should not be
+// initialized directly, but is returned from the [JobCancel] function and can
+// be used for test assertions.
+type JobCancelError struct {
 	err error
 }
 
-func (e *jobCancelError) Error() string {
+func (e *JobCancelError) Error() string {
 	if e.err == nil {
-		return "jobCancelError: <nil>"
+		return "JobCancelError: <nil>"
 	}
 	// should not ever be called, but add a prefix just in case:
-	return "jobCancelError: " + e.err.Error()
+	return "JobCancelError: " + e.err.Error()
 }
 
-func (e *jobCancelError) Is(target error) bool {
-	_, ok := target.(*jobCancelError)
+func (e *JobCancelError) Is(target error) bool {
+	_, ok := target.(*JobCancelError)
 	return ok
 }
 
-func (e *jobCancelError) Unwrap() error { return e.err }
+func (e *JobCancelError) Unwrap() error { return e.err }
 
 // JobSnooze can be returned from a Worker's Work method to cause the job to be
 // tried again after the specified duration. This also has the effect of
@@ -81,20 +84,23 @@ func JobSnooze(duration time.Duration) error {
 	if duration < 0 {
 		panic("JobSnooze: duration must be >= 0")
 	}
-	return &jobSnoozeError{duration: duration}
+	return &JobSnoozeError{duration: duration}
 }
 
-type jobSnoozeError struct {
+// JobSnoozeError is the error type returned by JobSnooze. It should not be
+// initialized directly, but is returned from the [JobSnooze] function and can
+// be used for test assertions.
+type JobSnoozeError struct {
 	duration time.Duration
 }
 
-func (e *jobSnoozeError) Error() string {
+func (e *JobSnoozeError) Error() string {
 	// should not ever be called, but add a prefix just in case:
-	return fmt.Sprintf("jobSnoozeError: %s", e.duration)
+	return fmt.Sprintf("JobSnoozeError: %s", e.duration)
 }
 
-func (e *jobSnoozeError) Is(target error) bool {
-	_, ok := target.(*jobSnoozeError)
+func (e *JobSnoozeError) Is(target error) bool {
+	_, ok := target.(*JobSnoozeError)
 	return ok
 }
 
@@ -270,7 +276,7 @@ func (e *jobExecutor) invokeErrorHandler(ctx context.Context, res *jobExecutorRe
 }
 
 func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) {
-	var snoozeErr *jobSnoozeError
+	var snoozeErr *JobSnoozeError
 
 	if res.Err != nil && errors.As(res.Err, &snoozeErr) {
 		e.Logger.DebugContext(ctx, e.Name+": Job snoozed",
@@ -316,7 +322,7 @@ func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
 	var (
 		cancelJob bool
-		cancelErr *jobCancelError
+		cancelErr *JobCancelError
 	)
 
 	logAttrs := []any{

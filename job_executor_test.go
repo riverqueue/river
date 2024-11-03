@@ -361,7 +361,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.Len(t, job.Errors, 1)
 		require.WithinDuration(t, time.Now(), job.Errors[0].At, 2*time.Second)
 		require.Equal(t, 1, job.Errors[0].Attempt)
-		require.Equal(t, "jobCancelError: throw away this job", job.Errors[0].Error)
+		require.Equal(t, "JobCancelError: throw away this job", job.Errors[0].Error)
 		require.Equal(t, "", job.Errors[0].Trace)
 	})
 
@@ -700,7 +700,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.Len(t, job.Errors, 1)
 		require.WithinDuration(t, time.Now(), job.Errors[0].At, 2*time.Second)
 		require.Equal(t, 1, job.Errors[0].Attempt)
-		require.Equal(t, "jobCancelError: job cancelled remotely", job.Errors[0].Error)
+		require.Equal(t, "JobCancelError: job cancelled remotely", job.Errors[0].Error)
 		require.Equal(t, ErrJobCancelledRemotely.Error(), job.Errors[0].Error)
 		require.Equal(t, "", job.Errors[0].Trace)
 	})
