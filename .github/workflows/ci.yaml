@@ -31,7 +31,7 @@ jobs:
           - "1.21"
           - "1.22"
           - "1.23"
-        postgres-version: [14, 15, 16]
+        postgres-version: [15, 16, 17]
       fail-fast: false
     timeout-minutes: 5
 
