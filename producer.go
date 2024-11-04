@@ -494,10 +494,12 @@ func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan pr
 			} else if len(result.jobs) > 0 {
 				p.startNewExecutors(workCtx, result.jobs)
 
-				// Fetch returned the maximum number of jobs that were requested,
-				// implying there may be more in the queue. Trigger another fetch when
-				// slots are available.
-				p.fetchWhenSlotsAreAvailable = true
+				if len(result.jobs) == limit {
+					// Fetch returned the maximum number of jobs that were requested,
+					// implying there may be more in the queue. Trigger another fetch when
+					// slots are available.
+					p.fetchWhenSlotsAreAvailable = true
+				}
 			}
 			return
 		case result := <-p.jobResultCh:

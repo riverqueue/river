@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] - 2024-11-04
+
+### Fixed
+
+- In [PR #663](https://github.com/riverqueue/river/pull/663) the client was changed to be more aggressive about re-fetching when it had previously fetched a full batch. Unfortunately a clause was missed, which resulted in the client being more aggressive any time even a single job was fetched on the previous attempt. This was corrected with a conditional to ensure it only happens when the last fetch was full. [PR #668](https://github.com/riverqueue/river/pull/668).
+
 ## [0.14.0] - 2024-11-03
 
 ### Added
