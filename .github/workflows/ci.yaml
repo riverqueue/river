@@ -27,11 +27,14 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
+        # Run the 4 latest Postgres versions against the latest Go version:
         go-version:
-          - "1.21"
-          - "1.22"
           - "1.23"
-        postgres-version: [14, 15, 16]
+        postgres-version: [14, 15, 16, 17]
+        include:
+          # Also run previous Go version against the latest Postgres version:
+          - go-version: "1.22"
+            postgres-version: 17
       fail-fast: false
     timeout-minutes: 5
 

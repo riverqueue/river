@@ -11,9 +11,9 @@ import (
 
 const sampleGoMod = `module github.com/riverqueue/river
 
-go 1.21
+go 1.22
 
-toolchain go1.22.5
+toolchain go1.23.1
 
 require (
 	github.com/riverqueue/river/riverdriver v0.0.0-00010101000000-000000000000
@@ -58,17 +58,17 @@ func TestParseAndUpdateGoModFile(t *testing.T) {
 
 		filename, _ := setup(t)
 
-		anyMismatch, err := parseAndUpdateGoModFile(false, filename, "go.work", "1.22", "go1.22.6")
+		anyMismatch, err := parseAndUpdateGoModFile(false, filename, "go.work", "1.23", "go1.23.2")
 		require.NoError(t, err)
 		require.True(t, anyMismatch)
 
 		// Reread the file that the command above just wrote and make sure the right
 		// changes were made.
-		requireDirectives(t, filename, "1.22", "go1.22.6")
+		requireDirectives(t, filename, "1.23", "go1.23.2")
 
 		// Running again is allowed and should be idempotent. This time it'll
 		// return that no changes were made.
-		anyMismatch, err = parseAndUpdateGoModFile(false, filename, "go.work", "1.22", "go1.22.6")
+		anyMismatch, err = parseAndUpdateGoModFile(false, filename, "go.work", "1.23", "go1.23.2")
 		require.NoError(t, err)
 		require.False(t, anyMismatch)
 	})
@@ -78,12 +78,12 @@ func TestParseAndUpdateGoModFile(t *testing.T) {
 
 		filename, _ := setup(t)
 
-		anyMismatch, err := parseAndUpdateGoModFile(false, filename, "go.work", "1.21", "go1.22.5")
+		anyMismatch, err := parseAndUpdateGoModFile(false, filename, "go.work", "1.22", "go1.23.1")
 		require.NoError(t, err)
 		require.False(t, anyMismatch)
 
 		// Expect no changes made in file.
-		requireDirectives(t, filename, "1.21", "go1.22.5")
+		requireDirectives(t, filename, "1.22", "go1.23.1")
 	})
 
 	t.Run("CheckOnlyGoMismatch", func(t *testing.T) {
@@ -91,8 +91,8 @@ func TestParseAndUpdateGoModFile(t *testing.T) {
 
 		filename, _ := setup(t)
 
-		_, err := parseAndUpdateGoModFile(true, filename, "go.work", "1.22", "go1.22.5")
-		require.EqualError(t, err, fmt.Sprintf("go directive of %q (%s) doesn't match %q (%s)", filename, "1.21", "go.work", "1.22"))
+		_, err := parseAndUpdateGoModFile(true, filename, "go.work", "1.23", "go1.23.1")
+		require.EqualError(t, err, fmt.Sprintf("go directive of %q (%s) doesn't match %q (%s)", filename, "1.22", "go.work", "1.23"))
 	})
 
 	t.Run("CheckOnlyToolchainMismatch", func(t *testing.T) {
@@ -100,8 +100,8 @@ func TestParseAndUpdateGoModFile(t *testing.T) {
 
 		filename, _ := setup(t)
 
-		_, err := parseAndUpdateGoModFile(true, filename, "go.work", "1.21", "go1.22.6")
-		require.EqualError(t, err, fmt.Sprintf("toolchain directive of %q (%s) doesn't match %q (%s)", filename, "go1.22.5", "go.work", "go1.22.6"))
+		_, err := parseAndUpdateGoModFile(true, filename, "go.work", "1.22", "go1.23.2")
+		require.EqualError(t, err, fmt.Sprintf("toolchain directive of %q (%s) doesn't match %q (%s)", filename, "go1.23.1", "go.work", "go1.23.2"))
 	})
 
 	t.Run("CheckOnlyNoChanges", func(t *testing.T) {
@@ -109,10 +109,10 @@ func TestParseAndUpdateGoModFile(t *testing.T) {
 
 		filename, _ := setup(t)
 
-		anyMismatch, err := parseAndUpdateGoModFile(true, filename, "go.work", "1.21", "go1.22.5")
+		anyMismatch, err := parseAndUpdateGoModFile(true, filename, "go.work", "1.22", "go1.23.1")
 		require.NoError(t, err)
 		require.False(t, anyMismatch)
 
-		requireDirectives(t, filename, "1.21", "go1.22.5")
+		requireDirectives(t, filename, "1.22", "go1.23.1")
 	})
 }
