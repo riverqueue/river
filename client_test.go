@@ -445,8 +445,12 @@ func Test_Client(t *testing.T) {
 	// _outside of_ a transaction. The exact same test logic applies to each case,
 	// the only difference is a different cancelFunc provided by the specific
 	// subtest.
-	cancelRunningJobTestHelper := func(t *testing.T, cancelFunc func(ctx context.Context, dbPool *pgxpool.Pool, client *Client[pgx.Tx], jobID int64) (*rivertype.JobRow, error)) { //nolint:thelper
-		client, bundle := setup(t)
+	cancelRunningJobTestHelper := func(t *testing.T, config *Config, cancelFunc func(ctx context.Context, dbPool *pgxpool.Pool, client *Client[pgx.Tx], jobID int64) (*rivertype.JobRow, error)) { //nolint:thelper
+		defaultConfig, bundle := setupConfig(t)
+		if config == nil {
+			config = defaultConfig
+		}
+		client := newTestClient(t, bundle.dbPool, config)
 
 		jobStartedChan := make(chan int64)
 
@@ -492,7 +496,17 @@ func Test_Client(t *testing.T) {
 	t.Run("CancelRunningJob", func(t *testing.T) {
 		t.Parallel()
 
-		cancelRunningJobTestHelper(t, func(ctx context.Context, dbPool *pgxpool.Pool, client *Client[pgx.Tx], jobID int64) (*rivertype.JobRow, error) {
+		cancelRunningJobTestHelper(t, nil, func(ctx context.Context, dbPool *pgxpool.Pool, client *Client[pgx.Tx], jobID int64) (*rivertype.JobRow, error) {
+			return client.JobCancel(ctx, jobID)
+		})
+	})
+
+	t.Run("CancelRunningJobWithLongPollInterval", func(t *testing.T) {
+		t.Parallel()
+
+		config := newTestConfig(t, nil)
+		config.FetchPollInterval = 60 * time.Second
+		cancelRunningJobTestHelper(t, config, func(ctx context.Context, dbPool *pgxpool.Pool, client *Client[pgx.Tx], jobID int64) (*rivertype.JobRow, error) {
 			return client.JobCancel(ctx, jobID)
 		})
 	})
@@ -500,7 +514,7 @@ func Test_Client(t *testing.T) {
 	t.Run("CancelRunningJobInTx", func(t *testing.T) {
 		t.Parallel()
 
-		cancelRunningJobTestHelper(t, func(ctx context.Context, dbPool *pgxpool.Pool, client *Client[pgx.Tx], jobID int64) (*rivertype.JobRow, error) {
+		cancelRunningJobTestHelper(t, nil, func(ctx context.Context, dbPool *pgxpool.Pool, client *Client[pgx.Tx], jobID int64) (*rivertype.JobRow, error) {
 			var (
 				job *rivertype.JobRow
 				err error

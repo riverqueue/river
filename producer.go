@@ -448,6 +448,8 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 			default:
 				p.Logger.DebugContext(workCtx, p.Name+": Unknown queue control action", "action", msg.Action)
 			}
+		case jobID := <-p.cancelCh:
+			p.maybeCancelJob(jobID)
 		case <-fetchLimiter.C():
 			if p.paused {
 				continue
