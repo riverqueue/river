@@ -3559,6 +3559,39 @@ func Test_Client_Maintenance(t *testing.T) {
 		}
 	})
 
+	t.Run("PeriodicJobEnqueuerUsesMiddleware", func(t *testing.T) {
+		t.Parallel()
+
+		config := newTestConfig(t, nil)
+
+		worker := &periodicJobWorker{}
+		AddWorker(config.Workers, worker)
+		config.PeriodicJobs = []*PeriodicJob{
+			NewPeriodicJob(cron.Every(time.Minute), func() (JobArgs, *InsertOpts) {
+				return periodicJobArgs{}, nil
+			}, &PeriodicJobOpts{RunOnStart: true}),
+		}
+		config.JobInsertMiddleware = []rivertype.JobInsertMiddleware{&overridableJobMiddleware{
+			insertManyFunc: func(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(ctx context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
+				for _, job := range manyParams {
+					job.EncodedArgs = []byte(`{"from": "middleware"}`)
+				}
+				return doInner(ctx)
+			},
+		}}
+
+		client, bundle := setup(t, config)
+
+		startAndWaitForQueueMaintainer(ctx, t, client)
+
+		svc := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
+		svc.TestSignals.InsertedJobs.WaitOrTimeout()
+
+		jobs, err := bundle.exec.JobGetByKindMany(ctx, []string{(periodicJobArgs{}).Kind()})
+		require.NoError(t, err)
+		require.Len(t, jobs, 1, "Expected to find exactly one job of kind: "+(periodicJobArgs{}).Kind())
+	})
+
 	t.Run("QueueCleaner", func(t *testing.T) {
 		t.Parallel()
 

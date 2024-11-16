@@ -15,6 +15,7 @@ import (
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
 	"github.com/riverqueue/river/rivershared/util/valutil"
+	"github.com/riverqueue/river/rivertype"
 )
 
 const (
@@ -32,6 +33,8 @@ func (ts *JobSchedulerTestSignals) Init() {
 	ts.NotifiedQueues.Init()
 	ts.ScheduledBatch.Init()
 }
+
+type InsertFunc func(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) ([]*rivertype.JobInsertResult, error)
 
 // NotifyInsert is a function to call to emit notifications for queues where
 // jobs were scheduled.
