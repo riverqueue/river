@@ -611,7 +611,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		{
 			periodicJobEnqueuer := maintenance.NewPeriodicJobEnqueuer(archetype, &maintenance.PeriodicJobEnqueuerConfig{
 				AdvisoryLockPrefix: config.AdvisoryLockPrefix,
-				NotifyInsert:       client.maybeNotifyInsertForQueues,
+				Insert:             client.insertMany,
 			}, driver.GetExecutor())
 			maintenanceServices = append(maintenanceServices, periodicJobEnqueuer)
 			client.testSignals.periodicJobEnqueuer = &periodicJobEnqueuer.TestSignals
@@ -1335,7 +1335,7 @@ func (c *Client[TTx]) InsertTx(ctx context.Context, tx TTx, args JobArgs, opts *
 
 func (c *Client[TTx]) insert(ctx context.Context, tx riverdriver.ExecutorTx, args JobArgs, opts *InsertOpts) (*rivertype.JobInsertResult, error) {
 	params := []InsertManyParams{{Args: args, InsertOpts: opts}}
-	results, err := c.insertMany(ctx, tx, params)
+	results, err := c.validateParamsAndInsertMany(ctx, tx, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1386,7 +1386,7 @@ func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams)
 	}
 	defer tx.Rollback(ctx)
 
-	inserted, err := c.insertMany(ctx, tx, params)
+	inserted, err := c.validateParamsAndInsertMany(ctx, tx, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1421,11 +1421,26 @@ func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams)
 // commits, and if the transaction rolls back, so too is the inserted job.
 func (c *Client[TTx]) InsertManyTx(ctx context.Context, tx TTx, params []InsertManyParams) ([]*rivertype.JobInsertResult, error) {
 	exec := c.driver.UnwrapExecutor(tx)
-	return c.insertMany(ctx, exec, params)
+	return c.validateParamsAndInsertMany(ctx, exec, params)
 }
 
-func (c *Client[TTx]) insertMany(ctx context.Context, tx riverdriver.ExecutorTx, params []InsertManyParams) ([]*rivertype.JobInsertResult, error) {
-	return c.insertManyShared(ctx, tx, params, func(ctx context.Context, insertParams []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error) {
+// validateParamsAndInsertMany is a helper method that wraps the insertMany
+// method to provide param validation and conversion prior to calling the actual
+// insertMany method. This allows insertMany to be reused by the
+// PeriodicJobEnqueuer which cannot reference top-level river package types.
+func (c *Client[TTx]) validateParamsAndInsertMany(ctx context.Context, tx riverdriver.ExecutorTx, params []InsertManyParams) ([]*rivertype.JobInsertResult, error) {
+	insertParams, err := c.insertManyParams(params)
+	if err != nil {
+		return nil, err
+	}
+
+	return c.insertMany(ctx, tx, insertParams)
+}
+
+// insertMany is a shared code path for InsertMany and InsertManyTx, also used
+// by the PeriodicJobEnqueuer.
+func (c *Client[TTx]) insertMany(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) ([]*rivertype.JobInsertResult, error) {
+	return c.insertManyShared(ctx, tx, insertParams, func(ctx context.Context, insertParams []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error) {
 		results, err := c.pilot.JobInsertMany(ctx, tx, insertParams)
 		if err != nil {
 			return nil, err
@@ -1446,14 +1461,9 @@ func (c *Client[TTx]) insertMany(ctx context.Context, tx riverdriver.ExecutorTx,
 func (c *Client[TTx]) insertManyShared(
 	ctx context.Context,
 	tx riverdriver.ExecutorTx,
-	rawParams []InsertManyParams,
+	insertParams []*rivertype.JobInsertParams,
 	execute func(context.Context, []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error),
 ) ([]*rivertype.JobInsertResult, error) {
-	insertParams, err := c.insertManyParams(rawParams)
-	if err != nil {
-		return nil, err
-	}
-
 	doInner := func(ctx context.Context) ([]*rivertype.JobInsertResult, error) {
 		finalInsertParams := sliceutil.Map(insertParams, func(params *rivertype.JobInsertParams) *riverdriver.JobInsertFastParams {
 			return (*riverdriver.JobInsertFastParams)(params)
@@ -1584,7 +1594,12 @@ func (c *Client[TTx]) InsertManyFastTx(ctx context.Context, tx TTx, params []Ins
 }
 
 func (c *Client[TTx]) insertManyFast(ctx context.Context, tx riverdriver.ExecutorTx, params []InsertManyParams) (int, error) {
-	results, err := c.insertManyShared(ctx, tx, params, func(ctx context.Context, insertParams []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error) {
+	insertParams, err := c.insertManyParams(params)
+	if err != nil {
+		return 0, err
+	}
+
+	results, err := c.insertManyShared(ctx, tx, insertParams, func(ctx context.Context, insertParams []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error) {
 		count, err := tx.JobInsertFastManyNoReturning(ctx, insertParams)
 		if err != nil {
 			return nil, err

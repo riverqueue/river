@@ -21,16 +21,14 @@ var ErrNoJobToInsert = errors.New("a nil job was returned, nothing to insert")
 
 // Test-only properties.
 type PeriodicJobEnqueuerTestSignals struct {
-	EnteredLoop    testsignal.TestSignal[struct{}] // notifies when the enqueuer finishes start up and enters its initial run loop
-	InsertedJobs   testsignal.TestSignal[struct{}] // notifies when a batch of jobs is inserted
-	NotifiedQueues testsignal.TestSignal[[]string] // notifies when queues are sent an insert notification
-	SkippedJob     testsignal.TestSignal[struct{}] // notifies when a job is skipped because of nil JobInsertParams
+	EnteredLoop  testsignal.TestSignal[struct{}] // notifies when the enqueuer finishes start up and enters its initial run loop
+	InsertedJobs testsignal.TestSignal[struct{}] // notifies when a batch of jobs is inserted
+	SkippedJob   testsignal.TestSignal[struct{}] // notifies when a job is skipped because of nil JobInsertParams
 }
 
 func (ts *PeriodicJobEnqueuerTestSignals) Init() {
 	ts.EnteredLoop.Init()
 	ts.InsertedJobs.Init()
-	ts.NotifiedQueues.Init()
 	ts.SkippedJob.Init()
 }
 
@@ -59,9 +57,8 @@ func (j *PeriodicJob) mustValidate() *PeriodicJob {
 type PeriodicJobEnqueuerConfig struct {
 	AdvisoryLockPrefix int32
 
-	// NotifyInsert is a function to call to emit notifications for queues
-	// where jobs were scheduled.
-	NotifyInsert NotifyInsertFunc
+	// Insert is the function to call to insert jobs into the database.
+	Insert InsertFunc
 
 	// PeriodicJobs are the periodic jobs with which to configure the enqueuer.
 	PeriodicJobs []*PeriodicJob
@@ -104,7 +101,7 @@ func NewPeriodicJobEnqueuer(archetype *baseservice.Archetype, config *PeriodicJo
 	svc := baseservice.Init(archetype, &PeriodicJobEnqueuer{
 		Config: (&PeriodicJobEnqueuerConfig{
 			AdvisoryLockPrefix: config.AdvisoryLockPrefix,
-			NotifyInsert:       config.NotifyInsert,
+			Insert:             config.Insert,
 			PeriodicJobs:       config.PeriodicJobs,
 		}).mustValidate(),
 
@@ -223,7 +220,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 			defer s.mu.RUnlock()
 
 			var (
-				insertParamsMany []*riverdriver.JobInsertFastParams
+				insertParamsMany []*rivertype.JobInsertParams
 				now              = s.Time.NowUTC()
 			)
 
@@ -269,7 +266,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 		for {
 			select {
 			case <-timerUntilNextRun.C:
-				var insertParamsMany []*riverdriver.JobInsertFastParams
+				var insertParamsMany []*rivertype.JobInsertParams
 
 				now := s.Time.NowUTC()
 
@@ -329,7 +326,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany []*riverdriver.JobInsertFastParams) {
+func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany []*rivertype.JobInsertParams) {
 	if len(insertParamsMany) == 0 {
 		return
 	}
@@ -341,28 +338,13 @@ func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany 
 	}
 	defer tx.Rollback(ctx)
 
-	queues := make([]string, 0, len(insertParamsMany))
-
 	if len(insertParamsMany) > 0 {
-		results, err := tx.JobInsertFastMany(ctx, insertParamsMany)
+		_, err := s.Config.Insert(ctx, tx, insertParamsMany)
 		if err != nil {
 			s.Logger.ErrorContext(ctx, s.Name+": Error inserting periodic jobs",
 				"error", err.Error(), "num_jobs", len(insertParamsMany))
 			return
 		}
-		for _, result := range results {
-			if !result.UniqueSkippedAsDuplicate {
-				queues = append(queues, result.Job.Queue)
-			}
-		}
-	}
-
-	if len(queues) > 0 {
-		if err := s.Config.NotifyInsert(ctx, tx, queues); err != nil {
-			s.Logger.ErrorContext(ctx, s.Name+": Error notifying insert", "error", err.Error())
-			return
-		}
-		s.TestSignals.NotifiedQueues.Signal(queues)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -373,7 +355,7 @@ func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany 
 	s.TestSignals.InsertedJobs.Signal(struct{}{})
 }
 
-func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, constructorFunc func() (*rivertype.JobInsertParams, error), scheduledAt time.Time) (*riverdriver.JobInsertFastParams, bool) {
+func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, constructorFunc func() (*rivertype.JobInsertParams, error), scheduledAt time.Time) (*rivertype.JobInsertParams, bool) {
 	insertParams, err := constructorFunc()
 	if err != nil {
 		if errors.Is(err, ErrNoJobToInsert) {
@@ -389,7 +371,7 @@ func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, c
 		insertParams.ScheduledAt = &scheduledAt
 	}
 
-	return (*riverdriver.JobInsertFastParams)(insertParams), true
+	return insertParams, true
 }
 
 const periodicJobEnqueuerVeryLongDuration = 24 * time.Hour
