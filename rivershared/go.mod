@@ -5,6 +5,7 @@ go 1.23.0
 toolchain go1.24.1
 
 require (
+	github.com/google/uuid v1.6.0
 	github.com/riverqueue/river v0.19.0
 	github.com/riverqueue/river/riverdriver v0.19.0
 	github.com/riverqueue/river/rivertype v0.19.0
