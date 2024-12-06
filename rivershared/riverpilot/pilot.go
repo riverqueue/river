@@ -3,6 +3,7 @@ package riverpilot
 import (
 	"context"
 
+	"github.com/google/uuid"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivertype"
@@ -13,6 +14,13 @@ import (
 // tracks closely to the underlying driver's API, but may add additional
 // functionality or logic wrapping the queries.
 type Pilot interface {
+	JobGetAvailable(
+		ctx context.Context,
+		exec riverdriver.Executor,
+		state ProducerState,
+		params *riverdriver.JobGetAvailableParams,
+	) ([]*rivertype.JobRow, error)
+
 	JobInsertMany(
 		ctx context.Context,
 		tx riverdriver.ExecutorTx,
@@ -22,4 +30,16 @@ type Pilot interface {
 	JobSetStateIfRunningMany(ctx context.Context, tx riverdriver.ExecutorTx, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
 
 	PilotInit(archetype *baseservice.Archetype)
+
+	ProducerKeepAlive(ctx context.Context, exec riverdriver.Executor, params *riverdriver.ProducerKeepAliveParams) error
+
+	// ProducerStateInit is called when a producer is started. It should return
+	// a new state object that will be used to track the producer's state.
+	ProducerStateInit(producerID uuid.UUID, queue string) ProducerState
+
+	ProducerShutdown(ctx context.Context, exec riverdriver.Executor, producerID uuid.UUID) error
+}
+
+type ProducerState interface {
+	JobFinish(job *rivertype.JobRow)
 }
