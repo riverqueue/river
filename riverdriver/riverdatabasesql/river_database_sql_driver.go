@@ -151,7 +151,7 @@ func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobD
 
 func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
 	jobs, err := dbsqlc.New().JobGetAvailable(ctx, e.dbtx, &dbsqlc.JobGetAvailableParams{
-		AttemptedBy: params.AttemptedBy,
+		AttemptedBy: params.ClientID,
 		Max:         int32(min(params.Max, math.MaxInt32)), //nolint:gosec
 		Now:         params.Now,
 		Queue:       params.Queue,

@@ -18,6 +18,7 @@ import (
 	"io/fs"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -26,8 +27,9 @@ const AllQueuesString = "*"
 const MigrationLineMain = "main"
 
 var (
-	ErrClosedPool     = errors.New("underlying driver pool is closed")
-	ErrNotImplemented = errors.New("driver does not implement this functionality")
+	ErrClosedPool       = errors.New("underlying driver pool is closed")
+	ErrNotImplemented   = errors.New("driver does not implement this functionality")
+	ErrRetryTransaction = errors.New("expected transaction collision, retry required")
 )
 
 // Driver provides a database driver for use with river.Client.
@@ -222,10 +224,11 @@ type JobDeleteBeforeParams struct {
 }
 
 type JobGetAvailableParams struct {
-	AttemptedBy string
-	Max         int
-	Now         *time.Time
-	Queue       string
+	ClientID   string
+	Max        int
+	Now        *time.Time
+	Queue      string
+	ProducerID uuid.UUID
 }
 
 type JobGetByKindAndUniquePropertiesParams struct {
@@ -490,6 +493,12 @@ type Migration struct {
 type NotifyManyParams struct {
 	Payload []string
 	Topic   string
+}
+
+type ProducerKeepAliveParams struct {
+	ID                    uuid.UUID
+	Queue                 string
+	StaleUpdatedAtHorizon time.Time
 }
 
 type QueueCreateOrSetUpdatedAtParams struct {

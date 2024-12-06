@@ -873,6 +873,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 
 		for _, producer := range c.producersByQueueName {
 			if err := producer.StartWorkContext(fetchCtx, workCtx); err != nil {
+				workCancel(err)
 				startstop.StopAllParallel(producersAsServices()...)
 				workCancel(err)
 				stopServicesOnError()
@@ -1846,23 +1847,24 @@ func (c *Client[TTx]) validateJobArgs(args JobArgs) error {
 }
 
 func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) *producer {
-	producer := newProducer(&c.baseService.Archetype, c.driver.GetExecutor(), &producerConfig{
-		ClientID:               c.config.ID,
-		Completer:              c.completer,
-		ErrorHandler:           c.config.ErrorHandler,
-		FetchCooldown:          c.config.FetchCooldown,
-		FetchPollInterval:      c.config.FetchPollInterval,
-		HookLookupByJob:        c.hookLookupByJob,
-		HookLookupGlobal:       c.hookLookupGlobal,
-		JobTimeout:             c.config.JobTimeout,
-		MaxWorkers:             queueConfig.MaxWorkers,
-		MiddlewareLookupGlobal: c.middlewareLookupGlobal,
-		Notifier:               c.notifier,
-		Queue:                  queueName,
-		QueueEventCallback:     c.subscriptionManager.distributeQueueEvent,
-		RetryPolicy:            c.config.RetryPolicy,
-		SchedulerInterval:      c.config.schedulerInterval,
-		Workers:                c.config.Workers,
+	producer := newProducer(&c.baseService.Archetype, c.driver.GetExecutor(), c.pilot, &producerConfig{
+		ClientID:                     c.config.ID,
+		Completer:                    c.completer,
+		ErrorHandler:                 c.config.ErrorHandler,
+		FetchCooldown:                c.config.FetchCooldown,
+		FetchPollInterval:            c.config.FetchPollInterval,
+		HookLookupByJob:              c.hookLookupByJob,
+		HookLookupGlobal:             c.hookLookupGlobal,
+		JobTimeout:                   c.config.JobTimeout,
+		MaxWorkers:                   queueConfig.MaxWorkers,
+		MiddlewareLookupGlobal:       c.middlewareLookupGlobal,
+		Notifier:                     c.notifier,
+		Queue:                        queueName,
+		QueueEventCallback:           c.subscriptionManager.distributeQueueEvent,
+		RetryPolicy:                  c.config.RetryPolicy,
+		SchedulerInterval:            c.config.schedulerInterval,
+		StaleProducerRetentionPeriod: 5 * time.Minute,
+		Workers:                      c.config.Workers,
 	})
 	c.producersByQueueName[queueName] = producer
 	return producer
@@ -2173,6 +2175,9 @@ type QueueBundle struct {
 // Add adds a new queue to the client. If the client is already started, a
 // producer for the queue is started. Context is inherited from the one given to
 // Client.Start.
+//
+// TODO: there is no way for this to work at runtime using a separate pro queue
+// config, unless we put pro configs like concurrency within QueueConfig.
 func (b *QueueBundle) Add(queueName string, queueConfig QueueConfig) error {
 	if err := queueConfig.validate(queueName); err != nil {
 		return err
