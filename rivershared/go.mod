@@ -5,6 +5,7 @@ go 1.22.0
 toolchain go1.23.5
 
 require (
+	github.com/google/uuid v1.6.0
 	github.com/riverqueue/river v0.18.0
 	github.com/riverqueue/river/riverdriver v0.18.0
 	github.com/riverqueue/river/rivertype v0.18.0
@@ -15,7 +16,6 @@ require (
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/kr/text v0.2.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
