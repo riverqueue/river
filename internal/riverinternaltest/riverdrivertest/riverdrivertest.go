@@ -497,9 +497,9 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
 
 			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
-				AttemptedBy: clientID,
-				Max:         100,
-				Queue:       rivercommon.QueueDefault,
+				ClientID: clientID,
+				Max:      100,
+				Queue:    rivercommon.QueueDefault,
 			})
 			require.NoError(t, err)
 			require.Len(t, jobRows, 1)
@@ -518,9 +518,9 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			// Two rows inserted but only one found because of the added limit.
 			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
-				AttemptedBy: clientID,
-				Max:         1,
-				Queue:       rivercommon.QueueDefault,
+				ClientID: clientID,
+				Max:      1,
+				Queue:    rivercommon.QueueDefault,
 			})
 			require.NoError(t, err)
 			require.Len(t, jobRows, 1)
@@ -537,9 +537,9 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			// Job is in a non-default queue so it's not found.
 			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
-				AttemptedBy: clientID,
-				Max:         100,
-				Queue:       rivercommon.QueueDefault,
+				ClientID: clientID,
+				Max:      100,
+				Queue:    rivercommon.QueueDefault,
 			})
 			require.NoError(t, err)
 			require.Empty(t, jobRows)
@@ -556,9 +556,9 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			// Job is scheduled a while from now so it's not found.
 			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
-				AttemptedBy: clientID,
-				Max:         100,
-				Queue:       rivercommon.QueueDefault,
+				ClientID: clientID,
+				Max:      100,
+				Queue:    rivercommon.QueueDefault,
 			})
 			require.NoError(t, err)
 			require.Empty(t, jobRows)
@@ -580,10 +580,10 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			})
 
 			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
-				AttemptedBy: clientID,
-				Max:         100,
-				Now:         ptrutil.Ptr(now),
-				Queue:       rivercommon.QueueDefault,
+				ClientID: clientID,
+				Max:      100,
+				Now:      ptrutil.Ptr(now),
+				Queue:    rivercommon.QueueDefault,
 			})
 			require.NoError(t, err)
 			require.Len(t, jobRows, 1)
@@ -603,9 +603,9 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			}
 
 			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
-				AttemptedBy: clientID,
-				Max:         2,
-				Queue:       rivercommon.QueueDefault,
+				ClientID: clientID,
+				Max:      2,
+				Queue:    rivercommon.QueueDefault,
 			})
 			require.NoError(t, err)
 			require.Len(t, jobRows, 2, "expected to fetch exactly 2 jobs")
@@ -622,9 +622,9 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			// Should fetch the one remaining job on the next attempt:
 			jobRows, err = exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
-				AttemptedBy: clientID,
-				Max:         1,
-				Queue:       rivercommon.QueueDefault,
+				ClientID: clientID,
+				Max:      1,
+				Queue:    rivercommon.QueueDefault,
 			})
 			require.NoError(t, err)
 			require.NoError(t, err)
@@ -2910,7 +2910,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 					Name:             queue.Name,
 				})
 				require.NoError(t, err)
-				require.Equal(t, []byte(`{"baz": "qux"}`), updatedQueue.Metadata)
+				require.JSONEq(t, `{"baz": "qux"}`, string(updatedQueue.Metadata))
 			})
 
 			t.Run("DoesNotUpdateFieldsIfDoUpdateIsFalse", func(t *testing.T) {
@@ -2926,7 +2926,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 					Name:             queue.Name,
 				})
 				require.NoError(t, err)
-				require.Equal(t, []byte(`{"foo": "bar"}`), updatedQueue.Metadata)
+				require.JSONEq(t, `{"foo": "bar"}`, string(updatedQueue.Metadata))
 			})
 		})
 	})

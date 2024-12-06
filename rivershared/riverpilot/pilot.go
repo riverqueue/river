@@ -16,6 +16,13 @@ import (
 // This should be considered a River internal API and its stability is not
 // guaranteed. DO NOT USE.
 type Pilot interface {
+	JobGetAvailable(
+		ctx context.Context,
+		exec riverdriver.Executor,
+		state ProducerState,
+		params *riverdriver.JobGetAvailableParams,
+	) ([]*rivertype.JobRow, error)
+
 	JobInsertMany(
 		ctx context.Context,
 		tx riverdriver.ExecutorTx,
@@ -25,4 +32,26 @@ type Pilot interface {
 	JobSetStateIfRunningMany(ctx context.Context, tx riverdriver.ExecutorTx, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
 
 	PilotInit(archetype *baseservice.Archetype)
+
+	// ProducerInit is called when a producer is started. It should return the ID
+	// of the new producer, a new state object that will be used to track the
+	// producer's state, and an error if the producer could not be initialized.
+	ProducerInit(ctx context.Context, exec riverdriver.Executor, params *ProducerInitParams) (int64, ProducerState, error)
+
+	ProducerKeepAlive(ctx context.Context, exec riverdriver.Executor, params *riverdriver.ProducerKeepAliveParams) error
+
+	ProducerShutdown(ctx context.Context, exec riverdriver.Executor, producerID int64, state ProducerState) error
+
+	QueueMetadataChanged(ctx context.Context, exec riverdriver.Executor, state ProducerState, metadata []byte) error
+}
+
+type ProducerState interface {
+	JobFinish(job *rivertype.JobRow)
+}
+
+type ProducerInitParams struct {
+	ClientID      string
+	ProducerID    int64
+	Queue         string
+	QueueMetadata []byte
 }
