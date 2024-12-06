@@ -6,9 +6,11 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
@@ -16,16 +18,19 @@ import (
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
+	"github.com/riverqueue/river/rivershared/util/timeutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
 const (
-	queuePollIntervalDefault   = 2 * time.Second
-	queueReportIntervalDefault = 10 * time.Minute
+	producerReportIntervalDefault = time.Minute
+	queuePollIntervalDefault      = 2 * time.Second
+	queueReportIntervalDefault    = 10 * time.Minute
 )
 
 // Test-only properties.
@@ -33,6 +38,7 @@ type producerTestSignals struct {
 	DeletedExpiredQueueRecords testsignal.TestSignal[struct{}] // notifies when the producer deletes expired queue records
 	Paused                     testsignal.TestSignal[struct{}] // notifies when the producer is paused
 	PolledQueueConfig          testsignal.TestSignal[struct{}] // notifies when the producer polls for queue settings
+	ReportedProducerStatus     testsignal.TestSignal[struct{}] // notifies when the producer reports its own status
 	ReportedQueueStatus        testsignal.TestSignal[struct{}] // notifies when the producer reports queue status
 	Resumed                    testsignal.TestSignal[struct{}] // notifies when the producer is resumed
 	StartedExecutors           testsignal.TestSignal[struct{}] // notifies when runOnce finishes a pass
@@ -43,6 +49,7 @@ func (ts *producerTestSignals) Init() {
 	ts.Paused.Init()
 	ts.PolledQueueConfig.Init()
 	ts.ReportedQueueStatus.Init()
+	ts.ReportedProducerStatus.Init()
 	ts.Resumed.Init()
 	ts.StartedExecutors.Init()
 }
@@ -70,6 +77,9 @@ type producerConfig struct {
 	// Notifier is a notifier for subscribing to new job inserts and job
 	// control. If nil, the producer will operate in poll-only mode.
 	Notifier *notifier.Notifier
+	// ProducerReportInterval is the amount of time between periodic reports
+	// of the producer status.
+	ProducerReportInterval time.Duration
 
 	Queue string
 	// QueueEventCallback gets called when a queue's config changes (such as
@@ -82,10 +92,11 @@ type producerConfig struct {
 	QueuePollInterval time.Duration
 	// QueueReportInterval is the amount of time between periodic reports
 	// of the queue status.
-	QueueReportInterval time.Duration
-	RetryPolicy         ClientRetryPolicy
-	SchedulerInterval   time.Duration
-	Workers             *Workers
+	QueueReportInterval          time.Duration
+	RetryPolicy                  ClientRetryPolicy
+	SchedulerInterval            time.Duration
+	StaleProducerRetentionPeriod time.Duration
+	Workers                      *Workers
 }
 
 func (c *producerConfig) mustValidate() *producerConfig {
@@ -107,6 +118,9 @@ func (c *producerConfig) mustValidate() *producerConfig {
 	if c.MaxWorkers == 0 {
 		panic("producerConfig.MaxWorkers is required")
 	}
+	if c.ProducerReportInterval == 0 {
+		c.ProducerReportInterval = producerReportIntervalDefault
+	}
 	if c.Queue == "" {
 		panic("producerConfig.Queue is required")
 	}
@@ -127,6 +141,9 @@ func (c *producerConfig) mustValidate() *producerConfig {
 	}
 	if c.SchedulerInterval == 0 {
 		panic("producerConfig.SchedulerInterval is required")
+	}
+	if c.StaleProducerRetentionPeriod <= 0 {
+		panic("producerConfig.StaleProducerRetentionPeriod must be greater than zero")
 	}
 	if c.Workers == nil {
 		panic("producerConfig.Workers is required")
@@ -151,8 +168,11 @@ type producer struct {
 
 	completer    jobcompleter.JobCompleter
 	config       *producerConfig
+	id           uuid.UUID
 	exec         riverdriver.Executor
 	errorHandler ErrorHandler
+	state        riverpilot.ProducerState
+	pilot        riverpilot.Pilot
 	workers      *Workers
 
 	// Receives job IDs to cancel. Written by notifier goroutine, only read from
@@ -183,7 +203,7 @@ type producer struct {
 	testSignals    producerTestSignals
 }
 
-func newProducer(archetype *baseservice.Archetype, exec riverdriver.Executor, config *producerConfig) *producer {
+func newProducer(archetype *baseservice.Archetype, exec riverdriver.Executor, pilot riverpilot.Pilot, config *producerConfig) *producer {
 	if archetype == nil {
 		panic("archetype is required")
 	}
@@ -198,8 +218,10 @@ func newProducer(archetype *baseservice.Archetype, exec riverdriver.Executor, co
 		config:         config.mustValidate(),
 		exec:           exec,
 		errorHandler:   config.ErrorHandler,
+		id:             uuid.New(),
 		jobResultCh:    make(chan *rivertype.JobRow, config.MaxWorkers),
 		jobTimeout:     config.JobTimeout,
+		pilot:          pilot,
 		queueControlCh: make(chan *jobControlPayload, 100),
 		retryPolicy:    config.RetryPolicy,
 		workers:        config.Workers,
@@ -218,9 +240,9 @@ func (p *producer) Start(ctx context.Context) error {
 }
 
 func (p *producer) Stop() {
-	p.Logger.Debug(p.Name + ": Stopping")
+	p.Logger.Debug(p.Name+": Stopping", slog.String("queue", p.config.Queue), slog.String("id", p.id.String()))
 	p.BaseStartStop.Stop()
-	p.Logger.Debug(p.Name + ": Stop returned")
+	p.Logger.Debug(p.Name+": Stop returned", slog.String("queue", p.config.Queue), slog.String("id", p.id.String()))
 }
 
 // Start starts the producer. It backgrounds a goroutine which is stopped when
@@ -235,6 +257,9 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 	if !shouldStart {
 		return nil
 	}
+
+	// TODO: how does this handle being reinitialized after stop/start?
+	p.state = p.pilot.ProducerStateInit(p.id, p.config.Queue)
 
 	queue, err := func() (*rivertype.Queue, error) {
 		ctx, cancel := context.WithTimeout(fetchCtx, 10*time.Second)
@@ -320,11 +345,23 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 			defer controlSub.Unlisten(fetchCtx)
 		}
 
-		go p.heartbeatLogLoop(fetchCtx)
-		go p.reportQueueStatusLoop(fetchCtx)
-		p.fetchAndRunLoop(fetchCtx, workCtx, fetchLimiter)
+		var subroutineWg sync.WaitGroup
+		subroutineWg.Add(3)
+		subroutineCtx, cancelSubroutines := context.WithCancelCause(context.WithoutCancel(fetchCtx))
+		go p.heartbeatLogLoop(subroutineCtx, &subroutineWg)
+		go p.reportQueueStatusLoop(subroutineCtx, &subroutineWg)
+		go p.reportProducerStatusLoop(subroutineCtx, &subroutineWg)
 
+		p.fetchAndRunLoop(fetchCtx, workCtx, fetchLimiter)
+		p.Logger.Debug(p.Name+": Entering shutdown loop", slog.String("queue", p.config.Queue), slog.String("id", p.id.String()))
 		p.executorShutdownLoop()
+
+		p.Logger.Debug(p.Name+": Shutdown loop exited, awaiting subroutines", slog.String("queue", p.config.Queue), slog.String("id", p.id.String()))
+		cancelSubroutines(errors.New("producer stopped"))
+		subroutineWg.Wait()
+		p.Logger.Debug(p.Name+": Shutdown subroutines completed, finalizing", slog.String("queue", p.config.Queue), slog.String("id", p.id.String()))
+
+		p.finalizeShutdown(context.WithoutCancel(fetchCtx))
 	}()
 
 	return nil
@@ -463,7 +500,7 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 			default:
 			}
 		case result := <-p.jobResultCh:
-			p.removeActiveJob(result.ID)
+			p.removeActiveJob(result)
 			if p.fetchWhenSlotsAreAvailable {
 				// If we missed a fetch because all worker slots were full, or if we
 				// fetched the maximum number of jobs on the last attempt, get a little
@@ -505,7 +542,7 @@ func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan pr
 			}
 			return
 		case result := <-p.jobResultCh:
-			p.removeActiveJob(result.ID)
+			p.removeActiveJob(result)
 		case jobID := <-p.cancelCh:
 			p.maybeCancelJob(jobID)
 		}
@@ -520,7 +557,39 @@ func (p *producer) executorShutdownLoop() {
 			break
 		}
 		result := <-p.jobResultCh
-		p.removeActiveJob(result.ID)
+		p.removeActiveJob(result)
+	}
+}
+
+func (p *producer) finalizeShutdown(baseCtx context.Context) {
+	p.Logger.Debug(p.Name + ": Finalizing shutdown")
+
+	for attempt := 1; attempt <= 5; attempt++ {
+		timeout := min(time.Second*time.Duration(attempt*attempt), 10*time.Second)
+
+		ctx, cancel := context.WithTimeout(baseCtx, timeout)
+		defer cancel()
+
+		if err := p.pilot.ProducerShutdown(baseCtx, p.exec, p.id); err != nil {
+			p.Logger.ErrorContext(ctx, p.Name+": Error shutting down producer with pilot", slog.String("err", err.Error()))
+			// A cancelled context will never succeed, return immediately.
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+
+			// A closed pool will never succeed, return immediately.
+			if errors.Is(err, riverdriver.ErrClosedPool) {
+				return
+			}
+
+			sleepDuration := serviceutil.ExponentialBackoff(p.Rand, attempt, serviceutil.MaxAttemptsBeforeResetDefault)
+			p.Logger.ErrorContext(baseCtx, p.Name+": Producer shutdown error (will retry after sleep)",
+				"attempt", attempt, "err", err, "sleep_duration", sleepDuration, "timeout", timeout)
+			serviceutil.CancellableSleep(baseCtx, sleepDuration)
+			continue
+		}
+
+		return
 	}
 }
 
@@ -529,10 +598,11 @@ func (p *producer) addActiveJob(id int64, executor *jobExecutor) {
 	p.activeJobs[id] = executor
 }
 
-func (p *producer) removeActiveJob(id int64) {
-	delete(p.activeJobs, id)
+func (p *producer) removeActiveJob(job *rivertype.JobRow) {
+	delete(p.activeJobs, job.ID)
 	p.numJobsActive.Add(-1)
 	p.numJobsRan.Add(1)
+	p.state.JobFinish(job)
 }
 
 func (p *producer) maybeCancelJob(id int64) {
@@ -551,21 +621,28 @@ func (p *producer) dispatchWork(workCtx context.Context, count int, fetchResultC
 	// risk of shutting down when we had already fetched jobs in the database,
 	// leaving those jobs stranded. We'd then potentially have to release them
 	// back to the queue.
-	jobs, err := p.exec.JobGetAvailable(context.WithoutCancel(workCtx), &riverdriver.JobGetAvailableParams{
-		AttemptedBy: p.config.ClientID,
-		Max:         count,
-		Queue:       p.config.Queue,
+	ctx := context.WithoutCancel(workCtx)
+
+	jobs, err := p.pilot.JobGetAvailable(ctx, p.exec, p.state, &riverdriver.JobGetAvailableParams{
+		ClientID:   p.config.ClientID,
+		Max:        count,
+		Queue:      p.config.Queue,
+		ProducerID: p.id,
 	})
 	if err != nil {
+		p.Logger.Error(p.Name+": Error fetching jobs", slog.String("err", err.Error()), slog.String("queue", p.config.Queue))
 		fetchResultCh <- producerFetchResult{err: err}
 		return
 	}
+
 	fetchResultCh <- producerFetchResult{jobs: jobs}
 }
 
 // Periodically logs an informational log line giving some insight into the
 // current state of the producer.
-func (p *producer) heartbeatLogLoop(ctx context.Context) {
+func (p *producer) heartbeatLogLoop(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	type jobCount struct {
@@ -680,7 +757,9 @@ func (p *producer) fetchQueueSettings(ctx context.Context) (*rivertype.Queue, er
 	return p.exec.QueueGet(ctx, p.config.Queue)
 }
 
-func (p *producer) reportQueueStatusLoop(ctx context.Context) {
+func (p *producer) reportQueueStatusLoop(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	serviceutil.CancellableSleep(ctx, randutil.DurationBetween(0, time.Second))
 	reportTicker := time.NewTicker(p.config.QueueReportInterval)
 	for {
@@ -711,6 +790,45 @@ func (p *producer) reportQueueStatusOnce(ctx context.Context) {
 		return
 	}
 	p.testSignals.ReportedQueueStatus.Signal(struct{}{})
+}
+
+func (p *producer) reportProducerStatusLoop(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	serviceutil.CancellableSleep(ctx, randutil.DurationBetween(p.Rand, 0, time.Second))
+	reportTicker := timeutil.NewTickerWithInitialTick(ctx, p.config.ProducerReportInterval)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-reportTicker.C:
+			p.reportProducerStatusOnce(ctx)
+		}
+	}
+}
+
+func (p *producer) reportProducerStatusOnce(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	p.Logger.DebugContext(ctx, p.Name+": Reporting producer status", slog.String("id", p.id.String()), slog.String("queue", p.config.Queue))
+	err := p.pilot.ProducerKeepAlive(ctx, p.exec, &riverdriver.ProducerKeepAliveParams{
+		ID:               p.id,
+		Queue:            p.config.Queue,
+		UpdatedAtHorizon: p.Time.NowUTC().Add(-p.config.StaleProducerRetentionPeriod),
+	})
+	if err != nil && errors.Is(context.Cause(ctx), startstop.ErrStop) {
+		return
+	}
+	if err != nil {
+		p.Logger.ErrorContext(ctx, p.Name+": Producer status update, error updating in database",
+			slog.String("id", p.id.String()),
+			slog.String("queue", p.config.Queue),
+			slog.String("err", err.Error()),
+		)
+		return
+	}
+	p.testSignals.ReportedProducerStatus.Signal(struct{}{})
 }
 
 type producerFetchResult struct {
