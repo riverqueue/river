@@ -52,10 +52,7 @@ const MaxAttemptsBeforeResetDefault = 10
 // +/- 10% random jitter. Sleep is cancelled if the given context is cancelled.
 //
 // Attempt should start at one for the first backoff/failure.
-//
-// TODO: When we drop Go 1.21 support, switch to `math/rand/v2` and kill the
-// `rand.Rand` argument.
-func ExponentialBackoff(rand *rand.Rand, attempt, maxAttemptsBeforeReset int) time.Duration {
+func ExponentialBackoff(attempt, maxAttemptsBeforeReset int) time.Duration {
 	retrySeconds := exponentialBackoffSecondsWithoutJitter(attempt, maxAttemptsBeforeReset)
 
 	// Jitter number of seconds +/- 10%.

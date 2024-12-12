@@ -202,7 +202,7 @@ func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
 			}
 
 			numErrors++
-			sleepDuration := serviceutil.ExponentialBackoff(e.Rand, numErrors, serviceutil.MaxAttemptsBeforeResetDefault)
+			sleepDuration := serviceutil.ExponentialBackoff(numErrors, serviceutil.MaxAttemptsBeforeResetDefault)
 			e.Logger.ErrorContext(ctx, e.Name+": Error attempting to elect", "client_id", e.config.ClientID, "err", err, "num_errors", numErrors, "sleep_duration", sleepDuration)
 			serviceutil.CancellableSleep(ctx, sleepDuration)
 			continue
@@ -221,7 +221,7 @@ func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
 		// of resignations. May want to make this reusable & cancel it when retrying?
 		// We may also want to consider a specialized ticker utility that can tick
 		// within a random range.
-		case <-serviceutil.CancellableSleepC(ctx, randutil.DurationBetween(e.Rand, e.config.ElectInterval, e.config.ElectInterval+e.config.ElectIntervalJitter)):
+		case <-serviceutil.CancellableSleepC(ctx, randutil.DurationBetween(e.config.ElectInterval, e.config.ElectInterval+e.config.ElectIntervalJitter)):
 			if ctx.Err() != nil { // context done
 				return ctx.Err()
 			}
@@ -229,7 +229,7 @@ func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
 		case <-e.leadershipNotificationChan:
 			// Somebody just resigned, try to win the next election after a very
 			// short random interval (to prevent all clients from bidding at once).
-			serviceutil.CancellableSleep(ctx, randutil.DurationBetween(e.Rand, 0, 50*time.Millisecond))
+			serviceutil.CancellableSleep(ctx, randutil.DurationBetween(0, 50*time.Millisecond))
 		}
 	}
 }
@@ -342,7 +342,7 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 				return err
 			}
 
-			sleepDuration := serviceutil.ExponentialBackoff(e.Rand, numErrors, serviceutil.MaxAttemptsBeforeResetDefault)
+			sleepDuration := serviceutil.ExponentialBackoff(numErrors, serviceutil.MaxAttemptsBeforeResetDefault)
 			e.Logger.Error(e.Name+": Error attempting reelection",
 				"client_id", e.config.ClientID, "err", err, "sleep_duration", sleepDuration)
 			serviceutil.CancellableSleep(ctx, sleepDuration)
@@ -383,7 +383,7 @@ func (e *Elector) attemptResignLoop(ctx context.Context) {
 		if err := e.attemptResign(ctx, attempt); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Error attempting to resign", "attempt", attempt, "client_id", e.config.ClientID, "err", err)
 
-			sleepDuration := serviceutil.ExponentialBackoff(e.Rand, attempt, serviceutil.MaxAttemptsBeforeResetDefault)
+			sleepDuration := serviceutil.ExponentialBackoff(attempt, serviceutil.MaxAttemptsBeforeResetDefault)
 			e.Logger.ErrorContext(ctx, e.Name+": Error attempting to resign",
 				"client_id", e.config.ClientID, "err", err, "num_errors", attempt, "sleep_duration", sleepDuration)
 			serviceutil.CancellableSleep(ctx, sleepDuration)

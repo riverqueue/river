@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-
-	"github.com/riverqueue/river/rivershared/util/randutil"
 )
 
 func TestInit(t *testing.T) {
@@ -29,7 +27,6 @@ type MyService struct {
 func archetype() *Archetype {
 	return &Archetype{
 		Logger: slog.New(slog.NewTextHandler(os.Stdout, nil)),
-		Rand:   randutil.NewCryptoSeededConcurrentSafeRand(),
 		Time:   &UnStubbableTimeGenerator{},
 	}
 }

@@ -548,7 +548,7 @@ func withRetries[T any](logCtx context.Context, baseService *baseservice.BaseSer
 			}
 
 			lastErr = err
-			sleepDuration := serviceutil.ExponentialBackoff(baseService.Rand, attempt, serviceutil.MaxAttemptsBeforeResetDefault)
+			sleepDuration := serviceutil.ExponentialBackoff(attempt, serviceutil.MaxAttemptsBeforeResetDefault)
 			baseService.Logger.ErrorContext(logCtx, baseService.Name+": Completer error (will retry after sleep)",
 				"attempt", attempt, "err", err, "sleep_duration", sleepDuration, "timeout", timeout)
 			if !disableSleep {

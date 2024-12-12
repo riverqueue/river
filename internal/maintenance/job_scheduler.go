@@ -199,7 +199,7 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 			break
 		}
 
-		serviceutil.CancellableSleep(ctx, randutil.DurationBetween(s.Rand, BatchBackoffMin, BatchBackoffMax))
+		serviceutil.CancellableSleep(ctx, randutil.DurationBetween(BatchBackoffMin, BatchBackoffMax))
 	}
 
 	return res, nil

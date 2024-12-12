@@ -123,7 +123,7 @@ func (s *queueMaintainerServiceBase) StaggerStart(ctx context.Context) {
 		return
 	}
 
-	serviceutil.CancellableSleep(ctx, randutil.DurationBetween(s.Rand, 0*time.Second, 1*time.Second))
+	serviceutil.CancellableSleep(ctx, randutil.DurationBetween(0*time.Second, 1*time.Second))
 }
 
 // StaggerStartupDisable sets whether the short staggered sleep on start up

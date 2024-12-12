@@ -127,7 +127,7 @@ func (n *Notifier) Start(ctx context.Context) error {
 					break
 				}
 
-				sleepDuration := serviceutil.ExponentialBackoff(n.Rand, attempt, serviceutil.MaxAttemptsBeforeResetDefault)
+				sleepDuration := serviceutil.ExponentialBackoff(attempt, serviceutil.MaxAttemptsBeforeResetDefault)
 				n.Logger.ErrorContext(ctx, n.Name+": Error running listener (will attempt reconnect after backoff)",
 					"attempt", attempt, "err", err, "sleep_duration", sleepDuration)
 				n.testSignals.BackoffError.Signal(err)

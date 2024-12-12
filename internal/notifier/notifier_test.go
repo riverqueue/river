@@ -439,7 +439,7 @@ func TestNotifier(t *testing.T) {
 					require.NoError(t, err)
 
 					// Pause a random brief amount of time.
-					serviceutil.CancellableSleep(ctx, randutil.DurationBetween(notifier.Rand, 15*time.Millisecond, 50*time.Millisecond))
+					serviceutil.CancellableSleep(ctx, randutil.DurationBetween(15*time.Millisecond, 50*time.Millisecond))
 
 					sub.Unlisten(ctx)
 				}
