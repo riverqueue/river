@@ -20,7 +20,10 @@ $$;
 --
 -- Add `river_job.unique_states` and bring up an index on it.
 --
-ALTER TABLE river_job ADD COLUMN unique_states BIT(8);
+-- This column may exist already if users manually created the column and index
+-- as instructed in the changelog so the index could be created `CONCURRENTLY`.
+--
+ALTER TABLE river_job ADD COLUMN IF NOT EXISTS unique_states BIT(8);
 
 -- This statement uses `IF NOT EXISTS` to allow users with a `river_job` table
 -- of non-trivial size to build the index `CONCURRENTLY` out of band of this
