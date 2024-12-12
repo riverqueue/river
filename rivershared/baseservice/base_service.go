@@ -7,12 +7,9 @@ package baseservice
 
 import (
 	"log/slog"
-	"math/rand"
 	"reflect"
 	"regexp"
 	"time"
-
-	"github.com/riverqueue/river/rivershared/util/randutil"
 )
 
 // Archetype contains the set of base service properties that are immutable, or
@@ -22,18 +19,6 @@ import (
 type Archetype struct {
 	// Logger is a structured logger.
 	Logger *slog.Logger
-
-	// Rand is a random source safe for concurrent access and seeded with a
-	// cryptographically random seed to ensure good distribution between nodes
-	// and services. The random source itself is _not_ cryptographically secure,
-	// and therefore should not be used anywhere security-related. This is a
-	// deliberate choice because Go's non-crypto rand source is about twenty
-	// times faster, and so far none of our uses of random require cryptographic
-	// secure randomness.
-	//
-	// TODO: When we drop Go 1.21 support, drop this in favor of just using top
-	// level rand functions which are already safe for concurrent use.
-	Rand *rand.Rand
 
 	// Time returns a time generator to get the current time in UTC. Normally
 	// it's implemented as UnStubbableTimeGenerator which just calls through to
@@ -48,7 +33,6 @@ type Archetype struct {
 func NewArchetype(logger *slog.Logger) *Archetype {
 	return &Archetype{
 		Logger: logger,
-		Rand:   randutil.NewCryptoSeededConcurrentSafeRand(),
 		Time:   &UnStubbableTimeGenerator{},
 	}
 }
@@ -87,7 +71,6 @@ func Init[TService withBaseService](archetype *Archetype, service TService) TSer
 
 	baseService.Logger = archetype.Logger
 	baseService.Name = simplifyLogName(reflect.TypeOf(service).Elem().Name())
-	baseService.Rand = archetype.Rand
 	baseService.Time = archetype.Time
 
 	return service

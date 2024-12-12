@@ -493,8 +493,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		var wg sync.WaitGroup
 
-		randomSleep := func() time.Duration {
-			return time.Duration(randutil.IntBetween(svc.Rand, 1, 5)) * time.Millisecond
+		randomSleep := func() {
+			time.Sleep(time.Duration(randutil.IntBetween(1, 5)) * time.Millisecond)
 		}
 
 		for i := 0; i < 10; i++ {

@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-
-	"github.com/riverqueue/river/rivershared/util/randutil"
 )
 
 func TestCancellableSleep(t *testing.T) {
@@ -73,14 +71,12 @@ func TestCancellableSleep(t *testing.T) {
 func TestExponentialBackoff(t *testing.T) {
 	t.Parallel()
 
-	rand := randutil.NewCryptoSeededConcurrentSafeRand()
-
-	require.InDelta(t, 1.0, ExponentialBackoff(rand, 1, MaxAttemptsBeforeResetDefault).Seconds(), 1.0*0.1)
-	require.InDelta(t, 2.0, ExponentialBackoff(rand, 2, MaxAttemptsBeforeResetDefault).Seconds(), 2.0*0.1)
-	require.InDelta(t, 4.0, ExponentialBackoff(rand, 3, MaxAttemptsBeforeResetDefault).Seconds(), 4.0*0.1)
-	require.InDelta(t, 8.0, ExponentialBackoff(rand, 4, MaxAttemptsBeforeResetDefault).Seconds(), 8.0*0.1)
-	require.InDelta(t, 16.0, ExponentialBackoff(rand, 5, MaxAttemptsBeforeResetDefault).Seconds(), 16.0*0.1)
-	require.InDelta(t, 32.0, ExponentialBackoff(rand, 6, MaxAttemptsBeforeResetDefault).Seconds(), 32.0*0.1)
+	require.InDelta(t, 1.0, ExponentialBackoff(1, MaxAttemptsBeforeResetDefault).Seconds(), 1.0*0.1)
+	require.InDelta(t, 2.0, ExponentialBackoff(2, MaxAttemptsBeforeResetDefault).Seconds(), 2.0*0.1)
+	require.InDelta(t, 4.0, ExponentialBackoff(3, MaxAttemptsBeforeResetDefault).Seconds(), 4.0*0.1)
+	require.InDelta(t, 8.0, ExponentialBackoff(4, MaxAttemptsBeforeResetDefault).Seconds(), 8.0*0.1)
+	require.InDelta(t, 16.0, ExponentialBackoff(5, MaxAttemptsBeforeResetDefault).Seconds(), 16.0*0.1)
+	require.InDelta(t, 32.0, ExponentialBackoff(6, MaxAttemptsBeforeResetDefault).Seconds(), 32.0*0.1)
 }
 
 func TestExponentialBackoffSecondsWithoutJitter(t *testing.T) {

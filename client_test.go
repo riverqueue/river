@@ -984,7 +984,7 @@ func Test_Client_Stop(t *testing.T) {
 					require.NoError(t, err)
 
 					// Sleep a brief time between inserts.
-					serviceutil.CancellableSleep(ctx, randutil.DurationBetween(client.baseService.Rand, 1*time.Microsecond, 10*time.Millisecond))
+					serviceutil.CancellableSleep(ctx, randutil.DurationBetween(1*time.Microsecond, 10*time.Millisecond))
 				}
 			}()
 		}
