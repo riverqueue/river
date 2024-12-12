@@ -186,7 +186,7 @@ func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, err
 			slog.Int("num_jobs_deleted", numDeleted),
 		)
 
-		serviceutil.CancellableSleep(ctx, randutil.DurationBetween(s.Rand, BatchBackoffMin, BatchBackoffMax))
+		serviceutil.CancellableSleep(ctx, randutil.DurationBetween(BatchBackoffMin, BatchBackoffMax))
 	}
 
 	return res, nil

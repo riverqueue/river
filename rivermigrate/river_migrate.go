@@ -21,7 +21,6 @@ import (
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/levenshtein"
 	"github.com/riverqueue/river/rivershared/util/maputil"
-	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivershared/util/valutil"
 )
@@ -114,7 +113,6 @@ func New[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Migrator[TTx
 
 	archetype := &baseservice.Archetype{
 		Logger: logger,
-		Rand:   randutil.NewCryptoSeededConcurrentSafeRand(),
 		Time:   &baseservice.UnStubbableTimeGenerator{},
 	}
 

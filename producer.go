@@ -681,7 +681,7 @@ func (p *producer) fetchQueueSettings(ctx context.Context) (*rivertype.Queue, er
 }
 
 func (p *producer) reportQueueStatusLoop(ctx context.Context) {
-	serviceutil.CancellableSleep(ctx, randutil.DurationBetween(p.Rand, 0, time.Second))
+	serviceutil.CancellableSleep(ctx, randutil.DurationBetween(0, time.Second))
 	reportTicker := time.NewTicker(p.config.QueueReportInterval)
 	for {
 		select {

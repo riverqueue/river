@@ -236,7 +236,7 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 			break
 		}
 
-		serviceutil.CancellableSleep(ctx, randutil.DurationBetween(s.Rand, BatchBackoffMin, BatchBackoffMax))
+		serviceutil.CancellableSleep(ctx, randutil.DurationBetween(BatchBackoffMin, BatchBackoffMax))
 	}
 
 	return res, nil
