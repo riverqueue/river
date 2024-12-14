@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Dropped internal random generators in favor of `math/rand/v2`, which will have the effect of making code fully incompatible with Go 1.21 (`go.mod` has specified a minimum of 1.22 for some time already though). [PR #691](https://github.com/riverqueue/river/pull/691).
 
+### Fixed
+
+- 006 migration now tolerates previous existence of a `unique_states` column in case it was added separately so that the new index could be raised with `CONCURRENTLY`. [PR #691](https://github.com/riverqueue/river/pull/691).
+
 ## [0.14.2] - 2024-11-16
 
 ### Fixed
