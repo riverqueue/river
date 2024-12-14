@@ -8,8 +8,7 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-type StandardPilot struct {
-}
+type StandardPilot struct{}
 
 func (p *StandardPilot) JobInsertMany(
 	ctx context.Context,
