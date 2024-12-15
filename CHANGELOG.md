@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.3] - 2024-12-14
+
 ### Changed
 
-- Dropped internal random generators in favor of `math/rand/v2`, which will have the effect of making code fully incompatible with Go 1.21 (`go.mod` has specified a minimum of 1.22 for some time already though). [PR #691](https://github.com/riverqueue/river/pull/691).
+- Dropped internal random generators in favor of `math/rand/v2`, which will have the effect of making code fully incompatible with Go 1.21 (`go.mod` has specified a minimum of 1.22 for some time already though). [PR #690](https://github.com/riverqueue/river/pull/690).
 
 ### Fixed
 
