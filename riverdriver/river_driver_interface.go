@@ -445,9 +445,9 @@ type NotifyManyParams struct {
 }
 
 type ProducerKeepAliveParams struct {
-	ID               uuid.UUID
-	Queue            string
-	UpdatedAtHorizon time.Time
+	ID                    uuid.UUID
+	Queue                 string
+	StaleUpdatedAtHorizon time.Time
 }
 
 type QueueCreateOrSetUpdatedAtParams struct {

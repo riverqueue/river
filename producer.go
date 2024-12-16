@@ -258,8 +258,21 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		return nil
 	}
 
+	isExpectedShutdownError := func(err error) bool {
+		return errors.Is(err, startstop.ErrStop) || strings.HasSuffix(err.Error(), "conn closed") || fetchCtx.Err() != nil
+	}
+
 	// TODO: how does this handle being reinitialized after stop/start?
-	p.state = p.pilot.ProducerStateInit(p.id, p.config.Queue)
+	var err error
+	p.state, err = p.pilot.ProducerInit(fetchCtx, p.exec, p.config.ClientID, p.id, p.config.Queue)
+	if err != nil {
+		stopped()
+		if isExpectedShutdownError(err) {
+			return nil //nolint:nilerr
+		}
+		p.Logger.ErrorContext(fetchCtx, p.Name+": Error initializing producer state", slog.String("err", err.Error()))
+		return err
+	}
 
 	queue, err := func() (*rivertype.Queue, error) {
 		ctx, cancel := context.WithTimeout(fetchCtx, 10*time.Second)
@@ -273,7 +286,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 	}()
 	if err != nil {
 		stopped()
-		if errors.Is(err, startstop.ErrStop) || strings.HasSuffix(err.Error(), "conn closed") || fetchCtx.Err() != nil {
+		if isExpectedShutdownError(err) {
 			return nil //nolint:nilerr
 		}
 		p.Logger.ErrorContext(fetchCtx, p.Name+": Error fetching initial queue settings", slog.String("err", err.Error()))
@@ -570,7 +583,7 @@ func (p *producer) finalizeShutdown(baseCtx context.Context) {
 		ctx, cancel := context.WithTimeout(baseCtx, timeout)
 		defer cancel()
 
-		if err := p.pilot.ProducerShutdown(baseCtx, p.exec, p.id); err != nil {
+		if err := p.pilot.ProducerShutdown(baseCtx, p.exec, p.id, p.state); err != nil {
 			p.Logger.ErrorContext(ctx, p.Name+": Error shutting down producer with pilot", slog.String("err", err.Error()))
 			// A cancelled context will never succeed, return immediately.
 			if errors.Is(err, context.Canceled) {
@@ -813,9 +826,9 @@ func (p *producer) reportProducerStatusOnce(ctx context.Context) {
 
 	p.Logger.DebugContext(ctx, p.Name+": Reporting producer status", slog.String("id", p.id.String()), slog.String("queue", p.config.Queue))
 	err := p.pilot.ProducerKeepAlive(ctx, p.exec, &riverdriver.ProducerKeepAliveParams{
-		ID:               p.id,
-		Queue:            p.config.Queue,
-		UpdatedAtHorizon: p.Time.NowUTC().Add(-p.config.StaleProducerRetentionPeriod),
+		ID:                    p.id,
+		Queue:                 p.config.Queue,
+		StaleUpdatedAtHorizon: p.Time.NowUTC().Add(-p.config.StaleProducerRetentionPeriod),
 	})
 	if err != nil && errors.Is(context.Cause(ctx), startstop.ErrStop) {
 		return
