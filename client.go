@@ -1762,7 +1762,7 @@ func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) *pr
 		QueueEventCallback:           c.subscriptionManager.distributeQueueEvent,
 		RetryPolicy:                  c.config.RetryPolicy,
 		SchedulerInterval:            c.config.schedulerInterval,
-		StaleProducerRetentionPeriod: time.Hour,
+		StaleProducerRetentionPeriod: 5 * time.Minute,
 		Workers:                      c.config.Workers,
 	})
 	c.producersByQueueName[queueName] = producer
