@@ -31,16 +31,16 @@ func (p *StandardPilot) PilotInit(archetype *baseservice.Archetype) {
 	// No-op
 }
 
+func (p *StandardPilot) ProducerInit(ctx context.Context, exec riverdriver.Executor, clientID string, producerID uuid.UUID, queue string) (ProducerState, error) {
+	return &standardProducerState{}, nil
+}
+
 func (p *StandardPilot) ProducerKeepAlive(ctx context.Context, exec riverdriver.Executor, params *riverdriver.ProducerKeepAliveParams) error {
 	return nil
 }
 
-func (p *StandardPilot) ProducerShutdown(ctx context.Context, exec riverdriver.Executor, producerID uuid.UUID) error {
+func (p *StandardPilot) ProducerShutdown(ctx context.Context, exec riverdriver.Executor, producerID uuid.UUID, state ProducerState) error {
 	return nil
-}
-
-func (p *StandardPilot) ProducerStateInit(producerID uuid.UUID, queue string) ProducerState {
-	return &standardProducerState{}
 }
 
 type standardProducerState struct{}
