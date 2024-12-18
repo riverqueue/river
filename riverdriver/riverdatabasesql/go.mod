@@ -11,7 +11,7 @@ require (
 	github.com/riverqueue/river/riverdriver v0.14.3
 	github.com/riverqueue/river/rivershared v0.14.3
 	github.com/riverqueue/river/rivertype v0.14.3
-	github.com/stretchr/testify v1.9.0
+	github.com/stretchr/testify v1.10.0
 )
 
 require (
