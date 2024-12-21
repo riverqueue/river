@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -187,9 +188,9 @@ func (e *Elector) Start(ctx context.Context) error {
 }
 
 func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
-	var numErrors int
-
+	var attempt int
 	for {
+		attempt++
 		e.Logger.DebugContext(ctx, e.Name+": Attempting to gain leadership", "client_id", e.config.ClientID)
 
 		elected, err := attemptElectOrReelect(ctx, e.exec, false, &riverdriver.LeaderElectParams{
@@ -201,9 +202,8 @@ func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
 				return err
 			}
 
-			numErrors++
-			sleepDuration := serviceutil.ExponentialBackoff(numErrors, serviceutil.MaxAttemptsBeforeResetDefault)
-			e.Logger.ErrorContext(ctx, e.Name+": Error attempting to elect", "client_id", e.config.ClientID, "err", err, "num_errors", numErrors, "sleep_duration", sleepDuration)
+			sleepDuration := serviceutil.ExponentialBackoff(attempt, serviceutil.MaxAttemptsBeforeResetDefault)
+			e.Logger.ErrorContext(ctx, e.Name+": Error attempting to elect", e.errorSlogArgs(err, attempt, sleepDuration)...)
 			serviceutil.CancellableSleep(ctx, sleepDuration)
 			continue
 		}
@@ -211,7 +211,7 @@ func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
 			return nil
 		}
 
-		numErrors = 0
+		attempt = 0
 
 		e.Logger.DebugContext(ctx, e.Name+": Leadership bid was unsuccessful (not an error)", "client_id", e.config.ClientID)
 		e.testSignals.DeniedLeadership.Signal(struct{}{})
@@ -343,8 +343,7 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 			}
 
 			sleepDuration := serviceutil.ExponentialBackoff(numErrors, serviceutil.MaxAttemptsBeforeResetDefault)
-			e.Logger.Error(e.Name+": Error attempting reelection",
-				"client_id", e.config.ClientID, "err", err, "sleep_duration", sleepDuration)
+			e.Logger.Error(e.Name+": Error attempting reelection", e.errorSlogArgs(err, numErrors, sleepDuration)...)
 			serviceutil.CancellableSleep(ctx, sleepDuration)
 			continue
 		}
@@ -381,11 +380,8 @@ func (e *Elector) attemptResignLoop(ctx context.Context) {
 
 	for attempt := 1; attempt <= maxNumErrors; attempt++ {
 		if err := e.attemptResign(ctx, attempt); err != nil {
-			e.Logger.ErrorContext(ctx, e.Name+": Error attempting to resign", "attempt", attempt, "client_id", e.config.ClientID, "err", err)
-
 			sleepDuration := serviceutil.ExponentialBackoff(attempt, serviceutil.MaxAttemptsBeforeResetDefault)
-			e.Logger.ErrorContext(ctx, e.Name+": Error attempting to resign",
-				"client_id", e.config.ClientID, "err", err, "num_errors", attempt, "sleep_duration", sleepDuration)
+			e.Logger.ErrorContext(ctx, e.Name+": Error attempting to resign", e.errorSlogArgs(err, attempt, sleepDuration)...)
 			serviceutil.CancellableSleep(ctx, sleepDuration)
 
 			continue
@@ -418,6 +414,19 @@ func (e *Elector) attemptResign(ctx context.Context, attempt int) error {
 	}
 
 	return nil
+}
+
+// Produces a common set of key/value pairs for logging when an error occurs.
+//
+// Refactored out because we had three repeats of identical information in this
+// file, but if it causes things to get messy, may want to refactor again.
+func (e *Elector) errorSlogArgs(err error, attempt int, sleepDuration time.Duration) []any {
+	return []any{
+		slog.Int("attempt", attempt),
+		slog.String("client_id", e.config.ClientID),
+		slog.String("err", err.Error()),
+		slog.String("sleep_duration", sleepDuration.String()),
+	}
 }
 
 func (e *Elector) Listen() *Subscription {
