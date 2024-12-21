@@ -385,6 +385,7 @@ func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
 	if nextRetryScheduledAt.Before(now) {
 		e.Logger.WarnContext(ctx,
 			e.Name+": Retry policy returned invalid next retry before current time; using default retry policy instead",
+			slog.Int("error_count", len(e.JobRow.Errors)+1),
 			slog.Time("next_retry_scheduled_at", nextRetryScheduledAt),
 			slog.Time("now", now),
 		)

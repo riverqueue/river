@@ -40,6 +40,10 @@ type DefaultClientRetryPolicy struct {
 // used instead of the attempt count. This means that snoozing a job (even
 // repeatedly) will not lead to a future error having a longer than expected
 // retry delay.
+//
+// At degenerately high retry counts (>= 310) the policy starts adding the
+// equivalent of the maximum of time.Duration to each retry, about 292 years.
+// The schedule is no longer exponential past this point.
 func (p *DefaultClientRetryPolicy) NextRetry(job *rivertype.JobRow) time.Time {
 	// For the purposes of calculating the backoff, we can look solely at the
 	// number of errors. If we were to use the raw attempt count, this would be
@@ -49,6 +53,7 @@ func (p *DefaultClientRetryPolicy) NextRetry(job *rivertype.JobRow) time.Time {
 	// Note that we explicitly add 1 here, because the error hasn't been appended
 	// yet at the time this is called (that happens in the completer).
 	errorCount := len(job.Errors) + 1
+
 	return p.timeNowUTC().Add(timeutil.SecondsAsDuration(p.retrySeconds(errorCount)))
 }
 
@@ -60,9 +65,24 @@ func (p *DefaultClientRetryPolicy) timeNowUTC() time.Time {
 	return time.Now().UTC()
 }
 
+// The maximum value of a duration before it overflows. About 292 years.
+const maxDuration time.Duration = 1<<63 - 1
+
+// Same as the above, but changed to a float represented in seconds.
+var maxDurationSeconds = maxDuration.Seconds() //nolint:gochecknoglobals
+
 // Gets a number of retry seconds for the given attempt, random jitter included.
 func (p *DefaultClientRetryPolicy) retrySeconds(attempt int) float64 {
 	retrySeconds := p.retrySecondsWithoutJitter(attempt)
+
+	// After hitting maximum retry durations jitter is no longer applied because
+	// it might overflow time.Duration. That's okay though because so much
+	// jitter will already have been applied up to this point (jitter measured
+	// in decades) that jobs will no longer run anywhere near contemporaneously
+	// unless there's been considerable manual intervention.
+	if retrySeconds == maxDurationSeconds {
+		return maxDurationSeconds
+	}
 
 	// Jitter number of seconds +/- 10%.
 	retrySeconds += retrySeconds * (rand.Float64()*0.2 - 0.1)
@@ -71,6 +91,10 @@ func (p *DefaultClientRetryPolicy) retrySeconds(attempt int) float64 {
 }
 
 // Gets a base number of retry seconds for the given attempt, jitter excluded.
+// If the number of seconds returned would overflow time.Duration if it were to
+// be made one, returns the maximum number of seconds that can fit in a
+// time.Duration instead, approximately 292 years.
 func (p *DefaultClientRetryPolicy) retrySecondsWithoutJitter(attempt int) float64 {
-	return math.Pow(float64(attempt), 4)
+	retrySeconds := math.Pow(float64(attempt), 4)
+	return min(retrySeconds, maxDurationSeconds)
 }
