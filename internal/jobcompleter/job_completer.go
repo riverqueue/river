@@ -3,6 +3,7 @@ package jobcompleter
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -550,7 +551,11 @@ func withRetries[T any](logCtx context.Context, baseService *baseservice.BaseSer
 			lastErr = err
 			sleepDuration := serviceutil.ExponentialBackoff(attempt, serviceutil.MaxAttemptsBeforeResetDefault)
 			baseService.Logger.ErrorContext(logCtx, baseService.Name+": Completer error (will retry after sleep)",
-				"attempt", attempt, "err", err, "sleep_duration", sleepDuration, "timeout", timeout)
+				slog.Int("attempt", attempt),
+				slog.String("err", err.Error()),
+				slog.String("sleep_duration", sleepDuration.String()),
+				slog.String("timeout", timeout.String()),
+			)
 			if !disableSleep {
 				serviceutil.CancellableSleep(logCtx, sleepDuration)
 			}

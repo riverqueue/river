@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sync"
 	"time"
@@ -129,7 +130,10 @@ func (n *Notifier) Start(ctx context.Context) error {
 
 				sleepDuration := serviceutil.ExponentialBackoff(attempt, serviceutil.MaxAttemptsBeforeResetDefault)
 				n.Logger.ErrorContext(ctx, n.Name+": Error running listener (will attempt reconnect after backoff)",
-					"attempt", attempt, "err", err, "sleep_duration", sleepDuration)
+					slog.Int("attempt", attempt),
+					slog.String("err", err.Error()),
+					slog.String("sleep_duration", sleepDuration.String()),
+				)
 				n.testSignals.BackoffError.Signal(err)
 				if !n.disableSleep {
 					serviceutil.CancellableSleep(ctx, sleepDuration)
