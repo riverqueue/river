@@ -437,7 +437,7 @@ func migratePrintResult(out io.Writer, opts *migrateOpts, res *rivermigrate.Migr
 
 		if opts.ShowSQL {
 			fmt.Fprintf(out, "%s\n", strings.Repeat("-", 80))
-			fmt.Fprintf(out, "%s\n", migrationComment(migrateVersion.Version, direction))
+			fmt.Fprintf(out, "%s\n", migrationComment(opts.Line, migrateVersion.Version, direction))
 			fmt.Fprintf(out, "%s\n\n", strings.TrimSpace(migrateVersion.SQL))
 		}
 	}
@@ -451,8 +451,8 @@ func migratePrintResult(out io.Writer, opts *migrateOpts, res *rivermigrate.Migr
 // An informational comment that's tagged on top of any migration's SQL to help
 // attribute what it is for when it's copied elsewhere like other migration
 // frameworks.
-func migrationComment(version int, direction rivermigrate.Direction) string {
-	return fmt.Sprintf("-- River migration %03d [%s]", version, direction)
+func migrationComment(line string, version int, direction rivermigrate.Direction) string {
+	return fmt.Sprintf("-- River %s migration %03d [%s]", line, version, direction)
 }
 
 type migrateGetOpts struct {
@@ -523,7 +523,7 @@ func (c *migrateGet) Run(_ context.Context, opts *migrateGetOpts) (bool, error) 
 		}
 
 		printedOne = true
-		fmt.Fprintf(c.Out, "%s\n", migrationComment(migration.Version, direction))
+		fmt.Fprintf(c.Out, "%s\n", migrationComment(opts.Line, migration.Version, direction))
 		fmt.Fprintf(c.Out, "%s\n", strings.TrimSpace(sql))
 	}
 
