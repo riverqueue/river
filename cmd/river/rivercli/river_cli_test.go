@@ -2,8 +2,11 @@ package rivercli
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
+	"net/url"
+	"os"
 	"runtime/debug"
 	"strings"
 	"testing"
@@ -113,16 +116,25 @@ func TestBaseCommandSetIntegration(t *testing.T) {
 		cmd, _ := setup(t)
 
 		cmd.SetArgs([]string{"--debug", "--verbose"})
-		require.EqualError(t, cmd.Execute(), `if any flags in the group [debug verbose] are set none of the others can be; [debug verbose] were all set`)
+		require.EqualError(t, cmd.Execute(), "if any flags in the group [debug verbose] are set none of the others can be; [debug verbose] were all set")
 	})
 
-	t.Run("MigrateDownMissingDatabaseURL", func(t *testing.T) {
+	t.Run("DatabaseURLWithInvalidPrefix", func(t *testing.T) {
+		t.Parallel()
+
+		cmd, _ := setup(t)
+
+		cmd.SetArgs([]string{"migrate-down", "--database-url", "post://"})
+		require.EqualError(t, cmd.Execute(), "unsupported database URL (`post://`); try one with a `postgres://` or `postgresql://` scheme/prefix")
+	})
+
+	t.Run("MissingDatabaseURLAndPGEnv", func(t *testing.T) {
 		t.Parallel()
 
 		cmd, _ := setup(t)
 
 		cmd.SetArgs([]string{"migrate-down"})
-		require.EqualError(t, cmd.Execute(), `required flag(s) "database-url" not set`)
+		require.EqualError(t, cmd.Execute(), "either PG* env vars or --database-url must be set")
 	})
 
 	t.Run("VersionFlag", func(t *testing.T) {
@@ -155,6 +167,59 @@ Built with %s
 River version (unknown)
 Built with %s
 		`, buildInfo.GoVersion)), strings.TrimSpace(bundle.out.String()))
+	})
+}
+
+// Same as the above, but non-parallel so tests can use `t.Setenv`. Separated
+// out into its own test block so that we don't have to mark the entire block
+// above as non-parallel because a few tests can't be made parallel.
+func TestBaseCommandSetNonParallel(t *testing.T) {
+	type testBundle struct {
+		out *bytes.Buffer
+	}
+
+	setup := func(t *testing.T) (*cobra.Command, *testBundle) {
+		t.Helper()
+
+		cli := NewCLI(&Config{
+			DriverProcurer: &TestDriverProcurer{},
+			Name:           "River",
+		})
+
+		var out bytes.Buffer
+		cli.SetOut(&out)
+
+		return cli.BaseCommandSet(), &testBundle{
+			out: &out,
+		}
+	}
+
+	t.Run("PGEnvWithoutDatabaseURL", func(t *testing.T) {
+		cmd, _ := setup(t)
+
+		// Deconstruct a database URL into its PG* components. This path is the
+		// one that gets taken in CI, but could work locally as well.
+		if databaseURL := os.Getenv("TEST_DATABASE_URL"); databaseURL != "" {
+			parsedURL, err := url.Parse(databaseURL)
+			require.NoError(t, err)
+
+			t.Setenv("PGDATABASE", parsedURL.Path[1:])
+			t.Setenv("PGHOST", parsedURL.Hostname())
+			pass, _ := parsedURL.User.Password()
+			t.Setenv("PGPASSWORD", pass)
+			t.Setenv("PGPORT", cmp.Or(parsedURL.Port(), "5432"))
+			t.Setenv("PGSSLMODE", parsedURL.Query().Get("sslmode"))
+			t.Setenv("PGUSER", parsedURL.User.Username())
+		} else {
+			// With no `TEST_DATABASE_URL` available, try a simpler alternative
+			// configuration. Requires a database on localhost that doesn't
+			// require authentication, which should exist from testdbman.
+			t.Setenv("PGDATABASE", "river_test")
+			t.Setenv("PGHOST", "localhost")
+		}
+
+		cmd.SetArgs([]string{"validate"})
+		require.NoError(t, cmd.Execute())
 	})
 }
 

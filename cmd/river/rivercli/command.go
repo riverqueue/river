@@ -14,6 +14,7 @@ import (
 
 	"github.com/riverqueue/river/cmd/river/riverbench"
 	"github.com/riverqueue/river/rivermigrate"
+	"github.com/riverqueue/river/rivershared/util/ptrutil"
 )
 
 const (
@@ -77,7 +78,7 @@ type RunCommandBundle struct {
 }
 
 // RunCommand bootstraps and runs a River CLI subcommand.
-func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle, command Command[TOpts], opts TOpts) {
+func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle, command Command[TOpts], opts TOpts) error {
 	procureAndRun := func() (bool, error) {
 		if err := opts.Validate(); err != nil {
 			return false, err
@@ -89,16 +90,33 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 			Out:            bundle.OutStd,
 		}
 
-		switch {
-		// If database URL is still nil after Validate check, then assume this
-		// command doesn't take one.
-		case bundle.DatabaseURL == nil:
-			commandBase.GetBenchmarker = func() BenchmarkerInterface { panic("databaseURL was not set") }
-			commandBase.GetMigrator = func(config *rivermigrate.Config) (MigratorInterface, error) { panic("databaseURL was not set") }
+		var databaseURL *string
 
-		case strings.HasPrefix(*bundle.DatabaseURL, uriScheme) ||
-			strings.HasPrefix(*bundle.DatabaseURL, uriSchemeAlias):
-			dbPool, err := openPgxV5DBPool(ctx, *bundle.DatabaseURL)
+		switch {
+		case pgEnvConfigured():
+			databaseURL = ptrutil.Ptr("")
+
+		case bundle.DatabaseURL != nil:
+			if !strings.HasPrefix(*bundle.DatabaseURL, uriScheme) &&
+				!strings.HasPrefix(*bundle.DatabaseURL, uriSchemeAlias) {
+				return false, fmt.Errorf(
+					"unsupported database URL (`%s`); try one with a `%s` or `%s` scheme/prefix",
+					*bundle.DatabaseURL,
+					uriSchemeAlias,
+					uriScheme,
+				)
+			}
+
+			databaseURL = bundle.DatabaseURL
+		}
+
+		if databaseURL == nil {
+			commandBase.GetBenchmarker = func() BenchmarkerInterface { panic("neither PG* env nor databaseURL was not set") }
+			commandBase.GetMigrator = func(config *rivermigrate.Config) (MigratorInterface, error) {
+				panic("neither PG* env nor databaseURL was not set")
+			}
+		} else {
+			dbPool, err := openPgxV5DBPool(ctx, *databaseURL)
 			if err != nil {
 				return false, err
 			}
@@ -108,14 +126,6 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 
 			commandBase.GetBenchmarker = func() BenchmarkerInterface { return riverbench.NewBenchmarker(driver, commandBase.Logger) }
 			commandBase.GetMigrator = func(config *rivermigrate.Config) (MigratorInterface, error) { return rivermigrate.New(driver, config) }
-
-		default:
-			return false, fmt.Errorf(
-				"unsupported database URL (`%s`); try one with a `%s` or `%s` scheme/prefix",
-				*bundle.DatabaseURL,
-				uriSchemeAlias,
-				uriScheme,
-			)
 		}
 
 		command.SetCommandBase(commandBase)
@@ -125,11 +135,12 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 
 	ok, err := procureAndRun()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed: %s\n", err)
+		return err
 	}
-	if err != nil || !ok {
+	if !ok {
 		os.Exit(1)
 	}
+	return nil
 }
 
 func openPgxV5DBPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
@@ -163,4 +174,11 @@ func openPgxV5DBPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, er
 	}
 
 	return dbPool, nil
+}
+
+// Determines if there's a minimum number of `PG*` env vars configured to
+// consider that configurable path viable. A `--database-url` parameter will
+// take precedence.
+func pgEnvConfigured() bool {
+	return os.Getenv("PGDATABASE") != ""
 }
