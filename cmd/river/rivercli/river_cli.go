@@ -101,13 +101,20 @@ func (c *CLI) BaseCommandSet() *cobra.Command {
 			Short: "Provides command line facilities for the River job queue",
 			Long: strings.TrimSpace(`
 Provides command line facilities for the River job queue.
+
+Commands that need database access will take a --database-url argument, but can
+also accept Postgres configuration through its standard set of environment
+variables like PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD, and PGSSLMODE,
+with a minimum of PGDATABASE required to use this strategy. --database-url will
+take precedence of PG* vars if it's been specified.
 		`),
-			Run: func(cmd *cobra.Command, args []string) {
+			RunE: func(cmd *cobra.Command, args []string) error {
 				if rootOpts.Version {
-					RunCommand(ctx, makeCommandBundle(nil), &version{}, &versionOpts{Name: c.name})
-				} else {
-					_ = cmd.Usage()
+					return RunCommand(ctx, makeCommandBundle(nil), &version{}, &versionOpts{Name: c.name})
 				}
+
+				_ = cmd.Usage()
+				return nil
 			},
 		}
 		rootCmd.SetOut(c.out)
@@ -119,17 +126,8 @@ Provides command line facilities for the River job queue.
 		rootCmd.Flags().BoolVar(&rootOpts.Version, "version", false, "print version information")
 	}
 
-	mustMarkFlagRequired := func(cmd *cobra.Command, name string) {
-		// We just panic here because this will never happen outside of an error
-		// in development.
-		if err := cmd.MarkFlagRequired(name); err != nil {
-			panic(err)
-		}
-	}
-
 	addDatabaseURLFlag := func(cmd *cobra.Command, databaseURL *string) {
 		cmd.Flags().StringVar(databaseURL, "database-url", "", "URL of the database (should look like `postgres://...`")
-		mustMarkFlagRequired(cmd, "database-url")
 	}
 	addLineFlag := func(cmd *cobra.Command, line *string) {
 		cmd.Flags().StringVar(line, "line", "", "migration line to operate on (default: main)")
@@ -155,8 +153,8 @@ before starting the client, and works until all jobs are finished.
 The database in --database-url will have its jobs table truncated, so make sure
 to use a development database only.
 	`),
-			Run: func(cmd *cobra.Command, args []string) {
-				RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL), &bench{}, &opts)
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL), &bench{}, &opts)
 			},
 		}
 		addDatabaseURLFlag(cmd, &opts.DatabaseURL)
@@ -194,8 +192,8 @@ SQL being run can be output using --show-sql, and executing real database
 operations can be prevented with --dry-run. Combine --show-sql and --dry-run to
 dump prospective migrations that would be applied to stdout.
 	`),
-			Run: func(cmd *cobra.Command, args []string) {
-				RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL), &migrateDown{}, &opts)
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL), &migrateDown{}, &opts)
 			},
 		}
 		addMigrateFlags(cmd, &opts)
@@ -232,8 +230,8 @@ framework, which aren't necessary if using an external framework:
     river migrate-get --all --exclude-version 1 --up > river_all.up.sql
     river migrate-get --all --exclude-version 1 --down > river_all.down.sql
 	`),
-			Run: func(cmd *cobra.Command, args []string) {
-				RunCommand(ctx, makeCommandBundle(nil), &migrateGet{}, &opts)
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return RunCommand(ctx, makeCommandBundle(nil), &migrateGet{}, &opts)
 			},
 		}
 		cmd.Flags().BoolVar(&opts.All, "all", false, "print all migrations; down migrations are printed in descending order")
@@ -259,8 +257,8 @@ framework, which aren't necessary if using an external framework:
 			Long: strings.TrimSpace(`
 TODO
 	`),
-			Run: func(cmd *cobra.Command, args []string) {
-				RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL), &migrateList{}, &opts)
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL), &migrateList{}, &opts)
 			},
 		}
 		addDatabaseURLFlag(cmd, &opts.DatabaseURL)
@@ -285,8 +283,8 @@ SQL being run can be output using --show-sql, and executing real database
 operations can be prevented with --dry-run. Combine --show-sql and --dry-run to
 dump prospective migrations that would be applied to stdout.
 	`),
-			Run: func(cmd *cobra.Command, args []string) {
-				RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL), &migrateUp{}, &opts)
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL), &migrateUp{}, &opts)
 			},
 		}
 		addMigrateFlags(cmd, &opts)
@@ -307,12 +305,11 @@ are outstanding migrations that still need to be run.
 Can be paired with river migrate-up --dry-run --show-sql to dump information on
 migrations that need to be run, but without running them.
 	`),
-			Run: func(cmd *cobra.Command, args []string) {
-				RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL), &validate{}, &opts)
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL), &validate{}, &opts)
 			},
 		}
 		addDatabaseURLFlag(cmd, &opts.DatabaseURL)
-		mustMarkFlagRequired(cmd, "database-url")
 		cmd.Flags().StringVar(&opts.Line, "line", "", "migration line to operate on (default: main)")
 		rootCmd.AddCommand(cmd)
 	}
@@ -325,8 +322,8 @@ migrations that need to be run, but without running them.
 			Long: strings.TrimSpace(`
 Print River and Go version information.
 	`),
-			Run: func(cmd *cobra.Command, args []string) {
-				RunCommand(ctx, makeCommandBundle(nil), &version{}, &versionOpts{Name: c.name})
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return RunCommand(ctx, makeCommandBundle(nil), &version{}, &versionOpts{Name: c.name})
 			},
 		}
 		rootCmd.AddCommand(cmd)
@@ -347,8 +344,8 @@ type benchOpts struct {
 }
 
 func (o *benchOpts) Validate() error {
-	if o.DatabaseURL == "" {
-		return errors.New("database URL cannot be empty")
+	if o.DatabaseURL == "" && !pgEnvConfigured() {
+		return errors.New("either PG* env vars or --database-url must be set")
 	}
 
 	return nil
@@ -375,8 +372,8 @@ type migrateOpts struct {
 }
 
 func (o *migrateOpts) Validate() error {
-	if o.DatabaseURL == "" {
-		return errors.New("database URL cannot be empty")
+	if o.DatabaseURL == "" && !pgEnvConfigured() {
+		return errors.New("either PG* env vars or --database-url must be set")
 	}
 
 	return nil
@@ -604,8 +601,8 @@ type validateOpts struct {
 }
 
 func (o *validateOpts) Validate() error {
-	if o.DatabaseURL == "" {
-		return errors.New("database URL cannot be empty")
+	if o.DatabaseURL == "" && !pgEnvConfigured() {
+		return errors.New("either PG* env vars or --database-url must be set")
 	}
 
 	return nil
