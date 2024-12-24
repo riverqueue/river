@@ -282,8 +282,8 @@ func withCommandBase[TCommand Command[TOpts], TOpts CommandOpts](t *testing.T, c
 func TestMigrationComment(t *testing.T) {
 	t.Parallel()
 
-	require.Equal(t, "-- River migration 001 [down]", migrationComment(1, rivermigrate.DirectionDown))
-	require.Equal(t, "-- River migration 002 [up]", migrationComment(2, rivermigrate.DirectionUp))
+	require.Equal(t, "-- River main migration 001 [down]", migrationComment("main", 1, rivermigrate.DirectionDown))
+	require.Equal(t, "-- River main migration 002 [up]", migrationComment("main", 2, rivermigrate.DirectionUp))
 }
 
 func TestRoundDuration(t *testing.T) {

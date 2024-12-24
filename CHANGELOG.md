@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Sleep durations are now logged as Go-like duration strings (e.g. "10s") in either text or JSON instead of duration strings in text and nanoseconds in JSON. [PR #699](https://github.com/riverqueue/river/pull/699).
+- Altered the migration comments from `river migrate-get` to include the "line" of the migration being run (`main`, or for River Pro `workflow` and `sequence`) to make them more distinguishable. [PR #703](https://github.com/riverqueue/river/pull/703).
 
 ### Fixed
 
