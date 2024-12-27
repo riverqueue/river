@@ -146,6 +146,10 @@ type UniqueOpts struct {
 	//
 	// 	ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCompleted, rivertype.JobStatePending, rivertype.JobStateRunning, rivertype.JobStateRetryable, rivertype.JobStateScheduled}
 	//
+	// Or more succinctly:
+	//
+	// 	ByState: rivertype.UniqueOptsByStateDefault()
+	//
 	// With this setting, any jobs of the same kind that have been completed or
 	// discarded, but not yet cleaned out by the system, will still prevent a
 	// duplicate unique job from being inserted. For example, with the default

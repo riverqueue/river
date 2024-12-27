@@ -14,19 +14,9 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-// When a job has specified unique options, but has not set the ByState
-// parameter explicitly, this is the set of default states that are used to
-// determine uniqueness. So for example, a new unique job may be inserted even
-// if another job already exists, as long as that other job is set `cancelled`
-// or `discarded`.
-var defaultUniqueStates = []rivertype.JobState{ //nolint:gochecknoglobals
-	rivertype.JobStateAvailable,
-	rivertype.JobStateCompleted,
-	rivertype.JobStatePending,
-	rivertype.JobStateRetryable,
-	rivertype.JobStateRunning,
-	rivertype.JobStateScheduled,
-}
+// Default job states for UniqueOpts.ByState. Stored here to a variable so we
+// don't have to reallocate a slice over and over again.
+var uniqueOptsByStateDefault = rivertype.UniqueOptsByStateDefault() //nolint:gochecknoglobals
 
 var jobStateBitPositions = map[rivertype.JobState]uint{ //nolint:gochecknoglobals
 	rivertype.JobStateAvailable: 7,
@@ -56,7 +46,7 @@ func (o *UniqueOpts) IsEmpty() bool {
 }
 
 func (o *UniqueOpts) StateBitmask() byte {
-	states := defaultUniqueStates
+	states := uniqueOptsByStateDefault
 	if len(o.ByState) > 0 {
 		states = o.ByState
 	}

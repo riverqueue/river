@@ -129,6 +129,9 @@ type JobRow struct {
 	// opts configuration.
 	UniqueKey []byte
 
+	// UniqueStates is the set of states where uniqueness is enforced for this
+	// job. Equivalent to the default set of unique states unless
+	// UniqueOpts.ByState was assigned a custom value.
 	UniqueStates []JobState
 }
 
@@ -302,4 +305,20 @@ type Queue struct {
 	// If UpdatedAt has not been updated for awhile, the queue record will be
 	// deleted from the table by a maintenance process.
 	UpdatedAt time.Time
+}
+
+// UniqueOptsByStateDefault is the set of job states that are used to determine
+// uniqueness unless unique job states have been overridden with
+// UniqueOpts.ByState. So for example, with this default set a new unique job
+// may be inserted even if another job already exists, as long as that other job
+// is set `cancelled` or `discarded`.
+func UniqueOptsByStateDefault() []JobState {
+	return []JobState{
+		JobStateAvailable,
+		JobStateCompleted,
+		JobStatePending,
+		JobStateRetryable,
+		JobStateRunning,
+		JobStateScheduled,
+	}
 }
