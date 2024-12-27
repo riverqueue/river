@@ -223,7 +223,7 @@ func TestUniqueKey(t *testing.T) {
 			encodedArgs, err := json.Marshal(args)
 			require.NoError(t, err)
 
-			states := defaultUniqueStates
+			states := uniqueOptsByStateDefault
 			if len(tt.uniqueOpts.ByState) > 0 {
 				states = tt.uniqueOpts.ByState
 			}
@@ -258,9 +258,9 @@ func TestUniqueKey(t *testing.T) {
 func TestDefaultUniqueStatesSorted(t *testing.T) {
 	t.Parallel()
 
-	states := slices.Clone(defaultUniqueStates)
+	states := slices.Clone(uniqueOptsByStateDefault)
 	slices.Sort(states)
-	require.Equal(t, states, defaultUniqueStates, "Default unique states should be sorted")
+	require.Equal(t, states, uniqueOptsByStateDefault, "Default unique states should be sorted")
 }
 
 func TestUniqueOptsIsEmpty(t *testing.T) {
@@ -289,7 +289,7 @@ func TestUniqueOptsStateBitmask(t *testing.T) {
 	t.Parallel()
 
 	emptyOpts := &UniqueOpts{}
-	require.Equal(t, UniqueStatesToBitmask(defaultUniqueStates), emptyOpts.StateBitmask(), "Empty unique options should have default bitmask")
+	require.Equal(t, UniqueStatesToBitmask(uniqueOptsByStateDefault), emptyOpts.StateBitmask(), "Empty unique options should have default bitmask")
 
 	otherStates := []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCompleted}
 	nonEmptyOpts := &UniqueOpts{
@@ -301,7 +301,7 @@ func TestUniqueOptsStateBitmask(t *testing.T) {
 func TestUniqueStatesToBitmask(t *testing.T) {
 	t.Parallel()
 
-	bitmask := UniqueStatesToBitmask(defaultUniqueStates)
+	bitmask := UniqueStatesToBitmask(uniqueOptsByStateDefault)
 	require.Equal(t, byte(0b11110101), bitmask, "Default unique states should be all set except cancelled and discarded")
 
 	for state, position := range jobStateBitPositions {
