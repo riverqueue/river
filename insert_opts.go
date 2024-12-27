@@ -184,6 +184,13 @@ func (o *UniqueOpts) isEmpty() bool {
 
 var jobStateAll = rivertype.JobStates() //nolint:gochecknoglobals
 
+var requiredV3states = []rivertype.JobState{ //nolint:gochecknoglobals
+	rivertype.JobStateAvailable,
+	rivertype.JobStatePending,
+	rivertype.JobStateRunning,
+	rivertype.JobStateScheduled,
+}
+
 func (o *UniqueOpts) validate() error {
 	if o.isEmpty() {
 		return nil
@@ -209,13 +216,7 @@ func (o *UniqueOpts) validate() error {
 		return nil
 	}
 
-	requiredV3states := []rivertype.JobState{
-		rivertype.JobStateAvailable,
-		rivertype.JobStatePending,
-		rivertype.JobStateRunning,
-		rivertype.JobStateScheduled,
-	}
-	missingStates := []string{}
+	var missingStates []string
 	for _, state := range requiredV3states {
 		if !slices.Contains(o.ByState, state) {
 			missingStates = append(missingStates, string(state))
