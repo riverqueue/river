@@ -84,8 +84,9 @@ type InsertOpts struct {
 //
 // When the options struct is uninitialized (its zero value) no uniqueness at is
 // enforced. As each property is initialized, it's added as a dimension on the
-// uniqueness matrix, and with any property on, the job's kind always counts
-// toward uniqueness.
+// uniqueness matrix. When any property has a non-zero value specified, the
+// job's kind automatically counts toward uniqueness, but can be excluded by
+// setting ExcludeKind to true.
 //
 // So for example, if only ByQueue is on, then for the given job kind, only a
 // single instance is allowed in any given queue, regardless of other properties
