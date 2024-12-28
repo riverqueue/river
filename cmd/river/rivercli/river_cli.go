@@ -103,10 +103,10 @@ func (c *CLI) BaseCommandSet() *cobra.Command {
 Provides command line facilities for the River job queue.
 
 Commands that need database access will take a --database-url argument, but can
-also accept Postgres configuration through its standard set of environment
+also accept Postgres configuration through the standard set of libpq environment
 variables like PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD, and PGSSLMODE,
-with a minimum of PGDATABASE required to use this strategy. --database-url will
-take precedence of PG* vars if it's been specified.
+with a minimum of PGDATABASE required. --database-url will take precedence of
+PG* vars if it's been specified.
 		`),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				if rootOpts.Version {
@@ -127,7 +127,7 @@ take precedence of PG* vars if it's been specified.
 	}
 
 	addDatabaseURLFlag := func(cmd *cobra.Command, databaseURL *string) {
-		cmd.Flags().StringVar(databaseURL, "database-url", "", "URL of the database (should look like `postgres://...`")
+		cmd.Flags().StringVar(databaseURL, "database-url", "", "URL of the database (should look like `postgres://...)`")
 	}
 	addLineFlag := func(cmd *cobra.Command, line *string) {
 		cmd.Flags().StringVar(line, "line", "", "migration line to operate on (default: main)")
