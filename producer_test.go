@@ -56,6 +56,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	dbDriver := riverpgxv5.New(dbPool)
 	exec := dbDriver.GetExecutor()
 	listener := dbDriver.GetListener()
+	pilot := &riverpilot.StandardPilot{}
 
 	subscribeCh := make(chan []jobcompleter.CompleterJobUpdated, 100)
 	t.Cleanup(riverinternaltest.DiscardContinuously(subscribeCh))
@@ -84,24 +85,25 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 
 	notifier := notifier.New(archetype, listener)
 
-	producer := newProducer(archetype, exec, &producerConfig{
+	producer := newProducer(archetype, exec, pilot, &producerConfig{
 		ClientID:     testClientID,
 		Completer:    completer,
 		ErrorHandler: newTestErrorHandler(),
 		// Fetch constantly to more aggressively trigger the potential data race:
-		FetchCooldown:       time.Millisecond,
-		FetchPollInterval:   time.Millisecond,
-		HookLookupByJob:     hooklookup.NewJobHookLookup(),
-		HookLookupGlobal:    hooklookup.NewHookLookup(nil),
-		JobTimeout:          JobTimeoutDefault,
-		MaxWorkers:          1000,
-		Notifier:            notifier,
-		Queue:               rivercommon.QueueDefault,
-		QueuePollInterval:   queuePollIntervalDefault,
-		QueueReportInterval: queueReportIntervalDefault,
-		RetryPolicy:         &DefaultClientRetryPolicy{},
-		SchedulerInterval:   maintenance.JobSchedulerIntervalDefault,
-		Workers:             workers,
+		FetchCooldown:                time.Millisecond,
+		FetchPollInterval:            time.Millisecond,
+		HookLookupByJob:              hooklookup.NewJobHookLookup(),
+		HookLookupGlobal:             hooklookup.NewHookLookup(nil),
+		JobTimeout:                   JobTimeoutDefault,
+		MaxWorkers:                   1000,
+		Notifier:                     notifier,
+		Queue:                        rivercommon.QueueDefault,
+		QueuePollInterval:            queuePollIntervalDefault,
+		QueueReportInterval:          queueReportIntervalDefault,
+		RetryPolicy:                  &DefaultClientRetryPolicy{},
+		SchedulerInterval:            maintenance.JobSchedulerIntervalDefault,
+		StaleProducerRetentionPeriod: time.Minute,
+		Workers:                      workers,
 	})
 
 	params := make([]*riverdriver.JobInsertFastParams, maxJobCount)
@@ -155,6 +157,7 @@ func TestProducer_PollOnly(t *testing.T) {
 		var (
 			archetype = riversharedtest.BaseServiceArchetype(t)
 			driver    = riverpgxv5.New(nil)
+			pilot     = &riverpilot.StandardPilot{}
 			tx        = riverinternaltest.TestTx(ctx, t)
 		)
 
@@ -173,23 +176,24 @@ func TestProducer_PollOnly(t *testing.T) {
 			t.Cleanup(completer.Stop)
 		}
 
-		return newProducer(archetype, exec, &producerConfig{
-			ClientID:            testClientID,
-			Completer:           completer,
-			ErrorHandler:        newTestErrorHandler(),
-			FetchCooldown:       FetchCooldownDefault,
-			FetchPollInterval:   50 * time.Millisecond, // more aggressive than normal because we have no notifier
-			HookLookupByJob:     hooklookup.NewJobHookLookup(),
-			HookLookupGlobal:    hooklookup.NewHookLookup(nil),
-			JobTimeout:          JobTimeoutDefault,
-			MaxWorkers:          1_000,
-			Notifier:            nil, // no notifier
-			Queue:               rivercommon.QueueDefault,
-			QueuePollInterval:   queuePollIntervalDefault,
-			QueueReportInterval: queueReportIntervalDefault,
-			RetryPolicy:         &DefaultClientRetryPolicy{},
-			SchedulerInterval:   riverinternaltest.SchedulerShortInterval,
-			Workers:             NewWorkers(),
+		return newProducer(archetype, exec, pilot, &producerConfig{
+			ClientID:                     testClientID,
+			Completer:                    completer,
+			ErrorHandler:                 newTestErrorHandler(),
+			FetchCooldown:                FetchCooldownDefault,
+			FetchPollInterval:            50 * time.Millisecond, // more aggressive than normal because we have no notifier
+			HookLookupByJob:              hooklookup.NewJobHookLookup(),
+			HookLookupGlobal:             hooklookup.NewHookLookup(nil),
+			JobTimeout:                   JobTimeoutDefault,
+			MaxWorkers:                   1_000,
+			Notifier:                     nil, // no notifier
+			Queue:                        rivercommon.QueueDefault,
+			QueuePollInterval:            queuePollIntervalDefault,
+			QueueReportInterval:          queueReportIntervalDefault,
+			RetryPolicy:                  &DefaultClientRetryPolicy{},
+			SchedulerInterval:            riverinternaltest.SchedulerShortInterval,
+			StaleProducerRetentionPeriod: time.Minute,
+			Workers:                      NewWorkers(),
 		}), jobUpdates
 	})
 }
@@ -207,6 +211,7 @@ func TestProducer_WithNotifier(t *testing.T) {
 			exec       = driver.GetExecutor()
 			jobUpdates = make(chan []jobcompleter.CompleterJobUpdated, 10)
 			listener   = driver.GetListener()
+			pilot      = &riverpilot.StandardPilot{}
 		)
 
 		completer := jobcompleter.NewInlineCompleter(archetype, exec, &riverpilot.StandardPilot{}, jobUpdates)
@@ -221,23 +226,24 @@ func TestProducer_WithNotifier(t *testing.T) {
 			t.Cleanup(notifier.Stop)
 		}
 
-		return newProducer(archetype, exec, &producerConfig{
-			ClientID:            testClientID,
-			Completer:           completer,
-			ErrorHandler:        newTestErrorHandler(),
-			FetchCooldown:       FetchCooldownDefault,
-			FetchPollInterval:   50 * time.Millisecond, // more aggressive than normal so in case we miss the event, tests still pass quickly
-			HookLookupByJob:     hooklookup.NewJobHookLookup(),
-			HookLookupGlobal:    hooklookup.NewHookLookup(nil),
-			JobTimeout:          JobTimeoutDefault,
-			MaxWorkers:          1_000,
-			Notifier:            notifier,
-			Queue:               rivercommon.QueueDefault,
-			QueuePollInterval:   queuePollIntervalDefault,
-			QueueReportInterval: queueReportIntervalDefault,
-			RetryPolicy:         &DefaultClientRetryPolicy{},
-			SchedulerInterval:   riverinternaltest.SchedulerShortInterval,
-			Workers:             NewWorkers(),
+		return newProducer(archetype, exec, pilot, &producerConfig{
+			ClientID:                     testClientID,
+			Completer:                    completer,
+			ErrorHandler:                 newTestErrorHandler(),
+			FetchCooldown:                FetchCooldownDefault,
+			FetchPollInterval:            50 * time.Millisecond, // more aggressive than normal so in case we miss the event, tests still pass quickly
+			HookLookupByJob:              hooklookup.NewJobHookLookup(),
+			HookLookupGlobal:             hooklookup.NewHookLookup(nil),
+			JobTimeout:                   JobTimeoutDefault,
+			MaxWorkers:                   1_000,
+			Notifier:                     notifier,
+			Queue:                        rivercommon.QueueDefault,
+			QueuePollInterval:            queuePollIntervalDefault,
+			QueueReportInterval:          queueReportIntervalDefault,
+			RetryPolicy:                  &DefaultClientRetryPolicy{},
+			SchedulerInterval:            riverinternaltest.SchedulerShortInterval,
+			StaleProducerRetentionPeriod: time.Minute,
+			Workers:                      NewWorkers(),
 		}), jobUpdates
 	})
 }

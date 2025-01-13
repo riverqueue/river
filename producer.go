@@ -272,19 +272,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		return errors.Is(err, startstop.ErrStop) || strings.HasSuffix(err.Error(), "conn closed") || fetchCtx.Err() != nil
 	}
 
-	// TODO: how does this handle being reinitialized after stop/start?
-	var err error
-	p.state, err = p.pilot.ProducerInit(fetchCtx, p.exec, p.config.ClientID, p.id, p.config.Queue)
-	if err != nil {
-		stopped()
-		if isExpectedShutdownError(err) {
-			return nil //nolint:nilerr
-		}
-		p.Logger.ErrorContext(fetchCtx, p.Name+": Error initializing producer state", slog.String("err", err.Error()))
-		return err
-	}
-
-	queue, err := func() (*rivertype.Queue, error) {
+	fetchedQueue, err := func() (*rivertype.Queue, error) {
 		ctx, cancel := context.WithTimeout(fetchCtx, 10*time.Second)
 		defer cancel()
 
@@ -303,8 +291,22 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		return err
 	}
 
-	initiallyPaused := queue != nil && (queue.PausedAt != nil)
-	p.paused = initiallyPaused
+	var initialQueue rivertype.Queue
+	if fetchedQueue != nil {
+		initialQueue = *fetchedQueue
+	}
+	p.paused = fetchedQueue.PausedAt != nil
+
+	// TODO: how does this handle being reinitialized after stop/start?
+	p.state, err = p.pilot.ProducerInit(fetchCtx, p.exec, p.config.ClientID, p.id, p.config.Queue)
+	if err != nil {
+		stopped()
+		if isExpectedShutdownError(err) {
+			return nil //nolint:nilerr
+		}
+		p.Logger.ErrorContext(fetchCtx, p.Name+": Error initializing producer state", slog.String("err", err.Error()))
+		return err
+	}
 
 	// TODO: fetcher should have some jitter in it to avoid stampeding issues.
 	fetchLimiter := chanutil.NewDebouncedChan(fetchCtx, p.config.FetchCooldown, true)
@@ -316,7 +318,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 	if p.config.Notifier == nil {
 		p.Logger.DebugContext(fetchCtx, p.Name+": No notifier configured; starting in poll mode", "client_id", p.config.ClientID)
 
-		go p.pollForSettingChanges(fetchCtx, initiallyPaused)
+		go p.pollForSettingChanges(fetchCtx, initialQueue)
 	} else {
 		var err error
 
@@ -605,7 +607,7 @@ func (p *producer) finalizeShutdown(baseCtx context.Context) {
 				return
 			}
 
-			sleepDuration := serviceutil.ExponentialBackoff(p.Rand, attempt, serviceutil.MaxAttemptsBeforeResetDefault)
+			sleepDuration := serviceutil.ExponentialBackoff(attempt, serviceutil.MaxAttemptsBeforeResetDefault)
 			p.Logger.ErrorContext(baseCtx, p.Name+": Producer shutdown error (will retry after sleep)",
 				"attempt", attempt, "err", err, "sleep_duration", sleepDuration, "timeout", timeout)
 			serviceutil.CancellableSleep(baseCtx, sleepDuration)
@@ -736,7 +738,7 @@ func (p *producer) handleWorkerDone(job *rivertype.JobRow) {
 	p.jobResultCh <- job
 }
 
-func (p *producer) pollForSettingChanges(ctx context.Context, lastPaused bool) {
+func (p *producer) pollForSettingChanges(ctx context.Context, lastQueueRecord rivertype.Queue) {
 	ticker := time.NewTicker(p.config.QueuePollInterval)
 	for {
 		select {
@@ -748,8 +750,16 @@ func (p *producer) pollForSettingChanges(ctx context.Context, lastPaused bool) {
 				p.Logger.ErrorContext(ctx, p.Name+": Error fetching queue settings", slog.String("err", err.Error()))
 				continue
 			}
+
+			if updatedQueue == nil {
+				p.Logger.ErrorContext(ctx, p.Name+": Queue row not found when polling for setting changes", slog.String("queue", p.config.Queue))
+				continue
+			}
+
+			// Look for a change in the paused state:
 			shouldBePaused := (updatedQueue.PausedAt != nil)
-			if lastPaused != shouldBePaused {
+			previouslyPaused := lastQueueRecord.PausedAt != nil
+			if previouslyPaused != shouldBePaused {
 				action := controlActionPause
 				if !shouldBePaused {
 					action = controlActionResume
@@ -766,11 +776,14 @@ func (p *producer) pollForSettingChanges(ctx context.Context, lastPaused bool) {
 
 				select {
 				case p.queueControlCh <- payload:
-					lastPaused = shouldBePaused
 				default:
 					p.Logger.WarnContext(ctx, p.Name+": Queue control notification dropped due to full buffer", slog.String("action", string(action)))
 				}
 			}
+
+			// TODO: Look for a change in the queue's metadata, emit event if changed
+
+			lastQueueRecord = *updatedQueue
 			p.testSignals.PolledQueueConfig.Signal(struct{}{})
 		}
 	}
@@ -781,6 +794,45 @@ func (p *producer) fetchQueueSettings(ctx context.Context) (*rivertype.Queue, er
 	defer cancel()
 
 	return p.exec.QueueGet(ctx, p.config.Queue)
+}
+
+func (p *producer) reportProducerStatusLoop(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	serviceutil.CancellableSleep(ctx, randutil.DurationBetween(0, time.Second))
+	reportTicker := timeutil.NewTickerWithInitialTick(ctx, p.config.ProducerReportInterval)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-reportTicker.C:
+			p.reportProducerStatusOnce(ctx)
+		}
+	}
+}
+
+func (p *producer) reportProducerStatusOnce(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	p.Logger.DebugContext(ctx, p.Name+": Reporting producer status", slog.String("id", p.id.String()), slog.String("queue", p.config.Queue))
+	err := p.pilot.ProducerKeepAlive(ctx, p.exec, &riverdriver.ProducerKeepAliveParams{
+		ID:                    p.id,
+		Queue:                 p.config.Queue,
+		StaleUpdatedAtHorizon: p.Time.NowUTC().Add(-p.config.StaleProducerRetentionPeriod),
+	})
+	if err != nil && errors.Is(context.Cause(ctx), startstop.ErrStop) {
+		return
+	}
+	if err != nil {
+		p.Logger.ErrorContext(ctx, p.Name+": Producer status update, error updating in database",
+			slog.String("id", p.id.String()),
+			slog.String("queue", p.config.Queue),
+			slog.String("err", err.Error()),
+		)
+		return
+	}
+	p.testSignals.ReportedProducerStatus.Signal(struct{}{})
 }
 
 func (p *producer) reportQueueStatusLoop(ctx context.Context, wg *sync.WaitGroup) {
@@ -816,45 +868,6 @@ func (p *producer) reportQueueStatusOnce(ctx context.Context) {
 		return
 	}
 	p.testSignals.ReportedQueueStatus.Signal(struct{}{})
-}
-
-func (p *producer) reportProducerStatusLoop(ctx context.Context, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	serviceutil.CancellableSleep(ctx, randutil.DurationBetween(p.Rand, 0, time.Second))
-	reportTicker := timeutil.NewTickerWithInitialTick(ctx, p.config.ProducerReportInterval)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-reportTicker.C:
-			p.reportProducerStatusOnce(ctx)
-		}
-	}
-}
-
-func (p *producer) reportProducerStatusOnce(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	p.Logger.DebugContext(ctx, p.Name+": Reporting producer status", slog.String("id", p.id.String()), slog.String("queue", p.config.Queue))
-	err := p.pilot.ProducerKeepAlive(ctx, p.exec, &riverdriver.ProducerKeepAliveParams{
-		ID:                    p.id,
-		Queue:                 p.config.Queue,
-		StaleUpdatedAtHorizon: p.Time.NowUTC().Add(-p.config.StaleProducerRetentionPeriod),
-	})
-	if err != nil && errors.Is(context.Cause(ctx), startstop.ErrStop) {
-		return
-	}
-	if err != nil {
-		p.Logger.ErrorContext(ctx, p.Name+": Producer status update, error updating in database",
-			slog.String("id", p.id.String()),
-			slog.String("queue", p.config.Queue),
-			slog.String("err", err.Error()),
-		)
-		return
-	}
-	p.testSignals.ReportedProducerStatus.Signal(struct{}{})
 }
 
 type producerFetchResult struct {
