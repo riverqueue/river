@@ -18,7 +18,7 @@ const (
 	ReindexerTimeoutDefault  = 15 * time.Second
 )
 
-var defaultIndexNames = []string{} //nolint:gochecknoglobals
+var defaultIndexNames = []string{"river_job_args_index", "river_job_metadata_index"} //nolint:gochecknoglobals
 
 // Test-only properties.
 type ReindexerTestSignals struct {
@@ -74,7 +74,7 @@ func NewReindexer(archetype *baseservice.Archetype, config *ReindexerConfig, exe
 
 	scheduleFunc := config.ScheduleFunc
 	if scheduleFunc == nil {
-		scheduleFunc = (&defaultReindexerSchedule{}).Next
+		scheduleFunc = (&DefaultReindexerSchedule{}).Next
 	}
 
 	return baseservice.Init(archetype, &Reindexer{
@@ -165,11 +165,11 @@ func (s *Reindexer) reindexOne(ctx context.Context, indexName string) error {
 	return nil
 }
 
-// defaultReindexerSchedule is a default schedule for the reindexer job which
+// DefaultReindexerSchedule is a default schedule for the reindexer job which
 // runs at midnight UTC daily.
-type defaultReindexerSchedule struct{}
+type DefaultReindexerSchedule struct{}
 
 // Next returns the next scheduled time for the reindexer job.
-func (s *defaultReindexerSchedule) Next(t time.Time) time.Time {
+func (s *DefaultReindexerSchedule) Next(t time.Time) time.Time {
 	return t.Add(24 * time.Hour).Truncate(24 * time.Hour)
 }

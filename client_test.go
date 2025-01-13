@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -3640,10 +3641,9 @@ func Test_Client_Maintenance(t *testing.T) {
 
 	t.Run("Reindexer", func(t *testing.T) {
 		t.Parallel()
-		t.Skip("Reindexer is disabled for further development")
 
 		config := newTestConfig(t, nil)
-		config.ReindexerSchedule = cron.Every(time.Second)
+		config.ReindexerSchedule = &runOnceSchedule{}
 
 		client, _ := setup(t, config)
 
@@ -3654,6 +3654,18 @@ func Test_Client_Maintenance(t *testing.T) {
 		svc.TestSignals.Reindexed.WaitOrTimeout()
 		svc.TestSignals.Reindexed.WaitOrTimeout()
 	})
+}
+
+type runOnceSchedule struct {
+	ran atomic.Bool
+}
+
+func (s *runOnceSchedule) Next(time.Time) time.Time {
+	if !s.ran.Swap(true) {
+		return time.Now()
+	}
+	// Return the maximum future time so that the schedule doesn't run again.
+	return time.Unix(1<<63-1, 0)
 }
 
 func Test_Client_QueueGet(t *testing.T) {
@@ -4935,6 +4947,12 @@ func Test_NewClient_Defaults(t *testing.T) {
 	require.Zero(t, enqueuer.Config.AdvisoryLockPrefix)
 	require.False(t, enqueuer.StaggerStartupIsDisabled())
 
+	reindexer := maintenance.GetService[*maintenance.Reindexer](client.queueMaintainer)
+	require.Equal(t, []string{"river_job_args_index", "river_job_metadata_index"}, reindexer.Config.IndexNames)
+	now := time.Now().UTC()
+	nextMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, 1)
+	require.Equal(t, nextMidnight, reindexer.Config.ScheduleFunc(now))
+
 	require.Nil(t, client.config.ErrorHandler)
 	require.Equal(t, FetchCooldownDefault, client.config.FetchCooldown)
 	require.Equal(t, FetchPollIntervalDefault, client.config.FetchPollInterval)
@@ -4979,6 +4997,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 		Logger:                      logger,
 		MaxAttempts:                 5,
 		Queues:                      map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}},
+		ReindexerSchedule:           &periodicIntervalSchedule{interval: time.Hour},
 		RetryPolicy:                 retryPolicy,
 		TestOnly:                    true, // disables staggered start in maintenance services
 		Workers:                     workers,
@@ -4997,6 +5016,10 @@ func Test_NewClient_Overrides(t *testing.T) {
 	enqueuer := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
 	require.Equal(t, int32(123_456), enqueuer.Config.AdvisoryLockPrefix)
 	require.True(t, enqueuer.StaggerStartupIsDisabled())
+
+	reindexer := maintenance.GetService[*maintenance.Reindexer](client.queueMaintainer)
+	now := time.Now().UTC()
+	require.Equal(t, now.Add(time.Hour), reindexer.Config.ScheduleFunc(now))
 
 	require.Equal(t, errorHandler, client.config.ErrorHandler)
 	require.Equal(t, 123*time.Millisecond, client.config.FetchCooldown)
