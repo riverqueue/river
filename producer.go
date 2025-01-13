@@ -595,7 +595,7 @@ func (p *producer) finalizeShutdown(baseCtx context.Context) {
 				return
 			}
 
-			sleepDuration := serviceutil.ExponentialBackoff(p.Rand, attempt, serviceutil.MaxAttemptsBeforeResetDefault)
+			sleepDuration := serviceutil.ExponentialBackoff(attempt, serviceutil.MaxAttemptsBeforeResetDefault)
 			p.Logger.ErrorContext(baseCtx, p.Name+": Producer shutdown error (will retry after sleep)",
 				"attempt", attempt, "err", err, "sleep_duration", sleepDuration, "timeout", timeout)
 			serviceutil.CancellableSleep(baseCtx, sleepDuration)
@@ -808,7 +808,7 @@ func (p *producer) reportQueueStatusOnce(ctx context.Context) {
 func (p *producer) reportProducerStatusLoop(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	serviceutil.CancellableSleep(ctx, randutil.DurationBetween(p.Rand, 0, time.Second))
+	serviceutil.CancellableSleep(ctx, randutil.DurationBetween(0, time.Second))
 	reportTicker := timeutil.NewTickerWithInitialTick(ctx, p.config.ProducerReportInterval)
 	for {
 		select {
