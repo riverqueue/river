@@ -787,6 +787,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 
 		for _, producer := range c.producersByQueueName {
 			if err := producer.StartWorkContext(fetchCtx, workCtx); err != nil {
+				workCancel(err)
 				startstop.StopAllParallel(producersAsServices()...)
 				workCancel(err)
 				stopServicesOnError()
