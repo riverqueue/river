@@ -6,7 +6,8 @@
 version: 2
 updates:
   - package-ecosystem: "gomod"
-    directory: "/" # Location of package manifests
+    directories:
+      - "**/*"
     groups:
       go-dependencies:
         update-types:
