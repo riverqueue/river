@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tidwall/sjson"
+
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/startstop"
@@ -369,6 +371,11 @@ func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, c
 
 	if insertParams.ScheduledAt == nil {
 		insertParams.ScheduledAt = &scheduledAt
+	}
+
+	if insertParams.Metadata, err = sjson.SetBytes(insertParams.Metadata, "periodic", true); err != nil {
+		s.Logger.ErrorContext(ctx, s.Name+": Error setting periodic metadata", "error", err.Error())
+		return nil, false
 	}
 
 	return insertParams, true

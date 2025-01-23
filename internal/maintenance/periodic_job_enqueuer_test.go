@@ -173,6 +173,44 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		requireNJobs(t, bundle.exec, "periodic_job_1500ms", 1)
 	})
 
+	t.Run("SetsPeriodicMetadataAttribute", func(t *testing.T) {
+		t.Parallel()
+
+		svc, bundle := setup(t)
+
+		jobConstructorWithMetadata := func(name string, metadata []byte) func() (*rivertype.JobInsertParams, error) {
+			return func() (*rivertype.JobInsertParams, error) {
+				params, err := jobConstructorFunc(name, false)()
+				if err != nil {
+					return nil, err
+				}
+				params.Metadata = metadata
+				return params, nil
+			}
+		}
+
+		svc.AddMany([]*PeriodicJob{
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorWithMetadata("p_md_nil", nil)},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorWithMetadata("p_md_empty_string", []byte(""))},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorWithMetadata("p_md_empty_obj", []byte("{}"))},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorWithMetadata("p_md_existing", []byte(`{"key": "value"}`))},
+		})
+
+		startService(t, svc)
+
+		svc.TestSignals.InsertedJobs.WaitOrTimeout()
+
+		assertMetadata := func(name string, expected string) {
+			job := requireNJobs(t, bundle.exec, name, 1)[0]
+			require.JSONEq(t, expected, string(job.Metadata))
+		}
+
+		assertMetadata("p_md_nil", `{"periodic": true}`)
+		assertMetadata("p_md_empty_string", `{"periodic": true}`)
+		assertMetadata("p_md_empty_obj", `{"periodic": true}`)
+		assertMetadata("p_md_existing", `{"key": "value", "periodic": true}`)
+	})
+
 	t.Run("SetsScheduledAtAccordingToExpectedNextRunAt", func(t *testing.T) {
 		t.Parallel()
 
