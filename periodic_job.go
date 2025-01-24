@@ -73,6 +73,18 @@ func NewPeriodicJob(scheduleFunc PeriodicSchedule, constructorFunc PeriodicJobCo
 	}
 }
 
+type neverSchedule struct{}
+
+func (s *neverSchedule) Next(t time.Time) time.Time {
+	// Return the maximum future time so that the schedule never runs.
+	return time.Unix(1<<63-1, 0)
+}
+
+// NeverSchedule returns a PeriodicSchedule that never runs.
+func NeverSchedule() PeriodicSchedule {
+	return &neverSchedule{}
+}
+
 type periodicIntervalSchedule struct {
 	interval time.Duration
 }

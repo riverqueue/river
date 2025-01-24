@@ -128,7 +128,7 @@ func TestReindexer(t *testing.T) {
 
 		require.Equal(t, defaultIndexNames, svc.Config.IndexNames)
 		require.Equal(t, ReindexerTimeoutDefault, svc.Config.Timeout)
-		require.Equal(t, svc.Config.ScheduleFunc(bundle.now), (&defaultReindexerSchedule{}).Next(bundle.now))
+		require.Equal(t, svc.Config.ScheduleFunc(bundle.now), (&DefaultReindexerSchedule{}).Next(bundle.now))
 	})
 }
 
@@ -138,7 +138,7 @@ func TestDefaultReindexerSchedule(t *testing.T) {
 	t.Run("WithMidnightInputReturnsMidnight24HoursLater", func(t *testing.T) {
 		t.Parallel()
 
-		schedule := &defaultReindexerSchedule{}
+		schedule := &DefaultReindexerSchedule{}
 		result := schedule.Next(time.Date(2023, 8, 31, 0, 0, 0, 0, time.UTC))
 		require.Equal(t, time.Date(2023, 9, 1, 0, 0, 0, 0, time.UTC), result)
 	})
@@ -146,7 +146,7 @@ func TestDefaultReindexerSchedule(t *testing.T) {
 	t.Run("WithMidnightInputReturnsMidnight24HoursLater", func(t *testing.T) {
 		t.Parallel()
 
-		schedule := &defaultReindexerSchedule{}
+		schedule := &DefaultReindexerSchedule{}
 		result := schedule.Next(time.Date(2023, 8, 31, 0, 0, 0, 0, time.UTC))
 		require.Equal(t, time.Date(2023, 9, 1, 0, 0, 0, 0, time.UTC), result)
 	})
@@ -154,7 +154,7 @@ func TestDefaultReindexerSchedule(t *testing.T) {
 	t.Run("With1NanosecondBeforeMidnightItReturnsUpcomingMidnight", func(t *testing.T) {
 		t.Parallel()
 
-		schedule := &defaultReindexerSchedule{}
+		schedule := &DefaultReindexerSchedule{}
 		result := schedule.Next(time.Date(2023, 8, 31, 23, 59, 59, 999999999, time.UTC))
 		require.Equal(t, time.Date(2023, 9, 1, 0, 0, 0, 0, time.UTC), result)
 	})
