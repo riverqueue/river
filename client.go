@@ -90,6 +90,17 @@ type Config struct {
 	// Defaults to 7 days.
 	DiscardedJobRetentionPeriod time.Duration
 
+	// SkipUnknownJobCheck is a flag to control whether the client should skip
+	// checking to see if a registered worker exists in the client's worker bundle
+	// for a job arg prior to insertion.
+	//
+	// This can be set to true to allow a client to insert jobs which are
+	// intended to be worked by a different client which effectively makes
+	// the client's insertion behavior mimic that of an insert-only client.
+	//
+	// Defaults to false.
+	SkipUnknownJobCheck bool
+
 	// ErrorHandler can be configured to be invoked in case of an error or panic
 	// occurring in a job. This is often useful for logging and exception
 	// tracking, but can also be used to customize retry behavior.
@@ -1687,11 +1698,11 @@ func (c *Client[TTx]) notifyQueuePauseOrResume(ctx context.Context, tx riverdriv
 }
 
 // Validates job args prior to insertion. Currently, verifies that a worker to
-// handle the kind is registered in the configured workers bundle. An
-// insert-only client doesn't require a workers bundle be configured though, so
-// no validation occurs if one wasn't.
+// handle the kind is registered in the configured workers bundle.
+// This validation is skipped if the client is configured as an insert-only (with no workers)
+// or if the client is configured to skip unknown job kinds.
 func (c *Client[TTx]) validateJobArgs(args JobArgs) error {
-	if c.config.Workers == nil {
+	if c.config.Workers == nil || c.config.SkipUnknownJobCheck {
 		return nil
 	}
 
