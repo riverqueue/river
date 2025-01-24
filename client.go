@@ -90,17 +90,6 @@ type Config struct {
 	// Defaults to 7 days.
 	DiscardedJobRetentionPeriod time.Duration
 
-	// SkipUnknownJobCheck is a flag to control whether the client should skip
-	// checking to see if a registered worker exists in the client's worker bundle
-	// for a job arg prior to insertion.
-	//
-	// This can be set to true to allow a client to insert jobs which are
-	// intended to be worked by a different client which effectively makes
-	// the client's insertion behavior mimic that of an insert-only client.
-	//
-	// Defaults to false.
-	SkipUnknownJobCheck bool
-
 	// ErrorHandler can be configured to be invoked in case of an error or panic
 	// occurring in a job. This is often useful for logging and exception
 	// tracking, but can also be used to customize retry behavior.
@@ -230,6 +219,17 @@ type Config struct {
 	//
 	// Defaults to DefaultRetryPolicy.
 	RetryPolicy ClientRetryPolicy
+
+	// SkipUnknownJobCheck is a flag to control whether the client should skip
+	// checking to see if a registered worker exists in the client's worker bundle
+	// for a job arg prior to insertion.
+	//
+	// This can be set to true to allow a client to insert jobs which are
+	// intended to be worked by a different client which effectively makes
+	// the client's insertion behavior mimic that of an insert-only client.
+	//
+	// Defaults to false.
+	SkipUnknownJobCheck bool
 
 	// TestOnly can be set to true to disable certain features that are useful
 	// in production, but which may be harmful to tests, in ways like having the
@@ -496,6 +496,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		ReindexerSchedule:           config.ReindexerSchedule,
 		RescueStuckJobsAfter:        valutil.ValOrDefault(config.RescueStuckJobsAfter, rescueAfter),
 		RetryPolicy:                 retryPolicy,
+		SkipUnknownJobCheck:         config.SkipUnknownJobCheck,
 		TestOnly:                    config.TestOnly,
 		Workers:                     config.Workers,
 		WorkerMiddleware:            config.WorkerMiddleware,
