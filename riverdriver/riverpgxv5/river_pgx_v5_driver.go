@@ -413,21 +413,22 @@ func (e *Executor) JobSetCompleteIfRunningMany(ctx context.Context, params *rive
 }
 
 func (e *Executor) JobSetStateIfRunning(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
-	var maxAttempts int16
-	if params.MaxAttempts != nil {
-		maxAttempts = int16(min(*params.MaxAttempts, math.MaxInt16)) //nolint:gosec
+	var attempt int16
+	if params.Attempt != nil {
+		attempt = int16(min(*params.Attempt, math.MaxInt16)) //nolint:gosec
 	}
 
 	job, err := dbsqlc.New().JobSetStateIfRunning(ctx, e.dbtx, &dbsqlc.JobSetStateIfRunningParams{
 		ID:                  params.ID,
+		AttemptUpdate:       params.Attempt != nil,
+		Attempt:             attempt,
 		ErrorDoUpdate:       params.ErrData != nil,
 		Error:               params.ErrData,
 		FinalizedAtDoUpdate: params.FinalizedAt != nil,
 		FinalizedAt:         params.FinalizedAt,
-		MaxAttemptsUpdate:   params.MaxAttempts != nil,
-		MaxAttempts:         maxAttempts,
 		ScheduledAtDoUpdate: params.ScheduledAt != nil,
 		ScheduledAt:         params.ScheduledAt,
+		SnoozeDoIncrement:   params.SnoozeDoIncrement,
 		State:               dbsqlc.RiverJobState(params.State),
 	})
 	if err != nil {
@@ -439,18 +440,23 @@ func (e *Executor) JobSetStateIfRunning(ctx context.Context, params *riverdriver
 func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
 	setStateParams := &dbsqlc.JobSetStateIfRunningManyParams{
 		IDs:                 params.ID,
+		Attempt:             make([]int32, len(params.ID)),
+		AttemptDoUpdate:     make([]bool, len(params.ID)),
 		Errors:              params.ErrData,
 		ErrorsDoUpdate:      make([]bool, len(params.ID)),
 		FinalizedAt:         make([]time.Time, len(params.ID)),
 		FinalizedAtDoUpdate: make([]bool, len(params.ID)),
-		MaxAttempts:         make([]int32, len(params.ID)),
-		MaxAttemptsDoUpdate: make([]bool, len(params.ID)),
 		ScheduledAt:         make([]time.Time, len(params.ID)),
 		ScheduledAtDoUpdate: make([]bool, len(params.ID)),
+		SnoozeDoIncrement:   make([]bool, len(params.ID)),
 		State:               make([]string, len(params.ID)),
 	}
 
 	for i := 0; i < len(params.ID); i++ {
+		if params.Attempt[i] != nil {
+			setStateParams.AttemptDoUpdate[i] = true
+			setStateParams.Attempt[i] = int32(*params.Attempt[i]) //nolint:gosec
+		}
 		if params.ErrData[i] != nil {
 			setStateParams.ErrorsDoUpdate[i] = true
 		}
@@ -458,14 +464,11 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 			setStateParams.FinalizedAtDoUpdate[i] = true
 			setStateParams.FinalizedAt[i] = *params.FinalizedAt[i]
 		}
-		if params.MaxAttempts[i] != nil {
-			setStateParams.MaxAttemptsDoUpdate[i] = true
-			setStateParams.MaxAttempts[i] = int32(*params.MaxAttempts[i]) //nolint:gosec
-		}
 		if params.ScheduledAt[i] != nil {
 			setStateParams.ScheduledAtDoUpdate[i] = true
 			setStateParams.ScheduledAt[i] = *params.ScheduledAt[i]
 		}
+		setStateParams.SnoozeDoIncrement[i] = params.SnoozeDoIncrement[i]
 		setStateParams.State[i] = string(params.State[i])
 	}
 

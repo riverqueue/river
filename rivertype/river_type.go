@@ -51,7 +51,8 @@ type JobRow struct {
 
 	// Attempt is the attempt number of the job. Jobs are inserted at 0, the
 	// number is incremented to 1 the first time work its worked, and may
-	// increment further if it's either snoozed or errors.
+	// increment further if it errors. Attempt will decrement on snooze so that
+	// repeated snoozes don't increment this value.
 	Attempt int
 
 	// AttemptedAt is the time that the job was last worked. Starts out as `nil`

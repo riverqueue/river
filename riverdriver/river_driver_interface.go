@@ -320,12 +320,13 @@ type JobSetCompleteIfRunningManyParams struct {
 // running job. Use one of the constructors below to ensure a correct
 // combination of parameters.
 type JobSetStateIfRunningParams struct {
-	ID          int64
-	ErrData     []byte
-	FinalizedAt *time.Time
-	MaxAttempts *int
-	ScheduledAt *time.Time
-	State       rivertype.JobState
+	ID                int64
+	Attempt           *int
+	ErrData           []byte
+	FinalizedAt       *time.Time
+	ScheduledAt       *time.Time
+	SnoozeDoIncrement bool
+	State             rivertype.JobState
 }
 
 func JobSetStateCancelled(id int64, finalizedAt time.Time, errData []byte) *JobSetStateIfRunningParams {
@@ -348,24 +349,25 @@ func JobSetStateErrorRetryable(id int64, scheduledAt time.Time, errData []byte) 
 	return &JobSetStateIfRunningParams{ID: id, ErrData: errData, ScheduledAt: &scheduledAt, State: rivertype.JobStateRetryable}
 }
 
-func JobSetStateSnoozed(id int64, scheduledAt time.Time, maxAttempts int) *JobSetStateIfRunningParams {
-	return &JobSetStateIfRunningParams{ID: id, MaxAttempts: &maxAttempts, ScheduledAt: &scheduledAt, State: rivertype.JobStateScheduled}
+func JobSetStateSnoozed(id int64, scheduledAt time.Time, attempt int) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{ID: id, Attempt: &attempt, ScheduledAt: &scheduledAt, SnoozeDoIncrement: true, State: rivertype.JobStateScheduled}
 }
 
-func JobSetStateSnoozedAvailable(id int64, scheduledAt time.Time, maxAttempts int) *JobSetStateIfRunningParams {
-	return &JobSetStateIfRunningParams{ID: id, MaxAttempts: &maxAttempts, ScheduledAt: &scheduledAt, State: rivertype.JobStateAvailable}
+func JobSetStateSnoozedAvailable(id int64, scheduledAt time.Time, attempt int) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{ID: id, Attempt: &attempt, ScheduledAt: &scheduledAt, SnoozeDoIncrement: true, State: rivertype.JobStateAvailable}
 }
 
 // JobSetStateIfRunningManyParams are parameters to update the state of
 // currently running jobs. Use one of the constructors below to ensure a correct
 // combination of parameters.
 type JobSetStateIfRunningManyParams struct {
-	ID          []int64
-	ErrData     [][]byte
-	FinalizedAt []*time.Time
-	MaxAttempts []*int
-	ScheduledAt []*time.Time
-	State       []rivertype.JobState
+	ID                []int64
+	Attempt           []*int
+	ErrData           [][]byte
+	FinalizedAt       []*time.Time
+	ScheduledAt       []*time.Time
+	SnoozeDoIncrement []bool
+	State             []rivertype.JobState
 }
 
 type JobUpdateParams struct {

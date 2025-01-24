@@ -438,6 +438,7 @@ func Test_Client(t *testing.T) {
 
 		updatedJob, err := client.JobGet(ctx, insertRes.Job.ID)
 		require.NoError(t, err)
+		require.Equal(t, 0, updatedJob.Attempt)
 		require.Equal(t, rivertype.JobStateScheduled, updatedJob.State)
 		require.WithinDuration(t, time.Now().Add(15*time.Minute), updatedJob.ScheduledAt, 2*time.Second)
 	})
