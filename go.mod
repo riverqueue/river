@@ -1,8 +1,8 @@
 module github.com/riverqueue/river
 
-go 1.22
+go 1.22.0
 
-toolchain go1.23.0
+toolchain go1.23.5
 
 require (
 	github.com/jackc/pgerrcode v0.0.0-20220416144525-469b46aa5efa
