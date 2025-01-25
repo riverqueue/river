@@ -1979,38 +1979,32 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 	setStateManyParams := func(params ...*riverdriver.JobSetStateIfRunningParams) *riverdriver.JobSetStateIfRunningManyParams {
 		batchParams := &riverdriver.JobSetStateIfRunningManyParams{}
-		// 	ID:          make([]int64, len(params)),
-		// 	ErrData:     make([]byte, len(params)),
-		// 	FinalizedAt: make([]*time.Time, len(params)),
-		// 	MaxAttempts: []*int{maxAttempts},
-		// 	ScheduledAt: []*time.Time{scheduledAt},
-		// 	State:       []rivertype.JobState{params.State},
-		// }
 		for _, param := range params {
 			var (
+				attempt     *int
 				errData     []byte
 				finalizedAt *time.Time
-				maxAttempts *int
 				scheduledAt *time.Time
 			)
+			if param.Attempt != nil {
+				attempt = param.Attempt
+			}
 			if param.ErrData != nil {
 				errData = param.ErrData
 			}
 			if param.FinalizedAt != nil {
 				finalizedAt = param.FinalizedAt
 			}
-			if param.MaxAttempts != nil {
-				maxAttempts = param.MaxAttempts
-			}
 			if param.ScheduledAt != nil {
 				scheduledAt = param.ScheduledAt
 			}
 
 			batchParams.ID = append(batchParams.ID, param.ID)
+			batchParams.Attempt = append(batchParams.Attempt, attempt)
 			batchParams.ErrData = append(batchParams.ErrData, errData)
 			batchParams.FinalizedAt = append(batchParams.FinalizedAt, finalizedAt)
-			batchParams.MaxAttempts = append(batchParams.MaxAttempts, maxAttempts)
 			batchParams.ScheduledAt = append(batchParams.ScheduledAt, scheduledAt)
+			batchParams.SnoozeDoIncrement = append(batchParams.SnoozeDoIncrement, param.SnoozeDoIncrement)
 			batchParams.State = append(batchParams.State, param.State)
 		}
 
@@ -2224,6 +2218,75 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			jobUpdated, err := exec.JobGetByID(ctx, job.ID)
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateDiscarded, jobUpdated.State)
+		})
+	})
+
+	t.Run("JobSetStateIfRunningMany_JobSetStateSnoozed", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("SnoozesARunningJob_WithNoPreexistingMetadata", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			now := time.Now().UTC()
+			snoozeUntil := now.Add(1 * time.Minute)
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Attempt:   ptrutil.Ptr(5),
+				State:     ptrutil.Ptr(rivertype.JobStateRunning),
+				UniqueKey: []byte("unique-key"),
+			})
+
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateSnoozed(job.ID, snoozeUntil, 4)))
+			require.NoError(t, err)
+			jobAfter := jobsAfter[0]
+			require.Equal(t, 4, jobAfter.Attempt)
+			require.Equal(t, job.MaxAttempts, jobAfter.MaxAttempts)
+			require.JSONEq(t, `{"snoozes": 1}`, string(jobAfter.Metadata))
+			require.Equal(t, rivertype.JobStateScheduled, jobAfter.State)
+			require.WithinDuration(t, snoozeUntil, jobAfter.ScheduledAt, time.Microsecond)
+
+			jobUpdated, err := exec.JobGetByID(ctx, job.ID)
+			require.NoError(t, err)
+			require.Equal(t, 4, jobUpdated.Attempt)
+			require.Equal(t, job.MaxAttempts, jobUpdated.MaxAttempts)
+			require.JSONEq(t, `{"snoozes": 1}`, string(jobUpdated.Metadata))
+			require.Equal(t, rivertype.JobStateScheduled, jobUpdated.State)
+			require.Equal(t, "unique-key", string(jobUpdated.UniqueKey))
+		})
+
+		t.Run("SnoozesARunningJob_WithPreexistingMetadata", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			now := time.Now().UTC()
+			snoozeUntil := now.Add(1 * time.Minute)
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Attempt:   ptrutil.Ptr(5),
+				State:     ptrutil.Ptr(rivertype.JobStateRunning),
+				UniqueKey: []byte("unique-key"),
+				Metadata:  []byte(`{"foo": "bar", "snoozes": 5}`),
+			})
+
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateSnoozed(job.ID, snoozeUntil, 4)))
+			require.NoError(t, err)
+			jobAfter := jobsAfter[0]
+			require.Equal(t, 4, jobAfter.Attempt)
+			require.Equal(t, job.MaxAttempts, jobAfter.MaxAttempts)
+			require.JSONEq(t, `{"foo": "bar", "snoozes": 6}`, string(jobAfter.Metadata))
+			require.Equal(t, rivertype.JobStateScheduled, jobAfter.State)
+			require.WithinDuration(t, snoozeUntil, jobAfter.ScheduledAt, time.Microsecond)
+
+			jobUpdated, err := exec.JobGetByID(ctx, job.ID)
+			require.NoError(t, err)
+			require.Equal(t, 4, jobUpdated.Attempt)
+			require.Equal(t, job.MaxAttempts, jobUpdated.MaxAttempts)
+			require.JSONEq(t, `{"foo": "bar", "snoozes": 6}`, string(jobUpdated.Metadata))
+			require.Equal(t, rivertype.JobStateScheduled, jobUpdated.State)
+			require.Equal(t, "unique-key", string(jobUpdated.UniqueKey))
 		})
 	})
 

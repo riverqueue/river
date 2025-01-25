@@ -365,11 +365,11 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.Equal(t, "", job.Errors[0].Trace)
 	})
 
-	t.Run("JobSnoozeErrorReschedulesJobAndIncrementsMaxAttempts", func(t *testing.T) {
+	t.Run("JobSnoozeErrorReschedulesJobAndDecrementsAttempt", func(t *testing.T) {
 		t.Parallel()
 
 		executor, bundle := setup(t)
-		maxAttemptsBefore := bundle.jobRow.MaxAttempts
+		attemptBefore := bundle.jobRow.Attempt
 
 		cancelErr := JobSnooze(30 * time.Minute)
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return cancelErr }, nil).MakeUnit(bundle.jobRow)
@@ -381,15 +381,15 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateScheduled, job.State)
 		require.WithinDuration(t, time.Now().Add(30*time.Minute), job.ScheduledAt, 2*time.Second)
-		require.Equal(t, maxAttemptsBefore+1, job.MaxAttempts)
+		require.Equal(t, attemptBefore-1, job.Attempt)
 		require.Empty(t, job.Errors)
 	})
 
-	t.Run("JobSnoozeErrorInNearFutureMakesJobAvailableAndIncrementsMaxAttempts", func(t *testing.T) {
+	t.Run("JobSnoozeErrorInNearFutureMakesJobAvailableAndDecrementsAttempt", func(t *testing.T) {
 		t.Parallel()
 
 		executor, bundle := setup(t)
-		maxAttemptsBefore := bundle.jobRow.MaxAttempts
+		attemptBefore := bundle.jobRow.Attempt
 
 		cancelErr := JobSnooze(time.Millisecond)
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return cancelErr }, nil).MakeUnit(bundle.jobRow)
@@ -401,7 +401,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateAvailable, job.State)
 		require.WithinDuration(t, time.Now(), job.ScheduledAt, 2*time.Second)
-		require.Equal(t, maxAttemptsBefore+1, job.MaxAttempts)
+		require.Equal(t, attemptBefore-1, job.Attempt)
 		require.Empty(t, job.Errors)
 	})
 

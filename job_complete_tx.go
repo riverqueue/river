@@ -39,12 +39,13 @@ func JobCompleteTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs](ctx 
 	execTx := driver.UnwrapExecutor(tx)
 	params := riverdriver.JobSetStateCompleted(job.ID, time.Now())
 	rows, err := pilot.JobSetStateIfRunningMany(ctx, execTx, &riverdriver.JobSetStateIfRunningManyParams{
-		ID:          []int64{params.ID},
-		ErrData:     [][]byte{params.ErrData},
-		FinalizedAt: []*time.Time{params.FinalizedAt},
-		MaxAttempts: []*int{params.MaxAttempts},
-		ScheduledAt: []*time.Time{params.ScheduledAt},
-		State:       []rivertype.JobState{params.State},
+		ID:                []int64{params.ID},
+		Attempt:           []*int{params.Attempt},
+		ErrData:           [][]byte{params.ErrData},
+		FinalizedAt:       []*time.Time{params.FinalizedAt},
+		ScheduledAt:       []*time.Time{params.ScheduledAt},
+		SnoozeDoIncrement: []bool{params.SnoozeDoIncrement},
+		State:             []rivertype.JobState{params.State},
 	})
 	if err != nil {
 		return nil, err

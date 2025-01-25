@@ -34,8 +34,8 @@ func (w *SnoozingWorker) Work(ctx context.Context, job *river.Job[SnoozingArgs])
 
 // Example_jobSnooze demonstrates how to snooze a job from within Work using
 // JobSnooze. The job will be run again after 5 minutes and the snooze attempt
-// will increment the job's max attempts, ensuring that one can snooze as many
-// times as desired.
+// will decrement the job's attempt count, ensuring that one can snooze as many
+// times as desired without being impacted by the max attempts.
 func Example_jobSnooze() { //nolint:dupl
 	ctx := context.Background()
 

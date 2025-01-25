@@ -36,10 +36,12 @@ type DefaultClientRetryPolicy struct {
 // try will be scheduled in 1 seconds, 16 seconds after the second, 1 minute and
 // 21 seconds after the third, etc.
 //
-// In order to avoid penalizing jobs that are snoozed, the number of errors is
-// used instead of the attempt count. This means that snoozing a job (even
-// repeatedly) will not lead to a future error having a longer than expected
-// retry delay.
+// Snoozes do not count as attempts and do not influence retry behavior.
+// Earlier versions of River would allow the attempt to increment each time a
+// job was snoozed. Although this has been changed and snoozes now decrement the
+// attempt count, we can maintain the same retry schedule even for pre-existing
+// jobs by using the number of errors instead of the attempt count. This ensures
+// consistent behavior across River versions.
 //
 // At degenerately high retry counts (>= 310) the policy starts adding the
 // equivalent of the maximum of time.Duration to each retry, about 292 years.
