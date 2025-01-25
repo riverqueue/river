@@ -10,6 +10,7 @@ import (
 	"github.com/tidwall/sjson"
 
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -123,7 +124,7 @@ func buildUniqueKeyString(timeGen baseservice.TimeGenerator, uniqueOpts *UniqueO
 	}
 
 	if uniqueOpts.ByPeriod != time.Duration(0) {
-		lowerPeriodBound := timeGen.NowUTC().Truncate(uniqueOpts.ByPeriod)
+		lowerPeriodBound := ptrutil.ValOrDefaultFunc(params.ScheduledAt, timeGen.NowUTC).Truncate(uniqueOpts.ByPeriod)
 		sb.WriteString("&period=" + lowerPeriodBound.Format(time.RFC3339))
 	}
 

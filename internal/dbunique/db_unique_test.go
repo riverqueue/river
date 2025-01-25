@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -30,10 +31,11 @@ func TestUniqueKey(t *testing.T) {
 	stubSvc.StubNowUTC(now)
 
 	tests := []struct {
-		name         string
-		argsFunc     func() rivertype.JobArgs
-		uniqueOpts   UniqueOpts
-		expectedJSON string
+		name                   string
+		argsFunc               func() rivertype.JobArgs
+		modifyInsertParamsFunc func(insertParams *rivertype.JobInsertParams)
+		uniqueOpts             UniqueOpts
+		expectedJSON           string
 	}{
 		{
 			name: "ByArgsWithMultipleUniqueStructTagsAndDefaultStates",
@@ -166,6 +168,22 @@ func TestUniqueKey(t *testing.T) {
 			expectedJSON: "&kind=worker_4&period=" + now.Truncate(time.Hour).Format(time.RFC3339),
 		},
 		{
+			name: "PeriodFromScheduledAt",
+			argsFunc: func() rivertype.JobArgs {
+				type TaskJobArgs struct {
+					JobArgsStaticKind
+				}
+				return TaskJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_4"},
+				}
+			},
+			modifyInsertParamsFunc: func(insertParams *rivertype.JobInsertParams) {
+				insertParams.ScheduledAt = ptrutil.Ptr(now.Add(time.Hour))
+			},
+			uniqueOpts:   UniqueOpts{ByPeriod: time.Hour},
+			expectedJSON: "&kind=worker_4&period=" + now.Add(time.Hour).Truncate(time.Hour).Format(time.RFC3339),
+		},
+		{
 			name: "ExcludeKindByArgs",
 			argsFunc: func() rivertype.JobArgs {
 				type TaskJobArgs struct {
@@ -228,7 +246,7 @@ func TestUniqueKey(t *testing.T) {
 				states = tt.uniqueOpts.ByState
 			}
 
-			jobParams := &rivertype.JobInsertParams{
+			insertParams := &rivertype.JobInsertParams{
 				Args:         args,
 				CreatedAt:    &now,
 				EncodedArgs:  encodedArgs,
@@ -241,12 +259,16 @@ func TestUniqueKey(t *testing.T) {
 				UniqueStates: UniqueStatesToBitmask(states),
 			}
 
-			uniqueKeyPreHash, err := buildUniqueKeyString(stubSvc, &tt.uniqueOpts, jobParams)
+			if tt.modifyInsertParamsFunc != nil {
+				tt.modifyInsertParamsFunc(insertParams)
+			}
+
+			uniqueKeyPreHash, err := buildUniqueKeyString(stubSvc, &tt.uniqueOpts, insertParams)
 			require.NoError(t, err)
 			require.Equal(t, tt.expectedJSON, uniqueKeyPreHash)
 			expectedHash := sha256.Sum256([]byte(tt.expectedJSON))
 
-			uniqueKey, err := UniqueKey(stubSvc, &tt.uniqueOpts, jobParams)
+			uniqueKey, err := UniqueKey(stubSvc, &tt.uniqueOpts, insertParams)
 			require.NoError(t, err)
 			require.NotNil(t, uniqueKey)
 
