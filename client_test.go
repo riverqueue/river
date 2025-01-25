@@ -5515,7 +5515,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 
 		insertParams, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, nil)
 		require.NoError(t, err)
-		require.Equal(t, `{"name":""}`, string(insertParams.EncodedArgs))
+		require.JSONEq(t, `{"name":""}`, string(insertParams.EncodedArgs))
 		require.Equal(t, (noOpArgs{}).Kind(), insertParams.Kind)
 		require.Equal(t, config.MaxAttempts, insertParams.MaxAttempts)
 		require.Equal(t, rivercommon.PriorityDefault, insertParams.Priority)

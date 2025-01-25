@@ -752,6 +752,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		workCtx, workCancel := context.WithCancelCause(withClient[TTx](ctx, c))
 
 		if err := startstop.StartAll(fetchCtx, c.services...); err != nil {
+			workCancel(err)
 			stopServicesOnError()
 			return err
 		}
@@ -761,6 +762,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 
 			if err := producer.StartWorkContext(fetchCtx, workCtx); err != nil {
 				startstop.StopAllParallel(producersAsServices()...)
+				workCancel(err)
 				stopServicesOnError()
 				return err
 			}
@@ -813,6 +815,8 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		c.baseService.Logger.DebugContext(ctx, c.baseService.Name+": Stopping producers")
 		startstop.StopAllParallel(producersAsServices()...)
 		c.baseService.Logger.DebugContext(ctx, c.baseService.Name+": All producers stopped")
+
+		c.workCancel(rivercommon.ErrShutdown)
 
 		// Stop all mainline services where stop order isn't important.
 		startstop.StopAllParallel(append(

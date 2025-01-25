@@ -114,7 +114,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		jobs, err := exec.JobGetByKindMany(ctx, []string{kind})
 		require.NoError(t, err)
-		require.Len(t, jobs, n, fmt.Sprintf("Expected to find exactly %d job(s) of kind: %s, but found %d", n, kind, len(jobs)))
+		require.Len(t, jobs, n, "Expected to find exactly %d job(s) of kind: %s, but found %d", n, kind, len(jobs))
 
 		return jobs
 	}
