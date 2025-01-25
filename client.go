@@ -220,6 +220,17 @@ type Config struct {
 	// Defaults to DefaultRetryPolicy.
 	RetryPolicy ClientRetryPolicy
 
+	// SkipUnknownJobCheck is a flag to control whether the client should skip
+	// checking to see if a registered worker exists in the client's worker bundle
+	// for a job arg prior to insertion.
+	//
+	// This can be set to true to allow a client to insert jobs which are
+	// intended to be worked by a different client which effectively makes
+	// the client's insertion behavior mimic that of an insert-only client.
+	//
+	// Defaults to false.
+	SkipUnknownJobCheck bool
+
 	// TestOnly can be set to true to disable certain features that are useful
 	// in production, but which may be harmful to tests, in ways like having the
 	// effect of making them slower. It should not be used outside of test
@@ -485,6 +496,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		ReindexerSchedule:           config.ReindexerSchedule,
 		RescueStuckJobsAfter:        valutil.ValOrDefault(config.RescueStuckJobsAfter, rescueAfter),
 		RetryPolicy:                 retryPolicy,
+		SkipUnknownJobCheck:         config.SkipUnknownJobCheck,
 		TestOnly:                    config.TestOnly,
 		Workers:                     config.Workers,
 		WorkerMiddleware:            config.WorkerMiddleware,
@@ -1687,11 +1699,11 @@ func (c *Client[TTx]) notifyQueuePauseOrResume(ctx context.Context, tx riverdriv
 }
 
 // Validates job args prior to insertion. Currently, verifies that a worker to
-// handle the kind is registered in the configured workers bundle. An
-// insert-only client doesn't require a workers bundle be configured though, so
-// no validation occurs if one wasn't.
+// handle the kind is registered in the configured workers bundle.
+// This validation is skipped if the client is configured as an insert-only (with no workers)
+// or if the client is configured to skip unknown job kinds.
 func (c *Client[TTx]) validateJobArgs(args JobArgs) error {
-	if c.config.Workers == nil {
+	if c.config.Workers == nil || c.config.SkipUnknownJobCheck {
 		return nil
 	}
 

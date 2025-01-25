@@ -1627,6 +1627,17 @@ func Test_Client_Insert(t *testing.T) {
 		_, err := client.Insert(ctx, &unregisteredJobArgs{}, nil)
 		require.NoError(t, err)
 	})
+
+	t.Run("AllowsUnknownJobKindWithSkipUnknownJobCheck", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		client.config.SkipUnknownJobCheck = true
+
+		_, err := client.Insert(ctx, &unregisteredJobArgs{}, nil)
+		require.NoError(t, err)
+	})
 }
 
 func Test_Client_InsertTx(t *testing.T) {
@@ -1748,6 +1759,17 @@ func Test_Client_InsertTx(t *testing.T) {
 		client, bundle := setup(t)
 
 		client.config.Workers = nil
+
+		_, err := client.InsertTx(ctx, bundle.tx, &unregisteredJobArgs{}, nil)
+		require.NoError(t, err)
+	})
+
+	t.Run("AllowsUnknownJobKindWithSkipUnknownJobCheck", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		client.config.SkipUnknownJobCheck = true
 
 		_, err := client.InsertTx(ctx, bundle.tx, &unregisteredJobArgs{}, nil)
 		require.NoError(t, err)
@@ -1960,6 +1982,19 @@ func Test_Client_InsertManyFast(t *testing.T) {
 		require.NoError(t, err)
 	})
 
+	t.Run("AllowsUnknownJobKindWithSkipUnknownJobCheck", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		client.config.SkipUnknownJobCheck = true
+
+		_, err := client.InsertManyFast(ctx, []InsertManyParams{
+			{Args: unregisteredJobArgs{}},
+		})
+		require.NoError(t, err)
+	})
+
 	t.Run("ErrorsOnInsertOptsWithoutRequiredUniqueStates", func(t *testing.T) {
 		t.Parallel()
 
@@ -2108,6 +2143,19 @@ func Test_Client_InsertManyFastTx(t *testing.T) {
 		client, bundle := setup(t)
 
 		client.config.Workers = nil
+
+		_, err := client.InsertManyFastTx(ctx, bundle.tx, []InsertManyParams{
+			{Args: unregisteredJobArgs{}},
+		})
+		require.NoError(t, err)
+	})
+
+	t.Run("AllowsUnknownJobKindWithSkipUnknownJobCheck", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		client.config.SkipUnknownJobCheck = true
 
 		_, err := client.InsertManyFastTx(ctx, bundle.tx, []InsertManyParams{
 			{Args: unregisteredJobArgs{}},
@@ -2381,6 +2429,20 @@ func Test_Client_InsertMany(t *testing.T) {
 		require.Len(t, results, 1)
 	})
 
+	t.Run("AllowsUnknownJobKindWithSkipUnknownJobCheck", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		client.config.SkipUnknownJobCheck = true
+
+		results, err := client.InsertMany(ctx, []InsertManyParams{
+			{Args: unregisteredJobArgs{}},
+		})
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+	})
+
 	t.Run("ErrorsOnInsertOptsWithV1UniqueOpts", func(t *testing.T) {
 		t.Parallel()
 
@@ -2630,6 +2692,20 @@ func Test_Client_InsertManyTx(t *testing.T) {
 		client, bundle := setup(t)
 
 		client.config.Workers = nil
+
+		results, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{
+			{Args: unregisteredJobArgs{}},
+		})
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+	})
+
+	t.Run("AllowsUnknownJobKindWithSkipUnknownJobCheck", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		client.config.SkipUnknownJobCheck = true
 
 		results, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{
 			{Args: unregisteredJobArgs{}},
@@ -4961,6 +5037,7 @@ func Test_NewClient_Defaults(t *testing.T) {
 	require.NotZero(t, client.baseService.Logger)
 	require.Equal(t, MaxAttemptsDefault, client.config.MaxAttempts)
 	require.IsType(t, &DefaultClientRetryPolicy{}, client.config.RetryPolicy)
+	require.False(t, client.config.SkipUnknownJobCheck)
 }
 
 func Test_NewClient_Overrides(t *testing.T) {
@@ -5000,6 +5077,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 		Queues:                      map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}},
 		ReindexerSchedule:           &periodicIntervalSchedule{interval: time.Hour},
 		RetryPolicy:                 retryPolicy,
+		SkipUnknownJobCheck:         true,
 		TestOnly:                    true, // disables staggered start in maintenance services
 		Workers:                     workers,
 		WorkerMiddleware:            []rivertype.WorkerMiddleware{&noOpWorkerMiddleware{}},
@@ -5030,6 +5108,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 	require.Equal(t, logger, client.baseService.Logger)
 	require.Equal(t, 5, client.config.MaxAttempts)
 	require.Equal(t, retryPolicy, client.config.RetryPolicy)
+	require.True(t, client.config.SkipUnknownJobCheck)
 	require.Len(t, client.config.WorkerMiddleware, 1)
 }
 
