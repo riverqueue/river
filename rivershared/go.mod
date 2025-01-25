@@ -1,7 +1,8 @@
 module github.com/riverqueue/river/rivershared
 
-go 1.22
-toolchain go1.23.0
+go 1.22.0
+
+toolchain go1.23.5
 
 require (
 	github.com/riverqueue/river v0.15.0
