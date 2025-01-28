@@ -5,9 +5,9 @@ go 1.22.0
 toolchain go1.23.5
 
 require (
-	github.com/riverqueue/river v0.15.0
-	github.com/riverqueue/river/riverdriver v0.15.0
-	github.com/riverqueue/river/rivertype v0.15.0
+	github.com/riverqueue/river v0.16.0
+	github.com/riverqueue/river/riverdriver v0.16.0
+	github.com/riverqueue/river/rivertype v0.16.0
 	github.com/stretchr/testify v1.10.0
 	go.uber.org/goleak v1.3.0
 	golang.org/x/mod v0.22.0
