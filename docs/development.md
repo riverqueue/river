@@ -39,8 +39,8 @@ queries. After changing an sqlc `.sql` file, generate Go with:
 3. Upon merge, pull down the changes, tag each module with the new version, and push the new tags:
 
     ```shell
+    git checkout master && git pull --rebase
     git tag cmd/river/$VERSION -m "release cmd/river/$VERSION"
-    git pull origin master
     git tag riverdriver/$VERSION -m "release riverdriver/$VERSION"
     git tag riverdriver/riverpgxv5/$VERSION -m "release riverdriver/riverpgxv5/$VERSION"
     git tag riverdriver/riverdatabasesql/$VERSION -m "release riverdriver/riverdatabasesql/$VERSION"
