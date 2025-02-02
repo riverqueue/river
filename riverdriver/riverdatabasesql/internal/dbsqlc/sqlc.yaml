@@ -32,6 +32,11 @@ sql:
           ttl: "TTL"
 
         overrides:
+          - db_type: "bytea"
+            go_type:
+              import: "github.com/riverqueue/river/riverdriver/riverdatabasesql/internal/pgtypealias"
+              type: "NullBytea"
+
           # `database/sql` really does not play nicely with json/jsonb. If it's
           # left as `[]byte` or `json.RawMessage`, `database/sql` will try to
           # encode it as binary (with a \x) which Postgres won't accept as

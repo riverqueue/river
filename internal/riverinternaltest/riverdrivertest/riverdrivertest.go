@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -882,15 +883,17 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
 			for i := 0; i < len(insertParams); i++ {
 				insertParams[i] = &riverdriver.JobInsertFastParams{
-					EncodedArgs: []byte(`{"encoded": "args"}`),
-					Kind:        "test_kind",
-					MaxAttempts: rivercommon.MaxAttemptsDefault,
-					Metadata:    []byte(`{"meta": "data"}`),
-					Priority:    rivercommon.PriorityDefault,
-					Queue:       rivercommon.QueueDefault,
-					ScheduledAt: ptrutil.Ptr(now.Add(time.Duration(i) * time.Minute)),
-					State:       rivertype.JobStateAvailable,
-					Tags:        []string{"tag"},
+					EncodedArgs:  []byte(`{"encoded": "args"}`),
+					Kind:         "test_kind",
+					MaxAttempts:  rivercommon.MaxAttemptsDefault,
+					Metadata:     []byte(`{"meta": "data"}`),
+					Priority:     rivercommon.PriorityDefault,
+					Queue:        rivercommon.QueueDefault,
+					ScheduledAt:  ptrutil.Ptr(now.Add(time.Duration(i) * time.Minute)),
+					State:        rivertype.JobStateAvailable,
+					Tags:         []string{"tag"},
+					UniqueKey:    []byte("unique-key-" + strconv.Itoa(i)),
+					UniqueStates: 0xff,
 				}
 			}
 
@@ -916,24 +919,30 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				requireEqualTime(t, now.Add(time.Duration(i)*time.Minute), job.ScheduledAt)
 				require.Equal(t, rivertype.JobStateAvailable, job.State)
 				require.Equal(t, []string{"tag"}, job.Tags)
+				require.Equal(t, []byte("unique-key-"+strconv.Itoa(i)), job.UniqueKey)
+				require.Equal(t, rivertype.JobStates(), job.UniqueStates)
 			}
 		})
 
-		t.Run("MissingScheduledAtDefaultsToNow", func(t *testing.T) {
+		t.Run("MissingValuesDefaultAsExpected", func(t *testing.T) {
+			t.Parallel()
+
 			exec, _ := setup(ctx, t)
 
 			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
 			for i := 0; i < len(insertParams); i++ {
 				insertParams[i] = &riverdriver.JobInsertFastParams{
-					EncodedArgs: []byte(`{"encoded": "args"}`),
-					Kind:        "test_kind",
-					MaxAttempts: rivercommon.MaxAttemptsDefault,
-					Metadata:    []byte(`{"meta": "data"}`),
-					Priority:    rivercommon.PriorityDefault,
-					Queue:       rivercommon.QueueDefault,
-					ScheduledAt: nil, // explicit nil
-					State:       rivertype.JobStateAvailable,
-					Tags:        []string{"tag"},
+					EncodedArgs:  []byte(`{"encoded": "args"}`),
+					Kind:         "test_kind",
+					MaxAttempts:  rivercommon.MaxAttemptsDefault,
+					Metadata:     []byte(`{"meta": "data"}`),
+					Priority:     rivercommon.PriorityDefault,
+					Queue:        rivercommon.QueueDefault,
+					ScheduledAt:  nil, // explicit nil
+					State:        rivertype.JobStateAvailable,
+					Tags:         []string{"tag"},
+					UniqueKey:    nil,  // explicit nil
+					UniqueStates: 0x00, // explicit 0
 				}
 			}
 
@@ -946,6 +955,12 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			require.Len(t, jobsAfter, len(insertParams))
 			for _, job := range jobsAfter {
 				require.WithinDuration(t, time.Now().UTC(), job.ScheduledAt, 2*time.Second)
+
+				// UniqueKey and UniqueStates are not set in the insert params, so they should
+				// be nil and an empty slice respectively.
+				require.Nil(t, job.UniqueKey)
+				var emptyJobStates []rivertype.JobState
+				require.Equal(t, emptyJobStates, job.UniqueStates)
 			}
 		})
 	})

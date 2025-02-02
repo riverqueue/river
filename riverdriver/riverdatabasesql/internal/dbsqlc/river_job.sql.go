@@ -576,7 +576,7 @@ type JobInsertFastManyParams struct {
 	ScheduledAt  []time.Time
 	State        []string
 	Tags         []string
-	UniqueKey    [][]byte
+	UniqueKey    []pgtypealias.NullBytea
 	UniqueStates []pgtypealias.Bits
 }
 
@@ -689,7 +689,7 @@ type JobInsertFastManyNoReturningParams struct {
 	ScheduledAt  []time.Time
 	State        []RiverJobState
 	Tags         []string
-	UniqueKey    [][]byte
+	UniqueKey    []pgtypealias.NullBytea
 	UniqueStates []pgtypealias.Bits
 }
 

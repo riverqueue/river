@@ -212,7 +212,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 		ScheduledAt:  make([]time.Time, len(params)),
 		State:        make([]string, len(params)),
 		Tags:         make([]string, len(params)),
-		UniqueKey:    make([][]byte, len(params)),
+		UniqueKey:    make([]pgtypealias.NullBytea, len(params)),
 		UniqueStates: make([]pgtypealias.Bits, len(params)),
 	}
 	now := time.Now().UTC()
@@ -270,7 +270,7 @@ func (e *Executor) JobInsertFastManyNoReturning(ctx context.Context, params []*r
 		ScheduledAt:  make([]time.Time, len(params)),
 		State:        make([]dbsqlc.RiverJobState, len(params)),
 		Tags:         make([]string, len(params)),
-		UniqueKey:    make([][]byte, len(params)),
+		UniqueKey:    make([]pgtypealias.NullBytea, len(params)),
 		UniqueStates: make([]pgtypealias.Bits, len(params)),
 	}
 	now := time.Now().UTC()
