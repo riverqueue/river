@@ -34,7 +34,7 @@ func TestParseAndUpdateGoModFile(t *testing.T) {
 	setup := func(t *testing.T) (string, *testBundle) {
 		t.Helper()
 
-		file, err := os.CreateTemp("", "go.mod")
+		file, err := os.CreateTemp(t.TempDir(), "go.mod")
 		require.NoError(t, err)
 		t.Cleanup(func() { os.Remove(file.Name()) })
 
