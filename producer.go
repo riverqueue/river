@@ -183,7 +183,7 @@ type producer struct {
 	paused     bool
 	// Receives control messages from the notifier goroutine. Written by notifier
 	// goroutine, only read from main goroutine.
-	queueControlCh chan *jobControlPayload
+	queueControlCh chan *controlEventPayload
 	retryPolicy    ClientRetryPolicy
 	testSignals    producerTestSignals
 }
@@ -210,7 +210,7 @@ func newProducer(archetype *baseservice.Archetype, exec riverdriver.Executor, co
 		errorHandler:   errorHandler,
 		jobResultCh:    make(chan *rivertype.JobRow, config.MaxWorkers),
 		jobTimeout:     config.JobTimeout,
-		queueControlCh: make(chan *jobControlPayload, 100),
+		queueControlCh: make(chan *controlEventPayload, 100),
 		retryPolicy:    config.RetryPolicy,
 		workers:        config.Workers,
 	})
@@ -348,7 +348,7 @@ const (
 	controlActionResume controlAction = "resume"
 )
 
-type jobControlPayload struct {
+type controlEventPayload struct {
 	Action controlAction `json:"action"`
 	JobID  int64         `json:"job_id"`
 	Queue  string        `json:"queue"`
@@ -360,7 +360,7 @@ type insertPayload struct {
 
 func (p *producer) handleControlNotification(workCtx context.Context) func(notifier.NotificationTopic, string) {
 	return func(topic notifier.NotificationTopic, payload string) {
-		var decoded jobControlPayload
+		var decoded controlEventPayload
 		if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
 			p.Logger.ErrorContext(workCtx, p.Name+": Failed to unmarshal job control notification payload", slog.String("err", err.Error()))
 			return
@@ -661,7 +661,7 @@ func (p *producer) pollForSettingChanges(ctx context.Context, lastPaused bool) {
 				if !shouldBePaused {
 					action = controlActionResume
 				}
-				payload := &jobControlPayload{
+				payload := &controlEventPayload{
 					Action: action,
 					Queue:  p.config.Queue,
 				}
