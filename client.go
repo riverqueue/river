@@ -1712,7 +1712,7 @@ func (c *Client[TTx]) notifyQueuePauseOrResume(ctx context.Context, tx riverdriv
 		slog.String("opts", fmt.Sprintf("%+v", opts)),
 	)
 
-	payload, err := json.Marshal(jobControlPayload{Action: action, Queue: queue})
+	payload, err := json.Marshal(controlEventPayload{Action: action, Queue: queue})
 	if err != nil {
 		return err
 	}
