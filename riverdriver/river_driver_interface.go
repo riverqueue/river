@@ -312,54 +312,104 @@ type JobScheduleResult struct {
 // running job. Use one of the constructors below to ensure a correct
 // combination of parameters.
 type JobSetStateIfRunningParams struct {
-	ID                int64
-	Attempt           *int
-	ErrData           []byte
-	FinalizedAt       *time.Time
-	ScheduledAt       *time.Time
-	SnoozeDoIncrement bool
-	State             rivertype.JobState
+	ID              int64
+	Attempt         *int
+	ErrData         []byte
+	FinalizedAt     *time.Time
+	MetadataDoMerge bool
+	MetadataUpdates []byte
+	ScheduledAt     *time.Time
+	State           rivertype.JobState
 }
 
-func JobSetStateCancelled(id int64, finalizedAt time.Time, errData []byte) *JobSetStateIfRunningParams {
-	return &JobSetStateIfRunningParams{ID: id, ErrData: errData, FinalizedAt: &finalizedAt, State: rivertype.JobStateCancelled}
+func JobSetStateCancelled(id int64, finalizedAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{
+		ID:              id,
+		ErrData:         errData,
+		MetadataDoMerge: len(metadataUpdates) > 0,
+		MetadataUpdates: metadataUpdates,
+		FinalizedAt:     &finalizedAt,
+		State:           rivertype.JobStateCancelled,
+	}
 }
 
-func JobSetStateCompleted(id int64, finalizedAt time.Time) *JobSetStateIfRunningParams {
-	return &JobSetStateIfRunningParams{ID: id, FinalizedAt: &finalizedAt, State: rivertype.JobStateCompleted}
+func JobSetStateCompleted(id int64, finalizedAt time.Time, metadataUpdates []byte) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{
+		FinalizedAt:     &finalizedAt,
+		ID:              id,
+		MetadataDoMerge: len(metadataUpdates) > 0,
+		MetadataUpdates: metadataUpdates,
+		State:           rivertype.JobStateCompleted,
+	}
 }
 
-func JobSetStateDiscarded(id int64, finalizedAt time.Time, errData []byte) *JobSetStateIfRunningParams {
-	return &JobSetStateIfRunningParams{ID: id, ErrData: errData, FinalizedAt: &finalizedAt, State: rivertype.JobStateDiscarded}
+func JobSetStateDiscarded(id int64, finalizedAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{
+		ID:              id,
+		ErrData:         errData,
+		MetadataDoMerge: len(metadataUpdates) > 0,
+		MetadataUpdates: metadataUpdates,
+		FinalizedAt:     &finalizedAt,
+		State:           rivertype.JobStateDiscarded,
+	}
 }
 
-func JobSetStateErrorAvailable(id int64, scheduledAt time.Time, errData []byte) *JobSetStateIfRunningParams {
-	return &JobSetStateIfRunningParams{ID: id, ErrData: errData, ScheduledAt: &scheduledAt, State: rivertype.JobStateAvailable}
+func JobSetStateErrorAvailable(id int64, scheduledAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{
+		ID:              id,
+		ErrData:         errData,
+		MetadataDoMerge: len(metadataUpdates) > 0,
+		MetadataUpdates: metadataUpdates,
+		ScheduledAt:     &scheduledAt,
+		State:           rivertype.JobStateAvailable,
+	}
 }
 
-func JobSetStateErrorRetryable(id int64, scheduledAt time.Time, errData []byte) *JobSetStateIfRunningParams {
-	return &JobSetStateIfRunningParams{ID: id, ErrData: errData, ScheduledAt: &scheduledAt, State: rivertype.JobStateRetryable}
+func JobSetStateErrorRetryable(id int64, scheduledAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{
+		ID:              id,
+		ErrData:         errData,
+		MetadataDoMerge: len(metadataUpdates) > 0,
+		MetadataUpdates: metadataUpdates,
+		ScheduledAt:     &scheduledAt,
+		State:           rivertype.JobStateRetryable,
+	}
 }
 
-func JobSetStateSnoozed(id int64, scheduledAt time.Time, attempt int) *JobSetStateIfRunningParams {
-	return &JobSetStateIfRunningParams{ID: id, Attempt: &attempt, ScheduledAt: &scheduledAt, SnoozeDoIncrement: true, State: rivertype.JobStateScheduled}
+func JobSetStateSnoozed(id int64, scheduledAt time.Time, attempt int, metadataUpdates []byte) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{
+		Attempt:         &attempt,
+		ID:              id,
+		MetadataDoMerge: len(metadataUpdates) > 0,
+		MetadataUpdates: metadataUpdates,
+		ScheduledAt:     &scheduledAt,
+		State:           rivertype.JobStateScheduled,
+	}
 }
 
-func JobSetStateSnoozedAvailable(id int64, scheduledAt time.Time, attempt int) *JobSetStateIfRunningParams {
-	return &JobSetStateIfRunningParams{ID: id, Attempt: &attempt, ScheduledAt: &scheduledAt, SnoozeDoIncrement: true, State: rivertype.JobStateAvailable}
+func JobSetStateSnoozedAvailable(id int64, scheduledAt time.Time, attempt int, metadataUpdates []byte) *JobSetStateIfRunningParams {
+	return &JobSetStateIfRunningParams{
+		Attempt:         &attempt,
+		ID:              id,
+		MetadataDoMerge: len(metadataUpdates) > 0,
+		MetadataUpdates: metadataUpdates,
+		ScheduledAt:     &scheduledAt,
+		State:           rivertype.JobStateAvailable,
+	}
 }
 
 // JobSetStateIfRunningManyParams are parameters to update the state of
 // currently running jobs. Use one of the constructors below to ensure a correct
 // combination of parameters.
 type JobSetStateIfRunningManyParams struct {
-	ID                []int64
-	Attempt           []*int
-	ErrData           [][]byte
-	FinalizedAt       []*time.Time
-	ScheduledAt       []*time.Time
-	SnoozeDoIncrement []bool
-	State             []rivertype.JobState
+	ID              []int64
+	Attempt         []*int
+	ErrData         [][]byte
+	FinalizedAt     []*time.Time
+	MetadataDoMerge []bool
+	MetadataUpdates [][]byte
+	ScheduledAt     []*time.Time
+	State           []rivertype.JobState
 }
 
 type JobUpdateParams struct {

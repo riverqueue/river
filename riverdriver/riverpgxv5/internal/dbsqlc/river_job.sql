@@ -455,9 +455,10 @@ WITH job_input AS (
         unnest(@errors::jsonb[]) AS errors,
         unnest(@finalized_at_do_update::boolean[]) AS finalized_at_do_update,
         unnest(@finalized_at::timestamptz[]) AS finalized_at,
+        unnest(@metadata_do_merge::boolean[]) AS metadata_do_merge,
+        unnest(@metadata_updates::jsonb[]) AS metadata_updates,
         unnest(@scheduled_at_do_update::boolean[]) AS scheduled_at_do_update,
         unnest(@scheduled_at::timestamptz[]) AS scheduled_at,
-        unnest(@snooze_do_increment::boolean[]) AS snooze_do_increment,
         -- To avoid requiring pgx users to register the OID of the river_job_state[]
         -- type, we cast the array to text[] and then to river_job_state.
         unnest(@state::text[])::river_job_state AS state
@@ -467,21 +468,22 @@ job_to_update AS (
         river_job.id,
         job_input.attempt,
         job_input.attempt_do_update,
-        job_input.finalized_at,
-        job_input.finalized_at_do_update,
         job_input.errors,
         job_input.errors_do_update,
+        job_input.finalized_at,
+        job_input.finalized_at_do_update,
+        job_input.metadata_do_merge,
+        job_input.metadata_updates,
         job_input.scheduled_at,
         job_input.scheduled_at_do_update,
-        job_input.snooze_do_increment,
         (job_input.state IN ('retryable', 'scheduled') AND river_job.metadata ? 'cancel_attempted_at') AS should_cancel,
         job_input.state
     FROM river_job
     JOIN job_input ON river_job.id = job_input.id
-    WHERE river_job.state = 'running'
+    WHERE river_job.state = 'running' OR job_input.metadata_do_merge
     FOR UPDATE
 ),
-updated_job AS (
+updated_running AS (
     UPDATE river_job
     SET
         attempt      = CASE WHEN NOT job_to_update.should_cancel AND job_to_update.attempt_do_update THEN job_to_update.attempt
@@ -491,8 +493,8 @@ updated_job AS (
         finalized_at = CASE WHEN job_to_update.should_cancel THEN now()
                             WHEN job_to_update.finalized_at_do_update THEN job_to_update.finalized_at
                             ELSE river_job.finalized_at END,
-        metadata     = CASE WHEN job_to_update.snooze_do_increment
-                            THEN river_job.metadata || jsonb_build_object('snoozes', coalesce((river_job.metadata->>'snoozes')::int, 0) + 1)
+        metadata     = CASE WHEN job_to_update.metadata_do_merge
+                            THEN river_job.metadata || job_to_update.metadata_updates
                             ELSE river_job.metadata END,
         scheduled_at = CASE WHEN NOT job_to_update.should_cancel AND job_to_update.scheduled_at_do_update THEN job_to_update.scheduled_at
                             ELSE river_job.scheduled_at END,
@@ -500,15 +502,26 @@ updated_job AS (
                             ELSE job_to_update.state END
     FROM job_to_update
     WHERE river_job.id = job_to_update.id
+      AND river_job.state = 'running'
+    RETURNING river_job.*
+),
+updated_metadata_only AS (
+    UPDATE river_job
+    SET metadata = river_job.metadata || job_to_update.metadata_updates
+    FROM job_to_update
+    WHERE river_job.id = job_to_update.id
+        AND river_job.id NOT IN (SELECT id FROM updated_running)
+        AND river_job.state != 'running'
+        AND job_to_update.metadata_do_merge
     RETURNING river_job.*
 )
 SELECT *
 FROM river_job
 WHERE id IN (SELECT id FROM job_input)
-  AND id NOT IN (SELECT id FROM updated_job)
-UNION
-SELECT *
-FROM updated_job;
+    AND id NOT IN (SELECT id FROM updated_metadata_only)
+    AND id NOT IN (SELECT id FROM updated_running)
+UNION SELECT * FROM updated_metadata_only
+UNION SELECT * FROM updated_running;
 
 -- A generalized update for any property on a job. This brings in a large number
 -- of parameters and therefore may be more suitable for testing than production.

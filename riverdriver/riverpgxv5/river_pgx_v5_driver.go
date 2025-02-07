@@ -424,9 +424,10 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 		ErrorsDoUpdate:      make([]bool, len(params.ID)),
 		FinalizedAt:         make([]time.Time, len(params.ID)),
 		FinalizedAtDoUpdate: make([]bool, len(params.ID)),
+		MetadataDoMerge:     make([]bool, len(params.ID)),
+		MetadataUpdates:     make([][]byte, len(params.ID)),
 		ScheduledAt:         make([]time.Time, len(params.ID)),
 		ScheduledAtDoUpdate: make([]bool, len(params.ID)),
-		SnoozeDoIncrement:   make([]bool, len(params.ID)),
 		State:               make([]string, len(params.ID)),
 	}
 
@@ -442,11 +443,14 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 			setStateParams.FinalizedAtDoUpdate[i] = true
 			setStateParams.FinalizedAt[i] = *params.FinalizedAt[i]
 		}
+		if params.MetadataDoMerge[i] {
+			setStateParams.MetadataDoMerge[i] = true
+			setStateParams.MetadataUpdates[i] = params.MetadataUpdates[i]
+		}
 		if params.ScheduledAt[i] != nil {
 			setStateParams.ScheduledAtDoUpdate[i] = true
 			setStateParams.ScheduledAt[i] = *params.ScheduledAt[i]
 		}
-		setStateParams.SnoozeDoIncrement[i] = params.SnoozeDoIncrement[i]
 		setStateParams.State[i] = string(params.State[i])
 	}
 

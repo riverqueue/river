@@ -12,6 +12,44 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
+func TestJobRow_Output(t *testing.T) {
+	t.Parallel()
+
+	t.Run("SimpleStringOutput", func(t *testing.T) {
+		t.Parallel()
+
+		jobRow := &rivertype.JobRow{
+			Metadata: []byte(`{"output": "test"}`),
+		}
+		require.Equal(t, []byte(`"test"`), jobRow.Output())
+	})
+
+	t.Run("ComplexObjectOutput", func(t *testing.T) {
+		t.Parallel()
+		jobRow := &rivertype.JobRow{
+			Metadata: []byte(`{"output": {"foo": {"bar": "baz"}}}`),
+		}
+		require.JSONEq(t, `{"foo": {"bar": "baz"}}`, string(jobRow.Output()))
+	})
+
+	t.Run("NoOutput", func(t *testing.T) {
+		t.Parallel()
+		jobRow := &rivertype.JobRow{
+			Metadata: []byte(`{}`),
+		}
+		require.Nil(t, jobRow.Output())
+	})
+
+	t.Run("InvalidMetadata", func(t *testing.T) {
+		t.Parallel()
+
+		jobRow := &rivertype.JobRow{
+			Metadata: []byte(`not-json`),
+		}
+		require.Nil(t, jobRow.Output())
+	})
+}
+
 func TestJobStates(t *testing.T) {
 	t.Parallel()
 
