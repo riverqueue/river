@@ -439,35 +439,6 @@ SELECT
 FROM river_job
 JOIN updated_jobs ON river_job.id = updated_jobs.id;
 
--- name: JobSetCompleteIfRunningMany :many
-WITH job_to_finalized_at AS (
-    SELECT
-        unnest(@id::bigint[]) AS id,
-        unnest(@finalized_at::timestamptz[]) AS finalized_at
-),
-job_to_update AS (
-    SELECT river_job.id, job_to_finalized_at.finalized_at
-    FROM river_job, job_to_finalized_at
-    WHERE river_job.id = job_to_finalized_at.id
-        AND river_job.state = 'running'
-    FOR UPDATE
-),
-updated_job AS (
-    UPDATE river_job
-    SET
-        finalized_at = job_to_update.finalized_at,
-        state = 'completed'
-    FROM job_to_update
-    WHERE river_job.id = job_to_update.id
-    RETURNING river_job.*
-)
-SELECT *
-FROM river_job
-WHERE id IN (SELECT id FROM job_to_finalized_at EXCEPT SELECT id FROM updated_job)
-UNION
-SELECT *
-FROM updated_job;
-
 -- name: JobSetStateIfRunning :one
 WITH job_to_update AS (
     SELECT

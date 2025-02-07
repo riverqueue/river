@@ -401,17 +401,6 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 	})
 }
 
-func (e *Executor) JobSetCompleteIfRunningMany(ctx context.Context, params *riverdriver.JobSetCompleteIfRunningManyParams) ([]*rivertype.JobRow, error) {
-	jobs, err := dbsqlc.New().JobSetCompleteIfRunningMany(ctx, e.dbtx, &dbsqlc.JobSetCompleteIfRunningManyParams{
-		ID:          params.ID,
-		FinalizedAt: params.FinalizedAt,
-	})
-	if err != nil {
-		return nil, interpretError(err)
-	}
-	return mapSliceError(jobs, jobRowFromInternal)
-}
-
 func (e *Executor) JobSetStateIfRunning(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
 	var attempt int16
 	if params.Attempt != nil {

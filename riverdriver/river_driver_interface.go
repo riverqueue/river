@@ -123,7 +123,6 @@ type Executor interface {
 	JobRescueMany(ctx context.Context, params *JobRescueManyParams) (*struct{}, error)
 	JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, error)
 	JobSchedule(ctx context.Context, params *JobScheduleParams) ([]*JobScheduleResult, error)
-	JobSetCompleteIfRunningMany(ctx context.Context, params *JobSetCompleteIfRunningManyParams) ([]*rivertype.JobRow, error)
 	JobSetStateIfRunning(ctx context.Context, params *JobSetStateIfRunningParams) (*rivertype.JobRow, error)
 	JobSetStateIfRunningMany(ctx context.Context, params *JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
 	JobUpdate(ctx context.Context, params *JobUpdateParams) (*rivertype.JobRow, error)
@@ -307,13 +306,6 @@ type JobScheduleParams struct {
 type JobScheduleResult struct {
 	Job               rivertype.JobRow
 	ConflictDiscarded bool
-}
-
-// JobSetCompleteIfRunningManyParams are parameters to set many running jobs to
-// `complete` all at once for improved throughput and efficiency.
-type JobSetCompleteIfRunningManyParams struct {
-	ID          []int64
-	FinalizedAt []time.Time
 }
 
 // JobSetStateIfRunningParams are parameters to update the state of a currently
