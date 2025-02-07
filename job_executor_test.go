@@ -16,6 +16,7 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
@@ -135,7 +136,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 			archetype = riversharedtest.BaseServiceArchetype(t)
 			exec      = riverpgxv5.New(nil).UnwrapExecutor(tx)
 			updateCh  = make(chan []jobcompleter.CompleterJobUpdated, 10)
-			completer = jobcompleter.NewInlineCompleter(archetype, exec, updateCh)
+			completer = jobcompleter.NewInlineCompleter(archetype, exec, &riverpilot.StandardPilot{}, updateCh)
 		)
 
 		t.Cleanup(completer.Stop)

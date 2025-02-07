@@ -52,6 +52,7 @@ type InlineCompleter struct {
 
 	disableSleep bool // disable sleep in testing
 	exec         riverdriver.Executor
+	pilot        riverpilot.Pilot
 	subscribeCh  SubscribeChan
 
 	// A waitgroup is not actually needed for the inline completer because as
@@ -62,9 +63,10 @@ type InlineCompleter struct {
 	wg sync.WaitGroup
 }
 
-func NewInlineCompleter(archetype *baseservice.Archetype, exec riverdriver.Executor, subscribeCh SubscribeChan) *InlineCompleter {
+func NewInlineCompleter(archetype *baseservice.Archetype, exec riverdriver.Executor, pilot riverpilot.Pilot, subscribeCh SubscribeChan) *InlineCompleter {
 	return baseservice.Init(archetype, &InlineCompleter{
 		exec:        exec,
+		pilot:       pilot,
 		subscribeCh: subscribeCh,
 	})
 }
@@ -75,15 +77,29 @@ func (c *InlineCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobst
 
 	start := c.Time.NowUTC()
 
-	job, err := withRetries(ctx, &c.BaseService, c.disableSleep, func(ctx context.Context) (*rivertype.JobRow, error) {
-		return c.exec.JobSetStateIfRunning(ctx, params)
+	jobs, err := withRetries(ctx, &c.BaseService, c.disableSleep, func(ctx context.Context) ([]*rivertype.JobRow, error) {
+		execTx, err := c.exec.Begin(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer execTx.Rollback(ctx)
+
+		jobs, err := c.pilot.JobSetStateIfRunningMany(ctx, execTx, setStateParamsToMany(params))
+		if err != nil {
+			return nil, err
+		}
+
+		if err := execTx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return jobs, nil
 	})
 	if err != nil {
 		return err
 	}
 
 	stats.CompleteDuration = c.Time.NowUTC().Sub(start)
-	c.subscribeCh <- []CompleterJobUpdated{{Job: job, JobStats: stats}}
+	c.subscribeCh <- []CompleterJobUpdated{{Job: jobs[0], JobStats: stats}}
 
 	return nil
 }
@@ -115,6 +131,18 @@ func (c *InlineCompleter) Start(ctx context.Context) error {
 	return nil
 }
 
+func setStateParamsToMany(params *riverdriver.JobSetStateIfRunningParams) *riverdriver.JobSetStateIfRunningManyParams {
+	return &riverdriver.JobSetStateIfRunningManyParams{
+		Attempt:           []*int{params.Attempt},
+		ErrData:           [][]byte{params.ErrData},
+		FinalizedAt:       []*time.Time{params.FinalizedAt},
+		ID:                []int64{params.ID},
+		ScheduledAt:       []*time.Time{params.ScheduledAt},
+		SnoozeDoIncrement: []bool{params.SnoozeDoIncrement},
+		State:             []rivertype.JobState{params.State},
+	}
+}
+
 // A default concurrency of 100 seems to perform better a much smaller number
 // like 10, but it's quite dependent on environment (10 and 100 bench almost
 // identically on MBA when it's on battery power). This number should represent
@@ -130,21 +158,23 @@ type AsyncCompleter struct {
 	disableSleep bool // disable sleep in testing
 	errGroup     *errgroup.Group
 	exec         riverdriver.Executor
+	pilot        riverpilot.Pilot
 	subscribeCh  SubscribeChan
 }
 
-func NewAsyncCompleter(archetype *baseservice.Archetype, exec riverdriver.Executor, subscribeCh SubscribeChan) *AsyncCompleter {
-	return newAsyncCompleterWithConcurrency(archetype, exec, asyncCompleterDefaultConcurrency, subscribeCh)
+func NewAsyncCompleter(archetype *baseservice.Archetype, exec riverdriver.Executor, pilot riverpilot.Pilot, subscribeCh SubscribeChan) *AsyncCompleter {
+	return newAsyncCompleterWithConcurrency(archetype, exec, pilot, asyncCompleterDefaultConcurrency, subscribeCh)
 }
 
-func newAsyncCompleterWithConcurrency(archetype *baseservice.Archetype, exec riverdriver.Executor, concurrency int, subscribeCh SubscribeChan) *AsyncCompleter {
+func newAsyncCompleterWithConcurrency(archetype *baseservice.Archetype, exec riverdriver.Executor, pilot riverpilot.Pilot, concurrency int, subscribeCh SubscribeChan) *AsyncCompleter {
 	errGroup := &errgroup.Group{}
 	errGroup.SetLimit(concurrency)
 
 	return baseservice.Init(archetype, &AsyncCompleter{
-		exec:        exec,
 		concurrency: concurrency,
 		errGroup:    errGroup,
+		exec:        exec,
+		pilot:       pilot,
 		subscribeCh: subscribeCh,
 	})
 }
@@ -155,15 +185,29 @@ func (c *AsyncCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobsta
 	start := c.Time.NowUTC()
 
 	c.errGroup.Go(func() error {
-		job, err := withRetries(ctx, &c.BaseService, c.disableSleep, func(ctx context.Context) (*rivertype.JobRow, error) {
-			return c.exec.JobSetStateIfRunning(ctx, params)
+		jobs, err := withRetries(ctx, &c.BaseService, c.disableSleep, func(ctx context.Context) ([]*rivertype.JobRow, error) {
+			execTx, err := c.exec.Begin(ctx)
+			if err != nil {
+				return nil, err
+			}
+			defer execTx.Rollback(ctx)
+
+			rows, err := c.pilot.JobSetStateIfRunningMany(ctx, execTx, setStateParamsToMany(params))
+			if err != nil {
+				return nil, err
+			}
+
+			if err := execTx.Commit(ctx); err != nil {
+				return nil, err
+			}
+			return rows, nil
 		})
 		if err != nil {
 			return err
 		}
 
 		stats.CompleteDuration = c.Time.NowUTC().Sub(start)
-		c.subscribeCh <- []CompleterJobUpdated{{Job: job, JobStats: stats}}
+		c.subscribeCh <- []CompleterJobUpdated{{Job: jobs[0], JobStats: stats}}
 
 		return nil
 	})

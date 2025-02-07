@@ -123,7 +123,6 @@ type Executor interface {
 	JobRescueMany(ctx context.Context, params *JobRescueManyParams) (*struct{}, error)
 	JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, error)
 	JobSchedule(ctx context.Context, params *JobScheduleParams) ([]*JobScheduleResult, error)
-	JobSetStateIfRunning(ctx context.Context, params *JobSetStateIfRunningParams) (*rivertype.JobRow, error)
 	JobSetStateIfRunningMany(ctx context.Context, params *JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
 	JobUpdate(ctx context.Context, params *JobUpdateParams) (*rivertype.JobRow, error)
 	LeaderAttemptElect(ctx context.Context, params *LeaderElectParams) (bool, error)

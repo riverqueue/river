@@ -439,45 +439,6 @@ SELECT
 FROM river_job
 JOIN updated_jobs ON river_job.id = updated_jobs.id;
 
--- name: JobSetStateIfRunning :one
-WITH job_to_update AS (
-    SELECT
-        id,
-        @state::river_job_state IN ('retryable', 'scheduled') AND metadata ? 'cancel_attempted_at' AS should_cancel
-    FROM river_job
-    WHERE id = @id::bigint
-    FOR UPDATE
-),
-updated_job AS (
-    UPDATE river_job
-    SET
-        attempt      = CASE WHEN NOT should_cancel AND @attempt_update::boolean          THEN @attempt
-                            ELSE attempt END,
-        errors       = CASE WHEN @error_do_update::boolean                               THEN array_append(errors, @error::jsonb)
-                            ELSE errors       END,
-        finalized_at = CASE WHEN should_cancel                                           THEN now()
-                            WHEN @finalized_at_do_update::boolean                        THEN @finalized_at
-                            ELSE finalized_at END,
-        metadata     = CASE WHEN @snooze_do_increment::boolean
-                            THEN river_job.metadata || jsonb_build_object('snoozes', coalesce((river_job.metadata->>'snoozes')::int, 0) + 1)
-                            ELSE river_job.metadata END,
-        scheduled_at = CASE WHEN NOT should_cancel AND @scheduled_at_do_update::boolean  THEN sqlc.narg('scheduled_at')::timestamptz
-                            ELSE scheduled_at END,
-        state        = CASE WHEN should_cancel                                           THEN 'cancelled'::river_job_state
-                            ELSE @state::river_job_state END
-    FROM job_to_update
-    WHERE river_job.id = job_to_update.id
-        AND river_job.state = 'running'
-    RETURNING river_job.*
-)
-SELECT *
-FROM river_job
-WHERE id = @id::bigint
-    AND id NOT IN (SELECT id FROM updated_job)
-UNION
-SELECT *
-FROM updated_job;
-
 -- name: JobSetStateIfRunningMany :many
 WITH job_input AS (
     SELECT
