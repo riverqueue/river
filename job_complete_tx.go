@@ -37,9 +37,9 @@ func JobCompleteTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs](ctx 
 	driver := client.Driver()
 	pilot := client.Pilot()
 
-	// extract metadata updates from context
-	metadataUpdates, hasMetadataUpdates := metadataUpdatesFromContext(ctx)
-	hasMetadataUpdates = hasMetadataUpdates && len(metadataUpdates) > 0
+	// extract metadata updates from job row:
+	metadataUpdates := job.MetadataPendingUpdates()
+	hasMetadataUpdates := len(metadataUpdates) > 0
 	var (
 		metadataUpdatesBytes []byte
 		err                  error
