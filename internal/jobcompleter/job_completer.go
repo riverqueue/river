@@ -133,13 +133,14 @@ func (c *InlineCompleter) Start(ctx context.Context) error {
 
 func setStateParamsToMany(params *riverdriver.JobSetStateIfRunningParams) *riverdriver.JobSetStateIfRunningManyParams {
 	return &riverdriver.JobSetStateIfRunningManyParams{
-		Attempt:           []*int{params.Attempt},
-		ErrData:           [][]byte{params.ErrData},
-		FinalizedAt:       []*time.Time{params.FinalizedAt},
-		ID:                []int64{params.ID},
-		ScheduledAt:       []*time.Time{params.ScheduledAt},
-		SnoozeDoIncrement: []bool{params.SnoozeDoIncrement},
-		State:             []rivertype.JobState{params.State},
+		Attempt:         []*int{params.Attempt},
+		ErrData:         [][]byte{params.ErrData},
+		FinalizedAt:     []*time.Time{params.FinalizedAt},
+		ID:              []int64{params.ID},
+		MetadataDoMerge: []bool{params.MetadataDoMerge},
+		MetadataUpdates: [][]byte{params.MetadataUpdates},
+		ScheduledAt:     []*time.Time{params.ScheduledAt},
+		State:           []rivertype.JobState{params.State},
 	}
 }
 
@@ -421,13 +422,14 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 	// it's done this way to allocate as few new slices as necessary.
 	mapBatch := func(setStateBatch map[int64]*batchCompleterSetState) *riverdriver.JobSetStateIfRunningManyParams {
 		params := &riverdriver.JobSetStateIfRunningManyParams{
-			ID:                make([]int64, len(setStateBatch)),
-			Attempt:           make([]*int, len(setStateBatch)),
-			ErrData:           make([][]byte, len(setStateBatch)),
-			FinalizedAt:       make([]*time.Time, len(setStateBatch)),
-			ScheduledAt:       make([]*time.Time, len(setStateBatch)),
-			SnoozeDoIncrement: make([]bool, len(setStateBatch)),
-			State:             make([]rivertype.JobState, len(setStateBatch)),
+			ID:              make([]int64, len(setStateBatch)),
+			Attempt:         make([]*int, len(setStateBatch)),
+			ErrData:         make([][]byte, len(setStateBatch)),
+			FinalizedAt:     make([]*time.Time, len(setStateBatch)),
+			MetadataDoMerge: make([]bool, len(setStateBatch)),
+			MetadataUpdates: make([][]byte, len(setStateBatch)),
+			ScheduledAt:     make([]*time.Time, len(setStateBatch)),
+			State:           make([]rivertype.JobState, len(setStateBatch)),
 		}
 		var i int
 		for _, setState := range setStateBatch {
@@ -435,8 +437,9 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 			params.Attempt[i] = setState.Params.Attempt
 			params.ErrData[i] = setState.Params.ErrData
 			params.FinalizedAt[i] = setState.Params.FinalizedAt
+			params.MetadataDoMerge[i] = setState.Params.MetadataDoMerge
+			params.MetadataUpdates[i] = setState.Params.MetadataUpdates
 			params.ScheduledAt[i] = setState.Params.ScheduledAt
-			params.SnoozeDoIncrement[i] = setState.Params.SnoozeDoIncrement
 			params.State[i] = setState.Params.State
 			i++
 		}
@@ -458,13 +461,14 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 		for i := 0; i < len(setStateBatch); i += c.completionMaxSize {
 			endIndex := min(i+c.completionMaxSize, len(params.ID)) // beginning of next sub-batch or end of slice
 			subBatch := &riverdriver.JobSetStateIfRunningManyParams{
-				ID:                params.ID[i:endIndex],
-				Attempt:           params.Attempt[i:endIndex],
-				ErrData:           params.ErrData[i:endIndex],
-				FinalizedAt:       params.FinalizedAt[i:endIndex],
-				ScheduledAt:       params.ScheduledAt[i:endIndex],
-				SnoozeDoIncrement: params.SnoozeDoIncrement[i:endIndex],
-				State:             params.State[i:endIndex],
+				ID:              params.ID[i:endIndex],
+				Attempt:         params.Attempt[i:endIndex],
+				ErrData:         params.ErrData[i:endIndex],
+				FinalizedAt:     params.FinalizedAt[i:endIndex],
+				MetadataDoMerge: params.MetadataDoMerge[i:endIndex],
+				MetadataUpdates: params.MetadataUpdates[i:endIndex],
+				ScheduledAt:     params.ScheduledAt[i:endIndex],
+				State:           params.State[i:endIndex],
 			}
 			jobRowsSubBatch, err := completeSubBatch(subBatch)
 			if err != nil {
