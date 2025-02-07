@@ -70,6 +70,42 @@ func TestJobCompleteTx(t *testing.T) {
 		require.Equal(t, rivertype.JobStateCompleted, updatedJob.State)
 	})
 
+	t.Run("CompletesJobWithMetadataUpdates", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, bundle := setup(ctx, t)
+		// Inject valid metadata updates into context
+		ctx = context.WithValue(ctx, ctxMetadataUpdatesKey, map[string]interface{}{"foo": "bar"})
+
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+			State: ptrutil.Ptr(rivertype.JobStateRunning),
+		})
+
+		completedJob, err := JobCompleteTx[*riverpgxv5.Driver](ctx, bundle.tx, &Job[JobArgs]{JobRow: job})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateCompleted, completedJob.State)
+
+		updatedJob, err := bundle.exec.JobGetByID(ctx, job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateCompleted, updatedJob.State)
+	})
+
+	t.Run("ErrorIfMetadataMarshallingFails", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, bundle := setup(ctx, t)
+		// Inject invalid metadata updates into context (using a channel which is not JSON marshalable)
+		ctx = context.WithValue(ctx, ctxMetadataUpdatesKey, make(chan int))
+
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+			State: ptrutil.Ptr(rivertype.JobStateRunning),
+		})
+
+		_, err := JobCompleteTx[*riverpgxv5.Driver](ctx, bundle.tx, &Job[JobArgs]{JobRow: job})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unsupported type")
+	})
+
 	t.Run("ErrorIfNotRunning", func(t *testing.T) {
 		t.Parallel()
 

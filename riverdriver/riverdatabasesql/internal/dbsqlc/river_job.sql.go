@@ -1057,12 +1057,13 @@ WITH job_input AS (
         unnest($5::jsonb[]) AS errors,
         unnest($6::boolean[]) AS finalized_at_do_update,
         unnest($7::timestamptz[]) AS finalized_at,
-        unnest($8::boolean[]) AS scheduled_at_do_update,
-        unnest($9::timestamptz[]) AS scheduled_at,
-        unnest($10::boolean[]) AS snooze_do_increment,
+        unnest($8::boolean[]) AS metadata_do_merge,
+        unnest($9::jsonb[]) AS metadata_updates,
+        unnest($10::boolean[]) AS scheduled_at_do_update,
+        unnest($11::timestamptz[]) AS scheduled_at,
         -- To avoid requiring pgx users to register the OID of the river_job_state[]
         -- type, we cast the array to text[] and then to river_job_state.
-        unnest($11::text[])::river_job_state AS state
+        unnest($12::text[])::river_job_state AS state
 ),
 job_to_update AS (
     SELECT
@@ -1073,9 +1074,10 @@ job_to_update AS (
         job_input.finalized_at_do_update,
         job_input.errors,
         job_input.errors_do_update,
+        job_input.metadata_do_merge,
+        job_input.metadata_updates,
         job_input.scheduled_at,
         job_input.scheduled_at_do_update,
-        job_input.snooze_do_increment,
         (job_input.state IN ('retryable', 'scheduled') AND river_job.metadata ? 'cancel_attempted_at') AS should_cancel,
         job_input.state
     FROM river_job
@@ -1093,8 +1095,8 @@ updated_job AS (
         finalized_at = CASE WHEN job_to_update.should_cancel THEN now()
                             WHEN job_to_update.finalized_at_do_update THEN job_to_update.finalized_at
                             ELSE river_job.finalized_at END,
-        metadata     = CASE WHEN job_to_update.snooze_do_increment
-                            THEN river_job.metadata || jsonb_build_object('snoozes', coalesce((river_job.metadata->>'snoozes')::int, 0) + 1)
+        metadata     = CASE WHEN job_to_update.metadata_do_merge
+                            THEN river_job.metadata || job_to_update.metadata_updates
                             ELSE river_job.metadata END,
         scheduled_at = CASE WHEN NOT job_to_update.should_cancel AND job_to_update.scheduled_at_do_update THEN job_to_update.scheduled_at
                             ELSE river_job.scheduled_at END,
@@ -1121,9 +1123,10 @@ type JobSetStateIfRunningManyParams struct {
 	Errors              []string
 	FinalizedAtDoUpdate []bool
 	FinalizedAt         []time.Time
+	MetadataDoMerge     []bool
+	MetadataUpdates     []string
 	ScheduledAtDoUpdate []bool
 	ScheduledAt         []time.Time
-	SnoozeDoIncrement   []bool
 	State               []string
 }
 
@@ -1136,9 +1139,10 @@ func (q *Queries) JobSetStateIfRunningMany(ctx context.Context, db DBTX, arg *Jo
 		pq.Array(arg.Errors),
 		pq.Array(arg.FinalizedAtDoUpdate),
 		pq.Array(arg.FinalizedAt),
+		pq.Array(arg.MetadataDoMerge),
+		pq.Array(arg.MetadataUpdates),
 		pq.Array(arg.ScheduledAtDoUpdate),
 		pq.Array(arg.ScheduledAt),
-		pq.Array(arg.SnoozeDoIncrement),
 		pq.Array(arg.State),
 	)
 	if err != nil {

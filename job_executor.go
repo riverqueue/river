@@ -17,11 +17,25 @@ import (
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/util/valutil"
 	"github.com/riverqueue/river/rivertype"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // Error used in CancelFunc in cases where the job was not cancelled for
 // purposes of resource cleanup. Should never be user visible.
 var errExecutorDefaultCancel = errors.New("context cancelled as executor finished")
+
+type contextKey string
+
+const ctxMetadataUpdatesKey contextKey = "river_metadata_updates"
+
+func metadataUpdatesFromContext(ctx context.Context) (map[string]any, bool) {
+	metadataUpdates := ctx.Value(ctxMetadataUpdatesKey)
+	if metadataUpdates == nil {
+		return nil, false
+	}
+	return metadataUpdates.(map[string]any), true
+}
 
 // UnknownJobKindError is returned when a Client fetches and attempts to
 // work a job that has not been registered on the Client's Workers bundle (using
@@ -109,10 +123,11 @@ func (e *JobSnoozeError) Is(target error) bool {
 var ErrJobCancelledRemotely = JobCancel(errors.New("job cancelled remotely"))
 
 type jobExecutorResult struct {
-	Err        error
-	NextRetry  time.Time
-	PanicTrace string
-	PanicVal   any
+	Err             error
+	MetadataUpdates map[string]any
+	NextRetry       time.Time
+	PanicTrace      string
+	PanicVal        any
 }
 
 // ErrorStr returns an appropriate string to persist to the database based on
@@ -178,6 +193,9 @@ func (e *jobExecutor) Execute(ctx context.Context) {
 //
 //nolint:nonamedreturns
 func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
+	metadataUpdates := make(map[string]any)
+	ctx = context.WithValue(ctx, ctxMetadataUpdatesKey, metadataUpdates)
+
 	defer func() {
 		if recovery := recover(); recovery != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": panic recovery; possible bug with Worker",
@@ -187,8 +205,9 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 			)
 
 			res = &jobExecutorResult{
-				PanicTrace: string(debug.Stack()),
-				PanicVal:   recovery,
+				MetadataUpdates: metadataUpdates,
+				PanicTrace:      string(debug.Stack()),
+				PanicVal:        recovery,
 			}
 		}
 		e.stats.RunDuration = e.Time.NowUTC().Sub(e.start)
@@ -199,11 +218,11 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 			slog.String("kind", e.JobRow.Kind),
 			slog.Int64("job_id", e.JobRow.ID),
 		)
-		return &jobExecutorResult{Err: &UnknownJobKindError{Kind: e.JobRow.Kind}}
+		return &jobExecutorResult{Err: &UnknownJobKindError{Kind: e.JobRow.Kind}, MetadataUpdates: metadataUpdates}
 	}
 
 	if err := e.WorkUnit.UnmarshalJob(); err != nil {
-		return &jobExecutorResult{Err: err}
+		return &jobExecutorResult{Err: err, MetadataUpdates: metadataUpdates}
 	}
 
 	doInner := execution.MiddlewareChain(e.GlobalMiddleware, e.WorkUnit.Middleware(), e.WorkUnit.Work, e.JobRow)
@@ -211,7 +230,7 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 	ctx, cancel := execution.MaybeApplyTimeout(ctx, jobTimeout)
 	defer cancel()
 
-	return &jobExecutorResult{Err: doInner(ctx)}
+	return &jobExecutorResult{Err: doInner(ctx), MetadataUpdates: metadataUpdates}
 }
 
 func (e *jobExecutor) invokeErrorHandler(ctx context.Context, res *jobExecutorResult) bool {
@@ -247,6 +266,18 @@ func (e *jobExecutor) invokeErrorHandler(ctx context.Context, res *jobExecutorRe
 func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) {
 	var snoozeErr *JobSnoozeError
 
+	var (
+		metadataUpdatesBytes []byte
+		err                  error
+	)
+	if len(res.MetadataUpdates) > 0 {
+		metadataUpdatesBytes, err = json.Marshal(res.MetadataUpdates)
+		if err != nil {
+			e.Logger.ErrorContext(ctx, e.Name+": Failed to marshal metadata updates", slog.String("error", err.Error()))
+			return
+		}
+	}
+
 	if res.Err != nil && errors.As(res.Err, &snoozeErr) {
 		e.Logger.DebugContext(ctx, e.Name+": Job snoozed",
 			slog.Int64("job_id", e.JobRow.ID),
@@ -255,6 +286,13 @@ func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 		)
 		nextAttemptScheduledAt := time.Now().Add(snoozeErr.duration)
 
+		snoozesValue := gjson.GetBytes(e.JobRow.Metadata, "snoozes").Int()
+		metadataUpdatesBytes, err = sjson.SetBytes(metadataUpdatesBytes, "snoozes", snoozesValue+1)
+		if err != nil {
+			e.Logger.ErrorContext(ctx, e.Name+": Failed to set snoozes", slog.String("error", err.Error()))
+			return
+		}
+
 		// Normally, snoozed jobs are set `scheduled` for the future and it's the
 		// scheduler's job to set them back to `available` so they can be reworked.
 		// Just as with retryable jobs, this isn't friendly for short snooze times
@@ -262,9 +300,9 @@ func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 		// smaller than the scheduler's run interval.
 		var params *riverdriver.JobSetStateIfRunningParams
 		if nextAttemptScheduledAt.Sub(e.Time.NowUTC()) <= e.SchedulerInterval {
-			params = riverdriver.JobSetStateSnoozedAvailable(e.JobRow.ID, nextAttemptScheduledAt, e.JobRow.Attempt-1)
+			params = riverdriver.JobSetStateSnoozedAvailable(e.JobRow.ID, nextAttemptScheduledAt, e.JobRow.Attempt-1, metadataUpdatesBytes)
 		} else {
-			params = riverdriver.JobSetStateSnoozed(e.JobRow.ID, nextAttemptScheduledAt, e.JobRow.Attempt-1)
+			params = riverdriver.JobSetStateSnoozed(e.JobRow.ID, nextAttemptScheduledAt, e.JobRow.Attempt-1, metadataUpdatesBytes)
 		}
 		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, params); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Error snoozing job",
@@ -275,11 +313,11 @@ func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 	}
 
 	if res.Err != nil || res.PanicVal != nil {
-		e.reportError(ctx, res)
+		e.reportError(ctx, res, metadataUpdatesBytes)
 		return
 	}
 
-	if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateCompleted(e.JobRow.ID, e.Time.NowUTC())); err != nil {
+	if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateCompleted(e.JobRow.ID, e.Time.NowUTC(), metadataUpdatesBytes)); err != nil {
 		e.Logger.ErrorContext(ctx, e.Name+": Error completing job",
 			slog.String("err", err.Error()),
 			slog.Int64("job_id", e.JobRow.ID),
@@ -288,7 +326,7 @@ func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 	}
 }
 
-func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
+func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult, metadataUpdates []byte) {
 	var (
 		cancelJob bool
 		cancelErr *JobCancelError
@@ -335,14 +373,14 @@ func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
 	now := time.Now()
 
 	if cancelJob {
-		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateCancelled(e.JobRow.ID, now, errData)); err != nil {
+		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateCancelled(e.JobRow.ID, now, errData, metadataUpdates)); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Failed to cancel job and report error", logAttrs...)
 		}
 		return
 	}
 
 	if e.JobRow.Attempt >= e.JobRow.MaxAttempts {
-		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateDiscarded(e.JobRow.ID, now, errData)); err != nil {
+		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateDiscarded(e.JobRow.ID, now, errData, metadataUpdates)); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Failed to discard job and report error", logAttrs...)
 		}
 		return
@@ -373,9 +411,9 @@ func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
 	// `available` if their retry was smaller than the scheduler's run interval.
 	var params *riverdriver.JobSetStateIfRunningParams
 	if nextRetryScheduledAt.Sub(e.Time.NowUTC()) <= e.SchedulerInterval {
-		params = riverdriver.JobSetStateErrorAvailable(e.JobRow.ID, nextRetryScheduledAt, errData)
+		params = riverdriver.JobSetStateErrorAvailable(e.JobRow.ID, nextRetryScheduledAt, errData, metadataUpdates)
 	} else {
-		params = riverdriver.JobSetStateErrorRetryable(e.JobRow.ID, nextRetryScheduledAt, errData)
+		params = riverdriver.JobSetStateErrorRetryable(e.JobRow.ID, nextRetryScheduledAt, errData, metadataUpdates)
 	}
 	if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, params); err != nil {
 		e.Logger.ErrorContext(ctx, e.Name+": Failed to report error for job", logAttrs...)
