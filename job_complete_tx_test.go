@@ -73,12 +73,11 @@ func TestJobCompleteTx(t *testing.T) {
 		t.Parallel()
 
 		ctx, bundle := setup(ctx, t)
-		// Inject valid metadata updates into context
-		ctx = context.WithValue(ctx, ctxMetadataUpdatesKey, map[string]interface{}{"foo": "bar"})
-
 		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
 			State: ptrutil.Ptr(rivertype.JobStateRunning),
 		})
+		// Inject valid metadata updates into the job:
+		require.NoError(t, job.MetadataPutUpdate("my_key", map[string]interface{}{"foo": "bar"}))
 
 		completedJob, err := JobCompleteTx[*riverpgxv5.Driver](ctx, bundle.tx, &Job[JobArgs]{JobRow: job})
 		require.NoError(t, err)
@@ -93,16 +92,19 @@ func TestJobCompleteTx(t *testing.T) {
 		t.Parallel()
 
 		ctx, bundle := setup(ctx, t)
-		// Inject invalid metadata updates into context (using a channel which is not JSON marshalable)
-		ctx = context.WithValue(ctx, ctxMetadataUpdatesKey, make(chan int))
 
 		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
 			State: ptrutil.Ptr(rivertype.JobStateRunning),
 		})
+		// Inject invalid metadata updates into the job (using a channel which is
+		// not JSON marshalable).  To do this, we first put a valid value, then
+		// fetch the map and manually inject an invalid value.
+		require.NoError(t, job.MetadataPutUpdate("a_key", "value"))
+		pendingUpdates := job.MetadataPendingUpdates()
+		pendingUpdates["my_key"] = make(chan int)
 
 		_, err := JobCompleteTx[*riverpgxv5.Driver](ctx, bundle.tx, &Job[JobArgs]{JobRow: job})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "unsupported type")
+		require.ErrorContains(t, err, "unsupported type: chan int")
 	})
 
 	t.Run("ErrorIfNotRunning", func(t *testing.T) {

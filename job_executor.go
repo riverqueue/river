@@ -23,18 +23,6 @@ import (
 // purposes of resource cleanup. Should never be user visible.
 var errExecutorDefaultCancel = errors.New("context cancelled as executor finished")
 
-type contextKey string
-
-const ctxMetadataUpdatesKey contextKey = "river_metadata_updates"
-
-func metadataUpdatesFromContext(ctx context.Context) (map[string]any, bool) {
-	metadataUpdates := ctx.Value(ctxMetadataUpdatesKey)
-	if metadataUpdates == nil {
-		return nil, false
-	}
-	return metadataUpdates.(map[string]any), true
-}
-
 // UnknownJobKindError is returned when a Client fetches and attempts to
 // work a job that has not been registered on the Client's Workers bundle (using
 // AddWorker).
@@ -191,9 +179,6 @@ func (e *jobExecutor) Execute(ctx context.Context) {
 //
 //nolint:nonamedreturns
 func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
-	metadataUpdates := make(map[string]any)
-	ctx = context.WithValue(ctx, ctxMetadataUpdatesKey, metadataUpdates)
-
 	workerMiddleware := e.WorkUnit.Middleware()
 	defer func() {
 		if recovery := recover(); recovery != nil {
@@ -204,7 +189,7 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 			)
 
 			res = &jobExecutorResult{
-				MetadataUpdates: metadataUpdates,
+				MetadataUpdates: e.JobRow.MetadataPendingUpdates(),
 				PanicTrace:      string(debug.Stack()),
 				PanicVal:        recovery,
 			}
@@ -217,11 +202,11 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 			slog.String("kind", e.JobRow.Kind),
 			slog.Int64("job_id", e.JobRow.ID),
 		)
-		return &jobExecutorResult{Err: &UnknownJobKindError{Kind: e.JobRow.Kind}, MetadataUpdates: metadataUpdates}
+		return &jobExecutorResult{Err: &UnknownJobKindError{Kind: e.JobRow.Kind}, MetadataUpdates: e.JobRow.MetadataPendingUpdates()}
 	}
 
 	if err := e.WorkUnit.UnmarshalJob(); err != nil {
-		return &jobExecutorResult{Err: err, MetadataUpdates: metadataUpdates}
+		return &jobExecutorResult{Err: err, MetadataUpdates: e.JobRow.MetadataPendingUpdates()}
 	}
 
 	doInner := func(ctx context.Context) error {
@@ -260,7 +245,7 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		}
 	}
 
-	return &jobExecutorResult{Err: doInner(ctx), MetadataUpdates: metadataUpdates}
+	return &jobExecutorResult{Err: doInner(ctx), MetadataUpdates: e.JobRow.MetadataPendingUpdates()}
 }
 
 func (e *jobExecutor) invokeErrorHandler(ctx context.Context, res *jobExecutorResult) bool {
