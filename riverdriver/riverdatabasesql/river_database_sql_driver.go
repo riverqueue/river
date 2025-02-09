@@ -517,42 +517,6 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 	})
 }
 
-func (e *Executor) JobSetCompleteIfRunningMany(ctx context.Context, params *riverdriver.JobSetCompleteIfRunningManyParams) ([]*rivertype.JobRow, error) {
-	jobs, err := dbsqlc.New().JobSetCompleteIfRunningMany(ctx, e.dbtx, &dbsqlc.JobSetCompleteIfRunningManyParams{
-		ID:          params.ID,
-		FinalizedAt: params.FinalizedAt,
-	})
-	if err != nil {
-		return nil, interpretError(err)
-	}
-	return mapSliceError(jobs, jobRowFromInternal)
-}
-
-func (e *Executor) JobSetStateIfRunning(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
-	var attempt int16
-	if params.Attempt != nil {
-		attempt = int16(min(*params.Attempt, math.MaxInt16)) //nolint:gosec
-	}
-
-	job, err := dbsqlc.New().JobSetStateIfRunning(ctx, e.dbtx, &dbsqlc.JobSetStateIfRunningParams{
-		ID:                  params.ID,
-		AttemptUpdate:       params.Attempt != nil,
-		Attempt:             attempt,
-		ErrorDoUpdate:       params.ErrData != nil,
-		Error:               valutil.ValOrDefault(string(params.ErrData), "{}"),
-		FinalizedAtDoUpdate: params.FinalizedAt != nil,
-		FinalizedAt:         params.FinalizedAt,
-		ScheduledAtDoUpdate: params.ScheduledAt != nil,
-		ScheduledAt:         params.ScheduledAt,
-		SnoozeDoIncrement:   params.SnoozeDoIncrement,
-		State:               dbsqlc.RiverJobState(params.State),
-	})
-	if err != nil {
-		return nil, interpretError(err)
-	}
-	return jobRowFromInternal(job)
-}
-
 func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
 	setStateParams := &dbsqlc.JobSetStateIfRunningManyParams{
 		IDs:                 params.ID,

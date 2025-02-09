@@ -19,6 +19,7 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
@@ -58,7 +59,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	subscribeCh := make(chan []jobcompleter.CompleterJobUpdated, 100)
 	t.Cleanup(riverinternaltest.DiscardContinuously(subscribeCh))
 
-	completer := jobcompleter.NewInlineCompleter(archetype, exec, subscribeCh)
+	completer := jobcompleter.NewInlineCompleter(archetype, exec, &riverpilot.StandardPilot{}, subscribeCh)
 	t.Cleanup(completer.Stop)
 
 	type WithJobNumArgs struct {
@@ -163,7 +164,7 @@ func TestProducer_PollOnly(t *testing.T) {
 			jobUpdates = make(chan []jobcompleter.CompleterJobUpdated, 10)
 		)
 
-		completer := jobcompleter.NewInlineCompleter(archetype, exec, jobUpdates)
+		completer := jobcompleter.NewInlineCompleter(archetype, exec, &riverpilot.StandardPilot{}, jobUpdates)
 		{
 			require.NoError(t, completer.Start(ctx))
 			t.Cleanup(completer.Stop)
@@ -203,7 +204,7 @@ func TestProducer_WithNotifier(t *testing.T) {
 			listener   = driver.GetListener()
 		)
 
-		completer := jobcompleter.NewInlineCompleter(archetype, exec, jobUpdates)
+		completer := jobcompleter.NewInlineCompleter(archetype, exec, &riverpilot.StandardPilot{}, jobUpdates)
 		{
 			require.NoError(t, completer.Start(ctx))
 			t.Cleanup(completer.Stop)

@@ -29,8 +29,6 @@ type partialExecutorMock struct {
 	riverdriver.Executor
 	JobSetStateIfRunningManyCalled bool
 	JobSetStateIfRunningManyFunc   func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
-	JobSetStateIfRunningCalled     bool
-	JobSetStateIfRunningFunc       func(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error)
 	mu                             sync.Mutex
 }
 
@@ -40,7 +38,6 @@ func NewPartialExecutorMock(exec riverdriver.Executor) *partialExecutorMock {
 	return &partialExecutorMock{
 		Executor:                     exec,
 		JobSetStateIfRunningManyFunc: exec.JobSetStateIfRunningMany,
-		JobSetStateIfRunningFunc:     exec.JobSetStateIfRunning,
 	}
 }
 
@@ -55,11 +52,6 @@ func (m *partialExecutorMock) Begin(ctx context.Context) (riverdriver.ExecutorTx
 func (m *partialExecutorMock) JobSetStateIfRunningMany(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
 	m.setCalled(func() { m.JobSetStateIfRunningManyCalled = true })
 	return m.JobSetStateIfRunningManyFunc(ctx, params)
-}
-
-func (m *partialExecutorMock) JobSetStateIfRunning(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
-	m.setCalled(func() { m.JobSetStateIfRunningCalled = true })
-	return m.JobSetStateIfRunningFunc(ctx, params)
 }
 
 func (m *partialExecutorMock) setCalled(setCalledFunc func()) {
@@ -77,29 +69,32 @@ func (m *partialExecutorTxMock) JobSetStateIfRunningMany(ctx context.Context, pa
 	return m.partial.JobSetStateIfRunningMany(ctx, params)
 }
 
-func (m *partialExecutorTxMock) JobSetStateIfRunning(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
-	return m.partial.JobSetStateIfRunning(ctx, params)
-}
-
 func TestInlineJobCompleter_Complete(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 
+	var (
+		tx       = riverinternaltest.TestTx(ctx, t)
+		driver   = riverpgxv5.New(nil)
+		exec     = driver.UnwrapExecutor(tx)
+		execMock = NewPartialExecutorMock(exec)
+	)
+
 	var attempt int
 	expectedErr := errors.New("an error from the completer")
-	execMock := &partialExecutorMock{
-		JobSetStateIfRunningFunc: func(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
-			require.Equal(t, int64(1), params.ID)
-			attempt++
-			return nil, expectedErr
-		},
+
+	execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+		require.Len(t, params.ID, 1)
+		require.Equal(t, int64(1), params.ID[0])
+		attempt++
+		return nil, expectedErr
 	}
 
 	subscribeCh := make(chan []CompleterJobUpdated, 10)
 	t.Cleanup(riverinternaltest.DiscardContinuously(subscribeCh))
 
-	completer := NewInlineCompleter(riversharedtest.BaseServiceArchetype(t), execMock, subscribeCh)
+	completer := NewInlineCompleter(riversharedtest.BaseServiceArchetype(t), execMock, &riverpilot.StandardPilot{}, subscribeCh)
 	t.Cleanup(completer.Stop)
 	completer.disableSleep = true
 
@@ -108,7 +103,7 @@ func TestInlineJobCompleter_Complete(t *testing.T) {
 		t.Errorf("expected %v, got %v", expectedErr, err)
 	}
 
-	require.True(t, execMock.JobSetStateIfRunningCalled)
+	require.True(t, execMock.JobSetStateIfRunningManyCalled)
 	require.Equal(t, numRetries, attempt)
 }
 
@@ -116,7 +111,7 @@ func TestInlineJobCompleter_Subscribe(t *testing.T) {
 	t.Parallel()
 
 	testCompleterSubscribe(t, func(exec riverdriver.Executor, subscribeCh SubscribeChan) JobCompleter {
-		return NewInlineCompleter(riversharedtest.BaseServiceArchetype(t), exec, subscribeCh)
+		return NewInlineCompleter(riversharedtest.BaseServiceArchetype(t), exec, &riverpilot.StandardPilot{}, subscribeCh)
 	})
 }
 
@@ -124,7 +119,7 @@ func TestInlineJobCompleter_Wait(t *testing.T) {
 	t.Parallel()
 
 	testCompleterWait(t, func(exec riverdriver.Executor, subscribeChan SubscribeChan) JobCompleter {
-		return NewInlineCompleter(riversharedtest.BaseServiceArchetype(t), exec, subscribeChan)
+		return NewInlineCompleter(riversharedtest.BaseServiceArchetype(t), exec, &riverpilot.StandardPilot{}, subscribeChan)
 	})
 }
 
@@ -149,15 +144,23 @@ func TestAsyncJobCompleter_Complete(t *testing.T) {
 		resultCh <- expectedErr
 	}()
 
-	adapter := &partialExecutorMock{
-		JobSetStateIfRunningFunc: func(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
-			inputCh <- jobInput{ctx: ctx, jobID: params.ID}
-			err := <-resultCh
+	var (
+		db       = riverinternaltest.TestDB(ctx, t)
+		driver   = riverpgxv5.New(db)
+		execMock = NewPartialExecutorMock(driver.GetExecutor())
+	)
+
+	execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+		require.Len(t, params.ID, 1)
+		inputCh <- jobInput{ctx: ctx, jobID: params.ID[0]}
+		err := <-resultCh
+		if err != nil {
 			return nil, err
-		},
+		}
+		return []*rivertype.JobRow{{ID: params.ID[0], State: params.State[0]}}, nil
 	}
 	subscribeChan := make(chan []CompleterJobUpdated, 10)
-	completer := newAsyncCompleterWithConcurrency(riversharedtest.BaseServiceArchetype(t), adapter, 2, subscribeChan)
+	completer := newAsyncCompleterWithConcurrency(riversharedtest.BaseServiceArchetype(t), execMock, &riverpilot.StandardPilot{}, 2, subscribeChan)
 	completer.disableSleep = true
 	require.NoError(t, completer.Start(ctx))
 	t.Cleanup(completer.Stop)
@@ -222,7 +225,7 @@ func TestAsyncJobCompleter_Subscribe(t *testing.T) {
 	t.Parallel()
 
 	testCompleterSubscribe(t, func(exec riverdriver.Executor, subscribeCh SubscribeChan) JobCompleter {
-		return newAsyncCompleterWithConcurrency(riversharedtest.BaseServiceArchetype(t), exec, 4, subscribeCh)
+		return newAsyncCompleterWithConcurrency(riversharedtest.BaseServiceArchetype(t), exec, &riverpilot.StandardPilot{}, 4, subscribeCh)
 	})
 }
 
@@ -230,7 +233,7 @@ func TestAsyncJobCompleter_Wait(t *testing.T) {
 	t.Parallel()
 
 	testCompleterWait(t, func(exec riverdriver.Executor, subscribeCh SubscribeChan) JobCompleter {
-		return newAsyncCompleterWithConcurrency(riversharedtest.BaseServiceArchetype(t), exec, 4, subscribeCh)
+		return newAsyncCompleterWithConcurrency(riversharedtest.BaseServiceArchetype(t), exec, &riverpilot.StandardPilot{}, 4, subscribeCh)
 	})
 }
 
@@ -239,16 +242,17 @@ func testCompleterSubscribe(t *testing.T, constructor func(riverdriver.Executor,
 
 	ctx := context.Background()
 
-	exec := &partialExecutorMock{
-		JobSetStateIfRunningFunc: func(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
-			return &rivertype.JobRow{
-				State: rivertype.JobStateCompleted,
-			}, nil
-		},
+	var (
+		db       = riverinternaltest.TestDB(ctx, t)
+		driver   = riverpgxv5.New(db)
+		execMock = NewPartialExecutorMock(driver.GetExecutor())
+	)
+	execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+		return []*rivertype.JobRow{{ID: params.ID[0], State: rivertype.JobStateCompleted}}, nil
 	}
 
 	subscribeChan := make(chan []CompleterJobUpdated, 10)
-	completer := constructor(exec, subscribeChan)
+	completer := constructor(execMock, subscribeChan)
 	require.NoError(t, completer.Start(ctx))
 
 	// Flatten the slice results from subscribeChan into jobUpdateChan:
@@ -283,18 +287,26 @@ func testCompleterWait(t *testing.T, constructor func(riverdriver.Executor, Subs
 
 	ctx := context.Background()
 
-	resultCh := make(chan error)
+	var (
+		db       = riverinternaltest.TestDB(ctx, t)
+		driver   = riverpgxv5.New(db)
+		execMock = NewPartialExecutorMock(driver.GetExecutor())
+	)
+
+	resultCh := make(chan struct{})
 	completeStartedCh := make(chan struct{})
-	exec := &partialExecutorMock{
-		JobSetStateIfRunningFunc: func(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
-			completeStartedCh <- struct{}{}
-			err := <-resultCh
-			return nil, err
-		},
+	execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+		completeStartedCh <- struct{}{}
+		<-resultCh
+		results := make([]*rivertype.JobRow, len(params.ID))
+		for i := range params.ID {
+			results[i] = &rivertype.JobRow{ID: params.ID[i], State: rivertype.JobStateCompleted}
+		}
+		return results, nil
 	}
 	subscribeCh := make(chan []CompleterJobUpdated, 100)
 
-	completer := constructor(exec, subscribeCh)
+	completer := constructor(execMock, subscribeCh)
 	require.NoError(t, completer.Start(ctx))
 
 	// launch 4 completions:
@@ -307,7 +319,7 @@ func testCompleterWait(t *testing.T, constructor func(riverdriver.Executor, Subs
 	}
 
 	// Give one completion a signal to finish, there should be 3 remaining in-flight:
-	resultCh <- nil
+	resultCh <- struct{}{}
 
 	waitDone := make(chan struct{})
 	go func() {
@@ -322,8 +334,8 @@ func testCompleterWait(t *testing.T, constructor func(riverdriver.Executor, Subs
 	}
 
 	// Get us down to one in-flight completion:
-	resultCh <- nil
-	resultCh <- nil
+	resultCh <- struct{}{}
+	resultCh <- struct{}{}
 
 	select {
 	case <-waitDone:
@@ -332,7 +344,7 @@ func testCompleterWait(t *testing.T, constructor func(riverdriver.Executor, Subs
 	}
 
 	// Finish the last one:
-	resultCh <- nil
+	resultCh <- struct{}{}
 
 	select {
 	case <-waitDone:
@@ -346,7 +358,7 @@ func TestAsyncCompleter(t *testing.T) {
 
 	testCompleter(t, func(t *testing.T, exec riverdriver.Executor, pilot riverpilot.Pilot, subscribeCh chan<- []CompleterJobUpdated) *AsyncCompleter {
 		t.Helper()
-		return NewAsyncCompleter(riversharedtest.BaseServiceArchetype(t), exec, subscribeCh)
+		return NewAsyncCompleter(riversharedtest.BaseServiceArchetype(t), exec, pilot, subscribeCh)
 	},
 		func(completer *AsyncCompleter) { completer.disableSleep = true },
 		func(completer *AsyncCompleter, exec riverdriver.Executor) { completer.exec = exec },
@@ -459,7 +471,7 @@ func TestInlineCompleter(t *testing.T) {
 
 	testCompleter(t, func(t *testing.T, exec riverdriver.Executor, pilot riverpilot.Pilot, subscribeCh chan<- []CompleterJobUpdated) *InlineCompleter {
 		t.Helper()
-		return NewInlineCompleter(riversharedtest.BaseServiceArchetype(t), exec, subscribeCh)
+		return NewInlineCompleter(riversharedtest.BaseServiceArchetype(t), exec, pilot, subscribeCh)
 	},
 		func(completer *InlineCompleter) { completer.disableSleep = true },
 		func(completer *InlineCompleter, exec riverdriver.Executor) { completer.exec = exec })
@@ -762,12 +774,6 @@ func testCompleter[TCompleter JobCompleter](
 			}
 			return bundle.exec.JobSetStateIfRunningMany(ctx, params)
 		}
-		execMock.JobSetStateIfRunningFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
-			if err := maybeError(); err != nil {
-				return nil, err
-			}
-			return bundle.exec.JobSetStateIfRunning(ctx, params)
-		}
 		setExec(completer, execMock)
 
 		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
@@ -776,10 +782,8 @@ func testCompleter[TCompleter JobCompleter](
 
 		completer.Stop()
 
-		// Make sure our mocks were really called. The specific function called
-		// will depend on the completer under test, so okay as long as one or
-		// the other was.
-		require.True(t, execMock.JobSetStateIfRunningManyCalled || execMock.JobSetStateIfRunningCalled)
+		// Make sure our mocks were really called.
+		require.True(t, execMock.JobSetStateIfRunningManyCalled)
 
 		// Job still managed to complete despite the errors.
 		requireState(t, bundle.exec, job.ID, rivertype.JobStateCompleted)
@@ -798,9 +802,6 @@ func testCompleter[TCompleter JobCompleter](
 		execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
 			return nil, context.Canceled
 		}
-		execMock.JobSetStateIfRunningFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
-			return nil, context.Canceled
-		}
 		setExec(completer, execMock)
 
 		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
@@ -813,10 +814,8 @@ func testCompleter[TCompleter JobCompleter](
 
 		completer.Stop()
 
-		// Make sure our mocks were really called. The specific function called
-		// will depend on the completer under test, so okay as long as one or
-		// the other was.
-		require.True(t, execMock.JobSetStateIfRunningManyCalled || execMock.JobSetStateIfRunningCalled)
+		// Make sure our mocks were really called.
+		require.True(t, execMock.JobSetStateIfRunningManyCalled)
 
 		// Job is still running because the completer is forced to give up
 		// immediately on certain types of errors like where a pool is closed.
@@ -836,9 +835,6 @@ func testCompleter[TCompleter JobCompleter](
 		execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
 			return nil, puddle.ErrClosedPool
 		}
-		execMock.JobSetStateIfRunningFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningParams) (*rivertype.JobRow, error) {
-			return nil, puddle.ErrClosedPool
-		}
 		setExec(completer, execMock)
 
 		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
@@ -851,10 +847,8 @@ func testCompleter[TCompleter JobCompleter](
 
 		completer.Stop()
 
-		// Make sure our mocks were really called. The specific function called
-		// will depend on the completer under test, so okay as long as one or
-		// the other was.
-		require.True(t, execMock.JobSetStateIfRunningManyCalled || execMock.JobSetStateIfRunningCalled)
+		// Make sure our mocks were really called.
+		require.True(t, execMock.JobSetStateIfRunningManyCalled)
 
 		// Job is still running because the completer is forced to give up
 		// immediately on certain types of errors like where a pool is closed.
@@ -878,14 +872,14 @@ func testCompleter[TCompleter JobCompleter](
 func BenchmarkAsyncCompleter_Concurrency10(b *testing.B) {
 	benchmarkCompleter(b, func(b *testing.B, exec riverdriver.Executor, pilot riverpilot.Pilot, subscribeCh chan<- []CompleterJobUpdated) JobCompleter {
 		b.Helper()
-		return newAsyncCompleterWithConcurrency(riversharedtest.BaseServiceArchetype(b), exec, 10, subscribeCh)
+		return newAsyncCompleterWithConcurrency(riversharedtest.BaseServiceArchetype(b), exec, pilot, 10, subscribeCh)
 	})
 }
 
 func BenchmarkAsyncCompleter_Concurrency100(b *testing.B) {
 	benchmarkCompleter(b, func(b *testing.B, exec riverdriver.Executor, pilot riverpilot.Pilot, subscribeCh chan<- []CompleterJobUpdated) JobCompleter {
 		b.Helper()
-		return newAsyncCompleterWithConcurrency(riversharedtest.BaseServiceArchetype(b), exec, 100, subscribeCh)
+		return newAsyncCompleterWithConcurrency(riversharedtest.BaseServiceArchetype(b), exec, pilot, 100, subscribeCh)
 	})
 }
 
@@ -899,7 +893,7 @@ func BenchmarkBatchCompleter(b *testing.B) {
 func BenchmarkInlineCompleter(b *testing.B) {
 	benchmarkCompleter(b, func(b *testing.B, exec riverdriver.Executor, pilot riverpilot.Pilot, subscribeCh chan<- []CompleterJobUpdated) JobCompleter {
 		b.Helper()
-		return NewInlineCompleter(riversharedtest.BaseServiceArchetype(b), exec, subscribeCh)
+		return NewInlineCompleter(riversharedtest.BaseServiceArchetype(b), exec, pilot, subscribeCh)
 	})
 }
 
