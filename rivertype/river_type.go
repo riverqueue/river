@@ -5,6 +5,7 @@ package rivertype
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -136,6 +137,27 @@ type JobRow struct {
 	UniqueStates []JobState
 }
 
+// GetMetadata unmarshals the JSON blob in the Metadata field into a map[string]interface{}.
+// If the JSON is invalid, an error is returned.
+func (j *JobRow) GetMetadata() (map[string]interface{}, error) {
+	unmarshalled := make(map[string]interface{})
+	err := json.Unmarshal(j.Metadata, &unmarshalled)
+
+	return unmarshalled, err
+}
+
+// MustGetMetadata unmarshals the JSON blob in the Metadata field into a map[string]interface{}.
+// If the JSON is invalid, this function panics.
+func (j *JobRow) MustGetMetadata() map[string]interface{} {
+	unmarshalled := make(map[string]interface{})
+	err := json.Unmarshal(j.Metadata, &unmarshalled)
+	if err != nil {
+		panic(err)
+	}
+
+	return unmarshalled
+}
+
 // JobState is the state of a job. Jobs start their lifecycle as either
 // JobStateAvailable or JobStateScheduled, and if all goes well, transition to
 // JobStateCompleted after they're worked.
@@ -250,6 +272,27 @@ type JobInsertParams struct {
 	UniqueStates byte
 }
 
+// GetMetadata unmarshals the JSON blob in the Metadata field into a map[string]interface{}.
+// If the JSON is invalid, an error is returned.
+func (j *JobInsertParams) GetMetadata() (map[string]interface{}, error) {
+	unmarshalled := make(map[string]interface{})
+	err := json.Unmarshal(j.Metadata, &unmarshalled)
+
+	return unmarshalled, err
+}
+
+// MustGetMetadata unmarshals the JSON blob in the Metadata field into a map[string]interface{}.
+// If the JSON is invalid, this function panics.
+func (j *JobInsertParams) MustGetMetadata() map[string]interface{} {
+	unmarshalled := make(map[string]interface{})
+	err := json.Unmarshal(j.Metadata, &unmarshalled)
+	if err != nil {
+		panic(err)
+	}
+
+	return unmarshalled
+}
+
 // JobInsertMiddleware provides an interface for middleware that integrations can
 // use to encapsulate common logic around job insertion.
 //
@@ -263,7 +306,11 @@ type JobInsertMiddleware interface {
 	//
 	// Returning an error from this function will fail the overarching insert
 	// operation, even if the inner insertion originally succeeded.
-	InsertMany(ctx context.Context, manyParams []*JobInsertParams, doInner func(context.Context) ([]*JobInsertResult, error)) ([]*JobInsertResult, error)
+	InsertMany(
+		ctx context.Context,
+		manyParams []*JobInsertParams,
+		doInner func(context.Context) ([]*JobInsertResult, error),
+	) ([]*JobInsertResult, error)
 }
 
 type WorkerMiddleware interface {
@@ -306,6 +353,27 @@ type Queue struct {
 	// If UpdatedAt has not been updated for awhile, the queue record will be
 	// deleted from the table by a maintenance process.
 	UpdatedAt time.Time
+}
+
+// GetMetadata unmarshals the JSON blob in the Metadata field into a map[string]interface{}.
+// If the JSON is invalid, an error is returned.
+func (q *Queue) GetMetadata() (map[string]interface{}, error) {
+	unmarshalled := make(map[string]interface{})
+	err := json.Unmarshal(q.Metadata, &unmarshalled)
+
+	return unmarshalled, err
+}
+
+// MustGetMetadata unmarshals the JSON blob in the Metadata field into a map[string]interface{}.
+// If the JSON is invalid, this function panics.
+func (q *Queue) MustGetMetadata() map[string]interface{} {
+	unmarshalled := make(map[string]interface{})
+	err := json.Unmarshal(q.Metadata, &unmarshalled)
+	if err != nil {
+		panic(err)
+	}
+
+	return unmarshalled
 }
 
 // UniqueOptsByStateDefault is the set of job states that are used to determine
