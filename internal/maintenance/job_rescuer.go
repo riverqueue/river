@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -26,10 +27,6 @@ const (
 	JobRescuerIntervalDefault    = 30 * time.Second
 )
 
-type ClientRetryPolicy interface {
-	NextRetry(job *rivertype.JobRow) time.Time
-}
-
 // Test-only properties.
 type JobRescuerTestSignals struct {
 	FetchedBatch testsignal.TestSignal[struct{}] // notifies when runOnce has fetched a batch of jobs
@@ -44,7 +41,7 @@ func (ts *JobRescuerTestSignals) Init() {
 type JobRescuerConfig struct {
 	// ClientRetryPolicy is the default retry policy to use for workers that don't
 	// override NextRetry.
-	ClientRetryPolicy ClientRetryPolicy
+	ClientRetryPolicy jobexecutor.ClientRetryPolicy
 
 	// Interval is the amount of time to wait between runs of the rescuer.
 	Interval time.Duration

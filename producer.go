@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/jobcompleter"
+	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/util/chanutil"
@@ -147,12 +148,12 @@ type producer struct {
 	startstop.BaseStartStop
 
 	// Jobs which are currently being worked. Only used by main goroutine.
-	activeJobs map[int64]*jobExecutor
+	activeJobs map[int64]*jobexecutor.JobExecutor
 
 	completer    jobcompleter.JobCompleter
 	config       *producerConfig
 	exec         riverdriver.Executor
-	errorHandler ErrorHandler
+	errorHandler jobexecutor.ErrorHandler
 	workers      *Workers
 
 	// Receives job IDs to cancel. Written by notifier goroutine, only read from
@@ -191,13 +192,18 @@ func newProducer(archetype *baseservice.Archetype, exec riverdriver.Executor, co
 		panic("exec is required")
 	}
 
+	var errorHandler jobexecutor.ErrorHandler
+	if config.ErrorHandler != nil {
+		errorHandler = &errorHandlerAdapter{config.ErrorHandler}
+	}
+
 	return baseservice.Init(archetype, &producer{
-		activeJobs:     make(map[int64]*jobExecutor),
+		activeJobs:     make(map[int64]*jobexecutor.JobExecutor),
 		cancelCh:       make(chan int64, 1000),
 		completer:      config.Completer,
 		config:         config.mustValidate(),
 		exec:           exec,
-		errorHandler:   config.ErrorHandler,
+		errorHandler:   errorHandler,
 		jobResultCh:    make(chan *rivertype.JobRow, config.MaxWorkers),
 		jobTimeout:     config.JobTimeout,
 		queueControlCh: make(chan *jobControlPayload, 100),
@@ -524,7 +530,7 @@ func (p *producer) executorShutdownLoop() {
 	}
 }
 
-func (p *producer) addActiveJob(id int64, executor *jobExecutor) {
+func (p *producer) addActiveJob(id int64, executor *jobexecutor.JobExecutor) {
 	p.numJobsActive.Add(1)
 	p.activeJobs[id] = executor
 }
@@ -603,17 +609,18 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 		// jobCancel will always be called by the executor to prevent leaks.
 		jobCtx, jobCancel := context.WithCancelCause(workCtx)
 
-		executor := baseservice.Init(&p.Archetype, &jobExecutor{
-			CancelFunc:             jobCancel,
-			ClientJobTimeout:       p.jobTimeout,
-			ClientRetryPolicy:      p.retryPolicy,
-			Completer:              p.completer,
-			ErrorHandler:           p.errorHandler,
-			InformProducerDoneFunc: p.handleWorkerDone,
-			GlobalMiddleware:       p.config.GlobalMiddleware,
-			JobRow:                 job,
-			SchedulerInterval:      p.config.SchedulerInterval,
-			WorkUnit:               workUnit,
+		executor := baseservice.Init(&p.Archetype, &jobexecutor.JobExecutor{
+			CancelFunc:               jobCancel,
+			ClientJobTimeout:         p.jobTimeout,
+			ClientRetryPolicy:        p.retryPolicy,
+			Completer:                p.completer,
+			DefaultClientRetryPolicy: &DefaultClientRetryPolicy{},
+			ErrorHandler:             p.errorHandler,
+			InformProducerDoneFunc:   p.handleWorkerDone,
+			GlobalMiddleware:         p.config.GlobalMiddleware,
+			JobRow:                   job,
+			SchedulerInterval:        p.config.SchedulerInterval,
+			WorkUnit:                 workUnit,
 		})
 		p.addActiveJob(job.ID, executor)
 
@@ -716,4 +723,18 @@ func (p *producer) reportQueueStatusOnce(ctx context.Context) {
 type producerFetchResult struct {
 	jobs []*rivertype.JobRow
 	err  error
+}
+
+type errorHandlerAdapter struct {
+	errorHandler ErrorHandler
+}
+
+func (e *errorHandlerAdapter) HandleError(ctx context.Context, job *rivertype.JobRow, err error) *jobexecutor.ErrorHandlerResult {
+	result := e.errorHandler.HandleError(ctx, job, err)
+	return (*jobexecutor.ErrorHandlerResult)(result)
+}
+
+func (e *errorHandlerAdapter) HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *jobexecutor.ErrorHandlerResult {
+	result := e.errorHandler.HandlePanic(ctx, job, panicVal, trace)
+	return (*jobexecutor.ErrorHandlerResult)(result)
 }

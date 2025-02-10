@@ -99,5 +99,5 @@ func Example_jobCancelFromClient() {
 	}
 
 	// Output:
-	// jobExecutor: job cancelled remotely
+	// JobExecutor: job cancelled remotely
 }
