@@ -30,11 +30,13 @@ func TestJobStates(t *testing.T) {
 }
 
 func TestMetadataGetters(t *testing.T) {
+	metaValid := "{ \"foo\": \"bar\" }"
+	metaInvalid := "{ \"foo\": \"bar\""
+	want := map[string]interface{}{"foo": "bar"}
+
 	t.Run("JobRowGet", func(t *testing.T) {
-		meta := "{ \"foo\": \"bar\" }"
-		want := map[string]interface{}{"foo": "bar"}
 		jobRow := rivertype.JobRow{
-			Metadata: []byte(meta),
+			Metadata: []byte(metaValid),
 		}
 
 		got, err := jobRow.GetMetadata()
@@ -42,28 +44,24 @@ func TestMetadataGetters(t *testing.T) {
 		require.Equal(t, want, got)
 	})
 	t.Run("JobRowGetInvalid", func(t *testing.T) {
-		meta := "{ \"foo\": \"bar\""
 		jobRow := rivertype.JobRow{
-			Metadata: []byte(meta),
+			Metadata: []byte(metaInvalid),
 		}
 
 		_, err := jobRow.GetMetadata()
 		require.Error(t, err)
 	})
 	t.Run("JobRowMustGet", func(t *testing.T) {
-		meta := "{ \"foo\": \"bar\" }"
-		want := map[string]interface{}{"foo": "bar"}
 		jobRow := rivertype.JobRow{
-			Metadata: []byte(meta),
+			Metadata: []byte(metaValid),
 		}
 
 		got := jobRow.MustGetMetadata()
 		require.Equal(t, want, got)
 	})
 	t.Run("JobRowMustGetInvalid", func(t *testing.T) {
-		meta := "{ \"foo\": \"bar\""
 		jobRow := rivertype.JobRow{
-			Metadata: []byte(meta),
+			Metadata: []byte(metaInvalid),
 		}
 
 		require.Panics(t, func() {
@@ -72,10 +70,8 @@ func TestMetadataGetters(t *testing.T) {
 	})
 
 	t.Run("JobInsertParamsGet", func(t *testing.T) {
-		meta := "{ \"foo\": \"bar\" }"
-		want := map[string]interface{}{"foo": "bar"}
 		jobInsertParams := rivertype.JobInsertParams{
-			Metadata: []byte(meta),
+			Metadata: []byte(metaValid),
 		}
 
 		got, err := jobInsertParams.GetMetadata()
@@ -83,28 +79,24 @@ func TestMetadataGetters(t *testing.T) {
 		require.Equal(t, want, got)
 	})
 	t.Run("JobInsertParamsGetInvalid", func(t *testing.T) {
-		meta := "{ \"foo\": \"bar\""
 		jobInsertParams := rivertype.JobInsertParams{
-			Metadata: []byte(meta),
+			Metadata: []byte(metaInvalid),
 		}
 
 		_, err := jobInsertParams.GetMetadata()
 		require.Error(t, err)
 	})
 	t.Run("JobInsertParamsMustGet", func(t *testing.T) {
-		meta := "{ \"foo\": \"bar\" }"
-		want := map[string]interface{}{"foo": "bar"}
 		jobInsertParams := rivertype.JobInsertParams{
-			Metadata: []byte(meta),
+			Metadata: []byte(metaValid),
 		}
 
 		got := jobInsertParams.MustGetMetadata()
 		require.Equal(t, want, got)
 	})
 	t.Run("JobInsertParamsMustGetInvalid", func(t *testing.T) {
-		meta := "{ \"foo\": \"bar\""
 		jobInsertParams := rivertype.JobInsertParams{
-			Metadata: []byte(meta),
+			Metadata: []byte(metaInvalid),
 		}
 
 		require.Panics(t, func() {
@@ -113,10 +105,8 @@ func TestMetadataGetters(t *testing.T) {
 	})
 
 	t.Run("QueueGet", func(t *testing.T) {
-		meta := "{ \"foo\": \"bar\" }"
-		want := map[string]interface{}{"foo": "bar"}
 		queue := rivertype.Queue{
-			Metadata: []byte(meta),
+			Metadata: []byte(metaValid),
 		}
 
 		got, err := queue.GetMetadata()
@@ -124,28 +114,24 @@ func TestMetadataGetters(t *testing.T) {
 		require.Equal(t, want, got)
 	})
 	t.Run("QueueGetInvalid", func(t *testing.T) {
-		meta := "{ \"foo\": \"bar\""
 		queue := rivertype.Queue{
-			Metadata: []byte(meta),
+			Metadata: []byte(metaInvalid),
 		}
 
 		_, err := queue.GetMetadata()
 		require.Error(t, err)
 	})
 	t.Run("QueueMustGet", func(t *testing.T) {
-		meta := "{ \"foo\": \"bar\" }"
-		want := map[string]interface{}{"foo": "bar"}
 		queue := rivertype.Queue{
-			Metadata: []byte(meta),
+			Metadata: []byte(metaValid),
 		}
 
 		got := queue.MustGetMetadata()
 		require.Equal(t, want, got)
 	})
 	t.Run("QueueMustGetInvalid", func(t *testing.T) {
-		meta := "{ \"foo\": \"bar\""
 		queue := rivertype.Queue{
-			Metadata: []byte(meta),
+			Metadata: []byte(metaInvalid),
 		}
 
 		require.Panics(t, func() {
