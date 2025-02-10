@@ -306,11 +306,7 @@ type JobInsertMiddleware interface {
 	//
 	// Returning an error from this function will fail the overarching insert
 	// operation, even if the inner insertion originally succeeded.
-	InsertMany(
-		ctx context.Context,
-		manyParams []*JobInsertParams,
-		doInner func(context.Context) ([]*JobInsertResult, error),
-	) ([]*JobInsertResult, error)
+	InsertMany(ctx context.Context, manyParams []*JobInsertParams, doInner func(context.Context) ([]*JobInsertResult, error)) ([]*JobInsertResult, error)
 }
 
 type WorkerMiddleware interface {
