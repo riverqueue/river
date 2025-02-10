@@ -1,4 +1,4 @@
-package river
+package jobexecutor
 
 import (
 	"context"
@@ -19,94 +19,37 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
+type ClientRetryPolicy interface {
+	NextRetry(job *rivertype.JobRow) time.Time
+}
+
+// ErrorHandler provides an interface that will be invoked in case of an error
+// or panic occurring in the job. This is often useful for logging and exception
+// tracking, but can also be used to customize retry behavior.
+type ErrorHandler interface {
+	// HandleError is invoked in case of an error occurring in a job.
+	//
+	// Context is descended from the one used to start the River client that
+	// worked the job.
+	HandleError(ctx context.Context, job *rivertype.JobRow, err error) *ErrorHandlerResult
+
+	// HandlePanic is invoked in case of a panic occurring in a job.
+	//
+	// Context is descended from the one used to start the River client that
+	// worked the job.
+	HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *ErrorHandlerResult
+}
+
+type ErrorHandlerResult struct {
+	// SetCancelled can be set to true to fail the job immediately and
+	// permanently. By default it'll continue to follow the configured retry
+	// schedule.
+	SetCancelled bool
+}
+
 // Error used in CancelFunc in cases where the job was not cancelled for
 // purposes of resource cleanup. Should never be user visible.
 var errExecutorDefaultCancel = errors.New("context cancelled as executor finished")
-
-// UnknownJobKindError is returned when a Client fetches and attempts to
-// work a job that has not been registered on the Client's Workers bundle (using
-// AddWorker).
-type UnknownJobKindError struct {
-	// Kind is the string that was returned by the JobArgs Kind method.
-	Kind string
-}
-
-// Error returns the error string.
-func (e *UnknownJobKindError) Error() string {
-	return "job kind is not registered in the client's Workers bundle: " + e.Kind
-}
-
-// Is implements the interface used by errors.Is to determine if errors are
-// equivalent. It returns true for any other UnknownJobKindError without
-// regard to the Kind string so it is possible to detect this type of error
-// with:
-//
-//	errors.Is(err, &UnknownJobKindError{})
-func (e *UnknownJobKindError) Is(target error) bool {
-	_, ok := target.(*UnknownJobKindError)
-	return ok
-}
-
-// JobCancel wraps err and can be returned from a Worker's Work method to cancel
-// the job at the end of execution. Regardless of whether or not the job has any
-// remaining attempts, this will ensure the job does not execute again.
-func JobCancel(err error) error {
-	return &JobCancelError{err: err}
-}
-
-// JobCancelError is the error type returned by JobCancel. It should not be
-// initialized directly, but is returned from the [JobCancel] function and can
-// be used for test assertions.
-type JobCancelError struct {
-	err error
-}
-
-func (e *JobCancelError) Error() string {
-	if e.err == nil {
-		return "JobCancelError: <nil>"
-	}
-	// should not ever be called, but add a prefix just in case:
-	return "JobCancelError: " + e.err.Error()
-}
-
-func (e *JobCancelError) Is(target error) bool {
-	_, ok := target.(*JobCancelError)
-	return ok
-}
-
-func (e *JobCancelError) Unwrap() error { return e.err }
-
-// JobSnooze can be returned from a Worker's Work method to cause the job to be
-// tried again after the specified duration. This also has the effect of
-// incrementing the job's MaxAttempts by 1, meaning that jobs can be repeatedly
-// snoozed without ever being discarded.
-//
-// Panics if duration is < 0.
-func JobSnooze(duration time.Duration) error {
-	if duration < 0 {
-		panic("JobSnooze: duration must be >= 0")
-	}
-	return &JobSnoozeError{duration: duration}
-}
-
-// JobSnoozeError is the error type returned by JobSnooze. It should not be
-// initialized directly, but is returned from the [JobSnooze] function and can
-// be used for test assertions.
-type JobSnoozeError struct {
-	duration time.Duration
-}
-
-func (e *JobSnoozeError) Error() string {
-	// should not ever be called, but add a prefix just in case:
-	return fmt.Sprintf("JobSnoozeError: %s", e.duration)
-}
-
-func (e *JobSnoozeError) Is(target error) bool {
-	_, ok := target.(*JobSnoozeError)
-	return ok
-}
-
-var ErrJobCancelledRemotely = JobCancel(errors.New("job cancelled remotely"))
 
 type jobExecutorResult struct {
 	Err        error
@@ -129,31 +72,32 @@ func (r *jobExecutorResult) ErrorStr() string {
 	panic("ErrorStr should not be called on non-errored result")
 }
 
-type jobExecutor struct {
+type JobExecutor struct {
 	baseservice.BaseService
 
-	CancelFunc             context.CancelCauseFunc
-	ClientJobTimeout       time.Duration
-	Completer              jobcompleter.JobCompleter
-	ClientRetryPolicy      ClientRetryPolicy
-	ErrorHandler           ErrorHandler
-	InformProducerDoneFunc func(jobRow *rivertype.JobRow)
-	JobRow                 *rivertype.JobRow
-	GlobalMiddleware       []rivertype.WorkerMiddleware
-	SchedulerInterval      time.Duration
-	WorkUnit               workunit.WorkUnit
+	CancelFunc               context.CancelCauseFunc
+	ClientJobTimeout         time.Duration
+	Completer                jobcompleter.JobCompleter
+	ClientRetryPolicy        ClientRetryPolicy
+	DefaultClientRetryPolicy ClientRetryPolicy
+	ErrorHandler             ErrorHandler
+	InformProducerDoneFunc   func(jobRow *rivertype.JobRow)
+	JobRow                   *rivertype.JobRow
+	GlobalMiddleware         []rivertype.WorkerMiddleware
+	SchedulerInterval        time.Duration
+	WorkUnit                 workunit.WorkUnit
 
 	// Meant to be used from within the job executor only.
 	start time.Time
 	stats *jobstats.JobStatistics // initialized by the executor, and handed off to completer
 }
 
-func (e *jobExecutor) Cancel() {
+func (e *JobExecutor) Cancel() {
 	e.Logger.Warn(e.Name+": job cancelled remotely", slog.Int64("job_id", e.JobRow.ID))
-	e.CancelFunc(ErrJobCancelledRemotely)
+	e.CancelFunc(rivertype.ErrJobCancelledRemotely)
 }
 
-func (e *jobExecutor) Execute(ctx context.Context) {
+func (e *JobExecutor) Execute(ctx context.Context) {
 	// Ensure that the context is cancelled no matter what, or it will leak:
 	defer e.CancelFunc(errExecutorDefaultCancel)
 
@@ -163,7 +107,7 @@ func (e *jobExecutor) Execute(ctx context.Context) {
 	}
 
 	res := e.execute(ctx)
-	if res.Err != nil && errors.Is(context.Cause(ctx), ErrJobCancelledRemotely) {
+	if res.Err != nil && errors.Is(context.Cause(ctx), rivertype.ErrJobCancelledRemotely) {
 		res.Err = context.Cause(ctx)
 	}
 
@@ -177,7 +121,7 @@ func (e *jobExecutor) Execute(ctx context.Context) {
 // case of a panic.
 //
 //nolint:nonamedreturns
-func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
+func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 	defer func() {
 		if recovery := recover(); recovery != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": panic recovery; possible bug with Worker",
@@ -199,7 +143,7 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 			slog.String("kind", e.JobRow.Kind),
 			slog.Int64("job_id", e.JobRow.ID),
 		)
-		return &jobExecutorResult{Err: &UnknownJobKindError{Kind: e.JobRow.Kind}}
+		return &jobExecutorResult{Err: &rivertype.UnknownJobKindError{Kind: e.JobRow.Kind}}
 	}
 
 	if err := e.WorkUnit.UnmarshalJob(); err != nil {
@@ -214,7 +158,7 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 	return &jobExecutorResult{Err: doInner(ctx)}
 }
 
-func (e *jobExecutor) invokeErrorHandler(ctx context.Context, res *jobExecutorResult) bool {
+func (e *JobExecutor) invokeErrorHandler(ctx context.Context, res *jobExecutorResult) bool {
 	invokeAndHandlePanic := func(funcName string, errorHandler func() *ErrorHandlerResult) *ErrorHandlerResult {
 		defer func() {
 			if panicVal := recover(); panicVal != nil {
@@ -244,16 +188,16 @@ func (e *jobExecutor) invokeErrorHandler(ctx context.Context, res *jobExecutorRe
 	return errorHandlerRes != nil && errorHandlerRes.SetCancelled
 }
 
-func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) {
-	var snoozeErr *JobSnoozeError
+func (e *JobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) {
+	var snoozeErr *rivertype.JobSnoozeError
 
 	if res.Err != nil && errors.As(res.Err, &snoozeErr) {
 		e.Logger.DebugContext(ctx, e.Name+": Job snoozed",
 			slog.Int64("job_id", e.JobRow.ID),
 			slog.String("job_kind", e.JobRow.Kind),
-			slog.Duration("duration", snoozeErr.duration),
+			slog.Duration("duration", snoozeErr.Duration),
 		)
-		nextAttemptScheduledAt := time.Now().Add(snoozeErr.duration)
+		nextAttemptScheduledAt := time.Now().Add(snoozeErr.Duration)
 
 		// Normally, snoozed jobs are set `scheduled` for the future and it's the
 		// scheduler's job to set them back to `available` so they can be reworked.
@@ -288,10 +232,10 @@ func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 	}
 }
 
-func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
+func (e *JobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
 	var (
 		cancelJob bool
-		cancelErr *JobCancelError
+		cancelErr *rivertype.JobCancelError
 	)
 
 	logAttrs := []any{
@@ -362,7 +306,7 @@ func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
 			slog.Time("next_retry_scheduled_at", nextRetryScheduledAt),
 			slog.Time("now", now),
 		)
-		nextRetryScheduledAt = (&DefaultClientRetryPolicy{}).NextRetry(e.JobRow)
+		nextRetryScheduledAt = e.DefaultClientRetryPolicy.NextRetry(e.JobRow)
 	}
 
 	// Normally, errored jobs are set `retryable` for the future and it's the
