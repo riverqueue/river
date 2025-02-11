@@ -1740,8 +1740,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			})
 
 			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateCompleted(job.ID, now, nil)))
-			jobAfter := jobsAfter[0]
 			require.NoError(t, err)
+			jobAfter := jobsAfter[0]
 			require.Equal(t, rivertype.JobStateRetryable, jobAfter.State)
 			require.Nil(t, jobAfter.FinalizedAt)
 
@@ -1787,7 +1787,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				UniqueKey: []byte("unique-key"),
 			})
 
-			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateErrorRetryable(job.ID, now, makeErrPayload(t, now))))
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateErrorRetryable(job.ID, now, makeErrPayload(t, now), nil)))
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
 			require.Equal(t, rivertype.JobStateRetryable, jobAfter.State)
@@ -1806,7 +1806,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			require.Equal(t, "foo.go:123\nbar.go:456", jobAfter.Errors[0].Trace)
 		})
 
-		t.Run("DoesNotTouchAlreadyRetryableJob", func(t *testing.T) {
+		t.Run("DoesNotTouchAlreadyRetryableJobWithNoMetadataUpdates", func(t *testing.T) {
 			t.Parallel()
 
 			exec, _ := setup(ctx, t)
@@ -1818,7 +1818,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				ScheduledAt: ptrutil.Ptr(now.Add(10 * time.Second)),
 			})
 
-			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateErrorRetryable(job.ID, now, makeErrPayload(t, now))))
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateErrorRetryable(job.ID, now, makeErrPayload(t, now), nil)))
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
 			require.Equal(t, rivertype.JobStateRetryable, jobAfter.State)
@@ -1828,6 +1828,37 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateRetryable, jobUpdated.State)
 			require.WithinDuration(t, job.ScheduledAt, jobAfter.ScheduledAt, time.Microsecond)
+		})
+
+		t.Run("UpdatesOnlyMetadataForAlreadyRetryableJobs", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			now := time.Now().UTC()
+
+			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Metadata:    []byte(`{"baz":"qux", "foo":"bar"}`),
+				State:       ptrutil.Ptr(rivertype.JobStateRetryable),
+				ScheduledAt: ptrutil.Ptr(now.Add(10 * time.Second)),
+			})
+
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(
+				riverdriver.JobSetStateErrorRetryable(job1.ID, now, makeErrPayload(t, now), []byte(`{"foo":"1", "output":{"a":"b"}}`)),
+			))
+			require.NoError(t, err)
+			jobAfter := jobsAfter[0]
+			require.Equal(t, rivertype.JobStateRetryable, jobAfter.State)
+			require.JSONEq(t, `{"baz":"qux", "foo":"1", "output":{"a":"b"}}`, string(jobAfter.Metadata))
+			require.Len(t, jobAfter.Errors, 0)
+			require.Equal(t, job1.ScheduledAt, jobAfter.ScheduledAt)
+
+			jobUpdated, err := exec.JobGetByID(ctx, job1.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateRetryable, jobUpdated.State)
+			require.JSONEq(t, `{"baz":"qux", "foo":"1", "output":{"a":"b"}}`, string(jobUpdated.Metadata))
+			require.Len(t, jobUpdated.Errors, 0)
+			require.Equal(t, job1.ScheduledAt, jobUpdated.ScheduledAt)
 		})
 
 		t.Run("SetsAJobWithCancelAttemptedAtToCancelled", func(t *testing.T) {
@@ -1849,7 +1880,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				ScheduledAt: ptrutil.Ptr(now.Add(-10 * time.Second)),
 			})
 
-			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateErrorRetryable(job.ID, now, makeErrPayload(t, now))))
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateErrorRetryable(job.ID, now, makeErrPayload(t, now), nil)))
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
 			require.Equal(t, rivertype.JobStateCancelled, jobAfter.State)
@@ -1887,7 +1918,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				UniqueStates: 0xFF,
 			})
 
-			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateCancelled(job.ID, now, makeErrPayload(t, now))))
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateCancelled(job.ID, now, makeErrPayload(t, now), nil)))
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
 			require.Equal(t, rivertype.JobStateCancelled, jobAfter.State)
@@ -1916,7 +1947,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				UniqueStates: 0xFF,
 			})
 
-			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateDiscarded(job.ID, now, makeErrPayload(t, now))))
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateDiscarded(job.ID, now, makeErrPayload(t, now), nil)))
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
 			require.Equal(t, rivertype.JobStateDiscarded, jobAfter.State)
@@ -2013,8 +2044,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 		jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(
 			riverdriver.JobSetStateCompleted(job1.ID, now, []byte(`{"a":"b"}`)),
-			riverdriver.JobSetStateErrorRetryable(job2.ID, future, makeErrPayload(t, now)),
-			riverdriver.JobSetStateCancelled(job3.ID, now, makeErrPayload(t, now)),
+			riverdriver.JobSetStateErrorRetryable(job2.ID, future, makeErrPayload(t, now), nil),
+			riverdriver.JobSetStateCancelled(job3.ID, now, makeErrPayload(t, now), nil),
 		))
 		require.NoError(t, err)
 		completedJob := jobsAfter[0]

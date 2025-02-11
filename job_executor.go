@@ -179,7 +179,6 @@ func (e *jobExecutor) Execute(ctx context.Context) {
 //
 //nolint:nonamedreturns
 func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
-	workerMiddleware := e.WorkUnit.Middleware()
 	defer func() {
 		if recovery := recover(); recovery != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": panic recovery; possible bug with Worker",
@@ -229,6 +228,7 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		return nil
 	}
 
+	workerMiddleware := e.WorkUnit.Middleware()
 	allMiddleware := make([]rivertype.WorkerMiddleware, 0, len(e.GlobalMiddleware)+len(workerMiddleware))
 	allMiddleware = append(allMiddleware, e.GlobalMiddleware...)
 	allMiddleware = append(allMiddleware, workerMiddleware...)
@@ -331,7 +331,7 @@ func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 	}
 
 	if res.Err != nil || res.PanicVal != nil {
-		e.reportError(ctx, res)
+		e.reportError(ctx, res, metadataUpdatesBytes)
 		return
 	}
 
@@ -344,7 +344,7 @@ func (e *jobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 	}
 }
 
-func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
+func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult, metadataUpdates []byte) {
 	var (
 		cancelJob bool
 		cancelErr *JobCancelError
@@ -391,14 +391,14 @@ func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
 	now := time.Now()
 
 	if cancelJob {
-		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateCancelled(e.JobRow.ID, now, errData)); err != nil {
+		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateCancelled(e.JobRow.ID, now, errData, metadataUpdates)); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Failed to cancel job and report error", logAttrs...)
 		}
 		return
 	}
 
 	if e.JobRow.Attempt >= e.JobRow.MaxAttempts {
-		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateDiscarded(e.JobRow.ID, now, errData)); err != nil {
+		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateDiscarded(e.JobRow.ID, now, errData, metadataUpdates)); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Failed to discard job and report error", logAttrs...)
 		}
 		return
@@ -429,9 +429,9 @@ func (e *jobExecutor) reportError(ctx context.Context, res *jobExecutorResult) {
 	// `available` if their retry was smaller than the scheduler's run interval.
 	var params *riverdriver.JobSetStateIfRunningParams
 	if nextRetryScheduledAt.Sub(e.Time.NowUTC()) <= e.SchedulerInterval {
-		params = riverdriver.JobSetStateErrorAvailable(e.JobRow.ID, nextRetryScheduledAt, errData)
+		params = riverdriver.JobSetStateErrorAvailable(e.JobRow.ID, nextRetryScheduledAt, errData, metadataUpdates)
 	} else {
-		params = riverdriver.JobSetStateErrorRetryable(e.JobRow.ID, nextRetryScheduledAt, errData)
+		params = riverdriver.JobSetStateErrorRetryable(e.JobRow.ID, nextRetryScheduledAt, errData, metadataUpdates)
 	}
 	if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, params); err != nil {
 		e.Logger.ErrorContext(ctx, e.Name+": Failed to report error for job", logAttrs...)
