@@ -204,8 +204,6 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		return &jobExecutorResult{Err: err}
 	}
 
-	workerMiddleware := e.WorkUnit.Middleware()
-
 	doInner := func(ctx context.Context) error {
 		jobTimeout := e.WorkUnit.Timeout()
 		if jobTimeout == 0 {
@@ -213,18 +211,18 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		}
 
 		// No timeout if a -1 was specified.
+		// TODO: is this timeout being applied in the wrong place? Should it apply
+		// on the *outside* of all middleware?
 		if jobTimeout > 0 {
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, jobTimeout)
 			defer cancel()
 		}
 
-		if err := e.WorkUnit.Work(ctx); err != nil {
-			return err
-		}
-
-		return nil
+		return e.WorkUnit.Work(ctx)
 	}
+
+	workerMiddleware := e.WorkUnit.Middleware()
 
 	allMiddleware := make([]rivertype.WorkerMiddleware, 0, len(e.GlobalMiddleware)+len(workerMiddleware))
 	allMiddleware = append(allMiddleware, e.GlobalMiddleware...)
