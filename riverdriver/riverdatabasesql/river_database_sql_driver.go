@@ -552,6 +552,10 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 		if params.MetadataDoMerge[i] {
 			setStateParams.MetadataDoMerge[i] = true
 			setStateParams.MetadataUpdates[i] = string(params.MetadataUpdates[i])
+		} else {
+			// Work around JSON encoding issues with database/sql which blow up on nil
+			// JSON values:
+			setStateParams.MetadataUpdates[i] = "{}"
 		}
 		if params.ScheduledAt[i] != nil {
 			setStateParams.ScheduledAtDoUpdate[i] = true

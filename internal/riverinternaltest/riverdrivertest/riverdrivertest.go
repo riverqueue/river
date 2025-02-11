@@ -1820,6 +1820,37 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			require.WithinDuration(t, job.ScheduledAt, jobAfter.ScheduledAt, time.Microsecond)
 		})
 
+		t.Run("UpdatesOnlyMetadataForAlreadyRetryableJobs", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			now := time.Now().UTC()
+
+			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Metadata:    []byte(`{"baz":"qux", "foo":"bar"}`),
+				State:       ptrutil.Ptr(rivertype.JobStateRetryable),
+				ScheduledAt: ptrutil.Ptr(now.Add(10 * time.Second)),
+			})
+
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(
+				riverdriver.JobSetStateErrorRetryable(job1.ID, now, makeErrPayload(t, now), []byte(`{"foo":"1", "output":{"a":"b"}}`)),
+			))
+			require.NoError(t, err)
+			jobAfter := jobsAfter[0]
+			require.Equal(t, rivertype.JobStateRetryable, jobAfter.State)
+			require.JSONEq(t, `{"baz":"qux", "foo":"1", "output":{"a":"b"}}`, string(jobAfter.Metadata))
+			require.Empty(t, jobAfter.Errors)
+			require.Equal(t, job1.ScheduledAt, jobAfter.ScheduledAt)
+
+			jobUpdated, err := exec.JobGetByID(ctx, job1.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateRetryable, jobUpdated.State)
+			require.JSONEq(t, `{"baz":"qux", "foo":"1", "output":{"a":"b"}}`, string(jobUpdated.Metadata))
+			require.Empty(t, jobUpdated.Errors)
+			require.Equal(t, job1.ScheduledAt, jobUpdated.ScheduledAt)
+		})
+
 		t.Run("SetsAJobWithCancelAttemptedAtToCancelled", func(t *testing.T) {
 			// If a job has cancel_attempted_at in its metadata, it means that the user
 			// tried to cancel the job with the Cancel API but that the job

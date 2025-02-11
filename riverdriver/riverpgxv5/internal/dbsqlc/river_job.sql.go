@@ -1051,10 +1051,10 @@ job_to_update AS (
         river_job.id,
         job_input.attempt,
         job_input.attempt_do_update,
-        job_input.finalized_at,
-        job_input.finalized_at_do_update,
         job_input.errors,
         job_input.errors_do_update,
+        job_input.finalized_at,
+        job_input.finalized_at_do_update,
         job_input.metadata_do_merge,
         job_input.metadata_updates,
         job_input.scheduled_at,
@@ -1063,10 +1063,10 @@ job_to_update AS (
         job_input.state
     FROM river_job
     JOIN job_input ON river_job.id = job_input.id
-    WHERE river_job.state = 'running'
+    WHERE river_job.state = 'running' OR job_input.metadata_do_merge
     FOR UPDATE
 ),
-updated_job AS (
+updated_running AS (
     UPDATE river_job
     SET
         attempt      = CASE WHEN NOT job_to_update.should_cancel AND job_to_update.attempt_do_update THEN job_to_update.attempt
@@ -1085,15 +1085,26 @@ updated_job AS (
                             ELSE job_to_update.state END
     FROM job_to_update
     WHERE river_job.id = job_to_update.id
+      AND river_job.state = 'running'
+    RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states
+),
+updated_metadata_only AS (
+    UPDATE river_job
+    SET metadata = river_job.metadata || job_to_update.metadata_updates
+    FROM job_to_update
+    WHERE river_job.id = job_to_update.id
+      AND river_job.id NOT IN (SELECT id FROM updated_running)
+      AND river_job.state != 'running'
+      AND job_to_update.metadata_do_merge
     RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states
 )
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 FROM river_job
 WHERE id IN (SELECT id FROM job_input)
-  AND id NOT IN (SELECT id FROM updated_job)
-UNION
-SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
-FROM updated_job
+    AND id NOT IN (SELECT id FROM updated_metadata_only)
+    AND id NOT IN (SELECT id FROM updated_running)
+UNION SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states FROM updated_metadata_only
+UNION SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states FROM updated_running
 `
 
 type JobSetStateIfRunningManyParams struct {
