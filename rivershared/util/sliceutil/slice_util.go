@@ -4,13 +4,15 @@
 // therefore omitted from the utilities in `slices`.
 package sliceutil
 
-// DefaultIfEmpty returns the default slice if the input slice is nil or empty,
-// otherwise it returns the input slice.
-func DefaultIfEmpty[T any](input []T, defaultSlice []T) []T {
-	if len(input) == 0 {
-		return defaultSlice
+// FirstNonEmpty returns the first non-empty slice from the input, or nil if
+// all input slices are empty.
+func FirstNonEmpty[T any](inputs ...[]T) []T {
+	for _, input := range inputs {
+		if len(input) > 0 {
+			return input
+		}
 	}
-	return input
+	return nil
 }
 
 // GroupBy returns an object composed of keys generated from the results of
