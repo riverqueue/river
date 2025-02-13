@@ -22,7 +22,6 @@ func TestSlogTestHandler_levels(t *testing.T) {
 		{desc: "Error", level: slog.LevelError},
 	}
 	for _, tt := range testCases {
-		tt := tt
 		t.Run(tt.desc, func(t *testing.T) {
 			t.Parallel()
 
@@ -44,10 +43,10 @@ func TestSlogTestHandler_stress(t *testing.T) {
 		wg     sync.WaitGroup
 	)
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		wg.Add(1)
 		go func() {
-			for j := 0; j < 100; j++ {
+			for range 100 {
 				logger.Info("message", "key", "value")
 			}
 			wg.Done()

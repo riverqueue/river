@@ -97,7 +97,7 @@ func TestDefaultRetryPolicy_retrySeconds(t *testing.T) {
 
 		// Run a number of times just to make sure we never generate a number
 		// outside of the expected bounds.
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			retryDuration := timeutil.SecondsAsDuration(retryPolicy.retrySeconds(attempt))
 
 			require.GreaterOrEqual(t, retryDuration, retrySecondsMin)
@@ -156,7 +156,6 @@ func TestDefaultRetryPolicy_retrySecondsWithoutJitter(t *testing.T) {
 			{attempt: 24, expectedRetry: 3*day + 20*time.Hour + 9*time.Minute + 36*time.Second},
 		}
 		for _, tt := range testCases {
-			tt := tt
 			t.Run(fmt.Sprintf("Attempt_%02d", tt.attempt), func(t *testing.T) {
 				t.Parallel()
 
@@ -190,10 +189,10 @@ func TestDefaultRetryPolicy_stress(t *testing.T) {
 
 	// Hit the source with a bunch of goroutines to help suss out any problems
 	// with concurrent safety (when combined with `-race`).
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		wg.Add(1)
 		go func() {
-			for j := 0; j < 100; j++ {
+			for range 100 {
 				_ = retryPolicy.retrySeconds(7)
 			}
 			wg.Done()

@@ -32,7 +32,7 @@ func TestLimiter(t *testing.T) {
 		limiter.Time.StubNowUTC(now)
 
 		require.True(t, limiter.ShouldTrigger("a"))
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			require.False(t, limiter.ShouldTrigger("a"))
 		}
 		// Move the time forward, by just less than waitDuration:
@@ -44,7 +44,7 @@ func TestLimiter(t *testing.T) {
 		// Move the time forward to just past the waitDuration:
 		limiter.Time.StubNowUTC(now.Add(11 * time.Millisecond))
 		require.True(t, limiter.ShouldTrigger("a"))
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			require.False(t, limiter.ShouldTrigger("a"))
 		}
 

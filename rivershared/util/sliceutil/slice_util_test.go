@@ -66,7 +66,6 @@ func TestKeyBy(t *testing.T) {
 		},
 	}
 	for i, tt := range testCases {
-		tt := tt
 		t.Run(fmt.Sprintf("test_%d", i), func(t *testing.T) {
 			t.Parallel()
 

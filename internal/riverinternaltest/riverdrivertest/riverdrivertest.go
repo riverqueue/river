@@ -234,8 +234,6 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			rivertype.JobStateRetryable,
 			rivertype.JobStateScheduled,
 		} {
-			startingState := startingState
-
 			t.Run(fmt.Sprintf("CancelsJobIn%sState", startingState), func(t *testing.T) {
 				t.Parallel()
 
@@ -296,8 +294,6 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			rivertype.JobStateCompleted,
 			rivertype.JobStateDiscarded,
 		} {
-			startingState := startingState
-
 			t.Run(fmt.Sprintf("DoesNotAlterFinalizedJobIn%sState", startingState), func(t *testing.T) {
 				t.Parallel()
 
@@ -385,8 +381,6 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			rivertype.JobStateRetryable,
 			rivertype.JobStateScheduled,
 		} {
-			state := state
-
 			t.Run(fmt.Sprintf("DeletesA_%s_Job", state), func(t *testing.T) {
 				t.Parallel()
 
@@ -1132,8 +1126,6 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				rivertype.JobStateCompleted,
 				rivertype.JobStateDiscarded,
 			} {
-				state := state // capture range variable
-
 				t.Run(fmt.Sprintf("CannotSetState%sWithoutFinalizedAt", capitalizeJobState(state)), func(t *testing.T) {
 					t.Parallel()
 
@@ -1169,8 +1161,6 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				rivertype.JobStateRunning,
 				rivertype.JobStateScheduled,
 			} {
-				state := state // capture range variable
-
 				t.Run(fmt.Sprintf("CanSetState%sWithoutFinalizedAt", capitalizeJobState(state)), func(t *testing.T) {
 					t.Parallel()
 
@@ -1369,8 +1359,6 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			rivertype.JobStateRetryable,
 			rivertype.JobStateScheduled,
 		} {
-			state := state
-
 			t.Run(fmt.Sprintf("UpdatesA_%s_JobToBeScheduledImmediately", state), func(t *testing.T) {
 				t.Parallel()
 

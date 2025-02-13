@@ -18,7 +18,7 @@ func TestTestSignal(t *testing.T) {
 		signal := TestSignal[struct{}]{}
 
 		// Signal can safely be invoked any number of times.
-		for i := 0; i < testSignalInternalChanSize+1; i++ {
+		for range testSignalInternalChanSize + 1 {
 			signal.Signal(struct{}{})
 		}
 	})
@@ -29,7 +29,7 @@ func TestTestSignal(t *testing.T) {
 		signal.Init()
 
 		// Signal can be invoked many times, but not infinitely
-		for i := 0; i < testSignalInternalChanSize; i++ {
+		for range testSignalInternalChanSize {
 			signal.Signal(struct{}{})
 		}
 
@@ -39,7 +39,7 @@ func TestTestSignal(t *testing.T) {
 		})
 
 		// And we can now wait on all the emitted signals.
-		for i := 0; i < testSignalInternalChanSize; i++ {
+		for range testSignalInternalChanSize {
 			signal.WaitOrTimeout()
 		}
 	})

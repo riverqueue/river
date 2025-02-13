@@ -208,7 +208,7 @@ func TestJobScheduler(t *testing.T) {
 
 		jobs := make([]*rivertype.JobRow, numJobs)
 
-		for i := 0; i < numJobs; i++ {
+		for i := range numJobs {
 			jobState := rivertype.JobStateScheduled
 			if i%2 == 0 {
 				jobState = rivertype.JobStateRetryable
@@ -241,7 +241,7 @@ func TestJobScheduler(t *testing.T) {
 		require.NoError(t, scheduler.Start(ctx))
 
 		// This should trigger ~immediately every time:
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			t.Logf("Iteration %d", i)
 			scheduler.TestSignals.ScheduledBatch.WaitOrTimeout()
 		}

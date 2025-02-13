@@ -166,7 +166,7 @@ func TestAsyncJobCompleter_Complete(t *testing.T) {
 	t.Cleanup(completer.Stop)
 
 	// launch 4 completions, only 2 can be inline due to the concurrency limit:
-	for i := int64(0); i < 2; i++ {
+	for i := range int64(2) {
 		if err := completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(i, time.Now())); err != nil {
 			t.Errorf("expected nil err, got %v", err)
 		}
@@ -266,14 +266,14 @@ func testCompleterSubscribe(t *testing.T, constructor func(riverdriver.Executor,
 		}
 	}()
 
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(int64(i), time.Now())))
 	}
 
 	completer.Stop() // closes subscribeChan
 
 	updates := riversharedtest.WaitOrTimeoutN(t, jobUpdateChan, 4)
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		require.Equal(t, rivertype.JobStateCompleted, updates[0].Job.State)
 	}
 	go completer.Stop()
@@ -310,8 +310,7 @@ func testCompleterWait(t *testing.T, constructor func(riverdriver.Executor, Subs
 	require.NoError(t, completer.Start(ctx))
 
 	// launch 4 completions:
-	for i := 0; i < 4; i++ {
-		i := i
+	for i := range 4 {
 		go func() {
 			require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(int64(i), time.Now())))
 		}()
@@ -580,7 +579,7 @@ func testCompleter[TCompleter JobCompleter](
 			insertParams = make([]*riverdriver.JobInsertFastParams, numJobs)
 			stats        = make([]jobstats.JobStatistics, numJobs)
 		)
-		for i := 0; i < numJobs; i++ {
+		for i := range numJobs {
 			insertParams[i] = &riverdriver.JobInsertFastParams{
 				EncodedArgs: []byte(`{}`),
 				Kind:        kind,
@@ -933,7 +932,7 @@ func benchmarkCompleter(
 		}
 
 		insertParams := make([]*riverdriver.JobInsertFastParams, b.N)
-		for i := 0; i < b.N; i++ {
+		for i := range b.N {
 			insertParams[i] = &riverdriver.JobInsertFastParams{
 				EncodedArgs: []byte(`{}`),
 				Kind:        "benchmark_kind",
@@ -963,7 +962,7 @@ func benchmarkCompleter(
 
 		b.ResetTimer()
 
-		for i := 0; i < b.N; i++ {
+		for i := range b.N {
 			err := completer.JobSetStateIfRunning(ctx, &bundle.stats[i], riverdriver.JobSetStateCompleted(bundle.jobs[i].ID, time.Now()))
 			require.NoError(b, err)
 		}
@@ -976,7 +975,7 @@ func benchmarkCompleter(
 
 		b.ResetTimer()
 
-		for i := 0; i < b.N; i++ {
+		for i := range b.N {
 			switch i % 7 {
 			case 0:
 				err := completer.JobSetStateIfRunning(ctx, &bundle.stats[i], riverdriver.JobSetStateCancelled(bundle.jobs[i].ID, time.Now(), []byte("{}")))

@@ -384,7 +384,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc.TestSignals.EnteredLoop.WaitOrTimeout()
 
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			svc.TestSignals.InsertedJobs.WaitOrTimeout()
 		}
 	})
@@ -535,7 +535,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			time.Sleep(time.Duration(randutil.IntBetween(1, 5)) * time.Millisecond)
 		}
 
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			wg.Add(1)
 
 			jobBaseName := fmt.Sprintf("periodic_job_1ms_%02d", i)
@@ -543,7 +543,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			go func() {
 				defer wg.Done()
 
-				for j := 0; j < 50; j++ {
+				for range 50 {
 					handle := svc.Add(&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(time.Millisecond), ConstructorFunc: jobConstructorFunc(jobBaseName, false)})
 					randomSleep()
 

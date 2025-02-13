@@ -47,12 +47,12 @@ func StressErr(ctx context.Context, tb testingT, svc startstop.Service, allowedS
 		return false
 	}
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 
-			for j := 0; j < 50; j++ {
+			for range 50 {
 				err := svc.Start(ctx)
 				if err != nil && !isAllowedStartError(err) {
 					require.NoError(tb, err)

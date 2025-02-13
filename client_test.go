@@ -315,13 +315,13 @@ func Test_Client(t *testing.T) {
 		// Uses a smaller number of workers and iterations than most stress
 		// tests because there's quite a lot of mutex contention so that too
 		// many can make the test run long.
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			wg.Add(1)
 			workerNum := i
 			go func() {
 				defer wg.Done()
 
-				for j := 0; j < 5; j++ {
+				for j := range 5 {
 					err := client.Queues().Add(fmt.Sprintf("new_queue_%d_%d_before", workerNum, j), QueueConfig{MaxWorkers: 1})
 					require.NoError(t, err)
 
@@ -964,7 +964,7 @@ func Test_Client_Stop(t *testing.T) {
 		ctx, cancel := context.WithCancel(ctx)
 
 		var wg sync.WaitGroup
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -1134,7 +1134,7 @@ func Test_Client_Stop(t *testing.T) {
 		defer finish()
 
 		// Arbitrarily wait for 100 jobs to come through.
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			riversharedtest.WaitOrTimeout(t, subscribeChan)
 		}
 
@@ -4011,7 +4011,7 @@ func Test_Client_RetryPolicy(t *testing.T) {
 		startClient(ctx, t, client)
 
 		// Wait for the expected number of jobs to be finished.
-		for i := 0; i < len(originalJobs); i++ {
+		for i := range originalJobs {
 			t.Logf("Waiting on job %d", i)
 			_ = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		}
@@ -4124,7 +4124,7 @@ func Test_Client_Subscribe(t *testing.T) {
 
 		events := make([]*Event, len(expectedJobs))
 
-		for i := 0; i < len(expectedJobs); i++ {
+		for i := range expectedJobs {
 			events[i] = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		}
 
@@ -4187,7 +4187,7 @@ func Test_Client_Subscribe(t *testing.T) {
 
 		events := make([]*Event, len(expectedJobs))
 
-		for i := 0; i < len(expectedJobs); i++ {
+		for i := range expectedJobs {
 			events[i] = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		}
 
@@ -4230,7 +4230,7 @@ func Test_Client_Subscribe(t *testing.T) {
 
 		events := make([]*Event, len(expectedJobs))
 
-		for i := 0; i < len(expectedJobs); i++ {
+		for i := range expectedJobs {
 			events[i] = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		}
 
@@ -4354,7 +4354,7 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 
 		events := make([]*Event, len(expectedJobs))
 
-		for i := 0; i < len(expectedJobs); i++ {
+		for i := range expectedJobs {
 			events[i] = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		}
 
@@ -4432,7 +4432,7 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 			insertParams = make([]*riverdriver.JobInsertFastParams, numJobsToInsert)
 			kind         = (&JobArgs{}).Kind()
 		)
-		for i := 0; i < numJobsToInsert; i++ {
+		for i := range numJobsToInsert {
 			insertParams[i] = &riverdriver.JobInsertFastParams{
 				Args:        &JobArgs{},
 				EncodedArgs: []byte(`{}`),
@@ -4607,7 +4607,7 @@ func Test_Client_InsertNotificationsAreDeduplicatedAndDebounced(t *testing.T) {
 	expectImmediateNotification(t, "queue1")
 	tNotif1 := time.Now()
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		config.Logger.Info("inserting queue1 job")
 		_, err = client.Insert(ctx, callbackArgs{}, &InsertOpts{Queue: "queue1"})
 		require.NoError(t, err)
@@ -5365,7 +5365,6 @@ func Test_NewClient_Validations(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -5465,7 +5464,6 @@ func TestClient_JobTimeout(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			require := require.New(t)
@@ -5872,7 +5870,6 @@ func TestInsert(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
