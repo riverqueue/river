@@ -768,7 +768,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 			}
 		}
 
-		c.queues.fetchCtx = fetchCtx //nolint:fatcontext
+		c.queues.fetchCtx = fetchCtx
 		c.queues.workCtx = workCtx
 		c.workCancel = workCancel
 
