@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Exposed `TestConfig` struct on `Config` under the `Test` field for configuration that is specific to test environments. For now, the only field on this type is `Time`, which can be used to set a synthetic `TimeGenerator` for tests. [PR #754](https://github.com/riverqueue/river/pull/754).
+
 ### Changed
 
 - Errors returned from retryable jobs are now logged with warning logs instead of error logs. Error logs are still used for jobs that error after reaching `max_attempts`. [PR #743](https://github.com/riverqueue/river/pull/743).

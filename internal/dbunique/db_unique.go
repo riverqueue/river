@@ -9,7 +9,6 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
-	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
@@ -54,7 +53,7 @@ func (o *UniqueOpts) StateBitmask() byte {
 	return UniqueStatesToBitmask(states)
 }
 
-func UniqueKey(timeGen baseservice.TimeGenerator, uniqueOpts *UniqueOpts, params *rivertype.JobInsertParams) ([]byte, error) {
+func UniqueKey(timeGen rivertype.TimeGenerator, uniqueOpts *UniqueOpts, params *rivertype.JobInsertParams) ([]byte, error) {
 	uniqueKeyString, err := buildUniqueKeyString(timeGen, uniqueOpts, params)
 	if err != nil {
 		return nil, err
@@ -65,7 +64,7 @@ func UniqueKey(timeGen baseservice.TimeGenerator, uniqueOpts *UniqueOpts, params
 
 // Builds a unique key made up of the unique options in place. The key is hashed
 // to become a value for `unique_key`.
-func buildUniqueKeyString(timeGen baseservice.TimeGenerator, uniqueOpts *UniqueOpts, params *rivertype.JobInsertParams) (string, error) {
+func buildUniqueKeyString(timeGen rivertype.TimeGenerator, uniqueOpts *UniqueOpts, params *rivertype.JobInsertParams) (string, error) {
 	var sb strings.Builder
 
 	if !uniqueOpts.ExcludeKind {
