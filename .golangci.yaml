@@ -13,11 +13,6 @@ linters:
     - unused
 
   disable:
-    # disabled, but which we should enable after dropping support for Go 1.21 as
-    # they're kind of a good idea
-    - copyloopvar # lints to make sure that loop variables are _not_ captured since it's not required in Go 1.22+
-    - intrange # encourages for loops to range over integers like `for i := range(5)` instead of a C-style for
-
     # disabled, but which we should enable with discussion
     - wrapcheck # checks that errors are wrapped; currently not done anywhere
 
