@@ -21,6 +21,7 @@ import (
 type JobOpts struct {
 	Attempt      *int
 	AttemptedAt  *time.Time
+	AttemptedBy  []string
 	CreatedAt    *time.Time
 	EncodedArgs  []byte
 	Errors       [][]byte
@@ -73,6 +74,7 @@ func Job_Build(tb testing.TB, opts *JobOpts) *riverdriver.JobInsertFullParams { 
 	return &riverdriver.JobInsertFullParams{
 		Attempt:      ptrutil.ValOrDefault(opts.Attempt, 0),
 		AttemptedAt:  opts.AttemptedAt,
+		AttemptedBy:  opts.AttemptedBy,
 		CreatedAt:    opts.CreatedAt,
 		EncodedArgs:  encodedArgs,
 		Errors:       opts.Errors,

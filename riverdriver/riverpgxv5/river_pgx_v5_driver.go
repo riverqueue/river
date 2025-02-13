@@ -302,6 +302,7 @@ func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobIns
 	job, err := dbsqlc.New().JobInsertFull(ctx, e.dbtx, &dbsqlc.JobInsertFullParams{
 		Attempt:      int16(min(params.Attempt, math.MaxInt16)), //nolint:gosec
 		AttemptedAt:  params.AttemptedAt,
+		AttemptedBy:  params.AttemptedBy,
 		Args:         params.EncodedArgs,
 		CreatedAt:    params.CreatedAt,
 		Errors:       params.Errors,

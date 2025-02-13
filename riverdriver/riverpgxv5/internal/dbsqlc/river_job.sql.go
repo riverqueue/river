@@ -702,6 +702,7 @@ INSERT INTO river_job(
     args,
     attempt,
     attempted_at,
+    attempted_by,
     created_at,
     errors,
     finalized_at,
@@ -719,19 +720,20 @@ INSERT INTO river_job(
     $1::jsonb,
     coalesce($2::smallint, 0),
     $3,
-    coalesce($4::timestamptz, now()),
-    $5,
+    coalesce($4::text[], '{}'),
+    coalesce($5::timestamptz, now()),
     $6,
     $7,
-    $8::smallint,
-    coalesce($9::jsonb, '{}'),
-    $10,
+    $8,
+    $9::smallint,
+    coalesce($10::jsonb, '{}'),
     $11,
-    coalesce($12::timestamptz, now()),
-    $13,
-    coalesce($14::varchar(255)[], '{}'),
-    $15,
-    $16
+    $12,
+    coalesce($13::timestamptz, now()),
+    $14,
+    coalesce($15::varchar(255)[], '{}'),
+    $16,
+    $17
 ) RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 `
 
@@ -739,6 +741,7 @@ type JobInsertFullParams struct {
 	Args         []byte
 	Attempt      int16
 	AttemptedAt  *time.Time
+	AttemptedBy  []string
 	CreatedAt    *time.Time
 	Errors       [][]byte
 	FinalizedAt  *time.Time
@@ -759,6 +762,7 @@ func (q *Queries) JobInsertFull(ctx context.Context, db DBTX, arg *JobInsertFull
 		arg.Args,
 		arg.Attempt,
 		arg.AttemptedAt,
+		arg.AttemptedBy,
 		arg.CreatedAt,
 		arg.Errors,
 		arg.FinalizedAt,
