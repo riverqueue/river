@@ -645,7 +645,16 @@ type version struct {
 func (c *version) Run(ctx context.Context, opts *versionOpts) (bool, error) {
 	buildInfo, _ := debug.ReadBuildInfo()
 
-	fmt.Fprintf(c.Out, "%s version %s\n", opts.Name, valutil.ValOrDefault(buildInfo.Main.Version, "(unknown)"))
+	// Go 1.24 appears to have changed the build version to "(devel)" even when
+	// using a release version of Go. This is a workaround to print "(unknown)"
+	// in that case to match previous versions. We could relax the test instead
+	// but it's unclear if this is a permanent change or not.
+	buildVersion := buildInfo.Main.Version
+	if strings.HasPrefix(buildInfo.GoVersion, "go1.24.") && buildVersion == "(devel)" {
+		buildVersion = ""
+	}
+
+	fmt.Fprintf(c.Out, "%s version %s\n", opts.Name, valutil.ValOrDefault(buildVersion, "(unknown)"))
 	fmt.Fprintf(c.Out, "Built with %s\n", buildInfo.GoVersion)
 
 	return true, nil
