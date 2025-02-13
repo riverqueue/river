@@ -160,7 +160,7 @@ func generateTestDBNames(numDBs int) []string {
 		"river_test_example",
 	}
 
-	for i := 0; i < numDBs; i++ {
+	for i := range numDBs {
 		dbNames = append(dbNames, fmt.Sprintf("river_test_%d", i))
 	}
 

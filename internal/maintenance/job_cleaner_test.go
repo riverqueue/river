@@ -146,7 +146,7 @@ func TestJobCleaner(t *testing.T) {
 
 		jobs := make([]*rivertype.JobRow, numJobs)
 
-		for i := 0; i < numJobs; i++ {
+		for i := range numJobs {
 			job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
 			jobs[i] = job
 		}
@@ -172,7 +172,7 @@ func TestJobCleaner(t *testing.T) {
 		require.NoError(t, cleaner.Start(ctx))
 
 		// This should trigger ~immediately every time:
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			t.Logf("Iteration %d", i)
 			cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
 		}

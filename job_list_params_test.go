@@ -56,8 +56,6 @@ func Test_JobListCursor_jobListCursorFromJobAndParams(t *testing.T) {
 		rivertype.JobStateRetryable,
 		rivertype.JobStateScheduled,
 	} {
-		i, state := i, state
-
 		t.Run(fmt.Sprintf("OrderByTimeScheduledAtUsedFor%sJob", state), func(t *testing.T) {
 			t.Parallel()
 
@@ -84,8 +82,6 @@ func Test_JobListCursor_jobListCursorFromJobAndParams(t *testing.T) {
 		rivertype.JobStateCompleted,
 		rivertype.JobStateDiscarded,
 	} {
-		i, state := i, state
-
 		t.Run(fmt.Sprintf("OrderByTimeFinalizedAtUsedFor%sJob", state), func(t *testing.T) {
 			t.Parallel()
 

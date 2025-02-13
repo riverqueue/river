@@ -434,7 +434,7 @@ func TestNotifier(t *testing.T) {
 			go func() {
 				defer wg.Done()
 
-				for j := 0; j < numSubscribeIterations; j++ {
+				for range numSubscribeIterations {
 					sub, err := notifier.Listen(ctx, testTopic1, topicAndPayloadNotifyFunc(notifyChan))
 					require.NoError(t, err)
 

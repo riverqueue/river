@@ -534,7 +534,7 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 
 	const defaultObject = "{}"
 
-	for i := 0; i < len(params.ID); i++ {
+	for i := range len(params.ID) {
 		setStateParams.Errors[i] = valutil.ValOrDefault(string(params.ErrData[i]), defaultObject)
 		if params.Attempt[i] != nil {
 			setStateParams.AttemptDoUpdate[i] = true

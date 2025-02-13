@@ -758,8 +758,6 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		}
 
 		for _, producer := range c.producersByQueueName {
-			producer := producer
-
 			if err := producer.StartWorkContext(fetchCtx, workCtx); err != nil {
 				startstop.StopAllParallel(producersAsServices()...)
 				workCancel(err)
@@ -768,7 +766,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 			}
 		}
 
-		c.queues.fetchCtx = fetchCtx //nolint:fatcontext
+		c.queues.fetchCtx = fetchCtx
 		c.queues.workCtx = workCtx
 		c.workCancel = workCancel
 

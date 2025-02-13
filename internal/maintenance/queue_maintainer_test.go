@@ -148,7 +148,7 @@ func TestQueueMaintainer(t *testing.T) {
 			testSvc.testSignals.returning.WaitOrTimeout()
 		}
 
-		for i := 0; i < 3; i++ {
+		for range 3 {
 			runOnce()
 		}
 	})

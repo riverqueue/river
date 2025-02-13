@@ -58,7 +58,7 @@ func getSortedUniqueFields(args rivertype.JobArgs) ([]string, error) {
 	var uniqueFields []string
 
 	// Iterate over all fields
-	for i := 0; i < typ.NumField(); i++ {
+	for i := range typ.NumField() {
 		field := typ.Field(i)
 
 		// Check for `river:"unique"` tag, possibly among other comma-separated values

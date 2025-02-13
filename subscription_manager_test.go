@@ -115,7 +115,7 @@ func Test_SubscriptionManager(t *testing.T) {
 		manager, bundle := setup(t)
 
 		subscribeCh := bundle.subscribeCh
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			close(subscribeCh)
 			manager.Stop()
 

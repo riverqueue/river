@@ -115,7 +115,7 @@ func TestQueueCleaner(t *testing.T) {
 
 		queues := make([]*rivertype.Queue, numQueues)
 
-		for i := 0; i < numQueues; i++ {
+		for i := range numQueues {
 			queue := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{
 				Name:      ptrutil.Ptr(fmt.Sprintf("queue%d", i)),
 				UpdatedAt: ptrutil.Ptr(bundle.deleteHorizon.Add(-25 * time.Hour)),
@@ -144,7 +144,7 @@ func TestQueueCleaner(t *testing.T) {
 		require.NoError(t, cleaner.Start(ctx))
 
 		// This should trigger ~immediately every time:
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			t.Logf("Iteration %d", i)
 			cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
 		}

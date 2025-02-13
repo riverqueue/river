@@ -39,7 +39,7 @@ func TestTickerWithInitialTick(t *testing.T) {
 		t.Cleanup(cancel)
 
 		ticker := timeutil.NewTickerWithInitialTick(ctx, 100*time.Microsecond)
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			t.Logf("Waiting on tick %d", i)
 			riversharedtest.WaitOrTimeout(t, ticker.C)
 		}

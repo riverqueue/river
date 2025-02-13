@@ -72,7 +72,7 @@ func TestTestTx_ConcurrentAccess(t *testing.T) { //nolint:paralleltest
 
 	// Don't open more than maximum pool size transactions at once because that
 	// would deadlock.
-	for i := 0; i < int(dbPoolMaxConns); i++ {
+	for i := range dbPoolMaxConns {
 		workerNum := i
 		go func() {
 			_ = TestTx(ctx, t)

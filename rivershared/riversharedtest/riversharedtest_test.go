@@ -12,7 +12,7 @@ func TestWaitOrTimeout(t *testing.T) {
 
 	// Inject a few extra numbers to make sure we pick only one.
 	numChan := make(chan int, 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		numChan <- i
 	}
 
@@ -25,7 +25,7 @@ func TestWaitOrTimeoutN(t *testing.T) {
 
 	// Inject a few extra numbers to make sure we pick the right number.
 	numChan := make(chan int, 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		numChan <- i
 	}
 
@@ -55,9 +55,9 @@ func TestTimeStub(t *testing.T) {
 
 		timeStub := &TimeStub{}
 
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			go func() {
-				for j := 0; j < 50; j++ {
+				for range 50 {
 					timeStub.StubNowUTC(time.Now().UTC())
 					_ = timeStub.NowUTC()
 				}

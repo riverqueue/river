@@ -18,7 +18,7 @@ func TestDurationBetween(t *testing.T) {
 	// Not exactly a super exhaustive test, but choose a relatively small range,
 	// generate numbers and check they're within bounds, and run enough times
 	// that we'd expect an offender to be generated if one was likely to be.
-	for i := 0; i < int(upperLimit/time.Second-lowerLimit/time.Second)*2; i++ {
+	for range int(upperLimit/time.Second-lowerLimit/time.Second) * 2 {
 		n := DurationBetween(lowerLimit, upperLimit)
 		require.GreaterOrEqual(t, n, lowerLimit)
 		require.Less(t, n, upperLimit)
@@ -33,7 +33,7 @@ func TestIntBetween(t *testing.T) {
 	// Not exactly a super exhaustive test, but choose a relatively small range,
 	// generate numbers and check they're within bounds, and run enough times
 	// that we'd expect an offender to be generated if one was likely to be.
-	for i := 0; i < int(upperLimit-lowerLimit)*2; i++ {
+	for range int(upperLimit-lowerLimit) * 2 {
 		n := IntBetween(lowerLimit, upperLimit)
 		require.GreaterOrEqual(t, n, lowerLimit)
 		require.Less(t, n, upperLimit)
@@ -54,7 +54,7 @@ func TestIntBetween(t *testing.T) {
 //
 
 func BenchmarkRandV2(b *testing.B) {
-	for n := 0; n < b.N; n++ {
+	for range b.N {
 		_ = rand.IntN(1984)
 	}
 }
@@ -68,7 +68,7 @@ func BenchmarkCryptoSource(b *testing.B) {
 		return nBig.Int64()
 	}
 
-	for n := 0; n < b.N; n++ {
+	for range b.N {
 		_ = intN(1984)
 	}
 }

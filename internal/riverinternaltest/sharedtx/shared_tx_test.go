@@ -102,7 +102,7 @@ func TestSharedTx(t *testing.T) {
 		const numIterations = 50
 		errGroup, ctx := errgroup.WithContext(ctx)
 
-		for i := 0; i < numIterations; i++ {
+		for range numIterations {
 			errGroup.Go(func() error {
 				sharedSubTx, err := sharedTx.Begin(ctx)
 				require.NoError(t, err)
@@ -120,7 +120,7 @@ func TestSharedTx(t *testing.T) {
 			})
 		}
 
-		for i := 0; i < numIterations; i++ {
+		for range numIterations {
 			errGroup.Go(func() error {
 				row := sharedTx.QueryRow(ctx, "SELECT 1")
 				var v int

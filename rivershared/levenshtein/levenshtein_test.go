@@ -79,7 +79,7 @@ func BenchmarkSimple(b *testing.B) {
 	tmp := 0
 	for _, test := range tests {
 		b.Run(test.name, func(b *testing.B) {
-			for n := 0; n < b.N; n++ {
+			for range b.N {
 				tmp = levenshtein.ComputeDistance(test.a, test.b)
 			}
 		})

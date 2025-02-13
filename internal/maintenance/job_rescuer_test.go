@@ -229,7 +229,7 @@ func TestJobRescuer(t *testing.T) {
 
 		jobs := make([]*rivertype.JobRow, numJobs)
 
-		for i := 0; i < numJobs; i++ {
+		for i := range numJobs {
 			job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
 			jobs[i] = job
 		}
@@ -258,7 +258,7 @@ func TestJobRescuer(t *testing.T) {
 		require.NoError(t, cleaner.Start(ctx))
 
 		// This should trigger ~immediately every time:
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			t.Logf("Iteration %d", i)
 			cleaner.TestSignals.FetchedBatch.WaitOrTimeout()
 		}

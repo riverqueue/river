@@ -122,10 +122,10 @@ func testService(t *testing.T, newService func(t *testing.T) serviceWithStopped)
 
 		var wg sync.WaitGroup
 
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			wg.Add(1)
 			go func() {
-				for j := 0; j < 50; j++ {
+				for range 50 {
 					require.NoError(t, service.Start(ctx))
 					service.Stop()
 				}

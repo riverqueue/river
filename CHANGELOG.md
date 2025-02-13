@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Errors returned from retryable jobs are now logged with warning logs instead of error logs. Error logs are still used for jobs that error after reaching `max_attempts`. [PR #743](https://github.com/riverqueue/river/pull/743).
+- Remove range variable capture in `for` loops and use simplified `range` syntax. Each of these requires Go 1.22 or later, which was already our minimum required version since Go 1.23 was released. [PR #755](https://github.com/riverqueue/river/pull/755).
 
 ### Fixed
 

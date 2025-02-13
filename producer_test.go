@@ -441,7 +441,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 			return ctx.Err()
 		}))
 
-		for i := 0; i < numJobs; i++ {
+		for range numJobs {
 			mustInsert(ctx, t, bundle, &JobArgs{})
 		}
 
