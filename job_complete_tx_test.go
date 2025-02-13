@@ -79,4 +79,23 @@ func TestJobCompleteTx(t *testing.T) {
 		_, err := JobCompleteTx[*riverpgxv5.Driver](ctx, bundle.tx, &Job[JobArgs]{JobRow: job})
 		require.EqualError(t, err, "job must be running")
 	})
+
+	t.Run("ErrorIfJobDoesntExist", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, bundle := setup(ctx, t)
+
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+			State: ptrutil.Ptr(rivertype.JobStateAvailable),
+		})
+
+		// delete the job
+		_, err := bundle.exec.JobDelete(ctx, job.ID)
+		require.NoError(t, err)
+
+		// fake the job's state to work around the check:
+		job.State = rivertype.JobStateRunning
+		_, err = JobCompleteTx[*riverpgxv5.Driver](ctx, bundle.tx, &Job[JobArgs]{JobRow: job})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+	})
 }

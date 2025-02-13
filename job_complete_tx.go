@@ -50,6 +50,9 @@ func JobCompleteTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs](ctx 
 	if err != nil {
 		return nil, err
 	}
+	if len(rows) == 0 {
+		return nil, rivertype.ErrNotFound
+	}
 	updatedJob := &Job[TArgs]{JobRow: rows[0]}
 
 	if err := json.Unmarshal(updatedJob.EncodedArgs, &updatedJob.Args); err != nil {
