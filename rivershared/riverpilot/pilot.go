@@ -12,6 +12,9 @@ import (
 // higher level functionality on top of the driver's underlying queries. It
 // tracks closely to the underlying driver's API, but may add additional
 // functionality or logic wrapping the queries.
+//
+// This should be considered a River internal API and its stability is not
+// guaranteed. DO NOT USE.
 type Pilot interface {
 	JobInsertMany(
 		ctx context.Context,

@@ -38,6 +38,71 @@ func TestClientDriverPlugin(t *testing.T) {
 		}
 	}
 
+	t.Run("InitCalled", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		startClient(ctx, t, client)
+
+		require.True(t, bundle.pluginDriver.initCalled)
+	})
+}
+
+var _ driverPlugin[pgx.Tx] = &TestDriverWithPlugin{}
+
+type TestDriverWithPlugin struct {
+	*riverpgxv5.Driver
+	initCalled bool
+	pilot      riverpilot.Pilot
+}
+
+func newDriverWithPlugin(t *testing.T, dbPool *pgxpool.Pool) *TestDriverWithPlugin {
+	t.Helper()
+
+	return &TestDriverWithPlugin{
+		Driver: riverpgxv5.New(dbPool),
+	}
+}
+
+func (d *TestDriverWithPlugin) PluginInit(archetype *baseservice.Archetype) {
+	d.initCalled = true
+}
+
+func (d *TestDriverWithPlugin) PluginPilot() riverpilot.Pilot {
+	if !d.initCalled {
+		panic("expected PluginInit to be called before this function")
+	}
+
+	return d.pilot
+}
+
+func TestClientPilotPlugin(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		pluginDriver *TestDriverWithPlugin
+		pluginPilot  *TestPilotWithPlugin
+	}
+
+	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+		t.Helper()
+
+		pluginDriver := newDriverWithPlugin(t, riverinternaltest.TestDB(ctx, t))
+		pluginPilot := newPilotWithPlugin(t)
+		pluginDriver.pilot = pluginPilot
+
+		client, err := NewClient(pluginDriver, newTestConfig(t, nil))
+		require.NoError(t, err)
+
+		return client, &testBundle{
+			pluginDriver: pluginDriver,
+			pluginPilot:  pluginPilot,
+		}
+	}
+
 	t.Run("ServicesStart", func(t *testing.T) {
 		t.Parallel()
 
@@ -46,22 +111,21 @@ func TestClientDriverPlugin(t *testing.T) {
 		startClient(ctx, t, client)
 
 		riversharedtest.WaitOrTimeout(t, startstop.WaitAllStartedC(
-			bundle.pluginDriver.maintenanceService,
-			bundle.pluginDriver.service,
+			bundle.pluginPilot.maintenanceService,
+			bundle.pluginPilot.service,
 		))
 	})
 }
 
-var _ driverPlugin[pgx.Tx] = &TestDriverWithPlugin{}
+var _ pilotPlugin = &TestPilotWithPlugin{}
 
-type TestDriverWithPlugin struct {
-	*riverpgxv5.Driver
-	initCalled         bool
+type TestPilotWithPlugin struct {
+	riverpilot.StandardPilot
 	maintenanceService startstop.Service
 	service            startstop.Service
 }
 
-func newDriverWithPlugin(t *testing.T, dbPool *pgxpool.Pool) *TestDriverWithPlugin {
+func newPilotWithPlugin(t *testing.T) *TestPilotWithPlugin {
 	t.Helper()
 
 	newService := func(name string) startstop.Service {
@@ -83,37 +147,17 @@ func newDriverWithPlugin(t *testing.T, dbPool *pgxpool.Pool) *TestDriverWithPlug
 		})
 	}
 
-	return &TestDriverWithPlugin{
-		Driver:             riverpgxv5.New(dbPool),
+	return &TestPilotWithPlugin{
+		StandardPilot:      riverpilot.StandardPilot{},
 		maintenanceService: newService("maintenance service"),
 		service:            newService("other service"),
 	}
 }
 
-func (d *TestDriverWithPlugin) PluginInit(archetype *baseservice.Archetype, client *Client[pgx.Tx]) {
-	d.initCalled = true
-}
-
-func (d *TestDriverWithPlugin) PluginMaintenanceServices() []startstop.Service {
-	if !d.initCalled {
-		panic("expected PluginInit to be called before this function")
-	}
-
+func (d *TestPilotWithPlugin) PluginMaintenanceServices() []startstop.Service {
 	return []startstop.Service{d.maintenanceService}
 }
 
-func (d *TestDriverWithPlugin) PluginPilot() riverpilot.Pilot {
-	if !d.initCalled {
-		panic("expected PluginInit to be called before this function")
-	}
-
-	return nil
-}
-
-func (d *TestDriverWithPlugin) PluginServices() []startstop.Service {
-	if !d.initCalled {
-		panic("expected PluginInit to be called before this function")
-	}
-
+func (d *TestPilotWithPlugin) PluginServices() []startstop.Service {
 	return []startstop.Service{d.service}
 }
