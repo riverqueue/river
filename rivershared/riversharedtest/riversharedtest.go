@@ -48,8 +48,10 @@ func LoggerWarn(tb testing.TB) *slog.Logger {
 	return slogtest.NewLogger(tb, &slog.HandlerOptions{Level: slog.LevelWarn})
 }
 
-// TimeStub implements baseservice.TimeGenerator to allow time to be stubbed in
-// tests.
+// TimeStub implements baseservice.TimeGeneratorWithStub to allow time to be
+// stubbed in tests.
+//
+// It exists separately from rivertest.TimeStub to avoid a circular dependency.
 type TimeStub struct {
 	mu     sync.RWMutex
 	nowUTC *time.Time
