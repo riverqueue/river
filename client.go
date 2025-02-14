@@ -268,6 +268,58 @@ type Config struct {
 	schedulerInterval time.Duration
 }
 
+// WithDefaults returns a copy of the Config with all default values applied.
+func (c *Config) WithDefaults() *Config {
+	// Use the existing logger if set, otherwise create a default one.
+	logger := c.Logger
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+			Level: slog.LevelWarn,
+		}))
+	}
+
+	// Compute the default rescue value. For convenience, if JobTimeout is specified
+	// but RescueStuckJobsAfter is not set (or less than 1) and JobTimeout is large, use
+	// JobTimeout + maintenance.JobRescuerRescueAfterDefault as the default.
+	rescueAfter := maintenance.JobRescuerRescueAfterDefault
+	if c.JobTimeout > 0 && c.RescueStuckJobsAfter < 1 && c.JobTimeout > c.RescueStuckJobsAfter {
+		rescueAfter = c.JobTimeout + maintenance.JobRescuerRescueAfterDefault
+	}
+
+	// Set default retry policy if none is provided.
+	retryPolicy := c.RetryPolicy
+	if retryPolicy == nil {
+		retryPolicy = &DefaultClientRetryPolicy{}
+	}
+
+	return &Config{
+		AdvisoryLockPrefix:          c.AdvisoryLockPrefix,
+		CancelledJobRetentionPeriod: valutil.ValOrDefault(c.CancelledJobRetentionPeriod, maintenance.CancelledJobRetentionPeriodDefault),
+		CompletedJobRetentionPeriod: valutil.ValOrDefault(c.CompletedJobRetentionPeriod, maintenance.CompletedJobRetentionPeriodDefault),
+		DiscardedJobRetentionPeriod: valutil.ValOrDefault(c.DiscardedJobRetentionPeriod, maintenance.DiscardedJobRetentionPeriodDefault),
+		ErrorHandler:                c.ErrorHandler,
+		FetchCooldown:               valutil.ValOrDefault(c.FetchCooldown, FetchCooldownDefault),
+		FetchPollInterval:           valutil.ValOrDefault(c.FetchPollInterval, FetchPollIntervalDefault),
+		ID:                          valutil.ValOrDefaultFunc(c.ID, func() string { return defaultClientID(time.Now().UTC()) }),
+		JobInsertMiddleware:         c.JobInsertMiddleware,
+		JobTimeout:                  valutil.ValOrDefault(c.JobTimeout, JobTimeoutDefault),
+		Logger:                      logger,
+		MaxAttempts:                 valutil.ValOrDefault(c.MaxAttempts, MaxAttemptsDefault),
+		PeriodicJobs:                c.PeriodicJobs,
+		PollOnly:                    c.PollOnly,
+		Queues:                      c.Queues,
+		ReindexerSchedule:           c.ReindexerSchedule,
+		RescueStuckJobsAfter:        valutil.ValOrDefault(c.RescueStuckJobsAfter, rescueAfter),
+		RetryPolicy:                 retryPolicy,
+		SkipUnknownJobCheck:         c.SkipUnknownJobCheck,
+		Test:                        c.Test,
+		TestOnly:                    c.TestOnly,
+		Workers:                     c.Workers,
+		WorkerMiddleware:            c.WorkerMiddleware,
+		schedulerInterval:           valutil.ValOrDefault(c.schedulerInterval, maintenance.JobSchedulerIntervalDefault),
+	}
+}
+
 func (c *Config) validate() error {
 	if c.CancelledJobRetentionPeriod < 0 {
 		return errors.New("CancelledJobRetentionPeriod time cannot be less than zero")
@@ -460,55 +512,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		return nil, errMissingConfig
 	}
 
-	logger := config.Logger
-	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-			Level: slog.LevelWarn,
-		}))
-	}
-
-	retryPolicy := config.RetryPolicy
-	if retryPolicy == nil {
-		retryPolicy = &DefaultClientRetryPolicy{}
-	}
-
-	// For convenience, in case the user's specified a large JobTimeout but no
-	// RescueStuckJobsAfter, since RescueStuckJobsAfter must be greater than
-	// JobTimeout, set a reasonable default value that's longer than JobTimeout.
-	rescueAfter := maintenance.JobRescuerRescueAfterDefault
-	if config.JobTimeout > 0 && config.RescueStuckJobsAfter < 1 && config.JobTimeout > config.RescueStuckJobsAfter {
-		rescueAfter = config.JobTimeout + maintenance.JobRescuerRescueAfterDefault
-	}
-
-	// Create a new version of config with defaults filled in. This replaces the
-	// original object, so everything that we care about must be initialized
-	// here, even if it's only carrying over the original value.
-	config = &Config{
-		AdvisoryLockPrefix:          config.AdvisoryLockPrefix,
-		CancelledJobRetentionPeriod: valutil.ValOrDefault(config.CancelledJobRetentionPeriod, maintenance.CancelledJobRetentionPeriodDefault),
-		CompletedJobRetentionPeriod: valutil.ValOrDefault(config.CompletedJobRetentionPeriod, maintenance.CompletedJobRetentionPeriodDefault),
-		DiscardedJobRetentionPeriod: valutil.ValOrDefault(config.DiscardedJobRetentionPeriod, maintenance.DiscardedJobRetentionPeriodDefault),
-		ErrorHandler:                config.ErrorHandler,
-		FetchCooldown:               valutil.ValOrDefault(config.FetchCooldown, FetchCooldownDefault),
-		FetchPollInterval:           valutil.ValOrDefault(config.FetchPollInterval, FetchPollIntervalDefault),
-		ID:                          valutil.ValOrDefaultFunc(config.ID, func() string { return defaultClientID(time.Now().UTC()) }),
-		JobInsertMiddleware:         config.JobInsertMiddleware,
-		JobTimeout:                  valutil.ValOrDefault(config.JobTimeout, JobTimeoutDefault),
-		Logger:                      logger,
-		MaxAttempts:                 valutil.ValOrDefault(config.MaxAttempts, MaxAttemptsDefault),
-		PeriodicJobs:                config.PeriodicJobs,
-		PollOnly:                    config.PollOnly,
-		Queues:                      config.Queues,
-		ReindexerSchedule:           config.ReindexerSchedule,
-		RescueStuckJobsAfter:        valutil.ValOrDefault(config.RescueStuckJobsAfter, rescueAfter),
-		RetryPolicy:                 retryPolicy,
-		SkipUnknownJobCheck:         config.SkipUnknownJobCheck,
-		Test:                        config.Test,
-		TestOnly:                    config.TestOnly,
-		Workers:                     config.Workers,
-		WorkerMiddleware:            config.WorkerMiddleware,
-		schedulerInterval:           valutil.ValOrDefault(config.schedulerInterval, maintenance.JobSchedulerIntervalDefault),
-	}
+	config = config.WithDefaults()
 
 	if err := config.validate(); err != nil {
 		return nil, err
@@ -567,7 +571,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 				client.services = append(client.services, client.notifier)
 			}
 		} else {
-			logger.Info("Driver does not support listener; entering poll only mode")
+			config.Logger.Info("Driver does not support listener; entering poll only mode")
 		}
 
 		client.elector = leadership.NewElector(archetype, driver.GetExecutor(), client.notifier, &leadership.Config{
@@ -608,7 +612,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 
 		{
 			jobRescuer := maintenance.NewRescuer(archetype, &maintenance.JobRescuerConfig{
-				ClientRetryPolicy: retryPolicy,
+				ClientRetryPolicy: config.RetryPolicy,
 				RescueAfter:       config.RescueStuckJobsAfter,
 				WorkUnitFactoryFunc: func(kind string) workunit.WorkUnitFactory {
 					if workerInfo, ok := config.Workers.workersMap[kind]; ok {

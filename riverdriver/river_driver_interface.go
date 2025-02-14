@@ -273,6 +273,7 @@ type JobInsertFastResult struct {
 type JobInsertFullParams struct {
 	Attempt      int
 	AttemptedAt  *time.Time
+	AttemptedBy  []string
 	CreatedAt    *time.Time
 	EncodedArgs  []byte
 	Errors       [][]byte

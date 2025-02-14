@@ -11,9 +11,9 @@ import (
 func TestDefaultIfEmpty(t *testing.T) {
 	t.Parallel()
 
-	result1 := DefaultIfEmpty([]int{1, 2, 3}, []int{4, 5, 6})
-	result2 := DefaultIfEmpty([]int{}, []int{4, 5, 6})
-	result3 := DefaultIfEmpty(nil, []int{4, 5, 6})
+	result1 := FirstNonEmpty([]int{1, 2, 3}, []int{4, 5, 6})
+	result2 := FirstNonEmpty([]int{}, []int{4, 5, 6})
+	result3 := FirstNonEmpty(nil, []int{4, 5, 6})
 
 	require.Len(t, result1, 3)
 	require.Len(t, result2, 3)

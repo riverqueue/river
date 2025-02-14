@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/riverqueue/river/internal/execution"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -49,6 +50,13 @@ func JobCompleteTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs](ctx 
 	})
 	if err != nil {
 		return nil, err
+	}
+	if len(rows) == 0 {
+		if _, isInsideTestWorker := ctx.Value(execution.ContextKeyInsideTestWorker{}).(bool); isInsideTestWorker {
+			panic("to use JobCompleteTx in a rivertest.Worker, the job must be inserted into the database first")
+		}
+
+		return nil, rivertype.ErrNotFound
 	}
 	updatedJob := &Job[TArgs]{JobRow: rows[0]}
 

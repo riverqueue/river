@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Exposed `TestConfig` struct on `Config` under the `Test` field for configuration that is specific to test environments. For now, the only field on this type is `Time`, which can be used to set a synthetic `TimeGenerator` for tests. A stubbable time generator was added as `rivertest.TimeStub` to allow time to be easily stubbed in tests. [PR #754](https://github.com/riverqueue/river/pull/754).
+- New `rivertest.Worker` type to make it significantly easier to test River workers. Either real or synthetic jobs can be worked using this interface, generally without requiring any database interactions. The `Worker` type provides a realistic execution environment with access to the full range of River features, including `river.ClientFromContext`, middleware (both global and per-worker), and timeouts. [PR #753](https://github.com/riverqueue/river/pull/753).
 
 ### Changed
 
@@ -19,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `riverdatabasesql` driver: properly handle `nil` values in `bytea[]` inputs. This fixes the driver's handling of empty unique keys on insert for non-unique jobs with the newer unique jobs implementation. [PR #739](https://github.com/riverqueue/river/pull/739).
+- `JobCompleteTx` now returns `rivertype.ErrNotFound` if the job doesn't exist instead of panicking. [PR #753](https://github.com/riverqueue/river/pull/753).
 
 ## [0.16.0] - 2024-01-27
 

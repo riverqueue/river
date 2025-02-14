@@ -1082,6 +1082,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			job, err := exec.JobInsertFull(ctx, &riverdriver.JobInsertFullParams{
 				Attempt:     3,
 				AttemptedAt: &now,
+				AttemptedBy: []string{"worker1", "worker2"},
 				CreatedAt:   &now,
 				EncodedArgs: []byte(`{"encoded": "args"}`),
 				Errors:      [][]byte{[]byte(`{"error": "message"}`)},
@@ -1099,6 +1100,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			require.NoError(t, err)
 			require.Equal(t, 3, job.Attempt)
 			requireEqualTime(t, now, *job.AttemptedAt)
+			require.Equal(t, []string{"worker1", "worker2"}, job.AttemptedBy)
 			requireEqualTime(t, now, job.CreatedAt)
 			require.JSONEq(t, `{"encoded": "args"}`, string(job.EncodedArgs))
 			require.Equal(t, "message", job.Errors[0].Error)

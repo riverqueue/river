@@ -9,11 +9,13 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/riverqueue/river/internal/execution"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobstats"
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/util/valutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -204,43 +206,10 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		return &jobExecutorResult{Err: err}
 	}
 
-	workerMiddleware := e.WorkUnit.Middleware()
-
-	doInner := func(ctx context.Context) error {
-		jobTimeout := e.WorkUnit.Timeout()
-		if jobTimeout == 0 {
-			jobTimeout = e.ClientJobTimeout
-		}
-
-		// No timeout if a -1 was specified.
-		if jobTimeout > 0 {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, jobTimeout)
-			defer cancel()
-		}
-
-		if err := e.WorkUnit.Work(ctx); err != nil {
-			return err
-		}
-
-		return nil
-	}
-
-	allMiddleware := make([]rivertype.WorkerMiddleware, 0, len(e.GlobalMiddleware)+len(workerMiddleware))
-	allMiddleware = append(allMiddleware, e.GlobalMiddleware...)
-	allMiddleware = append(allMiddleware, workerMiddleware...)
-
-	if len(allMiddleware) > 0 {
-		// Wrap middlewares in reverse order so the one defined first is wrapped
-		// as the outermost function and is first to receive the operation.
-		for i := len(allMiddleware) - 1; i >= 0; i-- {
-			middlewareItem := allMiddleware[i] // capture the current middleware item
-			previousDoInner := doInner         // Capture the current doInner function
-			doInner = func(ctx context.Context) error {
-				return middlewareItem.Work(ctx, e.JobRow, previousDoInner)
-			}
-		}
-	}
+	doInner := execution.MiddlewareChain(e.GlobalMiddleware, e.WorkUnit.Middleware(), e.WorkUnit.Work, e.JobRow)
+	jobTimeout := valutil.FirstNonZero(e.WorkUnit.Timeout(), e.ClientJobTimeout)
+	ctx, cancel := execution.MaybeApplyTimeout(ctx, jobTimeout)
+	defer cancel()
 
 	return &jobExecutorResult{Err: doInner(ctx)}
 }

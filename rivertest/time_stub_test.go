@@ -4,8 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/require"
+
+	"github.com/riverqueue/river/rivertype"
 )
 
 // Ensure that TimeStub implements rivertype.TimeGenerator.
