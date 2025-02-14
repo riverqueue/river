@@ -32,6 +32,7 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
@@ -132,10 +133,12 @@ func newTestConfig(t *testing.T, callback callbackFunc) *Config {
 		Logger:            riversharedtest.Logger(t),
 		MaxAttempts:       MaxAttemptsDefault,
 		Queues:            map[string]QueueConfig{QueueDefault: {MaxWorkers: 50}},
+		Test: TestConfig{
+			Time: &riversharedtest.TimeStub{},
+		},
 		TestOnly:          true, // disables staggered start in maintenance services
 		Workers:           workers,
 		schedulerInterval: riverinternaltest.SchedulerShortInterval,
-		time:              &riversharedtest.TimeStub{},
 	}
 }
 
@@ -5038,6 +5041,8 @@ func Test_NewClient_Defaults(t *testing.T) {
 	require.Equal(t, MaxAttemptsDefault, client.config.MaxAttempts)
 	require.IsType(t, &DefaultClientRetryPolicy{}, client.config.RetryPolicy)
 	require.False(t, client.config.SkipUnknownJobCheck)
+	require.IsType(t, nil, client.config.Test.Time)
+	require.IsType(t, &baseservice.UnStubbableTimeGenerator{}, client.baseService.Time)
 }
 
 func Test_NewClient_Overrides(t *testing.T) {

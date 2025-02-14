@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"regexp"
 	"time"
+
+	"github.com/riverqueue/river/rivertype"
 )
 
 // Archetype contains the set of base service properties that are immutable, or
@@ -21,11 +23,12 @@ type Archetype struct {
 	Logger *slog.Logger
 
 	// Time returns a time generator to get the current time in UTC. Normally
-	// it's implemented as UnStubbableTimeGenerator which just calls through to
-	// `time.Now().UTC()`, but is riverinternaltest.timeStub in tests to allow
-	// the current time to be stubbed.  Services should try to use this function
-	// instead of the vanilla ones from the `time` package for testing purposes.
-	Time TimeGenerator
+	// it's implemented as [UnStubbableTimeGenerator] which just calls
+	// through to `time.Now().UTC()`, but is riverinternaltest.timeStub in tests
+	// to allow the current time to be stubbed. Services should try to use this
+	// function instead of the vanilla ones from the `time` package for testing
+	// purposes.
+	Time TimeGeneratorWithStub
 }
 
 // NewArchetype returns a new archetype. This function is most suitable for
@@ -76,24 +79,24 @@ func Init[TService withBaseService](archetype *Archetype, service TService) TSer
 	return service
 }
 
-// TimeGenerator generates a current time in UTC. In test environments it's
-// implemented by riverinternaltest.timeStub which lets the current time be
-// stubbed. Otherwise, it's implemented as UnStubbableTimeGenerator which
-// doesn't allow stubbing.
-type TimeGenerator interface {
-	// NowUTC returns the current time. This may be a stubbed time if the time
-	// has been actively stubbed in a test.
-	NowUTC() time.Time
-
-	// NowUTCOrNil returns if the currently stubbed time _if_ the current time
-	// is stubbed, and returns nil otherwise. This is generally useful in cases
-	// where a component may want to use a stubbed time if the time is stubbed,
-	// but to fall back to a database time default otherwise.
-	NowUTCOrNil() *time.Time
+type TimeGeneratorWithStub interface {
+	rivertype.TimeGenerator
 
 	// StubNowUTC stubs the current time. It will panic if invoked outside of
 	// tests. Returns the same time passed as parameter for convenience.
 	StubNowUTC(nowUTC time.Time) time.Time
+}
+
+// TimeGeneratorWithStubWrapper provides a wrapper around TimeGenerator that
+// implements missing TimeGeneratorWithStub functions. This is used so that we
+// only need to expose the minimal TimeGenerator interface publicly, but can
+// keep a stubbable version of widely available for internal use.
+type TimeGeneratorWithStubWrapper struct {
+	rivertype.TimeGenerator
+}
+
+func (g *TimeGeneratorWithStubWrapper) StubNowUTC(nowUTC time.Time) time.Time {
+	panic("time not stubbable outside tests")
 }
 
 // UnStubbableTimeGenerator is a TimeGenerator implementation that can't be
@@ -102,6 +105,7 @@ type UnStubbableTimeGenerator struct{}
 
 func (g *UnStubbableTimeGenerator) NowUTC() time.Time       { return time.Now() }
 func (g *UnStubbableTimeGenerator) NowUTCOrNil() *time.Time { return nil }
+
 func (g *UnStubbableTimeGenerator) StubNowUTC(nowUTC time.Time) time.Time {
 	panic("time not stubbable outside tests")
 }

@@ -46,6 +46,12 @@ const (
 	QueueNumWorkersMax = 10_000
 )
 
+// TestConfig contains configuration specific to test environments.
+type TestConfig struct {
+	// Time is a time generator to make time stubbable in tests.
+	Time rivertype.TimeGenerator
+}
+
 // Config is the configuration for a Client.
 //
 // Both Queues and Workers are required for a client to work jobs, but an
@@ -231,6 +237,9 @@ type Config struct {
 	// Defaults to false.
 	SkipUnknownJobCheck bool
 
+	// Test holds configuration specific to test environments.
+	Test TestConfig
+
 	// TestOnly can be set to true to disable certain features that are useful
 	// in production, but which may be harmful to tests, in ways like having the
 	// effect of making them slower. It should not be used outside of test
@@ -257,9 +266,6 @@ type Config struct {
 	// Scheduler run interval. Shared between the scheduler and producer/job
 	// executors, but not currently exposed for configuration.
 	schedulerInterval time.Duration
-
-	// Time generator to make time stubbable in tests.
-	time baseservice.TimeGenerator
 }
 
 func (c *Config) validate() error {
@@ -497,11 +503,11 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		RescueStuckJobsAfter:        valutil.ValOrDefault(config.RescueStuckJobsAfter, rescueAfter),
 		RetryPolicy:                 retryPolicy,
 		SkipUnknownJobCheck:         config.SkipUnknownJobCheck,
+		Test:                        config.Test,
 		TestOnly:                    config.TestOnly,
 		Workers:                     config.Workers,
 		WorkerMiddleware:            config.WorkerMiddleware,
 		schedulerInterval:           valutil.ValOrDefault(config.schedulerInterval, maintenance.JobSchedulerIntervalDefault),
-		time:                        config.time,
 	}
 
 	if err := config.validate(); err != nil {
@@ -509,8 +515,12 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	}
 
 	archetype := baseservice.NewArchetype(config.Logger)
-	if config.time != nil {
-		archetype.Time = config.time
+	if config.Test.Time != nil {
+		if withStub, ok := config.Test.Time.(baseservice.TimeGeneratorWithStub); ok {
+			archetype.Time = withStub
+		} else {
+			archetype.Time = &baseservice.TimeGeneratorWithStubWrapper{TimeGenerator: config.Test.Time}
+		}
 	}
 
 	client := &Client[TTx]{
