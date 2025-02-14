@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
+	"github.com/riverqueue/river/internal/execution"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/riverdriver"
@@ -97,5 +98,23 @@ func TestJobCompleteTx(t *testing.T) {
 		job.State = rivertype.JobStateRunning
 		_, err = JobCompleteTx[*riverpgxv5.Driver](ctx, bundle.tx, &Job[JobArgs]{JobRow: job})
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
+	})
+
+	t.Run("PanicsIfCalledInTestWorkerWithoutInsertingJob", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, bundle := setup(ctx, t)
+		ctx = context.WithValue(ctx, execution.ContextKeyInsideTestWorker{}, true)
+
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+		// delete the job as though it was never inserted:
+		_, err := bundle.client.JobDeleteTx(ctx, bundle.tx, job.ID)
+		require.NoError(t, err)
+		job.State = rivertype.JobStateRunning
+
+		require.PanicsWithValue(t, "to use JobCompleteTx in a rivertest.Worker, the job must be inserted into the database first", func() {
+			_, err := JobCompleteTx[*riverpgxv5.Driver](ctx, bundle.tx, &Job[JobArgs]{JobRow: job})
+			require.NoError(t, err)
+		})
 	})
 }

@@ -7,6 +7,10 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
+// ContextKeyInsideTestWorker is an internal context key that indicates whether
+// the worker is running inside a [rivertest.Worker].
+type ContextKeyInsideTestWorker struct{}
+
 type Func func(ctx context.Context) error
 
 // MaybeApplyTimeout returns a context that will be cancelled after the given

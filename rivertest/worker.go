@@ -35,6 +35,10 @@ import (
 // job. The execution environment has a realistic River context with access to
 // all River features, including [river.ClientFromContext] and worker
 // middleware.
+//
+// When relying on features that require a database record (such as JobCompleteTx),
+// the job must be inserted into the database first and then executed with
+// WorkJob.
 type Worker[T river.JobArgs, TTx any] struct {
 	client *river.Client[TTx]
 	config *river.Config
@@ -81,6 +85,7 @@ func (w *Worker[T, TTx]) WorkJob(ctx context.Context, tb testing.TB, job *river.
 
 	// populate river client into context:
 	ctx = WorkContext(ctx, w.client)
+	ctx = context.WithValue(ctx, execution.ContextKeyInsideTestWorker{}, true)
 
 	doInner := execution.MiddlewareChain(
 		w.config.WorkerMiddleware,

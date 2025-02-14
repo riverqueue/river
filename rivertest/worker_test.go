@@ -9,6 +9,7 @@ import (
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/internal/dbunique"
+	"github.com/riverqueue/river/internal/execution"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
@@ -51,6 +52,9 @@ func TestWorker_Work(t *testing.T) {
 			require.Equal(t, rivertype.JobStateRunning, job.JobRow.State)
 			require.Equal(t, []string{}, job.JobRow.Tags)
 			require.Nil(t, job.JobRow.UniqueKey)
+
+			_, hasContextKeyInsideTestWorker := ctx.Value(execution.ContextKeyInsideTestWorker{}).(bool)
+			require.True(t, hasContextKeyInsideTestWorker)
 
 			return nil
 		})
