@@ -57,6 +57,14 @@ define test-target
 endef
 $(foreach mod,$(submodules),$(eval $(call test-target,$(mod))))
 
+.PHONY: test/race
+test/race:: ## Run test suite for all submodules with race detector
+define test-race-target
+    test/race:: ; cd $1 && go test ./... -p 1 -race
+endef
+$(foreach mod,$(submodules),$(eval $(call test-race-target,$(mod))))
+
+
 .PHONY: tidy
 tidy:: ## Run `go mod tidy` for all submodules
 define tidy-target
