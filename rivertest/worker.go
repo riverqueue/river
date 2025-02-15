@@ -3,6 +3,7 @@ package rivertest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -77,11 +78,61 @@ func (w *Worker[T, TTx]) Work(ctx context.Context, tb testing.TB, args T, opts *
 	return w.WorkJob(ctx, tb, job)
 }
 
+// WorkTx allocates a synthetic job with the provided arguments and optional
+// insert options, then works it in the given transaction.
+func (w *Worker[T, TTx]) WorkTx(ctx context.Context, tb testing.TB, tx TTx, args T, opts *river.InsertOpts) error {
+	tb.Helper()
+	job := makeJobFromArgs(tb, w.config, args, opts)
+	return w.WorkJobTx(ctx, tb, tx, job)
+}
+
 // WorkJob works the provided job. The job must be constructed to be a realistic
 // job using external logic prior to calling this method. Unlike the other
 // variants, this method offers total control over the job's attributes.
 func (w *Worker[T, TTx]) WorkJob(ctx context.Context, tb testing.TB, job *river.Job[T]) error {
 	tb.Helper()
+
+	var exec riverdriver.Executor
+	if w.client.Driver().HasPool() {
+		exec = w.client.Driver().GetExecutor()
+	}
+
+	return w.workJobExec(ctx, tb, exec, job)
+}
+
+// WorkJobTx works the provided job in the given transaction. The job must be
+// constructed to be a realistic job using external logic prior to calling this
+// method. Unlike the other variants, this method offers total control over the
+// job's attributes.
+func (w *Worker[T, TTx]) WorkJobTx(ctx context.Context, tb testing.TB, tx TTx, job *river.Job[T]) error {
+	tb.Helper()
+	return w.workJobExec(ctx, tb, w.client.Driver().UnwrapExecutor(tx), job)
+}
+
+func (w *Worker[T, TTx]) workJobExec(ctx context.Context, tb testing.TB, exec riverdriver.Executor, job *river.Job[T]) error {
+	tb.Helper()
+
+	// Try to transition an existing job row to running, but also tolerate the
+	// row not existing in the database. Most of the time you don't need to
+	// insert a real job row to use this function (it's only necessary if you
+	// want to use `JobCompleteTx`).
+	if exec != nil {
+		updatedJobRow, err := exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+			ID:            job.ID,
+			StateDoUpdate: true,
+			State:         rivertype.JobStateRunning,
+		})
+		if err != nil && !errors.Is(err, rivertype.ErrNotFound) {
+			return err
+		}
+		if updatedJobRow != nil {
+			job.JobRow = updatedJobRow
+		}
+	}
+
+	// Regardless of whether the job was actually in the database, transition it
+	// to running.
+	job.JobRow.State = rivertype.JobStateRunning
 
 	// populate river client into context:
 	ctx = WorkContext(ctx, w.client)
