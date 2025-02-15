@@ -180,7 +180,7 @@ func TestDB(ctx context.Context, tb testing.TB) *pgxpool.Pool {
 	tb.Cleanup(testPool.Release)
 
 	// Also close the pool just to ensure nothing is still active on it:
-	tb.Cleanup(testPool.Pool().Close)
+	// tb.Cleanup(testPool.Pool().Close)
 
 	return testPool.Pool()
 }

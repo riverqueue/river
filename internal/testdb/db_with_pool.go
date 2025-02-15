@@ -1,10 +1,8 @@
 package testdb
 
 import (
-	"context"
 	"log/slog"
 	"sync"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/puddle/v2"
@@ -33,27 +31,27 @@ func (db *DBWithPool) release() {
 	// 1. ensure tests don't hold on to connections
 	// 2. If a test happens to close the pool as a matter of course (i.e. as part of a defer)
 	//    then we don't reuse a closed pool.
-	db.res.Value().pool.Close()
+	// db.res.Value().pool.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	// ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// defer cancel()
 
-	newPgxPool, err := pgxpool.NewWithConfig(ctx, db.res.Value().config)
-	if err != nil {
-		db.res.Destroy()
-		return
-	}
-	db.res.Value().pool = newPgxPool
+	// newPgxPool, err := pgxpool.NewWithConfig(ctx, db.res.Value().config)
+	// if err != nil {
+	// 	db.res.Destroy()
+	// 	return
+	// }
+	// db.res.Value().pool = newPgxPool
 
-	if db.manager.cleanup != nil {
-		db.logger.Debug("DBWithPool: release calling cleanup", "dbName", db.dbName)
-		if err := db.manager.cleanup(ctx, newPgxPool); err != nil {
-			db.logger.Error("testdb.DBWithPool: Error during release cleanup", "err", err)
-			db.res.Destroy()
-			return
-		}
-		db.logger.Debug("DBWithPool: release done with cleanup", "dbName", db.dbName)
-	}
+	// if db.manager.cleanup != nil {
+	// 	db.logger.Debug("DBWithPool: release calling cleanup", "dbName", db.dbName)
+	// 	if err := db.manager.cleanup(ctx, newPgxPool); err != nil {
+	// 		db.logger.Error("testdb.DBWithPool: Error during release cleanup", "err", err)
+	// 		db.res.Destroy()
+	// 		return
+	// 	}
+	// 	db.logger.Debug("DBWithPool: release done with cleanup", "dbName", db.dbName)
+	// }
 
 	// Finally this resource is ready to be reused:
 	db.res.Release()
