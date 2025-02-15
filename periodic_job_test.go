@@ -18,7 +18,13 @@ func TestNeverSchedule(t *testing.T) {
 		t.Parallel()
 
 		schedule := NeverSchedule()
-		require.Equal(t, time.Unix(1<<63-62135596801, 999999999), schedule.Next(time.Now()))
+		now := time.Now()
+		next := schedule.Next(now)
+		require.Equal(t, time.Unix(1<<63-62135596801, 999999999), next)
+		require.False(t, next.Before(now))
+		// use an arbitrary duration to check that
+		// the next schedule is far in the future
+		require.True(t, next.Year()-now.Year() > 1000)
 	})
 }
 

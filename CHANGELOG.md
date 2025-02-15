@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `riverdatabasesql` driver: properly handle `nil` values in `bytea[]` inputs. This fixes the driver's handling of empty unique keys on insert for non-unique jobs with the newer unique jobs implementation. [PR #739](https://github.com/riverqueue/river/pull/739).
 - `JobCompleteTx` now returns `rivertype.ErrNotFound` if the job doesn't exist instead of panicking. [PR #753](https://github.com/riverqueue/river/pull/753).
+- - `NeverSchedule.Next` now returns the correct maximum time value, ensuring that the periodic job truly never runs. This fixes an issue where an incorrect maximum timestamp was previously used. [PR #760](https://github.com/riverqueue/river/pull/760)
 
 ## [0.16.0] - 2024-01-27
 
