@@ -26,6 +26,22 @@ import (
 // purposes of resource cleanup. Should never be user visible.
 var errExecutorDefaultCancel = errors.New("context cancelled as executor finished")
 
+type contextKey string
+
+const ctxMetadataUpdatesKey contextKey = "river_metadata_updates"
+
+func metadataUpdatesFromContext(ctx context.Context) (map[string]any, bool) {
+	metadataUpdates := ctx.Value(ctxMetadataUpdatesKey)
+	if metadataUpdates == nil {
+		return nil, false
+	}
+	typedMetadataUpdates, ok := metadataUpdates.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	return typedMetadataUpdates, true
+}
+
 // UnknownJobKindError is returned when a Client fetches and attempts to
 // work a job that has not been registered on the Client's Workers bundle (using
 // AddWorker).
@@ -182,6 +198,9 @@ func (e *jobExecutor) Execute(ctx context.Context) {
 //
 //nolint:nonamedreturns
 func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
+	metadataUpdates := make(map[string]any)
+	ctx = context.WithValue(ctx, ctxMetadataUpdatesKey, metadataUpdates)
+
 	defer func() {
 		if recovery := recover(); recovery != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": panic recovery; possible bug with Worker",
@@ -191,7 +210,7 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 			)
 
 			res = &jobExecutorResult{
-				MetadataUpdates: e.JobRow.MetadataPendingUpdates(),
+				MetadataUpdates: metadataUpdates,
 				PanicTrace:      string(debug.Stack()),
 				PanicVal:        recovery,
 			}
@@ -204,11 +223,11 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 			slog.String("kind", e.JobRow.Kind),
 			slog.Int64("job_id", e.JobRow.ID),
 		)
-		return &jobExecutorResult{Err: &UnknownJobKindError{Kind: e.JobRow.Kind}, MetadataUpdates: e.JobRow.MetadataPendingUpdates()}
+		return &jobExecutorResult{Err: &UnknownJobKindError{Kind: e.JobRow.Kind}, MetadataUpdates: metadataUpdates}
 	}
 
 	if err := e.WorkUnit.UnmarshalJob(); err != nil {
-		return &jobExecutorResult{Err: err, MetadataUpdates: e.JobRow.MetadataPendingUpdates()}
+		return &jobExecutorResult{Err: err, MetadataUpdates: metadataUpdates}
 	}
 
 	doInner := execution.MiddlewareChain(e.GlobalMiddleware, e.WorkUnit.Middleware(), e.WorkUnit.Work, e.JobRow)
@@ -216,7 +235,7 @@ func (e *jobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 	ctx, cancel := execution.MaybeApplyTimeout(ctx, jobTimeout)
 	defer cancel()
 
-	return &jobExecutorResult{Err: doInner(ctx), MetadataUpdates: e.JobRow.MetadataPendingUpdates()}
+	return &jobExecutorResult{Err: doInner(ctx), MetadataUpdates: metadataUpdates}
 }
 
 func (e *jobExecutor) invokeErrorHandler(ctx context.Context, res *jobExecutorResult) bool {

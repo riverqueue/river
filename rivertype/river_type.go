@@ -5,14 +5,13 @@ package rivertype
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"time"
 
 	"github.com/tidwall/gjson"
 )
 
-const metadataKeyOutput = "output"
+const MetadataKeyOutput = "output"
 
 // ErrNotFound is returned when a query by ID does not match any existing
 // rows. For example, attempting to cancel a job that doesn't exist will
@@ -139,54 +138,14 @@ type JobRow struct {
 	// job. Equivalent to the default set of unique states unless
 	// UniqueOpts.ByState was assigned a custom value.
 	UniqueStates []JobState
-
-	// pendingMetadataUpdates is a map of metadata updates that are pending for
-	// the job to be saved following execution.
-	pendingMetadataUpdates map[string]any
-}
-
-// MetadataPutUpdate adds a metadata update for the job to be saved following
-// execution. It is only useful when called on a job from within its execution
-// context, and it is not saved to the database immediately. It is also not safe
-// for concurrent writes.
-//
-// Values must marshal to JSON without errors, or an error will be returned.
-func (j *JobRow) MetadataPutUpdate(key string, value any) error {
-	if j.pendingMetadataUpdates == nil {
-		j.pendingMetadataUpdates = make(map[string]any)
-	}
-
-	jsonValue, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
-
-	j.pendingMetadataUpdates[key] = json.RawMessage(jsonValue)
-	return nil
-}
-
-// MetadataPendingUpdates returns the metadata updates for the job to be saved
-// following execution. It is not safe for concurrent reads.
-func (j *JobRow) MetadataPendingUpdates() map[string]any {
-	return j.pendingMetadataUpdates
 }
 
 // Output returns the previously recorded output for the job, if any.
 func (j *JobRow) Output() []byte {
-	if !gjson.GetBytes(j.Metadata, metadataKeyOutput).Exists() {
+	if !gjson.GetBytes(j.Metadata, MetadataKeyOutput).Exists() {
 		return nil
 	}
-	return []byte(gjson.GetBytes(j.Metadata, metadataKeyOutput).Raw)
-}
-
-// RecordOutput records the output for the job to be saved following execution.
-// It is only useful when called on a job from within its execution context,
-// and it is not saved to the database immediately. It is also not safe for
-// concurrent writes.
-//
-// Values must marshal to JSON without errors, or an error will be returned.
-func (j *JobRow) RecordOutput(output any) error {
-	return j.MetadataPutUpdate(metadataKeyOutput, output)
+	return []byte(gjson.GetBytes(j.Metadata, MetadataKeyOutput).Raw)
 }
 
 // JobState is the state of a job. Jobs start their lifecycle as either

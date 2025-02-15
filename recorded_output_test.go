@@ -50,7 +50,7 @@ func Test_RecordedOutput(t *testing.T) {
 		validOutput := myOutput{Message: "it worked"}
 		expectedOutput := `{"output":{"message":"it worked"}}`
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
-			return job.RecordOutput(validOutput)
+			return RecordOutput(ctx, validOutput)
 		}))
 
 		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
@@ -77,7 +77,7 @@ func Test_RecordedOutput(t *testing.T) {
 		// Use an invalid output value (a channel, which cannot be marshaled to JSON)
 		var invalidOutput chan int
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
-			return job.RecordOutput(invalidOutput)
+			return RecordOutput(ctx, invalidOutput)
 		}))
 
 		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
@@ -107,7 +107,7 @@ func Test_RecordedOutput(t *testing.T) {
 
 		newOutput := myOutput{Message: "new output"}
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
-			return job.RecordOutput(newOutput)
+			return RecordOutput(ctx, newOutput)
 		}))
 
 		// Insert a job with pre-existing metadata (including an output key)
