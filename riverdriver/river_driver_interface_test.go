@@ -4,8 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/require"
+
+	"github.com/riverqueue/river/rivertype"
 )
 
 func TestJobSetStateCancelled(t *testing.T) {
@@ -77,6 +78,7 @@ func TestJobSetStateCompleted(t *testing.T) {
 		require.Equal(t, rivertype.JobStateCompleted, result.State)
 	})
 }
+
 func TestJobSetStateDiscarded(t *testing.T) {
 	t.Parallel()
 
@@ -113,6 +115,7 @@ func TestJobSetStateDiscarded(t *testing.T) {
 		require.Equal(t, rivertype.JobStateDiscarded, result.State)
 	})
 }
+
 func TestJobSetStateErrorAvailable(t *testing.T) {
 	t.Parallel()
 
@@ -148,6 +151,7 @@ func TestJobSetStateErrorAvailable(t *testing.T) {
 		require.Equal(t, errData, result.ErrData)
 	})
 }
+
 func TestJobSetStateErrorRetryable(t *testing.T) {
 	t.Parallel()
 
@@ -183,8 +187,10 @@ func TestJobSetStateErrorRetryable(t *testing.T) {
 		require.Equal(t, errData, result.ErrData)
 	})
 }
-func TestJobSetStateSnoozed(t *testing.T) {
+
+func TestJobSetStateSnoozed(t *testing.T) { //nolint:dupl
 	t.Parallel()
+
 	t.Run("EmptyMetadata", func(t *testing.T) {
 		t.Parallel()
 
@@ -219,7 +225,8 @@ func TestJobSetStateSnoozed(t *testing.T) {
 		require.Equal(t, rivertype.JobStateScheduled, result.State)
 	})
 }
-func TestJobSetStateSnoozedAvailable(t *testing.T) {
+
+func TestJobSetStateSnoozedAvailable(t *testing.T) { //nolint:dupl
 	t.Parallel()
 
 	t.Run("empty metadata", func(t *testing.T) {

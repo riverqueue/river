@@ -24,7 +24,7 @@ func TestNeverSchedule(t *testing.T) {
 		require.False(t, next.Before(now))
 		// use an arbitrary duration to check that
 		// the next schedule is far in the future
-		require.True(t, next.Year()-now.Year() > 1000)
+		require.Greater(t, next.Year()-now.Year(), 1000)
 	})
 }
 

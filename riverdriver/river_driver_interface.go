@@ -380,6 +380,7 @@ func JobSetStateErrorRetryable(id int64, scheduledAt time.Time, errData []byte, 
 		State:           rivertype.JobStateRetryable,
 	}
 }
+
 func JobSetStateSnoozed(id int64, scheduledAt time.Time, attempt int, metadataUpdates []byte) *JobSetStateIfRunningParams {
 	metadataDoUpdate := len(metadataUpdates) > 0
 	return &JobSetStateIfRunningParams{
