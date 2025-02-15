@@ -160,7 +160,8 @@ func DrainContinuously[T any](drainChan <-chan T) func() []T {
 
 // TestDB acquires a dedicated test database for the duration of the test. If an
 // error occurs, the test fails. The test database will be automatically
-// returned to the pool at the end of the test and the pgxpool will be closed.
+// returned to the pool at the end of the test. If the pool was closed, it will
+// be recreated.
 func TestDB(ctx context.Context, tb testing.TB) *pgxpool.Pool {
 	tb.Helper()
 
@@ -172,9 +173,6 @@ func TestDB(ctx context.Context, tb testing.TB) *pgxpool.Pool {
 		tb.Fatalf("Failed to acquire pool for test DB: %v", err)
 	}
 	tb.Cleanup(testPool.Release)
-
-	// Also close the pool just to ensure nothing is still active on it:
-	tb.Cleanup(testPool.Pool().Close)
 
 	return testPool.Pool()
 }

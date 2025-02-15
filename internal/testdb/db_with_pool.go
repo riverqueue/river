@@ -2,6 +2,7 @@ package testdb
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -29,28 +30,33 @@ func (db *DBWithPool) Release() {
 
 func (db *DBWithPool) release() {
 	db.logger.Debug("DBWithPool: release called", "dbName", db.dbName)
-	// Close and recreate the connection pool for 2 reasons:
-	// 1. ensure tests don't hold on to connections
-	// 2. If a test happens to close the pool as a matter of course (i.e. as part of a defer)
-	//    then we don't reuse a closed pool.
-	db.res.Value().pool.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	newPgxPool, err := pgxpool.NewWithConfig(ctx, db.res.Value().config)
-	if err != nil {
-		db.res.Destroy()
-		return
+	if err := db.res.Value().pool.Ping(ctx); err != nil {
+		// If the pgx pool is already closed, Ping returns puddle.ErrClosedPool.
+		// When this happens, we need to re-create the pool.
+		if errors.Is(err, puddle.ErrClosedPool) {
+			db.logger.Debug("DBWithPool: pool is closed, re-creating", "dbName", db.dbName)
+
+			newPgxPool, err := pgxpool.NewWithConfig(ctx, db.res.Value().config)
+			if err != nil {
+				db.res.Destroy()
+				return
+			}
+			db.res.Value().pool = newPgxPool
+		} else {
+			// Log any other ping error but proceed with cleanup.
+			db.logger.Debug("DBWithPool: pool ping returned error", "dbName", db.dbName, "err", err)
+		}
 	}
-	db.res.Value().pool = newPgxPool
 
 	if db.manager.cleanup != nil {
 		db.logger.Debug("DBWithPool: release calling cleanup", "dbName", db.dbName)
-		if err := db.manager.cleanup(ctx, newPgxPool); err != nil {
+		if err := db.manager.cleanup(ctx, db.res.Value().pool); err != nil {
 			db.logger.Error("testdb.DBWithPool: Error during release cleanup", "err", err)
 			db.res.Destroy()
-			return
 		}
 		db.logger.Debug("DBWithPool: release done with cleanup", "dbName", db.dbName)
 	}
