@@ -28,6 +28,7 @@ func (db *DBWithPool) Release() {
 }
 
 func (db *DBWithPool) release() {
+	db.logger.Debug("DBWithPool: release called", "dbName", db.dbName)
 	// Close and recreate the connection pool for 2 reasons:
 	// 1. ensure tests don't hold on to connections
 	// 2. If a test happens to close the pool as a matter of course (i.e. as part of a defer)
@@ -45,11 +46,13 @@ func (db *DBWithPool) release() {
 	db.res.Value().pool = newPgxPool
 
 	if db.manager.cleanup != nil {
+		db.logger.Debug("DBWithPool: release calling cleanup", "dbName", db.dbName)
 		if err := db.manager.cleanup(ctx, newPgxPool); err != nil {
 			db.logger.Error("testdb.DBWithPool: Error during release cleanup", "err", err)
 			db.res.Destroy()
 			return
 		}
+		db.logger.Debug("DBWithPool: release done with cleanup", "dbName", db.dbName)
 	}
 
 	// Finally this resource is ready to be reused:

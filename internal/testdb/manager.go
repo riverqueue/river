@@ -69,10 +69,12 @@ func NewManager(config *pgxpool.Config, maxPoolSize int32, prepare PrepareFunc, 
 // Acquire returns a DBWithPool which contains a pgxpool.Pool. The DBWithPool
 // must be released after use.
 func (m *Manager) Acquire(ctx context.Context) (*DBWithPool, error) {
+	m.logger.Debug("DBManager: Acquire called")
 	res, err := m.pud.Acquire(ctx)
 	if err != nil {
 		return nil, err
 	}
+	m.logger.Debug("DBManager: Acquire returned pool", "pool", res.Value().pool, "error", err, "dbName", res.Value().dbName)
 
 	return &DBWithPool{res: res, logger: m.logger, manager: m, dbName: res.Value().dbName}, nil
 }
@@ -80,7 +82,9 @@ func (m *Manager) Acquire(ctx context.Context) (*DBWithPool, error) {
 // Close closes the Manager and all of its databases + pools. It blocks until
 // all those underlying resources are unused and closed.
 func (m *Manager) Close() {
+	m.logger.Debug("DBManager: Close called")
 	m.pud.Close()
+	m.logger.Debug("DBManager: Close returned")
 }
 
 func (m *Manager) allocatePool(ctx context.Context) (*poolWithDBName, error) {
@@ -98,17 +102,21 @@ func (m *Manager) allocatePool(ctx context.Context) (*poolWithDBName, error) {
 	}
 
 	if m.cleanup != nil {
+		m.logger.Debug("DBManager: allocatePool calling cleanup", "dbName", dbName)
 		if err := m.cleanup(ctx, pgxp); err != nil {
 			pgxp.Close()
 			return nil, fmt.Errorf("error during cleanup: %w", err)
 		}
+		m.logger.Debug("DBManager: allocatePool cleanup returned", "dbName", dbName)
 	}
 
 	if m.prepare != nil {
+		m.logger.Debug("DBManager: allocatePool calling prepare", "dbName", dbName)
 		if err = m.prepare(ctx, pgxp); err != nil {
 			pgxp.Close()
 			return nil, fmt.Errorf("error during prepare: %w", err)
 		}
+		m.logger.Debug("DBManager: allocatePool prepare returned", "dbName", dbName)
 	}
 
 	return &poolWithDBName{
@@ -120,7 +128,9 @@ func (m *Manager) allocatePool(ctx context.Context) (*poolWithDBName, error) {
 
 func (m *Manager) closePool(pwn *poolWithDBName) {
 	// Close the pool so that there are no active connections on the database:
+	m.logger.Debug("DBManager: closePool called", "pool", pwn.pool, "dbName", pwn.dbName)
 	pwn.pool.Close()
+	m.logger.Debug("DBManager: closePool returned")
 }
 
 func (m *Manager) getNextDBNum() int {
