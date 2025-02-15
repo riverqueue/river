@@ -24,6 +24,7 @@ jobs:
       # This ensures that we're really running the Go version in the CI matrix
       # rather than one that the Go command has upgraded to automatically.
       GOTOOLCHAIN: local
+      RIVER_DEBUG: true
     runs-on: ubuntu-latest
     strategy:
       matrix:

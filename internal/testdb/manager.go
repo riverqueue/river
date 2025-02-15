@@ -50,7 +50,7 @@ func NewManager(config *pgxpool.Config, maxPoolSize int32, prepare PrepareFunc, 
 	manager := &Manager{
 		baseConfig: config,
 		cleanup:    cleanup,
-		logger:     slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		logger:     slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		prepare:    prepare,
 	}
 
