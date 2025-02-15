@@ -77,7 +77,7 @@ type neverSchedule struct{}
 
 func (s *neverSchedule) Next(t time.Time) time.Time {
 	// Return the maximum future time so that the schedule never runs.
-	return time.Unix(1<<63-1, 0)
+	return time.Unix(1<<63-62135596801, 999999999)
 }
 
 // NeverSchedule returns a PeriodicSchedule that never runs.
