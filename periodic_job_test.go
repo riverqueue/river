@@ -18,7 +18,7 @@ func TestNeverSchedule(t *testing.T) {
 		t.Parallel()
 
 		schedule := NeverSchedule()
-		require.Equal(t, time.Unix(1<<63-1, 0), schedule.Next(time.Now()))
+		require.Equal(t, time.Unix(1<<63-62135596801, 999999999), schedule.Next(time.Now()))
 	})
 }
 
