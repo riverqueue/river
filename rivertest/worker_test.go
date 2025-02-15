@@ -5,11 +5,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/execution"
+	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
@@ -118,7 +121,7 @@ func TestWorker_Work(t *testing.T) {
 		})
 		tw := NewWorker(t, driver, config, worker)
 
-		// You can also use the WorkOpts method to pass in custom insert options:
+		// You can also pass in custom insert options:
 		require.NoError(t, tw.Work(context.Background(), t, testArgs{Value: "test3"}, &river.InsertOpts{
 			MaxAttempts: 420,
 			Metadata:    []byte(`{"key": "value"}`),
@@ -163,24 +166,224 @@ func TestWorker_Work(t *testing.T) {
 	})
 }
 
+func TestWorker_WorkTx(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		client   *river.Client[pgx.Tx]
+		driver   *riverpgxv5.Driver
+		tx       pgx.Tx
+		workFunc func(ctx context.Context, job *river.Job[testArgs]) error
+	}
+
+	setup := func(t *testing.T) (*Worker[testArgs, pgx.Tx], *testBundle) {
+		t.Helper()
+
+		var (
+			config = &river.Config{}
+			driver = riverpgxv5.New(nil)
+		)
+
+		client, err := river.NewClient(driver, config)
+		require.NoError(t, err)
+
+		bundle := &testBundle{
+			client:   client,
+			driver:   driver,
+			tx:       riverinternaltest.TestTx(ctx, t),
+			workFunc: func(ctx context.Context, job *river.Job[testArgs]) error { return nil },
+		}
+
+		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
+			return bundle.workFunc(ctx, job)
+		})
+
+		return NewWorker(t, driver, config, worker), bundle
+	}
+
+	t.Run("Success", func(t *testing.T) {
+		t.Parallel()
+
+		testWorker, bundle := setup(t)
+
+		bundle.workFunc = func(ctx context.Context, job *river.Job[testArgs]) error {
+			require.Equal(t, rivertype.JobStateRunning, job.State)
+			return nil
+		}
+
+		require.NoError(t, testWorker.WorkTx(ctx, t, bundle.tx, testArgs{}, nil))
+	})
+}
+
 func TestWorker_WorkJob(t *testing.T) {
 	t.Parallel()
 
-	config := &river.Config{}
-	driver := riverpgxv5.New(nil)
+	ctx := context.Background()
 
-	worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
-		require.Equal(t, []string{"worker123"}, job.JobRow.AttemptedBy)
-		return nil
+	type testBundle struct {
+		client   *river.Client[pgx.Tx]
+		dbPool   *pgxpool.Pool
+		driver   *riverpgxv5.Driver
+		workFunc func(ctx context.Context, job *river.Job[testArgs]) error
+	}
+
+	setup := func(t *testing.T) (*Worker[testArgs, pgx.Tx], *testBundle) {
+		t.Helper()
+
+		var (
+			config = &river.Config{}
+			dbPool = riverinternaltest.TestDB(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+		)
+
+		client, err := river.NewClient(driver, config)
+		require.NoError(t, err)
+
+		bundle := &testBundle{
+			client:   client,
+			driver:   driver,
+			dbPool:   dbPool,
+			workFunc: func(ctx context.Context, job *river.Job[testArgs]) error { return nil },
+		}
+
+		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
+			return bundle.workFunc(ctx, job)
+		})
+
+		return NewWorker(t, driver, config, worker), bundle
+	}
+
+	t.Run("Success", func(t *testing.T) {
+		t.Parallel()
+
+		testWorker, bundle := setup(t)
+
+		bundle.workFunc = func(ctx context.Context, job *river.Job[testArgs]) error {
+			require.Equal(t, []string{"worker123"}, job.JobRow.AttemptedBy)
+			require.Equal(t, rivertype.JobStateRunning, job.State)
+			return nil
+		}
+
+		now := time.Now()
+		require.NoError(t, testWorker.WorkJob(ctx, t, makeJobFromFactoryBuild(t, testArgs{}, &testfactory.JobOpts{
+			AttemptedAt: &now,
+			AttemptedBy: []string{"worker123"},
+			CreatedAt:   &now,
+			EncodedArgs: []byte(`{"value": "test"}`),
+			Errors:      nil,
+		})))
 	})
-	tw := NewWorker(t, driver, config, worker)
 
-	now := time.Now()
-	require.NoError(t, tw.WorkJob(context.Background(), t, makeJobFromFactoryBuild(t, testArgs{Value: "test"}, &testfactory.JobOpts{
-		AttemptedAt: &now,
-		AttemptedBy: []string{"worker123"},
-		CreatedAt:   &now,
-		EncodedArgs: []byte(`{"value": "test"}`),
-		Errors:      nil,
-	})))
+	t.Run("JobCompleteTxWithInsertedJobRow", func(t *testing.T) {
+		t.Parallel()
+
+		testWorker, bundle := setup(t)
+
+		args := testArgs{}
+		insertRes, err := bundle.client.Insert(ctx, args, nil)
+		require.NoError(t, err)
+
+		bundle.workFunc = func(ctx context.Context, job *river.Job[testArgs]) error {
+			tx, err := bundle.dbPool.Begin(ctx)
+			require.NoError(t, err)
+
+			updatedJob, err := bundle.driver.GetExecutor().JobGetByID(ctx, insertRes.Job.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateRunning, updatedJob.State)
+
+			_, err = river.JobCompleteTx[*riverpgxv5.Driver](ctx, tx, job)
+			require.NoError(t, err)
+
+			err = tx.Commit(ctx)
+			require.NoError(t, err)
+
+			return nil
+		}
+
+		require.NoError(t, testWorker.WorkJob(ctx, t, &river.Job[testArgs]{Args: args, JobRow: insertRes.Job}))
+
+		updatedJob, err := bundle.driver.GetExecutor().JobGetByID(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateCompleted, updatedJob.State)
+	})
+}
+
+func TestWorker_WorkJobTx(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		client   *river.Client[pgx.Tx]
+		driver   *riverpgxv5.Driver
+		tx       pgx.Tx
+		workFunc func(ctx context.Context, job *river.Job[testArgs]) error
+	}
+
+	setup := func(t *testing.T) (*Worker[testArgs, pgx.Tx], *testBundle) {
+		t.Helper()
+
+		var (
+			config = &river.Config{}
+			driver = riverpgxv5.New(nil)
+		)
+
+		client, err := river.NewClient(driver, config)
+		require.NoError(t, err)
+
+		bundle := &testBundle{
+			client:   client,
+			driver:   driver,
+			tx:       riverinternaltest.TestTx(ctx, t),
+			workFunc: func(ctx context.Context, job *river.Job[testArgs]) error { return nil },
+		}
+
+		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
+			return bundle.workFunc(ctx, job)
+		})
+
+		return NewWorker(t, driver, config, worker), bundle
+	}
+
+	t.Run("Success", func(t *testing.T) {
+		t.Parallel()
+
+		testWorker, bundle := setup(t)
+
+		bundle.workFunc = func(ctx context.Context, job *river.Job[testArgs]) error {
+			require.Equal(t, rivertype.JobStateRunning, job.State)
+			return nil
+		}
+
+		require.NoError(t, testWorker.WorkJobTx(ctx, t, bundle.tx, makeJobFromFactoryBuild(t, testArgs{}, &testfactory.JobOpts{})))
+	})
+
+	t.Run("JobCompleteTxWithInsertedJobRow", func(t *testing.T) {
+		t.Parallel()
+
+		testWorker, bundle := setup(t)
+
+		args := testArgs{}
+		insertRes, err := bundle.client.InsertTx(ctx, bundle.tx, args, nil)
+		require.NoError(t, err)
+
+		bundle.workFunc = func(ctx context.Context, job *river.Job[testArgs]) error {
+			updatedJob, err := bundle.driver.UnwrapExecutor(bundle.tx).JobGetByID(ctx, insertRes.Job.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateRunning, updatedJob.State)
+
+			_, err = river.JobCompleteTx[*riverpgxv5.Driver](ctx, bundle.tx, job)
+			require.NoError(t, err)
+
+			return nil
+		}
+
+		require.NoError(t, testWorker.WorkJobTx(ctx, t, bundle.tx, &river.Job[testArgs]{Args: args, JobRow: insertRes.Job}))
+
+		updatedJob, err := bundle.driver.UnwrapExecutor(bundle.tx).JobGetByID(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateCompleted, updatedJob.State)
+	})
 }
