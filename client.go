@@ -540,15 +540,16 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	client.baseService.Name = "Client" // Have to correct the name because base service isn't embedded like it usually is
 	client.insertNotifyLimiter = notifylimiter.NewLimiter(archetype, config.FetchCooldown)
 
-	plugin, _ := driver.(driverPlugin[TTx])
-	if plugin != nil {
-		plugin.PluginInit(archetype, client)
-		client.pilot = plugin.PluginPilot()
+	pluginDriver, _ := driver.(driverPlugin[TTx])
+	if pluginDriver != nil {
+		pluginDriver.PluginInit(archetype)
+		client.pilot = pluginDriver.PluginPilot()
 	}
 	if client.pilot == nil {
 		client.pilot = &riverpilot.StandardPilot{}
 	}
 	client.pilot.PilotInit(archetype)
+	pluginPilot, _ := client.pilot.(pilotPlugin)
 
 	// There are a number of internal components that are only needed/desired if
 	// we're actually going to be working jobs (as opposed to just enqueueing
@@ -589,8 +590,8 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		client.services = append(client.services,
 			startstop.StartStopFunc(client.handleLeadershipChangeLoop))
 
-		if plugin != nil {
-			client.services = append(client.services, plugin.PluginServices()...)
+		if pluginPilot != nil {
+			client.services = append(client.services, pluginPilot.PluginServices()...)
 		}
 
 		//
@@ -665,8 +666,8 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			client.testSignals.reindexer = &reindexer.TestSignals
 		}
 
-		if plugin != nil {
-			maintenanceServices = append(maintenanceServices, plugin.PluginMaintenanceServices()...)
+		if pluginPilot != nil {
+			maintenanceServices = append(maintenanceServices, pluginPilot.PluginMaintenanceServices()...)
 		}
 
 		// Not added to the main services list because the queue maintainer is
