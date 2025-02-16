@@ -9,13 +9,11 @@ import (
 	"time"
 
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/execution"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
-	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivershared/util/valutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -135,10 +133,20 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 	// insert a real job row to use this function (it's only necessary if you
 	// want to use `JobCompleteTx`).
 	if exec != nil {
+		timeGen := w.config.Test.Time
+		if timeGen == nil {
+			timeGen = &baseservice.UnStubbableTimeGenerator{}
+		}
 		updatedJobRow, err := exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
-			ID:            job.ID,
-			StateDoUpdate: true,
-			State:         rivertype.JobStateRunning,
+			ID:                  job.ID,
+			Attempt:             job.JobRow.Attempt + 1,
+			AttemptDoUpdate:     true,
+			AttemptedAt:         ptrutil.Ptr(timeGen.NowUTC()),
+			AttemptedAtDoUpdate: true,
+			AttemptedBy:         append(job.JobRow.AttemptedBy, "worker1"),
+			AttemptedByDoUpdate: true,
+			StateDoUpdate:       true,
+			State:               rivertype.JobStateRunning,
 		})
 		if err != nil && !errors.Is(err, rivertype.ErrNotFound) {
 			return err
@@ -174,78 +182,6 @@ var idSeq int64 = 0 //nolint:gochecknoglobals
 
 func nextID() int64 {
 	return atomic.AddInt64(&idSeq, 1)
-}
-
-func makeJobFromArgs[T river.JobArgs](tb testing.TB, config *river.Config, args T, opts *river.InsertOpts) *river.Job[T] {
-	tb.Helper()
-
-	encodedArgs, err := json.Marshal(args)
-	if err != nil {
-		tb.Fatalf("failed to marshal args: %s", err)
-	}
-
-	// Round trip the args to validate JSON marshalling/unmarshalling on the type.
-	var decodedArgs T
-	if err = json.Unmarshal(encodedArgs, &decodedArgs); err != nil {
-		tb.Fatalf("failed to unmarshal args: %s", err)
-	}
-
-	if opts == nil {
-		opts = &river.InsertOpts{}
-	}
-
-	// Extract any job insert opts from args type if present
-	var jobInsertOpts river.InsertOpts
-	if argsWithOpts, ok := any(args).(river.JobArgsWithInsertOpts); ok {
-		jobInsertOpts = argsWithOpts.InsertOpts()
-	}
-
-	now := valutil.FirstNonZero(opts.ScheduledAt, jobInsertOpts.ScheduledAt, time.Now())
-
-	internalUniqueOpts := (*dbunique.UniqueOpts)(&opts.UniqueOpts)
-	insertParams := &rivertype.JobInsertParams{
-		Args:        args,
-		CreatedAt:   &now,
-		EncodedArgs: encodedArgs,
-		Kind:        args.Kind(),
-		MaxAttempts: valutil.FirstNonZero(opts.MaxAttempts, jobInsertOpts.MaxAttempts, config.MaxAttempts, river.MaxAttemptsDefault),
-		Metadata:    sliceutil.FirstNonEmpty(opts.Metadata, jobInsertOpts.Metadata, []byte(`{}`)),
-		Priority:    valutil.FirstNonZero(opts.Priority, jobInsertOpts.Priority, river.PriorityDefault),
-		Queue:       valutil.FirstNonZero(opts.Queue, jobInsertOpts.Queue, river.QueueDefault),
-		State:       rivertype.JobStateAvailable,
-		Tags:        sliceutil.FirstNonEmpty(opts.Tags, jobInsertOpts.Tags, []string{}),
-	}
-	var uniqueKey []byte
-	timeGen := config.Test.Time
-	if timeGen == nil {
-		timeGen = &baseservice.UnStubbableTimeGenerator{}
-	}
-	if !internalUniqueOpts.IsEmpty() {
-		uniqueKey, err = dbunique.UniqueKey(valutil.ValOrDefault(config.Test.Time, timeGen), internalUniqueOpts, insertParams)
-		if err != nil {
-			tb.Fatalf("failed to create unique key: %s", err)
-		}
-	}
-
-	return makeJobFromFactoryBuild(tb, args, &testfactory.JobOpts{
-		Attempt:      ptrutil.Ptr(1),
-		AttemptedAt:  &now,
-		AttemptedBy:  []string{"worker1"},
-		CreatedAt:    &now,
-		EncodedArgs:  encodedArgs,
-		Errors:       nil,
-		FinalizedAt:  nil,
-		Kind:         ptrutil.Ptr(args.Kind()),
-		MaxAttempts:  ptrutil.Ptr(valutil.FirstNonZero(opts.MaxAttempts, jobInsertOpts.MaxAttempts, config.MaxAttempts, river.MaxAttemptsDefault)),
-		Metadata:     sliceutil.FirstNonEmpty(opts.Metadata, jobInsertOpts.Metadata, []byte(`{}`)),
-		Priority:     ptrutil.Ptr(valutil.FirstNonZero(opts.Priority, jobInsertOpts.Priority, river.PriorityDefault)),
-		Queue:        ptrutil.Ptr(valutil.FirstNonZero(opts.Queue, jobInsertOpts.Queue, river.QueueDefault)),
-		ScheduledAt:  &now,
-		State:        ptrutil.Ptr(rivertype.JobStateRunning),
-		Tags:         sliceutil.FirstNonEmpty(opts.Tags, jobInsertOpts.Tags, []string{}),
-		UniqueKey:    uniqueKey,
-		UniqueStates: internalUniqueOpts.StateBitmask(),
-	})
 }
 
 func makeJobFromFactoryBuild[T river.JobArgs](tb testing.TB, args T, jobOpts *testfactory.JobOpts) *river.Job[T] {
