@@ -58,6 +58,8 @@ func NewWorker[T river.JobArgs, TTx any](tb testing.TB, driver riverdriver.Drive
 	tb.Helper()
 
 	config = config.WithDefaults()
+	config.Test.DisableUniqueEnforcement = true
+
 	client, err := river.NewClient(driver, config)
 	if err != nil {
 		tb.Fatalf("failed to create client: %s", err)
@@ -70,34 +72,48 @@ func NewWorker[T river.JobArgs, TTx any](tb testing.TB, driver riverdriver.Drive
 	}
 }
 
+func (w *Worker[T, TTx]) insertJob(ctx context.Context, tb testing.TB, tx TTx, args T, opts *river.InsertOpts) *river.Job[T] {
+	tb.Helper()
+
+	result, err := w.client.InsertTx(ctx, tx, args, opts)
+	if err != nil {
+		tb.Fatalf("failed to insert job: %s", err)
+	}
+	var decodedArgs T
+	if err := json.Unmarshal(result.Job.EncodedArgs, &decodedArgs); err != nil {
+		tb.Fatalf("failed to unmarshal args: %s", err)
+	}
+
+	return &river.Job[T]{
+		Args:   decodedArgs,
+		JobRow: result.Job,
+	}
+}
+
 // Work allocates a synthetic job with the provided arguments and optional
 // insert options, then works it.
-func (w *Worker[T, TTx]) Work(ctx context.Context, tb testing.TB, args T, opts *river.InsertOpts) error {
+func (w *Worker[T, TTx]) Work(ctx context.Context, tb testing.TB, tx TTx, args T, opts *river.InsertOpts) error {
 	tb.Helper()
-	job := makeJobFromArgs(tb, w.config, args, opts)
-	return w.WorkJob(ctx, tb, job)
+
+	job := w.insertJob(ctx, tb, tx, args, opts)
+	return w.WorkJob(ctx, tb, tx, job)
 }
 
 // WorkTx allocates a synthetic job with the provided arguments and optional
 // insert options, then works it in the given transaction.
 func (w *Worker[T, TTx]) WorkTx(ctx context.Context, tb testing.TB, tx TTx, args T, opts *river.InsertOpts) error {
 	tb.Helper()
-	job := makeJobFromArgs(tb, w.config, args, opts)
+
+	job := w.insertJob(ctx, tb, tx, args, opts)
 	return w.WorkJobTx(ctx, tb, tx, job)
 }
 
 // WorkJob works the provided job. The job must be constructed to be a realistic
 // job using external logic prior to calling this method. Unlike the other
 // variants, this method offers total control over the job's attributes.
-func (w *Worker[T, TTx]) WorkJob(ctx context.Context, tb testing.TB, job *river.Job[T]) error {
+func (w *Worker[T, TTx]) WorkJob(ctx context.Context, tb testing.TB, tx TTx, job *river.Job[T]) error {
 	tb.Helper()
-
-	var exec riverdriver.Executor
-	if w.client.Driver().HasPool() {
-		exec = w.client.Driver().GetExecutor()
-	}
-
-	return w.workJobExec(ctx, tb, exec, job)
+	return w.workJob(ctx, tb, tx, job)
 }
 
 // WorkJobTx works the provided job in the given transaction. The job must be
@@ -106,11 +122,13 @@ func (w *Worker[T, TTx]) WorkJob(ctx context.Context, tb testing.TB, job *river.
 // job's attributes.
 func (w *Worker[T, TTx]) WorkJobTx(ctx context.Context, tb testing.TB, tx TTx, job *river.Job[T]) error {
 	tb.Helper()
-	return w.workJobExec(ctx, tb, w.client.Driver().UnwrapExecutor(tx), job)
+	return w.workJob(ctx, tb, tx, job)
 }
 
-func (w *Worker[T, TTx]) workJobExec(ctx context.Context, tb testing.TB, exec riverdriver.Executor, job *river.Job[T]) error {
+func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job *river.Job[T]) error {
 	tb.Helper()
+
+	exec := w.client.Driver().UnwrapExecutor(tx)
 
 	// Try to transition an existing job row to running, but also tolerate the
 	// row not existing in the database. Most of the time you don't need to
