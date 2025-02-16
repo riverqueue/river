@@ -1164,10 +1164,11 @@ UPDATE river_job
 SET
     attempt = CASE WHEN $1::boolean THEN $2 ELSE attempt END,
     attempted_at = CASE WHEN $3::boolean THEN $4 ELSE attempted_at END,
-    errors = CASE WHEN $5::boolean THEN $6::jsonb[] ELSE errors END,
-    finalized_at = CASE WHEN $7::boolean THEN $8 ELSE finalized_at END,
-    state = CASE WHEN $9::boolean THEN $10 ELSE state END
-WHERE id = $11
+    attempted_by = CASE WHEN $5::boolean THEN $6 ELSE attempted_by END,
+    errors = CASE WHEN $7::boolean THEN $8::jsonb[] ELSE errors END,
+    finalized_at = CASE WHEN $9::boolean THEN $10 ELSE finalized_at END,
+    state = CASE WHEN $11::boolean THEN $12 ELSE state END
+WHERE id = $13
 RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 `
 
@@ -1176,6 +1177,8 @@ type JobUpdateParams struct {
 	Attempt             int16
 	AttemptedAtDoUpdate bool
 	AttemptedAt         *time.Time
+	AttemptedByDoUpdate bool
+	AttemptedBy         []string
 	ErrorsDoUpdate      bool
 	Errors              [][]byte
 	FinalizedAtDoUpdate bool
@@ -1193,6 +1196,8 @@ func (q *Queries) JobUpdate(ctx context.Context, db DBTX, arg *JobUpdateParams) 
 		arg.Attempt,
 		arg.AttemptedAtDoUpdate,
 		arg.AttemptedAt,
+		arg.AttemptedByDoUpdate,
+		arg.AttemptedBy,
 		arg.ErrorsDoUpdate,
 		arg.Errors,
 		arg.FinalizedAtDoUpdate,

@@ -2020,6 +2020,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			Attempt:             7,
 			AttemptedAtDoUpdate: true,
 			AttemptedAt:         &now,
+			AttemptedByDoUpdate: true,
+			AttemptedBy:         []string{"worker1"},
 			ErrorsDoUpdate:      true,
 			Errors:              [][]byte{[]byte(`{"error":"message"}`)},
 			FinalizedAtDoUpdate: true,
@@ -2030,6 +2032,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		require.NoError(t, err)
 		require.Equal(t, 7, updatedJob.Attempt)
 		requireEqualTime(t, now, *updatedJob.AttemptedAt)
+		require.Equal(t, []string{"worker1"}, updatedJob.AttemptedBy)
 		require.Equal(t, "message", updatedJob.Errors[0].Error)
 		requireEqualTime(t, now, *updatedJob.FinalizedAt)
 		require.Equal(t, rivertype.JobStateDiscarded, updatedJob.State)

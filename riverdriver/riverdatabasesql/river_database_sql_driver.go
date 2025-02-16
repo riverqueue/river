@@ -566,10 +566,12 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateParams) (*rivertype.JobRow, error) {
 	job, err := dbsqlc.New().JobUpdate(ctx, e.dbtx, &dbsqlc.JobUpdateParams{
 		ID:                  params.ID,
-		AttemptedAtDoUpdate: params.AttemptedAtDoUpdate,
-		AttemptedAt:         params.AttemptedAt,
-		AttemptDoUpdate:     params.AttemptDoUpdate,
 		Attempt:             int16(min(params.Attempt, math.MaxInt16)), //nolint:gosec
+		AttemptDoUpdate:     params.AttemptDoUpdate,
+		AttemptedAt:         params.AttemptedAt,
+		AttemptedAtDoUpdate: params.AttemptedAtDoUpdate,
+		AttemptedBy:         params.AttemptedBy,
+		AttemptedByDoUpdate: params.AttemptedByDoUpdate,
 		ErrorsDoUpdate:      params.ErrorsDoUpdate,
 		Errors:              sliceutil.Map(params.Errors, func(e []byte) string { return string(e) }),
 		FinalizedAtDoUpdate: params.FinalizedAtDoUpdate,
