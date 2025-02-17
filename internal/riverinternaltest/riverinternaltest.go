@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"runtime/pprof"
 	"sync"
 	"testing"
 	"time"
@@ -169,12 +170,17 @@ func TestDB(ctx context.Context, tb testing.TB) *pgxpool.Pool {
 
 	testPool, err := dbManager.Acquire(ctx)
 	if err != nil {
+		// Dump all goroutine stack traces (like a SIGQUIT would do).
+		if err := pprof.Lookup("goroutine").WriteTo(os.Stderr, 2); err != nil {
+			tb.Logf("failed to write goroutine stack trace: %v", err)
+		}
+
 		tb.Fatalf("Failed to acquire pool for test DB: %v", err)
 	}
 	tb.Cleanup(testPool.Release)
 
 	// Also close the pool just to ensure nothing is still active on it:
-	tb.Cleanup(testPool.Pool().Close)
+	// tb.Cleanup(testPool.Pool().Close)
 
 	return testPool.Pool()
 }
