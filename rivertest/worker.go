@@ -4,40 +4,46 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/internal/execution"
+	"github.com/riverqueue/river/internal/jobcompleter"
+	"github.com/riverqueue/river/internal/jobexecutor"
+	"github.com/riverqueue/river/internal/maintenance"
+	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
-	"github.com/riverqueue/river/rivershared/testfactory"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
-	"github.com/riverqueue/river/rivershared/util/valutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
 // Worker makes it easier to test river workers. Once built, the worker can be
-// used to work any number of synthetic jobs without touching the database:
+// used to insert and work any number jobs:
 //
 //	worker := rivertest.NewWorker(t, driver, config, worker)
-//	if err := worker.Work(ctx, t, args, nil); err != nil {
+//	result, err := worker.Work(ctx, t, tx, args, nil)
+//	if err != nil {
+//		t.Fatalf("failed to work job: %s", err)
+//	}
+//	if result.Kind != river.EventKindJobCompleted {
+//		t.Fatalf("expected job to be completed, got %s", result.Kind)
+//	}
+//
+// An existing job (inserted using external logic) can also be worked:
+//
+//	job := worker.insertJob(ctx, t, tx, args, nil)
+//	result, err := worker.WorkJob(ctx, t, tx, job)
+//	if err != nil {
 //		t.Fatalf("failed to work job: %s", err)
 //	}
 //
-//	if err := worker.Work(ctx, t, args, &river.InsertOpts{Queue: "custom_queue"}); err != nil {
-//		t.Fatalf("failed to work job: %s", err)
-//	}
-//
-// In all cases the underlying [river.Worker] will be called with the synthetic
-// job. The execution environment has a realistic River context with access to
-// all River features, including [river.ClientFromContext] and worker
-// middleware.
-//
-// When relying on features that require a database record (such as JobCompleteTx),
-// the job must be inserted into the database first and then executed with
-// WorkJob.
+// In all cases the underlying [river.Worker] will be called with the job
+// transitioned into a running state. The execution environment has a realistic
+// River context with access to all River features, including
+// [river.ClientFromContext] and worker middleware.
 type Worker[T river.JobArgs, TTx any] struct {
 	client *river.Client[TTx]
 	config *river.Config
@@ -48,10 +54,13 @@ type Worker[T river.JobArgs, TTx any] struct {
 // The worker uses the provided driver and River config to populate default
 // values on test jobs and to configure the execution environment.
 //
-// The database is not required to use this helper, and a pool-less driver is
-// recommended for most usage. This enables individual test cases to run in
-// parallel and with full isolation, even using a single shared `Worker`
-// instance across many test cases.
+// A pool-less driver is recommended for most usage, as individual job inserts
+// and executions will happen within a provided transaction. This enables many
+// parallel test cases to run with full isolation, each in their own
+// transaction.
+//
+// The worker is configured to disable unique enforcement by default, as this
+// would otherwise prevent conflicting jobs from being tested in parallel.
 func NewWorker[T river.JobArgs, TTx any](tb testing.TB, driver riverdriver.Driver[TTx], config *river.Config, worker river.Worker[T]) *Worker[T, TTx] {
 	tb.Helper()
 
@@ -70,159 +79,215 @@ func NewWorker[T river.JobArgs, TTx any](tb testing.TB, driver riverdriver.Drive
 	}
 }
 
-func (w *Worker[T, TTx]) insertJob(ctx context.Context, tb testing.TB, tx TTx, args T, opts *river.InsertOpts) *river.Job[T] {
+func (w *Worker[T, TTx]) insertJob(ctx context.Context, tb testing.TB, tx TTx, args T, opts *river.InsertOpts) *rivertype.JobRow {
 	tb.Helper()
 
 	result, err := w.client.InsertTx(ctx, tx, args, opts)
 	if err != nil {
 		tb.Fatalf("failed to insert job: %s", err)
 	}
-	var decodedArgs T
-	if err := json.Unmarshal(result.Job.EncodedArgs, &decodedArgs); err != nil {
-		tb.Fatalf("failed to unmarshal args: %s", err)
-	}
-
-	return &river.Job[T]{
-		Args:   decodedArgs,
-		JobRow: result.Job,
-	}
+	return result.Job
 }
 
-// Work allocates a synthetic job with the provided arguments and optional
-// insert options, then works it.
-func (w *Worker[T, TTx]) Work(ctx context.Context, tb testing.TB, tx TTx, args T, opts *river.InsertOpts) error {
+// Work inserts a job with the provided arguments and optional insert options,
+// then works it. The transaction is used for all work-related database
+// operations so that the caller can easily roll back at the end of the test to
+// maintain a clean database state.
+//
+// The returned WorkResult contains the updated job row from the database
+// _after_ it has been worked, as well as the kind of event that occurred.
+//
+// The returned error only reflects _real_ errors and does not include
+// explicitly returned snooze or cancel errors from the worker.
+func (w *Worker[T, TTx]) Work(ctx context.Context, tb testing.TB, tx TTx, args T, opts *river.InsertOpts) (WorkResult, error) {
 	tb.Helper()
 
 	job := w.insertJob(ctx, tb, tx, args, opts)
 	return w.WorkJob(ctx, tb, tx, job)
 }
 
-// WorkTx allocates a synthetic job with the provided arguments and optional
-// insert options, then works it in the given transaction.
-func (w *Worker[T, TTx]) WorkTx(ctx context.Context, tb testing.TB, tx TTx, args T, opts *river.InsertOpts) error {
-	tb.Helper()
-
-	job := w.insertJob(ctx, tb, tx, args, opts)
-	return w.WorkJobTx(ctx, tb, tx, job)
-}
-
-// WorkJob works the provided job. The job must be constructed to be a realistic
-// job using external logic prior to calling this method. Unlike the other
-// variants, this method offers total control over the job's attributes.
-func (w *Worker[T, TTx]) WorkJob(ctx context.Context, tb testing.TB, tx TTx, job *river.Job[T]) error {
+// WorkJob works an existing job already in the database. The job must be
+// inserted using external logic prior to calling this method. The transaction
+// is used for all work-related database operations so that the caller can
+// easily roll back at the end of the test to maintain a clean database state.
+//
+// The returned WorkResult contains the updated job row from the database
+// _after_ it has been worked, as well as the kind of event that occurred.
+//
+// The returned error only reflects _real_ errors and does not include
+// explicitly returned snooze or cancel errors from the worker.
+func (w *Worker[T, TTx]) WorkJob(ctx context.Context, tb testing.TB, tx TTx, job *rivertype.JobRow) (WorkResult, error) {
 	tb.Helper()
 	return w.workJob(ctx, tb, tx, job)
 }
 
-// WorkJobTx works the provided job in the given transaction. The job must be
-// constructed to be a realistic job using external logic prior to calling this
-// method. Unlike the other variants, this method offers total control over the
-// job's attributes.
-func (w *Worker[T, TTx]) WorkJobTx(ctx context.Context, tb testing.TB, tx TTx, job *river.Job[T]) error {
-	tb.Helper()
-	return w.workJob(ctx, tb, tx, job)
-}
-
-func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job *river.Job[T]) error {
+func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job *rivertype.JobRow) (WorkResult, error) {
 	tb.Helper()
 
-	exec := w.client.Driver().UnwrapExecutor(tx)
-
-	// Try to transition an existing job row to running, but also tolerate the
-	// row not existing in the database. Most of the time you don't need to
-	// insert a real job row to use this function (it's only necessary if you
-	// want to use `JobCompleteTx`).
-	if exec != nil {
-		timeGen := w.config.Test.Time
-		if timeGen == nil {
-			timeGen = &baseservice.UnStubbableTimeGenerator{}
-		}
-		updatedJobRow, err := exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
-			ID:                  job.ID,
-			Attempt:             job.JobRow.Attempt + 1,
-			AttemptDoUpdate:     true,
-			AttemptedAt:         ptrutil.Ptr(timeGen.NowUTC()),
-			AttemptedAtDoUpdate: true,
-			AttemptedBy:         append(job.JobRow.AttemptedBy, "worker1"),
-			AttemptedByDoUpdate: true,
-			StateDoUpdate:       true,
-			State:               rivertype.JobStateRunning,
-		})
-		if err != nil && !errors.Is(err, rivertype.ErrNotFound) {
-			return err
-		}
-		if updatedJobRow != nil {
-			job.JobRow = updatedJobRow
-		}
+	timeGen := w.config.Test.Time
+	if timeGen == nil {
+		timeGen = &baseservice.UnStubbableTimeGenerator{}
 	}
 
-	// Regardless of whether the job was actually in the database, transition it
-	// to running.
-	job.JobRow.State = rivertype.JobStateRunning
+	exec := w.client.Driver().UnwrapExecutor(tx)
+	subscribeCh := make(chan []jobcompleter.CompleterJobUpdated, 1)
+	archetype := riversharedtest.BaseServiceArchetype(tb)
+	if withStub, ok := timeGen.(baseservice.TimeGeneratorWithStub); ok {
+		archetype.Time = withStub
+	} else {
+		archetype.Time = &baseservice.TimeGeneratorWithStubWrapper{TimeGenerator: timeGen}
+	}
+	completer := jobcompleter.NewInlineCompleter(archetype, exec, w.client.Pilot(), subscribeCh)
+
+	updatedJobRow, err := exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+		ID:                  job.ID,
+		Attempt:             job.Attempt + 1,
+		AttemptDoUpdate:     true,
+		AttemptedAt:         ptrutil.Ptr(timeGen.NowUTC()),
+		AttemptedAtDoUpdate: true,
+		AttemptedBy:         append(job.AttemptedBy, w.config.ID),
+		AttemptedByDoUpdate: true,
+		StateDoUpdate:       true,
+		State:               rivertype.JobStateRunning,
+	})
+	if err != nil && !errors.Is(err, rivertype.ErrNotFound) {
+		tb.Fatalf("test worker internal error: failed to update job to running state: %s", err)
+	}
+	job = updatedJobRow
+
+	workUnit := (&workUnitFactoryWrapper[T]{worker: w.worker}).MakeUnit(job)
 
 	// populate river client into context:
 	ctx = WorkContext(ctx, w.client)
+	// TODO: remove ContextKeyInsideTestWorker
 	ctx = context.WithValue(ctx, execution.ContextKeyInsideTestWorker{}, true)
 
-	doInner := execution.MiddlewareChain(
-		w.config.WorkerMiddleware,
-		w.worker.Middleware(job),
-		func(ctx context.Context) error { return w.worker.Work(ctx, job) },
-		job.JobRow,
-	)
+	// jobCancel will always be called by the executor to prevent leaks.
+	jobCtx, jobCancel := context.WithCancelCause(ctx)
 
-	jobTimeout := valutil.FirstNonZero(w.worker.Timeout(job), w.config.JobTimeout)
-	ctx, cancel := execution.MaybeApplyTimeout(ctx, jobTimeout)
-	defer cancel()
+	executionDone := make(chan struct{})
 
-	return doInner(ctx)
+	var resultErr error
+
+	executor := baseservice.Init(archetype, &jobexecutor.JobExecutor{
+		CancelFunc:               jobCancel,
+		ClientJobTimeout:         w.config.JobTimeout,
+		ClientRetryPolicy:        w.config.RetryPolicy,
+		Completer:                completer,
+		DefaultClientRetryPolicy: &river.DefaultClientRetryPolicy{},
+		ErrorHandler: &errorHandlerWrapper{
+			HandleErrorFunc: func(ctx context.Context, job *rivertype.JobRow, err error) *jobexecutor.ErrorHandlerResult {
+				resultErr = err
+				return nil
+			},
+			HandlePanicFunc: func(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *jobexecutor.ErrorHandlerResult {
+				tb.Fatalf("panic: %v", panicVal)
+				return nil
+			},
+		},
+		InformProducerDoneFunc: func(job *rivertype.JobRow) { close(executionDone) },
+		GlobalMiddleware:       w.config.WorkerMiddleware,
+		JobRow:                 job,
+		SchedulerInterval:      maintenance.JobSchedulerIntervalDefault,
+		WorkUnit:               workUnit,
+	})
+
+	executor.Execute(jobCtx)
+	<-executionDone
+
+	select {
+	case completerResult := <-subscribeCh:
+		if len(completerResult) == 0 {
+			tb.Fatal("test worker internal error: empty job completion received")
+		}
+		if len(completerResult) > 1 {
+			tb.Fatalf("test worker internal error: received %d job completions, expected 1", len(completerResult))
+		}
+		return completerResultToWorkResult(tb, completerResult[0]), resultErr
+	default:
+		tb.Fatal("test worker internal error: no job completions received")
+	}
+	panic("unreachable")
 }
 
-var idSeq int64 = 0 //nolint:gochecknoglobals
+// WorkResult is the result of working a job in the test Worker.
+type WorkResult struct {
+	// Job is the updated job row from the database _after_ it has been worked.
+	Job *rivertype.JobRow
 
-func nextID() int64 {
-	return atomic.AddInt64(&idSeq, 1)
+	// Kind is the kind of event that occurred following execution.
+	Kind river.EventKind
 }
 
-func makeJobFromFactoryBuild[T river.JobArgs](tb testing.TB, args T, jobOpts *testfactory.JobOpts) *river.Job[T] {
+func completerResultToWorkResult(tb testing.TB, completerResult jobcompleter.CompleterJobUpdated) WorkResult {
 	tb.Helper()
 
-	jobParams := testfactory.Job_Build(tb, jobOpts)
-
-	var errors []rivertype.AttemptError
-	if jobParams.Errors != nil {
-		errors = make([]rivertype.AttemptError, len(jobParams.Errors))
-		for i, err := range jobParams.Errors {
-			var attemptError rivertype.AttemptError
-			if err := json.Unmarshal(err, &attemptError); err != nil {
-				tb.Fatalf("failed to unmarshal attempt error: %s", err)
-			}
-			errors[i] = attemptError
-		}
+	var kind river.EventKind
+	switch completerResult.Job.State {
+	case rivertype.JobStateCancelled:
+		kind = river.EventKindJobCancelled
+	case rivertype.JobStateCompleted:
+		kind = river.EventKindJobCompleted
+	case rivertype.JobStateScheduled:
+		kind = river.EventKindJobSnoozed
+	case rivertype.JobStateAvailable, rivertype.JobStateDiscarded, rivertype.JobStateRetryable, rivertype.JobStateRunning:
+		kind = river.EventKindJobFailed
+	case rivertype.JobStatePending:
+		panic("test worker internal error: completion subscriber unexpectedly received job in pending state, river bug")
+	default:
+		// linter exhaustive rule prevents this from being reached
+		panic("test worker internal error: unreachable state to distribute, river bug")
 	}
 
-	now := time.Now()
-
-	return &river.Job[T]{
-		Args: args,
-		JobRow: &rivertype.JobRow{
-			ID:          nextID(),
-			Attempt:     jobParams.Attempt,
-			AttemptedAt: jobParams.AttemptedAt,
-			AttemptedBy: jobParams.AttemptedBy,
-			CreatedAt:   ptrutil.ValOrDefault(jobParams.CreatedAt, now),
-			EncodedArgs: jobParams.EncodedArgs,
-			Errors:      errors,
-			FinalizedAt: jobParams.FinalizedAt,
-			Kind:        jobParams.Kind,
-			MaxAttempts: jobParams.MaxAttempts,
-			Metadata:    jobParams.Metadata,
-			Priority:    jobParams.Priority,
-			Queue:       jobParams.Queue,
-			ScheduledAt: ptrutil.ValOrDefault(jobParams.ScheduledAt, now),
-			State:       jobParams.State,
-			Tags:        jobParams.Tags,
-			UniqueKey:   jobParams.UniqueKey,
-		},
+	return WorkResult{
+		Job:  completerResult.Job,
+		Kind: kind,
 	}
+}
+
+type errorHandlerWrapper struct {
+	HandleErrorFunc func(ctx context.Context, job *rivertype.JobRow, err error) *jobexecutor.ErrorHandlerResult
+	HandlePanicFunc func(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *jobexecutor.ErrorHandlerResult
+}
+
+func (h *errorHandlerWrapper) HandleError(ctx context.Context, job *rivertype.JobRow, err error) *jobexecutor.ErrorHandlerResult {
+	return h.HandleErrorFunc(ctx, job, err)
+}
+
+func (h *errorHandlerWrapper) HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *jobexecutor.ErrorHandlerResult {
+	return h.HandlePanicFunc(ctx, job, panicVal, trace)
+}
+
+// TODO: move work_unit_wrapper.go so I don't need to copy paste it here:
+
+// workUnitFactoryWrapper wraps a Worker to implement workUnitFactory.
+type workUnitFactoryWrapper[T river.JobArgs] struct {
+	worker river.Worker[T]
+}
+
+func (w *workUnitFactoryWrapper[T]) MakeUnit(jobRow *rivertype.JobRow) workunit.WorkUnit {
+	return &wrapperWorkUnit[T]{jobRow: jobRow, worker: w.worker}
+}
+
+// wrapperWorkUnit implements workUnit for a job and Worker.
+type wrapperWorkUnit[T river.JobArgs] struct {
+	job    *river.Job[T] // not set until after UnmarshalJob is invoked
+	jobRow *rivertype.JobRow
+	worker river.Worker[T]
+}
+
+func (w *wrapperWorkUnit[T]) NextRetry() time.Time           { return w.worker.NextRetry(w.job) }
+func (w *wrapperWorkUnit[T]) Timeout() time.Duration         { return w.worker.Timeout(w.job) }
+func (w *wrapperWorkUnit[T]) Work(ctx context.Context) error { return w.worker.Work(ctx, w.job) }
+
+func (w *wrapperWorkUnit[T]) Middleware() []rivertype.WorkerMiddleware {
+	return w.worker.Middleware(w.job)
+}
+
+func (w *wrapperWorkUnit[T]) UnmarshalJob() error {
+	w.job = &river.Job[T]{
+		JobRow: w.jobRow,
+	}
+
+	return json.Unmarshal(w.jobRow.EncodedArgs, &w.job.Args)
 }

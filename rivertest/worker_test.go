@@ -13,7 +13,6 @@ import (
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
-	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -38,7 +37,7 @@ func TestWorker_Work(t *testing.T) {
 		t.Helper()
 
 		var (
-			config = &river.Config{}
+			config = &river.Config{ID: "rivertest-worker"}
 			driver = riverpgxv5.New(nil)
 			tx     = riverinternaltest.TestTx(ctx, t)
 		)
@@ -60,7 +59,7 @@ func TestWorker_Work(t *testing.T) {
 			require.Equal(t, 1, job.JobRow.Attempt)
 			require.NotNil(t, job.JobRow.AttemptedAt)
 			require.WithinDuration(t, time.Now(), *job.JobRow.AttemptedAt, 5*time.Second)
-			require.Equal(t, []string{"worker1"}, job.JobRow.AttemptedBy)
+			require.Equal(t, []string{"rivertest-worker"}, job.JobRow.AttemptedBy)
 			require.WithinDuration(t, time.Now(), job.JobRow.CreatedAt, 5*time.Second)
 			require.JSONEq(t, `{"value": "test"}`, string(job.JobRow.EncodedArgs))
 			require.Empty(t, job.JobRow.Errors)
@@ -82,7 +81,9 @@ func TestWorker_Work(t *testing.T) {
 			return nil
 		})
 		tw := NewWorker(t, bundle.driver, bundle.config, worker)
-		require.NoError(t, tw.Work(context.Background(), t, bundle.tx, testArgs{Value: "test"}, nil))
+		res, err := tw.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, nil)
+		require.NoError(t, err)
+		require.Equal(t, river.EventKindJobCompleted, res.Kind)
 	})
 
 	t.Run("Reusable", func(t *testing.T) {
@@ -94,8 +95,12 @@ func TestWorker_Work(t *testing.T) {
 			return nil
 		})
 		tw := NewWorker(t, bundle.driver, bundle.config, worker)
-		require.NoError(t, tw.Work(context.Background(), t, bundle.tx, testArgs{Value: "test"}, nil))
-		require.NoError(t, tw.Work(context.Background(), t, bundle.tx, testArgs{Value: "test2"}, nil))
+		res, err := tw.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, nil)
+		require.NoError(t, err)
+		require.Equal(t, river.EventKindJobCompleted, res.Kind)
+		res, err = tw.Work(ctx, t, bundle.tx, testArgs{Value: "test2"}, nil)
+		require.NoError(t, err)
+		require.Equal(t, river.EventKindJobCompleted, res.Kind)
 	})
 
 	t.Run("SetsCustomInsertOpts", func(t *testing.T) {
@@ -110,7 +115,7 @@ func TestWorker_Work(t *testing.T) {
 			require.Equal(t, 1, job.JobRow.Attempt)
 			require.NotNil(t, job.JobRow.AttemptedAt)
 			require.WithinDuration(t, time.Now().UTC(), *job.JobRow.AttemptedAt, 2*time.Second)
-			require.Equal(t, []string{"worker1"}, job.JobRow.AttemptedBy)
+			require.Equal(t, []string{"rivertest-worker"}, job.JobRow.AttemptedBy)
 			require.WithinDuration(t, time.Now().UTC(), job.JobRow.CreatedAt, 2*time.Second)
 			require.JSONEq(t, `{"value": "test3"}`, string(job.JobRow.EncodedArgs))
 			require.Empty(t, job.JobRow.Errors)
@@ -130,7 +135,7 @@ func TestWorker_Work(t *testing.T) {
 		tw := NewWorker(t, bundle.driver, bundle.config, worker)
 
 		// You can also pass in custom insert options:
-		require.NoError(t, tw.Work(context.Background(), t, bundle.tx, testArgs{Value: "test3"}, &river.InsertOpts{
+		res, err := tw.Work(ctx, t, bundle.tx, testArgs{Value: "test3"}, &river.InsertOpts{
 			MaxAttempts: 420,
 			Metadata:    []byte(`{"key": "value"}`),
 			Pending:     true, // ignored but added to ensure non-default behavior
@@ -138,7 +143,9 @@ func TestWorker_Work(t *testing.T) {
 			Queue:       "custom_queue",
 			ScheduledAt: hourFromNow,
 			Tags:        []string{"tag1", "tag2"},
-		}))
+		})
+		require.NoError(t, err)
+		require.Equal(t, river.EventKindJobCompleted, res.Kind)
 	})
 
 	t.Run("UniqueOptsAreIgnored", func(t *testing.T) {
@@ -159,60 +166,65 @@ func TestWorker_Work(t *testing.T) {
 			return nil
 		})
 		tw := NewWorker(t, bundle.driver, bundle.config, worker)
-		require.NoError(t, tw.Work(context.Background(), t, bundle.tx, testArgs{Value: "test"}, &river.InsertOpts{
+
+		res, err := tw.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, &river.InsertOpts{
 			UniqueOpts: river.UniqueOpts{ByPeriod: 1 * time.Hour},
-		}))
-	})
-}
-
-func TestWorker_WorkTx(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-
-	type testBundle struct {
-		client   *river.Client[pgx.Tx]
-		driver   *riverpgxv5.Driver
-		tx       pgx.Tx
-		workFunc func(ctx context.Context, job *river.Job[testArgs]) error
-	}
-
-	setup := func(t *testing.T) (*Worker[testArgs, pgx.Tx], *testBundle) {
-		t.Helper()
-
-		var (
-			config = &river.Config{}
-			driver = riverpgxv5.New(nil)
-		)
-
-		client, err := river.NewClient(driver, config)
-		require.NoError(t, err)
-
-		bundle := &testBundle{
-			client:   client,
-			driver:   driver,
-			tx:       riverinternaltest.TestTx(ctx, t),
-			workFunc: func(ctx context.Context, job *river.Job[testArgs]) error { return nil },
-		}
-
-		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
-			return bundle.workFunc(ctx, job)
 		})
+		require.NoError(t, err)
+		require.Equal(t, river.EventKindJobCompleted, res.Kind)
+	})
 
-		return NewWorker(t, driver, config, worker), bundle
-	}
-
-	t.Run("Success", func(t *testing.T) {
+	t.Run("ReturnsASnoozeEventKindWhenSnoozed", func(t *testing.T) {
 		t.Parallel()
 
-		testWorker, bundle := setup(t)
+		bundle := setup(t)
 
-		bundle.workFunc = func(ctx context.Context, job *river.Job[testArgs]) error {
-			require.Equal(t, rivertype.JobStateRunning, job.State)
+		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
+			return river.JobSnooze(time.Hour)
+		})
+		tw := NewWorker(t, bundle.driver, bundle.config, worker)
+
+		res, err := tw.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, nil)
+		require.NoError(t, err)
+		require.Equal(t, river.EventKindJobSnoozed, res.Kind)
+	})
+
+	t.Run("ReturnsACancelEventKindWhenCancelled", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
+			return river.JobCancel(nil)
+		})
+		tw := NewWorker(t, bundle.driver, bundle.config, worker)
+
+		res, err := tw.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, nil)
+		require.NoError(t, err)
+		require.Equal(t, river.EventKindJobCancelled, res.Kind)
+	})
+
+	t.Run("UsesACustomClockWhenProvided", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		hourFromNow := time.Now().UTC().Add(1 * time.Hour)
+		timeStub := &TimeStub{}
+		timeStub.StubNowUTC(hourFromNow)
+		bundle.config.Test.Time = timeStub
+
+		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
+			require.WithinDuration(t, hourFromNow, *job.JobRow.AttemptedAt, time.Millisecond)
+			require.WithinDuration(t, hourFromNow, job.JobRow.CreatedAt, time.Millisecond)
+			require.WithinDuration(t, hourFromNow, job.JobRow.ScheduledAt, time.Millisecond)
 			return nil
-		}
+		})
+		tw := NewWorker(t, bundle.driver, bundle.config, worker)
 
-		require.NoError(t, testWorker.WorkTx(ctx, t, bundle.tx, testArgs{}, nil))
+		res, err := tw.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, nil)
+		require.NoError(t, err)
+		require.Equal(t, river.EventKindJobCompleted, res.Kind)
+		require.WithinDuration(t, hourFromNow, *res.Job.FinalizedAt, time.Millisecond)
 	})
 }
 
@@ -223,6 +235,7 @@ func TestWorker_WorkJob(t *testing.T) {
 
 	type testBundle struct {
 		client   *river.Client[pgx.Tx]
+		config   *river.Config
 		driver   *riverpgxv5.Driver
 		tx       pgx.Tx
 		workFunc func(ctx context.Context, job *river.Job[testArgs]) error
@@ -232,7 +245,7 @@ func TestWorker_WorkJob(t *testing.T) {
 		t.Helper()
 
 		var (
-			config = &river.Config{}
+			config = &river.Config{ID: "rivertest-workjob"}
 			driver = riverpgxv5.New(nil)
 		)
 
@@ -241,6 +254,7 @@ func TestWorker_WorkJob(t *testing.T) {
 
 		bundle := &testBundle{
 			client:   client,
+			config:   config,
 			driver:   driver,
 			tx:       riverinternaltest.TestTx(ctx, t),
 			workFunc: func(ctx context.Context, job *river.Job[testArgs]) error { return nil },
@@ -259,19 +273,18 @@ func TestWorker_WorkJob(t *testing.T) {
 		testWorker, bundle := setup(t)
 
 		bundle.workFunc = func(ctx context.Context, job *river.Job[testArgs]) error {
-			require.Equal(t, []string{"worker123"}, job.JobRow.AttemptedBy)
+			require.WithinDuration(t, time.Now(), *job.JobRow.AttemptedAt, 5*time.Second)
+			require.Equal(t, []string{"rivertest-workjob"}, job.JobRow.AttemptedBy)
 			require.Equal(t, rivertype.JobStateRunning, job.State)
 			return nil
 		}
 
-		now := time.Now()
-		require.NoError(t, testWorker.WorkJob(ctx, t, bundle.tx, makeJobFromFactoryBuild(t, testArgs{}, &testfactory.JobOpts{
-			AttemptedAt: &now,
-			AttemptedBy: []string{"worker123"},
-			CreatedAt:   &now,
-			EncodedArgs: []byte(`{"value": "test"}`),
-			Errors:      nil,
-		})))
+		insertRes, err := bundle.client.InsertTx(ctx, bundle.tx, testArgs{}, nil)
+		require.NoError(t, err)
+
+		res, err := testWorker.WorkJob(ctx, t, bundle.tx, insertRes.Job)
+		require.NoError(t, err)
+		require.Equal(t, river.EventKindJobCompleted, res.Kind)
 	})
 
 	t.Run("JobCompleteTxWithInsertedJobRow", func(t *testing.T) {
@@ -294,85 +307,9 @@ func TestWorker_WorkJob(t *testing.T) {
 			return nil
 		}
 
-		require.NoError(t, testWorker.WorkJob(ctx, t, bundle.tx, &river.Job[testArgs]{Args: args, JobRow: insertRes.Job}))
-
-		updatedJob, err := bundle.driver.UnwrapExecutor(bundle.tx).JobGetByID(ctx, insertRes.Job.ID)
+		res, err := testWorker.WorkJob(ctx, t, bundle.tx, insertRes.Job)
 		require.NoError(t, err)
-		require.Equal(t, rivertype.JobStateCompleted, updatedJob.State)
-	})
-}
-
-func TestWorker_WorkJobTx(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-
-	type testBundle struct {
-		client   *river.Client[pgx.Tx]
-		driver   *riverpgxv5.Driver
-		tx       pgx.Tx
-		workFunc func(ctx context.Context, job *river.Job[testArgs]) error
-	}
-
-	setup := func(t *testing.T) (*Worker[testArgs, pgx.Tx], *testBundle) {
-		t.Helper()
-
-		var (
-			config = &river.Config{}
-			driver = riverpgxv5.New(nil)
-		)
-
-		client, err := river.NewClient(driver, config)
-		require.NoError(t, err)
-
-		bundle := &testBundle{
-			client:   client,
-			driver:   driver,
-			tx:       riverinternaltest.TestTx(ctx, t),
-			workFunc: func(ctx context.Context, job *river.Job[testArgs]) error { return nil },
-		}
-
-		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
-			return bundle.workFunc(ctx, job)
-		})
-
-		return NewWorker(t, driver, config, worker), bundle
-	}
-
-	t.Run("Success", func(t *testing.T) {
-		t.Parallel()
-
-		testWorker, bundle := setup(t)
-
-		bundle.workFunc = func(ctx context.Context, job *river.Job[testArgs]) error {
-			require.Equal(t, rivertype.JobStateRunning, job.State)
-			return nil
-		}
-
-		require.NoError(t, testWorker.WorkJobTx(ctx, t, bundle.tx, makeJobFromFactoryBuild(t, testArgs{}, &testfactory.JobOpts{})))
-	})
-
-	t.Run("JobCompleteTxWithInsertedJobRow", func(t *testing.T) {
-		t.Parallel()
-
-		testWorker, bundle := setup(t)
-
-		args := testArgs{}
-		insertRes, err := bundle.client.InsertTx(ctx, bundle.tx, args, nil)
-		require.NoError(t, err)
-
-		bundle.workFunc = func(ctx context.Context, job *river.Job[testArgs]) error {
-			updatedJob, err := bundle.driver.UnwrapExecutor(bundle.tx).JobGetByID(ctx, insertRes.Job.ID)
-			require.NoError(t, err)
-			require.Equal(t, rivertype.JobStateRunning, updatedJob.State)
-
-			_, err = river.JobCompleteTx[*riverpgxv5.Driver](ctx, bundle.tx, job)
-			require.NoError(t, err)
-
-			return nil
-		}
-
-		require.NoError(t, testWorker.WorkJobTx(ctx, t, bundle.tx, &river.Job[testArgs]{Args: args, JobRow: insertRes.Job}))
+		require.Equal(t, river.EventKindJobCompleted, res.Kind)
 
 		updatedJob, err := bundle.driver.UnwrapExecutor(bundle.tx).JobGetByID(ctx, insertRes.Job.ID)
 		require.NoError(t, err)
