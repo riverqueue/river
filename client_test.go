@@ -28,6 +28,7 @@ import (
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/internal/riverinternaltest/retrypolicytest"
 	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
@@ -3980,7 +3981,7 @@ func Test_Client_RetryPolicy(t *testing.T) {
 
 		// The default policy would work too, but this takes some variability
 		// out of it to make comparisons easier.
-		config.RetryPolicy = &retryPolicyNoJitter{}
+		config.RetryPolicy = &retrypolicytest.RetryPolicyNoJitter{}
 
 		client := newTestClient(t, dbPool, config)
 

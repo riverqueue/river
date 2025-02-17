@@ -1,9 +1,8 @@
-package river
+package jobexecutor
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/internal/riverinternaltest/retrypolicytest"
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -19,72 +19,59 @@ import (
 	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
-	"github.com/riverqueue/river/rivershared/util/timeutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
-type customRetryPolicyWorker struct {
-	WorkerDefaults[callbackArgs]
-	f         func() error
-	nextRetry func() time.Time
+// customizableWorkUnit is a wrapper around a workUnit that allows for customization
+// of the workUnit.  Unlike in other packages, this one does not make use of any
+// types from the top level river package (like `river.Job[T]`).
+type customizableWorkUnit struct {
+	middleware []rivertype.WorkerMiddleware
+	nextRetry  func() time.Time
+	timeout    time.Duration
+	work       func() error
 }
 
-func (w *customRetryPolicyWorker) NextRetry(job *Job[callbackArgs]) time.Time {
+func (w *customizableWorkUnit) Middleware() []rivertype.WorkerMiddleware {
+	return w.middleware
+}
+
+func (w *customizableWorkUnit) NextRetry() time.Time {
 	if w.nextRetry != nil {
 		return w.nextRetry()
 	}
 	return time.Time{}
 }
 
-func (w *customRetryPolicyWorker) Work(ctx context.Context, job *Job[callbackArgs]) error {
-	return w.f()
+func (w *customizableWorkUnit) Timeout() time.Duration {
+	return w.timeout
+}
+
+func (w *customizableWorkUnit) UnmarshalJob() error {
+	return nil
+}
+
+func (w *customizableWorkUnit) Work(ctx context.Context) error {
+	return w.work()
+}
+
+type workUnitFactory struct {
+	workUnit *customizableWorkUnit
+}
+
+func (w *workUnitFactory) MakeUnit(jobRow *rivertype.JobRow) workunit.WorkUnit {
+	return w.workUnit
 }
 
 // Makes a workerInfo using the real workerWrapper with a job that uses a
 // callback Work func and allows for customizable maxAttempts and nextRetry.
 func newWorkUnitFactoryWithCustomRetry(f func() error, nextRetry func() time.Time) workunit.WorkUnitFactory {
-	return &workUnitFactoryWrapper[callbackArgs]{worker: &customRetryPolicyWorker{
-		f:         f,
-		nextRetry: nextRetry,
-	}}
-}
-
-// A retry policy demonstrating trivial customization.
-type retryPolicyCustom struct {
-	DefaultClientRetryPolicy
-}
-
-func (p *retryPolicyCustom) NextRetry(job *rivertype.JobRow) time.Time {
-	var backoffDuration time.Duration
-	switch job.Attempt {
-	case 1:
-		backoffDuration = 10 * time.Second
-	case 2:
-		backoffDuration = 20 * time.Second
-	case 3:
-		backoffDuration = 30 * time.Second
-	default:
-		panic(fmt.Sprintf("next retry should not have been called for attempt %d", job.Attempt))
+	return &workUnitFactory{
+		workUnit: &customizableWorkUnit{
+			work:      f,
+			nextRetry: nextRetry,
+		},
 	}
-
-	return job.AttemptedAt.Add(backoffDuration)
-}
-
-// A retry policy that returns invalid timestamps.
-type retryPolicyInvalid struct {
-	DefaultClientRetryPolicy
-}
-
-func (p *retryPolicyInvalid) NextRetry(job *rivertype.JobRow) time.Time { return time.Time{} }
-
-// Identical to default retry policy except that it leaves off the jitter to
-// make checking against it more convenient.
-type retryPolicyNoJitter struct {
-	DefaultClientRetryPolicy
-}
-
-func (p *retryPolicyNoJitter) NextRetry(job *rivertype.JobRow) time.Time {
-	return job.AttemptedAt.Add(timeutil.SecondsAsDuration(p.retrySecondsWithoutJitter(job.Attempt)))
 }
 
 type testErrorHandler struct {
@@ -128,7 +115,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		updateCh     <-chan []jobcompleter.CompleterJobUpdated
 	}
 
-	setup := func(t *testing.T) (*jobExecutor, *testBundle) {
+	setup := func(t *testing.T) (*JobExecutor, *testBundle) {
 		t.Helper()
 
 		var (
@@ -146,7 +133,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		now := time.Now().UTC()
 		results, err := exec.JobInsertFastMany(ctx, []*riverdriver.JobInsertFastParams{{
 			EncodedArgs: []byte("{}"),
-			Kind:        (callbackArgs{}).Kind(),
+			Kind:        "jobexecutor_test",
 			MaxAttempts: rivercommon.MaxAttemptsDefault,
 			Priority:    rivercommon.PriorityDefault,
 			Queue:       rivercommon.QueueDefault,
@@ -182,15 +169,16 @@ func TestJobExecutor_Execute(t *testing.T) {
 		_, cancel := context.WithCancelCause(ctx)
 		t.Cleanup(func() { cancel(nil) })
 
-		executor := baseservice.Init(archetype, &jobExecutor{
-			CancelFunc:             cancel,
-			ClientRetryPolicy:      &retryPolicyNoJitter{},
-			Completer:              bundle.completer,
-			ErrorHandler:           bundle.errorHandler,
-			InformProducerDoneFunc: func(job *rivertype.JobRow) {},
-			JobRow:                 bundle.jobRow,
-			SchedulerInterval:      riverinternaltest.SchedulerShortInterval,
-			WorkUnit:               workUnitFactory.MakeUnit(bundle.jobRow),
+		executor := baseservice.Init(archetype, &JobExecutor{
+			CancelFunc:               cancel,
+			ClientRetryPolicy:        &retrypolicytest.RetryPolicyNoJitter{},
+			Completer:                bundle.completer,
+			DefaultClientRetryPolicy: &retrypolicytest.RetryPolicyNoJitter{},
+			ErrorHandler:             bundle.errorHandler,
+			InformProducerDoneFunc:   func(job *rivertype.JobRow) {},
+			JobRow:                   bundle.jobRow,
+			SchedulerInterval:        riverinternaltest.SchedulerShortInterval,
+			WorkUnit:                 workUnitFactory.MakeUnit(bundle.jobRow),
 		})
 
 		return executor, bundle
@@ -348,7 +336,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		cancelErr := JobCancel(errors.New("throw away this job"))
+		cancelErr := rivertype.JobCancel(errors.New("throw away this job"))
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return cancelErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
@@ -372,7 +360,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor, bundle := setup(t)
 		attemptBefore := bundle.jobRow.Attempt
 
-		cancelErr := JobSnooze(30 * time.Minute)
+		cancelErr := &rivertype.JobSnoozeError{Duration: 30 * time.Minute}
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return cancelErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
@@ -392,7 +380,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor, bundle := setup(t)
 		attemptBefore := bundle.jobRow.Attempt
 
-		cancelErr := JobSnooze(time.Millisecond)
+		cancelErr := &rivertype.JobSnoozeError{Duration: time.Millisecond}
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return cancelErr }, nil).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
@@ -410,7 +398,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		t.Parallel()
 
 		executor, bundle := setup(t)
-		executor.ClientRetryPolicy = &retryPolicyCustom{}
+		executor.ClientRetryPolicy = &retrypolicytest.RetryPolicyCustom{}
 
 		workerErr := errors.New("job error")
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
@@ -448,7 +436,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		t.Parallel()
 
 		executor, bundle := setup(t)
-		executor.ClientRetryPolicy = &retryPolicyInvalid{}
+		executor.ClientRetryPolicy = &retrypolicytest.RetryPolicyInvalid{}
 
 		workerErr := errors.New("job error")
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
@@ -458,7 +446,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
 		require.NoError(t, err)
-		require.WithinDuration(t, (&DefaultClientRetryPolicy{}).NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
+		require.WithinDuration(t, executor.DefaultClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
 		require.Equal(t, rivertype.JobStateRetryable, job.State)
 	})
 
@@ -541,7 +529,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.Equal(t, rivertype.JobStateRetryable, job.State)
 		require.Len(t, job.Errors, 1)
 		// Sufficient enough to ensure that the stack trace is included:
-		require.Contains(t, job.Errors[0].Trace, "river/job_executor.go")
+		require.Contains(t, job.Errors[0].Trace, "river/internal/jobexecutor/job_executor.go")
 	})
 
 	t.Run("PanicAgainAfterRetry", func(t *testing.T) {
@@ -702,7 +690,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.WithinDuration(t, time.Now(), job.Errors[0].At, 2*time.Second)
 		require.Equal(t, 1, job.Errors[0].Attempt)
 		require.Equal(t, "JobCancelError: job cancelled remotely", job.Errors[0].Error)
-		require.Equal(t, ErrJobCancelledRemotely.Error(), job.Errors[0].Error)
+		require.Equal(t, rivertype.ErrJobCancelledRemotely.Error(), job.Errors[0].Error)
 		require.Equal(t, "", job.Errors[0].Trace)
 	})
 
@@ -714,63 +702,5 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.WithinDuration(t, time.Now(), *job.FinalizedAt, 2*time.Second)
 		require.Equal(t, rivertype.JobStateCompleted, job.State)
 		require.Empty(t, job.Errors)
-	})
-}
-
-func TestUnknownJobKindError_As(t *testing.T) {
-	// This test isn't really necessary because we didn't have to write any code
-	// to make it pass, but it does demonstrate that we can successfully use
-	// errors.As with this custom error type.
-	t.Parallel()
-
-	t.Run("ReturnsTrueForAnotherUnregisteredKindError", func(t *testing.T) {
-		t.Parallel()
-
-		err1 := &UnknownJobKindError{Kind: "MyJobArgs"}
-		var err2 *UnknownJobKindError
-		require.ErrorAs(t, err1, &err2)
-		require.Equal(t, err1, err2)
-		require.Equal(t, err1.Kind, err2.Kind)
-	})
-
-	t.Run("ReturnsFalseForADifferentError", func(t *testing.T) {
-		t.Parallel()
-
-		var err *UnknownJobKindError
-		require.False(t, errors.As(errors.New("some other error"), &err))
-	})
-}
-
-func TestUnknownJobKindError_Is(t *testing.T) {
-	t.Parallel()
-
-	t.Run("ReturnsTrueForAnotherUnregisteredKindError", func(t *testing.T) {
-		t.Parallel()
-
-		err1 := &UnknownJobKindError{Kind: "MyJobArgs"}
-		require.ErrorIs(t, err1, &UnknownJobKindError{})
-	})
-
-	t.Run("ReturnsFalseForADifferentError", func(t *testing.T) {
-		t.Parallel()
-
-		err1 := &UnknownJobKindError{Kind: "MyJobArgs"}
-		require.NotErrorIs(t, err1, errors.New("some other error"))
-	})
-}
-
-func TestJobCancel(t *testing.T) {
-	t.Parallel()
-
-	t.Run("ErrorsIsReturnsTrueForAnotherErrorOfSameType", func(t *testing.T) {
-		t.Parallel()
-		err1 := JobCancel(errors.New("some message"))
-		require.ErrorIs(t, err1, JobCancel(errors.New("another message")))
-	})
-
-	t.Run("ErrorsIsReturnsFalseForADifferentErrorType", func(t *testing.T) {
-		t.Parallel()
-		err1 := JobCancel(errors.New("some message"))
-		require.NotErrorIs(t, err1, &UnknownJobKindError{Kind: "MyJobArgs"})
 	})
 }

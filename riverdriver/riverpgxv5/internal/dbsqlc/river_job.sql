@@ -513,6 +513,7 @@ UPDATE river_job
 SET
     attempt = CASE WHEN @attempt_do_update::boolean THEN @attempt ELSE attempt END,
     attempted_at = CASE WHEN @attempted_at_do_update::boolean THEN @attempted_at ELSE attempted_at END,
+    attempted_by = CASE WHEN @attempted_by_do_update::boolean THEN @attempted_by ELSE attempted_by END,
     errors = CASE WHEN @errors_do_update::boolean THEN @errors::jsonb[] ELSE errors END,
     finalized_at = CASE WHEN @finalized_at_do_update::boolean THEN @finalized_at ELSE finalized_at END,
     state = CASE WHEN @state_do_update::boolean THEN @state ELSE state END

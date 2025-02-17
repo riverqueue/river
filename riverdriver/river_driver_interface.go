@@ -368,6 +368,8 @@ type JobUpdateParams struct {
 	Attempt             int
 	AttemptedAtDoUpdate bool
 	AttemptedAt         *time.Time
+	AttemptedByDoUpdate bool
+	AttemptedBy         []string
 	ErrorsDoUpdate      bool
 	Errors              [][]byte
 	FinalizedAtDoUpdate bool
