@@ -877,6 +877,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
 			for i := 0; i < len(insertParams); i++ {
 				insertParams[i] = &riverdriver.JobInsertFastParams{
+					CreatedAt:    ptrutil.Ptr(now.Add(time.Duration(i) * 5 * time.Second)),
 					EncodedArgs:  []byte(`{"encoded": "args"}`),
 					Kind:         "test_kind",
 					MaxAttempts:  rivercommon.MaxAttemptsDefault,
@@ -901,7 +902,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				require.Equal(t, 0, job.Attempt)
 				require.Nil(t, job.AttemptedAt)
 				require.Empty(t, job.AttemptedBy)
-				require.WithinDuration(t, now, job.CreatedAt, 2*time.Second)
+				require.WithinDuration(t, now.Add(time.Duration(i)*5*time.Second), job.CreatedAt, time.Millisecond)
 				require.JSONEq(t, `{"encoded": "args"}`, string(job.EncodedArgs))
 				require.Empty(t, job.Errors)
 				require.Nil(t, job.FinalizedAt)
@@ -974,6 +975,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
 			for i := 0; i < len(insertParams); i++ {
 				insertParams[i] = &riverdriver.JobInsertFastParams{
+					CreatedAt:   ptrutil.Ptr(now.Add(time.Duration(i) * 5 * time.Second)),
 					EncodedArgs: []byte(`{"encoded": "args"}`),
 					Kind:        "test_kind",
 					MaxAttempts: rivercommon.MaxAttemptsDefault,
@@ -994,10 +996,10 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			jobsAfter, err := exec.JobGetByKindMany(ctx, []string{"test_kind"})
 			require.NoError(t, err)
 			require.Len(t, jobsAfter, len(insertParams))
-			for _, job := range jobsAfter {
+			for i, job := range jobsAfter {
 				require.Equal(t, 0, job.Attempt)
 				require.Nil(t, job.AttemptedAt)
-				require.WithinDuration(t, time.Now().UTC(), job.CreatedAt, 2*time.Second)
+				require.WithinDuration(t, now.Add(time.Duration(i)*5*time.Second), job.CreatedAt, time.Millisecond)
 				require.JSONEq(t, `{"encoded": "args"}`, string(job.EncodedArgs))
 				require.Empty(t, job.Errors)
 				require.Nil(t, job.FinalizedAt)
@@ -1009,6 +1011,37 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				requireEqualTime(t, now, job.ScheduledAt)
 				require.Equal(t, rivertype.JobStateAvailable, job.State)
 				require.Equal(t, []string{"tag"}, job.Tags)
+			}
+		})
+
+		t.Run("MissingCreatedAtDefaultsToNow", func(t *testing.T) {
+			exec, _ := setup(ctx, t)
+
+			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
+			for i := 0; i < len(insertParams); i++ {
+				insertParams[i] = &riverdriver.JobInsertFastParams{
+					CreatedAt:   nil, // explicit nil
+					EncodedArgs: []byte(`{"encoded": "args"}`),
+					Kind:        "test_kind",
+					MaxAttempts: rivercommon.MaxAttemptsDefault,
+					Metadata:    []byte(`{"meta": "data"}`),
+					Priority:    rivercommon.PriorityDefault,
+					Queue:       rivercommon.QueueDefault,
+					ScheduledAt: ptrutil.Ptr(time.Now().UTC()),
+					State:       rivertype.JobStateAvailable,
+					Tags:        []string{"tag"},
+				}
+			}
+
+			count, err := exec.JobInsertFastManyNoReturning(ctx, insertParams)
+			require.NoError(t, err)
+			require.Len(t, insertParams, count)
+
+			jobsAfter, err := exec.JobGetByKindMany(ctx, []string{"test_kind"})
+			require.NoError(t, err)
+			require.Len(t, jobsAfter, len(insertParams))
+			for _, job := range jobsAfter {
+				require.WithinDuration(t, time.Now().UTC(), job.CreatedAt, 2*time.Second)
 			}
 		})
 
