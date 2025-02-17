@@ -7,7 +7,11 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/tidwall/gjson"
 )
+
+const MetadataKeyOutput = "output"
 
 // ErrNotFound is returned when a query by ID does not match any existing
 // rows. For example, attempting to cancel a job that doesn't exist will
@@ -134,6 +138,14 @@ type JobRow struct {
 	// job. Equivalent to the default set of unique states unless
 	// UniqueOpts.ByState was assigned a custom value.
 	UniqueStates []JobState
+}
+
+// Output returns the previously recorded output for the job, if any.
+func (j *JobRow) Output() []byte {
+	if !gjson.GetBytes(j.Metadata, MetadataKeyOutput).Exists() {
+		return nil
+	}
+	return []byte(gjson.GetBytes(j.Metadata, MetadataKeyOutput).Raw)
 }
 
 // JobState is the state of a job. Jobs start their lifecycle as either
