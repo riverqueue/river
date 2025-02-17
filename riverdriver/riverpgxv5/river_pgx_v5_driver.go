@@ -198,6 +198,7 @@ func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetSt
 func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.JobInsertFastParams) ([]*riverdriver.JobInsertFastResult, error) {
 	insertJobsParams := &dbsqlc.JobInsertFastManyParams{
 		Args:         make([][]byte, len(params)),
+		CreatedAt:    make([]time.Time, len(params)),
 		Kind:         make([]string, len(params)),
 		MaxAttempts:  make([]int16, len(params)),
 		Metadata:     make([][]byte, len(params)),
@@ -214,6 +215,11 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 	for i := 0; i < len(params); i++ {
 		params := params[i]
 
+		createdAt := now
+		if params.CreatedAt != nil {
+			createdAt = *params.CreatedAt
+		}
+
 		scheduledAt := now
 		if params.ScheduledAt != nil {
 			scheduledAt = *params.ScheduledAt
@@ -227,6 +233,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 		defaultObject := []byte("{}")
 
 		insertJobsParams.Args[i] = sliceutil.FirstNonEmpty(params.EncodedArgs, defaultObject)
+		insertJobsParams.CreatedAt[i] = createdAt
 		insertJobsParams.Kind[i] = params.Kind
 		insertJobsParams.MaxAttempts[i] = int16(min(params.MaxAttempts, math.MaxInt16)) //nolint:gosec
 		insertJobsParams.Metadata[i] = sliceutil.FirstNonEmpty(params.Metadata, defaultObject)
@@ -260,6 +267,11 @@ func (e *Executor) JobInsertFastManyNoReturning(ctx context.Context, params []*r
 	for i := 0; i < len(params); i++ {
 		params := params[i]
 
+		createdAt := now
+		if params.CreatedAt != nil {
+			createdAt = *params.CreatedAt
+		}
+
 		metadata := params.Metadata
 		if metadata == nil {
 			metadata = []byte("{}")
@@ -277,6 +289,7 @@ func (e *Executor) JobInsertFastManyNoReturning(ctx context.Context, params []*r
 
 		insertJobsParams[i] = &dbsqlc.JobInsertFastManyCopyFromParams{
 			Args:         params.EncodedArgs,
+			CreatedAt:    createdAt,
 			Kind:         params.Kind,
 			MaxAttempts:  int16(min(params.MaxAttempts, math.MaxInt16)), //nolint:gosec
 			Metadata:     metadata,

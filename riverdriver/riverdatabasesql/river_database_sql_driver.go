@@ -204,6 +204,7 @@ func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetSt
 func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.JobInsertFastParams) ([]*riverdriver.JobInsertFastResult, error) {
 	insertJobsParams := &dbsqlc.JobInsertFastManyParams{
 		Args:         make([]string, len(params)),
+		CreatedAt:    make([]time.Time, len(params)),
 		Kind:         make([]string, len(params)),
 		MaxAttempts:  make([]int16, len(params)),
 		Metadata:     make([]string, len(params)),
@@ -220,6 +221,11 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 	for i := 0; i < len(params); i++ {
 		params := params[i]
 
+		createdAt := now
+		if params.CreatedAt != nil {
+			createdAt = *params.CreatedAt
+		}
+
 		scheduledAt := now
 		if params.ScheduledAt != nil {
 			scheduledAt = *params.ScheduledAt
@@ -233,6 +239,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 		defaultObject := "{}"
 
 		insertJobsParams.Args[i] = valutil.ValOrDefault(string(params.EncodedArgs), defaultObject)
+		insertJobsParams.CreatedAt[i] = createdAt
 		insertJobsParams.Kind[i] = params.Kind
 		insertJobsParams.MaxAttempts[i] = int16(min(params.MaxAttempts, math.MaxInt16)) //nolint:gosec
 		insertJobsParams.Metadata[i] = valutil.ValOrDefault(string(params.Metadata), defaultObject)
@@ -262,6 +269,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params []*riverdriver.
 func (e *Executor) JobInsertFastManyNoReturning(ctx context.Context, params []*riverdriver.JobInsertFastParams) (int, error) {
 	insertJobsParams := &dbsqlc.JobInsertFastManyNoReturningParams{
 		Args:         make([]string, len(params)),
+		CreatedAt:    make([]time.Time, len(params)),
 		Kind:         make([]string, len(params)),
 		MaxAttempts:  make([]int16, len(params)),
 		Metadata:     make([]string, len(params)),
@@ -278,6 +286,11 @@ func (e *Executor) JobInsertFastManyNoReturning(ctx context.Context, params []*r
 	for i := 0; i < len(params); i++ {
 		params := params[i]
 
+		createdAt := now
+		if params.CreatedAt != nil {
+			createdAt = *params.CreatedAt
+		}
+
 		scheduledAt := now
 		if params.ScheduledAt != nil {
 			scheduledAt = *params.ScheduledAt
@@ -291,6 +304,7 @@ func (e *Executor) JobInsertFastManyNoReturning(ctx context.Context, params []*r
 		defaultObject := "{}"
 
 		insertJobsParams.Args[i] = valutil.ValOrDefault(string(params.EncodedArgs), defaultObject)
+		insertJobsParams.CreatedAt[i] = createdAt
 		insertJobsParams.Kind[i] = params.Kind
 		insertJobsParams.MaxAttempts[i] = int16(min(params.MaxAttempts, math.MaxInt16)) //nolint:gosec
 		insertJobsParams.Metadata[i] = valutil.ValOrDefault(string(params.Metadata), defaultObject)

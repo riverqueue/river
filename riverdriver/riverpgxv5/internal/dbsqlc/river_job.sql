@@ -197,6 +197,7 @@ LIMIT @max;
 -- name: JobInsertFastMany :many
 INSERT INTO river_job(
     args,
+    created_at,
     kind,
     max_attempts,
     metadata,
@@ -209,6 +210,7 @@ INSERT INTO river_job(
     unique_states
 ) SELECT
     unnest(@args::jsonb[]),
+    unnest(@created_at::timestamptz[]),
     unnest(@kind::text[]),
     unnest(@max_attempts::smallint[]),
     unnest(@metadata::jsonb[]),
@@ -237,6 +239,7 @@ RETURNING sqlc.embed(river_job), (xmax != 0) AS unique_skipped_as_duplicate;
 -- name: JobInsertFastManyNoReturning :execrows
 INSERT INTO river_job(
     args,
+    created_at,
     kind,
     max_attempts,
     metadata,
@@ -249,6 +252,7 @@ INSERT INTO river_job(
     unique_states
 ) SELECT
     unnest(@args::jsonb[]),
+    unnest(@created_at::timestamptz[]),
     unnest(@kind::text[]),
     unnest(@max_attempts::smallint[]),
     unnest(@metadata::jsonb[]),

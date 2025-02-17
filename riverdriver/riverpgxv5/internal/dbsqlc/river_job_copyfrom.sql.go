@@ -13,7 +13,7 @@ import (
 
 type JobInsertFastManyCopyFromParams struct {
 	Args         []byte
-	FinalizedAt  *time.Time
+	CreatedAt    time.Time
 	Kind         string
 	MaxAttempts  int16
 	Metadata     []byte

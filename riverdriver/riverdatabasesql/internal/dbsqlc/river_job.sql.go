@@ -528,6 +528,7 @@ func (q *Queries) JobGetStuck(ctx context.Context, db DBTX, arg *JobGetStuckPara
 const jobInsertFastMany = `-- name: JobInsertFastMany :many
 INSERT INTO river_job(
     args,
+    created_at,
     kind,
     max_attempts,
     metadata,
@@ -540,22 +541,23 @@ INSERT INTO river_job(
     unique_states
 ) SELECT
     unnest($1::jsonb[]),
-    unnest($2::text[]),
-    unnest($3::smallint[]),
-    unnest($4::jsonb[]),
-    unnest($5::smallint[]),
-    unnest($6::text[]),
-    unnest($7::timestamptz[]),
+    unnest($2::timestamptz[]),
+    unnest($3::text[]),
+    unnest($4::smallint[]),
+    unnest($5::jsonb[]),
+    unnest($6::smallint[]),
+    unnest($7::text[]),
+    unnest($8::timestamptz[]),
     -- To avoid requiring pgx users to register the OID of the river_job_state[]
     -- type, we cast the array to text[] and then to river_job_state.
-    unnest($8::text[])::river_job_state,
+    unnest($9::text[])::river_job_state,
     -- Unnest on a multi-dimensional array will fully flatten the array, so we
     -- encode the tag list as a comma-separated string and split it in the
     -- query.
-    string_to_array(unnest($9::text[]), ','),
+    string_to_array(unnest($10::text[]), ','),
 
-    unnest($10::bytea[]),
-    unnest($11::bit(8)[])
+    unnest($11::bytea[]),
+    unnest($12::bit(8)[])
 
 ON CONFLICT (unique_key)
     WHERE unique_key IS NOT NULL
@@ -568,6 +570,7 @@ RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_a
 
 type JobInsertFastManyParams struct {
 	Args         []string
+	CreatedAt    []time.Time
 	Kind         []string
 	MaxAttempts  []int16
 	Metadata     []string
@@ -588,6 +591,7 @@ type JobInsertFastManyRow struct {
 func (q *Queries) JobInsertFastMany(ctx context.Context, db DBTX, arg *JobInsertFastManyParams) ([]*JobInsertFastManyRow, error) {
 	rows, err := db.QueryContext(ctx, jobInsertFastMany,
 		pq.Array(arg.Args),
+		pq.Array(arg.CreatedAt),
 		pq.Array(arg.Kind),
 		pq.Array(arg.MaxAttempts),
 		pq.Array(arg.Metadata),
@@ -643,6 +647,7 @@ func (q *Queries) JobInsertFastMany(ctx context.Context, db DBTX, arg *JobInsert
 const jobInsertFastManyNoReturning = `-- name: JobInsertFastManyNoReturning :execrows
 INSERT INTO river_job(
     args,
+    created_at,
     kind,
     max_attempts,
     metadata,
@@ -655,22 +660,23 @@ INSERT INTO river_job(
     unique_states
 ) SELECT
     unnest($1::jsonb[]),
-    unnest($2::text[]),
-    unnest($3::smallint[]),
-    unnest($4::jsonb[]),
-    unnest($5::smallint[]),
-    unnest($6::text[]),
-    unnest($7::timestamptz[]),
-    unnest($8::river_job_state[]),
+    unnest($2::timestamptz[]),
+    unnest($3::text[]),
+    unnest($4::smallint[]),
+    unnest($5::jsonb[]),
+    unnest($6::smallint[]),
+    unnest($7::text[]),
+    unnest($8::timestamptz[]),
+    unnest($9::river_job_state[]),
 
     -- lib/pq really, REALLY does not play nicely with multi-dimensional arrays,
     -- so instead we pack each set of tags into a string, send them through,
     -- then unpack them here into an array to put in each row. This isn't
     -- necessary in the Pgx driver where copyfrom is used instead.
-    string_to_array(unnest($9::text[]), ','),
+    string_to_array(unnest($10::text[]), ','),
 
-    unnest($10::bytea[]),
-    unnest($11::bit(8)[])
+    unnest($11::bytea[]),
+    unnest($12::bit(8)[])
 
 ON CONFLICT (unique_key)
     WHERE unique_key IS NOT NULL
@@ -681,6 +687,7 @@ DO NOTHING
 
 type JobInsertFastManyNoReturningParams struct {
 	Args         []string
+	CreatedAt    []time.Time
 	Kind         []string
 	MaxAttempts  []int16
 	Metadata     []string
@@ -696,6 +703,7 @@ type JobInsertFastManyNoReturningParams struct {
 func (q *Queries) JobInsertFastManyNoReturning(ctx context.Context, db DBTX, arg *JobInsertFastManyNoReturningParams) (int64, error) {
 	result, err := db.ExecContext(ctx, jobInsertFastManyNoReturning,
 		pq.Array(arg.Args),
+		pq.Array(arg.CreatedAt),
 		pq.Array(arg.Kind),
 		pq.Array(arg.MaxAttempts),
 		pq.Array(arg.Metadata),
