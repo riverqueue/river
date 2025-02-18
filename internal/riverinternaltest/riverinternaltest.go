@@ -287,6 +287,8 @@ func WrapTestMain(m *testing.M) {
 	// NUM_CPU pools, each with NUM_CPU*4 connections, and that's a lot of
 	// connections.
 	poolConfig.MaxConns = 4
+	// Pre-initialize 1 connection per pool.
+	poolConfig.MinConns = 1
 
 	var err error
 	dbManager, err = testdb.NewManager(poolConfig, int32(runtime.GOMAXPROCS(0)), nil, TruncateRiverTables)
