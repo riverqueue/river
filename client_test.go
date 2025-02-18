@@ -4293,7 +4293,7 @@ func Test_Client_Subscribe(t *testing.T) {
 
 		client := newTestClient(t, dbPool, &Config{})
 
-		require.PanicsWithValue(t, "created a subscription on a client that will never work jobs (Workers not configured)", func() {
+		require.PanicsWithValue(t, "created a subscription on a client that will never work jobs (Queues not configured)", func() {
 			_, _ = client.Subscribe(EventKindJobCompleted)
 		})
 	})

@@ -966,7 +966,7 @@ type SubscribeConfig struct {
 // Special internal variant that lets us inject an overridden size.
 func (c *Client[TTx]) SubscribeConfig(config *SubscribeConfig) (<-chan *Event, func()) {
 	if c.subscriptionManager == nil {
-		panic("created a subscription on a client that will never work jobs (Workers not configured)")
+		panic("created a subscription on a client that will never work jobs (Queues not configured)")
 	}
 
 	return c.subscriptionManager.SubscribeConfig(config)
