@@ -1,7 +1,7 @@
 -- name: JobInsertFastManyCopyFrom :copyfrom
 INSERT INTO river_job(
     args,
-    finalized_at,
+    created_at,
     kind,
     max_attempts,
     metadata,
@@ -14,7 +14,7 @@ INSERT INTO river_job(
     unique_states
 ) VALUES (
     @args,
-    @finalized_at,
+    @created_at,
     @kind,
     @max_attempts,
     @metadata,

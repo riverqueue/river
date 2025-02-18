@@ -48,6 +48,15 @@ const (
 
 // TestConfig contains configuration specific to test environments.
 type TestConfig struct {
+	// DisableUniqueEnforcement disables the application of unique job
+	// constraints. This is useful for testing scenarios when testing a worker
+	// that typically uses uniqueness, but where enforcing uniqueness would cause
+	// conflicts with parallel test execution.
+	//
+	// The [rivertest.Worker] type automatically disables uniqueness enforcement
+	// when creating jobs.
+	DisableUniqueEnforcement bool
+
 	// Time is a time generator to make time stubbable in tests.
 	Time rivertype.TimeGenerator
 }
@@ -1253,9 +1262,12 @@ func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, conf
 		return nil, errors.New("priority must be between 1 and 4")
 	}
 
-	uniqueOpts := insertOpts.UniqueOpts
-	if uniqueOpts.isEmpty() {
-		uniqueOpts = jobInsertOpts.UniqueOpts
+	var uniqueOpts UniqueOpts
+	if !config.Test.DisableUniqueEnforcement {
+		uniqueOpts = insertOpts.UniqueOpts
+		if uniqueOpts.isEmpty() {
+			uniqueOpts = jobInsertOpts.UniqueOpts
+		}
 	}
 	if err := uniqueOpts.validate(); err != nil {
 		return nil, err

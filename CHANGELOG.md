@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+⚠️ Version 0.18.0 has breaking changes for the `rivertest.Worker` type that was just introduced. While attempting to round out some edge cases with its design, we realized some of them simply couldn't be solved adequately without changing the overall design such that all tested jobs are inserted into the database. Given the short duration since it was released (over a weekend) it's unlikely many users have adopted it and it seemed best to rip off the bandaid to fix it before it gets widely used.
+
+### Changed
+
+- **Breaking change:** The `rivertest.Worker` type now requires all jobs to be inserted into the database. The original design allowed workers to be tested without hitting the database at all. Ultimately this design made it hard to correctly simulate features like `JobCompleteTx` and the other potential solutions seemed undesirable.
+
+  As part of this change, the `Work` and `WorkJob` methods now take a transaction argument. The expectation is that a transaction will be opened by the caller and rolled back after test completion. Additionally, the return signature was changed to return a `WorkResult` struct alongside the error. The struct includes the post-execution job row as well as the event kind that occurred, making it easy to inspect the job's state after execution.
+
+  Finally, the implementation was refactored so that it uses the _real_ `river.Client` insert path, and also uses the same job execution path as real execution. This minimizes the potential for differences in behavior between testing and real execution.
+  [PR #766](https://github.com/riverqueue/river/pull/766).
+
 ## [0.17.0] - 2025-02-16
 
 ### Added
