@@ -282,8 +282,14 @@ func TruncateRiverTables(ctx context.Context, pool *pgxpool.Pool) error {
 // amongst all packages. e.g. Configures a manager for test databases on setup,
 // and checks for no goroutine leaks on teardown.
 func WrapTestMain(m *testing.M) {
+	poolConfig := DatabaseConfig("river_test")
+	// Use a smaller number of conns per pool, because otherwise we could have
+	// NUM_CPU pools, each with NUM_CPU*4 connections, and that's a lot of
+	// connections.
+	poolConfig.MaxConns = 4
+
 	var err error
-	dbManager, err = testdb.NewManager(DatabaseConfig("river_test"), dbPoolMaxConns, nil, TruncateRiverTables)
+	dbManager, err = testdb.NewManager(poolConfig, int32(runtime.GOMAXPROCS(0)), nil, TruncateRiverTables)
 	if err != nil {
 		log.Fatal(err)
 	}
