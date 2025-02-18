@@ -74,7 +74,7 @@ func (m *Manager) Acquire(ctx context.Context) (*DBWithPool, error) {
 	if err != nil {
 		return nil, err
 	}
-	m.logger.Debug("DBManager: Acquire returned pool", "pool", res.Value().pool, "error", err, "dbName", res.Value().dbName)
+	m.logger.Debug("DBManager: Acquire returned pool", "res", res, "error", err, "dbName", res.Value().dbName)
 
 	return &DBWithPool{res: res, logger: m.logger, manager: m, dbName: res.Value().dbName}, nil
 }
