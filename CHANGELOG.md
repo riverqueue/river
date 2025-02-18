@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Finally, the implementation was refactored so that it uses the _real_ `river.Client` insert path, and also uses the same job execution path as real execution. This minimizes the potential for differences in behavior between testing and real execution.
   [PR #766](https://github.com/riverqueue/river/pull/766).
 
+### Fixed
+
+- Fix error message on unsuccessful client subscribe that erroneously referred to "Workers" not configured. [PR #771](https://github.com/riverqueue/river/pull/771).
+
 ## [0.17.0] - 2025-02-16
 
 ### Added
