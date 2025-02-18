@@ -160,7 +160,8 @@ func DrainContinuously[T any](drainChan <-chan T) func() []T {
 
 // TestDB acquires a dedicated test database for the duration of the test. If an
 // error occurs, the test fails. The test database will be automatically
-// returned to the pool at the end of the test and the pgxpool will be closed.
+// returned to the pool at the end of the test. If the pool was closed, it will
+// be recreated.
 func TestDB(ctx context.Context, tb testing.TB) *pgxpool.Pool {
 	tb.Helper()
 
@@ -172,9 +173,6 @@ func TestDB(ctx context.Context, tb testing.TB) *pgxpool.Pool {
 		tb.Fatalf("Failed to acquire pool for test DB: %v", err)
 	}
 	tb.Cleanup(testPool.Release)
-
-	// Also close the pool just to ensure nothing is still active on it:
-	tb.Cleanup(testPool.Pool().Close)
 
 	return testPool.Pool()
 }
@@ -282,8 +280,16 @@ func TruncateRiverTables(ctx context.Context, pool *pgxpool.Pool) error {
 // amongst all packages. e.g. Configures a manager for test databases on setup,
 // and checks for no goroutine leaks on teardown.
 func WrapTestMain(m *testing.M) {
+	poolConfig := DatabaseConfig("river_test")
+	// Use a smaller number of conns per pool, because otherwise we could have
+	// NUM_CPU pools, each with NUM_CPU connections, and that's a lot of
+	// connections if there are many CPUs.
+	poolConfig.MaxConns = 4
+	// Pre-initialize 1 connection per pool.
+	poolConfig.MinConns = 1
+
 	var err error
-	dbManager, err = testdb.NewManager(DatabaseConfig("river_test"), dbPoolMaxConns, nil, TruncateRiverTables)
+	dbManager, err = testdb.NewManager(poolConfig, int32(runtime.GOMAXPROCS(0)), nil, TruncateRiverTables) //nolint:gosec
 	if err != nil {
 		log.Fatal(err)
 	}
