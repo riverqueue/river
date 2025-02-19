@@ -3,6 +3,7 @@ package jobexecutor
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -573,10 +574,30 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		executor, bundle := setup(t)
 
-		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { panic("panic val") }, nil).MakeUnit(bundle.jobRow)
+		// Add a middleware so we can verify it's in the trace too:
+		executor.GlobalMiddleware = []rivertype.WorkerMiddleware{
+			&testMiddleware{
+				work: func(ctx context.Context, job *rivertype.JobRow, next func(context.Context) error) error {
+					return next(ctx)
+				},
+			},
+		}
+
+		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error {
+			panic("panic val")
+		}, nil).MakeUnit(bundle.jobRow)
 		bundle.errorHandler.HandlePanicFunc = func(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *ErrorHandlerResult {
 			require.Equal(t, "panic val", panicVal)
-			require.Contains(t, trace, "runtime/debug.Stack()\n")
+			require.NotContains(t, trace, "runtime/debug.Stack()\n")
+			require.Contains(t, trace, "(*testMiddleware).Work")
+			// Ensure that the first frame (i.e. the file and line info) corresponds
+			// to the code that raised the panic. This ensures we've stripped out
+			// irrelevant frames like the ones from the runtime package which
+			// generated the trace, or the panic rescuing code.
+			lines := strings.Split(trace, "\n")
+			require.GreaterOrEqual(t, len(lines), 2, "expected at least one frame in the stack trace")
+			firstFrame := lines[1] // this line contains the file and line of the panic origin
+			require.Contains(t, firstFrame, "job_executor_test.go")
 
 			return nil
 		}
@@ -703,4 +724,12 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.Equal(t, rivertype.JobStateCompleted, job.State)
 		require.Empty(t, job.Errors)
 	})
+}
+
+type testMiddleware struct {
+	work func(ctx context.Context, job *rivertype.JobRow, next func(context.Context) error) error
+}
+
+func (m *testMiddleware) Work(ctx context.Context, job *rivertype.JobRow, next func(context.Context) error) error {
+	return m.work(ctx, job, next)
 }
