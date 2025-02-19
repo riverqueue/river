@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// NullBytea is a custom type for PostgreSQL bytea that returns SQL NULL when
+// NullBytea is a custom type for Postgres bytea that returns SQL NULL when
 // the underlying slice is nil or empty. This override takes over for the base
 // type `bytea`, so that when sqlc generates code for arrays of bytea, each
 // element is a NullBytea and properly handles nil values. This is in contrast

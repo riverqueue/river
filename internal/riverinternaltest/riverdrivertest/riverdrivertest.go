@@ -961,6 +961,34 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				require.Equal(t, emptyJobStates, job.UniqueStates)
 			}
 		})
+
+		t.Run("BinaryNonUTF8UniqueKey", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			uniqueKey := []byte{0x00, 0x01, 0x02}
+			results, err := exec.JobInsertFastMany(ctx, []*riverdriver.JobInsertFastParams{{
+				EncodedArgs:  []byte(`{"encoded": "args"}`),
+				Kind:         "test_kind",
+				MaxAttempts:  rivercommon.MaxAttemptsDefault,
+				Metadata:     []byte(`{"meta": "data"}`),
+				Priority:     rivercommon.PriorityDefault,
+				Queue:        rivercommon.QueueDefault,
+				ScheduledAt:  nil, // explicit nil
+				State:        rivertype.JobStateAvailable,
+				Tags:         []string{"tag"},
+				UniqueKey:    uniqueKey,
+				UniqueStates: 0xff,
+			}})
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			require.Equal(t, uniqueKey, results[0].Job.UniqueKey)
+
+			jobs, err := exec.JobGetByKindMany(ctx, []string{"test_kind"})
+			require.NoError(t, err)
+			require.Equal(t, uniqueKey, jobs[0].UniqueKey)
+		})
 	})
 
 	t.Run("JobInsertFastManyNoReturning", func(t *testing.T) {
