@@ -2,6 +2,7 @@ package pgtypealias
 
 import (
 	"database/sql/driver"
+	"encoding/hex"
 	"fmt"
 )
 
@@ -21,7 +22,13 @@ func (nb NullBytea) Value() (driver.Value, error) {
 	if len(nb) == 0 {
 		return nil, nil //nolint:nilnil
 	}
-	return []byte(nb), nil
+
+	// Encode the byte slice as a hex format string with \x prefix:
+	result := make([]byte, 2+hex.EncodedLen(len(nb)))
+	result[0] = '\\'
+	result[1] = 'x'
+	hex.Encode(result[2:], nb)
+	return result, nil
 }
 
 // Scan implements the sql.Scanner interface.

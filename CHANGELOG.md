@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Fix error message on unsuccessful client subscribe that erroneously referred to "Workers" not configured. [PR #771](https://github.com/riverqueue/river/pull/771).
+- Fix an issue with encoding unique keys in riverdatabasesql driver. [PR #777](https://github.com/riverqueue/river/pull/777).
 
 ## [0.17.0] - 2025-02-16
 
