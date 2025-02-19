@@ -870,6 +870,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		t.Parallel()
 
 		t.Run("AllArgs", func(t *testing.T) {
+			t.Parallel()
+
 			exec, _ := setup(ctx, t)
 
 			now := time.Now().UTC()
@@ -949,6 +951,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			require.NoError(t, err)
 			require.Len(t, jobsAfter, len(insertParams))
 			for _, job := range jobsAfter {
+				require.WithinDuration(t, time.Now().UTC(), job.CreatedAt, 2*time.Second)
 				require.WithinDuration(t, time.Now().UTC(), job.ScheduledAt, 2*time.Second)
 
 				// UniqueKey and UniqueStates are not set in the insert params, so they should
@@ -957,6 +960,34 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				var emptyJobStates []rivertype.JobState
 				require.Equal(t, emptyJobStates, job.UniqueStates)
 			}
+		})
+
+		t.Run("BinaryNonUTF8UniqueKey", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			uniqueKey := []byte{0x00, 0x01, 0x02}
+			results, err := exec.JobInsertFastMany(ctx, []*riverdriver.JobInsertFastParams{{
+				EncodedArgs:  []byte(`{"encoded": "args"}`),
+				Kind:         "test_kind",
+				MaxAttempts:  rivercommon.MaxAttemptsDefault,
+				Metadata:     []byte(`{"meta": "data"}`),
+				Priority:     rivercommon.PriorityDefault,
+				Queue:        rivercommon.QueueDefault,
+				ScheduledAt:  nil, // explicit nil
+				State:        rivertype.JobStateAvailable,
+				Tags:         []string{"tag"},
+				UniqueKey:    uniqueKey,
+				UniqueStates: 0xff,
+			}})
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			require.Equal(t, uniqueKey, results[0].Job.UniqueKey)
+
+			jobs, err := exec.JobGetByKindMany(ctx, []string{"test_kind"})
+			require.NoError(t, err)
+			require.Equal(t, uniqueKey, jobs[0].UniqueKey)
 		})
 	})
 
@@ -975,18 +1006,19 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
 			for i := 0; i < len(insertParams); i++ {
 				insertParams[i] = &riverdriver.JobInsertFastParams{
-					CreatedAt:   ptrutil.Ptr(now.Add(time.Duration(i) * 5 * time.Second)),
-					EncodedArgs: []byte(`{"encoded": "args"}`),
-					Kind:        "test_kind",
-					MaxAttempts: rivercommon.MaxAttemptsDefault,
-					Metadata:    []byte(`{"meta": "data"}`),
-					Priority:    rivercommon.PriorityDefault,
-					Queue:       rivercommon.QueueDefault,
-					ScheduledAt: &now,
-					State:       rivertype.JobStateAvailable,
-					Tags:        []string{"tag"},
+					CreatedAt:    ptrutil.Ptr(now.Add(time.Duration(i) * 5 * time.Second)),
+					EncodedArgs:  []byte(`{"encoded": "args"}`),
+					Kind:         "test_kind",
+					MaxAttempts:  rivercommon.MaxAttemptsDefault,
+					Metadata:     []byte(`{"meta": "data"}`),
+					Priority:     rivercommon.PriorityDefault,
+					Queue:        rivercommon.QueueDefault,
+					ScheduledAt:  &now,
+					State:        rivertype.JobStateAvailable,
+					Tags:         []string{"tag"},
+					UniqueKey:    []byte("unique-key-" + strconv.Itoa(i)),
+					UniqueStates: 0xff,
 				}
-				insertParams[i].ScheduledAt = &now
 			}
 
 			count, err := exec.JobInsertFastManyNoReturning(ctx, insertParams)
