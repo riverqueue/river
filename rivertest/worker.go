@@ -181,7 +181,7 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 				return nil
 			},
 			HandlePanicFunc: func(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *jobexecutor.ErrorHandlerResult {
-				tb.Fatalf("panic: %v", panicVal)
+				tb.Fatalf("panic: %v\n%s", panicVal, trace)
 				return nil
 			},
 		},
