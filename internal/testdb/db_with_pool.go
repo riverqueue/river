@@ -40,12 +40,10 @@ func (db *DBWithPool) release() {
 		if errors.Is(err, puddle.ErrClosedPool) {
 			db.logger.Debug("DBWithPool: pool is closed, re-creating", "dbName", db.dbName)
 
-			newPgxPool, err := pgxpool.NewWithConfig(ctx, db.res.Value().config)
-			if err != nil {
+			if err := db.recreatePool(ctx); err != nil {
 				db.res.Destroy()
 				return
 			}
-			db.res.Value().pool = newPgxPool
 		} else {
 			// Log any other ping error but proceed with cleanup.
 			db.logger.Debug("DBWithPool: pool ping returned error", "dbName", db.dbName, "err", err)
@@ -56,7 +54,11 @@ func (db *DBWithPool) release() {
 		db.logger.Debug("DBWithPool: release calling cleanup", "dbName", db.dbName)
 		if err := db.manager.cleanup(ctx, db.res.Value().pool); err != nil {
 			db.logger.Error("testdb.DBWithPool: Error during release cleanup", "err", err)
-			db.res.Destroy()
+
+			if err := db.recreatePool(ctx); err != nil {
+				db.res.Destroy()
+				return
+			}
 		}
 		db.logger.Debug("DBWithPool: release done with cleanup", "dbName", db.dbName)
 	}
@@ -68,4 +70,19 @@ func (db *DBWithPool) release() {
 // Pool returns the underlying pgxpool.Pool for the test database.
 func (db *DBWithPool) Pool() *pgxpool.Pool {
 	return db.res.Value().pool
+}
+
+func (db *DBWithPool) recreatePool(ctx context.Context) error {
+	db.logger.Debug("DBWithPool: recreatePool called", "dbName", db.dbName)
+	db.Pool().Close()
+
+	newPgxPool, err := pgxpool.NewWithConfig(ctx, db.res.Value().config)
+	if err != nil {
+		db.res.Destroy()
+		db.logger.Error("DBWithPool: recreatePool failed", "dbName", db.dbName, "err", err)
+		return err
+	}
+	db.logger.Debug("DBWithPool: recreatePool succeeded", "dbName", db.dbName)
+	db.res.Value().pool = newPgxPool
+	return nil
 }
