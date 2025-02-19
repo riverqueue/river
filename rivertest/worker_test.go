@@ -22,6 +22,40 @@ type testArgs struct {
 
 func (testArgs) Kind() string { return "rivertest_work_test" }
 
+func TestWorker_NewWorker(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		config *river.Config
+		driver *riverpgxv5.Driver
+		tx     pgx.Tx
+	}
+
+	setup := func(t *testing.T) *testBundle {
+		t.Helper()
+
+		return &testBundle{
+			config: &river.Config{ID: "rivertest-worker"},
+			driver: riverpgxv5.New(nil),
+			tx:     riverinternaltest.TestTx(ctx, t),
+		}
+	}
+
+	t.Run("HandlesANilRiverConfig", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
+			return nil
+		})
+		tw := NewWorker(t, bundle.driver, nil, worker)
+		require.NotNil(t, tw.config)
+	})
+}
+
 func TestWorker_Work(t *testing.T) {
 	t.Parallel()
 

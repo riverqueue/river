@@ -279,6 +279,10 @@ type Config struct {
 
 // WithDefaults returns a copy of the Config with all default values applied.
 func (c *Config) WithDefaults() *Config {
+	if c == nil {
+		c = &Config{}
+	}
+
 	// Use the existing logger if set, otherwise create a default one.
 	logger := c.Logger
 	if logger == nil {
