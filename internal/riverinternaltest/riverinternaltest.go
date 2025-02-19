@@ -289,7 +289,9 @@ func WrapTestMain(m *testing.M) {
 	poolConfig.MinConns = 1
 
 	var err error
-	dbManager, err = testdb.NewManager(poolConfig, int32(runtime.GOMAXPROCS(0)), nil, TruncateRiverTables) //nolint:gosec
+	// Allow up to one database per concurrent test, plus two for overhead:
+	maxTestDBs := int32(runtime.GOMAXPROCS(0)) + 2 //nolint:gosec
+	dbManager, err = testdb.NewManager(poolConfig, maxTestDBs, nil, TruncateRiverTables)
 	if err != nil {
 		log.Fatal(err)
 	}
