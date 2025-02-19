@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -79,14 +80,14 @@ func NewWorker[T river.JobArgs, TTx any](tb testing.TB, driver riverdriver.Drive
 	}
 }
 
-func (w *Worker[T, TTx]) insertJob(ctx context.Context, tb testing.TB, tx TTx, args T, opts *river.InsertOpts) *rivertype.JobRow {
+func (w *Worker[T, TTx]) insertJob(ctx context.Context, tb testing.TB, tx TTx, args T, opts *river.InsertOpts) (*rivertype.JobRow, error) {
 	tb.Helper()
 
 	result, err := w.client.InsertTx(ctx, tx, args, opts)
 	if err != nil {
-		tb.Fatalf("failed to insert job: %s", err)
+		return nil, err
 	}
-	return result.Job
+	return result.Job, nil
 }
 
 // Work inserts a job with the provided arguments and optional insert options,
@@ -99,10 +100,13 @@ func (w *Worker[T, TTx]) insertJob(ctx context.Context, tb testing.TB, tx TTx, a
 //
 // The returned error only reflects _real_ errors and does not include
 // explicitly returned snooze or cancel errors from the worker.
-func (w *Worker[T, TTx]) Work(ctx context.Context, tb testing.TB, tx TTx, args T, opts *river.InsertOpts) (WorkResult, error) {
+func (w *Worker[T, TTx]) Work(ctx context.Context, tb testing.TB, tx TTx, args T, opts *river.InsertOpts) (*WorkResult, error) {
 	tb.Helper()
 
-	job := w.insertJob(ctx, tb, tx, args, opts)
+	job, err := w.insertJob(ctx, tb, tx, args, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to insert job: %w", err)
+	}
 	return w.WorkJob(ctx, tb, tx, job)
 }
 
@@ -116,12 +120,12 @@ func (w *Worker[T, TTx]) Work(ctx context.Context, tb testing.TB, tx TTx, args T
 //
 // The returned error only reflects _real_ errors and does not include
 // explicitly returned snooze or cancel errors from the worker.
-func (w *Worker[T, TTx]) WorkJob(ctx context.Context, tb testing.TB, tx TTx, job *rivertype.JobRow) (WorkResult, error) {
+func (w *Worker[T, TTx]) WorkJob(ctx context.Context, tb testing.TB, tx TTx, job *rivertype.JobRow) (*WorkResult, error) {
 	tb.Helper()
 	return w.workJob(ctx, tb, tx, job)
 }
 
-func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job *rivertype.JobRow) (WorkResult, error) {
+func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job *rivertype.JobRow) (*WorkResult, error) {
 	tb.Helper()
 
 	timeGen := w.config.Test.Time
@@ -151,7 +155,7 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 		State:               rivertype.JobStateRunning,
 	})
 	if err != nil && !errors.Is(err, rivertype.ErrNotFound) {
-		tb.Fatalf("test worker internal error: failed to update job to running state: %s", err)
+		return nil, fmt.Errorf("test worker internal error: failed to update job to running state: %w", err)
 	}
 	job = updatedJobRow
 
@@ -181,7 +185,7 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 				return nil
 			},
 			HandlePanicFunc: func(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *jobexecutor.ErrorHandlerResult {
-				tb.Fatalf("panic: %v\n%s", panicVal, trace)
+				resultErr = &PanicError{Cause: panicVal, Trace: trace}
 				return nil
 			},
 		},
@@ -219,7 +223,7 @@ type WorkResult struct {
 	Job *rivertype.JobRow
 }
 
-func completerResultToWorkResult(tb testing.TB, completerResult jobcompleter.CompleterJobUpdated) WorkResult {
+func completerResultToWorkResult(tb testing.TB, completerResult jobcompleter.CompleterJobUpdated) *WorkResult {
 	tb.Helper()
 
 	var kind river.EventKind
@@ -239,10 +243,24 @@ func completerResultToWorkResult(tb testing.TB, completerResult jobcompleter.Com
 		panic("test worker internal error: unreachable state to distribute, river bug")
 	}
 
-	return WorkResult{
+	return &WorkResult{
 		EventKind: kind,
 		Job:       completerResult.Job,
 	}
+}
+
+type PanicError struct {
+	Cause any
+	Trace string
+}
+
+func (e *PanicError) Error() string {
+	return fmt.Sprintf("rivertest.PanicError: %v\n%s", e.Cause, e.Trace)
+}
+
+func (e *PanicError) Is(target error) bool {
+	_, ok := target.(*PanicError)
+	return ok
 }
 
 type errorHandlerWrapper struct {
