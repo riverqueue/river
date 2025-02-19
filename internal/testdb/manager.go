@@ -104,6 +104,7 @@ func (m *Manager) allocatePool(ctx context.Context) (*poolWithDBName, error) {
 	if m.cleanup != nil {
 		m.logger.Debug("DBManager: allocatePool calling cleanup", "dbName", dbName)
 		if err := m.cleanup(ctx, pgxp); err != nil {
+			m.logger.Error("DBManager: error during allocatePool cleanup", "error", err)
 			pgxp.Close()
 			return nil, fmt.Errorf("error during cleanup: %w", err)
 		}
