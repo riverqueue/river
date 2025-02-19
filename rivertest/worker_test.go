@@ -117,7 +117,7 @@ func TestWorker_Work(t *testing.T) {
 		tw := NewWorker(t, bundle.driver, bundle.config, worker)
 		res, err := tw.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, nil)
 		require.NoError(t, err)
-		require.Equal(t, river.EventKindJobCompleted, res.Kind)
+		require.Equal(t, river.EventKindJobCompleted, res.EventKind)
 	})
 
 	t.Run("Reusable", func(t *testing.T) {
@@ -131,10 +131,10 @@ func TestWorker_Work(t *testing.T) {
 		tw := NewWorker(t, bundle.driver, bundle.config, worker)
 		res, err := tw.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, nil)
 		require.NoError(t, err)
-		require.Equal(t, river.EventKindJobCompleted, res.Kind)
+		require.Equal(t, river.EventKindJobCompleted, res.EventKind)
 		res, err = tw.Work(ctx, t, bundle.tx, testArgs{Value: "test2"}, nil)
 		require.NoError(t, err)
-		require.Equal(t, river.EventKindJobCompleted, res.Kind)
+		require.Equal(t, river.EventKindJobCompleted, res.EventKind)
 	})
 
 	t.Run("SetsCustomInsertOpts", func(t *testing.T) {
@@ -179,7 +179,7 @@ func TestWorker_Work(t *testing.T) {
 			Tags:        []string{"tag1", "tag2"},
 		})
 		require.NoError(t, err)
-		require.Equal(t, river.EventKindJobCompleted, res.Kind)
+		require.Equal(t, river.EventKindJobCompleted, res.EventKind)
 	})
 
 	t.Run("UniqueOptsAreIgnored", func(t *testing.T) {
@@ -205,7 +205,7 @@ func TestWorker_Work(t *testing.T) {
 			UniqueOpts: river.UniqueOpts{ByPeriod: 1 * time.Hour},
 		})
 		require.NoError(t, err)
-		require.Equal(t, river.EventKindJobCompleted, res.Kind)
+		require.Equal(t, river.EventKindJobCompleted, res.EventKind)
 	})
 
 	t.Run("ReturnsASnoozeEventKindWhenSnoozed", func(t *testing.T) {
@@ -220,7 +220,7 @@ func TestWorker_Work(t *testing.T) {
 
 		res, err := tw.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, nil)
 		require.NoError(t, err)
-		require.Equal(t, river.EventKindJobSnoozed, res.Kind)
+		require.Equal(t, river.EventKindJobSnoozed, res.EventKind)
 	})
 
 	t.Run("ReturnsACancelEventKindWhenCancelled", func(t *testing.T) {
@@ -235,7 +235,7 @@ func TestWorker_Work(t *testing.T) {
 
 		res, err := tw.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, nil)
 		require.NoError(t, err)
-		require.Equal(t, river.EventKindJobCancelled, res.Kind)
+		require.Equal(t, river.EventKindJobCancelled, res.EventKind)
 	})
 
 	t.Run("UsesACustomClockWhenProvided", func(t *testing.T) {
@@ -257,7 +257,7 @@ func TestWorker_Work(t *testing.T) {
 
 		res, err := tw.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, nil)
 		require.NoError(t, err)
-		require.Equal(t, river.EventKindJobCompleted, res.Kind)
+		require.Equal(t, river.EventKindJobCompleted, res.EventKind)
 		require.WithinDuration(t, hourFromNow, *res.Job.FinalizedAt, time.Millisecond)
 	})
 }
@@ -318,7 +318,7 @@ func TestWorker_WorkJob(t *testing.T) {
 
 		res, err := testWorker.WorkJob(ctx, t, bundle.tx, insertRes.Job)
 		require.NoError(t, err)
-		require.Equal(t, river.EventKindJobCompleted, res.Kind)
+		require.Equal(t, river.EventKindJobCompleted, res.EventKind)
 	})
 
 	t.Run("JobCompleteTxWithInsertedJobRow", func(t *testing.T) {
@@ -343,7 +343,7 @@ func TestWorker_WorkJob(t *testing.T) {
 
 		res, err := testWorker.WorkJob(ctx, t, bundle.tx, insertRes.Job)
 		require.NoError(t, err)
-		require.Equal(t, river.EventKindJobCompleted, res.Kind)
+		require.Equal(t, river.EventKindJobCompleted, res.EventKind)
 
 		updatedJob, err := bundle.driver.UnwrapExecutor(bundle.tx).JobGetByID(ctx, insertRes.Job.ID)
 		require.NoError(t, err)

@@ -212,11 +212,11 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 
 // WorkResult is the result of working a job in the test Worker.
 type WorkResult struct {
+	// EventKind is the kind of event that occurred following execution.
+	EventKind river.EventKind
+
 	// Job is the updated job row from the database _after_ it has been worked.
 	Job *rivertype.JobRow
-
-	// Kind is the kind of event that occurred following execution.
-	Kind river.EventKind
 }
 
 func completerResultToWorkResult(tb testing.TB, completerResult jobcompleter.CompleterJobUpdated) WorkResult {
@@ -240,8 +240,8 @@ func completerResultToWorkResult(tb testing.TB, completerResult jobcompleter.Com
 	}
 
 	return WorkResult{
-		Job:  completerResult.Job,
-		Kind: kind,
+		EventKind: kind,
+		Job:       completerResult.Job,
 	}
 }
 
