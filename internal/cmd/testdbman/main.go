@@ -139,8 +139,9 @@ func createTestDatabases(ctx context.Context, out io.Writer) error {
 		return nil
 	}
 
-	dbNames := generateTestDBNames(runtime.GOMAXPROCS(0))
-
+	// Allow up to one database per concurrent test, plus two for overhead:
+	maxTestDBs := runtime.GOMAXPROCS(0) + 2
+	dbNames := generateTestDBNames(maxTestDBs)
 	for _, dbName := range dbNames {
 		if err := createDBAndMigrate(dbName); err != nil {
 			return err
