@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/rivertype"
 )
+
+const maxOutputSize = 32 * 1024 * 1024 // 32MB
 
 // RecordOutput records output JSON from a job. The "output" can be any
 // JSON-encodable value and will be stored in the database on the job row after
@@ -26,7 +29,8 @@ import (
 // ([github.com/riverqueue/river/rivertype.MetadataKeyOutput]).
 // This function must be called within an Worker's Work function. It returns an
 // error if called anywhere else. As with any stored value, care should be taken
-// to ensure that the payload size is not too large.
+// to ensure that the payload size is not too large. Output is limited to 32MB
+// in size for safety, but should be kept much smaller than this.
 //
 // Only one output can be stored per job. If this function is called more than
 // once, the output will be overwritten with the latest value. The output also
@@ -47,6 +51,12 @@ func RecordOutput(ctx context.Context, output any) error {
 	metadataUpdatesBytes, err := json.Marshal(output)
 	if err != nil {
 		return err
+	}
+
+	// Postgres JSONB is limited to 255MB, but it would be a bad idea to get
+	// anywhere close to that limit here.
+	if len(metadataUpdatesBytes) > maxOutputSize {
+		return fmt.Errorf("output is too large: %d bytes (max 32 MB)", len(metadataUpdatesBytes))
 	}
 
 	metadataUpdates[rivertype.MetadataKeyOutput] = json.RawMessage(metadataUpdatesBytes)
