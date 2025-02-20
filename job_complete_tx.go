@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/execution"
+	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -37,16 +38,31 @@ func JobCompleteTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs](ctx 
 	driver := client.Driver()
 	pilot := client.Pilot()
 
+	// extract metadata updates from context
+	metadataUpdates, hasMetadataUpdates := jobexecutor.MetadataUpdatesFromWorkContext(ctx)
+	hasMetadataUpdates = hasMetadataUpdates && len(metadataUpdates) > 0
+	var (
+		metadataUpdatesBytes []byte
+		err                  error
+	)
+	if hasMetadataUpdates {
+		metadataUpdatesBytes, err = json.Marshal(metadataUpdates)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	execTx := driver.UnwrapExecutor(tx)
-	params := riverdriver.JobSetStateCompleted(job.ID, time.Now())
+	params := riverdriver.JobSetStateCompleted(job.ID, time.Now(), nil)
 	rows, err := pilot.JobSetStateIfRunningMany(ctx, execTx, &riverdriver.JobSetStateIfRunningManyParams{
-		ID:                []int64{params.ID},
-		Attempt:           []*int{params.Attempt},
-		ErrData:           [][]byte{params.ErrData},
-		FinalizedAt:       []*time.Time{params.FinalizedAt},
-		ScheduledAt:       []*time.Time{params.ScheduledAt},
-		SnoozeDoIncrement: []bool{params.SnoozeDoIncrement},
-		State:             []rivertype.JobState{params.State},
+		ID:              []int64{params.ID},
+		Attempt:         []*int{params.Attempt},
+		ErrData:         [][]byte{params.ErrData},
+		FinalizedAt:     []*time.Time{params.FinalizedAt},
+		MetadataDoMerge: []bool{hasMetadataUpdates},
+		MetadataUpdates: [][]byte{metadataUpdatesBytes},
+		ScheduledAt:     []*time.Time{params.ScheduledAt},
+		State:           []rivertype.JobState{params.State},
 	})
 	if err != nil {
 		return nil, err

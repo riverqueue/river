@@ -5,9 +5,13 @@ package rivertype
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 )
+
+// MetadataKeyOutput is the metadata key used to store recorded job output.
+const MetadataKeyOutput = "output"
 
 // ErrNotFound is returned when a query by ID does not match any existing
 // rows. For example, attempting to cancel a job that doesn't exist will
@@ -134,6 +138,22 @@ type JobRow struct {
 	// job. Equivalent to the default set of unique states unless
 	// UniqueOpts.ByState was assigned a custom value.
 	UniqueStates []JobState
+}
+
+// Output returns the previously recorded output for the job, if any. The return
+// value is a raw JSON payload from the output that was recorded by the job, or
+// nil if no output was recorded.
+func (j *JobRow) Output() []byte {
+	type metadataWithOutput struct {
+		Output json.RawMessage `json:"output"`
+	}
+
+	var metadata metadataWithOutput
+	if err := json.Unmarshal(j.Metadata, &metadata); err != nil {
+		return nil
+	}
+
+	return metadata.Output
 }
 
 // JobState is the state of a job. Jobs start their lifecycle as either
