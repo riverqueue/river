@@ -24,8 +24,8 @@ import (
 // Worker makes it easier to test river workers. Once built, the worker can be
 // used to insert and work any number jobs:
 //
-//	worker := rivertest.NewWorker(t, driver, config, worker)
-//	result, err := worker.Work(ctx, t, tx, args, nil)
+//	testWorker := rivertest.NewWorker(t, driver, config, worker)
+//	result, err := testWorker.Work(ctx, t, tx, args, nil)
 //	if err != nil {
 //		t.Fatalf("failed to work job: %s", err)
 //	}
@@ -35,7 +35,8 @@ import (
 //
 // An existing job (inserted using external logic) can also be worked:
 //
-//	job := worker.insertJob(ctx, t, tx, args, nil)
+//	job := client.InsertTx(ctx, tx, args, nil)
+//	// ...
 //	result, err := worker.WorkJob(ctx, t, tx, job)
 //	if err != nil {
 //		t.Fatalf("failed to work job: %s", err)
