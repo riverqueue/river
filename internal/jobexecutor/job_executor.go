@@ -183,16 +183,21 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		return &jobExecutorResult{Err: &rivertype.UnknownJobKindError{Kind: e.JobRow.Kind}, MetadataUpdates: metadataUpdates}
 	}
 
-	if err := e.WorkUnit.UnmarshalJob(); err != nil {
-		return &jobExecutorResult{Err: err, MetadataUpdates: metadataUpdates}
-	}
+	doInner := execution.Func(func(ctx context.Context) error {
+		if err := e.WorkUnit.UnmarshalJob(); err != nil {
+			return err
+		}
 
-	doInner := execution.MiddlewareChain(e.GlobalMiddleware, e.WorkUnit.Middleware(), e.WorkUnit.Work, e.JobRow)
-	jobTimeout := valutil.FirstNonZero(e.WorkUnit.Timeout(), e.ClientJobTimeout)
-	ctx, cancel := execution.MaybeApplyTimeout(ctx, jobTimeout)
-	defer cancel()
+		jobTimeout := valutil.FirstNonZero(e.WorkUnit.Timeout(), e.ClientJobTimeout)
+		ctx, cancel := execution.MaybeApplyTimeout(ctx, jobTimeout)
+		defer cancel()
 
-	return &jobExecutorResult{Err: doInner(ctx), MetadataUpdates: metadataUpdates}
+		return e.WorkUnit.Work(ctx)
+	})
+
+	executeFunc := execution.MiddlewareChain(e.GlobalMiddleware, e.WorkUnit.Middleware(), doInner, e.JobRow)
+
+	return &jobExecutorResult{Err: executeFunc(ctx), MetadataUpdates: metadataUpdates}
 }
 
 func (e *JobExecutor) invokeErrorHandler(ctx context.Context, res *jobExecutorResult) bool {

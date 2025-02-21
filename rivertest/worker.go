@@ -300,7 +300,7 @@ func (w *wrapperWorkUnit[T]) Timeout() time.Duration         { return w.worker.T
 func (w *wrapperWorkUnit[T]) Work(ctx context.Context) error { return w.worker.Work(ctx, w.job) }
 
 func (w *wrapperWorkUnit[T]) Middleware() []rivertype.WorkerMiddleware {
-	return w.worker.Middleware(w.job)
+	return w.worker.Middleware(w.jobRow)
 }
 
 func (w *wrapperWorkUnit[T]) UnmarshalJob() error {
