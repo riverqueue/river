@@ -1,6 +1,7 @@
 package jobexecutor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -183,16 +184,31 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		return &jobExecutorResult{Err: &rivertype.UnknownJobKindError{Kind: e.JobRow.Kind}, MetadataUpdates: metadataUpdates}
 	}
 
+	// Unmarshal jobs early so that they can be used in places like allowing a
+	// custom args-driven job timeout.
 	if err := e.WorkUnit.UnmarshalJob(); err != nil {
 		return &jobExecutorResult{Err: err, MetadataUpdates: metadataUpdates}
 	}
 
-	doInner := execution.MiddlewareChain(e.GlobalMiddleware, e.WorkUnit.Middleware(), e.WorkUnit.Work, e.JobRow)
+	encodedArgs := e.JobRow.EncodedArgs
+	doInner := execution.Func(func(ctx context.Context) error {
+		// The middleware stack is allowed an opportunity to modify EncodedArgs.
+		// If we do detect a modification, unmarshal args again.
+		if bytes.Compare(encodedArgs, e.JobRow.EncodedArgs) != 0 {
+			if err := e.WorkUnit.UnmarshalJob(); err != nil {
+				return err
+			}
+		}
+
+		return e.WorkUnit.Work(ctx)
+	})
+
+	executeFunc := execution.MiddlewareChain(e.GlobalMiddleware, e.WorkUnit.Middleware(), doInner, e.JobRow)
 	jobTimeout := valutil.FirstNonZero(e.WorkUnit.Timeout(), e.ClientJobTimeout)
 	ctx, cancel := execution.MaybeApplyTimeout(ctx, jobTimeout)
 	defer cancel()
 
-	return &jobExecutorResult{Err: doInner(ctx), MetadataUpdates: metadataUpdates}
+	return &jobExecutorResult{Err: executeFunc(ctx), MetadataUpdates: metadataUpdates}
 }
 
 func (e *JobExecutor) invokeErrorHandler(ctx context.Context, res *jobExecutorResult) bool {

@@ -694,6 +694,51 @@ func Test_Client(t *testing.T) {
 		require.True(t, middlewareCalled)
 	})
 
+	t.Run("MiddlewareModifiesEncodedArgs", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+		middlewareCalled := false
+
+		worker := &workerWithMiddleware[callbackArgs]{
+			workFunc: func(ctx context.Context, job *Job[callbackArgs]) error {
+				require.Equal(t, "middleware name", job.Args.Name)
+				return nil
+			},
+			middlewareFunc: func(job *Job[callbackArgs]) []rivertype.WorkerMiddleware {
+				require.Equal(t, "inserted name", job.Args.Name)
+
+				return []rivertype.WorkerMiddleware{
+					&overridableJobMiddleware{
+						workFunc: func(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
+							middlewareCalled = true
+							require.Equal(t, `{"name": "inserted name"}`, string(job.EncodedArgs))
+							job.EncodedArgs = []byte(`{"name": "middleware name"}`)
+							return doInner(ctx)
+						},
+					},
+				}
+			},
+		}
+
+		AddWorker(bundle.config.Workers, worker)
+
+		driver := riverpgxv5.New(bundle.dbPool)
+		client, err := NewClient(driver, bundle.config)
+		require.NoError(t, err)
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		result, err := client.Insert(ctx, callbackArgs{Name: "inserted name"}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, result.Job.ID, event.Job.ID)
+		require.True(t, middlewareCalled)
+	})
+
 	t.Run("PauseAndResumeSingleQueue", func(t *testing.T) {
 		t.Parallel()
 
