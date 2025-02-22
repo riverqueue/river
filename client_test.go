@@ -661,8 +661,8 @@ func Test_Client(t *testing.T) {
 				require.Equal(t, "called", ctx.Value(privateKey("middleware")))
 				return nil
 			},
-			middlewareFunc: func(job *Job[callbackArgs]) []rivertype.WorkerMiddleware {
-				require.Equal(t, "middleware_test", job.Args.Name, "JSON should be decoded before middleware is called")
+			middlewareFunc: func(job *rivertype.JobRow) []rivertype.WorkerMiddleware {
+				require.Equal(t, "callback", job.Kind)
 
 				return []rivertype.WorkerMiddleware{
 					&overridableJobMiddleware{
@@ -705,9 +705,7 @@ func Test_Client(t *testing.T) {
 				require.Equal(t, "middleware name", job.Args.Name)
 				return nil
 			},
-			middlewareFunc: func(job *Job[callbackArgs]) []rivertype.WorkerMiddleware {
-				require.Equal(t, "inserted name", job.Args.Name)
-
+			middlewareFunc: func(job *rivertype.JobRow) []rivertype.WorkerMiddleware {
 				return []rivertype.WorkerMiddleware{
 					&overridableJobMiddleware{
 						workFunc: func(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
@@ -988,15 +986,15 @@ func Test_Client(t *testing.T) {
 type workerWithMiddleware[T JobArgs] struct {
 	WorkerDefaults[T]
 	workFunc       func(context.Context, *Job[T]) error
-	middlewareFunc func(*Job[T]) []rivertype.WorkerMiddleware
+	middlewareFunc func(*rivertype.JobRow) []rivertype.WorkerMiddleware
+}
+
+func (w *workerWithMiddleware[T]) Middleware(job *rivertype.JobRow) []rivertype.WorkerMiddleware {
+	return w.middlewareFunc(job)
 }
 
 func (w *workerWithMiddleware[T]) Work(ctx context.Context, job *Job[T]) error {
 	return w.workFunc(ctx, job)
-}
-
-func (w *workerWithMiddleware[T]) Middleware(job *Job[T]) []rivertype.WorkerMiddleware {
-	return w.middlewareFunc(job)
 }
 
 func Test_Client_Stop(t *testing.T) {
