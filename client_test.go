@@ -661,8 +661,8 @@ func Test_Client(t *testing.T) {
 				require.Equal(t, "called", ctx.Value(privateKey("middleware")))
 				return nil
 			},
-			middlewareFunc: func(job *Job[callbackArgs]) []rivertype.WorkerMiddleware {
-				require.Equal(t, "middleware_test", job.Args.Name, "JSON should be decoded before middleware is called")
+			middlewareFunc: func(job *rivertype.JobRow) []rivertype.WorkerMiddleware {
+				require.Equal(t, "callback", job.Kind)
 
 				return []rivertype.WorkerMiddleware{
 					&overridableJobMiddleware{
@@ -686,6 +686,49 @@ func Test_Client(t *testing.T) {
 		startClient(ctx, t, client)
 
 		result, err := client.Insert(ctx, callbackArgs{Name: "middleware_test"}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, result.Job.ID, event.Job.ID)
+		require.True(t, middlewareCalled)
+	})
+
+	t.Run("MiddlewareModifiesEncodedArgs", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+		middlewareCalled := false
+
+		worker := &workerWithMiddleware[callbackArgs]{
+			workFunc: func(ctx context.Context, job *Job[callbackArgs]) error {
+				require.Equal(t, "middleware name", job.Args.Name)
+				return nil
+			},
+			middlewareFunc: func(job *rivertype.JobRow) []rivertype.WorkerMiddleware {
+				return []rivertype.WorkerMiddleware{
+					&overridableJobMiddleware{
+						workFunc: func(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
+							middlewareCalled = true
+							require.Equal(t, `{"name": "inserted name"}`, string(job.EncodedArgs))
+							job.EncodedArgs = []byte(`{"name": "middleware name"}`)
+							return doInner(ctx)
+						},
+					},
+				}
+			},
+		}
+
+		AddWorker(bundle.config.Workers, worker)
+
+		driver := riverpgxv5.New(bundle.dbPool)
+		client, err := NewClient(driver, bundle.config)
+		require.NoError(t, err)
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		result, err := client.Insert(ctx, callbackArgs{Name: "inserted name"}, nil)
 		require.NoError(t, err)
 
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
@@ -943,15 +986,15 @@ func Test_Client(t *testing.T) {
 type workerWithMiddleware[T JobArgs] struct {
 	WorkerDefaults[T]
 	workFunc       func(context.Context, *Job[T]) error
-	middlewareFunc func(*Job[T]) []rivertype.WorkerMiddleware
+	middlewareFunc func(*rivertype.JobRow) []rivertype.WorkerMiddleware
+}
+
+func (w *workerWithMiddleware[T]) Middleware(job *rivertype.JobRow) []rivertype.WorkerMiddleware {
+	return w.middlewareFunc(job)
 }
 
 func (w *workerWithMiddleware[T]) Work(ctx context.Context, job *Job[T]) error {
 	return w.workFunc(ctx, job)
-}
-
-func (w *workerWithMiddleware[T]) Middleware(job *Job[T]) []rivertype.WorkerMiddleware {
-	return w.middlewareFunc(job)
 }
 
 func Test_Client_Stop(t *testing.T) {

@@ -32,7 +32,7 @@ func waitForNJobs(subscribeChan <-chan *river.Event, numJobs int) {
 			}
 
 		case <-time.After(time.Until(deadline)):
-			panic(fmt.Sprintf("WaitOrTimeout timed out after waiting %s (received %d job(s), wanted %d)",
+			panic(fmt.Sprintf("waitForNJobs timed out after waiting %s (received %d job(s), wanted %d)",
 				timeout, len(events), numJobs))
 		}
 	}

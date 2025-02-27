@@ -38,7 +38,7 @@ import (
 // with the client using the AddWorker function.
 type Worker[T JobArgs] interface {
 	// Middleware returns the type-specific middleware for this job.
-	Middleware(job *Job[T]) []rivertype.WorkerMiddleware
+	Middleware(job *rivertype.JobRow) []rivertype.WorkerMiddleware
 
 	// NextRetry calculates when the next retry for a failed job should take
 	// place given when it was last attempted and its number of attempts, or any
@@ -74,7 +74,7 @@ type Worker[T JobArgs] interface {
 // struct to make it fulfill the Worker interface with default values.
 type WorkerDefaults[T JobArgs] struct{}
 
-func (w WorkerDefaults[T]) Middleware(*Job[T]) []rivertype.WorkerMiddleware { return nil }
+func (w WorkerDefaults[T]) Middleware(*rivertype.JobRow) []rivertype.WorkerMiddleware { return nil }
 
 // NextRetry returns an empty time.Time{} to avoid setting any job or
 // Worker-specific overrides on the next retry time. This means that the

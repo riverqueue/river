@@ -29,19 +29,22 @@ func MaybeApplyTimeout(ctx context.Context, timeout time.Duration) (context.Cont
 // MiddlewareChain chains together the given middleware functions, returning a
 // single function that applies them all in reverse order.
 func MiddlewareChain(global, worker []rivertype.WorkerMiddleware, doInner Func, jobRow *rivertype.JobRow) Func {
+	// Quick return for no middleware, which will often be the case.
+	if len(global) < 1 && len(worker) < 1 {
+		return doInner
+	}
+
 	allMiddleware := make([]rivertype.WorkerMiddleware, 0, len(global)+len(worker))
 	allMiddleware = append(allMiddleware, global...)
 	allMiddleware = append(allMiddleware, worker...)
 
-	if len(allMiddleware) > 0 {
-		// Wrap middlewares in reverse order so the one defined first is wrapped
-		// as the outermost function and is first to receive the operation.
-		for i := len(allMiddleware) - 1; i >= 0; i-- {
-			middlewareItem := allMiddleware[i] // capture the current middleware item
-			previousDoInner := doInner         // capture the current doInner function
-			doInner = func(ctx context.Context) error {
-				return middlewareItem.Work(ctx, jobRow, previousDoInner)
-			}
+	// Wrap middlewares in reverse order so the one defined first is wrapped
+	// as the outermost function and is first to receive the operation.
+	for i := len(allMiddleware) - 1; i >= 0; i-- {
+		middlewareItem := allMiddleware[i] // capture the current middleware item
+		previousDoInner := doInner         // capture the current doInner function
+		doInner = func(ctx context.Context) error {
+			return middlewareItem.Work(ctx, jobRow, previousDoInner)
 		}
 	}
 
