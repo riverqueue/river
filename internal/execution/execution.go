@@ -34,9 +34,12 @@ func MiddlewareChain(global, worker []rivertype.WorkerMiddleware, doInner Func, 
 		return doInner
 	}
 
-	allMiddleware := make([]rivertype.WorkerMiddleware, 0, len(global)+len(worker))
-	allMiddleware = append(allMiddleware, global...)
-	allMiddleware = append(allMiddleware, worker...)
+	// Write this so as to avoid a new slice allocation in cases where there is
+	// no worker specific middleware (which will be the common case).
+	allMiddleware := global
+	if len(worker) > 0 {
+		allMiddleware = append(allMiddleware, worker...)
+	}
 
 	// Wrap middlewares in reverse order so the one defined first is wrapped
 	// as the outermost function and is first to receive the operation.
