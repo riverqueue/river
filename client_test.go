@@ -24,6 +24,7 @@ import (
 	"github.com/tidwall/sjson"
 
 	"github.com/riverqueue/river/internal/dbunique"
+	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
@@ -610,7 +611,117 @@ func Test_Client(t *testing.T) {
 		require.Equal(t, `relation "river_job" does not exist`, pgErr.Message)
 	})
 
-	t.Run("WithWorkerMiddleware", func(t *testing.T) {
+	t.Run("WithGlobalInsertBeginHook", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		insertBeginHookCalled := false
+
+		bundle.config.Hooks = []rivertype.Hook{
+			HookInsertBeginFunc(func(ctx context.Context, params *rivertype.JobInsertParams) error {
+				insertBeginHookCalled = true
+				return nil
+			}),
+		}
+
+		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[callbackArgs]) error {
+			return nil
+		}))
+
+		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
+		require.NoError(t, err)
+
+		_, err = client.Insert(ctx, callbackArgs{}, nil)
+		require.NoError(t, err)
+
+		require.True(t, insertBeginHookCalled)
+	})
+
+	t.Run("WithGlobalWorkBeginHook", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		workBeginHookCalled := false
+
+		bundle.config.Hooks = []rivertype.Hook{
+			HookWorkBeginFunc(func(ctx context.Context, job *rivertype.JobRow) error {
+				workBeginHookCalled = true
+				return nil
+			}),
+		}
+
+		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[callbackArgs]) error {
+			return nil
+		}))
+
+		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
+		require.NoError(t, err)
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+
+		require.True(t, workBeginHookCalled)
+	})
+
+	t.Run("WithInsertBeginHookOnJobArgs", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[jobArgsWithCustomHook]) error {
+			return nil
+		}))
+
+		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
+		require.NoError(t, err)
+
+		insertRes, err := client.Insert(ctx, jobArgsWithCustomHook{}, nil)
+		require.NoError(t, err)
+
+		var metadataMap map[string]any
+		err = json.Unmarshal(insertRes.Job.Metadata, &metadataMap)
+		require.NoError(t, err)
+		require.Equal(t, "called", metadataMap["insert_begin_hook"])
+	})
+
+	t.Run("WithWorkBeginHookOnJobArgs", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[jobArgsWithCustomHook]) error {
+			return nil
+		}))
+
+		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
+		require.NoError(t, err)
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, jobArgsWithCustomHook{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+
+		var metadataMap map[string]any
+		err = json.Unmarshal(event.Job.Metadata, &metadataMap)
+		require.NoError(t, err)
+		require.Equal(t, "called", metadataMap["work_begin_hook"])
+	})
+
+	t.Run("WithGlobalWorkerMiddleware", func(t *testing.T) {
 		t.Parallel()
 
 		_, bundle := setup(t)
@@ -981,6 +1092,51 @@ func Test_Client(t *testing.T) {
 
 		startstoptest.StressErr(ctx, t, clientWithStop, rivercommon.ErrShutdown)
 	})
+}
+
+type jobArgsWithCustomHook struct{}
+
+func (jobArgsWithCustomHook) Kind() string { return "with_custom_hook" }
+
+func (jobArgsWithCustomHook) Hooks() []rivertype.Hook {
+	return []rivertype.Hook{
+		&testHookInsertAndWorkBegin{},
+	}
+}
+
+var (
+	_ rivertype.HookInsertBegin = &testHookInsertAndWorkBegin{}
+	_ rivertype.HookWorkBegin   = &testHookInsertAndWorkBegin{}
+)
+
+type testHookInsertAndWorkBegin struct{ HookDefaults }
+
+func (t *testHookInsertAndWorkBegin) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
+	var metadataMap map[string]any
+	if err := json.Unmarshal(params.Metadata, &metadataMap); err != nil {
+		return err
+	}
+
+	metadataMap["insert_begin_hook"] = "called"
+
+	var err error
+	params.Metadata, err = json.Marshal(metadataMap)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (t *testHookInsertAndWorkBegin) WorkBegin(ctx context.Context, job *rivertype.JobRow) error {
+	metadataUpdates, hasMetadataUpdates := jobexecutor.MetadataUpdatesFromWorkContext(ctx)
+	if !hasMetadataUpdates {
+		panic("expected to be called from within job executor")
+	}
+
+	metadataUpdates["work_begin_hook"] = "called"
+
+	return nil
 }
 
 type workerWithMiddleware[T JobArgs] struct {
@@ -5081,6 +5237,7 @@ func Test_NewClient_Defaults(t *testing.T) {
 	require.Equal(t, FetchCooldownDefault, client.config.FetchCooldown)
 	require.Equal(t, FetchPollIntervalDefault, client.config.FetchPollInterval)
 	require.Equal(t, JobTimeoutDefault, client.config.JobTimeout)
+	require.Nil(t, client.config.Hooks)
 	require.NotZero(t, client.baseService.Logger)
 	require.Equal(t, MaxAttemptsDefault, client.config.MaxAttempts)
 	require.IsType(t, &DefaultClientRetryPolicy{}, client.config.RetryPolicy)
@@ -5103,6 +5260,10 @@ func Test_NewClient_Overrides(t *testing.T) {
 
 	retryPolicy := &DefaultClientRetryPolicy{}
 
+	type noOpHook struct {
+		HookDefaults
+	}
+
 	type noOpInsertMiddleware struct {
 		JobInsertMiddlewareDefaults
 	}
@@ -5119,6 +5280,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 		ErrorHandler:                errorHandler,
 		FetchCooldown:               123 * time.Millisecond,
 		FetchPollInterval:           124 * time.Millisecond,
+		Hooks:                       []rivertype.Hook{&noOpHook{}},
 		JobInsertMiddleware:         []rivertype.JobInsertMiddleware{&noOpInsertMiddleware{}},
 		JobTimeout:                  125 * time.Millisecond,
 		Logger:                      logger,
@@ -5154,6 +5316,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 	require.Equal(t, 124*time.Millisecond, client.config.FetchPollInterval)
 	require.Len(t, client.config.JobInsertMiddleware, 1)
 	require.Equal(t, 125*time.Millisecond, client.config.JobTimeout)
+	require.Equal(t, []rivertype.Hook{&noOpHook{}}, client.config.Hooks)
 	require.Equal(t, logger, client.baseService.Logger)
 	require.Equal(t, 5, client.config.MaxAttempts)
 	require.Equal(t, retryPolicy, client.config.RetryPolicy)

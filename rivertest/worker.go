@@ -10,6 +10,7 @@ import (
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/internal/execution"
+	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/maintenance"
@@ -191,7 +192,9 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 			},
 		},
 		InformProducerDoneFunc: func(job *rivertype.JobRow) { close(executionDone) },
-		GlobalMiddleware:       w.config.WorkerMiddleware,
+		HookLookupGlobal:       hooklookup.NewHookLookup(w.config.Hooks),
+		HookLookupByJob:        hooklookup.NewJobHookLookup(),
+		WorkerMiddleware:       w.config.WorkerMiddleware,
 		JobRow:                 job,
 		SchedulerInterval:      maintenance.JobSchedulerIntervalDefault,
 		WorkUnit:               workUnit,
@@ -295,13 +298,17 @@ type wrapperWorkUnit[T river.JobArgs] struct {
 	worker river.Worker[T]
 }
 
-func (w *wrapperWorkUnit[T]) NextRetry() time.Time           { return w.worker.NextRetry(w.job) }
-func (w *wrapperWorkUnit[T]) Timeout() time.Duration         { return w.worker.Timeout(w.job) }
-func (w *wrapperWorkUnit[T]) Work(ctx context.Context) error { return w.worker.Work(ctx, w.job) }
+func (w *wrapperWorkUnit[T]) HookLookup(lookup *hooklookup.JobHookLookup) hooklookup.HookLookupInterface {
+	var job T
+	return lookup.ByJobArgs(job)
+}
 
 func (w *wrapperWorkUnit[T]) Middleware() []rivertype.WorkerMiddleware {
 	return w.worker.Middleware(w.jobRow)
 }
+func (w *wrapperWorkUnit[T]) NextRetry() time.Time           { return w.worker.NextRetry(w.job) }
+func (w *wrapperWorkUnit[T]) Timeout() time.Duration         { return w.worker.Timeout(w.job) }
+func (w *wrapperWorkUnit[T]) Work(ctx context.Context) error { return w.worker.Work(ctx, w.job) }
 
 func (w *wrapperWorkUnit[T]) UnmarshalJob() error {
 	w.job = &river.Job[T]{

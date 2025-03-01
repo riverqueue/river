@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
@@ -38,6 +39,9 @@ type callbackWorkUnit struct {
 	timeout  time.Duration // defaults to 0, which signals default timeout
 }
 
+func (w *callbackWorkUnit) HookLookup(cache *hooklookup.JobHookLookup) hooklookup.HookLookupInterface {
+	return nil
+}
 func (w *callbackWorkUnit) Middleware() []rivertype.WorkerMiddleware { return nil }
 func (w *callbackWorkUnit) NextRetry() time.Time                     { return time.Now().Add(30 * time.Second) }
 func (w *callbackWorkUnit) Timeout() time.Duration                   { return w.timeout }

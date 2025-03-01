@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -15,6 +16,11 @@ import (
 //
 // Implemented by river.wrapperWorkUnit.
 type WorkUnit interface {
+	// HookLookup procures the a hook lookup bundle for the wrapped job using
+	// the given job hook lookup bundle. Hooks are looked up by job args and
+	// otherwise not available to jobexecutor.
+	HookLookup(lookup *hooklookup.JobHookLookup) hooklookup.HookLookupInterface
+
 	Middleware() []rivertype.WorkerMiddleware
 	NextRetry() time.Time
 	Timeout() time.Duration
