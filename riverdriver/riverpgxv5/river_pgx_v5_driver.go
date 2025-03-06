@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/puddle/v2"
@@ -24,6 +25,7 @@ import (
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5/internal/dbsqlc"
+	"github.com/riverqueue/river/rivershared/sqlctemplate"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -33,7 +35,8 @@ var migrationFS embed.FS
 
 // Driver is an implementation of riverdriver.Driver for Pgx v5.
 type Driver struct {
-	dbPool *pgxpool.Pool
+	dbPool   *pgxpool.Pool
+	replacer sqlctemplate.Replacer
 }
 
 // New returns a new Pgx v5 River driver for use with River.
@@ -49,10 +52,14 @@ type Driver struct {
 // in testing so that inserts can be performed and verified on a test
 // transaction that will be rolled back.
 func New(dbPool *pgxpool.Pool) *Driver {
-	return &Driver{dbPool: dbPool}
+	return &Driver{
+		dbPool: dbPool,
+	}
 }
 
-func (d *Driver) GetExecutor() riverdriver.Executor { return &Executor{d.dbPool} }
+func (d *Driver) GetExecutor() riverdriver.Executor {
+	return &Executor{templateReplaceWrapper{d.dbPool, &d.replacer}, d}
+}
 func (d *Driver) GetListener() riverdriver.Listener { return &Listener{dbPool: d.dbPool} }
 func (d *Driver) GetMigrationFS(line string) fs.FS {
 	if line == riverdriver.MigrationLineMain {
@@ -65,14 +72,20 @@ func (d *Driver) HasPool() bool               { return d.dbPool != nil }
 func (d *Driver) SupportsListener() bool      { return true }
 
 func (d *Driver) UnwrapExecutor(tx pgx.Tx) riverdriver.ExecutorTx {
-	return &ExecutorTx{Executor: Executor{tx}, tx: tx}
+	// Allows UnwrapExecutor to be invoked even if driver is nil.
+	var replacer *sqlctemplate.Replacer
+	if d == nil {
+		replacer = &sqlctemplate.Replacer{}
+	} else {
+		replacer = &d.replacer
+	}
+
+	return &ExecutorTx{Executor: Executor{templateReplaceWrapper{tx, replacer}, d}, tx: tx}
 }
 
 type Executor struct {
-	dbtx interface {
-		dbsqlc.DBTX
-		Begin(ctx context.Context) (pgx.Tx, error)
-	}
+	dbtx   templateReplaceWrapper
+	driver *Driver
 }
 
 func (e *Executor) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
@@ -80,7 +93,7 @@ func (e *Executor) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ExecutorTx{Executor: Executor{tx}, tx: tx}, nil
+	return &ExecutorTx{Executor: Executor{templateReplaceWrapper{tx, &e.driver.replacer}, e.driver}, tx: tx}, nil
 }
 
 func (e *Executor) ColumnExists(ctx context.Context, tableName, columnName string) (bool, error) {
@@ -812,6 +825,37 @@ func (l *Listener) WaitForNotification(ctx context.Context) (*riverdriver.Notifi
 		Topic:   strings.TrimPrefix(notification.Channel, l.prefix),
 		Payload: notification.Payload,
 	}, nil
+}
+
+type templateReplaceWrapper struct {
+	dbtx interface {
+		dbsqlc.DBTX
+		Begin(ctx context.Context) (pgx.Tx, error)
+	}
+	replacer *sqlctemplate.Replacer
+}
+
+func (w templateReplaceWrapper) Begin(ctx context.Context) (pgx.Tx, error) {
+	return w.dbtx.Begin(ctx)
+}
+
+func (w templateReplaceWrapper) Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error) {
+	sql, args = w.replacer.Run(ctx, sql, args)
+	return w.dbtx.Exec(ctx, sql, args...)
+}
+
+func (w templateReplaceWrapper) Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error) {
+	sql, args = w.replacer.Run(ctx, sql, args)
+	return w.dbtx.Query(ctx, sql, args...)
+}
+
+func (w templateReplaceWrapper) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
+	sql, args = w.replacer.Run(ctx, sql, args)
+	return w.dbtx.QueryRow(ctx, sql, args...)
+}
+
+func (w templateReplaceWrapper) CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error) {
+	return w.dbtx.CopyFrom(ctx, tableName, columnNames, rowSrc)
 }
 
 func interpretError(err error) error {
