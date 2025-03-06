@@ -35,7 +35,8 @@ var migrationFS embed.FS
 
 // Driver is an implementation of riverdriver.Driver for database/sql.
 type Driver struct {
-	dbPool *sql.DB
+	dbPool   *sql.DB
+	listener riverdriver.Listener
 }
 
 // New returns a new database/sql River driver for use with River.
@@ -47,11 +48,26 @@ func New(dbPool *sql.DB) *Driver {
 	return &Driver{dbPool: dbPool}
 }
 
+// NewWithListener returns a new database/sql River driver for use with River
+// just like New, except it also takes a riverdriver.Listener to use for
+// listening to notifications.
+func NewWithListener(dbPool *sql.DB, listener riverdriver.Listener) *Driver {
+	driver := New(dbPool)
+	driver.listener = listener
+	return driver
+}
+
 func (d *Driver) GetExecutor() riverdriver.Executor {
 	return &Executor{d.dbPool, d.dbPool}
 }
 
-func (d *Driver) GetListener() riverdriver.Listener { panic(riverdriver.ErrNotImplemented) }
+func (d *Driver) GetListener() riverdriver.Listener {
+	if d.listener == nil {
+		panic(riverdriver.ErrNotImplemented)
+	}
+	return d.listener
+}
+
 func (d *Driver) GetMigrationFS(line string) fs.FS {
 	if line == riverdriver.MigrationLineMain {
 		return migrationFS
@@ -60,7 +76,7 @@ func (d *Driver) GetMigrationFS(line string) fs.FS {
 }
 func (d *Driver) GetMigrationLines() []string { return []string{riverdriver.MigrationLineMain} }
 func (d *Driver) HasPool() bool               { return d.dbPool != nil }
-func (d *Driver) SupportsListener() bool      { return false }
+func (d *Driver) SupportsListener() bool      { return d.listener != nil }
 
 func (d *Driver) UnwrapExecutor(tx *sql.Tx) riverdriver.ExecutorTx {
 	return &ExecutorTx{Executor: Executor{nil, tx}, tx: tx}
