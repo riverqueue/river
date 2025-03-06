@@ -1281,11 +1281,15 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				UniqueStates: 0xFF,
 			})
 
-			fetchedJobs, err := exec.JobList(
-				ctx,
-				fmt.Sprintf("SELECT %s FROM river_job WHERE id = @job_id_123", exec.JobListFields()),
-				map[string]any{"job_id_123": job.ID},
-			)
+			// Does not match predicate (makes sure where clause is working).
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+
+			fetchedJobs, err := exec.JobList(ctx, &riverdriver.JobListParams{
+				Max:           100,
+				NamedArgs:     map[string]any{"job_id_123": job.ID},
+				OrderByClause: "id",
+				WhereClause:   "id = @job_id_123",
+			})
 			require.NoError(t, err)
 			require.Len(t, fetchedJobs, 1)
 
@@ -1316,34 +1320,27 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind2")})
 
 			{
-				fetchedJobs, err := exec.JobList(
-					ctx,
-					fmt.Sprintf("SELECT %s FROM river_job WHERE kind = @kind", exec.JobListFields()),
-					map[string]any{"kind": job1.Kind},
-				)
+				fetchedJobs, err := exec.JobList(ctx, &riverdriver.JobListParams{
+					Max:           100,
+					NamedArgs:     map[string]any{"kind": job1.Kind},
+					OrderByClause: "id",
+					WhereClause:   "kind = @kind",
+				})
 				require.NoError(t, err)
 				require.Len(t, fetchedJobs, 1)
 			}
 
 			{
-				fetchedJobs, err := exec.JobList(
-					ctx,
-					fmt.Sprintf("SELECT %s FROM river_job WHERE kind = any(@kind::text[])", exec.JobListFields()),
-					map[string]any{"kind": []string{job1.Kind, job2.Kind}},
-				)
+				fetchedJobs, err := exec.JobList(ctx, &riverdriver.JobListParams{
+					Max:           100,
+					NamedArgs:     map[string]any{"kind": []string{job1.Kind, job2.Kind}},
+					OrderByClause: "id",
+					WhereClause:   "kind = any(@kind::text[])",
+				})
 				require.NoError(t, err)
 				require.Len(t, fetchedJobs, 2)
 			}
 		})
-	})
-
-	t.Run("JobListFields", func(t *testing.T) {
-		t.Parallel()
-
-		exec, _ := setup(ctx, t)
-
-		require.Equal(t, "id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states",
-			exec.JobListFields())
 	})
 
 	t.Run("JobRescueMany", func(t *testing.T) {

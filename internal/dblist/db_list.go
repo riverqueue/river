@@ -3,24 +3,12 @@ package dblist
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
-
-const jobList = `-- name: JobList :many
-SELECT
-  %s
-FROM
-  river_job
-%s
-ORDER BY
-  %s
-LIMIT @count::integer
-`
 
 type SortOrder int
 
@@ -47,7 +35,7 @@ type JobListParams struct {
 }
 
 func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListParams) ([]*rivertype.JobRow, error) {
-	var conditionsBuilder strings.Builder
+	var whereBuilder strings.Builder
 
 	orderBy := make([]JobListOrderBy, len(params.OrderBy))
 	for i, o := range params.OrderBy {
@@ -62,41 +50,44 @@ func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListPara
 		namedArgs = make(map[string]any)
 	}
 
-	writeWhereOrAnd := func() {
-		if conditionsBuilder.Len() == 0 {
-			conditionsBuilder.WriteString("WHERE\n	")
-		} else {
-			conditionsBuilder.WriteString("\n  AND ")
+	writeAndAfterFirst := func() {
+		if whereBuilder.Len() != 0 {
+			whereBuilder.WriteString("\n  AND ")
 		}
 	}
 
 	if len(params.Kinds) > 0 {
-		writeWhereOrAnd()
-		conditionsBuilder.WriteString("kind = any(@kinds::text[])")
+		writeAndAfterFirst()
+		whereBuilder.WriteString("kind = any(@kinds::text[])")
 		namedArgs["kinds"] = params.Kinds
 	}
 
 	if len(params.Queues) > 0 {
-		writeWhereOrAnd()
-		conditionsBuilder.WriteString("queue = any(@queues::text[])")
+		writeAndAfterFirst()
+		whereBuilder.WriteString("queue = any(@queues::text[])")
 		namedArgs["queues"] = params.Queues
 	}
 
 	if len(params.States) > 0 {
-		writeWhereOrAnd()
-		conditionsBuilder.WriteString("state = any(@states::river_job_state[])")
+		writeAndAfterFirst()
+		whereBuilder.WriteString("state = any(@states::river_job_state[])")
 		namedArgs["states"] = sliceutil.Map(params.States, func(s rivertype.JobState) string { return string(s) })
 	}
 
 	if params.Conditions != "" {
-		writeWhereOrAnd()
-		conditionsBuilder.WriteString(params.Conditions)
+		writeAndAfterFirst()
+		whereBuilder.WriteString(params.Conditions)
+	}
+
+	// A condition of some kind is needed, so given no others write one that'll
+	// always return true.
+	if whereBuilder.Len() < 1 {
+		whereBuilder.WriteString("1")
 	}
 
 	if params.LimitCount < 1 {
 		return nil, errors.New("required parameter 'Count' in JobList must be greater than zero")
 	}
-	namedArgs["count"] = params.LimitCount
 
 	if len(params.OrderBy) == 0 {
 		return nil, errors.New("sort order is required")
@@ -116,7 +107,10 @@ func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListPara
 		}
 	}
 
-	sql := fmt.Sprintf(jobList, exec.JobListFields(), conditionsBuilder.String(), orderByBuilder.String())
-
-	return exec.JobList(ctx, sql, namedArgs)
+	return exec.JobList(ctx, &riverdriver.JobListParams{
+		Max:           params.LimitCount,
+		NamedArgs:     namedArgs,
+		OrderByClause: orderByBuilder.String(),
+		WhereClause:   whereBuilder.String(),
+	})
 }
