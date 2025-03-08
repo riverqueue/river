@@ -710,7 +710,7 @@ func Test_Client(t *testing.T) {
 					&overridableJobMiddleware{
 						workFunc: func(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
 							middlewareCalled = true
-							require.Equal(t, `{"name": "inserted name"}`, string(job.EncodedArgs))
+							require.JSONEq(t, `{"name": "inserted name"}`, string(job.EncodedArgs))
 							job.EncodedArgs = []byte(`{"name": "middleware name"}`)
 							return doInner(ctx)
 						},

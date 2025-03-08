@@ -25,6 +25,7 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql/internal/dbsqlc"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql/internal/pgtypealias"
+	"github.com/riverqueue/river/rivershared/sqlctemplate"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivershared/util/valutil"
 	"github.com/riverqueue/river/rivertype"
@@ -35,7 +36,8 @@ var migrationFS embed.FS
 
 // Driver is an implementation of riverdriver.Driver for database/sql.
 type Driver struct {
-	dbPool *sql.DB
+	dbPool   *sql.DB
+	replacer sqlctemplate.Replacer
 }
 
 // New returns a new database/sql River driver for use with River.
@@ -44,11 +46,13 @@ type Driver struct {
 // configured to use the schema specified in the client's Schema field. The pool
 // must not be closed while associated River objects are running.
 func New(dbPool *sql.DB) *Driver {
-	return &Driver{dbPool: dbPool}
+	return &Driver{
+		dbPool: dbPool,
+	}
 }
 
 func (d *Driver) GetExecutor() riverdriver.Executor {
-	return &Executor{d.dbPool, d.dbPool}
+	return &Executor{d.dbPool, templateReplaceWrapper{d.dbPool, &d.replacer}, d}
 }
 
 func (d *Driver) GetListener() riverdriver.Listener { panic(riverdriver.ErrNotImplemented) }
@@ -63,12 +67,21 @@ func (d *Driver) HasPool() bool               { return d.dbPool != nil }
 func (d *Driver) SupportsListener() bool      { return false }
 
 func (d *Driver) UnwrapExecutor(tx *sql.Tx) riverdriver.ExecutorTx {
-	return &ExecutorTx{Executor: Executor{nil, tx}, tx: tx}
+	// Allows UnwrapExecutor to be invoked even if driver is nil.
+	var replacer *sqlctemplate.Replacer
+	if d == nil {
+		replacer = &sqlctemplate.Replacer{}
+	} else {
+		replacer = &d.replacer
+	}
+
+	return &ExecutorTx{Executor: Executor{nil, templateReplaceWrapper{tx, replacer}, d}, tx: tx}
 }
 
 type Executor struct {
 	dbPool *sql.DB
-	dbtx   dbsqlc.DBTX
+	dbtx   templateReplaceWrapper
+	driver *Driver
 }
 
 func (e *Executor) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
@@ -76,7 +89,7 @@ func (e *Executor) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ExecutorTx{Executor: Executor{nil, tx}, tx: tx}, nil
+	return &ExecutorTx{Executor: Executor{nil, templateReplaceWrapper{tx, &e.driver.replacer}, e.driver}, tx: tx}, nil
 }
 
 func (e *Executor) ColumnExists(ctx context.Context, tableName, columnName string) (bool, error) {
@@ -846,7 +859,7 @@ type ExecutorTx struct {
 }
 
 func (t *ExecutorTx) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
-	return (&ExecutorSubTx{Executor: Executor{nil, t.tx}, savepointNum: 0, single: &singleTransaction{}, tx: t.tx}).Begin(ctx)
+	return (&ExecutorSubTx{Executor: Executor{nil, templateReplaceWrapper{t.tx, &t.driver.replacer}, t.driver}, savepointNum: 0, single: &singleTransaction{}, tx: t.tx}).Begin(ctx)
 }
 
 func (t *ExecutorTx) Commit(ctx context.Context) error {
@@ -878,7 +891,7 @@ func (t *ExecutorSubTx) Begin(ctx context.Context) (riverdriver.ExecutorTx, erro
 	if err != nil {
 		return nil, err
 	}
-	return &ExecutorSubTx{Executor: Executor{nil, t.tx}, savepointNum: nextSavepointNum, single: &singleTransaction{parent: t.single}, tx: t.tx}, nil
+	return &ExecutorSubTx{Executor: Executor{nil, templateReplaceWrapper{t.tx, &t.driver.replacer}, t.driver}, savepointNum: nextSavepointNum, single: &singleTransaction{parent: t.single}, tx: t.tx}, nil
 }
 
 func (t *ExecutorSubTx) Commit(ctx context.Context) error {
@@ -942,6 +955,31 @@ func (t *singleTransaction) setDone() {
 	if t.parent != nil {
 		t.parent.subTxInProgress = false
 	}
+}
+
+type templateReplaceWrapper struct {
+	dbtx     dbsqlc.DBTX
+	replacer *sqlctemplate.Replacer
+}
+
+func (w templateReplaceWrapper) ExecContext(ctx context.Context, sql string, args ...interface{}) (sql.Result, error) {
+	sql, args = w.replacer.Run(ctx, sql, args)
+	return w.dbtx.ExecContext(ctx, sql, args...)
+}
+
+func (w templateReplaceWrapper) PrepareContext(ctx context.Context, sql string) (*sql.Stmt, error) {
+	sql, _ = w.replacer.Run(ctx, sql, nil)
+	return w.dbtx.PrepareContext(ctx, sql)
+}
+
+func (w templateReplaceWrapper) QueryContext(ctx context.Context, sql string, args ...interface{}) (*sql.Rows, error) {
+	sql, args = w.replacer.Run(ctx, sql, args)
+	return w.dbtx.QueryContext(ctx, sql, args...)
+}
+
+func (w templateReplaceWrapper) QueryRowContext(ctx context.Context, sql string, args ...interface{}) *sql.Row {
+	sql, args = w.replacer.Run(ctx, sql, args)
+	return w.dbtx.QueryRowContext(ctx, sql, args...)
 }
 
 func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
