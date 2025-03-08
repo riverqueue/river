@@ -110,10 +110,20 @@ func (r *Replacer) Run(ctx context.Context, sql string, args []any) (string, []a
 // RunSafely is the same as Run, but returns an error in case of missing or
 // extra templates.
 func (r *Replacer) RunSafely(ctx context.Context, sql string, args []any) (string, []any, error) {
-	// If nothing present in context, short circuit quickly.
-	container, containerOK := ctx.Value(contextKey{}).(*contextContainer)
-	if !containerOK {
+	var (
+		container, containerOK = ctx.Value(contextKey{}).(*contextContainer)
+		sqlContainsTemplate    = strings.Contains(sql, "/* TEMPLATE")
+	)
+	switch {
+	case !containerOK && !sqlContainsTemplate:
+		// Neither context container or template in SQL; short circuit fast because there's no work to do.
 		return sql, args, nil
+
+	case containerOK && !sqlContainsTemplate:
+		return "", nil, errors.New("sqlctemplate found context container but SQL contains no templates; bug?")
+
+	case !containerOK && sqlContainsTemplate:
+		return "", nil, errors.New("sqlctemplate found template(s) in SQL, but no context container; bug?")
 	}
 
 	r.cacheMu.RLock()
@@ -132,10 +142,6 @@ func (r *Replacer) RunSafely(ctx context.Context, sql string, args []any) (strin
 			args = append(args, maputil.Values(container.NamedArgs)...)
 		}
 		return cachedSQL, args, nil
-	}
-
-	if !strings.Contains(sql, "/* TEMPLATE") {
-		return sql, args, nil
 	}
 
 	var (

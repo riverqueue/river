@@ -21,36 +21,43 @@ func TestReplacer(t *testing.T) {
 		return &Replacer{}, &testBundle{}
 	}
 
-	t.Run("NoContainer", func(t *testing.T) {
+	t.Run("NoContainerError", func(t *testing.T) {
 		t.Parallel()
 
 		replacer, _ := setup(t)
 
-		updatedSQL, args, err := replacer.RunSafely(ctx, `
+		_, _, err := replacer.RunSafely(ctx, `
 			SELECT /* TEMPLATE: schema */river_job;
 		`, nil)
-		require.NoError(t, err)
-		require.Nil(t, args)
-		require.Equal(t, `
-			SELECT /* TEMPLATE: schema */river_job;
-		`, updatedSQL)
+		require.EqualError(t, err, "sqlctemplate found template(s) in SQL, but no context container; bug?")
 	})
 
-	t.Run("NoTemplate", func(t *testing.T) {
+	t.Run("NoTemplateError", func(t *testing.T) {
 		t.Parallel()
 
 		replacer, _ := setup(t)
 
 		ctx := WithReplacements(ctx, map[string]Replacement{}, nil)
 
+		_, _, err := replacer.RunSafely(ctx, `
+			SELECT 1;
+		`, nil)
+		require.EqualError(t, err, "sqlctemplate found context container but SQL contains no templates; bug?")
+	})
+
+	t.Run("NoContainerOrTemplate", func(t *testing.T) {
+		t.Parallel()
+
+		replacer, _ := setup(t)
+
 		updatedSQL, args, err := replacer.RunSafely(ctx, `
 			SELECT 1;
 		`, nil)
 		require.NoError(t, err)
-		require.Nil(t, args)
 		require.Equal(t, `
 			SELECT 1;
 		`, updatedSQL)
+		require.Nil(t, args)
 	})
 
 	t.Run("BasicTemplate", func(t *testing.T) {
