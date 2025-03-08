@@ -55,6 +55,7 @@ type CommandBase struct {
 	DriverProcurer DriverProcurer
 	Logger         *slog.Logger
 	Out            io.Writer
+	Schema         string
 
 	GetBenchmarker func() BenchmarkerInterface
 	GetMigrator    func(config *rivermigrate.Config) (MigratorInterface, error)
@@ -75,6 +76,7 @@ type RunCommandBundle struct {
 	DriverProcurer DriverProcurer
 	Logger         *slog.Logger
 	OutStd         io.Writer
+	Schema         string
 }
 
 // RunCommand bootstraps and runs a River CLI subcommand.
@@ -88,6 +90,7 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 			DriverProcurer: bundle.DriverProcurer,
 			Logger:         bundle.Logger,
 			Out:            bundle.OutStd,
+			Schema:         bundle.Schema,
 		}
 
 		var databaseURL *string
@@ -124,7 +127,9 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 
 			driver := bundle.DriverProcurer.ProcurePgxV5(dbPool)
 
-			commandBase.GetBenchmarker = func() BenchmarkerInterface { return riverbench.NewBenchmarker(driver, commandBase.Logger) }
+			commandBase.GetBenchmarker = func() BenchmarkerInterface {
+				return riverbench.NewBenchmarker(driver, commandBase.Logger, commandBase.Schema)
+			}
 			commandBase.GetMigrator = func(config *rivermigrate.Config) (MigratorInterface, error) { return rivermigrate.New(driver, config) }
 		}
 

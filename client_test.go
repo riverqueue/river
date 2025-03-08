@@ -585,7 +585,7 @@ func Test_Client(t *testing.T) {
 
 		// Cancel an unknown job ID, within a transaction:
 		err = dbutil.WithTx(ctx, client.driver.GetExecutor(), func(ctx context.Context, exec riverdriver.ExecutorTx) error {
-			jobAfter, err := exec.JobCancel(ctx, &riverdriver.JobCancelParams{ID: 0})
+			jobAfter, err := exec.JobCancel(ctx, &riverdriver.JobCancelParams{ID: 0, Schema: client.config.schema})
 			require.ErrorIs(t, err, ErrNotFound)
 			require.Nil(t, jobAfter)
 			return nil
@@ -2020,7 +2020,11 @@ func Test_Client_InsertManyFast(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 2, count)
 
-		jobs, err := client.driver.GetExecutor().JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
+		jobs, err := client.driver.GetExecutor().JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{(noOpArgs{}).Kind()},
+			Schema: client.config.schema,
+		})
+
 		require.NoError(t, err)
 		require.Len(t, jobs, 2, "Expected to find exactly two jobs of kind: "+(noOpArgs{}).Kind())
 	})
@@ -2122,7 +2126,11 @@ func Test_Client_InsertManyFast(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 1, count)
 
-		jobs, err := client.driver.GetExecutor().JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
+		jobs, err := client.driver.GetExecutor().JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{(noOpArgs{}).Kind()},
+			Schema: client.config.schema,
+		})
+
 		require.NoError(t, err)
 		require.Len(t, jobs, 1, "Expected to find exactly one job of kind: "+(noOpArgs{}).Kind())
 		jobRow := jobs[0]
@@ -2262,14 +2270,21 @@ func Test_Client_InsertManyFastTx(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 2, count)
 
-		jobs, err := client.driver.UnwrapExecutor(bundle.tx).JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
+		jobs, err := client.driver.UnwrapExecutor(bundle.tx).JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{(noOpArgs{}).Kind()},
+			Schema: client.config.schema,
+		})
+
 		require.NoError(t, err)
 		require.Len(t, jobs, 2, "Expected to find exactly two jobs of kind: "+(noOpArgs{}).Kind())
 
 		require.NoError(t, bundle.tx.Commit(ctx))
 
 		// Ensure the jobs are visible outside the transaction:
-		jobs, err = client.driver.GetExecutor().JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
+		jobs, err = client.driver.GetExecutor().JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{(noOpArgs{}).Kind()},
+			Schema: client.config.schema,
+		})
 		require.NoError(t, err)
 		require.Len(t, jobs, 2, "Expected to find exactly two jobs of kind: "+(noOpArgs{}).Kind())
 	})
@@ -2282,7 +2297,10 @@ func Test_Client_InsertManyFastTx(t *testing.T) {
 		_, err := client.InsertManyFastTx(ctx, bundle.tx, []InsertManyParams{{noOpArgs{}, nil}})
 		require.NoError(t, err)
 
-		insertedJobs, err := client.driver.UnwrapExecutor(bundle.tx).JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
+		insertedJobs, err := client.driver.UnwrapExecutor(bundle.tx).JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{(noOpArgs{}).Kind()},
+			Schema: client.config.schema,
+		})
 		require.NoError(t, err)
 		require.Len(t, insertedJobs, 1)
 		require.Equal(t, rivertype.JobStateAvailable, insertedJobs[0].State)
@@ -2300,7 +2318,10 @@ func Test_Client_InsertManyFastTx(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 1, count)
 
-		insertedJobs, err := client.driver.UnwrapExecutor(bundle.tx).JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
+		insertedJobs, err := client.driver.UnwrapExecutor(bundle.tx).JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{(noOpArgs{}).Kind()},
+			Schema: client.config.schema,
+		})
 		require.NoError(t, err)
 		require.Len(t, insertedJobs, 1)
 		require.Equal(t, rivertype.JobStateScheduled, insertedJobs[0].State)
@@ -2466,7 +2487,10 @@ func Test_Client_InsertMany(t *testing.T) {
 
 		require.NotEqual(t, results[0].Job.ID, results[1].Job.ID)
 
-		jobs, err := client.driver.GetExecutor().JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
+		jobs, err := client.driver.GetExecutor().JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{(noOpArgs{}).Kind()},
+			Schema: client.config.schema,
+		})
 		require.NoError(t, err)
 		require.Len(t, jobs, 2, "Expected to find exactly two jobs of kind: "+(noOpArgs{}).Kind())
 	})
@@ -2568,7 +2592,10 @@ func Test_Client_InsertMany(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, results, 1)
 
-		jobs, err := client.driver.GetExecutor().JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
+		jobs, err := client.driver.GetExecutor().JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{(noOpArgs{}).Kind()},
+			Schema: client.config.schema,
+		})
 		require.NoError(t, err)
 		require.Len(t, jobs, 1, "Expected to find exactly one job of kind: "+(noOpArgs{}).Kind())
 		jobRow := jobs[0]
@@ -2752,7 +2779,10 @@ func Test_Client_InsertManyTx(t *testing.T) {
 
 		require.NotEqual(t, results[0].Job.ID, results[1].Job.ID)
 
-		jobs, err := client.driver.UnwrapExecutor(bundle.tx).JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
+		jobs, err := client.driver.UnwrapExecutor(bundle.tx).JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{(noOpArgs{}).Kind()},
+			Schema: client.config.schema,
+		})
 		require.NoError(t, err)
 		require.Len(t, jobs, 2, "Expected to find exactly two jobs of kind: "+(noOpArgs{}).Kind())
 	})
@@ -2769,7 +2799,10 @@ func Test_Client_InsertManyTx(t *testing.T) {
 		require.Equal(t, rivertype.JobStateAvailable, results[0].Job.State)
 		require.WithinDuration(t, time.Now(), results[0].Job.ScheduledAt, 2*time.Second)
 
-		insertedJobs, err := client.driver.UnwrapExecutor(bundle.tx).JobGetByKindMany(ctx, []string{(noOpArgs{}).Kind()})
+		insertedJobs, err := client.driver.UnwrapExecutor(bundle.tx).JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{(noOpArgs{}).Kind()},
+			Schema: client.config.schema,
+		})
 		require.NoError(t, err)
 		require.Len(t, insertedJobs, 1)
 		require.Equal(t, rivertype.JobStateAvailable, insertedJobs[0].State)
@@ -3444,7 +3477,10 @@ func Test_Client_ErrorHandler(t *testing.T) {
 		// unknown job.
 		insertParams, err := insertParamsFromConfigArgsAndOptions(&client.baseService.Archetype, config, unregisteredJobArgs{}, nil)
 		require.NoError(t, err)
-		_, err = client.driver.GetExecutor().JobInsertFastMany(ctx, []*riverdriver.JobInsertFastParams{(*riverdriver.JobInsertFastParams)(insertParams)})
+		_, err = client.driver.GetExecutor().JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+			Jobs:   []*riverdriver.JobInsertFastParams{(*riverdriver.JobInsertFastParams)(insertParams)},
+			Schema: client.config.schema,
+		})
 		require.NoError(t, err)
 
 		riversharedtest.WaitOrTimeout(t, bundle.SubscribeChan)
@@ -3605,7 +3641,7 @@ func Test_Client_Maintenance(t *testing.T) {
 
 		requireJobHasState := func(jobID int64, state rivertype.JobState) {
 			t.Helper()
-			job, err := bundle.exec.JobGetByID(ctx, jobID)
+			job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: jobID, Schema: ""})
 			require.NoError(t, err)
 			require.Equal(t, state, job.State)
 		}
@@ -3702,7 +3738,10 @@ func Test_Client_Maintenance(t *testing.T) {
 		svc := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
 
-		jobs, err := bundle.exec.JobGetByKindMany(ctx, []string{(periodicJobArgs{}).Kind()})
+		jobs, err := bundle.exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{(periodicJobArgs{}).Kind()},
+			Schema: client.config.schema,
+		})
 		require.NoError(t, err)
 		require.Len(t, jobs, 1, "Expected to find exactly one job of kind: "+(periodicJobArgs{}).Kind())
 	})
@@ -3728,7 +3767,10 @@ func Test_Client_Maintenance(t *testing.T) {
 		svc.TestSignals.EnteredLoop.WaitOrTimeout()
 
 		// No jobs yet because the RunOnStart option was not specified.
-		jobs, err := bundle.exec.JobGetByKindMany(ctx, []string{(periodicJobArgs{}).Kind()})
+		jobs, err := bundle.exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{(periodicJobArgs{}).Kind()},
+			Schema: client.config.schema,
+		})
 		require.NoError(t, err)
 		require.Empty(t, jobs)
 	})
@@ -3755,7 +3797,10 @@ func Test_Client_Maintenance(t *testing.T) {
 		svc := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
 		svc.TestSignals.SkippedJob.WaitOrTimeout()
 
-		jobs, err := bundle.exec.JobGetByKindMany(ctx, []string{(periodicJobArgs{}).Kind()})
+		jobs, err := bundle.exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{(periodicJobArgs{}).Kind()},
+			Schema: client.config.schema,
+		})
 		require.NoError(t, err)
 		require.Empty(t, jobs, "Expected to find zero jobs of kind: "+(periodicJobArgs{}).Kind())
 	})
@@ -3789,7 +3834,10 @@ func Test_Client_Maintenance(t *testing.T) {
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
 
 		// We get a queued job because RunOnStart was specified.
-		jobs, err := exec.JobGetByKindMany(ctx, []string{(periodicJobArgs{}).Kind()})
+		jobs, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{(periodicJobArgs{}).Kind()},
+			Schema: client.config.schema,
+		})
 		require.NoError(t, err)
 		require.Len(t, jobs, 1)
 	})
@@ -3839,12 +3887,18 @@ func Test_Client_Maintenance(t *testing.T) {
 		// periodic job was inserted also due to RunOnStart, but only after the
 		// first was removed.
 		{
-			jobs, err := exec.JobGetByKindMany(ctx, []string{(periodicJobArgs{}).Kind()})
+			jobs, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+				Kind:   []string{(periodicJobArgs{}).Kind()},
+				Schema: client.config.schema,
+			})
 			require.NoError(t, err)
 			require.Len(t, jobs, 1)
 		}
 		{
-			jobs, err := exec.JobGetByKindMany(ctx, []string{(OtherPeriodicArgs{}).Kind()})
+			jobs, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+				Kind:   []string{(OtherPeriodicArgs{}).Kind()},
+				Schema: client.config.schema,
+			})
 			require.NoError(t, err)
 			require.Len(t, jobs, 1)
 		}
@@ -3878,7 +3932,10 @@ func Test_Client_Maintenance(t *testing.T) {
 		svc := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
 
-		jobs, err := bundle.exec.JobGetByKindMany(ctx, []string{(periodicJobArgs{}).Kind()})
+		jobs, err := bundle.exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{(periodicJobArgs{}).Kind()},
+			Schema: client.config.schema,
+		})
 		require.NoError(t, err)
 		require.Len(t, jobs, 1, "Expected to find exactly one job of kind: "+(periodicJobArgs{}).Kind())
 	})
@@ -4371,8 +4428,10 @@ func Test_Client_RetryPolicy(t *testing.T) {
 			_ = riversharedtest.WaitOrTimeout(t, subscribeChan)
 		}
 
-		finishedJobs, err := client.driver.GetExecutor().JobGetByIDMany(ctx,
-			sliceutil.Map(originalJobs, func(m *rivertype.JobRow) int64 { return m.ID }))
+		finishedJobs, err := client.driver.GetExecutor().JobGetByIDMany(ctx, &riverdriver.JobGetByIDManyParams{
+			ID:     sliceutil.Map(originalJobs, func(m *rivertype.JobRow) int64 { return m.ID }),
+			Schema: "",
+		})
 		require.NoError(t, err)
 
 		// Jobs aren't guaranteed to come back out of the queue in the same
@@ -4799,7 +4858,10 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 			}
 		}
 
-		_, err := client.driver.GetExecutor().JobInsertFastMany(ctx, insertParams)
+		_, err := client.driver.GetExecutor().JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+			Jobs:   insertParams,
+			Schema: "",
+		})
 		require.NoError(t, err)
 
 		// Need to start waiting on events before running the client or the
@@ -5232,7 +5294,10 @@ func Test_Client_UnknownJobKindErrorsTheJob(t *testing.T) {
 
 	insertParams, err := insertParamsFromConfigArgsAndOptions(&client.baseService.Archetype, config, unregisteredJobArgs{}, nil)
 	require.NoError(err)
-	insertedResults, err := client.driver.GetExecutor().JobInsertFastMany(ctx, []*riverdriver.JobInsertFastParams{(*riverdriver.JobInsertFastParams)(insertParams)})
+	insertedResults, err := client.driver.GetExecutor().JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+		Jobs:   []*riverdriver.JobInsertFastParams{(*riverdriver.JobInsertFastParams)(insertParams)},
+		Schema: client.config.schema,
+	})
 	require.NoError(err)
 
 	insertedResult := insertedResults[0]

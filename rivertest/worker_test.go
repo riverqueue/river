@@ -12,6 +12,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/internal/execution"
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/testfactory"
@@ -397,7 +398,7 @@ func TestWorker_WorkJob(t *testing.T) {
 		require.NoError(t, err)
 
 		bundle.workFunc = func(ctx context.Context, job *river.Job[testArgs]) error {
-			updatedJob, err := bundle.driver.UnwrapExecutor(bundle.tx).JobGetByID(ctx, insertRes.Job.ID)
+			updatedJob, err := bundle.driver.UnwrapExecutor(bundle.tx).JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: insertRes.Job.ID, Schema: ""})
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateRunning, updatedJob.State)
 
@@ -411,7 +412,7 @@ func TestWorker_WorkJob(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, river.EventKindJobCompleted, res.EventKind)
 
-		updatedJob, err := bundle.driver.UnwrapExecutor(bundle.tx).JobGetByID(ctx, insertRes.Job.ID)
+		updatedJob, err := bundle.driver.UnwrapExecutor(bundle.tx).JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: insertRes.Job.ID, Schema: ""})
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateCompleted, updatedJob.State)
 	})

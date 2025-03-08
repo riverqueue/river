@@ -1,1 +1,3 @@
 -- not truly reversible, can't remove enum values.
+--
+-- here to prevent templating system from throwing here: /* TEMPLATE: schema */

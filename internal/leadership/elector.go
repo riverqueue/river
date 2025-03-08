@@ -75,6 +75,7 @@ type Config struct {
 	ClientID            string
 	ElectInterval       time.Duration // period on which each elector attempts elect even without having received a resignation notification
 	ElectIntervalJitter time.Duration
+	Schema              string
 }
 
 func (c *Config) mustValidate() *Config {
@@ -330,6 +331,7 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 
 		reelected, err := attemptElectOrReelect(ctx, e.exec, true, &riverdriver.LeaderElectParams{
 			LeaderID: e.config.ClientID,
+			Schema:   e.config.Schema,
 			TTL:      e.leaderTTL(),
 		})
 		if err != nil {
@@ -509,7 +511,9 @@ func attemptElectOrReelect(ctx context.Context, exec riverdriver.Executor, alrea
 	defer cancel()
 
 	return dbutil.WithTxV(ctx, exec, func(ctx context.Context, exec riverdriver.ExecutorTx) (bool, error) {
-		if _, err := exec.LeaderDeleteExpired(ctx); err != nil {
+		if _, err := exec.LeaderDeleteExpired(ctx, &riverdriver.LeaderDeleteExpiredParams{
+			Schema: params.Schema,
+		}); err != nil {
 			return false, err
 		}
 

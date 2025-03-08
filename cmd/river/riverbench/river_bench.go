@@ -20,13 +20,15 @@ type Benchmarker[TTx any] struct {
 	driver riverdriver.Driver[TTx] // database pool wrapped in River driver
 	logger *slog.Logger            // logger, also injected to client
 	name   string                  // name of the service for logging purposes
+	schema string                  // custom schema where River tables are located
 }
 
-func NewBenchmarker[TTx any](driver riverdriver.Driver[TTx], logger *slog.Logger) *Benchmarker[TTx] {
+func NewBenchmarker[TTx any](driver riverdriver.Driver[TTx], logger *slog.Logger, schema string) *Benchmarker[TTx] {
 	return &Benchmarker[TTx]{
 		driver: driver,
 		logger: logger,
 		name:   "Benchmarker",
+		schema: schema,
 	}
 }
 
@@ -190,7 +192,10 @@ func (b *Benchmarker[TTx]) Run(ctx context.Context, duration time.Duration, numT
 				return
 
 			case <-ticker.C:
-				numJobs, err := b.driver.GetExecutor().JobCountByState(ctx, rivertype.JobStateAvailable)
+				numJobs, err := b.driver.GetExecutor().JobCountByState(ctx, &riverdriver.JobCountByStateParams{
+					Schema: b.schema,
+					State:  rivertype.JobStateAvailable,
+				})
 				if err != nil {
 					b.logger.ErrorContext(ctx, "Error counting jobs", "err", err)
 					continue

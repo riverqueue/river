@@ -1,29 +1,29 @@
 -- The args column never had a NOT NULL constraint or default value at the
 -- database level, though we tried to ensure one at the application level.
-ALTER TABLE river_job ALTER COLUMN args SET DEFAULT '{}';
-UPDATE river_job SET args = '{}' WHERE args IS NULL;
-ALTER TABLE river_job ALTER COLUMN args SET NOT NULL;
-ALTER TABLE river_job ALTER COLUMN args DROP DEFAULT;
+ALTER TABLE /* TEMPLATE: schema */river_job ALTER COLUMN args SET DEFAULT '{}';
+UPDATE /* TEMPLATE: schema */river_job SET args = '{}' WHERE args IS NULL;
+ALTER TABLE /* TEMPLATE: schema */river_job ALTER COLUMN args SET NOT NULL;
+ALTER TABLE /* TEMPLATE: schema */river_job ALTER COLUMN args DROP DEFAULT;
 
 -- The metadata column never had a NOT NULL constraint or default value at the
 -- database level, though we tried to ensure one at the application level.
-ALTER TABLE river_job ALTER COLUMN metadata SET DEFAULT '{}';
-UPDATE river_job SET metadata = '{}' WHERE metadata IS NULL;
-ALTER TABLE river_job ALTER COLUMN metadata SET NOT NULL;
+ALTER TABLE /* TEMPLATE: schema */river_job ALTER COLUMN metadata SET DEFAULT '{}';
+UPDATE /* TEMPLATE: schema */river_job SET metadata = '{}' WHERE metadata IS NULL;
+ALTER TABLE /* TEMPLATE: schema */river_job ALTER COLUMN metadata SET NOT NULL;
 
 -- The 'pending' job state will be used for upcoming functionality:
-ALTER TYPE river_job_state ADD VALUE IF NOT EXISTS 'pending' AFTER 'discarded';
+ALTER TYPE /* TEMPLATE: schema */river_job_state ADD VALUE IF NOT EXISTS 'pending' AFTER 'discarded';
 
-ALTER TABLE river_job DROP CONSTRAINT finalized_or_finalized_at_null;
-ALTER TABLE river_job ADD CONSTRAINT finalized_or_finalized_at_null CHECK (
+ALTER TABLE /* TEMPLATE: schema */river_job DROP CONSTRAINT finalized_or_finalized_at_null;
+ALTER TABLE /* TEMPLATE: schema */river_job ADD CONSTRAINT finalized_or_finalized_at_null CHECK (
     (finalized_at IS NULL AND state NOT IN ('cancelled', 'completed', 'discarded')) OR
     (finalized_at IS NOT NULL AND state IN ('cancelled', 'completed', 'discarded'))
 );
 
-DROP TRIGGER river_notify ON river_job;
-DROP FUNCTION river_job_notify;
+DROP TRIGGER river_notify ON /* TEMPLATE: schema */river_job;
+DROP FUNCTION /* TEMPLATE: schema */river_job_notify;
 
-CREATE TABLE river_queue(
+CREATE TABLE /* TEMPLATE: schema */river_queue(
   name text PRIMARY KEY NOT NULL,
   created_at timestamptz NOT NULL DEFAULT NOW(),
   metadata jsonb NOT NULL DEFAULT '{}' ::jsonb,
@@ -31,7 +31,7 @@ CREATE TABLE river_queue(
   updated_at timestamptz NOT NULL
 );
 
-ALTER TABLE river_leader
+ALTER TABLE /* TEMPLATE: schema */river_leader
     ALTER COLUMN name SET DEFAULT 'default',
     DROP CONSTRAINT name_length,
     ADD CONSTRAINT name_length CHECK (name = 'default');

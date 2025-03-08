@@ -519,7 +519,7 @@ func testCompleter[TCompleter JobCompleter](
 	requireJob := func(t *testing.T, exec riverdriver.Executor, jobID int64) *rivertype.JobRow {
 		t.Helper()
 
-		job, err := exec.JobGetByID(ctx, jobID)
+		job, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: jobID, Schema: ""})
 		require.NoError(t, err)
 		return job
 	}
@@ -590,10 +590,16 @@ func testCompleter[TCompleter JobCompleter](
 			}
 		}
 
-		_, err := bundle.exec.JobInsertFastMany(ctx, insertParams)
+		_, err := bundle.exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+			Jobs:   insertParams,
+			Schema: "",
+		})
 		require.NoError(t, err)
 
-		jobs, err := bundle.exec.JobGetByKindMany(ctx, []string{kind})
+		jobs, err := bundle.exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{kind},
+			Schema: "",
+		})
 		require.NoError(t, err)
 
 		t.Cleanup(riverinternaltest.DiscardContinuously(bundle.subscribeCh))
@@ -604,7 +610,10 @@ func testCompleter[TCompleter JobCompleter](
 
 		completer.Stop()
 
-		updatedJobs, err := bundle.exec.JobGetByKindMany(ctx, []string{kind})
+		updatedJobs, err := bundle.exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{kind},
+			Schema: "",
+		})
 		require.NoError(t, err)
 		for i := range updatedJobs {
 			require.Equal(t, rivertype.JobStateCompleted, updatedJobs[i].State)
@@ -633,7 +642,9 @@ func testCompleter[TCompleter JobCompleter](
 
 		require.Positive(t, numInserted)
 
-		numCompleted, err := bundle.exec.JobCountByState(ctx, rivertype.JobStateCompleted)
+		numCompleted, err := bundle.exec.JobCountByState(ctx, &riverdriver.JobCountByStateParams{
+			State: rivertype.JobStateCompleted,
+		})
 		require.NoError(t, err)
 		t.Logf("Counted %d jobs as completed", numCompleted)
 		require.Positive(t, numCompleted)
@@ -658,7 +669,9 @@ func testCompleter[TCompleter JobCompleter](
 
 		require.Positive(t, numInserted)
 
-		numCompleted, err := bundle.exec.JobCountByState(ctx, rivertype.JobStateCompleted)
+		numCompleted, err := bundle.exec.JobCountByState(ctx, &riverdriver.JobCountByStateParams{
+			State: rivertype.JobStateCompleted,
+		})
 		require.NoError(t, err)
 		t.Logf("Counted %d jobs as completed", numCompleted)
 		require.Positive(t, numCompleted)
@@ -943,10 +956,16 @@ func benchmarkCompleter(
 			}
 		}
 
-		_, err := exec.JobInsertFastMany(ctx, insertParams)
+		_, err := exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+			Jobs:   insertParams,
+			Schema: "",
+		})
 		require.NoError(b, err)
 
-		jobs, err := exec.JobGetByKindMany(ctx, []string{"benchmark_kind"})
+		jobs, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{"benchmark_kind"},
+			Schema: "",
+		})
 		require.NoError(b, err)
 
 		return completer, &testBundle{

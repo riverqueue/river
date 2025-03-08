@@ -90,16 +90,31 @@ func TestQueueCleaner(t *testing.T) {
 		cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
 
 		var err error
-		_, err = bundle.exec.QueueGet(ctx, queue1.Name)
+		_, err = bundle.exec.QueueGet(ctx, &riverdriver.QueueGetParams{
+			Name:   queue1.Name,
+			Schema: cleaner.Config.Schema,
+		})
 		require.NoError(t, err) // still there
-		_, err = bundle.exec.QueueGet(ctx, queue2.Name)
+		_, err = bundle.exec.QueueGet(ctx, &riverdriver.QueueGetParams{
+			Name:   queue2.Name,
+			Schema: cleaner.Config.Schema,
+		})
 		require.NoError(t, err) // still there
 
-		_, err = bundle.exec.QueueGet(ctx, queue3.Name)
+		_, err = bundle.exec.QueueGet(ctx, &riverdriver.QueueGetParams{
+			Name:   queue3.Name,
+			Schema: cleaner.Config.Schema,
+		})
 		require.ErrorIs(t, err, rivertype.ErrNotFound) // still there
-		_, err = bundle.exec.QueueGet(ctx, queue4.Name)
+		_, err = bundle.exec.QueueGet(ctx, &riverdriver.QueueGetParams{
+			Name:   queue4.Name,
+			Schema: cleaner.Config.Schema,
+		})
 		require.ErrorIs(t, err, rivertype.ErrNotFound) // still there
-		_, err = bundle.exec.QueueGet(ctx, queue5.Name)
+		_, err = bundle.exec.QueueGet(ctx, &riverdriver.QueueGetParams{
+			Name:   queue5.Name,
+			Schema: cleaner.Config.Schema,
+		})
 		require.ErrorIs(t, err, rivertype.ErrNotFound) // still there
 	})
 
@@ -130,7 +145,10 @@ func TestQueueCleaner(t *testing.T) {
 		cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
 
 		for _, queue := range queues {
-			_, err := bundle.exec.QueueGet(ctx, queue.Name)
+			_, err := bundle.exec.QueueGet(ctx, &riverdriver.QueueGetParams{
+				Name:   queue.Name,
+				Schema: cleaner.Config.Schema,
+			})
 			require.ErrorIs(t, err, rivertype.ErrNotFound)
 		}
 	})
@@ -200,9 +218,15 @@ func TestQueueCleaner(t *testing.T) {
 		cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
 
 		var err error
-		_, err = bundle.exec.QueueGet(ctx, queue1.Name)
+		_, err = bundle.exec.QueueGet(ctx, &riverdriver.QueueGetParams{
+			Name:   queue1.Name,
+			Schema: cleaner.Config.Schema,
+		})
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
-		_, err = bundle.exec.QueueGet(ctx, queue2.Name)
+		_, err = bundle.exec.QueueGet(ctx, &riverdriver.QueueGetParams{
+			Name:   queue2.Name,
+			Schema: cleaner.Config.Schema,
+		})
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
 	})
 }

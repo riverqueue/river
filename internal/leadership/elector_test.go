@@ -80,9 +80,10 @@ func TestElector_WithNotifier(t *testing.T) {
 				archetype = riversharedtest.BaseServiceArchetype(t)
 				dbPool    = riverinternaltest.TestDB(ctx, t)
 				driver    = riverpgxv5.New(dbPool)
+				schema    = "" // try to make tests schema-based rather than database-based in the future
 			)
 
-			notifier := notifier.New(archetype, driver.GetListener())
+			notifier := notifier.New(archetype, driver.GetListener(schema))
 			{
 				require.NoError(t, notifier.Start(ctx))
 				t.Cleanup(notifier.Stop)
@@ -152,7 +153,9 @@ func testElector[TElectorBundle any](
 
 		elector.testSignals.GainedLeadership.WaitOrTimeout()
 
-		leader, err := bundle.exec.LeaderGetElectedLeader(ctx)
+		leader, err := bundle.exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{
+			Schema: elector.config.Schema,
+		})
 		require.NoError(t, err)
 		require.Equal(t, elector.config.ClientID, leader.LeaderID)
 
@@ -160,7 +163,9 @@ func testElector[TElectorBundle any](
 
 		elector.testSignals.ResignedLeadership.WaitOrTimeout()
 
-		_, err = bundle.exec.LeaderGetElectedLeader(ctx)
+		_, err = bundle.exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{
+			Schema: elector.config.Schema,
+		})
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
 	})
 
@@ -263,7 +268,9 @@ func testElector[TElectorBundle any](
 			t.Logf("Waiting for %s to gain leadership", elector1.config.ClientID)
 			elector1.testSignals.GainedLeadership.WaitOrTimeout()
 
-			leader, err := bundle.exec.LeaderGetElectedLeader(ctx)
+			leader, err := bundle.exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{
+				Schema: elector1.config.Schema,
+			})
 			require.NoError(t, err)
 			require.Equal(t, elector1.config.ClientID, leader.LeaderID)
 		}
@@ -297,7 +304,9 @@ func testElector[TElectorBundle any](
 			elector2.testSignals.ResignedLeadership.WaitOrTimeout()
 		}
 
-		_, err := bundle.exec.LeaderGetElectedLeader(ctx)
+		_, err := bundle.exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{
+			Schema: elector1.config.Schema,
+		})
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
 	})
 
@@ -347,11 +356,14 @@ func TestAttemptElectOrReelect(t *testing.T) {
 		elected, err := attemptElectOrReelect(ctx, bundle.exec, false, &riverdriver.LeaderElectParams{
 			LeaderID: clientID,
 			TTL:      leaderTTL,
+			Schema:   "",
 		})
 		require.NoError(t, err)
 		require.True(t, elected) // won election
 
-		leader, err := bundle.exec.LeaderGetElectedLeader(ctx)
+		leader, err := bundle.exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.WithinDuration(t, time.Now(), leader.ElectedAt, 100*time.Millisecond)
 		require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, 100*time.Millisecond)
@@ -372,13 +384,16 @@ func TestAttemptElectOrReelect(t *testing.T) {
 		elected, err := attemptElectOrReelect(ctx, bundle.exec, true, &riverdriver.LeaderElectParams{
 			LeaderID: clientID,
 			TTL:      30 * time.Second,
+			Schema:   "",
 		})
 		require.NoError(t, err)
 		require.True(t, elected) // won re-election
 
 		// expires_at should be incremented because this is the same leader that won
 		// previously and we specified that we're already elected:
-		updatedLeader, err := bundle.exec.LeaderGetElectedLeader(ctx)
+		updatedLeader, err := bundle.exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.Greater(t, updatedLeader.ExpiresAt, leader.ExpiresAt)
 	})
@@ -395,6 +410,7 @@ func TestAttemptElectOrReelect(t *testing.T) {
 		elected, err := attemptElectOrReelect(ctx, bundle.exec, true, &riverdriver.LeaderElectParams{
 			LeaderID: "different-client-id",
 			TTL:      leaderTTL,
+			Schema:   "",
 		})
 		require.NoError(t, err)
 		require.False(t, elected) // lost election
@@ -402,7 +418,9 @@ func TestAttemptElectOrReelect(t *testing.T) {
 		// The time should not have changed because we specified that we were not
 		// already elected, and the elect query is a no-op if there's already a
 		// updatedLeader:
-		updatedLeader, err := bundle.exec.LeaderGetElectedLeader(ctx)
+		updatedLeader, err := bundle.exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.Equal(t, leader.ExpiresAt, updatedLeader.ExpiresAt)
 	})

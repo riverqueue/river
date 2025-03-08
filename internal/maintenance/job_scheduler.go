@@ -52,6 +52,10 @@ type JobSchedulerConfig struct {
 	// NotifyInsert is a function to call to emit notifications for queues
 	// where jobs were scheduled.
 	NotifyInsert NotifyInsertFunc
+
+	// Schema where River tables are located. Empty string omits schema, causing
+	// Postgres to default to `search_path`.
+	Schema string
 }
 
 func (c *JobSchedulerConfig) mustValidate() *JobSchedulerConfig {
@@ -155,8 +159,9 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 			nowWithLookAhead := now.Add(s.config.Interval)
 
 			scheduledJobResults, err := tx.JobSchedule(ctx, &riverdriver.JobScheduleParams{
-				Max: s.config.Limit,
-				Now: nowWithLookAhead,
+				Max:    s.config.Limit,
+				Now:    nowWithLookAhead,
+				Schema: s.config.Schema,
 			})
 			if err != nil {
 				return 0, fmt.Errorf("error scheduling jobs: %w", err)

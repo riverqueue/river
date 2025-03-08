@@ -14,7 +14,7 @@ CREATE UNLOGGED TABLE river_client_queue (
 );
 
 -- name: ClientQueueCreateOrSetUpdatedAtMany :one
-INSERT INTO river_client_queue (
+INSERT INTO /* TEMPLATE: schema */river_client_queue (
     metadata,
     name,
     paused_at,

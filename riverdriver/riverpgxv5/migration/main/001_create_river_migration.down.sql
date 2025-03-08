@@ -1,1 +1,1 @@
-DROP TABLE river_migration;
+DROP TABLE /* TEMPLATE: schema */river_migration;

@@ -1,4 +1,4 @@
-CREATE TYPE river_job_state AS ENUM(
+CREATE TYPE /* TEMPLATE: schema */river_job_state AS ENUM(
   'available',
   'cancelled',
   'completed',
@@ -8,7 +8,7 @@ CREATE TYPE river_job_state AS ENUM(
   'scheduled'
 );
 
-CREATE TABLE river_job(
+CREATE TABLE /* TEMPLATE: schema */river_job(
   -- 8 bytes
   id bigserial PRIMARY KEY,
 
@@ -49,17 +49,17 @@ CREATE TABLE river_job(
 
 -- We may want to consider adding another property here after `kind` if it seems
 -- like it'd be useful for something.
-CREATE INDEX river_job_kind ON river_job USING btree(kind);
+CREATE INDEX river_job_kind ON /* TEMPLATE: schema */river_job USING btree(kind);
 
-CREATE INDEX river_job_state_and_finalized_at_index ON river_job USING btree(state, finalized_at) WHERE finalized_at IS NOT NULL;
+CREATE INDEX river_job_state_and_finalized_at_index ON /* TEMPLATE: schema */river_job USING btree(state, finalized_at) WHERE finalized_at IS NOT NULL;
 
-CREATE INDEX river_job_prioritized_fetching_index ON river_job USING btree(state, queue, priority, scheduled_at, id);
+CREATE INDEX river_job_prioritized_fetching_index ON /* TEMPLATE: schema */river_job USING btree(state, queue, priority, scheduled_at, id);
 
-CREATE INDEX river_job_args_index ON river_job USING GIN(args);
+CREATE INDEX river_job_args_index ON /* TEMPLATE: schema */river_job USING GIN(args);
 
-CREATE INDEX river_job_metadata_index ON river_job USING GIN(metadata);
+CREATE INDEX river_job_metadata_index ON /* TEMPLATE: schema */river_job USING GIN(metadata);
 
-CREATE OR REPLACE FUNCTION river_job_notify()
+CREATE OR REPLACE FUNCTION /* TEMPLATE: schema */river_job_notify()
   RETURNS TRIGGER
   AS $$
 DECLARE
@@ -78,11 +78,11 @@ $$
 LANGUAGE plpgsql;
 
 CREATE TRIGGER river_notify
-  AFTER INSERT ON river_job
+  AFTER INSERT ON /* TEMPLATE: schema */river_job
   FOR EACH ROW
-  EXECUTE PROCEDURE river_job_notify();
+  EXECUTE PROCEDURE /* TEMPLATE: schema */river_job_notify();
 
-CREATE UNLOGGED TABLE river_leader(
+CREATE UNLOGGED TABLE /* TEMPLATE: schema */river_leader(
   -- 8 bytes each (no alignment needed)
   elected_at timestamptz NOT NULL,
   expires_at timestamptz NOT NULL,

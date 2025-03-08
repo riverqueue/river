@@ -118,10 +118,11 @@ type MigrationOpts struct {
 func Migration(ctx context.Context, tb testing.TB, exec riverdriver.Executor, opts *MigrationOpts) *riverdriver.Migration {
 	tb.Helper()
 
-	migration, err := exec.MigrationInsertMany(ctx,
-		ptrutil.ValOrDefault(opts.Line, riverdriver.MigrationLineMain),
-		[]int{ptrutil.ValOrDefaultFunc(opts.Version, nextSeq)},
-	)
+	migration, err := exec.MigrationInsertMany(ctx, &riverdriver.MigrationInsertManyParams{
+		Line:     ptrutil.ValOrDefault(opts.Line, riverdriver.MigrationLineMain),
+		Schema:   "",
+		Versions: []int{ptrutil.ValOrDefaultFunc(opts.Version, nextSeq)},
+	})
 	require.NoError(tb, err)
 	return migration[0]
 }

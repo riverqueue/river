@@ -138,18 +138,22 @@ func TestJobExecutor_Execute(t *testing.T) {
 		workUnitFactory := newWorkUnitFactoryWithCustomRetry(func() error { return nil }, nil)
 
 		now := time.Now().UTC()
-		results, err := exec.JobInsertFastMany(ctx, []*riverdriver.JobInsertFastParams{{
-			EncodedArgs: []byte("{}"),
-			Kind:        "jobexecutor_test",
-			MaxAttempts: rivercommon.MaxAttemptsDefault,
-			Priority:    rivercommon.PriorityDefault,
-			Queue:       rivercommon.QueueDefault,
-			// Needs to be explicitly set to a "now" horizon that's aligned with the
-			// JobGetAvailable call. InsertMany applies a default scheduled_at in Go
-			// so it can't pick up the Postgres-level `now()` default.
-			ScheduledAt: ptrutil.Ptr(now),
-			State:       rivertype.JobStateAvailable,
-		}})
+		results, err := exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+			Jobs: []*riverdriver.JobInsertFastParams{
+				{
+					EncodedArgs: []byte("{}"),
+					Kind:        "jobexecutor_test",
+					MaxAttempts: rivercommon.MaxAttemptsDefault,
+					Priority:    rivercommon.PriorityDefault,
+					Queue:       rivercommon.QueueDefault,
+					// Needs to be explicitly set to a "now" horizon that's aligned with the
+					// JobGetAvailable call. InsertMany applies a default scheduled_at in Go
+					// so it can't pick up the Postgres-level `now()` default.
+					ScheduledAt: ptrutil.Ptr(now),
+					State:       rivertype.JobStateAvailable,
+				},
+			},
+		})
 		require.NoError(t, err)
 
 		// Fetch the job to make sure it's marked as running:
@@ -210,7 +214,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		jobUpdates := riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateCompleted, job.State)
 
@@ -241,7 +248,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.WithinDuration(t, executor.ClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
 		require.Equal(t, rivertype.JobStateRetryable, job.State)
@@ -265,7 +275,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.WithinDuration(t, executor.ClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
 		require.Equal(t, rivertype.JobStateRetryable, job.State)
@@ -285,7 +298,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 			executor.Execute(ctx)
 			riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-			job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+			job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+				ID:     bundle.jobRow.ID,
+				Schema: "",
+			})
 			require.NoError(t, err)
 			require.WithinDuration(t, executor.ClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
 			require.Equal(t, rivertype.JobStateAvailable, job.State)
@@ -304,7 +320,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 			executor.Execute(ctx)
 			riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-			job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+			job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+				ID:     bundle.jobRow.ID,
+				Schema: "",
+			})
 			require.NoError(t, err)
 			require.WithinDuration(t, executor.ClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 16*time.Second)
 			require.Equal(t, rivertype.JobStateRetryable, job.State)
@@ -324,7 +343,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.WithinDuration(t, time.Now(), *job.FinalizedAt, 1*time.Second)
 		require.Equal(t, rivertype.JobStateDiscarded, job.State)
@@ -352,7 +374,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.WithinDuration(t, time.Now(), *job.FinalizedAt, 2*time.Second)
 		require.Equal(t, rivertype.JobStateCancelled, job.State)
@@ -376,7 +401,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateScheduled, job.State)
 		require.WithinDuration(t, time.Now().Add(30*time.Minute), job.ScheduledAt, 2*time.Second)
@@ -396,7 +424,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateAvailable, job.State)
 		require.WithinDuration(t, time.Now(), job.ScheduledAt, 2*time.Second)
@@ -416,7 +447,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.WithinDuration(t, executor.ClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
 		require.Equal(t, rivertype.JobStateRetryable, job.State)
@@ -436,7 +470,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateRetryable, job.State)
 		require.WithinDuration(t, nextRetryAt, job.ScheduledAt, time.Microsecond)
@@ -454,7 +491,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.WithinDuration(t, executor.DefaultClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
 		require.Equal(t, rivertype.JobStateRetryable, job.State)
@@ -475,7 +515,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateRetryable, job.State)
 
@@ -496,7 +539,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateCancelled, job.State)
 
@@ -517,7 +563,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateRetryable, job.State)
 
@@ -533,7 +582,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.WithinDuration(t, executor.ClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
 		require.Equal(t, rivertype.JobStateRetryable, job.State)
@@ -554,7 +606,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.WithinDuration(t, executor.ClientRetryPolicy.NextRetry(bundle.jobRow), job.ScheduledAt, 1*time.Second)
 		require.Equal(t, rivertype.JobStateRetryable, job.State)
@@ -572,7 +627,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.WithinDuration(t, time.Now(), *job.FinalizedAt, 1*time.Second)
 		require.Equal(t, rivertype.JobStateDiscarded, job.State)
@@ -614,7 +672,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateRetryable, job.State)
 
@@ -634,7 +695,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateCancelled, job.State)
 
@@ -654,7 +718,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(ctx)
 		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-		job, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateRetryable, job.State)
 
@@ -704,7 +771,10 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.Execute(workCtx)
 		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
-		jobRow, err := bundle.exec.JobGetByID(ctx, bundle.jobRow.ID)
+		jobRow, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		return jobRow
 	}

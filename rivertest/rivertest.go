@@ -146,7 +146,10 @@ func requireInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.Jo
 	t.Helper()
 
 	// Returned ordered by ID.
-	jobRows, err := exec.JobGetByKindMany(ctx, []string{expectedJob.Kind()})
+	jobRows, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+		Kind:   []string{expectedJob.Kind()},
+		Schema: "",
+	})
 	if err != nil {
 		return nil, fmt.Errorf("error querying jobs: %w", err)
 	}
@@ -242,7 +245,10 @@ func requireNotInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river
 	t.Helper()
 
 	// Returned ordered by ID.
-	jobRows, err := exec.JobGetByKindMany(ctx, []string{expectedJob.Kind()})
+	jobRows, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+		Kind:   []string{expectedJob.Kind()},
+		Schema: "",
+	})
 	if err != nil {
 		return fmt.Errorf("error querying jobs: %w", err)
 	}
@@ -363,7 +369,10 @@ func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx contex
 	expectedArgsKinds := sliceutil.Map(expectedJobs, func(j ExpectedJob) string { return j.Args.Kind() })
 
 	// Returned ordered by ID.
-	jobRows, err := exec.JobGetByKindMany(ctx, expectedArgsKinds)
+	jobRows, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+		Kind:   expectedArgsKinds,
+		Schema: "",
+	})
 	if err != nil {
 		return nil, fmt.Errorf("error querying jobs: %w", err)
 	}

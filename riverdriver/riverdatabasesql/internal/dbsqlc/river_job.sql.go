@@ -7,6 +7,7 @@ package dbsqlc
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/lib/pq"
@@ -17,7 +18,7 @@ const jobCancel = `-- name: JobCancel :one
 WITH locked_job AS (
     SELECT
         id, queue, state, finalized_at
-    FROM river_job
+    FROM /* TEMPLATE: schema */river_job
     WHERE river_job.id = $1
     FOR UPDATE
 ),
@@ -25,7 +26,7 @@ notification AS (
     SELECT
         id,
         pg_notify(
-            concat(current_schema(), '.', $2::text),
+            concat(coalesce($2::text, current_schema()), '.', $3::text),
             json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text
         )
     FROM
@@ -35,7 +36,7 @@ notification AS (
         AND finalized_at IS NULL
 ),
 updated_job AS (
-    UPDATE river_job
+    UPDATE /* TEMPLATE: schema */river_job
     SET
         -- If the job is actively running, we want to let its current client and
         -- producer handle the cancellation. Otherwise, immediately cancel it.
@@ -43,13 +44,13 @@ updated_job AS (
         finalized_at = CASE WHEN state = 'running' THEN finalized_at ELSE now() END,
         -- Mark the job as cancelled by query so that the rescuer knows not to
         -- rescue it, even if it gets stuck in the running state:
-        metadata = jsonb_set(metadata, '{cancel_attempted_at}'::text[], $3::jsonb, true)
+        metadata = jsonb_set(metadata, '{cancel_attempted_at}'::text[], $4::jsonb, true)
     FROM notification
     WHERE river_job.id = notification.id
     RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states
 )
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE id = $1::bigint
     AND id NOT IN (SELECT id FROM updated_job)
 UNION
@@ -59,12 +60,18 @@ FROM updated_job
 
 type JobCancelParams struct {
 	ID                int64
+	Schema            sql.NullString
 	ControlTopic      string
 	CancelAttemptedAt string
 }
 
 func (q *Queries) JobCancel(ctx context.Context, db DBTX, arg *JobCancelParams) (*RiverJob, error) {
-	row := db.QueryRowContext(ctx, jobCancel, arg.ID, arg.ControlTopic, arg.CancelAttemptedAt)
+	row := db.QueryRowContext(ctx, jobCancel,
+		arg.ID,
+		arg.Schema,
+		arg.ControlTopic,
+		arg.CancelAttemptedAt,
+	)
 	var i RiverJob
 	err := row.Scan(
 		&i.ID,
@@ -91,7 +98,7 @@ func (q *Queries) JobCancel(ctx context.Context, db DBTX, arg *JobCancelParams) 
 
 const jobCountByState = `-- name: JobCountByState :one
 SELECT count(*)
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE state = $1
 `
 
@@ -105,13 +112,13 @@ func (q *Queries) JobCountByState(ctx context.Context, db DBTX, state RiverJobSt
 const jobDelete = `-- name: JobDelete :one
 WITH job_to_delete AS (
     SELECT id
-    FROM river_job
+    FROM /* TEMPLATE: schema */river_job
     WHERE river_job.id = $1
     FOR UPDATE
 ),
 deleted_job AS (
     DELETE
-    FROM river_job
+    FROM /* TEMPLATE: schema */river_job
     USING job_to_delete
     WHERE river_job.id = job_to_delete.id
         -- Do not touch running jobs:
@@ -119,7 +126,7 @@ deleted_job AS (
     RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states
 )
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE id = $1::bigint
     AND id NOT IN (SELECT id FROM deleted_job)
 UNION
@@ -155,10 +162,10 @@ func (q *Queries) JobDelete(ctx context.Context, db DBTX, id int64) (*RiverJob, 
 
 const jobDeleteBefore = `-- name: JobDeleteBefore :one
 WITH deleted_jobs AS (
-    DELETE FROM river_job
+    DELETE FROM /* TEMPLATE: schema */river_job
     WHERE id IN (
         SELECT id
-        FROM river_job
+        FROM /* TEMPLATE: schema */river_job
         WHERE
             (state = 'cancelled' AND finalized_at < $1::timestamptz) OR
             (state = 'completed' AND finalized_at < $2::timestamptz) OR
@@ -196,7 +203,7 @@ WITH locked_jobs AS (
     SELECT
         id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
     FROM
-        river_job
+        /* TEMPLATE: schema */river_job
     WHERE
         state = 'available'
         AND queue = $2::text
@@ -210,7 +217,7 @@ WITH locked_jobs AS (
     SKIP LOCKED
 )
 UPDATE
-    river_job
+    /* TEMPLATE: schema */river_job
 SET
     state = 'running',
     attempt = river_job.attempt + 1,
@@ -280,7 +287,7 @@ func (q *Queries) JobGetAvailable(ctx context.Context, db DBTX, arg *JobGetAvail
 
 const jobGetByID = `-- name: JobGetByID :one
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE id = $1
 LIMIT 1
 `
@@ -313,7 +320,7 @@ func (q *Queries) JobGetByID(ctx context.Context, db DBTX, id int64) (*RiverJob,
 
 const jobGetByIDMany = `-- name: JobGetByIDMany :many
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE id = any($1::bigint[])
 ORDER BY id
 `
@@ -362,7 +369,7 @@ func (q *Queries) JobGetByIDMany(ctx context.Context, db DBTX, id []int64) ([]*R
 
 const jobGetByKindAndUniqueProperties = `-- name: JobGetByKindAndUniqueProperties :one
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE kind = $1
     AND CASE WHEN $2::boolean THEN args = $3 ELSE true END
     AND CASE WHEN $4::boolean THEN tstzrange($5::timestamptz, $6::timestamptz, '[)') @> created_at ELSE true END
@@ -422,7 +429,7 @@ func (q *Queries) JobGetByKindAndUniqueProperties(ctx context.Context, db DBTX, 
 
 const jobGetByKindMany = `-- name: JobGetByKindMany :many
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE kind = any($1::text[])
 ORDER BY id
 `
@@ -471,7 +478,7 @@ func (q *Queries) JobGetByKindMany(ctx context.Context, db DBTX, kind []string) 
 
 const jobGetStuck = `-- name: JobGetStuck :many
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE state = 'running'
     AND attempted_at < $1::timestamptz
 ORDER BY id
@@ -526,7 +533,7 @@ func (q *Queries) JobGetStuck(ctx context.Context, db DBTX, arg *JobGetStuckPara
 }
 
 const jobInsertFastMany = `-- name: JobInsertFastMany :many
-INSERT INTO river_job(
+INSERT INTO /* TEMPLATE: schema */river_job(
     args,
     created_at,
     kind,
@@ -645,7 +652,7 @@ func (q *Queries) JobInsertFastMany(ctx context.Context, db DBTX, arg *JobInsert
 }
 
 const jobInsertFastManyNoReturning = `-- name: JobInsertFastManyNoReturning :execrows
-INSERT INTO river_job(
+INSERT INTO /* TEMPLATE: schema */river_job(
     args,
     created_at,
     kind,
@@ -722,7 +729,7 @@ func (q *Queries) JobInsertFastManyNoReturning(ctx context.Context, db DBTX, arg
 }
 
 const jobInsertFull = `-- name: JobInsertFull :one
-INSERT INTO river_job(
+INSERT INTO /* TEMPLATE: schema */river_job(
     args,
     attempt,
     attempted_at,
@@ -827,7 +834,7 @@ func (q *Queries) JobInsertFull(ctx context.Context, db DBTX, arg *JobInsertFull
 
 const jobList = `-- name: JobList :many
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE /* TEMPLATE_BEGIN: where_clause */ 1 /* TEMPLATE_END */
 ORDER BY /* TEMPLATE_BEGIN: order_by_clause */ id /* TEMPLATE_END */
 LIMIT $1::int
@@ -876,7 +883,7 @@ func (q *Queries) JobList(ctx context.Context, db DBTX, max int32) ([]*RiverJob,
 }
 
 const jobRescueMany = `-- name: JobRescueMany :exec
-UPDATE river_job
+UPDATE /* TEMPLATE: schema */river_job
 SET
     errors = array_append(errors, updated_job.error),
     finalized_at = updated_job.finalized_at,
@@ -916,12 +923,12 @@ func (q *Queries) JobRescueMany(ctx context.Context, db DBTX, arg *JobRescueMany
 const jobRetry = `-- name: JobRetry :one
 WITH job_to_update AS (
     SELECT id
-    FROM river_job
+    FROM /* TEMPLATE: schema */river_job
     WHERE river_job.id = $1
     FOR UPDATE
 ),
 updated_job AS (
-    UPDATE river_job
+    UPDATE /* TEMPLATE: schema */river_job
     SET
         state = 'available',
         scheduled_at = now(),
@@ -936,7 +943,7 @@ updated_job AS (
     RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states
 )
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE id = $1::bigint
     AND id NOT IN (SELECT id FROM updated_job)
 UNION
@@ -978,7 +985,7 @@ WITH jobs_to_schedule AS (
         unique_states,
         priority,
         scheduled_at
-    FROM river_job
+    FROM /* TEMPLATE: schema */river_job
     WHERE
         state IN ('retryable', 'scheduled')
         AND queue IS NOT NULL
@@ -1006,7 +1013,7 @@ jobs_with_rownum AS (
 ),
 unique_conflicts AS (
     SELECT river_job.unique_key
-    FROM river_job
+    FROM /* TEMPLATE: schema */river_job
     JOIN jobs_with_rownum
         ON river_job.unique_key = jobs_with_rownum.unique_key
         AND river_job.id != jobs_with_rownum.id
@@ -1032,7 +1039,7 @@ job_updates AS (
     LEFT JOIN unique_conflicts uc ON job.unique_key = uc.unique_key
 ),
 updated_jobs AS (
-    UPDATE river_job
+    UPDATE /* TEMPLATE: schema */river_job
     SET
         state        = job_updates.new_state,
         finalized_at = CASE WHEN job_updates.finalized_at_do_update THEN $1::timestamptz
@@ -1048,7 +1055,7 @@ updated_jobs AS (
 SELECT
     river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states,
     updated_jobs.conflict_discarded
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 JOIN updated_jobs ON river_job.id = updated_jobs.id
 `
 
@@ -1138,7 +1145,7 @@ job_to_update AS (
         job_input.scheduled_at_do_update,
         (job_input.state IN ('retryable', 'scheduled') AND river_job.metadata ? 'cancel_attempted_at') AS should_cancel,
         job_input.state
-    FROM river_job
+    FROM /* TEMPLATE: schema */river_job
     JOIN job_input ON river_job.id = job_input.id
     WHERE river_job.state = 'running' OR job_input.metadata_do_merge
     FOR UPDATE
@@ -1166,7 +1173,7 @@ updated_running AS (
     RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states
 ),
 updated_metadata_only AS (
-    UPDATE river_job
+    UPDATE /* TEMPLATE: schema */river_job
     SET metadata = river_job.metadata || job_to_update.metadata_updates
     FROM job_to_update
     WHERE river_job.id = job_to_update.id
@@ -1176,7 +1183,7 @@ updated_metadata_only AS (
     RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states
 )
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE id IN (SELECT id FROM job_input)
     AND id NOT IN (SELECT id FROM updated_metadata_only)
     AND id NOT IN (SELECT id FROM updated_running)
@@ -1255,7 +1262,7 @@ func (q *Queries) JobSetStateIfRunningMany(ctx context.Context, db DBTX, arg *Jo
 }
 
 const jobUpdate = `-- name: JobUpdate :one
-UPDATE river_job
+UPDATE /* TEMPLATE: schema */river_job
 SET
     attempt = CASE WHEN $1::boolean THEN $2 ELSE attempt END,
     attempted_at = CASE WHEN $3::boolean THEN $4 ELSE attempted_at END,

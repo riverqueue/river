@@ -13,7 +13,7 @@ import (
 )
 
 const queueCreateOrSetUpdatedAt = `-- name: QueueCreateOrSetUpdatedAt :one
-INSERT INTO river_queue(
+INSERT INTO /* TEMPLATE: schema */river_queue(
     created_at,
     metadata,
     name,
@@ -57,10 +57,10 @@ func (q *Queries) QueueCreateOrSetUpdatedAt(ctx context.Context, db DBTX, arg *Q
 }
 
 const queueDeleteExpired = `-- name: QueueDeleteExpired :many
-DELETE FROM river_queue
+DELETE FROM /* TEMPLATE: schema */river_queue
 WHERE name IN (
     SELECT name
-    FROM river_queue
+    FROM /* TEMPLATE: schema */river_queue
     WHERE updated_at < $1::timestamptz
     ORDER BY name ASC
     LIMIT $2::bigint
@@ -101,7 +101,7 @@ func (q *Queries) QueueDeleteExpired(ctx context.Context, db DBTX, arg *QueueDel
 
 const queueGet = `-- name: QueueGet :one
 SELECT name, created_at, metadata, paused_at, updated_at
-FROM river_queue
+FROM /* TEMPLATE: schema */river_queue
 WHERE name = $1::text
 `
 
@@ -120,7 +120,7 @@ func (q *Queries) QueueGet(ctx context.Context, db DBTX, name string) (*RiverQue
 
 const queueList = `-- name: QueueList :many
 SELECT name, created_at, metadata, paused_at, updated_at
-FROM river_queue
+FROM /* TEMPLATE: schema */river_queue
 ORDER BY name ASC
 LIMIT $1::integer
 `
@@ -154,12 +154,12 @@ func (q *Queries) QueueList(ctx context.Context, db DBTX, limitCount int32) ([]*
 const queuePause = `-- name: QueuePause :execresult
 WITH queue_to_update AS (
     SELECT name, paused_at
-    FROM river_queue
+    FROM /* TEMPLATE: schema */river_queue
     WHERE CASE WHEN $1::text = '*' THEN true ELSE name = $1 END
     FOR UPDATE
 ),
 updated_queue AS (
-    UPDATE river_queue
+    UPDATE /* TEMPLATE: schema */river_queue
     SET
         paused_at = now(),
         updated_at = now()
@@ -169,7 +169,7 @@ updated_queue AS (
     RETURNING river_queue.name, river_queue.created_at, river_queue.metadata, river_queue.paused_at, river_queue.updated_at
 )
 SELECT name, created_at, metadata, paused_at, updated_at
-FROM river_queue
+FROM /* TEMPLATE: schema */river_queue
 WHERE name = $1
     AND name NOT IN (SELECT name FROM updated_queue)
 UNION
@@ -184,12 +184,12 @@ func (q *Queries) QueuePause(ctx context.Context, db DBTX, name string) (pgconn.
 const queueResume = `-- name: QueueResume :execresult
 WITH queue_to_update AS (
     SELECT name
-    FROM river_queue
+    FROM /* TEMPLATE: schema */river_queue
     WHERE CASE WHEN $1::text = '*' THEN true ELSE river_queue.name = $1::text END
     FOR UPDATE
 ),
 updated_queue AS (
-    UPDATE river_queue
+    UPDATE /* TEMPLATE: schema */river_queue
     SET
         paused_at = NULL,
         updated_at = now()
@@ -198,7 +198,7 @@ updated_queue AS (
     RETURNING river_queue.name, river_queue.created_at, river_queue.metadata, river_queue.paused_at, river_queue.updated_at
 )
 SELECT name, created_at, metadata, paused_at, updated_at
-FROM river_queue
+FROM /* TEMPLATE: schema */river_queue
 WHERE name = $1
     AND name NOT IN (SELECT name FROM updated_queue)
 UNION
@@ -211,7 +211,7 @@ func (q *Queries) QueueResume(ctx context.Context, db DBTX, name string) (pgconn
 }
 
 const queueUpdate = `-- name: QueueUpdate :one
-UPDATE river_queue
+UPDATE /* TEMPLATE: schema */river_queue
 SET
     metadata = CASE WHEN $1::boolean THEN $2::jsonb ELSE metadata END,
     updated_at = now()
