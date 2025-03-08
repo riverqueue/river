@@ -130,7 +130,7 @@ func TestJobCompleteTx(t *testing.T) {
 		})
 
 		// delete the job
-		_, err := bundle.exec.JobDelete(ctx, job.ID)
+		_, err := bundle.exec.JobDelete(ctx, &riverdriver.JobDeleteParams{ID: job.ID})
 		require.NoError(t, err)
 
 		// fake the job's state to work around the check:

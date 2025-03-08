@@ -126,16 +126,16 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 	return jobRowFromInternal(job)
 }
 
-func (e *Executor) JobCountByState(ctx context.Context, state rivertype.JobState) (int, error) {
-	numJobs, err := dbsqlc.New().JobCountByState(ctx, e.dbtx, dbsqlc.RiverJobState(state))
+func (e *Executor) JobCountByState(ctx context.Context, params *riverdriver.JobCountByStateParams) (int, error) {
+	numJobs, err := dbsqlc.New().JobCountByState(schemaTemplateParam(ctx, params.Schema), e.dbtx, dbsqlc.RiverJobState(params.State))
 	if err != nil {
 		return 0, err
 	}
 	return int(numJobs), nil
 }
 
-func (e *Executor) JobDelete(ctx context.Context, id int64) (*rivertype.JobRow, error) {
-	job, err := dbsqlc.New().JobDelete(ctx, e.dbtx, id)
+func (e *Executor) JobDelete(ctx context.Context, params *riverdriver.JobDeleteParams) (*rivertype.JobRow, error) {
+	job, err := dbsqlc.New().JobDelete(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.ID)
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -965,4 +965,14 @@ func queueFromInternal(internal *dbsqlc.RiverQueue) *rivertype.Queue {
 		PausedAt:  pausedAt,
 		UpdatedAt: internal.UpdatedAt.UTC(),
 	}
+}
+
+func schemaTemplateParam(ctx context.Context, schema string) context.Context {
+	if schema != "" {
+		schema += "."
+	}
+
+	return sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
+		"schema": {Value: schema},
+	}, nil)
 }

@@ -106,8 +106,8 @@ type Executor interface {
 	Exec(ctx context.Context, sql string) (struct{}, error)
 
 	JobCancel(ctx context.Context, params *JobCancelParams) (*rivertype.JobRow, error)
-	JobCountByState(ctx context.Context, state rivertype.JobState) (int, error)
-	JobDelete(ctx context.Context, id int64) (*rivertype.JobRow, error)
+	JobCountByState(ctx context.Context, params *JobCountByStateParams) (int, error)
+	JobDelete(ctx context.Context, params *JobDeleteParams) (*rivertype.JobRow, error)
 	JobDeleteBefore(ctx context.Context, params *JobDeleteBeforeParams) (int, error)
 	JobGetAvailable(ctx context.Context, params *JobGetAvailableParams) ([]*rivertype.JobRow, error)
 	JobGetByID(ctx context.Context, id int64) (*rivertype.JobRow, error)
@@ -209,9 +209,19 @@ type Notification struct {
 }
 
 type JobCancelParams struct {
+	ID                int64
 	CancelAttemptedAt time.Time
 	ControlTopic      string
-	ID                int64
+}
+
+type JobCountByStateParams struct {
+	Schema string
+	State  rivertype.JobState
+}
+
+type JobDeleteParams struct {
+	ID     int64
+	Schema string
 }
 
 type JobDeleteBeforeParams struct {
