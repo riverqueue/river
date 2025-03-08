@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/lib/pq"
 
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/riverdriver"
@@ -364,50 +363,22 @@ func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobIns
 	return jobRowFromInternal(job)
 }
 
-func (e *Executor) JobList(ctx context.Context, query string, namedArgs map[string]any) ([]*rivertype.JobRow, error) {
-	query, err := replaceNamed(query, namedArgs)
+func (e *Executor) JobList(ctx context.Context, params *riverdriver.JobListParams) ([]*rivertype.JobRow, error) {
+	whereClause, err := replaceNamed(params.WhereClause, params.NamedArgs)
 	if err != nil {
 		return nil, err
 	}
 
-	rows, err := e.dbtx.QueryContext(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+	ctx = sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
+		"order_by_clause": {Value: params.OrderByClause},
+		"where_clause":    {Value: whereClause},
+	}, nil) // named params not passed because they've already been replaced above
 
-	var items []*dbsqlc.RiverJob
-	for rows.Next() {
-		var i dbsqlc.RiverJob
-		if err := rows.Scan(
-			&i.ID,
-			&i.Args,
-			&i.Attempt,
-			&i.AttemptedAt,
-			pq.Array(&i.AttemptedBy),
-			&i.CreatedAt,
-			pq.Array(&i.Errors),
-			&i.FinalizedAt,
-			&i.Kind,
-			&i.MaxAttempts,
-			&i.Metadata,
-			&i.Priority,
-			&i.Queue,
-			&i.State,
-			&i.ScheduledAt,
-			pq.Array(&i.Tags),
-			&i.UniqueKey,
-			&i.UniqueStates,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
+	jobs, err := dbsqlc.New().JobList(ctx, e.dbtx, params.Max)
+	if err != nil {
 		return nil, interpretError(err)
 	}
-
-	return mapSliceError(items, jobRowFromInternal)
+	return mapSliceError(jobs, jobRowFromInternal)
 }
 
 func escapeSinglePostgresValue(value any) string {
@@ -500,10 +471,6 @@ func replaceNamed(query string, namedArgs map[string]any) (string, error) {
 	}
 
 	return query, nil
-}
-
-func (e *Executor) JobListFields() string {
-	return "id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states"
 }
 
 func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRescueManyParams) (*struct{}, error) {

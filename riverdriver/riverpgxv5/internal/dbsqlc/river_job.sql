@@ -315,6 +315,12 @@ INSERT INTO river_job(
     @unique_states
 ) RETURNING *;
 
+-- name: JobList :many
+SELECT *
+FROM river_job
+WHERE /* TEMPLATE_BEGIN: where_clause */ 1 /* TEMPLATE_END */
+ORDER BY /* TEMPLATE_BEGIN: order_by_clause */ id /* TEMPLATE_END */
+LIMIT @max::int;
 
 -- Run by the rescuer to queue for retry or discard depending on job state.
 -- name: JobRescueMany :exec

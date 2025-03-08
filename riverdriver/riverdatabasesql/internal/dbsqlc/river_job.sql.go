@@ -825,6 +825,56 @@ func (q *Queries) JobInsertFull(ctx context.Context, db DBTX, arg *JobInsertFull
 	return &i, err
 }
 
+const jobList = `-- name: JobList :many
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
+FROM river_job
+WHERE /* TEMPLATE_BEGIN: where_clause */ 1 /* TEMPLATE_END */
+ORDER BY /* TEMPLATE_BEGIN: order_by_clause */ id /* TEMPLATE_END */
+LIMIT $1::int
+`
+
+func (q *Queries) JobList(ctx context.Context, db DBTX, max int32) ([]*RiverJob, error) {
+	rows, err := db.QueryContext(ctx, jobList, max)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverJob
+	for rows.Next() {
+		var i RiverJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Args,
+			&i.Attempt,
+			&i.AttemptedAt,
+			pq.Array(&i.AttemptedBy),
+			&i.CreatedAt,
+			pq.Array(&i.Errors),
+			&i.FinalizedAt,
+			&i.Kind,
+			&i.MaxAttempts,
+			&i.Metadata,
+			&i.Priority,
+			&i.Queue,
+			&i.State,
+			&i.ScheduledAt,
+			pq.Array(&i.Tags),
+			&i.UniqueKey,
+			&i.UniqueStates,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const jobRescueMany = `-- name: JobRescueMany :exec
 UPDATE river_job
 SET
