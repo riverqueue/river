@@ -177,12 +177,18 @@ func (r *Replacer) RunSafely(ctx context.Context, sql string, args []any) (strin
 
 	if len(container.NamedArgs) > 0 {
 		placeholderNum := len(args)
-		for arg, val := range container.NamedArgs {
+
+		// For the benefit of the test suite's output being predictable, sort
+		// named args before processing them.
+		sortedNamedArgs := maputil.Keys(container.NamedArgs)
+		slices.Sort(sortedNamedArgs)
+		for _, arg := range sortedNamedArgs {
 			placeholderNum++
 
 			var (
 				symbol      = "@" + arg
 				symbolIndex = strings.Index(updatedSQL, symbol)
+				val         = container.NamedArgs[arg]
 			)
 
 			if symbolIndex == -1 {
