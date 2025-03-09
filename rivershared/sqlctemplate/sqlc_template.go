@@ -88,7 +88,7 @@ type Replacement struct {
 // be initialized with a constructor. This lets it default to a usable instance
 // on drivers that may themselves not be initialized.
 type Replacer struct {
-	cache   map[string]string
+	cache   map[replacerCacheKey]string
 	cacheMu sync.RWMutex
 }
 
@@ -131,22 +131,25 @@ func (r *Replacer) RunSafely(ctx context.Context, sql string, args []any) (strin
 		return "", nil, errors.New("sqlctemplate found template(s) in SQL, but no context container; bug?")
 	}
 
-	r.cacheMu.RLock()
-	var (
-		cachedSQL   string
-		cachedSQLOK bool
-	)
-	if r.cache != nil { // protect against map not initialized yet
-		cachedSQL, cachedSQLOK = r.cache[sql]
-	}
-	r.cacheMu.RUnlock()
-
-	// If all input templates were stable, the finished SQL will have been cached.
-	if cachedSQLOK {
-		if len(container.NamedArgs) > 0 {
-			args = append(args, maputil.Values(container.NamedArgs)...)
+	cacheKey, cacheEligible := replacerCacheKeyFrom(sql, container)
+	if cacheEligible {
+		r.cacheMu.RLock()
+		var (
+			cachedSQL   string
+			cachedSQLOK bool
+		)
+		if r.cache != nil { // protect against map not initialized yet
+			cachedSQL, cachedSQLOK = r.cache[cacheKey]
 		}
-		return cachedSQL, args, nil
+		r.cacheMu.RUnlock()
+
+		// If all input templates were stable, the finished SQL will have been cached.
+		if cachedSQLOK {
+			if len(container.NamedArgs) > 0 {
+				args = append(args, maputil.Values(container.NamedArgs)...)
+			}
+			return cachedSQL, args, nil
+		}
 	}
 
 	var (
@@ -212,18 +215,14 @@ func (r *Replacer) RunSafely(ctx context.Context, sql string, args []any) (strin
 		}
 	}
 
-	for _, replacement := range container.Replacements {
-		if !replacement.Stable {
-			return updatedSQL, args, nil
+	if cacheEligible {
+		r.cacheMu.Lock()
+		if r.cache == nil {
+			r.cache = make(map[replacerCacheKey]string)
 		}
+		r.cache[cacheKey] = updatedSQL
+		r.cacheMu.Unlock()
 	}
-
-	r.cacheMu.Lock()
-	if r.cache == nil {
-		r.cache = make(map[string]string)
-	}
-	r.cache[sql] = updatedSQL
-	r.cacheMu.Unlock()
 
 	return updatedSQL, args, nil
 }
@@ -253,4 +252,55 @@ func WithReplacements(ctx context.Context, replacements map[string]Replacement, 
 		NamedArgs:    namedArgs,
 		Replacements: replacements,
 	})
+}
+
+// Comparable struct that's used as a key for template caching.
+type replacerCacheKey struct {
+	namedArgs         string // all arg names concatenated together
+	replacementValues string // all values concatenated together
+	sql               string
+}
+
+// Builds a cache key for the given SQL and context container.
+//
+// A key is only built if the given SQL/templates are cacheable, which means all
+// template values must be stable. The second return value is a boolean
+// indicating whether a cache key was built or not. If false, the input is not
+// eligible for caching, and no check against the cache should be made.
+func replacerCacheKeyFrom(sql string, container *contextContainer) (replacerCacheKey, bool) {
+	// Only eligible for caching if all replacements are stable.
+	for _, replacement := range container.Replacements {
+		if !replacement.Stable {
+			return replacerCacheKey{}, false
+		}
+	}
+
+	var (
+		namedArgsBuilder strings.Builder
+
+		// Named args must be sorted for key stability because Go maps don't
+		// provide any ordering guarantees.
+		sortedNamedArgs = maputil.Keys(container.NamedArgs)
+	)
+	slices.Sort(sortedNamedArgs)
+	for _, namedArg := range sortedNamedArgs {
+		namedArgsBuilder.WriteRune('@') // useful as separator because not valid in the name of a named arg
+		namedArgsBuilder.WriteString(namedArg)
+	}
+
+	var (
+		replacementValuesBuilder strings.Builder
+		sortedReplacements       = maputil.Keys(container.Replacements)
+	)
+	slices.Sort(sortedReplacements)
+	for _, template := range sortedReplacements {
+		replacementValuesBuilder.WriteRune('•') // use a separator that SQL would reject under most circumstances (this may be imperfect)
+		replacementValuesBuilder.WriteString(container.Replacements[template].Value)
+	}
+
+	return replacerCacheKey{
+		namedArgs:         namedArgsBuilder.String(),
+		replacementValues: replacementValuesBuilder.String(),
+		sql:               sql,
+	}, true
 }
