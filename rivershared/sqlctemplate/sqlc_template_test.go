@@ -199,6 +199,96 @@ func TestReplacer(t *testing.T) {
 		require.Empty(t, replacer.cache)
 	})
 
+	t.Run("CacheBasedOnInputValues", func(t *testing.T) {
+		t.Parallel()
+
+		replacer, _ := setup(t)
+
+		// SQL stays constant across all runs.
+		const sql = `
+			SELECT count(*)
+			FROM /* TEMPLATE: schema */river_job
+			WHERE kind = @kind
+				AND state = @state;
+			`
+
+		// Initially cached value
+		{
+			ctx := WithReplacements(ctx, map[string]Replacement{
+				"schema": {Stable: true, Value: "test_schema."},
+			}, nil)
+
+			_, _, err := replacer.RunSafely(ctx, sql, nil)
+			require.NoError(t, err)
+		}
+		require.Len(t, replacer.cache, 1)
+
+		// Same SQL, but new value.
+		{
+			ctx := WithReplacements(ctx, map[string]Replacement{
+				"schema": {Stable: true, Value: "other_schema."},
+			}, nil)
+
+			_, _, err := replacer.RunSafely(ctx, sql, nil)
+			require.NoError(t, err)
+		}
+		require.Len(t, replacer.cache, 2)
+
+		// Named arg added to the mix.
+		{
+			ctx := WithReplacements(ctx, map[string]Replacement{
+				"schema": {Stable: true, Value: "test_schema."},
+			}, map[string]any{
+				"kind": "kind_value",
+			})
+
+			_, _, err := replacer.RunSafely(ctx, sql, nil)
+			require.NoError(t, err)
+		}
+		require.Len(t, replacer.cache, 3)
+
+		// Different named arg _value_ (i.e. still same named arg) can still use
+		// the previous cached SQL.
+		{
+			ctx := WithReplacements(ctx, map[string]Replacement{
+				"schema": {Stable: true, Value: "test_schema."},
+			}, map[string]any{
+				"kind": "other_kind_value",
+			})
+
+			_, _, err := replacer.RunSafely(ctx, sql, nil)
+			require.NoError(t, err)
+		}
+		require.Len(t, replacer.cache, 3) // unchanged
+
+		// New named arg adds a new cache value.
+		{
+			ctx := WithReplacements(ctx, map[string]Replacement{
+				"schema": {Stable: true, Value: "test_schema."},
+			}, map[string]any{
+				"kind":  "kind_value",
+				"state": "state_value",
+			})
+
+			_, _, err := replacer.RunSafely(ctx, sql, nil)
+			require.NoError(t, err)
+		}
+		require.Len(t, replacer.cache, 4)
+
+		// Different input SQL.
+		{
+			ctx := WithReplacements(ctx, map[string]Replacement{
+				"schema": {Stable: true, Value: "test_schema."},
+			}, nil)
+
+			_, _, err := replacer.RunSafely(ctx, `
+			SELECT /* TEMPLATE: schema */river_job;
+		`, nil)
+			require.NoError(t, err)
+		}
+		require.Len(t, replacer.cache, 5)
+	})
+
 	t.Run("NamedArgsNoInitialArgs", func(t *testing.T) {
 		t.Parallel()
 
@@ -367,5 +457,39 @@ func TestReplacer(t *testing.T) {
 		}()
 
 		wg.Wait()
+	})
+}
+
+func BenchmarkReplacer(b *testing.B) {
+	ctx := context.Background()
+
+	runReplacer := func(b *testing.B, replacer *Replacer, stable bool) {
+		b.Helper()
+
+		ctx := WithReplacements(ctx, map[string]Replacement{
+			"schema": {Stable: stable, Value: "test_schema."},
+		}, nil)
+
+		_, _, err := replacer.RunSafely(ctx, `
+			-- name: JobCountByState :one
+			SELECT count(*)
+			FROM /* TEMPLATE: schema */river_job
+			WHERE state = @state;
+		`, nil)
+		require.NoError(b, err)
+	}
+
+	b.Run("WithCache", func(b *testing.B) {
+		var replacer Replacer
+		for range b.N {
+			runReplacer(b, &replacer, true)
+		}
+	})
+
+	b.Run("WithoutCache", func(b *testing.B) {
+		var replacer Replacer
+		for range b.N {
+			runReplacer(b, &replacer, false)
+		}
 	})
 }
