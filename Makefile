@@ -64,7 +64,6 @@ define test-race-target
 endef
 $(foreach mod,$(submodules),$(eval $(call test-race-target,$(mod))))
 
-
 .PHONY: tidy
 tidy:: ## Run `go mod tidy` for all submodules
 define tidy-target

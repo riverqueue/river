@@ -350,49 +350,17 @@ func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobIns
 	return jobRowFromInternal(job)
 }
 
-func (e *Executor) JobList(ctx context.Context, query string, namedArgs map[string]any) ([]*rivertype.JobRow, error) {
-	rows, err := e.dbtx.Query(ctx, query, pgx.NamedArgs(namedArgs))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+func (e *Executor) JobList(ctx context.Context, params *riverdriver.JobListParams) ([]*rivertype.JobRow, error) {
+	ctx = sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
+		"order_by_clause": {Value: params.OrderByClause},
+		"where_clause":    {Value: params.WhereClause},
+	}, params.NamedArgs)
 
-	var items []*dbsqlc.RiverJob
-	for rows.Next() {
-		var i dbsqlc.RiverJob
-		if err := rows.Scan(
-			&i.ID,
-			&i.Args,
-			&i.Attempt,
-			&i.AttemptedAt,
-			&i.AttemptedBy,
-			&i.CreatedAt,
-			&i.Errors,
-			&i.FinalizedAt,
-			&i.Kind,
-			&i.MaxAttempts,
-			&i.Metadata,
-			&i.Priority,
-			&i.Queue,
-			&i.State,
-			&i.ScheduledAt,
-			&i.Tags,
-			&i.UniqueKey,
-			&i.UniqueStates,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
+	jobs, err := dbsqlc.New().JobList(ctx, e.dbtx, params.Max)
+	if err != nil {
 		return nil, interpretError(err)
 	}
-
-	return mapSliceError(items, jobRowFromInternal)
-}
-
-func (e *Executor) JobListFields() string {
-	return "id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states"
+	return mapSliceError(jobs, jobRowFromInternal)
 }
 
 func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRescueManyParams) (*struct{}, error) {
