@@ -241,6 +241,13 @@ type Config struct {
 	// Defaults to DefaultRetryPolicy.
 	RetryPolicy ClientRetryPolicy
 
+	// Schema is a non-standard schema where River tables are located. All table
+	// references in database queries will use this value as a prefix.
+	//
+	// Defaults to empty, which causes the client to look for tables using the
+	// setting of Postgres `search_path`.
+	Schema string
+
 	// SkipUnknownJobCheck is a flag to control whether the client should skip
 	// checking to see if a registered worker exists in the client's worker bundle
 	// for a job arg prior to insertion.
@@ -331,6 +338,7 @@ func (c *Config) WithDefaults() *Config {
 		ReindexerSchedule:           c.ReindexerSchedule,
 		RescueStuckJobsAfter:        valutil.ValOrDefault(c.RescueStuckJobsAfter, rescueAfter),
 		RetryPolicy:                 retryPolicy,
+		Schema:                      c.Schema,
 		SkipUnknownJobCheck:         c.SkipUnknownJobCheck,
 		Test:                        c.Test,
 		TestOnly:                    c.TestOnly,
@@ -1167,7 +1175,10 @@ func (c *Client[TTx]) jobCancel(ctx context.Context, exec riverdriver.Executor, 
 // deleted row if it was deleted. Jobs in the running state are not deleted,
 // instead returning rivertype.ErrJobRunning.
 func (c *Client[TTx]) JobDelete(ctx context.Context, id int64) (*rivertype.JobRow, error) {
-	return c.driver.GetExecutor().JobDelete(ctx, id)
+	return c.driver.GetExecutor().JobDelete(ctx, &riverdriver.JobDeleteParams{
+		ID:     id,
+		Schema: c.config.Schema,
+	})
 }
 
 // JobDelete deletes the job with the given ID from the database, returning the
@@ -1177,7 +1188,10 @@ func (c *Client[TTx]) JobDelete(ctx context.Context, id int64) (*rivertype.JobRo
 // until the transaction commits, and if the transaction rolls back, so too is
 // the deleted job.
 func (c *Client[TTx]) JobDeleteTx(ctx context.Context, tx TTx, id int64) (*rivertype.JobRow, error) {
-	return c.driver.UnwrapExecutor(tx).JobDelete(ctx, id)
+	return c.driver.UnwrapExecutor(tx).JobDelete(ctx, &riverdriver.JobDeleteParams{
+		ID:     id,
+		Schema: c.config.Schema,
+	})
 }
 
 // JobGet fetches a single job by its ID. Returns the up-to-date JobRow for the

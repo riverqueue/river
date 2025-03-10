@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 	"golang.org/x/text/cases"
@@ -334,21 +336,39 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	t.Run("JobCountByState", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		t.Run("CountsJobsByState", func(t *testing.T) {
+			t.Parallel()
 
-		// Included because they're the queried state.
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+			exec, _ := setup(ctx, t)
 
-		// Excluded because they're not.
-		finalizedAt := ptrutil.Ptr(time.Now())
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: finalizedAt, State: ptrutil.Ptr(rivertype.JobStateCancelled)})
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: finalizedAt, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: finalizedAt, State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
+			// Included because they're the queried state.
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
 
-		numJobs, err := exec.JobCountByState(ctx, rivertype.JobStateAvailable)
-		require.NoError(t, err)
-		require.Equal(t, 2, numJobs)
+			// Excluded because they're not.
+			finalizedAt := ptrutil.Ptr(time.Now())
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: finalizedAt, State: ptrutil.Ptr(rivertype.JobStateCancelled)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: finalizedAt, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: finalizedAt, State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
+
+			numJobs, err := exec.JobCountByState(ctx, &riverdriver.JobCountByStateParams{
+				State: rivertype.JobStateAvailable,
+			})
+			require.NoError(t, err)
+			require.Equal(t, 2, numJobs)
+		})
+
+		t.Run("AlternateSchema", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			_, err := exec.JobCountByState(ctx, &riverdriver.JobCountByStateParams{
+				Schema: "custom_schema",
+				State:  rivertype.JobStateAvailable,
+			})
+			requireMissingRelation(t, err, "custom_schema.river_job")
+		})
 	})
 
 	t.Run("JobDelete", func(t *testing.T) {
@@ -363,7 +383,9 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				State: ptrutil.Ptr(rivertype.JobStateRunning),
 			})
 
-			jobAfter, err := exec.JobDelete(ctx, job.ID)
+			jobAfter, err := exec.JobDelete(ctx, &riverdriver.JobDeleteParams{
+				ID: job.ID,
+			})
 			require.ErrorIs(t, err, rivertype.ErrJobRunning)
 			require.Nil(t, jobAfter)
 
@@ -405,7 +427,9 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 					State:       &state,
 				})
 
-				jobAfter, err := exec.JobDelete(ctx, job.ID)
+				jobAfter, err := exec.JobDelete(ctx, &riverdriver.JobDeleteParams{
+					ID: job.ID,
+				})
 				require.NoError(t, err)
 				require.NotNil(t, jobAfter)
 				require.Equal(t, job.ID, jobAfter.ID)
@@ -421,9 +445,25 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			exec, _ := setup(ctx, t)
 
-			jobAfter, err := exec.JobDelete(ctx, 1234567890)
+			jobAfter, err := exec.JobDelete(ctx, &riverdriver.JobDeleteParams{
+				ID: 1234567890,
+			})
 			require.ErrorIs(t, err, rivertype.ErrNotFound)
 			require.Nil(t, jobAfter)
+		})
+
+		t.Run("AlternateSchema", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+
+			_, err := exec.JobDelete(ctx, &riverdriver.JobDeleteParams{
+				ID:     job.ID,
+				Schema: "custom_schema",
+			})
+			requireMissingRelation(t, err, "custom_schema.river_job")
 		})
 	})
 
@@ -3050,4 +3090,13 @@ func requireEqualTime(t *testing.T, expected, actual time.Time) {
 		expected.Format(rfc3339Micro),
 		actual.Format(rfc3339Micro),
 	)
+}
+
+func requireMissingRelation(t *testing.T, err error, missingRelation string) {
+	t.Helper()
+
+	var pgErr *pgconn.PgError
+	require.ErrorAs(t, err, &pgErr)
+	require.Equal(t, pgerrcode.UndefinedTable, pgErr.Code)
+	require.Equal(t, fmt.Sprintf(`relation "%s" does not exist`, missingRelation), pgErr.Message)
 }

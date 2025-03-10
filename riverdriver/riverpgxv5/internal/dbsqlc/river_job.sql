@@ -82,19 +82,19 @@ FROM updated_job;
 
 -- name: JobCountByState :one
 SELECT count(*)
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE state = @state;
 
 -- name: JobDelete :one
 WITH job_to_delete AS (
     SELECT id
-    FROM river_job
+    FROM /* TEMPLATE: schema */river_job
     WHERE river_job.id = @id
     FOR UPDATE
 ),
 deleted_job AS (
     DELETE
-    FROM river_job
+    FROM /* TEMPLATE: schema */river_job
     USING job_to_delete
     WHERE river_job.id = job_to_delete.id
         -- Do not touch running jobs:
@@ -102,7 +102,7 @@ deleted_job AS (
     RETURNING river_job.*
 )
 SELECT *
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE id = @id::bigint
     AND id NOT IN (SELECT id FROM deleted_job)
 UNION
