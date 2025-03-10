@@ -1,7 +1,6 @@
 module github.com/riverqueue/river
 
 go 1.22.0
-
 toolchain go1.23.5
 
 require (
@@ -18,8 +17,8 @@ require (
 	github.com/tidwall/gjson v1.18.0
 	github.com/tidwall/sjson v1.2.5
 	go.uber.org/goleak v1.3.0
-	golang.org/x/sync v0.11.0
-	golang.org/x/text v0.22.0
+	golang.org/x/sync v0.12.0
+	golang.org/x/text v0.23.0
 )
 
 require (
