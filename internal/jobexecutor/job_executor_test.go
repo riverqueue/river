@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
@@ -31,6 +32,10 @@ type customizableWorkUnit struct {
 	nextRetry  func() time.Time
 	timeout    time.Duration
 	work       func() error
+}
+
+func (w *customizableWorkUnit) HookLookup(lookup *hooklookup.JobHookLookup) hooklookup.HookLookupInterface {
+	return hooklookup.NewHookLookup(nil)
 }
 
 func (w *customizableWorkUnit) Middleware() []rivertype.WorkerMiddleware {
@@ -176,6 +181,8 @@ func TestJobExecutor_Execute(t *testing.T) {
 			Completer:                bundle.completer,
 			DefaultClientRetryPolicy: &retrypolicytest.RetryPolicyNoJitter{},
 			ErrorHandler:             bundle.errorHandler,
+			HookLookupByJob:          hooklookup.NewJobHookLookup(),
+			HookLookupGlobal:         hooklookup.NewHookLookup(nil),
 			InformProducerDoneFunc:   func(job *rivertype.JobRow) {},
 			JobRow:                   bundle.jobRow,
 			SchedulerInterval:        riverinternaltest.SchedulerShortInterval,
@@ -575,7 +582,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor, bundle := setup(t)
 
 		// Add a middleware so we can verify it's in the trace too:
-		executor.GlobalMiddleware = []rivertype.WorkerMiddleware{
+		executor.WorkerMiddleware = []rivertype.WorkerMiddleware{
 			&testMiddleware{
 				work: func(ctx context.Context, job *rivertype.JobRow, next func(context.Context) error) error {
 					return next(ctx)

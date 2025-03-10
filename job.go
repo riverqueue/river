@@ -24,6 +24,19 @@ type JobArgs interface {
 	Kind() string
 }
 
+type JobArgsWithHooks interface {
+	// Hooks returns specific hooks to run for this job type. These will run
+	// after the global hooks configured on the client.
+	//
+	// Warning: Hooks returned should be based on the job type only and be
+	// invariant of the specific contents of a job. Hooks are extracted by
+	// instantiating a generic instance of the job even when a specific instance
+	// is available, so any conditional logic within will be ignored. This is
+	// done because although specific job information may be available in some
+	// hook contexts like on InsertBegin, it won't be in others like WorkBegin.
+	Hooks() []rivertype.Hook
+}
+
 // JobArgsWithInsertOpts is an extra interface that a job may implement on top
 // of JobArgs to provide insertion-time options for all jobs of this type.
 type JobArgsWithInsertOpts interface {

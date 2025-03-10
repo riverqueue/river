@@ -14,6 +14,7 @@ import (
 
 	"github.com/riverqueue/river/internal/dblist"
 	"github.com/riverqueue/river/internal/dbunique"
+	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/leadership"
 	"github.com/riverqueue/river/internal/maintenance"
@@ -166,6 +167,11 @@ type Config struct {
 	// Defaults to 1 minute.
 	JobTimeout time.Duration
 
+	// Hooks are functions that may activate at certain points during a job's
+	// lifecycle (see rivertype.Hook), installed globally. Jobs may have their
+	// own specific hooks by implementing the JobArgsWithHooks interface.
+	Hooks []rivertype.Hook
+
 	// Logger is the structured logger to use for logging purposes. If none is
 	// specified, logs will be emitted to STDOUT with messages at warn level
 	// or higher.
@@ -314,6 +320,7 @@ func (c *Config) WithDefaults() *Config {
 		FetchCooldown:               valutil.ValOrDefault(c.FetchCooldown, FetchCooldownDefault),
 		FetchPollInterval:           valutil.ValOrDefault(c.FetchPollInterval, FetchPollIntervalDefault),
 		ID:                          valutil.ValOrDefaultFunc(c.ID, func() string { return defaultClientID(time.Now().UTC()) }),
+		Hooks:                       c.Hooks,
 		JobInsertMiddleware:         c.JobInsertMiddleware,
 		JobTimeout:                  valutil.ValOrDefault(c.JobTimeout, JobTimeoutDefault),
 		Logger:                      logger,
@@ -427,6 +434,8 @@ type Client[TTx any] struct {
 	config               *Config
 	driver               riverdriver.Driver[TTx]
 	elector              *leadership.Elector
+	hookLookupByJob      *hooklookup.JobHookLookup
+	hookLookupGlobal     hooklookup.HookLookupInterface
 	insertNotifyLimiter  *notifylimiter.Limiter
 	notifier             *notifier.Notifier // may be nil in poll-only mode
 	periodicJobs         *PeriodicJobBundle
@@ -543,6 +552,8 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	client := &Client[TTx]{
 		config:               config,
 		driver:               driver,
+		hookLookupByJob:      hooklookup.NewJobHookLookup(),
+		hookLookupGlobal:     hooklookup.NewHookLookup(config.Hooks),
 		producersByQueueName: make(map[string]*producer),
 		testSignals:          clientTestSignals{},
 		workCancel:           func(cause error) {}, // replaced on start, but here in case StopAndCancel is called before start up
@@ -1510,6 +1521,24 @@ func (c *Client[TTx]) insertManyShared(
 	execute func(context.Context, []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error),
 ) ([]*rivertype.JobInsertResult, error) {
 	doInner := func(ctx context.Context) ([]*rivertype.JobInsertResult, error) {
+		for _, params := range insertParams {
+			// TODO(brandur): This range clause and the one below it are
+			// identical, and it'd be nice to merge them together, but in such a
+			// way that doesn't require array allocation. I think we can do this
+			// using iterators after we drop support for Go 1.22.
+			for _, hook := range c.hookLookupGlobal.ByHookKind(hooklookup.HookKindInsertBegin) {
+				if err := hook.(rivertype.HookInsertBegin).InsertBegin(ctx, params); err != nil { //nolint:forcetypeassert
+					return nil, err
+				}
+			}
+
+			for _, hook := range c.hookLookupByJob.ByJobArgs(params.Args).ByHookKind(hooklookup.HookKindInsertBegin) {
+				if err := hook.(rivertype.HookInsertBegin).InsertBegin(ctx, params); err != nil { //nolint:forcetypeassert
+					return nil, err
+				}
+			}
+		}
+
 		finalInsertParams := sliceutil.Map(insertParams, func(params *rivertype.JobInsertParams) *riverdriver.JobInsertFastParams {
 			return (*riverdriver.JobInsertFastParams)(params)
 		})
@@ -1754,7 +1783,8 @@ func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) *pr
 		ErrorHandler:       c.config.ErrorHandler,
 		FetchCooldown:      c.config.FetchCooldown,
 		FetchPollInterval:  c.config.FetchPollInterval,
-		GlobalMiddleware:   c.config.WorkerMiddleware,
+		HookLookupByJob:    c.hookLookupByJob,
+		HookLookupGlobal:   c.hookLookupGlobal,
 		JobTimeout:         c.config.JobTimeout,
 		MaxWorkers:         queueConfig.MaxWorkers,
 		Notifier:           c.notifier,
@@ -1763,6 +1793,7 @@ func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) *pr
 		RetryPolicy:        c.config.RetryPolicy,
 		SchedulerInterval:  c.config.schedulerInterval,
 		Workers:            c.config.Workers,
+		WorkerMiddleware:   c.config.WorkerMiddleware,
 	})
 	c.producersByQueueName[queueName] = producer
 	return producer
