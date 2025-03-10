@@ -270,6 +270,55 @@ type JobInsertParams struct {
 	UniqueStates byte
 }
 
+// Hook is an arbitrary interface for a plugin "hook" which will execute some
+// arbitrary code at a predefined step in the job lifecycle.
+//
+// This interface is left purposely non-specific. Hook structs should embed
+// river.HookDefaults to inherit an IsHook implementation, then implement one
+// of the more specific hook interfaces like HookInsertBegin or HookWorkBegin. A
+// hook struct may also implement multiple specific hook interfaces which are
+// logically related and benefit from being grouped together.
+//
+// Hooks differ from middleware in that they're invoked at a specific lifecycle
+// phase, but finish immediately instead of wrapping an inner call like a
+// middleware does. One of the main ramifications of this different is that a
+// hook cannot modify context in any useful way to pass down into the stack.
+// Like a normal function, any changes it makes to its context are discarded on
+// return.
+//
+// All else equal, hooks should generally be preferred over middleware because
+// they don't add anything to the call stack. Call stacks that get overly deep
+// can become a bit of an operational nightmare because they get hard to read.
+//
+// In a language with more specific type capabilities, this should be a union
+// type. In Go we implement it somewhat awkwardly so that we can get future
+// extensibility, but also some typing guarantees to prevent misuse (i.e. if
+// Hook was an empty interface, then any object could be passed as a hook, but
+// having a single function to implement forces the caller to make some token
+// motions in the direction of implementing hooks).
+type Hook interface {
+	// IsHook is a sentinel function to check that a type is implementing Hook
+	// on purpose and not by accident (Hook would otherwise be an empty
+	// interface). Hooks should embed river.HookDefaults to pick up an
+	// implementation for this function automatically.
+	IsHook() bool
+}
+
+// HookInsertBegin is an interface to a hook that runs before job insertion.
+type HookInsertBegin interface {
+	Hook
+
+	InsertBegin(ctx context.Context, params *JobInsertParams) error
+}
+
+// HookWorkBegin is an interface to a hook that runs after a job has been locked
+// for work and before it's worked.
+type HookWorkBegin interface {
+	Hook
+
+	WorkBegin(ctx context.Context, job *JobRow) error
+}
+
 // JobInsertMiddleware provides an interface for middleware that integrations can
 // use to encapsulate common logic around job insertion.
 //

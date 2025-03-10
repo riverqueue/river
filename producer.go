@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/notifier"
@@ -64,7 +65,8 @@ type producerConfig struct {
 	// LISTEN/NOTIFY, but this provides a fallback.
 	FetchPollInterval time.Duration
 
-	GlobalMiddleware []rivertype.WorkerMiddleware
+	HookLookupByJob  *hooklookup.JobHookLookup
+	HookLookupGlobal hooklookup.HookLookupInterface
 	JobTimeout       time.Duration
 	MaxWorkers       int
 
@@ -87,6 +89,7 @@ type producerConfig struct {
 	RetryPolicy         ClientRetryPolicy
 	SchedulerInterval   time.Duration
 	Workers             *Workers
+	WorkerMiddleware    []rivertype.WorkerMiddleware
 }
 
 func (c *producerConfig) mustValidate() *producerConfig {
@@ -616,10 +619,12 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 			Completer:                p.completer,
 			DefaultClientRetryPolicy: &DefaultClientRetryPolicy{},
 			ErrorHandler:             p.errorHandler,
+			HookLookupByJob:          p.config.HookLookupByJob,
+			HookLookupGlobal:         p.config.HookLookupGlobal,
 			InformProducerDoneFunc:   p.handleWorkerDone,
-			GlobalMiddleware:         p.config.GlobalMiddleware,
 			JobRow:                   job,
 			SchedulerInterval:        p.config.SchedulerInterval,
+			WorkerMiddleware:         p.config.WorkerMiddleware,
 			WorkUnit:                 workUnit,
 		})
 		p.addActiveJob(job.ID, executor)

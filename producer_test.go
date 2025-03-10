@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/notifier"
@@ -90,6 +91,8 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 		// Fetch constantly to more aggressively trigger the potential data race:
 		FetchCooldown:       time.Millisecond,
 		FetchPollInterval:   time.Millisecond,
+		HookLookupByJob:     hooklookup.NewJobHookLookup(),
+		HookLookupGlobal:    hooklookup.NewHookLookup(nil),
 		JobTimeout:          JobTimeoutDefault,
 		MaxWorkers:          1000,
 		Notifier:            notifier,
@@ -176,6 +179,8 @@ func TestProducer_PollOnly(t *testing.T) {
 			ErrorHandler:        newTestErrorHandler(),
 			FetchCooldown:       FetchCooldownDefault,
 			FetchPollInterval:   50 * time.Millisecond, // more aggressive than normal because we have no notifier
+			HookLookupByJob:     hooklookup.NewJobHookLookup(),
+			HookLookupGlobal:    hooklookup.NewHookLookup(nil),
 			JobTimeout:          JobTimeoutDefault,
 			MaxWorkers:          1_000,
 			Notifier:            nil, // no notifier
@@ -222,6 +227,8 @@ func TestProducer_WithNotifier(t *testing.T) {
 			ErrorHandler:        newTestErrorHandler(),
 			FetchCooldown:       FetchCooldownDefault,
 			FetchPollInterval:   50 * time.Millisecond, // more aggressive than normal so in case we miss the event, tests still pass quickly
+			HookLookupByJob:     hooklookup.NewJobHookLookup(),
+			HookLookupGlobal:    hooklookup.NewHookLookup(nil),
 			JobTimeout:          JobTimeoutDefault,
 			MaxWorkers:          1_000,
 			Notifier:            notifier,
