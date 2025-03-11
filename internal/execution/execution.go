@@ -28,24 +28,25 @@ func MaybeApplyTimeout(ctx context.Context, timeout time.Duration) (context.Cont
 
 // MiddlewareChain chains together the given middleware functions, returning a
 // single function that applies them all in reverse order.
-func MiddlewareChain(global, worker []rivertype.WorkerMiddleware, doInner Func, jobRow *rivertype.JobRow) Func {
+func MiddlewareChain(globalMiddleware []rivertype.Middleware, workerMiddleware []rivertype.WorkerMiddleware, doInner Func, jobRow *rivertype.JobRow) Func {
 	// Quick return for no middleware, which will often be the case.
-	if len(global) < 1 && len(worker) < 1 {
+	if len(globalMiddleware) < 1 && len(workerMiddleware) < 1 {
 		return doInner
-	}
-
-	// Write this so as to avoid a new slice allocation in cases where there is
-	// no worker specific middleware (which will be the common case).
-	allMiddleware := global
-	if len(worker) > 0 {
-		allMiddleware = append(allMiddleware, worker...)
 	}
 
 	// Wrap middlewares in reverse order so the one defined first is wrapped
 	// as the outermost function and is first to receive the operation.
-	for i := len(allMiddleware) - 1; i >= 0; i-- {
-		middlewareItem := allMiddleware[i] // capture the current middleware item
-		previousDoInner := doInner         // capture the current doInner function
+	for i := len(globalMiddleware) - 1; i >= 0; i-- {
+		middlewareItem := globalMiddleware[i].(rivertype.WorkerMiddleware) //nolint:forcetypeassert // capture the current middleware item
+		previousDoInner := doInner                                         // capture the current doInner function
+		doInner = func(ctx context.Context) error {
+			return middlewareItem.Work(ctx, jobRow, previousDoInner)
+		}
+	}
+
+	for i := len(workerMiddleware) - 1; i >= 0; i-- {
+		middlewareItem := workerMiddleware[i] // capture the current middleware item
+		previousDoInner := doInner            // capture the current doInner function
 		doInner = func(ctx context.Context) error {
 			return middlewareItem.Work(ctx, jobRow, previousDoInner)
 		}

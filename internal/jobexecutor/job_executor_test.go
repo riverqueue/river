@@ -11,6 +11,7 @@ import (
 
 	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
+	"github.com/riverqueue/river/internal/middlewarelookup"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/retrypolicytest"
@@ -185,6 +186,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 			HookLookupGlobal:         hooklookup.NewHookLookup(nil),
 			InformProducerDoneFunc:   func(job *rivertype.JobRow) {},
 			JobRow:                   bundle.jobRow,
+			MiddlewareLookupGlobal:   middlewarelookup.NewMiddlewareLookup(nil),
 			SchedulerInterval:        riverinternaltest.SchedulerShortInterval,
 			WorkUnit:                 workUnitFactory.MakeUnit(bundle.jobRow),
 		})
@@ -582,13 +584,13 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor, bundle := setup(t)
 
 		// Add a middleware so we can verify it's in the trace too:
-		executor.WorkerMiddleware = []rivertype.WorkerMiddleware{
+		executor.MiddlewareLookupGlobal = middlewarelookup.NewMiddlewareLookup([]rivertype.Middleware{
 			&testMiddleware{
 				work: func(ctx context.Context, job *rivertype.JobRow, next func(context.Context) error) error {
 					return next(ctx)
 				},
 			},
-		}
+		})
 
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error {
 			panic("panic val")
@@ -736,6 +738,8 @@ func TestJobExecutor_Execute(t *testing.T) {
 type testMiddleware struct {
 	work func(ctx context.Context, job *rivertype.JobRow, next func(context.Context) error) error
 }
+
+func (m *testMiddleware) IsMiddleware() bool { return true }
 
 func (m *testMiddleware) Work(ctx context.Context, job *rivertype.JobRow, next func(context.Context) error) error {
 	return m.work(ctx, job, next)

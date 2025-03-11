@@ -14,6 +14,7 @@ import (
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/maintenance"
+	"github.com/riverqueue/river/internal/middlewarelookup"
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -194,8 +195,8 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 		InformProducerDoneFunc: func(job *rivertype.JobRow) { close(executionDone) },
 		HookLookupGlobal:       hooklookup.NewHookLookup(w.config.Hooks),
 		HookLookupByJob:        hooklookup.NewJobHookLookup(),
-		WorkerMiddleware:       w.config.WorkerMiddleware,
 		JobRow:                 job,
+		MiddlewareLookupGlobal: middlewarelookup.NewMiddlewareLookup(w.config.Middleware),
 		SchedulerInterval:      maintenance.JobSchedulerIntervalDefault,
 		WorkUnit:               workUnit,
 	})
