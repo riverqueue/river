@@ -24,6 +24,9 @@ type JobArgs interface {
 	Kind() string
 }
 
+// JobArgsWithHooks is an interface that job args can implement to attach
+// specific hooks (i.e. other than those globally installed to a client) to
+// certain kinds of jobs.
 type JobArgsWithHooks interface {
 	// Hooks returns specific hooks to run for this job type. These will run
 	// after the global hooks configured on the client.

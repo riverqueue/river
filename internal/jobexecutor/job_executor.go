@@ -16,6 +16,7 @@ import (
 	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobstats"
+	"github.com/riverqueue/river/internal/middlewarelookup"
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -113,7 +114,7 @@ type JobExecutor struct {
 	HookLookupGlobal         hooklookup.HookLookupInterface
 	InformProducerDoneFunc   func(jobRow *rivertype.JobRow)
 	JobRow                   *rivertype.JobRow
-	WorkerMiddleware         []rivertype.WorkerMiddleware
+	MiddlewareLookupGlobal   middlewarelookup.MiddlewareLookupInterface
 	SchedulerInterval        time.Duration
 	WorkUnit                 workunit.WorkUnit
 
@@ -216,7 +217,12 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		return e.WorkUnit.Work(ctx)
 	})
 
-	executeFunc := execution.MiddlewareChain(e.WorkerMiddleware, e.WorkUnit.Middleware(), doInner, e.JobRow)
+	executeFunc := execution.MiddlewareChain(
+		e.MiddlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindWorker),
+		e.WorkUnit.Middleware(),
+		doInner,
+		e.JobRow,
+	)
 
 	return &jobExecutorResult{Err: executeFunc(ctx), MetadataUpdates: metadataUpdates}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/maintenance"
+	"github.com/riverqueue/river/internal/middlewarelookup"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
@@ -89,19 +90,20 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 		Completer:    completer,
 		ErrorHandler: newTestErrorHandler(),
 		// Fetch constantly to more aggressively trigger the potential data race:
-		FetchCooldown:       time.Millisecond,
-		FetchPollInterval:   time.Millisecond,
-		HookLookupByJob:     hooklookup.NewJobHookLookup(),
-		HookLookupGlobal:    hooklookup.NewHookLookup(nil),
-		JobTimeout:          JobTimeoutDefault,
-		MaxWorkers:          1000,
-		Notifier:            notifier,
-		Queue:               rivercommon.QueueDefault,
-		QueuePollInterval:   queuePollIntervalDefault,
-		QueueReportInterval: queueReportIntervalDefault,
-		RetryPolicy:         &DefaultClientRetryPolicy{},
-		SchedulerInterval:   maintenance.JobSchedulerIntervalDefault,
-		Workers:             workers,
+		FetchCooldown:          time.Millisecond,
+		FetchPollInterval:      time.Millisecond,
+		HookLookupByJob:        hooklookup.NewJobHookLookup(),
+		HookLookupGlobal:       hooklookup.NewHookLookup(nil),
+		JobTimeout:             JobTimeoutDefault,
+		MaxWorkers:             1000,
+		MiddlewareLookupGlobal: middlewarelookup.NewMiddlewareLookup(nil),
+		Notifier:               notifier,
+		Queue:                  rivercommon.QueueDefault,
+		QueuePollInterval:      queuePollIntervalDefault,
+		QueueReportInterval:    queueReportIntervalDefault,
+		RetryPolicy:            &DefaultClientRetryPolicy{},
+		SchedulerInterval:      maintenance.JobSchedulerIntervalDefault,
+		Workers:                workers,
 	})
 
 	params := make([]*riverdriver.JobInsertFastParams, maxJobCount)
@@ -174,22 +176,23 @@ func TestProducer_PollOnly(t *testing.T) {
 		}
 
 		return newProducer(archetype, exec, &producerConfig{
-			ClientID:            testClientID,
-			Completer:           completer,
-			ErrorHandler:        newTestErrorHandler(),
-			FetchCooldown:       FetchCooldownDefault,
-			FetchPollInterval:   50 * time.Millisecond, // more aggressive than normal because we have no notifier
-			HookLookupByJob:     hooklookup.NewJobHookLookup(),
-			HookLookupGlobal:    hooklookup.NewHookLookup(nil),
-			JobTimeout:          JobTimeoutDefault,
-			MaxWorkers:          1_000,
-			Notifier:            nil, // no notifier
-			Queue:               rivercommon.QueueDefault,
-			QueuePollInterval:   queuePollIntervalDefault,
-			QueueReportInterval: queueReportIntervalDefault,
-			RetryPolicy:         &DefaultClientRetryPolicy{},
-			SchedulerInterval:   riverinternaltest.SchedulerShortInterval,
-			Workers:             NewWorkers(),
+			ClientID:               testClientID,
+			Completer:              completer,
+			ErrorHandler:           newTestErrorHandler(),
+			FetchCooldown:          FetchCooldownDefault,
+			FetchPollInterval:      50 * time.Millisecond, // more aggressive than normal because we have no notifier
+			HookLookupByJob:        hooklookup.NewJobHookLookup(),
+			HookLookupGlobal:       hooklookup.NewHookLookup(nil),
+			JobTimeout:             JobTimeoutDefault,
+			MaxWorkers:             1_000,
+			MiddlewareLookupGlobal: middlewarelookup.NewMiddlewareLookup(nil),
+			Notifier:               nil, // no notifier
+			Queue:                  rivercommon.QueueDefault,
+			QueuePollInterval:      queuePollIntervalDefault,
+			QueueReportInterval:    queueReportIntervalDefault,
+			RetryPolicy:            &DefaultClientRetryPolicy{},
+			SchedulerInterval:      riverinternaltest.SchedulerShortInterval,
+			Workers:                NewWorkers(),
 		}), jobUpdates
 	})
 }
@@ -222,22 +225,23 @@ func TestProducer_WithNotifier(t *testing.T) {
 		}
 
 		return newProducer(archetype, exec, &producerConfig{
-			ClientID:            testClientID,
-			Completer:           completer,
-			ErrorHandler:        newTestErrorHandler(),
-			FetchCooldown:       FetchCooldownDefault,
-			FetchPollInterval:   50 * time.Millisecond, // more aggressive than normal so in case we miss the event, tests still pass quickly
-			HookLookupByJob:     hooklookup.NewJobHookLookup(),
-			HookLookupGlobal:    hooklookup.NewHookLookup(nil),
-			JobTimeout:          JobTimeoutDefault,
-			MaxWorkers:          1_000,
-			Notifier:            notifier,
-			Queue:               rivercommon.QueueDefault,
-			QueuePollInterval:   queuePollIntervalDefault,
-			QueueReportInterval: queueReportIntervalDefault,
-			RetryPolicy:         &DefaultClientRetryPolicy{},
-			SchedulerInterval:   riverinternaltest.SchedulerShortInterval,
-			Workers:             NewWorkers(),
+			ClientID:               testClientID,
+			Completer:              completer,
+			ErrorHandler:           newTestErrorHandler(),
+			FetchCooldown:          FetchCooldownDefault,
+			FetchPollInterval:      50 * time.Millisecond, // more aggressive than normal so in case we miss the event, tests still pass quickly
+			HookLookupByJob:        hooklookup.NewJobHookLookup(),
+			HookLookupGlobal:       hooklookup.NewHookLookup(nil),
+			JobTimeout:             JobTimeoutDefault,
+			MaxWorkers:             1_000,
+			MiddlewareLookupGlobal: middlewarelookup.NewMiddlewareLookup(nil),
+			Notifier:               notifier,
+			Queue:                  rivercommon.QueueDefault,
+			QueuePollInterval:      queuePollIntervalDefault,
+			QueueReportInterval:    queueReportIntervalDefault,
+			RetryPolicy:            &DefaultClientRetryPolicy{},
+			SchedulerInterval:      riverinternaltest.SchedulerShortInterval,
+			Workers:                NewWorkers(),
 		}), jobUpdates
 	})
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/maintenance"
+	"github.com/riverqueue/river/internal/middlewarelookup"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
@@ -736,7 +737,7 @@ func Test_Client(t *testing.T) {
 				return doInner(ctx)
 			},
 		}
-		bundle.config.WorkerMiddleware = []rivertype.WorkerMiddleware{middleware}
+		bundle.config.Middleware = []rivertype.Middleware{middleware}
 
 		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[callbackArgs]) error {
 			require.Equal(t, "called", ctx.Value(privateKey("middleware")))
@@ -5463,6 +5464,55 @@ func Test_NewClient_Validations(t *testing.T) {
 				// A client config value of zero gets interpreted as the default max attempts:
 				require.Equal(t, MaxAttemptsDefault, client.config.MaxAttempts)
 			},
+		},
+		{
+			name: "Middleware can be configured independently",
+			configFunc: func(config *Config) {
+				config.Middleware = []rivertype.Middleware{&overridableJobMiddleware{}}
+			},
+			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
+				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindJobInsert), 1)
+				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindWorker), 1)
+			},
+		},
+		{
+			name: "JobInsertMiddleware and WorkMiddleware may be configured together with separate middlewares",
+			configFunc: func(config *Config) {
+				config.JobInsertMiddleware = []rivertype.JobInsertMiddleware{&overridableJobMiddleware{}}
+				config.WorkerMiddleware = []rivertype.WorkerMiddleware{&overridableJobMiddleware{}}
+			},
+			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
+				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindJobInsert), 2)
+				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindWorker), 2)
+			},
+		},
+		{
+			name: "JobInsertMiddleware and WorkMiddleware may be configured together with same middleware",
+			configFunc: func(config *Config) {
+				middleware := &overridableJobMiddleware{}
+				config.JobInsertMiddleware = []rivertype.JobInsertMiddleware{middleware}
+				config.WorkerMiddleware = []rivertype.WorkerMiddleware{middleware}
+			},
+			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
+				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindJobInsert), 1)
+				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindWorker), 1)
+			},
+		},
+		{
+			name: "Middleware not allowed with JobInsertMiddleware",
+			configFunc: func(config *Config) {
+				config.JobInsertMiddleware = []rivertype.JobInsertMiddleware{&overridableJobMiddleware{}}
+				config.Middleware = []rivertype.Middleware{&overridableJobMiddleware{}}
+			},
+			wantErr: errors.New("only one of the pair JobInsertMiddleware/WorkerMiddleware or Middleware may be provided (Middleware is recommended, and may contain both job insert and worker middleware)"),
+		},
+		{
+			name: "Middleware not allowed with WorkerMiddleware",
+			configFunc: func(config *Config) {
+				config.Middleware = []rivertype.Middleware{&overridableJobMiddleware{}}
+				config.WorkerMiddleware = []rivertype.WorkerMiddleware{&overridableJobMiddleware{}}
+			},
+			wantErr: errors.New("only one of the pair JobInsertMiddleware/WorkerMiddleware or Middleware may be provided (Middleware is recommended, and may contain both job insert and worker middleware)"),
 		},
 		{
 			name: "RescueStuckJobsAfter may be overridden",

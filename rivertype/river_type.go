@@ -290,12 +290,16 @@ type JobInsertParams struct {
 // they don't add anything to the call stack. Call stacks that get overly deep
 // can become a bit of an operational nightmare because they get hard to read.
 //
-// In a language with more specific type capabilities, this should be a union
-// type. In Go we implement it somewhat awkwardly so that we can get future
-// extensibility, but also some typing guarantees to prevent misuse (i.e. if
-// Hook was an empty interface, then any object could be passed as a hook, but
-// having a single function to implement forces the caller to make some token
-// motions in the direction of implementing hooks).
+// In a language with more specific type capabilities, this interface would be a
+// union type. In Go we implement it somewhat awkwardly so that we can get
+// future extensibility, but also some typing guarantees to prevent misuse (i.e.
+// if Hook was an empty interface, then any object could be passed as a hook,
+// but having a single function to implement forces the caller to make some
+// token motions in the direction of implementing hooks).
+//
+// List of hook interfaces that may be implemented:
+// - HookInsertBegin
+// - HookWorkBegin
 type Hook interface {
 	// IsHook is a sentinel function to check that a type is implementing Hook
 	// on purpose and not by accident (Hook would otherwise be an empty
@@ -319,13 +323,60 @@ type HookWorkBegin interface {
 	WorkBegin(ctx context.Context, job *JobRow) error
 }
 
-// JobInsertMiddleware provides an interface for middleware that integrations can
-// use to encapsulate common logic around job insertion.
+// Middleware is an arbitrary interface for a struct which will execute some
+// arbitrary code at a predefined step in the job lifecycle.
+//
+// This interface is left purposely non-specific. Middleware structs should
+// embed river.MiddlewareDefaults to inherit an IsMiddleware implementation,
+// then implement a more specific hook interface like JobInsertMiddleware or
+// WorkerMiddleware. A middleware struct may also implement multiple specific
+// hook interfaces which are logically related and benefit from being grouped
+// together.
+//
+// Hooks differ from middleware in that they're invoked at a specific lifecycle
+// phase, but finish immediately instead of wrapping an inner call like a
+// middleware does. One of the main ramifications of this different is that a
+// hook cannot modify context in any useful way to pass down into the stack.
+// Like a normal function, any changes it makes to its context are discarded on
+// return.
+//
+// Middleware differs from hooks in that they wrap a specific lifecycle phase,
+// staying on the callstack for the duration of the step while they call into a
+// doInner function that executes the step and the rest of the middleware stack.
+// The main ramification of this difference is that middleware can modify
+// context for the step and any other middleware inner relative to it.
+//
+// All else equal, hooks should generally be preferred over middleware because
+// they don't add anything to the call stack. Call stacks that get overly deep
+// can become a bit of an operational nightmare because they get hard to read.
+//
+// In a language with more specific type capabilities, this interface would be a
+// union type. In Go we implement it somewhat awkwardly so that we can get
+// future extensibility, but also some typing guarantees to prevent misuse (i.e.
+// if Hook was an empty interface, then any object could be passed as a hook,
+// but having a single function to implement forces the caller to make some
+// token motions in the direction of implementing hooks).
+//
+// List of middleware interfaces that may be implemented:
+// - JobInsertMiddleware
+// - WorkerMiddleware
+type Middleware interface {
+	// IsMiddleware is a sentinel function to check that a type is implementing
+	// Middleware on purpose and not by accident (Middleware would otherwise be
+	// an empty interface). Middleware should embed river.MiddlewareDefaults to
+	// pick up an implementation for this function automatically.
+	IsMiddleware() bool
+}
+
+// JobInsertMiddleware provides an interface for middleware that integrations
+// can use to encapsulate common logic around job insertion.
 //
 // Implementations should embed river.JobMiddlewareDefaults to inherit default
 // implementations for phases where no custom code is needed, and for forward
 // compatibility in case new functions are added to this interface.
 type JobInsertMiddleware interface {
+	Middleware
+
 	// InsertMany is invoked around a batch insert operation. Implementations
 	// must always include a call to doInner to call down the middleware stack
 	// and perform the batch insertion, and may run custom code before and after.
@@ -335,7 +386,11 @@ type JobInsertMiddleware interface {
 	InsertMany(ctx context.Context, manyParams []*JobInsertParams, doInner func(context.Context) ([]*JobInsertResult, error)) ([]*JobInsertResult, error)
 }
 
+// WorkerMiddleware provides an interface for middleware that integrations can
+// use to encapsulate common logic when a job is worked.
 type WorkerMiddleware interface {
+	Middleware
+
 	// Work is invoked after a job's JSON args being unmarshaled and before the
 	// job is worked. Implementations must always include a call to doInner to
 	// call down the middleware stack and perform the batch insertion, and may run

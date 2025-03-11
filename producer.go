@@ -12,6 +12,7 @@ import (
 	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobexecutor"
+	"github.com/riverqueue/river/internal/middlewarelookup"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/util/chanutil"
@@ -65,10 +66,11 @@ type producerConfig struct {
 	// LISTEN/NOTIFY, but this provides a fallback.
 	FetchPollInterval time.Duration
 
-	HookLookupByJob  *hooklookup.JobHookLookup
-	HookLookupGlobal hooklookup.HookLookupInterface
-	JobTimeout       time.Duration
-	MaxWorkers       int
+	HookLookupByJob        *hooklookup.JobHookLookup
+	HookLookupGlobal       hooklookup.HookLookupInterface
+	JobTimeout             time.Duration
+	MaxWorkers             int
+	MiddlewareLookupGlobal middlewarelookup.MiddlewareLookupInterface
 
 	// Notifier is a notifier for subscribing to new job inserts and job
 	// control. If nil, the producer will operate in poll-only mode.
@@ -89,7 +91,6 @@ type producerConfig struct {
 	RetryPolicy         ClientRetryPolicy
 	SchedulerInterval   time.Duration
 	Workers             *Workers
-	WorkerMiddleware    []rivertype.WorkerMiddleware
 }
 
 func (c *producerConfig) mustValidate() *producerConfig {
@@ -621,10 +622,10 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 			ErrorHandler:             p.errorHandler,
 			HookLookupByJob:          p.config.HookLookupByJob,
 			HookLookupGlobal:         p.config.HookLookupGlobal,
+			MiddlewareLookupGlobal:   p.config.MiddlewareLookupGlobal,
 			InformProducerDoneFunc:   p.handleWorkerDone,
 			JobRow:                   job,
 			SchedulerInterval:        p.config.SchedulerInterval,
-			WorkerMiddleware:         p.config.WorkerMiddleware,
 			WorkUnit:                 workUnit,
 		})
 		p.addActiveJob(job.ID, executor)
