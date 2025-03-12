@@ -39,7 +39,7 @@ func (w *JobWithHooksWorker) Work(ctx context.Context, job *river.Job[JobWithHoo
 	return nil
 }
 
-type JobWithHooksBothInsertAndWorkBeginHook struct{ river.HookDefaults }
+type JobWithHooksBothInsertAndWorkBeginHook struct{ rivertype.HookDefaults }
 
 func (JobWithHooksBothInsertAndWorkBeginHook) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
 	fmt.Printf("JobWithHooksInsertAndWorkBeginHook.InsertBegin ran\n")
@@ -51,14 +51,14 @@ func (JobWithHooksBothInsertAndWorkBeginHook) WorkBegin(ctx context.Context, job
 	return nil
 }
 
-type JobWithHooksInsertBeginHook struct{ river.HookDefaults }
+type JobWithHooksInsertBeginHook struct{ rivertype.HookDefaults }
 
 func (JobWithHooksInsertBeginHook) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
 	fmt.Printf("JobWithHooksInsertBeginHook.InsertBegin ran\n")
 	return nil
 }
 
-type JobWithHooksWorkBeginHook struct{ river.HookDefaults }
+type JobWithHooksWorkBeginHook struct{ rivertype.HookDefaults }
 
 func (JobWithHooksWorkBeginHook) WorkBegin(ctx context.Context, job *rivertype.JobRow) error {
 	fmt.Printf("JobWithHooksWorkBeginHook.WorkBegin ran\n")

@@ -736,10 +736,9 @@ func TestJobExecutor_Execute(t *testing.T) {
 }
 
 type testMiddleware struct {
+	rivertype.MiddlewareDefaults
 	work func(ctx context.Context, job *rivertype.JobRow, next func(context.Context) error) error
 }
-
-func (m *testMiddleware) IsMiddleware() bool { return true }
 
 func (m *testMiddleware) Work(ctx context.Context, job *rivertype.JobRow, next func(context.Context) error) error {
 	return m.work(ctx, job, next)
