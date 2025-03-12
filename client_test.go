@@ -620,7 +620,7 @@ func Test_Client(t *testing.T) {
 		insertBeginHookCalled := false
 
 		bundle.config.Hooks = []rivertype.Hook{
-			HookInsertBeginFunc(func(ctx context.Context, params *rivertype.JobInsertParams) error {
+			rivertype.HookInsertBeginFunc(func(ctx context.Context, params *rivertype.JobInsertParams) error {
 				insertBeginHookCalled = true
 				return nil
 			}),
@@ -647,7 +647,7 @@ func Test_Client(t *testing.T) {
 		workBeginHookCalled := false
 
 		bundle.config.Hooks = []rivertype.Hook{
-			HookWorkBeginFunc(func(ctx context.Context, job *rivertype.JobRow) error {
+			rivertype.HookWorkBeginFunc(func(ctx context.Context, job *rivertype.JobRow) error {
 				workBeginHookCalled = true
 				return nil
 			}),
@@ -1110,7 +1110,7 @@ var (
 	_ rivertype.HookWorkBegin   = &testHookInsertAndWorkBegin{}
 )
 
-type testHookInsertAndWorkBegin struct{ HookDefaults }
+type testHookInsertAndWorkBegin struct{ rivertype.HookDefaults }
 
 func (t *testHookInsertAndWorkBegin) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
 	var metadataMap map[string]any
@@ -5262,7 +5262,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 	retryPolicy := &DefaultClientRetryPolicy{}
 
 	type noOpHook struct {
-		HookDefaults
+		rivertype.HookDefaults
 	}
 
 	type noOpInsertMiddleware struct {

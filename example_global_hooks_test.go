@@ -14,7 +14,7 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-type BothInsertAndWorkBeginHook struct{ river.HookDefaults }
+type BothInsertAndWorkBeginHook struct{ rivertype.HookDefaults }
 
 func (BothInsertAndWorkBeginHook) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
 	fmt.Printf("BothInsertAndWorkBeginHook.InsertBegin ran\n")
@@ -26,14 +26,14 @@ func (BothInsertAndWorkBeginHook) WorkBegin(ctx context.Context, job *rivertype.
 	return nil
 }
 
-type InsertBeginHook struct{ river.HookDefaults }
+type InsertBeginHook struct{ rivertype.HookDefaults }
 
 func (InsertBeginHook) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
 	fmt.Printf("InsertBeginHook.InsertBegin ran\n")
 	return nil
 }
 
-type WorkBeginHook struct{ river.HookDefaults }
+type WorkBeginHook struct{ rivertype.HookDefaults }
 
 func (WorkBeginHook) WorkBegin(ctx context.Context, job *rivertype.JobRow) error {
 	fmt.Printf("WorkBeginHook.WorkBegin ran\n")

@@ -1,6 +1,7 @@
 package rivertype_test
 
 import (
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -10,6 +11,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/rivertype"
+)
+
+// Verify interface compliance.
+var (
+	_ rivertype.Hook            = rivertype.HookInsertBeginFunc(func(ctx context.Context, params *rivertype.JobInsertParams) error { return nil })
+	_ rivertype.HookInsertBegin = rivertype.HookInsertBeginFunc(func(ctx context.Context, params *rivertype.JobInsertParams) error { return nil })
+
+	_ rivertype.Hook          = rivertype.HookWorkBeginFunc(func(ctx context.Context, job *rivertype.JobRow) error { return nil })
+	_ rivertype.HookWorkBegin = rivertype.HookWorkBeginFunc(func(ctx context.Context, job *rivertype.JobRow) error { return nil })
 )
 
 func TestJobRow_Output(t *testing.T) {

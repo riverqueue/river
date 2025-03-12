@@ -14,7 +14,7 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-type JobBothInsertAndWorkMiddleware struct{ river.MiddlewareDefaults }
+type JobBothInsertAndWorkMiddleware struct{ rivertype.MiddlewareDefaults }
 
 func (JobBothInsertAndWorkMiddleware) InsertMany(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(ctx context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
 	fmt.Printf("JobBothInsertAndWorkMiddleware.InsertMany ran\n")
@@ -26,14 +26,14 @@ func (JobBothInsertAndWorkMiddleware) Work(ctx context.Context, job *rivertype.J
 	return doInner(ctx)
 }
 
-type JobInsertMiddleware struct{ river.MiddlewareDefaults }
+type JobInsertMiddleware struct{ rivertype.MiddlewareDefaults }
 
 func (JobInsertMiddleware) InsertMany(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(ctx context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
 	fmt.Printf("JobInsertMiddleware.InsertMany ran\n")
 	return doInner(ctx)
 }
 
-type WorkerMiddleware struct{ river.MiddlewareDefaults }
+type WorkerMiddleware struct{ rivertype.MiddlewareDefaults }
 
 func (WorkerMiddleware) Work(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
 	fmt.Printf("WorkerMiddleware.Work ran\n")

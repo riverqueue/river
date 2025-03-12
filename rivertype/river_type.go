@@ -274,7 +274,7 @@ type JobInsertParams struct {
 // arbitrary code at a predefined step in the job lifecycle.
 //
 // This interface is left purposely non-specific. Hook structs should embed
-// river.HookDefaults to inherit an IsHook implementation, then implement one
+// rivertype.HookDefaults to inherit an IsHook implementation, then implement one
 // of the more specific hook interfaces like HookInsertBegin or HookWorkBegin. A
 // hook struct may also implement multiple specific hook interfaces which are
 // logically related and benefit from being grouped together.
@@ -301,11 +301,11 @@ type JobInsertParams struct {
 // - HookInsertBegin
 // - HookWorkBegin
 type Hook interface {
-	// IsHook is a sentinel function to check that a type is implementing Hook
+	// isHook is a sentinel function to check that a type is implementing Hook
 	// on purpose and not by accident (Hook would otherwise be an empty
-	// interface). Hooks should embed river.HookDefaults to pick up an
+	// interface). Hooks should embed rivertype.HookDefaults to pick up an
 	// implementation for this function automatically.
-	IsHook() bool
+	isHook() bool
 }
 
 // HookInsertBegin is an interface to a hook that runs before job insertion.
@@ -323,11 +323,38 @@ type HookWorkBegin interface {
 	WorkBegin(ctx context.Context, job *JobRow) error
 }
 
+// HookDefaults should be embedded on any hook implementation. It helps
+// guarantee forward compatibility in case additions are necessary to the Hook
+// interface.
+type HookDefaults struct{}
+
+func (d *HookDefaults) isHook() bool { return true }
+
+// HookInsertBeginFunc is a convenience helper for implementing HookInsertBegin
+// using a simple function instead of a struct.
+type HookInsertBeginFunc func(ctx context.Context, params *JobInsertParams) error
+
+func (f HookInsertBeginFunc) InsertBegin(ctx context.Context, params *JobInsertParams) error {
+	return f(ctx, params)
+}
+
+func (f HookInsertBeginFunc) isHook() bool { return true }
+
+// HookWorkBeginFunc is a convenience helper for implementing HookworkBegin
+// using a simple function instead of a struct.
+type HookWorkBeginFunc func(ctx context.Context, job *JobRow) error
+
+func (f HookWorkBeginFunc) WorkBegin(ctx context.Context, job *JobRow) error {
+	return f(ctx, job)
+}
+
+func (f HookWorkBeginFunc) isHook() bool { return true }
+
 // Middleware is an arbitrary interface for a struct which will execute some
 // arbitrary code at a predefined step in the job lifecycle.
 //
 // This interface is left purposely non-specific. Middleware structs should
-// embed river.MiddlewareDefaults to inherit an IsMiddleware implementation,
+// embed rivertype.MiddlewareDefaults to inherit an IsMiddleware implementation,
 // then implement a more specific hook interface like JobInsertMiddleware or
 // WorkerMiddleware. A middleware struct may also implement multiple specific
 // hook interfaces which are logically related and benefit from being grouped
@@ -363,9 +390,9 @@ type HookWorkBegin interface {
 type Middleware interface {
 	// IsMiddleware is a sentinel function to check that a type is implementing
 	// Middleware on purpose and not by accident (Middleware would otherwise be
-	// an empty interface). Middleware should embed river.MiddlewareDefaults to
+	// an empty interface). Middleware should embed rivertype.MiddlewareDefaults to
 	// pick up an implementation for this function automatically.
-	IsMiddleware() bool
+	isMiddleware() bool
 }
 
 // JobInsertMiddleware provides an interface for middleware that integrations
@@ -400,6 +427,10 @@ type WorkerMiddleware interface {
 	// operation, even if the inner work originally succeeded.
 	Work(ctx context.Context, job *JobRow, doInner func(context.Context) error) error
 }
+
+type MiddlewareDefaults struct{}
+
+func (d *MiddlewareDefaults) isMiddleware() bool { return true }
 
 // PeriodicJobHandle is a reference to a dynamically added periodic job
 // (returned by the use of `Client.PeriodicJobs().Add()`) which can be used to

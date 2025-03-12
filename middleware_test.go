@@ -7,7 +7,7 @@ import (
 )
 
 type overridableJobMiddleware struct {
-	MiddlewareDefaults
+	rivertype.MiddlewareDefaults
 
 	insertManyFunc func(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(ctx context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error)
 	workFunc       func(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error
