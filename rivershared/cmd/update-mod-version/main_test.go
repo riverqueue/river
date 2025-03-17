@@ -50,7 +50,9 @@ func TestParseAndUpdateGoModFile(t *testing.T) {
 
 		filename, _ := setup(t)
 
-		anyChanges, err := parseAndUpdateGoModFile(filename, "v0.0.13")
+		const packagePrefix = "github.com/riverqueue/river"
+
+		anyChanges, err := parseAndUpdateGoModFile(filename, packagePrefix, "v0.0.13")
 		require.NoError(t, err)
 		require.True(t, anyChanges)
 
@@ -64,7 +66,7 @@ func TestParseAndUpdateGoModFile(t *testing.T) {
 
 		versions := make([]module.Version, 0, len(modFile.Require))
 		for _, require := range modFile.Require {
-			if !strings.HasPrefix(require.Mod.Path, "github.com/riverqueue/river") {
+			if !strings.HasPrefix(require.Mod.Path, packagePrefix) {
 				continue
 			}
 
@@ -80,7 +82,7 @@ func TestParseAndUpdateGoModFile(t *testing.T) {
 
 		// Running again is allowed and should be idempotent. This time it'll
 		// return that no changes were made.
-		anyChanges, err = parseAndUpdateGoModFile(filename, "v0.0.13")
+		anyChanges, err = parseAndUpdateGoModFile(filename, packagePrefix, "v0.0.13")
 		require.NoError(t, err)
 		require.False(t, anyChanges)
 	})

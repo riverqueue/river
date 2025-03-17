@@ -25,7 +25,7 @@ queries. After changing an sqlc `.sql` file, generate Go with:
 
 ## Releasing a new version
 
-1. Fetch changes to the repo and any new tags. Export `VERSION` by incrementing the last tag. Execute `update-submodule-versions` to add it the project's `go.mod` files:
+1. Fetch changes to the repo and any new tags. Export `VERSION` by incrementing the last tag. Execute `update-mod-version` to add it the project's `go.mod` files:
 
     ```shell
     git checkout master && git pull --rebase

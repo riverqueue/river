@@ -26,6 +26,13 @@ func main() {
 }
 
 func run() error {
+	// Allows secondary River repositories to make use of this command by
+	// specifying their own prefix.
+	packagePrefix := os.Getenv("PACKAGE_PREFIX")
+	if packagePrefix == "" {
+		return errors.New("expected to find PACKAGE_PREFIX in env")
+	}
+
 	version := os.Getenv("VERSION")
 	if version == "" {
 		return errors.New("expected to find VERSION in env")
@@ -52,14 +59,14 @@ func run() error {
 	}
 
 	for _, workUse := range workFile.Use {
-		if _, err := parseAndUpdateGoModFile("./"+path.Join(workUse.Path, "go.mod"), version); err != nil {
+		if _, err := parseAndUpdateGoModFile("./"+path.Join(workUse.Path, "go.mod"), packagePrefix, version); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func parseAndUpdateGoModFile(filename, version string) (bool, error) {
+func parseAndUpdateGoModFile(filename, packagePrefix, version string) (bool, error) {
 	fileData, err := os.ReadFile(filename)
 	if err != nil {
 		return false, fmt.Errorf("error reading file %q: %w", filename, err)
@@ -75,7 +82,7 @@ func parseAndUpdateGoModFile(filename, version string) (bool, error) {
 	fmt.Printf("%s\n", filename)
 
 	for _, require := range modFile.Require {
-		if !strings.HasPrefix(require.Mod.Path, "github.com/riverqueue/river") {
+		if !strings.HasPrefix(require.Mod.Path, packagePrefix) {
 			continue
 		}
 
