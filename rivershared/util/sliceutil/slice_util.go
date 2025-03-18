@@ -4,6 +4,8 @@
 // therefore omitted from the utilities in `slices`.
 package sliceutil
 
+import "iter"
+
 // FirstNonEmpty returns the first non-empty slice from the input, or nil if
 // all input slices are empty.
 func FirstNonEmpty[T any](inputs ...[]T) []T {
@@ -27,6 +29,21 @@ func GroupBy[T any, U comparable](collection []T, keyFunc func(T) U) map[U][]T {
 	}
 
 	return result
+}
+
+func IterateCombined[T any](collection1, collection2 []T) iter.Seq[T] {
+	return func(yield func(T) bool) {
+		for _, item := range collection1 {
+			if !yield(item) {
+				return
+			}
+		}
+		for _, item := range collection2 {
+			if !yield(item) {
+				return
+			}
+		}
+	}
 }
 
 // KeyBy converts a slice into a map using the key/value tuples returned by

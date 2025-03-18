@@ -1597,17 +1597,10 @@ func (c *Client[TTx]) insertManyShared(
 ) ([]*rivertype.JobInsertResult, error) {
 	doInner := func(ctx context.Context) ([]*rivertype.JobInsertResult, error) {
 		for _, params := range insertParams {
-			// TODO(brandur): This range clause and the one below it are
-			// identical, and it'd be nice to merge them together, but in such a
-			// way that doesn't require array allocation. I think we can do this
-			// using iterators after we drop support for Go 1.22.
-			for _, hook := range c.hookLookupGlobal.ByHookKind(hooklookup.HookKindInsertBegin) {
-				if err := hook.(rivertype.HookInsertBegin).InsertBegin(ctx, params); err != nil { //nolint:forcetypeassert
-					return nil, err
-				}
-			}
-
-			for _, hook := range c.hookLookupByJob.ByJobArgs(params.Args).ByHookKind(hooklookup.HookKindInsertBegin) {
+			for hook := range sliceutil.IterateCombined(
+				c.hookLookupGlobal.ByHookKind(hooklookup.HookKindInsertBegin),
+				c.hookLookupByJob.ByJobArgs(params.Args).ByHookKind(hooklookup.HookKindInsertBegin),
+			) {
 				if err := hook.(rivertype.HookInsertBegin).InsertBegin(ctx, params); err != nil { //nolint:forcetypeassert
 					return nil, err
 				}

@@ -89,3 +89,86 @@ func TestMap(t *testing.T) {
 	require.Equal(t, []string{"Hello", "Hello", "Hello", "Hello"}, result1)
 	require.Equal(t, []string{"1", "2", "3", "4"}, result2)
 }
+
+func BenchmarkIterateCombined(b *testing.B) {
+	var (
+		slice1 = []int{1, 2, 3, 4}
+		slice2 = []int{5, 6, 7, 8}
+	)
+
+	b.Run("IterateCombined", func(b *testing.B) {
+		for range b.N {
+			var total int // try to make sure the loop doesn't get optimized away
+			for item := range IterateCombined(slice1, slice2) {
+				total += item * 100
+			}
+			b.Logf("Total: %d", total)
+		}
+	})
+
+	b.Run("SliceAllocation", func(b *testing.B) {
+		for range b.N {
+			var total int // try to make sure the loop doesn't get optimized away
+			for _, item := range append(slice1, slice2...) {
+				total += item * 100
+			}
+			b.Logf("Total: %d", total)
+		}
+	})
+
+	b.Run("TwoForLoops", func(b *testing.B) {
+		for range b.N {
+			var total int // try to make sure the loop doesn't get optimized away
+			for _, item := range slice1 {
+				total += item * 100
+			}
+			for _, item := range slice2 {
+				total += item * 100
+			}
+			b.Logf("Total: %d", total)
+		}
+	})
+
+	var (
+		slice1Long = make([]int, 100)
+		slice2Long = make([]int, 100)
+	)
+
+	for i := range slice1Long {
+		slice1Long[i] = i + 1
+		slice2Long[i] = i + 1 + 100
+	}
+
+	b.Run("IterateCombinedLong", func(b *testing.B) {
+		for range b.N {
+			var total int // try to make sure the loop doesn't get optimized away
+			for item := range IterateCombined(slice1Long, slice2Long) {
+				total += item * 100
+			}
+			b.Logf("Total: %d", total)
+		}
+	})
+
+	b.Run("SliceAllocationLong", func(b *testing.B) {
+		for range b.N {
+			var total int // try to make sure the loop doesn't get optimized away
+			for _, item := range append(slice1Long, slice2Long...) {
+				total += item * 100
+			}
+			b.Logf("Total: %d", total)
+		}
+	})
+
+	b.Run("TwoForLoopsLong", func(b *testing.B) {
+		for range b.N {
+			var total int // try to make sure the loop doesn't get optimized away
+			for _, item := range slice1Long {
+				total += item * 100
+			}
+			for _, item := range slice2Long {
+				total += item * 100
+			}
+			b.Logf("Total: %d", total)
+		}
+	})
+}

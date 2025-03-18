@@ -20,6 +20,7 @@ import (
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivershared/util/valutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -189,17 +190,10 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 
 	doInner := execution.Func(func(ctx context.Context) error {
 		{
-			// TODO(brandur): This range clause and the one below it are
-			// identical, and it'd be nice to merge them together, but in such a
-			// way that doesn't require array allocation. I think we can do this
-			// using iterators after we drop support for Go 1.22.
-			for _, hook := range e.HookLookupGlobal.ByHookKind(hooklookup.HookKindWorkBegin) {
-				if err := hook.(rivertype.HookWorkBegin).WorkBegin(ctx, e.JobRow); err != nil { //nolint:forcetypeassert
-					return err
-				}
-			}
-
-			for _, hook := range e.WorkUnit.HookLookup(e.HookLookupByJob).ByHookKind(hooklookup.HookKindWorkBegin) {
+			for hook := range sliceutil.IterateCombined(
+				e.HookLookupGlobal.ByHookKind(hooklookup.HookKindWorkBegin),
+				e.WorkUnit.HookLookup(e.HookLookupByJob).ByHookKind(hooklookup.HookKindWorkBegin),
+			) {
 				if err := hook.(rivertype.HookWorkBegin).WorkBegin(ctx, e.JobRow); err != nil { //nolint:forcetypeassert
 					return err
 				}
