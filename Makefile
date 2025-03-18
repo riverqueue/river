@@ -77,7 +77,7 @@ update-mod-go: ## Update `go`/`toolchain` directives in all submodules to match 
 
 .PHONY: update-mod-version
 update-mod-version: ## Update River packages in all submodules to $VERSION
-	go run ./rivershared/cmd/update-mod-version ./go.work
+	PACKAGE_PREFIX="github.com/riverqueue/river" go run ./rivershared/cmd/update-mod-version ./go.work
 
 .PHONY: verify
 verify: ## Verify generated artifacts
