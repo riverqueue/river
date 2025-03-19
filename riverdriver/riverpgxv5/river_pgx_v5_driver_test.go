@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivershared/sqlctemplate"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -144,4 +145,46 @@ func testPool(ctx context.Context, t *testing.T, config *pgxpool.Config) *pgxpoo
 	require.NoError(t, err)
 	t.Cleanup(dbPool.Close)
 	return dbPool
+}
+
+func TestSchemaTemplateParam(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct{}
+
+	setup := func(t *testing.T) (*sqlctemplate.Replacer, *testBundle) { //nolint:unparam
+		t.Helper()
+
+		return &sqlctemplate.Replacer{}, &testBundle{}
+	}
+
+	t.Run("NoSchema", func(t *testing.T) {
+		t.Parallel()
+
+		replacer, _ := setup(t)
+
+		updatedSQL, _, err := replacer.RunSafely(
+			schemaTemplateParam(ctx, ""),
+			"SELECT 1 FROM /* TEMPLATE: schema */river_job",
+			nil,
+		)
+		require.NoError(t, err)
+		require.Equal(t, "SELECT 1 FROM river_job", updatedSQL)
+	})
+
+	t.Run("WithSchema", func(t *testing.T) {
+		t.Parallel()
+
+		replacer, _ := setup(t)
+
+		updatedSQL, _, err := replacer.RunSafely(
+			schemaTemplateParam(ctx, "custom_schema"),
+			"SELECT 1 FROM /* TEMPLATE: schema */river_job",
+			nil,
+		)
+		require.NoError(t, err)
+		require.Equal(t, "SELECT 1 FROM custom_schema.river_job", updatedSQL)
+	})
 }
