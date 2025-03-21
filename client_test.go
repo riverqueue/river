@@ -2207,7 +2207,7 @@ func Test_Client_InsertManyFast(t *testing.T) {
 		count, err := client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: noOpArgs{}, InsertOpts: &InsertOpts{UniqueOpts: UniqueOpts{
 				ByArgs: true,
-				// force the v1 unique path with a custom state list that isn't supported in v3:
+				// Attempt a custom state list that isn't supported in v3 unique jobs:
 				ByState: []rivertype.JobState{rivertype.JobStateAvailable},
 			}}},
 		})
