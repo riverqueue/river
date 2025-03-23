@@ -6,9 +6,9 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-// HookDefaults should be embedded on any hook implementation. It helps
-// guarantee forward compatibility in case additions are necessary to the Hook
-// interface.
+// HookDefaults should be embedded on any hooks implementation. It helps
+// identify a struct as hooks, and guarantee forward compatibility in case
+// additions are necessary to the rivertype.Hook interface.
 type HookDefaults struct{}
 
 func (d *HookDefaults) IsHook() bool { return true }
