@@ -4,7 +4,6 @@ package riverinternaltest
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -219,44 +218,7 @@ func TestTx(ctx context.Context, tb testing.TB) pgx.Tx {
 		return dbPool
 	}
 
-	tx, err := getPool().Begin(ctx)
-	require.NoError(tb, err)
-
-	tb.Cleanup(func() {
-		err := tx.Rollback(ctx)
-
-		if err == nil {
-			return
-		}
-
-		// Try to look for an error on rollback because it does occasionally
-		// reveal a real problem in the way a test is written. However, allow
-		// tests to roll back their transaction early if they like, so ignore
-		// `ErrTxClosed`.
-		if errors.Is(err, pgx.ErrTxClosed) {
-			return
-		}
-
-		// In case of a cancelled context during a database operation, which
-		// happens in many tests, pgx seems to not only roll back the
-		// transaction, but closes the connection, and returns this error on
-		// rollback. Allow this error since it's hard to prevent it in our flows
-		// that use contexts heavily.
-		if err.Error() == "conn closed" {
-			return
-		}
-
-		// Similar to the above, but a newly appeared error that wraps the
-		// above. As far as I can tell, no error variables are available to use
-		// with `errors.Is`.
-		if err.Error() == "failed to deallocate cached statement(s): conn closed" {
-			return
-		}
-
-		require.NoError(tb, err)
-	})
-
-	return tx
+	return riversharedtest.TestTxPool(ctx, tb, getPool())
 }
 
 // TruncateRiverTables truncates River tables in the target database. This is
