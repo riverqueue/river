@@ -1,16 +1,7 @@
-issues:
-  exclude:
-    - 'Error return value of .(\w+\.Rollback(.*)). is not checked'
+version: "2"
 
 linters:
-  presets:
-    - bugs
-    - comment
-    - format
-    - performance
-    - style
-    - test
-    - unused
+  default: all
 
   disable:
     # disabled, but which we should enable with discussion
@@ -21,82 +12,109 @@ linters:
     - testpackage # requires tests in test packages like `river_test`
 
     # disabled because they're annoying/bad
+    - cyclop # screams into the void at "cyclomatic complexity"
+    - funlen # screams when functions are more than 60 lines long; what are we even doing here guys
     - interfacebloat # we do in fact want >10 methods on the Adapter interface or wherever we see fit.
+    - gocognit # yells that "cognitive complexity" is too high; why
+    - gocyclo # ANOTHER "cyclomatic complexity" checker (see also "cyclop" and "gocyclo")
     - godox # bans TODO statements; total non-starter at the moment
     - err113 # wants all errors to be defined as variables at the package level; quite obnoxious
+    - maintidx # ANOTHER ANOTHER "cyclomatic complexity" lint (see also "cyclop" and "gocyclo")
     - mnd # detects "magic numbers", which it defines as any number; annoying
+    - nestif # yells when if blocks are nested; what planet do these people come from?
     - ireturn # bans returning interfaces; questionable as is, but also buggy as hell; very, very annoying
     - lll # restricts maximum line length; annoying
     - nlreturn # requires a blank line before returns; annoying
     - wsl # a bunch of style/whitespace stuff; annoying
 
-linters-settings:
-  depguard:
-    rules:
-      all:
-        files: ["$all"]
-        allow:
-        deny:
-          - desc: "Use `github.com/google/uuid` package for UUIDs instead."
-            pkg: "github.com/xtgo/uuid"
-      not-test:
-        files: ["!$test"]
-        deny:
-          - desc: "Don't use `dbadaptertest` package outside of test environments."
-            pkg: "github.com/riverqueue/river/internal/dbadaptertest"
-          - desc: "Don't use `riverinternaltest` package outside of test environments."
-            pkg: "github.com/riverqueue/river/internal/riverinternaltest"
-
-  forbidigo:
-    forbid:
-      - msg: "Use `require` variants instead."
-        p: '^assert\.'
-      - msg: "Use `Func` suffix for function variables instead."
-        p: 'Fn\b'
-      - msg: "Use built-in `max` function instead."
-        p: '\bmath\.Max\b'
-      - msg: "Use built-in `min` function instead."
-        p: '\bmath\.Min\b'
-
-  gci:
-    sections:
-      - Standard
-      - Default
-      - Prefix(github.com/riverqueue)
-
-  gomoddirectives:
-    replace-local: true
-
-  gosec:
-    excludes:
-      - G404 # use of non-crypto random; overly broad for our use case
-
-  revive:
-    rules:
-      - name: unused-parameter
-        disabled: true
-
-  tagliatelle:
-    case:
+  settings:
+    depguard:
       rules:
-        json: snake
+        all:
+          files: ["$all"]
+          deny:
+            - desc: Use `github.com/google/uuid` package for UUIDs instead.
+              pkg: github.com/xtgo/uuid
+        not-test:
+          files: ["!$test"]
+          deny:
+            - desc: Don't use `dbadaptertest` package outside of test environments.
+              pkg: github.com/riverqueue/river/internal/dbadaptertest
+            - desc: Don't use `riverinternaltest` package outside of test environments.
+              pkg: github.com/riverqueue/river/internal/riverinternaltest
 
-  testifylint:
-    enable-all: true
-    disable:
-      - go-require
+    forbidigo:
+      forbid:
+        - msg: Use `require` variants instead.
+          pattern: ^assert\.
+        - msg: Use `Func` suffix for function variables instead.
+          pattern: Fn\b
+        - msg: Use built-in `max` function instead.
+          pattern: \bmath\.Max\b
+        - msg: Use built-in `min` function instead.
+          pattern: \bmath\.Min\b
 
-  varnamelen:
-    ignore-names:
-      - db
-      - eg
-      - f
-      - i
-      - id
-      - j
-      - mu
-      - sb # common convention for string builder
-      - t
-      - tt # common convention for table tests
-      - tx
-      - wg
+    gomoddirectives:
+      replace-local: true
+
+    gosec:
+      excludes:
+        - G404 # use of non-crypto random; overly broad for our use case
+
+    revive:
+      rules:
+        - name: unused-parameter
+          disabled: true
+
+    tagliatelle:
+      case:
+        rules:
+          json: snake
+
+    testifylint:
+      enable-all: true
+      disable:
+        - go-require
+
+    varnamelen:
+      ignore-names:
+        - db
+        - eg
+        - f
+        - i
+        - id
+        - j
+        - mu
+        - r
+        - sb # common convention for string builder
+        - t
+        - tt # common convention for table tests
+        - tx
+        - w
+        - wg
+
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - path: (.+)\.go$
+        text: Error return value of .(\w+\.Rollback(.*)). is not checked
+
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+    - goimports
+
+  settings:
+    gci:
+      sections:
+        - Standard
+        - Default
+        - Prefix(github.com/riverqueue)
+        - Prefix(riverqueue.com/riverpro)

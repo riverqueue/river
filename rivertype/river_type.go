@@ -300,6 +300,8 @@ type JobInsertParams struct {
 // List of hook interfaces that may be implemented:
 // - HookInsertBegin
 // - HookWorkBegin
+//
+// More operation-specific interfaces may be added in future versions.
 type Hook interface {
 	// IsHook is a sentinel function to check that a type is implementing Hook
 	// on purpose and not by accident (Hook would otherwise be an empty
@@ -360,6 +362,8 @@ type HookWorkBegin interface {
 // List of middleware interfaces that may be implemented:
 // - JobInsertMiddleware
 // - WorkerMiddleware
+//
+// More operation-specific interfaces may be added in future versions.
 type Middleware interface {
 	// IsMiddleware is a sentinel function to check that a type is implementing
 	// Middleware on purpose and not by accident (Middleware would otherwise be

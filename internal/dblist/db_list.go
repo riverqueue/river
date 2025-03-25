@@ -99,10 +99,13 @@ func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListPara
 
 	for i, orderBy := range params.OrderBy {
 		orderByBuilder.WriteString(orderBy.Expr)
-		if orderBy.Order == SortOrderAsc {
+		switch orderBy.Order {
+		case SortOrderAsc:
 			orderByBuilder.WriteString(" ASC")
-		} else if orderBy.Order == SortOrderDesc {
+		case SortOrderDesc:
 			orderByBuilder.WriteString(" DESC")
+		case SortOrderUnspecified:
+			return nil, errors.New("should not have gotten SortOrderUnspecified by this point before executing list (bug?)")
 		}
 		if i < len(params.OrderBy)-1 {
 			orderByBuilder.WriteString(", ")
