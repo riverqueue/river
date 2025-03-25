@@ -37,13 +37,22 @@ type Pilot interface {
 
 	// ProducerInit is called when a producer is started. It should return
 	// a new state object that will be used to track the producer's state.
-	ProducerInit(ctx context.Context, exec riverdriver.Executor, clientID string, producerID uuid.UUID, queue string) (ProducerState, error)
+	ProducerInit(ctx context.Context, exec riverdriver.Executor, params *ProducerInitParams) (ProducerState, error)
 
 	ProducerKeepAlive(ctx context.Context, exec riverdriver.Executor, params *riverdriver.ProducerKeepAliveParams) error
 
 	ProducerShutdown(ctx context.Context, exec riverdriver.Executor, producerID uuid.UUID, state ProducerState) error
+
+	QueueMetadataChanged(ctx context.Context, exec riverdriver.Executor, state ProducerState, metadata []byte) error
 }
 
 type ProducerState interface {
 	JobFinish(job *rivertype.JobRow)
+}
+
+type ProducerInitParams struct {
+	ClientID      string
+	ProducerID    uuid.UUID
+	Queue         string
+	QueueMetadata []byte
 }
