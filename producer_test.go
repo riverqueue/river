@@ -535,7 +535,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		require.NoError(t, bundle.exec.QueuePause(ctx, queueNameToPause))
 		if producer.config.Notifier != nil {
 			// also emit notification:
-			emitQueueNotification(t, ctx, bundle.exec, queueNameToPause, "pause")
+			emitQueueNotification(t, ctx, bundle.exec, queueNameToPause, "pause", nil)
 		}
 		producer.testSignals.Paused.WaitOrTimeout()
 
@@ -552,7 +552,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		require.NoError(t, bundle.exec.QueueResume(ctx, queueNameToPause))
 		if producer.config.Notifier != nil {
 			// also emit notification:
-			emitQueueNotification(t, ctx, bundle.exec, queueNameToPause, "resume")
+			emitQueueNotification(t, ctx, bundle.exec, queueNameToPause, "resume", nil)
 		}
 		producer.testSignals.Resumed.WaitOrTimeout()
 
@@ -590,15 +590,81 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 			producer.testSignals.PolledQueueConfig.WaitOrTimeout()
 		}
 	})
+
+	t.Run("QueueMetadataChangedDuringOperation", func(t *testing.T) {
+		t.Parallel()
+
+		producer, bundle := setup(t)
+		producer.config.QueuePollInterval = 50 * time.Millisecond
+
+		startProducer(t, ctx, ctx, producer)
+
+		updateMetadata := func(newMetadata []byte) {
+			t.Helper()
+
+			_, err := bundle.exec.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
+				Metadata:         newMetadata,
+				MetadataDoUpdate: true,
+				Name:             rivercommon.QueueDefault,
+			})
+			require.NoError(t, err)
+		}
+
+		// Update the queue's metadata:
+		updateMetadata([]byte(`{"foo":"bar","baz":123}`))
+
+		if producer.config.Notifier != nil {
+			// also emit notification:
+			// TODO: must emit updated metadata with notification
+			emitQueueNotification(t, ctx, bundle.exec, rivercommon.QueueDefault, "metadata_changed", []byte(`{"foo":"bar","baz":123}`))
+		}
+
+		producer.testSignals.MetadataChanged.WaitOrTimeout()
+
+		// Update with equivalent metadata but different field ordering:
+		reorderedMetadata := []byte(`{"baz":123,"foo":"bar"}`)
+		updateMetadata(reorderedMetadata)
+		// do not emit a notification here because this isn't a "real" update and
+		// notifier mode doesn't check for metadata equivalence.
+
+		// Should not receive a metadata changed signal since the JSON is equivalent:
+		select {
+		case <-producer.testSignals.MetadataChanged.WaitC():
+			t.Fatal("Received unexpected metadata changed signal for equivalent JSON")
+		case <-time.After(100 * time.Millisecond):
+			// Expected - no signal received
+		}
+
+		// Verify that the producer's comparison logic is working correctly by updating with different metadata:
+		differentMetadata := []byte(`{"foo":"bar","baz":456}`)
+		updateMetadata(differentMetadata)
+		if producer.config.Notifier != nil {
+			// also emit notification:
+			emitQueueNotification(t, ctx, bundle.exec, rivercommon.QueueDefault, "metadata_changed", differentMetadata)
+		}
+
+		// Should receive a metadata changed signal since the JSON is different:
+		producer.testSignals.MetadataChanged.WaitOrTimeout()
+	})
 }
 
-func emitQueueNotification(t *testing.T, ctx context.Context, exec riverdriver.Executor, queue, action string) {
+func emitQueueNotification(t *testing.T, ctx context.Context, exec riverdriver.Executor, queue, action string, metadata []byte) {
 	t.Helper()
-	err := exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{
-		Topic: string(notifier.NotificationTopicControl),
-		Payload: []string{
-			fmt.Sprintf(`{"queue":"%s","action":"%s"}`, queue, action),
-		},
+
+	payload := map[string]any{
+		"queue":  queue,
+		"action": action,
+	}
+	if metadata != nil {
+		payload["metadata"] = metadata
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	err = exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+		Topic:   string(notifier.NotificationTopicControl),
+		Payload: []string{string(payloadBytes)},
 	})
 	require.NoError(t, err)
 }

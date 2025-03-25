@@ -43,6 +43,10 @@ func (p *StandardPilot) ProducerShutdown(ctx context.Context, exec riverdriver.E
 	return nil
 }
 
+func (p *StandardPilot) QueueMetadataChanged(ctx context.Context, exec riverdriver.Executor, state ProducerState, metadata []byte) error {
+	return nil
+}
+
 type standardProducerState struct{}
 
 func (s *standardProducerState) JobFinish(job *rivertype.JobRow) {

@@ -41,6 +41,8 @@ type Pilot interface {
 	ProducerKeepAlive(ctx context.Context, exec riverdriver.Executor, params *riverdriver.ProducerKeepAliveParams) error
 
 	ProducerShutdown(ctx context.Context, exec riverdriver.Executor, producerID uuid.UUID, state ProducerState) error
+
+	QueueMetadataChanged(ctx context.Context, exec riverdriver.Executor, state ProducerState, metadata []byte) error
 }
 
 type ProducerState interface {

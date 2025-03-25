@@ -19,6 +19,7 @@ import (
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/util/chanutil"
+	"github.com/riverqueue/river/internal/util/jsonutil"
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -40,6 +41,7 @@ const (
 // Test-only properties.
 type producerTestSignals struct {
 	DeletedExpiredQueueRecords testsignal.TestSignal[struct{}] // notifies when the producer deletes expired queue records
+	MetadataChanged            testsignal.TestSignal[struct{}] // notifies when the producer detects a metadata change
 	Paused                     testsignal.TestSignal[struct{}] // notifies when the producer is paused
 	PolledQueueConfig          testsignal.TestSignal[struct{}] // notifies when the producer polls for queue settings
 	ReportedProducerStatus     testsignal.TestSignal[struct{}] // notifies when the producer reports its own status
@@ -50,6 +52,7 @@ type producerTestSignals struct {
 
 func (ts *producerTestSignals) Init() {
 	ts.DeletedExpiredQueueRecords.Init()
+	ts.MetadataChanged.Init()
 	ts.Paused.Init()
 	ts.PolledQueueConfig.Init()
 	ts.ReportedQueueStatus.Init()
@@ -396,15 +399,17 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 type controlAction string
 
 const (
-	controlActionCancel controlAction = "cancel"
-	controlActionPause  controlAction = "pause"
-	controlActionResume controlAction = "resume"
+	controlActionCancel          controlAction = "cancel"
+	controlActionMetadataChanged controlAction = "metadata_changed"
+	controlActionPause           controlAction = "pause"
+	controlActionResume          controlAction = "resume"
 )
 
 type controlEventPayload struct {
-	Action controlAction `json:"action"`
-	JobID  int64         `json:"job_id"`
-	Queue  string        `json:"queue"`
+	Action   controlAction `json:"action"`
+	JobID    int64         `json:"job_id"`
+	Metadata []byte        `json:"metadata,omitempty"`
+	Queue    string        `json:"queue"`
 }
 
 type insertPayload struct {
@@ -420,7 +425,7 @@ func (p *producer) handleControlNotification(workCtx context.Context) func(notif
 		}
 
 		switch decoded.Action {
-		case controlActionPause, controlActionResume:
+		case controlActionMetadataChanged, controlActionPause, controlActionResume:
 			if decoded.Queue != rivercommon.AllQueuesString && decoded.Queue != p.config.Queue {
 				p.Logger.DebugContext(workCtx, p.Name+": Queue control notification for other queue", slog.String("action", string(decoded.Action)))
 				return
@@ -485,6 +490,15 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 			return
 		case msg := <-p.queueControlCh:
 			switch msg.Action {
+			case controlActionCancel:
+				// Separate this case to make linter happy:
+				p.Logger.DebugContext(workCtx, p.Name+": Unhandled queue control action", "action", msg.Action)
+			case controlActionMetadataChanged:
+				p.Logger.DebugContext(workCtx, p.Name+": Queue metadata changed", slog.String("queue", p.config.Queue), slog.String("queue_in_message", msg.Queue))
+				p.testSignals.MetadataChanged.Signal(struct{}{})
+				if err := p.pilot.QueueMetadataChanged(workCtx, p.exec, p.state, msg.Metadata); err != nil {
+					p.Logger.ErrorContext(workCtx, p.Name+": Error updating queue metadata with pilot", slog.String("queue", p.config.Queue), slog.String("err", err.Error()))
+				}
 			case controlActionPause:
 				if p.paused {
 					continue
@@ -505,9 +519,6 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 				if p.config.QueueEventCallback != nil {
 					p.config.QueueEventCallback(&Event{Kind: EventKindQueueResumed, Queue: &rivertype.Queue{Name: p.config.Queue}})
 				}
-			case controlActionCancel:
-				// Separate this case to make linter happy:
-				p.Logger.DebugContext(workCtx, p.Name+": Unhandled queue control action", "action", msg.Action)
 			default:
 				p.Logger.DebugContext(workCtx, p.Name+": Unknown queue control action", "action", msg.Action)
 			}
@@ -779,7 +790,23 @@ func (p *producer) pollForSettingChanges(ctx context.Context, lastQueueRecord ri
 				}
 			}
 
-			// TODO: Look for a change in the queue's metadata, emit event if changed
+			// Look for a change in the queue's metadata:
+			if !jsonutil.Equal(lastQueueRecord.Metadata, updatedQueue.Metadata) {
+				payload := &controlEventPayload{
+					Action:   controlActionMetadataChanged,
+					Queue:    p.config.Queue,
+					Metadata: updatedQueue.Metadata,
+				}
+				p.Logger.DebugContext(ctx, p.Name+": Queue metadata changed from polling",
+					slog.String("queue", p.config.Queue),
+				)
+
+				select {
+				case p.queueControlCh <- payload:
+				default:
+					p.Logger.WarnContext(ctx, p.Name+": Queue control notification dropped due to full buffer", slog.String("action", string(controlActionMetadataChanged)))
+				}
+			}
 
 			lastQueueRecord = *updatedQueue
 			p.testSignals.PolledQueueConfig.Signal(struct{}{})
