@@ -165,6 +165,7 @@ type Executor interface {
 	QueueList(ctx context.Context, limit int) ([]*rivertype.Queue, error)
 	QueuePause(ctx context.Context, name string) error
 	QueueResume(ctx context.Context, name string) error
+	QueueUpdate(ctx context.Context, params *QueueUpdateParams) (*rivertype.Queue, error)
 
 	// TableExists checks whether a table exists for the schema in the current
 	// search schema.
@@ -501,4 +502,10 @@ type QueueCreateOrSetUpdatedAtParams struct {
 type QueueDeleteExpiredParams struct {
 	Max              int
 	UpdatedAtHorizon time.Time
+}
+
+type QueueUpdateParams struct {
+	Metadata         []byte
+	MetadataDoUpdate bool
+	Name             string
 }

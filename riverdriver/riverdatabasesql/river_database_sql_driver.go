@@ -815,6 +815,18 @@ func (e *Executor) QueueResume(ctx context.Context, name string) error {
 	return nil
 }
 
+func (e *Executor) QueueUpdate(ctx context.Context, params *riverdriver.QueueUpdateParams) (*rivertype.Queue, error) {
+	queue, err := dbsqlc.New().QueueUpdate(ctx, e.dbtx, &dbsqlc.QueueUpdateParams{
+		Metadata:         string(params.Metadata),
+		MetadataDoUpdate: params.MetadataDoUpdate,
+		Name:             params.Name,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return queueFromInternal(queue), nil
+}
+
 func (e *Executor) TableExists(ctx context.Context, tableName string) (bool, error) {
 	exists, err := dbsqlc.New().TableExists(ctx, e.dbtx, tableName)
 	return exists, interpretError(err)
