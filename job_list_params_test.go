@@ -25,8 +25,8 @@ func Test_JobListCursor_JobListCursorFromJob(t *testing.T) {
 	cursor := JobListCursorFromJob(jobRow)
 	require.Zero(t, cursor.id)
 	require.Equal(t, jobRow, cursor.job)
-	require.Zero(t, cursor.kind)
-	require.Zero(t, cursor.queue)
+	require.Empty(t, cursor.kind)
+	require.Empty(t, cursor.queue)
 	require.Zero(t, cursor.sortField)
 	require.Zero(t, cursor.time)
 }
@@ -163,7 +163,7 @@ func Test_JobListCursor_MarshalJSON(t *testing.T) {
 
 		text, err := json.Marshal(cursor)
 		require.NoError(t, err)
-		require.NotEqual(t, "", text)
+		require.NotEmpty(t, text)
 
 		unmarshaledParams := &JobListCursor{}
 		require.NoError(t, json.Unmarshal(text, unmarshaledParams))

@@ -233,7 +233,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		executor, bundle := setup(t)
 
-		now := executor.Archetype.Time.StubNowUTC(time.Now().UTC())
+		now := executor.Time.StubNowUTC(time.Now().UTC())
 
 		workerErr := errors.New("job error")
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)
@@ -249,7 +249,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.Equal(t, now.Truncate(1*time.Microsecond), job.Errors[0].At.Truncate(1*time.Microsecond))
 		require.Equal(t, 1, job.Errors[0].Attempt)
 		require.Equal(t, "job error", job.Errors[0].Error)
-		require.Equal(t, "", job.Errors[0].Trace)
+		require.Empty(t, job.Errors[0].Trace)
 	})
 
 	t.Run("ErrorAgainAfterRetry", func(t *testing.T) {
@@ -361,7 +361,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.WithinDuration(t, time.Now(), job.Errors[0].At, 2*time.Second)
 		require.Equal(t, 1, job.Errors[0].Attempt)
 		require.Equal(t, "JobCancelError: throw away this job", job.Errors[0].Error)
-		require.Equal(t, "", job.Errors[0].Trace)
+		require.Empty(t, job.Errors[0].Trace)
 	})
 
 	t.Run("JobSnoozeErrorReschedulesJobAndDecrementsAttempt", func(t *testing.T) {
@@ -721,7 +721,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.Equal(t, 1, job.Errors[0].Attempt)
 		require.Equal(t, "JobCancelError: job cancelled remotely", job.Errors[0].Error)
 		require.Equal(t, rivertype.ErrJobCancelledRemotely.Error(), job.Errors[0].Error)
-		require.Equal(t, "", job.Errors[0].Trace)
+		require.Empty(t, job.Errors[0].Trace)
 	})
 
 	t.Run("RemoteCancellationJobNotCancelledIfNoErrorReturned", func(t *testing.T) {

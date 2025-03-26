@@ -100,24 +100,24 @@ func TestWorker_Work(t *testing.T) {
 
 		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
 			require.Equal(t, testArgs{Value: "test"}, job.Args)
-			require.Equal(t, 1, job.JobRow.Attempt)
-			require.NotNil(t, job.JobRow.AttemptedAt)
-			require.WithinDuration(t, time.Now(), *job.JobRow.AttemptedAt, 5*time.Second)
-			require.Equal(t, []string{"rivertest-worker"}, job.JobRow.AttemptedBy)
-			require.WithinDuration(t, time.Now(), job.JobRow.CreatedAt, 5*time.Second)
-			require.JSONEq(t, `{"value": "test"}`, string(job.JobRow.EncodedArgs))
-			require.Empty(t, job.JobRow.Errors)
-			require.Nil(t, job.JobRow.FinalizedAt)
-			require.Positive(t, job.JobRow.ID)
-			require.Equal(t, "rivertest_work_test", job.JobRow.Kind)
-			require.Equal(t, river.MaxAttemptsDefault, job.JobRow.MaxAttempts)
-			require.Equal(t, []byte(`{}`), job.JobRow.Metadata)
-			require.Equal(t, river.PriorityDefault, job.JobRow.Priority)
-			require.Equal(t, river.QueueDefault, job.JobRow.Queue)
-			require.WithinDuration(t, time.Now(), job.JobRow.ScheduledAt, 2*time.Second)
-			require.Equal(t, rivertype.JobStateRunning, job.JobRow.State)
-			require.Equal(t, []string{}, job.JobRow.Tags)
-			require.Nil(t, job.JobRow.UniqueKey)
+			require.Equal(t, 1, job.Attempt)
+			require.NotNil(t, job.AttemptedAt)
+			require.WithinDuration(t, time.Now(), *job.AttemptedAt, 5*time.Second)
+			require.Equal(t, []string{"rivertest-worker"}, job.AttemptedBy)
+			require.WithinDuration(t, time.Now(), job.CreatedAt, 5*time.Second)
+			require.JSONEq(t, `{"value": "test"}`, string(job.EncodedArgs))
+			require.Empty(t, job.Errors)
+			require.Nil(t, job.FinalizedAt)
+			require.Positive(t, job.ID)
+			require.Equal(t, "rivertest_work_test", job.Kind)
+			require.Equal(t, river.MaxAttemptsDefault, job.MaxAttempts)
+			require.Equal(t, []byte(`{}`), job.Metadata)
+			require.Equal(t, river.PriorityDefault, job.Priority)
+			require.Equal(t, river.QueueDefault, job.Queue)
+			require.WithinDuration(t, time.Now(), job.ScheduledAt, 2*time.Second)
+			require.Equal(t, rivertype.JobStateRunning, job.State)
+			require.Equal(t, []string{}, job.Tags)
+			require.Nil(t, job.UniqueKey)
 
 			_, hasContextKeyInsideTestWorker := ctx.Value(execution.ContextKeyInsideTestWorker{}).(bool)
 			require.True(t, hasContextKeyInsideTestWorker)
@@ -156,23 +156,23 @@ func TestWorker_Work(t *testing.T) {
 
 		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
 			require.Equal(t, testArgs{Value: "test3"}, job.Args)
-			require.Equal(t, 1, job.JobRow.Attempt)
-			require.NotNil(t, job.JobRow.AttemptedAt)
-			require.WithinDuration(t, time.Now().UTC(), *job.JobRow.AttemptedAt, 2*time.Second)
-			require.Equal(t, []string{"rivertest-worker"}, job.JobRow.AttemptedBy)
-			require.WithinDuration(t, time.Now().UTC(), job.JobRow.CreatedAt, 2*time.Second)
-			require.JSONEq(t, `{"value": "test3"}`, string(job.JobRow.EncodedArgs))
-			require.Empty(t, job.JobRow.Errors)
-			require.Nil(t, job.JobRow.FinalizedAt)
-			require.Positive(t, job.JobRow.ID)
-			require.Equal(t, "rivertest_work_test", job.JobRow.Kind)
-			require.Equal(t, 420, job.JobRow.MaxAttempts)
-			require.JSONEq(t, `{"key": "value"}`, string(job.JobRow.Metadata))
-			require.Equal(t, 3, job.JobRow.Priority)
-			require.Equal(t, "custom_queue", job.JobRow.Queue)
-			require.WithinDuration(t, hourFromNow, job.JobRow.ScheduledAt, 2*time.Second)
-			require.Equal(t, rivertype.JobStateRunning, job.JobRow.State)
-			require.Equal(t, []string{"tag1", "tag2"}, job.JobRow.Tags)
+			require.Equal(t, 1, job.Attempt)
+			require.NotNil(t, job.AttemptedAt)
+			require.WithinDuration(t, time.Now().UTC(), *job.AttemptedAt, 2*time.Second)
+			require.Equal(t, []string{"rivertest-worker"}, job.AttemptedBy)
+			require.WithinDuration(t, time.Now().UTC(), job.CreatedAt, 2*time.Second)
+			require.JSONEq(t, `{"value": "test3"}`, string(job.EncodedArgs))
+			require.Empty(t, job.Errors)
+			require.Nil(t, job.FinalizedAt)
+			require.Positive(t, job.ID)
+			require.Equal(t, "rivertest_work_test", job.Kind)
+			require.Equal(t, 420, job.MaxAttempts)
+			require.JSONEq(t, `{"key": "value"}`, string(job.Metadata))
+			require.Equal(t, 3, job.Priority)
+			require.Equal(t, "custom_queue", job.Queue)
+			require.WithinDuration(t, hourFromNow, job.ScheduledAt, 2*time.Second)
+			require.Equal(t, rivertype.JobStateRunning, job.State)
+			require.Equal(t, []string{"tag1", "tag2"}, job.Tags)
 
 			return nil
 		})
@@ -205,8 +205,8 @@ func TestWorker_Work(t *testing.T) {
 		bundle.config.Test.Time = stubTime
 
 		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
-			require.Empty(t, job.JobRow.UniqueKey)
-			require.Empty(t, job.JobRow.UniqueStates)
+			require.Empty(t, job.UniqueKey)
+			require.Empty(t, job.UniqueStates)
 			return nil
 		})
 		tw := NewWorker(t, bundle.driver, bundle.config, worker)
@@ -258,9 +258,9 @@ func TestWorker_Work(t *testing.T) {
 		bundle.config.Test.Time = timeStub
 
 		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
-			require.WithinDuration(t, hourFromNow, *job.JobRow.AttemptedAt, time.Millisecond)
-			require.WithinDuration(t, hourFromNow, job.JobRow.CreatedAt, time.Millisecond)
-			require.WithinDuration(t, hourFromNow, job.JobRow.ScheduledAt, time.Millisecond)
+			require.WithinDuration(t, hourFromNow, *job.AttemptedAt, time.Millisecond)
+			require.WithinDuration(t, hourFromNow, job.CreatedAt, time.Millisecond)
+			require.WithinDuration(t, hourFromNow, job.ScheduledAt, time.Millisecond)
 			return nil
 		})
 		tw := NewWorker(t, bundle.driver, bundle.config, worker)
@@ -373,8 +373,8 @@ func TestWorker_WorkJob(t *testing.T) {
 		testWorker, bundle := setup(t)
 
 		bundle.workFunc = func(ctx context.Context, job *river.Job[testArgs]) error {
-			require.WithinDuration(t, time.Now(), *job.JobRow.AttemptedAt, 5*time.Second)
-			require.Equal(t, []string{"rivertest-workjob"}, job.JobRow.AttemptedBy)
+			require.WithinDuration(t, time.Now(), *job.AttemptedAt, 5*time.Second)
+			require.Equal(t, []string{"rivertest-workjob"}, job.AttemptedBy)
 			require.Equal(t, rivertype.JobStateRunning, job.State)
 			return nil
 		}

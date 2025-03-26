@@ -31,7 +31,7 @@ func TestUnknownJobKindError_As(t *testing.T) {
 		t.Parallel()
 
 		var err *river.UnknownJobKindError
-		require.False(t, errors.As(errors.New("some other error"), &err))
+		require.NotErrorAs(t, errors.New("some other error"), &err)
 	})
 }
 

@@ -525,10 +525,7 @@ func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan pr
 func (p *producer) executorShutdownLoop() {
 	// No more jobs will be fetched or executed. However, we must wait for all
 	// in-progress jobs to complete.
-	for {
-		if len(p.activeJobs) == 0 {
-			break
-		}
+	for len(p.activeJobs) != 0 {
 		result := <-p.jobResultCh
 		p.removeActiveJob(result.ID)
 	}
