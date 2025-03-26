@@ -633,7 +633,9 @@ func testCompleter[TCompleter JobCompleter](
 
 		require.Positive(t, numInserted)
 
-		numCompleted, err := bundle.exec.JobCountByState(ctx, rivertype.JobStateCompleted)
+		numCompleted, err := bundle.exec.JobCountByState(ctx, &riverdriver.JobCountByStateParams{
+			State: rivertype.JobStateCompleted,
+		})
 		require.NoError(t, err)
 		t.Logf("Counted %d jobs as completed", numCompleted)
 		require.Positive(t, numCompleted)
@@ -658,7 +660,9 @@ func testCompleter[TCompleter JobCompleter](
 
 		require.Positive(t, numInserted)
 
-		numCompleted, err := bundle.exec.JobCountByState(ctx, rivertype.JobStateCompleted)
+		numCompleted, err := bundle.exec.JobCountByState(ctx, &riverdriver.JobCountByStateParams{
+			State: rivertype.JobStateCompleted,
+		})
 		require.NoError(t, err)
 		t.Logf("Counted %d jobs as completed", numCompleted)
 		require.Positive(t, numCompleted)

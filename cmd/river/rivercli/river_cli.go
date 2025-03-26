@@ -81,12 +81,13 @@ func (c *CLI) BaseCommandSet() *cobra.Command {
 	}
 
 	// Make a bundle for RunCommand. Takes a database URL pointer because not every command is required to take a database URL.
-	makeCommandBundle := func(databaseURL *string) *RunCommandBundle {
+	makeCommandBundle := func(databaseURL *string, schema string) *RunCommandBundle {
 		return &RunCommandBundle{
 			DatabaseURL:    databaseURL,
 			DriverProcurer: c.driverProcurer,
 			Logger:         makeLogger(),
 			OutStd:         c.out,
+			Schema:         schema,
 		}
 	}
 
@@ -110,7 +111,7 @@ PG* vars if it's been specified.
 		`),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				if rootOpts.Version {
-					return RunCommand(ctx, makeCommandBundle(nil), &version{}, &versionOpts{Name: c.name})
+					return RunCommand(ctx, makeCommandBundle(nil, ""), &version{}, &versionOpts{Name: c.name})
 				}
 
 				_ = cmd.Usage()
@@ -131,6 +132,9 @@ PG* vars if it's been specified.
 	}
 	addLineFlag := func(cmd *cobra.Command, line *string) {
 		cmd.Flags().StringVar(line, "line", "", "migration line to operate on (default: main)")
+	}
+	addSchemaFlag := func(cmd *cobra.Command, schema *string) {
+		cmd.Flags().StringVar(schema, "schema", "", "name of non-default database schema where River tables are located")
 	}
 
 	// bench
@@ -154,10 +158,11 @@ The database in --database-url will have its jobs table truncated, so make sure
 to use a development database only.
 	`),
 			RunE: func(cmd *cobra.Command, args []string) error {
-				return RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL), &bench{}, &opts)
+				return RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL, opts.Schema), &bench{}, &opts)
 			},
 		}
 		addDatabaseURLFlag(cmd, &opts.DatabaseURL)
+		addSchemaFlag(cmd, &opts.Schema)
 		cmd.Flags().DurationVar(&opts.Duration, "duration", 0, "duration after which to stop benchmark, accepting Go-style durations like 1m, 5m30s")
 		cmd.Flags().IntVarP(&opts.NumTotalJobs, "num-total-jobs", "n", 0, "number of jobs to insert before starting and which are worked down until finish")
 		rootCmd.AddCommand(cmd)
@@ -168,6 +173,7 @@ to use a development database only.
 	// consistent.
 	addMigrateFlags := func(cmd *cobra.Command, opts *migrateOpts) {
 		addDatabaseURLFlag(cmd, &opts.DatabaseURL)
+		addSchemaFlag(cmd, &opts.Schema)
 		cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "print information on migrations, but don't apply them")
 		cmd.Flags().StringVar(&opts.Line, "line", "", "migration line to operate on (default: main)")
 		cmd.Flags().IntVar(&opts.MaxSteps, "max-steps", 0, "maximum number of steps to migrate")
@@ -193,7 +199,7 @@ operations can be prevented with --dry-run. Combine --show-sql and --dry-run to
 dump prospective migrations that would be applied to stdout.
 	`),
 			RunE: func(cmd *cobra.Command, args []string) error {
-				return RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL), &migrateDown{}, &opts)
+				return RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL, opts.Schema), &migrateDown{}, &opts)
 			},
 		}
 		addMigrateFlags(cmd, &opts)
@@ -231,7 +237,7 @@ framework, which aren't necessary if using an external framework:
     river migrate-get --all --exclude-version 1 --down > river_all.down.sql
 	`),
 			RunE: func(cmd *cobra.Command, args []string) error {
-				return RunCommand(ctx, makeCommandBundle(nil), &migrateGet{}, &opts)
+				return RunCommand(ctx, makeCommandBundle(nil, ""), &migrateGet{}, &opts)
 			},
 		}
 		cmd.Flags().BoolVar(&opts.All, "all", false, "print all migrations; down migrations are printed in descending order")
@@ -258,10 +264,11 @@ framework, which aren't necessary if using an external framework:
 TODO
 	`),
 			RunE: func(cmd *cobra.Command, args []string) error {
-				return RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL), &migrateList{}, &opts)
+				return RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL, opts.Schema), &migrateList{}, &opts)
 			},
 		}
 		addDatabaseURLFlag(cmd, &opts.DatabaseURL)
+		addSchemaFlag(cmd, &opts.Schema)
 		cmd.Flags().StringVar(&opts.Line, "line", "", "migration line to operate on (default: main)")
 		rootCmd.AddCommand(cmd)
 	}
@@ -284,7 +291,7 @@ operations can be prevented with --dry-run. Combine --show-sql and --dry-run to
 dump prospective migrations that would be applied to stdout.
 	`),
 			RunE: func(cmd *cobra.Command, args []string) error {
-				return RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL), &migrateUp{}, &opts)
+				return RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL, opts.Schema), &migrateUp{}, &opts)
 			},
 		}
 		addMigrateFlags(cmd, &opts)
@@ -306,10 +313,11 @@ Can be paired with river migrate-up --dry-run --show-sql to dump information on
 migrations that need to be run, but without running them.
 	`),
 			RunE: func(cmd *cobra.Command, args []string) error {
-				return RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL), &validate{}, &opts)
+				return RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL, opts.Schema), &validate{}, &opts)
 			},
 		}
 		addDatabaseURLFlag(cmd, &opts.DatabaseURL)
+		addSchemaFlag(cmd, &opts.Schema)
 		cmd.Flags().StringVar(&opts.Line, "line", "", "migration line to operate on (default: main)")
 		rootCmd.AddCommand(cmd)
 	}
@@ -323,7 +331,7 @@ migrations that need to be run, but without running them.
 Print River and Go version information.
 	`),
 			RunE: func(cmd *cobra.Command, args []string) error {
-				return RunCommand(ctx, makeCommandBundle(nil), &version{}, &versionOpts{Name: c.name})
+				return RunCommand(ctx, makeCommandBundle(nil, ""), &version{}, &versionOpts{Name: c.name})
 			},
 		}
 		rootCmd.AddCommand(cmd)
@@ -340,6 +348,7 @@ type benchOpts struct {
 	Debug        bool
 	Duration     time.Duration
 	NumTotalJobs int
+	Schema       string
 	Verbose      bool
 }
 
@@ -368,6 +377,7 @@ type migrateOpts struct {
 	Line          string
 	ShowSQL       bool
 	MaxSteps      int
+	Schema        string
 	TargetVersion int
 }
 
@@ -530,6 +540,7 @@ func (c *migrateGet) Run(_ context.Context, opts *migrateGetOpts) (bool, error) 
 type migrateListOpts struct {
 	DatabaseURL string
 	Line        string
+	Schema      string
 }
 
 func (o *migrateListOpts) Validate() error { return nil }
@@ -598,6 +609,7 @@ func (c *migrateUp) Run(ctx context.Context, opts *migrateOpts) (bool, error) {
 type validateOpts struct {
 	DatabaseURL string
 	Line        string
+	Schema      string
 }
 
 func (o *validateOpts) Validate() error {
