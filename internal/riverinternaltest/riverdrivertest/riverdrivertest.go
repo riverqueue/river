@@ -2893,6 +2893,42 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				require.NoError(t, exec.QueueResume(ctx, rivercommon.AllQueuesString))
 			})
 		})
+
+		t.Run("QueueUpdate", func(t *testing.T) {
+			t.Parallel()
+
+			t.Run("UpdatesFieldsIfDoUpdateIsTrue", func(t *testing.T) {
+				t.Parallel()
+
+				exec, _ := setup(ctx, t)
+
+				queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`)})
+
+				updatedQueue, err := exec.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
+					Metadata:         []byte(`{"baz": "qux"}`),
+					MetadataDoUpdate: true,
+					Name:             queue.Name,
+				})
+				require.NoError(t, err)
+				require.Equal(t, []byte(`{"baz": "qux"}`), updatedQueue.Metadata)
+			})
+
+			t.Run("DoesNotUpdateFieldsIfDoUpdateIsFalse", func(t *testing.T) {
+				t.Parallel()
+
+				exec, _ := setup(ctx, t)
+
+				queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`)})
+
+				updatedQueue, err := exec.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
+					Metadata:         []byte(`{"baz": "qux"}`),
+					MetadataDoUpdate: false,
+					Name:             queue.Name,
+				})
+				require.NoError(t, err)
+				require.Equal(t, []byte(`{"foo": "bar"}`), updatedQueue.Metadata)
+			})
+		})
 	})
 }
 
