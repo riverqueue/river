@@ -2155,6 +2155,58 @@ func (c *Client[TTx]) QueueResumeTx(ctx context.Context, tx TTx, name string, op
 	return nil
 }
 
+// QueueUpdateParams are the parameters for a QueueUpdate operation.
+type QueueUpdateParams struct {
+	// Metadata is the new metadata for the queue. If nil or empty, the metadata
+	// will not be changed.
+	Metadata []byte
+}
+
+// QueueUpdate updates a queue's settings in the database. These settings
+// override the settings in the client (if applied).
+func (c *Client[TTx]) QueueUpdate(ctx context.Context, name string, params *QueueUpdateParams) (*rivertype.Queue, error) {
+	tx, err := c.driver.GetExecutor().Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	updateMetadata := len(params.Metadata) > 0
+
+	queue, err := tx.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
+		Metadata:         params.Metadata,
+		MetadataDoUpdate: updateMetadata,
+		Name:             name,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if updateMetadata {
+		payload, err := json.Marshal(controlEventPayload{
+			Action:   controlActionMetadataChanged,
+			Metadata: params.Metadata,
+			Queue:    queue.Name,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		if err := tx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+			Topic:   string(notifier.NotificationTopicControl),
+			Payload: []string{string(payload)},
+		}); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	return queue, nil
+}
+
 // QueueBundle is a bundle for adding additional queues. It's made accessible
 // through Client.Queues.
 type QueueBundle struct {

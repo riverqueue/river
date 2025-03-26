@@ -409,7 +409,7 @@ const (
 
 type controlEventPayload struct {
 	Action   controlAction `json:"action"`
-	JobID    int64         `json:"job_id"`
+	JobID    int64         `json:"job_id,omitempty"`
 	Metadata []byte        `json:"metadata,omitempty"`
 	Queue    string        `json:"queue"`
 }

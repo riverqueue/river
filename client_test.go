@@ -1106,6 +1106,78 @@ func Test_Client(t *testing.T) {
 
 		startstoptest.StressErr(ctx, t, clientWithStop, rivercommon.ErrShutdown)
 	})
+
+	t.Run("QueueUpdate", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+		startClient(ctx, t, client)
+
+		type metadataUpdatePayload struct {
+			Action   string `json:"action"`
+			Metadata []byte `json:"metadata"`
+			Queue    string `json:"queue"`
+		}
+		type notification struct {
+			topic   notifier.NotificationTopic
+			payload metadataUpdatePayload
+		}
+		notifyCh := make(chan notification, 10)
+
+		handleNotification := func(topic notifier.NotificationTopic, payload string) {
+			t.Logf("received notification: %s, %s", topic, payload)
+			notif := notification{topic: topic}
+			require.NoError(t, json.Unmarshal([]byte(payload), &notif.payload))
+			notifyCh <- notif
+		}
+
+		sub, err := client.notifier.Listen(ctx, notifier.NotificationTopicControl, handleNotification)
+		require.NoError(t, err)
+		t.Cleanup(func() { sub.Unlisten(ctx) })
+
+		queue := testfactory.Queue(ctx, t, client.driver.GetExecutor(), nil)
+		require.Equal(t, []byte(`{}`), queue.Metadata)
+
+		queue, err = client.QueueUpdate(ctx, queue.Name, &QueueUpdateParams{
+			Metadata: []byte(`{"foo":"bar"}`),
+		})
+		require.NoError(t, err)
+		require.JSONEq(t, `{"foo":"bar"}`, string(queue.Metadata))
+
+		notif := riversharedtest.WaitOrTimeout(t, notifyCh)
+		require.Equal(t, notifier.NotificationTopicControl, notif.topic)
+		require.Equal(t, metadataUpdatePayload{
+			Action:   "metadata_changed",
+			Metadata: []byte(`{"foo":"bar"}`),
+			Queue:    queue.Name,
+		}, notif.payload)
+
+		queue, err = client.QueueUpdate(ctx, queue.Name, &QueueUpdateParams{
+			Metadata: []byte(`{"foo":"baz"}`),
+		})
+		require.NoError(t, err)
+		require.JSONEq(t, `{"foo":"baz"}`, string(queue.Metadata))
+
+		notif = riversharedtest.WaitOrTimeout(t, notifyCh)
+		require.Equal(t, notifier.NotificationTopicControl, notif.topic)
+		require.Equal(t, metadataUpdatePayload{
+			Action:   "metadata_changed",
+			Metadata: []byte(`{"foo":"baz"}`),
+			Queue:    queue.Name,
+		}, notif.payload)
+
+		queue, err = client.QueueUpdate(ctx, queue.Name, &QueueUpdateParams{
+			Metadata: nil,
+		})
+		require.NoError(t, err)
+		require.JSONEq(t, `{"foo":"baz"}`, string(queue.Metadata))
+
+		select {
+		case notif = <-notifyCh:
+			t.Fatalf("expected no notification, got: %+v", notif)
+		case <-time.After(100 * time.Millisecond):
+		}
+	})
 }
 
 type jobArgsWithCustomHook struct{}
