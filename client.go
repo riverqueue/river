@@ -2156,6 +2156,45 @@ func (c *Client[TTx]) QueueResumeTx(ctx context.Context, tx TTx, name string, op
 	return nil
 }
 
+func (c *Client[TTx]) QueueUpdateMetadata(ctx context.Context, name string, metadata []byte) (*rivertype.Queue, error) {
+	tx, err := c.driver.GetExecutor().Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	queue, err := tx.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
+		Metadata:         metadata,
+		MetadataDoUpdate: true,
+		Name:             name,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	payload, err := json.Marshal(controlEventPayload{
+		Action:   controlActionMetadataChanged,
+		Metadata: metadata,
+		Queue:    queue.Name,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+		Topic:   string(notifier.NotificationTopicControl),
+		Payload: []string{string(payload)},
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	return queue, nil
+}
+
 // QueueBundle is a bundle for adding additional queues. It's made accessible
 // through Client.Queues.
 type QueueBundle struct {
