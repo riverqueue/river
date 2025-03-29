@@ -57,6 +57,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	dbDriver := riverpgxv5.New(dbPool)
 	exec := dbDriver.GetExecutor()
 	listener := dbDriver.GetListener()
+	pilot := &riverpilot.StandardPilot{}
 
 	subscribeCh := make(chan []jobcompleter.CompleterJobUpdated, 100)
 	t.Cleanup(riverinternaltest.DiscardContinuously(subscribeCh))
@@ -85,25 +86,26 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 
 	notifier := notifier.New(archetype, listener)
 
-	producer := newProducer(archetype, exec, &producerConfig{
+	producer := newProducer(archetype, exec, pilot, &producerConfig{
 		ClientID:     testClientID,
 		Completer:    completer,
 		ErrorHandler: newTestErrorHandler(),
 		// Fetch constantly to more aggressively trigger the potential data race:
-		FetchCooldown:          time.Millisecond,
-		FetchPollInterval:      time.Millisecond,
-		HookLookupByJob:        hooklookup.NewJobHookLookup(),
-		HookLookupGlobal:       hooklookup.NewHookLookup(nil),
-		JobTimeout:             JobTimeoutDefault,
-		MaxWorkers:             1000,
-		MiddlewareLookupGlobal: middlewarelookup.NewMiddlewareLookup(nil),
-		Notifier:               notifier,
-		Queue:                  rivercommon.QueueDefault,
-		QueuePollInterval:      queuePollIntervalDefault,
-		QueueReportInterval:    queueReportIntervalDefault,
-		RetryPolicy:            &DefaultClientRetryPolicy{},
-		SchedulerInterval:      maintenance.JobSchedulerIntervalDefault,
-		Workers:                workers,
+		FetchCooldown:                time.Millisecond,
+		FetchPollInterval:            time.Millisecond,
+		HookLookupByJob:              hooklookup.NewJobHookLookup(),
+		HookLookupGlobal:             hooklookup.NewHookLookup(nil),
+		JobTimeout:                   JobTimeoutDefault,
+		MaxWorkers:                   1000,
+		MiddlewareLookupGlobal:       middlewarelookup.NewMiddlewareLookup(nil),
+		Notifier:                     notifier,
+		Queue:                        rivercommon.QueueDefault,
+		QueuePollInterval:            queuePollIntervalDefault,
+		QueueReportInterval:          queueReportIntervalDefault,
+		RetryPolicy:                  &DefaultClientRetryPolicy{},
+		SchedulerInterval:            maintenance.JobSchedulerIntervalDefault,
+		StaleProducerRetentionPeriod: time.Minute,
+		Workers:                      workers,
 	})
 
 	params := make([]*riverdriver.JobInsertFastParams, maxJobCount)
@@ -157,6 +159,7 @@ func TestProducer_PollOnly(t *testing.T) {
 		var (
 			archetype = riversharedtest.BaseServiceArchetype(t)
 			driver    = riverpgxv5.New(nil)
+			pilot     = &riverpilot.StandardPilot{}
 			tx        = riverinternaltest.TestTx(ctx, t)
 		)
 
@@ -175,24 +178,25 @@ func TestProducer_PollOnly(t *testing.T) {
 			t.Cleanup(completer.Stop)
 		}
 
-		return newProducer(archetype, exec, &producerConfig{
-			ClientID:               testClientID,
-			Completer:              completer,
-			ErrorHandler:           newTestErrorHandler(),
-			FetchCooldown:          FetchCooldownDefault,
-			FetchPollInterval:      50 * time.Millisecond, // more aggressive than normal because we have no notifier
-			HookLookupByJob:        hooklookup.NewJobHookLookup(),
-			HookLookupGlobal:       hooklookup.NewHookLookup(nil),
-			JobTimeout:             JobTimeoutDefault,
-			MaxWorkers:             1_000,
-			MiddlewareLookupGlobal: middlewarelookup.NewMiddlewareLookup(nil),
-			Notifier:               nil, // no notifier
-			Queue:                  rivercommon.QueueDefault,
-			QueuePollInterval:      queuePollIntervalDefault,
-			QueueReportInterval:    queueReportIntervalDefault,
-			RetryPolicy:            &DefaultClientRetryPolicy{},
-			SchedulerInterval:      riverinternaltest.SchedulerShortInterval,
-			Workers:                NewWorkers(),
+		return newProducer(archetype, exec, pilot, &producerConfig{
+			ClientID:                     testClientID,
+			Completer:                    completer,
+			ErrorHandler:                 newTestErrorHandler(),
+			FetchCooldown:                FetchCooldownDefault,
+			FetchPollInterval:            50 * time.Millisecond, // more aggressive than normal because we have no notifier
+			HookLookupByJob:              hooklookup.NewJobHookLookup(),
+			HookLookupGlobal:             hooklookup.NewHookLookup(nil),
+			JobTimeout:                   JobTimeoutDefault,
+			MaxWorkers:                   1_000,
+			MiddlewareLookupGlobal:       middlewarelookup.NewMiddlewareLookup(nil),
+			Notifier:                     nil, // no notifier
+			Queue:                        rivercommon.QueueDefault,
+			QueuePollInterval:            queuePollIntervalDefault,
+			QueueReportInterval:          queueReportIntervalDefault,
+			RetryPolicy:                  &DefaultClientRetryPolicy{},
+			SchedulerInterval:            riverinternaltest.SchedulerShortInterval,
+			StaleProducerRetentionPeriod: time.Minute,
+			Workers:                      NewWorkers(),
 		}), jobUpdates
 	})
 }
@@ -210,6 +214,7 @@ func TestProducer_WithNotifier(t *testing.T) {
 			exec       = driver.GetExecutor()
 			jobUpdates = make(chan []jobcompleter.CompleterJobUpdated, 10)
 			listener   = driver.GetListener()
+			pilot      = &riverpilot.StandardPilot{}
 		)
 
 		completer := jobcompleter.NewInlineCompleter(archetype, exec, &riverpilot.StandardPilot{}, jobUpdates)
@@ -224,24 +229,25 @@ func TestProducer_WithNotifier(t *testing.T) {
 			t.Cleanup(notifier.Stop)
 		}
 
-		return newProducer(archetype, exec, &producerConfig{
-			ClientID:               testClientID,
-			Completer:              completer,
-			ErrorHandler:           newTestErrorHandler(),
-			FetchCooldown:          FetchCooldownDefault,
-			FetchPollInterval:      50 * time.Millisecond, // more aggressive than normal so in case we miss the event, tests still pass quickly
-			HookLookupByJob:        hooklookup.NewJobHookLookup(),
-			HookLookupGlobal:       hooklookup.NewHookLookup(nil),
-			JobTimeout:             JobTimeoutDefault,
-			MaxWorkers:             1_000,
-			MiddlewareLookupGlobal: middlewarelookup.NewMiddlewareLookup(nil),
-			Notifier:               notifier,
-			Queue:                  rivercommon.QueueDefault,
-			QueuePollInterval:      queuePollIntervalDefault,
-			QueueReportInterval:    queueReportIntervalDefault,
-			RetryPolicy:            &DefaultClientRetryPolicy{},
-			SchedulerInterval:      riverinternaltest.SchedulerShortInterval,
-			Workers:                NewWorkers(),
+		return newProducer(archetype, exec, pilot, &producerConfig{
+			ClientID:                     testClientID,
+			Completer:                    completer,
+			ErrorHandler:                 newTestErrorHandler(),
+			FetchCooldown:                FetchCooldownDefault,
+			FetchPollInterval:            50 * time.Millisecond, // more aggressive than normal so in case we miss the event, tests still pass quickly
+			HookLookupByJob:              hooklookup.NewJobHookLookup(),
+			HookLookupGlobal:             hooklookup.NewHookLookup(nil),
+			JobTimeout:                   JobTimeoutDefault,
+			MaxWorkers:                   1_000,
+			MiddlewareLookupGlobal:       middlewarelookup.NewMiddlewareLookup(nil),
+			Notifier:                     notifier,
+			Queue:                        rivercommon.QueueDefault,
+			QueuePollInterval:            queuePollIntervalDefault,
+			QueueReportInterval:          queueReportIntervalDefault,
+			RetryPolicy:                  &DefaultClientRetryPolicy{},
+			SchedulerInterval:            riverinternaltest.SchedulerShortInterval,
+			StaleProducerRetentionPeriod: time.Minute,
+			Workers:                      NewWorkers(),
 		}), jobUpdates
 	})
 }
@@ -529,7 +535,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		require.NoError(t, bundle.exec.QueuePause(ctx, queueNameToPause))
 		if producer.config.Notifier != nil {
 			// also emit notification:
-			emitQueueNotification(t, ctx, bundle.exec, queueNameToPause, "pause")
+			emitQueueNotification(t, ctx, bundle.exec, queueNameToPause, "pause", nil)
 		}
 		producer.testSignals.Paused.WaitOrTimeout()
 
@@ -546,7 +552,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		require.NoError(t, bundle.exec.QueueResume(ctx, queueNameToPause))
 		if producer.config.Notifier != nil {
 			// also emit notification:
-			emitQueueNotification(t, ctx, bundle.exec, queueNameToPause, "resume")
+			emitQueueNotification(t, ctx, bundle.exec, queueNameToPause, "resume", nil)
 		}
 		producer.testSignals.Resumed.WaitOrTimeout()
 
@@ -584,15 +590,80 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 			producer.testSignals.PolledQueueConfig.WaitOrTimeout()
 		}
 	})
+
+	t.Run("QueueMetadataChangedDuringOperation", func(t *testing.T) {
+		t.Parallel()
+
+		producer, bundle := setup(t)
+		producer.config.QueuePollInterval = 50 * time.Millisecond
+
+		startProducer(t, ctx, ctx, producer)
+
+		updateMetadata := func(newMetadata []byte) {
+			t.Helper()
+
+			_, err := bundle.exec.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
+				Metadata:         newMetadata,
+				MetadataDoUpdate: true,
+				Name:             rivercommon.QueueDefault,
+			})
+			require.NoError(t, err)
+		}
+
+		// Update the queue's metadata:
+		updateMetadata([]byte(`{"foo":"bar","baz":123}`))
+
+		if producer.config.Notifier != nil {
+			// also emit notification:
+			emitQueueNotification(t, ctx, bundle.exec, rivercommon.QueueDefault, "metadata_changed", []byte(`{"foo":"bar","baz":123}`))
+		}
+
+		producer.testSignals.MetadataChanged.WaitOrTimeout()
+
+		// Update with equivalent metadata but different field ordering:
+		reorderedMetadata := []byte(`{"baz":123,"foo":"bar"}`)
+		updateMetadata(reorderedMetadata)
+		// do not emit a notification here because this isn't a "real" update and
+		// notifier mode doesn't check for metadata equivalence.
+
+		// Should not receive a metadata changed signal since the JSON is equivalent:
+		select {
+		case <-producer.testSignals.MetadataChanged.WaitC():
+			t.Fatal("Received unexpected metadata changed signal for equivalent JSON")
+		case <-time.After(100 * time.Millisecond):
+			// Expected - no signal received
+		}
+
+		// Verify that the producer's comparison logic is working correctly by updating with different metadata:
+		differentMetadata := []byte(`{"foo":"bar","baz":456}`)
+		updateMetadata(differentMetadata)
+		if producer.config.Notifier != nil {
+			// also emit notification:
+			emitQueueNotification(t, ctx, bundle.exec, rivercommon.QueueDefault, "metadata_changed", differentMetadata)
+		}
+
+		// Should receive a metadata changed signal since the JSON is different:
+		producer.testSignals.MetadataChanged.WaitOrTimeout()
+	})
 }
 
-func emitQueueNotification(t *testing.T, ctx context.Context, exec riverdriver.Executor, queue, action string) {
+func emitQueueNotification(t *testing.T, ctx context.Context, exec riverdriver.Executor, queue, action string, metadata []byte) {
 	t.Helper()
-	err := exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{
-		Topic: string(notifier.NotificationTopicControl),
-		Payload: []string{
-			fmt.Sprintf(`{"queue":"%s","action":"%s"}`, queue, action),
-		},
+
+	payload := map[string]any{
+		"queue":  queue,
+		"action": action,
+	}
+	if metadata != nil {
+		payload["metadata"] = metadata
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	err = exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+		Topic:   string(notifier.NotificationTopicControl),
+		Payload: []string{string(payloadBytes)},
 	})
 	require.NoError(t, err)
 }

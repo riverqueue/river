@@ -94,3 +94,11 @@ WHERE name = @name
 UNION
 SELECT *
 FROM updated_queue;
+
+-- name: QueueUpdate :one
+UPDATE river_queue
+SET
+    metadata = CASE WHEN @metadata_do_update::boolean THEN @metadata::jsonb ELSE metadata END,
+    updated_at = now()
+WHERE name = @name::text
+RETURNING river_queue.*;

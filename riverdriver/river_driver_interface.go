@@ -18,6 +18,8 @@ import (
 	"io/fs"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -26,8 +28,9 @@ const AllQueuesString = "*"
 const MigrationLineMain = "main"
 
 var (
-	ErrClosedPool     = errors.New("underlying driver pool is closed")
-	ErrNotImplemented = errors.New("driver does not implement this functionality")
+	ErrClosedPool       = errors.New("underlying driver pool is closed")
+	ErrNotImplemented   = errors.New("driver does not implement this functionality")
+	ErrRetryTransaction = errors.New("expected transaction collision, retry required")
 )
 
 // Driver provides a database driver for use with river.Client.
@@ -165,6 +168,7 @@ type Executor interface {
 	QueueList(ctx context.Context, limit int) ([]*rivertype.Queue, error)
 	QueuePause(ctx context.Context, name string) error
 	QueueResume(ctx context.Context, name string) error
+	QueueUpdate(ctx context.Context, params *QueueUpdateParams) (*rivertype.Queue, error)
 
 	// TableExists checks whether a table exists for the schema in the current
 	// search schema.
@@ -221,10 +225,11 @@ type JobDeleteBeforeParams struct {
 }
 
 type JobGetAvailableParams struct {
-	AttemptedBy string
-	Max         int
-	Now         *time.Time
-	Queue       string
+	ClientID   string
+	Max        int
+	Now        *time.Time
+	Queue      string
+	ProducerID uuid.UUID
 }
 
 type JobGetByKindAndUniquePropertiesParams struct {
@@ -491,6 +496,12 @@ type NotifyManyParams struct {
 	Topic   string
 }
 
+type ProducerKeepAliveParams struct {
+	ID                    uuid.UUID
+	Queue                 string
+	StaleUpdatedAtHorizon time.Time
+}
+
 type QueueCreateOrSetUpdatedAtParams struct {
 	Metadata  []byte
 	Name      string
@@ -501,4 +512,10 @@ type QueueCreateOrSetUpdatedAtParams struct {
 type QueueDeleteExpiredParams struct {
 	Max              int
 	UpdatedAtHorizon time.Time
+}
+
+type QueueUpdateParams struct {
+	Metadata         []byte
+	MetadataDoUpdate bool
+	Name             string
 }

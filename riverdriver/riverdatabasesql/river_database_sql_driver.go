@@ -151,7 +151,7 @@ func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobD
 
 func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
 	jobs, err := dbsqlc.New().JobGetAvailable(ctx, e.dbtx, &dbsqlc.JobGetAvailableParams{
-		AttemptedBy: params.AttemptedBy,
+		AttemptedBy: params.ClientID,
 		Max:         int32(min(params.Max, math.MaxInt32)), //nolint:gosec
 		Now:         params.Now,
 		Queue:       params.Queue,
@@ -813,6 +813,18 @@ func (e *Executor) QueueResume(ctx context.Context, name string) error {
 		return rivertype.ErrNotFound
 	}
 	return nil
+}
+
+func (e *Executor) QueueUpdate(ctx context.Context, params *riverdriver.QueueUpdateParams) (*rivertype.Queue, error) {
+	queue, err := dbsqlc.New().QueueUpdate(ctx, e.dbtx, &dbsqlc.QueueUpdateParams{
+		Metadata:         string(params.Metadata),
+		MetadataDoUpdate: params.MetadataDoUpdate,
+		Name:             params.Name,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return queueFromInternal(queue), nil
 }
 
 func (e *Executor) TableExists(ctx context.Context, tableName string) (bool, error) {
