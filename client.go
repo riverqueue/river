@@ -863,7 +863,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		// We use separate contexts for fetching and working to allow for a graceful
 		// stop. Both inherit from the provided context, so if it's cancelled, a
 		// more aggressive stop will be initiated.
-		workCtx, workCancel := context.WithCancelCause(withClient[TTx](ctx, c))
+		workCtx, workCancel := context.WithCancelCause(withClient(ctx, c))
 
 		if err := startstop.StartAll(fetchCtx, c.services...); err != nil {
 			workCancel(err)

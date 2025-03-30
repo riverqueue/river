@@ -5423,14 +5423,14 @@ func Test_NewClient_MissingParameters(t *testing.T) {
 	t.Run("ErrorOnNilConfig", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := NewClient[pgx.Tx](riverpgxv5.New(nil), nil)
+		_, err := NewClient(riverpgxv5.New(nil), nil)
 		require.ErrorIs(t, err, errMissingConfig)
 	})
 
 	t.Run("ErrorOnDriverWithNoDatabasePoolAndQueues", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := NewClient[pgx.Tx](riverpgxv5.New(nil), newTestConfig(t, nil))
+		_, err := NewClient(riverpgxv5.New(nil), newTestConfig(t, nil))
 		require.ErrorIs(t, err, errMissingDatabasePoolWithQueues)
 	})
 }
