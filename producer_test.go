@@ -26,6 +26,7 @@ import (
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
+	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -160,6 +161,7 @@ func TestProducer_PollOnly(t *testing.T) {
 			archetype = riversharedtest.BaseServiceArchetype(t)
 			driver    = riverpgxv5.New(nil)
 			pilot     = &riverpilot.StandardPilot{}
+			queueName = fmt.Sprintf("test-producer-poll-only-%05d", randutil.IntBetween(1, 100_000))
 			tx        = riverinternaltest.TestTx(ctx, t)
 		)
 
@@ -190,7 +192,7 @@ func TestProducer_PollOnly(t *testing.T) {
 			MaxWorkers:                   1_000,
 			MiddlewareLookupGlobal:       middlewarelookup.NewMiddlewareLookup(nil),
 			Notifier:                     nil, // no notifier
-			Queue:                        rivercommon.QueueDefault,
+			Queue:                        queueName,
 			QueuePollInterval:            queuePollIntervalDefault,
 			QueueReportInterval:          queueReportIntervalDefault,
 			RetryPolicy:                  &DefaultClientRetryPolicy{},
@@ -215,6 +217,7 @@ func TestProducer_WithNotifier(t *testing.T) {
 			jobUpdates = make(chan []jobcompleter.CompleterJobUpdated, 10)
 			listener   = driver.GetListener()
 			pilot      = &riverpilot.StandardPilot{}
+			queueName  = fmt.Sprintf("test-producer-with-notifier-%05d", randutil.IntBetween(1, 100_000))
 		)
 
 		completer := jobcompleter.NewInlineCompleter(archetype, exec, &riverpilot.StandardPilot{}, jobUpdates)
@@ -241,7 +244,7 @@ func TestProducer_WithNotifier(t *testing.T) {
 			MaxWorkers:                   1_000,
 			MiddlewareLookupGlobal:       middlewarelookup.NewMiddlewareLookup(nil),
 			Notifier:                     notifier,
-			Queue:                        rivercommon.QueueDefault,
+			Queue:                        queueName,
 			QueuePollInterval:            queuePollIntervalDefault,
 			QueueReportInterval:          queueReportIntervalDefault,
 			RetryPolicy:                  &DefaultClientRetryPolicy{},
@@ -263,6 +266,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		config          *Config
 		exec            riverdriver.Executor
 		jobUpdates      chan jobcompleter.CompleterJobUpdated
+		queue           string
 		timeBeforeStart time.Time
 		workers         *Workers
 	}
@@ -291,6 +295,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 			config:          config,
 			exec:            producer.exec,
 			jobUpdates:      jobUpdatesFlattened,
+			queue:           producer.config.Queue,
 			timeBeforeStart: timeBeforeStart,
 			workers:         producer.workers,
 		}
@@ -299,7 +304,9 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 	mustInsert := func(ctx context.Context, t *testing.T, bundle *testBundle, args JobArgs) {
 		t.Helper()
 
-		insertParams, err := insertParamsFromConfigArgsAndOptions(bundle.archetype, bundle.config, args, nil)
+		insertParams, err := insertParamsFromConfigArgsAndOptions(bundle.archetype, bundle.config, args, &InsertOpts{
+			Queue: bundle.queue,
+		})
 		require.NoError(t, err)
 		if insertParams.ScheduledAt == nil {
 			// Without this, newly inserted jobs will pick up a scheduled_at time
@@ -355,11 +362,11 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		now := time.Now().UTC()
 		startProducer(t, ctx, ctx, producer)
 
-		queue, err := bundle.exec.QueueGet(ctx, rivercommon.QueueDefault)
+		queue, err := bundle.exec.QueueGet(ctx, producer.config.Queue)
 		require.NoError(t, err)
 		require.WithinDuration(t, now, queue.CreatedAt, 2*time.Second)
 		require.Equal(t, []byte("{}"), queue.Metadata)
-		require.Equal(t, rivercommon.QueueDefault, queue.Name)
+		require.Equal(t, producer.config.Queue, queue.Name)
 		require.WithinDuration(t, now, queue.UpdatedAt, 2*time.Second)
 		require.Equal(t, queue.CreatedAt, queue.UpdatedAt)
 
@@ -500,7 +507,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		AddWorker(bundle.workers, &noOpWorker{})
 
 		testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{
-			Name:     ptrutil.Ptr(rivercommon.QueueDefault),
+			Name:     ptrutil.Ptr(producer.config.Queue),
 			PausedAt: ptrutil.Ptr(time.Now()),
 		})
 
@@ -515,7 +522,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		}
 	})
 
-	testQueuePause := func(t *testing.T, queueNameToPause string) {
+	testQueuePause := func(t *testing.T, pauseAll bool) {
 		t.Helper()
 		t.Parallel()
 
@@ -532,6 +539,10 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		require.Equal(t, rivertype.JobStateCompleted, update.Job.State)
 
 		// Pause the queue and wait for confirmation:
+		queueNameToPause := producer.config.Queue
+		if pauseAll {
+			queueNameToPause = rivercommon.AllQueuesString
+		}
 		require.NoError(t, bundle.exec.QueuePause(ctx, queueNameToPause))
 		if producer.config.Notifier != nil {
 			// also emit notification:
@@ -562,21 +573,23 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 	}
 
 	t.Run("QueuePausedDuringOperation", func(t *testing.T) {
-		testQueuePause(t, rivercommon.QueueDefault)
+		testQueuePause(t, false)
 	})
 
 	t.Run("QueuePausedAndResumedDuringOperationUsing*", func(t *testing.T) {
-		testQueuePause(t, rivercommon.AllQueuesString)
+		testQueuePause(t, true)
 	})
 
 	t.Run("QueueDeletedFromRiverQueueTableDuringOperation", func(t *testing.T) {
 		t.Parallel()
 
 		producer, bundle := setup(t)
-		producer.config.QueuePollInterval = time.Second
-		producer.config.QueueReportInterval = time.Second
+		producer.config.QueuePollInterval = 100 * time.Millisecond
+		producer.config.QueueReportInterval = 100 * time.Millisecond
+		producer.config.ProducerReportInterval = 100 * time.Millisecond
 
 		startProducer(t, ctx, ctx, producer)
+		producer.testSignals.ReportedProducerStatus.WaitOrTimeout()
 
 		// Delete the queue by using a future-dated horizon:
 		_, err := bundle.exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{
@@ -605,7 +618,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 			_, err := bundle.exec.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
 				Metadata:         newMetadata,
 				MetadataDoUpdate: true,
-				Name:             rivercommon.QueueDefault,
+				Name:             producer.config.Queue,
 			})
 			require.NoError(t, err)
 		}
@@ -615,7 +628,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 
 		if producer.config.Notifier != nil {
 			// also emit notification:
-			emitQueueNotification(t, ctx, bundle.exec, rivercommon.QueueDefault, "metadata_changed", []byte(`{"foo":"bar","baz":123}`))
+			emitQueueNotification(t, ctx, bundle.exec, producer.config.Queue, "metadata_changed", []byte(`{"foo":"bar","baz":123}`))
 		}
 
 		producer.testSignals.MetadataChanged.WaitOrTimeout()
@@ -639,7 +652,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		updateMetadata(differentMetadata)
 		if producer.config.Notifier != nil {
 			// also emit notification:
-			emitQueueNotification(t, ctx, bundle.exec, rivercommon.QueueDefault, "metadata_changed", differentMetadata)
+			emitQueueNotification(t, ctx, bundle.exec, producer.config.Queue, "metadata_changed", differentMetadata)
 		}
 
 		// Should receive a metadata changed signal since the JSON is different:
