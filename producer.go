@@ -176,7 +176,7 @@ type producer struct {
 
 	completer    jobcompleter.JobCompleter
 	config       *producerConfig
-	id           int64
+	id           atomic.Int64 // atomic because it's written at startup and read during shutdown
 	exec         riverdriver.Executor
 	errorHandler jobexecutor.ErrorHandler
 	state        riverpilot.ProducerState
@@ -252,9 +252,9 @@ func (p *producer) Start(ctx context.Context) error {
 }
 
 func (p *producer) Stop() {
-	p.Logger.Debug(p.Name+": Stopping", slog.String("queue", p.config.Queue), slog.Int64("id", p.id))
+	p.Logger.Debug(p.Name+": Stopping", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
 	p.BaseStartStop.Stop()
-	p.Logger.Debug(p.Name+": Stop returned", slog.String("queue", p.config.Queue), slog.Int64("id", p.id))
+	p.Logger.Debug(p.Name+": Stop returned", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
 }
 
 // Start starts the producer. It backgrounds a goroutine which is stopped when
@@ -300,8 +300,10 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 	}
 	p.paused = initiallyPaused
 
-	p.id, p.state, err = p.pilot.ProducerInit(fetchCtx, p.exec, &riverpilot.ProducerInitParams{
+	id := p.id.Load()
+	id, p.state, err = p.pilot.ProducerInit(fetchCtx, p.exec, &riverpilot.ProducerInitParams{
 		ClientID:      p.config.ClientID,
+		ProducerID:    id,
 		Queue:         p.config.Queue,
 		QueueMetadata: initialMetadata,
 	})
@@ -313,6 +315,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		p.Logger.ErrorContext(fetchCtx, p.Name+": Error initializing producer state", slog.String("err", err.Error()))
 		return err
 	}
+	p.id.Store(id)
 
 	// TODO: fetcher should have some jitter in it to avoid stampeding issues.
 	fetchLimiter := chanutil.NewDebouncedChan(fetchCtx, p.config.FetchCooldown, true)
@@ -384,13 +387,13 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		go p.reportProducerStatusLoop(subroutineCtx, &subroutineWg)
 
 		p.fetchAndRunLoop(fetchCtx, workCtx, fetchLimiter)
-		p.Logger.Debug(p.Name+": Entering shutdown loop", slog.String("queue", p.config.Queue), slog.Int64("id", p.id))
+		p.Logger.Debug(p.Name+": Entering shutdown loop", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
 		p.executorShutdownLoop()
 
-		p.Logger.Debug(p.Name+": Shutdown loop exited, awaiting subroutines", slog.String("queue", p.config.Queue), slog.Int64("id", p.id))
+		p.Logger.Debug(p.Name+": Shutdown loop exited, awaiting subroutines", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
 		cancelSubroutines(errors.New("producer stopped"))
 		subroutineWg.Wait()
-		p.Logger.Debug(p.Name+": Shutdown subroutines completed, finalizing", slog.String("queue", p.config.Queue), slog.Int64("id", p.id))
+		p.Logger.Debug(p.Name+": Shutdown subroutines completed, finalizing", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
 
 		p.finalizeShutdown(context.WithoutCancel(fetchCtx))
 	}()
@@ -609,7 +612,7 @@ func (p *producer) finalizeShutdown(ctx context.Context) {
 		ctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
-		if err := p.pilot.ProducerShutdown(ctx, p.exec, p.id, p.state); err != nil {
+		if err := p.pilot.ProducerShutdown(ctx, p.exec, p.id.Load(), p.state); err != nil {
 			// Don't retry on these errors:
 			// - context.Canceled: parent context is canceled, so retrying with a new timeout won't help
 			// - ErrClosedPool: the database connection pool is closed, so retrying won't succeed
@@ -678,7 +681,7 @@ func (p *producer) dispatchWork(workCtx context.Context, count int, fetchResultC
 		ClientID:   p.config.ClientID,
 		Max:        count,
 		Queue:      p.config.Queue,
-		ProducerID: p.id,
+		ProducerID: p.id.Load(),
 	})
 	if err != nil {
 		p.Logger.Error(p.Name+": Error fetching jobs", slog.String("err", err.Error()), slog.String("queue", p.config.Queue))
@@ -857,9 +860,9 @@ func (p *producer) reportProducerStatusOnce(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	p.Logger.DebugContext(ctx, p.Name+": Reporting producer status", slog.Int64("id", p.id), slog.String("queue", p.config.Queue))
+	p.Logger.DebugContext(ctx, p.Name+": Reporting producer status", slog.Int64("id", p.id.Load()), slog.String("queue", p.config.Queue))
 	err := p.pilot.ProducerKeepAlive(ctx, p.exec, &riverdriver.ProducerKeepAliveParams{
-		ID:                    p.id,
+		ID:                    p.id.Load(),
 		QueueName:             p.config.Queue,
 		StaleUpdatedAtHorizon: p.Time.NowUTC().Add(-p.config.StaleProducerRetentionPeriod),
 	})
@@ -868,7 +871,7 @@ func (p *producer) reportProducerStatusOnce(ctx context.Context) {
 	}
 	if err != nil {
 		p.Logger.ErrorContext(ctx, p.Name+": Producer status update, error updating in database",
-			slog.Int64("id", p.id),
+			slog.Int64("id", p.id.Load()),
 			slog.String("queue", p.config.Queue),
 			slog.String("err", err.Error()),
 		)
