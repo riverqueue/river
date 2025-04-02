@@ -606,7 +606,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		testSignals:          clientTestSignals{},
 		workCancel:           func(cause error) {}, // replaced on start, but here in case StopAndCancel is called before start up
 	}
-	client.queues = &QueueBundle{addProducer: client.addProducer}
+	client.queues = &QueueBundle{addProducer: client.addProducer, clientWillExecuteJobs: config.willExecuteJobs()}
 
 	baseservice.Init(archetype, &client.baseService)
 	client.baseService.Name = "Client" // Have to correct the name because base service isn't embedded like it usually is
@@ -2160,6 +2160,8 @@ type QueueBundle struct {
 	// Function that adds a producer to the associated client.
 	addProducer func(queueName string, queueConfig QueueConfig) *producer
 
+	clientWillExecuteJobs bool
+
 	fetchCtx context.Context //nolint:containedctx
 
 	// Mutex that's acquired when client is starting and stopping and when a
@@ -2174,6 +2176,10 @@ type QueueBundle struct {
 // producer for the queue is started. Context is inherited from the one given to
 // Client.Start.
 func (b *QueueBundle) Add(queueName string, queueConfig QueueConfig) error {
+	if !b.clientWillExecuteJobs {
+		return errors.New("client is not configured to execute jobs, cannot add queue")
+	}
+
 	if err := queueConfig.validate(queueName); err != nil {
 		return err
 	}

@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Set minimum Go version to Go 1.23. [PR #811](https://github.com/riverqueue/river/pull/811).
 - Deprecate `river.JobInsertMiddlewareDefaults` and `river.WorkerMiddlewareDefaults` in favor of the more general `river.MiddlewareDefaults` embeddable struct. The two former structs will be removed in a future version. [PR #815](https://github.com/riverqueue/river/pull/815).
 
+### Fixed
+
+- Cleanly error when attempting to add a queue at runtime to a `Client` which was not configured to run jobs (no `Workers`). [PR #826](https://github.com/riverqueue/river/pull/826).
+
 ## [0.19.0] - 2025-03-16
 
 ⚠️ Version 0.19.0 has minor breaking changes for the `Worker.Middleware`, introduced fairly recently in 0.17.0 that has a worker's `Middleware` function now taking a non-generic `JobRow` parameter instead of a generic `Job[T]`. We tried not to make this change, but found the existing middleware interface insufficient to provide the necessary range of functionality we wanted, and this is a secondary middleware facility that won't be in use for many users, so it seemed worthwhile.

@@ -246,6 +246,19 @@ func Test_Client(t *testing.T) {
 		riversharedtest.WaitOrTimeout(t, workedChan)
 	})
 
+	t.Run("Queues_Add_WhenClientWontExecuteJobs", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		config.Queues = nil
+		config.Workers = nil
+		client := newTestClient(t, bundle.dbPool, config)
+
+		err := client.Queues().Add("new_queue", QueueConfig{MaxWorkers: 2})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "client is not configured to execute jobs, cannot add queue")
+	})
+
 	t.Run("Queues_Add_BeforeStart", func(t *testing.T) {
 		t.Parallel()
 
