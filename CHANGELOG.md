@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added a `QueueUpdate` API to the `Client` which will be used for upcoming functionality. [PR #822](https://github.com/riverqueue/river/pull/822).
+
 ### Changed
 
 - Set minimum Go version to Go 1.23. [PR #811](https://github.com/riverqueue/river/pull/811).
