@@ -214,3 +214,31 @@ FROM updated_queue
 func (q *Queries) QueueResume(ctx context.Context, db DBTX, name string) (sql.Result, error) {
 	return db.ExecContext(ctx, queueResume, name)
 }
+
+const queueUpdate = `-- name: QueueUpdate :one
+UPDATE river_queue
+SET
+    metadata = CASE WHEN $1::boolean THEN $2::jsonb ELSE metadata END,
+    updated_at = now()
+WHERE name = $3::text
+RETURNING river_queue.name, river_queue.created_at, river_queue.metadata, river_queue.paused_at, river_queue.updated_at
+`
+
+type QueueUpdateParams struct {
+	MetadataDoUpdate bool
+	Metadata         string
+	Name             string
+}
+
+func (q *Queries) QueueUpdate(ctx context.Context, db DBTX, arg *QueueUpdateParams) (*RiverQueue, error) {
+	row := db.QueryRowContext(ctx, queueUpdate, arg.MetadataDoUpdate, arg.Metadata, arg.Name)
+	var i RiverQueue
+	err := row.Scan(
+		&i.Name,
+		&i.CreatedAt,
+		&i.Metadata,
+		&i.PausedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
+}

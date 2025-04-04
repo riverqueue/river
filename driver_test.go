@@ -157,9 +157,9 @@ func BenchmarkDriverRiverPgxV5_Executor(b *testing.B) {
 
 		for range b.N {
 			if _, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
-				AttemptedBy: clientID,
-				Max:         100,
-				Queue:       rivercommon.QueueDefault,
+				ClientID: clientID,
+				Max:      100,
+				Queue:    rivercommon.QueueDefault,
 			}); err != nil {
 				b.Fatal(err)
 			}
@@ -183,9 +183,9 @@ func BenchmarkDriverRiverPgxV5_Executor(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
 			for pb.Next() {
 				if _, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
-					AttemptedBy: clientID,
-					Max:         100,
-					Queue:       rivercommon.QueueDefault,
+					ClientID: clientID,
+					Max:      100,
+					Queue:    rivercommon.QueueDefault,
 				}); err != nil {
 					b.Fatal(err)
 				}

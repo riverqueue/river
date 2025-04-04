@@ -102,7 +102,7 @@ func (w WorkerDefaults[T]) Timeout(*Job[T]) time.Duration { return 0 }
 // an application with invalid hardcoded runtime configuration. If you want to
 // avoid panics, use AddWorkerSafely instead.
 func AddWorker[T JobArgs](workers *Workers, worker Worker[T]) {
-	if err := AddWorkerSafely[T](workers, worker); err != nil {
+	if err := AddWorkerSafely(workers, worker); err != nil {
 		panic(err)
 	}
 }
