@@ -3,11 +3,15 @@ package river
 import (
 	"time"
 
+	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/rivertype"
 )
 
 // ErrJobCancelledRemotely is a sentinel error indicating that the job was cancelled remotely.
 var ErrJobCancelledRemotely = rivertype.ErrJobCancelledRemotely
+
+// ErrShutdown is a sentinel error indicating that the client is shutting down.
+var ErrShutdown = rivercommon.ErrShutdown
 
 // JobCancelError is the error type returned by JobCancel. It should not be
 // initialized directly, but is returned from the [JobCancel] function and can
