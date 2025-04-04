@@ -1498,14 +1498,6 @@ type InsertManyParams struct {
 //	if err != nil {
 //		// handle error
 //	}
-//
-// Job uniqueness is not respected when using InsertMany due to unique inserts
-// using an internal transaction and advisory lock that might lead to
-// significant lock contention. Insert unique jobs using Insert instead.
-//
-// Job uniqueness is not respected when using InsertMany due to unique inserts
-// using an internal transaction and advisory lock that might lead to
-// significant lock contention. Insert unique jobs using Insert instead.
 func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams) ([]*rivertype.JobInsertResult, error) {
 	if !c.driver.HasPool() {
 		return nil, errNoDriverDBPool
@@ -1542,10 +1534,6 @@ func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams)
 //	if err != nil {
 //		// handle error
 //	}
-//
-// Job uniqueness is not respected when using InsertMany due to unique inserts
-// using an internal transaction and advisory lock that might lead to
-// significant lock contention. Insert unique jobs using Insert instead.
 //
 // This variant lets a caller insert jobs atomically alongside other database
 // changes. An inserted job isn't visible to be worked until the transaction
@@ -1683,9 +1671,8 @@ func (c *Client[TTx]) insertManyParams(params []InsertManyParams) ([]*rivertype.
 //		// handle error
 //	}
 //
-// Job uniqueness is supported using this path, but unlike with `InsertMany`
-// unique conflicts cannot be handled gracefully. If a unique constraint is
-// violated, the operation will fail and no jobs will be inserted.
+// Unlike with `InsertMany`, unique conflicts cannot be handled gracefully. If a
+// unique constraint is violated, the operation will fail and no jobs will be inserted.
 func (c *Client[TTx]) InsertManyFast(ctx context.Context, params []InsertManyParams) (int, error) {
 	if !c.driver.HasPool() {
 		return 0, errNoDriverDBPool
@@ -1728,9 +1715,9 @@ func (c *Client[TTx]) InsertManyFast(ctx context.Context, params []InsertManyPar
 // changes. An inserted job isn't visible to be worked until the transaction
 // commits, and if the transaction rolls back, so too is the inserted job.
 //
-// Job uniqueness is supported using this path, but unlike with `InsertManyTx`
-// unique conflicts cannot be handled gracefully. If a unique constraint is
-// violated, the operation will fail and no jobs will be inserted.
+// Unlike with `InsertManyTx`, unique conflicts cannot be handled gracefully. If
+// a unique constraint is violated, the operation will fail and no jobs will be
+// inserted.
 func (c *Client[TTx]) InsertManyFastTx(ctx context.Context, tx TTx, params []InsertManyParams) (int, error) {
 	exec := c.driver.UnwrapExecutor(tx)
 	return c.insertManyFast(ctx, exec, params)
