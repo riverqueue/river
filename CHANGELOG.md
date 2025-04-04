@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2025-04-04
+
 ### Added
 
 - Added a `QueueUpdate` API to the `Client` which will be used for upcoming functionality. [PR #822](https://github.com/riverqueue/river/pull/822).
