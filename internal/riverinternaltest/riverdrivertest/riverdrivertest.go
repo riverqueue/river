@@ -889,7 +889,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 					ScheduledAt:  ptrutil.Ptr(now.Add(time.Duration(i) * time.Minute)),
 					State:        rivertype.JobStateAvailable,
 					Tags:         []string{"tag"},
-					UniqueKey:    []byte("unique-key-" + strconv.Itoa(i)),
+					UniqueKey:    []byte("unique-key-fast-many-" + strconv.Itoa(i)),
 					UniqueStates: 0xff,
 				}
 			}
@@ -916,7 +916,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				requireEqualTime(t, now.Add(time.Duration(i)*time.Minute), job.ScheduledAt)
 				require.Equal(t, rivertype.JobStateAvailable, job.State)
 				require.Equal(t, []string{"tag"}, job.Tags)
-				require.Equal(t, []byte("unique-key-"+strconv.Itoa(i)), job.UniqueKey)
+				require.Equal(t, []byte("unique-key-fast-many-"+strconv.Itoa(i)), job.UniqueKey)
 				require.Equal(t, rivertype.JobStates(), job.UniqueStates)
 			}
 		})
@@ -1016,7 +1016,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 					ScheduledAt:  &now,
 					State:        rivertype.JobStateAvailable,
 					Tags:         []string{"tag"},
-					UniqueKey:    []byte("unique-key-" + strconv.Itoa(i)),
+					UniqueKey:    []byte("unique-key-no-returning-" + strconv.Itoa(i)),
 					UniqueStates: 0xff,
 				}
 			}
@@ -1043,6 +1043,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				requireEqualTime(t, now, job.ScheduledAt)
 				require.Equal(t, rivertype.JobStateAvailable, job.State)
 				require.Equal(t, []string{"tag"}, job.Tags)
+				require.Equal(t, []byte("unique-key-no-returning-"+strconv.Itoa(i)), job.UniqueKey)
 			}
 		})
 
