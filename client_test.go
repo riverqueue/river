@@ -1114,9 +1114,9 @@ func Test_Client(t *testing.T) {
 		startClient(ctx, t, client)
 
 		type metadataUpdatePayload struct {
-			Action   string `json:"action"`
-			Metadata []byte `json:"metadata"`
-			Queue    string `json:"queue"`
+			Action   string          `json:"action"`
+			Metadata json.RawMessage `json:"metadata"`
+			Queue    string          `json:"queue"`
 		}
 		type notification struct {
 			topic   notifier.NotificationTopic
@@ -1125,7 +1125,7 @@ func Test_Client(t *testing.T) {
 		notifyCh := make(chan notification, 10)
 
 		handleNotification := func(topic notifier.NotificationTopic, payload string) {
-			t.Logf("received notification: %s, %s", topic, payload)
+			t.Logf("received notification: %s, %q", topic, payload)
 			notif := notification{topic: topic}
 			require.NoError(t, json.Unmarshal([]byte(payload), &notif.payload))
 			notifyCh <- notif
