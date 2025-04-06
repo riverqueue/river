@@ -7,9 +7,9 @@ toolchain go1.24.1
 require (
 	github.com/jackc/pgerrcode v0.0.0-20240316143900-6e2875d9b438
 	github.com/jackc/pgx/v5 v5.7.4
-	github.com/riverqueue/river v0.20.0
-	github.com/riverqueue/river/riverdriver v0.20.0
-	github.com/riverqueue/river/rivertype v0.20.0
+	github.com/riverqueue/river v0.20.1
+	github.com/riverqueue/river/riverdriver v0.20.1
+	github.com/riverqueue/river/rivertype v0.20.1
 	github.com/stretchr/testify v1.10.0
 	go.uber.org/goleak v1.3.0
 	golang.org/x/mod v0.24.0

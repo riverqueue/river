@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.1] - 2025-04-05
+
 ### Fixed
 
 - Corrected the serialization of queue control event payloads emitted by `QueueUpdate`. [PR #834](https://github.com/riverqueue/river/pull/834).
