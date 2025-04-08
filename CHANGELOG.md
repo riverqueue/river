@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `QueueUpdateTx` API so there's a transactional variant of the `QueueUpdate` API from [PR #834](https://github.com/riverqueue/river/pull/834). [PR #838](https://github.com/riverqueue/river/pull/838).
+
 ## [0.20.1] - 2025-04-05
 
 ### Fixed

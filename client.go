@@ -2158,9 +2158,30 @@ func (c *Client[TTx]) QueueUpdate(ctx context.Context, name string, params *Queu
 	}
 	defer tx.Rollback(ctx)
 
+	queue, err := c.queueUpdate(ctx, tx, name, params)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	return queue, nil
+}
+
+// QueueUpdateTx updates a queue's settings in the database. These settings
+// override the settings in the client (if applied).
+func (c *Client[TTx]) QueueUpdateTx(ctx context.Context, tx TTx, name string, params *QueueUpdateParams) (*rivertype.Queue, error) {
+	executorTx := c.driver.UnwrapExecutor(tx)
+
+	return c.queueUpdate(ctx, executorTx, name, params)
+}
+
+func (c *Client[TTx]) queueUpdate(ctx context.Context, executorTx riverdriver.ExecutorTx, name string, params *QueueUpdateParams) (*rivertype.Queue, error) {
 	updateMetadata := len(params.Metadata) > 0
 
-	queue, err := tx.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
+	queue, err := executorTx.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
 		Metadata:         params.Metadata,
 		MetadataDoUpdate: updateMetadata,
 		Name:             name,
@@ -2179,16 +2200,12 @@ func (c *Client[TTx]) QueueUpdate(ctx context.Context, name string, params *Queu
 			return nil, err
 		}
 
-		if err := tx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+		if err := executorTx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
 			Topic:   string(notifier.NotificationTopicControl),
 			Payload: []string{string(payload)},
 		}); err != nil {
 			return nil, err
 		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
 	}
 
 	return queue, nil
