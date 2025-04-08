@@ -530,9 +530,6 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 		case jobID := <-p.cancelCh:
 			p.maybeCancelJob(jobID)
 		case <-fetchLimiter.C():
-			if p.paused {
-				continue
-			}
 			p.innerFetchLoop(workCtx, fetchResultCh)
 			// Ensure we can't start another fetch when fetchCtx is done, even if
 			// the fetchLimiter is also ready to fire:
@@ -556,13 +553,18 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 }
 
 func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan producerFetchResult) {
-	limit := p.maxJobsToFetch()
-	if limit <= 0 {
-		// We have no slots for new jobs, so don't bother fetching. However, since
-		// we knew it was time to fetch, we keep track of what happened so we can
-		// trigger another fetch as soon as we have open slots.
-		p.fetchWhenSlotsAreAvailable = true
-		return
+	var limit int
+	if p.paused {
+		limit = 0
+	} else {
+		limit = p.maxJobsToFetch()
+		if limit <= 0 {
+			// We have no slots for new jobs, so don't bother fetching. However, since
+			// we knew it was time to fetch, we keep track of what happened so we can
+			// trigger another fetch as soon as we have open slots.
+			p.fetchWhenSlotsAreAvailable = true
+			return
+		}
 	}
 
 	go p.dispatchWork(workCtx, limit, fetchResultCh)

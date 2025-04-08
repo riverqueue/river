@@ -14,6 +14,9 @@ type StandardPilot struct {
 }
 
 func (p *StandardPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Executor, state ProducerState, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
+	if params.Max <= 0 {
+		return nil, nil
+	}
 	return exec.JobGetAvailable(ctx, params)
 }
 
