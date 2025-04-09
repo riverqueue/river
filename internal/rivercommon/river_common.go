@@ -18,8 +18,7 @@ const (
 
 type ContextKeyClient struct{}
 
-// ErrShutdown is a special error injected by the client into its fetch and work
+// ErrStop is a special error injected by the client into its fetch and work
 // CancelCauseFuncs when it's stopping. It may be used by components for such
-// cases like avoiding logging an error during a normal shutdown procedure. This
-// is internal for the time being, but we could also consider exposing it.
-var ErrShutdown = errors.New("shutdown initiated")
+// cases like avoiding logging an error during a normal shutdown procedure.
+var ErrStop = errors.New("stop initiated")
