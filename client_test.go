@@ -344,10 +344,7 @@ func Test_Client(t *testing.T) {
 					err := client.Queues().Add(fmt.Sprintf("new_queue_%d_%d_before", workerNum, j), QueueConfig{MaxWorkers: 1})
 					require.NoError(t, err)
 
-					err = client.Start(ctx)
-					if !errors.Is(err, rivercommon.ErrShutdown) {
-						require.NoError(t, err)
-					}
+					require.NoError(t, client.Start(ctx))
 
 					err = client.Queues().Add(fmt.Sprintf("new_queue_%d_%d_after", workerNum, j), QueueConfig{MaxWorkers: 1})
 					require.NoError(t, err)
@@ -1104,7 +1101,7 @@ func Test_Client(t *testing.T) {
 
 		clientWithStop := &clientWithSimpleStop[pgx.Tx]{Client: client}
 
-		startstoptest.StressErr(ctx, t, clientWithStop, rivercommon.ErrShutdown)
+		startstoptest.Stress(ctx, t, clientWithStop)
 	})
 }
 
@@ -1405,7 +1402,6 @@ func Test_Client_StopAndCancel(t *testing.T) {
 			t.Logf("Job waiting for context cancellation")
 			defer t.Logf("Job finished")
 			<-ctx.Done()
-			require.ErrorIs(t, context.Cause(ctx), rivercommon.ErrShutdown)
 			t.Logf("Job context done, closing chan and returning")
 			close(jobDoneChan)
 			return nil

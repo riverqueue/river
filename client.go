@@ -888,7 +888,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 	}(); err != nil {
 		defer stopped()
 		if errors.Is(context.Cause(fetchCtx), startstop.ErrStop) {
-			return rivercommon.ErrShutdown
+			return nil
 		}
 		return err
 	}
@@ -928,7 +928,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		startstop.StopAllParallel(producersAsServices()...)
 		c.baseService.Logger.DebugContext(ctx, c.baseService.Name+": All producers stopped")
 
-		c.workCancel(rivercommon.ErrShutdown)
+		c.workCancel(rivercommon.ErrStop)
 
 		// Stop all mainline services where stop order isn't important.
 		startstop.StopAllParallel(append(
@@ -985,7 +985,7 @@ func (c *Client[TTx]) Stop(ctx context.Context) error {
 // instead.
 func (c *Client[TTx]) StopAndCancel(ctx context.Context) error {
 	c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Hard stop started; cancelling all work")
-	c.workCancel(rivercommon.ErrShutdown)
+	c.workCancel(rivercommon.ErrStop)
 
 	shouldStop, stopped, finalizeStop := c.baseStartStop.StopInit()
 	if !shouldStop {
