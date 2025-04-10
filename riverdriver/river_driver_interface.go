@@ -26,9 +26,8 @@ const AllQueuesString = "*"
 const MigrationLineMain = "main"
 
 var (
-	ErrClosedPool       = errors.New("underlying driver pool is closed")
-	ErrNotImplemented   = errors.New("driver does not implement this functionality")
-	ErrRetryTransaction = errors.New("expected transaction collision, retry required")
+	ErrClosedPool     = errors.New("underlying driver pool is closed")
+	ErrNotImplemented = errors.New("driver does not implement this functionality")
 )
 
 // Driver provides a database driver for use with river.Client.
