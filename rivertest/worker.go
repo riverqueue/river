@@ -146,6 +146,17 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 	}
 	completer := jobcompleter.NewInlineCompleter(archetype, exec, w.client.Pilot(), subscribeCh)
 
+	for _, hook := range w.config.Hooks {
+		if withBaseService, ok := hook.(baseservice.WithBaseService); ok {
+			baseservice.Init(archetype, withBaseService)
+		}
+	}
+	for _, middleware := range w.config.Middleware {
+		if withBaseService, ok := middleware.(baseservice.WithBaseService); ok {
+			baseservice.Init(archetype, withBaseService)
+		}
+	}
+
 	updatedJobRow, err := exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
 		ID:                  job.ID,
 		Attempt:             job.Attempt + 1,

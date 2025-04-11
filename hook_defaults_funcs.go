@@ -13,8 +13,8 @@ type HookDefaults struct{}
 
 func (d *HookDefaults) IsHook() bool { return true }
 
-// HookInsertBeginFunc is a convenience helper for implementing HookInsertBegin
-// using a simple function instead of a struct.
+// HookInsertBeginFunc is a convenience helper for implementing
+// rivertype.HookInsertBegin using a simple function instead of a struct.
 type HookInsertBeginFunc func(ctx context.Context, params *rivertype.JobInsertParams) error
 
 func (f HookInsertBeginFunc) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
@@ -23,8 +23,8 @@ func (f HookInsertBeginFunc) InsertBegin(ctx context.Context, params *rivertype.
 
 func (f HookInsertBeginFunc) IsHook() bool { return true }
 
-// HookWorkBeginFunc is a convenience helper for implementing HookworkBegin
-// using a simple function instead of a struct.
+// HookWorkBeginFunc is a convenience helper for implementing
+// rivertype.HookworkBegin using a simple function instead of a struct.
 type HookWorkBeginFunc func(ctx context.Context, job *rivertype.JobRow) error
 
 func (f HookWorkBeginFunc) WorkBegin(ctx context.Context, job *rivertype.JobRow) error {

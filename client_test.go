@@ -649,6 +649,40 @@ func Test_Client(t *testing.T) {
 		require.True(t, insertBeginHookCalled)
 	})
 
+	t.Run("HookArchetypeInitialized", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		type HookWithBaseService struct {
+			baseservice.BaseService
+			HookInsertBeginFunc
+		}
+
+		var (
+			hook       = &HookWithBaseService{}
+			hookCalled = false
+		)
+		hook.HookInsertBeginFunc = func(ctx context.Context, params *rivertype.JobInsertParams) error {
+			hookCalled = true
+			require.NotEmpty(t, hook.Name) // if name is non-empty, it means the base service was initialized properly
+			return nil
+		}
+
+		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[callbackArgs]) error {
+			return nil
+		}))
+
+		bundle.config.Hooks = []rivertype.Hook{hook}
+		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
+		require.NoError(t, err)
+
+		_, err = client.Insert(ctx, callbackArgs{}, nil)
+		require.NoError(t, err)
+
+		require.True(t, hookCalled)
+	})
+
 	t.Run("WithGlobalWorkBeginHook", func(t *testing.T) {
 		t.Parallel()
 
@@ -2850,6 +2884,41 @@ func Test_Client_InsertManyTx(t *testing.T) {
 		require.Len(t, results, 1)
 		require.Equal(t, innerResults[0].Job.ID, results[0].Job.ID)
 		require.JSONEq(t, `{"middleware": "called"}`, string(results[0].Job.Metadata))
+	})
+
+	t.Run("MiddlewareArchetypeInitialized", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		config := newTestConfig(t, nil)
+		config.Queues = nil
+
+		type MiddlewareWithBaseService struct {
+			baseservice.BaseService
+			JobInsertMiddlewareFunc
+		}
+
+		var (
+			middleware       = &MiddlewareWithBaseService{}
+			middlewareCalled bool
+		)
+		middleware.JobInsertMiddlewareFunc = func(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(ctx context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
+			middlewareCalled = true
+			require.NotEmpty(t, middleware.Name) // if name is non-empty, it means the base service was initialized properly
+			return doInner(ctx)
+		}
+
+		config.Middleware = []rivertype.Middleware{middleware}
+		driver := riverpgxv5.New(nil)
+		client, err := NewClient(driver, config)
+		require.NoError(t, err)
+
+		results, err := client.InsertManyTx(ctx, bundle.tx, []InsertManyParams{{Args: noOpArgs{}}})
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		require.True(t, middlewareCalled)
 	})
 
 	t.Run("WithUniqueOpts", func(t *testing.T) {

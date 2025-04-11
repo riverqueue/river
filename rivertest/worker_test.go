@@ -13,6 +13,7 @@ import (
 	"github.com/riverqueue/river/internal/execution"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
@@ -325,6 +326,88 @@ func TestWorker_Work(t *testing.T) {
 		res, err := tw.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, nil)
 		require.ErrorContains(t, err, "failed to insert job: tx is closed")
 		require.Nil(t, res)
+	})
+
+	t.Run("WorkUsesHooks", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		type HookWithBaseService struct {
+			baseservice.BaseService
+			river.HookWorkBeginFunc
+		}
+		var (
+			hookCalled                bool
+			hookWithBaseService       = &HookWithBaseService{}
+			hookWithBaseServiceCalled bool
+		)
+		hookWithBaseService.HookWorkBeginFunc = func(ctx context.Context, job *rivertype.JobRow) error {
+			hookWithBaseServiceCalled = true
+			require.NotEmpty(t, hookWithBaseService.Name) // if name is non-empty, it means the base service was initialized properly
+			return nil
+		}
+
+		bundle.config.Hooks = []rivertype.Hook{
+			hookWithBaseService,
+			river.HookWorkBeginFunc(func(ctx context.Context, job *rivertype.JobRow) error {
+				hookCalled = true
+				return nil
+			}),
+		}
+
+		var (
+			worker = river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
+				return nil
+			})
+			testWorker = NewWorker(t, bundle.driver, bundle.config, worker)
+		)
+
+		_, err := testWorker.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, nil)
+		require.NoError(t, err)
+		require.True(t, hookCalled)
+		require.True(t, hookWithBaseServiceCalled)
+	})
+
+	t.Run("WorkUsesMiddleware", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		type MiddlewareWithBaseService struct {
+			baseservice.BaseService
+			river.WorkerMiddlewareFunc
+		}
+		var (
+			middlewareCalled                bool
+			middlewareWithBaseService       = &MiddlewareWithBaseService{}
+			middlewareWithBaseServiceCalled bool
+		)
+		middlewareWithBaseService.WorkerMiddlewareFunc = func(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
+			middlewareWithBaseServiceCalled = true
+			require.NotEmpty(t, middlewareWithBaseService.Name) // if name is non-empty, it means the base service was initialized properly
+			return doInner(ctx)
+		}
+
+		bundle.config.Middleware = []rivertype.Middleware{
+			middlewareWithBaseService,
+			river.WorkerMiddlewareFunc(func(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
+				middlewareCalled = true
+				return doInner(ctx)
+			}),
+		}
+
+		var (
+			worker = river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
+				return nil
+			})
+			testWorker = NewWorker(t, bundle.driver, bundle.config, worker)
+		)
+
+		_, err := testWorker.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, nil)
+		require.NoError(t, err)
+		require.True(t, middlewareCalled)
+		require.True(t, middlewareWithBaseServiceCalled)
 	})
 }
 

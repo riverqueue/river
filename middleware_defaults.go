@@ -25,6 +25,16 @@ func (d *JobInsertMiddlewareDefaults) InsertMany(ctx context.Context, manyParams
 	return doInner(ctx)
 }
 
+// JobInsertMiddlewareFunc is a convenience helper for implementing
+// rivertype.JobInsertMiddleware using a simple function instead of a struct.
+type JobInsertMiddlewareFunc func(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(ctx context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error)
+
+func (f JobInsertMiddlewareFunc) InsertMany(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(ctx context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
+	return f(ctx, manyParams, doInner)
+}
+
+func (f JobInsertMiddlewareFunc) IsMiddleware() bool { return true }
+
 // WorkerInsertMiddlewareDefaults is an embeddable struct that provides default
 // implementations for the rivertype.WorkerMiddleware. Use of this struct is
 // recommended in case rivertype.WorkerMiddleware is expanded in the future so
@@ -36,3 +46,13 @@ type WorkerMiddlewareDefaults struct{ MiddlewareDefaults }
 func (d *WorkerMiddlewareDefaults) Work(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
 	return doInner(ctx)
 }
+
+// WorkerMiddlewareFunc is a convenience helper for implementing
+// rivertype.WorkerMiddleware using a simple function instead of a struct.
+type WorkerMiddlewareFunc func(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error
+
+func (f WorkerMiddlewareFunc) Work(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
+	return f(ctx, job, doInner)
+}
+
+func (f WorkerMiddlewareFunc) IsMiddleware() bool { return true }

@@ -597,6 +597,12 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		}
 	}
 
+	for _, hook := range config.Hooks {
+		if withBaseService, ok := hook.(baseservice.WithBaseService); ok {
+			baseservice.Init(archetype, withBaseService)
+		}
+	}
+
 	client := &Client[TTx]{
 		config:               config,
 		driver:               driver,
@@ -636,6 +642,13 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 
 			middleware = append(middleware, workerMiddleware)
 		}
+
+		for _, middleware := range middleware {
+			if withBaseService, ok := middleware.(baseservice.WithBaseService); ok {
+				baseservice.Init(archetype, withBaseService)
+			}
+		}
+
 		client.middlewareLookupGlobal = middlewarelookup.NewMiddlewareLookup(middleware)
 	}
 

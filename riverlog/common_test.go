@@ -1,7 +1,6 @@
-package river_test
+package riverlog_test
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -16,22 +15,9 @@ import (
 // helpers aren't included in Godoc and keep each example more succinct.
 //
 
-type NoOpArgs struct{}
-
-func (NoOpArgs) Kind() string { return "no_op" }
-
-type NoOpWorker struct {
-	river.WorkerDefaults[NoOpArgs]
-}
-
-func (w *NoOpWorker) Work(ctx context.Context, job *river.Job[NoOpArgs]) error {
-	fmt.Printf("NoOpWorker.Work ran\n")
-	return nil
-}
-
 // Wait on the given subscription channel for numJobs. Times out with a panic if
 // jobs take too long to be received.
-func waitForNJobs(subscribeChan <-chan *river.Event, numJobs int) []*rivertype.JobRow { //nolint:unparam
+func waitForNJobs(subscribeChan <-chan *river.Event, numJobs int) []*rivertype.JobRow {
 	var (
 		timeout  = riversharedtest.WaitTimeout()
 		deadline = time.Now().Add(timeout)
