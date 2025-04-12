@@ -1,6 +1,7 @@
 package river
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1323,9 +1324,9 @@ func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, conf
 	// by drivers as necessary.
 	createdAt := archetype.Time.NowUTCOrNil()
 
-	maxAttempts := valutil.FirstNonZero(insertOpts.MaxAttempts, jobInsertOpts.MaxAttempts, config.MaxAttempts)
-	priority := valutil.FirstNonZero(insertOpts.Priority, jobInsertOpts.Priority, rivercommon.PriorityDefault)
-	queue := valutil.FirstNonZero(insertOpts.Queue, jobInsertOpts.Queue, rivercommon.QueueDefault)
+	maxAttempts := cmp.Or(insertOpts.MaxAttempts, jobInsertOpts.MaxAttempts, config.MaxAttempts)
+	priority := cmp.Or(insertOpts.Priority, jobInsertOpts.Priority, rivercommon.PriorityDefault)
+	queue := cmp.Or(insertOpts.Queue, jobInsertOpts.Queue, rivercommon.QueueDefault)
 
 	if err := validateQueueName(queue); err != nil {
 		return nil, err
