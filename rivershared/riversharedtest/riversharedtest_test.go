@@ -15,9 +15,13 @@ func TestDBPool(t *testing.T) {
 
 	ctx := context.Background()
 
-	pool := DBPool(ctx, t)
-	_, err := pool.Exec(ctx, "SELECT 1")
+	pool1 := DBPool(ctx, t)
+	_, err := pool1.Exec(ctx, "SELECT 1")
 	require.NoError(t, err)
+
+	// Both pools should be exactly the same object.
+	pool2 := DBPool(ctx, t)
+	require.Equal(t, pool1, pool2)
 }
 
 func TestTestTx(t *testing.T) {

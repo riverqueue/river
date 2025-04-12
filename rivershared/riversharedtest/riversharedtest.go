@@ -32,12 +32,12 @@ func BaseServiceArchetype(tb testing.TB) *baseservice.Archetype {
 	}
 }
 
-// A pool and mutex to protect it, lazily initialized by TestTx. Once open, this
+// A pool and sync.Once to initialize it, invoked by TestTx. Once open, this
 // pool is never explicitly closed, instead closing implicitly as the package
 // tests finish.
 var (
-	dbPool   *pgxpool.Pool //nolint:gochecknoglobals
-	dbPoolMu sync.RWMutex  //nolint:gochecknoglobals
+	dbPool     *pgxpool.Pool //nolint:gochecknoglobals
+	dbPoolOnce sync.Once     //nolint:gochecknoglobals
 )
 
 // DBPool gets a lazily initialized database pool for `TEST_DATABASE_URL` or
@@ -45,30 +45,15 @@ var (
 func DBPool(ctx context.Context, tb testing.TB) *pgxpool.Pool {
 	tb.Helper()
 
-	tryPool := func() *pgxpool.Pool {
-		dbPoolMu.RLock()
-		defer dbPoolMu.RUnlock()
-		return dbPool
-	}
-
-	if dbPool := tryPool(); dbPool != nil {
-		return dbPool
-	}
-
-	dbPoolMu.Lock()
-	defer dbPoolMu.Unlock()
-
-	// Multiple goroutines may have passed the initial `nil` check on start
-	// up, so check once more to make sure pool hasn't been set yet.
-	if dbPool != nil {
-		return dbPool
-	}
-
-	dbPool, err := pgxpool.New(ctx, cmp.Or(
-		os.Getenv("TEST_DATABASE_URL"),
-		"postgres://localhost:5432/river_test",
-	))
-	require.NoError(tb, err)
+	dbPoolOnce.Do(func() {
+		var err error
+		dbPool, err = pgxpool.New(ctx, cmp.Or(
+			os.Getenv("TEST_DATABASE_URL"),
+			"postgres://localhost:5432/river_test",
+		))
+		require.NoError(tb, err)
+	})
+	require.NotNil(tb, dbPool) // die in case initial connect from another test failed
 
 	return dbPool
 }
