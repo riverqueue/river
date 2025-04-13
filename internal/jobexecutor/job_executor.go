@@ -1,6 +1,7 @@
 package jobexecutor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,7 +21,6 @@ import (
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
-	"github.com/riverqueue/river/rivershared/util/valutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -203,7 +203,7 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 			return err
 		}
 
-		jobTimeout := valutil.FirstNonZero(e.WorkUnit.Timeout(), e.ClientJobTimeout)
+		jobTimeout := cmp.Or(e.WorkUnit.Timeout(), e.ClientJobTimeout)
 		ctx, cancel := execution.MaybeApplyTimeout(ctx, jobTimeout)
 		defer cancel()
 

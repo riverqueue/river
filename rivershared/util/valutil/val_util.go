@@ -22,6 +22,9 @@ func ValOrDefaultFunc[T comparable](val T, defaultFunc func() T) T {
 
 // FirstNonZero returns the first argument that is non-zero, or the zero value if
 // all are zero.
+//
+// Deprecated: Use `cmp.Or` instead. This function will be removed in a near
+// future version.
 func FirstNonZero[T comparable](values ...T) T {
 	var zero T
 	for _, val := range values {
