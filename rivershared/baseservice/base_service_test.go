@@ -16,7 +16,7 @@ func TestInit(t *testing.T) {
 
 	myService := Init(archetype, &MyService{})
 	require.NotNil(t, myService.Logger)
-	require.Equal(t, "MyService", myService.Name)
+	require.Equal(t, "baseservice.MyService", myService.Name)
 	require.WithinDuration(t, time.Now().UTC(), myService.Time.NowUTC(), 2*time.Second)
 }
 
@@ -29,6 +29,16 @@ func archetype() *Archetype {
 		Logger: slog.New(slog.NewTextHandler(os.Stdout, nil)),
 		Time:   &UnStubbableTimeGenerator{},
 	}
+}
+
+func TestLastPkgPathSegmentIfNotRiver(t *testing.T) {
+	t.Parallel()
+
+	require.Empty(t, lastPkgPathSegmentIfNotRiver("github.com/riverqueue/river"))
+	require.Equal(t, "riverlog.", lastPkgPathSegmentIfNotRiver("github.com/riverqueue/river/riverlog"))
+	require.Equal(t, "riverui.", lastPkgPathSegmentIfNotRiver("github.com/riverqueue/riverui"))
+	require.Empty(t, lastPkgPathSegmentIfNotRiver(""))
+	require.Empty(t, lastPkgPathSegmentIfNotRiver("/"))
 }
 
 func TestSimplifyLogName(t *testing.T) {

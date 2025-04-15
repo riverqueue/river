@@ -3,7 +3,9 @@ package slogutil
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
 )
 
 // SlogMessageOnlyHandler is a trivial slog handler that prints only messages.
@@ -12,6 +14,7 @@ import (
 // lines include timestamps so it's not possible to have reproducible output).
 type SlogMessageOnlyHandler struct {
 	Level slog.Level
+	Out   io.Writer
 }
 
 func (h *SlogMessageOnlyHandler) Enabled(ctx context.Context, level slog.Level) bool {
@@ -19,7 +22,12 @@ func (h *SlogMessageOnlyHandler) Enabled(ctx context.Context, level slog.Level) 
 }
 
 func (h *SlogMessageOnlyHandler) Handle(ctx context.Context, record slog.Record) error {
-	fmt.Printf("%s\n", record.Message)
+	w := h.Out
+	if w == nil {
+		w = os.Stdout
+	}
+
+	fmt.Fprintf(w, "%s\n", record.Message)
 	return nil
 }
 

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"reflect"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/riverqueue/river/rivertype"
@@ -60,20 +61,23 @@ type BaseService struct {
 
 func (s *BaseService) GetBaseService() *BaseService { return s }
 
-// withBaseService is an interface to a struct that embeds BaseService. An
+// WithBaseService is an interface to a struct that embeds BaseService. An
 // implementation is provided automatically by BaseService, and it's largely
 // meant for internal use.
-type withBaseService interface {
+type WithBaseService interface {
 	GetBaseService() *BaseService
 }
 
 // Init initializes a base service from an archetype. It returns the same
 // service that was passed into it for convenience.
-func Init[TService withBaseService](archetype *Archetype, service TService) TService {
-	baseService := service.GetBaseService()
+func Init[TService WithBaseService](archetype *Archetype, service TService) TService {
+	var (
+		baseService = service.GetBaseService()
+		serviceType = reflect.TypeOf(service).Elem()
+	)
 
 	baseService.Logger = archetype.Logger
-	baseService.Name = simplifyLogName(reflect.TypeOf(service).Elem().Name())
+	baseService.Name = lastPkgPathSegmentIfNotRiver(serviceType.PkgPath()) + simplifyLogName(serviceType.Name())
 	baseService.Time = archetype.Time
 
 	return service
@@ -108,6 +112,30 @@ func (g *UnStubbableTimeGenerator) NowUTCOrNil() *time.Time { return nil }
 
 func (g *UnStubbableTimeGenerator) StubNowUTC(nowUTC time.Time) time.Time {
 	panic("time not stubbable outside tests")
+}
+
+// Takes a package path and extracts the last part of it to use in a service
+// name for logging purposes. If the package is the top-level `river` returns an
+// empty string so that top-level structs aren't prefixed but sub-packages
+// structs are.
+//
+//   - github.com/riverqueue/river          -> ""
+//   - github.com/riverqueue/river/riverlog -> "riverlog."
+//   - github.com/riverqueue/riverui        -> "riverui."
+//
+// Helps produce log-friendly service names like `riverlog.Middleware`.
+func lastPkgPathSegmentIfNotRiver(pkgPath string) string {
+	lastSlashIndex := strings.LastIndex(pkgPath, "/")
+	if lastSlashIndex == -1 {
+		return ""
+	}
+
+	lastPart := pkgPath[lastSlashIndex+1:]
+	if lastPart == "" || lastPart == "river" {
+		return ""
+	}
+
+	return lastPart + "."
 }
 
 var stripGenericTypePathRE = regexp.MustCompile(`\[([\[\]\*]*).*/([^/]+)\]`)
