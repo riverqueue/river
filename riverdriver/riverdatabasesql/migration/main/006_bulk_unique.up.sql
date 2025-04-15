@@ -1,5 +1,5 @@
 
-CREATE OR REPLACE FUNCTION river_job_state_in_bitmask(bitmask BIT(8), state river_job_state)
+CREATE OR REPLACE FUNCTION /* TEMPLATE: schema */river_job_state_in_bitmask(bitmask BIT(8), state river_job_state)
 RETURNS boolean
 LANGUAGE SQL
 IMMUTABLE
@@ -23,12 +23,12 @@ $$;
 -- This column may exist already if users manually created the column and index
 -- as instructed in the changelog so the index could be created `CONCURRENTLY`.
 --
-ALTER TABLE river_job ADD COLUMN IF NOT EXISTS unique_states BIT(8);
+ALTER TABLE /* TEMPLATE: schema */river_job ADD COLUMN IF NOT EXISTS unique_states BIT(8);
 
 -- This statement uses `IF NOT EXISTS` to allow users with a `river_job` table
 -- of non-trivial size to build the index `CONCURRENTLY` out of band of this
 -- migration, then follow by completing the migration.
-CREATE UNIQUE INDEX IF NOT EXISTS river_job_unique_idx ON river_job (unique_key)
+CREATE UNIQUE INDEX IF NOT EXISTS river_job_unique_idx ON /* TEMPLATE: schema */river_job (unique_key)
     WHERE unique_key IS NOT NULL
       AND unique_states IS NOT NULL
       AND river_job_state_in_bitmask(unique_states, state);
@@ -38,4 +38,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS river_job_unique_idx ON river_job (unique_key)
 -- subsequent migration once all jobs using the old unique system have been
 -- completed (i.e. no more rows with non-null unique_key and null
 -- unique_states).
-DROP INDEX river_job_kind_unique_key_idx;
+DROP INDEX /* TEMPLATE: schema */river_job_kind_unique_key_idx;

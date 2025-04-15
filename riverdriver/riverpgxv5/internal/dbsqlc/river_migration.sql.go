@@ -15,7 +15,7 @@ SELECT EXISTS (
     SELECT column_name
     FROM information_schema.columns 
     WHERE table_name = $1::text
-        AND table_schema = CURRENT_SCHEMA
+        AND table_schema = /* TEMPLATE_BEGIN: schema */ CURRENT_SCHEMA /* TEMPLATE_END */
         AND column_name = $2::text
 )
 `
@@ -33,7 +33,7 @@ func (q *Queries) ColumnExists(ctx context.Context, db DBTX, arg *ColumnExistsPa
 }
 
 const riverMigrationDeleteAssumingMainMany = `-- name: RiverMigrationDeleteAssumingMainMany :many
-DELETE FROM river_migration
+DELETE FROM /* TEMPLATE: schema */river_migration
 WHERE version = any($1::bigint[])
 RETURNING
     created_at,
@@ -66,7 +66,7 @@ func (q *Queries) RiverMigrationDeleteAssumingMainMany(ctx context.Context, db D
 }
 
 const riverMigrationDeleteByLineAndVersionMany = `-- name: RiverMigrationDeleteByLineAndVersionMany :many
-DELETE FROM river_migration
+DELETE FROM /* TEMPLATE: schema */river_migration
 WHERE line = $1
     AND version = any($2::bigint[])
 RETURNING line, version, created_at
@@ -101,7 +101,7 @@ const riverMigrationGetAllAssumingMain = `-- name: RiverMigrationGetAllAssumingM
 SELECT
     created_at,
     version
-FROM river_migration
+FROM /* TEMPLATE: schema */river_migration
 ORDER BY version
 `
 
@@ -137,7 +137,7 @@ func (q *Queries) RiverMigrationGetAllAssumingMain(ctx context.Context, db DBTX)
 
 const riverMigrationGetByLine = `-- name: RiverMigrationGetByLine :many
 SELECT line, version, created_at
-FROM river_migration
+FROM /* TEMPLATE: schema */river_migration
 WHERE line = $1
 ORDER BY version
 `
@@ -163,7 +163,7 @@ func (q *Queries) RiverMigrationGetByLine(ctx context.Context, db DBTX, line str
 }
 
 const riverMigrationInsert = `-- name: RiverMigrationInsert :one
-INSERT INTO river_migration (
+INSERT INTO /* TEMPLATE: schema */river_migration (
     line,
     version
 ) VALUES (
@@ -185,7 +185,7 @@ func (q *Queries) RiverMigrationInsert(ctx context.Context, db DBTX, arg *RiverM
 }
 
 const riverMigrationInsertMany = `-- name: RiverMigrationInsertMany :many
-INSERT INTO river_migration (
+INSERT INTO /* TEMPLATE: schema */river_migration (
     line,
     version
 )
@@ -221,7 +221,7 @@ func (q *Queries) RiverMigrationInsertMany(ctx context.Context, db DBTX, arg *Ri
 }
 
 const riverMigrationInsertManyAssumingMain = `-- name: RiverMigrationInsertManyAssumingMain :many
-INSERT INTO river_migration (
+INSERT INTO /* TEMPLATE: schema */river_migration (
     version
 )
 SELECT
@@ -261,8 +261,8 @@ SELECT CASE WHEN to_regclass($1) IS NULL THEN false
             ELSE true END
 `
 
-func (q *Queries) TableExists(ctx context.Context, db DBTX, tableName string) (bool, error) {
-	row := db.QueryRow(ctx, tableExists, tableName)
+func (q *Queries) TableExists(ctx context.Context, db DBTX, schemaAndTable string) (bool, error) {
+	row := db.QueryRow(ctx, tableExists, schemaAndTable)
 	var column_1 bool
 	err := row.Scan(&column_1)
 	return column_1, err

@@ -11,7 +11,7 @@ import (
 )
 
 const clientCreateOrSetUpdatedAt = `-- name: ClientCreateOrSetUpdatedAt :one
-INSERT INTO river_client (
+INSERT INTO /* TEMPLATE: schema */river_client (
     id,
     metadata,
     paused_at,

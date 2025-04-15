@@ -8,10 +8,12 @@ package dbsqlc
 import (
 	"context"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const leaderAttemptElect = `-- name: LeaderAttemptElect :execrows
-INSERT INTO river_leader(leader_id, elected_at, expires_at)
+INSERT INTO /* TEMPLATE: schema */river_leader (leader_id, elected_at, expires_at)
     VALUES ($1, now(), now() + $2::interval)
 ON CONFLICT (name)
     DO NOTHING
@@ -31,7 +33,7 @@ func (q *Queries) LeaderAttemptElect(ctx context.Context, db DBTX, arg *LeaderAt
 }
 
 const leaderAttemptReelect = `-- name: LeaderAttemptReelect :execrows
-INSERT INTO river_leader(leader_id, elected_at, expires_at)
+INSERT INTO /* TEMPLATE: schema */river_leader (leader_id, elected_at, expires_at)
     VALUES ($1, now(), now() + $2::interval)
 ON CONFLICT (name)
     DO UPDATE SET
@@ -54,7 +56,7 @@ func (q *Queries) LeaderAttemptReelect(ctx context.Context, db DBTX, arg *Leader
 }
 
 const leaderDeleteExpired = `-- name: LeaderDeleteExpired :execrows
-DELETE FROM river_leader
+DELETE FROM /* TEMPLATE: schema */river_leader
 WHERE expires_at < now()
 `
 
@@ -68,7 +70,7 @@ func (q *Queries) LeaderDeleteExpired(ctx context.Context, db DBTX) (int64, erro
 
 const leaderGetElectedLeader = `-- name: LeaderGetElectedLeader :one
 SELECT elected_at, expires_at, leader_id, name
-FROM river_leader
+FROM /* TEMPLATE: schema */river_leader
 `
 
 func (q *Queries) LeaderGetElectedLeader(ctx context.Context, db DBTX) (*RiverLeader, error) {
@@ -84,7 +86,7 @@ func (q *Queries) LeaderGetElectedLeader(ctx context.Context, db DBTX) (*RiverLe
 }
 
 const leaderInsert = `-- name: LeaderInsert :one
-INSERT INTO river_leader(
+INSERT INTO /* TEMPLATE: schema */river_leader(
     elected_at,
     expires_at,
     leader_id
@@ -122,27 +124,28 @@ func (q *Queries) LeaderInsert(ctx context.Context, db DBTX, arg *LeaderInsertPa
 const leaderResign = `-- name: LeaderResign :execrows
 WITH currently_held_leaders AS (
   SELECT elected_at, expires_at, leader_id, name
-  FROM river_leader
+  FROM /* TEMPLATE: schema */river_leader
   WHERE leader_id = $1::text
   FOR UPDATE
 ),
 notified_resignations AS (
     SELECT pg_notify(
-        concat(current_schema(), '.', $2::text),
+        concat(coalesce($2::text, current_schema()), '.', $3::text),
         json_build_object('leader_id', leader_id, 'action', 'resigned')::text
     )
     FROM currently_held_leaders
 )
-DELETE FROM river_leader USING notified_resignations
+DELETE FROM /* TEMPLATE: schema */river_leader USING notified_resignations
 `
 
 type LeaderResignParams struct {
 	LeaderID        string
+	Schema          pgtype.Text
 	LeadershipTopic string
 }
 
 func (q *Queries) LeaderResign(ctx context.Context, db DBTX, arg *LeaderResignParams) (int64, error) {
-	result, err := db.Exec(ctx, leaderResign, arg.LeaderID, arg.LeadershipTopic)
+	result, err := db.Exec(ctx, leaderResign, arg.LeaderID, arg.Schema, arg.LeadershipTopic)
 	if err != nil {
 		return 0, err
 	}

@@ -65,23 +65,23 @@ func TestJobScheduler(t *testing.T) {
 		return setup(t, riverpgxv5.New(nil).UnwrapExecutor(tx))
 	}
 
-	requireJobStateUnchanged := func(t *testing.T, exec riverdriver.Executor, job *rivertype.JobRow) *rivertype.JobRow {
+	requireJobStateUnchanged := func(t *testing.T, scheduler *JobScheduler, exec riverdriver.Executor, job *rivertype.JobRow) *rivertype.JobRow {
 		t.Helper()
-		newJob, err := exec.JobGetByID(ctx, job.ID)
+		newJob, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: scheduler.config.Schema})
 		require.NoError(t, err)
 		require.Equal(t, job.State, newJob.State)
 		return newJob
 	}
-	requireJobStateAvailable := func(t *testing.T, exec riverdriver.Executor, job *rivertype.JobRow) *rivertype.JobRow {
+	requireJobStateAvailable := func(t *testing.T, scheduler *JobScheduler, exec riverdriver.Executor, job *rivertype.JobRow) *rivertype.JobRow {
 		t.Helper()
-		newJob, err := exec.JobGetByID(ctx, job.ID)
+		newJob, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: scheduler.config.Schema})
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateAvailable, newJob.State)
 		return newJob
 	}
-	requireJobStateDiscardedWithMeta := func(t *testing.T, exec riverdriver.Executor, job *rivertype.JobRow) *rivertype.JobRow {
+	requireJobStateDiscardedWithMeta := func(t *testing.T, scheduler *JobScheduler, exec riverdriver.Executor, job *rivertype.JobRow) *rivertype.JobRow {
 		t.Helper()
-		newJob, err := exec.JobGetByID(ctx, job.ID)
+		newJob, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: scheduler.config.Schema})
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateDiscarded, newJob.State)
 		require.NotNil(t, newJob.FinalizedAt)
@@ -134,20 +134,20 @@ func TestJobScheduler(t *testing.T) {
 
 		scheduler.TestSignals.ScheduledBatch.WaitOrTimeout()
 
-		requireJobStateUnchanged(t, bundle.exec, job1)
-		requireJobStateUnchanged(t, bundle.exec, job2)
-		requireJobStateUnchanged(t, bundle.exec, job3)
-		requireJobStateUnchanged(t, bundle.exec, job4)
-		requireJobStateUnchanged(t, bundle.exec, job5)
+		requireJobStateUnchanged(t, scheduler, bundle.exec, job1)
+		requireJobStateUnchanged(t, scheduler, bundle.exec, job2)
+		requireJobStateUnchanged(t, scheduler, bundle.exec, job3)
+		requireJobStateUnchanged(t, scheduler, bundle.exec, job4)
+		requireJobStateUnchanged(t, scheduler, bundle.exec, job5)
 
-		requireJobStateAvailable(t, bundle.exec, scheduledJob1)
-		requireJobStateAvailable(t, bundle.exec, scheduledJob2)
-		requireJobStateAvailable(t, bundle.exec, scheduledJob3)
-		requireJobStateUnchanged(t, bundle.exec, scheduledJob4) // still scheduled
+		requireJobStateAvailable(t, scheduler, bundle.exec, scheduledJob1)
+		requireJobStateAvailable(t, scheduler, bundle.exec, scheduledJob2)
+		requireJobStateAvailable(t, scheduler, bundle.exec, scheduledJob3)
+		requireJobStateUnchanged(t, scheduler, bundle.exec, scheduledJob4) // still scheduled
 
-		requireJobStateAvailable(t, bundle.exec, retryableJob1)
-		requireJobStateAvailable(t, bundle.exec, retryableJob2)
-		requireJobStateUnchanged(t, bundle.exec, retryableJob3) // still retryable
+		requireJobStateAvailable(t, scheduler, bundle.exec, retryableJob1)
+		requireJobStateAvailable(t, scheduler, bundle.exec, retryableJob2)
+		requireJobStateUnchanged(t, scheduler, bundle.exec, retryableJob3) // still retryable
 	})
 
 	t.Run("MovesUniqueKeyConflictingJobsToDiscarded", func(t *testing.T) {
@@ -185,13 +185,13 @@ func TestJobScheduler(t *testing.T) {
 
 		scheduler.TestSignals.ScheduledBatch.WaitOrTimeout()
 
-		requireJobStateAvailable(t, bundle.exec, retryableJob1)
-		requireJobStateAvailable(t, bundle.exec, retryableJob2)
-		requireJobStateDiscardedWithMeta(t, bundle.exec, retryableJob3)
-		requireJobStateDiscardedWithMeta(t, bundle.exec, retryableJob4)
-		requireJobStateDiscardedWithMeta(t, bundle.exec, retryableJob5)
-		requireJobStateDiscardedWithMeta(t, bundle.exec, retryableJob6)
-		requireJobStateDiscardedWithMeta(t, bundle.exec, retryableJob7)
+		requireJobStateAvailable(t, scheduler, bundle.exec, retryableJob1)
+		requireJobStateAvailable(t, scheduler, bundle.exec, retryableJob2)
+		requireJobStateDiscardedWithMeta(t, scheduler, bundle.exec, retryableJob3)
+		requireJobStateDiscardedWithMeta(t, scheduler, bundle.exec, retryableJob4)
+		requireJobStateDiscardedWithMeta(t, scheduler, bundle.exec, retryableJob5)
+		requireJobStateDiscardedWithMeta(t, scheduler, bundle.exec, retryableJob6)
+		requireJobStateDiscardedWithMeta(t, scheduler, bundle.exec, retryableJob7)
 	})
 
 	t.Run("SchedulesInBatches", func(t *testing.T) {
@@ -228,7 +228,7 @@ func TestJobScheduler(t *testing.T) {
 		scheduler.TestSignals.ScheduledBatch.WaitOrTimeout()
 
 		for _, job := range jobs {
-			requireJobStateAvailable(t, bundle.exec, job)
+			requireJobStateAvailable(t, scheduler, bundle.exec, job)
 		}
 	})
 
@@ -297,8 +297,8 @@ func TestJobScheduler(t *testing.T) {
 
 		scheduler.TestSignals.ScheduledBatch.WaitOrTimeout()
 
-		requireJobStateAvailable(t, bundle.exec, job1)
-		requireJobStateAvailable(t, bundle.exec, job2)
+		requireJobStateAvailable(t, scheduler, bundle.exec, job1)
+		requireJobStateAvailable(t, scheduler, bundle.exec, job2)
 	})
 
 	t.Run("TriggersNotificationsOnEachQueueWithNewlyAvailableJobs", func(t *testing.T) {

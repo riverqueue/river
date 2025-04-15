@@ -35,9 +35,14 @@ func (ts *QueueCleanerTestSignals) Init() {
 type QueueCleanerConfig struct {
 	// Interval is the amount of time to wait between runs of the cleaner.
 	Interval time.Duration
+
 	// RetentionPeriod is the amount of time to keep queues around before they're
 	// removed.
 	RetentionPeriod time.Duration
+
+	// Schema where River tables are located. Empty string omits schema, causing
+	// Postgres to default to `search_path`.
+	Schema string
 }
 
 func (c *QueueCleanerConfig) mustValidate() *QueueCleanerConfig {
@@ -134,6 +139,7 @@ func (s *QueueCleaner) runOnce(ctx context.Context) (*queueCleanerRunOnceResult,
 
 			queuesDeleted, err := s.exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{
 				Max:              s.batchSize,
+				Schema:           s.Config.Schema,
 				UpdatedAtHorizon: time.Now().Add(-s.Config.RetentionPeriod),
 			})
 			if err != nil {

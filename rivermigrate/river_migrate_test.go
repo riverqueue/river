@@ -11,6 +11,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -24,6 +25,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/sqlctemplate"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 )
@@ -74,6 +76,7 @@ func TestMigrator(t *testing.T) {
 		dbPool *pgxpool.Pool
 		driver *driverWithAlternateLine
 		logger *slog.Logger
+		schema string
 	}
 
 	setup := func(t *testing.T) (*Migrator[pgx.Tx], *testBundle) {
@@ -86,28 +89,27 @@ func TestMigrator(t *testing.T) {
 		//
 		// To make this easier to clean up afterward, we create a new, clean schema
 		// for each test run and then drop it afterward.
-		baseDBPool := riverinternaltest.TestDB(ctx, t)
-		schemaName := "river_migrate_test_" + randutil.Hex(8)
-		_, err := baseDBPool.Exec(ctx, "CREATE SCHEMA "+schemaName)
+		dbPool := riverinternaltest.TestDB(ctx, t)
+		schema := "river_migrate_test_" + randutil.Hex(8)
+		_, err := dbPool.Exec(ctx, "CREATE SCHEMA "+schema)
 		require.NoError(t, err)
 
 		t.Cleanup(func() {
-			_, err := baseDBPool.Exec(ctx, fmt.Sprintf("DROP SCHEMA %s CASCADE", schemaName))
+			_, err := dbPool.Exec(ctx, fmt.Sprintf("DROP SCHEMA %s CASCADE", schema))
 			require.NoError(t, err)
 		})
 
-		newSchemaConfig := baseDBPool.Config()
-		newSchemaConfig.ConnConfig.RuntimeParams["search_path"] = schemaName
-		newSchemaPool, err := pgxpool.NewWithConfig(ctx, newSchemaConfig)
-		require.NoError(t, err)
-
 		bundle := &testBundle{
-			dbPool: newSchemaPool,
-			driver: &driverWithAlternateLine{Driver: riverpgxv5.New(newSchemaPool)},
+			dbPool: dbPool,
+			driver: &driverWithAlternateLine{Driver: riverpgxv5.New(dbPool)},
 			logger: riversharedtest.Logger(t),
+			schema: schema,
 		}
 
-		migrator, err := New(bundle.driver, &Config{Logger: bundle.logger})
+		migrator, err := New(bundle.driver, &Config{
+			Logger: bundle.logger,
+			schema: schema,
+		})
 		require.NoError(t, err)
 		migrator.migrations = migrationsBundle.WithTestVersionsMap
 
@@ -126,7 +128,10 @@ func TestMigrator(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, tx.Rollback()) })
 
 		driver := riverdatabasesql.New(stdPool)
-		migrator, err := New(driver, &Config{Logger: bundle.logger})
+		migrator, err := New(driver, &Config{
+			Logger: bundle.logger,
+			schema: bundle.schema,
+		})
 		require.NoError(t, err)
 		migrator.migrations = migrationsBundle.WithTestVersionsMap
 
@@ -252,7 +257,7 @@ func TestMigrator(t *testing.T) {
 		require.Equal(t, DirectionUp, res.Direction)
 		require.Equal(t, seqOneTo(migrateVersionIncludingRiverJob), sliceutil.Map(res.Versions, migrateVersionToInt))
 
-		err = dbExecError(ctx, bundle.driver.GetExecutor(), "SELECT * FROM river_job")
+		err = dbExecError(ctx, bundle.driver.GetExecutor(), fmt.Sprintf("SELECT * FROM %s.river_job", bundle.schema))
 		require.NoError(t, err)
 
 		// Run once more to go down one more step
@@ -265,7 +270,7 @@ func TestMigrator(t *testing.T) {
 			version := res.Versions[0]
 			require.Equal(t, "initial schema", version.Name)
 
-			err = dbExecError(ctx, bundle.driver.GetExecutor(), "SELECT * FROM river_job")
+			err = dbExecError(ctx, bundle.driver.GetExecutor(), fmt.Sprintf("SELECT * FROM %s.river_job", bundle.schema))
 			require.Error(t, err)
 		}
 	})
@@ -296,12 +301,15 @@ func TestMigrator(t *testing.T) {
 		require.Equal(t, []int{migrationsBundle.WithTestVersionsMaxVersion, migrationsBundle.WithTestVersionsMaxVersion - 1},
 			sliceutil.Map(res.Versions, migrateVersionToInt))
 
-		migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, riverdriver.MigrationLineMain)
+		migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
+			Line:   riverdriver.MigrationLineMain,
+			Schema: bundle.schema,
+		})
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(migrationsBundle.WithTestVersionsMaxVersion-2),
 			sliceutil.Map(migrations, driverMigrationToInt))
 
-		err = dbExecError(ctx, bundle.driver.GetExecutor(), "SELECT name FROM test_table")
+		err = dbExecError(ctx, bundle.driver.GetExecutor(), fmt.Sprintf("SELECT name FROM %s.test_table", bundle.schema))
 		require.Error(t, err)
 	})
 
@@ -320,7 +328,10 @@ func TestMigrator(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []int{}, sliceutil.Map(res.Versions, migrateVersionToInt))
 
-		migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, riverdriver.MigrationLineMain)
+		migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
+			Line:   riverdriver.MigrationLineMain,
+			Schema: bundle.schema,
+		})
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(migrationsBundle.MaxVersion),
 			sliceutil.Map(migrations, driverMigrationToInt))
@@ -337,9 +348,12 @@ func TestMigrator(t *testing.T) {
 
 		res, err := migrator.Migrate(ctx, DirectionDown, &MigrateOpts{MaxSteps: 1})
 		require.NoError(t, err)
+		spew.Dump(res.Versions)
 		require.Equal(t, []int{migrationsBundle.MaxVersion}, sliceutil.Map(res.Versions, migrateVersionToInt))
 
-		migrations, err := migrator.driver.UnwrapExecutor(tx).MigrationGetAllAssumingMain(ctx)
+		migrations, err := migrator.driver.UnwrapExecutor(tx).MigrationGetAllAssumingMain(ctx, &riverdriver.MigrationGetAllAssumingMainParams{
+			Schema: bundle.schema,
+		})
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(migrationsBundle.MaxVersion-1),
 			sliceutil.Map(migrations, driverMigrationToInt))
@@ -358,12 +372,14 @@ func TestMigrator(t *testing.T) {
 		require.Equal(t, seqDownTo(migrationsBundle.WithTestVersionsMaxVersion, 5),
 			sliceutil.Map(res.Versions, migrateVersionToInt))
 
-		migrations, err := bundle.driver.GetExecutor().MigrationGetAllAssumingMain(ctx)
+		migrations, err := bundle.driver.GetExecutor().MigrationGetAllAssumingMain(ctx, &riverdriver.MigrationGetAllAssumingMainParams{
+			Schema: bundle.schema,
+		})
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(4),
 			sliceutil.Map(migrations, driverMigrationToInt))
 
-		err = dbExecError(ctx, bundle.driver.GetExecutor(), "SELECT name FROM test_table")
+		err = dbExecError(ctx, bundle.driver.GetExecutor(), fmt.Sprintf("SELECT name FROM %s.test_table", bundle.schema))
 		require.Error(t, err)
 	})
 
@@ -380,7 +396,7 @@ func TestMigrator(t *testing.T) {
 		require.Equal(t, seqDownTo(migrationsBundle.WithTestVersionsMaxVersion, 1),
 			sliceutil.Map(res.Versions, migrateVersionToInt))
 
-		err = dbExecError(ctx, bundle.driver.GetExecutor(), "SELECT name FROM river_migrate")
+		err = dbExecError(ctx, bundle.driver.GetExecutor(), fmt.Sprintf("SELECT name FROM %s.river_migrate", bundle.schema))
 		require.Error(t, err)
 	})
 
@@ -417,7 +433,10 @@ func TestMigrator(t *testing.T) {
 		// Migrate down returned a result above for a migration that was
 		// removed, but because we're in a dry run, the database still shows
 		// this version.
-		migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, riverdriver.MigrationLineMain)
+		migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
+			Line:   riverdriver.MigrationLineMain,
+			Schema: bundle.schema,
+		})
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(migrationsBundle.WithTestVersionsMaxVersion),
 			sliceutil.Map(migrations, driverMigrationToInt))
@@ -467,12 +486,15 @@ func TestMigrator(t *testing.T) {
 			require.Equal(t, seqOneTo(migrationsBundle.WithTestVersionsMaxVersion),
 				sliceutil.Map(res.Versions, migrateVersionToInt))
 
-			migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, riverdriver.MigrationLineMain)
+			migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
+				Line:   riverdriver.MigrationLineMain,
+				Schema: bundle.schema,
+			})
 			require.NoError(t, err)
 			require.Equal(t, seqOneTo(migrationsBundle.WithTestVersionsMaxVersion),
 				sliceutil.Map(migrations, driverMigrationToInt))
 
-			_, err = bundle.dbPool.Exec(ctx, "SELECT * FROM test_table")
+			_, err = bundle.dbPool.Exec(ctx, fmt.Sprintf("SELECT * FROM %s.test_table", bundle.schema))
 			require.NoError(t, err)
 		}
 
@@ -483,12 +505,15 @@ func TestMigrator(t *testing.T) {
 			require.Equal(t, DirectionUp, res.Direction)
 			require.Equal(t, []int{}, sliceutil.Map(res.Versions, migrateVersionToInt))
 
-			migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, riverdriver.MigrationLineMain)
+			migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
+				Line:   riverdriver.MigrationLineMain,
+				Schema: bundle.schema,
+			})
 			require.NoError(t, err)
 			require.Equal(t, seqOneTo(migrationsBundle.WithTestVersionsMaxVersion),
 				sliceutil.Map(migrations, driverMigrationToInt))
 
-			_, err = bundle.dbPool.Exec(ctx, "SELECT * FROM test_table")
+			_, err = bundle.dbPool.Exec(ctx, fmt.Sprintf("SELECT * FROM %s.test_table", bundle.schema))
 			require.NoError(t, err)
 		}
 	})
@@ -506,13 +531,16 @@ func TestMigrator(t *testing.T) {
 		require.Equal(t, []int{migrationsBundle.WithTestVersionsMaxVersion - 1},
 			sliceutil.Map(res.Versions, migrateVersionToInt))
 
-		migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, riverdriver.MigrationLineMain)
+		migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
+			Line:   riverdriver.MigrationLineMain,
+			Schema: bundle.schema,
+		})
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(migrationsBundle.WithTestVersionsMaxVersion-1),
 			sliceutil.Map(migrations, driverMigrationToInt))
 
 		// Column `name` is only added in the second test version.
-		err = dbExecError(ctx, bundle.driver.GetExecutor(), "SELECT name FROM test_table")
+		err = dbExecError(ctx, bundle.driver.GetExecutor(), fmt.Sprintf("SELECT name FROM %s.test_table", bundle.schema))
 		require.Error(t, err)
 
 		var pgErr *pgconn.PgError
@@ -529,7 +557,10 @@ func TestMigrator(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(migrationsBundle.MaxVersion), sliceutil.Map(res.Versions, migrateVersionToInt))
 
-		migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, riverdriver.MigrationLineMain)
+		migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
+			Line:   riverdriver.MigrationLineMain,
+			Schema: bundle.schema,
+		})
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(migrationsBundle.MaxVersion),
 			sliceutil.Map(migrations, driverMigrationToInt))
@@ -548,7 +579,10 @@ func TestMigrator(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []int{migrationsBundle.MaxVersion + 1}, sliceutil.Map(res.Versions, migrateVersionToInt))
 
-		migrations, err := migrator.driver.UnwrapExecutor(tx).MigrationGetByLine(ctx, riverdriver.MigrationLineMain)
+		migrations, err := migrator.driver.UnwrapExecutor(tx).MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
+			Line:   riverdriver.MigrationLineMain,
+			Schema: bundle.schema,
+		})
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(migrationsBundle.MaxVersion+1),
 			sliceutil.Map(migrations, driverMigrationToInt))
@@ -564,7 +598,10 @@ func TestMigrator(t *testing.T) {
 		require.Equal(t, seqOneTo(migrationsBundle.WithTestVersionsMaxVersion),
 			sliceutil.Map(res.Versions, migrateVersionToInt))
 
-		migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, riverdriver.MigrationLineMain)
+		migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
+			Line:   riverdriver.MigrationLineMain,
+			Schema: bundle.schema,
+		})
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(migrationsBundle.MaxVersion+2), sliceutil.Map(migrations, driverMigrationToInt))
 	})
@@ -607,7 +644,10 @@ func TestMigrator(t *testing.T) {
 		// Migrate up returned a result above for migrations that were applied,
 		// but because we're in a dry run, the database still shows the test
 		// migration versions not applied.
-		migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, riverdriver.MigrationLineMain)
+		migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
+			Line:   riverdriver.MigrationLineMain,
+			Schema: bundle.schema,
+		})
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(migrationsBundle.MaxVersion),
 			sliceutil.Map(migrations, driverMigrationToInt))
@@ -648,7 +688,10 @@ func TestMigrator(t *testing.T) {
 		migrator, bundle := setup(t)
 
 		requireMigrationTableExists := func(expectedExists bool) {
-			migrationExists, err := bundle.driver.GetExecutor().TableExists(ctx, "river_migration")
+			migrationExists, err := bundle.driver.GetExecutor().TableExists(ctx, &riverdriver.TableExistsParams{
+				Table:  "river_migration",
+				Schema: bundle.schema,
+			})
 			require.NoError(t, err)
 			require.Equal(t, expectedExists, migrationExists)
 		}
@@ -675,7 +718,10 @@ func TestMigrator(t *testing.T) {
 		require.Equal(t, seqOneTo(migrationsBundle.WithTestVersionsMaxVersion),
 			sliceutil.Map(res.Versions, migrateVersionToInt))
 
-		migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, riverdriver.MigrationLineMain)
+		migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
+			Line:   riverdriver.MigrationLineMain,
+			Schema: bundle.schema,
+		})
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(migrationsBundle.WithTestVersionsMaxVersion),
 			sliceutil.Map(migrations, driverMigrationToInt))
@@ -695,6 +741,7 @@ func TestMigrator(t *testing.T) {
 		alternateMigrator, err := New(bundle.driver, &Config{
 			Line:   migrationLineAlternate,
 			Logger: bundle.logger,
+			schema: bundle.schema,
 		})
 		require.NoError(t, err)
 
@@ -703,7 +750,10 @@ func TestMigrator(t *testing.T) {
 		require.Equal(t, seqOneTo(migrationLineAlternateMaxVersion),
 			sliceutil.Map(res.Versions, migrateVersionToInt))
 
-		migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, migrationLineAlternate)
+		migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
+			Line:   migrationLineAlternate,
+			Schema: bundle.schema,
+		})
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(migrationLineAlternateMaxVersion),
 			sliceutil.Map(migrations, driverMigrationToInt))
@@ -714,7 +764,10 @@ func TestMigrator(t *testing.T) {
 			sliceutil.Map(res.Versions, migrateVersionToInt))
 
 		// The main migration line should not have been touched.
-		migrations, err = bundle.driver.GetExecutor().MigrationGetByLine(ctx, riverdriver.MigrationLineMain)
+		migrations, err = bundle.driver.GetExecutor().MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
+			Line:   riverdriver.MigrationLineMain,
+			Schema: bundle.schema,
+		})
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(migrationsBundle.MaxVersion),
 			sliceutil.Map(migrations, driverMigrationToInt))
@@ -732,6 +785,7 @@ func TestMigrator(t *testing.T) {
 		alternateMigrator, err := New(bundle.driver, &Config{
 			Line:   migrationLineAlternate,
 			Logger: bundle.logger,
+			schema: bundle.schema,
 		})
 		require.NoError(t, err)
 
@@ -765,19 +819,29 @@ func TestMigrator(t *testing.T) {
 		require.Equal(t, seqOneTo(4), sliceutil.Map(res.Versions, migrateVersionToInt))
 
 		// Drop `river_migration` table as if version 001 had never originally run.
-		_, err = bundle.dbPool.Exec(ctx, "DROP TABLE river_migration")
+		_, err = bundle.dbPool.Exec(ctx, fmt.Sprintf("DROP TABLE %s.river_migration", bundle.schema))
 		require.NoError(t, err)
 
-		// Run version 005 to make sure it can tolerate the absence of
-		// `river_migration`. Note that we have to run the version's SQL
-		// directly because using the migrator will try to interact with
-		// `river_migration`, which is no longer present.
-		_, err = bundle.dbPool.Exec(ctx, migrationsBundle.WithTestVersionsMap[5].SQLUp)
-		require.NoError(t, err)
+		{
+			schemaReplacement := map[string]sqlctemplate.Replacement{
+				"schema": {Value: bundle.schema + "."},
+			}
 
-		// And the version 005 down migration to verify the same.
-		_, err = bundle.dbPool.Exec(ctx, migrationsBundle.WithTestVersionsMap[5].SQLDown)
-		require.NoError(t, err)
+			ctx := sqlctemplate.WithReplacements(ctx, schemaReplacement, nil)
+
+			// Run version 005 to make sure it can tolerate the absence of
+			// `river_migration`. Note that we have to run the version's SQL
+			// directly because using the migrator will try to interact with
+			// `river_migration`, which is no longer present.
+			sql, _ := migrator.replacer.Run(ctx, migrationsBundle.WithTestVersionsMap[5].SQLUp, nil)
+			_, err = bundle.dbPool.Exec(ctx, sql)
+			require.NoError(t, err)
+
+			// And the version 005 down migration to verify the same.
+			sql, _ = migrator.replacer.Run(ctx, migrationsBundle.WithTestVersionsMap[5].SQLDown, nil)
+			_, err = bundle.dbPool.Exec(ctx, sql)
+			require.NoError(t, err)
+		}
 	})
 
 	t.Run("MigrationsWithCommitRequired", func(t *testing.T) {
@@ -791,13 +855,13 @@ func TestMigrator(t *testing.T) {
 			defer tx.Rollback(ctx)
 
 			// Clean up the types we created.
-			_, err = tx.Exec(ctx, "DROP FUNCTION IF EXISTS foobar_in_bitmask")
+			_, err = tx.Exec(ctx, fmt.Sprintf("DROP FUNCTION IF EXISTS %s.foobar_in_bitmask", bundle.schema))
 			require.NoError(t, err)
 
-			_, err = tx.Exec(ctx, "DROP TYPE IF EXISTS foobar")
+			_, err = tx.Exec(ctx, fmt.Sprintf("DROP TYPE IF EXISTS %s.foobar", bundle.schema))
 			require.NoError(t, err)
 
-			_, err = tx.Exec(ctx, "DELETE FROM river_migration WHERE line = $1", migrationLineCommitRequired)
+			_, err = tx.Exec(ctx, fmt.Sprintf("DELETE FROM %s.river_migration WHERE line = $1", bundle.schema), migrationLineCommitRequired)
 			require.NoError(t, err)
 
 			require.NoError(t, tx.Commit(ctx))
@@ -811,6 +875,7 @@ func TestMigrator(t *testing.T) {
 		commitRequiredMigrator, err := New(bundle.driver, &Config{
 			Line:   migrationLineCommitRequired,
 			Logger: bundle.logger,
+			schema: bundle.schema,
 		})
 		require.NoError(t, err)
 
@@ -888,13 +953,13 @@ func buildTestMigrationsBundle(t *testing.T) *testMigrationsBundle {
 	testVersions := []Migration{
 		{
 			Version: migrationsMaxVersion + 1,
-			SQLUp:   "CREATE TABLE test_table(id bigserial PRIMARY KEY);",
-			SQLDown: "DROP TABLE test_table;",
+			SQLUp:   "CREATE TABLE /* TEMPLATE: schema */test_table(id bigserial PRIMARY KEY);",
+			SQLDown: "DROP TABLE /* TEMPLATE: schema */test_table;",
 		},
 		{
 			Version: migrationsMaxVersion + 2,
-			SQLUp:   "ALTER TABLE test_table ADD COLUMN name varchar(200); CREATE INDEX idx_test_table_name ON test_table(name);",
-			SQLDown: "DROP INDEX idx_test_table_name; ALTER TABLE test_table DROP COLUMN name;",
+			SQLUp:   "ALTER TABLE /* TEMPLATE: schema */test_table ADD COLUMN name varchar(200); CREATE INDEX idx_test_table_name ON /* TEMPLATE: schema */test_table(name);",
+			SQLDown: "DROP INDEX /* TEMPLATE: schema */idx_test_table_name; ALTER TABLE /* TEMPLATE: schema */test_table DROP COLUMN name;",
 		},
 	}
 

@@ -37,6 +37,10 @@ type ReindexerConfig struct {
 	// current time.
 	ScheduleFunc func(time.Time) time.Time
 
+	// Schema where River tables are located. Empty string omits schema, causing
+	// Postgres to default to `search_path`.
+	Schema string
+
 	// Timeout is the amount of time to wait for a single reindex query to return.
 	Timeout time.Duration
 }
@@ -156,7 +160,12 @@ func (s *Reindexer) reindexOne(ctx context.Context, indexName string) error {
 	ctx, cancel := context.WithTimeout(ctx, s.Config.Timeout)
 	defer cancel()
 
-	_, err := s.exec.Exec(ctx, "REINDEX INDEX CONCURRENTLY "+indexName)
+	var maybeSchema string
+	if s.Config.Schema != "" {
+		maybeSchema = "." + s.Config.Schema
+	}
+
+	_, err := s.exec.Exec(ctx, "REINDEX INDEX CONCURRENTLY "+maybeSchema+indexName)
 	if err != nil {
 		return err
 	}

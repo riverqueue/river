@@ -282,6 +282,13 @@ type Config struct {
 	// Defaults to DefaultRetryPolicy.
 	RetryPolicy ClientRetryPolicy
 
+	// schema is a non-standard schema where River tables are located. All table
+	// references in database queries will use this value as a prefix.
+	//
+	// Defaults to empty, which causes the client to look for tables using the
+	// setting of Postgres `search_path`.
+	schema string
+
 	// SkipUnknownJobCheck is a flag to control whether the client should skip
 	// checking to see if a registered worker exists in the client's worker bundle
 	// for a job arg prior to insertion.
@@ -376,6 +383,7 @@ func (c *Config) WithDefaults() *Config {
 		ReindexerSchedule:           c.ReindexerSchedule,
 		RescueStuckJobsAfter:        valutil.ValOrDefault(c.RescueStuckJobsAfter, rescueAfter),
 		RetryPolicy:                 retryPolicy,
+		schema:                      c.schema,
 		SkipUnknownJobCheck:         c.SkipUnknownJobCheck,
 		Test:                        c.Test,
 		TestOnly:                    c.TestOnly,
@@ -681,7 +689,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			// uses listen/notify. Instead, each service polls for changes it's
 			// interested in. e.g. Elector polls to see if leader has expired.
 			if !config.PollOnly {
-				client.notifier = notifier.New(archetype, driver.GetListener())
+				client.notifier = notifier.New(archetype, driver.GetListener(config.schema))
 				client.services = append(client.services, client.notifier)
 			}
 		} else {
@@ -718,6 +726,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 				CancelledJobRetentionPeriod: config.CancelledJobRetentionPeriod,
 				CompletedJobRetentionPeriod: config.CompletedJobRetentionPeriod,
 				DiscardedJobRetentionPeriod: config.DiscardedJobRetentionPeriod,
+				Schema:                      config.schema,
 				Timeout:                     config.JobCleanerTimeout,
 			}, driver.GetExecutor())
 			maintenanceServices = append(maintenanceServices, jobCleaner)
@@ -728,6 +737,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			jobRescuer := maintenance.NewRescuer(archetype, &maintenance.JobRescuerConfig{
 				ClientRetryPolicy: config.RetryPolicy,
 				RescueAfter:       config.RescueStuckJobsAfter,
+				Schema:            config.schema,
 				WorkUnitFactoryFunc: func(kind string) workunit.WorkUnitFactory {
 					if workerInfo, ok := config.Workers.workersMap[kind]; ok {
 						return workerInfo.workUnitFactory
@@ -743,6 +753,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			jobScheduler := maintenance.NewJobScheduler(archetype, &maintenance.JobSchedulerConfig{
 				Interval:     config.schedulerInterval,
 				NotifyInsert: client.maybeNotifyInsertForQueues,
+				Schema:       config.schema,
 			}, driver.GetExecutor())
 			maintenanceServices = append(maintenanceServices, jobScheduler)
 			client.testSignals.jobScheduler = &jobScheduler.TestSignals
@@ -763,6 +774,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		{
 			queueCleaner := maintenance.NewQueueCleaner(archetype, &maintenance.QueueCleanerConfig{
 				RetentionPeriod: maintenance.QueueRetentionPeriodDefault,
+				Schema:          config.schema,
 			}, driver.GetExecutor())
 			maintenanceServices = append(maintenanceServices, queueCleaner)
 			client.testSignals.queueCleaner = &queueCleaner.TestSignals
@@ -774,7 +786,10 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 				scheduleFunc = config.ReindexerSchedule.Next
 			}
 
-			reindexer := maintenance.NewReindexer(archetype, &maintenance.ReindexerConfig{ScheduleFunc: scheduleFunc}, driver.GetExecutor())
+			reindexer := maintenance.NewReindexer(archetype, &maintenance.ReindexerConfig{
+				ScheduleFunc: scheduleFunc,
+				Schema:       config.schema,
+			}, driver.GetExecutor())
 			maintenanceServices = append(maintenanceServices, reindexer)
 			client.testSignals.reindexer = &reindexer.TestSignals
 		}
@@ -1249,6 +1264,7 @@ func (c *Client[TTx]) jobCancel(ctx context.Context, exec riverdriver.Executor, 
 		ID:                jobID,
 		CancelAttemptedAt: c.baseService.Time.NowUTC(),
 		ControlTopic:      string(notifier.NotificationTopicControl),
+		Schema:            c.config.schema,
 	})
 }
 
@@ -1256,7 +1272,10 @@ func (c *Client[TTx]) jobCancel(ctx context.Context, exec riverdriver.Executor, 
 // deleted row if it was deleted. Jobs in the running state are not deleted,
 // instead returning rivertype.ErrJobRunning.
 func (c *Client[TTx]) JobDelete(ctx context.Context, id int64) (*rivertype.JobRow, error) {
-	return c.driver.GetExecutor().JobDelete(ctx, id)
+	return c.driver.GetExecutor().JobDelete(ctx, &riverdriver.JobDeleteParams{
+		ID:     id,
+		Schema: c.config.schema,
+	})
 }
 
 // JobDelete deletes the job with the given ID from the database, returning the
@@ -1266,20 +1285,29 @@ func (c *Client[TTx]) JobDelete(ctx context.Context, id int64) (*rivertype.JobRo
 // until the transaction commits, and if the transaction rolls back, so too is
 // the deleted job.
 func (c *Client[TTx]) JobDeleteTx(ctx context.Context, tx TTx, id int64) (*rivertype.JobRow, error) {
-	return c.driver.UnwrapExecutor(tx).JobDelete(ctx, id)
+	return c.driver.UnwrapExecutor(tx).JobDelete(ctx, &riverdriver.JobDeleteParams{
+		ID:     id,
+		Schema: c.config.schema,
+	})
 }
 
 // JobGet fetches a single job by its ID. Returns the up-to-date JobRow for the
 // specified jobID if it exists. Returns ErrNotFound if the job doesn't exist.
 func (c *Client[TTx]) JobGet(ctx context.Context, id int64) (*rivertype.JobRow, error) {
-	return c.driver.GetExecutor().JobGetByID(ctx, id)
+	return c.driver.GetExecutor().JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+		ID:     id,
+		Schema: c.config.schema,
+	})
 }
 
 // JobGetTx fetches a single job by its ID, within a transaction. Returns the
 // up-to-date JobRow for the specified jobID if it exists. Returns ErrNotFound
 // if the job doesn't exist.
 func (c *Client[TTx]) JobGetTx(ctx context.Context, tx TTx, id int64) (*rivertype.JobRow, error) {
-	return c.driver.UnwrapExecutor(tx).JobGetByID(ctx, id)
+	return c.driver.UnwrapExecutor(tx).JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+		ID:     id,
+		Schema: c.config.schema,
+	})
 }
 
 // JobRetry updates the job with the given ID to make it immediately available
@@ -1291,7 +1319,10 @@ func (c *Client[TTx]) JobGetTx(ctx context.Context, tx TTx, id int64) (*rivertyp
 // MaxAttempts is also incremented by one if the job has already exhausted its
 // max attempts.
 func (c *Client[TTx]) JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, error) {
-	return c.driver.GetExecutor().JobRetry(ctx, id)
+	return c.driver.GetExecutor().JobRetry(ctx, &riverdriver.JobRetryParams{
+		ID:     id,
+		Schema: c.config.schema,
+	})
 }
 
 // JobRetryTx updates the job with the given ID to make it immediately available
@@ -1308,7 +1339,10 @@ func (c *Client[TTx]) JobRetry(ctx context.Context, id int64) (*rivertype.JobRow
 // MaxAttempts is also incremented by one if the job has already exhausted its
 // max attempts.
 func (c *Client[TTx]) JobRetryTx(ctx context.Context, tx TTx, id int64) (*rivertype.JobRow, error) {
-	return c.driver.UnwrapExecutor(tx).JobRetry(ctx, id)
+	return c.driver.UnwrapExecutor(tx).JobRetry(ctx, &riverdriver.JobRetryParams{
+		ID:     id,
+		Schema: c.config.schema,
+	})
 }
 
 // ID returns the unique ID of this client as set in its config or
@@ -1574,7 +1608,10 @@ func (c *Client[TTx]) validateParamsAndInsertMany(ctx context.Context, tx riverd
 // by the PeriodicJobEnqueuer.
 func (c *Client[TTx]) insertMany(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) ([]*rivertype.JobInsertResult, error) {
 	return c.insertManyShared(ctx, tx, insertParams, func(ctx context.Context, insertParams []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error) {
-		results, err := c.pilot.JobInsertMany(ctx, tx, insertParams)
+		results, err := c.pilot.JobInsertMany(ctx, tx, &riverdriver.JobInsertFastManyParams{
+			Jobs:   insertParams,
+			Schema: c.config.schema,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -1744,7 +1781,10 @@ func (c *Client[TTx]) insertManyFast(ctx context.Context, tx riverdriver.Executo
 	}
 
 	results, err := c.insertManyShared(ctx, tx, insertParams, func(ctx context.Context, insertParams []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error) {
-		count, err := tx.JobInsertFastManyNoReturning(ctx, insertParams)
+		count, err := tx.JobInsertFastManyNoReturning(ctx, &riverdriver.JobInsertFastManyParams{
+			Jobs:   insertParams,
+			Schema: c.config.schema,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -1786,8 +1826,9 @@ func (c *Client[TTx]) maybeNotifyInsertForQueues(ctx context.Context, tx riverdr
 	}
 
 	err := tx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
-		Topic:   string(notifier.NotificationTopicInsert),
 		Payload: payloads,
+		Schema:  c.config.schema,
+		Topic:   string(notifier.NotificationTopicInsert),
 	})
 	if err != nil {
 		c.baseService.Logger.ErrorContext(
@@ -1817,6 +1858,7 @@ func (c *Client[TTx]) notifyQueuePauseOrResume(ctx context.Context, tx riverdriv
 
 	err = tx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
 		Payload: []string{string(payload)},
+		Schema:  c.config.schema,
 		Topic:   string(notifier.NotificationTopicControl),
 	})
 	if err != nil {
@@ -1863,6 +1905,7 @@ func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) *pr
 		QueueEventCallback:           c.subscriptionManager.distributeQueueEvent,
 		RetryPolicy:                  c.config.RetryPolicy,
 		SchedulerInterval:            c.config.schedulerInterval,
+		Schema:                       c.config.schema,
 		StaleProducerRetentionPeriod: 5 * time.Minute,
 		Workers:                      c.config.Workers,
 	})
@@ -1979,7 +2022,10 @@ func (c *Client[TTx]) Queues() *QueueBundle { return c.queues }
 // The provided context is used for the underlying Postgres query and can be
 // used to cancel the operation or apply a timeout.
 func (c *Client[TTx]) QueueGet(ctx context.Context, name string) (*rivertype.Queue, error) {
-	return c.driver.GetExecutor().QueueGet(ctx, name)
+	return c.driver.GetExecutor().QueueGet(ctx, &riverdriver.QueueGetParams{
+		Name:   name,
+		Schema: c.config.schema,
+	})
 }
 
 // QueueGetTx returns the queue with the given name. If the queue has not recently
@@ -1988,7 +2034,10 @@ func (c *Client[TTx]) QueueGet(ctx context.Context, name string) (*rivertype.Que
 // The provided context is used for the underlying Postgres query and can be
 // used to cancel the operation or apply a timeout.
 func (c *Client[TTx]) QueueGetTx(ctx context.Context, tx TTx, name string) (*rivertype.Queue, error) {
-	return c.driver.UnwrapExecutor(tx).QueueGet(ctx, name)
+	return c.driver.UnwrapExecutor(tx).QueueGet(ctx, &riverdriver.QueueGetParams{
+		Name:   name,
+		Schema: c.config.schema,
+	})
 }
 
 // QueueListResult is the result of a job list operation. It contains a list of
@@ -2014,7 +2063,10 @@ func (c *Client[TTx]) QueueList(ctx context.Context, params *QueueListParams) (*
 		params = NewQueueListParams()
 	}
 
-	queues, err := c.driver.GetExecutor().QueueList(ctx, int(params.paginationCount))
+	queues, err := c.driver.GetExecutor().QueueList(ctx, &riverdriver.QueueListParams{
+		Limit:  int(params.paginationCount),
+		Schema: c.config.schema,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -2038,7 +2090,10 @@ func (c *Client[TTx]) QueueListTx(ctx context.Context, tx TTx, params *QueueList
 		params = NewQueueListParams()
 	}
 
-	queues, err := c.driver.UnwrapExecutor(tx).QueueList(ctx, int(params.paginationCount))
+	queues, err := c.driver.UnwrapExecutor(tx).QueueList(ctx, &riverdriver.QueueListParams{
+		Limit:  int(params.paginationCount),
+		Schema: c.config.schema,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -2064,7 +2119,10 @@ func (c *Client[TTx]) QueuePause(ctx context.Context, name string, opts *QueuePa
 	}
 	defer tx.Rollback(ctx)
 
-	if err := tx.QueuePause(ctx, name); err != nil {
+	if err := tx.QueuePause(ctx, &riverdriver.QueuePauseParams{
+		Name:   name,
+		Schema: c.config.schema,
+	}); err != nil {
 		return err
 	}
 
@@ -2089,7 +2147,10 @@ func (c *Client[TTx]) QueuePause(ctx context.Context, name string, opts *QueuePa
 func (c *Client[TTx]) QueuePauseTx(ctx context.Context, tx TTx, name string, opts *QueuePauseOpts) error {
 	executorTx := c.driver.UnwrapExecutor(tx)
 
-	if err := executorTx.QueuePause(ctx, name); err != nil {
+	if err := executorTx.QueuePause(ctx, &riverdriver.QueuePauseParams{
+		Name:   name,
+		Schema: c.config.schema,
+	}); err != nil {
 		return err
 	}
 
@@ -2119,7 +2180,10 @@ func (c *Client[TTx]) QueueResume(ctx context.Context, name string, opts *QueueP
 	}
 	defer tx.Rollback(ctx)
 
-	if err := tx.QueueResume(ctx, name); err != nil {
+	if err := tx.QueueResume(ctx, &riverdriver.QueueResumeParams{
+		Name:   name,
+		Schema: c.config.schema,
+	}); err != nil {
 		return err
 	}
 
@@ -2145,7 +2209,10 @@ func (c *Client[TTx]) QueueResume(ctx context.Context, name string, opts *QueueP
 func (c *Client[TTx]) QueueResumeTx(ctx context.Context, tx TTx, name string, opts *QueuePauseOpts) error {
 	executorTx := c.driver.UnwrapExecutor(tx)
 
-	if err := executorTx.QueueResume(ctx, name); err != nil {
+	if err := executorTx.QueueResume(ctx, &riverdriver.QueueResumeParams{
+		Name:   name,
+		Schema: c.config.schema,
+	}); err != nil {
 		return err
 	}
 
@@ -2215,8 +2282,9 @@ func (c *Client[TTx]) queueUpdate(ctx context.Context, executorTx riverdriver.Ex
 		}
 
 		if err := executorTx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
-			Topic:   string(notifier.NotificationTopicControl),
 			Payload: []string{string(payload)},
+			Schema:  c.config.schema,
+			Topic:   string(notifier.NotificationTopicControl),
 		}); err != nil {
 			return nil, err
 		}

@@ -1,4 +1,4 @@
-CREATE OR REPLACE FUNCTION foobar_in_bitmask(bitmask BIT(8), val foobar)
+CREATE OR REPLACE FUNCTION /* TEMPLATE: schema */foobar_in_bitmask(bitmask BIT(8), val /* TEMPLATE: schema */foobar)
 RETURNS boolean
 LANGUAGE SQL
 IMMUTABLE

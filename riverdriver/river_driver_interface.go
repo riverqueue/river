@@ -53,7 +53,7 @@ type Driver[TTx any] interface {
 	// GetListener gets a listener for purposes of receiving notifications.
 	//
 	// API is not stable. DO NOT USE.
-	GetListener() Listener
+	GetListener(schema string) Listener
 
 	// GetMigrationFS gets a filesystem containing migrations for the driver.
 	//
@@ -100,76 +100,75 @@ type Executor interface {
 
 	// ColumnExists checks whether a column for a particular table exists for
 	// the schema in the current search schema.
-	ColumnExists(ctx context.Context, tableName, columnName string) (bool, error)
+	ColumnExists(ctx context.Context, params *ColumnExistsParams) (bool, error)
 
 	// Exec executes raw SQL. Used for migrations.
 	Exec(ctx context.Context, sql string) (struct{}, error)
 
 	JobCancel(ctx context.Context, params *JobCancelParams) (*rivertype.JobRow, error)
-	JobCountByState(ctx context.Context, state rivertype.JobState) (int, error)
-	JobDelete(ctx context.Context, id int64) (*rivertype.JobRow, error)
+	JobCountByState(ctx context.Context, params *JobCountByStateParams) (int, error)
+	JobDelete(ctx context.Context, params *JobDeleteParams) (*rivertype.JobRow, error)
 	JobDeleteBefore(ctx context.Context, params *JobDeleteBeforeParams) (int, error)
 	JobGetAvailable(ctx context.Context, params *JobGetAvailableParams) ([]*rivertype.JobRow, error)
-	JobGetByID(ctx context.Context, id int64) (*rivertype.JobRow, error)
-	JobGetByIDMany(ctx context.Context, id []int64) ([]*rivertype.JobRow, error)
-	JobGetByKindAndUniqueProperties(ctx context.Context, params *JobGetByKindAndUniquePropertiesParams) (*rivertype.JobRow, error)
-	JobGetByKindMany(ctx context.Context, kind []string) ([]*rivertype.JobRow, error)
+	JobGetByID(ctx context.Context, params *JobGetByIDParams) (*rivertype.JobRow, error)
+	JobGetByIDMany(ctx context.Context, params *JobGetByIDManyParams) ([]*rivertype.JobRow, error)
+	JobGetByKindMany(ctx context.Context, params *JobGetByKindManyParams) ([]*rivertype.JobRow, error)
 	JobGetStuck(ctx context.Context, params *JobGetStuckParams) ([]*rivertype.JobRow, error)
-	JobInsertFastMany(ctx context.Context, params []*JobInsertFastParams) ([]*JobInsertFastResult, error)
-	JobInsertFastManyNoReturning(ctx context.Context, params []*JobInsertFastParams) (int, error)
+	JobInsertFastMany(ctx context.Context, params *JobInsertFastManyParams) ([]*JobInsertFastResult, error)
+	JobInsertFastManyNoReturning(ctx context.Context, params *JobInsertFastManyParams) (int, error)
 	JobInsertFull(ctx context.Context, params *JobInsertFullParams) (*rivertype.JobRow, error)
 	JobList(ctx context.Context, params *JobListParams) ([]*rivertype.JobRow, error)
 	JobRescueMany(ctx context.Context, params *JobRescueManyParams) (*struct{}, error)
-	JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, error)
+	JobRetry(ctx context.Context, params *JobRetryParams) (*rivertype.JobRow, error)
 	JobSchedule(ctx context.Context, params *JobScheduleParams) ([]*JobScheduleResult, error)
 	JobSetStateIfRunningMany(ctx context.Context, params *JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
 	JobUpdate(ctx context.Context, params *JobUpdateParams) (*rivertype.JobRow, error)
 	LeaderAttemptElect(ctx context.Context, params *LeaderElectParams) (bool, error)
 	LeaderAttemptReelect(ctx context.Context, params *LeaderElectParams) (bool, error)
-	LeaderDeleteExpired(ctx context.Context) (int, error)
-	LeaderGetElectedLeader(ctx context.Context) (*Leader, error)
+	LeaderDeleteExpired(ctx context.Context, params *LeaderDeleteExpiredParams) (int, error)
+	LeaderGetElectedLeader(ctx context.Context, params *LeaderGetElectedLeaderParams) (*Leader, error)
 	LeaderInsert(ctx context.Context, params *LeaderInsertParams) (*Leader, error)
 	LeaderResign(ctx context.Context, params *LeaderResignParams) (bool, error)
 
 	// MigrationDeleteAssumingMainMany deletes many migrations assuming
 	// everything is on the main line. This is suitable for use in databases on
 	// a version before the `line` column exists.
-	MigrationDeleteAssumingMainMany(ctx context.Context, versions []int) ([]*Migration, error)
+	MigrationDeleteAssumingMainMany(ctx context.Context, params *MigrationDeleteAssumingMainManyParams) ([]*Migration, error)
 
 	// MigrationDeleteByLineAndVersionMany deletes many migration versions on a
 	// particular line.
-	MigrationDeleteByLineAndVersionMany(ctx context.Context, line string, versions []int) ([]*Migration, error)
+	MigrationDeleteByLineAndVersionMany(ctx context.Context, params *MigrationDeleteByLineAndVersionManyParams) ([]*Migration, error)
 
 	// MigrationGetAllAssumingMain gets all migrations assuming everything is on
 	// the main line. This is suitable for use in databases on a version before
 	// the `line` column exists.
-	MigrationGetAllAssumingMain(ctx context.Context) ([]*Migration, error)
+	MigrationGetAllAssumingMain(ctx context.Context, params *MigrationGetAllAssumingMainParams) ([]*Migration, error)
 
 	// MigrationGetByLine gets all currently applied migrations.
-	MigrationGetByLine(ctx context.Context, line string) ([]*Migration, error)
+	MigrationGetByLine(ctx context.Context, params *MigrationGetByLineParams) ([]*Migration, error)
 
 	// MigrationInsertMany inserts many migration versions.
-	MigrationInsertMany(ctx context.Context, line string, versions []int) ([]*Migration, error)
+	MigrationInsertMany(ctx context.Context, params *MigrationInsertManyParams) ([]*Migration, error)
 
 	// MigrationInsertManyAssumingMain inserts many migrations, assuming they're
 	// on the main line. This operation is necessary for compatibility before
 	// the `line` column was added to the migrations table.
-	MigrationInsertManyAssumingMain(ctx context.Context, versions []int) ([]*Migration, error)
+	MigrationInsertManyAssumingMain(ctx context.Context, params *MigrationInsertManyAssumingMainParams) ([]*Migration, error)
 
 	NotifyMany(ctx context.Context, params *NotifyManyParams) error
 	PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}, error)
 
 	QueueCreateOrSetUpdatedAt(ctx context.Context, params *QueueCreateOrSetUpdatedAtParams) (*rivertype.Queue, error)
 	QueueDeleteExpired(ctx context.Context, params *QueueDeleteExpiredParams) ([]string, error)
-	QueueGet(ctx context.Context, name string) (*rivertype.Queue, error)
-	QueueList(ctx context.Context, limit int) ([]*rivertype.Queue, error)
-	QueuePause(ctx context.Context, name string) error
-	QueueResume(ctx context.Context, name string) error
+	QueueGet(ctx context.Context, params *QueueGetParams) (*rivertype.Queue, error)
+	QueueList(ctx context.Context, params *QueueListParams) ([]*rivertype.Queue, error)
+	QueuePause(ctx context.Context, params *QueuePauseParams) error
+	QueueResume(ctx context.Context, params *QueueResumeParams) error
 	QueueUpdate(ctx context.Context, params *QueueUpdateParams) (*rivertype.Queue, error)
 
 	// TableExists checks whether a table exists for the schema in the current
 	// search schema.
-	TableExists(ctx context.Context, tableName string) (bool, error)
+	TableExists(ctx context.Context, params *TableExistsParams) (bool, error)
 }
 
 // ExecutorTx is an executor which is a transaction. In addition to standard
@@ -199,6 +198,7 @@ type Listener interface {
 	Connect(ctx context.Context) error
 	Listen(ctx context.Context, topic string) error
 	Ping(ctx context.Context) error
+	Schema() string
 	Unlisten(ctx context.Context, topic string) error
 	WaitForNotification(ctx context.Context) (*Notification, error)
 }
@@ -208,10 +208,27 @@ type Notification struct {
 	Topic   string
 }
 
+type ColumnExistsParams struct {
+	Column string
+	Schema string
+	Table  string
+}
+
 type JobCancelParams struct {
+	ID                int64
 	CancelAttemptedAt time.Time
 	ControlTopic      string
-	ID                int64
+	Schema            string
+}
+
+type JobCountByStateParams struct {
+	Schema string
+	State  rivertype.JobState
+}
+
+type JobDeleteParams struct {
+	ID     int64
+	Schema string
 }
 
 type JobDeleteBeforeParams struct {
@@ -219,31 +236,36 @@ type JobDeleteBeforeParams struct {
 	CompletedFinalizedAtHorizon time.Time
 	DiscardedFinalizedAtHorizon time.Time
 	Max                         int
+	Schema                      string
 }
 
 type JobGetAvailableParams struct {
 	ClientID   string
 	Max        int
 	Now        *time.Time
-	Queue      string
 	ProducerID int64
+	Queue      string
+	Schema     string
 }
 
-type JobGetByKindAndUniquePropertiesParams struct {
-	Kind           string
-	ByArgs         bool
-	Args           []byte
-	ByCreatedAt    bool
-	CreatedAtBegin time.Time
-	CreatedAtEnd   time.Time
-	ByQueue        bool
-	Queue          string
-	ByState        bool
-	State          []string
+type JobGetByIDParams struct {
+	ID     int64
+	Schema string
+}
+
+type JobGetByIDManyParams struct {
+	ID     []int64
+	Schema string
+}
+
+type JobGetByKindManyParams struct {
+	Kind   []string
+	Schema string
 }
 
 type JobGetStuckParams struct {
 	Max          int
+	Schema       string
 	StuckHorizon time.Time
 }
 
@@ -266,6 +288,11 @@ type JobInsertFastParams struct {
 	UniqueStates byte
 }
 
+type JobInsertFastManyParams struct {
+	Jobs   []*JobInsertFastParams
+	Schema string
+}
+
 type JobInsertFastResult struct {
 	Job                      *rivertype.JobRow
 	UniqueSkippedAsDuplicate bool
@@ -285,6 +312,7 @@ type JobInsertFullParams struct {
 	Priority     int
 	Queue        string
 	ScheduledAt  *time.Time
+	Schema       string
 	State        rivertype.JobState
 	Tags         []string
 	UniqueKey    []byte
@@ -295,6 +323,7 @@ type JobListParams struct {
 	Max           int32
 	NamedArgs     map[string]any
 	OrderByClause string
+	Schema        string
 	WhereClause   string
 }
 
@@ -303,12 +332,19 @@ type JobRescueManyParams struct {
 	Error       [][]byte
 	FinalizedAt []time.Time
 	ScheduledAt []time.Time
+	Schema      string
 	State       []string
 }
 
+type JobRetryParams struct {
+	ID     int64
+	Schema string
+}
+
 type JobScheduleParams struct {
-	Max int
-	Now time.Time
+	Max    int
+	Now    time.Time
+	Schema string
 }
 
 type JobScheduleResult struct {
@@ -417,6 +453,7 @@ type JobSetStateIfRunningManyParams struct {
 	MetadataDoMerge []bool
 	MetadataUpdates [][]byte
 	ScheduledAt     []*time.Time
+	Schema          string
 	State           []rivertype.JobState
 }
 
@@ -432,6 +469,7 @@ type JobUpdateParams struct {
 	Errors              [][]byte
 	FinalizedAtDoUpdate bool
 	FinalizedAt         *time.Time
+	Schema              string
 	StateDoUpdate       bool
 	State               rivertype.JobState
 	// Deprecated and will be removed when advisory lock unique path is removed.
@@ -449,21 +487,32 @@ type Leader struct {
 	LeaderID  string
 }
 
+type LeaderDeleteExpiredParams struct {
+	Schema string
+}
+
+type LeaderGetElectedLeaderParams struct {
+	Schema string
+}
+
 type LeaderInsertParams struct {
 	ElectedAt *time.Time
 	ExpiresAt *time.Time
 	LeaderID  string
+	Schema    string
 	TTL       time.Duration
 }
 
 type LeaderElectParams struct {
 	LeaderID string
+	Schema   string
 	TTL      time.Duration
 }
 
 type LeaderResignParams struct {
 	LeaderID        string
 	LeadershipTopic string
+	Schema          string
 }
 
 // Migration represents a River migration.
@@ -486,16 +535,49 @@ type Migration struct {
 	Version int
 }
 
+type MigrationDeleteAssumingMainManyParams struct {
+	Schema   string
+	Versions []int
+}
+
+type MigrationDeleteByLineAndVersionManyParams struct {
+	Line     string
+	Schema   string
+	Versions []int
+}
+
+type MigrationGetAllAssumingMainParams struct {
+	Schema string
+}
+
+type MigrationGetByLineParams struct {
+	Line   string
+	Schema string
+}
+
+type MigrationInsertManyParams struct {
+	Line     string
+	Schema   string
+	Versions []int
+}
+
+type MigrationInsertManyAssumingMainParams struct {
+	Schema   string
+	Versions []int
+}
+
 // NotifyManyParams are parameters to issue many pubsub notifications all at
 // once for a single topic.
 type NotifyManyParams struct {
 	Payload []string
 	Topic   string
+	Schema  string
 }
 
 type ProducerKeepAliveParams struct {
 	ID                    int64
 	QueueName             string
+	Schema                string
 	StaleUpdatedAtHorizon time.Time
 }
 
@@ -503,16 +585,44 @@ type QueueCreateOrSetUpdatedAtParams struct {
 	Metadata  []byte
 	Name      string
 	PausedAt  *time.Time
+	Schema    string
 	UpdatedAt *time.Time
 }
 
 type QueueDeleteExpiredParams struct {
 	Max              int
+	Schema           string
 	UpdatedAtHorizon time.Time
+}
+
+type QueueGetParams struct {
+	Name   string
+	Schema string
+}
+
+type QueueListParams struct {
+	Limit  int
+	Schema string
+}
+
+type QueuePauseParams struct {
+	Name   string
+	Schema string
+}
+
+type QueueResumeParams struct {
+	Name   string
+	Schema string
 }
 
 type QueueUpdateParams struct {
 	Metadata         []byte
 	MetadataDoUpdate bool
 	Name             string
+	Schema           string
+}
+
+type TableExistsParams struct {
+	Schema string
+	Table  string
 }

@@ -1,2 +1,3 @@
-ALTER TABLE river_job ALTER COLUMN tags DROP NOT NULL,
-                      ALTER COLUMN tags DROP DEFAULT;
+ALTER TABLE /* TEMPLATE: schema */river_job
+    ALTER COLUMN tags DROP NOT NULL,
+    ALTER COLUMN tags DROP DEFAULT;

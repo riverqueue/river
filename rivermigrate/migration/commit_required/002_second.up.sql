@@ -1,1 +1,1 @@
-ALTER TYPE foobar ADD VALUE 'baz' AFTER 'bar';
+ALTER TYPE /* TEMPLATE: schema */foobar ADD VALUE 'baz' AFTER 'bar';

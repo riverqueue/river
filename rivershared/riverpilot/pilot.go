@@ -26,7 +26,7 @@ type Pilot interface {
 	JobInsertMany(
 		ctx context.Context,
 		tx riverdriver.ExecutorTx,
-		params []*riverdriver.JobInsertFastParams,
+		params *riverdriver.JobInsertFastManyParams,
 	) ([]*riverdriver.JobInsertFastResult, error)
 
 	JobSetStateIfRunningMany(ctx context.Context, tx riverdriver.ExecutorTx, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
@@ -54,4 +54,5 @@ type ProducerInitParams struct {
 	ProducerID    int64
 	Queue         string
 	QueueMetadata []byte
+	Schema        string
 }

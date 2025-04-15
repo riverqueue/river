@@ -23,7 +23,7 @@ func (p *StandardPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Ex
 func (p *StandardPilot) JobInsertMany(
 	ctx context.Context,
 	tx riverdriver.ExecutorTx,
-	params []*riverdriver.JobInsertFastParams,
+	params *riverdriver.JobInsertFastManyParams,
 ) ([]*riverdriver.JobInsertFastResult, error) {
 	return tx.JobInsertFastMany(ctx, params)
 }

@@ -8,13 +8,13 @@ CREATE UNLOGGED TABLE river_leader(
 );
 
 -- name: LeaderAttemptElect :execrows
-INSERT INTO river_leader(leader_id, elected_at, expires_at)
+INSERT INTO /* TEMPLATE: schema */river_leader (leader_id, elected_at, expires_at)
     VALUES (@leader_id, now(), now() + @ttl::interval)
 ON CONFLICT (name)
     DO NOTHING;
 
 -- name: LeaderAttemptReelect :execrows
-INSERT INTO river_leader(leader_id, elected_at, expires_at)
+INSERT INTO /* TEMPLATE: schema */river_leader (leader_id, elected_at, expires_at)
     VALUES (@leader_id, now(), now() + @ttl::interval)
 ON CONFLICT (name)
     DO UPDATE SET
@@ -23,15 +23,15 @@ ON CONFLICT (name)
         river_leader.leader_id = @leader_id;
 
 -- name: LeaderDeleteExpired :execrows
-DELETE FROM river_leader
+DELETE FROM /* TEMPLATE: schema */river_leader
 WHERE expires_at < now();
 
 -- name: LeaderGetElectedLeader :one
 SELECT *
-FROM river_leader;
+FROM /* TEMPLATE: schema */river_leader;
 
 -- name: LeaderInsert :one
-INSERT INTO river_leader(
+INSERT INTO /* TEMPLATE: schema */river_leader(
     elected_at,
     expires_at,
     leader_id
@@ -44,15 +44,15 @@ INSERT INTO river_leader(
 -- name: LeaderResign :execrows
 WITH currently_held_leaders AS (
   SELECT *
-  FROM river_leader
+  FROM /* TEMPLATE: schema */river_leader
   WHERE leader_id = @leader_id::text
   FOR UPDATE
 ),
 notified_resignations AS (
     SELECT pg_notify(
-        concat(current_schema(), '.', @leadership_topic::text),
+        concat(coalesce(sqlc.narg('schema')::text, current_schema()), '.', @leadership_topic::text),
         json_build_object('leader_id', leader_id, 'action', 'resigned')::text
     )
     FROM currently_held_leaders
 )
-DELETE FROM river_leader USING notified_resignations;
+DELETE FROM /* TEMPLATE: schema */river_leader USING notified_resignations;

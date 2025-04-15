@@ -41,7 +41,7 @@ CREATE TABLE river_job(
 WITH locked_job AS (
     SELECT
         id, queue, state, finalized_at
-    FROM river_job
+    FROM /* TEMPLATE: schema */river_job
     WHERE river_job.id = @id
     FOR UPDATE
 ),
@@ -49,7 +49,7 @@ notification AS (
     SELECT
         id,
         pg_notify(
-            concat(current_schema(), '.', @control_topic::text),
+            concat(coalesce(sqlc.narg('schema')::text, current_schema()), '.', @control_topic::text),
             json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text
         )
     FROM
@@ -59,7 +59,7 @@ notification AS (
         AND finalized_at IS NULL
 ),
 updated_job AS (
-    UPDATE river_job
+    UPDATE /* TEMPLATE: schema */river_job
     SET
         -- If the job is actively running, we want to let its current client and
         -- producer handle the cancellation. Otherwise, immediately cancel it.
@@ -73,7 +73,7 @@ updated_job AS (
     RETURNING river_job.*
 )
 SELECT *
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE id = @id::bigint
     AND id NOT IN (SELECT id FROM updated_job)
 UNION
@@ -82,19 +82,19 @@ FROM updated_job;
 
 -- name: JobCountByState :one
 SELECT count(*)
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE state = @state;
 
 -- name: JobDelete :one
 WITH job_to_delete AS (
     SELECT id
-    FROM river_job
+    FROM /* TEMPLATE: schema */river_job
     WHERE river_job.id = @id
     FOR UPDATE
 ),
 deleted_job AS (
     DELETE
-    FROM river_job
+    FROM /* TEMPLATE: schema */river_job
     USING job_to_delete
     WHERE river_job.id = job_to_delete.id
         -- Do not touch running jobs:
@@ -102,7 +102,7 @@ deleted_job AS (
     RETURNING river_job.*
 )
 SELECT *
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE id = @id::bigint
     AND id NOT IN (SELECT id FROM deleted_job)
 UNION
@@ -111,10 +111,10 @@ FROM deleted_job;
 
 -- name: JobDeleteBefore :one
 WITH deleted_jobs AS (
-    DELETE FROM river_job
+    DELETE FROM /* TEMPLATE: schema */river_job
     WHERE id IN (
         SELECT id
-        FROM river_job
+        FROM /* TEMPLATE: schema */river_job
         WHERE
             (state = 'cancelled' AND finalized_at < @cancelled_finalized_at_horizon::timestamptz) OR
             (state = 'completed' AND finalized_at < @completed_finalized_at_horizon::timestamptz) OR
@@ -132,7 +132,7 @@ WITH locked_jobs AS (
     SELECT
         *
     FROM
-        river_job
+        /* TEMPLATE: schema */river_job
     WHERE
         state = 'available'
         AND queue = @queue::text
@@ -146,7 +146,7 @@ WITH locked_jobs AS (
     SKIP LOCKED
 )
 UPDATE
-    river_job
+    /* TEMPLATE: schema */river_job
 SET
     state = 'running',
     attempt = river_job.attempt + 1,
@@ -161,7 +161,7 @@ RETURNING
 
 -- name: JobGetByKindAndUniqueProperties :one
 SELECT *
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE kind = @kind
     AND CASE WHEN @by_args::boolean THEN args = @args ELSE true END
     AND CASE WHEN @by_created_at::boolean THEN tstzrange(@created_at_begin::timestamptz, @created_at_end::timestamptz, '[)') @> created_at ELSE true END
@@ -170,32 +170,32 @@ WHERE kind = @kind
 
 -- name: JobGetByKindMany :many
 SELECT *
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE kind = any(@kind::text[])
 ORDER BY id;
 
 -- name: JobGetByID :one
 SELECT *
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE id = @id
 LIMIT 1;
 
 -- name: JobGetByIDMany :many
 SELECT *
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE id = any(@id::bigint[])
 ORDER BY id;
 
 -- name: JobGetStuck :many
 SELECT *
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE state = 'running'
     AND attempted_at < @stuck_horizon::timestamptz
 ORDER BY id
 LIMIT @max;
 
 -- name: JobInsertFastMany :many
-INSERT INTO river_job(
+INSERT INTO /* TEMPLATE: schema */river_job(
     args,
     created_at,
     kind,
@@ -237,7 +237,7 @@ ON CONFLICT (unique_key)
 RETURNING sqlc.embed(river_job), (xmax != 0) AS unique_skipped_as_duplicate;
 
 -- name: JobInsertFastManyNoReturning :execrows
-INSERT INTO river_job(
+INSERT INTO /* TEMPLATE: schema */river_job(
     args,
     created_at,
     kind,
@@ -277,7 +277,7 @@ ON CONFLICT (unique_key)
 DO NOTHING;
 
 -- name: JobInsertFull :one
-INSERT INTO river_job(
+INSERT INTO /* TEMPLATE: schema */river_job(
     args,
     attempt,
     attempted_at,
@@ -317,14 +317,14 @@ INSERT INTO river_job(
 
 -- name: JobList :many
 SELECT *
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE /* TEMPLATE_BEGIN: where_clause */ 1 /* TEMPLATE_END */
 ORDER BY /* TEMPLATE_BEGIN: order_by_clause */ id /* TEMPLATE_END */
 LIMIT @max::int;
 
 -- Run by the rescuer to queue for retry or discard depending on job state.
 -- name: JobRescueMany :exec
-UPDATE river_job
+UPDATE /* TEMPLATE: schema */river_job
 SET
     errors = array_append(errors, updated_job.error),
     finalized_at = updated_job.finalized_at,
@@ -343,12 +343,12 @@ WHERE river_job.id = updated_job.id;
 -- name: JobRetry :one
 WITH job_to_update AS (
     SELECT id
-    FROM river_job
+    FROM /* TEMPLATE: schema */river_job
     WHERE river_job.id = @id
     FOR UPDATE
 ),
 updated_job AS (
-    UPDATE river_job
+    UPDATE /* TEMPLATE: schema */river_job
     SET
         state = 'available',
         scheduled_at = now(),
@@ -363,7 +363,7 @@ updated_job AS (
     RETURNING river_job.*
 )
 SELECT *
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE id = @id::bigint
     AND id NOT IN (SELECT id FROM updated_job)
 UNION
@@ -378,7 +378,7 @@ WITH jobs_to_schedule AS (
         unique_states,
         priority,
         scheduled_at
-    FROM river_job
+    FROM /* TEMPLATE: schema */river_job
     WHERE
         state IN ('retryable', 'scheduled')
         AND queue IS NOT NULL
@@ -406,7 +406,7 @@ jobs_with_rownum AS (
 ),
 unique_conflicts AS (
     SELECT river_job.unique_key
-    FROM river_job
+    FROM /* TEMPLATE: schema */river_job
     JOIN jobs_with_rownum
         ON river_job.unique_key = jobs_with_rownum.unique_key
         AND river_job.id != jobs_with_rownum.id
@@ -432,7 +432,7 @@ job_updates AS (
     LEFT JOIN unique_conflicts uc ON job.unique_key = uc.unique_key
 ),
 updated_jobs AS (
-    UPDATE river_job
+    UPDATE /* TEMPLATE: schema */river_job
     SET
         state        = job_updates.new_state,
         finalized_at = CASE WHEN job_updates.finalized_at_do_update THEN @now::timestamptz
@@ -448,7 +448,7 @@ updated_jobs AS (
 SELECT
     sqlc.embed(river_job),
     updated_jobs.conflict_discarded
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 JOIN updated_jobs ON river_job.id = updated_jobs.id;
 
 -- name: JobSetStateIfRunningMany :many
@@ -484,7 +484,7 @@ job_to_update AS (
         job_input.scheduled_at_do_update,
         (job_input.state IN ('retryable', 'scheduled') AND river_job.metadata ? 'cancel_attempted_at') AS should_cancel,
         job_input.state
-    FROM river_job
+    FROM /* TEMPLATE: schema */river_job
     JOIN job_input ON river_job.id = job_input.id
     WHERE river_job.state = 'running' OR job_input.metadata_do_merge
     FOR UPDATE
@@ -512,7 +512,7 @@ updated_running AS (
     RETURNING river_job.*
 ),
 updated_metadata_only AS (
-    UPDATE river_job
+    UPDATE /* TEMPLATE: schema */river_job
     SET metadata = river_job.metadata || job_to_update.metadata_updates
     FROM job_to_update
     WHERE river_job.id = job_to_update.id
@@ -522,7 +522,7 @@ updated_metadata_only AS (
     RETURNING river_job.*
 )
 SELECT *
-FROM river_job
+FROM /* TEMPLATE: schema */river_job
 WHERE id IN (SELECT id FROM job_input)
     AND id NOT IN (SELECT id FROM updated_metadata_only)
     AND id NOT IN (SELECT id FROM updated_running)
@@ -532,7 +532,7 @@ UNION SELECT * FROM updated_running;
 -- A generalized update for any property on a job. This brings in a large number
 -- of parameters and therefore may be more suitable for testing than production.
 -- name: JobUpdate :one
-UPDATE river_job
+UPDATE /* TEMPLATE: schema */river_job
 SET
     attempt = CASE WHEN @attempt_do_update::boolean THEN @attempt ELSE attempt END,
     attempted_at = CASE WHEN @attempted_at_do_update::boolean THEN @attempted_at ELSE attempted_at END,

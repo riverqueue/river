@@ -1,1 +1,1 @@
-DROP FUNCTION foobar_in_bitmask;
+DROP FUNCTION /* TEMPLATE: schema */foobar_in_bitmask;

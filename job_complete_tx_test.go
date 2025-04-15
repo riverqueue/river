@@ -66,7 +66,10 @@ func TestJobCompleteTx(t *testing.T) {
 		require.Equal(t, rivertype.JobStateCompleted, completedJob.State)
 		require.WithinDuration(t, time.Now(), *completedJob.FinalizedAt, 2*time.Second)
 
-		updatedJob, err := bundle.exec.JobGetByID(ctx, job.ID)
+		updatedJob, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     job.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateCompleted, updatedJob.State)
 	})
@@ -88,7 +91,10 @@ func TestJobCompleteTx(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateCompleted, completedJob.State)
 
-		updatedJob, err := bundle.exec.JobGetByID(ctx, job.ID)
+		updatedJob, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     job.ID,
+			Schema: "",
+		})
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateCompleted, updatedJob.State)
 	})
@@ -130,7 +136,7 @@ func TestJobCompleteTx(t *testing.T) {
 		})
 
 		// delete the job
-		_, err := bundle.exec.JobDelete(ctx, job.ID)
+		_, err := bundle.exec.JobDelete(ctx, &riverdriver.JobDeleteParams{ID: job.ID})
 		require.NoError(t, err)
 
 		// fake the job's state to work around the check:

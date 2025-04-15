@@ -103,6 +103,7 @@ type producerConfig struct {
 	QueueReportInterval          time.Duration
 	RetryPolicy                  ClientRetryPolicy
 	SchedulerInterval            time.Duration
+	Schema                       string
 	StaleProducerRetentionPeriod time.Duration
 	Workers                      *Workers
 }
@@ -306,6 +307,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		ProducerID:    id,
 		Queue:         p.config.Queue,
 		QueueMetadata: initialMetadata,
+		Schema:        p.config.Schema,
 	})
 	if err != nil {
 		stopped()
@@ -684,6 +686,7 @@ func (p *producer) dispatchWork(workCtx context.Context, count int, fetchResultC
 		Max:        count,
 		Queue:      p.config.Queue,
 		ProducerID: p.id.Load(),
+		Schema:     p.config.Schema,
 	})
 	if err != nil {
 		p.Logger.Error(p.Name+": Error fetching jobs", slog.String("err", err.Error()), slog.String("queue", p.config.Queue))
@@ -749,6 +752,7 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 			InformProducerDoneFunc:   p.handleWorkerDone,
 			JobRow:                   job,
 			SchedulerInterval:        p.config.SchedulerInterval,
+			Schema:                   p.config.Schema,
 			WorkUnit:                 workUnit,
 		})
 		p.addActiveJob(job.ID, executor)
@@ -840,7 +844,10 @@ func (p *producer) fetchQueueSettings(ctx context.Context) (*rivertype.Queue, er
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	return p.exec.QueueGet(ctx, p.config.Queue)
+	return p.exec.QueueGet(ctx, &riverdriver.QueueGetParams{
+		Name:   p.config.Queue,
+		Schema: p.config.Schema,
+	})
 }
 
 func (p *producer) reportProducerStatusLoop(ctx context.Context, wg *sync.WaitGroup) {
@@ -866,6 +873,7 @@ func (p *producer) reportProducerStatusOnce(ctx context.Context) {
 	err := p.pilot.ProducerKeepAlive(ctx, p.exec, &riverdriver.ProducerKeepAliveParams{
 		ID:                    p.id.Load(),
 		QueueName:             p.config.Queue,
+		Schema:                p.config.Schema,
 		StaleUpdatedAtHorizon: p.Time.NowUTC().Add(-p.config.StaleProducerRetentionPeriod),
 	})
 	if err != nil && errors.Is(context.Cause(ctx), startstop.ErrStop) {

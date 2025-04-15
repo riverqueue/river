@@ -50,6 +50,10 @@ type JobCleanerConfig struct {
 	// Interval is the amount of time to wait between runs of the cleaner.
 	Interval time.Duration
 
+	// Schema where River tables are located. Empty string omits schema, causing
+	// Postgres to default to `search_path`.
+	Schema string
+
 	// Timeout of the individual queries in the job cleaner.
 	Timeout time.Duration
 }
@@ -163,6 +167,7 @@ func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, err
 				CompletedFinalizedAtHorizon: time.Now().Add(-s.Config.CompletedJobRetentionPeriod),
 				DiscardedFinalizedAtHorizon: time.Now().Add(-s.Config.DiscardedJobRetentionPeriod),
 				Max:                         s.batchSize,
+				Schema:                      s.Config.Schema,
 			})
 			if err != nil {
 				return 0, fmt.Errorf("error deleting completed jobs: %w", err)

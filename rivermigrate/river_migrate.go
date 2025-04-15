@@ -20,6 +20,7 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/levenshtein"
+	"github.com/riverqueue/river/rivershared/sqlctemplate"
 	"github.com/riverqueue/river/rivershared/util/maputil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivershared/util/valutil"
@@ -59,6 +60,8 @@ type Config struct {
 	// specified, logs will be emitted to STDOUT with messages at warn level
 	// or higher.
 	Logger *slog.Logger
+
+	schema string
 }
 
 // Migrator is a database migration tool for River which can run up or down
@@ -69,6 +72,8 @@ type Migrator[TTx any] struct {
 	driver     riverdriver.Driver[TTx]
 	line       string
 	migrations map[int]Migration // allows us to inject test migrations
+	replacer   sqlctemplate.Replacer
+	schema     string
 }
 
 // New returns a new migrator with the given database driver and configuration.
@@ -148,6 +153,7 @@ func New[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Migrator[TTx
 		driver:     driver,
 		line:       line,
 		migrations: validateAndInit(riverMigrations),
+		schema:     config.schema,
 	}), nil
 }
 
@@ -412,11 +418,18 @@ func (m *Migrator[TTx]) migrateDown(ctx context.Context, exec riverdriver.Execut
 		// 005, we can remove migrations with a line included, but otherwise we
 		// must omit the `line` column from queries because it doesn't exist.
 		if m.line == riverdriver.MigrationLineMain && slices.Min(versions) <= migrateVersionLineColumnAdded {
-			if _, err := exec.MigrationDeleteAssumingMainMany(ctx, versions); err != nil {
+			if _, err := exec.MigrationDeleteAssumingMainMany(ctx, &riverdriver.MigrationDeleteAssumingMainManyParams{
+				Versions: versions,
+				Schema:   m.schema,
+			}); err != nil {
 				return nil, fmt.Errorf("error inserting migration rows for versions %+v assuming main: %w", res.Versions, err)
 			}
 		} else {
-			if _, err := exec.MigrationDeleteByLineAndVersionMany(ctx, m.line, versions); err != nil {
+			if _, err := exec.MigrationDeleteByLineAndVersionMany(ctx, &riverdriver.MigrationDeleteByLineAndVersionManyParams{
+				Line:     m.line,
+				Schema:   m.schema,
+				Versions: versions,
+			}); err != nil {
 				return nil, fmt.Errorf("error deleting migration rows for versions %+v on line %q: %w", res.Versions, m.line, err)
 			}
 		}
@@ -453,14 +466,18 @@ func (m *Migrator[TTx]) migrateUp(ctx context.Context, exec riverdriver.Executor
 		// 005, we can insert migrations with a line included, but otherwise we
 		// must omit the `line` column from queries because it doesn't exist.
 		if m.line == riverdriver.MigrationLineMain && slices.Max(versions) < migrateVersionLineColumnAdded {
-			if _, err := exec.MigrationInsertManyAssumingMain(ctx, versions); err != nil {
+			if _, err := exec.MigrationInsertManyAssumingMain(ctx, &riverdriver.MigrationInsertManyAssumingMainParams{
+				Schema:   m.schema,
+				Versions: versions,
+			}); err != nil {
 				return nil, fmt.Errorf("error inserting migration rows for versions %+v assuming main: %w", res.Versions, err)
 			}
 		} else {
-			if _, err := exec.MigrationInsertMany(ctx,
-				m.line,
-				versions,
-			); err != nil {
+			if _, err := exec.MigrationInsertMany(ctx, &riverdriver.MigrationInsertManyParams{
+				Line:     m.line,
+				Schema:   m.schema,
+				Versions: versions,
+			}); err != nil {
 				return nil, fmt.Errorf("error inserting migration rows for versions %+v on line %q: %w", res.Versions, m.line, err)
 			}
 		}
@@ -547,6 +564,14 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Ex
 		return res, nil
 	}
 
+	var schema string
+	if m.schema != "" {
+		schema = m.schema + "."
+	}
+	schemaReplacement := map[string]sqlctemplate.Replacement{
+		"schema": {Value: schema},
+	}
+
 	for _, versionBundle := range sortedTargetMigrations {
 		var sql string
 		switch direction {
@@ -554,6 +579,13 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Ex
 			sql = versionBundle.SQLDown
 		case DirectionUp:
 			sql = versionBundle.SQLUp
+		}
+
+		// Most migrations contain schema in their SQL by necessity, but some of
+		// the test ones do not because they only run trivial operations.
+		if strings.Contains(sql, "/* TEMPLATE: schema */") {
+			ctx := sqlctemplate.WithReplacements(ctx, schemaReplacement, nil)
+			sql, _ = m.replacer.Run(ctx, sql, nil)
 		}
 
 		var duration time.Duration
@@ -598,7 +630,10 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Ex
 // because otherwise the existing transaction would become aborted on an
 // unsuccessful `river_migration` check.)
 func (m *Migrator[TTx]) existingMigrations(ctx context.Context, exec riverdriver.Executor) ([]*riverdriver.Migration, error) {
-	migrateTableExists, err := exec.TableExists(ctx, "river_migration")
+	migrateTableExists, err := exec.TableExists(ctx, &riverdriver.TableExistsParams{
+		Schema: m.schema,
+		Table:  "river_migration",
+	})
 	if err != nil {
 		return nil, fmt.Errorf("error checking if `%s` exists: %w", "river_migration", err)
 	}
@@ -610,7 +645,11 @@ func (m *Migrator[TTx]) existingMigrations(ctx context.Context, exec riverdriver
 		return nil, nil
 	}
 
-	lineColumnExists, err := exec.ColumnExists(ctx, "river_migration", "line")
+	lineColumnExists, err := exec.ColumnExists(ctx, &riverdriver.ColumnExistsParams{
+		Column: "line",
+		Schema: m.schema,
+		Table:  "river_migration",
+	})
 	if err != nil {
 		return nil, fmt.Errorf("error checking if `%s.%s` exists: %w", "river_migration", "line", err)
 	}
@@ -620,7 +659,9 @@ func (m *Migrator[TTx]) existingMigrations(ctx context.Context, exec riverdriver
 			return nil, errors.New("can't add a non-main migration line until `river_migration.line` is raised; fully migrate the main migration line and try again")
 		}
 
-		migrations, err := exec.MigrationGetAllAssumingMain(ctx)
+		migrations, err := exec.MigrationGetAllAssumingMain(ctx, &riverdriver.MigrationGetAllAssumingMainParams{
+			Schema: m.schema,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("error getting existing migrations: %w", err)
 		}
@@ -628,7 +669,10 @@ func (m *Migrator[TTx]) existingMigrations(ctx context.Context, exec riverdriver
 		return migrations, nil
 	}
 
-	migrations, err := exec.MigrationGetByLine(ctx, m.line)
+	migrations, err := exec.MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
+		Line:   m.line,
+		Schema: m.schema,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("error getting existing migrations for line %q: %w", m.line, err)
 	}

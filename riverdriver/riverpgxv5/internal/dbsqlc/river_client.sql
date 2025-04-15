@@ -8,7 +8,7 @@ CREATE UNLOGGED TABLE river_client (
 );
 
 -- name: ClientCreateOrSetUpdatedAt :one
-INSERT INTO river_client (
+INSERT INTO /* TEMPLATE: schema */river_client (
     id,
     metadata,
     paused_at,

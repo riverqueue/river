@@ -82,7 +82,10 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		finalInsertParams := sliceutil.Map(insertParams, func(params *rivertype.JobInsertParams) *riverdriver.JobInsertFastParams {
 			return (*riverdriver.JobInsertFastParams)(params)
 		})
-		results, err := tx.JobInsertFastMany(ctx, finalInsertParams)
+		results, err := tx.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+			Jobs:   finalInsertParams,
+			Schema: "",
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -109,12 +112,15 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		return svc, bundle
 	}
 
-	requireNJobs := func(t *testing.T, exec riverdriver.Executor, kind string, n int) []*rivertype.JobRow {
+	requireNJobs := func(t *testing.T, exec riverdriver.Executor, kind string, expectedNumJobs int) []*rivertype.JobRow {
 		t.Helper()
 
-		jobs, err := exec.JobGetByKindMany(ctx, []string{kind})
+		jobs, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{kind},
+			Schema: "",
+		})
 		require.NoError(t, err)
-		require.Len(t, jobs, n, "Expected to find exactly %d job(s) of kind: %s, but found %d", n, kind, len(jobs))
+		require.Len(t, jobs, expectedNumJobs, "Expected to find exactly %d job(s) of kind: %s, but found %d", expectedNumJobs, kind, len(jobs))
 
 		return jobs
 	}

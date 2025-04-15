@@ -116,6 +116,8 @@ type JobExecutor struct {
 	JobRow                   *rivertype.JobRow
 	MiddlewareLookupGlobal   middlewarelookup.MiddlewareLookupInterface
 	SchedulerInterval        time.Duration
+	Schema                   string
+	WorkerMiddleware         []rivertype.WorkerMiddleware
 	WorkUnit                 workunit.WorkUnit
 
 	// Meant to be used from within the job executor only.

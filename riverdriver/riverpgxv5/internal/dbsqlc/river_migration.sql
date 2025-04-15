@@ -8,14 +8,14 @@ CREATE TABLE river_migration(
 );
 
 -- name: RiverMigrationDeleteAssumingMainMany :many
-DELETE FROM river_migration
+DELETE FROM /* TEMPLATE: schema */river_migration
 WHERE version = any(@version::bigint[])
 RETURNING
     created_at,
     version;
 
 -- name: RiverMigrationDeleteByLineAndVersionMany :many
-DELETE FROM river_migration
+DELETE FROM /* TEMPLATE: schema */river_migration
 WHERE line = @line
     AND version = any(@version::bigint[])
 RETURNING *;
@@ -30,17 +30,17 @@ RETURNING *;
 SELECT
     created_at,
     version
-FROM river_migration
+FROM /* TEMPLATE: schema */river_migration
 ORDER BY version;
 
 -- name: RiverMigrationGetByLine :many
 SELECT *
-FROM river_migration
+FROM /* TEMPLATE: schema */river_migration
 WHERE line = @line
 ORDER BY version;
 
 -- name: RiverMigrationInsert :one
-INSERT INTO river_migration (
+INSERT INTO /* TEMPLATE: schema */river_migration (
     line,
     version
 ) VALUES (
@@ -49,7 +49,7 @@ INSERT INTO river_migration (
 ) RETURNING *;
 
 -- name: RiverMigrationInsertMany :many
-INSERT INTO river_migration (
+INSERT INTO /* TEMPLATE: schema */river_migration (
     line,
     version
 )
@@ -59,7 +59,7 @@ SELECT
 RETURNING *;
 
 -- name: RiverMigrationInsertManyAssumingMain :many
-INSERT INTO river_migration (
+INSERT INTO /* TEMPLATE: schema */river_migration (
     version
 )
 SELECT
@@ -73,10 +73,10 @@ SELECT EXISTS (
     SELECT column_name
     FROM information_schema.columns 
     WHERE table_name = @table_name::text
-        AND table_schema = CURRENT_SCHEMA
+        AND table_schema = /* TEMPLATE_BEGIN: schema */ CURRENT_SCHEMA /* TEMPLATE_END */
         AND column_name = @column_name::text
 );
 
 -- name: TableExists :one
-SELECT CASE WHEN to_regclass(@table_name) IS NULL THEN false
+SELECT CASE WHEN to_regclass(@schema_and_table) IS NULL THEN false
             ELSE true END;

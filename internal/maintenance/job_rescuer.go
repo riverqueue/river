@@ -50,6 +50,10 @@ type JobRescuerConfig struct {
 	// considered stuck and should be rescued.
 	RescueAfter time.Duration
 
+	// Schema where River tables are located. Empty string omits schema, causing
+	// Postgres to default to `search_path`.
+	Schema string
+
 	WorkUnitFactoryFunc func(kind string) workunit.WorkUnitFactory
 }
 
@@ -169,6 +173,7 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 			Error:       make([][]byte, 0, len(stuckJobs)),
 			FinalizedAt: make([]time.Time, 0, len(stuckJobs)),
 			ScheduledAt: make([]time.Time, 0, len(stuckJobs)),
+			Schema:      s.Config.Schema,
 			State:       make([]string, 0, len(stuckJobs)),
 		}
 
@@ -247,6 +252,7 @@ func (s *JobRescuer) getStuckJobs(ctx context.Context) ([]*rivertype.JobRow, err
 
 	return s.exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
 		Max:          s.batchSize,
+		Schema:       s.Config.Schema,
 		StuckHorizon: stuckHorizon,
 	})
 }

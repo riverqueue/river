@@ -43,7 +43,8 @@ func TestNotifier(t *testing.T) {
 		var (
 			dbPool   = riverinternaltest.TestDB(ctx, t)
 			driver   = riverpgxv5.New(dbPool)
-			listener = driver.GetListener()
+			schema   = "" // try to make tests schema-based rather than database-based in the future
+			listener = driver.GetListener(schema)
 		)
 
 		notifier := New(riversharedtest.BaseServiceArchetype(t), listener)
@@ -599,5 +600,5 @@ func sendNotification(ctx context.Context, t *testing.T, exec riverdriver.Execut
 	t.Helper()
 
 	t.Logf("Sending notification on %q: %s", topic, payload)
-	require.NoError(t, exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{payload}, Topic: topic}))
+	require.NoError(t, exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{payload}, Schema: "", Topic: topic}))
 }

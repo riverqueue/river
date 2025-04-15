@@ -1,1 +1,1 @@
-DROP TYPE foobar;
+DROP TYPE /* TEMPLATE: schema */foobar;

@@ -7,6 +7,7 @@ package dbsqlc
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/lib/pq"
 )
@@ -23,8 +24,8 @@ func (q *Queries) PGAdvisoryXactLock(ctx context.Context, db DBTX, key int64) er
 const pGNotifyMany = `-- name: PGNotifyMany :exec
 WITH topic_to_notify AS (
     SELECT
-        concat(current_schema(), '.', $1::text) AS topic,
-        unnest($2::text[]) AS payload
+        concat(coalesce($1::text, current_schema()), '.', $2::text) AS topic,
+        unnest($3::text[]) AS payload
 )
 SELECT pg_notify(
     topic_to_notify.topic,
@@ -34,11 +35,12 @@ FROM topic_to_notify
 `
 
 type PGNotifyManyParams struct {
+	Schema  sql.NullString
 	Topic   string
 	Payload []string
 }
 
 func (q *Queries) PGNotifyMany(ctx context.Context, db DBTX, arg *PGNotifyManyParams) error {
-	_, err := db.ExecContext(ctx, pGNotifyMany, arg.Topic, pq.Array(arg.Payload))
+	_, err := db.ExecContext(ctx, pGNotifyMany, arg.Schema, arg.Topic, pq.Array(arg.Payload))
 	return err
 }

@@ -57,7 +57,8 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	config := newTestConfig(t, nil)
 	dbDriver := riverpgxv5.New(dbPool)
 	exec := dbDriver.GetExecutor()
-	listener := dbDriver.GetListener()
+	schema := "" // try to make tests schema-based rather than database-based in the future
+	listener := dbDriver.GetListener(schema)
 	pilot := &riverpilot.StandardPilot{}
 
 	subscribeCh := make(chan []jobcompleter.CompleterJobUpdated, 100)
@@ -105,6 +106,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 		QueueReportInterval:          queueReportIntervalDefault,
 		RetryPolicy:                  &DefaultClientRetryPolicy{},
 		SchedulerInterval:            maintenance.JobSchedulerIntervalDefault,
+		Schema:                       schema,
 		StaleProducerRetentionPeriod: time.Minute,
 		Workers:                      workers,
 	})
@@ -136,7 +138,10 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 		}
 	}()
 
-	_, err := exec.JobInsertFastMany(ctx, params)
+	_, err := exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+		Jobs:   params,
+		Schema: producer.config.Schema,
+	})
 	require.NoError(err)
 
 	require.NoError(producer.StartWorkContext(ctx, ctx))
@@ -162,6 +167,7 @@ func TestProducer_PollOnly(t *testing.T) {
 			driver    = riverpgxv5.New(nil)
 			pilot     = &riverpilot.StandardPilot{}
 			queueName = fmt.Sprintf("test-producer-poll-only-%05d", randutil.IntBetween(1, 100_000))
+			schema    = "" // try to make tests schema-based rather than database-based in the future
 			tx        = riverinternaltest.TestTx(ctx, t)
 		)
 
@@ -197,6 +203,7 @@ func TestProducer_PollOnly(t *testing.T) {
 			QueueReportInterval:          queueReportIntervalDefault,
 			RetryPolicy:                  &DefaultClientRetryPolicy{},
 			SchedulerInterval:            riverinternaltest.SchedulerShortInterval,
+			Schema:                       schema,
 			StaleProducerRetentionPeriod: time.Minute,
 			Workers:                      NewWorkers(),
 		}), jobUpdates
@@ -215,7 +222,8 @@ func TestProducer_WithNotifier(t *testing.T) {
 			driver     = riverpgxv5.New(dbPool)
 			exec       = driver.GetExecutor()
 			jobUpdates = make(chan []jobcompleter.CompleterJobUpdated, 10)
-			listener   = driver.GetListener()
+			schema     = "" // try to make tests schema-based rather than database-based in the future
+			listener   = driver.GetListener(schema)
 			pilot      = &riverpilot.StandardPilot{}
 			queueName  = fmt.Sprintf("test-producer-with-notifier-%05d", randutil.IntBetween(1, 100_000))
 		)
@@ -249,6 +257,7 @@ func TestProducer_WithNotifier(t *testing.T) {
 			QueueReportInterval:          queueReportIntervalDefault,
 			RetryPolicy:                  &DefaultClientRetryPolicy{},
 			SchedulerInterval:            riverinternaltest.SchedulerShortInterval,
+			Schema:                       schema,
 			StaleProducerRetentionPeriod: time.Minute,
 			Workers:                      NewWorkers(),
 		}), jobUpdates
@@ -301,7 +310,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		}
 	}
 
-	mustInsert := func(ctx context.Context, t *testing.T, bundle *testBundle, args JobArgs) {
+	mustInsert := func(ctx context.Context, t *testing.T, producer *producer, bundle *testBundle, args JobArgs) {
 		t.Helper()
 
 		insertParams, err := insertParamsFromConfigArgsAndOptions(bundle.archetype, bundle.config, args, &InsertOpts{
@@ -320,7 +329,10 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 			insertParams.ScheduledAt = &bundle.timeBeforeStart
 		}
 
-		_, err = bundle.exec.JobInsertFastMany(ctx, []*riverdriver.JobInsertFastParams{(*riverdriver.JobInsertFastParams)(insertParams)})
+		_, err = bundle.exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+			Jobs:   []*riverdriver.JobInsertFastParams{(*riverdriver.JobInsertFastParams)(insertParams)},
+			Schema: producer.config.Schema,
+		})
 		require.NoError(t, err)
 	}
 
@@ -345,7 +357,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		producer, bundle := setup(t)
 		AddWorker(bundle.workers, &noOpWorker{})
 
-		mustInsert(ctx, t, bundle, &noOpArgs{})
+		mustInsert(ctx, t, producer, bundle, &noOpArgs{})
 
 		startProducer(t, ctx, ctx, producer)
 
@@ -362,7 +374,10 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		now := time.Now().UTC()
 		startProducer(t, ctx, ctx, producer)
 
-		queue, err := bundle.exec.QueueGet(ctx, producer.config.Queue)
+		queue, err := bundle.exec.QueueGet(ctx, &riverdriver.QueueGetParams{
+			Name:   producer.config.Queue,
+			Schema: producer.config.Schema,
+		})
 		require.NoError(t, err)
 		require.WithinDuration(t, now, queue.CreatedAt, 2*time.Second)
 		require.Equal(t, []byte("{}"), queue.Metadata)
@@ -380,8 +395,8 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		producer, bundle := setup(t)
 		AddWorker(bundle.workers, &noOpWorker{})
 
-		mustInsert(ctx, t, bundle, &noOpArgs{})
-		mustInsert(ctx, t, bundle, &callbackArgs{}) // not registered
+		mustInsert(ctx, t, producer, bundle, &noOpArgs{})
+		mustInsert(ctx, t, producer, bundle, &callbackArgs{}) // not registered
 
 		startProducer(t, ctx, ctx, producer)
 
@@ -430,7 +445,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		workCtx, workCancel := context.WithCancel(ctx)
 		defer workCancel()
 
-		mustInsert(ctx, t, bundle, &JobArgs{})
+		mustInsert(ctx, t, producer, bundle, &JobArgs{})
 
 		startProducer(t, ctx, workCtx, producer)
 
@@ -466,7 +481,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		}))
 
 		for range numJobs {
-			mustInsert(ctx, t, bundle, &JobArgs{})
+			mustInsert(ctx, t, producer, bundle, &JobArgs{})
 		}
 
 		startProducer(t, ctx, ctx, producer)
@@ -474,7 +489,10 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		producer.testSignals.StartedExecutors.WaitOrTimeout()
 
 		// Jobs are still paused as we fetch updated job states.
-		updatedJobs, err := bundle.exec.JobGetByKindMany(ctx, []string{(&JobArgs{}).Kind()})
+		updatedJobs, err := bundle.exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{(&JobArgs{}).Kind()},
+			Schema: producer.config.Schema,
+		})
 		require.NoError(t, err)
 
 		jobStateCounts := make(map[rivertype.JobState]int)
@@ -511,7 +529,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 			PausedAt: ptrutil.Ptr(time.Now()),
 		})
 
-		mustInsert(ctx, t, bundle, &noOpArgs{})
+		mustInsert(ctx, t, producer, bundle, &noOpArgs{})
 
 		startProducer(t, ctx, ctx, producer)
 
@@ -530,7 +548,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		producer.config.QueuePollInterval = 50 * time.Millisecond
 		AddWorker(bundle.workers, &noOpWorker{})
 
-		mustInsert(ctx, t, bundle, &noOpArgs{})
+		mustInsert(ctx, t, producer, bundle, &noOpArgs{})
 
 		startProducer(t, ctx, ctx, producer)
 
@@ -543,7 +561,10 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		if pauseAll {
 			queueNameToPause = rivercommon.AllQueuesString
 		}
-		require.NoError(t, bundle.exec.QueuePause(ctx, queueNameToPause))
+		require.NoError(t, bundle.exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
+			Name:   queueNameToPause,
+			Schema: producer.config.Schema,
+		}))
 		if producer.config.Notifier != nil {
 			// also emit notification:
 			emitQueueNotification(t, ctx, bundle.exec, queueNameToPause, "pause", nil)
@@ -551,7 +572,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		producer.testSignals.Paused.WaitOrTimeout()
 
 		// Job should not be executed while paused:
-		mustInsert(ctx, t, bundle, &noOpArgs{})
+		mustInsert(ctx, t, producer, bundle, &noOpArgs{})
 
 		select {
 		case update := <-bundle.jobUpdates:
@@ -560,7 +581,10 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		}
 
 		// Resume the queue and wait for confirmation:
-		require.NoError(t, bundle.exec.QueueResume(ctx, queueNameToPause))
+		require.NoError(t, bundle.exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
+			Name:   queueNameToPause,
+			Schema: producer.config.Schema,
+		}))
 		if producer.config.Notifier != nil {
 			// also emit notification:
 			emitQueueNotification(t, ctx, bundle.exec, queueNameToPause, "resume", nil)
@@ -677,6 +701,7 @@ func emitQueueNotification(t *testing.T, ctx context.Context, exec riverdriver.E
 	err = exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{
 		Topic:   string(notifier.NotificationTopicControl),
 		Payload: []string{string(payloadBytes)},
+		Schema:  "",
 	})
 	require.NoError(t, err)
 }
