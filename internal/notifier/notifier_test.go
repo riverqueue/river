@@ -1,6 +1,7 @@
 package notifier
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -12,9 +13,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/riverschematest"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/util/maputil"
@@ -35,15 +36,24 @@ func TestNotifier(t *testing.T) {
 	type testBundle struct {
 		dbPool *pgxpool.Pool
 		exec   riverdriver.Executor
+		schema string
 	}
 
-	setup := func(t *testing.T) (*Notifier, *testBundle) {
+	type testOpts struct {
+		dbPool *pgxpool.Pool // may be left nil for riversharedtest.DBPool
+	}
+
+	setup := func(t *testing.T, opts *testOpts) (*Notifier, *testBundle) {
 		t.Helper()
 
+		if opts == nil {
+			opts = &testOpts{}
+		}
+
 		var (
-			dbPool   = riverinternaltest.TestDB(ctx, t)
+			dbPool   = cmp.Or(opts.dbPool, riversharedtest.DBPool(ctx, t))
 			driver   = riverpgxv5.New(dbPool)
-			schema   = "" // try to make tests schema-based rather than database-based in the future
+			schema   = riverschematest.TestSchema(ctx, t, driver, nil)
 			listener = driver.GetListener(schema)
 		)
 
@@ -53,6 +63,7 @@ func TestNotifier(t *testing.T) {
 		return notifier, &testBundle{
 			dbPool: dbPool,
 			exec:   driver.GetExecutor(),
+			schema: schema,
 		}
 	}
 
@@ -66,7 +77,7 @@ func TestNotifier(t *testing.T) {
 	t.Run("StartsAndStops", func(t *testing.T) {
 		t.Parallel()
 
-		notifier, _ := setup(t)
+		notifier, _ := setup(t, nil)
 		start(t, notifier)
 
 		notifier.testSignals.ListeningBegin.WaitOrTimeout()
@@ -79,7 +90,7 @@ func TestNotifier(t *testing.T) {
 	t.Run("StartStopStress", func(t *testing.T) {
 		t.Parallel()
 
-		notifier, _ := setup(t)
+		notifier, _ := setup(t, &testOpts{dbPool: riversharedtest.DBPoolClone(ctx, t)})
 		notifier.Logger = riversharedtest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
 		notifier.testSignals = notifierTestSignals{}    // deinit so channels don't fill
 
@@ -89,7 +100,7 @@ func TestNotifier(t *testing.T) {
 	t.Run("StartErrorsOnImmediateProblem", func(t *testing.T) {
 		t.Parallel()
 
-		notifier, bundle := setup(t)
+		notifier, bundle := setup(t, &testOpts{dbPool: riversharedtest.DBPoolClone(ctx, t)})
 
 		t.Log("Closing database pool")
 		bundle.dbPool.Close()
@@ -100,7 +111,7 @@ func TestNotifier(t *testing.T) {
 	t.Run("ListenErrorsOnImmediateProblem", func(t *testing.T) {
 		t.Parallel()
 
-		notifier, _ := setup(t)
+		notifier, _ := setup(t, nil)
 
 		// Use a mock to simulate an error for this one because it's really hard
 		// to get the timing right otherwise, and hard to avoid races.
@@ -136,7 +147,7 @@ func TestNotifier(t *testing.T) {
 	t.Run("ListensAndUnlistens", func(t *testing.T) {
 		t.Parallel()
 
-		notifier, bundle := setup(t)
+		notifier, bundle := setup(t, nil)
 		start(t, notifier)
 
 		notifyChan := make(chan TopicAndPayload, 10)
@@ -144,7 +155,7 @@ func TestNotifier(t *testing.T) {
 		sub, err := notifier.Listen(ctx, testTopic1, topicAndPayloadNotifyFunc(notifyChan))
 		require.NoError(t, err)
 
-		sendNotification(ctx, t, bundle.exec, testTopic1, "msg1")
+		sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic1, "msg1")
 
 		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riversharedtest.WaitOrTimeout(t, notifyChan))
 
@@ -152,7 +163,7 @@ func TestNotifier(t *testing.T) {
 
 		require.Empty(t, notifier.subscriptions)
 
-		sendNotification(ctx, t, bundle.exec, testTopic1, "msg2")
+		sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic1, "msg2")
 
 		time.Sleep(notificationWaitLeeway)
 
@@ -162,7 +173,7 @@ func TestNotifier(t *testing.T) {
 	t.Run("ListenWithoutStart", func(t *testing.T) {
 		t.Parallel()
 
-		notifier, bundle := setup(t)
+		notifier, bundle := setup(t, nil)
 
 		notifyChan := make(chan TopicAndPayload, 10)
 
@@ -170,7 +181,7 @@ func TestNotifier(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { sub.Unlisten(ctx) })
 
-		sendNotification(ctx, t, bundle.exec, testTopic1, "msg1")
+		sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic1, "msg1")
 
 		time.Sleep(notificationWaitLeeway)
 
@@ -186,7 +197,7 @@ func TestNotifier(t *testing.T) {
 	t.Run("ListenWithoutStartConnectError", func(t *testing.T) {
 		t.Parallel()
 
-		notifier, _ := setup(t)
+		notifier, _ := setup(t, nil)
 
 		listenerMock := NewListenerMock(notifier.listener)
 		listenerMock.connectFunc = func(ctx context.Context) error {
@@ -203,7 +214,7 @@ func TestNotifier(t *testing.T) {
 	t.Run("ListenWithoutStartListenError", func(t *testing.T) {
 		t.Parallel()
 
-		notifier, _ := setup(t)
+		notifier, _ := setup(t, nil)
 
 		listenerMock := NewListenerMock(notifier.listener)
 		listenerMock.listenFunc = func(ctx context.Context, topic string) error {
@@ -220,7 +231,7 @@ func TestNotifier(t *testing.T) {
 	t.Run("ListenWithoutStartMultipleSubscriptionsError", func(t *testing.T) {
 		t.Parallel()
 
-		notifier, _ := setup(t)
+		notifier, _ := setup(t, nil)
 
 		listenerMock := NewListenerMock(notifier.listener)
 		listenerMock.listenFunc = func(ctx context.Context, topic string) error {
@@ -248,7 +259,7 @@ func TestNotifier(t *testing.T) {
 	t.Run("ListenBeforeStart", func(t *testing.T) {
 		t.Parallel()
 
-		notifier, bundle := setup(t)
+		notifier, bundle := setup(t, nil)
 
 		notifyChan := make(chan TopicAndPayload, 10)
 
@@ -258,7 +269,7 @@ func TestNotifier(t *testing.T) {
 
 		start(t, notifier)
 
-		sendNotification(ctx, t, bundle.exec, testTopic1, "msg1")
+		sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic1, "msg1")
 
 		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riversharedtest.WaitOrTimeout(t, notifyChan))
 	})
@@ -266,7 +277,7 @@ func TestNotifier(t *testing.T) {
 	t.Run("SingleTopicMultipleSubscribers", func(t *testing.T) {
 		t.Parallel()
 
-		notifier, bundle := setup(t)
+		notifier, bundle := setup(t, nil)
 		start(t, notifier)
 
 		notifyChan1 := make(chan TopicAndPayload, 10)
@@ -277,7 +288,7 @@ func TestNotifier(t *testing.T) {
 		sub2, err := notifier.Listen(ctx, testTopic1, topicAndPayloadNotifyFunc(notifyChan2))
 		require.NoError(t, err)
 
-		sendNotification(ctx, t, bundle.exec, testTopic1, "msg1")
+		sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic1, "msg1")
 
 		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riversharedtest.WaitOrTimeout(t, notifyChan1))
 		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riversharedtest.WaitOrTimeout(t, notifyChan2))
@@ -287,7 +298,7 @@ func TestNotifier(t *testing.T) {
 
 		require.Empty(t, notifier.subscriptions)
 
-		sendNotification(ctx, t, bundle.exec, testTopic1, "msg2")
+		sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic1, "msg2")
 
 		time.Sleep(notificationWaitLeeway)
 
@@ -298,7 +309,7 @@ func TestNotifier(t *testing.T) {
 	t.Run("MultipleTopicsLockStep", func(t *testing.T) {
 		t.Parallel()
 
-		notifier, bundle := setup(t)
+		notifier, bundle := setup(t, nil)
 		start(t, notifier)
 
 		notifyChan1 := make(chan TopicAndPayload, 10)
@@ -309,8 +320,8 @@ func TestNotifier(t *testing.T) {
 		sub2, err := notifier.Listen(ctx, testTopic2, topicAndPayloadNotifyFunc(notifyChan2))
 		require.NoError(t, err)
 
-		sendNotification(ctx, t, bundle.exec, testTopic1, "msg1_1")
-		sendNotification(ctx, t, bundle.exec, testTopic2, "msg1_2")
+		sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic1, "msg1_1")
+		sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic2, "msg1_2")
 
 		require.Equal(t, TopicAndPayload{testTopic1, "msg1_1"}, riversharedtest.WaitOrTimeout(t, notifyChan1))
 		require.Equal(t, TopicAndPayload{testTopic2, "msg1_2"}, riversharedtest.WaitOrTimeout(t, notifyChan2))
@@ -320,8 +331,8 @@ func TestNotifier(t *testing.T) {
 
 		require.Empty(t, notifier.subscriptions)
 
-		sendNotification(ctx, t, bundle.exec, testTopic1, "msg2_1")
-		sendNotification(ctx, t, bundle.exec, testTopic2, "msg2_2")
+		sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic1, "msg2_1")
+		sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic2, "msg2_2")
 
 		time.Sleep(notificationWaitLeeway)
 
@@ -332,7 +343,7 @@ func TestNotifier(t *testing.T) {
 	t.Run("MultipleTopicsStaggered", func(t *testing.T) {
 		t.Parallel()
 
-		notifier, bundle := setup(t)
+		notifier, bundle := setup(t, nil)
 		start(t, notifier)
 
 		notifyChan1 := make(chan TopicAndPayload, 10)
@@ -341,8 +352,8 @@ func TestNotifier(t *testing.T) {
 		sub1, err := notifier.Listen(ctx, testTopic1, topicAndPayloadNotifyFunc(notifyChan1))
 		require.NoError(t, err)
 
-		sendNotification(ctx, t, bundle.exec, testTopic1, "msg1_1")
-		sendNotification(ctx, t, bundle.exec, testTopic2, "msg1_2")
+		sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic1, "msg1_1")
+		sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic2, "msg1_2")
 
 		time.Sleep(notificationWaitLeeway)
 
@@ -353,8 +364,8 @@ func TestNotifier(t *testing.T) {
 		sub2, err := notifier.Listen(ctx, testTopic2, topicAndPayloadNotifyFunc(notifyChan2))
 		require.NoError(t, err)
 
-		sendNotification(ctx, t, bundle.exec, testTopic1, "msg2_1")
-		sendNotification(ctx, t, bundle.exec, testTopic2, "msg2_2")
+		sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic1, "msg2_1")
+		sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic2, "msg2_2")
 
 		// Now both subscriptions are active.
 		require.Equal(t, TopicAndPayload{testTopic1, "msg2_1"}, riversharedtest.WaitOrTimeout(t, notifyChan1))
@@ -362,8 +373,8 @@ func TestNotifier(t *testing.T) {
 
 		sub1.Unlisten(ctx)
 
-		sendNotification(ctx, t, bundle.exec, testTopic1, "msg3_1")
-		sendNotification(ctx, t, bundle.exec, testTopic2, "msg3_2")
+		sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic1, "msg3_1")
+		sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic2, "msg3_2")
 
 		time.Sleep(notificationWaitLeeway)
 
@@ -375,8 +386,8 @@ func TestNotifier(t *testing.T) {
 
 		require.Empty(t, notifier.subscriptions)
 
-		sendNotification(ctx, t, bundle.exec, testTopic1, "msg4_1")
-		sendNotification(ctx, t, bundle.exec, testTopic2, "msg4_2")
+		sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic1, "msg4_1")
+		sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic2, "msg4_2")
 
 		time.Sleep(notificationWaitLeeway)
 
@@ -389,7 +400,7 @@ func TestNotifier(t *testing.T) {
 	t.Run("MultipleSubscribersStress", func(t *testing.T) {
 		t.Parallel()
 
-		notifier, bundle := setup(t)
+		notifier, bundle := setup(t, &testOpts{dbPool: riversharedtest.DBPoolClone(ctx, t)})
 		start(t, notifier)
 
 		const (
@@ -414,7 +425,7 @@ func TestNotifier(t *testing.T) {
 			defer ticker.Stop()
 
 			for messageNum := 0; ; messageNum++ {
-				sendNotification(ctx, t, bundle.exec, testTopic1, "msg"+strconv.Itoa(messageNum))
+				sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic1, "msg"+strconv.Itoa(messageNum))
 
 				select {
 				case <-ctx.Done():
@@ -464,7 +475,7 @@ func TestNotifier(t *testing.T) {
 	t.Run("WaitErrorAndBackoff", func(t *testing.T) {
 		t.Parallel()
 
-		notifier, _ := setup(t)
+		notifier, _ := setup(t, nil)
 
 		notifier.disableSleep = true
 
@@ -492,7 +503,7 @@ func TestNotifier(t *testing.T) {
 	t.Run("BackoffSleepCancelledOnStop", func(t *testing.T) {
 		t.Parallel()
 
-		notifier, _ := setup(t)
+		notifier, _ := setup(t, nil)
 
 		listenerMock := NewListenerMock(notifier.listener)
 		listenerMock.waitForNotificationFunc = func(ctx context.Context) (*riverdriver.Notification, error) {
@@ -510,7 +521,7 @@ func TestNotifier(t *testing.T) {
 	t.Run("StillFunctionalAfterMainLoopFailure", func(t *testing.T) {
 		t.Parallel()
 
-		notifier, bundle := setup(t)
+		notifier, bundle := setup(t, nil)
 
 		// Disable the backoff sleep that would occur after the first retry.
 		notifier.disableSleep = true
@@ -548,7 +559,7 @@ func TestNotifier(t *testing.T) {
 		// sending the notification below.
 		notifier.testSignals.ListeningBegin.WaitOrTimeout()
 
-		sendNotification(ctx, t, bundle.exec, testTopic1, "msg1")
+		sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic1, "msg1")
 
 		// Subscription should still work.
 		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riversharedtest.WaitOrTimeout(t, notifyChan))
@@ -596,9 +607,13 @@ func topicAndPayloadNotifyFunc(notifyChan chan TopicAndPayload) NotifyFunc {
 	}
 }
 
-func sendNotification(ctx context.Context, t *testing.T, exec riverdriver.Executor, topic string, payload string) {
+func sendNotification(ctx context.Context, t *testing.T, exec riverdriver.Executor, schema, topic string, payload string) {
 	t.Helper()
 
 	t.Logf("Sending notification on %q: %s", topic, payload)
-	require.NoError(t, exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{payload}, Schema: "", Topic: topic}))
+	require.NoError(t, exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+		Payload: []string{payload},
+		Schema:  schema,
+		Topic:   topic,
+	}))
 }

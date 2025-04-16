@@ -65,6 +65,7 @@ func (d *Driver) GetListener(schema string) riverdriver.Listener {
 	return &Listener{dbPool: d.dbPool, schema: schema}
 }
 
+func (d *Driver) GetMigrationDefaultLines() []string { return []string{riverdriver.MigrationLineMain} }
 func (d *Driver) GetMigrationFS(line string) fs.FS {
 	if line == riverdriver.MigrationLineMain {
 		return migrationFS
@@ -72,8 +73,20 @@ func (d *Driver) GetMigrationFS(line string) fs.FS {
 	panic("migration line does not exist: " + line)
 }
 func (d *Driver) GetMigrationLines() []string { return []string{riverdriver.MigrationLineMain} }
-func (d *Driver) HasPool() bool               { return d.dbPool != nil }
-func (d *Driver) SupportsListener() bool      { return true }
+func (d *Driver) GetMigrationTruncateTables(line string) []string {
+	if line == riverdriver.MigrationLineMain {
+		return []string{
+			"river_client",
+			"river_client_queue",
+			"river_job",
+			"river_leader",
+			"river_queue",
+		}
+	}
+	panic("migration line does not exist: " + line)
+}
+func (d *Driver) HasPool() bool          { return d.dbPool != nil }
+func (d *Driver) SupportsListener() bool { return true }
 
 func (d *Driver) UnwrapExecutor(tx pgx.Tx) riverdriver.ExecutorTx {
 	// Allows UnwrapExecutor to be invoked even if driver is nil.
@@ -230,7 +243,6 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.Jo
 		UniqueStates: make([]pgtype.Bits, len(params.Jobs)),
 	}
 	now := time.Now().UTC()
-
 	for i := range len(params.Jobs) {
 		params := params.Jobs[i]
 
@@ -322,7 +334,7 @@ func (e *Executor) JobInsertFastManyNoReturning(ctx context.Context, params *riv
 		}
 	}
 
-	numInserted, err := dbsqlc.New().JobInsertFastManyCopyFrom(schemaTemplateParam(ctx, params.Schema), e.dbtx, insertJobsParams)
+	numInserted, err := dbsqlc.New().JobInsertFastManyCopyFrom(schemaCopyFrom(ctx, params.Schema), e.dbtx, insertJobsParams)
 	if err != nil {
 		return 0, interpretError(err)
 	}
@@ -710,6 +722,21 @@ func (e *Executor) QueueUpdate(ctx context.Context, params *riverdriver.QueueUpd
 	return queueFromInternal(queue), nil
 }
 
+func (e *Executor) QueryRow(ctx context.Context, sql string, args ...any) riverdriver.Row {
+	return e.dbtx.QueryRow(ctx, sql, args...)
+}
+
+func (e *Executor) SchemaGetExpired(ctx context.Context, params *riverdriver.SchemaGetExpiredParams) ([]string, error) {
+	schemas, err := dbsqlc.New().SchemaGetExpired(ctx, e.dbtx, &dbsqlc.SchemaGetExpiredParams{
+		BeforeName: params.BeforeName,
+		Prefix:     params.Prefix,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return schemas, nil
+}
+
 func (e *Executor) TableExists(ctx context.Context, params *riverdriver.TableExistsParams) (bool, error) {
 	// Different from other operations because the schemaAndTable name is a parameter.
 	schemaAndTable := params.Table
@@ -780,14 +807,18 @@ func (l *Listener) Connect(ctx context.Context) error {
 	// schema based on `search_path`.
 	schema := l.schema
 	if schema == "" {
-		if err := poolConn.QueryRow(ctx, "SELECT current_schema();").Scan(&schema); err != nil {
+		// `current_schema` may be `NULL` if `search_path` is unset completely.
+		if err := poolConn.QueryRow(ctx, "SELECT coalesce(current_schema(), '');").Scan(&schema); err != nil {
 			poolConn.Release()
 			return err
 		}
 		l.schema = schema
 	}
 
-	l.prefix = schema + "."
+	if schema != "" {
+		l.prefix = schema + "."
+	}
+
 	// Assume full ownership of the conn so that it doesn't get released back to
 	// the pool or auto-closed by the pool.
 	l.conn = poolConn.Hijack()
@@ -868,6 +899,10 @@ func (w templateReplaceWrapper) QueryRow(ctx context.Context, sql string, args .
 }
 
 func (w templateReplaceWrapper) CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error) {
+	if schema, ok := ctx.Value(schemaCopyFromContextKey{}).(string); ok {
+		tableName = append([]string{schema}, tableName...)
+	}
+
 	return w.dbtx.CopyFrom(ctx, tableName, columnNames, rowSrc)
 }
 
@@ -978,6 +1013,20 @@ func queueFromInternal(internal *dbsqlc.RiverQueue) *rivertype.Queue {
 		PausedAt:  pausedAt,
 		UpdatedAt: internal.UpdatedAt.UTC(),
 	}
+}
+
+// A special internal context key used only to set a schema for use in CopyFrom.
+// If we end up eliminating the use of copyfrom functions (which can't use
+// sqlctemplate because no SQL is executed at any time so there's nowhere to
+// otherwise do a replacement), we can get rid of this completely.
+type schemaCopyFromContextKey struct{}
+
+func schemaCopyFrom(ctx context.Context, schema string) context.Context {
+	if schema != "" {
+		ctx = context.WithValue(ctx, schemaCopyFromContextKey{}, schema)
+	}
+
+	return ctx
 }
 
 func schemaTemplateParam(ctx context.Context, schema string) context.Context {

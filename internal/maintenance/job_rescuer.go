@@ -94,6 +94,7 @@ func NewRescuer(archetype *baseservice.Archetype, config *JobRescuerConfig, exec
 			ClientRetryPolicy:   config.ClientRetryPolicy,
 			Interval:            valutil.ValOrDefault(config.Interval, JobRescuerIntervalDefault),
 			RescueAfter:         valutil.ValOrDefault(config.RescueAfter, JobRescuerRescueAfterDefault),
+			Schema:              config.Schema,
 			WorkUnitFactoryFunc: config.WorkUnitFactoryFunc,
 		}).mustValidate(),
 

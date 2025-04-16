@@ -2,6 +2,7 @@ package riversharedtest
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,6 +65,36 @@ func TestTestTx(t *testing.T) {
 
 	err = checkTestTable(ctx, tx)
 	require.NoError(t, err)
+}
+
+// Simulates a bunch of parallel processes starting a `TestTx` simultaneously.
+// With the help of `go test -race`, should identify mutex/locking/parallel
+// access problems if there are any.
+func TestTestTxConcurrentAccess(t *testing.T) {
+	t.Parallel()
+
+	// Don't open more than maximum pool size transactions at once because that
+	// would deadlock.
+	const numGoroutines = 4
+
+	var (
+		ctx = context.Background()
+		wg  sync.WaitGroup
+	)
+
+	dbPool := DBPoolClone(ctx, t)
+
+	wg.Add(4)
+	for i := range numGoroutines {
+		workerNum := i
+		go func() {
+			_ = TestTxPool(ctx, t, dbPool)
+			t.Logf("Opened transaction: %d", workerNum)
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
 }
 
 func TestWaitOrTimeout(t *testing.T) {

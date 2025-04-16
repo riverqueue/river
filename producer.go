@@ -283,6 +283,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		return p.exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
 			Metadata: []byte("{}"),
 			Name:     p.config.Queue,
+			Schema:   p.config.Schema,
 		})
 	}()
 	if err != nil {
@@ -503,7 +504,11 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 			case controlActionMetadataChanged:
 				p.Logger.DebugContext(workCtx, p.Name+": Queue metadata changed", slog.String("queue", p.config.Queue), slog.String("queue_in_message", msg.Queue))
 				p.testSignals.MetadataChanged.Signal(struct{}{})
-				if err := p.pilot.QueueMetadataChanged(workCtx, p.exec, p.state, msg.Metadata); err != nil {
+				if err := p.pilot.QueueMetadataChanged(workCtx, p.exec, &riverpilot.QueueMetadataChangedParams{
+					Metadata: msg.Metadata,
+					Schema:   p.config.Schema,
+					State:    p.state,
+				}); err != nil {
 					p.Logger.ErrorContext(workCtx, p.Name+": Error updating queue metadata with pilot", slog.String("queue", p.config.Queue), slog.String("err", err.Error()))
 				}
 			case controlActionPause:
@@ -616,7 +621,11 @@ func (p *producer) finalizeShutdown(ctx context.Context) {
 		ctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
-		if err := p.pilot.ProducerShutdown(ctx, p.exec, p.id.Load(), p.state); err != nil {
+		if err := p.pilot.ProducerShutdown(ctx, p.exec, &riverpilot.ProducerShutdownParams{
+			ProducerID: p.id.Load(),
+			Schema:     p.config.Schema,
+			State:      p.state,
+		}); err != nil {
 			// Don't retry on these errors:
 			// - context.Canceled: parent context is canceled, so retrying with a new timeout won't help
 			// - ErrClosedPool: the database connection pool is closed, so retrying won't succeed
@@ -914,6 +923,7 @@ func (p *producer) reportQueueStatusOnce(ctx context.Context) {
 	_, err := p.exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
 		Metadata: []byte("{}"),
 		Name:     p.config.Queue,
+		Schema:   p.config.Schema,
 	})
 	if err != nil && errors.Is(context.Cause(ctx), startstop.ErrStop) {
 		return

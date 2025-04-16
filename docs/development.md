@@ -2,13 +2,13 @@
 
 ## Run tests
 
-Raise test databases:
+Raise the test database:
 
-    go run ./internal/cmd/testdbman create
+    createdb river_test
 
 Run tests:
 
-    go test ./... -p 1
+    go test ./... --timeout 2s
 
 ## Run lint
 

@@ -8,9 +8,12 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/riverqueue/river/rivermigrate"
+	"github.com/riverqueue/river/riverschematest"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/util/testutil"
+	"github.com/riverqueue/river/rivershared/util/urlutil"
 )
 
 // Example_migrateDatabaseSQL demonstrates the use of River's Go migration API
@@ -18,27 +21,20 @@ import (
 func Example_migrateDatabaseSQL() {
 	ctx := context.Background()
 
-	// Use a dedicated Postgres schema for this example so we can migrate and drop it at will:
-	schemaName := "migration_example_dbsql"
-	url := riverinternaltest.DatabaseURL("river_test_example") + "&search_path=" + schemaName
-	dbPool, err := sql.Open("pgx", url)
+	db, err := sql.Open("pgx", urlutil.DatabaseSQLCompatibleURL(riversharedtest.TestDatabaseURL()))
 	if err != nil {
 		panic(err)
 	}
-	defer dbPool.Close()
+	defer db.Close()
 
-	driver := riverdatabasesql.New(dbPool)
-	migrator, err := rivermigrate.New(driver, nil)
+	driver := riverdatabasesql.New(db)
+	migrator, err := rivermigrate.New(driver, &rivermigrate.Config{
+		// Test schema with no migrations for purposes of this test.
+		Schema: riverschematest.TestSchema(ctx, testutil.PanicTB(), driver, &riverschematest.TestSchemaOpts{Lines: []string{}}),
+	})
 	if err != nil {
 		panic(err)
 	}
-
-	// Create the schema used for this example. Drop it when we're done.
-	// This isn't necessary outside this test.
-	if _, err := dbPool.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+schemaName); err != nil {
-		panic(err)
-	}
-	defer dropRiverSchema(ctx, driver, schemaName)
 
 	printVersions := func(res *rivermigrate.MigrateResult) {
 		for _, version := range res.Versions {

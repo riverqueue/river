@@ -14,6 +14,8 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/riverschematest"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -41,20 +43,30 @@ func TestRequireInserted(t *testing.T) {
 
 	type testBundle struct {
 		dbPool *pgxpool.Pool
+		driver *riverpgxv5.Driver
 		mockT  *MockT
+		schema string
 	}
 
 	setup := func(t *testing.T) (*river.Client[pgx.Tx], *testBundle) {
 		t.Helper()
 
-		dbPool := riverinternaltest.TestDB(ctx, t)
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+		)
 
-		riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{})
+		riverClient, err := river.NewClient(driver, &river.Config{
+			Schema: schema,
+		})
 		require.NoError(t, err)
 
 		return riverClient, &testBundle{
 			dbPool: dbPool,
+			driver: driver,
 			mockT:  NewMockT(t),
+			schema: schema,
 		}
 	}
 
@@ -66,7 +78,7 @@ func TestRequireInserted(t *testing.T) {
 		_, err := riverClient.Insert(ctx, Job1Args{String: "foo"}, nil)
 		require.NoError(t, err)
 
-		job := requireInserted(ctx, t, riverpgxv5.New(bundle.dbPool), &Job1Args{}, nil)
+		job := requireInserted(ctx, t, bundle.driver, bundle.schema, &Job1Args{}, nil)
 		require.False(t, bundle.mockT.Failed)
 		require.Equal(t, "foo", job.Args.String)
 	})
@@ -102,7 +114,7 @@ func TestRequireInsertedTx(t *testing.T) {
 		_, err := riverClient.InsertTx(ctx, bundle.tx, Job1Args{String: "foo"}, nil)
 		require.NoError(t, err)
 
-		job := requireInsertedTx[*riverpgxv5.Driver](ctx, t, bundle.tx, &Job1Args{}, nil)
+		job := requireInsertedTx[*riverpgxv5.Driver](ctx, t, bundle.tx, emptySchema, &Job1Args{}, nil)
 		require.False(t, bundle.mockT.Failed)
 		require.Equal(t, "foo", job.Args.String)
 	})
@@ -118,11 +130,11 @@ func TestRequireInsertedTx(t *testing.T) {
 		_, err = riverClient.InsertTx(ctx, bundle.tx, Job2Args{Int: 123}, nil)
 		require.NoError(t, err)
 
-		job1 := requireInsertedTx[*riverpgxv5.Driver](ctx, t, bundle.tx, &Job1Args{}, nil)
+		job1 := requireInsertedTx[*riverpgxv5.Driver](ctx, t, bundle.tx, emptySchema, &Job1Args{}, nil)
 		require.False(t, bundle.mockT.Failed)
 		require.Equal(t, "foo", job1.Args.String)
 
-		job2 := requireInsertedTx[*riverpgxv5.Driver](ctx, t, bundle.tx, &Job2Args{}, nil)
+		job2 := requireInsertedTx[*riverpgxv5.Driver](ctx, t, bundle.tx, emptySchema, &Job2Args{}, nil)
 		require.False(t, bundle.mockT.Failed)
 		require.Equal(t, 123, job2.Args.Int)
 	})
@@ -139,12 +151,12 @@ func TestRequireInsertedTx(t *testing.T) {
 		require.NoError(t, err)
 
 		// Visible in the original transaction.
-		job := requireInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, &Job1Args{}, nil)
+		job := requireInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, emptySchema, &Job1Args{}, nil)
 		require.False(t, bundle.mockT.Failed)
 		require.Equal(t, "foo", job.Args.String)
 
 		// Not visible in the second transaction.
-		_ = requireInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, otherTx, &Job1Args{}, nil)
+		_ = requireInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, otherTx, emptySchema, &Job1Args{}, nil)
 		require.True(t, bundle.mockT.Failed)
 	})
 
@@ -156,7 +168,7 @@ func TestRequireInsertedTx(t *testing.T) {
 		_, err := riverClient.InsertTx(ctx, bundle.tx, Job1Args{String: "foo"}, nil)
 		require.NoError(t, err)
 
-		_ = requireInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, &Job2Args{}, nil)
+		_ = requireInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, emptySchema, &Job2Args{}, nil)
 		require.True(t, bundle.mockT.Failed)
 		require.Equal(t,
 			failureString("No jobs found with kind: job2")+"\n",
@@ -174,7 +186,7 @@ func TestRequireInsertedTx(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		_ = requireInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, &Job1Args{}, nil)
+		_ = requireInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, emptySchema, &Job1Args{}, nil)
 		require.True(t, bundle.mockT.Failed)
 		require.Equal(t,
 			failureString("More than one job found with kind: job1 (you might want RequireManyInserted instead)")+"\n",
@@ -189,7 +201,7 @@ func TestRequireInsertedTx(t *testing.T) {
 		_, err := riverClient.InsertTx(ctx, bundle.tx, Job2Args{Int: 123}, nil)
 		require.NoError(t, err)
 
-		_ = requireInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, &Job1Args{}, nil)
+		_ = requireInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, emptySchema, &Job1Args{}, nil)
 		require.True(t, bundle.mockT.Failed)
 		require.Equal(t,
 			failureString("No jobs found with kind: job1")+"\n",
@@ -229,7 +241,7 @@ func TestRequireInsertedTx(t *testing.T) {
 			mockT := NewMockT(t)
 			opts := sameOpts()
 			opts.MaxAttempts = 77
-			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.True(t, mockT.Failed)
 			require.Equal(t,
 				failureString("Job with kind 'job2' max attempts 78 not equal to expected 77")+"\n",
@@ -240,7 +252,7 @@ func TestRequireInsertedTx(t *testing.T) {
 			mockT := NewMockT(t)
 			opts := sameOpts()
 			opts.Priority = 3
-			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.True(t, mockT.Failed)
 			require.Equal(t,
 				failureString("Job with kind 'job2' priority 2 not equal to expected 3")+"\n",
@@ -251,7 +263,7 @@ func TestRequireInsertedTx(t *testing.T) {
 			mockT := NewMockT(t)
 			opts := sameOpts()
 			opts.Queue = "wrong_queue"
-			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.True(t, mockT.Failed)
 			require.Equal(t,
 				failureString("Job with kind 'job2' queue 'another_queue' not equal to expected 'wrong_queue'")+"\n",
@@ -262,7 +274,7 @@ func TestRequireInsertedTx(t *testing.T) {
 			mockT := NewMockT(t)
 			opts := sameOpts()
 			opts.ScheduledAt = testTime.Add(3*time.Minute + 23*time.Second + 123*time.Microsecond)
-			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.True(t, mockT.Failed)
 			require.Equal(t,
 				failureString("Job with kind 'job2' scheduled at 2023-10-30T10:45:23.000123Z not equal to expected 2023-10-30T10:48:46.000246Z")+"\n",
@@ -273,7 +285,7 @@ func TestRequireInsertedTx(t *testing.T) {
 			mockT := NewMockT(t)
 			opts := sameOpts()
 			opts.State = rivertype.JobStateCancelled
-			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.True(t, mockT.Failed)
 			require.Equal(t,
 				failureString("Job with kind 'job2' state 'scheduled' not equal to expected 'cancelled'")+"\n",
@@ -284,7 +296,7 @@ func TestRequireInsertedTx(t *testing.T) {
 			mockT := NewMockT(t)
 			opts := sameOpts()
 			opts.Tags = []string{"tag2"}
-			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.True(t, mockT.Failed)
 			require.Equal(t,
 				failureString("Job with kind 'job2' tags [tag1] not equal to expected [tag2]")+"\n",
@@ -296,7 +308,7 @@ func TestRequireInsertedTx(t *testing.T) {
 			opts := emptyOpts()
 			opts.MaxAttempts = job.MaxAttempts
 			opts.Priority = job.Priority
-			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.False(t, mockT.Failed, "Should have succeeded, but failed with: "+mockT.LogOutput())
 		})
 
@@ -305,7 +317,7 @@ func TestRequireInsertedTx(t *testing.T) {
 			opts := sameOpts()
 			opts.MaxAttempts = 77
 			opts.Priority = 3
-			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.True(t, mockT.Failed)
 			require.Equal(t,
 				failureString("Job with kind 'job2' max attempts 78 not equal to expected 77, priority 2 not equal to expected 3")+"\n",
@@ -315,7 +327,7 @@ func TestRequireInsertedTx(t *testing.T) {
 		t.Run("AllSameSucceeds", func(t *testing.T) {
 			mockT := NewMockT(t)
 			opts := sameOpts()
-			requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.False(t, mockT.Failed)
 		})
 	})
@@ -330,20 +342,30 @@ func TestRequireNotInserted(t *testing.T) {
 
 	type testBundle struct {
 		dbPool *pgxpool.Pool
+		driver *riverpgxv5.Driver
 		mockT  *MockT
+		schema string
 	}
 
 	setup := func(t *testing.T) (*river.Client[pgx.Tx], *testBundle) {
 		t.Helper()
 
-		dbPool := riverinternaltest.TestDB(ctx, t)
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+		)
 
-		riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{})
+		riverClient, err := river.NewClient(driver, &river.Config{
+			Schema: schema,
+		})
 		require.NoError(t, err)
 
 		return riverClient, &testBundle{
 			dbPool: dbPool,
+			driver: driver,
 			mockT:  NewMockT(t),
+			schema: schema,
 		}
 	}
 
@@ -355,7 +377,7 @@ func TestRequireNotInserted(t *testing.T) {
 		_, err := riverClient.Insert(ctx, Job2Args{Int: 123}, nil)
 		require.NoError(t, err)
 
-		requireNotInserted(ctx, t, riverpgxv5.New(bundle.dbPool), &Job1Args{}, nil)
+		requireNotInserted(ctx, t, bundle.driver, bundle.schema, &Job1Args{}, nil)
 		require.False(t, bundle.mockT.Failed)
 	})
 }
@@ -390,7 +412,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		_, err := riverClient.InsertTx(ctx, bundle.tx, Job2Args{Int: 123}, nil)
 		require.NoError(t, err)
 
-		requireNotInsertedTx[*riverpgxv5.Driver](ctx, t, bundle.tx, &Job1Args{}, nil)
+		requireNotInsertedTx[*riverpgxv5.Driver](ctx, t, bundle.tx, emptySchema, &Job1Args{}, nil)
 		require.False(t, bundle.mockT.Failed)
 	})
 
@@ -399,10 +421,10 @@ func TestRequireNotInsertedTx(t *testing.T) {
 
 		_, bundle := setup(t)
 
-		requireNotInsertedTx[*riverpgxv5.Driver](ctx, t, bundle.tx, &Job1Args{}, nil)
+		requireNotInsertedTx[*riverpgxv5.Driver](ctx, t, bundle.tx, emptySchema, &Job1Args{}, nil)
 		require.False(t, bundle.mockT.Failed)
 
-		requireNotInsertedTx[*riverpgxv5.Driver](ctx, t, bundle.tx, &Job2Args{}, nil)
+		requireNotInsertedTx[*riverpgxv5.Driver](ctx, t, bundle.tx, emptySchema, &Job2Args{}, nil)
 		require.False(t, bundle.mockT.Failed)
 	})
 
@@ -418,11 +440,11 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		require.NoError(t, err)
 
 		// Not visible in the second transaction.
-		requireNotInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, otherTx, &Job1Args{}, nil)
+		requireNotInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, otherTx, emptySchema, &Job1Args{}, nil)
 		require.False(t, bundle.mockT.Failed)
 
 		// Visible in the original transaction.
-		requireNotInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, &Job1Args{}, nil)
+		requireNotInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, emptySchema, &Job1Args{}, nil)
 		require.True(t, bundle.mockT.Failed)
 	})
 
@@ -431,7 +453,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 
 		_, bundle := setup(t)
 
-		requireNotInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, &Job2Args{}, nil)
+		requireNotInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, emptySchema, &Job2Args{}, nil)
 		require.False(t, bundle.mockT.Failed)
 	})
 
@@ -446,7 +468,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		requireNotInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, &Job1Args{}, nil)
+		requireNotInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, emptySchema, &Job1Args{}, nil)
 		require.True(t, bundle.mockT.Failed)
 		require.Equal(t,
 			failureString("2 jobs found with kind, but expected to find none: job1")+"\n",
@@ -461,7 +483,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		_, err := riverClient.InsertTx(ctx, bundle.tx, Job2Args{Int: 123}, nil)
 		require.NoError(t, err)
 
-		requireNotInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, &Job1Args{}, nil)
+		requireNotInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, emptySchema, &Job1Args{}, nil)
 		require.False(t, bundle.mockT.Failed)
 	})
 
@@ -498,7 +520,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 			mockT := NewMockT(t)
 			opts := emptyOpts()
 			opts.MaxAttempts = job.MaxAttempts
-			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.True(t, mockT.Failed)
 			require.Equal(t,
 				failureString("Job with kind 'job2' max attempts equal to excluded %d", job.MaxAttempts)+"\n",
@@ -509,7 +531,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 			mockT := NewMockT(t)
 			opts := emptyOpts()
 			opts.Priority = job.Priority
-			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.True(t, mockT.Failed)
 			require.Equal(t,
 				failureString("Job with kind 'job2' priority equal to excluded %d", job.Priority)+"\n",
@@ -520,7 +542,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 			mockT := NewMockT(t)
 			opts := emptyOpts()
 			opts.Queue = job.Queue
-			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.True(t, mockT.Failed)
 			require.Equal(t,
 				failureString("Job with kind 'job2' queue equal to excluded '%s'", job.Queue)+"\n",
@@ -531,7 +553,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 			mockT := NewMockT(t)
 			opts := emptyOpts()
 			opts.ScheduledAt = job.ScheduledAt
-			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.True(t, mockT.Failed)
 			require.Equal(t,
 				failureString("Job with kind 'job2' scheduled at equal to excluded %s", opts.ScheduledAt.Format(rfc3339Micro))+"\n",
@@ -542,7 +564,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 			mockT := NewMockT(t)
 			opts := emptyOpts()
 			opts.State = job.State
-			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.True(t, mockT.Failed)
 			require.Equal(t,
 				failureString("Job with kind 'job2' state equal to excluded '%s'", job.State)+"\n",
@@ -553,7 +575,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 			mockT := NewMockT(t)
 			opts := emptyOpts()
 			opts.Tags = job.Tags
-			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.True(t, mockT.Failed)
 			require.Equal(t,
 				failureString("Job with kind 'job2' tags equal to excluded %+v", job.Tags)+"\n",
@@ -565,7 +587,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 			opts := emptyOpts()
 			opts.MaxAttempts = job.MaxAttempts // one property matches job, but the other does not
 			opts.Priority = 3
-			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.False(t, mockT.Failed, "Should have succeeded, but failed with: "+mockT.LogOutput())
 		})
 
@@ -574,7 +596,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 			opts := emptyOpts()
 			opts.MaxAttempts = job.MaxAttempts
 			opts.Priority = job.Priority
-			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.True(t, mockT.Failed)
 			require.Equal(t,
 				failureString("Job with kind 'job2' max attempts equal to excluded %d, priority equal to excluded %d", job.MaxAttempts, job.Priority)+"\n",
@@ -584,7 +606,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		t.Run("AllSameFails", func(t *testing.T) {
 			mockT := NewMockT(t)
 			opts := sameOpts()
-			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.True(t, mockT.Failed)
 			require.Equal(t,
 				failureString("Job with kind 'job2' max attempts equal to excluded %d, priority equal to excluded %d, queue equal to excluded '%s', scheduled at equal to excluded %s, state equal to excluded '%s', tags equal to excluded %+v", job.MaxAttempts, job.Priority, job.Queue, job.ScheduledAt.Format(rfc3339Micro), job.State, job.Tags)+"\n",
@@ -600,7 +622,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 			mockT := NewMockT(t)
 			opts := emptyOpts()
 			opts.Priority = 3
-			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.True(t, mockT.Failed)
 			require.Equal(t,
 				failureString("Job with kind 'job2' priority equal to excluded %d", 3)+"\n",
@@ -618,20 +640,30 @@ func TestRequireManyInserted(t *testing.T) {
 
 	type testBundle struct {
 		dbPool *pgxpool.Pool
+		driver *riverpgxv5.Driver
 		mockT  *MockT
+		schema string
 	}
 
 	setup := func(t *testing.T) (*river.Client[pgx.Tx], *testBundle) {
 		t.Helper()
 
-		dbPool := riverinternaltest.TestDB(ctx, t)
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+		)
 
-		riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{})
+		riverClient, err := river.NewClient(driver, &river.Config{
+			Schema: schema,
+		})
 		require.NoError(t, err)
 
 		return riverClient, &testBundle{
 			dbPool: dbPool,
+			driver: driver,
 			mockT:  NewMockT(t),
+			schema: schema,
 		}
 	}
 
@@ -643,7 +675,7 @@ func TestRequireManyInserted(t *testing.T) {
 		_, err := riverClient.Insert(ctx, Job1Args{String: "foo"}, nil)
 		require.NoError(t, err)
 
-		jobs := requireManyInserted(ctx, bundle.mockT, riverpgxv5.New(bundle.dbPool), []ExpectedJob{
+		jobs := requireManyInserted(ctx, bundle.mockT, bundle.driver, bundle.schema, []ExpectedJob{
 			{Args: &Job1Args{}},
 		})
 		require.False(t, bundle.mockT.Failed)
@@ -681,7 +713,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 		_, err := riverClient.InsertTx(ctx, bundle.tx, Job1Args{String: "foo"}, nil)
 		require.NoError(t, err)
 
-		jobs := requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
+		jobs := requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, emptySchema, []ExpectedJob{
 			{Args: &Job1Args{}},
 		})
 		require.False(t, bundle.mockT.Failed)
@@ -700,14 +732,14 @@ func TestRequireManyInsertedTx(t *testing.T) {
 		require.NoError(t, err)
 
 		// Visible in the original transaction.
-		jobs := requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
+		jobs := requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, emptySchema, []ExpectedJob{
 			{Args: &Job1Args{}},
 		})
 		require.False(t, bundle.mockT.Failed)
 		require.Equal(t, "job1", jobs[0].Kind)
 
 		// Not visible in the second transaction.
-		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, otherTx, []ExpectedJob{
+		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, otherTx, emptySchema, []ExpectedJob{
 			{Args: &Job1Args{}},
 		})
 		require.True(t, bundle.mockT.Failed)
@@ -724,7 +756,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 		_, err = riverClient.InsertTx(ctx, bundle.tx, Job2Args{Int: 123}, nil)
 		require.NoError(t, err)
 
-		jobs := requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
+		jobs := requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, emptySchema, []ExpectedJob{
 			{Args: &Job1Args{}},
 			{Args: &Job2Args{}},
 		})
@@ -744,7 +776,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		jobs := requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
+		jobs := requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, emptySchema, []ExpectedJob{
 			{Args: &Job1Args{}},
 			{Args: &Job1Args{}},
 		})
@@ -767,7 +799,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		jobs := requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
+		jobs := requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, emptySchema, []ExpectedJob{
 			{Args: &Job1Args{}},
 			{Args: &Job1Args{}},
 			{Args: &Job2Args{}},
@@ -791,7 +823,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 		_, err := riverClient.InsertTx(ctx, bundle.tx, Job1Args{String: "foo"}, nil)
 		require.NoError(t, err)
 
-		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
+		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, emptySchema, []ExpectedJob{
 			{
 				Args: &Job1Args{},
 				Opts: &RequireInsertedOpts{
@@ -813,7 +845,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
+		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, emptySchema, []ExpectedJob{
 			{
 				Args: &Job2Args{},
 				Opts: &RequireInsertedOpts{
@@ -833,7 +865,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 
 		_, bundle := setup(t)
 
-		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
+		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, emptySchema, []ExpectedJob{
 			{Args: &Job1Args{}},
 		})
 		require.True(t, bundle.mockT.Failed)
@@ -853,7 +885,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
+		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, emptySchema, []ExpectedJob{
 			{Args: &Job1Args{}},
 		})
 		require.True(t, bundle.mockT.Failed)
@@ -873,7 +905,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
+		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, emptySchema, []ExpectedJob{
 			{Args: &Job1Args{}},
 			{Args: &Job2Args{}},
 		})
@@ -897,7 +929,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, []ExpectedJob{
+		_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, bundle.mockT, bundle.tx, emptySchema, []ExpectedJob{
 			{Args: &Job1Args{}},
 			{Args: &Job1Args{}},
 			{Args: &Job2Args{}},
@@ -928,7 +960,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 		// Max attempts
 		{
 			mockT := NewMockT(t)
-			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, []ExpectedJob{
+			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, []ExpectedJob{
 				{
 					Args: &Job2Args{},
 					Opts: &RequireInsertedOpts{
@@ -950,7 +982,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 		// Priority
 		{
 			mockT := NewMockT(t)
-			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, []ExpectedJob{
+			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, []ExpectedJob{
 				{
 					Args: &Job2Args{},
 					Opts: &RequireInsertedOpts{
@@ -972,7 +1004,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 		// Queue
 		{
 			mockT := NewMockT(t)
-			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, []ExpectedJob{
+			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, []ExpectedJob{
 				{
 					Args: &Job2Args{},
 					Opts: &RequireInsertedOpts{
@@ -994,7 +1026,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 		// Scheduled at
 		{
 			mockT := NewMockT(t)
-			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, []ExpectedJob{
+			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, []ExpectedJob{
 				{
 					Args: &Job2Args{},
 					Opts: &RequireInsertedOpts{
@@ -1016,7 +1048,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 		// State
 		{
 			mockT := NewMockT(t)
-			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, []ExpectedJob{
+			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, []ExpectedJob{
 				{
 					Args: &Job2Args{},
 					Opts: &RequireInsertedOpts{
@@ -1038,7 +1070,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 		// Tags
 		{
 			mockT := NewMockT(t)
-			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, []ExpectedJob{
+			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, []ExpectedJob{
 				{
 					Args: &Job2Args{},
 					Opts: &RequireInsertedOpts{

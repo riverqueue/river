@@ -11,9 +11,9 @@ import (
 
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/riverschematest"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/startstoptest"
@@ -34,6 +34,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 	type testBundle struct {
 		exec                 riverdriver.Executor
 		notificationsByQueue map[string]int
+		schema               string
 		waitChan             chan (struct{})
 	}
 
@@ -78,46 +79,54 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 	// A simplified version of `Client.insertMany` that only inserts jobs directly
 	// via the driver instead of using the pilot.
-	insertFunc := func(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) ([]*rivertype.JobInsertResult, error) {
-		finalInsertParams := sliceutil.Map(insertParams, func(params *rivertype.JobInsertParams) *riverdriver.JobInsertFastParams {
-			return (*riverdriver.JobInsertFastParams)(params)
-		})
-		results, err := tx.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
-			Jobs:   finalInsertParams,
-			Schema: "",
-		})
-		if err != nil {
-			return nil, err
+	makeInsertFunc := func(schema string) func(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) ([]*rivertype.JobInsertResult, error) {
+		return func(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) ([]*rivertype.JobInsertResult, error) {
+			results, err := tx.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+				Jobs: sliceutil.Map(insertParams, func(params *rivertype.JobInsertParams) *riverdriver.JobInsertFastParams {
+					return (*riverdriver.JobInsertFastParams)(params)
+				}),
+				Schema: schema,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return sliceutil.Map(results,
+				func(result *riverdriver.JobInsertFastResult) *rivertype.JobInsertResult {
+					return (*rivertype.JobInsertResult)(result)
+				},
+			), nil
 		}
-		return sliceutil.Map(results,
-			func(result *riverdriver.JobInsertFastResult) *rivertype.JobInsertResult {
-				return (*rivertype.JobInsertResult)(result)
-			},
-		), nil
 	}
 
 	setup := func(t *testing.T) (*PeriodicJobEnqueuer, *testBundle) {
 		t.Helper()
 
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+		)
+
 		bundle := &testBundle{
-			exec:                 riverpgxv5.New(riverinternaltest.TestDB(ctx, t)).GetExecutor(),
+			exec:                 riverpgxv5.New(dbPool).GetExecutor(),
 			notificationsByQueue: make(map[string]int),
+			schema:               schema,
 			waitChan:             make(chan struct{}),
 		}
 
-		svc := NewPeriodicJobEnqueuer(riversharedtest.BaseServiceArchetype(t), &PeriodicJobEnqueuerConfig{Insert: insertFunc}, bundle.exec)
+		svc := NewPeriodicJobEnqueuer(riversharedtest.BaseServiceArchetype(t), &PeriodicJobEnqueuerConfig{Insert: makeInsertFunc(schema)}, bundle.exec)
 		svc.StaggerStartupDisable(true)
 		svc.TestSignals.Init()
 
 		return svc, bundle
 	}
 
-	requireNJobs := func(t *testing.T, exec riverdriver.Executor, kind string, expectedNumJobs int) []*rivertype.JobRow {
+	requireNJobs := func(t *testing.T, bundle *testBundle, kind string, expectedNumJobs int) []*rivertype.JobRow {
 		t.Helper()
 
-		jobs, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+		jobs, err := bundle.exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
 			Kind:   []string{kind},
-			Schema: "",
+			Schema: bundle.schema,
 		})
 		require.NoError(t, err)
 		require.Len(t, jobs, expectedNumJobs, "Expected to find exactly %d job(s) of kind: %s, but found %d", expectedNumJobs, kind, len(jobs))
@@ -166,17 +175,17 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		// Should be no jobs to start.
-		requireNJobs(t, bundle.exec, "periodic_job_500ms", 0)
+		requireNJobs(t, bundle, "periodic_job_500ms", 0)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_500ms", 1)
+		requireNJobs(t, bundle, "periodic_job_500ms", 1)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_500ms", 2)
+		requireNJobs(t, bundle, "periodic_job_500ms", 2)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_500ms", 3)
-		requireNJobs(t, bundle.exec, "periodic_job_1500ms", 1)
+		requireNJobs(t, bundle, "periodic_job_500ms", 3)
+		requireNJobs(t, bundle, "periodic_job_1500ms", 1)
 	})
 
 	t.Run("SetsPeriodicMetadataAttribute", func(t *testing.T) {
@@ -207,7 +216,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
 
 		assertMetadata := func(name string, expected string) {
-			job := requireNJobs(t, bundle.exec, name, 1)[0]
+			job := requireNJobs(t, bundle, name, 1)[0]
 			require.JSONEq(t, expected, string(job.Metadata))
 		}
 
@@ -229,12 +238,12 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		job1 := requireNJobs(t, bundle.exec, "periodic_job_500ms", 1)[0]
+		job1 := requireNJobs(t, bundle, "periodic_job_500ms", 1)[0]
 		require.Equal(t, rivertype.JobStateAvailable, job1.State)
 		require.WithinDuration(t, time.Now(), job1.ScheduledAt, 1*time.Second)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		job2 := requireNJobs(t, bundle.exec, "periodic_job_500ms", 2)[1] // ordered by ID
+		job2 := requireNJobs(t, bundle, "periodic_job_500ms", 2)[1] // ordered by ID
 
 		// The new `scheduled_at` is *exactly* the original `scheduled_at` plus
 		// 500 milliseconds because the enqueuer used the target next run time
@@ -256,18 +265,18 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		// Should be no jobs to start.
-		requireNJobs(t, bundle.exec, "unique_periodic_job_500ms", 0)
+		requireNJobs(t, bundle, "unique_periodic_job_500ms", 0)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "unique_periodic_job_500ms", 1)
+		requireNJobs(t, bundle, "unique_periodic_job_500ms", 1)
 
 		// Another insert was attempted, but there's still only one job due to
 		// uniqueness conditions.
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "unique_periodic_job_500ms", 1)
+		requireNJobs(t, bundle, "unique_periodic_job_500ms", 1)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "unique_periodic_job_500ms", 1)
+		requireNJobs(t, bundle, "unique_periodic_job_500ms", 1)
 	})
 
 	t.Run("RunOnStart", func(t *testing.T) {
@@ -284,8 +293,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_5s", 1)
-		requireNJobs(t, bundle.exec, "unique_periodic_job_5s", 1)
+		requireNJobs(t, bundle, "periodic_job_5s", 1)
+		requireNJobs(t, bundle, "unique_periodic_job_5s", 1)
 
 		// Should've happened quite quickly.
 		require.WithinDuration(t, time.Now(), start, 1*time.Second)
@@ -403,7 +412,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		svc := NewPeriodicJobEnqueuer(
 			riversharedtest.BaseServiceArchetype(t),
 			&PeriodicJobEnqueuerConfig{
-				Insert: insertFunc,
+				Insert: makeInsertFunc(bundle.schema),
 				PeriodicJobs: []*PeriodicJob{
 					{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), RunOnStart: true},
 					{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false), RunOnStart: true},
@@ -415,8 +424,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_500ms", 1)
-		requireNJobs(t, bundle.exec, "periodic_job_1500ms", 1)
+		requireNJobs(t, bundle, "periodic_job_500ms", 1)
+		requireNJobs(t, bundle, "periodic_job_1500ms", 1)
 	})
 
 	t.Run("AddAfterStart", func(t *testing.T) {
@@ -434,8 +443,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_500ms", 0)
-		requireNJobs(t, bundle.exec, "periodic_job_500ms_start", 1)
+		requireNJobs(t, bundle, "periodic_job_500ms", 0)
+		requireNJobs(t, bundle, "periodic_job_500ms_start", 1)
 	})
 
 	t.Run("AddManyAfterStart", func(t *testing.T) {
@@ -451,8 +460,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		})
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_500ms", 0)
-		requireNJobs(t, bundle.exec, "periodic_job_500ms_start", 1)
+		requireNJobs(t, bundle, "periodic_job_500ms", 0)
+		requireNJobs(t, bundle, "periodic_job_500ms_start", 1)
 	})
 
 	t.Run("ClearAfterStart", func(t *testing.T) {
@@ -468,8 +477,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		})
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_500ms", 0)
-		requireNJobs(t, bundle.exec, "periodic_job_500ms_start", 1)
+		requireNJobs(t, bundle, "periodic_job_500ms", 0)
+		requireNJobs(t, bundle, "periodic_job_500ms_start", 1)
 
 		svc.Clear()
 
@@ -497,8 +506,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		})
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_500ms", 0)
-		requireNJobs(t, bundle.exec, "periodic_job_500ms_start", 1)
+		requireNJobs(t, bundle, "periodic_job_500ms", 0)
+		requireNJobs(t, bundle, "periodic_job_500ms_start", 1)
 
 		svc.Remove(handles[1])
 
@@ -519,9 +528,9 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		})
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle.exec, "periodic_job_500ms", 0)
-		requireNJobs(t, bundle.exec, "periodic_job_500ms_other", 0)
-		requireNJobs(t, bundle.exec, "periodic_job_500ms_start", 1)
+		requireNJobs(t, bundle, "periodic_job_500ms", 0)
+		requireNJobs(t, bundle, "periodic_job_500ms_other", 0)
+		requireNJobs(t, bundle, "periodic_job_500ms_start", 1)
 
 		svc.RemoveMany([]rivertype.PeriodicJobHandle{handles[1], handles[2]})
 

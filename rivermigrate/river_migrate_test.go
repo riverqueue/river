@@ -19,7 +19,6 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
@@ -89,7 +88,7 @@ func TestMigrator(t *testing.T) {
 		//
 		// To make this easier to clean up afterward, we create a new, clean schema
 		// for each test run and then drop it afterward.
-		dbPool := riverinternaltest.TestDB(ctx, t)
+		dbPool := riversharedtest.DBPool(ctx, t)
 		schema := "river_migrate_test_" + randutil.Hex(8)
 		_, err := dbPool.Exec(ctx, "CREATE SCHEMA "+schema)
 		require.NoError(t, err)
@@ -108,7 +107,7 @@ func TestMigrator(t *testing.T) {
 
 		migrator, err := New(bundle.driver, &Config{
 			Logger: bundle.logger,
-			schema: schema,
+			Schema: schema,
 		})
 		require.NoError(t, err)
 		migrator.migrations = migrationsBundle.WithTestVersionsMap
@@ -130,7 +129,7 @@ func TestMigrator(t *testing.T) {
 		driver := riverdatabasesql.New(stdPool)
 		migrator, err := New(driver, &Config{
 			Logger: bundle.logger,
-			schema: bundle.schema,
+			Schema: bundle.schema,
 		})
 		require.NoError(t, err)
 		migrator.migrations = migrationsBundle.WithTestVersionsMap
@@ -741,7 +740,7 @@ func TestMigrator(t *testing.T) {
 		alternateMigrator, err := New(bundle.driver, &Config{
 			Line:   migrationLineAlternate,
 			Logger: bundle.logger,
-			schema: bundle.schema,
+			Schema: bundle.schema,
 		})
 		require.NoError(t, err)
 
@@ -785,7 +784,7 @@ func TestMigrator(t *testing.T) {
 		alternateMigrator, err := New(bundle.driver, &Config{
 			Line:   migrationLineAlternate,
 			Logger: bundle.logger,
-			schema: bundle.schema,
+			Schema: bundle.schema,
 		})
 		require.NoError(t, err)
 
@@ -875,7 +874,7 @@ func TestMigrator(t *testing.T) {
 		commitRequiredMigrator, err := New(bundle.driver, &Config{
 			Line:   migrationLineCommitRequired,
 			Logger: bundle.logger,
-			schema: bundle.schema,
+			Schema: bundle.schema,
 		})
 		require.NoError(t, err)
 

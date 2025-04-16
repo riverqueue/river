@@ -18,23 +18,28 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/riverschematest"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivertype"
 )
 
 func TestDriverDatabaseSQL(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
-	dbPool := riverinternaltest.TestDB(ctx, t)
-
-	stdPool := stdlib.OpenDBFromPool(dbPool)
+	var (
+		ctx     = context.Background()
+		dbPool  = riversharedtest.DBPool(ctx, t)
+		stdPool = stdlib.OpenDBFromPool(dbPool)
+		driver  = riverdatabasesql.New(stdPool)
+		schema  = riverschematest.TestSchema(ctx, t, driver, nil)
+	)
 	t.Cleanup(func() { require.NoError(t, stdPool.Close()) })
 
 	riverdrivertest.Exercise(ctx, t,
-		func(ctx context.Context, t *testing.T) riverdriver.Driver[*sql.Tx] {
+		func(ctx context.Context, t *testing.T) (riverdriver.Driver[*sql.Tx], string) {
 			t.Helper()
 
-			return riverdatabasesql.New(stdPool)
+			return driver, schema
 		},
 		func(ctx context.Context, t *testing.T) riverdriver.Executor {
 			t.Helper()
@@ -42,6 +47,10 @@ func TestDriverDatabaseSQL(t *testing.T) {
 			tx, err := stdPool.BeginTx(ctx, nil)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = tx.Rollback() })
+
+			// The same thing as the built-in riversharedtest.TestTx does.
+			_, err = tx.ExecContext(ctx, "SET search_path TO 'public'")
+			require.NoError(t, err)
 
 			return riverdatabasesql.New(nil).UnwrapExecutor(tx)
 		})
@@ -53,11 +62,16 @@ func TestDriverRiverPgxV5(t *testing.T) {
 	ctx := context.Background()
 
 	riverdrivertest.Exercise(ctx, t,
-		func(ctx context.Context, t *testing.T) riverdriver.Driver[pgx.Tx] {
+		func(ctx context.Context, t *testing.T) (riverdriver.Driver[pgx.Tx], string) {
 			t.Helper()
 
-			dbPool := riverinternaltest.TestDB(ctx, t)
-			return riverpgxv5.New(dbPool)
+			var (
+				dbPool = riversharedtest.DBPool(ctx, t)
+				driver = riverpgxv5.New(dbPool)
+				schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			)
+
+			return driver, schema
 		},
 		func(ctx context.Context, t *testing.T) riverdriver.Executor {
 			t.Helper()
@@ -75,16 +89,24 @@ func BenchmarkDriverRiverPgxV5_Executor(b *testing.B) {
 
 	ctx := context.Background()
 
-	type testBundle struct{}
+	type testBundle struct {
+		schema string
+	}
 
 	setupPool := func(b *testing.B) (riverdriver.Executor, *testBundle) {
 		b.Helper()
 
-		driver := riverpgxv5.New(riverinternaltest.TestDB(ctx, b))
+		var (
+			dbPool = riversharedtest.DBPool(ctx, b)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverschematest.TestSchema(ctx, b, driver, nil)
+		)
 
 		b.ResetTimer()
 
-		return driver.GetExecutor(), &testBundle{}
+		return driver.GetExecutor(), &testBundle{
+			schema: schema,
+		}
 	}
 
 	setupTx := func(b *testing.B) (riverdriver.Executor, *testBundle) {
@@ -98,7 +120,7 @@ func BenchmarkDriverRiverPgxV5_Executor(b *testing.B) {
 		return driver.UnwrapExecutor(tx), &testBundle{}
 	}
 
-	makeInsertParams := func() *riverdriver.JobInsertFastManyParams {
+	makeInsertParams := func(bundle *testBundle) *riverdriver.JobInsertFastManyParams {
 		return &riverdriver.JobInsertFastManyParams{
 			Jobs: []*riverdriver.JobInsertFastParams{{
 				EncodedArgs: []byte(`{}`),
@@ -110,7 +132,7 @@ func BenchmarkDriverRiverPgxV5_Executor(b *testing.B) {
 				ScheduledAt: nil,
 				State:       rivertype.JobStateAvailable,
 			}},
-			Schema: "",
+			Schema: bundle.schema,
 		}
 	}
 
@@ -118,10 +140,10 @@ func BenchmarkDriverRiverPgxV5_Executor(b *testing.B) {
 		ctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
-		exec, _ := setupTx(b)
+		exec, bundle := setupTx(b)
 
 		for range b.N {
-			if _, err := exec.JobInsertFastMany(ctx, makeInsertParams()); err != nil {
+			if _, err := exec.JobInsertFastMany(ctx, makeInsertParams(bundle)); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -131,12 +153,12 @@ func BenchmarkDriverRiverPgxV5_Executor(b *testing.B) {
 		ctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
-		exec, _ := setupPool(b)
+		exec, bundle := setupPool(b)
 
 		b.RunParallel(func(pb *testing.PB) {
 			i := 0
 			for pb.Next() {
-				if _, err := exec.JobInsertFastMany(ctx, makeInsertParams()); err != nil {
+				if _, err := exec.JobInsertFastMany(ctx, makeInsertParams(bundle)); err != nil {
 					b.Fatal(err)
 				}
 				i++
@@ -148,10 +170,10 @@ func BenchmarkDriverRiverPgxV5_Executor(b *testing.B) {
 		ctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
-		exec, _ := setupTx(b)
+		exec, bundle := setupTx(b)
 
 		for range b.N * 100 {
-			if _, err := exec.JobInsertFastMany(ctx, makeInsertParams()); err != nil {
+			if _, err := exec.JobInsertFastMany(ctx, makeInsertParams(bundle)); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -173,10 +195,10 @@ func BenchmarkDriverRiverPgxV5_Executor(b *testing.B) {
 		ctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
-		exec, _ := setupPool(b)
+		exec, bundle := setupPool(b)
 
 		for range b.N * 100 * runtime.NumCPU() {
-			if _, err := exec.JobInsertFastMany(ctx, makeInsertParams()); err != nil {
+			if _, err := exec.JobInsertFastMany(ctx, makeInsertParams(bundle)); err != nil {
 				b.Fatal(err)
 			}
 		}

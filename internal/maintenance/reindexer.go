@@ -85,6 +85,7 @@ func NewReindexer(archetype *baseservice.Archetype, config *ReindexerConfig, exe
 		Config: (&ReindexerConfig{
 			IndexNames:   indexNames,
 			ScheduleFunc: scheduleFunc,
+			Schema:       config.Schema,
 			Timeout:      valutil.ValOrDefault(config.Timeout, ReindexerTimeoutDefault),
 		}).mustValidate(),
 

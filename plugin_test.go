@@ -8,8 +8,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/riverschematest"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
@@ -28,9 +28,16 @@ func TestClientDriverPlugin(t *testing.T) {
 	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
 		t.Helper()
 
-		pluginDriver := newDriverWithPlugin(t, riverinternaltest.TestDB(ctx, t))
+		var (
+			config       = newTestConfig(t, nil)
+			dbPool       = riversharedtest.DBPool(ctx, t)
+			driver       = riverpgxv5.New(dbPool)
+			schema       = riverschematest.TestSchema(ctx, t, driver, nil)
+			pluginDriver = newDriverWithPlugin(t, dbPool)
+		)
+		config.Schema = schema
 
-		client, err := NewClient(pluginDriver, newTestConfig(t, nil))
+		client, err := NewClient(pluginDriver, config)
 		require.NoError(t, err)
 
 		return client, &testBundle{
@@ -90,11 +97,18 @@ func TestClientPilotPlugin(t *testing.T) {
 	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
 		t.Helper()
 
-		pluginDriver := newDriverWithPlugin(t, riverinternaltest.TestDB(ctx, t))
-		pluginPilot := newPilotWithPlugin(t)
+		var (
+			config       = newTestConfig(t, nil)
+			dbPool       = riversharedtest.DBPool(ctx, t)
+			driver       = riverpgxv5.New(dbPool)
+			schema       = riverschematest.TestSchema(ctx, t, driver, nil)
+			pluginDriver = newDriverWithPlugin(t, dbPool)
+			pluginPilot  = newPilotWithPlugin(t)
+		)
+		config.Schema = schema
 		pluginDriver.pilot = pluginPilot
 
-		client, err := NewClient(pluginDriver, newTestConfig(t, nil))
+		client, err := NewClient(pluginDriver, config)
 		require.NoError(t, err)
 
 		return client, &testBundle{

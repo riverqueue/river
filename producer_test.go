@@ -20,6 +20,7 @@ import (
 	"github.com/riverqueue/river/internal/riverinternaltest/sharedtx"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/riverschematest"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
@@ -44,7 +45,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 
 	ctx := context.Background()
 	require := require.New(t)
-	dbPool := riverinternaltest.TestDB(ctx, t)
+	dbPool := riversharedtest.DBPool(ctx, t)
 
 	const maxJobCount = 10000
 	// This doesn't strictly mean that there are no more jobs left to process,
@@ -55,10 +56,10 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	archetype := riversharedtest.BaseServiceArchetype(t)
 
 	config := newTestConfig(t, nil)
-	dbDriver := riverpgxv5.New(dbPool)
-	exec := dbDriver.GetExecutor()
-	schema := "" // try to make tests schema-based rather than database-based in the future
-	listener := dbDriver.GetListener(schema)
+	driver := riverpgxv5.New(dbPool)
+	exec := driver.GetExecutor()
+	schema := riverschematest.TestSchema(ctx, t, driver, nil)
+	listener := driver.GetListener(schema)
 	pilot := &riverpilot.StandardPilot{}
 
 	subscribeCh := make(chan []jobcompleter.CompleterJobUpdated, 100)
@@ -167,7 +168,6 @@ func TestProducer_PollOnly(t *testing.T) {
 			driver    = riverpgxv5.New(nil)
 			pilot     = &riverpilot.StandardPilot{}
 			queueName = fmt.Sprintf("test-producer-poll-only-%05d", randutil.IntBetween(1, 100_000))
-			schema    = "" // try to make tests schema-based rather than database-based in the future
 			tx        = riverinternaltest.TestTx(ctx, t)
 		)
 
@@ -203,7 +203,7 @@ func TestProducer_PollOnly(t *testing.T) {
 			QueueReportInterval:          queueReportIntervalDefault,
 			RetryPolicy:                  &DefaultClientRetryPolicy{},
 			SchedulerInterval:            riverinternaltest.SchedulerShortInterval,
-			Schema:                       schema,
+			Schema:                       "",
 			StaleProducerRetentionPeriod: time.Minute,
 			Workers:                      NewWorkers(),
 		}), jobUpdates
@@ -218,11 +218,11 @@ func TestProducer_WithNotifier(t *testing.T) {
 
 		var (
 			archetype  = riversharedtest.BaseServiceArchetype(t)
-			dbPool     = riverinternaltest.TestDB(ctx, t)
+			dbPool     = riversharedtest.DBPool(ctx, t)
 			driver     = riverpgxv5.New(dbPool)
 			exec       = driver.GetExecutor()
 			jobUpdates = make(chan []jobcompleter.CompleterJobUpdated, 10)
-			schema     = "" // try to make tests schema-based rather than database-based in the future
+			schema     = riverschematest.TestSchema(ctx, t, driver, nil)
 			listener   = driver.GetListener(schema)
 			pilot      = &riverpilot.StandardPilot{}
 			queueName  = fmt.Sprintf("test-producer-with-notifier-%05d", randutil.IntBetween(1, 100_000))
@@ -527,6 +527,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{
 			Name:     ptrutil.Ptr(producer.config.Queue),
 			PausedAt: ptrutil.Ptr(time.Now()),
+			Schema:   producer.config.Schema,
 		})
 
 		mustInsert(ctx, t, producer, bundle, &noOpArgs{})
@@ -567,7 +568,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		}))
 		if producer.config.Notifier != nil {
 			// also emit notification:
-			emitQueueNotification(t, ctx, bundle.exec, queueNameToPause, "pause", nil)
+			emitQueueNotification(t, ctx, bundle.exec, producer.config.Schema, queueNameToPause, "pause", nil)
 		}
 		producer.testSignals.Paused.WaitOrTimeout()
 
@@ -587,7 +588,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		}))
 		if producer.config.Notifier != nil {
 			// also emit notification:
-			emitQueueNotification(t, ctx, bundle.exec, queueNameToPause, "resume", nil)
+			emitQueueNotification(t, ctx, bundle.exec, producer.config.Schema, queueNameToPause, "resume", nil)
 		}
 		producer.testSignals.Resumed.WaitOrTimeout()
 
@@ -618,6 +619,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		// Delete the queue by using a future-dated horizon:
 		_, err := bundle.exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{
 			Max:              100,
+			Schema:           producer.config.Schema,
 			UpdatedAtHorizon: time.Now().Add(time.Minute),
 		})
 		require.NoError(t, err)
@@ -643,6 +645,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 				Metadata:         newMetadata,
 				MetadataDoUpdate: true,
 				Name:             producer.config.Queue,
+				Schema:           producer.config.Schema,
 			})
 			require.NoError(t, err)
 		}
@@ -652,7 +655,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 
 		if producer.config.Notifier != nil {
 			// also emit notification:
-			emitQueueNotification(t, ctx, bundle.exec, producer.config.Queue, "metadata_changed", []byte(`{"foo":"bar","baz":123}`))
+			emitQueueNotification(t, ctx, bundle.exec, producer.config.Schema, producer.config.Queue, "metadata_changed", []byte(`{"foo":"bar","baz":123}`))
 		}
 
 		producer.testSignals.MetadataChanged.WaitOrTimeout()
@@ -676,7 +679,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		updateMetadata(differentMetadata)
 		if producer.config.Notifier != nil {
 			// also emit notification:
-			emitQueueNotification(t, ctx, bundle.exec, producer.config.Queue, "metadata_changed", differentMetadata)
+			emitQueueNotification(t, ctx, bundle.exec, producer.config.Schema, producer.config.Queue, "metadata_changed", differentMetadata)
 		}
 
 		// Should receive a metadata changed signal since the JSON is different:
@@ -684,7 +687,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 	})
 }
 
-func emitQueueNotification(t *testing.T, ctx context.Context, exec riverdriver.Executor, queue, action string, metadata []byte) {
+func emitQueueNotification(t *testing.T, ctx context.Context, exec riverdriver.Executor, schema, queue, action string, metadata []byte) {
 	t.Helper()
 
 	payload := map[string]any{
@@ -701,7 +704,7 @@ func emitQueueNotification(t *testing.T, ctx context.Context, exec riverdriver.E
 	err = exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{
 		Topic:   string(notifier.NotificationTopicControl),
 		Payload: []string{string(payloadBytes)},
-		Schema:  "",
+		Schema:  schema,
 	})
 	require.NoError(t, err)
 }

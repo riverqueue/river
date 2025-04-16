@@ -282,12 +282,12 @@ type Config struct {
 	// Defaults to DefaultRetryPolicy.
 	RetryPolicy ClientRetryPolicy
 
-	// schema is a non-standard schema where River tables are located. All table
+	// Schema is a non-standard Schema where River tables are located. All table
 	// references in database queries will use this value as a prefix.
 	//
 	// Defaults to empty, which causes the client to look for tables using the
 	// setting of Postgres `search_path`.
-	schema string
+	Schema string
 
 	// SkipUnknownJobCheck is a flag to control whether the client should skip
 	// checking to see if a registered worker exists in the client's worker bundle
@@ -383,7 +383,7 @@ func (c *Config) WithDefaults() *Config {
 		ReindexerSchedule:           c.ReindexerSchedule,
 		RescueStuckJobsAfter:        valutil.ValOrDefault(c.RescueStuckJobsAfter, rescueAfter),
 		RetryPolicy:                 retryPolicy,
-		schema:                      c.schema,
+		Schema:                      c.Schema,
 		SkipUnknownJobCheck:         c.SkipUnknownJobCheck,
 		Test:                        c.Test,
 		TestOnly:                    c.TestOnly,
@@ -689,7 +689,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			// uses listen/notify. Instead, each service polls for changes it's
 			// interested in. e.g. Elector polls to see if leader has expired.
 			if !config.PollOnly {
-				client.notifier = notifier.New(archetype, driver.GetListener(config.schema))
+				client.notifier = notifier.New(archetype, driver.GetListener(config.Schema))
 				client.services = append(client.services, client.notifier)
 			}
 		} else {
@@ -698,6 +698,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 
 		client.elector = leadership.NewElector(archetype, driver.GetExecutor(), client.notifier, &leadership.Config{
 			ClientID: config.ID,
+			Schema:   config.Schema,
 		})
 		client.services = append(client.services, client.elector)
 
@@ -726,7 +727,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 				CancelledJobRetentionPeriod: config.CancelledJobRetentionPeriod,
 				CompletedJobRetentionPeriod: config.CompletedJobRetentionPeriod,
 				DiscardedJobRetentionPeriod: config.DiscardedJobRetentionPeriod,
-				Schema:                      config.schema,
+				Schema:                      config.Schema,
 				Timeout:                     config.JobCleanerTimeout,
 			}, driver.GetExecutor())
 			maintenanceServices = append(maintenanceServices, jobCleaner)
@@ -737,7 +738,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			jobRescuer := maintenance.NewRescuer(archetype, &maintenance.JobRescuerConfig{
 				ClientRetryPolicy: config.RetryPolicy,
 				RescueAfter:       config.RescueStuckJobsAfter,
-				Schema:            config.schema,
+				Schema:            config.Schema,
 				WorkUnitFactoryFunc: func(kind string) workunit.WorkUnitFactory {
 					if workerInfo, ok := config.Workers.workersMap[kind]; ok {
 						return workerInfo.workUnitFactory
@@ -753,7 +754,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			jobScheduler := maintenance.NewJobScheduler(archetype, &maintenance.JobSchedulerConfig{
 				Interval:     config.schedulerInterval,
 				NotifyInsert: client.maybeNotifyInsertForQueues,
-				Schema:       config.schema,
+				Schema:       config.Schema,
 			}, driver.GetExecutor())
 			maintenanceServices = append(maintenanceServices, jobScheduler)
 			client.testSignals.jobScheduler = &jobScheduler.TestSignals
@@ -774,7 +775,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		{
 			queueCleaner := maintenance.NewQueueCleaner(archetype, &maintenance.QueueCleanerConfig{
 				RetentionPeriod: maintenance.QueueRetentionPeriodDefault,
-				Schema:          config.schema,
+				Schema:          config.Schema,
 			}, driver.GetExecutor())
 			maintenanceServices = append(maintenanceServices, queueCleaner)
 			client.testSignals.queueCleaner = &queueCleaner.TestSignals
@@ -788,7 +789,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 
 			reindexer := maintenance.NewReindexer(archetype, &maintenance.ReindexerConfig{
 				ScheduleFunc: scheduleFunc,
-				Schema:       config.schema,
+				Schema:       config.Schema,
 			}, driver.GetExecutor())
 			maintenanceServices = append(maintenanceServices, reindexer)
 			client.testSignals.reindexer = &reindexer.TestSignals
@@ -1264,7 +1265,7 @@ func (c *Client[TTx]) jobCancel(ctx context.Context, exec riverdriver.Executor, 
 		ID:                jobID,
 		CancelAttemptedAt: c.baseService.Time.NowUTC(),
 		ControlTopic:      string(notifier.NotificationTopicControl),
-		Schema:            c.config.schema,
+		Schema:            c.config.Schema,
 	})
 }
 
@@ -1274,7 +1275,7 @@ func (c *Client[TTx]) jobCancel(ctx context.Context, exec riverdriver.Executor, 
 func (c *Client[TTx]) JobDelete(ctx context.Context, id int64) (*rivertype.JobRow, error) {
 	return c.driver.GetExecutor().JobDelete(ctx, &riverdriver.JobDeleteParams{
 		ID:     id,
-		Schema: c.config.schema,
+		Schema: c.config.Schema,
 	})
 }
 
@@ -1287,7 +1288,7 @@ func (c *Client[TTx]) JobDelete(ctx context.Context, id int64) (*rivertype.JobRo
 func (c *Client[TTx]) JobDeleteTx(ctx context.Context, tx TTx, id int64) (*rivertype.JobRow, error) {
 	return c.driver.UnwrapExecutor(tx).JobDelete(ctx, &riverdriver.JobDeleteParams{
 		ID:     id,
-		Schema: c.config.schema,
+		Schema: c.config.Schema,
 	})
 }
 
@@ -1296,7 +1297,7 @@ func (c *Client[TTx]) JobDeleteTx(ctx context.Context, tx TTx, id int64) (*river
 func (c *Client[TTx]) JobGet(ctx context.Context, id int64) (*rivertype.JobRow, error) {
 	return c.driver.GetExecutor().JobGetByID(ctx, &riverdriver.JobGetByIDParams{
 		ID:     id,
-		Schema: c.config.schema,
+		Schema: c.config.Schema,
 	})
 }
 
@@ -1306,7 +1307,7 @@ func (c *Client[TTx]) JobGet(ctx context.Context, id int64) (*rivertype.JobRow, 
 func (c *Client[TTx]) JobGetTx(ctx context.Context, tx TTx, id int64) (*rivertype.JobRow, error) {
 	return c.driver.UnwrapExecutor(tx).JobGetByID(ctx, &riverdriver.JobGetByIDParams{
 		ID:     id,
-		Schema: c.config.schema,
+		Schema: c.config.Schema,
 	})
 }
 
@@ -1321,7 +1322,7 @@ func (c *Client[TTx]) JobGetTx(ctx context.Context, tx TTx, id int64) (*rivertyp
 func (c *Client[TTx]) JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, error) {
 	return c.driver.GetExecutor().JobRetry(ctx, &riverdriver.JobRetryParams{
 		ID:     id,
-		Schema: c.config.schema,
+		Schema: c.config.Schema,
 	})
 }
 
@@ -1341,7 +1342,7 @@ func (c *Client[TTx]) JobRetry(ctx context.Context, id int64) (*rivertype.JobRow
 func (c *Client[TTx]) JobRetryTx(ctx context.Context, tx TTx, id int64) (*rivertype.JobRow, error) {
 	return c.driver.UnwrapExecutor(tx).JobRetry(ctx, &riverdriver.JobRetryParams{
 		ID:     id,
-		Schema: c.config.schema,
+		Schema: c.config.Schema,
 	})
 }
 
@@ -1610,7 +1611,7 @@ func (c *Client[TTx]) insertMany(ctx context.Context, tx riverdriver.ExecutorTx,
 	return c.insertManyShared(ctx, tx, insertParams, func(ctx context.Context, insertParams []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error) {
 		results, err := c.pilot.JobInsertMany(ctx, tx, &riverdriver.JobInsertFastManyParams{
 			Jobs:   insertParams,
-			Schema: c.config.schema,
+			Schema: c.config.Schema,
 		})
 		if err != nil {
 			return nil, err
@@ -1774,16 +1775,16 @@ func (c *Client[TTx]) InsertManyFastTx(ctx context.Context, tx TTx, params []Ins
 	return c.insertManyFast(ctx, exec, params)
 }
 
-func (c *Client[TTx]) insertManyFast(ctx context.Context, tx riverdriver.ExecutorTx, params []InsertManyParams) (int, error) {
+func (c *Client[TTx]) insertManyFast(ctx context.Context, execTx riverdriver.ExecutorTx, params []InsertManyParams) (int, error) {
 	insertParams, err := c.insertManyParams(params)
 	if err != nil {
 		return 0, err
 	}
 
-	results, err := c.insertManyShared(ctx, tx, insertParams, func(ctx context.Context, insertParams []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error) {
-		count, err := tx.JobInsertFastManyNoReturning(ctx, &riverdriver.JobInsertFastManyParams{
+	results, err := c.insertManyShared(ctx, execTx, insertParams, func(ctx context.Context, insertParams []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error) {
+		count, err := execTx.JobInsertFastManyNoReturning(ctx, &riverdriver.JobInsertFastManyParams{
 			Jobs:   insertParams,
-			Schema: c.config.schema,
+			Schema: c.config.Schema,
 		})
 		if err != nil {
 			return nil, err
@@ -1827,7 +1828,7 @@ func (c *Client[TTx]) maybeNotifyInsertForQueues(ctx context.Context, tx riverdr
 
 	err := tx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
 		Payload: payloads,
-		Schema:  c.config.schema,
+		Schema:  c.config.Schema,
 		Topic:   string(notifier.NotificationTopicInsert),
 	})
 	if err != nil {
@@ -1858,7 +1859,7 @@ func (c *Client[TTx]) notifyQueuePauseOrResume(ctx context.Context, tx riverdriv
 
 	err = tx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
 		Payload: []string{string(payload)},
-		Schema:  c.config.schema,
+		Schema:  c.config.Schema,
 		Topic:   string(notifier.NotificationTopicControl),
 	})
 	if err != nil {
@@ -1905,7 +1906,7 @@ func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) *pr
 		QueueEventCallback:           c.subscriptionManager.distributeQueueEvent,
 		RetryPolicy:                  c.config.RetryPolicy,
 		SchedulerInterval:            c.config.schedulerInterval,
-		Schema:                       c.config.schema,
+		Schema:                       c.config.Schema,
 		StaleProducerRetentionPeriod: 5 * time.Minute,
 		Workers:                      c.config.Workers,
 	})
@@ -1955,6 +1956,8 @@ func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) (*JobL
 	if params == nil {
 		params = NewJobListParams()
 	}
+	params.schema = c.config.Schema
+
 	dbParams, err := params.toDBParams()
 	if err != nil {
 		return nil, err
@@ -1984,6 +1987,7 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 	if params == nil {
 		params = NewJobListParams()
 	}
+	params.schema = c.config.Schema
 
 	dbParams, err := params.toDBParams()
 	if err != nil {
@@ -2024,7 +2028,7 @@ func (c *Client[TTx]) Queues() *QueueBundle { return c.queues }
 func (c *Client[TTx]) QueueGet(ctx context.Context, name string) (*rivertype.Queue, error) {
 	return c.driver.GetExecutor().QueueGet(ctx, &riverdriver.QueueGetParams{
 		Name:   name,
-		Schema: c.config.schema,
+		Schema: c.config.Schema,
 	})
 }
 
@@ -2036,7 +2040,7 @@ func (c *Client[TTx]) QueueGet(ctx context.Context, name string) (*rivertype.Que
 func (c *Client[TTx]) QueueGetTx(ctx context.Context, tx TTx, name string) (*rivertype.Queue, error) {
 	return c.driver.UnwrapExecutor(tx).QueueGet(ctx, &riverdriver.QueueGetParams{
 		Name:   name,
-		Schema: c.config.schema,
+		Schema: c.config.Schema,
 	})
 }
 
@@ -2065,7 +2069,7 @@ func (c *Client[TTx]) QueueList(ctx context.Context, params *QueueListParams) (*
 
 	queues, err := c.driver.GetExecutor().QueueList(ctx, &riverdriver.QueueListParams{
 		Limit:  int(params.paginationCount),
-		Schema: c.config.schema,
+		Schema: c.config.Schema,
 	})
 	if err != nil {
 		return nil, err
@@ -2092,7 +2096,7 @@ func (c *Client[TTx]) QueueListTx(ctx context.Context, tx TTx, params *QueueList
 
 	queues, err := c.driver.UnwrapExecutor(tx).QueueList(ctx, &riverdriver.QueueListParams{
 		Limit:  int(params.paginationCount),
-		Schema: c.config.schema,
+		Schema: c.config.Schema,
 	})
 	if err != nil {
 		return nil, err
@@ -2121,7 +2125,7 @@ func (c *Client[TTx]) QueuePause(ctx context.Context, name string, opts *QueuePa
 
 	if err := tx.QueuePause(ctx, &riverdriver.QueuePauseParams{
 		Name:   name,
-		Schema: c.config.schema,
+		Schema: c.config.Schema,
 	}); err != nil {
 		return err
 	}
@@ -2149,7 +2153,7 @@ func (c *Client[TTx]) QueuePauseTx(ctx context.Context, tx TTx, name string, opt
 
 	if err := executorTx.QueuePause(ctx, &riverdriver.QueuePauseParams{
 		Name:   name,
-		Schema: c.config.schema,
+		Schema: c.config.Schema,
 	}); err != nil {
 		return err
 	}
@@ -2182,7 +2186,7 @@ func (c *Client[TTx]) QueueResume(ctx context.Context, name string, opts *QueueP
 
 	if err := tx.QueueResume(ctx, &riverdriver.QueueResumeParams{
 		Name:   name,
-		Schema: c.config.schema,
+		Schema: c.config.Schema,
 	}); err != nil {
 		return err
 	}
@@ -2211,7 +2215,7 @@ func (c *Client[TTx]) QueueResumeTx(ctx context.Context, tx TTx, name string, op
 
 	if err := executorTx.QueueResume(ctx, &riverdriver.QueueResumeParams{
 		Name:   name,
-		Schema: c.config.schema,
+		Schema: c.config.Schema,
 	}); err != nil {
 		return err
 	}
@@ -2266,6 +2270,7 @@ func (c *Client[TTx]) queueUpdate(ctx context.Context, executorTx riverdriver.Ex
 		Metadata:         params.Metadata,
 		MetadataDoUpdate: updateMetadata,
 		Name:             name,
+		Schema:           c.config.Schema,
 	})
 	if err != nil {
 		return nil, err
@@ -2283,7 +2288,7 @@ func (c *Client[TTx]) queueUpdate(ctx context.Context, executorTx riverdriver.Ex
 
 		if err := executorTx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
 			Payload: []string{string(payload)},
-			Schema:  c.config.schema,
+			Schema:  c.config.Schema,
 			Topic:   string(notifier.NotificationTopicControl),
 		}); err != nil {
 			return nil, err

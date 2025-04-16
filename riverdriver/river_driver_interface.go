@@ -55,6 +55,14 @@ type Driver[TTx any] interface {
 	// API is not stable. DO NOT USE.
 	GetListener(schema string) Listener
 
+	// GetMigrationDefaultLines gets default migration lines that should be
+	// applied when using this driver. This is mainly used by riverschematest to
+	// figure out what migration lines should be available by default for new
+	// test schemas.
+	//
+	// API is not stable. DO NOT USE.
+	GetMigrationDefaultLines() []string
+
 	// GetMigrationFS gets a filesystem containing migrations for the driver.
 	//
 	// Each set of migration files is expected to exist within the filesystem as
@@ -70,6 +78,14 @@ type Driver[TTx any] interface {
 	//
 	// API is not stable. DO NOT USE.
 	GetMigrationLines() []string
+
+	// GetMigrationTruncateTables gets the tables that should be truncated
+	// before or after tests for a specific migration line returned by this
+	// driver. Tables to truncate doesn't need to consider intermediary states,
+	// and should return tables for the latest migration version.
+	//
+	// API is not stable. DO NOT USE.
+	GetMigrationTruncateTables(line string) []string
 
 	// HasPool returns true if the driver is configured with a database pool.
 	//
@@ -165,6 +181,8 @@ type Executor interface {
 	QueuePause(ctx context.Context, params *QueuePauseParams) error
 	QueueResume(ctx context.Context, params *QueueResumeParams) error
 	QueueUpdate(ctx context.Context, params *QueueUpdateParams) (*rivertype.Queue, error)
+	QueryRow(ctx context.Context, sql string, args ...any) Row
+	SchemaGetExpired(ctx context.Context, params *SchemaGetExpiredParams) ([]string, error)
 
 	// TableExists checks whether a table exists for the schema in the current
 	// search schema.
@@ -363,81 +381,89 @@ type JobSetStateIfRunningParams struct {
 	MetadataDoMerge bool
 	MetadataUpdates []byte
 	ScheduledAt     *time.Time
+	Schema          string
 	State           rivertype.JobState
 }
 
-func JobSetStateCancelled(id int64, finalizedAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
+func JobSetStateCancelled(schema string, id int64, finalizedAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
 	return &JobSetStateIfRunningParams{
 		ID:              id,
 		ErrData:         errData,
 		MetadataDoMerge: len(metadataUpdates) > 0,
 		MetadataUpdates: metadataUpdates,
 		FinalizedAt:     &finalizedAt,
+		Schema:          schema,
 		State:           rivertype.JobStateCancelled,
 	}
 }
 
-func JobSetStateCompleted(id int64, finalizedAt time.Time, metadataUpdates []byte) *JobSetStateIfRunningParams {
+func JobSetStateCompleted(schema string, id int64, finalizedAt time.Time, metadataUpdates []byte) *JobSetStateIfRunningParams {
 	return &JobSetStateIfRunningParams{
 		FinalizedAt:     &finalizedAt,
 		ID:              id,
 		MetadataDoMerge: len(metadataUpdates) > 0,
 		MetadataUpdates: metadataUpdates,
+		Schema:          schema,
 		State:           rivertype.JobStateCompleted,
 	}
 }
 
-func JobSetStateDiscarded(id int64, finalizedAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
+func JobSetStateDiscarded(schema string, id int64, finalizedAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
 	return &JobSetStateIfRunningParams{
 		ID:              id,
 		ErrData:         errData,
 		MetadataDoMerge: len(metadataUpdates) > 0,
 		MetadataUpdates: metadataUpdates,
 		FinalizedAt:     &finalizedAt,
+		Schema:          schema,
 		State:           rivertype.JobStateDiscarded,
 	}
 }
 
-func JobSetStateErrorAvailable(id int64, scheduledAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
+func JobSetStateErrorAvailable(schema string, id int64, scheduledAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
 	return &JobSetStateIfRunningParams{
 		ID:              id,
 		ErrData:         errData,
 		MetadataDoMerge: len(metadataUpdates) > 0,
 		MetadataUpdates: metadataUpdates,
 		ScheduledAt:     &scheduledAt,
+		Schema:          schema,
 		State:           rivertype.JobStateAvailable,
 	}
 }
 
-func JobSetStateErrorRetryable(id int64, scheduledAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
+func JobSetStateErrorRetryable(schema string, id int64, scheduledAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
 	return &JobSetStateIfRunningParams{
 		ID:              id,
 		ErrData:         errData,
 		MetadataDoMerge: len(metadataUpdates) > 0,
 		MetadataUpdates: metadataUpdates,
 		ScheduledAt:     &scheduledAt,
+		Schema:          schema,
 		State:           rivertype.JobStateRetryable,
 	}
 }
 
-func JobSetStateSnoozed(id int64, scheduledAt time.Time, attempt int, metadataUpdates []byte) *JobSetStateIfRunningParams {
+func JobSetStateSnoozed(schema string, id int64, scheduledAt time.Time, attempt int, metadataUpdates []byte) *JobSetStateIfRunningParams {
 	return &JobSetStateIfRunningParams{
 		Attempt:         &attempt,
 		ID:              id,
 		MetadataDoMerge: len(metadataUpdates) > 0,
 		MetadataUpdates: metadataUpdates,
 		ScheduledAt:     &scheduledAt,
+		Schema:          schema,
 		State:           rivertype.JobStateScheduled,
 	}
 }
 
-func JobSetStateSnoozedAvailable(id int64, scheduledAt time.Time, attempt int, metadataUpdates []byte) *JobSetStateIfRunningParams {
+func JobSetStateSnoozedAvailable(schema string, id int64, scheduledAt time.Time, attempt int, metadataUpdates []byte) *JobSetStateIfRunningParams {
 	return &JobSetStateIfRunningParams{
 		Attempt:         &attempt,
 		ID:              id,
 		MetadataDoMerge: len(metadataUpdates) > 0,
 		MetadataUpdates: metadataUpdates,
 		ScheduledAt:     &scheduledAt,
+		Schema:          schema,
 		State:           rivertype.JobStateAvailable,
 	}
 }
@@ -453,7 +479,7 @@ type JobSetStateIfRunningManyParams struct {
 	MetadataDoMerge []bool
 	MetadataUpdates [][]byte
 	ScheduledAt     []*time.Time
-	Schema          string
+	Schema          string // TODO(brandur): Try to push this up a layer; it's awkward being the only non-slice on here.
 	State           []rivertype.JobState
 }
 
@@ -620,6 +646,19 @@ type QueueUpdateParams struct {
 	MetadataDoUpdate bool
 	Name             string
 	Schema           string
+}
+
+type Row interface {
+	Scan(dest ...any) error
+}
+
+type Schema struct {
+	Name string
+}
+
+type SchemaGetExpiredParams struct {
+	BeforeName string
+	Prefix     string
 }
 
 type TableExistsParams struct {

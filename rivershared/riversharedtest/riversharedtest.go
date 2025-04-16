@@ -18,6 +18,7 @@ import (
 
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/slogtest"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 )
 
 // BaseServiceArchetype returns a new base service suitable for use in tests.
@@ -46,14 +47,52 @@ func DBPool(ctx context.Context, tb testing.TB) *pgxpool.Pool {
 	tb.Helper()
 
 	dbPoolOnce.Do(func() {
-		var err error
-		dbPool, err = pgxpool.New(ctx, cmp.Or(
-			os.Getenv("TEST_DATABASE_URL"),
-			"postgres://localhost:5432/river_test",
-		))
+		config, err := pgxpool.ParseConfig(TestDatabaseURL())
+		require.NoError(tb, err)
+
+		config.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+			// Empty the search path so that tests using riverschematest are
+			// forced to pass a schema to clients and any other database
+			// operations they invoke. Calls do not accidentally fall back to a
+			// default schema, which would potentially hide bugs where we
+			// weren't properly referencing a schema explicitly.
+			_, err := conn.Exec(ctx, "SET search_path TO ''")
+
+			// This should not be a `require` because the callback may run long
+			// after the original test has completed.
+			if err != nil && !errors.Is(err, context.Canceled) {
+				panic(err)
+			}
+
+			return nil
+		}
+
+		dbPool, err = pgxpool.NewWithConfig(ctx, config)
 		require.NoError(tb, err)
 	})
 	require.NotNil(tb, dbPool) // die in case initial connect from another test failed
+
+	return dbPool
+}
+
+// DBPoolClone returns a disposable clone of DBPool. Share resources by using
+// DBPool when possible, but this is useless for areas like stress tests where
+// context cancellations are likely to end up closing the pool.
+//
+// Unlike DBPool, adds a test cleanup hook that closes the pool after run.
+func DBPoolClone(ctx context.Context, tb testing.TB) *pgxpool.Pool {
+	tb.Helper()
+
+	dbPool := DBPool(ctx, tb)
+
+	config := dbPool.Config()
+	config.MaxConns = 4 // dramatically reduce max allowed conns for clones so we they don't clobber the database server
+
+	var err error
+	dbPool, err = pgxpool.NewWithConfig(ctx, config)
+	require.NoError(tb, err)
+
+	tb.Cleanup(dbPool.Close)
 
 	return dbPool
 }
@@ -74,9 +113,32 @@ func Logger(tb testing.TB) *slog.Logger {
 
 // Logger returns a logger suitable for use in tests which outputs only at warn
 // or above. Useful in tests where particularly noisy log output is expected.
-func LoggerWarn(tb testing.TB) *slog.Logger {
+func LoggerWarn(tb testutil.TestingTB) *slog.Logger {
 	tb.Helper()
 	return slogtest.NewLogger(tb, &slog.HandlerOptions{Level: slog.LevelWarn})
+}
+
+// TestDatabaseURL returns `TEST_DATABASE_URL` or a default URL pointing to
+// `river_test` and with suitable connection configuration defaults.
+func TestDatabaseURL() string {
+	return cmp.Or(
+		os.Getenv("TEST_DATABASE_URL"),
+
+		// 100 conns is the default maximum for Homebrew.
+		//
+		// It'd be nice to be able to set this number really high because it'd
+		// mean less waiting time acquiring connections in tests, but with
+		// default settings, contention between tests/test packages leading to
+		// exhausion on the Postgres server is definitely a problem. At numbers
+		// >75 I started seeing a lot of errors between tests within a single
+		// package, and worse yet, at numbers >=20 I saw major problems between
+		// packages (i.e. as parallel packages run at the same time).
+		//
+		// 15 is about as high as I found I could set it while keeping test runs
+		// stable. This could be much higher in areas where we know Postgres is
+		// configured with more allowed max connections.
+		"postgres://localhost:5432/river_test?pool_max_conns=15&sslmode=disable",
+	)
 }
 
 // TestTx starts a test transaction that's rolled back automatically as the test
@@ -97,6 +159,9 @@ func TestTxPool(ctx context.Context, tb testing.TB, dbPool *pgxpool.Pool) pgx.Tx
 	tb.Helper()
 
 	tx, err := dbPool.Begin(ctx)
+	require.NoError(tb, err)
+
+	_, err = tx.Exec(ctx, "SET search_path TO 'public'")
 	require.NoError(tb, err)
 
 	tb.Cleanup(func() {

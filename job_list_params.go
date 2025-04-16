@@ -171,6 +171,7 @@ type JobListParams struct {
 	overrodeState    bool
 	paginationCount  int32
 	queues           []string
+	schema           string
 	sortField        JobListOrderByField
 	sortOrder        SortOrder
 	states           []rivertype.JobState
@@ -206,6 +207,7 @@ func (p *JobListParams) copy() *JobListParams {
 		queues:           append([]string(nil), p.queues...),
 		sortField:        p.sortField,
 		sortOrder:        p.sortOrder,
+		schema:           p.schema,
 		states:           append([]rivertype.JobState(nil), p.states...),
 	}
 }
@@ -289,7 +291,7 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 		conditionsBuilder.WriteString(condition)
 	}
 
-	dbParams := &dblist.JobListParams{
+	return &dblist.JobListParams{
 		Conditions: conditionsBuilder.String(),
 		Kinds:      p.kinds,
 		LimitCount: p.paginationCount,
@@ -297,10 +299,9 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 		OrderBy:    orderBy,
 		Priorities: nil,
 		Queues:     p.queues,
+		Schema:     p.schema,
 		States:     p.states,
-	}
-
-	return dbParams, nil
+	}, nil
 }
 
 // After returns an updated filter set that will only return jobs

@@ -6,19 +6,19 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
 )
 
 func TestWithTx(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	dbPool := riverinternaltest.TestDB(ctx, t)
-	driver := riverpgxv5.New(dbPool)
+	tx := riversharedtest.TestTx(ctx, t)
+	driver := riverpgxv5.New(nil)
 
-	err := WithTx(ctx, driver.GetExecutor(), func(ctx context.Context, exec riverdriver.ExecutorTx) error {
+	err := WithTx(ctx, driver.UnwrapExecutor(tx), func(ctx context.Context, exec riverdriver.ExecutorTx) error {
 		_, err := exec.Exec(ctx, "SELECT 1")
 		require.NoError(t, err)
 
@@ -31,10 +31,10 @@ func TestWithTxV(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	dbPool := riverinternaltest.TestDB(ctx, t)
-	driver := riverpgxv5.New(dbPool)
+	tx := riversharedtest.TestTx(ctx, t)
+	driver := riverpgxv5.New(nil)
 
-	ret, err := WithTxV(ctx, driver.GetExecutor(), func(ctx context.Context, exec riverdriver.ExecutorTx) (int, error) {
+	ret, err := WithTxV(ctx, driver.UnwrapExecutor(tx), func(ctx context.Context, exec riverdriver.ExecutorTx) (int, error) {
 		_, err := exec.Exec(ctx, "SELECT 1")
 		require.NoError(t, err)
 

@@ -7,7 +7,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/riverschematest"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 )
 
@@ -87,9 +88,15 @@ func TestWorkFunc(t *testing.T) {
 	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
 		t.Helper()
 
-		dbPool := riverinternaltest.TestDB(ctx, t)
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, nil)
+		)
+		config.Schema = schema
 
-		client := newTestClient(t, dbPool, newTestConfig(t, nil))
+		client := newTestClient(t, dbPool, config)
 		startClient(ctx, t, client)
 
 		return client, &testBundle{}

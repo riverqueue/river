@@ -140,6 +140,7 @@ func setStateParamsToMany(params *riverdriver.JobSetStateIfRunningParams) *river
 		MetadataDoMerge: []bool{params.MetadataDoMerge},
 		MetadataUpdates: [][]byte{params.MetadataUpdates},
 		ScheduledAt:     []*time.Time{params.ScheduledAt},
+		Schema:          params.Schema,
 		State:           []rivertype.JobState{params.State},
 	}
 }
@@ -440,6 +441,7 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 			params.MetadataDoMerge[i] = setState.Params.MetadataDoMerge
 			params.MetadataUpdates[i] = setState.Params.MetadataUpdates
 			params.ScheduledAt[i] = setState.Params.ScheduledAt
+			params.Schema = setState.Params.Schema
 			params.State[i] = setState.Params.State
 			i++
 		}
@@ -468,6 +470,7 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 				MetadataDoMerge: params.MetadataDoMerge[i:endIndex],
 				MetadataUpdates: params.MetadataUpdates[i:endIndex],
 				ScheduledAt:     params.ScheduledAt[i:endIndex],
+				Schema:          params.Schema,
 				State:           params.State[i:endIndex],
 			}
 			jobRowsSubBatch, err := completeSubBatch(subBatch)
