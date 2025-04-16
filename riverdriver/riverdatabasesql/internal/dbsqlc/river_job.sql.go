@@ -565,7 +565,6 @@ INSERT INTO /* TEMPLATE: schema */river_job(
 
     unnest($11::bytea[]),
     unnest($12::bit(8)[])
-
 ON CONFLICT (unique_key)
     WHERE unique_key IS NOT NULL
       AND unique_states IS NOT NULL
@@ -684,7 +683,6 @@ INSERT INTO /* TEMPLATE: schema */river_job(
 
     unnest($11::bytea[]),
     unnest($12::bit(8)[])
-
 ON CONFLICT (unique_key)
     WHERE unique_key IS NOT NULL
       AND unique_states IS NOT NULL
@@ -1151,7 +1149,7 @@ job_to_update AS (
     FOR UPDATE
 ),
 updated_running AS (
-    UPDATE river_job
+    UPDATE /* TEMPLATE: schema */river_job
     SET
         attempt      = CASE WHEN NOT job_to_update.should_cancel AND job_to_update.attempt_do_update THEN job_to_update.attempt
                             ELSE river_job.attempt END,

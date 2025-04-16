@@ -88,6 +88,7 @@ linters:
         - r
         - sb # common convention for string builder
         - t
+        - tb
         - tt # common convention for table tests
         - tx
         - w

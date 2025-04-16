@@ -31,6 +31,7 @@ type JobListParams struct {
 	OrderBy    []JobListOrderBy
 	Priorities []int16
 	Queues     []string
+	Schema     string
 	States     []rivertype.JobState
 }
 
@@ -116,6 +117,7 @@ func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListPara
 		Max:           params.LimitCount,
 		NamedArgs:     namedArgs,
 		OrderByClause: orderByBuilder.String(),
+		Schema:        params.Schema,
 		WhereClause:   whereBuilder.String(),
 	})
 }

@@ -289,9 +289,9 @@ func (e *JobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 		// smaller than the scheduler's run interval.
 		var params *riverdriver.JobSetStateIfRunningParams
 		if nextAttemptScheduledAt.Sub(e.Time.NowUTC()) <= e.SchedulerInterval {
-			params = riverdriver.JobSetStateSnoozedAvailable(e.JobRow.ID, nextAttemptScheduledAt, e.JobRow.Attempt-1, metadataUpdatesBytes)
+			params = riverdriver.JobSetStateSnoozedAvailable(e.Schema, e.JobRow.ID, nextAttemptScheduledAt, e.JobRow.Attempt-1, metadataUpdatesBytes)
 		} else {
-			params = riverdriver.JobSetStateSnoozed(e.JobRow.ID, nextAttemptScheduledAt, e.JobRow.Attempt-1, metadataUpdatesBytes)
+			params = riverdriver.JobSetStateSnoozed(e.Schema, e.JobRow.ID, nextAttemptScheduledAt, e.JobRow.Attempt-1, metadataUpdatesBytes)
 		}
 		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, params); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Error snoozing job",
@@ -306,7 +306,7 @@ func (e *JobExecutor) reportResult(ctx context.Context, res *jobExecutorResult) 
 		return
 	}
 
-	if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateCompleted(e.JobRow.ID, e.Time.NowUTC(), metadataUpdatesBytes)); err != nil {
+	if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateCompleted(e.Schema, e.JobRow.ID, e.Time.NowUTC(), metadataUpdatesBytes)); err != nil {
 		e.Logger.ErrorContext(ctx, e.Name+": Error completing job",
 			slog.String("err", err.Error()),
 			slog.Int64("job_id", e.JobRow.ID),
@@ -362,14 +362,14 @@ func (e *JobExecutor) reportError(ctx context.Context, res *jobExecutorResult, m
 	now := time.Now()
 
 	if cancelJob {
-		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateCancelled(e.JobRow.ID, now, errData, metadataUpdates)); err != nil {
+		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateCancelled(e.Schema, e.JobRow.ID, now, errData, metadataUpdates)); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Failed to cancel job and report error", logAttrs...)
 		}
 		return
 	}
 
 	if e.JobRow.Attempt >= e.JobRow.MaxAttempts {
-		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateDiscarded(e.JobRow.ID, now, errData, metadataUpdates)); err != nil {
+		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateDiscarded(e.Schema, e.JobRow.ID, now, errData, metadataUpdates)); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Failed to discard job and report error", logAttrs...)
 		}
 		return
@@ -400,9 +400,9 @@ func (e *JobExecutor) reportError(ctx context.Context, res *jobExecutorResult, m
 	// `available` if their retry was smaller than the scheduler's run interval.
 	var params *riverdriver.JobSetStateIfRunningParams
 	if nextRetryScheduledAt.Sub(e.Time.NowUTC()) <= e.SchedulerInterval {
-		params = riverdriver.JobSetStateErrorAvailable(e.JobRow.ID, nextRetryScheduledAt, errData, metadataUpdates)
+		params = riverdriver.JobSetStateErrorAvailable(e.Schema, e.JobRow.ID, nextRetryScheduledAt, errData, metadataUpdates)
 	} else {
-		params = riverdriver.JobSetStateErrorRetryable(e.JobRow.ID, nextRetryScheduledAt, errData, metadataUpdates)
+		params = riverdriver.JobSetStateErrorRetryable(e.Schema, e.JobRow.ID, nextRetryScheduledAt, errData, metadataUpdates)
 	}
 	if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, params); err != nil {
 		e.Logger.ErrorContext(ctx, e.Name+": Failed to report error for job", logAttrs...)
