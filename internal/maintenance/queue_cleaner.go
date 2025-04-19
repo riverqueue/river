@@ -75,6 +75,7 @@ func NewQueueCleaner(archetype *baseservice.Archetype, config *QueueCleanerConfi
 		Config: (&QueueCleanerConfig{
 			Interval:        valutil.ValOrDefault(config.Interval, queueCleanerIntervalDefault),
 			RetentionPeriod: valutil.ValOrDefault(config.RetentionPeriod, QueueRetentionPeriodDefault),
+			Schema:          config.Schema,
 		}).mustValidate(),
 
 		batchSize: BatchSizeDefault,

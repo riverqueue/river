@@ -113,6 +113,7 @@ func NewElector(archetype *baseservice.Archetype, exec riverdriver.Executor, not
 			ClientID:            config.ClientID,
 			ElectInterval:       valutil.ValOrDefault(config.ElectInterval, electIntervalDefault),
 			ElectIntervalJitter: valutil.ValOrDefault(config.ElectIntervalJitter, electIntervalJitterDefault),
+			Schema:              config.Schema,
 		}).mustValidate(),
 		exec:     exec,
 		notifier: notifier,
@@ -196,6 +197,7 @@ func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
 
 		elected, err := attemptElectOrReelect(ctx, e.exec, false, &riverdriver.LeaderElectParams{
 			LeaderID: e.config.ClientID,
+			Schema:   e.config.Schema,
 			TTL:      e.leaderTTL(),
 		})
 		if err != nil {
@@ -405,6 +407,7 @@ func (e *Elector) attemptResign(ctx context.Context, attempt int) error {
 	resigned, err := e.exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
 		LeaderID:        e.config.ClientID,
 		LeadershipTopic: string(notifier.NotificationTopicLeadership),
+		Schema:          e.config.Schema,
 	})
 	if err != nil {
 		return err

@@ -23,7 +23,7 @@ func Stress(ctx context.Context, tb testingT, svc startstop.Service) {
 // tolerated on start (either no error or an error that is allowedStartErr is
 // allowed). This is useful for services that may want to return an error if
 // they're shut down as they're still starting up.
-func StressErr(ctx context.Context, tb testingT, svc startstop.Service, allowedStartErr error) { //nolint:varnamelen
+func StressErr(ctx context.Context, tb testingT, svc startstop.Service, allowedStartErr error) {
 	tb.Helper()
 
 	var wg sync.WaitGroup

@@ -99,6 +99,7 @@ func NewJobCleaner(archetype *baseservice.Archetype, config *JobCleanerConfig, e
 			CompletedJobRetentionPeriod: valutil.ValOrDefault(config.CompletedJobRetentionPeriod, CompletedJobRetentionPeriodDefault),
 			DiscardedJobRetentionPeriod: valutil.ValOrDefault(config.DiscardedJobRetentionPeriod, DiscardedJobRetentionPeriodDefault),
 			Interval:                    valutil.ValOrDefault(config.Interval, JobCleanerIntervalDefault),
+			Schema:                      config.Schema,
 			Timeout:                     valutil.ValOrDefault(config.Timeout, JobCleanerTimeoutDefault),
 		}).mustValidate(),
 

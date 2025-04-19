@@ -2,12 +2,13 @@ package riverinternaltest
 
 import (
 	"context"
-	"sync"
 	"testing"
 
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
+
+	"github.com/riverqueue/river/rivershared/riversharedtest"
 )
 
 // Implemented by `pgx.Tx` or `pgxpool.Pool`. Normally we'd use a similar type
@@ -34,7 +35,7 @@ func TestTestTx(t *testing.T) {
 	// this cleanup, which checks that the database remains pristine, is invoked
 	// after the TestTx cleanup, so we add it first.
 	t.Cleanup(func() {
-		err := checkTestTable(dbPool)
+		err := checkTestTable(riversharedtest.DBPool(ctx, t))
 		require.Error(t, err)
 
 		var pgErr *pgconn.PgError
@@ -49,37 +50,4 @@ func TestTestTx(t *testing.T) {
 
 	err = checkTestTable(tx)
 	require.NoError(t, err)
-}
-
-// Simulates a bunch of parallel processes starting a `TestTx` simultaneously.
-// With the help of `go test -race`, should identify mutex/locking/parallel
-// access problems if there are any.
-//
-// This test does NOT run in parallel on purpose because we want to be able to
-// check access and set up on the `dbPool` global package variable which may be
-// tainted if another test calls `TestTx` at the same time.
-func TestTestTx_ConcurrentAccess(t *testing.T) { //nolint:paralleltest
-	var (
-		ctx = context.Background()
-		wg  sync.WaitGroup
-	)
-
-	wg.Add(int(dbPoolMaxConns))
-
-	// Before doing anything, zero out the pool because another test may have
-	// initialized it already.
-	dbPool = nil
-
-	// Don't open more than maximum pool size transactions at once because that
-	// would deadlock.
-	for i := range dbPoolMaxConns {
-		workerNum := i
-		go func() {
-			_ = TestTx(ctx, t)
-			t.Logf("Opened transaction: %d", workerNum)
-			wg.Done()
-		}()
-	}
-
-	wg.Wait()
 }

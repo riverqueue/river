@@ -10,6 +10,7 @@ sql:
       - river_leader.sql
       - river_migration.sql
       - river_queue.sql
+      - schema.sql
     schema:
       - pg_misc.sql
       - river_client.sql
@@ -18,6 +19,7 @@ sql:
       - river_leader.sql
       - river_migration.sql
       - river_queue.sql
+      - schema.sql
     gen:
       go:
         package: "dbsqlc"

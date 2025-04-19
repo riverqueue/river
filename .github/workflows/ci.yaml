@@ -8,7 +8,7 @@ env:
   DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/river_dev?sslmode=disable
 
   # Test database.
-  TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/river_test?sslmode=disable
+  TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/river_test?pool_max_conns=15&sslmode=disable
 
 on:
   push:
@@ -42,6 +42,13 @@ jobs:
       postgres:
         image: postgres:${{ matrix.postgres-version }}
         env:
+          # Left as a reminder that it might not be a bad idea to increase max
+          # connections and then increase the maximum allowed in the databaes
+          # pools for each package under tests. This config is only supported on
+          # Postgres 16+ though, and changing Postgres configuration on any
+          # version before that is absurdly difficult through Docker, so it
+          # might be worth just waiting until <16 have rolled off.
+          # POSTGRES_INITDB_ARGS: "-c max_connections=1500"
           POSTGRES_PASSWORD: postgres
         options: >-
           --health-cmd pg_isready
@@ -62,42 +69,13 @@ jobs:
       - name: Display Go version
         run: go version
 
-      - name: Set up test DBs
-        run: go run ./internal/cmd/testdbman create
-        env:
-          PGHOST: 127.0.0.1
-          PGPORT: 5432
-          PGUSER: postgres
-          PGPASSWORD: postgres
-          PGSSLMODE: disable
+      - name: Set up database
+        run: |
+          psql -c "CREATE DATABASE river_test" postgres://postgres:postgres@localhost:5432
+          go run github.com/riverqueue/river/cmd/river@latest migrate-up --database-url "$TEST_DATABASE_URL"
 
       - name: Test
-        working-directory: .
-        run: go test -p 1 -race ./... -timeout 2m
-
-      - name: Test cmd/river
-        working-directory: ./cmd/river
-        run: go test -race ./... -timeout 2m
-
-      - name: Test riverdriver
-        working-directory: ./riverdriver
-        run: go test -race ./... -timeout 2m
-
-      - name: Test riverdriver/riverdatabasesql
-        working-directory: ./riverdriver/riverdatabasesql
-        run: go test -race ./... -timeout 2m
-
-      - name: Test riverdriver/riverpgxv5
-        working-directory: ./riverdriver/riverpgxv5
-        run: go test -race ./... -timeout 2m
-
-      - name: Test rivershared
-        working-directory: ./rivershared
-        run: go test -race ./... -timeout 2m
-
-      - name: Test rivertype
-        working-directory: ./rivertype
-        run: go test -race ./... -timeout 2m
+        run: make test/race
 
   cli:
     strategy:

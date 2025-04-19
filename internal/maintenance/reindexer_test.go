@@ -7,9 +7,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/riverschematest"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 )
@@ -27,7 +27,12 @@ func TestReindexer(t *testing.T) {
 	setup := func(t *testing.T) (*Reindexer, *testBundle) {
 		t.Helper()
 
-		dbPool := riverinternaltest.TestDB(ctx, t)
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+		)
+
 		bundle := &testBundle{
 			exec: riverpgxv5.New(dbPool).GetExecutor(),
 		}
@@ -43,6 +48,7 @@ func TestReindexer(t *testing.T) {
 
 		svc := NewReindexer(archetype, &ReindexerConfig{
 			ScheduleFunc: fromNow(500 * time.Millisecond),
+			Schema:       schema,
 		}, bundle.exec)
 		svc.StaggerStartupDisable(true)
 		svc.TestSignals.Init()

@@ -58,6 +58,7 @@ func (d *Driver) GetListener(schema string) riverdriver.Listener {
 	panic(riverdriver.ErrNotImplemented)
 }
 
+func (d *Driver) GetMigrationDefaultLines() []string { return []string{riverdriver.MigrationLineMain} }
 func (d *Driver) GetMigrationFS(line string) fs.FS {
 	if line == riverdriver.MigrationLineMain {
 		return migrationFS
@@ -65,8 +66,20 @@ func (d *Driver) GetMigrationFS(line string) fs.FS {
 	panic("migration line does not exist: " + line)
 }
 func (d *Driver) GetMigrationLines() []string { return []string{riverdriver.MigrationLineMain} }
-func (d *Driver) HasPool() bool               { return d.dbPool != nil }
-func (d *Driver) SupportsListener() bool      { return false }
+func (d *Driver) GetMigrationTruncateTables(line string) []string {
+	if line == riverdriver.MigrationLineMain {
+		return []string{
+			"river_client",
+			"river_client_queue",
+			"river_job",
+			"river_leader",
+			"river_queue",
+		}
+	}
+	panic("migration line does not exist: " + line)
+}
+func (d *Driver) HasPool() bool          { return d.dbPool != nil }
+func (d *Driver) SupportsListener() bool { return false }
 
 func (d *Driver) UnwrapExecutor(tx *sql.Tx) riverdriver.ExecutorTx {
 	// Allows UnwrapExecutor to be invoked even if driver is nil.
@@ -822,6 +835,21 @@ func (e *Executor) QueueUpdate(ctx context.Context, params *riverdriver.QueueUpd
 		return nil, interpretError(err)
 	}
 	return queueFromInternal(queue), nil
+}
+
+func (e *Executor) QueryRow(ctx context.Context, sql string, args ...any) riverdriver.Row {
+	return e.dbtx.QueryRowContext(ctx, sql, args...)
+}
+
+func (e *Executor) SchemaGetExpired(ctx context.Context, params *riverdriver.SchemaGetExpiredParams) ([]string, error) {
+	schemas, err := dbsqlc.New().SchemaGetExpired(ctx, e.dbtx, &dbsqlc.SchemaGetExpiredParams{
+		BeforeName: params.BeforeName,
+		Prefix:     params.Prefix,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return schemas, nil
 }
 
 func (e *Executor) TableExists(ctx context.Context, params *riverdriver.TableExistsParams) (bool, error) {

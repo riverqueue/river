@@ -7,10 +7,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
-	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
+	"github.com/riverqueue/river/riverschematest"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 )
 
 // Example_migrate demonstrates the use of River's Go migration API by migrating
@@ -18,29 +19,20 @@ import (
 func Example_migrate() {
 	ctx := context.Background()
 
-	// Use a dedicated Postgres schema for this example so we can migrate and drop it at will:
-	schemaName := "migration_example"
-	poolConfig := riverinternaltest.DatabaseConfig("river_test_example")
-	poolConfig.ConnConfig.RuntimeParams["search_path"] = schemaName
-
-	dbPool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	dbPool, err := pgxpool.New(ctx, riversharedtest.TestDatabaseURL())
 	if err != nil {
 		panic(err)
 	}
 	defer dbPool.Close()
 
 	driver := riverpgxv5.New(dbPool)
-	migrator, err := rivermigrate.New(driver, nil)
+	migrator, err := rivermigrate.New(driver, &rivermigrate.Config{
+		// Test schema with no migrations for purposes of this test.
+		Schema: riverschematest.TestSchema(ctx, testutil.PanicTB(), driver, &riverschematest.TestSchemaOpts{Lines: []string{}}),
+	})
 	if err != nil {
 		panic(err)
 	}
-
-	// Create the schema used for this example. Drop it when we're done.
-	// This isn't necessary outside this test.
-	if _, err := dbPool.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+schemaName); err != nil {
-		panic(err)
-	}
-	defer dropRiverSchema(ctx, driver, schemaName)
 
 	printVersions := func(res *rivermigrate.MigrateResult) {
 		for _, version := range res.Versions {
@@ -75,11 +67,4 @@ func Example_migrate() {
 	// Migrated [DOWN] version 3
 	// Migrated [DOWN] version 2
 	// Migrated [DOWN] version 1
-}
-
-func dropRiverSchema[TTx any](ctx context.Context, driver riverdriver.Driver[TTx], schemaName string) {
-	_, err := driver.GetExecutor().Exec(ctx, "DROP SCHEMA IF EXISTS "+schemaName+" CASCADE;")
-	if err != nil {
-		panic(err)
-	}
 }

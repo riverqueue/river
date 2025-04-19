@@ -89,6 +89,7 @@ func NewJobScheduler(archetype *baseservice.Archetype, config *JobSchedulerConfi
 			Interval:     valutil.ValOrDefault(config.Interval, JobSchedulerIntervalDefault),
 			Limit:        valutil.ValOrDefault(config.Limit, JobSchedulerLimitDefault),
 			NotifyInsert: config.NotifyInsert,
+			Schema:       config.Schema,
 		}).mustValidate(),
 		exec: exec,
 	})

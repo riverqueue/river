@@ -45,11 +45,11 @@ func (p *StandardPilot) ProducerKeepAlive(ctx context.Context, exec riverdriver.
 	return nil
 }
 
-func (p *StandardPilot) ProducerShutdown(ctx context.Context, exec riverdriver.Executor, producerID int64, state ProducerState) error {
+func (p *StandardPilot) ProducerShutdown(ctx context.Context, exec riverdriver.Executor, params *ProducerShutdownParams) error {
 	return nil
 }
 
-func (p *StandardPilot) QueueMetadataChanged(ctx context.Context, exec riverdriver.Executor, state ProducerState, metadata []byte) error {
+func (p *StandardPilot) QueueMetadataChanged(ctx context.Context, exec riverdriver.Executor, params *QueueMetadataChangedParams) error {
 	return nil
 }
 

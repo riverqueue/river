@@ -9,6 +9,7 @@ sql:
       - ../../../riverpgxv5/internal/dbsqlc/river_leader.sql
       - ../../../riverpgxv5/internal/dbsqlc/river_migration.sql
       - ../../../riverpgxv5/internal/dbsqlc/river_queue.sql
+      - ../../../riverpgxv5/internal/dbsqlc/schema.sql
     schema:
       - ../../../riverpgxv5/internal/dbsqlc/pg_misc.sql
       - ../../../riverpgxv5/internal/dbsqlc/river_client.sql
@@ -17,6 +18,7 @@ sql:
       - ../../../riverpgxv5/internal/dbsqlc/river_leader.sql
       - ../../../riverpgxv5/internal/dbsqlc/river_migration.sql
       - ../../../riverpgxv5/internal/dbsqlc/river_queue.sql
+      - ../../../riverpgxv5/internal/dbsqlc/schema.sql
     gen:
       go:
         package: "dbsqlc"
