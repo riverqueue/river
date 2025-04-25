@@ -12,9 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	"github.com/riverqueue/river/riverschematest"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -54,7 +53,7 @@ func TestRequireInserted(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		riverClient, err := river.NewClient(driver, &river.Config{
@@ -102,7 +101,7 @@ func TestRequireInsertedTx(t *testing.T) {
 
 		return riverClient, &testBundle{
 			mockT: NewMockT(t),
-			tx:    riverinternaltest.TestTx(ctx, t),
+			tx:    riverdbtest.TestTxPgx(ctx, t),
 		}
 	}
 
@@ -145,7 +144,7 @@ func TestRequireInsertedTx(t *testing.T) {
 		riverClient, bundle := setup(t)
 
 		// Start a second transaction with different visibility.
-		otherTx := riverinternaltest.TestTx(ctx, t)
+		otherTx := riverdbtest.TestTxPgx(ctx, t)
 
 		_, err := riverClient.InsertTx(ctx, bundle.tx, Job1Args{String: "foo"}, nil)
 		require.NoError(t, err)
@@ -353,7 +352,7 @@ func TestRequireNotInserted(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		riverClient, err := river.NewClient(driver, &river.Config{
@@ -400,7 +399,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 
 		return riverClient, &testBundle{
 			mockT: NewMockT(t),
-			tx:    riverinternaltest.TestTx(ctx, t),
+			tx:    riverdbtest.TestTxPgx(ctx, t),
 		}
 	}
 
@@ -434,7 +433,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		riverClient, bundle := setup(t)
 
 		// Start a second transaction with different visibility.
-		otherTx := riverinternaltest.TestTx(ctx, t)
+		otherTx := riverdbtest.TestTxPgx(ctx, t)
 
 		_, err := riverClient.InsertTx(ctx, bundle.tx, Job1Args{String: "foo"}, nil)
 		require.NoError(t, err)
@@ -651,7 +650,7 @@ func TestRequireManyInserted(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		riverClient, err := river.NewClient(driver, &river.Config{
@@ -701,7 +700,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 
 		return riverClient, &testBundle{
 			mockT: NewMockT(t),
-			tx:    riverinternaltest.TestTx(ctx, t),
+			tx:    riverdbtest.TestTxPgx(ctx, t),
 		}
 	}
 
@@ -726,7 +725,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 		riverClient, bundle := setup(t)
 
 		// Start a second transaction with different visibility.
-		otherTx := riverinternaltest.TestTx(ctx, t)
+		otherTx := riverdbtest.TestTxPgx(ctx, t)
 
 		_, err := riverClient.InsertTx(ctx, bundle.tx, Job1Args{String: "foo"}, nil)
 		require.NoError(t, err)

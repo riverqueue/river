@@ -15,9 +15,9 @@ import (
 	"github.com/riverqueue/river/internal/jobstats"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	"github.com/riverqueue/river/riverschematest"
 	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstop"
@@ -76,7 +76,7 @@ func TestInlineJobCompleter_Complete(t *testing.T) {
 	ctx := context.Background()
 
 	var (
-		tx       = riverinternaltest.TestTx(ctx, t)
+		tx       = riverdbtest.TestTxPgx(ctx, t)
 		driver   = riverpgxv5.New(nil)
 		exec     = driver.UnwrapExecutor(tx)
 		execMock = NewPartialExecutorMock(exec)
@@ -151,7 +151,7 @@ func TestAsyncJobCompleter_Complete(t *testing.T) {
 	var (
 		dbPool   = riversharedtest.DBPool(ctx, t)
 		driver   = riverpgxv5.New(dbPool)
-		schema   = riverschematest.TestSchema(ctx, t, driver, nil)
+		schema   = riverdbtest.TestSchema(ctx, t, driver, nil)
 		execMock = NewPartialExecutorMock(driver.GetExecutor())
 	)
 
@@ -250,7 +250,7 @@ func testCompleterSubscribe(t *testing.T, constructor func(riverdriver.Executor,
 	var (
 		dbPool   = riversharedtest.DBPool(ctx, t)
 		driver   = riverpgxv5.New(dbPool)
-		schema   = riverschematest.TestSchema(ctx, t, driver, nil)
+		schema   = riverdbtest.TestSchema(ctx, t, driver, nil)
 		execMock = NewPartialExecutorMock(driver.GetExecutor())
 	)
 	execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
@@ -296,7 +296,7 @@ func testCompleterWait(t *testing.T, constructor func(riverdriver.Executor, Subs
 	var (
 		dbPool   = riversharedtest.DBPool(ctx, t)
 		driver   = riverpgxv5.New(dbPool)
-		schema   = riverschematest.TestSchema(ctx, t, driver, nil)
+		schema   = riverdbtest.TestSchema(ctx, t, driver, nil)
 		execMock = NewPartialExecutorMock(driver.GetExecutor())
 	)
 
@@ -398,7 +398,7 @@ func TestBatchCompleter(t *testing.T) {
 		var (
 			dbPool      = riversharedtest.DBPool(ctx, t)
 			driver      = riverpgxv5.New(dbPool)
-			schema      = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema      = riverdbtest.TestSchema(ctx, t, driver, nil)
 			exec        = driver.GetExecutor()
 			pilot       = &riverpilot.StandardPilot{}
 			subscribeCh = make(chan []CompleterJobUpdated, 10)
@@ -531,7 +531,7 @@ func testCompleter[TCompleter JobCompleter](
 		var (
 			dbPool      = riversharedtest.DBPool(ctx, t)
 			driver      = riverpgxv5.New(dbPool)
-			schema      = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema      = riverdbtest.TestSchema(ctx, t, driver, nil)
 			exec        = driver.GetExecutor()
 			pilot       = &riverpilot.StandardPilot{}
 			subscribeCh = make(chan []CompleterJobUpdated, 10)
@@ -953,7 +953,7 @@ func benchmarkCompleter(
 		var (
 			dbPool      = riversharedtest.DBPool(ctx, b)
 			driver      = riverpgxv5.New(dbPool)
-			schema      = riverschematest.TestSchema(ctx, b, driver, nil)
+			schema      = riverdbtest.TestSchema(ctx, b, driver, nil)
 			exec        = driver.GetExecutor()
 			pilot       = &riverpilot.StandardPilot{}
 			subscribeCh = make(chan []CompleterJobUpdated, 100)

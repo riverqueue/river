@@ -100,6 +100,8 @@ func (d *Driver) UnwrapExecutor(tx pgx.Tx) riverdriver.ExecutorTx {
 	return &ExecutorTx{Executor: Executor{templateReplaceWrapper{tx, replacer}, d}, tx: tx}
 }
 
+func (d *Driver) UnwrapTx(execTx riverdriver.ExecutorTx) pgx.Tx { return execTx.(*ExecutorTx).tx } //nolint:forcetypeassert
+
 type Executor struct {
 	dbtx   templateReplaceWrapper
 	driver *Driver

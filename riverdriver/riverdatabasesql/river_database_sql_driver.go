@@ -93,6 +93,8 @@ func (d *Driver) UnwrapExecutor(tx *sql.Tx) riverdriver.ExecutorTx {
 	return &ExecutorTx{Executor: Executor{nil, templateReplaceWrapper{tx, replacer}, d}, tx: tx}
 }
 
+func (d *Driver) UnwrapTx(execTx riverdriver.ExecutorTx) *sql.Tx { return execTx.(*ExecutorTx).tx } //nolint:forcetypeassert
+
 type Executor struct {
 	dbPool *sql.DB
 	dbtx   templateReplaceWrapper
@@ -898,11 +900,6 @@ func (t *ExecutorSubTx) Begin(ctx context.Context) (riverdriver.ExecutorTx, erro
 
 	nextSavepointNum := t.savepointNum + 1
 	_, err := t.Exec(ctx, fmt.Sprintf("SAVEPOINT %s%02d", savepointPrefix, nextSavepointNum))
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = t.Exec(ctx, "SET search_path TO 'public'")
 	if err != nil {
 		return nil, err
 	}

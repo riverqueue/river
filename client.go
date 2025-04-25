@@ -431,6 +431,14 @@ func (c *Config) validate() error {
 		return errors.New("RescueStuckJobsAfter cannot be less than JobTimeout")
 	}
 
+	// Max Postgres notification topic length is 63 and we prefix schema to
+	// notification topic, so whatever schema the user specifies must fit inside
+	// this convention.
+	maxSchemaLength := 63 - 1 - len(string(notifier.NotificationTopicLongest)) // -1 for the dot in `<schema>.<topic>`
+	if len(c.Schema) > maxSchemaLength {
+		return fmt.Errorf("Schema length must be less than or equal to %d characters", maxSchemaLength) //nolint:staticcheck
+	}
+
 	for queue, queueConfig := range c.Queues {
 		if err := queueConfig.validate(queue); err != nil {
 			return err
@@ -671,6 +679,10 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	}
 	client.pilot.PilotInit(archetype)
 	pluginPilot, _ := client.pilot.(pilotPlugin)
+
+	if withBaseService, ok := config.RetryPolicy.(baseservice.WithBaseService); ok {
+		baseservice.Init(archetype, withBaseService)
+	}
 
 	// There are a number of internal components that are only needed/desired if
 	// we're actually going to be working jobs (as opposed to just enqueueing

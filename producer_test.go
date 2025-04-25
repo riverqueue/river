@@ -18,9 +18,9 @@ import (
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/sharedtx"
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	"github.com/riverqueue/river/riverschematest"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
@@ -58,7 +58,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	config := newTestConfig(t, nil)
 	driver := riverpgxv5.New(dbPool)
 	exec := driver.GetExecutor()
-	schema := riverschematest.TestSchema(ctx, t, driver, nil)
+	schema := riverdbtest.TestSchema(ctx, t, driver, nil)
 	listener := driver.GetListener(schema)
 	pilot := &riverpilot.StandardPilot{}
 
@@ -168,7 +168,7 @@ func TestProducer_PollOnly(t *testing.T) {
 			driver    = riverpgxv5.New(nil)
 			pilot     = &riverpilot.StandardPilot{}
 			queueName = fmt.Sprintf("test-producer-poll-only-%05d", randutil.IntBetween(1, 100_000))
-			tx        = riverinternaltest.TestTx(ctx, t)
+			tx        = riverdbtest.TestTxPgx(ctx, t)
 		)
 
 		// Wrap with a shared transaction because the producer fetching jobs may
@@ -222,7 +222,7 @@ func TestProducer_WithNotifier(t *testing.T) {
 			driver     = riverpgxv5.New(dbPool)
 			exec       = driver.GetExecutor()
 			jobUpdates = make(chan []jobcompleter.CompleterJobUpdated, 10)
-			schema     = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema     = riverdbtest.TestSchema(ctx, t, driver, nil)
 			listener   = driver.GetListener(schema)
 			pilot      = &riverpilot.StandardPilot{}
 			queueName  = fmt.Sprintf("test-producer-with-notifier-%05d", randutil.IntBetween(1, 100_000))

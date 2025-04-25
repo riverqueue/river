@@ -70,9 +70,7 @@ jobs:
         run: go version
 
       - name: Set up database
-        run: |
-          psql -c "CREATE DATABASE river_test" postgres://postgres:postgres@localhost:5432
-          go run github.com/riverqueue/river/cmd/river@latest migrate-up --database-url "$TEST_DATABASE_URL"
+        run: psql -c "CREATE DATABASE river_test" $ADMIN_DATABASE_URL
 
       - name: Test
         run: make test/race
@@ -135,21 +133,16 @@ jobs:
 
       - run: river migrate-get --all --exclude-version 1 --up
 
-      - name: river migrate-up
-        run: river migrate-up --database-url $DATABASE_URL
+      - run: river migrate-up --database-url $DATABASE_URL
+        shell: bash # needed for windows to interpret env var
+
+      - run: river migrate-list --database-url $DATABASE_URL
         shell: bash
 
-      - name: river migrate-list
-        run: river migrate-list --database-url $DATABASE_URL
+      - run: river validate --database-url $DATABASE_URL
         shell: bash
 
-      - name: river validate
-        run: river validate --database-url $DATABASE_URL
-        shell: bash
-
-      - name: river version
-        run: river version
-        shell: bash
+      - run: river version
 
       - name: river bench
         run: |
@@ -174,8 +167,7 @@ jobs:
           fi
         shell: bash
 
-      - name: river migrate-down
-        run: river migrate-down --database-url $DATABASE_URL --max-steps 100
+      - run: river migrate-down --database-url $DATABASE_URL --max-steps 100
         shell: bash
 
       - name: river validate (expect failure)
@@ -188,6 +180,32 @@ jobs:
       - name: river unknown command (expect failure)
         run: |
           if river not-a-command; then
+            echo "expected non-zero exit code" && exit 1
+          fi
+        shell: bash
+
+      #
+      # Run the whole migration loop again, this time with a custom schema.
+      #
+
+      - run: echo "CUSTOM_SCHEMA=custom_schema" >> $GITHUB_ENV
+        shell: bash
+
+      - run: psql -c "CREATE SCHEMA $CUSTOM_SCHEMA" $DATABASE_URL
+        shell: bash
+
+      - run: river migrate-up --database-url $DATABASE_URL --schema $CUSTOM_SCHEMA
+        shell: bash
+
+      - run: river validate --database-url $DATABASE_URL --schema $CUSTOM_SCHEMA
+        shell: bash
+
+      - run: river migrate-down --database-url $DATABASE_URL --max-steps 100 --schema $CUSTOM_SCHEMA
+        shell: bash
+
+      - name: river validate (expect failure)
+        run: |
+          if river validate --database-url $DATABASE_URL --schema $CUSTOM_SCHEMA; then
             echo "expected non-zero exit code" && exit 1
           fi
         shell: bash

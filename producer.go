@@ -327,11 +327,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		controlSub *notifier.Subscription
 		insertSub  *notifier.Subscription
 	)
-	if p.config.Notifier == nil {
-		p.Logger.DebugContext(fetchCtx, p.Name+": No notifier configured; starting in poll mode", "client_id", p.config.ClientID)
-
-		go p.pollForSettingChanges(fetchCtx, initiallyPaused, initialMetadata)
-	} else {
+	if p.config.Notifier != nil {
 		var err error
 
 		handleInsertNotification := func(topic notifier.NotificationTopic, payload string) {
@@ -373,6 +369,18 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		defer func() {
 			p.Logger.DebugContext(fetchCtx, p.Name+": Run loop stopped", slog.String("queue", p.config.Queue), slog.Uint64("num_completed_jobs", p.numJobsRan.Load()))
 		}()
+
+		var wg sync.WaitGroup
+		defer wg.Wait()
+		if p.config.Notifier == nil {
+			p.Logger.DebugContext(fetchCtx, p.Name+": No notifier configured; starting in poll mode", "client_id", p.config.ClientID)
+
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				p.pollForSettingChanges(fetchCtx, initiallyPaused, initialMetadata)
+			}()
+		}
 
 		if insertSub != nil {
 			defer insertSub.Unlisten(fetchCtx)
@@ -693,6 +701,7 @@ func (p *producer) dispatchWork(workCtx context.Context, count int, fetchResultC
 	jobs, err := p.pilot.JobGetAvailable(ctx, p.exec, p.state, &riverdriver.JobGetAvailableParams{
 		ClientID:   p.config.ClientID,
 		Max:        count,
+		Now:        p.Time.NowUTCOrNil(),
 		Queue:      p.config.Queue,
 		ProducerID: p.id.Load(),
 		Schema:     p.config.Schema,

@@ -11,9 +11,9 @@ import (
 
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/rivercommon"
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	"github.com/riverqueue/river/riverschematest"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/startstoptest"
@@ -104,7 +104,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		bundle := &testBundle{

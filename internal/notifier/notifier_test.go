@@ -13,15 +13,21 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	"github.com/riverqueue/river/riverschematest"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/util/maputil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 )
+
+func TestNotificationTopicLongest(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, NotificationTopicLeadership, NotificationTopicLongest)
+}
 
 func TestNotifier(t *testing.T) {
 	t.Parallel()
@@ -53,7 +59,7 @@ func TestNotifier(t *testing.T) {
 		var (
 			dbPool   = cmp.Or(opts.dbPool, riversharedtest.DBPool(ctx, t))
 			driver   = riverpgxv5.New(dbPool)
-			schema   = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema   = riverdbtest.TestSchema(ctx, t, driver, nil)
 			listener = driver.GetListener(schema)
 		)
 

@@ -8,9 +8,9 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/riverqueue/river/rivermigrate"
-	"github.com/riverqueue/river/riverschematest"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivershared/util/urlutil"
@@ -30,7 +30,7 @@ func Example_migrateDatabaseSQL() {
 	driver := riverdatabasesql.New(db)
 	migrator, err := rivermigrate.New(driver, &rivermigrate.Config{
 		// Test schema with no migrations for purposes of this test.
-		Schema: riverschematest.TestSchema(ctx, testutil.PanicTB(), driver, &riverschematest.TestSchemaOpts{Lines: []string{}}),
+		Schema: riverdbtest.TestSchema(ctx, testutil.PanicTB(), driver, &riverdbtest.TestSchemaOpts{Lines: []string{}}),
 	})
 	if err != nil {
 		panic(err)

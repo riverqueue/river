@@ -8,8 +8,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	"github.com/riverqueue/river/riverschematest"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
@@ -32,7 +32,7 @@ func TestClientDriverPlugin(t *testing.T) {
 			config       = newTestConfig(t, nil)
 			dbPool       = riversharedtest.DBPool(ctx, t)
 			driver       = riverpgxv5.New(dbPool)
-			schema       = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema       = riverdbtest.TestSchema(ctx, t, driver, nil)
 			pluginDriver = newDriverWithPlugin(t, dbPool)
 		)
 		config.Schema = schema
@@ -101,7 +101,7 @@ func TestClientPilotPlugin(t *testing.T) {
 			config       = newTestConfig(t, nil)
 			dbPool       = riversharedtest.DBPool(ctx, t)
 			driver       = riverpgxv5.New(dbPool)
-			schema       = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema       = riverdbtest.TestSchema(ctx, t, driver, nil)
 			pluginDriver = newDriverWithPlugin(t, dbPool)
 			pluginPilot  = newPilotWithPlugin(t)
 		)

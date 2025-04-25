@@ -32,10 +32,10 @@ import (
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/retrypolicytest"
 	"github.com/riverqueue/river/internal/util/dbutil"
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	"github.com/riverqueue/river/riverschematest"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
@@ -173,7 +173,7 @@ func runNewTestClient(ctx context.Context, t *testing.T, config *Config) *Client
 	var (
 		dbPool = riversharedtest.DBPool(ctx, t)
 		driver = riverpgxv5.New(dbPool)
-		schema = riverschematest.TestSchema(ctx, t, driver, nil)
+		schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 	)
 	config.Schema = schema
 
@@ -218,7 +218,7 @@ func Test_Client(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPoolClone(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, nil)
 		)
 		config.Schema = schema
@@ -236,7 +236,7 @@ func Test_Client(t *testing.T) {
 		config, bundle := setupConfig(t)
 
 		// TODO(brandur): It'd be better if we could reuse the driver object
-		// rfrom setupConfig here, but it'll take a lot of unwinding of all
+		// from setupConfig here, but it'll take a lot of unwinding of all
 		// these test helpers.
 		return newTestClient(t, bundle.dbPool, config), bundle
 	}
@@ -345,7 +345,6 @@ func Test_Client(t *testing.T) {
 
 	t.Run("Queues_Add_Stress", func(t *testing.T) {
 		t.Parallel()
-		t.Skip() // TODO
 
 		client, _ := setup(t)
 
@@ -1159,7 +1158,6 @@ func Test_Client(t *testing.T) {
 
 	t.Run("StartStopStress", func(t *testing.T) {
 		t.Parallel()
-		t.Skip() // TODO
 
 		client, _ := setup(t)
 
@@ -1435,7 +1433,7 @@ func Test_Client_Stop_ContextImmediatelyCancelled(t *testing.T) {
 	var (
 		dbPool = riversharedtest.DBPool(ctx, t)
 		driver = riverpgxv5.New(dbPool)
-		schema = riverschematest.TestSchema(ctx, t, driver, nil)
+		schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		config = newTestConfig(t, makeAwaitCallback(startedCh, doneCh))
 	)
 	config.Schema = schema
@@ -1484,7 +1482,7 @@ func Test_Client_Stop_AfterContextCancelled(t *testing.T) {
 	var (
 		dbPool = riversharedtest.DBPool(ctx, t)
 		driver = riverpgxv5.New(dbPool)
-		schema = riverschematest.TestSchema(ctx, t, driver, nil)
+		schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		config = newTestConfig(t, makeAwaitCallback(startedCh, doneCh))
 	)
 	config.Schema = schema
@@ -1705,7 +1703,7 @@ func Test_Client_JobDelete(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, nil)
 		)
 		config.Schema = schema
@@ -1819,7 +1817,7 @@ func Test_Client_Insert(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, nil)
 		)
 		config.Schema = schema
@@ -2009,7 +2007,7 @@ func Test_Client_InsertTx(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, nil)
 		)
 		config.Schema = schema
@@ -2153,7 +2151,7 @@ func Test_Client_InsertManyFast(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, nil)
 		)
 		config.Schema = schema
@@ -2410,7 +2408,7 @@ func Test_Client_InsertManyFastTx(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, nil)
 		)
 		config.Schema = schema
@@ -2600,7 +2598,7 @@ func Test_Client_InsertMany(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, nil)
 		)
 		config.Schema = schema
@@ -2898,7 +2896,7 @@ func Test_Client_InsertManyTx(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, nil)
 		)
 		config.Schema = schema
@@ -3217,7 +3215,7 @@ func Test_Client_JobGet(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, nil)
 		)
 		config.Schema = schema
@@ -3270,7 +3268,7 @@ func Test_Client_JobList(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, nil)
 		)
 		config.Schema = schema
@@ -3589,7 +3587,7 @@ func Test_Client_JobRetry(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, nil)
 		)
 		config.Schema = schema
@@ -3780,7 +3778,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 		config.Schema = schema
 
@@ -4070,7 +4068,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		config := newTestConfig(t, nil)
@@ -4112,7 +4110,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		config := newTestConfig(t, nil)
@@ -4217,7 +4215,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		config := newTestConfig(t, nil)
@@ -4307,7 +4305,7 @@ func Test_Client_QueueGet(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, nil)
 		)
 		config.Schema = schema
@@ -4364,7 +4362,7 @@ func Test_Client_QueueGetTx(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, nil)
 		)
 		config.Schema = schema
@@ -4426,7 +4424,7 @@ func Test_Client_QueueList(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, nil)
 		)
 		config.Schema = schema
@@ -4503,7 +4501,7 @@ func Test_Client_QueueListTx(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, nil)
 		)
 		config.Schema = schema
@@ -4559,7 +4557,7 @@ func Test_Client_QueueUpdate(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, nil)
 		)
 		config.Schema = schema
@@ -4661,7 +4659,7 @@ func Test_Client_QueueUpdateTx(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, nil)
 		)
 		config.Schema = schema
@@ -4724,7 +4722,7 @@ func Test_Client_RetryPolicy(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
@@ -4738,11 +4736,14 @@ func Test_Client_RetryPolicy(t *testing.T) {
 
 		client := newTestClient(t, dbPool, config)
 
+		now := client.baseService.Time.StubNowUTC(time.Now().UTC())
+		t.Logf("Now: %s", now)
+
 		subscribeChan, cancel := client.Subscribe(EventKindJobCompleted, EventKindJobFailed)
 		t.Cleanup(cancel)
 
 		originalJobs := make([]*rivertype.JobRow, rivercommon.MaxAttemptsDefault)
-		for i := 0; i < len(originalJobs); i++ {
+		for i := range originalJobs {
 			job := requireInsert(ctx, client)
 			// regression protection to ensure we're testing the right number of jobs:
 			require.Equal(t, rivercommon.MaxAttemptsDefault, job.MaxAttempts)
@@ -4750,7 +4751,7 @@ func Test_Client_RetryPolicy(t *testing.T) {
 			updatedJob, err := client.driver.GetExecutor().JobUpdate(ctx, &riverdriver.JobUpdateParams{
 				ID:                  job.ID,
 				AttemptedAtDoUpdate: true,
-				AttemptedAt:         ptrutil.Ptr(time.Now().UTC()),
+				AttemptedAt:         &now, // we want a value here, but it'll be overwritten as jobs are locked by the producer
 				AttemptDoUpdate:     true,
 				Attempt:             i, // starts at i, but will be i + 1 by the time it's being worked
 				Schema:              schema,
@@ -4807,9 +4808,7 @@ func Test_Client_RetryPolicy(t *testing.T) {
 			t.Logf("    New scheduled at:      %v", finishedJob.ScheduledAt)
 			t.Logf("    Expected scheduled at: %v", expectedNextScheduledAt)
 
-			// TODO(brandur): This tolerance could be reduced if we could inject
-			// time.Now into adapter which may happen with baseservice
-			require.WithinDuration(t, expectedNextScheduledAt, finishedJob.ScheduledAt, 5*time.Second) // TODO: Bad clock-based test
+			require.WithinDuration(t, expectedNextScheduledAt, finishedJob.ScheduledAt, time.Microsecond)
 
 			require.Equal(t, rivertype.JobStateRetryable, finishedJob.State)
 		}
@@ -4823,8 +4822,7 @@ func Test_Client_RetryPolicy(t *testing.T) {
 
 			t.Logf("Attempt number %d discarded", originalJob.Attempt)
 
-			// TODO(brandur): See note on tolerance above.
-			require.WithinDuration(t, time.Now(), *finishedJob.FinalizedAt, 2*time.Second)
+			require.WithinDuration(t, now, *finishedJob.FinalizedAt, time.Microsecond)
 			require.Equal(t, rivertype.JobStateDiscarded, finishedJob.State)
 		}
 	})
@@ -4855,7 +4853,7 @@ func Test_Client_Subscribe(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		// Fail/succeed jobs based on their name so we can get a mix of both to
@@ -4930,7 +4928,7 @@ func Test_Client_Subscribe(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
@@ -4978,7 +4976,7 @@ func Test_Client_Subscribe(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
@@ -5026,7 +5024,7 @@ func Test_Client_Subscribe(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
@@ -5047,7 +5045,7 @@ func Test_Client_Subscribe(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
@@ -5073,7 +5071,7 @@ func Test_Client_Subscribe(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		config := &Config{}
@@ -5115,7 +5113,7 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		// Fail/succeed jobs based on their name so we can get a mix of both to
@@ -5192,7 +5190,7 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
@@ -5275,7 +5273,7 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
@@ -5298,7 +5296,7 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
@@ -5332,7 +5330,7 @@ func Test_Client_InsertTriggersImmediateWork(t *testing.T) {
 	var (
 		dbPool = riversharedtest.DBPool(ctx, t)
 		driver = riverpgxv5.New(dbPool)
-		schema = riverschematest.TestSchema(ctx, t, driver, nil)
+		schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 	)
 
 	config := newTestConfig(t, makeAwaitCallback(startedCh, doneCh))
@@ -5386,7 +5384,7 @@ func Test_Client_InsertNotificationsAreDeduplicatedAndDebounced(t *testing.T) {
 	var (
 		dbPool = riversharedtest.DBPool(ctx, t)
 		driver = riverpgxv5.New(dbPool)
-		schema = riverschematest.TestSchema(ctx, t, driver, nil)
+		schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 	)
 
 	config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
@@ -5473,7 +5471,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 		config.Schema = schema
 
@@ -5517,33 +5515,28 @@ func Test_Client_JobCompletion(t *testing.T) {
 	t.Run("JobThatIsAlreadyCompletedIsNotAlteredByCompleter", func(t *testing.T) {
 		t.Parallel()
 
-		// These variables are defined, used in the callback, then set below
-		// after setup. This is an incredible tribute to poor, non-obvious
-		// design. TODO: Move the job definition to below setup so this isn't
-		// necessary.
-		var (
-			exec   riverdriver.Executor
-			schema string
-		)
 		now := time.Now().UTC()
-		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
-			_, err := exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+
+		client, bundle := setup(t, newTestConfig(t, nil))
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			_, err := client.driver.GetExecutor().JobUpdate(ctx, &riverdriver.JobUpdateParams{
 				ID:                  job.ID,
 				FinalizedAtDoUpdate: true,
 				FinalizedAt:         &now,
-				Schema:              schema,
+				Schema:              bundle.schema,
 				StateDoUpdate:       true,
 				State:               rivertype.JobStateCompleted,
 			})
 			require.NoError(t, err)
 			return nil
-		})
+		}))
 
-		client, bundle := setup(t, config)
-		exec = client.driver.GetExecutor()
-		schema = client.config.Schema
-
-		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
+		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
 		require.NoError(t, err)
 
 		event := riversharedtest.WaitOrTimeout(t, bundle.subscribeChan)
@@ -5650,10 +5643,9 @@ func Test_Client_JobCompletion(t *testing.T) {
 	t.Run("JobThatIsCompletedManuallyIsNotTouchedByCompleter", func(t *testing.T) {
 		t.Parallel()
 
-		require := require.New(t)
-		now := time.Now().UTC()
-
 		client, bundle := setup(t, newTestConfig(t, nil))
+
+		now := client.baseService.Time.StubNowUTC(time.Now().UTC())
 
 		type JobArgs struct {
 			JobArgsReflectKind[JobArgs]
@@ -5662,37 +5654,37 @@ func Test_Client_JobCompletion(t *testing.T) {
 		var updatedJob *Job[JobArgs]
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 			tx, err := bundle.dbPool.Begin(ctx)
-			require.NoError(err)
+			require.NoError(t, err)
 
 			updatedJob, err = JobCompleteTx[*riverpgxv5.Driver](ctx, tx, job)
-			require.NoError(err)
+			require.NoError(t, err)
 
 			return tx.Commit(ctx)
 		}))
 
 		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
-		require.NoError(err)
+		require.NoError(t, err)
 
 		event := riversharedtest.WaitOrTimeout(t, bundle.subscribeChan)
-		require.Equal(insertRes.Job.ID, event.Job.ID)
-		require.Equal(rivertype.JobStateCompleted, event.Job.State)
-		require.Equal(rivertype.JobStateCompleted, updatedJob.State)
-		require.NotNil(updatedJob)
-		require.NotNil(event.Job.FinalizedAt)
-		require.NotNil(updatedJob.FinalizedAt)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+		require.Equal(t, rivertype.JobStateCompleted, event.Job.State)
+		require.Equal(t, rivertype.JobStateCompleted, updatedJob.State)
+		require.NotNil(t, updatedJob)
+		require.NotNil(t, event.Job.FinalizedAt)
+		require.NotNil(t, updatedJob.FinalizedAt)
 
 		// Make sure the FinalizedAt is approximately ~now:
-		require.WithinDuration(now, *updatedJob.FinalizedAt, 5*time.Second) // TODO: Bad clock-based test
+		require.WithinDuration(t, now, *updatedJob.FinalizedAt, time.Microsecond)
 
 		// Make sure we're getting the same timestamp back from the event and the
 		// updated job inside the txn:
-		require.WithinDuration(*updatedJob.FinalizedAt, *event.Job.FinalizedAt, time.Microsecond)
+		require.WithinDuration(t, *updatedJob.FinalizedAt, *event.Job.FinalizedAt, time.Microsecond)
 
 		reloadedJob, err := client.JobGet(ctx, insertRes.Job.ID)
-		require.NoError(err)
+		require.NoError(t, err)
 
-		require.Equal(rivertype.JobStateCompleted, reloadedJob.State)
-		require.Equal(updatedJob.FinalizedAt, reloadedJob.FinalizedAt)
+		require.Equal(t, rivertype.JobStateCompleted, reloadedJob.State)
+		require.Equal(t, updatedJob.FinalizedAt, reloadedJob.FinalizedAt)
 	})
 }
 
@@ -5754,7 +5746,7 @@ func Test_Client_Start_Error(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		config := newTestConfig(t, nil)
@@ -5773,7 +5765,7 @@ func Test_Client_Start_Error(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		config := newTestConfig(t, nil)
@@ -5815,7 +5807,7 @@ func Test_NewClient_BaseServiceName(t *testing.T) {
 	var (
 		dbPool = riversharedtest.DBPool(ctx, t)
 		driver = riverpgxv5.New(dbPool)
-		schema = riverschematest.TestSchema(ctx, t, driver, nil)
+		schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		config = newTestConfig(t, nil)
 	)
 	config.Schema = schema
@@ -5869,7 +5861,7 @@ func Test_NewClient_Defaults(t *testing.T) {
 	var (
 		dbPool = riversharedtest.DBPool(ctx, t)
 		driver = riverpgxv5.New(dbPool)
-		schema = riverschematest.TestSchema(ctx, t, driver, nil)
+		schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 	)
 
 	workers := NewWorkers()
@@ -5922,7 +5914,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 	var (
 		dbPool = riversharedtest.DBPool(ctx, t)
 		driver = riverpgxv5.New(dbPool)
-		schema = riverschematest.TestSchema(ctx, t, driver, nil)
+		schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 	)
 
 	errorHandler := &testErrorHandler{}
@@ -6215,6 +6207,13 @@ func Test_NewClient_Validations(t *testing.T) {
 			},
 		},
 		{
+			name: "Schema length must be less than or equal to 46 characters",
+			configFunc: func(config *Config) {
+				config.Schema = strings.Repeat("a", 47)
+			},
+			wantErr: errors.New("Schema length must be less than or equal to 46 characters"),
+		},
+		{
 			name: "Queues can be nil when Workers is also nil",
 			configFunc: func(config *Config) {
 				config.Queues = nil
@@ -6309,7 +6308,7 @@ func Test_NewClient_Validations(t *testing.T) {
 			var (
 				dbPool = riversharedtest.DBPool(ctx, t)
 				driver = riverpgxv5.New(dbPool)
-				schema = riverschematest.TestSchema(ctx, t, driver, nil)
+				schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			)
 
 			workers := NewWorkers()
@@ -6693,7 +6692,7 @@ func TestID(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		config := newTestConfig(t, nil)
@@ -6709,7 +6708,7 @@ func TestID(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 		)
 
 		config := newTestConfig(t, nil)
@@ -6747,7 +6746,7 @@ func TestInsert(t *testing.T) {
 	var (
 		dbPool = riversharedtest.DBPool(ctx, t)
 		driver = riverpgxv5.New(dbPool)
-		schema = riverschematest.TestSchema(ctx, t, driver, nil)
+		schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 	)
 
 	workers := NewWorkers()
@@ -6877,7 +6876,7 @@ func TestUniqueOpts(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, nil)
 		)
 		config.Schema = schema

@@ -150,7 +150,7 @@ UPDATE
 SET
     state = 'running',
     attempt = river_job.attempt + 1,
-    attempted_at = now(),
+    attempted_at = coalesce(sqlc.narg('now')::timestamptz, now()),
     attempted_by = array_append(river_job.attempted_by, @attempted_by::text)
 FROM
     locked_jobs
@@ -307,7 +307,7 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     @priority,
     @queue,
     coalesce(sqlc.narg('scheduled_at')::timestamptz, now()),
-    @state,
+    @state::/* TEMPLATE: schema */river_job_state,
     coalesce(@tags::varchar(255)[], '{}'),
     @unique_key,
     @unique_states
@@ -537,6 +537,6 @@ SET
     attempted_by = CASE WHEN @attempted_by_do_update::boolean THEN @attempted_by ELSE attempted_by END,
     errors = CASE WHEN @errors_do_update::boolean THEN @errors::jsonb[] ELSE errors END,
     finalized_at = CASE WHEN @finalized_at_do_update::boolean THEN @finalized_at ELSE finalized_at END,
-    state = CASE WHEN @state_do_update::boolean THEN @state ELSE state END
+    state = CASE WHEN @state_do_update::boolean THEN @state::/* TEMPLATE: schema */river_job_state ELSE state END
 WHERE id = @id
 RETURNING *;

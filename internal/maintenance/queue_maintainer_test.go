@@ -8,8 +8,8 @@ import (
 	"github.com/robfig/cron/v3"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/sharedtx"
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
@@ -92,7 +92,7 @@ func TestQueueMaintainer(t *testing.T) {
 	t.Run("StartStopStress", func(t *testing.T) {
 		t.Parallel()
 
-		tx := riverinternaltest.TestTx(ctx, t)
+		tx := riverdbtest.TestTxPgx(ctx, t)
 		sharedTx := sharedtx.NewSharedTx(tx)
 
 		archetype := riversharedtest.BaseServiceArchetype(t)

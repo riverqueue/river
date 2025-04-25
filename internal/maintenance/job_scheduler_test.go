@@ -10,10 +10,9 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/riverqueue/river/internal/dbunique"
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	"github.com/riverqueue/river/riverschematest"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
@@ -33,7 +32,7 @@ func TestJobScheduler(t *testing.T) {
 
 	type testOpts struct {
 		exec   riverdriver.Executor
-		schema string // for use when using a non-Testx
+		schema string // for use when using a non-TestTx
 	}
 
 	setup := func(t *testing.T, opts *testOpts) (*JobScheduler, *testBundle) {
@@ -68,7 +67,7 @@ func TestJobScheduler(t *testing.T) {
 
 	setupTx := func(t *testing.T) (*JobScheduler, *testBundle) {
 		t.Helper()
-		tx := riverinternaltest.TestTx(ctx, t)
+		tx := riverdbtest.TestTxPgx(ctx, t)
 		return setup(t, &testOpts{exec: riverpgxv5.New(nil).UnwrapExecutor(tx)})
 	}
 
@@ -314,7 +313,7 @@ func TestJobScheduler(t *testing.T) {
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverschematest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			exec   = driver.GetExecutor()
 		)
 		notifyCh := make(chan []string, 10)

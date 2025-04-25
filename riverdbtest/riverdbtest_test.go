@@ -1,7 +1,8 @@
-package riverschematest
+package riverdbtest
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgerrcode"
@@ -13,6 +14,7 @@ import (
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
+	"github.com/riverqueue/river/rivertype"
 )
 
 func TestTestSchema(t *testing.T) {
@@ -27,7 +29,7 @@ func TestTestSchema(t *testing.T) {
 
 	// Always use this set of options on the first invocation of TestSchema in
 	// each test. Makes sure that the initial check that package name isn't
-	// `riverschematest` is skipped, but it's only needed once because the
+	// `riverdbtest` is skipped, but it's only needed once because the
 	// check's done in a `sync.Once`. Must be used in every test case because
 	// we're using `t.Parallel()` and any test could win the first run race.
 	firstInvocationOpts := &TestSchemaOpts{skipPackageNameCheck: true}
@@ -36,10 +38,10 @@ func TestTestSchema(t *testing.T) {
 		t.Parallel()
 
 		schema1 := TestSchema(ctx, t, driver, firstInvocationOpts)
-		require.Regexp(t, `\Ariverschematest_`, schema1)
+		require.Regexp(t, `\Ariverdbtest_`, schema1)
 
 		schema2 := TestSchema(ctx, t, driver, nil)
-		require.Regexp(t, `\Ariverschematest_`, schema2)
+		require.Regexp(t, `\Ariverdbtest_`, schema2)
 
 		require.NotEqual(t, schema1, schema2)
 
@@ -127,4 +129,121 @@ func TestPackageFromFunc(t *testing.T) {
 
 	require.Equal(t, "river", packageFromFunc("github.com/riverqueue/river.Test_Client.func1"))
 	require.Equal(t, "jobcompleter", packageFromFunc("github.com/riverqueue/river/internal/jobcompleter.testCompleterWait"))
+}
+
+func TestTestTx(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx    = context.Background()
+		dbPool = riversharedtest.DBPool(ctx, t)
+		driver = riverpgxv5.New(dbPool)
+	)
+
+	t.Run("TransactionVisibility", func(t *testing.T) {
+		t.Parallel()
+
+		type PoolOrTx interface {
+			Exec(ctx context.Context, sql string, arguments ...any) (commandTag pgconn.CommandTag, err error)
+		}
+
+		checkTestTable := func(ctx context.Context, poolOrTx PoolOrTx) error {
+			_, err := poolOrTx.Exec(ctx, "SELECT * FROM river_shared_test_tx_table")
+			return err
+		}
+
+		// Test cleanups are invoked in the order of last added, first called.
+		// When TestTx is called below it adds a cleanup, so we want to make
+		// sure that this cleanup, which checks that the database remains
+		// pristine, is invoked after the TestTx cleanup, so we add it first.
+		t.Cleanup(func() {
+			// Tests may inherit context from `t.Context()` which is cancelled
+			// after tests run and before calling clean up. We need a
+			// non-cancelled context to issue rollback here, so use a bit of a
+			// bludgeon to do so with `context.WithoutCancel()`.
+			ctx := context.WithoutCancel(ctx)
+
+			err := checkTestTable(ctx, dbPool)
+			require.Error(t, err)
+
+			var pgErr *pgconn.PgError
+			require.ErrorAs(t, err, &pgErr)
+			require.Equal(t, pgerrcode.UndefinedTable, pgErr.Code)
+		})
+
+		tx := TestTx(ctx, t, driver, &TestTxOpts{skipPackageNameCheck: true})
+
+		_, err := tx.Exec(ctx, "CREATE TABLE river_shared_test_tx_table (id bigint)")
+		require.NoError(t, err)
+
+		err = checkTestTable(ctx, tx)
+		require.NoError(t, err)
+	})
+
+	t.Run("EmptyLines", func(t *testing.T) {
+		t.Parallel()
+
+		{
+			tx := TestTx(ctx, t, driver, &TestTxOpts{
+				lines:                []string{}, // non-nil empty indicates no migrations should be run
+				skipPackageNameCheck: true,
+			})
+
+			_, err := driver.UnwrapExecutor(tx).JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: 1, Schema: ""})
+			var pgErr *pgconn.PgError
+			require.ErrorAs(t, err, &pgErr)
+			require.Equal(t, pgerrcode.UndefinedTable, pgErr.Code)
+		}
+
+		// Get another test transaction with empty schema to make sure that
+		// rollback with an empty migration line works. This schema is reused
+		// because the subtest above will have added to test transaction schema
+		// to testTxSchemas.
+		{
+			tx := TestTx(ctx, t, driver, &TestTxOpts{
+				lines: []string{},
+			})
+			_, err := driver.UnwrapExecutor(tx).JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: 1, Schema: ""})
+			var pgErr *pgconn.PgError
+			require.ErrorAs(t, err, &pgErr)
+			require.Equal(t, pgerrcode.UndefinedTable, pgErr.Code)
+		}
+
+		// A test transaction with default options uses the main schema and has a jobs table.
+		{
+			tx := TestTx(ctx, t, driver, nil)
+			_, err := driver.UnwrapExecutor(tx).JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: 1, Schema: ""})
+			require.ErrorIs(t, rivertype.ErrNotFound, err)
+		}
+	})
+
+	// Simulates a bunch of parallel processes using `TestTx` simultaneously.
+	// With the help of `go test -race`, should identify mutex/locking/parallel
+	// access problems if there are any.
+	t.Run("ConcurrentAccess", func(t *testing.T) {
+		t.Parallel()
+
+		// Don't open more than maximum pool size transactions at once because
+		// that would deadlock.
+		const numGoroutines = 4
+
+		var (
+			ctx = context.Background()
+			wg  sync.WaitGroup
+		)
+
+		dbPool := riversharedtest.DBPoolClone(ctx, t)
+
+		wg.Add(4)
+		for i := range numGoroutines {
+			workerNum := i
+			go func() {
+				_ = TestTx(ctx, t, riverpgxv5.New(dbPool), &TestTxOpts{skipPackageNameCheck: true})
+				t.Logf("Opened transaction: %d", workerNum)
+				wg.Done()
+			}()
+		}
+
+		wg.Wait()
+	})
 }

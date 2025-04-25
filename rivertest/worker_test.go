@@ -11,7 +11,7 @@ import (
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/internal/execution"
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -51,7 +51,7 @@ func TestWorker_NewWorker(t *testing.T) {
 		return &testBundle{
 			config: &river.Config{ID: "rivertest-worker"},
 			driver: riverpgxv5.New(nil),
-			tx:     riverinternaltest.TestTx(ctx, t),
+			tx:     riverdbtest.TestTxPgx(ctx, t),
 		}
 	}
 
@@ -85,7 +85,7 @@ func TestWorker_Work(t *testing.T) {
 		var (
 			config = &river.Config{ID: "rivertest-worker"}
 			driver = riverpgxv5.New(nil)
-			tx     = riverinternaltest.TestTx(ctx, t)
+			tx     = riverdbtest.TestTxPgx(ctx, t)
 		)
 
 		return &testBundle{
@@ -440,7 +440,7 @@ func TestWorker_WorkJob(t *testing.T) {
 			client:   client,
 			config:   config,
 			driver:   driver,
-			tx:       riverinternaltest.TestTx(ctx, t),
+			tx:       riverdbtest.TestTxPgx(ctx, t),
 			workFunc: func(ctx context.Context, job *river.Job[testArgs]) error { return nil },
 		}
 

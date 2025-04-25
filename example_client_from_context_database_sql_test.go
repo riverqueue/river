@@ -11,8 +11,8 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
-	"github.com/riverqueue/river/riverschematest"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/util/slogutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
@@ -61,8 +61,8 @@ func ExampleClientFromContext_databaseSQL() {
 		},
 		FetchCooldown:     10 * time.Millisecond,
 		FetchPollInterval: 10 * time.Millisecond,
-		Schema:            riverschematest.TestSchema(ctx, testutil.PanicTB(), riverdatabasesql.New(db), nil), // only necessary for the example test
-		TestOnly:          true,                                                                               // suitable only for use in tests; remove for live environments
+		Schema:            riverdbtest.TestSchema(ctx, testutil.PanicTB(), riverdatabasesql.New(db), nil), // only necessary for the example test
+		TestOnly:          true,                                                                           // suitable only for use in tests; remove for live environments
 		Workers:           workers,
 	})
 	if err != nil {

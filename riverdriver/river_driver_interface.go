@@ -56,7 +56,7 @@ type Driver[TTx any] interface {
 	GetListener(schema string) Listener
 
 	// GetMigrationDefaultLines gets default migration lines that should be
-	// applied when using this driver. This is mainly used by riverschematest to
+	// applied when using this driver. This is mainly used by riverdbtest to
 	// figure out what migration lines should be available by default for new
 	// test schemas.
 	//
@@ -102,6 +102,8 @@ type Driver[TTx any] interface {
 	//
 	// API is not stable. DO NOT USE.
 	UnwrapExecutor(tx TTx) ExecutorTx
+
+	UnwrapTx(execTx ExecutorTx) TTx
 }
 
 // Executor provides River operations against a database. It may be a database
@@ -479,7 +481,7 @@ type JobSetStateIfRunningManyParams struct {
 	MetadataDoMerge []bool
 	MetadataUpdates [][]byte
 	ScheduledAt     []*time.Time
-	Schema          string // TODO(brandur): Try to push this up a layer; it's awkward being the only non-slice on here.
+	Schema          string
 	State           []rivertype.JobState
 }
 

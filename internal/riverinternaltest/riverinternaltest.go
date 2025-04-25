@@ -3,14 +3,12 @@
 package riverinternaltest
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"go.uber.org/goleak"
 
 	"github.com/riverqueue/river/rivershared/riversharedtest"
@@ -100,18 +98,6 @@ func DrainContinuously[T any](drainChan <-chan T) func() []T {
 
 		return items
 	}
-}
-
-// TestTx starts a test transaction that's rolled back automatically as the test
-// case is cleaning itself up. This can be used as a lighter weight alternative
-// to `testdb.Manager` in components where it's not necessary to have many
-// connections open simultaneously.
-//
-// TODO(brandur): Get rid of this in favor of `riversharedtest`.
-func TestTx(ctx context.Context, tb testing.TB) pgx.Tx {
-	tb.Helper()
-
-	return riversharedtest.TestTxPool(ctx, tb, riversharedtest.DBPool(ctx, tb))
 }
 
 // WrapTestMain performs some common setup and teardown that should be shared

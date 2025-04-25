@@ -359,7 +359,7 @@ func (e *JobExecutor) reportError(ctx context.Context, res *jobExecutorResult, m
 		return
 	}
 
-	now := time.Now()
+	now := e.Archetype.Time.NowUTC()
 
 	if cancelJob {
 		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateCancelled(e.Schema, e.JobRow.ID, now, errData, metadataUpdates)); err != nil {

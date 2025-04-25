@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/testfactory"
@@ -30,7 +30,7 @@ func TestJobListNoJobs(t *testing.T) {
 		driver := riverpgxv5.New(nil)
 
 		return &testBundle{
-			exec: driver.UnwrapExecutor(riverinternaltest.TestTx(ctx, t)),
+			exec: driver.UnwrapExecutor(riverdbtest.TestTxPgx(ctx, t)),
 		}
 	}
 
@@ -80,7 +80,7 @@ func TestJobListWithJobs(t *testing.T) {
 
 		var (
 			driver = riverpgxv5.New(nil)
-			tx     = riverinternaltest.TestTx(ctx, t)
+			tx     = riverdbtest.TestTxPgx(ctx, t)
 			exec   = driver.UnwrapExecutor(tx)
 		)
 

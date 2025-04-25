@@ -45,6 +45,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	}
 
 	t.Run("GetMigrationFS", func(t *testing.T) {
+		t.Parallel()
+
 		driver, _ := driverWithSchema(ctx, t)
 
 		for _, line := range driver.GetMigrationLines() {
@@ -57,6 +59,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	})
 
 	t.Run("GetMigrationTruncateTables", func(t *testing.T) {
+		t.Parallel()
+
 		driver, _ := driverWithSchema(ctx, t)
 
 		for _, line := range driver.GetMigrationLines() {
@@ -70,6 +74,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	})
 
 	t.Run("GetMigrationLines", func(t *testing.T) {
+		t.Parallel()
+
 		driver, _ := driverWithSchema(ctx, t)
 
 		// Should contain at minimum a main migration line.
@@ -100,6 +106,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			// Job visible in subtransaction, but not parent.
 			{
 				job := testfactory.Job(ctx, t, tx, &testfactory.JobOpts{})
+				_ = testfactory.Job(ctx, t, tx, &testfactory.JobOpts{})
 
 				_, err := tx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
 				require.NoError(t, err)

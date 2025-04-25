@@ -394,7 +394,7 @@ type migrateDown struct {
 }
 
 func (c *migrateDown) Run(ctx context.Context, opts *migrateOpts) (bool, error) {
-	migrator, err := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger})
+	migrator, err := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger, Schema: c.Schema})
 	if err != nil {
 		return false, err
 	}
@@ -482,7 +482,7 @@ func (c *migrateGet) Run(_ context.Context, opts *migrateGetOpts) (bool, error) 
 	// other databases is added in the future. Unlike other migrate commands,
 	// this one doesn't take a `--database-url`, so we'd need a way of
 	// detecting the database type.
-	migrator, err := rivermigrate.New(c.DriverProcurer.ProcurePgxV5(nil), &rivermigrate.Config{Line: opts.Line, Logger: c.Logger})
+	migrator, err := rivermigrate.New(c.DriverProcurer.ProcurePgxV5(nil), &rivermigrate.Config{Line: opts.Line, Logger: c.Logger, Schema: ""})
 	if err != nil {
 		return false, err
 	}
@@ -550,7 +550,7 @@ type migrateList struct {
 }
 
 func (c *migrateList) Run(ctx context.Context, opts *migrateListOpts) (bool, error) {
-	migrator, err := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger})
+	migrator, err := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger, Schema: c.Schema})
 	if err != nil {
 		return false, err
 	}
@@ -587,7 +587,7 @@ type migrateUp struct {
 }
 
 func (c *migrateUp) Run(ctx context.Context, opts *migrateOpts) (bool, error) {
-	migrator, err := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger})
+	migrator, err := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger, Schema: c.Schema})
 	if err != nil {
 		return false, err
 	}
@@ -625,7 +625,7 @@ type validate struct {
 }
 
 func (c *validate) Run(ctx context.Context, opts *validateOpts) (bool, error) {
-	migrator, err := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger})
+	migrator, err := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger, Schema: c.Schema})
 	if err != nil {
 		return false, err
 	}

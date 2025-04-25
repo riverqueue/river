@@ -152,10 +152,10 @@ func TestDebouncedChan_ContinuousOperation(t *testing.T) {
 	// into our total test time, and +1 for an initial fire.
 	//
 	// This almost always lands right on the expected number, but allow a delta
-	// of +/-2 to allow the channel to be off by two cycles in either direction.
-	// By running at `-count 1000` I can usually reproduce an off-by-one-or-two
-	// cycle.
+	// of +/-3 to allow the channel to be off by 3 cycles in either direction
+	// (mainly for CI). By running at `-count 1000` I can usually reproduce an
+	// off-by-one-or-two cycle.
 	expectedNumSignal := int(math.Round(float64(testTime)/float64(cooldown))) + 1
 	t.Logf("Expected: %d, actual: %d", expectedNumSignal, numSignals)
-	require.InDelta(t, expectedNumSignal, numSignals, 2)
+	require.InDelta(t, expectedNumSignal, numSignals, 3)
 }

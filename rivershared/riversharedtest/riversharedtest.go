@@ -51,7 +51,7 @@ func DBPool(ctx context.Context, tb testing.TB) *pgxpool.Pool {
 		require.NoError(tb, err)
 
 		config.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
-			// Empty the search path so that tests using riverschematest are
+			// Empty the search path so that tests using riverdbtest are
 			// forced to pass a schema to clients and any other database
 			// operations they invoke. Calls do not accidentally fall back to a
 			// default schema, which would potentially hide bugs where we
@@ -139,72 +139,6 @@ func TestDatabaseURL() string {
 		// configured with more allowed max connections.
 		"postgres://localhost:5432/river_test?pool_max_conns=15&sslmode=disable",
 	)
-}
-
-// TestTx starts a test transaction that's rolled back automatically as the test
-// case is cleaning itself up.
-//
-// This variant uses the default database pool from DBPool that points to
-// `TEST_DATABASE_URL` or `river_test` if the former wasn't specified.
-func TestTx(ctx context.Context, tb testing.TB) pgx.Tx {
-	tb.Helper()
-	return TestTxPool(ctx, tb, DBPool(ctx, tb))
-}
-
-// TestTxPool starts a test transaction that's rolled back automatically as the
-// test case is cleaning itself up.
-//
-// This variant starts the test transaction on the specified database pool.
-func TestTxPool(ctx context.Context, tb testing.TB, dbPool *pgxpool.Pool) pgx.Tx {
-	tb.Helper()
-
-	tx, err := dbPool.Begin(ctx)
-	require.NoError(tb, err)
-
-	_, err = tx.Exec(ctx, "SET search_path TO 'public'")
-	require.NoError(tb, err)
-
-	tb.Cleanup(func() {
-		// Tests may inerit context from `t.Context()` which is cancelled after
-		// tests run and before calling clean up. We need a non-cancelled
-		// context to issue rollback here, so use a bit of a bludgeon to do so
-		// with `context.WithoutCancel()`.
-		ctx := context.WithoutCancel(ctx)
-
-		err := tx.Rollback(ctx)
-
-		if err == nil {
-			return
-		}
-
-		// Try to look for an error on rollback because it does occasionally
-		// reveal a real problem in the way a test is written. However, allow
-		// tests to roll back their transaction early if they like, so ignore
-		// `ErrTxClosed`.
-		if errors.Is(err, pgx.ErrTxClosed) {
-			return
-		}
-
-		// In case of a cancelled context during a database operation, which
-		// happens in many tests, pgx seems to not only roll back the
-		// transaction, but closes the connection, and returns this error on
-		// rollback. Allow this error since it's hard to prevent it in our flows
-		// that use contexts heavily.
-		if err.Error() == "conn closed" {
-			return
-		}
-
-		// Similar to the above, but a newly appeared error that wraps the
-		// above. As far as I can tell, no error variables are available to use
-		// with `errors.Is`.
-		if err.Error() == "failed to deallocate cached statement(s): conn closed" {
-			return
-		}
-
-		require.NoError(tb, err)
-	})
-
-	return tx
 }
 
 // TimeStub implements baseservice.TimeGeneratorWithStub to allow time to be

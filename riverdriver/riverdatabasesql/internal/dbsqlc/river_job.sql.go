@@ -206,8 +206,8 @@ WITH locked_jobs AS (
         /* TEMPLATE: schema */river_job
     WHERE
         state = 'available'
-        AND queue = $2::text
-        AND scheduled_at <= coalesce($3::timestamptz, now())
+        AND queue = $3::text
+        AND scheduled_at <= coalesce($1::timestamptz, now())
     ORDER BY
         priority ASC,
         scheduled_at ASC,
@@ -221,8 +221,8 @@ UPDATE
 SET
     state = 'running',
     attempt = river_job.attempt + 1,
-    attempted_at = now(),
-    attempted_by = array_append(river_job.attempted_by, $1::text)
+    attempted_at = coalesce($1::timestamptz, now()),
+    attempted_by = array_append(river_job.attempted_by, $2::text)
 FROM
     locked_jobs
 WHERE
@@ -232,17 +232,17 @@ RETURNING
 `
 
 type JobGetAvailableParams struct {
+	Now         *time.Time
 	AttemptedBy string
 	Queue       string
-	Now         *time.Time
 	Max         int32
 }
 
 func (q *Queries) JobGetAvailable(ctx context.Context, db DBTX, arg *JobGetAvailableParams) ([]*RiverJob, error) {
 	rows, err := db.QueryContext(ctx, jobGetAvailable,
+		arg.Now,
 		arg.AttemptedBy,
 		arg.Queue,
-		arg.Now,
 		arg.Max,
 	)
 	if err != nil {
@@ -759,7 +759,7 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     $11,
     $12,
     coalesce($13::timestamptz, now()),
-    $14,
+    $14::/* TEMPLATE: schema */river_job_state,
     coalesce($15::varchar(255)[], '{}'),
     $16,
     $17
@@ -1267,7 +1267,7 @@ SET
     attempted_by = CASE WHEN $5::boolean THEN $6 ELSE attempted_by END,
     errors = CASE WHEN $7::boolean THEN $8::jsonb[] ELSE errors END,
     finalized_at = CASE WHEN $9::boolean THEN $10 ELSE finalized_at END,
-    state = CASE WHEN $11::boolean THEN $12 ELSE state END
+    state = CASE WHEN $11::boolean THEN $12::/* TEMPLATE: schema */river_job_state ELSE state END
 WHERE id = $13
 RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 `

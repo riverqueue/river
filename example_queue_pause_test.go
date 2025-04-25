@@ -9,8 +9,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	"github.com/riverqueue/river/riverschematest"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/util/slogutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
@@ -60,8 +60,8 @@ func Example_queuePause() {
 			unreliableQueue: {MaxWorkers: 10},
 			reliableQueue:   {MaxWorkers: 10},
 		},
-		Schema:   riverschematest.TestSchema(ctx, testutil.PanicTB(), riverpgxv5.New(dbPool), nil), // only necessary for the example test
-		TestOnly: true,                                                                             // suitable only for use in tests; remove for live environments
+		Schema:   riverdbtest.TestSchema(ctx, testutil.PanicTB(), riverpgxv5.New(dbPool), nil), // only necessary for the example test
+		TestOnly: true,                                                                         // suitable only for use in tests; remove for live environments
 		Workers:  workers,
 	})
 	if err != nil {

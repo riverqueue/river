@@ -53,7 +53,7 @@ func JobCompleteTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs](ctx 
 	}
 
 	execTx := driver.UnwrapExecutor(tx)
-	params := riverdriver.JobSetStateCompleted(client.config.Schema, job.ID, time.Now(), nil)
+	params := riverdriver.JobSetStateCompleted(client.config.Schema, job.ID, client.baseService.Time.NowUTC(), nil)
 	rows, err := pilot.JobSetStateIfRunningMany(ctx, execTx, &riverdriver.JobSetStateIfRunningManyParams{
 		ID:              []int64{params.ID},
 		Attempt:         []*int{params.Attempt},

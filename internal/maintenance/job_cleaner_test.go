@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
@@ -32,7 +32,7 @@ func TestJobCleaner(t *testing.T) {
 	setup := func(t *testing.T) (*JobCleaner, *testBundle) {
 		t.Helper()
 
-		tx := riverinternaltest.TestTx(ctx, t)
+		tx := riverdbtest.TestTxPgx(ctx, t)
 		bundle := &testBundle{
 			cancelledDeleteHorizon: time.Now().Add(-CancelledJobRetentionPeriodDefault),
 			completedDeleteHorizon: time.Now().Add(-CompletedJobRetentionPeriodDefault),

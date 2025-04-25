@@ -1,25 +1,28 @@
-// Package riverschematest contains testing infrastructure for the River project
+// Package riverdbtest contains testing infrastructure for the River project
 // itself that creates isolated schemas suitable for use within a single case.
 //
 // This package is for internal use and should not be considered stable. Changes
 // to functions and types in this package WILL NOT be considered breaking
 // changes for purposes of River's semantic versioning.
-package riverschematest
+package riverdbtest
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"maps"
 	"runtime"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
@@ -45,20 +48,23 @@ var (
 // TestSchemaOpts are options for TestSchema. Most of the time these can be left
 // as nil.
 type TestSchemaOpts struct {
-	// Lines are migration lines to run. By default, the main migration line is
-	// run, but an alternative set can be specified in case more are needed.
+	// Lines are migration lines to run. By default, the migration lines
+	// specified by the driver's GetMigrationDefaultLines function are run.
 	//
 	// Set to an empty non-nil slice like `[]string{}` to run no migrations.
-	//
-	// Defaults to `[]string{"main"}`.
 	Lines []string
 
+	// Schema will not be checked in for reuse at the end of tests.
+	noReuse bool
+
 	// skipPackageNameCheck skips the check that package name doesn't resolve to
-	// `riverschematest`. Normally we want this to make sure that we're skipping
+	// `riverdbtest`. Normally we want this to make sure that we're skipping
 	// the right number of frames back to the caller package, but it needs to be
-	// skipped for tests _in_ `riverschematest`. That's also why it's not
+	// skipped for tests _in_ `riverdbtest`. That's also why it's not
 	// exported.
 	skipPackageNameCheck bool
+
+	skipExtraFrames int
 }
 
 // TestSchema generates an isolated schema for use during a single test run.
@@ -100,18 +106,20 @@ func TestSchema[TTx any](ctx context.Context, tb testutil.TestingTB, driver rive
 	// `jobcompleter` or `riverpro`.
 	genSchemaBase.Do(func() {
 		var (
-			programCounterAddr, _, _, _ = runtime.Caller(4)                            // skip `TestSchema.func1` (closure) + `sync.(*Once).doSlow` + `sync.(*Once).Do` + `TestSchema` and end up at `TestSchema`'s caller
+			programCounterAddr, _, _, _ = runtime.Caller(4 + opts.skipExtraFrames)     // skip `TestSchema.func1` (closure) + `sync.(*Once).doSlow` + `sync.(*Once).Do` + `TestSchema` and end up at `TestSchema`'s caller
 			funcName                    = runtime.FuncForPC(programCounterAddr).Name() // like: github.com/riverqueue/river.Test_Client.func1
 		)
 
 		packageName = packageFromFunc(funcName) // like: `river` (or `jobcompleter`, or `riverpro`)
 
+		tb.Logf("package name: " + packageName)
+
 		// Check to make sure we're skipping the right number of frames above.
 		// If the location of `runtime.Caller` is changed at all (a single new
 		// function is added to the stack), the reported package will be
 		// completely wrong, so we try to take precautions about it.
-		if packageName == "riverschematest" && !opts.skipPackageNameCheck {
-			panic("package name should not resolve to riverschematest")
+		if packageName == "riverdbtest" && !opts.skipPackageNameCheck {
+			panic("package name should not resolve to riverdbtest")
 		}
 
 		// Notification topics are prefixed with schemas. The max Postgres
@@ -261,99 +269,22 @@ func TestSchema[TTx any](ctx context.Context, tb testutil.TestingTB, driver rive
 	}
 
 	if withCleanup, ok := tb.(testingTBWithCleanup); ok {
-		withCleanup.Cleanup(func() {
-			idleSchemasMu.Lock()
-			defer idleSchemasMu.Unlock()
+		if !opts.noReuse {
+			withCleanup.Cleanup(func() {
+				idleSchemasMu.Lock()
+				defer idleSchemasMu.Unlock()
 
-			idleSchemas[linesKey] = append(idleSchemas[linesKey], schema)
+				idleSchemas[linesKey] = append(idleSchemas[linesKey], schema)
 
-			tb.Logf("Checked in schema %q; %d idle schema(s) [%d generated] [%d reused]",
-				schema, len(idleSchemas), stats.numGenerated.Load(), stats.numReused.Load())
-		})
-
-		// Add separately to make sure it doesn't hold idleSchemasMu.
-		withCleanup.Cleanup(func() { checkExtraneousRows[TTx](ctx, tb, exec, linesKey, truncateTables) })
+				tb.Logf("Checked in schema %q; %d idle schema(s) [%d generated] [%d reused]",
+					schema, len(idleSchemas), stats.numGenerated.Load(), stats.numReused.Load())
+			})
+		}
 	} else {
 		tb.Logf("tb does not implement Cleanup; schema not checked in for reuse")
 	}
 
 	return schema
-}
-
-// If a test uses TestSchema but forgets to apply the schema to the client in
-// use, the client will leave debris in the database's default schema, which
-// will likely screw up a run for a subsequent test or the next time the test
-// suite is run. This check helps protect against that problem by checking known
-// interestig tables post run.
-func checkExtraneousRows[TTx any](ctx context.Context, tb testutil.TestingTB, exec riverdriver.Executor, linesKey string, truncateTables []string) {
-	if ctx.Err() != nil {
-		tb.Logf("Did not check default schema for extraneous rows because context error: %s", ctx.Err())
-		return
-	}
-
-	checkExtraneousRowsMu.RLock()
-	memo := checkExtraneousRowsMemo[linesKey]
-	checkExtraneousRowsMu.RUnlock()
-	if memo == nil {
-		memo = checkExtraneousRowsLinesMemoFor(truncateTables)
-		checkExtraneousRowsMu.Lock()
-		checkExtraneousRowsMemo[linesKey] = memo
-		checkExtraneousRowsMu.Unlock()
-	}
-
-	var (
-		allNumRows     = make([]int, len(truncateTables))
-		allNumRowsPtrs = make([]any, len(truncateTables))
-		start          = time.Now()
-	)
-	for i := range allNumRowsPtrs {
-		allNumRowsPtrs[i] = &(allNumRows[i])
-	}
-	err := exec.QueryRow(ctx, memo.remnantCheckSQL).Scan(allNumRowsPtrs...)
-	if err != nil && (err.Error() == "closed pool" || err.Error() == "sql: database is closed") {
-		tb.Logf("Did not check default schema for extraneous rows because database pool is closed")
-		return
-	} else {
-		require.NoError(tb, err)
-	}
-
-	actualNumRowsMap := maps.Clone(memo.expectedNumRowsMap)
-	for i, numRows := range allNumRows {
-		actualNumRowsMap[truncateTables[i]] = numRows
-	}
-	require.Equal(tb, memo.expectedNumRowsMap, actualNumRowsMap, "Found non-zero number of extraneous rows in default schema table")
-
-	tb.Logf("Checked default schema for extraneous rows in %s", time.Since(start))
-}
-
-// This isn't strictly necessary, but since a few items will always be the same
-// for a specific set of migration lines no matter how many thousands of test
-// cases are invoked, memoize them so that the objects can be reused.
-var (
-	checkExtraneousRowsMemo = make(map[string]*checkExtraneousRowsLinesMemo) //nolint:gochecknoglobals
-	checkExtraneousRowsMu   sync.RWMutex                                     //nolint:gochecknoglobals
-)
-
-type checkExtraneousRowsLinesMemo struct {
-	expectedNumRowsMap map[string]int
-	remnantCheckSQL    string
-}
-
-func checkExtraneousRowsLinesMemoFor(truncateTables []string) *checkExtraneousRowsLinesMemo {
-	expectedNumRowsMap := make(map[string]int, len(truncateTables))
-	for _, table := range truncateTables {
-		expectedNumRowsMap[table] = 0
-	}
-
-	tableSelects := sliceutil.Map(
-		truncateTables,
-		func(table string) string { return "(SELECT count(*) FROM public." + table + ")" },
-	)
-
-	return &checkExtraneousRowsLinesMemo{
-		expectedNumRowsMap: expectedNumRowsMap,
-		remnantCheckSQL:    "SELECT " + strings.Join(tableSelects, ", "),
-	}
 }
 
 // Gets a "friendly package name" from a fully qualified function name.
@@ -374,4 +305,171 @@ func packageFromFunc(funcName string) string {
 	)
 
 	return packageName
+}
+
+// TestTx starts a test transaction that's rolled back automatically as the test
+// case is cleaning itself up.
+//
+// This variant starts a transaction for the standard pgx/v5 driver most
+// commonly used throughout most of River.
+func TestTxPgx(ctx context.Context, tb testing.TB) pgx.Tx {
+	tb.Helper()
+
+	return TestTx(ctx, tb, riverpgxv5.New(riversharedtest.DBPool(ctx, tb)), &TestTxOpts{
+		IsTestTxHelper: true,
+	})
+}
+
+// TestTxOpts are options for TestTx. Most of the time these can be left as nil.
+type TestTxOpts struct {
+	// IsTestTxHelper should be set to true for if TestTx is being called from
+	// within a secondary helper that's in a common testing package. This causes
+	// an extra stack frame to be skipped when determining the name of the test
+	// schema being used for test transactions. So instead of `riverdbtest` or
+	// `riverprodbtest` we get the real name of the package being tested (e.g.
+	// `river` or `riverpro`).
+	IsTestTxHelper bool
+
+	// Lines are migration lines to run. By default, the migration lines
+	// specified by the driver's GetMigrationDefaultLines function are run.
+	//
+	// Set to an empty non-nil slice like `[]string{}` to run no migrations.
+	//
+	// This is currently not exported because it hasn't been needed anywhere yet
+	// for test transactions.
+	lines []string
+
+	// skipPackageNameCheck skips the check that package name doesn't resolve to
+	// `riverdbtest`. Normally we want this to make sure that we're skipping
+	// the right number of frames back to the caller package, but it needs to be
+	// skipped for tests _in_ `riverdbtest`. That's also why it's not exported.
+	skipPackageNameCheck bool
+}
+
+// TestTx starts a test transaction that's rolled back automatically as the test
+// case is cleaning itself up.
+//
+// The function invokes TestSchema to create a single schema where this test
+// transaction and all future test transactions for this package test run will
+// run.
+//
+// `search_path` is set to the name of the transaction schema so that it's not
+// necessary to specify an explicit schema for database operations. (This is
+// somewhat of a legacy decision
+//
+// The included driver determines what migrations are run to prepare the test
+// transaction schema.
+func TestTx[TTx any](ctx context.Context, tb testing.TB, driver riverdriver.Driver[TTx], opts *TestTxOpts) TTx {
+	tb.Helper()
+
+	schema := testTxSchemaForMigrationLines(ctx, tb, driver, opts)
+	tb.Logf("TestTx using schema: " + schema)
+
+	tx, err := driver.GetExecutor().Begin(ctx)
+	require.NoError(tb, err)
+
+	_, err = tx.Exec(ctx, "SET search_path TO '"+schema+"'")
+	require.NoError(tb, err)
+
+	tb.Cleanup(func() {
+		// Tests may inerit context from `t.Context()` which is cancelled after
+		// tests run and before calling clean up. We need a non-cancelled
+		// context to issue rollback here, so use a bit of a bludgeon to do so
+		// with `context.WithoutCancel()`.
+		ctx := context.WithoutCancel(ctx)
+
+		err := tx.Rollback(ctx)
+
+		if err == nil {
+			return
+		}
+
+		// Try to look for an error on rollback because it does occasionally
+		// reveal a real problem in the way a test is written. However, allow
+		// tests to roll back their transaction early if they like, so ignore
+		// `ErrTxClosed`.
+		if errors.Is(err, pgx.ErrTxClosed) {
+			return
+		}
+
+		// In case of a cancelled context during a database operation, which
+		// happens in many tests, pgx seems to not only roll back the
+		// transaction, but closes the connection, and returns this error on
+		// rollback. Allow this error since it's hard to prevent it in our flows
+		// that use contexts heavily.
+		if err.Error() == "conn closed" {
+			return
+		}
+
+		// Similar to the above, but a newly appeared error that wraps the
+		// above. As far as I can tell, no error variables are available to use
+		// with `errors.Is`.
+		if err.Error() == "failed to deallocate cached statement(s): conn closed" {
+			return
+		}
+
+		require.NoError(tb, err)
+	})
+
+	return driver.UnwrapTx(tx)
+}
+
+var (
+	testTxSchemas   = make(map[string]string) //nolint:gochecknoglobals
+	testTxSchemasMu sync.RWMutex              //nolint:gochecknoglobals
+)
+
+func testTxSchemaForMigrationLines[TTx any](ctx context.Context, tb testing.TB, driver riverdriver.Driver[TTx], opts *TestTxOpts) string {
+	tb.Helper()
+
+	if opts == nil {
+		opts = &TestTxOpts{}
+	}
+
+	lines := driver.GetMigrationDefaultLines()
+	if opts.lines != nil {
+		lines = opts.lines
+	}
+
+	// Transaction schemas must be managed by which migration lines were run
+	// within them, which is determined by the included driver. i.e. A schema
+	// with no migrations obviously cannot be reused for a test expecting the
+	// `main` migration line.
+	//
+	// linesKey acts as key specific to this migrations set for testTxSchemas.
+	slices.Sort(lines)
+	linesKey := strings.Join(lines, ",")
+
+	testTxSchemasMu.RLock()
+	schema := testTxSchemas[linesKey]
+	testTxSchemasMu.RUnlock()
+
+	if schema != "" {
+		return schema
+	}
+
+	testTxSchemasMu.Lock()
+	defer testTxSchemasMu.Unlock()
+
+	// Check for a schema once more in case there was a race to acquire the
+	// mutex lock and another TestTx invocation did it first.
+	if schema = testTxSchemas[linesKey]; schema != "" {
+		return schema
+	}
+
+	// If called from a transaction helper like `TestTxPgx`, skip one more frame
+	// for purposes of schema naming.
+	skipExtraFrames := 2
+	if opts.IsTestTxHelper {
+		skipExtraFrames++
+	}
+
+	schema = TestSchema(ctx, tb, driver, &TestSchemaOpts{
+		Lines:                lines,
+		noReuse:              true,
+		skipExtraFrames:      skipExtraFrames,
+		skipPackageNameCheck: opts.skipPackageNameCheck,
+	})
+	testTxSchemas[linesKey] = schema
+	return schema
 }

@@ -23,6 +23,13 @@ queries. After changing an sqlc `.sql` file, generate Go with:
 
     make generate
 
+## Raise and migrate development database
+
+To run programs locally outside of tests, create and raise a development database:
+
+    createdb river_dev
+    go run ./cmd/river migrate-up --database-url postgres:///river_dev --line main
+
 ## Releasing a new version
 
 1. Fetch changes to the repo and any new tags. Export `VERSION` by incrementing the last tag. Execute `update-mod-version` to add it the project's `go.mod` files:
