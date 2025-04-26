@@ -112,8 +112,6 @@ func TestSchema[TTx any](ctx context.Context, tb testutil.TestingTB, driver rive
 
 		packageName = packageFromFunc(funcName) // like: `river` (or `jobcompleter`, or `riverpro`)
 
-		tb.Logf("package name: " + packageName)
-
 		// Check to make sure we're skipping the right number of frames above.
 		// If the location of `runtime.Caller` is changed at all (a single new
 		// function is added to the stack), the reported package will be

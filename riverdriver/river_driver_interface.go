@@ -383,89 +383,82 @@ type JobSetStateIfRunningParams struct {
 	MetadataDoMerge bool
 	MetadataUpdates []byte
 	ScheduledAt     *time.Time
-	Schema          string
+	Schema          string // added by completer
 	State           rivertype.JobState
 }
 
-func JobSetStateCancelled(schema string, id int64, finalizedAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
+func JobSetStateCancelled(id int64, finalizedAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
 	return &JobSetStateIfRunningParams{
 		ID:              id,
 		ErrData:         errData,
 		MetadataDoMerge: len(metadataUpdates) > 0,
 		MetadataUpdates: metadataUpdates,
 		FinalizedAt:     &finalizedAt,
-		Schema:          schema,
 		State:           rivertype.JobStateCancelled,
 	}
 }
 
-func JobSetStateCompleted(schema string, id int64, finalizedAt time.Time, metadataUpdates []byte) *JobSetStateIfRunningParams {
+func JobSetStateCompleted(id int64, finalizedAt time.Time, metadataUpdates []byte) *JobSetStateIfRunningParams {
 	return &JobSetStateIfRunningParams{
 		FinalizedAt:     &finalizedAt,
 		ID:              id,
 		MetadataDoMerge: len(metadataUpdates) > 0,
 		MetadataUpdates: metadataUpdates,
-		Schema:          schema,
 		State:           rivertype.JobStateCompleted,
 	}
 }
 
-func JobSetStateDiscarded(schema string, id int64, finalizedAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
+func JobSetStateDiscarded(id int64, finalizedAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
 	return &JobSetStateIfRunningParams{
 		ID:              id,
 		ErrData:         errData,
 		MetadataDoMerge: len(metadataUpdates) > 0,
 		MetadataUpdates: metadataUpdates,
 		FinalizedAt:     &finalizedAt,
-		Schema:          schema,
 		State:           rivertype.JobStateDiscarded,
 	}
 }
 
-func JobSetStateErrorAvailable(schema string, id int64, scheduledAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
+func JobSetStateErrorAvailable(id int64, scheduledAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
 	return &JobSetStateIfRunningParams{
 		ID:              id,
 		ErrData:         errData,
 		MetadataDoMerge: len(metadataUpdates) > 0,
 		MetadataUpdates: metadataUpdates,
 		ScheduledAt:     &scheduledAt,
-		Schema:          schema,
 		State:           rivertype.JobStateAvailable,
 	}
 }
 
-func JobSetStateErrorRetryable(schema string, id int64, scheduledAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
+func JobSetStateErrorRetryable(id int64, scheduledAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
 	return &JobSetStateIfRunningParams{
 		ID:              id,
 		ErrData:         errData,
 		MetadataDoMerge: len(metadataUpdates) > 0,
 		MetadataUpdates: metadataUpdates,
 		ScheduledAt:     &scheduledAt,
-		Schema:          schema,
 		State:           rivertype.JobStateRetryable,
 	}
 }
 
-func JobSetStateSnoozed(schema string, id int64, scheduledAt time.Time, attempt int, metadataUpdates []byte) *JobSetStateIfRunningParams {
+func JobSetStateSnoozed(id int64, scheduledAt time.Time, attempt int, metadataUpdates []byte) *JobSetStateIfRunningParams {
 	return &JobSetStateIfRunningParams{
 		Attempt:         &attempt,
 		ID:              id,
 		MetadataDoMerge: len(metadataUpdates) > 0,
 		MetadataUpdates: metadataUpdates,
 		ScheduledAt:     &scheduledAt,
-		Schema:          schema,
 		State:           rivertype.JobStateScheduled,
 	}
 }
 
-func JobSetStateSnoozedAvailable(schema string, id int64, scheduledAt time.Time, attempt int, metadataUpdates []byte) *JobSetStateIfRunningParams {
+func JobSetStateSnoozedAvailable(id int64, scheduledAt time.Time, attempt int, metadataUpdates []byte) *JobSetStateIfRunningParams {
 	return &JobSetStateIfRunningParams{
 		Attempt:         &attempt,
 		ID:              id,
 		MetadataDoMerge: len(metadataUpdates) > 0,
 		MetadataUpdates: metadataUpdates,
 		ScheduledAt:     &scheduledAt,
-		Schema:          schema,
 		State:           rivertype.JobStateAvailable,
 	}
 }

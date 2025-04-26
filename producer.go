@@ -770,7 +770,6 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 			InformProducerDoneFunc:   p.handleWorkerDone,
 			JobRow:                   job,
 			SchedulerInterval:        p.config.SchedulerInterval,
-			Schema:                   p.config.Schema,
 			WorkUnit:                 workUnit,
 		})
 		p.addActiveJob(job.ID, executor)

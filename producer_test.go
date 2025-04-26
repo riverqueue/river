@@ -62,10 +62,10 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	listener := driver.GetListener(schema)
 	pilot := &riverpilot.StandardPilot{}
 
-	subscribeCh := make(chan []jobcompleter.CompleterJobUpdated, 100)
-	t.Cleanup(riverinternaltest.DiscardContinuously(subscribeCh))
+	subscribeChan := make(chan []jobcompleter.CompleterJobUpdated, 100)
+	t.Cleanup(riverinternaltest.DiscardContinuously(subscribeChan))
 
-	completer := jobcompleter.NewInlineCompleter(archetype, exec, &riverpilot.StandardPilot{}, subscribeCh)
+	completer := jobcompleter.NewInlineCompleter(archetype, schema, exec, &riverpilot.StandardPilot{}, subscribeChan)
 	t.Cleanup(completer.Stop)
 
 	type WithJobNumArgs struct {
@@ -180,7 +180,7 @@ func TestProducer_PollOnly(t *testing.T) {
 			jobUpdates = make(chan []jobcompleter.CompleterJobUpdated, 10)
 		)
 
-		completer := jobcompleter.NewInlineCompleter(archetype, exec, &riverpilot.StandardPilot{}, jobUpdates)
+		completer := jobcompleter.NewInlineCompleter(archetype, "", exec, &riverpilot.StandardPilot{}, jobUpdates)
 		{
 			require.NoError(t, completer.Start(ctx))
 			t.Cleanup(completer.Stop)
@@ -228,7 +228,7 @@ func TestProducer_WithNotifier(t *testing.T) {
 			queueName  = fmt.Sprintf("test-producer-with-notifier-%05d", randutil.IntBetween(1, 100_000))
 		)
 
-		completer := jobcompleter.NewInlineCompleter(archetype, exec, &riverpilot.StandardPilot{}, jobUpdates)
+		completer := jobcompleter.NewInlineCompleter(archetype, schema, exec, &riverpilot.StandardPilot{}, jobUpdates)
 		{
 			require.NoError(t, completer.Start(ctx))
 			t.Cleanup(completer.Stop)

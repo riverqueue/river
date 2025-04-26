@@ -1816,7 +1816,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				UniqueKey: []byte("unique-key"),
 			})
 
-			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateCompleted("", job.ID, now, nil)))
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateCompleted(job.ID, now, nil)))
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
 			require.Equal(t, rivertype.JobStateCompleted, jobAfter.State)
@@ -1840,7 +1840,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				UniqueKey: []byte("unique-key"),
 			})
 
-			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateCompleted("", job.ID, now, nil)))
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateCompleted(job.ID, now, nil)))
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
 			require.Equal(t, rivertype.JobStateRetryable, jobAfter.State)
@@ -1865,7 +1865,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				UniqueKey: []byte("unique-key"),
 			})
 
-			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateCompleted("", job.ID, now, []byte(`{"a":"b", "foo":"bar"}`))))
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateCompleted(job.ID, now, []byte(`{"a":"b", "foo":"bar"}`))))
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
 			require.Equal(t, rivertype.JobStateCompleted, jobAfter.State)
@@ -1888,7 +1888,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				UniqueKey: []byte("unique-key"),
 			})
 
-			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateErrorRetryable("", job.ID, now, makeErrPayload(t, now), nil)))
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateErrorRetryable(job.ID, now, makeErrPayload(t, now), nil)))
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
 			require.Equal(t, rivertype.JobStateRetryable, jobAfter.State)
@@ -1919,7 +1919,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				ScheduledAt: ptrutil.Ptr(now.Add(10 * time.Second)),
 			})
 
-			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateErrorRetryable("", job.ID, now, makeErrPayload(t, now), nil)))
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateErrorRetryable(job.ID, now, makeErrPayload(t, now), nil)))
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
 			require.Equal(t, rivertype.JobStateRetryable, jobAfter.State)
@@ -1945,7 +1945,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			})
 
 			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(
-				riverdriver.JobSetStateErrorRetryable("", job1.ID, now, makeErrPayload(t, now), []byte(`{"foo":"1", "output":{"a":"b"}}`)),
+				riverdriver.JobSetStateErrorRetryable(job1.ID, now, makeErrPayload(t, now), []byte(`{"foo":"1", "output":{"a":"b"}}`)),
 			))
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
@@ -1981,7 +1981,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				ScheduledAt: ptrutil.Ptr(now.Add(-10 * time.Second)),
 			})
 
-			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateErrorRetryable("", job.ID, now, makeErrPayload(t, now), nil)))
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateErrorRetryable(job.ID, now, makeErrPayload(t, now), nil)))
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
 			require.Equal(t, rivertype.JobStateCancelled, jobAfter.State)
@@ -2019,7 +2019,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				UniqueStates: 0xFF,
 			})
 
-			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateCancelled("", job.ID, now, makeErrPayload(t, now), nil)))
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateCancelled(job.ID, now, makeErrPayload(t, now), nil)))
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
 			require.Equal(t, rivertype.JobStateCancelled, jobAfter.State)
@@ -2048,7 +2048,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				UniqueStates: 0xFF,
 			})
 
-			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateDiscarded("", job.ID, now, makeErrPayload(t, now), nil)))
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateDiscarded(job.ID, now, makeErrPayload(t, now), nil)))
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
 			require.Equal(t, rivertype.JobStateDiscarded, jobAfter.State)
@@ -2079,7 +2079,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				UniqueKey: []byte("unique-key"),
 			})
 
-			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateSnoozed("", job.ID, snoozeUntil, 4, []byte(`{"snoozes": 1}`))))
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateSnoozed(job.ID, snoozeUntil, 4, []byte(`{"snoozes": 1}`))))
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
 			require.Equal(t, 4, jobAfter.Attempt)
@@ -2112,7 +2112,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				Metadata:  []byte(`{"foo": "bar", "snoozes": 5}`),
 			})
 
-			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateSnoozed("", job.ID, snoozeUntil, 4, []byte(`{"snoozes": 6}`))))
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateSnoozed(job.ID, snoozeUntil, 4, []byte(`{"snoozes": 6}`))))
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
 			require.Equal(t, 4, jobAfter.Attempt)
@@ -2144,9 +2144,9 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
 
 		jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(
-			riverdriver.JobSetStateCompleted("", job1.ID, now, []byte(`{"a":"b"}`)),
-			riverdriver.JobSetStateErrorRetryable("", job2.ID, future, makeErrPayload(t, now), nil),
-			riverdriver.JobSetStateCancelled("", job3.ID, now, makeErrPayload(t, now), nil),
+			riverdriver.JobSetStateCompleted(job1.ID, now, []byte(`{"a":"b"}`)),
+			riverdriver.JobSetStateErrorRetryable(job2.ID, future, makeErrPayload(t, now), nil),
+			riverdriver.JobSetStateCancelled(job3.ID, now, makeErrPayload(t, now), nil),
 		))
 		require.NoError(t, err)
 		completedJob := jobsAfter[0]

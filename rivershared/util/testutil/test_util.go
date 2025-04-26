@@ -2,13 +2,17 @@ package testutil
 
 import "fmt"
 
-// panicTB is an implementation for testing.TB that panics when an error is
-// logged or FailNow is called. This is useful to inject into test helpers in
-// example tests where no *testing.T is available.
+// See docs on PanicTB.
 type panicTB struct {
 	SuppressOutput bool
 }
 
+// PanicTB is an implementation for testing.TB that panics when an error is
+// logged or FailNow is called. This is useful to inject into test helpers in
+// example tests where no *testing.T is available.
+//
+// Doesn't fully implement testing.TB. Functions where it's used should take the
+// more streamlined TestingTB instead.
 func PanicTB() *panicTB {
 	return &panicTB{SuppressOutput: true}
 }
