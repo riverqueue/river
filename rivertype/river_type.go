@@ -325,6 +325,33 @@ type HookWorkBegin interface {
 	WorkBegin(ctx context.Context, job *JobRow) error
 }
 
+// HookWorkEnd is an interface to a hook that runs after a job has been worked.
+type HookWorkEnd interface {
+	Hook
+
+	// WorkEnd is invoked after a job has been worked with the error result of
+	// the worked job. It's invoked after any middleware has already run.
+	//
+	// WorkEnd may modify a returned work error or pass it through unchanged.
+	// Each returned error is passed through to the next hook and the final
+	// error result is returned from the job executor:
+	//
+	// 	err := e.WorkUnit.Work(ctx)
+	// 	for _, hook := range hooks {
+	// 		err = hook.(rivertype.HookWorkEnd).WorkEnd(ctx, err)
+	// 	}
+	// 	return err
+	//
+	// If a hook does not want to modify an error result, it should make sure to
+	// return whatever error value it received as its argument whether that
+	// error is nil or not.
+	//
+	// Will not receive a common context related to HookWorkBegin because
+	// WorkBegin doesn't return a context. Middleware should be used for this
+	// sort of shared context instead.
+	WorkEnd(ctx context.Context, err error) error
+}
+
 // Middleware is an arbitrary interface for a struct which will execute some
 // arbitrary code at a predefined step in the job lifecycle.
 //

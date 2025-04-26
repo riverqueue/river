@@ -22,6 +22,7 @@ func TestHookLookup(t *testing.T) {
 			&testHookInsertAndWorkBegin{},
 			&testHookInsertBegin{},
 			&testHookWorkBegin{},
+			&testHookWorkEnd{},
 		}).(*hookLookup), &testBundle{}
 	}
 
@@ -38,8 +39,11 @@ func TestHookLookup(t *testing.T) {
 			&testHookInsertAndWorkBegin{},
 			&testHookWorkBegin{},
 		}, hookLookup.ByHookKind(HookKindWorkBegin))
+		require.Equal(t, []rivertype.Hook{
+			&testHookWorkEnd{},
+		}, hookLookup.ByHookKind(HookKindWorkEnd))
 
-		require.Len(t, hookLookup.hooksByKind, 2)
+		require.Len(t, hookLookup.hooksByKind, 3)
 
 		// Repeat lookups to make sure we get the same result.
 		require.Equal(t, []rivertype.Hook{
@@ -50,6 +54,9 @@ func TestHookLookup(t *testing.T) {
 			&testHookInsertAndWorkBegin{},
 			&testHookWorkBegin{},
 		}, hookLookup.ByHookKind(HookKindWorkBegin))
+		require.Equal(t, []rivertype.Hook{
+			&testHookWorkEnd{},
+		}, hookLookup.ByHookKind(HookKindWorkEnd))
 	})
 
 	t.Run("Stress", func(t *testing.T) {
@@ -118,6 +125,7 @@ func TestJobHookLookup(t *testing.T) {
 
 		require.Nil(t, jobHookLookup.ByJobArgs(&jobArgsNoHooks{}).ByHookKind(HookKindInsertBegin))
 		require.Nil(t, jobHookLookup.ByJobArgs(&jobArgsNoHooks{}).ByHookKind(HookKindWorkBegin))
+		require.Nil(t, jobHookLookup.ByJobArgs(&jobArgsNoHooks{}).ByHookKind(HookKindWorkEnd))
 		require.Equal(t, []rivertype.Hook{
 			&testHookInsertAndWorkBegin{},
 			&testHookInsertBegin{},
@@ -126,12 +134,16 @@ func TestJobHookLookup(t *testing.T) {
 			&testHookInsertAndWorkBegin{},
 			&testHookWorkBegin{},
 		}, jobHookLookup.ByJobArgs(&jobArgsWithCustomHooks{}).ByHookKind(HookKindWorkBegin))
+		require.Equal(t, []rivertype.Hook{
+			&testHookWorkEnd{},
+		}, jobHookLookup.ByJobArgs(&jobArgsWithCustomHooks{}).ByHookKind(HookKindWorkEnd))
 
 		require.Len(t, jobHookLookup.hookLookupByKind, 2)
 
 		// Repeat lookups to make sure we get the same result.
 		require.Nil(t, jobHookLookup.ByJobArgs(&jobArgsNoHooks{}).ByHookKind(HookKindInsertBegin))
 		require.Nil(t, jobHookLookup.ByJobArgs(&jobArgsNoHooks{}).ByHookKind(HookKindWorkBegin))
+		require.Nil(t, jobHookLookup.ByJobArgs(&jobArgsNoHooks{}).ByHookKind(HookKindWorkEnd))
 		require.Equal(t, []rivertype.Hook{
 			&testHookInsertAndWorkBegin{},
 			&testHookInsertBegin{},
@@ -140,6 +152,9 @@ func TestJobHookLookup(t *testing.T) {
 			&testHookInsertAndWorkBegin{},
 			&testHookWorkBegin{},
 		}, jobHookLookup.ByJobArgs(&jobArgsWithCustomHooks{}).ByHookKind(HookKindWorkBegin))
+		require.Equal(t, []rivertype.Hook{
+			&testHookWorkEnd{},
+		}, jobHookLookup.ByJobArgs(&jobArgsWithCustomHooks{}).ByHookKind(HookKindWorkEnd))
 	})
 
 	t.Run("Stress", func(t *testing.T) {
@@ -195,6 +210,7 @@ func (jobArgsWithCustomHooks) Hooks() []rivertype.Hook {
 		&testHookInsertAndWorkBegin{},
 		&testHookInsertBegin{},
 		&testHookWorkBegin{},
+		&testHookWorkEnd{},
 	}
 }
 
@@ -240,5 +256,17 @@ var _ rivertype.HookWorkBegin = &testHookWorkBegin{}
 type testHookWorkBegin struct{ rivertype.Hook }
 
 func (t *testHookWorkBegin) WorkBegin(ctx context.Context, job *rivertype.JobRow) error {
+	return nil
+}
+
+//
+// testHookWorkEnd
+//
+
+var _ rivertype.HookWorkEnd = &testHookWorkEnd{}
+
+type testHookWorkEnd struct{ rivertype.Hook }
+
+func (t *testHookWorkEnd) WorkEnd(ctx context.Context, err error) error {
 	return nil
 }

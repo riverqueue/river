@@ -208,7 +208,18 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		ctx, cancel := execution.MaybeApplyTimeout(ctx, jobTimeout)
 		defer cancel()
 
-		return e.WorkUnit.Work(ctx)
+		err := e.WorkUnit.Work(ctx)
+
+		{
+			for _, hook := range append(
+				e.HookLookupGlobal.ByHookKind(hooklookup.HookKindWorkEnd),
+				e.WorkUnit.HookLookup(e.HookLookupByJob).ByHookKind(hooklookup.HookKindWorkEnd)...,
+			) {
+				err = hook.(rivertype.HookWorkEnd).WorkEnd(ctx, err) //nolint:forcetypeassert
+			}
+		}
+
+		return err
 	})
 
 	executeFunc := execution.MiddlewareChain(

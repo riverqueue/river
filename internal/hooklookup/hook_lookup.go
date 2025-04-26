@@ -15,6 +15,7 @@ type HookKind string
 const (
 	HookKindInsertBegin HookKind = "insert_begin"
 	HookKindWorkBegin   HookKind = "work_begin"
+	HookKindWorkEnd     HookKind = "work_end"
 )
 
 //
@@ -85,6 +86,12 @@ func (c *hookLookup) ByHookKind(kind HookKind) []rivertype.Hook {
 	case HookKindWorkBegin:
 		for _, hook := range c.hooks {
 			if typedHook, ok := hook.(rivertype.HookWorkBegin); ok {
+				c.hooksByKind[kind] = append(c.hooksByKind[kind], typedHook)
+			}
+		}
+	case HookKindWorkEnd:
+		for _, hook := range c.hooks {
+			if typedHook, ok := hook.(rivertype.HookWorkEnd); ok {
 				c.hooksByKind[kind] = append(c.hooksByKind[kind], typedHook)
 			}
 		}
