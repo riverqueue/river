@@ -274,11 +274,12 @@ type BatchCompleter struct {
 	setStateParamsMu     sync.RWMutex
 	setStateStartTimes   map[int64]time.Time
 	subscribeCh          SubscribeChan
+	testOnly             bool
 	waitOnBacklogChan    chan struct{}
 	waitOnBacklogWaiting bool
 }
 
-func NewBatchCompleter(archetype *baseservice.Archetype, schema string, exec riverdriver.Executor, pilot riverpilot.Pilot, subscribeCh SubscribeChan) *BatchCompleter {
+func NewBatchCompleter(archetype *baseservice.Archetype, schema string, exec riverdriver.Executor, pilot riverpilot.Pilot, subscribeCh SubscribeChan, testOnly bool) *BatchCompleter {
 	const (
 		completionMaxSize = 5_000
 		maxBacklog        = 20_000
@@ -293,6 +294,7 @@ func NewBatchCompleter(archetype *baseservice.Archetype, schema string, exec riv
 		setStateParams:     make(map[int64]*batchCompleterSetState),
 		setStateStartTimes: make(map[int64]time.Time),
 		subscribeCh:        subscribeCh,
+		testOnly:           testOnly,
 	})
 }
 
@@ -310,6 +312,22 @@ func (c *BatchCompleter) Start(ctx context.Context) error {
 		panic("subscribeCh must be non-nil")
 	}
 
+	// Ticket interval and batch multiple aren't very configurable on purpose
+	// (we try to find a reasonable number that works for most cases), but allow
+	// them to be expedited in some cases so that we can speed up tests. This is
+	// especially important for the top level test suite which starts a lot of
+	// real clients and waits on a lot of job completions. Example tests run
+	// sequentially by necessity in Go, which makes them especially prone to
+	// delays that slow down the entire test suite.
+	var (
+		tickInterval      = 50 * time.Millisecond // frequency at which ticker fires
+		tickBatchMultiple = 5                     // number of ticks across which to batch jobs unless we hit threshold early
+	)
+	if c.testOnly {
+		tickInterval = 5 * time.Millisecond
+		tickBatchMultiple = 2
+	}
+
 	go func() {
 		started()
 		defer stopped() // this defer should come first so it's first out
@@ -318,7 +336,7 @@ func (c *BatchCompleter) Start(ctx context.Context) error {
 		c.Logger.DebugContext(ctx, c.Name+": Run loop started")
 		defer c.Logger.DebugContext(ctx, c.Name+": Run loop stopped")
 
-		ticker := time.NewTicker(50 * time.Millisecond)
+		ticker := time.NewTicker(tickInterval)
 		defer ticker.Stop()
 
 		backlogSize := func() int {
@@ -347,7 +365,7 @@ func (c *BatchCompleter) Start(ctx context.Context) error {
 			// multiple of 5. So, jobs will be completed every 250ms even if the
 			// threshold hasn't been met.
 			const batchCompleterStartThreshold = 100
-			if backlogSize() < min(c.maxBacklog, batchCompleterStartThreshold) && numTicks != 0 && numTicks%5 != 0 {
+			if backlogSize() < min(c.maxBacklog, batchCompleterStartThreshold) && numTicks != 0 && numTicks%tickBatchMultiple != 0 {
 				continue
 			}
 

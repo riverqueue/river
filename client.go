@@ -692,7 +692,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			return nil, errMissingDatabasePoolWithQueues
 		}
 
-		client.completer = jobcompleter.NewBatchCompleter(archetype, config.Schema, driver.GetExecutor(), client.pilot, nil)
+		client.completer = jobcompleter.NewBatchCompleter(archetype, config.Schema, driver.GetExecutor(), client.pilot, nil, config.TestOnly)
 		client.subscriptionManager = newSubscriptionManager(archetype, nil)
 		client.services = append(client.services, client.completer, client.subscriptionManager)
 

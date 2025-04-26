@@ -375,9 +375,16 @@ func TestAsyncCompleter(t *testing.T) {
 func TestBatchCompleter(t *testing.T) {
 	t.Parallel()
 
+	// Notably, we don't use testOnly in this package's test suite to make sure
+	// we get a realistic runs of the completer. testOnly's use is more
+	// important in the top level package's test suite where the batch
+	// completer's behavior can significantly slow down total runtime as it
+	// operates hundreds of time in aggregates.
+	const testOnly = false
+
 	testCompleter(t, func(t *testing.T, schema string, exec riverdriver.Executor, pilot riverpilot.Pilot, subscribeChan chan<- []CompleterJobUpdated) *BatchCompleter {
 		t.Helper()
-		return NewBatchCompleter(riversharedtest.BaseServiceArchetype(t), schema, exec, pilot, subscribeChan)
+		return NewBatchCompleter(riversharedtest.BaseServiceArchetype(t), schema, exec, pilot, subscribeChan, testOnly)
 	},
 		func(completer *BatchCompleter) { completer.disableSleep = true },
 		4_400,
@@ -402,7 +409,7 @@ func TestBatchCompleter(t *testing.T) {
 			exec        = driver.GetExecutor()
 			pilot       = &riverpilot.StandardPilot{}
 			subscribeCh = make(chan []CompleterJobUpdated, 10)
-			completer   = NewBatchCompleter(riversharedtest.BaseServiceArchetype(t), schema, exec, pilot, subscribeCh)
+			completer   = NewBatchCompleter(riversharedtest.BaseServiceArchetype(t), schema, exec, pilot, subscribeCh, testOnly)
 		)
 
 		return completer, &testBundle{
@@ -920,7 +927,7 @@ func BenchmarkAsyncCompleter_Concurrency100(b *testing.B) {
 func BenchmarkBatchCompleter(b *testing.B) {
 	benchmarkCompleter(b, func(b *testing.B, schema string, exec riverdriver.Executor, pilot riverpilot.Pilot, subscribeChan chan<- []CompleterJobUpdated) JobCompleter {
 		b.Helper()
-		return NewBatchCompleter(riversharedtest.BaseServiceArchetype(b), schema, exec, pilot, subscribeChan)
+		return NewBatchCompleter(riversharedtest.BaseServiceArchetype(b), schema, exec, pilot, subscribeChan, false)
 	})
 }
 
