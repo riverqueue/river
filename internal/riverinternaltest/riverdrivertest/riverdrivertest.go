@@ -3275,19 +3275,12 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 	t.Run("SchemaFromSearchPath", func(t *testing.T) {
 		t.Parallel()
 
-		// TODO(brandur): Need to find a way to make this test work. We need to
-		// inject a `search_path`, but the connection is acquired below inside
-		// `listener.Connect`, which means we can't do so here without finding a
-		// way to do some kind of test injection.
-		t.Skip("needs a way to be test injectable")
-
-		// somehow do:
-		//     SET search_path TO 'public'
-
 		var (
 			driver, _ = driverWithPool(ctx, t)
 			listener  = driver.GetListener("")
 		)
+
+		listener.SetAfterConnectExec("SET search_path TO 'public'")
 
 		connectListener(ctx, t, listener)
 		require.Equal(t, "public", listener.Schema())
