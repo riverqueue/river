@@ -10,7 +10,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/riverdbtest"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 )
 
@@ -28,16 +29,27 @@ func Test_RecordedOutput(t *testing.T) {
 
 	type testBundle struct {
 		dbPool *pgxpool.Pool
+		schema string
 	}
 
 	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
 		t.Helper()
 
-		dbPool := riverinternaltest.TestDB(ctx, t)
-		config := newTestConfig(t, nil)
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, nil)
+		)
+		config.Schema = schema
+
 		client := newTestClient(t, dbPool, config)
 		t.Cleanup(func() { require.NoError(t, client.Stop(ctx)) })
-		return client, &testBundle{dbPool: dbPool}
+
+		return client, &testBundle{
+			dbPool: dbPool,
+			schema: schema,
+		}
 	}
 
 	t.Run("ValidOutput", func(t *testing.T) {

@@ -5,8 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgerrcode"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,48 +20,6 @@ func TestDBPool(t *testing.T) {
 	// Both pools should be exactly the same object.
 	pool2 := DBPool(ctx, t)
 	require.Equal(t, pool1, pool2)
-}
-
-func TestTestTx(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-
-	type PoolOrTx interface {
-		Exec(ctx context.Context, sql string, arguments ...any) (commandTag pgconn.CommandTag, err error)
-	}
-
-	checkTestTable := func(ctx context.Context, poolOrTx PoolOrTx) error {
-		_, err := poolOrTx.Exec(ctx, "SELECT * FROM river_shared_test_tx_table")
-		return err
-	}
-
-	// Test cleanups are invoked in the order of last added, first called. When
-	// TestTx is called below it adds a cleanup, so we want to make sure that
-	// this cleanup, which checks that the database remains pristine, is invoked
-	// after the TestTx cleanup, so we add it first.
-	t.Cleanup(func() {
-		// Tests may inherit context from `t.Context()` which is cancelled after
-		// tests run and before calling clean up. We need a non-cancelled
-		// context to issue rollback here, so use a bit of a bludgeon to do so
-		// with `context.WithoutCancel()`.
-		ctx := context.WithoutCancel(ctx)
-
-		err := checkTestTable(ctx, DBPool(ctx, t))
-		require.Error(t, err)
-
-		var pgErr *pgconn.PgError
-		require.ErrorAs(t, err, &pgErr)
-		require.Equal(t, pgerrcode.UndefinedTable, pgErr.Code)
-	})
-
-	tx := TestTx(ctx, t)
-
-	_, err := tx.Exec(ctx, "CREATE TABLE river_shared_test_tx_table (id bigint)")
-	require.NoError(t, err)
-
-	err = checkTestTable(ctx, tx)
-	require.NoError(t, err)
 }
 
 func TestWaitOrTimeout(t *testing.T) {

@@ -116,7 +116,6 @@ type JobExecutor struct {
 	JobRow                   *rivertype.JobRow
 	MiddlewareLookupGlobal   middlewarelookup.MiddlewareLookupInterface
 	SchedulerInterval        time.Duration
-	Schema                   string
 	WorkerMiddleware         []rivertype.WorkerMiddleware
 	WorkUnit                 workunit.WorkUnit
 
@@ -359,7 +358,7 @@ func (e *JobExecutor) reportError(ctx context.Context, res *jobExecutorResult, m
 		return
 	}
 
-	now := time.Now()
+	now := e.Time.NowUTC()
 
 	if cancelJob {
 		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateCancelled(e.JobRow.ID, now, errData, metadataUpdates)); err != nil {

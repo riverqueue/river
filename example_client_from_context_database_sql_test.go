@@ -11,9 +11,12 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/util/slogutil"
+	"github.com/riverqueue/river/rivershared/util/testutil"
+	"github.com/riverqueue/river/rivershared/util/urlutil"
 )
 
 type ContextClientSQLArgs struct{}
@@ -41,8 +44,7 @@ func (w *ContextClientSQLWorker) Work(ctx context.Context, job *river.Job[Contex
 func ExampleClientFromContext_databaseSQL() {
 	ctx := context.Background()
 
-	config := riverinternaltest.DatabaseConfig("river_test_example")
-	db, err := sql.Open("pgx", config.ConnString())
+	db, err := sql.Open("pgx", urlutil.DatabaseSQLCompatibleURL(riversharedtest.TestDatabaseURL()))
 	if err != nil {
 		panic(err)
 	}
@@ -59,7 +61,8 @@ func ExampleClientFromContext_databaseSQL() {
 		},
 		FetchCooldown:     10 * time.Millisecond,
 		FetchPollInterval: 10 * time.Millisecond,
-		TestOnly:          true, // suitable only for use in tests; remove for live environments
+		Schema:            riverdbtest.TestSchema(ctx, testutil.PanicTB(), riverdatabasesql.New(db), nil), // only necessary for the example test
+		TestOnly:          true,                                                                           // suitable only for use in tests; remove for live environments
 		Workers:           workers,
 	})
 	if err != nil {

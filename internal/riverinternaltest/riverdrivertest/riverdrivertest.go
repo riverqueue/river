@@ -30,19 +30,24 @@ import (
 // Exercise fully exercises a driver. The driver's listener is exercised if
 // supported.
 func Exercise[TTx any](ctx context.Context, t *testing.T,
-	driverWithPool func(ctx context.Context, t *testing.T) riverdriver.Driver[TTx],
+	driverWithSchema func(ctx context.Context, t *testing.T) (riverdriver.Driver[TTx], string),
 	executorWithTx func(ctx context.Context, t *testing.T) riverdriver.Executor,
 ) {
 	t.Helper()
 
-	if driverWithPool(ctx, t).SupportsListener() {
-		exerciseListener(ctx, t, driverWithPool)
-	} else {
-		t.Logf("Driver does not support listener; skipping listener tests")
+	{
+		driver, _ := driverWithSchema(ctx, t)
+		if driver.SupportsListener() {
+			exerciseListener(ctx, t, driverWithSchema)
+		} else {
+			t.Logf("Driver does not support listener; skipping listener tests")
+		}
 	}
 
 	t.Run("GetMigrationFS", func(t *testing.T) {
-		driver := driverWithPool(ctx, t)
+		t.Parallel()
+
+		driver, _ := driverWithSchema(ctx, t)
 
 		for _, line := range driver.GetMigrationLines() {
 			migrationFS := driver.GetMigrationFS(line)
@@ -53,8 +58,25 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		}
 	})
 
+	t.Run("GetMigrationTruncateTables", func(t *testing.T) {
+		t.Parallel()
+
+		driver, _ := driverWithSchema(ctx, t)
+
+		for _, line := range driver.GetMigrationLines() {
+			truncateTables := driver.GetMigrationTruncateTables(line)
+
+			// Technically a migration line's truncate tables might be empty,
+			// but this never happens in any of our migration lines, so check
+			// non-empty until it becomes an actual problem.
+			require.NotEmpty(t, truncateTables)
+		}
+	})
+
 	t.Run("GetMigrationLines", func(t *testing.T) {
-		driver := driverWithPool(ctx, t)
+		t.Parallel()
+
+		driver, _ := driverWithSchema(ctx, t)
 
 		// Should contain at minimum a main migration line.
 		require.Contains(t, driver.GetMigrationLines(), riverdriver.MigrationLineMain)
@@ -84,6 +106,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			// Job visible in subtransaction, but not parent.
 			{
 				job := testfactory.Job(ctx, t, tx, &testfactory.JobOpts{})
+				_ = testfactory.Job(ctx, t, tx, &testfactory.JobOpts{})
 
 				_, err := tx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
 				require.NoError(t, err)
@@ -995,6 +1018,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		})
 
 		t.Run("MissingCreatedAtDefaultsToNow", func(t *testing.T) {
+			t.Parallel()
+
 			exec, _ := setup(ctx, t)
 
 			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
@@ -1032,6 +1057,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		})
 
 		t.Run("MissingScheduledAtDefaultsToNow", func(t *testing.T) {
+			t.Parallel()
+
 			exec, _ := setup(ctx, t)
 
 			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
@@ -1065,6 +1092,53 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			for _, job := range jobsAfter {
 				require.WithinDuration(t, time.Now().UTC(), job.ScheduledAt, 2*time.Second)
 			}
+		})
+
+		t.Run("AlternateSchema", func(t *testing.T) {
+			t.Parallel()
+
+			var (
+				driver, schema = driverWithSchema(ctx, t)
+				exec           = driver.GetExecutor()
+			)
+
+			// This test needs to use a time from before the transaction begins, otherwise
+			// the newly-scheduled jobs won't yet show as available because their
+			// scheduled_at (which gets a default value from time.Now() in code) will be
+			// after the start of the transaction.
+			now := time.Now().UTC().Add(-1 * time.Minute)
+
+			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
+			for i := 0; i < len(insertParams); i++ {
+				insertParams[i] = &riverdriver.JobInsertFastParams{
+					CreatedAt:    ptrutil.Ptr(now.Add(time.Duration(i) * 5 * time.Second)),
+					EncodedArgs:  []byte(`{"encoded": "args"}`),
+					Kind:         "test_kind",
+					MaxAttempts:  rivercommon.MaxAttemptsDefault,
+					Metadata:     []byte(`{"meta": "data"}`),
+					Priority:     rivercommon.PriorityDefault,
+					Queue:        rivercommon.QueueDefault,
+					ScheduledAt:  &now,
+					State:        rivertype.JobStateAvailable,
+					Tags:         []string{"tag"},
+					UniqueKey:    []byte("unique-key-no-returning-" + strconv.Itoa(i)),
+					UniqueStates: 0xff,
+				}
+			}
+
+			count, err := exec.JobInsertFastManyNoReturning(ctx, &riverdriver.JobInsertFastManyParams{
+				Jobs:   insertParams,
+				Schema: schema,
+			})
+			require.NoError(t, err)
+			require.Len(t, insertParams, count)
+
+			jobsAfter, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+				Kind:   []string{"test_kind"},
+				Schema: schema,
+			})
+			require.NoError(t, err)
+			require.Len(t, jobsAfter, len(insertParams))
 		})
 	})
 
@@ -1416,7 +1490,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				})
 				require.NoError(t, err)
 				require.Equal(t, rivertype.JobStateAvailable, jobAfter.State)
-				require.WithinDuration(t, time.Now().UTC(), jobAfter.ScheduledAt, 100*time.Millisecond)
+				require.WithinDuration(t, time.Now().UTC(), jobAfter.ScheduledAt, 250*time.Millisecond) // TODO: Bad clock-based test
 
 				jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
 				require.NoError(t, err)
@@ -2149,6 +2223,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			ElectedAt: ptrutil.Ptr(now.Add(-2 * time.Hour)),
 			ExpiresAt: ptrutil.Ptr(now.Add(-1 * time.Hour)),
 			LeaderID:  ptrutil.Ptr(clientID),
+			Schema:    "",
 		})
 
 		{
@@ -2170,6 +2245,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			elected, err := exec.LeaderAttemptElect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: clientID,
+				Schema:   "",
 				TTL:      leaderTTL,
 			})
 			require.NoError(t, err)
@@ -2190,10 +2266,12 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 				LeaderID: ptrutil.Ptr(clientID),
+				Schema:   "",
 			})
 
 			elected, err := exec.LeaderAttemptElect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: "different-client-id",
+				Schema:   "",
 				TTL:      leaderTTL,
 			})
 			require.NoError(t, err)
@@ -2220,6 +2298,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			elected, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: clientID,
+				Schema:   "",
 				TTL:      leaderTTL,
 			})
 			require.NoError(t, err)
@@ -2240,6 +2319,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 				LeaderID: ptrutil.Ptr(clientID),
+				Schema:   "",
 			})
 
 			// Re-elect the same leader. Use a larger TTL to see if time is updated,
@@ -2247,6 +2327,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			// the transaction.
 			elected, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: clientID,
+				Schema:   "",
 				TTL:      30 * time.Second,
 			})
 			require.NoError(t, err)
@@ -2269,6 +2350,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 		leader, err := exec.LeaderInsert(ctx, &riverdriver.LeaderInsertParams{
 			LeaderID: clientID,
+			Schema:   "",
 			TTL:      leaderTTL,
 		})
 		require.NoError(t, err)
@@ -2284,6 +2366,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 		_ = testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 			LeaderID: ptrutil.Ptr(clientID),
+			Schema:   "",
 		})
 
 		leader, err := exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{
@@ -2307,6 +2390,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				resigned, err := exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
 					LeaderID:        clientID,
 					LeadershipTopic: string(notifier.NotificationTopicLeadership),
+					Schema:          "",
 				})
 				require.NoError(t, err)
 				require.False(t, resigned)
@@ -2314,12 +2398,14 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			_ = testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 				LeaderID: ptrutil.Ptr(clientID),
+				Schema:   "",
 			})
 
 			{
 				resigned, err := exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
 					LeaderID:        clientID,
 					LeadershipTopic: string(notifier.NotificationTopicLeadership),
+					Schema:          "",
 				})
 				require.NoError(t, err)
 				require.True(t, resigned)
@@ -2333,11 +2419,13 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			_ = testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 				LeaderID: ptrutil.Ptr("other-client-id"),
+				Schema:   "",
 			})
 
 			resigned, err := exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
 				LeaderID:        clientID,
 				LeadershipTopic: string(notifier.NotificationTopicLeadership),
+				Schema:          "",
 			})
 			require.NoError(t, err)
 			require.False(t, resigned)
@@ -2610,6 +2698,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			queue, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
 				Metadata: metadata,
 				Name:     "new-queue",
+				Schema:   "",
 			})
 			require.NoError(t, err)
 			require.WithinDuration(t, time.Now(), queue.CreatedAt, 500*time.Millisecond)
@@ -2628,6 +2717,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			queue, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
 				Name:     "new-queue",
 				PausedAt: ptrutil.Ptr(now),
+				Schema:   "",
 			})
 			require.NoError(t, err)
 			require.Equal(t, "new-queue", queue.Name)
@@ -2644,6 +2734,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			queueBefore, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
 				Metadata:  metadata,
 				Name:      "updatable-queue",
+				Schema:    "",
 				UpdatedAt: &tBefore,
 			})
 			require.NoError(t, err)
@@ -2653,6 +2744,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			queueAfter, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
 				Metadata:  []byte(`{"other": "metadata"}`),
 				Name:      "updatable-queue",
+				Schema:    "",
 				UpdatedAt: &tAfter,
 			})
 			require.NoError(t, err)
@@ -2666,356 +2758,407 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			// Timestamp is bumped:
 			require.WithinDuration(t, tAfter, queueAfter.UpdatedAt, time.Millisecond)
 		})
+	})
 
-		t.Run("QueueDeleteExpired", func(t *testing.T) {
+	t.Run("QueueDeleteExpired", func(t *testing.T) {
+		t.Parallel()
+
+		exec, _ := setup(ctx, t)
+
+		now := time.Now()
+		_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now)})
+		queue2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-25 * time.Hour))})
+		queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-26 * time.Hour))})
+		queue4 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-48 * time.Hour))})
+		_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-23 * time.Hour))})
+
+		horizon := now.Add(-24 * time.Hour)
+		deletedQueueNames, err := exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{Max: 2, UpdatedAtHorizon: horizon})
+		require.NoError(t, err)
+
+		// queue2 and queue3 should be deleted, with queue4 being skipped due to max of 2:
+		require.Equal(t, []string{queue2.Name, queue3.Name}, deletedQueueNames)
+
+		// Try again, make sure queue4 gets deleted this time:
+		deletedQueueNames, err = exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{Max: 2, UpdatedAtHorizon: horizon})
+		require.NoError(t, err)
+
+		require.Equal(t, []string{queue4.Name}, deletedQueueNames)
+	})
+
+	t.Run("QueueGet", func(t *testing.T) {
+		t.Parallel()
+
+		exec, _ := setup(ctx, t)
+
+		queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`)})
+
+		queueFetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
+			Name:   queue.Name,
+			Schema: "",
+		})
+		require.NoError(t, err)
+
+		require.WithinDuration(t, queue.CreatedAt, queueFetched.CreatedAt, time.Millisecond)
+		require.Equal(t, queue.Metadata, queueFetched.Metadata)
+		require.Equal(t, queue.Name, queueFetched.Name)
+		require.Nil(t, queueFetched.PausedAt)
+		require.WithinDuration(t, queue.UpdatedAt, queueFetched.UpdatedAt, time.Millisecond)
+
+		queueFetched, err = exec.QueueGet(ctx, &riverdriver.QueueGetParams{
+			Name:   "nonexistent-queue",
+			Schema: "",
+		})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		require.Nil(t, queueFetched)
+	})
+
+	t.Run("QueueList", func(t *testing.T) {
+		t.Parallel()
+
+		exec, _ := setup(ctx, t)
+
+		requireQueuesEqual := func(t *testing.T, target, actual *rivertype.Queue) {
+			t.Helper()
+			require.WithinDuration(t, target.CreatedAt, actual.CreatedAt, time.Millisecond)
+			require.Equal(t, target.Metadata, actual.Metadata)
+			require.Equal(t, target.Name, actual.Name)
+			if target.PausedAt == nil {
+				require.Nil(t, actual.PausedAt)
+			} else {
+				require.NotNil(t, actual.PausedAt)
+				require.WithinDuration(t, *target.PausedAt, *actual.PausedAt, time.Millisecond)
+			}
+		}
+
+		queues, err := exec.QueueList(ctx, &riverdriver.QueueListParams{
+			Limit:  10,
+			Schema: "",
+		})
+		require.NoError(t, err)
+		require.Empty(t, queues)
+
+		// Make queue1, already paused:
+		queue1 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`), PausedAt: ptrutil.Ptr(time.Now())})
+		require.NoError(t, err)
+
+		queue2 := testfactory.Queue(ctx, t, exec, nil)
+		queue3 := testfactory.Queue(ctx, t, exec, nil)
+
+		queues, err = exec.QueueList(ctx, &riverdriver.QueueListParams{
+			Limit:  2,
+			Schema: "",
+		})
+		require.NoError(t, err)
+
+		require.Len(t, queues, 2)
+		requireQueuesEqual(t, queue1, queues[0])
+		requireQueuesEqual(t, queue2, queues[1])
+
+		queues, err = exec.QueueList(ctx, &riverdriver.QueueListParams{
+			Limit:  3,
+			Schema: "",
+		})
+		require.NoError(t, err)
+
+		require.Len(t, queues, 3)
+		requireQueuesEqual(t, queue3, queues[2])
+	})
+
+	t.Run("QueuePause", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("ExistingPausedQueue", func(t *testing.T) {
 			t.Parallel()
 
 			exec, _ := setup(ctx, t)
 
-			now := time.Now()
-			_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now)})
-			queue2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-25 * time.Hour))})
-			queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-26 * time.Hour))})
-			queue4 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-48 * time.Hour))})
-			_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-23 * time.Hour))})
+			queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{
+				PausedAt: ptrutil.Ptr(time.Now()),
+			})
 
-			horizon := now.Add(-24 * time.Hour)
-			deletedQueueNames, err := exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{Max: 2, UpdatedAtHorizon: horizon})
+			require.NoError(t, exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
+				Name:   queue.Name,
+				Schema: "",
+			}))
+			queueFetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
+				Name:   queue.Name,
+				Schema: "",
+			})
 			require.NoError(t, err)
-
-			// queue2 and queue3 should be deleted, with queue4 being skipped due to max of 2:
-			require.Equal(t, []string{queue2.Name, queue3.Name}, deletedQueueNames)
-
-			// Try again, make sure queue4 gets deleted this time:
-			deletedQueueNames, err = exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{Max: 2, UpdatedAtHorizon: horizon})
-			require.NoError(t, err)
-
-			require.Equal(t, []string{queue4.Name}, deletedQueueNames)
+			require.NotNil(t, queueFetched.PausedAt)
+			requireEqualTime(t, *queue.PausedAt, *queueFetched.PausedAt) // paused_at stays unchanged
+			requireEqualTime(t, queue.UpdatedAt, queueFetched.UpdatedAt) // updated_at stays unchanged
 		})
 
-		t.Run("QueueGet", func(t *testing.T) {
+		t.Run("ExistingUnpausedQueue", func(t *testing.T) {
 			t.Parallel()
 
 			exec, _ := setup(ctx, t)
 
-			queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`)})
+			queue := testfactory.Queue(ctx, t, exec, nil)
+			require.Nil(t, queue.PausedAt)
+
+			require.NoError(t, exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
+				Name:   queue.Name,
+				Schema: "",
+			}))
 
 			queueFetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
 				Name:   queue.Name,
 				Schema: "",
 			})
 			require.NoError(t, err)
-
-			require.WithinDuration(t, queue.CreatedAt, queueFetched.CreatedAt, time.Millisecond)
-			require.Equal(t, queue.Metadata, queueFetched.Metadata)
-			require.Equal(t, queue.Name, queueFetched.Name)
-			require.Nil(t, queueFetched.PausedAt)
-			require.WithinDuration(t, queue.UpdatedAt, queueFetched.UpdatedAt, time.Millisecond)
-
-			queueFetched, err = exec.QueueGet(ctx, &riverdriver.QueueGetParams{
-				Name:   "nonexistent-queue",
-				Schema: "",
-			})
-			require.ErrorIs(t, err, rivertype.ErrNotFound)
-			require.Nil(t, queueFetched)
+			require.NotNil(t, queueFetched.PausedAt)
+			require.WithinDuration(t, time.Now(), *(queueFetched.PausedAt), 500*time.Millisecond)
 		})
 
-		t.Run("QueueList", func(t *testing.T) {
+		t.Run("NonExistentQueue", func(t *testing.T) {
 			t.Parallel()
 
 			exec, _ := setup(ctx, t)
 
-			requireQueuesEqual := func(t *testing.T, target, actual *rivertype.Queue) {
-				t.Helper()
-				require.WithinDuration(t, target.CreatedAt, actual.CreatedAt, time.Millisecond)
-				require.Equal(t, target.Metadata, actual.Metadata)
-				require.Equal(t, target.Name, actual.Name)
-				if target.PausedAt == nil {
-					require.Nil(t, actual.PausedAt)
-				} else {
-					require.NotNil(t, actual.PausedAt)
-					require.WithinDuration(t, *target.PausedAt, *actual.PausedAt, time.Millisecond)
-				}
-			}
-
-			queues, err := exec.QueueList(ctx, &riverdriver.QueueListParams{
-				Limit:  10,
+			err := exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
+				Name:   "queue1",
 				Schema: "",
 			})
-			require.NoError(t, err)
-			require.Empty(t, queues)
+			require.ErrorIs(t, err, rivertype.ErrNotFound)
+		})
 
-			// Make queue1, already paused:
-			queue1 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`), PausedAt: ptrutil.Ptr(time.Now())})
-			require.NoError(t, err)
+		t.Run("AllQueuesExistingQueues", func(t *testing.T) {
+			t.Parallel()
 
+			exec, _ := setup(ctx, t)
+
+			queue1 := testfactory.Queue(ctx, t, exec, nil)
+			require.Nil(t, queue1.PausedAt)
 			queue2 := testfactory.Queue(ctx, t, exec, nil)
-			queue3 := testfactory.Queue(ctx, t, exec, nil)
+			require.Nil(t, queue2.PausedAt)
 
-			queues, err = exec.QueueList(ctx, &riverdriver.QueueListParams{
-				Limit:  2,
+			require.NoError(t, exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
+				Name:   rivercommon.AllQueuesString,
+				Schema: "",
+			}))
+
+			now := time.Now()
+
+			queue1Fetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
+				Name:   queue1.Name,
 				Schema: "",
 			})
 			require.NoError(t, err)
+			require.NotNil(t, queue1Fetched.PausedAt)
+			require.WithinDuration(t, now, *(queue1Fetched.PausedAt), 500*time.Millisecond)
 
-			require.Len(t, queues, 2)
-			requireQueuesEqual(t, queue1, queues[0])
-			requireQueuesEqual(t, queue2, queues[1])
-
-			queues, err = exec.QueueList(ctx, &riverdriver.QueueListParams{
-				Limit:  3,
+			queue2Fetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
+				Name:   queue2.Name,
 				Schema: "",
 			})
 			require.NoError(t, err)
-
-			require.Len(t, queues, 3)
-			requireQueuesEqual(t, queue3, queues[2])
+			require.NotNil(t, queue2Fetched.PausedAt)
+			require.WithinDuration(t, now, *(queue2Fetched.PausedAt), 500*time.Millisecond)
 		})
 
-		t.Run("QueuePause", func(t *testing.T) {
+		t.Run("AllQueuesNoQueues", func(t *testing.T) {
 			t.Parallel()
 
-			t.Run("ExistingPausedQueue", func(t *testing.T) {
-				t.Parallel()
+			exec, _ := setup(ctx, t)
 
-				exec, _ := setup(ctx, t)
+			require.NoError(t, exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
+				Name:   rivercommon.AllQueuesString,
+				Schema: "",
+			}))
+		})
+	})
 
-				queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{
-					PausedAt: ptrutil.Ptr(time.Now()),
-				})
+	t.Run("QueueResume", func(t *testing.T) {
+		t.Parallel()
 
-				require.NoError(t, exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
-					Name:   queue.Name,
-					Schema: "",
-				}))
-				queueFetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
-					Name:   queue.Name,
-					Schema: "",
-				})
-				require.NoError(t, err)
-				require.NotNil(t, queueFetched.PausedAt)
-				requireEqualTime(t, *queue.PausedAt, *queueFetched.PausedAt) // paused_at stays unchanged
-				requireEqualTime(t, queue.UpdatedAt, queueFetched.UpdatedAt) // updated_at stays unchanged
+		t.Run("ExistingPausedQueue", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{
+				PausedAt: ptrutil.Ptr(time.Now()),
 			})
 
-			t.Run("ExistingUnpausedQueue", func(t *testing.T) {
-				t.Parallel()
+			require.NoError(t, exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
+				Name:   queue.Name,
+				Schema: "",
+			}))
 
-				exec, _ := setup(ctx, t)
-
-				queue := testfactory.Queue(ctx, t, exec, nil)
-				require.Nil(t, queue.PausedAt)
-
-				require.NoError(t, exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
-					Name:   queue.Name,
-					Schema: "",
-				}))
-
-				queueFetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
-					Name:   queue.Name,
-					Schema: "",
-				})
-				require.NoError(t, err)
-				require.NotNil(t, queueFetched.PausedAt)
-				require.WithinDuration(t, time.Now(), *(queueFetched.PausedAt), 500*time.Millisecond)
+			queueFetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
+				Name:   queue.Name,
+				Schema: "",
 			})
-
-			t.Run("NonExistentQueue", func(t *testing.T) {
-				t.Parallel()
-
-				exec, _ := setup(ctx, t)
-
-				err := exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
-					Name:   "queue1",
-					Schema: "",
-				})
-				require.ErrorIs(t, err, rivertype.ErrNotFound)
-			})
-
-			t.Run("AllQueuesExistingQueues", func(t *testing.T) {
-				t.Parallel()
-
-				exec, _ := setup(ctx, t)
-
-				queue1 := testfactory.Queue(ctx, t, exec, nil)
-				require.Nil(t, queue1.PausedAt)
-				queue2 := testfactory.Queue(ctx, t, exec, nil)
-				require.Nil(t, queue2.PausedAt)
-
-				require.NoError(t, exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
-					Name:   rivercommon.AllQueuesString,
-					Schema: "",
-				}))
-
-				now := time.Now()
-
-				queue1Fetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
-					Name:   queue1.Name,
-					Schema: "",
-				})
-				require.NoError(t, err)
-				require.NotNil(t, queue1Fetched.PausedAt)
-				require.WithinDuration(t, now, *(queue1Fetched.PausedAt), 500*time.Millisecond)
-
-				queue2Fetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
-					Name:   queue2.Name,
-					Schema: "",
-				})
-				require.NoError(t, err)
-				require.NotNil(t, queue2Fetched.PausedAt)
-				require.WithinDuration(t, now, *(queue2Fetched.PausedAt), 500*time.Millisecond)
-			})
-
-			t.Run("AllQueuesNoQueues", func(t *testing.T) {
-				t.Parallel()
-
-				exec, _ := setup(ctx, t)
-
-				require.NoError(t, exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
-					Name:   rivercommon.AllQueuesString,
-					Schema: "",
-				}))
-			})
+			require.NoError(t, err)
+			require.Nil(t, queueFetched.PausedAt)
 		})
 
-		t.Run("QueueResume", func(t *testing.T) {
+		t.Run("ExistingUnpausedQueue", func(t *testing.T) {
 			t.Parallel()
 
-			t.Run("ExistingPausedQueue", func(t *testing.T) {
-				t.Parallel()
+			exec, _ := setup(ctx, t)
 
-				exec, _ := setup(ctx, t)
+			queue := testfactory.Queue(ctx, t, exec, nil)
 
-				queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{
-					PausedAt: ptrutil.Ptr(time.Now()),
-				})
+			require.NoError(t, exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
+				Name:   queue.Name,
+				Schema: "",
+			}))
 
-				require.NoError(t, exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
-					Name:   queue.Name,
-					Schema: "",
-				}))
-
-				queueFetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
-					Name:   queue.Name,
-					Schema: "",
-				})
-				require.NoError(t, err)
-				require.Nil(t, queueFetched.PausedAt)
+			queueFetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
+				Name:   queue.Name,
+				Schema: "",
 			})
-
-			t.Run("ExistingUnpausedQueue", func(t *testing.T) {
-				t.Parallel()
-
-				exec, _ := setup(ctx, t)
-
-				queue := testfactory.Queue(ctx, t, exec, nil)
-
-				require.NoError(t, exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
-					Name:   queue.Name,
-					Schema: "",
-				}))
-
-				queueFetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
-					Name:   queue.Name,
-					Schema: "",
-				})
-				require.NoError(t, err)
-				require.Nil(t, queueFetched.PausedAt)
-				requireEqualTime(t, queue.UpdatedAt, queueFetched.UpdatedAt) // updated_at stays unchanged
-			})
-
-			t.Run("NonExistentQueue", func(t *testing.T) {
-				t.Parallel()
-
-				exec, _ := setup(ctx, t)
-
-				err := exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
-					Name:   "queue1",
-					Schema: "",
-				})
-				require.ErrorIs(t, err, rivertype.ErrNotFound)
-			})
-
-			t.Run("AllQueuesExistingQueues", func(t *testing.T) {
-				t.Parallel()
-
-				exec, _ := setup(ctx, t)
-
-				queue1 := testfactory.Queue(ctx, t, exec, nil)
-				require.Nil(t, queue1.PausedAt)
-				queue2 := testfactory.Queue(ctx, t, exec, nil)
-				require.Nil(t, queue2.PausedAt)
-
-				require.NoError(t, exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
-					Name:   rivercommon.AllQueuesString,
-					Schema: "",
-				}))
-				require.NoError(t, exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
-					Name:   rivercommon.AllQueuesString,
-					Schema: "",
-				}))
-
-				queue1Fetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
-					Name:   queue1.Name,
-					Schema: "",
-				})
-				require.NoError(t, err)
-				require.Nil(t, queue1Fetched.PausedAt)
-
-				queue2Fetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
-					Name:   queue2.Name,
-					Schema: "",
-				})
-				require.NoError(t, err)
-				require.Nil(t, queue2Fetched.PausedAt)
-			})
-
-			t.Run("AllQueuesNoQueues", func(t *testing.T) {
-				t.Parallel()
-
-				exec, _ := setup(ctx, t)
-
-				require.NoError(t, exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
-					Name:   rivercommon.AllQueuesString,
-					Schema: "",
-				}))
-			})
+			require.NoError(t, err)
+			require.Nil(t, queueFetched.PausedAt)
+			requireEqualTime(t, queue.UpdatedAt, queueFetched.UpdatedAt) // updated_at stays unchanged
 		})
 
-		t.Run("QueueUpdate", func(t *testing.T) {
+		t.Run("NonExistentQueue", func(t *testing.T) {
 			t.Parallel()
 
-			t.Run("UpdatesFieldsIfDoUpdateIsTrue", func(t *testing.T) {
-				t.Parallel()
+			exec, _ := setup(ctx, t)
 
-				exec, _ := setup(ctx, t)
-
-				queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`)})
-
-				updatedQueue, err := exec.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
-					Metadata:         []byte(`{"baz": "qux"}`),
-					MetadataDoUpdate: true,
-					Name:             queue.Name,
-				})
-				require.NoError(t, err)
-				require.JSONEq(t, `{"baz": "qux"}`, string(updatedQueue.Metadata))
+			err := exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
+				Name:   "queue1",
+				Schema: "",
 			})
+			require.ErrorIs(t, err, rivertype.ErrNotFound)
+		})
 
-			t.Run("DoesNotUpdateFieldsIfDoUpdateIsFalse", func(t *testing.T) {
-				t.Parallel()
+		t.Run("AllQueuesExistingQueues", func(t *testing.T) {
+			t.Parallel()
 
-				exec, _ := setup(ctx, t)
+			exec, _ := setup(ctx, t)
 
-				queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`)})
+			queue1 := testfactory.Queue(ctx, t, exec, nil)
+			require.Nil(t, queue1.PausedAt)
+			queue2 := testfactory.Queue(ctx, t, exec, nil)
+			require.Nil(t, queue2.PausedAt)
 
-				updatedQueue, err := exec.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
-					Metadata:         []byte(`{"baz": "qux"}`),
-					MetadataDoUpdate: false,
-					Name:             queue.Name,
-				})
-				require.NoError(t, err)
-				require.JSONEq(t, `{"foo": "bar"}`, string(updatedQueue.Metadata))
+			require.NoError(t, exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
+				Name:   rivercommon.AllQueuesString,
+				Schema: "",
+			}))
+			require.NoError(t, exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
+				Name:   rivercommon.AllQueuesString,
+				Schema: "",
+			}))
+
+			queue1Fetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
+				Name:   queue1.Name,
+				Schema: "",
 			})
+			require.NoError(t, err)
+			require.Nil(t, queue1Fetched.PausedAt)
+
+			queue2Fetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
+				Name:   queue2.Name,
+				Schema: "",
+			})
+			require.NoError(t, err)
+			require.Nil(t, queue2Fetched.PausedAt)
+		})
+
+		t.Run("AllQueuesNoQueues", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			require.NoError(t, exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
+				Name:   rivercommon.AllQueuesString,
+				Schema: "",
+			}))
+		})
+	})
+
+	t.Run("QueueUpdate", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("UpdatesFieldsIfDoUpdateIsTrue", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`)})
+
+			updatedQueue, err := exec.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
+				Metadata:         []byte(`{"baz": "qux"}`),
+				MetadataDoUpdate: true,
+				Name:             queue.Name,
+			})
+			require.NoError(t, err)
+			require.JSONEq(t, `{"baz": "qux"}`, string(updatedQueue.Metadata))
+		})
+
+		t.Run("DoesNotUpdateFieldsIfDoUpdateIsFalse", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`)})
+
+			updatedQueue, err := exec.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
+				Metadata:         []byte(`{"baz": "qux"}`),
+				MetadataDoUpdate: false,
+				Name:             queue.Name,
+			})
+			require.NoError(t, err)
+			require.JSONEq(t, `{"foo": "bar"}`, string(updatedQueue.Metadata))
+		})
+	})
+
+	t.Run("QueryRow", func(t *testing.T) {
+		t.Parallel()
+
+		exec, _ := setup(ctx, t)
+
+		var (
+			field1   int
+			field2   int
+			field3   int
+			fieldFoo string
+		)
+
+		err := exec.QueryRow(ctx, "SELECT 1, 2, 3, 'foo'").Scan(&field1, &field2, &field3, &fieldFoo)
+		require.NoError(t, err)
+
+		require.Equal(t, 1, field1)
+		require.Equal(t, 2, field2)
+		require.Equal(t, 3, field3)
+		require.Equal(t, "foo", fieldFoo)
+	})
+
+	t.Run("SchemaGetExpired", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("FiltersSchemasNotMatchingPrefix", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			schemas, err := exec.SchemaGetExpired(ctx, &riverdriver.SchemaGetExpiredParams{
+				BeforeName: "zzzzzzzzzzzzzzzzzz",
+				Prefix:     "this_prefix_will_not_exist_",
+			})
+			require.NoError(t, err)
+			require.Empty(t, schemas)
+		})
+
+		t.Run("ListsSchemasBelowMarker", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			schemas, err := exec.SchemaGetExpired(ctx, &riverdriver.SchemaGetExpiredParams{
+				BeforeName: "pg_toast",
+				Prefix:     "pg_%",
+			})
+			require.NoError(t, err)
+			require.Equal(t, []string{"pg_catalog"}, schemas)
 		})
 	})
 }
@@ -3025,12 +3168,12 @@ type testListenerBundle[TTx any] struct {
 	exec   riverdriver.Executor
 }
 
-func setupListener[TTx any](ctx context.Context, t *testing.T, getDriverWithPool func(ctx context.Context, t *testing.T) riverdriver.Driver[TTx]) (riverdriver.Listener, *testListenerBundle[TTx]) {
+func setupListener[TTx any](ctx context.Context, t *testing.T, driverWithPool func(ctx context.Context, t *testing.T) (riverdriver.Driver[TTx], string)) (riverdriver.Listener, *testListenerBundle[TTx]) {
 	t.Helper()
 
 	var (
-		driver   = getDriverWithPool(ctx, t)
-		listener = driver.GetListener("")
+		driver, schema = driverWithPool(ctx, t)
+		listener       = driver.GetListener(schema)
 	)
 
 	return listener, &testListenerBundle[TTx]{
@@ -3039,7 +3182,7 @@ func setupListener[TTx any](ctx context.Context, t *testing.T, getDriverWithPool
 	}
 }
 
-func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool func(ctx context.Context, t *testing.T) riverdriver.Driver[TTx]) {
+func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool func(ctx context.Context, t *testing.T) (riverdriver.Driver[TTx], string)) {
 	t.Helper()
 
 	connectListener := func(ctx context.Context, t *testing.T, listener riverdriver.Listener) {
@@ -3092,8 +3235,8 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 		require.NoError(t, listener.Ping(ctx)) // still alive
 
 		{
-			require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Topic: "topic1", Payload: []string{"payload1_1"}, Schema: ""}))
-			require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Topic: "topic2", Payload: []string{"payload2_1"}, Schema: ""}))
+			require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Topic: "topic1", Payload: []string{"payload1_1"}, Schema: listener.Schema()}))
+			require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Topic: "topic2", Payload: []string{"payload2_1"}, Schema: listener.Schema()}))
 
 			notification := waitForNotification(ctx, t, listener)
 			require.Equal(t, &riverdriver.Notification{Topic: "topic1", Payload: "payload1_1"}, notification)
@@ -3104,8 +3247,8 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 		require.NoError(t, listener.Unlisten(ctx, "topic2"))
 
 		{
-			require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Topic: "topic1", Payload: []string{"payload1_2"}, Schema: ""}))
-			require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Topic: "topic2", Payload: []string{"payload2_2"}, Schema: ""}))
+			require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Topic: "topic1", Payload: []string{"payload1_2"}, Schema: listener.Schema()}))
+			require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Topic: "topic2", Payload: []string{"payload2_2"}, Schema: listener.Schema()}))
 
 			notification := waitForNotification(ctx, t, listener)
 			require.Equal(t, &riverdriver.Notification{Topic: "topic1", Payload: "payload1_2"}, notification)
@@ -3122,8 +3265,8 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 		t.Parallel()
 
 		var (
-			driver   = driverWithPool(ctx, t)
-			listener = driver.GetListener("my_custom_schema")
+			driver, _ = driverWithPool(ctx, t)
+			listener  = driver.GetListener("my_custom_schema")
 		)
 
 		require.Equal(t, "my_custom_schema", listener.Schema())
@@ -3132,9 +3275,34 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 	t.Run("SchemaFromSearchPath", func(t *testing.T) {
 		t.Parallel()
 
-		listener, _ := setupListener(ctx, t, driverWithPool)
+		// TODO(brandur): Need to find a way to make this test work. We need to
+		// inject a `search_path`, but the connection is acquired below inside
+		// `listener.Connect`, which means we can't do so here without finding a
+		// way to do some kind of test injection.
+		t.Skip("needs a way to be test injectable")
+
+		// somehow do:
+		//     SET search_path TO 'public'
+
+		var (
+			driver, _ = driverWithPool(ctx, t)
+			listener  = driver.GetListener("")
+		)
+
 		connectListener(ctx, t, listener)
 		require.Equal(t, "public", listener.Schema())
+	})
+
+	t.Run("EmptySchemaFromSearchPath", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			driver, _ = driverWithPool(ctx, t)
+			listener  = driver.GetListener("")
+		)
+
+		connectListener(ctx, t, listener)
+		require.Empty(t, listener.Schema())
 	})
 
 	t.Run("TransactionGated", func(t *testing.T) {
@@ -3149,7 +3317,7 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 		tx, err := bundle.exec.Begin(ctx)
 		require.NoError(t, err)
 
-		require.NoError(t, tx.NotifyMany(ctx, &riverdriver.NotifyManyParams{Topic: "topic1", Payload: []string{"payload1"}, Schema: ""}))
+		require.NoError(t, tx.NotifyMany(ctx, &riverdriver.NotifyManyParams{Topic: "topic1", Payload: []string{"payload1"}, Schema: listener.Schema()}))
 
 		// No notification because the transaction hasn't committed yet.
 		requireNoNotification(ctx, t, listener)

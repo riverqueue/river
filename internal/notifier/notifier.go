@@ -26,6 +26,22 @@ const (
 	NotificationTopicLeadership NotificationTopic = "river_leadership"
 )
 
+var notificationTopicAll = []NotificationTopic{ //nolint:gochecknoglobals
+	NotificationTopicControl,
+	NotificationTopicInsert,
+	NotificationTopicLeadership,
+}
+
+// NotificationTopicLongest is just the longest notification topic. This is used
+// to determine the maximum length of allowed custom schema names because
+// schemas are prefixed to notification topic names and Postgres enforces a
+// maximum topic length of 63 characters.
+var NotificationTopicLongest = func() NotificationTopic { //nolint:gochecknoglobals
+	return slices.MaxFunc(notificationTopicAll, func(t1, t2 NotificationTopic) int {
+		return len(string(t1)) - len(string(t2))
+	})
+}()
+
 type NotifyFunc func(topic NotificationTopic, payload string)
 
 type Subscription struct {

@@ -40,9 +40,9 @@ type Pilot interface {
 
 	ProducerKeepAlive(ctx context.Context, exec riverdriver.Executor, params *riverdriver.ProducerKeepAliveParams) error
 
-	ProducerShutdown(ctx context.Context, exec riverdriver.Executor, producerID int64, state ProducerState) error
+	ProducerShutdown(ctx context.Context, exec riverdriver.Executor, params *ProducerShutdownParams) error
 
-	QueueMetadataChanged(ctx context.Context, exec riverdriver.Executor, state ProducerState, metadata []byte) error
+	QueueMetadataChanged(ctx context.Context, exec riverdriver.Executor, params *QueueMetadataChangedParams) error
 }
 
 type ProducerState interface {
@@ -55,4 +55,16 @@ type ProducerInitParams struct {
 	Queue         string
 	QueueMetadata []byte
 	Schema        string
+}
+
+type ProducerShutdownParams struct {
+	ProducerID int64
+	Schema     string
+	State      ProducerState
+}
+
+type QueueMetadataChangedParams struct {
+	Metadata []byte
+	Schema   string
+	State    ProducerState
 }

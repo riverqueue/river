@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/riverdbtest"
 )
 
 func TestSharedTx(t *testing.T) {
@@ -19,7 +19,7 @@ func TestSharedTx(t *testing.T) {
 	setup := func(t *testing.T) *SharedTx {
 		t.Helper()
 
-		return NewSharedTx(riverinternaltest.TestTx(ctx, t))
+		return NewSharedTx(riverdbtest.TestTxPgx(ctx, t))
 	}
 
 	t.Run("SharedTxFunctions", func(t *testing.T) {

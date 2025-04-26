@@ -55,6 +55,14 @@ type Driver[TTx any] interface {
 	// API is not stable. DO NOT USE.
 	GetListener(schema string) Listener
 
+	// GetMigrationDefaultLines gets default migration lines that should be
+	// applied when using this driver. This is mainly used by riverdbtest to
+	// figure out what migration lines should be available by default for new
+	// test schemas.
+	//
+	// API is not stable. DO NOT USE.
+	GetMigrationDefaultLines() []string
+
 	// GetMigrationFS gets a filesystem containing migrations for the driver.
 	//
 	// Each set of migration files is expected to exist within the filesystem as
@@ -71,6 +79,14 @@ type Driver[TTx any] interface {
 	// API is not stable. DO NOT USE.
 	GetMigrationLines() []string
 
+	// GetMigrationTruncateTables gets the tables that should be truncated
+	// before or after tests for a specific migration line returned by this
+	// driver. Tables to truncate doesn't need to consider intermediary states,
+	// and should return tables for the latest migration version.
+	//
+	// API is not stable. DO NOT USE.
+	GetMigrationTruncateTables(line string) []string
+
 	// HasPool returns true if the driver is configured with a database pool.
 	//
 	// API is not stable. DO NOT USE.
@@ -86,6 +102,8 @@ type Driver[TTx any] interface {
 	//
 	// API is not stable. DO NOT USE.
 	UnwrapExecutor(tx TTx) ExecutorTx
+
+	UnwrapTx(execTx ExecutorTx) TTx
 }
 
 // Executor provides River operations against a database. It may be a database
@@ -165,6 +183,8 @@ type Executor interface {
 	QueuePause(ctx context.Context, params *QueuePauseParams) error
 	QueueResume(ctx context.Context, params *QueueResumeParams) error
 	QueueUpdate(ctx context.Context, params *QueueUpdateParams) (*rivertype.Queue, error)
+	QueryRow(ctx context.Context, sql string, args ...any) Row
+	SchemaGetExpired(ctx context.Context, params *SchemaGetExpiredParams) ([]string, error)
 
 	// TableExists checks whether a table exists for the schema in the current
 	// search schema.
@@ -363,6 +383,7 @@ type JobSetStateIfRunningParams struct {
 	MetadataDoMerge bool
 	MetadataUpdates []byte
 	ScheduledAt     *time.Time
+	Schema          string // added by completer
 	State           rivertype.JobState
 }
 
@@ -620,6 +641,19 @@ type QueueUpdateParams struct {
 	MetadataDoUpdate bool
 	Name             string
 	Schema           string
+}
+
+type Row interface {
+	Scan(dest ...any) error
+}
+
+type Schema struct {
+	Name string
+}
+
+type SchemaGetExpiredParams struct {
+	BeforeName string
+	Prefix     string
 }
 
 type TableExistsParams struct {

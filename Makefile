@@ -53,14 +53,14 @@ $(foreach mod,$(submodules),$(eval $(call lint-target,$(mod))))
 .PHONY: test
 test:: ## Run test suite for all submodules
 define test-target
-    test:: ; cd $1 && go test ./... -p 1
+    test:: ; cd $1 && go test ./... -timeout 2m
 endef
 $(foreach mod,$(submodules),$(eval $(call test-target,$(mod))))
 
 .PHONY: test/race
 test/race:: ## Run test suite for all submodules with race detector
 define test-race-target
-    test/race:: ; cd $1 && go test ./... -p 1 -race
+    test/race:: ; cd $1 && go test ./... -race -timeout 2m
 endef
 $(foreach mod,$(submodules),$(eval $(call test-race-target,$(mod))))
 

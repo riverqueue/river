@@ -12,9 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/util/slogutil"
 	"github.com/riverqueue/river/rivertest"
 	"github.com/riverqueue/river/rivertype"
@@ -69,7 +69,7 @@ func TestMiddleware(t *testing.T) {
 			clientConfig = &river.Config{
 				Middleware: []rivertype.Middleware{middleware},
 			}
-			tx     = riversharedtest.TestTx(ctx, t)
+			tx     = riverdbtest.TestTxPgx(ctx, t)
 			worker = &loggingWorker{}
 		)
 

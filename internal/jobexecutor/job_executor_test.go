@@ -16,6 +16,7 @@ import (
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/retrypolicytest"
 	"github.com/riverqueue/river/internal/workunit"
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -126,11 +127,11 @@ func TestJobExecutor_Execute(t *testing.T) {
 		t.Helper()
 
 		var (
-			tx        = riverinternaltest.TestTx(ctx, t)
+			tx        = riverdbtest.TestTxPgx(ctx, t)
 			archetype = riversharedtest.BaseServiceArchetype(t)
 			exec      = riverpgxv5.New(nil).UnwrapExecutor(tx)
 			updateCh  = make(chan []jobcompleter.CompleterJobUpdated, 10)
-			completer = jobcompleter.NewInlineCompleter(archetype, exec, &riverpilot.StandardPilot{}, updateCh)
+			completer = jobcompleter.NewInlineCompleter(archetype, "", exec, &riverpilot.StandardPilot{}, updateCh)
 		)
 
 		t.Cleanup(completer.Stop)

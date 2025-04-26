@@ -18,6 +18,10 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
+// A placeholder for empty schema placeholders that'll need to be fixed to
+// something better at some point.
+const emptySchema = ""
+
 // testingT is an interface wrapper around *testing.T that's implemented by all
 // of *testing.T, *testing.F, and *testing.B.
 //
@@ -97,12 +101,12 @@ type RequireInsertedOpts struct {
 // to cover that case instead.
 func RequireInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, tb testing.TB, driver TDriver, expectedJob TArgs, opts *RequireInsertedOpts) *river.Job[TArgs] {
 	tb.Helper()
-	return requireInserted(ctx, tb, driver, expectedJob, opts)
+	return requireInserted(ctx, tb, driver, emptySchema, expectedJob, opts)
 }
 
-func requireInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, driver TDriver, expectedJob TArgs, opts *RequireInsertedOpts) *river.Job[TArgs] {
+func requireInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, driver TDriver, schema string, expectedJob TArgs, opts *RequireInsertedOpts) *river.Job[TArgs] {
 	t.Helper()
-	actualArgs, err := requireInsertedErr[TDriver](ctx, t, driver.GetExecutor(), expectedJob, opts)
+	actualArgs, err := requireInsertedErr[TDriver](ctx, t, driver.GetExecutor(), schema, expectedJob, opts)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
 	}
@@ -127,28 +131,31 @@ func requireInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobAr
 // to cover that case instead.
 func RequireInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, tb testing.TB, tx TTx, expectedJob TArgs, opts *RequireInsertedOpts) *river.Job[TArgs] {
 	tb.Helper()
-	return requireInsertedTx[TDriver](ctx, tb, tx, expectedJob, opts)
+	return requireInsertedTx[TDriver](ctx, tb, tx, emptySchema, expectedJob, opts)
 }
 
 // Internal function used by the tests so that the exported version can take
 // `testing.TB` instead of `testing.T`.
-func requireInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, tx TTx, expectedJob TArgs, opts *RequireInsertedOpts) *river.Job[TArgs] {
+//
+// Also takes a schema for testing purposes, which I haven't quite figured out
+// how to get into the public API yet.
+func requireInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, tx TTx, schema string, expectedJob TArgs, opts *RequireInsertedOpts) *river.Job[TArgs] {
 	t.Helper()
 	var driver TDriver
-	actualArgs, err := requireInsertedErr[TDriver](ctx, t, driver.UnwrapExecutor(tx), expectedJob, opts)
+	actualArgs, err := requireInsertedErr[TDriver](ctx, t, driver.UnwrapExecutor(tx), schema, expectedJob, opts)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
 	}
 	return actualArgs
 }
 
-func requireInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, exec riverdriver.Executor, expectedJob TArgs, opts *RequireInsertedOpts) (*river.Job[TArgs], error) {
+func requireInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, exec riverdriver.Executor, schema string, expectedJob TArgs, opts *RequireInsertedOpts) (*river.Job[TArgs], error) {
 	t.Helper()
 
 	// Returned ordered by ID.
 	jobRows, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
 		Kind:   []string{expectedJob.Kind()},
-		Schema: "",
+		Schema: schema,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error querying jobs: %w", err)
@@ -198,12 +205,12 @@ func requireInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.Jo
 // the given opts.
 func RequireNotInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, tb testing.TB, driver TDriver, expectedJob TArgs, opts *RequireInsertedOpts) {
 	tb.Helper()
-	requireNotInserted(ctx, tb, driver, expectedJob, opts)
+	requireNotInserted(ctx, tb, driver, emptySchema, expectedJob, opts)
 }
 
-func requireNotInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, driver TDriver, expectedJob TArgs, opts *RequireInsertedOpts) {
+func requireNotInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, driver TDriver, schema string, expectedJob TArgs, opts *RequireInsertedOpts) {
 	t.Helper()
-	err := requireNotInsertedErr[TDriver](ctx, t, driver.GetExecutor(), expectedJob, opts)
+	err := requireNotInsertedErr[TDriver](ctx, t, driver.GetExecutor(), schema, expectedJob, opts)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
 	}
@@ -227,27 +234,30 @@ func requireNotInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.Jo
 // the given opts.
 func RequireNotInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, tb testing.TB, tx TTx, expectedJob TArgs, opts *RequireInsertedOpts) {
 	tb.Helper()
-	requireNotInsertedTx[TDriver](ctx, tb, tx, expectedJob, opts)
+	requireNotInsertedTx[TDriver](ctx, tb, tx, emptySchema, expectedJob, opts)
 }
 
 // Internal function used by the tests so that the exported version can take
 // `testing.TB` instead of `testing.T`.
-func requireNotInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, tx TTx, expectedJob TArgs, opts *RequireInsertedOpts) {
+//
+// Also takes a schema for testing purposes, which I haven't quite figured out
+// how to get into the public API yet.
+func requireNotInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, tx TTx, schema string, expectedJob TArgs, opts *RequireInsertedOpts) {
 	t.Helper()
 	var driver TDriver
-	err := requireNotInsertedErr[TDriver](ctx, t, driver.UnwrapExecutor(tx), expectedJob, opts)
+	err := requireNotInsertedErr[TDriver](ctx, t, driver.UnwrapExecutor(tx), schema, expectedJob, opts)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
 	}
 }
 
-func requireNotInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, exec riverdriver.Executor, expectedJob TArgs, opts *RequireInsertedOpts) error {
+func requireNotInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, exec riverdriver.Executor, schema string, expectedJob TArgs, opts *RequireInsertedOpts) error {
 	t.Helper()
 
 	// Returned ordered by ID.
 	jobRows, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
 		Kind:   []string{expectedJob.Kind()},
-		Schema: "",
+		Schema: schema,
 	})
 	if err != nil {
 		return fmt.Errorf("error querying jobs: %w", err)
@@ -314,12 +324,12 @@ type ExpectedJob struct {
 // multiple times.
 func RequireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, tb testing.TB, driver TDriver, expectedJobs []ExpectedJob) []*rivertype.JobRow {
 	tb.Helper()
-	return requireManyInserted(ctx, tb, driver, expectedJobs)
+	return requireManyInserted(ctx, tb, driver, string(emptySchema), expectedJobs)
 }
 
-func requireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, driver TDriver, expectedJobs []ExpectedJob) []*rivertype.JobRow {
+func requireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, driver TDriver, schema string, expectedJobs []ExpectedJob) []*rivertype.JobRow {
 	t.Helper()
-	actualArgs, err := requireManyInsertedErr[TDriver](ctx, t, driver.GetExecutor(), expectedJobs)
+	actualArgs, err := requireManyInsertedErr[TDriver](ctx, t, driver.GetExecutor(), schema, expectedJobs)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
 	}
@@ -348,22 +358,25 @@ func requireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.C
 // multiple times.
 func RequireManyInsertedTx[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, tb testing.TB, tx TTx, expectedJobs []ExpectedJob) []*rivertype.JobRow {
 	tb.Helper()
-	return requireManyInsertedTx[TDriver](ctx, tb, tx, expectedJobs)
+	return requireManyInsertedTx[TDriver](ctx, tb, tx, emptySchema, expectedJobs)
 }
 
 // Internal function used by the tests so that the exported version can take
 // `testing.TB` instead of `testing.T`.
-func requireManyInsertedTx[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, tx TTx, expectedJobs []ExpectedJob) []*rivertype.JobRow {
+//
+// Also takes a schema for testing purposes, which I haven't quite figured out
+// how to get into the public API yet.
+func requireManyInsertedTx[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, tx TTx, schema string, expectedJobs []ExpectedJob) []*rivertype.JobRow {
 	t.Helper()
 	var driver TDriver
-	actualArgs, err := requireManyInsertedErr[TDriver](ctx, t, driver.UnwrapExecutor(tx), expectedJobs)
+	actualArgs, err := requireManyInsertedErr[TDriver](ctx, t, driver.UnwrapExecutor(tx), schema, expectedJobs)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
 	}
 	return actualArgs
 }
 
-func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, exec riverdriver.Executor, expectedJobs []ExpectedJob) ([]*rivertype.JobRow, error) {
+func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, exec riverdriver.Executor, schema string, expectedJobs []ExpectedJob) ([]*rivertype.JobRow, error) {
 	t.Helper()
 
 	expectedArgsKinds := sliceutil.Map(expectedJobs, func(j ExpectedJob) string { return j.Args.Kind() })
@@ -371,7 +384,7 @@ func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx contex
 	// Returned ordered by ID.
 	jobRows, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
 		Kind:   expectedArgsKinds,
-		Schema: "",
+		Schema: schema,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error querying jobs: %w", err)

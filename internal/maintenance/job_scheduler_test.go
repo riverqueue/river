@@ -10,7 +10,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/riverqueue/river/internal/dbunique"
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
@@ -30,13 +30,18 @@ func TestJobScheduler(t *testing.T) {
 		notificationsByQueue map[string]int
 	}
 
-	setup := func(t *testing.T, exec riverdriver.Executor) (*JobScheduler, *testBundle) {
+	type testOpts struct {
+		exec   riverdriver.Executor
+		schema string // for use when using a non-TestTx
+	}
+
+	setup := func(t *testing.T, opts *testOpts) (*JobScheduler, *testBundle) {
 		t.Helper()
 
 		archetype := riversharedtest.BaseServiceArchetype(t)
 
 		bundle := &testBundle{
-			exec:                 exec,
+			exec:                 opts.exec,
 			notificationsByQueue: make(map[string]int),
 		}
 
@@ -51,6 +56,7 @@ func TestJobScheduler(t *testing.T) {
 					}
 					return nil
 				},
+				Schema: opts.schema,
 			},
 			bundle.exec)
 		scheduler.TestSignals.Init()
@@ -61,8 +67,8 @@ func TestJobScheduler(t *testing.T) {
 
 	setupTx := func(t *testing.T) (*JobScheduler, *testBundle) {
 		t.Helper()
-		tx := riverinternaltest.TestTx(ctx, t)
-		return setup(t, riverpgxv5.New(nil).UnwrapExecutor(tx))
+		tx := riverdbtest.TestTxPgx(ctx, t)
+		return setup(t, &testOpts{exec: riverpgxv5.New(nil).UnwrapExecutor(tx)})
 	}
 
 	requireJobStateUnchanged := func(t *testing.T, scheduler *JobScheduler, exec riverdriver.Executor, job *rivertype.JobRow) *rivertype.JobRow {
@@ -304,12 +310,15 @@ func TestJobScheduler(t *testing.T) {
 	t.Run("TriggersNotificationsOnEachQueueWithNewlyAvailableJobs", func(t *testing.T) {
 		t.Parallel()
 
-		dbPool := riverinternaltest.TestDB(ctx, t)
-		driver := riverpgxv5.New(dbPool)
-		exec := driver.GetExecutor()
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			exec   = driver.GetExecutor()
+		)
 		notifyCh := make(chan []string, 10)
 
-		scheduler, _ := setup(t, exec)
+		scheduler, _ := setup(t, &testOpts{exec: exec, schema: schema})
 		scheduler.config.Interval = time.Minute // should only trigger once for the initial run
 		scheduler.config.NotifyInsert = func(ctx context.Context, tx riverdriver.ExecutorTx, queues []string) error {
 			notifyCh <- queues
@@ -327,6 +336,7 @@ func TestJobScheduler(t *testing.T) {
 			testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				FinalizedAt: finalizedAt,
 				Queue:       &queue,
+				Schema:      schema,
 				State:       &state,
 				ScheduledAt: ptrutil.Ptr(now.Add(fromNow)),
 			})

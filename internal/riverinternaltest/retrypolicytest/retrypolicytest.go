@@ -5,6 +5,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -41,7 +42,9 @@ var maxDurationSeconds = maxDuration.Seconds() //nolint:gochecknoglobals
 
 // RetryPolicyNoJitter is identical to default retry policy except that it
 // leaves off the jitter to make checking against it more convenient.
-type RetryPolicyNoJitter struct{}
+type RetryPolicyNoJitter struct {
+	baseservice.BaseService
+}
 
 func (p *RetryPolicyNoJitter) NextRetry(job *rivertype.JobRow) time.Time {
 	return job.AttemptedAt.Add(timeutil.SecondsAsDuration(p.retrySecondsWithoutJitter(job.Attempt)))

@@ -8,7 +8,7 @@ env:
   DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/river_dev?sslmode=disable
 
   # Test database.
-  TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/river_test?sslmode=disable
+  TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/river_test?pool_max_conns=15&sslmode=disable
 
 on:
   push:
@@ -42,6 +42,13 @@ jobs:
       postgres:
         image: postgres:${{ matrix.postgres-version }}
         env:
+          # Left as a reminder that it might not be a bad idea to increase max
+          # connections and then increase the maximum allowed in the databaes
+          # pools for each package under tests. This config is only supported on
+          # Postgres 16+ though, and changing Postgres configuration on any
+          # version before that is absurdly difficult through Docker, so it
+          # might be worth just waiting until <16 have rolled off.
+          # POSTGRES_INITDB_ARGS: "-c max_connections=1500"
           POSTGRES_PASSWORD: postgres
         options: >-
           --health-cmd pg_isready
@@ -62,42 +69,11 @@ jobs:
       - name: Display Go version
         run: go version
 
-      - name: Set up test DBs
-        run: go run ./internal/cmd/testdbman create
-        env:
-          PGHOST: 127.0.0.1
-          PGPORT: 5432
-          PGUSER: postgres
-          PGPASSWORD: postgres
-          PGSSLMODE: disable
+      - name: Set up database
+        run: psql -c "CREATE DATABASE river_test" $ADMIN_DATABASE_URL
 
       - name: Test
-        working-directory: .
-        run: go test -p 1 -race ./... -timeout 2m
-
-      - name: Test cmd/river
-        working-directory: ./cmd/river
-        run: go test -race ./... -timeout 2m
-
-      - name: Test riverdriver
-        working-directory: ./riverdriver
-        run: go test -race ./... -timeout 2m
-
-      - name: Test riverdriver/riverdatabasesql
-        working-directory: ./riverdriver/riverdatabasesql
-        run: go test -race ./... -timeout 2m
-
-      - name: Test riverdriver/riverpgxv5
-        working-directory: ./riverdriver/riverpgxv5
-        run: go test -race ./... -timeout 2m
-
-      - name: Test rivershared
-        working-directory: ./rivershared
-        run: go test -race ./... -timeout 2m
-
-      - name: Test rivertype
-        working-directory: ./rivertype
-        run: go test -race ./... -timeout 2m
+        run: make test/race
 
   cli:
     strategy:
@@ -157,21 +133,16 @@ jobs:
 
       - run: river migrate-get --all --exclude-version 1 --up
 
-      - name: river migrate-up
-        run: river migrate-up --database-url $DATABASE_URL
+      - run: river migrate-up --database-url $DATABASE_URL
+        shell: bash # needed for windows to interpret env var
+
+      - run: river migrate-list --database-url $DATABASE_URL
         shell: bash
 
-      - name: river migrate-list
-        run: river migrate-list --database-url $DATABASE_URL
+      - run: river validate --database-url $DATABASE_URL
         shell: bash
 
-      - name: river validate
-        run: river validate --database-url $DATABASE_URL
-        shell: bash
-
-      - name: river version
-        run: river version
-        shell: bash
+      - run: river version
 
       - name: river bench
         run: |
@@ -196,8 +167,7 @@ jobs:
           fi
         shell: bash
 
-      - name: river migrate-down
-        run: river migrate-down --database-url $DATABASE_URL --max-steps 100
+      - run: river migrate-down --database-url $DATABASE_URL --max-steps 100
         shell: bash
 
       - name: river validate (expect failure)
@@ -210,6 +180,32 @@ jobs:
       - name: river unknown command (expect failure)
         run: |
           if river not-a-command; then
+            echo "expected non-zero exit code" && exit 1
+          fi
+        shell: bash
+
+      #
+      # Run the whole migration loop again, this time with a custom schema.
+      #
+
+      - run: echo "CUSTOM_SCHEMA=custom_schema" >> $GITHUB_ENV
+        shell: bash
+
+      - run: psql -c "CREATE SCHEMA $CUSTOM_SCHEMA" $DATABASE_URL
+        shell: bash
+
+      - run: river migrate-up --database-url $DATABASE_URL --schema $CUSTOM_SCHEMA
+        shell: bash
+
+      - run: river validate --database-url $DATABASE_URL --schema $CUSTOM_SCHEMA
+        shell: bash
+
+      - run: river migrate-down --database-url $DATABASE_URL --max-steps 100 --schema $CUSTOM_SCHEMA
+        shell: bash
+
+      - name: river validate (expect failure)
+        run: |
+          if river validate --database-url $DATABASE_URL --schema $CUSTOM_SCHEMA; then
             echo "expected non-zero exit code" && exit 1
           fi
         shell: bash

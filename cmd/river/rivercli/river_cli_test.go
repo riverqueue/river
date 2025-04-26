@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"os"
 	"runtime/debug"
 	"strings"
 	"testing"
@@ -17,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
@@ -174,6 +174,8 @@ Built with %s
 // out into its own test block so that we don't have to mark the entire block
 // above as non-parallel because a few tests can't be made parallel.
 func TestBaseCommandSetNonParallel(t *testing.T) {
+	ctx := context.Background()
+
 	type testBundle struct {
 		out *bytes.Buffer
 	}
@@ -197,28 +199,33 @@ func TestBaseCommandSetNonParallel(t *testing.T) {
 	t.Run("PGEnvWithoutDatabaseURL", func(t *testing.T) {
 		cmd, _ := setup(t)
 
-		// Deconstruct a database URL into its PG* components. This path is the
-		// one that gets taken in CI, but could work locally as well.
-		if databaseURL := os.Getenv("TEST_DATABASE_URL"); databaseURL != "" {
-			parsedURL, err := url.Parse(databaseURL)
-			require.NoError(t, err)
+		testDatabaseURL := riversharedtest.TestDatabaseURL()
 
-			t.Setenv("PGDATABASE", parsedURL.Path[1:])
-			t.Setenv("PGHOST", parsedURL.Hostname())
-			pass, _ := parsedURL.User.Password()
-			t.Setenv("PGPASSWORD", pass)
-			t.Setenv("PGPORT", cmp.Or(parsedURL.Port(), "5432"))
-			t.Setenv("PGSSLMODE", parsedURL.Query().Get("sslmode"))
-			t.Setenv("PGUSER", parsedURL.User.Username())
-		} else {
-			// With no `TEST_DATABASE_URL` available, try a simpler alternative
-			// configuration. Requires a database on localhost that doesn't
-			// require authentication, which should exist from testdbman.
-			t.Setenv("PGDATABASE", "river_test")
-			t.Setenv("PGHOST", "localhost")
-		}
+		config, err := pgxpool.ParseConfig(testDatabaseURL)
+		require.NoError(t, err)
 
-		cmd.SetArgs([]string{"validate"})
+		dbPool, err := pgxpool.NewWithConfig(ctx, config)
+		require.NoError(t, err)
+
+		var (
+			driver = riverpgxv5.New(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+		)
+
+		t.Setenv("TEST_DATABASE_URL", "")
+
+		parsedURL, err := url.Parse(testDatabaseURL)
+		require.NoError(t, err)
+
+		t.Setenv("PGDATABASE", parsedURL.Path[1:])
+		t.Setenv("PGHOST", parsedURL.Hostname())
+		pass, _ := parsedURL.User.Password()
+		t.Setenv("PGPASSWORD", pass)
+		t.Setenv("PGPORT", cmp.Or(parsedURL.Port(), "5432"))
+		t.Setenv("PGSSLMODE", parsedURL.Query().Get("sslmode"))
+		t.Setenv("PGUSER", parsedURL.User.Username())
+
+		cmd.SetArgs([]string{"migrate-up", "--schema", schema})
 		require.NoError(t, cmd.Execute())
 	})
 }

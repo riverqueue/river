@@ -1,5 +1,4 @@
-
-CREATE OR REPLACE FUNCTION /* TEMPLATE: schema */river_job_state_in_bitmask(bitmask BIT(8), state river_job_state)
+CREATE OR REPLACE FUNCTION /* TEMPLATE: schema */river_job_state_in_bitmask(bitmask BIT(8), state /* TEMPLATE: schema */river_job_state)
 RETURNS boolean
 LANGUAGE SQL
 IMMUTABLE
@@ -31,7 +30,7 @@ ALTER TABLE /* TEMPLATE: schema */river_job ADD COLUMN IF NOT EXISTS unique_stat
 CREATE UNIQUE INDEX IF NOT EXISTS river_job_unique_idx ON /* TEMPLATE: schema */river_job (unique_key)
     WHERE unique_key IS NOT NULL
       AND unique_states IS NOT NULL
-      AND river_job_state_in_bitmask(unique_states, state);
+      AND /* TEMPLATE: schema */river_job_state_in_bitmask(unique_states, state);
 
 -- Remove the old unique index. Users who are actively using the unique jobs
 -- feature and who wish to avoid deploy downtime may want od drop this in a

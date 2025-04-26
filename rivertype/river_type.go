@@ -397,8 +397,8 @@ type WorkerMiddleware interface {
 
 	// Work is invoked after a job's JSON args being unmarshaled and before the
 	// job is worked. Implementations must always include a call to doInner to
-	// call down the middleware stack and perform the batch insertion, and may run
-	// custom code before and after.
+	// call down the middleware stack and perform the batch insertion, and may
+	// run custom code before and after.
 	//
 	// Returning an error from this function will fail the overarching work
 	// operation, even if the inner work originally succeeded.

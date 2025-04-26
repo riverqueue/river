@@ -144,7 +144,7 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 	} else {
 		archetype.Time = &baseservice.TimeGeneratorWithStubWrapper{TimeGenerator: timeGen}
 	}
-	completer := jobcompleter.NewInlineCompleter(archetype, exec, w.client.Pilot(), subscribeCh)
+	completer := jobcompleter.NewInlineCompleter(archetype, w.config.Schema, exec, w.client.Pilot(), subscribeCh)
 
 	for _, hook := range w.config.Hooks {
 		if withBaseService, ok := hook.(baseservice.WithBaseService); ok {

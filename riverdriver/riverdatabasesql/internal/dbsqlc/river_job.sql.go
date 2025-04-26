@@ -206,8 +206,8 @@ WITH locked_jobs AS (
         /* TEMPLATE: schema */river_job
     WHERE
         state = 'available'
-        AND queue = $2::text
-        AND scheduled_at <= coalesce($3::timestamptz, now())
+        AND queue = $3::text
+        AND scheduled_at <= coalesce($1::timestamptz, now())
     ORDER BY
         priority ASC,
         scheduled_at ASC,
@@ -221,8 +221,8 @@ UPDATE
 SET
     state = 'running',
     attempt = river_job.attempt + 1,
-    attempted_at = now(),
-    attempted_by = array_append(river_job.attempted_by, $1::text)
+    attempted_at = coalesce($1::timestamptz, now()),
+    attempted_by = array_append(river_job.attempted_by, $2::text)
 FROM
     locked_jobs
 WHERE
@@ -232,17 +232,17 @@ RETURNING
 `
 
 type JobGetAvailableParams struct {
+	Now         *time.Time
 	AttemptedBy string
 	Queue       string
-	Now         *time.Time
 	Max         int32
 }
 
 func (q *Queries) JobGetAvailable(ctx context.Context, db DBTX, arg *JobGetAvailableParams) ([]*RiverJob, error) {
 	rows, err := db.QueryContext(ctx, jobGetAvailable,
+		arg.Now,
 		arg.AttemptedBy,
 		arg.Queue,
-		arg.Now,
 		arg.Max,
 	)
 	if err != nil {
@@ -557,7 +557,7 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     unnest($8::timestamptz[]),
     -- To avoid requiring pgx users to register the OID of the river_job_state[]
     -- type, we cast the array to text[] and then to river_job_state.
-    unnest($9::text[])::river_job_state,
+    unnest($9::text[])::/* TEMPLATE: schema */river_job_state,
     -- Unnest on a multi-dimensional array will fully flatten the array, so we
     -- encode the tag list as a comma-separated string and split it in the
     -- query.
@@ -565,11 +565,10 @@ INSERT INTO /* TEMPLATE: schema */river_job(
 
     unnest($11::bytea[]),
     unnest($12::bit(8)[])
-
 ON CONFLICT (unique_key)
     WHERE unique_key IS NOT NULL
       AND unique_states IS NOT NULL
-      AND river_job_state_in_bitmask(unique_states, state)
+      AND /* TEMPLATE: schema */river_job_state_in_bitmask(unique_states, state)
     -- Something needs to be updated for a row to be returned on a conflict.
     DO UPDATE SET kind = EXCLUDED.kind
 RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states, (xmax != 0) AS unique_skipped_as_duplicate
@@ -674,7 +673,7 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     unnest($6::smallint[]),
     unnest($7::text[]),
     unnest($8::timestamptz[]),
-    unnest($9::river_job_state[]),
+    unnest($9::/* TEMPLATE: schema */river_job_state[]),
 
     -- lib/pq really, REALLY does not play nicely with multi-dimensional arrays,
     -- so instead we pack each set of tags into a string, send them through,
@@ -684,11 +683,10 @@ INSERT INTO /* TEMPLATE: schema */river_job(
 
     unnest($11::bytea[]),
     unnest($12::bit(8)[])
-
 ON CONFLICT (unique_key)
     WHERE unique_key IS NOT NULL
       AND unique_states IS NOT NULL
-      AND river_job_state_in_bitmask(unique_states, state)
+      AND /* TEMPLATE: schema */river_job_state_in_bitmask(unique_states, state)
 DO NOTHING
 `
 
@@ -761,7 +759,7 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     $11,
     $12,
     coalesce($13::timestamptz, now()),
-    $14,
+    $14::/* TEMPLATE: schema */river_job_state,
     coalesce($15::varchar(255)[], '{}'),
     $16,
     $17
@@ -895,7 +893,7 @@ FROM (
         unnest($2::jsonb[]) AS error,
         nullif(unnest($3::timestamptz[]), '0001-01-01 00:00:00 +0000') AS finalized_at,
         unnest($4::timestamptz[]) AS scheduled_at,
-        unnest($5::text[])::river_job_state AS state
+        unnest($5::text[])::/* TEMPLATE: schema */river_job_state AS state
 ) AS updated_job
 WHERE river_job.id = updated_job.id
 `
@@ -1020,7 +1018,7 @@ unique_conflicts AS (
     WHERE
         river_job.unique_key IS NOT NULL
         AND river_job.unique_states IS NOT NULL
-        AND river_job_state_in_bitmask(river_job.unique_states, river_job.state)
+        AND /* TEMPLATE: schema */river_job_state_in_bitmask(river_job.unique_states, river_job.state)
 ),
 job_updates AS (
     SELECT
@@ -1028,10 +1026,10 @@ job_updates AS (
         job.unique_key,
         job.unique_states,
         CASE
-            WHEN job.row_num IS NULL THEN 'available'::river_job_state
-            WHEN uc.unique_key IS NOT NULL THEN 'discarded'::river_job_state
-            WHEN job.row_num = 1 THEN 'available'::river_job_state
-            ELSE 'discarded'::river_job_state
+            WHEN job.row_num IS NULL THEN 'available'::/* TEMPLATE: schema */river_job_state
+            WHEN uc.unique_key IS NOT NULL THEN 'discarded'::/* TEMPLATE: schema */river_job_state
+            WHEN job.row_num = 1 THEN 'available'::/* TEMPLATE: schema */river_job_state
+            ELSE 'discarded'::/* TEMPLATE: schema */river_job_state
         END AS new_state,
         (job.row_num IS NOT NULL AND (uc.unique_key IS NOT NULL OR job.row_num > 1)) AS finalized_at_do_update,
         (job.row_num IS NOT NULL AND (uc.unique_key IS NOT NULL OR job.row_num > 1)) AS metadata_do_update
@@ -1050,7 +1048,7 @@ updated_jobs AS (
     WHERE river_job.id = job_updates.id
     RETURNING
         river_job.id,
-        job_updates.new_state = 'discarded'::river_job_state AS conflict_discarded
+        job_updates.new_state = 'discarded'::/* TEMPLATE: schema */river_job_state AS conflict_discarded
 )
 SELECT
     river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states,
@@ -1128,7 +1126,7 @@ WITH job_input AS (
         unnest($11::timestamptz[]) AS scheduled_at,
         -- To avoid requiring pgx users to register the OID of the river_job_state[]
         -- type, we cast the array to text[] and then to river_job_state.
-        unnest($12::text[])::river_job_state AS state
+        unnest($12::text[])::/* TEMPLATE: schema */river_job_state AS state
 ),
 job_to_update AS (
     SELECT
@@ -1151,7 +1149,7 @@ job_to_update AS (
     FOR UPDATE
 ),
 updated_running AS (
-    UPDATE river_job
+    UPDATE /* TEMPLATE: schema */river_job
     SET
         attempt      = CASE WHEN NOT job_to_update.should_cancel AND job_to_update.attempt_do_update THEN job_to_update.attempt
                             ELSE river_job.attempt END,
@@ -1165,7 +1163,7 @@ updated_running AS (
                             ELSE river_job.metadata END,
         scheduled_at = CASE WHEN NOT job_to_update.should_cancel AND job_to_update.scheduled_at_do_update THEN job_to_update.scheduled_at
                             ELSE river_job.scheduled_at END,
-        state        = CASE WHEN job_to_update.should_cancel THEN 'cancelled'::river_job_state
+        state        = CASE WHEN job_to_update.should_cancel THEN 'cancelled'::/* TEMPLATE: schema */river_job_state
                             ELSE job_to_update.state END
     FROM job_to_update
     WHERE river_job.id = job_to_update.id
@@ -1269,7 +1267,7 @@ SET
     attempted_by = CASE WHEN $5::boolean THEN $6 ELSE attempted_by END,
     errors = CASE WHEN $7::boolean THEN $8::jsonb[] ELSE errors END,
     finalized_at = CASE WHEN $9::boolean THEN $10 ELSE finalized_at END,
-    state = CASE WHEN $11::boolean THEN $12 ELSE state END
+    state = CASE WHEN $11::boolean THEN $12::/* TEMPLATE: schema */river_job_state ELSE state END
 WHERE id = $13
 RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 `

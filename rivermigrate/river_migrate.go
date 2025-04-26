@@ -61,7 +61,7 @@ type Config struct {
 	// or higher.
 	Logger *slog.Logger
 
-	schema string
+	Schema string
 }
 
 // Migrator is a database migration tool for River which can run up or down
@@ -153,7 +153,7 @@ func New[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Migrator[TTx
 		driver:     driver,
 		line:       line,
 		migrations: validateAndInit(riverMigrations),
-		schema:     config.schema,
+		schema:     config.Schema,
 	}), nil
 }
 

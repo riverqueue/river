@@ -58,6 +58,7 @@ func (d *Driver) GetListener(schema string) riverdriver.Listener {
 	panic(riverdriver.ErrNotImplemented)
 }
 
+func (d *Driver) GetMigrationDefaultLines() []string { return []string{riverdriver.MigrationLineMain} }
 func (d *Driver) GetMigrationFS(line string) fs.FS {
 	if line == riverdriver.MigrationLineMain {
 		return migrationFS
@@ -65,8 +66,20 @@ func (d *Driver) GetMigrationFS(line string) fs.FS {
 	panic("migration line does not exist: " + line)
 }
 func (d *Driver) GetMigrationLines() []string { return []string{riverdriver.MigrationLineMain} }
-func (d *Driver) HasPool() bool               { return d.dbPool != nil }
-func (d *Driver) SupportsListener() bool      { return false }
+func (d *Driver) GetMigrationTruncateTables(line string) []string {
+	if line == riverdriver.MigrationLineMain {
+		return []string{
+			"river_client",
+			"river_client_queue",
+			"river_job",
+			"river_leader",
+			"river_queue",
+		}
+	}
+	panic("migration line does not exist: " + line)
+}
+func (d *Driver) HasPool() bool          { return d.dbPool != nil }
+func (d *Driver) SupportsListener() bool { return false }
 
 func (d *Driver) UnwrapExecutor(tx *sql.Tx) riverdriver.ExecutorTx {
 	// Allows UnwrapExecutor to be invoked even if driver is nil.
@@ -79,6 +92,8 @@ func (d *Driver) UnwrapExecutor(tx *sql.Tx) riverdriver.ExecutorTx {
 
 	return &ExecutorTx{Executor: Executor{nil, templateReplaceWrapper{tx, replacer}, d}, tx: tx}
 }
+
+func (d *Driver) UnwrapTx(execTx riverdriver.ExecutorTx) *sql.Tx { return execTx.(*ExecutorTx).tx } //nolint:forcetypeassert
 
 type Executor struct {
 	dbPool *sql.DB
@@ -824,6 +839,21 @@ func (e *Executor) QueueUpdate(ctx context.Context, params *riverdriver.QueueUpd
 	return queueFromInternal(queue), nil
 }
 
+func (e *Executor) QueryRow(ctx context.Context, sql string, args ...any) riverdriver.Row {
+	return e.dbtx.QueryRowContext(ctx, sql, args...)
+}
+
+func (e *Executor) SchemaGetExpired(ctx context.Context, params *riverdriver.SchemaGetExpiredParams) ([]string, error) {
+	schemas, err := dbsqlc.New().SchemaGetExpired(ctx, e.dbtx, &dbsqlc.SchemaGetExpiredParams{
+		BeforeName: params.BeforeName,
+		Prefix:     params.Prefix,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return schemas, nil
+}
+
 func (e *Executor) TableExists(ctx context.Context, params *riverdriver.TableExistsParams) (bool, error) {
 	// Different from other operations because the schemaAndTable name is a parameter.
 	schemaAndTable := params.Table
@@ -873,6 +903,7 @@ func (t *ExecutorSubTx) Begin(ctx context.Context) (riverdriver.ExecutorTx, erro
 	if err != nil {
 		return nil, err
 	}
+
 	return &ExecutorSubTx{Executor: Executor{nil, templateReplaceWrapper{t.tx, &t.driver.replacer}, t.driver}, savepointNum: nextSavepointNum, single: &singleTransaction{parent: t.single}, tx: t.tx}, nil
 }
 

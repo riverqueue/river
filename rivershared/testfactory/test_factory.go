@@ -31,6 +31,7 @@ type JobOpts struct {
 	Priority     *int
 	Queue        *string
 	ScheduledAt  *time.Time
+	Schema       string
 	State        *rivertype.JobState
 	Tags         []string
 	UniqueKey    []byte
@@ -42,6 +43,7 @@ func Job(ctx context.Context, tb testing.TB, exec riverdriver.Executor, opts *Jo
 
 	job, err := exec.JobInsertFull(ctx, Job_Build(tb, opts))
 	require.NoError(tb, err)
+
 	return job
 }
 
@@ -84,6 +86,7 @@ func Job_Build(tb testing.TB, opts *JobOpts) *riverdriver.JobInsertFullParams {
 		Priority:     ptrutil.ValOrDefault(opts.Priority, rivercommon.PriorityDefault),
 		Queue:        ptrutil.ValOrDefault(opts.Queue, rivercommon.QueueDefault),
 		ScheduledAt:  opts.ScheduledAt,
+		Schema:       opts.Schema,
 		State:        ptrutil.ValOrDefault(opts.State, rivertype.JobStateAvailable),
 		Tags:         tags,
 		UniqueKey:    opts.UniqueKey,
@@ -95,6 +98,7 @@ type LeaderOpts struct {
 	ElectedAt *time.Time
 	ExpiresAt *time.Time
 	LeaderID  *string
+	Schema    string
 }
 
 func Leader(ctx context.Context, tb testing.TB, exec riverdriver.Executor, opts *LeaderOpts) *riverdriver.Leader {
@@ -104,6 +108,7 @@ func Leader(ctx context.Context, tb testing.TB, exec riverdriver.Executor, opts 
 		ElectedAt: opts.ElectedAt,
 		ExpiresAt: opts.ExpiresAt,
 		LeaderID:  ptrutil.ValOrDefault(opts.LeaderID, "test-client-id"),
+		Schema:    opts.Schema,
 		TTL:       10 * time.Second,
 	})
 	require.NoError(tb, err)
@@ -112,6 +117,7 @@ func Leader(ctx context.Context, tb testing.TB, exec riverdriver.Executor, opts 
 
 type MigrationOpts struct {
 	Line    *string
+	Schema  string
 	Version *int
 }
 
@@ -120,7 +126,7 @@ func Migration(ctx context.Context, tb testing.TB, exec riverdriver.Executor, op
 
 	migration, err := exec.MigrationInsertMany(ctx, &riverdriver.MigrationInsertManyParams{
 		Line:     ptrutil.ValOrDefault(opts.Line, riverdriver.MigrationLineMain),
-		Schema:   "",
+		Schema:   opts.Schema,
 		Versions: []int{ptrutil.ValOrDefaultFunc(opts.Version, nextSeq)},
 	})
 	require.NoError(tb, err)
@@ -137,6 +143,7 @@ type QueueOpts struct {
 	Metadata  []byte
 	Name      *string
 	PausedAt  *time.Time
+	Schema    string
 	UpdatedAt *time.Time
 }
 
@@ -156,6 +163,7 @@ func Queue(ctx context.Context, tb testing.TB, exec riverdriver.Executor, opts *
 		Metadata:  metadata,
 		Name:      ptrutil.ValOrDefaultFunc(opts.Name, func() string { return fmt.Sprintf("queue_%05d", nextSeq()) }),
 		PausedAt:  opts.PausedAt,
+		Schema:    opts.Schema,
 		UpdatedAt: opts.UpdatedAt,
 	})
 	require.NoError(tb, err)

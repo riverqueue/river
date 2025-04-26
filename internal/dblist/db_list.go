@@ -31,6 +31,7 @@ type JobListParams struct {
 	OrderBy    []JobListOrderBy
 	Priorities []int16
 	Queues     []string
+	Schema     string
 	States     []rivertype.JobState
 }
 
@@ -72,7 +73,11 @@ func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListPara
 
 	if len(params.States) > 0 {
 		writeAndAfterFirst()
-		whereBuilder.WriteString("state = any(@states::river_job_state[])")
+		var maybeSchema string
+		if params.Schema != "" {
+			maybeSchema = params.Schema + "."
+		}
+		whereBuilder.WriteString("state = any(@states::" + maybeSchema + "river_job_state[])")
 		namedArgs["states"] = sliceutil.Map(params.States, func(s rivertype.JobState) string { return string(s) })
 	}
 
@@ -116,6 +121,7 @@ func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListPara
 		Max:           params.LimitCount,
 		NamedArgs:     namedArgs,
 		OrderByClause: orderByBuilder.String(),
+		Schema:        params.Schema,
 		WhereClause:   whereBuilder.String(),
 	})
 }

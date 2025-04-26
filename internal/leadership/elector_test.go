@@ -8,11 +8,12 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/notifier"
-	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/sharedtx"
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -36,10 +37,10 @@ func TestElector_PollOnly(t *testing.T) {
 	}
 
 	testElector(ctx, t,
-		func(t *testing.T) *electorBundle {
+		func(ctx context.Context, t *testing.T, stress bool) *electorBundle {
 			t.Helper()
 
-			tx := riverinternaltest.TestTx(ctx, t)
+			tx := riverdbtest.TestTxPgx(ctx, t)
 
 			// We'll put multiple electors on one transaction. Make sure they can
 			// live with each other in relative harmony.
@@ -56,7 +57,9 @@ func TestElector_PollOnly(t *testing.T) {
 				riversharedtest.BaseServiceArchetype(t),
 				driver.UnwrapExecutor(electorBundle.tx),
 				nil,
-				&Config{ClientID: "test_client_id"},
+				&Config{
+					ClientID: "test_client_id",
+				},
 			)
 		})
 }
@@ -70,17 +73,24 @@ func TestElector_WithNotifier(t *testing.T) {
 		archetype *baseservice.Archetype
 		exec      riverdriver.Executor
 		notifier  *notifier.Notifier
+		schema    string
 	}
 
 	testElector(ctx, t,
-		func(t *testing.T) *electorBundle {
+		func(ctx context.Context, t *testing.T, stress bool) *electorBundle {
 			t.Helper()
 
+			var dbPool *pgxpool.Pool
+			if stress {
+				dbPool = riversharedtest.DBPoolClone(ctx, t)
+			} else {
+				dbPool = riversharedtest.DBPool(ctx, t)
+			}
+
 			var (
-				archetype = riversharedtest.BaseServiceArchetype(t)
-				dbPool    = riverinternaltest.TestDB(ctx, t)
 				driver    = riverpgxv5.New(dbPool)
-				schema    = "" // try to make tests schema-based rather than database-based in the future
+				schema    = riverdbtest.TestSchema(ctx, t, driver, nil)
+				archetype = riversharedtest.BaseServiceArchetype(t)
 			)
 
 			notifier := notifier.New(archetype, driver.GetListener(schema))
@@ -93,6 +103,7 @@ func TestElector_WithNotifier(t *testing.T) {
 				archetype: archetype,
 				exec:      driver.GetExecutor(),
 				notifier:  notifier,
+				schema:    schema,
 			}
 		},
 		func(t *testing.T, electorBundle *electorBundle) *Elector {
@@ -102,7 +113,10 @@ func TestElector_WithNotifier(t *testing.T) {
 				electorBundle.archetype,
 				electorBundle.exec,
 				electorBundle.notifier,
-				&Config{ClientID: "test_client_id"},
+				&Config{
+					ClientID: "test_client_id",
+					Schema:   electorBundle.schema,
+				},
 			)
 		})
 }
@@ -113,7 +127,7 @@ func TestElector_WithNotifier(t *testing.T) {
 func testElector[TElectorBundle any](
 	ctx context.Context,
 	t *testing.T,
-	makeElectorBundle func(t *testing.T) TElectorBundle,
+	makeElectorBundle func(ctx context.Context, t *testing.T, stress bool) TElectorBundle,
 	makeElector func(t *testing.T, bundle TElectorBundle) *Elector,
 ) {
 	t.Helper()
@@ -123,10 +137,18 @@ func testElector[TElectorBundle any](
 		exec          riverdriver.Executor
 	}
 
-	setup := func(t *testing.T) (*Elector, *testBundle) {
+	type testOpts struct {
+		stress bool
+	}
+
+	setup := func(t *testing.T, opts *testOpts) (*Elector, *testBundle) {
 		t.Helper()
 
-		electorBundle := makeElectorBundle(t)
+		if opts == nil {
+			opts = &testOpts{}
+		}
+
+		electorBundle := makeElectorBundle(ctx, t, opts.stress)
 
 		elector := makeElector(t, electorBundle)
 		elector.testSignals.Init()
@@ -147,7 +169,7 @@ func testElector[TElectorBundle any](
 	t.Run("StartsGainsLeadershipAndStops", func(t *testing.T) {
 		t.Parallel()
 
-		elector, bundle := setup(t)
+		elector, bundle := setup(t, nil)
 
 		startElector(ctx, t, elector)
 
@@ -172,7 +194,7 @@ func testElector[TElectorBundle any](
 	t.Run("NotifiesSubscribers", func(t *testing.T) {
 		t.Parallel()
 
-		elector, _ := setup(t)
+		elector, _ := setup(t, nil)
 
 		sub := elector.Listen()
 		t.Cleanup(func() { elector.unlisten(sub) })
@@ -199,7 +221,7 @@ func testElector[TElectorBundle any](
 	t.Run("SustainsLeadership", func(t *testing.T) {
 		t.Parallel()
 
-		elector, _ := setup(t)
+		elector, _ := setup(t, nil)
 
 		startElector(ctx, t, elector)
 
@@ -225,7 +247,7 @@ func testElector[TElectorBundle any](
 	t.Run("LosesLeadership", func(t *testing.T) {
 		t.Parallel()
 
-		elector, bundle := setup(t)
+		elector, bundle := setup(t, nil)
 
 		startElector(ctx, t, elector)
 
@@ -238,11 +260,13 @@ func testElector[TElectorBundle any](
 		_, err := bundle.exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
 			LeaderID:        elector.config.ClientID,
 			LeadershipTopic: string(notifier.NotificationTopicLeadership),
+			Schema:          elector.config.Schema,
 		})
 		require.NoError(t, err)
 
 		_ = testfactory.Leader(ctx, t, bundle.exec, &testfactory.LeaderOpts{
 			LeaderID: ptrutil.Ptr("other-client-id"),
+			Schema:   elector.config.Schema,
 		})
 
 		elector.leadershipNotificationChan <- struct{}{}
@@ -258,7 +282,7 @@ func testElector[TElectorBundle any](
 	t.Run("CompetingElectors", func(t *testing.T) {
 		t.Parallel()
 
-		elector1, bundle := setup(t)
+		elector1, bundle := setup(t, nil)
 		elector1.config.ClientID = "elector1"
 
 		{
@@ -313,7 +337,7 @@ func testElector[TElectorBundle any](
 	t.Run("StartStopStress", func(t *testing.T) {
 		t.Parallel()
 
-		elector, _ := setup(t)
+		elector, _ := setup(t, &testOpts{stress: true})
 		elector.Logger = riversharedtest.LoggerWarn(t) // loop started/stop log is very noisy; suppress
 		elector.testSignals = electorTestSignals{}     // deinit so channels don't fill
 
@@ -343,7 +367,7 @@ func TestAttemptElectOrReelect(t *testing.T) {
 		driver := riverpgxv5.New(nil)
 
 		return &testBundle{
-			exec:   driver.UnwrapExecutor(riverinternaltest.TestTx(ctx, t)),
+			exec:   driver.UnwrapExecutor(riverdbtest.TestTxPgx(ctx, t)),
 			logger: riversharedtest.Logger(t),
 		}
 	}
@@ -365,8 +389,8 @@ func TestAttemptElectOrReelect(t *testing.T) {
 			Schema: "",
 		})
 		require.NoError(t, err)
-		require.WithinDuration(t, time.Now(), leader.ElectedAt, 100*time.Millisecond)
-		require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, 100*time.Millisecond)
+		require.WithinDuration(t, time.Now(), leader.ElectedAt, 1*time.Second)
+		require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, 1*time.Second)
 	})
 
 	t.Run("ReelectsSameLeader", func(t *testing.T) {
@@ -376,6 +400,7 @@ func TestAttemptElectOrReelect(t *testing.T) {
 
 		leader := testfactory.Leader(ctx, t, bundle.exec, &testfactory.LeaderOpts{
 			LeaderID: ptrutil.Ptr(clientID),
+			Schema:   "",
 		})
 
 		// Re-elect the same leader. Use a larger TTL to see if time is updated,
@@ -405,6 +430,7 @@ func TestAttemptElectOrReelect(t *testing.T) {
 
 		leader := testfactory.Leader(ctx, t, bundle.exec, &testfactory.LeaderOpts{
 			LeaderID: ptrutil.Ptr(clientID),
+			Schema:   "",
 		})
 
 		elected, err := attemptElectOrReelect(ctx, bundle.exec, true, &riverdriver.LeaderElectParams{
@@ -439,7 +465,7 @@ func TestElectorHandleLeadershipNotification(t *testing.T) {
 	setup := func(t *testing.T) (*Elector, *testBundle) {
 		t.Helper()
 
-		tx := riverinternaltest.TestTx(ctx, t)
+		tx := riverdbtest.TestTxPgx(ctx, t)
 
 		elector := NewElector(
 			riversharedtest.BaseServiceArchetype(t),

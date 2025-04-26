@@ -2,13 +2,13 @@
 
 ## Run tests
 
-Raise test databases:
+Raise the test database:
 
-    go run ./internal/cmd/testdbman create
+    createdb river_test
 
 Run tests:
 
-    go test ./... -p 1
+    go test ./... --timeout 2s
 
 ## Run lint
 
@@ -22,6 +22,13 @@ The project uses sqlc (`brew install sqlc`) to generate Go targets for Postgres
 queries. After changing an sqlc `.sql` file, generate Go with:
 
     make generate
+
+## Raise and migrate development database
+
+To run programs locally outside of tests, create and raise a development database:
+
+    createdb river_dev
+    go run ./cmd/river migrate-up --database-url postgres:///river_dev --line main
 
 ## Releasing a new version
 

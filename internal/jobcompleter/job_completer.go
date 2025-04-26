@@ -53,6 +53,7 @@ type InlineCompleter struct {
 	disableSleep bool // disable sleep in testing
 	exec         riverdriver.Executor
 	pilot        riverpilot.Pilot
+	schema       string
 	subscribeCh  SubscribeChan
 
 	// A waitgroup is not actually needed for the inline completer because as
@@ -63,10 +64,11 @@ type InlineCompleter struct {
 	wg sync.WaitGroup
 }
 
-func NewInlineCompleter(archetype *baseservice.Archetype, exec riverdriver.Executor, pilot riverpilot.Pilot, subscribeCh SubscribeChan) *InlineCompleter {
+func NewInlineCompleter(archetype *baseservice.Archetype, schema string, exec riverdriver.Executor, pilot riverpilot.Pilot, subscribeCh SubscribeChan) *InlineCompleter {
 	return baseservice.Init(archetype, &InlineCompleter{
 		exec:        exec,
 		pilot:       pilot,
+		schema:      schema,
 		subscribeCh: subscribeCh,
 	})
 }
@@ -84,7 +86,7 @@ func (c *InlineCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobst
 		}
 		defer execTx.Rollback(ctx)
 
-		jobs, err := c.pilot.JobSetStateIfRunningMany(ctx, execTx, setStateParamsToMany(params))
+		jobs, err := c.pilot.JobSetStateIfRunningMany(ctx, execTx, setStateParamsToMany(c.schema, params))
 		if err != nil {
 			return nil, err
 		}
@@ -131,7 +133,7 @@ func (c *InlineCompleter) Start(ctx context.Context) error {
 	return nil
 }
 
-func setStateParamsToMany(params *riverdriver.JobSetStateIfRunningParams) *riverdriver.JobSetStateIfRunningManyParams {
+func setStateParamsToMany(schema string, params *riverdriver.JobSetStateIfRunningParams) *riverdriver.JobSetStateIfRunningManyParams {
 	return &riverdriver.JobSetStateIfRunningManyParams{
 		Attempt:         []*int{params.Attempt},
 		ErrData:         [][]byte{params.ErrData},
@@ -140,6 +142,7 @@ func setStateParamsToMany(params *riverdriver.JobSetStateIfRunningParams) *river
 		MetadataDoMerge: []bool{params.MetadataDoMerge},
 		MetadataUpdates: [][]byte{params.MetadataUpdates},
 		ScheduledAt:     []*time.Time{params.ScheduledAt},
+		Schema:          schema,
 		State:           []rivertype.JobState{params.State},
 	}
 }
@@ -160,14 +163,15 @@ type AsyncCompleter struct {
 	errGroup     *errgroup.Group
 	exec         riverdriver.Executor
 	pilot        riverpilot.Pilot
+	schema       string
 	subscribeCh  SubscribeChan
 }
 
-func NewAsyncCompleter(archetype *baseservice.Archetype, exec riverdriver.Executor, pilot riverpilot.Pilot, subscribeCh SubscribeChan) *AsyncCompleter {
-	return newAsyncCompleterWithConcurrency(archetype, exec, pilot, asyncCompleterDefaultConcurrency, subscribeCh)
+func NewAsyncCompleter(archetype *baseservice.Archetype, schema string, exec riverdriver.Executor, pilot riverpilot.Pilot, subscribeCh SubscribeChan) *AsyncCompleter {
+	return newAsyncCompleterWithConcurrency(archetype, schema, exec, pilot, asyncCompleterDefaultConcurrency, subscribeCh)
 }
 
-func newAsyncCompleterWithConcurrency(archetype *baseservice.Archetype, exec riverdriver.Executor, pilot riverpilot.Pilot, concurrency int, subscribeCh SubscribeChan) *AsyncCompleter {
+func newAsyncCompleterWithConcurrency(archetype *baseservice.Archetype, schema string, exec riverdriver.Executor, pilot riverpilot.Pilot, concurrency int, subscribeCh SubscribeChan) *AsyncCompleter {
 	errGroup := &errgroup.Group{}
 	errGroup.SetLimit(concurrency)
 
@@ -176,6 +180,7 @@ func newAsyncCompleterWithConcurrency(archetype *baseservice.Archetype, exec riv
 		errGroup:    errGroup,
 		exec:        exec,
 		pilot:       pilot,
+		schema:      schema,
 		subscribeCh: subscribeCh,
 	})
 }
@@ -193,7 +198,7 @@ func (c *AsyncCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobsta
 			}
 			defer execTx.Rollback(ctx)
 
-			rows, err := c.pilot.JobSetStateIfRunningMany(ctx, execTx, setStateParamsToMany(params))
+			rows, err := c.pilot.JobSetStateIfRunningMany(ctx, execTx, setStateParamsToMany(c.schema, params))
 			if err != nil {
 				return nil, err
 			}
@@ -264,6 +269,7 @@ type BatchCompleter struct {
 	maxBacklog           int  // configurable for testing purposes; max backlog allowed before no more completions accepted
 	exec                 riverdriver.Executor
 	pilot                riverpilot.Pilot
+	schema               string
 	setStateParams       map[int64]*batchCompleterSetState
 	setStateParamsMu     sync.RWMutex
 	setStateStartTimes   map[int64]time.Time
@@ -272,7 +278,7 @@ type BatchCompleter struct {
 	waitOnBacklogWaiting bool
 }
 
-func NewBatchCompleter(archetype *baseservice.Archetype, exec riverdriver.Executor, pilot riverpilot.Pilot, subscribeCh SubscribeChan) *BatchCompleter {
+func NewBatchCompleter(archetype *baseservice.Archetype, schema string, exec riverdriver.Executor, pilot riverpilot.Pilot, subscribeCh SubscribeChan) *BatchCompleter {
 	const (
 		completionMaxSize = 5_000
 		maxBacklog        = 20_000
@@ -283,6 +289,7 @@ func NewBatchCompleter(archetype *baseservice.Archetype, exec riverdriver.Execut
 		exec:               exec,
 		maxBacklog:         maxBacklog,
 		pilot:              pilot,
+		schema:             schema,
 		setStateParams:     make(map[int64]*batchCompleterSetState),
 		setStateStartTimes: make(map[int64]time.Time),
 		subscribeCh:        subscribeCh,
@@ -440,6 +447,7 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 			params.MetadataDoMerge[i] = setState.Params.MetadataDoMerge
 			params.MetadataUpdates[i] = setState.Params.MetadataUpdates
 			params.ScheduledAt[i] = setState.Params.ScheduledAt
+			params.Schema = c.schema
 			params.State[i] = setState.Params.State
 			i++
 		}
@@ -468,6 +476,7 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 				MetadataDoMerge: params.MetadataDoMerge[i:endIndex],
 				MetadataUpdates: params.MetadataUpdates[i:endIndex],
 				ScheduledAt:     params.ScheduledAt[i:endIndex],
+				Schema:          params.Schema,
 				State:           params.State[i:endIndex],
 			}
 			jobRowsSubBatch, err := completeSubBatch(subBatch)

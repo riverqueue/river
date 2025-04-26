@@ -6,13 +6,14 @@ import (
 	"io"
 	"log/slog"
 	"sync"
-	"testing"
+
+	"github.com/riverqueue/river/rivershared/util/testutil"
 )
 
 // NewLogger returns a new slog text logger that outputs to `t.Log`. This helps
 // keep test output better formatted, and allows it to be differentiated in case
 // of a failure during a parallel test suite run.
-func NewLogger(tb testing.TB, opts *slog.HandlerOptions) *slog.Logger {
+func NewLogger(tb testutil.TestingTB, opts *slog.HandlerOptions) *slog.Logger {
 	tb.Helper()
 
 	var buf bytes.Buffer
@@ -31,7 +32,7 @@ type slogTestHandler struct {
 	buf   *bytes.Buffer
 	inner slog.Handler
 	mu    *sync.Mutex
-	tb    testing.TB
+	tb    testutil.TestingTB
 }
 
 func (b *slogTestHandler) Enabled(ctx context.Context, level slog.Level) bool {

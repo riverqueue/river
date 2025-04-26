@@ -18,7 +18,7 @@ CREATE TABLE /* TEMPLATE: schema */river_job(
   -- looking at jobs with `SELECT *` it'll appear first after ID. The other two
   -- fields aren't as important but are kept adjacent to `state` for alignment
   -- to get an 8-byte block.
-  state river_job_state NOT NULL DEFAULT 'available',
+  state /* TEMPLATE: schema */river_job_state NOT NULL DEFAULT 'available',
   attempt smallint NOT NULL DEFAULT 0,
   max_attempts smallint NOT NULL,
 

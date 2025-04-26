@@ -9,9 +9,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/internal/riverinternaltest"
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/util/slogutil"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 )
 
 type SortArgs struct {
@@ -36,16 +38,11 @@ func (w *SortWorker) Work(ctx context.Context, job *river.Job[SortArgs]) error {
 func Example_insertAndWork() {
 	ctx := context.Background()
 
-	dbPool, err := pgxpool.NewWithConfig(ctx, riverinternaltest.DatabaseConfig("river_test_example"))
+	dbPool, err := pgxpool.New(ctx, riversharedtest.TestDatabaseURL())
 	if err != nil {
 		panic(err)
 	}
 	defer dbPool.Close()
-
-	// Required for the purpose of this test, but not necessary in real usage.
-	if err := riverinternaltest.TruncateRiverTables(ctx, dbPool); err != nil {
-		panic(err)
-	}
 
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &SortWorker{})
@@ -55,7 +52,8 @@ func Example_insertAndWork() {
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: 100},
 		},
-		TestOnly: true, // suitable only for use in tests; remove for live environments
+		Schema:   riverdbtest.TestSchema(ctx, testutil.PanicTB(), riverpgxv5.New(dbPool), nil), // only necessary for the example test
+		TestOnly: true,                                                                         // suitable only for use in tests; remove for live environments
 		Workers:  workers,
 	})
 	if err != nil {

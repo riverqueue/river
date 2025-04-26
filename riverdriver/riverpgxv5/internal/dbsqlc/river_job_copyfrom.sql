@@ -1,5 +1,5 @@
 -- name: JobInsertFastManyCopyFrom :copyfrom
-INSERT INTO /* TEMPLATE: schema */river_job(
+INSERT INTO river_job(
     args,
     created_at,
     kind,
