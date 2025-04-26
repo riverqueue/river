@@ -283,6 +283,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		return p.exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
 			Metadata: []byte("{}"),
 			Name:     p.config.Queue,
+			Now:      p.Time.NowUTCOrNil(),
 			Schema:   p.config.Schema,
 		})
 	}()
@@ -931,6 +932,7 @@ func (p *producer) reportQueueStatusOnce(ctx context.Context) {
 	_, err := p.exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
 		Metadata: []byte("{}"),
 		Name:     p.config.Queue,
+		Now:      p.Time.NowUTCOrNil(),
 		Schema:   p.config.Schema,
 	})
 	if err != nil && errors.Is(context.Cause(ctx), startstop.ErrStop) {

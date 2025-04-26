@@ -605,6 +605,7 @@ type ProducerKeepAliveParams struct {
 type QueueCreateOrSetUpdatedAtParams struct {
 	Metadata  []byte
 	Name      string
+	Now       *time.Time
 	PausedAt  *time.Time
 	Schema    string
 	UpdatedAt *time.Time
