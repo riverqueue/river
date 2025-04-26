@@ -90,7 +90,8 @@ func Example_jobCancelFromClient() {
 	if _, err = riverClient.JobCancel(ctx, insertRes.Job.ID); err != nil {
 		panic(err)
 	}
-	waitForNJobs(subscribeChan, 1)
+	// Wait for jobs to complete. Only needed for purposes of the example test.
+	riversharedtest.WaitOrTimeoutN(testutil.PanicTB(), subscribeChan, 1)
 
 	if err := riverClient.Stop(ctx); err != nil {
 		panic(err)

@@ -77,7 +77,8 @@ func Example_batchInsert() {
 	}
 	fmt.Printf("Inserted %d jobs\n", len(results))
 
-	waitForNJobs(subscribeChan, 5)
+	// Wait for jobs to complete. Only needed for purposes of the example test.
+	riversharedtest.WaitOrTimeoutN(testutil.PanicTB(), subscribeChan, 5)
 
 	if err := riverClient.Stop(ctx); err != nil {
 		panic(err)
