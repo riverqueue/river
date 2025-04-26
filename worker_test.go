@@ -24,12 +24,14 @@ func TestWork(t *testing.T) {
 		AddWorker(workers, &noOpWorker{})
 	})
 
-	fn := func(ctx context.Context, job *Job[callbackArgs]) error { return nil }
-	ch := callbackWorker{fn: fn}
+	type JobArgs struct {
+		JobArgsReflectKind[JobArgs]
+	}
 
-	// function worker
-	AddWorker(workers, &ch)
-	require.Contains(t, workers.workersMap, (callbackArgs{}).Kind())
+	AddWorker(workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+		return nil
+	}))
+	require.Contains(t, workers.workersMap, (JobArgs{}).Kind())
 }
 
 type configurableArgs struct {
@@ -92,11 +94,10 @@ func TestWorkFunc(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-		config.Schema = schema
 
-		client := newTestClient(t, dbPool, config)
 		startClient(ctx, t, client)
 
 		return client, &testBundle{}

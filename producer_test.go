@@ -55,12 +55,14 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 
 	archetype := riversharedtest.BaseServiceArchetype(t)
 
-	config := newTestConfig(t, nil)
-	driver := riverpgxv5.New(dbPool)
-	exec := driver.GetExecutor()
-	schema := riverdbtest.TestSchema(ctx, t, driver, nil)
-	listener := driver.GetListener(&riverdriver.GetListenenerParams{Schema: schema})
-	pilot := &riverpilot.StandardPilot{}
+	var (
+		driver   = riverpgxv5.New(dbPool)
+		schema   = riverdbtest.TestSchema(ctx, t, driver, nil)
+		config   = newTestConfig(t, schema)
+		exec     = driver.GetExecutor()
+		listener = driver.GetListener(&riverdriver.GetListenenerParams{Schema: schema})
+		pilot    = &riverpilot.StandardPilot{}
+	)
 
 	subscribeChan := make(chan []jobcompleter.CompleterJobUpdated, 100)
 	t.Cleanup(riverinternaltest.DiscardContinuously(subscribeChan))
@@ -287,7 +289,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 
 		producer, jobUpdates := makeProducer(ctx, t)
 		producer.testSignals.Init()
-		config := newTestConfig(t, nil)
+		config := newTestConfig(t, producer.config.Schema)
 
 		jobUpdatesFlattened := make(chan jobcompleter.CompleterJobUpdated, 10)
 		go func() {
@@ -396,8 +398,12 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		producer, bundle := setup(t)
 		AddWorker(bundle.workers, &noOpWorker{})
 
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
 		mustInsert(ctx, t, producer, bundle, &noOpArgs{})
-		mustInsert(ctx, t, producer, bundle, &callbackArgs{}) // not registered
+		mustInsert(ctx, t, producer, bundle, &JobArgs{}) // not registered
 
 		startProducer(t, ctx, ctx, producer)
 
@@ -417,9 +423,9 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		}
 
 		{
-			job := findJob((&callbackArgs{}).Kind())
+			job := findJob((&JobArgs{}).Kind())
 			require.Equal(t, rivertype.JobStateRetryable, job.State)
-			require.Equal(t, (&UnknownJobKindError{Kind: (&callbackArgs{}).Kind()}).Error(), job.Errors[0].Error)
+			require.Equal(t, (&UnknownJobKindError{Kind: (&JobArgs{}).Kind()}).Error(), job.Errors[0].Error)
 		}
 		{
 			job := findJob((&noOpArgs{}).Kind())

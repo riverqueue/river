@@ -29,13 +29,13 @@ func TestClientDriverPlugin(t *testing.T) {
 		t.Helper()
 
 		var (
-			config       = newTestConfig(t, nil)
-			dbPool       = riversharedtest.DBPool(ctx, t)
-			driver       = riverpgxv5.New(dbPool)
-			schema       = riverdbtest.TestSchema(ctx, t, driver, nil)
-			pluginDriver = newDriverWithPlugin(t, dbPool)
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
 		)
-		config.Schema = schema
+
+		pluginDriver := newDriverWithPlugin(t, dbPool)
 
 		client, err := NewClient(pluginDriver, config)
 		require.NoError(t, err)
@@ -98,14 +98,13 @@ func TestClientPilotPlugin(t *testing.T) {
 		t.Helper()
 
 		var (
-			config       = newTestConfig(t, nil)
 			dbPool       = riversharedtest.DBPool(ctx, t)
 			driver       = riverpgxv5.New(dbPool)
 			schema       = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config       = newTestConfig(t, schema)
 			pluginDriver = newDriverWithPlugin(t, dbPool)
 			pluginPilot  = newPilotWithPlugin(t)
 		)
-		config.Schema = schema
 		pluginDriver.pilot = pluginPilot
 
 		client, err := NewClient(pluginDriver, config)

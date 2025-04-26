@@ -39,11 +39,10 @@ func Test_RecordedOutput(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-		config.Schema = schema
 
-		client := newTestClient(t, dbPool, config)
 		t.Cleanup(func() { require.NoError(t, client.Stop(ctx)) })
 
 		return client, &testBundle{

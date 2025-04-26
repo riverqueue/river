@@ -71,10 +71,8 @@ func (w *periodicJobWorker) Work(ctx context.Context, job *Job[periodicJobArgs])
 	return nil
 }
 
-type callbackFunc func(context.Context, *Job[callbackArgs]) error
-
-func makeAwaitCallback(startedCh chan<- int64, doneCh chan struct{}) callbackFunc {
-	return func(ctx context.Context, job *Job[callbackArgs]) error {
+func makeAwaitWorker[T JobArgs](startedCh chan<- int64, doneCh chan struct{}) Worker[T] {
+	return WorkFunc(func(ctx context.Context, job *Job[T]) error {
 		client := ClientFromContext[pgx.Tx](ctx)
 		client.config.Logger.InfoContext(ctx, "callback job started with id="+strconv.FormatInt(job.ID, 10))
 
@@ -91,22 +89,7 @@ func makeAwaitCallback(startedCh chan<- int64, doneCh chan struct{}) callbackFun
 		case <-doneCh:
 			return nil
 		}
-	}
-}
-
-type callbackArgs struct {
-	Name string `json:"name"`
-}
-
-func (callbackArgs) Kind() string { return "callback" }
-
-type callbackWorker struct {
-	WorkerDefaults[callbackArgs]
-	fn callbackFunc
-}
-
-func (w *callbackWorker) Work(ctx context.Context, job *Job[callbackArgs]) error {
-	return w.fn(ctx, job)
+	})
 }
 
 // A small wrapper around Client that gives us a struct that corrects the
@@ -123,12 +106,10 @@ func (c *clientWithSimpleStop[TTx]) Stop() {
 	_ = c.Client.Stop(context.Background())
 }
 
-func newTestConfig(t *testing.T, callback callbackFunc) *Config {
+func newTestConfig(t *testing.T, schema string) *Config {
 	t.Helper()
+
 	workers := NewWorkers()
-	if callback != nil {
-		AddWorker(workers, &callbackWorker{fn: callback})
-	}
 	AddWorker(workers, &noOpWorker{})
 
 	return &Config{
@@ -137,6 +118,7 @@ func newTestConfig(t *testing.T, callback callbackFunc) *Config {
 		Logger:            riversharedtest.Logger(t),
 		MaxAttempts:       MaxAttemptsDefault,
 		Queues:            map[string]QueueConfig{QueueDefault: {MaxWorkers: 50}},
+		Schema:            schema,
 		Test: TestConfig{
 			Time: &riversharedtest.TimeStub{},
 		},
@@ -219,9 +201,8 @@ func Test_Client(t *testing.T) {
 			dbPool = riversharedtest.DBPoolClone(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, nil)
+			config = newTestConfig(t, schema)
 		)
-		config.Schema = schema
 
 		return config, &testBundle{
 			config: config,
@@ -660,14 +641,10 @@ func Test_Client(t *testing.T) {
 			}),
 		}
 
-		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[callbackArgs]) error {
-			return nil
-		}))
-
 		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
 		require.NoError(t, err)
 
-		_, err = client.Insert(ctx, callbackArgs{}, nil)
+		_, err = client.Insert(ctx, noOpArgs{}, nil)
 		require.NoError(t, err)
 
 		require.True(t, insertBeginHookCalled)
@@ -693,15 +670,11 @@ func Test_Client(t *testing.T) {
 			return nil
 		}
 
-		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[callbackArgs]) error {
-			return nil
-		}))
-
 		bundle.config.Hooks = []rivertype.Hook{hook}
 		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
 		require.NoError(t, err)
 
-		_, err = client.Insert(ctx, callbackArgs{}, nil)
+		_, err = client.Insert(ctx, noOpArgs{}, nil)
 		require.NoError(t, err)
 
 		require.True(t, hookCalled)
@@ -721,17 +694,13 @@ func Test_Client(t *testing.T) {
 			}),
 		}
 
-		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[callbackArgs]) error {
-			return nil
-		}))
-
 		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
 		require.NoError(t, err)
 
 		subscribeChan := subscribe(t, client)
 		startClient(ctx, t, client)
 
-		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
+		insertRes, err := client.Insert(ctx, noOpArgs{}, nil)
 		require.NoError(t, err)
 
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
@@ -755,17 +724,13 @@ func Test_Client(t *testing.T) {
 			}),
 		}
 
-		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[callbackArgs]) error {
-			return nil
-		}))
-
 		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
 		require.NoError(t, err)
 
 		subscribeChan := subscribe(t, client)
 		startClient(ctx, t, client)
 
-		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
+		insertRes, err := client.Insert(ctx, noOpArgs{}, nil)
 		require.NoError(t, err)
 
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
@@ -884,7 +849,11 @@ func Test_Client(t *testing.T) {
 		}
 		bundle.config.Middleware = []rivertype.Middleware{middleware}
 
-		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[callbackArgs]) error {
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 			require.Equal(t, "called", ctx.Value(privateKey("middleware")))
 			return nil
 		}))
@@ -896,7 +865,7 @@ func Test_Client(t *testing.T) {
 		subscribeChan := subscribe(t, client)
 		startClient(ctx, t, client)
 
-		result, err := client.Insert(ctx, callbackArgs{}, nil)
+		result, err := client.Insert(ctx, JobArgs{}, nil)
 		require.NoError(t, err)
 
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
@@ -911,15 +880,19 @@ func Test_Client(t *testing.T) {
 		_, bundle := setup(t)
 		middlewareCalled := false
 
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
 		type privateKey string
 
-		worker := &workerWithMiddleware[callbackArgs]{
-			workFunc: func(ctx context.Context, job *Job[callbackArgs]) error {
+		worker := &workerWithMiddleware[JobArgs]{
+			workFunc: func(ctx context.Context, job *Job[JobArgs]) error {
 				require.Equal(t, "called", ctx.Value(privateKey("middleware")))
 				return nil
 			},
 			middlewareFunc: func(job *rivertype.JobRow) []rivertype.WorkerMiddleware {
-				require.Equal(t, "callback", job.Kind)
+				require.Equal(t, (JobArgs{}).Kind(), job.Kind)
 
 				return []rivertype.WorkerMiddleware{
 					&overridableJobMiddleware{
@@ -942,7 +915,7 @@ func Test_Client(t *testing.T) {
 		subscribeChan := subscribe(t, client)
 		startClient(ctx, t, client)
 
-		result, err := client.Insert(ctx, callbackArgs{Name: "middleware_test"}, nil)
+		result, err := client.Insert(ctx, JobArgs{}, nil)
 		require.NoError(t, err)
 
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
@@ -957,8 +930,13 @@ func Test_Client(t *testing.T) {
 		_, bundle := setup(t)
 		middlewareCalled := false
 
-		worker := &workerWithMiddleware[callbackArgs]{
-			workFunc: func(ctx context.Context, job *Job[callbackArgs]) error {
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+			Name string `json:"name"`
+		}
+
+		worker := &workerWithMiddleware[JobArgs]{
+			workFunc: func(ctx context.Context, job *Job[JobArgs]) error {
 				require.Equal(t, "middleware name", job.Args.Name)
 				return nil
 			},
@@ -985,7 +963,7 @@ func Test_Client(t *testing.T) {
 		subscribeChan := subscribe(t, client)
 		startClient(ctx, t, client)
 
-		result, err := client.Insert(ctx, callbackArgs{Name: "inserted name"}, nil)
+		result, err := client.Insert(ctx, JobArgs{Name: "inserted name"}, nil)
 		require.NoError(t, err)
 
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
@@ -1333,7 +1311,7 @@ func Test_Client_Stop(t *testing.T) {
 	// Performs continual job insertion on a number of background goroutines.
 	// Returns a `finish` function that should be deferred to stop insertion and
 	// safely stop goroutines.
-	doParallelContinualInsertion := func(ctx context.Context, t *testing.T, client *Client[pgx.Tx]) func() {
+	doParallelContinualInsertion := func(ctx context.Context, t *testing.T, client *Client[pgx.Tx], args JobArgs) func() {
 		t.Helper()
 
 		ctx, cancel := context.WithCancel(ctx)
@@ -1350,7 +1328,7 @@ func Test_Client_Stop(t *testing.T) {
 					default:
 					}
 
-					_, err := client.Insert(ctx, callbackArgs{}, nil)
+					_, err := client.Insert(ctx, args, nil)
 					// A cancelled context may produce a variety of underlying
 					// errors in pgx, so rather than comparing the return error,
 					// first check if context is cancelled, and ignore an error
@@ -1374,7 +1352,8 @@ func Test_Client_Stop(t *testing.T) {
 
 	t.Run("NoJobsInProgress", func(t *testing.T) {
 		t.Parallel()
-		client := runNewTestClient(ctx, t, newTestConfig(t, nil))
+
+		client := runNewTestClient(ctx, t, newTestConfig(t, ""))
 
 		// Should shut down quickly:
 		ctx, cancel := context.WithTimeout(ctx, time.Second)
@@ -1385,18 +1364,34 @@ func Test_Client_Stop(t *testing.T) {
 
 	t.Run("JobsInProgressCompletingPromptly", func(t *testing.T) {
 		t.Parallel()
-		require := require.New(t)
-		doneCh := make(chan struct{})
-		startedCh := make(chan int64)
 
-		client := runNewTestClient(ctx, t, newTestConfig(t, makeAwaitCallback(startedCh, doneCh)))
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
+		)
+
+		client := newTestClient(t, dbPool, config)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		var (
+			doneCh    = make(chan struct{})
+			startedCh = make(chan int64)
+		)
+		AddWorker(client.config.Workers, makeAwaitWorker[JobArgs](startedCh, doneCh))
 
 		// enqueue job:
-		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
-		require.NoError(err)
+		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
+		require.NoError(t, err)
+
+		startClient(ctx, t, client)
 
 		startedJobID := riversharedtest.WaitOrTimeout(t, startedCh)
-		require.Equal(insertRes.Job.ID, startedJobID)
+		require.Equal(t, insertRes.Job.ID, startedJobID)
 
 		// Should not shut down immediately, not until jobs are given the signal to
 		// complete:
@@ -1405,16 +1400,22 @@ func Test_Client_Stop(t *testing.T) {
 			close(doneCh)
 		}()
 
-		require.NoError(client.Stop(ctx))
+		require.NoError(t, client.Stop(ctx))
 	})
 
 	t.Run("JobsInProgressFailingToCompleteBeforeStopContext", func(t *testing.T) {
 		t.Parallel()
 
+		config := newTestConfig(t, "")
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
 		jobDoneChan := make(chan struct{})
 		jobStartedChan := make(chan int64)
 
-		callbackFunc := func(ctx context.Context, job *Job[callbackArgs]) error {
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -1428,11 +1429,11 @@ func Test_Client_Stop(t *testing.T) {
 			}
 
 			return nil
-		}
+		}))
 
-		client := runNewTestClient(ctx, t, newTestConfig(t, callbackFunc))
+		client := runNewTestClient(ctx, t, config)
 
-		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
+		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
 		require.NoError(t, err)
 
 		startedJobID := riversharedtest.WaitOrTimeout(t, jobStartedChan)
@@ -1462,19 +1463,24 @@ func Test_Client_Stop(t *testing.T) {
 	t.Run("WithContinualInsertionNoJobsLeftRunning", func(t *testing.T) {
 		t.Parallel()
 
+		config := newTestConfig(t, "")
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
 		startedCh := make(chan int64)
-		callbackFunc := func(ctx context.Context, job *Job[callbackArgs]) error {
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 			select {
 			case startedCh <- job.ID:
 			default:
 			}
 			return nil
-		}
+		}))
 
-		config := newTestConfig(t, callbackFunc)
 		client := runNewTestClient(ctx, t, config)
 
-		finish := doParallelContinualInsertion(ctx, t, client)
+		finish := doParallelContinualInsertion(ctx, t, client, JobArgs{})
 		t.Cleanup(finish)
 
 		// Wait for at least one job to start
@@ -1490,14 +1496,22 @@ func Test_Client_Stop(t *testing.T) {
 	t.Run("WithSubscriber", func(t *testing.T) {
 		t.Parallel()
 
-		callbackFunc := func(ctx context.Context, job *Job[callbackArgs]) error { return nil }
+		config := newTestConfig(t, "")
 
-		client := runNewTestClient(ctx, t, newTestConfig(t, callbackFunc))
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			return nil
+		}))
+
+		client := runNewTestClient(ctx, t, config)
 
 		subscribeChan, cancel := client.Subscribe(EventKindJobCompleted)
 		defer cancel()
 
-		finish := doParallelContinualInsertion(ctx, t, client)
+		finish := doParallelContinualInsertion(ctx, t, client, JobArgs{})
 		defer finish()
 
 		// Arbitrarily wait for 100 jobs to come through.
@@ -1517,17 +1531,24 @@ func Test_Client_Stop_ContextImmediatelyCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// doneCh will never close, job will exit due to context cancellation:
-	doneCh := make(chan struct{})
-	startedCh := make(chan int64)
-
 	var (
 		dbPool = riversharedtest.DBPool(ctx, t)
 		driver = riverpgxv5.New(dbPool)
 		schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-		config = newTestConfig(t, makeAwaitCallback(startedCh, doneCh))
+		config = newTestConfig(t, schema)
 	)
 	config.Schema = schema
+
+	type JobArgs struct {
+		JobArgsReflectKind[JobArgs]
+	}
+
+	// doneCh will never close, job will exit due to context cancellation:
+	var (
+		doneCh    = make(chan struct{})
+		startedCh = make(chan int64)
+	)
+	AddWorker(config.Workers, makeAwaitWorker[JobArgs](startedCh, doneCh))
 
 	client := newTestClient(t, dbPool, config)
 
@@ -1538,7 +1559,7 @@ func Test_Client_Stop_ContextImmediatelyCancelled(t *testing.T) {
 	require.NoError(t, client.Start(ctx))
 	t.Cleanup(func() { require.NoError(t, client.Stop(context.Background())) })
 
-	insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
+	insertRes, err := client.Insert(ctx, JobArgs{}, nil)
 	require.NoError(t, err)
 	startedJobID := riversharedtest.WaitOrTimeout(t, startedCh)
 	require.Equal(t, insertRes.Job.ID, startedJobID)
@@ -1566,24 +1587,31 @@ func Test_Client_Stop_AfterContextCancelled(t *testing.T) {
 
 	ctx := context.Background()
 
-	// doneCh will never close, job will exit due to context cancellation:
-	doneCh := make(chan struct{})
-	startedCh := make(chan int64)
-
 	var (
 		dbPool = riversharedtest.DBPool(ctx, t)
 		driver = riverpgxv5.New(dbPool)
 		schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-		config = newTestConfig(t, makeAwaitCallback(startedCh, doneCh))
+		config = newTestConfig(t, schema)
 	)
 	config.Schema = schema
+
+	type JobArgs struct {
+		JobArgsReflectKind[JobArgs]
+	}
+
+	// doneCh will never close, job will exit due to context cancellation:
+	var (
+		doneCh    = make(chan struct{})
+		startedCh = make(chan int64)
+	)
+	AddWorker(config.Workers, makeAwaitWorker[JobArgs](startedCh, doneCh))
 
 	client := newTestClient(t, dbPool, config)
 	subscribeChan := subscribe(t, client)
 
 	startClient(ctx, t, client)
 
-	insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
+	insertRes, err := client.Insert(ctx, JobArgs{}, nil)
 	require.NoError(t, err)
 	event := riversharedtest.WaitOrTimeout(t, subscribeChan)
 	require.Equal(t, insertRes.Job.ID, event.Job.ID)
@@ -1599,6 +1627,10 @@ func Test_Client_StopAndCancel(t *testing.T) {
 
 	ctx := context.Background()
 
+	type JobArgs struct {
+		JobArgsReflectKind[JobArgs]
+	}
+
 	type testBundle struct {
 		jobDoneChan    chan struct{}
 		jobStartedChan chan int64
@@ -1607,10 +1639,13 @@ func Test_Client_StopAndCancel(t *testing.T) {
 	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
 		t.Helper()
 
-		jobStartedChan := make(chan int64)
-		jobDoneChan := make(chan struct{})
+		config := newTestConfig(t, "")
 
-		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+		var (
+			jobStartedChan = make(chan int64)
+			jobDoneChan    = make(chan struct{})
+		)
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 			jobStartedChan <- job.ID
 			t.Logf("Job waiting for context cancellation")
 			defer t.Logf("Job finished")
@@ -1618,7 +1653,7 @@ func Test_Client_StopAndCancel(t *testing.T) {
 			t.Logf("Job context done, closing chan and returning")
 			close(jobDoneChan)
 			return nil
-		})
+		}))
 
 		client := runNewTestClient(ctx, t, config)
 
@@ -1635,7 +1670,7 @@ func Test_Client_StopAndCancel(t *testing.T) {
 
 		startClient(ctx, t, client)
 
-		_, err := client.Insert(ctx, &callbackArgs{}, nil)
+		_, err := client.Insert(ctx, JobArgs{}, nil)
 		require.NoError(t, err)
 
 		riversharedtest.WaitOrTimeout(t, bundle.jobStartedChan)
@@ -1660,7 +1695,7 @@ func Test_Client_StopAndCancel(t *testing.T) {
 
 		startClient(ctx, t, client)
 
-		_, err := client.Insert(ctx, &callbackArgs{}, nil)
+		_, err := client.Insert(ctx, JobArgs{}, nil)
 		require.NoError(t, err)
 
 		riversharedtest.WaitOrTimeout(t, bundle.jobStartedChan)
@@ -1710,7 +1745,6 @@ func Test_Client_JobContextInheritsFromProvidedContext(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Minute)
 
-	require := require.New(t)
 	jobCtxCh := make(chan context.Context)
 	doneCh := make(chan struct{})
 	close(doneCh)
@@ -1724,7 +1758,7 @@ func Test_Client_JobContextInheritsFromProvidedContext(t *testing.T) {
 		}
 		return nil
 	}
-	config := newTestConfig(t, nil)
+	config := newTestConfig(t, "")
 	AddWorker(config.Workers, &callbackWorkerWithCustomTimeout{fn: callbackFunc})
 
 	// Set a deadline and a value on the context for the client so we can verify
@@ -1741,7 +1775,7 @@ func Test_Client_JobContextInheritsFromProvidedContext(t *testing.T) {
 
 	// enqueue job:
 	_, err := client.Insert(insertCtx, callbackWithCustomTimeoutArgs{TimeoutValue: 5 * time.Minute}, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	var jobCtx context.Context
 	select {
@@ -1750,10 +1784,10 @@ func Test_Client_JobContextInheritsFromProvidedContext(t *testing.T) {
 		t.Fatal("timed out waiting for job to start")
 	}
 
-	require.Equal("River", jobCtx.Value(customContextKey("BestGoPostgresQueue")), "job should persist the context value from the client context")
+	require.Equal(t, "River", jobCtx.Value(customContextKey("BestGoPostgresQueue")), "job should persist the context value from the client context")
 	jobDeadline, ok := jobCtx.Deadline()
-	require.True(ok, "job should have a deadline")
-	require.Equal(deadline, jobDeadline, "job should have the same deadline as the client context (shorter than the job's timeout)")
+	require.True(t, ok, "job should have a deadline")
+	require.Equal(t, deadline, jobDeadline, "job should have the same deadline as the client context (shorter than the job's timeout)")
 }
 
 func Test_Client_ClientFromContext(t *testing.T) {
@@ -1761,16 +1795,25 @@ func Test_Client_ClientFromContext(t *testing.T) {
 
 	ctx := context.Background()
 
-	var clientResult *Client[pgx.Tx]
-	jobDoneChan := make(chan struct{})
-	config := newTestConfig(t, func(ctx context.Context, j *Job[callbackArgs]) error {
+	config := newTestConfig(t, "")
+
+	type JobArgs struct {
+		JobArgsReflectKind[JobArgs]
+	}
+
+	var (
+		clientResult *Client[pgx.Tx]
+		jobDoneChan  = make(chan struct{})
+	)
+	AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 		clientResult = ClientFromContext[pgx.Tx](ctx)
 		close(jobDoneChan)
 		return nil
-	})
+	}))
+
 	client := runNewTestClient(ctx, t, config)
 
-	_, err := client.Insert(ctx, callbackArgs{}, nil)
+	_, err := client.Insert(ctx, JobArgs{}, nil)
 	require.NoError(t, err)
 
 	riversharedtest.WaitOrTimeout(t, jobDoneChan)
@@ -1795,10 +1838,9 @@ func Test_Client_JobDelete(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-		config.Schema = schema
-		client := newTestClient(t, dbPool, config)
 
 		return client, &testBundle{dbPool: dbPool}
 	}
@@ -1826,10 +1868,15 @@ func Test_Client_JobDelete(t *testing.T) {
 
 		client, _ := setup(t)
 
-		doneCh := make(chan struct{})
-		startedCh := make(chan int64)
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
 
-		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[callbackArgs]) error {
+		var (
+			doneCh    = make(chan struct{})
+			startedCh = make(chan int64)
+		)
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 			close(startedCh)
 			<-doneCh
 			return nil
@@ -1839,7 +1886,7 @@ func Test_Client_JobDelete(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, client.Stop(ctx)) })
 		t.Cleanup(func() { close(doneCh) }) // must close before stopping client
 
-		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
+		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
 		require.NoError(t, err)
 
 		// Wait for the job to start:
@@ -1909,10 +1956,9 @@ func Test_Client_Insert(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-		config.Schema = schema
-		client := newTestClient(t, dbPool, config)
 
 		return client, &testBundle{
 			dbPool: dbPool,
@@ -1980,10 +2026,9 @@ func Test_Client_Insert(t *testing.T) {
 
 		_, bundle := setup(t)
 
-		config := newTestConfig(t, nil)
+		config := newTestConfig(t, bundle.schema)
 		config.FetchCooldown = 5 * time.Second
 		config.FetchPollInterval = 5 * time.Second
-		config.Schema = bundle.schema
 
 		client := newTestClient(t, bundle.dbPool, config)
 
@@ -2099,10 +2144,9 @@ func Test_Client_InsertTx(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-		config.Schema = schema
-		client := newTestClient(t, dbPool, config)
 
 		tx, err := dbPool.Begin(ctx)
 		require.NoError(t, err)
@@ -2243,11 +2287,9 @@ func Test_Client_InsertManyFast(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-		config.Schema = schema
-
-		client := newTestClient(t, dbPool, config)
 
 		return client, &testBundle{
 			dbPool: dbPool,
@@ -2280,20 +2322,25 @@ func Test_Client_InsertManyFast(t *testing.T) {
 		t.Parallel()
 
 		ctx := context.Background()
+
 		_, bundle := setup(t)
 
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		t.Cleanup(cancel)
 
-		doneCh := make(chan struct{})
-		close(doneCh) // don't need to block any jobs from completing
-		startedCh := make(chan int64)
-
-		config := newTestConfig(t, makeAwaitCallback(startedCh, doneCh))
+		config := newTestConfig(t, bundle.schema)
 		config.FetchCooldown = 20 * time.Millisecond
 		config.FetchPollInterval = 20 * time.Second // essentially disable polling
 		config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: 2}, "another_queue": {MaxWorkers: 1}}
-		config.Schema = bundle.schema
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		doneCh := make(chan struct{})
+		close(doneCh) // don't need to block any jobs from completing
+		startedCh := make(chan int64)
+		AddWorker(config.Workers, makeAwaitWorker[JobArgs](startedCh, doneCh))
 
 		client := newTestClient(t, bundle.dbPool, config)
 
@@ -2301,8 +2348,8 @@ func Test_Client_InsertManyFast(t *testing.T) {
 		riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
 
 		count, err := client.InsertManyFast(ctx, []InsertManyParams{
-			{Args: callbackArgs{}},
-			{Args: callbackArgs{}},
+			{Args: JobArgs{}},
+			{Args: JobArgs{}},
 		})
 		require.NoError(t, err)
 		require.Equal(t, 2, count)
@@ -2317,7 +2364,7 @@ func Test_Client_InsertManyFast(t *testing.T) {
 		// Note: we specifically use a different queue to ensure that the notify
 		// limiter is immediately to fire on this queue.
 		count, err = client.InsertManyFast(ctx, []InsertManyParams{
-			{Args: callbackArgs{}, InsertOpts: &InsertOpts{Queue: "another_queue"}},
+			{Args: JobArgs{}, InsertOpts: &InsertOpts{Queue: "another_queue"}},
 		})
 		require.NoError(t, err)
 		require.Equal(t, 1, count)
@@ -2340,10 +2387,9 @@ func Test_Client_InsertManyFast(t *testing.T) {
 
 		_, bundle := setup(t)
 
-		config := newTestConfig(t, nil)
+		config := newTestConfig(t, bundle.schema)
 		config.FetchCooldown = 5 * time.Second
 		config.FetchPollInterval = 5 * time.Second
-		config.Schema = bundle.schema
 
 		client := newTestClient(t, bundle.dbPool, config)
 
@@ -2500,11 +2546,9 @@ func Test_Client_InsertManyFastTx(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-		config.Schema = schema
-
-		client := newTestClient(t, dbPool, config)
 
 		tx, err := dbPool.Begin(ctx)
 		require.NoError(t, err)
@@ -2690,10 +2734,9 @@ func Test_Client_InsertMany(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-		config.Schema = schema
-		client := newTestClient(t, dbPool, config)
 
 		return client, &testBundle{
 			dbPool: dbPool,
@@ -2767,20 +2810,25 @@ func Test_Client_InsertMany(t *testing.T) {
 		t.Parallel()
 
 		ctx := context.Background()
+
 		_, bundle := setup(t)
 
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		t.Cleanup(cancel)
 
-		doneCh := make(chan struct{})
-		close(doneCh) // don't need to block any jobs from completing
-		startedCh := make(chan int64)
-
-		config := newTestConfig(t, makeAwaitCallback(startedCh, doneCh))
+		config := newTestConfig(t, bundle.schema)
 		config.FetchCooldown = 20 * time.Millisecond
 		config.FetchPollInterval = 20 * time.Second // essentially disable polling
 		config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: 2}, "another_queue": {MaxWorkers: 1}}
-		config.Schema = bundle.schema
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		doneCh := make(chan struct{})
+		close(doneCh) // don't need to block any jobs from completing
+		startedCh := make(chan int64)
+		AddWorker(config.Workers, makeAwaitWorker[JobArgs](startedCh, doneCh))
 
 		client := newTestClient(t, bundle.dbPool, config)
 
@@ -2788,8 +2836,8 @@ func Test_Client_InsertMany(t *testing.T) {
 		riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
 
 		results, err := client.InsertMany(ctx, []InsertManyParams{
-			{Args: callbackArgs{}},
-			{Args: callbackArgs{}},
+			{Args: JobArgs{}},
+			{Args: JobArgs{}},
 		})
 		require.NoError(t, err)
 		require.Len(t, results, 2)
@@ -2804,7 +2852,7 @@ func Test_Client_InsertMany(t *testing.T) {
 		// Note: we specifically use a different queue to ensure that the notify
 		// limiter is immediately to fire on this queue.
 		results, err = client.InsertMany(ctx, []InsertManyParams{
-			{Args: callbackArgs{}, InsertOpts: &InsertOpts{Queue: "another_queue"}},
+			{Args: JobArgs{}, InsertOpts: &InsertOpts{Queue: "another_queue"}},
 		})
 		require.NoError(t, err)
 		require.Len(t, results, 1)
@@ -2827,10 +2875,9 @@ func Test_Client_InsertMany(t *testing.T) {
 
 		_, bundle := setup(t)
 
-		config := newTestConfig(t, nil)
+		config := newTestConfig(t, bundle.schema)
 		config.FetchCooldown = 5 * time.Second
 		config.FetchPollInterval = 5 * time.Second
-		config.Schema = bundle.schema
 
 		client := newTestClient(t, bundle.dbPool, config)
 
@@ -2988,10 +3035,9 @@ func Test_Client_InsertManyTx(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-		config.Schema = schema
-		client := newTestClient(t, dbPool, config)
 
 		tx, err := dbPool.Begin(ctx)
 		require.NoError(t, err)
@@ -3126,9 +3172,9 @@ func Test_Client_InsertManyTx(t *testing.T) {
 		t.Parallel()
 
 		_, bundle := setup(t)
-		config := newTestConfig(t, nil)
+
+		config := newTestConfig(t, bundle.schema)
 		config.Queues = nil
-		config.Schema = bundle.schema
 
 		insertCalled := false
 		var innerResults []*rivertype.JobInsertResult
@@ -3170,9 +3216,8 @@ func Test_Client_InsertManyTx(t *testing.T) {
 
 		_, bundle := setup(t)
 
-		config := newTestConfig(t, nil)
+		config := newTestConfig(t, bundle.schema)
 		config.Queues = nil
-		config.Schema = bundle.schema
 
 		type MiddlewareWithBaseService struct {
 			baseservice.BaseService
@@ -3307,11 +3352,9 @@ func Test_Client_JobGet(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-		config.Schema = schema
-
-		client := newTestClient(t, dbPool, config)
 
 		return client, &testBundle{}
 	}
@@ -3360,11 +3403,9 @@ func Test_Client_JobList(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-		config.Schema = schema
-
-		client := newTestClient(t, dbPool, config)
 
 		return client, &testBundle{
 			exec:   client.driver.GetExecutor(),
@@ -3679,11 +3720,9 @@ func Test_Client_JobRetry(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-		config.Schema = schema
-
-		client := newTestClient(t, dbPool, config)
 
 		return client, &testBundle{dbPool: dbPool}
 	}
@@ -3764,19 +3803,19 @@ func Test_Client_ErrorHandler(t *testing.T) {
 		}
 	}
 
-	requireInsert := func(ctx context.Context, client *Client[pgx.Tx]) *rivertype.JobRow {
-		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
-		require.NoError(t, err)
-		return insertRes.Job
-	}
-
 	t.Run("ErrorHandler", func(t *testing.T) {
 		t.Parallel()
 
+		config := newTestConfig(t, "")
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
 		handlerErr := errors.New("job error")
-		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 			return handlerErr
-		})
+		}))
 
 		var errorHandlerCalled bool
 		config.ErrorHandler = &testErrorHandler{
@@ -3789,7 +3828,9 @@ func Test_Client_ErrorHandler(t *testing.T) {
 
 		client, bundle := setup(t, config)
 
-		requireInsert(ctx, client)
+		_, err := client.Insert(ctx, JobArgs{}, nil)
+		require.NoError(t, err)
+
 		riversharedtest.WaitOrTimeout(t, bundle.subscribeChan)
 
 		require.True(t, errorHandlerCalled)
@@ -3798,7 +3839,7 @@ func Test_Client_ErrorHandler(t *testing.T) {
 	t.Run("ErrorHandler_UnknownJobKind", func(t *testing.T) {
 		t.Parallel()
 
-		config := newTestConfig(t, nil)
+		config := newTestConfig(t, "")
 
 		var errorHandlerCalled bool
 		config.ErrorHandler = &testErrorHandler{
@@ -3831,9 +3872,15 @@ func Test_Client_ErrorHandler(t *testing.T) {
 	t.Run("PanicHandler", func(t *testing.T) {
 		t.Parallel()
 
-		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+		config := newTestConfig(t, "")
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 			panic("panic val")
-		})
+		}))
 
 		var panicHandlerCalled bool
 		config.ErrorHandler = &testErrorHandler{
@@ -3846,7 +3893,9 @@ func Test_Client_ErrorHandler(t *testing.T) {
 
 		client, bundle := setup(t, config)
 
-		requireInsert(ctx, client)
+		_, err := client.Insert(ctx, JobArgs{}, nil)
+		require.NoError(t, err)
+
 		riversharedtest.WaitOrTimeout(t, bundle.subscribeChan)
 
 		require.True(t, panicHandlerCalled)
@@ -3895,7 +3944,7 @@ func Test_Client_Maintenance(t *testing.T) {
 	t.Run("JobCleaner", func(t *testing.T) {
 		t.Parallel()
 
-		config := newTestConfig(t, nil)
+		config := newTestConfig(t, "")
 		config.CancelledJobRetentionPeriod = 1 * time.Hour
 		config.CompletedJobRetentionPeriod = 1 * time.Hour
 		config.DiscardedJobRetentionPeriod = 1 * time.Hour
@@ -3951,7 +4000,7 @@ func Test_Client_Maintenance(t *testing.T) {
 	t.Run("JobRescuer", func(t *testing.T) {
 		t.Parallel()
 
-		config := newTestConfig(t, nil)
+		config := newTestConfig(t, "")
 		config.RescueStuckJobsAfter = 5 * time.Minute
 
 		client, bundle := setup(t, config)
@@ -4015,7 +4064,7 @@ func Test_Client_Maintenance(t *testing.T) {
 	t.Run("JobScheduler", func(t *testing.T) {
 		t.Parallel()
 
-		config := newTestConfig(t, nil)
+		config := newTestConfig(t, "")
 		config.Queues = map[string]QueueConfig{"another_queue": {MaxWorkers: 1}} // don't work jobs on the default queue we're using in this test
 
 		client, bundle := setup(t, config)
@@ -4069,7 +4118,7 @@ func Test_Client_Maintenance(t *testing.T) {
 	t.Run("PeriodicJobEnqueuerWithInsertOpts", func(t *testing.T) {
 		t.Parallel()
 
-		config := newTestConfig(t, nil)
+		config := newTestConfig(t, "")
 
 		worker := &periodicJobWorker{}
 		AddWorker(config.Workers, worker)
@@ -4097,7 +4146,7 @@ func Test_Client_Maintenance(t *testing.T) {
 	t.Run("PeriodicJobEnqueuerNoInsertOpts", func(t *testing.T) {
 		t.Parallel()
 
-		config := newTestConfig(t, nil)
+		config := newTestConfig(t, "")
 
 		worker := &periodicJobWorker{}
 		AddWorker(config.Workers, worker)
@@ -4126,7 +4175,7 @@ func Test_Client_Maintenance(t *testing.T) {
 	t.Run("PeriodicJobConstructorReturningNil", func(t *testing.T) {
 		t.Parallel()
 
-		config := newTestConfig(t, nil)
+		config := newTestConfig(t, "")
 
 		worker := &periodicJobWorker{}
 		AddWorker(config.Workers, worker)
@@ -4160,10 +4209,8 @@ func Test_Client_Maintenance(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
 		)
-
-		config := newTestConfig(t, nil)
-		config.Schema = schema
 
 		worker := &periodicJobWorker{}
 		AddWorker(config.Workers, worker)
@@ -4202,10 +4249,8 @@ func Test_Client_Maintenance(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
 		)
-
-		config := newTestConfig(t, nil)
-		config.Schema = schema
 
 		worker := &periodicJobWorker{}
 		AddWorker(config.Workers, worker)
@@ -4267,7 +4312,7 @@ func Test_Client_Maintenance(t *testing.T) {
 	t.Run("PeriodicJobEnqueuerUsesMiddleware", func(t *testing.T) {
 		t.Parallel()
 
-		config := newTestConfig(t, nil)
+		config := newTestConfig(t, "")
 
 		worker := &periodicJobWorker{}
 		AddWorker(config.Workers, worker)
@@ -4307,13 +4352,11 @@ func Test_Client_Maintenance(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-
-		config := newTestConfig(t, nil)
-		config.Schema = schema
-
-		client := newTestClient(t, dbPool, config)
 		client.testSignals.Init()
+
 		exec := client.driver.GetExecutor()
 
 		deleteHorizon := time.Now().Add(-maintenance.QueueRetentionPeriodDefault)
@@ -4355,7 +4398,7 @@ func Test_Client_Maintenance(t *testing.T) {
 	t.Run("Reindexer", func(t *testing.T) {
 		t.Parallel()
 
-		config := newTestConfig(t, nil)
+		config := newTestConfig(t, "")
 		config.ReindexerSchedule = &runOnceSchedule{}
 
 		client, _ := setup(t, config)
@@ -4397,11 +4440,9 @@ func Test_Client_QueueGet(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-		config.Schema = schema
-
-		client := newTestClient(t, dbPool, config)
 
 		return client, &testBundle{
 			schema: schema,
@@ -4454,11 +4495,9 @@ func Test_Client_QueueGetTx(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-		config.Schema = schema
-
-		client := newTestClient(t, dbPool, config)
 
 		tx, err := dbPool.Begin(ctx)
 		require.NoError(t, err)
@@ -4516,11 +4555,9 @@ func Test_Client_QueueList(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-		config.Schema = schema
-
-		client := newTestClient(t, dbPool, config)
 
 		return client, &testBundle{
 			schema: schema,
@@ -4593,11 +4630,9 @@ func Test_Client_QueueListTx(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-		config.Schema = schema
-
-		client := newTestClient(t, dbPool, config)
 
 		tx, err := dbPool.Begin(ctx)
 		require.NoError(t, err)
@@ -4649,11 +4684,9 @@ func Test_Client_QueueUpdate(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-		config.Schema = schema
-
-		client := newTestClient(t, dbPool, config)
 
 		return client, &testBundle{
 			schema: schema,
@@ -4751,11 +4784,9 @@ func Test_Client_QueueUpdateTx(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-		config.Schema = schema
-
-		client := newTestClient(t, dbPool, config)
 
 		tx, err := dbPool.Begin(ctx)
 		require.NoError(t, err)
@@ -4801,12 +4832,6 @@ func Test_Client_RetryPolicy(t *testing.T) {
 
 	ctx := context.Background()
 
-	requireInsert := func(ctx context.Context, client *Client[pgx.Tx]) *rivertype.JobRow {
-		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
-		require.NoError(t, err)
-		return insertRes.Job
-	}
-
 	t.Run("RetryUntilDiscarded", func(t *testing.T) {
 		t.Parallel()
 
@@ -4814,16 +4839,20 @@ func Test_Client_RetryPolicy(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
 		)
-
-		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
-			return errors.New("job error")
-		})
-		config.Schema = schema
 
 		// The default policy would work too, but this takes some variability
 		// out of it to make comparisons easier.
 		config.RetryPolicy = &retrypolicytest.RetryPolicyNoJitter{}
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			return errors.New("job error")
+		}))
 
 		client := newTestClient(t, dbPool, config)
 
@@ -4835,12 +4864,14 @@ func Test_Client_RetryPolicy(t *testing.T) {
 
 		originalJobs := make([]*rivertype.JobRow, rivercommon.MaxAttemptsDefault)
 		for i := range originalJobs {
-			job := requireInsert(ctx, client)
+			insertRes, err := client.Insert(ctx, JobArgs{}, nil)
+			require.NoError(t, err)
+
 			// regression protection to ensure we're testing the right number of jobs:
-			require.Equal(t, rivercommon.MaxAttemptsDefault, job.MaxAttempts)
+			require.Equal(t, rivercommon.MaxAttemptsDefault, insertRes.Job.MaxAttempts)
 
 			updatedJob, err := client.driver.GetExecutor().JobUpdate(ctx, &riverdriver.JobUpdateParams{
-				ID:                  job.ID,
+				ID:                  insertRes.Job.ID,
 				AttemptedAtDoUpdate: true,
 				AttemptedAt:         &now, // we want a value here, but it'll be overwritten as jobs are locked by the producer
 				AttemptDoUpdate:     true,
@@ -4924,16 +4955,21 @@ func Test_Client_Subscribe(t *testing.T) {
 
 	ctx := context.Background()
 
+	type JobArgs struct {
+		JobArgsReflectKind[JobArgs]
+		Name string `json:"name"`
+	}
+
 	keyEventsByName := func(events []*Event) map[string]*Event {
 		return sliceutil.KeyBy(events, func(event *Event) (string, *Event) {
-			var args callbackArgs
+			var args JobArgs
 			require.NoError(t, json.Unmarshal(event.Job.EncodedArgs, &args))
 			return args.Name, event
 		})
 	}
 
 	requireInsert := func(ctx context.Context, client *Client[pgx.Tx], jobName string) *rivertype.JobRow {
-		insertRes, err := client.Insert(ctx, callbackArgs{Name: jobName}, nil)
+		insertRes, err := client.Insert(ctx, JobArgs{Name: jobName}, nil)
 		require.NoError(t, err)
 		return insertRes.Job
 	}
@@ -4945,17 +4981,17 @@ func Test_Client_Subscribe(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
 		)
 
 		// Fail/succeed jobs based on their name so we can get a mix of both to
 		// verify.
-		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 			if strings.HasPrefix(job.Args.Name, "failed") {
 				return errors.New("job error")
 			}
 			return nil
-		})
-		config.Schema = schema
+		}))
 
 		client := newTestClient(t, dbPool, config)
 
@@ -5020,15 +5056,15 @@ func Test_Client_Subscribe(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
 		)
 
-		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 			if strings.HasPrefix(job.Args.Name, "failed") {
 				return errors.New("job error")
 			}
 			return nil
-		})
-		config.Schema = schema
+		}))
 
 		client := newTestClient(t, dbPool, config)
 
@@ -5068,15 +5104,15 @@ func Test_Client_Subscribe(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
 		)
 
-		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 			if strings.HasPrefix(job.Args.Name, "failed") {
 				return errors.New("job error")
 			}
 			return nil
-		})
-		config.Schema = schema
+		}))
 
 		client := newTestClient(t, dbPool, config)
 
@@ -5116,12 +5152,12 @@ func Test_Client_Subscribe(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
 		)
 
-		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 			return nil
-		})
-		config.Schema = schema
+		}))
 
 		client := newTestClient(t, dbPool, config)
 
@@ -5137,12 +5173,12 @@ func Test_Client_Subscribe(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
 		)
 
-		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 			return nil
-		})
-		config.Schema = schema
+		}))
 
 		client := newTestClient(t, dbPool, config)
 
@@ -5163,10 +5199,9 @@ func Test_Client_Subscribe(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
 		)
-
-		config := &Config{}
-		config.Schema = schema
+		config.Queues = nil
 
 		client := newTestClient(t, dbPool, config)
 
@@ -5184,20 +5219,6 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 
 	ctx := context.Background()
 
-	keyEventsByName := func(events []*Event) map[string]*Event {
-		return sliceutil.KeyBy(events, func(event *Event) (string, *Event) {
-			var args callbackArgs
-			require.NoError(t, json.Unmarshal(event.Job.EncodedArgs, &args))
-			return args.Name, event
-		})
-	}
-
-	requireInsert := func(ctx context.Context, client *Client[pgx.Tx], jobName string) *rivertype.JobRow {
-		insertRes, err := client.Insert(ctx, callbackArgs{Name: jobName}, nil)
-		require.NoError(t, err)
-		return insertRes.Job
-	}
-
 	t.Run("Success", func(t *testing.T) {
 		t.Parallel()
 
@@ -5205,17 +5226,22 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
 		)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+			Name string `json:"name"`
+		}
 
 		// Fail/succeed jobs based on their name so we can get a mix of both to
 		// verify.
-		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 			if strings.HasPrefix(job.Args.Name, "failed") {
 				return errors.New("job error")
 			}
 			return nil
-		})
-		config.Schema = schema
+		}))
 
 		client := newTestClient(t, dbPool, config)
 
@@ -5223,6 +5249,20 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 			Kinds: []EventKind{EventKindJobCompleted, EventKindJobFailed},
 		})
 		t.Cleanup(cancel)
+
+		keyEventsByName := func(events []*Event) map[string]*Event {
+			return sliceutil.KeyBy(events, func(event *Event) (string, *Event) {
+				var args JobArgs
+				require.NoError(t, json.Unmarshal(event.Job.EncodedArgs, &args))
+				return args.Name, event
+			})
+		}
+
+		requireInsert := func(ctx context.Context, client *Client[pgx.Tx], jobName string) *rivertype.JobRow {
+			insertRes, err := client.Insert(ctx, JobArgs{Name: jobName}, nil)
+			require.NoError(t, err)
+			return insertRes.Job
+		}
 
 		jobCompleted1 := requireInsert(ctx, client, "completed1")
 		jobCompleted2 := requireInsert(ctx, client, "completed2")
@@ -5282,14 +5322,9 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-
-		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
-			return nil
-		})
-		config.Schema = schema
-
-		client := newTestClient(t, dbPool, config)
 
 		type JobArgs struct {
 			JobArgsReflectKind[JobArgs]
@@ -5365,12 +5400,8 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
 		)
-
-		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
-			return nil
-		})
-		config.Schema = schema
 
 		client := newTestClient(t, dbPool, config)
 
@@ -5388,12 +5419,8 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
 		)
-
-		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
-			return nil
-		})
-		config.Schema = schema
 
 		client := newTestClient(t, dbPool, config)
 
@@ -5409,39 +5436,41 @@ func Test_Client_InsertTriggersImmediateWork(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	require := require.New(t)
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	t.Cleanup(cancel)
-
-	doneCh := make(chan struct{})
-	close(doneCh) // don't need to block any jobs from completing
-	startedCh := make(chan int64)
 
 	var (
 		dbPool = riversharedtest.DBPool(ctx, t)
 		driver = riverpgxv5.New(dbPool)
 		schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+		config = newTestConfig(t, schema)
 	)
-
-	config := newTestConfig(t, makeAwaitCallback(startedCh, doneCh))
 	config.FetchCooldown = 20 * time.Millisecond
 	config.FetchPollInterval = 20 * time.Second // essentially disable polling
 	config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}, "another_queue": {MaxWorkers: 1}}
-	config.Schema = schema
+
+	type JobArgs struct {
+		JobArgsReflectKind[JobArgs]
+	}
+
+	doneCh := make(chan struct{})
+	close(doneCh) // don't need to block any jobs from completing
+	startedCh := make(chan int64)
+	AddWorker(config.Workers, makeAwaitWorker[JobArgs](startedCh, doneCh))
 
 	client := newTestClient(t, dbPool, config)
 
 	startClient(ctx, t, client)
 	riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
 
-	insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
-	require.NoError(err)
+	insertRes, err := client.Insert(ctx, JobArgs{}, nil)
+	require.NoError(t, err)
 
 	// Wait for the client to be ready by waiting for a job to be executed:
 	select {
 	case jobID := <-startedCh:
-		require.Equal(insertRes.Job.ID, jobID)
+		require.Equal(t, insertRes.Job.ID, jobID)
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for warmup job to start")
 	}
@@ -5452,19 +5481,19 @@ func Test_Client_InsertTriggersImmediateWork(t *testing.T) {
 	//
 	// Note: we specifically use a different queue to ensure that the notify
 	// limiter is immediately to fire on this queue.
-	insertRes2, err := client.Insert(ctx, callbackArgs{}, &InsertOpts{Queue: "another_queue"})
-	require.NoError(err)
+	insertRes2, err := client.Insert(ctx, JobArgs{}, &InsertOpts{Queue: "another_queue"})
+	require.NoError(t, err)
 
 	select {
 	case jobID := <-startedCh:
-		require.Equal(insertRes2.Job.ID, jobID)
+		require.Equal(t, insertRes2.Job.ID, jobID)
 	// As long as this is meaningfully shorter than the poll interval, we can be
 	// sure the re-fetch came from listen/notify.
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for 2nd job to start")
 	}
 
-	require.NoError(client.Stop(ctx))
+	require.NoError(t, client.Stop(ctx))
 }
 
 func Test_Client_InsertNotificationsAreDeduplicatedAndDebounced(t *testing.T) {
@@ -5476,16 +5505,21 @@ func Test_Client_InsertNotificationsAreDeduplicatedAndDebounced(t *testing.T) {
 		dbPool = riversharedtest.DBPool(ctx, t)
 		driver = riverpgxv5.New(dbPool)
 		schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+		config = newTestConfig(t, schema)
 	)
-
-	config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
-		return nil
-	})
 	config.FetchPollInterval = 20 * time.Second // essentially disable polling
 	config.FetchCooldown = time.Second
 	config.schedulerInterval = 20 * time.Second // quiet scheduler
 	config.Queues = map[string]QueueConfig{"queue1": {MaxWorkers: 1}, "queue2": {MaxWorkers: 1}, "queue3": {MaxWorkers: 1}}
-	config.Schema = schema
+
+	type JobArgs struct {
+		JobArgsReflectKind[JobArgs]
+	}
+
+	AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+		return nil
+	}))
+
 	client := newTestClient(t, dbPool, config)
 
 	startClient(ctx, t, client)
@@ -5512,7 +5546,7 @@ func Test_Client_InsertNotificationsAreDeduplicatedAndDebounced(t *testing.T) {
 	expectImmediateNotification := func(t *testing.T, queue string) {
 		t.Helper()
 		config.Logger.Info("inserting " + queue + " job")
-		_, err = client.Insert(ctx, callbackArgs{}, &InsertOpts{Queue: queue})
+		_, err = client.Insert(ctx, JobArgs{}, &InsertOpts{Queue: queue})
 		require.NoError(t, err)
 		notif := riversharedtest.WaitOrTimeout(t, notifyCh)
 		require.Equal(t, notifier.NotificationTopicInsert, notif.topic)
@@ -5525,7 +5559,7 @@ func Test_Client_InsertNotificationsAreDeduplicatedAndDebounced(t *testing.T) {
 
 	for range 5 {
 		config.Logger.Info("inserting queue1 job")
-		_, err = client.Insert(ctx, callbackArgs{}, &InsertOpts{Queue: "queue1"})
+		_, err = client.Insert(ctx, JobArgs{}, &InsertOpts{Queue: "queue1"})
 		require.NoError(t, err)
 	}
 	// None of these should fire an insert notification due to debouncing:
@@ -5582,27 +5616,32 @@ func Test_Client_JobCompletion(t *testing.T) {
 	t.Run("JobThatReturnsNilIsCompleted", func(t *testing.T) {
 		t.Parallel()
 
-		require := require.New(t)
-		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+		config := newTestConfig(t, "")
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 			return nil
-		})
+		}))
 
 		client, bundle := setup(t, config)
 
 		now := client.baseService.Time.StubNowUTC(time.Now().UTC())
 
-		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
-		require.NoError(err)
+		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
+		require.NoError(t, err)
 
 		event := riversharedtest.WaitOrTimeout(t, bundle.subscribeChan)
-		require.Equal(insertRes.Job.ID, event.Job.ID)
-		require.Equal(rivertype.JobStateCompleted, event.Job.State)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+		require.Equal(t, rivertype.JobStateCompleted, event.Job.State)
 
 		reloadedJob, err := client.JobGet(ctx, insertRes.Job.ID)
-		require.NoError(err)
+		require.NoError(t, err)
 
-		require.Equal(rivertype.JobStateCompleted, reloadedJob.State)
-		require.WithinDuration(now, *reloadedJob.FinalizedAt, 2*time.Second)
+		require.Equal(t, rivertype.JobStateCompleted, reloadedJob.State)
+		require.WithinDuration(t, now, *reloadedJob.FinalizedAt, time.Microsecond)
 	})
 
 	t.Run("JobThatIsAlreadyCompletedIsNotAlteredByCompleter", func(t *testing.T) {
@@ -5610,7 +5649,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 
 		now := time.Now().UTC()
 
-		client, bundle := setup(t, newTestConfig(t, nil))
+		client, bundle := setup(t, newTestConfig(t, ""))
 
 		type JobArgs struct {
 			JobArgsReflectKind[JobArgs]
@@ -5646,10 +5685,15 @@ func Test_Client_JobCompletion(t *testing.T) {
 	t.Run("JobThatReturnsErrIsRetryable", func(t *testing.T) {
 		t.Parallel()
 
-		require := require.New(t)
-		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+		config := newTestConfig(t, "")
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 			return errors.New("oops")
-		})
+		}))
 		config.RetryPolicy = &retrypolicytest.RetryPolicyNoJitter{}
 
 		retryPolicy := &retrypolicytest.RetryPolicySlow{} // make sure job isn't set back to available/running by the time we check it below
@@ -5659,46 +5703,51 @@ func Test_Client_JobCompletion(t *testing.T) {
 
 		now := client.baseService.Time.StubNowUTC(time.Now().UTC())
 
-		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
-		require.NoError(err)
+		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
+		require.NoError(t, err)
 
 		event := riversharedtest.WaitOrTimeout(t, bundle.subscribeChan)
-		require.Equal(insertRes.Job.ID, event.Job.ID)
-		require.Equal(rivertype.JobStateRetryable, event.Job.State)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+		require.Equal(t, rivertype.JobStateRetryable, event.Job.State)
 
 		reloadedJob, err := client.JobGet(ctx, insertRes.Job.ID)
-		require.NoError(err)
+		require.NoError(t, err)
 
-		require.Equal(rivertype.JobStateRetryable, reloadedJob.State)
-		require.WithinDuration(now.Add(retryPolicy.Interval()), reloadedJob.ScheduledAt, time.Microsecond)
-		require.Nil(reloadedJob.FinalizedAt)
+		require.Equal(t, rivertype.JobStateRetryable, reloadedJob.State)
+		require.WithinDuration(t, now.Add(retryPolicy.Interval()), reloadedJob.ScheduledAt, time.Microsecond)
+		require.Nil(t, reloadedJob.FinalizedAt)
 	})
 
 	t.Run("JobThatReturnsJobCancelErrorIsImmediatelyCancelled", func(t *testing.T) {
 		t.Parallel()
 
-		require := require.New(t)
-		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
+		config := newTestConfig(t, "")
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 			return JobCancel(errors.New("oops"))
-		})
+		}))
 
 		client, bundle := setup(t, config)
 
 		now := client.baseService.Time.StubNowUTC(time.Now().UTC())
 
-		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
-		require.NoError(err)
+		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
+		require.NoError(t, err)
 
 		event := riversharedtest.WaitOrTimeout(t, bundle.subscribeChan)
-		require.Equal(insertRes.Job.ID, event.Job.ID)
-		require.Equal(rivertype.JobStateCancelled, event.Job.State)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+		require.Equal(t, rivertype.JobStateCancelled, event.Job.State)
 
 		reloadedJob, err := client.JobGet(ctx, insertRes.Job.ID)
-		require.NoError(err)
+		require.NoError(t, err)
 
-		require.Equal(rivertype.JobStateCancelled, reloadedJob.State)
-		require.NotNil(reloadedJob.FinalizedAt)
-		require.WithinDuration(now, *reloadedJob.FinalizedAt, time.Microsecond)
+		require.Equal(t, rivertype.JobStateCancelled, reloadedJob.State)
+		require.NotNil(t, reloadedJob.FinalizedAt)
+		require.WithinDuration(t, now, *reloadedJob.FinalizedAt, time.Microsecond)
 	})
 
 	t.Run("JobThatIsAlreadyDiscardedIsNotAlteredByCompleter", func(t *testing.T) {
@@ -5706,7 +5755,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 
 		now := time.Now().UTC()
 
-		client, bundle := setup(t, newTestConfig(t, nil))
+		client, bundle := setup(t, newTestConfig(t, ""))
 
 		type JobArgs struct {
 			JobArgsReflectKind[JobArgs]
@@ -5744,7 +5793,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 	t.Run("JobThatIsCompletedManuallyIsNotTouchedByCompleter", func(t *testing.T) {
 		t.Parallel()
 
-		client, bundle := setup(t, newTestConfig(t, nil))
+		client, bundle := setup(t, newTestConfig(t, ""))
 
 		now := client.baseService.Time.StubNowUTC(time.Now().UTC())
 
@@ -5797,7 +5846,6 @@ func Test_Client_UnknownJobKindErrorsTheJob(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	require := require.New(t)
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	t.Cleanup(cancel)
@@ -5805,35 +5853,35 @@ func Test_Client_UnknownJobKindErrorsTheJob(t *testing.T) {
 	doneCh := make(chan struct{})
 	close(doneCh) // don't need to block any jobs from completing
 
-	config := newTestConfig(t, nil)
+	config := newTestConfig(t, "")
 	client := runNewTestClient(ctx, t, config)
 
 	subscribeChan, cancel := client.Subscribe(EventKindJobFailed)
 	t.Cleanup(cancel)
 
 	insertParams, err := insertParamsFromConfigArgsAndOptions(&client.baseService.Archetype, config, unregisteredJobArgs{}, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 	insertedResults, err := client.driver.GetExecutor().JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
 		Jobs:   []*riverdriver.JobInsertFastParams{(*riverdriver.JobInsertFastParams)(insertParams)},
 		Schema: client.config.Schema,
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	insertedResult := insertedResults[0]
 
 	event := riversharedtest.WaitOrTimeout(t, subscribeChan)
-	require.Equal(insertedResult.Job.ID, event.Job.ID)
-	require.Equal("RandomWorkerNameThatIsNeverRegistered", insertedResult.Job.Kind)
-	require.Len(event.Job.Errors, 1)
-	require.Equal((&UnknownJobKindError{Kind: "RandomWorkerNameThatIsNeverRegistered"}).Error(), event.Job.Errors[0].Error)
-	require.Equal(rivertype.JobStateRetryable, event.Job.State)
+	require.Equal(t, insertedResult.Job.ID, event.Job.ID)
+	require.Equal(t, "RandomWorkerNameThatIsNeverRegistered", insertedResult.Job.Kind)
+	require.Len(t, event.Job.Errors, 1)
+	require.Equal(t, (&UnknownJobKindError{Kind: "RandomWorkerNameThatIsNeverRegistered"}).Error(), event.Job.Errors[0].Error)
+	require.Equal(t, rivertype.JobStateRetryable, event.Job.State)
 	// Ensure that ScheduledAt was updated with next run time:
-	require.True(event.Job.ScheduledAt.After(insertedResult.Job.ScheduledAt))
+	require.True(t, event.Job.ScheduledAt.After(insertedResult.Job.ScheduledAt))
 	// It's the 1st attempt that failed. Attempt won't be incremented again until
 	// the job gets fetched a 2nd time.
-	require.Equal(1, event.Job.Attempt)
+	require.Equal(t, 1, event.Job.Attempt)
 
-	require.NoError(client.Stop(ctx))
+	require.NoError(t, client.Stop(ctx))
 }
 
 func Test_Client_Start_Error(t *testing.T) {
@@ -5848,11 +5896,9 @@ func Test_Client_Start_Error(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
 		)
-
-		config := newTestConfig(t, nil)
 		config.Queues = nil
-		config.Schema = schema
 		config.Workers = nil
 
 		client := newTestClient(t, dbPool, config)
@@ -5867,10 +5913,8 @@ func Test_Client_Start_Error(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
 		)
-
-		config := newTestConfig(t, nil)
-		config.Schema = schema
 		config.Workers = NewWorkers() // initialized, but empty
 
 		client := newTestClient(t, dbPool, config)
@@ -5887,7 +5931,7 @@ func Test_Client_Start_Error(t *testing.T) {
 		dbPool, err := pgxpool.NewWithConfig(ctx, dbConfig)
 		require.NoError(t, err)
 
-		config := newTestConfig(t, nil)
+		config := newTestConfig(t, "")
 
 		client := newTestClient(t, dbPool, config)
 
@@ -5909,11 +5953,10 @@ func Test_NewClient_BaseServiceName(t *testing.T) {
 		dbPool = riversharedtest.DBPool(ctx, t)
 		driver = riverpgxv5.New(dbPool)
 		schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-		config = newTestConfig(t, nil)
+		config = newTestConfig(t, schema)
+		client = newTestClient(t, dbPool, config)
 	)
-	config.Schema = schema
 
-	client := newTestClient(t, dbPool, config)
 	// Ensure we get the clean name "Client" instead of the fully qualified name
 	// with generic type param:
 	require.Equal(t, "Client", client.baseService.Name)
@@ -5921,34 +5964,40 @@ func Test_NewClient_BaseServiceName(t *testing.T) {
 
 func Test_NewClient_ClientIDWrittenToJobAttemptedByWhenFetched(t *testing.T) {
 	t.Parallel()
-	require := require.New(t)
-	ctx := context.Background()
-	doneCh := make(chan struct{})
-	startedCh := make(chan *Job[callbackArgs])
 
-	callback := func(ctx context.Context, job *Job[callbackArgs]) error {
+	ctx := context.Background()
+
+	config := newTestConfig(t, "")
+
+	type JobArgs struct {
+		JobArgsReflectKind[JobArgs]
+	}
+
+	doneCh := make(chan struct{})
+	startedCh := make(chan *Job[JobArgs])
+	AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 		startedCh <- job
 		<-doneCh
 		return nil
-	}
+	}))
 
-	client := runNewTestClient(ctx, t, newTestConfig(t, callback))
+	client := runNewTestClient(ctx, t, config)
 	t.Cleanup(func() { close(doneCh) })
 
 	// enqueue job:
 	insertCtx, insertCancel := context.WithTimeout(ctx, 5*time.Second)
 	t.Cleanup(insertCancel)
-	insertRes, err := client.Insert(insertCtx, callbackArgs{}, nil)
-	require.NoError(err)
-	require.Nil(insertRes.Job.AttemptedAt)
-	require.Empty(insertRes.Job.AttemptedBy)
+	insertRes, err := client.Insert(insertCtx, JobArgs{}, nil)
+	require.NoError(t, err)
+	require.Nil(t, insertRes.Job.AttemptedAt)
+	require.Empty(t, insertRes.Job.AttemptedBy)
 
-	var startedJob *Job[callbackArgs]
+	var startedJob *Job[JobArgs]
 	select {
 	case startedJob = <-startedCh:
-		require.Equal([]string{client.ID()}, startedJob.AttemptedBy)
-		require.NotNil(startedJob.AttemptedAt)
-		require.WithinDuration(time.Now().UTC(), *startedJob.AttemptedAt, 2*time.Second)
+		require.Equal(t, []string{client.ID()}, startedJob.AttemptedBy)
+		require.NotNil(t, startedJob.AttemptedAt)
+		require.WithinDuration(t, time.Now().UTC(), *startedJob.AttemptedAt, 2*time.Second)
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for job to start")
 	}
@@ -6112,7 +6161,7 @@ func Test_NewClient_MissingParameters(t *testing.T) {
 	t.Run("ErrorOnDriverWithNoDatabasePoolAndQueues", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := NewClient(riverpgxv5.New(nil), newTestConfig(t, nil))
+		_, err := NewClient(riverpgxv5.New(nil), newTestConfig(t, ""))
 		require.ErrorIs(t, err, errMissingDatabasePoolWithQueues)
 	})
 }
@@ -6507,6 +6556,7 @@ func TestClient_JobTimeout(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+
 			ctx := context.Background()
 
 			testWorker := &timeoutTestWorker{doneCh: make(chan testWorkerDeadline)}
@@ -6514,7 +6564,7 @@ func TestClient_JobTimeout(t *testing.T) {
 			workers := NewWorkers()
 			AddWorker(workers, testWorker)
 
-			config := newTestConfig(t, nil)
+			config := newTestConfig(t, "")
 			config.JobTimeout = tt.clientJobTimeout
 			config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}}
 			config.Workers = workers
@@ -6546,7 +6596,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 	t.Parallel()
 
 	archetype := riversharedtest.BaseServiceArchetype(t)
-	config := newTestConfig(t, nil)
+	config := newTestConfig(t, "")
 
 	t.Run("Defaults", func(t *testing.T) {
 		t.Parallel()
@@ -6794,12 +6844,10 @@ func TestID(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
 
-		config := newTestConfig(t, nil)
-		config.Schema = schema
-
-		client := newTestClient(t, dbPool, config)
 		require.NotEmpty(t, client.ID())
 	})
 
@@ -6810,11 +6858,9 @@ func TestID(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
 		)
-
-		config := newTestConfig(t, nil)
 		config.ID = "my-client-id"
-		config.Schema = schema
 
 		client := newTestClient(t, dbPool, config)
 		require.Equal(t, "my-client-id", client.ID())
@@ -6978,11 +7024,9 @@ func TestUniqueOpts(t *testing.T) {
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
 			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
 		)
-		config.Schema = schema
-
-		client := newTestClient(t, dbPool, config)
 
 		// Tests that use ByPeriod below can be sensitive to intermittency if
 		// the tests run at say 23:59:59.998, then it's possible to accidentally
