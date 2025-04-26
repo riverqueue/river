@@ -3173,7 +3173,7 @@ func setupListener[TTx any](ctx context.Context, t *testing.T, driverWithPool fu
 
 	var (
 		driver, schema = driverWithPool(ctx, t)
-		listener       = driver.GetListener(schema)
+		listener       = driver.GetListener(&riverdriver.GetListenenerParams{Schema: schema})
 	)
 
 	return listener, &testListenerBundle[TTx]{
@@ -3266,7 +3266,7 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 
 		var (
 			driver, _ = driverWithPool(ctx, t)
-			listener  = driver.GetListener("my_custom_schema")
+			listener  = driver.GetListener(&riverdriver.GetListenenerParams{Schema: "my_custom_schema"})
 		)
 
 		require.Equal(t, "my_custom_schema", listener.Schema())
@@ -3286,7 +3286,7 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 
 		var (
 			driver, _ = driverWithPool(ctx, t)
-			listener  = driver.GetListener("")
+			listener  = driver.GetListener(&riverdriver.GetListenenerParams{Schema: ""})
 		)
 
 		connectListener(ctx, t, listener)
@@ -3298,7 +3298,7 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 
 		var (
 			driver, _ = driverWithPool(ctx, t)
-			listener  = driver.GetListener("")
+			listener  = driver.GetListener(&riverdriver.GetListenenerParams{Schema: ""})
 		)
 
 		connectListener(ctx, t, listener)

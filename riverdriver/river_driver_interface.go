@@ -53,7 +53,7 @@ type Driver[TTx any] interface {
 	// GetListener gets a listener for purposes of receiving notifications.
 	//
 	// API is not stable. DO NOT USE.
-	GetListener(schema string) Listener
+	GetListener(params *GetListenenerParams) Listener
 
 	// GetMigrationDefaultLines gets default migration lines that should be
 	// applied when using this driver. This is mainly used by riverdbtest to
@@ -207,6 +207,10 @@ type ExecutorTx interface {
 	//
 	// API is not stable. DO NOT USE.
 	Rollback(ctx context.Context) error
+}
+
+type GetListenenerParams struct {
+	Schema string
 }
 
 // Listener listens for notifications. In Postgres, this is a database

@@ -701,7 +701,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			// uses listen/notify. Instead, each service polls for changes it's
 			// interested in. e.g. Elector polls to see if leader has expired.
 			if !config.PollOnly {
-				client.notifier = notifier.New(archetype, driver.GetListener(config.Schema))
+				client.notifier = notifier.New(archetype, driver.GetListener(&riverdriver.GetListenenerParams{Schema: config.Schema}))
 				client.services = append(client.services, client.notifier)
 			}
 		} else {

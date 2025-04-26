@@ -61,8 +61,8 @@ func (d *Driver) GetExecutor() riverdriver.Executor {
 	return &Executor{templateReplaceWrapper{d.dbPool, &d.replacer}, d}
 }
 
-func (d *Driver) GetListener(schema string) riverdriver.Listener {
-	return &Listener{dbPool: d.dbPool, schema: schema}
+func (d *Driver) GetListener(params *riverdriver.GetListenenerParams) riverdriver.Listener {
+	return &Listener{dbPool: d.dbPool, schema: params.Schema}
 }
 
 func (d *Driver) GetMigrationDefaultLines() []string { return []string{riverdriver.MigrationLineMain} }

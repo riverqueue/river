@@ -54,7 +54,7 @@ func (d *Driver) GetExecutor() riverdriver.Executor {
 	return &Executor{d.dbPool, templateReplaceWrapper{d.dbPool, &d.replacer}, d}
 }
 
-func (d *Driver) GetListener(schema string) riverdriver.Listener {
+func (d *Driver) GetListener(params *riverdriver.GetListenenerParams) riverdriver.Listener {
 	panic(riverdriver.ErrNotImplemented)
 }
 
