@@ -5652,6 +5652,9 @@ func Test_Client_JobCompletion(t *testing.T) {
 		})
 		config.RetryPolicy = &retrypolicytest.RetryPolicyNoJitter{}
 
+		retryPolicy := &retrypolicytest.RetryPolicySlow{} // make sure job isn't set back to available/running by the time we check it below
+		config.RetryPolicy = retryPolicy
+
 		client, bundle := setup(t, config)
 
 		now := client.baseService.Time.StubNowUTC(time.Now().UTC())
@@ -5667,7 +5670,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		require.NoError(err)
 
 		require.Equal(rivertype.JobStateRetryable, reloadedJob.State)
-		require.WithinDuration(now.Add(1*time.Second), reloadedJob.ScheduledAt, time.Microsecond)
+		require.WithinDuration(now.Add(retryPolicy.Interval()), reloadedJob.ScheduledAt, time.Microsecond)
 		require.Nil(reloadedJob.FinalizedAt)
 	})
 
