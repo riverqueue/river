@@ -5498,6 +5498,8 @@ func Test_Client_JobCompletion(t *testing.T) {
 
 		client, bundle := setup(t, config)
 
+		now := client.baseService.Time.StubNowUTC(time.Now().UTC())
+
 		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 		require.NoError(err)
 
@@ -5509,7 +5511,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		require.NoError(err)
 
 		require.Equal(rivertype.JobStateCompleted, reloadedJob.State)
-		require.WithinDuration(time.Now(), *reloadedJob.FinalizedAt, 2*time.Second)
+		require.WithinDuration(now, *reloadedJob.FinalizedAt, 2*time.Second)
 	})
 
 	t.Run("JobThatIsAlreadyCompletedIsNotAlteredByCompleter", func(t *testing.T) {
@@ -5557,8 +5559,11 @@ func Test_Client_JobCompletion(t *testing.T) {
 		config := newTestConfig(t, func(ctx context.Context, job *Job[callbackArgs]) error {
 			return errors.New("oops")
 		})
+		config.RetryPolicy = &retrypolicytest.RetryPolicyNoJitter{}
 
 		client, bundle := setup(t, config)
+
+		now := client.baseService.Time.StubNowUTC(time.Now().UTC())
 
 		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 		require.NoError(err)
@@ -5571,7 +5576,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		require.NoError(err)
 
 		require.Equal(rivertype.JobStateRetryable, reloadedJob.State)
-		require.WithinDuration(time.Now(), reloadedJob.ScheduledAt, 2*time.Second)
+		require.WithinDuration(now.Add(1*time.Second), reloadedJob.ScheduledAt, time.Microsecond)
 		require.Nil(reloadedJob.FinalizedAt)
 	})
 
@@ -5585,6 +5590,8 @@ func Test_Client_JobCompletion(t *testing.T) {
 
 		client, bundle := setup(t, config)
 
+		now := client.baseService.Time.StubNowUTC(time.Now().UTC())
+
 		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 		require.NoError(err)
 
@@ -5597,7 +5604,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 
 		require.Equal(rivertype.JobStateCancelled, reloadedJob.State)
 		require.NotNil(reloadedJob.FinalizedAt)
-		require.WithinDuration(time.Now(), *reloadedJob.FinalizedAt, 2*time.Second)
+		require.WithinDuration(now, *reloadedJob.FinalizedAt, time.Microsecond)
 	})
 
 	t.Run("JobThatIsAlreadyDiscardedIsNotAlteredByCompleter", func(t *testing.T) {
