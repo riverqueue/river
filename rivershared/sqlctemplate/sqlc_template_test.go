@@ -115,6 +115,53 @@ func TestReplacer(t *testing.T) {
 		`, updatedSQL)
 	})
 
+	t.Run("SyntaxMistakes", func(t *testing.T) {
+		t.Parallel()
+
+		replacer, _ := setup(t)
+
+		// Missing colon after "TEMPLATE".
+		{
+			ctx := WithReplacements(ctx, map[string]Replacement{}, nil)
+
+			_, _, err := replacer.RunSafely(ctx, `
+			-- name: JobCountByState :one
+			SELECT count(*)
+			FROM /* TEMPLATE schema */river_job
+			WHERE state = @state;
+		`, nil)
+			require.EqualError(t, err, "sqlctemplate found template-like tag after replacements; probably syntax error or missing end tag: /* TEMPLATE")
+		}
+
+		// Missing "TEMPLATE_END".
+		{
+			ctx := WithReplacements(ctx, map[string]Replacement{}, nil)
+
+			_, _, err := replacer.RunSafely(ctx, `
+			-- name: JobCountByState :one
+			SELECT count(*)
+			FROM /* TEMPLATE_BEGIN: schema */river_job
+			WHERE state = @state;
+		`, nil)
+			require.EqualError(t, err, "sqlctemplate found template-like tag after replacements; probably syntax error or missing end tag: /* TEMPLATE_BEGIN")
+		}
+
+		// Extra whitespace before "TEMPLATE".
+		{
+			ctx := WithReplacements(ctx, map[string]Replacement{
+				"state": {Value: "'available'"},
+			}, nil)
+
+			_, _, err := replacer.RunSafely(ctx, `
+			-- name: JobCountByState :one
+			SELECT count(*)
+			FROM /*   TEMPLATE schema */river_job
+			WHERE state = /* TEMPLATE_BEGIN: state */ 'available' /* TEMPLATE_END */ -- need to have one valid template to get to the right error
+		`, nil)
+			require.EqualError(t, err, "sqlctemplate found template-like tag after replacements; probably syntax error or missing end tag: /*   TEMPLATE")
+		}
+	})
+
 	t.Run("RepeatedTemplate", func(t *testing.T) {
 		t.Parallel()
 
