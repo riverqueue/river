@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"runtime"
 	"slices"
 	"strings"
@@ -32,14 +33,16 @@ import (
 const schemaDateFormat = "2006_01_02t15_04_05" // everything here needs to be lowercase because Postgres forces schema names to lowercase
 
 var (
-	genSchemaBase  sync.Once                   //nolint:gochecknoglobals
-	idleSchemas    = make(map[string][]string) //nolint:gochecknoglobals
-	idleSchemasMu  sync.Mutex                  //nolint:gochecknoglobals
-	initialCleanup sync.Once                   //nolint:gochecknoglobals
-	nextSchemaNum  atomic.Int32                //nolint:gochecknoglobals
-	packageName    string                      //nolint:gochecknoglobals
-	schemaBaseName string                      //nolint:gochecknoglobals
-	stats          struct {                    //nolint:gochecknoglobals
+	genSchemaBase       sync.Once                   //nolint:gochecknoglobals
+	idleSchemas         = make(map[string][]string) //nolint:gochecknoglobals
+	idleSchemasMu       sync.Mutex                  //nolint:gochecknoglobals
+	initialCleanup      sync.Once                   //nolint:gochecknoglobals
+	nextSchemaNum       atomic.Int32                //nolint:gochecknoglobals
+	packageName         string                      //nolint:gochecknoglobals
+	schemaBaseName      string                      //nolint:gochecknoglobals
+	schemaExpireHorizon string                      //nolint:gochecknoglobals
+	schemaRandSuffix    string                      //nolint:gochecknoglobals
+	stats               struct {                    //nolint:gochecknoglobals
 		numGenerated atomic.Int32
 		numReused    atomic.Int32
 	}
@@ -129,10 +132,22 @@ func TestSchema[TTx any](ctx context.Context, tb testutil.TestingTB, driver rive
 		// to trim "_schema_" to an abbreviation or shorten "river_leadership".
 		const maxLength = 63 - len("_2025_04_20t16_00_20_schema_01.river_leadership") - 1
 		if len(packageName) > maxLength {
-			packageName = packageName[0:maxLength]
+			// Where truncation is necessary, we also end up with a high
+			// possibility of contention between schema names. For example,
+			// `example_job_cancel` and `example_job_cancel_from_client` resolve
+			// to exactly the same thing and may run in parallel.
+			//
+			// Correct this so that if truncation was necessary, generate a
+			// random suffix. This is added to the schema name separately so
+			// that cleanup still works correctly (if a random suffix was
+			// included in cleanup names, it wouldn't match anything).
+			const numRandChars = 5
+			packageName = packageName[0 : maxLength-numRandChars-1]
+			schemaRandSuffix = randBase62(numRandChars) + "_"
 		}
 
 		schemaBaseName = packageName + "_" + time.Now().Format(schemaDateFormat) + "_schema_"
+		schemaExpireHorizon = packageName + "_" + time.Now().Add(-1*time.Minute).Format(schemaDateFormat) + "_schema_"
 	})
 
 	exec := driver.GetExecutor()
@@ -148,7 +163,7 @@ func TestSchema[TTx any](ctx context.Context, tb testutil.TestingTB, driver rive
 			// end up contending with them as they also try to clean their old
 			// schemas.
 			expiredSchemas, err := driver.GetExecutor().SchemaGetExpired(ctx, &riverdriver.SchemaGetExpiredParams{
-				BeforeName: schemaBaseName,
+				BeforeName: schemaExpireHorizon,
 				Prefix:     packageName + "_%",
 			})
 			require.NoError(tb, err)
@@ -228,7 +243,12 @@ func TestSchema[TTx any](ctx context.Context, tb testutil.TestingTB, driver rive
 	}
 
 	// e.g. river_2025_04_14t22_13_58_schema_10
-	schema := schemaBaseName + fmt.Sprintf("%02d", nextSchemaNum.Add(1))
+	//
+	// Or where a package name had to truncated so a random suffix was
+	// generated:
+	//
+	// e.g. river_2025_04_14t22_13_58_schema_kwo78x_10
+	schema := schemaBaseName + schemaRandSuffix + fmt.Sprintf("%02d", nextSchemaNum.Add(1))
 
 	_, err := exec.Exec(ctx, "CREATE SCHEMA "+schema)
 	require.NoError(tb, err)
@@ -303,6 +323,16 @@ func packageFromFunc(funcName string) string {
 	)
 
 	return packageName
+}
+
+var base62Runes = []rune("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789") //nolint:gochecknoglobals
+
+func randBase62(numRandChars int) string {
+	randChars := make([]rune, numRandChars)
+	for i := range numRandChars {
+		randChars[i] = base62Runes[rand.IntN(len(base62Runes))]
+	}
+	return string(randChars)
 }
 
 // TestTx starts a test transaction that's rolled back automatically as the test
