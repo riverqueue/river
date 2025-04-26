@@ -98,6 +98,7 @@ type LeaderOpts struct {
 	ElectedAt *time.Time
 	ExpiresAt *time.Time
 	LeaderID  *string
+	Now       *time.Time
 	Schema    string
 }
 
@@ -108,6 +109,7 @@ func Leader(ctx context.Context, tb testing.TB, exec riverdriver.Executor, opts 
 		ElectedAt: opts.ElectedAt,
 		ExpiresAt: opts.ExpiresAt,
 		LeaderID:  ptrutil.ValOrDefault(opts.LeaderID, "test-client-id"),
+		Now:       opts.Now,
 		Schema:    opts.Schema,
 		TTL:       10 * time.Second,
 	})

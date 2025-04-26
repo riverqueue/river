@@ -509,6 +509,7 @@ type Leader struct {
 }
 
 type LeaderDeleteExpiredParams struct {
+	Now    *time.Time
 	Schema string
 }
 
@@ -520,12 +521,14 @@ type LeaderInsertParams struct {
 	ElectedAt *time.Time
 	ExpiresAt *time.Time
 	LeaderID  string
+	Now       *time.Time
 	Schema    string
 	TTL       time.Duration
 }
 
 type LeaderElectParams struct {
 	LeaderID string
+	Now      *time.Time
 	Schema   string
 	TTL      time.Duration
 }

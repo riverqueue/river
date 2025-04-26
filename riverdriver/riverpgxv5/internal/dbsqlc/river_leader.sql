@@ -9,22 +9,22 @@ CREATE UNLOGGED TABLE river_leader(
 
 -- name: LeaderAttemptElect :execrows
 INSERT INTO /* TEMPLATE: schema */river_leader (leader_id, elected_at, expires_at)
-    VALUES (@leader_id, now(), now() + @ttl::interval)
+    VALUES (@leader_id, coalesce(sqlc.narg('now')::timestamptz, now()), coalesce(sqlc.narg('now')::timestamptz, now()) + @ttl::interval)
 ON CONFLICT (name)
     DO NOTHING;
 
 -- name: LeaderAttemptReelect :execrows
 INSERT INTO /* TEMPLATE: schema */river_leader (leader_id, elected_at, expires_at)
-    VALUES (@leader_id, now(), now() + @ttl::interval)
+    VALUES (@leader_id, coalesce(sqlc.narg('now')::timestamptz, now()), coalesce(sqlc.narg('now')::timestamptz, now()) + @ttl::interval)
 ON CONFLICT (name)
     DO UPDATE SET
-        expires_at = now() + @ttl
+        expires_at = coalesce(sqlc.narg('now')::timestamptz, now()) + @ttl
     WHERE
         river_leader.leader_id = @leader_id;
 
 -- name: LeaderDeleteExpired :execrows
 DELETE FROM /* TEMPLATE: schema */river_leader
-WHERE expires_at < now();
+WHERE expires_at < coalesce(sqlc.narg('now')::timestamptz, now());
 
 -- name: LeaderGetElectedLeader :one
 SELECT *
@@ -36,8 +36,8 @@ INSERT INTO /* TEMPLATE: schema */river_leader(
     expires_at,
     leader_id
 ) VALUES (
-    coalesce(sqlc.narg('elected_at')::timestamptz, now()),
-    coalesce(sqlc.narg('expires_at')::timestamptz, now() + @ttl::interval),
+    coalesce(sqlc.narg('elected_at')::timestamptz, coalesce(sqlc.narg('now')::timestamptz, now())),
+    coalesce(sqlc.narg('expires_at')::timestamptz, coalesce(sqlc.narg('now')::timestamptz, now()) + @ttl::interval),
     @leader_id
 ) RETURNING *;
 

@@ -197,6 +197,7 @@ func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
 
 		elected, err := attemptElectOrReelect(ctx, e.exec, false, &riverdriver.LeaderElectParams{
 			LeaderID: e.config.ClientID,
+			Now:      e.Time.NowUTCOrNil(),
 			Schema:   e.config.Schema,
 			TTL:      e.leaderTTL(),
 		})
@@ -333,6 +334,7 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 
 		reelected, err := attemptElectOrReelect(ctx, e.exec, true, &riverdriver.LeaderElectParams{
 			LeaderID: e.config.ClientID,
+			Now:      e.Time.NowUTCOrNil(),
 			Schema:   e.config.Schema,
 			TTL:      e.leaderTTL(),
 		})
@@ -515,6 +517,7 @@ func attemptElectOrReelect(ctx context.Context, exec riverdriver.Executor, alrea
 
 	return dbutil.WithTxV(ctx, exec, func(ctx context.Context, exec riverdriver.ExecutorTx) (bool, error) {
 		if _, err := exec.LeaderDeleteExpired(ctx, &riverdriver.LeaderDeleteExpiredParams{
+			Now:    params.Now,
 			Schema: params.Schema,
 		}); err != nil {
 			return false, err
