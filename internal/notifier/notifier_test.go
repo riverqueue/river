@@ -459,6 +459,13 @@ func TestNotifier(t *testing.T) {
 					// Pause a random brief amount of time.
 					serviceutil.CancellableSleep(ctx, randutil.DurationBetween(15*time.Millisecond, 50*time.Millisecond))
 
+					// Wait for at least one message to come through. This
+					// generally isn't necessary, but we can run into strange
+					// problems in slow environments like GitHub Actions where
+					// the send goroutine can apparently be paused entirely
+					// around the sleep above between listen and unlisten.
+					riversharedtest.WaitOrTimeout(t, notifyChan)
+
 					sub.Unlisten(ctx)
 				}
 			}()
@@ -469,12 +476,12 @@ func TestNotifier(t *testing.T) {
 		<-sendNotificationsDone          // wait for notifications goroutine to finish
 
 		for i := range notifyChans {
-			t.Logf("Channel %2d contains %3d message(s)", i, len(notifyChans[i]))
-
 			// Don't require a specific number of messages to have been received
 			// since it's non-deterministic, but every channel should've gotten
-			// at least one message. It my test runs, they receive ~15 each.
-			require.NotEmpty(t, notifyChans[i])
+			// at least one message (as measured by the WaitOrTimeout above).
+			// In my test runs, they receive ~15 each. The WaitOrTimeout
+			// consumes one message, so we add +1 when measuring each channel.
+			t.Logf("Channel %2d contains %3d message(s)", i, len(notifyChans[i])+1)
 		}
 	})
 
