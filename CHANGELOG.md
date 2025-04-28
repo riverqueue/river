@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Client no longer returns an error if stopped before startup could complete (previously, it returned the unexported `ErrShutdown`). [PR #841](https://github.com/riverqueue/river/pull/841).
 
+### Fixed
+
+- A queue unpausing triggers an immediate fetch so that available jobs in the paused queue may be started faster than before. [PR #854](https://github.com/riverqueue/river/pull/854).
+
 ## [0.20.2] - 2025-04-08
 
 ### Added

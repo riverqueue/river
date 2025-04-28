@@ -530,6 +530,7 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 				}
 				p.paused = false
 				p.Logger.DebugContext(workCtx, p.Name+": Resumed", slog.String("queue", p.config.Queue), slog.String("queue_in_message", msg.Queue))
+				fetchLimiter.Call() // try another fetch because more jobs may be available to run which were gated behind the paused queue
 				p.testSignals.Resumed.Signal(struct{}{})
 				if p.config.QueueEventCallback != nil {
 					p.config.QueueEventCallback(&Event{Kind: EventKindQueueResumed, Queue: &rivertype.Queue{Name: p.config.Queue}})
