@@ -93,7 +93,7 @@ func TestElector_WithNotifier(t *testing.T) {
 				archetype = riversharedtest.BaseServiceArchetype(t)
 			)
 
-			notifier := notifier.New(archetype, driver.GetListener(schema))
+			notifier := notifier.New(archetype, driver.GetListener(&riverdriver.GetListenenerParams{Schema: schema}))
 			{
 				require.NoError(t, notifier.Start(ctx))
 				t.Cleanup(notifier.Stop)

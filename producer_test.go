@@ -59,7 +59,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	driver := riverpgxv5.New(dbPool)
 	exec := driver.GetExecutor()
 	schema := riverdbtest.TestSchema(ctx, t, driver, nil)
-	listener := driver.GetListener(schema)
+	listener := driver.GetListener(&riverdriver.GetListenenerParams{Schema: schema})
 	pilot := &riverpilot.StandardPilot{}
 
 	subscribeChan := make(chan []jobcompleter.CompleterJobUpdated, 100)
@@ -223,7 +223,7 @@ func TestProducer_WithNotifier(t *testing.T) {
 			exec       = driver.GetExecutor()
 			jobUpdates = make(chan []jobcompleter.CompleterJobUpdated, 10)
 			schema     = riverdbtest.TestSchema(ctx, t, driver, nil)
-			listener   = driver.GetListener(schema)
+			listener   = driver.GetListener(&riverdriver.GetListenenerParams{Schema: schema})
 			pilot      = &riverpilot.StandardPilot{}
 			queueName  = fmt.Sprintf("test-producer-with-notifier-%05d", randutil.IntBetween(1, 100_000))
 		)

@@ -60,7 +60,7 @@ func TestNotifier(t *testing.T) {
 			dbPool   = cmp.Or(opts.dbPool, riversharedtest.DBPool(ctx, t))
 			driver   = riverpgxv5.New(dbPool)
 			schema   = riverdbtest.TestSchema(ctx, t, driver, nil)
-			listener = driver.GetListener(schema)
+			listener = driver.GetListener(&riverdriver.GetListenenerParams{Schema: schema})
 		)
 
 		notifier := New(riversharedtest.BaseServiceArchetype(t), listener)
