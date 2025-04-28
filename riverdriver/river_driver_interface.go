@@ -223,6 +223,7 @@ type Listener interface {
 	Listen(ctx context.Context, topic string) error
 	Ping(ctx context.Context) error
 	Schema() string
+	SetAfterConnectExec(sql string) // should only ever be used in testing
 	Unlisten(ctx context.Context, topic string) error
 	WaitForNotification(ctx context.Context) (*Notification, error)
 }

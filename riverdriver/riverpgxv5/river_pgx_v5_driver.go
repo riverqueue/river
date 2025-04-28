@@ -767,11 +767,12 @@ func (t *ExecutorTx) Rollback(ctx context.Context) error {
 }
 
 type Listener struct {
-	conn   *pgx.Conn
-	dbPool *pgxpool.Pool
-	prefix string // schema with a dot on the end (very minor optimization)
-	mu     sync.Mutex
-	schema string
+	afterConnectExec string // should only ever be used in testing
+	conn             *pgx.Conn
+	dbPool           *pgxpool.Pool
+	prefix           string // schema with a dot on the end (very minor optimization)
+	mu               sync.Mutex
+	schema           string
 }
 
 func (l *Listener) Close(ctx context.Context) error {
@@ -806,6 +807,12 @@ func (l *Listener) Connect(ctx context.Context) error {
 	poolConn, err := l.dbPool.Acquire(ctx)
 	if err != nil {
 		return err
+	}
+
+	if l.afterConnectExec != "" {
+		if _, err := poolConn.Exec(ctx, l.afterConnectExec); err != nil {
+			return err
+		}
 	}
 
 	// Use a configured schema if non-empty, otherwise try to select the current
@@ -851,6 +858,13 @@ func (l *Listener) Schema() string {
 	defer l.mu.Unlock()
 
 	return l.schema
+}
+
+func (l *Listener) SetAfterConnectExec(sql string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.afterConnectExec = sql
 }
 
 func (l *Listener) Unlisten(ctx context.Context, topic string) error {
