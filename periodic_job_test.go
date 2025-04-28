@@ -42,7 +42,7 @@ func TestPeriodicJobBundle(t *testing.T) {
 			nil,
 		)
 
-		return newPeriodicJobBundle(newTestConfig(t, nil), periodicJobEnqueuer), &testBundle{}
+		return newPeriodicJobBundle(newTestConfig(t, ""), periodicJobEnqueuer), &testBundle{}
 	}
 
 	t.Run("ConstructorFuncGeneratesNewArgsOnEachCall", func(t *testing.T) {
