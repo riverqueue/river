@@ -97,6 +97,12 @@ var (
 	templateRE         = regexp.MustCompile(`/\* TEMPLATE: (.*?) \*/`)
 )
 
+// Regex to search for in SQL after replacement has occurred and which probably
+// represents a syntax error. sqlctemplate isn't a true compiler so if template
+// REs don't match, we can be left with some subtle bugs where there's some
+// minor problem like a missing semicolon that are hard to debug.
+var postReplaceMistakeRE = regexp.MustCompile(`\/\*\s*TEMPLATE([A-Z0-9_]+)?`) // also finds "/* TEMPLATE_BEGIN"
+
 // Run replaces any tempates in input SQL with values from context added via
 // WithReplacements.
 //
@@ -187,6 +193,11 @@ func (r *Replacer) RunSafely(ctx context.Context, sql string, args []any) (strin
 
 	if len(templatesMissing) > 0 {
 		return "", nil, errors.New("sqlctemplate params present in SQL but missing in context: " + strings.Join(templatesMissing, ", "))
+	}
+
+	probableMistakes := postReplaceMistakeRE.FindAllString(updatedSQL, -1)
+	if len(probableMistakes) > 0 {
+		return "", nil, errors.New("sqlctemplate found template-like tag after replacements; probably syntax error or missing end tag: " + strings.Join(probableMistakes, ", "))
 	}
 
 	if len(container.NamedArgs) > 0 {
