@@ -1391,19 +1391,11 @@ func Test_Client_Stop(t *testing.T) {
 
 		client := runNewTestClient(ctx, t, newTestConfig(t, makeAwaitCallback(startedCh, doneCh)))
 
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-
 		// enqueue job:
 		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
 		require.NoError(err)
 
-		var startedJobID int64
-		select {
-		case startedJobID = <-startedCh:
-		case <-time.After(1 * time.Second):
-			t.Fatal("timed out waiting for job to start")
-		}
+		startedJobID := riversharedtest.WaitOrTimeout(t, startedCh)
 		require.Equal(insertRes.Job.ID, startedJobID)
 
 		// Should not shut down immediately, not until jobs are given the signal to
