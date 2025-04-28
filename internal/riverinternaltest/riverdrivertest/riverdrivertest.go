@@ -2204,37 +2204,6 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 	const leaderTTL = 10 * time.Second
 
-	t.Run("LeaderDeleteExpired", func(t *testing.T) {
-		t.Parallel()
-
-		exec, _ := setup(ctx, t)
-
-		now := time.Now().UTC()
-
-		{
-			numDeleted, err := exec.LeaderDeleteExpired(ctx, &riverdriver.LeaderDeleteExpiredParams{
-				Schema: "",
-			})
-			require.NoError(t, err)
-			require.Zero(t, numDeleted)
-		}
-
-		_ = testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
-			ElectedAt: ptrutil.Ptr(now.Add(-2 * time.Hour)),
-			ExpiresAt: ptrutil.Ptr(now.Add(-1 * time.Hour)),
-			LeaderID:  ptrutil.Ptr(clientID),
-			Schema:    "",
-		})
-
-		{
-			numDeleted, err := exec.LeaderDeleteExpired(ctx, &riverdriver.LeaderDeleteExpiredParams{
-				Schema: "",
-			})
-			require.NoError(t, err)
-			require.Equal(t, 1, numDeleted)
-		}
-	})
-
 	t.Run("LeaderAttemptElect", func(t *testing.T) {
 		t.Parallel()
 
@@ -2243,8 +2212,11 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			exec, _ := setup(ctx, t)
 
+			now := time.Now()
+
 			elected, err := exec.LeaderAttemptElect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: clientID,
+				Now:      &now,
 				Schema:   "",
 				TTL:      leaderTTL,
 			})
@@ -2255,8 +2227,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				Schema: "",
 			})
 			require.NoError(t, err)
-			require.WithinDuration(t, time.Now(), leader.ElectedAt, 100*time.Millisecond)
-			require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, 100*time.Millisecond)
+			require.WithinDuration(t, now, leader.ElectedAt, time.Microsecond)
+			require.WithinDuration(t, now.Add(leaderTTL), leader.ExpiresAt, time.Microsecond)
 		})
 
 		t.Run("CannotElectTwiceInARow", func(t *testing.T) {
@@ -2296,8 +2268,11 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			exec, _ := setup(ctx, t)
 
+			now := time.Now()
+
 			elected, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: clientID,
+				Now:      &now,
 				Schema:   "",
 				TTL:      leaderTTL,
 			})
@@ -2308,8 +2283,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				Schema: "",
 			})
 			require.NoError(t, err)
-			require.WithinDuration(t, time.Now(), leader.ElectedAt, 100*time.Millisecond)
-			require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, 100*time.Millisecond)
+			require.WithinDuration(t, now, leader.ElectedAt, time.Microsecond)
+			require.WithinDuration(t, now.Add(leaderTTL), leader.ExpiresAt, time.Microsecond)
 		})
 
 		t.Run("ReelectsSameLeader", func(t *testing.T) {
@@ -2343,19 +2318,80 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		})
 	})
 
+	t.Run("LeaderDeleteExpired", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("DeletesExpired", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			now := time.Now().UTC()
+
+			{
+				numDeleted, err := exec.LeaderDeleteExpired(ctx, &riverdriver.LeaderDeleteExpiredParams{
+					Schema: "",
+				})
+				require.NoError(t, err)
+				require.Zero(t, numDeleted)
+			}
+
+			_ = testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
+				ElectedAt: ptrutil.Ptr(now.Add(-2 * time.Hour)),
+				ExpiresAt: ptrutil.Ptr(now.Add(-1 * time.Hour)),
+				LeaderID:  ptrutil.Ptr(clientID),
+				Schema:    "",
+			})
+
+			{
+				numDeleted, err := exec.LeaderDeleteExpired(ctx, &riverdriver.LeaderDeleteExpiredParams{
+					Schema: "",
+				})
+				require.NoError(t, err)
+				require.Equal(t, 1, numDeleted)
+			}
+		})
+
+		t.Run("WithInjectedNow", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			now := time.Now().UTC()
+
+			// Elected in the future.
+			_ = testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
+				ElectedAt: ptrutil.Ptr(now.Add(1 * time.Hour)),
+				ExpiresAt: ptrutil.Ptr(now.Add(2 * time.Hour)),
+				LeaderID:  ptrutil.Ptr(clientID),
+				Schema:    "",
+			})
+
+			numDeleted, err := exec.LeaderDeleteExpired(ctx, &riverdriver.LeaderDeleteExpiredParams{
+				Now:    ptrutil.Ptr(now.Add(2*time.Hour + 1*time.Second)),
+				Schema: "",
+			})
+			require.NoError(t, err)
+			require.Equal(t, 1, numDeleted)
+		})
+	})
+
 	t.Run("LeaderInsert", func(t *testing.T) {
 		t.Parallel()
 
 		exec, _ := setup(ctx, t)
 
+		now := time.Now()
+
 		leader, err := exec.LeaderInsert(ctx, &riverdriver.LeaderInsertParams{
 			LeaderID: clientID,
+			Now:      &now,
 			Schema:   "",
 			TTL:      leaderTTL,
 		})
 		require.NoError(t, err)
-		require.WithinDuration(t, time.Now(), leader.ElectedAt, 500*time.Millisecond)
-		require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, 500*time.Millisecond)
+		require.WithinDuration(t, now, leader.ElectedAt, time.Microsecond)
+		require.WithinDuration(t, now.Add(leaderTTL), leader.ExpiresAt, time.Microsecond)
 		require.Equal(t, clientID, leader.LeaderID)
 	})
 
@@ -2364,8 +2400,11 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 		exec, _ := setup(ctx, t)
 
+		now := time.Now()
+
 		_ = testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 			LeaderID: ptrutil.Ptr(clientID),
+			Now:      &now,
 			Schema:   "",
 		})
 
@@ -2373,8 +2412,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			Schema: "",
 		})
 		require.NoError(t, err)
-		require.WithinDuration(t, time.Now(), leader.ElectedAt, 500*time.Millisecond)
-		require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, 500*time.Millisecond)
+		require.WithinDuration(t, now, leader.ElectedAt, time.Microsecond)
+		require.WithinDuration(t, now.Add(leaderTTL), leader.ExpiresAt, time.Microsecond)
 		require.Equal(t, clientID, leader.LeaderID)
 	})
 

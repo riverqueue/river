@@ -494,6 +494,7 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 func (e *Executor) LeaderAttemptElect(ctx context.Context, params *riverdriver.LeaderElectParams) (bool, error) {
 	numElectionsWon, err := dbsqlc.New().LeaderAttemptElect(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.LeaderAttemptElectParams{
 		LeaderID: params.LeaderID,
+		Now:      params.Now,
 		TTL:      params.TTL,
 	})
 	if err != nil {
@@ -505,6 +506,7 @@ func (e *Executor) LeaderAttemptElect(ctx context.Context, params *riverdriver.L
 func (e *Executor) LeaderAttemptReelect(ctx context.Context, params *riverdriver.LeaderElectParams) (bool, error) {
 	numElectionsWon, err := dbsqlc.New().LeaderAttemptReelect(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.LeaderAttemptReelectParams{
 		LeaderID: params.LeaderID,
+		Now:      params.Now,
 		TTL:      params.TTL,
 	})
 	if err != nil {
@@ -514,7 +516,7 @@ func (e *Executor) LeaderAttemptReelect(ctx context.Context, params *riverdriver
 }
 
 func (e *Executor) LeaderDeleteExpired(ctx context.Context, params *riverdriver.LeaderDeleteExpiredParams) (int, error) {
-	numDeleted, err := dbsqlc.New().LeaderDeleteExpired(schemaTemplateParam(ctx, params.Schema), e.dbtx)
+	numDeleted, err := dbsqlc.New().LeaderDeleteExpired(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.Now)
 	if err != nil {
 		return 0, interpretError(err)
 	}
@@ -534,6 +536,7 @@ func (e *Executor) LeaderInsert(ctx context.Context, params *riverdriver.LeaderI
 		ElectedAt: params.ElectedAt,
 		ExpiresAt: params.ExpiresAt,
 		LeaderID:  params.LeaderID,
+		Now:       params.Now,
 		TTL:       params.TTL,
 	})
 	if err != nil {

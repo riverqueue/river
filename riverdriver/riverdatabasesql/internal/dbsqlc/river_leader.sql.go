@@ -13,18 +13,19 @@ import (
 
 const leaderAttemptElect = `-- name: LeaderAttemptElect :execrows
 INSERT INTO /* TEMPLATE: schema */river_leader (leader_id, elected_at, expires_at)
-    VALUES ($1, now(), now() + $2::interval)
+    VALUES ($1, coalesce($2::timestamptz, now()), coalesce($2::timestamptz, now()) + $3::interval)
 ON CONFLICT (name)
     DO NOTHING
 `
 
 type LeaderAttemptElectParams struct {
 	LeaderID string
+	Now      *time.Time
 	TTL      time.Duration
 }
 
 func (q *Queries) LeaderAttemptElect(ctx context.Context, db DBTX, arg *LeaderAttemptElectParams) (int64, error) {
-	result, err := db.ExecContext(ctx, leaderAttemptElect, arg.LeaderID, arg.TTL)
+	result, err := db.ExecContext(ctx, leaderAttemptElect, arg.LeaderID, arg.Now, arg.TTL)
 	if err != nil {
 		return 0, err
 	}
@@ -33,21 +34,22 @@ func (q *Queries) LeaderAttemptElect(ctx context.Context, db DBTX, arg *LeaderAt
 
 const leaderAttemptReelect = `-- name: LeaderAttemptReelect :execrows
 INSERT INTO /* TEMPLATE: schema */river_leader (leader_id, elected_at, expires_at)
-    VALUES ($1, now(), now() + $2::interval)
+    VALUES ($1, coalesce($2::timestamptz, now()), coalesce($2::timestamptz, now()) + $3::interval)
 ON CONFLICT (name)
     DO UPDATE SET
-        expires_at = now() + $2
+        expires_at = coalesce($2::timestamptz, now()) + $3
     WHERE
         river_leader.leader_id = $1
 `
 
 type LeaderAttemptReelectParams struct {
 	LeaderID string
+	Now      *time.Time
 	TTL      time.Duration
 }
 
 func (q *Queries) LeaderAttemptReelect(ctx context.Context, db DBTX, arg *LeaderAttemptReelectParams) (int64, error) {
-	result, err := db.ExecContext(ctx, leaderAttemptReelect, arg.LeaderID, arg.TTL)
+	result, err := db.ExecContext(ctx, leaderAttemptReelect, arg.LeaderID, arg.Now, arg.TTL)
 	if err != nil {
 		return 0, err
 	}
@@ -56,11 +58,11 @@ func (q *Queries) LeaderAttemptReelect(ctx context.Context, db DBTX, arg *Leader
 
 const leaderDeleteExpired = `-- name: LeaderDeleteExpired :execrows
 DELETE FROM /* TEMPLATE: schema */river_leader
-WHERE expires_at < now()
+WHERE expires_at < coalesce($1::timestamptz, now())
 `
 
-func (q *Queries) LeaderDeleteExpired(ctx context.Context, db DBTX) (int64, error) {
-	result, err := db.ExecContext(ctx, leaderDeleteExpired)
+func (q *Queries) LeaderDeleteExpired(ctx context.Context, db DBTX, now *time.Time) (int64, error) {
+	result, err := db.ExecContext(ctx, leaderDeleteExpired, now)
 	if err != nil {
 		return 0, err
 	}
@@ -90,14 +92,15 @@ INSERT INTO /* TEMPLATE: schema */river_leader(
     expires_at,
     leader_id
 ) VALUES (
-    coalesce($1::timestamptz, now()),
-    coalesce($2::timestamptz, now() + $3::interval),
-    $4
+    coalesce($1::timestamptz, coalesce($2::timestamptz, now())),
+    coalesce($3::timestamptz, coalesce($2::timestamptz, now()) + $4::interval),
+    $5
 ) RETURNING elected_at, expires_at, leader_id, name
 `
 
 type LeaderInsertParams struct {
 	ElectedAt *time.Time
+	Now       *time.Time
 	ExpiresAt *time.Time
 	TTL       time.Duration
 	LeaderID  string
@@ -106,6 +109,7 @@ type LeaderInsertParams struct {
 func (q *Queries) LeaderInsert(ctx context.Context, db DBTX, arg *LeaderInsertParams) (*RiverLeader, error) {
 	row := db.QueryRowContext(ctx, leaderInsert,
 		arg.ElectedAt,
+		arg.Now,
 		arg.ExpiresAt,
 		arg.TTL,
 		arg.LeaderID,
