@@ -741,33 +741,21 @@ func Test_Client(t *testing.T) {
 		require.True(t, workBeginHookCalled)
 	})
 
-	t.Run("WithInsertBeginHookOnJobArgs", func(t *testing.T) {
+	t.Run("WithGlobalWorkEndHook", func(t *testing.T) {
 		t.Parallel()
 
 		_, bundle := setup(t)
 
-		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[jobArgsWithCustomHook]) error {
-			return nil
-		}))
+		workEndHookCalled := false
 
-		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
-		require.NoError(t, err)
+		bundle.config.Hooks = []rivertype.Hook{
+			HookWorkEndFunc(func(ctx context.Context, err error) error {
+				workEndHookCalled = true
+				return err
+			}),
+		}
 
-		insertRes, err := client.Insert(ctx, jobArgsWithCustomHook{}, nil)
-		require.NoError(t, err)
-
-		var metadataMap map[string]any
-		err = json.Unmarshal(insertRes.Job.Metadata, &metadataMap)
-		require.NoError(t, err)
-		require.Equal(t, "called", metadataMap["insert_begin_hook"])
-	})
-
-	t.Run("WithWorkBeginHookOnJobArgs", func(t *testing.T) {
-		t.Parallel()
-
-		_, bundle := setup(t)
-
-		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[jobArgsWithCustomHook]) error {
+		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[callbackArgs]) error {
 			return nil
 		}))
 
@@ -777,7 +765,63 @@ func Test_Client(t *testing.T) {
 		subscribeChan := subscribe(t, client)
 		startClient(ctx, t, client)
 
-		insertRes, err := client.Insert(ctx, jobArgsWithCustomHook{}, nil)
+		insertRes, err := client.Insert(ctx, callbackArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+
+		require.True(t, workEndHookCalled)
+	})
+
+	t.Run("WithInsertBeginHookOnJobArgs", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+			hookEmbed[metadataHookInsertBegin]
+		}
+
+		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			return nil
+		}))
+
+		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
+		require.NoError(t, err)
+
+		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
+		require.NoError(t, err)
+
+		var metadataMap map[string]any
+		err = json.Unmarshal(insertRes.Job.Metadata, &metadataMap)
+		require.NoError(t, err)
+		require.Equal(t, metadataHookCalled, metadataMap[metadataHookInsertBeginKey])
+	})
+
+	t.Run("WithWorkBeginHookOnJobArgs", func(t *testing.T) { //nolint:dupl
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+			hookEmbed[metadataHookWorkBegin]
+		}
+
+		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			return nil
+		}))
+
+		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
+		require.NoError(t, err)
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
 		require.NoError(t, err)
 
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
@@ -787,7 +831,40 @@ func Test_Client(t *testing.T) {
 		var metadataMap map[string]any
 		err = json.Unmarshal(event.Job.Metadata, &metadataMap)
 		require.NoError(t, err)
-		require.Equal(t, "called", metadataMap["work_begin_hook"])
+		require.Equal(t, metadataHookCalled, metadataMap[metadataHookWorkBeginKey])
+	})
+
+	t.Run("WithWorkEndHookOnJobArgs", func(t *testing.T) { //nolint:dupl
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+			hookEmbed[metadataHookWorkEnd]
+		}
+
+		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			return nil
+		}))
+
+		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
+		require.NoError(t, err)
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+
+		var metadataMap map[string]any
+		err = json.Unmarshal(event.Job.Metadata, &metadataMap)
+		require.NoError(t, err)
+		require.Equal(t, metadataHookCalled, metadataMap[metadataHookWorkEndKey])
 	})
 
 	t.Run("WithGlobalWorkerMiddleware", func(t *testing.T) {
@@ -1167,30 +1244,31 @@ func Test_Client(t *testing.T) {
 	})
 }
 
-type jobArgsWithCustomHook struct{}
+// hookEmbed can be embedded on a JobArgs to add a hook to it in such a way that
+// it can be encapsulated within a test case.
+type hookEmbed[T rivertype.Hook] struct{}
 
-func (jobArgsWithCustomHook) Kind() string { return "with_custom_hook" }
-
-func (jobArgsWithCustomHook) Hooks() []rivertype.Hook {
-	return []rivertype.Hook{
-		&testHookInsertAndWorkBegin{},
-	}
+func (f hookEmbed[T]) Hooks() []rivertype.Hook {
+	var hook T
+	return []rivertype.Hook{hook}
 }
 
-var (
-	_ rivertype.HookInsertBegin = &testHookInsertAndWorkBegin{}
-	_ rivertype.HookWorkBegin   = &testHookInsertAndWorkBegin{}
+const (
+	metadataHookCalled         = "called"
+	metadataHookInsertBeginKey = "insert_begin"
+	metadataHookWorkBeginKey   = "work_begin"
+	metadataHookWorkEndKey     = "work_end"
 )
 
-type testHookInsertAndWorkBegin struct{ HookDefaults }
+type metadataHookInsertBegin struct{ rivertype.Hook }
 
-func (t *testHookInsertAndWorkBegin) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
+func (metadataHookInsertBegin) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
 	var metadataMap map[string]any
 	if err := json.Unmarshal(params.Metadata, &metadataMap); err != nil {
 		return err
 	}
 
-	metadataMap["insert_begin_hook"] = "called"
+	metadataMap[metadataHookInsertBeginKey] = metadataHookCalled
 
 	var err error
 	params.Metadata, err = json.Marshal(metadataMap)
@@ -1201,16 +1279,37 @@ func (t *testHookInsertAndWorkBegin) InsertBegin(ctx context.Context, params *ri
 	return nil
 }
 
-func (t *testHookInsertAndWorkBegin) WorkBegin(ctx context.Context, job *rivertype.JobRow) error {
+type metadataHookWorkBegin struct{ rivertype.Hook }
+
+func (metadataHookWorkBegin) WorkBegin(ctx context.Context, job *rivertype.JobRow) error {
 	metadataUpdates, hasMetadataUpdates := jobexecutor.MetadataUpdatesFromWorkContext(ctx)
 	if !hasMetadataUpdates {
 		panic("expected to be called from within job executor")
 	}
 
-	metadataUpdates["work_begin_hook"] = "called"
+	metadataUpdates[metadataHookWorkBeginKey] = metadataHookCalled
 
 	return nil
 }
+
+type metadataHookWorkEnd struct{ rivertype.Hook }
+
+func (metadataHookWorkEnd) WorkEnd(ctx context.Context, err error) error {
+	metadataUpdates, hasMetadataUpdates := jobexecutor.MetadataUpdatesFromWorkContext(ctx)
+	if !hasMetadataUpdates {
+		panic("expected to be called from within job executor")
+	}
+
+	metadataUpdates[metadataHookWorkEndKey] = metadataHookCalled
+
+	return err
+}
+
+var (
+	_ rivertype.HookInsertBegin = metadataHookInsertBegin{}
+	_ rivertype.HookWorkBegin   = metadataHookWorkBegin{}
+	_ rivertype.HookWorkEnd     = metadataHookWorkEnd{}
+)
 
 type workerWithMiddleware[T JobArgs] struct {
 	WorkerDefaults[T]

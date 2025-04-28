@@ -804,7 +804,126 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.Equal(t, rivertype.JobStateCompleted, job.State)
 		require.Empty(t, job.Errors)
 	})
+
+	t.Run("WorkHooks", func(t *testing.T) {
+		t.Parallel()
+
+		executor, bundle := setup(t)
+
+		var (
+			workBeginCalled bool
+			workEndCalled   bool
+		)
+		executor.HookLookupGlobal = hooklookup.NewHookLookup([]rivertype.Hook{
+			HookWorkBeginFunc(func(ctx context.Context, job *rivertype.JobRow) error {
+				workBeginCalled = true
+				return nil
+			}),
+			HookWorkEndFunc(func(ctx context.Context, err error) error {
+				workEndCalled = true
+				return err
+			}),
+		})
+		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return nil }, nil).MakeUnit(bundle.jobRow)
+
+		executor.Execute(ctx)
+		jobsUpdated := riversharedtest.WaitOrTimeout(t, bundle.updateCh)
+		require.Len(t, jobsUpdated, 1)
+		require.Empty(t, jobsUpdated[0].Job.Errors)
+
+		require.True(t, workBeginCalled)
+		require.True(t, workEndCalled)
+	})
+
+	t.Run("WorkEndErrorPassThrough", func(t *testing.T) {
+		t.Parallel()
+
+		executor, bundle := setup(t)
+
+		var (
+			workEnd1Called bool
+			workEnd2Called bool
+		)
+		executor.HookLookupGlobal = hooklookup.NewHookLookup([]rivertype.Hook{
+			HookWorkEndFunc(func(ctx context.Context, err error) error {
+				workEnd1Called = true
+				require.EqualError(t, err, "job error")
+				return err
+			}),
+			HookWorkEndFunc(func(ctx context.Context, err error) error {
+				workEnd2Called = true
+				require.EqualError(t, err, "job error")
+				return err
+			}),
+		})
+		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error {
+			return errors.New("job error")
+		}, nil).MakeUnit(bundle.jobRow)
+
+		executor.Execute(ctx)
+		jobsUpdated := riversharedtest.WaitOrTimeout(t, bundle.updateCh)
+		require.Len(t, jobsUpdated, 1)
+		require.Equal(t, "job error", jobsUpdated[0].Job.Errors[0].Error)
+
+		require.True(t, workEnd1Called)
+		require.True(t, workEnd2Called)
+	})
+
+	t.Run("WorkEndErrorSuppression", func(t *testing.T) {
+		t.Parallel()
+
+		executor, bundle := setup(t)
+
+		var (
+			workEnd1Called bool
+			workEnd2Called bool
+		)
+		executor.HookLookupGlobal = hooklookup.NewHookLookup([]rivertype.Hook{
+			HookWorkEndFunc(func(ctx context.Context, err error) error {
+				workEnd1Called = true
+				require.EqualError(t, err, "job error")
+				return err
+			}),
+			HookWorkEndFunc(func(ctx context.Context, err error) error {
+				workEnd2Called = true
+				require.EqualError(t, err, "job error")
+				return nil // second hook suppresses the error
+			}),
+		})
+		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error {
+			return errors.New("job error")
+		}, nil).MakeUnit(bundle.jobRow)
+
+		executor.Execute(ctx)
+		jobsUpdated := riversharedtest.WaitOrTimeout(t, bundle.updateCh)
+		require.Len(t, jobsUpdated, 1)
+		require.Empty(t, jobsUpdated[0].Job.Errors)
+
+		require.True(t, workEnd1Called)
+		require.True(t, workEnd2Called)
+	})
 }
+
+//
+// *Func types are copied from the top level River package because they can't be
+// accessed from here.
+//
+
+type HookWorkBeginFunc func(ctx context.Context, job *rivertype.JobRow) error
+
+func (f HookWorkBeginFunc) WorkBegin(ctx context.Context, job *rivertype.JobRow) error {
+	return f(ctx, job)
+}
+
+func (f HookWorkBeginFunc) IsHook() bool { return true }
+
+type HookWorkEndFunc func(ctx context.Context, err error) error
+
+func (f HookWorkEndFunc) WorkEnd(ctx context.Context, err error) error {
+	return f(ctx, err)
+}
+
+func (f HookWorkEndFunc) IsHook() bool { return true }
 
 type testMiddleware struct {
 	work func(ctx context.Context, job *rivertype.JobRow, next func(context.Context) error) error
