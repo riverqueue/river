@@ -103,6 +103,10 @@ type Driver[TTx any] interface {
 	// API is not stable. DO NOT USE.
 	UnwrapExecutor(tx TTx) ExecutorTx
 
+	// UnwrapTx gets a driver transaction from an executor. This is currently
+	// only needed for test transaction helpers.
+	//
+	// API is not stable. DO NOT USE.
 	UnwrapTx(execTx ExecutorTx) TTx
 }
 
