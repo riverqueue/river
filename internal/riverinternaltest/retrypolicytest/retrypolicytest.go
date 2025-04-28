@@ -59,7 +59,10 @@ func (p *RetryPolicyNoJitter) retrySecondsWithoutJitter(attempt int) float64 {
 	return min(retrySeconds, maxDurationSeconds)
 }
 
-const retryPolicySlowInterval = 1 * time.Hour
+// Choose a number here that's larger than the job rescuer's rescue interval of
+// one hour so that can easily use it to test the job rescuer (in addition to
+// other things).
+const retryPolicySlowInterval = 2 * time.Hour
 
 // RetryPolicySlow is a retry policy that has a very slow retry interval. This
 // is used in tests that check retries to make sure that in slower environments
