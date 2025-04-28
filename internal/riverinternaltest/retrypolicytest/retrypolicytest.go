@@ -58,3 +58,23 @@ func (p *RetryPolicyNoJitter) retrySecondsWithoutJitter(attempt int) float64 {
 	retrySeconds := math.Pow(float64(attempt), 4)
 	return min(retrySeconds, maxDurationSeconds)
 }
+
+const retryPolicySlowInterval = 1 * time.Hour
+
+// RetryPolicySlow is a retry policy that has a very slow retry interval. This
+// is used in tests that check retries to make sure that in slower environments
+// (like GitHub Actions), jobs aren't accidentally set back to available or
+// running before a paused test case can check to make sure it's in a retryable
+// state.
+type RetryPolicySlow struct{}
+
+// Interval is the slow retry interval exposed for use in test case assertions.
+// Unlike the standard retry policy, RetryPolicySlow's interval is constant
+// regardless of which attempt number the job was on.
+func (p *RetryPolicySlow) Interval() time.Duration {
+	return retryPolicySlowInterval
+}
+
+func (p *RetryPolicySlow) NextRetry(job *rivertype.JobRow) time.Time {
+	return job.AttemptedAt.Add(retryPolicySlowInterval)
+}
