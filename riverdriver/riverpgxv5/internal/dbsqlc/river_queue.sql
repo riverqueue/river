@@ -1,6 +1,6 @@
 CREATE TABLE river_queue(
   name text PRIMARY KEY NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT NOW(),
+  created_at timestamptz NOT NULL DEFAULT now(),
   metadata jsonb NOT NULL DEFAULT '{}' ::jsonb,
   paused_at timestamptz,
   updated_at timestamptz NOT NULL
@@ -14,14 +14,14 @@ INSERT INTO /* TEMPLATE: schema */river_queue(
     paused_at,
     updated_at
 ) VALUES (
-    now(),
+    coalesce(sqlc.narg('now')::timestamptz, now()),
     coalesce(@metadata::jsonb, '{}'::jsonb),
     @name::text,
     coalesce(sqlc.narg('paused_at')::timestamptz, NULL),
-    coalesce(sqlc.narg('updated_at')::timestamptz, now())
+    coalesce(sqlc.narg('updated_at')::timestamptz, sqlc.narg('now')::timestamptz, now())
 ) ON CONFLICT (name) DO UPDATE
 SET
-    updated_at = coalesce(sqlc.narg('updated_at')::timestamptz, now())
+    updated_at = coalesce(sqlc.narg('updated_at')::timestamptz, sqlc.narg('now')::timestamptz, now())
 RETURNING *;
 
 -- name: QueueDeleteExpired :many

@@ -20,18 +20,19 @@ INSERT INTO /* TEMPLATE: schema */river_queue(
     paused_at,
     updated_at
 ) VALUES (
-    now(),
-    coalesce($1::jsonb, '{}'::jsonb),
-    $2::text,
-    coalesce($3::timestamptz, NULL),
-    coalesce($4::timestamptz, now())
+    coalesce($1::timestamptz, now()),
+    coalesce($2::jsonb, '{}'::jsonb),
+    $3::text,
+    coalesce($4::timestamptz, NULL),
+    coalesce($5::timestamptz, $1::timestamptz, now())
 ) ON CONFLICT (name) DO UPDATE
 SET
-    updated_at = coalesce($4::timestamptz, now())
+    updated_at = coalesce($5::timestamptz, $1::timestamptz, now())
 RETURNING name, created_at, metadata, paused_at, updated_at
 `
 
 type QueueCreateOrSetUpdatedAtParams struct {
+	Now       *time.Time
 	Metadata  []byte
 	Name      string
 	PausedAt  *time.Time
@@ -40,6 +41,7 @@ type QueueCreateOrSetUpdatedAtParams struct {
 
 func (q *Queries) QueueCreateOrSetUpdatedAt(ctx context.Context, db DBTX, arg *QueueCreateOrSetUpdatedAtParams) (*RiverQueue, error) {
 	row := db.QueryRow(ctx, queueCreateOrSetUpdatedAt,
+		arg.Now,
 		arg.Metadata,
 		arg.Name,
 		arg.PausedAt,

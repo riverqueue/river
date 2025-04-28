@@ -2734,17 +2734,19 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			exec, _ := setup(ctx, t)
 
 			metadata := []byte(`{"foo": "bar"}`)
+			now := time.Now().UTC()
 			queue, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
 				Metadata: metadata,
 				Name:     "new-queue",
+				Now:      &now,
 				Schema:   "",
 			})
 			require.NoError(t, err)
-			require.WithinDuration(t, time.Now(), queue.CreatedAt, 500*time.Millisecond)
+			require.WithinDuration(t, now, queue.CreatedAt, time.Microsecond)
 			require.Equal(t, metadata, queue.Metadata)
 			require.Equal(t, "new-queue", queue.Name)
 			require.Nil(t, queue.PausedAt)
-			require.WithinDuration(t, time.Now(), queue.UpdatedAt, 500*time.Millisecond)
+			require.WithinDuration(t, now, queue.UpdatedAt, time.Microsecond)
 		})
 
 		t.Run("InsertsANewQueueWithCustomPausedAt", func(t *testing.T) {

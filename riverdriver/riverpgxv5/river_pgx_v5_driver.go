@@ -649,6 +649,7 @@ func (e *Executor) QueueCreateOrSetUpdatedAt(ctx context.Context, params *riverd
 	queue, err := dbsqlc.New().QueueCreateOrSetUpdatedAt(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueCreateOrSetUpdatedAtParams{
 		Metadata:  params.Metadata,
 		Name:      params.Name,
+		Now:       params.Now,
 		PausedAt:  params.PausedAt,
 		UpdatedAt: params.UpdatedAt,
 	})

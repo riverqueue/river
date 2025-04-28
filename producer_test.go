@@ -371,7 +371,8 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		producer, bundle := setup(t)
 		producer.config.QueueReportInterval = 50 * time.Millisecond
 
-		now := time.Now().UTC()
+		now := producer.Time.StubNowUTC(time.Now().UTC())
+
 		startProducer(t, ctx, ctx, producer)
 
 		queue, err := bundle.exec.QueueGet(ctx, &riverdriver.QueueGetParams{
@@ -379,10 +380,10 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 			Schema: producer.config.Schema,
 		})
 		require.NoError(t, err)
-		require.WithinDuration(t, now, queue.CreatedAt, 2*time.Second)
+		require.WithinDuration(t, now, queue.CreatedAt, time.Microsecond)
 		require.Equal(t, []byte("{}"), queue.Metadata)
 		require.Equal(t, producer.config.Queue, queue.Name)
-		require.WithinDuration(t, now, queue.UpdatedAt, 2*time.Second)
+		require.WithinDuration(t, now, queue.UpdatedAt, time.Microsecond)
 		require.Equal(t, queue.CreatedAt, queue.UpdatedAt)
 
 		// Queue status should be updated quickly:
