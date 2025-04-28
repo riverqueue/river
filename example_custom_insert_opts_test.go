@@ -106,7 +106,8 @@ func Example_customInsertOpts() {
 		panic(err)
 	}
 
-	waitForNJobs(subscribeChan, 2)
+	// Wait for jobs to complete. Only needed for purposes of the example test.
+	riversharedtest.WaitOrTimeoutN(testutil.PanicTB(), subscribeChan, 2)
 
 	if err := riverClient.Stop(ctx); err != nil {
 		panic(err)

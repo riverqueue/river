@@ -112,7 +112,8 @@ func Example_uniqueJob() {
 
 	// Cheat a little by waiting for the first job to come back so we can
 	// guarantee that this example's output comes out in order.
-	waitForNJobs(subscribeChan, 1)
+	// Wait for jobs to complete. Only needed for purposes of the example test.
+	riversharedtest.WaitOrTimeoutN(testutil.PanicTB(), subscribeChan, 1)
 
 	// Because the job is unique ByArgs, another job for account 2 is allowed.
 	_, err = riverClient.Insert(ctx, ReconcileAccountArgs{AccountID: 2}, nil)
@@ -120,7 +121,8 @@ func Example_uniqueJob() {
 		panic(err)
 	}
 
-	waitForNJobs(subscribeChan, 1)
+	// Wait for jobs to complete. Only needed for purposes of the example test.
+	riversharedtest.WaitOrTimeoutN(testutil.PanicTB(), subscribeChan, 1)
 
 	if err := riverClient.Stop(ctx); err != nil {
 		panic(err)

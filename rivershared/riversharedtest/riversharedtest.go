@@ -199,7 +199,7 @@ func WaitOrTimeout[T any](tb testing.TB, waitChan <-chan T) T {
 // through, and returns it if they do, but times out after a reasonable amount
 // of time.  Useful to guarantee that test cases don't hang forever, even in the
 // event of something wrong.
-func WaitOrTimeoutN[T any](tb testing.TB, waitChan <-chan T, numValues int) []T {
+func WaitOrTimeoutN[T any](tb testutil.TestingTB, waitChan <-chan T, numValues int) []T {
 	tb.Helper()
 
 	var (

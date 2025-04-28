@@ -76,7 +76,8 @@ func Example_periodicJob() {
 		panic(err)
 	}
 
-	waitForNJobs(subscribeChan, 1)
+	// Wait for jobs to complete. Only needed for purposes of the example test.
+	riversharedtest.WaitOrTimeoutN(testutil.PanicTB(), subscribeChan, 1)
 
 	// Periodic jobs can also be configured dynamically after a client has
 	// already started. Added jobs are scheduled for run immediately.

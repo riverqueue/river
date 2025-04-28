@@ -90,9 +90,9 @@ func Example_middleware() {
 	}
 
 	// Wait for job to complete, extract log data out of metadata, and print it.
-	for _, job := range waitForNJobs(subscribeChan, 1) {
+	for _, event := range riversharedtest.WaitOrTimeoutN(testutil.PanicTB(), subscribeChan, 1) {
 		var metadataWithLog metadataWithLog
-		if err := json.Unmarshal(job.Metadata, &metadataWithLog); err != nil {
+		if err := json.Unmarshal(event.Job.Metadata, &metadataWithLog); err != nil {
 			panic(err)
 		}
 		for _, logAttempt := range metadataWithLog.RiverLog {
