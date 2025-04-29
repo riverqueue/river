@@ -4001,6 +4001,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		t.Parallel()
 
 		config := newTestConfig(t, "")
+		config.RetryPolicy = &retrypolicytest.RetryPolicySlow{} // make sure jobs aren't worked before we can assert on job
 		config.RescueStuckJobsAfter = 5 * time.Minute
 
 		client, bundle := setup(t, config)
@@ -4036,11 +4037,12 @@ func Test_Client_Maintenance(t *testing.T) {
 		svc.TestSignals.FetchedBatch.WaitOrTimeout()
 		svc.TestSignals.UpdatedBatch.WaitOrTimeout()
 
-		requireJobHasState := func(jobID int64, state rivertype.JobState) {
+		requireJobHasState := func(jobID int64, state rivertype.JobState) *rivertype.JobRow {
 			t.Helper()
 			job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: jobID, Schema: bundle.schema})
 			require.NoError(t, err)
 			require.Equal(t, state, job.State)
+			return job
 		}
 
 		// unchanged
@@ -4049,8 +4051,10 @@ func Test_Client_Maintenance(t *testing.T) {
 		requireJobHasState(ineligibleJob3.ID, ineligibleJob3.State)
 
 		// Jobs to retry should be retryable:
-		requireJobHasState(jobStuckToRetry1.ID, rivertype.JobStateRetryable)
-		requireJobHasState(jobStuckToRetry2.ID, rivertype.JobStateRetryable)
+		updatedJobStuckToRetry1 := requireJobHasState(jobStuckToRetry1.ID, rivertype.JobStateRetryable)
+		require.Greater(t, updatedJobStuckToRetry1.ScheduledAt, now.Add(10*time.Minute)) // make sure `scheduled_at` is a good margin in the future so it's not at risk of immediate retry (which could cause intermittent test issues)
+		updatedJobStuckToRetry2 := requireJobHasState(jobStuckToRetry2.ID, rivertype.JobStateRetryable)
+		require.Greater(t, updatedJobStuckToRetry2.ScheduledAt, now.Add(10*time.Minute))
 
 		// This one should be discarded because it's already at MaxAttempts:
 		requireJobHasState(jobStuckToDiscard.ID, rivertype.JobStateDiscarded)
