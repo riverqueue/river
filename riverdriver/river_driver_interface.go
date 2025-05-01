@@ -45,6 +45,21 @@ var (
 //
 // API is not stable. DO NOT IMPLEMENT.
 type Driver[TTx any] interface {
+	// ArgPlaceholder is the placeholder character used in query positional
+	// arguments, so "$" for "$1", "$2", "$3", etc. This is a "$" for Postgres
+	// and "?" for SQLite.
+	//
+	// API is not stable. DO NOT USE.
+	ArgPlaceholder() string
+
+	// DatabaseName is the name of the database that the driver targets like
+	// "postgres" or "sqlite". This is used for purposes like a cache key prefix
+	// in riverdbtest so that multiple drivers may share schemas as long as they
+	// target the same database.
+	//
+	// API is not stable. DO NOT USE.
+	DatabaseName() string
+
 	// GetExecutor gets an executor for the driver.
 	//
 	// API is not stable. DO NOT USE.
@@ -85,18 +100,59 @@ type Driver[TTx any] interface {
 	// and should return tables for the latest migration version.
 	//
 	// API is not stable. DO NOT USE.
-	GetMigrationTruncateTables(line string) []string
+	GetMigrationTruncateTables(line string, version int) []string
 
-	// HasPool returns true if the driver is configured with a database pool.
+	// PoolIsSet returns true if the driver is configured with a database pool.
 	//
 	// API is not stable. DO NOT USE.
-	HasPool() bool
+	PoolIsSet() bool
+
+	// PoolSet sets a database pool into a driver will a nil pool. This is meant
+	// only for use in testing, and only in specific circumstances where it's
+	// needed. The pool in a driver should generally be treated as immutable
+	// because it's inherited by driver executors, and changing if when active
+	// executors exist will cause problems.
+	//
+	// Most drivers don't implement this function and return ErrNotImplemented.
+	//
+	// Drivers should only set a pool if the previous pool was nil (to help root
+	// out bugs where something unexpected is happening), and panic in case a
+	// pool is set to a driver twice.
+	//
+	// API is not stable. DO NOT USE.
+	PoolSet(dbPool any) error
+
+	// SQLFragmentColumnIn generates an SQL fragment to be included as a
+	// predicate in a `WHERE` query for the existence of a set of values in a
+	// column like `id IN (...)`. The actual implementation depends on support
+	// for specific data types. Postgres uses arrays while SQLite uses a JSON
+	// fragment with `json_each`.
+	//
+	// API is not stable. DO NOT USE.
+	SQLFragmentColumnIn(column string, values any) (string, any, error)
 
 	// SupportsListener gets whether this driver supports a listener. Drivers
 	// that don't support a listener support poll only mode only.
 	//
 	// API is not stable. DO NOT USE.
 	SupportsListener() bool
+
+	// SupportsListenNotify indicates whether the underlying database supports
+	// listen/notify. This differs from SupportsListener in that even if a
+	// driver doesn't a support a listener but the database supports the
+	// underlying listen/notify mechanism, it will still broadcast in case there
+	// are other clients/drivers on the database that do support a listener. If
+	// listen/notify can't be supported at all, no broadcast attempt is made.
+	//
+	// API is not stable. DO NOT USE.
+	SupportsListenNotify() bool
+
+	// TimePrecision returns the maximum time resolution supported by the
+	// database. This is used in test assertions when checking round trips on
+	// timestamps.
+	//
+	// API is not stable. DO NOT USE.
+	TimePrecision() time.Duration
 
 	// UnwrapExecutor gets an executor from a driver transaction.
 	//
@@ -188,11 +244,14 @@ type Executor interface {
 	QueueResume(ctx context.Context, params *QueueResumeParams) error
 	QueueUpdate(ctx context.Context, params *QueueUpdateParams) (*rivertype.Queue, error)
 	QueryRow(ctx context.Context, sql string, args ...any) Row
+	SchemaCreate(ctx context.Context, params *SchemaCreateParams) error
+	SchemaDrop(ctx context.Context, params *SchemaDropParams) error
 	SchemaGetExpired(ctx context.Context, params *SchemaGetExpiredParams) ([]string, error)
 
 	// TableExists checks whether a table exists for the schema in the current
 	// search schema.
 	TableExists(ctx context.Context, params *TableExistsParams) (bool, error)
+	TableTruncate(ctx context.Context, params *TableTruncateParams) error
 }
 
 // ExecutorTx is an executor which is a transaction. In addition to standard
@@ -247,6 +306,7 @@ type JobCancelParams struct {
 	ID                int64
 	CancelAttemptedAt time.Time
 	ControlTopic      string
+	Now               *time.Time
 	Schema            string
 }
 
@@ -359,7 +419,7 @@ type JobListParams struct {
 type JobRescueManyParams struct {
 	ID          []int64
 	Error       [][]byte
-	FinalizedAt []time.Time
+	FinalizedAt []*time.Time
 	ScheduledAt []time.Time
 	Schema      string
 	State       []string
@@ -367,12 +427,13 @@ type JobRescueManyParams struct {
 
 type JobRetryParams struct {
 	ID     int64
+	Now    *time.Time
 	Schema string
 }
 
 type JobScheduleParams struct {
 	Max    int
-	Now    time.Time
+	Now    *time.Time
 	Schema string
 }
 
@@ -482,6 +543,7 @@ type JobSetStateIfRunningManyParams struct {
 	FinalizedAt     []*time.Time
 	MetadataDoMerge []bool
 	MetadataUpdates [][]byte
+	Now             *time.Time
 	ScheduledAt     []*time.Time
 	Schema          string
 	State           []rivertype.JobState
@@ -641,11 +703,13 @@ type QueueListParams struct {
 
 type QueuePauseParams struct {
 	Name   string
+	Now    *time.Time
 	Schema string
 }
 
 type QueueResumeParams struct {
 	Name   string
+	Now    *time.Time
 	Schema string
 }
 
@@ -664,6 +728,22 @@ type Schema struct {
 	Name string
 }
 
+type SchemaAttachParams struct {
+	Schema string
+}
+
+type SchemaCreateParams struct {
+	Schema string
+}
+
+type SchemaDetachParams struct {
+	Schema string
+}
+
+type SchemaDropParams struct {
+	Schema string
+}
+
 type SchemaGetExpiredParams struct {
 	BeforeName string
 	Prefix     string
@@ -672,4 +752,27 @@ type SchemaGetExpiredParams struct {
 type TableExistsParams struct {
 	Schema string
 	Table  string
+}
+
+type TableTruncateParams struct {
+	Schema string
+	Table  []string
+}
+
+// MigrationLineMainTruncateTables is a shared helper that produces tables to
+// truncate for the main migration line. It's reused across all drivers.
+//
+// API is not stable. DO NOT USE.
+func MigrationLineMainTruncateTables(version int) []string {
+	switch version {
+	case 1:
+		return nil // don't truncate `river_migrate`
+	case 2, 3:
+		return []string{"river_job", "river_leader"}
+	case 4:
+		return []string{"river_job", "river_leader", "river_queue"}
+	}
+
+	// 0 (zero value), 5, 6
+	return []string{"river_job", "river_leader", "river_queue", "river_client", "river_client_queue"}
 }

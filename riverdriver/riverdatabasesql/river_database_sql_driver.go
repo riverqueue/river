@@ -15,9 +15,10 @@ import (
 	"fmt"
 	"io/fs"
 	"math"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lib/pq"
 
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/riverdriver"
@@ -49,6 +50,11 @@ func New(dbPool *sql.DB) *Driver {
 	}
 }
 
+const argPlaceholder = "$"
+
+func (d *Driver) ArgPlaceholder() string { return argPlaceholder }
+func (d *Driver) DatabaseName() string   { return "postgres" }
+
 func (d *Driver) GetExecutor() riverdriver.Executor {
 	return &Executor{d.dbPool, templateReplaceWrapper{d.dbPool, &d.replacer}, d}
 }
@@ -65,20 +71,24 @@ func (d *Driver) GetMigrationFS(line string) fs.FS {
 	panic("migration line does not exist: " + line)
 }
 func (d *Driver) GetMigrationLines() []string { return []string{riverdriver.MigrationLineMain} }
-func (d *Driver) GetMigrationTruncateTables(line string) []string {
+func (d *Driver) GetMigrationTruncateTables(line string, version int) []string {
 	if line == riverdriver.MigrationLineMain {
-		return []string{
-			"river_client",
-			"river_client_queue",
-			"river_job",
-			"river_leader",
-			"river_queue",
-		}
+		return riverdriver.MigrationLineMainTruncateTables(version)
 	}
 	panic("migration line does not exist: " + line)
 }
-func (d *Driver) HasPool() bool          { return d.dbPool != nil }
-func (d *Driver) SupportsListener() bool { return false }
+
+func (d *Driver) PoolIsSet() bool          { return d.dbPool != nil }
+func (d *Driver) PoolSet(dbPool any) error { return riverdriver.ErrNotImplemented }
+
+func (d *Driver) SQLFragmentColumnIn(column string, values any) (string, any, error) {
+	// Identical to the Pgx implementation except for use of `pg.Array`.
+	return fmt.Sprintf("%s = any(@%s)", column, column), pq.Array(values), nil
+}
+
+func (d *Driver) SupportsListener() bool       { return false }
+func (d *Driver) SupportsListenNotify() bool   { return true }
+func (d *Driver) TimePrecision() time.Duration { return time.Microsecond }
 
 func (d *Driver) UnwrapExecutor(tx *sql.Tx) riverdriver.ExecutorTx {
 	// Allows UnwrapExecutor to be invoked even if driver is nil.
@@ -140,6 +150,7 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 		ID:                params.ID,
 		CancelAttemptedAt: string(cancelledAt),
 		ControlTopic:      params.ControlTopic,
+		Now:               params.Now,
 		Schema:            sql.NullString{String: params.Schema, Valid: params.Schema != ""},
 	})
 	if err != nil {
@@ -168,13 +179,20 @@ func (e *Executor) JobDelete(ctx context.Context, params *riverdriver.JobDeleteP
 }
 
 func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobDeleteBeforeParams) (int, error) {
-	numDeleted, err := dbsqlc.New().JobDeleteBefore(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobDeleteBeforeParams{
+	res, err := dbsqlc.New().JobDeleteBefore(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobDeleteBeforeParams{
 		CancelledFinalizedAtHorizon: params.CancelledFinalizedAtHorizon,
 		CompletedFinalizedAtHorizon: params.CompletedFinalizedAtHorizon,
 		DiscardedFinalizedAtHorizon: params.DiscardedFinalizedAtHorizon,
 		Max:                         int64(params.Max),
 	})
-	return int(numDeleted), interpretError(err)
+	if err != nil {
+		return 0, interpretError(err)
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return 0, interpretError(err)
+	}
+	return int(rowsAffected), nil
 }
 
 func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
@@ -215,7 +233,10 @@ func (e *Executor) JobGetByKindMany(ctx context.Context, params *riverdriver.Job
 }
 
 func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error) {
-	jobs, err := dbsqlc.New().JobGetStuck(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobGetStuckParams{Max: int32(min(params.Max, math.MaxInt32)), StuckHorizon: params.StuckHorizon}) //nolint:gosec
+	jobs, err := dbsqlc.New().JobGetStuck(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobGetStuckParams{
+		Max:          int32(min(params.Max, math.MaxInt32)), //nolint:gosec
+		StuckHorizon: params.StuckHorizon,
+	})
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -343,13 +364,18 @@ func (e *Executor) JobInsertFastManyNoReturning(ctx context.Context, params *riv
 }
 
 func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobInsertFullParams) (*rivertype.JobRow, error) {
+	var errors []string
+	if len(params.Errors) > 0 {
+		errors = sliceutil.Map(params.Errors, func(e []byte) string { return string(e) })
+	}
+
 	job, err := dbsqlc.New().JobInsertFull(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobInsertFullParams{
 		Attempt:      int16(min(params.Attempt, math.MaxInt16)), //nolint:gosec
 		AttemptedAt:  params.AttemptedAt,
 		AttemptedBy:  params.AttemptedBy,
 		Args:         string(params.EncodedArgs),
 		CreatedAt:    params.CreatedAt,
-		Errors:       sliceutil.Map(params.Errors, func(e []byte) string { return string(e) }),
+		Errors:       errors,
 		FinalizedAt:  params.FinalizedAt,
 		Kind:         params.Kind,
 		MaxAttempts:  int16(min(params.MaxAttempts, math.MaxInt16)), //nolint:gosec
@@ -359,7 +385,7 @@ func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobIns
 		ScheduledAt:  params.ScheduledAt,
 		State:        dbsqlc.RiverJobState(params.State),
 		Tags:         params.Tags,
-		UniqueKey:    params.UniqueKey,
+		UniqueKey:    string(params.UniqueKey),
 		UniqueStates: int32(params.UniqueStates),
 	})
 	if err != nil {
@@ -369,15 +395,10 @@ func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobIns
 }
 
 func (e *Executor) JobList(ctx context.Context, params *riverdriver.JobListParams) ([]*rivertype.JobRow, error) {
-	whereClause, err := replaceNamed(params.WhereClause, params.NamedArgs)
-	if err != nil {
-		return nil, err
-	}
-
 	ctx = sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
 		"order_by_clause": {Value: params.OrderByClause},
-		"where_clause":    {Value: whereClause},
-	}, nil) // named params not passed because they've already been replaced above
+		"where_clause":    {Value: params.WhereClause},
+	}, params.NamedArgs)
 
 	jobs, err := dbsqlc.New().JobList(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.Max)
 	if err != nil {
@@ -386,114 +407,24 @@ func (e *Executor) JobList(ctx context.Context, params *riverdriver.JobListParam
 	return mapSliceError(jobs, jobRowFromInternal)
 }
 
-func escapeSinglePostgresValue(value any) string {
-	switch typedValue := value.(type) {
-	case bool:
-		return strconv.FormatBool(typedValue)
-	case float32:
-		// The `-1` arg tells Go to represent the number with as few digits as
-		// possible. i.e. No unnecessary trailing zeroes.
-		return strconv.FormatFloat(float64(typedValue), 'f', -1, 32)
-	case float64:
-		// The `-1` arg tells Go to represent the number with as few digits as
-		// possible. i.e. No unnecessary trailing zeroes.
-		return strconv.FormatFloat(typedValue, 'f', -1, 64)
-	case int, int16, int32, int64, uint, uint16, uint32, uint64:
-		return fmt.Sprintf("%d", value)
-	case string:
-		return "'" + strings.ReplaceAll(typedValue, "'", "''") + "'"
-	default:
-		// unreachable as long as new types aren't added to the switch in `replacedNamed` below
-		panic("type not supported")
-	}
-}
-
-func makePostgresArray[T any](values []T) string {
-	var sb strings.Builder
-	sb.WriteString("ARRAY[")
-
-	for i, value := range values {
-		sb.WriteString(escapeSinglePostgresValue(value))
-
-		if i < len(values)-1 {
-			sb.WriteString(",")
-		}
-	}
-
-	sb.WriteString("]")
-	return sb.String()
-}
-
-// `database/sql` has an `sql.Named` system that should theoretically work for
-// named parameters, but neither Pgx or lib/pq implement it, so just use dumb
-// string replacement given we're only injecting a very basic value anyway.
-func replaceNamed(query string, namedArgs map[string]any) (string, error) {
-	for name, value := range namedArgs {
-		var escapedValue string
-
-		switch typedValue := value.(type) {
-		case bool, float32, float64, int, int16, int32, int64, string, uint, uint16, uint32, uint64:
-			escapedValue = escapeSinglePostgresValue(value)
-
-			// This is pretty awkward, but typedValue reverts back to `any` if
-			// any of these conditions are combined together, and that prevents
-			// us from ranging over the slice. Technically only `[]string` is
-			// needed right now, but I included other slice types just so there
-			// isn't a surprise later on.
-		case []bool:
-			escapedValue = makePostgresArray(typedValue)
-		case []float32:
-			escapedValue = makePostgresArray(typedValue)
-		case []float64:
-			escapedValue = makePostgresArray(typedValue)
-		case []int:
-			escapedValue = makePostgresArray(typedValue)
-		case []int16:
-			escapedValue = makePostgresArray(typedValue)
-		case []int32:
-			escapedValue = makePostgresArray(typedValue)
-		case []int64:
-			escapedValue = makePostgresArray(typedValue)
-		case []string:
-			escapedValue = makePostgresArray(typedValue)
-		case []uint:
-			escapedValue = makePostgresArray(typedValue)
-		case []uint16:
-			escapedValue = makePostgresArray(typedValue)
-		case []uint32:
-			escapedValue = makePostgresArray(typedValue)
-		case []uint64:
-			escapedValue = makePostgresArray(typedValue)
-		default:
-			return "", fmt.Errorf("named query parameter @%s is not a supported type", name)
-		}
-
-		newQuery := strings.Replace(query, "@"+name, escapedValue, 1)
-		if newQuery == query {
-			return "", fmt.Errorf("named query parameter @%s not found in query", name)
-		}
-		query = newQuery
-	}
-
-	return query, nil
-}
-
 func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRescueManyParams) (*struct{}, error) {
-	err := dbsqlc.New().JobRescueMany(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobRescueManyParams{
+	if err := dbsqlc.New().JobRescueMany(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobRescueManyParams{
 		ID:          params.ID,
 		Error:       sliceutil.Map(params.Error, func(e []byte) string { return string(e) }),
-		FinalizedAt: params.FinalizedAt,
+		FinalizedAt: sliceutil.Map(params.FinalizedAt, func(t *time.Time) time.Time { return ptrutil.ValOrDefault(t, time.Time{}) }),
 		ScheduledAt: params.ScheduledAt,
 		State:       params.State,
-	})
-	if err != nil {
+	}); err != nil {
 		return nil, interpretError(err)
 	}
 	return &struct{}{}, nil
 }
 
 func (e *Executor) JobRetry(ctx context.Context, params *riverdriver.JobRetryParams) (*rivertype.JobRow, error) {
-	job, err := dbsqlc.New().JobRetry(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.ID)
+	job, err := dbsqlc.New().JobRetry(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobRetryParams{
+		ID:  params.ID,
+		Now: params.Now,
+	})
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -584,7 +515,7 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 		FinalizedAtDoUpdate: params.FinalizedAtDoUpdate,
 		FinalizedAt:         params.FinalizedAt,
 		StateDoUpdate:       params.StateDoUpdate,
-		State:               dbsqlc.RiverJobState(params.State),
+		State:               dbsqlc.RiverJobState(cmp.Or(params.State, rivertype.JobStateAvailable)), // can't send empty job state, so provider default value that may not be set
 	})
 	if err != nil {
 		return nil, interpretError(err)
@@ -785,42 +716,36 @@ func (e *Executor) QueueGet(ctx context.Context, params *riverdriver.QueueGetPar
 }
 
 func (e *Executor) QueueList(ctx context.Context, params *riverdriver.QueueListParams) ([]*rivertype.Queue, error) {
-	internalQueues, err := dbsqlc.New().QueueList(schemaTemplateParam(ctx, params.Schema), e.dbtx, int32(min(params.Limit, math.MaxInt32))) //nolint:gosec
+	queues, err := dbsqlc.New().QueueList(schemaTemplateParam(ctx, params.Schema), e.dbtx, int32(min(params.Limit, math.MaxInt32))) //nolint:gosec
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	queues := make([]*rivertype.Queue, len(internalQueues))
-	for i, q := range internalQueues {
-		queues[i] = queueFromInternal(q)
-	}
-	return queues, nil
+	return sliceutil.Map(queues, queueFromInternal), nil
 }
 
 func (e *Executor) QueuePause(ctx context.Context, params *riverdriver.QueuePauseParams) error {
-	res, err := dbsqlc.New().QueuePause(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.Name)
+	rowsAffected, err := dbsqlc.New().QueuePause(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueuePauseParams{
+		Name: params.Name,
+		Now:  params.Now,
+	})
 	if err != nil {
 		return interpretError(err)
 	}
-	rowsAffected, err := res.RowsAffected()
-	if err != nil {
-		return interpretError(err)
-	}
-	if rowsAffected == 0 && params.Name != riverdriver.AllQueuesString {
+	if rowsAffected < 1 && params.Name != riverdriver.AllQueuesString {
 		return rivertype.ErrNotFound
 	}
 	return nil
 }
 
 func (e *Executor) QueueResume(ctx context.Context, params *riverdriver.QueueResumeParams) error {
-	res, err := dbsqlc.New().QueueResume(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.Name)
+	rowsAffected, err := dbsqlc.New().QueueResume(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueResumeParams{
+		Name: params.Name,
+		Now:  params.Now,
+	})
 	if err != nil {
 		return interpretError(err)
 	}
-	rowsAffected, err := res.RowsAffected()
-	if err != nil {
-		return interpretError(err)
-	}
-	if rowsAffected == 0 && params.Name != riverdriver.AllQueuesString {
+	if rowsAffected < 1 && params.Name != riverdriver.AllQueuesString {
 		return rivertype.ErrNotFound
 	}
 	return nil
@@ -842,10 +767,20 @@ func (e *Executor) QueryRow(ctx context.Context, sql string, args ...any) riverd
 	return e.dbtx.QueryRowContext(ctx, sql, args...)
 }
 
+func (e *Executor) SchemaCreate(ctx context.Context, params *riverdriver.SchemaCreateParams) error {
+	_, err := e.dbtx.ExecContext(ctx, "CREATE SCHEMA "+params.Schema)
+	return interpretError(err)
+}
+
+func (e *Executor) SchemaDrop(ctx context.Context, params *riverdriver.SchemaDropParams) error {
+	_, err := e.dbtx.ExecContext(ctx, "DROP SCHEMA "+params.Schema+" CASCADE")
+	return interpretError(err)
+}
+
 func (e *Executor) SchemaGetExpired(ctx context.Context, params *riverdriver.SchemaGetExpiredParams) ([]string, error) {
 	schemas, err := dbsqlc.New().SchemaGetExpired(ctx, e.dbtx, &dbsqlc.SchemaGetExpiredParams{
 		BeforeName: params.BeforeName,
-		Prefix:     params.Prefix,
+		Prefix:     params.Prefix + "%",
 	})
 	if err != nil {
 		return nil, interpretError(err)
@@ -862,6 +797,25 @@ func (e *Executor) TableExists(ctx context.Context, params *riverdriver.TableExi
 
 	exists, err := dbsqlc.New().TableExists(ctx, e.dbtx, schemaAndTable)
 	return exists, interpretError(err)
+}
+
+func (e *Executor) TableTruncate(ctx context.Context, params *riverdriver.TableTruncateParams) error {
+	var maybeSchema string
+	if params.Schema != "" {
+		maybeSchema = params.Schema + "."
+	}
+
+	// Uses raw SQL so we can truncate multiple tables at once.
+	_, err := e.dbtx.ExecContext(ctx, "TRUNCATE TABLE "+
+		strings.Join(
+			sliceutil.Map(
+				params.Table,
+				func(table string) string { return maybeSchema + table },
+			),
+			", ",
+		),
+	)
+	return interpretError(err)
 }
 
 type ExecutorTx struct {
@@ -975,22 +929,22 @@ type templateReplaceWrapper struct {
 }
 
 func (w templateReplaceWrapper) ExecContext(ctx context.Context, sql string, args ...interface{}) (sql.Result, error) {
-	sql, args = w.replacer.Run(ctx, sql, args)
+	sql, args = w.replacer.Run(ctx, argPlaceholder, sql, args)
 	return w.dbtx.ExecContext(ctx, sql, args...)
 }
 
 func (w templateReplaceWrapper) PrepareContext(ctx context.Context, sql string) (*sql.Stmt, error) {
-	sql, _ = w.replacer.Run(ctx, sql, nil)
+	sql, _ = w.replacer.Run(ctx, argPlaceholder, sql, nil)
 	return w.dbtx.PrepareContext(ctx, sql)
 }
 
 func (w templateReplaceWrapper) QueryContext(ctx context.Context, sql string, args ...interface{}) (*sql.Rows, error) {
-	sql, args = w.replacer.Run(ctx, sql, args)
+	sql, args = w.replacer.Run(ctx, argPlaceholder, sql, args)
 	return w.dbtx.QueryContext(ctx, sql, args...)
 }
 
 func (w templateReplaceWrapper) QueryRowContext(ctx context.Context, sql string, args ...interface{}) *sql.Row {
-	sql, args = w.replacer.Run(ctx, sql, args)
+	sql, args = w.replacer.Run(ctx, argPlaceholder, sql, args)
 	return w.dbtx.QueryRowContext(ctx, sql, args...)
 }
 

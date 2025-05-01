@@ -210,6 +210,35 @@ jobs:
           fi
         shell: bash
 
+      #
+      # Run the whole migration loop again, this time for SQLite.
+      #
+
+      - run: echo "SQLITE_DATABASE_URL=sqlite://river_dev.sqlite3" >> $GITHUB_ENV
+        shell: bash
+
+      - run: river migrate-up --database-url $SQLITE_DATABASE_URL
+        shell: bash
+
+      - run: river validate --database-url $SQLITE_DATABASE_URL
+        shell: bash
+
+      - run: river migrate-down --database-url $SQLITE_DATABASE_URL --max-steps 100
+        shell: bash
+
+      - name: river validate (expect failure)
+        run: |
+          if river validate --database-url $SQLITE_DATABASE_URL; then
+            echo "expected non-zero exit code" && exit 1
+          fi
+        shell: bash
+
+      - run: river migrate-get --down --version 3 --database-url $SQLITE_DATABASE_URL
+        shell: bash
+
+      - run: river migrate-get --up --version 3 --database-url $SQLITE_DATABASE_URL
+        shell: bash
+
   golangci:
     name: lint
     runs-on: ubuntu-latest

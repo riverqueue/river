@@ -83,14 +83,14 @@ CREATE TRIGGER river_notify
   EXECUTE PROCEDURE /* TEMPLATE: schema */river_job_notify();
 
 CREATE UNLOGGED TABLE /* TEMPLATE: schema */river_leader(
-  -- 8 bytes each (no alignment needed)
-  elected_at timestamptz NOT NULL,
-  expires_at timestamptz NOT NULL,
+    -- 8 bytes each (no alignment needed)
+    elected_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL,
 
-  -- types stored out-of-band
-  leader_id text NOT NULL,
-  name text PRIMARY KEY,
+    -- types stored out-of-band
+    leader_id text NOT NULL,
+    name text PRIMARY KEY,
 
-  CONSTRAINT name_length CHECK (char_length(name) > 0 AND char_length(name) < 128),
-  CONSTRAINT leader_id_length CHECK (char_length(leader_id) > 0 AND char_length(leader_id) < 128)
+    CONSTRAINT name_length CHECK (char_length(name) > 0 AND char_length(name) < 128),
+    CONSTRAINT leader_id_length CHECK (char_length(leader_id) > 0 AND char_length(leader_id) < 128)
 );

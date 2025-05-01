@@ -86,7 +86,7 @@ func (c *InlineCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobst
 		}
 		defer execTx.Rollback(ctx)
 
-		jobs, err := c.pilot.JobSetStateIfRunningMany(ctx, execTx, setStateParamsToMany(c.schema, params))
+		jobs, err := c.pilot.JobSetStateIfRunningMany(ctx, execTx, setStateParamsToMany(c.Time.NowUTCOrNil(), c.schema, params))
 		if err != nil {
 			return nil, err
 		}
@@ -133,7 +133,7 @@ func (c *InlineCompleter) Start(ctx context.Context) error {
 	return nil
 }
 
-func setStateParamsToMany(schema string, params *riverdriver.JobSetStateIfRunningParams) *riverdriver.JobSetStateIfRunningManyParams {
+func setStateParamsToMany(now *time.Time, schema string, params *riverdriver.JobSetStateIfRunningParams) *riverdriver.JobSetStateIfRunningManyParams {
 	return &riverdriver.JobSetStateIfRunningManyParams{
 		Attempt:         []*int{params.Attempt},
 		ErrData:         [][]byte{params.ErrData},
@@ -141,6 +141,7 @@ func setStateParamsToMany(schema string, params *riverdriver.JobSetStateIfRunnin
 		ID:              []int64{params.ID},
 		MetadataDoMerge: []bool{params.MetadataDoMerge},
 		MetadataUpdates: [][]byte{params.MetadataUpdates},
+		Now:             now,
 		ScheduledAt:     []*time.Time{params.ScheduledAt},
 		Schema:          schema,
 		State:           []rivertype.JobState{params.State},
@@ -198,7 +199,7 @@ func (c *AsyncCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobsta
 			}
 			defer execTx.Rollback(ctx)
 
-			rows, err := c.pilot.JobSetStateIfRunningMany(ctx, execTx, setStateParamsToMany(c.schema, params))
+			rows, err := c.pilot.JobSetStateIfRunningMany(ctx, execTx, setStateParamsToMany(c.Time.NowUTCOrNil(), c.schema, params))
 			if err != nil {
 				return nil, err
 			}

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -32,14 +34,15 @@ import (
 const schemaDateFormat = "2006_01_02t15_04_05" // everything here needs to be lowercase because Postgres forces schema names to lowercase
 
 var (
-	genSchemaBase  sync.Once                   //nolint:gochecknoglobals
-	idleSchemas    = make(map[string][]string) //nolint:gochecknoglobals
-	idleSchemasMu  sync.Mutex                  //nolint:gochecknoglobals
-	initialCleanup sync.Once                   //nolint:gochecknoglobals
-	nextSchemaNum  atomic.Int32                //nolint:gochecknoglobals
-	packageName    string                      //nolint:gochecknoglobals
-	schemaBaseName string                      //nolint:gochecknoglobals
-	stats          struct {                    //nolint:gochecknoglobals
+	genSchemaBase    sync.Once                     //nolint:gochecknoglobals
+	idleSchemas      = make(map[string][]string)   //nolint:gochecknoglobals
+	idleSchemasMu    sync.Mutex                    //nolint:gochecknoglobals
+	initialCleanup   = make(map[string]*sync.Once) //nolint:gochecknoglobals
+	initialCleanupMu sync.Mutex                    //nolint:gochecknoglobals
+	nextSchemaNum    atomic.Int32                  //nolint:gochecknoglobals
+	packageName      string                        //nolint:gochecknoglobals
+	schemaBaseName   string                        //nolint:gochecknoglobals
+	stats            struct {                      //nolint:gochecknoglobals
 		numGenerated atomic.Int32
 		numReused    atomic.Int32
 	}
@@ -48,14 +51,40 @@ var (
 // TestSchemaOpts are options for TestSchema. Most of the time these can be left
 // as nil.
 type TestSchemaOpts struct {
+	// LineTargetVersions specify target versions for migration lines being
+	// migrated. By default all lines are migrated all the way up, but this lets
+	// tests migrate to an only partially applied version. This option is rarely
+	// required.
+	LineTargetVersions map[string]int
+
 	// Lines are migration lines to run. By default, the migration lines
 	// specified by the driver's GetMigrationDefaultLines function are run.
 	//
 	// Set to an empty non-nil slice like `[]string{}` to run no migrations.
 	Lines []string
 
-	// Schema will not be checked in for reuse at the end of tests.
-	noReuse bool
+	// ProcurePool returns a database pool that will be set to the input driver
+	// using Driver.PoolSet. This is an optional parameter and should usuall be
+	// left unset. It exists for use with SQLite to generate a database pool for
+	// use in testing after a test schema is available because unlike other
+	// databases, test schemas in SQLite (which are actually test databases) are
+	// not available between databases.
+	//
+	// The input schema is the name of the test schema to use. After the pool's
+	// been procured, it'll either be migrated to current version or have its
+	// tables truncated, depending on whether it's been reused or not.
+	//
+	// Returns a database pool (*sql.DB for SQLite) and a "user-facing schema
+	// name", which is the schema used in River operations. In practice, this is
+	// an empty string for SQLite because unlike other databases, schemas can't
+	// be reference by their qualified name (operations must use `river_job`
+	// instead of `schema.river_job`).
+	ProcurePool func(ctx context.Context, schema string) (any, string)
+
+	// disableReuse specifies that schema will not be checked in for reuse at
+	// the end of tests. This is desirable in certain like cases like where a
+	// test case is making modifications to schema.
+	disableReuse bool
 
 	// skipPackageNameCheck skips the check that package name doesn't resolve to
 	// `riverdbtest`. Normally we want this to make sure that we're skipping
@@ -135,13 +164,26 @@ func TestSchema[TTx any](ctx context.Context, tb testutil.TestingTB, driver rive
 		schemaBaseName = packageName + "_" + time.Now().Format(schemaDateFormat) + "_schema_"
 	})
 
-	exec := driver.GetExecutor()
-
 	// Schemas aren't dropped after a package test run. Instead, we drop them
 	// before starting a test run. This happens in a `sync.Once` to minimize the
 	// amount of work that needs to be done (it has to run once, but all other
-	// TestSchema invocations skip it).
-	initialCleanup.Do(func() {
+	// TestSchema invocations skip it). It's done once per database (i.e.  once
+	// for Postgres and once for SQLite).
+	//
+	// The code below may look a little odd using both a mutex and `sync.Once`.
+	// It's done this way as a minor optimization so that cleanups for different
+	// database types can run in parallel with each other.
+	initialCleanupOnce := func() *sync.Once {
+		initialCleanupMu.Lock()
+		defer initialCleanupMu.Unlock()
+
+		if _, ok := initialCleanup[driver.DatabaseName()]; !ok {
+			initialCleanup[driver.DatabaseName()] = &sync.Once{}
+		}
+
+		return initialCleanup[driver.DatabaseName()]
+	}()
+	initialCleanupOnce.Do(func() {
 		expiredSchemas := func() []string {
 			// We only expire schemas in our package prefix (e.g. `river_*`) so
 			// that in case other package tests are running in parallel we don't
@@ -149,21 +191,29 @@ func TestSchema[TTx any](ctx context.Context, tb testutil.TestingTB, driver rive
 			// schemas.
 			expiredSchemas, err := driver.GetExecutor().SchemaGetExpired(ctx, &riverdriver.SchemaGetExpiredParams{
 				BeforeName: schemaBaseName,
-				Prefix:     packageName + "_%",
+				Prefix:     packageName + "_", // drivers must add "%" wildcard if they need it
 			})
 			require.NoError(tb, err)
 
 			return expiredSchemas
 		}()
 
-		start := time.Now()
-
+		// A complete test run may have created quite a few test schemas (I've
+		// seen 100+ from SQLite), so drop schemas with some parallelism as a
+		// small optimization.
+		var (
+			errGroup, ctx = errgroup.WithContext(ctx)
+			exec          = driver.GetExecutor()
+			start         = time.Now()
+		)
+		errGroup.SetLimit(runtime.NumCPU())
 		for _, schema := range expiredSchemas {
-			_, err := exec.Exec(ctx, fmt.Sprintf("DROP SCHEMA %s CASCADE", schema))
-			require.NoError(tb, err)
+			errGroup.Go(func() error {
+				return exec.SchemaDrop(ctx, &riverdriver.SchemaDropParams{Schema: schema})
+			})
 		}
-
-		tb.Logf("Dropped %d expired schema(s) in %s", len(expiredSchemas), time.Since(start))
+		require.NoError(tb, errGroup.Wait())
+		tb.Logf("Dropped %d expired %s schema(s) in %s", len(expiredSchemas), driver.DatabaseName(), time.Since(start))
 	})
 
 	lines := driver.GetMigrationDefaultLines()
@@ -171,20 +221,99 @@ func TestSchema[TTx any](ctx context.Context, tb testutil.TestingTB, driver rive
 		lines = opts.Lines
 	}
 
-	// Idle schemas must be managed by which migration lines were run within
-	// them. i.e. A schema with no migrations obviously cannot be reused for a
-	// test expecting the `main` migration line.
+	if opts.LineTargetVersions != nil {
+		for lineTarget := range opts.LineTargetVersions {
+			if !slices.Contains(lines, lineTarget) {
+				require.FailNow(tb, "line from LineTargetVersions not in target line: "+lineTarget)
+			}
+		}
+	}
+
+	// Idle schemas must be managed by their database which migration lines were
+	// run within them. i.e. A schema with no migrations obviously cannot be
+	// reused for a test expecting the `main` migration line. An SQLite schema
+	// can't be reused for Postgres.
 	//
 	// linesKey acts as key specific to this migrations set for idleSchemas.
-	slices.Sort(lines)
-	linesKey := strings.Join(lines, ",")
+	databaseAndLinesKey := func() string {
+		slices.Sort(lines)
+
+		var sb strings.Builder
+		sb.WriteString(driver.DatabaseName())
+
+		for _, line := range lines {
+			sb.WriteString(",")
+			sb.WriteString(line)
+
+			if opts.LineTargetVersions != nil {
+				if targetVersion, ok := opts.LineTargetVersions[line]; ok {
+					sb.WriteString(":")
+					sb.WriteString(strconv.Itoa(targetVersion))
+				}
+			}
+		}
+
+		return sb.String()
+	}()
 
 	// All tables to truncate when reusing a schema for this set of lines. Also
 	// used to perform the post-flight cleanup check to make sure tests didn't
 	// leave any detritus in the default schema.
 	var truncateTables []string
 	for _, line := range lines {
-		truncateTables = append(truncateTables, driver.GetMigrationTruncateTables(line)...)
+		var targetVersion int
+		if opts.LineTargetVersions != nil {
+			targetVersion = opts.LineTargetVersions[line]
+		}
+
+		truncateTables = driver.GetMigrationTruncateTables(line, targetVersion)
+	}
+
+	// Adds a hook on `tb.Cleanup` that checks the test schema in after use.
+	addCleanupHook := func(schema string) {
+		// Use an interface here so that callers can pass in `testutil.PanicTB`,
+		// which doesn't have a Cleanup implementation, but also won't care about
+		// having to check schemas back in (it's used in example tests).
+		type testingTBWithCleanup interface {
+			Cleanup(cleanupFunc func())
+		}
+
+		if withCleanup, ok := tb.(testingTBWithCleanup); ok {
+			if !opts.disableReuse {
+				withCleanup.Cleanup(func() {
+					idleSchemasMu.Lock()
+					defer idleSchemasMu.Unlock()
+
+					idleSchemas[databaseAndLinesKey] = append(idleSchemas[databaseAndLinesKey], schema)
+
+					tb.Logf("Checked in %s schema %q; %d idle schema(s) [%d generated] [%d reused]",
+						driver.DatabaseName(), schema, len(idleSchemas), stats.numGenerated.Load(), stats.numReused.Load())
+				})
+			} else {
+				tb.Logf("TestSchemaOpts.disableReuse is set; schema not checked in for reuse")
+			}
+		} else {
+			tb.Logf("tb does not implement Cleanup; schema not checked in for reuse")
+		}
+	}
+
+	// This is used for SQLite to provision a new pool for our test schema
+	// because test schemas are really test databases under SQLite. Returns a
+	// "user-facing schema name" that gives the SQLite an opportunity to empty
+	// the name because unlike a schema, we won't be able to reference it.
+	maybeProcurePool := func(schema string) string {
+		if opts.ProcurePool == nil {
+			return schema
+		}
+
+		if driver.PoolIsSet() {
+			require.FailNow(tb, "Should not use ProcurePool with driver already containing pool")
+		}
+
+		dbPool, userFacingSchema := opts.ProcurePool(ctx, schema)
+		require.NoError(tb, driver.PoolSet(dbPool))
+
+		return userFacingSchema
 	}
 
 	// See if there are any idle schemas that were previously generated during
@@ -196,42 +325,51 @@ func TestSchema[TTx any](ctx context.Context, tb testutil.TestingTB, driver rive
 		idleSchemasMu.Lock()
 		defer idleSchemasMu.Unlock()
 
-		linesIdleSchemas := idleSchemas[linesKey]
+		linesIdleSchemas := idleSchemas[databaseAndLinesKey]
 
 		if len(linesIdleSchemas) < 1 {
 			return ""
 		}
 
 		schema := linesIdleSchemas[0]
-		idleSchemas[linesKey] = linesIdleSchemas[1:]
+		idleSchemas[databaseAndLinesKey] = linesIdleSchemas[1:]
 		return schema
 	}(); schema != "" {
-		start := time.Now()
+		// Should be called BEFORE maybeProcurePool. maybeProcurePool may open a
+		// pool, and in case it does, we want a cleanup in it that closes the pool
+		// to run before this cleanup hook that checks the test schema back in.
+		// Cleanup is FILO, so clean up must appear first to run last.
+		addCleanupHook(schema)
+
+		var (
+			start            = time.Now()
+			userFacingSchema = maybeProcurePool(schema)
+		)
 
 		if len(truncateTables) > 0 {
-			_, err := exec.Exec(ctx, "TRUNCATE TABLE "+
-				strings.Join(
-					sliceutil.Map(
-						truncateTables,
-						func(table string) string { return schema + "." + table },
-					),
-					", ",
-				),
-			)
-			require.NoError(tb, err)
+			require.NoError(tb, driver.GetExecutor().TableTruncate(ctx, &riverdriver.TableTruncateParams{Schema: userFacingSchema, Table: truncateTables}))
 		}
 
-		tb.Logf("Reusing idle schema %q after cleaning in %s [%d generated] [%d reused]",
-			schema, time.Since(start), stats.numGenerated.Load(), stats.numReused.Add(1))
+		tb.Logf("Reusing idle %s schema %q [user facing: %q] after cleaning in %s [%d generated] [%d reused]",
+			driver.DatabaseName(), schema, userFacingSchema, time.Since(start), stats.numGenerated.Load(), stats.numReused.Add(1))
 
-		return schema
+		return userFacingSchema
 	}
 
 	// e.g. river_2025_04_14t22_13_58_schema_10
 	schema := schemaBaseName + fmt.Sprintf("%02d", nextSchemaNum.Add(1))
 
-	_, err := exec.Exec(ctx, "CREATE SCHEMA "+schema)
-	require.NoError(tb, err)
+	// Should be called BEFORE maybeProcurePool. maybeProcurePool may open a
+	// pool, and in case it does, we want a cleanup in it that closes the pool
+	// to run before this cleanup hook that checks the test schema back in.
+	// Cleanup is FILO, so clean up must appear first to run last.
+	addCleanupHook(schema)
+
+	// same as schema for Postgres, but empty string for SQLite where we can't reference the current schema by its qualified name
+	userFacingSchema := maybeProcurePool(schema)
+
+	// `CREATE SCHEMA` for Postgres; no-op for SQLite
+	require.NoError(tb, driver.GetExecutor().SchemaCreate(ctx, &riverdriver.SchemaCreateParams{Schema: schema}))
 
 	for _, line := range lines {
 		// Migrate the new schema. This takes somewhere in the neighborhood of 10 to
@@ -240,16 +378,24 @@ func TestSchema[TTx any](ctx context.Context, tb testutil.TestingTB, driver rive
 		migrator, err := rivermigrate.New(driver, &rivermigrate.Config{
 			Line:   line,
 			Logger: riversharedtest.LoggerWarn(tb), // set to warn level to make migrate logs a little quieter since as we'll be migrating a lot
-			Schema: schema,
+			Schema: userFacingSchema,
 		})
 		require.NoError(tb, err)
 
+		var targetVersion int
+		if opts.LineTargetVersions != nil {
+			targetVersion = opts.LineTargetVersions[line]
+		}
+
 		start := time.Now()
 
-		migrateRes, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, &rivermigrate.MigrateOpts{})
+		migrateRes, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, &rivermigrate.MigrateOpts{
+			TargetVersion: targetVersion,
+		})
 		require.NoError(tb, err)
 
-		tb.Logf("Generated schema %q with migrations %+v on line %q in %s [%d generated] [%d reused]",
+		tb.Logf("Generated %s schema %q with migrations %+v on line %q in %s [%d generated] [%d reused]",
+			driver.DatabaseName(),
 			schema,
 			sliceutil.Map(migrateRes.Versions, func(v rivermigrate.MigrateVersion) int { return v.Version }),
 			line,
@@ -259,30 +405,7 @@ func TestSchema[TTx any](ctx context.Context, tb testutil.TestingTB, driver rive
 		)
 	}
 
-	// Use an interface here so that callers can pass in `testutil.PanicTB`,
-	// which doesn't have a Cleanup implementation, but also won't care about
-	// having to check schemas back in (it's used in example tests).
-	type testingTBWithCleanup interface {
-		Cleanup(cleanupFunc func())
-	}
-
-	if withCleanup, ok := tb.(testingTBWithCleanup); ok {
-		if !opts.noReuse {
-			withCleanup.Cleanup(func() {
-				idleSchemasMu.Lock()
-				defer idleSchemasMu.Unlock()
-
-				idleSchemas[linesKey] = append(idleSchemas[linesKey], schema)
-
-				tb.Logf("Checked in schema %q; %d idle schema(s) [%d generated] [%d reused]",
-					schema, len(idleSchemas), stats.numGenerated.Load(), stats.numReused.Load())
-			})
-		}
-	} else {
-		tb.Logf("tb does not implement Cleanup; schema not checked in for reuse")
-	}
-
-	return schema
+	return userFacingSchema
 }
 
 // Gets a "friendly package name" from a fully qualified function name.
@@ -313,13 +436,26 @@ func packageFromFunc(funcName string) string {
 func TestTxPgx(ctx context.Context, tb testing.TB) pgx.Tx {
 	tb.Helper()
 
-	return TestTx(ctx, tb, riverpgxv5.New(riversharedtest.DBPool(ctx, tb)), &TestTxOpts{
+	tx, schema := TestTx(ctx, tb, riverpgxv5.New(riversharedtest.DBPool(ctx, tb)), &TestTxOpts{
 		IsTestTxHelper: true,
 	})
+
+	_, err := tx.Exec(ctx, "SET search_path TO '"+schema+"'")
+	require.NoError(tb, err)
+
+	return tx
 }
 
 // TestTxOpts are options for TestTx. Most of the time these can be left as nil.
 type TestTxOpts struct {
+	// DisableSchemaSharing prevents test transactions from trying to share a
+	// schema, and instead falls back to procuring schemas for each transaction
+	// run using TestSchema. This is meant for environments where parallelism
+	// doesn't work as well, like SQLite, which will emit "busy" errors when
+	// multiple clients try to share a schema, even when they're in separate
+	// transactions.
+	DisableSchemaSharing bool
+
 	// IsTestTxHelper should be set to true for if TestTx is being called from
 	// within a secondary helper that's in a common testing package. This causes
 	// an extra stack frame to be skipped when determining the name of the test
@@ -327,6 +463,24 @@ type TestTxOpts struct {
 	// `riverprodbtest` we get the real name of the package being tested (e.g.
 	// `river` or `riverpro`).
 	IsTestTxHelper bool
+
+	// ProcurePool returns a database pool that will be set to the input driver
+	// using Driver.PoolSet. This is an optional parameter and should usuall be
+	// left unset. It exists for use with SQLite to generate a database pool for
+	// use in testing after a test schema is available because unlike other
+	// databases, test schemas in SQLite (which are actually test databases) are
+	// not available between databases.
+	//
+	// The input schema is the name of the test schema to use. After the pool's
+	// been procured, it'll either be migrated to current version or have its
+	// tables truncated, depending on whether it's been reused or not.
+	//
+	// Returns a database pool (*sql.DB for SQLite) and a "user-facing schema
+	// name", which is the schema used in River operations. In practice, this is
+	// an empty string for SQLite because unlike other databases, schemas can't
+	// be reference by their qualified name (operations must use `river_job`
+	// instead of `schema.river_job`).
+	ProcurePool func(ctx context.Context, schema string) (any, string)
 
 	// Lines are migration lines to run. By default, the migration lines
 	// specified by the driver's GetMigrationDefaultLines function are run.
@@ -357,16 +511,13 @@ type TestTxOpts struct {
 //
 // The included driver determines what migrations are run to prepare the test
 // transaction schema.
-func TestTx[TTx any](ctx context.Context, tb testing.TB, driver riverdriver.Driver[TTx], opts *TestTxOpts) TTx {
+func TestTx[TTx any](ctx context.Context, tb testing.TB, driver riverdriver.Driver[TTx], opts *TestTxOpts) (TTx, string) {
 	tb.Helper()
 
-	schema := testTxSchemaForMigrationLines(ctx, tb, driver, opts)
-	tb.Logf("TestTx using schema: " + schema)
+	schema := testTxSchemaForDatabaseAndMigrationLines(ctx, tb, driver, opts)
+	tb.Logf("TestTx using %s schema: %s", driver.DatabaseName(), schema)
 
-	tx, err := driver.GetExecutor().Begin(ctx)
-	require.NoError(tb, err)
-
-	_, err = tx.Exec(ctx, "SET search_path TO '"+schema+"'")
+	execTx, err := driver.GetExecutor().Begin(ctx)
 	require.NoError(tb, err)
 
 	tb.Cleanup(func() {
@@ -376,7 +527,7 @@ func TestTx[TTx any](ctx context.Context, tb testing.TB, driver riverdriver.Driv
 		// with `context.WithoutCancel()`.
 		ctx := context.WithoutCancel(ctx)
 
-		err := tx.Rollback(ctx)
+		err := execTx.Rollback(ctx)
 
 		if err == nil {
 			return
@@ -414,7 +565,7 @@ func TestTx[TTx any](ctx context.Context, tb testing.TB, driver riverdriver.Driv
 		require.NoError(tb, err)
 	})
 
-	return driver.UnwrapTx(tx)
+	return driver.UnwrapTx(execTx), schema
 }
 
 var (
@@ -422,7 +573,7 @@ var (
 	testTxSchemasMu sync.RWMutex              //nolint:gochecknoglobals
 )
 
-func testTxSchemaForMigrationLines[TTx any](ctx context.Context, tb testing.TB, driver riverdriver.Driver[TTx], opts *TestTxOpts) string {
+func testTxSchemaForDatabaseAndMigrationLines[TTx any](ctx context.Context, tb testing.TB, driver riverdriver.Driver[TTx], opts *TestTxOpts) string {
 	tb.Helper()
 
 	if opts == nil {
@@ -434,30 +585,35 @@ func testTxSchemaForMigrationLines[TTx any](ctx context.Context, tb testing.TB, 
 		lines = opts.lines
 	}
 
-	// Transaction schemas must be managed by which migration lines were run
-	// within them, which is determined by the included driver. i.e. A schema
-	// with no migrations obviously cannot be reused for a test expecting the
-	// `main` migration line.
-	//
-	// linesKey acts as key specific to this migrations set for testTxSchemas.
-	slices.Sort(lines)
-	linesKey := strings.Join(lines, ",")
+	var databaseAndLinesKey string
+	var schema string
 
-	testTxSchemasMu.RLock()
-	schema := testTxSchemas[linesKey]
-	testTxSchemasMu.RUnlock()
+	if !opts.DisableSchemaSharing {
+		// Transaction schemas must be managed by database and which migration lines
+		// were run within them, which is determined by the included driver. i.e. A
+		// schema with no migrations obviously cannot be reused for a test expecting
+		// the `main` migration line. An SQLite schema can't be reused for Postgres.
+		//
+		// linesKey acts as key specific to this migrations set for testTxSchemas.
+		slices.Sort(lines)
+		databaseAndLinesKey = strings.Join(append([]string{driver.DatabaseName()}, lines...), ",")
 
-	if schema != "" {
-		return schema
-	}
+		testTxSchemasMu.RLock()
+		schema := testTxSchemas[databaseAndLinesKey]
+		testTxSchemasMu.RUnlock()
 
-	testTxSchemasMu.Lock()
-	defer testTxSchemasMu.Unlock()
+		if schema != "" {
+			return schema
+		}
 
-	// Check for a schema once more in case there was a race to acquire the
-	// mutex lock and another TestTx invocation did it first.
-	if schema = testTxSchemas[linesKey]; schema != "" {
-		return schema
+		testTxSchemasMu.Lock()
+		defer testTxSchemasMu.Unlock()
+
+		// Check for a schema once more in case there was a race to acquire the
+		// mutex lock and another TestTx invocation did it first.
+		if schema = testTxSchemas[databaseAndLinesKey]; schema != "" {
+			return schema
+		}
 	}
 
 	// If called from a transaction helper like `TestTxPgx`, skip one more frame
@@ -468,11 +624,23 @@ func testTxSchemaForMigrationLines[TTx any](ctx context.Context, tb testing.TB, 
 	}
 
 	schema = TestSchema(ctx, tb, driver, &TestSchemaOpts{
-		Lines:                lines,
-		noReuse:              true,
+		Lines:       lines,
+		ProcurePool: opts.ProcurePool,
+
+		// If test transactions are being shared (opts.DisableSharing = false)
+		// then reserve the shared schemas exclusively for TestTx. Otherwise,
+		// allow them to be put back in the pool for use by other test
+		// transactions with opts.DisableSharing = true or other TestSchema
+		// invocations.
+		disableReuse: !opts.DisableSchemaSharing,
+
 		skipExtraFrames:      skipExtraFrames,
 		skipPackageNameCheck: opts.skipPackageNameCheck,
 	})
-	testTxSchemas[linesKey] = schema
+
+	if !opts.DisableSchemaSharing {
+		testTxSchemas[databaseAndLinesKey] = schema
+	}
+
 	return schema
 }

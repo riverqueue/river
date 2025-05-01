@@ -134,6 +134,7 @@ func newTestConfig(t *testing.T, schema string) *Config {
 		},
 		TestOnly:          true, // disables staggered start in maintenance services
 		Workers:           workers,
+		queuePollInterval: 50 * time.Millisecond,
 		schedulerInterval: riverinternaltest.SchedulerShortInterval,
 	}
 }
@@ -1242,7 +1243,7 @@ func Test_Client(t *testing.T) {
 		require.NoError(t, err)
 
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
-		require.Equal(t, (withKindAliasesArgs{}).KindAliases(), []string{event.Job.Kind})
+		require.Equal(t, []string{event.Job.Kind}, (withKindAliasesArgs{}).KindAliases())
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {
@@ -1617,7 +1618,7 @@ func Test_Client_Stop_ContextImmediatelyCancelled(t *testing.T) {
 func Test_Client_Stop_AfterContextCancelled(t *testing.T) {
 	t.Parallel()
 
-	t.Skip("this test case added broken and should be fixed")
+	t.Skip("this test case was added broken and should be fixed")
 
 	ctx := context.Background()
 

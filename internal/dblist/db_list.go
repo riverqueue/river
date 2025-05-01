@@ -3,6 +3,7 @@ package dblist
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/riverqueue/river/riverdriver"
@@ -36,7 +37,7 @@ type JobListParams struct {
 	States     []rivertype.JobState
 }
 
-func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListParams) ([]*rivertype.JobRow, error) {
+func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListParams, sqlFragmentColumnIn func(column string, values any) (string, any, error)) ([]*rivertype.JobRow, error) {
 	var whereBuilder strings.Builder
 
 	orderBy := make([]JobListOrderBy, len(params.OrderBy))
@@ -62,36 +63,63 @@ func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListPara
 
 	if len(params.IDs) > 0 {
 		writeAndAfterFirst()
-		whereBuilder.WriteString("id = any(@ids::bigint[])")
-		namedArgs["ids"] = params.IDs
+
+		const column = "id"
+		sqlFragment, arg, err := sqlFragmentColumnIn(column, params.IDs)
+		if err != nil {
+			return nil, fmt.Errorf("error building SQL fragment for %q: %w", column, err)
+		}
+		whereBuilder.WriteString(sqlFragment)
+		namedArgs[column] = arg
 	}
 
 	if len(params.Kinds) > 0 {
 		writeAndAfterFirst()
-		whereBuilder.WriteString("kind = any(@kinds::text[])")
-		namedArgs["kinds"] = params.Kinds
+
+		const column = "kind"
+		sqlFragment, arg, err := sqlFragmentColumnIn(column, params.Kinds)
+		if err != nil {
+			return nil, fmt.Errorf("error building SQL fragment for %q: %w", column, err)
+		}
+		whereBuilder.WriteString(sqlFragment)
+		namedArgs[column] = arg
 	}
 
 	if len(params.Priorities) > 0 {
 		writeAndAfterFirst()
-		whereBuilder.WriteString("priority = any(@priorities::int[])")
-		namedArgs["priorities"] = params.Priorities
+
+		const column = "priority"
+		sqlFragment, arg, err := sqlFragmentColumnIn(column, params.Priorities)
+		if err != nil {
+			return nil, fmt.Errorf("error building SQL fragment for %q: %w", column, err)
+		}
+		whereBuilder.WriteString(sqlFragment)
+		namedArgs[column] = arg
 	}
 
 	if len(params.Queues) > 0 {
 		writeAndAfterFirst()
-		whereBuilder.WriteString("queue = any(@queues::text[])")
-		namedArgs["queues"] = params.Queues
+
+		const column = "queue"
+		sqlFragment, arg, err := sqlFragmentColumnIn(column, params.Queues)
+		if err != nil {
+			return nil, fmt.Errorf("error building SQL fragment for %q: %w", column, err)
+		}
+		whereBuilder.WriteString(sqlFragment)
+		namedArgs[column] = arg
 	}
 
 	if len(params.States) > 0 {
 		writeAndAfterFirst()
-		var maybeSchema string
-		if params.Schema != "" {
-			maybeSchema = params.Schema + "."
+
+		const column = "state"
+		sqlFragment, arg, err := sqlFragmentColumnIn(column,
+			sliceutil.Map(params.States, func(v rivertype.JobState) string { return string(v) }))
+		if err != nil {
+			return nil, fmt.Errorf("error building SQL fragment for %q: %w", column, err)
 		}
-		whereBuilder.WriteString("state = any(@states::" + maybeSchema + "river_job_state[])")
-		namedArgs["states"] = sliceutil.Map(params.States, func(s rivertype.JobState) string { return string(s) })
+		whereBuilder.WriteString(sqlFragment)
+		namedArgs[column] = arg
 	}
 
 	if params.Conditions != "" {

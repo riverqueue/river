@@ -12,50 +12,37 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"runtime/debug"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/lmittmann/tint"
 	"github.com/spf13/cobra"
 
-	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/cmd/river/riverbench"
 	"github.com/riverqueue/river/rivermigrate"
 )
 
 type Config struct {
-	// DriverProcurer provides a way of procuring drivers for various supported
-	// databases.
-	DriverProcurer DriverProcurer
-
 	// Name is the human-friendly named of the executable, used while showing
 	// version output. Usually this is just "River", but it could be "River
 	// Pro".
 	Name string
 }
 
-// DriverProcurer is an interface that provides a way of procuring drivers for
-// various supported databases.
-type DriverProcurer interface {
-	ProcurePgxV5(pool *pgxpool.Pool) riverdriver.Driver[pgx.Tx]
-}
-
 // CLI provides a common base of commands for the River CLI.
 type CLI struct {
-	driverProcurer DriverProcurer
-	name           string
-	out            io.Writer
+	name string
+	out  io.Writer
 }
 
 func NewCLI(config *Config) *CLI {
 	return &CLI{
-		driverProcurer: config.DriverProcurer,
-		name:           config.Name,
-		out:            os.Stdout,
+		name: config.Name,
+		out:  os.Stdout,
 	}
 }
 
@@ -83,11 +70,10 @@ func (c *CLI) BaseCommandSet() *cobra.Command {
 	// Make a bundle for RunCommand. Takes a database URL pointer because not every command is required to take a database URL.
 	makeCommandBundle := func(databaseURL *string, schema string) *RunCommandBundle {
 		return &RunCommandBundle{
-			DatabaseURL:    databaseURL,
-			DriverProcurer: c.driverProcurer,
-			Logger:         makeLogger(),
-			OutStd:         c.out,
-			Schema:         schema,
+			DatabaseURL: databaseURL,
+			Logger:      makeLogger(),
+			OutStd:      c.out,
+			Schema:      schema,
 		}
 	}
 
@@ -128,7 +114,7 @@ PG* vars if it's been specified.
 	}
 
 	addDatabaseURLFlag := func(cmd *cobra.Command, databaseURL *string) {
-		cmd.Flags().StringVar(databaseURL, "database-url", "", "URL of the database (should look like `postgres://...)`")
+		cmd.Flags().StringVar(databaseURL, "database-url", "", "URL of the database (should look like `postgres://...`)")
 	}
 	addLineFlag := func(cmd *cobra.Command, line *string) {
 		cmd.Flags().StringVar(line, "line", "", "migration line to operate on (default: main)")
@@ -237,9 +223,10 @@ framework, which aren't necessary if using an external framework:
     river migrate-get --all --exclude-version 1 --down > river_all.down.sql
 	`),
 			RunE: func(cmd *cobra.Command, args []string) error {
-				return RunCommand(ctx, makeCommandBundle(nil, ""), &migrateGet{}, &opts)
+				return RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL, ""), &migrateGet{}, &opts)
 			},
 		}
+		cmd.Flags().StringVar(&opts.DatabaseURL, "database-url", "postgres://", "URL of the database; used only as a hint of kind of database being targeted (defaults to `postgres://`)`")
 		cmd.Flags().BoolVar(&opts.All, "all", false, "print all migrations; down migrations are printed in descending order")
 		cmd.Flags().BoolVar(&opts.Down, "down", false, "print down migration")
 		cmd.Flags().IntSliceVar(&opts.ExcludeVersion, "exclude-version", nil, "exclude version(s), usually version 1, containing River's migration tables")
@@ -365,7 +352,36 @@ type bench struct {
 }
 
 func (c *bench) Run(ctx context.Context, opts *benchOpts) (bool, error) {
-	if err := c.GetBenchmarker().Run(ctx, opts.Duration, opts.NumTotalJobs); err != nil {
+	parsedDatabaseURL, err := url.Parse(opts.DatabaseURL)
+	if err != nil {
+		return false, err
+	}
+
+	if parsedDatabaseURL.Scheme == "sqlite" {
+		// Everything's way more likely to lock up if the database isn't using
+		// WAL journal mode, so a little presumptively, set it on target.
+		var journalMode string
+		if err := c.DriverProcurer.QueryRow(ctx, "PRAGMA journal_mode = wal").Scan(&journalMode); err != nil {
+			return false, fmt.Errorf("error setting `journal_mode`: %w", err)
+		}
+
+		// In the special case of a purely ephemeral memory database, migrate
+		// the schema up to make sure it's fully prepared for use. (Otherwise
+		// there's no way to raise it.)
+		if parsedDatabaseURL.Host == ":memory:" {
+			migrator, err := c.DriverProcurer.GetMigrator(&rivermigrate.Config{
+				Schema: opts.Schema,
+			})
+			if err != nil {
+				return false, fmt.Errorf("error creating migrator: %w", err)
+			}
+			if _, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
+				return false, fmt.Errorf("error migrating database: %w", err)
+			}
+		}
+	}
+
+	if err := c.DriverProcurer.GetBenchmarker(&riverbench.Config{Logger: c.Logger, Schema: c.Schema}).Run(ctx, opts.Duration, opts.NumTotalJobs); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -394,7 +410,7 @@ type migrateDown struct {
 }
 
 func (c *migrateDown) Run(ctx context.Context, opts *migrateOpts) (bool, error) {
-	migrator, err := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger, Schema: c.Schema})
+	migrator, err := c.DriverProcurer.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger, Schema: c.Schema})
 	if err != nil {
 		return false, err
 	}
@@ -464,6 +480,7 @@ func migrationComment(line string, version int, direction rivermigrate.Direction
 
 type migrateGetOpts struct {
 	All            bool
+	DatabaseURL    string
 	Down           bool
 	ExcludeVersion []int
 	Line           string
@@ -482,7 +499,9 @@ func (c *migrateGet) Run(_ context.Context, opts *migrateGetOpts) (bool, error) 
 	// other databases is added in the future. Unlike other migrate commands,
 	// this one doesn't take a `--database-url`, so we'd need a way of
 	// detecting the database type.
-	migrator, err := rivermigrate.New(c.DriverProcurer.ProcurePgxV5(nil), &rivermigrate.Config{Line: opts.Line, Logger: c.Logger, Schema: ""})
+	//
+	// TODO
+	migrator, err := c.DriverProcurer.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger, Schema: ""})
 	if err != nil {
 		return false, err
 	}
@@ -550,7 +569,7 @@ type migrateList struct {
 }
 
 func (c *migrateList) Run(ctx context.Context, opts *migrateListOpts) (bool, error) {
-	migrator, err := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger, Schema: c.Schema})
+	migrator, err := c.DriverProcurer.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger, Schema: c.Schema})
 	if err != nil {
 		return false, err
 	}
@@ -587,7 +606,7 @@ type migrateUp struct {
 }
 
 func (c *migrateUp) Run(ctx context.Context, opts *migrateOpts) (bool, error) {
-	migrator, err := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger, Schema: c.Schema})
+	migrator, err := c.DriverProcurer.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger, Schema: c.Schema})
 	if err != nil {
 		return false, err
 	}
@@ -625,7 +644,7 @@ type validate struct {
 }
 
 func (c *validate) Run(ctx context.Context, opts *validateOpts) (bool, error) {
-	migrator, err := c.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger, Schema: c.Schema})
+	migrator, err := c.DriverProcurer.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger, Schema: c.Schema})
 	if err != nil {
 		return false, err
 	}

@@ -152,21 +152,26 @@ func TestSchemaTemplateParam(t *testing.T) {
 
 	ctx := context.Background()
 
-	type testBundle struct{}
+	type testBundle struct {
+		driver *Driver
+	}
 
-	setup := func(t *testing.T) (*sqlctemplate.Replacer, *testBundle) { //nolint:unparam
+	setup := func(t *testing.T) (*sqlctemplate.Replacer, *testBundle) {
 		t.Helper()
 
-		return &sqlctemplate.Replacer{}, &testBundle{}
+		return &sqlctemplate.Replacer{}, &testBundle{
+			driver: New(nil),
+		}
 	}
 
 	t.Run("NoSchema", func(t *testing.T) {
 		t.Parallel()
 
-		replacer, _ := setup(t)
+		replacer, bundle := setup(t)
 
 		updatedSQL, _, err := replacer.RunSafely(
 			schemaTemplateParam(ctx, ""),
+			bundle.driver.ArgPlaceholder(),
 			"SELECT 1 FROM /* TEMPLATE: schema */river_job",
 			nil,
 		)
@@ -177,10 +182,11 @@ func TestSchemaTemplateParam(t *testing.T) {
 	t.Run("WithSchema", func(t *testing.T) {
 		t.Parallel()
 
-		replacer, _ := setup(t)
+		replacer, bundle := setup(t)
 
 		updatedSQL, _, err := replacer.RunSafely(
 			schemaTemplateParam(ctx, "custom_schema"),
+			bundle.driver.ArgPlaceholder(),
 			"SELECT 1 FROM /* TEMPLATE: schema */river_job",
 			nil,
 		)

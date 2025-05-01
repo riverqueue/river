@@ -6,10 +6,12 @@
 package riverpgxv5
 
 import (
+	"cmp"
 	"context"
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"math"
 	"strings"
@@ -26,6 +28,7 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5/internal/dbsqlc"
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
+	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -57,6 +60,11 @@ func New(dbPool *pgxpool.Pool) *Driver {
 	}
 }
 
+const argPlaceholder = "$"
+
+func (d *Driver) ArgPlaceholder() string { return argPlaceholder }
+func (d *Driver) DatabaseName() string   { return "postgres" }
+
 func (d *Driver) GetExecutor() riverdriver.Executor {
 	return &Executor{templateReplaceWrapper{d.dbPool, &d.replacer}, d}
 }
@@ -73,20 +81,23 @@ func (d *Driver) GetMigrationFS(line string) fs.FS {
 	panic("migration line does not exist: " + line)
 }
 func (d *Driver) GetMigrationLines() []string { return []string{riverdriver.MigrationLineMain} }
-func (d *Driver) GetMigrationTruncateTables(line string) []string {
+func (d *Driver) GetMigrationTruncateTables(line string, version int) []string {
 	if line == riverdriver.MigrationLineMain {
-		return []string{
-			"river_client",
-			"river_client_queue",
-			"river_job",
-			"river_leader",
-			"river_queue",
-		}
+		return riverdriver.MigrationLineMainTruncateTables(version)
 	}
 	panic("migration line does not exist: " + line)
 }
-func (d *Driver) HasPool() bool          { return d.dbPool != nil }
-func (d *Driver) SupportsListener() bool { return true }
+
+func (d *Driver) PoolIsSet() bool          { return d.dbPool != nil }
+func (d *Driver) PoolSet(dbPool any) error { return riverdriver.ErrNotImplemented }
+
+func (d *Driver) SQLFragmentColumnIn(column string, values any) (string, any, error) {
+	return fmt.Sprintf("%s = any(@%s)", column, column), values, nil
+}
+
+func (d *Driver) SupportsListener() bool       { return true }
+func (d *Driver) SupportsListenNotify() bool   { return true }
+func (d *Driver) TimePrecision() time.Duration { return time.Microsecond }
 
 func (d *Driver) UnwrapExecutor(tx pgx.Tx) riverdriver.ExecutorTx {
 	// Allows UnwrapExecutor to be invoked even if driver is nil.
@@ -147,6 +158,7 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 		ID:                params.ID,
 		CancelAttemptedAt: cancelledAt,
 		ControlTopic:      params.ControlTopic,
+		Now:               params.Now,
 		Schema:            pgtype.Text{String: params.Schema, Valid: params.Schema != ""},
 	})
 	if err != nil {
@@ -175,13 +187,16 @@ func (e *Executor) JobDelete(ctx context.Context, params *riverdriver.JobDeleteP
 }
 
 func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobDeleteBeforeParams) (int, error) {
-	numDeleted, err := dbsqlc.New().JobDeleteBefore(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobDeleteBeforeParams{
+	res, err := dbsqlc.New().JobDeleteBefore(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobDeleteBeforeParams{
 		CancelledFinalizedAtHorizon: params.CancelledFinalizedAtHorizon,
 		CompletedFinalizedAtHorizon: params.CompletedFinalizedAtHorizon,
 		DiscardedFinalizedAtHorizon: params.DiscardedFinalizedAtHorizon,
 		Max:                         int64(params.Max),
 	})
-	return int(numDeleted), interpretError(err)
+	if err != nil {
+		return 0, interpretError(err)
+	}
+	return int(res.RowsAffected()), nil
 }
 
 func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
@@ -222,7 +237,10 @@ func (e *Executor) JobGetByKindMany(ctx context.Context, params *riverdriver.Job
 }
 
 func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error) {
-	jobs, err := dbsqlc.New().JobGetStuck(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobGetStuckParams{Max: int32(min(params.Max, math.MaxInt32)), StuckHorizon: params.StuckHorizon}) //nolint:gosec
+	jobs, err := dbsqlc.New().JobGetStuck(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobGetStuckParams{
+		Max:          int32(min(params.Max, math.MaxInt32)), //nolint:gosec
+		StuckHorizon: params.StuckHorizon,
+	})
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -361,7 +379,7 @@ func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobIns
 		ScheduledAt:  params.ScheduledAt,
 		State:        dbsqlc.RiverJobState(params.State),
 		Tags:         params.Tags,
-		UniqueKey:    params.UniqueKey,
+		UniqueKey:    string(params.UniqueKey),
 		UniqueStates: int32(params.UniqueStates),
 	})
 	if err != nil {
@@ -387,7 +405,7 @@ func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRes
 	err := dbsqlc.New().JobRescueMany(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobRescueManyParams{
 		ID:          params.ID,
 		Error:       params.Error,
-		FinalizedAt: params.FinalizedAt,
+		FinalizedAt: sliceutil.Map(params.FinalizedAt, func(t *time.Time) time.Time { return ptrutil.ValOrDefault(t, time.Time{}) }),
 		ScheduledAt: params.ScheduledAt,
 		State:       params.State,
 	})
@@ -398,7 +416,10 @@ func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRes
 }
 
 func (e *Executor) JobRetry(ctx context.Context, params *riverdriver.JobRetryParams) (*rivertype.JobRow, error) {
-	job, err := dbsqlc.New().JobRetry(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.ID)
+	job, err := dbsqlc.New().JobRetry(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobRetryParams{
+		ID:  params.ID,
+		Now: params.Now,
+	})
 	if err != nil {
 		return nil, interpretError(err)
 	}
@@ -433,6 +454,7 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 		FinalizedAtDoUpdate: make([]bool, len(params.ID)),
 		MetadataDoMerge:     make([]bool, len(params.ID)),
 		MetadataUpdates:     make([][]byte, len(params.ID)),
+		Now:                 params.Now,
 		ScheduledAt:         make([]time.Time, len(params.ID)),
 		ScheduledAtDoUpdate: make([]bool, len(params.ID)),
 		State:               make([]string, len(params.ID)),
@@ -482,7 +504,7 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 		FinalizedAtDoUpdate: params.FinalizedAtDoUpdate,
 		FinalizedAt:         params.FinalizedAt,
 		StateDoUpdate:       params.StateDoUpdate,
-		State:               dbsqlc.RiverJobState(params.State),
+		State:               dbsqlc.RiverJobState(cmp.Or(params.State, rivertype.JobStateAvailable)), // can't send empty job state, so provider default value that may not be set
 	})
 	if err != nil {
 		return nil, interpretError(err)
@@ -683,34 +705,36 @@ func (e *Executor) QueueGet(ctx context.Context, params *riverdriver.QueueGetPar
 }
 
 func (e *Executor) QueueList(ctx context.Context, params *riverdriver.QueueListParams) ([]*rivertype.Queue, error) {
-	internalQueues, err := dbsqlc.New().QueueList(schemaTemplateParam(ctx, params.Schema), e.dbtx, int32(min(params.Limit, math.MaxInt32))) //nolint:gosec
+	queues, err := dbsqlc.New().QueueList(schemaTemplateParam(ctx, params.Schema), e.dbtx, int32(min(params.Limit, math.MaxInt32))) //nolint:gosec
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	queues := make([]*rivertype.Queue, len(internalQueues))
-	for i, q := range internalQueues {
-		queues[i] = queueFromInternal(q)
-	}
-	return queues, nil
+	return sliceutil.Map(queues, queueFromInternal), nil
 }
 
 func (e *Executor) QueuePause(ctx context.Context, params *riverdriver.QueuePauseParams) error {
-	res, err := dbsqlc.New().QueuePause(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.Name)
+	rowsAffected, err := dbsqlc.New().QueuePause(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueuePauseParams{
+		Name: params.Name,
+		Now:  params.Now,
+	})
 	if err != nil {
 		return interpretError(err)
 	}
-	if res.RowsAffected() == 0 && params.Name != riverdriver.AllQueuesString {
+	if rowsAffected < 1 && params.Name != riverdriver.AllQueuesString {
 		return rivertype.ErrNotFound
 	}
 	return nil
 }
 
 func (e *Executor) QueueResume(ctx context.Context, params *riverdriver.QueueResumeParams) error {
-	res, err := dbsqlc.New().QueueResume(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.Name)
+	rowsAffected, err := dbsqlc.New().QueueResume(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueResumeParams{
+		Name: params.Name,
+		Now:  params.Now,
+	})
 	if err != nil {
 		return interpretError(err)
 	}
-	if res.RowsAffected() == 0 && params.Name != riverdriver.AllQueuesString {
+	if rowsAffected < 1 && params.Name != riverdriver.AllQueuesString {
 		return rivertype.ErrNotFound
 	}
 	return nil
@@ -732,10 +756,20 @@ func (e *Executor) QueryRow(ctx context.Context, sql string, args ...any) riverd
 	return e.dbtx.QueryRow(ctx, sql, args...)
 }
 
+func (e *Executor) SchemaCreate(ctx context.Context, params *riverdriver.SchemaCreateParams) error {
+	_, err := e.dbtx.Exec(ctx, "CREATE SCHEMA "+params.Schema)
+	return interpretError(err)
+}
+
+func (e *Executor) SchemaDrop(ctx context.Context, params *riverdriver.SchemaDropParams) error {
+	_, err := e.dbtx.Exec(ctx, "DROP SCHEMA "+params.Schema+" CASCADE")
+	return interpretError(err)
+}
+
 func (e *Executor) SchemaGetExpired(ctx context.Context, params *riverdriver.SchemaGetExpiredParams) ([]string, error) {
 	schemas, err := dbsqlc.New().SchemaGetExpired(ctx, e.dbtx, &dbsqlc.SchemaGetExpiredParams{
 		BeforeName: params.BeforeName,
-		Prefix:     params.Prefix,
+		Prefix:     params.Prefix + "%",
 	})
 	if err != nil {
 		return nil, interpretError(err)
@@ -752,6 +786,25 @@ func (e *Executor) TableExists(ctx context.Context, params *riverdriver.TableExi
 
 	exists, err := dbsqlc.New().TableExists(ctx, e.dbtx, schemaAndTable)
 	return exists, interpretError(err)
+}
+
+func (e *Executor) TableTruncate(ctx context.Context, params *riverdriver.TableTruncateParams) error {
+	var maybeSchema string
+	if params.Schema != "" {
+		maybeSchema = params.Schema + "."
+	}
+
+	// Uses raw SQL so we can truncate multiple tables at once.
+	_, err := e.dbtx.Exec(ctx, "TRUNCATE TABLE "+
+		strings.Join(
+			sliceutil.Map(
+				params.Table,
+				func(table string) string { return maybeSchema + table },
+			),
+			", ",
+		),
+	)
+	return interpretError(err)
 }
 
 type ExecutorTx struct {
@@ -904,17 +957,17 @@ func (w templateReplaceWrapper) Begin(ctx context.Context) (pgx.Tx, error) {
 }
 
 func (w templateReplaceWrapper) Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error) {
-	sql, args = w.replacer.Run(ctx, sql, args)
+	sql, args = w.replacer.Run(ctx, argPlaceholder, sql, args)
 	return w.dbtx.Exec(ctx, sql, args...)
 }
 
 func (w templateReplaceWrapper) Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error) {
-	sql, args = w.replacer.Run(ctx, sql, args)
+	sql, args = w.replacer.Run(ctx, argPlaceholder, sql, args)
 	return w.dbtx.Query(ctx, sql, args...)
 }
 
 func (w templateReplaceWrapper) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
-	sql, args = w.replacer.Run(ctx, sql, args)
+	sql, args = w.replacer.Run(ctx, argPlaceholder, sql, args)
 	return w.dbtx.QueryRow(ctx, sql, args...)
 }
 

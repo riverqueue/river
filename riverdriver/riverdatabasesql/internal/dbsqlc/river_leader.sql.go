@@ -12,9 +12,16 @@ import (
 )
 
 const leaderAttemptElect = `-- name: LeaderAttemptElect :execrows
-INSERT INTO /* TEMPLATE: schema */river_leader (leader_id, elected_at, expires_at)
+INSERT INTO /* TEMPLATE: schema */river_leader (
+    leader_id,
+    elected_at,
+    expires_at
+) VALUES (
+    $1,
+    coalesce($2::timestamptz, now()),
     -- @ttl is inserted as as seconds rather than a duration because ` + "`" + `lib/pq` + "`" + ` doesn't support the latter
-    VALUES ($1, coalesce($2::timestamptz, now()), coalesce($2::timestamptz, now()) + make_interval(secs => $3))
+    coalesce($2::timestamptz, now()) + make_interval(secs => $3)
+)
 ON CONFLICT (name)
     DO NOTHING
 `
@@ -34,8 +41,15 @@ func (q *Queries) LeaderAttemptElect(ctx context.Context, db DBTX, arg *LeaderAt
 }
 
 const leaderAttemptReelect = `-- name: LeaderAttemptReelect :execrows
-INSERT INTO /* TEMPLATE: schema */river_leader (leader_id, elected_at, expires_at)
-    VALUES ($1, coalesce($2::timestamptz, now()), coalesce($2::timestamptz, now()) + make_interval(secs => $3))
+INSERT INTO /* TEMPLATE: schema */river_leader (
+    leader_id,
+    elected_at,
+    expires_at
+) VALUES (
+    $1,
+    coalesce($2::timestamptz, now()),
+    coalesce($2::timestamptz, now()) + make_interval(secs => $3)
+)
 ON CONFLICT (name)
     DO UPDATE SET
         expires_at = EXCLUDED.expires_at
@@ -127,10 +141,10 @@ func (q *Queries) LeaderInsert(ctx context.Context, db DBTX, arg *LeaderInsertPa
 
 const leaderResign = `-- name: LeaderResign :execrows
 WITH currently_held_leaders AS (
-  SELECT elected_at, expires_at, leader_id, name
-  FROM /* TEMPLATE: schema */river_leader
-  WHERE leader_id = $1::text
-  FOR UPDATE
+    SELECT elected_at, expires_at, leader_id, name
+    FROM /* TEMPLATE: schema */river_leader
+    WHERE leader_id = $1::text
+    FOR UPDATE
 ),
 notified_resignations AS (
     SELECT pg_notify(
