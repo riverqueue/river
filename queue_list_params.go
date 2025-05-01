@@ -9,7 +9,7 @@ type QueueListParams struct {
 	paginationCount int32
 }
 
-// NewQueueListParams creates a new QueueListParams to return available jobs
+// NewQueueListParams creates a new QueueListParams to return available queues
 // sorted by time in ascending order, returning 100 jobs at most.
 func NewQueueListParams() *QueueListParams {
 	return &QueueListParams{

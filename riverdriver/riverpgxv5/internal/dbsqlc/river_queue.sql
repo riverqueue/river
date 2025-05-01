@@ -1,13 +1,13 @@
-CREATE TABLE river_queue(
-  name text PRIMARY KEY NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  metadata jsonb NOT NULL DEFAULT '{}' ::jsonb,
-  paused_at timestamptz,
-  updated_at timestamptz NOT NULL
+CREATE TABLE river_queue (
+    name text PRIMARY KEY NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    metadata jsonb NOT NULL DEFAULT '{}' ::jsonb,
+    paused_at timestamptz,
+    updated_at timestamptz NOT NULL
 );
 
 -- name: QueueCreateOrSetUpdatedAt :one
-INSERT INTO /* TEMPLATE: schema */river_queue(
+INSERT INTO /* TEMPLATE: schema */river_queue (
     created_at,
     metadata,
     name,
@@ -21,7 +21,7 @@ INSERT INTO /* TEMPLATE: schema */river_queue(
     coalesce(sqlc.narg('updated_at')::timestamptz, sqlc.narg('now')::timestamptz, now())
 ) ON CONFLICT (name) DO UPDATE
 SET
-    updated_at = coalesce(sqlc.narg('updated_at')::timestamptz, sqlc.narg('now')::timestamptz, now())
+    updated_at = EXCLUDED.updated_at
 RETURNING *;
 
 -- name: QueueDeleteExpired :many
@@ -29,7 +29,7 @@ DELETE FROM /* TEMPLATE: schema */river_queue
 WHERE name IN (
     SELECT name
     FROM /* TEMPLATE: schema */river_queue
-    WHERE updated_at < @updated_at_horizon::timestamptz
+    WHERE river_queue.updated_at < @updated_at_horizon
     ORDER BY name ASC
     LIMIT @max::bigint
 )
@@ -44,61 +44,26 @@ WHERE name = @name::text;
 SELECT *
 FROM /* TEMPLATE: schema */river_queue
 ORDER BY name ASC
-LIMIT @limit_count::integer;
+LIMIT @max;
 
--- name: QueuePause :execresult
-WITH queue_to_update AS (
-    SELECT name, paused_at
-    FROM /* TEMPLATE: schema */river_queue
-    WHERE CASE WHEN @name::text = '*' THEN true ELSE name = @name END
-    FOR UPDATE
-),
-updated_queue AS (
-    UPDATE /* TEMPLATE: schema */river_queue
-    SET
-        paused_at = now(),
-        updated_at = now()
-    FROM queue_to_update
-    WHERE river_queue.name = queue_to_update.name
-        AND river_queue.paused_at IS NULL
-    RETURNING river_queue.*
-)
-SELECT *
-FROM /* TEMPLATE: schema */river_queue
-WHERE name = @name
-    AND name NOT IN (SELECT name FROM updated_queue)
-UNION
-SELECT *
-FROM updated_queue;
+-- name: QueuePause :execrows
+UPDATE /* TEMPLATE: schema */river_queue
+SET
+    paused_at = CASE WHEN paused_at IS NULL THEN coalesce(sqlc.narg('now')::timestamptz, now()) ELSE paused_at END,
+    updated_at = CASE WHEN paused_at IS NULL THEN coalesce(sqlc.narg('now')::timestamptz, now()) ELSE updated_at END
+WHERE CASE WHEN @name::text = '*' THEN true ELSE name = @name END;
 
--- name: QueueResume :execresult
-WITH queue_to_update AS (
-    SELECT name
-    FROM /* TEMPLATE: schema */river_queue
-    WHERE CASE WHEN @name::text = '*' THEN true ELSE river_queue.name = @name::text END
-    FOR UPDATE
-),
-updated_queue AS (
-    UPDATE /* TEMPLATE: schema */river_queue
-    SET
-        paused_at = NULL,
-        updated_at = now()
-    FROM queue_to_update
-    WHERE river_queue.name = queue_to_update.name
-    RETURNING river_queue.*
-)
-SELECT *
-FROM /* TEMPLATE: schema */river_queue
-WHERE name = @name
-    AND name NOT IN (SELECT name FROM updated_queue)
-UNION
-SELECT *
-FROM updated_queue;
+-- name: QueueResume :execrows
+UPDATE /* TEMPLATE: schema */river_queue
+SET
+    paused_at = NULL,
+    updated_at = CASE WHEN paused_at IS NOT NULL THEN coalesce(sqlc.narg('now')::timestamptz, now()) ELSE updated_at END
+WHERE CASE WHEN @name::text = '*' THEN true ELSE name = @name END;
 
 -- name: QueueUpdate :one
 UPDATE /* TEMPLATE: schema */river_queue
 SET
     metadata = CASE WHEN @metadata_do_update::boolean THEN @metadata::jsonb ELSE metadata END,
     updated_at = now()
-WHERE name = @name::text
-RETURNING river_queue.*;
+WHERE name = @name
+RETURNING *;

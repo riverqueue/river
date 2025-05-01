@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - A new `JobArgsWithKindAliases` interface lets job args implement `KindAliases` to register a second kind that their worker will respond to. This provides a way to safely rename job kinds even with jobs using the original kind already in the database. [PR #XXX](https://github.com/riverqueue/river/pull/XXX).
+- Preliminary River driver for SQLite (`riverdriver/riversqlite`). This driver seems to produce good results as judged by the test suite, but so far as minimal real world vetting. Try it and let us know how it works out. [PR #870](https://github.com/riverqueue/river/pull/870).
 
 ### Changed
 
@@ -17,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Resuming an already unpaused queue is now fully an no-op, and won't touch the row's `updated_at` like it (unintentionally) did before. [PR #870](https://github.com/riverqueue/river/pull/870).
 - The `riverdatabasesql` now fully supports raw connections through [`lib/pq`](https://github.com/lib/pq) rather than just `database/sql` through Pgx. We don't recommend the use of `lib/pq` as it's an unmaintained project, but this change should help with compatibility for older projects. [PR #883](https://github.com/riverqueue/river/pull/883).
 
 ## [0.21.0] - 2025-05-02

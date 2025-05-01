@@ -2,10 +2,12 @@ package riverdbtest
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 
 	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
 
@@ -122,6 +124,44 @@ func TestTestSchema(t *testing.T) {
 		})
 		require.Equal(t, schema, nextSchema)
 	})
+
+	t.Run("LineTargetVersions", func(t *testing.T) {
+		t.Parallel()
+
+		var schema string
+
+		t.Run("FirstCheckout", func(t *testing.T) {
+			schema = TestSchema(ctx, t, driver, &TestSchemaOpts{
+				LineTargetVersions:   map[string]int{riverdriver.MigrationLineMain: 1},
+				skipPackageNameCheck: true,
+			})
+
+			// we can get a migration
+			_, err := exec.MigrationGetAllAssumingMain(ctx, &riverdriver.MigrationGetAllAssumingMainParams{Schema: schema})
+			require.NoError(t, err)
+
+			// ... but not a job (because that comes up in version 002
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: 1, Schema: schema})
+			var pgErr *pgconn.PgError
+			require.ErrorAs(t, err, &pgErr)
+			require.Equal(t, pgerrcode.UndefinedTable, pgErr.Code)
+		})
+
+		// TestSchema can reuse the schema with the same LineTargetVersions. Get
+		// another test schema after cleanup has run on the test case above and
+		// make sure it's the same.
+		nextSchema := TestSchema(ctx, t, driver, &TestSchemaOpts{
+			LineTargetVersions: map[string]int{riverdriver.MigrationLineMain: 1},
+		})
+		require.Equal(t, schema, nextSchema)
+
+		// Another main-only schema without LineTargetVersions must return a
+		// different schema because it has a different expected version.
+		schemaWithoutLineTargetVersions := TestSchema(ctx, t, driver, &TestSchemaOpts{
+			Lines: []string{riverdriver.MigrationLineMain},
+		})
+		require.NotEqual(t, schema, schemaWithoutLineTargetVersions)
+	})
 }
 
 func TestPackageFromFunc(t *testing.T) {
@@ -147,8 +187,9 @@ func TestTestTx(t *testing.T) {
 			Exec(ctx context.Context, sql string, arguments ...any) (commandTag pgconn.CommandTag, err error)
 		}
 
+		var schema string
 		checkTestTable := func(ctx context.Context, poolOrTx PoolOrTx) error {
-			_, err := poolOrTx.Exec(ctx, "SELECT * FROM river_shared_test_tx_table")
+			_, err := poolOrTx.Exec(ctx, fmt.Sprintf("SELECT * FROM %s.river_shared_test_tx_table", schema))
 			return err
 		}
 
@@ -171,25 +212,42 @@ func TestTestTx(t *testing.T) {
 			require.Equal(t, pgerrcode.UndefinedTable, pgErr.Code)
 		})
 
-		tx := TestTx(ctx, t, driver, &TestTxOpts{skipPackageNameCheck: true})
+		var tx pgx.Tx
+		tx, schema = TestTx(ctx, t, driver, &TestTxOpts{skipPackageNameCheck: true})
 
-		_, err := tx.Exec(ctx, "CREATE TABLE river_shared_test_tx_table (id bigint)")
+		_, err := tx.Exec(ctx, fmt.Sprintf("CREATE TABLE %s.river_shared_test_tx_table (id bigint)", schema))
 		require.NoError(t, err)
 
 		err = checkTestTable(ctx, tx)
 		require.NoError(t, err)
 	})
 
+	t.Run("SchemaSharing", func(t *testing.T) {
+		t.Parallel()
+
+		_, schema1 := TestTx(ctx, t, driver, &TestTxOpts{skipPackageNameCheck: true})
+		_, schema2 := TestTx(ctx, t, driver, &TestTxOpts{skipPackageNameCheck: true})
+		require.Equal(t, schema1, schema2)
+	})
+
+	t.Run("DisableSchemaSharing", func(t *testing.T) {
+		t.Parallel()
+
+		_, schema1 := TestTx(ctx, t, driver, &TestTxOpts{skipPackageNameCheck: true, DisableSchemaSharing: true})
+		_, schema2 := TestTx(ctx, t, driver, &TestTxOpts{skipPackageNameCheck: true}) // doesn't specify DisableSchemaSharing, but doesn't have to since first call won't check its schema in
+		require.NotEqual(t, schema1, schema2)
+	})
+
 	t.Run("EmptyLines", func(t *testing.T) {
 		t.Parallel()
 
 		{
-			tx := TestTx(ctx, t, driver, &TestTxOpts{
+			tx, schema := TestTx(ctx, t, driver, &TestTxOpts{
 				lines:                []string{}, // non-nil empty indicates no migrations should be run
 				skipPackageNameCheck: true,
 			})
 
-			_, err := driver.UnwrapExecutor(tx).JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: 1, Schema: ""})
+			_, err := driver.UnwrapExecutor(tx).JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: 1, Schema: schema})
 			var pgErr *pgconn.PgError
 			require.ErrorAs(t, err, &pgErr)
 			require.Equal(t, pgerrcode.UndefinedTable, pgErr.Code)
@@ -200,10 +258,10 @@ func TestTestTx(t *testing.T) {
 		// because the subtest above will have added to test transaction schema
 		// to testTxSchemas.
 		{
-			tx := TestTx(ctx, t, driver, &TestTxOpts{
+			tx, schema := TestTx(ctx, t, driver, &TestTxOpts{
 				lines: []string{},
 			})
-			_, err := driver.UnwrapExecutor(tx).JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: 1, Schema: ""})
+			_, err := driver.UnwrapExecutor(tx).JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: 1, Schema: schema})
 			var pgErr *pgconn.PgError
 			require.ErrorAs(t, err, &pgErr)
 			require.Equal(t, pgerrcode.UndefinedTable, pgErr.Code)
@@ -211,8 +269,8 @@ func TestTestTx(t *testing.T) {
 
 		// A test transaction with default options uses the main schema and has a jobs table.
 		{
-			tx := TestTx(ctx, t, driver, nil)
-			_, err := driver.UnwrapExecutor(tx).JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: 1, Schema: ""})
+			tx, schema := TestTx(ctx, t, driver, nil)
+			_, err := driver.UnwrapExecutor(tx).JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: 1, Schema: schema})
 			require.ErrorIs(t, rivertype.ErrNotFound, err)
 		}
 	})
@@ -238,7 +296,7 @@ func TestTestTx(t *testing.T) {
 		for i := range numGoroutines {
 			workerNum := i
 			go func() {
-				_ = TestTx(ctx, t, riverpgxv5.New(dbPool), &TestTxOpts{skipPackageNameCheck: true})
+				_, _ = TestTx(ctx, t, riverpgxv5.New(dbPool), &TestTxOpts{skipPackageNameCheck: true})
 				t.Logf("Opened transaction: %d", workerNum)
 				wg.Done()
 			}()

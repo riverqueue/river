@@ -8,6 +8,7 @@ use (
 	./riverdriver
 	./riverdriver/riverdatabasesql
 	./riverdriver/riverpgxv5
+	./riverdriver/riversqlite
 	./rivershared
 	./rivertype
 )

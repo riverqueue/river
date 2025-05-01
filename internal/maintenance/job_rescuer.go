@@ -15,7 +15,6 @@ import (
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
@@ -173,7 +172,7 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 		rescueManyParams := riverdriver.JobRescueManyParams{
 			ID:          make([]int64, 0, len(stuckJobs)),
 			Error:       make([][]byte, 0, len(stuckJobs)),
-			FinalizedAt: make([]time.Time, 0, len(stuckJobs)),
+			FinalizedAt: make([]*time.Time, 0, len(stuckJobs)),
 			ScheduledAt: make([]time.Time, 0, len(stuckJobs)),
 			Schema:      s.Config.Schema,
 			State:       make([]string, 0, len(stuckJobs)),
@@ -198,7 +197,7 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 			addRescueParam := func(state rivertype.JobState, finalizedAt *time.Time, scheduledAt time.Time) {
 				rescueManyParams.ID = append(rescueManyParams.ID, job.ID)
 				rescueManyParams.Error = append(rescueManyParams.Error, errorData)
-				rescueManyParams.FinalizedAt = append(rescueManyParams.FinalizedAt, ptrutil.ValOrDefault(finalizedAt, time.Time{}))
+				rescueManyParams.FinalizedAt = append(rescueManyParams.FinalizedAt, finalizedAt)
 				rescueManyParams.ScheduledAt = append(rescueManyParams.ScheduledAt, scheduledAt)
 				rescueManyParams.State = append(rescueManyParams.State, string(state))
 			}

@@ -585,7 +585,7 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Ex
 		// the test ones do not because they only run trivial operations.
 		if strings.Contains(sql, "/* TEMPLATE: schema */") {
 			ctx := sqlctemplate.WithReplacements(ctx, schemaReplacement, nil)
-			sql, _ = m.replacer.Run(ctx, sql, nil)
+			sql, _ = m.replacer.Run(ctx, m.driver.ArgPlaceholder(), sql, nil)
 		}
 
 		var duration time.Duration

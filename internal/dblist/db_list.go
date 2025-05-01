@@ -3,6 +3,7 @@ package dblist
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/riverqueue/river/riverdriver"
@@ -60,38 +61,56 @@ func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListPara
 		}
 	}
 
+	var argNum int
+	writeArgs := func(args []any) {
+		for i, arg := range args {
+			if i > 0 {
+				whereBuilder.WriteString(",")
+			}
+
+			argName := fmt.Sprintf("list_arg_%02d", argNum)
+			argNum++
+
+			whereBuilder.WriteString("@")
+			whereBuilder.WriteString(argName)
+
+			namedArgs[argName] = arg
+		}
+	}
+
 	if len(params.IDs) > 0 {
 		writeAndAfterFirst()
-		whereBuilder.WriteString("id = any(@ids::bigint[])")
-		namedArgs["ids"] = params.IDs
+		whereBuilder.WriteString("id IN (")
+		writeArgs(sliceutil.Map(params.IDs, func(v int64) any { return v }))
+		whereBuilder.WriteString(")")
 	}
 
 	if len(params.Kinds) > 0 {
 		writeAndAfterFirst()
-		whereBuilder.WriteString("kind = any(@kinds::text[])")
-		namedArgs["kinds"] = params.Kinds
+		whereBuilder.WriteString("kind IN (")
+		writeArgs(sliceutil.Map(params.Kinds, func(v string) any { return v }))
+		whereBuilder.WriteString(")")
 	}
 
 	if len(params.Priorities) > 0 {
 		writeAndAfterFirst()
-		whereBuilder.WriteString("priority = any(@priorities::int[])")
-		namedArgs["priorities"] = params.Priorities
+		whereBuilder.WriteString("priority IN (")
+		writeArgs(sliceutil.Map(params.Priorities, func(v int16) any { return v }))
+		whereBuilder.WriteString(")")
 	}
 
 	if len(params.Queues) > 0 {
 		writeAndAfterFirst()
-		whereBuilder.WriteString("queue = any(@queues::text[])")
-		namedArgs["queues"] = params.Queues
+		whereBuilder.WriteString("queue IN (")
+		writeArgs(sliceutil.Map(params.Queues, func(v string) any { return v }))
+		whereBuilder.WriteString(")")
 	}
 
 	if len(params.States) > 0 {
 		writeAndAfterFirst()
-		var maybeSchema string
-		if params.Schema != "" {
-			maybeSchema = params.Schema + "."
-		}
-		whereBuilder.WriteString("state = any(@states::" + maybeSchema + "river_job_state[])")
-		namedArgs["states"] = sliceutil.Map(params.States, func(s rivertype.JobState) string { return string(s) })
+		whereBuilder.WriteString("state IN (")
+		writeArgs(sliceutil.Map(params.States, func(v rivertype.JobState) any { return string(v) }))
+		whereBuilder.WriteString(")")
 	}
 
 	if params.Conditions != "" {
