@@ -25,6 +25,7 @@ type JobListOrderBy struct {
 
 type JobListParams struct {
 	Conditions string
+	IDs        []int64
 	Kinds      []string
 	LimitCount int32
 	NamedArgs  map[string]any
@@ -59,10 +60,22 @@ func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListPara
 		}
 	}
 
+	if len(params.IDs) > 0 {
+		writeAndAfterFirst()
+		whereBuilder.WriteString("id = any(@ids::bigint[])")
+		namedArgs["ids"] = params.IDs
+	}
+
 	if len(params.Kinds) > 0 {
 		writeAndAfterFirst()
 		whereBuilder.WriteString("kind = any(@kinds::text[])")
 		namedArgs["kinds"] = params.Kinds
+	}
+
+	if len(params.Priorities) > 0 {
+		writeAndAfterFirst()
+		whereBuilder.WriteString("priority = any(@priorities::int[])")
+		namedArgs["priorities"] = params.Priorities
 	}
 
 	if len(params.Queues) > 0 {

@@ -166,10 +166,12 @@ const (
 //	params := NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).First(100)
 type JobListParams struct {
 	after            *JobListCursor
+	ids              []int64
 	kinds            []string
 	metadataFragment string
 	overrodeState    bool
 	paginationCount  int32
+	priorities       []int16
 	queues           []string
 	schema           string
 	sortField        JobListOrderByField
@@ -200,10 +202,12 @@ func NewJobListParams() *JobListParams {
 func (p *JobListParams) copy() *JobListParams {
 	return &JobListParams{
 		after:            p.after,
+		ids:              append([]int64(nil), p.ids...),
 		kinds:            append([]string(nil), p.kinds...),
 		metadataFragment: p.metadataFragment,
 		overrodeState:    p.overrodeState,
 		paginationCount:  p.paginationCount,
+		priorities:       append([]int16(nil), p.priorities...),
 		queues:           append([]string(nil), p.queues...),
 		sortField:        p.sortField,
 		sortOrder:        p.sortOrder,
@@ -293,11 +297,12 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 
 	return &dblist.JobListParams{
 		Conditions: conditionsBuilder.String(),
+		IDs:        p.ids,
 		Kinds:      p.kinds,
 		LimitCount: p.paginationCount,
 		NamedArgs:  namedArgs,
 		OrderBy:    orderBy,
-		Priorities: nil,
+		Priorities: p.priorities,
 		Queues:     p.queues,
 		Schema:     p.schema,
 		States:     p.states,
@@ -329,6 +334,15 @@ func (p *JobListParams) First(count int) *JobListParams {
 	}
 	paramsCopy := p.copy()
 	paramsCopy.paginationCount = int32(count)
+	return paramsCopy
+}
+
+// IDs returns an updated filter set that will only return jobs with the given
+// IDs.
+func (p *JobListParams) IDs(ids ...int64) *JobListParams {
+	paramsCopy := p.copy()
+	paramsCopy.ids = make([]int64, len(ids))
+	copy(paramsCopy.ids, ids)
 	return paramsCopy
 }
 
@@ -380,6 +394,15 @@ func (p *JobListParams) OrderBy(field JobListOrderByField, direction SortOrder) 
 	}
 	paramsCopy.sortField = field
 	paramsCopy.sortOrder = direction
+	return paramsCopy
+}
+
+// Priorities returns an updated filter set that will only return jobs with the
+// given priorities.
+func (p *JobListParams) Priorities(priorities ...int16) *JobListParams {
+	paramsCopy := p.copy()
+	paramsCopy.priorities = make([]int16, len(priorities))
+	copy(paramsCopy.priorities, priorities)
 	return paramsCopy
 }
 
