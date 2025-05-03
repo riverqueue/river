@@ -1,6 +1,7 @@
 package maintenance
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -15,7 +16,6 @@ import (
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
-	"github.com/riverqueue/river/rivershared/util/valutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -87,8 +87,8 @@ type JobScheduler struct {
 func NewJobScheduler(archetype *baseservice.Archetype, config *JobSchedulerConfig, exec riverdriver.Executor) *JobScheduler {
 	return baseservice.Init(archetype, &JobScheduler{
 		config: (&JobSchedulerConfig{
-			Interval:     valutil.ValOrDefault(config.Interval, JobSchedulerIntervalDefault),
-			Limit:        valutil.ValOrDefault(config.Limit, JobSchedulerLimitDefault),
+			Interval:     cmp.Or(config.Interval, JobSchedulerIntervalDefault),
+			Limit:        cmp.Or(config.Limit, JobSchedulerLimitDefault),
 			NotifyInsert: config.NotifyInsert,
 			Schema:       config.Schema,
 		}).mustValidate(),

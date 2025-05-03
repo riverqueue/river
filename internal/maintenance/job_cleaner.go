@@ -1,6 +1,7 @@
 package maintenance
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -15,7 +16,6 @@ import (
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
-	"github.com/riverqueue/river/rivershared/util/valutil"
 )
 
 const (
@@ -96,12 +96,12 @@ type JobCleaner struct {
 func NewJobCleaner(archetype *baseservice.Archetype, config *JobCleanerConfig, exec riverdriver.Executor) *JobCleaner {
 	return baseservice.Init(archetype, &JobCleaner{
 		Config: (&JobCleanerConfig{
-			CancelledJobRetentionPeriod: valutil.ValOrDefault(config.CancelledJobRetentionPeriod, CancelledJobRetentionPeriodDefault),
-			CompletedJobRetentionPeriod: valutil.ValOrDefault(config.CompletedJobRetentionPeriod, CompletedJobRetentionPeriodDefault),
-			DiscardedJobRetentionPeriod: valutil.ValOrDefault(config.DiscardedJobRetentionPeriod, DiscardedJobRetentionPeriodDefault),
-			Interval:                    valutil.ValOrDefault(config.Interval, JobCleanerIntervalDefault),
+			CancelledJobRetentionPeriod: cmp.Or(config.CancelledJobRetentionPeriod, CancelledJobRetentionPeriodDefault),
+			CompletedJobRetentionPeriod: cmp.Or(config.CompletedJobRetentionPeriod, CompletedJobRetentionPeriodDefault),
+			DiscardedJobRetentionPeriod: cmp.Or(config.DiscardedJobRetentionPeriod, DiscardedJobRetentionPeriodDefault),
+			Interval:                    cmp.Or(config.Interval, JobCleanerIntervalDefault),
 			Schema:                      config.Schema,
-			Timeout:                     valutil.ValOrDefault(config.Timeout, JobCleanerTimeoutDefault),
+			Timeout:                     cmp.Or(config.Timeout, JobCleanerTimeoutDefault),
 		}).mustValidate(),
 
 		batchSize: BatchSizeDefault,

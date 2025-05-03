@@ -1,6 +1,7 @@
 package leadership
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,7 +19,6 @@ import (
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
-	"github.com/riverqueue/river/rivershared/util/valutil"
 )
 
 const (
@@ -112,8 +112,8 @@ func NewElector(archetype *baseservice.Archetype, exec riverdriver.Executor, not
 	return baseservice.Init(archetype, &Elector{
 		config: (&Config{
 			ClientID:            config.ClientID,
-			ElectInterval:       valutil.ValOrDefault(config.ElectInterval, electIntervalDefault),
-			ElectIntervalJitter: valutil.ValOrDefault(config.ElectIntervalJitter, electIntervalJitterDefault),
+			ElectInterval:       cmp.Or(config.ElectInterval, electIntervalDefault),
+			ElectIntervalJitter: cmp.Or(config.ElectIntervalJitter, electIntervalJitterDefault),
 			Schema:              config.Schema,
 		}).mustValidate(),
 		exec:     exec,

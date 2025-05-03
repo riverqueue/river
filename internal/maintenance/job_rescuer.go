@@ -1,6 +1,7 @@
 package maintenance
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,7 +20,6 @@ import (
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
-	"github.com/riverqueue/river/rivershared/util/valutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -93,8 +93,8 @@ func NewRescuer(archetype *baseservice.Archetype, config *JobRescuerConfig, exec
 	return baseservice.Init(archetype, &JobRescuer{
 		Config: (&JobRescuerConfig{
 			ClientRetryPolicy:   config.ClientRetryPolicy,
-			Interval:            valutil.ValOrDefault(config.Interval, JobRescuerIntervalDefault),
-			RescueAfter:         valutil.ValOrDefault(config.RescueAfter, JobRescuerRescueAfterDefault),
+			Interval:            cmp.Or(config.Interval, JobRescuerIntervalDefault),
+			RescueAfter:         cmp.Or(config.RescueAfter, JobRescuerRescueAfterDefault),
 			Schema:              config.Schema,
 			WorkUnitFactoryFunc: config.WorkUnitFactoryFunc,
 		}).mustValidate(),
