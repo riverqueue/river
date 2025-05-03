@@ -31,6 +31,7 @@ import (
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/maputil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivershared/util/valutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -530,26 +531,26 @@ type clientTestSignals struct {
 	reindexer           *maintenance.ReindexerTestSignals
 }
 
-func (ts *clientTestSignals) Init() {
-	ts.electedLeader.Init()
+func (ts *clientTestSignals) Init(tb testutil.TestingTB) {
+	ts.electedLeader.Init(tb)
 
 	if ts.jobCleaner != nil {
-		ts.jobCleaner.Init()
+		ts.jobCleaner.Init(tb)
 	}
 	if ts.jobRescuer != nil {
-		ts.jobRescuer.Init()
+		ts.jobRescuer.Init(tb)
 	}
 	if ts.jobScheduler != nil {
-		ts.jobScheduler.Init()
+		ts.jobScheduler.Init(tb)
 	}
 	if ts.periodicJobEnqueuer != nil {
-		ts.periodicJobEnqueuer.Init()
+		ts.periodicJobEnqueuer.Init(tb)
 	}
 	if ts.queueCleaner != nil {
-		ts.queueCleaner.Init()
+		ts.queueCleaner.Init(tb)
 	}
 	if ts.reindexer != nil {
-		ts.reindexer.Init()
+		ts.reindexer.Init(tb)
 	}
 }
 

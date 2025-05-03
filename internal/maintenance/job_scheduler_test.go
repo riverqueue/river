@@ -59,7 +59,7 @@ func TestJobScheduler(t *testing.T) {
 				Schema: opts.schema,
 			},
 			bundle.exec)
-		scheduler.TestSignals.Init()
+		scheduler.TestSignals.Init(t)
 		t.Cleanup(scheduler.Stop)
 
 		return scheduler, bundle

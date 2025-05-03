@@ -13,6 +13,7 @@ import (
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
 	"github.com/riverqueue/river/rivershared/util/valutil"
 )
@@ -30,8 +31,8 @@ type JobCleanerTestSignals struct {
 	DeletedBatch testsignal.TestSignal[struct{}] // notifies when runOnce finishes a pass
 }
 
-func (ts *JobCleanerTestSignals) Init() {
-	ts.DeletedBatch.Init()
+func (ts *JobCleanerTestSignals) Init(tb testutil.TestingTB) {
+	ts.DeletedBatch.Init(tb)
 }
 
 type JobCleanerConfig struct {

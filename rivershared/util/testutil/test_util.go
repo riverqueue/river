@@ -1,6 +1,9 @@
 package testutil
 
-import "fmt"
+import (
+	"bytes"
+	"fmt"
+)
 
 // See docs on PanicTB.
 type panicTB struct {
@@ -37,6 +40,52 @@ func (tb *panicTB) Logf(format string, args ...any) {
 	if !tb.SuppressOutput {
 		fmt.Printf(format+"\n", args...)
 	}
+}
+
+// MockT mocks TestingTB. It's used to let us verify our test helpers.
+type MockT struct {
+	Failed    bool
+	logOutput bytes.Buffer
+	tb        TestingTB
+}
+
+// NewMockT initializes a new MockT. It takes another TestingTB which is usually
+// something like a *testing.T and where logs are emitted to along with being
+// internalized and retrievable on LogOutput.
+func NewMockT(tb TestingTB) *MockT {
+	tb.Helper()
+	return &MockT{tb: tb}
+}
+
+func (t *MockT) Errorf(format string, args ...any) {
+	// Errorf is equivalent to Log + Fail
+	t.logOutput.WriteString(fmt.Sprintf(format, args...))
+	t.logOutput.WriteString("\n")
+	t.Failed = true
+}
+
+func (t *MockT) FailNow() {
+	t.Failed = true
+}
+
+func (t *MockT) Helper() {}
+
+func (t *MockT) Log(args ...any) {
+	t.tb.Log(args...)
+
+	t.logOutput.WriteString(fmt.Sprint(args...))
+	t.logOutput.WriteString("\n")
+}
+
+func (t *MockT) Logf(format string, args ...any) {
+	t.tb.Logf(format, args...)
+
+	t.logOutput.WriteString(fmt.Sprintf(format, args...))
+	t.logOutput.WriteString("\n")
+}
+
+func (t *MockT) LogOutput() string {
+	return t.logOutput.String()
 }
 
 // TestingT is an interface wrapper around *testing.T that's implemented by all

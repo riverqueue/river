@@ -1162,7 +1162,7 @@ func Test_Client(t *testing.T) {
 		client, err := NewClient(riverdatabasesql.New(stdPool), config)
 		require.NoError(t, err)
 
-		client.testSignals.Init()
+		client.testSignals.Init(t)
 
 		// Notifier should not have been initialized at all.
 		require.Nil(t, client.notifier)
@@ -1190,7 +1190,7 @@ func Test_Client(t *testing.T) {
 		bundle.config.PollOnly = true
 
 		client := newTestClient(t, bundle.dbPool, config)
-		client.testSignals.Init()
+		client.testSignals.Init(t)
 
 		// Notifier should not have been initialized at all.
 		require.Nil(t, client.notifier)
@@ -3973,7 +3973,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		config.Schema = schema
 
 		client := newTestClient(t, dbPool, config)
-		client.testSignals.Init()
+		client.testSignals.Init(t)
 
 		return client, &testBundle{
 			exec:   client.driver.GetExecutor(),
@@ -4270,7 +4270,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		AddWorker(config.Workers, worker)
 
 		client := newTestClient(t, dbPool, config)
-		client.testSignals.Init()
+		client.testSignals.Init(t)
 		startClient(ctx, t, client)
 
 		exec := client.driver.GetExecutor()
@@ -4310,7 +4310,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		AddWorker(config.Workers, worker)
 
 		client := newTestClient(t, dbPool, config)
-		client.testSignals.Init()
+		client.testSignals.Init(t)
 		exec := client.driver.GetExecutor()
 
 		handle := client.PeriodicJobs().Add(
@@ -4409,7 +4409,7 @@ func Test_Client_Maintenance(t *testing.T) {
 			config = newTestConfig(t, schema)
 			client = newTestClient(t, dbPool, config)
 		)
-		client.testSignals.Init()
+		client.testSignals.Init(t)
 
 		exec := client.driver.GetExecutor()
 

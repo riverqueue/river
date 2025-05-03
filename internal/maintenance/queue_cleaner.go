@@ -14,6 +14,7 @@ import (
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
 	"github.com/riverqueue/river/rivershared/util/valutil"
 )
@@ -28,8 +29,8 @@ type QueueCleanerTestSignals struct {
 	DeletedBatch testsignal.TestSignal[struct{}] // notifies when runOnce finishes a pass
 }
 
-func (ts *QueueCleanerTestSignals) Init() {
-	ts.DeletedBatch.Init()
+func (ts *QueueCleanerTestSignals) Init(tb testutil.TestingTB) {
+	ts.DeletedBatch.Init(tb)
 }
 
 type QueueCleanerConfig struct {
