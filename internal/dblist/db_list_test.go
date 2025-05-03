@@ -84,11 +84,11 @@ func TestJobListWithJobs(t *testing.T) {
 			exec   = driver.UnwrapExecutor(tx)
 		)
 
-		job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("priority")})
-		job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{EncodedArgs: []byte(`{"job_num": 2}`)})
-		job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Metadata: []byte(`{"some_key": "some_value"}`)})
-		job4 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
-		job5 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("alternate_kind")})
+		job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("priority"), Priority: ptrutil.Ptr(1)})
+		job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{EncodedArgs: []byte(`{"job_num": 2}`), Priority: ptrutil.Ptr(2)})
+		job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Metadata: []byte(`{"some_key": "some_value"}`), Priority: ptrutil.Ptr(3)})
+		job4 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning), Priority: ptrutil.Ptr(1)})
+		job5 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("alternate_kind"), Priority: ptrutil.Ptr(2)})
 
 		return &testBundle{
 			baselineTime: time.Now(),
@@ -162,6 +162,49 @@ func TestJobListWithJobs(t *testing.T) {
 		})
 	})
 
+	t.Run("ConditionsWithIDs", func(t *testing.T) {
+		t.Parallel()
+		bundle := setup(t)
+		job1, job2, job3 := bundle.jobs[0], bundle.jobs[1], bundle.jobs[2]
+		params := &JobListParams{
+			IDs:        []int64{job1.ID},
+			LimitCount: 10,
+			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderAsc}},
+		}
+		execTest(ctx, t, bundle, params, func(jobs []*rivertype.JobRow, err error) {
+			require.NoError(t, err)
+			require.Equal(t, []int64{job1.ID}, sliceutil.Map(jobs, func(j *rivertype.JobRow) int64 { return j.ID }))
+		})
+		params = &JobListParams{
+			IDs:        []int64{job2.ID, job3.ID},
+			LimitCount: 10,
+			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderAsc}},
+		}
+		execTest(ctx, t, bundle, params, func(jobs []*rivertype.JobRow, err error) {
+			require.NoError(t, err)
+			require.Equal(t, []int64{job2.ID, job3.ID}, sliceutil.Map(jobs, func(j *rivertype.JobRow) int64 { return j.ID }))
+		})
+	})
+
+	t.Run("ConditionsWithIDsAndPriorities", func(t *testing.T) {
+		t.Parallel()
+		bundle := setup(t)
+		job1, job2, job3 := bundle.jobs[0], bundle.jobs[1], bundle.jobs[2]
+		params := &JobListParams{
+			IDs:        []int64{job1.ID, job2.ID, job3.ID},
+			Priorities: []int16{1},
+			LimitCount: 10,
+			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderAsc}},
+		}
+		execTest(ctx, t, bundle, params, func(jobs []*rivertype.JobRow, err error) {
+			require.NoError(t, err)
+			// Only job1 is in the IDs list and has priority 1
+			expected := []int64{job1.ID}
+			actual := sliceutil.Map(jobs, func(j *rivertype.JobRow) int64 { return j.ID })
+			require.Equal(t, expected, actual)
+		})
+	})
+
 	t.Run("ConditionsWithKinds", func(t *testing.T) {
 		t.Parallel()
 
@@ -181,6 +224,23 @@ func TestJobListWithJobs(t *testing.T) {
 			job1 := bundle.jobs[4]
 			returnedIDs := sliceutil.Map(jobs, func(j *rivertype.JobRow) int64 { return j.ID })
 			require.Equal(t, []int64{job1.ID}, returnedIDs)
+		})
+	})
+
+	t.Run("ConditionsWithPriorities", func(t *testing.T) {
+		t.Parallel()
+		bundle := setup(t)
+		_, job2, job3, _, job5 := bundle.jobs[0], bundle.jobs[1], bundle.jobs[2], bundle.jobs[3], bundle.jobs[4]
+		params := &JobListParams{
+			Priorities: []int16{2, 3},
+			LimitCount: 10,
+			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderAsc}},
+		}
+		execTest(ctx, t, bundle, params, func(jobs []*rivertype.JobRow, err error) {
+			require.NoError(t, err)
+			expected := []int64{job2.ID, job3.ID, job5.ID}
+			actual := sliceutil.Map(jobs, func(j *rivertype.JobRow) int64 { return j.ID })
+			require.Equal(t, expected, actual)
 		})
 	})
 

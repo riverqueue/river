@@ -3413,6 +3413,56 @@ func Test_Client_JobList(t *testing.T) {
 		}
 	}
 
+	t.Run("FiltersByID", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+
+		listRes, err := client.JobList(ctx, NewJobListParams().IDs(job1.ID))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job1.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		listRes, err = client.JobList(ctx, NewJobListParams().IDs(job2.ID, job3.ID))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job2.ID, job3.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+	})
+
+	t.Run("FiltersByIDAndPriorityAndKind", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Kind: ptrutil.Ptr("special_kind"), Priority: ptrutil.Ptr(1)})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Kind: ptrutil.Ptr("special_kind"), Priority: ptrutil.Ptr(2)})
+		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Kind: ptrutil.Ptr("other_kind"), Priority: ptrutil.Ptr(1)})
+
+		listRes, err := client.JobList(ctx, NewJobListParams().IDs(job1.ID, job2.ID, job3.ID).Priorities(1, 2).Kinds("special_kind"))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+	})
+
+	t.Run("FiltersByPriority", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Priority: ptrutil.Ptr(1)})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Priority: ptrutil.Ptr(2)})
+		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Priority: ptrutil.Ptr(3)})
+
+		listRes, err := client.JobList(ctx, NewJobListParams().Priorities(1))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job1.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		listRes, err = client.JobList(ctx, NewJobListParams().Priorities(2, 3))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job2.ID, job3.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+	})
+
 	t.Run("FiltersByKind", func(t *testing.T) { //nolint:dupl
 		t.Parallel()
 
