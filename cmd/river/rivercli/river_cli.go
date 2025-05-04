@@ -6,6 +6,7 @@
 package rivercli
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -24,7 +25,6 @@ import (
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivermigrate"
-	"github.com/riverqueue/river/rivershared/util/valutil"
 )
 
 type Config struct {
@@ -666,7 +666,7 @@ func (c *version) Run(ctx context.Context, opts *versionOpts) (bool, error) {
 		buildVersion = ""
 	}
 
-	fmt.Fprintf(c.Out, "%s version %s\n", opts.Name, valutil.ValOrDefault(buildVersion, "(unknown)"))
+	fmt.Fprintf(c.Out, "%s version %s\n", opts.Name, cmp.Or(buildVersion, "(unknown)"))
 	fmt.Fprintf(c.Out, "Built with %s\n", buildInfo.GoVersion)
 
 	return true, nil

@@ -1,6 +1,7 @@
 package maintenance
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
@@ -11,7 +12,6 @@ import (
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/testutil"
-	"github.com/riverqueue/river/rivershared/util/valutil"
 )
 
 const (
@@ -87,7 +87,7 @@ func NewReindexer(archetype *baseservice.Archetype, config *ReindexerConfig, exe
 			IndexNames:   indexNames,
 			ScheduleFunc: scheduleFunc,
 			Schema:       config.Schema,
-			Timeout:      valutil.ValOrDefault(config.Timeout, ReindexerTimeoutDefault),
+			Timeout:      cmp.Or(config.Timeout, ReindexerTimeoutDefault),
 		}).mustValidate(),
 
 		batchSize: BatchSizeDefault,

@@ -6,6 +6,7 @@
 package riverdatabasesql
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"embed"
@@ -26,7 +27,6 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql/internal/pgtypealias"
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
-	"github.com/riverqueue/river/rivershared/util/valutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -260,11 +260,11 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.Jo
 
 		defaultObject := "{}"
 
-		insertJobsParams.Args[i] = valutil.ValOrDefault(string(params.EncodedArgs), defaultObject)
+		insertJobsParams.Args[i] = cmp.Or(string(params.EncodedArgs), defaultObject)
 		insertJobsParams.CreatedAt[i] = createdAt
 		insertJobsParams.Kind[i] = params.Kind
 		insertJobsParams.MaxAttempts[i] = int16(min(params.MaxAttempts, math.MaxInt16)) //nolint:gosec
-		insertJobsParams.Metadata[i] = valutil.ValOrDefault(string(params.Metadata), defaultObject)
+		insertJobsParams.Metadata[i] = cmp.Or(string(params.Metadata), defaultObject)
 		insertJobsParams.Priority[i] = int16(min(params.Priority, math.MaxInt16)) //nolint:gosec
 		insertJobsParams.Queue[i] = params.Queue
 		insertJobsParams.ScheduledAt[i] = scheduledAt
@@ -325,11 +325,11 @@ func (e *Executor) JobInsertFastManyNoReturning(ctx context.Context, params *riv
 
 		defaultObject := "{}"
 
-		insertJobsParams.Args[i] = valutil.ValOrDefault(string(params.EncodedArgs), defaultObject)
+		insertJobsParams.Args[i] = cmp.Or(string(params.EncodedArgs), defaultObject)
 		insertJobsParams.CreatedAt[i] = createdAt
 		insertJobsParams.Kind[i] = params.Kind
 		insertJobsParams.MaxAttempts[i] = int16(min(params.MaxAttempts, math.MaxInt16)) //nolint:gosec
-		insertJobsParams.Metadata[i] = valutil.ValOrDefault(string(params.Metadata), defaultObject)
+		insertJobsParams.Metadata[i] = cmp.Or(string(params.Metadata), defaultObject)
 		insertJobsParams.Priority[i] = int16(min(params.Priority, math.MaxInt16)) //nolint:gosec
 		insertJobsParams.Queue[i] = params.Queue
 		insertJobsParams.ScheduledAt[i] = scheduledAt
@@ -358,7 +358,7 @@ func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobIns
 		FinalizedAt:  params.FinalizedAt,
 		Kind:         params.Kind,
 		MaxAttempts:  int16(min(params.MaxAttempts, math.MaxInt16)), //nolint:gosec
-		Metadata:     valutil.ValOrDefault(string(params.Metadata), "{}"),
+		Metadata:     cmp.Or(string(params.Metadata), "{}"),
 		Priority:     int16(min(params.Priority, math.MaxInt16)), //nolint:gosec
 		Queue:        params.Queue,
 		ScheduledAt:  params.ScheduledAt,
@@ -541,7 +541,7 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 	const defaultObject = "{}"
 
 	for i := range len(params.ID) {
-		setStateParams.Errors[i] = valutil.ValOrDefault(string(params.ErrData[i]), defaultObject)
+		setStateParams.Errors[i] = cmp.Or(string(params.ErrData[i]), defaultObject)
 		if params.Attempt[i] != nil {
 			setStateParams.AttemptDoUpdate[i] = true
 			setStateParams.Attempt[i] = int32(*params.Attempt[i]) //nolint:gosec
@@ -754,7 +754,7 @@ func (e *Executor) PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}
 
 func (e *Executor) QueueCreateOrSetUpdatedAt(ctx context.Context, params *riverdriver.QueueCreateOrSetUpdatedAtParams) (*rivertype.Queue, error) {
 	queue, err := dbsqlc.New().QueueCreateOrSetUpdatedAt(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueCreateOrSetUpdatedAtParams{
-		Metadata:  valutil.ValOrDefault(string(params.Metadata), "{}"),
+		Metadata:  cmp.Or(string(params.Metadata), "{}"),
 		Name:      params.Name,
 		Now:       params.Now,
 		PausedAt:  params.PausedAt,

@@ -3,6 +3,7 @@
 package rivermigrate
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -23,7 +24,6 @@ import (
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
 	"github.com/riverqueue/river/rivershared/util/maputil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
-	"github.com/riverqueue/river/rivershared/util/valutil"
 )
 
 // The migrate version where the `line` column was added. Meaningful in that the
@@ -107,7 +107,7 @@ func New[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Migrator[TTx
 		config = &Config{}
 	}
 
-	line := valutil.ValOrDefault(config.Line, riverdriver.MigrationLineMain)
+	line := cmp.Or(config.Line, riverdriver.MigrationLineMain)
 
 	logger := config.Logger
 	if logger == nil {
