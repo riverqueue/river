@@ -24,6 +24,39 @@ type JobArgs interface {
 	Kind() string
 }
 
+// JobArgsWithKindAliases  is an interface that jobs args can implement to
+// provide an alternate kind which a worker will be registered under in addition
+// to the primary kind. This is useful for renaming a job kind in a safe manner
+// so that any jobs already in the database aren't orphaned.
+//
+// Renaming a job is a three part process. To begin, a job args with its
+// original name:
+//
+//	type jobArgsBeingRenamed struct{}
+//
+//	func (a jobArgsBeingRenamed) Kind() string { return "old_name" }
+//
+// Rename by putting the new name in Kind and moving the old name to
+// KindAliases:
+//
+//	type jobArgsBeingRenamed struct{}
+//
+//	func (a jobArgsBeingRenamed) Kind() string          { return "new_name" }
+//	func (a jobArgsBeingRenamed) KindAliases() []string { return []string{"old_name_still_recognized"} }
+//
+// After all jobs inserted under the original name have finished working
+// (including all their possible retries, which notably might take up to three
+// weeks on the default retry policy), remove KindAliases:
+//
+//	type jobArgsBeingRenamed struct{}
+//
+//	func (a jobArgsBeingRenamed) Kind() string { return "new_name" }
+type JobArgsWithKindAliases interface {
+	// KindAliases returns alias kinds that an associated job args worker will
+	// respond to.
+	KindAliases() []string
+}
+
 // JobArgsWithHooks is an interface that job args can implement to attach
 // specific hooks (i.e. other than those globally installed to a client) to
 // certain kinds of jobs.

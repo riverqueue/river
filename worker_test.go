@@ -32,6 +32,18 @@ func TestWork(t *testing.T) {
 		return nil
 	}))
 	require.Contains(t, workers.workersMap, (JobArgs{}).Kind())
+
+	AddWorker(workers, WorkFunc(func(ctx context.Context, job *Job[withKindAliasesArgs]) error {
+		return nil
+	}))
+	require.Contains(t, workers.workersMap, (withKindAliasesArgs{}).Kind())
+	require.Contains(t, workers.workersMap, (withKindAliasesArgs{}).KindAliases()[0])
+
+	require.PanicsWithError(t, `worker for kind "with_kind_alternate_alternate" is already registered`, func() {
+		AddWorker(workers, WorkFunc(func(ctx context.Context, job *Job[withKindAliasesCollisionArgs]) error {
+			return nil
+		}))
+	})
 }
 
 type configurableArgs struct {
@@ -49,6 +61,17 @@ type configurableWorker struct {
 
 func (w *configurableWorker) Work(ctx context.Context, job *Job[configurableArgs]) error {
 	return nil
+}
+
+type withKindAliasesArgs struct{}
+
+func (a withKindAliasesArgs) Kind() string          { return "with_kind_alternate" }
+func (a withKindAliasesArgs) KindAliases() []string { return []string{"with_kind_alternate_alternate"} }
+
+type withKindAliasesCollisionArgs struct{}
+
+func (a withKindAliasesCollisionArgs) Kind() string {
+	return (withKindAliasesArgs{}).KindAliases()[0]
 }
 
 func TestWorkers_add(t *testing.T) {

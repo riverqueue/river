@@ -147,15 +147,32 @@ func NewWorkers() *Workers {
 }
 
 func (w Workers) add(jobArgs JobArgs, workUnitFactory workunit.WorkUnitFactory) error {
-	kind := jobArgs.Kind()
-
-	if _, ok := w.workersMap[kind]; ok {
-		return fmt.Errorf("worker for kind %q is already registered", kind)
+	checkRegistered := func(kind string) error {
+		if _, ok := w.workersMap[kind]; ok {
+			return fmt.Errorf("worker for kind %q is already registered", kind)
+		}
+		return nil
 	}
 
-	w.workersMap[kind] = workerInfo{
+	workerInfo := workerInfo{
 		jobArgs:         jobArgs,
 		workUnitFactory: workUnitFactory,
+	}
+
+	kind := jobArgs.Kind()
+	if err := checkRegistered(kind); err != nil {
+		return err
+	}
+	w.workersMap[kind] = workerInfo
+
+	// Jobs can register an alternate kind to make renaming easier.
+	if jobArgsWithKindAliases, ok := jobArgs.(JobArgsWithKindAliases); ok {
+		for _, kind := range jobArgsWithKindAliases.KindAliases() {
+			if err := checkRegistered(kind); err != nil {
+				return err
+			}
+			w.workersMap[kind] = workerInfo
+		}
 	}
 
 	return nil

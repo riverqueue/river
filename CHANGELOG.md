@@ -7,9 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A new `JobArgsWithKindAliases` interface lets job args implement `KindAliases` to register a second kind that their worker will respond to. This provides a way to safely rename job kinds even with jobs using the original kind already in the database. [PR #XXX](https://github.com/riverqueue/river/pull/XXX).
+
 ### Changed
 
-- Job kinds must comply to a format of `\A[\w][\w\-\[\]<>\/.·:+]+\z`, mainly in an attempt to eliminate commas and spaces to make format more predictable for an upcoming search UI. This check can be disabled for now using `Config.SkipJobKindValidation`, but this option will likely be removed in a future version of River. [PR #879](https://github.com/riverqueue/river/pull/879).
+- Job kinds must comply to a format of `\A[\w][\w\-\[\]<>\/.·:+]+\z`, mainly in an attempt to eliminate commas and spaces to make format more predictable for an upcoming search UI. This check can be disabled for now using `Config.SkipJobKindValidation`, but this option will likely be removed in a future version of River. The new `JobArgsWithKindAliases` interface (see above) can be used to rename non-compliant kinds. [PR #879](https://github.com/riverqueue/river/pull/879).
 
 ## [0.21.0] - 2025-05-02
 
