@@ -288,7 +288,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		timeBeforeStart := time.Now().UTC()
 
 		producer, jobUpdates := makeProducer(ctx, t)
-		producer.testSignals.Init()
+		producer.testSignals.Init(t)
 		config := newTestConfig(t, producer.config.Schema)
 
 		jobUpdatesFlattened := make(chan jobcompleter.CompleterJobUpdated, 10)

@@ -51,7 +51,7 @@ func TestReindexer(t *testing.T) {
 			Schema:       schema,
 		}, bundle.exec)
 		svc.StaggerStartupDisable(true)
-		svc.TestSignals.Init()
+		svc.TestSignals.Init(t)
 		t.Cleanup(svc.Stop)
 
 		return svc, bundle

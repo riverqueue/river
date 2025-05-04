@@ -14,6 +14,7 @@ import (
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/maputil"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -28,10 +29,10 @@ type PeriodicJobEnqueuerTestSignals struct {
 	SkippedJob   testsignal.TestSignal[struct{}] // notifies when a job is skipped because of nil JobInsertParams
 }
 
-func (ts *PeriodicJobEnqueuerTestSignals) Init() {
-	ts.EnteredLoop.Init()
-	ts.InsertedJobs.Init()
-	ts.SkippedJob.Init()
+func (ts *PeriodicJobEnqueuerTestSignals) Init(tb testutil.TestingTB) {
+	ts.EnteredLoop.Init(tb)
+	ts.InsertedJobs.Init(tb)
+	ts.SkippedJob.Init(tb)
 }
 
 // PeriodicJob is a periodic job to be run. It's similar to the top-level

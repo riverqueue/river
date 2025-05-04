@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 )
 
 func TestTestSignal(t *testing.T) {
@@ -25,18 +26,22 @@ func TestTestSignal(t *testing.T) {
 	t.Run("Initialized", func(t *testing.T) {
 		t.Parallel()
 
+		mockT := testutil.NewMockT(t)
+
 		signal := TestSignal[struct{}]{}
-		signal.Init()
+		signal.Init(mockT)
 
 		// Signal can be invoked many times, but not infinitely
 		for range testSignalInternalChanSize {
 			signal.Signal(struct{}{})
 		}
+		require.False(t, mockT.Failed)
+		require.Empty(t, mockT.LogOutput())
 
 		// Another signal will panic because the internal channel is full.
-		require.PanicsWithValue(t, "test only signal channel is full", func() {
-			signal.Signal(struct{}{})
-		})
+		signal.Signal(struct{}{})
+		require.True(t, mockT.Failed)
+		require.Equal(t, "test only signal channel is full\n", mockT.LogOutput())
 
 		// And we can now wait on all the emitted signals.
 		for range testSignalInternalChanSize {
@@ -48,7 +53,7 @@ func TestTestSignal(t *testing.T) {
 		t.Parallel()
 
 		signal := TestSignal[struct{}]{}
-		signal.Init()
+		signal.Init(t)
 
 		select {
 		case <-signal.WaitC():
@@ -69,7 +74,7 @@ func TestTestSignal(t *testing.T) {
 		t.Parallel()
 
 		signal := TestSignal[struct{}]{}
-		signal.Init()
+		signal.Init(t)
 
 		signal.Signal(struct{}{})
 

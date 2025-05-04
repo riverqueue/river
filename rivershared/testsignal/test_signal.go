@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 )
 
 // TestSignalWaiter provides an interface for TestSignal which only exposes
@@ -25,14 +26,16 @@ type TestSignalWaiter[T any] interface {
 // possible for tests to WaitOrTimeout on them.
 type TestSignal[T any] struct {
 	internalChan chan T
+	tb           testutil.TestingTB
 }
 
 const testSignalInternalChanSize = 50
 
 // Init initializes the test signal for use. This should only ever be called
 // from tests.
-func (s *TestSignal[T]) Init() {
+func (s *TestSignal[T]) Init(tb testutil.TestingTB) {
 	s.internalChan = make(chan T, testSignalInternalChanSize)
+	s.tb = tb
 }
 
 // Signal signals the test signal. In production where the signal hasn't been
@@ -48,7 +51,8 @@ func (s *TestSignal[T]) Signal(val T) {
 	select { // never block on send
 	case s.internalChan <- val:
 	default:
-		panic("test only signal channel is full")
+		s.tb.Errorf("test only signal channel is full")
+		s.tb.FailNow()
 	}
 }
 

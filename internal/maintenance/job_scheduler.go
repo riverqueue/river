@@ -13,6 +13,7 @@ import (
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
 	"github.com/riverqueue/river/rivershared/util/valutil"
 	"github.com/riverqueue/river/rivertype"
@@ -29,9 +30,9 @@ type JobSchedulerTestSignals struct {
 	ScheduledBatch testsignal.TestSignal[struct{}] // notifies when runOnce finishes a pass
 }
 
-func (ts *JobSchedulerTestSignals) Init() {
-	ts.NotifiedQueues.Init()
-	ts.ScheduledBatch.Init()
+func (ts *JobSchedulerTestSignals) Init(tb testutil.TestingTB) {
+	ts.NotifiedQueues.Init(tb)
+	ts.ScheduledBatch.Init(tb)
 }
 
 type InsertFunc func(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) ([]*rivertype.JobInsertResult, error)

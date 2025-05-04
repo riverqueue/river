@@ -64,7 +64,7 @@ func TestNotifier(t *testing.T) {
 		)
 
 		notifier := New(riversharedtest.BaseServiceArchetype(t), listener)
-		notifier.testSignals.Init()
+		notifier.testSignals.Init(t)
 
 		return notifier, &testBundle{
 			dbPool: dbPool,

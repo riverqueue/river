@@ -45,7 +45,7 @@ func TestQueueCleaner(t *testing.T) {
 			},
 			bundle.exec)
 		cleaner.StaggerStartupDisable(true)
-		cleaner.TestSignals.Init()
+		cleaner.TestSignals.Init(t)
 		t.Cleanup(cleaner.Stop)
 
 		return cleaner, bundle

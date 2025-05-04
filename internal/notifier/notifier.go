@@ -16,6 +16,7 @@ import (
 	"github.com/riverqueue/river/rivershared/util/maputil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 )
 
 type NotificationTopic string
@@ -67,10 +68,10 @@ type notifierTestSignals struct {
 	ListeningEnd   testsignal.TestSignal[struct{}] // notifier has left a listen loop
 }
 
-func (ts *notifierTestSignals) Init() {
-	ts.BackoffError.Init()
-	ts.ListeningBegin.Init()
-	ts.ListeningEnd.Init()
+func (ts *notifierTestSignals) Init(tb testutil.TestingTB) {
+	ts.BackoffError.Init(tb)
+	ts.ListeningBegin.Init(tb)
+	ts.ListeningEnd.Init(tb)
 }
 
 type Notifier struct {

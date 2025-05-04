@@ -1,9 +1,7 @@
 package rivertest
 
 import (
-	"bytes"
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -15,6 +13,7 @@ import (
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -43,7 +42,7 @@ func TestRequireInserted(t *testing.T) {
 	type testBundle struct {
 		dbPool *pgxpool.Pool
 		driver *riverpgxv5.Driver
-		mockT  *MockT
+		mockT  *testutil.MockT
 		schema string
 	}
 
@@ -64,7 +63,7 @@ func TestRequireInserted(t *testing.T) {
 		return riverClient, &testBundle{
 			dbPool: dbPool,
 			driver: driver,
-			mockT:  NewMockT(t),
+			mockT:  testutil.NewMockT(t),
 			schema: schema,
 		}
 	}
@@ -89,7 +88,7 @@ func TestRequireInsertedTx(t *testing.T) {
 	ctx := context.Background()
 
 	type testBundle struct {
-		mockT *MockT
+		mockT *testutil.MockT
 		tx    pgx.Tx
 	}
 
@@ -100,7 +99,7 @@ func TestRequireInsertedTx(t *testing.T) {
 		require.NoError(t, err)
 
 		return riverClient, &testBundle{
-			mockT: NewMockT(t),
+			mockT: testutil.NewMockT(t),
 			tx:    riverdbtest.TestTxPgx(ctx, t),
 		}
 	}
@@ -237,7 +236,7 @@ func TestRequireInsertedTx(t *testing.T) {
 		}
 
 		t.Run("MaxAttempts", func(t *testing.T) {
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			opts := sameOpts()
 			opts.MaxAttempts = 77
 			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
@@ -248,7 +247,7 @@ func TestRequireInsertedTx(t *testing.T) {
 		})
 
 		t.Run("Priority", func(t *testing.T) {
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			opts := sameOpts()
 			opts.Priority = 3
 			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
@@ -259,7 +258,7 @@ func TestRequireInsertedTx(t *testing.T) {
 		})
 
 		t.Run("Queue", func(t *testing.T) {
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			opts := sameOpts()
 			opts.Queue = "wrong_queue"
 			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
@@ -270,7 +269,7 @@ func TestRequireInsertedTx(t *testing.T) {
 		})
 
 		t.Run("ScheduledAt", func(t *testing.T) {
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			opts := sameOpts()
 			opts.ScheduledAt = testTime.Add(3*time.Minute + 23*time.Second + 123*time.Microsecond)
 			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
@@ -281,7 +280,7 @@ func TestRequireInsertedTx(t *testing.T) {
 		})
 
 		t.Run("State", func(t *testing.T) {
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			opts := sameOpts()
 			opts.State = rivertype.JobStateCancelled
 			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
@@ -292,7 +291,7 @@ func TestRequireInsertedTx(t *testing.T) {
 		})
 
 		t.Run("Tags", func(t *testing.T) {
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			opts := sameOpts()
 			opts.Tags = []string{"tag2"}
 			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
@@ -303,7 +302,7 @@ func TestRequireInsertedTx(t *testing.T) {
 		})
 
 		t.Run("MultiplePropertiesSucceed", func(t *testing.T) {
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			opts := emptyOpts()
 			opts.MaxAttempts = job.MaxAttempts
 			opts.Priority = job.Priority
@@ -312,7 +311,7 @@ func TestRequireInsertedTx(t *testing.T) {
 		})
 
 		t.Run("MultiplePropertiesFails", func(t *testing.T) {
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			opts := sameOpts()
 			opts.MaxAttempts = 77
 			opts.Priority = 3
@@ -324,7 +323,7 @@ func TestRequireInsertedTx(t *testing.T) {
 		})
 
 		t.Run("AllSameSucceeds", func(t *testing.T) {
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			opts := sameOpts()
 			requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.False(t, mockT.Failed)
@@ -342,7 +341,7 @@ func TestRequireNotInserted(t *testing.T) {
 	type testBundle struct {
 		dbPool *pgxpool.Pool
 		driver *riverpgxv5.Driver
-		mockT  *MockT
+		mockT  *testutil.MockT
 		schema string
 	}
 
@@ -363,7 +362,7 @@ func TestRequireNotInserted(t *testing.T) {
 		return riverClient, &testBundle{
 			dbPool: dbPool,
 			driver: driver,
-			mockT:  NewMockT(t),
+			mockT:  testutil.NewMockT(t),
 			schema: schema,
 		}
 	}
@@ -387,7 +386,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 	ctx := context.Background()
 
 	type testBundle struct {
-		mockT *MockT
+		mockT *testutil.MockT
 		tx    pgx.Tx
 	}
 
@@ -398,7 +397,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		require.NoError(t, err)
 
 		return riverClient, &testBundle{
-			mockT: NewMockT(t),
+			mockT: testutil.NewMockT(t),
 			tx:    riverdbtest.TestTxPgx(ctx, t),
 		}
 	}
@@ -516,7 +515,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		}
 
 		t.Run("MaxAttempts", func(t *testing.T) {
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			opts := emptyOpts()
 			opts.MaxAttempts = job.MaxAttempts
 			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
@@ -527,7 +526,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		})
 
 		t.Run("Priority", func(t *testing.T) {
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			opts := emptyOpts()
 			opts.Priority = job.Priority
 			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
@@ -538,7 +537,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		})
 
 		t.Run("Queue", func(t *testing.T) {
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			opts := emptyOpts()
 			opts.Queue = job.Queue
 			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
@@ -549,7 +548,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		})
 
 		t.Run("ScheduledAt", func(t *testing.T) {
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			opts := emptyOpts()
 			opts.ScheduledAt = job.ScheduledAt
 			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
@@ -560,7 +559,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		})
 
 		t.Run("State", func(t *testing.T) {
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			opts := emptyOpts()
 			opts.State = job.State
 			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
@@ -571,7 +570,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		})
 
 		t.Run("Tags", func(t *testing.T) {
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			opts := emptyOpts()
 			opts.Tags = job.Tags
 			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
@@ -582,7 +581,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		})
 
 		t.Run("MultiplePropertiesSucceed", func(t *testing.T) {
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			opts := emptyOpts()
 			opts.MaxAttempts = job.MaxAttempts // one property matches job, but the other does not
 			opts.Priority = 3
@@ -591,7 +590,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		})
 
 		t.Run("MultiplePropertiesFail", func(t *testing.T) {
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			opts := emptyOpts()
 			opts.MaxAttempts = job.MaxAttempts
 			opts.Priority = job.Priority
@@ -603,7 +602,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		})
 
 		t.Run("AllSameFails", func(t *testing.T) {
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			opts := sameOpts()
 			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
 			require.True(t, mockT.Failed)
@@ -618,7 +617,7 @@ func TestRequireNotInsertedTx(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			opts := emptyOpts()
 			opts.Priority = 3
 			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
@@ -640,7 +639,7 @@ func TestRequireManyInserted(t *testing.T) {
 	type testBundle struct {
 		dbPool *pgxpool.Pool
 		driver *riverpgxv5.Driver
-		mockT  *MockT
+		mockT  *testutil.MockT
 		schema string
 	}
 
@@ -661,7 +660,7 @@ func TestRequireManyInserted(t *testing.T) {
 		return riverClient, &testBundle{
 			dbPool: dbPool,
 			driver: driver,
-			mockT:  NewMockT(t),
+			mockT:  testutil.NewMockT(t),
 			schema: schema,
 		}
 	}
@@ -688,7 +687,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 	ctx := context.Background()
 
 	type testBundle struct {
-		mockT *MockT
+		mockT *testutil.MockT
 		tx    pgx.Tx
 	}
 
@@ -699,7 +698,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 		require.NoError(t, err)
 
 		return riverClient, &testBundle{
-			mockT: NewMockT(t),
+			mockT: testutil.NewMockT(t),
 			tx:    riverdbtest.TestTxPgx(ctx, t),
 		}
 	}
@@ -958,7 +957,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 
 		// Max attempts
 		{
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, []ExpectedJob{
 				{
 					Args: &Job2Args{},
@@ -980,7 +979,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 
 		// Priority
 		{
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, []ExpectedJob{
 				{
 					Args: &Job2Args{},
@@ -1002,7 +1001,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 
 		// Queue
 		{
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, []ExpectedJob{
 				{
 					Args: &Job2Args{},
@@ -1024,7 +1023,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 
 		// Scheduled at
 		{
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, []ExpectedJob{
 				{
 					Args: &Job2Args{},
@@ -1046,7 +1045,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 
 		// State
 		{
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, []ExpectedJob{
 				{
 					Args: &Job2Args{},
@@ -1068,7 +1067,7 @@ func TestRequireManyInsertedTx(t *testing.T) {
 
 		// Tags
 		{
-			mockT := NewMockT(t)
+			mockT := testutil.NewMockT(t)
 			_ = requireManyInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, []ExpectedJob{
 				{
 					Args: &Job2Args{},
@@ -1114,45 +1113,4 @@ func TestWorkContext(t *testing.T) {
 		client := river.ClientFromContext[pgx.Tx](ctx)
 		require.NotNil(t, client)
 	})
-}
-
-// MockT mocks testingT (or *testing.T). It's used to let us verify our test
-// helpers.
-type MockT struct {
-	Failed    bool
-	logOutput bytes.Buffer
-	tb        testing.TB
-}
-
-func NewMockT(tb testing.TB) *MockT {
-	tb.Helper()
-	return &MockT{tb: tb}
-}
-
-func (t *MockT) Errorf(format string, args ...any) {
-	_, _ = format, args
-}
-
-func (t *MockT) FailNow() {
-	t.Failed = true
-}
-
-func (t *MockT) Helper() {}
-
-func (t *MockT) Log(args ...any) {
-	t.tb.Log(args...)
-
-	t.logOutput.WriteString(fmt.Sprint(args...))
-	t.logOutput.WriteString("\n")
-}
-
-func (t *MockT) Logf(format string, args ...any) {
-	t.tb.Logf(format, args...)
-
-	t.logOutput.WriteString(fmt.Sprintf(format, args...))
-	t.logOutput.WriteString("\n")
-}
-
-func (t *MockT) LogOutput() string {
-	return t.logOutput.String()
 }

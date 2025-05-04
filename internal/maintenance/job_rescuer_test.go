@@ -100,7 +100,7 @@ func TestJobRescuer(t *testing.T) {
 			},
 			bundle.exec)
 		rescuer.StaggerStartupDisable(true)
-		rescuer.TestSignals.Init()
+		rescuer.TestSignals.Init(t)
 		t.Cleanup(rescuer.Stop)
 
 		return rescuer, bundle

@@ -27,6 +27,7 @@ import (
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -49,15 +50,15 @@ type producerTestSignals struct {
 	StartedExecutors           testsignal.TestSignal[struct{}] // notifies when runOnce finishes a pass
 }
 
-func (ts *producerTestSignals) Init() {
-	ts.DeletedExpiredQueueRecords.Init()
-	ts.MetadataChanged.Init()
-	ts.Paused.Init()
-	ts.PolledQueueConfig.Init()
-	ts.ReportedQueueStatus.Init()
-	ts.ReportedProducerStatus.Init()
-	ts.Resumed.Init()
-	ts.StartedExecutors.Init()
+func (ts *producerTestSignals) Init(tb testutil.TestingTB) {
+	ts.DeletedExpiredQueueRecords.Init(tb)
+	ts.MetadataChanged.Init(tb)
+	ts.Paused.Init(tb)
+	ts.PolledQueueConfig.Init(tb)
+	ts.ReportedQueueStatus.Init(tb)
+	ts.ReportedProducerStatus.Init(tb)
+	ts.Resumed.Init(tb)
+	ts.StartedExecutors.Init(tb)
 }
 
 type producerConfig struct {

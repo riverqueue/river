@@ -116,7 +116,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc := NewPeriodicJobEnqueuer(riversharedtest.BaseServiceArchetype(t), &PeriodicJobEnqueuerConfig{Insert: makeInsertFunc(schema)}, bundle.exec)
 		svc.StaggerStartupDisable(true)
-		svc.TestSignals.Init()
+		svc.TestSignals.Init(t)
 
 		return svc, bundle
 	}
@@ -419,7 +419,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 				},
 			}, bundle.exec)
 		svc.StaggerStartupDisable(true)
-		svc.TestSignals.Init()
+		svc.TestSignals.Init(t)
 
 		startService(t, svc)
 

@@ -10,6 +10,7 @@ import (
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivershared/util/valutil"
 )
 
@@ -25,8 +26,8 @@ type ReindexerTestSignals struct {
 	Reindexed testsignal.TestSignal[struct{}] // notifies when a run finishes executing reindexes for all indexes
 }
 
-func (ts *ReindexerTestSignals) Init() {
-	ts.Reindexed.Init()
+func (ts *ReindexerTestSignals) Init(tb testutil.TestingTB) {
+	ts.Reindexed.Init(tb)
 }
 
 type ReindexerConfig struct {

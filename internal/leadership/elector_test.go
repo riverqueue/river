@@ -151,7 +151,7 @@ func testElector[TElectorBundle any](
 		electorBundle := makeElectorBundle(ctx, t, opts.stress)
 
 		elector := makeElector(t, electorBundle)
-		elector.testSignals.Init()
+		elector.testSignals.Init(t)
 
 		return elector, &testBundle{
 			electorBundle: electorBundle,
@@ -303,7 +303,7 @@ func testElector[TElectorBundle any](
 		elector2 := makeElector(t, bundle.electorBundle)
 		elector2.config.ClientID = "elector2"
 		elector2.exec = elector1.exec
-		elector2.testSignals.Init()
+		elector2.testSignals.Init(t)
 
 		{
 			startElector(ctx, t, elector2)

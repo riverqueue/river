@@ -17,6 +17,7 @@ import (
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivershared/util/valutil"
 )
 
@@ -63,12 +64,12 @@ type electorTestSignals struct {
 	ResignedLeadership   testsignal.TestSignal[struct{}] // notifies when elector resigns leadership
 }
 
-func (ts *electorTestSignals) Init() {
-	ts.DeniedLeadership.Init()
-	ts.GainedLeadership.Init()
-	ts.LostLeadership.Init()
-	ts.MaintainedLeadership.Init()
-	ts.ResignedLeadership.Init()
+func (ts *electorTestSignals) Init(tb testutil.TestingTB) {
+	ts.DeniedLeadership.Init(tb)
+	ts.GainedLeadership.Init(tb)
+	ts.LostLeadership.Init(tb)
+	ts.MaintainedLeadership.Init(tb)
+	ts.ResignedLeadership.Init(tb)
 }
 
 type Config struct {

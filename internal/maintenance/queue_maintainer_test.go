@@ -16,6 +16,7 @@ import (
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testsignal"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -30,7 +31,7 @@ func newTestService(tb testing.TB) *testService {
 	tb.Helper()
 
 	testSvc := baseservice.Init(riversharedtest.BaseServiceArchetype(tb), &testService{})
-	testSvc.testSignals.Init()
+	testSvc.testSignals.Init(tb)
 
 	return testSvc
 }
@@ -58,9 +59,9 @@ type testServiceTestSignals struct {
 	started   testsignal.TestSignal[struct{}]
 }
 
-func (ts *testServiceTestSignals) Init() {
-	ts.returning.Init()
-	ts.started.Init()
+func (ts *testServiceTestSignals) Init(tb testutil.TestingTB) {
+	ts.returning.Init(tb)
+	ts.started.Init(tb)
 }
 
 func TestQueueMaintainer(t *testing.T) {
