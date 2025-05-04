@@ -6521,6 +6521,9 @@ func Test_NewClient_Validations(t *testing.T) {
 		{
 			name: "Job kind validation skipped with SkipJobKindValidation",
 			configFunc: func(config *Config) {
+				// this run will emit a warning; make sure it's collated under
+				// this test as opposed to going to stdout/stderr
+				config.Logger = riversharedtest.Logger(t)
 				config.SkipJobKindValidation = true
 				AddWorker(config.Workers, &invalidKindWorker{})
 			},
