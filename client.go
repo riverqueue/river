@@ -289,6 +289,15 @@ type Config struct {
 	// setting of Postgres `search_path`.
 	Schema string
 
+	// SkipJobKindValidation causes the job kind format validation check to be
+	// skipped. This is available as an interim stopgap for users that have
+	// invalid job kind names, but would rather disable the check rather than
+	// fix them immediately.
+	//
+	// Deprecated: This option will be removed in a future versions so that job
+	// kinds will always have to have a valid format.
+	SkipJobKindValidation bool
+
 	// SkipUnknownJobCheck is a flag to control whether the client should skip
 	// checking to see if a registered worker exists in the client's worker bundle
 	// for a job arg prior to insertion.
@@ -384,6 +393,7 @@ func (c *Config) WithDefaults() *Config {
 		RescueStuckJobsAfter:        valutil.ValOrDefault(c.RescueStuckJobsAfter, rescueAfter),
 		RetryPolicy:                 retryPolicy,
 		Schema:                      c.Schema,
+		SkipJobKindValidation:       c.SkipJobKindValidation,
 		SkipUnknownJobCheck:         c.SkipUnknownJobCheck,
 		Test:                        c.Test,
 		TestOnly:                    c.TestOnly,
@@ -447,6 +457,22 @@ func (c *Config) validate() error {
 
 	if c.Workers == nil && c.Queues != nil {
 		return errors.New("Workers must be set if Queues is set")
+	}
+
+	if c.Workers != nil {
+		for _, workerInfo := range c.Workers.workersMap {
+			kind := workerInfo.jobArgs.Kind()
+			if !jobKindRE.MatchString(kind) {
+				if c.SkipJobKindValidation {
+					c.Logger.Warn("job kind should match regex; this will be an error in future versions",
+						slog.String("kind", kind),
+						slog.String("regex", jobKindRE.String()),
+					)
+				} else {
+					return fmt.Errorf("job kind %q should match regex %q", kind, jobKindRE.String())
+				}
+			}
+		}
 	}
 
 	return nil
@@ -2357,6 +2383,11 @@ func (b *QueueBundle) Add(queueName string, queueConfig QueueConfig) error {
 
 	return nil
 }
+
+// Regular expression to which the format of job kinds must comply. Mainly,
+// minimal special characters, and excluding spaces and commas which are
+// problematic for the search UI.
+var jobKindRE = regexp.MustCompile(`\A[\w][\w\-\[\]<>\/.·:+]+\z`)
 
 // Generates a default client ID using the current hostname and time.
 func defaultClientID(startedAt time.Time) string {
