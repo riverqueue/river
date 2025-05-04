@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Job kinds must comply to a format of `\A[\w][\w\-\[\]<>\/.·:+]+\z`, mainly in an attempt to eliminate commas and spaces to make format more predictable for an upcoming search UI. This check can be disabled for now using `Config.SkipJobKindValidation`, but this option will likely be removed in a future version of River. [PR #879](https://github.com/riverqueue/river/pull/879).
+
 ## [0.21.0] - 2025-05-02
 
 ⚠️ Internal APIs used for communication between River and River Pro have changed. If using River Pro, make sure to update River and River Pro to latest at the same time to get compatible versions. River v0.21.0 is compatible with River Pro v0.13.0.

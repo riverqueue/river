@@ -47,6 +47,16 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
+type invalidKindArgs struct{}
+
+func (a invalidKindArgs) Kind() string { return "this kind is invalid" }
+
+type invalidKindWorker struct {
+	WorkerDefaults[invalidKindArgs]
+}
+
+func (w *invalidKindWorker) Work(ctx context.Context, job *Job[invalidKindArgs]) error { return nil }
+
 type noOpArgs struct {
 	Name string `json:"name"`
 }
@@ -6501,6 +6511,20 @@ func Test_NewClient_Validations(t *testing.T) {
 			},
 			wantErr: errors.New("Workers must be set if Queues is set"),
 		},
+		{
+			name: "Job kinds must be valid",
+			configFunc: func(config *Config) {
+				AddWorker(config.Workers, &invalidKindWorker{})
+			},
+			wantErr: fmt.Errorf("job kind %q should match regex %q", "this kind is invalid", jobKindRE.String()),
+		},
+		{
+			name: "Job kind validation skipped with SkipJobKindValidation",
+			configFunc: func(config *Config) {
+				config.SkipJobKindValidation = true
+				AddWorker(config.Workers, &invalidKindWorker{})
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -7202,4 +7226,24 @@ func TestDefaultClientIDWithHost(t *testing.T) {
 	require.Equal(t, strings.Repeat("a", 59)+"_2024_03_07T04_39_12_123456", defaultClientIDWithHost(startedAt, strings.Repeat("a", 59)))
 	require.Equal(t, strings.Repeat("a", 60)+"_2024_03_07T04_39_12_123456", defaultClientIDWithHost(startedAt, strings.Repeat("a", 60)))
 	require.Equal(t, strings.Repeat("a", 60)+"_2024_03_07T04_39_12_123456", defaultClientIDWithHost(startedAt, strings.Repeat("a", 61)))
+}
+
+func TestJobKindRE(t *testing.T) {
+	t.Parallel()
+
+	require.Regexp(t, jobKindRE, "kind")
+	require.Regexp(t, jobKindRE, "kind123")
+	require.Regexp(t, jobKindRE, "with.dot")
+	require.Regexp(t, jobKindRE, "with:colon")
+	require.Regexp(t, jobKindRE, "with+plus")
+	require.Regexp(t, jobKindRE, "with-hyphen")
+	require.Regexp(t, jobKindRE, "with_underscore")
+	require.Regexp(t, jobKindRE, "with[brackets]")
+	require.Regexp(t, jobKindRE, "with<triangle_brackets>")
+	require.Regexp(t, jobKindRE, "with/slash")
+	require.Regexp(t, jobKindRE, "JobArgsReflectKind[github.com/riverqueue/river.JobArgs·12]")
+
+	require.NotRegexp(t, jobKindRE, "with space")
+	require.NotRegexp(t, jobKindRE, "with,comma")
+	require.NotRegexp(t, jobKindRE, ":no_leading_special_characters")
 }
