@@ -981,6 +981,7 @@ type templateReplaceWrapper struct {
 
 func (w templateReplaceWrapper) ExecContext(ctx context.Context, sql string, args ...interface{}) (sql.Result, error) {
 	sql, args = w.replacer.Run(ctx, sql, args)
+	convertDurationToInterval(sql, args)
 	return w.dbtx.ExecContext(ctx, sql, args...)
 }
 
@@ -1106,4 +1107,18 @@ func schemaTemplateParam(ctx context.Context, schema string) context.Context {
 	return sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
 		"schema": {Value: schema},
 	}, nil)
+}
+
+// convertDurationToInterval converts Go's time.Duration to PostgreSQL's
+func convertDurationToInterval(sql string, args []any) {
+	if !strings.Contains(sql, "interval") {
+		return
+	}
+
+	for i, arg := range args {
+		if d, ok := arg.(time.Duration); ok {
+			pgInterval := fmt.Sprintf("%d seconds", int(d.Seconds()))
+			args[i] = pgInterval
+		}
+	}
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -130,4 +131,35 @@ func TestSchemaTemplateParam(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "SELECT 1 FROM custom_schema.river_job", updatedSQL)
 	})
+}
+
+func TestConvertDurationToInterval(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		Desc         string
+		InputSQL     string
+		InputArgs    []any
+		ExpectedArgs []any
+	}{
+		{
+			Desc: "Convert duration to interval",
+			InputSQL: `
+			INSERT INTO river_leader(leader_id, elected_At, expires_at)
+				VALUES($1, now(), now() + $2::interval)
+			ON CONFICT (name)
+				DO NOTHING
+			`,
+			InputArgs:    []any{"river", 15 * time.Second},
+			ExpectedArgs: []any{"river", "15 seconds"},
+		},
+	}
+	for _, tt := range testCases {
+		t.Run(tt.Desc, func(t *testing.T) {
+			t.Parallel()
+
+			convertDurationToInterval(tt.InputSQL, tt.InputArgs)
+			require.Equal(t, tt.InputArgs, tt.ExpectedArgs)
+		})
+	}
 }
