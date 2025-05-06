@@ -9,16 +9,17 @@ CREATE UNLOGGED TABLE river_leader(
 
 -- name: LeaderAttemptElect :execrows
 INSERT INTO /* TEMPLATE: schema */river_leader (leader_id, elected_at, expires_at)
-    VALUES (@leader_id, coalesce(sqlc.narg('now')::timestamptz, now()), coalesce(sqlc.narg('now')::timestamptz, now()) + @ttl::interval)
+    -- @ttl is inserted as 
+    VALUES (@leader_id, coalesce(sqlc.narg('now')::timestamptz, now()), coalesce(sqlc.narg('now')::timestamptz, now()) + make_interval(secs => @ttl))
 ON CONFLICT (name)
     DO NOTHING;
 
 -- name: LeaderAttemptReelect :execrows
 INSERT INTO /* TEMPLATE: schema */river_leader (leader_id, elected_at, expires_at)
-    VALUES (@leader_id, coalesce(sqlc.narg('now')::timestamptz, now()), coalesce(sqlc.narg('now')::timestamptz, now()) + @ttl::interval)
+    VALUES (@leader_id, coalesce(sqlc.narg('now')::timestamptz, now()), coalesce(sqlc.narg('now')::timestamptz, now()) + make_interval(secs => @ttl))
 ON CONFLICT (name)
     DO UPDATE SET
-        expires_at = coalesce(sqlc.narg('now')::timestamptz, now()) + @ttl
+        expires_at = EXCLUDED.expires_at
     WHERE
         river_leader.leader_id = @leader_id;
 
@@ -37,7 +38,7 @@ INSERT INTO /* TEMPLATE: schema */river_leader(
     leader_id
 ) VALUES (
     coalesce(sqlc.narg('elected_at')::timestamptz, coalesce(sqlc.narg('now')::timestamptz, now())),
-    coalesce(sqlc.narg('expires_at')::timestamptz, coalesce(sqlc.narg('now')::timestamptz, now()) + @ttl::interval),
+    coalesce(sqlc.narg('expires_at')::timestamptz, coalesce(sqlc.narg('now')::timestamptz, now()) + make_interval(secs => @ttl)),
     @leader_id
 ) RETURNING *;
 

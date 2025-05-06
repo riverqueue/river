@@ -14,7 +14,8 @@ import (
 
 const leaderAttemptElect = `-- name: LeaderAttemptElect :execrows
 INSERT INTO /* TEMPLATE: schema */river_leader (leader_id, elected_at, expires_at)
-    VALUES ($1, coalesce($2::timestamptz, now()), coalesce($2::timestamptz, now()) + $3::interval)
+    -- @ttl is inserted as 
+    VALUES ($1, coalesce($2::timestamptz, now()), coalesce($2::timestamptz, now()) + make_interval(secs => $3))
 ON CONFLICT (name)
     DO NOTHING
 `
@@ -22,7 +23,7 @@ ON CONFLICT (name)
 type LeaderAttemptElectParams struct {
 	LeaderID string
 	Now      *time.Time
-	TTL      time.Duration
+	TTL      float64
 }
 
 func (q *Queries) LeaderAttemptElect(ctx context.Context, db DBTX, arg *LeaderAttemptElectParams) (int64, error) {
@@ -35,10 +36,10 @@ func (q *Queries) LeaderAttemptElect(ctx context.Context, db DBTX, arg *LeaderAt
 
 const leaderAttemptReelect = `-- name: LeaderAttemptReelect :execrows
 INSERT INTO /* TEMPLATE: schema */river_leader (leader_id, elected_at, expires_at)
-    VALUES ($1, coalesce($2::timestamptz, now()), coalesce($2::timestamptz, now()) + $3::interval)
+    VALUES ($1, coalesce($2::timestamptz, now()), coalesce($2::timestamptz, now()) + make_interval(secs => $3))
 ON CONFLICT (name)
     DO UPDATE SET
-        expires_at = coalesce($2::timestamptz, now()) + $3
+        expires_at = EXCLUDED.expires_at
     WHERE
         river_leader.leader_id = $1
 `
@@ -46,7 +47,7 @@ ON CONFLICT (name)
 type LeaderAttemptReelectParams struct {
 	LeaderID string
 	Now      *time.Time
-	TTL      time.Duration
+	TTL      float64
 }
 
 func (q *Queries) LeaderAttemptReelect(ctx context.Context, db DBTX, arg *LeaderAttemptReelectParams) (int64, error) {
@@ -94,7 +95,7 @@ INSERT INTO /* TEMPLATE: schema */river_leader(
     leader_id
 ) VALUES (
     coalesce($1::timestamptz, coalesce($2::timestamptz, now())),
-    coalesce($3::timestamptz, coalesce($2::timestamptz, now()) + $4::interval),
+    coalesce($3::timestamptz, coalesce($2::timestamptz, now()) + make_interval(secs => $4)),
     $5
 ) RETURNING elected_at, expires_at, leader_id, name
 `
@@ -103,7 +104,7 @@ type LeaderInsertParams struct {
 	ElectedAt *time.Time
 	Now       *time.Time
 	ExpiresAt *time.Time
-	TTL       time.Duration
+	TTL       float64
 	LeaderID  string
 }
 

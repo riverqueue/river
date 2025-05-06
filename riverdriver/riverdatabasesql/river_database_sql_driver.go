@@ -19,13 +19,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
-
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql/internal/dbsqlc"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql/internal/pgtypealias"
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
+	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -236,7 +235,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.Jo
 		State:        make([]string, len(params.Jobs)),
 		Tags:         make([]string, len(params.Jobs)),
 		UniqueKey:    make([]pgtypealias.NullBytea, len(params.Jobs)),
-		UniqueStates: make([]pgtypealias.Bits, len(params.Jobs)),
+		UniqueStates: make([]int32, len(params.Jobs)),
 	}
 	now := time.Now().UTC()
 
@@ -258,20 +257,18 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.Jo
 			tags = []string{}
 		}
 
-		defaultObject := "{}"
-
-		insertJobsParams.Args[i] = cmp.Or(string(params.EncodedArgs), defaultObject)
+		insertJobsParams.Args[i] = cmp.Or(string(params.EncodedArgs), "{}")
 		insertJobsParams.CreatedAt[i] = createdAt
 		insertJobsParams.Kind[i] = params.Kind
 		insertJobsParams.MaxAttempts[i] = int16(min(params.MaxAttempts, math.MaxInt16)) //nolint:gosec
-		insertJobsParams.Metadata[i] = cmp.Or(string(params.Metadata), defaultObject)
+		insertJobsParams.Metadata[i] = cmp.Or(string(params.Metadata), "{}")
 		insertJobsParams.Priority[i] = int16(min(params.Priority, math.MaxInt16)) //nolint:gosec
 		insertJobsParams.Queue[i] = params.Queue
 		insertJobsParams.ScheduledAt[i] = scheduledAt
 		insertJobsParams.State[i] = string(params.State)
 		insertJobsParams.Tags[i] = strings.Join(tags, ",")
 		insertJobsParams.UniqueKey[i] = sliceutil.FirstNonEmpty(params.UniqueKey)
-		insertJobsParams.UniqueStates[i] = pgtypealias.Bits{Bits: pgtype.Bits{Bytes: []byte{params.UniqueStates}, Len: 8, Valid: params.UniqueStates != 0}}
+		insertJobsParams.UniqueStates[i] = int32(params.UniqueStates)
 	}
 
 	items, err := dbsqlc.New().JobInsertFastMany(schemaTemplateParam(ctx, params.Schema), e.dbtx, insertJobsParams)
@@ -301,7 +298,7 @@ func (e *Executor) JobInsertFastManyNoReturning(ctx context.Context, params *riv
 		State:        make([]dbsqlc.RiverJobState, len(params.Jobs)),
 		Tags:         make([]string, len(params.Jobs)),
 		UniqueKey:    make([]pgtypealias.NullBytea, len(params.Jobs)),
-		UniqueStates: make([]pgtypealias.Bits, len(params.Jobs)),
+		UniqueStates: make([]int32, len(params.Jobs)),
 	}
 	now := time.Now().UTC()
 
@@ -323,20 +320,18 @@ func (e *Executor) JobInsertFastManyNoReturning(ctx context.Context, params *riv
 			tags = []string{}
 		}
 
-		defaultObject := "{}"
-
-		insertJobsParams.Args[i] = cmp.Or(string(params.EncodedArgs), defaultObject)
+		insertJobsParams.Args[i] = cmp.Or(string(params.EncodedArgs), "{}")
 		insertJobsParams.CreatedAt[i] = createdAt
 		insertJobsParams.Kind[i] = params.Kind
 		insertJobsParams.MaxAttempts[i] = int16(min(params.MaxAttempts, math.MaxInt16)) //nolint:gosec
-		insertJobsParams.Metadata[i] = cmp.Or(string(params.Metadata), defaultObject)
+		insertJobsParams.Metadata[i] = cmp.Or(string(params.Metadata), "{}")
 		insertJobsParams.Priority[i] = int16(min(params.Priority, math.MaxInt16)) //nolint:gosec
 		insertJobsParams.Queue[i] = params.Queue
 		insertJobsParams.ScheduledAt[i] = scheduledAt
 		insertJobsParams.State[i] = dbsqlc.RiverJobState(params.State)
 		insertJobsParams.Tags[i] = strings.Join(tags, ",")
 		insertJobsParams.UniqueKey[i] = params.UniqueKey
-		insertJobsParams.UniqueStates[i] = pgtypealias.Bits{Bits: pgtype.Bits{Bytes: []byte{params.UniqueStates}, Len: 8, Valid: params.UniqueStates != 0}}
+		insertJobsParams.UniqueStates[i] = int32(params.UniqueStates)
 	}
 
 	numInserted, err := dbsqlc.New().JobInsertFastManyNoReturning(schemaTemplateParam(ctx, params.Schema), e.dbtx, insertJobsParams)
@@ -365,7 +360,7 @@ func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobIns
 		State:        dbsqlc.RiverJobState(params.State),
 		Tags:         params.Tags,
 		UniqueKey:    params.UniqueKey,
-		UniqueStates: pgtypealias.Bits{Bits: pgtype.Bits{Bytes: []byte{params.UniqueStates}, Len: 8, Valid: params.UniqueStates != 0}},
+		UniqueStates: int32(params.UniqueStates),
 	})
 	if err != nil {
 		return nil, interpretError(err)
@@ -602,7 +597,7 @@ func (e *Executor) LeaderAttemptElect(ctx context.Context, params *riverdriver.L
 	numElectionsWon, err := dbsqlc.New().LeaderAttemptElect(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.LeaderAttemptElectParams{
 		LeaderID: params.LeaderID,
 		Now:      params.Now,
-		TTL:      params.TTL,
+		TTL:      params.TTL.Seconds(),
 	})
 	if err != nil {
 		return false, interpretError(err)
@@ -614,7 +609,7 @@ func (e *Executor) LeaderAttemptReelect(ctx context.Context, params *riverdriver
 	numElectionsWon, err := dbsqlc.New().LeaderAttemptReelect(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.LeaderAttemptReelectParams{
 		LeaderID: params.LeaderID,
 		Now:      params.Now,
-		TTL:      params.TTL,
+		TTL:      params.TTL.Seconds(),
 	})
 	if err != nil {
 		return false, interpretError(err)
@@ -644,7 +639,7 @@ func (e *Executor) LeaderInsert(ctx context.Context, params *riverdriver.LeaderI
 		ExpiresAt: params.ExpiresAt,
 		LeaderID:  params.LeaderID,
 		Now:       params.Now,
-		TTL:       params.TTL,
+		TTL:       params.TTL.Seconds(),
 	})
 	if err != nil {
 		return nil, interpretError(err)
@@ -999,6 +994,18 @@ func (w templateReplaceWrapper) QueryRowContext(ctx context.Context, sql string,
 	return w.dbtx.QueryRowContext(ctx, sql, args...)
 }
 
+// lib/pq reads in `bits` (like `bits(8)`) as a bit string that's a normal
+// decimal integer like 1111_1111 (_not_ 0b1111_1111). This function converts it
+// back to binary representation. See the test suite for examples.
+func bitIntegerToBits(bitInteger, numBits int) int {
+	var bits int
+	for i := range numBits {
+		bits += bitInteger % 10 * int(math.Pow(2, float64(i)))
+		bitInteger /= 10
+	}
+	return bits
+}
+
 func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
 	var attemptedAt *time.Time
 	if internal.AttemptedAt != nil {
@@ -1019,11 +1026,6 @@ func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
 		finalizedAt = &t
 	}
 
-	var uniqueStatesByte byte
-	if internal.UniqueStates.Valid && len(internal.UniqueStates.Bytes) > 0 {
-		uniqueStatesByte = internal.UniqueStates.Bytes[0]
-	}
-
 	return &rivertype.JobRow{
 		ID:           internal.ID,
 		Attempt:      max(int(internal.Attempt), 0),
@@ -1042,7 +1044,7 @@ func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
 		State:        rivertype.JobState(internal.State),
 		Tags:         internal.Tags,
 		UniqueKey:    internal.UniqueKey,
-		UniqueStates: dbunique.UniqueBitmaskToStates(uniqueStatesByte),
+		UniqueStates: dbunique.UniqueBitmaskToStates(byte(bitIntegerToBits(ptrutil.ValOrDefault(internal.UniqueStates, 0), 8))),
 	}, nil
 }
 

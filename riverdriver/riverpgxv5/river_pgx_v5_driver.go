@@ -242,7 +242,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.Jo
 		State:        make([]string, len(params.Jobs)),
 		Tags:         make([]string, len(params.Jobs)),
 		UniqueKey:    make([][]byte, len(params.Jobs)),
-		UniqueStates: make([]pgtype.Bits, len(params.Jobs)),
+		UniqueStates: make([]int32, len(params.Jobs)),
 	}
 	now := time.Now().UTC()
 	for i := range len(params.Jobs) {
@@ -276,7 +276,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.Jo
 		insertJobsParams.State[i] = string(params.State)
 		insertJobsParams.Tags[i] = strings.Join(tags, ",")
 		insertJobsParams.UniqueKey[i] = sliceutil.FirstNonEmpty(params.UniqueKey)
-		insertJobsParams.UniqueStates[i] = pgtype.Bits{Bytes: []byte{params.UniqueStates}, Len: 8, Valid: params.UniqueStates != 0}
+		insertJobsParams.UniqueStates[i] = int32(params.UniqueStates)
 	}
 
 	items, err := dbsqlc.New().JobInsertFastMany(schemaTemplateParam(ctx, params.Schema), e.dbtx, insertJobsParams)
@@ -362,7 +362,7 @@ func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobIns
 		State:        dbsqlc.RiverJobState(params.State),
 		Tags:         params.Tags,
 		UniqueKey:    params.UniqueKey,
-		UniqueStates: pgtype.Bits{Bytes: []byte{params.UniqueStates}, Len: 8, Valid: params.UniqueStates != 0},
+		UniqueStates: int32(params.UniqueStates),
 	})
 	if err != nil {
 		return nil, interpretError(err)
@@ -495,7 +495,7 @@ func (e *Executor) LeaderAttemptElect(ctx context.Context, params *riverdriver.L
 	numElectionsWon, err := dbsqlc.New().LeaderAttemptElect(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.LeaderAttemptElectParams{
 		LeaderID: params.LeaderID,
 		Now:      params.Now,
-		TTL:      params.TTL,
+		TTL:      params.TTL.Seconds(),
 	})
 	if err != nil {
 		return false, interpretError(err)
@@ -507,7 +507,7 @@ func (e *Executor) LeaderAttemptReelect(ctx context.Context, params *riverdriver
 	numElectionsWon, err := dbsqlc.New().LeaderAttemptReelect(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.LeaderAttemptReelectParams{
 		LeaderID: params.LeaderID,
 		Now:      params.Now,
-		TTL:      params.TTL,
+		TTL:      params.TTL.Seconds(),
 	})
 	if err != nil {
 		return false, interpretError(err)
@@ -537,7 +537,7 @@ func (e *Executor) LeaderInsert(ctx context.Context, params *riverdriver.LeaderI
 		ExpiresAt: params.ExpiresAt,
 		LeaderID:  params.LeaderID,
 		Now:       params.Now,
-		TTL:       params.TTL,
+		TTL:       params.TTL.Seconds(),
 	})
 	if err != nil {
 		return nil, interpretError(err)

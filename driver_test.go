@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/rivercommon"
@@ -19,10 +20,41 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/util/urlutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
-func TestDriverDatabaseSQL(t *testing.T) {
+func TestDriverDatabaseSQLLibPQ(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	connector, err := pq.NewConnector(urlutil.DatabaseSQLCompatibleURL(riversharedtest.TestDatabaseURL()))
+	require.NoError(t, err)
+
+	stdPool := sql.OpenDB(connector)
+	t.Cleanup(func() { require.NoError(t, stdPool.Close()) })
+
+	driver := riverdatabasesql.New(stdPool)
+
+	riverdrivertest.Exercise(ctx, t,
+		func(ctx context.Context, t *testing.T) (riverdriver.Driver[*sql.Tx], string) {
+			t.Helper()
+
+			return driver, riverdbtest.TestSchema(ctx, t, driver, nil)
+		},
+		func(ctx context.Context, t *testing.T) riverdriver.Executor {
+			t.Helper()
+
+			tx := riverdbtest.TestTx(ctx, t, driver, nil)
+
+			// TODO(brandur): Set `search_path` path here when SQLite changes come in.
+
+			return riverdatabasesql.New(nil).UnwrapExecutor(tx)
+		})
+}
+
+func TestDriverDatabaseSQLPgx(t *testing.T) {
 	t.Parallel()
 
 	var (

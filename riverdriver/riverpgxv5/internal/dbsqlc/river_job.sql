@@ -226,7 +226,7 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     string_to_array(unnest(@tags::text[]), ','),
 
     unnest(@unique_key::bytea[]),
-    unnest(@unique_states::bit(8)[])
+    nullif(unnest(@unique_states::integer[]), 0)::bit(8)
 ON CONFLICT (unique_key)
     WHERE unique_key IS NOT NULL
       AND unique_states IS NOT NULL
@@ -267,7 +267,7 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     string_to_array(unnest(@tags::text[]), ','),
 
     unnest(@unique_key::bytea[]),
-    unnest(@unique_states::bit(8)[])
+    nullif(unnest(@unique_states::integer[]), 0)::bit(8)
 ON CONFLICT (unique_key)
     WHERE unique_key IS NOT NULL
       AND unique_states IS NOT NULL
@@ -310,7 +310,7 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     @state::/* TEMPLATE: schema */river_job_state,
     coalesce(@tags::varchar(255)[], '{}'),
     @unique_key,
-    @unique_states
+    nullif(@unique_states::integer, 0)::bit(8)
 ) RETURNING *;
 
 -- name: JobList :many

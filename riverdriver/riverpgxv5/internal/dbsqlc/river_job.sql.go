@@ -550,7 +550,7 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     string_to_array(unnest($10::text[]), ','),
 
     unnest($11::bytea[]),
-    unnest($12::bit(8)[])
+    nullif(unnest($12::integer[]), 0)::bit(8)
 ON CONFLICT (unique_key)
     WHERE unique_key IS NOT NULL
       AND unique_states IS NOT NULL
@@ -572,7 +572,7 @@ type JobInsertFastManyParams struct {
 	State        []string
 	Tags         []string
 	UniqueKey    [][]byte
-	UniqueStates []pgtype.Bits
+	UniqueStates []int32
 }
 
 type JobInsertFastManyRow struct {
@@ -665,7 +665,7 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     string_to_array(unnest($10::text[]), ','),
 
     unnest($11::bytea[]),
-    unnest($12::bit(8)[])
+    nullif(unnest($12::integer[]), 0)::bit(8)
 ON CONFLICT (unique_key)
     WHERE unique_key IS NOT NULL
       AND unique_states IS NOT NULL
@@ -685,7 +685,7 @@ type JobInsertFastManyNoReturningParams struct {
 	State        []RiverJobState
 	Tags         []string
 	UniqueKey    [][]byte
-	UniqueStates []pgtype.Bits
+	UniqueStates []int32
 }
 
 func (q *Queries) JobInsertFastManyNoReturning(ctx context.Context, db DBTX, arg *JobInsertFastManyNoReturningParams) (int64, error) {
@@ -745,7 +745,7 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     $14::/* TEMPLATE: schema */river_job_state,
     coalesce($15::varchar(255)[], '{}'),
     $16,
-    $17
+    nullif($17::integer, 0)::bit(8)
 ) RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 `
 
@@ -766,7 +766,7 @@ type JobInsertFullParams struct {
 	State        RiverJobState
 	Tags         []string
 	UniqueKey    []byte
-	UniqueStates pgtype.Bits
+	UniqueStates int32
 }
 
 func (q *Queries) JobInsertFull(ctx context.Context, db DBTX, arg *JobInsertFullParams) (*RiverJob, error) {

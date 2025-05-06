@@ -399,6 +399,11 @@ func TestTx[TTx any](ctx context.Context, tb testing.TB, driver riverdriver.Driv
 			return
 		}
 
+		// Cancelled context again, but this one from libpq.
+		if err.Error() == "driver: bad connection" {
+			return
+		}
+
 		// Similar to the above, but a newly appeared error that wraps the
 		// above. As far as I can tell, no error variables are available to use
 		// with `errors.Is`.

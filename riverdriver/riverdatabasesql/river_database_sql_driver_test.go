@@ -35,6 +35,32 @@ func TestNew(t *testing.T) {
 	})
 }
 
+func TestBitIntegerToBits(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, 0b0000_0000, bitIntegerToBits(0, 8))
+	require.Equal(t, 0b0000_0001, bitIntegerToBits(1, 8))
+	require.Equal(t, 0b0000_0011, bitIntegerToBits(11, 8))
+	require.Equal(t, 0b0000_0111, bitIntegerToBits(111, 8))
+	require.Equal(t, 0b0000_1111, bitIntegerToBits(1111, 8))
+	require.Equal(t, 0b0001_1111, bitIntegerToBits(1_1111, 8))
+	require.Equal(t, 0b0011_1111, bitIntegerToBits(11_1111, 8))
+	require.Equal(t, 0b0111_1111, bitIntegerToBits(111_1111, 8))
+	require.Equal(t, 0b1111_1111, bitIntegerToBits(1111_1111, 8))
+	require.Equal(t, 0b0000_0010, bitIntegerToBits(10, 8))
+	require.Equal(t, 0b0000_0100, bitIntegerToBits(100, 8))
+	require.Equal(t, 0b0000_1000, bitIntegerToBits(1000, 8))
+	require.Equal(t, 0b0001_0000, bitIntegerToBits(1_0000, 8))
+	require.Equal(t, 0b0010_0000, bitIntegerToBits(10_0000, 8))
+	require.Equal(t, 0b0100_0000, bitIntegerToBits(100_0000, 8))
+	require.Equal(t, 0b1000_0000, bitIntegerToBits(1000_0000, 8))
+	require.Equal(t, 0b1010_1010, bitIntegerToBits(1010_1010, 8))
+	require.Equal(t, 0b101_0101, bitIntegerToBits(101_0101, 8))
+
+	// Extra values past numBits.
+	require.Equal(t, 0b1010, bitIntegerToBits(1010_1010, 4))
+}
+
 func TestInterpretError(t *testing.T) {
 	t.Parallel()
 
