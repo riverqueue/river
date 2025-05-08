@@ -9,7 +9,7 @@ CREATE UNLOGGED TABLE river_leader(
 
 -- name: LeaderAttemptElect :execrows
 INSERT INTO /* TEMPLATE: schema */river_leader (leader_id, elected_at, expires_at)
-    -- @ttl is inserted as 
+    -- @ttl is inserted as as seconds rather than a duration because `lib/pq` doesn't support the latter
     VALUES (@leader_id, coalesce(sqlc.narg('now')::timestamptz, now()), coalesce(sqlc.narg('now')::timestamptz, now()) + make_interval(secs => @ttl))
 ON CONFLICT (name)
     DO NOTHING;
