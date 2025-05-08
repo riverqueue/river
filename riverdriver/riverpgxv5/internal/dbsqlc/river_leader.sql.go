@@ -14,7 +14,7 @@ import (
 
 const leaderAttemptElect = `-- name: LeaderAttemptElect :execrows
 INSERT INTO /* TEMPLATE: schema */river_leader (leader_id, elected_at, expires_at)
-    -- @ttl is inserted as 
+    -- @ttl is inserted as as seconds rather than a duration because ` + "`" + `lib/pq` + "`" + ` doesn't support the latter
     VALUES ($1, coalesce($2::timestamptz, now()), coalesce($2::timestamptz, now()) + make_interval(secs => $3))
 ON CONFLICT (name)
     DO NOTHING
