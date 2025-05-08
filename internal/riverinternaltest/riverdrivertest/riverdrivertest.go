@@ -3,6 +3,7 @@ package riverdrivertest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -2708,7 +2709,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				defer close(goroutineDone)
 
 				_, err := otherExec.PGAdvisoryXactLock(ctx, 123456)
-				require.ErrorIs(t, err, context.Canceled)
+				// pgx will produce a context.Canceled error, but pg swallows it to emit its own
+				require.Regexp(t, "(context canceled|pq: canceling statement due to user request)", err.Error())
 			}()
 
 			select {
@@ -3387,22 +3389,30 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 func requireEqualTime(t *testing.T, expected, actual time.Time) {
 	t.Helper()
 
-	// Leaving off the nanosecond portion has the effect of truncating it rather
-	// than rounding to the nearest microsecond, which functionally matches
-	// pgx's behavior while persisting.
 	const rfc3339Micro = "2006-01-02T15:04:05.999999Z07:00"
 
-	require.Equal(t,
-		expected.Format(rfc3339Micro),
-		actual.Format(rfc3339Micro),
+	// This is a bit unfortunate, but while Pgx truncates to the nearest
+	// microsecond, lib/pq will round, thereby producing off-by-one microsecond
+	// problems in tests without intervention. Here, allow either the truncated
+	// or rounded version. It's a bit gnarly, but the upcoming SQLite change
+	// brings in a better way to accomplish this, so it should be short-lived.
+	var (
+		actualFormatted            = actual.Format(rfc3339Micro)
+		expectedRoundedFormatted   = expected.Round(1 * time.Microsecond).Format(rfc3339Micro)
+		expectedTruncatedFormatted = expected.Format(rfc3339Micro)
 	)
+	require.True(t, expectedRoundedFormatted == actualFormatted || expectedTruncatedFormatted == actualFormatted,
+		"Expected time %s to be equal to either %s (rounded, for lib/pq) or %s (truncated, for Pgx)", actualFormatted, expectedRoundedFormatted, expectedTruncatedFormatted)
 }
 
 func requireMissingRelation(t *testing.T, err error, missingRelation string) {
 	t.Helper()
 
 	var pgErr *pgconn.PgError
-	require.ErrorAs(t, err, &pgErr)
-	require.Equal(t, pgerrcode.UndefinedTable, pgErr.Code)
-	require.Equal(t, fmt.Sprintf(`relation "%s" does not exist`, missingRelation), pgErr.Message)
+	if errors.As(err, &pgErr) {
+		require.Equal(t, pgerrcode.UndefinedTable, pgErr.Code)
+		require.Equal(t, fmt.Sprintf(`relation "%s" does not exist`, missingRelation), pgErr.Message)
+	} else {
+		require.ErrorContains(t, err, fmt.Sprintf("pq: relation %q does not exist", missingRelation))
+	}
 }

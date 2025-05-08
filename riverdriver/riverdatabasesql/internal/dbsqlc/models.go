@@ -8,8 +8,6 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"time"
-
-	"github.com/riverqueue/river/riverdriver/riverdatabasesql/internal/pgtypealias"
 )
 
 type RiverJobState string
@@ -97,7 +95,7 @@ type RiverJob struct {
 	ScheduledAt  time.Time
 	Tags         []string
 	UniqueKey    []byte
-	UniqueStates pgtypealias.Bits
+	UniqueStates *int
 }
 
 type RiverLeader struct {
