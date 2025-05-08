@@ -258,10 +258,23 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	t.Run("Exec", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		t.Run("NoArgs", func(t *testing.T) {
+			t.Parallel()
 
-		_, err := exec.Exec(ctx, "SELECT 1 + 2")
-		require.NoError(t, err)
+			exec, _ := setup(ctx, t)
+
+			_, err := exec.Exec(ctx, "SELECT 1 + 2")
+			require.NoError(t, err)
+		})
+
+		t.Run("WithArgs", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			_, err := exec.Exec(ctx, "SELECT $1 || $2", "foo", "bar")
+			require.NoError(t, err)
+		})
 	})
 
 	t.Run("JobCancel", func(t *testing.T) {
