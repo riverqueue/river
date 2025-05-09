@@ -125,8 +125,8 @@ func (e *Executor) ColumnExists(ctx context.Context, params *riverdriver.ColumnE
 	return exists, interpretError(err)
 }
 
-func (e *Executor) Exec(ctx context.Context, sql string) (struct{}, error) {
-	_, err := e.dbtx.ExecContext(ctx, sql)
+func (e *Executor) Exec(ctx context.Context, sql string, args ...any) (struct{}, error) {
+	_, err := e.dbtx.ExecContext(ctx, sql, args...)
 	return struct{}{}, interpretError(err)
 }
 

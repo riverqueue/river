@@ -125,7 +125,7 @@ type Executor interface {
 	ColumnExists(ctx context.Context, params *ColumnExistsParams) (bool, error)
 
 	// Exec executes raw SQL. Used for migrations.
-	Exec(ctx context.Context, sql string) (struct{}, error)
+	Exec(ctx context.Context, sql string, args ...any) (struct{}, error)
 
 	JobCancel(ctx context.Context, params *JobCancelParams) (*rivertype.JobRow, error)
 	JobCountByState(ctx context.Context, params *JobCountByStateParams) (int, error)
