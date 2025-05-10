@@ -5,7 +5,7 @@ go 1.23.0
 toolchain go1.24.1
 
 require (
-	github.com/riverqueue/river/rivertype v0.21.0
+	github.com/riverqueue/river/rivertype v0.22.0
 	github.com/stretchr/testify v1.10.0
 )
 
