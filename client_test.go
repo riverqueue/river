@@ -1221,6 +1221,30 @@ func Test_Client(t *testing.T) {
 		require.Equal(t, rivertype.JobStateCompleted, event.Job.State)
 	})
 
+	t.Run("KindAliases", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[withKindAliasesArgs]) error {
+			return nil
+		}))
+
+		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
+		require.NoError(t, err)
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		// withKindAliasesCollisionArgs returns withKindAliasesArgs's
+		// KindAliases as its primary Kind
+		_, err = client.Insert(ctx, withKindAliasesCollisionArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, (withKindAliasesArgs{}).KindAliases(), []string{event.Job.Kind})
+	})
+
 	t.Run("StartStopStress", func(t *testing.T) {
 		t.Parallel()
 
