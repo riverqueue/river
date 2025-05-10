@@ -9,11 +9,11 @@ require (
 	github.com/jackc/pgerrcode v0.0.0-20240316143900-6e2875d9b438
 	github.com/jackc/pgx/v5 v5.7.4
 	github.com/jackc/puddle/v2 v2.2.2
-	github.com/riverqueue/river/riverdriver v0.21.0
-	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.21.0
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.21.0
-	github.com/riverqueue/river/rivershared v0.21.0
-	github.com/riverqueue/river/rivertype v0.21.0
+	github.com/riverqueue/river/riverdriver v0.22.0
+	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.22.0
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.22.0
+	github.com/riverqueue/river/rivershared v0.22.0
+	github.com/riverqueue/river/rivertype v0.22.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/gjson v1.18.0
