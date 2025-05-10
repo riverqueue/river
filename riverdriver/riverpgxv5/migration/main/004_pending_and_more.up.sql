@@ -23,13 +23,21 @@ ALTER TABLE /* TEMPLATE: schema */river_job ADD CONSTRAINT finalized_or_finalize
 DROP TRIGGER river_notify ON /* TEMPLATE: schema */river_job;
 DROP FUNCTION /* TEMPLATE: schema */river_job_notify;
 
-CREATE TABLE /* TEMPLATE: schema */river_queue(
-  name text PRIMARY KEY NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT NOW(),
-  metadata jsonb NOT NULL DEFAULT '{}' ::jsonb,
-  paused_at timestamptz,
-  updated_at timestamptz NOT NULL
+--
+-- Create table `river_queue`.
+--
+
+CREATE TABLE /* TEMPLATE: schema */river_queue (
+    name text PRIMARY KEY NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    metadata jsonb NOT NULL DEFAULT '{}' ::jsonb,
+    paused_at timestamptz,
+    updated_at timestamptz NOT NULL
 );
+
+--
+-- Alter `river_leader` to add a default value of 'default` to `name`.
+--
 
 ALTER TABLE /* TEMPLATE: schema */river_leader
     ALTER COLUMN name SET DEFAULT 'default',

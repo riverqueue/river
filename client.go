@@ -339,6 +339,15 @@ type Config struct {
 	// instances of rivertype.WorkerMiddleware).
 	WorkerMiddleware []rivertype.WorkerMiddleware
 
+	// queuePollInterval is the amount of time between periodic checks for queue
+	// setting changes. This is only used in poll-only mode (when no notifier is
+	// provided).
+	//
+	// This is internal for the time being as it hasn't had any major demand to
+	// be exposed, but it's needed to make sure that our poll-only tests can
+	// finish in a timely manner.
+	queuePollInterval time.Duration
+
 	// Scheduler run interval. Shared between the scheduler and producer/job
 	// executors, but not currently exposed for configuration.
 	schedulerInterval time.Duration
@@ -400,6 +409,7 @@ func (c *Config) WithDefaults() *Config {
 		TestOnly:                    c.TestOnly,
 		WorkerMiddleware:            c.WorkerMiddleware,
 		Workers:                     c.Workers,
+		queuePollInterval:           c.queuePollInterval,
 		schedulerInterval:           cmp.Or(c.schedulerInterval, maintenance.JobSchedulerIntervalDefault),
 	}
 }
@@ -1865,20 +1875,23 @@ func (c *Client[TTx]) maybeNotifyInsertForQueues(ctx context.Context, tx riverdr
 		return nil
 	}
 
-	err := tx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
-		Payload: payloads,
-		Schema:  c.config.Schema,
-		Topic:   string(notifier.NotificationTopicInsert),
-	})
-	if err != nil {
-		c.baseService.Logger.ErrorContext(
-			ctx,
-			c.baseService.Name+": Failed to send job insert notification",
-			slog.String("queues", strings.Join(queuesDeduped, ",")),
-			slog.String("err", err.Error()),
-		)
-		return err
+	if c.driver.SupportsListenNotify() {
+		err := tx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+			Payload: payloads,
+			Schema:  c.config.Schema,
+			Topic:   string(notifier.NotificationTopicInsert),
+		})
+		if err != nil {
+			c.baseService.Logger.ErrorContext(
+				ctx,
+				c.baseService.Name+": Failed to send job insert notification",
+				slog.String("queues", strings.Join(queuesDeduped, ",")),
+				slog.String("err", err.Error()),
+			)
+			return err
+		}
 	}
+
 	return nil
 }
 
@@ -1896,19 +1909,22 @@ func (c *Client[TTx]) notifyQueuePauseOrResume(ctx context.Context, tx riverdriv
 		return err
 	}
 
-	err = tx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
-		Payload: []string{string(payload)},
-		Schema:  c.config.Schema,
-		Topic:   string(notifier.NotificationTopicControl),
-	})
-	if err != nil {
-		c.baseService.Logger.ErrorContext(
-			ctx,
-			c.baseService.Name+": Failed to send queue state change notification",
-			slog.String("err", err.Error()),
-		)
-		return err
+	if c.driver.SupportsListenNotify() {
+		err = tx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+			Payload: []string{string(payload)},
+			Schema:  c.config.Schema,
+			Topic:   string(notifier.NotificationTopicControl),
+		})
+		if err != nil {
+			c.baseService.Logger.ErrorContext(
+				ctx,
+				c.baseService.Name+": Failed to send queue state change notification",
+				slog.String("err", err.Error()),
+			)
+			return err
+		}
 	}
+
 	return nil
 }
 
@@ -1943,6 +1959,7 @@ func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) *pr
 		Notifier:                     c.notifier,
 		Queue:                        queueName,
 		QueueEventCallback:           c.subscriptionManager.distributeQueueEvent,
+		QueuePollInterval:            c.config.queuePollInterval,
 		RetryPolicy:                  c.config.RetryPolicy,
 		SchedulerInterval:            c.config.schedulerInterval,
 		Schema:                       c.config.Schema,
@@ -1996,6 +2013,10 @@ func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) (*JobL
 		params = NewJobListParams()
 	}
 	params.schema = c.config.Schema
+
+	if c.driver.DatabaseName() == "sqlite" && params.metadataFragment != "" {
+		return nil, errors.New("JobListResult.Metadata is not supported on SQLite")
+	}
 
 	dbParams, err := params.toDBParams()
 	if err != nil {
@@ -2325,12 +2346,14 @@ func (c *Client[TTx]) queueUpdate(ctx context.Context, executorTx riverdriver.Ex
 			return nil, err
 		}
 
-		if err := executorTx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
-			Payload: []string{string(payload)},
-			Schema:  c.config.Schema,
-			Topic:   string(notifier.NotificationTopicControl),
-		}); err != nil {
-			return nil, err
+		if c.driver.SupportsListenNotify() {
+			if err := executorTx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+				Payload: []string{string(payload)},
+				Schema:  c.config.Schema,
+				Topic:   string(notifier.NotificationTopicControl),
+			}); err != nil {
+				return nil, err
+			}
 		}
 	}
 

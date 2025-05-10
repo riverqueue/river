@@ -9,7 +9,7 @@ import (
 
 // WithTx starts and commits a transaction on a driver executor around
 // the given function, allowing the return of a generic value.
-func WithTx(ctx context.Context, exec riverdriver.Executor, innerFunc func(ctx context.Context, exec riverdriver.ExecutorTx) error) error {
+func WithTx(ctx context.Context, exec riverdriver.Executor, innerFunc func(ctx context.Context, execTx riverdriver.ExecutorTx) error) error {
 	_, err := WithTxV(ctx, exec, func(ctx context.Context, tx riverdriver.ExecutorTx) (struct{}, error) {
 		return struct{}{}, innerFunc(ctx, tx)
 	})
@@ -18,7 +18,7 @@ func WithTx(ctx context.Context, exec riverdriver.Executor, innerFunc func(ctx c
 
 // WithTxV starts and commits a transaction on a driver executor around
 // the given function, allowing the return of a generic value.
-func WithTxV[T any](ctx context.Context, exec riverdriver.Executor, innerFunc func(ctx context.Context, exec riverdriver.ExecutorTx) (T, error)) (T, error) {
+func WithTxV[T any](ctx context.Context, exec riverdriver.Executor, innerFunc func(ctx context.Context, execTx riverdriver.ExecutorTx) (T, error)) (T, error) {
 	var defaultRes T
 
 	tx, err := exec.Begin(ctx)

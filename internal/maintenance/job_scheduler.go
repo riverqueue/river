@@ -162,7 +162,7 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 
 			scheduledJobResults, err := tx.JobSchedule(ctx, &riverdriver.JobScheduleParams{
 				Max:    s.config.Limit,
-				Now:    nowWithLookAhead,
+				Now:    &nowWithLookAhead,
 				Schema: s.config.Schema,
 			})
 			if err != nil {

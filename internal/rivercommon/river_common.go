@@ -16,6 +16,8 @@ const (
 	QueueDefault       = "default"
 )
 
+const MetadataKeyUniqueNonce = "river:unique_nonce"
+
 type ContextKeyClient struct{}
 
 // ErrStop is a special error injected by the client into its fetch and work

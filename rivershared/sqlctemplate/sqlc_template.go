@@ -110,8 +110,11 @@ var postReplaceMistakeRE = regexp.MustCompile(`\/\*\s*TEMPLATE([A-Z0-9_]+)?`) //
 // determine which placeholder number (e.g. $1, $2, $3, ...) we should start
 // with to replace any template named args. The returned args value should then
 // be used as query input as named args from context may have been added to it.
-func (r *Replacer) Run(ctx context.Context, sql string, args []any) (string, []any) {
-	sql, namedArgs, err := r.RunSafely(ctx, sql, args)
+//
+// argPlaceholder is the character to use as a placeholder like "$" in "$1" or
+// "$2". This should be a "$" for Postgres, but a "?" for SQLite.
+func (r *Replacer) Run(ctx context.Context, argPlaceholder, sql string, args []any) (string, []any) {
+	sql, namedArgs, err := r.RunSafely(ctx, argPlaceholder, sql, args)
 	if err != nil {
 		panic(err)
 	}
@@ -120,7 +123,7 @@ func (r *Replacer) Run(ctx context.Context, sql string, args []any) (string, []a
 
 // RunSafely is the same as Run, but returns an error in case of missing or
 // extra templates.
-func (r *Replacer) RunSafely(ctx context.Context, sql string, args []any) (string, []any, error) {
+func (r *Replacer) RunSafely(ctx context.Context, argPlaceholder, sql string, args []any) (string, []any, error) {
 	var (
 		container, containerOK = ctx.Value(contextKey{}).(*contextContainer)
 		sqlContainsTemplate    = strings.Contains(sql, "/* TEMPLATE")
@@ -221,7 +224,7 @@ func (r *Replacer) RunSafely(ctx context.Context, sql string, args []any) (strin
 			}
 
 			// ReplaceAll because an input parameter may appear multiple times.
-			updatedSQL = strings.ReplaceAll(updatedSQL, symbol, "$"+strconv.Itoa(placeholderNum))
+			updatedSQL = strings.ReplaceAll(updatedSQL, symbol, argPlaceholder+strconv.Itoa(placeholderNum))
 			args = append(args, val)
 		}
 	}

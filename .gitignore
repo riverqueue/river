@@ -2,3 +2,4 @@
 /river
 /internal/cmd/riverbench/riverbench
 /internal/cmd/testdbman/testdbman
+/sqlite/

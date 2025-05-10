@@ -3,11 +3,12 @@ package testutil
 import (
 	"bytes"
 	"fmt"
+	"io"
 )
 
 // See docs on PanicTB.
 type panicTB struct {
-	SuppressOutput bool
+	logOut io.Writer
 }
 
 // PanicTB is an implementation for testing.TB that panics when an error is
@@ -17,7 +18,7 @@ type panicTB struct {
 // Doesn't fully implement testing.TB. Functions where it's used should take the
 // more streamlined TestingTB instead.
 func PanicTB() *panicTB {
-	return &panicTB{SuppressOutput: true}
+	return &panicTB{}
 }
 
 func (tb *panicTB) Errorf(format string, args ...any) {
@@ -31,15 +32,22 @@ func (tb *panicTB) FailNow() {
 func (tb *panicTB) Helper() {}
 
 func (tb *panicTB) Log(args ...any) {
-	if !tb.SuppressOutput {
-		fmt.Println(args...)
+	if tb.logOut != nil {
+		fmt.Fprintln(tb.logOut, args...)
 	}
 }
 
 func (tb *panicTB) Logf(format string, args ...any) {
-	if !tb.SuppressOutput {
-		fmt.Printf(format+"\n", args...)
+	if tb.logOut != nil {
+		fmt.Fprintf(tb.logOut, format+"\n", args...)
 	}
+}
+
+func (tb *panicTB) Name() string { return "panicTB" }
+
+func (tb *panicTB) WithLog(out io.Writer) *panicTB {
+	tb.logOut = out
+	return tb
 }
 
 // MockT mocks TestingTB. It's used to let us verify our test helpers.
@@ -88,6 +96,8 @@ func (t *MockT) LogOutput() string {
 	return t.logOutput.String()
 }
 
+func (t *MockT) Name() string { return "MockT" }
+
 // TestingT is an interface wrapper around *testing.T that's implemented by all
 // of *testing.T, *testing.F, and *testing.B.
 //
@@ -99,4 +109,5 @@ type TestingTB interface {
 	Helper()
 	Log(args ...any)
 	Logf(format string, args ...any)
+	Name() string
 }

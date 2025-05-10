@@ -134,6 +134,7 @@ func newTestConfig(t *testing.T, schema string) *Config {
 		},
 		TestOnly:          true, // disables staggered start in maintenance services
 		Workers:           workers,
+		queuePollInterval: 50 * time.Millisecond,
 		schedulerInterval: riverinternaltest.SchedulerShortInterval,
 	}
 }
