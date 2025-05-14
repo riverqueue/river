@@ -89,3 +89,12 @@ func TestMap(t *testing.T) {
 	require.Equal(t, []string{"Hello", "Hello", "Hello", "Hello"}, result1)
 	require.Equal(t, []string{"1", "2", "3", "4"}, result2)
 }
+
+func TestUniq(t *testing.T) {
+	t.Parallel()
+
+	result1 := Uniq([]int{1, 2, 2, 1})
+
+	require.Len(t, result1, 2)
+	require.Equal(t, []int{1, 2}, result1)
+}

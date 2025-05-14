@@ -36,6 +36,7 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
@@ -134,7 +135,6 @@ func newTestConfig(t *testing.T, schema string) *Config {
 		},
 		TestOnly:          true, // disables staggered start in maintenance services
 		Workers:           workers,
-		queuePollInterval: 50 * time.Millisecond,
 		schedulerInterval: riverinternaltest.SchedulerShortInterval,
 	}
 }
@@ -2016,6 +2016,46 @@ func Test_Client_Insert(t *testing.T) {
 		require.Equal(t, PriorityDefault, jobRow.Priority)
 		require.Equal(t, QueueDefault, jobRow.Queue)
 		require.Equal(t, []string{}, jobRow.Tags)
+	})
+
+	t.Run("FetchLimiterCalled", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			driver = riversqlite.New(nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, &riverdbtest.TestSchemaOpts{
+				ProcurePool: func(ctx context.Context, schema string) (any, string) {
+					return riversharedtest.DBPoolSQLite(ctx, t, schema), "" // could also be `main` instead of empty string
+				},
+			})
+			config = newTestConfig(t, schema)
+		)
+
+		client, err := NewClient(driver, config)
+		require.NoError(t, err)
+
+		startClient(ctx, t, client)
+
+		client.producersByQueueName[QueueDefault].testSignals.Init(t)
+
+		_, err = client.Insert(ctx, &noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		client.producersByQueueName[QueueDefault].testSignals.FetchLimiterCalled.WaitOrTimeout()
+	})
+
+	t.Run("FetchLimiterNotCalled", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+		client.producersByQueueName[QueueDefault].testSignals.Init(t)
+
+		startClient(ctx, t, client)
+
+		_, err := client.Insert(ctx, &noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		client.producersByQueueName[QueueDefault].testSignals.FetchLimiterCalled.RequireEmpty()
 	})
 
 	t.Run("WithInsertOpts", func(t *testing.T) {

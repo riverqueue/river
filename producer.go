@@ -42,6 +42,7 @@ const (
 // Test-only properties.
 type producerTestSignals struct {
 	DeletedExpiredQueueRecords testsignal.TestSignal[struct{}] // notifies when the producer deletes expired queue records
+	FetchLimiterCalled         testsignal.TestSignal[struct{}] // notifies when the producer's fetch limiter is called externally
 	MetadataChanged            testsignal.TestSignal[struct{}] // notifies when the producer detects a metadata change
 	Paused                     testsignal.TestSignal[struct{}] // notifies when the producer is paused
 	PolledQueueConfig          testsignal.TestSignal[struct{}] // notifies when the producer polls for queue settings
@@ -53,6 +54,7 @@ type producerTestSignals struct {
 
 func (ts *producerTestSignals) Init(tb testutil.TestingTB) {
 	ts.DeletedExpiredQueueRecords.Init(tb)
+	ts.FetchLimiterCalled.Init(tb)
 	ts.MetadataChanged.Init(tb)
 	ts.Paused.Init(tb)
 	ts.PolledQueueConfig.Init(tb)
@@ -177,14 +179,15 @@ type producer struct {
 	// Jobs which are currently being worked. Only used by main goroutine.
 	activeJobs map[int64]*jobexecutor.JobExecutor
 
-	completer    jobcompleter.JobCompleter
-	config       *producerConfig
-	id           atomic.Int64 // atomic because it's written at startup and read during shutdown
-	exec         riverdriver.Executor
-	errorHandler jobexecutor.ErrorHandler
-	state        riverpilot.ProducerState
-	pilot        riverpilot.Pilot
-	workers      *Workers
+	completer        jobcompleter.JobCompleter
+	config           *producerConfig
+	id               atomic.Int64 // atomic because it's written at startup and read during shutdown
+	exec             riverdriver.Executor
+	errorHandler     jobexecutor.ErrorHandler
+	fetchLimiterCall func()
+	state            riverpilot.ProducerState
+	pilot            riverpilot.Pilot
+	workers          *Workers
 
 	// Receives job IDs to cancel. Written by notifier goroutine, only read from
 	// main goroutine.
@@ -228,18 +231,19 @@ func newProducer(archetype *baseservice.Archetype, exec riverdriver.Executor, pi
 	}
 
 	return baseservice.Init(archetype, &producer{
-		activeJobs:     make(map[int64]*jobexecutor.JobExecutor),
-		cancelCh:       make(chan int64, 1000),
-		completer:      config.Completer,
-		config:         config.mustValidate(),
-		exec:           exec,
-		errorHandler:   errorHandler,
-		jobResultCh:    make(chan *rivertype.JobRow, config.MaxWorkers),
-		jobTimeout:     config.JobTimeout,
-		pilot:          pilot,
-		queueControlCh: make(chan *controlEventPayload, 100),
-		retryPolicy:    config.RetryPolicy,
-		workers:        config.Workers,
+		activeJobs:       make(map[int64]*jobexecutor.JobExecutor),
+		cancelCh:         make(chan int64, 1000),
+		completer:        config.Completer,
+		config:           config.mustValidate(),
+		exec:             exec,
+		errorHandler:     errorHandler,
+		fetchLimiterCall: func() {},
+		jobResultCh:      make(chan *rivertype.JobRow, config.MaxWorkers),
+		jobTimeout:       config.JobTimeout,
+		pilot:            pilot,
+		queueControlCh:   make(chan *controlEventPayload, 100),
+		retryPolicy:      config.RetryPolicy,
+		workers:          config.Workers,
 	})
 }
 
@@ -325,6 +329,10 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 
 	// TODO: fetcher should have some jitter in it to avoid stampeding issues.
 	fetchLimiter := chanutil.NewDebouncedChan(fetchCtx, p.config.FetchCooldown, true)
+	p.fetchLimiterCall = func() {
+		fetchLimiter.Call()
+		p.testSignals.FetchLimiterCalled.Signal(struct{}{})
+	}
 
 	var (
 		controlSub *notifier.Subscription

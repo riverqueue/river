@@ -79,22 +79,15 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 	// A simplified version of `Client.insertMany` that only inserts jobs directly
 	// via the driver instead of using the pilot.
-	makeInsertFunc := func(schema string) func(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) ([]*rivertype.JobInsertResult, error) {
-		return func(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) ([]*rivertype.JobInsertResult, error) {
-			results, err := tx.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+	makeInsertFunc := func(schema string) func(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) error {
+		return func(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) error {
+			_, err := tx.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
 				Jobs: sliceutil.Map(insertParams, func(params *rivertype.JobInsertParams) *riverdriver.JobInsertFastParams {
 					return (*riverdriver.JobInsertFastParams)(params)
 				}),
 				Schema: schema,
 			})
-			if err != nil {
-				return nil, err
-			}
-			return sliceutil.Map(results,
-				func(result *riverdriver.JobInsertFastResult) *rivertype.JobInsertResult {
-					return (*rivertype.JobInsertResult)(result)
-				},
-			), nil
+			return err
 		}
 	}
 
