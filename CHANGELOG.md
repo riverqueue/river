@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Resuming an already unpaused queue is now fully an no-op, and won't touch the row's `updated_at` like it (unintentionally) did before. [PR #870](https://github.com/riverqueue/river/pull/870).
+- Suppress an error log line from the producer that may occur on normal shutdown when operating in poll-only mode. [PR #896](https://github.com/riverqueue/river/pull/896).
 
 ## [0.22.0] - 2025-05-10
 

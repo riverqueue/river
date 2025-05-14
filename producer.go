@@ -797,9 +797,21 @@ func (p *producer) pollForSettingChanges(ctx context.Context, wg *sync.WaitGroup
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			updatedQueue, err := p.fetchQueueSettings(ctx)
+			updatedQueue, err := func() (*rivertype.Queue, error) {
+				ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				defer cancel()
+
+				return p.exec.QueueGet(ctx, &riverdriver.QueueGetParams{
+					Name:   p.config.Queue,
+					Schema: p.config.Schema,
+				})
+			}()
 			if err != nil {
-				p.Logger.ErrorContext(ctx, p.Name+": Error fetching queue settings", slog.String("err", err.Error()))
+				// Don't log if this is part of a standard shutdown.
+				if !errors.Is(context.Cause(ctx), startstop.ErrStop) {
+					p.Logger.ErrorContext(ctx, p.Name+": Error fetching queue settings", slog.String("err", err.Error()))
+
+				}
 				continue
 			}
 
@@ -855,16 +867,6 @@ func (p *producer) pollForSettingChanges(ctx context.Context, wg *sync.WaitGroup
 			p.testSignals.PolledQueueConfig.Signal(struct{}{})
 		}
 	}
-}
-
-func (p *producer) fetchQueueSettings(ctx context.Context) (*rivertype.Queue, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	return p.exec.QueueGet(ctx, &riverdriver.QueueGetParams{
-		Name:   p.config.Queue,
-		Schema: p.config.Schema,
-	})
 }
 
 func (p *producer) reportProducerStatusLoop(ctx context.Context, wg *sync.WaitGroup) {
