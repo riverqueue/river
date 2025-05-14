@@ -3,6 +3,7 @@ package riversharedtest
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -93,6 +94,68 @@ func DBPoolClone(ctx context.Context, tb testing.TB) *pgxpool.Pool {
 	require.NoError(tb, err)
 
 	tb.Cleanup(dbPool.Close)
+
+	return dbPool
+}
+
+// DBPoolSQLite gets a database pool appropriate for use with SQLite in testing.
+func DBPoolSQLite(ctx context.Context, tb testing.TB, schema string) *sql.DB {
+	tb.Helper()
+
+	const sqliteTestDir = "./sqlite"
+
+	require.NoError(tb, os.MkdirAll(sqliteTestDir, 0o700))
+
+	dbPool, err := sql.Open("sqlite", fmt.Sprintf("%s/%s.sqlite3", sqliteTestDir, schema))
+	require.NoError(tb, err)
+	tb.Cleanup(func() { require.NoError(tb, dbPool.Close()) })
+
+	// River does enough concurrent work that given multiple active SQLite
+	// connections, it'll immediately start erroring with "database is locked
+	// (5) (SQLITE_BUSY)" because SQLite can only handle one operation at a time
+	// and explicitly errors if another is in flight. To prevent this problem,
+	// we constrain the maximum pool size to 1 so it limits concurrent access
+	// for us.
+	//
+	// I've seen some broad recommendations that it might be better to
+	// always set maximum connections for a single SQLite database to 1
+	// anyway. See for example:
+	//
+	// https://news.ycombinator.com/item?id=30369095
+	dbPool.SetMaxOpenConns(1)
+
+	// This innocuous line turns out to be quite important at the tail.
+	//
+	// When running the test suite via SQLite, most of the time everything goes
+	// well and we get no problems. But sometimes, especially when using `-race`
+	// or at higher iteration counts, SQLite will arbitrarily return the error
+	// "database is locked (5) (SQLITE_BUSY)". This is a death sentence because
+	// SQLite provides no tooling for figuring out _what_ is locking the
+	// database, so any further tests using TestSchema that try to reuse that
+	// schema will fail on the same error.
+	//
+	// I tried a number of techniques to fix this include doing a post-flight
+	// check on schema health before checking a schema back into the TestSchema
+	// pool, and while that also semed to the trick, a simpler alternative is to
+	// make sure that SQLite is doing its journaling via WAL:
+	//
+	// https://sqlite.org/pragma.html#pragma_journal_mode
+	// https://sqlite.org/wal.html
+	//
+	// There's a lot of potential reading to do on the subject of WAL, but the
+	// short answer is that it unlocks more concurrency, and it's faster anyway.
+	//
+	// My results in using WAL to decrease the prevalance of "database is
+	// locked" problems also seems to be mirrored by other peoples' findings:
+	//
+	// https://til.simonwillison.net/sqlite/enabling-wal-mode
+	//
+	// I write all this because this line is a little dangerous. Removing it
+	// will probably still allow a basic test run to pass so it might seem okay,
+	// but actually it opens the door to intermittency hell.
+	var journalMode string
+	require.NoError(tb, dbPool.QueryRowContext(ctx, "PRAGMA journal_mode = wal").Scan(&journalMode))
+	require.Equal(tb, "wal", journalMode)
 
 	return dbPool
 }

@@ -1,0 +1,32 @@
+version: "2"
+sql:
+  - engine: "sqlite"
+    queries:
+      - river_client.sql
+      - river_client_queue.sql
+      - river_job.sql
+      - river_leader.sql
+      - river_migration.sql
+      - river_queue.sql
+    schema:
+      - river_client.sql
+      - river_client_queue.sql
+      - river_job.sql
+      - river_leader.sql
+      - river_migration.sql
+      - river_queue.sql
+    gen:
+      go:
+        package: "dbsqlc"
+        out: "."
+        emit_exact_table_names: true
+        emit_methods_with_db_argument: true
+        emit_params_struct_pointers: true
+        emit_pointers_for_null_types: true
+        emit_result_struct_pointers: true
+
+        rename:
+          ids: "IDs"
+          ttl: "TTL"
+
+        overrides:

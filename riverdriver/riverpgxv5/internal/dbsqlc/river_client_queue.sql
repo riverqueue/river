@@ -12,21 +12,3 @@ CREATE UNLOGGED TABLE river_client_queue (
     CONSTRAINT num_jobs_completed_zero_or_positive CHECK (num_jobs_completed >= 0),
     CONSTRAINT num_jobs_running_zero_or_positive CHECK (num_jobs_running >= 0)
 );
-
--- name: ClientQueueCreateOrSetUpdatedAtMany :one
-INSERT INTO /* TEMPLATE: schema */river_client_queue (
-    metadata,
-    name,
-    paused_at,
-    river_client_id,
-    updated_at
-) VALUES (
-    coalesce(@metadata::jsonb, '{}'),
-    unnest(@name::text[]),
-    coalesce(sqlc.narg('paused_at')::timestamptz, NULL),
-    @river_client_id,
-    coalesce(sqlc.narg('updated_at')::timestamptz, now())
-) ON CONFLICT (name) DO UPDATE
-SET
-    updated_at = coalesce(sqlc.narg('updated_at')::timestamptz, now())
-RETURNING *;

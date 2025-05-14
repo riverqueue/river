@@ -23,12 +23,17 @@ type Benchmarker[TTx any] struct {
 	schema string                  // custom schema where River tables are located
 }
 
-func NewBenchmarker[TTx any](driver riverdriver.Driver[TTx], logger *slog.Logger, schema string) *Benchmarker[TTx] {
+type Config struct {
+	Logger *slog.Logger
+	Schema string
+}
+
+func NewBenchmarker[TTx any](driver riverdriver.Driver[TTx], config *Config) *Benchmarker[TTx] {
 	return &Benchmarker[TTx]{
 		driver: driver,
-		logger: logger,
+		logger: config.Logger,
 		name:   "Benchmarker",
-		schema: schema,
+		schema: config.Schema,
 	}
 }
 
@@ -231,7 +236,7 @@ func (b *Benchmarker[TTx]) Run(ctx context.Context, duration time.Duration, numT
 		// okay
 	case <-shutdown:
 		return nil
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second): // this timeout can probably be tightened again after we get bulk operations working for SQLite; Postgres easily fits in 5s
 		return errors.New("timed out waiting for starting jobs to be inserted")
 	}
 
@@ -468,13 +473,27 @@ func (b *Benchmarker[TTx]) insertJobsContinuously(
 func (b *Benchmarker[TTx]) resetJobsTable(ctx context.Context) error {
 	b.logger.InfoContext(ctx, b.name+": Truncating and vacuuming jobs table")
 
-	_, err := b.driver.GetExecutor().Exec(ctx, "TRUNCATE river_job")
-	if err != nil {
+	if err := b.driver.GetExecutor().TableTruncate(ctx, &riverdriver.TableTruncateParams{
+		Schema: b.schema,
+		Table:  b.driver.GetMigrationTruncateTables(riverdriver.MigrationLineMain, 0),
+	}); err != nil {
 		return err
 	}
-	_, err = b.driver.GetExecutor().Exec(ctx, "VACUUM FULL river_job")
-	if err != nil {
-		return err
+
+	switch b.driver.DatabaseName() {
+	case "postgres":
+		if _, err := b.driver.GetExecutor().Exec(ctx, "VACUUM FULL river_job"); err != nil {
+			return fmt.Errorf("error vacuuming: %w", err)
+		}
+	case "sqlite":
+		// SQLite doesn't support `VACUUM FULL`, nor does it support vacuuming
+		// on a per-table basis. `VACUUM` vacuums the entire schema, which is
+		// okay in this case.
+		if _, err := b.driver.GetExecutor().Exec(ctx, "VACUUM"); err != nil {
+			return fmt.Errorf("error vacuuming: %w", err)
+		}
+	default:
+		return fmt.Errorf("don't know how to vacuum database: %s", b.driver.DatabaseName())
 	}
 
 	return nil

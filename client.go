@@ -339,6 +339,15 @@ type Config struct {
 	// instances of rivertype.WorkerMiddleware).
 	WorkerMiddleware []rivertype.WorkerMiddleware
 
+	// queuePollInterval is the amount of time between periodic checks for queue
+	// setting changes. This is only used in poll-only mode (when no notifier is
+	// provided).
+	//
+	// This is internal for the time being as it hasn't had any major demand to
+	// be exposed, but it's needed to make sure that our poll-only tests can
+	// finish in a timely manner.
+	queuePollInterval time.Duration
+
 	// Scheduler run interval. Shared between the scheduler and producer/job
 	// executors, but not currently exposed for configuration.
 	schedulerInterval time.Duration
@@ -400,6 +409,7 @@ func (c *Config) WithDefaults() *Config {
 		TestOnly:                    c.TestOnly,
 		WorkerMiddleware:            c.WorkerMiddleware,
 		Workers:                     c.Workers,
+		queuePollInterval:           c.queuePollInterval,
 		schedulerInterval:           cmp.Or(c.schedulerInterval, maintenance.JobSchedulerIntervalDefault),
 	}
 }
@@ -715,7 +725,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	// we're actually going to be working jobs (as opposed to just enqueueing
 	// them):
 	if config.willExecuteJobs() {
-		if !driver.HasPool() {
+		if !driver.PoolIsSet() {
 			return nil, errMissingDatabasePoolWithQueues
 		}
 
@@ -1510,7 +1520,7 @@ var errNoDriverDBPool = errors.New("driver must have non-nil database pool to us
 //		// handle error
 //	}
 func (c *Client[TTx]) Insert(ctx context.Context, args JobArgs, opts *InsertOpts) (*rivertype.JobInsertResult, error) {
-	if !c.driver.HasPool() {
+	if !c.driver.PoolIsSet() {
 		return nil, errNoDriverDBPool
 	}
 
@@ -1587,7 +1597,7 @@ type InsertManyParams struct {
 //		// handle error
 //	}
 func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams) ([]*rivertype.JobInsertResult, error) {
-	if !c.driver.HasPool() {
+	if !c.driver.PoolIsSet() {
 		return nil, errNoDriverDBPool
 	}
 
@@ -1765,7 +1775,7 @@ func (c *Client[TTx]) insertManyParams(params []InsertManyParams) ([]*rivertype.
 // Unlike with `InsertMany`, unique conflicts cannot be handled gracefully. If a
 // unique constraint is violated, the operation will fail and no jobs will be inserted.
 func (c *Client[TTx]) InsertManyFast(ctx context.Context, params []InsertManyParams) (int, error) {
-	if !c.driver.HasPool() {
+	if !c.driver.PoolIsSet() {
 		return 0, errNoDriverDBPool
 	}
 
@@ -1865,20 +1875,23 @@ func (c *Client[TTx]) maybeNotifyInsertForQueues(ctx context.Context, tx riverdr
 		return nil
 	}
 
-	err := tx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
-		Payload: payloads,
-		Schema:  c.config.Schema,
-		Topic:   string(notifier.NotificationTopicInsert),
-	})
-	if err != nil {
-		c.baseService.Logger.ErrorContext(
-			ctx,
-			c.baseService.Name+": Failed to send job insert notification",
-			slog.String("queues", strings.Join(queuesDeduped, ",")),
-			slog.String("err", err.Error()),
-		)
-		return err
+	if c.driver.SupportsListenNotify() {
+		err := tx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+			Payload: payloads,
+			Schema:  c.config.Schema,
+			Topic:   string(notifier.NotificationTopicInsert),
+		})
+		if err != nil {
+			c.baseService.Logger.ErrorContext(
+				ctx,
+				c.baseService.Name+": Failed to send job insert notification",
+				slog.String("queues", strings.Join(queuesDeduped, ",")),
+				slog.String("err", err.Error()),
+			)
+			return err
+		}
 	}
+
 	return nil
 }
 
@@ -1896,19 +1909,22 @@ func (c *Client[TTx]) notifyQueuePauseOrResume(ctx context.Context, tx riverdriv
 		return err
 	}
 
-	err = tx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
-		Payload: []string{string(payload)},
-		Schema:  c.config.Schema,
-		Topic:   string(notifier.NotificationTopicControl),
-	})
-	if err != nil {
-		c.baseService.Logger.ErrorContext(
-			ctx,
-			c.baseService.Name+": Failed to send queue state change notification",
-			slog.String("err", err.Error()),
-		)
-		return err
+	if c.driver.SupportsListenNotify() {
+		err = tx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+			Payload: []string{string(payload)},
+			Schema:  c.config.Schema,
+			Topic:   string(notifier.NotificationTopicControl),
+		})
+		if err != nil {
+			c.baseService.Logger.ErrorContext(
+				ctx,
+				c.baseService.Name+": Failed to send queue state change notification",
+				slog.String("err", err.Error()),
+			)
+			return err
+		}
 	}
+
 	return nil
 }
 
@@ -1943,6 +1959,7 @@ func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) *pr
 		Notifier:                     c.notifier,
 		Queue:                        queueName,
 		QueueEventCallback:           c.subscriptionManager.distributeQueueEvent,
+		QueuePollInterval:            c.config.queuePollInterval,
 		RetryPolicy:                  c.config.RetryPolicy,
 		SchedulerInterval:            c.config.schedulerInterval,
 		Schema:                       c.config.Schema,
@@ -1988,7 +2005,7 @@ type JobListResult struct {
 //		// handle error
 //	}
 func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) (*JobListResult, error) {
-	if !c.driver.HasPool() {
+	if !c.driver.PoolIsSet() {
 		return nil, errNoDriverDBPool
 	}
 
@@ -1997,12 +2014,16 @@ func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) (*JobL
 	}
 	params.schema = c.config.Schema
 
+	if c.driver.DatabaseName() == "sqlite" && params.metadataFragment != "" {
+		return nil, errors.New("JobListResult.Metadata is not supported on SQLite")
+	}
+
 	dbParams, err := params.toDBParams()
 	if err != nil {
 		return nil, err
 	}
 
-	jobs, err := dblist.JobList(ctx, c.driver.GetExecutor(), dbParams)
+	jobs, err := dblist.JobList(ctx, c.driver.GetExecutor(), dbParams, c.driver.SQLFragmentColumnIn)
 	if err != nil {
 		return nil, err
 	}
@@ -2033,7 +2054,7 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 		return nil, err
 	}
 
-	jobs, err := dblist.JobList(ctx, c.driver.UnwrapExecutor(tx), dbParams)
+	jobs, err := dblist.JobList(ctx, c.driver.UnwrapExecutor(tx), dbParams, c.driver.SQLFragmentColumnIn)
 	if err != nil {
 		return nil, err
 	}
@@ -2325,12 +2346,14 @@ func (c *Client[TTx]) queueUpdate(ctx context.Context, executorTx riverdriver.Ex
 			return nil, err
 		}
 
-		if err := executorTx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
-			Payload: []string{string(payload)},
-			Schema:  c.config.Schema,
-			Topic:   string(notifier.NotificationTopicControl),
-		}); err != nil {
-			return nil, err
+		if c.driver.SupportsListenNotify() {
+			if err := executorTx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+				Payload: []string{string(payload)},
+				Schema:  c.config.Schema,
+				Topic:   string(notifier.NotificationTopicControl),
+			}); err != nil {
+				return nil, err
+			}
 		}
 	}
 

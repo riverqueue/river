@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest/riverdrivertest"
@@ -19,12 +20,13 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/util/urlutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
-func TestDriverDatabaseSQLLibPQ(t *testing.T) {
+func TestDriverRiverDatabaseSQLLibPQ(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -38,87 +40,126 @@ func TestDriverDatabaseSQLLibPQ(t *testing.T) {
 	driver := riverdatabasesql.New(stdPool)
 
 	riverdrivertest.Exercise(ctx, t,
-		func(ctx context.Context, t *testing.T) (riverdriver.Driver[*sql.Tx], string) {
+		func(ctx context.Context, t *testing.T, opts *riverdbtest.TestSchemaOpts) (riverdriver.Driver[*sql.Tx], string) {
 			t.Helper()
 
-			return driver, riverdbtest.TestSchema(ctx, t, driver, nil)
+			return driver, riverdbtest.TestSchema(ctx, t, driver, opts)
 		},
-		func(ctx context.Context, t *testing.T) riverdriver.Executor {
+		func(ctx context.Context, t *testing.T) (riverdriver.Executor, riverdriver.Driver[*sql.Tx]) {
 			t.Helper()
 
-			tx := riverdbtest.TestTx(ctx, t, driver, nil)
+			tx, schema := riverdbtest.TestTx(ctx, t, driver, nil)
 
-			// TODO(brandur): Set `search_path` path here when SQLite changes come in.
+			// The same thing as the built-in riversharedtest.TestTx does.
+			_, err := tx.ExecContext(ctx, "SET search_path TO '"+schema+"'")
+			require.NoError(t, err)
 
-			return riverdatabasesql.New(nil).UnwrapExecutor(tx)
+			return driver.UnwrapExecutor(tx), driver
 		})
 }
 
-func TestDriverDatabaseSQLPgx(t *testing.T) {
+func TestDriverRiverDatabaseSQLPgx(t *testing.T) {
 	t.Parallel()
 
 	var (
 		ctx     = context.Background()
-		dbPool  = riversharedtest.DBPool(ctx, t) // TODO
+		dbPool  = riversharedtest.DBPool(ctx, t)
 		stdPool = stdlib.OpenDBFromPool(dbPool)
 		driver  = riverdatabasesql.New(stdPool)
 	)
 	t.Cleanup(func() { require.NoError(t, stdPool.Close()) })
 
-	// Make sure to use the same schema as Pgx test transactions use or else
-	// operations without a schema included will clash with each other due to
-	// different `river_state` types with the error "ERROR: cached plan must not
-	// change result type (SQLSTATE 0A000)".
-	//
-	// Alternatively, we could switch dbPool to use a DBPoolClone so it's got a
-	// different statement cache.
-	var testTxSchema string
-	tx := riverdbtest.TestTxPgx(ctx, t)
-	require.NoError(t, tx.QueryRow(ctx, "SELECT current_schema()").Scan(&testTxSchema))
-
 	riverdrivertest.Exercise(ctx, t,
-		func(ctx context.Context, t *testing.T) (riverdriver.Driver[*sql.Tx], string) {
+		func(ctx context.Context, t *testing.T, opts *riverdbtest.TestSchemaOpts) (riverdriver.Driver[*sql.Tx], string) {
 			t.Helper()
 
-			return driver, riverdbtest.TestSchema(ctx, t, driver, nil)
+			return driver, riverdbtest.TestSchema(ctx, t, driver, opts)
 		},
-		func(ctx context.Context, t *testing.T) riverdriver.Executor {
+		func(ctx context.Context, t *testing.T) (riverdriver.Executor, riverdriver.Driver[*sql.Tx]) {
 			t.Helper()
 
-			tx, err := stdPool.BeginTx(ctx, nil)
-			require.NoError(t, err)
-			t.Cleanup(func() { _ = tx.Rollback() })
+			tx, schema := riverdbtest.TestTx(ctx, t, driver, nil)
 
 			// The same thing as the built-in riversharedtest.TestTx does.
-			_, err = tx.ExecContext(ctx, "SET search_path TO '"+testTxSchema+"'")
+			_, err := tx.ExecContext(ctx, "SET search_path TO '"+schema+"'")
 			require.NoError(t, err)
 
-			return riverdatabasesql.New(nil).UnwrapExecutor(tx)
+			return driver.UnwrapExecutor(tx), driver
 		})
 }
 
 func TestDriverRiverPgxV5(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	var (
+		ctx    = context.Background()
+		dbPool = riversharedtest.DBPool(ctx, t)
+		driver = riverpgxv5.New(dbPool)
+	)
 
 	riverdrivertest.Exercise(ctx, t,
-		func(ctx context.Context, t *testing.T) (riverdriver.Driver[pgx.Tx], string) {
+		func(ctx context.Context, t *testing.T, opts *riverdbtest.TestSchemaOpts) (riverdriver.Driver[pgx.Tx], string) {
 			t.Helper()
 
-			var (
-				dbPool = riversharedtest.DBPool(ctx, t)
-				driver = riverpgxv5.New(dbPool)
-				schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			)
-
-			return driver, schema
+			return driver, riverdbtest.TestSchema(ctx, t, driver, opts)
 		},
-		func(ctx context.Context, t *testing.T) riverdriver.Executor {
+		func(ctx context.Context, t *testing.T) (riverdriver.Executor, riverdriver.Driver[pgx.Tx]) {
 			t.Helper()
 
 			tx := riverdbtest.TestTxPgx(ctx, t)
-			return riverpgxv5.New(nil).UnwrapExecutor(tx)
+			return riverpgxv5.New(nil).UnwrapExecutor(tx), driver
+		})
+}
+
+func TestDriverRiverSQLite(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx         = context.Background()
+		procurePool = func(ctx context.Context, schema string) (any, string) {
+			return riversharedtest.DBPoolSQLite(ctx, t, schema), "" // could also be `main` instead of empty string
+		}
+	)
+
+	riverdrivertest.Exercise(ctx, t,
+		func(ctx context.Context, t *testing.T, opts *riverdbtest.TestSchemaOpts) (riverdriver.Driver[*sql.Tx], string) {
+			t.Helper()
+
+			if opts == nil {
+				opts = &riverdbtest.TestSchemaOpts{}
+			}
+			opts.ProcurePool = procurePool
+
+			var (
+				// Driver will have its pool set by TestSchema.
+				driver = riversqlite.New(nil)
+				schema = riverdbtest.TestSchema(ctx, t, driver, opts)
+			)
+			return driver, schema
+		},
+		func(ctx context.Context, t *testing.T) (riverdriver.Executor, riverdriver.Driver[*sql.Tx]) {
+			t.Helper()
+
+			// Driver will have its pool set by TestSchema.
+			driver := riversqlite.New(nil)
+
+			tx, _ := riverdbtest.TestTx(ctx, t, driver, &riverdbtest.TestTxOpts{
+				// Unfortunately, the normal test transaction schema sharing has
+				// to be disabled for SQLite. When enabled, there's too much
+				// contention on the shared test databases and operations fail
+				// with `database is locked (5) (SQLITE_BUSY)`, which is a
+				// common concurrency error in SQLite whose recommended
+				// remediation is a backoff and retry. I tried various
+				// techniques like journal_mode=WAL, but it didn't seem to help
+				// enough. SQLite databases are just local files anyway, and
+				// test transactions can still reuse schemas freed by other
+				// tests through TestSchema, so this should be okay performance
+				// wise.
+				DisableSchemaSharing: true,
+
+				ProcurePool: procurePool,
+			})
+			return driver.UnwrapExecutor(tx), driver
 		})
 }
 

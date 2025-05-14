@@ -51,6 +51,7 @@ To run programs locally outside of tests, create and raise a development databas
     git tag riverdriver/$VERSION -m "release riverdriver/$VERSION"
     git tag riverdriver/riverpgxv5/$VERSION -m "release riverdriver/riverpgxv5/$VERSION"
     git tag riverdriver/riverdatabasesql/$VERSION -m "release riverdriver/riverdatabasesql/$VERSION"
+    git tag riverdriver/riversqlite/$VERSION -m "release riverdriver/riversqlite/$VERSION"
     git tag rivershared/$VERSION -m "release rivershared/$VERSION"
     git tag rivertype/$VERSION -m "release rivertype/$VERSION"
     git tag $VERSION

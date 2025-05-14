@@ -23,14 +23,16 @@ func TestJobListNoJobs(t *testing.T) {
 	ctx := context.Background()
 
 	type testBundle struct {
-		exec riverdriver.Executor
+		driver *riverpgxv5.Driver
+		exec   riverdriver.Executor
 	}
 
 	setup := func() *testBundle {
 		driver := riverpgxv5.New(nil)
 
 		return &testBundle{
-			exec: driver.UnwrapExecutor(riverdbtest.TestTxPgx(ctx, t)),
+			driver: driver,
+			exec:   driver.UnwrapExecutor(riverdbtest.TestTxPgx(ctx, t)),
 		}
 	}
 
@@ -43,7 +45,7 @@ func TestJobListNoJobs(t *testing.T) {
 			States:     []rivertype.JobState{rivertype.JobStateCompleted},
 			LimitCount: 1,
 			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderAsc}},
-		})
+		}, bundle.driver.SQLFragmentColumnIn)
 		require.NoError(t, err)
 	})
 
@@ -58,7 +60,7 @@ func TestJobListNoJobs(t *testing.T) {
 			States:     []rivertype.JobState{rivertype.JobStateCompleted},
 			LimitCount: 1,
 			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderAsc}},
-		})
+		}, bundle.driver.SQLFragmentColumnIn)
 		require.NoError(t, err)
 	})
 }
@@ -103,7 +105,7 @@ func TestJobListWithJobs(t *testing.T) {
 	execTest := func(ctx context.Context, t *testing.T, bundle *testBundle, params *JobListParams, testFunc testListFunc) {
 		t.Helper()
 		t.Logf("testing JobList in Executor")
-		jobs, err := JobList(ctx, bundle.exec, params)
+		jobs, err := JobList(ctx, bundle.exec, params, bundle.driver.SQLFragmentColumnIn)
 		testFunc(jobs, err)
 
 		t.Logf("testing JobListTx")
@@ -111,7 +113,7 @@ func TestJobListWithJobs(t *testing.T) {
 		tx, err := bundle.exec.Begin(ctx)
 		require.NoError(t, err)
 		defer tx.Rollback(ctx)
-		jobs, err = JobList(ctx, tx, params)
+		jobs, err = JobList(ctx, tx, params, bundle.driver.SQLFragmentColumnIn)
 		testFunc(jobs, err)
 	}
 

@@ -16,6 +16,11 @@ const (
 	QueueDefault       = "default"
 )
 
+// MetadataKeyUniqueNonce is a special metadata key used by the SQLite driver to
+// determine whether an upsert is was skipped or not because the `(xmax != 0)`
+// trick we use in Postgres doesn't work in SQLite.
+const MetadataKeyUniqueNonce = "river:unique_nonce"
+
 type ContextKeyClient struct{}
 
 // ErrStop is a special error injected by the client into its fetch and work

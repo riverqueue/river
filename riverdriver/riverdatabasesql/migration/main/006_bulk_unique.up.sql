@@ -8,9 +8,9 @@ AS $$
         WHEN 'cancelled' THEN get_bit(bitmask, 6)
         WHEN 'completed' THEN get_bit(bitmask, 5)
         WHEN 'discarded' THEN get_bit(bitmask, 4)
-        WHEN 'pending' THEN get_bit(bitmask, 3)
+        WHEN 'pending'   THEN get_bit(bitmask, 3)
         WHEN 'retryable' THEN get_bit(bitmask, 2)
-        WHEN 'running' THEN get_bit(bitmask, 1)
+        WHEN 'running'   THEN get_bit(bitmask, 1)
         WHEN 'scheduled' THEN get_bit(bitmask, 0)
         ELSE 0
     END = 1;

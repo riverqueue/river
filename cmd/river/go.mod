@@ -10,6 +10,7 @@ require (
 	github.com/riverqueue/river v0.22.0
 	github.com/riverqueue/river/riverdriver v0.22.0
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.22.0
+	github.com/riverqueue/river/riverdriver/riversqlite v0.0.0-00010101000000-000000000000
 	github.com/riverqueue/river/rivershared v0.22.0
 	github.com/riverqueue/river/rivertype v0.22.0
 	github.com/spf13/cobra v1.9.1
@@ -34,3 +35,8 @@ require (
 	golang.org/x/text v0.25.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// TODO(brandur): Remove this before first release including SQLite driver. It's
+// needed temporarily because there's no riversqlite tag to target (the one
+// referenced above is fake and does not exist).
+replace github.com/riverqueue/river/riverdriver/riversqlite => ../../../river/riverdriver/riversqlite

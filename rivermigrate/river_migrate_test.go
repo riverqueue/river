@@ -11,7 +11,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -347,7 +346,6 @@ func TestMigrator(t *testing.T) {
 
 		res, err := migrator.Migrate(ctx, DirectionDown, &MigrateOpts{MaxSteps: 1})
 		require.NoError(t, err)
-		spew.Dump(res.Versions)
 		require.Equal(t, []int{migrationsBundle.MaxVersion}, sliceutil.Map(res.Versions, migrateVersionToInt))
 
 		migrations, err := migrator.driver.UnwrapExecutor(tx).MigrationGetAllAssumingMain(ctx, &riverdriver.MigrationGetAllAssumingMainParams{
@@ -832,12 +830,12 @@ func TestMigrator(t *testing.T) {
 			// `river_migration`. Note that we have to run the version's SQL
 			// directly because using the migrator will try to interact with
 			// `river_migration`, which is no longer present.
-			sql, _ := migrator.replacer.Run(ctx, migrationsBundle.WithTestVersionsMap[5].SQLUp, nil)
+			sql, _ := migrator.replacer.Run(ctx, bundle.driver.ArgPlaceholder(), migrationsBundle.WithTestVersionsMap[5].SQLUp, nil)
 			_, err = bundle.dbPool.Exec(ctx, sql)
 			require.NoError(t, err)
 
 			// And the version 005 down migration to verify the same.
-			sql, _ = migrator.replacer.Run(ctx, migrationsBundle.WithTestVersionsMap[5].SQLDown, nil)
+			sql, _ = migrator.replacer.Run(ctx, bundle.driver.ArgPlaceholder(), migrationsBundle.WithTestVersionsMap[5].SQLDown, nil)
 			_, err = bundle.dbPool.Exec(ctx, sql)
 			require.NoError(t, err)
 		}

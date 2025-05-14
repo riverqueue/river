@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDefaultIfEmpty(t *testing.T) {
+func TestFirstNonEmpty(t *testing.T) {
 	t.Parallel()
 
 	result1 := FirstNonEmpty([]int{1, 2, 3}, []int{4, 5, 6})

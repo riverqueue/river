@@ -5,40 +5,53 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
+	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivermigrate"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivershared/util/hashutil"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
+	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
+)
+
+const (
+	databaseNamePostgres = "postgres"
+	databaseNameSQLite   = "sqlite"
 )
 
 // Exercise fully exercises a driver. The driver's listener is exercised if
 // supported.
 func Exercise[TTx any](ctx context.Context, t *testing.T,
-	driverWithSchema func(ctx context.Context, t *testing.T) (riverdriver.Driver[TTx], string),
-	executorWithTx func(ctx context.Context, t *testing.T) riverdriver.Executor,
+	driverWithSchema func(ctx context.Context, t *testing.T, opts *riverdbtest.TestSchemaOpts) (riverdriver.Driver[TTx], string),
+	executorWithTx func(ctx context.Context, t *testing.T) (riverdriver.Executor, riverdriver.Driver[TTx]),
 ) {
 	t.Helper()
 
 	{
-		driver, _ := driverWithSchema(ctx, t)
+		driver, _ := driverWithSchema(ctx, t, nil)
 		if driver.SupportsListener() {
 			exerciseListener(ctx, t, driverWithSchema)
 		} else {
@@ -49,7 +62,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	t.Run("GetMigrationFS", func(t *testing.T) {
 		t.Parallel()
 
-		driver, _ := driverWithSchema(ctx, t)
+		driver, _ := driverWithSchema(ctx, t, nil)
 
 		for _, line := range driver.GetMigrationLines() {
 			migrationFS := driver.GetMigrationFS(line)
@@ -63,32 +76,217 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	t.Run("GetMigrationTruncateTables", func(t *testing.T) {
 		t.Parallel()
 
-		driver, _ := driverWithSchema(ctx, t)
+		t.Run("AllLinesNonEmpty", func(t *testing.T) {
+			t.Parallel()
 
-		for _, line := range driver.GetMigrationLines() {
-			truncateTables := driver.GetMigrationTruncateTables(line)
+			driver, _ := driverWithSchema(ctx, t, nil)
 
-			// Technically a migration line's truncate tables might be empty,
-			// but this never happens in any of our migration lines, so check
-			// non-empty until it becomes an actual problem.
-			require.NotEmpty(t, truncateTables)
-		}
+			for _, line := range driver.GetMigrationLines() {
+				truncateTables := driver.GetMigrationTruncateTables(line, 0)
+
+				// Technically a migration line's truncate tables might be empty,
+				// but this never happens in any of our migration lines, so check
+				// non-empty until it becomes an actual problem.
+				require.NotEmpty(t, truncateTables)
+			}
+		})
+
+		t.Run("MainLine", func(t *testing.T) {
+			t.Parallel()
+
+			driver, _ := driverWithSchema(ctx, t, nil)
+
+			require.Empty(t, driver.GetMigrationTruncateTables(riverdriver.MigrationLineMain, 1))
+			require.Equal(t, []string{"river_job", "river_leader"},
+				driver.GetMigrationTruncateTables(riverdriver.MigrationLineMain, 2))
+			require.Equal(t, []string{"river_job", "river_leader"},
+				driver.GetMigrationTruncateTables(riverdriver.MigrationLineMain, 3))
+			require.Equal(t, []string{"river_job", "river_leader", "river_queue"},
+				driver.GetMigrationTruncateTables(riverdriver.MigrationLineMain, 4))
+			require.Equal(t, []string{"river_job", "river_leader", "river_queue", "river_client", "river_client_queue"},
+				driver.GetMigrationTruncateTables(riverdriver.MigrationLineMain, 5))
+			require.Equal(t, []string{"river_job", "river_leader", "river_queue", "river_client", "river_client_queue"},
+				driver.GetMigrationTruncateTables(riverdriver.MigrationLineMain, 6))
+			require.Equal(t, []string{"river_job", "river_leader", "river_queue", "river_client", "river_client_queue"},
+				driver.GetMigrationTruncateTables(riverdriver.MigrationLineMain, 0))
+		})
 	})
 
 	t.Run("GetMigrationLines", func(t *testing.T) {
 		t.Parallel()
 
-		driver, _ := driverWithSchema(ctx, t)
+		driver, _ := driverWithSchema(ctx, t, nil)
 
 		// Should contain at minimum a main migration line.
 		require.Contains(t, driver.GetMigrationLines(), riverdriver.MigrationLineMain)
 	})
 
-	type testBundle struct{}
+	// This doesn't map to a particular function, but make sure the driver is
+	// capable of migration all the way up, then all the way back down.
+	t.Run("MigrateUpAndDown", func(t *testing.T) {
+		t.Parallel()
+
+		driver, _ := driverWithSchema(ctx, t, nil)
+
+		for _, line := range driver.GetMigrationLines() {
+			t.Run(strings.ToUpper(line[0:1])+line[1:], func(t *testing.T) {
+				driver, schema := driverWithSchema(ctx, t, &riverdbtest.TestSchemaOpts{
+					Lines: []string{},
+				})
+
+				migrator, err := rivermigrate.New(driver, &rivermigrate.Config{
+					Line:   line,
+					Logger: riversharedtest.Logger(t),
+					Schema: schema,
+				})
+				require.NoError(t, err)
+
+				{
+					t.Log("Migrating up (round 1)")
+					_, err = migrator.Migrate(ctx, rivermigrate.DirectionUp, nil)
+					require.NoError(t, err)
+
+					t.Log("Migrating down (round 1)")
+					_, err = migrator.Migrate(ctx, rivermigrate.DirectionDown, &rivermigrate.MigrateOpts{
+						TargetVersion: -1,
+					})
+					require.NoError(t, err)
+				}
+
+				// Do the process a second time to make sure all migrations
+				// really were idempotent and didn't leave artifacts.
+				{
+					t.Log("Migrating up (round 2)")
+					_, err = migrator.Migrate(ctx, rivermigrate.DirectionUp, nil)
+					require.NoError(t, err)
+
+					t.Log("Migrating down (round 2)")
+					_, err = migrator.Migrate(ctx, rivermigrate.DirectionDown, &rivermigrate.MigrateOpts{
+						TargetVersion: -1,
+					})
+					require.NoError(t, err)
+				}
+
+				// Last check to make sure we really went down to zero.
+				exists, err := driver.GetExecutor().TableExists(ctx, &riverdriver.TableExistsParams{
+					Schema: schema,
+					Table:  "river_migration",
+				})
+				require.NoError(t, err)
+				require.False(t, exists)
+			})
+		}
+	})
+
+	t.Run("SQLFragmentColumnIn", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("IntegerValues", func(t *testing.T) {
+			t.Parallel()
+
+			exec, driver := executorWithTx(ctx, t)
+
+			var (
+				job1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+				job2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+				_    = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+			)
+
+			sqlFragment, arg, err := driver.SQLFragmentColumnIn("id", []int64{job1.ID, job2.ID})
+			require.NoError(t, err)
+
+			jobs, err := exec.JobList(ctx, &riverdriver.JobListParams{
+				Max:           100,
+				NamedArgs:     map[string]any{"id": arg},
+				OrderByClause: "id",
+				WhereClause:   sqlFragment,
+			})
+			require.NoError(t, err)
+			require.Len(t, jobs, 2)
+			require.Equal(t, job1.ID, jobs[0].ID)
+			require.Equal(t, job2.ID, jobs[1].ID)
+		})
+
+		t.Run("StringValues", func(t *testing.T) {
+			t.Parallel()
+
+			exec, driver := executorWithTx(ctx, t)
+
+			var (
+				job1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("kind1")})
+				job2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("kind2")})
+				_    = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("kind3")})
+			)
+
+			sqlFragment, arg, err := driver.SQLFragmentColumnIn("kind", []string{job1.Kind, job2.Kind})
+			require.NoError(t, err)
+
+			jobs, err := exec.JobList(ctx, &riverdriver.JobListParams{
+				Max:           100,
+				NamedArgs:     map[string]any{"kind": arg},
+				OrderByClause: "kind",
+				WhereClause:   sqlFragment,
+			})
+			require.NoError(t, err)
+			require.Len(t, jobs, 2)
+			require.Equal(t, job1.Kind, jobs[0].Kind)
+			require.Equal(t, job2.Kind, jobs[1].Kind)
+		})
+	})
+
+	t.Run("PoolIsSet", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("PoolIsSetOnDriverWithSchema", func(t *testing.T) {
+			t.Parallel()
+
+			driver, _ := driverWithSchema(ctx, t, nil)
+			require.True(t, driver.PoolIsSet())
+		})
+	})
+
+	t.Run("PoolSet", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("PoolSetNotImplementedOrAlreadySetError", func(t *testing.T) {
+			t.Parallel()
+
+			driver, _ := driverWithSchema(ctx, t, nil)
+			err := driver.PoolSet(struct{}{})
+			require.Error(t, err)
+			if !errors.Is(err, riverdriver.ErrNotImplemented) {
+				require.EqualError(t, err, "cannot PoolSet when internal pool is already non-nil")
+			}
+		})
+	})
+
+	t.Run("SupportsListenNotify", func(t *testing.T) {
+		t.Parallel()
+
+		_, driver := executorWithTx(ctx, t)
+
+		switch driver.DatabaseName() {
+		case databaseNamePostgres:
+			require.True(t, driver.SupportsListenNotify())
+		case databaseNameSQLite:
+			require.False(t, driver.SupportsListenNotify())
+		default:
+			require.FailNow(t, "Don't know how to check SupportsListenNotify for: "+driver.DatabaseName())
+		}
+	})
+
+	type testBundle struct {
+		driver riverdriver.Driver[TTx]
+	}
 
 	setup := func(ctx context.Context, t *testing.T) (riverdriver.Executor, *testBundle) {
 		t.Helper()
-		return executorWithTx(ctx, t), &testBundle{}
+
+		tx, driver := executorWithTx(ctx, t)
+
+		return tx, &testBundle{
+			driver: driver,
+		}
 	}
 
 	const clientID = "test-client-id"
@@ -110,12 +308,12 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				job := testfactory.Job(ctx, t, tx, &testfactory.JobOpts{})
 				_ = testfactory.Job(ctx, t, tx, &testfactory.JobOpts{})
 
-				_, err := tx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
+				_, err := tx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
 				require.NoError(t, err)
 
 				require.NoError(t, tx.Rollback(ctx))
 
-				_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
+				_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
 				require.ErrorIs(t, err, rivertype.ErrNotFound)
 			}
 		})
@@ -142,16 +340,16 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 					{
 						job2 := testfactory.Job(ctx, t, tx2, &testfactory.JobOpts{})
 
-						_, err := tx2.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: ""})
+						_, err := tx2.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID})
 						require.NoError(t, err)
 
 						require.NoError(t, tx2.Rollback(ctx))
 
-						_, err = tx1.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: ""})
+						_, err = tx1.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID})
 						require.ErrorIs(t, err, rivertype.ErrNotFound)
 					}
 
-					_, err = tx1.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: ""})
+					_, err = tx1.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID})
 					require.NoError(t, err)
 				}
 
@@ -165,22 +363,22 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 					{
 						job2 := testfactory.Job(ctx, t, tx2, &testfactory.JobOpts{})
 
-						_, err = tx2.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: ""})
+						_, err = tx2.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID})
 						require.NoError(t, err)
 
 						require.NoError(t, tx2.Rollback(ctx))
 
-						_, err = tx1.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: ""})
+						_, err = tx1.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID})
 						require.ErrorIs(t, err, rivertype.ErrNotFound)
 					}
 
-					_, err = tx1.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: ""})
+					_, err = tx1.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID})
 					require.NoError(t, err)
 				}
 
 				require.NoError(t, tx1.Rollback(ctx))
 
-				_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: ""})
+				_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID})
 				require.ErrorIs(t, err, rivertype.ErrNotFound)
 			}
 		})
@@ -205,7 +403,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			// Despite rollback being called after commit, the job is still
 			// visible from the outer transaction.
-			_, err = tx1.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
+			_, err = tx1.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
 			require.NoError(t, err)
 		})
 	})
@@ -216,41 +414,38 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		exec, _ := setup(ctx, t)
 
 		exists, err := exec.ColumnExists(ctx, &riverdriver.ColumnExistsParams{
-			Column: "id",
-			Table:  "river_job",
+			Column: "line",
+			Table:  "river_migration",
 		})
 		require.NoError(t, err)
 		require.True(t, exists)
 
 		exists, err = exec.ColumnExists(ctx, &riverdriver.ColumnExistsParams{
 			Column: "does_not_exist",
-			Table:  "river_job",
+			Table:  "river_migration",
 		})
 		require.NoError(t, err)
 		require.False(t, exists)
 
 		exists, err = exec.ColumnExists(ctx, &riverdriver.ColumnExistsParams{
-			Column: "id",
+			Column: "line",
 			Table:  "does_not_exist",
 		})
 		require.NoError(t, err)
 		require.False(t, exists)
 
-		// Will be rolled back by the test transaction.
-		_, err = exec.Exec(ctx, "CREATE SCHEMA another_schema_123")
-		require.NoError(t, err)
+		// A different schema on main, but before the `line` column was added to
+		// migrations.
+		driver2, schemaVersion2 := driverWithSchema(ctx, t, &riverdbtest.TestSchemaOpts{
+			LineTargetVersions: map[string]int{
+				riverdriver.MigrationLineMain: 2,
+			},
+		})
 
-		_, err = exec.Exec(ctx, "SET search_path = another_schema_123")
-		require.NoError(t, err)
-
-		// Table with the same name as the main schema, but without the same
-		// columns.
-		_, err = exec.Exec(ctx, "CREATE TABLE river_job (another_id bigint)")
-		require.NoError(t, err)
-
-		exists, err = exec.ColumnExists(ctx, &riverdriver.ColumnExistsParams{
-			Column: "id",
-			Table:  "river_job",
+		exists, err = driver2.GetExecutor().ColumnExists(ctx, &riverdriver.ColumnExistsParams{
+			Column: "line",
+			Schema: schemaVersion2,
+			Table:  "river_migration",
 		})
 		require.NoError(t, err)
 		require.False(t, exists)
@@ -286,7 +481,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			rivertype.JobStateRetryable,
 			rivertype.JobStateScheduled,
 		} {
-			t.Run(fmt.Sprintf("CancelsJobIn%sState", startingState), func(t *testing.T) {
+			t.Run(fmt.Sprintf("CancelsJobIn%sState", strings.ToUpper(string(startingState[0]))+string(startingState)[1:]), func(t *testing.T) {
 				t.Parallel()
 
 				exec, _ := setup(ctx, t)
@@ -417,7 +612,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				Schema: "custom_schema",
 				State:  rivertype.JobStateAvailable,
 			})
-			requireMissingRelation(t, err, "custom_schema.river_job")
+			requireMissingRelation(t, err, "custom_schema", "river_job")
 		})
 	})
 
@@ -439,7 +634,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			require.ErrorIs(t, err, rivertype.ErrJobRunning)
 			require.Nil(t, jobAfter)
 
-			jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
+			jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateRunning, jobUpdated.State)
 		})
@@ -478,15 +673,14 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				})
 
 				jobAfter, err := exec.JobDelete(ctx, &riverdriver.JobDeleteParams{
-					ID:     job.ID,
-					Schema: "",
+					ID: job.ID,
 				})
 				require.NoError(t, err)
 				require.NotNil(t, jobAfter)
 				require.Equal(t, job.ID, jobAfter.ID)
 				require.Equal(t, state, jobAfter.State)
 
-				_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
+				_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
 				require.ErrorIs(t, err, rivertype.ErrNotFound)
 			})
 		}
@@ -514,7 +708,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				ID:     job.ID,
 				Schema: "custom_schema",
 			})
-			requireMissingRelation(t, err, "custom_schema.river_job")
+			requireMissingRelation(t, err, "custom_schema", "river_job")
 		})
 	})
 
@@ -561,19 +755,19 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		require.Equal(t, 1, numDeleted)
 
 		// All deleted.
-		_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: deletedJob1.ID, Schema: ""})
+		_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: deletedJob1.ID})
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
-		_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: deletedJob2.ID, Schema: ""})
+		_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: deletedJob2.ID})
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
-		_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: deletedJob3.ID, Schema: ""})
+		_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: deletedJob3.ID})
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
 
 		// Not deleted
-		_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notDeletedJob1.ID, Schema: ""})
+		_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notDeletedJob1.ID})
 		require.NoError(t, err)
-		_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notDeletedJob2.ID, Schema: ""})
+		_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notDeletedJob2.ID})
 		require.NoError(t, err)
-		_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notDeletedJob3.ID, Schema: ""})
+		_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notDeletedJob3.ID})
 		require.NoError(t, err)
 	})
 
@@ -641,14 +835,17 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			exec, _ := setup(ctx, t)
 
+			now := time.Now().UTC()
+
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				ScheduledAt: ptrutil.Ptr(time.Now().Add(1 * time.Minute)),
+				ScheduledAt: ptrutil.Ptr(now.Add(1 * time.Minute)),
 			})
 
 			// Job is scheduled a while from now so it's not found.
 			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
 				ClientID: clientID,
 				Max:      100,
+				Now:      &now,
 				Queue:    rivercommon.QueueDefault,
 			})
 			require.NoError(t, err)
@@ -730,20 +927,20 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		t.Run("FetchesAnExistingJob", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
 
 			now := time.Now().UTC()
 
-			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{CreatedAt: &now, ScheduledAt: &now})
 
-			fetchedJob, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
+			fetchedJob, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
 			require.NoError(t, err)
 			require.NotNil(t, fetchedJob)
 
 			require.Equal(t, job.ID, fetchedJob.ID)
 			require.Equal(t, rivertype.JobStateAvailable, fetchedJob.State)
-			require.WithinDuration(t, now, fetchedJob.CreatedAt, 100*time.Millisecond)
-			require.WithinDuration(t, now, fetchedJob.ScheduledAt, 100*time.Millisecond)
+			require.WithinDuration(t, now, fetchedJob.CreatedAt, bundle.driver.TimePrecision())
+			require.WithinDuration(t, now, fetchedJob.ScheduledAt, bundle.driver.TimePrecision())
 		})
 
 		t.Run("ReturnsErrNotFoundIfJobDoesNotExist", func(t *testing.T) {
@@ -751,7 +948,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			exec, _ := setup(ctx, t)
 
-			job, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: 0, Schema: ""})
+			job, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: 0})
 			require.Error(t, err)
 			require.ErrorIs(t, err, rivertype.ErrNotFound)
 			require.Nil(t, job)
@@ -789,8 +986,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("kind3")})
 
 		jobs, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
-			Kind:   []string{job1.Kind, job2.Kind},
-			Schema: "",
+			Kind: []string{job1.Kind, job2.Kind},
 		})
 		require.NoError(t, err)
 		require.Equal(t, []int64{job1.ID, job2.ID},
@@ -803,13 +999,19 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		exec, _ := setup(ctx, t)
 
 		var (
-			horizon       = time.Now()
+			horizon       = time.Now().UTC()
 			beforeHorizon = horizon.Add(-1 * time.Minute)
 			afterHorizon  = horizon.Add(1 * time.Minute)
 		)
 
 		stuckJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
 		stuckJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+
+		t.Logf("horizon   = %s", horizon)
+		t.Logf("stuckJob1 = %s", stuckJob1.AttemptedAt)
+		t.Logf("stuckJob2 = %s", stuckJob2.AttemptedAt)
+
+		t.Logf("stuckJob1 full = %s", spew.Sdump(stuckJob1))
 
 		// Not returned because we put a maximum of two.
 		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
@@ -822,8 +1024,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 		// Max two stuck
 		stuckJobs, err := exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
-			StuckHorizon: horizon,
 			Max:          2,
+			StuckHorizon: horizon,
 		})
 		require.NoError(t, err)
 		require.Equal(t, []int64{stuckJob1.ID, stuckJob2.ID},
@@ -836,7 +1038,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		t.Run("AllArgs", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
 
 			now := time.Now().UTC()
 
@@ -867,6 +1069,13 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			for i, result := range resultRows {
 				require.False(t, result.UniqueSkippedAsDuplicate)
 				job := result.Job
+
+				// SQLite needs to set a special metadata key to be able to
+				// check for duplicates. Remove this for purposes of comparing
+				// inserted metadata.
+				job.Metadata, err = sjson.DeleteBytes(job.Metadata, rivercommon.MetadataKeyUniqueNonce)
+				require.NoError(t, err)
+
 				require.Equal(t, 0, job.Attempt)
 				require.Nil(t, job.AttemptedAt)
 				require.Empty(t, job.AttemptedBy)
@@ -879,7 +1088,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				require.JSONEq(t, `{"meta": "data"}`, string(job.Metadata))
 				require.Equal(t, rivercommon.PriorityDefault, job.Priority)
 				require.Equal(t, rivercommon.QueueDefault, job.Queue)
-				requireEqualTime(t, now.Add(time.Duration(i)*time.Minute), job.ScheduledAt)
+				require.WithinDuration(t, now.Add(time.Duration(i)*time.Minute), job.ScheduledAt, bundle.driver.TimePrecision())
 				require.Equal(t, rivertype.JobStateAvailable, job.State)
 				require.Equal(t, []string{"tag"}, job.Tags)
 				require.Equal(t, []byte("unique-key-fast-many-"+strconv.Itoa(i)), job.UniqueKey)
@@ -910,15 +1119,33 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			}
 
 			results, err := exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
-				Jobs:   insertParams,
-				Schema: "",
+				Jobs: insertParams,
 			})
 			require.NoError(t, err)
 			require.Len(t, results, len(insertParams))
 
+			// Especially in SQLite where both the database and the drivers
+			// suck, it's really easy to accidentally insert an empty value
+			// instead of a real null so double check that we got real nulls.
+			var (
+				attemptedAtIsNull  bool
+				attemptedByIsNull  bool
+				uniqueKeyIsNull    bool
+				uniqueStatesIsNull bool
+			)
+			require.NoError(t, exec.QueryRow(ctx, "SELECT attempted_at IS NULL, attempted_by IS NULL, unique_key IS NULL, unique_states IS NULL FROM river_job").Scan(
+				&attemptedAtIsNull,
+				&attemptedByIsNull,
+				&uniqueKeyIsNull,
+				&uniqueStatesIsNull,
+			))
+			require.True(t, attemptedAtIsNull)
+			require.True(t, attemptedByIsNull)
+			require.True(t, uniqueKeyIsNull)
+			require.True(t, uniqueStatesIsNull)
+
 			jobsAfter, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
-				Kind:   []string{"test_kind"},
-				Schema: "",
+				Kind: []string{"test_kind"},
 			})
 			require.NoError(t, err)
 			require.Len(t, jobsAfter, len(insertParams))
@@ -932,6 +1159,56 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				var emptyJobStates []rivertype.JobState
 				require.Equal(t, emptyJobStates, job.UniqueStates)
 			}
+		})
+
+		t.Run("UniqueConflict", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			uniqueKey := "unique-key-fast-conflict"
+
+			results1, err := exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+				Jobs: []*riverdriver.JobInsertFastParams{
+					{
+						EncodedArgs:  []byte(`{"encoded": "args"}`),
+						Kind:         "test_kind",
+						MaxAttempts:  rivercommon.MaxAttemptsDefault,
+						Metadata:     []byte(`{"meta": "data"}`),
+						Priority:     rivercommon.PriorityDefault,
+						Queue:        rivercommon.QueueDefault,
+						State:        rivertype.JobStateAvailable,
+						Tags:         []string{"tag"},
+						UniqueKey:    []byte(uniqueKey),
+						UniqueStates: 0xff,
+					},
+				},
+			})
+			require.NoError(t, err)
+			require.Len(t, results1, 1)
+			require.False(t, results1[0].UniqueSkippedAsDuplicate)
+
+			results2, err := exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+				Jobs: []*riverdriver.JobInsertFastParams{
+					{
+						EncodedArgs:  []byte(`{"encoded": "args"}`),
+						Kind:         "test_kind",
+						MaxAttempts:  rivercommon.MaxAttemptsDefault,
+						Metadata:     []byte(`{"meta": "data"}`),
+						Priority:     rivercommon.PriorityDefault,
+						Queue:        rivercommon.QueueDefault,
+						State:        rivertype.JobStateAvailable,
+						Tags:         []string{"tag"},
+						UniqueKey:    []byte(uniqueKey),
+						UniqueStates: 0xff,
+					},
+				},
+			})
+			require.NoError(t, err)
+			require.Len(t, results2, 1)
+			require.True(t, results2[0].UniqueSkippedAsDuplicate)
+
+			require.Equal(t, results1[0].Job.ID, results2[0].Job.ID)
 		})
 
 		t.Run("BinaryNonUTF8UniqueKey", func(t *testing.T) {
@@ -962,8 +1239,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			require.Equal(t, uniqueKey, results[0].Job.UniqueKey)
 
 			jobs, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
-				Kind:   []string{"test_kind"},
-				Schema: "",
+				Kind: []string{"test_kind"},
 			})
 			require.NoError(t, err)
 			require.Equal(t, uniqueKey, jobs[0].UniqueKey)
@@ -974,7 +1250,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		t.Parallel()
 
 		t.Run("AllArgs", func(t *testing.T) {
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
 
 			// This test needs to use a time from before the transaction begins, otherwise
 			// the newly-scheduled jobs won't yet show as available because their
@@ -1025,11 +1301,141 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				require.JSONEq(t, `{"meta": "data"}`, string(job.Metadata))
 				require.Equal(t, rivercommon.PriorityDefault, job.Priority)
 				require.Equal(t, rivercommon.QueueDefault, job.Queue)
-				requireEqualTime(t, now, job.ScheduledAt)
+				require.WithinDuration(t, now, job.ScheduledAt, bundle.driver.TimePrecision())
 				require.Equal(t, rivertype.JobStateAvailable, job.State)
 				require.Equal(t, []string{"tag"}, job.Tags)
 				require.Equal(t, []byte("unique-key-no-returning-"+strconv.Itoa(i)), job.UniqueKey)
 			}
+		})
+
+		t.Run("MissingValuesDefaultAsExpected", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
+			for i := 0; i < len(insertParams); i++ {
+				insertParams[i] = &riverdriver.JobInsertFastParams{
+					EncodedArgs:  []byte(`{"encoded": "args"}`),
+					Kind:         "test_kind",
+					MaxAttempts:  rivercommon.MaxAttemptsDefault,
+					Metadata:     []byte(`{"meta": "data"}`),
+					Priority:     rivercommon.PriorityDefault,
+					Queue:        rivercommon.QueueDefault,
+					ScheduledAt:  nil, // explicit nil
+					State:        rivertype.JobStateAvailable,
+					Tags:         []string{"tag"},
+					UniqueKey:    nil,  // explicit nil
+					UniqueStates: 0x00, // explicit 0
+				}
+			}
+
+			rowsAffected, err := exec.JobInsertFastManyNoReturning(ctx, &riverdriver.JobInsertFastManyParams{
+				Jobs: insertParams,
+			})
+			require.NoError(t, err)
+			require.Equal(t, len(insertParams), rowsAffected)
+
+			// Especially in SQLite where both the database and the drivers
+			// suck, it's really easy to accidentally insert an empty value
+			// instead of a real null so double check that we got real nulls.
+			var (
+				attemptedAtIsNull  bool
+				attemptedByIsNull  bool
+				uniqueKeyIsNull    bool
+				uniqueStatesIsNull bool
+			)
+			require.NoError(t, exec.QueryRow(ctx, "SELECT attempted_at IS NULL, attempted_by IS NULL, unique_key IS NULL, unique_states IS NULL FROM river_job").Scan(
+				&attemptedAtIsNull,
+				&attemptedByIsNull,
+				&uniqueKeyIsNull,
+				&uniqueStatesIsNull,
+			))
+			require.True(t, attemptedAtIsNull)
+			require.True(t, attemptedByIsNull)
+			require.True(t, uniqueKeyIsNull)
+			require.True(t, uniqueStatesIsNull)
+
+			jobsAfter, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+				Kind: []string{"test_kind"},
+			})
+			require.NoError(t, err)
+			require.Len(t, jobsAfter, len(insertParams))
+			for _, job := range jobsAfter {
+				require.WithinDuration(t, time.Now().UTC(), job.CreatedAt, 2*time.Second)
+				require.WithinDuration(t, time.Now().UTC(), job.ScheduledAt, 2*time.Second)
+
+				// UniqueKey and UniqueStates are not set in the insert params, so they should
+				// be nil and an empty slice respectively.
+				require.Nil(t, job.UniqueKey)
+				var emptyJobStates []rivertype.JobState
+				require.Equal(t, emptyJobStates, job.UniqueStates)
+			}
+		})
+
+		t.Run("UniqueConflict", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+
+			uniqueKey := "unique-key-fast-conflict"
+
+			rowsAffected1, err := exec.JobInsertFastManyNoReturning(ctx, &riverdriver.JobInsertFastManyParams{
+				Jobs: []*riverdriver.JobInsertFastParams{
+					{
+						EncodedArgs:  []byte(`{"encoded": "args"}`),
+						Kind:         "test_kind",
+						MaxAttempts:  rivercommon.MaxAttemptsDefault,
+						Metadata:     []byte(`{"meta": "data"}`),
+						Priority:     rivercommon.PriorityDefault,
+						Queue:        rivercommon.QueueDefault,
+						State:        rivertype.JobStateAvailable,
+						Tags:         []string{"tag"},
+						UniqueKey:    []byte(uniqueKey),
+						UniqueStates: 0xff,
+					},
+				},
+			})
+			require.NoError(t, err)
+			require.Equal(t, 1, rowsAffected1)
+
+			rowsAffected2, err := exec.JobInsertFastManyNoReturning(ctx, &riverdriver.JobInsertFastManyParams{
+				Jobs: []*riverdriver.JobInsertFastParams{
+					{
+						EncodedArgs:  []byte(`{"encoded": "args"}`),
+						Kind:         "test_kind",
+						MaxAttempts:  rivercommon.MaxAttemptsDefault,
+						Metadata:     []byte(`{"meta": "data"}`),
+						Priority:     rivercommon.PriorityDefault,
+						Queue:        rivercommon.QueueDefault,
+						State:        rivertype.JobStateAvailable,
+						Tags:         []string{"tag"},
+						UniqueKey:    []byte(uniqueKey),
+						UniqueStates: 0xff,
+					},
+				},
+			})
+			if err != nil {
+				// PgxV5 uses copy/from which means that it can't support `ON
+				// CONFLICT` and therefore returns an error here. Callers that
+				// want to bulk insert unique jobs should use the returning
+				// variant instead.
+				if reflect.TypeOf(bundle.driver).Elem().PkgPath() == "github.com/riverqueue/river/riverdriver/riverpgxv5" {
+					var pgErr *pgconn.PgError
+					require.ErrorAs(t, err, &pgErr)
+					require.Equal(t, pgerrcode.UniqueViolation, pgErr.Code)
+					require.Equal(t, "river_job_unique_idx", pgErr.ConstraintName)
+					return
+				}
+			}
+			require.NoError(t, err)
+			require.Zero(t, rowsAffected2)
+
+			jobsAfter, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+				Kind: []string{"test_kind"},
+			})
+			require.NoError(t, err)
+			require.Len(t, jobsAfter, 1)
 		})
 
 		t.Run("MissingCreatedAtDefaultsToNow", func(t *testing.T) {
@@ -1113,7 +1519,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			t.Parallel()
 
 			var (
-				driver, schema = driverWithSchema(ctx, t)
+				driver, schema = driverWithSchema(ctx, t, nil)
 				exec           = driver.GetExecutor()
 			)
 
@@ -1184,12 +1590,31 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			require.Equal(t, rivercommon.MaxAttemptsDefault, job.MaxAttempts)
 			require.Equal(t, rivercommon.QueueDefault, job.Queue)
 			require.Equal(t, rivertype.JobStateAvailable, job.State)
+
+			// Especially in SQLite where both the database and the drivers
+			// suck, it's really easy to accidentally insert an empty value
+			// instead of a real null so double check that we got real nulls.
+			var (
+				attemptedAtIsNull  bool
+				attemptedByIsNull  bool
+				errorsIsNull       bool
+				finalizedAtIsNull  bool
+				uniqueKeyIsNull    bool
+				uniqueStatesIsNull bool
+			)
+			require.NoError(t, exec.QueryRow(ctx, "SELECT attempted_at IS NULL, attempted_by IS NULL, errors IS NULL, finalized_at IS NULL, unique_key IS NULL, unique_states IS NULL FROM river_job").Scan(&attemptedAtIsNull, &attemptedByIsNull, &errorsIsNull, &finalizedAtIsNull, &uniqueKeyIsNull, &uniqueStatesIsNull))
+			require.True(t, attemptedAtIsNull)
+			require.True(t, attemptedByIsNull)
+			require.True(t, errorsIsNull)
+			require.True(t, finalizedAtIsNull)
+			require.True(t, uniqueKeyIsNull)
+			require.True(t, uniqueStatesIsNull)
 		})
 
 		t.Run("AllArgs", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
 
 			now := time.Now().UTC()
 
@@ -1213,18 +1638,18 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			})
 			require.NoError(t, err)
 			require.Equal(t, 3, job.Attempt)
-			requireEqualTime(t, now, *job.AttemptedAt)
+			require.WithinDuration(t, now, *job.AttemptedAt, bundle.driver.TimePrecision())
 			require.Equal(t, []string{"worker1", "worker2"}, job.AttemptedBy)
-			requireEqualTime(t, now, job.CreatedAt)
+			require.WithinDuration(t, now, job.CreatedAt, bundle.driver.TimePrecision())
 			require.JSONEq(t, `{"encoded": "args"}`, string(job.EncodedArgs))
 			require.Equal(t, "message", job.Errors[0].Error)
-			requireEqualTime(t, now, *job.FinalizedAt)
+			require.WithinDuration(t, now, *job.FinalizedAt, bundle.driver.TimePrecision())
 			require.Equal(t, "test_kind", job.Kind)
 			require.Equal(t, 6, job.MaxAttempts)
 			require.JSONEq(t, `{"meta": "data"}`, string(job.Metadata))
 			require.Equal(t, 2, job.Priority)
 			require.Equal(t, "queue_name", job.Queue)
-			requireEqualTime(t, now, job.ScheduledAt)
+			require.WithinDuration(t, now, job.ScheduledAt, bundle.driver.TimePrecision())
 			require.Equal(t, rivertype.JobStateCompleted, job.State)
 			require.Equal(t, []string{"tag"}, job.Tags)
 			require.Equal(t, []byte("unique-key"), job.UniqueKey)
@@ -1246,6 +1671,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 					t.Parallel()
 
 					exec, _ := setup(ctx, t)
+
 					// Create a job with the target state but without a finalized_at,
 					// expect an error:
 					params := testfactory.Job_Build(t, &testfactory.JobOpts{
@@ -1253,7 +1679,9 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 					})
 					params.FinalizedAt = nil
 					_, err := exec.JobInsertFull(ctx, params)
-					require.ErrorContains(t, err, "violates check constraint \"finalized_or_finalized_at_null\"")
+					require.Error(t, err)
+					// two separate error messages here for Postgres and SQLite
+					require.Regexp(t, `(CHECK constraint failed: finalized_or_finalized_at_null|violates check constraint "finalized_or_finalized_at_null")`, err.Error())
 				})
 
 				t.Run(fmt.Sprintf("CanSetState%sWithFinalizedAt", capitalizeJobState(state)), func(t *testing.T) {
@@ -1301,7 +1729,9 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 						FinalizedAt: ptrutil.Ptr(time.Now()),
 						State:       &state,
 					}))
-					require.ErrorContains(t, err, "violates check constraint \"finalized_or_finalized_at_null\"")
+					require.Error(t, err)
+					// two separate error messages here for Postgres and SQLite
+					require.Regexp(t, `(CHECK constraint failed: finalized_or_finalized_at_null|violates check constraint "finalized_or_finalized_at_null")`, err.Error())
 				})
 			}
 		})
@@ -1311,6 +1741,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		t.Parallel()
 
 		t.Run("ListsJobs", func(t *testing.T) {
+			t.Parallel()
+
 			exec, _ := setup(ctx, t)
 
 			now := time.Now().UTC()
@@ -1363,6 +1795,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		})
 
 		t.Run("HandlesRequiredArgumentTypes", func(t *testing.T) {
+			t.Parallel()
+
 			exec, _ := setup(ctx, t)
 
 			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind1")})
@@ -1382,9 +1816,9 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			{
 				fetchedJobs, err := exec.JobList(ctx, &riverdriver.JobListParams{
 					Max:           100,
-					NamedArgs:     map[string]any{"kind": []string{job1.Kind, job2.Kind}},
+					NamedArgs:     map[string]any{"list_arg_00": job1.Kind, "list_arg_01": job2.Kind},
 					OrderByClause: "id",
-					WhereClause:   "kind = any(@kind::text[])",
+					WhereClause:   "kind IN (@list_arg_00, @list_arg_01)",
 				})
 				require.NoError(t, err)
 				require.Len(t, fetchedJobs, 2)
@@ -1395,7 +1829,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	t.Run("JobRescueMany", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		exec, bundle := setup(ctx, t)
 
 		now := time.Now().UTC()
 
@@ -1411,14 +1845,15 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				[]byte(`{"error": "message1"}`),
 				[]byte(`{"error": "message2"}`),
 			},
-			FinalizedAt: []time.Time{
-				{},
-				now,
+			FinalizedAt: []*time.Time{
+				nil,
+				&now,
 			},
 			ScheduledAt: []time.Time{
 				now,
 				now,
 			},
+
 			State: []string{
 				string(rivertype.JobStateAvailable),
 				string(rivertype.JobStateDiscarded),
@@ -1426,18 +1861,18 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		})
 		require.NoError(t, err)
 
-		updatedJob1, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: ""})
+		updatedJob1, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID})
 		require.NoError(t, err)
 		require.Equal(t, "message1", updatedJob1.Errors[0].Error)
 		require.Nil(t, updatedJob1.FinalizedAt)
-		requireEqualTime(t, now, updatedJob1.ScheduledAt)
+		require.WithinDuration(t, now, updatedJob1.ScheduledAt, bundle.driver.TimePrecision())
 		require.Equal(t, rivertype.JobStateAvailable, updatedJob1.State)
 
-		updatedJob2, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: ""})
+		updatedJob2, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID})
 		require.NoError(t, err)
 		require.Equal(t, "message2", updatedJob2.Errors[0].Error)
-		requireEqualTime(t, now, *updatedJob2.FinalizedAt)
-		requireEqualTime(t, now, updatedJob2.ScheduledAt)
+		require.WithinDuration(t, now, *updatedJob2.FinalizedAt, bundle.driver.TimePrecision())
+		require.WithinDuration(t, now, updatedJob2.ScheduledAt, bundle.driver.TimePrecision())
 		require.Equal(t, rivertype.JobStateDiscarded, updatedJob2.State)
 	})
 
@@ -1454,14 +1889,13 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			})
 
 			jobAfter, err := exec.JobRetry(ctx, &riverdriver.JobRetryParams{
-				ID:     job.ID,
-				Schema: "",
+				ID: job.ID,
 			})
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateRunning, jobAfter.State)
 			require.WithinDuration(t, job.ScheduledAt, jobAfter.ScheduledAt, time.Microsecond)
 
-			jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
+			jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateRunning, jobUpdated.State)
 		})
@@ -1478,7 +1912,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			t.Run(fmt.Sprintf("UpdatesA_%s_JobToBeScheduledImmediately", state), func(t *testing.T) {
 				t.Parallel()
 
-				exec, _ := setup(ctx, t)
+				exec, bundle := setup(ctx, t)
 
 				now := time.Now().UTC()
 
@@ -1500,14 +1934,14 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				})
 
 				jobAfter, err := exec.JobRetry(ctx, &riverdriver.JobRetryParams{
-					ID:     job.ID,
-					Schema: "",
+					ID:  job.ID,
+					Now: &now,
 				})
 				require.NoError(t, err)
 				require.Equal(t, rivertype.JobStateAvailable, jobAfter.State)
-				require.WithinDuration(t, time.Now().UTC(), jobAfter.ScheduledAt, 250*time.Millisecond) // TODO: Bad clock-based test
+				require.WithinDuration(t, now, jobAfter.ScheduledAt, bundle.driver.TimePrecision())
 
-				jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
+				jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
 				require.NoError(t, err)
 				require.Equal(t, rivertype.JobStateAvailable, jobUpdated.State)
 				require.Nil(t, jobUpdated.FinalizedAt)
@@ -1533,8 +1967,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			})
 
 			jobAfter, err := exec.JobRetry(ctx, &riverdriver.JobRetryParams{
-				ID:     job.ID,
-				Schema: "",
+				ID:  job.ID,
+				Now: &now,
 			})
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateAvailable, jobAfter.State)
@@ -1555,14 +1989,14 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			})
 
 			jobAfter, err := exec.JobRetry(ctx, &riverdriver.JobRetryParams{
-				ID:     job.ID,
-				Schema: "",
+				ID:  job.ID,
+				Now: &now,
 			})
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateAvailable, jobAfter.State)
 			require.WithinDuration(t, job.ScheduledAt, jobAfter.ScheduledAt, time.Microsecond)
 
-			jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
+			jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateAvailable, jobUpdated.State)
 		})
@@ -1573,8 +2007,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			exec, _ := setup(ctx, t)
 
 			_, err := exec.JobRetry(ctx, &riverdriver.JobRetryParams{
-				ID:     0,
-				Schema: "",
+				ID: 0,
 			})
 			require.Error(t, err)
 			require.ErrorIs(t, err, rivertype.ErrNotFound)
@@ -1609,28 +2042,34 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			// First two scheduled because of limit.
 			result, err := exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
 				Max: 2,
-				Now: horizon,
+				Now: &horizon,
 			})
 			require.NoError(t, err)
 			require.Len(t, result, 2)
+			require.Equal(t, job1.ID, result[0].Job.ID)
+			require.False(t, result[0].ConflictDiscarded)
+			require.Equal(t, job2.ID, result[1].Job.ID)
+			require.False(t, result[1].ConflictDiscarded)
 
 			// And then job3 scheduled.
 			result, err = exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
 				Max: 2,
-				Now: horizon,
+				Now: &horizon,
 			})
 			require.NoError(t, err)
 			require.Len(t, result, 1)
+			require.Equal(t, job3.ID, result[0].Job.ID)
+			require.False(t, result[0].ConflictDiscarded)
 
-			updatedJob1, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: ""})
+			updatedJob1, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID})
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateAvailable, updatedJob1.State)
 
-			updatedJob2, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: ""})
+			updatedJob2, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID})
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateAvailable, updatedJob2.State)
 
-			updatedJob3, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job3.ID, Schema: ""})
+			updatedJob3, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job3.ID})
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateAvailable, updatedJob3.State)
 		})
@@ -1700,22 +2139,22 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			result, err := exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
 				Max: 100,
-				Now: horizon,
+				Now: &horizon,
 			})
 			require.NoError(t, err)
 			require.Len(t, result, 3)
 
-			updatedJob1, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: ""})
+			updatedJob1, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID})
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateDiscarded, updatedJob1.State)
 			require.Equal(t, "scheduler_discarded", gjson.GetBytes(updatedJob1.Metadata, "unique_key_conflict").String())
 
-			updatedJob2, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: ""})
+			updatedJob2, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID})
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateAvailable, updatedJob2.State)
 			require.False(t, gjson.GetBytes(updatedJob2.Metadata, "unique_key_conflict").Exists())
 
-			updatedJob3, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job3.ID, Schema: ""})
+			updatedJob3, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job3.ID})
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateAvailable, updatedJob3.State)
 			require.False(t, gjson.GetBytes(updatedJob3.Metadata, "unique_key_conflict").Exists())
@@ -1754,17 +2193,17 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			result, err := exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
 				Max: 100,
-				Now: horizon,
+				Now: &horizon,
 			})
 			require.NoError(t, err)
 			require.Len(t, result, 2)
 
-			updatedJob1, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: ""})
+			updatedJob1, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID})
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateAvailable, updatedJob1.State)
 			require.False(t, gjson.GetBytes(updatedJob1.Metadata, "unique_key_conflict").Exists())
 
-			updatedJob2, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: ""})
+			updatedJob2, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID})
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateDiscarded, updatedJob2.State)
 			require.Equal(t, "scheduler_discarded", gjson.GetBytes(updatedJob2.Metadata, "unique_key_conflict").String())
@@ -1885,6 +2324,18 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			jobAfter := jobsAfter[0]
 			require.Equal(t, rivertype.JobStateCompleted, jobAfter.State)
 			require.JSONEq(t, `{"a":"b", "foo":"bar", "something":"else"}`, string(jobAfter.Metadata))
+		})
+
+		t.Run("UnknownJobIgnored", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			// The operation doesn't return anything like a "not found" in case
+			// of an unknown job so that it doesn't fail in case a job is
+			// deleted in the interim as a completer is trying to finalize it.
+			_, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateCompleted(0, time.Now().UTC(), nil)))
+			require.NoError(t, err)
 		})
 	})
 
@@ -2187,37 +2638,66 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	t.Run("JobUpdate", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		t.Run("AllArgs", func(t *testing.T) {
+			t.Parallel()
 
-		job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+			exec, bundle := setup(ctx, t)
 
-		now := time.Now().UTC()
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
 
-		updatedJob, err := exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
-			ID:                  job.ID,
-			AttemptDoUpdate:     true,
-			Attempt:             7,
-			AttemptedAtDoUpdate: true,
-			AttemptedAt:         &now,
-			AttemptedByDoUpdate: true,
-			AttemptedBy:         []string{"worker1"},
-			ErrorsDoUpdate:      true,
-			Errors:              [][]byte{[]byte(`{"error":"message"}`)},
-			FinalizedAtDoUpdate: true,
-			FinalizedAt:         &now,
-			StateDoUpdate:       true,
-			State:               rivertype.JobStateDiscarded,
+			now := time.Now().UTC()
+
+			updatedJob, err := exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+				ID:                  job.ID,
+				AttemptDoUpdate:     true,
+				Attempt:             7,
+				AttemptedAtDoUpdate: true,
+				AttemptedAt:         &now,
+				AttemptedByDoUpdate: true,
+				AttemptedBy:         []string{"worker1"},
+				ErrorsDoUpdate:      true,
+				Errors:              [][]byte{[]byte(`{"error":"message"}`)},
+				FinalizedAtDoUpdate: true,
+				FinalizedAt:         &now,
+				StateDoUpdate:       true,
+				State:               rivertype.JobStateDiscarded,
+			})
+			require.NoError(t, err)
+			require.Equal(t, 7, updatedJob.Attempt)
+			require.WithinDuration(t, now, *updatedJob.AttemptedAt, bundle.driver.TimePrecision())
+			require.Equal(t, []string{"worker1"}, updatedJob.AttemptedBy)
+			require.Equal(t, "message", updatedJob.Errors[0].Error)
+			require.WithinDuration(t, now, *updatedJob.FinalizedAt, bundle.driver.TimePrecision())
+			require.Equal(t, rivertype.JobStateDiscarded, updatedJob.State)
 		})
-		require.NoError(t, err)
-		require.Equal(t, 7, updatedJob.Attempt)
-		requireEqualTime(t, now, *updatedJob.AttemptedAt)
-		require.Equal(t, []string{"worker1"}, updatedJob.AttemptedBy)
-		require.Equal(t, "message", updatedJob.Errors[0].Error)
-		requireEqualTime(t, now, *updatedJob.FinalizedAt)
-		require.Equal(t, rivertype.JobStateDiscarded, updatedJob.State)
+
+		t.Run("NoArgs", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+
+			updatedJob, err := exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+				ID: job.ID,
+			})
+			require.NoError(t, err)
+			require.Equal(t, job.Attempt, updatedJob.Attempt)
+			require.Nil(t, updatedJob.AttemptedAt)
+			require.Empty(t, updatedJob.AttemptedBy)
+			require.Empty(t, updatedJob.Errors)
+			require.Nil(t, updatedJob.FinalizedAt)
+			require.Equal(t, job.State, updatedJob.State)
+		})
 	})
 
 	const leaderTTL = 10 * time.Second
+
+	// For use in test cases whera non-clock "now" is _not_ injected. This can
+	// normally be very tight, but we see huge variance especially in GitHub
+	// Actions, and given it's really not necessary to assert that this is
+	// anything except within reasonable recent history, it's okay if it's big.
+	const veryGenerousTimeCompareTolerance = 5 * time.Minute
 
 	t.Run("LeaderAttemptElect", func(t *testing.T) {
 		t.Parallel()
@@ -2225,25 +2705,22 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		t.Run("ElectsLeader", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
 
-			now := time.Now()
+			now := time.Now().UTC()
 
 			elected, err := exec.LeaderAttemptElect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: clientID,
 				Now:      &now,
-				Schema:   "",
 				TTL:      leaderTTL,
 			})
 			require.NoError(t, err)
 			require.True(t, elected) // won election
 
-			leader, err := exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{
-				Schema: "",
-			})
+			leader, err := exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{})
 			require.NoError(t, err)
-			require.WithinDuration(t, now, leader.ElectedAt, time.Microsecond)
-			require.WithinDuration(t, now.Add(leaderTTL), leader.ExpiresAt, time.Microsecond)
+			require.WithinDuration(t, now, leader.ElectedAt, bundle.driver.TimePrecision())
+			require.WithinDuration(t, now.Add(leaderTTL), leader.ExpiresAt, bundle.driver.TimePrecision())
 		})
 
 		t.Run("CannotElectTwiceInARow", func(t *testing.T) {
@@ -2253,12 +2730,10 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 				LeaderID: ptrutil.Ptr(clientID),
-				Schema:   "",
 			})
 
 			elected, err := exec.LeaderAttemptElect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: "different-client-id",
-				Schema:   "",
 				TTL:      leaderTTL,
 			})
 			require.NoError(t, err)
@@ -2267,11 +2742,27 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			// The time should not have changed because we specified that we were not
 			// already elected, and the elect query is a no-op if there's already a
 			// updatedLeader:
-			updatedLeader, err := exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{
-				Schema: "",
-			})
+			updatedLeader, err := exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{})
 			require.NoError(t, err)
 			require.Equal(t, leader.ExpiresAt, updatedLeader.ExpiresAt)
+		})
+
+		t.Run("WithoutNow", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			elected, err := exec.LeaderAttemptElect(ctx, &riverdriver.LeaderElectParams{
+				LeaderID: clientID,
+				TTL:      leaderTTL,
+			})
+			require.NoError(t, err)
+			require.True(t, elected) // won election
+
+			leader, err := exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{})
+			require.NoError(t, err)
+			require.WithinDuration(t, time.Now(), leader.ElectedAt, veryGenerousTimeCompareTolerance)
+			require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, veryGenerousTimeCompareTolerance)
 		})
 	})
 
@@ -2281,25 +2772,22 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		t.Run("ElectsLeader", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
 
-			now := time.Now()
+			now := time.Now().UTC()
 
 			elected, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: clientID,
 				Now:      &now,
-				Schema:   "",
 				TTL:      leaderTTL,
 			})
 			require.NoError(t, err)
 			require.True(t, elected) // won election
 
-			leader, err := exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{
-				Schema: "",
-			})
+			leader, err := exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{})
 			require.NoError(t, err)
-			require.WithinDuration(t, now, leader.ElectedAt, time.Microsecond)
-			require.WithinDuration(t, now.Add(leaderTTL), leader.ExpiresAt, time.Microsecond)
+			require.WithinDuration(t, now, leader.ElectedAt, bundle.driver.TimePrecision())
+			require.WithinDuration(t, now.Add(leaderTTL), leader.ExpiresAt, bundle.driver.TimePrecision())
 		})
 
 		t.Run("ReelectsSameLeader", func(t *testing.T) {
@@ -2309,7 +2797,6 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 				LeaderID: ptrutil.Ptr(clientID),
-				Schema:   "",
 			})
 
 			// Re-elect the same leader. Use a larger TTL to see if time is updated,
@@ -2317,7 +2804,6 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			// the transaction.
 			elected, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: clientID,
-				Schema:   "",
 				TTL:      30 * time.Second,
 			})
 			require.NoError(t, err)
@@ -2325,11 +2811,50 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			// expires_at should be incremented because this is the same leader that won
 			// previously and we specified that we're already elected:
-			updatedLeader, err := exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{
-				Schema: "",
-			})
+			updatedLeader, err := exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{})
 			require.NoError(t, err)
 			require.Greater(t, updatedLeader.ExpiresAt, leader.ExpiresAt)
+		})
+
+		t.Run("DoesNotReelectDifferentLeader", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
+				LeaderID: ptrutil.Ptr(clientID),
+			})
+
+			elected, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderElectParams{
+				LeaderID: "different-client",
+				TTL:      30 * time.Second,
+			})
+			require.NoError(t, err)
+			require.False(t, elected) // did not win re-election
+
+			// expires_at should be incremented because this is the same leader that won
+			// previously and we specified that we're already elected:
+			updatedLeader, err := exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{})
+			require.NoError(t, err)
+			require.Equal(t, leader.LeaderID, updatedLeader.LeaderID)
+		})
+
+		t.Run("WithoutNow", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			elected, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderElectParams{
+				LeaderID: clientID,
+				TTL:      leaderTTL,
+			})
+			require.NoError(t, err)
+			require.True(t, elected) // won election
+
+			leader, err := exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{})
+			require.NoError(t, err)
+			require.WithinDuration(t, time.Now(), leader.ElectedAt, veryGenerousTimeCompareTolerance)
+			require.WithinDuration(t, time.Now().Add(leaderTTL), leader.ExpiresAt, veryGenerousTimeCompareTolerance)
 		})
 	})
 
@@ -2344,9 +2869,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			now := time.Now().UTC()
 
 			{
-				numDeleted, err := exec.LeaderDeleteExpired(ctx, &riverdriver.LeaderDeleteExpiredParams{
-					Schema: "",
-				})
+				numDeleted, err := exec.LeaderDeleteExpired(ctx, &riverdriver.LeaderDeleteExpiredParams{})
 				require.NoError(t, err)
 				require.Zero(t, numDeleted)
 			}
@@ -2355,13 +2878,10 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				ElectedAt: ptrutil.Ptr(now.Add(-2 * time.Hour)),
 				ExpiresAt: ptrutil.Ptr(now.Add(-1 * time.Hour)),
 				LeaderID:  ptrutil.Ptr(clientID),
-				Schema:    "",
 			})
 
 			{
-				numDeleted, err := exec.LeaderDeleteExpired(ctx, &riverdriver.LeaderDeleteExpiredParams{
-					Schema: "",
-				})
+				numDeleted, err := exec.LeaderDeleteExpired(ctx, &riverdriver.LeaderDeleteExpiredParams{})
 				require.NoError(t, err)
 				require.Equal(t, 1, numDeleted)
 			}
@@ -2379,12 +2899,10 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				ElectedAt: ptrutil.Ptr(now.Add(1 * time.Hour)),
 				ExpiresAt: ptrutil.Ptr(now.Add(2 * time.Hour)),
 				LeaderID:  ptrutil.Ptr(clientID),
-				Schema:    "",
 			})
 
 			numDeleted, err := exec.LeaderDeleteExpired(ctx, &riverdriver.LeaderDeleteExpiredParams{
-				Now:    ptrutil.Ptr(now.Add(2*time.Hour + 1*time.Second)),
-				Schema: "",
+				Now: ptrutil.Ptr(now.Add(2*time.Hour + 1*time.Second)),
 			})
 			require.NoError(t, err)
 			require.Equal(t, 1, numDeleted)
@@ -2394,41 +2912,65 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	t.Run("LeaderInsert", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		t.Run("InsertsLeader", func(t *testing.T) {
+			exec, bundle := setup(ctx, t)
 
-		now := time.Now()
+			var (
+				now       = time.Now().UTC()
+				electedAt = now.Add(1 * time.Second)
+				expiresAt = now.Add(4*time.Hour + 3*time.Minute + 2*time.Second)
+			)
 
-		leader, err := exec.LeaderInsert(ctx, &riverdriver.LeaderInsertParams{
-			LeaderID: clientID,
-			Now:      &now,
-			Schema:   "",
-			TTL:      leaderTTL,
+			leader, err := exec.LeaderInsert(ctx, &riverdriver.LeaderInsertParams{
+				ElectedAt: &electedAt,
+				ExpiresAt: &expiresAt,
+				LeaderID:  clientID,
+				TTL:       leaderTTL,
+			})
+			require.NoError(t, err)
+			require.WithinDuration(t, electedAt, leader.ElectedAt, bundle.driver.TimePrecision())
+			require.WithinDuration(t, expiresAt, leader.ExpiresAt, bundle.driver.TimePrecision())
+			require.Equal(t, clientID, leader.LeaderID)
 		})
-		require.NoError(t, err)
-		require.WithinDuration(t, now, leader.ElectedAt, time.Microsecond)
-		require.WithinDuration(t, now.Add(leaderTTL), leader.ExpiresAt, time.Microsecond)
-		require.Equal(t, clientID, leader.LeaderID)
+
+		t.Run("WithNow", func(t *testing.T) {
+			exec, bundle := setup(ctx, t)
+
+			now := time.Now().UTC().Add(-1 * time.Minute) // subtract a minute to make sure it'not coincidentally working using wall time
+
+			leader, err := exec.LeaderInsert(ctx, &riverdriver.LeaderInsertParams{
+				LeaderID: clientID,
+				Now:      &now,
+				TTL:      leaderTTL,
+			})
+			require.NoError(t, err)
+			require.WithinDuration(t, now, leader.ElectedAt, bundle.driver.TimePrecision())
+			require.WithinDuration(t, now.Add(leaderTTL), leader.ExpiresAt, bundle.driver.TimePrecision())
+			require.Equal(t, clientID, leader.LeaderID)
+		})
 	})
 
 	t.Run("LeaderGetElectedLeader", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		exec, bundle := setup(ctx, t)
 
-		now := time.Now()
+		now := time.Now().UTC()
 
-		_ = testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
+		leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 			LeaderID: ptrutil.Ptr(clientID),
 			Now:      &now,
-			Schema:   "",
 		})
 
-		leader, err := exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{
-			Schema: "",
-		})
+		// TODO(brandur): Remove
+		t.Logf("now         = %s", now)
+		t.Logf("elected at  = %s", leader.ElectedAt)
+		t.Logf("expires at  = %s", leader.ExpiresAt)
+
+		leader, err := exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{})
 		require.NoError(t, err)
-		require.WithinDuration(t, now, leader.ElectedAt, time.Microsecond)
-		require.WithinDuration(t, now.Add(leaderTTL), leader.ExpiresAt, time.Microsecond)
+		require.WithinDuration(t, now, leader.ElectedAt, bundle.driver.TimePrecision())
+		require.WithinDuration(t, now.Add(leaderTTL), leader.ExpiresAt, bundle.driver.TimePrecision())
 		require.Equal(t, clientID, leader.LeaderID)
 	})
 
@@ -2444,7 +2986,6 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				resigned, err := exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
 					LeaderID:        clientID,
 					LeadershipTopic: string(notifier.NotificationTopicLeadership),
-					Schema:          "",
 				})
 				require.NoError(t, err)
 				require.False(t, resigned)
@@ -2452,14 +2993,12 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			_ = testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 				LeaderID: ptrutil.Ptr(clientID),
-				Schema:   "",
 			})
 
 			{
 				resigned, err := exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
 					LeaderID:        clientID,
 					LeadershipTopic: string(notifier.NotificationTopicLeadership),
-					Schema:          "",
 				})
 				require.NoError(t, err)
 				require.True(t, resigned)
@@ -2473,47 +3012,52 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			_ = testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 				LeaderID: ptrutil.Ptr("other-client-id"),
-				Schema:   "",
 			})
 
 			resigned, err := exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
 				LeaderID:        clientID,
 				LeadershipTopic: string(notifier.NotificationTopicLeadership),
-				Schema:          "",
 			})
 			require.NoError(t, err)
 			require.False(t, resigned)
 		})
 	})
 
-	// Truncates the migration table so we only have to work with test
-	// migration data.
-	truncateMigrations := func(ctx context.Context, t *testing.T, exec riverdriver.Executor) {
-		t.Helper()
-
-		_, err := exec.Exec(ctx, "TRUNCATE TABLE river_migration")
-		require.NoError(t, err)
-	}
-
 	t.Run("MigrationDeleteAssumingMainMany", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		// Use dedicated schema instead of test transaction because SQLite
+		// doesn't support transaction DDL.
+		var (
+			driver, schema = driverWithSchema(ctx, t, &riverdbtest.TestSchemaOpts{
+				LineTargetVersions: map[string]int{
+					riverdriver.MigrationLineMain: 4,
+				},
+			})
+			exec = driver.GetExecutor()
+		)
 
-		truncateMigrations(ctx, t, exec)
+		// Truncates the migration table so we only have to work with test
+		// migration data.
+		require.NoError(t, exec.TableTruncate(ctx, &riverdriver.TableTruncateParams{Schema: schema, Table: []string{"river_migration"}}))
 
-		migration1 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
-		migration2 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
-
-		// This query is designed to work before the `line` column was added to
-		// the `river_migration` table. These tests will be operating on a fully
-		// migrated database, so drop the column in this transaction to make
-		// sure we are really checking that this operation works as expected.
-		_, err := exec.Exec(ctx, "ALTER TABLE river_migration DROP COLUMN line")
-		require.NoError(t, err)
+		// Doesn't use testfactory because we're using an old schema version.
+		var (
+			migration1 *riverdriver.Migration
+			migration2 *riverdriver.Migration
+		)
+		{
+			migrations, err := exec.MigrationInsertManyAssumingMain(ctx, &riverdriver.MigrationInsertManyAssumingMainParams{
+				Schema:   schema,
+				Versions: []int{1, 2},
+			})
+			require.NoError(t, err)
+			migration1 = migrations[0]
+			migration2 = migrations[1]
+		}
 
 		migrations, err := exec.MigrationDeleteAssumingMainMany(ctx, &riverdriver.MigrationDeleteAssumingMainManyParams{
-			Schema: "",
+			Schema: schema,
 			Versions: []int{
 				migration1.Version,
 				migration2.Version,
@@ -2533,7 +3077,9 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 		exec, _ := setup(ctx, t)
 
-		truncateMigrations(ctx, t, exec)
+		// Truncates the migration table so we only have to work with test
+		// migration data.
+		require.NoError(t, exec.TableTruncate(ctx, &riverdriver.TableTruncateParams{Table: []string{"river_migration"}}))
 
 		// not touched
 		_ = testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
@@ -2542,8 +3088,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		migration2 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{Line: ptrutil.Ptr("alternate")})
 
 		migrations, err := exec.MigrationDeleteByLineAndVersionMany(ctx, &riverdriver.MigrationDeleteByLineAndVersionManyParams{
-			Line:   "alternate",
-			Schema: "",
+			Line: "alternate",
+
 			Versions: []int{
 				migration1.Version,
 				migration2.Version,
@@ -2561,22 +3107,38 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	t.Run("MigrationGetAllAssumingMain", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		// Use dedicated schema instead of test transaction because SQLite
+		// doesn't support transaction DDL.
+		var (
+			driver, schema = driverWithSchema(ctx, t, &riverdbtest.TestSchemaOpts{
+				LineTargetVersions: map[string]int{
+					riverdriver.MigrationLineMain: 4,
+				},
+			})
+			exec = driver.GetExecutor()
+		)
 
-		truncateMigrations(ctx, t, exec)
+		// Truncates the migration table so we only have to work with test
+		// migration data.
+		require.NoError(t, exec.TableTruncate(ctx, &riverdriver.TableTruncateParams{Schema: schema, Table: []string{"river_migration"}}))
 
-		migration1 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
-		migration2 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
-
-		// This query is designed to work before the `line` column was added to
-		// the `river_migration` table. These tests will be operating on a fully
-		// migrated database, so drop the column in this transaction to make
-		// sure we are really checking that this operation works as expected.
-		_, err := exec.Exec(ctx, "ALTER TABLE river_migration DROP COLUMN line")
-		require.NoError(t, err)
+		// Doesn't use testfactory because we're using an old schema version.
+		var (
+			migration1 *riverdriver.Migration
+			migration2 *riverdriver.Migration
+		)
+		{
+			migrations, err := exec.MigrationInsertManyAssumingMain(ctx, &riverdriver.MigrationInsertManyAssumingMainParams{
+				Schema:   schema,
+				Versions: []int{1, 2},
+			})
+			require.NoError(t, err)
+			migration1 = migrations[0]
+			migration2 = migrations[1]
+		}
 
 		migrations, err := exec.MigrationGetAllAssumingMain(ctx, &riverdriver.MigrationGetAllAssumingMainParams{
-			Schema: "",
+			Schema: schema,
 		})
 		require.NoError(t, err)
 		require.Len(t, migrations, 2)
@@ -2585,7 +3147,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 		// Check the full properties of one of the migrations.
 		migration1Fetched := migrations[0]
-		requireEqualTime(t, migration1.CreatedAt, migration1Fetched.CreatedAt)
+		require.WithinDuration(t, migration1.CreatedAt, migration1Fetched.CreatedAt, driver.TimePrecision())
 		require.Equal(t, riverdriver.MigrationLineMain, migration1Fetched.Line)
 		require.Equal(t, migration1.Version, migration1Fetched.Version)
 	})
@@ -2593,9 +3155,11 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	t.Run("MigrationGetByLine", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		exec, bundle := setup(ctx, t)
 
-		truncateMigrations(ctx, t, exec)
+		// Truncates the migration table so we only have to work with test
+		// migration data.
+		require.NoError(t, exec.TableTruncate(ctx, &riverdriver.TableTruncateParams{Table: []string{"river_migration"}}))
 
 		// not returned
 		_ = testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
@@ -2604,8 +3168,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		migration2 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{Line: ptrutil.Ptr("alternate")})
 
 		migrations, err := exec.MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
-			Line:   "alternate",
-			Schema: "",
+			Line: "alternate",
 		})
 		require.NoError(t, err)
 		require.Len(t, migrations, 2)
@@ -2614,7 +3177,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 		// Check the full properties of one of the migrations.
 		migration1Fetched := migrations[0]
-		requireEqualTime(t, migration1.CreatedAt, migration1Fetched.CreatedAt)
+		require.WithinDuration(t, migration1.CreatedAt, migration1Fetched.CreatedAt, bundle.driver.TimePrecision())
 		require.Equal(t, "alternate", migration1Fetched.Line)
 		require.Equal(t, migration1.Version, migration1Fetched.Version)
 	})
@@ -2624,7 +3187,9 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 		exec, _ := setup(ctx, t)
 
-		truncateMigrations(ctx, t, exec)
+		// Truncates the migration table so we only have to work with test
+		// migration data.
+		require.NoError(t, exec.TableTruncate(ctx, &riverdriver.TableTruncateParams{Table: []string{"river_migration"}}))
 
 		migrations, err := exec.MigrationInsertMany(ctx, &riverdriver.MigrationInsertManyParams{
 			Line:     "alternate",
@@ -2641,19 +3206,23 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	t.Run("MigrationInsertManyAssumingMain", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		// Use dedicated schema instead of test transaction because SQLite
+		// doesn't support transaction DDL.
+		var (
+			driver, schema = driverWithSchema(ctx, t, &riverdbtest.TestSchemaOpts{
+				LineTargetVersions: map[string]int{
+					riverdriver.MigrationLineMain: 4,
+				},
+			})
+			exec = driver.GetExecutor()
+		)
 
-		truncateMigrations(ctx, t, exec)
-
-		// This query is designed to work before the `line` column was added to
-		// the `river_migration` table. These tests will be operating on a fully
-		// migrated database, so drop the column in this transaction to make
-		// sure we are really checking that this operation works as expected.
-		_, err := exec.Exec(ctx, "ALTER TABLE river_migration DROP COLUMN line")
-		require.NoError(t, err)
+		// Truncates the migration table so we only have to work with test
+		// migration data.
+		require.NoError(t, exec.TableTruncate(ctx, &riverdriver.TableTruncateParams{Schema: schema, Table: []string{"river_migration"}}))
 
 		migrations, err := exec.MigrationInsertManyAssumingMain(ctx, &riverdriver.MigrationInsertManyAssumingMainParams{
-			Schema:   "",
+			Schema:   schema,
 			Versions: []int{1, 2},
 		})
 
@@ -2671,29 +3240,24 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		exec, _ := setup(ctx, t)
 
 		exists, err := exec.TableExists(ctx, &riverdriver.TableExistsParams{
-			Schema: "",
-			Table:  "river_job",
+			Table: "river_migration",
 		})
 		require.NoError(t, err)
 		require.True(t, exists)
 
 		exists, err = exec.TableExists(ctx, &riverdriver.TableExistsParams{
-			Schema: "",
-			Table:  "does_not_exist",
+			Table: "does_not_exist",
 		})
 		require.NoError(t, err)
 		require.False(t, exists)
 
-		// Will be rolled back by the test transaction.
-		_, err = exec.Exec(ctx, "CREATE SCHEMA another_schema_123")
-		require.NoError(t, err)
+		driver2, schema2 := driverWithSchema(ctx, t, &riverdbtest.TestSchemaOpts{
+			Lines: []string{},
+		})
 
-		_, err = exec.Exec(ctx, "SET search_path = another_schema_123")
-		require.NoError(t, err)
-
-		exists, err = exec.TableExists(ctx, &riverdriver.TableExistsParams{
-			Schema: "",
-			Table:  "river_job",
+		exists, err = driver2.GetExecutor().TableExists(ctx, &riverdriver.TableExistsParams{
+			Schema: schema2,
+			Table:  "river_migration",
 		})
 		require.NoError(t, err)
 		require.False(t, exists)
@@ -2702,14 +3266,23 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	t.Run("PGAdvisoryXactLock", func(t *testing.T) {
 		t.Parallel()
 
+		{
+			driver, _ := driverWithSchema(ctx, t, nil)
+			if driver.DatabaseName() == databaseNameSQLite {
+				t.Logf("Skipping PGAdvisoryXactLock test for SQLite")
+				return
+			}
+		}
+
 		exec, _ := setup(ctx, t)
 
 		// It's possible for multiple versions of this test to be running at the
 		// same time (from different drivers), so make sure the lock we're
-		// acquiring per test is unique by using the complete test name.
+		// acquiring per test is unique by using the complete test name. Also
+		// add randomness in case a test is run multiple times with `-count`.
 		lockHash := hashutil.NewAdvisoryLockHash(0)
 		lockHash.Write([]byte(t.Name()))
-		lockHash.Write([]byte("123456"))
+		lockHash.Write([]byte(randutil.Hex(10)))
 		key := lockHash.Key()
 
 		// Tries to acquire the given lock from another test transaction and
@@ -2730,7 +3303,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		require.NoError(t, err)
 
 		// Start another test transaction unrelated to the first.
-		otherExec := executorWithTx(ctx, t)
+		otherExec, _ := executorWithTx(ctx, t)
 
 		// The other test transaction is unable to acquire the lock because the
 		// first test transaction holds it.
@@ -2744,10 +3317,20 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	})
 
 	t.Run("QueueCreateOrSetUpdatedAt", func(t *testing.T) {
+		t.Parallel()
+
+		mustUnmarshalJSON := func(t *testing.T, data []byte) map[string]any {
+			t.Helper()
+
+			var dataMap map[string]any
+			require.NoError(t, json.Unmarshal(data, &dataMap))
+			return dataMap
+		}
+
 		t.Run("InsertsANewQueueWithDefaultUpdatedAt", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
 
 			metadata := []byte(`{"foo": "bar"}`)
 			now := time.Now().UTC()
@@ -2755,30 +3338,28 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				Metadata: metadata,
 				Name:     "new-queue",
 				Now:      &now,
-				Schema:   "",
 			})
 			require.NoError(t, err)
-			require.WithinDuration(t, now, queue.CreatedAt, time.Microsecond)
-			require.Equal(t, metadata, queue.Metadata)
+			require.WithinDuration(t, now, queue.CreatedAt, bundle.driver.TimePrecision())
+			require.JSONEq(t, string(metadata), string(queue.Metadata))
 			require.Equal(t, "new-queue", queue.Name)
 			require.Nil(t, queue.PausedAt)
-			require.WithinDuration(t, now, queue.UpdatedAt, time.Microsecond)
+			require.WithinDuration(t, now, queue.UpdatedAt, bundle.driver.TimePrecision())
 		})
 
 		t.Run("InsertsANewQueueWithCustomPausedAt", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
 
-			now := time.Now().Add(-5 * time.Minute)
+			now := time.Now().UTC().Add(-5 * time.Minute)
 			queue, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
 				Name:     "new-queue",
 				PausedAt: ptrutil.Ptr(now),
-				Schema:   "",
 			})
 			require.NoError(t, err)
 			require.Equal(t, "new-queue", queue.Name)
-			require.WithinDuration(t, now, *queue.PausedAt, time.Millisecond)
+			require.WithinDuration(t, now, *queue.PausedAt, bundle.driver.TimePrecision())
 		})
 
 		t.Run("UpdatesTheUpdatedAtOfExistingQueue", func(t *testing.T) {
@@ -2791,7 +3372,6 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			queueBefore, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
 				Metadata:  metadata,
 				Name:      "updatable-queue",
-				Schema:    "",
 				UpdatedAt: &tBefore,
 			})
 			require.NoError(t, err)
@@ -2801,14 +3381,13 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			queueAfter, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
 				Metadata:  []byte(`{"other": "metadata"}`),
 				Name:      "updatable-queue",
-				Schema:    "",
 				UpdatedAt: &tAfter,
 			})
 			require.NoError(t, err)
 
 			// unchanged:
 			require.Equal(t, queueBefore.CreatedAt, queueAfter.CreatedAt)
-			require.Equal(t, metadata, queueAfter.Metadata)
+			require.Equal(t, mustUnmarshalJSON(t, metadata), mustUnmarshalJSON(t, queueAfter.Metadata))
 			require.Equal(t, "updatable-queue", queueAfter.Name)
 			require.Nil(t, queueAfter.PausedAt)
 
@@ -2846,25 +3425,23 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	t.Run("QueueGet", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		exec, bundle := setup(ctx, t)
 
 		queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`)})
 
 		queueFetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
-			Name:   queue.Name,
-			Schema: "",
+			Name: queue.Name,
 		})
 		require.NoError(t, err)
 
-		require.WithinDuration(t, queue.CreatedAt, queueFetched.CreatedAt, time.Millisecond)
+		require.WithinDuration(t, queue.CreatedAt, queueFetched.CreatedAt, bundle.driver.TimePrecision())
 		require.Equal(t, queue.Metadata, queueFetched.Metadata)
 		require.Equal(t, queue.Name, queueFetched.Name)
 		require.Nil(t, queueFetched.PausedAt)
-		require.WithinDuration(t, queue.UpdatedAt, queueFetched.UpdatedAt, time.Millisecond)
+		require.WithinDuration(t, queue.UpdatedAt, queueFetched.UpdatedAt, bundle.driver.TimePrecision())
 
 		queueFetched, err = exec.QueueGet(ctx, &riverdriver.QueueGetParams{
-			Name:   "nonexistent-queue",
-			Schema: "",
+			Name: "nonexistent-queue",
 		})
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
 		require.Nil(t, queueFetched)
@@ -2873,24 +3450,23 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	t.Run("QueueList", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		exec, bundle := setup(ctx, t)
 
 		requireQueuesEqual := func(t *testing.T, target, actual *rivertype.Queue) {
 			t.Helper()
-			require.WithinDuration(t, target.CreatedAt, actual.CreatedAt, time.Millisecond)
+			require.WithinDuration(t, target.CreatedAt, actual.CreatedAt, bundle.driver.TimePrecision())
 			require.Equal(t, target.Metadata, actual.Metadata)
 			require.Equal(t, target.Name, actual.Name)
 			if target.PausedAt == nil {
 				require.Nil(t, actual.PausedAt)
 			} else {
 				require.NotNil(t, actual.PausedAt)
-				require.WithinDuration(t, *target.PausedAt, *actual.PausedAt, time.Millisecond)
+				require.WithinDuration(t, *target.PausedAt, *actual.PausedAt, bundle.driver.TimePrecision())
 			}
 		}
 
 		queues, err := exec.QueueList(ctx, &riverdriver.QueueListParams{
-			Limit:  10,
-			Schema: "",
+			Limit: 10,
 		})
 		require.NoError(t, err)
 		require.Empty(t, queues)
@@ -2899,12 +3475,11 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		queue1 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`), PausedAt: ptrutil.Ptr(time.Now())})
 		require.NoError(t, err)
 
-		queue2 := testfactory.Queue(ctx, t, exec, nil)
-		queue3 := testfactory.Queue(ctx, t, exec, nil)
+		queue2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{})
+		queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{})
 
 		queues, err = exec.QueueList(ctx, &riverdriver.QueueListParams{
-			Limit:  2,
-			Schema: "",
+			Limit: 2,
 		})
 		require.NoError(t, err)
 
@@ -2913,8 +3488,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		requireQueuesEqual(t, queue2, queues[1])
 
 		queues, err = exec.QueueList(ctx, &riverdriver.QueueListParams{
-			Limit:  3,
-			Schema: "",
+			Limit: 3,
 		})
 		require.NoError(t, err)
 
@@ -2928,46 +3502,50 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		t.Run("ExistingPausedQueue", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
+
+			now := time.Now().UTC().Add(-5 * time.Minute)
 
 			queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{
-				PausedAt: ptrutil.Ptr(time.Now()),
+				PausedAt:  &now,
+				UpdatedAt: &now,
 			})
 
 			require.NoError(t, exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
-				Name:   queue.Name,
-				Schema: "",
+				Name: queue.Name,
 			}))
 			queueFetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
-				Name:   queue.Name,
-				Schema: "",
+				Name: queue.Name,
 			})
 			require.NoError(t, err)
 			require.NotNil(t, queueFetched.PausedAt)
-			requireEqualTime(t, *queue.PausedAt, *queueFetched.PausedAt) // paused_at stays unchanged
-			requireEqualTime(t, queue.UpdatedAt, queueFetched.UpdatedAt) // updated_at stays unchanged
+			require.WithinDuration(t, *queue.PausedAt, *queueFetched.PausedAt, bundle.driver.TimePrecision()) // paused_at stays unchanged
+			require.WithinDuration(t, queue.UpdatedAt, queueFetched.UpdatedAt, bundle.driver.TimePrecision()) // updated_at stays unchanged
 		})
 
 		t.Run("ExistingUnpausedQueue", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
 
-			queue := testfactory.Queue(ctx, t, exec, nil)
+			now := time.Now().UTC()
+
+			queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{
+				UpdatedAt: ptrutil.Ptr(now.Add(-5 * time.Minute)),
+			})
 			require.Nil(t, queue.PausedAt)
 
 			require.NoError(t, exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
-				Name:   queue.Name,
-				Schema: "",
+				Name: queue.Name,
+				Now:  &now,
 			}))
 
 			queueFetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
-				Name:   queue.Name,
-				Schema: "",
+				Name: queue.Name,
 			})
 			require.NoError(t, err)
-			require.NotNil(t, queueFetched.PausedAt)
-			require.WithinDuration(t, time.Now(), *(queueFetched.PausedAt), 500*time.Millisecond)
+			require.WithinDuration(t, now, *queueFetched.PausedAt, bundle.driver.TimePrecision())
+			require.WithinDuration(t, now, queueFetched.UpdatedAt, bundle.driver.TimePrecision())
 		})
 
 		t.Run("NonExistentQueue", func(t *testing.T) {
@@ -2976,8 +3554,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			exec, _ := setup(ctx, t)
 
 			err := exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
-				Name:   "queue1",
-				Schema: "",
+				Name: "queue1",
 			})
 			require.ErrorIs(t, err, rivertype.ErrNotFound)
 		})
@@ -2993,23 +3570,20 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			require.Nil(t, queue2.PausedAt)
 
 			require.NoError(t, exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
-				Name:   rivercommon.AllQueuesString,
-				Schema: "",
+				Name: rivercommon.AllQueuesString,
 			}))
 
 			now := time.Now()
 
 			queue1Fetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
-				Name:   queue1.Name,
-				Schema: "",
+				Name: queue1.Name,
 			})
 			require.NoError(t, err)
 			require.NotNil(t, queue1Fetched.PausedAt)
 			require.WithinDuration(t, now, *(queue1Fetched.PausedAt), 500*time.Millisecond)
 
 			queue2Fetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
-				Name:   queue2.Name,
-				Schema: "",
+				Name: queue2.Name,
 			})
 			require.NoError(t, err)
 			require.NotNil(t, queue2Fetched.PausedAt)
@@ -3022,8 +3596,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			exec, _ := setup(ctx, t)
 
 			require.NoError(t, exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
-				Name:   rivercommon.AllQueuesString,
-				Schema: "",
+				Name: rivercommon.AllQueuesString,
 			}))
 		})
 	})
@@ -3034,44 +3607,49 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		t.Run("ExistingPausedQueue", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
+
+			now := time.Now().UTC()
 
 			queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{
-				PausedAt: ptrutil.Ptr(time.Now()),
+				PausedAt:  ptrutil.Ptr(now.Add(-5 * time.Minute)),
+				UpdatedAt: ptrutil.Ptr(now.Add(-5 * time.Minute)),
 			})
 
 			require.NoError(t, exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
-				Name:   queue.Name,
-				Schema: "",
+				Name: queue.Name,
+				Now:  &now,
 			}))
 
 			queueFetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
-				Name:   queue.Name,
-				Schema: "",
+				Name: queue.Name,
 			})
 			require.NoError(t, err)
 			require.Nil(t, queueFetched.PausedAt)
+			require.WithinDuration(t, now, queueFetched.UpdatedAt, bundle.driver.TimePrecision())
 		})
 
 		t.Run("ExistingUnpausedQueue", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
 
-			queue := testfactory.Queue(ctx, t, exec, nil)
+			now := time.Now().UTC()
+
+			queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{
+				UpdatedAt: ptrutil.Ptr(now.Add(-5 * time.Minute)),
+			})
 
 			require.NoError(t, exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
-				Name:   queue.Name,
-				Schema: "",
+				Name: queue.Name,
 			}))
 
 			queueFetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
-				Name:   queue.Name,
-				Schema: "",
+				Name: queue.Name,
 			})
 			require.NoError(t, err)
 			require.Nil(t, queueFetched.PausedAt)
-			requireEqualTime(t, queue.UpdatedAt, queueFetched.UpdatedAt) // updated_at stays unchanged
+			require.WithinDuration(t, queue.UpdatedAt, queueFetched.UpdatedAt, bundle.driver.TimePrecision()) // updated_at stays unchanged
 		})
 
 		t.Run("NonExistentQueue", func(t *testing.T) {
@@ -3080,8 +3658,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			exec, _ := setup(ctx, t)
 
 			err := exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
-				Name:   "queue1",
-				Schema: "",
+				Name: "queue1",
 			})
 			require.ErrorIs(t, err, rivertype.ErrNotFound)
 		})
@@ -3091,30 +3668,26 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			exec, _ := setup(ctx, t)
 
-			queue1 := testfactory.Queue(ctx, t, exec, nil)
+			queue1 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{})
 			require.Nil(t, queue1.PausedAt)
-			queue2 := testfactory.Queue(ctx, t, exec, nil)
+			queue2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{})
 			require.Nil(t, queue2.PausedAt)
 
 			require.NoError(t, exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
-				Name:   rivercommon.AllQueuesString,
-				Schema: "",
+				Name: rivercommon.AllQueuesString,
 			}))
 			require.NoError(t, exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
-				Name:   rivercommon.AllQueuesString,
-				Schema: "",
+				Name: rivercommon.AllQueuesString,
 			}))
 
 			queue1Fetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
-				Name:   queue1.Name,
-				Schema: "",
+				Name: queue1.Name,
 			})
 			require.NoError(t, err)
 			require.Nil(t, queue1Fetched.PausedAt)
 
 			queue2Fetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
-				Name:   queue2.Name,
-				Schema: "",
+				Name: queue2.Name,
 			})
 			require.NoError(t, err)
 			require.Nil(t, queue2Fetched.PausedAt)
@@ -3126,8 +3699,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			exec, _ := setup(ctx, t)
 
 			require.NoError(t, exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
-				Name:   rivercommon.AllQueuesString,
-				Schema: "",
+				Name: rivercommon.AllQueuesString,
 			}))
 		})
 	})
@@ -3157,6 +3729,11 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			exec, _ := setup(ctx, t)
 
 			queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`)})
+
+			var myInt int
+			err := exec.QueryRow(ctx, "SELECT 1").Scan(&myInt)
+			require.NoError(t, err)
+			require.Equal(t, 1, myInt)
 
 			updatedQueue, err := exec.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
 				Metadata:         []byte(`{"baz": "qux"}`),
@@ -3198,7 +3775,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			exec, _ := setup(ctx, t)
 
 			schemas, err := exec.SchemaGetExpired(ctx, &riverdriver.SchemaGetExpiredParams{
-				BeforeName: "zzzzzzzzzzzzzzzzzz",
+				BeforeName: "zzz",
 				Prefix:     "this_prefix_will_not_exist_",
 			})
 			require.NoError(t, err)
@@ -3208,14 +3785,64 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		t.Run("ListsSchemasBelowMarker", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			var (
+				driver1, schema1 = driverWithSchema(ctx, t, nil)
+				driver2, schema2 = driverWithSchema(ctx, t, nil)
+			)
 
-			schemas, err := exec.SchemaGetExpired(ctx, &riverdriver.SchemaGetExpiredParams{
-				BeforeName: "pg_toast",
-				Prefix:     "pg_%",
+			// This isn't super great, but we need to a little more work to get
+			// the real schema names for SQLite. SQLite schemas are normally
+			// empty because they're actually separate databases and can't be
+			// referenced with their fully qualified name. So instead, extract
+			// the name of the current database via pragma and use it as schema.
+			if driver1.DatabaseName() == databaseNameSQLite {
+				getCurrentSchema := func(exec riverdriver.Executor) string {
+					var databaseFile string
+					require.NoError(t, exec.QueryRow(ctx, "SELECT file FROM pragma_database_list WHERE name = ?1", "main").Scan(&databaseFile))
+
+					lastSlashIndex := strings.LastIndex(databaseFile, "/")
+					require.NotEqual(t, -1, lastSlashIndex)
+
+					schema, _, ok := strings.Cut(databaseFile[lastSlashIndex+1:], ".sqlite3")
+					require.True(t, ok)
+					return schema
+				}
+
+				schema1 = getCurrentSchema(driver1.GetExecutor())
+				schema2 = getCurrentSchema(driver2.GetExecutor())
+			}
+
+			// Package name packagePrefix like `river_test_`.
+			packagePrefix, _, ok := strings.Cut(schema1, time.Now().Format("_2006_"))
+			require.True(t, ok)
+
+			// With added year like `river_test_2006_`.
+			packagePrefixWithYear := packagePrefix + "_2006_"
+
+			schemas, err := driver1.GetExecutor().SchemaGetExpired(ctx, &riverdriver.SchemaGetExpiredParams{
+				BeforeName: "zzz",
+				Prefix:     time.Now().Format(packagePrefixWithYear),
 			})
 			require.NoError(t, err)
-			require.Equal(t, []string{"pg_catalog"}, schemas)
+
+			// Using "zzz" as a cursor we expect to get both the schemas that
+			// were created before it. However, because this test case may be
+			// running in parallel with many others, there may be many other
+			// test schemas that exist concurrently, so we use Contains instead
+			// of comparing against a specific list. It'd be nice to use one of
+			// the test schemas as a cursor, but this isn't possible because
+			// schemas may be reused non-determnistically, so while generally
+			// schema1 < schema2, it may be that schema1 > schema2.
+			require.Contains(t, schemas, schema1)
+			require.Contains(t, schemas, schema2)
+
+			// Fetch for a year ago which returns nothing.
+			schemas, err = driver1.GetExecutor().SchemaGetExpired(ctx, &riverdriver.SchemaGetExpiredParams{
+				BeforeName: "zzz",
+				Prefix:     time.Now().Add(-365 * 24 * time.Hour).Format(packagePrefixWithYear),
+			})
+			require.NoError(t, err)
+			require.Empty(t, schemas)
 		})
 	})
 }
@@ -3225,11 +3852,11 @@ type testListenerBundle[TTx any] struct {
 	exec   riverdriver.Executor
 }
 
-func setupListener[TTx any](ctx context.Context, t *testing.T, driverWithPool func(ctx context.Context, t *testing.T) (riverdriver.Driver[TTx], string)) (riverdriver.Listener, *testListenerBundle[TTx]) {
+func setupListener[TTx any](ctx context.Context, t *testing.T, driverWithPool func(ctx context.Context, t *testing.T, opts *riverdbtest.TestSchemaOpts) (riverdriver.Driver[TTx], string)) (riverdriver.Listener, *testListenerBundle[TTx]) {
 	t.Helper()
 
 	var (
-		driver, schema = driverWithPool(ctx, t)
+		driver, schema = driverWithPool(ctx, t, nil)
 		listener       = driver.GetListener(&riverdriver.GetListenenerParams{Schema: schema})
 	)
 
@@ -3239,7 +3866,7 @@ func setupListener[TTx any](ctx context.Context, t *testing.T, driverWithPool fu
 	}
 }
 
-func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool func(ctx context.Context, t *testing.T) (riverdriver.Driver[TTx], string)) {
+func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool func(ctx context.Context, t *testing.T, opts *riverdbtest.TestSchemaOpts) (riverdriver.Driver[TTx], string)) {
 	t.Helper()
 
 	connectListener := func(ctx context.Context, t *testing.T, listener riverdriver.Listener) {
@@ -3322,7 +3949,7 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 		t.Parallel()
 
 		var (
-			driver, _ = driverWithPool(ctx, t)
+			driver, _ = driverWithPool(ctx, t, nil)
 			listener  = driver.GetListener(&riverdriver.GetListenenerParams{Schema: "my_custom_schema"})
 		)
 
@@ -3333,7 +3960,7 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 		t.Parallel()
 
 		var (
-			driver, _ = driverWithPool(ctx, t)
+			driver, _ = driverWithPool(ctx, t, nil)
 			listener  = driver.GetListener(&riverdriver.GetListenenerParams{Schema: ""})
 		)
 
@@ -3347,7 +3974,7 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 		t.Parallel()
 
 		var (
-			driver, _ = driverWithPool(ctx, t)
+			driver, _ = driverWithPool(ctx, t, nil)
 			listener  = driver.GetListener(&riverdriver.GetListenenerParams{Schema: ""})
 		)
 
@@ -3397,36 +4024,16 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 	})
 }
 
-// requireEqualTime compares to timestamps down the microsecond only. This is
-// appropriate for comparing times that might've roundtripped from Postgres,
-// which only stores to microsecond precision.
-func requireEqualTime(t *testing.T, expected, actual time.Time) {
-	t.Helper()
-
-	const rfc3339Micro = "2006-01-02T15:04:05.999999Z07:00"
-
-	// This is a bit unfortunate, but while Pgx truncates to the nearest
-	// microsecond, lib/pq will round, thereby producing off-by-one microsecond
-	// problems in tests without intervention. Here, allow either the truncated
-	// or rounded version. It's a bit gnarly, but the upcoming SQLite change
-	// brings in a better way to accomplish this, so it should be short-lived.
-	var (
-		actualFormatted            = actual.Format(rfc3339Micro)
-		expectedRoundedFormatted   = expected.Round(1 * time.Microsecond).Format(rfc3339Micro)
-		expectedTruncatedFormatted = expected.Format(rfc3339Micro)
-	)
-	require.True(t, expectedRoundedFormatted == actualFormatted || expectedTruncatedFormatted == actualFormatted,
-		"Expected time %s to be equal to either %s (rounded, for lib/pq) or %s (truncated, for Pgx)", actualFormatted, expectedRoundedFormatted, expectedTruncatedFormatted)
-}
-
-func requireMissingRelation(t *testing.T, err error, missingRelation string) {
+func requireMissingRelation(t *testing.T, err error, schema, missingRelation string) {
 	t.Helper()
 
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		require.Equal(t, pgerrcode.UndefinedTable, pgErr.Code)
-		require.Equal(t, fmt.Sprintf(`relation "%s" does not exist`, missingRelation), pgErr.Message)
+		require.Equal(t, fmt.Sprintf(`relation "%s.%s" does not exist`, schema, missingRelation), pgErr.Message)
 	} else {
-		require.ErrorContains(t, err, fmt.Sprintf("pq: relation %q does not exist", missingRelation))
+		// lib/pq: pq: relation %s.%s does not exist
+		// SQLite: no such table: %s.%s
+		require.Regexp(t, fmt.Sprintf(`(pq: relation "%s\.%s" does not exist|no such table: %s\.%s)`, schema, missingRelation, schema, missingRelation), err.Error())
 	}
 }

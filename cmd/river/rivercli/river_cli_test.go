@@ -16,12 +16,43 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 
+	"github.com/riverqueue/river/cmd/river/riverbench"
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 )
+
+type DriverProcurerStub struct {
+	getBenchmarkerStub func(config *riverbench.Config) BenchmarkerInterface
+	getMigratorStub    func(config *rivermigrate.Config) (MigratorInterface, error)
+	queryRowStub       func(ctx context.Context, sql string, args ...any) riverdriver.Row
+}
+
+func (p *DriverProcurerStub) GetBenchmarker(config *riverbench.Config) BenchmarkerInterface {
+	if p.getBenchmarkerStub == nil {
+		panic("GetBenchmarker is not stubbed")
+	}
+
+	return p.getBenchmarkerStub(config)
+}
+
+func (p *DriverProcurerStub) GetMigrator(config *rivermigrate.Config) (MigratorInterface, error) {
+	if p.getMigratorStub == nil {
+		panic("GetMigrator is not stubbed")
+	}
+
+	return p.getMigratorStub(config)
+}
+
+func (p *DriverProcurerStub) QueryRow(ctx context.Context, sql string, args ...any) riverdriver.Row {
+	if p.queryRowStub == nil {
+		panic("QueryRow is not stubbed")
+	}
+
+	return p.queryRowStub(ctx, sql, args...)
+}
 
 type MigratorStub struct {
 	allVersionsStub      func() []rivermigrate.Migration
@@ -98,8 +129,7 @@ func TestBaseCommandSetIntegration(t *testing.T) {
 		t.Helper()
 
 		cli := NewCLI(&Config{
-			DriverProcurer: &TestDriverProcurer{},
-			Name:           "River",
+			Name: "River",
 		})
 
 		var out bytes.Buffer
@@ -125,7 +155,7 @@ func TestBaseCommandSetIntegration(t *testing.T) {
 		cmd, _ := setup(t)
 
 		cmd.SetArgs([]string{"migrate-down", "--database-url", "post://"})
-		require.EqualError(t, cmd.Execute(), "unsupported database URL (`post://`); try one with a `postgres://` or `postgresql://` scheme/prefix")
+		require.EqualError(t, cmd.Execute(), "unsupported database URL (`post://`); try one with a `postgres://`, `postgresql://`, or `sqlite://` scheme/prefix")
 	})
 
 	t.Run("MissingDatabaseURLAndPGEnv", func(t *testing.T) {
@@ -184,8 +214,7 @@ func TestBaseCommandSetNonParallel(t *testing.T) {
 		t.Helper()
 
 		cli := NewCLI(&Config{
-			DriverProcurer: &TestDriverProcurer{},
-			Name:           "River",
+			Name: "River",
 		})
 
 		var out bytes.Buffer
@@ -249,7 +278,9 @@ func TestMigrateList(t *testing.T) {
 		migratorStub.allVersionsStub = func() []rivermigrate.Migration { return testMigrationAll }
 		migratorStub.existingVersionsStub = func(ctx context.Context) ([]rivermigrate.Migration, error) { return nil, nil }
 
-		cmd.GetCommandBase().GetMigrator = func(config *rivermigrate.Config) (MigratorInterface, error) { return migratorStub, nil }
+		cmd.GetCommandBase().DriverProcurer = &DriverProcurerStub{
+			getMigratorStub: func(config *rivermigrate.Config) (MigratorInterface, error) { return migratorStub, nil },
+		}
 
 		return cmd, &testBundle{
 			out:          out,
@@ -343,10 +374,9 @@ func withCommandBase[TCommand Command[TOpts], TOpts CommandOpts](t *testing.T, c
 
 	var out bytes.Buffer
 	cmd.SetCommandBase(&CommandBase{
-		Logger: riversharedtest.Logger(t),
-		Out:    &out,
-
-		GetMigrator: func(config *rivermigrate.Config) (MigratorInterface, error) { return &MigratorStub{}, nil },
+		DriverProcurer: &DriverProcurerStub{},
+		Logger:         riversharedtest.Logger(t),
+		Out:            &out,
 	})
 	return cmd, &out
 }

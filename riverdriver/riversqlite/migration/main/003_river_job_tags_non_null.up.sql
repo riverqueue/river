@@ -1,0 +1,4 @@
+--
+-- Normally `river_job.tags` is set to `NOT NULL` with a `DEFAULT` here, but since
+-- SQLite was added well after 003 came about, we push that to version 006 index.
+--
