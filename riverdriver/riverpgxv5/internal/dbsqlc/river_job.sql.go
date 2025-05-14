@@ -484,7 +484,7 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     -- query.
     string_to_array(unnest($10::text[]), ','),
 
-    unnest($11::bytea[]),
+    nullif(unnest($11::bytea[]), ''),
     nullif(unnest($12::integer[]), 0)::bit(8)
 ON CONFLICT (unique_key)
     WHERE unique_key IS NOT NULL
@@ -599,7 +599,7 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     -- necessary in the Pgx driver where copyfrom is used instead.
     string_to_array(unnest($10::text[]), ','),
 
-    unnest($11::bytea[]),
+    nullif(unnest($11::bytea[]), ''),
     nullif(unnest($12::integer[]), 0)::bit(8)
 ON CONFLICT (unique_key)
     WHERE unique_key IS NOT NULL

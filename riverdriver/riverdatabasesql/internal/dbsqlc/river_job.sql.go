@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/lib/pq"
-	"github.com/riverqueue/river/riverdriver/riverdatabasesql/internal/pgtypealias"
 )
 
 const jobCancel = `-- name: JobCancel :one
@@ -497,7 +496,7 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     -- query.
     string_to_array(unnest($10::text[]), ','),
 
-    unnest($11::bytea[]),
+    nullif(unnest($11::bytea[]), ''),
     nullif(unnest($12::integer[]), 0)::bit(8)
 ON CONFLICT (unique_key)
     WHERE unique_key IS NOT NULL
@@ -519,7 +518,7 @@ type JobInsertFastManyParams struct {
 	ScheduledAt  []time.Time
 	State        []string
 	Tags         []string
-	UniqueKey    []pgtypealias.NullBytea
+	UniqueKey    [][]byte
 	UniqueStates []int32
 }
 
@@ -615,7 +614,7 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     -- necessary in the Pgx driver where copyfrom is used instead.
     string_to_array(unnest($10::text[]), ','),
 
-    unnest($11::bytea[]),
+    nullif(unnest($11::bytea[]), ''),
     nullif(unnest($12::integer[]), 0)::bit(8)
 ON CONFLICT (unique_key)
     WHERE unique_key IS NOT NULL
@@ -635,7 +634,7 @@ type JobInsertFastManyNoReturningParams struct {
 	ScheduledAt  []time.Time
 	State        []RiverJobState
 	Tags         []string
-	UniqueKey    []pgtypealias.NullBytea
+	UniqueKey    [][]byte
 	UniqueStates []int32
 }
 
