@@ -266,7 +266,7 @@ func TestSchema[TTx any](ctx context.Context, tb testutil.TestingTB, driver rive
 			targetVersion = opts.LineTargetVersions[line]
 		}
 
-		truncateTables = driver.GetMigrationTruncateTables(line, targetVersion)
+		truncateTables = append(truncateTables, driver.GetMigrationTruncateTables(line, targetVersion)...)
 	}
 
 	// Adds a hook on `tb.Cleanup` that checks the test schema in after use.
