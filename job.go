@@ -54,7 +54,7 @@ type JobArgs interface {
 //	type jobArgsBeingRenamed struct{}
 //
 //	func (a jobArgsBeingRenamed) Kind() string          { return "new_name" }
-//	func (a jobArgsBeingRenamed) KindAliases() []string { return []string{"old_name_still_recognized"} }
+//	func (a jobArgsBeingRenamed) KindAliases() []string { return []string{"old_name"} }
 //
 // After all jobs inserted under the original name have finished working
 // (including all their possible retries, which notably might take up to three
