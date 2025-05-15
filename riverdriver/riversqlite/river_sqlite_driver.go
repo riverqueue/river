@@ -34,12 +34,12 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
-	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riversqlite/internal/dbsqlc"
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
+	"github.com/riverqueue/river/rivershared/uniquestates"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
@@ -1320,7 +1320,7 @@ func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
 		State:        rivertype.JobState(internal.State),
 		Tags:         tags,
 		UniqueKey:    internal.UniqueKey,
-		UniqueStates: dbunique.UniqueBitmaskToStates(uniqueStatesByte),
+		UniqueStates: uniquestates.UniqueBitmaskToStates(uniqueStatesByte),
 	}, nil
 }
 

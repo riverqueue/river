@@ -9,6 +9,7 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
+	"github.com/riverqueue/river/rivershared/uniquestates"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
@@ -17,17 +18,6 @@ import (
 // Default job states for UniqueOpts.ByState. Stored here to a variable so we
 // don't have to reallocate a slice over and over again.
 var uniqueOptsByStateDefault = rivertype.UniqueOptsByStateDefault() //nolint:gochecknoglobals
-
-var jobStateBitPositions = map[rivertype.JobState]uint{ //nolint:gochecknoglobals
-	rivertype.JobStateAvailable: 7,
-	rivertype.JobStateCancelled: 6,
-	rivertype.JobStateCompleted: 5,
-	rivertype.JobStateDiscarded: 4,
-	rivertype.JobStatePending:   3,
-	rivertype.JobStateRetryable: 2,
-	rivertype.JobStateRunning:   1,
-	rivertype.JobStateScheduled: 0,
-}
 
 type UniqueOpts struct {
 	ByArgs      bool
@@ -50,7 +40,7 @@ func (o *UniqueOpts) StateBitmask() byte {
 	if len(o.ByState) > 0 {
 		states = o.ByState
 	}
-	return UniqueStatesToBitmask(states)
+	return uniquestates.UniqueStatesToBitmask(states)
 }
 
 func UniqueKey(timeGen rivertype.TimeGenerator, uniqueOpts *UniqueOpts, params *rivertype.JobInsertParams) ([]byte, error) {
@@ -132,33 +122,4 @@ func buildUniqueKeyString(timeGen rivertype.TimeGenerator, uniqueOpts *UniqueOpt
 	}
 
 	return sb.String(), nil
-}
-
-func UniqueStatesToBitmask(states []rivertype.JobState) byte {
-	var val byte
-
-	for _, state := range states {
-		bitIndex, exists := jobStateBitPositions[state]
-		if !exists {
-			continue // Ignore unknown states
-		}
-		bitPosition := 7 - (bitIndex % 8)
-		val |= 1 << bitPosition
-	}
-
-	return val
-}
-
-func UniqueBitmaskToStates(mask byte) []rivertype.JobState {
-	var states []rivertype.JobState
-
-	for state, bitIndex := range jobStateBitPositions {
-		bitPosition := 7 - (bitIndex % 8)
-		if mask&(1<<bitPosition) != 0 {
-			states = append(states, state)
-		}
-	}
-
-	slices.Sort(states)
-	return states
 }
