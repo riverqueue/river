@@ -23,7 +23,6 @@ import (
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql/internal/dbsqlc"
-	"github.com/riverqueue/river/riverdriver/riverdatabasesql/internal/pgtypealias"
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
@@ -255,7 +254,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.Jo
 		ScheduledAt:  make([]time.Time, len(params.Jobs)),
 		State:        make([]string, len(params.Jobs)),
 		Tags:         make([]string, len(params.Jobs)),
-		UniqueKey:    make([]pgtypealias.NullBytea, len(params.Jobs)),
+		UniqueKey:    make([][]byte, len(params.Jobs)),
 		UniqueStates: make([]int32, len(params.Jobs)),
 	}
 	now := time.Now().UTC()
@@ -288,7 +287,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.Jo
 		insertJobsParams.ScheduledAt[i] = scheduledAt
 		insertJobsParams.State[i] = string(params.State)
 		insertJobsParams.Tags[i] = strings.Join(tags, ",")
-		insertJobsParams.UniqueKey[i] = sliceutil.FirstNonEmpty(params.UniqueKey)
+		insertJobsParams.UniqueKey[i] = params.UniqueKey
 		insertJobsParams.UniqueStates[i] = int32(params.UniqueStates)
 	}
 
@@ -318,7 +317,7 @@ func (e *Executor) JobInsertFastManyNoReturning(ctx context.Context, params *riv
 		ScheduledAt:  make([]time.Time, len(params.Jobs)),
 		State:        make([]dbsqlc.RiverJobState, len(params.Jobs)),
 		Tags:         make([]string, len(params.Jobs)),
-		UniqueKey:    make([]pgtypealias.NullBytea, len(params.Jobs)),
+		UniqueKey:    make([][]byte, len(params.Jobs)),
 		UniqueStates: make([]int32, len(params.Jobs)),
 	}
 	now := time.Now().UTC()
