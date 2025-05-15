@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/uniquestates"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -254,7 +255,7 @@ func TestUniqueKey(t *testing.T) {
 				ScheduledAt:  &now,
 				State:        "Pending",
 				Tags:         []string{"notification", "email"},
-				UniqueStates: UniqueStatesToBitmask(states),
+				UniqueStates: uniquestates.UniqueStatesToBitmask(states),
 			}
 
 			if tt.modifyInsertParamsFunc != nil {
@@ -309,25 +310,11 @@ func TestUniqueOptsStateBitmask(t *testing.T) {
 	t.Parallel()
 
 	emptyOpts := &UniqueOpts{}
-	require.Equal(t, UniqueStatesToBitmask(uniqueOptsByStateDefault), emptyOpts.StateBitmask(), "Empty unique options should have default bitmask")
+	require.Equal(t, uniquestates.UniqueStatesToBitmask(uniqueOptsByStateDefault), emptyOpts.StateBitmask(), "Empty unique options should have default bitmask")
 
 	otherStates := []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCompleted}
 	nonEmptyOpts := &UniqueOpts{
 		ByState: otherStates,
 	}
-	require.Equal(t, UniqueStatesToBitmask([]rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCompleted}), nonEmptyOpts.StateBitmask(), "Non-empty unique options should have correct bitmask")
-}
-
-func TestUniqueStatesToBitmask(t *testing.T) {
-	t.Parallel()
-
-	bitmask := UniqueStatesToBitmask(uniqueOptsByStateDefault)
-	require.Equal(t, byte(0b11110101), bitmask, "Default unique states should be all set except cancelled and discarded")
-
-	for state, position := range jobStateBitPositions {
-		bitmask = UniqueStatesToBitmask([]rivertype.JobState{state})
-		// Bit shifting uses postgres bit numbering with MSB on the right, so we
-		// need to flip the position when shifting manually:
-		require.Equal(t, byte(1<<(7-position)), bitmask, "Bitmask should be set for single state %s", state)
-	}
+	require.Equal(t, uniquestates.UniqueStatesToBitmask([]rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCompleted}), nonEmptyOpts.StateBitmask(), "Non-empty unique options should have correct bitmask")
 }

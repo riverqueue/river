@@ -22,7 +22,6 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 
-	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdbtest"
@@ -30,6 +29,7 @@ import (
 	"github.com/riverqueue/river/rivermigrate"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/testfactory"
+	"github.com/riverqueue/river/rivershared/uniquestates"
 	"github.com/riverqueue/river/rivershared/util/hashutil"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
@@ -2103,13 +2103,13 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				ScheduledAt:  &beforeHorizon,
 				State:        ptrutil.Ptr(rivertype.JobStateRetryable),
 				UniqueKey:    []byte("unique-key-1"),
-				UniqueStates: dbunique.UniqueStatesToBitmask(nonRetryableUniqueStates),
+				UniqueStates: uniquestates.UniqueStatesToBitmask(nonRetryableUniqueStates),
 			})
 			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				ScheduledAt:  &beforeHorizon,
 				State:        ptrutil.Ptr(rivertype.JobStateRetryable),
 				UniqueKey:    []byte("unique-key-2"),
-				UniqueStates: dbunique.UniqueStatesToBitmask(nonRetryableUniqueStates),
+				UniqueStates: uniquestates.UniqueStatesToBitmask(nonRetryableUniqueStates),
 			})
 			// job3 has no conflict (it's the only one with this key), so it should be
 			// scheduled.
@@ -2117,7 +2117,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				ScheduledAt:  &beforeHorizon,
 				State:        ptrutil.Ptr(rivertype.JobStateRetryable),
 				UniqueKey:    []byte("unique-key-3"),
-				UniqueStates: dbunique.UniqueStatesToBitmask(defaultUniqueStates),
+				UniqueStates: uniquestates.UniqueStatesToBitmask(defaultUniqueStates),
 			})
 
 			// This one is a conflict with job1 because it's already running and has
@@ -2126,7 +2126,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				ScheduledAt:  &beforeHorizon,
 				State:        ptrutil.Ptr(rivertype.JobStateRunning),
 				UniqueKey:    []byte("unique-key-1"),
-				UniqueStates: dbunique.UniqueStatesToBitmask(nonRetryableUniqueStates),
+				UniqueStates: uniquestates.UniqueStatesToBitmask(nonRetryableUniqueStates),
 			})
 			// This one is *not* a conflict with job2 because it's completed, which
 			// isn't in the unique states:
@@ -2134,7 +2134,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				ScheduledAt:  &beforeHorizon,
 				State:        ptrutil.Ptr(rivertype.JobStateCompleted),
 				UniqueKey:    []byte("unique-key-2"),
-				UniqueStates: dbunique.UniqueStatesToBitmask(nonRetryableUniqueStates),
+				UniqueStates: uniquestates.UniqueStatesToBitmask(nonRetryableUniqueStates),
 			})
 
 			result, err := exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
@@ -2182,13 +2182,13 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				ScheduledAt:  &beforeHorizon,
 				State:        ptrutil.Ptr(rivertype.JobStateRetryable),
 				UniqueKey:    []byte("unique-key-1"),
-				UniqueStates: dbunique.UniqueStatesToBitmask(nonRetryableUniqueStates),
+				UniqueStates: uniquestates.UniqueStatesToBitmask(nonRetryableUniqueStates),
 			})
 			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				ScheduledAt:  &beforeHorizon,
 				State:        ptrutil.Ptr(rivertype.JobStateRetryable),
 				UniqueKey:    []byte("unique-key-1"),
-				UniqueStates: dbunique.UniqueStatesToBitmask(nonRetryableUniqueStates),
+				UniqueStates: uniquestates.UniqueStatesToBitmask(nonRetryableUniqueStates),
 			})
 
 			result, err := exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{

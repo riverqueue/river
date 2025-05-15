@@ -24,10 +24,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/puddle/v2"
 
-	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5/internal/dbsqlc"
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
+	"github.com/riverqueue/river/rivershared/uniquestates"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
@@ -1032,7 +1032,7 @@ func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
 		State:        rivertype.JobState(internal.State),
 		Tags:         internal.Tags,
 		UniqueKey:    internal.UniqueKey,
-		UniqueStates: dbunique.UniqueBitmaskToStates(uniqueStatesByte),
+		UniqueStates: uniquestates.UniqueBitmaskToStates(uniqueStatesByte),
 	}, nil
 }
 

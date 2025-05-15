@@ -20,10 +20,10 @@ import (
 
 	"github.com/lib/pq"
 
-	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql/internal/dbsqlc"
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
+	"github.com/riverqueue/river/rivershared/uniquestates"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
@@ -997,7 +997,7 @@ func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
 		State:        rivertype.JobState(internal.State),
 		Tags:         internal.Tags,
 		UniqueKey:    internal.UniqueKey,
-		UniqueStates: dbunique.UniqueBitmaskToStates(byte(bitIntegerToBits(ptrutil.ValOrDefault(internal.UniqueStates, 0), 8))),
+		UniqueStates: uniquestates.UniqueBitmaskToStates(byte(bitIntegerToBits(ptrutil.ValOrDefault(internal.UniqueStates, 0), 8))),
 	}, nil
 }
 
