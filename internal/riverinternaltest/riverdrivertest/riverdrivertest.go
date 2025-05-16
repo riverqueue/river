@@ -2261,7 +2261,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		t.Run("CompletesARunningJob", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
 
 			now := time.Now().UTC()
 
@@ -2274,7 +2274,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
 			require.Equal(t, rivertype.JobStateCompleted, jobAfter.State)
-			require.WithinDuration(t, now, *jobAfter.FinalizedAt, time.Microsecond)
+			require.WithinDuration(t, now, *jobAfter.FinalizedAt, bundle.driver.TimePrecision())
 
 			jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
 			require.NoError(t, err)
