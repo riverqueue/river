@@ -11,9 +11,9 @@
 // `dbPool.SetMaxOpenConns(1)`.
 //
 // A known deficiency in this driver compared to Postgres is that due to
-// limitations in sqlc, it performs operations like completion and `InsertMany`
-// one row at a time instead of in batches. This means that it's slower than the
-// Postgres driver, especially when benchmarking.
+// limitations in sqlc, it performs bulk operations like non-standard
+// completions and `InsertMany` one row at a time instead of in batches. This
+// means that it processes batches more slowly than the Postgres driver.
 package riversqlite
 
 import (
@@ -40,6 +40,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riversqlite/internal/dbsqlc"
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
 	"github.com/riverqueue/river/rivershared/uniquestates"
+	"github.com/riverqueue/river/rivershared/util/maputil"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
@@ -683,8 +684,63 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 		ctx = schemaTemplateParam(ctx, params.Schema)
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 
+		// Because it's by far the most common path, put in an optimization for
+		// jobs that we're setting to `completed` that don't have any metadata
+		// updates needed. Group those jobs out and complete them all in one
+		// query, then continue on and do all the other updates.
+		var (
+			completedIDs     = make([]int64, 0, len(params.ID))
+			completedIndexes = make(map[int64]int, len(params.ID)) // job ID -> params index (for setting result)
+		)
+		for i, id := range params.ID {
+			if params.State[i] == rivertype.JobStateCompleted && !params.MetadataDoMerge[i] {
+				completedIDs = append(completedIDs, id)
+				completedIndexes[id] = i
+			}
+		}
+
+		if len(completedIDs) > 0 {
+			jobs, err := dbsqlc.New().JobSetCompletedIfRunning(ctx, dbtx, &dbsqlc.JobSetCompletedIfRunningParams{
+				ID:          completedIDs,
+				FinalizedAt: timeStringNullable(params.Now),
+			})
+			if err != nil {
+				return fmt.Errorf("error setting completed state on jobs: %w", err)
+			}
+
+			for _, job := range jobs {
+				setRes[completedIndexes[job.ID]], err = jobRowFromInternal(job)
+				if err != nil {
+					return err
+				}
+				delete(completedIndexes, job.ID)
+			}
+
+			// Fetch any jobs that weren't set by the query above because they
+			// weren't `running`. In practice this should be quite rare, but we
+			// check for it in the test suite.
+			if len(completedIndexes) > 0 {
+				jobs, err := dbsqlc.New().JobGetByIDMany(ctx, dbtx, maputil.Keys(completedIndexes))
+				if err != nil {
+					return fmt.Errorf("error getting non-running jobs: %w", err)
+				}
+
+				for _, job := range jobs {
+					setRes[completedIndexes[job.ID]], err = jobRowFromInternal(job)
+					if err != nil {
+						return err
+					}
+				}
+			}
+		}
+
 		// Should be a batch insert, but that's currently impossible with SQLite/sqlc. https://github.com/sqlc-dev/sqlc/issues/3802
-		for i := range params.ID {
+		for i, id := range params.ID {
+			// Skip job if we handled it in the happy path optimization above.
+			if _, ok := completedIndexes[id]; ok {
+				continue
+			}
+
 			setStateParams := &dbsqlc.JobSetStateIfRunningParams{
 				ID:              params.ID[i],
 				Error:           []byte("{}"), // even if not used, must be valid JSON because it's bed into the `json` function
@@ -723,6 +779,7 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 						MetadataUpdates: sliceutil.FirstNonEmpty(params.MetadataUpdates[i], []byte("{}")),
 					})
 					if err != nil {
+						// Allow a job to have been deleted in the interim.
 						if errors.Is(err, sql.ErrNoRows) {
 							return nil
 						}
