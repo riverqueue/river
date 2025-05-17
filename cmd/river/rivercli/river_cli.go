@@ -23,7 +23,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/riverqueue/river/cmd/river/riverbench"
+	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivermigrate"
+	"github.com/riverqueue/river/rivershared/sqlctemplate"
 )
 
 type Config struct {
@@ -231,6 +233,7 @@ framework, which aren't necessary if using an external framework:
 		cmd.Flags().BoolVar(&opts.Down, "down", false, "print down migration")
 		cmd.Flags().IntSliceVar(&opts.ExcludeVersion, "exclude-version", nil, "exclude version(s), usually version 1, containing River's migration tables")
 		addLineFlag(cmd, &opts.Line)
+		addSchemaFlag(cmd, &opts.Schema)
 		cmd.Flags().BoolVar(&opts.Up, "up", false, "print up migration")
 		cmd.Flags().IntSliceVar(&opts.Version, "version", nil, "version(s) to print (can be multiple versions)")
 		cmd.MarkFlagsMutuallyExclusive("all", "version")
@@ -248,7 +251,8 @@ framework, which aren't necessary if using an external framework:
 			Use:   "migrate-list",
 			Short: "List River schema migrations",
 			Long: strings.TrimSpace(`
-TODO
+List available migrations for the given line, showing the currently applied
+migration as determined by the database in --database-url.
 	`),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				return RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL, opts.Schema), &migrateList{}, &opts)
@@ -484,6 +488,7 @@ type migrateGetOpts struct {
 	Down           bool
 	ExcludeVersion []int
 	Line           string
+	Schema         string
 	Up             bool
 	Version        []int
 }
@@ -494,13 +499,7 @@ type migrateGet struct {
 	CommandBase
 }
 
-func (c *migrateGet) Run(_ context.Context, opts *migrateGetOpts) (bool, error) {
-	// We'll need to have a way of using an alternate driver if support for
-	// other databases is added in the future. Unlike other migrate commands,
-	// this one doesn't take a `--database-url`, so we'd need a way of
-	// detecting the database type.
-	//
-	// TODO
+func (c *migrateGet) Run(ctx context.Context, opts *migrateGetOpts) (bool, error) {
 	migrator, err := c.DriverProcurer.GetMigrator(&rivermigrate.Config{Line: opts.Line, Logger: c.Logger, Schema: ""})
 	if err != nil {
 		return false, err
@@ -523,7 +522,16 @@ func (c *migrateGet) Run(_ context.Context, opts *migrateGetOpts) (bool, error) 
 		}
 	}
 
-	var printedOne bool
+	var (
+		line       = cmp.Or(opts.Line, riverdriver.MigrationLineMain)
+		printedOne bool
+		replacer   sqlctemplate.Replacer
+		schema     string
+	)
+
+	if opts.Schema != "" {
+		schema = opts.Schema + "."
+	}
 
 	for _, migration := range migrations {
 		if slices.Contains(opts.ExcludeVersion, migration.Version) {
@@ -548,8 +556,19 @@ func (c *migrateGet) Run(_ context.Context, opts *migrateGetOpts) (bool, error) 
 			sql = migration.SQLUp
 		}
 
+		if strings.Contains(sql, "/* TEMPLATE: schema */") {
+			ctx = sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
+				"schema": {Stable: true, Value: schema},
+			}, nil)
+
+			sql, _, err = replacer.RunSafely(ctx, "$", sql, nil)
+			if err != nil {
+				return false, err
+			}
+		}
+
 		printedOne = true
-		fmt.Fprintf(c.Out, "%s\n", migrationComment(opts.Line, migration.Version, direction))
+		fmt.Fprintf(c.Out, "%s\n", migrationComment(line, migration.Version, direction))
 		fmt.Fprintf(c.Out, "%s\n", strings.TrimSpace(sql))
 	}
 

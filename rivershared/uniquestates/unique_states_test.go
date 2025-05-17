@@ -3,8 +3,9 @@ package uniquestates
 import (
 	"testing"
 
-	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/require"
+
+	"github.com/riverqueue/river/rivertype"
 )
 
 func TestUniqueStatesToBitmask(t *testing.T) {
