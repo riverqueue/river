@@ -195,6 +195,7 @@ type Executor interface {
 	JobInsertFastMany(ctx context.Context, params *JobInsertFastManyParams) ([]*JobInsertFastResult, error)
 	JobInsertFastManyNoReturning(ctx context.Context, params *JobInsertFastManyParams) (int, error)
 	JobInsertFull(ctx context.Context, params *JobInsertFullParams) (*rivertype.JobRow, error)
+	JobInsertFullMany(ctx context.Context, jobs *JobInsertFullManyParams) ([]*rivertype.JobRow, error)
 	JobList(ctx context.Context, params *JobListParams) ([]*rivertype.JobRow, error)
 	JobRescueMany(ctx context.Context, params *JobRescueManyParams) (*struct{}, error)
 	JobRetry(ctx context.Context, params *JobRetryParams) (*rivertype.JobRow, error)
@@ -406,6 +407,11 @@ type JobInsertFullParams struct {
 	Tags         []string
 	UniqueKey    []byte
 	UniqueStates byte
+}
+
+type JobInsertFullManyParams struct {
+	Jobs   []*JobInsertFullParams
+	Schema string
 }
 
 type JobListParams struct {

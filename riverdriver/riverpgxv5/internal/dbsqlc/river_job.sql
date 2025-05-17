@@ -302,6 +302,64 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     nullif(@unique_states::integer, 0)::bit(8)
 ) RETURNING *;
 
+-- name: JobInsertFullMany :many
+WITH raw_job_data AS (
+    SELECT
+        unnest(@args::jsonb[]) AS args,
+        unnest(@attempt::smallint[]) AS attempt,
+        unnest(@attempted_at::timestamptz[]) AS attempted_at,
+        unnest(@created_at::timestamptz[]) AS created_at,
+        unnest(@finalized_at::timestamptz[]) AS finalized_at,
+        unnest(@kind::text[]) AS kind,
+        unnest(@max_attempts::smallint[]) AS max_attempts,
+        unnest(@metadata::jsonb[]) AS metadata,
+        unnest(@priority::smallint[]) AS priority,
+        unnest(@queue::text[]) AS queue,
+        unnest(@scheduled_at::timestamptz[]) AS scheduled_at,
+        unnest(@state::text[]) AS state,
+        unnest(@tags::text[]) AS tags,
+        unnest(@unique_key::text[]) AS unique_key,
+        unnest(@unique_states::integer[]) AS unique_states
+)
+INSERT INTO /* TEMPLATE: schema */river_job(
+    args,
+    attempt,
+    attempted_at,
+    created_at,
+    finalized_at,
+    kind,
+    max_attempts,
+    metadata,
+    priority,
+    queue,
+    scheduled_at,
+    state,
+    tags,
+    unique_key,
+    unique_states
+)
+SELECT
+    args,
+    coalesce(attempt, 0) AS attempt,
+    coalesce(nullif(attempted_at, '0001-01-01 00:00:00 +0000'), now()) AS attempted_at,
+    coalesce(nullif(created_at, '0001-01-01 00:00:00 +0000'), now()) AS created_at,
+    nullif(finalized_at, '0001-01-01 00:00:00 +0000') AS finalized_at,
+    kind,
+    max_attempts,
+    coalesce(metadata, '{}'::jsonb) AS metadata,
+    priority,
+    queue,
+    coalesce(nullif(scheduled_at, '0001-01-01 00:00:00 +0000'), now()) AS scheduled_at,
+    state::/* TEMPLATE: schema */river_job_state,
+    string_to_array(tags, ',')::varchar(255)[],
+    -- `nullif` is required for `lib/pq`, which doesn't do a good job of reading
+    -- `nil` into `bytea`. We use `text` because otherwise `lib/pq` will encode
+    -- to Postgres binary like `\xAAAA`.
+    nullif(unique_key, '')::bytea,
+    nullif(unique_states::integer, 0)::bit(8)
+FROM raw_job_data
+RETURNING *;
+
 -- name: JobList :many
 SELECT *
 FROM /* TEMPLATE: schema */river_job

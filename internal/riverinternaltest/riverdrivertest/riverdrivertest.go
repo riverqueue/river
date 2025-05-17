@@ -1737,6 +1737,66 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		})
 	})
 
+	t.Run("JobInsertFullMany", func(t *testing.T) {
+		t.Parallel()
+
+		exec, bundle := setup(ctx, t)
+
+		jobParams1 := testfactory.Job_Build(t, &testfactory.JobOpts{
+			State: ptrutil.Ptr(rivertype.JobStateCompleted),
+		})
+		jobParams2 := testfactory.Job_Build(t, &testfactory.JobOpts{
+			State: ptrutil.Ptr(rivertype.JobStateRunning),
+		})
+
+		results, err := exec.JobInsertFullMany(ctx, &riverdriver.JobInsertFullManyParams{
+			Jobs: []*riverdriver.JobInsertFullParams{jobParams1, jobParams2},
+		})
+		require.NoError(t, err)
+
+		require.Equal(t, 2, len(results))
+		now := time.Now().UTC()
+
+		assertJobEqualsInput := func(t *testing.T, job *rivertype.JobRow, input *riverdriver.JobInsertFullParams) {
+			t.Helper()
+
+			require.Equal(t, input.Attempt, job.Attempt)
+			if input.AttemptedAt == nil {
+				require.Nil(t, job.AttemptedAt)
+			} else {
+				t.Logf("job: %+v", job)
+				t.Logf("input: %+v", input)
+				require.WithinDuration(t, *input.AttemptedAt, *job.AttemptedAt, bundle.driver.TimePrecision())
+			}
+			require.Equal(t, input.AttemptedBy, job.AttemptedBy)
+			require.WithinDuration(t, now, job.CreatedAt, 5*time.Second)
+			require.Equal(t, input.EncodedArgs, job.EncodedArgs)
+			require.Empty(t, job.Errors)
+			if input.FinalizedAt == nil || input.FinalizedAt.IsZero() {
+				require.Nil(t, job.FinalizedAt)
+			} else {
+				require.WithinDuration(t, input.FinalizedAt.UTC(), job.FinalizedAt.UTC(), bundle.driver.TimePrecision())
+			}
+			require.Equal(t, input.Kind, job.Kind)
+			require.Equal(t, input.MaxAttempts, job.MaxAttempts)
+			require.Equal(t, input.Metadata, job.Metadata)
+			require.Equal(t, input.Priority, job.Priority)
+			require.Equal(t, input.Queue, job.Queue)
+			if input.ScheduledAt == nil {
+				require.WithinDuration(t, now, job.ScheduledAt, 5*time.Second)
+			} else {
+				require.WithinDuration(t, input.ScheduledAt.UTC(), job.ScheduledAt, bundle.driver.TimePrecision())
+			}
+			require.Equal(t, input.State, job.State)
+			require.Equal(t, input.Tags, job.Tags)
+			require.Equal(t, input.UniqueKey, job.UniqueKey)
+			require.Empty(t, job.UniqueStates)
+		}
+
+		assertJobEqualsInput(t, results[0], jobParams1)
+		assertJobEqualsInput(t, results[1], jobParams2)
+	})
+
 	t.Run("JobList", func(t *testing.T) {
 		t.Parallel()
 

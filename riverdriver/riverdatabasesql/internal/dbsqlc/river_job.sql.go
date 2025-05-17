@@ -766,6 +766,141 @@ func (q *Queries) JobInsertFull(ctx context.Context, db DBTX, arg *JobInsertFull
 	return &i, err
 }
 
+const jobInsertFullMany = `-- name: JobInsertFullMany :many
+WITH raw_job_data AS (
+    SELECT
+        unnest($1::jsonb[]) AS args,
+        unnest($2::smallint[]) AS attempt,
+        unnest($3::timestamptz[]) AS attempted_at,
+        unnest($4::timestamptz[]) AS created_at,
+        unnest($5::timestamptz[]) AS finalized_at,
+        unnest($6::text[]) AS kind,
+        unnest($7::smallint[]) AS max_attempts,
+        unnest($8::jsonb[]) AS metadata,
+        unnest($9::smallint[]) AS priority,
+        unnest($10::text[]) AS queue,
+        unnest($11::timestamptz[]) AS scheduled_at,
+        unnest($12::text[]) AS state,
+        unnest($13::text[]) AS tags,
+        unnest($14::text[]) AS unique_key,
+        unnest($15::integer[]) AS unique_states
+)
+INSERT INTO /* TEMPLATE: schema */river_job(
+    args,
+    attempt,
+    attempted_at,
+    created_at,
+    finalized_at,
+    kind,
+    max_attempts,
+    metadata,
+    priority,
+    queue,
+    scheduled_at,
+    state,
+    tags,
+    unique_key,
+    unique_states
+)
+SELECT
+    args,
+    coalesce(attempt, 0) AS attempt,
+    coalesce(nullif(attempted_at, '0001-01-01 00:00:00 +0000'), now()) AS attempted_at,
+    coalesce(nullif(created_at, '0001-01-01 00:00:00 +0000'), now()) AS created_at,
+    nullif(finalized_at, '0001-01-01 00:00:00 +0000') AS finalized_at,
+    kind,
+    max_attempts,
+    coalesce(metadata, '{}'::jsonb) AS metadata,
+    priority,
+    queue,
+    coalesce(nullif(scheduled_at, '0001-01-01 00:00:00 +0000'), now()) AS scheduled_at,
+    state::/* TEMPLATE: schema */river_job_state,
+    string_to_array(tags, ',')::varchar(255)[],
+    -- ` + "`" + `nullif` + "`" + ` is required for ` + "`" + `lib/pq` + "`" + `, which doesn't do a good job of reading
+    -- ` + "`" + `nil` + "`" + ` into ` + "`" + `bytea` + "`" + `. We use ` + "`" + `text` + "`" + ` because otherwise ` + "`" + `lib/pq` + "`" + ` will encode
+    -- to Postgres binary like ` + "`" + `\xAAAA` + "`" + `.
+    nullif(unique_key, '')::bytea,
+    nullif(unique_states::integer, 0)::bit(8)
+FROM raw_job_data
+RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
+`
+
+type JobInsertFullManyParams struct {
+	Args         []string
+	Attempt      []int16
+	AttemptedAt  []time.Time
+	CreatedAt    []time.Time
+	FinalizedAt  []time.Time
+	Kind         []string
+	MaxAttempts  []int16
+	Metadata     []string
+	Priority     []int16
+	Queue        []string
+	ScheduledAt  []time.Time
+	State        []string
+	Tags         []string
+	UniqueKey    []string
+	UniqueStates []int32
+}
+
+func (q *Queries) JobInsertFullMany(ctx context.Context, db DBTX, arg *JobInsertFullManyParams) ([]*RiverJob, error) {
+	rows, err := db.QueryContext(ctx, jobInsertFullMany,
+		pq.Array(arg.Args),
+		pq.Array(arg.Attempt),
+		pq.Array(arg.AttemptedAt),
+		pq.Array(arg.CreatedAt),
+		pq.Array(arg.FinalizedAt),
+		pq.Array(arg.Kind),
+		pq.Array(arg.MaxAttempts),
+		pq.Array(arg.Metadata),
+		pq.Array(arg.Priority),
+		pq.Array(arg.Queue),
+		pq.Array(arg.ScheduledAt),
+		pq.Array(arg.State),
+		pq.Array(arg.Tags),
+		pq.Array(arg.UniqueKey),
+		pq.Array(arg.UniqueStates),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverJob
+	for rows.Next() {
+		var i RiverJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Args,
+			&i.Attempt,
+			&i.AttemptedAt,
+			pq.Array(&i.AttemptedBy),
+			&i.CreatedAt,
+			pq.Array(&i.Errors),
+			&i.FinalizedAt,
+			&i.Kind,
+			&i.MaxAttempts,
+			&i.Metadata,
+			&i.Priority,
+			&i.Queue,
+			&i.State,
+			&i.ScheduledAt,
+			pq.Array(&i.Tags),
+			&i.UniqueKey,
+			&i.UniqueStates,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const jobList = `-- name: JobList :many
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 FROM /* TEMPLATE: schema */river_job
