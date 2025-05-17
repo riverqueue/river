@@ -557,7 +557,7 @@ func (c *migrateGet) Run(ctx context.Context, opts *migrateGetOpts) (bool, error
 		}
 
 		if strings.Contains(sql, "/* TEMPLATE: schema */") {
-			ctx = sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
+			ctx := sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
 				"schema": {Stable: true, Value: schema},
 			}, nil)
 
