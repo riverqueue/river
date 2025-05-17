@@ -79,7 +79,7 @@ func (m *MigratorStub) ExistingVersions(ctx context.Context) ([]rivermigrate.Mig
 }
 
 func (m *MigratorStub) GetVersion(version int) (rivermigrate.Migration, error) {
-	if m.allVersionsStub == nil {
+	if m.getVersionStub == nil {
 		panic("GetVersion is not stubbed")
 	}
 
@@ -87,7 +87,7 @@ func (m *MigratorStub) GetVersion(version int) (rivermigrate.Migration, error) {
 }
 
 func (m *MigratorStub) Migrate(ctx context.Context, direction rivermigrate.Direction, opts *rivermigrate.MigrateOpts) (*rivermigrate.MigrateResult, error) {
-	if m.allVersionsStub == nil {
+	if m.migrateStub == nil {
 		panic("Migrate is not stubbed")
 	}
 
@@ -95,7 +95,7 @@ func (m *MigratorStub) Migrate(ctx context.Context, direction rivermigrate.Direc
 }
 
 func (m *MigratorStub) Validate(ctx context.Context) (*rivermigrate.ValidateResult, error) {
-	if m.allVersionsStub == nil {
+	if m.validateStub == nil {
 		panic("Validate is not stubbed")
 	}
 
@@ -103,9 +103,9 @@ func (m *MigratorStub) Validate(ctx context.Context) (*rivermigrate.ValidateResu
 }
 
 var (
-	testMigration01 = rivermigrate.Migration{Name: "1st migration", SQLDown: "SELECT 1", SQLUp: "SELECT 1", Version: 1} //nolint:gochecknoglobals
-	testMigration02 = rivermigrate.Migration{Name: "2nd migration", SQLDown: "SELECT 1", SQLUp: "SELECT 1", Version: 2} //nolint:gochecknoglobals
-	testMigration03 = rivermigrate.Migration{Name: "3rd migration", SQLDown: "SELECT 1", SQLUp: "SELECT 1", Version: 3} //nolint:gochecknoglobals
+	testMigration01 = rivermigrate.Migration{Name: "1st migration", SQLDown: "SELECT 'down 1' FROM /* TEMPLATE: schema */river_table", SQLUp: "SELECT 'up 1' FROM /* TEMPLATE: schema */river_table", Version: 1} //nolint:gochecknoglobals
+	testMigration02 = rivermigrate.Migration{Name: "2nd migration", SQLDown: "SELECT 'down 2' FROM /* TEMPLATE: schema */river_table", SQLUp: "SELECT 'up 2' FROM /* TEMPLATE: schema */river_table", Version: 2} //nolint:gochecknoglobals
+	testMigration03 = rivermigrate.Migration{Name: "3rd migration", SQLDown: "SELECT 'down 3' FROM /* TEMPLATE: schema */river_table", SQLUp: "SELECT 'up 3' FROM /* TEMPLATE: schema */river_table", Version: 3} //nolint:gochecknoglobals
 
 	testMigrationAll = []rivermigrate.Migration{testMigration01, testMigration02, testMigration03} //nolint:gochecknoglobals
 )
@@ -256,6 +256,109 @@ func TestBaseCommandSetNonParallel(t *testing.T) {
 
 		cmd.SetArgs([]string{"migrate-up", "--schema", schema})
 		require.NoError(t, cmd.Execute())
+	})
+}
+
+func TestMigrateGet(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		migratorStub *MigratorStub
+		out          *bytes.Buffer
+	}
+
+	setup := func(t *testing.T) (*migrateGet, *testBundle) {
+		t.Helper()
+
+		cmd, out := withCommandBase(t, &migrateGet{})
+
+		migratorStub := &MigratorStub{}
+		migratorStub.allVersionsStub = func() []rivermigrate.Migration { return testMigrationAll }
+		migratorStub.getVersionStub = func(version int) (rivermigrate.Migration, error) {
+			switch version {
+			case 1:
+				return testMigration01, nil
+			case 2:
+				return testMigration02, nil
+			case 3:
+				return testMigration03, nil
+			}
+			return rivermigrate.Migration{}, fmt.Errorf("unknown version: %d", version)
+		}
+		migratorStub.existingVersionsStub = func(ctx context.Context) ([]rivermigrate.Migration, error) { return nil, nil }
+
+		cmd.GetCommandBase().DriverProcurer = &DriverProcurerStub{
+			getMigratorStub: func(config *rivermigrate.Config) (MigratorInterface, error) { return migratorStub, nil },
+		}
+
+		return cmd, &testBundle{
+			out:          out,
+			migratorStub: migratorStub,
+		}
+	}
+
+	t.Run("DownMigration", func(t *testing.T) {
+		t.Parallel()
+
+		cmd, bundle := setup(t)
+
+		_, err := runCommand(ctx, t, cmd, &migrateGetOpts{Down: true, Version: []int{1}})
+		require.NoError(t, err)
+
+		require.Equal(t, strings.TrimSpace(`
+-- River main migration 001 [down]
+SELECT 'down 1' FROM river_table
+		`), strings.TrimSpace(bundle.out.String()))
+	})
+
+	t.Run("UpMigration", func(t *testing.T) {
+		t.Parallel()
+
+		cmd, bundle := setup(t)
+
+		_, err := runCommand(ctx, t, cmd, &migrateGetOpts{Up: true, Version: []int{1}})
+		require.NoError(t, err)
+
+		require.Equal(t, strings.TrimSpace(`
+-- River main migration 001 [up]
+SELECT 'up 1' FROM river_table
+		`), strings.TrimSpace(bundle.out.String()))
+	})
+
+	t.Run("MultipleMigrations", func(t *testing.T) {
+		t.Parallel()
+
+		cmd, bundle := setup(t)
+
+		_, err := runCommand(ctx, t, cmd, &migrateGetOpts{Up: true, Version: []int{1, 2, 3}})
+		require.NoError(t, err)
+
+		require.Equal(t, strings.TrimSpace(`
+-- River main migration 001 [up]
+SELECT 'up 1' FROM river_table
+
+-- River main migration 002 [up]
+SELECT 'up 2' FROM river_table
+
+-- River main migration 003 [up]
+SELECT 'up 3' FROM river_table
+		`), strings.TrimSpace(bundle.out.String()))
+	})
+
+	t.Run("WithSchema", func(t *testing.T) {
+		t.Parallel()
+
+		cmd, bundle := setup(t)
+
+		_, err := runCommand(ctx, t, cmd, &migrateGetOpts{Schema: "custom_schema", Up: true, Version: []int{1}})
+		require.NoError(t, err)
+
+		require.Equal(t, strings.TrimSpace(`
+-- River main migration 001 [up]
+SELECT 'up 1' FROM custom_schema.river_table
+		`), strings.TrimSpace(bundle.out.String()))
 	})
 }
 

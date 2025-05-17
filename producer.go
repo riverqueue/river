@@ -810,7 +810,6 @@ func (p *producer) pollForSettingChanges(ctx context.Context, wg *sync.WaitGroup
 				// Don't log if this is part of a standard shutdown.
 				if !errors.Is(context.Cause(ctx), startstop.ErrStop) {
 					p.Logger.ErrorContext(ctx, p.Name+": Error fetching queue settings", slog.String("err", err.Error()))
-
 				}
 				continue
 			}
