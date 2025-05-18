@@ -196,7 +196,7 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 	return dbutil.WithTxV(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) (*rivertype.JobRow, error) {
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 
-		cancelledAt, err := params.CancelAttemptedAt.MarshalJSON()
+		cancelledAt, err := params.CancelAttemptedAt.UTC().MarshalJSON()
 		if err != nil {
 			return nil, err
 		}
@@ -597,7 +597,7 @@ func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRes
 				ID:          params.ID[i],
 				Error:       params.Error[i],
 				FinalizedAt: timeStringNullable(params.FinalizedAt[i]),
-				ScheduledAt: params.ScheduledAt[i],
+				ScheduledAt: params.ScheduledAt[i].UTC(),
 				State:       params.State[i],
 			}); err != nil {
 				return interpretError(err)
@@ -822,6 +822,11 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 }
 
 func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateParams) (*rivertype.JobRow, error) {
+	attemptedAt := params.AttemptedAt
+	if attemptedAt != nil {
+		attemptedAt = ptrutil.Ptr(attemptedAt.UTC())
+	}
+
 	attemptedBy, err := json.Marshal(params.AttemptedBy)
 	if err != nil {
 		return nil, err
@@ -832,18 +837,23 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 		return nil, err
 	}
 
+	finalizedAt := params.FinalizedAt
+	if finalizedAt != nil {
+		finalizedAt = ptrutil.Ptr(finalizedAt.UTC())
+	}
+
 	job, err := dbsqlc.New().JobUpdate(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobUpdateParams{
 		ID:                  params.ID,
 		Attempt:             int64(params.Attempt),
 		AttemptDoUpdate:     params.AttemptDoUpdate,
-		AttemptedAt:         params.AttemptedAt,
+		AttemptedAt:         attemptedAt,
 		AttemptedAtDoUpdate: params.AttemptedAtDoUpdate,
 		AttemptedBy:         attemptedBy,
 		AttemptedByDoUpdate: params.AttemptedByDoUpdate,
 		ErrorsDoUpdate:      params.ErrorsDoUpdate,
 		Errors:              errors,
 		FinalizedAtDoUpdate: params.FinalizedAtDoUpdate,
-		FinalizedAt:         params.FinalizedAt,
+		FinalizedAt:         finalizedAt,
 		StateDoUpdate:       params.StateDoUpdate,
 		State:               string(params.State),
 	})
@@ -1045,7 +1055,7 @@ func (e *Executor) QueueCreateOrSetUpdatedAt(ctx context.Context, params *riverd
 func (e *Executor) QueueDeleteExpired(ctx context.Context, params *riverdriver.QueueDeleteExpiredParams) ([]string, error) {
 	queues, err := dbsqlc.New().QueueDeleteExpired(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueDeleteExpiredParams{
 		Max:              int64(params.Max),
-		UpdatedAtHorizon: params.UpdatedAtHorizon,
+		UpdatedAtHorizon: params.UpdatedAtHorizon.UTC(),
 	})
 	if err != nil {
 		return nil, interpretError(err)
@@ -1468,7 +1478,7 @@ func timeString(t time.Time) string {
 	// everything to fail in non-obvious ways.
 	const sqliteFormat = "2006-01-02 15:04:05.999"
 
-	return t.Round(time.Millisecond).Format(sqliteFormat)
+	return t.UTC().Round(time.Millisecond).Format(sqliteFormat)
 }
 
 // This is kind of unfortunate, but I've found it the easiest way to encode an
