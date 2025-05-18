@@ -1754,7 +1754,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		})
 		require.NoError(t, err)
 
-		require.Equal(t, 2, len(results))
+		require.Len(t, results, 2)
 		now := time.Now().UTC()
 
 		assertJobEqualsInput := func(t *testing.T, job *rivertype.JobRow, input *riverdriver.JobInsertFullParams) {
