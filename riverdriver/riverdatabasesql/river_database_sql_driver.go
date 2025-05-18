@@ -393,6 +393,54 @@ func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobIns
 	return jobRowFromInternal(job)
 }
 
+func (e *Executor) JobInsertFullMany(ctx context.Context, params *riverdriver.JobInsertFullManyParams) ([]*rivertype.JobRow, error) {
+	insertJobsParams := &dbsqlc.JobInsertFullManyParams{
+		Args:         make([]string, len(params.Jobs)),
+		Attempt:      make([]int16, len(params.Jobs)),
+		AttemptedAt:  make([]time.Time, len(params.Jobs)),
+		CreatedAt:    make([]time.Time, len(params.Jobs)),
+		FinalizedAt:  make([]time.Time, len(params.Jobs)),
+		Kind:         make([]string, len(params.Jobs)),
+		MaxAttempts:  make([]int16, len(params.Jobs)),
+		Metadata:     make([]string, len(params.Jobs)),
+		Priority:     make([]int16, len(params.Jobs)),
+		Queue:        make([]string, len(params.Jobs)),
+		ScheduledAt:  make([]time.Time, len(params.Jobs)),
+		State:        make([]string, len(params.Jobs)),
+		Tags:         make([]string, len(params.Jobs)),
+		UniqueKey:    make([]string, len(params.Jobs)),
+		UniqueStates: make([]int32, len(params.Jobs)),
+	}
+	now := time.Now().UTC()
+
+	for i := range len(params.Jobs) {
+		jobParams := params.Jobs[i]
+
+		insertJobsParams.Args[i] = cmp.Or(string(jobParams.EncodedArgs), "{}")
+		insertJobsParams.Attempt[i] = int16(min(jobParams.Attempt, math.MaxInt16)) //nolint:gosec
+		insertJobsParams.AttemptedAt[i] = ptrutil.ValOrDefault(jobParams.AttemptedAt, time.Time{})
+		insertJobsParams.CreatedAt[i] = ptrutil.ValOrDefault(jobParams.CreatedAt, now)
+		insertJobsParams.FinalizedAt[i] = ptrutil.ValOrDefault(jobParams.FinalizedAt, time.Time{})
+		insertJobsParams.Kind[i] = jobParams.Kind
+		insertJobsParams.MaxAttempts[i] = int16(min(jobParams.MaxAttempts, math.MaxInt16)) //nolint:gosec
+		insertJobsParams.Metadata[i] = string(jobParams.Metadata)
+		insertJobsParams.Priority[i] = int16(min(jobParams.Priority, math.MaxInt16)) //nolint:gosec
+		insertJobsParams.Queue[i] = jobParams.Queue
+		insertJobsParams.ScheduledAt[i] = ptrutil.ValOrDefault(jobParams.ScheduledAt, now)
+		insertJobsParams.State[i] = string(jobParams.State)
+		insertJobsParams.Tags[i] = strings.Join(sliceutil.FirstNonEmpty(jobParams.Tags, []string{}), ",")
+		insertJobsParams.UniqueKey[i] = string(jobParams.UniqueKey)
+		insertJobsParams.UniqueStates[i] = int32(jobParams.UniqueStates)
+	}
+
+	items, err := dbsqlc.New().JobInsertFullMany(schemaTemplateParam(ctx, params.Schema), e.dbtx, insertJobsParams)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+
+	return mapSliceError(items, jobRowFromInternal)
+}
+
 func (e *Executor) JobList(ctx context.Context, params *riverdriver.JobListParams) ([]*rivertype.JobRow, error) {
 	ctx = sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
 		"order_by_clause": {Value: params.OrderByClause},

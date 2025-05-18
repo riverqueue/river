@@ -5,6 +5,7 @@ package testfactory
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -50,15 +51,27 @@ func Job(ctx context.Context, tb testing.TB, exec riverdriver.Executor, opts *Jo
 func Job_Build(tb testing.TB, opts *JobOpts) *riverdriver.JobInsertFullParams {
 	tb.Helper()
 
+	attemptedAt := opts.AttemptedAt
+	if attemptedAt == nil && (opts.State != nil && (slices.Contains([]rivertype.JobState{
+		rivertype.JobStateCompleted,
+		rivertype.JobStateDiscarded,
+		rivertype.JobStateRetryable,
+		rivertype.JobStateRunning,
+	}, *opts.State))) {
+		attemptedAt = ptrutil.Ptr(time.Now())
+	}
+
 	encodedArgs := opts.EncodedArgs
 	if opts.EncodedArgs == nil {
 		encodedArgs = []byte("{}")
 	}
 
 	finalizedAt := opts.FinalizedAt
-	if finalizedAt == nil && (opts.State != nil && (*opts.State == rivertype.JobStateCompleted ||
-		*opts.State == rivertype.JobStateCancelled ||
-		*opts.State == rivertype.JobStateDiscarded)) {
+	if finalizedAt == nil && (opts.State != nil && (slices.Contains([]rivertype.JobState{
+		rivertype.JobStateCompleted,
+		rivertype.JobStateCancelled,
+		rivertype.JobStateDiscarded,
+	}, *opts.State))) {
 		finalizedAt = ptrutil.Ptr(time.Now())
 	}
 
@@ -74,7 +87,7 @@ func Job_Build(tb testing.TB, opts *JobOpts) *riverdriver.JobInsertFullParams {
 
 	return &riverdriver.JobInsertFullParams{
 		Attempt:      ptrutil.ValOrDefault(opts.Attempt, 0),
-		AttemptedAt:  opts.AttemptedAt,
+		AttemptedAt:  attemptedAt,
 		AttemptedBy:  opts.AttemptedBy,
 		CreatedAt:    opts.CreatedAt,
 		EncodedArgs:  encodedArgs,

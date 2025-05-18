@@ -196,7 +196,7 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 	return dbutil.WithTxV(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) (*rivertype.JobRow, error) {
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 
-		cancelledAt, err := params.CancelAttemptedAt.MarshalJSON()
+		cancelledAt, err := params.CancelAttemptedAt.UTC().MarshalJSON()
 		if err != nil {
 			return nil, err
 		}
@@ -499,6 +499,80 @@ func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobIns
 	return jobRowFromInternal(job)
 }
 
+func (e *Executor) JobInsertFullMany(ctx context.Context, params *riverdriver.JobInsertFullManyParams) ([]*rivertype.JobRow, error) {
+	insertRes := make([]*rivertype.JobRow, len(params.Jobs))
+
+	if err := dbutil.WithTx(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
+		ctx = schemaTemplateParam(ctx, params.Schema)
+		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
+
+		// Should be a batch insert, but that's currently impossible with SQLite/sqlc. https://github.com/sqlc-dev/sqlc/issues/3802
+		for i, jobParams := range params.Jobs {
+			var attemptedBy []byte
+			if jobParams.AttemptedBy != nil {
+				var err error
+				attemptedBy, err = json.Marshal(jobParams.AttemptedBy)
+				if err != nil {
+					return err
+				}
+			}
+
+			var errors []byte
+			if len(jobParams.Errors) > 0 {
+				var err error
+				errors, err = json.Marshal(sliceutil.Map(jobParams.Errors, func(e []byte) json.RawMessage { return json.RawMessage(e) }))
+				if err != nil {
+					return err
+				}
+			}
+
+			tags, err := json.Marshal(jobParams.Tags)
+			if err != nil {
+				return err
+			}
+
+			var uniqueStates *int64
+			if jobParams.UniqueStates != 0 {
+				uniqueStates = ptrutil.Ptr(int64(jobParams.UniqueStates))
+			}
+
+			job, err := dbsqlc.New().JobInsertFull(ctx, dbtx, &dbsqlc.JobInsertFullParams{
+				Attempt:      int64(jobParams.Attempt),
+				AttemptedAt:  timeStringNullable(jobParams.AttemptedAt),
+				AttemptedBy:  attemptedBy,
+				Args:         jobParams.EncodedArgs,
+				CreatedAt:    timeStringNullable(jobParams.CreatedAt),
+				Errors:       errors,
+				FinalizedAt:  timeStringNullable(jobParams.FinalizedAt),
+				Kind:         jobParams.Kind,
+				MaxAttempts:  int64(jobParams.MaxAttempts),
+				Metadata:     sliceutil.FirstNonEmpty(jobParams.Metadata, []byte("{}")),
+				Priority:     int64(jobParams.Priority),
+				Queue:        jobParams.Queue,
+				ScheduledAt:  timeStringNullable(jobParams.ScheduledAt),
+				State:        string(jobParams.State),
+				Tags:         tags,
+				UniqueKey:    jobParams.UniqueKey,
+				UniqueStates: uniqueStates,
+			})
+			if err != nil {
+				return interpretError(err)
+			}
+
+			insertRes[i], err = jobRowFromInternal(job)
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	return insertRes, nil
+}
+
 func (e *Executor) JobList(ctx context.Context, params *riverdriver.JobListParams) ([]*rivertype.JobRow, error) {
 	ctx = sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
 		"order_by_clause": {Value: params.OrderByClause},
@@ -523,7 +597,7 @@ func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRes
 				ID:          params.ID[i],
 				Error:       params.Error[i],
 				FinalizedAt: timeStringNullable(params.FinalizedAt[i]),
-				ScheduledAt: params.ScheduledAt[i],
+				ScheduledAt: params.ScheduledAt[i].UTC(),
 				State:       params.State[i],
 			}); err != nil {
 				return interpretError(err)
@@ -748,6 +822,11 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 }
 
 func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateParams) (*rivertype.JobRow, error) {
+	attemptedAt := params.AttemptedAt
+	if attemptedAt != nil {
+		attemptedAt = ptrutil.Ptr(attemptedAt.UTC())
+	}
+
 	attemptedBy, err := json.Marshal(params.AttemptedBy)
 	if err != nil {
 		return nil, err
@@ -758,18 +837,23 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 		return nil, err
 	}
 
+	finalizedAt := params.FinalizedAt
+	if finalizedAt != nil {
+		finalizedAt = ptrutil.Ptr(finalizedAt.UTC())
+	}
+
 	job, err := dbsqlc.New().JobUpdate(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobUpdateParams{
 		ID:                  params.ID,
 		Attempt:             int64(params.Attempt),
 		AttemptDoUpdate:     params.AttemptDoUpdate,
-		AttemptedAt:         params.AttemptedAt,
+		AttemptedAt:         attemptedAt,
 		AttemptedAtDoUpdate: params.AttemptedAtDoUpdate,
 		AttemptedBy:         attemptedBy,
 		AttemptedByDoUpdate: params.AttemptedByDoUpdate,
 		ErrorsDoUpdate:      params.ErrorsDoUpdate,
 		Errors:              errors,
 		FinalizedAtDoUpdate: params.FinalizedAtDoUpdate,
-		FinalizedAt:         params.FinalizedAt,
+		FinalizedAt:         finalizedAt,
 		StateDoUpdate:       params.StateDoUpdate,
 		State:               string(params.State),
 	})
@@ -971,7 +1055,7 @@ func (e *Executor) QueueCreateOrSetUpdatedAt(ctx context.Context, params *riverd
 func (e *Executor) QueueDeleteExpired(ctx context.Context, params *riverdriver.QueueDeleteExpiredParams) ([]string, error) {
 	queues, err := dbsqlc.New().QueueDeleteExpired(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueDeleteExpiredParams{
 		Max:              int64(params.Max),
-		UpdatedAtHorizon: params.UpdatedAtHorizon,
+		UpdatedAtHorizon: params.UpdatedAtHorizon.UTC(),
 	})
 	if err != nil {
 		return nil, interpretError(err)
@@ -1394,7 +1478,7 @@ func timeString(t time.Time) string {
 	// everything to fail in non-obvious ways.
 	const sqliteFormat = "2006-01-02 15:04:05.999"
 
-	return t.Round(time.Millisecond).Format(sqliteFormat)
+	return t.UTC().Round(time.Millisecond).Format(sqliteFormat)
 }
 
 // This is kind of unfortunate, but I've found it the easiest way to encode an

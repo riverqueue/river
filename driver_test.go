@@ -163,6 +163,88 @@ func TestDriverRiverSQLite(t *testing.T) {
 		})
 }
 
+func BenchmarkDriverRiverDatabaseSQLLibPQ(b *testing.B) {
+	ctx := context.Background()
+
+	connector, err := pq.NewConnector(urlutil.DatabaseSQLCompatibleURL(riversharedtest.TestDatabaseURL()))
+	require.NoError(b, err)
+
+	stdPool := sql.OpenDB(connector)
+	b.Cleanup(func() { require.NoError(b, stdPool.Close()) })
+
+	driver := riverdatabasesql.New(stdPool)
+	schema := riverdbtest.TestSchema(ctx, b, driver, nil)
+
+	riverdrivertest.Benchmark(ctx, b,
+		func(ctx context.Context, b *testing.B) (riverdriver.Driver[*sql.Tx], string) {
+			b.Helper()
+
+			return driver, schema
+		},
+		func(ctx context.Context, b *testing.B) riverdriver.Executor {
+			b.Helper()
+
+			tx, schema := riverdbtest.TestTx(ctx, b, driver, nil)
+
+			// The same thing as the built-in riversharedtest.TestTx does.
+			_, err := tx.ExecContext(ctx, "SET search_path TO '"+schema+"'")
+			require.NoError(b, err)
+
+			return driver.UnwrapExecutor(tx)
+		},
+	)
+}
+
+func BenchmarkDriverRiverDatabaseSQLPgx(b *testing.B) {
+	var (
+		ctx     = context.Background()
+		dbPool  = riversharedtest.DBPool(ctx, b)
+		stdPool = stdlib.OpenDBFromPool(dbPool)
+		driver  = riverdatabasesql.New(stdPool)
+		schema  = riverdbtest.TestSchema(ctx, b, driver, nil)
+	)
+
+	riverdrivertest.Benchmark(ctx, b,
+		func(ctx context.Context, b *testing.B) (riverdriver.Driver[*sql.Tx], string) {
+			b.Helper()
+
+			return driver, schema
+		},
+		func(ctx context.Context, b *testing.B) riverdriver.Executor {
+			b.Helper()
+
+			tx, schema := riverdbtest.TestTx(ctx, b, driver, nil)
+
+			// The same thing as the built-in riversharedtest.TestTx does.
+			_, err := tx.ExecContext(ctx, "SET search_path TO '"+schema+"'")
+			require.NoError(b, err)
+
+			return driver.UnwrapExecutor(tx)
+		},
+	)
+}
+
+func BenchmarkDriverRiverPgxV5(b *testing.B) {
+	var (
+		ctx    = context.Background()
+		dbPool = riversharedtest.DBPool(ctx, b)
+		driver = riverpgxv5.New(dbPool)
+		schema = riverdbtest.TestSchema(ctx, b, driver, nil)
+	)
+
+	riverdrivertest.Benchmark(ctx, b,
+		func(ctx context.Context, b *testing.B) (riverdriver.Driver[pgx.Tx], string) {
+			b.Helper()
+
+			return driver, schema
+		},
+		func(ctx context.Context, b *testing.B) riverdriver.Executor {
+			b.Helper()
+			return riverpgxv5.New(nil).UnwrapExecutor(riverdbtest.TestTxPgx(ctx, b))
+		},
+	)
+}
+
 func BenchmarkDriverRiverPgxV5_Executor(b *testing.B) {
 	const (
 		clientID = "test-client-id"

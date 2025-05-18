@@ -766,6 +766,141 @@ func (q *Queries) JobInsertFull(ctx context.Context, db DBTX, arg *JobInsertFull
 	return &i, err
 }
 
+const jobInsertFullMany = `-- name: JobInsertFullMany :many
+WITH raw_job_data AS (
+    SELECT
+        unnest($1::jsonb[]) AS args,
+        unnest($2::smallint[]) AS attempt,
+        unnest($3::timestamptz[]) AS attempted_at,
+        unnest($4::timestamptz[]) AS created_at,
+        unnest($5::timestamptz[]) AS finalized_at,
+        unnest($6::text[]) AS kind,
+        unnest($7::smallint[]) AS max_attempts,
+        unnest($8::jsonb[]) AS metadata,
+        unnest($9::smallint[]) AS priority,
+        unnest($10::text[]) AS queue,
+        unnest($11::timestamptz[]) AS scheduled_at,
+        unnest($12::text[]) AS state,
+        unnest($13::text[]) AS tags,
+        unnest($14::text[]) AS unique_key,
+        unnest($15::integer[]) AS unique_states
+)
+INSERT INTO /* TEMPLATE: schema */river_job(
+    args,
+    attempt,
+    attempted_at,
+    created_at,
+    finalized_at,
+    kind,
+    max_attempts,
+    metadata,
+    priority,
+    queue,
+    scheduled_at,
+    state,
+    tags,
+    unique_key,
+    unique_states
+)
+SELECT
+    args,
+    coalesce(attempt, 0) AS attempt,
+    coalesce(nullif(attempted_at, '0001-01-01 00:00:00 +0000'), now()) AS attempted_at,
+    coalesce(nullif(created_at, '0001-01-01 00:00:00 +0000'), now()) AS created_at,
+    nullif(finalized_at, '0001-01-01 00:00:00 +0000') AS finalized_at,
+    kind,
+    max_attempts,
+    coalesce(metadata, '{}'::jsonb) AS metadata,
+    priority,
+    queue,
+    coalesce(nullif(scheduled_at, '0001-01-01 00:00:00 +0000'), now()) AS scheduled_at,
+    state::/* TEMPLATE: schema */river_job_state,
+    string_to_array(tags, ',')::varchar(255)[],
+    -- ` + "`" + `nullif` + "`" + ` is required for ` + "`" + `lib/pq` + "`" + `, which doesn't do a good job of reading
+    -- ` + "`" + `nil` + "`" + ` into ` + "`" + `bytea` + "`" + `. We use ` + "`" + `text` + "`" + ` because otherwise ` + "`" + `lib/pq` + "`" + ` will encode
+    -- to Postgres binary like ` + "`" + `\xAAAA` + "`" + `.
+    nullif(unique_key, '')::bytea,
+    nullif(unique_states::integer, 0)::bit(8)
+FROM raw_job_data
+RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
+`
+
+type JobInsertFullManyParams struct {
+	Args         []string
+	Attempt      []int16
+	AttemptedAt  []time.Time
+	CreatedAt    []time.Time
+	FinalizedAt  []time.Time
+	Kind         []string
+	MaxAttempts  []int16
+	Metadata     []string
+	Priority     []int16
+	Queue        []string
+	ScheduledAt  []time.Time
+	State        []string
+	Tags         []string
+	UniqueKey    []string
+	UniqueStates []int32
+}
+
+func (q *Queries) JobInsertFullMany(ctx context.Context, db DBTX, arg *JobInsertFullManyParams) ([]*RiverJob, error) {
+	rows, err := db.QueryContext(ctx, jobInsertFullMany,
+		pq.Array(arg.Args),
+		pq.Array(arg.Attempt),
+		pq.Array(arg.AttemptedAt),
+		pq.Array(arg.CreatedAt),
+		pq.Array(arg.FinalizedAt),
+		pq.Array(arg.Kind),
+		pq.Array(arg.MaxAttempts),
+		pq.Array(arg.Metadata),
+		pq.Array(arg.Priority),
+		pq.Array(arg.Queue),
+		pq.Array(arg.ScheduledAt),
+		pq.Array(arg.State),
+		pq.Array(arg.Tags),
+		pq.Array(arg.UniqueKey),
+		pq.Array(arg.UniqueStates),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverJob
+	for rows.Next() {
+		var i RiverJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Args,
+			&i.Attempt,
+			&i.AttemptedAt,
+			pq.Array(&i.AttemptedBy),
+			&i.CreatedAt,
+			pq.Array(&i.Errors),
+			&i.FinalizedAt,
+			&i.Kind,
+			&i.MaxAttempts,
+			&i.Metadata,
+			&i.Priority,
+			&i.Queue,
+			&i.State,
+			&i.ScheduledAt,
+			pq.Array(&i.Tags),
+			&i.UniqueKey,
+			&i.UniqueStates,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const jobList = `-- name: JobList :many
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 FROM /* TEMPLATE: schema */river_job
@@ -1057,80 +1192,81 @@ func (q *Queries) JobSchedule(ctx context.Context, db DBTX, arg *JobSchedulePara
 const jobSetStateIfRunningMany = `-- name: JobSetStateIfRunningMany :many
 WITH job_input AS (
     SELECT
-        unnest($1::bigint[]) AS id,
-        unnest($2::boolean[]) AS attempt_do_update,
-        unnest($3::int[]) AS attempt,
-        unnest($4::boolean[]) AS errors_do_update,
-        unnest($5::jsonb[]) AS errors,
+        unnest($1::bigint[])                     AS id,
+        unnest($2::boolean[])      AS attempt_do_update,
+        unnest($3::int[])                    AS attempt,
+        unnest($4::boolean[])       AS errors_do_update,
+        unnest($5::jsonb[])                   AS errors,
         unnest($6::boolean[]) AS finalized_at_do_update,
-        unnest($7::timestamptz[]) AS finalized_at,
-        unnest($8::boolean[]) AS metadata_do_merge,
-        unnest($9::jsonb[]) AS metadata_updates,
+        unnest($7::timestamptz[])       AS finalized_at,
+        unnest($8::boolean[])      AS metadata_do_merge,
+        unnest($9::jsonb[])         AS metadata_updates,
         unnest($10::boolean[]) AS scheduled_at_do_update,
-        unnest($11::timestamptz[]) AS scheduled_at,
+        unnest($11::timestamptz[])       AS scheduled_at,
         -- To avoid requiring pgx users to register the OID of the river_job_state[]
         -- type, we cast the array to text[] and then to river_job_state.
         unnest($12::text[])::/* TEMPLATE: schema */river_job_state AS state
 ),
-job_to_update AS (
-    SELECT
-        river_job.id,
-        job_input.attempt,
-        job_input.attempt_do_update,
-        job_input.errors,
-        job_input.errors_do_update,
-        job_input.finalized_at,
-        job_input.finalized_at_do_update,
-        job_input.metadata_do_merge,
-        job_input.metadata_updates,
-        job_input.scheduled_at,
-        job_input.scheduled_at_do_update,
-        (job_input.state IN ('retryable', 'scheduled') AND river_job.metadata ? 'cancel_attempted_at') AS should_cancel,
-        job_input.state
-    FROM /* TEMPLATE: schema */river_job
-    JOIN job_input ON river_job.id = job_input.id
-    WHERE river_job.state = 'running' OR job_input.metadata_do_merge
-    FOR UPDATE
-),
-updated_running AS (
+updated AS (
     UPDATE /* TEMPLATE: schema */river_job
     SET
-        attempt      = CASE WHEN NOT job_to_update.should_cancel AND job_to_update.attempt_do_update THEN job_to_update.attempt
-                            ELSE river_job.attempt END,
-        errors       = CASE WHEN job_to_update.errors_do_update THEN array_append(river_job.errors, job_to_update.errors)
-                            ELSE river_job.errors END,
-        finalized_at = CASE WHEN job_to_update.should_cancel THEN coalesce($13::timestamptz, now())
-                            WHEN job_to_update.finalized_at_do_update THEN job_to_update.finalized_at
-                            ELSE river_job.finalized_at END,
-        metadata     = CASE WHEN job_to_update.metadata_do_merge
-                            THEN river_job.metadata || job_to_update.metadata_updates
-                            ELSE river_job.metadata END,
-        scheduled_at = CASE WHEN NOT job_to_update.should_cancel AND job_to_update.scheduled_at_do_update THEN job_to_update.scheduled_at
-                            ELSE river_job.scheduled_at END,
-        state        = CASE WHEN job_to_update.should_cancel THEN 'cancelled'::/* TEMPLATE: schema */river_job_state
-                            ELSE job_to_update.state END
-    FROM job_to_update
-    WHERE river_job.id = job_to_update.id
-        AND river_job.state = 'running'
-    RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states
-),
-updated_metadata_only AS (
-    UPDATE /* TEMPLATE: schema */river_job
-    SET metadata = river_job.metadata || job_to_update.metadata_updates
-    FROM job_to_update
-    WHERE river_job.id = job_to_update.id
-        AND river_job.id NOT IN (SELECT id FROM updated_running)
-        AND river_job.state != 'running'
-        AND job_to_update.metadata_do_merge
+        attempt = CASE
+            WHEN river_job.state = 'running'
+                 AND NOT (job_input.state IN ('retryable','scheduled') AND river_job.metadata ? 'cancel_attempted_at')
+                 AND job_input.attempt_do_update
+            THEN job_input.attempt
+            ELSE river_job.attempt
+        END,
+        errors = CASE
+            WHEN river_job.state = 'running'
+                 AND job_input.errors_do_update
+            THEN array_append(river_job.errors, job_input.errors)
+            ELSE river_job.errors
+        END,
+        finalized_at = CASE
+            WHEN river_job.state = 'running'
+                 AND (job_input.state IN ('retryable','scheduled') AND river_job.metadata ? 'cancel_attempted_at')
+            THEN coalesce($13::timestamptz, now())
+            WHEN river_job.state = 'running'
+                 AND job_input.finalized_at_do_update
+            THEN job_input.finalized_at
+            ELSE river_job.finalized_at
+        END,
+        metadata = CASE
+            WHEN job_input.metadata_do_merge
+            THEN river_job.metadata || job_input.metadata_updates
+            ELSE river_job.metadata
+        END,
+        scheduled_at = CASE
+            WHEN river_job.state = 'running'
+                 AND NOT (job_input.state IN ('retryable','scheduled') AND river_job.metadata ? 'cancel_attempted_at')
+                 AND job_input.scheduled_at_do_update
+            THEN job_input.scheduled_at
+            ELSE river_job.scheduled_at
+        END,
+        state = CASE
+            WHEN river_job.state = 'running'
+                 AND (job_input.state IN ('retryable','scheduled') AND river_job.metadata ? 'cancel_attempted_at')
+            THEN 'cancelled'::/* TEMPLATE: schema */river_job_state
+            WHEN river_job.state = 'running'
+            THEN job_input.state
+            ELSE river_job.state
+        END
+    FROM job_input
+    WHERE river_job.id = job_input.id
+      AND (river_job.state = 'running' OR job_input.metadata_do_merge)
     RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states
 )
-SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
+SELECT river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states
 FROM /* TEMPLATE: schema */river_job
-WHERE id IN (SELECT id FROM job_input)
-    AND id NOT IN (SELECT id FROM updated_metadata_only)
-    AND id NOT IN (SELECT id FROM updated_running)
-UNION SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states FROM updated_metadata_only
-UNION SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states FROM updated_running
+JOIN job_input ON river_job.id = job_input.id
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM updated
+    WHERE updated.id = river_job.id
+)
+UNION ALL
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states FROM updated
 `
 
 type JobSetStateIfRunningManyParams struct {

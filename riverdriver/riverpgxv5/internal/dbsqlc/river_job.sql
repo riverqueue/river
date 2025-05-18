@@ -302,6 +302,64 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     nullif(@unique_states::integer, 0)::bit(8)
 ) RETURNING *;
 
+-- name: JobInsertFullMany :many
+WITH raw_job_data AS (
+    SELECT
+        unnest(@args::jsonb[]) AS args,
+        unnest(@attempt::smallint[]) AS attempt,
+        unnest(@attempted_at::timestamptz[]) AS attempted_at,
+        unnest(@created_at::timestamptz[]) AS created_at,
+        unnest(@finalized_at::timestamptz[]) AS finalized_at,
+        unnest(@kind::text[]) AS kind,
+        unnest(@max_attempts::smallint[]) AS max_attempts,
+        unnest(@metadata::jsonb[]) AS metadata,
+        unnest(@priority::smallint[]) AS priority,
+        unnest(@queue::text[]) AS queue,
+        unnest(@scheduled_at::timestamptz[]) AS scheduled_at,
+        unnest(@state::text[]) AS state,
+        unnest(@tags::text[]) AS tags,
+        unnest(@unique_key::text[]) AS unique_key,
+        unnest(@unique_states::integer[]) AS unique_states
+)
+INSERT INTO /* TEMPLATE: schema */river_job(
+    args,
+    attempt,
+    attempted_at,
+    created_at,
+    finalized_at,
+    kind,
+    max_attempts,
+    metadata,
+    priority,
+    queue,
+    scheduled_at,
+    state,
+    tags,
+    unique_key,
+    unique_states
+)
+SELECT
+    args,
+    coalesce(attempt, 0) AS attempt,
+    coalesce(nullif(attempted_at, '0001-01-01 00:00:00 +0000'), now()) AS attempted_at,
+    coalesce(nullif(created_at, '0001-01-01 00:00:00 +0000'), now()) AS created_at,
+    nullif(finalized_at, '0001-01-01 00:00:00 +0000') AS finalized_at,
+    kind,
+    max_attempts,
+    coalesce(metadata, '{}'::jsonb) AS metadata,
+    priority,
+    queue,
+    coalesce(nullif(scheduled_at, '0001-01-01 00:00:00 +0000'), now()) AS scheduled_at,
+    state::/* TEMPLATE: schema */river_job_state,
+    string_to_array(tags, ',')::varchar(255)[],
+    -- `nullif` is required for `lib/pq`, which doesn't do a good job of reading
+    -- `nil` into `bytea`. We use `text` because otherwise `lib/pq` will encode
+    -- to Postgres binary like `\xAAAA`.
+    nullif(unique_key, '')::bytea,
+    nullif(unique_states::integer, 0)::bit(8)
+FROM raw_job_data
+RETURNING *;
+
 -- name: JobList :many
 SELECT *
 FROM /* TEMPLATE: schema */river_job
@@ -444,80 +502,81 @@ JOIN updated_jobs ON river_job.id = updated_jobs.id;
 -- name: JobSetStateIfRunningMany :many
 WITH job_input AS (
     SELECT
-        unnest(@ids::bigint[]) AS id,
-        unnest(@attempt_do_update::boolean[]) AS attempt_do_update,
-        unnest(@attempt::int[]) AS attempt,
-        unnest(@errors_do_update::boolean[]) AS errors_do_update,
-        unnest(@errors::jsonb[]) AS errors,
+        unnest(@ids::bigint[])                     AS id,
+        unnest(@attempt_do_update::boolean[])      AS attempt_do_update,
+        unnest(@attempt::int[])                    AS attempt,
+        unnest(@errors_do_update::boolean[])       AS errors_do_update,
+        unnest(@errors::jsonb[])                   AS errors,
         unnest(@finalized_at_do_update::boolean[]) AS finalized_at_do_update,
-        unnest(@finalized_at::timestamptz[]) AS finalized_at,
-        unnest(@metadata_do_merge::boolean[]) AS metadata_do_merge,
-        unnest(@metadata_updates::jsonb[]) AS metadata_updates,
+        unnest(@finalized_at::timestamptz[])       AS finalized_at,
+        unnest(@metadata_do_merge::boolean[])      AS metadata_do_merge,
+        unnest(@metadata_updates::jsonb[])         AS metadata_updates,
         unnest(@scheduled_at_do_update::boolean[]) AS scheduled_at_do_update,
-        unnest(@scheduled_at::timestamptz[]) AS scheduled_at,
+        unnest(@scheduled_at::timestamptz[])       AS scheduled_at,
         -- To avoid requiring pgx users to register the OID of the river_job_state[]
         -- type, we cast the array to text[] and then to river_job_state.
         unnest(@state::text[])::/* TEMPLATE: schema */river_job_state AS state
 ),
-job_to_update AS (
-    SELECT
-        river_job.id,
-        job_input.attempt,
-        job_input.attempt_do_update,
-        job_input.errors,
-        job_input.errors_do_update,
-        job_input.finalized_at,
-        job_input.finalized_at_do_update,
-        job_input.metadata_do_merge,
-        job_input.metadata_updates,
-        job_input.scheduled_at,
-        job_input.scheduled_at_do_update,
-        (job_input.state IN ('retryable', 'scheduled') AND river_job.metadata ? 'cancel_attempted_at') AS should_cancel,
-        job_input.state
-    FROM /* TEMPLATE: schema */river_job
-    JOIN job_input ON river_job.id = job_input.id
-    WHERE river_job.state = 'running' OR job_input.metadata_do_merge
-    FOR UPDATE
-),
-updated_running AS (
+updated AS (
     UPDATE /* TEMPLATE: schema */river_job
     SET
-        attempt      = CASE WHEN NOT job_to_update.should_cancel AND job_to_update.attempt_do_update THEN job_to_update.attempt
-                            ELSE river_job.attempt END,
-        errors       = CASE WHEN job_to_update.errors_do_update THEN array_append(river_job.errors, job_to_update.errors)
-                            ELSE river_job.errors END,
-        finalized_at = CASE WHEN job_to_update.should_cancel THEN coalesce(sqlc.narg('now')::timestamptz, now())
-                            WHEN job_to_update.finalized_at_do_update THEN job_to_update.finalized_at
-                            ELSE river_job.finalized_at END,
-        metadata     = CASE WHEN job_to_update.metadata_do_merge
-                            THEN river_job.metadata || job_to_update.metadata_updates
-                            ELSE river_job.metadata END,
-        scheduled_at = CASE WHEN NOT job_to_update.should_cancel AND job_to_update.scheduled_at_do_update THEN job_to_update.scheduled_at
-                            ELSE river_job.scheduled_at END,
-        state        = CASE WHEN job_to_update.should_cancel THEN 'cancelled'::/* TEMPLATE: schema */river_job_state
-                            ELSE job_to_update.state END
-    FROM job_to_update
-    WHERE river_job.id = job_to_update.id
-        AND river_job.state = 'running'
-    RETURNING river_job.*
-),
-updated_metadata_only AS (
-    UPDATE /* TEMPLATE: schema */river_job
-    SET metadata = river_job.metadata || job_to_update.metadata_updates
-    FROM job_to_update
-    WHERE river_job.id = job_to_update.id
-        AND river_job.id NOT IN (SELECT id FROM updated_running)
-        AND river_job.state != 'running'
-        AND job_to_update.metadata_do_merge
+        attempt = CASE
+            WHEN river_job.state = 'running'
+                 AND NOT (job_input.state IN ('retryable','scheduled') AND river_job.metadata ? 'cancel_attempted_at')
+                 AND job_input.attempt_do_update
+            THEN job_input.attempt
+            ELSE river_job.attempt
+        END,
+        errors = CASE
+            WHEN river_job.state = 'running'
+                 AND job_input.errors_do_update
+            THEN array_append(river_job.errors, job_input.errors)
+            ELSE river_job.errors
+        END,
+        finalized_at = CASE
+            WHEN river_job.state = 'running'
+                 AND (job_input.state IN ('retryable','scheduled') AND river_job.metadata ? 'cancel_attempted_at')
+            THEN coalesce(sqlc.narg('now')::timestamptz, now())
+            WHEN river_job.state = 'running'
+                 AND job_input.finalized_at_do_update
+            THEN job_input.finalized_at
+            ELSE river_job.finalized_at
+        END,
+        metadata = CASE
+            WHEN job_input.metadata_do_merge
+            THEN river_job.metadata || job_input.metadata_updates
+            ELSE river_job.metadata
+        END,
+        scheduled_at = CASE
+            WHEN river_job.state = 'running'
+                 AND NOT (job_input.state IN ('retryable','scheduled') AND river_job.metadata ? 'cancel_attempted_at')
+                 AND job_input.scheduled_at_do_update
+            THEN job_input.scheduled_at
+            ELSE river_job.scheduled_at
+        END,
+        state = CASE
+            WHEN river_job.state = 'running'
+                 AND (job_input.state IN ('retryable','scheduled') AND river_job.metadata ? 'cancel_attempted_at')
+            THEN 'cancelled'::/* TEMPLATE: schema */river_job_state
+            WHEN river_job.state = 'running'
+            THEN job_input.state
+            ELSE river_job.state
+        END
+    FROM job_input
+    WHERE river_job.id = job_input.id
+      AND (river_job.state = 'running' OR job_input.metadata_do_merge)
     RETURNING river_job.*
 )
-SELECT *
+SELECT river_job.*
 FROM /* TEMPLATE: schema */river_job
-WHERE id IN (SELECT id FROM job_input)
-    AND id NOT IN (SELECT id FROM updated_metadata_only)
-    AND id NOT IN (SELECT id FROM updated_running)
-UNION SELECT * FROM updated_metadata_only
-UNION SELECT * FROM updated_running;
+JOIN job_input ON river_job.id = job_input.id
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM updated
+    WHERE updated.id = river_job.id
+)
+UNION ALL
+SELECT * FROM updated;
 
 -- A generalized update for any property on a job. This brings in a large number
 -- of parameters and therefore may be more suitable for testing than production.

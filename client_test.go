@@ -2451,6 +2451,7 @@ func Test_Client_InsertManyFast(t *testing.T) {
 
 		client, _ := setup(t)
 
+		now := time.Now().UTC()
 		count, err := client.InsertManyFast(ctx, []InsertManyParams{
 			{Args: &noOpArgs{}, InsertOpts: &InsertOpts{ScheduledAt: time.Time{}}},
 		})
@@ -2465,7 +2466,7 @@ func Test_Client_InsertManyFast(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, jobs, 1, "Expected to find exactly one job of kind: "+(noOpArgs{}).Kind())
 		jobRow := jobs[0]
-		require.WithinDuration(t, time.Now(), jobRow.ScheduledAt, 2*time.Second)
+		require.WithinDuration(t, now, jobRow.ScheduledAt, 5*time.Second)
 	})
 
 	t.Run("ErrorsOnInvalidQueueName", func(t *testing.T) {
