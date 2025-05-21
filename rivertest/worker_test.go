@@ -255,7 +255,7 @@ func TestWorker_Work(t *testing.T) {
 
 		bundle := setup(t)
 		hourFromNow := time.Now().UTC().Add(1 * time.Hour)
-		timeStub := &TimeStub{}
+		timeStub := &riversharedtest.TimeStub{}
 		timeStub.StubNowUTC(hourFromNow)
 		bundle.config.Test.Time = timeStub
 
