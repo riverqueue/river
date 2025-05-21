@@ -814,6 +814,16 @@ func (e *Executor) QueryRow(ctx context.Context, sql string, args ...any) riverd
 	return e.dbtx.QueryRowContext(ctx, sql, args...)
 }
 
+func (e *Executor) Reindex(ctx context.Context, params *riverdriver.ReindexParams) error {
+	var maybeSchema string
+	if params.Schema != "" {
+		maybeSchema = params.Schema + "."
+	}
+
+	_, err := e.dbtx.ExecContext(ctx, "REINDEX INDEX CONCURRENTLY "+maybeSchema+params.Index)
+	return interpretError(err)
+}
+
 func (e *Executor) SchemaCreate(ctx context.Context, params *riverdriver.SchemaCreateParams) error {
 	_, err := e.dbtx.ExecContext(ctx, "CREATE SCHEMA "+params.Schema)
 	return interpretError(err)

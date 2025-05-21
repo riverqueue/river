@@ -245,6 +245,12 @@ type Executor interface {
 	QueueResume(ctx context.Context, params *QueueResumeParams) error
 	QueueUpdate(ctx context.Context, params *QueueUpdateParams) (*rivertype.Queue, error)
 	QueryRow(ctx context.Context, sql string, args ...any) Row
+
+	// Reindex reindexes a database index. This abstraction is a little leaky
+	// right now because Postgres runs this `CONCURRENTLY` and that's not
+	// possible in SQLite.
+	Reindex(ctx context.Context, params *ReindexParams) error
+
 	SchemaCreate(ctx context.Context, params *SchemaCreateParams) error
 	SchemaDrop(ctx context.Context, params *SchemaDropParams) error
 	SchemaGetExpired(ctx context.Context, params *SchemaGetExpiredParams) ([]string, error)
@@ -730,19 +736,16 @@ type Row interface {
 	Scan(dest ...any) error
 }
 
+type ReindexParams struct {
+	Index  string
+	Schema string
+}
+
 type Schema struct {
 	Name string
 }
 
-type SchemaAttachParams struct {
-	Schema string
-}
-
 type SchemaCreateParams struct {
-	Schema string
-}
-
-type SchemaDetachParams struct {
 	Schema string
 }
 
