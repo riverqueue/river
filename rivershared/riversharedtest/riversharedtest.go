@@ -122,6 +122,10 @@ func DBPoolSQLite(ctx context.Context, tb testing.TB, schema string) *sql.DB {
 	// anyway. See for example:
 	//
 	// https://news.ycombinator.com/item?id=30369095
+	//
+	// An alternative approach is to increase `PRAGMA busy_timeout`, but I've
+	// found that we still run into `SQLITE_BUSY` errors with that at higher
+	// iteration counts like `-run TestClientWithDriverRiverSQLite -count 100`.
 	dbPool.SetMaxOpenConns(1)
 
 	// This innocuous line turns out to be quite important at the tail.
