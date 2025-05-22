@@ -164,7 +164,7 @@ func (s *Reindexer) reindexOne(ctx context.Context, indexName string) error {
 
 	var maybeSchema string
 	if s.Config.Schema != "" {
-		maybeSchema = "." + s.Config.Schema
+		maybeSchema = s.Config.Schema + "."
 	}
 
 	_, err := s.exec.Exec(ctx, "REINDEX INDEX CONCURRENTLY "+maybeSchema+indexName)

@@ -78,6 +78,16 @@ func TestReindexer(t *testing.T) {
 		startstoptest.Stress(ctx, t, svc)
 	})
 
+	t.Run("ReindexesOne", func(t *testing.T) {
+		t.Parallel()
+
+		svc, _ := setup(t)
+
+		for _, indexName := range svc.Config.IndexNames {
+			require.NoError(t, svc.reindexOne(ctx, indexName))
+		}
+	})
+
 	t.Run("ReindexesEachIndex", func(t *testing.T) {
 		t.Parallel()
 
