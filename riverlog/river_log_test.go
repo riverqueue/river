@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"log/slog"
 	"testing"
 
@@ -35,7 +36,9 @@ type loggingWorker struct {
 }
 
 func (w *loggingWorker) Work(ctx context.Context, job *river.Job[loggingArgs]) error {
-	Logger(ctx).InfoContext(ctx, job.Args.Message)
+	if len(job.Args.Message) > 0 {
+		Logger(ctx).InfoContext(ctx, job.Args.Message)
+	}
 
 	if job.Args.DoError {
 		return errors.New("error from worker")
@@ -54,8 +57,10 @@ func TestMiddleware(t *testing.T) {
 	ctx := context.Background()
 
 	type testBundle struct {
-		driver *riverpgxv5.Driver
-		tx     pgx.Tx
+		clientConfig *river.Config
+		driver       *riverpgxv5.Driver
+		middleware   *Middleware
+		tx           pgx.Tx
 	}
 
 	setup := func(t *testing.T, config *MiddlewareConfig) (*rivertest.Worker[loggingArgs, pgx.Tx], *testBundle) {
@@ -74,8 +79,10 @@ func TestMiddleware(t *testing.T) {
 		)
 
 		return rivertest.NewWorker(t, driver, clientConfig, worker), &testBundle{
-			driver: driver,
-			tx:     tx,
+			clientConfig: clientConfig,
+			driver:       driver,
+			middleware:   middleware,
+			tx:           tx,
 		}
 	}
 
@@ -183,6 +190,17 @@ func TestMiddleware(t *testing.T) {
 		)
 	})
 
+	t.Run("EmptyLogsStoreNoMetadata", func(t *testing.T) {
+		t.Parallel()
+
+		testWorker, bundle := setup(t, nil)
+
+		workRes, err := testWorker.Work(ctx, t, bundle.tx, loggingArgs{Message: ""}, nil)
+		require.NoError(t, err)
+
+		require.JSONEq(t, "{}", string(workRes.Job.Metadata))
+	})
+
 	t.Run("TruncatedAtMaxSizeBytes", func(t *testing.T) {
 		t.Parallel()
 
@@ -200,6 +218,41 @@ func TestMiddleware(t *testing.T) {
 			{
 				Attempt: 1,
 				Log:     "Logged from",
+			},
+		},
+			metadataWithLog.RiverLog,
+		)
+	})
+
+	t.Run("RawMiddleware", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t, nil)
+
+		type writerContextKey struct{}
+
+		bundle.middleware.newCustomContext = func(ctx context.Context, w io.Writer) context.Context {
+			logger := log.New(w, "", 0)
+			return context.WithValue(ctx, writerContextKey{}, logger)
+		}
+		bundle.middleware.newSlogHandler = nil
+
+		testWorker := rivertest.NewWorker(t, bundle.driver, bundle.clientConfig, river.WorkFunc(func(ctx context.Context, job *river.Job[loggingArgs]) error {
+			logger := ctx.Value(writerContextKey{}).(*log.Logger) //nolint:forcetypeassert
+			logger.Printf(job.Args.Message)
+			return nil
+		}))
+
+		workRes, err := testWorker.Work(ctx, t, bundle.tx, loggingArgs{Message: "Raw log from worker"}, nil)
+		require.NoError(t, err)
+
+		var metadataWithLog metadataWithLog
+		require.NoError(t, json.Unmarshal(workRes.Job.Metadata, &metadataWithLog))
+
+		require.Equal(t, []logAttempt{
+			{
+				Attempt: 1,
+				Log:     "Raw log from worker\n",
 			},
 		},
 			metadataWithLog.RiverLog,

@@ -42,8 +42,9 @@ func Logger(ctx context.Context) *slog.Logger {
 type Middleware struct {
 	baseservice.BaseService
 	rivertype.Middleware
-	config     *MiddlewareConfig
-	newHandler func(w io.Writer) slog.Handler
+	config           *MiddlewareConfig
+	newCustomContext func(ctx context.Context, w io.Writer) context.Context
+	newSlogHandler   func(w io.Writer) slog.Handler
 }
 
 // MiddlewareConfig is configuration for Middleware.
@@ -64,8 +65,8 @@ type MiddlewareConfig struct {
 	MaxSizeBytes int
 }
 
-// NewMiddleware initializes a new Middleware with the given handler function
-// and configuration.
+// NewMiddleware initializes a new Middleware with the given slog handler
+// initialization function and configuration.
 //
 // newHandler is a function which is invoked on every Work execution to generate
 // a new slog.Handler for a work-specific slog.Logger. It should take an
@@ -77,20 +78,46 @@ type MiddlewareConfig struct {
 //	riverlog.NewMiddleware(func(w io.Writer) slog.Handler {
 //		return slog.NewJSONHandler(w, nil)
 //	}, nil)
-func NewMiddleware(newHandler func(w io.Writer) slog.Handler, config *MiddlewareConfig) *Middleware {
+func NewMiddleware(newSlogHandler func(w io.Writer) slog.Handler, config *MiddlewareConfig) *Middleware {
+	return &Middleware{
+		config:         defaultConfig(config),
+		newSlogHandler: newSlogHandler,
+	}
+}
+
+// NewMiddlewareCustomContext initializes a new Middleware with the given arbitrary
+// context initialization function and configuration.
+//
+// newContext is a function which is invoked on every Work execution to generate
+// a new context for the worker. It's generally used to initialize a logger with
+// the given writer and put it in context under a user-defined context key for
+// later use.
+//
+// This variant is meant to provide callers with a version of the middleware
+// that's not tied to slog. A non-slog standard library logger, Logrus, or Zap
+// logger could all be placed in context according to preferred convention.
+//
+// For example:
+//
+//	riverlog.NewMiddlewareCustomContext(func(ctx context.Context, w io.Writer) context.Context {
+//		logger := log.New(w, "", 0)
+//		return context.WithValue(ctx, ArbitraryContextKey{}, logger)
+//	}, nil),
+func NewMiddlewareCustomContext(newCustomContext func(ctx context.Context, w io.Writer) context.Context, config *MiddlewareConfig) *Middleware {
+	return &Middleware{
+		config:           defaultConfig(config),
+		newCustomContext: newCustomContext,
+	}
+}
+
+func defaultConfig(config *MiddlewareConfig) *MiddlewareConfig {
 	if config == nil {
 		config = &MiddlewareConfig{}
 	}
 
-	// Assign defaults.
-	config = &MiddlewareConfig{
-		MaxSizeBytes: cmp.Or(config.MaxSizeBytes, maxSizeBytes),
-	}
+	config.MaxSizeBytes = cmp.Or(config.MaxSizeBytes, maxSizeBytes)
 
-	return &Middleware{
-		config:     config,
-		newHandler: newHandler,
-	}
+	return config
 }
 
 type logAttempt struct {
@@ -106,8 +133,17 @@ func (m *Middleware) Work(ctx context.Context, job *rivertype.JobRow, doInner fu
 	var (
 		existingLogData metadataWithLog
 		logBuf          bytes.Buffer
-		logger          = slog.New(m.newHandler(&logBuf))
 	)
+
+	switch {
+	case m.newCustomContext != nil:
+		ctx = m.newCustomContext(ctx, &logBuf)
+	case m.newSlogHandler != nil:
+		logger := slog.New(m.newSlogHandler(&logBuf))
+		ctx = context.WithValue(ctx, contextKey{}, logger)
+	default:
+		return errors.New("expected either newContextLogger or newSlogHandler to be set")
+	}
 
 	if err := json.Unmarshal(job.Metadata, &existingLogData); err != nil {
 		return err
@@ -121,6 +157,11 @@ func (m *Middleware) Work(ctx context.Context, job *rivertype.JobRow, doInner fu
 	// This all runs invariant of whether the job panics or returns an error.
 	defer func() {
 		logData := logBuf.String()
+
+		// Return early if nothing ended up getting logged.
+		if len(logData) < 1 {
+			return
+		}
 
 		// Postgres JSONB is limited to 255MB, but it would be a bad idea to get
 		// anywhere close to that limit here.
@@ -145,5 +186,5 @@ func (m *Middleware) Work(ctx context.Context, job *rivertype.JobRow, doInner fu
 		metadataUpdates[metadataKey] = json.RawMessage(allLogDataBytes)
 	}()
 
-	return doInner(context.WithValue(ctx, contextKey{}, logger))
+	return doInner(ctx)
 }
