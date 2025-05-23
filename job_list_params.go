@@ -355,6 +355,14 @@ func (p *JobListParams) Kinds(kinds ...string) *JobListParams {
 	return paramsCopy
 }
 
+// Metadata returns an updated filter set that will return only jobs that has
+// metadata which contains the given JSON fragment at its top level. This is
+// equivalent to the `@>` operator in Postgres:
+//
+// https://www.postgresql.org/docs/current/functions-json.html
+//
+// This function isn't supported in SQLite due to SQLite not having an
+// equivalent operator to use, so there's no efficient way to implement it.
 func (p *JobListParams) Metadata(json string) *JobListParams {
 	paramsCopy := p.copy()
 	paramsCopy.metadataFragment = json
