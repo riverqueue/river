@@ -1266,7 +1266,9 @@ WHERE NOT EXISTS (
     WHERE updated.id = river_job.id
 )
 UNION ALL
-SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states FROM updated
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
+FROM updated
+ORDER BY id
 `
 
 type JobSetStateIfRunningManyParams struct {
