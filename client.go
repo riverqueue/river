@@ -1995,6 +1995,10 @@ type JobListResult struct {
 	LastCursor *JobListCursor
 }
 
+const databaseNameSQLite = "sqlite"
+
+var errJobListParamsMetadataNotSupportedSQLite = errors.New("JobListParams.Metadata is not supported on SQLite")
+
 // JobList returns a paginated list of jobs matching the provided filters. The
 // provided context is used for the underlying Postgres query and can be used to
 // cancel the operation or apply a timeout.
@@ -2014,8 +2018,8 @@ func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) (*JobL
 	}
 	params.schema = c.config.Schema
 
-	if c.driver.DatabaseName() == "sqlite" && params.metadataFragment != "" {
-		return nil, errors.New("JobListResult.Metadata is not supported on SQLite")
+	if c.driver.DatabaseName() == databaseNameSQLite && params.metadataFragment != "" {
+		return nil, errJobListParamsMetadataNotSupportedSQLite
 	}
 
 	dbParams, err := params.toDBParams()
@@ -2048,6 +2052,10 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 		params = NewJobListParams()
 	}
 	params.schema = c.config.Schema
+
+	if c.driver.DatabaseName() == databaseNameSQLite && params.metadataFragment != "" {
+		return nil, errJobListParamsMetadataNotSupportedSQLite
+	}
 
 	dbParams, err := params.toDBParams()
 	if err != nil {

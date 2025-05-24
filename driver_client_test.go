@@ -258,9 +258,73 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		})
 
 		listRes, err := client.JobList(ctx, NewJobListParams().Metadata(`{"foo":"bar"}`))
-		if client.driver.DatabaseName() == "sqlite" {
+		if client.driver.DatabaseName() == databaseNameSQLite {
 			t.Logf("Ignoring unsupported JobListResult.Metadata on SQLite")
-			require.EqualError(t, err, "JobListResult.Metadata is not supported on SQLite")
+			require.ErrorIs(t, err, errJobListParamsMetadataNotSupportedSQLite)
+			return
+		}
+		require.NoError(t, err)
+		require.Len(t, listRes.Jobs, 1)
+		require.Equal(t, job.ID, listRes.Jobs[0].ID)
+	})
+
+	t.Run("JobListTx", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		tx, execTx := beginTx(ctx, t, bundle)
+
+		var (
+			job1 = testfactory.Job(ctx, t, execTx, &testfactory.JobOpts{Schema: bundle.schema})
+			job2 = testfactory.Job(ctx, t, execTx, &testfactory.JobOpts{Schema: bundle.schema})
+		)
+
+		listRes, err := client.JobListTx(ctx, tx, NewJobListParams())
+		require.NoError(t, err)
+		require.Len(t, listRes.Jobs, 2)
+		require.Equal(t, job1.ID, listRes.Jobs[0].ID)
+		require.Equal(t, job2.ID, listRes.Jobs[1].ID)
+	})
+
+	t.Run("JobListTxAllArgs", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		tx, execTx := beginTx(ctx, t, bundle)
+
+		job := testfactory.Job(ctx, t, execTx, &testfactory.JobOpts{Schema: bundle.schema})
+
+		listRes, err := client.JobListTx(ctx, tx,
+			NewJobListParams().
+				IDs(job.ID).
+				Kinds(job.Kind).
+				Priorities(int16(min(job.Priority, math.MaxInt16))). //nolint:gosec
+				Queues(job.Queue).
+				States(job.State),
+		)
+		require.NoError(t, err)
+		require.Len(t, listRes.Jobs, 1)
+		require.Equal(t, job.ID, listRes.Jobs[0].ID)
+	})
+
+	t.Run("JobListTxMetadata", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		tx, execTx := beginTx(ctx, t, bundle)
+
+		job := testfactory.Job(ctx, t, execTx, &testfactory.JobOpts{
+			Metadata: []byte(`{"foo":"bar","bar":"baz"}`),
+			Schema:   bundle.schema,
+		})
+
+		listRes, err := client.JobListTx(ctx, tx, NewJobListParams().Metadata(`{"foo":"bar"}`))
+		if client.driver.DatabaseName() == databaseNameSQLite {
+			t.Logf("Ignoring unsupported JobListTxResult.Metadata on SQLite")
+			require.ErrorIs(t, err, errJobListParamsMetadataNotSupportedSQLite)
 			return
 		}
 		require.NoError(t, err)
