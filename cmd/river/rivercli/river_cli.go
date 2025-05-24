@@ -208,8 +208,8 @@ migration SQL to be dumped for use elsewhere.
 
 Specify a version with --version, and one of --down or --up:
 
-    river migrate-get --version 3 --up > river3.up.sql
-    river migrate-get --version 3 --down > river3.down.sql
+    river migrate-get --version 3 --up > river_3.up.sql
+    river migrate-get --version 3 --down > river_3.down.sql
 
 Can also take multiple versions by separating them with commas or passing
 --version multiple times:
@@ -223,6 +223,11 @@ framework, which aren't necessary if using an external framework:
 
     river migrate-get --all --exclude-version 1 --up > river_all.up.sql
     river migrate-get --all --exclude-version 1 --down > river_all.down.sql
+
+Returns migrations for Postgres by default. Use --database-url to hint a
+non-Postgres alternative:
+
+    river migrate-get --version 6 --up --database-url sqlite:// > river_6.up.sql
 	`),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				return RunCommand(ctx, makeCommandBundle(&opts.DatabaseURL, ""), &migrateGet{}, &opts)
