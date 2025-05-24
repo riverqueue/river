@@ -33,9 +33,9 @@ func (w *LoggingWorker) Work(ctx context.Context, job *river.Job[LoggingArgs]) e
 	return nil
 }
 
-// Example_middleware demonstrates the use of riverlog middleware to inject a
+// ExampleNewMiddleware demonstrates the use of riverlog middleware to inject a
 // logger into context that'll persist its output onto the job record.
-func Example_middleware() {
+func ExampleNewMiddleware() {
 	ctx := context.Background()
 
 	dbPool, err := pgxpool.New(ctx, riversharedtest.TestDatabaseURL())
@@ -83,12 +83,6 @@ func Example_middleware() {
 		panic(err)
 	}
 
-	type metadataWithLog struct {
-		RiverLog []struct {
-			Log string `json:"log"`
-		} `json:"river:log"`
-	}
-
 	// Wait for job to complete, extract log data out of metadata, and print it.
 	for _, event := range riversharedtest.WaitOrTimeoutN(testutil.PanicTB(), subscribeChan, 1) {
 		var metadataWithLog metadataWithLog
@@ -107,4 +101,10 @@ func Example_middleware() {
 	// Output:
 	// Logged from worker
 	// Another line logged from worker
+}
+
+type metadataWithLog struct {
+	RiverLog []struct {
+		Log string `json:"log"`
+	} `json:"river:log"`
 }
