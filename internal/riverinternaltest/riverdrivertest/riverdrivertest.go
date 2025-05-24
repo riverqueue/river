@@ -3826,6 +3826,20 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		require.Equal(t, "foo", fieldFoo)
 	})
 
+	t.Run("Reindex", func(t *testing.T) {
+		t.Parallel()
+
+		// Postgres runs the reindex with `CONCURRENTLY` so this must use a full
+		// schema rather than a transaction block.
+		driver, schema := driverWithSchema(ctx, t, nil)
+
+		err := driver.GetExecutor().Reindex(ctx, &riverdriver.ReindexParams{
+			Index:  "river_job_kind",
+			Schema: schema,
+		})
+		require.NoError(t, err)
+	})
+
 	t.Run("SchemaGetExpired", func(t *testing.T) {
 		t.Parallel()
 

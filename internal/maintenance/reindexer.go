@@ -162,13 +162,7 @@ func (s *Reindexer) reindexOne(ctx context.Context, indexName string) error {
 	ctx, cancel := context.WithTimeout(ctx, s.Config.Timeout)
 	defer cancel()
 
-	var maybeSchema string
-	if s.Config.Schema != "" {
-		maybeSchema = s.Config.Schema + "."
-	}
-
-	_, err := s.exec.Exec(ctx, "REINDEX INDEX CONCURRENTLY "+maybeSchema+indexName)
-	if err != nil {
+	if err := s.exec.Reindex(ctx, &riverdriver.ReindexParams{Schema: s.Config.Schema, Index: indexName}); err != nil {
 		return err
 	}
 
