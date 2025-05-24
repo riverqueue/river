@@ -576,7 +576,9 @@ WHERE NOT EXISTS (
     WHERE updated.id = river_job.id
 )
 UNION ALL
-SELECT * FROM updated;
+SELECT *
+FROM updated
+ORDER BY id;
 
 -- A generalized update for any property on a job. This brings in a large number
 -- of parameters and therefore may be more suitable for testing than production.
