@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"strings"
@@ -399,7 +400,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		p.executorShutdownLoop()
 
 		p.Logger.Debug(p.Name+": Shutdown loop exited, awaiting subroutines", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
-		cancelSubroutines(errors.New("producer stopped"))
+		cancelSubroutines(fmt.Errorf("producer stopped: %w", startstop.ErrStop))
 		subroutineWG.Wait()
 		p.Logger.Debug(p.Name+": Shutdown subroutines completed, finalizing", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
 
