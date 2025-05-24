@@ -1121,6 +1121,75 @@ func (q *Queries) JobScheduleSetDiscarded(ctx context.Context, db DBTX, arg *Job
 	return items, nil
 }
 
+const jobSetCompletedIfRunning = `-- name: JobSetCompletedIfRunning :many
+UPDATE /* TEMPLATE: schema */river_job
+SET finalized_at = coalesce(cast(?1 AS text), datetime('now', 'subsec')),
+    state = 'completed'
+WHERE id IN (/*SLICE:id*/?)
+    AND state = 'running'
+RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
+`
+
+type JobSetCompletedIfRunningParams struct {
+	FinalizedAt *string
+	ID          []int64
+}
+
+// This doesn't exist under the Postgres driver, but is used for an optimized
+// happy path for setting jobs to `complete` where metadata isn't required.
+func (q *Queries) JobSetCompletedIfRunning(ctx context.Context, db DBTX, arg *JobSetCompletedIfRunningParams) ([]*RiverJob, error) {
+	query := jobSetCompletedIfRunning
+	var queryParams []interface{}
+	queryParams = append(queryParams, arg.FinalizedAt)
+	if len(arg.ID) > 0 {
+		for _, v := range arg.ID {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:id*/?", strings.Repeat(",?", len(arg.ID))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:id*/?", "NULL", 1)
+	}
+	rows, err := db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverJob
+	for rows.Next() {
+		var i RiverJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Args,
+			&i.Attempt,
+			&i.AttemptedAt,
+			&i.AttemptedBy,
+			&i.CreatedAt,
+			&i.Errors,
+			&i.FinalizedAt,
+			&i.Kind,
+			&i.MaxAttempts,
+			&i.Metadata,
+			&i.Priority,
+			&i.Queue,
+			&i.State,
+			&i.ScheduledAt,
+			&i.Tags,
+			&i.UniqueKey,
+			&i.UniqueStates,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const jobSetMetadataIfNotRunning = `-- name: JobSetMetadataIfNotRunning :one
 UPDATE /* TEMPLATE: schema */river_job
 SET metadata = json_patch(metadata, json(cast(?1 AS blob)))
