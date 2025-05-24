@@ -61,7 +61,10 @@ func Example_requireManyInserted() {
 	river.AddWorker(workers, &FirstRequiredWorker{})
 	river.AddWorker(workers, &SecondRequiredWorker{})
 
-	schema := riverdbtest.TestSchema(ctx, testutil.PanicTB(), riverpgxv5.New(dbPool), nil)
+	var (
+		schema     = riverdbtest.TestSchema(ctx, testutil.PanicTB(), riverpgxv5.New(dbPool), nil)
+		schemaOpts = &rivertest.RequireInsertedOpts{Schema: schema}
+	)
 
 	riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
 		Logger:  slog.New(&slogutil.SlogMessageOnlyHandler{Level: slog.LevelWarn}),
@@ -97,13 +100,8 @@ func Example_requireManyInserted() {
 	// *testing.T that comes from a test's argument.
 	t := &testing.T{}
 
-	// This is needed because rivertest does not yet support an injected schema.
-	if _, err := tx.Exec(ctx, "SET search_path TO "+schema); err != nil {
-		panic(err)
-	}
-
 	jobs := rivertest.RequireManyInsertedTx[*riverpgxv5.Driver](ctx, t, tx, []rivertest.ExpectedJob{
-		{Args: &FirstRequiredArgs{}},
+		{Args: &FirstRequiredArgs{}, Opts: schemaOpts},
 		{Args: &SecondRequiredArgs{}},
 		{Args: &FirstRequiredArgs{}},
 	})
@@ -117,22 +115,18 @@ func Example_requireManyInserted() {
 		{Args: &SecondRequiredArgs{}, Opts: &rivertest.RequireInsertedOpts{
 			Priority: 1,
 			Queue:    river.QueueDefault,
+			Schema:   schema,
 		}},
 	})
 
-	// Due to some refactoring to make schemas injectable, we don't yet have a
-	// way of injecting a schema at the pool level. The rivertest API will need
-	// to be expanded to allow it.
-	/*
-		// Insert and verify one on a pool instead of transaction.
-		_, err = riverClient.Insert(ctx, &FirstRequiredArgs{Message: "Hello from pool."}, nil)
-		if err != nil {
-			panic(err)
-		}
-		_ = rivertest.RequireManyInserted(ctx, t, riverpgxv5.New(dbPool), []rivertest.ExpectedJob{
-			{Args: &FirstRequiredArgs{}},
-		})
-	*/
+	// Insert and verify one on a pool instead of transaction.
+	_, err = riverClient.Insert(ctx, &FirstRequiredArgs{Message: "Hello from pool."}, nil)
+	if err != nil {
+		panic(err)
+	}
+	_ = rivertest.RequireManyInserted(ctx, t, riverpgxv5.New(dbPool), []rivertest.ExpectedJob{
+		{Args: &FirstRequiredArgs{}, Opts: schemaOpts},
+	})
 
 	// Output:
 	// Job 0 args: {"message": "Hello from first."}
