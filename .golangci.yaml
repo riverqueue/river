@@ -13,6 +13,7 @@ linters:
 
     # disabled because they're annoying/bad
     - cyclop # screams into the void at "cyclomatic complexity"
+    - funcorder # very particular about where unexported functions can go, lots of churn.
     - funlen # screams when functions are more than 60 lines long; what are we even doing here guys
     - interfacebloat # we do in fact want >10 methods on the Adapter interface or wherever we see fit.
     - gocognit # yells that "cognitive complexity" is too high; why

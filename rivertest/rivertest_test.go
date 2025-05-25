@@ -209,20 +209,19 @@ func TestRequireInsertedTx(t *testing.T) {
 	t.Run("InsertOpts", func(t *testing.T) {
 		t.Parallel()
 
-		riverClient, bundle := setup(t)
-
-		// Verify custom insertion options.
-		insertRes, err := riverClient.InsertTx(ctx, bundle.tx, Job2Args{Int: 123}, &river.InsertOpts{
-			MaxAttempts: 78,
-			Priority:    2,
-			Queue:       "another_queue",
-			ScheduledAt: testTime,
-			Tags:        []string{"tag1"},
-		})
-		require.NoError(t, err)
-		job := insertRes.Job
-
 		emptyOpts := func() *RequireInsertedOpts { return &RequireInsertedOpts{} }
+
+		insertJob := func(riverClient *river.Client[pgx.Tx], bundle *testBundle) *rivertype.JobRow {
+			insertRes, err := riverClient.InsertTx(ctx, bundle.tx, Job2Args{Int: 123}, &river.InsertOpts{
+				MaxAttempts: 78,
+				Priority:    2,
+				Queue:       "another_queue",
+				ScheduledAt: testTime,
+				Tags:        []string{"tag1"},
+			})
+			require.NoError(t, err)
+			return insertRes.Job
+		}
 
 		sameOpts := func() *RequireInsertedOpts {
 			return &RequireInsertedOpts{
@@ -236,6 +235,12 @@ func TestRequireInsertedTx(t *testing.T) {
 		}
 
 		t.Run("MaxAttempts", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			_ = insertJob(riverClient, bundle)
+
 			mockT := testutil.NewMockT(t)
 			opts := sameOpts()
 			opts.MaxAttempts = 77
@@ -247,6 +252,12 @@ func TestRequireInsertedTx(t *testing.T) {
 		})
 
 		t.Run("Priority", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			_ = insertJob(riverClient, bundle)
+
 			mockT := testutil.NewMockT(t)
 			opts := sameOpts()
 			opts.Priority = 3
@@ -258,6 +269,12 @@ func TestRequireInsertedTx(t *testing.T) {
 		})
 
 		t.Run("Queue", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			_ = insertJob(riverClient, bundle)
+
 			mockT := testutil.NewMockT(t)
 			opts := sameOpts()
 			opts.Queue = "wrong_queue"
@@ -269,6 +286,12 @@ func TestRequireInsertedTx(t *testing.T) {
 		})
 
 		t.Run("ScheduledAt", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			_ = insertJob(riverClient, bundle)
+
 			mockT := testutil.NewMockT(t)
 			opts := sameOpts()
 			opts.ScheduledAt = testTime.Add(3*time.Minute + 23*time.Second + 123*time.Microsecond)
@@ -280,6 +303,12 @@ func TestRequireInsertedTx(t *testing.T) {
 		})
 
 		t.Run("State", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			_ = insertJob(riverClient, bundle)
+
 			mockT := testutil.NewMockT(t)
 			opts := sameOpts()
 			opts.State = rivertype.JobStateCancelled
@@ -291,6 +320,12 @@ func TestRequireInsertedTx(t *testing.T) {
 		})
 
 		t.Run("Tags", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			_ = insertJob(riverClient, bundle)
+
 			mockT := testutil.NewMockT(t)
 			opts := sameOpts()
 			opts.Tags = []string{"tag2"}
@@ -302,6 +337,12 @@ func TestRequireInsertedTx(t *testing.T) {
 		})
 
 		t.Run("MultiplePropertiesSucceed", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			job := insertJob(riverClient, bundle)
+
 			mockT := testutil.NewMockT(t)
 			opts := emptyOpts()
 			opts.MaxAttempts = job.MaxAttempts
@@ -311,6 +352,12 @@ func TestRequireInsertedTx(t *testing.T) {
 		})
 
 		t.Run("MultiplePropertiesFails", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			_ = insertJob(riverClient, bundle)
+
 			mockT := testutil.NewMockT(t)
 			opts := sameOpts()
 			opts.MaxAttempts = 77
@@ -323,6 +370,12 @@ func TestRequireInsertedTx(t *testing.T) {
 		})
 
 		t.Run("AllSameSucceeds", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			_ = insertJob(riverClient, bundle)
+
 			mockT := testutil.NewMockT(t)
 			opts := sameOpts()
 			requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
@@ -488,20 +541,19 @@ func TestRequireNotInsertedTx(t *testing.T) {
 	t.Run("InsertOpts", func(t *testing.T) {
 		t.Parallel()
 
-		riverClient, bundle := setup(t)
-
-		// Verify custom insertion options.
-		insertRes, err := riverClient.InsertTx(ctx, bundle.tx, Job2Args{Int: 123}, &river.InsertOpts{
-			MaxAttempts: 78,
-			Priority:    2,
-			Queue:       "another_queue",
-			ScheduledAt: testTime,
-			Tags:        []string{"tag1"},
-		})
-		require.NoError(t, err)
-		job := insertRes.Job
-
 		emptyOpts := func() *RequireInsertedOpts { return &RequireInsertedOpts{} }
+
+		insertJob := func(riverClient *river.Client[pgx.Tx], bundle *testBundle) *rivertype.JobRow {
+			insertRes, err := riverClient.InsertTx(ctx, bundle.tx, Job2Args{Int: 123}, &river.InsertOpts{
+				MaxAttempts: 78,
+				Priority:    2,
+				Queue:       "another_queue",
+				ScheduledAt: testTime,
+				Tags:        []string{"tag1"},
+			})
+			require.NoError(t, err)
+			return insertRes.Job
+		}
 
 		sameOpts := func() *RequireInsertedOpts {
 			return &RequireInsertedOpts{
@@ -515,6 +567,12 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		}
 
 		t.Run("MaxAttempts", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			job := insertJob(riverClient, bundle)
+
 			mockT := testutil.NewMockT(t)
 			opts := emptyOpts()
 			opts.MaxAttempts = job.MaxAttempts
@@ -526,6 +584,12 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		})
 
 		t.Run("Priority", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			job := insertJob(riverClient, bundle)
+
 			mockT := testutil.NewMockT(t)
 			opts := emptyOpts()
 			opts.Priority = job.Priority
@@ -537,6 +601,12 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		})
 
 		t.Run("Queue", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			job := insertJob(riverClient, bundle)
+
 			mockT := testutil.NewMockT(t)
 			opts := emptyOpts()
 			opts.Queue = job.Queue
@@ -548,6 +618,12 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		})
 
 		t.Run("ScheduledAt", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			job := insertJob(riverClient, bundle)
+
 			mockT := testutil.NewMockT(t)
 			opts := emptyOpts()
 			opts.ScheduledAt = job.ScheduledAt
@@ -559,6 +635,12 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		})
 
 		t.Run("State", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			job := insertJob(riverClient, bundle)
+
 			mockT := testutil.NewMockT(t)
 			opts := emptyOpts()
 			opts.State = job.State
@@ -570,6 +652,12 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		})
 
 		t.Run("Tags", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			job := insertJob(riverClient, bundle)
+
 			mockT := testutil.NewMockT(t)
 			opts := emptyOpts()
 			opts.Tags = job.Tags
@@ -581,6 +669,12 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		})
 
 		t.Run("MultiplePropertiesSucceed", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			job := insertJob(riverClient, bundle)
+
 			mockT := testutil.NewMockT(t)
 			opts := emptyOpts()
 			opts.MaxAttempts = job.MaxAttempts // one property matches job, but the other does not
@@ -590,6 +684,12 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		})
 
 		t.Run("MultiplePropertiesFail", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			job := insertJob(riverClient, bundle)
+
 			mockT := testutil.NewMockT(t)
 			opts := emptyOpts()
 			opts.MaxAttempts = job.MaxAttempts
@@ -602,6 +702,12 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		})
 
 		t.Run("AllSameFails", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			job := insertJob(riverClient, bundle)
+
 			mockT := testutil.NewMockT(t)
 			opts := sameOpts()
 			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, emptySchema, &Job2Args{}, opts)
@@ -612,6 +718,12 @@ func TestRequireNotInsertedTx(t *testing.T) {
 		})
 
 		t.Run("FailsWithTooManyInserts", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			_ = insertJob(riverClient, bundle)
+
 			_, err := riverClient.InsertTx(ctx, bundle.tx, Job2Args{Int: 123}, &river.InsertOpts{
 				Priority: 3,
 			})

@@ -95,7 +95,7 @@ func TestTestSchema(t *testing.T) {
 
 		var schema string
 
-		t.Run("FirstCheckout", func(t *testing.T) {
+		t.Run("FirstCheckout", func(t *testing.T) { //nolint:paralleltest
 			schema = TestSchema(ctx, t, driver, &TestSchemaOpts{
 				Lines:                []string{}, // non-nil empty indicates no migrations should be run
 				skipPackageNameCheck: true,
@@ -122,7 +122,7 @@ func TestTestSchema(t *testing.T) {
 
 		var schema string
 
-		t.Run("FirstCheckout", func(t *testing.T) {
+		t.Run("FirstCheckout", func(t *testing.T) { //nolint:paralleltest
 			schema = TestSchema(ctx, t, driver, &TestSchemaOpts{
 				LineTargetVersions:   map[string]int{riverdriver.MigrationLineMain: 1},
 				skipPackageNameCheck: true,
