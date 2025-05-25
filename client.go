@@ -23,6 +23,7 @@ import (
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/notifylimiter"
 	"github.com/riverqueue/river/internal/rivercommon"
+	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -823,7 +824,10 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		{
 			periodicJobEnqueuer := maintenance.NewPeriodicJobEnqueuer(archetype, &maintenance.PeriodicJobEnqueuerConfig{
 				AdvisoryLockPrefix: config.AdvisoryLockPrefix,
-				Insert:             client.insertMany,
+				Insert: func(ctx context.Context, execTx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) error {
+					_, err := client.insertMany(ctx, execTx, insertParams)
+					return err
+				},
 			}, driver.GetExecutor())
 			maintenanceServices = append(maintenanceServices, periodicJobEnqueuer)
 			client.testSignals.periodicJobEnqueuer = &periodicJobEnqueuer.TestSignals
@@ -1272,7 +1276,18 @@ func (c *Client[TTx]) Driver() riverdriver.Driver[TTx] {
 // Returns the up-to-date JobRow for the specified jobID if it exists. Returns
 // ErrNotFound if the job doesn't exist.
 func (c *Client[TTx]) JobCancel(ctx context.Context, jobID int64) (*rivertype.JobRow, error) {
-	return c.jobCancel(ctx, c.driver.GetExecutor(), jobID)
+	job, err := c.jobCancel(ctx, c.driver.GetExecutor(), jobID)
+	if err != nil {
+		return nil, err
+	}
+
+	c.notifyProducerWithoutListenerQueueControlEvent(job.Queue, &controlEventPayload{
+		Action: controlActionCancel,
+		JobID:  job.ID,
+		Queue:  job.Queue,
+	})
+
+	return job, nil
 }
 
 // JobCancelTx cancels the job with the given ID within the specified
@@ -1535,21 +1550,16 @@ func (c *Client[TTx]) Insert(ctx context.Context, args JobArgs, opts *InsertOpts
 		return nil, errNoDriverDBPool
 	}
 
-	tx, err := c.driver.GetExecutor().Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-
-	inserted, err := c.insert(ctx, tx, args, opts)
+	res, err := dbutil.WithTxV(ctx, c.driver.GetExecutor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) (*insertManySharedResult, error) {
+		return c.validateParamsAndInsertMany(ctx, execTx, []InsertManyParams{{Args: args, InsertOpts: opts}})
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-	return inserted, nil
+	c.notifyProducerWithoutListenerJobFetch(res.QueuesDeduped)
+
+	return res.InsertResults[0], nil
 }
 
 // InsertTx inserts a new job with the provided args on the given transaction.
@@ -1570,17 +1580,11 @@ func (c *Client[TTx]) Insert(ctx context.Context, args JobArgs, opts *InsertOpts
 // transactions, the job will not be worked until the transaction has committed,
 // and if the transaction rolls back, so too is the inserted job.
 func (c *Client[TTx]) InsertTx(ctx context.Context, tx TTx, args JobArgs, opts *InsertOpts) (*rivertype.JobInsertResult, error) {
-	return c.insert(ctx, c.driver.UnwrapExecutor(tx), args, opts)
-}
-
-func (c *Client[TTx]) insert(ctx context.Context, tx riverdriver.ExecutorTx, args JobArgs, opts *InsertOpts) (*rivertype.JobInsertResult, error) {
-	params := []InsertManyParams{{Args: args, InsertOpts: opts}}
-	results, err := c.validateParamsAndInsertMany(ctx, tx, params)
+	res, err := c.validateParamsAndInsertMany(ctx, c.driver.UnwrapExecutor(tx), []InsertManyParams{{Args: args, InsertOpts: opts}})
 	if err != nil {
 		return nil, err
 	}
-
-	return results[0], nil
+	return res.InsertResults[0], nil
 }
 
 // InsertManyParams encapsulates a single job combined with insert options for
@@ -1612,21 +1616,16 @@ func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams)
 		return nil, errNoDriverDBPool
 	}
 
-	tx, err := c.driver.GetExecutor().Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-
-	inserted, err := c.validateParamsAndInsertMany(ctx, tx, params)
+	res, err := dbutil.WithTxV(ctx, c.driver.GetExecutor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) (*insertManySharedResult, error) {
+		return c.validateParamsAndInsertMany(ctx, execTx, params)
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-	return inserted, nil
+	c.notifyProducerWithoutListenerJobFetch(res.QueuesDeduped)
+
+	return res.InsertResults, nil
 }
 
 // InsertManyTx inserts many jobs at once. Each job is inserted as an
@@ -1648,28 +1647,31 @@ func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams)
 // changes. An inserted job isn't visible to be worked until the transaction
 // commits, and if the transaction rolls back, so too is the inserted job.
 func (c *Client[TTx]) InsertManyTx(ctx context.Context, tx TTx, params []InsertManyParams) ([]*rivertype.JobInsertResult, error) {
-	exec := c.driver.UnwrapExecutor(tx)
-	return c.validateParamsAndInsertMany(ctx, exec, params)
+	res, err := c.validateParamsAndInsertMany(ctx, c.driver.UnwrapExecutor(tx), params)
+	if err != nil {
+		return nil, err
+	}
+	return res.InsertResults, nil
 }
 
 // validateParamsAndInsertMany is a helper method that wraps the insertMany
 // method to provide param validation and conversion prior to calling the actual
 // insertMany method. This allows insertMany to be reused by the
 // PeriodicJobEnqueuer which cannot reference top-level river package types.
-func (c *Client[TTx]) validateParamsAndInsertMany(ctx context.Context, tx riverdriver.ExecutorTx, params []InsertManyParams) ([]*rivertype.JobInsertResult, error) {
+func (c *Client[TTx]) validateParamsAndInsertMany(ctx context.Context, execTx riverdriver.ExecutorTx, params []InsertManyParams) (*insertManySharedResult, error) {
 	insertParams, err := c.insertManyParams(params)
 	if err != nil {
 		return nil, err
 	}
 
-	return c.insertMany(ctx, tx, insertParams)
+	return c.insertMany(ctx, execTx, insertParams)
 }
 
 // insertMany is a shared code path for InsertMany and InsertManyTx, also used
 // by the PeriodicJobEnqueuer.
-func (c *Client[TTx]) insertMany(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) ([]*rivertype.JobInsertResult, error) {
-	return c.insertManyShared(ctx, tx, insertParams, func(ctx context.Context, insertParams []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error) {
-		results, err := c.pilot.JobInsertMany(ctx, tx, &riverdriver.JobInsertFastManyParams{
+func (c *Client[TTx]) insertMany(ctx context.Context, execTx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) (*insertManySharedResult, error) {
+	return c.insertManyShared(ctx, execTx, insertParams, func(ctx context.Context, insertParams []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error) {
+		results, err := c.pilot.JobInsertMany(ctx, execTx, &riverdriver.JobInsertFastManyParams{
 			Jobs:   insertParams,
 			Schema: c.config.Schema,
 		})
@@ -1685,6 +1687,11 @@ func (c *Client[TTx]) insertMany(ctx context.Context, tx riverdriver.ExecutorTx,
 	})
 }
 
+type insertManySharedResult struct {
+	InsertResults []*rivertype.JobInsertResult
+	QueuesDeduped []string
+}
+
 // The shared code path for all Insert and InsertMany methods. It takes a
 // function that executes the actual insert operation and allows for different
 // implementations of the insert query to be passed in, each mapping their
@@ -1694,7 +1701,9 @@ func (c *Client[TTx]) insertManyShared(
 	tx riverdriver.ExecutorTx,
 	insertParams []*rivertype.JobInsertParams,
 	execute func(context.Context, []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error),
-) ([]*rivertype.JobInsertResult, error) {
+) (*insertManySharedResult, error) {
+	var queuesDeduped []string
+
 	doInner := func(ctx context.Context) ([]*rivertype.JobInsertResult, error) {
 		for _, params := range insertParams {
 			for _, hook := range append(
@@ -1710,9 +1719,10 @@ func (c *Client[TTx]) insertManyShared(
 		finalInsertParams := sliceutil.Map(insertParams, func(params *rivertype.JobInsertParams) *riverdriver.JobInsertFastParams {
 			return (*riverdriver.JobInsertFastParams)(params)
 		})
-		results, err := execute(ctx, finalInsertParams)
+
+		insertResults, err := execute(ctx, finalInsertParams)
 		if err != nil {
-			return results, err
+			return insertResults, err
 		}
 
 		queues := make([]string, 0, 10)
@@ -1721,10 +1731,14 @@ func (c *Client[TTx]) insertManyShared(
 				queues = append(queues, params.Queue)
 			}
 		}
-		if err := c.maybeNotifyInsertForQueues(ctx, tx, queues); err != nil {
+
+		queuesDeduped = sliceutil.Uniq(queues)
+
+		if err = c.maybeNotifyInsertForQueues(ctx, tx, queuesDeduped); err != nil {
 			return nil, err
 		}
-		return results, nil
+
+		return insertResults, nil
 	}
 
 	jobInsertMiddleware := c.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindJobInsert)
@@ -1740,7 +1754,15 @@ func (c *Client[TTx]) insertManyShared(
 		}
 	}
 
-	return doInner(ctx)
+	insertResults, err := doInner(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &insertManySharedResult{
+		InsertResults: insertResults,
+		QueuesDeduped: queuesDeduped,
+	}, nil
 }
 
 // Validates input parameters for a batch insert operation and generates a set
@@ -1767,6 +1789,25 @@ func (c *Client[TTx]) insertManyParams(params []InsertManyParams) ([]*rivertype.
 	return insertParams, nil
 }
 
+// Notifies an internal producer of new jobs being queued for work.  Only
+// invoked if the client's driver doesn't support a listener. If a listener is
+// supported, job notifications go out via listen/notify instead.
+//
+// Should only ever be invoked *outside* a transaction. If invoked within a
+// transaction, the producer wouldn't yet be able to access the new jobs that
+// triggered the notification because they're not committed yet.
+func (c *Client[TTx]) notifyProducerWithoutListenerJobFetch(queuesDeduped []string) {
+	if c.driver.SupportsListener() || len(c.producersByQueueName) < 1 {
+		return
+	}
+
+	for _, queue := range queuesDeduped {
+		if producer, ok := c.producersByQueueName[queue]; ok {
+			producer.TriggerJobFetch()
+		}
+	}
+}
+
 // InsertManyFast inserts many jobs at once using Postgres' `COPY FROM` mechanism,
 // making the operation quite fast and memory efficient. Each job is inserted as
 // an InsertManyParams tuple, which takes job args along with an optional set of
@@ -1791,20 +1832,16 @@ func (c *Client[TTx]) InsertManyFast(ctx context.Context, params []InsertManyPar
 	}
 
 	// Wrap in a transaction in case we need to notify about inserts.
-	tx, err := c.driver.GetExecutor().Begin(ctx)
+	res, err := dbutil.WithTxV(ctx, c.driver.GetExecutor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) (*insertManySharedResult, error) {
+		return c.insertManyFast(ctx, execTx, params)
+	})
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback(ctx)
 
-	inserted, err := c.insertManyFast(ctx, tx, params)
-	if err != nil {
-		return 0, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return 0, err
-	}
-	return inserted, nil
+	c.notifyProducerWithoutListenerJobFetch(res.QueuesDeduped)
+
+	return len(res.InsertResults), nil
 }
 
 // InsertManyTx inserts many jobs at once using Postgres' `COPY FROM` mechanism,
@@ -1831,17 +1868,20 @@ func (c *Client[TTx]) InsertManyFast(ctx context.Context, params []InsertManyPar
 // a unique constraint is violated, the operation will fail and no jobs will be
 // inserted.
 func (c *Client[TTx]) InsertManyFastTx(ctx context.Context, tx TTx, params []InsertManyParams) (int, error) {
-	exec := c.driver.UnwrapExecutor(tx)
-	return c.insertManyFast(ctx, exec, params)
-}
-
-func (c *Client[TTx]) insertManyFast(ctx context.Context, execTx riverdriver.ExecutorTx, params []InsertManyParams) (int, error) {
-	insertParams, err := c.insertManyParams(params)
+	res, err := c.insertManyFast(ctx, c.driver.UnwrapExecutor(tx), params)
 	if err != nil {
 		return 0, err
 	}
+	return len(res.InsertResults), nil
+}
 
-	results, err := c.insertManyShared(ctx, execTx, insertParams, func(ctx context.Context, insertParams []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error) {
+func (c *Client[TTx]) insertManyFast(ctx context.Context, execTx riverdriver.ExecutorTx, params []InsertManyParams) (*insertManySharedResult, error) {
+	insertParams, err := c.insertManyParams(params)
+	if err != nil {
+		return nil, err
+	}
+
+	return c.insertManyShared(ctx, execTx, insertParams, func(ctx context.Context, insertParams []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error) {
 		count, err := execTx.JobInsertFastManyNoReturning(ctx, &riverdriver.JobInsertFastManyParams{
 			Jobs:   insertParams,
 			Schema: c.config.Schema,
@@ -1851,34 +1891,25 @@ func (c *Client[TTx]) insertManyFast(ctx context.Context, execTx riverdriver.Exe
 		}
 		return make([]*rivertype.JobInsertResult, count), nil
 	})
-	if err != nil {
-		return 0, err
-	}
-
-	return len(results), nil
 }
 
 // Notify the given queues that new jobs are available. The queues list will be
 // deduplicated and each will be checked to see if it is due for an insert
 // notification from this client.
-func (c *Client[TTx]) maybeNotifyInsertForQueues(ctx context.Context, tx riverdriver.ExecutorTx, queues []string) error {
-	if len(queues) < 1 {
+func (c *Client[TTx]) maybeNotifyInsertForQueues(ctx context.Context, tx riverdriver.ExecutorTx, queuesDeduped []string) error {
+	if len(queuesDeduped) < 1 {
 		return nil
 	}
 
-	queueMap := make(map[string]struct{})
-	queuesDeduped := make([]string, 0, len(queues))
-	payloads := make([]string, 0, len(queues))
+	var (
+		payloads        = make([]string, 0, len(queuesDeduped))
+		queuesTriggered = make([]string, 0, len(queuesDeduped))
+	)
 
-	for _, queue := range queues {
-		if _, ok := queueMap[queue]; ok {
-			continue
-		}
-
-		queueMap[queue] = struct{}{}
+	for _, queue := range queuesDeduped {
 		if c.insertNotifyLimiter.ShouldTrigger(queue) {
 			payloads = append(payloads, fmt.Sprintf("{\"queue\": %q}", queue))
-			queuesDeduped = append(queuesDeduped, queue)
+			queuesTriggered = append(queuesTriggered, queue)
 		}
 	}
 
@@ -1896,7 +1927,7 @@ func (c *Client[TTx]) maybeNotifyInsertForQueues(ctx context.Context, tx riverdr
 			c.baseService.Logger.ErrorContext(
 				ctx,
 				c.baseService.Name+": Failed to send job insert notification",
-				slog.String("queues", strings.Join(queuesDeduped, ",")),
+				slog.String("queues", strings.Join(queuesTriggered, ",")),
 				slog.String("err", err.Error()),
 			)
 			return err
@@ -1907,7 +1938,7 @@ func (c *Client[TTx]) maybeNotifyInsertForQueues(ctx context.Context, tx riverdr
 }
 
 // emit a notification about a queue being paused or resumed.
-func (c *Client[TTx]) notifyQueuePauseOrResume(ctx context.Context, tx riverdriver.ExecutorTx, action controlAction, queue string, opts *QueuePauseOpts) error {
+func (c *Client[TTx]) notifyQueuePauseOrResume(ctx context.Context, tx riverdriver.ExecutorTx, action controlAction, queue string, opts *QueuePauseOpts) (*controlEventPayload, error) {
 	c.baseService.Logger.DebugContext(ctx,
 		c.baseService.Name+": Notifying about queue state change",
 		slog.String("action", string(action)),
@@ -1915,9 +1946,11 @@ func (c *Client[TTx]) notifyQueuePauseOrResume(ctx context.Context, tx riverdriv
 		slog.String("opts", fmt.Sprintf("%+v", opts)),
 	)
 
-	payload, err := json.Marshal(controlEventPayload{Action: action, Queue: queue})
+	controlEvent := &controlEventPayload{Action: action, Queue: queue}
+
+	payload, err := json.Marshal(controlEvent)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if c.driver.SupportsListenNotify() {
@@ -1932,11 +1965,11 @@ func (c *Client[TTx]) notifyQueuePauseOrResume(ctx context.Context, tx riverdriv
 				c.baseService.Name+": Failed to send queue state change notification",
 				slog.String("err", err.Error()),
 			)
-			return err
+			return nil, err
 		}
 	}
 
-	return nil
+	return controlEvent, nil
 }
 
 // Validates job args prior to insertion. Currently, verifies that a worker to
@@ -2221,11 +2254,18 @@ func (c *Client[TTx]) QueuePause(ctx context.Context, name string, opts *QueuePa
 		return err
 	}
 
-	if err := c.notifyQueuePauseOrResume(ctx, tx, controlActionPause, name, opts); err != nil {
+	controlEvent, err := c.notifyQueuePauseOrResume(ctx, tx, controlActionPause, name, opts)
+	if err != nil {
 		return err
 	}
 
-	return tx.Commit(ctx)
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
+
+	c.notifyProducerWithoutListenerQueueControlEvent(name, controlEvent)
+
+	return nil
 }
 
 // QueuePauseTx pauses the queue with the given name. When a queue is paused,
@@ -2249,7 +2289,7 @@ func (c *Client[TTx]) QueuePauseTx(ctx context.Context, tx TTx, name string, opt
 		return err
 	}
 
-	if err := c.notifyQueuePauseOrResume(ctx, executorTx, controlActionPause, name, opts); err != nil {
+	if _, err := c.notifyQueuePauseOrResume(ctx, executorTx, controlActionPause, name, opts); err != nil {
 		return err
 	}
 
@@ -2282,11 +2322,18 @@ func (c *Client[TTx]) QueueResume(ctx context.Context, name string, opts *QueueP
 		return err
 	}
 
-	if err := c.notifyQueuePauseOrResume(ctx, tx, controlActionResume, name, opts); err != nil {
+	controlEvent, err := c.notifyQueuePauseOrResume(ctx, tx, controlActionResume, name, opts)
+	if err != nil {
 		return err
 	}
 
-	return tx.Commit(ctx)
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
+
+	c.notifyProducerWithoutListenerQueueControlEvent(name, controlEvent)
+
+	return nil
 }
 
 // QueueResume resumes the queue with the given name. If the queue was
@@ -2311,7 +2358,7 @@ func (c *Client[TTx]) QueueResumeTx(ctx context.Context, tx TTx, name string, op
 		return err
 	}
 
-	if err := c.notifyQueuePauseOrResume(ctx, executorTx, controlActionResume, name, opts); err != nil {
+	if _, err := c.notifyQueuePauseOrResume(ctx, executorTx, controlActionResume, name, opts); err != nil {
 		return err
 	}
 
@@ -2334,7 +2381,7 @@ func (c *Client[TTx]) QueueUpdate(ctx context.Context, name string, params *Queu
 	}
 	defer tx.Rollback(ctx)
 
-	queue, err := c.queueUpdate(ctx, tx, name, params)
+	queue, controlEvent, err := c.queueUpdate(ctx, tx, name, params)
 	if err != nil {
 		return nil, err
 	}
@@ -2343,18 +2390,39 @@ func (c *Client[TTx]) QueueUpdate(ctx context.Context, name string, params *Queu
 		return nil, err
 	}
 
+	c.notifyProducerWithoutListenerQueueControlEvent(name, controlEvent)
+
 	return queue, nil
 }
 
 // QueueUpdateTx updates a queue's settings in the database. These settings
 // override the settings in the client (if applied).
 func (c *Client[TTx]) QueueUpdateTx(ctx context.Context, tx TTx, name string, params *QueueUpdateParams) (*rivertype.Queue, error) {
-	executorTx := c.driver.UnwrapExecutor(tx)
-
-	return c.queueUpdate(ctx, executorTx, name, params)
+	queue, _, err := c.queueUpdate(ctx, c.driver.UnwrapExecutor(tx), name, params)
+	if err != nil {
+		return nil, err
+	}
+	return queue, nil
 }
 
-func (c *Client[TTx]) queueUpdate(ctx context.Context, executorTx riverdriver.ExecutorTx, name string, params *QueueUpdateParams) (*rivertype.Queue, error) {
+// Notifies an internal producer of a queue control event like pause/resume.
+// Only invoked if the client's driver doesn't support a listener. If a listener
+// is supported, control events go out via listen/notify instead.
+//
+// Should only ever be invoked *outside* a transaction. If invoked within a
+// transaction, the producer wouldn't yet be able to access the state that
+// triggered the notification because it's not committed yet.
+func (c *Client[TTx]) notifyProducerWithoutListenerQueueControlEvent(queue string, controlEvent *controlEventPayload) {
+	if c.driver.SupportsListener() || len(c.producersByQueueName) < 1 {
+		return
+	}
+
+	if producer, ok := c.producersByQueueName[queue]; ok {
+		producer.TriggerQueueControlEvent(controlEvent)
+	}
+}
+
+func (c *Client[TTx]) queueUpdate(ctx context.Context, executorTx riverdriver.ExecutorTx, name string, params *QueueUpdateParams) (*rivertype.Queue, *controlEventPayload, error) {
 	updateMetadata := len(params.Metadata) > 0
 
 	queue, err := executorTx.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
@@ -2364,31 +2432,35 @@ func (c *Client[TTx]) queueUpdate(ctx context.Context, executorTx riverdriver.Ex
 		Schema:           c.config.Schema,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	if updateMetadata {
-		payload, err := json.Marshal(controlEventPayload{
-			Action:   controlActionMetadataChanged,
-			Metadata: params.Metadata,
-			Queue:    queue.Name,
-		})
-		if err != nil {
-			return nil, err
-		}
+	if !updateMetadata {
+		return queue, nil, err
+	}
 
-		if c.driver.SupportsListenNotify() {
-			if err := executorTx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
-				Payload: []string{string(payload)},
-				Schema:  c.config.Schema,
-				Topic:   string(notifier.NotificationTopicControl),
-			}); err != nil {
-				return nil, err
-			}
+	controlEvent := &controlEventPayload{
+		Action:   controlActionMetadataChanged,
+		Metadata: params.Metadata,
+		Queue:    queue.Name,
+	}
+
+	payload, err := json.Marshal(controlEvent)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if c.driver.SupportsListenNotify() {
+		if err := executorTx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+			Payload: []string{string(payload)},
+			Schema:  c.config.Schema,
+			Topic:   string(notifier.NotificationTopicControl),
+		}); err != nil {
+			return nil, nil, err
 		}
 	}
 
-	return queue, nil
+	return queue, controlEvent, nil
 }
 
 // QueueBundle is a bundle for adding additional queues. It's made accessible

@@ -1,7 +1,6 @@
 package testsignal
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/riverqueue/river/rivershared/riversharedtest"
@@ -38,6 +37,20 @@ func (s *TestSignal[T]) Init(tb testutil.TestingTB) {
 	s.tb = tb
 }
 
+// RequireEmpty requires that the test signal be empty (i.e. have not received
+// any values).
+func (s *TestSignal[T]) RequireEmpty() {
+	if s.internalChan == nil {
+		panic("test only signal is not initialized; called outside of tests?")
+	}
+
+	select {
+	case val := <-s.internalChan:
+		s.tb.Errorf("test signal should be empty, but wasn't\ngot value: %v\n", val)
+	default:
+	}
+}
+
 // Signal signals the test signal. In production where the signal hasn't been
 // initialized, this no ops harmlessly. In tests, the value is written to an
 // internal asynchronous channel which can be waited with WaitOrTimeout.
@@ -52,7 +65,6 @@ func (s *TestSignal[T]) Signal(val T) {
 	case s.internalChan <- val:
 	default:
 		s.tb.Errorf("test only signal channel is full")
-		s.tb.FailNow()
 	}
 }
 
@@ -77,9 +89,12 @@ func (s *TestSignal[T]) WaitOrTimeout() T {
 	timeout := riversharedtest.WaitTimeout()
 
 	select {
-	case value := <-s.internalChan:
-		return value
+	case val := <-s.internalChan:
+		return val
 	case <-time.After(timeout):
-		panic(fmt.Sprintf("timed out waiting on test signal after %s", timeout))
+		s.tb.Errorf("timed out waiting on test signal after %s", timeout)
 	}
+
+	var val T
+	return val
 }
