@@ -41,21 +41,25 @@ const (
 
 // Test-only properties.
 type producerTestSignals struct {
-	DeletedExpiredQueueRecords testsignal.TestSignal[struct{}] // notifies when the producer deletes expired queue records
-	MetadataChanged            testsignal.TestSignal[struct{}] // notifies when the producer detects a metadata change
-	Paused                     testsignal.TestSignal[struct{}] // notifies when the producer is paused
-	PolledQueueConfig          testsignal.TestSignal[struct{}] // notifies when the producer polls for queue settings
-	ReportedProducerStatus     testsignal.TestSignal[struct{}] // notifies when the producer reports its own status
-	ReportedQueueStatus        testsignal.TestSignal[struct{}] // notifies when the producer reports queue status
-	Resumed                    testsignal.TestSignal[struct{}] // notifies when the producer is resumed
-	StartedExecutors           testsignal.TestSignal[struct{}] // notifies when runOnce finishes a pass
+	DeletedExpiredQueueRecords testsignal.TestSignal[struct{}]             // notifies when the producer deletes expired queue records
+	JobFetchTriggered          testsignal.TestSignal[struct{}]             // notifies when the producer's fetch limiter is triggered via triggerJobFetch
+	MetadataChanged            testsignal.TestSignal[struct{}]             // notifies when the producer detects a metadata change
+	Paused                     testsignal.TestSignal[struct{}]             // notifies when the producer is paused
+	PolledQueueConfig          testsignal.TestSignal[struct{}]             // notifies when the producer polls for queue settings
+	QueueControlEventTriggered testsignal.TestSignal[*controlEventPayload] // notifies when a queue control event is triggered via triggerQueueControlEvent
+	ReportedProducerStatus     testsignal.TestSignal[struct{}]             // notifies when the producer reports its own status
+	ReportedQueueStatus        testsignal.TestSignal[struct{}]             // notifies when the producer reports queue status
+	Resumed                    testsignal.TestSignal[struct{}]             // notifies when the producer is resumed
+	StartedExecutors           testsignal.TestSignal[struct{}]             // notifies when runOnce finishes a pass
 }
 
 func (ts *producerTestSignals) Init(tb testutil.TestingTB) {
 	ts.DeletedExpiredQueueRecords.Init(tb)
+	ts.JobFetchTriggered.Init(tb)
 	ts.MetadataChanged.Init(tb)
 	ts.Paused.Init(tb)
 	ts.PolledQueueConfig.Init(tb)
+	ts.QueueControlEventTriggered.Init(tb)
 	ts.ReportedQueueStatus.Init(tb)
 	ts.ReportedProducerStatus.Init(tb)
 	ts.Resumed.Init(tb)
@@ -182,6 +186,7 @@ type producer struct {
 	id           atomic.Int64 // atomic because it's written at startup and read during shutdown
 	exec         riverdriver.Executor
 	errorHandler jobexecutor.ErrorHandler
+	fetchLimiter *chanutil.DebouncedChan
 	state        riverpilot.ProducerState
 	pilot        riverpilot.Pilot
 	workers      *Workers
@@ -324,7 +329,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 	p.id.Store(id)
 
 	// TODO: fetcher should have some jitter in it to avoid stampeding issues.
-	fetchLimiter := chanutil.NewDebouncedChan(fetchCtx, p.config.FetchCooldown, true)
+	p.fetchLimiter = chanutil.NewDebouncedChan(fetchCtx, p.config.FetchCooldown, true)
 
 	var (
 		controlSub *notifier.Subscription
@@ -343,7 +348,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 				return
 			}
 			p.Logger.DebugContext(workCtx, p.Name+": Received insert notification", slog.String("queue", decoded.Queue))
-			fetchLimiter.Call()
+			p.fetchLimiter.Call()
 		}
 		insertSub, err = p.config.Notifier.Listen(fetchCtx, notifier.NotificationTopicInsert, handleInsertNotification)
 		if err != nil {
@@ -395,7 +400,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 			go p.pollForSettingChanges(subroutineCtx, &subroutineWG, initiallyPaused, initialMetadata)
 		}
 
-		p.fetchAndRunLoop(fetchCtx, workCtx, fetchLimiter)
+		p.fetchAndRunLoop(fetchCtx, workCtx)
 		p.Logger.Debug(p.Name+": Entering shutdown loop", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
 		p.executorShutdownLoop()
 
@@ -408,6 +413,29 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 	}()
 
 	return nil
+}
+
+// TriggerJobFetch manually triggers the producer to perform a job fetch
+// (although it's debounced, so it may not happen immediately if a fetch was
+// performed very recently). This is used by clients using drivers that don't
+// support listeners to wake a producer immediately after a job insert was known
+// to be performed so the producer doesn't have to wait on polling.
+func (p *producer) TriggerJobFetch() {
+	if p.fetchLimiter != nil {
+		p.fetchLimiter.Call()
+	}
+	p.testSignals.JobFetchTriggered.Signal(struct{}{})
+}
+
+// TriggerQueueControlEvent manually injects a queue control event into the
+// producer's queue control channel as if it'd been received through
+// listen/notify. This is used by clients using drivers that don't support
+// listeners to wake a producer immediately after a queue control event was
+// known to be performed so the producer doesn't have to wait on polling.
+func (p *producer) TriggerQueueControlEvent(controlEvent *controlEventPayload) {
+	p.queueControlCh <- controlEvent
+	p.testSignals.QueueControlEventTriggered.Signal(controlEvent)
+
 }
 
 type controlAction string
@@ -475,10 +503,10 @@ func (p *producer) handleControlNotification(workCtx context.Context) func(notif
 	}
 }
 
-func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimiter *chanutil.DebouncedChan) {
+func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context) {
 	// Prime the fetchLimiter so we can make an initial fetch without waiting for
 	// an insert notification or a fetch poll.
-	fetchLimiter.Call()
+	p.fetchLimiter.Call()
 
 	fetchPollTimer := time.NewTimer(p.config.FetchPollInterval)
 	go func() {
@@ -491,7 +519,7 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 				}
 				return
 			case <-fetchPollTimer.C:
-				fetchLimiter.Call()
+				p.fetchLimiter.Call()
 				fetchPollTimer.Reset(p.config.FetchPollInterval)
 			}
 		}
@@ -533,7 +561,7 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 				}
 				p.paused = false
 				p.Logger.DebugContext(workCtx, p.Name+": Resumed", slog.String("queue", p.config.Queue), slog.String("queue_in_message", msg.Queue))
-				fetchLimiter.Call() // try another fetch because more jobs may be available to run which were gated behind the paused queue
+				p.fetchLimiter.Call() // try another fetch because more jobs may be available to run which were gated behind the paused queue
 				p.testSignals.Resumed.Signal(struct{}{})
 				if p.config.QueueEventCallback != nil {
 					p.config.QueueEventCallback(&Event{Kind: EventKindQueueResumed, Queue: &rivertype.Queue{Name: p.config.Queue}})
@@ -543,7 +571,7 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 			}
 		case jobID := <-p.cancelCh:
 			p.maybeCancelJob(jobID)
-		case <-fetchLimiter.C():
+		case <-p.fetchLimiter.C():
 			p.innerFetchLoop(workCtx, fetchResultCh)
 			// Ensure we can't start another fetch when fetchCtx is done, even if
 			// the fetchLimiter is also ready to fire:
@@ -560,7 +588,7 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context, fetchLimit
 				// more aggressive triggering the fetch limiter now that we have a slot
 				// available.
 				p.fetchWhenSlotsAreAvailable = false
-				fetchLimiter.Call()
+				p.fetchLimiter.Call()
 			}
 		}
 	}

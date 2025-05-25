@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"log/slog"
-	"time"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver"
@@ -36,9 +35,7 @@ func Example_sqlite() {
 	river.AddWorker(workers, &SortWorker{})
 
 	riverClient, err := river.NewClient(driver, &river.Config{
-		FetchCooldown:     20 * time.Millisecond,
-		FetchPollInterval: 50 * time.Millisecond, // this driver is poll only, so speed up poll interval so the test runs fater
-		Logger:            slog.New(&slogutil.SlogMessageOnlyHandler{Level: slog.LevelWarn}),
+		Logger: slog.New(&slogutil.SlogMessageOnlyHandler{Level: slog.LevelWarn}),
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: 100},
 		},
