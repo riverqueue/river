@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+⚠️ Internal APIs used for communication between River and River Pro have changed. If using River Pro, make sure to update River and River Pro to latest at the same time to get compatible versions. River v0.23.0 is compatible with River Pro v0.15.0.
+
 **Terminal UI:** @almottier wrote a very cool [terminal UI for River](https://github.com/almottier/rivertui) featuring real-time job monitoring with automatic refresh, job filtering, a job details view providing detailed information (plus look up by ID in the UI or by command line argument), and job actions like retry and cancellation. And as good as all that might sound, go take a look because it's even better in person.
 
 ### Added
@@ -23,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Optimized the job completer's query `JobSetStateIfRunningMany`, resulting in an approximately 15% reduction in its duration when completing 2000 jobs, and around a 15-20% increase in `riverbench` throughput. [PR #904](https://github.com/riverqueue/river/pull/904).
 - `TimeStub` has been removed from the `rivertest` package. Its original inclusion was entirely accidentally and it should be considered entirely an internal API. [PR #912](https://github.com/riverqueue/river/pull/912).
 - When storing job-persisted logging with `riverlog`, if a work run's logging was completely empty, no metadata value is stored at all (previously, an empty value was stored). [PR #919](https://github.com/riverqueue/river/pull/919).
+- Changed the internal integration APIs for River Pro. River Pro users must upgrade both libraries as part of this update. [PR #929](https://github.com/riverqueue/river/pull/929).
 
 ### Fixed
 
@@ -33,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Return specific explanatory error when attempting to use `JobListParams.Metadata` with `JobListTx` on SQLite. [PR #924](https://github.com/riverqueue/river/pull/924).
 - The reindexer now skips work if artifacts from a failed reindex are present under the assumption that if they are, a new reindex build is likely to fail again. Context cancel timeout is increased from 15 seconds to 1 minute, allowing more time for reindexes to finish. Timeout becomes configurable with `Config.ReindexerTimeout`. [PR #935](https://github.com/riverqueue/river/pull/935).
 - Accessing `Client.PeriodicJobs()` on an insert-only client now panics with a more helpful explanatory error message rather than an unhelpful nil pointer panic. [PR #938](https://github.com/riverqueue/river/pull/938).
+- Return an error when adding a new queue at runtime via the `QueueBundle` if that queue was already added. [PR #929](https://github.com/riverqueue/river/pull/929).
 
 ## [0.22.0] - 2025-05-10
 

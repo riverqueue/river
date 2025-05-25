@@ -1,6 +1,7 @@
 package river
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/riverqueue/river/rivertype"
@@ -34,6 +35,21 @@ type JobSnoozeError = rivertype.JobSnoozeError
 // Panics if duration is < 0.
 func JobSnooze(duration time.Duration) error {
 	return &rivertype.JobSnoozeError{Duration: duration}
+}
+
+// QueueAlreadyAddedError is returned when attempting to add a queue that has
+// already been added to the Client.
+type QueueAlreadyAddedError struct {
+	Name string
+}
+
+func (e *QueueAlreadyAddedError) Error() string {
+	return fmt.Sprintf("queue %q already added", e.Name)
+}
+
+func (e *QueueAlreadyAddedError) Is(target error) bool {
+	_, ok := target.(*QueueAlreadyAddedError)
+	return ok
 }
 
 // UnknownJobKindError is returned when a Client fetches and attempts to

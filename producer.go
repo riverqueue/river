@@ -307,16 +307,21 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 	initialMetadata := []byte("{}")
 	if fetchedQueue != nil {
 		initialMetadata = fetchedQueue.Metadata
+		if err := p.pilot.QueueMetadataChanged(fetchCtx, p.exec, &riverpilot.QueueMetadataChangedParams{
+			Queue:    p.config.Queue,
+			Metadata: initialMetadata,
+		}); err != nil {
+			p.Logger.ErrorContext(fetchCtx, p.Name+": Error setting fetched queue metadata with pilot", slog.String("queue", p.config.Queue), slog.String("err", err.Error()))
+		}
 	}
 	p.paused = initiallyPaused
 
 	id := p.id.Load()
 	id, p.state, err = p.pilot.ProducerInit(fetchCtx, p.exec, &riverpilot.ProducerInitParams{
-		ClientID:      p.config.ClientID,
-		ProducerID:    id,
-		Queue:         p.config.Queue,
-		QueueMetadata: initialMetadata,
-		Schema:        p.config.Schema,
+		ClientID:   p.config.ClientID,
+		ProducerID: id,
+		Queue:      p.config.Queue,
+		Schema:     p.config.Schema,
 	})
 	if err != nil {
 		stopped()
@@ -539,9 +544,8 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context) {
 				p.Logger.DebugContext(workCtx, p.Name+": Queue metadata changed", slog.String("queue", p.config.Queue), slog.String("queue_in_message", msg.Queue))
 				p.testSignals.MetadataChanged.Signal(struct{}{})
 				if err := p.pilot.QueueMetadataChanged(workCtx, p.exec, &riverpilot.QueueMetadataChangedParams{
+					Queue:    p.config.Queue,
 					Metadata: msg.Metadata,
-					Schema:   p.config.Schema,
-					State:    p.state,
 				}); err != nil {
 					p.Logger.ErrorContext(workCtx, p.Name+": Error updating queue metadata with pilot", slog.String("queue", p.config.Queue), slog.String("err", err.Error()))
 				}
@@ -658,8 +662,8 @@ func (p *producer) finalizeShutdown(ctx context.Context) {
 
 		if err := p.pilot.ProducerShutdown(ctx, p.exec, &riverpilot.ProducerShutdownParams{
 			ProducerID: p.id.Load(),
+			Queue:      p.config.Queue,
 			Schema:     p.config.Schema,
-			State:      p.state,
 		}); err != nil {
 			// Don't retry on these errors:
 			// - context.Canceled: parent context is canceled, so retrying with a new timeout won't help

@@ -678,7 +678,11 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		testSignals:          clientTestSignals{},
 		workCancel:           func(cause error) {}, // replaced on start, but here in case StopAndCancel is called before start up
 	}
-	client.queues = &QueueBundle{addProducer: client.addProducer, clientWillExecuteJobs: config.willExecuteJobs()}
+
+	client.queues = &QueueBundle{
+		addProducer:           client.addProducer,
+		clientWillExecuteJobs: config.willExecuteJobs(),
+	}
 
 	baseservice.Init(archetype, &client.baseService)
 	client.baseService.Name = "Client" // Have to correct the name because base service isn't embedded like it usually is
@@ -764,7 +768,9 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		client.services = append(client.services, client.elector)
 
 		for queue, queueConfig := range config.Queues {
-			client.addProducer(queue, queueConfig)
+			if _, err := client.addProducer(queue, queueConfig); err != nil {
+				return nil, err
+			}
 		}
 
 		client.services = append(client.services,
@@ -1988,7 +1994,11 @@ func (c *Client[TTx]) validateJobArgs(args JobArgs) error {
 	return nil
 }
 
-func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) *producer {
+func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) (*producer, error) {
+	if _, alreadyExists := c.producersByQueueName[queueName]; alreadyExists {
+		return nil, &QueueAlreadyAddedError{Name: queueName}
+	}
+
 	producer := newProducer(&c.baseService.Archetype, c.driver.GetExecutor(), c.pilot, &producerConfig{
 		ClientID:                     c.config.ID,
 		Completer:                    c.completer,
@@ -2011,7 +2021,7 @@ func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) *pr
 		Workers:                      c.config.Workers,
 	})
 	c.producersByQueueName[queueName] = producer
-	return producer
+	return producer, nil
 }
 
 var nameRegex = regexp.MustCompile(`^(?:[a-z0-9])+(?:[_|\-]?[a-z0-9]+)*$`)
@@ -2467,7 +2477,7 @@ func (c *Client[TTx]) queueUpdate(ctx context.Context, executorTx riverdriver.Ex
 // through Client.Queues.
 type QueueBundle struct {
 	// Function that adds a producer to the associated client.
-	addProducer func(queueName string, queueConfig QueueConfig) *producer
+	addProducer func(queueName string, queueConfig QueueConfig) (*producer, error)
 
 	clientWillExecuteJobs bool
 
@@ -2484,9 +2494,6 @@ type QueueBundle struct {
 // Add adds a new queue to the client. If the client is already started, a
 // producer for the queue is started. Context is inherited from the one given to
 // Client.Start.
-//
-// TODO: there is no way for this to work at runtime using a separate pro queue
-// config, unless we put pro configs like concurrency within QueueConfig.
 func (b *QueueBundle) Add(queueName string, queueConfig QueueConfig) error {
 	if !b.clientWillExecuteJobs {
 		return errors.New("client is not configured to execute jobs, cannot add queue")
@@ -2499,7 +2506,10 @@ func (b *QueueBundle) Add(queueName string, queueConfig QueueConfig) error {
 	b.startStopMu.Lock()
 	defer b.startStopMu.Unlock()
 
-	producer := b.addProducer(queueName, queueConfig)
+	producer, err := b.addProducer(queueName, queueConfig)
+	if err != nil {
+		return err
+	}
 
 	// Start the queue if the client is already started.
 	if b.fetchCtx != nil && b.fetchCtx.Err() == nil {

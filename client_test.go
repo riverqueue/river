@@ -335,6 +335,31 @@ func Test_Client(t *testing.T) {
 		riversharedtest.WaitOrTimeout(t, workedChan)
 	})
 
+	t.Run("Queues_Add_AlreadyAdded", func(t *testing.T) {
+		t.Parallel()
+
+		// Test two scenarios: when the queue was already added before the client
+		// was created, and when the queue was added after the client was created.
+		// Both should error.
+
+		config, bundle := setupConfig(t)
+		config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: 2}}
+		client := newTestClient(t, bundle.dbPool, config)
+
+		err := client.Queues().Add(QueueDefault, QueueConfig{MaxWorkers: 2})
+		require.Error(t, err)
+		var alreadyAddedErr *QueueAlreadyAddedError
+		require.ErrorAs(t, err, &alreadyAddedErr)
+		require.Equal(t, QueueDefault, alreadyAddedErr.Name)
+
+		require.NoError(t, client.Queues().Add("new_queue", QueueConfig{MaxWorkers: 2}))
+
+		err = client.Queues().Add("new_queue", QueueConfig{MaxWorkers: 2})
+		require.Error(t, err)
+		require.ErrorAs(t, err, &alreadyAddedErr)
+		require.Equal(t, "new_queue", alreadyAddedErr.Name)
+	})
+
 	t.Run("Queues_Add_Stress", func(t *testing.T) {
 		t.Parallel()
 
