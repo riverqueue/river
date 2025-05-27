@@ -202,6 +202,10 @@ func (b *Benchmarker[TTx]) Run(ctx context.Context, duration time.Duration, numT
 					State:  rivertype.JobStateAvailable,
 				})
 				if err != nil {
+					if errors.Is(err, context.Canceled) {
+						return // shut down
+					}
+
 					b.logger.ErrorContext(ctx, "Error counting jobs", "err", err)
 					continue
 				}
