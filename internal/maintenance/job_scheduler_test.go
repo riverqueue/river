@@ -320,8 +320,8 @@ func TestJobScheduler(t *testing.T) {
 
 		scheduler, _ := setup(t, &testOpts{exec: exec, schema: schema})
 		scheduler.config.Interval = time.Minute // should only trigger once for the initial run
-		scheduler.config.NotifyInsert = func(ctx context.Context, tx riverdriver.ExecutorTx, queues []string) error {
-			notifyCh <- queues
+		scheduler.config.NotifyInsert = func(ctx context.Context, tx riverdriver.ExecutorTx, queuesDeduped []string) error {
+			notifyCh <- queuesDeduped
 			return nil
 		}
 		now := time.Now().UTC()
@@ -362,10 +362,10 @@ func TestJobScheduler(t *testing.T) {
 		require.NoError(t, scheduler.Start(ctx))
 		scheduler.TestSignals.ScheduledBatch.WaitOrTimeout()
 
-		expectedQueues := []string{"queue1", "queue2", "queue2", "queue3", "queue4"}
+		expectedQueues := []string{"queue1", "queue2", "queue3", "queue4"}
 
-		notifiedQueues := riversharedtest.WaitOrTimeout(t, notifyCh)
-		sort.Strings(notifiedQueues)
-		require.Equal(t, expectedQueues, notifiedQueues)
+		notifiedQueuesDeduped := riversharedtest.WaitOrTimeout(t, notifyCh)
+		sort.Strings(notifiedQueuesDeduped)
+		require.Equal(t, expectedQueues, notifiedQueuesDeduped)
 	})
 }
