@@ -380,6 +380,16 @@ WHERE id = @id
     AND state != 'running'
 RETURNING *;
 
+-- This doesn't exist under the Postgres driver, but is used for an optimized
+-- happy path for setting jobs to `complete` where metadata isn't required.
+-- name: JobSetCompletedIfRunning :many
+UPDATE /* TEMPLATE: schema */river_job
+SET finalized_at = coalesce(cast(sqlc.narg('finalized_at') AS text), datetime('now', 'subsec')),
+    state = 'completed'
+WHERE id IN (sqlc.slice('id'))
+    AND state = 'running'
+RETURNING *;
+
 -- Differs significantly from the Postgres version in that it can't do a bulk
 -- update, and since sqlc doesn't support `UPDATE` in CTEs, we need separate
 -- queries like JobSetMetadataIfNotRunning to do the fallback work.
