@@ -3776,6 +3776,86 @@ func Test_Client_JobList(t *testing.T) {
 		require.Equal(t, []int64{job3.ID, job2.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 	})
 
+	t.Run("ArbitraryWhereRawSQL", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Metadata: []byte(`{"foo": "bar"}`), Schema: bundle.schema})
+			_    = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Metadata: []byte(`{"baz": "value"}`), Schema: bundle.schema})
+			_    = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Metadata: []byte(`{"baz": "value"}`), Schema: bundle.schema})
+		)
+
+		listRes, err := client.JobList(ctx, NewJobListParams().Where(`jsonb_path_query_first(metadata, '$.foo') = '"bar"'::jsonb`))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job1.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+	})
+
+	t.Run("ArbitraryWhereNamedParams", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Metadata: []byte(`{"foo": "bar"}`), Schema: bundle.schema})
+			_    = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Metadata: []byte(`{"baz": "value"}`), Schema: bundle.schema})
+			_    = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Metadata: []byte(`{"baz": "value"}`), Schema: bundle.schema})
+		)
+
+		listRes, err := client.JobList(ctx, NewJobListParams().Where("jsonb_path_query_first(metadata, @json_query) = @json_val", NamedArgs{
+			"json_query": "$.foo",
+			"json_val":   `"bar"`,
+		}))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job1.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+	})
+
+	t.Run("ArbitraryWhereMultipleNamedParams", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+			_    = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+		)
+
+		listRes, err := client.JobList(ctx, NewJobListParams().Where("id IN (@id1, @id2, @id3)",
+			NamedArgs{"id1": job1.ID},
+			NamedArgs{"id2": job2.ID},
+			NamedArgs{"id3": job3.ID},
+		))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job1.ID, job2.ID, job3.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+	})
+
+	t.Run("ArbitraryWhereMultipleClauses", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+				MaxAttempts: ptrutil.Ptr(27),
+				Queue:       ptrutil.Ptr("custom_queue"),
+				Schema:      bundle.schema,
+				State:       ptrutil.Ptr(rivertype.JobStateDiscarded),
+			})
+			_ = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+		)
+
+		listRes, err := client.JobList(ctx, NewJobListParams().
+			Where("kind = @kind", NamedArgs{"kind": job.Kind}).
+			Where("max_attempts = @max_attempts", NamedArgs{"max_attempts": job.MaxAttempts}).
+			Where("queue = @queue", NamedArgs{"queue": job.Queue}),
+		)
+		require.NoError(t, err)
+		require.Equal(t, []int64{job.ID}, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+	})
+
 	t.Run("WithCancelledContext", func(t *testing.T) {
 		t.Parallel()
 

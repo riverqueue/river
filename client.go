@@ -2017,7 +2017,7 @@ func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) (*JobL
 	}
 	params.schema = c.config.Schema
 
-	if c.driver.DatabaseName() == databaseNameSQLite && params.metadataFragment != "" {
+	if c.driver.DatabaseName() == databaseNameSQLite && params.metadataCalled {
 		return nil, errJobListParamsMetadataNotSupportedSQLite
 	}
 
@@ -2052,7 +2052,7 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 	}
 	params.schema = c.config.Schema
 
-	if c.driver.DatabaseName() == databaseNameSQLite && params.metadataFragment != "" {
+	if c.driver.DatabaseName() == databaseNameSQLite && params.metadataCalled {
 		return nil, errJobListParamsMetadataNotSupportedSQLite
 	}
 
