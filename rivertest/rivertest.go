@@ -18,10 +18,6 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-// A placeholder for empty schema placeholders that'll need to be fixed to
-// something better at some point.
-const emptySchema = ""
-
 // testingT is an interface wrapper around *testing.T that's implemented by all
 // of *testing.T, *testing.F, and *testing.B.
 //
@@ -72,6 +68,13 @@ type RequireInsertedOpts struct {
 	// No assertion is made if left the zero value.
 	ScheduledAt time.Time
 
+	// Schema is a non-standard Schema where River tables are located. All table
+	// references in assertion queries will use this value as a prefix.
+	//
+	// Defaults to empty, which causes the client to look for tables using the
+	// setting of Postgres `search_path`.
+	Schema string
+
 	// State is the expected state of the inserted job.
 	//
 	// No assertion is made if left the zero value.
@@ -101,12 +104,12 @@ type RequireInsertedOpts struct {
 // to cover that case instead.
 func RequireInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, tb testing.TB, driver TDriver, expectedJob TArgs, opts *RequireInsertedOpts) *river.Job[TArgs] {
 	tb.Helper()
-	return requireInserted(ctx, tb, driver, emptySchema, expectedJob, opts)
+	return requireInserted(ctx, tb, driver, expectedJob, opts)
 }
 
-func requireInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, driver TDriver, schema string, expectedJob TArgs, opts *RequireInsertedOpts) *river.Job[TArgs] {
+func requireInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, driver TDriver, expectedJob TArgs, opts *RequireInsertedOpts) *river.Job[TArgs] {
 	t.Helper()
-	actualArgs, err := requireInsertedErr[TDriver](ctx, t, driver.GetExecutor(), schema, expectedJob, opts)
+	actualArgs, err := requireInsertedErr[TDriver](ctx, t, driver.GetExecutor(), expectedJob, opts)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
 	}
@@ -131,7 +134,7 @@ func requireInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobAr
 // to cover that case instead.
 func RequireInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, tb testing.TB, tx TTx, expectedJob TArgs, opts *RequireInsertedOpts) *river.Job[TArgs] {
 	tb.Helper()
-	return requireInsertedTx[TDriver](ctx, tb, tx, emptySchema, expectedJob, opts)
+	return requireInsertedTx[TDriver](ctx, tb, tx, expectedJob, opts)
 }
 
 // Internal function used by the tests so that the exported version can take
@@ -139,18 +142,23 @@ func RequireInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.Job
 //
 // Also takes a schema for testing purposes, which I haven't quite figured out
 // how to get into the public API yet.
-func requireInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, tx TTx, schema string, expectedJob TArgs, opts *RequireInsertedOpts) *river.Job[TArgs] {
+func requireInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, tx TTx, expectedJob TArgs, opts *RequireInsertedOpts) *river.Job[TArgs] {
 	t.Helper()
 	var driver TDriver
-	actualArgs, err := requireInsertedErr[TDriver](ctx, t, driver.UnwrapExecutor(tx), schema, expectedJob, opts)
+	actualArgs, err := requireInsertedErr[TDriver](ctx, t, driver.UnwrapExecutor(tx), expectedJob, opts)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
 	}
 	return actualArgs
 }
 
-func requireInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, exec riverdriver.Executor, schema string, expectedJob TArgs, opts *RequireInsertedOpts) (*river.Job[TArgs], error) {
+func requireInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, exec riverdriver.Executor, expectedJob TArgs, opts *RequireInsertedOpts) (*river.Job[TArgs], error) {
 	t.Helper()
+
+	var schema string
+	if opts != nil {
+		schema = opts.Schema
+	}
 
 	// Returned ordered by ID.
 	jobRows, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
@@ -205,12 +213,12 @@ func requireInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.Jo
 // the given opts.
 func RequireNotInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, tb testing.TB, driver TDriver, expectedJob TArgs, opts *RequireInsertedOpts) {
 	tb.Helper()
-	requireNotInserted(ctx, tb, driver, emptySchema, expectedJob, opts)
+	requireNotInserted(ctx, tb, driver, expectedJob, opts)
 }
 
-func requireNotInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, driver TDriver, schema string, expectedJob TArgs, opts *RequireInsertedOpts) {
+func requireNotInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, driver TDriver, expectedJob TArgs, opts *RequireInsertedOpts) {
 	t.Helper()
-	err := requireNotInsertedErr[TDriver](ctx, t, driver.GetExecutor(), schema, expectedJob, opts)
+	err := requireNotInsertedErr[TDriver](ctx, t, driver.GetExecutor(), expectedJob, opts)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
 	}
@@ -234,7 +242,7 @@ func requireNotInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.Jo
 // the given opts.
 func RequireNotInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, tb testing.TB, tx TTx, expectedJob TArgs, opts *RequireInsertedOpts) {
 	tb.Helper()
-	requireNotInsertedTx[TDriver](ctx, tb, tx, emptySchema, expectedJob, opts)
+	requireNotInsertedTx[TDriver](ctx, tb, tx, expectedJob, opts)
 }
 
 // Internal function used by the tests so that the exported version can take
@@ -242,17 +250,22 @@ func RequireNotInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.
 //
 // Also takes a schema for testing purposes, which I haven't quite figured out
 // how to get into the public API yet.
-func requireNotInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, tx TTx, schema string, expectedJob TArgs, opts *RequireInsertedOpts) {
+func requireNotInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, tx TTx, expectedJob TArgs, opts *RequireInsertedOpts) {
 	t.Helper()
 	var driver TDriver
-	err := requireNotInsertedErr[TDriver](ctx, t, driver.UnwrapExecutor(tx), schema, expectedJob, opts)
+	err := requireNotInsertedErr[TDriver](ctx, t, driver.UnwrapExecutor(tx), expectedJob, opts)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
 	}
 }
 
-func requireNotInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, exec riverdriver.Executor, schema string, expectedJob TArgs, opts *RequireInsertedOpts) error {
+func requireNotInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobArgs](ctx context.Context, t testingT, exec riverdriver.Executor, expectedJob TArgs, opts *RequireInsertedOpts) error {
 	t.Helper()
+
+	var schema string
+	if opts != nil {
+		schema = opts.Schema
+	}
 
 	// Returned ordered by ID.
 	jobRows, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
@@ -322,14 +335,20 @@ type ExpectedJob struct {
 // the number specified, and will fail in case this expectation isn't met. So if
 // a job of a certain kind is emitted multiple times, it must be expected
 // multiple times.
+//
+// If RequireInsertedOpts.Schema is used, it may be set only in the first
+// expectation's options (and all expectations will use that schema), or the
+// same schema may be set in every expectation. Setting a non-empty schema after
+// the first expectation if the first's was empty is not allowed, and neither is
+// mixing and matching schemas between options.
 func RequireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, tb testing.TB, driver TDriver, expectedJobs []ExpectedJob) []*rivertype.JobRow {
 	tb.Helper()
-	return requireManyInserted(ctx, tb, driver, string(emptySchema), expectedJobs)
+	return requireManyInserted(ctx, tb, driver, expectedJobs)
 }
 
-func requireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, driver TDriver, schema string, expectedJobs []ExpectedJob) []*rivertype.JobRow {
+func requireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, driver TDriver, expectedJobs []ExpectedJob) []*rivertype.JobRow {
 	t.Helper()
-	actualArgs, err := requireManyInsertedErr[TDriver](ctx, t, driver.GetExecutor(), schema, expectedJobs)
+	actualArgs, err := requireManyInsertedErr[TDriver](ctx, t, driver.GetExecutor(), expectedJobs)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
 	}
@@ -356,9 +375,15 @@ func requireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.C
 // the number specified, and will fail in case this expectation isn't met. So if
 // a job of a certain kind is emitted multiple times, it must be expected
 // multiple times.
+//
+// If RequireInsertedOpts.Schema is used, it may be set only in the first
+// expectation's options (and all expectations will use that schema), or the
+// same schema may be set in every expectation. Setting a non-empty schema after
+// the first expectation if the first's was empty is not allowed, and neither is
+// mixing and matching schemas between options.
 func RequireManyInsertedTx[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, tb testing.TB, tx TTx, expectedJobs []ExpectedJob) []*rivertype.JobRow {
 	tb.Helper()
-	return requireManyInsertedTx[TDriver](ctx, tb, tx, emptySchema, expectedJobs)
+	return requireManyInsertedTx[TDriver](ctx, tb, tx, expectedJobs)
 }
 
 // Internal function used by the tests so that the exported version can take
@@ -366,20 +391,44 @@ func RequireManyInsertedTx[TDriver riverdriver.Driver[TTx], TTx any](ctx context
 //
 // Also takes a schema for testing purposes, which I haven't quite figured out
 // how to get into the public API yet.
-func requireManyInsertedTx[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, tx TTx, schema string, expectedJobs []ExpectedJob) []*rivertype.JobRow {
+func requireManyInsertedTx[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, tx TTx, expectedJobs []ExpectedJob) []*rivertype.JobRow {
 	t.Helper()
 	var driver TDriver
-	actualArgs, err := requireManyInsertedErr[TDriver](ctx, t, driver.UnwrapExecutor(tx), schema, expectedJobs)
+	actualArgs, err := requireManyInsertedErr[TDriver](ctx, t, driver.UnwrapExecutor(tx), expectedJobs)
 	if err != nil {
 		failure(t, "Internal failure: %s", err)
 	}
 	return actualArgs
 }
 
-func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, exec riverdriver.Executor, schema string, expectedJobs []ExpectedJob) ([]*rivertype.JobRow, error) {
+func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx context.Context, t testingT, exec riverdriver.Executor, expectedJobs []ExpectedJob) ([]*rivertype.JobRow, error) {
 	t.Helper()
 
 	expectedArgsKinds := sliceutil.Map(expectedJobs, func(j ExpectedJob) string { return j.Args.Kind() })
+
+	var schema string
+	if len(expectedJobs) > 0 && expectedJobs[0].Opts != nil {
+		schema = expectedJobs[0].Opts.Schema
+	}
+
+	// For simplicity (and because I can't think of any reason anyone would need
+	// to do otherwise), require that if an explicit schema is being set that
+	// it's the same explicit schema for all options. Callers may specify the
+	// schema only once in the first expectation's options, or specify the same
+	// schema for all expectations' options, but they're not allowed to set a
+	// schema after the first expectation's options if it wasn't set in the
+	// first, and not allowed to mix and match schemas between options.
+	for i, expectedJob := range expectedJobs {
+		if opts := expectedJob.Opts; opts != nil {
+			if schema == "" && opts.Schema != "" ||
+				schema != "" && opts.Schema != "" && schema != opts.Schema {
+				return nil, fmt.Errorf(
+					"when setting RequireInsertedOpts.Schema with RequireMany schema should be set only at index 0 or the same schema set for all options; "+
+						"expectedJobs[0].Opts.Schema = %q, expectedJobs[%d].Opts.Schema = %q",
+					schema, i, opts.Schema)
+			}
+		}
+	}
 
 	// Returned ordered by ID.
 	jobRows, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
