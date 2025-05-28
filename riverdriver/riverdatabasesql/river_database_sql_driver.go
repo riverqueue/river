@@ -134,9 +134,9 @@ func (e *Executor) ColumnExists(ctx context.Context, params *riverdriver.ColumnE
 	return exists, interpretError(err)
 }
 
-func (e *Executor) Exec(ctx context.Context, sql string, args ...any) (struct{}, error) {
+func (e *Executor) Exec(ctx context.Context, sql string, args ...any) error {
 	_, err := e.dbtx.ExecContext(ctx, sql, args...)
-	return struct{}{}, interpretError(err)
+	return interpretError(err)
 }
 
 func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error) {
@@ -909,8 +909,7 @@ func (t *ExecutorSubTx) Begin(ctx context.Context) (riverdriver.ExecutorTx, erro
 	}
 
 	nextSavepointNum := t.savepointNum + 1
-	_, err := t.Exec(ctx, fmt.Sprintf("SAVEPOINT %s%02d", savepointPrefix, nextSavepointNum))
-	if err != nil {
+	if err := t.Exec(ctx, fmt.Sprintf("SAVEPOINT %s%02d", savepointPrefix, nextSavepointNum)); err != nil {
 		return nil, err
 	}
 
@@ -926,8 +925,7 @@ func (t *ExecutorSubTx) Commit(ctx context.Context) error {
 
 	// Release destroys a savepoint, keeping all the effects of commands that
 	// were run within it (so it's effectively COMMIT for savepoints).
-	_, err := t.Exec(ctx, fmt.Sprintf("RELEASE %s%02d", savepointPrefix, t.savepointNum))
-	if err != nil {
+	if err := t.Exec(ctx, fmt.Sprintf("RELEASE %s%02d", savepointPrefix, t.savepointNum)); err != nil {
 		return err
 	}
 
@@ -941,8 +939,7 @@ func (t *ExecutorSubTx) Rollback(ctx context.Context) error {
 		return errors.New("tx is closed") // mirrors pgx's behavior for this condition
 	}
 
-	_, err := t.Exec(ctx, fmt.Sprintf("ROLLBACK TO %s%02d", savepointPrefix, t.savepointNum))
-	if err != nil {
+	if err := t.Exec(ctx, fmt.Sprintf("ROLLBACK TO %s%02d", savepointPrefix, t.savepointNum)); err != nil {
 		return err
 	}
 

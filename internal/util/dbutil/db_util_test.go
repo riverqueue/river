@@ -20,9 +20,7 @@ func TestWithTx(t *testing.T) {
 	driver := riverpgxv5.New(nil)
 
 	err := dbutil.WithTx(ctx, driver.UnwrapExecutor(tx), func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
-		_, err := execTx.Exec(ctx, "SELECT 1")
-		require.NoError(t, err)
-
+		require.NoError(t, execTx.Exec(ctx, "SELECT 1"))
 		return nil
 	})
 	require.NoError(t, err)
@@ -36,9 +34,7 @@ func TestWithTxV(t *testing.T) {
 	driver := riverpgxv5.New(nil)
 
 	ret, err := dbutil.WithTxV(ctx, driver.UnwrapExecutor(tx), func(ctx context.Context, execTx riverdriver.ExecutorTx) (int, error) {
-		_, err := execTx.Exec(ctx, "SELECT 1")
-		require.NoError(t, err)
-
+		require.NoError(t, execTx.Exec(ctx, "SELECT 1"))
 		return 7, nil
 	})
 	require.NoError(t, err)

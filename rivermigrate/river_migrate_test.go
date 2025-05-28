@@ -972,8 +972,7 @@ func buildTestMigrationsBundle(t *testing.T) *testMigrationsBundle {
 // continue to use the original transaction.
 func dbExecError(ctx context.Context, exec riverdriver.Executor, sql string) error {
 	return dbutil.WithTx(ctx, exec, func(ctx context.Context, exec riverdriver.ExecutorTx) error {
-		_, err := exec.Exec(ctx, sql)
-		return err
+		return exec.Exec(ctx, sql)
 	})
 }
 
