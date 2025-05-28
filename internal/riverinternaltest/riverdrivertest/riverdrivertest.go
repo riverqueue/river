@@ -459,8 +459,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			exec, _ := setup(ctx, t)
 
-			_, err := exec.Exec(ctx, "SELECT 1 + 2")
-			require.NoError(t, err)
+			require.NoError(t, exec.Exec(ctx, "SELECT 1 + 2"))
 		})
 
 		t.Run("WithArgs", func(t *testing.T) {
@@ -468,8 +467,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			exec, _ := setup(ctx, t)
 
-			_, err := exec.Exec(ctx, "SELECT $1 || $2", "foo", "bar")
-			require.NoError(t, err)
+			require.NoError(t, exec.Exec(ctx, "SELECT $1 || $2", "foo", "bar"))
 		})
 	})
 

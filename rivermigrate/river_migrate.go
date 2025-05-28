@@ -602,8 +602,7 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Ex
 			// a commit on a preexisting operation (such as adding an enum value to be
 			// used in an immutable function) cannot succeed.
 			err := dbutil.WithTx(ctx, exec, func(ctx context.Context, exec riverdriver.ExecutorTx) error {
-				_, err := exec.Exec(ctx, sql)
-				if err != nil {
+				if err := exec.Exec(ctx, sql); err != nil {
 					return fmt.Errorf("error applying version %03d [%s]: %w",
 						versionBundle.Version, strings.ToUpper(string(direction)), err)
 				}

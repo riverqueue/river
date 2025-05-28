@@ -486,14 +486,14 @@ func (b *Benchmarker[TTx]) resetJobsTable(ctx context.Context) error {
 
 	switch b.driver.DatabaseName() {
 	case "postgres":
-		if _, err := b.driver.GetExecutor().Exec(ctx, "VACUUM FULL river_job"); err != nil {
+		if err := b.driver.GetExecutor().Exec(ctx, "VACUUM FULL river_job"); err != nil {
 			return fmt.Errorf("error vacuuming: %w", err)
 		}
 	case "sqlite":
 		// SQLite doesn't support `VACUUM FULL`, nor does it support vacuuming
 		// on a per-table basis. `VACUUM` vacuums the entire schema, which is
 		// okay in this case.
-		if _, err := b.driver.GetExecutor().Exec(ctx, "VACUUM"); err != nil {
+		if err := b.driver.GetExecutor().Exec(ctx, "VACUUM"); err != nil {
 			return fmt.Errorf("error vacuuming: %w", err)
 		}
 	default:

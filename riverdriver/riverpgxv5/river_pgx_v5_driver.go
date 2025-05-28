@@ -143,9 +143,9 @@ func (e *Executor) ColumnExists(ctx context.Context, params *riverdriver.ColumnE
 	return exists, interpretError(err)
 }
 
-func (e *Executor) Exec(ctx context.Context, sql string, args ...any) (struct{}, error) {
+func (e *Executor) Exec(ctx context.Context, sql string, args ...any) error {
 	_, err := e.dbtx.Exec(ctx, sql, args...)
-	return struct{}{}, interpretError(err)
+	return interpretError(err)
 }
 
 func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error) {

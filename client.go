@@ -909,8 +909,7 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		// available, the client appears to have started even though it's completely
 		// non-functional. Here we try to make an initial assessment of health and
 		// return quickly in case of an apparent problem.
-		_, err := c.driver.GetExecutor().Exec(fetchCtx, "SELECT 1")
-		if err != nil {
+		if err := c.driver.GetExecutor().Exec(fetchCtx, "SELECT 1"); err != nil {
 			return fmt.Errorf("error making initial connection to database: %w", err)
 		}
 
