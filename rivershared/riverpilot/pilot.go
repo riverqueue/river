@@ -2,6 +2,7 @@ package riverpilot
 
 import (
 	"context"
+	"time"
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -16,6 +17,8 @@ import (
 // This should be considered a River internal API and its stability is not
 // guaranteed. DO NOT USE.
 type Pilot interface {
+	PilotPeriodicJob
+
 	JobGetAvailable(
 		ctx context.Context,
 		exec riverdriver.Executor,
@@ -43,6 +46,53 @@ type Pilot interface {
 	ProducerShutdown(ctx context.Context, exec riverdriver.Executor, params *ProducerShutdownParams) error
 
 	QueueMetadataChanged(ctx context.Context, exec riverdriver.Executor, params *QueueMetadataChangedParams) error
+}
+
+// PilotPeriodicJob contains pilot functions related to periodic jobs. This is
+// extracted as its own interface so there's less surface area to mock in places
+// like the periodic job enqueuer where that's needed.
+type PilotPeriodicJob interface {
+	// PeriodicJobDeleteByIDMany deletes many periodic jobs by ID.
+	//
+	// API is not stable. DO NOT USE.
+	PeriodicJobDeleteByIDMany(ctx context.Context, exec riverdriver.Executor, params *PeriodicJobDeleteByIDManyParams) ([]*PeriodicJob, error)
+
+	// PeriodicJobGetAll gets all currently known periodic jobs.
+	//
+	// API is not stable. DO NOT USE.
+	PeriodicJobGetAll(ctx context.Context, exec riverdriver.Executor, params *PeriodicJobGetAllParams) ([]*PeriodicJob, error)
+
+	// PeriodicJobUpsertMany upserts many periodic jobs.
+	//
+	// API is not stable. DO NOT USE.
+	PeriodicJobUpsertMany(ctx context.Context, exec riverdriver.Executor, params *PeriodicJobUpsertManyParams) ([]*PeriodicJob, error)
+}
+
+type PeriodicJob struct {
+	ID        string
+	CreatedAt time.Time
+	NextRunAt time.Time
+	UpdatedAt time.Time
+}
+
+type PeriodicJobDeleteByIDManyParams struct {
+	ID     []string
+	Schema string
+}
+
+type PeriodicJobGetAllParams struct {
+	Schema string
+}
+
+type PeriodicJobUpsertManyParams struct {
+	Jobs   []*PeriodicJobUpsertParams
+	Schema string
+}
+
+type PeriodicJobUpsertParams struct {
+	ID        string
+	NextRunAt time.Time
+	UpdatedAt time.Time
 }
 
 type ProducerState interface {

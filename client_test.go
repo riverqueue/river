@@ -6892,7 +6892,7 @@ func Test_NewClient_Validations(t *testing.T) {
 			configFunc: func(config *Config) {
 				AddWorker(config.Workers, &invalidKindWorker{})
 			},
-			wantErr: fmt.Errorf("job kind %q should match regex %q", "this kind is invalid", jobKindRE.String()),
+			wantErr: fmt.Errorf("job kind %q should match regex %s", "this kind is invalid", rivercommon.UserSpecifiedIDOrKindRE.String()),
 		},
 		{
 			name: "Job kind validation skipped with SkipJobKindValidation",
@@ -7605,24 +7605,4 @@ func TestDefaultClientIDWithHost(t *testing.T) {
 	require.Equal(t, strings.Repeat("a", 59)+"_2024_03_07T04_39_12_123456", defaultClientIDWithHost(startedAt, strings.Repeat("a", 59)))
 	require.Equal(t, strings.Repeat("a", 60)+"_2024_03_07T04_39_12_123456", defaultClientIDWithHost(startedAt, strings.Repeat("a", 60)))
 	require.Equal(t, strings.Repeat("a", 60)+"_2024_03_07T04_39_12_123456", defaultClientIDWithHost(startedAt, strings.Repeat("a", 61)))
-}
-
-func TestJobKindRE(t *testing.T) {
-	t.Parallel()
-
-	require.Regexp(t, jobKindRE, "kind")
-	require.Regexp(t, jobKindRE, "kind123")
-	require.Regexp(t, jobKindRE, "with.dot")
-	require.Regexp(t, jobKindRE, "with:colon")
-	require.Regexp(t, jobKindRE, "with+plus")
-	require.Regexp(t, jobKindRE, "with-hyphen")
-	require.Regexp(t, jobKindRE, "with_underscore")
-	require.Regexp(t, jobKindRE, "with[brackets]")
-	require.Regexp(t, jobKindRE, "with<triangle_brackets>")
-	require.Regexp(t, jobKindRE, "with/slash")
-	require.Regexp(t, jobKindRE, "JobArgsReflectKind[github.com/riverqueue/river.JobArgs·12]")
-
-	require.NotRegexp(t, jobKindRE, "with space")
-	require.NotRegexp(t, jobKindRE, "with,comma")
-	require.NotRegexp(t, jobKindRE, ":no_leading_special_characters")
 }

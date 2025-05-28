@@ -485,14 +485,14 @@ func (c *Config) validate() error {
 	if c.Workers != nil {
 		for _, workerInfo := range c.Workers.workersMap {
 			kind := workerInfo.jobArgs.Kind()
-			if !jobKindRE.MatchString(kind) {
+			if !rivercommon.UserSpecifiedIDOrKindRE.MatchString(kind) {
 				if c.SkipJobKindValidation {
 					c.Logger.Warn("job kind should match regex; this will be an error in future versions",
 						slog.String("kind", kind),
-						slog.String("regex", jobKindRE.String()),
+						slog.String("regex", rivercommon.UserSpecifiedIDOrKindRE.String()),
 					)
 				} else {
-					return fmt.Errorf("job kind %q should match regex %q", kind, jobKindRE.String())
+					return fmt.Errorf("job kind %q should match regex %s", kind, rivercommon.UserSpecifiedIDOrKindRE.String())
 				}
 			}
 		}
@@ -828,13 +828,18 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		}
 
 		{
-			periodicJobEnqueuer := maintenance.NewPeriodicJobEnqueuer(archetype, &maintenance.PeriodicJobEnqueuerConfig{
+			periodicJobEnqueuer, err := maintenance.NewPeriodicJobEnqueuer(archetype, &maintenance.PeriodicJobEnqueuerConfig{
 				AdvisoryLockPrefix: config.AdvisoryLockPrefix,
 				Insert: func(ctx context.Context, execTx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) error {
 					_, err := client.insertMany(ctx, execTx, insertParams)
 					return err
 				},
+				Pilot:  client.pilot,
+				Schema: config.Schema,
 			}, driver.GetExecutor())
+			if err != nil {
+				return nil, err
+			}
 			maintenanceServices = append(maintenanceServices, periodicJobEnqueuer)
 			client.testSignals.periodicJobEnqueuer = &periodicJobEnqueuer.TestSignals
 
@@ -2520,11 +2525,6 @@ func (b *QueueBundle) Add(queueName string, queueConfig QueueConfig) error {
 
 	return nil
 }
-
-// Regular expression to which the format of job kinds must comply. Mainly,
-// minimal special characters, and excluding spaces and commas which are
-// problematic for the search UI.
-var jobKindRE = regexp.MustCompile(`\A[\w][\w\-\[\]<>\/.·:+]+\z`)
 
 // Generates a default client ID using the current hostname and time.
 func defaultClientID(startedAt time.Time) string {

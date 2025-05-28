@@ -2,6 +2,7 @@ package rivercommon
 
 import (
 	"errors"
+	"regexp"
 )
 
 // These constants are made available in rivercommon so that they're accessible
@@ -27,3 +28,9 @@ type ContextKeyClient struct{}
 // CancelCauseFuncs when it's stopping. It may be used by components for such
 // cases like avoiding logging an error during a normal shutdown procedure.
 var ErrStop = errors.New("stop initiated")
+
+// UserSpecifiedIDOrKindRE is a regular expression to which the format of job
+// kinds and some other user-specified IDs (e.g. periodic job names) must
+// comply. Mainly, minimal special characters, and excluding spaces and commas
+// which are problematic for the search UI.
+var UserSpecifiedIDOrKindRE = regexp.MustCompile(`\A[\w][\w\-\[\]<>\/.·:+]+\z`)

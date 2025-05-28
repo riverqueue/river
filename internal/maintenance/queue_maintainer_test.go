@@ -101,20 +101,23 @@ func TestQueueMaintainer(t *testing.T) {
 
 		driver := riverpgxv5.New(nil).UnwrapExecutor(sharedTx)
 
+		periodicJobEnqueuer, err := NewPeriodicJobEnqueuer(archetype, &PeriodicJobEnqueuerConfig{
+			PeriodicJobs: []*PeriodicJob{
+				{
+					ConstructorFunc: func() (*rivertype.JobInsertParams, error) {
+						return nil, ErrNoJobToInsert
+					},
+					ScheduleFunc: cron.Every(15 * time.Minute).Next,
+				},
+			},
+		}, driver)
+		require.NoError(t, err)
+
 		// Use realistic services in this one so we can verify stress not only
 		// on the queue maintainer, but it and all its subservices together.
 		maintainer := setup(t, []startstop.Service{
 			NewJobCleaner(archetype, &JobCleanerConfig{}, driver),
-			NewPeriodicJobEnqueuer(archetype, &PeriodicJobEnqueuerConfig{
-				PeriodicJobs: []*PeriodicJob{
-					{
-						ConstructorFunc: func() (*rivertype.JobInsertParams, error) {
-							return nil, ErrNoJobToInsert
-						},
-						ScheduleFunc: cron.Every(15 * time.Minute).Next,
-					},
-				},
-			}, driver),
+			periodicJobEnqueuer,
 			NewQueueCleaner(archetype, &QueueCleanerConfig{}, driver),
 			NewJobScheduler(archetype, &JobSchedulerConfig{}, driver),
 		})

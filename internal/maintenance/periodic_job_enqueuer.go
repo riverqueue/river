@@ -3,17 +3,21 @@ package maintenance
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"time"
 
 	"github.com/tidwall/sjson"
 
+	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/maputil"
+	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -39,6 +43,7 @@ func (ts *PeriodicJobEnqueuerTestSignals) Init(tb testutil.TestingTB) {
 // river.PeriodicJobArgs, but needs a separate type because the enqueuer is in a
 // subpackage.
 type PeriodicJob struct {
+	ID              string
 	ConstructorFunc func() (*rivertype.JobInsertParams, error)
 	RunOnStart      bool
 	ScheduleFunc    func(time.Time) time.Time
@@ -47,14 +52,29 @@ type PeriodicJob struct {
 }
 
 func (j *PeriodicJob) mustValidate() *PeriodicJob {
-	if j.ScheduleFunc == nil {
-		panic("PeriodicJob.ScheduleFunc must be set")
+	if err := j.validate(); err != nil {
+		panic(err)
+	}
+	return j
+}
+
+func (j *PeriodicJob) validate() error {
+	if j.ID != "" {
+		if len(j.ID) >= 128 {
+			return errors.New("PeriodicJob.ID must be less than 128 characters")
+		}
+		if !rivercommon.UserSpecifiedIDOrKindRE.MatchString(j.ID) {
+			return fmt.Errorf("PeriodicJob.ID %q should match regex %s", j.ID, rivercommon.UserSpecifiedIDOrKindRE.String())
+		}
 	}
 	if j.ConstructorFunc == nil {
-		panic("PeriodicJob.ConstructorFunc must be set")
+		return errors.New("PeriodicJob.ConstructorFunc must be set")
+	}
+	if j.ScheduleFunc == nil {
+		return errors.New("PeriodicJob.ScheduleFunc must be set")
 	}
 
-	return j
+	return nil
 }
 
 type PeriodicJobEnqueuerConfig struct {
@@ -65,9 +85,17 @@ type PeriodicJobEnqueuerConfig struct {
 
 	// PeriodicJobs are the periodic jobs with which to configure the enqueuer.
 	PeriodicJobs []*PeriodicJob
+
+	// Pilot is a plugin module providing additional non-standard functionality.
+	Pilot riverpilot.PilotPeriodicJob
+
+	// Schema where River tables are located. Empty string omits schema, causing
+	// Postgres to default to `search_path`.
+	Schema string
 }
 
 func (c *PeriodicJobEnqueuerConfig) mustValidate() *PeriodicJobEnqueuerConfig {
+	// no validations currently
 	return c
 }
 
@@ -84,21 +112,34 @@ type PeriodicJobEnqueuer struct {
 	exec               riverdriver.Executor
 	mu                 sync.RWMutex
 	nextHandle         rivertype.PeriodicJobHandle
+	periodicJobIDs     map[string]struct{}
 	periodicJobs       map[rivertype.PeriodicJobHandle]*PeriodicJob
 	recalculateNextRun chan struct{}
 }
 
-func NewPeriodicJobEnqueuer(archetype *baseservice.Archetype, config *PeriodicJobEnqueuerConfig, exec riverdriver.Executor) *PeriodicJobEnqueuer {
+func NewPeriodicJobEnqueuer(archetype *baseservice.Archetype, config *PeriodicJobEnqueuerConfig, exec riverdriver.Executor) (*PeriodicJobEnqueuer, error) {
 	var (
-		nextHandle   rivertype.PeriodicJobHandle
-		periodicJobs = make(map[rivertype.PeriodicJobHandle]*PeriodicJob, len(config.PeriodicJobs))
+		nextHandle     rivertype.PeriodicJobHandle
+		periodicJobIDs = make(map[string]struct{})
+		periodicJobs   = make(map[rivertype.PeriodicJobHandle]*PeriodicJob, len(config.PeriodicJobs))
 	)
 
 	for _, periodicJob := range config.PeriodicJobs {
-		periodicJob.mustValidate()
+		if err := periodicJob.validate(); err != nil {
+			return nil, err
+		}
+
+		if err := addUniqueID(periodicJobIDs, periodicJob.ID); err != nil {
+			return nil, err
+		}
 
 		periodicJobs[nextHandle] = periodicJob
 		nextHandle++
+	}
+
+	pilot := config.Pilot
+	if pilot == nil {
+		pilot = &riverpilot.StandardPilot{}
 	}
 
 	svc := baseservice.Init(archetype, &PeriodicJobEnqueuer{
@@ -106,25 +147,34 @@ func NewPeriodicJobEnqueuer(archetype *baseservice.Archetype, config *PeriodicJo
 			AdvisoryLockPrefix: config.AdvisoryLockPrefix,
 			Insert:             config.Insert,
 			PeriodicJobs:       config.PeriodicJobs,
+			Pilot:              pilot,
+			Schema:             config.Schema,
 		}).mustValidate(),
 
 		exec:               exec,
 		nextHandle:         nextHandle,
+		periodicJobIDs:     periodicJobIDs,
 		periodicJobs:       periodicJobs,
 		recalculateNextRun: make(chan struct{}, 1),
 	})
 
-	return svc
+	return svc, nil
 }
 
-// Add adds a new periodic job to the enqueuer. The service's run loop is woken
-// immediately so that the job is scheduled appropriately, and inserted if its
-// RunOnStart flag is set to true.
-func (s *PeriodicJobEnqueuer) Add(periodicJob *PeriodicJob) rivertype.PeriodicJobHandle {
+// AddSafely adds a new periodic job to the enqueuer. The service's run loop is
+// woken immediately so that the job is scheduled appropriately, and inserted if
+// its RunOnStart flag is set to true.
+func (s *PeriodicJobEnqueuer) AddSafely(periodicJob *PeriodicJob) (rivertype.PeriodicJobHandle, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	periodicJob.mustValidate()
+	if err := periodicJob.validate(); err != nil {
+		return 0, err
+	}
+
+	if err := addUniqueID(s.periodicJobIDs, periodicJob.ID); err != nil {
+		return 0, err
+	}
 
 	handle := s.nextHandle
 	s.periodicJobs[handle] = periodicJob
@@ -135,20 +185,26 @@ func (s *PeriodicJobEnqueuer) Add(periodicJob *PeriodicJob) rivertype.PeriodicJo
 	default:
 	}
 
-	return handle
+	return handle, nil
 }
 
-// AddMany adds many new periodic job to the enqueuer. The service's run loop is
+// AddManySafely adds many new periodic job to the enqueuer. The service's run loop is
 // woken immediately so that the job is scheduled appropriately, and inserted if
 // any RunOnStart flags are set to true.
-func (s *PeriodicJobEnqueuer) AddMany(periodicJobs []*PeriodicJob) []rivertype.PeriodicJobHandle {
+func (s *PeriodicJobEnqueuer) AddManySafely(periodicJobs []*PeriodicJob) ([]rivertype.PeriodicJobHandle, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	handles := make([]rivertype.PeriodicJobHandle, len(periodicJobs))
 
 	for i, periodicJob := range periodicJobs {
-		periodicJob.mustValidate()
+		if err := periodicJob.validate(); err != nil {
+			return nil, err
+		}
+
+		if err := addUniqueID(s.periodicJobIDs, periodicJob.ID); err != nil {
+			return nil, err
+		}
 
 		handles[i] = s.nextHandle
 		s.periodicJobs[handles[i]] = periodicJob
@@ -160,7 +216,7 @@ func (s *PeriodicJobEnqueuer) AddMany(periodicJobs []*PeriodicJob) []rivertype.P
 	default:
 	}
 
-	return handles
+	return handles, nil
 }
 
 // Clear clears all periodic jobs from the enqueuer.
@@ -216,6 +272,21 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 		default:
 		}
 
+		// Initial set of periodic job IDs mapped to next run at times fetched
+		// from a configured pilot. Not used in most cases.
+		initialPeriodicJobsMap := func() map[string]time.Time {
+			initialPeriodicJobs, err := s.Config.Pilot.PeriodicJobGetAll(ctx, s.exec, &riverpilot.PeriodicJobGetAllParams{
+				Schema: s.Config.Schema,
+			})
+			if err != nil {
+				s.Logger.ErrorContext(ctx, s.Name+": Error fetching initial periodic jobs", "error", err)
+				return make(map[string]time.Time)
+			}
+
+			return sliceutil.KeyBy(initialPeriodicJobs,
+				func(j *riverpilot.PeriodicJob) (string, time.Time) { return j.ID, j.NextRunAt })
+		}()
+
 		var lastHandleSeen rivertype.PeriodicJobHandle = -1 // so handle 0 is considered
 
 		validateInsertRunOnStartAndScheduleNewlyAdded := func() {
@@ -223,8 +294,9 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 			defer s.mu.RUnlock()
 
 			var (
-				insertParamsMany []*rivertype.JobInsertParams
-				now              = s.Time.NowUTC()
+				insertParamsMany        []*rivertype.JobInsertParams
+				now                     = s.Time.NowUTC()
+				periodicJobUpsertParams = &riverpilot.PeriodicJobUpsertManyParams{Schema: s.Config.Schema}
 			)
 
 			// Handle periodic jobs in sorted order so we can correctly account
@@ -241,7 +313,12 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 
 				periodicJob := s.periodicJobs[handle].mustValidate()
 
-				periodicJob.nextRunAt = periodicJob.ScheduleFunc(now)
+				if nextRunAt, ok := initialPeriodicJobsMap[periodicJob.ID]; periodicJob.ID != "" && ok {
+					periodicJob.nextRunAt = nextRunAt
+					delete(initialPeriodicJobsMap, periodicJob.ID)
+				} else {
+					periodicJob.nextRunAt = periodicJob.ScheduleFunc(now)
+				}
 
 				if !periodicJob.RunOnStart {
 					continue
@@ -250,9 +327,16 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 				if insertParams, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc, now); ok {
 					insertParamsMany = append(insertParamsMany, insertParams)
 				}
+
+				if periodicJob.ID != "" {
+					periodicJobUpsertParams.Jobs = append(periodicJobUpsertParams.Jobs, &riverpilot.PeriodicJobUpsertParams{
+						ID:        periodicJob.ID,
+						NextRunAt: periodicJob.nextRunAt,
+					})
+				}
 			}
 
-			s.insertBatch(ctx, insertParamsMany)
+			s.insertBatch(ctx, insertParamsMany, periodicJobUpsertParams)
 
 			if len(insertParamsMany) > 0 {
 				s.Logger.DebugContext(ctx, s.Name+": Inserted RunOnStart jobs", "num_jobs", len(insertParamsMany))
@@ -262,6 +346,17 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 		// Run any jobs that need to run on start and calculate initial runs.
 		validateInsertRunOnStartAndScheduleNewlyAdded()
 
+		// Delete any periodic jobs that were in the database but no longer
+		// present in the client's configured periodic jobs.
+		if len(initialPeriodicJobsMap) > 0 {
+			if _, err := s.Config.Pilot.PeriodicJobDeleteByIDMany(ctx, s.exec, &riverpilot.PeriodicJobDeleteByIDManyParams{
+				ID:     maputil.Keys(initialPeriodicJobsMap),
+				Schema: s.Config.Schema,
+			}); err != nil {
+				s.Logger.ErrorContext(ctx, s.Name+": Error deleting periodic jobs", "error", err)
+			}
+		}
+
 		s.TestSignals.EnteredLoop.Signal(struct{}{})
 
 		timerUntilNextRun := time.NewTimer(s.timeUntilNextRun())
@@ -269,7 +364,10 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 		for {
 			select {
 			case <-timerUntilNextRun.C:
-				var insertParamsMany []*rivertype.JobInsertParams
+				var (
+					insertParamsMany        []*rivertype.JobInsertParams
+					periodicJobUpsertParams = &riverpilot.PeriodicJobUpsertManyParams{Schema: s.Config.Schema}
+				)
 
 				now := s.Time.NowUTC()
 
@@ -296,10 +394,17 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 						// as true as possible to the original schedule by using the
 						// original run time when calculating the next one.
 						periodicJob.nextRunAt = periodicJob.ScheduleFunc(periodicJob.nextRunAt)
+
+						if periodicJob.ID != "" {
+							periodicJobUpsertParams.Jobs = append(periodicJobUpsertParams.Jobs, &riverpilot.PeriodicJobUpsertParams{
+								ID:        periodicJob.ID,
+								NextRunAt: periodicJob.nextRunAt,
+							})
+						}
 					}
 				}()
 
-				s.insertBatch(ctx, insertParamsMany)
+				s.insertBatch(ctx, insertParamsMany, periodicJobUpsertParams)
 
 			case <-s.recalculateNextRun:
 				if !timerUntilNextRun.Stop() {
@@ -329,8 +434,8 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany []*rivertype.JobInsertParams) {
-	if len(insertParamsMany) == 0 {
+func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany []*rivertype.JobInsertParams, periodicJobUpsertParams *riverpilot.PeriodicJobUpsertManyParams) {
+	if len(insertParamsMany) < 1 {
 		return
 	}
 
@@ -345,6 +450,13 @@ func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany 
 		if err := s.Config.Insert(ctx, tx, insertParamsMany); err != nil {
 			s.Logger.ErrorContext(ctx, s.Name+": Error inserting periodic jobs",
 				"error", err.Error(), "num_jobs", len(insertParamsMany))
+		}
+	}
+
+	if len(periodicJobUpsertParams.Jobs) > 0 {
+		if _, err = s.Config.Pilot.PeriodicJobUpsertMany(ctx, tx, periodicJobUpsertParams); err != nil {
+			s.Logger.ErrorContext(ctx, s.Name+": Error upserting periodic job next run times",
+				"error", err.Error(), "num_jobs", len(insertParamsMany), "num_next_run_at_upserts", len(periodicJobUpsertParams.Jobs))
 			return
 		}
 	}
@@ -426,4 +538,18 @@ func (s *PeriodicJobEnqueuer) timeUntilNextRun() time.Duration {
 	}
 
 	return firstNextRunAt.Sub(now)
+}
+
+// Adds a unique ID to known periodic job IDs, erroring in case of a duplicate.
+func addUniqueID(periodicJobIDs map[string]struct{}, id string) error {
+	if id == "" {
+		return nil
+	}
+
+	if _, ok := periodicJobIDs[id]; ok {
+		return errors.New("periodic job with ID already registered: " + id)
+	}
+
+	periodicJobIDs[id] = struct{}{}
+	return nil
 }
