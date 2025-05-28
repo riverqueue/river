@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
+	"maps"
 	"time"
 
 	"github.com/riverqueue/river/internal/dblist"
@@ -165,18 +165,19 @@ const (
 //
 //	params := NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).First(100)
 type JobListParams struct {
-	after            *JobListCursor
-	ids              []int64
-	kinds            []string
-	metadataFragment string
-	overrodeState    bool
-	paginationCount  int32
-	priorities       []int16
-	queues           []string
-	schema           string
-	sortField        JobListOrderByField
-	sortOrder        SortOrder
-	states           []rivertype.JobState
+	after           *JobListCursor
+	ids             []int64
+	kinds           []string
+	metadataCalled  bool
+	overrodeState   bool
+	paginationCount int32
+	priorities      []int16
+	queues          []string
+	schema          string
+	sortField       JobListOrderByField
+	sortOrder       SortOrder
+	states          []rivertype.JobState
+	where           []dblist.WherePredicate
 }
 
 // NewJobListParams creates a new JobListParams to return available jobs sorted
@@ -201,25 +202,23 @@ func NewJobListParams() *JobListParams {
 
 func (p *JobListParams) copy() *JobListParams {
 	return &JobListParams{
-		after:            p.after,
-		ids:              append([]int64(nil), p.ids...),
-		kinds:            append([]string(nil), p.kinds...),
-		metadataFragment: p.metadataFragment,
-		overrodeState:    p.overrodeState,
-		paginationCount:  p.paginationCount,
-		priorities:       append([]int16(nil), p.priorities...),
-		queues:           append([]string(nil), p.queues...),
-		sortField:        p.sortField,
-		sortOrder:        p.sortOrder,
-		schema:           p.schema,
-		states:           append([]rivertype.JobState(nil), p.states...),
+		after:           p.after,
+		ids:             append([]int64(nil), p.ids...),
+		kinds:           append([]string(nil), p.kinds...),
+		metadataCalled:  p.metadataCalled,
+		overrodeState:   p.overrodeState,
+		paginationCount: p.paginationCount,
+		priorities:      append([]int16(nil), p.priorities...),
+		queues:          append([]string(nil), p.queues...),
+		sortField:       p.sortField,
+		sortOrder:       p.sortOrder,
+		schema:          p.schema,
+		states:          append([]rivertype.JobState(nil), p.states...),
+		where:           append([]dblist.WherePredicate(nil), p.where...),
 	}
 }
 
 func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
-	conditionsBuilder := &strings.Builder{}
-	conditions := make([]string, 0, 10)
-	namedArgs := make(map[string]any)
 	orderBy := make([]dblist.JobListOrderBy, 0, 2)
 
 	var sortOrder dblist.SortOrder
@@ -265,47 +264,34 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 
 	orderBy = append(orderBy, dblist.JobListOrderBy{Expr: "id", Order: sortOrder})
 
-	if p.metadataFragment != "" {
-		conditions = append(conditions, `metadata @> @metadata_fragment::jsonb`)
-		namedArgs["metadata_fragment"] = p.metadataFragment
-	}
-
 	if p.after != nil {
+		namedArgs := map[string]any{"after_id": p.after.id}
 		if p.after.time.IsZero() { // order by ID only
 			if sortOrder == dblist.SortOrderAsc {
-				conditions = append(conditions, "(id > @after_id)")
+				p.where = append(p.where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: "(id > @after_id)"})
 			} else {
-				conditions = append(conditions, "(id < @after_id)")
+				p.where = append(p.where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: "(id < @after_id)"})
 			}
 		} else {
-			if sortOrder == dblist.SortOrderAsc {
-				conditions = append(conditions, fmt.Sprintf(`("%s" > @cursor_time OR ("%s" = @cursor_time AND "id" > @after_id))`, timeField, timeField))
-			} else {
-				conditions = append(conditions, fmt.Sprintf(`("%s" < @cursor_time OR ("%s" = @cursor_time AND "id" < @after_id))`, timeField, timeField))
-			}
 			namedArgs["cursor_time"] = p.after.time
+			if sortOrder == dblist.SortOrderAsc {
+				p.where = append(p.where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`("%s" > @cursor_time OR ("%s" = @cursor_time AND "id" > @after_id))`, timeField, timeField)})
+			} else {
+				p.where = append(p.where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`("%s" < @cursor_time OR ("%s" = @cursor_time AND "id" < @after_id))`, timeField, timeField)})
+			}
 		}
-		namedArgs["after_id"] = p.after.id
-	}
-
-	for i, condition := range conditions {
-		if i > 0 {
-			conditionsBuilder.WriteString("\n  AND ")
-		}
-		conditionsBuilder.WriteString(condition)
 	}
 
 	return &dblist.JobListParams{
-		Conditions: conditionsBuilder.String(),
 		IDs:        p.ids,
 		Kinds:      p.kinds,
 		LimitCount: p.paginationCount,
-		NamedArgs:  namedArgs,
 		OrderBy:    orderBy,
 		Priorities: p.priorities,
 		Queues:     p.queues,
 		Schema:     p.schema,
 		States:     p.states,
+		Where:      p.where,
 	}, nil
 }
 
@@ -362,10 +348,16 @@ func (p *JobListParams) Kinds(kinds ...string) *JobListParams {
 // https://www.postgresql.org/docs/current/functions-json.html
 //
 // This function isn't supported in SQLite due to SQLite not having an
-// equivalent operator to use, so there's no efficient way to implement it.
+// equivalent operator to use, so there's no efficient way to implement it. We
+// recommend the use of Where using a condition with a comparison on the `->>`
+// operator instead.
 func (p *JobListParams) Metadata(json string) *JobListParams {
 	paramsCopy := p.copy()
-	paramsCopy.metadataFragment = json
+	paramsCopy.metadataCalled = true
+	paramsCopy.where = append(paramsCopy.where, dblist.WherePredicate{
+		NamedArgs: map[string]any{"metadata_fragment": json},
+		SQL:       `metadata @> @metadata_fragment::jsonb`,
+	})
 	return paramsCopy
 }
 
@@ -421,6 +413,57 @@ func (p *JobListParams) States(states ...rivertype.JobState) *JobListParams {
 	paramsCopy.states = make([]rivertype.JobState, len(states))
 	paramsCopy.overrodeState = true
 	copy(paramsCopy.states, states)
+	return paramsCopy
+}
+
+// NamedArgs are named arguments for use with JobListParams.Where. Keys should
+// look like "my_param", and map to parameters like "@my_param" in SQL queries.
+// "@" are present in the SQL, but not in the keys of this map.
+type NamedArgs map[string]any
+
+// Where is an all-encompassing query escape hatch that adds an arbitrary
+// predicate after a list query's `WHERE ...` clause. Use of other JobListParams
+// filters should be preferred where possible because they're safer and their
+// compatibility between drivers is better guaranteed, but in case none is
+// suitable, Where can be used as a last resort.
+//
+// For example, using Where to query with `jsonb_path_query_first(...)` using a
+// JSON path, a function that's specific to Postgres:
+//
+//	listParams = listParams.Where("jsonb_path_query_first(metadata, @json_path) = @json_val", NamedArgs{"json_path": "$.foo", "json_val": `"bar"`})
+//
+// A JSON path can be used in a query in SQLite as well, but there the `->` or
+// `->>` operators must be used instead:
+//
+//	listParams = listParams.Where("metadata ->> @json_path = @json_val", NamedArgs{"json_path": "$.foo", "json_val": "bar"})
+//
+// Arguments beyond the first are interpreted as named parameters. Each one
+// should be present in the query SQL prefixed with a `@` symbol. Multiple sets
+// of named parameters will be merged together, with values in later sets
+// overwriting those in earlier ones.
+//
+// Calling Where multiple times will add multiple conditions separate by `AND`.
+// Use `OR` instead by stuffing all conditions into a single Where invocation.
+//
+// Consider use of this function possibly hazardous! Any time raw SQL is in
+// play, an application is opening itself up to SQL injection attacks. Never mix
+// unsanitized user input into a SQL string, and use named parameters to curb
+// the likelihood of injection.
+func (p *JobListParams) Where(sql string, namedArgsMany ...NamedArgs) *JobListParams {
+	paramsCopy := p.copy()
+
+	var allNamedArgs NamedArgs
+	if len(namedArgsMany) > 0 {
+		for i, namedArgs := range namedArgsMany {
+			if i == 0 {
+				allNamedArgs = namedArgs
+			} else {
+				maps.Copy(allNamedArgs, namedArgs)
+			}
+		}
+	}
+
+	paramsCopy.where = append(paramsCopy.where, dblist.WherePredicate{NamedArgs: allNamedArgs, SQL: sql})
 	return paramsCopy
 }
 

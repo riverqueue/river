@@ -332,6 +332,33 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.Equal(t, job.ID, listRes.Jobs[0].ID)
 	})
 
+	t.Run("JobListTxWhere", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		tx, execTx := beginTx(ctx, t, bundle)
+
+		job := testfactory.Job(ctx, t, execTx, &testfactory.JobOpts{
+			Metadata: []byte(`{"foo":"bar","bar":"baz"}`),
+			Schema:   bundle.schema,
+		})
+
+		listParams := NewJobListParams()
+
+		if client.driver.DatabaseName() == databaseNameSQLite {
+			listParams = listParams.Where("metadata ->> @json_path = @json_val", NamedArgs{"json_path": "$.foo", "json_val": "bar"})
+		} else {
+			// "bar" is quoted in this branch because `jsonb_path_query_first` needs to be compared to a JSON value
+			listParams = listParams.Where("jsonb_path_query_first(metadata, @json_path) = @json_val", NamedArgs{"json_path": "$.foo", "json_val": `"bar"`})
+		}
+
+		listRes, err := client.JobListTx(ctx, tx, listParams)
+		require.NoError(t, err)
+		require.Len(t, listRes.Jobs, 1)
+		require.Equal(t, job.ID, listRes.Jobs[0].ID)
+	})
+
 	t.Run("QueueGet", func(t *testing.T) {
 		t.Parallel()
 

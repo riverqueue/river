@@ -25,20 +25,27 @@ type JobListOrderBy struct {
 }
 
 type JobListParams struct {
-	Conditions string
 	IDs        []int64
 	Kinds      []string
 	LimitCount int32
-	NamedArgs  map[string]any
 	OrderBy    []JobListOrderBy
 	Priorities []int16
 	Queues     []string
 	Schema     string
 	States     []rivertype.JobState
+	Where      []WherePredicate
+}
+
+type WherePredicate struct {
+	NamedArgs map[string]any
+	SQL       string
 }
 
 func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListParams, sqlFragmentColumnIn func(column string, values any) (string, any, error)) ([]*rivertype.JobRow, error) {
-	var whereBuilder strings.Builder
+	var (
+		namedArgs    = make(map[string]any)
+		whereBuilder strings.Builder
+	)
 
 	orderBy := make([]JobListOrderBy, len(params.OrderBy))
 	for i, o := range params.OrderBy {
@@ -46,11 +53,6 @@ func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListPara
 			Expr:  o.Expr,
 			Order: o.Order,
 		}
-	}
-
-	namedArgs := params.NamedArgs
-	if namedArgs == nil {
-		namedArgs = make(map[string]any)
 	}
 
 	// Writes an `AND` to connect SQL predicates as long as this isn't the first
@@ -122,9 +124,22 @@ func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListPara
 		namedArgs[column] = arg
 	}
 
-	if params.Conditions != "" {
+	for _, where := range params.Where {
 		writeAndAfterFirst()
-		whereBuilder.WriteString(params.Conditions)
+
+		whereBuilder.WriteString(where.SQL)
+		for name, val := range where.NamedArgs {
+			expectedSymbol := "@" + name
+			if !strings.Contains(where.SQL, expectedSymbol) {
+				return nil, fmt.Errorf("expected %q to contain named arg symbol %s", where.SQL, expectedSymbol)
+			}
+
+			if _, ok := namedArgs[name]; ok {
+				return nil, fmt.Errorf("named argument %s already registered", expectedSymbol)
+			}
+
+			namedArgs[name] = val
+		}
 	}
 
 	// A condition of some kind is needed, so given no others write one that'll
