@@ -187,6 +187,31 @@ func (e *Executor) Exec(ctx context.Context, sql string, args ...any) error {
 	return interpretError(err)
 }
 
+func (e *Executor) IndexDropIfExists(ctx context.Context, params *riverdriver.IndexDropIfExistsParams) error {
+	var maybeSchema string
+	if params.Schema != "" {
+		maybeSchema = params.Schema + "."
+	}
+
+	_, err := e.dbtx.ExecContext(ctx, "DROP INDEX IF EXISTS "+maybeSchema+params.Index)
+	return interpretError(err)
+}
+
+func (e *Executor) IndexExists(ctx context.Context, params *riverdriver.IndexExistsParams) (bool, error) {
+	exists, err := dbsqlc.New().IndexExists(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.Index)
+	return exists > 0, interpretError(err)
+}
+
+func (e *Executor) IndexReindex(ctx context.Context, params *riverdriver.IndexReindexParams) error {
+	var maybeSchema string
+	if params.Schema != "" {
+		maybeSchema = params.Schema + "."
+	}
+
+	_, err := e.dbtx.ExecContext(ctx, "REINDEX "+maybeSchema+params.Index)
+	return interpretError(err)
+}
+
 func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error) {
 	// Unlike Postgres, this must be carried out in two operations because
 	// SQLite doesn't support CTEs containing `UPDATE`. As long as the job
@@ -1129,16 +1154,6 @@ func (e *Executor) QueueUpdate(ctx context.Context, params *riverdriver.QueueUpd
 
 func (e *Executor) QueryRow(ctx context.Context, sql string, args ...any) riverdriver.Row {
 	return e.dbtx.QueryRowContext(ctx, sql, args...)
-}
-
-func (e *Executor) Reindex(ctx context.Context, params *riverdriver.ReindexParams) error {
-	var maybeSchema string
-	if params.Schema != "" {
-		maybeSchema = params.Schema + "."
-	}
-
-	_, err := e.dbtx.ExecContext(ctx, "REINDEX "+maybeSchema+params.Index)
-	return interpretError(err)
 }
 
 const sqliteTestDir = "./sqlite"

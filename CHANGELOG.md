@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added missing help documentation for CLI command `river migrate-list`. [PR #903](https://github.com/riverqueue/river/pull/903).
 - Correct handling an explicit schema in the reindexer maintenance service. [PR #916](https://github.com/riverqueue/river/pull/916).
 - Return specific explanatory error when attempting to use `JobListParams.Metadata` with `JobListTx` on SQLite. [PR #924](https://github.com/riverqueue/river/pull/924).
+- The reindexer now skips work if artifacts from a failed reindex are present under the assumption that if they are, a new reindex build is likely to fail again. Context cancel timeout is increased from 15 seconds to 1 minute, allowing more time for reindexes to finish. Timeout becomes configurable with `Config.ReindexerTimeout`. [PR #935](https://github.com/riverqueue/river/pull/935).
 
 ## [0.22.0] - 2025-05-10
 

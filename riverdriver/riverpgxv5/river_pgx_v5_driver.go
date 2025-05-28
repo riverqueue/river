@@ -148,6 +148,37 @@ func (e *Executor) Exec(ctx context.Context, sql string, args ...any) error {
 	return interpretError(err)
 }
 
+func (e *Executor) IndexDropIfExists(ctx context.Context, params *riverdriver.IndexDropIfExistsParams) error {
+	var maybeSchema string
+	if params.Schema != "" {
+		maybeSchema = params.Schema + "."
+	}
+
+	_, err := e.dbtx.Exec(ctx, "DROP INDEX CONCURRENTLY IF EXISTS "+maybeSchema+params.Index)
+	return interpretError(err)
+}
+
+func (e *Executor) IndexExists(ctx context.Context, params *riverdriver.IndexExistsParams) (bool, error) {
+	exists, err := dbsqlc.New().IndexExists(ctx, e.dbtx, &dbsqlc.IndexExistsParams{
+		Index:  params.Index,
+		Schema: pgtype.Text{String: params.Schema, Valid: params.Schema != ""},
+	})
+	if err != nil {
+		return false, interpretError(err)
+	}
+	return exists, nil
+}
+
+func (e *Executor) IndexReindex(ctx context.Context, params *riverdriver.IndexReindexParams) error {
+	var maybeSchema string
+	if params.Schema != "" {
+		maybeSchema = params.Schema + "."
+	}
+
+	_, err := e.dbtx.Exec(ctx, "REINDEX INDEX CONCURRENTLY "+maybeSchema+params.Index)
+	return interpretError(err)
+}
+
 func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error) {
 	cancelledAt, err := params.CancelAttemptedAt.MarshalJSON()
 	if err != nil {
@@ -802,16 +833,6 @@ func (e *Executor) QueueUpdate(ctx context.Context, params *riverdriver.QueueUpd
 
 func (e *Executor) QueryRow(ctx context.Context, sql string, args ...any) riverdriver.Row {
 	return e.dbtx.QueryRow(ctx, sql, args...)
-}
-
-func (e *Executor) Reindex(ctx context.Context, params *riverdriver.ReindexParams) error {
-	var maybeSchema string
-	if params.Schema != "" {
-		maybeSchema = params.Schema + "."
-	}
-
-	_, err := e.dbtx.Exec(ctx, "REINDEX INDEX CONCURRENTLY "+maybeSchema+params.Index)
-	return interpretError(err)
 }
 
 func (e *Executor) SchemaCreate(ctx context.Context, params *riverdriver.SchemaCreateParams) error {

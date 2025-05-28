@@ -258,6 +258,13 @@ type Config struct {
 	// reindexer will run at midnight UTC every day.
 	ReindexerSchedule PeriodicSchedule
 
+	// ReindexerTimeout is the amount of time to wait for the reindexer to run a
+	// single reindex operation before cancelling it via context. Set to -1 to
+	// disable the timeout.
+	//
+	// Defaults to 1 minute.
+	ReindexerTimeout time.Duration
+
 	// RescueStuckJobsAfter is the amount of time a job can be running before it
 	// is considered stuck. A stuck job which has not yet reached its max attempts
 	// will be scheduled for a retry, while one which has exhausted its attempts
@@ -400,6 +407,7 @@ func (c *Config) WithDefaults() *Config {
 		PollOnly:                    c.PollOnly,
 		Queues:                      c.Queues,
 		ReindexerSchedule:           c.ReindexerSchedule,
+		ReindexerTimeout:            cmp.Or(c.ReindexerTimeout, maintenance.ReindexerTimeoutDefault),
 		RescueStuckJobsAfter:        cmp.Or(c.RescueStuckJobsAfter, rescueAfter),
 		RetryPolicy:                 retryPolicy,
 		Schema:                      c.Schema,
@@ -444,6 +452,9 @@ func (c *Config) validate() error {
 	}
 	if len(c.Middleware) > 0 && (len(c.JobInsertMiddleware) > 0 || len(c.WorkerMiddleware) > 0) {
 		return errors.New("only one of the pair JobInsertMiddleware/WorkerMiddleware or Middleware may be provided (Middleware is recommended, and may contain both job insert and worker middleware)")
+	}
+	if c.ReindexerTimeout < -1 {
+		return errors.New("ReindexerTimeout cannot be negative, except for -1 (infinite)")
 	}
 	if c.RescueStuckJobsAfter < 0 {
 		return errors.New("RescueStuckJobsAfter cannot be less than zero")
@@ -839,6 +850,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			reindexer := maintenance.NewReindexer(archetype, &maintenance.ReindexerConfig{
 				ScheduleFunc: scheduleFunc,
 				Schema:       config.Schema,
+				Timeout:      config.ReindexerTimeout,
 			}, driver.GetExecutor())
 			maintenanceServices = append(maintenanceServices, reindexer)
 			client.testSignals.reindexer = &reindexer.TestSignals
