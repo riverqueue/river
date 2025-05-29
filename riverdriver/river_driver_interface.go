@@ -183,6 +183,21 @@ type Executor interface {
 	// Exec executes raw SQL. Used for migrations.
 	Exec(ctx context.Context, sql string, args ...any) error
 
+	// IndexDropIfExists drops a database index if exists. This abstraction is a
+	// little leaky right now because Postgres runs this `CONCURRENTLY` and
+	// that's not possible in SQLite.
+	//
+	// API is not stable. DO NOT USE.
+	IndexDropIfExists(ctx context.Context, params *IndexDropIfExistsParams) error
+	IndexExists(ctx context.Context, params *IndexExistsParams) (bool, error)
+
+	// IndexReindex reindexes a database index. This abstraction is a little
+	// leaky right now because Postgres runs this `CONCURRENTLY` and that's not
+	// possible in SQLite.
+	//
+	// API is not stable. DO NOT USE.
+	IndexReindex(ctx context.Context, params *IndexReindexParams) error
+
 	JobCancel(ctx context.Context, params *JobCancelParams) (*rivertype.JobRow, error)
 	JobCountByState(ctx context.Context, params *JobCountByStateParams) (int, error)
 	JobDelete(ctx context.Context, params *JobDeleteParams) (*rivertype.JobRow, error)
@@ -246,11 +261,6 @@ type Executor interface {
 	QueueUpdate(ctx context.Context, params *QueueUpdateParams) (*rivertype.Queue, error)
 	QueryRow(ctx context.Context, sql string, args ...any) Row
 
-	// Reindex reindexes a database index. This abstraction is a little leaky
-	// right now because Postgres runs this `CONCURRENTLY` and that's not
-	// possible in SQLite.
-	Reindex(ctx context.Context, params *ReindexParams) error
-
 	SchemaCreate(ctx context.Context, params *SchemaCreateParams) error
 	SchemaDrop(ctx context.Context, params *SchemaDropParams) error
 	SchemaGetExpired(ctx context.Context, params *SchemaGetExpiredParams) ([]string, error)
@@ -307,6 +317,16 @@ type ColumnExistsParams struct {
 	Column string
 	Schema string
 	Table  string
+}
+
+type IndexDropIfExistsParams struct {
+	Schema string
+	Index  string
+}
+
+type IndexExistsParams struct {
+	Schema string
+	Index  string
 }
 
 type JobCancelParams struct {
@@ -736,7 +756,7 @@ type Row interface {
 	Scan(dest ...any) error
 }
 
-type ReindexParams struct {
+type IndexReindexParams struct {
 	Index  string
 	Schema string
 }

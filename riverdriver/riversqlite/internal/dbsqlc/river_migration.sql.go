@@ -227,17 +227,3 @@ func (q *Queries) RiverMigrationInsertAssumingMain(ctx context.Context, db DBTX,
 	err := row.Scan(&i.CreatedAt, &i.Version)
 	return &i, err
 }
-
-const tableExists = `-- name: TableExists :one
-SELECT EXISTS (
-    SELECT 1
-    FROM /* TEMPLATE: schema */sqlite_master WHERE type = 'table' AND name = cast(?1 AS text)
-)
-`
-
-func (q *Queries) TableExists(ctx context.Context, db DBTX, table string) (int64, error) {
-	row := db.QueryRowContext(ctx, tableExists, table)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
-}

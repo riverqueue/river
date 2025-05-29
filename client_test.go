@@ -6220,6 +6220,7 @@ func Test_NewClient_Defaults(t *testing.T) {
 	require.Nil(t, client.config.Hooks)
 	require.NotZero(t, client.baseService.Logger)
 	require.Equal(t, MaxAttemptsDefault, client.config.MaxAttempts)
+	require.Equal(t, maintenance.ReindexerTimeoutDefault, client.config.ReindexerTimeout)
 	require.IsType(t, &DefaultClientRetryPolicy{}, client.config.RetryPolicy)
 	require.False(t, client.config.SkipUnknownJobCheck)
 	require.IsType(t, nil, client.config.Test.Time)
@@ -6272,6 +6273,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 		MaxAttempts:                 5,
 		Queues:                      map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}},
 		ReindexerSchedule:           &periodicIntervalSchedule{interval: time.Hour},
+		ReindexerTimeout:            125 * time.Millisecond,
 		RetryPolicy:                 retryPolicy,
 		Schema:                      schema,
 		SkipUnknownJobCheck:         true,
@@ -6305,6 +6307,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 	require.Equal(t, []rivertype.Hook{&noOpHook{}}, client.config.Hooks)
 	require.Equal(t, logger, client.baseService.Logger)
 	require.Equal(t, 5, client.config.MaxAttempts)
+	require.Equal(t, 125*time.Millisecond, client.config.ReindexerTimeout)
 	require.Equal(t, retryPolicy, client.config.RetryPolicy)
 	require.Equal(t, schema, client.config.Schema)
 	require.True(t, client.config.SkipUnknownJobCheck)
@@ -6499,6 +6502,37 @@ func Test_NewClient_Validations(t *testing.T) {
 				config.WorkerMiddleware = []rivertype.WorkerMiddleware{&overridableJobMiddleware{}}
 			},
 			wantErr: errors.New("only one of the pair JobInsertMiddleware/WorkerMiddleware or Middleware may be provided (Middleware is recommended, and may contain both job insert and worker middleware)"),
+		},
+		{
+			name: "ReindexerTimeout can be -1 (infinite)",
+			configFunc: func(config *Config) {
+				config.ReindexerTimeout = -1
+			},
+			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
+				require.Equal(t, time.Duration(-1), client.config.ReindexerTimeout)
+			},
+		},
+		{
+			name: "ReindexerTimeout cannot be less than -1",
+			configFunc: func(config *Config) {
+				config.ReindexerTimeout = -2
+			},
+			wantErr: errors.New("ReindexerTimeout cannot be negative, except for -1 (infinite)"),
+		},
+		{
+			name: "ReindexerTimeout of zero applies maintenance.DefaultReindexerTimeout",
+			configFunc: func(config *Config) {
+				config.ReindexerTimeout = 0
+			},
+			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
+				require.Equal(t, maintenance.ReindexerTimeoutDefault, client.config.ReindexerTimeout)
+			},
+		},
+		{
+			name: "ReindexerTimeout can be a large positive value",
+			configFunc: func(config *Config) {
+				config.ReindexerTimeout = 7 * 24 * time.Hour
+			},
 		},
 		{
 			name: "RescueStuckJobsAfter may be overridden",

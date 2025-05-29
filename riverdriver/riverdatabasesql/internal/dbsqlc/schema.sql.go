@@ -7,7 +7,53 @@ package dbsqlc
 
 import (
 	"context"
+	"database/sql"
 )
+
+const columnExists = `-- name: ColumnExists :one
+SELECT EXISTS (
+    SELECT column_name
+    FROM information_schema.columns 
+    WHERE table_name = $1::text
+        AND table_schema = /* TEMPLATE_BEGIN: schema */ CURRENT_SCHEMA /* TEMPLATE_END */
+        AND column_name = $2::text
+)
+`
+
+type ColumnExistsParams struct {
+	TableName  string
+	ColumnName string
+}
+
+func (q *Queries) ColumnExists(ctx context.Context, db DBTX, arg *ColumnExistsParams) (bool, error) {
+	row := db.QueryRowContext(ctx, columnExists, arg.TableName, arg.ColumnName)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const indexExists = `-- name: IndexExists :one
+SELECT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_class
+        JOIN pg_catalog.pg_namespace ON pg_namespace.oid = pg_class.relnamespace
+    WHERE pg_class.relname = $1::text
+        AND pg_namespace.nspname = coalesce($2::text, current_schema())
+        AND pg_class.relkind = 'i'
+)
+`
+
+type IndexExistsParams struct {
+	Index  string
+	Schema sql.NullString
+}
+
+func (q *Queries) IndexExists(ctx context.Context, db DBTX, arg *IndexExistsParams) (bool, error) {
+	row := db.QueryRowContext(ctx, indexExists, arg.Index, arg.Schema)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
 
 const schemaGetExpired = `-- name: SchemaGetExpired :many
 SELECT schema_name::text
@@ -43,4 +89,16 @@ func (q *Queries) SchemaGetExpired(ctx context.Context, db DBTX, arg *SchemaGetE
 		return nil, err
 	}
 	return items, nil
+}
+
+const tableExists = `-- name: TableExists :one
+SELECT CASE WHEN to_regclass($1) IS NULL THEN false
+            ELSE true END
+`
+
+func (q *Queries) TableExists(ctx context.Context, db DBTX, schemaAndTable string) (bool, error) {
+	row := db.QueryRowContext(ctx, tableExists, schemaAndTable)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
 }

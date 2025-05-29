@@ -67,16 +67,3 @@ SELECT
 RETURNING
     created_at,
     version;
-
--- name: ColumnExists :one
-SELECT EXISTS (
-    SELECT column_name
-    FROM information_schema.columns 
-    WHERE table_name = @table_name::text
-        AND table_schema = /* TEMPLATE_BEGIN: schema */ CURRENT_SCHEMA /* TEMPLATE_END */
-        AND column_name = @column_name::text
-);
-
--- name: TableExists :one
-SELECT CASE WHEN to_regclass(@schema_and_table) IS NULL THEN false
-            ELSE true END;

@@ -471,6 +471,96 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		})
 	})
 
+	t.Run("IndexDropIfExists", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("DropsIndex", func(t *testing.T) {
+			t.Parallel()
+
+			// Postgres runs the drop with `CONCURRENTLY` so this must use a full
+			// schema rather than a transaction block.
+			driver, schema := driverWithSchema(ctx, t, nil)
+
+			// Oddly, when creating indexes on SQLite the schema must go before
+			// the index name, but on Postgres it should go before the table.
+			// The schema is empty for SQLite anyway since we're operating in
+			// isolation in a particular database file.
+			if driver.DatabaseName() == databaseNameSQLite {
+				require.NoError(t, driver.GetExecutor().Exec(ctx, "CREATE INDEX river_job_index_drop_if_exists ON river_job (id)"))
+			} else {
+				require.NoError(t, driver.GetExecutor().Exec(ctx, fmt.Sprintf("CREATE INDEX river_job_index_drop_if_exists ON %s.river_job (id)", schema)))
+			}
+
+			err := driver.GetExecutor().IndexDropIfExists(ctx, &riverdriver.IndexDropIfExistsParams{
+				Index:  "river_job_index_drop_if_exists ",
+				Schema: schema,
+			})
+			require.NoError(t, err)
+		})
+
+		t.Run("IndexThatDoesNotExistIgnore", func(t *testing.T) {
+		})
+	})
+
+	t.Run("IndexExists", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("ReturnsTrueIfIndexExists", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			exists, err := exec.IndexExists(ctx, &riverdriver.IndexExistsParams{
+				Index: "river_job_prioritized_fetching_index",
+			})
+			require.NoError(t, err)
+			require.True(t, exists)
+		})
+
+		t.Run("ReturnsFalseIfIndexDoesNotExistInAlternateSchema", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+
+			exists, err := exec.IndexExists(ctx, &riverdriver.IndexExistsParams{
+				Index:  "river_job_prioritized_fetching_index",
+				Schema: "custom_schema",
+			})
+			if bundle.driver.DatabaseName() == databaseNameSQLite {
+				requireMissingRelation(t, err, "custom_schema", "sqlite_master")
+			} else {
+				require.NoError(t, err)
+				require.False(t, exists)
+			}
+		})
+
+		t.Run("ReturnsFalseIfIndexDoesNotExist", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			exists, err := exec.IndexExists(ctx, &riverdriver.IndexExistsParams{
+				Index: "river_job_prioritized_fetching_index_with_extra_suffix_123",
+			})
+			require.NoError(t, err)
+			require.False(t, exists)
+		})
+	})
+
+	t.Run("IndexReindex", func(t *testing.T) {
+		t.Parallel()
+
+		// Postgres runs the reindex with `CONCURRENTLY` so this must use a full
+		// schema rather than a transaction block.
+		driver, schema := driverWithSchema(ctx, t, nil)
+
+		err := driver.GetExecutor().IndexReindex(ctx, &riverdriver.IndexReindexParams{
+			Index:  "river_job_kind",
+			Schema: schema,
+		})
+		require.NoError(t, err)
+	})
+
 	t.Run("JobCancel", func(t *testing.T) {
 		t.Parallel()
 
@@ -3822,20 +3912,6 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		require.Equal(t, 2, field2)
 		require.Equal(t, 3, field3)
 		require.Equal(t, "foo", fieldFoo)
-	})
-
-	t.Run("Reindex", func(t *testing.T) {
-		t.Parallel()
-
-		// Postgres runs the reindex with `CONCURRENTLY` so this must use a full
-		// schema rather than a transaction block.
-		driver, schema := driverWithSchema(ctx, t, nil)
-
-		err := driver.GetExecutor().Reindex(ctx, &riverdriver.ReindexParams{
-			Index:  "river_job_kind",
-			Schema: schema,
-		})
-		require.NoError(t, err)
 	})
 
 	t.Run("SchemaGetExpired", func(t *testing.T) {

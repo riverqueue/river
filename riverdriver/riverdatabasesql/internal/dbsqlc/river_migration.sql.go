@@ -12,28 +12,6 @@ import (
 	"github.com/lib/pq"
 )
 
-const columnExists = `-- name: ColumnExists :one
-SELECT EXISTS (
-    SELECT column_name
-    FROM information_schema.columns 
-    WHERE table_name = $1::text
-        AND table_schema = /* TEMPLATE_BEGIN: schema */ CURRENT_SCHEMA /* TEMPLATE_END */
-        AND column_name = $2::text
-)
-`
-
-type ColumnExistsParams struct {
-	TableName  string
-	ColumnName string
-}
-
-func (q *Queries) ColumnExists(ctx context.Context, db DBTX, arg *ColumnExistsParams) (bool, error) {
-	row := db.QueryRowContext(ctx, columnExists, arg.TableName, arg.ColumnName)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
 const riverMigrationDeleteAssumingMainMany = `-- name: RiverMigrationDeleteAssumingMainMany :many
 DELETE FROM /* TEMPLATE: schema */river_migration
 WHERE version = any($1::bigint[])
@@ -274,16 +252,4 @@ func (q *Queries) RiverMigrationInsertManyAssumingMain(ctx context.Context, db D
 		return nil, err
 	}
 	return items, nil
-}
-
-const tableExists = `-- name: TableExists :one
-SELECT CASE WHEN to_regclass($1) IS NULL THEN false
-            ELSE true END
-`
-
-func (q *Queries) TableExists(ctx context.Context, db DBTX, schemaAndTable string) (bool, error) {
-	row := db.QueryRowContext(ctx, tableExists, schemaAndTable)
-	var column_1 bool
-	err := row.Scan(&column_1)
-	return column_1, err
 }
