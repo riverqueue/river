@@ -36,11 +36,12 @@ func TestPeriodicJobBundle(t *testing.T) {
 	setup := func(t *testing.T) (*PeriodicJobBundle, *testBundle) { //nolint:unparam
 		t.Helper()
 
-		periodicJobEnqueuer := maintenance.NewPeriodicJobEnqueuer(
+		periodicJobEnqueuer, err := maintenance.NewPeriodicJobEnqueuer(
 			riversharedtest.BaseServiceArchetype(t),
 			&maintenance.PeriodicJobEnqueuerConfig{},
 			nil,
 		)
+		require.NoError(t, err)
 
 		return newPeriodicJobBundle(newTestConfig(t, ""), periodicJobEnqueuer), &testBundle{}
 	}
@@ -95,6 +96,48 @@ func TestPeriodicJobBundle(t *testing.T) {
 
 		_, err := internalPeriodicJob.ConstructorFunc()
 		require.ErrorIs(t, err, maintenance.ErrNoJobToInsert)
+	})
+
+	t.Run("AddError", func(t *testing.T) {
+		t.Parallel()
+
+		periodicJobBundle, _ := setup(t)
+
+		periodicJob := NewPeriodicJob(
+			PeriodicInterval(15*time.Minute),
+			func() (JobArgs, *InsertOpts) { return nil, nil },
+			&PeriodicJobOpts{ID: "periodic_job_id"},
+		)
+
+		periodicJobBundle.Add(periodicJob)
+
+		require.PanicsWithError(t, "periodic job with ID already registered: periodic_job_id", func() {
+			periodicJobBundle.Add(periodicJob)
+		})
+
+		_, err := periodicJobBundle.AddSafely(periodicJob)
+		require.EqualError(t, err, "periodic job with ID already registered: periodic_job_id")
+	})
+
+	t.Run("AddManyError", func(t *testing.T) {
+		t.Parallel()
+
+		periodicJobBundle, _ := setup(t)
+
+		periodicJob := NewPeriodicJob(
+			PeriodicInterval(15*time.Minute),
+			func() (JobArgs, *InsertOpts) { return nil, nil },
+			&PeriodicJobOpts{ID: "periodic_job_id"},
+		)
+
+		periodicJobBundle.Add(periodicJob)
+
+		require.PanicsWithError(t, "periodic job with ID already registered: periodic_job_id", func() {
+			periodicJobBundle.AddMany([]*PeriodicJob{periodicJob})
+		})
+
+		_, err := periodicJobBundle.AddManySafely([]*PeriodicJob{periodicJob})
+		require.EqualError(t, err, "periodic job with ID already registered: periodic_job_id")
 	})
 }
 
