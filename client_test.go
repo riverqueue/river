@@ -6423,7 +6423,7 @@ func Test_NewClient_Defaults(t *testing.T) {
 	workers := NewWorkers()
 	AddWorker(workers, &noOpWorker{})
 
-	client, err := NewClient(riverpgxv5.New(dbPool), &Config{
+	client, err := NewClient(driver, &Config{
 		Queues:  map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}},
 		Schema:  schema,
 		Workers: workers,
@@ -6494,7 +6494,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 		WorkerMiddlewareDefaults
 	}
 
-	client, err := NewClient(riverpgxv5.New(dbPool), &Config{
+	client, err := NewClient(driver, &Config{
 		AdvisoryLockPrefix:          123_456,
 		CancelledJobRetentionPeriod: 1 * time.Hour,
 		CompletedJobRetentionPeriod: 2 * time.Hour,
@@ -6928,7 +6928,7 @@ func Test_NewClient_Validations(t *testing.T) {
 			}
 			tt.configFunc(config)
 
-			client, err := NewClient(riverpgxv5.New(dbPool), config)
+			client, err := NewClient(driver, config)
 			if tt.wantErr != nil {
 				require.Error(t, err)
 				require.ErrorContains(t, err, tt.wantErr.Error())
