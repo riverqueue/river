@@ -4479,6 +4479,20 @@ func Test_Client_Maintenance(t *testing.T) {
 		}
 	})
 
+	t.Run("PeriodicJobsPanicIfClientNotConfiguredToExecuteJobs", func(t *testing.T) {
+		t.Parallel()
+
+		config := newTestConfig(t, "")
+		config.Queues = nil
+		config.Workers = nil
+
+		client := newTestClient(t, nil, config)
+
+		require.PanicsWithValue(t, "client Queues and Workers must be configured to modify periodic jobs (otherwise, they'll have no effect because a client not configured to work jobs can't be started)", func() {
+			client.PeriodicJobs()
+		})
+	})
+
 	t.Run("PeriodicJobEnqueuerUsesMiddleware", func(t *testing.T) {
 		t.Parallel()
 

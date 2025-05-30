@@ -2085,8 +2085,20 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 }
 
 // PeriodicJobs returns the currently configured set of periodic jobs for the
-// client, and can be used to add new ones or remove existing ones.
-func (c *Client[TTx]) PeriodicJobs() *PeriodicJobBundle { return c.periodicJobs }
+// client, and can be used to add new or remove existing ones.
+//
+// This function should only be invoked on clients capable of running perioidc
+// jobs. Running periodic jobs requires that the client be electable as leader
+// to run maintenance services, and being electable as leader requires that a
+// client be started. To be startable, a client must have Queues and Workers
+// configured. Invoking this function will panic if these conditions aren't met.
+func (c *Client[TTx]) PeriodicJobs() *PeriodicJobBundle {
+	if !c.config.willExecuteJobs() {
+		panic("client Queues and Workers must be configured to modify periodic jobs (otherwise, they'll have no effect because a client not configured to work jobs can't be started)")
+	}
+
+	return c.periodicJobs
+}
 
 // Driver exposes the underlying pilot used by the client.
 //
