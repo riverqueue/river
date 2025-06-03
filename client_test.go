@@ -335,6 +335,31 @@ func Test_Client(t *testing.T) {
 		riversharedtest.WaitOrTimeout(t, workedChan)
 	})
 
+	t.Run("Queues_Add_AlreadyAdded", func(t *testing.T) {
+		t.Parallel()
+
+		// Test two scenarios: when the queue was already added before the client
+		// was created, and when the queue was added after the client was created.
+		// Both should error.
+
+		config, bundle := setupConfig(t)
+		config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: 2}}
+		client := newTestClient(t, bundle.dbPool, config)
+
+		err := client.Queues().Add(QueueDefault, QueueConfig{MaxWorkers: 2})
+		require.Error(t, err)
+		var alreadyAddedErr *QueueAlreadyAddedError
+		require.ErrorAs(t, err, &alreadyAddedErr)
+		require.Equal(t, QueueDefault, alreadyAddedErr.Name)
+
+		require.NoError(t, client.Queues().Add("new_queue", QueueConfig{MaxWorkers: 2}))
+
+		err = client.Queues().Add("new_queue", QueueConfig{MaxWorkers: 2})
+		require.Error(t, err)
+		require.ErrorAs(t, err, &alreadyAddedErr)
+		require.Equal(t, "new_queue", alreadyAddedErr.Name)
+	})
+
 	t.Run("Queues_Add_Stress", func(t *testing.T) {
 		t.Parallel()
 
@@ -6398,7 +6423,7 @@ func Test_NewClient_Defaults(t *testing.T) {
 	workers := NewWorkers()
 	AddWorker(workers, &noOpWorker{})
 
-	client, err := NewClient(riverpgxv5.New(dbPool), &Config{
+	client, err := NewClient(driver, &Config{
 		Queues:  map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}},
 		Schema:  schema,
 		Workers: workers,
@@ -6469,7 +6494,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 		WorkerMiddlewareDefaults
 	}
 
-	client, err := NewClient(riverpgxv5.New(dbPool), &Config{
+	client, err := NewClient(driver, &Config{
 		AdvisoryLockPrefix:          123_456,
 		CancelledJobRetentionPeriod: 1 * time.Hour,
 		CompletedJobRetentionPeriod: 2 * time.Hour,
@@ -6903,7 +6928,7 @@ func Test_NewClient_Validations(t *testing.T) {
 			}
 			tt.configFunc(config)
 
-			client, err := NewClient(riverpgxv5.New(dbPool), config)
+			client, err := NewClient(driver, config)
 			if tt.wantErr != nil {
 				require.Error(t, err)
 				require.ErrorContains(t, err, tt.wantErr.Error())

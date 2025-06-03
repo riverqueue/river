@@ -50,21 +50,19 @@ type ProducerState interface {
 }
 
 type ProducerInitParams struct {
-	ClientID      string
-	ProducerID    int64
-	Queue         string
-	QueueMetadata []byte
-	Schema        string
+	ClientID   string
+	ProducerID int64
+	Queue      string
+	Schema     string
 }
 
 type ProducerShutdownParams struct {
 	ProducerID int64
+	Queue      string
 	Schema     string
-	State      ProducerState
 }
 
 type QueueMetadataChangedParams struct {
+	Queue    string
 	Metadata []byte
-	Schema   string
-	State    ProducerState
 }
