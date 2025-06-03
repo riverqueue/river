@@ -14,6 +14,7 @@ import (
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
+	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
 	"github.com/riverqueue/river/rivertype"
@@ -35,11 +36,11 @@ func (ts *JobSchedulerTestSignals) Init(tb testutil.TestingTB) {
 	ts.ScheduledBatch.Init(tb)
 }
 
-type InsertFunc func(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) ([]*rivertype.JobInsertResult, error)
+type InsertFunc func(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) error
 
 // NotifyInsert is a function to call to emit notifications for queues where
 // jobs were scheduled.
-type NotifyInsertFunc func(ctx context.Context, tx riverdriver.ExecutorTx, queues []string) error
+type NotifyInsertFunc func(ctx context.Context, tx riverdriver.ExecutorTx, queuesDeduped []string) error
 
 type JobSchedulerConfig struct {
 	// Interval is the amount of time between periodic checks for jobs to
@@ -186,7 +187,7 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 			}
 
 			if len(queues) > 0 {
-				if err := s.config.NotifyInsert(ctx, tx, queues); err != nil {
+				if err := s.config.NotifyInsert(ctx, tx, sliceutil.Uniq(queues)); err != nil {
 					return 0, fmt.Errorf("error notifying insert: %w", err)
 				}
 				s.TestSignals.NotifiedQueues.Signal(queues)

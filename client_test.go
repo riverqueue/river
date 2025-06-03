@@ -36,6 +36,7 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
@@ -134,7 +135,6 @@ func newTestConfig(t *testing.T, schema string) *Config {
 		},
 		TestOnly:          true, // disables staggered start in maintenance services
 		Workers:           workers,
-		queuePollInterval: 50 * time.Millisecond,
 		schedulerInterval: riverinternaltest.SchedulerShortInterval,
 	}
 }
@@ -606,6 +606,69 @@ func Test_Client(t *testing.T) {
 			return nil
 		})
 		require.NoError(t, err)
+	})
+
+	t.Run("CancelProducerControlEventSent", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			driver = riversqlite.New(nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, &riverdbtest.TestSchemaOpts{
+				ProcurePool: func(ctx context.Context, schema string) (any, string) {
+					return riversharedtest.DBPoolSQLite(ctx, t, schema), "" // could also be `main` instead of empty string
+				},
+			})
+			config = newTestConfig(t, schema)
+		)
+
+		client, err := NewClient(driver, config)
+		require.NoError(t, err)
+		client.producersByQueueName[QueueDefault].testSignals.Init(t)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			return nil
+		}))
+
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		_, err = client.JobCancel(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+
+		controlEvent := client.producersByQueueName[QueueDefault].testSignals.QueueControlEventTriggered.WaitOrTimeout()
+		require.NotNil(t, controlEvent)
+		require.Equal(t, controlActionCancel, controlEvent.Action)
+	})
+
+	t.Run("CancelProducerControlEventNotSent", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+		client.producersByQueueName[QueueDefault].testSignals.Init(t)
+
+		type JobArgs struct {
+			JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			return nil
+		}))
+
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		_, err = client.JobCancel(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+
+		client.producersByQueueName[QueueDefault].testSignals.QueueControlEventTriggered.RequireEmpty()
 	})
 
 	t.Run("AlternateSchema", func(t *testing.T) {
@@ -1161,6 +1224,55 @@ func Test_Client(t *testing.T) {
 		}
 	})
 
+	t.Run("QueuePauseAndResumeProducerControlEventSent", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			driver = riversqlite.New(nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, &riverdbtest.TestSchemaOpts{
+				ProcurePool: func(ctx context.Context, schema string) (any, string) {
+					return riversharedtest.DBPoolSQLite(ctx, t, schema), "" // could also be `main` instead of empty string
+				},
+			})
+			config = newTestConfig(t, schema)
+		)
+
+		client, err := NewClient(driver, config)
+		require.NoError(t, err)
+		client.producersByQueueName[QueueDefault].testSignals.Init(t)
+
+		startClient(ctx, t, client)
+
+		require.NoError(t, client.QueuePause(ctx, QueueDefault, nil))
+
+		controlEvent := client.producersByQueueName[QueueDefault].testSignals.QueueControlEventTriggered.WaitOrTimeout()
+		require.NotNil(t, controlEvent)
+		require.Equal(t, controlActionPause, controlEvent.Action)
+
+		require.NoError(t, client.QueueResume(ctx, QueueDefault, nil))
+
+		controlEvent = client.producersByQueueName[QueueDefault].testSignals.QueueControlEventTriggered.WaitOrTimeout()
+		require.NotNil(t, controlEvent)
+		require.Equal(t, controlActionResume, controlEvent.Action)
+	})
+
+	t.Run("QueuePauseAndResumeProducerControlEventNotSent", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+		client.producersByQueueName[QueueDefault].testSignals.Init(t)
+
+		startClient(ctx, t, client)
+
+		require.NoError(t, client.QueuePause(ctx, QueueDefault, nil))
+
+		client.producersByQueueName[QueueDefault].testSignals.QueueControlEventTriggered.RequireEmpty()
+
+		require.NoError(t, client.QueueResume(ctx, QueueDefault, nil))
+
+		client.producersByQueueName[QueueDefault].testSignals.QueueControlEventTriggered.RequireEmpty()
+	})
+
 	t.Run("PollOnlyDriver", func(t *testing.T) {
 		t.Parallel()
 
@@ -1172,7 +1284,6 @@ func Test_Client(t *testing.T) {
 
 		client, err := NewClient(riverdatabasesql.New(stdPool), config)
 		require.NoError(t, err)
-
 		client.testSignals.Init(t)
 
 		// Notifier should not have been initialized at all.
@@ -2016,6 +2127,46 @@ func Test_Client_Insert(t *testing.T) {
 		require.Equal(t, PriorityDefault, jobRow.Priority)
 		require.Equal(t, QueueDefault, jobRow.Queue)
 		require.Equal(t, []string{}, jobRow.Tags)
+	})
+
+	t.Run("ProducerFetchLimiterCalled", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			driver = riversqlite.New(nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, &riverdbtest.TestSchemaOpts{
+				ProcurePool: func(ctx context.Context, schema string) (any, string) {
+					return riversharedtest.DBPoolSQLite(ctx, t, schema), "" // could also be `main` instead of empty string
+				},
+			})
+			config = newTestConfig(t, schema)
+		)
+
+		client, err := NewClient(driver, config)
+		require.NoError(t, err)
+		client.producersByQueueName[QueueDefault].testSignals.Init(t)
+
+		startClient(ctx, t, client)
+
+		_, err = client.Insert(ctx, &noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		client.producersByQueueName[QueueDefault].testSignals.JobFetchTriggered.WaitOrTimeout()
+	})
+
+	// Not called for drivers that support a listener.
+	t.Run("ProducerFetchLimiterNotCalled", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+		client.producersByQueueName[QueueDefault].testSignals.Init(t)
+
+		startClient(ctx, t, client)
+
+		_, err := client.Insert(ctx, &noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		client.producersByQueueName[QueueDefault].testSignals.JobFetchTriggered.RequireEmpty()
 	})
 
 	t.Run("WithInsertOpts", func(t *testing.T) {
@@ -4947,6 +5098,52 @@ func Test_Client_QueueUpdate(t *testing.T) {
 			t.Fatalf("expected no notification, got: %+v", notif)
 		case <-time.After(100 * time.Millisecond):
 		}
+	})
+
+	t.Run("ProducerControlEventSent", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			driver = riversqlite.New(nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, &riverdbtest.TestSchemaOpts{
+				ProcurePool: func(ctx context.Context, schema string) (any, string) {
+					return riversharedtest.DBPoolSQLite(ctx, t, schema), "" // could also be `main` instead of empty string
+				},
+			})
+			config = newTestConfig(t, schema)
+		)
+
+		client, err := NewClient(driver, config)
+		require.NoError(t, err)
+		client.producersByQueueName[QueueDefault].testSignals.Init(t)
+
+		startClient(ctx, t, client)
+
+		_, err = client.QueueUpdate(ctx, QueueDefault, &QueueUpdateParams{
+			Metadata: []byte(`{"foo":"baz"}`),
+		})
+		require.NoError(t, err)
+
+		controlEvent := client.producersByQueueName[QueueDefault].testSignals.QueueControlEventTriggered.WaitOrTimeout()
+		require.NotNil(t, controlEvent)
+		require.Equal(t, controlActionMetadataChanged, controlEvent.Action)
+	})
+
+	t.Run("ProducerControlEventNotSent", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		client.producersByQueueName[QueueDefault].testSignals.Init(t)
+
+		startClient(ctx, t, client)
+
+		_, err := client.QueueUpdate(ctx, QueueDefault, &QueueUpdateParams{
+			Metadata: []byte(`{"foo":"baz"}`),
+		})
+		require.NoError(t, err)
+
+		client.producersByQueueName[QueueDefault].testSignals.QueueControlEventTriggered.RequireEmpty()
 	})
 }
 

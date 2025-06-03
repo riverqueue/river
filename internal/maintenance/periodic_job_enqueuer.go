@@ -342,8 +342,7 @@ func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany 
 	defer tx.Rollback(ctx)
 
 	if len(insertParamsMany) > 0 {
-		_, err := s.Config.Insert(ctx, tx, insertParamsMany)
-		if err != nil {
+		if err := s.Config.Insert(ctx, tx, insertParamsMany); err != nil {
 			s.Logger.ErrorContext(ctx, s.Name+": Error inserting periodic jobs",
 				"error", err.Error(), "num_jobs", len(insertParamsMany))
 			return

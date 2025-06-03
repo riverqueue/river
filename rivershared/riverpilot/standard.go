@@ -22,14 +22,14 @@ func (p *StandardPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Ex
 
 func (p *StandardPilot) JobInsertMany(
 	ctx context.Context,
-	tx riverdriver.ExecutorTx,
+	execTx riverdriver.ExecutorTx,
 	params *riverdriver.JobInsertFastManyParams,
 ) ([]*riverdriver.JobInsertFastResult, error) {
-	return tx.JobInsertFastMany(ctx, params)
+	return execTx.JobInsertFastMany(ctx, params)
 }
 
-func (p *StandardPilot) JobSetStateIfRunningMany(ctx context.Context, tx riverdriver.ExecutorTx, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
-	return tx.JobSetStateIfRunningMany(ctx, params)
+func (p *StandardPilot) JobSetStateIfRunningMany(ctx context.Context, execTx riverdriver.ExecutorTx, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+	return execTx.JobSetStateIfRunningMany(ctx, params)
 }
 
 func (p *StandardPilot) PilotInit(archetype *baseservice.Archetype) {

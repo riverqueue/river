@@ -49,6 +49,27 @@ func TestTestSignal(t *testing.T) {
 		}
 	})
 
+	t.Run("RequireEmpty", func(t *testing.T) {
+		t.Parallel()
+
+		signal := TestSignal[struct{}]{}
+
+		require.PanicsWithValue(t, "test only signal is not initialized; called outside of tests?", func() {
+			signal.RequireEmpty()
+		})
+
+		mockT := testutil.NewMockT(t)
+		signal.Init(mockT)
+
+		signal.RequireEmpty() // succeeds
+
+		signal.Signal(struct{}{})
+
+		signal.RequireEmpty()
+		require.True(t, mockT.Failed)
+		require.Equal(t, "test signal should be empty, but wasn't\ngot value: {}\n\n", mockT.LogOutput())
+	})
+
 	t.Run("WaitC", func(t *testing.T) {
 		t.Parallel()
 
@@ -74,6 +95,11 @@ func TestTestSignal(t *testing.T) {
 		t.Parallel()
 
 		signal := TestSignal[struct{}]{}
+
+		require.PanicsWithValue(t, "test only signal is not initialized; called outside of tests?", func() {
+			signal.WaitOrTimeout()
+		})
+
 		signal.Init(t)
 
 		signal.Signal(struct{}{})
