@@ -10,12 +10,12 @@ require (
 	github.com/jackc/pgx/v5 v5.7.4
 	github.com/jackc/puddle/v2 v2.2.2
 	github.com/lib/pq v1.10.9
-	github.com/riverqueue/river/riverdriver v0.23.0
-	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.23.0
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.23.0
-	github.com/riverqueue/river/riverdriver/riversqlite v0.23.0
-	github.com/riverqueue/river/rivershared v0.23.0
-	github.com/riverqueue/river/rivertype v0.23.0
+	github.com/riverqueue/river/riverdriver v0.23.1
+	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.23.1
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.23.1
+	github.com/riverqueue/river/riverdriver/riversqlite v0.23.1
+	github.com/riverqueue/river/rivershared v0.23.1
+	github.com/riverqueue/river/rivertype v0.23.1
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/gjson v1.18.0
