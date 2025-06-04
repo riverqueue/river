@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
@@ -27,6 +26,7 @@ import (
 type DriverProcurerStub struct {
 	getBenchmarkerStub func(config *riverbench.Config) BenchmarkerInterface
 	getMigratorStub    func(config *rivermigrate.Config) (MigratorInterface, error)
+	initPgxV5Stub      func(pool *pgxpool.Pool)
 	queryRowStub       func(ctx context.Context, sql string, args ...any) riverdriver.Row
 }
 
@@ -44,6 +44,14 @@ func (p *DriverProcurerStub) GetMigrator(config *rivermigrate.Config) (MigratorI
 	}
 
 	return p.getMigratorStub(config)
+}
+
+func (p *DriverProcurerStub) InitPgxV5(pool *pgxpool.Pool) {
+	if p.initPgxV5Stub == nil {
+		panic("InitPgxV5 is not stubbed")
+	}
+
+	p.initPgxV5Stub(pool)
 }
 
 func (p *DriverProcurerStub) QueryRow(ctx context.Context, sql string, args ...any) riverdriver.Row {
@@ -109,12 +117,6 @@ var (
 
 	testMigrationAll = []rivermigrate.Migration{testMigration01, testMigration02, testMigration03} //nolint:gochecknoglobals
 )
-
-type TestDriverProcurer struct{}
-
-func (p *TestDriverProcurer) ProcurePgxV5(pool *pgxpool.Pool) riverdriver.Driver[pgx.Tx] {
-	return riverpgxv5.New(pool)
-}
 
 // High level integration tests that operate on the Cobra command directly. This
 // isn't always appropriate because there's no way to inject a test transaction.
@@ -257,6 +259,51 @@ func TestBaseCommandSetNonParallel(t *testing.T) {
 		cmd.SetArgs([]string{"migrate-up", "--schema", schema})
 		require.NoError(t, cmd.Execute())
 	})
+}
+
+func TestBaseCommandSetDriverProcurerPgxV5(t *testing.T) {
+	t.Parallel()
+
+	calledStub := false
+
+	migratorStub := &MigratorStub{}
+	migratorStub.allVersionsStub = func() []rivermigrate.Migration { return []rivermigrate.Migration{testMigration01} }
+	migratorStub.getVersionStub = func(version int) (rivermigrate.Migration, error) {
+		calledStub = true
+		if version == 1 {
+			return testMigration01, nil
+		}
+
+		return rivermigrate.Migration{}, fmt.Errorf("unknown version: %d", version)
+	}
+	migratorStub.existingVersionsStub = func(ctx context.Context) ([]rivermigrate.Migration, error) { return nil, nil }
+
+	cli := NewCLI(&Config{
+		DriverProcurer: &DriverProcurerStub{
+			getMigratorStub: func(config *rivermigrate.Config) (MigratorInterface, error) {
+				calledStub = true
+				return migratorStub, nil
+			},
+			initPgxV5Stub: func(pool *pgxpool.Pool) {
+				calledStub = true
+			},
+		},
+		Name: "River",
+	})
+
+	var out bytes.Buffer
+	cli.SetOut(&out)
+
+	cmd := cli.BaseCommandSet()
+	cmd.SetArgs([]string{"migrate-get", "--up", "--version", "1"})
+	require.NoError(t, cmd.Execute())
+
+	require.True(t, calledStub)
+
+	require.Equal(t, strings.TrimSpace(`
+-- River main migration 001 [up]
+SELECT 'up 1' FROM river_table
+		`), strings.TrimSpace(out.String()))
 }
 
 func TestMigrateGet(t *testing.T) {

@@ -29,6 +29,10 @@ import (
 )
 
 type Config struct {
+	// DriverProcurer is used to procure a driver for the database. If not
+	// specified, a default one will be initialized based on the database URL
+	// scheme.
+	DriverProcurer DriverProcurer
 	// Name is the human-friendly named of the executable, used while showing
 	// version output. Usually this is just "River", but it could be "River
 	// Pro".
@@ -37,14 +41,16 @@ type Config struct {
 
 // CLI provides a common base of commands for the River CLI.
 type CLI struct {
-	name string
-	out  io.Writer
+	driverProcurer DriverProcurer
+	name           string
+	out            io.Writer
 }
 
 func NewCLI(config *Config) *CLI {
 	return &CLI{
-		name: config.Name,
-		out:  os.Stdout,
+		driverProcurer: config.DriverProcurer,
+		name:           config.Name,
+		out:            os.Stdout,
 	}
 }
 
@@ -72,10 +78,11 @@ func (c *CLI) BaseCommandSet() *cobra.Command {
 	// Make a bundle for RunCommand. Takes a database URL pointer because not every command is required to take a database URL.
 	makeCommandBundle := func(databaseURL *string, schema string) *RunCommandBundle {
 		return &RunCommandBundle{
-			DatabaseURL: databaseURL,
-			Logger:      makeLogger(),
-			OutStd:      c.out,
-			Schema:      schema,
+			DatabaseURL:    databaseURL,
+			DriverProcurer: c.driverProcurer,
+			Logger:         makeLogger(),
+			OutStd:         c.out,
+			Schema:         schema,
 		}
 	}
 
