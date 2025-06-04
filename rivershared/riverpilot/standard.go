@@ -32,6 +32,18 @@ func (p *StandardPilot) JobSetStateIfRunningMany(ctx context.Context, execTx riv
 	return execTx.JobSetStateIfRunningMany(ctx, params)
 }
 
+func (p *StandardPilot) PeriodicJobKeepAliveAndReap(ctx context.Context, exec riverdriver.Executor, params *PeriodicJobKeepAliveAndReapParams) ([]*PeriodicJob, error) {
+	return nil, nil
+}
+
+func (p *StandardPilot) PeriodicJobGetAll(ctx context.Context, exec riverdriver.Executor, params *PeriodicJobGetAllParams) ([]*PeriodicJob, error) {
+	return nil, nil
+}
+
+func (p *StandardPilot) PeriodicJobUpsertMany(ctx context.Context, exec riverdriver.Executor, params *PeriodicJobUpsertManyParams) ([]*PeriodicJob, error) {
+	return nil, nil
+}
+
 func (p *StandardPilot) PilotInit(archetype *baseservice.Archetype) {
 	// No-op
 }

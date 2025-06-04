@@ -33,6 +33,11 @@ type PeriodicJob struct {
 
 // PeriodicJobOpts are options for a periodic job.
 type PeriodicJobOpts struct {
+	// ID is an optional identifier for the job. Identifiers must be unique
+	// between all periodic jobs and adding a periodic job will error if they're
+	// not.
+	ID string
+
 	// RunOnStart can be used to indicate that a periodic job should insert an
 	// initial job as a new scheduler is started. This can be used as a hedge
 	// for jobs with longer scheduled durations that may not get to expiry
@@ -114,7 +119,7 @@ func newPeriodicJobBundle(config *Config, periodicJobEnqueuer *maintenance.Perio
 	}
 }
 
-// Adds a new periodic job to the client. The job is queued immediately if
+// Add adds a new periodic job to the client. The job is queued immediately if
 // RunOnStart is enabled, and then scheduled normally.
 //
 // Returns a periodic job handle which can be used to subsequently remove the
@@ -125,7 +130,17 @@ func newPeriodicJobBundle(config *Config, periodicJobEnqueuer *maintenance.Perio
 // new periodic job is fully enabled or disabled, it should be added or removed
 // from _every_ active River client across all processes.
 func (b *PeriodicJobBundle) Add(periodicJob *PeriodicJob) rivertype.PeriodicJobHandle {
-	return b.periodicJobEnqueuer.Add(b.toInternal(periodicJob))
+	handle, err := b.periodicJobEnqueuer.AddSafely(b.toInternal(periodicJob))
+	if err != nil {
+		panic(err)
+	}
+	return handle
+}
+
+// AddSafely is the same as Add, but it returns an error in the case of a
+// validation problem or duplicate ID instead of panicking.
+func (b *PeriodicJobBundle) AddSafely(periodicJob *PeriodicJob) (rivertype.PeriodicJobHandle, error) {
+	return b.periodicJobEnqueuer.AddSafely(b.toInternal(periodicJob))
 }
 
 // AddMany adds many new periodic jobs to the client. The jobs are queued
@@ -139,7 +154,17 @@ func (b *PeriodicJobBundle) Add(periodicJob *PeriodicJob) rivertype.PeriodicJobH
 // new periodic job is fully enabled or disabled, it should be added or removed
 // from _every_ active River client across all processes.
 func (b *PeriodicJobBundle) AddMany(periodicJobs []*PeriodicJob) []rivertype.PeriodicJobHandle {
-	return b.periodicJobEnqueuer.AddMany(sliceutil.Map(periodicJobs, b.toInternal))
+	handles, err := b.periodicJobEnqueuer.AddManySafely(sliceutil.Map(periodicJobs, b.toInternal))
+	if err != nil {
+		panic(err)
+	}
+	return handles
+}
+
+// AddManySafely is the same as AddMany, but it returns an error in the case of
+// a validation problem or duplicate ID instead of panicking.
+func (b *PeriodicJobBundle) AddManySafely(periodicJobs []*PeriodicJob) ([]rivertype.PeriodicJobHandle, error) {
+	return b.periodicJobEnqueuer.AddManySafely(sliceutil.Map(periodicJobs, b.toInternal))
 }
 
 // Clear clears all periodic jobs, cancelling all scheduled runs.
@@ -191,6 +216,7 @@ func (b *PeriodicJobBundle) toInternal(periodicJob *PeriodicJob) *maintenance.Pe
 		opts = periodicJob.opts
 	}
 	return &maintenance.PeriodicJob{
+		ID: opts.ID,
 		ConstructorFunc: func() (*rivertype.JobInsertParams, error) {
 			args, options := periodicJob.constructorFunc()
 			if args == nil {
