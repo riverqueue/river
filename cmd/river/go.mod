@@ -7,12 +7,12 @@ toolchain go1.24.1
 require (
 	github.com/jackc/pgx/v5 v5.7.5
 	github.com/lmittmann/tint v1.1.1
-	github.com/riverqueue/river v0.22.0
-	github.com/riverqueue/river/riverdriver v0.22.0
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.22.0
-	github.com/riverqueue/river/riverdriver/riversqlite v0.0.0-00010101000000-000000000000
-	github.com/riverqueue/river/rivershared v0.22.0
-	github.com/riverqueue/river/rivertype v0.22.0
+	github.com/riverqueue/river v0.23.0
+	github.com/riverqueue/river/riverdriver v0.23.0
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.23.0
+	github.com/riverqueue/river/riverdriver/riversqlite v0.23.0
+	github.com/riverqueue/river/rivershared v0.23.0
+	github.com/riverqueue/river/rivertype v0.23.0
 	github.com/spf13/cobra v1.9.1
 	github.com/stretchr/testify v1.10.0
 	modernc.org/sqlite v1.37.1
@@ -46,8 +46,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-// TODO(brandur): Remove this before first release including SQLite driver. It's
-// needed temporarily because there's no riversqlite tag to target (the one
-// referenced above is fake and does not exist).
-replace github.com/riverqueue/river/riverdriver/riversqlite => ../../../river/riverdriver/riversqlite
