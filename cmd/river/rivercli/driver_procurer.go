@@ -23,6 +23,10 @@ type DriverProcurer interface {
 	QueryRow(ctx context.Context, sql string, args ...any) riverdriver.Row
 }
 
+type DriverProcurerPgxV5 interface {
+	InitPgxV5(pool *pgxpool.Pool)
+}
+
 // BenchmarkerInterface is an interface to a Benchmarker. Its reason for
 // existence is to wrap a benchmarker to strip it of its generic parameter,
 // letting us pass it around without having to know the transaction type.

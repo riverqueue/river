@@ -46,10 +46,11 @@ type CommandOpts interface {
 
 // RunCommandBundle is a bundle of utilities for RunCommand.
 type RunCommandBundle struct {
-	DatabaseURL *string
-	Logger      *slog.Logger
-	OutStd      io.Writer
-	Schema      string
+	DatabaseURL    *string
+	DriverProcurer DriverProcurer
+	Logger         *slog.Logger
+	OutStd         io.Writer
+	Schema         string
 }
 
 // RunCommand bootstraps and runs a River CLI subcommand.
@@ -76,7 +77,7 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 			}
 		}
 
-		var driverProcurer DriverProcurer
+		driverProcurer := bundle.DriverProcurer
 		if databaseURL != nil {
 			switch protocol {
 			case "postgres", "postgresql":
@@ -86,7 +87,12 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 				}
 				defer dbPool.Close()
 
-				driverProcurer = &pgxV5DriverProcurer{dbPool: dbPool}
+				driverProcurerPgxV5, isPgxV5Procurer := driverProcurer.(DriverProcurerPgxV5)
+				if driverProcurer != nil && isPgxV5Procurer {
+					driverProcurerPgxV5.InitPgxV5(dbPool)
+				} else {
+					driverProcurer = &pgxV5DriverProcurer{dbPool: dbPool}
+				}
 
 			case "sqlite":
 				dbPool, err := openSQLitePool(protocol, urlWithoutProtocol)

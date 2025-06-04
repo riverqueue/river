@@ -3105,7 +3105,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 		now := time.Now().UTC()
 
-		leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
+		_ = testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
 			LeaderID: ptrutil.Ptr(clientID),
 			Now:      &now,
 		})
