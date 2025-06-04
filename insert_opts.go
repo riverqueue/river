@@ -51,7 +51,8 @@ type InsertOpts struct {
 
 	// Queue is the name of the job queue in which to insert the job.
 	//
-	// Defaults to QueueDefault.
+	// Defaults to the job kind's default queue if set via
+	// `JobArgsWithInsertOpts`, or QueueDefault if not.
 	Queue string
 
 	// ScheduledAt is a time in future at which to schedule the job (i.e. in
