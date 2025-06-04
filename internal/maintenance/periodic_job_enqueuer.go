@@ -19,6 +19,7 @@ import (
 	"github.com/riverqueue/river/rivershared/util/maputil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
+	"github.com/riverqueue/river/rivershared/util/timeutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -28,14 +29,16 @@ var ErrNoJobToInsert = errors.New("a nil job was returned, nothing to insert")
 
 // Test-only properties.
 type PeriodicJobEnqueuerTestSignals struct {
-	EnteredLoop  testsignal.TestSignal[struct{}] // notifies when the enqueuer finishes start up and enters its initial run loop
-	InsertedJobs testsignal.TestSignal[struct{}] // notifies when a batch of jobs is inserted
-	SkippedJob   testsignal.TestSignal[struct{}] // notifies when a job is skipped because of nil JobInsertParams
+	EnteredLoop                 testsignal.TestSignal[struct{}] // notifies when the enqueuer finishes start up and enters its initial run loop
+	InsertedJobs                testsignal.TestSignal[struct{}] // notifies when a batch of jobs is inserted
+	PeriodicJobKeepAliveAndReap testsignal.TestSignal[struct{}] // notifies when the background services that runs keep alive and reap on periodic jobs ticks
+	SkippedJob                  testsignal.TestSignal[struct{}] // notifies when a job is skipped because of nil JobInsertParams
 }
 
 func (ts *PeriodicJobEnqueuerTestSignals) Init(tb testutil.TestingTB) {
 	ts.EnteredLoop.Init(tb)
 	ts.InsertedJobs.Init(tb)
+	ts.PeriodicJobKeepAliveAndReap.Init(tb)
 	ts.SkippedJob.Init(tb)
 }
 
@@ -257,12 +260,21 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 
 	s.StaggerStart(ctx)
 
+	subServices := []startstop.Service{
+		startstop.StartStopFunc(s.periodicJobKeepAliveAndReapPeriodically),
+	}
+	if err := startstop.StartAll(ctx, subServices...); err != nil {
+		return err
+	}
+
 	go func() {
 		started()
 		defer stopped() // this defer should come first so it's last out
 
 		s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStarted)
 		defer s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStopped)
+
+		defer startstop.StopAllParallel(subServices...)
 
 		// Drain the signal to recalculate next run if it's been sent (i.e. Add
 		// or AddMany called before Start). We're about to schedule jobs from
@@ -345,17 +357,6 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 
 		// Run any jobs that need to run on start and calculate initial runs.
 		validateInsertRunOnStartAndScheduleNewlyAdded()
-
-		// Delete any periodic jobs that were in the database but no longer
-		// present in the client's configured periodic jobs.
-		if len(initialPeriodicJobsMap) > 0 {
-			if _, err := s.Config.Pilot.PeriodicJobDeleteByIDMany(ctx, s.exec, &riverpilot.PeriodicJobDeleteByIDManyParams{
-				ID:     maputil.Keys(initialPeriodicJobsMap),
-				Schema: s.Config.Schema,
-			}); err != nil {
-				s.Logger.ErrorContext(ctx, s.Name+": Error deleting periodic jobs", "error", err)
-			}
-		}
 
 		s.TestSignals.EnteredLoop.Signal(struct{}{})
 
@@ -491,6 +492,45 @@ func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, c
 	}
 
 	return insertParams, true
+}
+
+func (s *PeriodicJobEnqueuer) periodicJobKeepAliveAndReapPeriodically(ctx context.Context, shouldStart bool, started, stopped func()) error {
+	if !shouldStart {
+		return nil
+	}
+
+	go func() {
+		started()
+		defer stopped() // this defer should come first so it's last out
+
+		ticker := timeutil.NewTickerWithInitialTick(ctx, 10*time.Minute)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+
+			case <-ticker.C:
+				func() {
+					s.mu.RLock()
+					defer s.mu.RUnlock()
+
+					if len(s.periodicJobIDs) > 0 {
+						if _, err := s.Config.Pilot.PeriodicJobKeepAliveAndReap(ctx, s.exec, &riverpilot.PeriodicJobKeepAliveAndReapParams{
+							ID:     maputil.Keys(s.periodicJobIDs),
+							Schema: s.Config.Schema,
+						}); err != nil {
+							s.Logger.ErrorContext(ctx, s.Name+": Error executing periodic job keep alive and reap", "error", err.Error())
+							return
+						}
+					}
+
+					s.TestSignals.PeriodicJobKeepAliveAndReap.Signal(struct{}{})
+				}()
+			}
+		}
+	}()
+
+	return nil
 }
 
 const periodicJobEnqueuerVeryLongDuration = 24 * time.Hour

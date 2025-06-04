@@ -52,15 +52,17 @@ type Pilot interface {
 // extracted as its own interface so there's less surface area to mock in places
 // like the periodic job enqueuer where that's needed.
 type PilotPeriodicJob interface {
-	// PeriodicJobDeleteByIDMany deletes many periodic jobs by ID.
-	//
-	// API is not stable. DO NOT USE.
-	PeriodicJobDeleteByIDMany(ctx context.Context, exec riverdriver.Executor, params *PeriodicJobDeleteByIDManyParams) ([]*PeriodicJob, error)
-
 	// PeriodicJobGetAll gets all currently known periodic jobs.
 	//
 	// API is not stable. DO NOT USE.
 	PeriodicJobGetAll(ctx context.Context, exec riverdriver.Executor, params *PeriodicJobGetAllParams) ([]*PeriodicJob, error)
+
+	// PeriodicJobTouchMany updates the `updated_at` timestamp on many jobs at
+	// once to keep them alive and reaps any jobs that haven't been seen in some
+	// time.
+	//
+	// API is not stable. DO NOT USE.
+	PeriodicJobKeepAliveAndReap(ctx context.Context, exec riverdriver.Executor, params *PeriodicJobKeepAliveAndReapParams) ([]*PeriodicJob, error)
 
 	// PeriodicJobUpsertMany upserts many periodic jobs.
 	//
@@ -75,12 +77,12 @@ type PeriodicJob struct {
 	UpdatedAt time.Time
 }
 
-type PeriodicJobDeleteByIDManyParams struct {
-	ID     []string
+type PeriodicJobGetAllParams struct {
 	Schema string
 }
 
-type PeriodicJobGetAllParams struct {
+type PeriodicJobKeepAliveAndReapParams struct {
+	ID     []string
 	Schema string
 }
 

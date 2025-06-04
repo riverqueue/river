@@ -748,17 +748,17 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			}, nil
 		}
 
-		var periodicJobDeleteByIDManyMockCalled bool
-		bundle.pilotMock.PeriodicJobDeleteByIDManyMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobDeleteByIDManyParams) ([]*riverpilot.PeriodicJob, error) {
-			periodicJobDeleteByIDManyMockCalled = true
-			require.Equal(t, []string{"periodic_job_999ms"}, params.ID)
+		var periodicJobKeepAliveAndReapMockCalled bool
+		bundle.pilotMock.PeriodicJobKeepAliveAndReapMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobKeepAliveAndReapParams) ([]*riverpilot.PeriodicJob, error) {
+			periodicJobKeepAliveAndReapMockCalled = true
+			require.ElementsMatch(t, []string{"periodic_job_100ms", "periodic_job_500ms", "periodic_job_1500ms"}, params.ID)
 			require.Equal(t, bundle.schema, params.Schema)
 			return nil, nil
 		}
 
-		var PeriodicJobUpsertManyMockCalled bool
+		var periodicJobUpsertManyMockCalled bool
 		bundle.pilotMock.PeriodicJobUpsertManyMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobUpsertManyParams) ([]*riverpilot.PeriodicJob, error) {
-			PeriodicJobUpsertManyMockCalled = true
+			periodicJobUpsertManyMockCalled = true
 			require.Equal(t, []string{"periodic_job_100ms"}, sliceutil.Map(params.Jobs, func(j *riverpilot.PeriodicJobUpsertParams) string { return j.ID }))
 			require.Equal(t, bundle.schema, params.Schema)
 			return nil, nil
@@ -777,9 +777,10 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		requireNJobs(t, bundle, "periodic_job_100ms", 1)
 		requireNJobs(t, bundle, "periodic_job_500ms", 0)
 		requireNJobs(t, bundle, "periodic_job_1500ms", 0)
+		require.True(t, periodicJobUpsertManyMockCalled)
 
-		require.True(t, periodicJobDeleteByIDManyMockCalled)
-		require.True(t, PeriodicJobUpsertManyMockCalled)
+		svc.TestSignals.PeriodicJobKeepAliveAndReap.WaitOrTimeout()
+		require.True(t, periodicJobKeepAliveAndReapMockCalled)
 
 		svc.Stop()
 
@@ -796,15 +797,15 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			return nil, nil
 		}
 
-		var periodicJobDeleteByIDManyMockCalled bool
-		bundle.pilotMock.PeriodicJobDeleteByIDManyMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobDeleteByIDManyParams) ([]*riverpilot.PeriodicJob, error) {
-			periodicJobDeleteByIDManyMockCalled = true
+		var periodicJobKeepAliveAndReapMockCalled bool
+		bundle.pilotMock.PeriodicJobKeepAliveAndReapMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobKeepAliveAndReapParams) ([]*riverpilot.PeriodicJob, error) {
+			periodicJobKeepAliveAndReapMockCalled = true
 			return nil, nil
 		}
 
-		var PeriodicJobUpsertManyMockCalled bool
+		var periodicJobUpsertManyMockCalled bool
 		bundle.pilotMock.PeriodicJobUpsertManyMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobUpsertManyParams) ([]*riverpilot.PeriodicJob, error) {
-			PeriodicJobUpsertManyMockCalled = true
+			periodicJobUpsertManyMockCalled = true
 			return nil, nil
 		}
 
@@ -819,9 +820,10 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
 		requireNJobs(t, bundle, "periodic_job_100ms", 1)
+		require.False(t, periodicJobUpsertManyMockCalled)
 
-		require.False(t, periodicJobDeleteByIDManyMockCalled)
-		require.False(t, PeriodicJobUpsertManyMockCalled)
+		svc.TestSignals.PeriodicJobKeepAliveAndReap.WaitOrTimeout()
+		require.False(t, periodicJobKeepAliveAndReapMockCalled)
 	})
 
 	t.Run("DuplicateIDError", func(t *testing.T) {
@@ -848,17 +850,17 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 }
 
 type PilotPeriodicJobMock struct {
-	PeriodicJobDeleteByIDManyMock func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobDeleteByIDManyParams) ([]*riverpilot.PeriodicJob, error)
-	PeriodicJobGetAllMock         func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobGetAllParams) ([]*riverpilot.PeriodicJob, error)
-	PeriodicJobUpsertManyMock     func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobUpsertManyParams) ([]*riverpilot.PeriodicJob, error)
+	PeriodicJobGetAllMock           func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobGetAllParams) ([]*riverpilot.PeriodicJob, error)
+	PeriodicJobKeepAliveAndReapMock func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobKeepAliveAndReapParams) ([]*riverpilot.PeriodicJob, error)
+	PeriodicJobUpsertManyMock       func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobUpsertManyParams) ([]*riverpilot.PeriodicJob, error)
 }
 
 func NewPilotPeriodicJobMock() *PilotPeriodicJobMock {
 	return &PilotPeriodicJobMock{
-		PeriodicJobDeleteByIDManyMock: func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobDeleteByIDManyParams) ([]*riverpilot.PeriodicJob, error) {
+		PeriodicJobGetAllMock: func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobGetAllParams) ([]*riverpilot.PeriodicJob, error) {
 			return nil, nil
 		},
-		PeriodicJobGetAllMock: func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobGetAllParams) ([]*riverpilot.PeriodicJob, error) {
+		PeriodicJobKeepAliveAndReapMock: func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobKeepAliveAndReapParams) ([]*riverpilot.PeriodicJob, error) {
 			return nil, nil
 		},
 		PeriodicJobUpsertManyMock: func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobUpsertManyParams) ([]*riverpilot.PeriodicJob, error) {
@@ -867,12 +869,12 @@ func NewPilotPeriodicJobMock() *PilotPeriodicJobMock {
 	}
 }
 
-func (p *PilotPeriodicJobMock) PeriodicJobDeleteByIDMany(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobDeleteByIDManyParams) ([]*riverpilot.PeriodicJob, error) {
-	return p.PeriodicJobDeleteByIDManyMock(ctx, exec, params)
-}
-
 func (p *PilotPeriodicJobMock) PeriodicJobGetAll(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobGetAllParams) ([]*riverpilot.PeriodicJob, error) {
 	return p.PeriodicJobGetAllMock(ctx, exec, params)
+}
+
+func (p *PilotPeriodicJobMock) PeriodicJobKeepAliveAndReap(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobKeepAliveAndReapParams) ([]*riverpilot.PeriodicJob, error) {
+	return p.PeriodicJobKeepAliveAndReapMock(ctx, exec, params)
 }
 
 func (p *PilotPeriodicJobMock) PeriodicJobUpsertMany(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobUpsertManyParams) ([]*riverpilot.PeriodicJob, error) {

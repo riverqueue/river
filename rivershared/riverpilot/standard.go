@@ -32,7 +32,7 @@ func (p *StandardPilot) JobSetStateIfRunningMany(ctx context.Context, execTx riv
 	return execTx.JobSetStateIfRunningMany(ctx, params)
 }
 
-func (p *StandardPilot) PeriodicJobDeleteByIDMany(ctx context.Context, exec riverdriver.Executor, params *PeriodicJobDeleteByIDManyParams) ([]*PeriodicJob, error) {
+func (p *StandardPilot) PeriodicJobKeepAliveAndReap(ctx context.Context, exec riverdriver.Executor, params *PeriodicJobKeepAliveAndReapParams) ([]*PeriodicJob, error) {
 	return nil, nil
 }
 

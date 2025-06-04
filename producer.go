@@ -448,7 +448,6 @@ func (p *producer) TriggerJobFetch() {
 func (p *producer) TriggerQueueControlEvent(controlEvent *controlEventPayload) {
 	p.queueControlCh <- controlEvent
 	p.testSignals.QueueControlEventTriggered.Signal(controlEvent)
-
 }
 
 type controlAction string
