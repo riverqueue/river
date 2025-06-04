@@ -3110,11 +3110,6 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			Now:      &now,
 		})
 
-		// TODO(brandur): Remove
-		t.Logf("now         = %s", now)
-		t.Logf("elected at  = %s", leader.ElectedAt)
-		t.Logf("expires at  = %s", leader.ExpiresAt)
-
 		leader, err := exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{})
 		require.NoError(t, err)
 		require.WithinDuration(t, now, leader.ElectedAt, bundle.driver.TimePrecision())

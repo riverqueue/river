@@ -10,12 +10,12 @@ require (
 	github.com/jackc/pgx/v5 v5.7.4
 	github.com/jackc/puddle/v2 v2.2.2
 	github.com/lib/pq v1.10.9
-	github.com/riverqueue/river/riverdriver v0.22.0
-	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.22.0
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.22.0
-	github.com/riverqueue/river/riverdriver/riversqlite v0.0.0-00010101000000-000000000000
-	github.com/riverqueue/river/rivershared v0.22.0
-	github.com/riverqueue/river/rivertype v0.22.0
+	github.com/riverqueue/river/riverdriver v0.23.0
+	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.23.0
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.23.0
+	github.com/riverqueue/river/riverdriver/riversqlite v0.23.0
+	github.com/riverqueue/river/rivershared v0.23.0
+	github.com/riverqueue/river/rivertype v0.23.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/gjson v1.18.0
@@ -45,8 +45,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.10.0 // indirect
 )
-
-// TODO(brandur): Remove this before first release including SQLite driver. It's
-// needed temporarily because there's no riversqlite tag to target (the one
-// referenced above is fake and does not exist).
-replace github.com/riverqueue/river/riverdriver/riversqlite => ../river/riverdriver/riversqlite
