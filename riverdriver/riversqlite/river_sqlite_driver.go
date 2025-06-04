@@ -313,7 +313,7 @@ func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobG
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	return mapSliceError(jobs, jobRowFromInternal)
+	return sliceutil.MapError(jobs, jobRowFromInternal)
 }
 
 func (e *Executor) JobGetByID(ctx context.Context, params *riverdriver.JobGetByIDParams) (*rivertype.JobRow, error) {
@@ -329,7 +329,7 @@ func (e *Executor) JobGetByIDMany(ctx context.Context, params *riverdriver.JobGe
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	return mapSliceError(jobs, jobRowFromInternal)
+	return sliceutil.MapError(jobs, jobRowFromInternal)
 }
 
 func (e *Executor) JobGetByKindMany(ctx context.Context, params *riverdriver.JobGetByKindManyParams) ([]*rivertype.JobRow, error) {
@@ -337,7 +337,7 @@ func (e *Executor) JobGetByKindMany(ctx context.Context, params *riverdriver.Job
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	return mapSliceError(jobs, jobRowFromInternal)
+	return sliceutil.MapError(jobs, jobRowFromInternal)
 }
 
 func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error) {
@@ -348,7 +348,7 @@ func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetSt
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	return mapSliceError(jobs, jobRowFromInternal)
+	return sliceutil.MapError(jobs, jobRowFromInternal)
 }
 
 func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.JobInsertFastManyParams) ([]*riverdriver.JobInsertFastResult, error) {
@@ -608,7 +608,7 @@ func (e *Executor) JobList(ctx context.Context, params *riverdriver.JobListParam
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	return mapSliceError(jobs, jobRowFromInternal)
+	return sliceutil.MapError(jobs, jobRowFromInternal)
 }
 
 func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRescueManyParams) (*struct{}, error) {
@@ -1436,27 +1436,6 @@ func leaderFromInternal(internal *dbsqlc.RiverLeader) *riverdriver.Leader {
 		ExpiresAt: internal.ExpiresAt.UTC(),
 		LeaderID:  internal.LeaderID,
 	}
-}
-
-// mapSliceError manipulates a slice and transforms it to a slice of another
-// type, returning the first error that occurred invoking the map function, if
-// there was one.
-func mapSliceError[T any, R any](collection []T, mapFunc func(T) (R, error)) ([]R, error) {
-	if collection == nil {
-		return nil, nil
-	}
-
-	result := make([]R, len(collection))
-
-	for i, item := range collection {
-		var err error
-		result[i], err = mapFunc(item)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return result, nil
 }
 
 func migrationFromInternal(internal *dbsqlc.RiverMigration) *riverdriver.Migration {
