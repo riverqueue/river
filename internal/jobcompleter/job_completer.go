@@ -80,20 +80,11 @@ func (c *InlineCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobst
 	start := c.Time.NowUTC()
 
 	jobs, err := withRetries(ctx, &c.BaseService, c.disableSleep, func(ctx context.Context) ([]*rivertype.JobRow, error) {
-		execTx, err := c.exec.Begin(ctx)
-		if err != nil {
-			return nil, err
-		}
-		defer execTx.Rollback(ctx)
-
-		jobs, err := c.pilot.JobSetStateIfRunningMany(ctx, execTx, setStateParamsToMany(c.Time.NowUTCOrNil(), c.schema, params))
+		jobs, err := c.pilot.JobSetStateIfRunningMany(ctx, c.exec, setStateParamsToMany(c.Time.NowUTCOrNil(), c.schema, params))
 		if err != nil {
 			return nil, err
 		}
 
-		if err := execTx.Commit(ctx); err != nil {
-			return nil, err
-		}
 		return jobs, nil
 	})
 	if err != nil {
@@ -193,20 +184,11 @@ func (c *AsyncCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobsta
 
 	c.errGroup.Go(func() error {
 		jobs, err := withRetries(ctx, &c.BaseService, c.disableSleep, func(ctx context.Context) ([]*rivertype.JobRow, error) {
-			execTx, err := c.exec.Begin(ctx)
-			if err != nil {
-				return nil, err
-			}
-			defer execTx.Rollback(ctx)
-
-			rows, err := c.pilot.JobSetStateIfRunningMany(ctx, execTx, setStateParamsToMany(c.Time.NowUTCOrNil(), c.schema, params))
+			rows, err := c.pilot.JobSetStateIfRunningMany(ctx, c.exec, setStateParamsToMany(c.Time.NowUTCOrNil(), c.schema, params))
 			if err != nil {
 				return nil, err
 			}
 
-			if err := execTx.Commit(ctx); err != nil {
-				return nil, err
-			}
 			return rows, nil
 		})
 		if err != nil {
@@ -408,17 +390,8 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 		}()
 
 		return withRetries(ctx, &c.BaseService, c.disableSleep, func(ctx context.Context) ([]*rivertype.JobRow, error) {
-			tx, err := c.exec.Begin(ctx)
+			rows, err := c.pilot.JobSetStateIfRunningMany(ctx, c.exec, batchParams)
 			if err != nil {
-				return nil, err
-			}
-			defer tx.Rollback(ctx)
-
-			rows, err := c.pilot.JobSetStateIfRunningMany(ctx, tx, batchParams)
-			if err != nil {
-				return nil, err
-			}
-			if err := tx.Commit(ctx); err != nil {
 				return nil, err
 			}
 
