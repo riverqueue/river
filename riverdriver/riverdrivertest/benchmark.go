@@ -128,21 +128,8 @@ func Benchmark[TTx any](ctx context.Context, b *testing.B,
 
 		b.ResetTimer()
 		for range b.N {
-			// Start a new sub-transaction for each iteration
-			subTx, err := exec.Begin(ctx)
-			if err != nil {
-				b.Fatal(err)
-			}
-
 			// Execute the update
-			_, err = subTx.JobSetStateIfRunningMany(ctx, params)
-			if err != nil {
-				subTx.Rollback(ctx)
-				b.Fatal(err)
-			}
-
-			// Rollback to keep the database clean
-			if err := subTx.Rollback(ctx); err != nil {
+			if _, err := exec.JobSetStateIfRunningMany(ctx, params); err != nil {
 				b.Fatal(err)
 			}
 		}

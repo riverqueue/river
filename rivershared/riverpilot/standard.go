@@ -22,14 +22,14 @@ func (p *StandardPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Ex
 
 func (p *StandardPilot) JobInsertMany(
 	ctx context.Context,
-	execTx riverdriver.ExecutorTx,
+	exec riverdriver.Executor,
 	params *riverdriver.JobInsertFastManyParams,
 ) ([]*riverdriver.JobInsertFastResult, error) {
-	return execTx.JobInsertFastMany(ctx, params)
+	return exec.JobInsertFastMany(ctx, params)
 }
 
-func (p *StandardPilot) JobSetStateIfRunningMany(ctx context.Context, execTx riverdriver.ExecutorTx, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
-	return execTx.JobSetStateIfRunningMany(ctx, params)
+func (p *StandardPilot) JobSetStateIfRunningMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+	return exec.JobSetStateIfRunningMany(ctx, params)
 }
 
 func (p *StandardPilot) PeriodicJobKeepAliveAndReap(ctx context.Context, exec riverdriver.Executor, params *PeriodicJobKeepAliveAndReapParams) ([]*PeriodicJob, error) {
