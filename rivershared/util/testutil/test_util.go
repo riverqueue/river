@@ -4,16 +4,18 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
 )
 
 // See docs on PanicTB.
-type panicTB struct {
-	logOut io.Writer
-}
+type panicTB struct{}
 
 // PanicTB is an implementation for testing.TB that panics when an error is
 // logged or FailNow is called. This is useful to inject into test helpers in
 // example tests where no *testing.T is available.
+//
+// If env is set with `RIVER_DEBUG=true`, output is logged to os.Stderr (Stderr
+// instead of Stdout to not interfere with example test output).
 //
 // Doesn't fully implement testing.TB. Functions where it's used should take the
 // more streamlined TestingTB instead.
@@ -32,22 +34,28 @@ func (tb *panicTB) FailNow() {
 func (tb *panicTB) Helper() {}
 
 func (tb *panicTB) Log(args ...any) {
-	if tb.logOut != nil {
-		fmt.Fprintln(tb.logOut, args...)
+	logOut := tb.maybeDebugOut()
+	if logOut != nil {
+		fmt.Fprintln(logOut, args...)
 	}
 }
 
 func (tb *panicTB) Logf(format string, args ...any) {
-	if tb.logOut != nil {
-		fmt.Fprintf(tb.logOut, format+"\n", args...)
+	logOut := tb.maybeDebugOut()
+	if logOut != nil {
+		fmt.Fprintf(logOut, format+"\n", args...)
 	}
 }
 
 func (tb *panicTB) Name() string { return "panicTB" }
 
-func (tb *panicTB) WithLog(out io.Writer) *panicTB {
-	tb.logOut = out
-	return tb
+func (tb *panicTB) maybeDebugOut() io.Writer {
+	if os.Getenv("RIVER_DEBUG") == "1" || os.Getenv("RIVER_DEBUG") == "true" {
+		// Send output to stderr so it doesn't interfere with example tests.
+		return os.Stderr
+	}
+
+	return nil
 }
 
 // MockT mocks TestingTB. It's used to let us verify our test helpers.
