@@ -6804,6 +6804,13 @@ func Test_NewClient_Validations(t *testing.T) {
 			wantErr: errors.New("Schema length must be less than or equal to 46 characters"),
 		},
 		{
+			name: "Schema cannot contain invalid characters",
+			configFunc: func(config *Config) {
+				config.Schema = "invalid-schema@name"
+			},
+			wantErr: errors.New("Schema name can only contain letters, numbers, and underscores, and must start with a letter or underscore"),
+		},
+		{
 			name: "Queues can be nil when Workers is also nil",
 			configFunc: func(config *Config) {
 				config.Queues = nil

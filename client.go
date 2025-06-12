@@ -51,6 +51,10 @@ const (
 	QueueNumWorkersMax = 10_000
 )
 
+var (
+	postgresSchemaNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+)
+
 // TestConfig contains configuration specific to test environments.
 type TestConfig struct {
 	// DisableUniqueEnforcement disables the application of unique job
@@ -470,6 +474,9 @@ func (c *Config) validate() error {
 	maxSchemaLength := 63 - 1 - len(string(notifier.NotificationTopicLongest)) // -1 for the dot in `<schema>.<topic>`
 	if len(c.Schema) > maxSchemaLength {
 		return fmt.Errorf("Schema length must be less than or equal to %d characters", maxSchemaLength) //nolint:staticcheck
+	}
+	if c.Schema != "" && !postgresSchemaNameRE.MatchString(c.Schema) {
+		return fmt.Errorf("Schema name can only contain letters, numbers, and underscores, and must start with a letter or underscore") //nolint:staticcheck
 	}
 
 	for queue, queueConfig := range c.Queues {

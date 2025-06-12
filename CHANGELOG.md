@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Cleanly error on invalid schema names in `Config.Schema`. [PR #952](https://github.com/riverqueue/river/pull/952).
+
 ## [0.23.1] - 2025-06-04
 
 This includes a minor CLI bugfix for riverpro and no other changes, see the v0.23.0 notes for major changes.
