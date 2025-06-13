@@ -181,7 +181,7 @@ const (
 	JobStateCompleted JobState = "completed"
 
 	// JobStateDiscarded is the state for jobs that have errored enough times
-	// that they're no longer eligible to be retried. Manual user invention
+	// that they're no longer eligible to be retried. Manual user intervention
 	// is required for them to be tried again.
 	//
 	// Discarded jobs are reaped by the job cleaner service after a configured
