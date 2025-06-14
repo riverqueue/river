@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+⚠️ Internal APIs used for communication between River and River Pro have changed. If using River Pro, make sure to update River and River Pro to latest at the same time to get compatible versions. River v0.24.0 is compatible with River Pro v0.16.0.
+
+### Changed
+
+- Remove unecessary transactions where a single database operation will do. This remduces the number of subtransactions created which can be an operational benefit it many cases. [PR #950](https://github.com/riverqueue/river/pull/950)
+
 ### Fixed
 
 - Cleanly error on invalid schema names in `Config.Schema`. [PR #952](https://github.com/riverqueue/river/pull/952).
