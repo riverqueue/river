@@ -112,15 +112,27 @@ var sqliteTestDir = sync.OnceValue(func() string { //nolint:gochecknoglobals
 	return path.Join(rootDir, "sqlite")
 })
 
+// DBPoolLibSQL gets a database pool appropriate for use with libSQL (a SQLite
+// fork) in testing.
+func DBPoolLibSQL(ctx context.Context, tb testing.TB, schema string) *sql.DB {
+	tb.Helper()
+
+	return dbPoolSQLite(ctx, tb, schema, "libsql")
+}
+
 // DBPoolSQLite gets a database pool appropriate for use with SQLite in testing.
 func DBPoolSQLite(ctx context.Context, tb testing.TB, schema string) *sql.DB {
 	tb.Helper()
 
-	require.NoError(tb, os.MkdirAll(sqliteTestDir(), 0o700))
+	return dbPoolSQLite(ctx, tb, schema, "sqlite")
+}
+
+func dbPoolSQLite(ctx context.Context, tb testing.TB, schema, driverName string) *sql.DB { //nolint:unparam
+	tb.Helper()
 
 	var databaseURLBuilder strings.Builder
 
-	databaseURLBuilder.WriteString(filepath.Join(sqliteTestDir(), schema+".sqlite3"))
+	databaseURLBuilder.WriteString("file:" + filepath.Join(sqliteTestDir(), schema+".sqlite3"))
 
 	// This innocuous line turns out to be quite important at the tail.
 	//
@@ -153,7 +165,7 @@ func DBPoolSQLite(ctx context.Context, tb testing.TB, schema string) *sql.DB {
 	// but actually it opens the door to intermittency hell.
 	databaseURLBuilder.WriteString("?_pragma=journal_mode(WAL)")
 
-	dbPool, err := sql.Open("sqlite", databaseURLBuilder.String())
+	dbPool, err := sql.Open(driverName, databaseURLBuilder.String())
 	require.NoError(tb, err)
 	tb.Cleanup(func() { require.NoError(tb, dbPool.Close()) })
 
@@ -334,6 +346,8 @@ var IgnoredKnownGoroutineLeaks = []goleak.Option{ //nolint:gochecknoglobals
 	// Similar to the above, may be sitting in a sleep when the program finishes
 	// and there's not much we can do about it.
 	goleak.IgnoreAnyFunction("github.com/jackc/pgx/v5/pgxpool.(*Pool).triggerHealthCheck.func1"),
+
+	goleak.IgnoreAnyFunction("database/sql.(*DB).connectionOpener"),
 }
 
 // WrapTestMain performs some common setup and teardown that should be shared

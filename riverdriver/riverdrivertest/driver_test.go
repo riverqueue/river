@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
+	_ "github.com/tursodatabase/libsql-client-go/libsql"
 	_ "modernc.org/sqlite"
 
 	"github.com/riverqueue/river"
@@ -111,7 +112,59 @@ func TestDriverRiverPgxV5(t *testing.T) {
 		})
 }
 
-func TestDriverRiverSQLite(t *testing.T) {
+func TestDriverRiverLiteLibSQL(t *testing.T) { //nolint:dupl
+	t.Parallel()
+
+	var (
+		ctx         = context.Background()
+		procurePool = func(ctx context.Context, schema string) (any, string) {
+			return riversharedtest.DBPoolLibSQL(ctx, t, schema), "" // could also be `main` instead of empty string
+		}
+	)
+
+	riverdrivertest.Exercise(ctx, t,
+		func(ctx context.Context, t *testing.T, opts *riverdbtest.TestSchemaOpts) (riverdriver.Driver[*sql.Tx], string) {
+			t.Helper()
+
+			if opts == nil {
+				opts = &riverdbtest.TestSchemaOpts{}
+			}
+			opts.ProcurePool = procurePool
+
+			var (
+				// Driver will have its pool set by TestSchema.
+				driver = riversqlite.New(nil)
+				schema = riverdbtest.TestSchema(ctx, t, driver, opts)
+			)
+			return driver, schema
+		},
+		func(ctx context.Context, t *testing.T) (riverdriver.Executor, riverdriver.Driver[*sql.Tx]) {
+			t.Helper()
+
+			// Driver will have its pool set by TestSchema.
+			driver := riversqlite.New(nil)
+
+			tx, _ := riverdbtest.TestTx(ctx, t, driver, &riverdbtest.TestTxOpts{
+				// Unfortunately, the normal test transaction schema sharing has
+				// to be disabled for SQLite. When enabled, there's too much
+				// contention on the shared test databases and operations fail
+				// with `database is locked (5) (SQLITE_BUSY)`, which is a
+				// common concurrency error in SQLite whose recommended
+				// remediation is a backoff and retry. I tried various
+				// techniques like journal_mode=WAL, but it didn't seem to help
+				// enough. SQLite databases are just local files anyway, and
+				// test transactions can still reuse schemas freed by other
+				// tests through TestSchema, so this should be okay performance
+				// wise.
+				DisableSchemaSharing: true,
+
+				ProcurePool: procurePool,
+			})
+			return driver.UnwrapExecutor(tx), driver
+		})
+}
+
+func TestDriverRiverSQLiteModernC(t *testing.T) { //nolint:dupl
 	t.Parallel()
 
 	var (
