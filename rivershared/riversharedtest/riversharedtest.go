@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -98,15 +100,23 @@ func DBPoolClone(ctx context.Context, tb testing.TB) *pgxpool.Pool {
 	return dbPool
 }
 
+// Gets an SQLite test directory at project root so it's invariant of which
+// package tests are being run in.
+var sqliteTestDir = sync.OnceValue(func() string { //nolint:gochecknoglobals
+	var (
+		_, filename, _, _ = runtime.Caller(0)
+		rootDir           = path.Join(path.Dir(filename), "..", "..")
+	)
+	return path.Join(rootDir, "sqlite")
+})
+
 // DBPoolSQLite gets a database pool appropriate for use with SQLite in testing.
 func DBPoolSQLite(ctx context.Context, tb testing.TB, schema string) *sql.DB {
 	tb.Helper()
 
-	const sqliteTestDir = "./sqlite"
+	require.NoError(tb, os.MkdirAll(sqliteTestDir(), 0o700))
 
-	require.NoError(tb, os.MkdirAll(sqliteTestDir, 0o700))
-
-	dbPool, err := sql.Open("sqlite", fmt.Sprintf("%s/%s.sqlite3", sqliteTestDir, schema))
+	dbPool, err := sql.Open("sqlite", fmt.Sprintf("%s/%s.sqlite3", sqliteTestDir(), schema))
 	require.NoError(tb, err)
 	tb.Cleanup(func() { require.NoError(tb, dbPool.Close()) })
 

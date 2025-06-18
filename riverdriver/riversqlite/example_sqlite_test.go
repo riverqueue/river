@@ -1,9 +1,13 @@
-package river_test
+package riversqlite_test
 
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
+	"sort"
+
+	_ "modernc.org/sqlite"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver"
@@ -13,6 +17,23 @@ import (
 	"github.com/riverqueue/river/rivershared/util/slogutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 )
+
+type SortArgs struct {
+	// Strings is a slice of strings to sort.
+	Strings []string `json:"strings"`
+}
+
+func (SortArgs) Kind() string { return "sort" }
+
+type SortWorker struct {
+	river.WorkerDefaults[SortArgs]
+}
+
+func (w *SortWorker) Work(ctx context.Context, job *river.Job[SortArgs]) error {
+	sort.Strings(job.Args.Strings)
+	fmt.Printf("Sorted strings: %+v\n", job.Args.Strings)
+	return nil
+}
 
 // Example_sqlite demonstrates use of River's SQLite driver.
 func Example_sqlite() {

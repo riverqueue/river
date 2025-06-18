@@ -51,9 +51,7 @@ const (
 	QueueNumWorkersMax = 10_000
 )
 
-var (
-	postgresSchemaNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
-)
+var postgresSchemaNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 // TestConfig contains configuration specific to test environments.
 type TestConfig struct {
@@ -476,7 +474,7 @@ func (c *Config) validate() error {
 		return fmt.Errorf("Schema length must be less than or equal to %d characters", maxSchemaLength) //nolint:staticcheck
 	}
 	if c.Schema != "" && !postgresSchemaNameRE.MatchString(c.Schema) {
-		return fmt.Errorf("Schema name can only contain letters, numbers, and underscores, and must start with a letter or underscore") //nolint:staticcheck
+		return errors.New("Schema name can only contain letters, numbers, and underscores, and must start with a letter or underscore") //nolint:staticcheck
 	}
 
 	for queue, queueConfig := range c.Queues {

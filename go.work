@@ -7,6 +7,7 @@ use (
 	./cmd/river
 	./riverdriver
 	./riverdriver/riverdatabasesql
+	./riverdriver/riverdrivertest
 	./riverdriver/riverpgxv5
 	./riverdriver/riversqlite
 	./rivershared

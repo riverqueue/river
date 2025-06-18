@@ -1,4 +1,4 @@
-package river_test
+package riverdatabasesql_test
 
 import (
 	"context"

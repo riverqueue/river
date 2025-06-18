@@ -13,6 +13,7 @@ import (
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 )
 
 func Test_RecordedOutput(t *testing.T) {
@@ -20,7 +21,7 @@ func Test_RecordedOutput(t *testing.T) {
 	ctx := context.Background()
 
 	type JobArgs struct {
-		JobArgsReflectKind[JobArgs]
+		testutil.JobArgsReflectKind[JobArgs]
 	}
 
 	type myOutput struct {

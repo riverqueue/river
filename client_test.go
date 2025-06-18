@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,7 +19,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/robfig/cron/v3"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/sjson"
@@ -34,9 +34,7 @@ import (
 	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
-	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
@@ -45,6 +43,7 @@ import (
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -239,7 +238,7 @@ func Test_Client(t *testing.T) {
 		client, _ := setup(t)
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		workedChan := make(chan struct{})
@@ -276,7 +275,7 @@ func Test_Client(t *testing.T) {
 		client, _ := setup(t)
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		workedChan := make(chan struct{})
@@ -308,7 +307,7 @@ func Test_Client(t *testing.T) {
 		client, _ := setup(t)
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		workedChan := make(chan struct{})
@@ -410,7 +409,7 @@ func Test_Client(t *testing.T) {
 		client, _ := setup(t)
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -440,7 +439,7 @@ func Test_Client(t *testing.T) {
 		client, _ := setup(t)
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -470,7 +469,7 @@ func Test_Client(t *testing.T) {
 		client, _ := setup(t)
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -511,7 +510,7 @@ func Test_Client(t *testing.T) {
 		jobStartedChan := make(chan int64)
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -592,7 +591,7 @@ func Test_Client(t *testing.T) {
 		client, _ := setup(t)
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -637,12 +636,9 @@ func Test_Client(t *testing.T) {
 		t.Parallel()
 
 		var (
-			driver = riversqlite.New(nil)
-			schema = riverdbtest.TestSchema(ctx, t, driver, &riverdbtest.TestSchemaOpts{
-				ProcurePool: func(ctx context.Context, schema string) (any, string) {
-					return riversharedtest.DBPoolSQLite(ctx, t, schema), "" // could also be `main` instead of empty string
-				},
-			})
+			dbPool = riversharedtest.DBPoolClone(ctx, t)
+			driver = NewDriverWithoutListenNotify(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, schema)
 		)
 
@@ -651,7 +647,7 @@ func Test_Client(t *testing.T) {
 		client.producersByQueueName[QueueDefault].testSignals.Init(t)
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -678,7 +674,7 @@ func Test_Client(t *testing.T) {
 		client.producersByQueueName[QueueDefault].testSignals.Init(t)
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -845,7 +841,7 @@ func Test_Client(t *testing.T) {
 		_, bundle := setup(t)
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 			hookEmbed[metadataHookInsertBegin]
 		}
 
@@ -871,7 +867,7 @@ func Test_Client(t *testing.T) {
 		_, bundle := setup(t)
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 			hookEmbed[metadataHookWorkBegin]
 		}
 
@@ -904,7 +900,7 @@ func Test_Client(t *testing.T) {
 		_, bundle := setup(t)
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 			hookEmbed[metadataHookWorkEnd]
 		}
 
@@ -949,7 +945,7 @@ func Test_Client(t *testing.T) {
 		bundle.config.Middleware = []rivertype.Middleware{middleware}
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		AddWorker(bundle.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -980,7 +976,7 @@ func Test_Client(t *testing.T) {
 		middlewareCalled := false
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		type privateKey string
@@ -1030,7 +1026,7 @@ func Test_Client(t *testing.T) {
 		middlewareCalled := false
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 			Name string `json:"name"`
 		}
 
@@ -1221,7 +1217,7 @@ func Test_Client(t *testing.T) {
 		jobStartedChan := make(chan int64)
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -1253,12 +1249,9 @@ func Test_Client(t *testing.T) {
 		t.Parallel()
 
 		var (
-			driver = riversqlite.New(nil)
-			schema = riverdbtest.TestSchema(ctx, t, driver, &riverdbtest.TestSchemaOpts{
-				ProcurePool: func(ctx context.Context, schema string) (any, string) {
-					return riversharedtest.DBPoolSQLite(ctx, t, schema), "" // could also be `main` instead of empty string
-				},
-			})
+			dbPool = riversharedtest.DBPoolClone(ctx, t)
+			driver = NewDriverWithoutListenNotify(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, schema)
 		)
 
@@ -1304,10 +1297,7 @@ func Test_Client(t *testing.T) {
 		config, bundle := setupConfig(t)
 		bundle.config.PollOnly = true
 
-		stdPool := stdlib.OpenDBFromPool(bundle.dbPool)
-		t.Cleanup(func() { require.NoError(t, stdPool.Close()) })
-
-		client, err := NewClient(riverdatabasesql.New(stdPool), config)
+		client, err := NewClient(NewDriverPollOnly(bundle.dbPool), config)
 		require.NoError(t, err)
 		client.testSignals.Init(t)
 
@@ -1546,7 +1536,7 @@ func Test_Client_Stop(t *testing.T) {
 		client := newTestClient(t, dbPool, config)
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		var (
@@ -1580,7 +1570,7 @@ func Test_Client_Stop(t *testing.T) {
 		config := newTestConfig(t, "")
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		jobDoneChan := make(chan struct{})
@@ -1637,7 +1627,7 @@ func Test_Client_Stop(t *testing.T) {
 		config := newTestConfig(t, "")
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		startedCh := make(chan int64)
@@ -1670,7 +1660,7 @@ func Test_Client_Stop(t *testing.T) {
 		config := newTestConfig(t, "")
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -1711,7 +1701,7 @@ func Test_Client_Stop_ContextImmediatelyCancelled(t *testing.T) {
 	config.Schema = schema
 
 	type JobArgs struct {
-		JobArgsReflectKind[JobArgs]
+		testutil.JobArgsReflectKind[JobArgs]
 	}
 
 	// doneCh will never close, job will exit due to context cancellation:
@@ -1767,7 +1757,7 @@ func Test_Client_Stop_AfterContextCancelled(t *testing.T) {
 	config.Schema = schema
 
 	type JobArgs struct {
-		JobArgsReflectKind[JobArgs]
+		testutil.JobArgsReflectKind[JobArgs]
 	}
 
 	// doneCh will never close, job will exit due to context cancellation:
@@ -1799,7 +1789,7 @@ func Test_Client_StopAndCancel(t *testing.T) {
 	ctx := context.Background()
 
 	type JobArgs struct {
-		JobArgsReflectKind[JobArgs]
+		testutil.JobArgsReflectKind[JobArgs]
 	}
 
 	type testBundle struct {
@@ -1969,7 +1959,7 @@ func Test_Client_ClientFromContext(t *testing.T) {
 	config := newTestConfig(t, "")
 
 	type JobArgs struct {
-		JobArgsReflectKind[JobArgs]
+		testutil.JobArgsReflectKind[JobArgs]
 	}
 
 	var (
@@ -2040,7 +2030,7 @@ func Test_Client_JobDelete(t *testing.T) {
 		client, _ := setup(t)
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		var (
@@ -2158,12 +2148,9 @@ func Test_Client_Insert(t *testing.T) {
 		t.Parallel()
 
 		var (
-			driver = riversqlite.New(nil)
-			schema = riverdbtest.TestSchema(ctx, t, driver, &riverdbtest.TestSchemaOpts{
-				ProcurePool: func(ctx context.Context, schema string) (any, string) {
-					return riversharedtest.DBPoolSQLite(ctx, t, schema), "" // could also be `main` instead of empty string
-				},
-			})
+			dbPool = riversharedtest.DBPoolClone(ctx, t)
+			driver = NewDriverWithoutListenNotify(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, schema)
 		)
 
@@ -2545,7 +2532,7 @@ func Test_Client_InsertManyFast(t *testing.T) {
 		config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: 2}, "another_queue": {MaxWorkers: 1}}
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		doneCh := make(chan struct{})
@@ -3034,7 +3021,7 @@ func Test_Client_InsertMany(t *testing.T) {
 		config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: 2}, "another_queue": {MaxWorkers: 1}}
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		doneCh := make(chan struct{})
@@ -4151,7 +4138,7 @@ func Test_Client_ErrorHandler(t *testing.T) {
 		config := newTestConfig(t, "")
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		handlerErr := errors.New("job error")
@@ -4217,7 +4204,7 @@ func Test_Client_ErrorHandler(t *testing.T) {
 		config := newTestConfig(t, "")
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -4622,7 +4609,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		client.PeriodicJobs().Remove(handle)
 
 		type OtherPeriodicArgs struct {
-			JobArgsReflectKind[OtherPeriodicArgs]
+			testutil.JobArgsReflectKind[OtherPeriodicArgs]
 		}
 
 		client.PeriodicJobs().Add(
@@ -5129,12 +5116,9 @@ func Test_Client_QueueUpdate(t *testing.T) {
 		t.Parallel()
 
 		var (
-			driver = riversqlite.New(nil)
-			schema = riverdbtest.TestSchema(ctx, t, driver, &riverdbtest.TestSchemaOpts{
-				ProcurePool: func(ctx context.Context, schema string) (any, string) {
-					return riversharedtest.DBPoolSQLite(ctx, t, schema), "" // could also be `main` instead of empty string
-				},
-			})
+			dbPool = riversharedtest.DBPoolClone(ctx, t)
+			driver = NewDriverWithoutListenNotify(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 			config = newTestConfig(t, schema)
 		)
 
@@ -5253,7 +5237,7 @@ func Test_Client_RetryPolicy(t *testing.T) {
 		config.RetryPolicy = &retrypolicytest.RetryPolicyNoJitter{}
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -5362,7 +5346,7 @@ func Test_Client_Subscribe(t *testing.T) {
 	ctx := context.Background()
 
 	type JobArgs struct {
-		JobArgsReflectKind[JobArgs]
+		testutil.JobArgsReflectKind[JobArgs]
 		Name string `json:"name"`
 	}
 
@@ -5636,7 +5620,7 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 		)
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 			Name string `json:"name"`
 		}
 
@@ -5733,7 +5717,7 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 		)
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -5857,7 +5841,7 @@ func Test_Client_InsertTriggersImmediateWork(t *testing.T) {
 	config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}, "another_queue": {MaxWorkers: 1}}
 
 	type JobArgs struct {
-		JobArgsReflectKind[JobArgs]
+		testutil.JobArgsReflectKind[JobArgs]
 	}
 
 	doneCh := make(chan struct{})
@@ -5919,7 +5903,7 @@ func Test_Client_InsertNotificationsAreDeduplicatedAndDebounced(t *testing.T) {
 	config.Queues = map[string]QueueConfig{"queue1": {MaxWorkers: 1}, "queue2": {MaxWorkers: 1}, "queue3": {MaxWorkers: 1}}
 
 	type JobArgs struct {
-		JobArgsReflectKind[JobArgs]
+		testutil.JobArgsReflectKind[JobArgs]
 	}
 
 	AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -6025,7 +6009,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		config := newTestConfig(t, "")
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -6058,7 +6042,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		client, bundle := setup(t, newTestConfig(t, ""))
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -6094,7 +6078,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		config := newTestConfig(t, "")
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -6130,7 +6114,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		config := newTestConfig(t, "")
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -6164,7 +6148,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		client, bundle := setup(t, newTestConfig(t, ""))
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -6204,7 +6188,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		now := client.baseService.Time.StubNowUTC(time.Now().UTC())
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		var updatedJob *Job[JobArgs]
@@ -6376,7 +6360,7 @@ func Test_NewClient_ClientIDWrittenToJobAttemptedByWhenFetched(t *testing.T) {
 	config := newTestConfig(t, "")
 
 	type JobArgs struct {
-		JobArgsReflectKind[JobArgs]
+		testutil.JobArgsReflectKind[JobArgs]
 	}
 
 	doneCh := make(chan struct{})
@@ -7056,6 +7040,10 @@ func (a JobArgsStaticKind) Kind() string {
 	return a.kind
 }
 
+type JobArgsReflectKind[TKind any] struct{}
+
+func (a JobArgsReflectKind[TKind]) Kind() string { return reflect.TypeOf(a).Name() }
+
 func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 	t.Parallel()
 
@@ -7613,3 +7601,38 @@ func TestDefaultClientIDWithHost(t *testing.T) {
 	require.Equal(t, strings.Repeat("a", 60)+"_2024_03_07T04_39_12_123456", defaultClientIDWithHost(startedAt, strings.Repeat("a", 60)))
 	require.Equal(t, strings.Repeat("a", 60)+"_2024_03_07T04_39_12_123456", defaultClientIDWithHost(startedAt, strings.Repeat("a", 61)))
 }
+
+// DriverPollOnly simulates a driver without a listener. An example of this is
+// Postgres through `riverdatabasesql`, which is Postgres (so it can notify),
+// but where `database/sql` provides no listener mechanism. We could use the
+// real `riverdatabasesql`, but avoid doing so here so we don't have to bring
+// that into the top level package as a dependency.
+type DriverPollOnly struct {
+	riverpgxv5.Driver
+}
+
+func NewDriverPollOnly(dbPool *pgxpool.Pool) *DriverPollOnly {
+	return &DriverPollOnly{
+		Driver: *riverpgxv5.New(dbPool),
+	}
+}
+
+func (d *DriverPollOnly) SupportsListener() bool { return false }
+
+// DriverWithoutListenNotify simulates a driver without any listen/notify
+// support at all. An example of this is SQLite through `riversqlite` where
+// SQLite doesn't support listen/notify or anything like it. We could use the
+// real `riversqlite`, but avoid doing so here so we don't have to bring that
+// into the top level package as a dependency.
+type DriverWithoutListenNotify struct {
+	riverpgxv5.Driver
+}
+
+func NewDriverWithoutListenNotify(dbPool *pgxpool.Pool) *DriverWithoutListenNotify {
+	return &DriverWithoutListenNotify{
+		Driver: *riverpgxv5.New(dbPool),
+	}
+}
+
+func (d *DriverWithoutListenNotify) SupportsListener() bool     { return false }
+func (d *DriverWithoutListenNotify) SupportsListenNotify() bool { return false }

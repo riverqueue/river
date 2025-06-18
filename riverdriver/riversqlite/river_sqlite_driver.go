@@ -26,9 +26,12 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -1156,8 +1159,6 @@ func (e *Executor) QueryRow(ctx context.Context, sql string, args ...any) riverd
 	return e.dbtx.QueryRowContext(ctx, sql, args...)
 }
 
-const sqliteTestDir = "./sqlite"
-
 func (e *Executor) SchemaCreate(ctx context.Context, params *riverdriver.SchemaCreateParams) error {
 	return nil
 }
@@ -1170,9 +1171,19 @@ var possibleExtensions = []string{ //nolint:gochecknoglobals
 	"sqlite3-wal",
 }
 
+// Gets an SQLite test directory at project root so it's invariant of which
+// package tests are being run in.
+var sqliteTestDir = sync.OnceValue(func() string { //nolint:gochecknoglobals
+	var (
+		_, filename, _, _ = runtime.Caller(0)
+		rootDir           = path.Join(path.Dir(filename), "..", "..")
+	)
+	return path.Join(rootDir, "sqlite")
+})
+
 func (e *Executor) SchemaDrop(ctx context.Context, params *riverdriver.SchemaDropParams) error {
 	for _, possibleExtension := range possibleExtensions {
-		if err := os.Remove(fmt.Sprintf("%s/%s.%s", sqliteTestDir, params.Schema, possibleExtension)); !os.IsNotExist(err) {
+		if err := os.Remove(fmt.Sprintf("%s/%s.%s", sqliteTestDir(), params.Schema, possibleExtension)); !os.IsNotExist(err) {
 			return err
 		}
 	}
@@ -1181,11 +1192,11 @@ func (e *Executor) SchemaDrop(ctx context.Context, params *riverdriver.SchemaDro
 }
 
 func (e *Executor) SchemaGetExpired(ctx context.Context, params *riverdriver.SchemaGetExpiredParams) ([]string, error) {
-	if err := os.MkdirAll(sqliteTestDir, 0o700); err != nil {
+	if err := os.MkdirAll(sqliteTestDir(), 0o700); err != nil {
 		return nil, err
 	}
 
-	schemaEntries, err := os.ReadDir(sqliteTestDir)
+	schemaEntries, err := os.ReadDir(sqliteTestDir())
 	if err != nil {
 		return nil, err
 	}

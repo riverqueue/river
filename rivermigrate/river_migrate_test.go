@@ -2,7 +2,6 @@ package rivermigrate
 
 import (
 	"context"
-	"database/sql"
 	"embed"
 	"fmt"
 	"io/fs"
@@ -15,12 +14,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/riverdriver"
-	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
@@ -112,28 +109,6 @@ func TestMigrator(t *testing.T) {
 		migrator.migrations = migrationsBundle.WithTestVersionsMap
 
 		return migrator, bundle
-	}
-
-	// Gets a migrator using the driver for `database/sql`.
-	setupDatabaseSQLMigrator := func(t *testing.T, bundle *testBundle) (*Migrator[*sql.Tx], *sql.Tx) {
-		t.Helper()
-
-		stdPool := stdlib.OpenDBFromPool(bundle.dbPool)
-		t.Cleanup(func() { require.NoError(t, stdPool.Close()) })
-
-		tx, err := stdPool.BeginTx(ctx, nil)
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, tx.Rollback()) })
-
-		driver := riverdatabasesql.New(stdPool)
-		migrator, err := New(driver, &Config{
-			Logger: bundle.logger,
-			Schema: bundle.schema,
-		})
-		require.NoError(t, err)
-		migrator.migrations = migrationsBundle.WithTestVersionsMap
-
-		return migrator, tx
 	}
 
 	t.Run("NewUnknownLine", func(t *testing.T) {
@@ -332,27 +307,6 @@ func TestMigrator(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(migrationsBundle.MaxVersion),
-			sliceutil.Map(migrations, driverMigrationToInt))
-	})
-
-	t.Run("MigrateDownWithDatabaseSQLDriver", func(t *testing.T) {
-		t.Parallel()
-
-		_, bundle := setup(t)
-		migrator, tx := setupDatabaseSQLMigrator(t, bundle)
-
-		_, err := migrator.Migrate(ctx, DirectionUp, &MigrateOpts{MaxSteps: migrationsBundle.MaxVersion})
-		require.NoError(t, err)
-
-		res, err := migrator.Migrate(ctx, DirectionDown, &MigrateOpts{MaxSteps: 1})
-		require.NoError(t, err)
-		require.Equal(t, []int{migrationsBundle.MaxVersion}, sliceutil.Map(res.Versions, migrateVersionToInt))
-
-		migrations, err := migrator.driver.UnwrapExecutor(tx).MigrationGetAllAssumingMain(ctx, &riverdriver.MigrationGetAllAssumingMainParams{
-			Schema: bundle.schema,
-		})
-		require.NoError(t, err)
-		require.Equal(t, seqOneTo(migrationsBundle.MaxVersion-1),
 			sliceutil.Map(migrations, driverMigrationToInt))
 	})
 
@@ -560,28 +514,6 @@ func TestMigrator(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(migrationsBundle.MaxVersion),
-			sliceutil.Map(migrations, driverMigrationToInt))
-	})
-
-	t.Run("MigrateUpWithDatabaseSQLDriver", func(t *testing.T) {
-		t.Parallel()
-
-		_, bundle := setup(t)
-		migrator, tx := setupDatabaseSQLMigrator(t, bundle)
-
-		_, err := migrator.Migrate(ctx, DirectionUp, &MigrateOpts{MaxSteps: migrationsBundle.MaxVersion})
-		require.NoError(t, err)
-
-		res, err := migrator.Migrate(ctx, DirectionUp, &MigrateOpts{MaxSteps: 1})
-		require.NoError(t, err)
-		require.Equal(t, []int{migrationsBundle.MaxVersion + 1}, sliceutil.Map(res.Versions, migrateVersionToInt))
-
-		migrations, err := migrator.driver.UnwrapExecutor(tx).MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
-			Line:   riverdriver.MigrationLineMain,
-			Schema: bundle.schema,
-		})
-		require.NoError(t, err)
-		require.Equal(t, seqOneTo(migrationsBundle.MaxVersion+1),
 			sliceutil.Map(migrations, driverMigrationToInt))
 	})
 
