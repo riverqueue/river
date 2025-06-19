@@ -9,7 +9,9 @@ import (
 	"log/slog"
 	"os"
 	"path"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -116,27 +118,9 @@ func DBPoolSQLite(ctx context.Context, tb testing.TB, schema string) *sql.DB {
 
 	require.NoError(tb, os.MkdirAll(sqliteTestDir(), 0o700))
 
-	dbPool, err := sql.Open("sqlite", fmt.Sprintf("%s/%s.sqlite3", sqliteTestDir(), schema))
-	require.NoError(tb, err)
-	tb.Cleanup(func() { require.NoError(tb, dbPool.Close()) })
+	var databaseURLBuilder strings.Builder
 
-	// River does enough concurrent work that given multiple active SQLite
-	// connections, it'll immediately start erroring with "database is locked
-	// (5) (SQLITE_BUSY)" because SQLite can only handle one operation at a time
-	// and explicitly errors if another is in flight. To prevent this problem,
-	// we constrain the maximum pool size to 1 so it limits concurrent access
-	// for us.
-	//
-	// I've seen some broad recommendations that it might be better to
-	// always set maximum connections for a single SQLite database to 1
-	// anyway. See for example:
-	//
-	// https://news.ycombinator.com/item?id=30369095
-	//
-	// An alternative approach is to increase `PRAGMA busy_timeout`, but I've
-	// found that we still run into `SQLITE_BUSY` errors with that at higher
-	// iteration counts like `-run TestClientWithDriverRiverSQLite -count 100`.
-	dbPool.SetMaxOpenConns(1)
+	databaseURLBuilder.WriteString(filepath.Join(sqliteTestDir(), schema+".sqlite3"))
 
 	// This innocuous line turns out to be quite important at the tail.
 	//
@@ -167,9 +151,29 @@ func DBPoolSQLite(ctx context.Context, tb testing.TB, schema string) *sql.DB {
 	// I write all this because this line is a little dangerous. Removing it
 	// will probably still allow a basic test run to pass so it might seem okay,
 	// but actually it opens the door to intermittency hell.
-	var journalMode string
-	require.NoError(tb, dbPool.QueryRowContext(ctx, "PRAGMA journal_mode = wal").Scan(&journalMode))
-	require.Equal(tb, "wal", journalMode)
+	databaseURLBuilder.WriteString("?_pragma=journal_mode(WAL)")
+
+	dbPool, err := sql.Open("sqlite", databaseURLBuilder.String())
+	require.NoError(tb, err)
+	tb.Cleanup(func() { require.NoError(tb, dbPool.Close()) })
+
+	// River does enough concurrent work that given multiple active SQLite
+	// connections, it'll immediately start erroring with "database is locked
+	// (5) (SQLITE_BUSY)" because SQLite can only handle one operation at a time
+	// and explicitly errors if another is in flight. To prevent this problem,
+	// we constrain the maximum pool size to 1 so it limits concurrent access
+	// for us.
+	//
+	// I've seen some broad recommendations that it might be better to
+	// always set maximum connections for a single SQLite database to 1
+	// anyway. See for example:
+	//
+	// https://news.ycombinator.com/item?id=30369095
+	//
+	// An alternative approach is to increase `PRAGMA busy_timeout`, but I've
+	// found that we still run into `SQLITE_BUSY` errors with that at higher
+	// iteration counts like `-run TestClientWithDriverRiverSQLite -count 100`.
+	dbPool.SetMaxOpenConns(1)
 
 	return dbPool
 }
