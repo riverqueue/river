@@ -1,4 +1,4 @@
-package river
+package testutil
 
 import "reflect"
 
@@ -9,7 +9,7 @@ import "reflect"
 // job args and worker pair to be implemented inside the body of a function.
 //
 //	type InFuncWorkFuncArgs struct {
-//		JobArgsReflectKind[InFuncWorkFuncArgs]
+//		testutil.JobArgsReflectKind[InFuncWorkFuncArgs]
 //		Message `json:"message"`
 //	}
 //

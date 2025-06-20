@@ -3943,6 +3943,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 					var databaseFile string
 					require.NoError(t, exec.QueryRow(ctx, "SELECT file FROM pragma_database_list WHERE name = ?1", "main").Scan(&databaseFile))
 
+					t.Logf("database file = %s", databaseFile)
+
 					lastSlashIndex := strings.LastIndex(databaseFile, "/")
 					require.NotEqual(t, -1, lastSlashIndex)
 

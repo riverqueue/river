@@ -17,6 +17,7 @@ import (
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -26,7 +27,7 @@ func TestJobCompleteTx(t *testing.T) {
 	ctx := context.Background()
 
 	type JobArgs struct {
-		JobArgsReflectKind[JobArgs]
+		testutil.JobArgsReflectKind[JobArgs]
 	}
 
 	type testBundle struct {

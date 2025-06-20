@@ -1,16 +1,19 @@
-package river
+package riverdrivertest
 
 import (
 	"context"
 	"database/sql"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 
+	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
@@ -18,6 +21,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/testfactory"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivershared/util/urlutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -104,6 +108,72 @@ func TestClientWithDriverRiverSQLite(t *testing.T) {
 	)
 }
 
+type noOpArgs struct {
+	Name string `json:"name"`
+}
+
+func (noOpArgs) Kind() string { return "noOp" }
+
+type noOpWorker struct {
+	river.WorkerDefaults[noOpArgs]
+}
+
+func (w *noOpWorker) Work(ctx context.Context, job *river.Job[noOpArgs]) error { return nil }
+
+// Try to keep this helper close to the one found in the top-level package so we
+// can copy/paste between them reasonably easily.
+func newTestConfig(t *testing.T, schema string) *river.Config {
+	t.Helper()
+
+	workers := river.NewWorkers()
+	river.AddWorker(workers, &noOpWorker{})
+
+	return &river.Config{
+		FetchCooldown:     20 * time.Millisecond,
+		FetchPollInterval: 50 * time.Millisecond,
+		Logger:            riversharedtest.Logger(t),
+		MaxAttempts:       river.MaxAttemptsDefault,
+		Queues:            map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 50}},
+		Schema:            schema,
+		Test: river.TestConfig{
+			Time: &riversharedtest.TimeStub{},
+		},
+		TestOnly: true, // disables staggered start in maintenance services
+		Workers:  workers,
+	}
+}
+
+// Try to keep this helper close to the one found in the top-level package so we
+// can copy/paste between them reasonably easily.
+func startClient[TTx any](ctx context.Context, t *testing.T, client *river.Client[TTx]) {
+	t.Helper()
+
+	require.NoError(t, client.Start(ctx))
+
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		require.NoError(t, client.Stop(ctx))
+	})
+}
+
+// Try to keep this helper close to the one found in the top-level package so we
+// can copy/paste between them reasonably easily.
+func subscribe[TTx any](t *testing.T, client *river.Client[TTx]) <-chan *river.Event {
+	t.Helper()
+
+	subscribeChan, cancel := client.Subscribe(
+		river.EventKindJobCancelled,
+		river.EventKindJobCompleted,
+		river.EventKindJobFailed,
+		river.EventKindJobSnoozed,
+		river.EventKindQueuePaused,
+		river.EventKindQueueResumed,
+	)
+	t.Cleanup(cancel)
+	return subscribeChan
+}
+
 // ExerciseClient exercises a client using a generic driver using a minimal set
 // of test cases to verify that the driver works end to end.
 func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
@@ -112,14 +182,14 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 	t.Helper()
 
 	type testBundle struct {
-		config *Config
+		config *river.Config
 		driver riverdriver.Driver[TTx]
 		exec   riverdriver.Executor
 		schema string
 	}
 
 	// Alternate setup returning only client Config rather than a full Client.
-	setupConfig := func(t *testing.T) (*Config, *testBundle) {
+	setupConfig := func(t *testing.T) (*river.Config, *testBundle) {
 		t.Helper()
 
 		var (
@@ -135,12 +205,12 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		}
 	}
 
-	setup := func(t *testing.T) (*Client[TTx], *testBundle) {
+	setup := func(t *testing.T) (*river.Client[TTx], *testBundle) {
 		t.Helper()
 
 		config, bundle := setupConfig(t)
 
-		client, err := NewClient(bundle.driver, config)
+		client, err := river.NewClient(bundle.driver, config)
 		require.NoError(t, err)
 
 		return client, bundle
@@ -161,13 +231,13 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 	t.Run("StartInsertAndWork", func(t *testing.T) {
 		t.Parallel()
 
-		client, _ := setup(t)
+		client, bundle := setup(t)
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
-		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+		river.AddWorker(bundle.config.Workers, river.WorkFunc(func(ctx context.Context, job *river.Job[JobArgs]) error {
 			return nil
 		}))
 
@@ -179,7 +249,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.NoError(t, err)
 
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
-		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, river.EventKindJobCompleted, event.Kind)
 		require.Equal(t, insertRes.Job.ID, event.Job.ID)
 		require.Equal(t, insertRes.Job.Kind, event.Job.Kind)
 	})
@@ -220,7 +290,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
 		)
 
-		listRes, err := client.JobList(ctx, NewJobListParams())
+		listRes, err := client.JobList(ctx, river.NewJobListParams())
 		require.NoError(t, err)
 		require.Len(t, listRes.Jobs, 2)
 		require.Equal(t, job1.ID, listRes.Jobs[0].ID)
@@ -235,7 +305,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
 
 		listRes, err := client.JobList(ctx,
-			NewJobListParams().
+			river.NewJobListParams().
 				IDs(job.ID).
 				Kinds(job.Kind).
 				Priorities(int16(min(job.Priority, math.MaxInt16))). //nolint:gosec
@@ -257,10 +327,10 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 			Schema:   bundle.schema,
 		})
 
-		listRes, err := client.JobList(ctx, NewJobListParams().Metadata(`{"foo":"bar"}`))
-		if client.driver.DatabaseName() == databaseNameSQLite {
+		listRes, err := client.JobList(ctx, river.NewJobListParams().Metadata(`{"foo":"bar"}`))
+		if bundle.driver.DatabaseName() == databaseNameSQLite {
 			t.Logf("Ignoring unsupported JobListResult.Metadata on SQLite")
-			require.ErrorIs(t, err, errJobListParamsMetadataNotSupportedSQLite)
+			require.EqualError(t, err, "JobListParams.Metadata is not supported on SQLite")
 			return
 		}
 		require.NoError(t, err)
@@ -280,7 +350,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 			job2 = testfactory.Job(ctx, t, execTx, &testfactory.JobOpts{Schema: bundle.schema})
 		)
 
-		listRes, err := client.JobListTx(ctx, tx, NewJobListParams())
+		listRes, err := client.JobListTx(ctx, tx, river.NewJobListParams())
 		require.NoError(t, err)
 		require.Len(t, listRes.Jobs, 2)
 		require.Equal(t, job1.ID, listRes.Jobs[0].ID)
@@ -297,7 +367,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		job := testfactory.Job(ctx, t, execTx, &testfactory.JobOpts{Schema: bundle.schema})
 
 		listRes, err := client.JobListTx(ctx, tx,
-			NewJobListParams().
+			river.NewJobListParams().
 				IDs(job.ID).
 				Kinds(job.Kind).
 				Priorities(int16(min(job.Priority, math.MaxInt16))). //nolint:gosec
@@ -321,10 +391,10 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 			Schema:   bundle.schema,
 		})
 
-		listRes, err := client.JobListTx(ctx, tx, NewJobListParams().Metadata(`{"foo":"bar"}`))
-		if client.driver.DatabaseName() == databaseNameSQLite {
+		listRes, err := client.JobListTx(ctx, tx, river.NewJobListParams().Metadata(`{"foo":"bar"}`))
+		if bundle.driver.DatabaseName() == databaseNameSQLite {
 			t.Logf("Ignoring unsupported JobListTxResult.Metadata on SQLite")
-			require.ErrorIs(t, err, errJobListParamsMetadataNotSupportedSQLite)
+			require.EqualError(t, err, "JobListParams.Metadata is not supported on SQLite")
 			return
 		}
 		require.NoError(t, err)
@@ -344,13 +414,13 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 			Schema:   bundle.schema,
 		})
 
-		listParams := NewJobListParams()
+		listParams := river.NewJobListParams()
 
-		if client.driver.DatabaseName() == databaseNameSQLite {
-			listParams = listParams.Where("metadata ->> @json_path = @json_val", NamedArgs{"json_path": "$.foo", "json_val": "bar"})
+		if bundle.driver.DatabaseName() == databaseNameSQLite {
+			listParams = listParams.Where("metadata ->> @json_path = @json_val", river.NamedArgs{"json_path": "$.foo", "json_val": "bar"})
 		} else {
 			// "bar" is quoted in this branch because `jsonb_path_query_first` needs to be compared to a JSON value
-			listParams = listParams.Where("jsonb_path_query_first(metadata, @json_path) = @json_val", NamedArgs{"json_path": "$.foo", "json_val": `"bar"`})
+			listParams = listParams.Where("jsonb_path_query_first(metadata, @json_path) = @json_val", river.NamedArgs{"json_path": "$.foo", "json_val": `"bar"`})
 		}
 
 		listRes, err := client.JobListTx(ctx, tx, listParams)
@@ -395,7 +465,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 			queue2 = testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Schema: bundle.schema})
 		)
 
-		listRes, err := client.QueueList(ctx, NewQueueListParams())
+		listRes, err := client.QueueList(ctx, river.NewQueueListParams())
 		require.NoError(t, err)
 		require.Len(t, listRes.Queues, 2)
 		require.Equal(t, queue1.Name, listRes.Queues[0].Name)
@@ -414,7 +484,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 			queue2 = testfactory.Queue(ctx, t, execTx, &testfactory.QueueOpts{Schema: bundle.schema})
 		)
 
-		listRes, err := client.QueueListTx(ctx, tx, NewQueueListParams())
+		listRes, err := client.QueueListTx(ctx, tx, river.NewQueueListParams())
 		require.NoError(t, err)
 		require.Len(t, listRes.Queues, 2)
 		require.Equal(t, queue1.Name, listRes.Queues[0].Name)
@@ -433,12 +503,12 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.NoError(t, err)
 
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
-		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, river.EventKindJobCompleted, event.Kind)
 		require.Equal(t, insertRes1.Job.ID, event.Job.ID)
 
-		require.NoError(t, client.QueuePause(ctx, QueueDefault, nil))
+		require.NoError(t, client.QueuePause(ctx, river.QueueDefault, nil))
 		event = riversharedtest.WaitOrTimeout(t, subscribeChan)
-		require.Equal(t, &Event{Kind: EventKindQueuePaused, Queue: &rivertype.Queue{Name: QueueDefault}}, event)
+		require.Equal(t, &river.Event{Kind: river.EventKindQueuePaused, Queue: &rivertype.Queue{Name: river.QueueDefault}}, event)
 
 		insertRes2, err := client.Insert(ctx, &noOpArgs{}, nil)
 		require.NoError(t, err)
@@ -458,12 +528,12 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		default:
 		}
 
-		require.NoError(t, client.QueueResume(ctx, QueueDefault, nil))
+		require.NoError(t, client.QueueResume(ctx, river.QueueDefault, nil))
 		event = riversharedtest.WaitOrTimeout(t, subscribeChan)
-		require.Equal(t, &Event{Kind: EventKindQueueResumed, Queue: &rivertype.Queue{Name: QueueDefault}}, event)
+		require.Equal(t, &river.Event{Kind: river.EventKindQueueResumed, Queue: &rivertype.Queue{Name: river.QueueDefault}}, event)
 
 		event = riversharedtest.WaitOrTimeout(t, subscribeChan)
-		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, river.EventKindJobCompleted, event.Kind)
 		require.Equal(t, insertRes2.Job.ID, event.Job.ID)
 	})
 
@@ -474,7 +544,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 
 		queue := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Schema: bundle.schema})
 
-		updatedQueue, err := client.QueueUpdate(ctx, queue.Name, &QueueUpdateParams{
+		updatedQueue, err := client.QueueUpdate(ctx, queue.Name, &river.QueueUpdateParams{
 			Metadata: []byte(`{"foo":"bar"}`),
 		})
 		require.NoError(t, err)
@@ -491,7 +561,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 
 		tx, execTx := beginTx(ctx, t, bundle)
 
-		updatedQueue, err := client.QueueUpdateTx(ctx, tx, queue.Name, &QueueUpdateParams{
+		updatedQueue, err := client.QueueUpdateTx(ctx, tx, queue.Name, &river.QueueUpdateParams{
 			Metadata: []byte(`{"foo":"bar"}`),
 		})
 		require.NoError(t, err)

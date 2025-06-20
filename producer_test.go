@@ -28,6 +28,7 @@ import (
 	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -71,7 +72,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	t.Cleanup(completer.Stop)
 
 	type WithJobNumArgs struct {
-		JobArgsReflectKind[WithJobNumArgs]
+		testutil.JobArgsReflectKind[WithJobNumArgs]
 		JobNum int `json:"job_num"`
 	}
 
@@ -399,7 +400,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		AddWorker(bundle.workers, &noOpWorker{})
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		mustInsert(ctx, t, producer, bundle, &noOpArgs{})
@@ -439,7 +440,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		producer, bundle := setup(t)
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		AddWorker(bundle.workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -474,7 +475,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		producer.config.MaxWorkers = maxWorkers
 
 		type JobArgs struct {
-			JobArgsReflectKind[JobArgs]
+			testutil.JobArgsReflectKind[JobArgs]
 		}
 
 		unpauseWorkers := make(chan struct{})

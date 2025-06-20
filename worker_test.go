@@ -10,6 +10,7 @@ import (
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 )
 
 func TestWork(t *testing.T) {
@@ -25,7 +26,7 @@ func TestWork(t *testing.T) {
 	})
 
 	type JobArgs struct {
-		JobArgsReflectKind[JobArgs]
+		testutil.JobArgsReflectKind[JobArgs]
 	}
 
 	AddWorker(workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
@@ -166,7 +167,7 @@ func TestWorkFunc(t *testing.T) {
 		client, _ := setup(t)
 
 		type InFuncWorkFuncArgs struct {
-			JobArgsReflectKind[InFuncWorkFuncArgs]
+			testutil.JobArgsReflectKind[InFuncWorkFuncArgs]
 		}
 
 		workChan := make(chan struct{})

@@ -1,4 +1,4 @@
-package river_test
+package riverdrivertest_test
 
 import (
 	"context"
@@ -14,11 +14,11 @@ import (
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 
-	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/riverinternaltest/riverdrivertest"
+	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
+	"github.com/riverqueue/river/riverdriver/riverdrivertest"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
@@ -289,10 +289,10 @@ func BenchmarkDriverRiverPgxV5_Executor(b *testing.B) {
 			Jobs: []*riverdriver.JobInsertFastParams{{
 				EncodedArgs: []byte(`{}`),
 				Kind:        "fake_job",
-				MaxAttempts: rivercommon.MaxAttemptsDefault,
+				MaxAttempts: river.MaxAttemptsDefault,
 				Metadata:    []byte(`{}`),
-				Priority:    rivercommon.PriorityDefault,
-				Queue:       rivercommon.QueueDefault,
+				Priority:    river.PriorityDefault,
+				Queue:       river.QueueDefault,
 				ScheduledAt: nil,
 				State:       rivertype.JobStateAvailable,
 			}},
@@ -348,7 +348,7 @@ func BenchmarkDriverRiverPgxV5_Executor(b *testing.B) {
 			if _, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
 				ClientID: clientID,
 				Max:      100,
-				Queue:    rivercommon.QueueDefault,
+				Queue:    river.QueueDefault,
 			}); err != nil {
 				b.Fatal(err)
 			}
@@ -374,7 +374,7 @@ func BenchmarkDriverRiverPgxV5_Executor(b *testing.B) {
 				if _, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
 					ClientID: clientID,
 					Max:      100,
-					Queue:    rivercommon.QueueDefault,
+					Queue:    river.QueueDefault,
 				}); err != nil {
 					b.Fatal(err)
 				}
@@ -415,9 +415,9 @@ func BenchmarkDriverRiverPgxV5Insert(b *testing.B) {
 				Jobs: []*riverdriver.JobInsertFastParams{{
 					EncodedArgs: []byte(`{"encoded": "args"}`),
 					Kind:        "test_kind",
-					MaxAttempts: rivercommon.MaxAttemptsDefault,
-					Priority:    rivercommon.PriorityDefault,
-					Queue:       rivercommon.QueueDefault,
+					MaxAttempts: river.MaxAttemptsDefault,
+					Priority:    river.PriorityDefault,
+					Queue:       river.QueueDefault,
 					State:       rivertype.JobStateAvailable,
 				}},
 			})
@@ -433,9 +433,9 @@ func BenchmarkDriverRiverPgxV5Insert(b *testing.B) {
 				Jobs: []*riverdriver.JobInsertFastParams{{
 					EncodedArgs:  []byte(`{"encoded": "args"}`),
 					Kind:         "test_kind",
-					MaxAttempts:  rivercommon.MaxAttemptsDefault,
-					Priority:     rivercommon.PriorityDefault,
-					Queue:        rivercommon.QueueDefault,
+					MaxAttempts:  river.MaxAttemptsDefault,
+					Priority:     river.PriorityDefault,
+					Queue:        river.QueueDefault,
 					State:        rivertype.JobStateAvailable,
 					UniqueKey:    []byte("test_unique_key_" + strconv.Itoa(i)),
 					UniqueStates: 0xFB,

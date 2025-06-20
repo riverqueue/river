@@ -9,6 +9,7 @@ import (
 
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/util/testutil"
 )
 
 func TestNeverSchedule(t *testing.T) {
@@ -52,7 +53,7 @@ func TestPeriodicJobBundle(t *testing.T) {
 		periodicJobBundle, _ := setup(t)
 
 		type TestJobArgs struct {
-			JobArgsReflectKind[TestJobArgs]
+			testutil.JobArgsReflectKind[TestJobArgs]
 			JobNum int `json:"job_num"`
 		}
 
