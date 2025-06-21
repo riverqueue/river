@@ -1,4 +1,6 @@
-// Package riversqlite provides a River driver implementation for SQLite.
+// Package riversqlite provides a River driver implementation for SQLite. It's
+// also tested against libSQL (a SQLite fork), and that should continue to work
+// as long they keep to their commitment in maintaining API compatibility.
 //
 // This driver is currently in early testing. It's exercised reasonably
 // thoroughly in the test suite, but has minimal real world use as of yet.
@@ -59,7 +61,8 @@ type Driver struct {
 	replacer sqlctemplate.Replacer
 }
 
-// New returns a new database/sql River driver for use with River.
+// New returns a new SQLite driver for use with River. It also works with libSQL
+// (a SQLite fork).
 //
 // It takes an sql.DB to use for use with River. The pool should already be
 // configured to use the schema specified in the client's Schema field. The pool

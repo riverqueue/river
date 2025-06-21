@@ -1,45 +1,25 @@
-package riversqlite_test
+package riverdrivertest_test
 
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"log/slog"
-	"sort"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/tursodatabase/libsql-client-go/libsql"
 
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riversqlite"
-	"github.com/riverqueue/river/rivermigrate"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/util/slogutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 )
 
-type SortArgs struct {
-	// Strings is a slice of strings to sort.
-	Strings []string `json:"strings"`
-}
-
-func (SortArgs) Kind() string { return "sort" }
-
-type SortWorker struct {
-	river.WorkerDefaults[SortArgs]
-}
-
-func (w *SortWorker) Work(ctx context.Context, job *river.Job[SortArgs]) error {
-	sort.Strings(job.Args.Strings)
-	fmt.Printf("Sorted strings: %+v\n", job.Args.Strings)
-	return nil
-}
-
-// Example_sqlite demonstrates use of River's SQLite driver.
-func Example_sqlite() {
+// Example_libSQL demonstrates use of River's SQLite driver with libSQL (a
+// SQLite fork).
+func Example_libSQL() { //nolint:dupl
 	ctx := context.Background()
 
-	dbPool, err := sql.Open("sqlite", ":memory:")
+	dbPool, err := sql.Open("libsql", "file:./example_libsql_test.libsql")
 	if err != nil {
 		panic(err)
 	}
@@ -93,21 +73,4 @@ func Example_sqlite() {
 
 	// Output:
 	// Sorted strings: [bear tiger whale]
-}
-
-func migrateDB(ctx context.Context, driver riverdriver.Driver[*sql.Tx]) error {
-	// We're using an in-memory SQLite database here, so we need to migrate it
-	// up before use. This won't generally be needed outside of tests.
-	migrator, err := rivermigrate.New(driver, &rivermigrate.Config{
-		Logger: slog.New(&slogutil.SlogMessageOnlyHandler{Level: slog.LevelWarn}),
-	})
-	if err != nil {
-		return err
-	}
-	_, err = migrator.Migrate(ctx, rivermigrate.DirectionUp, nil)
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
