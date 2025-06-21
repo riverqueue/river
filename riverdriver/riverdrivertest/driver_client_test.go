@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
+	_ "github.com/tursodatabase/libsql-client-go/libsql"
 	_ "modernc.org/sqlite"
 
 	"github.com/riverqueue/river"
@@ -86,7 +87,29 @@ func TestClientWithDriverRiverPgxV5(t *testing.T) {
 	)
 }
 
-func TestClientWithDriverRiverSQLite(t *testing.T) {
+func TestClientWithDriverRiverLibSQL(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	ExerciseClient(ctx, t,
+		func(ctx context.Context, t *testing.T) (riverdriver.Driver[*sql.Tx], string) {
+			t.Helper()
+
+			var (
+				driver = riversqlite.New(nil)
+				schema = riverdbtest.TestSchema(ctx, t, driver, &riverdbtest.TestSchemaOpts{
+					ProcurePool: func(ctx context.Context, schema string) (any, string) {
+						return riversharedtest.DBPoolLibSQL(ctx, t, schema), "" // could also be `main` instead of empty string
+					},
+				})
+			)
+			return driver, schema
+		},
+	)
+}
+
+func TestClientWithDriverRiverSQLiteModernC(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
