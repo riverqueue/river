@@ -45,6 +45,7 @@ import (
 	"github.com/riverqueue/river/rivershared/uniquestates"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
+	"github.com/riverqueue/river/rivershared/util/savepointutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -1252,7 +1253,11 @@ type ExecutorTx struct {
 }
 
 func (t *ExecutorTx) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
-	executorSubTx := &ExecutorSubTx{savepointNum: 0, single: &singleTransaction{}, tx: t.tx}
+	executorSubTx := &ExecutorSubTx{
+		beginOnce:    &savepointutil.BeginOnlyOnce{},
+		savepointNum: 0,
+		tx:           t.tx,
+	}
 	executorSubTx.Executor = Executor{nil, templateReplaceWrapper{t.tx, &t.driver.replacer}, t.driver, executorSubTx}
 	return executorSubTx.Begin(ctx)
 }
@@ -1269,15 +1274,15 @@ func (t *ExecutorTx) Rollback(ctx context.Context) error {
 
 type ExecutorSubTx struct {
 	Executor
+	beginOnce    *savepointutil.BeginOnlyOnce
 	savepointNum int
-	single       *singleTransaction
 	tx           *sql.Tx
 }
 
 const savepointPrefix = "river_savepoint_"
 
 func (t *ExecutorSubTx) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
-	if err := t.single.begin(); err != nil {
+	if err := t.beginOnce.Begin(); err != nil {
 		return nil, err
 	}
 
@@ -1286,16 +1291,20 @@ func (t *ExecutorSubTx) Begin(ctx context.Context) (riverdriver.ExecutorTx, erro
 		return nil, err
 	}
 
-	executorSubTx := &ExecutorSubTx{savepointNum: nextSavepointNum, single: &singleTransaction{parent: t.single}, tx: t.tx}
+	executorSubTx := &ExecutorSubTx{
+		beginOnce:    savepointutil.NewBeginOnlyOnce(t.beginOnce),
+		savepointNum: nextSavepointNum,
+		tx:           t.tx,
+	}
 	executorSubTx.Executor = Executor{nil, templateReplaceWrapper{t.tx, &t.driver.replacer}, t.driver, executorSubTx}
 
 	return executorSubTx, nil
 }
 
 func (t *ExecutorSubTx) Commit(ctx context.Context) error {
-	defer t.single.setDone()
+	defer t.beginOnce.Done()
 
-	if t.single.done {
+	if t.beginOnce.IsDone() {
 		return errors.New("tx is closed") // mirrors pgx's behavior for this condition
 	}
 
@@ -1309,9 +1318,9 @@ func (t *ExecutorSubTx) Commit(ctx context.Context) error {
 }
 
 func (t *ExecutorSubTx) Rollback(ctx context.Context) error {
-	defer t.single.setDone()
+	defer t.beginOnce.Done()
 
-	if t.single.done {
+	if t.beginOnce.IsDone() {
 		return errors.New("tx is closed") // mirrors pgx's behavior for this condition
 	}
 
@@ -1327,30 +1336,6 @@ func interpretError(err error) error {
 		return rivertype.ErrNotFound
 	}
 	return err
-}
-
-// Not strictly necessary, but a small struct designed to help us route out
-// problems where `Begin` might be called multiple times on the same
-// subtransaction, which would silently produce the wrong result.
-type singleTransaction struct {
-	done            bool
-	parent          *singleTransaction
-	subTxInProgress bool
-}
-
-func (t *singleTransaction) begin() error {
-	if t.subTxInProgress {
-		return errors.New("subtransaction already in progress")
-	}
-	t.subTxInProgress = true
-	return nil
-}
-
-func (t *singleTransaction) setDone() {
-	t.done = true
-	if t.parent != nil {
-		t.parent.subTxInProgress = false
-	}
 }
 
 type templateReplaceWrapper struct {

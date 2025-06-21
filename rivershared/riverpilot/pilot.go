@@ -28,11 +28,11 @@ type Pilot interface {
 
 	JobInsertMany(
 		ctx context.Context,
-		execTx riverdriver.ExecutorTx,
+		exec riverdriver.Executor,
 		params *riverdriver.JobInsertFastManyParams,
 	) ([]*riverdriver.JobInsertFastResult, error)
 
-	JobSetStateIfRunningMany(ctx context.Context, execTx riverdriver.ExecutorTx, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
+	JobSetStateIfRunningMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
 
 	PilotInit(archetype *baseservice.Archetype)
 
