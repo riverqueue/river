@@ -41,7 +41,15 @@ type WherePredicate struct {
 	SQL       string
 }
 
-func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListParams, sqlFragmentColumnIn func(column string, values any) (string, any, error)) ([]*rivertype.JobRow, error) {
+// JobMakeDriverParams converts client-level parameters for job and delete to
+// driver-level parameters for use with an executor, which generally goes by
+// converting typed fields for IDs, kinds, queues, etc. to lower-level SQL.
+//
+// This was originally implemented for listing jobs, but since the logic is so
+// similar, it also performs the same function for JobDeleteMany. This works
+// because `riverdriver.JobListParams` is identical to `JobDeleteMany` and
+// therefore pointer-level converts to it.
+func JobMakeDriverParams(ctx context.Context, params *JobListParams, sqlFragmentColumnIn func(column string, values any) (string, any, error)) (*riverdriver.JobListParams, error) {
 	var (
 		namedArgs    = make(map[string]any)
 		whereBuilder strings.Builder
@@ -145,7 +153,7 @@ func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListPara
 	// A condition of some kind is needed, so given no others write one that'll
 	// always return true.
 	if whereBuilder.Len() < 1 {
-		whereBuilder.WriteString("1")
+		whereBuilder.WriteString("true")
 	}
 
 	if params.LimitCount < 1 {
@@ -173,11 +181,11 @@ func JobList(ctx context.Context, exec riverdriver.Executor, params *JobListPara
 		}
 	}
 
-	return exec.JobList(ctx, &riverdriver.JobListParams{
+	return &riverdriver.JobListParams{
 		Max:           params.LimitCount,
 		NamedArgs:     namedArgs,
 		OrderByClause: orderByBuilder.String(),
 		Schema:        params.Schema,
 		WhereClause:   whereBuilder.String(),
-	})
+	}, nil
 }

@@ -2100,6 +2100,333 @@ func Test_Client_JobDelete(t *testing.T) {
 	})
 }
 
+func Test_Client_JobDeleteTx(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		dbPool *pgxpool.Pool
+		exec   riverdriver.Executor
+		execTx riverdriver.ExecutorTx
+		schema string
+		tx     pgx.Tx
+	}
+
+	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+		t.Helper()
+
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
+		)
+
+		tx, err := dbPool.Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { tx.Rollback(ctx) })
+
+		return client, &testBundle{
+			dbPool: dbPool,
+			exec:   driver.GetExecutor(),
+			execTx: driver.UnwrapExecutor(tx),
+			schema: schema,
+			tx:     tx,
+		}
+	}
+
+	t.Run("Succeeds", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+
+		deletedJob, err := client.JobDeleteTx(ctx, bundle.tx, job1.ID)
+		require.NoError(t, err)
+		require.Equal(t, job1.ID, deletedJob.ID)
+
+		_, err = bundle.execTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: bundle.schema})
+		require.ErrorIs(t, rivertype.ErrNotFound, err)
+		_, err = bundle.execTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+
+		// Both jobs present because other transaction doesn't see the deletion.
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+	})
+}
+
+func Test_Client_JobDeleteMany(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		exec   riverdriver.Executor
+		schema string
+	}
+
+	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+		t.Helper()
+
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
+		)
+
+		return client, &testBundle{
+			exec:   client.driver.GetExecutor(),
+			schema: schema,
+		}
+	}
+
+	t.Run("FiltersByID", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+		)
+
+		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().IDs(job1.ID))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job1.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		deleteRes, err = client.JobDeleteMany(ctx, NewJobDeleteManyParams().IDs(job2.ID, job3.ID))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job2.ID, job3.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+	})
+
+	t.Run("FiltersByIDAndPriorityAndKind", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Kind: ptrutil.Ptr("special_kind"), Priority: ptrutil.Ptr(1)})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Kind: ptrutil.Ptr("special_kind"), Priority: ptrutil.Ptr(2)})
+			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Kind: ptrutil.Ptr("other_kind"), Priority: ptrutil.Ptr(1)})
+		)
+
+		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().IDs(job1.ID, job2.ID, job3.ID).Priorities(1, 2).Kinds("special_kind"))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+	})
+
+	t.Run("FiltersByPriority", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Priority: ptrutil.Ptr(1)})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Priority: ptrutil.Ptr(2)})
+			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Priority: ptrutil.Ptr(3)})
+		)
+
+		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().Priorities(1))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job1.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		deleteRes, err = client.JobDeleteMany(ctx, NewJobDeleteManyParams().Priorities(2, 3))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job2.ID, job3.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+	})
+
+	t.Run("FiltersByKind", func(t *testing.T) { //nolint:dupl
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind_1"), Schema: bundle.schema})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind_1"), Schema: bundle.schema})
+			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind_2"), Schema: bundle.schema})
+		)
+
+		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().Kinds("test_kind_1"))
+		require.NoError(t, err)
+		// jobs ordered by ScheduledAt ASC by default
+		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		deleteRes, err = client.JobDeleteMany(ctx, NewJobDeleteManyParams().Kinds("test_kind_2"))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job3.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+	})
+
+	t.Run("FiltersByQueue", func(t *testing.T) { //nolint:dupl
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue_1"), Schema: bundle.schema})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue_1"), Schema: bundle.schema})
+			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue_2"), Schema: bundle.schema})
+		)
+
+		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().Queues("queue_1"))
+		require.NoError(t, err)
+		// jobs ordered by ScheduledAt ASC by default
+		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		deleteRes, err = client.JobDeleteMany(ctx, NewJobDeleteManyParams().Queues("queue_2"))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job3.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+	})
+
+	t.Run("FiltersByState", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable), Schema: bundle.schema})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable), Schema: bundle.schema})
+			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), Schema: bundle.schema})
+			job4 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStatePending), Schema: bundle.schema})
+		)
+
+		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().States(rivertype.JobStateAvailable))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		deleteRes, err = client.JobDeleteMany(ctx, NewJobDeleteManyParams().States(rivertype.JobStateCompleted))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job3.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		// All by default:
+		deleteRes, err = client.JobDeleteMany(ctx, NewJobDeleteManyParams())
+		require.NoError(t, err)
+		require.Equal(t, []int64{job4.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+	})
+
+	t.Run("WithNilParamsFiltersToAllStatesByDefault", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			now  = time.Now().UTC()
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateAvailable), ScheduledAt: &now})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateAvailable), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
+			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateCompleted), ScheduledAt: ptrutil.Ptr(now.Add(-2 * time.Second))})
+		)
+
+		deleteRes, err := client.JobDeleteMany(ctx, nil)
+		require.NoError(t, err)
+		// sort order defaults to ID
+		require.Equal(t, []int64{job1.ID, job2.ID, job3.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+	})
+
+	t.Run("IgnoresRunningJobs", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+		)
+
+		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().IDs(job1.ID, job2.ID))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job1.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+	})
+
+	t.Run("WithCancelledContext", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		ctx, cancel := context.WithCancel(ctx)
+		cancel() // cancel immediately
+
+		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().States(rivertype.JobStateRunning))
+		require.ErrorIs(t, context.Canceled, err)
+		require.Nil(t, deleteRes)
+	})
+}
+
+func Test_Client_JobDeleteManyTx(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		dbPool *pgxpool.Pool
+		exec   riverdriver.Executor
+		execTx riverdriver.ExecutorTx
+		schema string
+		tx     pgx.Tx
+	}
+
+	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+		t.Helper()
+
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
+		)
+
+		tx, err := dbPool.Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { tx.Rollback(ctx) })
+
+		return client, &testBundle{
+			dbPool: dbPool,
+			exec:   driver.GetExecutor(),
+			execTx: driver.UnwrapExecutor(tx),
+			schema: schema,
+			tx:     tx,
+		}
+	}
+
+	t.Run("Succeeds", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+
+		deleteRes, err := client.JobDeleteManyTx(ctx, bundle.tx, NewJobDeleteManyParams().IDs(job1.ID))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job1.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		deleteRes, err = client.JobDeleteManyTx(ctx, bundle.tx, NewJobDeleteManyParams().IDs(job2.ID, job3.ID))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job2.ID, job3.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		_, err = bundle.execTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: bundle.schema})
+		require.ErrorIs(t, rivertype.ErrNotFound, err)
+		_, err = bundle.execTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: bundle.schema})
+		require.ErrorIs(t, rivertype.ErrNotFound, err)
+
+		// Jobs present because other transaction doesn't see the deletion.
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+	})
+}
+
 func Test_Client_Insert(t *testing.T) {
 	t.Parallel()
 

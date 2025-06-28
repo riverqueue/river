@@ -859,6 +859,148 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		require.NoError(t, err)
 	})
 
+	t.Run("JobDeleteMany", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("DeletesJobs", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			now := time.Now().UTC()
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Attempt:      ptrutil.Ptr(3),
+				AttemptedAt:  &now,
+				CreatedAt:    &now,
+				EncodedArgs:  []byte(`{"encoded": "args"}`),
+				Errors:       [][]byte{[]byte(`{"error": "message1"}`), []byte(`{"error": "message2"}`)},
+				FinalizedAt:  &now,
+				Metadata:     []byte(`{"meta": "data"}`),
+				ScheduledAt:  &now,
+				State:        ptrutil.Ptr(rivertype.JobStateCompleted),
+				Tags:         []string{"tag"},
+				UniqueKey:    []byte("unique-key"),
+				UniqueStates: 0xFF,
+			})
+
+			// Does not match predicate (makes sure where clause is working).
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+
+			deletedJobs, err := exec.JobDeleteMany(ctx, &riverdriver.JobDeleteManyParams{
+				Max:           100,
+				NamedArgs:     map[string]any{"job_id_123": job.ID},
+				OrderByClause: "id",
+				WhereClause:   "id = @job_id_123",
+			})
+			require.NoError(t, err)
+			require.Len(t, deletedJobs, 1)
+
+			deletedJob := deletedJobs[0]
+			require.Equal(t, job.Attempt, deletedJob.Attempt)
+			require.Equal(t, job.AttemptedAt, deletedJob.AttemptedAt)
+			require.Equal(t, job.CreatedAt, deletedJob.CreatedAt)
+			require.Equal(t, job.EncodedArgs, deletedJob.EncodedArgs)
+			require.Equal(t, "message1", deletedJob.Errors[0].Error)
+			require.Equal(t, "message2", deletedJob.Errors[1].Error)
+			require.Equal(t, job.FinalizedAt, deletedJob.FinalizedAt)
+			require.Equal(t, job.Kind, deletedJob.Kind)
+			require.Equal(t, job.MaxAttempts, deletedJob.MaxAttempts)
+			require.Equal(t, job.Metadata, deletedJob.Metadata)
+			require.Equal(t, job.Priority, deletedJob.Priority)
+			require.Equal(t, job.Queue, deletedJob.Queue)
+			require.Equal(t, job.ScheduledAt, deletedJob.ScheduledAt)
+			require.Equal(t, job.State, deletedJob.State)
+			require.Equal(t, job.Tags, deletedJob.Tags)
+			require.Equal(t, []byte("unique-key"), deletedJob.UniqueKey)
+			require.Equal(t, rivertype.JobStates(), deletedJob.UniqueStates)
+
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
+			require.ErrorIs(t, err, rivertype.ErrNotFound)
+		})
+
+		t.Run("IgnoresRunningJobs", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
+
+			deletedJobs, err := exec.JobDeleteMany(ctx, &riverdriver.JobDeleteManyParams{
+				Max:           100,
+				NamedArgs:     map[string]any{"job_id": job.ID},
+				OrderByClause: "id",
+				WhereClause:   "id = @job_id",
+			})
+			require.NoError(t, err)
+			require.Empty(t, deletedJobs)
+
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
+			require.NoError(t, err)
+		})
+
+		t.Run("HandlesRequiredArgumentTypes", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			{
+				var (
+					job1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind1")})
+					_    = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind2")})
+				)
+
+				deletedJobs, err := exec.JobDeleteMany(ctx, &riverdriver.JobDeleteManyParams{
+					Max:           100,
+					NamedArgs:     map[string]any{"kind": job1.Kind},
+					OrderByClause: "id",
+					WhereClause:   "kind = @kind",
+				})
+				require.NoError(t, err)
+				require.Len(t, deletedJobs, 1)
+			}
+
+			{
+				var (
+					job1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind3")})
+					job2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind4")})
+				)
+
+				deletedJobs, err := exec.JobDeleteMany(ctx, &riverdriver.JobDeleteManyParams{
+					Max:           100,
+					NamedArgs:     map[string]any{"list_arg_00": job1.Kind, "list_arg_01": job2.Kind},
+					OrderByClause: "id",
+					WhereClause:   "kind IN (@list_arg_00, @list_arg_01)",
+				})
+				require.NoError(t, err)
+				require.Len(t, deletedJobs, 2)
+			}
+		})
+
+		t.Run("SortedResults", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			var (
+				job1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+				job2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+				job3 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+				job4 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+				job5 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+			)
+
+			deletedJobs, err := exec.JobDeleteMany(ctx, &riverdriver.JobDeleteManyParams{
+				Max: 100,
+				// NamedArgs:     map[string]any{"kind": job1.Kind},
+				OrderByClause: "id",
+				WhereClause:   "true",
+			})
+			require.NoError(t, err)
+			require.Equal(t, []int64{job1.ID, job2.ID, job3.ID, job4.ID, job5.ID}, sliceutil.Map(deletedJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
+		})
+	})
+
 	t.Run("JobGetAvailable", func(t *testing.T) {
 		t.Parallel()
 

@@ -31,6 +31,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -308,6 +309,25 @@ func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobD
 		return 0, interpretError(err)
 	}
 	return int(rowsAffected), nil
+}
+
+func (e *Executor) JobDeleteMany(ctx context.Context, params *riverdriver.JobDeleteManyParams) ([]*rivertype.JobRow, error) {
+	ctx = sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
+		"order_by_clause": {Value: params.OrderByClause},
+		"where_clause":    {Value: params.WhereClause},
+	}, params.NamedArgs)
+
+	jobs, err := dbsqlc.New().JobDeleteMany(schemaTemplateParam(ctx, params.Schema), e.dbtx, int64(params.Max))
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	// This is unfortunate. SQLite doesn't support `DELETE` in CTEs, so there's
+	// no way to get reliable ordering back. It has a non-standard `ORDER BY`
+	// statement in `DELETE`, but this is only used to determine what fits
+	// inside `LIMIT`, and again not guaranteed to be the order returned by
+	// `RETURNING`. Here, order post-operation before returning from driver.
+	slices.SortFunc(jobs, func(j1, j2 *dbsqlc.RiverJob) int { return int(j1.ID - j2.ID) })
+	return sliceutil.MapError(jobs, jobRowFromInternal)
 }
 
 func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
