@@ -192,7 +192,7 @@ func subscribe[TTx any](t *testing.T, client *Client[TTx]) <-chan *Event {
 	return subscribeChan
 }
 
-func Test_Client(t *testing.T) {
+func Test_Client_Common(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -1464,7 +1464,7 @@ func (w *workerWithMiddleware[T]) Work(ctx context.Context, job *Job[T]) error {
 	return w.workFunc(ctx, job)
 }
 
-func Test_Client_Stop(t *testing.T) {
+func Test_Client_Stop_Common(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
