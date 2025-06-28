@@ -165,28 +165,28 @@ const (
 //
 //	params := NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).First(100)
 type JobListParams struct {
-	after           *JobListCursor
-	ids             []int64
-	kinds           []string
-	metadataCalled  bool
-	overrodeState   bool
-	paginationCount int32
-	priorities      []int16
-	queues          []string
-	schema          string
-	sortField       JobListOrderByField
-	sortOrder       SortOrder
-	states          []rivertype.JobState
-	where           []dblist.WherePredicate
+	after          *JobListCursor
+	ids            []int64
+	kinds          []string
+	metadataCalled bool
+	overrodeState  bool
+	limit          int32
+	priorities     []int16
+	queues         []string
+	schema         string
+	sortField      JobListOrderByField
+	sortOrder      SortOrder
+	states         []rivertype.JobState
+	where          []dblist.WherePredicate
 }
 
 // NewJobListParams creates a new JobListParams to return available jobs sorted
 // by time in ascending order, returning 100 jobs at most.
 func NewJobListParams() *JobListParams {
 	return &JobListParams{
-		paginationCount: 100,
-		sortField:       JobListOrderByID,
-		sortOrder:       SortOrderAsc,
+		limit:     100,
+		sortField: JobListOrderByID,
+		sortOrder: SortOrderAsc,
 		states: []rivertype.JobState{
 			rivertype.JobStateAvailable,
 			rivertype.JobStateCancelled,
@@ -202,19 +202,19 @@ func NewJobListParams() *JobListParams {
 
 func (p *JobListParams) copy() *JobListParams {
 	return &JobListParams{
-		after:           p.after,
-		ids:             append([]int64(nil), p.ids...),
-		kinds:           append([]string(nil), p.kinds...),
-		metadataCalled:  p.metadataCalled,
-		overrodeState:   p.overrodeState,
-		paginationCount: p.paginationCount,
-		priorities:      append([]int16(nil), p.priorities...),
-		queues:          append([]string(nil), p.queues...),
-		sortField:       p.sortField,
-		sortOrder:       p.sortOrder,
-		schema:          p.schema,
-		states:          append([]rivertype.JobState(nil), p.states...),
-		where:           append([]dblist.WherePredicate(nil), p.where...),
+		after:          p.after,
+		ids:            append([]int64(nil), p.ids...),
+		kinds:          append([]string(nil), p.kinds...),
+		metadataCalled: p.metadataCalled,
+		overrodeState:  p.overrodeState,
+		limit:          p.limit,
+		priorities:     append([]int16(nil), p.priorities...),
+		queues:         append([]string(nil), p.queues...),
+		sortField:      p.sortField,
+		sortOrder:      p.sortOrder,
+		schema:         p.schema,
+		states:         append([]rivertype.JobState(nil), p.states...),
+		where:          append([]dblist.WherePredicate(nil), p.where...),
 	}
 }
 
@@ -285,7 +285,7 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 	return &dblist.JobListParams{
 		IDs:        p.ids,
 		Kinds:      p.kinds,
-		LimitCount: p.paginationCount,
+		LimitCount: p.limit,
 		OrderBy:    orderBy,
 		Priorities: p.priorities,
 		Queues:     p.queues,
@@ -310,16 +310,16 @@ func (p *JobListParams) After(cursor *JobListCursor) *JobListParams {
 // First returns an updated filter set that will only return the first
 // count jobs.
 //
-// Count must be between 1 and 10000, inclusive, or this will panic.
+// Count must be between 1 and 10_000, inclusive, or this will panic.
 func (p *JobListParams) First(count int) *JobListParams {
 	if count <= 0 {
 		panic("count must be > 0")
 	}
-	if count > 10000 {
-		panic("count must be <= 10000")
+	if count > 10_000 {
+		panic("count must be <= 10_000")
 	}
 	paramsCopy := p.copy()
-	paramsCopy.paginationCount = int32(count)
+	paramsCopy.limit = int32(count)
 	return paramsCopy
 }
 
@@ -361,15 +361,6 @@ func (p *JobListParams) Metadata(json string) *JobListParams {
 	return paramsCopy
 }
 
-// Queues returns an updated filter set that will only return jobs from the
-// given queues.
-func (p *JobListParams) Queues(queues ...string) *JobListParams {
-	paramsCopy := p.copy()
-	paramsCopy.queues = make([]string, len(queues))
-	copy(paramsCopy.queues, queues)
-	return paramsCopy
-}
-
 // OrderBy returns an updated filter set that will sort the results using the
 // specified field and direction.
 //
@@ -403,6 +394,15 @@ func (p *JobListParams) Priorities(priorities ...int16) *JobListParams {
 	paramsCopy := p.copy()
 	paramsCopy.priorities = make([]int16, len(priorities))
 	copy(paramsCopy.priorities, priorities)
+	return paramsCopy
+}
+
+// Queues returns an updated filter set that will only return jobs from the
+// given queues.
+func (p *JobListParams) Queues(queues ...string) *JobListParams {
+	paramsCopy := p.copy()
+	paramsCopy.queues = make([]string, len(queues))
+	copy(paramsCopy.queues, queues)
 	return paramsCopy
 }
 

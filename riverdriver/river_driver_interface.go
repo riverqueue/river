@@ -202,6 +202,7 @@ type Executor interface {
 	JobCountByState(ctx context.Context, params *JobCountByStateParams) (int, error)
 	JobDelete(ctx context.Context, params *JobDeleteParams) (*rivertype.JobRow, error)
 	JobDeleteBefore(ctx context.Context, params *JobDeleteBeforeParams) (int, error)
+	JobDeleteMany(ctx context.Context, params *JobDeleteManyParams) ([]*rivertype.JobRow, error)
 	JobGetAvailable(ctx context.Context, params *JobGetAvailableParams) ([]*rivertype.JobRow, error)
 	JobGetByID(ctx context.Context, params *JobGetByIDParams) (*rivertype.JobRow, error)
 	JobGetByIDMany(ctx context.Context, params *JobGetByIDManyParams) ([]*rivertype.JobRow, error)
@@ -353,6 +354,14 @@ type JobDeleteBeforeParams struct {
 	DiscardedFinalizedAtHorizon time.Time
 	Max                         int
 	Schema                      string
+}
+
+type JobDeleteManyParams struct {
+	Max           int32
+	NamedArgs     map[string]any
+	OrderByClause string
+	Schema        string
+	WhereClause   string
 }
 
 type JobGetAvailableParams struct {

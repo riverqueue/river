@@ -99,7 +99,7 @@ func TestReplacer(t *testing.T) {
 			-- name: JobList :many
 			SELECT *
 			FROM river_job
-			WHERE /* TEMPLATE_BEGIN: where_clause */ 1 /* TEMPLATE_END */
+			WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */
 			ORDER BY /* TEMPLATE_BEGIN: order_by_clause */ id /* TEMPLATE_END */
 			LIMIT @max::int;
 		`, nil)
@@ -233,7 +233,7 @@ func TestReplacer(t *testing.T) {
 		updatedSQL, args, err := replacer.RunSafely(ctx, "$", `
 			SELECT count(*)
 			FROM /* TEMPLATE: schema */river_job
-			WHERE /* TEMPLATE_BEGIN: where_clause */ 1 /* TEMPLATE_END */;
+			WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */;
 		`, nil)
 		require.NoError(t, err)
 		require.Nil(t, args)
@@ -350,7 +350,7 @@ func TestReplacer(t *testing.T) {
 		updatedSQL, args, err := replacer.RunSafely(ctx, "$", `
 			SELECT count(*)
 			FROM river_job
-			WHERE /* TEMPLATE_BEGIN: where_clause */ 1 /* TEMPLATE_END */;
+			WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */;
 		`, nil)
 		require.NoError(t, err)
 		require.Equal(t, []any{"no_op"}, args)
@@ -375,7 +375,7 @@ func TestReplacer(t *testing.T) {
 		updatedSQL, args, err := replacer.RunSafely(ctx, "$", `
 			SELECT count(*)
 			FROM river_job
-			WHERE /* TEMPLATE_BEGIN: where_clause */ 1 /* TEMPLATE_END */
+			WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */
 				AND status = $1;
 		`, []any{"succeeded"})
 		require.NoError(t, err)
@@ -409,7 +409,7 @@ func TestReplacer(t *testing.T) {
 		updatedSQL, args, err := replacer.RunSafely(ctx, "$", `
 			SELECT count(*)
 			FROM /* TEMPLATE: schema */river_job
-			WHERE /* TEMPLATE_BEGIN: where_clause */ 1 /* TEMPLATE_END */;
+			WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */;
 		`, nil)
 		require.NoError(t, err)
 		require.Equal(t, []any{"no_op", "succeeded"}, args)
