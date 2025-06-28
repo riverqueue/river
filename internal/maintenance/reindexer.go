@@ -26,7 +26,15 @@ const (
 	ReindexerTimeoutDefault = 1 * time.Minute
 )
 
-var defaultIndexNames = []string{"river_job_args_index", "river_job_metadata_index"} //nolint:gochecknoglobals
+var defaultIndexNames = []string{ //nolint:gochecknoglobals
+	"river_job_args_index",
+	"river_job_kind",
+	"river_job_metadata_index",
+	"river_job_pkey",
+	"river_job_prioritized_fetching_index",
+	"river_job_state_and_finalized_at_index",
+	"river_job_unique_idx",
+}
 
 // Test-only properties.
 type ReindexerTestSignals struct {
