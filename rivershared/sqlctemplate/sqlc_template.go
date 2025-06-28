@@ -25,7 +25,7 @@
 //	-- name: JobList :many
 //	SELECT *
 //	FROM river_job
-//	WHERE /* TEMPLATE_BEGIN: where_clause */ 1 /* TEMPLATE_END */
+//	WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */
 //	ORDER BY /* TEMPLATE_BEGIN: order_by_clause */ id /* TEMPLATE_END */
 //	LIMIT @max::int;
 //

@@ -80,6 +80,18 @@ WHERE id IN (
     LIMIT @max
 );
 
+-- name: JobDeleteMany :many
+DELETE FROM /* TEMPLATE: schema */river_job
+WHERE id IN (
+    SELECT id
+    FROM /* TEMPLATE: schema */river_job
+    WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */
+        AND state != 'running'
+    ORDER BY /* TEMPLATE_BEGIN: order_by_clause */ id /* TEMPLATE_END */
+    LIMIT @max
+)
+RETURNING *;
+
 -- Differs from the Postgres version in that we don't have `FOR UPDATE SKIP
 -- LOCKED`. It doesn't exist in SQLite, but more aptly, there's only one writer
 -- on SQLite at a time, so nothing else has the rows locked.
@@ -273,7 +285,7 @@ INSERT INTO /* TEMPLATE: schema */river_job(
 -- name: JobList :many
 SELECT *
 FROM /* TEMPLATE: schema */river_job
-WHERE /* TEMPLATE_BEGIN: where_clause */ 1 /* TEMPLATE_END */
+WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */
 ORDER BY /* TEMPLATE_BEGIN: order_by_clause */ id /* TEMPLATE_END */
 LIMIT @max;
 

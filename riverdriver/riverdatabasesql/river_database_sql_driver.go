@@ -226,6 +226,19 @@ func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobD
 	return int(rowsAffected), nil
 }
 
+func (e *Executor) JobDeleteMany(ctx context.Context, params *riverdriver.JobDeleteManyParams) ([]*rivertype.JobRow, error) {
+	ctx = sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
+		"order_by_clause": {Value: params.OrderByClause},
+		"where_clause":    {Value: params.WhereClause},
+	}, params.NamedArgs)
+
+	jobs, err := dbsqlc.New().JobDeleteMany(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.Max)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return sliceutil.MapError(jobs, jobRowFromInternal)
+}
+
 func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
 	jobs, err := dbsqlc.New().JobGetAvailable(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobGetAvailableParams{
 		AttemptedBy: params.ClientID,

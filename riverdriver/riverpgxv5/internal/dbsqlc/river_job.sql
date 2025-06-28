@@ -122,6 +122,29 @@ WHERE id IN (
     LIMIT @max::bigint
 );
 
+-- name: JobDeleteMany :many
+WITH jobs_to_delete AS (
+    SELECT *
+    FROM /* TEMPLATE: schema */river_job
+    WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */
+        AND state != 'running'
+    ORDER BY /* TEMPLATE_BEGIN: order_by_clause */ id /* TEMPLATE_END */
+    LIMIT @max::int
+    FOR UPDATE
+    SKIP LOCKED
+),
+deleted_jobs AS (
+    DELETE FROM /* TEMPLATE: schema */river_job
+    WHERE id IN (SELECT id FROM jobs_to_delete)
+    RETURNING *
+)
+-- this last SELECT step is necessary because there's no other way to define
+-- order records come back from a DELETE statement
+SELECT *
+FROM /* TEMPLATE: schema */river_job
+WHERE id IN (SELECT id FROM deleted_jobs)
+ORDER BY /* TEMPLATE_BEGIN: order_by_clause */ id /* TEMPLATE_END */;
+
 -- name: JobGetAvailable :many
 WITH locked_jobs AS (
     SELECT
@@ -363,7 +386,7 @@ RETURNING *;
 -- name: JobList :many
 SELECT *
 FROM /* TEMPLATE: schema */river_job
-WHERE /* TEMPLATE_BEGIN: where_clause */ 1 /* TEMPLATE_END */
+WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */
 ORDER BY /* TEMPLATE_BEGIN: order_by_clause */ id /* TEMPLATE_END */
 LIMIT @max::int;
 
