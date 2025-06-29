@@ -127,7 +127,7 @@ func TestReindexer(t *testing.T) {
 		require.True(t, requireReindexOne(indexName))
 	})
 
-	t.Run("ReindexesEachIndex", func(t *testing.T) {
+	t.Run("ReindexesMinimalSubsetofIndexes", func(t *testing.T) {
 		t.Parallel()
 
 		svc, bundle := setup(t)
@@ -161,6 +161,17 @@ func TestReindexer(t *testing.T) {
 				require.False(t, indexExists)
 			}
 		}
+	})
+
+	t.Run("ReindexesDefaultIndexes", func(t *testing.T) {
+		t.Parallel()
+
+		svc, _ := setup(t)
+
+		svc.Config.ScheduleFunc = runImmediatelyThenOnceAnHour()
+
+		require.NoError(t, svc.Start(ctx))
+		svc.TestSignals.Reindexed.WaitOrTimeout()
 	})
 
 	t.Run("ReindexDeletesArtifactsWhenCancelledWithStop", func(t *testing.T) {
