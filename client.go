@@ -1356,6 +1356,7 @@ func (c *Client[TTx]) jobCancel(ctx context.Context, exec riverdriver.Executor, 
 		ID:                jobID,
 		CancelAttemptedAt: c.baseService.Time.NowUTC(),
 		ControlTopic:      string(notifier.NotificationTopicControl),
+		Now:               c.baseService.Time.NowUTCOrNil(),
 		Schema:            c.config.Schema,
 	})
 }
@@ -1413,6 +1414,7 @@ func (c *Client[TTx]) JobGetTx(ctx context.Context, tx TTx, id int64) (*rivertyp
 func (c *Client[TTx]) JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, error) {
 	return c.driver.GetExecutor().JobRetry(ctx, &riverdriver.JobRetryParams{
 		ID:     id,
+		Now:    c.baseService.Time.NowUTCOrNil(),
 		Schema: c.config.Schema,
 	})
 }
@@ -1433,6 +1435,7 @@ func (c *Client[TTx]) JobRetry(ctx context.Context, id int64) (*rivertype.JobRow
 func (c *Client[TTx]) JobRetryTx(ctx context.Context, tx TTx, id int64) (*rivertype.JobRow, error) {
 	return c.driver.UnwrapExecutor(tx).JobRetry(ctx, &riverdriver.JobRetryParams{
 		ID:     id,
+		Now:    c.baseService.Time.NowUTCOrNil(),
 		Schema: c.config.Schema,
 	})
 }
@@ -2269,6 +2272,7 @@ func (c *Client[TTx]) QueuePause(ctx context.Context, name string, opts *QueuePa
 
 	if err := tx.QueuePause(ctx, &riverdriver.QueuePauseParams{
 		Name:   name,
+		Now:    c.baseService.Time.NowUTCOrNil(),
 		Schema: c.config.Schema,
 	}); err != nil {
 		return err
@@ -2304,6 +2308,7 @@ func (c *Client[TTx]) QueuePauseTx(ctx context.Context, tx TTx, name string, opt
 
 	if err := executorTx.QueuePause(ctx, &riverdriver.QueuePauseParams{
 		Name:   name,
+		Now:    c.baseService.Time.NowUTCOrNil(),
 		Schema: c.config.Schema,
 	}); err != nil {
 		return err
@@ -2337,6 +2342,7 @@ func (c *Client[TTx]) QueueResume(ctx context.Context, name string, opts *QueueP
 
 	if err := tx.QueueResume(ctx, &riverdriver.QueueResumeParams{
 		Name:   name,
+		Now:    c.baseService.Time.NowUTCOrNil(),
 		Schema: c.config.Schema,
 	}); err != nil {
 		return err
@@ -2373,6 +2379,7 @@ func (c *Client[TTx]) QueueResumeTx(ctx context.Context, tx TTx, name string, op
 
 	if err := executorTx.QueueResume(ctx, &riverdriver.QueueResumeParams{
 		Name:   name,
+		Now:    c.baseService.Time.NowUTCOrNil(),
 		Schema: c.config.Schema,
 	}); err != nil {
 		return err
