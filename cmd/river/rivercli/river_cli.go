@@ -173,7 +173,7 @@ to use a development database only.
 		cmd.Flags().StringVar(&opts.Line, "line", "", "migration line to operate on (default: main)")
 		cmd.Flags().IntVar(&opts.MaxSteps, "max-steps", 0, "maximum number of steps to migrate")
 		cmd.Flags().BoolVar(&opts.ShowSQL, "show-sql", false, "show SQL of each migration")
-		cmd.Flags().IntVar(&opts.TargetVersion, "target-version", 0, "target version to migrate to (final state includes this version, but none after it)")
+		cmd.Flags().IntVar(&opts.TargetVersion, "target-version", targetVersionCLIFlagDefault, "target version to migrate to (final state includes this version, but none after it); when migrating down, use 0 to apply all down migrations")
 	}
 
 	// migrate-down
@@ -434,7 +434,7 @@ func (c *migrateDown) Run(ctx context.Context, opts *migrateOpts) (bool, error) 
 	res, err := migrator.Migrate(ctx, rivermigrate.DirectionDown, &rivermigrate.MigrateOpts{
 		DryRun:        opts.DryRun,
 		MaxSteps:      opts.MaxSteps,
-		TargetVersion: opts.TargetVersion,
+		TargetVersion: targetVersionTranslateDefault(opts.TargetVersion),
 	})
 	if err != nil {
 		return false, err
@@ -645,7 +645,7 @@ func (c *migrateUp) Run(ctx context.Context, opts *migrateOpts) (bool, error) {
 	res, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, &rivermigrate.MigrateOpts{
 		DryRun:        opts.DryRun,
 		MaxSteps:      opts.MaxSteps,
-		TargetVersion: opts.TargetVersion,
+		TargetVersion: targetVersionTranslateDefault(opts.TargetVersion),
 	})
 	if err != nil {
 		return false, err
@@ -720,4 +720,31 @@ func (c *version) Run(ctx context.Context, opts *versionOpts) (bool, error) {
 	fmt.Fprintf(c.Out, "Built with %s\n", buildInfo.GoVersion)
 
 	return true, nil
+}
+
+// A sentinel value used to represent an unset CLI flag for TargetVersion. See
+// comment below for details.
+const targetVersionCLIFlagDefault = -2
+
+// Translates a target version from incoming CLI flag to one that goes in the
+// rivermigrate package's options. The reason this exists is that get around the
+// bad UX required with default values, rivermigrate uses a TargetVersion of 0
+// to do nothing, and a TargetVersion of -1 to specify all versions. This is
+// suboptimal from a CLI perspective, because when migrating down, it requires
+// the caller to know to specify -1 instead of the more natural 0 to down
+// migrate everything.
+//
+// This function translates an incoming CLI option so that a 0 is changed to a
+// -1 so that it migrates everything. -1 stays as is. -2  is used as a default
+// value (targetVersionCLIFlagDefault) for the CLI flags and is changed to 0 so
+// it becomes the default value on the migrate options.
+func targetVersionTranslateDefault(targetVersion int) int {
+	switch targetVersion {
+	case 0:
+		return -1
+	case targetVersionCLIFlagDefault:
+		return 0
+	}
+
+	return targetVersion
 }
