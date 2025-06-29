@@ -556,3 +556,15 @@ func TestRoundDuration(t *testing.T) {
 	require.Equal(t, "34.04s", roundDuration(mustParseDuration("34.042234s")).String())
 	require.Equal(t, "2m34.04s", roundDuration(mustParseDuration("2m34.042234s")).String())
 }
+
+func TestTargetVersion(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, 1, targetVersionTranslateDefault(1))
+	require.Equal(t, 2, targetVersionTranslateDefault(2))
+	require.Equal(t, 3, targetVersionTranslateDefault(3))
+
+	require.Equal(t, 0, targetVersionTranslateDefault(-2))
+	require.Equal(t, -1, targetVersionTranslateDefault(-1))
+	require.Equal(t, -1, targetVersionTranslateDefault(0))
+}
