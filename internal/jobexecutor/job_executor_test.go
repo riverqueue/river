@@ -819,7 +819,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 				workBeginCalled = true
 				return nil
 			}),
-			HookWorkEndFunc(func(ctx context.Context, err error) error {
+			HookWorkEndFunc(func(ctx context.Context, job *rivertype.JobRow, err error) error {
 				workEndCalled = true
 				return err
 			}),
@@ -845,12 +845,12 @@ func TestJobExecutor_Execute(t *testing.T) {
 			workEnd2Called bool
 		)
 		executor.HookLookupGlobal = hooklookup.NewHookLookup([]rivertype.Hook{
-			HookWorkEndFunc(func(ctx context.Context, err error) error {
+			HookWorkEndFunc(func(ctx context.Context, job *rivertype.JobRow, err error) error {
 				workEnd1Called = true
 				require.EqualError(t, err, "job error")
 				return err
 			}),
-			HookWorkEndFunc(func(ctx context.Context, err error) error {
+			HookWorkEndFunc(func(ctx context.Context, job *rivertype.JobRow, err error) error {
 				workEnd2Called = true
 				require.EqualError(t, err, "job error")
 				return err
@@ -879,12 +879,12 @@ func TestJobExecutor_Execute(t *testing.T) {
 			workEnd2Called bool
 		)
 		executor.HookLookupGlobal = hooklookup.NewHookLookup([]rivertype.Hook{
-			HookWorkEndFunc(func(ctx context.Context, err error) error {
+			HookWorkEndFunc(func(ctx context.Context, job *rivertype.JobRow, err error) error {
 				workEnd1Called = true
 				require.EqualError(t, err, "job error")
 				return err
 			}),
-			HookWorkEndFunc(func(ctx context.Context, err error) error {
+			HookWorkEndFunc(func(ctx context.Context, job *rivertype.JobRow, err error) error {
 				workEnd2Called = true
 				require.EqualError(t, err, "job error")
 				return nil // second hook suppresses the error
@@ -917,10 +917,10 @@ func (f HookWorkBeginFunc) WorkBegin(ctx context.Context, job *rivertype.JobRow)
 
 func (f HookWorkBeginFunc) IsHook() bool { return true }
 
-type HookWorkEndFunc func(ctx context.Context, err error) error
+type HookWorkEndFunc func(ctx context.Context, job *rivertype.JobRow, err error) error
 
-func (f HookWorkEndFunc) WorkEnd(ctx context.Context, err error) error {
-	return f(ctx, err)
+func (f HookWorkEndFunc) WorkEnd(ctx context.Context, job *rivertype.JobRow, err error) error {
+	return f(ctx, job, err)
 }
 
 func (f HookWorkEndFunc) IsHook() bool { return true }

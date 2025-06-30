@@ -813,7 +813,7 @@ func Test_Client(t *testing.T) {
 		workEndHookCalled := false
 
 		bundle.config.Hooks = []rivertype.Hook{
-			HookWorkEndFunc(func(ctx context.Context, err error) error {
+			HookWorkEndFunc(func(ctx context.Context, job *rivertype.JobRow, err error) error {
 				workEndHookCalled = true
 				return err
 			}),
@@ -1433,7 +1433,7 @@ func (metadataHookWorkBegin) WorkBegin(ctx context.Context, job *rivertype.JobRo
 
 type metadataHookWorkEnd struct{ rivertype.Hook }
 
-func (metadataHookWorkEnd) WorkEnd(ctx context.Context, err error) error {
+func (metadataHookWorkEnd) WorkEnd(ctx context.Context, job *rivertype.JobRow, err error) error {
 	metadataUpdates, hasMetadataUpdates := jobexecutor.MetadataUpdatesFromWorkContext(ctx)
 	if !hasMetadataUpdates {
 		panic("expected to be called from within job executor")

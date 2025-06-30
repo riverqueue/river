@@ -300,6 +300,7 @@ type JobInsertParams struct {
 // List of hook interfaces that may be implemented:
 // - HookInsertBegin
 // - HookWorkBegin
+// - HookWorkEnd
 //
 // More operation-specific interfaces may be added in future versions.
 type Hook interface {
@@ -314,6 +315,7 @@ type Hook interface {
 type HookInsertBegin interface {
 	Hook
 
+	// InsertBegin is invoked just before a job is inserted to the database.
 	InsertBegin(ctx context.Context, params *JobInsertParams) error
 }
 
@@ -322,6 +324,16 @@ type HookInsertBegin interface {
 type HookWorkBegin interface {
 	Hook
 
+	// WorkBegin is invoked after a job has been locked and assigned to a
+	// particular executor for work and just before the job is actually worked.
+	//
+	// Returning an error from any HookWorkBegin hook will abort the job early
+	// such that it has an error set and doesn't work, with a retry scheduled
+	// according to its retry policy.
+	//
+	// This function doesn't return a context so any context set in WorkBegin is
+	// discarded after the function returns. If persistent context needs to be
+	// set, middleware should be used instead.
 	WorkBegin(ctx context.Context, job *JobRow) error
 }
 
@@ -338,7 +350,7 @@ type HookWorkEnd interface {
 	//
 	// 	err := e.WorkUnit.Work(ctx)
 	// 	for _, hook := range hooks {
-	// 		err = hook.(rivertype.HookWorkEnd).WorkEnd(ctx, err)
+	// 		err = hook.(rivertype.HookWorkEnd).WorkEnd(ctx, e.JobRow, err)
 	// 	}
 	// 	return err
 	//
@@ -346,10 +358,14 @@ type HookWorkEnd interface {
 	// return whatever error value it received as its argument whether that
 	// error is nil or not.
 	//
+	// The JobRow received by WorkEnd is the same one passed to HookWorkBegin's
+	// WorkBegin. Its state, errors, next scheduled at time, etc. have not yet
+	// been updated based on the latest work result.
+	//
 	// Will not receive a common context related to HookWorkBegin because
 	// WorkBegin doesn't return a context. Middleware should be used for this
 	// sort of shared context instead.
-	WorkEnd(ctx context.Context, err error) error
+	WorkEnd(ctx context.Context, job *JobRow, err error) error
 }
 
 // Middleware is an arbitrary interface for a struct which will execute some

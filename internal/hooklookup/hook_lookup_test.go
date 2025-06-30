@@ -267,6 +267,6 @@ var _ rivertype.HookWorkEnd = &testHookWorkEnd{}
 
 type testHookWorkEnd struct{ rivertype.Hook }
 
-func (t *testHookWorkEnd) WorkEnd(ctx context.Context, err error) error {
+func (t *testHookWorkEnd) WorkEnd(ctx context.Context, job *rivertype.JobRow, err error) error {
 	return nil
 }
