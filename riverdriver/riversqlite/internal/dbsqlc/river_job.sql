@@ -100,7 +100,11 @@ UPDATE /* TEMPLATE: schema */river_job
 SET
     attempt = river_job.attempt + 1,
     attempted_at = coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')),
-    attempted_by = json_insert(coalesce(attempted_by, json('[]')), '$[#]', cast(@attempted_by AS text)),
+
+    -- This is replaced in the driver to work around sqlc bugs for SQLite. See
+    -- comments there for more details.
+    attempted_by = /* TEMPLATE_BEGIN: attempted_by_clause */ attempted_by /* TEMPLATE_END */,
+
     state = 'running'
 WHERE id IN (
     SELECT id
@@ -114,7 +118,7 @@ WHERE id IN (
         priority ASC,
         scheduled_at ASC,
         id ASC
-    LIMIT @max
+    LIMIT @max_to_lock
 )
 RETURNING *;
 

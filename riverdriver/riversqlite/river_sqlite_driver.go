@@ -330,12 +330,63 @@ func (e *Executor) JobDeleteMany(ctx context.Context, params *riverdriver.JobDel
 	return sliceutil.MapError(jobs, jobRowFromInternal)
 }
 
+// This really sucks, but this SQL fragment's been extracted to a string because
+// sqlc is buggy and can't parse it.
+//
+// The SQL appends a new `attempted_by` to a job's `attempted_by` array (a jsonb
+// array), which in SQLite is really quite difficult to to because there aren't
+// any arrays or array functions. I tried every version of this in sqlc I could
+// come up with, but there was a bug in every direction that blocked it. e.g.
+//
+//   - This version almost works, but as soon as you add a subselect like `FROM (
+//     ... )`, SQLite bugs out and can't handle it.
+//
+//   - I tried putting it in a CTE, but this is paired with an `UPDATE` statement,
+//     and `UPDATE ... FROM` isn't support in sqlc for SQLite.
+//
+// I'm really hoping this could be fixed one day by by bringing it back in with
+// the rest of the job definitions, but it'll require some sqlc fixes for that
+// to work. Frustratingly, some of these fixes actually exist already [1], but
+// just can't be merged/release due to bottlenecks in the sqlc project.
+//
+// [1] https://github.com/sqlc-dev/sqlc/pull/3610
+//
+//nolint:gochecknoglobals
+var jobGetAvailableAttemptedBySQL = strings.TrimSpace(`
+    json_insert(
+        (
+            SELECT json_group_array(value)
+            FROM (
+                SELECT *
+                FROM (
+                    SELECT *
+                    FROM json_each(attempted_by)
+                    ORDER BY key DESC
+                    LIMIT @max_attempted_by - 1
+                )
+                ORDER BY key
+            )
+        ),
+        '$[#]',
+        @attempted_by
+    )
+`)
+
 func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
+	ctx = sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
+		"attempted_by_clause": {
+			Stable: true, // input never changes
+			Value:  jobGetAvailableAttemptedBySQL,
+		},
+	}, map[string]any{
+		"attempted_by":     params.ClientID,
+		"max_attempted_by": params.MaxAttemptedBy,
+	})
+
 	jobs, err := dbsqlc.New().JobGetAvailable(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobGetAvailableParams{
-		AttemptedBy: params.ClientID,
-		Max:         int64(params.Max),
-		Now:         timeStringNullable(params.Now),
-		Queue:       params.Queue,
+		MaxToLock: int64(params.MaxToLock),
+		Now:       timeStringNullable(params.Now),
+		Queue:     params.Queue,
 	})
 	if err != nil {
 		return nil, interpretError(err)

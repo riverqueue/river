@@ -262,13 +262,13 @@ WITH locked_jobs AS (
         /* TEMPLATE: schema */river_job
     WHERE
         state = 'available'
-        AND queue = $3::text
+        AND queue = $4::text
         AND scheduled_at <= coalesce($1::timestamptz, now())
     ORDER BY
         priority ASC,
         scheduled_at ASC,
         id ASC
-    LIMIT $4::integer
+    LIMIT $5::integer
     FOR UPDATE
     SKIP LOCKED
 )
@@ -278,7 +278,14 @@ SET
     state = 'running',
     attempt = river_job.attempt + 1,
     attempted_at = coalesce($1::timestamptz, now()),
-    attempted_by = array_append(river_job.attempted_by, $2::text)
+    attempted_by = array_append(
+        CASE WHEN array_length(river_job.attempted_by, 1) >= $2::int
+        -- +2 instead of +1 because Postgres array indexing starts at 1, not 0.
+        THEN river_job.attempted_by[array_length(river_job.attempted_by, 1) + 2 - $2:]
+        ELSE river_job.attempted_by
+        END,
+        $3::text
+    )
 FROM
     locked_jobs
 WHERE
@@ -288,18 +295,20 @@ RETURNING
 `
 
 type JobGetAvailableParams struct {
-	Now         *time.Time
-	AttemptedBy string
-	Queue       string
-	Max         int32
+	Now            *time.Time
+	MaxAttemptedBy int32
+	AttemptedBy    string
+	Queue          string
+	MaxToLock      int32
 }
 
 func (q *Queries) JobGetAvailable(ctx context.Context, db DBTX, arg *JobGetAvailableParams) ([]*RiverJob, error) {
 	rows, err := db.Query(ctx, jobGetAvailable,
 		arg.Now,
+		arg.MaxAttemptedBy,
 		arg.AttemptedBy,
 		arg.Queue,
-		arg.Max,
+		arg.MaxToLock,
 	)
 	if err != nil {
 		return nil, err

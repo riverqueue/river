@@ -742,13 +742,18 @@ func (p *producer) dispatchWork(workCtx context.Context, count int, fetchResultC
 	// back to the queue.
 	ctx := context.WithoutCancel(workCtx)
 
+	// Maximum size of the `attempted_by` array on each job row. This maximum is
+	// rarely hit, but exists to protect against degenerate cases.
+	const maxAttemptedBy = 100
+
 	jobs, err := p.pilot.JobGetAvailable(ctx, p.exec, p.state, &riverdriver.JobGetAvailableParams{
-		ClientID:   p.config.ClientID,
-		Max:        count,
-		Now:        p.Time.NowUTCOrNil(),
-		Queue:      p.config.Queue,
-		ProducerID: p.id.Load(),
-		Schema:     p.config.Schema,
+		ClientID:       p.config.ClientID,
+		MaxAttemptedBy: maxAttemptedBy,
+		MaxToLock:      count,
+		Now:            p.Time.NowUTCOrNil(),
+		Queue:          p.config.Queue,
+		ProducerID:     p.id.Load(),
+		Schema:         p.config.Schema,
 	})
 	if err != nil {
 		p.Logger.Error(p.Name+": Error fetching jobs", slog.String("err", err.Error()), slog.String("queue", p.config.Queue))
