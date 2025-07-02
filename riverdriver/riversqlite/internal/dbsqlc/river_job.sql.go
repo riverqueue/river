@@ -210,7 +210,7 @@ UPDATE /* TEMPLATE: schema */river_job
 SET
     attempt = river_job.attempt + 1,
     attempted_at = coalesce(cast(?1 AS text), datetime('now', 'subsec')),
-    attempted_by = json_insert(coalesce(attempted_by, json('[]')), '$[#]', cast(?2 AS text)),
+    attempted_by = /* TEMPLATE_BEGIN: attempted_by_clause */ json_insert(coalesce(attempted_by, json('[]')), '$[#]', cast(?2 AS text)) /* TEMPLATE_END */,
     state = 'running'
 WHERE id IN (
     SELECT id
