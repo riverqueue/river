@@ -41,11 +41,14 @@ func TestJobListNoJobs(t *testing.T) {
 
 		bundle := setup()
 
-		_, err := JobList(ctx, bundle.exec, &JobListParams{
+		listParams, err := JobMakeDriverParams(ctx, &JobListParams{
 			States:     []rivertype.JobState{rivertype.JobStateCompleted},
 			LimitCount: 1,
 			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderAsc}},
 		}, bundle.driver.SQLFragmentColumnIn)
+		require.NoError(t, err)
+
+		_, err = bundle.exec.JobList(ctx, listParams)
 		require.NoError(t, err)
 	})
 
@@ -54,7 +57,7 @@ func TestJobListNoJobs(t *testing.T) {
 
 		bundle := setup()
 
-		_, err := JobList(ctx, bundle.exec, &JobListParams{
+		listParams, err := JobMakeDriverParams(ctx, &JobListParams{
 			States:     []rivertype.JobState{rivertype.JobStateCompleted},
 			LimitCount: 1,
 			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderAsc}},
@@ -62,6 +65,9 @@ func TestJobListNoJobs(t *testing.T) {
 				{NamedArgs: map[string]any{"foo": "bar"}, SQL: "queue = 'test' AND priority = 1 AND args->>'foo' = @foo"},
 			},
 		}, bundle.driver.SQLFragmentColumnIn)
+		require.NoError(t, err)
+
+		_, err = bundle.exec.JobList(ctx, listParams)
 		require.NoError(t, err)
 	})
 }
@@ -105,17 +111,28 @@ func TestJobListWithJobs(t *testing.T) {
 
 	execTest := func(ctx context.Context, t *testing.T, bundle *testBundle, params *JobListParams, testFunc testListFunc) {
 		t.Helper()
+
+		listParams, err := JobMakeDriverParams(ctx, params, bundle.driver.SQLFragmentColumnIn)
+		require.NoError(t, err)
+
 		t.Logf("testing JobList in Executor")
-		jobs, err := JobList(ctx, bundle.exec, params, bundle.driver.SQLFragmentColumnIn)
-		testFunc(jobs, err)
+		{
+			jobs, err := bundle.exec.JobList(ctx, listParams)
+			require.NoError(t, err)
+			testFunc(jobs, err)
+		}
 
 		t.Logf("testing JobListTx")
-		// use a sub-transaction in case it's rolled back or errors:
-		tx, err := bundle.exec.Begin(ctx)
-		require.NoError(t, err)
-		defer tx.Rollback(ctx)
-		jobs, err = JobList(ctx, tx, params, bundle.driver.SQLFragmentColumnIn)
-		testFunc(jobs, err)
+		{
+			// use a sub-transaction in case it's rolled back or errors:
+			execTx, err := bundle.exec.Begin(ctx)
+			require.NoError(t, err)
+			defer execTx.Rollback(ctx)
+
+			jobs, err := execTx.JobList(ctx, listParams)
+			require.NoError(t, err)
+			testFunc(jobs, err)
+		}
 	}
 
 	t.Run("Minimal", func(t *testing.T) {
@@ -309,7 +326,7 @@ func TestJobListWithJobs(t *testing.T) {
 			},
 		}
 
-		_, err := JobList(ctx, bundle.exec, params, bundle.driver.SQLFragmentColumnIn)
+		_, err := JobMakeDriverParams(ctx, params, bundle.driver.SQLFragmentColumnIn)
 		require.EqualError(t, err, `expected "1" to contain named arg symbol @not_present`)
 	})
 
@@ -327,7 +344,7 @@ func TestJobListWithJobs(t *testing.T) {
 			},
 		}
 
-		_, err := JobList(ctx, bundle.exec, params, bundle.driver.SQLFragmentColumnIn)
+		_, err := JobMakeDriverParams(ctx, params, bundle.driver.SQLFragmentColumnIn)
 		require.EqualError(t, err, "named argument @duplicate already registered")
 	})
 }

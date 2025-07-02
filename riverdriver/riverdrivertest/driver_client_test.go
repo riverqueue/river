@@ -277,6 +277,174 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.Equal(t, insertRes.Job.Kind, event.Job.Kind)
 	})
 
+	t.Run("JobDelete", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+		)
+
+		deletedJob, err := client.JobDelete(ctx, job1.ID)
+		require.NoError(t, err)
+		require.Equal(t, job1.ID, deletedJob.ID)
+
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: bundle.schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+	})
+
+	t.Run("JobDeleteTx", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+		)
+
+		tx, execTx := beginTx(ctx, t, bundle)
+
+		deletedJob, err := client.JobDeleteTx(ctx, tx, job1.ID)
+		require.NoError(t, err)
+		require.Equal(t, job1.ID, deletedJob.ID)
+
+		_, err = execTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: bundle.schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = execTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+
+		// SQLite can't support multiple concurrent transactions, so skip this extra check there.
+		if bundle.driver.DatabaseName() != databaseNameSQLite {
+			_, otherExecTx := beginTx(ctx, t, bundle)
+
+			// Both jobs present because other transaction doesn't see the deletion.
+			_, err = otherExecTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: bundle.schema})
+			require.NoError(t, err)
+			_, err = otherExecTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: bundle.schema})
+			require.NoError(t, err)
+		}
+	})
+
+	t.Run("JobDeleteManyMinimal", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+		)
+
+		deleteRes, err := client.JobDeleteMany(ctx, river.NewJobDeleteManyParams())
+		require.NoError(t, err)
+		require.Len(t, deleteRes.Jobs, 2)
+		require.Equal(t, job1.ID, deleteRes.Jobs[0].ID)
+		require.Equal(t, job2.ID, deleteRes.Jobs[1].ID)
+
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: bundle.schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: bundle.schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+	})
+
+	t.Run("JobDeleteManyAllArgs", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+		)
+
+		deleteRes, err := client.JobDeleteMany(ctx,
+			river.NewJobDeleteManyParams().
+				IDs(job1.ID).
+				Kinds(job1.Kind).
+				Priorities(int16(min(job1.Priority, math.MaxInt16))). //nolint:gosec
+				Queues(job1.Queue).
+				States(job1.State),
+		)
+		require.NoError(t, err)
+		require.Len(t, deleteRes.Jobs, 1)
+		require.Equal(t, job1.ID, deleteRes.Jobs[0].ID)
+
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: bundle.schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+	})
+
+	t.Run("JobDeleteManyTxMinimal", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+		)
+
+		tx, execTx := beginTx(ctx, t, bundle)
+
+		deleteRes, err := client.JobDeleteManyTx(ctx, tx, river.NewJobDeleteManyParams())
+		require.NoError(t, err)
+		require.Len(t, deleteRes.Jobs, 2)
+		require.Equal(t, job1.ID, deleteRes.Jobs[0].ID)
+		require.Equal(t, job2.ID, deleteRes.Jobs[1].ID)
+
+		_, err = execTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: bundle.schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = execTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: bundle.schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+
+		// SQLite can't support multiple concurrent transactions, so skip this extra check there.
+		if bundle.driver.DatabaseName() != databaseNameSQLite {
+			_, otherExecTx := beginTx(ctx, t, bundle)
+
+			// Jobs present because other transaction doesn't see the deletions.
+			_, err = otherExecTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: bundle.schema})
+			require.NoError(t, err)
+			_, err = otherExecTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: bundle.schema})
+			require.NoError(t, err)
+		}
+	})
+
+	t.Run("JobDeleteManyTxAllArgs", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+		)
+
+		tx, execTx := beginTx(ctx, t, bundle)
+
+		deleteRes, err := client.JobDeleteManyTx(ctx, tx,
+			river.NewJobDeleteManyParams().
+				IDs(job1.ID).
+				Kinds(job1.Kind).
+				Priorities(int16(min(job1.Priority, math.MaxInt16))). //nolint:gosec
+				Queues(job1.Queue).
+				States(job1.State),
+		)
+		require.NoError(t, err)
+		require.Len(t, deleteRes.Jobs, 1)
+		require.Equal(t, job1.ID, deleteRes.Jobs[0].ID)
+
+		_, err = execTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: bundle.schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = execTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+	})
+
 	t.Run("JobGet", func(t *testing.T) {
 		t.Parallel()
 

@@ -191,6 +191,69 @@ func (q *Queries) JobDeleteBefore(ctx context.Context, db DBTX, arg *JobDeleteBe
 	)
 }
 
+const jobDeleteMany = `-- name: JobDeleteMany :many
+WITH jobs_to_delete AS (
+    SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
+    FROM /* TEMPLATE: schema */river_job
+    WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */
+        AND state != 'running'
+    ORDER BY /* TEMPLATE_BEGIN: order_by_clause */ id /* TEMPLATE_END */
+    LIMIT $1::int
+    FOR UPDATE
+    SKIP LOCKED
+),
+deleted_jobs AS (
+    DELETE FROM /* TEMPLATE: schema */river_job
+    WHERE id IN (SELECT id FROM jobs_to_delete)
+    RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
+)
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
+FROM /* TEMPLATE: schema */river_job
+WHERE id IN (SELECT id FROM deleted_jobs)
+ORDER BY /* TEMPLATE_BEGIN: order_by_clause */ id /* TEMPLATE_END */
+`
+
+// this last SELECT step is necessary because there's no other way to define
+// order records come back from a DELETE statement
+func (q *Queries) JobDeleteMany(ctx context.Context, db DBTX, max int32) ([]*RiverJob, error) {
+	rows, err := db.Query(ctx, jobDeleteMany, max)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverJob
+	for rows.Next() {
+		var i RiverJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Args,
+			&i.Attempt,
+			&i.AttemptedAt,
+			&i.AttemptedBy,
+			&i.CreatedAt,
+			&i.Errors,
+			&i.FinalizedAt,
+			&i.Kind,
+			&i.MaxAttempts,
+			&i.Metadata,
+			&i.Priority,
+			&i.Queue,
+			&i.State,
+			&i.ScheduledAt,
+			&i.Tags,
+			&i.UniqueKey,
+			&i.UniqueStates,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const jobGetAvailable = `-- name: JobGetAvailable :many
 WITH locked_jobs AS (
     SELECT
@@ -886,7 +949,7 @@ func (q *Queries) JobInsertFullMany(ctx context.Context, db DBTX, arg *JobInsert
 const jobList = `-- name: JobList :many
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 FROM /* TEMPLATE: schema */river_job
-WHERE /* TEMPLATE_BEGIN: where_clause */ 1 /* TEMPLATE_END */
+WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */
 ORDER BY /* TEMPLATE_BEGIN: order_by_clause */ id /* TEMPLATE_END */
 LIMIT $1::int
 `

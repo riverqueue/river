@@ -2052,6 +2052,71 @@ func validateQueueName(queueName string) error {
 	return nil
 }
 
+// JobDeleteManyResult is the result of a job list operation. It contains a list of
+// jobs and a cursor for fetching the next page of results.
+type JobDeleteManyResult struct {
+	// Jobs is a slice of job returned as part of the list operation.
+	Jobs []*rivertype.JobRow
+}
+
+// JobDeleteMany deletes many jobs at once based on the conditions defined by
+// JobDeleteManyParams. Running jobs are always ignored.
+//
+//	params := river.NewJobDeleteManyParams().First(10).State(rivertype.JobStateCompleted)
+//	jobRows, err := client.JobDeleteMany(ctx, params)
+//	if err != nil {
+//		// handle error
+//	}
+func (c *Client[TTx]) JobDeleteMany(ctx context.Context, params *JobDeleteManyParams) (*JobDeleteManyResult, error) {
+	if !c.driver.PoolIsSet() {
+		return nil, errNoDriverDBPool
+	}
+
+	if params == nil {
+		params = NewJobDeleteManyParams()
+	}
+	params.schema = c.config.Schema
+
+	listParams, err := dblist.JobMakeDriverParams(ctx, params.toDBParams(), c.driver.SQLFragmentColumnIn)
+	if err != nil {
+		return nil, err
+	}
+
+	jobs, err := c.driver.GetExecutor().JobDeleteMany(ctx, (*riverdriver.JobDeleteManyParams)(listParams))
+	if err != nil {
+		return nil, err
+	}
+
+	return &JobDeleteManyResult{Jobs: jobs}, nil
+}
+
+// JobDeleteManyTx deletes many jobs at once based on the conditions defined by
+// JobDeleteManyParams. Running jobs are always ignored.
+//
+//	params := river.NewJobDeleteManyParams().First(10).States(river.JobStateCompleted)
+//	jobRows, err := client.JobDeleteManyTx(ctx, tx, params)
+//	if err != nil {
+//		// handle error
+//	}
+func (c *Client[TTx]) JobDeleteManyTx(ctx context.Context, tx TTx, params *JobDeleteManyParams) (*JobDeleteManyResult, error) {
+	if params == nil {
+		params = NewJobDeleteManyParams()
+	}
+	params.schema = c.config.Schema
+
+	listParams, err := dblist.JobMakeDriverParams(ctx, params.toDBParams(), c.driver.SQLFragmentColumnIn)
+	if err != nil {
+		return nil, err
+	}
+
+	jobs, err := c.driver.UnwrapExecutor(tx).JobDeleteMany(ctx, (*riverdriver.JobDeleteManyParams)(listParams))
+	if err != nil {
+		return nil, err
+	}
+
+	return &JobDeleteManyResult{Jobs: jobs}, nil
+}
+
 // JobListResult is the result of a job list operation. It contains a list of
 // jobs and a cursor for fetching the next page of results.
 type JobListResult struct {
@@ -2094,10 +2159,16 @@ func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) (*JobL
 		return nil, err
 	}
 
-	jobs, err := dblist.JobList(ctx, c.driver.GetExecutor(), dbParams, c.driver.SQLFragmentColumnIn)
+	listParams, err := dblist.JobMakeDriverParams(ctx, dbParams, c.driver.SQLFragmentColumnIn)
 	if err != nil {
 		return nil, err
 	}
+
+	jobs, err := c.driver.GetExecutor().JobList(ctx, listParams)
+	if err != nil {
+		return nil, err
+	}
+
 	res := &JobListResult{Jobs: jobs}
 	if len(jobs) > 0 {
 		res.LastCursor = jobListCursorFromJobAndParams(jobs[len(jobs)-1], params)
@@ -2129,10 +2200,16 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 		return nil, err
 	}
 
-	jobs, err := dblist.JobList(ctx, c.driver.UnwrapExecutor(tx), dbParams, c.driver.SQLFragmentColumnIn)
+	listParams, err := dblist.JobMakeDriverParams(ctx, dbParams, c.driver.SQLFragmentColumnIn)
 	if err != nil {
 		return nil, err
 	}
+
+	jobs, err := c.driver.UnwrapExecutor(tx).JobList(ctx, listParams)
+	if err != nil {
+		return nil, err
+	}
+
 	res := &JobListResult{Jobs: jobs}
 	if len(jobs) > 0 {
 		res.LastCursor = jobListCursorFromJobAndParams(jobs[len(jobs)-1], params)
