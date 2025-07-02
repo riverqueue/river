@@ -35,10 +35,10 @@ func (f HookWorkBeginFunc) IsHook() bool { return true }
 
 // HookWorkEndFunc is a convenience helper for implementing
 // rivertype.HookworkEnd using a simple function instead of a struct.
-type HookWorkEndFunc func(ctx context.Context, err error) error
+type HookWorkEndFunc func(ctx context.Context, job *rivertype.JobRow, err error) error
 
-func (f HookWorkEndFunc) WorkEnd(ctx context.Context, err error) error {
-	return f(ctx, err)
+func (f HookWorkEndFunc) WorkEnd(ctx context.Context, job *rivertype.JobRow, err error) error {
+	return f(ctx, job, err)
 }
 
 func (f HookWorkEndFunc) IsHook() bool { return true }

@@ -215,7 +215,7 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 				e.HookLookupGlobal.ByHookKind(hooklookup.HookKindWorkEnd),
 				e.WorkUnit.HookLookup(e.HookLookupByJob).ByHookKind(hooklookup.HookKindWorkEnd)...,
 			) {
-				err = hook.(rivertype.HookWorkEnd).WorkEnd(ctx, err) //nolint:forcetypeassert
+				err = hook.(rivertype.HookWorkEnd).WorkEnd(ctx, e.JobRow, err) //nolint:forcetypeassert
 			}
 		}
 
