@@ -169,7 +169,19 @@ SET
     state = 'running',
     attempt = river_job.attempt + 1,
     attempted_at = coalesce(sqlc.narg('now')::timestamptz, now()),
-    attempted_by = array_append(river_job.attempted_by, @attempted_by::text)
+    attempted_by = CASE WHEN array_length(river_job.attempted_by, 1) >= @max_attempted_by::int
+                        THEN array_append(
+                            -- +2 instead of +1 because in one of those history
+                            -- making mistakes that's likely in aggregate cost
+                            -- humanity >$10B in bugs and lost productivity by
+                            -- now, like strings, Postgres array indexing start
+                            -- at 1 instead of 0.
+                            river_job.attempted_by[array_length(river_job.attempted_by,
+                            1) + 2 - @max_attempted_by:],
+                            @attempted_by::text
+                        )
+                        ELSE array_append(river_job.attempted_by, @attempted_by::text)
+                        END
 FROM
     locked_jobs
 WHERE

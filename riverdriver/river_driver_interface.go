@@ -365,12 +365,13 @@ type JobDeleteManyParams struct {
 }
 
 type JobGetAvailableParams struct {
-	ClientID   string
-	Max        int
-	Now        *time.Time
-	ProducerID int64
-	Queue      string
-	Schema     string
+	ClientID       string
+	Max            int
+	MaxAttemptedBy int
+	Now            *time.Time
+	ProducerID     int64
+	Queue          string
+	Schema         string
 }
 
 type JobGetByIDParams struct {
