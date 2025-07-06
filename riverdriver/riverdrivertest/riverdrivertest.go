@@ -2302,6 +2302,32 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			require.Error(t, err)
 			require.ErrorIs(t, err, rivertype.ErrNotFound)
 		})
+
+		t.Run("SetsStatePendingWhenSeqKeyPresent", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+
+			now := time.Now().UTC()
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				ScheduledAt: ptrutil.Ptr(now.Add(1 * time.Hour)),
+				State:       ptrutil.Ptr(rivertype.JobStateRetryable),
+				Metadata:    []byte(`{"seq_key":"foo"}`),
+			})
+
+			jobAfter, err := exec.JobRetry(ctx, &riverdriver.JobRetryParams{
+				ID:  job.ID,
+				Now: &now,
+			})
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStatePending, jobAfter.State)
+			require.WithinDuration(t, now, jobAfter.ScheduledAt, bundle.driver.TimePrecision())
+
+			jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStatePending, jobUpdated.State)
+		})
 	})
 
 	t.Run("JobSchedule", func(t *testing.T) {

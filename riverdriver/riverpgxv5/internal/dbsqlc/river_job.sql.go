@@ -1041,7 +1041,10 @@ WITH job_to_update AS (
 updated_job AS (
     UPDATE /* TEMPLATE: schema */river_job
     SET
-        state = 'available',
+        state = CASE WHEN river_job.metadata ? 'seq_key'
+            THEN 'pending'::/* TEMPLATE: schema */river_job_state
+            ELSE 'available'::/* TEMPLATE: schema */river_job_state
+        END,
         max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END,
         finalized_at = NULL,
         scheduled_at = coalesce($2::timestamptz, now())

@@ -320,7 +320,7 @@ WHERE id = @id;
 -- name: JobRetry :one
 UPDATE /* TEMPLATE: schema */river_job
 SET
-    state = 'available',
+    state = CASE WHEN river_job.metadata -> 'seq_key' IS NOT NULL THEN 'pending' ELSE 'available' END,
     max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END,
     finalized_at = NULL,
     scheduled_at = coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec'))
