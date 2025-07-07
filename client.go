@@ -1412,11 +1412,7 @@ func (c *Client[TTx]) JobGetTx(ctx context.Context, tx TTx, id int64) (*rivertyp
 // MaxAttempts is also incremented by one if the job has already exhausted its
 // max attempts.
 func (c *Client[TTx]) JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, error) {
-	return c.driver.GetExecutor().JobRetry(ctx, &riverdriver.JobRetryParams{
-		ID:     id,
-		Now:    c.baseService.Time.NowUTCOrNil(),
-		Schema: c.config.Schema,
-	})
+	return c.jobRetry(ctx, c.driver.GetExecutor(), id)
 }
 
 // JobRetryTx updates the job with the given ID to make it immediately available
@@ -1433,7 +1429,11 @@ func (c *Client[TTx]) JobRetry(ctx context.Context, id int64) (*rivertype.JobRow
 // MaxAttempts is also incremented by one if the job has already exhausted its
 // max attempts.
 func (c *Client[TTx]) JobRetryTx(ctx context.Context, tx TTx, id int64) (*rivertype.JobRow, error) {
-	return c.driver.UnwrapExecutor(tx).JobRetry(ctx, &riverdriver.JobRetryParams{
+	return c.jobRetry(ctx, c.driver.UnwrapExecutor(tx), id)
+}
+
+func (c *Client[TTx]) jobRetry(ctx context.Context, exec riverdriver.Executor, id int64) (*rivertype.JobRow, error) {
+	return c.pilot.JobRetry(ctx, exec, &riverdriver.JobRetryParams{
 		ID:     id,
 		Now:    c.baseService.Time.NowUTCOrNil(),
 		Schema: c.config.Schema,

@@ -28,6 +28,10 @@ func (p *StandardPilot) JobInsertMany(
 	return exec.JobInsertFastMany(ctx, params)
 }
 
+func (p *StandardPilot) JobRetry(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobRetryParams) (*rivertype.JobRow, error) {
+	return exec.JobRetry(ctx, params)
+}
+
 func (p *StandardPilot) JobSetStateIfRunningMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
 	return exec.JobSetStateIfRunningMany(ctx, params)
 }
