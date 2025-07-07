@@ -210,42 +210,40 @@ UPDATE /* TEMPLATE: schema */river_job
 SET
     attempt = river_job.attempt + 1,
     attempted_at = coalesce(cast(?1 AS text), datetime('now', 'subsec')),
-    attempted_by = json_insert(coalesce(attempted_by, json('[]')), '$[#]', cast(?2 AS text)),
+
+    -- This is replaced in the driver to work around sqlc bugs for SQLite. See
+    -- comments there for more details.
+    attempted_by = /* TEMPLATE_BEGIN: attempted_by_clause */ attempted_by /* TEMPLATE_END */,
+
     state = 'running'
 WHERE id IN (
     SELECT id
     FROM /* TEMPLATE: schema */river_job
     WHERE
         priority >= 0
-        AND river_job.queue = ?3
+        AND river_job.queue = ?2
         AND scheduled_at <= coalesce(cast(?1 AS text), datetime('now', 'subsec'))
         AND state = 'available'
     ORDER BY
         priority ASC,
         scheduled_at ASC,
         id ASC
-    LIMIT ?4
+    LIMIT ?3
 )
 RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 `
 
 type JobGetAvailableParams struct {
-	Now         *string
-	AttemptedBy string
-	Queue       string
-	Max         int64
+	Now       *string
+	Queue     string
+	MaxToLock int64
 }
 
 // Differs from the Postgres version in that we don't have `FOR UPDATE SKIP
 // LOCKED`. It doesn't exist in SQLite, but more aptly, there's only one writer
 // on SQLite at a time, so nothing else has the rows locked.
 func (q *Queries) JobGetAvailable(ctx context.Context, db DBTX, arg *JobGetAvailableParams) ([]*RiverJob, error) {
-	rows, err := db.QueryContext(ctx, jobGetAvailable,
-		arg.Now,
-		arg.AttemptedBy,
-		arg.Queue,
-		arg.Max,
-	)
+	rows, err := db.QueryContext(ctx, jobGetAvailable, arg.Now, arg.Queue, arg.MaxToLock)
 	if err != nil {
 		return nil, err
 	}

@@ -159,7 +159,7 @@ WITH locked_jobs AS (
         priority ASC,
         scheduled_at ASC,
         id ASC
-    LIMIT @max::integer
+    LIMIT @max_to_lock::integer
     FOR UPDATE
     SKIP LOCKED
 )
@@ -169,7 +169,14 @@ SET
     state = 'running',
     attempt = river_job.attempt + 1,
     attempted_at = coalesce(sqlc.narg('now')::timestamptz, now()),
-    attempted_by = array_append(river_job.attempted_by, @attempted_by::text)
+    attempted_by = array_append(
+        CASE WHEN array_length(river_job.attempted_by, 1) >= @max_attempted_by::int
+        -- +2 instead of +1 because Postgres array indexing starts at 1, not 0.
+        THEN river_job.attempted_by[array_length(river_job.attempted_by, 1) + 2 - @max_attempted_by:]
+        ELSE river_job.attempted_by
+        END,
+        @attempted_by::text
+    )
 FROM
     locked_jobs
 WHERE

@@ -159,9 +159,9 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		// Fetch the job to make sure it's marked as running:
 		jobs, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
-			Max:   1,
-			Now:   ptrutil.Ptr(now),
-			Queue: rivercommon.QueueDefault,
+			MaxToLock: 1,
+			Now:       ptrutil.Ptr(now),
+			Queue:     rivercommon.QueueDefault,
 		})
 		require.NoError(t, err)
 

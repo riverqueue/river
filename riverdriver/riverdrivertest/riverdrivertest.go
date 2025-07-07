@@ -1004,6 +1004,11 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	t.Run("JobGetAvailable", func(t *testing.T) {
 		t.Parallel()
 
+		const (
+			maxAttemptedBy = 10
+			maxToLock      = 100
+		)
+
 		t.Run("Success", func(t *testing.T) {
 			t.Parallel()
 
@@ -1012,9 +1017,10 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
 
 			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
-				ClientID: clientID,
-				Max:      100,
-				Queue:    rivercommon.QueueDefault,
+				ClientID:       clientID,
+				MaxAttemptedBy: maxAttemptedBy,
+				MaxToLock:      maxToLock,
+				Queue:          rivercommon.QueueDefault,
 			})
 			require.NoError(t, err)
 			require.Len(t, jobRows, 1)
@@ -1033,9 +1039,10 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			// Two rows inserted but only one found because of the added limit.
 			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
-				ClientID: clientID,
-				Max:      1,
-				Queue:    rivercommon.QueueDefault,
+				ClientID:       clientID,
+				MaxAttemptedBy: maxAttemptedBy,
+				MaxToLock:      1,
+				Queue:          rivercommon.QueueDefault,
 			})
 			require.NoError(t, err)
 			require.Len(t, jobRows, 1)
@@ -1052,9 +1059,10 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			// Job is in a non-default queue so it's not found.
 			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
-				ClientID: clientID,
-				Max:      100,
-				Queue:    rivercommon.QueueDefault,
+				ClientID:       clientID,
+				MaxAttemptedBy: maxAttemptedBy,
+				MaxToLock:      maxToLock,
+				Queue:          rivercommon.QueueDefault,
 			})
 			require.NoError(t, err)
 			require.Empty(t, jobRows)
@@ -1073,10 +1081,11 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			// Job is scheduled a while from now so it's not found.
 			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
-				ClientID: clientID,
-				Max:      100,
-				Now:      &now,
-				Queue:    rivercommon.QueueDefault,
+				ClientID:       clientID,
+				MaxAttemptedBy: maxAttemptedBy,
+				MaxToLock:      maxToLock,
+				Now:            &now,
+				Queue:          rivercommon.QueueDefault,
 			})
 			require.NoError(t, err)
 			require.Empty(t, jobRows)
@@ -1098,10 +1107,11 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			})
 
 			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
-				ClientID: clientID,
-				Max:      100,
-				Now:      ptrutil.Ptr(now),
-				Queue:    rivercommon.QueueDefault,
+				ClientID:       clientID,
+				MaxAttemptedBy: maxAttemptedBy,
+				MaxToLock:      maxToLock,
+				Now:            ptrutil.Ptr(now),
+				Queue:          rivercommon.QueueDefault,
 			})
 			require.NoError(t, err)
 			require.Len(t, jobRows, 1)
@@ -1121,9 +1131,10 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			}
 
 			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
-				ClientID: clientID,
-				Max:      2,
-				Queue:    rivercommon.QueueDefault,
+				ClientID:       clientID,
+				MaxAttemptedBy: maxAttemptedBy,
+				MaxToLock:      2,
+				Queue:          rivercommon.QueueDefault,
 			})
 			require.NoError(t, err)
 			require.Len(t, jobRows, 2, "expected to fetch exactly 2 jobs")
@@ -1140,14 +1151,83 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			// Should fetch the one remaining job on the next attempt:
 			jobRows, err = exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
-				ClientID: clientID,
-				Max:      1,
-				Queue:    rivercommon.QueueDefault,
+				ClientID:       clientID,
+				MaxAttemptedBy: maxAttemptedBy,
+				MaxToLock:      1,
+				Queue:          rivercommon.QueueDefault,
 			})
 			require.NoError(t, err)
 			require.NoError(t, err)
 			require.Len(t, jobRows, 1, "expected to fetch exactly 1 job")
 			require.Equal(t, 3, jobRows[0].Priority, "expected final job to have priority 3")
+		})
+
+		t.Run("AttemptedByAtMaxTruncated", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			attemptedBy := make([]string, maxAttemptedBy)
+			for i := range maxAttemptedBy {
+				attemptedBy[i] = "attempt_" + strconv.Itoa(i)
+			}
+
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				AttemptedBy: attemptedBy,
+			})
+
+			// Job is in a non-default queue so it's not found.
+			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+				ClientID:       clientID,
+				MaxAttemptedBy: maxAttemptedBy,
+				MaxToLock:      maxToLock,
+				Queue:          rivercommon.QueueDefault,
+			})
+			require.NoError(t, err)
+			require.Len(t, jobRows, 1)
+
+			jobRow := jobRows[0]
+			require.Equal(t, append(
+				attemptedBy[1:],
+				clientID,
+			), jobRow.AttemptedBy)
+			require.Len(t, jobRow.AttemptedBy, maxAttemptedBy)
+		})
+
+		// Almost identical to the above, but tests that there are more existing
+		// `attempted_by` elements than the maximum allowed. There's a fine bug
+		// around use of > versus >= in the query's conditional, so make sure to
+		// capture both cases to make sure they work.
+		t.Run("AttemptedByOverMaxTruncated", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			attemptedBy := make([]string, maxAttemptedBy+1)
+			for i := range maxAttemptedBy + 1 {
+				attemptedBy[i] = "attempt_" + strconv.Itoa(i)
+			}
+
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				AttemptedBy: attemptedBy,
+			})
+
+			// Job is in a non-default queue so it's not found.
+			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+				ClientID:       clientID,
+				MaxAttemptedBy: maxAttemptedBy,
+				MaxToLock:      maxToLock,
+				Queue:          rivercommon.QueueDefault,
+			})
+			require.NoError(t, err)
+			require.Len(t, jobRows, 1)
+
+			jobRow := jobRows[0]
+			require.Equal(t, append(
+				attemptedBy[2:], // start at 2 because there were 2 extra elements
+				clientID,
+			), jobRow.AttemptedBy)
+			require.Len(t, jobRow.AttemptedBy, maxAttemptedBy)
 		})
 	})
 
