@@ -1,8 +1,10 @@
 package rivertest
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -248,6 +250,29 @@ func TestWorker_Work(t *testing.T) {
 		res, err := tw.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, nil)
 		require.NoError(t, err)
 		require.Equal(t, river.EventKindJobCancelled, res.EventKind)
+	})
+
+	t.Run("UsesACustomLoggerWhenProvided", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		var logBuf bytes.Buffer
+		bundle.config.Logger = slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{
+			Level: slog.LevelInfo,
+		}))
+
+		// Return an error here because normal execution doesn't produce any
+		// logging that we can use to match on.
+		expectedErr := errors.New("my error that will be logged")
+		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
+			return expectedErr
+		})
+		tw := NewWorker(t, bundle.driver, bundle.config, worker)
+		_, err := tw.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, nil)
+		require.EqualError(t, err, expectedErr.Error())
+
+		require.Contains(t, logBuf.String(), expectedErr.Error())
 	})
 
 	t.Run("UsesACustomClockWhenProvided", func(t *testing.T) {

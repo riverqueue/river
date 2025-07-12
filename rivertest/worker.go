@@ -139,6 +139,9 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 	exec := w.client.Driver().UnwrapExecutor(tx)
 	subscribeCh := make(chan []jobcompleter.CompleterJobUpdated, 1)
 	archetype := riversharedtest.BaseServiceArchetype(tb)
+	if w.config.Logger != nil {
+		archetype.Logger = w.config.Logger
+	}
 	if withStub, ok := timeGen.(baseservice.TimeGeneratorWithStub); ok {
 		archetype.Time = withStub
 	} else {
