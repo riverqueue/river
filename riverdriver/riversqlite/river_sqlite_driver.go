@@ -220,6 +220,22 @@ func (e *Executor) IndexReindex(ctx context.Context, params *riverdriver.IndexRe
 	return interpretError(err)
 }
 
+func (e *Executor) IndexesExist(ctx context.Context, params *riverdriver.IndexesExistParams) (map[string]bool, error) {
+	exists := make(map[string]bool)
+	for _, index := range params.IndexNames {
+		indexExists, err := e.IndexExists(ctx, &riverdriver.IndexExistsParams{
+			Index:  index,
+			Schema: params.Schema,
+		})
+		if err != nil {
+			return nil, err
+		}
+		exists[index] = indexExists
+	}
+
+	return exists, nil
+}
+
 func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error) {
 	// Unlike Postgres, this must be carried out in two operations because
 	// SQLite doesn't support CTEs containing `UPDATE`. As long as the job

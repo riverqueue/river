@@ -179,6 +179,22 @@ func (e *Executor) IndexReindex(ctx context.Context, params *riverdriver.IndexRe
 	return interpretError(err)
 }
 
+func (e *Executor) IndexesExist(ctx context.Context, params *riverdriver.IndexesExistParams) (map[string]bool, error) {
+	rows, err := dbsqlc.New().IndexesExist(ctx, e.dbtx, &dbsqlc.IndexesExistParams{
+		IndexNames: params.IndexNames,
+		Schema:     pgtype.Text{String: params.Schema, Valid: params.Schema != ""},
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+
+	exists := make(map[string]bool)
+	for _, row := range rows {
+		exists[row.IndexName] = row.Exists
+	}
+	return exists, nil
+}
+
 func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error) {
 	cancelledAt, err := params.CancelAttemptedAt.MarshalJSON()
 	if err != nil {

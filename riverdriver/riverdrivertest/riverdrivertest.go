@@ -561,6 +561,45 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		require.NoError(t, err)
 	})
 
+	t.Run("IndexesExist", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("ReturnsTrueIfIndexExistsInSchema", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			exists, err := exec.IndexesExist(ctx, &riverdriver.IndexesExistParams{
+				IndexNames: []string{"river_job_kind", "river_job_prioritized_fetching_index", "special_index"},
+				Schema:     "", // empty schema means current schema
+			})
+			require.NoError(t, err)
+
+			require.True(t, exists["river_job_kind"])
+			require.True(t, exists["river_job_prioritized_fetching_index"])
+			require.False(t, exists["special_index"])
+		})
+
+		t.Run("ReturnsFalseIfIndexDoesNotExistInAlternateSchema", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+
+			exists, err := exec.IndexesExist(ctx, &riverdriver.IndexesExistParams{
+				IndexNames: []string{"river_job_kind", "river_job_prioritized_fetching_index"},
+				Schema:     "custom_schema_that_does_not_exist",
+			})
+			if bundle.driver.DatabaseName() == databaseNameSQLite {
+				requireMissingRelation(t, err, "custom_schema_that_does_not_exist", "sqlite_master")
+			} else {
+				require.NoError(t, err)
+
+				require.False(t, exists["river_job_kind"])
+				require.False(t, exists["river_job_prioritized_fetching_index"])
+			}
+		})
+	})
+
 	t.Run("JobCancel", func(t *testing.T) {
 		t.Parallel()
 

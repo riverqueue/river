@@ -190,6 +190,7 @@ type Executor interface {
 	// API is not stable. DO NOT USE.
 	IndexDropIfExists(ctx context.Context, params *IndexDropIfExistsParams) error
 	IndexExists(ctx context.Context, params *IndexExistsParams) (bool, error)
+	IndexesExist(ctx context.Context, params *IndexesExistParams) (map[string]bool, error)
 
 	// IndexReindex reindexes a database index. This abstraction is a little
 	// leaky right now because Postgres runs this `CONCURRENTLY` and that's not
@@ -321,13 +322,18 @@ type ColumnExistsParams struct {
 }
 
 type IndexDropIfExistsParams struct {
-	Schema string
 	Index  string
+	Schema string
 }
 
 type IndexExistsParams struct {
-	Schema string
 	Index  string
+	Schema string
+}
+
+type IndexesExistParams struct {
+	IndexNames []string
+	Schema     string
 }
 
 type JobCancelParams struct {
