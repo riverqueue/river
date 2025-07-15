@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The project now tests against [libSQL](https://github.com/tursodatabase/libsql), a popular SQLite fork. It's used through the same `riversqlite` driver that SQLite uses. [PR #957](https://github.com/riverqueue/river/pull/957)
 - Added `JobDeleteMany` operations that remove many jobs in a single operation according to input criteria. [PR #962](https://github.com/riverqueue/river/pull/962)
-- Added `Client.Schema()` method to return a client's configured schema. [PR #XXX](https://github.com/riverqueue/river/pull/XXX).
+- Added `Client.Schema()` method to return a client's configured schema. [PR #983](https://github.com/riverqueue/river/pull/983).
+- Integrated riverui queries into the driver system to pave the way for multi-driver UI support. [PR #983](https://github.com/riverqueue/river/pull/983).
 
 ### Changed
 
