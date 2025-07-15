@@ -1195,7 +1195,7 @@ func (e *Executor) QueueGet(ctx context.Context, params *riverdriver.QueueGetPar
 }
 
 func (e *Executor) QueueList(ctx context.Context, params *riverdriver.QueueListParams) ([]*rivertype.Queue, error) {
-	queues, err := dbsqlc.New().QueueList(schemaTemplateParam(ctx, params.Schema), e.dbtx, int64(params.Limit))
+	queues, err := dbsqlc.New().QueueList(schemaTemplateParam(ctx, params.Schema), e.dbtx, int64(params.Max))
 	if err != nil {
 		return nil, interpretError(err)
 	}

@@ -2292,7 +2292,7 @@ func (c *Client[TTx]) QueueList(ctx context.Context, params *QueueListParams) (*
 	}
 
 	queues, err := c.driver.GetExecutor().QueueList(ctx, &riverdriver.QueueListParams{
-		Limit:  int(params.paginationCount),
+		Max:    int(params.paginationCount),
 		Schema: c.config.Schema,
 	})
 	if err != nil {
@@ -2319,7 +2319,7 @@ func (c *Client[TTx]) QueueListTx(ctx context.Context, tx TTx, params *QueueList
 	}
 
 	queues, err := c.driver.UnwrapExecutor(tx).QueueList(ctx, &riverdriver.QueueListParams{
-		Limit:  int(params.paginationCount),
+		Max:    int(params.paginationCount),
 		Schema: c.config.Schema,
 	})
 	if err != nil {

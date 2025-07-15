@@ -3870,7 +3870,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		}
 
 		queues, err := exec.QueueList(ctx, &riverdriver.QueueListParams{
-			Limit: 10,
+			Max: 10,
 		})
 		require.NoError(t, err)
 		require.Empty(t, queues)
@@ -3883,7 +3883,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{})
 
 		queues, err = exec.QueueList(ctx, &riverdriver.QueueListParams{
-			Limit: 2,
+			Max: 2,
 		})
 		require.NoError(t, err)
 
@@ -3892,7 +3892,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		requireQueuesEqual(t, queue2, queues[1])
 
 		queues, err = exec.QueueList(ctx, &riverdriver.QueueListParams{
-			Limit: 3,
+			Max: 3,
 		})
 		require.NoError(t, err)
 

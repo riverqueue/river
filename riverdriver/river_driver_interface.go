@@ -745,7 +745,7 @@ type QueueGetParams struct {
 }
 
 type QueueListParams struct {
-	Limit  int
+	Max    int
 	Schema string
 }
 
