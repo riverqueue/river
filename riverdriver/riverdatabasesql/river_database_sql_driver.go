@@ -832,6 +832,19 @@ func (e *Executor) QueueList(ctx context.Context, params *riverdriver.QueueListP
 	return sliceutil.Map(queues, queueFromInternal), nil
 }
 
+func (e *Executor) QueueNameListByPrefix(ctx context.Context, params *riverdriver.QueueNameListByPrefixParams) ([]string, error) {
+	queueNames, err := dbsqlc.New().QueueNameListByPrefix(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueNameListByPrefixParams{
+		After:   params.After,
+		Exclude: params.Exclude,
+		Max:     int32(min(params.Max, math.MaxInt32)), //nolint:gosec
+		Prefix:  params.Prefix,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return queueNames, nil
+}
+
 func (e *Executor) QueuePause(ctx context.Context, params *riverdriver.QueuePauseParams) error {
 	rowsAffected, err := dbsqlc.New().QueuePause(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueuePauseParams{
 		Name: params.Name,

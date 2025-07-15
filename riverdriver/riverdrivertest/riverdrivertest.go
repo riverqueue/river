@@ -3900,6 +3900,51 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		requireQueuesEqual(t, queue3, queues[2])
 	})
 
+	t.Run("QueueNameListByPrefix", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("ListsQueuesInOrderWithMaxLimit", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_zzz")})
+			queue2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_aaa")})
+			queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_bbb")})
+			_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("different_prefix_queue")})
+
+			queueNames, err := exec.QueueNameListByPrefix(ctx, &riverdriver.QueueNameListByPrefixParams{
+				After:   "queue2",
+				Exclude: nil,
+				Max:     2,
+				Prefix:  "queue",
+				Schema:  "",
+			})
+			require.NoError(t, err)
+			require.Equal(t, []string{queue2.Name, queue3.Name}, queueNames) // sorted by name
+		})
+
+		t.Run("ExcludesQueueNamesInExcludeList", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			queue1 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_zzz")})
+			queue2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_aaa")})
+			queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_bbb")})
+
+			queueNames, err := exec.QueueNameListByPrefix(ctx, &riverdriver.QueueNameListByPrefixParams{
+				After:   "queue2",
+				Exclude: []string{queue2.Name},
+				Max:     2,
+				Prefix:  "queue",
+				Schema:  "",
+			})
+			require.NoError(t, err)
+			require.Equal(t, []string{queue3.Name, queue1.Name}, queueNames)
+		})
+	})
+
 	t.Run("QueuePause", func(t *testing.T) {
 		t.Parallel()
 

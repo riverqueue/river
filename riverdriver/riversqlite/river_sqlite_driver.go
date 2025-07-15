@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -1200,6 +1201,23 @@ func (e *Executor) QueueList(ctx context.Context, params *riverdriver.QueueListP
 		return nil, interpretError(err)
 	}
 	return sliceutil.Map(queues, queueFromInternal), nil
+}
+
+func (e *Executor) QueueNameListByPrefix(ctx context.Context, params *riverdriver.QueueNameListByPrefixParams) ([]string, error) {
+	exclude := params.Exclude
+	if exclude == nil {
+		exclude = []string{"**********"}
+	}
+	queueNames, err := dbsqlc.New().QueueNameListByPrefix(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueNameListByPrefixParams{
+		After:   params.After,
+		Exclude: exclude,
+		Max:     int64(min(params.Max, math.MaxInt32)), //nolint:gosec
+		Prefix:  params.Prefix,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return queueNames, nil
 }
 
 func (e *Executor) QueuePause(ctx context.Context, params *riverdriver.QueuePauseParams) error {

@@ -258,6 +258,7 @@ type Executor interface {
 	QueueDeleteExpired(ctx context.Context, params *QueueDeleteExpiredParams) ([]string, error)
 	QueueGet(ctx context.Context, params *QueueGetParams) (*rivertype.Queue, error)
 	QueueList(ctx context.Context, params *QueueListParams) ([]*rivertype.Queue, error)
+	QueueNameListByPrefix(ctx context.Context, params *QueueNameListByPrefixParams) ([]string, error)
 	QueuePause(ctx context.Context, params *QueuePauseParams) error
 	QueueResume(ctx context.Context, params *QueueResumeParams) error
 	QueueUpdate(ctx context.Context, params *QueueUpdateParams) (*rivertype.Queue, error)
@@ -747,6 +748,14 @@ type QueueGetParams struct {
 type QueueListParams struct {
 	Max    int
 	Schema string
+}
+
+type QueueNameListByPrefixParams struct {
+	After   string
+	Exclude []string
+	Max     int
+	Prefix  string
+	Schema  string
 }
 
 type QueuePauseParams struct {
