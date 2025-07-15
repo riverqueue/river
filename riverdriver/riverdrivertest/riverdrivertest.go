@@ -2146,6 +2146,51 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		assertJobEqualsInput(t, results[1], jobParams2)
 	})
 
+	t.Run("JobKindListByPrefix", func(t *testing.T) { //nolint:dupl
+		t.Parallel()
+
+		t.Run("ListsJobKindsInOrderWithMaxLimit", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_zzz")})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_aaa")})
+			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_bbb")})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("different_prefix_job")})
+
+			jobKinds, err := exec.JobKindListByPrefix(ctx, &riverdriver.JobKindListByPrefixParams{
+				After:   "job2",
+				Exclude: nil,
+				Max:     2,
+				Prefix:  "job",
+				Schema:  "",
+			})
+			require.NoError(t, err)
+			require.Equal(t, []string{job2.Kind, job3.Kind}, jobKinds) // sorted by name
+		})
+
+		t.Run("ExcludesJobKindsInExcludeList", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_zzz")})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_aaa")})
+			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_bbb")})
+
+			jobKinds, err := exec.JobKindListByPrefix(ctx, &riverdriver.JobKindListByPrefixParams{
+				After:   "job2",
+				Exclude: []string{job2.Kind},
+				Max:     2,
+				Prefix:  "job",
+				Schema:  "",
+			})
+			require.NoError(t, err)
+			require.Equal(t, []string{job3.Kind, job1.Kind}, jobKinds)
+		})
+	})
+
 	t.Run("JobList", func(t *testing.T) {
 		t.Parallel()
 
@@ -3900,7 +3945,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		requireQueuesEqual(t, queue3, queues[2])
 	})
 
-	t.Run("QueueNameListByPrefix", func(t *testing.T) {
+	t.Run("QueueNameListByPrefix", func(t *testing.T) { //nolint:dupl
 		t.Parallel()
 
 		t.Run("ListsQueuesInOrderWithMaxLimit", func(t *testing.T) {

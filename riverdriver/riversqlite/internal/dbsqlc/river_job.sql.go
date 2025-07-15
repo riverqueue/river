@@ -786,6 +786,59 @@ func (q *Queries) JobInsertFull(ctx context.Context, db DBTX, arg *JobInsertFull
 	return &i, err
 }
 
+const jobKindListByPrefix = `-- name: JobKindListByPrefix :many
+SELECT DISTINCT kind
+FROM /* TEMPLATE: schema */river_job
+WHERE (cast(?1 AS text) = '' OR kind LIKE cast(?1 AS text) || '%')
+    AND (cast(?2 AS text) = '' OR kind > cast(?2 AS text))
+    AND kind NOT IN (/*SLICE:exclude*/?)
+ORDER BY kind ASC
+LIMIT ?4
+`
+
+type JobKindListByPrefixParams struct {
+	Prefix  string
+	After   string
+	Exclude []string
+	Max     int64
+}
+
+func (q *Queries) JobKindListByPrefix(ctx context.Context, db DBTX, arg *JobKindListByPrefixParams) ([]string, error) {
+	query := jobKindListByPrefix
+	var queryParams []interface{}
+	queryParams = append(queryParams, arg.Prefix)
+	queryParams = append(queryParams, arg.After)
+	if len(arg.Exclude) > 0 {
+		for _, v := range arg.Exclude {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:exclude*/?", strings.Repeat(",?", len(arg.Exclude))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:exclude*/?", "NULL", 1)
+	}
+	queryParams = append(queryParams, arg.Max)
+	rows, err := db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var kind string
+		if err := rows.Scan(&kind); err != nil {
+			return nil, err
+		}
+		items = append(items, kind)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const jobList = `-- name: JobList :many
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 FROM /* TEMPLATE: schema */river_job

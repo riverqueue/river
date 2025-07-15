@@ -390,6 +390,15 @@ SELECT
 FROM raw_job_data
 RETURNING *;
 
+-- name: JobKindListByPrefix :many
+SELECT DISTINCT ON (kind) kind
+FROM /* TEMPLATE: schema */river_job
+WHERE (@prefix = '' OR kind ILIKE @prefix || '%')
+    AND (@after = '' OR kind > @after)
+    AND (@exclude::text[] IS NULL OR kind != ALL(@exclude))
+ORDER BY kind ASC
+LIMIT @max;
+
 -- name: JobList :many
 SELECT *
 FROM /* TEMPLATE: schema */river_job

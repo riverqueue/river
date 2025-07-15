@@ -976,6 +976,51 @@ func (q *Queries) JobInsertFullMany(ctx context.Context, db DBTX, arg *JobInsert
 	return items, nil
 }
 
+const jobKindListByPrefix = `-- name: JobKindListByPrefix :many
+SELECT DISTINCT ON (kind) kind
+FROM /* TEMPLATE: schema */river_job
+WHERE ($1 = '' OR kind ILIKE $1 || '%')
+    AND ($2 = '' OR kind > $2)
+    AND ($3::text[] IS NULL OR kind != ALL($3))
+ORDER BY kind ASC
+LIMIT $4
+`
+
+type JobKindListByPrefixParams struct {
+	Prefix  interface{}
+	After   interface{}
+	Exclude []string
+	Max     int32
+}
+
+func (q *Queries) JobKindListByPrefix(ctx context.Context, db DBTX, arg *JobKindListByPrefixParams) ([]string, error) {
+	rows, err := db.QueryContext(ctx, jobKindListByPrefix,
+		arg.Prefix,
+		arg.After,
+		pq.Array(arg.Exclude),
+		arg.Max,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var kind string
+		if err := rows.Scan(&kind); err != nil {
+			return nil, err
+		}
+		items = append(items, kind)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const jobList = `-- name: JobList :many
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 FROM /* TEMPLATE: schema */river_job

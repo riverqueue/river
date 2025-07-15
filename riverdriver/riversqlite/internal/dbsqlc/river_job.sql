@@ -286,6 +286,15 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     @unique_states
 ) RETURNING *;
 
+-- name: JobKindListByPrefix :many
+SELECT DISTINCT kind
+FROM /* TEMPLATE: schema */river_job
+WHERE (cast(@prefix AS text) = '' OR kind LIKE cast(@prefix AS text) || '%')
+    AND (cast(@after AS text) = '' OR kind > cast(@after AS text))
+    AND kind NOT IN (sqlc.slice('exclude'))
+ORDER BY kind ASC
+LIMIT @max;
+
 -- name: JobList :many
 SELECT *
 FROM /* TEMPLATE: schema */river_job

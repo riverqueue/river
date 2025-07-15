@@ -693,6 +693,23 @@ func (e *Executor) JobInsertFullMany(ctx context.Context, params *riverdriver.Jo
 	return insertRes, nil
 }
 
+func (e *Executor) JobKindListByPrefix(ctx context.Context, params *riverdriver.JobKindListByPrefixParams) ([]string, error) {
+	exclude := params.Exclude
+	if exclude == nil {
+		exclude = []string{"**********"}
+	}
+	kinds, err := dbsqlc.New().JobKindListByPrefix(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobKindListByPrefixParams{
+		After:   params.After,
+		Exclude: exclude,
+		Max:     int64(min(params.Max, math.MaxInt32)), //nolint:gosec
+		Prefix:  params.Prefix,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return kinds, nil
+}
+
 func (e *Executor) JobList(ctx context.Context, params *riverdriver.JobListParams) ([]*rivertype.JobRow, error) {
 	ctx = sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
 		"order_by_clause": {Value: params.OrderByClause},
