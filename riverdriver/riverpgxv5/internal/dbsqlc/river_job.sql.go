@@ -128,6 +128,71 @@ func (q *Queries) JobCountByAllStates(ctx context.Context, db DBTX) ([]*JobCount
 	return items, nil
 }
 
+const jobCountByQueueAndState = `-- name: JobCountByQueueAndState :many
+WITH all_queues AS (
+    SELECT unnest($1::text[])::text AS queue
+),
+
+running_job_counts AS (
+    SELECT
+        queue,
+        COUNT(*) AS count
+    FROM /* TEMPLATE: schema */river_job
+    WHERE queue = ANY($1::text[])
+        AND state = 'running'
+    GROUP BY queue
+),
+
+available_job_counts AS (
+    SELECT
+        queue,
+        COUNT(*) AS count
+    FROM
+      /* TEMPLATE: schema */river_job
+    WHERE queue = ANY($1::text[])
+        AND state = 'available'
+    GROUP BY queue
+)
+
+SELECT
+    all_queues.queue,
+    COALESCE(available_job_counts.count, 0) AS count_available,
+    COALESCE(running_job_counts.count, 0) AS count_running
+FROM
+    all_queues
+LEFT JOIN
+    running_job_counts ON all_queues.queue = running_job_counts.queue
+LEFT JOIN
+    available_job_counts ON all_queues.queue = available_job_counts.queue
+ORDER BY all_queues.queue ASC
+`
+
+type JobCountByQueueAndStateRow struct {
+	Queue          string
+	CountAvailable int64
+	CountRunning   int64
+}
+
+func (q *Queries) JobCountByQueueAndState(ctx context.Context, db DBTX, queueNames []string) ([]*JobCountByQueueAndStateRow, error) {
+	rows, err := db.Query(ctx, jobCountByQueueAndState, queueNames)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*JobCountByQueueAndStateRow
+	for rows.Next() {
+		var i JobCountByQueueAndStateRow
+		if err := rows.Scan(&i.Queue, &i.CountAvailable, &i.CountRunning); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const jobCountByState = `-- name: JobCountByState :one
 SELECT count(*)
 FROM /* TEMPLATE: schema */river_job

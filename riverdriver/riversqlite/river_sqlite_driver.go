@@ -290,6 +290,22 @@ func (e *Executor) JobCountByAllStates(ctx context.Context, params *riverdriver.
 	return countsMap, nil
 }
 
+func (e *Executor) JobCountByQueueAndState(ctx context.Context, params *riverdriver.JobCountByQueueAndStateParams) ([]*riverdriver.JobCountByQueueAndStateResult, error) {
+	rows, err := dbsqlc.New().JobCountByQueueAndState(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.QueueNames)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	results := make([]*riverdriver.JobCountByQueueAndStateResult, len(rows))
+	for i, row := range rows {
+		results[i] = &riverdriver.JobCountByQueueAndStateResult{
+			CountAvailable: row.CountAvailable,
+			CountRunning:   row.CountRunning,
+			Queue:          row.Queue,
+		}
+	}
+	return results, nil
+}
+
 func (e *Executor) JobCountByState(ctx context.Context, params *riverdriver.JobCountByStateParams) (int, error) {
 	numJobs, err := dbsqlc.New().JobCountByState(schemaTemplateParam(ctx, params.Schema), e.dbtx, string(params.State))
 	if err != nil {

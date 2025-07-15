@@ -102,6 +102,64 @@ func (q *Queries) JobCountByAllStates(ctx context.Context, db DBTX) ([]*JobCount
 	return items, nil
 }
 
+const jobCountByQueueAndState = `-- name: JobCountByQueueAndState :many
+WITH queue_stats AS (
+    SELECT
+        river_job.queue,
+        COUNT(CASE WHEN river_job.state = 'available' THEN 1 END) AS count_available,
+        COUNT(CASE WHEN river_job.state = 'running' THEN 1 END) AS count_running
+    FROM /* TEMPLATE: schema */river_job
+    WHERE river_job.queue IN (/*SLICE:queue_names*/?)
+    GROUP BY river_job.queue
+)
+
+SELECT
+    cast(queue AS text) AS queue,
+    count_available,
+    count_running
+FROM queue_stats
+ORDER BY queue ASC
+`
+
+type JobCountByQueueAndStateRow struct {
+	Queue          string
+	CountAvailable int64
+	CountRunning   int64
+}
+
+func (q *Queries) JobCountByQueueAndState(ctx context.Context, db DBTX, queueNames []string) ([]*JobCountByQueueAndStateRow, error) {
+	query := jobCountByQueueAndState
+	var queryParams []interface{}
+	if len(queueNames) > 0 {
+		for _, v := range queueNames {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:queue_names*/?", strings.Repeat(",?", len(queueNames))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:queue_names*/?", "NULL", 1)
+	}
+	rows, err := db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*JobCountByQueueAndStateRow
+	for rows.Next() {
+		var i JobCountByQueueAndStateRow
+		if err := rows.Scan(&i.Queue, &i.CountAvailable, &i.CountRunning); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const jobCountByState = `-- name: JobCountByState :one
 SELECT count(*)
 FROM /* TEMPLATE: schema */river_job
