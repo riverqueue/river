@@ -200,6 +200,7 @@ type Executor interface {
 	IndexReindex(ctx context.Context, params *IndexReindexParams) error
 
 	JobCancel(ctx context.Context, params *JobCancelParams) (*rivertype.JobRow, error)
+	JobCountByAllStates(ctx context.Context, params *JobCountByAllStatesParams) (map[rivertype.JobState]int, error)
 	JobCountByState(ctx context.Context, params *JobCountByStateParams) (int, error)
 	JobDelete(ctx context.Context, params *JobDeleteParams) (*rivertype.JobRow, error)
 	JobDeleteBefore(ctx context.Context, params *JobDeleteBeforeParams) (int, error)
@@ -344,6 +345,10 @@ type JobCancelParams struct {
 	ControlTopic      string
 	Now               *time.Time
 	Schema            string
+}
+
+type JobCountByAllStatesParams struct {
+	Schema string
 }
 
 type JobCountByStateParams struct {

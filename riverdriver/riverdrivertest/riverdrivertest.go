@@ -705,6 +705,54 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		})
 	})
 
+	t.Run("JobCountByAllStates", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("CountsJobsByState", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
+
+			countsByState, err := exec.JobCountByAllStates(ctx, &riverdriver.JobCountByAllStatesParams{
+				Schema: "",
+			})
+			require.NoError(t, err)
+
+			for _, state := range rivertype.JobStates() {
+				require.Contains(t, countsByState, state)
+				switch state { //nolint:exhaustive
+				case rivertype.JobStateAvailable:
+					require.Equal(t, 2, countsByState[state])
+				case rivertype.JobStateCancelled:
+					require.Equal(t, 1, countsByState[state])
+				case rivertype.JobStateCompleted:
+					require.Equal(t, 1, countsByState[state])
+				case rivertype.JobStateDiscarded:
+					require.Equal(t, 1, countsByState[state])
+				default:
+					require.Equal(t, 0, countsByState[state])
+				}
+			}
+		})
+
+		t.Run("AlternateSchema", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			_, err := exec.JobCountByAllStates(ctx, &riverdriver.JobCountByAllStatesParams{
+				Schema: "custom_schema",
+			})
+			requireMissingRelation(t, err, "custom_schema", "river_job")
+		})
+	})
+
 	t.Run("JobCountByState", func(t *testing.T) {
 		t.Parallel()
 

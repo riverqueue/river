@@ -275,6 +275,21 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 	})
 }
 
+func (e *Executor) JobCountByAllStates(ctx context.Context, params *riverdriver.JobCountByAllStatesParams) (map[rivertype.JobState]int, error) {
+	counts, err := dbsqlc.New().JobCountByAllStates(schemaTemplateParam(ctx, params.Schema), e.dbtx)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	countsMap := make(map[rivertype.JobState]int)
+	for _, state := range rivertype.JobStates() {
+		countsMap[state] = 0
+	}
+	for _, count := range counts {
+		countsMap[rivertype.JobState(count.State)] = int(count.Count)
+	}
+	return countsMap, nil
+}
+
 func (e *Executor) JobCountByState(ctx context.Context, params *riverdriver.JobCountByStateParams) (int, error) {
 	numJobs, err := dbsqlc.New().JobCountByState(schemaTemplateParam(ctx, params.Schema), e.dbtx, string(params.State))
 	if err != nil {

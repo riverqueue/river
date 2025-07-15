@@ -97,6 +97,37 @@ func (q *Queries) JobCancel(ctx context.Context, db DBTX, arg *JobCancelParams) 
 	return &i, err
 }
 
+const jobCountByAllStates = `-- name: JobCountByAllStates :many
+SELECT state, count(*)
+FROM /* TEMPLATE: schema */ river_job
+GROUP BY state
+`
+
+type JobCountByAllStatesRow struct {
+	State RiverJobState
+	Count int64
+}
+
+func (q *Queries) JobCountByAllStates(ctx context.Context, db DBTX) ([]*JobCountByAllStatesRow, error) {
+	rows, err := db.Query(ctx, jobCountByAllStates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*JobCountByAllStatesRow
+	for rows.Next() {
+		var i JobCountByAllStatesRow
+		if err := rows.Scan(&i.State, &i.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const jobCountByState = `-- name: JobCountByState :one
 SELECT count(*)
 FROM /* TEMPLATE: schema */river_job

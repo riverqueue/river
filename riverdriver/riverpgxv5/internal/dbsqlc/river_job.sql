@@ -80,6 +80,11 @@ UNION
 SELECT *
 FROM updated_job;
 
+-- name: JobCountByAllStates :many
+SELECT state, count(*)
+FROM /* TEMPLATE: schema */ river_job
+GROUP BY state;
+
 -- name: JobCountByState :one
 SELECT count(*)
 FROM /* TEMPLATE: schema */river_job

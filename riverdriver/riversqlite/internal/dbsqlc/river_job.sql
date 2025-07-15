@@ -50,6 +50,11 @@ WHERE id = @id
     AND finalized_at IS NULL
 RETURNING *;
 
+-- name: JobCountByAllStates :many
+SELECT state, count(*)
+FROM /* TEMPLATE: schema */river_job
+GROUP BY state;
+
 -- name: JobCountByState :one
 SELECT count(*)
 FROM /* TEMPLATE: schema */river_job
