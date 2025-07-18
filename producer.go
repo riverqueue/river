@@ -112,6 +112,8 @@ type producerConfig struct {
 	Schema                       string
 	StaleProducerRetentionPeriod time.Duration
 	Workers                      *Workers
+
+	Fifo bool
 }
 
 func (c *producerConfig) mustValidate() *producerConfig {
@@ -754,6 +756,7 @@ func (p *producer) dispatchWork(workCtx context.Context, count int, fetchResultC
 		Queue:          p.config.Queue,
 		ProducerID:     p.id.Load(),
 		Schema:         p.config.Schema,
+		Fifo:           p.config.Fifo,
 	})
 	if err != nil {
 		p.Logger.Error(p.Name+": Error fetching jobs", slog.String("err", err.Error()), slog.String("queue", p.config.Queue))

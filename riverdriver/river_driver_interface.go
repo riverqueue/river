@@ -372,6 +372,7 @@ type JobGetAvailableParams struct {
 	ProducerID     int64
 	Queue          string
 	Schema         string
+	Fifo           bool
 }
 
 type JobGetByIDParams struct {

@@ -257,7 +257,103 @@ func (q *Queries) JobDeleteMany(ctx context.Context, db DBTX, max int32) ([]*Riv
 	return items, nil
 }
 
-const jobGetAvailable = `-- name: JobGetAvailable :many
+const jobGetAvailableFifo = `-- name: JobGetAvailableFifo :many
+WITH locked_jobs AS (
+    SELECT
+        id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
+    FROM
+        /* TEMPLATE: schema */river_job
+    WHERE
+        state = 'available'
+        AND queue = $4::text
+        AND scheduled_at <= coalesce($1::timestamptz, now())
+    ORDER BY
+        priority ASC,
+        scheduled_at DESC,
+        id ASC
+    LIMIT $5::integer
+    FOR UPDATE
+    SKIP LOCKED
+)
+UPDATE
+    /* TEMPLATE: schema */river_job
+SET
+    state = 'running',
+    attempt = river_job.attempt + 1,
+    attempted_at = coalesce($1::timestamptz, now()),
+    attempted_by = array_append(
+        CASE WHEN array_length(river_job.attempted_by, 1) >= $2::int
+        -- +2 instead of +1 because Postgres array indexing starts at 1, not 0.
+        THEN river_job.attempted_by[array_length(river_job.attempted_by, 1) + 2 - $2:]
+        ELSE river_job.attempted_by
+        END,
+        $3::text
+    )
+FROM
+    locked_jobs
+WHERE
+    river_job.id = locked_jobs.id
+RETURNING
+    river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states
+`
+
+type JobGetAvailableFifoParams struct {
+	Now            *time.Time
+	MaxAttemptedBy int32
+	AttemptedBy    string
+	Queue          string
+	MaxToLock      int32
+}
+
+func (q *Queries) JobGetAvailableFifo(ctx context.Context, db DBTX, arg *JobGetAvailableFifoParams) ([]*RiverJob, error) {
+	rows, err := db.QueryContext(ctx, jobGetAvailableFifo,
+		arg.Now,
+		arg.MaxAttemptedBy,
+		arg.AttemptedBy,
+		arg.Queue,
+		arg.MaxToLock,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverJob
+	for rows.Next() {
+		var i RiverJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Args,
+			&i.Attempt,
+			&i.AttemptedAt,
+			pq.Array(&i.AttemptedBy),
+			&i.CreatedAt,
+			pq.Array(&i.Errors),
+			&i.FinalizedAt,
+			&i.Kind,
+			&i.MaxAttempts,
+			&i.Metadata,
+			&i.Priority,
+			&i.Queue,
+			&i.State,
+			&i.ScheduledAt,
+			pq.Array(&i.Tags),
+			&i.UniqueKey,
+			&i.UniqueStates,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const jobGetAvailableLifo = `-- name: JobGetAvailableLifo :many
 WITH locked_jobs AS (
     SELECT
         id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
@@ -297,7 +393,7 @@ RETURNING
     river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states
 `
 
-type JobGetAvailableParams struct {
+type JobGetAvailableLifoParams struct {
 	Now            *time.Time
 	MaxAttemptedBy int32
 	AttemptedBy    string
@@ -305,8 +401,8 @@ type JobGetAvailableParams struct {
 	MaxToLock      int32
 }
 
-func (q *Queries) JobGetAvailable(ctx context.Context, db DBTX, arg *JobGetAvailableParams) ([]*RiverJob, error) {
-	rows, err := db.QueryContext(ctx, jobGetAvailable,
+func (q *Queries) JobGetAvailableLifo(ctx context.Context, db DBTX, arg *JobGetAvailableLifoParams) ([]*RiverJob, error) {
+	rows, err := db.QueryContext(ctx, jobGetAvailableLifo,
 		arg.Now,
 		arg.MaxAttemptedBy,
 		arg.AttemptedBy,

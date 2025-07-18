@@ -95,7 +95,7 @@ RETURNING *;
 -- Differs from the Postgres version in that we don't have `FOR UPDATE SKIP
 -- LOCKED`. It doesn't exist in SQLite, but more aptly, there's only one writer
 -- on SQLite at a time, so nothing else has the rows locked.
--- name: JobGetAvailable :many
+-- name: JobGetAvailableLifo :many
 UPDATE /* TEMPLATE: schema */river_job
 SET
     attempt = river_job.attempt + 1,
@@ -117,6 +117,36 @@ WHERE id IN (
     ORDER BY
         priority ASC,
         scheduled_at ASC,
+        id ASC
+    LIMIT @max_to_lock
+)
+RETURNING *;
+
+-- Differs from the Postgres version in that we don't have `FOR UPDATE SKIP
+-- LOCKED`. It doesn't exist in SQLite, but more aptly, there's only one writer
+-- on SQLite at a time, so nothing else has the rows locked.
+-- name: JobGetAvailableFifo :many
+UPDATE /* TEMPLATE: schema */river_job
+SET
+    attempt = river_job.attempt + 1,
+    attempted_at = coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')),
+
+    -- This is replaced in the driver to work around sqlc bugs for SQLite. See
+    -- comments there for more details.
+    attempted_by = /* TEMPLATE_BEGIN: attempted_by_clause */ attempted_by /* TEMPLATE_END */,
+
+    state = 'running'
+WHERE id IN (
+    SELECT id
+    FROM /* TEMPLATE: schema */river_job
+    WHERE
+        priority >= 0
+        AND river_job.queue = @queue
+        AND scheduled_at <= coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec'))
+        AND state = 'available'
+    ORDER BY
+        priority ASC,
+        scheduled_at DESC,
         id ASC
     LIMIT @max_to_lock
 )

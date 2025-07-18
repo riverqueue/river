@@ -382,16 +382,27 @@ func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobG
 		"attempted_by":     params.ClientID,
 		"max_attempted_by": params.MaxAttemptedBy,
 	})
-
-	jobs, err := dbsqlc.New().JobGetAvailable(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobGetAvailableParams{
-		MaxToLock: int64(params.MaxToLock),
-		Now:       timeStringNullable(params.Now),
-		Queue:     params.Queue,
-	})
-	if err != nil {
-		return nil, interpretError(err)
+	if params.Fifo {
+		jobs, err := dbsqlc.New().JobGetAvailableFifo(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobGetAvailableFifoParams{
+			MaxToLock: int64(params.MaxToLock),
+			Now:       timeStringNullable(params.Now),
+			Queue:     params.Queue,
+		})
+		if err != nil {
+			return nil, interpretError(err)
+		}
+		return sliceutil.MapError(jobs, jobRowFromInternal)
+	} else {
+		jobs, err := dbsqlc.New().JobGetAvailableLifo(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobGetAvailableLifoParams{
+			MaxToLock: int64(params.MaxToLock),
+			Now:       timeStringNullable(params.Now),
+			Queue:     params.Queue,
+		})
+		if err != nil {
+			return nil, interpretError(err)
+		}
+		return sliceutil.MapError(jobs, jobRowFromInternal)
 	}
-	return sliceutil.MapError(jobs, jobRowFromInternal)
 }
 
 func (e *Executor) JobGetByID(ctx context.Context, params *riverdriver.JobGetByIDParams) (*rivertype.JobRow, error) {

@@ -205,7 +205,86 @@ func (q *Queries) JobDeleteMany(ctx context.Context, db DBTX, max int64) ([]*Riv
 	return items, nil
 }
 
-const jobGetAvailable = `-- name: JobGetAvailable :many
+const jobGetAvailableFifo = `-- name: JobGetAvailableFifo :many
+UPDATE /* TEMPLATE: schema */river_job
+SET
+    attempt = river_job.attempt + 1,
+    attempted_at = coalesce(cast(?1 AS text), datetime('now', 'subsec')),
+
+    -- This is replaced in the driver to work around sqlc bugs for SQLite. See
+    -- comments there for more details.
+    attempted_by = /* TEMPLATE_BEGIN: attempted_by_clause */ attempted_by /* TEMPLATE_END */,
+
+    state = 'running'
+WHERE id IN (
+    SELECT id
+    FROM /* TEMPLATE: schema */river_job
+    WHERE
+        priority >= 0
+        AND river_job.queue = ?2
+        AND scheduled_at <= coalesce(cast(?1 AS text), datetime('now', 'subsec'))
+        AND state = 'available'
+    ORDER BY
+        priority ASC,
+        scheduled_at DESC,
+        id ASC
+    LIMIT ?3
+)
+RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
+`
+
+type JobGetAvailableFifoParams struct {
+	Now       *string
+	Queue     string
+	MaxToLock int64
+}
+
+// Differs from the Postgres version in that we don't have `FOR UPDATE SKIP
+// LOCKED`. It doesn't exist in SQLite, but more aptly, there's only one writer
+// on SQLite at a time, so nothing else has the rows locked.
+func (q *Queries) JobGetAvailableFifo(ctx context.Context, db DBTX, arg *JobGetAvailableFifoParams) ([]*RiverJob, error) {
+	rows, err := db.QueryContext(ctx, jobGetAvailableFifo, arg.Now, arg.Queue, arg.MaxToLock)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverJob
+	for rows.Next() {
+		var i RiverJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Args,
+			&i.Attempt,
+			&i.AttemptedAt,
+			&i.AttemptedBy,
+			&i.CreatedAt,
+			&i.Errors,
+			&i.FinalizedAt,
+			&i.Kind,
+			&i.MaxAttempts,
+			&i.Metadata,
+			&i.Priority,
+			&i.Queue,
+			&i.State,
+			&i.ScheduledAt,
+			&i.Tags,
+			&i.UniqueKey,
+			&i.UniqueStates,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const jobGetAvailableLifo = `-- name: JobGetAvailableLifo :many
 UPDATE /* TEMPLATE: schema */river_job
 SET
     attempt = river_job.attempt + 1,
@@ -233,7 +312,7 @@ WHERE id IN (
 RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 `
 
-type JobGetAvailableParams struct {
+type JobGetAvailableLifoParams struct {
 	Now       *string
 	Queue     string
 	MaxToLock int64
@@ -242,8 +321,8 @@ type JobGetAvailableParams struct {
 // Differs from the Postgres version in that we don't have `FOR UPDATE SKIP
 // LOCKED`. It doesn't exist in SQLite, but more aptly, there's only one writer
 // on SQLite at a time, so nothing else has the rows locked.
-func (q *Queries) JobGetAvailable(ctx context.Context, db DBTX, arg *JobGetAvailableParams) ([]*RiverJob, error) {
-	rows, err := db.QueryContext(ctx, jobGetAvailable, arg.Now, arg.Queue, arg.MaxToLock)
+func (q *Queries) JobGetAvailableLifo(ctx context.Context, db DBTX, arg *JobGetAvailableLifoParams) ([]*RiverJob, error) {
+	rows, err := db.QueryContext(ctx, jobGetAvailableLifo, arg.Now, arg.Queue, arg.MaxToLock)
 	if err != nil {
 		return nil, err
 	}

@@ -145,7 +145,7 @@ FROM /* TEMPLATE: schema */river_job
 WHERE id IN (SELECT id FROM deleted_jobs)
 ORDER BY /* TEMPLATE_BEGIN: order_by_clause */ id /* TEMPLATE_END */;
 
--- name: JobGetAvailable :many
+-- name: JobGetAvailableLifo :many
 WITH locked_jobs AS (
     SELECT
         *
@@ -158,6 +158,45 @@ WITH locked_jobs AS (
     ORDER BY
         priority ASC,
         scheduled_at ASC,
+        id ASC
+    LIMIT @max_to_lock::integer
+    FOR UPDATE
+    SKIP LOCKED
+)
+UPDATE
+    /* TEMPLATE: schema */river_job
+SET
+    state = 'running',
+    attempt = river_job.attempt + 1,
+    attempted_at = coalesce(sqlc.narg('now')::timestamptz, now()),
+    attempted_by = array_append(
+        CASE WHEN array_length(river_job.attempted_by, 1) >= @max_attempted_by::int
+        -- +2 instead of +1 because Postgres array indexing starts at 1, not 0.
+        THEN river_job.attempted_by[array_length(river_job.attempted_by, 1) + 2 - @max_attempted_by:]
+        ELSE river_job.attempted_by
+        END,
+        @attempted_by::text
+    )
+FROM
+    locked_jobs
+WHERE
+    river_job.id = locked_jobs.id
+RETURNING
+    river_job.*;
+
+-- name: JobGetAvailableFifo :many
+WITH locked_jobs AS (
+    SELECT
+        *
+    FROM
+        /* TEMPLATE: schema */river_job
+    WHERE
+        state = 'available'
+        AND queue = @queue::text
+        AND scheduled_at <= coalesce(sqlc.narg('now')::timestamptz, now())
+    ORDER BY
+        priority ASC,
+        scheduled_at DESC,
         id ASC
     LIMIT @max_to_lock::integer
     FOR UPDATE

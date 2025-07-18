@@ -361,6 +361,10 @@ type Config struct {
 	// Scheduler run interval. Shared between the scheduler and producer/job
 	// executors, but not currently exposed for configuration.
 	schedulerInterval time.Duration
+
+	// Customize processing order of job. Jobs can be processed in a FIFO/LIFO
+	// fashion
+	Fifo bool
 }
 
 // WithDefaults returns a copy of the Config with all default values applied.
@@ -2032,6 +2036,7 @@ func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) (*p
 		Schema:                       c.config.Schema,
 		StaleProducerRetentionPeriod: 5 * time.Minute,
 		Workers:                      c.config.Workers,
+		Fifo:                         c.config.Fifo,
 	})
 	c.producersByQueueName[queueName] = producer
 	return producer, nil
