@@ -50,6 +50,29 @@ WHERE id = @id
     AND finalized_at IS NULL
 RETURNING *;
 
+-- name: JobCountByAllStates :many
+SELECT state, count(*)
+FROM /* TEMPLATE: schema */river_job
+GROUP BY state;
+
+-- name: JobCountByQueueAndState :many
+WITH queue_stats AS (
+    SELECT
+        river_job.queue,
+        COUNT(CASE WHEN river_job.state = 'available' THEN 1 END) AS count_available,
+        COUNT(CASE WHEN river_job.state = 'running' THEN 1 END) AS count_running
+    FROM /* TEMPLATE: schema */river_job
+    WHERE river_job.queue IN (sqlc.slice('queue_names'))
+    GROUP BY river_job.queue
+)
+
+SELECT
+    cast(queue AS text) AS queue,
+    count_available,
+    count_running
+FROM queue_stats
+ORDER BY queue ASC;
+
 -- name: JobCountByState :one
 SELECT count(*)
 FROM /* TEMPLATE: schema */river_job
@@ -285,6 +308,15 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     CASE WHEN length(cast(@unique_key AS blob)) = 0 THEN NULL ELSE @unique_key END,
     @unique_states
 ) RETURNING *;
+
+-- name: JobKindListByPrefix :many
+SELECT DISTINCT kind
+FROM /* TEMPLATE: schema */river_job
+WHERE (cast(@prefix AS text) = '' OR kind LIKE cast(@prefix AS text) || '%')
+    AND (cast(@after AS text) = '' OR kind > cast(@after AS text))
+    AND kind NOT IN (sqlc.slice('exclude'))
+ORDER BY kind ASC
+LIMIT @max;
 
 -- name: JobList :many
 SELECT *

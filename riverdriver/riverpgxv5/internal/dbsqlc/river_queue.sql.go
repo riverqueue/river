@@ -151,6 +151,48 @@ func (q *Queries) QueueList(ctx context.Context, db DBTX, max int32) ([]*RiverQu
 	return items, nil
 }
 
+const queueNameListByPrefix = `-- name: QueueNameListByPrefix :many
+SELECT name
+FROM /* TEMPLATE: schema */river_queue
+WHERE name > $1::text
+    AND ($2::text = '' OR name LIKE $2::text || '%')
+    AND ($3::text[] IS NULL OR name != ALL($3))
+ORDER BY name
+LIMIT $4::int
+`
+
+type QueueNameListByPrefixParams struct {
+	After   string
+	Prefix  string
+	Exclude []string
+	Max     int32
+}
+
+func (q *Queries) QueueNameListByPrefix(ctx context.Context, db DBTX, arg *QueueNameListByPrefixParams) ([]string, error) {
+	rows, err := db.Query(ctx, queueNameListByPrefix,
+		arg.After,
+		arg.Prefix,
+		arg.Exclude,
+		arg.Max,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const queuePause = `-- name: QueuePause :execrows
 UPDATE /* TEMPLATE: schema */river_queue
 SET

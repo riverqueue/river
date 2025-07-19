@@ -2292,7 +2292,7 @@ func (c *Client[TTx]) QueueList(ctx context.Context, params *QueueListParams) (*
 	}
 
 	queues, err := c.driver.GetExecutor().QueueList(ctx, &riverdriver.QueueListParams{
-		Limit:  int(params.paginationCount),
+		Max:    int(params.paginationCount),
 		Schema: c.config.Schema,
 	})
 	if err != nil {
@@ -2319,7 +2319,7 @@ func (c *Client[TTx]) QueueListTx(ctx context.Context, tx TTx, params *QueueList
 	}
 
 	queues, err := c.driver.UnwrapExecutor(tx).QueueList(ctx, &riverdriver.QueueListParams{
-		Limit:  int(params.paginationCount),
+		Max:    int(params.paginationCount),
 		Schema: c.config.Schema,
 	})
 	if err != nil {
@@ -2566,6 +2566,9 @@ func (c *Client[TTx]) queueUpdate(ctx context.Context, executorTx riverdriver.Ex
 
 	return queue, controlEvent, nil
 }
+
+// Schema returns the configured schema for the client.
+func (c *Client[TTx]) Schema() string { return c.config.Schema }
 
 // QueueBundle is a bundle for adding additional queues. It's made accessible
 // through Client.Queues.

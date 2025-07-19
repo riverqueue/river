@@ -46,6 +46,15 @@ FROM /* TEMPLATE: schema */river_queue
 ORDER BY name ASC
 LIMIT @max;
 
+-- name: QueueNameListByPrefix :many
+SELECT name
+FROM /* TEMPLATE: schema */river_queue
+WHERE name > @after::text
+    AND (@prefix::text = '' OR name LIKE @prefix::text || '%')
+    AND (@exclude::text[] IS NULL OR name != ALL(@exclude))
+ORDER BY name
+LIMIT @max::int;
+
 -- name: QueuePause :execrows
 UPDATE /* TEMPLATE: schema */river_queue
 SET

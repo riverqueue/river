@@ -190,6 +190,7 @@ type Executor interface {
 	// API is not stable. DO NOT USE.
 	IndexDropIfExists(ctx context.Context, params *IndexDropIfExistsParams) error
 	IndexExists(ctx context.Context, params *IndexExistsParams) (bool, error)
+	IndexesExist(ctx context.Context, params *IndexesExistParams) (map[string]bool, error)
 
 	// IndexReindex reindexes a database index. This abstraction is a little
 	// leaky right now because Postgres runs this `CONCURRENTLY` and that's not
@@ -199,6 +200,8 @@ type Executor interface {
 	IndexReindex(ctx context.Context, params *IndexReindexParams) error
 
 	JobCancel(ctx context.Context, params *JobCancelParams) (*rivertype.JobRow, error)
+	JobCountByAllStates(ctx context.Context, params *JobCountByAllStatesParams) (map[rivertype.JobState]int, error)
+	JobCountByQueueAndState(ctx context.Context, params *JobCountByQueueAndStateParams) ([]*JobCountByQueueAndStateResult, error)
 	JobCountByState(ctx context.Context, params *JobCountByStateParams) (int, error)
 	JobDelete(ctx context.Context, params *JobDeleteParams) (*rivertype.JobRow, error)
 	JobDeleteBefore(ctx context.Context, params *JobDeleteBeforeParams) (int, error)
@@ -212,6 +215,7 @@ type Executor interface {
 	JobInsertFastManyNoReturning(ctx context.Context, params *JobInsertFastManyParams) (int, error)
 	JobInsertFull(ctx context.Context, params *JobInsertFullParams) (*rivertype.JobRow, error)
 	JobInsertFullMany(ctx context.Context, jobs *JobInsertFullManyParams) ([]*rivertype.JobRow, error)
+	JobKindListByPrefix(ctx context.Context, params *JobKindListByPrefixParams) ([]string, error)
 	JobList(ctx context.Context, params *JobListParams) ([]*rivertype.JobRow, error)
 	JobRescueMany(ctx context.Context, params *JobRescueManyParams) (*struct{}, error)
 	JobRetry(ctx context.Context, params *JobRetryParams) (*rivertype.JobRow, error)
@@ -257,6 +261,7 @@ type Executor interface {
 	QueueDeleteExpired(ctx context.Context, params *QueueDeleteExpiredParams) ([]string, error)
 	QueueGet(ctx context.Context, params *QueueGetParams) (*rivertype.Queue, error)
 	QueueList(ctx context.Context, params *QueueListParams) ([]*rivertype.Queue, error)
+	QueueNameListByPrefix(ctx context.Context, params *QueueNameListByPrefixParams) ([]string, error)
 	QueuePause(ctx context.Context, params *QueuePauseParams) error
 	QueueResume(ctx context.Context, params *QueueResumeParams) error
 	QueueUpdate(ctx context.Context, params *QueueUpdateParams) (*rivertype.Queue, error)
@@ -321,13 +326,18 @@ type ColumnExistsParams struct {
 }
 
 type IndexDropIfExistsParams struct {
-	Schema string
 	Index  string
+	Schema string
 }
 
 type IndexExistsParams struct {
-	Schema string
 	Index  string
+	Schema string
+}
+
+type IndexesExistParams struct {
+	IndexNames []string
+	Schema     string
 }
 
 type JobCancelParams struct {
@@ -336,6 +346,21 @@ type JobCancelParams struct {
 	ControlTopic      string
 	Now               *time.Time
 	Schema            string
+}
+
+type JobCountByAllStatesParams struct {
+	Schema string
+}
+
+type JobCountByQueueAndStateParams struct {
+	QueueNames []string
+	Schema     string
+}
+
+type JobCountByQueueAndStateResult struct {
+	CountAvailable int64
+	CountRunning   int64
+	Queue          string
 }
 
 type JobCountByStateParams struct {
@@ -448,6 +473,14 @@ type JobInsertFullParams struct {
 type JobInsertFullManyParams struct {
 	Jobs   []*JobInsertFullParams
 	Schema string
+}
+
+type JobKindListByPrefixParams struct {
+	After   string
+	Exclude []string
+	Max     int
+	Prefix  string
+	Schema  string
 }
 
 type JobListParams struct {
@@ -739,8 +772,16 @@ type QueueGetParams struct {
 }
 
 type QueueListParams struct {
-	Limit  int
+	Max    int
 	Schema string
+}
+
+type QueueNameListByPrefixParams struct {
+	After   string
+	Exclude []string
+	Max     int
+	Prefix  string
+	Schema  string
 }
 
 type QueuePauseParams struct {
