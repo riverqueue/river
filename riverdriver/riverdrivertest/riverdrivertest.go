@@ -561,6 +561,45 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		require.NoError(t, err)
 	})
 
+	t.Run("IndexesExist", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("ReturnsTrueIfIndexExistsInSchema", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			exists, err := exec.IndexesExist(ctx, &riverdriver.IndexesExistParams{
+				IndexNames: []string{"river_job_kind", "river_job_prioritized_fetching_index", "special_index"},
+				Schema:     "", // empty schema means current schema
+			})
+			require.NoError(t, err)
+
+			require.True(t, exists["river_job_kind"])
+			require.True(t, exists["river_job_prioritized_fetching_index"])
+			require.False(t, exists["special_index"])
+		})
+
+		t.Run("ReturnsFalseIfIndexDoesNotExistInAlternateSchema", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+
+			exists, err := exec.IndexesExist(ctx, &riverdriver.IndexesExistParams{
+				IndexNames: []string{"river_job_kind", "river_job_prioritized_fetching_index"},
+				Schema:     "custom_schema_that_does_not_exist",
+			})
+			if bundle.driver.DatabaseName() == databaseNameSQLite {
+				requireMissingRelation(t, err, "custom_schema_that_does_not_exist", "sqlite_master")
+			} else {
+				require.NoError(t, err)
+
+				require.False(t, exists["river_job_kind"])
+				require.False(t, exists["river_job_prioritized_fetching_index"])
+			}
+		})
+	})
+
 	t.Run("JobCancel", func(t *testing.T) {
 		t.Parallel()
 
@@ -663,6 +702,89 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			})
 			require.ErrorIs(t, err, rivertype.ErrNotFound)
 			require.Nil(t, jobAfter)
+		})
+	})
+
+	t.Run("JobCountByAllStates", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("CountsJobsByState", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
+
+			countsByState, err := exec.JobCountByAllStates(ctx, &riverdriver.JobCountByAllStatesParams{
+				Schema: "",
+			})
+			require.NoError(t, err)
+
+			for _, state := range rivertype.JobStates() {
+				require.Contains(t, countsByState, state)
+				switch state { //nolint:exhaustive
+				case rivertype.JobStateAvailable:
+					require.Equal(t, 2, countsByState[state])
+				case rivertype.JobStateCancelled:
+					require.Equal(t, 1, countsByState[state])
+				case rivertype.JobStateCompleted:
+					require.Equal(t, 1, countsByState[state])
+				case rivertype.JobStateDiscarded:
+					require.Equal(t, 1, countsByState[state])
+				default:
+					require.Equal(t, 0, countsByState[state])
+				}
+			}
+		})
+
+		t.Run("AlternateSchema", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			_, err := exec.JobCountByAllStates(ctx, &riverdriver.JobCountByAllStatesParams{
+				Schema: "custom_schema",
+			})
+			requireMissingRelation(t, err, "custom_schema", "river_job")
+		})
+	})
+
+	t.Run("JobCountByQueueAndState", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("CountsJobsInAvailableAndRunningForEachOfTheSpecifiedQueues", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue1"), State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue1"), State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue1"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue1"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue1"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue2"), State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue2"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue3"), State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue3"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
+
+			countsByQueue, err := exec.JobCountByQueueAndState(ctx, &riverdriver.JobCountByQueueAndStateParams{
+				QueueNames: []string{"queue1", "queue2"},
+				Schema:     "",
+			})
+			require.NoError(t, err)
+
+			require.Len(t, countsByQueue, 2)
+
+			require.Equal(t, "queue1", countsByQueue[0].Queue)
+			require.Equal(t, int64(2), countsByQueue[0].CountAvailable)
+			require.Equal(t, int64(3), countsByQueue[0].CountRunning)
+			require.Equal(t, "queue2", countsByQueue[1].Queue)
+			require.Equal(t, int64(1), countsByQueue[1].CountAvailable)
+			require.Equal(t, int64(1), countsByQueue[1].CountRunning)
 		})
 	})
 
@@ -2105,6 +2227,51 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 		assertJobEqualsInput(t, results[0], jobParams1)
 		assertJobEqualsInput(t, results[1], jobParams2)
+	})
+
+	t.Run("JobKindListByPrefix", func(t *testing.T) { //nolint:dupl
+		t.Parallel()
+
+		t.Run("ListsJobKindsInOrderWithMaxLimit", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_zzz")})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_aaa")})
+			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_bbb")})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("different_prefix_job")})
+
+			jobKinds, err := exec.JobKindListByPrefix(ctx, &riverdriver.JobKindListByPrefixParams{
+				After:   "job2",
+				Exclude: nil,
+				Max:     2,
+				Prefix:  "job",
+				Schema:  "",
+			})
+			require.NoError(t, err)
+			require.Equal(t, []string{job2.Kind, job3.Kind}, jobKinds) // sorted by name
+		})
+
+		t.Run("ExcludesJobKindsInExcludeList", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_zzz")})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_aaa")})
+			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_bbb")})
+
+			jobKinds, err := exec.JobKindListByPrefix(ctx, &riverdriver.JobKindListByPrefixParams{
+				After:   "job2",
+				Exclude: []string{job2.Kind},
+				Max:     2,
+				Prefix:  "job",
+				Schema:  "",
+			})
+			require.NoError(t, err)
+			require.Equal(t, []string{job3.Kind, job1.Kind}, jobKinds)
+		})
 	})
 
 	t.Run("JobList", func(t *testing.T) {
@@ -3831,7 +3998,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		}
 
 		queues, err := exec.QueueList(ctx, &riverdriver.QueueListParams{
-			Limit: 10,
+			Max: 10,
 		})
 		require.NoError(t, err)
 		require.Empty(t, queues)
@@ -3844,7 +4011,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{})
 
 		queues, err = exec.QueueList(ctx, &riverdriver.QueueListParams{
-			Limit: 2,
+			Max: 2,
 		})
 		require.NoError(t, err)
 
@@ -3853,12 +4020,57 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		requireQueuesEqual(t, queue2, queues[1])
 
 		queues, err = exec.QueueList(ctx, &riverdriver.QueueListParams{
-			Limit: 3,
+			Max: 3,
 		})
 		require.NoError(t, err)
 
 		require.Len(t, queues, 3)
 		requireQueuesEqual(t, queue3, queues[2])
+	})
+
+	t.Run("QueueNameListByPrefix", func(t *testing.T) { //nolint:dupl
+		t.Parallel()
+
+		t.Run("ListsQueuesInOrderWithMaxLimit", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_zzz")})
+			queue2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_aaa")})
+			queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_bbb")})
+			_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("different_prefix_queue")})
+
+			queueNames, err := exec.QueueNameListByPrefix(ctx, &riverdriver.QueueNameListByPrefixParams{
+				After:   "queue2",
+				Exclude: nil,
+				Max:     2,
+				Prefix:  "queue",
+				Schema:  "",
+			})
+			require.NoError(t, err)
+			require.Equal(t, []string{queue2.Name, queue3.Name}, queueNames) // sorted by name
+		})
+
+		t.Run("ExcludesQueueNamesInExcludeList", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			queue1 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_zzz")})
+			queue2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_aaa")})
+			queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_bbb")})
+
+			queueNames, err := exec.QueueNameListByPrefix(ctx, &riverdriver.QueueNameListByPrefixParams{
+				After:   "queue2",
+				Exclude: []string{queue2.Name},
+				Max:     2,
+				Prefix:  "queue",
+				Schema:  "",
+			})
+			require.NoError(t, err)
+			require.Equal(t, []string{queue3.Name, queue1.Name}, queueNames)
+		})
 	})
 
 	t.Run("QueuePause", func(t *testing.T) {

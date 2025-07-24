@@ -56,6 +56,52 @@ func (q *Queries) IndexExists(ctx context.Context, db DBTX, arg *IndexExistsPara
 	return exists, err
 }
 
+const indexesExist = `-- name: IndexesExist :many
+WITH index_names AS (
+    SELECT unnest($2::text[]) as index_name
+)
+SELECT index_names.index_name::text AS index_name,
+       EXISTS (
+         SELECT 1
+         FROM pg_catalog.pg_class c
+         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = coalesce($1::text, current_schema())
+         AND c.relname = index_names.index_name
+         AND c.relkind = 'i'
+       ) AS exists
+FROM index_names
+`
+
+type IndexesExistParams struct {
+	Schema     pgtype.Text
+	IndexNames []string
+}
+
+type IndexesExistRow struct {
+	IndexName string
+	Exists    bool
+}
+
+func (q *Queries) IndexesExist(ctx context.Context, db DBTX, arg *IndexesExistParams) ([]*IndexesExistRow, error) {
+	rows, err := db.Query(ctx, indexesExist, arg.Schema, arg.IndexNames)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*IndexesExistRow
+	for rows.Next() {
+		var i IndexesExistRow
+		if err := rows.Scan(&i.IndexName, &i.Exists); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const schemaGetExpired = `-- name: SchemaGetExpired :many
 SELECT schema_name::text
 FROM information_schema.schemata

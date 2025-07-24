@@ -68,6 +68,98 @@ func (q *Queries) JobCancel(ctx context.Context, db DBTX, arg *JobCancelParams) 
 	return &i, err
 }
 
+const jobCountByAllStates = `-- name: JobCountByAllStates :many
+SELECT state, count(*)
+FROM /* TEMPLATE: schema */river_job
+GROUP BY state
+`
+
+type JobCountByAllStatesRow struct {
+	State string
+	Count int64
+}
+
+func (q *Queries) JobCountByAllStates(ctx context.Context, db DBTX) ([]*JobCountByAllStatesRow, error) {
+	rows, err := db.QueryContext(ctx, jobCountByAllStates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*JobCountByAllStatesRow
+	for rows.Next() {
+		var i JobCountByAllStatesRow
+		if err := rows.Scan(&i.State, &i.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const jobCountByQueueAndState = `-- name: JobCountByQueueAndState :many
+WITH queue_stats AS (
+    SELECT
+        river_job.queue,
+        COUNT(CASE WHEN river_job.state = 'available' THEN 1 END) AS count_available,
+        COUNT(CASE WHEN river_job.state = 'running' THEN 1 END) AS count_running
+    FROM /* TEMPLATE: schema */river_job
+    WHERE river_job.queue IN (/*SLICE:queue_names*/?)
+    GROUP BY river_job.queue
+)
+
+SELECT
+    cast(queue AS text) AS queue,
+    count_available,
+    count_running
+FROM queue_stats
+ORDER BY queue ASC
+`
+
+type JobCountByQueueAndStateRow struct {
+	Queue          string
+	CountAvailable int64
+	CountRunning   int64
+}
+
+func (q *Queries) JobCountByQueueAndState(ctx context.Context, db DBTX, queueNames []string) ([]*JobCountByQueueAndStateRow, error) {
+	query := jobCountByQueueAndState
+	var queryParams []interface{}
+	if len(queueNames) > 0 {
+		for _, v := range queueNames {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:queue_names*/?", strings.Repeat(",?", len(queueNames))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:queue_names*/?", "NULL", 1)
+	}
+	rows, err := db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*JobCountByQueueAndStateRow
+	for rows.Next() {
+		var i JobCountByQueueAndStateRow
+		if err := rows.Scan(&i.Queue, &i.CountAvailable, &i.CountRunning); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const jobCountByState = `-- name: JobCountByState :one
 SELECT count(*)
 FROM /* TEMPLATE: schema */river_job
@@ -784,6 +876,59 @@ func (q *Queries) JobInsertFull(ctx context.Context, db DBTX, arg *JobInsertFull
 		&i.UniqueStates,
 	)
 	return &i, err
+}
+
+const jobKindListByPrefix = `-- name: JobKindListByPrefix :many
+SELECT DISTINCT kind
+FROM /* TEMPLATE: schema */river_job
+WHERE (cast(?1 AS text) = '' OR kind LIKE cast(?1 AS text) || '%')
+    AND (cast(?2 AS text) = '' OR kind > cast(?2 AS text))
+    AND kind NOT IN (/*SLICE:exclude*/?)
+ORDER BY kind ASC
+LIMIT ?4
+`
+
+type JobKindListByPrefixParams struct {
+	Prefix  string
+	After   string
+	Exclude []string
+	Max     int64
+}
+
+func (q *Queries) JobKindListByPrefix(ctx context.Context, db DBTX, arg *JobKindListByPrefixParams) ([]string, error) {
+	query := jobKindListByPrefix
+	var queryParams []interface{}
+	queryParams = append(queryParams, arg.Prefix)
+	queryParams = append(queryParams, arg.After)
+	if len(arg.Exclude) > 0 {
+		for _, v := range arg.Exclude {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:exclude*/?", strings.Repeat(",?", len(arg.Exclude))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:exclude*/?", "NULL", 1)
+	}
+	queryParams = append(queryParams, arg.Max)
+	rows, err := db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var kind string
+		if err := rows.Scan(&kind); err != nil {
+			return nil, err
+		}
+		items = append(items, kind)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const jobList = `-- name: JobList :many

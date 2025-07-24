@@ -97,6 +97,108 @@ func (q *Queries) JobCancel(ctx context.Context, db DBTX, arg *JobCancelParams) 
 	return &i, err
 }
 
+const jobCountByAllStates = `-- name: JobCountByAllStates :many
+SELECT state, count(*)
+FROM /* TEMPLATE: schema */ river_job
+GROUP BY state
+`
+
+type JobCountByAllStatesRow struct {
+	State RiverJobState
+	Count int64
+}
+
+func (q *Queries) JobCountByAllStates(ctx context.Context, db DBTX) ([]*JobCountByAllStatesRow, error) {
+	rows, err := db.QueryContext(ctx, jobCountByAllStates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*JobCountByAllStatesRow
+	for rows.Next() {
+		var i JobCountByAllStatesRow
+		if err := rows.Scan(&i.State, &i.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const jobCountByQueueAndState = `-- name: JobCountByQueueAndState :many
+WITH all_queues AS (
+    SELECT unnest($1::text[])::text AS queue
+),
+
+running_job_counts AS (
+    SELECT
+        queue,
+        COUNT(*) AS count
+    FROM /* TEMPLATE: schema */river_job
+    WHERE queue = ANY($1::text[])
+        AND state = 'running'
+    GROUP BY queue
+),
+
+available_job_counts AS (
+    SELECT
+        queue,
+        COUNT(*) AS count
+    FROM
+      /* TEMPLATE: schema */river_job
+    WHERE queue = ANY($1::text[])
+        AND state = 'available'
+    GROUP BY queue
+)
+
+SELECT
+    all_queues.queue,
+    COALESCE(available_job_counts.count, 0) AS count_available,
+    COALESCE(running_job_counts.count, 0) AS count_running
+FROM
+    all_queues
+LEFT JOIN
+    running_job_counts ON all_queues.queue = running_job_counts.queue
+LEFT JOIN
+    available_job_counts ON all_queues.queue = available_job_counts.queue
+ORDER BY all_queues.queue ASC
+`
+
+type JobCountByQueueAndStateRow struct {
+	Queue          string
+	CountAvailable int64
+	CountRunning   int64
+}
+
+func (q *Queries) JobCountByQueueAndState(ctx context.Context, db DBTX, queueNames []string) ([]*JobCountByQueueAndStateRow, error) {
+	rows, err := db.QueryContext(ctx, jobCountByQueueAndState, pq.Array(queueNames))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*JobCountByQueueAndStateRow
+	for rows.Next() {
+		var i JobCountByQueueAndStateRow
+		if err := rows.Scan(&i.Queue, &i.CountAvailable, &i.CountRunning); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const jobCountByState = `-- name: JobCountByState :one
 SELECT count(*)
 FROM /* TEMPLATE: schema */river_job
@@ -966,6 +1068,51 @@ func (q *Queries) JobInsertFullMany(ctx context.Context, db DBTX, arg *JobInsert
 			return nil, err
 		}
 		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const jobKindListByPrefix = `-- name: JobKindListByPrefix :many
+SELECT DISTINCT ON (kind) kind
+FROM /* TEMPLATE: schema */river_job
+WHERE ($1 = '' OR kind ILIKE $1 || '%')
+    AND ($2 = '' OR kind > $2)
+    AND ($3::text[] IS NULL OR kind != ALL($3))
+ORDER BY kind ASC
+LIMIT $4
+`
+
+type JobKindListByPrefixParams struct {
+	Prefix  interface{}
+	After   interface{}
+	Exclude []string
+	Max     int32
+}
+
+func (q *Queries) JobKindListByPrefix(ctx context.Context, db DBTX, arg *JobKindListByPrefixParams) ([]string, error) {
+	rows, err := db.QueryContext(ctx, jobKindListByPrefix,
+		arg.Prefix,
+		arg.After,
+		pq.Array(arg.Exclude),
+		arg.Max,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var kind string
+		if err := rows.Scan(&kind); err != nil {
+			return nil, err
+		}
+		items = append(items, kind)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

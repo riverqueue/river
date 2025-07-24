@@ -7,6 +7,7 @@ package dbsqlc
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -147,6 +148,60 @@ func (q *Queries) QueueList(ctx context.Context, db DBTX, max int64) ([]*RiverQu
 			return nil, err
 		}
 		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const queueNameListByPrefix = `-- name: QueueNameListByPrefix :many
+SELECT name
+FROM /* TEMPLATE: schema */river_queue
+WHERE
+    name > cast(?1 AS text)
+    AND (cast(?2 AS text) = '' OR name LIKE cast(?2 AS text) || '%')
+    AND name NOT IN (/*SLICE:exclude*/?)
+ORDER BY name ASC
+LIMIT ?4
+`
+
+type QueueNameListByPrefixParams struct {
+	After   string
+	Prefix  string
+	Exclude []string
+	Max     int64
+}
+
+func (q *Queries) QueueNameListByPrefix(ctx context.Context, db DBTX, arg *QueueNameListByPrefixParams) ([]string, error) {
+	query := queueNameListByPrefix
+	var queryParams []interface{}
+	queryParams = append(queryParams, arg.After)
+	queryParams = append(queryParams, arg.Prefix)
+	if len(arg.Exclude) > 0 {
+		for _, v := range arg.Exclude {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:exclude*/?", strings.Repeat(",?", len(arg.Exclude))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:exclude*/?", "NULL", 1)
+	}
+	queryParams = append(queryParams, arg.Max)
+	rows, err := db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

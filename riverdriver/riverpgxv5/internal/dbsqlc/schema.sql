@@ -17,6 +17,21 @@ SELECT EXISTS (
         AND pg_class.relkind = 'i'
 );
 
+-- name: IndexesExist :many
+WITH index_names AS (
+    SELECT unnest(@index_names::text[]) as index_name
+)
+SELECT index_names.index_name::text AS index_name,
+       EXISTS (
+         SELECT 1
+         FROM pg_catalog.pg_class c
+         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = coalesce(sqlc.narg('schema')::text, current_schema())
+         AND c.relname = index_names.index_name
+         AND c.relkind = 'i'
+       ) AS exists
+FROM index_names;
+
 -- name: SchemaGetExpired :many
 SELECT schema_name::text
 FROM information_schema.schemata

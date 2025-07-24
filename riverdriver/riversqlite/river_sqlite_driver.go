@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -220,6 +221,22 @@ func (e *Executor) IndexReindex(ctx context.Context, params *riverdriver.IndexRe
 	return interpretError(err)
 }
 
+func (e *Executor) IndexesExist(ctx context.Context, params *riverdriver.IndexesExistParams) (map[string]bool, error) {
+	exists := make(map[string]bool)
+	for _, index := range params.IndexNames {
+		indexExists, err := e.IndexExists(ctx, &riverdriver.IndexExistsParams{
+			Index:  index,
+			Schema: params.Schema,
+		})
+		if err != nil {
+			return nil, err
+		}
+		exists[index] = indexExists
+	}
+
+	return exists, nil
+}
+
 func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error) {
 	// Unlike Postgres, this must be carried out in two operations because
 	// SQLite doesn't support CTEs containing `UPDATE`. As long as the job
@@ -256,6 +273,37 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 		}
 		return jobRowFromInternal(job)
 	})
+}
+
+func (e *Executor) JobCountByAllStates(ctx context.Context, params *riverdriver.JobCountByAllStatesParams) (map[rivertype.JobState]int, error) {
+	counts, err := dbsqlc.New().JobCountByAllStates(schemaTemplateParam(ctx, params.Schema), e.dbtx)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	countsMap := make(map[rivertype.JobState]int)
+	for _, state := range rivertype.JobStates() {
+		countsMap[state] = 0
+	}
+	for _, count := range counts {
+		countsMap[rivertype.JobState(count.State)] = int(count.Count)
+	}
+	return countsMap, nil
+}
+
+func (e *Executor) JobCountByQueueAndState(ctx context.Context, params *riverdriver.JobCountByQueueAndStateParams) ([]*riverdriver.JobCountByQueueAndStateResult, error) {
+	rows, err := dbsqlc.New().JobCountByQueueAndState(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.QueueNames)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	results := make([]*riverdriver.JobCountByQueueAndStateResult, len(rows))
+	for i, row := range rows {
+		results[i] = &riverdriver.JobCountByQueueAndStateResult{
+			CountAvailable: row.CountAvailable,
+			CountRunning:   row.CountRunning,
+			Queue:          row.Queue,
+		}
+	}
+	return results, nil
 }
 
 func (e *Executor) JobCountByState(ctx context.Context, params *riverdriver.JobCountByStateParams) (int, error) {
@@ -674,6 +722,23 @@ func (e *Executor) JobInsertFullMany(ctx context.Context, params *riverdriver.Jo
 	}
 
 	return insertRes, nil
+}
+
+func (e *Executor) JobKindListByPrefix(ctx context.Context, params *riverdriver.JobKindListByPrefixParams) ([]string, error) {
+	exclude := params.Exclude
+	if exclude == nil {
+		exclude = []string{"**********"}
+	}
+	kinds, err := dbsqlc.New().JobKindListByPrefix(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobKindListByPrefixParams{
+		After:   params.After,
+		Exclude: exclude,
+		Max:     int64(min(params.Max, math.MaxInt32)), //nolint:gosec
+		Prefix:  params.Prefix,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return kinds, nil
 }
 
 func (e *Executor) JobList(ctx context.Context, params *riverdriver.JobListParams) ([]*rivertype.JobRow, error) {
@@ -1179,11 +1244,28 @@ func (e *Executor) QueueGet(ctx context.Context, params *riverdriver.QueueGetPar
 }
 
 func (e *Executor) QueueList(ctx context.Context, params *riverdriver.QueueListParams) ([]*rivertype.Queue, error) {
-	queues, err := dbsqlc.New().QueueList(schemaTemplateParam(ctx, params.Schema), e.dbtx, int64(params.Limit))
+	queues, err := dbsqlc.New().QueueList(schemaTemplateParam(ctx, params.Schema), e.dbtx, int64(params.Max))
 	if err != nil {
 		return nil, interpretError(err)
 	}
 	return sliceutil.Map(queues, queueFromInternal), nil
+}
+
+func (e *Executor) QueueNameListByPrefix(ctx context.Context, params *riverdriver.QueueNameListByPrefixParams) ([]string, error) {
+	exclude := params.Exclude
+	if exclude == nil {
+		exclude = []string{"**********"}
+	}
+	queueNames, err := dbsqlc.New().QueueNameListByPrefix(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueNameListByPrefixParams{
+		After:   params.After,
+		Exclude: exclude,
+		Max:     int64(min(params.Max, math.MaxInt32)), //nolint:gosec
+		Prefix:  params.Prefix,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return queueNames, nil
 }
 
 func (e *Executor) QueuePause(ctx context.Context, params *riverdriver.QueuePauseParams) error {
