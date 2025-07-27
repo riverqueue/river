@@ -1,6 +1,7 @@
 package slogtest
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 	"testing"
@@ -11,6 +12,8 @@ import (
 // working correctly.
 func TestSlogTestHandler_levels(t *testing.T) {
 	t.Parallel()
+
+	ctx := context.Background()
 
 	testCases := []struct {
 		desc  string
@@ -27,10 +30,10 @@ func TestSlogTestHandler_levels(t *testing.T) {
 
 			logger := NewLogger(t, &slog.HandlerOptions{Level: tt.level})
 
-			logger.Debug("debug message")
-			logger.Info("info message")
-			logger.Warn("warn message")
-			logger.Error("error message")
+			logger.DebugContext(ctx, "debug message")
+			logger.InfoContext(ctx, "info message")
+			logger.WarnContext(ctx, "warn message")
+			logger.ErrorContext(ctx, "error message")
 		})
 	}
 }
@@ -39,6 +42,7 @@ func TestSlogTestHandler_stress(t *testing.T) {
 	t.Parallel()
 
 	var (
+		ctx    = context.Background()
 		logger = NewLogger(t, nil)
 		wg     sync.WaitGroup
 	)
@@ -47,7 +51,7 @@ func TestSlogTestHandler_stress(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			for range 100 {
-				logger.Info("message", "key", "value")
+				logger.InfoContext(ctx, "message", "key", "value")
 			}
 			wg.Done()
 		}()

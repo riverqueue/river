@@ -986,6 +986,7 @@ func (e *Executor) TableTruncate(ctx context.Context, params *riverdriver.TableT
 
 type ExecutorTx struct {
 	Executor
+
 	tx *sql.Tx
 }
 
@@ -1010,6 +1011,7 @@ func (t *ExecutorTx) Rollback(ctx context.Context) error {
 
 type ExecutorSubTx struct {
 	Executor
+
 	beginOnce    *savepointutil.BeginOnlyOnce
 	savepointNum int
 	tx           *sql.Tx

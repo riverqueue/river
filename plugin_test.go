@@ -60,6 +60,7 @@ var _ driverPlugin[pgx.Tx] = &TestDriverWithPlugin{}
 
 type TestDriverWithPlugin struct {
 	*riverpgxv5.Driver
+
 	initCalled bool
 	pilot      riverpilot.Pilot
 }
@@ -134,6 +135,7 @@ var _ pilotPlugin = &TestPilotWithPlugin{}
 
 type TestPilotWithPlugin struct {
 	riverpilot.StandardPilot
+
 	maintenanceService startstop.Service
 	service            startstop.Service
 }

@@ -26,6 +26,7 @@ func (TransactionalArgs) Kind() string { return "transactional_worker" }
 // the transaction such as inserting additional jobs or manipulating other data.
 type TransactionalWorker struct {
 	river.WorkerDefaults[TransactionalArgs]
+
 	dbPool *pgxpool.Pool
 }
 

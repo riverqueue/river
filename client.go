@@ -471,10 +471,10 @@ func (c *Config) validate() error {
 	// this convention.
 	maxSchemaLength := 63 - 1 - len(string(notifier.NotificationTopicLongest)) // -1 for the dot in `<schema>.<topic>`
 	if len(c.Schema) > maxSchemaLength {
-		return fmt.Errorf("Schema length must be less than or equal to %d characters", maxSchemaLength) //nolint:staticcheck
+		return fmt.Errorf("Schema length must be less than or equal to %d characters", maxSchemaLength)
 	}
 	if c.Schema != "" && !postgresSchemaNameRE.MatchString(c.Schema) {
-		return errors.New("Schema name can only contain letters, numbers, and underscores, and must start with a letter or underscore") //nolint:staticcheck
+		return errors.New("Schema name can only contain letters, numbers, and underscores, and must start with a letter or underscore")
 	}
 
 	for queue, queueConfig := range c.Queues {
@@ -492,7 +492,7 @@ func (c *Config) validate() error {
 			kind := workerInfo.jobArgs.Kind()
 			if !rivercommon.UserSpecifiedIDOrKindRE.MatchString(kind) {
 				if c.SkipJobKindValidation {
-					c.Logger.Warn("job kind should match regex; this will be an error in future versions",
+					c.Logger.Warn("job kind should match regex; this will be an error in future versions", //nolint:noctx
 						slog.String("kind", kind),
 						slog.String("regex", rivercommon.UserSpecifiedIDOrKindRE.String()),
 					)
@@ -763,7 +763,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 				client.services = append(client.services, client.notifier)
 			}
 		} else {
-			config.Logger.Info("Driver does not support listener; entering poll only mode")
+			config.Logger.Info("Driver does not support listener; entering poll only mode") //nolint:noctx
 		}
 
 		client.elector = leadership.NewElector(archetype, driver.GetExecutor(), client.notifier, &leadership.Config{

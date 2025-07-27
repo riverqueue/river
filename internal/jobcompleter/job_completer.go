@@ -225,7 +225,7 @@ func (c *AsyncCompleter) Start(ctx context.Context) error {
 		<-ctx.Done()
 
 		if err := c.errGroup.Wait(); err != nil {
-			c.Logger.Error("Error waiting on async completer", "err", err)
+			c.Logger.ErrorContext(ctx, "Error waiting on async completer", "err", err)
 		}
 	}()
 
@@ -316,7 +316,7 @@ func (c *BatchCompleter) Start(ctx context.Context) error {
 				// Try to insert last batch before leaving. Note we use the
 				// original context so operations aren't immediately cancelled.
 				if err := c.handleBatch(ctx); err != nil {
-					c.Logger.Error(c.Name+": Error completing batch", "err", err)
+					c.Logger.ErrorContext(ctx, c.Name+": Error completing batch", "err", err)
 				}
 				return
 
@@ -336,7 +336,7 @@ func (c *BatchCompleter) Start(ctx context.Context) error {
 
 			for {
 				if err := c.handleBatch(ctx); err != nil {
-					c.Logger.Error(c.Name+": Error completing batch", "err", err)
+					c.Logger.ErrorContext(ctx, c.Name+": Error completing batch", "err", err)
 				}
 
 				// New jobs to complete may have come in while working the batch

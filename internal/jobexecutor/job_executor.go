@@ -124,8 +124,8 @@ type JobExecutor struct {
 	stats *jobstats.JobStatistics // initialized by the executor, and handed off to completer
 }
 
-func (e *JobExecutor) Cancel() {
-	e.Logger.Warn(e.Name+": job cancelled remotely", slog.Int64("job_id", e.JobRow.ID))
+func (e *JobExecutor) Cancel(ctx context.Context) {
+	e.Logger.WarnContext(ctx, e.Name+": job cancelled remotely", slog.Int64("job_id", e.JobRow.ID))
 	e.CancelFunc(rivertype.ErrJobCancelledRemotely)
 }
 

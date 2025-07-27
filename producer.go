@@ -260,9 +260,9 @@ func (p *producer) Start(ctx context.Context) error {
 }
 
 func (p *producer) Stop() {
-	p.Logger.Debug(p.Name+": Stopping", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
+	p.Logger.Debug(p.Name+": Stopping", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load())) //nolint:noctx
 	p.BaseStartStop.Stop()
-	p.Logger.Debug(p.Name+": Stop returned", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
+	p.Logger.Debug(p.Name+": Stop returned", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load())) //nolint:noctx
 }
 
 // Start starts the producer. It backgrounds a goroutine which is stopped when
@@ -414,13 +414,13 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		}
 
 		p.fetchAndRunLoop(fetchCtx, workCtx)
-		p.Logger.Debug(p.Name+": Entering shutdown loop", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
+		p.Logger.DebugContext(workCtx, p.Name+": Entering shutdown loop", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
 		p.executorShutdownLoop()
 
-		p.Logger.Debug(p.Name+": Shutdown loop exited, awaiting subroutines", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
+		p.Logger.DebugContext(workCtx, p.Name+": Shutdown loop exited, awaiting subroutines", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
 		cancelSubroutines(fmt.Errorf("producer stopped: %w", startstop.ErrStop))
 		subroutineWG.Wait()
-		p.Logger.Debug(p.Name+": Shutdown subroutines completed, finalizing", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
+		p.Logger.DebugContext(workCtx, p.Name+": Shutdown subroutines completed, finalizing", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
 
 		p.finalizeShutdown(context.WithoutCancel(fetchCtx))
 	}()
@@ -564,7 +564,7 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context) {
 				p.Logger.DebugContext(workCtx, p.Name+": Unknown queue control action", "action", msg.Action)
 			}
 		case jobID := <-p.cancelCh:
-			p.maybeCancelJob(jobID)
+			p.maybeCancelJob(workCtx, jobID)
 		case <-p.fetchLimiter.C():
 			p.innerFetchLoop(workCtx, fetchResultCh)
 			// Ensure we can't start another fetch when fetchCtx is done, even if
@@ -647,7 +647,7 @@ func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan pr
 		case result := <-p.jobResultCh:
 			p.removeActiveJob(result)
 		case jobID := <-p.cancelCh:
-			p.maybeCancelJob(jobID)
+			p.maybeCancelJob(workCtx, jobID)
 		}
 	}
 }
@@ -662,7 +662,7 @@ func (p *producer) executorShutdownLoop() {
 }
 
 func (p *producer) finalizeShutdown(ctx context.Context) {
-	p.Logger.Debug(p.Name + ": Finalizing shutdown")
+	p.Logger.DebugContext(ctx, p.Name+": Finalizing shutdown")
 
 	const (
 		maxAttempts = 4                      // Maximum number of shutdown attempts
@@ -724,12 +724,12 @@ func (p *producer) removeActiveJob(job *rivertype.JobRow) {
 	p.state.JobFinish(job)
 }
 
-func (p *producer) maybeCancelJob(id int64) {
+func (p *producer) maybeCancelJob(ctx context.Context, id int64) {
 	executor, ok := p.activeJobs[id]
 	if !ok {
 		return
 	}
-	executor.Cancel()
+	executor.Cancel(ctx)
 }
 
 func (p *producer) dispatchWork(workCtx context.Context, count int, fetchResultCh chan<- producerFetchResult) {
@@ -756,7 +756,7 @@ func (p *producer) dispatchWork(workCtx context.Context, count int, fetchResultC
 		Schema:         p.config.Schema,
 	})
 	if err != nil {
-		p.Logger.Error(p.Name+": Error fetching jobs", slog.String("err", err.Error()), slog.String("queue", p.config.Queue))
+		p.Logger.ErrorContext(ctx, p.Name+": Error fetching jobs", slog.String("err", err.Error()), slog.String("queue", p.config.Queue))
 		fetchResultCh <- producerFetchResult{err: err}
 		return
 	}

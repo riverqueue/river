@@ -243,6 +243,7 @@ func (s *BaseStartStop) StoppedUnsafe() <-chan struct{} { return s.stopped }
 
 type startStopFunc struct {
 	BaseStartStop
+
 	startFunc func(ctx context.Context, shouldStart bool, started, stopped func()) error
 }
 

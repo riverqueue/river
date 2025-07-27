@@ -22,6 +22,7 @@ func (args ReportingArgs) Kind() string { return "Reporting" }
 
 type ReportingWorker struct {
 	river.WorkerDefaults[ReportingArgs]
+
 	jobWorkedCh chan<- string
 }
 

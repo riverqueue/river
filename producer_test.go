@@ -73,6 +73,7 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 
 	type WithJobNumArgs struct {
 		testutil.JobArgsReflectKind[WithJobNumArgs]
+
 		JobNum int `json:"job_num"`
 	}
 
