@@ -28,6 +28,7 @@ func (WaitsForCancelOnlyArgs) Kind() string { return "waits_for_cancel_only" }
 // context is cancelled.
 type WaitsForCancelOnlyWorker struct {
 	river.WorkerDefaults[WaitsForCancelOnlyArgs]
+
 	jobStarted chan struct{}
 }
 

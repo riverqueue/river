@@ -42,6 +42,7 @@ func Logger(ctx context.Context) *slog.Logger {
 type Middleware struct {
 	baseservice.BaseService
 	rivertype.Middleware
+
 	config           *MiddlewareConfig
 	newCustomContext func(ctx context.Context, w io.Writer) context.Context
 	newSlogHandler   func(w io.Writer) slog.Handler

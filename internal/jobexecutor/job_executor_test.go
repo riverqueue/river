@@ -761,7 +761,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		go func() {
 			<-jobStarted
-			executor.Cancel()
+			executor.Cancel(ctx)
 			close(haveCancelled)
 		}()
 

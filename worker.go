@@ -181,6 +181,7 @@ func (w Workers) add(jobArgs JobArgs, workUnitFactory workunit.WorkUnitFactory) 
 // workFunc implements JobArgs and is used to wrap a function given to WorkFunc.
 type workFunc[T JobArgs] struct {
 	WorkerDefaults[T]
+
 	kind string
 	f    func(context.Context, *Job[T]) error
 }

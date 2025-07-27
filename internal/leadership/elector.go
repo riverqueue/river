@@ -350,7 +350,7 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 			}
 
 			sleepDuration := serviceutil.ExponentialBackoff(numErrors, serviceutil.MaxAttemptsBeforeResetDefault)
-			e.Logger.Error(e.Name+": Error attempting reelection", e.errorSlogArgs(err, numErrors, sleepDuration)...)
+			e.Logger.ErrorContext(ctx, e.Name+": Error attempting reelection", e.errorSlogArgs(err, numErrors, sleepDuration)...)
 			serviceutil.CancellableSleep(ctx, sleepDuration)
 			continue
 		}

@@ -172,7 +172,7 @@ func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, err
 				Schema:                      s.Config.Schema,
 			})
 			if err != nil {
-				return 0, fmt.Errorf("error deleting completed jobs: %w", err)
+				return 0, fmt.Errorf("error cleaning jobs: %w", err)
 			}
 
 			return numDeleted, nil

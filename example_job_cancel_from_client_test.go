@@ -22,6 +22,7 @@ func (args SleepingArgs) Kind() string { return "SleepingWorker" }
 
 type SleepingWorker struct {
 	river.WorkerDefaults[CancellingArgs]
+
 	jobChan chan int64
 }
 

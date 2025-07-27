@@ -43,6 +43,7 @@ func TestUniqueKey(t *testing.T) {
 			argsFunc: func() rivertype.JobArgs {
 				type EmailJobArgs struct {
 					JobArgsStaticKind
+
 					Recipient   string `json:"recipient"    river:"unique"`
 					Subject     string `json:"subject"      river:"unique"`
 					Body        string `json:"body"`
@@ -66,6 +67,7 @@ func TestUniqueKey(t *testing.T) {
 			argsFunc: func() rivertype.JobArgs {
 				type SMSJobArgs struct {
 					JobArgsStaticKind
+
 					PhoneNumber string `json:"phone_number"      river:"unique"`
 					Message     string `json:"message,omitempty" river:"unique"`
 					TemplateID  int    `json:"template_id"`
@@ -85,6 +87,7 @@ func TestUniqueKey(t *testing.T) {
 			argsFunc: func() rivertype.JobArgs {
 				type EmailJobArgs struct {
 					JobArgsStaticKind
+
 					Recipient  string `river:"unique"`
 					Subject    string `river:"unique"`
 					TemplateID int
@@ -104,6 +107,7 @@ func TestUniqueKey(t *testing.T) {
 			argsFunc: func() rivertype.JobArgs {
 				type EmailJobArgs struct {
 					JobArgsStaticKind
+
 					Recipient string `json:"recipient" river:"unique"`
 					Subject   string `json:"subject"   river:"unique"`
 					Body      string `json:"body"`
@@ -123,6 +127,7 @@ func TestUniqueKey(t *testing.T) {
 			argsFunc: func() rivertype.JobArgs {
 				type GenericJobArgs struct {
 					JobArgsStaticKind
+
 					Description string `json:"description"`
 					Count       int    `json:"count"`
 					foo         string // won't be marshaled in JSON
@@ -158,6 +163,7 @@ func TestUniqueKey(t *testing.T) {
 			argsFunc: func() rivertype.JobArgs {
 				type TaskJobArgs struct {
 					JobArgsStaticKind
+
 					TaskID string
 				}
 				return TaskJobArgs{
@@ -189,6 +195,7 @@ func TestUniqueKey(t *testing.T) {
 			argsFunc: func() rivertype.JobArgs {
 				type TaskJobArgs struct {
 					JobArgsStaticKind
+
 					TaskID string `json:"task_id"`
 				}
 				return TaskJobArgs{
@@ -204,6 +211,7 @@ func TestUniqueKey(t *testing.T) {
 			argsFunc: func() rivertype.JobArgs {
 				type TaskJobArgs struct {
 					JobArgsStaticKind
+
 					TaskID string `json:"task_id"`
 				}
 				return TaskJobArgs{
@@ -219,6 +227,7 @@ func TestUniqueKey(t *testing.T) {
 			argsFunc: func() rivertype.JobArgs {
 				type TaskJobArgs struct {
 					JobArgsStaticKind
+
 					TaskID string `json:"task_id"`
 				}
 				return TaskJobArgs{

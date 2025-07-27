@@ -975,6 +975,7 @@ func (e *Executor) TableTruncate(ctx context.Context, params *riverdriver.TableT
 
 type ExecutorTx struct {
 	Executor
+
 	tx pgx.Tx
 }
 

@@ -54,6 +54,7 @@ func TestPeriodicJobBundle(t *testing.T) {
 
 		type TestJobArgs struct {
 			testutil.JobArgsReflectKind[TestJobArgs]
+
 			JobNum int `json:"job_num"`
 		}
 

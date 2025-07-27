@@ -382,7 +382,7 @@ func (e *Executor) JobDeleteMany(ctx context.Context, params *riverdriver.JobDel
 // sqlc is buggy and can't parse it.
 //
 // The SQL appends a new `attempted_by` to a job's `attempted_by` array (a jsonb
-// array), which in SQLite is really quite difficult to to because there aren't
+// array), which in SQLite is really quite difficult to because there aren't
 // any arrays or array functions. I tried every version of this in sqlc I could
 // come up with, but there was a bug in every direction that blocked it. e.g.
 //
@@ -392,7 +392,7 @@ func (e *Executor) JobDeleteMany(ctx context.Context, params *riverdriver.JobDel
 //   - I tried putting it in a CTE, but this is paired with an `UPDATE` statement,
 //     and `UPDATE ... FROM` isn't support in sqlc for SQLite.
 //
-// I'm really hoping this could be fixed one day by by bringing it back in with
+// I'm really hoping this could be fixed one day by bringing it back in with
 // the rest of the job definitions, but it'll require some sqlc fixes for that
 // to work. Frustratingly, some of these fixes actually exist already [1], but
 // just can't be merged/release due to bottlenecks in the sqlc project.
@@ -732,7 +732,7 @@ func (e *Executor) JobKindListByPrefix(ctx context.Context, params *riverdriver.
 	kinds, err := dbsqlc.New().JobKindListByPrefix(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobKindListByPrefixParams{
 		After:   params.After,
 		Exclude: exclude,
-		Max:     int64(min(params.Max, math.MaxInt32)), //nolint:gosec
+		Max:     int64(min(params.Max, math.MaxInt32)),
 		Prefix:  params.Prefix,
 	})
 	if err != nil {
@@ -1259,7 +1259,7 @@ func (e *Executor) QueueNameListByPrefix(ctx context.Context, params *riverdrive
 	queueNames, err := dbsqlc.New().QueueNameListByPrefix(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueNameListByPrefixParams{
 		After:   params.After,
 		Exclude: exclude,
-		Max:     int64(min(params.Max, math.MaxInt32)), //nolint:gosec
+		Max:     int64(min(params.Max, math.MaxInt32)),
 		Prefix:  params.Prefix,
 	})
 	if err != nil {
@@ -1405,6 +1405,7 @@ func (e *Executor) TableTruncate(ctx context.Context, params *riverdriver.TableT
 
 type ExecutorTx struct {
 	Executor
+
 	tx *sql.Tx
 }
 
@@ -1430,6 +1431,7 @@ func (t *ExecutorTx) Rollback(ctx context.Context) error {
 
 type ExecutorSubTx struct {
 	Executor
+
 	beginOnce    *savepointutil.BeginOnlyOnce
 	savepointNum int
 	tx           *sql.Tx

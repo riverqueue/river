@@ -112,6 +112,7 @@ func serviceName(service startstop.Service) string {
 // should be called on service start to avoid thundering herd problems.
 type queueMaintainerServiceBase struct {
 	baseservice.BaseService
+
 	staggerStartupDisabled bool
 }
 

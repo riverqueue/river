@@ -1027,6 +1027,7 @@ func Test_Client_Common(t *testing.T) {
 
 		type JobArgs struct {
 			testutil.JobArgsReflectKind[JobArgs]
+
 			Name string `json:"name"`
 		}
 
@@ -1452,6 +1453,7 @@ var (
 
 type workerWithMiddleware[T JobArgs] struct {
 	WorkerDefaults[T]
+
 	workFunc       func(context.Context, *Job[T]) error
 	middlewareFunc func(*rivertype.JobRow) []rivertype.WorkerMiddleware
 }
@@ -1890,6 +1892,7 @@ func (callbackWithCustomTimeoutArgs) Kind() string { return "callbackWithCustomT
 
 type callbackWorkerWithCustomTimeout struct {
 	WorkerDefaults[callbackWithCustomTimeoutArgs]
+
 	fn func(context.Context, *Job[callbackWithCustomTimeoutArgs]) error
 }
 
@@ -5674,6 +5677,7 @@ func Test_Client_Subscribe(t *testing.T) {
 
 	type JobArgs struct {
 		testutil.JobArgsReflectKind[JobArgs]
+
 		Name string `json:"name"`
 	}
 
@@ -5948,6 +5952,7 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 
 		type JobArgs struct {
 			testutil.JobArgsReflectKind[JobArgs]
+
 			Name string `json:"name"`
 		}
 
@@ -6251,7 +6256,7 @@ func Test_Client_InsertNotificationsAreDeduplicatedAndDebounced(t *testing.T) {
 	}
 	notifyCh := make(chan notification, 10)
 	handleNotification := func(topic notifier.NotificationTopic, payload string) {
-		config.Logger.Info("received notification", slog.String("topic", string(topic)), slog.String("payload", payload))
+		config.Logger.InfoContext(ctx, "received notification", slog.String("topic", string(topic)), slog.String("payload", payload))
 		notif := notification{topic: topic}
 		require.NoError(t, json.Unmarshal([]byte(payload), &notif.payload))
 		notifyCh <- notif
@@ -6262,7 +6267,7 @@ func Test_Client_InsertNotificationsAreDeduplicatedAndDebounced(t *testing.T) {
 
 	expectImmediateNotification := func(t *testing.T, queue string) {
 		t.Helper()
-		config.Logger.Info("inserting " + queue + " job")
+		config.Logger.InfoContext(ctx, "inserting "+queue+" job")
 		_, err = client.Insert(ctx, JobArgs{}, &InsertOpts{Queue: queue})
 		require.NoError(t, err)
 		notif := riversharedtest.WaitOrTimeout(t, notifyCh)
@@ -6275,7 +6280,7 @@ func Test_Client_InsertNotificationsAreDeduplicatedAndDebounced(t *testing.T) {
 	tNotif1 := time.Now()
 
 	for range 5 {
-		config.Logger.Info("inserting queue1 job")
+		config.Logger.InfoContext(ctx, "inserting queue1 job")
 		_, err = client.Insert(ctx, JobArgs{}, &InsertOpts{Queue: "queue1"})
 		require.NoError(t, err)
 	}
@@ -7280,6 +7285,7 @@ type testWorkerDeadline struct {
 
 type timeoutTestWorker struct {
 	WorkerDefaults[timeoutTestArgs]
+
 	doneCh chan testWorkerDeadline
 }
 
@@ -7548,6 +7554,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 
 		type PartialArgs struct {
 			JobArgsStaticKind
+
 			Included bool `json:"included" river:"unique"`
 			Excluded bool `json:"excluded"`
 		}

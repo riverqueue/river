@@ -15,6 +15,7 @@ import (
 
 type MyService struct {
 	startstop.BaseStartStop
+
 	logger   *slog.Logger
 	startErr error
 }

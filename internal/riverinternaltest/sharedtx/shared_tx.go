@@ -141,6 +141,7 @@ func (d *sharedTxDerivative) unlockParent() {
 // the row finishes scanning.
 type SharedTxRow struct {
 	sharedTxDerivative
+
 	innerRow pgx.Row
 }
 
@@ -153,6 +154,7 @@ func (r *SharedTxRow) Scan(dest ...any) error {
 // the rows are closed.
 type SharedTxRows struct {
 	sharedTxDerivative
+
 	innerRows pgx.Rows
 }
 
@@ -177,6 +179,7 @@ func (r *SharedTxRows) Values() ([]interface{}, error) { return r.innerRows.Valu
 // rolls back.
 type SharedSubTx struct {
 	sharedTxDerivative
+
 	inner pgx.Tx
 }
 

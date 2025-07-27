@@ -28,6 +28,7 @@ import (
 
 type partialExecutorMock struct {
 	riverdriver.Executor
+
 	JobSetStateIfRunningManyCalled bool
 	JobSetStateIfRunningManyFunc   func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
 	mu                             sync.Mutex
@@ -63,6 +64,7 @@ func (m *partialExecutorMock) setCalled(setCalledFunc func()) {
 
 type partialExecutorTxMock struct {
 	riverdriver.ExecutorTx
+
 	partial *partialExecutorMock
 }
 
