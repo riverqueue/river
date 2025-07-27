@@ -97,17 +97,23 @@ type Config struct {
 	// CancelledJobRetentionPeriod is the amount of time to keep cancelled jobs
 	// around before they're removed permanently.
 	//
+	// The special value -1 disables deletion of cancelled jobs.
+	//
 	// Defaults to 24 hours.
 	CancelledJobRetentionPeriod time.Duration
 
 	// CompletedJobRetentionPeriod is the amount of time to keep completed jobs
 	// around before they're removed permanently.
 	//
+	// The special value -1 disables deletion of completed jobs.
+	//
 	// Defaults to 24 hours.
 	CompletedJobRetentionPeriod time.Duration
 
 	// DiscardedJobRetentionPeriod is the amount of time to keep discarded jobs
 	// around before they're removed permanently.
+	//
+	// The special value -1 disables deletion of discarded jobs.
 	//
 	// Defaults to 7 days.
 	DiscardedJobRetentionPeriod time.Duration
@@ -426,14 +432,14 @@ func (c *Config) WithDefaults() *Config {
 }
 
 func (c *Config) validate() error {
-	if c.CancelledJobRetentionPeriod < 0 {
-		return errors.New("CancelledJobRetentionPeriod time cannot be less than zero")
+	if c.CancelledJobRetentionPeriod < -1 {
+		return errors.New("CancelledJobRetentionPeriod time cannot be less than zero, except for -1 (infinite)")
 	}
-	if c.CompletedJobRetentionPeriod < 0 {
-		return errors.New("CompletedJobRetentionPeriod cannot be less than zero")
+	if c.CompletedJobRetentionPeriod < -1 {
+		return errors.New("CompletedJobRetentionPeriod cannot be less than zero, except for -1 (infinite)")
 	}
-	if c.DiscardedJobRetentionPeriod < 0 {
-		return errors.New("DiscardedJobRetentionPeriod cannot be less than zero")
+	if c.DiscardedJobRetentionPeriod < -1 {
+		return errors.New("DiscardedJobRetentionPeriod cannot be less than zero, except for -1 (infinite)")
 	}
 	if c.FetchCooldown < FetchCooldownMin {
 		return fmt.Errorf("FetchCooldown must be at least %s", FetchCooldownMin)

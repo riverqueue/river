@@ -266,8 +266,11 @@ func (e *Executor) JobDelete(ctx context.Context, params *riverdriver.JobDeleteP
 
 func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobDeleteBeforeParams) (int, error) {
 	res, err := dbsqlc.New().JobDeleteBefore(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobDeleteBeforeParams{
+		CancelledDoDelete:           params.CancelledDoDelete,
 		CancelledFinalizedAtHorizon: params.CancelledFinalizedAtHorizon,
+		CompletedDoDelete:           params.CompletedDoDelete,
 		CompletedFinalizedAtHorizon: params.CompletedFinalizedAtHorizon,
+		DiscardedDoDelete:           params.DiscardedDoDelete,
 		DiscardedFinalizedAtHorizon: params.DiscardedFinalizedAtHorizon,
 		Max:                         int64(params.Max),
 	})

@@ -263,25 +263,31 @@ WHERE id IN (
     SELECT id
     FROM /* TEMPLATE: schema */river_job
     WHERE
-        (state = 'cancelled' AND finalized_at < $1::timestamptz) OR
-        (state = 'completed' AND finalized_at < $2::timestamptz) OR
-        (state = 'discarded' AND finalized_at < $3::timestamptz)
+        (state = 'cancelled' AND $1 AND finalized_at < $2::timestamptz) OR
+        (state = 'completed' AND $3 AND finalized_at < $4::timestamptz) OR
+        (state = 'discarded' AND $5 AND finalized_at < $6::timestamptz)
     ORDER BY id
-    LIMIT $4::bigint
+    LIMIT $7::bigint
 )
 `
 
 type JobDeleteBeforeParams struct {
+	CancelledDoDelete           interface{}
 	CancelledFinalizedAtHorizon time.Time
+	CompletedDoDelete           interface{}
 	CompletedFinalizedAtHorizon time.Time
+	DiscardedDoDelete           interface{}
 	DiscardedFinalizedAtHorizon time.Time
 	Max                         int64
 }
 
 func (q *Queries) JobDeleteBefore(ctx context.Context, db DBTX, arg *JobDeleteBeforeParams) (pgconn.CommandTag, error) {
 	return db.Exec(ctx, jobDeleteBefore,
+		arg.CancelledDoDelete,
 		arg.CancelledFinalizedAtHorizon,
+		arg.CompletedDoDelete,
 		arg.CompletedFinalizedAtHorizon,
+		arg.DiscardedDoDelete,
 		arg.DiscardedFinalizedAtHorizon,
 		arg.Max,
 	)

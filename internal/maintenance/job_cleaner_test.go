@@ -134,6 +134,104 @@ func TestJobCleaner(t *testing.T) {
 		require.NotErrorIs(t, err, rivertype.ErrNotFound) // still there
 	})
 
+	t.Run("DoesNotDeleteWhenRetentionMinusOne", func(t *testing.T) {
+		t.Parallel()
+
+		cleaner, bundle := setup(t)
+		cleaner.Config.CancelledJobRetentionPeriod = -1
+		cleaner.Config.CompletedJobRetentionPeriod = -1
+		cleaner.Config.DiscardedJobRetentionPeriod = -1
+
+		cancelledJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
+		completedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
+		discardedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
+
+		require.NoError(t, cleaner.Start(ctx))
+
+		cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
+
+		var err error
+
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: cancelledJob.ID, Schema: cleaner.Config.Schema})
+		require.NotErrorIs(t, err, rivertype.ErrNotFound) // still there
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: completedJob.ID, Schema: cleaner.Config.Schema})
+		require.NotErrorIs(t, err, rivertype.ErrNotFound) // still there
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: discardedJob.ID, Schema: cleaner.Config.Schema})
+		require.NotErrorIs(t, err, rivertype.ErrNotFound) // still there
+	})
+
+	t.Run("DoesNotDeleteCancelledWhenRetentionMinusOne", func(t *testing.T) { //nolint:dupl
+		t.Parallel()
+
+		cleaner, bundle := setup(t)
+		cleaner.Config.CancelledJobRetentionPeriod = -1
+
+		cancelledJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
+		completedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
+		discardedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
+
+		require.NoError(t, cleaner.Start(ctx))
+
+		cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
+
+		var err error
+
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: cancelledJob.ID, Schema: cleaner.Config.Schema})
+		require.NotErrorIs(t, err, rivertype.ErrNotFound) // still there
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: completedJob.ID, Schema: cleaner.Config.Schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: discardedJob.ID, Schema: cleaner.Config.Schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+	})
+
+	t.Run("DoesNotDeleteCompletedWhenRetentionMinusOne", func(t *testing.T) { //nolint:dupl
+		t.Parallel()
+
+		cleaner, bundle := setup(t)
+		cleaner.Config.CompletedJobRetentionPeriod = -1
+
+		cancelledJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
+		completedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
+		discardedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
+
+		require.NoError(t, cleaner.Start(ctx))
+
+		cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
+
+		var err error
+
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: cancelledJob.ID, Schema: cleaner.Config.Schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: completedJob.ID, Schema: cleaner.Config.Schema})
+		require.NotErrorIs(t, err, rivertype.ErrNotFound) // still there
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: discardedJob.ID, Schema: cleaner.Config.Schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+	})
+
+	t.Run("DoesNotDeleteDiscardedWhenRetentionMinusOne", func(t *testing.T) { //nolint:dupl
+		t.Parallel()
+
+		cleaner, bundle := setup(t)
+		cleaner.Config.DiscardedJobRetentionPeriod = -1
+
+		cancelledJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
+		completedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
+		discardedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
+
+		require.NoError(t, cleaner.Start(ctx))
+
+		cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
+
+		var err error
+
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: cancelledJob.ID, Schema: cleaner.Config.Schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: completedJob.ID, Schema: cleaner.Config.Schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: discardedJob.ID, Schema: cleaner.Config.Schema})
+		require.NotErrorIs(t, err, rivertype.ErrNotFound) // still there
+	})
+
 	t.Run("DeletesInBatches", func(t *testing.T) {
 		t.Parallel()
 

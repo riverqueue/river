@@ -158,9 +158,9 @@ WHERE id IN (
     SELECT id
     FROM /* TEMPLATE: schema */river_job
     WHERE
-        (state = 'cancelled' AND finalized_at < @cancelled_finalized_at_horizon::timestamptz) OR
-        (state = 'completed' AND finalized_at < @completed_finalized_at_horizon::timestamptz) OR
-        (state = 'discarded' AND finalized_at < @discarded_finalized_at_horizon::timestamptz)
+        (state = 'cancelled' AND @cancelled_do_delete AND finalized_at < @cancelled_finalized_at_horizon::timestamptz) OR
+        (state = 'completed' AND @completed_do_delete AND finalized_at < @completed_finalized_at_horizon::timestamptz) OR
+        (state = 'discarded' AND @discarded_do_delete AND finalized_at < @discarded_finalized_at_horizon::timestamptz)
     ORDER BY id
     LIMIT @max::bigint
 );

@@ -374,8 +374,11 @@ type JobDeleteParams struct {
 }
 
 type JobDeleteBeforeParams struct {
+	CancelledDoDelete           bool
 	CancelledFinalizedAtHorizon time.Time
+	CompletedDoDelete           bool
 	CompletedFinalizedAtHorizon time.Time
+	DiscardedDoDelete           bool
 	DiscardedFinalizedAtHorizon time.Time
 	Max                         int
 	Schema                      string
