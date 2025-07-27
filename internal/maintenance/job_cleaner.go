@@ -60,13 +60,13 @@ type JobCleanerConfig struct {
 }
 
 func (c *JobCleanerConfig) mustValidate() *JobCleanerConfig {
-	if c.CancelledJobRetentionPeriod <= 0 {
+	if c.CancelledJobRetentionPeriod < -1 {
 		panic("JobCleanerConfig.CancelledJobRetentionPeriod must be above zero")
 	}
-	if c.CompletedJobRetentionPeriod <= 0 {
+	if c.CompletedJobRetentionPeriod < -1 {
 		panic("JobCleanerConfig.CompletedJobRetentionPeriod must be above zero")
 	}
-	if c.DiscardedJobRetentionPeriod <= 0 {
+	if c.DiscardedJobRetentionPeriod < -1 {
 		panic("JobCleanerConfig.DiscardedJobRetentionPeriod must be above zero")
 	}
 	if c.Interval <= 0 {
@@ -161,12 +161,23 @@ func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, err
 	for {
 		// Wrapped in a function so that defers run as expected.
 		numDeleted, err := func() (int, error) {
+			// In the special case that all retentions are indefinite, don't
+			// bother issuing the query at all as an optimization.
+			if s.Config.CompletedJobRetentionPeriod == -1 &&
+				s.Config.CancelledJobRetentionPeriod == -1 &&
+				s.Config.DiscardedJobRetentionPeriod == -1 {
+				return 0, nil
+			}
+
 			ctx, cancelFunc := context.WithTimeout(ctx, s.Config.Timeout)
 			defer cancelFunc()
 
 			numDeleted, err := s.exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
+				CancelledDoDelete:           s.Config.CancelledJobRetentionPeriod != -1,
 				CancelledFinalizedAtHorizon: time.Now().Add(-s.Config.CancelledJobRetentionPeriod),
+				CompletedDoDelete:           s.Config.CompletedJobRetentionPeriod != -1,
 				CompletedFinalizedAtHorizon: time.Now().Add(-s.Config.CompletedJobRetentionPeriod),
+				DiscardedDoDelete:           s.Config.DiscardedJobRetentionPeriod != -1,
 				DiscardedFinalizedAtHorizon: time.Now().Add(-s.Config.DiscardedJobRetentionPeriod),
 				Max:                         s.batchSize,
 				Schema:                      s.Config.Schema,

@@ -946,8 +946,11 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 		// Max two deleted on the first pass.
 		numDeleted, err := exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
+			CancelledDoDelete:           true,
 			CancelledFinalizedAtHorizon: horizon,
+			CompletedDoDelete:           true,
 			CompletedFinalizedAtHorizon: horizon,
+			DiscardedDoDelete:           true,
 			DiscardedFinalizedAtHorizon: horizon,
 			Max:                         2,
 		})
@@ -956,8 +959,11 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 		// And one more pass gets the last one.
 		numDeleted, err = exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
+			CancelledDoDelete:           true,
 			CancelledFinalizedAtHorizon: horizon,
+			CompletedDoDelete:           true,
 			CompletedFinalizedAtHorizon: horizon,
+			DiscardedDoDelete:           true,
 			DiscardedFinalizedAtHorizon: horizon,
 			Max:                         2,
 		})

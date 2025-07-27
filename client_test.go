@@ -4600,7 +4600,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		riversharedtest.WaitOrTimeout(t, client.queueMaintainer.Started())
 	}
 
-	t.Run("JobCleaner", func(t *testing.T) {
+	t.Run("JobCleanerCleans", func(t *testing.T) {
 		t.Parallel()
 
 		config := newTestConfig(t, "")
@@ -4653,6 +4653,40 @@ func Test_Client_Maintenance(t *testing.T) {
 		_, err = client.JobGet(ctx, jobWithinHorizon2.ID)
 		require.NotErrorIs(t, err, ErrNotFound) // still there
 		_, err = client.JobGet(ctx, jobWithinHorizon3.ID)
+		require.NotErrorIs(t, err, ErrNotFound) // still there
+	})
+
+	t.Run("JobCleanerDoesNotCleanWithMinusOneRetention", func(t *testing.T) {
+		t.Parallel()
+
+		config := newTestConfig(t, "")
+		config.CancelledJobRetentionPeriod = -1
+		config.CompletedJobRetentionPeriod = -1
+		config.DiscardedJobRetentionPeriod = -1
+
+		client, bundle := setup(t, config)
+
+		// Normal long retention period.
+		deleteHorizon := time.Now().Add(-maintenance.DiscardedJobRetentionPeriodDefault)
+
+		// Take care to insert jobs before starting the client because otherwise
+		// there's a race condition where the cleaner could run its initial
+		// pass before our insertion is complete.
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
+		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
+
+		startAndWaitForQueueMaintainer(ctx, t, client)
+
+		jc := maintenance.GetService[*maintenance.JobCleaner](client.queueMaintainer)
+		jc.TestSignals.DeletedBatch.WaitOrTimeout()
+
+		var err error
+		_, err = client.JobGet(ctx, job1.ID)
+		require.NotErrorIs(t, err, ErrNotFound) // still there
+		_, err = client.JobGet(ctx, job2.ID)
+		require.NotErrorIs(t, err, ErrNotFound) // still there
+		_, err = client.JobGet(ctx, job3.ID)
 		require.NotErrorIs(t, err, ErrNotFound) // still there
 	})
 
