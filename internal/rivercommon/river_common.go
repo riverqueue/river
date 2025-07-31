@@ -17,10 +17,18 @@ const (
 	QueueDefault       = "default"
 )
 
-// MetadataKeyUniqueNonce is a special metadata key used by the SQLite driver to
-// determine whether an upsert is was skipped or not because the `(xmax != 0)`
-// trick we use in Postgres doesn't work in SQLite.
-const MetadataKeyUniqueNonce = "river:unique_nonce"
+const (
+	// MetadataKeyPeriodicJobID is a metadata key inserted with a periodic job
+	// when a configured periodic job has its ID property set. This lets
+	// inserted jobs easily be traced back to the periodic job that created
+	// them.
+	MetadataKeyPeriodicJobID = "river:periodic_job_id"
+
+	// MetadataKeyUniqueNonce is a special metadata key used by the SQLite driver to
+	// determine whether an upsert is was skipped or not because the `(xmax != 0)`
+	// trick we use in Postgres doesn't work in SQLite.
+	MetadataKeyUniqueNonce = "river:unique_nonce"
+)
 
 type ContextKeyClient struct{}
 

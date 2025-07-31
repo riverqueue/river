@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/rivercommon"
@@ -230,7 +231,9 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		requireNJobs(t, bundle, "periodic_job_500ms", 0)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle, "periodic_job_500ms", 1)
+		insertedPeriodicJobs := requireNJobs(t, bundle, "periodic_job_500ms", 1)
+
+		require.Empty(t, gjson.GetBytes(insertedPeriodicJobs[0].Metadata, rivercommon.MetadataKeyPeriodicJobID).Str) // no metadata set without periodic job ID
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
 		requireNJobs(t, bundle, "periodic_job_500ms", 2)
@@ -774,10 +777,12 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle, "periodic_job_100ms", 1)
+		insertedPeriodicJobs := requireNJobs(t, bundle, "periodic_job_100ms", 1)
 		requireNJobs(t, bundle, "periodic_job_500ms", 0)
 		requireNJobs(t, bundle, "periodic_job_1500ms", 0)
 		require.True(t, periodicJobUpsertManyMockCalled)
+
+		require.Equal(t, "periodic_job_100ms", gjson.GetBytes(insertedPeriodicJobs[0].Metadata, rivercommon.MetadataKeyPeriodicJobID).Str)
 
 		svc.TestSignals.PeriodicJobKeepAliveAndReap.WaitOrTimeout()
 		require.True(t, periodicJobKeepAliveAndReapMockCalled)
