@@ -336,7 +336,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 					continue
 				}
 
-				if insertParams, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc, now); ok {
+				if insertParams, ok := s.insertParamsFromConstructor(ctx, periodicJob.ID, periodicJob.ConstructorFunc, now); ok {
 					insertParamsMany = append(insertParamsMany, insertParams)
 				}
 
@@ -386,7 +386,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 							continue
 						}
 
-						if insertParams, ok := s.insertParamsFromConstructor(ctx, periodicJob.ConstructorFunc, periodicJob.nextRunAt); ok {
+						if insertParams, ok := s.insertParamsFromConstructor(ctx, periodicJob.ID, periodicJob.ConstructorFunc, periodicJob.nextRunAt); ok {
 							insertParamsMany = append(insertParamsMany, insertParams)
 						}
 
@@ -470,7 +470,7 @@ func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany 
 	s.TestSignals.InsertedJobs.Signal(struct{}{})
 }
 
-func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, constructorFunc func() (*rivertype.JobInsertParams, error), scheduledAt time.Time) (*rivertype.JobInsertParams, bool) {
+func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, periodicJobID string, constructorFunc func() (*rivertype.JobInsertParams, error), scheduledAt time.Time) (*rivertype.JobInsertParams, bool) {
 	insertParams, err := constructorFunc()
 	if err != nil {
 		if errors.Is(err, ErrNoJobToInsert) {
@@ -484,6 +484,13 @@ func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, c
 
 	if insertParams.ScheduledAt == nil {
 		insertParams.ScheduledAt = &scheduledAt
+	}
+
+	if periodicJobID != "" {
+		var err error
+		if insertParams.Metadata, err = sjson.SetBytes(insertParams.Metadata, rivercommon.MetadataKeyPeriodicJobID, periodicJobID); err != nil {
+			s.Logger.ErrorContext(ctx, s.Name+": Error setting periodic metadata", "error", err.Error())
+		}
 	}
 
 	if insertParams.Metadata, err = sjson.SetBytes(insertParams.Metadata, "periodic", true); err != nil {
