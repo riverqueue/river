@@ -36,7 +36,7 @@ type Pilot interface {
 
 	JobSetStateIfRunningMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
 
-	PilotInit(archetype *baseservice.Archetype)
+	PilotInit(archetype *baseservice.Archetype, params *PilotInitParams)
 
 	// ProducerInit is called when a producer is started. It should return the ID
 	// of the new producer, a new state object that will be used to track the
@@ -48,6 +48,17 @@ type Pilot interface {
 	ProducerShutdown(ctx context.Context, exec riverdriver.Executor, params *ProducerShutdownParams) error
 
 	QueueMetadataChanged(ctx context.Context, exec riverdriver.Executor, params *QueueMetadataChangedParams) error
+}
+
+// PilotInitParams are parameters for initializing a pilot.
+//
+// API is not stable. DO NOT USE.
+type PilotInitParams struct {
+	// WorkerMetadata is metadata about registered workers as received from the
+	// client's worker bundle. Only available when a client will work jobs (i.e.
+	// has Workers configured), so while it's safe to assume the presence of
+	// this value in places like maintenance services, it's not in all contexts.
+	WorkerMetadata []*rivertype.WorkerMetadata
 }
 
 // PilotPeriodicJob contains pilot functions related to periodic jobs. This is

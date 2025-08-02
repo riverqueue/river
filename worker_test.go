@@ -45,6 +45,16 @@ func TestWork(t *testing.T) {
 			return nil
 		}))
 	})
+
+	type OtherJobArgs struct {
+		testutil.JobArgsReflectKind[OtherJobArgs]
+	}
+
+	var jobArgs OtherJobArgs
+	AddWorkerArgs(workers, jobArgs, WorkFunc(func(ctx context.Context, job *Job[OtherJobArgs]) error {
+		return nil
+	}))
+	require.Contains(t, workers.workersMap, (OtherJobArgs{}).Kind())
 }
 
 type configurableArgs struct {

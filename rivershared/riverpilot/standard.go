@@ -48,7 +48,7 @@ func (p *StandardPilot) PeriodicJobUpsertMany(ctx context.Context, exec riverdri
 	return nil, nil
 }
 
-func (p *StandardPilot) PilotInit(archetype *baseservice.Archetype) {
+func (p *StandardPilot) PilotInit(archetype *baseservice.Archetype, params *PilotInitParams) {
 	// No-op
 }
 
