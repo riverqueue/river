@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `JobDeleteMany` operations that remove many jobs in a single operation according to input criteria. [PR #962](https://github.com/riverqueue/river/pull/962)
 - Added `Client.Schema()` method to return a client's configured schema. [PR #983](https://github.com/riverqueue/river/pull/983).
 - Integrated riverui queries into the driver system to pave the way for multi-driver UI support. [PR #983](https://github.com/riverqueue/river/pull/983).
+- Added `QueueConfig` level `FetchCooldown` and `FetchPollInterval` settings to enable queue-specific job fetch intervals. For example, a queue of high-priority jobs could be checked more often to improve responsiveness, while one with slow or time-insensitive tasks could be checked infrequently to reduce database load. [PR #994](https://github.com/riverqueue/river/pull/994).
 
 ### Changed
 

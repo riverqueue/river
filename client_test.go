@@ -7184,6 +7184,32 @@ func Test_NewClient_Validations(t *testing.T) {
 			configFunc: func(config *Config) { config.Queues = make(map[string]QueueConfig) },
 		},
 		{
+			name: "Queues FetchCooldown can be overridden",
+			configFunc: func(config *Config) {
+				config.Queues = map[string]QueueConfig{QueueDefault: {FetchCooldown: 9 * time.Millisecond, MaxWorkers: 1}}
+			},
+			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
+				require.Equal(t, 9*time.Millisecond, client.producersByQueueName[QueueDefault].config.FetchCooldown)
+			},
+		},
+		{
+			name: "Queues FetchCooldown can't be greater than Client FetchPollInterval",
+			configFunc: func(config *Config) {
+				config.Queues = map[string]QueueConfig{QueueDefault: {FetchCooldown: 10 * time.Millisecond, MaxWorkers: 1}}
+				config.FetchPollInterval = 9 * time.Millisecond
+			},
+			wantErr: fmt.Errorf("FetchPollInterval cannot be shorter than FetchCooldown (%s)", FetchCooldownDefault),
+		},
+		{
+			name: "Queues FetchPollInterval can be overridden",
+			configFunc: func(config *Config) {
+				config.Queues = map[string]QueueConfig{QueueDefault: {FetchPollInterval: 9 * time.Second, MaxWorkers: 1}}
+			},
+			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
+				require.Equal(t, 9*time.Second, client.producersByQueueName[QueueDefault].config.FetchPollInterval)
+			},
+		},
+		{
 			name: "Queues MaxWorkers can't be negative",
 			configFunc: func(config *Config) {
 				config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: -1}}
