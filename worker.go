@@ -74,8 +74,6 @@ type Worker[T JobArgs] interface {
 // struct to make it fulfill the Worker interface with default values.
 type WorkerDefaults[T JobArgs] struct{}
 
-func (w WorkerDefaults[T]) Hooks(*rivertype.JobRow) []rivertype.Hook { return nil }
-
 func (w WorkerDefaults[T]) Middleware(*rivertype.JobRow) []rivertype.WorkerMiddleware { return nil }
 
 // NextRetry returns an empty time.Time{} to avoid setting any job or
