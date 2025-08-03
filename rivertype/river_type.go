@@ -494,3 +494,13 @@ func UniqueOptsByStateDefault() []JobState {
 		JobStateScheduled,
 	}
 }
+
+// WorkerMetadata is metadata about workers registerd with a client.
+type WorkerMetadata struct {
+	// JobArgHooks are job args specific hooks returned from a JobArgsWithHooks
+	// implementation.
+	JobArgHooks []Hook
+
+	// Kind is the kind returned from job args and recognized by worker to work.
+	Kind string
+}

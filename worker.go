@@ -105,6 +105,17 @@ func AddWorker[T JobArgs](workers *Workers, worker Worker[T]) {
 	}
 }
 
+// AddWorkerArgs is the same as AddWorker except that it lets args be passed
+// explicitly rather than being instantiated implicitly. We don't know of any
+// use for this function beyond exercising some args-related edge cases in tests
+// are are difficult/impossible to exercise otherwise, and its use should be
+// considered internal only.
+func AddWorkerArgs[T JobArgs](workers *Workers, jobArgs T, worker Worker[T]) {
+	if err := workers.add(jobArgs, &workUnitFactoryWrapper[T]{worker: worker}); err != nil {
+		panic(err)
+	}
+}
+
 // AddWorkerSafely registers a worker on the provided Workers bundle. Unlike AddWorker,
 // AddWorkerSafely does not panic and instead returns an error if the worker
 // is already registered or if its configuration is invalid.

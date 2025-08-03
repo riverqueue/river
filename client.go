@@ -776,10 +776,29 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		pluginDriver.PluginInit(archetype)
 		client.pilot = pluginDriver.PluginPilot()
 	}
+
+	var workerMetadata []*rivertype.WorkerMetadata
+	if config.Workers != nil {
+		workerMetadata = make([]*rivertype.WorkerMetadata, 0, len(config.Workers.workersMap))
+		for kind, workerInfo := range config.Workers.workersMap {
+			var hooks []rivertype.Hook
+			if jobArgsWithHooks, ok := workerInfo.jobArgs.(JobArgsWithHooks); ok {
+				hooks = jobArgsWithHooks.Hooks()
+			}
+
+			workerMetadata = append(workerMetadata, &rivertype.WorkerMetadata{
+				JobArgHooks: hooks,
+				Kind:        kind,
+			})
+		}
+	}
+
 	if client.pilot == nil {
 		client.pilot = &riverpilot.StandardPilot{}
 	}
-	client.pilot.PilotInit(archetype)
+	client.pilot.PilotInit(archetype, &riverpilot.PilotInitParams{
+		WorkerMetadata: workerMetadata,
+	})
 	pluginPilot, _ := client.pilot.(pilotPlugin)
 
 	if withBaseService, ok := config.RetryPolicy.(baseservice.WithBaseService); ok {
