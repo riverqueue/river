@@ -32,6 +32,7 @@ type PeriodicJobEnqueuerTestSignals struct {
 	EnteredLoop                 testsignal.TestSignal[struct{}] // notifies when the enqueuer finishes start up and enters its initial run loop
 	InsertedJobs                testsignal.TestSignal[struct{}] // notifies when a batch of jobs is inserted
 	PeriodicJobKeepAliveAndReap testsignal.TestSignal[struct{}] // notifies when the background services that runs keep alive and reap on periodic jobs ticks
+	PeriodicJobUpserted         testsignal.TestSignal[struct{}] // notifies when a batch of periodic job records are upserted to pilot
 	SkippedJob                  testsignal.TestSignal[struct{}] // notifies when a job is skipped because of nil JobInsertParams
 }
 
@@ -39,6 +40,7 @@ func (ts *PeriodicJobEnqueuerTestSignals) Init(tb testutil.TestingTB) {
 	ts.EnteredLoop.Init(tb)
 	ts.InsertedJobs.Init(tb)
 	ts.PeriodicJobKeepAliveAndReap.Init(tb)
+	ts.PeriodicJobUpserted.Init(tb)
 	ts.SkippedJob.Init(tb)
 }
 
@@ -332,19 +334,19 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 					periodicJob.nextRunAt = periodicJob.ScheduleFunc(now)
 				}
 
+				if periodicJob.ID != "" {
+					periodicJobUpsertParams.Jobs = append(periodicJobUpsertParams.Jobs, &riverpilot.PeriodicJobUpsertParams{
+						ID:        periodicJob.ID,
+						NextRunAt: periodicJob.nextRunAt,
+					})
+				}
+
 				if !periodicJob.RunOnStart {
 					continue
 				}
 
 				if insertParams, ok := s.insertParamsFromConstructor(ctx, periodicJob.ID, periodicJob.ConstructorFunc, now); ok {
 					insertParamsMany = append(insertParamsMany, insertParams)
-				}
-
-				if periodicJob.ID != "" {
-					periodicJobUpsertParams.Jobs = append(periodicJobUpsertParams.Jobs, &riverpilot.PeriodicJobUpsertParams{
-						ID:        periodicJob.ID,
-						NextRunAt: periodicJob.nextRunAt,
-					})
 				}
 			}
 
@@ -436,7 +438,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 }
 
 func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany []*rivertype.JobInsertParams, periodicJobUpsertParams *riverpilot.PeriodicJobUpsertManyParams) {
-	if len(insertParamsMany) < 1 {
+	if len(insertParamsMany) < 1 && len(periodicJobUpsertParams.Jobs) < 1 {
 		return
 	}
 
@@ -467,7 +469,12 @@ func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany 
 		return
 	}
 
-	s.TestSignals.InsertedJobs.Signal(struct{}{})
+	if len(insertParamsMany) > 0 {
+		s.TestSignals.InsertedJobs.Signal(struct{}{})
+	}
+	if len(periodicJobUpsertParams.Jobs) > 0 {
+		s.TestSignals.PeriodicJobUpserted.Signal(struct{}{})
+	}
 }
 
 func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, periodicJobID string, constructorFunc func() (*rivertype.JobInsertParams, error), scheduledAt time.Time) (*rivertype.JobInsertParams, bool) {
