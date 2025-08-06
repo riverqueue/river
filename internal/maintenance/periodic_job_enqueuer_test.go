@@ -759,10 +759,9 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			return nil, nil
 		}
 
-		var periodicJobUpsertManyMockCalled bool
+		var insertedPeriodicJobIDs [][]string
 		bundle.pilotMock.PeriodicJobUpsertManyMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobUpsertManyParams) ([]*riverpilot.PeriodicJob, error) {
-			periodicJobUpsertManyMockCalled = true
-			require.Equal(t, []string{"periodic_job_100ms"}, sliceutil.Map(params.Jobs, func(j *riverpilot.PeriodicJobUpsertParams) string { return j.ID }))
+			insertedPeriodicJobIDs = append(insertedPeriodicJobIDs, sliceutil.Map(params.Jobs, func(j *riverpilot.PeriodicJobUpsertParams) string { return j.ID }))
 			require.Equal(t, bundle.schema, params.Schema)
 			return nil, nil
 		}
@@ -777,12 +776,22 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
+
+		// periodic_job_100ms runs immediately because it didn't have a
+		// persisted record from PeriodicJobGetAllMock
 		insertedPeriodicJobs := requireNJobs(t, bundle, "periodic_job_100ms", 1)
 		requireNJobs(t, bundle, "periodic_job_500ms", 0)
 		requireNJobs(t, bundle, "periodic_job_1500ms", 0)
-		require.True(t, periodicJobUpsertManyMockCalled)
 
 		require.Equal(t, "periodic_job_100ms", gjson.GetBytes(insertedPeriodicJobs[0].Metadata, rivercommon.MetadataKeyPeriodicJobID).Str)
+
+		// During the first invocation periodic job records for all three jobs
+		// are inserted (this happens on start up), then after one run we expect
+		// only an insertion for the job that actually ran.
+		require.Equal(t, [][]string{
+			{"periodic_job_100ms", "periodic_job_500ms", "periodic_job_1500ms"},
+			{"periodic_job_100ms"},
+		}, insertedPeriodicJobIDs)
 
 		svc.TestSignals.PeriodicJobKeepAliveAndReap.WaitOrTimeout()
 		require.True(t, periodicJobKeepAliveAndReapMockCalled)
@@ -829,6 +838,43 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc.TestSignals.PeriodicJobKeepAliveAndReap.WaitOrTimeout()
 		require.False(t, periodicJobKeepAliveAndReapMockCalled)
+	})
+
+	t.Run("PeriodicJobsWithIDAlwaysUpserted", func(t *testing.T) {
+		t.Parallel()
+
+		svc, bundle := setup(t)
+
+		bundle.pilotMock.PeriodicJobGetAllMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobGetAllParams) ([]*riverpilot.PeriodicJob, error) {
+			return []*riverpilot.PeriodicJob{}, nil
+		}
+
+		bundle.pilotMock.PeriodicJobKeepAliveAndReapMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobKeepAliveAndReapParams) ([]*riverpilot.PeriodicJob, error) {
+			return nil, nil
+		}
+
+		var insertedPeriodicJobIDs [][]string
+		bundle.pilotMock.PeriodicJobUpsertManyMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobUpsertManyParams) ([]*riverpilot.PeriodicJob, error) {
+			insertedPeriodicJobIDs = append(insertedPeriodicJobIDs, sliceutil.Map(params.Jobs, func(j *riverpilot.PeriodicJobUpsertParams) string { return j.ID }))
+			return nil, nil
+		}
+
+		_, err := svc.AddManySafely([]*PeriodicJob{
+			{ID: "periodic_job_10m", ScheduleFunc: periodicIntervalSchedule(10 * time.Minute), ConstructorFunc: jobConstructorFunc("periodic_job_10m", false)},
+			{ID: "periodic_job_20m", ScheduleFunc: periodicIntervalSchedule(20 * time.Minute), ConstructorFunc: jobConstructorFunc("periodic_job_20m", false)},
+
+			// this one doesn't have an ID and won't get an initial insert
+			{ScheduleFunc: periodicIntervalSchedule(30 * time.Minute), ConstructorFunc: jobConstructorFunc("periodic_job_30m", false)},
+		})
+		require.NoError(t, err)
+
+		startService(t, svc)
+
+		svc.TestSignals.PeriodicJobUpserted.WaitOrTimeout()
+
+		require.Equal(t, [][]string{
+			{"periodic_job_10m", "periodic_job_20m"},
+		}, insertedPeriodicJobIDs)
 	})
 
 	t.Run("DuplicateIDError", func(t *testing.T) {
