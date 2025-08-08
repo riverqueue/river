@@ -54,11 +54,33 @@ type Pilot interface {
 //
 // API is not stable. DO NOT USE.
 type PilotInitParams struct {
+	// Insert is the insert implementation from the main client. This is
+	// used as a low-level insert that shouldn't be accessible via public API,
+	// but should be accessible to deep integrations.
+	Insert func(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) ([]*rivertype.JobInsertResult, error)
+
+	// NotifyNonTxJobInsert is a special function that should be invoked when a
+	// client knows that a job has become available and the transaction that
+	// committed it has finished so that it's possible for a producer to fetch
+	// it. This is used in special cases like poll-only clients to improve
+	// latency between job insert and when a job is worked.
+	NotifyNonTxJobInsert func(ctx context.Context, res []*rivertype.JobInsertResult)
+
 	// WorkerMetadata is metadata about registered workers as received from the
 	// client's worker bundle. Only available when a client will work jobs (i.e.
 	// has Workers configured), so while it's safe to assume the presence of
 	// this value in places like maintenance services, it's not in all contexts.
 	WorkerMetadata []*rivertype.WorkerMetadata
+}
+
+func (p *PilotInitParams) Validate() *PilotInitParams {
+	if p.Insert == nil {
+		panic("need PilotInitParams.Insert")
+	}
+	if p.NotifyNonTxJobInsert == nil {
+		panic("need PilotInitParams.NotifyNonTxJobInsert ")
+	}
+	return p
 }
 
 // PilotPeriodicJob contains pilot functions related to periodic jobs. This is

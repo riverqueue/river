@@ -23,13 +23,13 @@ import (
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/notifylimiter"
 	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
+	"github.com/riverqueue/river/rivershared/util/dbutil"
 	"github.com/riverqueue/river/rivershared/util/maputil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
@@ -796,9 +796,11 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	if client.pilot == nil {
 		client.pilot = &riverpilot.StandardPilot{}
 	}
-	client.pilot.PilotInit(archetype, &riverpilot.PilotInitParams{
-		WorkerMetadata: workerMetadata,
-	})
+	client.pilot.PilotInit(archetype, (&riverpilot.PilotInitParams{
+		Insert:               client.insertMany,
+		NotifyNonTxJobInsert: client.notifyProducerWithoutListenerJobFetch,
+		WorkerMetadata:       workerMetadata,
+	}).Validate())
 	pluginPilot, _ := client.pilot.(pilotPlugin)
 
 	if withBaseService, ok := config.RetryPolicy.(baseservice.WithBaseService); ok {
@@ -898,12 +900,9 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		{
 			periodicJobEnqueuer, err := maintenance.NewPeriodicJobEnqueuer(archetype, &maintenance.PeriodicJobEnqueuerConfig{
 				AdvisoryLockPrefix: config.AdvisoryLockPrefix,
-				Insert: func(ctx context.Context, execTx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) error {
-					_, err := client.insertMany(ctx, execTx, insertParams)
-					return err
-				},
-				Pilot:  client.pilot,
-				Schema: config.Schema,
+				Insert:             client.insertMany,
+				Pilot:              client.pilot,
+				Schema:             config.Schema,
 			}, driver.GetExecutor())
 			if err != nil {
 				return nil, err
@@ -1632,16 +1631,16 @@ func (c *Client[TTx]) Insert(ctx context.Context, args JobArgs, opts *InsertOpts
 		return nil, errNoDriverDBPool
 	}
 
-	res, err := dbutil.WithTxV(ctx, c.driver.GetExecutor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) (*insertManySharedResult, error) {
+	res, err := dbutil.WithTxV(ctx, c.driver.GetExecutor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) ([]*rivertype.JobInsertResult, error) {
 		return c.validateParamsAndInsertMany(ctx, execTx, []InsertManyParams{{Args: args, InsertOpts: opts}})
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	c.notifyProducerWithoutListenerJobFetch(res.QueuesDeduped)
+	c.notifyProducerWithoutListenerJobFetch(ctx, res)
 
-	return res.InsertResults[0], nil
+	return res[0], nil
 }
 
 // InsertTx inserts a new job with the provided args on the given transaction.
@@ -1666,7 +1665,7 @@ func (c *Client[TTx]) InsertTx(ctx context.Context, tx TTx, args JobArgs, opts *
 	if err != nil {
 		return nil, err
 	}
-	return res.InsertResults[0], nil
+	return res[0], nil
 }
 
 // InsertManyParams encapsulates a single job combined with insert options for
@@ -1698,16 +1697,16 @@ func (c *Client[TTx]) InsertMany(ctx context.Context, params []InsertManyParams)
 		return nil, errNoDriverDBPool
 	}
 
-	res, err := dbutil.WithTxV(ctx, c.driver.GetExecutor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) (*insertManySharedResult, error) {
+	res, err := dbutil.WithTxV(ctx, c.driver.GetExecutor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) ([]*rivertype.JobInsertResult, error) {
 		return c.validateParamsAndInsertMany(ctx, execTx, params)
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	c.notifyProducerWithoutListenerJobFetch(res.QueuesDeduped)
+	c.notifyProducerWithoutListenerJobFetch(ctx, res)
 
-	return res.InsertResults, nil
+	return res, nil
 }
 
 // InsertManyTx inserts many jobs at once. Each job is inserted as an
@@ -1733,14 +1732,14 @@ func (c *Client[TTx]) InsertManyTx(ctx context.Context, tx TTx, params []InsertM
 	if err != nil {
 		return nil, err
 	}
-	return res.InsertResults, nil
+	return res, nil
 }
 
 // validateParamsAndInsertMany is a helper method that wraps the insertMany
 // method to provide param validation and conversion prior to calling the actual
 // insertMany method. This allows insertMany to be reused by the
 // PeriodicJobEnqueuer which cannot reference top-level river package types.
-func (c *Client[TTx]) validateParamsAndInsertMany(ctx context.Context, execTx riverdriver.ExecutorTx, params []InsertManyParams) (*insertManySharedResult, error) {
+func (c *Client[TTx]) validateParamsAndInsertMany(ctx context.Context, execTx riverdriver.ExecutorTx, params []InsertManyParams) ([]*rivertype.JobInsertResult, error) {
 	insertParams, err := c.insertManyParams(params)
 	if err != nil {
 		return nil, err
@@ -1751,7 +1750,7 @@ func (c *Client[TTx]) validateParamsAndInsertMany(ctx context.Context, execTx ri
 
 // insertMany is a shared code path for InsertMany and InsertManyTx, also used
 // by the PeriodicJobEnqueuer.
-func (c *Client[TTx]) insertMany(ctx context.Context, execTx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) (*insertManySharedResult, error) {
+func (c *Client[TTx]) insertMany(ctx context.Context, execTx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) ([]*rivertype.JobInsertResult, error) {
 	return c.insertManyShared(ctx, execTx, insertParams, func(ctx context.Context, insertParams []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error) {
 		results, err := c.pilot.JobInsertMany(ctx, execTx, &riverdriver.JobInsertFastManyParams{
 			Jobs:   insertParams,
@@ -1769,11 +1768,6 @@ func (c *Client[TTx]) insertMany(ctx context.Context, execTx riverdriver.Executo
 	})
 }
 
-type insertManySharedResult struct {
-	InsertResults []*rivertype.JobInsertResult
-	QueuesDeduped []string
-}
-
 // The shared code path for all Insert and InsertMany methods. It takes a
 // function that executes the actual insert operation and allows for different
 // implementations of the insert query to be passed in, each mapping their
@@ -1783,9 +1777,7 @@ func (c *Client[TTx]) insertManyShared(
 	tx riverdriver.ExecutorTx,
 	insertParams []*rivertype.JobInsertParams,
 	execute func(context.Context, []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error),
-) (*insertManySharedResult, error) {
-	var queuesDeduped []string
-
+) ([]*rivertype.JobInsertResult, error) {
 	doInner := func(ctx context.Context) ([]*rivertype.JobInsertResult, error) {
 		for _, params := range insertParams {
 			for _, hook := range append(
@@ -1814,9 +1806,7 @@ func (c *Client[TTx]) insertManyShared(
 			}
 		}
 
-		queuesDeduped = sliceutil.Uniq(queues)
-
-		if err = c.maybeNotifyInsertForQueues(ctx, tx, queuesDeduped); err != nil {
+		if err = c.maybeNotifyInsertForQueues(ctx, tx, queues); err != nil {
 			return nil, err
 		}
 
@@ -1836,15 +1826,7 @@ func (c *Client[TTx]) insertManyShared(
 		}
 	}
 
-	insertResults, err := doInner(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return &insertManySharedResult{
-		InsertResults: insertResults,
-		QueuesDeduped: queuesDeduped,
-	}, nil
+	return doInner(ctx)
 }
 
 // Validates input parameters for a batch insert operation and generates a set
@@ -1878,13 +1860,30 @@ func (c *Client[TTx]) insertManyParams(params []InsertManyParams) ([]*rivertype.
 // Should only ever be invoked *outside* a transaction. If invoked within a
 // transaction, the producer wouldn't yet be able to access the new jobs that
 // triggered the notification because they're not committed yet.
-func (c *Client[TTx]) notifyProducerWithoutListenerJobFetch(queuesDeduped []string) {
+func (c *Client[TTx]) notifyProducerWithoutListenerJobFetch(_ context.Context, res []*rivertype.JobInsertResult) {
 	if c.driver.SupportsListener() || len(c.producersByQueueName) < 1 {
 		return
 	}
 
-	for _, queue := range queuesDeduped {
-		if producer, ok := c.producersByQueueName[queue]; ok {
+	// Special case for when we were handling exactly one job, which is a very
+	// common case. Acts as a minor optimization by avoiding the map allocation.
+	if len(res) == 1 {
+		if producer, ok := c.producersByQueueName[res[0].Job.Queue]; ok {
+			producer.TriggerJobFetch()
+		}
+
+		return
+	}
+
+	queuesTriggered := make(map[string]struct{})
+
+	for _, insertRes := range res {
+		if _, ok := queuesTriggered[insertRes.Job.Queue]; ok {
+			continue
+		}
+		queuesTriggered[insertRes.Job.Queue] = struct{}{}
+
+		if producer, ok := c.producersByQueueName[insertRes.Job.Queue]; ok {
 			producer.TriggerJobFetch()
 		}
 	}
@@ -1914,16 +1913,16 @@ func (c *Client[TTx]) InsertManyFast(ctx context.Context, params []InsertManyPar
 	}
 
 	// Wrap in a transaction in case we need to notify about inserts.
-	res, err := dbutil.WithTxV(ctx, c.driver.GetExecutor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) (*insertManySharedResult, error) {
+	res, err := dbutil.WithTxV(ctx, c.driver.GetExecutor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) ([]*rivertype.JobInsertResult, error) {
 		return c.insertManyFast(ctx, execTx, params)
 	})
 	if err != nil {
 		return 0, err
 	}
 
-	c.notifyProducerWithoutListenerJobFetch(res.QueuesDeduped)
+	c.notifyProducerWithoutListenerJobFetch(ctx, res)
 
-	return len(res.InsertResults), nil
+	return len(res), nil
 }
 
 // InsertManyTx inserts many jobs at once using Postgres' `COPY FROM` mechanism,
@@ -1954,10 +1953,10 @@ func (c *Client[TTx]) InsertManyFastTx(ctx context.Context, tx TTx, params []Ins
 	if err != nil {
 		return 0, err
 	}
-	return len(res.InsertResults), nil
+	return len(res), nil
 }
 
-func (c *Client[TTx]) insertManyFast(ctx context.Context, execTx riverdriver.ExecutorTx, params []InsertManyParams) (*insertManySharedResult, error) {
+func (c *Client[TTx]) insertManyFast(ctx context.Context, execTx riverdriver.ExecutorTx, params []InsertManyParams) ([]*rivertype.JobInsertResult, error) {
 	insertParams, err := c.insertManyParams(params)
 	if err != nil {
 		return nil, err
@@ -1978,12 +1977,13 @@ func (c *Client[TTx]) insertManyFast(ctx context.Context, execTx riverdriver.Exe
 // Notify the given queues that new jobs are available. The queues list will be
 // deduplicated and each will be checked to see if it is due for an insert
 // notification from this client.
-func (c *Client[TTx]) maybeNotifyInsertForQueues(ctx context.Context, tx riverdriver.ExecutorTx, queuesDeduped []string) error {
-	if len(queuesDeduped) < 1 {
+func (c *Client[TTx]) maybeNotifyInsertForQueues(ctx context.Context, tx riverdriver.ExecutorTx, queues []string) error {
+	if len(queues) < 1 {
 		return nil
 	}
 
 	var (
+		queuesDeduped   = sliceutil.Uniq(queues)
 		payloads        = make([]string, 0, len(queuesDeduped))
 		queuesTriggered = make([]string, 0, len(queuesDeduped))
 	)

@@ -424,6 +424,7 @@ type JobGetStuckParams struct {
 }
 
 type JobInsertFastParams struct {
+	ID *int64
 	// Args contains the raw underlying job arguments struct. It has already been
 	// encoded into EncodedArgs, but the original is kept here for to leverage its
 	// struct tags and interfaces, such as for use in unique key generation.

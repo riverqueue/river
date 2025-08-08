@@ -254,7 +254,24 @@ ORDER BY id
 LIMIT @max;
 
 -- name: JobInsertFastMany :many
+WITH raw_job_data AS (
+    SELECT
+        unnest(@id::bigint[]) AS id,
+        unnest(@args::jsonb[]) AS args,
+        unnest(@created_at::timestamptz[]) AS created_at,
+        unnest(@kind::text[]) AS kind,
+        unnest(@max_attempts::smallint[]) AS max_attempts,
+        unnest(@metadata::jsonb[]) AS metadata,
+        unnest(@priority::smallint[]) AS priority,
+        unnest(@queue::text[]) AS queue,
+        unnest(@scheduled_at::timestamptz[]) AS scheduled_at,
+        unnest(@state::text[]) AS state,
+        unnest(@tags::text[]) AS tags,
+        unnest(@unique_key::bytea[]) AS unique_key,
+        unnest(@unique_states::integer[]) AS unique_states
+)
 INSERT INTO /* TEMPLATE: schema */river_job(
+    id,
     args,
     created_at,
     kind,
@@ -268,24 +285,23 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     unique_key,
     unique_states
 ) SELECT
-    unnest(@args::jsonb[]),
-    unnest(@created_at::timestamptz[]),
-    unnest(@kind::text[]),
-    unnest(@max_attempts::smallint[]),
-    unnest(@metadata::jsonb[]),
-    unnest(@priority::smallint[]),
-    unnest(@queue::text[]),
-    unnest(@scheduled_at::timestamptz[]),
-    -- To avoid requiring pgx users to register the OID of the river_job_state[]
-    -- type, we cast the array to text[] and then to river_job_state.
-    unnest(@state::text[])::/* TEMPLATE: schema */river_job_state,
-    -- Unnest on a multi-dimensional array will fully flatten the array, so we
-    -- encode the tag list as a comma-separated string and split it in the
-    -- query.
-    string_to_array(unnest(@tags::text[]), ','),
-
-    nullif(unnest(@unique_key::bytea[]), ''),
-    nullif(unnest(@unique_states::integer[]), 0)::bit(8)
+    coalesce(nullif(id, 0), nextval('/* TEMPLATE: schema */river_job_id_seq'::regclass)),
+    args,
+    coalesce(nullif(created_at, '0001-01-01 00:00:00 +0000'), now()) AS created_at,
+    kind,
+    max_attempts,
+    coalesce(metadata, '{}'::jsonb) AS metadata,
+    priority,
+    queue,
+    coalesce(nullif(scheduled_at, '0001-01-01 00:00:00 +0000'), now()) AS scheduled_at,
+    state::/* TEMPLATE: schema */river_job_state,
+    string_to_array(tags, ',')::varchar(255)[],
+    -- `nullif` is required for `lib/pq`, which doesn't do a good job of reading
+    -- `nil` into `bytea`. We use `text` because otherwise `lib/pq` will encode
+    -- to Postgres binary like `\xAAAA`.
+    nullif(unique_key, '')::bytea,
+    nullif(unique_states::integer, 0)::bit(8)
+FROM raw_job_data
 ON CONFLICT (unique_key)
     WHERE unique_key IS NOT NULL
         AND unique_states IS NOT NULL
