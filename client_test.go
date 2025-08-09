@@ -863,7 +863,7 @@ func Test_Client_Common(t *testing.T) {
 		require.True(t, hookInsertBeginCalled.Load())
 	})
 
-	t.Run("WithWorkBeginHookOnJobArgs", func(t *testing.T) { //nolint:dupl
+	t.Run("WithWorkBeginHookOnJobArgs", func(t *testing.T) {
 		t.Parallel()
 
 		_, bundle := setup(t)
@@ -899,7 +899,7 @@ func Test_Client_Common(t *testing.T) {
 		require.True(t, hookWorkBeginCalled.Load())
 	})
 
-	t.Run("WithWorkEndHookOnJobArgs", func(t *testing.T) { //nolint:dupl
+	t.Run("WithWorkEndHookOnJobArgs", func(t *testing.T) {
 		t.Parallel()
 
 		_, bundle := setup(t)
