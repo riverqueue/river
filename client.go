@@ -559,16 +559,16 @@ type QueueConfig struct {
 
 func (c QueueConfig) validate(queueName string, clientFetchCooldown time.Duration, clientFetchPollInterval time.Duration) error {
 	if c.FetchCooldown < 0 {
-		return fmt.Errorf("FetchCooldown cannot be less than zero")
+		return errors.New("FetchCooldown cannot be less than zero")
 	}
 	if c.FetchPollInterval < 0 {
-		return fmt.Errorf("FetchPollInterval cannot be less than zero")
+		return errors.New("FetchPollInterval cannot be less than zero")
 	}
 
 	resolvedFetchCooldown := cmp.Or(c.FetchCooldown, clientFetchCooldown)
 	resolvedFetchPollInterval := cmp.Or(c.FetchPollInterval, clientFetchPollInterval)
 	if resolvedFetchPollInterval < resolvedFetchCooldown {
-		return fmt.Errorf("FetchPollInterval cannot be less than FetchCooldown")
+		return errors.New("FetchPollInterval cannot be less than FetchCooldown")
 	}
 
 	if c.MaxWorkers < 1 || c.MaxWorkers > QueueNumWorkersMax {

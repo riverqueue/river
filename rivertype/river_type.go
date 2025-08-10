@@ -495,7 +495,7 @@ func UniqueOptsByStateDefault() []JobState {
 	}
 }
 
-// WorkerMetadata is metadata about workers registerd with a client.
+// WorkerMetadata is metadata about workers registered with a client.
 type WorkerMetadata struct {
 	// JobArgHooks are job args specific hooks returned from a JobArgsWithHooks
 	// implementation.
