@@ -13,6 +13,7 @@ import (
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/randutil"
@@ -77,7 +78,7 @@ func (c *JobRescuerConfig) mustValidate() *JobRescuerConfig {
 // JobRescuer periodically rescues jobs that have been executing for too long
 // and are considered to be "stuck".
 type JobRescuer struct {
-	queueMaintainerServiceBase
+	riversharedmaintenance.QueueMaintainerServiceBase
 	startstop.BaseStartStop
 
 	// exported for test purposes
@@ -98,7 +99,7 @@ func NewRescuer(archetype *baseservice.Archetype, config *JobRescuerConfig, exec
 			WorkUnitFactoryFunc: config.WorkUnitFactoryFunc,
 		}).mustValidate(),
 
-		batchSize: BatchSizeDefault,
+		batchSize: riversharedmaintenance.BatchSizeDefault,
 		exec:      exec,
 	})
 }
@@ -115,8 +116,8 @@ func (s *JobRescuer) Start(ctx context.Context) error {
 		started()
 		defer stopped() // this defer should come first so it's last out
 
-		s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStarted)
-		defer s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStopped)
+		s.Logger.DebugContext(ctx, s.Name+riversharedmaintenance.LogPrefixRunLoopStarted)
+		defer s.Logger.DebugContext(ctx, s.Name+riversharedmaintenance.LogPrefixRunLoopStopped)
 
 		ticker := timeutil.NewTickerWithInitialTick(ctx, s.Config.Interval)
 		for {
@@ -135,7 +136,7 @@ func (s *JobRescuer) Start(ctx context.Context) error {
 			}
 
 			if res.NumJobsDiscarded > 0 || res.NumJobsRetried > 0 {
-				s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
+				s.Logger.InfoContext(ctx, s.Name+riversharedmaintenance.LogPrefixRanSuccessfully,
 					slog.Int64("num_jobs_discarded", res.NumJobsDiscarded),
 					slog.Int64("num_jobs_retry_scheduled", res.NumJobsRetried),
 				)
@@ -239,7 +240,7 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 			break
 		}
 
-		serviceutil.CancellableSleep(ctx, randutil.DurationBetween(BatchBackoffMin, BatchBackoffMax))
+		serviceutil.CancellableSleep(ctx, randutil.DurationBetween(riversharedmaintenance.BatchBackoffMin, riversharedmaintenance.BatchBackoffMax))
 	}
 
 	return res, nil

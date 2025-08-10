@@ -268,12 +268,21 @@ DELETE FROM /* TEMPLATE: schema */river_job
 WHERE id IN (
     SELECT id
     FROM /* TEMPLATE: schema */river_job
-    WHERE
-        (state = 'cancelled' AND $1 AND finalized_at < $2::timestamptz) OR
-        (state = 'completed' AND $3 AND finalized_at < $4::timestamptz) OR
-        (state = 'discarded' AND $5 AND finalized_at < $6::timestamptz)
+    WHERE (
+            (state = 'cancelled' AND $1 AND finalized_at < $2::timestamptz) OR
+            (state = 'completed' AND $3 AND finalized_at < $4::timestamptz) OR
+            (state = 'discarded' AND $5 AND finalized_at < $6::timestamptz)
+        )
+        AND (
+            $7::text[] IS NULL
+            OR NOT (queue = any($7))
+        )
+        AND (
+            $8::text[] IS NULL
+            OR queue = any($8)
+        )
     ORDER BY id
-    LIMIT $7::bigint
+    LIMIT $9::bigint
 )
 `
 
@@ -284,6 +293,8 @@ type JobDeleteBeforeParams struct {
 	CompletedFinalizedAtHorizon time.Time
 	DiscardedDoDelete           interface{}
 	DiscardedFinalizedAtHorizon time.Time
+	QueuesExcluded              []string
+	QueuesIncluded              []string
 	Max                         int64
 }
 
@@ -295,6 +306,8 @@ func (q *Queries) JobDeleteBefore(ctx context.Context, db DBTX, arg *JobDeleteBe
 		arg.CompletedFinalizedAtHorizon,
 		arg.DiscardedDoDelete,
 		arg.DiscardedFinalizedAtHorizon,
+		pq.Array(arg.QueuesExcluded),
+		pq.Array(arg.QueuesIncluded),
 		arg.Max,
 	)
 }

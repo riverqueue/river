@@ -214,16 +214,34 @@ func (q *Queries) JobDelete(ctx context.Context, db DBTX, id int64) (*RiverJob, 
 
 const jobDeleteBefore = `-- name: JobDeleteBefore :execresult
 DELETE FROM /* TEMPLATE: schema */river_job
-WHERE id IN (
-    SELECT id
-    FROM /* TEMPLATE: schema */river_job
-    WHERE
-        (state = 'cancelled' AND finalized_at < cast(?1 AS text)) OR
-        (state = 'completed' AND finalized_at < cast(?2 AS text)) OR
-        (state = 'discarded' AND finalized_at < cast(?3 AS text))
-    ORDER BY id
-    LIMIT ?4
-)
+WHERE
+    id IN (
+        SELECT id
+        FROM /* TEMPLATE: schema */river_job
+        WHERE
+            (state = 'cancelled' AND finalized_at < cast(?1 AS text)) OR
+            (state = 'completed' AND finalized_at < cast(?2 AS text)) OR
+            (state = 'discarded' AND finalized_at < cast(?3 AS text))
+        ORDER BY id
+        LIMIT ?4
+    )
+    -- This is really awful, but unless the ` + "`" + `sqlc.slice` + "`" + ` appears as the very
+    -- last parameter in the query things will fail if it includes more than one
+    -- element. The sqlc SQLite driver uses position-based placeholders (?1) for
+    -- most parameters, but unnamed ones with ` + "`" + `sqlc.slice` + "`" + ` (?), and when
+    -- positional parameters follow unnamed parameters great confusion is the
+    -- result. Making sure ` + "`" + `sqlc.slice` + "`" + ` is last is the only workaround I could
+    -- find, but it stops working if there are multiple clauses that need a
+    -- positional placeholder plus ` + "`" + `sqlc.slice` + "`" + ` like this one (the Postgres
+    -- driver supports a ` + "`" + `queues_included` + "`" + ` parameter that I couldn't support
+    -- here). The non-workaround version is (unfortunately) to never, ever use
+    -- the sqlc driver for SQLite -- it's not a little buggy, it's off the
+    -- charts buggy, and there's little interest from the maintainers in fixing
+    -- any of it. We already started using it though, so plough on.
+    AND (
+        cast(?5 AS boolean)
+        OR river_job.queue NOT IN (/*SLICE:queues_excluded*/?)
+    )
 `
 
 type JobDeleteBeforeParams struct {
@@ -231,15 +249,27 @@ type JobDeleteBeforeParams struct {
 	CompletedFinalizedAtHorizon string
 	DiscardedFinalizedAtHorizon string
 	Max                         int64
+	QueuesExcludedEmpty         bool
+	QueuesExcluded              []string
 }
 
 func (q *Queries) JobDeleteBefore(ctx context.Context, db DBTX, arg *JobDeleteBeforeParams) (sql.Result, error) {
-	return db.ExecContext(ctx, jobDeleteBefore,
-		arg.CancelledFinalizedAtHorizon,
-		arg.CompletedFinalizedAtHorizon,
-		arg.DiscardedFinalizedAtHorizon,
-		arg.Max,
-	)
+	query := jobDeleteBefore
+	var queryParams []interface{}
+	queryParams = append(queryParams, arg.CancelledFinalizedAtHorizon)
+	queryParams = append(queryParams, arg.CompletedFinalizedAtHorizon)
+	queryParams = append(queryParams, arg.DiscardedFinalizedAtHorizon)
+	queryParams = append(queryParams, arg.Max)
+	queryParams = append(queryParams, arg.QueuesExcludedEmpty)
+	if len(arg.QueuesExcluded) > 0 {
+		for _, v := range arg.QueuesExcluded {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:queues_excluded*/?", strings.Repeat(",?", len(arg.QueuesExcluded))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:queues_excluded*/?", "NULL", 1)
+	}
+	return db.ExecContext(ctx, query, queryParams...)
 }
 
 const jobDeleteMany = `-- name: JobDeleteMany :many

@@ -19,6 +19,11 @@ import (
 type Pilot interface {
 	PilotPeriodicJob
 
+	// JobCleanerQueuesExcluded returns queues that should be excluded from the
+	// main River client's JobCleaner. Empty omitted queues should return nil as
+	// instead of empty array.
+	JobCleanerQueuesExcluded() []string
+
 	JobGetAvailable(
 		ctx context.Context,
 		exec riverdriver.Executor,

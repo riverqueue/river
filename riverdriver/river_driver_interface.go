@@ -381,6 +381,8 @@ type JobDeleteBeforeParams struct {
 	DiscardedDoDelete           bool
 	DiscardedFinalizedAtHorizon time.Time
 	Max                         int
+	QueuesExcluded              []string
+	QueuesIncluded              []string
 	Schema                      string
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/startstoptest"
@@ -21,7 +22,7 @@ import (
 )
 
 type testService struct {
-	queueMaintainerServiceBase
+	riversharedmaintenance.QueueMaintainerServiceBase
 	startstop.BaseStartStop
 
 	testSignals testServiceTestSignals

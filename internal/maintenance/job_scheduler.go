@@ -10,6 +10,7 @@ import (
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/randutil"
@@ -71,7 +72,7 @@ func (c *JobSchedulerConfig) mustValidate() *JobSchedulerConfig {
 // which are ready to run over to `available` so that they're eligible to be
 // worked.
 type JobScheduler struct {
-	queueMaintainerServiceBase
+	riversharedmaintenance.QueueMaintainerServiceBase
 	startstop.BaseStartStop
 
 	// exported for test purposes
@@ -105,8 +106,8 @@ func (s *JobScheduler) Start(ctx context.Context) error { //nolint:dupl
 		started()
 		defer stopped() // this defer should come first so it's last out
 
-		s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStarted)
-		defer s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStopped)
+		s.Logger.DebugContext(ctx, s.Name+riversharedmaintenance.LogPrefixRunLoopStarted)
+		defer s.Logger.DebugContext(ctx, s.Name+riversharedmaintenance.LogPrefixRunLoopStopped)
 
 		ticker := timeutil.NewTickerWithInitialTick(ctx, s.config.Interval)
 		for {
@@ -125,7 +126,7 @@ func (s *JobScheduler) Start(ctx context.Context) error { //nolint:dupl
 			}
 
 			if res.NumCompletedJobsScheduled > 0 {
-				s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
+				s.Logger.InfoContext(ctx, s.Name+riversharedmaintenance.LogPrefixRanSuccessfully,
 					slog.Int("num_jobs_scheduled", res.NumCompletedJobsScheduled),
 				)
 			}
@@ -203,7 +204,7 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 			break
 		}
 
-		serviceutil.CancellableSleep(ctx, randutil.DurationBetween(BatchBackoffMin, BatchBackoffMax))
+		serviceutil.CancellableSleep(ctx, randutil.DurationBetween(riversharedmaintenance.BatchBackoffMin, riversharedmaintenance.BatchBackoffMax))
 	}
 
 	return res, nil

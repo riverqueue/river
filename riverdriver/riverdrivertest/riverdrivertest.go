@@ -926,66 +926,180 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	t.Run("JobDeleteBefore", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
-
 		var (
 			horizon       = time.Now()
 			beforeHorizon = horizon.Add(-1 * time.Minute)
 			afterHorizon  = horizon.Add(1 * time.Minute)
 		)
 
-		deletedJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCancelled)})
-		deletedJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
-		deletedJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
+		t.Run("Success", func(t *testing.T) {
+			t.Parallel()
 
-		// Not deleted because not appropriate state.
-		notDeletedJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-		notDeletedJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			exec, _ := setup(ctx, t)
 
-		// Not deleted because after the delete horizon.
-		notDeletedJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &afterHorizon, State: ptrutil.Ptr(rivertype.JobStateCancelled)})
+			deletedJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCancelled)})
+			deletedJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+			deletedJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
 
-		// Max two deleted on the first pass.
-		numDeleted, err := exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
-			CancelledDoDelete:           true,
-			CancelledFinalizedAtHorizon: horizon,
-			CompletedDoDelete:           true,
-			CompletedFinalizedAtHorizon: horizon,
-			DiscardedDoDelete:           true,
-			DiscardedFinalizedAtHorizon: horizon,
-			Max:                         2,
+			// Not deleted because not appropriate state.
+			notDeletedJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+			notDeletedJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
+
+			// Not deleted because after the delete horizon.
+			notDeletedJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &afterHorizon, State: ptrutil.Ptr(rivertype.JobStateCancelled)})
+
+			// Max two deleted on the first pass.
+			numDeleted, err := exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
+				CancelledDoDelete:           true,
+				CancelledFinalizedAtHorizon: horizon,
+				CompletedDoDelete:           true,
+				CompletedFinalizedAtHorizon: horizon,
+				DiscardedDoDelete:           true,
+				DiscardedFinalizedAtHorizon: horizon,
+				Max:                         2,
+			})
+			require.NoError(t, err)
+			require.Equal(t, 2, numDeleted)
+
+			// And one more pass gets the last one.
+			numDeleted, err = exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
+				CancelledDoDelete:           true,
+				CancelledFinalizedAtHorizon: horizon,
+				CompletedDoDelete:           true,
+				CompletedFinalizedAtHorizon: horizon,
+				DiscardedDoDelete:           true,
+				DiscardedFinalizedAtHorizon: horizon,
+				Max:                         2,
+			})
+			require.NoError(t, err)
+			require.Equal(t, 1, numDeleted)
+
+			// All deleted
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: deletedJob1.ID})
+			require.ErrorIs(t, err, rivertype.ErrNotFound)
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: deletedJob2.ID})
+			require.ErrorIs(t, err, rivertype.ErrNotFound)
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: deletedJob3.ID})
+			require.ErrorIs(t, err, rivertype.ErrNotFound)
+
+			// Not deleted
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notDeletedJob1.ID})
+			require.NoError(t, err)
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notDeletedJob2.ID})
+			require.NoError(t, err)
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notDeletedJob3.ID})
+			require.NoError(t, err)
 		})
-		require.NoError(t, err)
-		require.Equal(t, 2, numDeleted)
 
-		// And one more pass gets the last one.
-		numDeleted, err = exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
-			CancelledDoDelete:           true,
-			CancelledFinalizedAtHorizon: horizon,
-			CompletedDoDelete:           true,
-			CompletedFinalizedAtHorizon: horizon,
-			DiscardedDoDelete:           true,
-			DiscardedFinalizedAtHorizon: horizon,
-			Max:                         2,
+		t.Run("QueuesExcluded", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			var ( //nolint:dupl
+				cancelledJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCancelled)})
+				completedJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+				discardedJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
+
+				excludedQueue1 = "excluded1"
+				excludedQueue2 = "excluded2"
+
+				// Not deleted because in an omitted queue.
+				notDeletedJob1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, Queue: &excludedQueue1, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+				notDeletedJob2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, Queue: &excludedQueue2, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+			)
+
+			numDeleted, err := exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
+				CancelledDoDelete:           true,
+				CancelledFinalizedAtHorizon: horizon,
+				CompletedDoDelete:           true,
+				CompletedFinalizedAtHorizon: horizon,
+				DiscardedDoDelete:           true,
+				DiscardedFinalizedAtHorizon: horizon,
+				Max:                         1_000,
+				QueuesExcluded:              []string{excludedQueue1, excludedQueue2},
+			})
+			require.NoError(t, err)
+			require.Equal(t, 3, numDeleted)
+
+			// All deleted
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: cancelledJob.ID})
+			require.ErrorIs(t, err, rivertype.ErrNotFound)
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: completedJob.ID})
+			require.ErrorIs(t, err, rivertype.ErrNotFound)
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: discardedJob.ID})
+			require.ErrorIs(t, err, rivertype.ErrNotFound)
+
+			// Not deleted
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notDeletedJob1.ID})
+			require.NoError(t, err)
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notDeletedJob2.ID})
+			require.NoError(t, err)
 		})
-		require.NoError(t, err)
-		require.Equal(t, 1, numDeleted)
 
-		// All deleted.
-		_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: deletedJob1.ID})
-		require.ErrorIs(t, err, rivertype.ErrNotFound)
-		_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: deletedJob2.ID})
-		require.ErrorIs(t, err, rivertype.ErrNotFound)
-		_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: deletedJob3.ID})
-		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		t.Run("QueuesIncluded", func(t *testing.T) {
+			t.Parallel()
 
-		// Not deleted
-		_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notDeletedJob1.ID})
-		require.NoError(t, err)
-		_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notDeletedJob2.ID})
-		require.NoError(t, err)
-		_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notDeletedJob3.ID})
-		require.NoError(t, err)
+			exec, bundle := setup(ctx, t)
+
+			// I ran into yet another huge sqlc SQLite bug in that when mixing
+			// normal parameters with a `sqlc.slice` the latter must appear at
+			// the very end because it'll produce unnamed placeholders (?)
+			// instead of positional placeholders (?1) like most parameters. The
+			// trick of putting it at the end works, but only if you have
+			// exactly one `sqlc.slice` needed. If you need multiple and they
+			// need to be interspersed with other parameters (like in the case
+			// of `queues_excluded` and `queues_included`), everything stops
+			// working real fast. I could have worked around this by breaking
+			// the SQLite version of this operation into two sqlc queries, but
+			// since we only expect to need `queues_excluded` on SQLite (and not
+			// `queues_included` for the foreseeable future), I've just set
+			// SQLite to not support `queues_included` for the time being.
+			if bundle.driver.DatabaseName() == databaseNameSQLite {
+				t.Logf("Skipping JobDeleteBefore with QueuesIncluded test for SQLite")
+				return
+			}
+
+			var ( //nolint:dupl
+				cancelledJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCancelled)})
+				completedJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+				discardedJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
+
+				includedQueue1 = "included1"
+				includedQueue2 = "included2"
+
+				// Not deleted because in an omitted queue.
+				deletedJob1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, Queue: &includedQueue1, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+				deletedJob2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, Queue: &includedQueue2, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+			)
+
+			numDeleted, err := exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
+				CancelledDoDelete:           true,
+				CancelledFinalizedAtHorizon: horizon,
+				CompletedDoDelete:           true,
+				CompletedFinalizedAtHorizon: horizon,
+				DiscardedDoDelete:           true,
+				DiscardedFinalizedAtHorizon: horizon,
+				Max:                         1_000,
+				QueuesIncluded:              []string{includedQueue1, includedQueue2},
+			})
+			require.NoError(t, err)
+			require.Equal(t, 2, numDeleted)
+
+			// Not deleted
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: cancelledJob.ID})
+			require.NoError(t, err)
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: completedJob.ID})
+			require.NoError(t, err)
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: discardedJob.ID})
+			require.NoError(t, err)
+
+			// Deleted as part of included queues
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: deletedJob1.ID})
+			require.ErrorIs(t, err, rivertype.ErrNotFound)
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: deletedJob2.ID})
+			require.ErrorIs(t, err, rivertype.ErrNotFound)
+		})
 	})
 
 	t.Run("JobDeleteMany", func(t *testing.T) {

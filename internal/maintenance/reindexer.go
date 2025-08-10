@@ -9,6 +9,7 @@ import (
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/testutil"
@@ -76,7 +77,7 @@ func (c *ReindexerConfig) mustValidate() *ReindexerConfig {
 // Reindexer periodically executes a REINDEX command on the important job
 // indexes to rebuild them and fix bloat issues.
 type Reindexer struct {
-	queueMaintainerServiceBase
+	riversharedmaintenance.QueueMaintainerServiceBase
 	startstop.BaseStartStop
 
 	// exported for test purposes
@@ -107,7 +108,7 @@ func NewReindexer(archetype *baseservice.Archetype, config *ReindexerConfig, exe
 			Timeout:      cmp.Or(config.Timeout, ReindexerTimeoutDefault),
 		}).mustValidate(),
 
-		batchSize: BatchSizeDefault,
+		batchSize: riversharedmaintenance.BatchSizeDefault,
 		exec:      exec,
 	})
 }
@@ -124,8 +125,8 @@ func (s *Reindexer) Start(ctx context.Context) error {
 		started()
 		defer stopped() // this defer should come first so it's last out
 
-		s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStarted)
-		defer s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStopped)
+		s.Logger.DebugContext(ctx, s.Name+riversharedmaintenance.LogPrefixRunLoopStarted)
+		defer s.Logger.DebugContext(ctx, s.Name+riversharedmaintenance.LogPrefixRunLoopStopped)
 
 		nextRunAt := s.Config.ScheduleFunc(time.Now().UTC())
 
@@ -153,7 +154,7 @@ func (s *Reindexer) Start(ctx context.Context) error {
 				nextRunAt = s.Config.ScheduleFunc(nextRunAt)
 
 				// TODO: maybe we should log differently if some of these fail?
-				s.Logger.DebugContext(ctx, s.Name+logPrefixRanSuccessfully,
+				s.Logger.DebugContext(ctx, s.Name+riversharedmaintenance.LogPrefixRanSuccessfully,
 					slog.Time("next_run_at", nextRunAt), slog.Int("num_reindexes_initiated", len(s.Config.IndexNames)))
 
 				// Reset the timer after the insert loop has finished so it's

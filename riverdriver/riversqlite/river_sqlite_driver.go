@@ -343,11 +343,17 @@ func (e *Executor) JobDelete(ctx context.Context, params *riverdriver.JobDeleteP
 }
 
 func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobDeleteBeforeParams) (int, error) {
+	if len(params.QueuesIncluded) > 0 {
+		return 0, riverdriver.ErrNotImplemented
+	}
+
 	res, err := dbsqlc.New().JobDeleteBefore(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobDeleteBeforeParams{
 		CancelledFinalizedAtHorizon: timeString(params.CancelledFinalizedAtHorizon),
 		CompletedFinalizedAtHorizon: timeString(params.CompletedFinalizedAtHorizon),
 		DiscardedFinalizedAtHorizon: timeString(params.DiscardedFinalizedAtHorizon),
 		Max:                         int64(params.Max),
+		QueuesExcluded:              params.QueuesExcluded,
+		QueuesExcludedEmpty:         len(params.QueuesExcluded) < 1, // not in the Postgres version, but I couldn't find a way around it
 	})
 	if err != nil {
 		return 0, interpretError(err)

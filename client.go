@@ -27,6 +27,7 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riverpilot"
+	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/dbutil"
@@ -403,9 +404,9 @@ func (c *Config) WithDefaults() *Config {
 
 	return &Config{
 		AdvisoryLockPrefix:          c.AdvisoryLockPrefix,
-		CancelledJobRetentionPeriod: cmp.Or(c.CancelledJobRetentionPeriod, maintenance.CancelledJobRetentionPeriodDefault),
-		CompletedJobRetentionPeriod: cmp.Or(c.CompletedJobRetentionPeriod, maintenance.CompletedJobRetentionPeriodDefault),
-		DiscardedJobRetentionPeriod: cmp.Or(c.DiscardedJobRetentionPeriod, maintenance.DiscardedJobRetentionPeriodDefault),
+		CancelledJobRetentionPeriod: cmp.Or(c.CancelledJobRetentionPeriod, riversharedmaintenance.CancelledJobRetentionPeriodDefault),
+		CompletedJobRetentionPeriod: cmp.Or(c.CompletedJobRetentionPeriod, riversharedmaintenance.CompletedJobRetentionPeriodDefault),
+		DiscardedJobRetentionPeriod: cmp.Or(c.DiscardedJobRetentionPeriod, riversharedmaintenance.DiscardedJobRetentionPeriodDefault),
 		ErrorHandler:                c.ErrorHandler,
 		FetchCooldown:               cmp.Or(c.FetchCooldown, FetchCooldownDefault),
 		FetchPollInterval:           cmp.Or(c.FetchPollInterval, FetchPollIntervalDefault),
@@ -864,6 +865,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 				CancelledJobRetentionPeriod: config.CancelledJobRetentionPeriod,
 				CompletedJobRetentionPeriod: config.CompletedJobRetentionPeriod,
 				DiscardedJobRetentionPeriod: config.DiscardedJobRetentionPeriod,
+				QueuesExcluded:              client.pilot.JobCleanerQueuesExcluded(),
 				Schema:                      config.Schema,
 				Timeout:                     config.JobCleanerTimeout,
 			}, driver.GetExecutor())

@@ -10,20 +10,13 @@ import (
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
-)
-
-const (
-	CancelledJobRetentionPeriodDefault = 24 * time.Hour
-	CompletedJobRetentionPeriodDefault = 24 * time.Hour
-	DiscardedJobRetentionPeriodDefault = 7 * 24 * time.Hour
-	JobCleanerIntervalDefault          = 30 * time.Second
-	JobCleanerTimeoutDefault           = 30 * time.Second
 )
 
 // Test-only properties.
@@ -38,18 +31,27 @@ func (ts *JobCleanerTestSignals) Init(tb testutil.TestingTB) {
 type JobCleanerConfig struct {
 	// CancelledJobRetentionPeriod is the amount of time to keep cancelled jobs
 	// around before they're removed permanently.
+	//
+	// The special value -1 disables deletion of cancelled jobs.
 	CancelledJobRetentionPeriod time.Duration
 
 	// CompletedJobRetentionPeriod is the amount of time to keep completed jobs
 	// around before they're removed permanently.
+	//
+	// The special value -1 disables deletion of completed jobs.
 	CompletedJobRetentionPeriod time.Duration
 
 	// DiscardedJobRetentionPeriod is the amount of time to keep cancelled jobs
 	// around before they're removed permanently.
+	//
+	// The special value -1 disables deletion of discarded jobs.
 	DiscardedJobRetentionPeriod time.Duration
 
 	// Interval is the amount of time to wait between runs of the cleaner.
 	Interval time.Duration
+
+	// QueuesExcluded are queues that'll be excluded from cleaning.
+	QueuesExcluded []string
 
 	// Schema where River tables are located. Empty string omits schema, causing
 	// Postgres to default to `search_path`.
@@ -82,7 +84,7 @@ func (c *JobCleanerConfig) mustValidate() *JobCleanerConfig {
 // JobCleaner periodically removes finalized jobs that are cancelled, completed,
 // or discarded. Each state's retention time can be configured individually.
 type JobCleaner struct {
-	queueMaintainerServiceBase
+	riversharedmaintenance.QueueMaintainerServiceBase
 	startstop.BaseStartStop
 
 	// exported for test purposes
@@ -96,15 +98,16 @@ type JobCleaner struct {
 func NewJobCleaner(archetype *baseservice.Archetype, config *JobCleanerConfig, exec riverdriver.Executor) *JobCleaner {
 	return baseservice.Init(archetype, &JobCleaner{
 		Config: (&JobCleanerConfig{
-			CancelledJobRetentionPeriod: cmp.Or(config.CancelledJobRetentionPeriod, CancelledJobRetentionPeriodDefault),
-			CompletedJobRetentionPeriod: cmp.Or(config.CompletedJobRetentionPeriod, CompletedJobRetentionPeriodDefault),
-			DiscardedJobRetentionPeriod: cmp.Or(config.DiscardedJobRetentionPeriod, DiscardedJobRetentionPeriodDefault),
-			Interval:                    cmp.Or(config.Interval, JobCleanerIntervalDefault),
+			CancelledJobRetentionPeriod: cmp.Or(config.CancelledJobRetentionPeriod, riversharedmaintenance.CancelledJobRetentionPeriodDefault),
+			CompletedJobRetentionPeriod: cmp.Or(config.CompletedJobRetentionPeriod, riversharedmaintenance.CompletedJobRetentionPeriodDefault),
+			DiscardedJobRetentionPeriod: cmp.Or(config.DiscardedJobRetentionPeriod, riversharedmaintenance.DiscardedJobRetentionPeriodDefault),
+			QueuesExcluded:              config.QueuesExcluded,
+			Interval:                    cmp.Or(config.Interval, riversharedmaintenance.JobCleanerIntervalDefault),
 			Schema:                      config.Schema,
-			Timeout:                     cmp.Or(config.Timeout, JobCleanerTimeoutDefault),
+			Timeout:                     cmp.Or(config.Timeout, riversharedmaintenance.JobCleanerTimeoutDefault),
 		}).mustValidate(),
 
-		batchSize: BatchSizeDefault,
+		batchSize: riversharedmaintenance.BatchSizeDefault,
 		exec:      exec,
 	})
 }
@@ -121,8 +124,8 @@ func (s *JobCleaner) Start(ctx context.Context) error { //nolint:dupl
 		started()
 		defer stopped() // this defer should come first so it's last out
 
-		s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStarted)
-		defer s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStopped)
+		s.Logger.DebugContext(ctx, s.Name+riversharedmaintenance.LogPrefixRunLoopStarted)
+		defer s.Logger.DebugContext(ctx, s.Name+riversharedmaintenance.LogPrefixRunLoopStopped)
 
 		ticker := timeutil.NewTickerWithInitialTick(ctx, s.Config.Interval)
 		for {
@@ -141,7 +144,7 @@ func (s *JobCleaner) Start(ctx context.Context) error { //nolint:dupl
 			}
 
 			if res.NumJobsDeleted > 0 {
-				s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
+				s.Logger.InfoContext(ctx, s.Name+riversharedmaintenance.LogPrefixRanSuccessfully,
 					slog.Int("num_jobs_deleted", res.NumJobsDeleted),
 				)
 			}
@@ -180,6 +183,7 @@ func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, err
 				DiscardedDoDelete:           s.Config.DiscardedJobRetentionPeriod != -1,
 				DiscardedFinalizedAtHorizon: time.Now().Add(-s.Config.DiscardedJobRetentionPeriod),
 				Max:                         s.batchSize,
+				QueuesExcluded:              s.Config.QueuesExcluded,
 				Schema:                      s.Config.Schema,
 			})
 			if err != nil {
@@ -204,7 +208,7 @@ func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, err
 			slog.Int("num_jobs_deleted", numDeleted),
 		)
 
-		serviceutil.CancellableSleep(ctx, randutil.DurationBetween(BatchBackoffMin, BatchBackoffMax))
+		serviceutil.CancellableSleep(ctx, randutil.DurationBetween(riversharedmaintenance.BatchBackoffMin, riversharedmaintenance.BatchBackoffMax))
 	}
 
 	return res, nil
