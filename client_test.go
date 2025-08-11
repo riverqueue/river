@@ -168,9 +168,9 @@ func runNewTestClient(ctx context.Context, t *testing.T, config *Config) *Client
 	)
 	config.Schema = schema
 
-	// TODO(brandur): It'd be better if we could reuse the driver object here,
-	// but it'll take a lot of unwinding of all these test helpers.
-	client := newTestClient(t, dbPool, config)
+	client, err := NewClient(driver, config)
+	require.NoError(t, err)
+
 	startClient(ctx, t, client)
 
 	return client
@@ -199,6 +199,7 @@ func Test_Client_Common(t *testing.T) {
 	type testBundle struct {
 		config *Config
 		dbPool *pgxpool.Pool
+		driver *riverpgxv5.Driver
 		schema string
 	}
 
@@ -216,6 +217,7 @@ func Test_Client_Common(t *testing.T) {
 		return config, &testBundle{
 			config: config,
 			dbPool: dbPool,
+			driver: driver,
 			schema: schema,
 		}
 	}
@@ -225,10 +227,10 @@ func Test_Client_Common(t *testing.T) {
 
 		config, bundle := setupConfig(t)
 
-		// TODO(brandur): It'd be better if we could reuse the driver object
-		// from setupConfig here, but it'll take a lot of unwinding of all
-		// these test helpers.
-		return newTestClient(t, bundle.dbPool, config), bundle
+		client, err := NewClient(bundle.driver, config)
+		require.NoError(t, err)
+
+		return client, bundle
 	}
 
 	t.Run("StartInsertAndWork", func(t *testing.T) {
