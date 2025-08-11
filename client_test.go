@@ -7592,7 +7592,15 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		require.Equal(t, params.UniqueKey, params2.UniqueKey, "unique keys should be identical because included args are the same, even though others differ")
 	})
 
-	t.Run("PriorityIsLimitedTo4", func(t *testing.T) {
+	t.Run("PriorityMinimum1", func(t *testing.T) {
+		t.Parallel()
+
+		insertParams, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{Priority: -1})
+		require.ErrorContains(t, err, "priority must be between 1 and 4")
+		require.Nil(t, insertParams)
+	})
+
+	t.Run("PriorityMaximum4", func(t *testing.T) {
 		t.Parallel()
 
 		insertParams, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{Priority: 5})
@@ -7724,7 +7732,7 @@ func TestInsert(t *testing.T) {
 			args: noOpArgs{Name: "testJob"},
 			opts: &InsertOpts{
 				Queue:    "other",
-				Priority: 2, // TODO: enforce a range on priority
+				Priority: 2,
 				// TODO: comprehensive timezone testing
 				ScheduledAt: now.Add(time.Hour).In(time.FixedZone("UTC-5", -5*60*60)),
 				Tags:        []string{"tag1", "tag2"},
