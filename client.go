@@ -1554,7 +1554,7 @@ func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, conf
 		}
 	}
 
-	if priority > 4 {
+	if priority < 1 || priority > 4 {
 		return nil, errors.New("priority must be between 1 and 4")
 	}
 
