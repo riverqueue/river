@@ -20,7 +20,7 @@ require (
 	github.com/tidwall/gjson v1.18.0
 	github.com/tidwall/sjson v1.2.5
 	github.com/tursodatabase/libsql-client-go v0.0.0-20240902231107-85af5b9d094d
-	golang.org/x/text v0.27.0
+	golang.org/x/text v0.28.0
 	modernc.org/sqlite v1.38.2
 )
 
