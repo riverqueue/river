@@ -251,6 +251,9 @@ type AttemptError struct {
 
 	// Trace contains a stack trace from a job that panicked. The trace is
 	// produced by invoking `debug.Trace()`.
+	//
+	// In the case of a non-panic or an error produced as a stuck job was
+	// rescued, this value will be an empty string.
 	Trace string `json:"trace"`
 }
 
