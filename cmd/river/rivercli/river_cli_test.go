@@ -179,8 +179,9 @@ func TestBaseCommandSetIntegration(t *testing.T) {
 
 		buildInfo, _ := debug.ReadBuildInfo()
 
-		require.Equal(t, strings.TrimSpace(fmt.Sprintf(`
-River version (unknown)
+		// `devel` on 1.25, `unknown` on versions previous to that
+		require.Regexp(t, strings.TrimSpace(fmt.Sprintf(`
+River version \((devel|unknown)\)
 Built with %s
 		`, buildInfo.GoVersion)), strings.TrimSpace(bundle.out.String()))
 	})
@@ -195,8 +196,9 @@ Built with %s
 
 		buildInfo, _ := debug.ReadBuildInfo()
 
-		require.Equal(t, strings.TrimSpace(fmt.Sprintf(`
-River version (unknown)
+		// `devel` on 1.25, `unknown` on versions previous to that
+		require.Regexp(t, strings.TrimSpace(fmt.Sprintf(`
+River version \((devel|unknown)\)
 Built with %s
 		`, buildInfo.GoVersion)), strings.TrimSpace(bundle.out.String()))
 	})
@@ -502,8 +504,9 @@ func TestVersion(t *testing.T) {
 
 		buildInfo, _ := debug.ReadBuildInfo()
 
-		require.Equal(t, strings.TrimSpace(fmt.Sprintf(`
-River version (unknown)
+		// `devel` on 1.25, `unknown` on versions previous to that
+		require.Regexp(t, strings.TrimSpace(fmt.Sprintf(`
+River version \((devel|unknown)\)
 Built with %s
 		`, buildInfo.GoVersion)), strings.TrimSpace(bundle.buf.String()))
 	})
