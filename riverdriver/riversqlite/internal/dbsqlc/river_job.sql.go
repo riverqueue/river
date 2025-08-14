@@ -585,6 +585,7 @@ func (q *Queries) JobGetStuck(ctx context.Context, db DBTX, arg *JobGetStuckPara
 
 const jobInsertFast = `-- name: JobInsertFast :one
 INSERT INTO /* TEMPLATE: schema */river_job(
+    id,
     args,
     created_at,
     kind,
@@ -598,18 +599,19 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     unique_key,
     unique_states
 ) VALUES (
-    ?1,
-    coalesce(cast(?2 AS text), datetime('now', 'subsec')),
-    ?3,
+    cast(?1 AS integer),
+    ?2,
+    coalesce(cast(?3 AS text), datetime('now', 'subsec')),
     ?4,
-    json(cast(?5 AS blob)),
-    ?6,
+    ?5,
+    json(cast(?6 AS blob)),
     ?7,
-    coalesce(cast(?8 AS text), datetime('now', 'subsec')),
-    ?9,
-    json(cast(?10 AS blob)),
-    CASE WHEN length(cast(?11 AS blob)) = 0 THEN NULL ELSE ?11 END,
-    ?12
+    ?8,
+    coalesce(cast(?9 AS text), datetime('now', 'subsec')),
+    ?10,
+    json(cast(?11 AS blob)),
+    CASE WHEN length(cast(?12 AS blob)) = 0 THEN NULL ELSE ?12 END,
+    ?13
 )
 ON CONFLICT (unique_key)
     WHERE unique_key IS NOT NULL
@@ -631,6 +633,7 @@ RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, fin
 `
 
 type JobInsertFastParams struct {
+	ID           *int64
 	Args         []byte
 	CreatedAt    *string
 	Kind         string
@@ -656,6 +659,7 @@ type JobInsertFastParams struct {
 // a network, looping over operations is probably okay performance-wise.
 func (q *Queries) JobInsertFast(ctx context.Context, db DBTX, arg *JobInsertFastParams) (*RiverJob, error) {
 	row := db.QueryRowContext(ctx, jobInsertFast,
+		arg.ID,
 		arg.Args,
 		arg.CreatedAt,
 		arg.Kind,

@@ -42,11 +42,11 @@ import (
 	"github.com/tidwall/sjson"
 
 	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/util/dbutil"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riversqlite/internal/dbsqlc"
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
 	"github.com/riverqueue/river/rivershared/uniquestates"
+	"github.com/riverqueue/river/rivershared/util/dbutil"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/savepointutil"
@@ -511,6 +511,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.Jo
 			}
 
 			internal, err := dbsqlc.New().JobInsertFast(ctx, dbtx, &dbsqlc.JobInsertFastParams{
+				ID:           params.ID,
 				Args:         params.EncodedArgs,
 				CreatedAt:    timeStringNullable(params.CreatedAt),
 				Kind:         params.Kind,

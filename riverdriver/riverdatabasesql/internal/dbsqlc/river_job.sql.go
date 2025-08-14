@@ -649,7 +649,24 @@ func (q *Queries) JobGetStuck(ctx context.Context, db DBTX, arg *JobGetStuckPara
 }
 
 const jobInsertFastMany = `-- name: JobInsertFastMany :many
+WITH raw_job_data AS (
+    SELECT
+        unnest($1::bigint[]) AS id,
+        unnest($2::jsonb[]) AS args,
+        unnest($3::timestamptz[]) AS created_at,
+        unnest($4::text[]) AS kind,
+        unnest($5::smallint[]) AS max_attempts,
+        unnest($6::jsonb[]) AS metadata,
+        unnest($7::smallint[]) AS priority,
+        unnest($8::text[]) AS queue,
+        unnest($9::timestamptz[]) AS scheduled_at,
+        unnest($10::text[]) AS state,
+        unnest($11::text[]) AS tags,
+        unnest($12::bytea[]) AS unique_key,
+        unnest($13::integer[]) AS unique_states
+)
 INSERT INTO /* TEMPLATE: schema */river_job(
+    id,
     args,
     created_at,
     kind,
@@ -663,24 +680,23 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     unique_key,
     unique_states
 ) SELECT
-    unnest($1::jsonb[]),
-    unnest($2::timestamptz[]),
-    unnest($3::text[]),
-    unnest($4::smallint[]),
-    unnest($5::jsonb[]),
-    unnest($6::smallint[]),
-    unnest($7::text[]),
-    unnest($8::timestamptz[]),
-    -- To avoid requiring pgx users to register the OID of the river_job_state[]
-    -- type, we cast the array to text[] and then to river_job_state.
-    unnest($9::text[])::/* TEMPLATE: schema */river_job_state,
-    -- Unnest on a multi-dimensional array will fully flatten the array, so we
-    -- encode the tag list as a comma-separated string and split it in the
-    -- query.
-    string_to_array(unnest($10::text[]), ','),
-
-    nullif(unnest($11::bytea[]), ''),
-    nullif(unnest($12::integer[]), 0)::bit(8)
+    coalesce(nullif(id, 0), nextval('/* TEMPLATE: schema */river_job_id_seq'::regclass)),
+    args,
+    coalesce(nullif(created_at, '0001-01-01 00:00:00 +0000'), now()) AS created_at,
+    kind,
+    max_attempts,
+    coalesce(metadata, '{}'::jsonb) AS metadata,
+    priority,
+    queue,
+    coalesce(nullif(scheduled_at, '0001-01-01 00:00:00 +0000'), now()) AS scheduled_at,
+    state::/* TEMPLATE: schema */river_job_state,
+    string_to_array(tags, ',')::varchar(255)[],
+    -- ` + "`" + `nullif` + "`" + ` is required for ` + "`" + `lib/pq` + "`" + `, which doesn't do a good job of reading
+    -- ` + "`" + `nil` + "`" + ` into ` + "`" + `bytea` + "`" + `. We use ` + "`" + `text` + "`" + ` because otherwise ` + "`" + `lib/pq` + "`" + ` will encode
+    -- to Postgres binary like ` + "`" + `\xAAAA` + "`" + `.
+    nullif(unique_key, '')::bytea,
+    nullif(unique_states::integer, 0)::bit(8)
+FROM raw_job_data
 ON CONFLICT (unique_key)
     WHERE unique_key IS NOT NULL
         AND unique_states IS NOT NULL
@@ -691,6 +707,7 @@ RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_a
 `
 
 type JobInsertFastManyParams struct {
+	ID           []int64
 	Args         []string
 	CreatedAt    []time.Time
 	Kind         []string
@@ -712,6 +729,7 @@ type JobInsertFastManyRow struct {
 
 func (q *Queries) JobInsertFastMany(ctx context.Context, db DBTX, arg *JobInsertFastManyParams) ([]*JobInsertFastManyRow, error) {
 	rows, err := db.QueryContext(ctx, jobInsertFastMany,
+		pq.Array(arg.ID),
 		pq.Array(arg.Args),
 		pq.Array(arg.CreatedAt),
 		pq.Array(arg.Kind),

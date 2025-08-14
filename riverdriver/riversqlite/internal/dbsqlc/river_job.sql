@@ -182,6 +182,7 @@ LIMIT @max;
 -- a network, looping over operations is probably okay performance-wise.
 -- name: JobInsertFast :one
 INSERT INTO /* TEMPLATE: schema */river_job(
+    id,
     args,
     created_at,
     kind,
@@ -195,6 +196,7 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     unique_key,
     unique_states
 ) VALUES (
+    cast(sqlc.narg('id') AS integer),
     @args,
     coalesce(cast(sqlc.narg('created_at') AS text), datetime('now', 'subsec')),
     @kind,

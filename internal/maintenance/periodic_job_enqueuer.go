@@ -82,6 +82,8 @@ func (j *PeriodicJob) validate() error {
 	return nil
 }
 
+type InsertFunc func(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) ([]*rivertype.JobInsertResult, error)
+
 type PeriodicJobEnqueuerConfig struct {
 	AdvisoryLockPrefix int32
 
@@ -450,7 +452,7 @@ func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany 
 	defer tx.Rollback(ctx)
 
 	if len(insertParamsMany) > 0 {
-		if err := s.Config.Insert(ctx, tx, insertParamsMany); err != nil {
+		if _, err := s.Config.Insert(ctx, tx, insertParamsMany); err != nil {
 			s.Logger.ErrorContext(ctx, s.Name+": Error inserting periodic jobs",
 				"error", err.Error(), "num_jobs", len(insertParamsMany))
 		}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"reflect"
 	"slices"
 	"sort"
@@ -1478,11 +1479,15 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			exec, bundle := setup(ctx, t)
 
-			now := time.Now().UTC()
+			var (
+				idStart = rand.Int64()
+				now     = time.Now().UTC()
+			)
 
 			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
 			for i := 0; i < len(insertParams); i++ {
 				insertParams[i] = &riverdriver.JobInsertFastParams{
+					ID:           ptrutil.Ptr(idStart + int64(i)),
 					CreatedAt:    ptrutil.Ptr(now.Add(time.Duration(i) * 5 * time.Second)),
 					EncodedArgs:  []byte(`{"encoded": "args"}`),
 					Kind:         "test_kind",
@@ -1514,6 +1519,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				job.Metadata, err = sjson.DeleteBytes(job.Metadata, rivercommon.MetadataKeyUniqueNonce)
 				require.NoError(t, err)
 
+				require.Equal(t, idStart+int64(i), job.ID)
 				require.Equal(t, 0, job.Attempt)
 				require.Nil(t, job.AttemptedAt)
 				require.Empty(t, job.AttemptedBy)
@@ -1588,6 +1594,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			require.NoError(t, err)
 			require.Len(t, jobsAfter, len(insertParams))
 			for _, job := range jobsAfter {
+				require.NotZero(t, job.ID)
 				require.WithinDuration(t, time.Now().UTC(), job.CreatedAt, 2*time.Second)
 				require.WithinDuration(t, time.Now().UTC(), job.ScheduledAt, 2*time.Second)
 

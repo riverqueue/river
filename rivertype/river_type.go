@@ -255,6 +255,7 @@ type AttemptError struct {
 }
 
 type JobInsertParams struct {
+	ID           *int64
 	Args         JobArgs
 	CreatedAt    *time.Time
 	EncodedArgs  []byte

@@ -344,6 +344,7 @@ func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetSt
 
 func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.JobInsertFastManyParams) ([]*riverdriver.JobInsertFastResult, error) {
 	insertJobsParams := &dbsqlc.JobInsertFastManyParams{
+		ID:           make([]int64, len(params.Jobs)),
 		Args:         make([][]byte, len(params.Jobs)),
 		CreatedAt:    make([]time.Time, len(params.Jobs)),
 		Kind:         make([]string, len(params.Jobs)),
@@ -378,6 +379,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.Jo
 
 		defaultObject := []byte("{}")
 
+		insertJobsParams.ID[i] = ptrutil.ValOrDefault(params.ID, 0)
 		insertJobsParams.Args[i] = sliceutil.FirstNonEmpty(params.EncodedArgs, defaultObject)
 		insertJobsParams.CreatedAt[i] = createdAt
 		insertJobsParams.Kind[i] = params.Kind
