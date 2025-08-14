@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Jobs inserted from periodic jobs with IDs now have metadata `river:periodic_job_id` set so they can be traced back to the periodic job that inserted them. [PR #992](https://github.com/riverqueue/river/pull/992).
 - The unused function `WorkerDefaults.Hooks` has been removed. This is technically a breaking change, but this function was a vestigal refactoring artifact that was never used by anything, so in practice it shouldn't be breaking. [PR #997](https://github.com/riverqueue/river/pull/997).
 - Periodic job records are upserted immediately through a pilot when a client is started rather than the first time their associated job would run. This doesn't mean they're run immediately (they'll only run if `RunOnStart` is enabled), but rather just tracked immediately. [PR #998](https://github.com/riverqueue/river/pull/998).
+- The job scheduler still schedules jobs in batches of up to 10,000, but when it encounters a series of consecutive timeouts it assumes that the database is in a degraded state and switches to doing work in a smaller batch size of 1,000 jobs. [PR #1013](https://github.com/riverqueue/river/pull/1013).
 
 ### Fixed
 

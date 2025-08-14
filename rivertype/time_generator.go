@@ -3,7 +3,7 @@ package rivertype
 import "time"
 
 // TimeGenerator generates a current time in UTC. In test environments it's
-// implemented by riverinternaltest.timeStub which lets the current time be
+// implemented by riversharedtest.TimeStub which lets the current time be
 // stubbed. Otherwise, it's implemented as UnStubbableTimeGenerator which
 // doesn't allow stubbing.
 type TimeGenerator interface {

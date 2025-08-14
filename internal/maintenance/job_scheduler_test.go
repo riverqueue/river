@@ -49,7 +49,6 @@ func TestJobScheduler(t *testing.T) {
 			archetype,
 			&JobSchedulerConfig{
 				Interval: JobSchedulerIntervalDefault,
-				Limit:    10,
 				NotifyInsert: func(ctx context.Context, tx riverdriver.ExecutorTx, queues []string) error {
 					for _, queue := range queues {
 						bundle.notificationsByQueue[queue]++
@@ -101,7 +100,7 @@ func TestJobScheduler(t *testing.T) {
 		scheduler := NewJobScheduler(riversharedtest.BaseServiceArchetype(t), &JobSchedulerConfig{}, nil)
 
 		require.Equal(t, JobSchedulerIntervalDefault, scheduler.config.Interval)
-		require.Equal(t, JobSchedulerLimitDefault, scheduler.config.Limit)
+		require.Equal(t, JobSchedulerBatchSizeDefault, scheduler.config.BatchSizeDefault)
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {
@@ -204,13 +203,13 @@ func TestJobScheduler(t *testing.T) {
 		t.Parallel()
 
 		scheduler, bundle := setupTx(t)
-		scheduler.config.Limit = 10 // reduced size for test speed
+		scheduler.config.BatchSizeDefault = 10 // reduced size for test speed
 
 		now := time.Now().UTC()
 
 		// Add one to our chosen batch size to get one extra job and therefore
 		// one extra batch, ensuring that we've tested working multiple.
-		numJobs := scheduler.config.Limit + 1
+		numJobs := scheduler.config.BatchSizeDefault + 1
 
 		jobs := make([]*rivertype.JobRow, numJobs)
 
@@ -365,5 +364,77 @@ func TestJobScheduler(t *testing.T) {
 		notifiedQueues := riversharedtest.WaitOrTimeout(t, notifyCh)
 		sort.Strings(notifiedQueues)
 		require.Equal(t, []string{"queue1", "queue2", "queue2", "queue3", "queue4"}, notifiedQueues)
+	})
+
+	t.Run("ReducedBatchSizeBreakerTrips", func(t *testing.T) {
+		t.Parallel()
+
+		scheduler, _ := setupTx(t)
+
+		ctx, cancel := context.WithTimeout(ctx, 1*time.Nanosecond)
+		defer cancel()
+
+		// Starts at default batch size.
+		require.Equal(t, JobSchedulerBatchSizeDefault, scheduler.batchSize())
+
+		for range scheduler.reducedBatchSizeBreaker.Limit() - 1 {
+			_, err := scheduler.runOnce(ctx)
+			require.Error(t, err)
+
+			// Circuit not broken yet so we stay at default batch size.
+			require.Equal(t, JobSchedulerBatchSizeDefault, scheduler.batchSize())
+		}
+
+		_, err := scheduler.runOnce(ctx)
+		require.Error(t, err)
+
+		// Circuit now broken. Reduced batch size.
+		require.Equal(t, JobSchedulerBatchSizeReduced, scheduler.batchSize())
+	})
+
+	t.Run("ReducedBatchSizeBreakerResetsOnSuccess", func(t *testing.T) {
+		t.Parallel()
+
+		scheduler, _ := setupTx(t)
+
+		{
+			ctx, cancel := context.WithTimeout(ctx, 1*time.Nanosecond)
+			defer cancel()
+
+			// Starts at default batch size.
+			require.Equal(t, JobSchedulerBatchSizeDefault, scheduler.batchSize())
+
+			for range scheduler.reducedBatchSizeBreaker.Limit() - 1 {
+				_, err := scheduler.runOnce(ctx)
+				require.Error(t, err)
+
+				// Circuit not broken yet so we stay at default batch size.
+				require.Equal(t, JobSchedulerBatchSizeDefault, scheduler.batchSize())
+			}
+		}
+
+		// Context has not been cancelled for this call so it succeeds.
+		_, err := scheduler.runOnce(ctx)
+		require.NoError(t, err)
+
+		require.Equal(t, JobSchedulerBatchSizeDefault, scheduler.batchSize())
+
+		// Because of the success above, the circuit breaker resets. N - 1
+		// failures are allowed again before it breaks.
+		{
+			ctx, cancel := context.WithTimeout(ctx, 1*time.Nanosecond)
+			defer cancel()
+
+			// Starts at default batch size.
+			require.Equal(t, JobSchedulerBatchSizeDefault, scheduler.batchSize())
+
+			for range scheduler.reducedBatchSizeBreaker.Limit() - 1 {
+				_, err := scheduler.runOnce(ctx)
+				require.Error(t, err)
+
+				// Circuit not broken yet so we stay at default batch size.
+				require.Equal(t, JobSchedulerBatchSizeDefault, scheduler.batchSize())
+			}
+		}
 	})
 }
