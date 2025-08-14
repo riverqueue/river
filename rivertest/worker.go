@@ -2,11 +2,9 @@ package rivertest
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/internal/execution"
@@ -15,7 +13,6 @@ import (
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/middlewarelookup"
-	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
@@ -293,42 +290,4 @@ func (h *errorHandlerWrapper) HandleError(ctx context.Context, job *rivertype.Jo
 
 func (h *errorHandlerWrapper) HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *jobexecutor.ErrorHandlerResult {
 	return h.HandlePanicFunc(ctx, job, panicVal, trace)
-}
-
-// TODO: move work_unit_wrapper.go so I don't need to copy paste it here:
-
-// workUnitFactoryWrapper wraps a Worker to implement workUnitFactory.
-type workUnitFactoryWrapper[T river.JobArgs] struct {
-	worker river.Worker[T]
-}
-
-func (w *workUnitFactoryWrapper[T]) MakeUnit(jobRow *rivertype.JobRow) workunit.WorkUnit {
-	return &wrapperWorkUnit[T]{jobRow: jobRow, worker: w.worker}
-}
-
-// wrapperWorkUnit implements workUnit for a job and Worker.
-type wrapperWorkUnit[T river.JobArgs] struct {
-	job    *river.Job[T] // not set until after UnmarshalJob is invoked
-	jobRow *rivertype.JobRow
-	worker river.Worker[T]
-}
-
-func (w *wrapperWorkUnit[T]) HookLookup(lookup *hooklookup.JobHookLookup) hooklookup.HookLookupInterface {
-	var job T
-	return lookup.ByJobArgs(job)
-}
-
-func (w *wrapperWorkUnit[T]) Middleware() []rivertype.WorkerMiddleware {
-	return w.worker.Middleware(w.jobRow)
-}
-func (w *wrapperWorkUnit[T]) NextRetry() time.Time           { return w.worker.NextRetry(w.job) }
-func (w *wrapperWorkUnit[T]) Timeout() time.Duration         { return w.worker.Timeout(w.job) }
-func (w *wrapperWorkUnit[T]) Work(ctx context.Context) error { return w.worker.Work(ctx, w.job) }
-
-func (w *wrapperWorkUnit[T]) UnmarshalJob() error {
-	w.job = &river.Job[T]{
-		JobRow: w.jobRow,
-	}
-
-	return json.Unmarshal(w.jobRow.EncodedArgs, &w.job.Args)
 }
