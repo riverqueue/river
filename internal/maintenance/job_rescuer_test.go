@@ -134,7 +134,6 @@ func TestJobRescuer(t *testing.T) {
 
 	t.Run("RescuesStuckJobs", func(t *testing.T) {
 		t.Parallel()
-		require := require.New(t)
 
 		rescuer, bundle := setup(t)
 
@@ -163,15 +162,21 @@ func TestJobRescuer(t *testing.T) {
 		longTimeOutJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKindLongTimeout), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)})
 		longTimeOutJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKindLongTimeout), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-6 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)})
 
-		require.NoError(rescuer.Start(ctx))
+		require.NoError(t, rescuer.Start(ctx))
 
 		rescuer.TestSignals.FetchedBatch.WaitOrTimeout()
 		rescuer.TestSignals.UpdatedBatch.WaitOrTimeout()
 
 		confirmRetried := func(jobBefore *rivertype.JobRow) {
 			jobAfter, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: jobBefore.ID, Schema: rescuer.Config.Schema})
-			require.NoError(err)
-			require.Equal(rivertype.JobStateRetryable, jobAfter.State)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateRetryable, jobAfter.State)
+
+			require.Len(t, jobAfter.Errors, 1)
+			attemptError := jobAfter.Errors[0]
+			require.Zero(t, attemptError.Attempt)
+			require.Equal(t, "Stuck job rescued by JobRescuer", attemptError.Error)
+			require.Empty(t, attemptError.Trace)
 		}
 
 		var err error
@@ -179,47 +184,47 @@ func TestJobRescuer(t *testing.T) {
 		confirmRetried(stuckToRetryJob2)
 
 		job3After, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: stuckToRetryJob3.ID, Schema: rescuer.Config.Schema})
-		require.NoError(err)
-		require.Equal(stuckToRetryJob3.State, job3After.State) // not rescued
+		require.NoError(t, err)
+		require.Equal(t, stuckToRetryJob3.State, job3After.State) // not rescued
 
 		discardJob1After, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: stuckToDiscardJob1.ID, Schema: rescuer.Config.Schema})
-		require.NoError(err)
-		require.Equal(rivertype.JobStateDiscarded, discardJob1After.State)
-		require.WithinDuration(time.Now(), *discardJob1After.FinalizedAt, 5*time.Second)
-		require.Len(discardJob1After.Errors, 1)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateDiscarded, discardJob1After.State)
+		require.WithinDuration(t, time.Now(), *discardJob1After.FinalizedAt, 5*time.Second)
+		require.Len(t, discardJob1After.Errors, 1)
 
 		discardJob2After, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: stuckToDiscardJob2.ID, Schema: rescuer.Config.Schema})
-		require.NoError(err)
-		require.Equal(rivertype.JobStateRunning, discardJob2After.State)
-		require.Nil(discardJob2After.FinalizedAt)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, discardJob2After.State)
+		require.Nil(t, discardJob2After.FinalizedAt)
 
 		cancelJob1After, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: stuckToCancelJob1.ID, Schema: rescuer.Config.Schema})
-		require.NoError(err)
-		require.Equal(rivertype.JobStateCancelled, cancelJob1After.State)
-		require.WithinDuration(time.Now(), *cancelJob1After.FinalizedAt, 5*time.Second)
-		require.Len(cancelJob1After.Errors, 1)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateCancelled, cancelJob1After.State)
+		require.WithinDuration(t, time.Now(), *cancelJob1After.FinalizedAt, 5*time.Second)
+		require.Len(t, cancelJob1After.Errors, 1)
 
 		cancelJob2After, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: stuckToCancelJob2.ID, Schema: rescuer.Config.Schema})
-		require.NoError(err)
-		require.Equal(rivertype.JobStateRunning, cancelJob2After.State)
-		require.Nil(cancelJob2After.FinalizedAt)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, cancelJob2After.State)
+		require.Nil(t, cancelJob2After.FinalizedAt)
 
 		notRunningJob1After, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notRunningJob1.ID, Schema: rescuer.Config.Schema})
-		require.NoError(err)
-		require.Equal(notRunningJob1.State, notRunningJob1After.State)
+		require.NoError(t, err)
+		require.Equal(t, notRunningJob1.State, notRunningJob1After.State)
 		notRunningJob2After, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notRunningJob2.ID, Schema: rescuer.Config.Schema})
-		require.NoError(err)
-		require.Equal(notRunningJob2.State, notRunningJob2After.State)
+		require.NoError(t, err)
+		require.Equal(t, notRunningJob2.State, notRunningJob2After.State)
 		notRunningJob3After, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notRunningJob3.ID, Schema: rescuer.Config.Schema})
-		require.NoError(err)
-		require.Equal(notRunningJob3.State, notRunningJob3After.State)
+		require.NoError(t, err)
+		require.Equal(t, notRunningJob3.State, notRunningJob3After.State)
 
 		notTimedOutJob1After, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: longTimeOutJob1.ID, Schema: rescuer.Config.Schema})
-		require.NoError(err)
-		require.Equal(rivertype.JobStateRunning, notTimedOutJob1After.State)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, notTimedOutJob1After.State)
 		notTimedOutJob2After, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: longTimeOutJob2.ID, Schema: rescuer.Config.Schema})
-		require.NoError(err)
-		require.Equal(rivertype.JobStateRetryable, notTimedOutJob2After.State)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRetryable, notTimedOutJob2After.State)
 	})
 
 	t.Run("RescuesInBatches", func(t *testing.T) {

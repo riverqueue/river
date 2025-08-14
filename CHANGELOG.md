@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Cleanly error on invalid schema names in `Config.Schema`. [PR #952](https://github.com/riverqueue/river/pull/952).
+- Jobs rescued by `JobRescuer` no longer have their trace set to "TODO". This becomes an empty string instead. [PR #1010](https://github.com/riverqueue/river/pull/1010).
 
 ## [0.23.1] - 2025-06-04
 

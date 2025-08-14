@@ -188,8 +188,8 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 			errorData, err := json.Marshal(rivertype.AttemptError{
 				At:      now,
 				Attempt: max(job.Attempt, 0),
-				Error:   "Stuck job rescued by Rescuer",
-				Trace:   "TODO",
+				Error:   "Stuck job rescued by JobRescuer",
+				Trace:   "",
 			})
 			if err != nil {
 				return nil, fmt.Errorf("error marshaling error JSON: %w", err)
