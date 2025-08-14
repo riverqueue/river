@@ -10,6 +10,7 @@ import (
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
@@ -34,20 +35,15 @@ func TestJobCleaner(t *testing.T) {
 
 		tx := riverdbtest.TestTxPgx(ctx, t)
 		bundle := &testBundle{
-			cancelledDeleteHorizon: time.Now().Add(-CancelledJobRetentionPeriodDefault),
-			completedDeleteHorizon: time.Now().Add(-CompletedJobRetentionPeriodDefault),
+			cancelledDeleteHorizon: time.Now().Add(-riversharedmaintenance.CancelledJobRetentionPeriodDefault),
+			completedDeleteHorizon: time.Now().Add(-riversharedmaintenance.CompletedJobRetentionPeriodDefault),
 			exec:                   riverpgxv5.New(nil).UnwrapExecutor(tx),
-			discardedDeleteHorizon: time.Now().Add(-DiscardedJobRetentionPeriodDefault),
+			discardedDeleteHorizon: time.Now().Add(-riversharedmaintenance.DiscardedJobRetentionPeriodDefault),
 		}
 
 		cleaner := NewJobCleaner(
 			riversharedtest.BaseServiceArchetype(t),
-			&JobCleanerConfig{
-				CancelledJobRetentionPeriod: CancelledJobRetentionPeriodDefault,
-				CompletedJobRetentionPeriod: CompletedJobRetentionPeriodDefault,
-				DiscardedJobRetentionPeriod: DiscardedJobRetentionPeriodDefault,
-				Interval:                    JobCleanerIntervalDefault,
-			},
+			&JobCleanerConfig{},
 			bundle.exec)
 		cleaner.StaggerStartupDisable(true)
 		cleaner.TestSignals.Init(t)
@@ -59,13 +55,13 @@ func TestJobCleaner(t *testing.T) {
 	t.Run("Defaults", func(t *testing.T) {
 		t.Parallel()
 
-		cleaner := NewJobCleaner(riversharedtest.BaseServiceArchetype(t), &JobCleanerConfig{}, nil)
+		cleaner, _ := setup(t)
 
-		require.Equal(t, CancelledJobRetentionPeriodDefault, cleaner.Config.CancelledJobRetentionPeriod)
-		require.Equal(t, CompletedJobRetentionPeriodDefault, cleaner.Config.CompletedJobRetentionPeriod)
-		require.Equal(t, DiscardedJobRetentionPeriodDefault, cleaner.Config.DiscardedJobRetentionPeriod)
-		require.Equal(t, JobCleanerIntervalDefault, cleaner.Config.Interval)
-		require.Equal(t, JobCleanerTimeoutDefault, cleaner.Config.Timeout)
+		require.Equal(t, riversharedmaintenance.CancelledJobRetentionPeriodDefault, cleaner.Config.CancelledJobRetentionPeriod)
+		require.Equal(t, riversharedmaintenance.CompletedJobRetentionPeriodDefault, cleaner.Config.CompletedJobRetentionPeriod)
+		require.Equal(t, riversharedmaintenance.DiscardedJobRetentionPeriodDefault, cleaner.Config.DiscardedJobRetentionPeriod)
+		require.Equal(t, riversharedmaintenance.JobCleanerIntervalDefault, cleaner.Config.Interval)
+		require.Equal(t, riversharedmaintenance.JobCleanerTimeoutDefault, cleaner.Config.Timeout)
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {
@@ -78,7 +74,7 @@ func TestJobCleaner(t *testing.T) {
 		startstoptest.Stress(ctx, t, cleaner)
 	})
 
-	t.Run("DeletesCompletedJobs", func(t *testing.T) {
+	t.Run("DeletesCancelledCompletedAndDiscardedJobs", func(t *testing.T) {
 		t.Parallel()
 
 		cleaner, bundle := setup(t)
@@ -329,6 +325,44 @@ func TestJobCleaner(t *testing.T) {
 		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: cleaner.Config.Schema})
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
 		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: cleaner.Config.Schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+	})
+
+	t.Run("OmmittedQueues", func(t *testing.T) {
+		t.Parallel()
+
+		cleaner, bundle := setup(t)
+
+		var (
+			cancelledJob = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
+			completedJob = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
+			discardedJob = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
+
+			omittedQueue1 = "omitted1"
+			omittedQueue2 = "omitted1"
+
+			// Not deleted because in an omitted queue.
+			omittedQueueJob1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour)), Queue: &omittedQueue1, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+			omittedQueueJob2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour)), Queue: &omittedQueue2, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+		)
+
+		cleaner.Config.QueuesExcluded = []string{omittedQueue1, omittedQueue2}
+
+		require.NoError(t, cleaner.Start(ctx))
+
+		cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
+
+		var err error
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: omittedQueueJob1.ID, Schema: cleaner.Config.Schema})
+		require.NoError(t, err)
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: omittedQueueJob2.ID, Schema: cleaner.Config.Schema})
+		require.NoError(t, err)
+
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: cancelledJob.ID, Schema: cleaner.Config.Schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: completedJob.ID, Schema: cleaner.Config.Schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: discardedJob.ID, Schema: cleaner.Config.Schema})
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
 	})
 }

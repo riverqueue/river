@@ -11,6 +11,7 @@ import (
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/randutil"
@@ -60,7 +61,7 @@ func (c *QueueCleanerConfig) mustValidate() *QueueCleanerConfig {
 // QueueCleaner periodically removes queues from the river_queue table that have
 // not been updated in a while, indicating that they are no longer active.
 type QueueCleaner struct {
-	queueMaintainerServiceBase
+	riversharedmaintenance.QueueMaintainerServiceBase
 	startstop.BaseStartStop
 
 	// exported for test purposes
@@ -79,7 +80,7 @@ func NewQueueCleaner(archetype *baseservice.Archetype, config *QueueCleanerConfi
 			Schema:          config.Schema,
 		}).mustValidate(),
 
-		batchSize: BatchSizeDefault,
+		batchSize: riversharedmaintenance.BatchSizeDefault,
 		exec:      exec,
 	})
 }
@@ -96,8 +97,8 @@ func (s *QueueCleaner) Start(ctx context.Context) error {
 		started()
 		defer stopped() // this defer should come first so it's last out
 
-		s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStarted)
-		defer s.Logger.DebugContext(ctx, s.Name+logPrefixRunLoopStopped)
+		s.Logger.DebugContext(ctx, s.Name+riversharedmaintenance.LogPrefixRunLoopStarted)
+		defer s.Logger.DebugContext(ctx, s.Name+riversharedmaintenance.LogPrefixRunLoopStopped)
 
 		ticker := timeutil.NewTickerWithInitialTick(ctx, s.Config.Interval)
 		for {
@@ -116,7 +117,7 @@ func (s *QueueCleaner) Start(ctx context.Context) error {
 			}
 
 			if len(res.QueuesDeleted) > 0 {
-				s.Logger.InfoContext(ctx, s.Name+logPrefixRanSuccessfully,
+				s.Logger.InfoContext(ctx, s.Name+riversharedmaintenance.LogPrefixRanSuccessfully,
 					slog.String("queues_deleted", strings.Join(res.QueuesDeleted, ",")),
 				)
 			}
@@ -162,7 +163,7 @@ func (s *QueueCleaner) runOnce(ctx context.Context) (*queueCleanerRunOnceResult,
 			break
 		}
 
-		serviceutil.CancellableSleep(ctx, randutil.DurationBetween(BatchBackoffMin, BatchBackoffMax))
+		serviceutil.CancellableSleep(ctx, randutil.DurationBetween(riversharedmaintenance.BatchBackoffMin, riversharedmaintenance.BatchBackoffMax))
 	}
 
 	return res, nil

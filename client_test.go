@@ -34,6 +34,7 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
@@ -4610,7 +4611,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		client, bundle := setup(t, config)
 
 		// Normal long retention period.
-		deleteHorizon := time.Now().Add(-maintenance.DiscardedJobRetentionPeriodDefault)
+		deleteHorizon := time.Now().Add(-riversharedmaintenance.DiscardedJobRetentionPeriodDefault)
 
 		// Take care to insert jobs before starting the client because otherwise
 		// there's a race condition where the cleaner could run its initial
@@ -6726,10 +6727,10 @@ func Test_NewClient_Defaults(t *testing.T) {
 	require.Zero(t, client.config.AdvisoryLockPrefix)
 
 	jobCleaner := maintenance.GetService[*maintenance.JobCleaner](client.queueMaintainer)
-	require.Equal(t, maintenance.CancelledJobRetentionPeriodDefault, jobCleaner.Config.CancelledJobRetentionPeriod)
-	require.Equal(t, maintenance.CompletedJobRetentionPeriodDefault, jobCleaner.Config.CompletedJobRetentionPeriod)
-	require.Equal(t, maintenance.DiscardedJobRetentionPeriodDefault, jobCleaner.Config.DiscardedJobRetentionPeriod)
-	require.Equal(t, maintenance.JobCleanerTimeoutDefault, jobCleaner.Config.Timeout)
+	require.Equal(t, riversharedmaintenance.CancelledJobRetentionPeriodDefault, jobCleaner.Config.CancelledJobRetentionPeriod)
+	require.Equal(t, riversharedmaintenance.CompletedJobRetentionPeriodDefault, jobCleaner.Config.CompletedJobRetentionPeriod)
+	require.Equal(t, riversharedmaintenance.DiscardedJobRetentionPeriodDefault, jobCleaner.Config.DiscardedJobRetentionPeriod)
+	require.Equal(t, riversharedmaintenance.JobCleanerTimeoutDefault, jobCleaner.Config.Timeout)
 	require.False(t, jobCleaner.StaggerStartupIsDisabled())
 
 	enqueuer := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)

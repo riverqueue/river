@@ -265,6 +265,8 @@ func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobD
 		DiscardedDoDelete:           params.DiscardedDoDelete,
 		DiscardedFinalizedAtHorizon: params.DiscardedFinalizedAtHorizon,
 		Max:                         int64(params.Max),
+		QueuesExcluded:              params.QueuesExcluded,
+		QueuesIncluded:              params.QueuesIncluded,
 	})
 	if err != nil {
 		return 0, interpretError(err)

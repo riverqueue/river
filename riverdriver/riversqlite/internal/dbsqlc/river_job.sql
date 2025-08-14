@@ -92,16 +92,34 @@ RETURNING *;
 
 -- name: JobDeleteBefore :execresult
 DELETE FROM /* TEMPLATE: schema */river_job
-WHERE id IN (
-    SELECT id
-    FROM /* TEMPLATE: schema */river_job
-    WHERE
-        (state = 'cancelled' AND finalized_at < cast(@cancelled_finalized_at_horizon AS text)) OR
-        (state = 'completed' AND finalized_at < cast(@completed_finalized_at_horizon AS text)) OR
-        (state = 'discarded' AND finalized_at < cast(@discarded_finalized_at_horizon AS text))
-    ORDER BY id
-    LIMIT @max
-);
+WHERE
+    id IN (
+        SELECT id
+        FROM /* TEMPLATE: schema */river_job
+        WHERE
+            (state = 'cancelled' AND finalized_at < cast(@cancelled_finalized_at_horizon AS text)) OR
+            (state = 'completed' AND finalized_at < cast(@completed_finalized_at_horizon AS text)) OR
+            (state = 'discarded' AND finalized_at < cast(@discarded_finalized_at_horizon AS text))
+        ORDER BY id
+        LIMIT @max
+    )
+    -- This is really awful, but unless the `sqlc.slice` appears as the very
+    -- last parameter in the query things will fail if it includes more than one
+    -- element. The sqlc SQLite driver uses position-based placeholders (?1) for
+    -- most parameters, but unnamed ones with `sqlc.slice` (?), and when
+    -- positional parameters follow unnamed parameters great confusion is the
+    -- result. Making sure `sqlc.slice` is last is the only workaround I could
+    -- find, but it stops working if there are multiple clauses that need a
+    -- positional placeholder plus `sqlc.slice` like this one (the Postgres
+    -- driver supports a `queues_included` parameter that I couldn't support
+    -- here). The non-workaround version is (unfortunately) to never, ever use
+    -- the sqlc driver for SQLite -- it's not a little buggy, it's off the
+    -- charts buggy, and there's little interest from the maintainers in fixing
+    -- any of it. We already started using it though, so plough on.
+    AND (
+        cast(@queues_excluded_empty AS boolean)
+        OR river_job.queue NOT IN (sqlc.slice('queues_excluded'))
+    );
 
 -- name: JobDeleteMany :many
 DELETE FROM /* TEMPLATE: schema */river_job

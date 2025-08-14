@@ -13,6 +13,8 @@ type StandardPilot struct {
 	seq atomic.Int64
 }
 
+func (p *StandardPilot) JobCleanerQueuesExcluded() []string { return nil }
+
 func (p *StandardPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Executor, state ProducerState, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
 	if params.MaxToLock <= 0 {
 		return nil, nil

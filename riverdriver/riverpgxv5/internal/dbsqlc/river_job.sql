@@ -157,10 +157,19 @@ DELETE FROM /* TEMPLATE: schema */river_job
 WHERE id IN (
     SELECT id
     FROM /* TEMPLATE: schema */river_job
-    WHERE
-        (state = 'cancelled' AND @cancelled_do_delete AND finalized_at < @cancelled_finalized_at_horizon::timestamptz) OR
-        (state = 'completed' AND @completed_do_delete AND finalized_at < @completed_finalized_at_horizon::timestamptz) OR
-        (state = 'discarded' AND @discarded_do_delete AND finalized_at < @discarded_finalized_at_horizon::timestamptz)
+    WHERE (
+            (state = 'cancelled' AND @cancelled_do_delete AND finalized_at < @cancelled_finalized_at_horizon::timestamptz) OR
+            (state = 'completed' AND @completed_do_delete AND finalized_at < @completed_finalized_at_horizon::timestamptz) OR
+            (state = 'discarded' AND @discarded_do_delete AND finalized_at < @discarded_finalized_at_horizon::timestamptz)
+        )
+        AND (
+            @queues_excluded::text[] IS NULL
+            OR NOT (queue = any(@queues_excluded))
+        )
+        AND (
+            @queues_included::text[] IS NULL
+            OR queue = any(@queues_included)
+        )
     ORDER BY id
     LIMIT @max::bigint
 );
