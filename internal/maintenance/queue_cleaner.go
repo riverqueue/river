@@ -11,6 +11,7 @@ import (
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/circuitbreaker"
 	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
@@ -35,6 +36,8 @@ func (ts *QueueCleanerTestSignals) Init(tb testutil.TestingTB) {
 }
 
 type QueueCleanerConfig struct {
+	riversharedmaintenance.BatchSizes
+
 	// Interval is the amount of time to wait between runs of the cleaner.
 	Interval time.Duration
 
@@ -48,6 +51,8 @@ type QueueCleanerConfig struct {
 }
 
 func (c *QueueCleanerConfig) mustValidate() *QueueCleanerConfig {
+	c.MustValidate()
+
 	if c.Interval <= 0 {
 		panic("QueueCleanerConfig.Interval must be above zero")
 	}
@@ -68,20 +73,29 @@ type QueueCleaner struct {
 	Config      *QueueCleanerConfig
 	TestSignals QueueCleanerTestSignals
 
-	batchSize int // configurable for test purposes
-	exec      riverdriver.Executor
+	exec riverdriver.Executor
+
+	// Circuit breaker that tracks consecutive timeout failures from the central
+	// query. The query starts by using the full/default batch size, but after
+	// this breaker trips (after N consecutive timeouts occur in a row), it
+	// switches to a smaller batch. We assume that a database that's degraded is
+	// likely to stay degraded over a longer term, so after the circuit breaks,
+	// it stays broken until the program is restarted.
+	reducedBatchSizeBreaker *circuitbreaker.CircuitBreaker
 }
 
 func NewQueueCleaner(archetype *baseservice.Archetype, config *QueueCleanerConfig, exec riverdriver.Executor) *QueueCleaner {
+	batchSizes := config.WithDefaults()
+
 	return baseservice.Init(archetype, &QueueCleaner{
 		Config: (&QueueCleanerConfig{
+			BatchSizes:      batchSizes,
 			Interval:        cmp.Or(config.Interval, queueCleanerIntervalDefault),
 			RetentionPeriod: cmp.Or(config.RetentionPeriod, QueueRetentionPeriodDefault),
 			Schema:          config.Schema,
 		}).mustValidate(),
-
-		batchSize: riversharedmaintenance.BatchSizeDefault,
-		exec:      exec,
+		exec:                    exec,
+		reducedBatchSizeBreaker: riversharedmaintenance.ReducedBatchSizeBreaker(batchSizes),
 	})
 }
 
@@ -127,6 +141,13 @@ func (s *QueueCleaner) Start(ctx context.Context) error {
 	return nil
 }
 
+func (s *QueueCleaner) batchSize() int {
+	if s.reducedBatchSizeBreaker.Open() {
+		return s.Config.Reduced
+	}
+	return s.Config.Default
+}
+
 type queueCleanerRunOnceResult struct {
 	QueuesDeleted []string
 }
@@ -141,7 +162,7 @@ func (s *QueueCleaner) runOnce(ctx context.Context) (*queueCleanerRunOnceResult,
 			defer cancelFunc()
 
 			queuesDeleted, err := s.exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{
-				Max:              s.batchSize,
+				Max:              s.batchSize(),
 				Schema:           s.Config.Schema,
 				UpdatedAtHorizon: time.Now().Add(-s.Config.RetentionPeriod),
 			})
@@ -149,9 +170,15 @@ func (s *QueueCleaner) runOnce(ctx context.Context) (*queueCleanerRunOnceResult,
 				return nil, fmt.Errorf("error deleting expired queues: %w", err)
 			}
 
+			s.reducedBatchSizeBreaker.ResetIfNotOpen()
+
 			return queuesDeleted, nil
 		}()
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				s.reducedBatchSizeBreaker.Trip()
+			}
+
 			return nil, err
 		}
 
@@ -159,7 +186,7 @@ func (s *QueueCleaner) runOnce(ctx context.Context) (*queueCleanerRunOnceResult,
 
 		res.QueuesDeleted = append(res.QueuesDeleted, queuesDeleted...)
 		// Deleted was less than query `LIMIT` which means work is done.
-		if len(queuesDeleted) < s.batchSize {
+		if len(queuesDeleted) < s.batchSize() {
 			break
 		}
 

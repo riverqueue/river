@@ -84,7 +84,6 @@ type Reindexer struct {
 	Config      *ReindexerConfig
 	TestSignals ReindexerTestSignals
 
-	batchSize                int64                // configurable for test purposes
 	exec                     riverdriver.Executor // driver executor
 	skipReindexArtifactCheck bool                 // lets the reindex artifact check be skipped for test purposes
 }
@@ -108,8 +107,7 @@ func NewReindexer(archetype *baseservice.Archetype, config *ReindexerConfig, exe
 			Timeout:      cmp.Or(config.Timeout, ReindexerTimeoutDefault),
 		}).mustValidate(),
 
-		batchSize: riversharedmaintenance.BatchSizeDefault,
-		exec:      exec,
+		exec: exec,
 	})
 }
 

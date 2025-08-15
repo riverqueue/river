@@ -8,9 +8,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/riverqueue/river/internal/circuitbreaker"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/circuitbreaker"
 	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
@@ -21,9 +21,7 @@ import (
 )
 
 const (
-	JobSchedulerBatchSizeReduced = 1_000
-	JobSchedulerBatchSizeDefault = 10_000
-	JobSchedulerIntervalDefault  = 5 * time.Second
+	JobSchedulerIntervalDefault = 5 * time.Second
 )
 
 // Test-only properties.
@@ -42,19 +40,11 @@ func (ts *JobSchedulerTestSignals) Init(tb testutil.TestingTB) {
 type NotifyInsertFunc func(ctx context.Context, tx riverdriver.ExecutorTx, queues []string) error
 
 type JobSchedulerConfig struct {
+	riversharedmaintenance.BatchSizes
+
 	// Interval is the amount of time between periodic checks for jobs to
 	// be moved from "scheduled" to "available".
 	Interval time.Duration
-
-	// BatchSizeDefault is the maximum number of jobs to transition at once from
-	// "scheduled" to "available" during periodic scheduling checks.
-	BatchSizeDefault int
-
-	// BatchSizeReduced is a considerably smaller batch size that the service
-	// uses after encountering 3 consecutive timeouts in a row. The idea behind
-	// this is that if it appears the database is degraded, then we start doing
-	// less work in the hope that it can better succeed.
-	BatchSizeReduced int
 
 	// NotifyInsert is a function to call to emit notifications for queues
 	// where jobs were scheduled.
@@ -66,10 +56,12 @@ type JobSchedulerConfig struct {
 }
 
 func (c *JobSchedulerConfig) mustValidate() *JobSchedulerConfig {
+	c.MustValidate()
+
 	if c.Interval <= 0 {
 		panic("SchedulerConfig.Interval must be above zero")
 	}
-	if c.BatchSizeDefault <= 0 {
+	if c.Default <= 0 {
 		panic("SchedulerConfig.Limit must be above zero")
 	}
 
@@ -89,29 +81,27 @@ type JobScheduler struct {
 	config *JobSchedulerConfig
 	exec   riverdriver.Executor
 
-	// Circuit breaker that tracks consecutive timeout failures from the
-	// scheduling query. The query starts by using the full/default batch size,
-	// but after this breaker trips (after N consecutive timeouts occur in a
-	// row), it switches to a smaller batch. We assume that a database that's
-	// degraded is likely to stay degraded over a longer term, so after the
-	// circuit breaks, it stays broken until the program is restarted.
+	// Circuit breaker that tracks consecutive timeout failures from the central
+	// query. The query starts by using the full/default batch size, but after
+	// this breaker trips (after N consecutive timeouts occur in a row), it
+	// switches to a smaller batch. We assume that a database that's degraded is
+	// likely to stay degraded over a longer term, so after the circuit breaks,
+	// it stays broken until the program is restarted.
 	reducedBatchSizeBreaker *circuitbreaker.CircuitBreaker
 }
 
 func NewJobScheduler(archetype *baseservice.Archetype, config *JobSchedulerConfig, exec riverdriver.Executor) *JobScheduler {
+	batchSizes := config.WithDefaults()
+
 	return baseservice.Init(archetype, &JobScheduler{
-		reducedBatchSizeBreaker: circuitbreaker.NewCircuitBreaker(&circuitbreaker.CircuitBreakerOptions{
-			Limit:  3,
-			Window: 10 * time.Minute,
-		}),
 		config: (&JobSchedulerConfig{
-			BatchSizeDefault: cmp.Or(config.BatchSizeDefault, JobSchedulerBatchSizeDefault),
-			BatchSizeReduced: cmp.Or(config.BatchSizeReduced, JobSchedulerBatchSizeReduced),
-			Interval:         cmp.Or(config.Interval, JobSchedulerIntervalDefault),
-			NotifyInsert:     config.NotifyInsert,
-			Schema:           config.Schema,
+			BatchSizes:   batchSizes,
+			Interval:     cmp.Or(config.Interval, JobSchedulerIntervalDefault),
+			NotifyInsert: config.NotifyInsert,
+			Schema:       config.Schema,
 		}).mustValidate(),
-		exec: exec,
+		exec:                    exec,
+		reducedBatchSizeBreaker: riversharedmaintenance.ReducedBatchSizeBreaker(batchSizes),
 	})
 }
 
@@ -159,9 +149,9 @@ func (s *JobScheduler) Start(ctx context.Context) error { //nolint:dupl
 
 func (s *JobScheduler) batchSize() int {
 	if s.reducedBatchSizeBreaker.Open() {
-		return s.config.BatchSizeReduced
+		return s.config.Reduced
 	}
-	return s.config.BatchSizeDefault
+	return s.config.Default
 }
 
 type schedulerRunOnceResult struct {
@@ -234,7 +224,7 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 
 		res.NumCompletedJobsScheduled += numScheduled
 		// Scheduled was less than query `LIMIT` which means work is done.
-		if numScheduled < s.config.BatchSizeDefault {
+		if numScheduled < s.batchSize() {
 			break
 		}
 

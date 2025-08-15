@@ -12,6 +12,7 @@ import (
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
@@ -100,7 +101,8 @@ func TestJobScheduler(t *testing.T) {
 		scheduler := NewJobScheduler(riversharedtest.BaseServiceArchetype(t), &JobSchedulerConfig{}, nil)
 
 		require.Equal(t, JobSchedulerIntervalDefault, scheduler.config.Interval)
-		require.Equal(t, JobSchedulerBatchSizeDefault, scheduler.config.BatchSizeDefault)
+		require.Equal(t, riversharedmaintenance.BatchSizeDefault, scheduler.config.Default)
+		require.Equal(t, riversharedmaintenance.BatchSizeReduced, scheduler.config.Reduced)
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {
@@ -203,13 +205,13 @@ func TestJobScheduler(t *testing.T) {
 		t.Parallel()
 
 		scheduler, bundle := setupTx(t)
-		scheduler.config.BatchSizeDefault = 10 // reduced size for test speed
+		scheduler.config.Default = 10 // reduced size for test speed
 
 		now := time.Now().UTC()
 
 		// Add one to our chosen batch size to get one extra job and therefore
 		// one extra batch, ensuring that we've tested working multiple.
-		numJobs := scheduler.config.BatchSizeDefault + 1
+		numJobs := scheduler.config.Default + 1
 
 		jobs := make([]*rivertype.JobRow, numJobs)
 
@@ -375,24 +377,24 @@ func TestJobScheduler(t *testing.T) {
 		defer cancel()
 
 		// Starts at default batch size.
-		require.Equal(t, JobSchedulerBatchSizeDefault, scheduler.batchSize())
+		require.Equal(t, riversharedmaintenance.BatchSizeDefault, scheduler.batchSize())
 
 		for range scheduler.reducedBatchSizeBreaker.Limit() - 1 {
 			_, err := scheduler.runOnce(ctx)
 			require.Error(t, err)
 
 			// Circuit not broken yet so we stay at default batch size.
-			require.Equal(t, JobSchedulerBatchSizeDefault, scheduler.batchSize())
+			require.Equal(t, riversharedmaintenance.BatchSizeDefault, scheduler.batchSize())
 		}
 
 		_, err := scheduler.runOnce(ctx)
 		require.Error(t, err)
 
 		// Circuit now broken. Reduced batch size.
-		require.Equal(t, JobSchedulerBatchSizeReduced, scheduler.batchSize())
+		require.Equal(t, riversharedmaintenance.BatchSizeReduced, scheduler.batchSize())
 	})
 
-	t.Run("ReducedBatchSizeBreakerResetsOnSuccess", func(t *testing.T) {
+	t.Run("ReducedBatchSizeBreakerResetsOnSuccess", func(t *testing.T) { //nolint:dupl
 		t.Parallel()
 
 		scheduler, _ := setupTx(t)
@@ -402,14 +404,14 @@ func TestJobScheduler(t *testing.T) {
 			defer cancel()
 
 			// Starts at default batch size.
-			require.Equal(t, JobSchedulerBatchSizeDefault, scheduler.batchSize())
+			require.Equal(t, riversharedmaintenance.BatchSizeDefault, scheduler.batchSize())
 
 			for range scheduler.reducedBatchSizeBreaker.Limit() - 1 {
 				_, err := scheduler.runOnce(ctx)
 				require.Error(t, err)
 
 				// Circuit not broken yet so we stay at default batch size.
-				require.Equal(t, JobSchedulerBatchSizeDefault, scheduler.batchSize())
+				require.Equal(t, riversharedmaintenance.BatchSizeDefault, scheduler.batchSize())
 			}
 		}
 
@@ -417,7 +419,7 @@ func TestJobScheduler(t *testing.T) {
 		_, err := scheduler.runOnce(ctx)
 		require.NoError(t, err)
 
-		require.Equal(t, JobSchedulerBatchSizeDefault, scheduler.batchSize())
+		require.Equal(t, riversharedmaintenance.BatchSizeDefault, scheduler.batchSize())
 
 		// Because of the success above, the circuit breaker resets. N - 1
 		// failures are allowed again before it breaks.
@@ -426,14 +428,14 @@ func TestJobScheduler(t *testing.T) {
 			defer cancel()
 
 			// Starts at default batch size.
-			require.Equal(t, JobSchedulerBatchSizeDefault, scheduler.batchSize())
+			require.Equal(t, riversharedmaintenance.BatchSizeDefault, scheduler.batchSize())
 
 			for range scheduler.reducedBatchSizeBreaker.Limit() - 1 {
 				_, err := scheduler.runOnce(ctx)
 				require.Error(t, err)
 
 				// Circuit not broken yet so we stay at default batch size.
-				require.Equal(t, JobSchedulerBatchSizeDefault, scheduler.batchSize())
+				require.Equal(t, riversharedmaintenance.BatchSizeDefault, scheduler.batchSize())
 			}
 		}
 	})

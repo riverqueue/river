@@ -14,6 +14,7 @@ import (
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
@@ -231,11 +232,11 @@ func TestJobRescuer(t *testing.T) {
 		t.Parallel()
 
 		rescuer, bundle := setup(t)
-		rescuer.batchSize = 10 // reduced size for test speed
+		rescuer.Config.Default = 10 // reduced size for test speed
 
 		// Add one to our chosen batch size to get one extra job and therefore
 		// one extra batch, ensuring that we've tested working multiple.
-		numJobs := rescuer.batchSize + 1
+		numJobs := rescuer.Config.Default + 1
 
 		jobs := make([]*rivertype.JobRow, numJobs)
 
@@ -331,5 +332,77 @@ func TestJobRescuer(t *testing.T) {
 		job2After, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: rescuer.Config.Schema})
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateDiscarded, job2After.State)
+	})
+
+	t.Run("ReducedBatchSizeBreakerTrips", func(t *testing.T) {
+		t.Parallel()
+
+		rescuer, _ := setup(t)
+
+		ctx, cancel := context.WithTimeout(ctx, 1*time.Nanosecond)
+		defer cancel()
+
+		// Starts at default batch size.
+		require.Equal(t, riversharedmaintenance.BatchSizeDefault, rescuer.batchSize())
+
+		for range rescuer.reducedBatchSizeBreaker.Limit() - 1 {
+			_, err := rescuer.runOnce(ctx)
+			require.Error(t, err)
+
+			// Circuit not broken yet so we stay at default batch size.
+			require.Equal(t, riversharedmaintenance.BatchSizeDefault, rescuer.batchSize())
+		}
+
+		_, err := rescuer.runOnce(ctx)
+		require.Error(t, err)
+
+		// Circuit now broken. Reduced batch size.
+		require.Equal(t, riversharedmaintenance.BatchSizeReduced, rescuer.batchSize())
+	})
+
+	t.Run("ReducedBatchSizeBreakerResetsOnSuccess", func(t *testing.T) { //nolint:dupl
+		t.Parallel()
+
+		rescuer, _ := setup(t)
+
+		{
+			ctx, cancel := context.WithTimeout(ctx, 1*time.Nanosecond)
+			defer cancel()
+
+			// Starts at default batch size.
+			require.Equal(t, riversharedmaintenance.BatchSizeDefault, rescuer.batchSize())
+
+			for range rescuer.reducedBatchSizeBreaker.Limit() - 1 {
+				_, err := rescuer.runOnce(ctx)
+				require.Error(t, err)
+
+				// Circuit not broken yet so we stay at default batch size.
+				require.Equal(t, riversharedmaintenance.BatchSizeDefault, rescuer.batchSize())
+			}
+		}
+
+		// Context has not been cancelled for this call so it succeeds.
+		_, err := rescuer.runOnce(ctx)
+		require.NoError(t, err)
+
+		require.Equal(t, riversharedmaintenance.BatchSizeDefault, rescuer.batchSize())
+
+		// Because of the success above, the circuit breaker resets. N - 1
+		// failures are allowed again before it breaks.
+		{
+			ctx, cancel := context.WithTimeout(ctx, 1*time.Nanosecond)
+			defer cancel()
+
+			// Starts at default batch size.
+			require.Equal(t, riversharedmaintenance.BatchSizeDefault, rescuer.batchSize())
+
+			for range rescuer.reducedBatchSizeBreaker.Limit() - 1 {
+				_, err := rescuer.runOnce(ctx)
+				require.Error(t, err)
+
+				// Circuit not broken yet so we stay at default batch size.
+				require.Equal(t, riversharedmaintenance.BatchSizeDefault, rescuer.batchSize())
+			}
+		}
 	})
 }
