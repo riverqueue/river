@@ -20,6 +20,12 @@ const (
 	LogPrefixRanSuccessfully = ": Ran successfully"
 	LogPrefixRunLoopStarted  = ": Run loop started"
 	LogPrefixRunLoopStopped  = ": Run loop stopped"
+
+	// TimeoutDefault is a reasonable timeout for any large maintenance-related
+	// queries. Some maintainers may opt to switch to their own timeout, but
+	// this one should generally be used unless there's a good reason to have a
+	// specific version.
+	TimeoutDefault = 30 * time.Second
 )
 
 // Constants related to JobCleaner.

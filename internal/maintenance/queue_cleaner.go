@@ -158,7 +158,7 @@ func (s *QueueCleaner) runOnce(ctx context.Context) (*queueCleanerRunOnceResult,
 	for {
 		// Wrapped in a function so that defers run as expected.
 		queuesDeleted, err := func() ([]string, error) {
-			ctx, cancelFunc := context.WithTimeout(ctx, 30*time.Second)
+			ctx, cancelFunc := context.WithTimeout(ctx, riversharedmaintenance.TimeoutDefault)
 			defer cancelFunc()
 
 			queuesDeleted, err := s.exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{

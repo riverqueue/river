@@ -164,7 +164,7 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 	for {
 		// Wrapped in a function so that defers run as expected.
 		numScheduled, err := func() (int, error) {
-			ctx, cancelFunc := context.WithTimeout(ctx, 30*time.Second)
+			ctx, cancelFunc := context.WithTimeout(ctx, riversharedmaintenance.TimeoutDefault)
 			defer cancelFunc()
 
 			tx, err := s.exec.Begin(ctx)
