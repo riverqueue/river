@@ -10,6 +10,7 @@ import (
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/circuitbreaker"
 	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
@@ -29,6 +30,8 @@ func (ts *JobCleanerTestSignals) Init(tb testutil.TestingTB) {
 }
 
 type JobCleanerConfig struct {
+	riversharedmaintenance.BatchSizes
+
 	// CancelledJobRetentionPeriod is the amount of time to keep cancelled jobs
 	// around before they're removed permanently.
 	//
@@ -62,6 +65,8 @@ type JobCleanerConfig struct {
 }
 
 func (c *JobCleanerConfig) mustValidate() *JobCleanerConfig {
+	c.MustValidate()
+
 	if c.CancelledJobRetentionPeriod < -1 {
 		panic("JobCleanerConfig.CancelledJobRetentionPeriod must be above zero")
 	}
@@ -91,13 +96,23 @@ type JobCleaner struct {
 	Config      *JobCleanerConfig
 	TestSignals JobCleanerTestSignals
 
-	batchSize int // configurable for test purposes
-	exec      riverdriver.Executor
+	exec riverdriver.Executor
+
+	// Circuit breaker that tracks consecutive timeout failures from the central
+	// query. The query starts by using the full/default batch size, but after
+	// this breaker trips (after N consecutive timeouts occur in a row), it
+	// switches to a smaller batch. We assume that a database that's degraded is
+	// likely to stay degraded over a longer term, so after the circuit breaks,
+	// it stays broken until the program is restarted.
+	reducedBatchSizeBreaker *circuitbreaker.CircuitBreaker
 }
 
 func NewJobCleaner(archetype *baseservice.Archetype, config *JobCleanerConfig, exec riverdriver.Executor) *JobCleaner {
+	batchSizes := config.WithDefaults()
+
 	return baseservice.Init(archetype, &JobCleaner{
 		Config: (&JobCleanerConfig{
+			BatchSizes:                  batchSizes,
 			CancelledJobRetentionPeriod: cmp.Or(config.CancelledJobRetentionPeriod, riversharedmaintenance.CancelledJobRetentionPeriodDefault),
 			CompletedJobRetentionPeriod: cmp.Or(config.CompletedJobRetentionPeriod, riversharedmaintenance.CompletedJobRetentionPeriodDefault),
 			DiscardedJobRetentionPeriod: cmp.Or(config.DiscardedJobRetentionPeriod, riversharedmaintenance.DiscardedJobRetentionPeriodDefault),
@@ -106,9 +121,8 @@ func NewJobCleaner(archetype *baseservice.Archetype, config *JobCleanerConfig, e
 			Schema:                      config.Schema,
 			Timeout:                     cmp.Or(config.Timeout, riversharedmaintenance.JobCleanerTimeoutDefault),
 		}).mustValidate(),
-
-		batchSize: riversharedmaintenance.BatchSizeDefault,
-		exec:      exec,
+		exec:                    exec,
+		reducedBatchSizeBreaker: riversharedmaintenance.ReducedBatchSizeBreaker(batchSizes),
 	})
 }
 
@@ -154,6 +168,13 @@ func (s *JobCleaner) Start(ctx context.Context) error { //nolint:dupl
 	return nil
 }
 
+func (s *JobCleaner) batchSize() int {
+	if s.reducedBatchSizeBreaker.Open() {
+		return s.Config.Reduced
+	}
+	return s.Config.Default
+}
+
 type jobCleanerRunOnceResult struct {
 	NumJobsDeleted int
 }
@@ -182,7 +203,7 @@ func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, err
 				CompletedFinalizedAtHorizon: time.Now().Add(-s.Config.CompletedJobRetentionPeriod),
 				DiscardedDoDelete:           s.Config.DiscardedJobRetentionPeriod != -1,
 				DiscardedFinalizedAtHorizon: time.Now().Add(-s.Config.DiscardedJobRetentionPeriod),
-				Max:                         s.batchSize,
+				Max:                         s.batchSize(),
 				QueuesExcluded:              s.Config.QueuesExcluded,
 				Schema:                      s.Config.Schema,
 			})
@@ -190,9 +211,15 @@ func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, err
 				return 0, fmt.Errorf("error cleaning jobs: %w", err)
 			}
 
+			s.reducedBatchSizeBreaker.ResetIfNotOpen()
+
 			return numDeleted, nil
 		}()
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				s.reducedBatchSizeBreaker.Trip()
+			}
+
 			return nil, err
 		}
 
@@ -200,7 +227,7 @@ func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, err
 
 		res.NumJobsDeleted += numDeleted
 		// Deleted was less than query `LIMIT` which means work is done.
-		if numDeleted < s.batchSize {
+		if numDeleted < s.batchSize() {
 			break
 		}
 
