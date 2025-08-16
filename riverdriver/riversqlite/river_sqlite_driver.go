@@ -731,16 +731,17 @@ func (e *Executor) JobInsertFullMany(ctx context.Context, params *riverdriver.Jo
 	return insertRes, nil
 }
 
-func (e *Executor) JobKindListByPrefix(ctx context.Context, params *riverdriver.JobKindListByPrefixParams) ([]string, error) {
+func (e *Executor) JobKindList(ctx context.Context, params *riverdriver.JobKindListParams) ([]string, error) {
 	exclude := params.Exclude
-	if exclude == nil {
-		exclude = []string{"**********"}
+	if len(exclude) == 0 {
+		exclude = []string{""}
 	}
-	kinds, err := dbsqlc.New().JobKindListByPrefix(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobKindListByPrefixParams{
+
+	kinds, err := dbsqlc.New().JobKindList(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobKindListParams{
 		After:   params.After,
 		Exclude: exclude,
+		Match:   params.Match,
 		Max:     int64(min(params.Max, math.MaxInt32)),
-		Prefix:  params.Prefix,
 	})
 	if err != nil {
 		return nil, interpretError(err)
@@ -1258,16 +1259,16 @@ func (e *Executor) QueueList(ctx context.Context, params *riverdriver.QueueListP
 	return sliceutil.Map(queues, queueFromInternal), nil
 }
 
-func (e *Executor) QueueNameListByPrefix(ctx context.Context, params *riverdriver.QueueNameListByPrefixParams) ([]string, error) {
+func (e *Executor) QueueNameList(ctx context.Context, params *riverdriver.QueueNameListParams) ([]string, error) {
 	exclude := params.Exclude
-	if exclude == nil {
-		exclude = []string{"**********"}
+	if len(exclude) == 0 {
+		exclude = []string{""}
 	}
-	queueNames, err := dbsqlc.New().QueueNameListByPrefix(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueNameListByPrefixParams{
+	queueNames, err := dbsqlc.New().QueueNameList(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueNameListParams{
 		After:   params.After,
 		Exclude: exclude,
+		Match:   params.Match,
 		Max:     int64(min(params.Max, math.MaxInt32)),
-		Prefix:  params.Prefix,
 	})
 	if err != nil {
 		return nil, interpretError(err)

@@ -260,9 +260,9 @@ func (p *producer) Start(ctx context.Context) error {
 }
 
 func (p *producer) Stop() {
-	p.Logger.Debug(p.Name+": Stopping", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load())) //nolint:noctx
+	p.Logger.Debug(p.Name+": Stopping", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
 	p.BaseStartStop.Stop()
-	p.Logger.Debug(p.Name+": Stop returned", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load())) //nolint:noctx
+	p.Logger.Debug(p.Name+": Stop returned", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
 }
 
 // Start starts the producer. It backgrounds a goroutine which is stopped when

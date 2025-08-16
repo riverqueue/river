@@ -46,12 +46,12 @@ FROM /* TEMPLATE: schema */river_queue
 ORDER BY name ASC
 LIMIT @max;
 
--- name: QueueNameListByPrefix :many
+-- name: QueueNameList :many
 SELECT name
 FROM /* TEMPLATE: schema */river_queue
 WHERE
     name > cast(@after AS text)
-    AND (cast(@prefix AS text) = '' OR name LIKE cast(@prefix AS text) || '%')
+    AND (cast(@match AS text) = '' OR LOWER(name) LIKE '%' || LOWER(cast(@match AS text)) || '%')
     AND name NOT IN (sqlc.slice('exclude'))
 ORDER BY name ASC
 LIMIT @max;

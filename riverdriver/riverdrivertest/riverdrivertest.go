@@ -2356,10 +2356,10 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		assertJobEqualsInput(t, results[1], jobParams2)
 	})
 
-	t.Run("JobKindListByPrefix", func(t *testing.T) { //nolint:dupl
+	t.Run("JobKindList", func(t *testing.T) {
 		t.Parallel()
 
-		t.Run("ListsJobKindsInOrderWithMaxLimit", func(t *testing.T) {
+		t.Run("ListsJobKindsInOrderWithMaxLimit", func(t *testing.T) { //nolint:dupl
 			t.Parallel()
 
 			exec, _ := setup(ctx, t)
@@ -2369,11 +2369,11 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_bbb")})
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("different_prefix_job")})
 
-			jobKinds, err := exec.JobKindListByPrefix(ctx, &riverdriver.JobKindListByPrefixParams{
+			jobKinds, err := exec.JobKindList(ctx, &riverdriver.JobKindListParams{
 				After:   "job2",
 				Exclude: nil,
+				Match:   "job",
 				Max:     2,
-				Prefix:  "job",
 				Schema:  "",
 			})
 			require.NoError(t, err)
@@ -2389,15 +2389,36 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_aaa")})
 			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_bbb")})
 
-			jobKinds, err := exec.JobKindListByPrefix(ctx, &riverdriver.JobKindListByPrefixParams{
+			jobKinds, err := exec.JobKindList(ctx, &riverdriver.JobKindListParams{
 				After:   "job2",
 				Exclude: []string{job2.Kind},
 				Max:     2,
-				Prefix:  "job",
+				Match:   "job",
 				Schema:  "",
 			})
 			require.NoError(t, err)
 			require.Equal(t, []string{job3.Kind, job1.Kind}, jobKinds)
+		})
+
+		t.Run("ListsJobKindsWithSubstringMatch", func(t *testing.T) { //nolint:dupl
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("mid_job_kind")})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("prefix_job")})
+			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("suffix_job")})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("nojobhere")})
+
+			jobKinds, err := exec.JobKindList(ctx, &riverdriver.JobKindListParams{
+				After:   "",
+				Exclude: nil,
+				Match:   "fix",
+				Max:     3,
+				Schema:  "",
+			})
+			require.NoError(t, err)
+			require.Equal(t, []string{job2.Kind, job3.Kind}, jobKinds)
 		})
 	})
 
@@ -4155,10 +4176,10 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		requireQueuesEqual(t, queue3, queues[2])
 	})
 
-	t.Run("QueueNameListByPrefix", func(t *testing.T) { //nolint:dupl
+	t.Run("QueueNameList", func(t *testing.T) {
 		t.Parallel()
 
-		t.Run("ListsQueuesInOrderWithMaxLimit", func(t *testing.T) {
+		t.Run("ListsQueuesInOrderWithMaxLimit", func(t *testing.T) { //nolint:dupl
 			t.Parallel()
 
 			exec, _ := setup(ctx, t)
@@ -4168,11 +4189,11 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_bbb")})
 			_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("different_prefix_queue")})
 
-			queueNames, err := exec.QueueNameListByPrefix(ctx, &riverdriver.QueueNameListByPrefixParams{
+			queueNames, err := exec.QueueNameList(ctx, &riverdriver.QueueNameListParams{
 				After:   "queue2",
 				Exclude: nil,
+				Match:   "queue",
 				Max:     2,
-				Prefix:  "queue",
 				Schema:  "",
 			})
 			require.NoError(t, err)
@@ -4188,15 +4209,35 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			queue2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_aaa")})
 			queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_bbb")})
 
-			queueNames, err := exec.QueueNameListByPrefix(ctx, &riverdriver.QueueNameListByPrefixParams{
+			queueNames, err := exec.QueueNameList(ctx, &riverdriver.QueueNameListParams{
 				After:   "queue2",
 				Exclude: []string{queue2.Name},
+				Match:   "queue",
 				Max:     2,
-				Prefix:  "queue",
 				Schema:  "",
 			})
 			require.NoError(t, err)
 			require.Equal(t, []string{queue3.Name, queue1.Name}, queueNames)
+		})
+
+		t.Run("ListsQueuesWithSubstringMatch", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			queue1 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("prefix_queue")})
+			_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("another_queue")})
+			queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("suffix_queue")})
+
+			queueNames, err := exec.QueueNameList(ctx, &riverdriver.QueueNameListParams{
+				After:   "",
+				Exclude: nil,
+				Match:   "fix",
+				Max:     3,
+				Schema:  "",
+			})
+			require.NoError(t, err)
+			require.Equal(t, []string{queue1.Name, queue3.Name}, queueNames)
 		})
 	})
 

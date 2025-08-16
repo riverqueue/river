@@ -158,29 +158,29 @@ func (q *Queries) QueueList(ctx context.Context, db DBTX, max int64) ([]*RiverQu
 	return items, nil
 }
 
-const queueNameListByPrefix = `-- name: QueueNameListByPrefix :many
+const queueNameList = `-- name: QueueNameList :many
 SELECT name
 FROM /* TEMPLATE: schema */river_queue
 WHERE
     name > cast(?1 AS text)
-    AND (cast(?2 AS text) = '' OR name LIKE cast(?2 AS text) || '%')
+    AND (cast(?2 AS text) = '' OR LOWER(name) LIKE '%' || LOWER(cast(?2 AS text)) || '%')
     AND name NOT IN (/*SLICE:exclude*/?)
 ORDER BY name ASC
 LIMIT ?4
 `
 
-type QueueNameListByPrefixParams struct {
+type QueueNameListParams struct {
 	After   string
-	Prefix  string
+	Match   string
 	Exclude []string
 	Max     int64
 }
 
-func (q *Queries) QueueNameListByPrefix(ctx context.Context, db DBTX, arg *QueueNameListByPrefixParams) ([]string, error) {
-	query := queueNameListByPrefix
+func (q *Queries) QueueNameList(ctx context.Context, db DBTX, arg *QueueNameListParams) ([]string, error) {
+	query := queueNameList
 	var queryParams []interface{}
 	queryParams = append(queryParams, arg.After)
-	queryParams = append(queryParams, arg.Prefix)
+	queryParams = append(queryParams, arg.Match)
 	if len(arg.Exclude) > 0 {
 		for _, v := range arg.Exclude {
 			queryParams = append(queryParams, v)
