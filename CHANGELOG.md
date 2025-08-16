@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2025-08-16
+
 ⚠️ Version 0.24.0 has a breaking change in `HookWorkEnd.WorkEnd` in that a new `JobRow` parameter has been added to the function's signature. Any intergration defining a custom `HookWorkEnd` hook should update its implementation so the hook continues to be called correctly.
 
 ⚠️ Internal APIs used for communication between River and River Pro have changed. If using River Pro, make sure to update River and River Pro to latest at the same time to get compatible versions. River v0.24.0 is compatible with River Pro v0.16.0.
