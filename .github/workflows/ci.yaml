@@ -251,7 +251,7 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     env:
-      GOLANGCI_LINT_VERSION: v2.3.0
+      GOLANGCI_LINT_VERSION: v2.4.0
     permissions:
       contents: read
       # allow read access to pull request. Use with `only-new-issues` option.
