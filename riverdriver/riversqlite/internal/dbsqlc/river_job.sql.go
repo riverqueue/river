@@ -912,27 +912,27 @@ func (q *Queries) JobInsertFull(ctx context.Context, db DBTX, arg *JobInsertFull
 	return &i, err
 }
 
-const jobKindListByPrefix = `-- name: JobKindListByPrefix :many
+const jobKindList = `-- name: JobKindList :many
 SELECT DISTINCT kind
 FROM /* TEMPLATE: schema */river_job
-WHERE (cast(?1 AS text) = '' OR kind LIKE cast(?1 AS text) || '%')
+WHERE (cast(?1 AS text) = '' OR LOWER(kind) LIKE '%' || LOWER(cast(?1 AS text)) || '%')
     AND (cast(?2 AS text) = '' OR kind > cast(?2 AS text))
     AND kind NOT IN (/*SLICE:exclude*/?)
 ORDER BY kind ASC
 LIMIT ?4
 `
 
-type JobKindListByPrefixParams struct {
-	Prefix  string
+type JobKindListParams struct {
+	Match   string
 	After   string
 	Exclude []string
 	Max     int64
 }
 
-func (q *Queries) JobKindListByPrefix(ctx context.Context, db DBTX, arg *JobKindListByPrefixParams) ([]string, error) {
-	query := jobKindListByPrefix
+func (q *Queries) JobKindList(ctx context.Context, db DBTX, arg *JobKindListParams) ([]string, error) {
+	query := jobKindList
 	var queryParams []interface{}
-	queryParams = append(queryParams, arg.Prefix)
+	queryParams = append(queryParams, arg.Match)
 	queryParams = append(queryParams, arg.After)
 	if len(arg.Exclude) > 0 {
 		for _, v := range arg.Exclude {

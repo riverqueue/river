@@ -215,7 +215,7 @@ type Executor interface {
 	JobInsertFastManyNoReturning(ctx context.Context, params *JobInsertFastManyParams) (int, error)
 	JobInsertFull(ctx context.Context, params *JobInsertFullParams) (*rivertype.JobRow, error)
 	JobInsertFullMany(ctx context.Context, jobs *JobInsertFullManyParams) ([]*rivertype.JobRow, error)
-	JobKindListByPrefix(ctx context.Context, params *JobKindListByPrefixParams) ([]string, error)
+	JobKindList(ctx context.Context, params *JobKindListParams) ([]string, error)
 	JobList(ctx context.Context, params *JobListParams) ([]*rivertype.JobRow, error)
 	JobRescueMany(ctx context.Context, params *JobRescueManyParams) (*struct{}, error)
 	JobRetry(ctx context.Context, params *JobRetryParams) (*rivertype.JobRow, error)
@@ -261,7 +261,7 @@ type Executor interface {
 	QueueDeleteExpired(ctx context.Context, params *QueueDeleteExpiredParams) ([]string, error)
 	QueueGet(ctx context.Context, params *QueueGetParams) (*rivertype.Queue, error)
 	QueueList(ctx context.Context, params *QueueListParams) ([]*rivertype.Queue, error)
-	QueueNameListByPrefix(ctx context.Context, params *QueueNameListByPrefixParams) ([]string, error)
+	QueueNameList(ctx context.Context, params *QueueNameListParams) ([]string, error)
 	QueuePause(ctx context.Context, params *QueuePauseParams) error
 	QueueResume(ctx context.Context, params *QueueResumeParams) error
 	QueueUpdate(ctx context.Context, params *QueueUpdateParams) (*rivertype.Queue, error)
@@ -481,11 +481,11 @@ type JobInsertFullManyParams struct {
 	Schema string
 }
 
-type JobKindListByPrefixParams struct {
+type JobKindListParams struct {
 	After   string
 	Exclude []string
+	Match   string
 	Max     int
-	Prefix  string
 	Schema  string
 }
 
@@ -782,11 +782,11 @@ type QueueListParams struct {
 	Schema string
 }
 
-type QueueNameListByPrefixParams struct {
+type QueueNameListParams struct {
 	After   string
 	Exclude []string
+	Match   string
 	Max     int
-	Prefix  string
 	Schema  string
 }
 

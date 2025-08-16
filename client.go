@@ -503,7 +503,7 @@ func (c *Config) validate() error {
 			kind := workerInfo.jobArgs.Kind()
 			if !rivercommon.UserSpecifiedIDOrKindRE.MatchString(kind) {
 				if c.SkipJobKindValidation {
-					c.Logger.Warn("job kind should match regex; this will be an error in future versions", //nolint:noctx
+					c.Logger.Warn("job kind should match regex; this will be an error in future versions",
 						slog.String("kind", kind),
 						slog.String("regex", rivercommon.UserSpecifiedIDOrKindRE.String()),
 					)
@@ -829,7 +829,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 				client.services = append(client.services, client.notifier)
 			}
 		} else {
-			config.Logger.Info("Driver does not support listener; entering poll only mode") //nolint:noctx
+			config.Logger.Info("Driver does not support listener; entering poll only mode")
 		}
 
 		client.elector = leadership.NewElector(archetype, driver.GetExecutor(), client.notifier, &leadership.Config{

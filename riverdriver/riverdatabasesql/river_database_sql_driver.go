@@ -541,12 +541,12 @@ func (e *Executor) JobInsertFullMany(ctx context.Context, params *riverdriver.Jo
 	return sliceutil.MapError(items, jobRowFromInternal)
 }
 
-func (e *Executor) JobKindListByPrefix(ctx context.Context, params *riverdriver.JobKindListByPrefixParams) ([]string, error) {
-	kinds, err := dbsqlc.New().JobKindListByPrefix(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobKindListByPrefixParams{
+func (e *Executor) JobKindList(ctx context.Context, params *riverdriver.JobKindListParams) ([]string, error) {
+	kinds, err := dbsqlc.New().JobKindList(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobKindListParams{
 		After:   params.After,
 		Exclude: params.Exclude,
+		Match:   params.Match,
 		Max:     int32(params.Max), //nolint:gosec
-		Prefix:  params.Prefix,
 	})
 	if err != nil {
 		return nil, interpretError(err)
@@ -883,12 +883,12 @@ func (e *Executor) QueueList(ctx context.Context, params *riverdriver.QueueListP
 	return sliceutil.Map(queues, queueFromInternal), nil
 }
 
-func (e *Executor) QueueNameListByPrefix(ctx context.Context, params *riverdriver.QueueNameListByPrefixParams) ([]string, error) {
-	queueNames, err := dbsqlc.New().QueueNameListByPrefix(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueNameListByPrefixParams{
+func (e *Executor) QueueNameList(ctx context.Context, params *riverdriver.QueueNameListParams) ([]string, error) {
+	queueNames, err := dbsqlc.New().QueueNameList(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueNameListParams{
 		After:   params.After,
 		Exclude: params.Exclude,
+		Match:   params.Match,
 		Max:     int32(min(params.Max, math.MaxInt32)), //nolint:gosec
-		Prefix:  params.Prefix,
 	})
 	if err != nil {
 		return nil, interpretError(err)
