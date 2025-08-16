@@ -274,7 +274,7 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 }
 
 func (s *JobRescuer) getStuckJobs(ctx context.Context) ([]*rivertype.JobRow, error) {
-	ctx, cancelFunc := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancelFunc := context.WithTimeout(ctx, riversharedmaintenance.TimeoutDefault)
 	defer cancelFunc()
 
 	stuckHorizon := time.Now().Add(-s.Config.RescueAfter)

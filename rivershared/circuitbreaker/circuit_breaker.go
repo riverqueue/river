@@ -81,7 +81,8 @@ func (b *CircuitBreaker) ResetIfNotOpen() bool {
 
 // Trip "trips" the circuit breaker by counting an action towards opening it. If
 // the action causes the breaker to reach its limit within its window, the
-// breaker opens and the function returns true.
+// breaker opens and the function returns true. Subsequent calls to Trip after
+// the breaker is open will also return true.
 func (b *CircuitBreaker) Trip() bool {
 	if b.open {
 		return true
