@@ -47,13 +47,11 @@ type DefaultClientRetryPolicy struct {
 // equivalent of the maximum of time.Duration to each retry, about 292 years.
 // The schedule is no longer exponential past this point.
 func (p *DefaultClientRetryPolicy) NextRetry(job *rivertype.JobRow) time.Time {
-	// For the purposes of calculating the backoff, we can look solely at the
-	// number of errors. If we were to use the raw attempt count, this would be
-	// incremented and influenced by snoozes. However the use case for snoozing is
-	// to try again later *without* counting as an error.
-	//
-	// Note that we explicitly add 1 here, because the error hasn't been appended
-	// yet at the time this is called (that happens in the completer).
+	// In modern versions of River `len(job.Errors)` is the same number as
+	// `attempt`.  However, in older version snoozing a job wouldn't restore its
+	// attempt count to the pre-fetch value, and that would lead to incorrect
+	// retry durations when jobs are first snoozed, then retried. To avoid this
+	// and keep backward compatibility, the number of errors are used instead.
 	errorCount := len(job.Errors) + 1
 
 	return p.timeNowUTC().Add(timeutil.SecondsAsDuration(p.retrySeconds(errorCount)))
@@ -89,7 +87,10 @@ func (p *DefaultClientRetryPolicy) retrySeconds(attempt int) float64 {
 	// Jitter number of seconds +/- 10%.
 	retrySeconds += retrySeconds * (rand.Float64()*0.2 - 0.1)
 
-	return retrySeconds
+	// Cap retrySeconds once more in case adding random jitter pushed it over
+	// maxDurationSeconds. (This should never realistically happen, but protect
+	// against it just in case.)
+	return min(retrySeconds, maxDurationSeconds)
 }
 
 // Gets a base number of retry seconds for the given attempt, jitter excluded.
