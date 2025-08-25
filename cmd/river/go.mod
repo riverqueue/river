@@ -14,7 +14,7 @@ require (
 	github.com/riverqueue/river/rivershared v0.24.0
 	github.com/riverqueue/river/rivertype v0.24.0
 	github.com/spf13/cobra v1.9.1
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.0
 	modernc.org/sqlite v1.38.2
 )
 

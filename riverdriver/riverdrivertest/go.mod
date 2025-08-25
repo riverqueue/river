@@ -16,7 +16,7 @@ require (
 	github.com/riverqueue/river/riverdriver/riversqlite v0.24.0
 	github.com/riverqueue/river/rivershared v0.24.0
 	github.com/riverqueue/river/rivertype v0.24.0
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.0
 	github.com/tidwall/gjson v1.18.0
 	github.com/tidwall/sjson v1.2.5
 	github.com/tursodatabase/libsql-client-go v0.0.0-20240902231107-85af5b9d094d
