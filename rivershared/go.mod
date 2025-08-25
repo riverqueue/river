@@ -8,8 +8,9 @@ require (
 	github.com/jackc/pgx/v5 v5.7.5
 	github.com/riverqueue/river v0.24.0
 	github.com/riverqueue/river/riverdriver v0.24.0
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.24.0
 	github.com/riverqueue/river/rivertype v0.24.0
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.0
 	go.uber.org/goleak v1.3.0
 	golang.org/x/mod v0.27.0
 )
