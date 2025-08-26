@@ -632,7 +632,12 @@ func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan pr
 		select {
 		case result := <-fetchResultCh:
 			if result.err != nil {
-				p.Logger.ErrorContext(workCtx, p.Name+": Error fetching jobs", slog.String("err", result.err.Error()))
+				var warnableError *riverpilot.FetchErrorWithWarningLevel
+				if errors.As(result.err, &warnableError) {
+					p.Logger.WarnContext(workCtx, p.Name+": Unable to fetch jobs", slog.String("err", result.err.Error()))
+				} else {
+					p.Logger.ErrorContext(workCtx, p.Name+": Error fetching jobs", slog.String("err", result.err.Error()))
+				}
 			} else if len(result.jobs) > 0 {
 				p.startNewExecutors(workCtx, result.jobs)
 
