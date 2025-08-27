@@ -632,7 +632,7 @@ func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan pr
 		select {
 		case result := <-fetchResultCh:
 			if result.err != nil {
-				p.Logger.ErrorContext(workCtx, p.Name+": Error fetching jobs", slog.String("err", result.err.Error()))
+				p.Logger.ErrorContext(workCtx, p.Name+": Error fetching jobs", slog.String("err", result.err.Error()), slog.String("queue", p.config.Queue))
 			} else if len(result.jobs) > 0 {
 				p.startNewExecutors(workCtx, result.jobs)
 
@@ -756,7 +756,6 @@ func (p *producer) dispatchWork(workCtx context.Context, count int, fetchResultC
 		Schema:         p.config.Schema,
 	})
 	if err != nil {
-		p.Logger.ErrorContext(ctx, p.Name+": Error fetching jobs", slog.String("err", err.Error()), slog.String("queue", p.config.Queue))
 		fetchResultCh <- producerFetchResult{err: err}
 		return
 	}
