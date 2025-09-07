@@ -2137,22 +2137,7 @@ func (c *Client[TTx]) JobDeleteMany(ctx context.Context, params *JobDeleteManyPa
 		return nil, errNoDriverDBPool
 	}
 
-	if params == nil {
-		params = NewJobDeleteManyParams()
-	}
-	params.schema = c.config.Schema
-
-	listParams, err := dblist.JobMakeDriverParams(ctx, params.toDBParams(), c.driver.SQLFragmentColumnIn)
-	if err != nil {
-		return nil, err
-	}
-
-	jobs, err := c.driver.GetExecutor().JobDeleteMany(ctx, (*riverdriver.JobDeleteManyParams)(listParams))
-	if err != nil {
-		return nil, err
-	}
-
-	return &JobDeleteManyResult{Jobs: jobs}, nil
+	return c.jobDeleteMany(ctx, c.driver.GetExecutor(), params)
 }
 
 // JobDeleteManyTx deletes many jobs at once based on the conditions defined by
@@ -2164,6 +2149,10 @@ func (c *Client[TTx]) JobDeleteMany(ctx context.Context, params *JobDeleteManyPa
 //		// handle error
 //	}
 func (c *Client[TTx]) JobDeleteManyTx(ctx context.Context, tx TTx, params *JobDeleteManyParams) (*JobDeleteManyResult, error) {
+	return c.jobDeleteMany(ctx, c.driver.UnwrapExecutor(tx), params)
+}
+
+func (c *Client[TTx]) jobDeleteMany(ctx context.Context, exec riverdriver.Executor, params *JobDeleteManyParams) (*JobDeleteManyResult, error) {
 	if params == nil {
 		params = NewJobDeleteManyParams()
 	}
@@ -2174,7 +2163,7 @@ func (c *Client[TTx]) JobDeleteManyTx(ctx context.Context, tx TTx, params *JobDe
 		return nil, err
 	}
 
-	jobs, err := c.driver.UnwrapExecutor(tx).JobDeleteMany(ctx, (*riverdriver.JobDeleteManyParams)(listParams))
+	jobs, err := exec.JobDeleteMany(ctx, (*riverdriver.JobDeleteManyParams)(listParams))
 	if err != nil {
 		return nil, err
 	}
