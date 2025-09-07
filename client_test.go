@@ -2145,15 +2145,27 @@ func Test_Client_JobDeleteMany(t *testing.T) {
 			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
 			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
 			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+			job4 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
 		)
 
 		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().IDs(job1.ID))
 		require.NoError(t, err)
 		require.Equal(t, []int64{job1.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: bundle.schema})
+		require.ErrorIs(t, rivertype.ErrNotFound, err)
+		_, err = client.JobGet(ctx, job2.ID)
+		require.NoError(t, err)
+		_, err = client.JobGet(ctx, job3.ID)
+		require.NoError(t, err)
+
 		deleteRes, err = client.JobDeleteMany(ctx, NewJobDeleteManyParams().IDs(job2.ID, job3.ID))
 		require.NoError(t, err)
 		require.Equal(t, []int64{job2.ID, job3.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		// job4 should still be present
+		_, err = client.JobGet(ctx, job4.ID)
+		require.NoError(t, err)
 	})
 
 	t.Run("FiltersByIDAndPriorityAndKind", func(t *testing.T) {
@@ -2170,6 +2182,9 @@ func Test_Client_JobDeleteMany(t *testing.T) {
 		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().IDs(job1.ID, job2.ID, job3.ID).Priorities(1, 2).Kinds("special_kind"))
 		require.NoError(t, err)
 		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		_, err = client.JobGet(ctx, job3.ID)
+		require.NoError(t, err)
 	})
 
 	t.Run("FiltersByPriority", func(t *testing.T) {
@@ -2186,6 +2201,11 @@ func Test_Client_JobDeleteMany(t *testing.T) {
 		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().Priorities(1))
 		require.NoError(t, err)
 		require.Equal(t, []int64{job1.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		_, err = client.JobGet(ctx, job2.ID)
+		require.NoError(t, err)
+		_, err = client.JobGet(ctx, job3.ID)
+		require.NoError(t, err)
 
 		deleteRes, err = client.JobDeleteMany(ctx, NewJobDeleteManyParams().Priorities(2, 3))
 		require.NoError(t, err)
@@ -2208,6 +2228,9 @@ func Test_Client_JobDeleteMany(t *testing.T) {
 		// jobs ordered by ScheduledAt ASC by default
 		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
+		_, err = client.JobGet(ctx, job3.ID)
+		require.NoError(t, err)
+
 		deleteRes, err = client.JobDeleteMany(ctx, NewJobDeleteManyParams().Kinds("test_kind_2"))
 		require.NoError(t, err)
 		require.Equal(t, []int64{job3.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
@@ -2228,6 +2251,9 @@ func Test_Client_JobDeleteMany(t *testing.T) {
 		require.NoError(t, err)
 		// jobs ordered by ScheduledAt ASC by default
 		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		_, err = client.JobGet(ctx, job3.ID)
+		require.NoError(t, err)
 
 		deleteRes, err = client.JobDeleteMany(ctx, NewJobDeleteManyParams().Queues("queue_2"))
 		require.NoError(t, err)
@@ -2250,9 +2276,17 @@ func Test_Client_JobDeleteMany(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
+		_, err = client.JobGet(ctx, job3.ID)
+		require.NoError(t, err)
+		_, err = client.JobGet(ctx, job4.ID)
+		require.NoError(t, err)
+
 		deleteRes, err = client.JobDeleteMany(ctx, NewJobDeleteManyParams().States(rivertype.JobStateCompleted))
 		require.NoError(t, err)
 		require.Equal(t, []int64{job3.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		_, err = client.JobGet(ctx, job4.ID)
+		require.NoError(t, err)
 
 		// All by default:
 		deleteRes, err = client.JobDeleteMany(ctx, NewJobDeleteManyParams())
@@ -2291,6 +2325,9 @@ func Test_Client_JobDeleteMany(t *testing.T) {
 		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().IDs(job1.ID, job2.ID))
 		require.NoError(t, err)
 		require.Equal(t, []int64{job1.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		_, err = client.JobGet(ctx, job2.ID)
+		require.NoError(t, err)
 	})
 
 	t.Run("WithCancelledContext", func(t *testing.T) {
@@ -2357,6 +2394,13 @@ func Test_Client_JobDeleteManyTx(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []int64{job1.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 
+		_, err = bundle.execTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: bundle.schema})
+		require.ErrorIs(t, rivertype.ErrNotFound, err)
+		_, err = bundle.execTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+		_, err = bundle.execTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job3.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+
 		deleteRes, err = client.JobDeleteManyTx(ctx, bundle.tx, NewJobDeleteManyParams().IDs(job2.ID, job3.ID))
 		require.NoError(t, err)
 		require.Equal(t, []int64{job2.ID, job3.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
@@ -2364,6 +2408,8 @@ func Test_Client_JobDeleteManyTx(t *testing.T) {
 		_, err = bundle.execTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job1.ID, Schema: bundle.schema})
 		require.ErrorIs(t, rivertype.ErrNotFound, err)
 		_, err = bundle.execTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID, Schema: bundle.schema})
+		require.ErrorIs(t, rivertype.ErrNotFound, err)
+		_, err = bundle.execTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job3.ID, Schema: bundle.schema})
 		require.ErrorIs(t, rivertype.ErrNotFound, err)
 
 		// Jobs present because other transaction doesn't see the deletion.
