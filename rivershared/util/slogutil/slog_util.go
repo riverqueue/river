@@ -6,7 +6,32 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
+	"strings"
+
+	"github.com/riverqueue/river/rivershared/util/sliceutil"
 )
+
+// SliceInt64 is a type that implements slog.LogValue and which will format a
+// slice for inclusion in logging, but lazily so that no work is done unless a
+// log line is actually emitted.
+type SliceInt64 []int64
+
+func (s SliceInt64) LogValue() slog.Value {
+	return slog.StringValue(strings.Join(
+		sliceutil.Map(s, func(i int64) string { return strconv.FormatInt(i, 10) }),
+		",",
+	))
+}
+
+// SliceString is a type that implements slog.LogValue and which will format a
+// slice for inclusion in logging, but lazily so that no work is done unless a
+// log line is actually emitted.
+type SliceString []string
+
+func (s SliceString) LogValue() slog.Value {
+	return slog.StringValue(strings.Join(s, ","))
+}
 
 // SlogMessageOnlyHandler is a trivial slog handler that prints only messages.
 // All attributes and groups are ignored. It's useful in example tests where it
