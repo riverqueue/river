@@ -1128,7 +1128,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			})
 
 			// Does not match predicate (makes sure where clause is working).
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+			otherJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
 
 			deletedJobs, err := exec.JobDeleteMany(ctx, &riverdriver.JobDeleteManyParams{
 				Max:           100,
@@ -1160,6 +1160,10 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
 			require.ErrorIs(t, err, rivertype.ErrNotFound)
+
+			// Non-matching job should remain
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: otherJob.ID})
+			require.NoError(t, err)
 		})
 
 		t.Run("IgnoresRunningJobs", func(t *testing.T) {
@@ -1190,7 +1194,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			{
 				var (
 					job1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind1")})
-					_    = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind2")})
+					job2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind2")})
 				)
 
 				deletedJobs, err := exec.JobDeleteMany(ctx, &riverdriver.JobDeleteManyParams{
@@ -1201,6 +1205,10 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				})
 				require.NoError(t, err)
 				require.Len(t, deletedJobs, 1)
+
+				// Non-matching job should remain
+				_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID})
+				require.NoError(t, err)
 			}
 
 			{
