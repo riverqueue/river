@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Set minimum Go version to Go 1.24. [PR #1032](https://github.com/riverqueue/river/pull/1032).
+- **Breaking change:** `Client.JobDeleteMany` now requires the use of `JobDeleteManyParams.UnsafeAll` to delete all jobs without a filter applied. This is a safety feature to make it more difficult to accidentally delete all non-running jobs. This is a minor breaking change, but on a fairly new feature that's not likely to be used on purpose by very many people yet. [PR #1033](https://github.com/riverqueue/river/pull/1033).
 
 ### Fixed
 
