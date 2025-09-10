@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Set minimum Go version to Go 1.24. [PR #1032](https://github.com/riverqueue/river/pull/1032).
+
 ### Fixed
 
 - Don't double log fetch errors. [PR #1025](https://github.com/riverqueue/river/pull/1025).

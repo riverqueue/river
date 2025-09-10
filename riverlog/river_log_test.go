@@ -239,7 +239,7 @@ func TestMiddleware(t *testing.T) {
 
 		testWorker := rivertest.NewWorker(t, bundle.driver, bundle.clientConfig, river.WorkFunc(func(ctx context.Context, job *river.Job[loggingArgs]) error {
 			logger := ctx.Value(writerContextKey{}).(*log.Logger) //nolint:forcetypeassert
-			logger.Printf(job.Args.Message)
+			logger.Println(job.Args.Message)
 			return nil
 		}))
 
