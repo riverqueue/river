@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Don't double log fetch errors. [PR #1025](https://github.com/riverqueue/river/pull/1025).
+- When snoozing a job with zero duration so that it's retried immediately, subscription events no longer appear incorrectly with a kind of `rivertype.EventKindJobFailed`. Instead they're assigned `rivertype.EventKindJobSnoozed` just like they would have with a non-zero snooze duration. [PR #1037](https://github.com/riverqueue/river/pull/1037).
 
 ## [0.24.0] - 2025-08-16
 

@@ -535,6 +535,7 @@ type JobSetStateIfRunningParams struct {
 	MetadataUpdates []byte
 	ScheduledAt     *time.Time
 	Schema          string // added by completer
+	Snoozed         bool
 	State           rivertype.JobState
 }
 
@@ -599,6 +600,7 @@ func JobSetStateSnoozed(id int64, scheduledAt time.Time, attempt int, metadataUp
 		MetadataDoMerge: len(metadataUpdates) > 0,
 		MetadataUpdates: metadataUpdates,
 		ScheduledAt:     &scheduledAt,
+		Snoozed:         true,
 		State:           rivertype.JobStateScheduled,
 	}
 }
@@ -610,6 +612,7 @@ func JobSetStateSnoozedAvailable(id int64, scheduledAt time.Time, attempt int, m
 		MetadataDoMerge: len(metadataUpdates) > 0,
 		MetadataUpdates: metadataUpdates,
 		ScheduledAt:     &scheduledAt,
+		Snoozed:         true,
 		State:           rivertype.JobStateAvailable,
 	}
 }
