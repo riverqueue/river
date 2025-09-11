@@ -2289,12 +2289,12 @@ func Test_Client_JobDeleteMany(t *testing.T) {
 		require.NoError(t, err)
 
 		// All by default:
-		deleteRes, err = client.JobDeleteMany(ctx, NewJobDeleteManyParams())
+		deleteRes, err = client.JobDeleteMany(ctx, NewJobDeleteManyParams().UnsafeAll())
 		require.NoError(t, err)
 		require.Equal(t, []int64{job4.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 	})
 
-	t.Run("WithNilParamsFiltersToAllStatesByDefault", func(t *testing.T) {
+	t.Run("DeletesAllWithUnsafeAll", func(t *testing.T) {
 		t.Parallel()
 
 		client, bundle := setup(t)
@@ -2306,10 +2306,19 @@ func Test_Client_JobDeleteMany(t *testing.T) {
 			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateCompleted), ScheduledAt: ptrutil.Ptr(now.Add(-2 * time.Second))})
 		)
 
-		deleteRes, err := client.JobDeleteMany(ctx, nil)
+		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().UnsafeAll())
 		require.NoError(t, err)
 		// sort order defaults to ID
 		require.Equal(t, []int64{job1.ID, job2.ID, job3.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+	})
+
+	t.Run("EmptyFiltersError", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		_, err := client.JobDeleteMany(ctx, nil)
+		require.EqualError(t, err, "delete with no filters not allowed to prevent accidental deletion of all jobs; either specify a predicate (e.g. JobDeleteManyParams.IDs, JobDeleteManyParams.Kinds, ...) or call JobDeleteManyParams.All")
 	})
 
 	t.Run("IgnoresRunningJobs", func(t *testing.T) {

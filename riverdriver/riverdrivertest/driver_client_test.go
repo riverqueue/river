@@ -330,7 +330,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		}
 	})
 
-	t.Run("JobDeleteManyMinimal", func(t *testing.T) {
+	t.Run("JobDeleteManyUnsafeAll", func(t *testing.T) {
 		t.Parallel()
 
 		client, bundle := setup(t)
@@ -340,7 +340,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
 		)
 
-		deleteRes, err := client.JobDeleteMany(ctx, river.NewJobDeleteManyParams())
+		deleteRes, err := client.JobDeleteMany(ctx, river.NewJobDeleteManyParams().UnsafeAll())
 		require.NoError(t, err)
 		require.Len(t, deleteRes.Jobs, 2)
 		require.Equal(t, job1.ID, deleteRes.Jobs[0].ID)
@@ -380,7 +380,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.NoError(t, err)
 	})
 
-	t.Run("JobDeleteManyTxMinimal", func(t *testing.T) {
+	t.Run("JobDeleteManyTxUnsafeAll", func(t *testing.T) {
 		t.Parallel()
 
 		client, bundle := setup(t)
@@ -392,7 +392,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 
 		tx, execTx := beginTx(ctx, t, bundle)
 
-		deleteRes, err := client.JobDeleteManyTx(ctx, tx, river.NewJobDeleteManyParams())
+		deleteRes, err := client.JobDeleteManyTx(ctx, tx, river.NewJobDeleteManyParams().UnsafeAll())
 		require.NoError(t, err)
 		require.Len(t, deleteRes.Jobs, 2)
 		require.Equal(t, job1.ID, deleteRes.Jobs[0].ID)

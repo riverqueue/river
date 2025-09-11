@@ -2158,6 +2158,10 @@ func (c *Client[TTx]) jobDeleteMany(ctx context.Context, exec riverdriver.Execut
 	}
 	params.schema = c.config.Schema
 
+	if params.filtersEmpty() && !params.unsafeAll {
+		return nil, errors.New("delete with no filters not allowed to prevent accidental deletion of all jobs; either specify a predicate (e.g. JobDeleteManyParams.IDs, JobDeleteManyParams.Kinds, ...) or call JobDeleteManyParams.All")
+	}
+
 	listParams, err := dblist.JobMakeDriverParams(ctx, params.toDBParams(), c.driver.SQLFragmentColumnIn)
 	if err != nil {
 		return nil, err

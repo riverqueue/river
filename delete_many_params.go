@@ -18,6 +18,7 @@ type JobDeleteManyParams struct {
 	queues     []string
 	schema     string
 	states     []rivertype.JobState
+	unsafeAll  bool
 }
 
 // NewJobDeleteManyParams creates a new JobDeleteManyParams to delete jobs
@@ -37,7 +38,16 @@ func (p *JobDeleteManyParams) copy() *JobDeleteManyParams {
 		queues:     append([]string(nil), p.queues...),
 		schema:     p.schema,
 		states:     append([]rivertype.JobState(nil), p.states...),
+		unsafeAll:  p.unsafeAll,
 	}
+}
+
+func (p *JobDeleteManyParams) filtersEmpty() bool {
+	return len(p.ids) < 1 &&
+		len(p.kinds) < 1 &&
+		len(p.priorities) < 1 &&
+		len(p.queues) < 1 &&
+		len(p.states) < 1
 }
 
 func (p *JobDeleteManyParams) toDBParams() *dblist.JobListParams {
@@ -111,5 +121,30 @@ func (p *JobDeleteManyParams) States(states ...rivertype.JobState) *JobDeleteMan
 	paramsCopy := p.copy()
 	paramsCopy.states = make([]rivertype.JobState, len(states))
 	copy(paramsCopy.states, states)
+	return paramsCopy
+}
+
+// UnsafeAll is a special directive that allows unbounded job deletion without
+// any filters. Normally, filters like IDs or Kinds is required to scope down
+// the deletion so that the caller doesn't accidentally delete all non-running
+// jobs. Invoking UnsafeAll removes this safety guard so that all jobs can be
+// removed arbitrarily.
+//
+// Example of use:
+//
+//	deleteRes, err = client.JobDeleteMany(ctx, NewJobDeleteManyParams().UnsafeAll())
+//	if err != nil {
+//		// handle error
+//	}
+//
+// It only makes sense to call this function if no filters have yet been applied
+// on the parameters object. If some have already, calling it will panic.
+func (p *JobDeleteManyParams) UnsafeAll() *JobDeleteManyParams {
+	if !p.filtersEmpty() {
+		panic("UnsafeAll no longer meaningful with non-default filters applied")
+	}
+
+	paramsCopy := p.copy()
+	paramsCopy.unsafeAll = true
 	return paramsCopy
 }
