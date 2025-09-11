@@ -141,7 +141,7 @@ func (sm *subscriptionManager) distributeJobUpdates(updates []jobcompleter.Compl
 	}
 
 	for _, update := range updates {
-		sm.distributeJobEvent(update.Job, jobStatisticsFromInternal(update.JobStats))
+		sm.distributeJobEvent(update.Job, jobStatisticsFromInternal(update.JobStats), update.Snoozed)
 	}
 }
 
@@ -151,22 +151,26 @@ func (sm *subscriptionManager) distributeJobUpdates(updates []jobcompleter.Compl
 // the queue.
 //
 // MUST be called with sm.mu already held.
-func (sm *subscriptionManager) distributeJobEvent(job *rivertype.JobRow, stats *JobStatistics) {
+func (sm *subscriptionManager) distributeJobEvent(job *rivertype.JobRow, stats *JobStatistics, snoozed bool) {
 	var event *Event
-	switch job.State {
-	case rivertype.JobStateCancelled:
-		event = &Event{Kind: EventKindJobCancelled, Job: job, JobStats: stats}
-	case rivertype.JobStateCompleted:
-		event = &Event{Kind: EventKindJobCompleted, Job: job, JobStats: stats}
-	case rivertype.JobStateScheduled:
+	if snoozed {
 		event = &Event{Kind: EventKindJobSnoozed, Job: job, JobStats: stats}
-	case rivertype.JobStateAvailable, rivertype.JobStateDiscarded, rivertype.JobStateRetryable, rivertype.JobStateRunning:
-		event = &Event{Kind: EventKindJobFailed, Job: job, JobStats: stats}
-	case rivertype.JobStatePending:
-		panic("completion subscriber unexpectedly received job in pending state, river bug")
-	default:
-		// linter exhaustive rule prevents this from being reached
-		panic("unreachable state to distribute, river bug")
+	} else {
+		switch job.State {
+		case rivertype.JobStateCancelled:
+			event = &Event{Kind: EventKindJobCancelled, Job: job, JobStats: stats}
+		case rivertype.JobStateCompleted:
+			event = &Event{Kind: EventKindJobCompleted, Job: job, JobStats: stats}
+		case rivertype.JobStateAvailable, rivertype.JobStateDiscarded, rivertype.JobStateRetryable, rivertype.JobStateRunning:
+			event = &Event{Kind: EventKindJobFailed, Job: job, JobStats: stats}
+		case rivertype.JobStatePending, rivertype.JobStateScheduled:
+			// job state may be set to scheduled, but only for snoozed jobs, so
+			// the case at the top should always take precedence before this
+			panic(fmt.Sprintf("completion subscriber unexpectedly received job in %s state, river bug", job.State))
+		default:
+			// linter exhaustive rule prevents this from being reached
+			panic("unreachable state to distribute, river bug")
+		}
 	}
 
 	// All subscription channels are non-blocking so this is always fast and

@@ -44,6 +44,7 @@ type SubscribeFunc func(update CompleterJobUpdated)
 type CompleterJobUpdated struct {
 	Job      *rivertype.JobRow
 	JobStats *jobstats.JobStatistics
+	Snoozed  bool
 }
 
 type InlineCompleter struct {
@@ -92,7 +93,11 @@ func (c *InlineCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobst
 	}
 
 	stats.CompleteDuration = c.Time.NowUTC().Sub(start)
-	c.subscribeCh <- []CompleterJobUpdated{{Job: jobs[0], JobStats: stats}}
+	c.subscribeCh <- []CompleterJobUpdated{{
+		Job:      jobs[0],
+		JobStats: stats,
+		Snoozed:  params.Snoozed,
+	}}
 
 	return nil
 }
@@ -196,7 +201,11 @@ func (c *AsyncCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobsta
 		}
 
 		stats.CompleteDuration = c.Time.NowUTC().Sub(start)
-		c.subscribeCh <- []CompleterJobUpdated{{Job: jobs[0], JobStats: stats}}
+		c.subscribeCh <- []CompleterJobUpdated{{
+			Job:      jobs[0],
+			JobStats: stats,
+			Snoozed:  params.Snoozed,
+		}}
 
 		return nil
 	})
@@ -471,7 +480,11 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 		setState := setStateBatch[jobRow.ID]
 		startTime := setStateStartTimes[jobRow.ID]
 		setState.Stats.CompleteDuration = c.Time.NowUTC().Sub(startTime)
-		return CompleterJobUpdated{Job: jobRow, JobStats: setState.Stats}
+		return CompleterJobUpdated{
+			Job:      jobRow,
+			JobStats: setState.Stats,
+			Snoozed:  setState.Params.Snoozed,
+		}
 	})
 
 	c.subscribeCh <- events

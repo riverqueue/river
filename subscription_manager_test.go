@@ -78,8 +78,8 @@ func Test_SubscriptionManager(t *testing.T) {
 			{Job: job2, JobStats: makeStats(201, 202, 203)}, // cancelled, should be skipped
 		}
 		bundle.subscribeCh <- []jobcompleter.CompleterJobUpdated{
-			{Job: job3, JobStats: makeStats(301, 302, 303)}, // retryable, should be skipped
-			{Job: job4, JobStats: makeStats(401, 402, 403)}, // snoozed/scheduled, should be sent
+			{Job: job3, JobStats: makeStats(301, 302, 303)},                // retryable, should be skipped
+			{Job: job4, JobStats: makeStats(401, 402, 403), Snoozed: true}, // snoozed/scheduled, should be sent
 		}
 
 		received := riversharedtest.WaitOrTimeoutN(t, sub, 2)

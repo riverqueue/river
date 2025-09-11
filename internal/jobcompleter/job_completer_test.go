@@ -283,6 +283,7 @@ func testCompleterSubscribe(t *testing.T, constructor func(schema string, exec r
 	updates := riversharedtest.WaitOrTimeoutN(t, jobUpdateChan, 4)
 	for range 4 {
 		require.Equal(t, rivertype.JobStateCompleted, updates[0].Job.State)
+		require.False(t, updates[0].Snoozed)
 	}
 	go completer.Stop()
 	// drain all remaining jobs
@@ -740,15 +741,46 @@ func testCompleter[TCompleter JobCompleter](
 
 		completer, bundle := setup(t)
 
-		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+		)
 
-		require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(job.ID, time.Now(), nil)))
+		require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(job1.ID, time.Now(), nil)))
+		require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateSnoozedAvailable(job2.ID, time.Now(), job2.Attempt, nil)))
 
 		completer.Stop()
 
-		jobUpdate := riversharedtest.WaitOrTimeout(t, bundle.subscribeCh)
-		require.Len(t, jobUpdate, 1)
-		require.Equal(t, rivertype.JobStateCompleted, jobUpdate[0].Job.State)
+		// Unfortunately we have to do this awkward loop to wait for all updates
+		// because updates are sent through the channel as batches. The sync and
+		// async completer don't work in batches and therefore send batches of
+		// one item each while the batch completer will send both. Put
+		// otherwise, expect the sync and async completers to iterate this loop
+		// twice and batch completer to iterate it once.
+		var jobUpdates []CompleterJobUpdated
+		for {
+			jobUpdates = append(jobUpdates, riversharedtest.WaitOrTimeout(t, bundle.subscribeCh)...)
+			if len(jobUpdates) >= 2 {
+				break
+			}
+		}
+
+		findUpdate := func(jobID int64) CompleterJobUpdated {
+			for _, jobUpdate := range jobUpdates {
+				if jobUpdate.Job.ID == jobID {
+					return jobUpdate
+				}
+			}
+			require.FailNow(t, "Job not found")
+			return CompleterJobUpdated{}
+		}
+
+		job1Update := findUpdate(job1.ID)
+		require.Equal(t, rivertype.JobStateCompleted, job1Update.Job.State)
+		require.False(t, job1Update.Snoozed)
+		job2Update := findUpdate(job2.ID)
+		require.Equal(t, rivertype.JobStateAvailable, job2Update.Job.State)
+		require.True(t, job2Update.Snoozed)
 	})
 
 	t.Run("MultipleCycles", func(t *testing.T) {

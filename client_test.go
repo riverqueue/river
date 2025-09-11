@@ -496,6 +496,37 @@ func Test_Client_Common(t *testing.T) {
 		require.WithinDuration(t, time.Now().Add(15*time.Minute), updatedJob.ScheduledAt, 2*time.Second)
 	})
 
+	t.Run("JobSnoozeWithZeroDurationSetsAvailableImmediately", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			return JobSnooze(0)
+		}))
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobSnoozed, event.Kind)
+		require.Equal(t, rivertype.JobStateAvailable, event.Job.State)
+		require.WithinDuration(t, time.Now(), event.Job.ScheduledAt, 2*time.Second)
+
+		updatedJob, err := client.JobGet(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, 0, updatedJob.Attempt)
+		require.Equal(t, rivertype.JobStateAvailable, updatedJob.State)
+		require.WithinDuration(t, time.Now(), updatedJob.ScheduledAt, 2*time.Second)
+	})
+
 	// This helper is used to test cancelling a job both _in_ a transaction and
 	// _outside of_ a transaction. The exact same test logic applies to each case,
 	// the only difference is a different cancelFunc provided by the specific
