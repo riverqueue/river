@@ -516,15 +516,11 @@ func Test_Client_Common(t *testing.T) {
 		require.NoError(t, err)
 
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
 		require.Equal(t, EventKindJobSnoozed, event.Kind)
 		require.Equal(t, rivertype.JobStateAvailable, event.Job.State)
 		require.WithinDuration(t, time.Now(), event.Job.ScheduledAt, 2*time.Second)
-
-		updatedJob, err := client.JobGet(ctx, insertRes.Job.ID)
-		require.NoError(t, err)
-		require.Equal(t, 0, updatedJob.Attempt)
-		require.Equal(t, rivertype.JobStateAvailable, updatedJob.State)
-		require.WithinDuration(t, time.Now(), updatedJob.ScheduledAt, 2*time.Second)
+		require.Equal(t, 0, event.Job.Attempt)
 	})
 
 	// This helper is used to test cancelling a job both _in_ a transaction and
