@@ -697,6 +697,8 @@ SET
     attempted_by = CASE WHEN @attempted_by_do_update::boolean THEN @attempted_by ELSE attempted_by END,
     errors = CASE WHEN @errors_do_update::boolean THEN @errors::jsonb[] ELSE errors END,
     finalized_at = CASE WHEN @finalized_at_do_update::boolean THEN @finalized_at ELSE finalized_at END,
+    max_attempts = CASE WHEN @max_attempts_do_update::boolean THEN @max_attempts ELSE max_attempts END,
+    metadata = CASE WHEN @metadata_do_update::boolean THEN @metadata::jsonb ELSE metadata END,
     state = CASE WHEN @state_do_update::boolean THEN @state::/* TEMPLATE: schema */river_job_state ELSE state END
 WHERE id = @id
 RETURNING *;

@@ -1018,6 +1018,11 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 		finalizedAt = ptrutil.Ptr(finalizedAt.UTC())
 	}
 
+	metadata := params.Metadata
+	if metadata == nil {
+		metadata = []byte("{}")
+	}
+
 	job, err := dbsqlc.New().JobUpdate(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobUpdateParams{
 		ID:                  params.ID,
 		Attempt:             int64(params.Attempt),
@@ -1030,6 +1035,10 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 		Errors:              errors,
 		FinalizedAtDoUpdate: params.FinalizedAtDoUpdate,
 		FinalizedAt:         finalizedAt,
+		MaxAttemptsDoUpdate: params.MaxAttemptsDoUpdate,
+		MaxAttempts:         int64(min(params.MaxAttempts, math.MaxInt64)), //nolint:gosec
+		MetadataDoUpdate:    params.MetadataDoUpdate,
+		Metadata:            metadata,
 		StateDoUpdate:       params.StateDoUpdate,
 		State:               string(params.State),
 	})

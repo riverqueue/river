@@ -651,6 +651,11 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 }
 
 func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateParams) (*rivertype.JobRow, error) {
+	metadata := params.Metadata
+	if metadata == nil {
+		metadata = []byte("{}")
+	}
+
 	job, err := dbsqlc.New().JobUpdate(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobUpdateParams{
 		ID:                  params.ID,
 		AttemptedAtDoUpdate: params.AttemptedAtDoUpdate,
@@ -663,6 +668,10 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 		Errors:              params.Errors,
 		FinalizedAtDoUpdate: params.FinalizedAtDoUpdate,
 		FinalizedAt:         params.FinalizedAt,
+		MaxAttemptsDoUpdate: params.MaxAttemptsDoUpdate,
+		MaxAttempts:         int16(min(params.MaxAttempts, math.MaxInt16)), //nolint:gosec
+		MetadataDoUpdate:    params.MetadataDoUpdate,
+		Metadata:            metadata,
 		StateDoUpdate:       params.StateDoUpdate,
 		State:               dbsqlc.RiverJobState(cmp.Or(params.State, rivertype.JobStateAvailable)), // can't send empty job state, so provider default value that may not be set
 	})

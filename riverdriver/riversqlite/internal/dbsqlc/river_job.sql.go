@@ -1492,8 +1492,10 @@ SET
     attempted_by = CASE WHEN cast(?5 AS boolean) THEN ?6 ELSE attempted_by END,
     errors = CASE WHEN cast(?7 AS boolean) THEN ?8 ELSE errors END,
     finalized_at = CASE WHEN cast(?9 AS boolean) THEN ?10 ELSE finalized_at END,
-    state = CASE WHEN cast(?11 AS boolean) THEN ?12 ELSE state END
-WHERE id = ?13
+    max_attempts = CASE WHEN cast(?11 AS boolean) THEN ?12 ELSE max_attempts END,
+    metadata = CASE WHEN cast(?13 AS boolean) THEN json(cast(?14 AS blob)) ELSE metadata END,
+    state = CASE WHEN cast(?15 AS boolean) THEN ?16 ELSE state END
+WHERE id = ?17
 RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 `
 
@@ -1508,6 +1510,10 @@ type JobUpdateParams struct {
 	Errors              []byte
 	FinalizedAtDoUpdate bool
 	FinalizedAt         *time.Time
+	MaxAttemptsDoUpdate bool
+	MaxAttempts         int64
+	MetadataDoUpdate    bool
+	Metadata            []byte
 	StateDoUpdate       bool
 	State               string
 	ID                  int64
@@ -1527,6 +1533,10 @@ func (q *Queries) JobUpdate(ctx context.Context, db DBTX, arg *JobUpdateParams) 
 		arg.Errors,
 		arg.FinalizedAtDoUpdate,
 		arg.FinalizedAt,
+		arg.MaxAttemptsDoUpdate,
+		arg.MaxAttempts,
+		arg.MetadataDoUpdate,
+		arg.Metadata,
 		arg.StateDoUpdate,
 		arg.State,
 		arg.ID,
