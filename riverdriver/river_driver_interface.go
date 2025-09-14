@@ -645,6 +645,10 @@ type JobUpdateParams struct {
 	Errors              [][]byte
 	FinalizedAtDoUpdate bool
 	FinalizedAt         *time.Time
+	MaxAttemptsDoUpdate bool
+	MaxAttempts         int
+	MetadataDoUpdate    bool
+	Metadata            []byte
 	Schema              string
 	StateDoUpdate       bool
 	State               rivertype.JobState

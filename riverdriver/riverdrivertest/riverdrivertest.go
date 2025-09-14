@@ -3352,6 +3352,10 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				Errors:              [][]byte{[]byte(`{"error":"message"}`)},
 				FinalizedAtDoUpdate: true,
 				FinalizedAt:         &now,
+				MaxAttemptsDoUpdate: true,
+				MaxAttempts:         99,
+				MetadataDoUpdate:    true,
+				Metadata:            []byte(`{"foo":"bar"}`),
 				StateDoUpdate:       true,
 				State:               rivertype.JobStateDiscarded,
 			})
@@ -3361,6 +3365,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			require.Equal(t, []string{"worker1"}, updatedJob.AttemptedBy)
 			require.Equal(t, "message", updatedJob.Errors[0].Error)
 			require.WithinDuration(t, now, *updatedJob.FinalizedAt, bundle.driver.TimePrecision())
+			require.Equal(t, 99, updatedJob.MaxAttempts)
+			require.JSONEq(t, `{"foo":"bar"}`, string(updatedJob.Metadata))
 			require.Equal(t, rivertype.JobStateDiscarded, updatedJob.State)
 		})
 
@@ -3380,6 +3386,8 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			require.Empty(t, updatedJob.AttemptedBy)
 			require.Empty(t, updatedJob.Errors)
 			require.Nil(t, updatedJob.FinalizedAt)
+			require.Equal(t, job.MaxAttempts, updatedJob.MaxAttempts)
+			require.Equal(t, job.Metadata, updatedJob.Metadata)
 			require.Equal(t, job.State, updatedJob.State)
 		})
 	})

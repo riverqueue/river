@@ -491,6 +491,8 @@ SET
     attempted_by = CASE WHEN cast(@attempted_by_do_update AS boolean) THEN @attempted_by ELSE attempted_by END,
     errors = CASE WHEN cast(@errors_do_update AS boolean) THEN @errors ELSE errors END,
     finalized_at = CASE WHEN cast(@finalized_at_do_update AS boolean) THEN @finalized_at ELSE finalized_at END,
+    max_attempts = CASE WHEN cast(@max_attempts_do_update AS boolean) THEN @max_attempts ELSE max_attempts END,
+    metadata = CASE WHEN cast(@metadata_do_update AS boolean) THEN json(cast(@metadata AS blob)) ELSE metadata END,
     state = CASE WHEN cast(@state_do_update AS boolean) THEN @state ELSE state END
 WHERE id = @id
 RETURNING *;
