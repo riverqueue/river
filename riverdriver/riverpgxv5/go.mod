@@ -7,9 +7,9 @@ toolchain go1.24.1
 require (
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/jackc/puddle/v2 v2.2.2
-	github.com/riverqueue/river/riverdriver v0.24.0
-	github.com/riverqueue/river/rivershared v0.24.0
-	github.com/riverqueue/river/rivertype v0.24.0
+	github.com/riverqueue/river/riverdriver v0.25.0
+	github.com/riverqueue/river/rivershared v0.25.0
+	github.com/riverqueue/river/rivertype v0.25.0
 	github.com/stretchr/testify v1.11.1
 )
 

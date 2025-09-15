@@ -7,12 +7,12 @@ toolchain go1.24.1
 require (
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/lmittmann/tint v1.1.2
-	github.com/riverqueue/river v0.24.0
-	github.com/riverqueue/river/riverdriver v0.24.0
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.24.0
-	github.com/riverqueue/river/riverdriver/riversqlite v0.24.0
-	github.com/riverqueue/river/rivershared v0.24.0
-	github.com/riverqueue/river/rivertype v0.24.0
+	github.com/riverqueue/river v0.25.0
+	github.com/riverqueue/river/riverdriver v0.25.0
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.25.0
+	github.com/riverqueue/river/riverdriver/riversqlite v0.25.0
+	github.com/riverqueue/river/rivershared v0.25.0
+	github.com/riverqueue/river/rivertype v0.25.0
 	github.com/spf13/cobra v1.10.1
 	github.com/stretchr/testify v1.11.1
 	modernc.org/sqlite v1.38.2
