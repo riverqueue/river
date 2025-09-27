@@ -341,6 +341,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 					periodicJobUpsertParams.Jobs = append(periodicJobUpsertParams.Jobs, &riverpilot.PeriodicJobUpsertParams{
 						ID:        periodicJob.ID,
 						NextRunAt: periodicJob.nextRunAt,
+						UpdatedAt: s.Time.NowUTC(),
 					})
 				}
 
@@ -405,6 +406,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 							periodicJobUpsertParams.Jobs = append(periodicJobUpsertParams.Jobs, &riverpilot.PeriodicJobUpsertParams{
 								ID:        periodicJob.ID,
 								NextRunAt: periodicJob.nextRunAt,
+								UpdatedAt: s.Time.NowUTC(),
 							})
 						}
 					}

@@ -763,6 +763,10 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		bundle.pilotMock.PeriodicJobUpsertManyMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobUpsertManyParams) ([]*riverpilot.PeriodicJob, error) {
 			insertedPeriodicJobIDs = append(insertedPeriodicJobIDs, sliceutil.Map(params.Jobs, func(j *riverpilot.PeriodicJobUpsertParams) string { return j.ID }))
 			require.Equal(t, bundle.schema, params.Schema)
+			for _, job := range params.Jobs {
+				require.NotZero(t, job.NextRunAt)
+				require.NotZero(t, job.UpdatedAt)
+			}
 			return nil, nil
 		}
 
