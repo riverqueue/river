@@ -20,8 +20,10 @@ type Pilot interface {
 	PilotPeriodicJob
 
 	// JobCleanerQueuesExcluded returns queues that should be excluded from the
-	// main River client's JobCleaner. Empty omitted queues should return nil as
-	// instead of empty array.
+	// main River client's JobCleaner. If no queues should be omitted, this
+	// function should return nil as opposed to an empty array. (Because the
+	// underlying database query uses an `IS NULL` check, though this could
+	// conceivably be changed.)
 	JobCleanerQueuesExcluded() []string
 
 	JobGetAvailable(
