@@ -1216,6 +1216,16 @@ SET
     errors = array_append(errors, updated_job.error),
     finalized_at = updated_job.finalized_at,
     scheduled_at = updated_job.scheduled_at,
+    metadata = river_job.metadata || jsonb_build_object(
+        'river:rescue_count',
+        coalesce(
+            CASE
+                WHEN jsonb_typeof(river_job.metadata -> 'river:rescue_count') = 'number'
+                    THEN (river_job.metadata ->> 'river:rescue_count')::int
+            END,
+            0
+        ) + 1
+    ),
     state = updated_job.state
 FROM (
     SELECT

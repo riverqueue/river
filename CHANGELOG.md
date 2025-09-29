@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The job rescuer now sets `river:rescue_count` with an integer count of how many times the job has been rescued by the `JobRescuer` maintenance process when it's considered stuck. [PR #1047](https://github.com/riverqueue/river/pull/1047).
+
 ### Fixed
 
 - Set `updated_at` when invoking pilot `PeriodicJobUpsert`. [PR #1045](https://github.com/riverqueue/river/pull/1045).

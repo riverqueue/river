@@ -1036,7 +1036,7 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 		FinalizedAtDoUpdate: params.FinalizedAtDoUpdate,
 		FinalizedAt:         finalizedAt,
 		MaxAttemptsDoUpdate: params.MaxAttemptsDoUpdate,
-		MaxAttempts:         int64(min(params.MaxAttempts, math.MaxInt64)), //nolint:gosec
+		MaxAttempts:         int64(min(params.MaxAttempts, math.MaxInt64)),
 		MetadataDoUpdate:    params.MetadataDoUpdate,
 		Metadata:            metadata,
 		StateDoUpdate:       params.StateDoUpdate,
