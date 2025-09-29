@@ -361,6 +361,17 @@ SET
     errors = json_insert(coalesce(errors, json('[]')), '$[#]', json(cast(@error AS blob))),
     finalized_at = cast(sqlc.narg('finalized_at') as text),
     scheduled_at = @scheduled_at,
+    metadata = json_set(
+        metadata,
+        '$."river:rescue_count"',
+        coalesce(
+            CASE json_type(metadata, '$."river:rescue_count"')
+                WHEN 'integer' THEN json_extract(metadata, '$."river:rescue_count"')
+                WHEN 'real' THEN json_extract(metadata, '$."river:rescue_count"')
+            END,
+            0
+        ) + 1
+    ),
     state = @state
 WHERE id = @id;
 

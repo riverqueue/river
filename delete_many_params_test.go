@@ -3,8 +3,9 @@ package river
 import (
 	"testing"
 
-	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/require"
+
+	"github.com/riverqueue/river/rivertype"
 )
 
 func TestJobDeleteManyParams_filtersEmpty(t *testing.T) {

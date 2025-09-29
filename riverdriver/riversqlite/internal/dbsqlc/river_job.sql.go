@@ -1021,6 +1021,17 @@ SET
     errors = json_insert(coalesce(errors, json('[]')), '$[#]', json(cast(?1 AS blob))),
     finalized_at = cast(?2 as text),
     scheduled_at = ?3,
+    metadata = json_set(
+        metadata,
+        '$."river:rescue_count"',
+        coalesce(
+            CASE json_type(metadata, '$."river:rescue_count"')
+                WHEN 'integer' THEN json_extract(metadata, '$."river:rescue_count"')
+                WHEN 'real' THEN json_extract(metadata, '$."river:rescue_count"')
+            END,
+            0
+        ) + 1
+    ),
     state = ?4
 WHERE id = ?5
 `

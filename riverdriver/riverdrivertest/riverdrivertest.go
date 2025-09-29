@@ -2526,8 +2526,14 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 		now := time.Now().UTC()
 
-		job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
-		job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
+		job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+			Metadata: []byte(`{"river:rescue_count": 5, "something": "else"}`),
+			State:    ptrutil.Ptr(rivertype.JobStateRunning),
+		})
+		job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+			Metadata: []byte(`{}`),
+			State:    ptrutil.Ptr(rivertype.JobStateRunning),
+		})
 
 		_, err := exec.JobRescueMany(ctx, &riverdriver.JobRescueManyParams{
 			ID: []int64{
@@ -2560,6 +2566,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		require.Nil(t, updatedJob1.FinalizedAt)
 		require.WithinDuration(t, now, updatedJob1.ScheduledAt, bundle.driver.TimePrecision())
 		require.Equal(t, rivertype.JobStateAvailable, updatedJob1.State)
+		require.JSONEq(t, `{"river:rescue_count": 6, "something": "else"}`, string(updatedJob1.Metadata))
 
 		updatedJob2, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID})
 		require.NoError(t, err)
@@ -2567,6 +2574,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		require.WithinDuration(t, now, *updatedJob2.FinalizedAt, bundle.driver.TimePrecision())
 		require.WithinDuration(t, now, updatedJob2.ScheduledAt, bundle.driver.TimePrecision())
 		require.Equal(t, rivertype.JobStateDiscarded, updatedJob2.State)
+		require.JSONEq(t, `{"river:rescue_count": 1}`, string(updatedJob2.Metadata))
 	})
 
 	t.Run("JobRetry", func(t *testing.T) {

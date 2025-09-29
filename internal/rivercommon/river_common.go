@@ -24,6 +24,9 @@ const (
 	// them.
 	MetadataKeyPeriodicJobID = "river:periodic_job_id"
 
+	// MetadataKeyRescueCount records how many times the job has been rescued.
+	MetadataKeyRescueCount = "river:rescue_count"
+
 	// MetadataKeyUniqueNonce is a special metadata key used by the SQLite driver to
 	// determine whether an upsert is was skipped or not because the `(xmax != 0)`
 	// trick we use in Postgres doesn't work in SQLite.
