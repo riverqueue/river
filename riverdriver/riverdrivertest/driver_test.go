@@ -51,7 +51,7 @@ func TestDriverRiverDatabaseSQLLibPQ(t *testing.T) {
 
 			tx, schema := riverdbtest.TestTx(ctx, t, driver, nil)
 
-			// The same thing as the built-in riversharedtest.TestTx does.
+			// The same thing as the built-in riverdbtest.TestTxPgx does.
 			_, err := tx.ExecContext(ctx, "SET search_path TO '"+schema+"'")
 			require.NoError(t, err)
 
@@ -81,7 +81,7 @@ func TestDriverRiverDatabaseSQLPgx(t *testing.T) {
 
 			tx, schema := riverdbtest.TestTx(ctx, t, driver, nil)
 
-			// The same thing as the built-in riversharedtest.TestTx does.
+			// The same thing as the built-in riverdbtest.TestTxPgx does.
 			_, err := tx.ExecContext(ctx, "SET search_path TO '"+schema+"'")
 			require.NoError(t, err)
 
@@ -239,7 +239,7 @@ func BenchmarkDriverRiverDatabaseSQLLibPQ(b *testing.B) {
 
 			tx, schema := riverdbtest.TestTx(ctx, b, driver, nil)
 
-			// The same thing as the built-in riversharedtest.TestTx does.
+			// The same thing as the built-in riverdbtest.TestTxPgx does.
 			_, err := tx.ExecContext(ctx, "SET search_path TO '"+schema+"'")
 			require.NoError(b, err)
 
@@ -268,7 +268,7 @@ func BenchmarkDriverRiverDatabaseSQLPgx(b *testing.B) {
 
 			tx, schema := riverdbtest.TestTx(ctx, b, driver, nil)
 
-			// The same thing as the built-in riversharedtest.TestTx does.
+			// The same thing as the built-in riverdbtest.TestTxPgx does.
 			_, err := tx.ExecContext(ctx, "SET search_path TO '"+schema+"'")
 			require.NoError(b, err)
 
