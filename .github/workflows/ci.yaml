@@ -28,7 +28,9 @@ jobs:
     strategy:
       matrix:
         include:
-          # Run the 4 latest Postgres versions against the latest Go version:
+          # Run the latest Go version against all supported Postgres versions:
+          - go-version: "1.25"
+            postgres-version: 18
           - go-version: "1.25"
             postgres-version: 17
           - go-version: "1.25"
@@ -38,9 +40,11 @@ jobs:
           - go-version: "1.25"
             postgres-version: 14
 
-          # Also run the previous Go version against the latest Postgres version:
+          # Also run the previous Go version (the Go version previous to current
+          # is the only other officially supported Go version) against the
+          # latest Postgres version:
           - go-version: "1.24"
-            postgres-version: 17
+            postgres-version: 18
       fail-fast: false
     timeout-minutes: 5
 
