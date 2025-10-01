@@ -3,6 +3,7 @@ package jobexecutor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -574,6 +576,126 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.True(t, bundle.errorHandler.HandleErrorCalled)
 	})
 
+	t.Run("ExpandableErrorsApplyToMultipleJobsIndividually", func(t *testing.T) {
+		makeExtraRunningJobs := func(t *testing.T, exec riverdriver.Executor) []*rivertype.JobRow {
+			t.Helper()
+
+			now := time.Now().UTC()
+			_, err := exec.JobInsertFullMany(ctx, &riverdriver.JobInsertFullManyParams{
+				Jobs: []*riverdriver.JobInsertFullParams{
+					testfactory.Job_Build(t, &testfactory.JobOpts{Kind: ptrutil.Ptr("jobexecutor_test"), ScheduledAt: &now}),
+					testfactory.Job_Build(t, &testfactory.JobOpts{Kind: ptrutil.Ptr("jobexecutor_test"), ScheduledAt: &now}),
+					testfactory.Job_Build(t, &testfactory.JobOpts{Kind: ptrutil.Ptr("jobexecutor_test"), ScheduledAt: &now}),
+				},
+			})
+			require.NoError(t, err)
+
+			locked, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+				MaxToLock: 3,
+				Now:       &now,
+				Queue:     rivercommon.QueueDefault,
+			})
+			require.NoError(t, err)
+			require.Len(t, locked, 3)
+			return locked
+		}
+
+		t.Run("AllJobsShareSameNormalError", func(t *testing.T) {
+			t.Parallel()
+
+			executor, bundle := setup(t)
+			allJobs := append([]*rivertype.JobRow{bundle.jobRow}, makeExtraRunningJobs(t, bundle.exec)...)
+
+			errAll := errors.New("job error")
+			perJob := map[int64]error{
+				allJobs[0].ID: errAll,
+				allJobs[1].ID: errAll,
+				allJobs[2].ID: errAll,
+				allJobs[3].ID: errAll,
+			}
+			executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error {
+				return &errorBundle{errorsByID: perJob, jobs: allJobs}
+			}, nil).MakeUnit(bundle.jobRow)
+
+			executor.Execute(ctx)
+			riversharedtest.WaitOrTimeoutN(t, bundle.updateCh, len(allJobs))
+
+			for i, j := range allJobs {
+				got, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: j.ID, Schema: ""})
+				require.NoError(t, err)
+				require.Equal(t, rivertype.JobStateRetryable, got.State, "expected job %d to be retryable, got %s", i, got.State)
+				require.Len(t, got.Errors, 1)
+				require.Equal(t, "job error", got.Errors[0].Error)
+			}
+		})
+
+		t.Run("OnlySomeJobsHaveErrors", func(t *testing.T) {
+			t.Parallel()
+
+			executor, bundle := setup(t)
+			allJobs := append([]*rivertype.JobRow{bundle.jobRow}, makeExtraRunningJobs(t, bundle.exec)...)
+
+			errSome := errors.New("job error")
+			perJob := map[int64]error{
+				allJobs[0].ID: errSome,
+				// allJobs[1] omitted -> success
+				allJobs[2].ID: errSome,
+				allJobs[3].ID: nil, // explicit nil: success
+			}
+			executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error {
+				return &errorBundle{errorsByID: perJob, jobs: allJobs}
+			}, nil).MakeUnit(bundle.jobRow)
+
+			executor.Execute(ctx)
+			riversharedtest.WaitOrTimeoutN(t, bundle.updateCh, len(allJobs))
+
+			// errored jobs -> retryable with 1 error
+			for _, idx := range []int{0, 2} {
+				got, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: allJobs[idx].ID, Schema: ""})
+				require.NoError(t, err)
+				require.Equal(t, rivertype.JobStateRetryable, got.State)
+				require.Len(t, got.Errors, 1)
+				require.Equal(t, "job error", got.Errors[0].Error)
+			}
+
+			// successful jobs -> completed, no errors
+			for _, idx := range []int{1, 3} {
+				got, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: allJobs[idx].ID, Schema: ""})
+				require.NoError(t, err)
+				require.Equal(t, rivertype.JobStateCompleted, got.State)
+				require.Empty(t, got.Errors)
+			}
+		})
+
+		t.Run("AllJobsHaveErrorsViaBundle", func(t *testing.T) {
+			t.Parallel()
+
+			executor, bundle := setup(t)
+			allJobs := append([]*rivertype.JobRow{bundle.jobRow}, makeExtraRunningJobs(t, bundle.exec)...)
+
+			perJob := map[int64]error{
+				allJobs[0].ID: errors.New("job error 0"),
+				allJobs[1].ID: errors.New("job error 1"),
+				allJobs[2].ID: errors.New("job error 2"),
+				allJobs[3].ID: errors.New("job error 3"),
+			}
+			executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error {
+				return &errorBundle{errorsByID: perJob, jobs: allJobs}
+			}, nil).MakeUnit(bundle.jobRow)
+
+			executor.Execute(ctx)
+			riversharedtest.WaitOrTimeoutN(t, bundle.updateCh, len(allJobs))
+
+			for i, j := range allJobs {
+				got, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: j.ID, Schema: ""})
+				require.NoError(t, err)
+				require.Equal(t, rivertype.JobStateRetryable, got.State)
+				require.Len(t, got.Errors, 1)
+				require.Equal(t, fmt.Sprintf("job error %d", i), got.Errors[0].Error)
+			}
+		})
+	})
+
 	t.Run("Panic", func(t *testing.T) {
 		t.Parallel()
 
@@ -934,3 +1056,16 @@ func (m *testMiddleware) IsMiddleware() bool { return true }
 func (m *testMiddleware) Work(ctx context.Context, job *rivertype.JobRow, next func(context.Context) error) error {
 	return m.work(ctx, job, next)
 }
+
+// errorBundle is for testing withJobAndErrorsByID.
+type errorBundle struct { //nolint:errname
+	errorsByID map[int64]error
+	jobs       []*rivertype.JobRow
+}
+
+func (eb *errorBundle) Error() string { return "error bundle" }
+
+func (eb *errorBundle) ErrorsByID() map[int64]error { return eb.errorsByID }
+func (eb *errorBundle) Jobs() []*rivertype.JobRow   { return eb.jobs }
+
+var _ withJobsAndErrorsByID = (*errorBundle)(nil)
