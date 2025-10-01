@@ -180,7 +180,7 @@ func (m *Middleware) Work(ctx context.Context, job *rivertype.JobRow, doInner fu
 		}))
 		if err != nil {
 			m.Logger.ErrorContext(ctx, m.Name+": Error marshaling log data",
-				slog.String("error", err.Error()),
+				slog.Any("error", err),
 			)
 		}
 
