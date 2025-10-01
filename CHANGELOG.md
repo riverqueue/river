@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The job rescuer now sets `river:rescue_count` with an integer count of how many times the job has been rescued by the `JobRescuer` maintenance process when it's considered stuck. [PR #1047](https://github.com/riverqueue/river/pull/1047).
 
+### Changed
+
+- Errors returned from job workers are now logged in full using a `slog.Any` attribute. Before, only their error text was logged. [PR #1051](https://github.com/riverqueue/river/pull/1051)
+
 ### Fixed
 
 - Set `updated_at` when invoking pilot `PeriodicJobUpsert`. [PR #1045](https://github.com/riverqueue/river/pull/1045).
