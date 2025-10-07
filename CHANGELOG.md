@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Errors returned from job workers are now logged in full using a `slog.Any` attribute. Before, only their error text was logged. [PR #1051](https://github.com/riverqueue/river/pull/1051)
+- Errors returned from job workers are now logged in full using a `slog.Any` attribute. Previously, only their error text was logged. [PR #1051](https://github.com/riverqueue/river/pull/1051).
 
 ### Fixed
 
