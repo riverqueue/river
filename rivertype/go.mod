@@ -2,7 +2,7 @@ module github.com/riverqueue/river/rivertype
 
 go 1.24.0
 
-toolchain go1.24.1
+toolchain go1.25.2
 
 require github.com/stretchr/testify v1.11.1
 

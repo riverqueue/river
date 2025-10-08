@@ -2,7 +2,7 @@ module github.com/riverqueue/river
 
 go 1.24.0
 
-toolchain go1.24.1
+toolchain go1.25.2
 
 require (
 	github.com/jackc/pgerrcode v0.0.0-20240316143900-6e2875d9b438

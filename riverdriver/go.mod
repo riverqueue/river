@@ -2,7 +2,7 @@ module github.com/riverqueue/river/riverdriver
 
 go 1.24.0
 
-toolchain go1.24.1
+toolchain go1.25.2
 
 require (
 	github.com/riverqueue/river/rivertype v0.25.0
