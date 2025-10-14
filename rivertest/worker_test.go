@@ -222,13 +222,28 @@ func TestWorker_Work(t *testing.T) {
 		require.Equal(t, river.EventKindJobCompleted, res.EventKind)
 	})
 
-	t.Run("ReturnsASnoozeEventKindWhenSnoozed", func(t *testing.T) {
+	t.Run("ReturnsASnoozeEventKindWhenSnoozedNonZeroDuration", func(t *testing.T) {
 		t.Parallel()
 
 		bundle := setup(t)
 
 		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
 			return river.JobSnooze(time.Hour)
+		})
+		tw := NewWorker(t, bundle.driver, bundle.config, worker)
+
+		res, err := tw.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, nil)
+		require.NoError(t, err)
+		require.Equal(t, river.EventKindJobSnoozed, res.EventKind)
+	})
+
+	t.Run("ReturnsASnoozeEventKindWhenSnoozedZeroDuration", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
+			return river.JobSnooze(0)
 		})
 		tw := NewWorker(t, bundle.driver, bundle.config, worker)
 
