@@ -243,7 +243,7 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 	// exists and is not running, only one database operation is needed, but if
 	// the initial update comes back empty, it does one more fetch to return the
 	// most appropriate error.
-	return dbutil.WithTxV(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) (*rivertype.JobRow, error) {
+	return dbutil.WithTxV(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) (*rivertype.JobRow, error) { // TODO
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 
 		cancelledAt, err := params.CancelAttemptedAt.UTC().MarshalJSON()
@@ -320,7 +320,7 @@ func (e *Executor) JobDelete(ctx context.Context, params *riverdriver.JobDeleteP
 	// exists and is not running, only one database operation is needed, but if
 	// the initial delete comes back empty, it does one more fetch to return the
 	// most appropriate error.
-	return dbutil.WithTxV(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) (*rivertype.JobRow, error) {
+	return dbutil.WithTxV(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) (*rivertype.JobRow, error) { // TODO
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 
 		job, err := dbsqlc.New().JobDelete(schemaTemplateParam(ctx, params.Schema), dbtx, params.ID)
@@ -495,7 +495,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.Jo
 		uniqueNonce = randutil.Hex(8)
 	)
 
-	if err := dbutil.WithTx(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
+	if err := dbutil.WithTx(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) error { // TODO
 		ctx = schemaTemplateParam(ctx, params.Schema)
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 

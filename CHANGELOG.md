@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Fix snoozed events emitted from `rivertest.Worker` when snooze duration is zero seconds. [PR #1057](https://github.com/riverqueue/river/pull/1057).
+- Rollbacks now use an uncancelled context so as to not leave transactions in an ambiguous state if a transaction in them fails due to context cancellation. [PR #1062](https://github.com/riverqueue/river/pull/1062).
 
 ## [0.26.0] - 2025-10-07
 

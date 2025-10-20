@@ -14,6 +14,7 @@ import (
 	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
+	"github.com/riverqueue/river/rivershared/util/dbutil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
@@ -37,7 +38,7 @@ func (ts *JobSchedulerTestSignals) Init(tb testutil.TestingTB) {
 
 // NotifyInsert is a function to call to emit notifications for queues where
 // jobs were scheduled.
-type NotifyInsertFunc func(ctx context.Context, tx riverdriver.ExecutorTx, queues []string) error
+type NotifyInsertFunc func(ctx context.Context, execTx riverdriver.ExecutorTx, queues []string) error
 
 type JobSchedulerConfig struct {
 	riversharedmaintenance.BatchSizes
@@ -167,16 +168,16 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 			ctx, cancelFunc := context.WithTimeout(ctx, riversharedmaintenance.TimeoutDefault)
 			defer cancelFunc()
 
-			tx, err := s.exec.Begin(ctx)
+			execTx, err := s.exec.Begin(ctx)
 			if err != nil {
 				return 0, fmt.Errorf("error starting transaction: %w", err)
 			}
-			defer tx.Rollback(ctx)
+			defer dbutil.RollbackWithoutCancel(ctx, execTx)
 
 			now := s.Time.NowUTC()
 			nowWithLookAhead := now.Add(s.config.Interval)
 
-			scheduledJobResults, err := tx.JobSchedule(ctx, &riverdriver.JobScheduleParams{
+			scheduledJobResults, err := execTx.JobSchedule(ctx, &riverdriver.JobScheduleParams{
 				Max:    s.batchSize(),
 				Now:    &nowWithLookAhead,
 				Schema: s.config.Schema,
@@ -204,13 +205,13 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 			}
 
 			if len(queues) > 0 {
-				if err := s.config.NotifyInsert(ctx, tx, queues); err != nil {
+				if err := s.config.NotifyInsert(ctx, execTx, queues); err != nil {
 					return 0, fmt.Errorf("error notifying insert: %w", err)
 				}
 				s.TestSignals.NotifiedQueues.Signal(queues)
 			}
 
-			return len(scheduledJobResults), tx.Commit(ctx)
+			return len(scheduledJobResults), execTx.Commit(ctx)
 		}()
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {

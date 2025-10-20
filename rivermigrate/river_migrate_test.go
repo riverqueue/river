@@ -27,10 +27,9 @@ import (
 
 const (
 	// The name of an actual migration line embedded in our test data below.
-	migrationLineAlternate                = "alternate"
-	migrationLineAlternateMaxVersion      = 6
-	migrationLineCommitRequired           = "commit_required"
-	migrationLineCommitRequiredMaxVersion = 3
+	migrationLineAlternate           = "alternate"
+	migrationLineAlternateMaxVersion = 6
+	migrationLineCommitRequired      = "commit_required"
 )
 
 //go:embed migration/*/*.sql
