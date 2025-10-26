@@ -66,7 +66,7 @@ func Example_gracefulShutdown() {
 	river.AddWorker(workers, &WaitsForCancelOnlyWorker{jobStarted: jobStarted})
 
 	riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
-		Logger: slog.New(&slogutil.SlogMessageOnlyHandler{Level: slog.LevelWarn}),
+		Logger: slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn, ReplaceAttr: slogutil.NoLevelTimeJobID})),
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: 100},
 		},
@@ -168,5 +168,5 @@ func Example_gracefulShutdown() {
 	// Received SIGINT/SIGTERM; initiating soft stop (try to wait for jobs to finish)
 	// Received SIGINT/SIGTERM again; initiating hard stop (cancel everything)
 	// Job cancelled
-	// jobexecutor.JobExecutor: Job errored; retrying
+	// msg="jobexecutor.JobExecutor: Job errored; retrying" error="context canceled" job_kind=waits_for_cancel_only
 }

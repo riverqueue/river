@@ -8,6 +8,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestRemoveReplaceAttrFunc(t *testing.T) {
+	t.Parallel()
+
+	type testBundle struct {
+		buf    *bytes.Buffer
+		logger *slog.Logger
+	}
+
+	setup := func(t *testing.T) *testBundle {
+		t.Helper()
+
+		var buf bytes.Buffer
+
+		return &testBundle{
+			buf: &buf,
+			logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+				ReplaceAttr: removeReplaceAttrFunc("removed1", "removed2", "time"),
+			})),
+		}
+	}
+
+	t.Run("RemovesAttrs", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		bundle.logger.Info("A log message", slog.String("not_removed", "val"), slog.String("removed1", "val"), slog.String("removed1", "val"))
+
+		require.Equal(t,
+			`level=INFO msg="A log message" not_removed=val`+"\n",
+			bundle.buf.String(),
+		)
+	})
+}
+
 func TestSliceInt64(t *testing.T) {
 	t.Parallel()
 
@@ -55,16 +90,6 @@ func TestSliceString(t *testing.T) {
 func plainLoggerAndBuffer() (*slog.Logger, *bytes.Buffer) {
 	var buf bytes.Buffer
 	return slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
-		// Removes the `level` and `time` keys so that we have clean and stable
-		// output to match against in assertions.
-		ReplaceAttr: func(groups []string, attr slog.Attr) slog.Attr {
-			if len(groups) < 1 {
-				switch attr.Key {
-				case slog.LevelKey, slog.TimeKey:
-					return slog.Attr{}
-				}
-			}
-			return attr
-		},
+		ReplaceAttr: NoLevelTime,
 	})), &buf
 }

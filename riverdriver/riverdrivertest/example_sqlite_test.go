@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"os"
 	"sort"
 
 	_ "modernc.org/sqlite"
@@ -56,7 +57,7 @@ func Example_sqlite() { //nolint:dupl
 	river.AddWorker(workers, &SortWorker{})
 
 	riverClient, err := river.NewClient(driver, &river.Config{
-		Logger: slog.New(&slogutil.SlogMessageOnlyHandler{Level: slog.LevelWarn}),
+		Logger: slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn, ReplaceAttr: slogutil.NoLevelTime})),
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: 100},
 		},
@@ -99,7 +100,7 @@ func migrateDB(ctx context.Context, driver riverdriver.Driver[*sql.Tx]) error {
 	// We're using an in-memory SQLite database here, so we need to migrate it
 	// up before use. This won't generally be needed outside of tests.
 	migrator, err := rivermigrate.New(driver, &rivermigrate.Config{
-		Logger: slog.New(&slogutil.SlogMessageOnlyHandler{Level: slog.LevelWarn}),
+		Logger: slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn, ReplaceAttr: slogutil.NoLevelTime})),
 	})
 	if err != nil {
 		return err

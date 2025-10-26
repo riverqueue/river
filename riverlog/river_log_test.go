@@ -69,7 +69,7 @@ func TestMiddleware(t *testing.T) {
 		var (
 			driver     = riverpgxv5.New(nil)
 			middleware = NewMiddleware(func(w io.Writer) slog.Handler {
-				return &slogutil.SlogMessageOnlyHandler{Out: w}
+				return slog.NewTextHandler(w, &slog.HandlerOptions{ReplaceAttr: slogutil.NoLevelTime})
 			}, config)
 			clientConfig = &river.Config{
 				Middleware: []rivertype.Middleware{middleware},
@@ -100,7 +100,7 @@ func TestMiddleware(t *testing.T) {
 		require.Equal(t, []logAttempt{
 			{
 				Attempt: 1,
-				Log:     "Logged from worker\n",
+				Log:     `msg="Logged from worker"` + "\n",
 			},
 		},
 			metadataWithLog.RiverLog,
@@ -135,11 +135,11 @@ func TestMiddleware(t *testing.T) {
 		require.Equal(t, []logAttempt{
 			{
 				Attempt: 1,
-				Log:     "Logged from worker\n",
+				Log:     `msg="Logged from worker"` + "\n",
 			},
 			{
 				Attempt: 2,
-				Log:     "Logged from worker\n",
+				Log:     `msg="Logged from worker"` + "\n",
 			},
 		},
 			metadataWithLog.RiverLog,
@@ -160,7 +160,7 @@ func TestMiddleware(t *testing.T) {
 		require.Equal(t, []logAttempt{
 			{
 				Attempt: 1,
-				Log:     "Logged from worker\n",
+				Log:     `msg="Logged from worker"` + "\n",
 			},
 		},
 			metadataWithLog.RiverLog,
@@ -183,7 +183,7 @@ func TestMiddleware(t *testing.T) {
 		require.Equal(t, []logAttempt{
 			{
 				Attempt: 1,
-				Log:     "Logged from worker\n",
+				Log:     `msg="Logged from worker"` + "\n",
 			},
 		},
 			metadataWithLog.RiverLog,
@@ -205,7 +205,7 @@ func TestMiddleware(t *testing.T) {
 		t.Parallel()
 
 		testWorker, bundle := setup(t, &MiddlewareConfig{
-			MaxSizeBytes: 11,
+			MaxSizeBytes: 16,
 		})
 
 		workRes, err := testWorker.Work(ctx, t, bundle.tx, loggingArgs{Message: "Logged from worker"}, nil)
@@ -217,7 +217,7 @@ func TestMiddleware(t *testing.T) {
 		require.Equal(t, []logAttempt{
 			{
 				Attempt: 1,
-				Log:     "Logged from",
+				Log:     `msg="Logged from`,
 			},
 		},
 			metadataWithLog.RiverLog,
