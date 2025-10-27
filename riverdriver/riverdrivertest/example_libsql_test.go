@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"log/slog"
+	"os"
 
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
 
@@ -36,7 +37,7 @@ func Example_libSQL() { //nolint:dupl
 	river.AddWorker(workers, &SortWorker{})
 
 	riverClient, err := river.NewClient(driver, &river.Config{
-		Logger: slog.New(&slogutil.SlogMessageOnlyHandler{Level: slog.LevelWarn}),
+		Logger: slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn, ReplaceAttr: slogutil.NoLevelTime})),
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: 100},
 		},

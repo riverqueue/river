@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -68,7 +69,7 @@ func Example_globalMiddleware() {
 
 	riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
 		// Order is significant. See output below.
-		Logger: slog.New(&slogutil.SlogMessageOnlyHandler{Level: slog.LevelWarn}),
+		Logger: slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn, ReplaceAttr: slogutil.NoLevelTime})),
 		Middleware: []rivertype.Middleware{
 			&JobBothInsertAndWorkMiddleware{},
 			&JobInsertMiddleware{},

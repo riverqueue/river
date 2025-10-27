@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -48,18 +49,18 @@ func ExampleNewMiddleware() {
 	river.AddWorker(workers, &LoggingWorker{})
 
 	riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
-		Logger: slog.New(&slogutil.SlogMessageOnlyHandler{Level: slog.LevelWarn}),
+		Logger: slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn, ReplaceAttr: slogutil.NoLevelTime})),
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: 100},
 		},
 		Middleware: []rivertype.Middleware{
 			riverlog.NewMiddleware(func(w io.Writer) slog.Handler {
-				// We have to use a specialized handler without timestamps to
-				// make test output reproducible, but in reality this would as
-				// simple as something like:
+				// We have to use a specialized ReplacedAttr without level or
+				// timestamps to make test output reproducible, but in reality
+				// this would as simple as something like:
 				//
 				// 	return slog.NewJSONHandler(w, nil)
-				return &slogutil.SlogMessageOnlyHandler{Out: w}
+				return slog.NewTextHandler(w, &slog.HandlerOptions{ReplaceAttr: slogutil.NoLevelTime})
 			}, nil),
 		},
 		Schema:   riverdbtest.TestSchema(ctx, testutil.PanicTB(), riverpgxv5.New(dbPool), nil), // only necessary for the example test
@@ -99,8 +100,8 @@ func ExampleNewMiddleware() {
 	}
 
 	// Output:
-	// Logged from worker
-	// Another line logged from worker
+	// msg="Logged from worker"
+	// msg="Another line logged from worker"
 }
 
 type metadataWithLog struct {
