@@ -2403,7 +2403,7 @@ func (c *Client[TTx]) QueuePause(ctx context.Context, name string, opts *QueuePa
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer dbutil.RollbackWithoutCancel(ctx, tx)
 
 	if err := tx.QueuePause(ctx, &riverdriver.QueuePauseParams{
 		Name:   name,
@@ -2473,7 +2473,7 @@ func (c *Client[TTx]) QueueResume(ctx context.Context, name string, opts *QueueP
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer dbutil.RollbackWithoutCancel(ctx, tx)
 
 	if err := tx.QueueResume(ctx, &riverdriver.QueueResumeParams{
 		Name:   name,
@@ -2541,7 +2541,7 @@ func (c *Client[TTx]) QueueUpdate(ctx context.Context, name string, params *Queu
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx)
+	defer dbutil.RollbackWithoutCancel(ctx, tx)
 
 	queue, controlEvent, err := c.queueUpdate(ctx, tx, name, params)
 	if err != nil {
