@@ -2275,6 +2275,18 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 	return res, nil
 }
 
+// JobCountByAllStates returns a map of counts for all job states.
+// The provided context is used for the underlying database query.
+func (c *Client[TTx]) JobCountByAllStates(ctx context.Context) (map[rivertype.JobState]int, error) {
+	if !c.driver.PoolIsSet() {
+		return nil, errNoDriverDBPool
+	}
+
+	return c.driver.GetExecutor().JobCountByAllStates(ctx, &riverdriver.JobCountByAllStatesParams{
+		Schema: c.config.Schema,
+	})
+}
+
 // PeriodicJobs returns the currently configured set of periodic jobs for the
 // client, and can be used to add new or remove existing ones.
 //

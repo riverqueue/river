@@ -4389,6 +4389,58 @@ func Test_Client_JobList(t *testing.T) {
 	})
 }
 
+func Test_Client_JobCountByAllStates(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		exec   riverdriver.Executor
+		schema string
+	}
+
+	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+		t.Helper()
+
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
+		)
+
+		return client, &testBundle{
+			exec:   client.driver.GetExecutor(),
+			schema: schema,
+		}
+	}
+
+	t.Run("CountsAllStatesWithZerosForMissing", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		_ = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable), Schema: bundle.schema})
+		_ = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning), Schema: bundle.schema})
+		_ = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning), Schema: bundle.schema})
+		_ = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStatePending), Schema: bundle.schema})
+
+		counts, err := client.JobCountByAllStates(ctx)
+		require.NoError(t, err)
+
+		require.Equal(t, 1, counts[rivertype.JobStateAvailable])
+		require.Equal(t, 2, counts[rivertype.JobStateRunning])
+		require.Equal(t, 1, counts[rivertype.JobStatePending])
+		// verify a few states default to zero when absent
+		require.Equal(t, 0, counts[rivertype.JobStateScheduled])
+		require.Equal(t, 0, counts[rivertype.JobStateCompleted])
+		require.Equal(t, 0, counts[rivertype.JobStateDiscarded])
+		require.Equal(t, 0, counts[rivertype.JobStateCancelled])
+		require.Equal(t, 0, counts[rivertype.JobStateRetryable])
+	})
+}
+
 func Test_Client_JobRetry(t *testing.T) {
 	t.Parallel()
 
