@@ -190,6 +190,21 @@ func (b *PeriodicJobBundle) Remove(periodicJobHandle rivertype.PeriodicJobHandle
 	b.periodicJobEnqueuer.Remove(periodicJobHandle)
 }
 
+// RemoveByID removes a periodic job by ID, cancelling all scheduled runs.
+//
+// Adding or removing periodic jobs has no effect unless this client is elected
+// leader because only the leader enqueues periodic jobs. To make sure that a
+// new periodic job is fully enabled or disabled, it should be added or removed
+// from _every_ active River client across all processes.
+//
+// Has no effect if no jobs with the given ID is configured.
+//
+// Returns true if a job with the given ID existed (and was removed), and false
+// otherwise.
+func (b *PeriodicJobBundle) RemoveByID(id string) bool {
+	return b.periodicJobEnqueuer.RemoveByID(id)
+}
+
 // RemoveMany removes many periodic jobs, cancelling all scheduled runs.
 //
 // Requires the use of the periodic job handles that were returned when the jobs
@@ -201,6 +216,19 @@ func (b *PeriodicJobBundle) Remove(periodicJobHandle rivertype.PeriodicJobHandle
 // from _every_ active River client across all processes.
 func (b *PeriodicJobBundle) RemoveMany(periodicJobHandles []rivertype.PeriodicJobHandle) {
 	b.periodicJobEnqueuer.RemoveMany(periodicJobHandles)
+}
+
+// RemoveManyByID removes many periodic jobs by ID, cancelling all scheduled
+// runs.
+//
+// Adding or removing periodic jobs has no effect unless this client is elected
+// leader because only the leader enqueues periodic jobs. To make sure that a
+// new periodic job is fully enabled or disabled, it should be added or removed
+// from _every_ active River client across all processes.
+//
+// Has no effect if no jobs with the given IDs are configured.
+func (b *PeriodicJobBundle) RemoveManyByID(ids []string) {
+	b.periodicJobEnqueuer.RemoveManyByID(ids)
 }
 
 // An empty set of periodic job opts used as a default when none are specified.

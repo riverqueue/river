@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Periodic jobs with IDs may now be removed by ID using the new `PeriodicJobBundle.RemoveByID` and `PeriodicJobBundle.RemoveManyByID`. [PR #1071](https://github.com/riverqueue/river/pull/1071).
+
 ### Fixed
 
 - Fix snoozed events emitted from `rivertest.Worker` when snooze duration is zero seconds. [PR #1057](https://github.com/riverqueue/river/pull/1057).
