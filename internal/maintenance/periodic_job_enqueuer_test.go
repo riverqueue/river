@@ -30,8 +30,8 @@ func TestPeriodicJob(t *testing.T) {
 
 	validPeriodicJob := func() *PeriodicJob {
 		return &PeriodicJob{
-			ConstructorFunc: func() (*rivertype.JobInsertParams, error) { return nil, nil },
-			ScheduleFunc:    func(t time.Time) time.Time { return time.Time{} },
+			JobConstructorFunc: func() (*rivertype.JobInsertParams, error) { return nil, nil },
+			ScheduleFunc:       func(t time.Time) time.Time { return time.Time{} },
 		}
 	}
 
@@ -61,7 +61,7 @@ func TestPeriodicJob(t *testing.T) {
 		t.Parallel()
 
 		periodicJob := validPeriodicJob()
-		periodicJob.ConstructorFunc = nil
+		periodicJob.JobConstructorFunc = nil
 		require.EqualError(t, periodicJob.validate(), "PeriodicJob.ConstructorFunc must be set")
 	})
 
@@ -220,8 +220,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		svc, bundle := setup(t)
 
 		_, err := svc.AddManySafely([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
-			{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false)},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
+			{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false)},
 		})
 		require.NoError(t, err)
 
@@ -260,10 +260,10 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		}
 
 		_, err := svc.AddManySafely([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorWithMetadata("p_md_nil", nil)},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorWithMetadata("p_md_empty_string", []byte(""))},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorWithMetadata("p_md_empty_obj", []byte("{}"))},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorWithMetadata("p_md_existing", []byte(`{"key": "value"}`))},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorWithMetadata("p_md_nil", nil)},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorWithMetadata("p_md_empty_string", []byte(""))},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorWithMetadata("p_md_empty_obj", []byte("{}"))},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorWithMetadata("p_md_existing", []byte(`{"key": "value"}`))},
 		})
 		require.NoError(t, err)
 
@@ -288,7 +288,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		svc, bundle := setup(t)
 
 		_, err := svc.AddManySafely([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), RunOnStart: true},
 		})
 		require.NoError(t, err)
 
@@ -316,7 +316,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		svc, bundle := setup(t)
 
 		_, err := svc.AddManySafely([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("unique_periodic_job_500ms", true)},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("unique_periodic_job_500ms", true)},
 		})
 		require.NoError(t, err)
 
@@ -343,8 +343,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		svc, bundle := setup(t)
 
 		_, err := svc.AddManySafely([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s", false), RunOnStart: true},
-			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("unique_periodic_job_5s", true), RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), JobConstructorFunc: jobConstructorFunc("periodic_job_5s", false), RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), JobConstructorFunc: jobConstructorFunc("unique_periodic_job_5s", true), RunOnStart: true},
 		})
 		require.NoError(t, err)
 
@@ -366,7 +366,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		_, err := svc.AddManySafely([]*PeriodicJob{
 			// skip this insert when it returns nil:
-			{ScheduleFunc: periodicIntervalSchedule(time.Second), ConstructorFunc: func() (*rivertype.JobInsertParams, error) {
+			{ScheduleFunc: periodicIntervalSchedule(time.Second), JobConstructorFunc: func() (*rivertype.JobInsertParams, error) {
 				return nil, ErrNoJobToInsert
 			}, RunOnStart: true},
 		})
@@ -386,12 +386,12 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc.periodicJobs = make(map[rivertype.PeriodicJobHandle]*PeriodicJob)
 		periodicJobHandles, err := svc.AddManySafely([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
-			{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false)},
-			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_5s", false)},
-			{ScheduleFunc: periodicIntervalSchedule(15 * time.Minute), ConstructorFunc: jobConstructorFunc("periodic_job_15m", false)},
-			{ScheduleFunc: periodicIntervalSchedule(3 * time.Hour), ConstructorFunc: jobConstructorFunc("periodic_job_3h", false)},
-			{ScheduleFunc: periodicIntervalSchedule(7 * 24 * time.Hour), ConstructorFunc: jobConstructorFunc("periodic_job_7d", false)},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
+			{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false)},
+			{ScheduleFunc: periodicIntervalSchedule(5 * time.Second), JobConstructorFunc: jobConstructorFunc("periodic_job_5s", false)},
+			{ScheduleFunc: periodicIntervalSchedule(15 * time.Minute), JobConstructorFunc: jobConstructorFunc("periodic_job_15m", false)},
+			{ScheduleFunc: periodicIntervalSchedule(3 * time.Hour), JobConstructorFunc: jobConstructorFunc("periodic_job_3h", false)},
+			{ScheduleFunc: periodicIntervalSchedule(7 * 24 * time.Hour), JobConstructorFunc: jobConstructorFunc("periodic_job_7d", false)},
 		})
 		require.NoError(t, err)
 
@@ -447,14 +447,14 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc, _ := setup(t)
 
-		_, err := svc.AddSafely(&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(time.Microsecond), ConstructorFunc: jobConstructorFunc("periodic_job_1us", false)})
+		_, err := svc.AddSafely(&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(time.Microsecond), JobConstructorFunc: jobConstructorFunc("periodic_job_1us", false)})
 		require.NoError(t, err)
 
 		// make a longer list of jobs so the loop has to run for longer
 		for i := 1; i < 100; i++ {
 			_, err := svc.AddSafely(&PeriodicJob{
-				ScheduleFunc:    periodicIntervalSchedule(time.Duration(i) * time.Hour),
-				ConstructorFunc: jobConstructorFunc(fmt.Sprintf("periodic_job_%dh", i), false),
+				ScheduleFunc:       periodicIntervalSchedule(time.Duration(i) * time.Hour),
+				JobConstructorFunc: jobConstructorFunc(fmt.Sprintf("periodic_job_%dh", i), false),
 			})
 			require.NoError(t, err)
 		}
@@ -478,8 +478,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			&PeriodicJobEnqueuerConfig{
 				Insert: makeInsertFunc(bundle.schema),
 				PeriodicJobs: []*PeriodicJob{
-					{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), RunOnStart: true},
-					{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false), RunOnStart: true},
+					{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), RunOnStart: true},
+					{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false), RunOnStart: true},
 				},
 			}, bundle.exec)
 		require.NoError(t, err)
@@ -501,11 +501,11 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		_, err := svc.AddSafely(
-			&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
+			&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
 		)
 		require.NoError(t, err)
 		_, err = svc.AddSafely(
-			&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), RunOnStart: true},
+			&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), RunOnStart: true},
 		)
 		require.NoError(t, err)
 
@@ -522,8 +522,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		_, err := svc.AddManySafely([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), RunOnStart: true},
 		})
 		require.NoError(t, err)
 
@@ -540,8 +540,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		handles, err := svc.AddManySafely([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), RunOnStart: true},
 		})
 		require.NoError(t, err)
 
@@ -554,7 +554,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		require.Empty(t, svc.periodicJobs)
 
 		handleAfterClear, err := svc.AddSafely(
-			&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_new", false)},
+			&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms_new", false)},
 		)
 		require.NoError(t, err)
 
@@ -571,8 +571,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		handles, err := svc.AddManySafely([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), RunOnStart: true},
 		})
 		require.NoError(t, err)
 
@@ -591,8 +591,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		svc, _ := setup(t)
 
 		handles, err := svc.AddManySafely([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), ID: "periodic_job_500ms"},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), ID: "periodic_job_500ms_start", RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), ID: "periodic_job_500ms"},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), ID: "periodic_job_500ms_start", RunOnStart: true},
 		})
 		require.NoError(t, err)
 
@@ -608,8 +608,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		svc, _ := setup(t)
 
 		_, err := svc.AddManySafely([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), ID: "periodic_job_500ms"},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), ID: "periodic_job_500ms_start", RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), ID: "periodic_job_500ms"},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), ID: "periodic_job_500ms_start", RunOnStart: true},
 		})
 		require.NoError(t, err)
 
@@ -631,9 +631,9 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		startService(t, svc)
 
 		handles, err := svc.AddManySafely([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_other", false)},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms_other", false)},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), RunOnStart: true},
 		})
 		require.NoError(t, err)
 
@@ -653,9 +653,9 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		svc, _ := setup(t)
 
 		handles, err := svc.AddManySafely([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), ID: "periodic_job_500ms"},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_other", false), ID: "periodic_job_500ms_other"},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), ID: "periodic_job_500ms_start", RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), ID: "periodic_job_500ms"},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms_other", false), ID: "periodic_job_500ms_other"},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), ID: "periodic_job_500ms_start", RunOnStart: true},
 		})
 		require.NoError(t, err)
 
@@ -675,9 +675,9 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		svc, _ := setup(t)
 
 		_, err := svc.AddManySafely([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), ID: "periodic_job_500ms"},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_other", false), ID: "periodic_job_500ms_other"},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), ID: "periodic_job_500ms_start", RunOnStart: true},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), ID: "periodic_job_500ms"},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms_other", false), ID: "periodic_job_500ms_other"},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), ID: "periodic_job_500ms_start", RunOnStart: true},
 		})
 		require.NoError(t, err)
 
@@ -713,11 +713,11 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 				defer wg.Done()
 
 				for range 50 {
-					handle, err := svc.AddSafely(&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(time.Millisecond), ConstructorFunc: jobConstructorFunc(jobBaseName, false)})
+					handle, err := svc.AddSafely(&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(time.Millisecond), JobConstructorFunc: jobConstructorFunc(jobBaseName, false)})
 					require.NoError(t, err)
 					randomSleep()
 
-					_, err = svc.AddSafely(&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(time.Millisecond), ConstructorFunc: jobConstructorFunc(jobBaseName+"_second", false)})
+					_, err = svc.AddSafely(&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(time.Millisecond), JobConstructorFunc: jobConstructorFunc(jobBaseName+"_second", false)})
 					require.NoError(t, err)
 					randomSleep()
 
@@ -853,9 +853,9 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		}
 
 		handles, err := svc.AddManySafely([]*PeriodicJob{
-			{ID: "periodic_job_100ms", ScheduleFunc: periodicIntervalSchedule(100 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_100ms", false)},
-			{ID: "periodic_job_500ms", ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
-			{ID: "periodic_job_1500ms", ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false)},
+			{ID: "periodic_job_100ms", ScheduleFunc: periodicIntervalSchedule(100 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_100ms", false)},
+			{ID: "periodic_job_500ms", ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
+			{ID: "periodic_job_1500ms", ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false)},
 		})
 		require.NoError(t, err)
 
@@ -910,9 +910,9 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		}
 
 		_, err := svc.AddManySafely([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(100 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_100ms", false)},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
-			{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false)},
+			{ScheduleFunc: periodicIntervalSchedule(100 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_100ms", false)},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
+			{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false)},
 		})
 		require.NoError(t, err)
 
@@ -946,13 +946,73 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		}
 
 		_, err := svc.AddManySafely([]*PeriodicJob{
-			{ID: "periodic_job_10m", ScheduleFunc: periodicIntervalSchedule(10 * time.Minute), ConstructorFunc: jobConstructorFunc("periodic_job_10m", false)},
-			{ID: "periodic_job_20m", ScheduleFunc: periodicIntervalSchedule(20 * time.Minute), ConstructorFunc: jobConstructorFunc("periodic_job_20m", false)},
+			{ID: "periodic_job_10m", ScheduleFunc: periodicIntervalSchedule(10 * time.Minute), JobConstructorFunc: jobConstructorFunc("periodic_job_10m", false)},
+			{ID: "periodic_job_20m", ScheduleFunc: periodicIntervalSchedule(20 * time.Minute), JobConstructorFunc: jobConstructorFunc("periodic_job_20m", false)},
 
 			// this one doesn't have an ID and won't get an initial insert
-			{ScheduleFunc: periodicIntervalSchedule(30 * time.Minute), ConstructorFunc: jobConstructorFunc("periodic_job_30m", false)},
+			{ScheduleFunc: periodicIntervalSchedule(30 * time.Minute), JobConstructorFunc: jobConstructorFunc("periodic_job_30m", false)},
 		})
 		require.NoError(t, err)
+
+		startService(t, svc)
+
+		svc.TestSignals.PeriodicJobUpserted.WaitOrTimeout()
+
+		require.Equal(t, [][]string{
+			{"periodic_job_10m", "periodic_job_20m"},
+		}, insertedPeriodicJobIDs)
+	})
+
+	t.Run("UnknownConfigure", func(t *testing.T) {
+		t.Parallel()
+
+		svc, bundle := setup(t)
+
+		now := time.Now()
+
+		bundle.pilotMock.PeriodicJobGetAllMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobGetAllParams) ([]*riverpilot.PeriodicJob, error) {
+			return []*riverpilot.PeriodicJob{
+				{
+					ID:        "periodic_job_10m",
+					CreatedAt: now.Add(-1 * time.Hour),
+					NextRunAt: now,
+					UpdatedAt: now.Add(-1 * time.Hour),
+				},
+				{
+					ID:        "periodic_job_20m",
+					CreatedAt: now.Add(-1 * time.Hour),
+					NextRunAt: now,
+					UpdatedAt: now.Add(-1 * time.Hour),
+				},
+			}, nil
+		}
+
+		bundle.pilotMock.PeriodicJobKeepAliveAndReapMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobKeepAliveAndReapParams) ([]*riverpilot.PeriodicJob, error) {
+			return nil, nil
+		}
+
+		svc.Config.UnknownConfigure = func(job *riverpilot.PeriodicJob) *UnknownConfigureResult {
+			switch job.ID {
+			case "periodic_job_10m":
+				return &UnknownConfigureResult{
+					JobConstructor: jobConstructorFunc(job.ID, false),
+					Schedule:       func(t time.Time) time.Time { return t.Add(10 * time.Minute) },
+				}
+			case "periodic_job_20m":
+				return &UnknownConfigureResult{
+					JobConstructor: jobConstructorFunc(job.ID, false),
+					Schedule:       func(t time.Time) time.Time { return t.Add(20 * time.Minute) },
+				}
+			}
+
+			panic("unrecognized durable job: " + job.ID)
+		}
+
+		var insertedPeriodicJobIDs [][]string
+		bundle.pilotMock.PeriodicJobUpsertManyMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobUpsertManyParams) ([]*riverpilot.PeriodicJob, error) {
+			insertedPeriodicJobIDs = append(insertedPeriodicJobIDs, sliceutil.Map(params.Jobs, func(j *riverpilot.PeriodicJobUpsertParams) string { return j.ID }))
+			return nil, nil
+		}
 
 		startService(t, svc)
 
@@ -969,8 +1029,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		svc, bundle := setup(t)
 
 		periodicJobs := []*PeriodicJob{
-			{ID: "periodic_job_100ms", ScheduleFunc: periodicIntervalSchedule(100 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_100ms", false)},
-			{ID: "periodic_job_100ms", ScheduleFunc: periodicIntervalSchedule(100 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
+			{ID: "periodic_job_100ms", ScheduleFunc: periodicIntervalSchedule(100 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_100ms", false)},
+			{ID: "periodic_job_100ms", ScheduleFunc: periodicIntervalSchedule(100 * time.Millisecond), JobConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
 		}
 
 		_, err := NewPeriodicJobEnqueuer(riversharedtest.BaseServiceArchetype(t), &PeriodicJobEnqueuerConfig{
@@ -989,6 +1049,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 type PilotPeriodicJobMock struct {
 	PeriodicJobGetAllMock           func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobGetAllParams) ([]*riverpilot.PeriodicJob, error)
 	PeriodicJobKeepAliveAndReapMock func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobKeepAliveAndReapParams) ([]*riverpilot.PeriodicJob, error)
+	PeriodicJobUnknownConfigureMock func(job *riverpilot.PeriodicJob) *riverpilot.UnknownConfigureResult
 	PeriodicJobUpsertManyMock       func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobUpsertManyParams) ([]*riverpilot.PeriodicJob, error)
 }
 
@@ -999,6 +1060,9 @@ func NewPilotPeriodicJobMock() *PilotPeriodicJobMock {
 		},
 		PeriodicJobKeepAliveAndReapMock: func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobKeepAliveAndReapParams) ([]*riverpilot.PeriodicJob, error) {
 			return nil, nil
+		},
+		PeriodicJobUnknownConfigureMock: func(job *riverpilot.PeriodicJob) *riverpilot.UnknownConfigureResult {
+			return nil
 		},
 		PeriodicJobUpsertManyMock: func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobUpsertManyParams) ([]*riverpilot.PeriodicJob, error) {
 			return nil, nil
@@ -1012,6 +1076,10 @@ func (p *PilotPeriodicJobMock) PeriodicJobGetAll(ctx context.Context, exec river
 
 func (p *PilotPeriodicJobMock) PeriodicJobKeepAliveAndReap(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobKeepAliveAndReapParams) ([]*riverpilot.PeriodicJob, error) {
 	return p.PeriodicJobKeepAliveAndReapMock(ctx, exec, params)
+}
+
+func (p *PilotPeriodicJobMock) PeriodicJobUnknownConfigure() func(job *riverpilot.PeriodicJob) *riverpilot.UnknownConfigureResult {
+	return p.PeriodicJobUnknownConfigureMock
 }
 
 func (p *PilotPeriodicJobMock) PeriodicJobUpsertMany(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobUpsertManyParams) ([]*riverpilot.PeriodicJob, error) {

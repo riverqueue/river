@@ -46,6 +46,10 @@ func (p *StandardPilot) PeriodicJobGetAll(ctx context.Context, exec riverdriver.
 	return nil, nil
 }
 
+func (p *StandardPilot) PeriodicJobUnknownConfigure() func(job *PeriodicJob) *UnknownConfigureResult {
+	return nil
+}
+
 func (p *StandardPilot) PeriodicJobUpsertMany(ctx context.Context, exec riverdriver.Executor, params *PeriodicJobUpsertManyParams) ([]*PeriodicJob, error) {
 	return nil, nil
 }

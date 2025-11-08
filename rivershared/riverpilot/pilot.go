@@ -106,6 +106,8 @@ type PilotPeriodicJob interface {
 	// API is not stable. DO NOT USE.
 	PeriodicJobKeepAliveAndReap(ctx context.Context, exec riverdriver.Executor, params *PeriodicJobKeepAliveAndReapParams) ([]*PeriodicJob, error)
 
+	PeriodicJobUnknownConfigure() func(job *PeriodicJob) *UnknownConfigureResult
+
 	// PeriodicJobUpsertMany upserts many periodic jobs.
 	//
 	// API is not stable. DO NOT USE.
@@ -159,4 +161,9 @@ type ProducerShutdownParams struct {
 type QueueMetadataChangedParams struct {
 	Queue    string
 	Metadata []byte
+}
+
+type UnknownConfigureResult struct {
+	JobConstructor rivertype.PeriodicJobConstructor
+	Schedule       rivertype.PeriodicSchedule
 }

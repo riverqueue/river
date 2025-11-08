@@ -8,27 +8,22 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-// PeriodicSchedule is a schedule for a periodic job. Periodic jobs should
-// generally have an interval of at least 1 minute, and never less than one
-// second.
-type PeriodicSchedule interface {
-	// Next returns the next time at which the job should be run given the
-	// current time.
-	Next(current time.Time) time.Time
-}
+type (
+	// PeriodicJobConstructor was originally in the top-level river package, but
+	// moved so it could be accessible by subpackages. Prefer using the one in
+	// rivertype.
+	PeriodicJobConstructor = rivertype.PeriodicJobConstructor
 
-// PeriodicJobConstructor is a function that gets called each time the paired
-// PeriodicSchedule is triggered.
-//
-// A constructor must never block. It may return nil to indicate that no job
-// should be inserted.
-type PeriodicJobConstructor func() (JobArgs, *InsertOpts)
+	// PeriodicSchedule was originally in the top-level river package, but moved so it
+	// could be accessible by subpackages. Prefer using the one in rivertype.
+	PeriodicSchedule = rivertype.PeriodicSchedule
+)
 
 // PeriodicJob is a configuration for a periodic job.
 type PeriodicJob struct {
-	constructorFunc PeriodicJobConstructor
+	constructorFunc rivertype.PeriodicJobConstructor
 	opts            *PeriodicJobOpts
-	scheduleFunc    PeriodicSchedule
+	scheduleFunc    rivertype.PeriodicSchedule
 }
 
 // PeriodicJobOpts are options for a periodic job.
@@ -70,7 +65,7 @@ type PeriodicJobOpts struct {
 // without regard for the state of the last scheduler. The RunOnStart option
 // can be used as a hedge to make sure that jobs with long run durations are
 // guaranteed to occasionally run.
-func NewPeriodicJob(scheduleFunc PeriodicSchedule, constructorFunc PeriodicJobConstructor, opts *PeriodicJobOpts) *PeriodicJob {
+func NewPeriodicJob(scheduleFunc rivertype.PeriodicSchedule, constructorFunc rivertype.PeriodicJobConstructor, opts *PeriodicJobOpts) *PeriodicJob {
 	return &PeriodicJob{
 		constructorFunc: constructorFunc,
 		opts:            opts,
@@ -245,7 +240,7 @@ func (b *PeriodicJobBundle) toInternal(periodicJob *PeriodicJob) *maintenance.Pe
 	}
 	return &maintenance.PeriodicJob{
 		ID: opts.ID,
-		ConstructorFunc: func() (*rivertype.JobInsertParams, error) {
+		JobConstructorFunc: func() (*rivertype.JobInsertParams, error) {
 			args, options := periodicJob.constructorFunc()
 			if args == nil {
 				return nil, maintenance.ErrNoJobToInsert

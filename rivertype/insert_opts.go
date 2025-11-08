@@ -1,23 +1,8 @@
-package river
+package rivertype
 
 import (
-	"errors"
-	"fmt"
-	"regexp"
-	"slices"
-	"strings"
 	"time"
-
-	"github.com/riverqueue/river/rivertype"
 )
-
-// Regular expression to which the format of tags must comply. Mainly, no
-// special characters, and with hyphens in the middle.
-//
-// A key property here (in case this is relaxed in the future) is that commas
-// must never be allowed because they're used as a delimiter during batch job
-// insertion for the `riverdatabasesql` driver.
-var tagRE = regexp.MustCompile(`\A[\w][\w\-]+[\w]\z`)
 
 // InsertOpts are optional settings for a new job which can be provided at job
 // insertion time. These will override any default InsertOpts settings provided
@@ -167,70 +152,10 @@ type UniqueOpts struct {
 	// forces a fallback to a slower insertion path that takes an advisory lock
 	// and performs a look up before insertion. This path is deprecated and should
 	// be avoided if possible.
-	ByState []rivertype.JobState
+	ByState []JobState
 
 	// ExcludeKind indicates that the job kind should not be included in the
 	// uniqueness check. This is useful when you want to enforce uniqueness
 	// across all jobs regardless of kind.
 	ExcludeKind bool
-}
-
-// isEmpty returns true for an empty, uninitialized options struct.
-//
-// This is required because we can't check against `UniqueOpts{}` because slices
-// aren't comparable. Unfortunately it makes things a little more brittle
-// comparatively because any new options must also be considered here for things
-// to work.
-func (o *UniqueOpts) isEmpty() bool {
-	return !o.ByArgs &&
-		o.ByPeriod == time.Duration(0) &&
-		!o.ByQueue &&
-		o.ByState == nil
-}
-
-var jobStateAll = rivertype.JobStates() //nolint:gochecknoglobals
-
-var requiredV3states = []rivertype.JobState{ //nolint:gochecknoglobals
-	rivertype.JobStateAvailable,
-	rivertype.JobStatePending,
-	rivertype.JobStateRunning,
-	rivertype.JobStateScheduled,
-}
-
-func (o *UniqueOpts) validate() error {
-	if o.isEmpty() {
-		return nil
-	}
-
-	if o.ByPeriod != time.Duration(0) && o.ByPeriod < 1*time.Second {
-		return errors.New("UniqueOpts.ByPeriod should not be less than 1 second")
-	}
-
-	// Job states are typed, but since the underlying type is a string, users
-	// can put anything they want in there.
-	for _, state := range o.ByState {
-		// This could be turned to a map lookup, but last I checked the speed
-		// difference for tiny slice sizes is negligible, and map lookup might
-		// even be slower.
-		if !slices.Contains(jobStateAll, state) {
-			return fmt.Errorf("UniqueOpts.ByState contains invalid state %q", state)
-		}
-	}
-
-	// Skip required states validation if no custom states were provided.
-	if len(o.ByState) == 0 {
-		return nil
-	}
-
-	var missingStates []string
-	for _, state := range requiredV3states {
-		if !slices.Contains(o.ByState, state) {
-			missingStates = append(missingStates, string(state))
-		}
-	}
-	if len(missingStates) > 0 {
-		return fmt.Errorf("UniqueOpts.ByState must contain all required states, missing: %s", strings.Join(missingStates, ", "))
-	}
-
-	return nil
 }

@@ -49,10 +49,10 @@ func (ts *PeriodicJobEnqueuerTestSignals) Init(tb testutil.TestingTB) {
 // river.PeriodicJobArgs, but needs a separate type because the enqueuer is in a
 // subpackage.
 type PeriodicJob struct {
-	ID              string
-	ConstructorFunc func() (*rivertype.JobInsertParams, error)
-	RunOnStart      bool
-	ScheduleFunc    func(time.Time) time.Time
+	ID                 string
+	JobConstructorFunc func() (*rivertype.JobInsertParams, error)
+	RunOnStart         bool
+	ScheduleFunc       func(time.Time) time.Time
 
 	nextRunAt time.Time // set on service start
 }
@@ -73,7 +73,7 @@ func (j *PeriodicJob) validate() error {
 			return fmt.Errorf("PeriodicJob.ID %q should match regex %s", j.ID, rivercommon.UserSpecifiedIDOrKindRE.String())
 		}
 	}
-	if j.ConstructorFunc == nil {
+	if j.JobConstructorFunc == nil {
 		return errors.New("PeriodicJob.ConstructorFunc must be set")
 	}
 	if j.ScheduleFunc == nil {
@@ -100,6 +100,16 @@ type PeriodicJobEnqueuerConfig struct {
 	// Schema where River tables are located. Empty string omits schema, causing
 	// Postgres to default to `search_path`.
 	Schema string
+
+	// UnknownConfigure is a user-specified hook that configures a periodic job
+	// found in the database, but which wasn't configured with one of the same
+	// ID in the enqueuer.
+	UnknownConfigure func(job *riverpilot.PeriodicJob) *UnknownConfigureResult
+}
+
+type UnknownConfigureResult struct {
+	JobConstructor func() (*rivertype.JobInsertParams, error)
+	Schedule       func(time.Time) time.Time
 }
 
 func (c *PeriodicJobEnqueuerConfig) mustValidate() *PeriodicJobEnqueuerConfig {
@@ -159,6 +169,7 @@ func NewPeriodicJobEnqueuer(archetype *baseservice.Archetype, config *PeriodicJo
 			PeriodicJobs:       config.PeriodicJobs,
 			Pilot:              pilot,
 			Schema:             config.Schema,
+			UnknownConfigure:   config.UnknownConfigure,
 		}).mustValidate(),
 
 		exec:               exec,
@@ -342,6 +353,46 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 				return make(map[string]time.Time)
 			}
 
+			if s.Config.UnknownConfigure != nil {
+				func() {
+					s.mu.Lock()
+					defer s.mu.Unlock()
+
+					for _, initialPeriodicJob := range initialPeriodicJobs {
+						if _, ok := s.periodicJobIDs[initialPeriodicJob.ID]; ok {
+							continue
+						}
+
+						unknownConfigureRes := s.Config.UnknownConfigure(initialPeriodicJob)
+
+						// Function has elected not to configure the job.
+						if unknownConfigureRes == nil {
+							continue
+						}
+
+						periodicJob := &PeriodicJob{
+							ID:                 initialPeriodicJob.ID,
+							JobConstructorFunc: unknownConfigureRes.JobConstructor,
+							ScheduleFunc:       unknownConfigureRes.Schedule,
+						}
+
+						if err := periodicJob.validate(); err != nil {
+							s.Logger.ErrorContext(ctx, s.Name+": Error validating periodic job", "error", err, "id", initialPeriodicJob.ID)
+							continue
+						}
+
+						handle := s.nextHandle
+
+						if err := addUniqueID(s.periodicJobIDs, periodicJob.ID, handle); err != nil {
+							panic("bug; should not be possible to add non-unique ID here: " + err.Error())
+						}
+
+						s.periodicJobs[handle] = periodicJob
+						s.nextHandle++
+					}
+				}()
+			}
+
 			return sliceutil.KeyBy(initialPeriodicJobs,
 				func(j *riverpilot.PeriodicJob) (string, time.Time) { return j.ID, j.NextRunAt })
 		}()
@@ -391,7 +442,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 					continue
 				}
 
-				if insertParams, ok := s.insertParamsFromConstructor(ctx, periodicJob.ID, periodicJob.ConstructorFunc, now); ok {
+				if insertParams, ok := s.insertParamsFromConstructor(ctx, periodicJob.ID, periodicJob.JobConstructorFunc, now); ok {
 					insertParamsMany = append(insertParamsMany, insertParams)
 				}
 			}
@@ -434,7 +485,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 							continue
 						}
 
-						if insertParams, ok := s.insertParamsFromConstructor(ctx, periodicJob.ID, periodicJob.ConstructorFunc, periodicJob.nextRunAt); ok {
+						if insertParams, ok := s.insertParamsFromConstructor(ctx, periodicJob.ID, periodicJob.JobConstructorFunc, periodicJob.nextRunAt); ok {
 							insertParamsMany = append(insertParamsMany, insertParams)
 						}
 

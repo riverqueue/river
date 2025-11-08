@@ -71,11 +71,11 @@ func TestPeriodicJobBundle(t *testing.T) {
 
 		internalPeriodicJob := periodicJobBundle.toInternal(periodicJob)
 
-		insertParams1, err := internalPeriodicJob.ConstructorFunc()
+		insertParams1, err := internalPeriodicJob.JobConstructorFunc()
 		require.NoError(t, err)
 		require.Equal(t, 1, mustUnmarshalJSON[TestJobArgs](t, insertParams1.EncodedArgs).JobNum)
 
-		insertParams2, err := internalPeriodicJob.ConstructorFunc()
+		insertParams2, err := internalPeriodicJob.JobConstructorFunc()
 		require.NoError(t, err)
 		require.Equal(t, 2, mustUnmarshalJSON[TestJobArgs](t, insertParams2.EncodedArgs).JobNum)
 	})
@@ -96,7 +96,7 @@ func TestPeriodicJobBundle(t *testing.T) {
 
 		internalPeriodicJob := periodicJobBundle.toInternal(periodicJob)
 
-		_, err := internalPeriodicJob.ConstructorFunc()
+		_, err := internalPeriodicJob.JobConstructorFunc()
 		require.ErrorIs(t, err, maintenance.ErrNoJobToInsert)
 	})
 

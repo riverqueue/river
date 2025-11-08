@@ -105,7 +105,7 @@ func TestQueueMaintainer(t *testing.T) {
 		periodicJobEnqueuer, err := NewPeriodicJobEnqueuer(archetype, &PeriodicJobEnqueuerConfig{
 			PeriodicJobs: []*PeriodicJob{
 				{
-					ConstructorFunc: func() (*rivertype.JobInsertParams, error) {
+					JobConstructorFunc: func() (*rivertype.JobInsertParams, error) {
 						return nil, ErrNoJobToInsert
 					},
 					ScheduleFunc: cron.Every(15 * time.Minute).Next,

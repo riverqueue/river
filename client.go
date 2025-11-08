@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -900,11 +901,32 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		}
 
 		{
+			pilotUnknownConfigure := client.pilot.PeriodicJobUnknownConfigure()
+
 			periodicJobEnqueuer, err := maintenance.NewPeriodicJobEnqueuer(archetype, &maintenance.PeriodicJobEnqueuerConfig{
 				AdvisoryLockPrefix: config.AdvisoryLockPrefix,
 				Insert:             client.insertMany,
 				Pilot:              client.pilot,
 				Schema:             config.Schema,
+				UnknownConfigure: func(job *riverpilot.PeriodicJob) *maintenance.UnknownConfigureResult {
+					if pilotUnknownConfigure == nil {
+						return nil
+					}
+
+					unknownConfigureRes := pilotUnknownConfigure(job)
+
+					if unknownConfigureRes == nil {
+						return nil
+					}
+
+					return &maintenance.UnknownConfigureResult{
+						JobConstructor: func() (*rivertype.JobInsertParams, error) {
+							jobArgs, insertOpts := unknownConfigureRes.JobConstructor()
+							return insertParamsFromConfigArgsAndOptions(archetype, config, jobArgs, insertOpts)
+						},
+						Schedule: unknownConfigureRes.Schedule.Next,
+					}
+				},
 			}, driver.GetExecutor())
 			if err != nil {
 				return nil, err
@@ -1510,6 +1532,14 @@ func (c *Client[TTx]) ID() string {
 	return c.config.ID
 }
 
+// Regular expression to which the format of tags must comply. Mainly, no
+// special characters, and with hyphens in the middle.
+//
+// A key property here (in case this is relaxed in the future) is that commas
+// must never be allowed because they're used as a delimiter during batch job
+// insertion for the `riverdatabasesql` driver.
+var tagRE = regexp.MustCompile(`\A[\w][\w\-]+[\w]\z`)
+
 func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, config *Config, args JobArgs, insertOpts *InsertOpts) (*rivertype.JobInsertParams, error) {
 	encodedArgs, err := json.Marshal(args)
 	if err != nil {
@@ -1562,11 +1592,11 @@ func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, conf
 	var uniqueOpts UniqueOpts
 	if !config.Test.DisableUniqueEnforcement {
 		uniqueOpts = insertOpts.UniqueOpts
-		if uniqueOpts.isEmpty() {
+		if uniqueOptsIsEmpty(&uniqueOpts) {
 			uniqueOpts = jobInsertOpts.UniqueOpts
 		}
 	}
-	if err := uniqueOpts.validate(); err != nil {
+	if err := uniqueOptsValidate(&uniqueOpts); err != nil {
 		return nil, err
 	}
 
@@ -1587,7 +1617,7 @@ func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, conf
 		State:       rivertype.JobStateAvailable,
 		Tags:        tags,
 	}
-	if !uniqueOpts.isEmpty() {
+	if !uniqueOptsIsEmpty(&uniqueOpts) {
 		internalUniqueOpts := (*dbunique.UniqueOpts)(&uniqueOpts)
 		insertParams.UniqueKey, err = dbunique.UniqueKey(archetype.Time, internalUniqueOpts, insertParams)
 		if err != nil {
@@ -2708,4 +2738,71 @@ func defaultClientIDWithHost(startedAt time.Time, host string) string {
 	const rfc3339Compact = "2006_01_02T15_04_05.000000"
 
 	return host + "_" + strings.Replace(startedAt.Format(rfc3339Compact), ".", "_", 1)
+}
+
+// uniqueOptsIsEmpty returns true for an empty, uninitialized options struct.
+//
+// This is required because we can't check against `UniqueOpts{}` because slices
+// aren't comparable. Unfortunately it makes things a little more brittle
+// comparatively because any new options must also be considered here for things
+// to work.
+//
+// This is an unexported function in `river` so that it doesn't have
+// to be exported from `rivertype` and doesn't become part of the public API.
+func uniqueOptsIsEmpty(opts *rivertype.UniqueOpts) bool {
+	return !opts.ByArgs &&
+		opts.ByPeriod == time.Duration(0) &&
+		!opts.ByQueue &&
+		opts.ByState == nil
+}
+
+var jobStateAll = rivertype.JobStates() //nolint:gochecknoglobals
+
+var requiredV3states = []rivertype.JobState{ //nolint:gochecknoglobals
+	rivertype.JobStateAvailable,
+	rivertype.JobStatePending,
+	rivertype.JobStateRunning,
+	rivertype.JobStateScheduled,
+}
+
+// uniqueOptsValidate validates the given rivertype.UniqueOpts.
+//
+// This is a function instance of an instance function so that it doesn't have
+// to be exported from `rivertype` and doesn't become part of the public API.
+func uniqueOptsValidate(opts *rivertype.UniqueOpts) error {
+	if uniqueOptsIsEmpty(opts) {
+		return nil
+	}
+
+	if opts.ByPeriod != time.Duration(0) && opts.ByPeriod < 1*time.Second {
+		return errors.New("UniqueOpts.ByPeriod should not be less than 1 second")
+	}
+
+	// Job states are typed, but since the underlying type is a string, users
+	// can put anything they want in there.
+	for _, state := range opts.ByState {
+		// This could be turned to a map lookup, but last I checked the speed
+		// difference for tiny slice sizes is negligible, and map lookup might
+		// even be slower.
+		if !slices.Contains(jobStateAll, state) {
+			return fmt.Errorf("UniqueOpts.ByState contains invalid state %q", state)
+		}
+	}
+
+	// Skip required states validation if no custom states were provided.
+	if len(opts.ByState) == 0 {
+		return nil
+	}
+
+	var missingStates []string
+	for _, state := range requiredV3states {
+		if !slices.Contains(opts.ByState, state) {
+			missingStates = append(missingStates, string(state))
+		}
+	}
+	if len(missingStates) > 0 {
+		return fmt.Errorf("UniqueOpts.ByState must contain all required states, missing: %s", strings.Join(missingStates, ", "))
+	}
+
+	return nil
 }

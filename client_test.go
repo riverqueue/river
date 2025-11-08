@@ -34,8 +34,10 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivershared/util/dbutil"
@@ -5173,6 +5175,72 @@ func Test_Client_Maintenance(t *testing.T) {
 		require.Len(t, jobs, 1, "Expected to find exactly one job of kind: "+(periodicJobArgs{}).Kind())
 	})
 
+	t.Run("PeriodicJobEnqueuerUnknownConfigureFromPilotNilResult", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			dbPool       = riversharedtest.DBPool(ctx, t)
+			config       = newTestConfig(t, "")
+			pluginDriver = newDriverWithPlugin(t, dbPool)
+			pluginPilot  = &TestPilotWithUnknownConfigure{}
+		)
+		pluginDriver.pilot = pluginPilot
+
+		var unknownJobConfigureCalled bool
+		pluginPilot.PeriodicJobUnknownConfigureFunc = func(job *riverpilot.PeriodicJob) *riverpilot.UnknownConfigureResult {
+			unknownJobConfigureCalled = true
+			return nil
+		}
+
+		client, err := NewClient(pluginDriver, config)
+		require.NoError(t, err)
+
+		svc := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
+
+		unknownConfigureRes := svc.Config.UnknownConfigure(&riverpilot.PeriodicJob{})
+		require.Nil(t, unknownConfigureRes)
+		require.True(t, unknownJobConfigureCalled)
+	})
+
+	t.Run("PeriodicJobEnqueuerUnknownConfigureFromPilotNonNilResult", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			dbPool       = riversharedtest.DBPool(ctx, t)
+			config       = newTestConfig(t, "")
+			pluginDriver = newDriverWithPlugin(t, dbPool)
+			pluginPilot  = &TestPilotWithUnknownConfigure{}
+		)
+		pluginDriver.pilot = pluginPilot
+
+		var (
+			jobConstructorCalled      bool
+			unknownJobConfigureCalled bool
+		)
+		pluginPilot.PeriodicJobUnknownConfigureFunc = func(job *riverpilot.PeriodicJob) *riverpilot.UnknownConfigureResult {
+			unknownJobConfigureCalled = true
+			return &riverpilot.UnknownConfigureResult{
+				JobConstructor: func() (rivertype.JobArgs, *rivertype.InsertOpts) {
+					jobConstructorCalled = true
+					return &noOpArgs{}, &rivertype.InsertOpts{}
+				},
+				Schedule: cron.Every(time.Minute),
+			}
+		}
+
+		client, err := NewClient(pluginDriver, config)
+		require.NoError(t, err)
+
+		svc := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
+
+		unknownConfigureRes := svc.Config.UnknownConfigure(&riverpilot.PeriodicJob{})
+		require.True(t, unknownJobConfigureCalled)
+
+		_, err = unknownConfigureRes.JobConstructor()
+		require.NoError(t, err)
+		require.True(t, jobConstructorCalled)
+	})
+
 	t.Run("QueueCleaner", func(t *testing.T) {
 		t.Parallel()
 
@@ -8173,3 +8241,97 @@ func (f JobArgsWithHooksFunc) Hooks() []rivertype.Hook {
 func (JobArgsWithHooksFunc) MarshalJSON() ([]byte, error) { return []byte("{}"), nil }
 
 func (JobArgsWithHooksFunc) UnmarshalJSON([]byte) error { return nil }
+
+var _ pilotPlugin = &TestPilotWithUnknownConfigure{}
+
+type TestPilotWithUnknownConfigure struct {
+	riverpilot.StandardPilot
+
+	PeriodicJobUnknownConfigureFunc func(job *riverpilot.PeriodicJob) *riverpilot.UnknownConfigureResult
+}
+
+func (p *TestPilotWithUnknownConfigure) PeriodicJobUnknownConfigure() func(job *riverpilot.PeriodicJob) *riverpilot.UnknownConfigureResult {
+	return p.PeriodicJobUnknownConfigureFunc
+}
+
+func (p *TestPilotWithUnknownConfigure) PluginServices() []startstop.Service { return nil }
+
+func (p *TestPilotWithUnknownConfigure) PluginMaintenanceServices() []startstop.Service { return nil }
+
+func TestTagRE(t *testing.T) {
+	t.Parallel()
+
+	require.Regexp(t, tagRE, "aaa")
+	require.Regexp(t, tagRE, "_aaa")
+	require.Regexp(t, tagRE, "aaa_")
+	require.Regexp(t, tagRE, "777")
+	require.Regexp(t, tagRE, "my-tag")
+	require.Regexp(t, tagRE, "my_tag")
+	require.Regexp(t, tagRE, "my-longer-tag")
+	require.Regexp(t, tagRE, "my_longer_tag")
+	require.Regexp(t, tagRE, "My_Capitalized_Tag")
+	require.Regexp(t, tagRE, "ALL_CAPS")
+	require.Regexp(t, tagRE, "1_2_3")
+
+	require.NotRegexp(t, tagRE, "a")
+	require.NotRegexp(t, tagRE, "aa")
+	require.NotRegexp(t, tagRE, "-aaa")
+	require.NotRegexp(t, tagRE, "aaa-")
+	require.NotRegexp(t, tagRE, "special@characters$banned")
+	require.NotRegexp(t, tagRE, "commas,never,allowed")
+}
+
+func TestUniqueOptsIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, uniqueOptsIsEmpty(&UniqueOpts{}))
+	require.False(t, uniqueOptsIsEmpty(&UniqueOpts{ByArgs: true}))
+	require.False(t, uniqueOptsIsEmpty(&UniqueOpts{ByPeriod: 1 * time.Nanosecond}))
+	require.False(t, uniqueOptsIsEmpty(&UniqueOpts{ByQueue: true}))
+	require.False(t, uniqueOptsIsEmpty(&UniqueOpts{ByState: []rivertype.JobState{rivertype.JobStateAvailable}}))
+}
+
+func TestUniqueOptsValidate(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, uniqueOptsValidate(&UniqueOpts{}))
+	require.NoError(t, uniqueOptsValidate(&UniqueOpts{
+		ByArgs:   true,
+		ByPeriod: 1 * time.Second,
+		ByQueue:  true,
+	}))
+
+	require.EqualError(t, uniqueOptsValidate(&UniqueOpts{ByPeriod: 1 * time.Millisecond}), "UniqueOpts.ByPeriod should not be less than 1 second")
+	require.EqualError(t, uniqueOptsValidate(&UniqueOpts{ByState: []rivertype.JobState{rivertype.JobState("invalid")}}), `UniqueOpts.ByState contains invalid state "invalid"`)
+
+	requiredStates := []rivertype.JobState{
+		rivertype.JobStateAvailable,
+		rivertype.JobStatePending,
+		rivertype.JobStateRunning,
+		rivertype.JobStateScheduled,
+	}
+
+	for _, state := range requiredStates {
+		// Test with each state individually removed from requiredStates to ensure
+		// it's validated.
+
+		// Create a copy of requiredStates without the current state
+		var testStates []rivertype.JobState
+		for _, s := range requiredStates {
+			if s != state {
+				testStates = append(testStates, s)
+			}
+		}
+
+		// Test validation
+		require.EqualError(t, uniqueOptsValidate(&UniqueOpts{ByState: testStates}), "UniqueOpts.ByState must contain all required states, missing: "+string(state))
+	}
+
+	// test with more than one required state missing:
+	require.EqualError(t, uniqueOptsValidate(&UniqueOpts{ByState: []rivertype.JobState{
+		rivertype.JobStateAvailable,
+		rivertype.JobStateScheduled,
+	}}), "UniqueOpts.ByState must contain all required states, missing: pending, running")
+
+	require.NoError(t, uniqueOptsValidate(&UniqueOpts{ByState: rivertype.JobStates()}))
+}
