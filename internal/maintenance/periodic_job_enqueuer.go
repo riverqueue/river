@@ -243,7 +243,9 @@ func (s *PeriodicJobEnqueuer) Remove(periodicJobHandle rivertype.PeriodicJobHand
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.periodicJobs, periodicJobHandle)
+	if periodicJob, ok := s.periodicJobs[periodicJobHandle]; ok {
+		s.removeJobLockFree(periodicJob, periodicJobHandle)
+	}
 }
 
 // RemoveMany removes many periodic jobs from the enqueuer. Their current target
@@ -252,9 +254,16 @@ func (s *PeriodicJobEnqueuer) RemoveMany(periodicJobHandles []rivertype.Periodic
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for _, handle := range periodicJobHandles {
-		delete(s.periodicJobs, handle)
+	for _, periodicJobHandle := range periodicJobHandles {
+		if periodicJob, ok := s.periodicJobs[periodicJobHandle]; ok {
+			s.removeJobLockFree(periodicJob, periodicJobHandle)
+		}
 	}
+}
+
+func (s *PeriodicJobEnqueuer) removeJobLockFree(periodicJob *PeriodicJob, periodicJobHandle rivertype.PeriodicJobHandle) {
+	delete(s.periodicJobs, periodicJobHandle)
+	delete(s.periodicJobIDs, periodicJob.ID)
 }
 
 func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {

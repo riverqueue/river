@@ -585,6 +585,23 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		require.Len(t, svc.periodicJobs, 1)
 	})
 
+	t.Run("RemoveWithID", func(t *testing.T) {
+		t.Parallel()
+
+		svc, _ := setup(t)
+
+		handles, err := svc.AddManySafely([]*PeriodicJob{
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), ID: "periodic_job_500ms"},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), ID: "periodic_job_500ms_start", RunOnStart: true},
+		})
+		require.NoError(t, err)
+
+		svc.Remove(handles[1])
+
+		require.Len(t, svc.periodicJobIDs, 1)
+		require.Len(t, svc.periodicJobs, 1)
+	})
+
 	t.Run("RemoveManyAfterStart", func(t *testing.T) {
 		t.Parallel()
 
@@ -606,6 +623,24 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc.RemoveMany([]rivertype.PeriodicJobHandle{handles[1], handles[2]})
 
+		require.Len(t, svc.periodicJobs, 1)
+	})
+
+	t.Run("RemoveManyWithID", func(t *testing.T) {
+		t.Parallel()
+
+		svc, _ := setup(t)
+
+		handles, err := svc.AddManySafely([]*PeriodicJob{
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), ID: "periodic_job_500ms"},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_other", false), ID: "periodic_job_500ms_other"},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), ID: "periodic_job_500ms_start", RunOnStart: true},
+		})
+		require.NoError(t, err)
+
+		svc.RemoveMany([]rivertype.PeriodicJobHandle{handles[1], handles[2]})
+
+		require.Len(t, svc.periodicJobIDs, 1)
 		require.Len(t, svc.periodicJobs, 1)
 	})
 
