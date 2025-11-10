@@ -120,7 +120,7 @@ type PeriodicJobEnqueuer struct {
 	exec               riverdriver.Executor
 	mu                 sync.RWMutex
 	nextHandle         rivertype.PeriodicJobHandle
-	periodicJobIDs     map[string]struct{}
+	periodicJobIDs     map[string]rivertype.PeriodicJobHandle
 	periodicJobs       map[rivertype.PeriodicJobHandle]*PeriodicJob
 	recalculateNextRun chan struct{}
 }
@@ -128,7 +128,7 @@ type PeriodicJobEnqueuer struct {
 func NewPeriodicJobEnqueuer(archetype *baseservice.Archetype, config *PeriodicJobEnqueuerConfig, exec riverdriver.Executor) (*PeriodicJobEnqueuer, error) {
 	var (
 		nextHandle     rivertype.PeriodicJobHandle
-		periodicJobIDs = make(map[string]struct{})
+		periodicJobIDs = make(map[string]rivertype.PeriodicJobHandle)
 		periodicJobs   = make(map[rivertype.PeriodicJobHandle]*PeriodicJob, len(config.PeriodicJobs))
 	)
 
@@ -137,11 +137,13 @@ func NewPeriodicJobEnqueuer(archetype *baseservice.Archetype, config *PeriodicJo
 			return nil, err
 		}
 
-		if err := addUniqueID(periodicJobIDs, periodicJob.ID); err != nil {
+		handle := nextHandle
+
+		if err := addUniqueID(periodicJobIDs, periodicJob.ID, handle); err != nil {
 			return nil, err
 		}
 
-		periodicJobs[nextHandle] = periodicJob
+		periodicJobs[handle] = periodicJob
 		nextHandle++
 	}
 
@@ -180,11 +182,12 @@ func (s *PeriodicJobEnqueuer) AddSafely(periodicJob *PeriodicJob) (rivertype.Per
 		return 0, err
 	}
 
-	if err := addUniqueID(s.periodicJobIDs, periodicJob.ID); err != nil {
+	handle := s.nextHandle
+
+	if err := addUniqueID(s.periodicJobIDs, periodicJob.ID, handle); err != nil {
 		return 0, err
 	}
 
-	handle := s.nextHandle
 	s.periodicJobs[handle] = periodicJob
 	s.nextHandle++
 
@@ -210,11 +213,12 @@ func (s *PeriodicJobEnqueuer) AddManySafely(periodicJobs []*PeriodicJob) ([]rive
 			return nil, err
 		}
 
-		if err := addUniqueID(s.periodicJobIDs, periodicJob.ID); err != nil {
+		handles[i] = s.nextHandle
+
+		if err := addUniqueID(s.periodicJobIDs, periodicJob.ID, handles[i]); err != nil {
 			return nil, err
 		}
 
-		handles[i] = s.nextHandle
 		s.periodicJobs[handles[i]] = periodicJob
 		s.nextHandle++
 	}
@@ -248,6 +252,21 @@ func (s *PeriodicJobEnqueuer) Remove(periodicJobHandle rivertype.PeriodicJobHand
 	}
 }
 
+// Remove removes a periodic job from the enqueuer by ID. Its current target run
+// time and all future runs are cancelled.
+func (s *PeriodicJobEnqueuer) RemoveByID(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if handle, ok := s.periodicJobIDs[id]; ok {
+		delete(s.periodicJobIDs, id)
+		delete(s.periodicJobs, handle)
+		return true
+	}
+
+	return false
+}
+
 // RemoveMany removes many periodic jobs from the enqueuer. Their current target
 // run time and all future runs are cancelled.
 func (s *PeriodicJobEnqueuer) RemoveMany(periodicJobHandles []rivertype.PeriodicJobHandle) {
@@ -257,6 +276,20 @@ func (s *PeriodicJobEnqueuer) RemoveMany(periodicJobHandles []rivertype.Periodic
 	for _, periodicJobHandle := range periodicJobHandles {
 		if periodicJob, ok := s.periodicJobs[periodicJobHandle]; ok {
 			s.removeJobLockFree(periodicJob, periodicJobHandle)
+		}
+	}
+}
+
+// RemoveMany removes many periodic jobs from the enqueuer by ID. Their current
+// target run time and all future runs are cancelled.
+func (s *PeriodicJobEnqueuer) RemoveManyByID(ids []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, id := range ids {
+		if handle, ok := s.periodicJobIDs[id]; ok {
+			delete(s.periodicJobIDs, id)
+			delete(s.periodicJobs, handle)
 		}
 	}
 }
@@ -609,7 +642,7 @@ func (s *PeriodicJobEnqueuer) timeUntilNextRun() time.Duration {
 }
 
 // Adds a unique ID to known periodic job IDs, erroring in case of a duplicate.
-func addUniqueID(periodicJobIDs map[string]struct{}, id string) error {
+func addUniqueID(periodicJobIDs map[string]rivertype.PeriodicJobHandle, id string, handle rivertype.PeriodicJobHandle) error {
 	if id == "" {
 		return nil
 	}
@@ -618,6 +651,6 @@ func addUniqueID(periodicJobIDs map[string]struct{}, id string) error {
 		return errors.New("periodic job with ID already registered: " + id)
 	}
 
-	periodicJobIDs[id] = struct{}{}
+	periodicJobIDs[id] = handle
 	return nil
 }

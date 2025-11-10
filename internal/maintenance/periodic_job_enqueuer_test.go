@@ -602,6 +602,27 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		require.Len(t, svc.periodicJobs, 1)
 	})
 
+	t.Run("RemoveByID", func(t *testing.T) {
+		t.Parallel()
+
+		svc, _ := setup(t)
+
+		_, err := svc.AddManySafely([]*PeriodicJob{
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), ID: "periodic_job_500ms"},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), ID: "periodic_job_500ms_start", RunOnStart: true},
+		})
+		require.NoError(t, err)
+
+		require.True(t, svc.RemoveByID("periodic_job_500ms_start"))
+		require.False(t, svc.RemoveByID("does_not_exist"))
+
+		require.Contains(t, svc.periodicJobIDs, "periodic_job_500ms")
+		require.NotContains(t, svc.periodicJobIDs, "periodic_job_500ms_start")
+
+		require.Len(t, svc.periodicJobIDs, 1)
+		require.Len(t, svc.periodicJobs, 1)
+	})
+
 	t.Run("RemoveManyAfterStart", func(t *testing.T) {
 		t.Parallel()
 
@@ -639,6 +660,32 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		require.NoError(t, err)
 
 		svc.RemoveMany([]rivertype.PeriodicJobHandle{handles[1], handles[2]})
+
+		require.Contains(t, svc.periodicJobIDs, "periodic_job_500ms")
+		require.NotContains(t, svc.periodicJobIDs, "periodic_job_500ms_other")
+		require.NotContains(t, svc.periodicJobIDs, "periodic_job_500ms_start")
+
+		require.Len(t, svc.periodicJobIDs, 1)
+		require.Len(t, svc.periodicJobs, 1)
+	})
+
+	t.Run("RemoveManyByID", func(t *testing.T) {
+		t.Parallel()
+
+		svc, _ := setup(t)
+
+		_, err := svc.AddManySafely([]*PeriodicJob{
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false), ID: "periodic_job_500ms"},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_other", false), ID: "periodic_job_500ms_other"},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms_start", false), ID: "periodic_job_500ms_start", RunOnStart: true},
+		})
+		require.NoError(t, err)
+
+		svc.RemoveManyByID([]string{"periodic_job_500ms_other", "periodic_job_500ms_start", "does_not_exist"})
+
+		require.Contains(t, svc.periodicJobIDs, "periodic_job_500ms")
+		require.NotContains(t, svc.periodicJobIDs, "periodic_job_500ms_other")
+		require.NotContains(t, svc.periodicJobIDs, "periodic_job_500ms_start")
 
 		require.Len(t, svc.periodicJobIDs, 1)
 		require.Len(t, svc.periodicJobs, 1)

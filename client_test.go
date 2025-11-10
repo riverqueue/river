@@ -5032,6 +5032,97 @@ func Test_Client_Maintenance(t *testing.T) {
 		}
 	})
 
+	t.Run("PeriodicJobEnqueuerRemoveByID", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
+		)
+
+		worker := &periodicJobWorker{}
+		AddWorker(config.Workers, worker)
+
+		client := newTestClient(t, dbPool, config)
+		client.testSignals.Init(t)
+		exec := client.driver.GetExecutor()
+
+		_ = client.PeriodicJobs().AddMany([]*PeriodicJob{
+			NewPeriodicJob(cron.Every(15*time.Minute), func() (JobArgs, *InsertOpts) {
+				return periodicJobArgs{}, nil
+			}, &PeriodicJobOpts{ID: "my_periodic_job_1", RunOnStart: true}),
+			NewPeriodicJob(cron.Every(15*time.Minute), func() (JobArgs, *InsertOpts) {
+				return periodicJobArgs{}, nil
+			}, &PeriodicJobOpts{ID: "my_periodic_job_2", RunOnStart: true}),
+		})
+
+		require.True(t, client.PeriodicJobs().RemoveByID("my_periodic_job_1"))
+		require.False(t, client.PeriodicJobs().RemoveByID("does_not_exist"))
+
+		startClient(ctx, t, client)
+
+		client.testSignals.electedLeader.WaitOrTimeout()
+
+		svc := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
+		svc.TestSignals.EnteredLoop.WaitOrTimeout()
+		svc.TestSignals.InsertedJobs.WaitOrTimeout()
+
+		// Only one periodic job added because one was removed before starting the client.
+		jobs, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{(periodicJobArgs{}).Kind()},
+			Schema: client.config.Schema,
+		})
+		require.NoError(t, err)
+		require.Len(t, jobs, 1)
+	})
+
+	t.Run("PeriodicJobEnqueuerRemoveManyByID", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
+		)
+
+		worker := &periodicJobWorker{}
+		AddWorker(config.Workers, worker)
+
+		client := newTestClient(t, dbPool, config)
+		client.testSignals.Init(t)
+		exec := client.driver.GetExecutor()
+
+		_ = client.PeriodicJobs().AddMany([]*PeriodicJob{
+			NewPeriodicJob(cron.Every(15*time.Minute), func() (JobArgs, *InsertOpts) {
+				return periodicJobArgs{}, nil
+			}, &PeriodicJobOpts{ID: "my_periodic_job_1", RunOnStart: true}),
+			NewPeriodicJob(cron.Every(15*time.Minute), func() (JobArgs, *InsertOpts) {
+				return periodicJobArgs{}, nil
+			}, &PeriodicJobOpts{ID: "my_periodic_job_2", RunOnStart: true}),
+		})
+
+		client.PeriodicJobs().RemoveManyByID([]string{"my_periodic_job_1", "does_not_exist"})
+
+		startClient(ctx, t, client)
+
+		client.testSignals.electedLeader.WaitOrTimeout()
+
+		svc := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
+		svc.TestSignals.EnteredLoop.WaitOrTimeout()
+		svc.TestSignals.InsertedJobs.WaitOrTimeout()
+
+		// Only one periodic job added because one was removed before starting the client.
+		jobs, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{(periodicJobArgs{}).Kind()},
+			Schema: client.config.Schema,
+		})
+		require.NoError(t, err)
+		require.Len(t, jobs, 1)
+	})
+
 	t.Run("PeriodicJobsPanicIfClientNotConfiguredToExecuteJobs", func(t *testing.T) {
 		t.Parallel()
 
