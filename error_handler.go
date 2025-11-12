@@ -13,13 +13,17 @@ type ErrorHandler interface {
 	// HandleError is invoked in case of an error occurring in a job.
 	//
 	// Context is descended from the one used to start the River client that
-	// worked the job.
+	// worked the job. Errors are handled above all middleware, so changes made
+	// to context by a middleware are not available in the context.
 	HandleError(ctx context.Context, job *rivertype.JobRow, err error) *ErrorHandlerResult
 
 	// HandlePanic is invoked in case of a panic occurring in a job.
 	//
 	// Context is descended from the one used to start the River client that
-	// worked the job.
+	// worked the job. Panics are handled above all middleware, so changes made
+	// to context by a middleware are not available in the context (however,
+	// panics can be recovered from in any middleware where middleware context
+	// is available).
 	HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *ErrorHandlerResult
 }
 
