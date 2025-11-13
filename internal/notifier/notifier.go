@@ -25,12 +25,14 @@ const (
 	NotificationTopicControl    NotificationTopic = "river_control"
 	NotificationTopicInsert     NotificationTopic = "river_insert"
 	NotificationTopicLeadership NotificationTopic = "river_leadership"
+	NotificationTopicPeriodic   NotificationTopic = "river_periodic" // "periodic" instead of "periodic_job" because we must keep topic names short
 )
 
 var notificationTopicAll = []NotificationTopic{ //nolint:gochecknoglobals
 	NotificationTopicControl,
 	NotificationTopicInsert,
 	NotificationTopicLeadership,
+	NotificationTopicPeriodic,
 }
 
 // NotificationTopicLongest is just the longest notification topic. This is used
@@ -360,6 +362,8 @@ func (n *Notifier) waitOnce(ctx context.Context) error {
 				return
 			}
 
+			fmt.Printf("--- notifier got notification: %+v\n\n", notification.Payload)
+
 			select {
 			case n.notificationBuf <- notification:
 			default:
@@ -471,6 +475,8 @@ func (n *Notifier) Listen(ctx context.Context, topic NotificationTopic, notifyFu
 	// By the time this function is run (i.e. after an interrupt), a lock on
 	// `n.mu` has been reacquired, and modifying subscription state is safe.
 	removeSub := func() { n.removeSubscription(ctx, sub) }
+
+	fmt.Printf("--- existingTopic: %+v\n\n", existingTopic)
 
 	if !existingTopic {
 		// If already waiting, send an interrupt to the wait function to run a

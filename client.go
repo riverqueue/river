@@ -903,6 +903,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			periodicJobEnqueuer, err := maintenance.NewPeriodicJobEnqueuer(archetype, &maintenance.PeriodicJobEnqueuerConfig{
 				AdvisoryLockPrefix: config.AdvisoryLockPrefix,
 				Insert:             client.insertMany,
+				Notifier:           client.notifier, // may be nil for poll-only driver
 				Pilot:              client.pilot,
 				Schema:             config.Schema,
 			}, driver.GetExecutor())
@@ -2273,6 +2274,78 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 		res.LastCursor = jobListCursorFromJobAndParams(jobs[len(jobs)-1], params)
 	}
 	return res, nil
+}
+
+// NotifyKind is a kind of notification to be sent through Client.Notify.
+type NotifyKind string
+
+// NotifyKindPeriodicJobRemove sends a notification for the current leader to
+// remove a given periodic job by its ID.
+const NotifyKindPeriodicJobRemove NotifyKind = "periodic_job_remove"
+
+// Notify sends a notification of a known kind along with a compatible payload.
+// The payload type is any because it varies based on notification kind.
+//
+// This function should only be used with a driver that supports listen/notify.
+// Sending a notification with no listener available will have no effect.
+//
+// List of current notification types and their expected payloads:
+//
+//   - NotifyKindPeriodicJobRemove should send a plain string payload of a
+//     periodic job ID.
+func (c *Client[TTx]) Notify(ctx context.Context, notifyKind NotifyKind, payload any) error {
+	return dbutil.WithTx(ctx, c.driver.GetExecutor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
+		return c.notifyExecTx(ctx, execTx, notifyKind, payload)
+	})
+}
+
+// NotifyTx sends a notification of a known kind along with a compatible
+// payload. The payload type is any because it varies based on notification
+// kind.
+//
+// This function should only be used with a driver that supports listen/notify.
+// Sending a notification with no listener available will have no effect.
+//
+// This variant sends a notification in a transaction, which means that no
+// notification is sent until the transaction commits.
+func (c *Client[TTx]) NotifyTx(ctx context.Context, tx TTx, notifyKind NotifyKind, payload any) error {
+	return c.notifyExecTx(ctx, c.driver.UnwrapExecutor(tx), notifyKind, payload)
+}
+
+// notifyExecTx is a shared helper between Notify and NotifyTx that sends a
+// notification.
+func (c *Client[TTx]) notifyExecTx(ctx context.Context, execTx riverdriver.ExecutorTx, notifyKind NotifyKind, payload any) error {
+	if !c.driver.SupportsListenNotify() {
+		return errors.New("notify is only supported for drivers that support listen/notify (e.g. pgx, but not database/sql)")
+	}
+
+	var topic string
+	switch notifyKind {
+	case NotifyKindPeriodicJobRemove:
+		periodicJobID, ok := payload.(string)
+		if !ok {
+			return fmt.Errorf("expected payload for %q to be a string representing job ID", notifyKind)
+		}
+
+		payload = &maintenance.PeriodicJobEnquererNotifyPayload{
+			Operation:     maintenance.PeriodicJobEnqueuerNotifyOperationRemove,
+			PeriodicJobID: periodicJobID,
+		}
+		topic = string(notifier.NotificationTopicPeriodic)
+	default:
+		return fmt.Errorf("unknown notify kind: %s", notifyKind)
+	}
+
+	payloadStr, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	return execTx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+		Payload: []string{string(payloadStr)},
+		Schema:  c.config.Schema,
+		Topic:   topic,
+	})
 }
 
 // PeriodicJobs returns the currently configured set of periodic jobs for the

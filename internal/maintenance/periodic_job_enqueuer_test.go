@@ -2,6 +2,7 @@ package maintenance
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/riverqueue/river/internal/dbunique"
+	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
@@ -84,6 +86,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 	ctx := context.Background()
 
 	type testBundle struct {
+		driver               *riverpgxv5.Driver
 		exec                 riverdriver.Executor
 		notificationsByQueue map[string]int
 		pilotMock            *PilotPeriodicJobMock
@@ -154,7 +157,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		)
 
 		bundle := &testBundle{
-			exec:                 riverpgxv5.New(dbPool).GetExecutor(),
+			driver:               driver,
+			exec:                 driver.GetExecutor(),
 			notificationsByQueue: make(map[string]int),
 			pilotMock:            NewPilotPeriodicJobMock(),
 			schema:               schema,
@@ -984,6 +988,50 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		_, err = svc.AddManySafely(periodicJobs)
 		require.EqualError(t, err, "periodic job with ID already registered: periodic_job_100ms")
 	})
+
+	t.Run("NotifyOperationRemove", func(t *testing.T) {
+		t.Parallel()
+
+		svc, bundle := setup(t)
+		svc.Config.Notifier = notifier.New(&svc.Archetype, bundle.driver.GetListener(&riverdriver.GetListenenerParams{Schema: bundle.schema}))
+
+		_, err := svc.AddManySafely([]*PeriodicJob{
+			{ScheduleFunc: periodicIntervalSchedule(100 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_100ms", false)},
+			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
+		})
+		require.NoError(t, err)
+
+		fmt.Printf("--- %+v\n\n", "starting service")
+
+		startService(t, svc)
+
+		fmt.Printf("--- %+v\n\n", "sending notification")
+
+		notify(ctx, t, bundle.schema, bundle.driver.GetExecutor(), notifier.NotificationTopicPeriodic, &PeriodicJobEnquererNotifyPayload{
+			Operation:     PeriodicJobEnqueuerNotifyOperationRemove,
+			PeriodicJobID: "periodic_job_500ms",
+		})
+
+		svc.TestSignals.NotifyProcessed.WaitOrTimeout()
+
+		require.Contains(t, svc.periodicJobIDs, "periodic_job_100ms")
+		require.NotContains(t, svc.periodicJobIDs, "periodic_job_500ms")
+
+		require.Len(t, svc.periodicJobs, 1)
+	})
+}
+
+func notify(ctx context.Context, t *testing.T, schema string, exec riverdriver.Executor, topic notifier.NotificationTopic, payload any) {
+	t.Helper()
+
+	payloadStr, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	require.NoError(t, exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+		Payload: []string{string(payloadStr)},
+		Schema:  schema,
+		Topic:   string(topic),
+	}))
 }
 
 type PilotPeriodicJobMock struct {

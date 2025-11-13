@@ -751,6 +751,40 @@ func Test_Client_Common(t *testing.T) {
 		require.Equal(t, `relation "river_job" does not exist`, pgErr.Message)
 	})
 
+	t.Run("Notify", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		notifiedChan := make(chan struct{})
+
+		sub, err := client.notifier.Listen(ctx, notifier.NotificationTopicPeriodic, func(topic notifier.NotificationTopic, payload string) {
+			require.Equal(t, notifier.NotificationTopicPeriodic, topic)
+			require.Equal(t, ``, payload)
+			notifiedChan <- struct{}{}
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { sub.Unlisten(ctx) })
+
+		sub2, err := client.notifier.Listen(ctx, "my_topic", func(topic notifier.NotificationTopic, payload string) {
+			require.Equal(t, notifier.NotificationTopicPeriodic, topic)
+			require.Equal(t, ``, payload)
+			notifiedChan <- struct{}{}
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { sub2.Unlisten(ctx) })
+
+		fmt.Printf("--- manual notify: %s.%s\n\n", bundle.schema, "my_topic")
+
+		require.NoError(t, client.driver.GetExecutor().Exec(ctx, fmt.Sprintf("SELECT pg_notify('%s.%s', 'foo')", bundle.schema, "my_topic")))
+
+		client.driver.GetExecutor().NotifyMany(ctx, &riverdriver.NotifyManyParams{Topic: "my_topic", Payload: []string{"foo"}, Schema: bundle.schema})
+
+		require.NoError(t, client.Notify(ctx, NotifyKindPeriodicJobRemove, "my_periodic_job"))
+
+		riversharedtest.WaitOrTimeout(t, notifiedChan)
+	})
+
 	t.Run("WithGlobalInsertBeginHook", func(t *testing.T) {
 		t.Parallel()
 

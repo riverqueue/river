@@ -2,14 +2,18 @@ package maintenance
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/tidwall/sjson"
 
+	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -32,6 +36,7 @@ var ErrNoJobToInsert = errors.New("a nil job was returned, nothing to insert")
 type PeriodicJobEnqueuerTestSignals struct {
 	EnteredLoop                 testsignal.TestSignal[struct{}] // notifies when the enqueuer finishes start up and enters its initial run loop
 	InsertedJobs                testsignal.TestSignal[struct{}] // notifies when a batch of jobs is inserted
+	NotifyProcessed             testsignal.TestSignal[struct{}] // notifies after a listen/notify notification has been processed
 	PeriodicJobKeepAliveAndReap testsignal.TestSignal[struct{}] // notifies when the background services that runs keep alive and reap on periodic jobs ticks
 	PeriodicJobUpserted         testsignal.TestSignal[struct{}] // notifies when a batch of periodic job records are upserted to pilot
 	SkippedJob                  testsignal.TestSignal[struct{}] // notifies when a job is skipped because of nil JobInsertParams
@@ -40,6 +45,7 @@ type PeriodicJobEnqueuerTestSignals struct {
 func (ts *PeriodicJobEnqueuerTestSignals) Init(tb testutil.TestingTB) {
 	ts.EnteredLoop.Init(tb)
 	ts.InsertedJobs.Init(tb)
+	ts.NotifyProcessed.Init(tb)
 	ts.PeriodicJobKeepAliveAndReap.Init(tb)
 	ts.PeriodicJobUpserted.Init(tb)
 	ts.SkippedJob.Init(tb)
@@ -91,6 +97,10 @@ type PeriodicJobEnqueuerConfig struct {
 	// Insert is the function to call to insert jobs into the database.
 	Insert InsertFunc
 
+	// Notifier is a listen/notify listener for subscribing to global job
+	// removals.
+	Notifier *notifier.Notifier
+
 	// PeriodicJobs are the periodic jobs with which to configure the enqueuer.
 	PeriodicJobs []*PeriodicJob
 
@@ -106,6 +116,15 @@ func (c *PeriodicJobEnqueuerConfig) mustValidate() *PeriodicJobEnqueuerConfig {
 	// no validations currently
 	return c
 }
+
+type PeriodicJobEnquererNotifyPayload struct {
+	Operation     PeriodicJobEnqueuerNotifyOperation `json:"operation"`
+	PeriodicJobID string                             `json:"periodic_job_id"`
+}
+
+type PeriodicJobEnqueuerNotifyOperation string
+
+const PeriodicJobEnqueuerNotifyOperationRemove PeriodicJobEnqueuerNotifyOperation = "remove"
 
 // PeriodicJobEnqueuer inserts jobs configured to run periodically as unique
 // jobs to make sure they'll run as frequently as their period dictates.
@@ -156,6 +175,7 @@ func NewPeriodicJobEnqueuer(archetype *baseservice.Archetype, config *PeriodicJo
 		Config: (&PeriodicJobEnqueuerConfig{
 			AdvisoryLockPrefix: config.AdvisoryLockPrefix,
 			Insert:             config.Insert,
+			Notifier:           config.Notifier,
 			PeriodicJobs:       config.PeriodicJobs,
 			Pilot:              pilot,
 			Schema:             config.Schema,
@@ -311,7 +331,52 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 		startstop.StartStopFunc(s.periodicJobKeepAliveAndReapPeriodically),
 	}
 	if err := startstop.StartAll(ctx, subServices...); err != nil {
+		stopped()
 		return err
+	}
+
+	var controlSub *notifier.Subscription
+	if s.Config.Notifier != nil {
+		handleNotification := func(payloadStr string) error {
+			var payload PeriodicJobEnquererNotifyPayload
+			if err := json.Unmarshal([]byte(payloadStr), &payload); err != nil {
+				return err
+			}
+
+			fmt.Printf("--- %+v\n\n", "GOT NOTIFICATION")
+
+			switch payload.Operation {
+			case PeriodicJobEnqueuerNotifyOperationRemove:
+				s.RemoveByID(payload.PeriodicJobID)
+
+			default:
+				return fmt.Errorf("unknown periodic job operation: %s", payload.Operation)
+			}
+
+			s.TestSignals.NotifyProcessed.Signal(struct{}{})
+
+			return nil
+		}
+
+		fmt.Printf("--- %+v\n\n", "notifier.NotificationTopicPeriodicJob created subscription")
+
+		var err error
+		controlSub, err = s.Config.Notifier.Listen(ctx, notifier.NotificationTopicPeriodic, func(_ notifier.NotificationTopic, payloadStr string) {
+			fmt.Printf("--- %+v\n\n", "got notification")
+
+			if err := handleNotification(payloadStr); err != nil {
+				s.Logger.ErrorContext(ctx, s.Name+": Error handling notification", slog.Any("error", err))
+			}
+		})
+		if err != nil {
+			fmt.Printf("--- listen err: %+v\n\n", err)
+
+			stopped()
+			if strings.HasSuffix(err.Error(), "conn closed") || errors.Is(err, context.Canceled) {
+				return nil
+			}
+			return err
+		}
 	}
 
 	go func() {
@@ -322,6 +387,10 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 		defer s.Logger.DebugContext(ctx, s.Name+riversharedmaintenance.LogPrefixRunLoopStopped)
 
 		defer startstop.StopAllParallel(subServices...)
+
+		if controlSub != nil {
+			defer controlSub.Unlisten(ctx)
+		}
 
 		// Drain the signal to recalculate next run if it's been sent (i.e. Add
 		// or AddMany called before Start). We're about to schedule jobs from
