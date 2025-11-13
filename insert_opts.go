@@ -114,7 +114,7 @@ type UniqueOpts struct {
 	//
 	// 	type MyJobArgs struct {
 	// 		CustomerID string `json:"customer_id" river:"unique"`
-	// 		TraceID string `json:"trace_id"
+	// 		TraceID    string `json:"trace_id"
 	// 	}
 	//
 	// In this example, only the encoded `customer_id` key will be included in the
@@ -122,6 +122,40 @@ type UniqueOpts struct {
 	//
 	// All keys are sorted alphabetically before hashing to ensure consistent
 	// results.
+	//
+	// River recurses into embedded structs and fields with struct values and
+	// looks for `river:"unique"` annotations on them as well:
+	//
+	// 	type MyJobArgs struct {
+	// 		Customer *Customer `json:"customer"`
+	// 		TraceID  string    `json:"trace_id"
+	// 	}
+	//
+	// 	type Customer struct {
+	// 		ID string `json:"id" river:"unique"`
+	// 	}
+	//
+	// In this example, the `id` value inside a `customer` subboject is used in
+	// the uniqueness check. It'd be the same story if Customer was embedded on
+	// MyJobArgs instead:
+	//
+	// 	type MyJobArgs struct {
+	// 		Customer
+	// 		TraceID string `json:"trace_id"
+	// 	}
+	//
+	// If the struct field itself has a `river:"unique"` annotation, but none on
+	// any fields in the substruct, then the entire JSON encoded value of the
+	// struct is used as a unique value:
+	//
+	// 	type MyJobArgs struct {
+	// 		Customer *Customer `json:"customer" river:"unique"`
+	// 		TraceID  string    `json:"trace_id"
+	// 	}
+	//
+	// 	type Customer struct {
+	// 		ID string `json:"id"`
+	// 	}
 	ByArgs bool
 
 	// ByPeriod defines uniqueness within a given period. On an insert time is

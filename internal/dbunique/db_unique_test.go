@@ -123,6 +123,192 @@ func TestUniqueKey(t *testing.T) {
 			expectedJSON: `&kind=worker_1&args={"recipient":"john@example.com","subject":"Another Test Email"}`,
 		},
 		{
+			name: "ByArgsWithSubstructNonPointer",
+			argsFunc: func() rivertype.JobArgs {
+				type EmailAddresses struct {
+					Recipient string `json:"recipient" river:"unique"`
+					BCC       string `json:"bcc"`
+				}
+				type EmailJobArgs struct {
+					JobArgsStaticKind
+
+					Addresses EmailAddresses `json:"addresses"`
+					Subject   string         `json:"subject"   river:"unique"`
+					Body      string         `json:"body"`
+				}
+				return &EmailJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_1"},
+					Addresses: EmailAddresses{
+						Recipient: "john@example.com",
+					},
+					Subject: "Another Test Email",
+					Body:    "This is another test email.",
+				}
+			},
+			uniqueOpts:   UniqueOpts{ByArgs: true},
+			expectedJSON: `&kind=worker_1&args={"addresses":{"recipient":"john@example.com"},"subject":"Another Test Email"}`,
+		},
+		{
+			name: "ByArgsWithSubstructPointer",
+			argsFunc: func() rivertype.JobArgs {
+				type EmailAddresses struct {
+					Recipient string `json:"recipient" river:"unique"`
+					BCC       string `json:"bcc"`
+				}
+				type EmailJobArgs struct {
+					JobArgsStaticKind
+
+					Addresses *EmailAddresses `json:"addresses"`
+					Subject   string          `json:"subject"   river:"unique"`
+					Body      string          `json:"body"`
+				}
+				return &EmailJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_1"},
+					Addresses: &EmailAddresses{
+						Recipient: "john@example.com",
+					},
+					Subject: "Another Test Email",
+					Body:    "This is another test email.",
+				}
+			},
+			uniqueOpts:   UniqueOpts{ByArgs: true},
+			expectedJSON: `&kind=worker_1&args={"addresses":{"recipient":"john@example.com"},"subject":"Another Test Email"}`,
+		},
+		{
+			name: "ByArgsWithEmbeddedSubstruct",
+			argsFunc: func() rivertype.JobArgs {
+				type EmailAddresses struct {
+					Recipient string `json:"recipient" river:"unique"`
+					BCC       string `json:"bcc"`
+				}
+				type EmailJobArgs struct {
+					EmailAddresses
+					JobArgsStaticKind
+
+					Subject string `json:"subject" river:"unique"`
+					Body    string `json:"body"`
+				}
+				return &EmailJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_1"},
+					EmailAddresses: EmailAddresses{
+						Recipient: "john@example.com",
+					},
+					Subject: "Another Test Email",
+					Body:    "This is another test email.",
+				}
+			},
+			uniqueOpts:   UniqueOpts{ByArgs: true},
+			expectedJSON: `&kind=worker_1&args={"recipient":"john@example.com","subject":"Another Test Email"}`,
+		},
+		{
+			name: "ByArgsWithSubstructTagged",
+			argsFunc: func() rivertype.JobArgs {
+				type EmailAddresses struct {
+					Recipient string `json:"recipient" river:"unique"`
+					BCC       string `json:"bcc"`
+				}
+				type EmailJobArgs struct {
+					JobArgsStaticKind
+
+					Addresses EmailAddresses `json:"addresses" river:"unique"`
+					Subject   string         `json:"subject"   river:"unique"`
+					Body      string         `json:"body"`
+				}
+				return &EmailJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_1"},
+					Addresses: EmailAddresses{
+						Recipient: "john@example.com",
+					},
+					Subject: "Another Test Email",
+					Body:    "This is another test email.",
+				}
+			},
+			uniqueOpts:   UniqueOpts{ByArgs: true},
+			expectedJSON: `&kind=worker_1&args={"addresses":{"recipient":"john@example.com"},"subject":"Another Test Email"}`,
+		},
+		{
+			name: "ByArgsWithAllSubstructUntagged",
+			argsFunc: func() rivertype.JobArgs {
+				type EmailAddresses struct {
+					Recipient string `json:"recipient"`
+					BCC       string `json:"bcc"`
+				}
+				type EmailJobArgs struct {
+					JobArgsStaticKind
+
+					Addresses *EmailAddresses `json:"addresses" river:"unique"`
+					Subject   string          `json:"subject"   river:"unique"`
+					Body      string          `json:"body"`
+				}
+				return &EmailJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_1"},
+					Addresses: &EmailAddresses{
+						Recipient: "john@example.com",
+					},
+					Subject: "Another Test Email",
+					Body:    "This is another test email.",
+				}
+			},
+			uniqueOpts:   UniqueOpts{ByArgs: true},
+			expectedJSON: `&kind=worker_1&args={"addresses":{"recipient":"john@example.com","bcc":""},"subject":"Another Test Email"}`,
+		},
+		{
+			name: "ByArgsWithMultiLevelSubstructPointer",
+			argsFunc: func() rivertype.JobArgs {
+				type EmailAddresses struct {
+					Recipient string `json:"recipient" river:"unique"`
+				}
+				type EmailHeaders struct {
+					Addresses *EmailAddresses `json:"addresses" river:"unique"`
+					Subject   string          `json:"subject"   river:"unique"`
+				}
+				type EmailJobArgs struct {
+					JobArgsStaticKind
+
+					Headers *EmailHeaders `json:"headers" river:"unique"`
+					Body    string        `json:"body"`
+				}
+				return &EmailJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_1"},
+					Headers: &EmailHeaders{
+						Addresses: &EmailAddresses{
+							Recipient: "john@example.com",
+						},
+						Subject: "Another Test Email",
+					},
+					Body: "This is another test email.",
+				}
+			},
+			uniqueOpts:   UniqueOpts{ByArgs: true},
+			expectedJSON: `&kind=worker_1&args={"headers":{"addresses":{"recipient":"john@example.com"},"subject":"Another Test Email"}}`,
+		},
+		{
+			name: "ByArgsUnexportedSkipped",
+			argsFunc: func() rivertype.JobArgs {
+				type EmailAddresses struct {
+					Recipient string `json:"recipient" river:"unique"`
+					BCC       string `json:"bcc"`
+				}
+				type EmailJobArgs struct {
+					JobArgsStaticKind
+
+					Subject   string `json:"subject" river:"unique"`
+					Body      string `json:"body"`
+					addresses EmailAddresses
+				}
+				return &EmailJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_1"},
+					Subject:           "Another Test Email",
+					Body:              "This is another test email.",
+					addresses: EmailAddresses{
+						Recipient: "john@example.com",
+					},
+				}
+			},
+			uniqueOpts:   UniqueOpts{ByArgs: true},
+			expectedJSON: `&kind=worker_1&args={"subject":"Another Test Email"}`,
+		},
+		{
 			name: "ByArgsWithNoUniqueFields",
 			argsFunc: func() rivertype.JobArgs {
 				type GenericJobArgs struct {

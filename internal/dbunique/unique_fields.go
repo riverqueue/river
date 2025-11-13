@@ -42,9 +42,7 @@ func extractUniqueValues(encodedArgs []byte, uniqueKeys []string) []string {
 // getSortedUniqueFields uses reflection to retrieve the JSON keys of fields
 // marked with `river:"unique"` among potentially other comma-separated values.
 // The return values are the JSON keys using the same logic as the `json` struct tag.
-func getSortedUniqueFields(args rivertype.JobArgs) ([]string, error) {
-	typ := reflect.TypeOf(args)
-
+func getSortedUniqueFields(typ reflect.Type, path []string) ([]string, error) {
 	// Handle pointer to struct
 	if typ != nil && typ.Kind() == reflect.Ptr {
 		typ = typ.Elem()
@@ -52,7 +50,7 @@ func getSortedUniqueFields(args rivertype.JobArgs) ([]string, error) {
 
 	// Ensure we're dealing with a struct
 	if typ == nil || typ.Kind() != reflect.Struct {
-		return nil, fmt.Errorf("expected struct, got %T", args)
+		return nil, fmt.Errorf("expected struct, got %T", typ.Name())
 	}
 
 	var uniqueFields []string
@@ -61,25 +59,65 @@ func getSortedUniqueFields(args rivertype.JobArgs) ([]string, error) {
 	for i := range typ.NumField() {
 		field := typ.Field(i)
 
+		if !field.IsExported() {
+			continue
+		}
+
+		if field.Anonymous {
+			uniqueSubFields, err := getSortedUniqueFields(field.Type, path)
+			if err != nil {
+				return nil, err
+			}
+			uniqueFields = append(uniqueFields, uniqueSubFields...)
+
+			continue
+		}
+
+		var uniqueName string
+		{
+			// Get the corresponding JSON key
+			jsonTag := field.Tag.Get("json")
+
+			if jsonTag == "" {
+				// If no JSON tag, use the field name as-is
+				uniqueName = field.Name
+			} else {
+				// Handle cases like `json:"recipient,omitempty"`
+				uniqueName = parseJSONTag(jsonTag)
+			}
+		}
+
 		// Check for `river:"unique"` tag, possibly among other comma-separated values
+		var hasUniqueTag bool
 		if riverTag, ok := field.Tag.Lookup("river"); ok {
-			// Split riverTag by comma
 			tags := strings.Split(riverTag, ",")
 			for _, tag := range tags {
 				if strings.TrimSpace(tag) == "unique" {
-					// Get the corresponding JSON key
-					jsonTag := field.Tag.Get("json")
-					if jsonTag == "" {
-						// If no JSON tag, use the field name as-is
-						uniqueFields = append(uniqueFields, field.Name)
-					} else {
-						// Handle cases like `json:"recipient,omitempty"`
-						jsonKey := parseJSONTag(jsonTag)
-						uniqueFields = append(uniqueFields, jsonKey)
-					}
-					break // No need to check other tags once "unique" is found
+					hasUniqueTag = true
 				}
 			}
+		}
+
+		if field.Type.Kind() == reflect.Struct || field.Type.Kind() == reflect.Ptr && field.Type.Elem().Kind() == reflect.Struct {
+			uniqueSubFields, err := getSortedUniqueFields(field.Type, append(path, uniqueName))
+			if err != nil {
+				return nil, err
+			}
+			if len(uniqueSubFields) > 0 {
+				uniqueFields = append(uniqueFields, uniqueSubFields...)
+			} else if hasUniqueTag {
+				// If a struct field is marked `river:"unique"`, use its entire
+				// JSON serialization as a unique value. This may not be the
+				// greatest idea practically, but keeping it in place for
+				// backwards compatibility.
+				uniqueFields = append(uniqueFields, strings.Join(append(path, uniqueName), "."))
+			}
+
+			continue
+		}
+
+		if hasUniqueTag {
+			uniqueFields = append(uniqueFields, strings.Join(append(path, uniqueName), "."))
 		}
 	}
 
@@ -103,7 +141,7 @@ func getSortedUniqueFieldsCached(args rivertype.JobArgs) ([]string, error) {
 	cacheMutex.RUnlock()
 
 	// Not in cache; retrieve using reflection
-	fields, err := getSortedUniqueFields(args)
+	fields, err := getSortedUniqueFields(reflect.TypeOf(args), nil)
 	if err != nil {
 		return nil, err
 	}
