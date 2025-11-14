@@ -907,6 +907,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		{
 			periodicJobEnqueuer, err := maintenance.NewPeriodicJobEnqueuer(archetype, &maintenance.PeriodicJobEnqueuerConfig{
 				AdvisoryLockPrefix: config.AdvisoryLockPrefix,
+				HookLookupGlobal:   client.hookLookupGlobal,
 				Insert:             client.insertMany,
 				Pilot:              client.pilot,
 				Schema:             config.Schema,
@@ -1042,7 +1043,11 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		// We use separate contexts for fetching and working to allow for a graceful
 		// stop. Both inherit from the provided context, so if it's cancelled, a
 		// more aggressive stop will be initiated.
-		workCtx, workCancel := context.WithCancelCause(withClient(ctx, c))
+		workCtx, workCancel := context.WithCancelCause(ctx)
+
+		// Client available to executors and to various service hooks.
+		fetchCtx := withClient(fetchCtx, c)
+		workCtx = withClient(workCtx, c)
 
 		if err := startstop.StartAll(fetchCtx, c.services...); err != nil {
 			workCancel(err)

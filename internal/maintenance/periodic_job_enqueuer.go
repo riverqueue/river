@@ -10,6 +10,7 @@ import (
 
 	"github.com/tidwall/sjson"
 
+	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -88,6 +89,8 @@ type InsertFunc func(ctx context.Context, tx riverdriver.ExecutorTx, insertParam
 type PeriodicJobEnqueuerConfig struct {
 	AdvisoryLockPrefix int32
 
+	HookLookupGlobal hooklookup.HookLookupInterface
+
 	// Insert is the function to call to insert jobs into the database.
 	Insert InsertFunc
 
@@ -147,6 +150,11 @@ func NewPeriodicJobEnqueuer(archetype *baseservice.Archetype, config *PeriodicJo
 		nextHandle++
 	}
 
+	hookLookupGlobal := config.HookLookupGlobal
+	if hookLookupGlobal == nil {
+		hookLookupGlobal = hooklookup.NewHookLookup([]rivertype.Hook{})
+	}
+
 	pilot := config.Pilot
 	if pilot == nil {
 		pilot = &riverpilot.StandardPilot{}
@@ -155,6 +163,7 @@ func NewPeriodicJobEnqueuer(archetype *baseservice.Archetype, config *PeriodicJo
 	svc := baseservice.Init(archetype, &PeriodicJobEnqueuer{
 		Config: (&PeriodicJobEnqueuerConfig{
 			AdvisoryLockPrefix: config.AdvisoryLockPrefix,
+			HookLookupGlobal:   hookLookupGlobal,
 			Insert:             config.Insert,
 			PeriodicJobs:       config.PeriodicJobs,
 			Pilot:              pilot,
@@ -309,6 +318,23 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 
 	s.StaggerStart(ctx)
 
+	initialPeriodicJobs, err := s.Config.Pilot.PeriodicJobGetAll(ctx, s.exec, &riverpilot.PeriodicJobGetAllParams{
+		Schema: s.Config.Schema,
+	})
+	if err != nil {
+		return err
+	}
+
+	for _, hook := range s.Config.HookLookupGlobal.ByHookKind(hooklookup.HookKindPeriodicJobsStart) {
+		if err := hook.(rivertype.HookPeriodicJobsStart).Start(ctx, &rivertype.HookPeriodicJobsStartParams{ //nolint:forcetypeassert
+			DurableJobs: sliceutil.Map(initialPeriodicJobs, func(job *riverpilot.PeriodicJob) *rivertype.DurablePeriodicJob {
+				return (*rivertype.DurablePeriodicJob)(job)
+			}),
+		}); err != nil {
+			return err
+		}
+	}
+
 	subServices := []startstop.Service{
 		startstop.StartStopFunc(s.periodicJobKeepAliveAndReapPeriodically),
 	}
@@ -340,18 +366,8 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 
 		// Initial set of periodic job IDs mapped to next run at times fetched
 		// from a configured pilot. Not used in most cases.
-		initialPeriodicJobsMap := func() map[string]time.Time {
-			initialPeriodicJobs, err := s.Config.Pilot.PeriodicJobGetAll(ctx, s.exec, &riverpilot.PeriodicJobGetAllParams{
-				Schema: s.Config.Schema,
-			})
-			if err != nil {
-				s.Logger.ErrorContext(ctx, s.Name+": Error fetching initial periodic jobs", "error", err)
-				return make(map[string]time.Time)
-			}
-
-			return sliceutil.KeyBy(initialPeriodicJobs,
-				func(j *riverpilot.PeriodicJob) (string, time.Time) { return j.ID, j.NextRunAt })
-		}()
+		initialPeriodicJobsMap := sliceutil.KeyBy(initialPeriodicJobs,
+			func(j *riverpilot.PeriodicJob) (string, time.Time) { return j.ID, j.NextRunAt })
 
 		var lastHandleSeen rivertype.PeriodicJobHandle = -1 // so handle 0 is considered
 
