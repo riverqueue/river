@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Periodic jobs with IDs may now be removed by ID using the new `PeriodicJobBundle.RemoveByID` and `PeriodicJobBundle.RemoveManyByID`. [PR #1071](https://github.com/riverqueue/river/pull/1071).
 
+### Changed
+
+- Decrease `serviceutil.MaxAttemptsBeforeResetDefault` from 10 to 7, lowering the effective limit on most internal exponential backoffs from ~512 seconds to 64 seconds. Further lowered the leader elector's keep leadership backoff interval to cap out at 4 seconds since leadership without a successful heartbeat will be lost soon after that anyway. [PR #1079](https://github.com/riverqueue/river/pull/1079).
+
 ### Fixed
 
 - Fix snoozed events emitted from `rivertest.Worker` when snooze duration is zero seconds. [PR #1057](https://github.com/riverqueue/river/pull/1057).

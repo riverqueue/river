@@ -44,7 +44,9 @@ func CancellableSleepC(ctx context.Context, sleepDuration time.Duration) <-chan 
 // into a ridiculously distant future. This constant is typically injected into
 // the CancellableSleepExponentialBackoff function. It could technically take
 // another value instead, but shouldn't unless there's a good reason to do so.
-const MaxAttemptsBeforeResetDefault = 10
+//
+// The value of 7 corresponds to a max sleep duration of 64 seconds ±10% jitter.
+const MaxAttemptsBeforeResetDefault = 7
 
 // ExponentialBackoff returns a duration for a reasonable exponential backoff
 // interval for a service based on the given attempt number, which can then be
@@ -52,6 +54,15 @@ const MaxAttemptsBeforeResetDefault = 10
 // +/- 10% random jitter. Sleep is cancelled if the given context is cancelled.
 //
 // Attempt should start at one for the first backoff/failure.
+//
+// Backoff values when using MaxAttemptsBeforeResetDefault are:
+// - 1s
+// - 2s
+// - 4s
+// - 8s
+// - 16s
+// - 32s
+// - 64s
 func ExponentialBackoff(attempt, maxAttemptsBeforeReset int) time.Duration {
 	retrySeconds := exponentialBackoffSecondsWithoutJitter(attempt, maxAttemptsBeforeReset)
 

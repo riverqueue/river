@@ -349,7 +349,7 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 				return err
 			}
 
-			sleepDuration := serviceutil.ExponentialBackoff(numErrors, serviceutil.MaxAttemptsBeforeResetDefault)
+			sleepDuration := serviceutil.ExponentialBackoff(numErrors, 3)
 			e.Logger.ErrorContext(ctx, e.Name+": Error attempting reelection", e.errorSlogArgs(err, numErrors, sleepDuration)...)
 			serviceutil.CancellableSleep(ctx, sleepDuration)
 			continue
@@ -387,7 +387,7 @@ func (e *Elector) attemptResignLoop(ctx context.Context) {
 
 	for attempt := 1; attempt <= maxNumErrors; attempt++ {
 		if err := e.attemptResign(ctx, attempt); err != nil {
-			sleepDuration := serviceutil.ExponentialBackoff(attempt, serviceutil.MaxAttemptsBeforeResetDefault)
+			sleepDuration := serviceutil.ExponentialBackoff(attempt, maxNumErrors)
 			e.Logger.ErrorContext(ctx, e.Name+": Error attempting to resign", e.errorSlogArgs(err, attempt, sleepDuration)...)
 			serviceutil.CancellableSleep(ctx, sleepDuration)
 

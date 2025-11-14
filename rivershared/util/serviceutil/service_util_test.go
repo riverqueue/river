@@ -77,6 +77,8 @@ func TestExponentialBackoff(t *testing.T) {
 	require.InDelta(t, 8.0, ExponentialBackoff(4, MaxAttemptsBeforeResetDefault).Seconds(), 8.0*0.1)
 	require.InDelta(t, 16.0, ExponentialBackoff(5, MaxAttemptsBeforeResetDefault).Seconds(), 16.0*0.1)
 	require.InDelta(t, 32.0, ExponentialBackoff(6, MaxAttemptsBeforeResetDefault).Seconds(), 32.0*0.1)
+	require.InDelta(t, 64.0, ExponentialBackoff(7, MaxAttemptsBeforeResetDefault).Seconds(), 64.0*0.1)
+	require.InDelta(t, 1.0, ExponentialBackoff(8, MaxAttemptsBeforeResetDefault).Seconds(), 1.0*0.1)
 }
 
 func TestExponentialBackoffSecondsWithoutJitter(t *testing.T) {
@@ -89,8 +91,5 @@ func TestExponentialBackoffSecondsWithoutJitter(t *testing.T) {
 	require.Equal(t, 16, int(exponentialBackoffSecondsWithoutJitter(5, MaxAttemptsBeforeResetDefault)))
 	require.Equal(t, 32, int(exponentialBackoffSecondsWithoutJitter(6, MaxAttemptsBeforeResetDefault)))
 	require.Equal(t, 64, int(exponentialBackoffSecondsWithoutJitter(7, MaxAttemptsBeforeResetDefault)))
-	require.Equal(t, 128, int(exponentialBackoffSecondsWithoutJitter(8, MaxAttemptsBeforeResetDefault)))
-	require.Equal(t, 256, int(exponentialBackoffSecondsWithoutJitter(9, MaxAttemptsBeforeResetDefault)))
-	require.Equal(t, 512, int(exponentialBackoffSecondsWithoutJitter(10, MaxAttemptsBeforeResetDefault)))
-	require.Equal(t, 1, int(exponentialBackoffSecondsWithoutJitter(11, MaxAttemptsBeforeResetDefault))) // resets
+	require.Equal(t, 1, int(exponentialBackoffSecondsWithoutJitter(8, MaxAttemptsBeforeResetDefault))) // resets
 }
