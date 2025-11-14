@@ -112,6 +112,8 @@ type PilotPeriodicJob interface {
 	PeriodicJobUpsertMany(ctx context.Context, exec riverdriver.Executor, params *PeriodicJobUpsertManyParams) ([]*PeriodicJob, error)
 }
 
+// TODO: Get rid of this in favor of rivertype.PeriodicJob the next time we're
+// making River <-> River Pro API contract changes.
 type PeriodicJob struct {
 	ID        string
 	CreatedAt time.Time

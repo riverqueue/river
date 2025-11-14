@@ -323,6 +323,34 @@ type HookInsertBegin interface {
 	InsertBegin(ctx context.Context, params *JobInsertParams) error
 }
 
+// HookPeriodicJobsStart is an interface to a hook that runs when the periodic
+// job enqueuer starts on a newly elected leader.
+type HookPeriodicJobsStart interface {
+	Hook
+
+	// Start is invoked when the periodic job enqueuer starts on a newly elected
+	// leader.
+	//
+	// Returning an error will cancel the periodic job enqueuer's start up
+	// routine. Be very careful with this because if the error is chronic, it
+	// will prevent any client from successfully starting as leader, thereby
+	// effectively disabling all maintenance services.
+	Start(ctx context.Context, params *HookPeriodicJobsStartParams) error
+}
+
+// HookPeriodicJobsStartParams are parameters for HookPeriodicJobsStart.
+type HookPeriodicJobsStartParams struct {
+	// DurableJobs contains a list of durable periodic job records that
+	// were found in the database. This includes durable jobs that have been
+	// recently active in an elected periodic job enqueuer, but may also contain
+	// jobs that've been previously removed, but for which their database record
+	// has not yet been reaped.
+	//
+	// This property will be empty unless durable jobs (a pro feature) are
+	// enabled.
+	DurableJobs []*DurablePeriodicJob
+}
+
 // HookWorkBegin is an interface to a hook that runs after a job has been locked
 // for work and before it's worked.
 type HookWorkBegin interface {
@@ -450,6 +478,21 @@ type WorkerMiddleware interface {
 	// Returning an error from this function will fail the overarching work
 	// operation, even if the inner work originally succeeded.
 	Work(ctx context.Context, job *JobRow, doInner func(context.Context) error) error
+}
+
+// DurablePeriodicJob represents a durable periodic job.
+type DurablePeriodicJob struct {
+	// ID is a unique identifier for the durable periodic job.
+	ID string
+
+	// CreatedAt is when the database record was created.
+	CreatedAt time.Time
+
+	// NextRunAt is when the periodic job is next scheduled to run.
+	NextRunAt time.Time
+
+	// UpdatedAt is when the database record was last updated.
+	UpdatedAt time.Time
 }
 
 // PeriodicJobHandle is a reference to a dynamically added periodic job

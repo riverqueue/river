@@ -2,7 +2,10 @@ package maintenance
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +15,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/riverqueue/river/internal/dbunique"
+	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
@@ -985,6 +989,154 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		_, err = svc.AddManySafely(periodicJobs)
 		require.EqualError(t, err, "periodic job with ID already registered: periodic_job_100ms")
 	})
+
+	t.Run("PeriodicJobsStartHookNoDurableJobs", func(t *testing.T) {
+		t.Parallel()
+
+		svc, _ := setup(t)
+
+		_, err := svc.AddManySafely([]*PeriodicJob{
+			{ID: "periodic_job_10s", ScheduleFunc: periodicIntervalSchedule(10 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_10s", false)},
+			{ID: "periodic_job_50s", ScheduleFunc: periodicIntervalSchedule(50 * time.Second), ConstructorFunc: jobConstructorFunc("periodic_job_50s", false)},
+		})
+		require.NoError(t, err)
+
+		var periodicJobsStartHookCalled bool
+		svc.Config.HookLookupGlobal = hooklookup.NewHookLookup([]rivertype.Hook{
+			HookPeriodicJobsStartFunc(func(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error {
+				periodicJobsStartHookCalled = true
+
+				require.Empty(t, params.DurableJobs)
+
+				require.True(t, svc.RemoveByID("periodic_job_10s"))
+				require.True(t, svc.RemoveByID("periodic_job_50s"))
+
+				_, err := svc.AddManySafely([]*PeriodicJob{
+					{
+						ID:              "periodic_job_10s",
+						ConstructorFunc: jobConstructorFunc("periodic_job_10s", false),
+						RunOnStart:      true,
+						ScheduleFunc:    periodicIntervalSchedule(10 * time.Second),
+					},
+					{
+						ID:              "periodic_job_50s",
+						ConstructorFunc: jobConstructorFunc("periodic_job_50s", false),
+						ScheduleFunc:    periodicIntervalSchedule(50 * time.Second),
+					},
+				})
+				require.NoError(t, err)
+
+				return nil
+			}),
+		})
+
+		startService(t, svc)
+
+		svc.TestSignals.InsertedJobs.WaitOrTimeout() // this works because `periodic_job_10s` is RunOnStart
+
+		require.True(t, periodicJobsStartHookCalled)
+
+		require.Contains(t, svc.periodicJobIDs, "periodic_job_10s")
+		require.Contains(t, svc.periodicJobIDs, "periodic_job_50s")
+
+		require.Len(t, svc.periodicJobIDs, 2)
+	})
+
+	t.Run("PeriodicJobsStartHookWithDurableJobs", func(t *testing.T) {
+		t.Parallel()
+
+		svc, bundle := setup(t)
+
+		_, err := svc.AddManySafely([]*PeriodicJob{
+			{ID: "periodic_job_10s", ScheduleFunc: periodicIntervalSchedule(100 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_10s", false)},
+			{ID: "periodic_job_50s", ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_50s", false)},
+		})
+		require.NoError(t, err)
+
+		now := time.Now()
+
+		bundle.pilotMock.PeriodicJobGetAllMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobGetAllParams) ([]*riverpilot.PeriodicJob, error) {
+			require.Equal(t, bundle.schema, params.Schema)
+			return []*riverpilot.PeriodicJob{
+				{ID: "periodic_job_10s", NextRunAt: now.Add(-1 * time.Second)}, // will run immediately so we can wait on a test signal
+				{ID: "periodic_job_50s", NextRunAt: now.Add(5 * time.Hour)},
+			}, nil
+		}
+
+		var periodicJobsStartHookCalled bool
+		svc.Config.HookLookupGlobal = hooklookup.NewHookLookup([]rivertype.Hook{
+			HookPeriodicJobsStartFunc(func(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error {
+				periodicJobsStartHookCalled = true
+
+				svc.Clear()
+
+				durationRE := regexp.MustCompile(`([0-9]+)s\z`)
+
+				for _, durableJob := range params.DurableJobs {
+					// Match should look like: [[10s 100]]
+					matches := durationRE.FindAllStringSubmatch(durableJob.ID, 1)
+					require.Len(t, matches, 1, "Couldn't extract a second duration from: %s", durableJob.ID)
+					require.Len(t, matches[0], 2)
+
+					msStr := matches[0][1]
+
+					msInt, err := strconv.Atoi(msStr)
+					require.NoError(t, err)
+
+					_, err = svc.AddSafely(&PeriodicJob{
+						ID:              durableJob.ID,
+						ConstructorFunc: jobConstructorFunc(durableJob.ID, false),
+						ScheduleFunc:    periodicIntervalSchedule(time.Duration(msInt) * time.Second),
+					})
+					require.NoError(t, err)
+				}
+
+				return nil
+			}),
+		})
+
+		startService(t, svc)
+
+		svc.TestSignals.InsertedJobs.WaitOrTimeout()
+
+		require.True(t, periodicJobsStartHookCalled)
+
+		require.Contains(t, svc.periodicJobIDs, "periodic_job_10s")
+		require.Contains(t, svc.periodicJobIDs, "periodic_job_50s")
+
+		require.Len(t, svc.periodicJobIDs, 2)
+
+		{
+			periodicJob := svc.periodicJobs[svc.periodicJobIDs["periodic_job_10s"]]
+			// This durable job's next one was one second in the past so it'll
+			// be scheduled immediately, despite no RunOnStart attribute. Don't
+			// have to use WithinDuration because the previous `next_run_at` is
+			// used to calculate the next one, meaning we know exactly what its
+			// value will be by comparing to `now`.
+			require.Equal(t, now.Add(-1*time.Second).Add(10*time.Second), periodicJob.nextRunAt)
+		}
+
+		{
+			periodicJob := svc.periodicJobs[svc.periodicJobIDs["periodic_job_50s"]]
+			// This should be *exactly* the same as the durable job aove because
+			// its `next_run_at` was in the future so it wasn't rescheduled.
+			require.Equal(t, now.Add(5*time.Hour), periodicJob.nextRunAt)
+		}
+	})
+
+	t.Run("PeriodicJobsStartHookCancelsStart", func(t *testing.T) {
+		t.Parallel()
+
+		svc, _ := setup(t)
+
+		svc.Config.HookLookupGlobal = hooklookup.NewHookLookup([]rivertype.Hook{
+			HookPeriodicJobsStartFunc(func(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error {
+				return errors.New("hook start error")
+			}),
+		})
+
+		require.EqualError(t, svc.Start(ctx), "hook start error")
+	})
 }
 
 type PilotPeriodicJobMock struct {
@@ -1018,3 +1170,21 @@ func (p *PilotPeriodicJobMock) PeriodicJobKeepAliveAndReap(ctx context.Context, 
 func (p *PilotPeriodicJobMock) PeriodicJobUpsertMany(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobUpsertManyParams) ([]*riverpilot.PeriodicJob, error) {
 	return p.PeriodicJobUpsertManyMock(ctx, exec, params)
 }
+
+//
+// *Func types are copied from the top level River package because they can't be
+// accessed from here.
+//
+
+type HookPeriodicJobsStartFunc func(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error
+
+func (f HookPeriodicJobsStartFunc) IsHook() bool { return true }
+
+func (f HookPeriodicJobsStartFunc) Start(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error {
+	return f(ctx, params)
+}
+
+var (
+	_ rivertype.Hook                  = HookPeriodicJobsStartFunc(func(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error { return nil })
+	_ rivertype.HookPeriodicJobsStart = HookPeriodicJobsStartFunc(func(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error { return nil })
+)
