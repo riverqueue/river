@@ -236,6 +236,8 @@ func (s *PeriodicJobEnqueuer) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.periodicJobIDs = make(map[string]rivertype.PeriodicJobHandle)
+
 	// `nextHandle` is _not_ reset so that even across multiple generations of
 	// jobs, handles aren't reused.
 	s.periodicJobs = make(map[rivertype.PeriodicJobHandle]*PeriodicJob)

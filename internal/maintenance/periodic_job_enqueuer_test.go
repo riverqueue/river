@@ -551,6 +551,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc.Clear()
 
+		require.Empty(t, svc.periodicJobIDs)
 		require.Empty(t, svc.periodicJobs)
 
 		handleAfterClear, err := svc.AddSafely(
