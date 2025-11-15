@@ -310,7 +310,12 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 	subServices := []startstop.Service{
 		startstop.StartStopFunc(s.periodicJobKeepAliveAndReapPeriodically),
 	}
+	stopServicesOnError := func() {
+		startstop.StopAllParallel(subServices...)
+	}
 	if err := startstop.StartAll(ctx, subServices...); err != nil {
+		stopServicesOnError()
+		stopped()
 		return err
 	}
 
