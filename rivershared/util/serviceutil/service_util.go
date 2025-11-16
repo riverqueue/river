@@ -62,7 +62,7 @@ const MaxAttemptsBeforeResetDefault = 7
 // - 8s
 // - 16s
 // - 32s
-// - 64s
+// - 64s.
 func ExponentialBackoff(attempt, maxAttemptsBeforeReset int) time.Duration {
 	retrySeconds := exponentialBackoffSecondsWithoutJitter(attempt, maxAttemptsBeforeReset)
 
