@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] - 2025-11-14
+
 ### Added
 
 - Periodic jobs with IDs may now be removed by ID using the new `PeriodicJobBundle.RemoveByID` and `PeriodicJobBundle.RemoveManyByID`. [PR #1071](https://github.com/riverqueue/river/pull/1071).

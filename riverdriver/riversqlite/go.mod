@@ -5,10 +5,10 @@ go 1.24.0
 toolchain go1.25.2
 
 require (
-	github.com/riverqueue/river v0.26.0
-	github.com/riverqueue/river/riverdriver v0.26.0
-	github.com/riverqueue/river/rivershared v0.26.0
-	github.com/riverqueue/river/rivertype v0.26.0
+	github.com/riverqueue/river v0.27.0
+	github.com/riverqueue/river/riverdriver v0.27.0
+	github.com/riverqueue/river/rivershared v0.27.0
+	github.com/riverqueue/river/rivertype v0.27.0
 	github.com/stretchr/testify v1.11.1
 	github.com/tidwall/gjson v1.18.0
 	github.com/tidwall/sjson v1.2.5
