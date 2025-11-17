@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix snoozed events emitted from `rivertest.Worker` when snooze duration is zero seconds. [PR #1057](https://github.com/riverqueue/river/pull/1057).
 - Rollbacks now use an uncancelled context so as to not leave transactions in an ambiguous state if a transaction in them fails due to context cancellation. [PR #1062](https://github.com/riverqueue/river/pull/1062).
 - Removing periodic jobs with IDs assigned also remove them from ID map. [PR #1070](https://github.com/riverqueue/river/pull/1070).
+- Clear periodic jobs also fully clears all those assigned with an ID. [PR #1083](https://github.com/riverqueue/river/pull/1083).
 - `river:"unique"` annotations on substructs within `JobArgs` structs are now factored into uniqueness `ByArgs` calculations. [PR #1076](https://github.com/riverqueue/river/pull/1076).
 - Stop subservices and embedded `baseservice.Service` on error in the event of a periodic job enqueuer start error. [PR #1081](https://github.com/riverqueue/river/pull/1081).
 
