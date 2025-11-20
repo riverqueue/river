@@ -1106,6 +1106,90 @@ func Test_Client_Common(t *testing.T) {
 		require.True(t, middlewareCalled)
 	})
 
+	t.Run("Notify", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+		client.testSignals.Init(t)
+
+		startClient(ctx, t, client)
+
+		client.config.Logger.InfoContext(ctx, "Test waiting for client to be elected leader for the first time")
+		client.testSignals.electedLeader.WaitOrTimeout()
+		client.config.Logger.InfoContext(ctx, "Client was elected leader for the first time")
+
+		// We test the function with a forced resignation, but this is a general
+		// Notify test case so this could be changed to any notification.
+		require.NoError(t, client.Notify(ctx, NotifyKindLeaderRequestResign, struct{}{}))
+
+		client.config.Logger.InfoContext(ctx, "Test waiting for client to be elected leader after forced resignation")
+		client.testSignals.electedLeader.WaitOrTimeout()
+		client.config.Logger.InfoContext(ctx, "Client was elected leader after forced resignation")
+	})
+
+	t.Run("NotifyNoListenNotifyError", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			dbPool = riversharedtest.DBPoolClone(ctx, t)
+			driver = NewDriverWithoutListenNotify(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
+		)
+
+		client, err := NewClient(driver, config)
+		require.NoError(t, err)
+
+		require.EqualError(t,
+			client.Notify(ctx, NotifyKindLeaderRequestResign, struct{}{}),
+			"notify is only supported for drivers that support listen/notify (e.g. pgx, but not database/sql)",
+		)
+	})
+
+	t.Run("NotifyTx", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+		client.testSignals.Init(t)
+
+		startClient(ctx, t, client)
+
+		client.config.Logger.InfoContext(ctx, "Test waiting for client to be elected leader for the first time")
+		client.testSignals.electedLeader.WaitOrTimeout()
+		client.config.Logger.InfoContext(ctx, "Client was elected leader for the first time")
+
+		tx, err := bundle.dbPool.Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { tx.Rollback(ctx) })
+
+		require.NoError(t, client.NotifyTx(ctx, tx, NotifyKindLeaderRequestResign, struct{}{}))
+
+		require.NoError(t, tx.Commit(ctx))
+
+		client.config.Logger.InfoContext(ctx, "Test waiting for client to be elected leader after forced resignation")
+		client.testSignals.electedLeader.WaitOrTimeout()
+		client.config.Logger.InfoContext(ctx, "Client was elected leader after forced resignation")
+	})
+
+	t.Run("NotificationKindLeaderRequestResign", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+		client.testSignals.Init(t)
+
+		startClient(ctx, t, client)
+
+		client.config.Logger.InfoContext(ctx, "Test waiting for client to be elected leader for the first time")
+		client.testSignals.electedLeader.WaitOrTimeout()
+		client.config.Logger.InfoContext(ctx, "Client was elected leader for the first time")
+
+		require.NoError(t, client.Notify(ctx, NotifyKindLeaderRequestResign, struct{}{}))
+
+		client.config.Logger.InfoContext(ctx, "Test waiting for client to be elected leader after forced resignation")
+		client.testSignals.electedLeader.WaitOrTimeout()
+		client.config.Logger.InfoContext(ctx, "Client was elected leader after forced resignation")
+	})
+
 	t.Run("PauseAndResumeSingleQueue", func(t *testing.T) {
 		t.Parallel()
 
