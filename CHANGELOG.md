@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Unique args: Handle embedded fields that are not structs. [PR #1088](https://github.com/riverqueue/river/pull/1088).
+
 ## [0.27.0] - 2025-11-14
 
 ### Added

@@ -63,16 +63,6 @@ func getSortedUniqueFields(typ reflect.Type, path []string) ([]string, error) {
 			continue
 		}
 
-		if field.Anonymous {
-			uniqueSubFields, err := getSortedUniqueFields(field.Type, path)
-			if err != nil {
-				return nil, err
-			}
-			uniqueFields = append(uniqueFields, uniqueSubFields...)
-
-			continue
-		}
-
 		var uniqueName string
 		{
 			// Get the corresponding JSON key
@@ -98,11 +88,20 @@ func getSortedUniqueFields(typ reflect.Type, path []string) ([]string, error) {
 			}
 		}
 
-		if field.Type.Kind() == reflect.Struct || field.Type.Kind() == reflect.Ptr && field.Type.Elem().Kind() == reflect.Struct {
-			uniqueSubFields, err := getSortedUniqueFields(field.Type, append(path, uniqueName))
+		if typeStructOrPointerToStruct(field.Type) {
+			// Append the JSON to the path (all path segments sent down
+			// recursively) unless we're looking at an anonymous struct, whose
+			// fields will be let at the top level.
+			fullPath := path
+			if !field.Anonymous {
+				fullPath = append(path, uniqueName) //nolint:gocritic
+			}
+
+			uniqueSubFields, err := getSortedUniqueFields(field.Type, fullPath)
 			if err != nil {
 				return nil, err
 			}
+
 			if len(uniqueSubFields) > 0 {
 				uniqueFields = append(uniqueFields, uniqueSubFields...)
 			} else if hasUniqueTag {
@@ -162,4 +161,16 @@ func parseJSONTag(tag string) string {
 		return tag[:commaIdx]
 	}
 	return tag
+}
+
+func typeStructOrPointerToStruct(typ reflect.Type) bool {
+	if typ.Kind() == reflect.Struct {
+		return true
+	}
+
+	if typ.Kind() == reflect.Ptr && typ.Elem().Kind() == reflect.Struct {
+		return true
+	}
+
+	return false
 }
