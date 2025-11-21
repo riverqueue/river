@@ -201,6 +201,22 @@ func TestUniqueKey(t *testing.T) {
 			expectedJSON: `&kind=worker_1&args={"recipient":"john@example.com","subject":"Another Test Email"}`,
 		},
 		{
+			name: "ByArgsWithEmbeddedNonStruct",
+			argsFunc: func() rivertype.JobArgs {
+				type MyString string
+				type TaskJobArgs struct {
+					JobArgsStaticKind
+					MyString // anonymous non-struct field; needs to be a custom type because it has to be capitalized to be exported
+				}
+				return TaskJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_7"},
+					MyString:          "my_string_in_anonymous_field",
+				}
+			},
+			uniqueOpts:   UniqueOpts{ByArgs: true},
+			expectedJSON: `&kind=worker_7&args={"MyString":"my_string_in_anonymous_field"}`,
+		},
+		{
 			name: "ByArgsWithSubstructTagged",
 			argsFunc: func() rivertype.JobArgs {
 				type EmailAddresses struct {
