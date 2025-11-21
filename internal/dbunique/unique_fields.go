@@ -44,12 +44,12 @@ func extractUniqueValues(encodedArgs []byte, uniqueKeys []string) []string {
 // The return values are the JSON keys using the same logic as the `json` struct tag.
 func getSortedUniqueFields(typ reflect.Type, path []string) ([]string, error) {
 	// Handle pointer to struct
-	if typ != nil && typ.Kind() == reflect.Ptr {
+	if typ.Kind() == reflect.Ptr {
 		typ = typ.Elem()
 	}
 
 	// Ensure we're dealing with a struct
-	if typ == nil || typ.Kind() != reflect.Struct {
+	if typ.Kind() != reflect.Struct {
 		return nil, fmt.Errorf("expected struct, got %T", typ.Name())
 	}
 
