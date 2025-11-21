@@ -42,7 +42,10 @@ func extractUniqueValues(encodedArgs []byte, uniqueKeys []string) []string {
 // getSortedUniqueFields uses reflection to retrieve the JSON keys of fields
 // marked with `river:"unique"` among potentially other comma-separated values.
 // The return values are the JSON keys using the same logic as the `json` struct tag.
-func getSortedUniqueFields(typ reflect.Type, path []string) ([]string, error) {
+//
+// typesSeen should be a map passed through to make sure that recursive types
+// don't cause a stack overflow.
+func getSortedUniqueFields(typ reflect.Type, path []string, typesSeen map[reflect.Type]struct{}) ([]string, error) {
 	// Handle pointer to struct
 	if typ.Kind() == reflect.Ptr {
 		typ = typ.Elem()
@@ -52,6 +55,14 @@ func getSortedUniqueFields(typ reflect.Type, path []string) ([]string, error) {
 	if typ.Kind() != reflect.Struct {
 		return nil, fmt.Errorf("expected struct, got %T", typ.Name())
 	}
+
+	// Stop when encountering a recursive type. This has the effect of the
+	// entire subfield's value being extracted by gjson, but this is about as
+	// right of a way to handle it as any other I can think of.
+	if _, ok := typesSeen[typ]; ok {
+		return nil, nil
+	}
+	typesSeen[typ] = struct{}{}
 
 	var uniqueFields []string
 
@@ -97,7 +108,7 @@ func getSortedUniqueFields(typ reflect.Type, path []string) ([]string, error) {
 				fullPath = append(path, uniqueName) //nolint:gocritic
 			}
 
-			uniqueSubFields, err := getSortedUniqueFields(field.Type, fullPath)
+			uniqueSubFields, err := getSortedUniqueFields(field.Type, fullPath, typesSeen)
 			if err != nil {
 				return nil, err
 			}
@@ -140,7 +151,7 @@ func getSortedUniqueFieldsCached(args rivertype.JobArgs) ([]string, error) {
 	cacheMutex.RUnlock()
 
 	// Not in cache; retrieve using reflection
-	fields, err := getSortedUniqueFields(reflect.TypeOf(args), nil)
+	fields, err := getSortedUniqueFields(reflect.TypeOf(args), nil, make(map[reflect.Type]struct{}))
 	if err != nil {
 		return nil, err
 	}

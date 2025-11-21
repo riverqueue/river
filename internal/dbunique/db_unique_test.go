@@ -361,6 +361,39 @@ func TestUniqueKey(t *testing.T) {
 			expectedJSON: `&kind=worker_1&args={}`,
 		},
 		{
+			name: "ByArgsRecursiveType",
+			argsFunc: func() rivertype.JobArgs {
+				type RecursiveType struct {
+					NotUnique string         `river:"-"`
+					Recursive *RecursiveType `river:"unique"` // inner recursive type ignored by River
+					String    string         `river:"unique"`
+				}
+				type TaskJobArgs struct {
+					JobArgsStaticKind
+
+					Recursive RecursiveType `river:"unique"`
+				}
+				return TaskJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_7"},
+					Recursive: RecursiveType{
+						Recursive: &RecursiveType{
+							String: "level2",
+						},
+						String: "level1",
+					},
+				}
+			},
+			uniqueOpts: UniqueOpts{ByArgs: true},
+
+			// Notably, "NotUnique" shows up here inside the inner recursive
+			// type because when River saw the recursive typed markd with
+			// `unique` again, it just gave up and returned the entire the
+			// entire key which is then extracted by gjson. The top-level type
+			// also has a "NotUnique", but that's not returned because River was
+			// processing this type for the first time.
+			expectedJSON: `&kind=worker_7&args={"Recursive":{"Recursive":{"NotUnique":"","Recursive":null,"String":"level2"},"String":"level1"}}`,
+		},
+		{
 			name: "CustomByStateWithPeriod",
 			argsFunc: func() rivertype.JobArgs {
 				type TaskJobArgs struct {
