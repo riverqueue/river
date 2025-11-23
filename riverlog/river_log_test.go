@@ -16,10 +16,56 @@ import (
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/util/slogutil"
 	"github.com/riverqueue/river/rivertest"
 	"github.com/riverqueue/river/rivertype"
 )
+
+func TestLogger(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("Success", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.WithValue(ctx, contextKey{}, riversharedtest.Logger(t))
+
+		Logger(ctx).InfoContext(ctx, "Hello from logger")
+	})
+
+	t.Run("PanicIfNotSet", func(t *testing.T) {
+		t.Parallel()
+
+		require.PanicsWithValue(t, "no logger in context; do you have riverlog.Middleware configured?", func() {
+			Logger(ctx).InfoContext(ctx, "This will panic")
+		})
+	})
+}
+
+func TestLoggerSafely(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("Success", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.WithValue(ctx, contextKey{}, riversharedtest.Logger(t))
+
+		logger, ok := LoggerSafely(ctx)
+		require.True(t, ok)
+		logger.InfoContext(ctx, "Hello from logger")
+	})
+
+	t.Run("PanicIfNotSet", func(t *testing.T) {
+		t.Parallel()
+
+		_, ok := LoggerSafely(ctx)
+		require.False(t, ok)
+	})
+}
 
 var _ rivertype.WorkerMiddleware = &Middleware{}
 
