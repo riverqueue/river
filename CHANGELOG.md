@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.0] - 2025-11-23
+
 ### Added
 
 - Added `riverlog.LoggerSafely` which provides a non-panic variant of `riverlog.Logger` for use when code may or may not have a context logger available. [PR #1093](https://github.com/riverqueue/river/pull/1093).
