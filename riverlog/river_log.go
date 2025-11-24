@@ -27,12 +27,25 @@ type contextKey struct{}
 // Logger extracts a logger from context from within the Work body of a worker.
 // Middleware must be installed on either the worker or client for this function
 // to be usable.
+//
+// This variant panics if no logger was available in context.
 func Logger(ctx context.Context) *slog.Logger {
-	logger, ok := ctx.Value(contextKey{}).(*slog.Logger)
+	logger, ok := LoggerSafely(ctx)
 	if !ok {
 		panic("no logger in context; do you have riverlog.Middleware configured?")
 	}
 	return logger
+}
+
+// LoggerSafely extracts a logger from context from within the Work body of a
+// worker.  Middleware must be installed on either the worker or client for this
+// function to be usable.
+//
+// This variant returns a boolean that's true if a logger was available in
+// context and false otherwise.
+func LoggerSafely(ctx context.Context) (*slog.Logger, bool) {
+	logger, ok := ctx.Value(contextKey{}).(*slog.Logger)
+	return logger, ok
 }
 
 // Middleware injects a context logger into the Work function of workers it's
@@ -79,6 +92,12 @@ type MiddlewareConfig struct {
 //	riverlog.NewMiddleware(func(w io.Writer) slog.Handler {
 //		return slog.NewJSONHandler(w, nil)
 //	}, nil)
+//
+// With the middleware in place, the logger is available in a work function's
+// context:
+//
+//	func (w *MyWorker) Work(ctx context.Context, job *river.Job[MyArgs]) error {
+//		Logger(ctx).InfoContext(ctx, "Hello from work")
 func NewMiddleware(newSlogHandler func(w io.Writer) slog.Handler, config *MiddlewareConfig) *Middleware {
 	return &Middleware{
 		config:         defaultConfig(config),
