@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/maintenance"
+	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -108,13 +109,13 @@ func (s *periodicIntervalSchedule) Next(t time.Time) time.Time {
 // made accessible through Client, where new periodic jobs can be configured,
 // and old ones removed.
 type PeriodicJobBundle struct {
-	clientConfig        *Config
+	mapper              *periodicJobInternalMapper
 	periodicJobEnqueuer *maintenance.PeriodicJobEnqueuer
 }
 
 func newPeriodicJobBundle(config *Config, periodicJobEnqueuer *maintenance.PeriodicJobEnqueuer) *PeriodicJobBundle {
 	return &PeriodicJobBundle{
-		clientConfig:        config,
+		mapper:              &periodicJobInternalMapper{archetype: &periodicJobEnqueuer.Archetype, config: config},
 		periodicJobEnqueuer: periodicJobEnqueuer,
 	}
 }
@@ -130,7 +131,7 @@ func newPeriodicJobBundle(config *Config, periodicJobEnqueuer *maintenance.Perio
 // new periodic job is fully enabled or disabled, it should be added or removed
 // from _every_ active River client across all processes.
 func (b *PeriodicJobBundle) Add(periodicJob *PeriodicJob) rivertype.PeriodicJobHandle {
-	handle, err := b.periodicJobEnqueuer.AddSafely(b.toInternal(periodicJob))
+	handle, err := b.periodicJobEnqueuer.AddSafely(b.mapper.toInternal(periodicJob))
 	if err != nil {
 		panic(err)
 	}
@@ -140,7 +141,7 @@ func (b *PeriodicJobBundle) Add(periodicJob *PeriodicJob) rivertype.PeriodicJobH
 // AddSafely is the same as Add, but it returns an error in the case of a
 // validation problem or duplicate ID instead of panicking.
 func (b *PeriodicJobBundle) AddSafely(periodicJob *PeriodicJob) (rivertype.PeriodicJobHandle, error) {
-	return b.periodicJobEnqueuer.AddSafely(b.toInternal(periodicJob))
+	return b.periodicJobEnqueuer.AddSafely(b.mapper.toInternal(periodicJob))
 }
 
 // AddMany adds many new periodic jobs to the client. The jobs are queued
@@ -154,7 +155,7 @@ func (b *PeriodicJobBundle) AddSafely(periodicJob *PeriodicJob) (rivertype.Perio
 // new periodic job is fully enabled or disabled, it should be added or removed
 // from _every_ active River client across all processes.
 func (b *PeriodicJobBundle) AddMany(periodicJobs []*PeriodicJob) []rivertype.PeriodicJobHandle {
-	handles, err := b.periodicJobEnqueuer.AddManySafely(sliceutil.Map(periodicJobs, b.toInternal))
+	handles, err := b.periodicJobEnqueuer.AddManySafely(sliceutil.Map(periodicJobs, b.mapper.toInternal))
 	if err != nil {
 		panic(err)
 	}
@@ -164,7 +165,7 @@ func (b *PeriodicJobBundle) AddMany(periodicJobs []*PeriodicJob) []rivertype.Per
 // AddManySafely is the same as AddMany, but it returns an error in the case of
 // a validation problem or duplicate ID instead of panicking.
 func (b *PeriodicJobBundle) AddManySafely(periodicJobs []*PeriodicJob) ([]rivertype.PeriodicJobHandle, error) {
-	return b.periodicJobEnqueuer.AddManySafely(sliceutil.Map(periodicJobs, b.toInternal))
+	return b.periodicJobEnqueuer.AddManySafely(sliceutil.Map(periodicJobs, b.mapper.toInternal))
 }
 
 // Clear clears all periodic jobs, cancelling all scheduled runs.
@@ -234,11 +235,16 @@ func (b *PeriodicJobBundle) RemoveManyByID(ids []string) {
 // An empty set of periodic job opts used as a default when none are specified.
 var periodicJobEmptyOpts PeriodicJobOpts //nolint:gochecknoglobals
 
+type periodicJobInternalMapper struct {
+	archetype *baseservice.Archetype
+	config    *Config
+}
+
 // There are two separate periodic job structs so that the top-level River
 // package can expose one while still containing most periodic job logic in a
 // subpackage. This function converts a top-level periodic job struct (used for
 // configuration) to an internal one.
-func (b *PeriodicJobBundle) toInternal(periodicJob *PeriodicJob) *maintenance.PeriodicJob {
+func (m *periodicJobInternalMapper) toInternal(periodicJob *PeriodicJob) *maintenance.PeriodicJob {
 	opts := &periodicJobEmptyOpts
 	if periodicJob.opts != nil {
 		opts = periodicJob.opts
@@ -250,7 +256,7 @@ func (b *PeriodicJobBundle) toInternal(periodicJob *PeriodicJob) *maintenance.Pe
 			if args == nil {
 				return nil, maintenance.ErrNoJobToInsert
 			}
-			return insertParamsFromConfigArgsAndOptions(&b.periodicJobEnqueuer.Archetype, b.clientConfig, args, options)
+			return insertParamsFromConfigArgsAndOptions(m.archetype, m.config, args, options)
 		},
 		RunOnStart:   opts.RunOnStart,
 		ScheduleFunc: periodicJob.scheduleFunc.Next,
