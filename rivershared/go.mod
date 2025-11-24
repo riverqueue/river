@@ -12,7 +12,7 @@ require (
 	github.com/riverqueue/river/rivertype v0.27.1
 	github.com/stretchr/testify v1.11.1
 	go.uber.org/goleak v1.3.0
-	golang.org/x/mod v0.29.0
+	golang.org/x/mod v0.30.0
 )
 
 require (
