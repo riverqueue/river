@@ -209,6 +209,7 @@ type producer struct {
 	// An atomic count of the number of jobs actively being worked on. This is
 	// written to by the main goroutine, but read by the dispatcher.
 	numJobsActive atomic.Int32
+	numJobsStuck  atomic.Int32
 
 	numJobsRan atomic.Uint64
 	paused     bool
@@ -771,8 +772,9 @@ func (p *producer) heartbeatLogLoop(ctx context.Context, wg *sync.WaitGroup) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	type jobCount struct {
-		ran    uint64
 		active int
+		ran    uint64
+		stuck  int
 	}
 	var prevCount jobCount
 	for {
@@ -780,11 +782,16 @@ func (p *producer) heartbeatLogLoop(ctx context.Context, wg *sync.WaitGroup) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			curCount := jobCount{ran: p.numJobsRan.Load(), active: int(p.numJobsActive.Load())}
+			curCount := jobCount{
+				active: int(p.numJobsActive.Load()),
+				ran:    p.numJobsRan.Load(),
+				stuck:  int(p.numJobsStuck.Load()),
+			}
 			if curCount != prevCount {
 				p.Logger.InfoContext(ctx, p.Name+": Producer job counts",
 					slog.Uint64("num_completed_jobs", curCount.ran),
 					slog.Int("num_jobs_running", curCount.active),
+					slog.Int("num_jobs_stuck", curCount.stuck),
 					slog.String("queue", p.config.Queue),
 				)
 			}
@@ -815,10 +822,18 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 			HookLookupByJob:          p.config.HookLookupByJob,
 			HookLookupGlobal:         p.config.HookLookupGlobal,
 			MiddlewareLookupGlobal:   p.config.MiddlewareLookupGlobal,
-			InformProducerDoneFunc:   p.handleWorkerDone,
 			JobRow:                   job,
-			SchedulerInterval:        p.config.SchedulerInterval,
-			WorkUnit:                 workUnit,
+			ProducerCallbacks: struct {
+				JobDone func(jobRow *rivertype.JobRow)
+				Stuck   func()
+				Unstuck func()
+			}{
+				JobDone: p.handleWorkerDone,
+				Stuck:   func() { p.numJobsStuck.Add(1) },
+				Unstuck: func() { p.numJobsStuck.Add(-1) },
+			},
+			SchedulerInterval: p.config.SchedulerInterval,
+			WorkUnit:          workUnit,
 		})
 		p.addActiveJob(job.ID, executor)
 
