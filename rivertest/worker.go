@@ -203,13 +203,21 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 				return nil
 			},
 		},
-		InformProducerDoneFunc: func(job *rivertype.JobRow) { close(executionDone) },
 		HookLookupGlobal:       hooklookup.NewHookLookup(w.config.Hooks),
 		HookLookupByJob:        hooklookup.NewJobHookLookup(),
 		JobRow:                 job,
 		MiddlewareLookupGlobal: middlewarelookup.NewMiddlewareLookup(w.config.Middleware),
-		SchedulerInterval:      maintenance.JobSchedulerIntervalDefault,
-		WorkUnit:               workUnit,
+		ProducerCallbacks: struct {
+			JobDone func(jobRow *rivertype.JobRow)
+			Stuck   func()
+			Unstuck func()
+		}{
+			JobDone: func(job *rivertype.JobRow) { close(executionDone) },
+			Stuck:   func() {},
+			Unstuck: func() {},
+		},
+		SchedulerInterval: maintenance.JobSchedulerIntervalDefault,
+		WorkUnit:          workUnit,
 	})
 
 	executor.Execute(jobCtx)

@@ -191,11 +191,19 @@ func TestJobExecutor_Execute(t *testing.T) {
 			ErrorHandler:             bundle.errorHandler,
 			HookLookupByJob:          hooklookup.NewJobHookLookup(),
 			HookLookupGlobal:         hooklookup.NewHookLookup(nil),
-			InformProducerDoneFunc:   func(job *rivertype.JobRow) {},
 			JobRow:                   bundle.jobRow,
 			MiddlewareLookupGlobal:   middlewarelookup.NewMiddlewareLookup(nil),
-			SchedulerInterval:        riverinternaltest.SchedulerShortInterval,
-			WorkUnit:                 workUnitFactory.MakeUnit(bundle.jobRow),
+			ProducerCallbacks: struct {
+				JobDone func(jobRow *rivertype.JobRow)
+				Stuck   func()
+				Unstuck func()
+			}{
+				JobDone: func(jobRow *rivertype.JobRow) {},
+				Stuck:   func() {},
+				Unstuck: func() {},
+			},
+			SchedulerInterval: riverinternaltest.SchedulerShortInterval,
+			WorkUnit:          workUnitFactory.MakeUnit(bundle.jobRow),
 		})
 
 		return executor, bundle
@@ -694,6 +702,36 @@ func TestJobExecutor_Execute(t *testing.T) {
 				require.Equal(t, fmt.Sprintf("job error %d", i), got.Errors[0].Error)
 			}
 		})
+	})
+
+	t.Run("StuckDetection", func(t *testing.T) {
+		t.Parallel()
+
+		executor, bundle := setup(t)
+
+		executor.ClientJobTimeout = 5 * time.Millisecond
+		executor.StuckThresholdOverride = 1 * time.Nanosecond // must be greater than 0 to take effect
+
+		var (
+			informProducerStuckReceived   = make(chan struct{})
+			informProducerUnstuckReceived = make(chan struct{})
+		)
+		executor.ProducerCallbacks.Stuck = func() {
+			close(informProducerStuckReceived)
+		}
+		executor.ProducerCallbacks.Unstuck = func() {
+			close(informProducerUnstuckReceived)
+		}
+
+		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error {
+			riversharedtest.WaitOrTimeout(t, informProducerStuckReceived)
+			return nil
+		}, nil).MakeUnit(bundle.jobRow)
+
+		executor.Execute(ctx)
+		_ = riversharedtest.WaitOrTimeout(t, bundle.updateCh)
+
+		riversharedtest.WaitOrTimeout(t, informProducerUnstuckReceived)
 	})
 
 	t.Run("Panic", func(t *testing.T) {
