@@ -191,11 +191,19 @@ func TestJobExecutor_Execute(t *testing.T) {
 			ErrorHandler:             bundle.errorHandler,
 			HookLookupByJob:          hooklookup.NewJobHookLookup(),
 			HookLookupGlobal:         hooklookup.NewHookLookup(nil),
-			InformProducerDoneFunc:   func(job *rivertype.JobRow) {},
 			JobRow:                   bundle.jobRow,
 			MiddlewareLookupGlobal:   middlewarelookup.NewMiddlewareLookup(nil),
-			SchedulerInterval:        riverinternaltest.SchedulerShortInterval,
-			WorkUnit:                 workUnitFactory.MakeUnit(bundle.jobRow),
+			ProducerCallbacks: struct {
+				JobDone func(jobRow *rivertype.JobRow)
+				Stuck   func()
+				Unstuck func()
+			}{
+				JobDone: func(jobRow *rivertype.JobRow) {},
+				Stuck:   func() {},
+				Unstuck: func() {},
+			},
+			SchedulerInterval: riverinternaltest.SchedulerShortInterval,
+			WorkUnit:          workUnitFactory.MakeUnit(bundle.jobRow),
 		})
 
 		return executor, bundle
@@ -694,6 +702,94 @@ func TestJobExecutor_Execute(t *testing.T) {
 				require.Equal(t, fmt.Sprintf("job error %d", i), got.Errors[0].Error)
 			}
 		})
+	})
+
+	configureStuckDetection := func(executor *JobExecutor) {
+		executor.ClientJobTimeout = 5 * time.Millisecond
+		executor.StuckThresholdOverride = 1 * time.Nanosecond // must be greater than 0 to take effect
+	}
+
+	t.Run("StuckDetectionActivates", func(t *testing.T) {
+		t.Parallel()
+
+		executor, bundle := setup(t)
+
+		configureStuckDetection(executor)
+
+		var (
+			informProducerStuckReceived   = make(chan struct{})
+			informProducerUnstuckReceived = make(chan struct{})
+		)
+		executor.ProducerCallbacks.Stuck = func() {
+			t.Log("Job executor reported stuck")
+			close(informProducerStuckReceived)
+		}
+		executor.ProducerCallbacks.Unstuck = func() {
+			t.Log("Job executor reported unstuck (after being stuck)")
+			close(informProducerUnstuckReceived)
+		}
+
+		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error {
+			riversharedtest.WaitOrTimeout(t, informProducerStuckReceived)
+
+			select {
+			case <-informProducerUnstuckReceived:
+				require.FailNow(t, "Executor should not have reported unstuck immediately")
+			case <-time.After(10 * time.Millisecond):
+				t.Log("Job executor still stuck after wait (this is expected)")
+			}
+
+			return nil
+		}, nil).MakeUnit(bundle.jobRow)
+
+		executor.Execute(ctx)
+		_ = riversharedtest.WaitOrTimeout(t, bundle.updateCh)
+
+		riversharedtest.WaitOrTimeout(t, informProducerUnstuckReceived)
+	})
+
+	// Checks that even if a work context is cancelled immediately, stuck
+	// detection still works as expected.
+	t.Run("StuckDetectionIgnoresParentContextCancellation", func(t *testing.T) {
+		t.Parallel()
+
+		executor, bundle := setup(t)
+
+		configureStuckDetection(executor)
+
+		var (
+			informProducerStuckReceived   = make(chan struct{})
+			informProducerUnstuckReceived = make(chan struct{})
+		)
+		executor.ProducerCallbacks.Stuck = func() {
+			t.Log("Job executor reported stuck")
+			close(informProducerStuckReceived)
+		}
+		executor.ProducerCallbacks.Unstuck = func() {
+			t.Log("Job executor reported unstuck (after being stuck)")
+			close(informProducerUnstuckReceived)
+		}
+
+		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error {
+			riversharedtest.WaitOrTimeout(t, informProducerStuckReceived)
+
+			select {
+			case <-informProducerUnstuckReceived:
+				require.FailNow(t, "Executor should not have reported unstuck immediately")
+			case <-time.After(10 * time.Millisecond):
+				t.Log("Job executor still stuck after wait (this is expected)")
+			}
+
+			return nil
+		}, nil).MakeUnit(bundle.jobRow)
+
+		ctx, cancel := context.WithCancel(ctx)
+		cancel() // cancel immediately
+
+		executor.Execute(ctx)
+		_ = riversharedtest.WaitOrTimeout(t, bundle.updateCh)
+
+		riversharedtest.WaitOrTimeout(t, informProducerUnstuckReceived)
 	})
 
 	t.Run("Panic", func(t *testing.T) {
