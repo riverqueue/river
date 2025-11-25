@@ -230,13 +230,13 @@ func testElector[TElectorBundle any](
 		// The leadership maintenance loop also listens on the leadership
 		// notification channel. Take advantage of that to cause an
 		// immediate reelect attempt with no sleep.
-		elector.leadershipNotificationChan <- struct{}{}
+		elector.leaderResignedChan <- struct{}{}
 		elector.testSignals.MaintainedLeadership.WaitOrTimeout()
 
-		elector.leadershipNotificationChan <- struct{}{}
+		elector.leaderResignedChan <- struct{}{}
 		elector.testSignals.MaintainedLeadership.WaitOrTimeout()
 
-		elector.leadershipNotificationChan <- struct{}{}
+		elector.leaderResignedChan <- struct{}{}
 		elector.testSignals.MaintainedLeadership.WaitOrTimeout()
 
 		elector.Stop()
@@ -269,7 +269,7 @@ func testElector[TElectorBundle any](
 			Schema:   elector.config.Schema,
 		})
 
-		elector.leadershipNotificationChan <- struct{}{}
+		elector.leaderResignedChan <- struct{}{}
 		elector.testSignals.LostLeadership.WaitOrTimeout()
 
 		// Wait for the elector to try and fail to gain leadership so we
@@ -317,7 +317,7 @@ func testElector[TElectorBundle any](
 			// Cheat if we're in poll only by notifying leadership channel to
 			// wake the elector from sleep.
 			if elector2.notifier == nil {
-				elector2.leadershipNotificationChan <- struct{}{}
+				elector2.leaderResignedChan <- struct{}{}
 			}
 
 			t.Logf("Waiting for %s to gain leadership", elector2.config.ClientID)
@@ -342,6 +342,49 @@ func testElector[TElectorBundle any](
 		elector.testSignals = electorTestSignals{}     // deinit so channels don't fill
 
 		startstoptest.Stress(ctx, t, elector)
+	})
+
+	t.Run("RequestResignStress", func(t *testing.T) {
+		t.Parallel()
+
+		elector, bundle := setup(t, nil)
+
+		startElector(ctx, t, elector)
+
+		elector.testSignals.GainedLeadership.WaitOrTimeout()
+
+		leader, err := bundle.exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{
+			Schema: elector.config.Schema,
+		})
+		require.NoError(t, err)
+		require.Equal(t, elector.config.ClientID, leader.LeaderID)
+
+		payload, err := json.Marshal(DBNotification{
+			Action: DBNotificationKindRequestResign,
+		})
+		require.NoError(t, err)
+
+		// Send a bunch of resign requests consecutively. Only one will have an
+		// effect as the channel's size is only 1, and any extra items in it
+		// will be drained as the leader resigns, making it start empty the next
+		// time the leader starts up again.
+		//
+		// Wait for the elector to resign leadership, gain leadership again,
+		// then stop the elector and wait for it to resign one more time.
+		for range 5 {
+			t.Log("Requesting leadership resign")
+			elector.handleLeadershipNotification(ctx, notifier.NotificationTopicLeadership, string(payload))
+		}
+		elector.testSignals.ResignedLeadership.WaitOrTimeout()
+		elector.testSignals.GainedLeadership.WaitOrTimeout()
+
+		elector.Stop()
+		elector.testSignals.ResignedLeadership.WaitOrTimeout()
+
+		_, err = bundle.exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{
+			Schema: elector.config.Schema,
+		})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
 	})
 }
 
@@ -474,9 +517,10 @@ func TestElectorHandleLeadershipNotification(t *testing.T) {
 			&Config{ClientID: "test_client_id"},
 		)
 
-		// This channel is normally only initialized on start, so we need to
+		// These channels are normally only initialized on start, so we need to
 		// create it manually here.
-		elector.leadershipNotificationChan = make(chan struct{}, 1)
+		elector.requestResignChan = make(chan struct{}, 1)
+		elector.leaderResignedChan = make(chan struct{}, 1)
 
 		return elector, &testBundle{}
 	}
@@ -489,11 +533,11 @@ func TestElectorHandleLeadershipNotification(t *testing.T) {
 		return data
 	}
 
-	validLeadershipChange := func() *dbLeadershipNotification {
+	validLeadershipChange := func() *DBNotification {
 		t.Helper()
 
-		return &dbLeadershipNotification{
-			Action:   "resigned",
+		return &DBNotification{
+			Action:   DBNotificationKindResigned,
 			LeaderID: "other-client-id",
 		}
 	}
@@ -505,7 +549,7 @@ func TestElectorHandleLeadershipNotification(t *testing.T) {
 
 		elector.handleLeadershipNotification(ctx, notifier.NotificationTopicLeadership, string(mustMarshalJSON(t, validLeadershipChange())))
 
-		riversharedtest.WaitOrTimeout(t, elector.leadershipNotificationChan)
+		riversharedtest.WaitOrTimeout(t, elector.leaderResignedChan)
 	})
 
 	t.Run("StopsOnContextDone", func(t *testing.T) {
@@ -518,7 +562,7 @@ func TestElectorHandleLeadershipNotification(t *testing.T) {
 
 		elector.handleLeadershipNotification(ctx, notifier.NotificationTopicLeadership, string(mustMarshalJSON(t, validLeadershipChange())))
 
-		require.Empty(t, elector.leadershipNotificationChan)
+		require.Empty(t, elector.leaderResignedChan)
 	})
 
 	t.Run("IgnoresNonResignedAction", func(t *testing.T) {
@@ -531,7 +575,7 @@ func TestElectorHandleLeadershipNotification(t *testing.T) {
 
 		elector.handleLeadershipNotification(ctx, notifier.NotificationTopicLeadership, string(mustMarshalJSON(t, change)))
 
-		require.Empty(t, elector.leadershipNotificationChan)
+		require.Empty(t, elector.leaderResignedChan)
 	})
 
 	t.Run("IgnoresSameClientID", func(t *testing.T) {
@@ -544,6 +588,6 @@ func TestElectorHandleLeadershipNotification(t *testing.T) {
 
 		elector.handleLeadershipNotification(ctx, notifier.NotificationTopicLeadership, string(mustMarshalJSON(t, change)))
 
-		require.Empty(t, elector.leadershipNotificationChan)
+		require.Empty(t, elector.leaderResignedChan)
 	})
 }

@@ -27,10 +27,17 @@ const (
 	electIntervalTTLPaddingDefault = 10 * time.Second
 )
 
-type dbLeadershipNotification struct {
-	Action   string `json:"action"`
-	LeaderID string `json:"leader_id"`
+type DBNotification struct {
+	Action   DBNotificationKind `json:"action"`
+	LeaderID string             `json:"leader_id"`
 }
+
+type DBNotificationKind string
+
+const (
+	DBNotificationKindRequestResign DBNotificationKind = "request_resign"
+	DBNotificationKindResigned      DBNotificationKind = "resigned"
+)
 
 type Notification struct {
 	IsLeader  bool
@@ -94,11 +101,12 @@ type Elector struct {
 	baseservice.BaseService
 	startstop.BaseStartStop
 
-	config                     *Config
-	exec                       riverdriver.Executor
-	leadershipNotificationChan chan struct{}
-	notifier                   *notifier.Notifier
-	testSignals                electorTestSignals
+	config             *Config
+	exec               riverdriver.Executor
+	leaderResignedChan chan struct{}
+	notifier           *notifier.Notifier
+	requestResignChan  chan struct{}
+	testSignals        electorTestSignals
 
 	mu            sync.Mutex
 	isLeader      bool
@@ -128,7 +136,9 @@ func (e *Elector) Start(ctx context.Context) error {
 	}
 
 	// We'll send to this channel anytime a leader resigns on the key with `name`
-	e.leadershipNotificationChan = make(chan struct{})
+	e.leaderResignedChan = make(chan struct{})
+
+	e.requestResignChan = make(chan struct{})
 
 	var sub *notifier.Subscription
 	if e.notifier == nil {
@@ -231,7 +241,7 @@ func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
 				return ctx.Err()
 			}
 
-		case <-e.leadershipNotificationChan:
+		case <-e.leaderResignedChan:
 			// Somebody just resigned, try to win the next election after a very
 			// short random interval (to prevent all clients from bidding at once).
 			serviceutil.CancellableSleep(ctx, randutil.DurationBetween(0, 50*time.Millisecond))
@@ -247,7 +257,7 @@ func (e *Elector) handleLeadershipNotification(ctx context.Context, topic notifi
 		return
 	}
 
-	notification := dbLeadershipNotification{}
+	notification := DBNotification{}
 	if err := json.Unmarshal([]byte(payload), &notification); err != nil {
 		e.Logger.ErrorContext(ctx, e.Name+": Unable to unmarshal leadership notification", "client_id", e.config.ClientID, "err", err)
 		return
@@ -255,26 +265,39 @@ func (e *Elector) handleLeadershipNotification(ctx context.Context, topic notifi
 
 	e.Logger.DebugContext(ctx, e.Name+": Received notification from notifier", "action", notification.Action, "client_id", e.config.ClientID)
 
-	if notification.Action != "resigned" {
-		// We only care about resignations because we use them to preempt the
-		// election attempt backoff.
-		return
-	}
-
-	// If this a resignation from _this_ client, ignore the change.
-	if notification.LeaderID == e.config.ClientID {
-		return
-	}
-
 	// Do an initial context check so in case context is done, it always takes
 	// precedence over sending a leadership notification.
 	if ctx.Err() != nil {
 		return
 	}
 
-	select {
-	case <-ctx.Done():
-	case e.leadershipNotificationChan <- struct{}{}:
+	switch notification.Action {
+	case DBNotificationKindRequestResign:
+		e.mu.Lock()
+		isLeader := e.isLeader
+		e.mu.Unlock()
+
+		if !isLeader {
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+		case e.requestResignChan <- struct{}{}:
+		default:
+			// if context is not done and requestResignChan has an item in it
+			// already, do nothing
+		}
+	case DBNotificationKindResigned:
+		// If this a resignation from _this_ client, ignore the change.
+		if notification.LeaderID == e.config.ClientID {
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+		case e.leaderResignedChan <- struct{}{}:
+		}
 	}
 }
 
@@ -284,7 +307,19 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 	// notify all subscribers that we're the leader
 	e.notifySubscribers(true)
 
+	// On the way out clear any another item that may have been added to
+	// requestResignChan. Having isLeader set to false will prevent additional
+	// items from being queued after this one.
+	defer func() {
+		select {
+		case <-e.requestResignChan:
+		default:
+		}
+	}()
+
 	// Defer is LIFO. This will run after the resign below.
+	//
+	// This also sets e.isLeader = false.
 	defer e.notifySubscribers(false)
 
 	var lostLeadership bool
@@ -320,15 +355,31 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 
 			return ctx.Err()
 
-		case <-timer.C:
-			// Reelect timer expired; attempt reelection below.
+		case <-e.requestResignChan:
+			// Receive a notification telling current leader to resign.
 
-		case <-e.leadershipNotificationChan:
-			// Used only in tests for force an immediately reelect attempt.
+			e.Logger.InfoContext(ctx, e.Name+": Current leader received forced resignation", "client_id", e.config.ClientID)
 
 			if !timer.Stop() {
 				<-timer.C
 			}
+
+			// This client may win leadership again, but drop out of this
+			// function and make it start all over.
+			return nil
+
+		case <-e.leaderResignedChan:
+			// Used only in tests for force an immediately reelect attempt.
+			//
+			// This differs from the case above in that it drops through to
+			// attempting to reelect instead of returning from the function.
+
+			if !timer.Stop() {
+				<-timer.C
+			}
+
+		case <-timer.C:
+			// Reelect timer expired; attempt reelection below.
 		}
 
 		e.Logger.DebugContext(ctx, e.Name+": Current leader attempting reelect", "client_id", e.config.ClientID)
