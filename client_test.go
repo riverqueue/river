@@ -1127,25 +1127,6 @@ func Test_Client_Common(t *testing.T) {
 		client.config.Logger.InfoContext(ctx, "Client was elected leader after forced resignation")
 	})
 
-	t.Run("NotifyRequestResignNoListenNotifyError", func(t *testing.T) {
-		t.Parallel()
-
-		var (
-			dbPool = riversharedtest.DBPoolClone(ctx, t)
-			driver = NewDriverWithoutListenNotify(dbPool)
-			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-			config = newTestConfig(t, schema)
-		)
-
-		client, err := NewClient(driver, config)
-		require.NoError(t, err)
-
-		require.EqualError(t,
-			client.Notify().RequestResign(ctx),
-			"notify is only supported for drivers that support listen/notify (e.g. pgx, but not database/sql)",
-		)
-	})
-
 	t.Run("NotifyRequestResignTx", func(t *testing.T) {
 		t.Parallel()
 

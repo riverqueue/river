@@ -2316,10 +2316,6 @@ func (c *ClientNotifyBundle[TTx]) RequestResignTx(ctx context.Context, tx TTx) e
 // notifyExecTx is a shared helper between Notify and NotifyTx that sends a
 // notification.
 func (c *ClientNotifyBundle[TTx]) requestResignTx(ctx context.Context, execTx riverdriver.ExecutorTx) error {
-	if !c.driver.SupportsListenNotify() {
-		return errors.New("notify is only supported for drivers that support listen/notify (e.g. pgx, but not database/sql)")
-	}
-
 	payloadStr, err := json.Marshal(&leadership.DBNotification{
 		Action: leadership.DBNotificationKindRequestResign,
 	})
