@@ -507,3 +507,10 @@ SET
     state = CASE WHEN cast(@state_do_update AS boolean) THEN @state ELSE state END
 WHERE id = @id
 RETURNING *;
+
+-- name: JobUpdateFast :one
+UPDATE /* TEMPLATE: schema */river_job
+SET
+    metadata = CASE WHEN cast(@metadata_do_merge AS boolean) THEN json_patch(metadata, json(cast(@metadata AS blob))) ELSE metadata END
+WHERE id = @id
+RETURNING *;

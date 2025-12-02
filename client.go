@@ -17,6 +17,7 @@ import (
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
+	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/leadership"
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/middlewarelookup"
@@ -1501,6 +1502,55 @@ func (c *Client[TTx]) jobRetry(ctx context.Context, exec riverdriver.Executor, i
 		ID:     id,
 		Now:    c.baseService.Time.NowUTCOrNil(),
 		Schema: c.config.Schema,
+	})
+}
+
+type JobUpdateParams struct{}
+
+// JobUpdate updates the job with the given ID.
+//
+// Currently, no fields are explicitly updatable via this method, but if called
+// inside a work function, it will set output recorded with RecordOutput, if
+// any.
+func (c *Client[TTx]) JobUpdate(ctx context.Context, id int64, params *JobUpdateParams) (*rivertype.JobRow, error) {
+	return c.jobUpdate(ctx, c.driver.GetExecutor(), id, params)
+}
+
+// JobUpdateTx updates the job with the given ID.
+//
+// Currently, no fields are explicitly updatable via this method, but if called
+// inside a work function, it will set output recorded with RecordOutput, if
+// any.
+//
+// This variant updates the job inside of a transaction.
+func (c *Client[TTx]) JobUpdateTx(ctx context.Context, tx TTx, id int64, params *JobUpdateParams) (*rivertype.JobRow, error) {
+	return c.jobUpdate(ctx, c.driver.UnwrapExecutor(tx), id, params)
+}
+
+func (c *Client[TTx]) jobUpdate(ctx context.Context, exec riverdriver.Executor, id int64, params *JobUpdateParams) (*rivertype.JobRow, error) {
+	if params == nil {
+		params = &JobUpdateParams{} //nolint:ineffassign,wastedassign // this is ineffectual because params aren't actually used anywhere, but keep this behavior for once they are
+	}
+
+	var (
+		metadataDoMerge      bool
+		metadataUpdatesBytes = []byte("{}") // even in the even of no update, still valid jsonb
+	)
+	metadataUpdates, hasMetadataUpdates := jobexecutor.MetadataUpdatesFromWorkContext(ctx)
+	if hasMetadataUpdates {
+		var err error
+		metadataDoMerge = true
+		metadataUpdatesBytes, err = json.Marshal(metadataUpdates)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling metadata updates to JSON: %w", err)
+		}
+	}
+
+	return exec.JobUpdateFast(ctx, &riverdriver.JobUpdateFastParams{
+		ID:              id,
+		MetadataDoMerge: metadataDoMerge,
+		Metadata:        metadataUpdatesBytes,
+		Schema:          c.config.Schema,
 	})
 }
 

@@ -3400,6 +3400,44 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		})
 	})
 
+	t.Run("JobUpdateFast", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("AllArgs", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Metadata: []byte(`{"key1":"val1"}`),
+			})
+
+			updatedJob, err := exec.JobUpdateFast(ctx, &riverdriver.JobUpdateFastParams{
+				ID:              job.ID,
+				MetadataDoMerge: true,
+				Metadata:        []byte(`{"key2":"val2"}`),
+			})
+			require.NoError(t, err)
+			require.JSONEq(t, `{"key1":"val1","key2":"val2"}`, string(updatedJob.Metadata))
+		})
+
+		t.Run("NoArgs", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Metadata: []byte(`{"key1":"val1"}`),
+			})
+
+			updatedJob, err := exec.JobUpdateFast(ctx, &riverdriver.JobUpdateFastParams{
+				ID: job.ID,
+			})
+			require.NoError(t, err)
+			require.JSONEq(t, `{"key1":"val1"}`, string(updatedJob.Metadata))
+		})
+	})
+
 	const leaderTTL = 10 * time.Second
 
 	// For use in test cases whera non-clock "now" is _not_ injected. This can
