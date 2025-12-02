@@ -43,6 +43,11 @@ const (
 // Once recorded, the output is stored regardless of the outcome of the
 // execution attempt (success, error, panic, etc.).
 //
+// RecordOutput always stores output lazily as a job is being completed (whether
+// that's completion to success or failure). Client.JobUpdate and JobUpdateTx
+// are available to store output eagerly at any time, including from inside a
+// work function as the job is being executed.
+//
 // The output is marshalled to JSON as part of this function and it will return
 // an error if the output is not JSON-encodable.
 func RecordOutput(ctx context.Context, output any) error {
@@ -51,17 +56,24 @@ func RecordOutput(ctx context.Context, output any) error {
 		return errors.New("RecordOutput must be called within a Worker")
 	}
 
-	metadataUpdatesBytes, err := json.Marshal(output)
+	outputBytes, err := json.Marshal(output)
 	if err != nil {
 		return err
 	}
 
-	// Postgres JSONB is limited to 255MB, but it would be a bad idea to get
-	// anywhere close to that limit here.
-	if len(metadataUpdatesBytes) > maxOutputSizeBytes {
-		return fmt.Errorf("output is too large: %d bytes (max %d MB)", len(metadataUpdatesBytes), maxOutputSizeMB)
+	if err := checkOutputSize(outputBytes); err != nil {
+		return err
 	}
 
-	metadataUpdates[rivertype.MetadataKeyOutput] = json.RawMessage(metadataUpdatesBytes)
+	metadataUpdates[rivertype.MetadataKeyOutput] = json.RawMessage(outputBytes)
+	return nil
+}
+
+// Postgres JSONB is limited to 255MB, but it would be a bad idea to get
+// anywhere close to that limit for output.
+func checkOutputSize(outputBytes []byte) error {
+	if len(outputBytes) > maxOutputSizeBytes {
+		return fmt.Errorf("output is too large: %d bytes (max %d MB)", len(outputBytes), maxOutputSizeMB)
+	}
 	return nil
 }

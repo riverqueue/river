@@ -222,6 +222,7 @@ type Executor interface {
 	JobSchedule(ctx context.Context, params *JobScheduleParams) ([]*JobScheduleResult, error)
 	JobSetStateIfRunningMany(ctx context.Context, params *JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
 	JobUpdate(ctx context.Context, params *JobUpdateParams) (*rivertype.JobRow, error)
+	JobUpdateFull(ctx context.Context, params *JobUpdateFullParams) (*rivertype.JobRow, error)
 	LeaderAttemptElect(ctx context.Context, params *LeaderElectParams) (bool, error)
 	LeaderAttemptReelect(ctx context.Context, params *LeaderElectParams) (bool, error)
 	LeaderDeleteExpired(ctx context.Context, params *LeaderDeleteExpiredParams) (int, error)
@@ -634,6 +635,13 @@ type JobSetStateIfRunningManyParams struct {
 }
 
 type JobUpdateParams struct {
+	ID              int64
+	MetadataDoMerge bool
+	Metadata        []byte
+	Schema          string
+}
+
+type JobUpdateFullParams struct {
 	ID                  int64
 	AttemptDoUpdate     bool
 	Attempt             int

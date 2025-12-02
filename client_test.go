@@ -24,6 +24,7 @@ import (
 	"github.com/tidwall/sjson"
 
 	"github.com/riverqueue/river/internal/dbunique"
+	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/middlewarelookup"
 	"github.com/riverqueue/river/internal/notifier"
@@ -4534,6 +4535,187 @@ func Test_Client_JobRetry(t *testing.T) {
 	})
 }
 
+func Test_Client_JobUpdate(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		dbPool *pgxpool.Pool
+	}
+
+	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+		t.Helper()
+
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
+		)
+
+		return client, &testBundle{dbPool: dbPool}
+	}
+
+	t.Run("AllParams", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		insertRes, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{})
+		require.NoError(t, err)
+
+		job, err := client.JobUpdate(ctx, insertRes.Job.ID, &JobUpdateParams{
+			Output: "my job output",
+		})
+		require.NoError(t, err)
+		require.Equal(t, `"my job output"`, string(job.Output()))
+
+		updatedJob, err := client.JobGet(ctx, job.ID)
+		require.NoError(t, err)
+		require.Equal(t, `"my job output"`, string(updatedJob.Output()))
+	})
+
+	t.Run("NoParams", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		insertRes, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{})
+		require.NoError(t, err)
+
+		_, err = client.JobUpdate(ctx, insertRes.Job.ID, nil)
+		require.NoError(t, err)
+	})
+
+	t.Run("OutputFromContext", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		insertRes, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{})
+		require.NoError(t, err)
+
+		ctx := context.WithValue(ctx, jobexecutor.ContextKeyMetadataUpdates, map[string]any{})
+		require.NoError(t, RecordOutput(ctx, "my job output from context"))
+
+		job, err := client.JobUpdate(ctx, insertRes.Job.ID, &JobUpdateParams{})
+		require.NoError(t, err)
+		require.Equal(t, `"my job output from context"`, string(job.Output()))
+
+		updatedJob, err := client.JobGet(ctx, job.ID)
+		require.NoError(t, err)
+		require.Equal(t, `"my job output from context"`, string(updatedJob.Output()))
+	})
+
+	t.Run("ParamOutputTakesPrecedenceOverContextOutput", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		insertRes, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{})
+		require.NoError(t, err)
+
+		ctx := context.WithValue(ctx, jobexecutor.ContextKeyMetadataUpdates, map[string]any{})
+		require.NoError(t, RecordOutput(ctx, "my job output from context"))
+
+		job, err := client.JobUpdate(ctx, insertRes.Job.ID, &JobUpdateParams{
+			Output: "my job output from params",
+		})
+		require.NoError(t, err)
+		require.Equal(t, `"my job output from params"`, string(job.Output()))
+
+		updatedJob, err := client.JobGet(ctx, job.ID)
+		require.NoError(t, err)
+		require.Equal(t, `"my job output from params"`, string(updatedJob.Output()))
+	})
+
+	t.Run("ParamOutputTooLarge", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		insertRes, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{})
+		require.NoError(t, err)
+
+		_, err = client.JobUpdate(ctx, insertRes.Job.ID, &JobUpdateParams{
+			Output: strings.Repeat("x", maxOutputSizeBytes+1),
+		})
+		require.ErrorContains(t, err, "output is too large")
+	})
+}
+
+func Test_Client_JobUpdateTx(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		dbPool     *pgxpool.Pool
+		executorTx riverdriver.ExecutorTx
+		tx         pgx.Tx
+	}
+
+	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+		t.Helper()
+
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
+			client = newTestClient(t, dbPool, config)
+		)
+
+		tx, err := dbPool.Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { tx.Rollback(ctx) })
+
+		return client, &testBundle{
+			dbPool:     dbPool,
+			executorTx: client.driver.UnwrapExecutor(tx),
+			tx:         tx,
+		}
+	}
+
+	t.Run("AllParams", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		insertRes, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{})
+		require.NoError(t, err)
+
+		job, err := client.JobUpdateTx(ctx, bundle.tx, insertRes.Job.ID, &JobUpdateParams{
+			Output: "my job output",
+		})
+		require.NoError(t, err)
+		require.Equal(t, `"my job output"`, string(job.Output()))
+
+		updatedJob, err := client.JobGetTx(ctx, bundle.tx, job.ID)
+		require.NoError(t, err)
+		require.Equal(t, `"my job output"`, string(updatedJob.Output()))
+
+		// Outside of transaction shows original
+		updatedJob, err = client.JobGet(ctx, job.ID)
+		require.NoError(t, err)
+		require.Empty(t, string(updatedJob.Output()))
+	})
+
+	t.Run("NoParams", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		insertRes, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{})
+		require.NoError(t, err)
+
+		_, err = client.JobUpdateTx(ctx, bundle.tx, insertRes.Job.ID, nil)
+		require.NoError(t, err)
+	})
+}
+
 func Test_Client_ErrorHandler(t *testing.T) {
 	t.Parallel()
 
@@ -5859,7 +6041,7 @@ func Test_Client_RetryPolicy(t *testing.T) {
 			// regression protection to ensure we're testing the right number of jobs:
 			require.Equal(t, rivercommon.MaxAttemptsDefault, insertRes.Job.MaxAttempts)
 
-			updatedJob, err := client.driver.GetExecutor().JobUpdate(ctx, &riverdriver.JobUpdateParams{
+			updatedJob, err := client.driver.GetExecutor().JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
 				ID:                  insertRes.Job.ID,
 				AttemptedAtDoUpdate: true,
 				AttemptedAt:         &now, // we want a value here, but it'll be overwritten as jobs are locked by the producer
@@ -6647,7 +6829,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		}
 
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
-			_, err := client.driver.GetExecutor().JobUpdate(ctx, &riverdriver.JobUpdateParams{
+			_, err := client.driver.GetExecutor().JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
 				ID:                  job.ID,
 				FinalizedAtDoUpdate: true,
 				FinalizedAt:         &now,
@@ -6753,7 +6935,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		}
 
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
-			_, err := client.driver.GetExecutor().JobUpdate(ctx, &riverdriver.JobUpdateParams{
+			_, err := client.driver.GetExecutor().JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
 				ID:                  job.ID,
 				ErrorsDoUpdate:      true,
 				Errors:              [][]byte{[]byte("{\"error\": \"oops\"}")},

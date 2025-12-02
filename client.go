@@ -17,6 +17,7 @@ import (
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
+	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/leadership"
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/middlewarelookup"
@@ -1511,6 +1512,97 @@ func (c *Client[TTx]) jobRetry(ctx context.Context, exec riverdriver.Executor, i
 		ID:     id,
 		Now:    c.baseService.Time.NowUTCOrNil(),
 		Schema: c.config.Schema,
+	})
+}
+
+// JobUpdateParams contains parameters for Client.JobUpdate and Client.JobUpdateTx.
+type JobUpdateParams struct {
+	// Output is a new output value for a job.
+	//
+	// If not set, and a job is updated from inside a work function, the job's
+	// output is set based on output recorded so far using RecordOutput.
+	Output any
+}
+
+// JobUpdate updates the job with the given ID.
+//
+// If JobUpdateParams.Output is not set, this function may be used inside a job
+// work function to set a job's output based on output recorded so far using
+// RecordOutput.
+func (c *Client[TTx]) JobUpdate(ctx context.Context, id int64, params *JobUpdateParams) (*rivertype.JobRow, error) {
+	return c.jobUpdate(ctx, c.driver.GetExecutor(), id, params)
+}
+
+// JobUpdateTx updates the job with the given ID.
+//
+// If JobUpdateParams.Output is not set, this function may be used inside a job
+// work function to set a job's output based on output recorded so far using
+// RecordOutput.
+//
+// This variant updates the job inside of a transaction.
+func (c *Client[TTx]) JobUpdateTx(ctx context.Context, tx TTx, id int64, params *JobUpdateParams) (*rivertype.JobRow, error) {
+	return c.jobUpdate(ctx, c.driver.UnwrapExecutor(tx), id, params)
+}
+
+func (c *Client[TTx]) jobUpdate(ctx context.Context, exec riverdriver.Executor, id int64, params *JobUpdateParams) (*rivertype.JobRow, error) {
+	if params == nil {
+		params = &JobUpdateParams{}
+	}
+
+	outputFromWorkContext := func() json.RawMessage {
+		metadataUpdates, hasMetadataUpdates := jobexecutor.MetadataUpdatesFromWorkContext(ctx)
+		if !hasMetadataUpdates {
+			return nil
+		}
+
+		if val, ok := metadataUpdates[rivertype.MetadataKeyOutput]; ok {
+			return val.(json.RawMessage) //nolint:forcetypeassert
+		}
+
+		return nil
+	}()
+
+	var (
+		metadataDoMerge      bool
+		metadataUpdatesBytes = []byte("{}") // even in the event of no update, still valid jsonb
+	)
+	if outputFromWorkContext != nil || params.Output != nil {
+		metadataDoMerge = true
+
+		var outputBytes json.RawMessage
+
+		switch {
+		// comes first because params takes precedence over context output
+		case params.Output != nil:
+			var err error
+			outputBytes, err = json.Marshal(params.Output)
+			if err != nil {
+				return nil, err
+			}
+
+			if err := checkOutputSize(outputBytes); err != nil {
+				return nil, err
+			}
+
+		case outputFromWorkContext != nil:
+			// no size check necessary here because it's already been checked in RecordOutput
+			outputBytes = outputFromWorkContext
+		}
+
+		var err error
+		metadataUpdatesBytes, err = json.Marshal(map[string]json.RawMessage{
+			rivertype.MetadataKeyOutput: outputBytes,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling metadata updates to JSON: %w", err)
+		}
+	}
+
+	return exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+		ID:              id,
+		MetadataDoMerge: metadataDoMerge,
+		Metadata:        metadataUpdatesBytes,
+		Schema:          c.config.Schema,
 	})
 }
 

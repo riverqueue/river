@@ -3342,13 +3342,51 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		t.Run("AllArgs", func(t *testing.T) {
 			t.Parallel()
 
+			exec, _ := setup(ctx, t)
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Metadata: []byte(`{"key1":"val1"}`),
+			})
+
+			updatedJob, err := exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+				ID:              job.ID,
+				MetadataDoMerge: true,
+				Metadata:        []byte(`{"key2":"val2"}`),
+			})
+			require.NoError(t, err)
+			require.JSONEq(t, `{"key1":"val1","key2":"val2"}`, string(updatedJob.Metadata))
+		})
+
+		t.Run("NoArgs", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Metadata: []byte(`{"key1":"val1"}`),
+			})
+
+			updatedJob, err := exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+				ID: job.ID,
+			})
+			require.NoError(t, err)
+			require.JSONEq(t, `{"key1":"val1"}`, string(updatedJob.Metadata))
+		})
+	})
+
+	t.Run("JobUpdateFull", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("AllArgs", func(t *testing.T) {
+			t.Parallel()
+
 			exec, bundle := setup(ctx, t)
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
 
 			now := time.Now().UTC()
 
-			updatedJob, err := exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+			updatedJob, err := exec.JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
 				ID:                  job.ID,
 				AttemptDoUpdate:     true,
 				Attempt:             7,
@@ -3385,7 +3423,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
 
-			updatedJob, err := exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+			updatedJob, err := exec.JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
 				ID: job.ID,
 			})
 			require.NoError(t, err)

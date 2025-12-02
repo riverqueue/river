@@ -697,9 +697,24 @@ SELECT *
 FROM updated
 ORDER BY id;
 
+-- name: JobUpdate :one
+WITH locked_job AS (
+    SELECT id
+    FROM /* TEMPLATE: schema */river_job
+    WHERE river_job.id = @id
+    FOR UPDATE
+)
+UPDATE /* TEMPLATE: schema */river_job
+SET
+    metadata = CASE WHEN @metadata_do_merge::boolean THEN metadata || @metadata::jsonb ELSE metadata END
+FROM
+    locked_job
+WHERE river_job.id = locked_job.id
+RETURNING river_job.*;
+
 -- A generalized update for any property on a job. This brings in a large number
 -- of parameters and therefore may be more suitable for testing than production.
--- name: JobUpdate :one
+-- name: JobUpdateFull :one
 UPDATE /* TEMPLATE: schema */river_job
 SET
     attempt = CASE WHEN @attempt_do_update::boolean THEN @attempt ELSE attempt END,
