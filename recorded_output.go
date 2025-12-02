@@ -51,17 +51,17 @@ func RecordOutput(ctx context.Context, output any) error {
 		return errors.New("RecordOutput must be called within a Worker")
 	}
 
-	metadataUpdatesBytes, err := json.Marshal(output)
+	outputBytes, err := json.Marshal(output)
 	if err != nil {
 		return err
 	}
 
 	// Postgres JSONB is limited to 255MB, but it would be a bad idea to get
 	// anywhere close to that limit here.
-	if len(metadataUpdatesBytes) > maxOutputSizeBytes {
-		return fmt.Errorf("output is too large: %d bytes (max %d MB)", len(metadataUpdatesBytes), maxOutputSizeMB)
+	if len(outputBytes) > maxOutputSizeBytes {
+		return fmt.Errorf("output is too large: %d bytes (max %d MB)", len(outputBytes), maxOutputSizeMB)
 	}
 
-	metadataUpdates[rivertype.MetadataKeyOutput] = json.RawMessage(metadataUpdatesBytes)
+	metadataUpdates[rivertype.MetadataKeyOutput] = json.RawMessage(outputBytes)
 	return nil
 }

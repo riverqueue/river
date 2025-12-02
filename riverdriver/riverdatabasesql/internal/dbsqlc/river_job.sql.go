@@ -1613,6 +1613,54 @@ func (q *Queries) JobSetStateIfRunningMany(ctx context.Context, db DBTX, arg *Jo
 }
 
 const jobUpdate = `-- name: JobUpdate :one
+WITH locked_job AS (
+    SELECT id
+    FROM /* TEMPLATE: schema */river_job
+    WHERE river_job.id = $3
+    FOR UPDATE
+)
+UPDATE /* TEMPLATE: schema */river_job
+SET
+    metadata = CASE WHEN $1::boolean THEN metadata || $2::jsonb ELSE metadata END
+FROM
+    locked_job
+WHERE river_job.id = locked_job.id
+RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states
+`
+
+type JobUpdateParams struct {
+	MetadataDoMerge bool
+	Metadata        string
+	ID              int64
+}
+
+func (q *Queries) JobUpdate(ctx context.Context, db DBTX, arg *JobUpdateParams) (*RiverJob, error) {
+	row := db.QueryRowContext(ctx, jobUpdate, arg.MetadataDoMerge, arg.Metadata, arg.ID)
+	var i RiverJob
+	err := row.Scan(
+		&i.ID,
+		&i.Args,
+		&i.Attempt,
+		&i.AttemptedAt,
+		pq.Array(&i.AttemptedBy),
+		&i.CreatedAt,
+		pq.Array(&i.Errors),
+		&i.FinalizedAt,
+		&i.Kind,
+		&i.MaxAttempts,
+		&i.Metadata,
+		&i.Priority,
+		&i.Queue,
+		&i.State,
+		&i.ScheduledAt,
+		pq.Array(&i.Tags),
+		&i.UniqueKey,
+		&i.UniqueStates,
+	)
+	return &i, err
+}
+
+const jobUpdateFull = `-- name: JobUpdateFull :one
 UPDATE /* TEMPLATE: schema */river_job
 SET
     attempt = CASE WHEN $1::boolean THEN $2 ELSE attempt END,
@@ -1627,7 +1675,7 @@ WHERE id = $17
 RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 `
 
-type JobUpdateParams struct {
+type JobUpdateFullParams struct {
 	AttemptDoUpdate     bool
 	Attempt             int16
 	AttemptedAtDoUpdate bool
@@ -1649,8 +1697,8 @@ type JobUpdateParams struct {
 
 // A generalized update for any property on a job. This brings in a large number
 // of parameters and therefore may be more suitable for testing than production.
-func (q *Queries) JobUpdate(ctx context.Context, db DBTX, arg *JobUpdateParams) (*RiverJob, error) {
-	row := db.QueryRowContext(ctx, jobUpdate,
+func (q *Queries) JobUpdateFull(ctx context.Context, db DBTX, arg *JobUpdateFullParams) (*RiverJob, error) {
+	row := db.QueryRowContext(ctx, jobUpdateFull,
 		arg.AttemptDoUpdate,
 		arg.Attempt,
 		arg.AttemptedAtDoUpdate,

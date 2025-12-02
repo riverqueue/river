@@ -162,7 +162,7 @@ func TestMiddleware(t *testing.T) {
 		require.NoError(t, err)
 
 		// Set state back to available and unfinalize the job to make it runnable again.
-		workRes.Job, err = bundle.driver.UnwrapExecutor(bundle.tx).JobUpdate(ctx, &riverdriver.JobUpdateParams{
+		workRes.Job, err = bundle.driver.UnwrapExecutor(bundle.tx).JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
 			ID:                  workRes.Job.ID,
 			FinalizedAtDoUpdate: true,
 			FinalizedAt:         nil,
