@@ -1653,3 +1653,51 @@ func (q *Queries) JobUpdate(ctx context.Context, db DBTX, arg *JobUpdateParams) 
 	)
 	return &i, err
 }
+
+const jobUpdateFast = `-- name: JobUpdateFast :one
+WITH locked_job AS (
+    SELECT id
+    FROM /* TEMPLATE: schema */river_job
+    WHERE river_job.id = $3
+    FOR UPDATE
+)
+UPDATE /* TEMPLATE: schema */river_job
+SET
+    metadata = CASE WHEN $1::boolean THEN metadata || $2::jsonb ELSE metadata END
+FROM
+    locked_job
+WHERE river_job.id = locked_job.id
+RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states
+`
+
+type JobUpdateFastParams struct {
+	MetadataDoMerge bool
+	Metadata        []byte
+	ID              int64
+}
+
+func (q *Queries) JobUpdateFast(ctx context.Context, db DBTX, arg *JobUpdateFastParams) (*RiverJob, error) {
+	row := db.QueryRow(ctx, jobUpdateFast, arg.MetadataDoMerge, arg.Metadata, arg.ID)
+	var i RiverJob
+	err := row.Scan(
+		&i.ID,
+		&i.Args,
+		&i.Attempt,
+		&i.AttemptedAt,
+		&i.AttemptedBy,
+		&i.CreatedAt,
+		&i.Errors,
+		&i.FinalizedAt,
+		&i.Kind,
+		&i.MaxAttempts,
+		&i.Metadata,
+		&i.Priority,
+		&i.Queue,
+		&i.State,
+		&i.ScheduledAt,
+		&i.Tags,
+		&i.UniqueKey,
+		&i.UniqueStates,
+	)
+	return &i, err
+}

@@ -712,3 +712,18 @@ SET
     state = CASE WHEN @state_do_update::boolean THEN @state::/* TEMPLATE: schema */river_job_state ELSE state END
 WHERE id = @id
 RETURNING *;
+
+-- name: JobUpdateFast :one
+WITH locked_job AS (
+    SELECT id
+    FROM /* TEMPLATE: schema */river_job
+    WHERE river_job.id = @id
+    FOR UPDATE
+)
+UPDATE /* TEMPLATE: schema */river_job
+SET
+    metadata = CASE WHEN @metadata_do_merge::boolean THEN metadata || @metadata::jsonb ELSE metadata END
+FROM
+    locked_job
+WHERE river_job.id = locked_job.id
+RETURNING river_job.*;

@@ -693,6 +693,24 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 	return jobRowFromInternal(job)
 }
 
+func (e *Executor) JobUpdateFast(ctx context.Context, params *riverdriver.JobUpdateFastParams) (*rivertype.JobRow, error) {
+	metadata := params.Metadata
+	if metadata == nil {
+		metadata = []byte("{}")
+	}
+
+	job, err := dbsqlc.New().JobUpdateFast(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobUpdateFastParams{
+		ID:              params.ID,
+		MetadataDoMerge: params.MetadataDoMerge,
+		Metadata:        string(metadata),
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+
+	return jobRowFromInternal(job)
+}
+
 func (e *Executor) LeaderAttemptElect(ctx context.Context, params *riverdriver.LeaderElectParams) (bool, error) {
 	numElectionsWon, err := dbsqlc.New().LeaderAttemptElect(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.LeaderAttemptElectParams{
 		LeaderID: params.LeaderID,

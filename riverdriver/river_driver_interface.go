@@ -222,6 +222,7 @@ type Executor interface {
 	JobSchedule(ctx context.Context, params *JobScheduleParams) ([]*JobScheduleResult, error)
 	JobSetStateIfRunningMany(ctx context.Context, params *JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
 	JobUpdate(ctx context.Context, params *JobUpdateParams) (*rivertype.JobRow, error)
+	JobUpdateFast(ctx context.Context, params *JobUpdateFastParams) (*rivertype.JobRow, error)
 	LeaderAttemptElect(ctx context.Context, params *LeaderElectParams) (bool, error)
 	LeaderAttemptReelect(ctx context.Context, params *LeaderElectParams) (bool, error)
 	LeaderDeleteExpired(ctx context.Context, params *LeaderDeleteExpiredParams) (int, error)
@@ -656,6 +657,13 @@ type JobUpdateParams struct {
 	UniqueKeyDoUpdate bool
 	// Deprecated and will be removed when advisory lock unique path is removed.
 	UniqueKey []byte
+}
+
+type JobUpdateFastParams struct {
+	ID              int64
+	MetadataDoMerge bool
+	Metadata        []byte
+	Schema          string
 }
 
 // Leader represents a River leader.

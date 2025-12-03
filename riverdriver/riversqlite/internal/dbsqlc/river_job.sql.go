@@ -1575,3 +1575,43 @@ func (q *Queries) JobUpdate(ctx context.Context, db DBTX, arg *JobUpdateParams) 
 	)
 	return &i, err
 }
+
+const jobUpdateFast = `-- name: JobUpdateFast :one
+UPDATE /* TEMPLATE: schema */river_job
+SET
+    metadata = CASE WHEN cast(?1 AS boolean) THEN json_patch(metadata, json(cast(?2 AS blob))) ELSE metadata END
+WHERE id = ?3
+RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
+`
+
+type JobUpdateFastParams struct {
+	MetadataDoMerge bool
+	Metadata        []byte
+	ID              int64
+}
+
+func (q *Queries) JobUpdateFast(ctx context.Context, db DBTX, arg *JobUpdateFastParams) (*RiverJob, error) {
+	row := db.QueryRowContext(ctx, jobUpdateFast, arg.MetadataDoMerge, arg.Metadata, arg.ID)
+	var i RiverJob
+	err := row.Scan(
+		&i.ID,
+		&i.Args,
+		&i.Attempt,
+		&i.AttemptedAt,
+		&i.AttemptedBy,
+		&i.CreatedAt,
+		&i.Errors,
+		&i.FinalizedAt,
+		&i.Kind,
+		&i.MaxAttempts,
+		&i.Metadata,
+		&i.Priority,
+		&i.Queue,
+		&i.State,
+		&i.ScheduledAt,
+		&i.Tags,
+		&i.UniqueKey,
+		&i.UniqueStates,
+	)
+	return &i, err
+}
