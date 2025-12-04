@@ -591,6 +591,7 @@ type Client[TTx any] struct {
 	baseService   baseservice.BaseService
 	baseStartStop startstop.BaseStartStop
 
+	clientNotifyBundle     *ClientNotifyBundle[TTx]
 	completer              jobcompleter.JobCompleter
 	config                 *Config
 	driver                 riverdriver.Driver[TTx]
@@ -718,6 +719,10 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	}
 
 	client := &Client[TTx]{
+		clientNotifyBundle: &ClientNotifyBundle[TTx]{
+			config: config,
+			driver: driver,
+		},
 		config:               config,
 		driver:               driver,
 		hookLookupByJob:      hooklookup.NewJobHookLookup(),
@@ -2273,6 +2278,56 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 		res.LastCursor = jobListCursorFromJobAndParams(jobs[len(jobs)-1], params)
 	}
 	return res, nil
+}
+
+// Notify retrieves a notification bundle for the client (in the sense of
+// Postgres listen/notify) used to send notifications of various kinds.
+func (c *Client[TTx]) Notify() *ClientNotifyBundle[TTx] {
+	return c.clientNotifyBundle
+}
+
+// ClientNotifyBundle sends various notifications for a client (in the sense of
+// Postgres listen/notify). Functions are on this bundle struct instead of the
+// top-level client to keep them grouped together and better organized.
+type ClientNotifyBundle[TTx any] struct {
+	config *Config
+	driver riverdriver.Driver[TTx]
+}
+
+// RequestResign sends a notification requesting that the current leader resign.
+// This usually causes the resignation of the current leader, but may have no
+// effect if no leader is currently elected.
+func (c *ClientNotifyBundle[TTx]) RequestResign(ctx context.Context) error {
+	return dbutil.WithTx(ctx, c.driver.GetExecutor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
+		return c.requestResignTx(ctx, execTx)
+	})
+}
+
+// RequestResignTx sends a notification requesting that the current leader
+// resign. This usually causes the resignation of the current leader, but may
+// have no effect if no leader is currently elected.
+//
+// This variant sends a notification in a transaction, which means that no
+// notification is sent until the transaction commits.
+func (c *ClientNotifyBundle[TTx]) RequestResignTx(ctx context.Context, tx TTx) error {
+	return c.requestResignTx(ctx, c.driver.UnwrapExecutor(tx))
+}
+
+// notifyExecTx is a shared helper between Notify and NotifyTx that sends a
+// notification.
+func (c *ClientNotifyBundle[TTx]) requestResignTx(ctx context.Context, execTx riverdriver.ExecutorTx) error {
+	payloadStr, err := json.Marshal(&leadership.DBNotification{
+		Action: leadership.DBNotificationKindRequestResign,
+	})
+	if err != nil {
+		return err
+	}
+
+	return execTx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+		Payload: []string{string(payloadStr)},
+		Schema:  c.config.Schema,
+		Topic:   string(notifier.NotificationTopicLeadership),
+	})
 }
 
 // PeriodicJobs returns the currently configured set of periodic jobs for the

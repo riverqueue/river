@@ -1106,6 +1106,52 @@ func Test_Client_Common(t *testing.T) {
 		require.True(t, middlewareCalled)
 	})
 
+	t.Run("NotifyRequestResign", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+		client.testSignals.Init(t)
+
+		startClient(ctx, t, client)
+
+		client.config.Logger.InfoContext(ctx, "Test waiting for client to be elected leader for the first time")
+		client.testSignals.electedLeader.WaitOrTimeout()
+		client.config.Logger.InfoContext(ctx, "Client was elected leader for the first time")
+
+		// We test the function with a forced resignation, but this is a general
+		// Notify test case so this could be changed to any notification.
+		require.NoError(t, client.Notify().RequestResign(ctx))
+
+		client.config.Logger.InfoContext(ctx, "Test waiting for client to be elected leader after forced resignation")
+		client.testSignals.electedLeader.WaitOrTimeout()
+		client.config.Logger.InfoContext(ctx, "Client was elected leader after forced resignation")
+	})
+
+	t.Run("NotifyRequestResignTx", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+		client.testSignals.Init(t)
+
+		startClient(ctx, t, client)
+
+		client.config.Logger.InfoContext(ctx, "Test waiting for client to be elected leader for the first time")
+		client.testSignals.electedLeader.WaitOrTimeout()
+		client.config.Logger.InfoContext(ctx, "Client was elected leader for the first time")
+
+		tx, err := bundle.dbPool.Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { tx.Rollback(ctx) })
+
+		require.NoError(t, client.Notify().RequestResignTx(ctx, tx))
+
+		require.NoError(t, tx.Commit(ctx))
+
+		client.config.Logger.InfoContext(ctx, "Test waiting for client to be elected leader after forced resignation")
+		client.testSignals.electedLeader.WaitOrTimeout()
+		client.config.Logger.InfoContext(ctx, "Client was elected leader after forced resignation")
+	})
+
 	t.Run("PauseAndResumeSingleQueue", func(t *testing.T) {
 		t.Parallel()
 
