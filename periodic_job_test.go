@@ -69,7 +69,7 @@ func TestPeriodicJobBundle(t *testing.T) {
 			nil,
 		)
 
-		internalPeriodicJob := periodicJobBundle.toInternal(periodicJob)
+		internalPeriodicJob := periodicJobBundle.mapper.toInternal(periodicJob)
 
 		insertParams1, err := internalPeriodicJob.ConstructorFunc()
 		require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestPeriodicJobBundle(t *testing.T) {
 			nil,
 		)
 
-		internalPeriodicJob := periodicJobBundle.toInternal(periodicJob)
+		internalPeriodicJob := periodicJobBundle.mapper.toInternal(periodicJob)
 
 		_, err := internalPeriodicJob.ConstructorFunc()
 		require.ErrorIs(t, err, maintenance.ErrNoJobToInsert)

@@ -4884,6 +4884,54 @@ func Test_Client_Maintenance(t *testing.T) {
 		requireJobHasState(jobInFuture3.ID, jobInFuture3.State)
 	})
 
+	t.Run("PeriodicJobEnqueuerStartHook", func(t *testing.T) {
+		t.Parallel()
+
+		config := newTestConfig(t, "")
+
+		var periodicJobsStartHookCalled bool
+		config.Hooks = []rivertype.Hook{
+			HookPeriodicJobsStartFunc(func(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error {
+				periodicJobsStartHookCalled = true
+
+				client := ClientFromContext[pgx.Tx](ctx)
+
+				client.PeriodicJobs().Clear()
+
+				client.PeriodicJobs().Add(
+					NewPeriodicJob(cron.Every(15*time.Minute), func() (JobArgs, *InsertOpts) {
+						return periodicJobArgs{}, nil
+					}, &PeriodicJobOpts{ID: "new_periodic_job", RunOnStart: true}),
+				)
+
+				return nil
+			}),
+		}
+
+		worker := &periodicJobWorker{}
+		AddWorker(config.Workers, worker)
+		config.PeriodicJobs = []*PeriodicJob{
+			NewPeriodicJob(cron.Every(15*time.Minute), func() (JobArgs, *InsertOpts) {
+				return periodicJobArgs{}, nil
+			}, &PeriodicJobOpts{ID: "old_periodic_job", RunOnStart: true}),
+		}
+
+		client, _ := setup(t, config)
+
+		startAndWaitForQueueMaintainer(ctx, t, client)
+
+		svc := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
+		svc.TestSignals.InsertedJobs.WaitOrTimeout()
+
+		require.True(t, periodicJobsStartHookCalled)
+
+		// Use the return value of these to determine that the OnStart callback
+		// went through successfully. (True if the job was removed and false
+		// otherwise.)
+		require.False(t, svc.RemoveByID("old_periodic_job"))
+		require.True(t, svc.RemoveByID("new_periodic_job"))
+	})
+
 	t.Run("PeriodicJobEnqueuerWithInsertOpts", func(t *testing.T) {
 		t.Parallel()
 

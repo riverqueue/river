@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Added `HookPeriodicJobsStart` that can be used to run custom logic when a periodic job enqueuer starts up on a new leader. [PR #1084](https://github.com/riverqueue/river/pull/1084).
 - Added `Client.Notify().RequestResign` and `Client.Notify().RequestResignTx` functions allowing any client to request that the current leader resign. [PR #1085](https://github.com/riverqueue/river/pull/1085).
 
 ## [0.28.0] - 2025-11-23
@@ -14,13 +15,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Added `riverlog.LoggerSafely` which provides a non-panic variant of `riverlog.Logger` for use when code may or may not have a context logger available. [PR #1093](https://github.com/riverqueue/river/pull/1093).
-
-## [0.27.1] - 2025-11-21
-
-### Fixed
-
-- Unique args: Handle embedded fields that are not structs. [PR #1088](https://github.com/riverqueue/river/pull/1088).
-- Fix stack overflow when handling `river:"unique"` annotations on recursive types. [PR #1090](https://github.com/riverqueue/river/pull/1090).
 
 ## [0.27.0] - 2025-11-14
 
