@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -567,27 +568,38 @@ func attemptElectOrReelect(ctx context.Context, exec riverdriver.Executor, alrea
 	ctx, cancel := context.WithTimeout(ctx, deadlineTimeout)
 	defer cancel()
 
-	return dbutil.WithTxV(ctx, exec, func(ctx context.Context, exec riverdriver.ExecutorTx) (bool, error) {
-		if _, err := exec.LeaderDeleteExpired(ctx, &riverdriver.LeaderDeleteExpiredParams{
-			Now:    params.Now,
-			Schema: params.Schema,
-		}); err != nil {
-			return false, err
+	execTx, err := exec.Begin(ctx)
+	if err != nil {
+		var additionalDetail string
+		if errors.Is(err, context.DeadlineExceeded) {
+			additionalDetail = " (a common cause of this is a database pool that's at its connection limit; you may need to increase maximum connections)"
 		}
 
-		var (
-			elected bool
-			err     error
-		)
-		if alreadyElected {
-			elected, err = exec.LeaderAttemptReelect(ctx, params)
-		} else {
-			elected, err = exec.LeaderAttemptElect(ctx, params)
-		}
-		if err != nil {
-			return false, err
-		}
+		return false, fmt.Errorf("error beginning transaction: %w%s", err, additionalDetail)
+	}
+	defer dbutil.RollbackWithoutCancel(ctx, execTx)
 
-		return elected, nil
-	})
+	if _, err := execTx.LeaderDeleteExpired(ctx, &riverdriver.LeaderDeleteExpiredParams{
+		Now:    params.Now,
+		Schema: params.Schema,
+	}); err != nil {
+		return false, err
+	}
+
+	var elected bool
+	if alreadyElected {
+		elected, err = execTx.LeaderAttemptReelect(ctx, params)
+
+	} else {
+		elected, err = execTx.LeaderAttemptElect(ctx, params)
+	}
+	if err != nil {
+		return false, err
+	}
+
+	if err := execTx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("error committing transaction: %w", err)
+	}
+
+	return elected, nil
 }
