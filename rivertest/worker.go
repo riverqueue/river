@@ -157,7 +157,7 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 		}
 	}
 
-	updatedJobRow, err := exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+	updatedJobRow, err := exec.JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
 		ID:                  job.ID,
 		Attempt:             job.Attempt + 1,
 		AttemptDoUpdate:     true,

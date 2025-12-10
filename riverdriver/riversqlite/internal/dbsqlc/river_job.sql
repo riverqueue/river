@@ -492,9 +492,16 @@ WHERE id = @id
     AND state = 'running'
 RETURNING *;
 
+-- name: JobUpdate :one
+UPDATE /* TEMPLATE: schema */river_job
+SET
+    metadata = CASE WHEN cast(@metadata_do_merge AS boolean) THEN json_patch(metadata, json(cast(@metadata AS blob))) ELSE metadata END
+WHERE id = @id
+RETURNING *;
+
 -- A generalized update for any property on a job. This brings in a large number
 -- of parameters and therefore may be more suitable for testing than production.
--- name: JobUpdate :one
+-- name: JobUpdateFull :one
 UPDATE /* TEMPLATE: schema */river_job
 SET
     attempt = CASE WHEN cast(@attempt_do_update AS boolean) THEN @attempt ELSE attempt END,
