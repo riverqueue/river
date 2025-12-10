@@ -1152,6 +1152,30 @@ func Test_Client_Common(t *testing.T) {
 		client.config.Logger.InfoContext(ctx, "Client was elected leader after forced resignation")
 	})
 
+	t.Run("OutputRoundTrip", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			require.NoError(t, RecordOutput(ctx, "my job output"))
+			return nil
+		}))
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		_, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, `"my job output"`, string(event.Job.Output()))
+	})
+
 	t.Run("PauseAndResumeSingleQueue", func(t *testing.T) {
 		t.Parallel()
 
