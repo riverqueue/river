@@ -998,6 +998,24 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 }
 
 func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateParams) (*rivertype.JobRow, error) {
+	metadata := params.Metadata
+	if metadata == nil {
+		metadata = []byte("{}")
+	}
+
+	job, err := dbsqlc.New().JobUpdate(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobUpdateParams{
+		ID:              params.ID,
+		MetadataDoMerge: params.MetadataDoMerge,
+		Metadata:        metadata,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+
+	return jobRowFromInternal(job)
+}
+
+func (e *Executor) JobUpdateFull(ctx context.Context, params *riverdriver.JobUpdateFullParams) (*rivertype.JobRow, error) {
 	attemptedAt := params.AttemptedAt
 	if attemptedAt != nil {
 		attemptedAt = ptrutil.Ptr(attemptedAt.UTC())
@@ -1023,7 +1041,7 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 		metadata = []byte("{}")
 	}
 
-	job, err := dbsqlc.New().JobUpdate(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobUpdateParams{
+	job, err := dbsqlc.New().JobUpdateFull(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobUpdateFullParams{
 		ID:                  params.ID,
 		Attempt:             int64(params.Attempt),
 		AttemptDoUpdate:     params.AttemptDoUpdate,

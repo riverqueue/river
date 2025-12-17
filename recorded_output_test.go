@@ -145,7 +145,7 @@ func Test_RecordedOutput(t *testing.T) {
 
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 			// Record an output of 32MB + 1 byte:
-			err := RecordOutput(ctx, strings.Repeat("x", 32*1024*1024+1))
+			err := RecordOutput(ctx, strings.Repeat("x", maxOutputSizeBytes+1))
 			require.ErrorContains(t, err, "output is too large")
 			return err
 		}))

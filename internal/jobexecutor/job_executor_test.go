@@ -318,7 +318,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 			require.Equal(t, rivertype.JobStateAvailable, job.State)
 		}
 
-		_, err := bundle.exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+		_, err := bundle.exec.JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
 			ID:            bundle.jobRow.ID,
 			StateDoUpdate: true,
 			State:         rivertype.JobStateRunning,
@@ -373,7 +373,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		// add a unique key so we can verify it's cleared
 		var err error
-		bundle.jobRow, err = bundle.exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+		bundle.jobRow, err = bundle.exec.JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
 			ID:    bundle.jobRow.ID,
 			State: rivertype.JobStateAvailable, // required for encoding but ignored
 		})
