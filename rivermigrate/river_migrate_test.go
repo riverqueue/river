@@ -392,6 +392,43 @@ func TestMigrator(t *testing.T) {
 			sliceutil.Map(migrations, driverMigrationToInt))
 	})
 
+	// Can't use riverdbtest inthis package due to a circular dependency problem.
+	testTx := func(t *testing.T, driver *driverWithAlternateLine) pgx.Tx {
+		t.Helper()
+
+		execTx, err := driver.GetExecutor().Begin(ctx)
+		require.NoError(t, err)
+
+		t.Cleanup(func() { require.NoError(t, execTx.Rollback(ctx)) })
+
+		return driver.UnwrapTx(execTx)
+	}
+
+	t.Run("MigrateDownTx", func(t *testing.T) {
+		t.Parallel()
+
+		// Some transactional incompatibilities were introduced into the
+		// migration lines so we can no longer exercise the *Tx functions all
+		// the way up and down right now. Only do a couple steps to give them a
+		// little exercise and in such a away that they're functional.
+		// still work
+		const maxSteps = 2
+
+		migrator, bundle := setup(t)
+
+		tx := testTx(t, bundle.driver)
+
+		_, err := migrator.MigrateTx(ctx, tx, DirectionUp, &MigrateOpts{
+			MaxSteps: maxSteps,
+		})
+		require.NoError(t, err)
+
+		_, err = migrator.MigrateTx(ctx, tx, DirectionDown, &MigrateOpts{
+			MaxSteps: maxSteps,
+		})
+		require.NoError(t, err)
+	})
+
 	t.Run("GetVersion", func(t *testing.T) {
 		t.Parallel()
 
@@ -579,6 +616,26 @@ func TestMigrator(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(migrationsBundle.MaxVersion),
 			sliceutil.Map(migrations, driverMigrationToInt))
+	})
+
+	t.Run("MigrateUpTx", func(t *testing.T) {
+		t.Parallel()
+
+		// Some transactional incompatibilities were introduced into the
+		// migration lines so we can no longer exercise the *Tx functions all
+		// the way up and down right now. Only do a couple steps to give them a
+		// little exercise and in such a away that they're functional.
+		// still work
+		const maxSteps = 2
+
+		migrator, bundle := setup(t)
+
+		tx := testTx(t, bundle.driver)
+
+		_, err := migrator.MigrateTx(ctx, tx, DirectionUp, &MigrateOpts{
+			MaxSteps: maxSteps,
+		})
+		require.NoError(t, err)
 	})
 
 	t.Run("ValidateSuccess", func(t *testing.T) {
