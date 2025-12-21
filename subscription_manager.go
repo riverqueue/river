@@ -207,7 +207,8 @@ func (sm *subscriptionManager) distributeQueueEvent(event *Event) {
 	}
 }
 
-// Special internal variant that lets us inject an overridden size.
+// SubscribeConfig is a special internal Subscribe variant that lets us inject
+// an overridden size.
 func (sm *subscriptionManager) SubscribeConfig(config *SubscribeConfig) (<-chan *Event, func()) {
 	if config.ChanSize < 0 {
 		panic("SubscribeConfig.ChanSize must be greater or equal to 1")

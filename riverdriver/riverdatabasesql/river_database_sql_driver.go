@@ -1108,7 +1108,7 @@ type templateReplaceWrapper struct {
 	replacer *sqlctemplate.Replacer
 }
 
-func (w templateReplaceWrapper) ExecContext(ctx context.Context, sql string, args ...interface{}) (sql.Result, error) {
+func (w templateReplaceWrapper) ExecContext(ctx context.Context, sql string, args ...any) (sql.Result, error) {
 	sql, args = w.replacer.Run(ctx, argPlaceholder, sql, args)
 	return w.dbtx.ExecContext(ctx, sql, args...)
 }
@@ -1118,12 +1118,12 @@ func (w templateReplaceWrapper) PrepareContext(ctx context.Context, sql string) 
 	return w.dbtx.PrepareContext(ctx, sql)
 }
 
-func (w templateReplaceWrapper) QueryContext(ctx context.Context, sql string, args ...interface{}) (*sql.Rows, error) {
+func (w templateReplaceWrapper) QueryContext(ctx context.Context, sql string, args ...any) (*sql.Rows, error) {
 	sql, args = w.replacer.Run(ctx, argPlaceholder, sql, args)
 	return w.dbtx.QueryContext(ctx, sql, args...)
 }
 
-func (w templateReplaceWrapper) QueryRowContext(ctx context.Context, sql string, args ...interface{}) *sql.Row {
+func (w templateReplaceWrapper) QueryRowContext(ctx context.Context, sql string, args ...any) *sql.Row {
 	sql, args = w.replacer.Run(ctx, argPlaceholder, sql, args)
 	return w.dbtx.QueryRowContext(ctx, sql, args...)
 }

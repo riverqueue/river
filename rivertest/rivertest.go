@@ -31,8 +31,8 @@ type testingT interface {
 	Logf(format string, args ...any)
 }
 
-// Options for RequireInserted functions including expectations for various
-// queuing properties that stem from InsertOpts.
+// RequireInsertedOpts are options for RequireInserted functions including
+// expectations for various queuing properties that stem from InsertOpts.
 //
 // Multiple properties set on this struct increase the specificity on a job to
 // match, acting like an AND condition on each.
@@ -111,7 +111,7 @@ func requireInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.JobAr
 	t.Helper()
 	actualArgs, err := requireInsertedErr[TDriver](ctx, t, driver.GetExecutor(), expectedJob, opts)
 	if err != nil {
-		failure(t, "Internal failure: %s", err)
+		failuref(t, "Internal failure: %s", err)
 	}
 	return actualArgs
 }
@@ -147,7 +147,7 @@ func requireInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.Job
 	var driver TDriver
 	actualArgs, err := requireInsertedErr[TDriver](ctx, t, driver.UnwrapExecutor(tx), expectedJob, opts)
 	if err != nil {
-		failure(t, "Internal failure: %s", err)
+		failuref(t, "Internal failure: %s", err)
 	}
 	return actualArgs
 }
@@ -170,12 +170,12 @@ func requireInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.Jo
 	}
 
 	if len(jobRows) < 1 {
-		failure(t, "No jobs found with kind: %s", expectedJob.Kind())
+		failuref(t, "No jobs found with kind: %s", expectedJob.Kind())
 		return nil, nil //nolint:nilnil
 	}
 
 	if len(jobRows) > 1 {
-		failure(t, "More than one job found with kind: %s (you might want RequireManyInserted instead)", expectedJob.Kind())
+		failuref(t, "More than one job found with kind: %s (you might want RequireManyInserted instead)", expectedJob.Kind())
 		return nil, nil //nolint:nilnil
 	}
 
@@ -220,7 +220,7 @@ func requireNotInserted[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.Jo
 	t.Helper()
 	err := requireNotInsertedErr[TDriver](ctx, t, driver.GetExecutor(), expectedJob, opts)
 	if err != nil {
-		failure(t, "Internal failure: %s", err)
+		failuref(t, "Internal failure: %s", err)
 	}
 }
 
@@ -255,7 +255,7 @@ func requireNotInsertedTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs river.
 	var driver TDriver
 	err := requireNotInsertedErr[TDriver](ctx, t, driver.UnwrapExecutor(tx), expectedJob, opts)
 	if err != nil {
-		failure(t, "Internal failure: %s", err)
+		failuref(t, "Internal failure: %s", err)
 	}
 }
 
@@ -281,7 +281,7 @@ func requireNotInsertedErr[TDriver riverdriver.Driver[TTx], TTx any, TArgs river
 	}
 
 	if len(jobRows) > 0 && opts == nil {
-		failure(t, "%d jobs found with kind, but expected to find none: %s", len(jobRows), expectedJob.Kind())
+		failuref(t, "%d jobs found with kind, but expected to find none: %s", len(jobRows), expectedJob.Kind())
 		return nil
 	}
 
@@ -350,7 +350,7 @@ func requireManyInserted[TDriver riverdriver.Driver[TTx], TTx any](ctx context.C
 	t.Helper()
 	actualArgs, err := requireManyInsertedErr[TDriver](ctx, t, driver.GetExecutor(), expectedJobs)
 	if err != nil {
-		failure(t, "Internal failure: %s", err)
+		failuref(t, "Internal failure: %s", err)
 	}
 	return actualArgs
 }
@@ -396,7 +396,7 @@ func requireManyInsertedTx[TDriver riverdriver.Driver[TTx], TTx any](ctx context
 	var driver TDriver
 	actualArgs, err := requireManyInsertedErr[TDriver](ctx, t, driver.UnwrapExecutor(tx), expectedJobs)
 	if err != nil {
-		failure(t, "Internal failure: %s", err)
+		failuref(t, "Internal failure: %s", err)
 	}
 	return actualArgs
 }
@@ -442,7 +442,7 @@ func requireManyInsertedErr[TDriver riverdriver.Driver[TTx], TTx any](ctx contex
 	actualArgsKinds := sliceutil.Map(jobRows, func(j *rivertype.JobRow) string { return j.Kind })
 
 	if !slices.Equal(expectedArgsKinds, actualArgsKinds) {
-		failure(t, "Inserted jobs didn't match expectation; expected: %+v, actual: %+v",
+		failuref(t, "Inserted jobs didn't match expectation; expected: %+v, actual: %+v",
 			expectedArgsKinds, actualArgsKinds)
 		return nil, nil
 	}
@@ -590,13 +590,13 @@ func compareJobToInsertOpts(t testingT, jobRow *rivertype.JobRow, expectedOpts *
 	// not match all requested conditions, so the RequireNotInserted will not
 	// fail). If all properties matched, then like with RequireInserted, we'll
 	// have built up failures and are ready to emit a final failure message.
-	failure(t, "Job with kind '%s'%s %s", jobRow.Kind, positionStr(), strings.Join(failures, ", "))
+	failuref(t, "Job with kind '%s'%s %s", jobRow.Kind, positionStr(), strings.Join(failures, ", "))
 	return false
 }
 
-// failure takes a printf-style directive and is a shortcut for failing an
+// failuref takes a printf-style directive and is a shortcut for failing an
 // assertion.
-func failure(t testingT, format string, a ...any) {
+func failuref(t testingT, format string, a ...any) {
 	t.Helper()
 	t.Log(failureString(format, a...))
 	t.FailNow()

@@ -1238,7 +1238,8 @@ type SubscribeConfig struct {
 	Kinds []EventKind
 }
 
-// Special internal variant that lets us inject an overridden size.
+// SubscribeConfig is a special internal variant of Subscribe that lets us
+// inject an overridden channel size.
 func (c *Client[TTx]) SubscribeConfig(config *SubscribeConfig) (<-chan *Event, func()) {
 	if c.subscriptionManager == nil {
 		panic("created a subscription on a client that will never work jobs (Queues not configured)")
@@ -1446,7 +1447,7 @@ func (c *Client[TTx]) JobDelete(ctx context.Context, id int64) (*rivertype.JobRo
 	})
 }
 
-// JobDelete deletes the job with the given ID from the database, returning the
+// JobDeleteTx deletes the job with the given ID from the database, returning the
 // deleted row if it was deleted. Jobs in the running state are not deleted,
 // instead returning rivertype.ErrJobRunning. This variant lets a caller retry a
 // job atomically alongside other database changes. A deleted job isn't deleted
@@ -2029,10 +2030,10 @@ func (c *Client[TTx]) InsertManyFast(ctx context.Context, params []InsertManyPar
 	return len(res), nil
 }
 
-// InsertManyTx inserts many jobs at once using Postgres' `COPY FROM` mechanism,
-// making the operation quite fast and memory efficient. Each job is inserted as
-// an InsertManyParams tuple, which takes job args along with an optional set of
-// insert options, which override insert options provided by an
+// InsertManyFastTx inserts many jobs at once using Postgres' `COPY FROM`
+// mechanism, making the operation quite fast and memory efficient. Each job is
+// inserted as an InsertManyParams tuple, which takes job args along with an
+// optional set of insert options, which override insert options provided by an
 // JobArgsWithInsertOpts.InsertOpts implementation or any client-level defaults.
 // The provided context is used for the underlying Postgres inserts and can be
 // used to cancel the operation or apply a timeout.
@@ -2443,7 +2444,8 @@ func (c *Client[TTx]) PeriodicJobs() *PeriodicJobBundle {
 	return c.periodicJobs
 }
 
-// Driver exposes the underlying pilot used by the client.
+// Pilot returns the pilot in use by the pilot. If not configured, this is often
+// simply StandardPilot.
 //
 // API is not stable. DO NOT USE.
 func (c *Client[TTx]) Pilot() riverpilot.Pilot {
@@ -2649,7 +2651,7 @@ func (c *Client[TTx]) QueueResume(ctx context.Context, name string, opts *QueueP
 	return nil
 }
 
-// QueueResume resumes the queue with the given name. If the queue was
+// QueueResumeTx resumes the queue with the given name. If the queue was
 // previously paused, any clients configured to work that queue will resume
 // fetching additional jobs. To resume all queues at once, use the special queue
 // name "*".

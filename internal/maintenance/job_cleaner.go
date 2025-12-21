@@ -20,7 +20,7 @@ import (
 	"github.com/riverqueue/river/rivershared/util/timeutil"
 )
 
-// Test-only properties.
+// JobCleanerTestSignals are internal signals used exclusively in tests.
 type JobCleanerTestSignals struct {
 	DeletedBatch testsignal.TestSignal[struct{}] // notifies when runOnce finishes a pass
 }

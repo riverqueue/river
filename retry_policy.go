@@ -25,7 +25,7 @@ type ClientRetryPolicy interface {
 	NextRetry(job *rivertype.JobRow) time.Time
 }
 
-// River's default retry policy.
+// DefaultClientRetryPolicy is River's default retry policy.
 type DefaultClientRetryPolicy struct {
 	timeNowFunc func() time.Time
 }

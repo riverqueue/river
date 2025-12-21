@@ -29,7 +29,7 @@ const (
 	JobRescuerIntervalDefault    = 30 * time.Second
 )
 
-// Test-only properties.
+// JobRescuerTestSignals are internal signals used exclusively in tests.
 type JobRescuerTestSignals struct {
 	FetchedBatch testsignal.TestSignal[struct{}] // notifies when runOnce has fetched a batch of jobs
 	UpdatedBatch testsignal.TestSignal[struct{}] // notifies when runOnce has updated rescued jobs from a batch

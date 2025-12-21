@@ -29,7 +29,7 @@ import (
 // signal that there's no job to insert at this time.
 var ErrNoJobToInsert = errors.New("a nil job was returned, nothing to insert")
 
-// Test-only properties.
+// PeriodicJobEnqueuerTestSignals are internal signals used exclusively in tests.
 type PeriodicJobEnqueuerTestSignals struct {
 	EnteredLoop                 testsignal.TestSignal[struct{}] // notifies when the enqueuer finishes start up and enters its initial run loop
 	InsertedJobs                testsignal.TestSignal[struct{}] // notifies when a batch of jobs is inserted
@@ -263,7 +263,7 @@ func (s *PeriodicJobEnqueuer) Remove(periodicJobHandle rivertype.PeriodicJobHand
 	}
 }
 
-// Remove removes a periodic job from the enqueuer by ID. Its current target run
+// RemoveByID removes a periodic job from the enqueuer by ID. Its current target run
 // time and all future runs are cancelled.
 func (s *PeriodicJobEnqueuer) RemoveByID(id string) bool {
 	s.mu.Lock()
@@ -291,8 +291,8 @@ func (s *PeriodicJobEnqueuer) RemoveMany(periodicJobHandles []rivertype.Periodic
 	}
 }
 
-// RemoveMany removes many periodic jobs from the enqueuer by ID. Their current
-// target run time and all future runs are cancelled.
+// RemoveManyByID removes many periodic jobs from the enqueuer by ID. Their
+// current target run time and all future runs are cancelled.
 func (s *PeriodicJobEnqueuer) RemoveManyByID(ids []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

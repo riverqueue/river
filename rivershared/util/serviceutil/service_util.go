@@ -23,7 +23,7 @@ func CancellableSleep(ctx context.Context, sleepDuration time.Duration) {
 	}
 }
 
-// CancellableSleep sleeps for the given duration, but returns early if context
+// CancellableSleepC sleeps for the given duration, but returns early if context
 // has been cancelled.
 //
 // This variant returns a channel that should be waited on and which will be
@@ -62,7 +62,7 @@ const MaxAttemptsBeforeResetDefault = 7
 // - 8s
 // - 16s
 // - 32s
-// - 64s
+// - 64s.
 func ExponentialBackoff(attempt, maxAttemptsBeforeReset int) time.Duration {
 	retrySeconds := exponentialBackoffSecondsWithoutJitter(attempt, maxAttemptsBeforeReset)
 

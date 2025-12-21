@@ -204,8 +204,9 @@ func Logger(tb testing.TB) *slog.Logger {
 	return slogtest.NewLogger(tb, nil)
 }
 
-// Logger returns a logger suitable for use in tests which outputs only at warn
-// or above. Useful in tests where particularly noisy log output is expected.
+// LoggerWarn returns a logger suitable for use in tests which outputs only at
+// warn or above. Useful in tests where particularly noisy log output is
+// expected.
 func LoggerWarn(tb testutil.TestingTB) *slog.Logger {
 	tb.Helper()
 	return slogtest.NewLogger(tb, &slog.HandlerOptions{Level: slog.LevelWarn})

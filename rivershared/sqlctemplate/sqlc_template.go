@@ -43,6 +43,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strconv"
@@ -249,12 +250,8 @@ func (r *Replacer) RunSafely(ctx context.Context, argPlaceholder, sql string, ar
 // merged, with the new params taking precedent.
 func WithReplacements(ctx context.Context, replacements map[string]Replacement, namedArgs map[string]any) context.Context {
 	if container, ok := ctx.Value(contextKey{}).(*contextContainer); ok {
-		for arg, val := range namedArgs {
-			container.NamedArgs[arg] = val
-		}
-		for template, replacement := range replacements {
-			container.Replacements[template] = replacement
-		}
+		maps.Copy(container.NamedArgs, namedArgs)
+		maps.Copy(container.Replacements, replacements)
 		return ctx
 	}
 

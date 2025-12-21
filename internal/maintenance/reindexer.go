@@ -18,6 +18,8 @@ import (
 const (
 	ReindexerIntervalDefault = 24 * time.Hour
 
+	// ReindexerTimeoutDefault is the default timeout of the reindexer.
+	//
 	// We've had user reports of builds taking 45 seconds on large tables, so
 	// set a timeout of that plus a little margin. Use of `CONCURRENTLY` should
 	// prevent index operations that run a little long from impacting work from
@@ -37,7 +39,7 @@ var defaultIndexNames = []string{ //nolint:gochecknoglobals
 	"river_job_unique_idx",
 }
 
-// Test-only properties.
+// ReindexerTestSignals are internal signals used exclusively in tests.
 type ReindexerTestSignals struct {
 	Reindexed testsignal.TestSignal[struct{}] // notifies when a run finishes executing reindexes for all indexes
 }
