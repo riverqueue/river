@@ -27,6 +27,7 @@ linters:
     - ireturn # bans returning interfaces; questionable as is, but also buggy as hell; very, very annoying
     - lll # restricts maximum line length; annoying
     - nlreturn # requires a blank line before returns; annoying
+    - unqueryvet # bans all use of `SELECT *`; just ... sigh
     - wsl # a bunch of style/whitespace stuff; annoying
     - wsl_v5 # a second version of the first annoying wsl; how nice
 

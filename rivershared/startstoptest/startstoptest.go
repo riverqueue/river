@@ -80,7 +80,7 @@ func StressErr(ctx context.Context, tb testingT, svc startstop.Service, allowedS
 // Minimal interface for *testing.B/*testing.T that lets us test a failure
 // condition for our test helpers above.
 type testingT interface {
-	Errorf(format string, args ...interface{})
+	Errorf(format string, args ...any)
 	FailNow()
 	Helper()
 }

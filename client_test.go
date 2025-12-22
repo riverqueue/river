@@ -7858,7 +7858,9 @@ func (a JobArgsStaticKind) Kind() string {
 
 type JobArgsReflectKind[TKind any] struct{}
 
-func (a JobArgsReflectKind[TKind]) Kind() string { return reflect.TypeOf(a).Name() }
+func (a JobArgsReflectKind[TKind]) Kind() string {
+	return reflect.TypeFor[JobArgsReflectKind[TKind]]().Name()
+}
 
 func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 	t.Parallel()

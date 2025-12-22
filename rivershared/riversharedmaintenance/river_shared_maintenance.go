@@ -11,12 +11,14 @@ import (
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 )
 
+// Maintainers will sleep a brief period of time between batches to give the
+// database some breathing room.
 const (
-	// Maintainers will sleep a brief period of time between batches to give the
-	// database some breathing room.
 	BatchBackoffMax = 1 * time.Second
 	BatchBackoffMin = 50 * time.Millisecond
+)
 
+const (
 	LogPrefixRanSuccessfully = ": Ran successfully"
 	LogPrefixRunLoopStarted  = ": Run loop started"
 	LogPrefixRunLoopStopped  = ": Run loop stopped"

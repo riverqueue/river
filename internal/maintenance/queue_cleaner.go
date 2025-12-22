@@ -26,7 +26,7 @@ const (
 	QueueRetentionPeriodDefault = 24 * time.Hour
 )
 
-// Test-only properties.
+// QueueCleanerTestSignals are internal signals used exclusively in tests.
 type QueueCleanerTestSignals struct {
 	DeletedBatch testsignal.TestSignal[struct{}] // notifies when runOnce finishes a pass
 }

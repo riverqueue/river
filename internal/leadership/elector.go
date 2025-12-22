@@ -589,7 +589,6 @@ func attemptElectOrReelect(ctx context.Context, exec riverdriver.Executor, alrea
 	var elected bool
 	if alreadyElected {
 		elected, err = execTx.LeaderAttemptReelect(ctx, params)
-
 	} else {
 		elected, err = execTx.LeaderAttemptElect(ctx, params)
 	}

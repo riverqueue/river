@@ -25,7 +25,7 @@ const (
 	JobSchedulerIntervalDefault = 5 * time.Second
 )
 
-// Test-only properties.
+// JobSchedulerTestSignals are internal signals used exclusively in tests.
 type JobSchedulerTestSignals struct {
 	NotifiedQueues testsignal.TestSignal[[]string] // notifies when queues are sent an insert notification
 	ScheduledBatch testsignal.TestSignal[struct{}] // notifies when runOnce finishes a pass
@@ -36,7 +36,7 @@ func (ts *JobSchedulerTestSignals) Init(tb testutil.TestingTB) {
 	ts.ScheduledBatch.Init(tb)
 }
 
-// NotifyInsert is a function to call to emit notifications for queues where
+// NotifyInsertFunc is a function to call to emit notifications for queues where
 // jobs were scheduled.
 type NotifyInsertFunc func(ctx context.Context, execTx riverdriver.ExecutorTx, queues []string) error
 

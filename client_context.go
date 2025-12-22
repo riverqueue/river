@@ -33,9 +33,9 @@ func ClientFromContext[TTx any](ctx context.Context) *Client[TTx] {
 	return client
 }
 
-// ClientFromContext returns the Client from the context. This function can
-// only be used within a Worker's Work() method because that is the only place
-// River sets the Client on the context.
+// ClientFromContextSafely returns the Client from the context. This function
+// can only be used within a Worker's Work() method because that is the only
+// place River sets the Client on the context.
 //
 // It returns an error if the context does not contain a Client, which will
 // never happen from the context provided to a Worker's Work() method.

@@ -266,8 +266,8 @@ func (p *producer) Stop() {
 	p.Logger.Debug(p.Name+": Stop returned", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
 }
 
-// Start starts the producer. It backgrounds a goroutine which is stopped when
-// context is cancelled or Stop is invoked.
+// StartWorkContext starts the producer. It backgrounds a goroutine which is
+// stopped when context is cancelled or Stop is invoked.
 //
 // When fetchCtx is cancelled, no more jobs will be fetched; however, if a fetch
 // is already in progress, It will be allowed to complete and run any fetched

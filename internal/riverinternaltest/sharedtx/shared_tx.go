@@ -95,8 +95,11 @@ func (e *SharedTx) QueryRow(ctx context.Context, query string, args ...any) pgx.
 	return &SharedTxRow{sharedTxDerivative{sharedTx: e}, row}
 }
 
+//
 // These are all implemented so that a SharedTx can be used as a pgx.Tx, but are
 // all non-functional.
+//
+
 func (e *SharedTx) Conn() *pgx.Conn                  { panic("not implemented") }
 func (e *SharedTx) Commit(ctx context.Context) error { panic("not implemented") }
 func (e *SharedTx) LargeObjects() pgx.LargeObjects   { panic("not implemented") }
@@ -163,17 +166,20 @@ func (r *SharedTxRows) Close() {
 	r.innerRows.Close()
 }
 
+//
 // All of these are simple pass throughs.
+//
+
 func (r *SharedTxRows) CommandTag() pgconn.CommandTag { return r.innerRows.CommandTag() }
 func (r *SharedTxRows) Conn() *pgx.Conn               { return nil }
 func (r *SharedTxRows) Err() error                    { return r.innerRows.Err() }
 func (r *SharedTxRows) FieldDescriptions() []pgconn.FieldDescription {
 	return r.innerRows.FieldDescriptions()
 }
-func (r *SharedTxRows) Next() bool                     { return r.innerRows.Next() }
-func (r *SharedTxRows) RawValues() [][]byte            { return r.innerRows.RawValues() }
-func (r *SharedTxRows) Scan(dest ...any) error         { return r.innerRows.Scan(dest...) }
-func (r *SharedTxRows) Values() ([]interface{}, error) { return r.innerRows.Values() }
+func (r *SharedTxRows) Next() bool             { return r.innerRows.Next() }
+func (r *SharedTxRows) RawValues() [][]byte    { return r.innerRows.RawValues() }
+func (r *SharedTxRows) Scan(dest ...any) error { return r.innerRows.Scan(dest...) }
+func (r *SharedTxRows) Values() ([]any, error) { return r.innerRows.Values() }
 
 // SharedSubTx wraps a pgx.Tx such that it unlocks SharedTx when it commits or
 // rolls back.

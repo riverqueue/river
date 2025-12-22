@@ -28,4 +28,6 @@ import "reflect"
 // so the type doesn't pollute the global namespace.
 type JobArgsReflectKind[TKind any] struct{}
 
-func (a JobArgsReflectKind[TKind]) Kind() string { return reflect.TypeOf(a).Name() }
+func (a JobArgsReflectKind[TKind]) Kind() string {
+	return reflect.TypeFor[JobArgsReflectKind[TKind]]().Name()
+}

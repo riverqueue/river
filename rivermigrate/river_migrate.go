@@ -177,8 +177,8 @@ func (m *Migrator[TTx]) ExistingVersions(ctx context.Context) ([]Migration, erro
 	return versions, nil
 }
 
-// ExistingVersions gets the existing set of versions that have been migrated in
-// the database, ordered by version.
+// ExistingVersionsTx gets the existing set of versions that have been migrated
+// in the database, ordered by version.
 //
 // This variant checks for existing versions in a transaction.
 func (m *Migrator[TTx]) ExistingVersionsTx(ctx context.Context, tx TTx) ([]Migration, error) {
@@ -367,7 +367,7 @@ func (m *Migrator[TTx]) Validate(ctx context.Context) (*ValidateResult, error) {
 	})
 }
 
-// Validate validates the current state of migrations, returning an unsuccessful
+// ValidateTx validates the current state of migrations, returning an unsuccessful
 // validation and usable message in case there are migrations that haven't yet
 // been applied.
 //

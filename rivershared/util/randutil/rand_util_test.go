@@ -54,7 +54,7 @@ func TestIntBetween(t *testing.T) {
 //
 
 func BenchmarkRandV2(b *testing.B) {
-	for range b.N {
+	for b.Loop() {
 		_ = rand.IntN(1984)
 	}
 }
@@ -68,7 +68,7 @@ func BenchmarkCryptoSource(b *testing.B) {
 		return nBig.Int64()
 	}
 
-	for range b.N {
+	for b.Loop() {
 		_ = intN(1984)
 	}
 }

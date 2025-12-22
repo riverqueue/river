@@ -91,8 +91,8 @@ func getSortedUniqueFields(typ reflect.Type, path []string, typesSeen map[reflec
 		// Check for `river:"unique"` tag, possibly among other comma-separated values
 		var hasUniqueTag bool
 		if riverTag, ok := field.Tag.Lookup("river"); ok {
-			tags := strings.Split(riverTag, ",")
-			for _, tag := range tags {
+			tags := strings.SplitSeq(riverTag, ",")
+			for tag := range tags {
 				if strings.TrimSpace(tag) == "unique" {
 					hasUniqueTag = true
 				}

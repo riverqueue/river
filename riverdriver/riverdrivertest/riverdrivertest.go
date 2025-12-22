@@ -1607,7 +1607,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			)
 
 			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
-			for i := 0; i < len(insertParams); i++ {
+			for i := range insertParams {
 				insertParams[i] = &riverdriver.JobInsertFastParams{
 					ID:           ptrutil.Ptr(idStart + int64(i)),
 					CreatedAt:    ptrutil.Ptr(now.Add(time.Duration(i) * 5 * time.Second)),
@@ -1668,7 +1668,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			exec, _ := setup(ctx, t)
 
 			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
-			for i := 0; i < len(insertParams); i++ {
+			for i := range insertParams {
 				insertParams[i] = &riverdriver.JobInsertFastParams{
 					EncodedArgs:  []byte(`{"encoded": "args"}`),
 					Kind:         "test_kind",
@@ -1826,7 +1826,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			now := time.Now().UTC().Add(-1 * time.Minute)
 
 			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
-			for i := 0; i < len(insertParams); i++ {
+			for i := range insertParams {
 				insertParams[i] = &riverdriver.JobInsertFastParams{
 					CreatedAt:    ptrutil.Ptr(now.Add(time.Duration(i) * 5 * time.Second)),
 					EncodedArgs:  []byte(`{"encoded": "args"}`),
@@ -1881,7 +1881,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			exec, _ := setup(ctx, t)
 
 			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
-			for i := 0; i < len(insertParams); i++ {
+			for i := range insertParams {
 				insertParams[i] = &riverdriver.JobInsertFastParams{
 					EncodedArgs:  []byte(`{"encoded": "args"}`),
 					Kind:         "test_kind",
@@ -2011,7 +2011,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			exec, _ := setup(ctx, t)
 
 			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
-			for i := 0; i < len(insertParams); i++ {
+			for i := range insertParams {
 				insertParams[i] = &riverdriver.JobInsertFastParams{
 					CreatedAt:   nil, // explicit nil
 					EncodedArgs: []byte(`{"encoded": "args"}`),
@@ -2050,7 +2050,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			exec, _ := setup(ctx, t)
 
 			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
-			for i := 0; i < len(insertParams); i++ {
+			for i := range insertParams {
 				insertParams[i] = &riverdriver.JobInsertFastParams{
 					EncodedArgs: []byte(`{"encoded": "args"}`),
 					Kind:        "test_kind",
@@ -2097,7 +2097,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			now := time.Now().UTC().Add(-1 * time.Minute)
 
 			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
-			for i := 0; i < len(insertParams); i++ {
+			for i := range insertParams {
 				insertParams[i] = &riverdriver.JobInsertFastParams{
 					CreatedAt:    ptrutil.Ptr(now.Add(time.Duration(i) * 5 * time.Second)),
 					EncodedArgs:  []byte(`{"encoded": "args"}`),
@@ -3143,7 +3143,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			now := time.Now().UTC()
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				Metadata:    []byte(fmt.Sprintf(`{"cancel_attempted_at":"%s"}`, time.Now().UTC().Format(time.RFC3339))),
+				Metadata:    fmt.Appendf(nil, `{"cancel_attempted_at":"%s"}`, time.Now().UTC().Format(time.RFC3339)),
 				State:       ptrutil.Ptr(rivertype.JobStateRunning),
 				ScheduledAt: ptrutil.Ptr(now.Add(-10 * time.Second)),
 			})

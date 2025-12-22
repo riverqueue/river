@@ -106,7 +106,7 @@ func (t *MockT) LogOutput() string {
 
 func (t *MockT) Name() string { return "MockT" }
 
-// TestingT is an interface wrapper around *testing.T that's implemented by all
+// TestingTB is an interface wrapper around *testing.T that's implemented by all
 // of *testing.T, *testing.F, and *testing.B.
 //
 // It's used internally to verify that River's test assertions are working as

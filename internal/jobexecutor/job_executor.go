@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -507,13 +508,13 @@ func captureStackTraceSkipFrames(skip int) string {
 	n := runtime.Callers(skip, pcs)
 	frames := runtime.CallersFrames(pcs[:n])
 
-	var stackTrace string
+	var stackTraceSB strings.Builder
 	for {
 		frame, more := frames.Next()
-		stackTrace += fmt.Sprintf("%s\n\t%s:%d\n", frame.Function, frame.File, frame.Line)
+		stackTraceSB.WriteString(fmt.Sprintf("%s\n\t%s:%d\n", frame.Function, frame.File, frame.Line))
 		if !more {
 			break
 		}
 	}
-	return stackTrace
+	return stackTraceSB.String()
 }

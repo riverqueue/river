@@ -76,6 +76,6 @@ func newMockTestingT(tb testing.TB) *mockTestingT {
 	return &mockTestingT{tb: tb}
 }
 
-func (t *mockTestingT) Errorf(format string, args ...interface{}) {}
-func (t *mockTestingT) FailNow()                                  { t.failed.Store(true) }
-func (t *mockTestingT) Helper()                                   { t.tb.Helper() }
+func (t *mockTestingT) Errorf(format string, args ...any) {}
+func (t *mockTestingT) FailNow()                          { t.failed.Store(true) }
+func (t *mockTestingT) Helper()                           { t.tb.Helper() }

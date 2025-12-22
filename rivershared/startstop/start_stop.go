@@ -231,8 +231,8 @@ func (s *BaseStartStop) Stopped() <-chan struct{} {
 	return s.stopped
 }
 
-// StoppedWithoutLock returns a channel that can be waited on for the service to
-// be stopped.
+// StoppedUnsafe returns a channel that can be waited on for the service to be
+// stopped.
 //
 // Unlike Stopped, this returns the struct's internal channel directly without
 // preallocation and without taking a lock on the mutex (making it safe to call

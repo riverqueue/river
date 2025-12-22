@@ -1157,17 +1157,17 @@ func (w templateReplaceWrapper) Begin(ctx context.Context) (pgx.Tx, error) {
 	return w.dbtx.Begin(ctx)
 }
 
-func (w templateReplaceWrapper) Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error) {
+func (w templateReplaceWrapper) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	sql, args = w.replacer.Run(ctx, argPlaceholder, sql, args)
 	return w.dbtx.Exec(ctx, sql, args...)
 }
 
-func (w templateReplaceWrapper) Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error) {
+func (w templateReplaceWrapper) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
 	sql, args = w.replacer.Run(ctx, argPlaceholder, sql, args)
 	return w.dbtx.Query(ctx, sql, args...)
 }
 
-func (w templateReplaceWrapper) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
+func (w templateReplaceWrapper) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
 	sql, args = w.replacer.Run(ctx, argPlaceholder, sql, args)
 	return w.dbtx.QueryRow(ctx, sql, args...)
 }
