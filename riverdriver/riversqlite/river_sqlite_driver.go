@@ -375,17 +375,25 @@ func (e *Executor) JobDelete(ctx context.Context, params *riverdriver.JobDeleteP
 }
 
 func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobDeleteBeforeParams) (int, error) {
-	if len(params.QueuesIncluded) > 0 {
-		return 0, riverdriver.ErrNotImplemented
+	var (
+		replacements = make(map[string]sqlctemplate.Replacement)
+		namedArgs    = make(map[string]any)
+	)
+
+	if err := addQueuesClauseSQL(replacements, namedArgs, "queues_excluded_clause", "queue", params.QueuesExcluded, true); err != nil {
+		return 0, err
 	}
+	if err := addQueuesClauseSQL(replacements, namedArgs, "queues_included_clause", "queue", sliceutil.NilIfEmpty(params.QueuesIncluded), false); err != nil {
+		return 0, err
+	}
+
+	ctx = sqlctemplate.WithReplacements(ctx, replacements, namedArgs)
 
 	res, err := dbsqlc.New().JobDeleteBefore(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobDeleteBeforeParams{
 		CancelledFinalizedAtHorizon: timeString(params.CancelledFinalizedAtHorizon),
 		CompletedFinalizedAtHorizon: timeString(params.CompletedFinalizedAtHorizon),
 		DiscardedFinalizedAtHorizon: timeString(params.DiscardedFinalizedAtHorizon),
 		Max:                         int64(params.Max),
-		QueuesExcluded:              params.QueuesExcluded,
-		QueuesExcludedEmpty:         len(params.QueuesExcluded) < 1, // not in the Postgres version, but I couldn't find a way around it
 	})
 	if err != nil {
 		return 0, interpretError(err)
@@ -505,6 +513,17 @@ func (e *Executor) JobGetByKindMany(ctx context.Context, params *riverdriver.Job
 }
 
 func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error) {
+	var (
+		replacements = make(map[string]sqlctemplate.Replacement)
+		namedArgs    = make(map[string]any)
+	)
+
+	if err := addQueuesClauseSQL(replacements, namedArgs, "queues_included_clause", "queue", sliceutil.NilIfEmpty(params.QueuesIncluded), false); err != nil {
+		return nil, err
+	}
+
+	ctx = sqlctemplate.WithReplacements(ctx, replacements, namedArgs)
+
 	jobs, err := dbsqlc.New().JobGetStuck(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobGetStuckParams{
 		Max:          int64(params.Max),
 		StuckHorizon: timeString(params.StuckHorizon),
@@ -869,10 +888,24 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 		ctx = schemaTemplateParam(ctx, params.Schema)
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 
-		eligibleJobs, err := dbsqlc.New().JobScheduleGetEligible(schemaTemplateParam(ctx, params.Schema), dbtx, &dbsqlc.JobScheduleGetEligibleParams{
-			Max: int64(params.Max),
-			Now: timeStringNullable(params.Now),
-		})
+		eligibleJobs, err := func() ([]*dbsqlc.RiverJob, error) {
+			var (
+				replacements = make(map[string]sqlctemplate.Replacement)
+				namedArgs    = make(map[string]any)
+			)
+
+			if err := addQueuesClauseSQL(replacements, namedArgs, "queues_included_clause", "queue", sliceutil.NilIfEmpty(params.QueuesIncluded), false); err != nil {
+				return nil, err
+			}
+
+			ctx := sqlctemplate.WithReplacementsDup(ctx) // dupe so these new replacements don't leak into queries below (WithReplacements mutates an existing context container rather copies-on-write it)
+			ctx = sqlctemplate.WithReplacements(ctx, replacements, namedArgs)
+
+			return dbsqlc.New().JobScheduleGetEligible(schemaTemplateParam(ctx, params.Schema), dbtx, &dbsqlc.JobScheduleGetEligibleParams{
+				Max: int64(params.Max),
+				Now: timeStringNullable(params.Now),
+			})
+		}()
 		if err != nil {
 			return nil, interpretError(err)
 		}
@@ -1102,6 +1135,7 @@ func (e *Executor) JobUpdateFull(ctx context.Context, params *riverdriver.JobUpd
 func (e *Executor) LeaderAttemptElect(ctx context.Context, params *riverdriver.LeaderElectParams) (*riverdriver.Leader, error) {
 	leader, err := dbsqlc.New().LeaderAttemptElect(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.LeaderAttemptElectParams{
 		LeaderID: params.LeaderID,
+		Name:     params.Name,
 		Now:      timeStringNullable(params.Now),
 		TTL:      durationAsString(params.TTL),
 	})
@@ -1115,6 +1149,7 @@ func (e *Executor) LeaderAttemptReelect(ctx context.Context, params *riverdriver
 	leader, err := dbsqlc.New().LeaderAttemptReelect(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.LeaderAttemptReelectParams{
 		ElectedAt: timeString(params.ElectedAt),
 		LeaderID:  params.LeaderID,
+		Name:      params.Name,
 		Now:       timeStringNullable(params.Now),
 		TTL:       durationAsString(params.TTL),
 	})
@@ -1144,6 +1179,7 @@ func (e *Executor) LeaderInsert(ctx context.Context, params *riverdriver.LeaderI
 	leader, err := dbsqlc.New().LeaderInsert(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.LeaderInsertParams{
 		ElectedAt: timeStringNullable(params.ElectedAt),
 		ExpiresAt: timeStringNullable(params.ExpiresAt),
+		Name:      params.Name,
 		Now:       timeStringNullable(params.Now),
 		LeaderID:  params.LeaderID,
 		TTL:       durationAsString(params.TTL),
@@ -1292,6 +1328,17 @@ func (e *Executor) QueueCreateOrSetUpdatedAt(ctx context.Context, params *riverd
 }
 
 func (e *Executor) QueueDeleteExpired(ctx context.Context, params *riverdriver.QueueDeleteExpiredParams) ([]string, error) {
+	var (
+		replacements = make(map[string]sqlctemplate.Replacement)
+		namedArgs    = make(map[string]any)
+	)
+
+	if err := addQueuesClauseSQL(replacements, namedArgs, "queues_included_clause", "name", sliceutil.NilIfEmpty(params.QueuesIncluded), false); err != nil {
+		return nil, err
+	}
+
+	ctx = sqlctemplate.WithReplacements(ctx, replacements, namedArgs)
+
 	queues, err := dbsqlc.New().QueueDeleteExpired(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueDeleteExpiredParams{
 		Max:              int64(params.Max),
 		UpdatedAtHorizon: params.UpdatedAtHorizon.UTC(),
@@ -1556,6 +1603,62 @@ func (t *ExecutorSubTx) Rollback(ctx context.Context) error {
 	if err := t.Exec(ctx, fmt.Sprintf("ROLLBACK TO %s%02d", savepointPrefix, t.savepointNum)); err != nil {
 		return err
 	}
+
+	return nil
+}
+
+// addQueuesClauseSQL generates a partial SQL fragment used to checking whether
+// a query's queue is included or excluded from a given set of injected queues.
+//
+// This is really, really awful, and I wish there was a way I could find to
+// avoid doing this, but it's the only option I could come up with to work
+// around the fact that sqlc is incredibly buggy, and near non-functionally
+// buggy when it comes to SQLite.
+//
+// I tried to use an slice-like inject using `sqlc.slice(...)`, but because that
+// generates `?` placeholders without numbers, it's completely incompatible with
+// other parameters if it shows up anywhere in the query except for the very
+// end. It's sometimes possible to rearrange the query so it appears at the end,
+// but even that causes issues in other cases like if you want to use multiple
+// `sqlc.slice(...)` calls (e.g. using both a `queues_included` and
+// `queues_excluded`).
+//
+// Next up, you could workaround the problem using a `json_each(@json_array)`,
+// but sqlc can't find variables used in a function like this. Not for a good
+// reason, but again, just because it's extremely buggy.
+//
+// So instead, we use a `json_each` approach, but we have to manually inject via
+// our home-grown templating system (see the `sqlctemplate` package). It's not
+// great, and possibly bad even, but it works.
+func addQueuesClauseSQL(replacements map[string]sqlctemplate.Replacement, namedArgs map[string]any, clauseName, columnName string, queues []string, isExcluded bool) error {
+	if queues == nil {
+		replacements[clauseName] = sqlctemplate.Replacement{Value: "true"}
+		return nil
+	}
+
+	var maybeNot string
+	if isExcluded {
+		maybeNot = "NOT "
+	}
+
+	var (
+		paramName = clauseName + "_arg"
+		clauseSQL = `
+		` + maybeNot + `EXISTS (
+			SELECT 1
+			FROM json_each(@` + paramName + `)
+			WHERE json_each.value = ` + columnName + `
+		)
+	`
+	)
+
+	data, err := json.Marshal(queues)
+	if err != nil {
+		return fmt.Errorf("error marshaling queues: %w", err)
+	}
+
+	replacements[clauseName] = sqlctemplate.Replacement{Value: clauseSQL}
+	namedArgs[paramName] = data
 
 	return nil
 }

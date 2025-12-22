@@ -51,6 +51,7 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 
 			leader, err := exec.LeaderAttemptElect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: testClientID,
+				Name:     "default",
 				Now:      &now,
 				TTL:      leaderTTL,
 			})
@@ -77,6 +78,7 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 
 			leaderAttempt, err := exec.LeaderAttemptElect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: "different-client-id",
+				Name:     "default",
 				TTL:      leaderTTL,
 			})
 			require.ErrorIs(t, err, rivertype.ErrNotFound)
@@ -97,6 +99,7 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 
 			leader, err := exec.LeaderAttemptElect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: testClientID,
+				Name:     "default",
 				TTL:      leaderTTL,
 			})
 			require.NoError(t, err)
@@ -124,6 +127,7 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 			updatedLeader, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderReelectParams{
 				ElectedAt: leader.ElectedAt,
 				LeaderID:  testClientID,
+				Name:      "default",
 				TTL:       leaderTTL,
 			})
 			require.ErrorIs(t, err, rivertype.ErrNotFound)
@@ -150,6 +154,7 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 			updatedLeader, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderReelectParams{
 				ElectedAt: leader.ElectedAt,
 				LeaderID:  testClientID,
+				Name:      "default",
 				TTL:       30 * time.Second,
 			})
 			require.NoError(t, err)
@@ -179,6 +184,7 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 			updatedLeader, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderReelectParams{
 				ElectedAt: leader.ElectedAt,
 				LeaderID:  testClientID,
+				Name:      "default",
 				TTL:       30 * time.Second,
 			})
 			require.ErrorIs(t, err, rivertype.ErrNotFound)
@@ -202,6 +208,7 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 			updatedLeader, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderReelectParams{
 				ElectedAt: leader.ElectedAt.Add(-time.Second),
 				LeaderID:  testClientID,
+				Name:      "default",
 				TTL:       30 * time.Second,
 			})
 			require.ErrorIs(t, err, rivertype.ErrNotFound)
@@ -224,6 +231,7 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 			updatedLeader, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderReelectParams{
 				ElectedAt: leader.ElectedAt,
 				LeaderID:  testClientID,
+				Name:      "default",
 				TTL:       leaderTTL,
 			})
 			require.NoError(t, err)
@@ -304,6 +312,7 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 				ElectedAt: &electedAt,
 				ExpiresAt: &expiresAt,
 				LeaderID:  testClientID,
+				Name:      "default",
 				TTL:       leaderTTL,
 			})
 			require.NoError(t, err)
@@ -319,6 +328,7 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 
 			leader, err := exec.LeaderInsert(ctx, &riverdriver.LeaderInsertParams{
 				LeaderID: testClientID,
+				Name:     "default",
 				Now:      &now,
 				TTL:      leaderTTL,
 			})

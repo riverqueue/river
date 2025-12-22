@@ -23,6 +23,8 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
+const DomainDefault = "default"
+
 const (
 	electIntervalDefault            = 5 * time.Second
 	electIntervalJitterDefault      = 1 * time.Second
@@ -202,6 +204,7 @@ func (ts *electorTestSignals) Init(tb testutil.TestingTB) {
 
 type Config struct {
 	ClientID            string
+	Domain              string
 	ElectInterval       time.Duration // period on which each elector attempts elect even without having received a resignation notification
 	ElectIntervalJitter time.Duration
 	Schema              string
@@ -283,6 +286,7 @@ func NewElector(archetype *baseservice.Archetype, exec riverdriver.Executor, not
 	return baseservice.Init(archetype, &Elector{
 		config: (&Config{
 			ClientID:            config.ClientID,
+			Domain:              cmp.Or(config.Domain, string(DomainDefault)),
 			ElectInterval:       cmp.Or(config.ElectInterval, electIntervalDefault),
 			ElectIntervalJitter: cmp.Or(config.ElectIntervalJitter, electIntervalJitterDefault),
 			Schema:              config.Schema,
@@ -315,9 +319,9 @@ func (e *Elector) Start(ctx context.Context) error {
 
 	var sub *notifier.Subscription
 	if e.notifier == nil {
-		e.Logger.DebugContext(ctx, e.Name+": No notifier configured; starting in poll mode", "client_id", e.config.ClientID)
+		e.Logger.DebugContext(ctx, e.Name+": No notifier configured; starting in poll mode", "client_id", e.config.ClientID, "domain", e.config.Domain)
 	} else {
-		e.Logger.DebugContext(ctx, e.Name+": Listening for leadership changes", "client_id", e.config.ClientID, "topic", notifier.NotificationTopicLeadership)
+		e.Logger.DebugContext(ctx, e.Name+": Resigned leadership successfully", "client_id", e.config.ClientID, "domain", e.config.Domain, "topic", notifier.NotificationTopicLeadership)
 		var err error
 		sub, err = e.notifier.Listen(ctx, notifier.NotificationTopicLeadership, func(topic notifier.NotificationTopic, payload string) {
 			e.handleLeadershipNotification(ctx, topic, payload)
@@ -354,7 +358,7 @@ func (e *Elector) Start(ctx context.Context) error {
 			}
 
 			e.publishLeadershipState(true)
-			e.Logger.DebugContext(ctx, e.Name+": Gained leadership", "client_id", e.config.ClientID)
+			e.Logger.DebugContext(ctx, e.Name+": Gained leadership", "client_id", e.config.ClientID, "domain", e.config.Domain)
 			e.testSignals.GainedLeadership.Signal(struct{}{})
 
 			err = e.runLeaderState(ctx, term)
@@ -363,7 +367,7 @@ func (e *Elector) Start(ctx context.Context) error {
 					return
 				}
 
-				e.Logger.ErrorContext(ctx, e.Name+": Error keeping leadership", "client_id", e.config.ClientID, "err", err)
+				e.Logger.ErrorContext(ctx, e.Name+": Error keeping leadership", "client_id", e.config.ClientID, "domain", e.config.Domain, "err", err)
 			}
 		}
 	}()
@@ -377,13 +381,14 @@ func (e *Elector) runFollowerState(ctx context.Context) (leadershipTerm, error) 
 	var attempt int
 	for {
 		attempt++
-		e.Logger.DebugContext(ctx, e.Name+": Attempting to gain leadership", "client_id", e.config.ClientID)
+		e.Logger.DebugContext(ctx, e.Name+": Attempting to gain leadership", "client_id", e.config.ClientID, "domain", e.config.Domain)
 		// Use the local monotonic-bearing clock for the trust window. The
-		// DB-facing timestamp path stays on NowUTCOrNil below.
+		// DB-facing timestamp path stays on NowOrNil below.
 		attemptStarted := e.Time.Now()
 
 		leader, err := attemptElect(ctx, e.exec, &riverdriver.LeaderElectParams{
 			LeaderID: e.config.ClientID,
+			Name:     e.config.Domain,
 			Now:      e.Time.NowOrNil(),
 			Schema:   e.config.Schema,
 			TTL:      e.leaderTTL(),
@@ -406,7 +411,7 @@ func (e *Elector) runFollowerState(ctx context.Context) (leadershipTerm, error) 
 
 		attempt = 0
 
-		e.Logger.DebugContext(ctx, e.Name+": Leadership bid was unsuccessful (not an error)", "client_id", e.config.ClientID)
+		e.Logger.DebugContext(ctx, e.Name+": Leadership bid was unsuccessful (not an error)", "client_id", e.config.ClientID, "domain", e.config.Domain)
 		e.testSignals.DeniedLeadership.Signal(struct{}{})
 
 		select {
@@ -427,17 +432,17 @@ func (e *Elector) runFollowerState(ctx context.Context) (leadershipTerm, error) 
 func (e *Elector) handleLeadershipNotification(ctx context.Context, topic notifier.NotificationTopic, payload string) {
 	if topic != notifier.NotificationTopicLeadership {
 		// This should not happen unless the notifier is broken.
-		e.Logger.ErrorContext(ctx, e.Name+": Received unexpected notification", "client_id", e.config.ClientID, "topic", topic, "payload", payload)
+		e.Logger.ErrorContext(ctx, e.Name+": Received unexpected notification", "client_id", e.config.ClientID, "domain", e.config.Domain, "topic", topic, "payload", payload)
 		return
 	}
 
 	notification := DBNotification{}
 	if err := json.Unmarshal([]byte(payload), &notification); err != nil {
-		e.Logger.ErrorContext(ctx, e.Name+": Unable to unmarshal leadership notification", "client_id", e.config.ClientID, "err", err)
+		e.Logger.ErrorContext(ctx, e.Name+": Unable to unmarshal leadership notification", "client_id", e.config.ClientID, "domain", e.config.Domain, "err", err)
 		return
 	}
 
-	e.Logger.DebugContext(ctx, e.Name+": Received notification from notifier", "action", notification.Action, "client_id", e.config.ClientID)
+	e.Logger.DebugContext(ctx, e.Name+": Received notification from notifier", "action", notification.Action, "client_id", e.config.ClientID, "domain", e.config.Domain)
 
 	// Do an initial context check so in case context is done, it always takes
 	// precedence over sending a leadership notification.
@@ -500,7 +505,7 @@ func (e *Elector) runLeaderState(ctx context.Context, term leadershipTerm) error
 				continue
 			}
 
-			e.Logger.InfoContext(ctx, e.Name+": Current leader received forced resignation", "client_id", e.config.ClientID)
+			e.Logger.InfoContext(ctx, e.Name+": Current leader received forced resignation", "client_id", e.config.ClientID, "domain", e.config.Domain)
 
 			// This client may win leadership again, but drop out of this
 			// function and make it start all over.
@@ -510,14 +515,14 @@ func (e *Elector) runLeaderState(ctx context.Context, term leadershipTerm) error
 			// Reelect timer expired; attempt reelection below.
 		}
 
-		e.Logger.DebugContext(ctx, e.Name+": Current leader attempting reelect", "client_id", e.config.ClientID)
+		e.Logger.DebugContext(ctx, e.Name+": Current leader attempting reelect", "client_id", e.config.ClientID, "domain", e.config.Domain)
 
 		// Use the local monotonic-bearing clock for the trust window. The
 		// DB-facing timestamp path stays on NowOrNil below.
 		attemptStarted := e.Time.Now()
 		attemptTimeout := term.reelectAttemptTimeout(attemptStarted)
 		if attemptTimeout <= 0 {
-			e.Logger.WarnContext(ctx, e.Name+": Current leader stepping down because the reelection deadline elapsed", "client_id", e.config.ClientID)
+			e.Logger.WarnContext(ctx, e.Name+": Current leader stepping down because the reelection deadline elapsed", "client_id", e.config.ClientID, "domain", e.config.Domain)
 			e.testSignals.LostLeadership.Signal(struct{}{})
 			return nil
 		}
@@ -525,6 +530,7 @@ func (e *Elector) runLeaderState(ctx context.Context, term leadershipTerm) error
 		leader, err := attemptReelectWithTimeout(ctx, e.exec, &riverdriver.LeaderReelectParams{
 			ElectedAt: term.electedAt,
 			LeaderID:  term.clientID,
+			Name:      e.config.Domain,
 			Now:       e.Time.NowOrNil(),
 			Schema:    e.config.Schema,
 			TTL:       e.leaderTTL(),
@@ -577,7 +583,7 @@ func (e *Elector) runLeaderState(ctx context.Context, term leadershipTerm) error
 // always surrendered in a timely manner so it can be picked up quickly by
 // another client, even in the event of a cancellation.
 func (e *Elector) attemptResignLoop(ctx context.Context, term leadershipTerm) {
-	e.Logger.DebugContext(ctx, e.Name+": Attempting to resign leadership", "client_id", e.config.ClientID)
+	e.Logger.DebugContext(ctx, e.Name+": Attempting to resign leadership", "client_id", e.config.ClientID, "domain", e.config.Domain)
 
 	// Make a good faith attempt to resign, even in the presence of errors, but
 	// don't keep hammering if it doesn't work. In case a resignation failure,
@@ -623,7 +629,7 @@ func (e *Elector) attemptResign(ctx context.Context, attempt int, term leadershi
 	}
 
 	if resigned {
-		e.Logger.DebugContext(ctx, e.Name+": Resigned leadership successfully", "client_id", e.config.ClientID)
+		e.Logger.DebugContext(ctx, e.Name+": Resigned leadership successfully", "client_id", e.config.ClientID, "domain", e.config.Domain)
 		e.testSignals.ResignedLeadership.Signal(struct{}{})
 	}
 
@@ -638,6 +644,7 @@ func (e *Elector) errorSlogArgs(err error, attempt int, sleepDuration time.Durat
 	return []any{
 		slog.Int("attempt", attempt),
 		slog.String("client_id", e.config.ClientID),
+		slog.String("domain", e.config.Domain),
 		slog.String("err", err.Error()),
 		slog.String("sleep_duration", sleepDuration.String()),
 	}

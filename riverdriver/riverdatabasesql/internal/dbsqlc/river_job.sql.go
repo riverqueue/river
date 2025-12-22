@@ -610,17 +610,22 @@ SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finali
 FROM /* TEMPLATE: schema */river_job
 WHERE state = 'running'
     AND attempted_at < $1::timestamptz
+    AND (
+        $2::text[] IS NULL
+        OR queue = any($2)
+    )
 ORDER BY id
-LIMIT $2
+LIMIT $3
 `
 
 type JobGetStuckParams struct {
-	StuckHorizon time.Time
-	Max          int32
+	StuckHorizon   time.Time
+	QueuesIncluded []string
+	Max            int32
 }
 
 func (q *Queries) JobGetStuck(ctx context.Context, db DBTX, arg *JobGetStuckParams) ([]*RiverJob, error) {
-	rows, err := db.QueryContext(ctx, jobGetStuck, arg.StuckHorizon, arg.Max)
+	rows, err := db.QueryContext(ctx, jobGetStuck, arg.StuckHorizon, pq.Array(arg.QueuesIncluded), arg.Max)
 	if err != nil {
 		return nil, err
 	}
@@ -1336,12 +1341,16 @@ WITH jobs_to_schedule AS (
         state IN ('retryable', 'scheduled')
         AND priority >= 0
         AND queue IS NOT NULL
-        AND scheduled_at <= coalesce($1::timestamptz, now())
+        AND (
+            $1::text[] IS NULL
+            OR queue = any($1)
+        )
+        AND scheduled_at <= coalesce($2::timestamptz, now())
     ORDER BY
         priority,
         scheduled_at,
         id
-    LIMIT $2::bigint
+    LIMIT $3::bigint
     FOR UPDATE
 ),
 jobs_with_rownum AS (
@@ -1388,7 +1397,7 @@ updated_jobs AS (
     UPDATE /* TEMPLATE: schema */river_job
     SET
         state        = job_updates.new_state,
-        finalized_at = CASE WHEN job_updates.finalized_at_do_update THEN coalesce($1::timestamptz, now())
+        finalized_at = CASE WHEN job_updates.finalized_at_do_update THEN coalesce($2::timestamptz, now())
                             ELSE river_job.finalized_at END,
         metadata     = CASE WHEN job_updates.metadata_do_update THEN river_job.metadata || '{"unique_key_conflict": "scheduler_discarded"}'::jsonb
                             ELSE river_job.metadata END
@@ -1406,8 +1415,9 @@ JOIN updated_jobs ON river_job.id = updated_jobs.id
 `
 
 type JobScheduleParams struct {
-	Now *time.Time
-	Max int64
+	QueuesIncluded []string
+	Now            *time.Time
+	Max            int64
 }
 
 type JobScheduleRow struct {
@@ -1416,7 +1426,7 @@ type JobScheduleRow struct {
 }
 
 func (q *Queries) JobSchedule(ctx context.Context, db DBTX, arg *JobScheduleParams) ([]*JobScheduleRow, error) {
-	rows, err := db.QueryContext(ctx, jobSchedule, arg.Now, arg.Max)
+	rows, err := db.QueryContext(ctx, jobSchedule, pq.Array(arg.QueuesIncluded), arg.Now, arg.Max)
 	if err != nil {
 		return nil, err
 	}

@@ -44,6 +44,17 @@ func KeyBy[T any, K comparable, V any](collection []T, tupleFunc func(item T) (K
 	return result
 }
 
+// NilIfEmpty returns nil if the given slice is empty (zero length) or nil,
+// and the original slice otherwise. This is useful when a nil slice has
+// different semantics from an empty one, such as SQL array parameters where nil
+// means "no filter" but an empty array would match nothing.
+func NilIfEmpty[T any](s []T) []T {
+	if len(s) == 0 {
+		return nil
+	}
+	return s
+}
+
 // Map manipulates a slice and transforms it to a slice of another type.
 func Map[T any, R any](collection []T, mapFunc func(T) R) []R {
 	result := make([]R, len(collection))

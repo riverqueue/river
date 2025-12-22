@@ -30,6 +30,7 @@ WHERE name IN (
     SELECT name
     FROM /* TEMPLATE: schema */river_queue
     WHERE river_queue.updated_at < @updated_at_horizon
+        AND (/* TEMPLATE_BEGIN: queues_included_clause */ true /* TEMPLATE_END */)
     ORDER BY name ASC
     LIMIT @max
 )

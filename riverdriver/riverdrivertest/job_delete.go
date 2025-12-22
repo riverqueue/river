@@ -306,6 +306,31 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: deletedJob2.ID})
 			require.ErrorIs(t, err, rivertype.ErrNotFound)
 		})
+
+		// Verifies that an empty QueuesIncluded slice is treated as nil (no
+		// filter) rather than as "match no queues".
+		t.Run("QueuesIncludedEmptySlice", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCancelled)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
+
+			numDeleted, err := exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
+				CancelledDoDelete:           true,
+				CancelledFinalizedAtHorizon: horizon,
+				CompletedDoDelete:           true,
+				CompletedFinalizedAtHorizon: horizon,
+				DiscardedDoDelete:           true,
+				DiscardedFinalizedAtHorizon: horizon,
+				Max:                         1_000,
+				QueuesIncluded:              []string{},
+			})
+			require.NoError(t, err)
+			require.Equal(t, 3, numDeleted)
+		})
 	})
 
 	t.Run("JobDeleteMany", func(t *testing.T) {

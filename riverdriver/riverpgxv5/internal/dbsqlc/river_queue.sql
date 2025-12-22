@@ -25,15 +25,26 @@ SET
 RETURNING *;
 
 -- name: QueueDeleteExpired :many
-DELETE FROM /* TEMPLATE: schema */river_queue
-WHERE name IN (
-    SELECT name
-    FROM /* TEMPLATE: schema */river_queue
-    WHERE river_queue.updated_at < @updated_at_horizon
-    ORDER BY name ASC
-    LIMIT @max::bigint
+WITH deleted_queues AS (
+    DELETE FROM /* TEMPLATE: schema */river_queue
+    WHERE name IN (
+        SELECT name
+        FROM /* TEMPLATE: schema */river_queue
+        WHERE river_queue.updated_at < @updated_at_horizon
+            AND (
+                @queues_included::text[] IS NULL
+                OR name = any(@queues_included)
+            )
+        ORDER BY name ASC
+        LIMIT @max::bigint
+    )
+    RETURNING *
 )
-RETURNING *;
+-- Uses a CTE only to guarantee return order.
+SELECT *
+FROM /* TEMPLATE: schema */river_queue
+WHERE name IN (SELECT name FROM deleted_queues)
+ORDER BY name ASC;
 
 -- name: QueueGet :one
 SELECT *

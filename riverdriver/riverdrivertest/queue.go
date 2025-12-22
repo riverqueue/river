@@ -115,27 +115,51 @@ func exerciseQueue[TTx any](ctx context.Context, t *testing.T, executorWithTx fu
 	t.Run("QueueDeleteExpired", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		t.Run("Success", func(t *testing.T) {
+			t.Parallel()
 
-		now := time.Now()
-		_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now)})
-		queue2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-25 * time.Hour))})
-		queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-26 * time.Hour))})
-		queue4 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-48 * time.Hour))})
-		_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-23 * time.Hour))})
+			exec, _ := setup(ctx, t)
 
-		horizon := now.Add(-24 * time.Hour)
-		deletedQueueNames, err := exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{Max: 2, UpdatedAtHorizon: horizon})
-		require.NoError(t, err)
+			now := time.Now()
+			_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now)})
+			queue2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-25 * time.Hour))})
+			queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-26 * time.Hour))})
+			queue4 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-48 * time.Hour))})
+			_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-23 * time.Hour))})
 
-		// queue2 and queue3 should be deleted, with queue4 being skipped due to max of 2:
-		require.Equal(t, []string{queue2.Name, queue3.Name}, deletedQueueNames)
+			horizon := now.Add(-24 * time.Hour)
+			deletedQueueNames, err := exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{Max: 2, UpdatedAtHorizon: horizon})
+			require.NoError(t, err)
 
-		// Try again, make sure queue4 gets deleted this time:
-		deletedQueueNames, err = exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{Max: 2, UpdatedAtHorizon: horizon})
-		require.NoError(t, err)
+			// queue2 and queue3 should be deleted, with queue4 being skipped due to max of 2:
+			require.Equal(t, []string{queue2.Name, queue3.Name}, deletedQueueNames)
 
-		require.Equal(t, []string{queue4.Name}, deletedQueueNames)
+			// Try again, make sure queue4 gets deleted this time:
+			deletedQueueNames, err = exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{Max: 2, UpdatedAtHorizon: horizon})
+			require.NoError(t, err)
+
+			require.Equal(t, []string{queue4.Name}, deletedQueueNames)
+		})
+
+		// Verifies that an empty QueuesIncluded slice is treated as nil (no
+		// filter) rather than as "match no queues".
+		t.Run("QueuesIncludedEmptySlice", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			now := time.Now()
+			queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-48 * time.Hour))})
+
+			horizon := now.Add(-24 * time.Hour)
+			deletedQueueNames, err := exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{
+				Max:              100,
+				QueuesIncluded:   []string{},
+				UpdatedAtHorizon: horizon,
+			})
+			require.NoError(t, err)
+			require.Equal(t, []string{queue.Name}, deletedQueueNames)
+		})
 	})
 
 	t.Run("QueueGet", func(t *testing.T) {

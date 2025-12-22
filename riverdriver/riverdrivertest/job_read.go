@@ -511,40 +511,66 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 	t.Run("JobGetStuck", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		t.Run("Success", func(t *testing.T) {
+			t.Parallel()
 
-		var (
-			horizon       = time.Now().UTC()
-			beforeHorizon = horizon.Add(-1 * time.Minute)
-			afterHorizon  = horizon.Add(1 * time.Minute)
-		)
+			exec, _ := setup(ctx, t)
 
-		stuckJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
-		stuckJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			var (
+				horizon       = time.Now().UTC()
+				beforeHorizon = horizon.Add(-1 * time.Minute)
+				afterHorizon  = horizon.Add(1 * time.Minute)
+			)
 
-		t.Logf("horizon   = %s", horizon)
-		t.Logf("stuckJob1 = %s", stuckJob1.AttemptedAt)
-		t.Logf("stuckJob2 = %s", stuckJob2.AttemptedAt)
+			stuckJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			stuckJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
 
-		t.Logf("stuckJob1 full = %s", spew.Sdump(stuckJob1))
+			t.Logf("horizon   = %s", horizon)
+			t.Logf("stuckJob1 = %s", stuckJob1.AttemptedAt)
+			t.Logf("stuckJob2 = %s", stuckJob2.AttemptedAt)
 
-		// Not returned because we put a maximum of two.
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			t.Logf("stuckJob1 full = %s", spew.Sdump(stuckJob1))
 
-		// Not stuck because not in running state.
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+			// Not returned because we put a maximum of two.
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
 
-		// Not stuck because after queried horizon.
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &afterHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			// Not stuck because not in running state.
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
 
-		// Max two stuck
-		stuckJobs, err := exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
-			Max:          2,
-			StuckHorizon: horizon,
+			// Not stuck because after queried horizon.
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &afterHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+
+			// Max two stuck
+			stuckJobs, err := exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
+				Max:          2,
+				StuckHorizon: horizon,
+			})
+			require.NoError(t, err)
+			require.Equal(t, []int64{stuckJob1.ID, stuckJob2.ID},
+				sliceutil.Map(stuckJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
 		})
-		require.NoError(t, err)
-		require.Equal(t, []int64{stuckJob1.ID, stuckJob2.ID},
-			sliceutil.Map(stuckJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
+
+		// Verifies that an empty QueuesIncluded slice is treated as nil (no
+		// filter) rather than as "match no queues".
+		t.Run("QueuesIncludedEmptySlice", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			horizon := time.Now().UTC()
+			beforeHorizon := horizon.Add(-1 * time.Minute)
+
+			stuckJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+
+			stuckJobs, err := exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
+				Max:            100,
+				QueuesIncluded: []string{},
+				StuckHorizon:   horizon,
+			})
+			require.NoError(t, err)
+			require.Equal(t, []int64{stuckJob.ID},
+				sliceutil.Map(stuckJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
+		})
 	})
 
 	t.Run("JobKindList", func(t *testing.T) {
