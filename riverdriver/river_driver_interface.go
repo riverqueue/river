@@ -382,6 +382,7 @@ type JobDeleteBeforeParams struct {
 	DiscardedDoDelete           bool
 	DiscardedFinalizedAtHorizon time.Time
 	Max                         int
+	Queues                      []string
 	QueuesExcluded              []string
 	QueuesIncluded              []string
 	Schema                      string
@@ -421,9 +422,10 @@ type JobGetByKindManyParams struct {
 }
 
 type JobGetStuckParams struct {
-	Max          int
-	Schema       string
-	StuckHorizon time.Time
+	Max            int
+	QueuesIncluded []string
+	Schema         string
+	StuckHorizon   time.Time
 }
 
 type JobInsertFastParams struct {
@@ -514,9 +516,10 @@ type JobRetryParams struct {
 }
 
 type JobScheduleParams struct {
-	Max    int
-	Now    *time.Time
-	Schema string
+	Max            int
+	Now            *time.Time
+	QueuesIncluded []string
+	Schema         string
 }
 
 type JobScheduleResult struct {
@@ -688,6 +691,7 @@ type LeaderInsertParams struct {
 	ElectedAt *time.Time
 	ExpiresAt *time.Time
 	LeaderID  string
+	Name      string
 	Now       *time.Time
 	Schema    string
 	TTL       time.Duration
@@ -695,6 +699,7 @@ type LeaderInsertParams struct {
 
 type LeaderElectParams struct {
 	LeaderID string
+	Name     string
 	Now      *time.Time
 	Schema   string
 	TTL      time.Duration
@@ -783,6 +788,7 @@ type QueueCreateOrSetUpdatedAtParams struct {
 
 type QueueDeleteExpiredParams struct {
 	Max              int
+	QueuesIncluded   []string
 	Schema           string
 	UpdatedAtHorizon time.Time
 }

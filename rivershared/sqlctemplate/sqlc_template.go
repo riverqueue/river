@@ -188,8 +188,8 @@ func (r *Replacer) RunSafely(ctx context.Context, argPlaceholder, sql string, ar
 	}
 
 	updatedSQL := sql
-	updatedSQL = replaceTemplate(updatedSQL, templateBeginEndRE)
 	updatedSQL = replaceTemplate(updatedSQL, templateRE)
+	updatedSQL = replaceTemplate(updatedSQL, templateBeginEndRE)
 
 	if len(templatesExpected) > 0 {
 		return "", nil, errors.New("sqlctemplate params present in context but missing in SQL: " + strings.Join(templatesExpected, ", "))
@@ -257,6 +257,33 @@ func WithReplacements(ctx context.Context, replacements map[string]Replacement, 
 
 	if namedArgs == nil {
 		namedArgs = make(map[string]any)
+	}
+
+	return context.WithValue(ctx, contextKey{}, &contextContainer{
+		NamedArgs:    namedArgs,
+		Replacements: replacements,
+	})
+}
+
+// WithReplacementsDup duplicates the template replacements container in context.
+//
+// Normally, adding replacements modifies an existing container in context. Call
+// this function before WithReplacements to create a dup instead.
+//
+// TODO(brandur): This API isn't great. Reconsider it. Maybe WithReplacements
+// should always dup?
+func WithReplacementsDup(ctx context.Context) context.Context {
+	var (
+		namedArgs    map[string]any
+		replacements map[string]Replacement
+	)
+
+	if container, ok := ctx.Value(contextKey{}).(*contextContainer); ok {
+		namedArgs = maps.Clone(container.NamedArgs)
+		replacements = maps.Clone(container.Replacements)
+	} else {
+		namedArgs = make(map[string]any)
+		replacements = make(map[string]Replacement)
 	}
 
 	return context.WithValue(ctx, contextKey{}, &contextContainer{

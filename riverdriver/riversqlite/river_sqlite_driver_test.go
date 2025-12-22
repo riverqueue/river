@@ -25,6 +25,58 @@ func TestDurationAsString(t *testing.T) {
 	require.Equal(t, "3.255 seconds", durationAsString(3*time.Second+255*time.Millisecond))
 }
 
+func TestAddQueuesClauseSQL(t *testing.T) {
+	t.Parallel()
+
+	t.Run("IsExcludedFalse", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			replacements = make(map[string]sqlctemplate.Replacement)
+			namedArgs    = make(map[string]any)
+		)
+
+		require.NoError(t, addQueuesClauseSQL(replacements, namedArgs, "is_excluded_clause", "queue", []string{"queue_a", "queue_b"}, false))
+
+		require.Equal(t, map[string]sqlctemplate.Replacement{
+			"is_excluded_clause": {
+				Value: `
+		EXISTS (
+			SELECT 1
+			FROM json_each(@is_excluded_clause_arg)
+			WHERE json_each.value = queue
+		)
+	`,
+			},
+		}, replacements)
+		require.Equal(t, `["queue_a","queue_b"]`, string(namedArgs["is_excluded_clause_arg"].([]byte))) //nolint:forcetypeassert
+	})
+
+	t.Run("IsExcludedTrue", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			replacements = make(map[string]sqlctemplate.Replacement)
+			namedArgs    = make(map[string]any)
+		)
+
+		require.NoError(t, addQueuesClauseSQL(replacements, namedArgs, "is_excluded_clause", "queue", []string{"queue_a", "queue_b"}, true))
+
+		require.Equal(t, map[string]sqlctemplate.Replacement{
+			"is_excluded_clause": {
+				Value: `
+		NOT EXISTS (
+			SELECT 1
+			FROM json_each(@is_excluded_clause_arg)
+			WHERE json_each.value = queue
+		)
+	`,
+			},
+		}, replacements)
+		require.Equal(t, `["queue_a","queue_b"]`, string(namedArgs["is_excluded_clause_arg"].([]byte))) //nolint:forcetypeassert
+	})
+}
+
 func TestInterpretError(t *testing.T) {
 	t.Parallel()
 

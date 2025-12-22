@@ -1040,25 +1040,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 		t.Run("QueuesIncluded", func(t *testing.T) {
 			t.Parallel()
 
-			exec, bundle := setup(ctx, t)
-
-			// I ran into yet another huge sqlc SQLite bug in that when mixing
-			// normal parameters with a `sqlc.slice` the latter must appear at
-			// the very end because it'll produce unnamed placeholders (?)
-			// instead of positional placeholders (?1) like most parameters. The
-			// trick of putting it at the end works, but only if you have
-			// exactly one `sqlc.slice` needed. If you need multiple and they
-			// need to be interspersed with other parameters (like in the case
-			// of `queues_excluded` and `queues_included`), everything stops
-			// working real fast. I could have worked around this by breaking
-			// the SQLite version of this operation into two sqlc queries, but
-			// since we only expect to need `queues_excluded` on SQLite (and not
-			// `queues_included` for the foreseeable future), I've just set
-			// SQLite to not support `queues_included` for the time being.
-			if bundle.driver.DatabaseName() == databaseNameSQLite {
-				t.Logf("Skipping JobDeleteBefore with QueuesIncluded test for SQLite")
-				return
-			}
+			exec, _ := setup(ctx, t)
 
 			var ( //nolint:dupl
 				cancelledJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCancelled)})
@@ -1557,40 +1539,76 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	t.Run("JobGetStuck", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		t.Run("Success", func(t *testing.T) {
+			t.Parallel()
 
-		var (
-			horizon       = time.Now().UTC()
-			beforeHorizon = horizon.Add(-1 * time.Minute)
-			afterHorizon  = horizon.Add(1 * time.Minute)
-		)
+			exec, _ := setup(ctx, t)
 
-		stuckJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
-		stuckJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			var (
+				horizon       = time.Now().UTC()
+				beforeHorizon = horizon.Add(-1 * time.Minute)
+				afterHorizon  = horizon.Add(1 * time.Minute)
+			)
 
-		t.Logf("horizon   = %s", horizon)
-		t.Logf("stuckJob1 = %s", stuckJob1.AttemptedAt)
-		t.Logf("stuckJob2 = %s", stuckJob2.AttemptedAt)
+			stuckJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			stuckJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
 
-		t.Logf("stuckJob1 full = %s", spew.Sdump(stuckJob1))
+			t.Logf("horizon   = %s", horizon)
+			t.Logf("stuckJob1 = %s", stuckJob1.AttemptedAt)
+			t.Logf("stuckJob2 = %s", stuckJob2.AttemptedAt)
 
-		// Not returned because we put a maximum of two.
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			t.Logf("stuckJob1 full = %s", spew.Sdump(stuckJob1))
 
-		// Not stuck because not in running state.
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+			// Not returned because we put a maximum of two.
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
 
-		// Not stuck because after queried horizon.
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &afterHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			// Not stuck because not in running state.
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
 
-		// Max two stuck
-		stuckJobs, err := exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
-			Max:          2,
-			StuckHorizon: horizon,
+			// Not stuck because after queried horizon.
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &afterHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+
+			// Max two stuck
+			stuckJobs, err := exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
+				Max:          2,
+				StuckHorizon: horizon,
+			})
+			require.NoError(t, err)
+			require.Equal(t, []int64{stuckJob1.ID, stuckJob2.ID},
+				sliceutil.Map(stuckJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
 		})
-		require.NoError(t, err)
-		require.Equal(t, []int64{stuckJob1.ID, stuckJob2.ID},
-			sliceutil.Map(stuckJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
+
+		t.Run("QueuesIncluded", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			var (
+				horizon       = time.Now().UTC()
+				beforeHorizon = horizon.Add(-1 * time.Minute)
+			)
+
+			var (
+				includedQueue1 = "included1"
+				includedQueue2 = "included2"
+
+				stuckJob1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, Queue: &includedQueue1, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+				stuckJob2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, Queue: &includedQueue2, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+
+				// Not included because not in an included queue.
+				_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, Queue: ptrutil.Ptr("excluded1"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
+				_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, Queue: ptrutil.Ptr("excluded2"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			)
+
+			stuckJobs, err := exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
+				Max:            2,
+				QueuesIncluded: []string{includedQueue1, includedQueue2},
+				StuckHorizon:   horizon,
+			})
+			require.NoError(t, err)
+			require.Equal(t, []int64{stuckJob1.ID, stuckJob2.ID},
+				sliceutil.Map(stuckJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
+		})
 	})
 
 	t.Run("JobInsertFastMany", func(t *testing.T) {
@@ -2909,6 +2927,37 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			require.Equal(t, rivertype.JobStateDiscarded, updatedJob2.State)
 			require.Equal(t, "scheduler_discarded", gjson.GetBytes(updatedJob2.Metadata, "unique_key_conflict").String())
 		})
+
+		t.Run("QueuesIncluded", func(t *testing.T) {
+			exec, _ := setup(ctx, t)
+
+			var (
+				horizon       = time.Now()
+				beforeHorizon = horizon.Add(-1 * time.Minute)
+			)
+
+			var (
+				includedQueue1 = "included1"
+				includedQueue2 = "included2"
+
+				job1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: &includedQueue1, ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRetryable)})
+				job2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: &includedQueue2, ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateScheduled)})
+
+				// Not scheduled because not in an included queue.
+				_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("excluded1"), ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRetryable)})
+				_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("excluded1"), ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateScheduled)})
+			)
+
+			// First two scheduled because of limit.
+			result, err := exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
+				Max:            5,
+				Now:            &horizon,
+				QueuesIncluded: []string{includedQueue1, includedQueue2},
+			})
+			require.NoError(t, err)
+			require.Equal(t, []int64{job1.ID, job2.ID},
+				sliceutil.Map(result, func(j *riverdriver.JobScheduleResult) int64 { return j.Job.ID }))
+		})
 	})
 
 	makeErrPayload := func(t *testing.T, now time.Time) []byte {
@@ -3458,6 +3507,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			elected, err := exec.LeaderAttemptElect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: clientID,
+				Name:     "default",
 				Now:      &now,
 				TTL:      leaderTTL,
 			})
@@ -3481,6 +3531,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			elected, err := exec.LeaderAttemptElect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: "different-client-id",
+				Name:     "default",
 				TTL:      leaderTTL,
 			})
 			require.NoError(t, err)
@@ -3501,6 +3552,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			elected, err := exec.LeaderAttemptElect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: clientID,
+				Name:     "default",
 				TTL:      leaderTTL,
 			})
 			require.NoError(t, err)
@@ -3525,6 +3577,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			elected, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: clientID,
+				Name:     "default",
 				Now:      &now,
 				TTL:      leaderTTL,
 			})
@@ -3551,6 +3604,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 			// the transaction.
 			elected, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: clientID,
+				Name:     "default",
 				TTL:      30 * time.Second,
 			})
 			require.NoError(t, err)
@@ -3574,6 +3628,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			elected, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: "different-client",
+				Name:     "default",
 				TTL:      30 * time.Second,
 			})
 			require.NoError(t, err)
@@ -3593,6 +3648,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			elected, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderElectParams{
 				LeaderID: clientID,
+				Name:     "default",
 				TTL:      leaderTTL,
 			})
 			require.NoError(t, err)
@@ -3672,6 +3728,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				ElectedAt: &electedAt,
 				ExpiresAt: &expiresAt,
 				LeaderID:  clientID,
+				Name:      "default",
 				TTL:       leaderTTL,
 			})
 			require.NoError(t, err)
@@ -3687,6 +3744,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 			leader, err := exec.LeaderInsert(ctx, &riverdriver.LeaderInsertParams{
 				LeaderID: clientID,
+				Name:     "default",
 				Now:      &now,
 				TTL:      leaderTTL,
 			})
@@ -4141,27 +4199,65 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	t.Run("QueueDeleteExpired", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		t.Run("Success", func(t *testing.T) {
+			t.Parallel()
 
-		now := time.Now()
-		_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now)})
-		queue2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-25 * time.Hour))})
-		queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-26 * time.Hour))})
-		queue4 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-48 * time.Hour))})
-		_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-23 * time.Hour))})
+			exec, _ := setup(ctx, t)
 
-		horizon := now.Add(-24 * time.Hour)
-		deletedQueueNames, err := exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{Max: 2, UpdatedAtHorizon: horizon})
-		require.NoError(t, err)
+			var (
+				now = time.Now()
 
-		// queue2 and queue3 should be deleted, with queue4 being skipped due to max of 2:
-		require.Equal(t, []string{queue2.Name, queue3.Name}, deletedQueueNames)
+				_      = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now)})
+				queue2 = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-25 * time.Hour))})
+				queue3 = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-26 * time.Hour))})
+				queue4 = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-48 * time.Hour))})
+				_      = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-23 * time.Hour))})
+			)
 
-		// Try again, make sure queue4 gets deleted this time:
-		deletedQueueNames, err = exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{Max: 2, UpdatedAtHorizon: horizon})
-		require.NoError(t, err)
+			horizon := now.Add(-24 * time.Hour)
+			deletedQueueNames, err := exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{Max: 2, UpdatedAtHorizon: horizon})
+			require.NoError(t, err)
 
-		require.Equal(t, []string{queue4.Name}, deletedQueueNames)
+			// queue2 and queue3 should be deleted, with queue4 being skipped due to max of 2:
+			require.Equal(t, []string{queue2.Name, queue3.Name}, deletedQueueNames)
+
+			// Try again, make sure queue4 gets deleted this time:
+			deletedQueueNames, err = exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{
+				Max:              2,
+				UpdatedAtHorizon: horizon,
+			})
+			require.NoError(t, err)
+
+			require.Equal(t, []string{queue4.Name}, deletedQueueNames)
+		})
+
+		t.Run("QueuesIncluded", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			var (
+				horizon = time.Now().Add(-24 * time.Hour)
+
+				includedQueue1 = "included1"
+				includedQueue2 = "included2"
+
+				queue1 = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: &includedQueue1, UpdatedAt: ptrutil.Ptr(horizon.Add(-1 * time.Minute))})
+				queue2 = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: &includedQueue2, UpdatedAt: ptrutil.Ptr(horizon.Add(-2 * time.Minute))})
+
+				// Not included because not in an included queue.
+				_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("excluded1"), UpdatedAt: ptrutil.Ptr(horizon.Add(-1 * time.Minute))})
+				_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("excluded2"), UpdatedAt: ptrutil.Ptr(horizon.Add(-2 * time.Minute))})
+			)
+
+			deletedQueueNames, err := exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{
+				Max:              5,
+				QueuesIncluded:   []string{includedQueue1, includedQueue2},
+				UpdatedAtHorizon: horizon,
+			})
+			require.NoError(t, err)
+			require.Equal(t, []string{queue1.Name, queue2.Name}, deletedQueueNames)
+		})
 	})
 
 	t.Run("QueueGet", func(t *testing.T) {

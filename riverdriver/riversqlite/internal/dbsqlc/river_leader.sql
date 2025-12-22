@@ -11,11 +11,13 @@ CREATE TABLE river_leader (
 INSERT INTO /* TEMPLATE: schema */river_leader (
     leader_id,
     elected_at,
-    expires_at
+    expires_at,
+    name
 ) VALUES (
     @leader_id,
     coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')),
-    datetime(coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')), 'subsec', cast(@ttl as text))
+    datetime(coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')), 'subsec', cast(@ttl as text)),
+    @name
 )
 ON CONFLICT (name)
     DO NOTHING;
@@ -24,11 +26,13 @@ ON CONFLICT (name)
 INSERT INTO /* TEMPLATE: schema */river_leader (
     leader_id,
     elected_at,
-    expires_at
+    expires_at,
+    name
 ) VALUES (
     @leader_id,
     coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')),
-    datetime(coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')), 'subsec', cast(@ttl as text))
+    datetime(coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')), 'subsec', cast(@ttl as text)),
+    @name
 )
 ON CONFLICT (name)
     DO UPDATE SET
@@ -48,11 +52,13 @@ FROM /* TEMPLATE: schema */river_leader;
 INSERT INTO /* TEMPLATE: schema */river_leader(
     elected_at,
     expires_at,
-    leader_id
+    leader_id,
+    name
 ) VALUES (
     coalesce(cast(sqlc.narg('elected_at') AS text), cast(sqlc.narg('now') AS text), datetime('now', 'subsec')),
     coalesce(cast(sqlc.narg('expires_at') AS text), datetime(coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')), 'subsec', cast(@ttl as text))),
-    @leader_id
+    @leader_id,
+    @name
 ) RETURNING *;
 
 -- name: LeaderResign :execrows

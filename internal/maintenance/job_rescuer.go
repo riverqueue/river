@@ -50,6 +50,11 @@ type JobRescuerConfig struct {
 	// Interval is the amount of time to wait between runs of the rescuer.
 	Interval time.Duration
 
+	// QueuesIncluded are queues that'll be included when considering jobs to
+	// rescue.  If set, only these queues will be rescued. If nil, jobs in all
+	// queues are rescued.
+	QueuesIncluded []string
+
 	// RescueAfter is the amount of time for a job to be active before it is
 	// considered stuck and should be rescued.
 	RescueAfter time.Duration
@@ -69,6 +74,9 @@ func (c *JobRescuerConfig) mustValidate() *JobRescuerConfig {
 	}
 	if c.Interval <= 0 {
 		panic("RescuerConfig.Interval must be above zero")
+	}
+	if c.QueuesIncluded != nil && len(c.QueuesIncluded) == 0 {
+		panic("JobCleanerConfig.QueuesIncluded should be either nil or a non-empty slice")
 	}
 	if c.RescueAfter <= 0 {
 		panic("RescuerConfig.JobDuration must be above zero")
@@ -109,6 +117,7 @@ func NewRescuer(archetype *baseservice.Archetype, config *JobRescuerConfig, exec
 			BatchSizes:          batchSizes,
 			ClientRetryPolicy:   config.ClientRetryPolicy,
 			Interval:            cmp.Or(config.Interval, JobRescuerIntervalDefault),
+			QueuesIncluded:      config.QueuesIncluded,
 			RescueAfter:         cmp.Or(config.RescueAfter, JobRescuerRescueAfterDefault),
 			Schema:              config.Schema,
 			WorkUnitFactoryFunc: config.WorkUnitFactoryFunc,
@@ -280,9 +289,10 @@ func (s *JobRescuer) getStuckJobs(ctx context.Context) ([]*rivertype.JobRow, err
 	stuckHorizon := time.Now().Add(-s.Config.RescueAfter)
 
 	return s.exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
-		Max:          s.batchSize(),
-		Schema:       s.Config.Schema,
-		StuckHorizon: stuckHorizon,
+		Max:            s.batchSize(),
+		QueuesIncluded: s.Config.QueuesIncluded,
+		Schema:         s.Config.Schema,
+		StuckHorizon:   stuckHorizon,
 	})
 }
 

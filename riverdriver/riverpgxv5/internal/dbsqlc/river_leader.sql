@@ -2,8 +2,11 @@ CREATE UNLOGGED TABLE river_leader(
     elected_at timestamptz NOT NULL,
     expires_at timestamptz NOT NULL,
     leader_id text NOT NULL,
-    name text PRIMARY KEY DEFAULT 'default' CHECK (name = 'default'),
-    CONSTRAINT name_length CHECK (name = 'default'),
+
+    -- this would be more aptly called "domain", but left as is for a less
+    -- invasive migration change
+    name text PRIMARY KEY DEFAULT 'default' CHECK (char_length(name) > 0 AND char_length(name) < 128),
+
     CONSTRAINT leader_id_length CHECK (char_length(leader_id) > 0 AND char_length(leader_id) < 128)
 );
 
@@ -11,12 +14,14 @@ CREATE UNLOGGED TABLE river_leader(
 INSERT INTO /* TEMPLATE: schema */river_leader (
     leader_id,
     elected_at,
-    expires_at
+    expires_at,
+    name
 ) VALUES (
     @leader_id,
     coalesce(sqlc.narg('now')::timestamptz, now()),
     -- @ttl is inserted as as seconds rather than a duration because `lib/pq` doesn't support the latter
-    coalesce(sqlc.narg('now')::timestamptz, now()) + make_interval(secs => @ttl)
+    coalesce(sqlc.narg('now')::timestamptz, now()) + make_interval(secs => @ttl),
+    @name
 )
 ON CONFLICT (name)
     DO NOTHING;
@@ -25,11 +30,13 @@ ON CONFLICT (name)
 INSERT INTO /* TEMPLATE: schema */river_leader (
     leader_id,
     elected_at,
-    expires_at
+    expires_at,
+    name
 ) VALUES (
     @leader_id,
     coalesce(sqlc.narg('now')::timestamptz, now()),
-    coalesce(sqlc.narg('now')::timestamptz, now()) + make_interval(secs => @ttl)
+    coalesce(sqlc.narg('now')::timestamptz, now()) + make_interval(secs => @ttl),
+    @name
 )
 ON CONFLICT (name)
     DO UPDATE SET
@@ -49,11 +56,13 @@ FROM /* TEMPLATE: schema */river_leader;
 INSERT INTO /* TEMPLATE: schema */river_leader(
     elected_at,
     expires_at,
-    leader_id
+    leader_id,
+    name
 ) VALUES (
     coalesce(sqlc.narg('elected_at')::timestamptz, coalesce(sqlc.narg('now')::timestamptz, now())),
     coalesce(sqlc.narg('expires_at')::timestamptz, coalesce(sqlc.narg('now')::timestamptz, now()) + make_interval(secs => @ttl)),
-    @leader_id
+    @leader_id,
+    @name
 ) RETURNING *;
 
 -- name: LeaderResign :execrows

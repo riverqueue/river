@@ -56,6 +56,10 @@ type JobCleanerConfig struct {
 	// QueuesExcluded are queues that'll be excluded from cleaning.
 	QueuesExcluded []string
 
+	// QueuesIncluded are queues that'll be included in cleaning.  If set, only
+	// these queues will be cleaned. If nil, all queues are cleaned.
+	QueuesIncluded []string
+
 	// Schema where River tables are located. Empty string omits schema, causing
 	// Postgres to default to `search_path`.
 	Schema string
@@ -78,6 +82,12 @@ func (c *JobCleanerConfig) mustValidate() *JobCleanerConfig {
 	}
 	if c.Interval <= 0 {
 		panic("JobCleanerConfig.Interval must be above zero")
+	}
+	if c.QueuesExcluded != nil && len(c.QueuesExcluded) == 0 {
+		panic("JobCleanerConfig.QueuesExcluded should be either nil or a non-empty slice")
+	}
+	if c.QueuesIncluded != nil && len(c.QueuesIncluded) == 0 {
+		panic("JobCleanerConfig.QueuesIncluded should be either nil or a non-empty slice")
 	}
 	if c.Timeout <= 0 {
 		panic("JobCleanerConfig.Timeout must be above zero")
@@ -117,6 +127,7 @@ func NewJobCleaner(archetype *baseservice.Archetype, config *JobCleanerConfig, e
 			CompletedJobRetentionPeriod: cmp.Or(config.CompletedJobRetentionPeriod, riversharedmaintenance.CompletedJobRetentionPeriodDefault),
 			DiscardedJobRetentionPeriod: cmp.Or(config.DiscardedJobRetentionPeriod, riversharedmaintenance.DiscardedJobRetentionPeriodDefault),
 			QueuesExcluded:              config.QueuesExcluded,
+			QueuesIncluded:              config.QueuesIncluded,
 			Interval:                    cmp.Or(config.Interval, riversharedmaintenance.JobCleanerIntervalDefault),
 			Schema:                      config.Schema,
 			Timeout:                     cmp.Or(config.Timeout, riversharedmaintenance.JobCleanerTimeoutDefault),
@@ -205,6 +216,7 @@ func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, err
 				DiscardedFinalizedAtHorizon: time.Now().Add(-s.Config.DiscardedJobRetentionPeriod),
 				Max:                         s.batchSize(),
 				QueuesExcluded:              s.Config.QueuesExcluded,
+				QueuesIncluded:              s.Config.QueuesIncluded,
 				Schema:                      s.Config.Schema,
 			})
 			if err != nil {
