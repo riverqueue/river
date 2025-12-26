@@ -3,7 +3,7 @@ CREATE TABLE river_queue (
     created_at timestamptz NOT NULL DEFAULT now(),
     metadata jsonb NOT NULL DEFAULT '{}' ::jsonb,
     paused_at timestamptz,
-    updated_at timestamptz NOT NULL
+    updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- name: QueueCreateOrSetUpdatedAt :one

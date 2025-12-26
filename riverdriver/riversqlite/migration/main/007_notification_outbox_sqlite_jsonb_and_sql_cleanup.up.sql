@@ -1,11 +1,26 @@
 --
--- SQLite JSONB conversion rollback.
+-- Notification outbox.
 --
--- Convert JSONB binary columns back to JSON text format and restore json()
--- defaults.
+
+CREATE TABLE /* TEMPLATE: schema */river_notification (
+    id integer PRIMARY KEY AUTOINCREMENT,
+    created_at timestamp NOT NULL DEFAULT (datetime('now', 'subsec')),
+    payload text NOT NULL,
+    topic text NOT NULL,
+    CONSTRAINT topic_length CHECK (length(topic) > 0 AND length(topic) < 128)
+);
+
+CREATE INDEX /* TEMPLATE: schema */river_notification_created_at_idx ON river_notification (created_at);
+CREATE INDEX /* TEMPLATE: schema */river_notification_topic_id_idx ON river_notification (topic, id);
+
+--
+-- SQLite JSONB conversion.
+--
+-- Convert JSON text columns to JSONB binary format for more efficient storage
+-- and processing, and update column defaults from json() to jsonb().
 --
 -- SQLite doesn't allow `ALTER TABLE ADD COLUMN` with non-constant defaults like
--- `json('{}')`, so rebuild each affected table instead.
+-- `jsonb('{}')`, so rebuild each affected table instead.
 --
 
 --
@@ -21,7 +36,7 @@ ALTER TABLE /* TEMPLATE: schema */river_job RENAME TO river_job_old;
 
 CREATE TABLE /* TEMPLATE: schema */river_job (
     id integer PRIMARY KEY, -- SQLite makes this autoincrementing automatically
-    args blob NOT NULL DEFAULT '{}',
+    args blob NOT NULL DEFAULT (jsonb('{}')),
     attempt integer NOT NULL DEFAULT 0,
     attempted_at timestamp,
     attempted_by blob, -- json
@@ -30,12 +45,12 @@ CREATE TABLE /* TEMPLATE: schema */river_job (
     finalized_at timestamp,
     kind text NOT NULL,
     max_attempts integer NOT NULL,
-    metadata blob NOT NULL DEFAULT (json('{}')),
+    metadata blob NOT NULL DEFAULT (jsonb('{}')),
     priority integer NOT NULL DEFAULT 1,
     queue text NOT NULL DEFAULT 'default',
     state text NOT NULL DEFAULT 'available',
     scheduled_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    tags blob NOT NULL DEFAULT (json('[]')),
+    tags blob NOT NULL DEFAULT (jsonb('[]')),
     unique_key blob,
     unique_states integer,
     CONSTRAINT finalized_or_finalized_at_null CHECK (
@@ -70,21 +85,21 @@ INSERT INTO /* TEMPLATE: schema */river_job (
 )
 SELECT
     id,
-    json(args),
+    jsonb(args),
     attempt,
     attempted_at,
-    CASE WHEN attempted_by IS NULL THEN NULL ELSE json(attempted_by) END,
+    CASE WHEN attempted_by IS NULL THEN NULL ELSE jsonb(attempted_by) END,
     created_at,
-    CASE WHEN errors IS NULL THEN NULL ELSE json(errors) END,
+    CASE WHEN errors IS NULL THEN NULL ELSE jsonb(errors) END,
     finalized_at,
     kind,
     max_attempts,
-    json(metadata),
+    jsonb(metadata),
     priority,
     queue,
     state,
     scheduled_at,
-    json(tags),
+    jsonb(tags),
     unique_key,
     unique_states
 FROM /* TEMPLATE: schema */river_job_old;
@@ -118,7 +133,7 @@ ALTER TABLE /* TEMPLATE: schema */river_queue RENAME TO river_queue_old;
 CREATE TABLE /* TEMPLATE: schema */river_queue (
     name text PRIMARY KEY NOT NULL,
     created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    metadata blob NOT NULL DEFAULT (json('{}')),
+    metadata blob NOT NULL DEFAULT (jsonb('{}')),
     paused_at timestamp,
     updated_at timestamp NOT NULL
 );
@@ -133,7 +148,7 @@ INSERT INTO /* TEMPLATE: schema */river_queue (
 SELECT
     name,
     created_at,
-    json(metadata),
+    jsonb(metadata),
     paused_at,
     updated_at
 FROM /* TEMPLATE: schema */river_queue_old;
@@ -149,7 +164,7 @@ ALTER TABLE /* TEMPLATE: schema */river_client RENAME TO river_client_old;
 CREATE TABLE /* TEMPLATE: schema */river_client (
     id text PRIMARY KEY NOT NULL,
     created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    metadata blob NOT NULL DEFAULT (json('{}')),
+    metadata blob NOT NULL DEFAULT (jsonb('{}')),
     paused_at timestamp,
     updated_at timestamp NOT NULL,
     CONSTRAINT name_length CHECK (length(id) > 0 AND length(id) < 128)
@@ -165,7 +180,7 @@ INSERT INTO /* TEMPLATE: schema */river_client (
 SELECT
     id,
     created_at,
-    json(metadata),
+    jsonb(metadata),
     paused_at,
     updated_at
 FROM /* TEMPLATE: schema */river_client_old;
@@ -181,7 +196,7 @@ CREATE TABLE /* TEMPLATE: schema */river_client_queue (
     name text NOT NULL,
     created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
     max_workers integer NOT NULL DEFAULT 0,
-    metadata blob NOT NULL DEFAULT (json('{}')),
+    metadata blob NOT NULL DEFAULT (jsonb('{}')),
     num_jobs_completed integer NOT NULL DEFAULT 0,
     num_jobs_running integer NOT NULL DEFAULT 0,
     updated_at timestamp NOT NULL,
@@ -206,7 +221,7 @@ SELECT
     name,
     created_at,
     max_workers,
-    json(metadata),
+    jsonb(metadata),
     num_jobs_completed,
     num_jobs_running,
     updated_at
@@ -216,7 +231,47 @@ DROP TABLE /* TEMPLATE: schema */river_client_queue_old;
 DROP TABLE /* TEMPLATE: schema */river_client_old;
 
 --
--- Notification outbox rollback.
+-- SQL cleanup.
 --
 
-DROP TABLE /* TEMPLATE: schema */river_notification;
+--
+-- Drop unused tables `river_client` and `river_client_queue`.
+--
+
+DROP TABLE /* TEMPLATE: schema */river_client_queue;
+DROP TABLE /* TEMPLATE: schema */river_client;
+
+--
+-- Adds `DEFAULT 25` to `river_job.max_attempts`.
+--
+
+-- This may look odd in that we're adding a brand new column, but it's because
+-- SQLite doesn't support anything beyond the most trivial DDL.
+
+ALTER TABLE /* TEMPLATE: schema */river_job
+    RENAME COLUMN max_attempts TO max_attempts_old;
+
+ALTER TABLE /* TEMPLATE: schema */river_job
+    ADD COLUMN max_attempts integer NOT NULL DEFAULT 25;
+
+UPDATE /* TEMPLATE: schema */river_job
+SET max_attempts = max_attempts_old;
+
+ALTER TABLE /* TEMPLATE: schema */river_job
+    DROP COLUMN max_attempts_old;
+
+--
+-- Changes `river_queue.updated_at` to have a default of `CURRENT_TIMESTAMP`.
+--
+
+ALTER TABLE /* TEMPLATE: schema */river_queue
+    RENAME COLUMN updated_at TO updated_at_old;
+
+ALTER TABLE /* TEMPLATE: schema */river_queue
+    ADD COLUMN updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+UPDATE /* TEMPLATE: schema */river_queue
+SET updated_at = updated_at_old;
+
+ALTER TABLE /* TEMPLATE: schema */river_queue
+    DROP COLUMN updated_at_old;
