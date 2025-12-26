@@ -19,7 +19,7 @@ CREATE TABLE river_job (
     errors jsonb[],
     finalized_at timestamptz,
     kind text NOT NULL,
-    max_attempts smallint NOT NULL,
+    max_attempts smallint NOT NULL DEFAULT 25,
     metadata jsonb NOT NULL DEFAULT '{}',
     priority smallint NOT NULL DEFAULT 1,
     queue text NOT NULL DEFAULT 'default',
