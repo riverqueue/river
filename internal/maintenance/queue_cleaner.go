@@ -41,6 +41,10 @@ type QueueCleanerConfig struct {
 	// Interval is the amount of time to wait between runs of the cleaner.
 	Interval time.Duration
 
+	// QueuesIncluded are queues that'll be included in cleaning.  If set, only
+	// these queues will be cleaned. If nil, all queues are cleaned.
+	QueuesIncluded []string
+
 	// RetentionPeriod is the amount of time to keep queues around before they're
 	// removed.
 	RetentionPeriod time.Duration
@@ -55,6 +59,9 @@ func (c *QueueCleanerConfig) mustValidate() *QueueCleanerConfig {
 
 	if c.Interval <= 0 {
 		panic("QueueCleanerConfig.Interval must be above zero")
+	}
+	if c.QueuesIncluded != nil && len(c.QueuesIncluded) == 0 {
+		panic("QueueCleanerConfig.QueuesIncluded should be either nil or a non-empty slice")
 	}
 	if c.RetentionPeriod <= 0 {
 		panic("QueueCleanerConfig.RetentionPeriod must be above zero")
@@ -91,6 +98,7 @@ func NewQueueCleaner(archetype *baseservice.Archetype, config *QueueCleanerConfi
 		Config: (&QueueCleanerConfig{
 			BatchSizes:      batchSizes,
 			Interval:        cmp.Or(config.Interval, queueCleanerIntervalDefault),
+			QueuesIncluded:  config.QueuesIncluded,
 			RetentionPeriod: cmp.Or(config.RetentionPeriod, QueueRetentionPeriodDefault),
 			Schema:          config.Schema,
 		}).mustValidate(),
@@ -163,6 +171,7 @@ func (s *QueueCleaner) runOnce(ctx context.Context) (*queueCleanerRunOnceResult,
 
 			queuesDeleted, err := s.exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{
 				Max:              s.batchSize(),
+				QueuesIncluded:   s.Config.QueuesIncluded,
 				Schema:           s.Config.Schema,
 				UpdatedAtHorizon: time.Now().Add(-s.Config.RetentionPeriod),
 			})

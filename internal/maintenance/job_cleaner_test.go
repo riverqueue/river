@@ -328,7 +328,7 @@ func TestJobCleaner(t *testing.T) {
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
 	})
 
-	t.Run("OmmittedQueues", func(t *testing.T) {
+	t.Run("QueuesExcluded", func(t *testing.T) {
 		t.Parallel()
 
 		cleaner, bundle := setup(t)
@@ -338,24 +338,24 @@ func TestJobCleaner(t *testing.T) {
 			completedJob = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
 			discardedJob = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
 
-			omittedQueue1 = "omitted1"
-			omittedQueue2 = "omitted1"
+			excludedQueue1 = "queue1"
+			excludedQueue2 = "queue2"
 
-			// Not deleted because in an omitted queue.
-			omittedQueueJob1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour)), Queue: &omittedQueue1, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
-			omittedQueueJob2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour)), Queue: &omittedQueue2, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+			// Not deleted because in an excluded queue.
+			excludedQueueJob1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour)), Queue: &excludedQueue1, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+			excludedQueueJob2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour)), Queue: &excludedQueue2, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
 		)
 
-		cleaner.Config.QueuesExcluded = []string{omittedQueue1, omittedQueue2}
+		cleaner.Config.QueuesExcluded = []string{excludedQueue1, excludedQueue2}
 
 		require.NoError(t, cleaner.Start(ctx))
 
 		cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
 
 		var err error
-		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: omittedQueueJob1.ID, Schema: cleaner.Config.Schema})
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: excludedQueueJob1.ID, Schema: cleaner.Config.Schema})
 		require.NoError(t, err)
-		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: omittedQueueJob2.ID, Schema: cleaner.Config.Schema})
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: excludedQueueJob2.ID, Schema: cleaner.Config.Schema})
 		require.NoError(t, err)
 
 		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: cancelledJob.ID, Schema: cleaner.Config.Schema})
@@ -364,6 +364,41 @@ func TestJobCleaner(t *testing.T) {
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
 		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: discardedJob.ID, Schema: cleaner.Config.Schema})
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
+	})
+
+	t.Run("QueuesIncluded", func(t *testing.T) {
+		t.Parallel()
+
+		cleaner, bundle := setup(t)
+
+		var (
+			// Not deleted because not in an included queue.
+			notIncludedJob1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
+			notIncludedJob2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
+
+			includedQueue1 = "queue1"
+			includedQueue2 = "queue2"
+
+			includedQueueJob1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour)), Queue: &includedQueue1, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+			includedQueueJob2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour)), Queue: &includedQueue2, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+		)
+
+		cleaner.Config.QueuesIncluded = []string{includedQueue1, includedQueue2}
+
+		require.NoError(t, cleaner.Start(ctx))
+
+		cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
+
+		var err error
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: includedQueueJob1.ID, Schema: cleaner.Config.Schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: includedQueueJob2.ID, Schema: cleaner.Config.Schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notIncludedJob1.ID, Schema: cleaner.Config.Schema})
+		require.NoError(t, err)
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notIncludedJob2.ID, Schema: cleaner.Config.Schema})
+		require.NoError(t, err)
 	})
 
 	t.Run("ReducedBatchSizeBreakerTrips", func(t *testing.T) {

@@ -15,12 +15,14 @@ const leaderAttemptElect = `-- name: LeaderAttemptElect :execrows
 INSERT INTO /* TEMPLATE: schema */river_leader (
     leader_id,
     elected_at,
-    expires_at
+    expires_at,
+    name
 ) VALUES (
     $1,
     coalesce($2::timestamptz, now()),
     -- @ttl is inserted as as seconds rather than a duration because ` + "`" + `lib/pq` + "`" + ` doesn't support the latter
-    coalesce($2::timestamptz, now()) + make_interval(secs => $3)
+    coalesce($2::timestamptz, now()) + make_interval(secs => $3),
+    $4
 )
 ON CONFLICT (name)
     DO NOTHING
@@ -30,10 +32,16 @@ type LeaderAttemptElectParams struct {
 	LeaderID string
 	Now      *time.Time
 	TTL      float64
+	Name     string
 }
 
 func (q *Queries) LeaderAttemptElect(ctx context.Context, db DBTX, arg *LeaderAttemptElectParams) (int64, error) {
-	result, err := db.ExecContext(ctx, leaderAttemptElect, arg.LeaderID, arg.Now, arg.TTL)
+	result, err := db.ExecContext(ctx, leaderAttemptElect,
+		arg.LeaderID,
+		arg.Now,
+		arg.TTL,
+		arg.Name,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -44,11 +52,13 @@ const leaderAttemptReelect = `-- name: LeaderAttemptReelect :execrows
 INSERT INTO /* TEMPLATE: schema */river_leader (
     leader_id,
     elected_at,
-    expires_at
+    expires_at,
+    name
 ) VALUES (
     $1,
     coalesce($2::timestamptz, now()),
-    coalesce($2::timestamptz, now()) + make_interval(secs => $3)
+    coalesce($2::timestamptz, now()) + make_interval(secs => $3),
+    $4
 )
 ON CONFLICT (name)
     DO UPDATE SET
@@ -61,10 +71,16 @@ type LeaderAttemptReelectParams struct {
 	LeaderID string
 	Now      *time.Time
 	TTL      float64
+	Name     string
 }
 
 func (q *Queries) LeaderAttemptReelect(ctx context.Context, db DBTX, arg *LeaderAttemptReelectParams) (int64, error) {
-	result, err := db.ExecContext(ctx, leaderAttemptReelect, arg.LeaderID, arg.Now, arg.TTL)
+	result, err := db.ExecContext(ctx, leaderAttemptReelect,
+		arg.LeaderID,
+		arg.Now,
+		arg.TTL,
+		arg.Name,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -105,11 +121,13 @@ const leaderInsert = `-- name: LeaderInsert :one
 INSERT INTO /* TEMPLATE: schema */river_leader(
     elected_at,
     expires_at,
-    leader_id
+    leader_id,
+    name
 ) VALUES (
     coalesce($1::timestamptz, coalesce($2::timestamptz, now())),
     coalesce($3::timestamptz, coalesce($2::timestamptz, now()) + make_interval(secs => $4)),
-    $5
+    $5,
+    $6
 ) RETURNING elected_at, expires_at, leader_id, name
 `
 
@@ -119,6 +137,7 @@ type LeaderInsertParams struct {
 	ExpiresAt *time.Time
 	TTL       float64
 	LeaderID  string
+	Name      string
 }
 
 func (q *Queries) LeaderInsert(ctx context.Context, db DBTX, arg *LeaderInsertParams) (*RiverLeader, error) {
@@ -128,6 +147,7 @@ func (q *Queries) LeaderInsert(ctx context.Context, db DBTX, arg *LeaderInsertPa
 		arg.ExpiresAt,
 		arg.TTL,
 		arg.LeaderID,
+		arg.Name,
 	)
 	var i RiverLeader
 	err := row.Scan(

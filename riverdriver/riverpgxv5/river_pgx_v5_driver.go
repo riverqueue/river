@@ -335,8 +335,9 @@ func (e *Executor) JobGetByKindMany(ctx context.Context, params *riverdriver.Job
 
 func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error) {
 	jobs, err := dbsqlc.New().JobGetStuck(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobGetStuckParams{
-		Max:          int32(min(params.Max, math.MaxInt32)), //nolint:gosec
-		StuckHorizon: params.StuckHorizon,
+		Max:            int32(min(params.Max, math.MaxInt32)), //nolint:gosec
+		QueuesIncluded: params.QueuesIncluded,
+		StuckHorizon:   params.StuckHorizon,
 	})
 	if err != nil {
 		return nil, interpretError(err)
@@ -588,8 +589,9 @@ func (e *Executor) JobRetry(ctx context.Context, params *riverdriver.JobRetryPar
 
 func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobScheduleParams) ([]*riverdriver.JobScheduleResult, error) {
 	scheduleResults, err := dbsqlc.New().JobSchedule(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobScheduleParams{
-		Max: int64(params.Max),
-		Now: params.Now,
+		Max:            int64(params.Max),
+		Now:            params.Now,
+		QueuesIncluded: params.QueuesIncluded,
 	})
 	if err != nil {
 		return nil, interpretError(err)
@@ -703,6 +705,7 @@ func (e *Executor) JobUpdateFull(ctx context.Context, params *riverdriver.JobUpd
 func (e *Executor) LeaderAttemptElect(ctx context.Context, params *riverdriver.LeaderElectParams) (bool, error) {
 	numElectionsWon, err := dbsqlc.New().LeaderAttemptElect(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.LeaderAttemptElectParams{
 		LeaderID: params.LeaderID,
+		Name:     params.Name,
 		Now:      params.Now,
 		TTL:      params.TTL.Seconds(),
 	})
@@ -715,6 +718,7 @@ func (e *Executor) LeaderAttemptElect(ctx context.Context, params *riverdriver.L
 func (e *Executor) LeaderAttemptReelect(ctx context.Context, params *riverdriver.LeaderElectParams) (bool, error) {
 	numElectionsWon, err := dbsqlc.New().LeaderAttemptReelect(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.LeaderAttemptReelectParams{
 		LeaderID: params.LeaderID,
+		Name:     params.Name,
 		Now:      params.Now,
 		TTL:      params.TTL.Seconds(),
 	})
@@ -745,6 +749,7 @@ func (e *Executor) LeaderInsert(ctx context.Context, params *riverdriver.LeaderI
 		ElectedAt: params.ElectedAt,
 		ExpiresAt: params.ExpiresAt,
 		LeaderID:  params.LeaderID,
+		Name:      params.Name,
 		Now:       params.Now,
 		TTL:       params.TTL.Seconds(),
 	})
@@ -871,11 +876,13 @@ func (e *Executor) QueueCreateOrSetUpdatedAt(ctx context.Context, params *riverd
 func (e *Executor) QueueDeleteExpired(ctx context.Context, params *riverdriver.QueueDeleteExpiredParams) ([]string, error) {
 	queues, err := dbsqlc.New().QueueDeleteExpired(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueDeleteExpiredParams{
 		Max:              int64(params.Max),
+		QueuesIncluded:   params.QueuesIncluded,
 		UpdatedAtHorizon: params.UpdatedAtHorizon,
 	})
 	if err != nil {
 		return nil, interpretError(err)
 	}
+
 	queueNames := make([]string, len(queues))
 	for i, q := range queues {
 		queueNames[i] = q.Name

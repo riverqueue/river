@@ -73,21 +73,21 @@ func TestJobScheduler(t *testing.T) {
 
 	requireJobStateUnchanged := func(t *testing.T, scheduler *JobScheduler, exec riverdriver.Executor, job *rivertype.JobRow) *rivertype.JobRow {
 		t.Helper()
-		newJob, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: scheduler.config.Schema})
+		newJob, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: scheduler.Config.Schema})
 		require.NoError(t, err)
 		require.Equal(t, job.State, newJob.State)
 		return newJob
 	}
 	requireJobStateAvailable := func(t *testing.T, scheduler *JobScheduler, exec riverdriver.Executor, job *rivertype.JobRow) *rivertype.JobRow {
 		t.Helper()
-		newJob, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: scheduler.config.Schema})
+		newJob, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: scheduler.Config.Schema})
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateAvailable, newJob.State)
 		return newJob
 	}
 	requireJobStateDiscardedWithMeta := func(t *testing.T, scheduler *JobScheduler, exec riverdriver.Executor, job *rivertype.JobRow) *rivertype.JobRow {
 		t.Helper()
-		newJob, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: scheduler.config.Schema})
+		newJob, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: scheduler.Config.Schema})
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateDiscarded, newJob.State)
 		require.NotNil(t, newJob.FinalizedAt)
@@ -100,9 +100,9 @@ func TestJobScheduler(t *testing.T) {
 
 		scheduler := NewJobScheduler(riversharedtest.BaseServiceArchetype(t), &JobSchedulerConfig{}, nil)
 
-		require.Equal(t, JobSchedulerIntervalDefault, scheduler.config.Interval)
-		require.Equal(t, riversharedmaintenance.BatchSizeDefault, scheduler.config.Default)
-		require.Equal(t, riversharedmaintenance.BatchSizeReduced, scheduler.config.Reduced)
+		require.Equal(t, JobSchedulerIntervalDefault, scheduler.Config.Interval)
+		require.Equal(t, riversharedmaintenance.BatchSizeDefault, scheduler.Config.Default)
+		require.Equal(t, riversharedmaintenance.BatchSizeReduced, scheduler.Config.Reduced)
 	})
 
 	t.Run("StartStopStress", func(t *testing.T) {
@@ -130,7 +130,7 @@ func TestJobScheduler(t *testing.T) {
 
 		scheduledJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
 		scheduledJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
-		scheduledJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(scheduler.config.Interval - time.Millisecond))}) // won't be scheduled
+		scheduledJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(scheduler.Config.Interval - time.Millisecond))}) // won't be scheduled
 		scheduledJob4 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(30 * time.Second))})                             // won't be scheduled
 
 		retryableJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
@@ -205,13 +205,13 @@ func TestJobScheduler(t *testing.T) {
 		t.Parallel()
 
 		scheduler, bundle := setupTx(t)
-		scheduler.config.Default = 10 // reduced size for test speed
+		scheduler.Config.Default = 10 // reduced size for test speed
 
 		now := time.Now().UTC()
 
 		// Add one to our chosen batch size to get one extra job and therefore
 		// one extra batch, ensuring that we've tested working multiple.
-		numJobs := scheduler.config.Default + 1
+		numJobs := scheduler.Config.Default + 1
 
 		jobs := make([]*rivertype.JobRow, numJobs)
 
@@ -243,7 +243,7 @@ func TestJobScheduler(t *testing.T) {
 		t.Parallel()
 
 		scheduler, _ := setupTx(t)
-		scheduler.config.Interval = 1 * time.Microsecond
+		scheduler.Config.Interval = 1 * time.Microsecond
 
 		require.NoError(t, scheduler.Start(ctx))
 
@@ -258,7 +258,7 @@ func TestJobScheduler(t *testing.T) {
 		t.Parallel()
 
 		scheduler, _ := setupTx(t)
-		scheduler.config.Interval = time.Minute // should only trigger once for the initial run
+		scheduler.Config.Interval = time.Minute // should only trigger once for the initial run
 
 		require.NoError(t, scheduler.Start(ctx))
 		scheduler.Stop()
@@ -268,7 +268,7 @@ func TestJobScheduler(t *testing.T) {
 		t.Parallel()
 
 		scheduler, _ := setupTx(t)
-		scheduler.config.Interval = time.Minute // should only trigger once for the initial run
+		scheduler.Config.Interval = time.Minute // should only trigger once for the initial run
 
 		ctx, cancelFunc := context.WithCancel(ctx)
 
@@ -287,7 +287,7 @@ func TestJobScheduler(t *testing.T) {
 		t.Parallel()
 
 		scheduler, bundle := setupTx(t)
-		scheduler.config.Interval = time.Minute // should only trigger once for the initial run
+		scheduler.Config.Interval = time.Minute // should only trigger once for the initial run
 		now := time.Now().UTC()
 
 		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
@@ -320,8 +320,8 @@ func TestJobScheduler(t *testing.T) {
 		notifyCh := make(chan []string, 10)
 
 		scheduler, _ := setup(t, &testOpts{exec: exec, schema: schema})
-		scheduler.config.Interval = time.Minute // should only trigger once for the initial run
-		scheduler.config.NotifyInsert = func(ctx context.Context, tx riverdriver.ExecutorTx, queues []string) error {
+		scheduler.Config.Interval = time.Minute // should only trigger once for the initial run
+		scheduler.Config.NotifyInsert = func(ctx context.Context, tx riverdriver.ExecutorTx, queues []string) error {
 			notifyCh <- queues
 			return nil
 		}
@@ -357,7 +357,7 @@ func TestJobScheduler(t *testing.T) {
 		addJob("other_status_queue", time.Minute, rivertype.JobStateCancelled) // it's cancelled
 		// This one is scheduled in the future, just barely before the next run, so it should
 		// be scheduled but shouldn't trigger a notification:
-		addJob("queue5", scheduler.config.Interval-time.Millisecond, rivertype.JobStateRetryable)
+		addJob("queue5", scheduler.Config.Interval-time.Millisecond, rivertype.JobStateRetryable)
 
 		// Run the scheduler and wait for it to execute once:
 		require.NoError(t, scheduler.Start(ctx))
@@ -438,5 +438,36 @@ func TestJobScheduler(t *testing.T) {
 				require.Equal(t, riversharedmaintenance.BatchSizeDefault, scheduler.batchSize())
 			}
 		}
+	})
+
+	t.Run("QueuesIncluded", func(t *testing.T) {
+		t.Parallel()
+
+		scheduler, bundle := setupTx(t)
+
+		var (
+			now = time.Now().UTC()
+
+			notIncludedJob1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
+			notIncludedJob2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
+
+			includedQueue1 = "queue1"
+			includedQueue2 = "queue2"
+
+			includedJob1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: &includedQueue1, State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
+			includedJob2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: &includedQueue2, State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
+		)
+
+		scheduler.Config.QueuesIncluded = []string{includedQueue1, includedQueue2}
+
+		require.NoError(t, scheduler.Start(ctx))
+
+		scheduler.TestSignals.ScheduledBatch.WaitOrTimeout()
+
+		requireJobStateUnchanged(t, scheduler, bundle.exec, notIncludedJob1)
+		requireJobStateUnchanged(t, scheduler, bundle.exec, notIncludedJob2)
+
+		requireJobStateAvailable(t, scheduler, bundle.exec, includedJob1)
+		requireJobStateAvailable(t, scheduler, bundle.exec, includedJob2)
 	})
 }
