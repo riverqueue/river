@@ -51,6 +51,10 @@ type JobSchedulerConfig struct {
 	// where jobs were scheduled.
 	NotifyInsert NotifyInsertFunc
 
+	// QueuesIncluded are queues that'll be included in scheduling.  If set,
+	// only these queues will be scheduled. If nil, all queues are scheduled.
+	QueuesIncluded []string
+
 	// Schema where River tables are located. Empty string omits schema, causing
 	// Postgres to default to `search_path`.
 	Schema string
@@ -59,11 +63,14 @@ type JobSchedulerConfig struct {
 func (c *JobSchedulerConfig) mustValidate() *JobSchedulerConfig {
 	c.MustValidate()
 
+	if c.Default <= 0 {
+		panic("SchedulerConfig.Limit must be above zero")
+	}
 	if c.Interval <= 0 {
 		panic("SchedulerConfig.Interval must be above zero")
 	}
-	if c.Default <= 0 {
-		panic("SchedulerConfig.Limit must be above zero")
+	if c.QueuesIncluded != nil && len(c.QueuesIncluded) == 0 {
+		panic("JobSchedulerConfig.QueuesIncluded should be either nil or a non-empty slice")
 	}
 
 	return c
@@ -77,10 +84,10 @@ type JobScheduler struct {
 	startstop.BaseStartStop
 
 	// exported for test purposes
+	Config      *JobSchedulerConfig
 	TestSignals JobSchedulerTestSignals
 
-	config *JobSchedulerConfig
-	exec   riverdriver.Executor
+	exec riverdriver.Executor
 
 	// Circuit breaker that tracks consecutive timeout failures from the central
 	// query. The query starts by using the full/default batch size, but after
@@ -95,11 +102,12 @@ func NewJobScheduler(archetype *baseservice.Archetype, config *JobSchedulerConfi
 	batchSizes := config.WithDefaults()
 
 	return baseservice.Init(archetype, &JobScheduler{
-		config: (&JobSchedulerConfig{
-			BatchSizes:   batchSizes,
-			Interval:     cmp.Or(config.Interval, JobSchedulerIntervalDefault),
-			NotifyInsert: config.NotifyInsert,
-			Schema:       config.Schema,
+		Config: (&JobSchedulerConfig{
+			BatchSizes:     batchSizes,
+			Interval:       cmp.Or(config.Interval, JobSchedulerIntervalDefault),
+			NotifyInsert:   config.NotifyInsert,
+			QueuesIncluded: config.QueuesIncluded,
+			Schema:         config.Schema,
 		}).mustValidate(),
 		exec:                    exec,
 		reducedBatchSizeBreaker: riversharedmaintenance.ReducedBatchSizeBreaker(batchSizes),
@@ -121,7 +129,7 @@ func (s *JobScheduler) Start(ctx context.Context) error { //nolint:dupl
 		s.Logger.DebugContext(ctx, s.Name+riversharedmaintenance.LogPrefixRunLoopStarted)
 		defer s.Logger.DebugContext(ctx, s.Name+riversharedmaintenance.LogPrefixRunLoopStopped)
 
-		ticker := timeutil.NewTickerWithInitialTick(ctx, s.config.Interval)
+		ticker := timeutil.NewTickerWithInitialTick(ctx, s.Config.Interval)
 		for {
 			select {
 			case <-ctx.Done():
@@ -150,9 +158,9 @@ func (s *JobScheduler) Start(ctx context.Context) error { //nolint:dupl
 
 func (s *JobScheduler) batchSize() int {
 	if s.reducedBatchSizeBreaker.Open() {
-		return s.config.Reduced
+		return s.Config.Reduced
 	}
-	return s.config.Default
+	return s.Config.Default
 }
 
 type schedulerRunOnceResult struct {
@@ -175,12 +183,13 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 			defer dbutil.RollbackWithoutCancel(ctx, execTx)
 
 			now := s.Time.NowUTC()
-			nowWithLookAhead := now.Add(s.config.Interval)
+			nowWithLookAhead := now.Add(s.Config.Interval)
 
 			scheduledJobResults, err := execTx.JobSchedule(ctx, &riverdriver.JobScheduleParams{
-				Max:    s.batchSize(),
-				Now:    &nowWithLookAhead,
-				Schema: s.config.Schema,
+				Max:            s.batchSize(),
+				Now:            &nowWithLookAhead,
+				QueuesIncluded: s.Config.QueuesIncluded,
+				Schema:         s.Config.Schema,
 			})
 			if err != nil {
 				return 0, fmt.Errorf("error scheduling jobs: %w", err)
@@ -205,7 +214,7 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 			}
 
 			if len(queues) > 0 {
-				if err := s.config.NotifyInsert(ctx, execTx, queues); err != nil {
+				if err := s.Config.NotifyInsert(ctx, execTx, queues); err != nil {
 					return 0, fmt.Errorf("error notifying insert: %w", err)
 				}
 				s.TestSignals.NotifiedQueues.Signal(queues)

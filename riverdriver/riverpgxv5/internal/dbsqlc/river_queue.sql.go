@@ -57,24 +57,36 @@ func (q *Queries) QueueCreateOrSetUpdatedAt(ctx context.Context, db DBTX, arg *Q
 }
 
 const queueDeleteExpired = `-- name: QueueDeleteExpired :many
-DELETE FROM /* TEMPLATE: schema */river_queue
-WHERE name IN (
-    SELECT name
-    FROM /* TEMPLATE: schema */river_queue
-    WHERE river_queue.updated_at < $1
-    ORDER BY name ASC
-    LIMIT $2::bigint
+WITH deleted_queues AS (
+    DELETE FROM /* TEMPLATE: schema */river_queue
+    WHERE name IN (
+        SELECT name
+        FROM /* TEMPLATE: schema */river_queue
+        WHERE river_queue.updated_at < $1
+            AND (
+                $2::text[] IS NULL
+                OR name = any($2)
+            )
+        ORDER BY name ASC
+        LIMIT $3::bigint
+    )
+    RETURNING name, created_at, metadata, paused_at, updated_at
 )
-RETURNING name, created_at, metadata, paused_at, updated_at
+SELECT name, created_at, metadata, paused_at, updated_at
+FROM /* TEMPLATE: schema */river_queue
+WHERE name IN (SELECT name FROM deleted_queues)
+ORDER BY name ASC
 `
 
 type QueueDeleteExpiredParams struct {
 	UpdatedAtHorizon time.Time
+	QueuesIncluded   []string
 	Max              int64
 }
 
+// Uses a CTE only to guarantee return order.
 func (q *Queries) QueueDeleteExpired(ctx context.Context, db DBTX, arg *QueueDeleteExpiredParams) ([]*RiverQueue, error) {
-	rows, err := db.Query(ctx, queueDeleteExpired, arg.UpdatedAtHorizon, arg.Max)
+	rows, err := db.Query(ctx, queueDeleteExpired, arg.UpdatedAtHorizon, arg.QueuesIncluded, arg.Max)
 	if err != nil {
 		return nil, err
 	}

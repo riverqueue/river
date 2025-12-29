@@ -106,12 +106,12 @@ func TestQueueCleaner(t *testing.T) {
 			Name:   queue3.Name,
 			Schema: cleaner.Config.Schema,
 		})
-		require.ErrorIs(t, err, rivertype.ErrNotFound) // still there
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
 		_, err = bundle.exec.QueueGet(ctx, &riverdriver.QueueGetParams{
 			Name:   queue4.Name,
 			Schema: cleaner.Config.Schema,
 		})
-		require.ErrorIs(t, err, rivertype.ErrNotFound) // still there
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
 		_, err = bundle.exec.QueueGet(ctx, &riverdriver.QueueGetParams{
 			Name:   queue5.Name,
 			Schema: cleaner.Config.Schema,
@@ -301,5 +301,38 @@ func TestQueueCleaner(t *testing.T) {
 				require.Equal(t, riversharedmaintenance.BatchSizeDefault, cleaner.batchSize())
 			}
 		}
+	})
+
+	t.Run("QueuesIncluded", func(t *testing.T) {
+		t.Parallel()
+
+		cleaner, bundle := setup(t)
+
+		var (
+			now = time.Now()
+
+			notIncludedQueue1 = testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-25 * time.Hour))})
+			notIncludedQueue2 = testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-26 * time.Hour))})
+
+			includedQueue1 = testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("included1"), UpdatedAt: ptrutil.Ptr(now.Add(-25 * time.Hour))})
+			includedQueue2 = testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("included2"), UpdatedAt: ptrutil.Ptr(now.Add(-26 * time.Hour))})
+		)
+
+		cleaner.Config.QueuesIncluded = []string{includedQueue1.Name, includedQueue2.Name}
+
+		require.NoError(t, cleaner.Start(ctx))
+
+		cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
+
+		var err error
+		_, err = bundle.exec.QueueGet(ctx, &riverdriver.QueueGetParams{Name: notIncludedQueue1.Name, Schema: cleaner.Config.Schema})
+		require.NoError(t, err) // still there
+		_, err = bundle.exec.QueueGet(ctx, &riverdriver.QueueGetParams{Name: notIncludedQueue2.Name, Schema: cleaner.Config.Schema})
+		require.NoError(t, err) // still there
+
+		_, err = bundle.exec.QueueGet(ctx, &riverdriver.QueueGetParams{Name: includedQueue1.Name, Schema: cleaner.Config.Schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		_, err = bundle.exec.QueueGet(ctx, &riverdriver.QueueGetParams{Name: includedQueue2.Name, Schema: cleaner.Config.Schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
 	})
 }

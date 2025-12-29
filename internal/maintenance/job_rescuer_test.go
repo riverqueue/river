@@ -405,4 +405,42 @@ func TestJobRescuer(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("QueuesIncluded", func(t *testing.T) {
+		t.Parallel()
+
+		rescuer, bundle := setup(t)
+
+		var (
+			notIncludedJob1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+			notIncludedJob2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)})
+
+			includedQueue1 = "queue1"
+			includedQueue2 = "queue2"
+
+			includedJob1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5), Queue: &includedQueue1})
+			includedJob2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Minute)), MaxAttempts: ptrutil.Ptr(5), Queue: &includedQueue2})
+		)
+
+		rescuer.Config.QueuesIncluded = []string{includedQueue1, includedQueue2}
+
+		require.NoError(t, rescuer.Start(ctx))
+
+		rescuer.TestSignals.FetchedBatch.WaitOrTimeout()
+		rescuer.TestSignals.UpdatedBatch.WaitOrTimeout()
+
+		includedJob1After, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: includedJob1.ID, Schema: rescuer.Config.Schema})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRetryable, includedJob1After.State)
+		includedJob2After, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: includedJob2.ID, Schema: rescuer.Config.Schema})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRetryable, includedJob2After.State)
+
+		notIncludedJob1After, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notIncludedJob1.ID, Schema: rescuer.Config.Schema})
+		require.NoError(t, err)
+		require.Equal(t, notIncludedJob1.State, notIncludedJob1After.State) // not rescued
+		notIncludedJob2After, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: notIncludedJob2.ID, Schema: rescuer.Config.Schema})
+		require.NoError(t, err)
+		require.Equal(t, notIncludedJob2.State, notIncludedJob2After.State) // not rescued
+	})
 }

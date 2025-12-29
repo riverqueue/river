@@ -422,6 +422,7 @@ func TestAttemptElectOrReelect(t *testing.T) {
 
 		elected, err := attemptElectOrReelect(ctx, bundle.exec, false, &riverdriver.LeaderElectParams{
 			LeaderID: clientID,
+			Name:     DomainDefault,
 			TTL:      leaderTTL,
 			Schema:   "",
 		})
@@ -451,6 +452,7 @@ func TestAttemptElectOrReelect(t *testing.T) {
 		// the transaction.
 		elected, err := attemptElectOrReelect(ctx, bundle.exec, true, &riverdriver.LeaderElectParams{
 			LeaderID: clientID,
+			Name:     DomainDefault,
 			TTL:      30 * time.Second,
 			Schema:   "",
 		})
@@ -478,6 +480,7 @@ func TestAttemptElectOrReelect(t *testing.T) {
 
 		elected, err := attemptElectOrReelect(ctx, bundle.exec, true, &riverdriver.LeaderElectParams{
 			LeaderID: "different-client-id",
+			Name:     DomainDefault,
 			TTL:      leaderTTL,
 			Schema:   "",
 		})
@@ -492,6 +495,46 @@ func TestAttemptElectOrReelect(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, leader.ExpiresAt, updatedLeader.ExpiresAt)
+	})
+
+	t.Run("MultipleDomains", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		elected, err := attemptElectOrReelect(ctx, bundle.exec, true, &riverdriver.LeaderElectParams{
+			LeaderID: clientID,
+			Name:     DomainDefault,
+			Schema:   "",
+		})
+		require.NoError(t, err)
+		require.True(t, elected)
+
+		elected, err = attemptElectOrReelect(ctx, bundle.exec, true, &riverdriver.LeaderElectParams{
+			LeaderID: clientID,
+			Name:     "domain2",
+			Schema:   "",
+		})
+		require.NoError(t, err)
+		require.True(t, elected)
+
+		// Second election on a domain where we have a leader fails.
+		elected, err = attemptElectOrReelect(ctx, bundle.exec, true, &riverdriver.LeaderElectParams{
+			LeaderID: "other-client-id",
+			Name:     DomainDefault,
+			Schema:   "",
+		})
+		require.NoError(t, err)
+		require.False(t, elected)
+
+		// And same in the alternate domain.
+		elected, err = attemptElectOrReelect(ctx, bundle.exec, true, &riverdriver.LeaderElectParams{
+			LeaderID: "other-client-id",
+			Name:     "domain2",
+			Schema:   "",
+		})
+		require.NoError(t, err)
+		require.False(t, elected)
 	})
 }
 

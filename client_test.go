@@ -1491,6 +1491,154 @@ func Test_Client_Common(t *testing.T) {
 
 		startstoptest.Stress(ctx, t, clientWithStop)
 	})
+
+	t.Run("LeaderDomain_Alternate", func(t *testing.T) {
+		t.Parallel()
+
+		var client1 *Client[pgx.Tx]
+		{
+			config, bundle := setupConfig(t)
+			config.LeaderDomain = "domain1"
+			config.ReindexerSchedule = &neverSchedule{}
+			config.Queues = map[string]QueueConfig{
+				"queue_a": {MaxWorkers: 50},
+				"queue_b": {MaxWorkers: 50},
+			}
+
+			var err error
+			client1, err = NewClient(bundle.driver, config)
+			require.NoError(t, err)
+			client1.testSignals.Init(t)
+		}
+
+		var client2 *Client[pgx.Tx]
+		{
+			config, bundle := setupConfig(t)
+			config.LeaderDomain = "domain2"
+			config.Queues = map[string]QueueConfig{
+				"queue_c": {MaxWorkers: 50},
+				"queue_d": {MaxWorkers: 50},
+			}
+			config.Schema = client1.config.Schema
+			config.ReindexerSchedule = &neverSchedule{}
+
+			var err error
+			client2, err = NewClient(bundle.driver, config)
+			require.NoError(t, err)
+			client2.testSignals.Init(t)
+		}
+
+		startClient(ctx, t, client1)
+		startClient(ctx, t, client2)
+
+		// Both elected
+		client1.testSignals.electedLeader.WaitOrTimeout()
+		client2.testSignals.electedLeader.WaitOrTimeout()
+	})
+
+	t.Run("LeaderDomain_MaintenanceServiceConfigEmpty", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		config.Queues = map[string]QueueConfig{
+			"queue_a": {MaxWorkers: 50},
+			"queue_b": {MaxWorkers: 50},
+		}
+
+		client, err := NewClient(bundle.driver, config)
+		require.NoError(t, err)
+		client.testSignals.Init(t)
+
+		jobCleaner := maintenance.GetService[*maintenance.JobCleaner](client.queueMaintainer)
+		require.Nil(t, jobCleaner.Config.QueuesIncluded)
+		jobRescuer := maintenance.GetService[*maintenance.JobRescuer](client.queueMaintainer)
+		require.Nil(t, jobRescuer.Config.QueuesIncluded)
+		jobScheduler := maintenance.GetService[*maintenance.JobScheduler](client.queueMaintainer)
+		require.Nil(t, jobScheduler.Config.QueuesIncluded)
+		queueCleaner := maintenance.GetService[*maintenance.QueueCleaner](client.queueMaintainer)
+		require.Nil(t, queueCleaner.Config.QueuesIncluded)
+	})
+
+	// The domain "default" is special in that it behaves like if LeaderDomain
+	// was not set.
+	t.Run("LeaderDomain_MaintenanceServiceConfigDefault", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		config.LeaderDomain = "default"
+		config.Queues = map[string]QueueConfig{
+			"queue_a": {MaxWorkers: 50},
+			"queue_b": {MaxWorkers: 50},
+		}
+
+		client, err := NewClient(bundle.driver, config)
+		require.NoError(t, err)
+		client.testSignals.Init(t)
+
+		jobCleaner := maintenance.GetService[*maintenance.JobCleaner](client.queueMaintainer)
+		require.Nil(t, jobCleaner.Config.QueuesIncluded)
+		jobRescuer := maintenance.GetService[*maintenance.JobRescuer](client.queueMaintainer)
+		require.Nil(t, jobRescuer.Config.QueuesIncluded)
+		jobScheduler := maintenance.GetService[*maintenance.JobScheduler](client.queueMaintainer)
+		require.Nil(t, jobScheduler.Config.QueuesIncluded)
+		queueCleaner := maintenance.GetService[*maintenance.QueueCleaner](client.queueMaintainer)
+		require.Nil(t, queueCleaner.Config.QueuesIncluded)
+	})
+
+	// When non-default leader domains are configured, each client's maintenance
+	// services are limited to only their client's queues.
+	t.Run("LeaderDomain_MaintenanceServiceConfigAlternate", func(t *testing.T) {
+		t.Parallel()
+
+		var client1 *Client[pgx.Tx]
+		{
+			config, bundle := setupConfig(t)
+			config.LeaderDomain = "domain1"
+			config.ReindexerSchedule = &neverSchedule{}
+			config.Queues = map[string]QueueConfig{
+				"queue_a": {MaxWorkers: 50},
+				"queue_b": {MaxWorkers: 50},
+			}
+
+			var err error
+			client1, err = NewClient(bundle.driver, config)
+			require.NoError(t, err)
+			client1.testSignals.Init(t)
+
+			jobCleaner := maintenance.GetService[*maintenance.JobCleaner](client1.queueMaintainer)
+			require.Equal(t, []string{"queue_a", "queue_b"}, jobCleaner.Config.QueuesIncluded)
+			jobRescuer := maintenance.GetService[*maintenance.JobRescuer](client1.queueMaintainer)
+			require.Equal(t, []string{"queue_a", "queue_b"}, jobRescuer.Config.QueuesIncluded)
+			jobScheduler := maintenance.GetService[*maintenance.JobScheduler](client1.queueMaintainer)
+			require.Equal(t, []string{"queue_a", "queue_b"}, jobScheduler.Config.QueuesIncluded)
+			queueCleaner := maintenance.GetService[*maintenance.QueueCleaner](client1.queueMaintainer)
+			require.Equal(t, []string{"queue_a", "queue_b"}, queueCleaner.Config.QueuesIncluded)
+		}
+
+		{
+			config, bundle := setupConfig(t)
+			config.LeaderDomain = "domain2"
+			config.Queues = map[string]QueueConfig{
+				"queue_c": {MaxWorkers: 50},
+				"queue_d": {MaxWorkers: 50},
+			}
+			config.Schema = client1.config.Schema
+			config.ReindexerSchedule = &neverSchedule{}
+
+			client2, err := NewClient(bundle.driver, config)
+			require.NoError(t, err)
+			client2.testSignals.Init(t)
+
+			jobCleaner := maintenance.GetService[*maintenance.JobCleaner](client2.queueMaintainer)
+			require.Equal(t, []string{"queue_c", "queue_d"}, jobCleaner.Config.QueuesIncluded)
+			jobRescuer := maintenance.GetService[*maintenance.JobRescuer](client2.queueMaintainer)
+			require.Equal(t, []string{"queue_c", "queue_d"}, jobRescuer.Config.QueuesIncluded)
+			jobScheduler := maintenance.GetService[*maintenance.JobScheduler](client2.queueMaintainer)
+			require.Equal(t, []string{"queue_c", "queue_d"}, jobScheduler.Config.QueuesIncluded)
+			queueCleaner := maintenance.GetService[*maintenance.QueueCleaner](client2.queueMaintainer)
+			require.Equal(t, []string{"queue_c", "queue_d"}, queueCleaner.Config.QueuesIncluded)
+		}
+	})
 }
 
 type workerWithMiddleware[T JobArgs] struct {

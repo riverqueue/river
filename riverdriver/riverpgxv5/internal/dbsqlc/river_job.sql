@@ -259,6 +259,10 @@ SELECT *
 FROM /* TEMPLATE: schema */river_job
 WHERE state = 'running'
     AND attempted_at < @stuck_horizon::timestamptz
+    AND (
+        @queues_included::text[] IS NULL
+        OR queue = any(@queues_included)
+    )
 ORDER BY id
 LIMIT @max;
 
@@ -548,6 +552,10 @@ WITH jobs_to_schedule AS (
         state IN ('retryable', 'scheduled')
         AND priority >= 0
         AND queue IS NOT NULL
+        AND (
+            @queues_included::text[] IS NULL
+            OR queue = any(@queues_included)
+        )
         AND scheduled_at <= coalesce(sqlc.narg('now')::timestamptz, now())
     ORDER BY
         priority,
