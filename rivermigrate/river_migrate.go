@@ -385,6 +385,10 @@ func (m *Migrator[TTx]) ValidateTx(ctx context.Context, tx TTx) (*ValidateResult
 
 // migrateDown runs down migrations.
 func (m *Migrator[TTx]) migrateDown(ctx context.Context, exec riverdriver.Executor, direction Direction, opts *MigrateOpts, inOuterTx bool) (*MigrateResult, error) {
+	if opts == nil {
+		opts = &MigrateOpts{}
+	}
+
 	existingMigrations, err := m.existingMigrations(ctx, exec)
 	if err != nil {
 		return nil, err
@@ -434,6 +438,10 @@ func (m *Migrator[TTx]) migrateDown(ctx context.Context, exec riverdriver.Execut
 
 // migrateUp runs up migrations.
 func (m *Migrator[TTx]) migrateUp(ctx context.Context, exec riverdriver.Executor, direction Direction, opts *MigrateOpts, inOuterTx bool) (*MigrateResult, error) {
+	if opts == nil {
+		opts = &MigrateOpts{}
+	}
+
 	existingMigrations, err := m.existingMigrations(ctx, exec)
 	if err != nil {
 		return nil, err
@@ -493,10 +501,6 @@ func (m *Migrator[TTx]) validate(ctx context.Context, exec riverdriver.Executor)
 // Common code shared between the up and down migration directions that walks
 // through each target migration and applies it, logging appropriately.
 func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Executor, direction Direction, opts *MigrateOpts, inOuterTx bool, sortedTargetMigrations []Migration) (*MigrateResult, error) {
-	if opts == nil {
-		opts = &MigrateOpts{}
-	}
-
 	var maxSteps int
 	switch {
 	case opts.MaxSteps != 0:
