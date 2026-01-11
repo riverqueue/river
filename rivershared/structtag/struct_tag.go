@@ -1,4 +1,4 @@
-package dbunique
+package structtag
 
 import (
 	"fmt"
@@ -12,15 +12,8 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-var (
-	// uniqueFieldsCache caches the unique fields for each JobArgs type. These are
-	// global to ensure that each struct type's tags are only extracted once.
-	uniqueFieldsCache = make(map[reflect.Type][]string) //nolint:gochecknoglobals
-	cacheMutex        sync.RWMutex                      //nolint:gochecknoglobals
-)
-
-// extractUniqueValues extracts the raw JSON values of the specified keys from the JSON-encoded args.
-func extractUniqueValues(encodedArgs []byte, uniqueKeys []string) []string {
+// ExtractValues extracts the raw JSON values of the specified keys from the JSON-encoded args.
+func ExtractValues(encodedArgs []byte, uniqueKeys []string) []string {
 	// Use GetManyBytes to retrieve multiple values at once
 	results := gjson.GetManyBytes(encodedArgs, uniqueKeys...)
 
@@ -29,9 +22,9 @@ func extractUniqueValues(encodedArgs []byte, uniqueKeys []string) []string {
 		if res.Exists() {
 			uniqueValues[i] = res.Raw // Use Raw to get the JSON-encoded value
 		} else {
-			// Handle missing keys as "undefined" (they'll be skipped when building
-			// the unique key). We don't want to use "null" here because the JSON may
-			// actually contain "null" as a value.
+			// Handle missing keys as "undefined" (they'll be skipped when
+			// building the key). We don't want to use "null" here because the
+			// JSON may actually contain "null" as a value.
 			uniqueValues[i] = "undefined"
 		}
 	}
@@ -39,13 +32,56 @@ func extractUniqueValues(encodedArgs []byte, uniqueKeys []string) []string {
 	return uniqueValues
 }
 
-// getSortedUniqueFields uses reflection to retrieve the JSON keys of fields
-// marked with `river:"unique"` among potentially other comma-separated values.
-// The return values are the JSON keys using the same logic as the `json` struct tag.
+type uniqueFieldCacheKey struct {
+	typ      reflect.Type
+	tagValue string
+}
+
+var (
+	// uniqueFieldsCache caches the unique fields for each JobArgs type. These are
+	// global to ensure that each struct type's tags are only extracted once.
+	uniqueFieldsCache = make(map[uniqueFieldCacheKey][]string) //nolint:gochecknoglobals
+	cacheMutex        sync.RWMutex                             //nolint:gochecknoglobals
+)
+
+// SortedFieldsWithTag retrieves unique fields with caching to avoid
+// extracting fields from the same struct type repeatedly.
+func SortedFieldsWithTag(args rivertype.JobArgs, tagValue string) ([]string, error) {
+	var (
+		typ      = reflect.TypeOf(args)
+		cacheKey = uniqueFieldCacheKey{typ: typ, tagValue: tagValue}
+	)
+
+	// Check cache first
+	cacheMutex.RLock()
+	if fields, ok := uniqueFieldsCache[cacheKey]; ok {
+		cacheMutex.RUnlock()
+		return fields, nil
+	}
+	cacheMutex.RUnlock()
+
+	// Not in cache; retrieve using reflection
+	fields, err := sortedFieldsWithTagUncached(reflect.TypeOf(args), tagValue, nil, make(map[reflect.Type]struct{}))
+	if err != nil {
+		return nil, err
+	}
+
+	// Store in cache
+	cacheMutex.Lock()
+	uniqueFieldsCache[cacheKey] = fields
+	cacheMutex.Unlock()
+
+	return fields, nil
+}
+
+// sortedFieldsWithTagUncached uses reflection to retrieve the JSON keys of fields
+// marked with `river:"<tagValue>"` among potentially other comma-separated
+// values.  The return values are the JSON keys using the same logic as the
+// `json` struct tag.
 //
 // typesSeen should be a map passed through to make sure that recursive types
 // don't cause a stack overflow.
-func getSortedUniqueFields(typ reflect.Type, path []string, typesSeen map[reflect.Type]struct{}) ([]string, error) {
+func sortedFieldsWithTagUncached(typ reflect.Type, tagValue string, path []string, typesSeen map[reflect.Type]struct{}) ([]string, error) {
 	// Handle pointer to struct
 	if typ.Kind() == reflect.Ptr {
 		typ = typ.Elem()
@@ -93,7 +129,7 @@ func getSortedUniqueFields(typ reflect.Type, path []string, typesSeen map[reflec
 		if riverTag, ok := field.Tag.Lookup("river"); ok {
 			tags := strings.SplitSeq(riverTag, ",")
 			for tag := range tags {
-				if strings.TrimSpace(tag) == "unique" {
+				if strings.TrimSpace(tag) == tagValue {
 					hasUniqueTag = true
 				}
 			}
@@ -108,7 +144,7 @@ func getSortedUniqueFields(typ reflect.Type, path []string, typesSeen map[reflec
 				fullPath = append(path, uniqueName) //nolint:gocritic
 			}
 
-			uniqueSubFields, err := getSortedUniqueFields(field.Type, fullPath, typesSeen)
+			uniqueSubFields, err := sortedFieldsWithTagUncached(field.Type, tagValue, fullPath, typesSeen)
 			if err != nil {
 				return nil, err
 			}
@@ -116,7 +152,7 @@ func getSortedUniqueFields(typ reflect.Type, path []string, typesSeen map[reflec
 			if len(uniqueSubFields) > 0 {
 				uniqueFields = append(uniqueFields, uniqueSubFields...)
 			} else if hasUniqueTag {
-				// If a struct field is marked `river:"unique"`, use its entire
+				// If a struct field is marked `river:"<tagValue>"`, use its entire
 				// JSON serialization as a unique value. This may not be the
 				// greatest idea practically, but keeping it in place for
 				// backwards compatibility.
@@ -135,33 +171,6 @@ func getSortedUniqueFields(typ reflect.Type, path []string, typesSeen map[reflec
 	sort.Strings(uniqueFields)
 
 	return uniqueFields, nil
-}
-
-// getSortedUniqueFieldsCached retrieves unique fields with caching to avoid
-// extracting fields from the same struct type repeatedly.
-func getSortedUniqueFieldsCached(args rivertype.JobArgs) ([]string, error) {
-	typ := reflect.TypeOf(args)
-
-	// Check cache first
-	cacheMutex.RLock()
-	if fields, ok := uniqueFieldsCache[typ]; ok {
-		cacheMutex.RUnlock()
-		return fields, nil
-	}
-	cacheMutex.RUnlock()
-
-	// Not in cache; retrieve using reflection
-	fields, err := getSortedUniqueFields(reflect.TypeOf(args), nil, make(map[reflect.Type]struct{}))
-	if err != nil {
-		return nil, err
-	}
-
-	// Store in cache
-	cacheMutex.Lock()
-	uniqueFieldsCache[typ] = fields
-	cacheMutex.Unlock()
-
-	return fields, nil
 }
 
 // parseJSONTag extracts the JSON key from the struct tag.
