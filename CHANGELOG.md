@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-01-11
+
 ### Fixed
 
 - Fix possible nil pointer panic when using nil `opts` in `Migrator.MigrateTx`. [PR #1117](https://github.com/riverqueue/river/pull/1117).
