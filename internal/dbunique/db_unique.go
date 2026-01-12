@@ -9,6 +9,7 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
+	"github.com/riverqueue/river/rivershared/structtag"
 	"github.com/riverqueue/river/rivershared/uniquestates"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
@@ -64,14 +65,14 @@ func buildUniqueKeyString(timeGen rivertype.TimeGenerator, uniqueOpts *UniqueOpt
 	if uniqueOpts.ByArgs {
 		var encodedArgsForUnique []byte
 		// Get unique JSON keys from the JobArgs struct:
-		uniqueFields, err := getSortedUniqueFieldsCached(params.Args)
+		uniqueFields, err := structtag.SortedFieldsWithTag(params.Args, "unique")
 		if err != nil {
 			return "", err
 		}
 
 		if len(uniqueFields) > 0 {
 			// Extract unique values from the EncodedArgs JSON
-			uniqueValues := extractUniqueValues(params.EncodedArgs, uniqueFields)
+			uniqueValues := structtag.ExtractValues(params.EncodedArgs, uniqueFields)
 
 			// Assemble the JSON object using bytes.Buffer
 			// Better to overallocate a bit than to allocate multiple times, so just
