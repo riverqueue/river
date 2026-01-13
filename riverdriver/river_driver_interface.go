@@ -872,8 +872,10 @@ func MigrationLineMainTruncateTables(version int) []string {
 		return []string{"river_job", "river_leader"}
 	case 4:
 		return []string{"river_job", "river_leader", "river_queue"}
+	case 5, 6:
+		return []string{"river_job", "river_leader", "river_queue", "river_client", "river_client_queue"}
 	}
 
-	// 0 (zero value), 5, 6
-	return []string{"river_job", "river_leader", "river_queue", "river_client", "river_client_queue"}
+	// 0 (zero value), 7
+	return []string{"river_job", "river_leader", "river_queue"}
 }
