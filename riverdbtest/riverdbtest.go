@@ -98,7 +98,7 @@ type TestSchemaOpts struct {
 
 // TestSchema generates an isolated schema for use during a single test run.
 // Migrations are run in the schema (this adds ~50 ms of overhead) to prepare it
-// for River testing. AFter a test run, the schema in use is checked back into a
+// for River testing. After a test run, the schema in use is checked back into a
 // pool for potential reuse. When a schema is reused, tables in TruncateTables
 // are truncated to leave a clean state for the next test.
 //
