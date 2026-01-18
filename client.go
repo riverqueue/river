@@ -1428,7 +1428,7 @@ func (c *Client[TTx]) JobCancelTx(ctx context.Context, tx TTx, jobID int64) (*ri
 }
 
 func (c *Client[TTx]) jobCancel(ctx context.Context, exec riverdriver.Executor, jobID int64) (*rivertype.JobRow, error) {
-	return exec.JobCancel(ctx, &riverdriver.JobCancelParams{
+	return c.pilot.JobCancel(ctx, exec, &riverdriver.JobCancelParams{
 		ID:                jobID,
 		CancelAttemptedAt: c.baseService.Time.NowUTC(),
 		ControlTopic:      string(notifier.NotificationTopicControl),

@@ -33,6 +33,8 @@ type Pilot interface {
 		params *riverdriver.JobGetAvailableParams,
 	) ([]*rivertype.JobRow, error)
 
+	JobCancel(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error)
+
 	JobInsertMany(
 		ctx context.Context,
 		exec riverdriver.Executor,
