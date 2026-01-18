@@ -22,6 +22,10 @@ func (p *StandardPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Ex
 	return exec.JobGetAvailable(ctx, params)
 }
 
+func (p *StandardPilot) JobCancel(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error) {
+	return exec.JobCancel(ctx, params)
+}
+
 func (p *StandardPilot) JobInsertMany(
 	ctx context.Context,
 	exec riverdriver.Executor,
