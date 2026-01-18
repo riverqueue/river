@@ -177,6 +177,15 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 	metadataUpdates := make(map[string]any)
 	ctx = context.WithValue(ctx, ContextKeyMetadataUpdates, metadataUpdates)
 
+	if e.WorkUnit == nil {
+		e.Logger.ErrorContext(ctx, e.Name+": Unhandled job kind",
+			slog.String("kind", e.JobRow.Kind),
+			slog.Int64("job_id", e.JobRow.ID),
+		)
+		return &jobExecutorResult{Err: &rivertype.UnknownJobKindError{Kind: e.JobRow.Kind}, MetadataUpdates: metadataUpdates}
+	}
+	jobTimeout := cmp.Or(e.WorkUnit.Timeout(), e.ClientJobTimeout)
+
 	// Watches for jobs that may have become stuck. i.e. They've run longer than
 	// their job timeout (plus a small margin) and don't appear to be responding
 	// to context cancellation (unfortunately, quite an easy error to make in
@@ -185,12 +194,12 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 	// Currently we don't do anything if we notice a job is stuck. Knowing about
 	// stuck jobs is just used for informational purposes in the producer in
 	// generating periodic stats.
-	if e.ClientJobTimeout > 0 {
+	if jobTimeout > 0 {
 		// We add a WithoutCancel here so that this inner goroutine becomes
 		// immune to all context cancellations _except_ the one where it's
 		// cancelled because we leave JobExecutor.execute.
 		//
-		// This shadows the context outside the e.ClientJobTimeout > 0 check.
+		// This shadows the context outside the jobTimeout > 0 check.
 		ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 		defer cancel()
 
@@ -201,13 +210,13 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 			case <-ctx.Done():
 				// context cancelled as we leave JobExecutor.execute
 
-			case <-time.After(e.ClientJobTimeout + cmp.Or(e.StuckThresholdOverride, stuckThresholdDefault)):
+			case <-time.After(jobTimeout + cmp.Or(e.StuckThresholdOverride, stuckThresholdDefault)):
 				e.ProducerCallbacks.Stuck()
 
 				e.Logger.WarnContext(ctx, e.Name+": Job appears to be stuck",
 					slog.Int64("job_id", e.JobRow.ID),
 					slog.String("kind", e.JobRow.Kind),
-					slog.Duration("timeout", e.ClientJobTimeout),
+					slog.Duration("timeout", jobTimeout),
 				)
 
 				// context cancelled as we leave JobExecutor.execute
@@ -253,14 +262,6 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		e.stats.RunDuration = e.Time.NowUTC().Sub(e.start)
 	}()
 
-	if e.WorkUnit == nil {
-		e.Logger.ErrorContext(ctx, e.Name+": Unhandled job kind",
-			slog.String("kind", e.JobRow.Kind),
-			slog.Int64("job_id", e.JobRow.ID),
-		)
-		return &jobExecutorResult{Err: &rivertype.UnknownJobKindError{Kind: e.JobRow.Kind}, MetadataUpdates: metadataUpdates}
-	}
-
 	doInner := execution.Func(func(ctx context.Context) error {
 		{
 			for _, hook := range append(
@@ -277,7 +278,6 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 			return err
 		}
 
-		jobTimeout := cmp.Or(e.WorkUnit.Timeout(), e.ClientJobTimeout)
 		ctx, cancel := execution.MaybeApplyTimeout(ctx, jobTimeout)
 		defer cancel()
 
