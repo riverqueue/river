@@ -19,6 +19,8 @@ import (
 type Pilot interface {
 	PilotPeriodicJob
 
+	JobCancel(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error)
+
 	// JobCleanerQueuesExcluded returns queues that should be excluded from the
 	// main River client's JobCleaner. If no queues should be omitted, this
 	// function should return nil as opposed to an empty array. (Because the
