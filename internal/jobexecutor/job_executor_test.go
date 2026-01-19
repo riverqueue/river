@@ -709,7 +709,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor.StuckThresholdOverride = 1 * time.Nanosecond // must be greater than 0 to take effect
 	}
 
-	t.Run("StuckDetectionActivates", func(t *testing.T) {
+	t.Run("StuckDetectionActivatesForClientTimeout", func(t *testing.T) {
 		t.Parallel()
 
 		executor, bundle := setup(t)
@@ -741,6 +741,54 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 			return nil
 		}, nil).MakeUnit(bundle.jobRow)
+
+		executor.Execute(ctx)
+		_ = riversharedtest.WaitOrTimeout(t, bundle.updateCh)
+
+		riversharedtest.WaitOrTimeout(t, informProducerUnstuckReceived)
+	})
+
+	t.Run("StuckDetectionActivatesForWorkerTimeout", func(t *testing.T) {
+		t.Parallel()
+
+		executor, bundle := setup(t)
+
+		// Does not use configureStuckDetection to avoid ClientJobTimeout being
+		// set. Instead, customizableWorkUnit.timeout is set below instead.
+		executor.StuckThresholdOverride = 1 * time.Nanosecond // must be greater than 0 to take effect
+
+		var (
+			informProducerStuckReceived   = make(chan struct{})
+			informProducerUnstuckReceived = make(chan struct{})
+		)
+		executor.ProducerCallbacks.Stuck = func() {
+			t.Log("Job executor reported stuck")
+			close(informProducerStuckReceived)
+		}
+		executor.ProducerCallbacks.Unstuck = func() {
+			t.Log("Job executor reported unstuck (after being stuck)")
+			close(informProducerUnstuckReceived)
+		}
+
+		workUnit := &customizableWorkUnit{
+			timeout: 5 * time.Millisecond,
+			work: func() error {
+				riversharedtest.WaitOrTimeout(t, informProducerStuckReceived)
+
+				select {
+				case <-informProducerUnstuckReceived:
+					require.FailNow(t, "Executor should not have reported unstuck immediately")
+				case <-time.After(10 * time.Millisecond):
+					t.Log("Job executor still stuck after wait (this is expected)")
+				}
+
+				return nil
+			},
+		}
+
+		executor.WorkUnit = (&workUnitFactory{
+			workUnit: workUnit,
+		}).MakeUnit(bundle.jobRow)
 
 		executor.Execute(ctx)
 		_ = riversharedtest.WaitOrTimeout(t, bundle.updateCh)
