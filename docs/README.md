@@ -62,7 +62,7 @@ river.AddWorker(workers, &SortWorker{})
 A River [`Client`] provides an interface for job insertion and manages job
 processing and [maintenance services]. A client's created with a database pool,
 [driver], and config struct containing a `Workers` bundle and other settings.
-Here's a client `Client` working one queue (`"default"`) with up to 100 worker
+Here's a `Client` working one queue (`"default"`) with up to 100 worker
 goroutines at a time:
 
 ```go
