@@ -8,7 +8,7 @@ CREATE TABLE river_job (
     errors blob, -- JSON array of error objects
     finalized_at timestamp,
     kind text NOT NULL,
-    max_attempts integer NOT NULL,
+    max_attempts integer NOT NULL DEFAULT 25,
     metadata blob NOT NULL DEFAULT (json('{}')),
     priority integer NOT NULL DEFAULT 1,
     queue text NOT NULL DEFAULT 'default',

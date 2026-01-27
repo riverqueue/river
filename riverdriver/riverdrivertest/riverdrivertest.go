@@ -108,7 +108,9 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 				driver.GetMigrationTruncateTables(riverdriver.MigrationLineMain, 5))
 			require.Equal(t, []string{"river_job", "river_leader", "river_queue", "river_client", "river_client_queue"},
 				driver.GetMigrationTruncateTables(riverdriver.MigrationLineMain, 6))
-			require.Equal(t, []string{"river_job", "river_leader", "river_queue", "river_client", "river_client_queue"},
+			require.Equal(t, []string{"river_job", "river_leader", "river_queue"},
+				driver.GetMigrationTruncateTables(riverdriver.MigrationLineMain, 7))
+			require.Equal(t, []string{"river_job", "river_leader", "river_queue"},
 				driver.GetMigrationTruncateTables(riverdriver.MigrationLineMain, 0))
 		})
 	})
