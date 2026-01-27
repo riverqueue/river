@@ -231,7 +231,7 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 			ctx, timeoutCancel = context.WithTimeout(ctx, jobTimeout)
 			defer timeoutCancel()
 
-			watchStuckCancel := e.watchStuck(ctx)
+			watchStuckCancel := e.watchStuck(ctx, jobTimeout)
 			defer watchStuckCancel()
 		}
 
@@ -266,7 +266,7 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 // Currently we don't do anything if we notice a job is stuck.  Knowing about
 // stuck jobs is just used for informational purposes in the producer in
 // generating periodic stats.
-func (e *JobExecutor) watchStuck(ctx context.Context) context.CancelFunc {
+func (e *JobExecutor) watchStuck(ctx context.Context, jobTimeout time.Duration) context.CancelFunc {
 	// We add a WithoutCancel here so that this inner goroutine becomes
 	// immune to all context cancellations _except_ the one where it's
 	// cancelled because we leave JobExecutor.execute.
@@ -281,7 +281,7 @@ func (e *JobExecutor) watchStuck(ctx context.Context) context.CancelFunc {
 		case <-ctx.Done():
 			// context cancelled as we leave JobExecutor.execute
 
-		case <-time.After(e.ClientJobTimeout + cmp.Or(e.StuckThresholdOverride, stuckThresholdDefault)):
+		case <-time.After(jobTimeout + cmp.Or(e.StuckThresholdOverride, stuckThresholdDefault)):
 			e.ProducerCallbacks.Stuck()
 
 			e.Logger.WarnContext(ctx, e.Name+": Job appears to be stuck",
