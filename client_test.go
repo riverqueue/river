@@ -7115,6 +7115,31 @@ func Test_Client_Start_Error(t *testing.T) {
 		require.ErrorAs(t, err, &pgErr)
 		require.Equal(t, pgerrcode.InvalidCatalogName, pgErr.Code)
 	})
+
+	t.Run("CanRestartAfterFailure", func(t *testing.T) {
+		t.Parallel()
+
+		// Use a non-existent database to trigger a startup failure
+		dbConfig := riversharedtest.DBPool(ctx, t).Config().Copy()
+		dbConfig.ConnConfig.Database = "does-not-exist-and-dont-create-it"
+
+		dbPool, err := pgxpool.NewWithConfig(ctx, dbConfig)
+		require.NoError(t, err)
+
+		config := newTestConfig(t, "")
+
+		client := newTestClient(t, dbPool, config)
+
+		// First Start() should fail with a database error
+		err = client.Start(ctx)
+		require.Error(t, err, "first Start() should fail with database error")
+
+		// Second Start() should also fail with an error, NOT return nil.
+		// This verifies that the client's internal state was properly reset
+		// after the first failure, allowing it to attempt startup again.
+		err = client.Start(ctx)
+		require.Error(t, err, "second Start() should return an error, not nil; client state should be reset after failed start")
+	})
 }
 
 func Test_NewClient_BaseServiceName(t *testing.T) {

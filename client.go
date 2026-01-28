@@ -1071,7 +1071,12 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 
 		return nil
 	}(); err != nil {
-		defer stopped()
+		defer func() {
+			stopped()
+			// Reset the client's internal state (isRunning flag) so that Start
+			// can be called again after a startup failure.
+			c.baseStartStop.Stop()
+		}()
 		if errors.Is(context.Cause(fetchCtx), startstop.ErrStop) {
 			return nil
 		}
