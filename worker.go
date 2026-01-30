@@ -138,6 +138,12 @@ type Workers struct {
 	workersMap map[string]workerInfo // job kind -> worker info
 }
 
+// WorkUnitFactoryFunc returns a work unit for the provided job row.
+//
+// This is intended for use by test helpers that need to execute any registered
+// worker by kind.
+type WorkUnitFactoryFunc func(jobRow *rivertype.JobRow) any
+
 // workerInfo bundles information about a registered worker for later lookup
 // in a Workers bundle.
 type workerInfo struct {
@@ -155,7 +161,24 @@ func NewWorkers() *Workers {
 	}
 }
 
-func (w Workers) add(jobArgs JobArgs, workUnitFactory workunit.WorkUnitFactory) error {
+// LookupWorkUnitFactory returns a factory for the worker registered for the
+// given job kind.
+func (w *Workers) LookupWorkUnitFactory(kind string) (WorkUnitFactoryFunc, bool) {
+	if w == nil {
+		return nil, false
+	}
+
+	workerInfo, ok := w.workersMap[kind]
+	if !ok {
+		return nil, false
+	}
+
+	return func(jobRow *rivertype.JobRow) any {
+		return workerInfo.workUnitFactory.MakeUnit(jobRow)
+	}, true
+}
+
+func (w *Workers) add(jobArgs JobArgs, workUnitFactory workunit.WorkUnitFactory) error {
 	checkRegistered := func(kind string) error {
 		if _, ok := w.workersMap[kind]; ok {
 			return fmt.Errorf("worker for kind %q is already registered", kind)

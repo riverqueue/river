@@ -70,6 +70,97 @@ func TestWorker_NewWorker(t *testing.T) {
 	})
 }
 
+func TestWorker_NewWorkerOpts(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		config *river.Config
+		driver *riverpgxv5.Driver
+		tx     pgx.Tx
+	}
+
+	setup := func(t *testing.T) *testBundle {
+		t.Helper()
+
+		return &testBundle{
+			config: &river.Config{ID: "rivertest-worker"},
+			driver: riverpgxv5.New(nil),
+			tx:     riverdbtest.TestTxPgx(ctx, t),
+		}
+	}
+
+	t.Run("UsesProvidedClient", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		client, err := river.NewClient(bundle.driver, bundle.config)
+		require.NoError(t, err)
+
+		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
+			return nil
+		})
+		testWorker := NewWorkerOpts(t, &WorkerOpts[pgx.Tx]{
+			Client: client,
+			Config: bundle.config,
+		}, worker)
+		require.Same(t, client, testWorker.client)
+		require.True(t, testWorker.config.Test.DisableUniqueEnforcement)
+	})
+
+	t.Run("AfterWorkRuns", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		afterWorkCalled := false
+		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
+			return nil
+		})
+
+		testWorker := NewWorkerOpts(t, &WorkerOpts[pgx.Tx]{
+			AfterWork: func(ctx context.Context, tx pgx.Tx, result *WorkResult) error {
+				afterWorkCalled = true
+				require.Equal(t, river.EventKindJobCompleted, result.EventKind)
+				require.Equal(t, "rivertest_work_test", result.Job.Kind)
+				return nil
+			},
+			Config: bundle.config,
+			Driver: bundle.driver,
+		}, worker)
+
+		res, err := testWorker.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, nil)
+		require.NoError(t, err)
+		require.Equal(t, river.EventKindJobCompleted, res.EventKind)
+		require.True(t, afterWorkCalled)
+	})
+
+	t.Run("AfterWorkReturnsError", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		afterWorkErr := errors.New("after work error")
+		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
+			return nil
+		})
+
+		testWorker := NewWorkerOpts(t, &WorkerOpts[pgx.Tx]{
+			AfterWork: func(ctx context.Context, tx pgx.Tx, result *WorkResult) error {
+				return afterWorkErr
+			},
+			Config: bundle.config,
+			Driver: bundle.driver,
+		}, worker)
+
+		res, err := testWorker.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, nil)
+		require.ErrorIs(t, err, afterWorkErr)
+		require.Equal(t, river.EventKindJobCompleted, res.EventKind)
+	})
+}
+
 func TestWorker_Work(t *testing.T) {
 	t.Parallel()
 

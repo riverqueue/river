@@ -8,11 +8,8 @@ import (
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/internal/execution"
-	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobexecutor"
-	"github.com/riverqueue/river/internal/maintenance"
-	"github.com/riverqueue/river/internal/middlewarelookup"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
@@ -49,6 +46,8 @@ type Worker[T river.JobArgs, TTx any] struct {
 	client *river.Client[TTx]
 	config *river.Config
 	worker river.Worker[T]
+
+	afterWork func(ctx context.Context, tx TTx, result *WorkResult) error
 }
 
 // NewWorker creates a new test Worker for testing the provided [river.Worker].
@@ -65,18 +64,68 @@ type Worker[T river.JobArgs, TTx any] struct {
 func NewWorker[T river.JobArgs, TTx any](tb testing.TB, driver riverdriver.Driver[TTx], config *river.Config, worker river.Worker[T]) *Worker[T, TTx] {
 	tb.Helper()
 
-	config = config.WithDefaults()
+	return NewWorkerOpts(tb, &WorkerOpts[TTx]{
+		Config: config,
+		Driver: driver,
+	}, worker)
+}
+
+// WorkerOpts are options for NewWorkerOpts.
+type WorkerOpts[TTx any] struct {
+	// AfterWork runs after job execution completes.
+	AfterWork func(ctx context.Context, tx TTx, result *WorkResult) error
+
+	// Client is an optional preconstructed River client. If provided, Driver
+	// is ignored and Config must be non-nil.
+	Client *river.Client[TTx]
+
+	// Config configures the test worker. It is required when Client is
+	// provided.
+	Config *river.Config
+
+	// Driver is required when Client is not provided.
+	Driver riverdriver.Driver[TTx]
+}
+
+// NewWorkerOpts creates a new test Worker using the provided options.
+// It supports using an existing River client via WorkerOpts.Client.
+func NewWorkerOpts[T river.JobArgs, TTx any](tb testing.TB, opts *WorkerOpts[TTx], worker river.Worker[T]) *Worker[T, TTx] {
+	tb.Helper()
+
+	if opts == nil {
+		opts = &WorkerOpts[TTx]{}
+	}
+
+	if opts.Client != nil && opts.Config == nil {
+		tb.Fatalf("rivertest.NewWorkerOpts: Config must be set when providing Client")
+	}
+
+	if opts.Client == nil && opts.Driver == nil {
+		tb.Fatalf("rivertest.NewWorkerOpts: Driver must be set when Client is not provided")
+	}
+
+	config := opts.Config.WithDefaults()
 	config.Test.DisableUniqueEnforcement = true
 
-	client, err := river.NewClient(driver, config)
-	if err != nil {
-		tb.Fatalf("failed to create client: %s", err)
+	var (
+		client *river.Client[TTx]
+		err    error
+	)
+	if opts.Client != nil {
+		client = opts.Client
+	} else {
+		client, err = river.NewClient(opts.Driver, config)
+		if err != nil {
+			tb.Fatalf("failed to create client: %s", err)
+		}
 	}
 
 	return &Worker[T, TTx]{
 		client: client,
 		config: config,
 		worker: worker,
+
+		afterWork: opts.AfterWork,
 	}
 }
 
@@ -187,38 +236,7 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 
 	var resultErr error
 
-	executor := baseservice.Init(archetype, &jobexecutor.JobExecutor{
-		CancelFunc:               jobCancel,
-		ClientJobTimeout:         w.config.JobTimeout,
-		ClientRetryPolicy:        w.config.RetryPolicy,
-		Completer:                completer,
-		DefaultClientRetryPolicy: &river.DefaultClientRetryPolicy{},
-		ErrorHandler: &errorHandlerWrapper{
-			HandleErrorFunc: func(ctx context.Context, job *rivertype.JobRow, err error) *jobexecutor.ErrorHandlerResult {
-				resultErr = err
-				return nil
-			},
-			HandlePanicFunc: func(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *jobexecutor.ErrorHandlerResult {
-				resultErr = &PanicError{Cause: panicVal, Trace: trace}
-				return nil
-			},
-		},
-		HookLookupGlobal:       hooklookup.NewHookLookup(w.config.Hooks),
-		HookLookupByJob:        hooklookup.NewJobHookLookup(),
-		JobRow:                 job,
-		MiddlewareLookupGlobal: middlewarelookup.NewMiddlewareLookup(w.config.Middleware),
-		ProducerCallbacks: struct {
-			JobDone func(jobRow *rivertype.JobRow)
-			Stuck   func()
-			Unstuck func()
-		}{
-			JobDone: func(job *rivertype.JobRow) { close(executionDone) },
-			Stuck:   func() {},
-			Unstuck: func() {},
-		},
-		SchedulerInterval: maintenance.JobSchedulerIntervalDefault,
-		WorkUnit:          workUnit,
-	})
+	executor := newTestJobExecutor(archetype, w.config, completer, job, workUnit, jobCancel, executionDone, &resultErr)
 
 	executor.Execute(jobCtx)
 	<-executionDone
@@ -231,7 +249,18 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 		if len(completerResult) > 1 {
 			tb.Fatalf("test worker internal error: received %d job completions, expected 1", len(completerResult))
 		}
-		return completerResultToWorkResult(tb, completerResult[0]), resultErr
+		result := completerResultToWorkResult(tb, completerResult[0])
+		var afterWorkErr error
+		if w.afterWork != nil {
+			afterWorkErr = w.afterWork(ctx, tx, result)
+		}
+		if afterWorkErr != nil {
+			afterWorkErr = fmt.Errorf("after work hook: %w", afterWorkErr)
+		}
+		if resultErr != nil || afterWorkErr != nil {
+			return result, errors.Join(resultErr, afterWorkErr)
+		}
+		return result, nil
 	default:
 		tb.Fatal("test worker internal error: no job completions received")
 	}
