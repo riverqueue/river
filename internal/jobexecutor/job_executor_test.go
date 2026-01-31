@@ -858,7 +858,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.Equal(t, rivertype.JobStateRetryable, job.State)
 		require.Len(t, job.Errors, 1)
 		// Sufficient enough to ensure that the stack trace is included:
-		require.Contains(t, job.Errors[0].Trace, "river/internal/jobexecutor/job_executor.go")
+		require.Contains(t, job.Errors[0].Trace, "internal/jobexecutor/job_executor.go")
 	})
 
 	t.Run("PanicAgainAfterRetry", func(t *testing.T) {
