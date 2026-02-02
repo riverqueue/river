@@ -6,7 +6,7 @@ toolchain go1.25.2
 
 require (
 	github.com/jackc/pgx/v5 v5.8.0
-	github.com/lib/pq v1.10.9
+	github.com/lib/pq v1.11.1
 	github.com/riverqueue/river v0.30.2
 	github.com/riverqueue/river/riverdriver v0.30.2
 	github.com/riverqueue/river/rivershared v0.30.2
@@ -22,7 +22,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.30.2 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
-	github.com/tidwall/match v1.1.1 // indirect
+	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	go.uber.org/goleak v1.3.0 // indirect
