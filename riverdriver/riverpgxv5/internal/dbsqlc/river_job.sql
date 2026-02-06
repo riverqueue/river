@@ -87,7 +87,7 @@ GROUP BY state;
 
 -- name: JobCountByQueueAndState :many
 WITH all_queues AS (
-    SELECT unnest(@queue_names::text[])::text AS queue
+    SELECT DISTINCT unnest(@queue_names::text[])::text AS queue
 ),
 
 running_job_counts AS (

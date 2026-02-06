@@ -130,7 +130,7 @@ func (q *Queries) JobCountByAllStates(ctx context.Context, db DBTX) ([]*JobCount
 
 const jobCountByQueueAndState = `-- name: JobCountByQueueAndState :many
 WITH all_queues AS (
-    SELECT unnest($1::text[])::text AS queue
+    SELECT DISTINCT unnest($1::text[])::text AS queue
 ),
 
 running_job_counts AS (
