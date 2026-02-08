@@ -295,14 +295,46 @@ func (e *Executor) JobCountByQueueAndState(ctx context.Context, params *riverdri
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	results := make([]*riverdriver.JobCountByQueueAndStateResult, len(rows))
-	for i, row := range rows {
-		results[i] = &riverdriver.JobCountByQueueAndStateResult{
+
+	// The PostgreSQL drivers implement this query with an `all_queues` CTE and
+	// LEFT JOINs, so they return one row per requested queue, including queues
+	// that currently have no jobs. The input queue list is deduplicated in SQL.
+	// The SQLite sqlc driver only reliably supports `sqlc.slice` in `IN (...)`,
+	// and we haven't found a workable way to bind a parameterized list through
+	// `json_each(...)` to produce equivalent SQL. The SQLite SQL query therefore
+	// returns only queues with matching rows, and this wrapper fills in missing
+	// queues to match PostgreSQL behavior.
+	countsByQueue := make(map[string]struct {
+		CountAvailable int64
+		CountRunning   int64
+	}, len(rows))
+	for _, row := range rows {
+		countsByQueue[row.Queue] = struct {
+			CountAvailable int64
+			CountRunning   int64
+		}{
 			CountAvailable: row.CountAvailable,
 			CountRunning:   row.CountRunning,
-			Queue:          row.Queue,
 		}
 	}
+
+	queueNames := slices.Clone(params.QueueNames)
+	slices.Sort(queueNames)
+	queueNames = slices.Compact(queueNames)
+
+	results := make([]*riverdriver.JobCountByQueueAndStateResult, 0, len(queueNames))
+	for _, queueName := range queueNames {
+		result := &riverdriver.JobCountByQueueAndStateResult{
+			Queue: queueName,
+		}
+		if counts, ok := countsByQueue[queueName]; ok {
+			result.CountAvailable = counts.CountAvailable
+			result.CountRunning = counts.CountRunning
+		}
+
+		results = append(results, result)
+	}
+
 	return results, nil
 }
 
