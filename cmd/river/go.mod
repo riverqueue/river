@@ -6,7 +6,7 @@ toolchain go1.25.2
 
 require (
 	github.com/jackc/pgx/v5 v5.8.0
-	github.com/lmittmann/tint v1.1.2
+	github.com/lmittmann/tint v1.1.3
 	github.com/riverqueue/river v0.30.2
 	github.com/riverqueue/river/riverdriver v0.30.2
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.30.2
