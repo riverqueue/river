@@ -1,6 +1,7 @@
 package rivercli
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
@@ -46,11 +47,12 @@ type CommandOpts interface {
 
 // RunCommandBundle is a bundle of utilities for RunCommand.
 type RunCommandBundle struct {
-	DatabaseURL    *string
-	DriverProcurer DriverProcurer
-	Logger         *slog.Logger
-	OutStd         io.Writer
-	Schema         string
+	DatabaseURL      *string
+	DriverProcurer   DriverProcurer
+	Logger           *slog.Logger
+	OutStd           io.Writer
+	Schema           string
+	StatementTimeout *time.Duration
 }
 
 // RunCommand bootstraps and runs a River CLI subcommand.
@@ -81,7 +83,7 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 		if databaseURL != nil {
 			switch protocol {
 			case "postgres", "postgresql":
-				dbPool, err := openPgxV5DBPool(ctx, *databaseURL)
+				dbPool, err := openPgxV5DBPool(ctx, *databaseURL, bundle.StatementTimeout)
 				if err != nil {
 					return false, err
 				}
@@ -128,7 +130,7 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 	return nil
 }
 
-func openPgxV5DBPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
+func openPgxV5DBPool(ctx context.Context, databaseURL string, statementTimeout *time.Duration) (*pgxpool.Pool, error) {
 	const (
 		defaultIdleInTransactionSessionTimeout = 11 * time.Second // should be greater than statement timeout because statements count towards idle-in-transaction
 		defaultStatementTimeout                = 10 * time.Second
@@ -149,9 +151,24 @@ func openPgxV5DBPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, er
 		runtimeParams[name] = val
 	}
 
-	setParamIfUnset(pgxConfig.ConnConfig.RuntimeParams, "application_name", "river CLI")
-	setParamIfUnset(pgxConfig.ConnConfig.RuntimeParams, "idle_in_transaction_session_timeout", strconv.Itoa(int(defaultIdleInTransactionSessionTimeout.Milliseconds())))
-	setParamIfUnset(pgxConfig.ConnConfig.RuntimeParams, "statement_timeout", strconv.Itoa(int(defaultStatementTimeout.Milliseconds())))
+	runtimeParams := pgxConfig.ConnConfig.RuntimeParams
+	if runtimeParams == nil {
+		runtimeParams = make(map[string]string)
+		pgxConfig.ConnConfig.RuntimeParams = runtimeParams
+	}
+
+	var statementTimeoutMilliseconds string
+	if statementTimeout != nil {
+		statementTimeoutMilliseconds = strconv.Itoa(int(statementTimeout.Milliseconds()))
+	}
+
+	setParamIfUnset(runtimeParams, "application_name", "river CLI")
+	setParamIfUnset(runtimeParams, "idle_in_transaction_session_timeout", strconv.Itoa(int(defaultIdleInTransactionSessionTimeout.Milliseconds())))
+	runtimeParams["statement_timeout"] = cmp.Or(
+		statementTimeoutMilliseconds,
+		runtimeParams["statement_timeout"],
+		strconv.Itoa(int(defaultStatementTimeout.Milliseconds())),
+	)
 
 	dbPool, err := pgxpool.NewWithConfig(ctx, pgxConfig)
 	if err != nil {

@@ -30,6 +30,11 @@ To run programs locally outside of tests, create and raise a development databas
     createdb river_dev
     go run ./cmd/river migrate-up --database-url postgres:///river_dev --line main
 
+If needed, override Postgres timeouts for long-running migrations with root CLI
+flags:
+
+    go run ./cmd/river --statement-timeout 2m migrate-up --database-url postgres:///river_dev --line main
+
 ## Releasing a new version
 
 1. Fetch changes to the repo and any new tags. Export `VERSION` by incrementing the last tag. Execute `update-mod-version` to add it the project's `go.mod` files:
