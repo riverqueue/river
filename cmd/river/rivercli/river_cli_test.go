@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"net/url"
 	"runtime/debug"
 	"strings"
@@ -169,6 +170,34 @@ func TestBaseCommandSetIntegration(t *testing.T) {
 		require.EqualError(t, cmd.Execute(), "either PG* env vars or --database-url must be set")
 	})
 
+	t.Run("StatementTimeoutValidation", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("AllowsGreaterThanOneMillisecond", func(t *testing.T) {
+			t.Parallel()
+
+			cmd, _ := setup(t)
+			cmd.SetArgs([]string{"--statement-timeout", "2ms", "--version"})
+			require.NoError(t, cmd.Execute())
+		})
+
+		t.Run("RejectsOneMillisecond", func(t *testing.T) {
+			t.Parallel()
+
+			cmd, _ := setup(t)
+			cmd.SetArgs([]string{"--statement-timeout", "1ms", "--version"})
+			require.EqualError(t, cmd.Execute(), "`--statement-timeout` must be greater than 1ms when set")
+		})
+
+		t.Run("RejectsZero", func(t *testing.T) {
+			t.Parallel()
+
+			cmd, _ := setup(t)
+			cmd.SetArgs([]string{"--statement-timeout", "0", "--version"})
+			require.EqualError(t, cmd.Execute(), "`--statement-timeout` must be greater than 1ms when set")
+		})
+	})
+
 	t.Run("VersionFlag", func(t *testing.T) {
 		t.Parallel()
 
@@ -261,6 +290,116 @@ func TestBaseCommandSetNonParallel(t *testing.T) {
 		cmd.SetArgs([]string{"migrate-up", "--schema", schema})
 		require.NoError(t, cmd.Execute())
 	})
+}
+
+func TestBaseCommandSetPostgresTimeoutPrecedence(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		databaseURLStatementTimeout string
+		expectedStatementTimeoutMS  string
+		name                        string
+		statementTimeoutFlag        string
+	}
+
+	makeCommandAndParams := func(t *testing.T) (*cobra.Command, func() map[string]string) {
+		t.Helper()
+
+		var capturedRuntimeParams map[string]string
+
+		migratorStub := &MigratorStub{}
+		migratorStub.allVersionsStub = func() []rivermigrate.Migration { return []rivermigrate.Migration{testMigration01} }
+		migratorStub.getVersionStub = func(version int) (rivermigrate.Migration, error) {
+			if version == 1 {
+				return testMigration01, nil
+			}
+
+			return rivermigrate.Migration{}, fmt.Errorf("unknown version: %d", version)
+		}
+		migratorStub.existingVersionsStub = func(ctx context.Context) ([]rivermigrate.Migration, error) { return nil, nil }
+
+		cli := NewCLI(&Config{
+			DriverProcurer: &DriverProcurerStub{
+				getMigratorStub: func(config *rivermigrate.Config) (MigratorInterface, error) {
+					return migratorStub, nil
+				},
+				initPgxV5Stub: func(pool *pgxpool.Pool) {
+					capturedRuntimeParams = maps.Clone(pool.Config().ConnConfig.RuntimeParams)
+				},
+			},
+			Name: "River",
+		})
+
+		var out bytes.Buffer
+		cli.SetOut(&out)
+
+		return cli.BaseCommandSet(), func() map[string]string {
+			return capturedRuntimeParams
+		}
+	}
+
+	makeBaseDatabaseURL := func(t *testing.T) *url.URL {
+		t.Helper()
+
+		testDatabaseURL := riversharedtest.TestDatabaseURL()
+		parsedDatabaseURL, err := url.Parse(testDatabaseURL)
+		require.NoError(t, err)
+
+		return parsedDatabaseURL
+	}
+
+	testCases := []testCase{
+		{
+			name:                       "DefaultsAppliedWhenNothingSpecified",
+			expectedStatementTimeoutMS: "10000",
+		},
+		{
+			databaseURLStatementTimeout: "11234",
+			name:                        "DatabaseURLQueryParamsOverrideDefaults",
+			expectedStatementTimeoutMS:  "11234",
+		},
+		{
+			databaseURLStatementTimeout: "12345",
+			name:                        "ExplicitFlagsOverrideDatabaseURLQueryParams",
+			statementTimeoutFlag:        "1m3.123s",
+			expectedStatementTimeoutMS:  "63123",
+		},
+		{
+			databaseURLStatementTimeout: "12345",
+			name:                        "ExplicitFlagsUseMillisecondValue",
+			statementTimeoutFlag:        "2ms",
+			expectedStatementTimeoutMS:  "2",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			cmd, getRuntimeParams := makeCommandAndParams(t)
+
+			databaseURL := makeBaseDatabaseURL(t)
+			if testCase.databaseURLStatementTimeout != "" {
+				queryValues := databaseURL.Query()
+				queryValues.Set("statement_timeout", testCase.databaseURLStatementTimeout)
+				databaseURL.RawQuery = queryValues.Encode()
+			}
+
+			args := []string{
+				"migrate-get", "--up", "--version", "1", "--database-url", databaseURL.String(),
+			}
+			if testCase.statementTimeoutFlag != "" {
+				args = append(args, "--statement-timeout", testCase.statementTimeoutFlag)
+			}
+			cmd.SetArgs(args)
+			require.NoError(t, cmd.Execute())
+
+			runtimeParams := getRuntimeParams()
+			require.NotNil(t, runtimeParams)
+
+			require.Equal(t, testCase.expectedStatementTimeoutMS, runtimeParams["statement_timeout"])
+		})
+	}
 }
 
 func TestBaseCommandSetDriverProcurerPgxV5(t *testing.T) {

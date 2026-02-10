@@ -60,9 +60,11 @@ func (c *CLI) BaseCommandSet() *cobra.Command {
 	ctx := context.Background()
 
 	var globalOpts struct {
-		Debug   bool
-		Verbose bool
+		Debug            bool
+		StatementTimeout time.Duration
+		Verbose          bool
 	}
+	var rootCmd *cobra.Command
 
 	makeLogger := func() *slog.Logger {
 		switch {
@@ -75,18 +77,35 @@ func (c *CLI) BaseCommandSet() *cobra.Command {
 		}
 	}
 
+	statementTimeoutFlagSet := func() bool {
+		return rootCmd.PersistentFlags().Changed("statement-timeout")
+	}
+
+	validateGlobalOpts := func() error {
+		if statementTimeoutFlagSet() && globalOpts.StatementTimeout <= time.Millisecond {
+			return errors.New("`--statement-timeout` must be greater than 1ms when set")
+		}
+
+		return nil
+	}
+
 	// Make a bundle for RunCommand. Takes a database URL pointer because not every command is required to take a database URL.
 	makeCommandBundle := func(databaseURL *string, schema string) *RunCommandBundle {
+		var statementTimeout *time.Duration
+		if statementTimeoutFlagSet() {
+			statementTimeout = &globalOpts.StatementTimeout
+		}
+
 		return &RunCommandBundle{
-			DatabaseURL:    databaseURL,
-			DriverProcurer: c.driverProcurer,
-			Logger:         makeLogger(),
-			OutStd:         c.out,
-			Schema:         schema,
+			DatabaseURL:      databaseURL,
+			DriverProcurer:   c.driverProcurer,
+			Logger:           makeLogger(),
+			OutStd:           c.out,
+			Schema:           schema,
+			StatementTimeout: statementTimeout,
 		}
 	}
 
-	var rootCmd *cobra.Command
 	{
 		var rootOpts struct {
 			Version bool
@@ -103,7 +122,15 @@ also accept Postgres configuration through the standard set of libpq environment
 variables like PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD, and PGSSLMODE,
 with a minimum of PGDATABASE required. --database-url will take precedence of
 PG* vars if it's been specified.
+
+Use --statement-timeout to explicitly set Postgres statement_timeout for
+Postgres-backed commands. Precedence is: --statement-timeout, then a
+statement_timeout query parameter in --database-url, then the built-in 10s
+default.
 		`),
+			PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+				return validateGlobalOpts()
+			},
 			RunE: func(cmd *cobra.Command, args []string) error {
 				if rootOpts.Version {
 					return RunCommand(ctx, makeCommandBundle(nil, ""), &version{}, &versionOpts{Name: c.name})
@@ -116,6 +143,7 @@ PG* vars if it's been specified.
 		rootCmd.SetOut(c.out)
 
 		rootCmd.PersistentFlags().BoolVar(&globalOpts.Debug, "debug", false, "output maximum logging verbosity (debug level)")
+		rootCmd.PersistentFlags().DurationVar(&globalOpts.StatementTimeout, "statement-timeout", 0, "override Postgres statement_timeout for Postgres commands (Go duration >1ms, e.g. 10s, 1m); precedence: flag > --database-url statement_timeout > default 10s")
 		rootCmd.PersistentFlags().BoolVarP(&globalOpts.Verbose, "verbose", "v", false, "output additional logging verbosity (info level)")
 		rootCmd.MarkFlagsMutuallyExclusive("debug", "verbose")
 
