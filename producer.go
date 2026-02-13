@@ -334,7 +334,6 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 	}
 	p.id.Store(id)
 
-	// TODO: fetcher should have some jitter in it to avoid stampeding issues.
 	p.fetchLimiter = chanutil.NewDebouncedChan(fetchCtx, p.config.FetchCooldown, true)
 
 	var (
@@ -596,7 +595,7 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context) {
 func (p *producer) fetchPollLoop(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	fetchPollTimer := time.NewTimer(p.config.FetchPollInterval)
+	fetchPollTimer := time.NewTimer(p.jitteredFetchPollInterval())
 	for {
 		select {
 		case <-ctx.Done():
@@ -607,9 +606,17 @@ func (p *producer) fetchPollLoop(ctx context.Context, wg *sync.WaitGroup) {
 			return
 		case <-fetchPollTimer.C:
 			p.fetchLimiter.Call()
-			fetchPollTimer.Reset(p.config.FetchPollInterval)
+			fetchPollTimer.Reset(p.jitteredFetchPollInterval())
 		}
 	}
+}
+
+// jitteredFetchPollInterval returns FetchPollInterval with random jitter in
+// [0, FetchCooldown) added. This prevents multiple producers from
+// synchronizing their fetches after a transient event (e.g. GC pause, network
+// blip), which would cause periodic DB load spikes.
+func (p *producer) jitteredFetchPollInterval() time.Duration {
+	return randutil.DurationBetween(p.config.FetchPollInterval, p.config.FetchPollInterval+p.config.FetchCooldown)
 }
 
 func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan producerFetchResult) {
