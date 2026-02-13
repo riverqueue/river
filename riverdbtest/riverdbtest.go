@@ -259,7 +259,7 @@ func TestSchema[TTx any](ctx context.Context, tb testutil.TestingTB, driver rive
 	// All tables to truncate when reusing a schema for this set of lines. Also
 	// used to perform the post-flight cleanup check to make sure tests didn't
 	// leave any detritus in the default schema.
-	var truncateTables []string
+	truncateTables := make([]string, 0, len(lines))
 	for _, line := range lines {
 		var targetVersion int
 		if opts.LineTargetVersions != nil {
