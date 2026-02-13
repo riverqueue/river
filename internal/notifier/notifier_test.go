@@ -531,6 +531,51 @@ func TestNotifier(t *testing.T) {
 		require.EqualError(t, notifier.testSignals.BackoffError.WaitOrTimeout(), "error during wait")
 	})
 
+	t.Run("PingUsesNonCancelledContext", func(t *testing.T) {
+		t.Parallel()
+
+		notifier, _ := setup(t, nil)
+
+		// Use a very short ping interval so the test doesn't take 5 seconds.
+		notifier.testPingInterval = 50 * time.Millisecond
+
+		var (
+			pingCtxCancelled bool
+			pingCalled       = make(chan struct{})
+			pingOnce         sync.Once
+		)
+
+		listenerMock := NewListenerMock(notifier.listener)
+		listenerMock.waitForNotificationFunc = func(ctx context.Context) (*riverdriver.Notification, error) {
+			// Block until the context is cancelled (which happens when
+			// drainErrChan runs after the ping interval elapses).
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		listenerMock.pingFunc = func(ctx context.Context) error {
+			pingOnce.Do(func() {
+				pingCtxCancelled = ctx.Err() != nil
+				close(pingCalled)
+			})
+			return nil
+		}
+		notifier.listener = listenerMock
+
+		start(t, notifier)
+
+		notifier.testSignals.ListeningBegin.WaitOrTimeout()
+
+		select {
+		case <-pingCalled:
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "Timed out waiting for Ping to be called")
+		}
+
+		require.False(t, pingCtxCancelled,
+			"Ping should receive a non-cancelled context; the inner context is "+
+				"cancelled to interrupt WaitForNotification, but Ping needs a live context")
+	})
+
 	t.Run("StillFunctionalAfterMainLoopFailure", func(t *testing.T) {
 		t.Parallel()
 
@@ -584,6 +629,7 @@ type ListenerMock struct {
 
 	connectFunc             func(ctx context.Context) error
 	listenFunc              func(ctx context.Context, topic string) error
+	pingFunc                func(ctx context.Context) error
 	waitForNotificationFunc func(ctx context.Context) (*riverdriver.Notification, error)
 }
 
@@ -593,6 +639,7 @@ func NewListenerMock(listener riverdriver.Listener) *ListenerMock {
 
 		connectFunc:             listener.Connect,
 		listenFunc:              listener.Listen,
+		pingFunc:                listener.Ping,
 		waitForNotificationFunc: listener.WaitForNotification,
 	}
 }
@@ -603,6 +650,10 @@ func (l *ListenerMock) Connect(ctx context.Context) error {
 
 func (l *ListenerMock) Listen(ctx context.Context, topic string) error {
 	return l.listenFunc(ctx, topic)
+}
+
+func (l *ListenerMock) Ping(ctx context.Context) error {
+	return l.pingFunc(ctx)
 }
 
 func (l *ListenerMock) WaitForNotification(ctx context.Context) (*riverdriver.Notification, error) {
