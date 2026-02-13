@@ -1066,6 +1066,7 @@ func (l *Listener) Connect(ctx context.Context) error {
 
 	if l.afterConnectExec != "" {
 		if _, err := poolConn.Exec(ctx, l.afterConnectExec); err != nil {
+			poolConn.Release()
 			return err
 		}
 	}
