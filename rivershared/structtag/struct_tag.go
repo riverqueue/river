@@ -177,8 +177,8 @@ func sortedFieldsWithTagUncached(typ reflect.Type, tagValue string, path []strin
 // It handles tags with options, e.g., `json:"recipient,omitempty"`.
 func parseJSONTag(tag string) string {
 	// Tags can be like "recipient,omitempty", so split by comma
-	if commaIdx := strings.Index(tag, ","); commaIdx != -1 {
-		return tag[:commaIdx]
+	if before, _, ok := strings.Cut(tag, ","); ok {
+		return before
 	}
 	return tag
 }

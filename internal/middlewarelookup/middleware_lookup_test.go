@@ -60,14 +60,11 @@ func TestMiddlewareLookup(t *testing.T) {
 		var wg sync.WaitGroup
 
 		parallelLookupLoop := func(kind MiddlewareKind) {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-
+			wg.Go(func() {
 				for range 50 {
 					middlewareLookup.ByMiddlewareKind(kind)
 				}
-			}()
+			})
 		}
 
 		parallelLookupLoop(MiddlewareKindJobInsert)

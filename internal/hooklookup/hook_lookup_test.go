@@ -67,14 +67,11 @@ func TestHookLookup(t *testing.T) {
 		var wg sync.WaitGroup
 
 		parallelLookupLoop := func(kind HookKind) {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-
+			wg.Go(func() {
 				for range 50 {
 					hookLookup.ByHookKind(kind)
 				}
-			}()
+			})
 		}
 
 		parallelLookupLoop(HookKindInsertBegin)
@@ -165,14 +162,11 @@ func TestJobHookLookup(t *testing.T) {
 		var wg sync.WaitGroup
 
 		parallelLookupLoop := func(args rivertype.JobArgs) {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-
+			wg.Go(func() {
 				for range 50 {
 					jobHookLookup.ByJobArgs(args)
 				}
-			}()
+			})
 		}
 
 		parallelLookupLoop(&jobArgsNoHooks{})

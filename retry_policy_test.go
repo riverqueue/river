@@ -190,13 +190,11 @@ func TestDefaultRetryPolicy_stress(t *testing.T) {
 	// Hit the source with a bunch of goroutines to help suss out any problems
 	// with concurrent safety (when combined with `-race`).
 	for range 10 {
-		wg.Add(1)
-		go func() {
+		wg.Go(func() {
 			for range 100 {
 				_ = retryPolicy.retrySeconds(7)
 			}
-			wg.Done()
-		}()
+		})
 	}
 
 	wg.Wait()

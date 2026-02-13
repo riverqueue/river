@@ -440,10 +440,7 @@ func TestReplacer(t *testing.T) {
 
 		var wg sync.WaitGroup
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			for i := range numIterations {
 				ctx := WithReplacements(ctx, map[string]Replacement{
 					"schema": {Value: "test_schema."},
@@ -459,12 +456,9 @@ func TestReplacer(t *testing.T) {
 
 				periodicallyClearCache(i, replacer)
 			}
-		}()
+		})
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			for i := range numIterations {
 				ctx := WithReplacements(ctx, map[string]Replacement{
 					"schema": {Stable: true, Value: "test_schema."},
@@ -480,12 +474,9 @@ func TestReplacer(t *testing.T) {
 
 				periodicallyClearCache(i, replacer)
 			}
-		}()
+		})
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			for i := range numIterations {
 				ctx := WithReplacements(ctx, map[string]Replacement{
 					"schema": {Stable: true, Value: "test_schema."},
@@ -501,7 +492,7 @@ func TestReplacer(t *testing.T) {
 
 				periodicallyClearCache(i, replacer)
 			}
-		}()
+		})
 
 		wg.Wait()
 	})
