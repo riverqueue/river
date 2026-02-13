@@ -857,6 +857,7 @@ func (p *producer) pollForSettingChanges(ctx context.Context, wg *sync.WaitGroup
 	defer wg.Done()
 
 	ticker := time.NewTicker(p.config.QueuePollInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
