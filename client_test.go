@@ -1523,9 +1523,7 @@ func Test_Client_Stop_Common(t *testing.T) {
 
 		var wg sync.WaitGroup
 		for range 10 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				for {
 					select {
 					case <-ctx.Done():
@@ -1546,7 +1544,7 @@ func Test_Client_Stop_Common(t *testing.T) {
 					// Sleep a brief time between inserts.
 					serviceutil.CancellableSleep(ctx, randutil.DurationBetween(1*time.Microsecond, 10*time.Millisecond))
 				}
-			}()
+			})
 		}
 
 		return func() {
@@ -6552,11 +6550,9 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 		// Need to start waiting on events before running the client or the
 		// channel could overflow before we start listening.
 		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_ = riversharedtest.WaitOrTimeoutN(t, subscribeChan, numJobsToInsert)
-		}()
+		})
 
 		startClient(ctx, t, client)
 

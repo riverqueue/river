@@ -48,10 +48,7 @@ func StressErr(ctx context.Context, tb testingT, svc startstop.Service, allowedS
 	}
 
 	for range 10 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			for range 50 {
 				err := svc.Start(ctx)
 				if err != nil && !isAllowedStartError(err) {
@@ -71,7 +68,7 @@ func StressErr(ctx context.Context, tb testingT, svc startstop.Service, allowedS
 					require.FailNow(tb, "Timed out waiting for service to stop")
 				}
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

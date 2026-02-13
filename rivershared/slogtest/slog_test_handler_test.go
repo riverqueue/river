@@ -48,13 +48,11 @@ func TestSlogTestHandler_stress(t *testing.T) {
 	)
 
 	for range 10 {
-		wg.Add(1)
-		go func() {
+		wg.Go(func() {
 			for range 100 {
 				logger.InfoContext(ctx, "message", "key", "value")
 			}
-			wg.Done()
-		}()
+		})
 	}
 
 	wg.Wait()

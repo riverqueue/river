@@ -133,11 +133,9 @@ func (n *Notifier) Start(ctx context.Context) error {
 
 		var wg sync.WaitGroup
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			n.deliverNotifications(ctx)
-		}()
+		})
 
 		for attempt := 0; ; attempt++ {
 			if err := n.listenAndWait(ctx); err != nil {

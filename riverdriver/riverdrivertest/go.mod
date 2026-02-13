@@ -1,8 +1,8 @@
 module github.com/riverqueue/river/riverdriver/riverdrivertest
 
-go 1.24.0
+go 1.25.0
 
-toolchain go1.25.2
+toolchain go1.25.7
 
 require (
 	github.com/davecgh/go-spew v1.1.1
