@@ -6672,6 +6672,11 @@ func Test_Client_InsertTriggersImmediateWork(t *testing.T) {
 func Test_Client_InsertNotificationsAreDeduplicatedAndDebounced(t *testing.T) {
 	t.Parallel()
 
+	// Keep limiter time deterministic so debounce checks don't depend on CI
+	// jitter. Hold repeated `queue1` inserts inside `FetchCooldown` and assert no
+	// extra notification, then advance time past cooldown and assert it notifies
+	// again. `queue2`/`queue3` confirm debounce state is per queue.
+
 	ctx := context.Background()
 
 	var (
@@ -6697,6 +6702,9 @@ func Test_Client_InsertNotificationsAreDeduplicatedAndDebounced(t *testing.T) {
 
 	startClient(ctx, t, client)
 	riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
+	// Anchor all limiter checks to a known base time so debounce behavior is
+	// independent from scheduler jitter or machine load.
+	now := client.baseService.Time.StubNowUTC(time.Now().UTC())
 
 	type insertPayload struct {
 		Queue string `json:"queue"`
@@ -6728,27 +6736,32 @@ func Test_Client_InsertNotificationsAreDeduplicatedAndDebounced(t *testing.T) {
 
 	// Immediate first fire on queue1:
 	expectImmediateNotification(t, "queue1")
-	tNotif1 := time.Now()
+	// Keep time fixed inside the cooldown window before issuing repeated queue1
+	// inserts. This guarantees that all of these inserts are ineligible for a
+	// second notification regardless of wall-clock runtime.
+	client.baseService.Time.StubNowUTC(now.Add(500 * time.Millisecond))
 
 	for range 5 {
 		config.Logger.InfoContext(ctx, "inserting queue1 job")
 		_, err = client.Insert(ctx, JobArgs{}, &InsertOpts{Queue: "queue1"})
 		require.NoError(t, err)
 	}
-	// None of these should fire an insert notification due to debouncing:
+	// No second `queue1` notification should arrive while still in cooldown.
 	select {
 	case notification := <-notifyCh:
 		t.Fatalf("received insert notification when it should have been debounced %+v", notification)
 	case <-time.After(100 * time.Millisecond):
 	}
 
+	// First notifications on other queues are independent from queue1's debounce
+	// state and should still fire immediately.
 	expectImmediateNotification(t, "queue2") // Immediate first fire on queue2
 	expectImmediateNotification(t, "queue3") // Immediate first fire on queue3
 
-	// Wait until the queue1 cooldown period has passed:
-	<-time.After(time.Until(tNotif1.Add(config.FetchCooldown)))
+	// `ShouldTrigger` uses a strict `Before` check; move just past the boundary.
+	client.baseService.Time.StubNowUTC(now.Add(config.FetchCooldown + time.Nanosecond))
 
-	// Now we should receive an immediate notification again:
+	// Now queue1 should immediately notify again.
 	expectImmediateNotification(t, "queue1")
 }
 
