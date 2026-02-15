@@ -79,10 +79,10 @@ type Notifier struct {
 	baseservice.BaseService
 	startstop.BaseStartStop
 
-	disableSleep      bool          // for tests only; disable sleep on exponential backoff
-	testPingInterval  time.Duration // for tests only; override the 5s ping interval
 	listener          riverdriver.Listener
 	notificationBuf   chan *riverdriver.Notification
+	testDisableSleep  bool          // for tests only; disable sleep on exponential backoff
+	testPingInterval  time.Duration // for tests only; override the 5s ping interval
 	testSignals       notifierTestSignals
 	waitInterruptChan chan func()
 
@@ -152,7 +152,7 @@ func (n *Notifier) Start(ctx context.Context) error {
 					slog.String("sleep_duration", sleepDuration.String()),
 				)
 				n.testSignals.BackoffError.Signal(err)
-				if !n.disableSleep {
+				if !n.testDisableSleep {
 					serviceutil.CancellableSleep(ctx, sleepDuration)
 				}
 			}

@@ -94,6 +94,18 @@ func TestListener_Connect(t *testing.T) {
 
 	ctx := context.Background()
 
+	t.Run("SuccessfulConnect", func(t *testing.T) {
+		t.Parallel()
+
+		pool := testPool(ctx, t, nil)
+		listener := &Listener{dbPool: pool}
+
+		require.NoError(t, listener.Connect(ctx))
+		require.NotNil(t, listener.conn)
+
+		require.NoError(t, listener.Close(ctx))
+	})
+
 	t.Run("ReleasesPoolConnOnAfterConnectExecError", func(t *testing.T) {
 		t.Parallel()
 
@@ -117,18 +129,6 @@ func TestListener_Connect(t *testing.T) {
 		conn, err := pool.Acquire(acquireCtx)
 		require.NoError(t, err, "pool connection was leaked: Acquire timed out because the connection was not released")
 		conn.Release()
-	})
-
-	t.Run("SuccessfulConnect", func(t *testing.T) {
-		t.Parallel()
-
-		pool := testPool(ctx, t, nil)
-		listener := &Listener{dbPool: pool}
-
-		require.NoError(t, listener.Connect(ctx))
-		require.NotNil(t, listener.conn)
-
-		require.NoError(t, listener.Close(ctx))
 	})
 }
 

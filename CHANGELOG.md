@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added root River CLI flag `--statement-timeout` so Postgres session statement timeout can be set explicitly for commands like migrations. Explicit flag values take priority over database URL query params, and query params still take priority over built-in defaults. [PR #1142](https://github.com/riverqueue/river/pull/1142).
 
+### Fixed
+
+- Fix connection leak in `Listener.Connect` in case where `afterConnectExec` failed.  Thanks Johan Kjölhede ([@GiGurra](https://github.com/GiGurra))! [PR #1147](https://github.com/riverqueue/river/pull/1147).
+- Fix missing `ticker.Stop` in producer's `pollForSettingChanges` ([@GiGurra](https://github.com/GiGurra)). [PR #1148](https://github.com/riverqueue/river/pull/1148).
+- Fix accidental use of cancelled context for `Notifier.Ping` ([@GiGurra](https://github.com/GiGurra)). [PR #1149](https://github.com/riverqueue/river/pull/1149).
+- Add jitter to fetch poll loop to prevent producer stampeding ([@GiGurra](https://github.com/GiGurra)). [PR #1150](https://github.com/riverqueue/river/pull/1150).
+
 ### Changed
 
 - Upgrade supported Go versions to 1.25 and 1.26, and update CI accordingly. [PR #1144](https://github.com/riverqueue/river/pull/1144).

@@ -490,7 +490,7 @@ func TestNotifier(t *testing.T) {
 
 		notifier, _ := setup(t, nil)
 
-		notifier.disableSleep = true
+		notifier.testDisableSleep = true
 
 		var errorNum int
 
@@ -582,7 +582,7 @@ func TestNotifier(t *testing.T) {
 		notifier, bundle := setup(t, nil)
 
 		// Disable the backoff sleep that would occur after the first retry.
-		notifier.disableSleep = true
+		notifier.testDisableSleep = true
 
 		var errorNum int
 
