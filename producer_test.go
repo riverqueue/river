@@ -696,6 +696,24 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 	})
 }
 
+func TestProducer_jitteredFetchPollInterval(t *testing.T) {
+	t.Parallel()
+
+	prod := &producer{}
+	prod.config = &producerConfig{
+		FetchPollInterval: 1 * time.Second,
+	}
+
+	// Run enough iterations to catch any out-of-bounds values without being
+	// flaky. The jitter range is [FetchPollInterval, FetchPollInterval +
+	// 10% of FetchPollInterval), so [1s, 1.1s).
+	for range 100 {
+		d := prod.jitteredFetchPollInterval()
+		require.GreaterOrEqual(t, d, prod.config.FetchPollInterval)
+		require.Less(t, d, prod.config.FetchPollInterval+prod.config.FetchPollInterval/10)
+	}
+}
+
 func emitQueueNotification(t *testing.T, ctx context.Context, exec riverdriver.Executor, schema, queue, action string, metadata []byte) {
 	t.Helper()
 
