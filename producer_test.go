@@ -701,17 +701,16 @@ func TestProducer_jitteredFetchPollInterval(t *testing.T) {
 
 	p := &producer{}
 	p.config = &producerConfig{
-		FetchCooldown:     100 * time.Millisecond,
 		FetchPollInterval: 1 * time.Second,
 	}
 
 	// Run enough iterations to catch any out-of-bounds values without being
 	// flaky. The jitter range is [FetchPollInterval, FetchPollInterval +
-	// FetchCooldown), so [1s, 1.1s).
-	for range 1_000 {
+	// 10% of FetchPollInterval), so [1s, 1.1s).
+	for range 100 {
 		d := p.jitteredFetchPollInterval()
 		require.GreaterOrEqual(t, d, p.config.FetchPollInterval)
-		require.Less(t, d, p.config.FetchPollInterval+p.config.FetchCooldown)
+		require.Less(t, d, p.config.FetchPollInterval+p.config.FetchPollInterval/10)
 	}
 }
 

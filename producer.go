@@ -612,11 +612,12 @@ func (p *producer) fetchPollLoop(ctx context.Context, wg *sync.WaitGroup) {
 }
 
 // jitteredFetchPollInterval returns FetchPollInterval with random jitter in
-// [0, FetchCooldown) added. This prevents multiple producers from
-// synchronizing their fetches after a transient event (e.g. GC pause, network
-// blip), which would cause periodic DB load spikes.
+// [0, 10% of FetchPollInterval) added (minimum 10ms). This prevents multiple
+// producers from synchronizing their fetches after a transient event (e.g. GC
+// pause, network blip), which would cause periodic DB load spikes.
 func (p *producer) jitteredFetchPollInterval() time.Duration {
-	return randutil.DurationBetween(p.config.FetchPollInterval, p.config.FetchPollInterval+p.config.FetchCooldown)
+	jitterRange := max(p.config.FetchPollInterval/10, 10*time.Millisecond)
+	return randutil.DurationBetween(p.config.FetchPollInterval, p.config.FetchPollInterval+jitterRange)
 }
 
 func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan producerFetchResult) {
