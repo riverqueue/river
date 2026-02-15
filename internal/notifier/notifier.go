@@ -1,6 +1,7 @@
 package notifier
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -78,7 +79,8 @@ type Notifier struct {
 	baseservice.BaseService
 	startstop.BaseStartStop
 
-	disableSleep      bool // for tests only; disable sleep on exponential backoff
+	disableSleep      bool          // for tests only; disable sleep on exponential backoff
+	testPingInterval  time.Duration // for tests only; override the 5s ping interval
 	listener          riverdriver.Listener
 	notificationBuf   chan *riverdriver.Notification
 	testSignals       notifierTestSignals
@@ -345,6 +347,12 @@ func (n *Notifier) waitOnce(ctx context.Context) error {
 		n.waitCancel()
 	})
 
+	// Save a reference to the parent context before creating the inner
+	// cancellable context. The inner context is cancelled by drainErrChan to
+	// interrupt WaitForNotification, but we still need a live context for the
+	// Ping health check afterward.
+	pingCtx := ctx
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -382,7 +390,8 @@ func (n *Notifier) waitOnce(ctx context.Context) error {
 		return nil
 	}
 
-	needPingCtx, needPingCancel := context.WithTimeout(ctx, 5*time.Second)
+	pingInterval := cmp.Or(n.testPingInterval, 5*time.Second)
+	needPingCtx, needPingCancel := context.WithTimeout(ctx, pingInterval)
 	defer needPingCancel()
 
 	// * Wait for notifications
@@ -397,8 +406,15 @@ func (n *Notifier) waitOnce(ctx context.Context) error {
 		if err := drainErrChan(); err != nil {
 			return err
 		}
-		// Ping the conn to see if it's still alive
-		if err := n.listener.Ping(ctx); err != nil {
+		// Ping the conn to see if it's still alive. Use pingCtx (the parent
+		// context) because the inner ctx was cancelled by drainErrChan above
+		// to interrupt WaitForNotification.
+		//
+		// Note: Previously this used the (already cancelled) inner ctx, making
+		// the ping a no-op that always returned context.Canceled. With the fix,
+		// dead or flaky connections are now actively detected, which may trigger
+		// reconnections that were previously silently swallowed.
+		if err := n.listener.Ping(pingCtx); err != nil {
 			return err
 		}
 
