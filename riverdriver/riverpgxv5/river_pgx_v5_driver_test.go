@@ -89,6 +89,49 @@ func TestListener_Close(t *testing.T) {
 	})
 }
 
+func TestListener_Connect(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("ReleasesPoolConnOnAfterConnectExecError", func(t *testing.T) {
+		t.Parallel()
+
+		config := testPoolConfig()
+		config.MaxConns = 1 // only one connection in pool
+
+		pool := testPool(ctx, t, config)
+
+		listener := &Listener{dbPool: pool}
+		listener.SetAfterConnectExec("INVALID SQL THAT WILL FAIL")
+
+		// Connect should fail because of invalid afterConnectExec SQL.
+		err := listener.Connect(ctx)
+		require.Error(t, err)
+
+		// The pool connection must have been released back to the pool.
+		// With MaxConns=1, if it leaked, this Acquire would hang forever.
+		acquireCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+
+		conn, err := pool.Acquire(acquireCtx)
+		require.NoError(t, err, "pool connection was leaked: Acquire timed out because the connection was not released")
+		conn.Release()
+	})
+
+	t.Run("SuccessfulConnect", func(t *testing.T) {
+		t.Parallel()
+
+		pool := testPool(ctx, t, nil)
+		listener := &Listener{dbPool: pool}
+
+		require.NoError(t, listener.Connect(ctx))
+		require.NotNil(t, listener.conn)
+
+		require.NoError(t, listener.Close(ctx))
+	})
+}
+
 func TestInterpretError(t *testing.T) {
 	t.Parallel()
 
