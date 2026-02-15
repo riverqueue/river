@@ -699,8 +699,8 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 func TestProducer_jitteredFetchPollInterval(t *testing.T) {
 	t.Parallel()
 
-	p := &producer{}
-	p.config = &producerConfig{
+	prod := &producer{}
+	prod.config = &producerConfig{
 		FetchPollInterval: 1 * time.Second,
 	}
 
@@ -708,9 +708,9 @@ func TestProducer_jitteredFetchPollInterval(t *testing.T) {
 	// flaky. The jitter range is [FetchPollInterval, FetchPollInterval +
 	// 10% of FetchPollInterval), so [1s, 1.1s).
 	for range 100 {
-		d := p.jitteredFetchPollInterval()
-		require.GreaterOrEqual(t, d, p.config.FetchPollInterval)
-		require.Less(t, d, p.config.FetchPollInterval+p.config.FetchPollInterval/10)
+		d := prod.jitteredFetchPollInterval()
+		require.GreaterOrEqual(t, d, prod.config.FetchPollInterval)
+		require.Less(t, d, prod.config.FetchPollInterval+prod.config.FetchPollInterval/10)
 	}
 }
 
