@@ -1071,10 +1071,15 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 
 		return nil
 	}(); err != nil {
-		defer stopped()
+		// If context was cancelled due to Stop(), just close the stopped channel
+		// and return. Stop() will handle cleanup via finalizeStop().
 		if errors.Is(context.Cause(fetchCtx), startstop.ErrStop) {
+			stopped()
 			return nil
 		}
+
+		// For real startup failures, reset state so Start() can be called again.
+		c.baseStartStop.StartFailed(stopped)
 		return err
 	}
 
