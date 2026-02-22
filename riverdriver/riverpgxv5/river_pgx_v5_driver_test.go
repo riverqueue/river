@@ -2,6 +2,7 @@ package riverpgxv5
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/puddle/v2"
 	"github.com/stretchr/testify/require"
@@ -235,5 +237,333 @@ func TestSchemaTemplateParam(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Equal(t, "SELECT 1 FROM custom_schema.river_job", updatedSQL)
+	})
+}
+
+type nilConnDBTX struct{}
+
+func (nilConnDBTX) Begin(context.Context) (pgx.Tx, error) { panic("unused") }
+func (nilConnDBTX) Conn() *pgx.Conn                       { return nil }
+func (nilConnDBTX) CopyFrom(context.Context, pgx.Identifier, []string, pgx.CopyFromSource) (int64, error) {
+	panic("unused")
+}
+
+func (nilConnDBTX) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	panic("unused")
+}
+
+func (nilConnDBTX) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	panic("unused")
+}
+func (nilConnDBTX) QueryRow(context.Context, string, ...any) pgx.Row { panic("unused") }
+
+type unexpectedPanicConnDBTX struct{}
+
+func (unexpectedPanicConnDBTX) Begin(context.Context) (pgx.Tx, error) { panic("unused") }
+func (unexpectedPanicConnDBTX) Conn() *pgx.Conn                       { panic("unexpected panic") }
+func (unexpectedPanicConnDBTX) CopyFrom(context.Context, pgx.Identifier, []string, pgx.CopyFromSource) (int64, error) {
+	panic("unused")
+}
+
+func (unexpectedPanicConnDBTX) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	panic("unused")
+}
+
+func (unexpectedPanicConnDBTX) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	panic("unused")
+}
+
+func (unexpectedPanicConnDBTX) QueryRow(context.Context, string, ...any) pgx.Row {
+	panic("unused")
+}
+
+func TestTemplateReplaceWrapper_DefaultQueryExecMode(t *testing.T) {
+	t.Parallel()
+
+	t.Run("FallsBackToCacheStatementIfConnIsNil", func(t *testing.T) {
+		t.Parallel()
+
+		wrapper := templateReplaceWrapper{
+			dbtx:     nilConnDBTX{},
+			replacer: &sqlctemplate.Replacer{},
+		}
+
+		require.Equal(t, pgx.QueryExecModeCacheStatement, wrapper.defaultQueryExecMode())
+	})
+
+	t.Run("RepanicsUnexpectedConnPanic", func(t *testing.T) {
+		t.Parallel()
+
+		wrapper := templateReplaceWrapper{
+			dbtx:     unexpectedPanicConnDBTX{},
+			replacer: &sqlctemplate.Replacer{},
+		}
+
+		require.PanicsWithValue(t, "unexpected panic", func() {
+			_ = wrapper.defaultQueryExecMode()
+		})
+	})
+}
+
+func TestTemplateReplaceWrapper_QueryExecModeOverride(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	newWrapper := func(t *testing.T, config *pgxpool.Config) templateReplaceWrapper {
+		t.Helper()
+
+		pool := testPool(ctx, t, config)
+
+		tx, err := pool.Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+		return templateReplaceWrapper{
+			dbtx:     tx,
+			replacer: &sqlctemplate.Replacer{},
+		}
+	}
+
+	t.Run("SimpleProtocolOverrideAdaptsJSONInput", func(t *testing.T) {
+		t.Parallel()
+
+		wrapper := newWrapper(t, nil)
+
+		var val string
+		err := wrapper.QueryRow(
+			ctx,
+			"SELECT $1::jsonb->>'hello'",
+			pgx.QueryExecModeSimpleProtocol,
+			[]byte(`{"hello":"world"}`),
+		).Scan(&val)
+		require.NoError(t, err)
+		require.Equal(t, "world", val)
+	})
+
+	t.Run("SimpleProtocolOverrideAdaptsJSONInputViaNamedArgsRewriter", func(t *testing.T) {
+		t.Parallel()
+
+		wrapper := newWrapper(t, nil)
+
+		var val string
+		err := wrapper.QueryRow(
+			ctx,
+			"SELECT @payload::jsonb->>'hello'",
+			pgx.QueryExecModeSimpleProtocol,
+			pgx.NamedArgs{"payload": []byte(`{"hello":"world"}`)},
+		).Scan(&val)
+		require.NoError(t, err)
+		require.Equal(t, "world", val)
+	})
+
+	t.Run("SimpleProtocolOverrideAdaptsJSONInputInExecPath", func(t *testing.T) {
+		t.Parallel()
+
+		wrapper := newWrapper(t, nil)
+
+		_, err := wrapper.Exec(
+			ctx,
+			"SELECT $1::jsonb",
+			pgx.QueryExecModeSimpleProtocol,
+			[]byte(`{"hello":"world"}`),
+		)
+		require.NoError(t, err)
+	})
+
+	t.Run("SimpleProtocolOverridePreservesExplicitByteaInput", func(t *testing.T) {
+		t.Parallel()
+
+		wrapper := newWrapper(t, nil)
+
+		var hexVal string
+		err := wrapper.QueryRow(
+			ctx,
+			"SELECT encode($1::bytea, 'hex')",
+			pgx.QueryExecModeSimpleProtocol,
+			[]byte{0x00, 0x01, 0x02},
+		).Scan(&hexVal)
+		require.NoError(t, err)
+		require.Equal(t, "000102", hexVal)
+	})
+
+	t.Run("CacheStatementOverrideOnSimpleDefaultConnection", func(t *testing.T) {
+		t.Parallel()
+
+		config := testPoolConfig()
+		config.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+		wrapper := newWrapper(t, config)
+
+		var val string
+		err := wrapper.QueryRow(
+			ctx,
+			"SELECT $1::jsonb->>'hello'",
+			pgx.QueryExecModeCacheStatement,
+			[]byte(`{"hello":"world"}`),
+		).Scan(&val)
+		require.NoError(t, err)
+		require.Equal(t, "world", val)
+	})
+}
+
+type passthroughQueryRewriter struct{}
+
+func (passthroughQueryRewriter) RewriteQuery(ctx context.Context, conn *pgx.Conn, sql string, args []any) (string, []any, error) {
+	return sql, args, nil
+}
+
+func TestAdaptArgsForJSONTextModes(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ConvertsOnlyJSONArgsSimpleProtocol", func(t *testing.T) {
+		t.Parallel()
+
+		args := []any{
+			[]byte(`{"a":1}`),
+			[]byte{0x01, 0x02},
+			[][]byte{[]byte(`{"b":2}`), []byte(`{"c":3}`)},
+		}
+		updatedArgs := adaptArgsForJSONTextModes(pgx.QueryExecModeSimpleProtocol, "SELECT $1::jsonb, $2::bytea, $3::jsonb[]", args)
+
+		require.IsType(t, json.RawMessage{}, updatedArgs[0])
+		require.JSONEq(t, `{"a":1}`, string(updatedArgs[0].(json.RawMessage))) //nolint:forcetypeassert
+		require.IsType(t, []byte{}, updatedArgs[1])
+		require.Equal(t, []byte{0x01, 0x02}, updatedArgs[1])
+
+		jsonArray, ok := updatedArgs[2].([]json.RawMessage)
+		require.True(t, ok)
+		require.Equal(t, []json.RawMessage{
+			json.RawMessage(`{"b":2}`),
+			json.RawMessage(`{"c":3}`),
+		}, jsonArray)
+	})
+
+	t.Run("ConvertsUncastByteSlicesExceptExplicitBytea", func(t *testing.T) {
+		t.Parallel()
+
+		args := []any{
+			[]byte(`{"a":1}`), // uncast json-ish arg
+			[][]byte{[]byte(`{"b":2}`), []byte(`{"c":3}`)}, // uncast json-ish array arg
+			[][]byte{{0x00, 0x01}, {0x02, 0x03}},           // explicit bytea[] arg
+		}
+		updatedArgs := adaptArgsForJSONTextModes(
+			pgx.QueryExecModeSimpleProtocol,
+			"INSERT INTO river_job(args, errors, unique_key) VALUES ($1, $2, unnest($3::bytea[]))",
+			args,
+		)
+
+		require.IsType(t, json.RawMessage{}, updatedArgs[0])
+		require.IsType(t, []json.RawMessage{}, updatedArgs[1])
+		require.IsType(t, [][]byte{}, updatedArgs[2])
+	})
+
+	t.Run("PreservesByteSliceForCastFunctionBytea", func(t *testing.T) {
+		t.Parallel()
+
+		args := []any{
+			[]byte{0x00, 0x01, 0x02},
+		}
+		updatedArgs := adaptArgsForJSONTextModes(
+			pgx.QueryExecModeSimpleProtocol,
+			"SELECT encode(CAST($1 AS bytea), 'hex')",
+			args,
+		)
+
+		require.IsType(t, []byte{}, updatedArgs[0])
+		require.Equal(t, []byte{0x00, 0x01, 0x02}, updatedArgs[0])
+	})
+
+	t.Run("PreservesNilForConvertedByteSliceArrays", func(t *testing.T) {
+		t.Parallel()
+
+		var errors [][]byte
+		updatedArgs := adaptArgsForJSONTextModes(pgx.QueryExecModeSimpleProtocol, "INSERT INTO river_job(errors) VALUES ($1)", []any{errors})
+
+		converted, ok := updatedArgs[0].([]json.RawMessage)
+		require.True(t, ok)
+		require.Nil(t, converted)
+	})
+
+	t.Run("ConvertsJSONArgsInExecMode", func(t *testing.T) {
+		t.Parallel()
+
+		args := []any{[]byte(`{"x":1}`)}
+		updatedArgs := adaptArgsForJSONTextModes(pgx.QueryExecModeExec, "SELECT $1::jsonb", args)
+
+		require.IsType(t, json.RawMessage{}, updatedArgs[0])
+		require.JSONEq(t, `{"x":1}`, string(updatedArgs[0].(json.RawMessage))) //nolint:forcetypeassert
+	})
+
+	t.Run("DoesNotConvertArgsInCacheStatementMode", func(t *testing.T) {
+		t.Parallel()
+
+		args := []any{[]byte(`{"x":1}`), [][]byte{[]byte(`{"y":2}`)}}
+		updatedArgs := adaptArgsForJSONTextModes(pgx.QueryExecModeCacheStatement, "SELECT $1::jsonb, $2::jsonb[]", args)
+
+		require.IsType(t, []byte{}, updatedArgs[0])
+		require.IsType(t, [][]byte{}, updatedArgs[1])
+	})
+
+	t.Run("RespectsQueryOptionArgOffset", func(t *testing.T) {
+		t.Parallel()
+
+		args := []any{
+			pgx.QueryExecModeSimpleProtocol,
+			[]byte(`{"x":1}`),
+			[][]byte{[]byte(`{"y":2}`)},
+		}
+		updatedArgs := adaptArgsForJSONTextModes(pgx.QueryExecModeCacheStatement, "SELECT $1::jsonb, $2::jsonb[]", args)
+
+		require.Equal(t, pgx.QueryExecModeSimpleProtocol, updatedArgs[0])
+		require.IsType(t, json.RawMessage{}, updatedArgs[1])
+		require.IsType(t, []json.RawMessage{}, updatedArgs[2])
+	})
+
+	t.Run("QueryExecModeArgCanDisableAdaptation", func(t *testing.T) {
+		t.Parallel()
+
+		args := []any{
+			pgx.QueryExecModeCacheStatement,
+			[]byte(`{"x":1}`),
+		}
+		updatedArgs := adaptArgsForJSONTextModes(pgx.QueryExecModeSimpleProtocol, "SELECT $1::jsonb", args)
+
+		require.Equal(t, pgx.QueryExecModeCacheStatement, updatedArgs[0])
+		require.IsType(t, []byte{}, updatedArgs[1])
+	})
+
+	t.Run("ModeOverrideAfterResultFormatsStillApplies", func(t *testing.T) {
+		t.Parallel()
+
+		args := []any{
+			pgx.QueryResultFormats{pgx.TextFormatCode},
+			pgx.QueryExecModeSimpleProtocol,
+			[]byte(`{"x":1}`),
+		}
+		updatedArgs := adaptArgsForJSONTextModes(pgx.QueryExecModeCacheStatement, "SELECT $1::jsonb", args)
+
+		require.IsType(t, pgx.QueryResultFormats{}, updatedArgs[0])
+		require.Equal(t, pgx.QueryExecModeSimpleProtocol, updatedArgs[1])
+		require.IsType(t, json.RawMessage{}, updatedArgs[2])
+	})
+
+	t.Run("WrapsQueryRewriterForPostRewriteAdaptation", func(t *testing.T) {
+		t.Parallel()
+
+		args := []any{
+			passthroughQueryRewriter{},
+			[]byte(`{"x":1}`),
+		}
+		updatedArgs := adaptArgsForJSONTextModes(pgx.QueryExecModeSimpleProtocol, "SELECT $1::jsonb", args)
+
+		// Bind args are unchanged before rewrite.
+		require.IsType(t, []byte{}, updatedArgs[1])
+
+		rewriter, ok := updatedArgs[0].(pgx.QueryRewriter)
+		require.True(t, ok)
+		rewrittenSQL, rewrittenArgs, err := rewriter.RewriteQuery(context.Background(), nil, "SELECT $1::jsonb", []any{[]byte(`{"x":1}`)})
+		require.NoError(t, err)
+		require.Equal(t, "SELECT $1::jsonb", rewrittenSQL)
+		require.IsType(t, json.RawMessage{}, rewrittenArgs[0])
 	})
 }

@@ -96,11 +96,18 @@ func (e *SharedTx) QueryRow(ctx context.Context, query string, args ...any) pgx.
 }
 
 //
-// These are all implemented so that a SharedTx can be used as a pgx.Tx, but are
-// all non-functional.
+// These are implemented so SharedTx can satisfy pgx.Tx.
+//
+// Conn intentionally returns nil (instead of panicking) because some callers
+// perform capability/config probes through Conn() and can safely handle nil.
+// SharedTx does not expose a stable underlying conn pointer, so nil is the
+// correct "unavailable" signal for probes.
+//
+// The rest stay panic-only because they are behavioral operations that should
+// not be used on SharedTx directly.
 //
 
-func (e *SharedTx) Conn() *pgx.Conn                  { panic("not implemented") }
+func (e *SharedTx) Conn() *pgx.Conn                  { return nil }
 func (e *SharedTx) Commit(ctx context.Context) error { panic("not implemented") }
 func (e *SharedTx) LargeObjects() pgx.LargeObjects   { panic("not implemented") }
 func (e *SharedTx) Prepare(ctx context.Context, name, sql string) (*pgconn.StatementDescription, error) {

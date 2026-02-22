@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improved `riverlog` performance and reduced memory amplification when appending to large persisted `river:log` histories. [PR #1157](https://github.com/riverqueue/river/pull/1157).
 - Reduced snooze-path memory amplification by setting `snoozes` in metadata updates before marshaling, avoiding an extra full-payload JSON rewrite. [PR #1159](https://github.com/riverqueue/river/pull/1159).
 
+### Fixed
+
+- `riverpgxv5` now adapts JSON parameters for `simple protocol` / `exec` query modes so `[]byte` JSON payloads are not encoded as `bytea` in pgx text-mode execution paths. This fixes invalid JSON syntax errors when running through protocol-constrained setups like PgBouncer transaction pooling while preserving normal behavior for explicit `bytea` parameters. Fixes [#1153](https://github.com/riverqueue/river/issues/1153). [PR #1155](https://github.com/riverqueue/river/pull/1155).
+
 ## [0.31.0] - 2026-02-21
 
 ### Added
