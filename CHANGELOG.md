@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added a new `rivertest/v2` package with a different design for insert assertions. In `rivertest/v2`, `RequireInserted` now succeeds when _any_ job of the kind matches the provided criteria, and `RequireNotInserted` fails only when _any_ matching job exists. This makes it easier to test code that inserts multiple jobs of the same kind without depending on exact insert counts or ordering, while leaving existing `rivertest` behavior unchanged for strict assertions. It also allows for more flexible assertions in the future. [PR #XXXX](https://github.com/riverqueue/river/pull/XXXX).
+
 ## [0.31.0] - 2026-02-21
 
 ### Added
