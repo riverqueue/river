@@ -2,6 +2,7 @@ package riverpgxv5
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/puddle/v2"
 	"github.com/stretchr/testify/require"
@@ -236,4 +238,127 @@ func TestSchemaTemplateParam(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "SELECT 1 FROM custom_schema.river_job", updatedSQL)
 	})
+}
+
+type panicConnDBTX struct{}
+
+func (panicConnDBTX) Begin(context.Context) (pgx.Tx, error) { panic("unused") }
+func (panicConnDBTX) Conn() *pgx.Conn                       { panic("not implemented") }
+func (panicConnDBTX) CopyFrom(context.Context, pgx.Identifier, []string, pgx.CopyFromSource) (int64, error) {
+	panic("unused")
+}
+func (panicConnDBTX) Exec(context.Context, string, ...interface{}) (pgconn.CommandTag, error) {
+	panic("unused")
+}
+func (panicConnDBTX) Query(context.Context, string, ...interface{}) (pgx.Rows, error) {
+	panic("unused")
+}
+func (panicConnDBTX) QueryRow(context.Context, string, ...interface{}) pgx.Row { panic("unused") }
+
+func TestTemplateReplaceWrapper_DefaultQueryExecMode(t *testing.T) {
+	t.Parallel()
+
+	t.Run("FallsBackToCacheStatementIfConnPanics", func(t *testing.T) {
+		t.Parallel()
+
+		wrapper := templateReplaceWrapper{
+			dbtx:     panicConnDBTX{},
+			replacer: &sqlctemplate.Replacer{},
+		}
+
+		require.Equal(t, pgx.QueryExecModeCacheStatement, wrapper.defaultQueryExecMode())
+	})
+}
+
+func TestAdaptArgsForJSONTextModes(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ConvertsOnlyJSONArgsSimpleProtocol", func(t *testing.T) {
+		t.Parallel()
+
+		args := []any{
+			[]byte(`{"a":1}`),
+			[]byte{0x01, 0x02},
+			[][]byte{[]byte(`{"b":2}`), []byte(`{"c":3}`)},
+		}
+		updatedArgs := adaptArgsForJSONTextModes(pgx.QueryExecModeSimpleProtocol, "SELECT $1::jsonb, $2::bytea, $3::jsonb[]", args)
+
+		require.IsType(t, json.RawMessage{}, updatedArgs[0])
+		require.Equal(t, json.RawMessage([]byte(`{"a":1}`)), updatedArgs[0])
+		require.IsType(t, []byte{}, updatedArgs[1])
+		require.Equal(t, []byte{0x01, 0x02}, updatedArgs[1])
+
+		jsonArray, ok := updatedArgs[2].([]json.RawMessage)
+		require.True(t, ok)
+		require.Equal(t, []json.RawMessage{
+			json.RawMessage(`{"b":2}`),
+			json.RawMessage(`{"c":3}`),
+		}, jsonArray)
+	})
+
+	t.Run("ConvertsUncastByteSlicesExceptExplicitBytea", func(t *testing.T) {
+		t.Parallel()
+
+		args := []any{
+			[]byte(`{"a":1}`),                                  // uncast json-ish arg
+			[][]byte{[]byte(`{"b":2}`), []byte(`{"c":3}`)},    // uncast json-ish array arg
+			[][]byte{[]byte{0x00, 0x01}, []byte{0x02, 0x03}}, // explicit bytea[] arg
+		}
+		updatedArgs := adaptArgsForJSONTextModes(
+			pgx.QueryExecModeSimpleProtocol,
+			"INSERT INTO river_job(args, errors, unique_key) VALUES ($1, $2, unnest($3::bytea[]))",
+			args,
+		)
+
+		require.IsType(t, json.RawMessage{}, updatedArgs[0])
+		require.IsType(t, []json.RawMessage{}, updatedArgs[1])
+		require.IsType(t, [][]byte{}, updatedArgs[2])
+	})
+
+	t.Run("PreservesNilForConvertedByteSliceArrays", func(t *testing.T) {
+		t.Parallel()
+
+		var errors [][]byte
+		updatedArgs := adaptArgsForJSONTextModes(pgx.QueryExecModeSimpleProtocol, "INSERT INTO river_job(errors) VALUES ($1)", []any{errors})
+
+		converted, ok := updatedArgs[0].([]json.RawMessage)
+		require.True(t, ok)
+		require.Nil(t, converted)
+	})
+
+	t.Run("ConvertsJSONArgsInExecMode", func(t *testing.T) {
+		t.Parallel()
+
+		args := []any{[]byte(`{"x":1}`)}
+		updatedArgs := adaptArgsForJSONTextModes(pgx.QueryExecModeExec, "SELECT $1::jsonb", args)
+
+		require.IsType(t, json.RawMessage{}, updatedArgs[0])
+		require.Equal(t, json.RawMessage(`{"x":1}`), updatedArgs[0])
+	})
+
+	t.Run("DoesNotConvertArgsInCacheStatementMode", func(t *testing.T) {
+		t.Parallel()
+
+		args := []any{[]byte(`{"x":1}`), [][]byte{[]byte(`{"y":2}`)}}
+		updatedArgs := adaptArgsForJSONTextModes(pgx.QueryExecModeCacheStatement, "SELECT $1::jsonb, $2::jsonb[]", args)
+
+		require.IsType(t, []byte{}, updatedArgs[0])
+		require.IsType(t, [][]byte{}, updatedArgs[1])
+	})
+
+	t.Run("RespectsQueryOptionArgOffset", func(t *testing.T) {
+		t.Parallel()
+
+		args := []any{
+			pgx.QueryExecModeSimpleProtocol,
+			[]byte(`{"x":1}`),
+			[][]byte{[]byte(`{"y":2}`)},
+		}
+		updatedArgs := adaptArgsForJSONTextModes(pgx.QueryExecModeCacheStatement, "SELECT $1::jsonb, $2::jsonb[]", args)
+
+		require.Equal(t, pgx.QueryExecModeSimpleProtocol, updatedArgs[0])
+		require.IsType(t, json.RawMessage{}, updatedArgs[1])
+		require.IsType(t, []json.RawMessage{}, updatedArgs[2])
+	})
+
 }

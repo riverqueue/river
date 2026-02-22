@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
@@ -92,11 +93,26 @@ func TestDriverRiverDatabaseSQLPgx(t *testing.T) {
 func TestDriverRiverPgxV5(t *testing.T) {
 	t.Parallel()
 
-	var (
-		ctx    = context.Background()
-		dbPool = riversharedtest.DBPool(ctx, t)
-		driver = riverpgxv5.New(dbPool)
-	)
+	ctx := context.Background()
+
+	t.Run("DefaultMode", func(t *testing.T) {
+		t.Parallel()
+
+		exerciseDriverRiverPgxV5WithMode(ctx, t, pgx.QueryExecModeCacheStatement)
+	})
+
+	t.Run("SimpleProtocol", func(t *testing.T) {
+		t.Parallel()
+
+		exerciseDriverRiverPgxV5WithMode(ctx, t, pgx.QueryExecModeSimpleProtocol)
+	})
+}
+
+func exerciseDriverRiverPgxV5WithMode(ctx context.Context, t *testing.T, mode pgx.QueryExecMode) {
+	t.Helper()
+
+	dbPool := dbPoolWithExecMode(ctx, t, mode)
+	driver := riverpgxv5.New(dbPool)
 
 	riverdrivertest.Exercise(ctx, t,
 		func(ctx context.Context, t *testing.T, opts *riverdbtest.TestSchemaOpts) (riverdriver.Driver[pgx.Tx], string) {
@@ -107,9 +123,22 @@ func TestDriverRiverPgxV5(t *testing.T) {
 		func(ctx context.Context, t *testing.T) (riverdriver.Executor, riverdriver.Driver[pgx.Tx]) {
 			t.Helper()
 
-			tx := riverdbtest.TestTxPgx(ctx, t)
-			return riverpgxv5.New(nil).UnwrapExecutor(tx), driver
+			tx, _ := riverdbtest.TestTxPgxDriver(ctx, t, driver, nil)
+			return driver.UnwrapExecutor(tx), driver
 		})
+}
+
+func dbPoolWithExecMode(ctx context.Context, t *testing.T, mode pgx.QueryExecMode) *pgxpool.Pool {
+	t.Helper()
+
+	config := riversharedtest.DBPool(ctx, t).Config()
+	config.ConnConfig.DefaultQueryExecMode = mode
+
+	dbPool, err := pgxpool.NewWithConfig(ctx, config)
+	require.NoError(t, err)
+	t.Cleanup(dbPool.Close)
+
+	return dbPool
 }
 
 func TestDriverRiverLiteLibSQL(t *testing.T) { //nolint:dupl

@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"io/fs"
 	"math"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1160,16 +1162,19 @@ func (w templateReplaceWrapper) Begin(ctx context.Context) (pgx.Tx, error) {
 
 func (w templateReplaceWrapper) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	sql, args = w.replacer.Run(ctx, argPlaceholder, sql, args)
+	args = adaptArgsForJSONTextModes(w.defaultQueryExecMode(), sql, args)
 	return w.dbtx.Exec(ctx, sql, args...)
 }
 
 func (w templateReplaceWrapper) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
 	sql, args = w.replacer.Run(ctx, argPlaceholder, sql, args)
+	args = adaptArgsForJSONTextModes(w.defaultQueryExecMode(), sql, args)
 	return w.dbtx.Query(ctx, sql, args...)
 }
 
 func (w templateReplaceWrapper) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
 	sql, args = w.replacer.Run(ctx, argPlaceholder, sql, args)
+	args = adaptArgsForJSONTextModes(w.defaultQueryExecMode(), sql, args)
 	return w.dbtx.QueryRow(ctx, sql, args...)
 }
 
@@ -1179,6 +1184,220 @@ func (w templateReplaceWrapper) CopyFrom(ctx context.Context, tableName pgx.Iden
 	}
 
 	return w.dbtx.CopyFrom(ctx, tableName, columnNames, rowSrc)
+}
+
+func (w templateReplaceWrapper) defaultQueryExecMode() pgx.QueryExecMode {
+	if poolWithConfig, ok := any(w.dbtx).(interface{ Config() *pgxpool.Config }); ok {
+		if config := poolWithConfig.Config(); config != nil {
+			return config.ConnConfig.DefaultQueryExecMode
+		}
+	}
+	if txWithConn, ok := any(w.dbtx).(interface{ Conn() *pgx.Conn }); ok {
+		if conn := safeConn(txWithConn); conn != nil {
+			return conn.Config().DefaultQueryExecMode
+		}
+	}
+	return pgx.QueryExecModeCacheStatement
+}
+
+func safeConn(txWithConn interface{ Conn() *pgx.Conn }) (conn *pgx.Conn) {
+	defer func() {
+		// Test wrappers like sharedtx.SharedTx intentionally panic on Conn().
+		if recover() != nil {
+			conn = nil
+		}
+	}()
+	return txWithConn.Conn()
+}
+
+var jsonCastPlaceholderRegexp = regexp.MustCompile(`(?i)\$([0-9]+)\s*::\s*jsonb?\s*(\[\s*\])?`)
+var byteaCastPlaceholderRegexp = regexp.MustCompile(`(?i)\$([0-9]+)\s*::\s*bytea\s*(\[\s*\])?`)
+
+type jsonPlaceholderCast struct {
+	argIndex int
+	isArray  bool
+}
+
+var jsonCastPlaceholderCache sync.Map // map[string][]jsonPlaceholderCast
+
+func jsonPlaceholderCasts(sql string) []jsonPlaceholderCast {
+	if cached, ok := jsonCastPlaceholderCache.Load(sql); ok {
+		return cached.([]jsonPlaceholderCast) //nolint:forcetypeassert
+	}
+
+	matches := jsonCastPlaceholderRegexp.FindAllStringSubmatch(sql, -1)
+	casts := make([]jsonPlaceholderCast, 0, len(matches))
+	seen := make(map[int]int, len(matches))
+
+	for _, match := range matches {
+		if len(match) < 3 {
+			continue
+		}
+
+		placeholderNum, err := strconv.Atoi(match[1])
+		if err != nil || placeholderNum < 1 {
+			continue
+		}
+
+		cast := jsonPlaceholderCast{
+			argIndex: placeholderNum - 1,
+			isArray:  strings.TrimSpace(match[2]) != "",
+		}
+
+		if priorIndex, found := seen[cast.argIndex]; found {
+			if cast.isArray {
+				casts[priorIndex].isArray = true
+			}
+			continue
+		}
+
+		seen[cast.argIndex] = len(casts)
+		casts = append(casts, cast)
+	}
+
+	jsonCastPlaceholderCache.Store(sql, casts)
+	return casts
+}
+
+func adaptArgsForJSONTextModes(defaultMode pgx.QueryExecMode, sql string, args []any) []any {
+	mode, bindArgStart, allowAdaptation := queryArgInfo(defaultMode, args)
+	if !allowAdaptation {
+		return args
+	}
+	if mode != pgx.QueryExecModeSimpleProtocol && mode != pgx.QueryExecModeExec {
+		return args
+	}
+
+	casts := jsonPlaceholderCasts(sql)
+	if len(casts) == 0 {
+		casts = nil
+	}
+
+	protectedByteaArgs := byteaPlaceholderArgIndices(sql)
+	var updatedArgs []any
+	adaptedArgs := make(map[int]struct{}, len(casts))
+	for _, cast := range casts {
+		argIndex := bindArgStart + cast.argIndex
+		if argIndex >= len(args) {
+			continue
+		}
+
+		updatedArg, changed := adaptArgForJSONTextMode(cast, args[argIndex])
+		if !changed {
+			continue
+		}
+
+		if updatedArgs == nil {
+			updatedArgs = append([]any(nil), args...)
+		}
+		updatedArgs[argIndex] = updatedArg
+		adaptedArgs[cast.argIndex] = struct{}{}
+	}
+
+	// Some generated SQL leaves JSON columns uncast in VALUES/SET lists. In
+	// simple/exec modes, []byte defaults to bytea, so adapt remaining []byte
+	// args except those explicitly cast as bytea.
+	for i := bindArgStart; i < len(args); i++ {
+		logicalIndex := i - bindArgStart
+		if _, isBytea := protectedByteaArgs[logicalIndex]; isBytea {
+			continue
+		}
+		if _, alreadyAdapted := adaptedArgs[logicalIndex]; alreadyAdapted {
+			continue
+		}
+
+		updatedArg, changed := adaptArgForJSONTextMode(jsonPlaceholderCast{isArray: false}, args[i])
+		if !changed {
+			updatedArg, changed = adaptArgForJSONTextMode(jsonPlaceholderCast{isArray: true}, args[i])
+			if !changed {
+				continue
+			}
+		}
+
+		if updatedArgs == nil {
+			updatedArgs = append([]any(nil), args...)
+		}
+		updatedArgs[i] = updatedArg
+	}
+
+	if updatedArgs != nil {
+		return updatedArgs
+	}
+	return args
+}
+
+func queryArgInfo(defaultMode pgx.QueryExecMode, args []any) (mode pgx.QueryExecMode, bindArgStart int, allowAdaptation bool) {
+	mode = defaultMode
+	allowAdaptation = true
+
+	for i := range len(args) {
+		switch arg := args[i].(type) {
+		case pgx.QueryResultFormats, pgx.QueryResultFormatsByOID:
+			continue
+		case pgx.QueryExecMode:
+			mode = arg
+		case pgx.QueryRewriter:
+			// Query rewriters can alter both SQL and args after this wrapper runs.
+			// Avoid adapting in this edge case.
+			allowAdaptation = false
+			return mode, 0, allowAdaptation
+		default:
+			return mode, i, allowAdaptation
+		}
+	}
+
+	return mode, len(args), allowAdaptation
+}
+
+func adaptArgForJSONTextMode(cast jsonPlaceholderCast, arg any) (updatedArg any, changed bool) {
+	if cast.isArray {
+		switch arg := arg.(type) {
+		case [][]byte:
+			if arg == nil {
+				return []json.RawMessage(nil), true
+			}
+			out := make([]json.RawMessage, len(arg))
+			for i := range len(arg) {
+				out[i] = json.RawMessage(arg[i])
+			}
+			return out, true
+		case []json.RawMessage:
+			return arg, false
+		default:
+			return arg, false
+		}
+	}
+
+	switch arg := arg.(type) {
+	case []byte:
+		return json.RawMessage(arg), true
+	case json.RawMessage:
+		return arg, false
+	default:
+		return arg, false
+	}
+}
+
+func byteaPlaceholderArgIndices(sql string) map[int]struct{} {
+	matches := byteaCastPlaceholderRegexp.FindAllStringSubmatch(sql, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	argIndices := make(map[int]struct{}, len(matches))
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+
+		placeholderNum, err := strconv.Atoi(match[1])
+		if err != nil || placeholderNum < 1 {
+			continue
+		}
+		argIndices[placeholderNum-1] = struct{}{}
+	}
+
+	return argIndices
 }
 
 func interpretError(err error) error {
