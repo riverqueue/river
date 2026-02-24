@@ -270,6 +270,106 @@ func TestMiddleware(t *testing.T) {
 		)
 	})
 
+	t.Run("PrunesOldestEntriesAtMaxTotalBytes", func(t *testing.T) {
+		t.Parallel()
+
+		maxTotalBytes, err := json.Marshal([]logAttempt{
+			{Attempt: 1, Log: `msg="Logged from worker"` + "\n"},
+			{Attempt: 2, Log: `msg="Logged from worker"` + "\n"},
+		})
+		require.NoError(t, err)
+
+		testWorker, bundle := setup(t, &MiddlewareConfig{
+			MaxTotalBytes: len(maxTotalBytes),
+		})
+
+		workRes, err := testWorker.Work(ctx, t, bundle.tx, loggingArgs{Message: "Logged from worker"}, nil)
+		require.NoError(t, err)
+
+		// Set state back to available and unfinalize the job to make it runnable again.
+		workRes.Job, err = bundle.driver.UnwrapExecutor(bundle.tx).JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
+			ID:                  workRes.Job.ID,
+			FinalizedAtDoUpdate: true,
+			FinalizedAt:         nil,
+			StateDoUpdate:       true,
+			State:               rivertype.JobStateAvailable,
+		})
+		require.NoError(t, err)
+
+		workRes, err = testWorker.WorkJob(ctx, t, bundle.tx, workRes.Job)
+		require.NoError(t, err)
+
+		// Set state back to available and unfinalize the job to make it runnable again.
+		workRes.Job, err = bundle.driver.UnwrapExecutor(bundle.tx).JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
+			ID:                  workRes.Job.ID,
+			FinalizedAtDoUpdate: true,
+			FinalizedAt:         nil,
+			StateDoUpdate:       true,
+			State:               rivertype.JobStateAvailable,
+		})
+		require.NoError(t, err)
+
+		workRes, err = testWorker.WorkJob(ctx, t, bundle.tx, workRes.Job)
+		require.NoError(t, err)
+
+		var metadataWithLog metadataWithLog
+		require.NoError(t, json.Unmarshal(workRes.Job.Metadata, &metadataWithLog))
+
+		require.Equal(t, []logAttempt{
+			{Attempt: 2, Log: `msg="Logged from worker"` + "\n"},
+			{Attempt: 3, Log: `msg="Logged from worker"` + "\n"},
+		}, metadataWithLog.RiverLog)
+	})
+
+	t.Run("RetainsLatestEntryWhenTotalLimitTiny", func(t *testing.T) {
+		t.Parallel()
+
+		testWorker, bundle := setup(t, &MiddlewareConfig{
+			MaxTotalBytes: 1,
+		})
+
+		workRes, err := testWorker.Work(ctx, t, bundle.tx, loggingArgs{Message: "Logged from worker"}, nil)
+		require.NoError(t, err)
+
+		// Set state back to available and unfinalize the job to make it runnable again.
+		workRes.Job, err = bundle.driver.UnwrapExecutor(bundle.tx).JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
+			ID:                  workRes.Job.ID,
+			FinalizedAtDoUpdate: true,
+			FinalizedAt:         nil,
+			StateDoUpdate:       true,
+			State:               rivertype.JobStateAvailable,
+		})
+		require.NoError(t, err)
+
+		workRes, err = testWorker.WorkJob(ctx, t, bundle.tx, workRes.Job)
+		require.NoError(t, err)
+
+		var metadataWithLog metadataWithLog
+		require.NoError(t, json.Unmarshal(workRes.Job.Metadata, &metadataWithLog))
+
+		require.Equal(t, []logAttempt{
+			{Attempt: 2, Log: `msg="Logged from worker"` + "\n"},
+		}, metadataWithLog.RiverLog)
+	})
+
+	t.Run("DefaultsMaxTotalBytes", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t, nil)
+
+		require.Equal(t, maxTotalBytes, bundle.middleware.config.MaxTotalBytes)
+	})
+
+	t.Run("ClampsMaxTotalBytes", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t, &MiddlewareConfig{
+			MaxTotalBytes: maxTotalBytesMax + 1,
+		})
+
+		require.Equal(t, maxTotalBytesMax, bundle.middleware.config.MaxTotalBytes)
+	})
+
 	t.Run("RawMiddleware", func(t *testing.T) {
 		t.Parallel()
 

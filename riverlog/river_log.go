@@ -17,9 +17,14 @@ import (
 )
 
 const (
-	maxSizeMB    = 2
-	maxSizeBytes = maxSizeMB * 1024 * 1024
-	metadataKey  = "river:log"
+	maxSizeMB      = 2
+	maxSizeBytes   = maxSizeMB * 1024 * 1024
+	maxTotalSizeMB = 8
+	maxTotalBytes  = maxTotalSizeMB * 1024 * 1024
+	// Hard ceiling to prevent pathological allocations from extreme configs.
+	maxTotalSizeMaxMB = 64
+	maxTotalBytesMax  = maxTotalSizeMaxMB * 1024 * 1024
+	metadataKey    = "river:log"
 )
 
 type contextKey struct{}
@@ -77,6 +82,16 @@ type MiddlewareConfig struct {
 	//
 	// Defaults to 2 MB (which is per job attempt).
 	MaxSizeBytes int
+
+	// MaxTotalBytes is the maximum total size of all persisted river logs for a
+	// job attempt history. If appending the latest attempt would exceed this
+	// size, oldest log entries are dropped first.
+	//
+	// The latest entry is always retained, even if doing so means the resulting
+	// payload exceeds MaxTotalBytes.
+	//
+	// Defaults to 8 MB. Values larger than 64 MB are clamped to 64 MB.
+	MaxTotalBytes int
 }
 
 // NewMiddleware initializes a new Middleware with the given slog handler
@@ -136,6 +151,10 @@ func defaultConfig(config *MiddlewareConfig) *MiddlewareConfig {
 	}
 
 	config.MaxSizeBytes = cmp.Or(config.MaxSizeBytes, maxSizeBytes)
+	config.MaxTotalBytes = cmp.Or(config.MaxTotalBytes, maxTotalBytes)
+	if config.MaxTotalBytes > maxTotalBytesMax {
+		config.MaxTotalBytes = maxTotalBytesMax
+	}
 
 	return config
 }
@@ -193,13 +212,20 @@ func (m *Middleware) Work(ctx context.Context, job *rivertype.JobRow, doInner fu
 			logData = logData[0:m.config.MaxSizeBytes]
 		}
 
-		allLogDataBytes, err := json.Marshal(append(existingLogData.RiverLog, logAttempt{
+		allLogDataBytes, numDroppedEntries, err := marshalLogDataWithCap(append(existingLogData.RiverLog, logAttempt{
 			Attempt: job.Attempt,
 			Log:     logData,
-		}))
+		}), m.config.MaxTotalBytes)
 		if err != nil {
 			m.Logger.ErrorContext(ctx, m.Name+": Error marshaling log data",
 				slog.Any("error", err),
+			)
+		}
+
+		if numDroppedEntries > 0 {
+			m.Logger.WarnContext(ctx, m.Name+": Logs size exceeded total maximum; dropping oldest entries",
+				slog.Int("max_total_size", m.config.MaxTotalBytes),
+				slog.Int("num_entries_dropped", numDroppedEntries),
 			)
 		}
 
@@ -207,4 +233,28 @@ func (m *Middleware) Work(ctx context.Context, job *rivertype.JobRow, doInner fu
 	}()
 
 	return doInner(ctx)
+}
+
+func marshalLogDataWithCap(allLogData []logAttempt, maxTotalBytes int) ([]byte, int, error) {
+	allLogDataBytes, err := json.Marshal(allLogData)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if maxTotalBytes <= 0 || len(allLogDataBytes) <= maxTotalBytes {
+		return allLogDataBytes, 0, nil
+	}
+
+	// Drop oldest entries first, while always retaining the latest one.
+	var numDroppedEntries int
+	for numDroppedEntries < len(allLogData)-1 && len(allLogDataBytes) > maxTotalBytes {
+		numDroppedEntries++
+
+		allLogDataBytes, err = json.Marshal(allLogData[numDroppedEntries:])
+		if err != nil {
+			return nil, numDroppedEntries, err
+		}
+	}
+
+	return allLogDataBytes, numDroppedEntries, nil
 }
