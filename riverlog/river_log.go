@@ -168,10 +168,14 @@ type metadataWithLog struct {
 	RiverLog []logAttempt `json:"river:log"`
 }
 
+type metadataWithRawLog struct {
+	RiverLog []json.RawMessage `json:"river:log"`
+}
+
 func (m *Middleware) Work(ctx context.Context, job *rivertype.JobRow, doInner func(context.Context) error) error {
 	var (
-		existingLogData metadataWithLog
-		logBuf          bytes.Buffer
+		existingRawLogData metadataWithRawLog
+		logBuf             bytes.Buffer
 	)
 
 	switch {
@@ -184,7 +188,7 @@ func (m *Middleware) Work(ctx context.Context, job *rivertype.JobRow, doInner fu
 		return errors.New("expected either newContextLogger or newSlogHandler to be set")
 	}
 
-	if err := json.Unmarshal(job.Metadata, &existingLogData); err != nil {
+	if err := json.Unmarshal(job.Metadata, &existingRawLogData); err != nil {
 		return err
 	}
 
@@ -212,14 +216,23 @@ func (m *Middleware) Work(ctx context.Context, job *rivertype.JobRow, doInner fu
 			logData = logData[0:m.config.MaxSizeBytes]
 		}
 
-		allLogDataBytes, numDroppedEntries, err := marshalLogDataWithCap(append(existingLogData.RiverLog, logAttempt{
+		newLogEntryBytes, err := json.Marshal(logAttempt{
 			Attempt: job.Attempt,
 			Log:     logData,
-		}), m.config.MaxTotalBytes)
+		})
 		if err != nil {
 			m.Logger.ErrorContext(ctx, m.Name+": Error marshaling log data",
 				slog.Any("error", err),
 			)
+			return
+		}
+
+		allLogDataBytes, numDroppedEntries, err := marshalRawLogDataWithCap(append(existingRawLogData.RiverLog, json.RawMessage(newLogEntryBytes)), m.config.MaxTotalBytes)
+		if err != nil {
+			m.Logger.ErrorContext(ctx, m.Name+": Error marshaling log data",
+				slog.Any("error", err),
+			)
+			return
 		}
 
 		if numDroppedEntries > 0 {
@@ -235,7 +248,7 @@ func (m *Middleware) Work(ctx context.Context, job *rivertype.JobRow, doInner fu
 	return doInner(ctx)
 }
 
-func marshalLogDataWithCap(allLogData []logAttempt, maxTotalBytes int) ([]byte, int, error) {
+func marshalRawLogDataWithCap(allLogData []json.RawMessage, maxTotalBytes int) ([]byte, int, error) {
 	allLogDataBytes, err := json.Marshal(allLogData)
 	if err != nil {
 		return nil, 0, err
