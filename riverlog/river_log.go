@@ -8,8 +8,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -168,15 +172,8 @@ type metadataWithLog struct {
 	RiverLog []logAttempt `json:"river:log"`
 }
 
-type metadataWithRawLog struct {
-	RiverLog []json.RawMessage `json:"river:log"`
-}
-
 func (m *Middleware) Work(ctx context.Context, job *rivertype.JobRow, doInner func(context.Context) error) error {
-	var (
-		existingRawLogData metadataWithRawLog
-		logBuf             bytes.Buffer
-	)
+	var logBuf bytes.Buffer
 
 	switch {
 	case m.newCustomContext != nil:
@@ -186,10 +183,6 @@ func (m *Middleware) Work(ctx context.Context, job *rivertype.JobRow, doInner fu
 		ctx = context.WithValue(ctx, contextKey{}, logger)
 	default:
 		return errors.New("expected either newContextLogger or newSlogHandler to be set")
-	}
-
-	if err := json.Unmarshal(job.Metadata, &existingRawLogData); err != nil {
-		return err
 	}
 
 	metadataUpdates, hasMetadataUpdates := jobexecutor.MetadataUpdatesFromWorkContext(ctx)
@@ -227,7 +220,7 @@ func (m *Middleware) Work(ctx context.Context, job *rivertype.JobRow, doInner fu
 			return
 		}
 
-		allLogDataBytes, numDroppedEntries, err := marshalRawLogDataWithCap(append(existingRawLogData.RiverLog, json.RawMessage(newLogEntryBytes)), m.config.MaxTotalBytes)
+		allLogDataBytes, numDroppedEntries, err := appendLogDataWithCap(job.Metadata, newLogEntryBytes, m.config.MaxTotalBytes)
 		if err != nil {
 			m.Logger.ErrorContext(ctx, m.Name+": Error marshaling log data",
 				slog.Any("error", err),
@@ -248,8 +241,24 @@ func (m *Middleware) Work(ctx context.Context, job *rivertype.JobRow, doInner fu
 	return doInner(ctx)
 }
 
-func marshalRawLogDataWithCap(allLogData []json.RawMessage, maxTotalBytes int) ([]byte, int, error) {
-	allLogDataBytes, err := json.Marshal(allLogData)
+func appendLogDataWithCap(metadataBytes, newLogEntryBytes []byte, maxTotalBytes int) ([]byte, int, error) {
+	if !json.Valid(metadataBytes) {
+		return nil, 0, errors.New("metadata is not valid JSON")
+	}
+
+	existingLogData := gjson.GetBytes(metadataBytes, metadataKey)
+	var allLogDataBytes []byte
+	switch {
+	case !existingLogData.Exists():
+		allLogDataBytes = []byte("[]")
+	case existingLogData.IsArray():
+		allLogDataBytes = []byte(existingLogData.Raw)
+	default:
+		return nil, 0, fmt.Errorf("%q value is not an array", metadataKey)
+	}
+
+	var err error
+	allLogDataBytes, err = sjson.SetRawBytes(allLogDataBytes, "-1", newLogEntryBytes)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -259,14 +268,15 @@ func marshalRawLogDataWithCap(allLogData []json.RawMessage, maxTotalBytes int) (
 	}
 
 	// Drop oldest entries first, while always retaining the latest one.
+	numEntries := len(gjson.ParseBytes(allLogDataBytes).Array())
 	var numDroppedEntries int
-	for numDroppedEntries < len(allLogData)-1 && len(allLogDataBytes) > maxTotalBytes {
-		numDroppedEntries++
-
-		allLogDataBytes, err = json.Marshal(allLogData[numDroppedEntries:])
+	for numEntries > 1 && len(allLogDataBytes) > maxTotalBytes {
+		allLogDataBytes, err = sjson.DeleteBytes(allLogDataBytes, "0")
 		if err != nil {
 			return nil, numDroppedEntries, err
 		}
+		numEntries--
+		numDroppedEntries++
 	}
 
 	return allLogDataBytes, numDroppedEntries, nil

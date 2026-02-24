@@ -280,7 +280,8 @@ func TestMiddleware(t *testing.T) {
 		require.NoError(t, err)
 
 		testWorker, bundle := setup(t, &MiddlewareConfig{
-			MaxTotalBytes: len(maxTotalBytes),
+			// Keep two entries, force pruning once a third is appended.
+			MaxTotalBytes: len(maxTotalBytes) + 16,
 		})
 
 		workRes, err := testWorker.Work(ctx, t, bundle.tx, loggingArgs{Message: "Logged from worker"}, nil)
