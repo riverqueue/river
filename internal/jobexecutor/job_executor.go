@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 
 	"github.com/riverqueue/river/internal/execution"
 	"github.com/riverqueue/river/internal/hooklookup"
@@ -345,16 +344,17 @@ func (e *JobExecutor) invokeErrorHandler(ctx context.Context, res *jobExecutorRe
 func (e *JobExecutor) reportResult(ctx context.Context, jobRow *rivertype.JobRow, res *jobExecutorResult) {
 	var snoozeErr *rivertype.JobSnoozeError
 
-	var (
-		metadataUpdatesBytes []byte
-		err                  error
-	)
-	if len(res.MetadataUpdates) > 0 {
-		metadataUpdatesBytes, err = json.Marshal(res.MetadataUpdates)
-		if err != nil {
-			e.Logger.ErrorContext(ctx, e.Name+": Failed to marshal metadata updates", slog.String("error", err.Error()))
-			return
+	marshalMetadataUpdates := func(metadataUpdates map[string]any) ([]byte, error) {
+		if len(metadataUpdates) == 0 {
+			return nil, nil
 		}
+
+		metadataUpdatesBytes, err := json.Marshal(metadataUpdates)
+		if err != nil {
+			return nil, err
+		}
+
+		return metadataUpdatesBytes, nil
 	}
 
 	if res.Err != nil && errors.As(res.Err, &snoozeErr) {
@@ -366,9 +366,16 @@ func (e *JobExecutor) reportResult(ctx context.Context, jobRow *rivertype.JobRow
 		nextAttemptScheduledAt := time.Now().Add(snoozeErr.Duration)
 
 		snoozesValue := gjson.GetBytes(jobRow.Metadata, "snoozes").Int()
-		metadataUpdatesBytes, err = sjson.SetBytes(metadataUpdatesBytes, "snoozes", snoozesValue+1)
+		if res.MetadataUpdates == nil {
+			res.MetadataUpdates = make(map[string]any)
+		}
+		// Set snooze count in the metadata map before marshaling so we avoid
+		// rewriting a potentially large encoded metadata payload.
+		res.MetadataUpdates["snoozes"] = snoozesValue + 1
+
+		metadataUpdatesBytes, err := marshalMetadataUpdates(res.MetadataUpdates)
 		if err != nil {
-			e.Logger.ErrorContext(ctx, e.Name+": Failed to set snoozes", slog.String("error", err.Error()))
+			e.Logger.ErrorContext(ctx, e.Name+": Failed to marshal metadata updates", slog.String("error", err.Error()))
 			return
 		}
 
@@ -388,6 +395,12 @@ func (e *JobExecutor) reportResult(ctx context.Context, jobRow *rivertype.JobRow
 				slog.Int64("job_id", jobRow.ID),
 			)
 		}
+		return
+	}
+
+	metadataUpdatesBytes, err := marshalMetadataUpdates(res.MetadataUpdates)
+	if err != nil {
+		e.Logger.ErrorContext(ctx, e.Name+": Failed to marshal metadata updates", slog.String("error", err.Error()))
 		return
 	}
 

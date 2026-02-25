@@ -2,6 +2,9 @@ package riverdrivertest
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -134,4 +137,178 @@ func Benchmark[TTx any](ctx context.Context, b *testing.B,
 			}
 		}
 	})
+
+	b.Run("JobSetStateIfRunningMany_LargeMetadata", func(b *testing.B) {
+		if testing.Short() {
+			b.Skip("skipping benchmark in short mode")
+		}
+
+		exec, schema := setup(ctx, b)
+
+		testCases := []struct {
+			name              string
+			metadataSizeBytes int
+		}{
+			{name: "Metadata2MB", metadataSizeBytes: 2 * 1024 * 1024},
+			{name: "Metadata8MB", metadataSizeBytes: 8 * 1024 * 1024},
+		}
+
+		for _, tc := range testCases {
+			b.Run(tc.name, func(b *testing.B) {
+				largeMetadata := makeBenchmarkMetadataWithRiverLogSize(tc.metadataSizeBytes)
+				stateRunning := rivertype.JobStateRunning
+
+				insertedJobs, err := exec.JobInsertFullMany(ctx, &riverdriver.JobInsertFullManyParams{
+					Jobs: []*riverdriver.JobInsertFullParams{
+						testfactory.Job_Build(b, &testfactory.JobOpts{
+							Metadata: largeMetadata,
+							State:    &stateRunning,
+						}),
+					},
+					Schema: schema,
+				})
+				if err != nil {
+					b.Fatalf("failed to insert benchmark job: %v", err)
+				}
+				if len(insertedJobs) != 1 {
+					b.Fatalf("expected exactly one inserted job, got %d", len(insertedJobs))
+				}
+
+				now := time.Now().UTC()
+				params := &riverdriver.JobSetStateIfRunningManyParams{
+					ID:              []int64{insertedJobs[0].ID},
+					Attempt:         []*int{nil},
+					ErrData:         [][]byte{nil},
+					FinalizedAt:     []*time.Time{nil},
+					MetadataDoMerge: []bool{true},
+					MetadataUpdates: [][]byte{largeMetadata},
+					ScheduledAt:     []*time.Time{&now},
+					Schema:          schema,
+					State:           []rivertype.JobState{rivertype.JobStateScheduled},
+				}
+
+				b.ReportAllocs()
+				b.ResetTimer()
+
+				for range b.N {
+					if _, err := exec.JobSetStateIfRunningMany(ctx, params); err != nil {
+						b.Fatalf("failed to update benchmark job: %v", err)
+					}
+				}
+			})
+		}
+	})
+
+	b.Run("JobGetAvailable_LargeMetadata", func(b *testing.B) {
+		if testing.Short() {
+			b.Skip("skipping benchmark in short mode")
+		}
+
+		exec, schema := setup(ctx, b)
+
+		testCases := []struct {
+			name              string
+			metadataSizeBytes int
+		}{
+			{name: "Metadata2MB", metadataSizeBytes: 2 * 1024 * 1024},
+			{name: "Metadata8MB", metadataSizeBytes: 8 * 1024 * 1024},
+		}
+
+		for _, tc := range testCases {
+			b.Run(tc.name, func(b *testing.B) {
+				largeMetadata := makeBenchmarkMetadataWithRiverLogSize(tc.metadataSizeBytes)
+				now := time.Now().UTC()
+
+				insertedJobs, err := exec.JobInsertFullMany(ctx, &riverdriver.JobInsertFullManyParams{
+					Jobs: []*riverdriver.JobInsertFullParams{
+						testfactory.Job_Build(b, &testfactory.JobOpts{
+							Metadata:    largeMetadata,
+							ScheduledAt: &now,
+						}),
+					},
+					Schema: schema,
+				})
+				if err != nil {
+					b.Fatalf("failed to insert benchmark job: %v", err)
+				}
+				if len(insertedJobs) != 1 {
+					b.Fatalf("expected exactly one inserted job, got %d", len(insertedJobs))
+				}
+
+				schemaPrefix := ""
+				if schema != "" {
+					schemaPrefix = schema + "."
+				}
+				resetSQL := fmt.Sprintf(
+					"UPDATE %sriver_job SET state = 'available', attempt = 0 WHERE id = %d",
+					schemaPrefix,
+					insertedJobs[0].ID,
+				)
+
+				getAvailableParams := &riverdriver.JobGetAvailableParams{
+					ClientID:       "bench-client-id",
+					MaxAttemptedBy: 100,
+					MaxToLock:      1,
+					Now:            &now,
+					Queue:          insertedJobs[0].Queue,
+					Schema:         schema,
+				}
+
+				b.ReportAllocs()
+				b.ResetTimer()
+
+				for range b.N {
+					jobs, err := exec.JobGetAvailable(ctx, getAvailableParams)
+					if err != nil {
+						b.Fatalf("failed to fetch benchmark job: %v", err)
+					}
+					if len(jobs) != 1 {
+						b.Fatalf("expected exactly one fetched job, got %d", len(jobs))
+					}
+
+					if len(jobs[0].Metadata) == 0 {
+						b.Fatal("expected non-empty job metadata")
+					}
+
+					// Reset job state for the next benchmark iteration without
+					// using a RETURNING query that would read metadata again.
+					if err := exec.Exec(ctx, resetSQL); err != nil {
+						b.Fatalf("failed to reset benchmark job: %v", err)
+					}
+				}
+			})
+		}
+	})
+}
+
+type benchmarkLogAttempt struct {
+	Attempt int    `json:"attempt"`
+	Log     string `json:"log"`
+}
+
+func makeBenchmarkMetadataWithRiverLogSize(targetBytes int) []byte {
+	if targetBytes <= 0 {
+		return []byte(`{}`)
+	}
+
+	const perEntryLogSize = 1024
+	payload := strings.Repeat("x", perEntryLogSize)
+	numEntries := max(1, targetBytes/perEntryLogSize)
+
+	logs := make([]benchmarkLogAttempt, numEntries)
+	for i := range numEntries {
+		logs[i] = benchmarkLogAttempt{
+			Attempt: i + 1,
+			Log:     payload,
+		}
+	}
+
+	metadataBytes, err := json.Marshal(map[string]any{
+		"river:log": logs,
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	return metadataBytes
 }
