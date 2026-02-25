@@ -1617,6 +1617,7 @@ func Test_Client_Stop_Common(t *testing.T) {
 
 		jobDoneChan := make(chan struct{})
 		jobStartedChan := make(chan int64)
+		jobCanceledChan := make(chan struct{}, 1)
 
 		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 			select {
@@ -1627,7 +1628,13 @@ func Test_Client_Stop_Common(t *testing.T) {
 
 			select {
 			case <-ctx.Done():
-				require.FailNow(t, "Did not expect job to be cancelled")
+				// Graceful Stop should wait for in-progress work rather than
+				// cancelling worker context (that's StopAndCancel behavior).
+				select {
+				case jobCanceledChan <- struct{}{}:
+				default:
+				}
+				return ctx.Err()
 			case <-jobDoneChan:
 			}
 
@@ -1642,25 +1649,27 @@ func Test_Client_Stop_Common(t *testing.T) {
 		startedJobID := riversharedtest.WaitOrTimeout(t, jobStartedChan)
 		require.Equal(t, insertRes.Job.ID, startedJobID)
 
-		go func() {
-			<-time.After(100 * time.Millisecond)
-			close(jobDoneChan)
-		}()
-
 		t.Logf("Shutting down client with timeout, but while jobs are still in progress")
 
 		// Context should expire while jobs are still in progress:
 		stopCtx, stopCancel := context.WithTimeout(ctx, 50*time.Millisecond)
 		t.Cleanup(stopCancel)
 
+		// Keep the job blocked while waiting for Stop so this assertion doesn't
+		// depend on relative scheduling of short timers in CI.
 		err = client.Stop(stopCtx)
 		require.Equal(t, context.DeadlineExceeded, err)
 
 		select {
-		case <-jobDoneChan:
-			require.FailNow(t, "Expected Stop to return before job was done")
+		case <-jobCanceledChan:
+			require.FailNow(t, "Did not expect job to be cancelled")
 		default:
 		}
+
+		// The first Stop timed out by design. Now release the worker and stop
+		// again so test cleanup doesn't race an in-progress shutdown.
+		close(jobDoneChan)
+		require.NoError(t, client.Stop(ctx))
 	})
 
 	t.Run("WithContinualInsertionNoJobsLeftRunning", func(t *testing.T) {
