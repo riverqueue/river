@@ -13,7 +13,6 @@ import (
 	"log/slog"
 
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -28,7 +27,7 @@ const (
 	// Hard ceiling to prevent pathological allocations from extreme configs.
 	maxTotalSizeMaxMB = 64
 	maxTotalBytesMax  = maxTotalSizeMaxMB * 1024 * 1024
-	metadataKey    = "river:log"
+	metadataKey       = "river:log"
 )
 
 type contextKey struct{}
@@ -155,10 +154,7 @@ func defaultConfig(config *MiddlewareConfig) *MiddlewareConfig {
 	}
 
 	config.MaxSizeBytes = cmp.Or(config.MaxSizeBytes, maxSizeBytes)
-	config.MaxTotalBytes = cmp.Or(config.MaxTotalBytes, maxTotalBytes)
-	if config.MaxTotalBytes > maxTotalBytesMax {
-		config.MaxTotalBytes = maxTotalBytesMax
-	}
+	config.MaxTotalBytes = min(cmp.Or(config.MaxTotalBytes, maxTotalBytes), maxTotalBytesMax)
 
 	return config
 }
@@ -192,26 +188,26 @@ func (m *Middleware) Work(ctx context.Context, job *rivertype.JobRow, doInner fu
 
 	// This all runs invariant of whether the job panics or returns an error.
 	defer func() {
-		logData := logBuf.String()
+		logBytes := logBuf.Bytes()
 
 		// Return early if nothing ended up getting logged.
-		if len(logData) < 1 {
+		if len(logBytes) < 1 {
 			return
 		}
 
 		// Postgres JSONB is limited to 255MB, but it would be a bad idea to get
 		// anywhere close to that limit here.
-		if len(logData) > m.config.MaxSizeBytes {
+		if len(logBytes) > m.config.MaxSizeBytes {
 			m.Logger.WarnContext(ctx, m.Name+": Logs size exceeded maximum; truncating",
-				slog.Int("logs_size", len(logData)),
+				slog.Int("logs_size", len(logBytes)),
 				slog.Int("max_size", m.config.MaxSizeBytes),
 			)
-			logData = logData[0:m.config.MaxSizeBytes]
+			logBytes = logBytes[0:m.config.MaxSizeBytes]
 		}
 
 		newLogEntryBytes, err := json.Marshal(logAttempt{
 			Attempt: job.Attempt,
-			Log:     logData,
+			Log:     string(logBytes),
 		})
 		if err != nil {
 			m.Logger.ErrorContext(ctx, m.Name+": Error marshaling log data",
@@ -242,42 +238,123 @@ func (m *Middleware) Work(ctx context.Context, job *rivertype.JobRow, doInner fu
 }
 
 func appendLogDataWithCap(metadataBytes, newLogEntryBytes []byte, maxTotalBytes int) ([]byte, int, error) {
-	if !json.Valid(metadataBytes) {
-		return nil, 0, errors.New("metadata is not valid JSON")
-	}
-
 	existingLogData := gjson.GetBytes(metadataBytes, metadataKey)
-	var allLogDataBytes []byte
+	var existingLogArrayBytes []byte
 	switch {
 	case !existingLogData.Exists():
-		allLogDataBytes = []byte("[]")
+		existingLogArrayBytes = []byte("[]")
 	case existingLogData.IsArray():
-		allLogDataBytes = []byte(existingLogData.Raw)
+		// Slice raw JSON straight from metadata bytes to avoid an extra copy.
+		existingLogArrayBytes = metadataBytes[existingLogData.Index : existingLogData.Index+len(existingLogData.Raw)]
 	default:
 		return nil, 0, fmt.Errorf("%q value is not an array", metadataKey)
 	}
 
-	var err error
-	allLogDataBytes, err = sjson.SetRawBytes(allLogDataBytes, "-1", newLogEntryBytes)
+	existingElementBounds, err := getArrayElementBounds(existingLogArrayBytes)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	if maxTotalBytes <= 0 || len(allLogDataBytes) <= maxTotalBytes {
-		return allLogDataBytes, 0, nil
+	// Determine the smallest suffix to keep that still fits with the new entry.
+	// This keeps pruning oldest-first while avoiding repeated full rewrites.
+	keepStart := getKeepStart(existingElementBounds, len(newLogEntryBytes), maxTotalBytes)
+
+	// Build the final array once from the kept suffix plus the new entry.
+	appendedLogDataBytes := buildAppendedArray(existingLogArrayBytes, existingElementBounds, keepStart, newLogEntryBytes)
+	numDroppedEntries := min(keepStart, len(existingElementBounds))
+
+	return appendedLogDataBytes, numDroppedEntries, nil
+}
+
+type arrayElementBounds struct {
+	Start int
+	End   int
+}
+
+func getArrayElementBounds(arrayBytes []byte) ([]arrayElementBounds, error) {
+	arrResult := gjson.ParseBytes(arrayBytes)
+	if !arrResult.IsArray() {
+		return nil, errors.New("expected a JSON array")
 	}
 
-	// Drop oldest entries first, while always retaining the latest one.
-	numEntries := len(gjson.ParseBytes(allLogDataBytes).Array())
-	var numDroppedEntries int
-	for numEntries > 1 && len(allLogDataBytes) > maxTotalBytes {
-		allLogDataBytes, err = sjson.DeleteBytes(allLogDataBytes, "0")
-		if err != nil {
-			return nil, numDroppedEntries, err
+	elements := arrResult.Array()
+	bounds := make([]arrayElementBounds, len(elements))
+	for i, elem := range elements {
+		if elem.Index < 0 {
+			return nil, errors.New("failed to determine array element index")
 		}
-		numEntries--
-		numDroppedEntries++
+		bounds[i] = arrayElementBounds{
+			Start: elem.Index,
+			End:   elem.Index + len(elem.Raw),
+		}
+	}
+	return bounds, nil
+}
+
+func getKeepStart(bounds []arrayElementBounds, newEntryLen, maxTotalBytes int) int {
+	if maxTotalBytes <= 0 {
+		return 0
 	}
 
-	return allLogDataBytes, numDroppedEntries, nil
+	// Keep newest entry even if it's larger than the configured cap.
+	newOnlyLen := 2 + newEntryLen // `[` + entry + `]`
+	if newOnlyLen > maxTotalBytes {
+		return len(bounds)
+	}
+
+	if len(bounds) == 0 {
+		return 0
+	}
+
+	lastEnd := bounds[len(bounds)-1].End
+
+	// Iterate from oldest to newest so we drop the minimum number of entries
+	// necessary to fit the configured cap.
+	for keepStart := 0; keepStart <= len(bounds); keepStart++ {
+		contentLen := newEntryLen
+		if keepStart < len(bounds) {
+			// Use actual byte offsets from parsed elements so separator
+			// whitespace is fully counted toward the cap.
+			keptContentLen := lastEnd - bounds[keepStart].Start
+			contentLen += 1 + keptContentLen // comma between kept suffix and new entry
+		}
+		totalLen := 2 + contentLen // `[` + content + `]`
+		if totalLen <= maxTotalBytes {
+			return keepStart
+		}
+	}
+
+	return len(bounds)
+}
+
+func buildAppendedArray(existingArrayBytes []byte, bounds []arrayElementBounds, keepStart int, newEntryBytes []byte) []byte {
+	totalLen := 0
+	maxInt := int(^uint(0) >> 1)
+
+	// Preallocation is an optimization only. If length math would overflow,
+	// fall back to zero-capacity and let append grow as needed.
+	if keepStart >= len(bounds) {
+		if len(newEntryBytes) <= maxInt-2 {
+			totalLen = 2 + len(newEntryBytes)
+		}
+	} else {
+		// Kept suffix is contiguous in the original array bytes, so copy once.
+		keptContentLen := bounds[len(bounds)-1].End - bounds[keepStart].Start
+		if keptContentLen >= 0 && len(newEntryBytes) <= maxInt-3 && keptContentLen <= maxInt-3-len(newEntryBytes) {
+			totalLen = 3 + keptContentLen + len(newEntryBytes) // [] + comma + new entry
+		}
+	}
+
+	result := make([]byte, 0, totalLen)
+	result = append(result, '[')
+
+	if keepStart < len(bounds) {
+		result = append(result, existingArrayBytes[bounds[keepStart].Start:bounds[len(bounds)-1].End]...)
+		result = append(result, ',')
+	}
+
+	result = append(result, newEntryBytes...)
+	result = append(result, ']')
+
+	return result
 }

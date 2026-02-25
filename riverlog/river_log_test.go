@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -41,6 +42,159 @@ func TestLogger(t *testing.T) {
 		require.PanicsWithValue(t, "no logger in context; do you have riverlog.Middleware configured?", func() {
 			Logger(ctx).InfoContext(ctx, "This will panic")
 		})
+	})
+}
+
+func TestAppendLogDataWithCap(t *testing.T) {
+	t.Parallel()
+
+	marshalLog := func(tb testing.TB, attempt int, log string) []byte {
+		tb.Helper()
+		b, err := json.Marshal(logAttempt{Attempt: attempt, Log: log})
+		require.NoError(tb, err)
+		return b
+	}
+
+	marshalMetadataWithLogs := func(tb testing.TB, logs []logAttempt) []byte {
+		tb.Helper()
+		b, err := json.Marshal(map[string]any{
+			metadataKey: logs,
+		})
+		require.NoError(tb, err)
+		return b
+	}
+
+	unmarshalLogs := func(tb testing.TB, rawArray []byte) []logAttempt {
+		tb.Helper()
+		var logs []logAttempt
+		require.NoError(tb, json.Unmarshal(rawArray, &logs))
+		return logs
+	}
+
+	t.Run("MissingKeyStartsFromEmptyArray", func(t *testing.T) {
+		t.Parallel()
+
+		newEntry := marshalLog(t, 1, "new")
+		result, dropped, err := appendLogDataWithCap([]byte(`{"other":"value"}`), newEntry, maxTotalBytes)
+		require.NoError(t, err)
+		require.Zero(t, dropped)
+		require.Equal(t, []logAttempt{{Attempt: 1, Log: "new"}}, unmarshalLogs(t, result))
+	})
+
+	t.Run("NonArrayLogValueReturnsError", func(t *testing.T) {
+		t.Parallel()
+
+		newEntry := marshalLog(t, 1, "new")
+		_, _, err := appendLogDataWithCap([]byte(`{"river:log":{"not":"array"}}`), newEntry, maxTotalBytes)
+		require.EqualError(t, err, `"river:log" value is not an array`)
+	})
+
+	t.Run("PrunesOldestEntriesOnlyAsNeeded", func(t *testing.T) {
+		t.Parallel()
+
+		existing := []logAttempt{
+			{Attempt: 1, Log: "a"},
+			{Attempt: 2, Log: "b"},
+			{Attempt: 3, Log: "c"},
+		}
+		newEntry := marshalLog(t, 4, "d")
+
+		target, err := json.Marshal([]logAttempt{
+			{Attempt: 2, Log: "b"},
+			{Attempt: 3, Log: "c"},
+			{Attempt: 4, Log: "d"},
+		})
+		require.NoError(t, err)
+
+		result, dropped, err := appendLogDataWithCap(marshalMetadataWithLogs(t, existing), newEntry, len(target))
+		require.NoError(t, err)
+		require.Equal(t, 1, dropped)
+		require.Equal(t, []logAttempt{
+			{Attempt: 2, Log: "b"},
+			{Attempt: 3, Log: "c"},
+			{Attempt: 4, Log: "d"},
+		}, unmarshalLogs(t, result))
+	})
+
+	t.Run("KeepsNewestEntryEvenIfOverCap", func(t *testing.T) {
+		t.Parallel()
+
+		existing := []logAttempt{
+			{Attempt: 1, Log: "a"},
+			{Attempt: 2, Log: "b"},
+		}
+		newEntry := marshalLog(t, 3, strings.Repeat("x", 64))
+
+		result, dropped, err := appendLogDataWithCap(marshalMetadataWithLogs(t, existing), newEntry, 8)
+		require.NoError(t, err)
+		require.Equal(t, len(existing), dropped)
+		require.Equal(t, []logAttempt{
+			{Attempt: 3, Log: strings.Repeat("x", 64)},
+		}, unmarshalLogs(t, result))
+	})
+
+	t.Run("NoCapKeepsEverything", func(t *testing.T) {
+		t.Parallel()
+
+		existing := []logAttempt{
+			{Attempt: 1, Log: "a"},
+		}
+		newEntry := marshalLog(t, 2, "b")
+
+		result, dropped, err := appendLogDataWithCap(marshalMetadataWithLogs(t, existing), newEntry, 0)
+		require.NoError(t, err)
+		require.Zero(t, dropped)
+		require.Equal(t, []logAttempt{
+			{Attempt: 1, Log: "a"},
+			{Attempt: 2, Log: "b"},
+		}, unmarshalLogs(t, result))
+	})
+
+	t.Run("LargeExistingPayloadPrunesToCap", func(t *testing.T) {
+		t.Parallel()
+
+		// Simulate externally-written oversized payloads in metadata.
+		existing := []logAttempt{
+			{Attempt: 1, Log: strings.Repeat("x", 4*1024*1024)},
+		}
+		newEntry := marshalLog(t, 2, "new")
+
+		// Cap is small enough that only the new entry can remain.
+		const maxTotalBytes = 256
+
+		result, dropped, err := appendLogDataWithCap(marshalMetadataWithLogs(t, existing), newEntry, maxTotalBytes)
+		require.NoError(t, err)
+		require.Equal(t, 1, dropped)
+		require.LessOrEqual(t, len(result), maxTotalBytes)
+		require.Equal(t, []logAttempt{
+			{Attempt: 2, Log: "new"},
+		}, unmarshalLogs(t, result))
+	})
+
+	t.Run("WhitespaceSeparatorsCountTowardsCap", func(t *testing.T) {
+		t.Parallel()
+
+		// jsonb canonicalization in Postgres usually removes separator
+		// whitespace, so this shape is unlikely for production rows loaded from
+		// the database. We still keep this test because the cap logic must remain
+		// correct for any valid JSON input. If separators include spaces/newlines,
+		// those bytes still count toward MaxTotalBytes and must be included in the
+		// retention calculation.
+		existingMetadata := []byte(`{"river:log":[{"attempt":1,"log":"a"},            {"attempt":2,"log":"b"},            {"attempt":3,"log":"c"}]}`)
+		newEntry := marshalLog(t, 4, "d")
+
+		// This cap is large enough to fit [2,3,4] only if separator whitespace is
+		// ignored. Correct behavior must count all bytes in the final JSON.
+		const maxTotalBytes = 73
+
+		result, dropped, err := appendLogDataWithCap(existingMetadata, newEntry, maxTotalBytes)
+		require.NoError(t, err)
+		require.LessOrEqual(t, len(result), maxTotalBytes)
+		require.Equal(t, 2, dropped)
+		require.Equal(t, []logAttempt{
+			{Attempt: 3, Log: "c"},
+			{Attempt: 4, Log: "d"},
+		}, unmarshalLogs(t, result))
 	})
 }
 
