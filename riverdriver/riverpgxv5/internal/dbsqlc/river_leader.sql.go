@@ -20,7 +20,7 @@ INSERT INTO /* TEMPLATE: schema */river_leader (
 ) VALUES (
     $1,
     coalesce($2::timestamptz, now()),
-    -- @ttl is inserted as as seconds rather than a duration because ` + "`" + `lib/pq` + "`" + ` doesn't support the latter
+    -- @ttl is inserted as seconds rather than a duration because ` + "`" + `lib/pq` + "`" + ` does not support the latter
     coalesce($2::timestamptz, now()) + make_interval(secs => $3)
 )
 ON CONFLICT (name)
