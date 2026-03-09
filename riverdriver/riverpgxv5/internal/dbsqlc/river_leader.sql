@@ -15,7 +15,7 @@ INSERT INTO /* TEMPLATE: schema */river_leader (
 ) VALUES (
     @leader_id,
     coalesce(sqlc.narg('now')::timestamptz, now()),
-    -- @ttl is inserted as as seconds rather than a duration because `lib/pq` doesn't support the latter
+    -- @ttl is inserted as seconds rather than a duration because `lib/pq` does not support the latter
     coalesce(sqlc.narg('now')::timestamptz, now()) + make_interval(secs => @ttl)
 )
 ON CONFLICT (name)
