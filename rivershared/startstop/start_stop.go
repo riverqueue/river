@@ -136,6 +136,28 @@ func (s *BaseStartStop) StartInit(ctx context.Context) (context.Context, bool, f
 	}
 }
 
+// StartFailed should be called when a service fails to start after StartInit.
+// It closes the stopped channel and resets internal state so Start can be
+// called again.
+//
+// This should not be used when a Stop is already in progress (ErrStop), because
+// Stop will handle cleanup via finalizeStop.
+func (s *BaseStartStop) StartFailed(stopped func()) {
+	if s.cancelFunc != nil {
+		s.cancelFunc(ErrStop)
+	}
+	stopped()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.isRunning {
+		return
+	}
+	s.isRunning = false
+	s.started = nil
+	s.stopped = nil
+}
+
 // Started returns a channel that's closed when a service finishes starting, or
 // if failed to start and is stopped instead. It can be used in conjunction with
 // WaitAllStarted to verify startup of a constellation of services.
