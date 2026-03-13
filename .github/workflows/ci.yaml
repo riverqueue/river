@@ -17,6 +17,52 @@ on:
   pull_request:
 
 jobs:
+  benchmark:
+    env:
+      # The special value "local" tells Go to use the bundled Go version rather
+      # than trying to fetch one according to a `toolchain` value in `go.mod`.
+      # This ensures that we're really running the Go version in the CI matrix
+      # rather than one that the Go command has upgraded to automatically.
+      GOTOOLCHAIN: local
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version:
+          - "1.26"
+        postgres-version: [17]
+      fail-fast: false
+    timeout-minutes: 5
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres-version }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Go ${{ matrix.go-version }}
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Display Go version
+        run: go version
+
+      - name: Set up database
+        run: psql -c "CREATE DATABASE river_test" $ADMIN_DATABASE_URL
+
+      - name: Benchmark
+        run: make bench ITERATIONS=1
+
   build_and_test:
     env:
       # The special value "local" tells Go to use the bundled Go version rather
@@ -69,10 +115,10 @@ jobs:
           - 5432:5432
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Go ${{ matrix.go-version }}
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go-version }}
 
@@ -94,12 +140,12 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: ikalnytskyi/action-setup-postgres@v6
+      - uses: ikalnytskyi/action-setup-postgres@v8
         with:
           database: river_dev
           password: postgres
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "stable"
           check-latest: true
@@ -120,7 +166,7 @@ jobs:
         shell: pwsh
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: export RIVER_CMD_DIR
         run: |
@@ -260,13 +306,13 @@ jobs:
       pull-requests: read
 
     steps:
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "stable"
           check-latest: true
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Lint
         uses: golangci/golangci-lint-action@v9
@@ -290,7 +336,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup sqlc
         uses: sqlc-dev/setup-sqlc@v4
@@ -311,13 +357,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "stable"
           check-latest: true
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Check all go/toolchain directives match
         run: CHECK=true make update-mod-go
