@@ -1626,6 +1626,9 @@ func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
 
 	var uniqueStatesByte byte
 	if internal.UniqueStates != nil {
+		if *internal.UniqueStates < 0 || *internal.UniqueStates > 255 {
+			return nil, fmt.Errorf("value out of range for byte: %d", *internal.UniqueStates)
+		}
 		uniqueStatesByte = byte(*internal.UniqueStates)
 	}
 

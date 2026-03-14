@@ -11,7 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/mod/modfile"
@@ -46,9 +46,12 @@ func run() error {
 		return errors.New("expected exactly one arg, which should be the path to a go.work file")
 	}
 
-	workFilename := os.Args[1]
+	workFilename, err := localPath(".", os.Args[1])
+	if err != nil {
+		return err
+	}
 
-	workFileData, err := os.ReadFile(workFilename)
+	workFileData, err := os.ReadFile(workFilename) //nolint:gosec // validated by localPath
 	if err != nil {
 		return fmt.Errorf("error reading file %q: %w", workFilename, err)
 	}
@@ -58,16 +61,43 @@ func run() error {
 		return fmt.Errorf("error parsing file %q: %w", workFilename, err)
 	}
 
+	workDir := filepath.Dir(workFilename)
 	for _, workUse := range workFile.Use {
-		if _, err := parseAndUpdateGoModFile("./"+path.Join(workUse.Path, "go.mod"), packagePrefix, version); err != nil {
+		filename, err := localPath(workDir, filepath.Join(workUse.Path, "go.mod"))
+		if err != nil {
+			return err
+		}
+		if _, err := parseAndUpdateGoModFile(filename, packagePrefix, version); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+func localPath(baseDir, filename string) (string, error) {
+	absBaseDir, err := filepath.Abs(baseDir)
+	if err != nil {
+		return "", fmt.Errorf("error resolving base directory %q: %w", baseDir, err)
+	}
+
+	absFilename, err := filepath.Abs(filepath.Join(absBaseDir, filepath.Clean(filename)))
+	if err != nil {
+		return "", fmt.Errorf("error resolving path %q: %w", filename, err)
+	}
+
+	rel, err := filepath.Rel(absBaseDir, absFilename)
+	if err != nil {
+		return "", fmt.Errorf("error checking path %q: %w", filename, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path escapes base directory %q: %q", absBaseDir, filename)
+	}
+
+	return absFilename, nil
+}
+
 func parseAndUpdateGoModFile(filename, packagePrefix, version string) (bool, error) {
-	fileData, err := os.ReadFile(filename)
+	fileData, err := os.ReadFile(filename) //nolint:gosec // validated by localPath
 	if err != nil {
 		return false, fmt.Errorf("error reading file %q: %w", filename, err)
 	}
@@ -108,7 +138,7 @@ func parseAndUpdateGoModFile(filename, packagePrefix, version string) (bool, err
 			return false, fmt.Errorf("error formatting file %q after update: %w", filename, err)
 		}
 
-		if err := os.WriteFile(filename, updatedFileData, 0o600); err != nil {
+		if err := os.WriteFile(filename, updatedFileData, 0o600); err != nil { //nolint:gosec // validated by localPath
 			return false, fmt.Errorf("error writing file %q after update: %w", filename, err)
 		}
 	} else {

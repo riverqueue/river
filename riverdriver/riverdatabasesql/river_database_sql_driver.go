@@ -629,8 +629,12 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 	for i := range len(params.ID) {
 		setStateParams.Errors[i] = cmp.Or(string(params.ErrData[i]), defaultObject)
 		if params.Attempt[i] != nil {
+			attempt, err := intToInt32(*params.Attempt[i])
+			if err != nil {
+				return nil, err
+			}
 			setStateParams.AttemptDoUpdate[i] = true
-			setStateParams.Attempt[i] = int32(*params.Attempt[i]) //nolint:gosec
+			setStateParams.Attempt[i] = attempt
 		}
 		if params.ErrData[i] != nil {
 			setStateParams.ErrorsDoUpdate[i] = true
@@ -1140,6 +1144,22 @@ func bitIntegerToBits(bitInteger, numBits int) int {
 	return bits
 }
 
+func intToByte(value int) (byte, error) {
+	if value < 0 || value > 255 {
+		return 0, fmt.Errorf("value out of range for byte: %d", value)
+	}
+
+	return byte(value), nil
+}
+
+func intToInt32(value int) (int32, error) {
+	if value < math.MinInt32 || value > math.MaxInt32 {
+		return 0, fmt.Errorf("value out of range for int32: %d", value)
+	}
+
+	return int32(value), nil
+}
+
 func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
 	var attemptedAt *time.Time
 	if internal.AttemptedAt != nil {
@@ -1160,6 +1180,11 @@ func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
 		finalizedAt = &t
 	}
 
+	uniqueStates, err := intToByte(bitIntegerToBits(ptrutil.ValOrDefault(internal.UniqueStates, 0), 8))
+	if err != nil {
+		return nil, err
+	}
+
 	return &rivertype.JobRow{
 		ID:           internal.ID,
 		Attempt:      max(int(internal.Attempt), 0),
@@ -1178,7 +1203,7 @@ func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
 		State:        rivertype.JobState(internal.State),
 		Tags:         internal.Tags,
 		UniqueKey:    internal.UniqueKey,
-		UniqueStates: uniquestates.UniqueBitmaskToStates(byte(bitIntegerToBits(ptrutil.ValOrDefault(internal.UniqueStates, 0), 8))),
+		UniqueStates: uniquestates.UniqueBitmaskToStates(uniqueStates),
 	}, nil
 }
 

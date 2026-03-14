@@ -31,7 +31,7 @@ func TestParseAndUpdateGoModFile(t *testing.T) {
 
 		file, err := os.CreateTemp(t.TempDir(), "go.mod")
 		require.NoError(t, err)
-		t.Cleanup(func() { os.Remove(file.Name()) })
+		t.Cleanup(func() { _ = os.Remove(file.Name()) }) //nolint:gosec // temp file path comes from os.CreateTemp
 
 		_, err = file.WriteString(sampleGoMod)
 		require.NoError(t, err)

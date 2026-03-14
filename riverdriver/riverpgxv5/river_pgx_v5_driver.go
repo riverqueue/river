@@ -623,7 +623,7 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 	for i := range len(params.ID) {
 		if params.Attempt[i] != nil {
 			setStateParams.AttemptDoUpdate[i] = true
-			setStateParams.Attempt[i] = int32(*params.Attempt[i]) //nolint:gosec
+			setStateParams.Attempt[i] = int32(*params.Attempt[i])
 		}
 		if params.ErrData[i] != nil {
 			setStateParams.ErrorsDoUpdate[i] = true

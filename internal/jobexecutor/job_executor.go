@@ -531,7 +531,7 @@ func captureStackTraceSkipFrames(skip int) string {
 	var stackTraceSB strings.Builder
 	for {
 		frame, more := frames.Next()
-		stackTraceSB.WriteString(fmt.Sprintf("%s\n\t%s:%d\n", frame.Function, frame.File, frame.Line))
+		fmt.Fprintf(&stackTraceSB, "%s\n\t%s:%d\n", frame.Function, frame.File, frame.Line)
 		if !more {
 			break
 		}

@@ -17,7 +17,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"
+	"path/filepath"
+	"strings"
 
 	"golang.org/x/mod/modfile"
 )
@@ -36,9 +37,12 @@ func run() error {
 		return errors.New("expected exactly one arg, which should be the path to a go.work file")
 	}
 
-	workFilename := os.Args[1]
+	workFilename, err := localPath(".", os.Args[1])
+	if err != nil {
+		return err
+	}
 
-	workFileData, err := os.ReadFile(workFilename)
+	workFileData, err := os.ReadFile(workFilename) //nolint:gosec // validated by localPath
 	if err != nil {
 		return fmt.Errorf("error reading file %q: %w", workFilename, err)
 	}
@@ -53,8 +57,13 @@ func run() error {
 		workToolchainName = workFile.Toolchain.Name
 	)
 
+	workDir := filepath.Dir(workFilename)
 	for _, workUse := range workFile.Use {
-		if _, err := parseAndUpdateGoModFile(checkOnly, "./"+path.Join(workUse.Path, "go.mod"), workFilename, workGoVersion, workToolchainName); err != nil {
+		modFilename, err := localPath(workDir, filepath.Join(workUse.Path, "go.mod"))
+		if err != nil {
+			return err
+		}
+		if _, err := parseAndUpdateGoModFile(checkOnly, modFilename, workFilename, workGoVersion, workToolchainName); err != nil {
 			return err
 		}
 	}
@@ -66,8 +75,30 @@ func run() error {
 	return nil
 }
 
+func localPath(baseDir, filename string) (string, error) {
+	absBaseDir, err := filepath.Abs(baseDir)
+	if err != nil {
+		return "", fmt.Errorf("error resolving base directory %q: %w", baseDir, err)
+	}
+
+	absFilename, err := filepath.Abs(filepath.Join(absBaseDir, filepath.Clean(filename)))
+	if err != nil {
+		return "", fmt.Errorf("error resolving path %q: %w", filename, err)
+	}
+
+	rel, err := filepath.Rel(absBaseDir, absFilename)
+	if err != nil {
+		return "", fmt.Errorf("error checking path %q: %w", filename, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path escapes base directory %q: %q", absBaseDir, filename)
+	}
+
+	return absFilename, nil
+}
+
 func parseAndUpdateGoModFile(checkOnly bool, modFilename, workFilename, workGoVersion, workToolchainName string) (bool, error) {
-	modFileData, err := os.ReadFile(modFilename)
+	modFileData, err := os.ReadFile(modFilename) //nolint:gosec // validated by localPath
 	if err != nil {
 		return false, fmt.Errorf("error reading file %q: %w", modFilename, err)
 	}
@@ -112,7 +143,7 @@ func parseAndUpdateGoModFile(checkOnly bool, modFilename, workFilename, workGoVe
 				return false, fmt.Errorf("error formatting file %q after update: %w", modFilename, err)
 			}
 
-			if err := os.WriteFile(modFilename, updatedFileData, 0o600); err != nil {
+			if err := os.WriteFile(modFilename, updatedFileData, 0o600); err != nil { //nolint:gosec // validated by localPath
 				return false, fmt.Errorf("error writing file %q after update: %w", modFilename, err)
 			}
 		} else {
