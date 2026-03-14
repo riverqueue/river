@@ -441,6 +441,7 @@ func BenchmarkDriverRiverPgxV5_Executor(b *testing.B) {
 				ClientID:  clientID,
 				MaxToLock: 100,
 				Queue:     river.QueueDefault,
+				Schema:    bundle.schema,
 			}); err != nil {
 				b.Fatal(err)
 			}
@@ -467,6 +468,7 @@ func BenchmarkDriverRiverPgxV5_Executor(b *testing.B) {
 					ClientID:  clientID,
 					MaxToLock: 100,
 					Queue:     river.QueueDefault,
+					Schema:    bundle.schema,
 				}); err != nil {
 					b.Fatal(err)
 				}

@@ -41,6 +41,8 @@ help: ## Print this message
 # workspace with `go work use ./driver/new`.
 submodules := $(shell go list -f '{{.Dir}}' -m)
 
+ITERATIONS ?= 100
+
 # Definitions of following tasks look ugly, but they're done this way because to
 # produce the best/most comprehensible output by far (e.g. compared to a shell
 # loop).
@@ -64,6 +66,13 @@ define test-race-target
     test/race:: ; cd $1 && go test ./... -race -timeout 2m
 endef
 $(foreach mod,$(submodules),$(eval $(call test-race-target,$(mod))))
+
+.PHONY: bench
+bench:: ## Run benchmarks in each submodule (ITERATIONS=100)
+define bench-target
+    bench:: ; cd $1 && go test -bench=. -benchtime=$(ITERATIONS)x -run=a^ ./...
+endef
+$(foreach mod,$(submodules),$(eval $(call bench-target,$(mod))))
 
 .PHONY: tidy
 tidy:: ## Run `go mod tidy` for all submodules
