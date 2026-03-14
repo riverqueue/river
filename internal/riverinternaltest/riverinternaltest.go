@@ -3,13 +3,9 @@
 package riverinternaltest
 
 import (
-	"fmt"
-	"os"
 	"sync"
 	"testing"
 	"time"
-
-	"go.uber.org/goleak"
 
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 )
@@ -103,14 +99,5 @@ func DrainContinuously[T any](drainChan <-chan T) func() []T {
 // WrapTestMain performs some common setup and teardown that should be shared
 // amongst all packages. e.g. Checks for no goroutine leaks on teardown.
 func WrapTestMain(m *testing.M) {
-	status := m.Run()
-
-	if status == 0 {
-		if err := goleak.Find(riversharedtest.IgnoredKnownGoroutineLeaks...); err != nil {
-			fmt.Fprintf(os.Stderr, "goleak: Errors on successful test run: %v\n", err)
-			status = 1
-		}
-	}
-
-	os.Exit(status)
+	riversharedtest.WrapTestMain(m)
 }
