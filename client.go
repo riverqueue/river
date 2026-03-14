@@ -1165,8 +1165,8 @@ func (c *Client[TTx]) Stop(ctx context.Context) error {
 // before shutdown has completed, Stop will return immediately with the
 // context's error.
 //
-// This can also be initiated by cancelling the context passed to Run. There is
-// no need to call this method if the context passed to Run is cancelled
+// This can also be initiated by cancelling the context passed to Start. There is
+// no need to call this method if the context passed to Start is cancelled
 // instead.
 func (c *Client[TTx]) StopAndCancel(ctx context.Context) error {
 	c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Hard stop started; cancelling all work")
