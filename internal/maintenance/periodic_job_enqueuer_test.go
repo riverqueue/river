@@ -962,19 +962,25 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		}
 
 		_, err := svc.AddManySafely([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(100 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_100ms", false)},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
-			{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false)},
+			{
+				ConstructorFunc: jobConstructorFunc("periodic_job_no_id_start", false),
+				RunOnStart:      true,
+				ScheduleFunc:    periodicIntervalSchedule(10 * time.Second),
+			},
 		})
 		require.NoError(t, err)
 
 		startService(t, svc)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle, "periodic_job_100ms", 1)
-		require.False(t, periodicJobUpsertManyMockCalled)
+
+		requireNJobs(t, bundle, "periodic_job_no_id_start", 1)
 
 		svc.TestSignals.PeriodicJobKeepAliveAndReap.WaitOrTimeout()
+
+		svc.Stop()
+
+		require.False(t, periodicJobUpsertManyMockCalled)
 		require.False(t, periodicJobKeepAliveAndReapMockCalled)
 	})
 
