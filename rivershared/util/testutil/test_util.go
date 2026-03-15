@@ -75,7 +75,7 @@ func NewMockT(tb TestingTB) *MockT {
 
 func (t *MockT) Errorf(format string, args ...any) {
 	// Errorf is equivalent to Log + Fail
-	t.logOutput.WriteString(fmt.Sprintf(format, args...))
+	fmt.Fprintf(&t.logOutput, format, args...)
 	t.logOutput.WriteString("\n")
 	t.Failed = true
 }
@@ -89,14 +89,14 @@ func (t *MockT) Helper() {}
 func (t *MockT) Log(args ...any) {
 	t.tb.Log(args...)
 
-	t.logOutput.WriteString(fmt.Sprint(args...))
+	fmt.Fprint(&t.logOutput, args...)
 	t.logOutput.WriteString("\n")
 }
 
 func (t *MockT) Logf(format string, args ...any) {
 	t.tb.Logf(format, args...)
 
-	t.logOutput.WriteString(fmt.Sprintf(format, args...))
+	fmt.Fprintf(&t.logOutput, format, args...)
 	t.logOutput.WriteString("\n")
 }
 

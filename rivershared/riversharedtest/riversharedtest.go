@@ -356,6 +356,9 @@ var IgnoredKnownGoroutineLeaks = []goleak.Option{ //nolint:gochecknoglobals
 // and checks for no goroutine leaks on teardown.
 func WrapTestMain(m *testing.M) {
 	status := m.Run()
+	if dbPool != nil {
+		dbPool.Close()
+	}
 
 	if status == 0 {
 		if err := goleak.Find(IgnoredKnownGoroutineLeaks...); err != nil {
