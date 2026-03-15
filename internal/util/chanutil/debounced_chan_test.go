@@ -2,9 +2,9 @@ package chanutil
 
 import (
 	"context"
-	"math"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -108,54 +108,55 @@ func TestDebouncedChan_SendLeadingDisabled(t *testing.T) {
 func TestDebouncedChan_ContinuousOperation(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	// Run in a synctest bubble so sleeps/timers use deterministic fake time.
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 
-	const (
-		cooldown  = 17 * time.Millisecond
-		increment = 1 * time.Millisecond
-		testTime  = 150 * time.Millisecond
-	)
+		const (
+			cooldown        = 17 * time.Millisecond
+			increment       = 1 * time.Millisecond
+			cooldownPeriods = 9
+		)
 
-	var (
-		debouncedChan = NewDebouncedChan(ctx, cooldown, true)
-		goroutineDone = make(chan struct{})
-		numSignals    int
-	)
+		var (
+			debouncedChan = NewDebouncedChan(ctx, cooldown, true)
+			goroutineDone = make(chan struct{})
+			numSignals    int
+		)
 
-	go func() {
-		defer close(goroutineDone)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-debouncedChan.C():
-				numSignals++
+		go func() {
+			defer close(goroutineDone)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-debouncedChan.C():
+					numSignals++
+				}
 			}
+		}()
+		// Ensure the receiver goroutine is blocked on the debounced channel
+		// before we start advancing fake time.
+		synctest.Wait()
+
+		testTime := cooldown * cooldownPeriods
+		// Call more often than the cooldown so the debouncer should emit once
+		// on the leading edge plus once per cooldown period.
+		for tm := time.Duration(0); tm < testTime; tm += increment {
+			time.Sleep(increment)
+			debouncedChan.Call()
 		}
-	}()
 
-	for tm := increment; tm <= testTime; tm += increment {
-		time.Sleep(increment)
-		debouncedChan.Call()
-	}
+		// Allow one final trailing-edge signal for the last burst of calls.
+		time.Sleep(cooldown)
 
-	cancel()
+		cancel()
+		<-goroutineDone
+		// Wait for any internal timer goroutine to observe cancellation.
+		synctest.Wait()
 
-	select {
-	case <-goroutineDone:
-	case <-time.After(3 * time.Second):
-		require.FailNow(t, "Timed out waiting for goroutine to finish")
-	}
-
-	// Expect number of signals equal to number of cooldown periods that fit
-	// into our total test time, and +1 for an initial fire.
-	//
-	// This almost always lands right on the expected number, but allow a delta
-	// of +/-3 to allow the channel to be off by 3 cycles in either direction
-	// (mainly for CI). By running at `-count 1000` I can usually reproduce an
-	// off-by-one-or-two cycle.
-	expectedNumSignal := int(math.Round(float64(testTime)/float64(cooldown))) + 1
-	t.Logf("Expected: %d, actual: %d", expectedNumSignal, numSignals)
-	require.InDelta(t, expectedNumSignal, numSignals, 3)
+		expectedNumSignals := cooldownPeriods + 1
+		require.Equal(t, expectedNumSignals, numSignals)
+	})
 }
