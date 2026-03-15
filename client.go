@@ -1162,11 +1162,11 @@ func (c *Client[TTx]) Stop(ctx context.Context) error {
 // more aggressive stop than Stop because the contexts for any in-progress jobs
 // are cancelled. However, it still waits for jobs to complete before returning,
 // even though their contexts are cancelled. If the provided context is done
-// before shutdown has completed, Stop will return immediately with the
+// before shutdown has completed, StopAndCancel will return immediately with the
 // context's error.
 //
-// This can also be initiated by cancelling the context passed to Run. There is
-// no need to call this method if the context passed to Run is cancelled
+// This can also be initiated by cancelling the context passed to Start. There is
+// no need to call this method if the context passed to Start is cancelled
 // instead.
 func (c *Client[TTx]) StopAndCancel(ctx context.Context) error {
 	c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Hard stop started; cancelling all work")
