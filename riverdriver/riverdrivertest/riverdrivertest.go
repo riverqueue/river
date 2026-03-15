@@ -36,6 +36,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	exerciseSQLFragments(ctx, t, executorWithTx)
 	exerciseExecutorTx(ctx, t, driverWithSchema, executorWithTx)
 	exerciseSchemaIntrospection(ctx, t, driverWithSchema, executorWithTx)
+	exerciseSchemaName(ctx, t, driverWithSchema)
 	exerciseJobInsert(ctx, t, driverWithSchema, executorWithTx)
 	exerciseJobRead(ctx, t, executorWithTx)
 	exerciseJobUpdate(ctx, t, executorWithTx)

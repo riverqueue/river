@@ -24,6 +24,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql/internal/dbsqlc"
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
 	"github.com/riverqueue/river/rivershared/uniquestates"
+	"github.com/riverqueue/river/rivershared/util/dbutil"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/savepointutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
@@ -143,7 +144,7 @@ func (e *Executor) Exec(ctx context.Context, sql string, args ...any) error {
 func (e *Executor) IndexDropIfExists(ctx context.Context, params *riverdriver.IndexDropIfExistsParams) error {
 	var maybeSchema string
 	if params.Schema != "" {
-		maybeSchema = params.Schema + "."
+		maybeSchema = dbutil.SafeIdentifier(params.Schema) + "."
 	}
 
 	_, err := e.dbtx.ExecContext(ctx, "DROP INDEX CONCURRENTLY IF EXISTS "+maybeSchema+params.Index)
@@ -164,7 +165,7 @@ func (e *Executor) IndexExists(ctx context.Context, params *riverdriver.IndexExi
 func (e *Executor) IndexReindex(ctx context.Context, params *riverdriver.IndexReindexParams) error {
 	var maybeSchema string
 	if params.Schema != "" {
-		maybeSchema = params.Schema + "."
+		maybeSchema = dbutil.SafeIdentifier(params.Schema) + "."
 	}
 
 	_, err := e.dbtx.ExecContext(ctx, "REINDEX INDEX CONCURRENTLY "+maybeSchema+params.Index)
@@ -972,12 +973,12 @@ func (e *Executor) QueryRow(ctx context.Context, sql string, args ...any) riverd
 }
 
 func (e *Executor) SchemaCreate(ctx context.Context, params *riverdriver.SchemaCreateParams) error {
-	_, err := e.dbtx.ExecContext(ctx, "CREATE SCHEMA "+params.Schema)
+	_, err := e.dbtx.ExecContext(ctx, "CREATE SCHEMA "+dbutil.SafeIdentifier(params.Schema))
 	return interpretError(err)
 }
 
 func (e *Executor) SchemaDrop(ctx context.Context, params *riverdriver.SchemaDropParams) error {
-	_, err := e.dbtx.ExecContext(ctx, "DROP SCHEMA "+params.Schema+" CASCADE")
+	_, err := e.dbtx.ExecContext(ctx, "DROP SCHEMA "+dbutil.SafeIdentifier(params.Schema)+" CASCADE")
 	return interpretError(err)
 }
 
@@ -996,7 +997,7 @@ func (e *Executor) TableExists(ctx context.Context, params *riverdriver.TableExi
 	// Different from other operations because the schemaAndTable name is a parameter.
 	schemaAndTable := params.Table
 	if params.Schema != "" {
-		schemaAndTable = params.Schema + "." + schemaAndTable
+		schemaAndTable = dbutil.SafeIdentifier(params.Schema) + "." + schemaAndTable
 	}
 
 	exists, err := dbsqlc.New().TableExists(ctx, e.dbtx, schemaAndTable)
@@ -1006,7 +1007,7 @@ func (e *Executor) TableExists(ctx context.Context, params *riverdriver.TableExi
 func (e *Executor) TableTruncate(ctx context.Context, params *riverdriver.TableTruncateParams) error {
 	var maybeSchema string
 	if params.Schema != "" {
-		maybeSchema = params.Schema + "."
+		maybeSchema = dbutil.SafeIdentifier(params.Schema) + "."
 	}
 
 	// Uses raw SQL so we can truncate multiple tables at once.
@@ -1240,7 +1241,7 @@ func queueFromInternal(internal *dbsqlc.RiverQueue) *rivertype.Queue {
 
 func schemaTemplateParam(ctx context.Context, schema string) context.Context {
 	if schema != "" {
-		schema += "."
+		schema = dbutil.SafeIdentifier(schema) + "."
 	}
 
 	return sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{

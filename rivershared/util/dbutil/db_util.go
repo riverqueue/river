@@ -3,10 +3,18 @@ package dbutil
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/riverqueue/river/riverdriver"
 )
+
+// SafeIdentifier returns a safely quoted identifier (e.g. a table or schem
+// name) for use in SQL queries. It wraps the identifier in quotes and escapes
+// any internal quotes as appropriate.
+func SafeIdentifier(ident string) string {
+	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`
+}
 
 // RollbackWithoutCancel initiates a rollback, but one in which context is
 // overridden with context.WithoutCancel so that the rollback can proceed even

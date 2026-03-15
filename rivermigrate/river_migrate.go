@@ -547,7 +547,7 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Ex
 
 	var schema string
 	if m.schema != "" {
-		schema = m.schema + "."
+		schema = dbutil.SafeIdentifier(m.schema) + "."
 	}
 	schemaReplacement := map[string]sqlctemplate.Replacement{
 		"schema": {Value: schema},
