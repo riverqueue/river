@@ -822,7 +822,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		require.Equal(t, 1*time.Hour, svc.timeUntilNextRun())
 	})
 
-	t.Run("InvokesPilot", func(t *testing.T) {
+	t.Run("InvokesPilotStartupDurableState", func(t *testing.T) {
 		t.Parallel()
 
 		svc, bundle := setup(t)
@@ -832,16 +832,16 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		bundle.pilotMock.PeriodicJobGetAllMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobGetAllParams) ([]*riverpilot.PeriodicJob, error) {
 			require.Equal(t, bundle.schema, params.Schema)
 			return []*riverpilot.PeriodicJob{
-				{ID: "periodic_job_500ms", NextRunAt: now.Add(1 * time.Hour)},
-				{ID: "periodic_job_1500ms", NextRunAt: now.Add(2 * time.Hour)},
-				{ID: "periodic_job_999ms", NextRunAt: now.Add(3 * time.Hour)},
+				{ID: "pilot_startup_durable_1h", NextRunAt: now.Add(1 * time.Hour)},
+				{ID: "pilot_startup_durable_2h", NextRunAt: now.Add(2 * time.Hour)},
+				{ID: "pilot_unmatched_job", NextRunAt: now.Add(3 * time.Hour)},
 			}, nil
 		}
 
 		var periodicJobKeepAliveAndReapMockCalled bool
 		bundle.pilotMock.PeriodicJobKeepAliveAndReapMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobKeepAliveAndReapParams) ([]*riverpilot.PeriodicJob, error) {
 			periodicJobKeepAliveAndReapMockCalled = true
-			require.ElementsMatch(t, []string{"periodic_job_100ms", "periodic_job_500ms", "periodic_job_1500ms"}, params.ID)
+			require.ElementsMatch(t, []string{"pilot_startup_new_job", "pilot_startup_durable_1h", "pilot_startup_durable_2h"}, params.ID)
 			require.Equal(t, bundle.schema, params.Schema)
 			return nil, nil
 		}
@@ -857,40 +857,87 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 			return nil, nil
 		}
 
-		handles, err := svc.AddManySafely([]*PeriodicJob{
-			{ID: "periodic_job_100ms", ScheduleFunc: periodicIntervalSchedule(100 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_100ms", false)},
-			{ID: "periodic_job_500ms", ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
-			{ID: "periodic_job_1500ms", ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false)},
+		_, err := svc.AddManySafely([]*PeriodicJob{
+			{ID: "pilot_startup_new_job", ScheduleFunc: periodicIntervalSchedule(10 * time.Second), ConstructorFunc: jobConstructorFunc("pilot_startup_new_job", false)},
+			{ID: "pilot_startup_durable_1h", ScheduleFunc: periodicIntervalSchedule(10 * time.Second), ConstructorFunc: jobConstructorFunc("pilot_startup_durable_1h", false)},
+			{ID: "pilot_startup_durable_2h", ScheduleFunc: periodicIntervalSchedule(10 * time.Second), ConstructorFunc: jobConstructorFunc("pilot_startup_durable_2h", false)},
 		})
 		require.NoError(t, err)
 
 		startService(t, svc)
 
-		svc.TestSignals.InsertedJobs.WaitOrTimeout()
+		requireNJobs(t, bundle, "pilot_startup_new_job", 0)
+		requireNJobs(t, bundle, "pilot_startup_durable_1h", 0)
+		requireNJobs(t, bundle, "pilot_startup_durable_2h", 0)
 
-		// periodic_job_100ms runs immediately because it didn't have a
-		// persisted record from PeriodicJobGetAllMock
-		insertedPeriodicJobs := requireNJobs(t, bundle, "periodic_job_100ms", 1)
-		requireNJobs(t, bundle, "periodic_job_500ms", 0)
-		requireNJobs(t, bundle, "periodic_job_1500ms", 0)
-
-		require.Equal(t, "periodic_job_100ms", gjson.GetBytes(insertedPeriodicJobs[0].Metadata, rivercommon.MetadataKeyPeriodicJobID).Str)
-
-		// During the first invocation periodic job records for all three jobs
-		// are inserted (this happens on start up), then after one run we expect
-		// only an insertion for the job that actually ran.
-		require.Equal(t, [][]string{
-			{"periodic_job_100ms", "periodic_job_500ms", "periodic_job_1500ms"},
-			{"periodic_job_100ms"},
-		}, insertedPeriodicJobIDs)
-
+		svc.TestSignals.PeriodicJobUpserted.WaitOrTimeout()
 		svc.TestSignals.PeriodicJobKeepAliveAndReap.WaitOrTimeout()
 		require.True(t, periodicJobKeepAliveAndReapMockCalled)
 
 		svc.Stop()
 
-		require.WithinDuration(t, now.Add(1*time.Hour), svc.periodicJobs[handles[1]].nextRunAt, time.Microsecond)
-		require.WithinDuration(t, now.Add(2*time.Hour), svc.periodicJobs[handles[2]].nextRunAt, time.Microsecond)
+		require.Equal(t, [][]string{
+			{"pilot_startup_new_job", "pilot_startup_durable_1h", "pilot_startup_durable_2h"},
+		}, insertedPeriodicJobIDs)
+
+		require.WithinDuration(t, now.Add(1*time.Hour), svc.periodicJobs[svc.periodicJobIDs["pilot_startup_durable_1h"]].nextRunAt, time.Microsecond)
+		require.WithinDuration(t, now.Add(2*time.Hour), svc.periodicJobs[svc.periodicJobIDs["pilot_startup_durable_2h"]].nextRunAt, time.Microsecond)
+	})
+
+	t.Run("InvokesPilotDueDurableJobRunsOnce", func(t *testing.T) {
+		t.Parallel()
+
+		svc, bundle := setup(t)
+
+		now := time.Now()
+
+		bundle.pilotMock.PeriodicJobGetAllMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobGetAllParams) ([]*riverpilot.PeriodicJob, error) {
+			require.Equal(t, bundle.schema, params.Schema)
+			return []*riverpilot.PeriodicJob{
+				{ID: "pilot_due_job", NextRunAt: now.Add(-1 * time.Second)},
+			}, nil
+		}
+
+		bundle.pilotMock.PeriodicJobKeepAliveAndReapMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobKeepAliveAndReapParams) ([]*riverpilot.PeriodicJob, error) {
+			return nil, nil
+		}
+
+		var insertedPeriodicJobIDs [][]string
+		bundle.pilotMock.PeriodicJobUpsertManyMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobUpsertManyParams) ([]*riverpilot.PeriodicJob, error) {
+			insertedPeriodicJobIDs = append(insertedPeriodicJobIDs, sliceutil.Map(params.Jobs, func(j *riverpilot.PeriodicJobUpsertParams) string { return j.ID }))
+			require.Equal(t, bundle.schema, params.Schema)
+			for _, job := range params.Jobs {
+				require.NotZero(t, job.NextRunAt)
+				require.NotZero(t, job.UpdatedAt)
+			}
+			return nil, nil
+		}
+
+		_, err := svc.AddManySafely([]*PeriodicJob{
+			{ID: "pilot_due_job", ScheduleFunc: periodicIntervalSchedule(10 * time.Second), ConstructorFunc: jobConstructorFunc("pilot_due_job", false)},
+		})
+		require.NoError(t, err)
+
+		startService(t, svc)
+
+		// First upsert is startup durable-state sync.
+		svc.TestSignals.PeriodicJobUpserted.WaitOrTimeout()
+		svc.TestSignals.InsertedJobs.WaitOrTimeout()
+		// Second upsert happens after the due job runs.
+		svc.TestSignals.PeriodicJobUpserted.WaitOrTimeout()
+
+		svc.Stop()
+
+		insertedPeriodicJobs := requireNJobs(t, bundle, "pilot_due_job", 1)
+		require.Equal(t, "pilot_due_job", gjson.GetBytes(insertedPeriodicJobs[0].Metadata, rivercommon.MetadataKeyPeriodicJobID).Str)
+
+		// First upsert is startup state sync; second is after running the due job.
+		require.Equal(t, [][]string{
+			{"pilot_due_job"},
+			{"pilot_due_job"},
+		}, insertedPeriodicJobIDs)
+
+		require.WithinDuration(t, now.Add(9*time.Second), svc.periodicJobs[svc.periodicJobIDs["pilot_due_job"]].nextRunAt, time.Microsecond)
 	})
 
 	t.Run("PilotNotInvokedWithoutID", func(t *testing.T) {
@@ -915,19 +962,25 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		}
 
 		_, err := svc.AddManySafely([]*PeriodicJob{
-			{ScheduleFunc: periodicIntervalSchedule(100 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_100ms", false)},
-			{ScheduleFunc: periodicIntervalSchedule(500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_500ms", false)},
-			{ScheduleFunc: periodicIntervalSchedule(1500 * time.Millisecond), ConstructorFunc: jobConstructorFunc("periodic_job_1500ms", false)},
+			{
+				ConstructorFunc: jobConstructorFunc("periodic_job_no_id_start", false),
+				RunOnStart:      true,
+				ScheduleFunc:    periodicIntervalSchedule(10 * time.Second),
+			},
 		})
 		require.NoError(t, err)
 
 		startService(t, svc)
 
 		svc.TestSignals.InsertedJobs.WaitOrTimeout()
-		requireNJobs(t, bundle, "periodic_job_100ms", 1)
-		require.False(t, periodicJobUpsertManyMockCalled)
+
+		requireNJobs(t, bundle, "periodic_job_no_id_start", 1)
 
 		svc.TestSignals.PeriodicJobKeepAliveAndReap.WaitOrTimeout()
+
+		svc.Stop()
+
+		require.False(t, periodicJobUpsertManyMockCalled)
 		require.False(t, periodicJobKeepAliveAndReapMockCalled)
 	})
 
