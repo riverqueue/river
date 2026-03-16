@@ -14,6 +14,18 @@ import (
 	"github.com/riverqueue/river/rivershared/util/dbutil"
 )
 
+func TestSafeIdentifier(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, `"simple"`, dbutil.SafeIdentifier("simple"))
+	require.Equal(t, `"has space"`, dbutil.SafeIdentifier("has space"))
+	require.Equal(t, `"has""quote"`, dbutil.SafeIdentifier(`has"quote`))
+	require.Equal(t, `"has""""many"`, dbutil.SafeIdentifier(`has""many`))
+	require.Equal(t, `""`, dbutil.SafeIdentifier(""))
+	require.Equal(t, `"my_schema"`, dbutil.SafeIdentifier("my_schema"))
+	require.Equal(t, `"MixedCase"`, dbutil.SafeIdentifier("MixedCase"))
+}
+
 func TestRollbackCancelOverride(t *testing.T) {
 	t.Parallel()
 

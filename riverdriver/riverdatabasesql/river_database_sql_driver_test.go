@@ -113,6 +113,6 @@ func TestSchemaTemplateParam(t *testing.T) {
 			nil,
 		)
 		require.NoError(t, err)
-		require.Equal(t, "SELECT 1 FROM custom_schema.river_job", updatedSQL)
+		require.Equal(t, `SELECT 1 FROM "custom_schema".river_job`, updatedSQL)
 	})
 }
