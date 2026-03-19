@@ -22,6 +22,8 @@
 - **JSON tags**: use snake_case for JSON field tags.
 - **Dependencies**: minimize external dependencies beyond standard library and pgx.
 - **SQL access (non-test code)**: avoid ad-hoc SQL strings in library/runtime code. Add or extend a sqlc query, regenerate with `make generate`, and expose it through the driver interface. Keep direct SQL for tests and benchmark/admin utilities only (for example, `pg_stat_statements` and `VACUUM`).
+- **Driver interface stability**: treat `riverdriver` as an internal adapter seam, not as an official external API. Its package comments explicitly say it should not be implemented or invoked by user code, and changes there are not considered semver-breaking. Do not preserve driver-interface methods or semantics for outside consumers; add, remove, or reshape them as needed to preserve or improve user-facing functionality.
+- **Cross-driver driver tests**: treat `riverdriver/riverdrivertest` as the shared conformance suite for driver behavior. When changing `riverdriver` or a concrete driver, update or extend `riverdrivertest` so the intended semantics are exercised across drivers, not only in a single driver-specific test.
 - **Error handling**: prefer context-rich errors; review linting rules before disabling them.
 - **Testing**: use require variants instead of assert.
 - **Helpers**: use `Func` suffix for function variables, not `Fn`.
