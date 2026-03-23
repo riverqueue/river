@@ -5,7 +5,7 @@ go 1.25.0
 toolchain go1.25.7
 
 require (
-	github.com/jackc/pgx/v5 v5.8.0
+	github.com/jackc/pgx/v5 v5.9.1
 	github.com/jackc/puddle/v2 v2.2.2
 	github.com/riverqueue/river/riverdriver v0.31.0
 	github.com/riverqueue/river/rivershared v0.31.0
