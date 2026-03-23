@@ -197,10 +197,18 @@ type UniqueOpts struct {
 	// or `discarded`), though only `retryable` may be safely _removed_ from the
 	// list.
 	//
-	// Warning: Removing any states from the default list (other than `retryable`)
-	// forces a fallback to a slower insertion path that takes an advisory lock
-	// and performs a look up before insertion. This path is deprecated and should
-	// be avoided if possible.
+	// The following states must be included in ByState if set:
+	//
+	//   - rivertype.JobStateAvailable
+	//   - rivertype.JobStatePending
+	//   - rivertype.JobStateRunning
+	//   - rivertype.JobStateScheduled
+	//
+	// These states being required is an implementation detail, but not
+	// requiring them would put River in a difficult position when moving jobs
+	// between common parts of the state machine and finding a unique conflict
+	// already there. Resolving this isn't completely intractable, but'll
+	// require some in-depth thinking and designing around every possible edge.
 	ByState []rivertype.JobState
 
 	// ExcludeKind indicates that the job kind should not be included in the
@@ -224,6 +232,15 @@ func (o *UniqueOpts) isEmpty() bool {
 
 var jobStateAll = rivertype.JobStates() //nolint:gochecknoglobals
 
+// Required unique states. Requiring states like this isn't necessary
+// fundamental for correctness, but doing so avoids some gnarly problems that
+// don't have a clear error action otherwise. For example, if `available` was
+// omittable and a producer tried to transition an `available` job to `running`
+// but found another unique contender already there, we'd have to figure out
+// what to do about the job that can't be scheduled. We can't send feedback to
+// the caller at this point, so probably the best we could do is leave it in
+// this untransitionable state until the `running` job finished, which isn't
+// particularly satsifactory.
 var requiredV3states = []rivertype.JobState{ //nolint:gochecknoglobals
 	rivertype.JobStateAvailable,
 	rivertype.JobStatePending,
