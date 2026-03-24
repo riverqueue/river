@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -39,13 +38,7 @@ type jsonPlaceholderCast struct {
 	isArray  bool
 }
 
-var jsonCastPlaceholderCache sync.Map //nolint:gochecknoglobals // Cache cast parsing for hot query paths.
-
 func jsonPlaceholderCasts(sql string) []jsonPlaceholderCast {
-	if cached, ok := jsonCastPlaceholderCache.Load(sql); ok {
-		return cached.([]jsonPlaceholderCast) //nolint:forcetypeassert
-	}
-
 	matches := jsonCastPlaceholderRegexp.FindAllStringSubmatch(sql, -1)
 	casts := make([]jsonPlaceholderCast, 0, len(matches))
 	seen := make(map[int]int, len(matches))
@@ -76,7 +69,6 @@ func jsonPlaceholderCasts(sql string) []jsonPlaceholderCast {
 		casts = append(casts, cast)
 	}
 
-	jsonCastPlaceholderCache.Store(sql, casts)
 	return casts
 }
 
