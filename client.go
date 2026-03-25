@@ -33,6 +33,7 @@ import (
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/dbutil"
 	"github.com/riverqueue/river/rivershared/util/maputil"
+	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivershared/util/valutil"
@@ -619,7 +620,9 @@ type Client[TTx any] struct {
 
 // Test-only signals.
 type clientTestSignals struct {
-	electedLeader testsignal.TestSignal[struct{}] // notifies when elected leader
+	electedLeader                        testsignal.TestSignal[struct{}] // notifies when elected leader
+	queueMaintainerStartError            testsignal.TestSignal[error]    // notifies on each failed queue maintainer start attempt
+	queueMaintainerStartRetriesExhausted testsignal.TestSignal[struct{}] // notifies when leader resignation is requested after all queue maintainer start retries have been exhausted
 
 	jobCleaner          *maintenance.JobCleanerTestSignals
 	jobRescuer          *maintenance.JobRescuerTestSignals
@@ -631,6 +634,8 @@ type clientTestSignals struct {
 
 func (ts *clientTestSignals) Init(tb testutil.TestingTB) {
 	ts.electedLeader.Init(tb)
+	ts.queueMaintainerStartError.Init(tb)
+	ts.queueMaintainerStartRetriesExhausted.Init(tb)
 
 	if ts.jobCleaner != nil {
 		ts.jobCleaner.Init(tb)
@@ -1290,9 +1295,9 @@ func (c *Client[TTx]) handleLeadershipChangeLoop(ctx context.Context, shouldStar
 			// cancel the queue maintainer start, and overall run much faster.
 			c.testSignals.electedLeader.Signal(struct{}{})
 
-			if err := c.queueMaintainer.Start(ctx); err != nil {
-				c.baseService.Logger.ErrorContext(ctx, "Error starting queue maintainer", slog.String("err", err.Error()))
-			}
+			// Start the queue maintainer with a few retries and exponential
+			// backoff. In case of total failure, request resignation.
+			c.tryStartQueueMaintainer(ctx)
 
 		default:
 			c.queueMaintainer.Stop()
@@ -1322,6 +1327,43 @@ func (c *Client[TTx]) handleLeadershipChangeLoop(ctx context.Context, shouldStar
 	}()
 
 	return nil
+}
+
+// Tries to start the queue maintainer after gaining leadership. We allow some
+// retries with exponential backoff in case of failure, and in case the queue
+// maintainer can't be started, we request resignation to allow another client
+// to try and take over.
+func (c *Client[TTx]) tryStartQueueMaintainer(ctx context.Context) {
+	const maxStartAttempts = 3
+
+	var lastErr error
+	for attempt := 1; attempt <= maxStartAttempts; attempt++ {
+		if lastErr = c.queueMaintainer.Start(ctx); lastErr == nil {
+			return
+		}
+
+		c.baseService.Logger.ErrorContext(ctx, c.baseService.Name+": Error starting queue maintainer",
+			slog.String("err", lastErr.Error()), slog.Int("attempt", attempt))
+
+		c.testSignals.queueMaintainerStartError.Signal(lastErr)
+
+		// Stop the queue maintainer to fully reset its state (and any
+		// sub-services) before retrying.
+		c.queueMaintainer.Stop()
+
+		if attempt < maxStartAttempts {
+			serviceutil.CancellableSleep(ctx, serviceutil.ExponentialBackoff(attempt, serviceutil.MaxAttemptsBeforeResetDefault))
+		}
+	}
+
+	c.baseService.Logger.ErrorContext(ctx, c.baseService.Name+": Queue maintainer failed to start after all attempts, requesting leader resignation",
+		slog.String("err", lastErr.Error()))
+
+	c.testSignals.queueMaintainerStartRetriesExhausted.Signal(struct{}{})
+
+	if err := c.clientNotifyBundle.RequestResign(ctx); err != nil {
+		c.baseService.Logger.ErrorContext(ctx, c.baseService.Name+": Error requesting leader resignation", slog.String("err", err.Error()))
+	}
 }
 
 // Driver exposes the underlying driver used by the client.

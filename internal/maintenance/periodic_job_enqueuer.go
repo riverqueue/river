@@ -318,31 +318,42 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 
 	s.StaggerStart(ctx)
 
-	initialPeriodicJobs, err := s.Config.Pilot.PeriodicJobGetAll(ctx, s.exec, &riverpilot.PeriodicJobGetAllParams{
-		Schema: s.Config.Schema,
-	})
-	if err != nil {
-		return err
-	}
-
-	for _, hook := range s.Config.HookLookupGlobal.ByHookKind(hooklookup.HookKindPeriodicJobsStart) {
-		if err := hook.(rivertype.HookPeriodicJobsStart).Start(ctx, &rivertype.HookPeriodicJobsStartParams{ //nolint:forcetypeassert
-			DurableJobs: sliceutil.Map(initialPeriodicJobs, func(job *riverpilot.PeriodicJob) *rivertype.DurablePeriodicJob {
-				return (*rivertype.DurablePeriodicJob)(job)
-			}),
-		}); err != nil {
+	var (
+		initialPeriodicJobs []*riverpilot.PeriodicJob
+		subServices         []startstop.Service
+	)
+	if err := func() error {
+		var err error
+		initialPeriodicJobs, err = s.Config.Pilot.PeriodicJobGetAll(ctx, s.exec, &riverpilot.PeriodicJobGetAllParams{
+			Schema: s.Config.Schema,
+		})
+		if err != nil {
 			return err
 		}
-	}
 
-	subServices := []startstop.Service{
-		startstop.StartStopFunc(s.periodicJobKeepAliveAndReapPeriodically),
-	}
-	stopServicesOnError := func() {
-		startstop.StopAllParallel(subServices...)
-	}
-	if err := startstop.StartAll(ctx, subServices...); err != nil {
-		stopServicesOnError()
+		for _, hook := range s.Config.HookLookupGlobal.ByHookKind(hooklookup.HookKindPeriodicJobsStart) {
+			if err := hook.(rivertype.HookPeriodicJobsStart).Start(ctx, &rivertype.HookPeriodicJobsStartParams{ //nolint:forcetypeassert
+				DurableJobs: sliceutil.Map(initialPeriodicJobs, func(job *riverpilot.PeriodicJob) *rivertype.DurablePeriodicJob {
+					return (*rivertype.DurablePeriodicJob)(job)
+				}),
+			}); err != nil {
+				return err
+			}
+		}
+
+		subServices = []startstop.Service{
+			startstop.StartStopFunc(s.periodicJobKeepAliveAndReapPeriodically),
+		}
+		stopServicesOnError := func() {
+			startstop.StopAllParallel(subServices...)
+		}
+		if err := startstop.StartAll(ctx, subServices...); err != nil {
+			stopServicesOnError()
+			return err
+		}
+
+		return nil
+	}(); err != nil {
 		stopped()
 		return err
 	}
