@@ -109,7 +109,24 @@ func (s *BaseStartStop) StartInit(ctx context.Context) (context.Context, bool, f
 	defer s.mu.Unlock()
 
 	if s.isRunning {
-		return ctx, false, nil, nil
+		// If stopped has already been closed (e.g. a previous Start failed and
+		// called stopped()), reset state so the service can start again.
+		//
+		// Notably, for this branch to be taken, Stop will not have been called.
+		// If it was, isRunning will have been set to false via finalizeStop.
+		if s.stopped != nil {
+			select {
+			case <-s.stopped:
+				s.isRunning = false
+				s.started = nil
+				s.stopped = nil
+			default:
+			}
+		}
+
+		if s.isRunning {
+			return ctx, false, nil, nil
+		}
 	}
 
 	s.isRunning = true
