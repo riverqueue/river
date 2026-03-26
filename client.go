@@ -1284,26 +1284,6 @@ func (c *Client[TTx]) logStatsLoop(ctx context.Context, shouldStart bool, starte
 }
 
 func (c *Client[TTx]) handleLeadershipChangeLoop(ctx context.Context, shouldStart bool, started, stopped func()) error {
-	handleLeadershipChange := func(ctx context.Context, notification *leadership.Notification) {
-		c.baseService.Logger.DebugContext(ctx, c.baseService.Name+": Election change received",
-			slog.String("client_id", c.config.ID), slog.Bool("is_leader", notification.IsLeader))
-
-		switch {
-		case notification.IsLeader:
-			// Starting the queue maintainer can take a little time so send to
-			// this test signal _first_ so tests waiting on it can finish,
-			// cancel the queue maintainer start, and overall run much faster.
-			c.testSignals.electedLeader.Signal(struct{}{})
-
-			// Start the queue maintainer with a few retries and exponential
-			// backoff. In case of total failure, request resignation.
-			c.tryStartQueueMaintainer(ctx)
-
-		default:
-			c.queueMaintainer.Stop()
-		}
-	}
-
 	if !shouldStart {
 		return nil
 	}
@@ -1315,13 +1295,48 @@ func (c *Client[TTx]) handleLeadershipChangeLoop(ctx context.Context, shouldStar
 		sub := c.elector.Listen()
 		defer sub.Unlisten()
 
+		// Cancel function for an in-progress tryStartQueueMaintainer. If
+		// leadership is lost while the start process is still retrying, this
+		// is used to abort it promptly instead of waiting for retries to
+		// finish.
+		var cancelQueueMaintainerStart context.CancelCauseFunc = func(_ error) {}
+
 		for {
 			select {
 			case <-ctx.Done():
+				cancelQueueMaintainerStart(context.Cause(ctx))
 				return
 
 			case notification := <-sub.C():
-				handleLeadershipChange(ctx, notification)
+				c.baseService.Logger.DebugContext(ctx, c.baseService.Name+": Election change received",
+					slog.String("client_id", c.config.ID), slog.Bool("is_leader", notification.IsLeader))
+
+				switch {
+				case notification.IsLeader:
+					// Starting the queue maintainer can take a little time so
+					// send to this test signal first so tests waiting on it
+					// can finish, cancel the queue maintainer start, and
+					// overall run much faster.
+					c.testSignals.electedLeader.Signal(struct{}{})
+
+					// Start the queue maintainer with a few retries and
+					// exponential backoff in a separate goroutine so the
+					// leadership change loop remains responsive to new
+					// notifications. startCtx is used for cancellation in case
+					// leadership is lost while retries are in progress.
+					var startCtx context.Context
+					startCtx, cancelQueueMaintainerStart = context.WithCancelCause(ctx)
+					go c.tryStartQueueMaintainer(startCtx)
+
+				default:
+					// Cancel any in-progress start attempts before stopping. We
+					// sent a startstop.ErrStop to make sure services like
+					// Reindexer run any specific cleanup code for stops.
+					cancelQueueMaintainerStart(startstop.ErrStop)
+					cancelQueueMaintainerStart = func(_ error) {}
+
+					c.queueMaintainer.Stop()
+				}
 			}
 		}
 	}()
@@ -1336,8 +1351,20 @@ func (c *Client[TTx]) handleLeadershipChangeLoop(ctx context.Context, shouldStar
 func (c *Client[TTx]) tryStartQueueMaintainer(ctx context.Context) {
 	const maxStartAttempts = 3
 
+	ctxCancelled := func() bool {
+		if ctx.Err() != nil {
+			c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Queue maintainer start cancelled")
+			return true
+		}
+		return false
+	}
+
 	var lastErr error
 	for attempt := 1; attempt <= maxStartAttempts; attempt++ {
+		if ctxCancelled() {
+			return
+		}
+
 		if lastErr = c.queueMaintainer.Start(ctx); lastErr == nil {
 			return
 		}
@@ -1347,6 +1374,14 @@ func (c *Client[TTx]) tryStartQueueMaintainer(ctx context.Context) {
 
 		c.testSignals.queueMaintainerStartError.Signal(lastErr)
 
+		// If Start blocked long enough for this context to be cancelled
+		// (e.g. leadership was lost), bail out immediately. A newer
+		// leadership term may already have started the maintainer, and
+		// calling Stop here would tear it down.
+		if ctxCancelled() {
+			return
+		}
+
 		// Stop the queue maintainer to fully reset its state (and any
 		// sub-services) before retrying.
 		c.queueMaintainer.Stop()
@@ -1354,6 +1389,10 @@ func (c *Client[TTx]) tryStartQueueMaintainer(ctx context.Context) {
 		if attempt < maxStartAttempts {
 			serviceutil.CancellableSleep(ctx, serviceutil.ExponentialBackoff(attempt, serviceutil.MaxAttemptsBeforeResetDefault))
 		}
+	}
+
+	if ctxCancelled() {
+		return
 	}
 
 	c.baseService.Logger.ErrorContext(ctx, c.baseService.Name+": Queue maintainer failed to start after all attempts, requesting leader resignation",
