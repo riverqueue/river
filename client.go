@@ -613,6 +613,14 @@ type Client[TTx any] struct {
 	subscriptionManager    *subscriptionManager
 	testSignals            clientTestSignals
 
+	// queueMaintainerEpoch is incremented each time leadership is gained,
+	// giving each tryStartQueueMaintainer goroutine a term number.
+	// queueMaintainerMu serializes epoch checks with Stop calls so that a
+	// stale goroutine from an older term cannot tear down a maintainer
+	// started by a newer term.
+	queueMaintainerEpoch int64
+	queueMaintainerMu    sync.Mutex
+
 	// workCancel cancels the context used for all work goroutines. Normal Stop
 	// does not cancel that context.
 	workCancel context.CancelCauseFunc
@@ -1324,9 +1332,18 @@ func (c *Client[TTx]) handleLeadershipChangeLoop(ctx context.Context, shouldStar
 					// leadership change loop remains responsive to new
 					// notifications. startCtx is used for cancellation in case
 					// leadership is lost while retries are in progress.
+					//
+					// The epoch is incremented under the mutex so that
+					// stale tryStartQueueMaintainer goroutines from a
+					// previous term cannot call Stop after a new term has
+					// begun.
 					var startCtx context.Context
 					startCtx, cancelQueueMaintainerStart = context.WithCancelCause(ctx)
-					go c.tryStartQueueMaintainer(startCtx)
+					c.queueMaintainerMu.Lock()
+					c.queueMaintainerEpoch++
+					epoch := c.queueMaintainerEpoch
+					c.queueMaintainerMu.Unlock()
+					go c.tryStartQueueMaintainer(startCtx, epoch)
 
 				default:
 					// Cancel any in-progress start attempts before stopping. We
@@ -1348,7 +1365,7 @@ func (c *Client[TTx]) handleLeadershipChangeLoop(ctx context.Context, shouldStar
 // retries with exponential backoff in case of failure, and in case the queue
 // maintainer can't be started, we request resignation to allow another client
 // to try and take over.
-func (c *Client[TTx]) tryStartQueueMaintainer(ctx context.Context) {
+func (c *Client[TTx]) tryStartQueueMaintainer(ctx context.Context, epoch int64) {
 	const maxStartAttempts = 3
 
 	ctxCancelled := func() bool {
@@ -1357,6 +1374,23 @@ func (c *Client[TTx]) tryStartQueueMaintainer(ctx context.Context) {
 			return true
 		}
 		return false
+	}
+
+	// stopIfCurrentEpoch atomically checks whether this goroutine's epoch
+	// is still the active one and calls Stop only if it is. The mutex
+	// serializes this with the epoch increment in handleLeadershipChangeLoop,
+	// preventing a stale goroutine from stopping a maintainer that was
+	// started by a newer leadership term.
+	stopIfCurrentEpoch := func() bool {
+		c.queueMaintainerMu.Lock()
+		defer c.queueMaintainerMu.Unlock()
+
+		if c.queueMaintainerEpoch != epoch {
+			return false
+		}
+
+		c.queueMaintainer.Stop()
+		return true
 	}
 
 	var lastErr error
@@ -1374,17 +1408,12 @@ func (c *Client[TTx]) tryStartQueueMaintainer(ctx context.Context) {
 
 		c.testSignals.queueMaintainerStartError.Signal(lastErr)
 
-		// If Start blocked long enough for this context to be cancelled
-		// (e.g. leadership was lost), bail out immediately. A newer
-		// leadership term may already have started the maintainer, and
-		// calling Stop here would tear it down.
-		if ctxCancelled() {
+		// Stop the queue maintainer to fully reset its state (and any
+		// sub-services) before retrying. The epoch check ensures a stale
+		// goroutine cannot stop a maintainer from a newer leadership term.
+		if !stopIfCurrentEpoch() {
 			return
 		}
-
-		// Stop the queue maintainer to fully reset its state (and any
-		// sub-services) before retrying.
-		c.queueMaintainer.Stop()
 
 		if attempt < maxStartAttempts {
 			serviceutil.CancellableSleep(ctx, serviceutil.ExponentialBackoff(attempt, serviceutil.MaxAttemptsBeforeResetDefault))
