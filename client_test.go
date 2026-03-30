@@ -5145,6 +5145,31 @@ func Test_Client_Maintenance(t *testing.T) {
 		require.True(t, svc.RemoveByID("new_periodic_job"))
 	})
 
+	t.Run("QueueMaintainerStartRetriesAndResigns", func(t *testing.T) {
+		t.Parallel()
+
+		config := newTestConfig(t, "")
+		config.Hooks = []rivertype.Hook{
+			HookPeriodicJobsStartFunc(func(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error {
+				return errors.New("hook start error")
+			}),
+		}
+
+		client, _ := setup(t, config)
+
+		startClient(ctx, t, client)
+		client.testSignals.electedLeader.WaitOrTimeout()
+
+		// Wait for all 3 retry attempts to fail.
+		for range 3 {
+			err := client.testSignals.queueMaintainerStartError.WaitOrTimeout()
+			require.EqualError(t, err, "hook start error")
+		}
+
+		// After all retries exhausted, the client should request resignation.
+		client.testSignals.queueMaintainerStartRetriesExhausted.WaitOrTimeout()
+	})
+
 	t.Run("PeriodicJobEnqueuerWithInsertOpts", func(t *testing.T) {
 		t.Parallel()
 
