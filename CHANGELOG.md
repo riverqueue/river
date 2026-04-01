@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Jobs erroring or panicking no longer logs at the error/warn level because this is not indicative of a problem inside of River itself. These log statements have been demoted to info. [PR #1190](https://github.com/riverqueue/river/pull/1190).
+
 ### Fixed
 
 - Fix in `Client.Start` where previously it was possible for a River client that only partially started before erroring to not try to start on subsequent `Start` invocations. [PR #1187](https://github.com/riverqueue/river/pull/1187).

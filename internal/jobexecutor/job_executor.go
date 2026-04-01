@@ -436,12 +436,12 @@ func (e *JobExecutor) reportError(ctx context.Context, jobRow *rivertype.JobRow,
 		e.Logger.DebugContext(ctx, e.Name+": Job cancelled explicitly", logAttrs...)
 	case res.Err != nil:
 		if jobRow.Attempt >= jobRow.MaxAttempts {
-			e.Logger.ErrorContext(ctx, e.Name+": Job errored", logAttrs...)
+			e.Logger.InfoContext(ctx, e.Name+": Job errored", logAttrs...)
 		} else {
-			e.Logger.WarnContext(ctx, e.Name+": Job errored; retrying", logAttrs...)
+			e.Logger.InfoContext(ctx, e.Name+": Job errored; retrying", logAttrs...)
 		}
 	case res.PanicVal != nil:
-		e.Logger.ErrorContext(ctx, e.Name+": Job panicked", logAttrs...)
+		e.Logger.InfoContext(ctx, e.Name+": Job panicked", logAttrs...)
 	}
 
 	if e.ErrorHandler != nil && !cancelJob {
