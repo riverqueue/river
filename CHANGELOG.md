@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-04-03
+
 ### Changed
 
 - Jobs erroring or panicking no longer logs at the error/warn level because this is not indicative of a problem inside of River itself. These log statements have been demoted to info. [PR #1190](https://github.com/riverqueue/river/pull/1190).
