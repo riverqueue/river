@@ -27,6 +27,14 @@ func NewLimiter(archetype *baseservice.Archetype, waitDuration time.Duration) *L
 	})
 }
 
+func (l *Limiter) prune(lastSentHorizon time.Time) {
+	for topic, lastSent := range l.lastSentByTopic {
+		if lastSent.Before(lastSentHorizon) {
+			delete(l.lastSentByTopic, topic)
+		}
+	}
+}
+
 func (l *Limiter) ShouldTrigger(topic string) bool {
 	// Calculate this beforehand to reduce mutex duration.
 	now := l.Time.NowUTC()
@@ -34,6 +42,8 @@ func (l *Limiter) ShouldTrigger(topic string) bool {
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	l.prune(lastSentHorizon)
 
 	if l.lastSentByTopic[topic].Before(lastSentHorizon) {
 		l.lastSentByTopic[topic] = now
