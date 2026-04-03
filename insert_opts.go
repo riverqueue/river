@@ -240,7 +240,7 @@ var jobStateAll = rivertype.JobStates() //nolint:gochecknoglobals
 // what to do about the job that can't be scheduled. We can't send feedback to
 // the caller at this point, so probably the best we could do is leave it in
 // this untransitionable state until the `running` job finished, which isn't
-// particularly satsifactory.
+// particularly satisfactory.
 var requiredV3states = []rivertype.JobState{ //nolint:gochecknoglobals
 	rivertype.JobStateAvailable,
 	rivertype.JobStatePending,
