@@ -50,6 +50,8 @@ func (m *QueueMaintainer) Start(ctx context.Context) error {
 
 	for _, service := range m.servicesByName {
 		if err := service.Start(ctx); err != nil {
+			startstop.StopAllParallel(maputil.Values(m.servicesByName)...)
+			stopped()
 			return err
 		}
 	}
