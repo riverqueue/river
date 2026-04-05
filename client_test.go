@@ -1116,7 +1116,7 @@ func Test_Client_Common(t *testing.T) {
 		startClient(ctx, t, client)
 
 		client.config.Logger.InfoContext(ctx, "Test waiting for client to be elected leader for the first time")
-		client.testSignals.electedLeader.WaitOrTimeout()
+		client.queueMaintainerLeader.TestSignals.ElectedLeader.WaitOrTimeout()
 		client.config.Logger.InfoContext(ctx, "Client was elected leader for the first time")
 
 		// We test the function with a forced resignation, but this is a general
@@ -1124,7 +1124,7 @@ func Test_Client_Common(t *testing.T) {
 		require.NoError(t, client.Notify().RequestResign(ctx))
 
 		client.config.Logger.InfoContext(ctx, "Test waiting for client to be elected leader after forced resignation")
-		client.testSignals.electedLeader.WaitOrTimeout()
+		client.queueMaintainerLeader.TestSignals.ElectedLeader.WaitOrTimeout()
 		client.config.Logger.InfoContext(ctx, "Client was elected leader after forced resignation")
 	})
 
@@ -1137,7 +1137,7 @@ func Test_Client_Common(t *testing.T) {
 		startClient(ctx, t, client)
 
 		client.config.Logger.InfoContext(ctx, "Test waiting for client to be elected leader for the first time")
-		client.testSignals.electedLeader.WaitOrTimeout()
+		client.queueMaintainerLeader.TestSignals.ElectedLeader.WaitOrTimeout()
 		client.config.Logger.InfoContext(ctx, "Client was elected leader for the first time")
 
 		tx, err := bundle.dbPool.Begin(ctx)
@@ -1149,7 +1149,7 @@ func Test_Client_Common(t *testing.T) {
 		require.NoError(t, tx.Commit(ctx))
 
 		client.config.Logger.InfoContext(ctx, "Test waiting for client to be elected leader after forced resignation")
-		client.testSignals.electedLeader.WaitOrTimeout()
+		client.queueMaintainerLeader.TestSignals.ElectedLeader.WaitOrTimeout()
 		client.config.Logger.InfoContext(ctx, "Client was elected leader after forced resignation")
 	})
 
@@ -1422,7 +1422,7 @@ func Test_Client_Common(t *testing.T) {
 
 		// Despite no notifier, the client should still be able to elect itself
 		// leader.
-		client.testSignals.electedLeader.WaitOrTimeout()
+		client.queueMaintainerLeader.TestSignals.ElectedLeader.WaitOrTimeout()
 
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCompleted, event.Kind)
@@ -1450,7 +1450,7 @@ func Test_Client_Common(t *testing.T) {
 
 		// Despite no notifier, the client should still be able to elect itself
 		// leader.
-		client.testSignals.electedLeader.WaitOrTimeout()
+		client.queueMaintainerLeader.TestSignals.ElectedLeader.WaitOrTimeout()
 
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCompleted, event.Kind)
@@ -4881,7 +4881,7 @@ func Test_Client_Maintenance(t *testing.T) {
 		t.Helper()
 
 		startClient(ctx, t, client)
-		client.testSignals.electedLeader.WaitOrTimeout()
+		client.queueMaintainerLeader.TestSignals.ElectedLeader.WaitOrTimeout()
 		riversharedtest.WaitOrTimeout(t, client.queueMaintainer.Started())
 	}
 
@@ -5158,16 +5158,16 @@ func Test_Client_Maintenance(t *testing.T) {
 		client, _ := setup(t, config)
 
 		startClient(ctx, t, client)
-		client.testSignals.electedLeader.WaitOrTimeout()
+		client.queueMaintainerLeader.TestSignals.ElectedLeader.WaitOrTimeout()
 
 		// Wait for all 3 retry attempts to fail.
 		for range 3 {
-			err := client.testSignals.queueMaintainerStartError.WaitOrTimeout()
+			err := client.queueMaintainerLeader.TestSignals.StartError.WaitOrTimeout()
 			require.EqualError(t, err, "hook start error")
 		}
 
 		// After all retries exhausted, the client should request resignation.
-		client.testSignals.queueMaintainerStartRetriesExhausted.WaitOrTimeout()
+		client.queueMaintainerLeader.TestSignals.StartRetriesExhausted.WaitOrTimeout()
 	})
 
 	t.Run("PeriodicJobEnqueuerWithInsertOpts", func(t *testing.T) {
@@ -5276,7 +5276,7 @@ func Test_Client_Maintenance(t *testing.T) {
 
 		exec := client.driver.GetExecutor()
 
-		client.testSignals.electedLeader.WaitOrTimeout()
+		client.queueMaintainerLeader.TestSignals.ElectedLeader.WaitOrTimeout()
 
 		client.PeriodicJobs().Add(
 			NewPeriodicJob(cron.Every(15*time.Minute), func() (JobArgs, *InsertOpts) {
@@ -5322,7 +5322,7 @@ func Test_Client_Maintenance(t *testing.T) {
 
 		startClient(ctx, t, client)
 
-		client.testSignals.electedLeader.WaitOrTimeout()
+		client.queueMaintainerLeader.TestSignals.ElectedLeader.WaitOrTimeout()
 
 		svc := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
 		svc.TestSignals.EnteredLoop.WaitOrTimeout()
@@ -5395,7 +5395,7 @@ func Test_Client_Maintenance(t *testing.T) {
 
 		startClient(ctx, t, client)
 
-		client.testSignals.electedLeader.WaitOrTimeout()
+		client.queueMaintainerLeader.TestSignals.ElectedLeader.WaitOrTimeout()
 
 		svc := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
 		svc.TestSignals.EnteredLoop.WaitOrTimeout()
@@ -5440,7 +5440,7 @@ func Test_Client_Maintenance(t *testing.T) {
 
 		startClient(ctx, t, client)
 
-		client.testSignals.electedLeader.WaitOrTimeout()
+		client.queueMaintainerLeader.TestSignals.ElectedLeader.WaitOrTimeout()
 
 		svc := maintenance.GetService[*maintenance.PeriodicJobEnqueuer](client.queueMaintainer)
 		svc.TestSignals.EnteredLoop.WaitOrTimeout()
@@ -5535,7 +5535,7 @@ func Test_Client_Maintenance(t *testing.T) {
 
 		startClient(ctx, t, client)
 
-		client.testSignals.electedLeader.WaitOrTimeout()
+		client.queueMaintainerLeader.TestSignals.ElectedLeader.WaitOrTimeout()
 		qc := maintenance.GetService[*maintenance.QueueCleaner](client.queueMaintainer)
 		qc.TestSignals.DeletedBatch.WaitOrTimeout()
 
