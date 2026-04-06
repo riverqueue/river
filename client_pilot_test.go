@@ -281,7 +281,7 @@ func Test_Client_PilotUsage(t *testing.T) {
 		pilot.testSignals.Init(t)
 
 		startClient(ctx, t, client)
-		client.testSignals.electedLeader.WaitOrTimeout()
+		client.queueMaintainerLeader.TestSignals.ElectedLeader.WaitOrTimeout()
 
 		pilot.testSignals.PeriodicJobGetAll.WaitOrTimeout()
 		pilot.testSignals.PeriodicJobUpsertMany.WaitOrTimeout()
