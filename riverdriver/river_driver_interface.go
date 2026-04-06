@@ -15,6 +15,7 @@ package riverdriver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"time"
 
@@ -865,6 +866,7 @@ type TableTruncateParams struct {
 //
 // API is not stable. DO NOT USE.
 func MigrationLineMainTruncateTables(version int) []string {
+	// 0 value must be handled and should always point to latest migration version
 	switch version {
 	case 1:
 		return nil // don't truncate `river_migrate`
@@ -872,8 +874,9 @@ func MigrationLineMainTruncateTables(version int) []string {
 		return []string{"river_job", "river_leader"}
 	case 4:
 		return []string{"river_job", "river_leader", "river_queue"}
+	case 0, 5, 6:
+		return []string{"river_job", "river_leader", "river_queue", "river_client", "river_client_queue"}
 	}
 
-	// 0 (zero value), 5, 6
-	return []string{"river_job", "river_leader", "river_queue", "river_client", "river_client_queue"}
+	panic(fmt.Sprintf("unrecognized migration version: %d", version))
 }

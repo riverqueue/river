@@ -250,6 +250,19 @@ func TestJobSetStateSnoozed(t *testing.T) { //nolint:dupl
 	})
 }
 
+func TestMigrationLineMainTruncateTables(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ZeroValueDoesNotPanic", func(t *testing.T) {
+		t.Parallel()
+
+		require.NotPanics(t, func() {
+			tables := MigrationLineMainTruncateTables(0)
+			require.NotEmpty(t, tables)
+		})
+	})
+}
+
 func TestJobSetStateSnoozedAvailable(t *testing.T) { //nolint:dupl
 	t.Parallel()
 
