@@ -51,6 +51,15 @@ var (
 // TestSchemaOpts are options for TestSchema. Most of the time these can be left
 // as nil.
 type TestSchemaOpts struct {
+	// DisableReuse specifies that schema will not be checked in for reuse at
+	// the end of tests. This is desirable in certain like cases like where a
+	// test case is making modifications to schema.
+	//
+	// Not being able to reuse the schema introduces overhead to tests because
+	// it means more schemas will need to be generated to replace one not
+	// reused, so don't set this option unless necessary.
+	DisableReuse bool
+
 	// LineTargetVersions specify target versions for migration lines being
 	// migrated. By default all lines are migrated all the way up, but this lets
 	// tests migrate to an only partially applied version. This option is rarely
@@ -80,11 +89,6 @@ type TestSchemaOpts struct {
 	// be reference by their qualified name (operations must use `river_job`
 	// instead of `schema.river_job`).
 	ProcurePool func(ctx context.Context, schema string) (any, string)
-
-	// disableReuse specifies that schema will not be checked in for reuse at
-	// the end of tests. This is desirable in certain like cases like where a
-	// test case is making modifications to schema.
-	disableReuse bool
 
 	// skipPackageNameCheck skips the check that package name doesn't resolve to
 	// `riverdbtest`. Normally we want this to make sure that we're skipping
@@ -279,7 +283,7 @@ func TestSchema[TTx any](ctx context.Context, tb testutil.TestingTB, driver rive
 		}
 
 		if withCleanup, ok := tb.(testingTBWithCleanup); ok {
-			if !opts.disableReuse {
+			if !opts.DisableReuse {
 				withCleanup.Cleanup(func() {
 					idleSchemasMu.Lock()
 					defer idleSchemasMu.Unlock()
@@ -638,15 +642,15 @@ func testTxSchemaForDatabaseAndMigrationLines[TTx any](ctx context.Context, tb t
 	}
 
 	schema = TestSchema(ctx, tb, driver, &TestSchemaOpts{
-		Lines:       lines,
-		ProcurePool: opts.ProcurePool,
-
 		// If test transactions are being shared (opts.DisableSharing = false)
 		// then reserve the shared schemas exclusively for TestTx. Otherwise,
 		// allow them to be put back in the pool for use by other test
 		// transactions with opts.DisableSharing = true or other TestSchema
 		// invocations.
-		disableReuse: !opts.DisableSchemaSharing,
+		DisableReuse: !opts.DisableSchemaSharing,
+
+		Lines:       lines,
+		ProcurePool: opts.ProcurePool,
 
 		skipExtraFrames:      skipExtraFrames,
 		skipPackageNameCheck: opts.skipPackageNameCheck,
