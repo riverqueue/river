@@ -8,7 +8,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1
 	github.com/jackc/pgerrcode v0.0.0-20240316143900-6e2875d9b438
 	github.com/jackc/pgx/v5 v5.9.1
-	github.com/lib/pq v1.12.0
+	github.com/lib/pq v1.12.3
 	github.com/riverqueue/river v0.33.0
 	github.com/riverqueue/river/riverdriver v0.33.0
 	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.33.0
@@ -21,7 +21,7 @@ require (
 	github.com/tidwall/sjson v1.2.5
 	github.com/tursodatabase/libsql-client-go v0.0.0-20240902231107-85af5b9d094d
 	golang.org/x/text v0.35.0
-	modernc.org/sqlite v1.48.0
+	modernc.org/sqlite v1.48.1
 )
 
 require (
