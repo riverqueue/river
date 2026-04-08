@@ -29,16 +29,6 @@ const (
 	ReindexerTimeoutDefault = 1 * time.Minute
 )
 
-var defaultIndexNames = []string{ //nolint:gochecknoglobals
-	"river_job_args_index",
-	"river_job_kind",
-	"river_job_metadata_index",
-	"river_job_pkey",
-	"river_job_prioritized_fetching_index",
-	"river_job_state_and_finalized_at_index",
-	"river_job_unique_idx",
-}
-
 // ReindexerTestSignals are internal signals used exclusively in tests.
 type ReindexerTestSignals struct {
 	Reindexed testsignal.TestSignal[struct{}] // notifies when a run finishes executing reindexes for all indexes
@@ -49,7 +39,8 @@ func (ts *ReindexerTestSignals) Init(tb testutil.TestingTB) {
 }
 
 type ReindexerConfig struct {
-	// IndexNames is a list of indexes to reindex on each run.
+	// IndexNames is the exact list of indexes to reindex on each run. It must
+	// be non-nil. An empty slice disables reindex work.
 	IndexNames []string
 
 	// ScheduleFunc returns the next scheduled run time for the reindexer given the
@@ -66,6 +57,9 @@ type ReindexerConfig struct {
 }
 
 func (c *ReindexerConfig) mustValidate() *ReindexerConfig {
+	if c.IndexNames == nil {
+		panic("ReindexerConfig.IndexNames must be set")
+	}
 	if c.ScheduleFunc == nil {
 		panic("ReindexerConfig.ScheduleFunc must be set")
 	}
@@ -91,10 +85,12 @@ type Reindexer struct {
 }
 
 func NewReindexer(archetype *baseservice.Archetype, config *ReindexerConfig, exec riverdriver.Executor) *Reindexer {
-	indexNames := defaultIndexNames
-	if config.IndexNames != nil {
-		indexNames = config.IndexNames
+	if config.IndexNames == nil {
+		panic("ReindexerConfig.IndexNames must be set")
 	}
+
+	indexNames := make([]string, len(config.IndexNames))
+	copy(indexNames, config.IndexNames)
 
 	scheduleFunc := config.ScheduleFunc
 	if scheduleFunc == nil {
@@ -133,11 +129,27 @@ func (s *Reindexer) Start(ctx context.Context) error {
 		s.Logger.DebugContext(ctx, s.Name+": Scheduling first run", slog.Time("next_run_at", nextRunAt))
 
 		timerUntilNextRun := time.NewTimer(time.Until(nextRunAt))
+		scheduleNextRun := func() {
+			// Advance from the previous scheduled time, not "now", so retries
+			// stay aligned with the configured cadence and don't immediately
+			// refire after a timer that has already elapsed.
+			nextRunAt = s.Config.ScheduleFunc(nextRunAt)
+			timerUntilNextRun.Reset(time.Until(nextRunAt))
+		}
 
 		for {
 			select {
 			case <-timerUntilNextRun.C:
-				for _, indexName := range s.Config.IndexNames {
+				reindexableIndexNames, err := s.reindexableIndexNames(ctx)
+				if err != nil {
+					if !errors.Is(err, context.Canceled) {
+						s.Logger.ErrorContext(ctx, s.Name+": Error listing reindexable indexes", slog.String("error", err.Error()))
+					}
+					scheduleNextRun()
+					continue
+				}
+
+				for _, indexName := range reindexableIndexNames {
 					if _, err := s.reindexOne(ctx, indexName); err != nil {
 						if !errors.Is(err, context.Canceled) {
 							s.Logger.ErrorContext(ctx, s.Name+": Error reindexing", slog.String("error", err.Error()), slog.String("index_name", indexName))
@@ -151,15 +163,11 @@ func (s *Reindexer) Start(ctx context.Context) error {
 				// On each run, we calculate the new schedule based on the
 				// previous run's start time. This ensures that we don't
 				// accidentally skip a run as time elapses during the run.
-				nextRunAt = s.Config.ScheduleFunc(nextRunAt)
+				scheduleNextRun()
 
 				// TODO: maybe we should log differently if some of these fail?
 				s.Logger.DebugContext(ctx, s.Name+riversharedmaintenance.LogPrefixRanSuccessfully,
-					slog.Time("next_run_at", nextRunAt), slog.Int("num_reindexes_initiated", len(s.Config.IndexNames)))
-
-				// Reset the timer after the insert loop has finished so it's
-				// paused during work. Makes its firing more deterministic.
-				timerUntilNextRun.Reset(time.Until(nextRunAt))
+					slog.Time("next_run_at", nextRunAt), slog.Int("num_reindexes_initiated", len(reindexableIndexNames)))
 
 			case <-ctx.Done():
 				// Clean up timer resources. We know it has _not_ received from
@@ -174,6 +182,34 @@ func (s *Reindexer) Start(ctx context.Context) error {
 	}()
 
 	return nil
+}
+
+func (s *Reindexer) reindexableIndexNames(ctx context.Context) ([]string, error) {
+	indexesExist, err := s.exec.IndexesExist(ctx, &riverdriver.IndexesExistParams{
+		IndexNames: s.Config.IndexNames,
+		Schema:     s.Config.Schema,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	indexNames := make([]string, 0, len(s.Config.IndexNames))
+	missingIndexNames := make([]string, 0)
+	for _, indexName := range s.Config.IndexNames {
+		if indexesExist[indexName] {
+			indexNames = append(indexNames, indexName)
+			continue
+		}
+
+		missingIndexNames = append(missingIndexNames, indexName)
+	}
+
+	if len(missingIndexNames) > 0 {
+		s.Logger.WarnContext(ctx, s.Name+": Configured reindex indexes do not exist; run migrations or update ReindexerIndexNames",
+			slog.Any("index_names", missingIndexNames))
+	}
+
+	return indexNames, nil
 }
 
 func (s *Reindexer) reindexOne(ctx context.Context, indexName string) (bool, error) {

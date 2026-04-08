@@ -52,7 +52,19 @@ const (
 	QueueNumWorkersMax = 10_000
 )
 
-var postgresSchemaNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+var (
+	postgresSchemaNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+	reindexerIndexNamesDefault = []string{ //nolint:gochecknoglobals
+		"river_job_args_index",
+		"river_job_kind",
+		"river_job_metadata_index",
+		"river_job_pkey",
+		"river_job_prioritized_fetching_index",
+		"river_job_state_and_finalized_at_index",
+		"river_job_unique_idx",
+	}
+)
 
 // TestConfig contains configuration specific to test environments.
 type TestConfig struct {
@@ -272,6 +284,11 @@ type Config struct {
 	// reindexer will run at midnight UTC every day.
 	ReindexerSchedule PeriodicSchedule
 
+	// ReindexerIndexNames customizes which indexes River periodically reindexes.
+	// If nil, River uses [ReindexerIndexNamesDefault]. If non-nil, the provided
+	// slice is used as the exact list.
+	ReindexerIndexNames []string
+
 	// ReindexerTimeout is the amount of time to wait for the reindexer to run a
 	// single reindex operation before cancelling it via context. Set to -1 to
 	// disable the timeout.
@@ -374,10 +391,24 @@ type Config struct {
 	schedulerInterval time.Duration
 }
 
+// ReindexerIndexNamesDefault returns the default set of indexes reindexed by River.
+func ReindexerIndexNamesDefault() []string {
+	indexNames := make([]string, len(reindexerIndexNamesDefault))
+	copy(indexNames, reindexerIndexNamesDefault)
+
+	return indexNames
+}
+
 // WithDefaults returns a copy of the Config with all default values applied.
 func (c *Config) WithDefaults() *Config {
 	if c == nil {
 		c = &Config{}
+	}
+
+	reindexerIndexNames := ReindexerIndexNamesDefault()
+	if c.ReindexerIndexNames != nil {
+		reindexerIndexNames = make([]string, len(c.ReindexerIndexNames))
+		copy(reindexerIndexNames, c.ReindexerIndexNames)
 	}
 
 	// Use the existing logger if set, otherwise create a default one.
@@ -420,6 +451,7 @@ func (c *Config) WithDefaults() *Config {
 		PeriodicJobs:                c.PeriodicJobs,
 		PollOnly:                    c.PollOnly,
 		Queues:                      c.Queues,
+		ReindexerIndexNames:         reindexerIndexNames,
 		ReindexerSchedule:           c.ReindexerSchedule,
 		ReindexerTimeout:            cmp.Or(c.ReindexerTimeout, maintenance.ReindexerTimeoutDefault),
 		RescueStuckJobsAfter:        cmp.Or(c.RescueStuckJobsAfter, rescueAfter),
@@ -603,14 +635,14 @@ type Client[TTx any] struct {
 	notifier               *notifier.Notifier // may be nil in poll-only mode
 	periodicJobs           *PeriodicJobBundle
 	pilot                  riverpilot.Pilot
-	producersByQueueName      map[string]*producer
-	queueMaintainer           *maintenance.QueueMaintainer
-	queueMaintainerLeader     *maintenance.QueueMaintainerLeader
-	queues                    *QueueBundle
-	services            []startstop.Service
-	stopped             <-chan struct{}
-	subscriptionManager *subscriptionManager
-	testSignals         clientTestSignals
+	producersByQueueName   map[string]*producer
+	queueMaintainer        *maintenance.QueueMaintainer
+	queueMaintainerLeader  *maintenance.QueueMaintainerLeader
+	queues                 *QueueBundle
+	services               []startstop.Service
+	stopped                <-chan struct{}
+	subscriptionManager    *subscriptionManager
+	testSignals            clientTestSignals
 
 	// workCancel cancels the context used for all work goroutines. Normal Stop
 	// does not cancel that context.
@@ -936,6 +968,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			}
 
 			reindexer := maintenance.NewReindexer(archetype, &maintenance.ReindexerConfig{
+				IndexNames:   config.ReindexerIndexNames,
 				ScheduleFunc: scheduleFunc,
 				Schema:       config.Schema,
 				Timeout:      config.ReindexerTimeout,

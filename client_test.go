@@ -7185,6 +7185,39 @@ func Test_Client_Start_Error(t *testing.T) {
 	})
 }
 
+func Test_Config_WithDefaults(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ReindexerIndexNamesEmptyStaysNonNil", func(t *testing.T) {
+		t.Parallel()
+
+		config := (&Config{ReindexerIndexNames: []string{}}).WithDefaults()
+
+		require.NotNil(t, config.ReindexerIndexNames)
+		require.Empty(t, config.ReindexerIndexNames)
+	})
+
+	t.Run("ReindexerIndexNamesNilGetsDefaults", func(t *testing.T) {
+		t.Parallel()
+
+		config := (&Config{}).WithDefaults()
+
+		require.Equal(t, ReindexerIndexNamesDefault(), config.ReindexerIndexNames)
+	})
+
+	t.Run("ReindexerIndexNamesSliceIsCopied", func(t *testing.T) {
+		t.Parallel()
+
+		input := []string{"custom_index", "other_index"}
+		config := (&Config{ReindexerIndexNames: input}).WithDefaults()
+
+		require.Equal(t, input, config.ReindexerIndexNames)
+
+		input[0] = "mutated"
+		require.Equal(t, []string{"custom_index", "other_index"}, config.ReindexerIndexNames)
+	})
+}
+
 func Test_NewClient_BaseServiceName(t *testing.T) {
 	t.Parallel()
 
@@ -7279,13 +7312,8 @@ func Test_NewClient_Defaults(t *testing.T) {
 	require.False(t, enqueuer.StaggerStartupIsDisabled())
 
 	reindexer := maintenance.GetService[*maintenance.Reindexer](client.queueMaintainer)
-	require.Contains(t, reindexer.Config.IndexNames, "river_job_args_index")
-	require.Contains(t, reindexer.Config.IndexNames, "river_job_kind")
-	require.Contains(t, reindexer.Config.IndexNames, "river_job_metadata_index")
-	require.Contains(t, reindexer.Config.IndexNames, "river_job_pkey")
-	require.Contains(t, reindexer.Config.IndexNames, "river_job_prioritized_fetching_index")
-	require.Contains(t, reindexer.Config.IndexNames, "river_job_state_and_finalized_at_index")
-	require.Contains(t, reindexer.Config.IndexNames, "river_job_unique_idx")
+	require.Equal(t, ReindexerIndexNamesDefault(), client.config.ReindexerIndexNames)
+	require.Equal(t, ReindexerIndexNamesDefault(), reindexer.Config.IndexNames)
 	now := time.Now().UTC()
 	nextMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, 1)
 	require.Equal(t, nextMidnight, reindexer.Config.ScheduleFunc(now))
@@ -7349,6 +7377,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 		Logger:                      logger,
 		MaxAttempts:                 5,
 		Queues:                      map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}},
+		ReindexerIndexNames:         []string{"custom_index", "other_index"},
 		ReindexerSchedule:           &periodicIntervalSchedule{interval: time.Hour},
 		ReindexerTimeout:            125 * time.Millisecond,
 		RetryPolicy:                 retryPolicy,
@@ -7373,6 +7402,8 @@ func Test_NewClient_Overrides(t *testing.T) {
 	require.True(t, enqueuer.StaggerStartupIsDisabled())
 
 	reindexer := maintenance.GetService[*maintenance.Reindexer](client.queueMaintainer)
+	// Assert the exact list so index list changes require explicit test updates.
+	require.Equal(t, []string{"custom_index", "other_index"}, reindexer.Config.IndexNames)
 	now := time.Now().UTC()
 	require.Equal(t, now.Add(time.Hour), reindexer.Config.ScheduleFunc(now))
 
@@ -7389,6 +7420,37 @@ func Test_NewClient_Overrides(t *testing.T) {
 	require.Equal(t, schema, client.config.Schema)
 	require.True(t, client.config.SkipUnknownJobCheck)
 	require.Len(t, client.config.WorkerMiddleware, 1)
+}
+
+func Test_NewClient_ReindexerIndexNamesExplicitEmptyOverride(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	var (
+		dbPool = riversharedtest.DBPool(ctx, t)
+		driver = riverpgxv5.New(dbPool)
+		schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+	)
+
+	workers := NewWorkers()
+	AddWorker(workers, &noOpWorker{})
+
+	client, err := NewClient(driver, &Config{
+		Queues:              map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}},
+		ReindexerIndexNames: []string{},
+		Schema:              schema,
+		TestOnly:            true,
+		Workers:             workers,
+	})
+	require.NoError(t, err)
+
+	require.NotNil(t, client.config.ReindexerIndexNames)
+	require.Empty(t, client.config.ReindexerIndexNames)
+
+	reindexer := maintenance.GetService[*maintenance.Reindexer](client.queueMaintainer)
+	require.NotNil(t, reindexer.Config.IndexNames)
+	require.Empty(t, reindexer.Config.IndexNames)
 }
 
 func Test_NewClient_MissingParameters(t *testing.T) {
@@ -7815,6 +7877,26 @@ func Test_NewClient_Validations(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReindexerIndexNamesDefault(t *testing.T) {
+	t.Parallel()
+
+	indexNames := ReindexerIndexNamesDefault()
+
+	// Assert the exact list so index list changes require explicit test updates.
+	require.Equal(t, []string{
+		"river_job_args_index",
+		"river_job_kind",
+		"river_job_metadata_index",
+		"river_job_pkey",
+		"river_job_prioritized_fetching_index",
+		"river_job_state_and_finalized_at_index",
+		"river_job_unique_idx",
+	}, indexNames)
+
+	indexNames[0] = "mutated"
+	require.Equal(t, "river_job_args_index", ReindexerIndexNamesDefault()[0])
 }
 
 type timeoutTestArgs struct {

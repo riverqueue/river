@@ -2,7 +2,9 @@ package maintenance
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,15 +18,43 @@ import (
 	"github.com/riverqueue/river/rivershared/startstoptest"
 )
 
+type reindexerExecutorMock struct {
+	riverdriver.Executor
+
+	indexesExistCalls  atomic.Int32
+	indexesExistFunc   func(ctx context.Context, params *riverdriver.IndexesExistParams) (map[string]bool, error)
+	indexesExistSignal chan struct{}
+}
+
+func newReindexerExecutorMock(exec riverdriver.Executor) *reindexerExecutorMock {
+	return &reindexerExecutorMock{
+		Executor:           exec,
+		indexesExistFunc:   exec.IndexesExist,
+		indexesExistSignal: make(chan struct{}, 10),
+	}
+}
+
+func (m *reindexerExecutorMock) IndexesExist(ctx context.Context, params *riverdriver.IndexesExistParams) (map[string]bool, error) {
+	m.indexesExistCalls.Add(1)
+
+	select {
+	case m.indexesExistSignal <- struct{}{}:
+	default:
+	}
+
+	return m.indexesExistFunc(ctx, params)
+}
+
 func TestReindexer(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 
 	type testBundle struct {
-		exec   riverdriver.Executor
-		now    time.Time
-		schema string
+		exec       riverdriver.Executor
+		indexNames []string
+		now        time.Time
+		schema     string
 	}
 
 	setup := func(t *testing.T) (*Reindexer, *testBundle) {
@@ -37,8 +67,9 @@ func TestReindexer(t *testing.T) {
 		)
 
 		bundle := &testBundle{
-			exec:   riverpgxv5.New(dbPool).GetExecutor(),
-			schema: schema,
+			exec:       riverpgxv5.New(dbPool).GetExecutor(),
+			indexNames: []string{"river_job_kind", "river_job_prioritized_fetching_index", "river_job_state_and_finalized_at_index"},
+			schema:     schema,
 		}
 
 		archetype := riversharedtest.BaseServiceArchetype(t)
@@ -51,6 +82,7 @@ func TestReindexer(t *testing.T) {
 		}
 
 		svc := NewReindexer(archetype, &ReindexerConfig{
+			IndexNames:   bundle.indexNames,
 			ScheduleFunc: fromNow(500 * time.Millisecond),
 			Schema:       schema,
 		}, bundle.exec)
@@ -67,6 +99,8 @@ func TestReindexer(t *testing.T) {
 			if alreadyRan {
 				return t.Add(time.Hour)
 			}
+			// Force the first run immediately, then make the next legitimate
+			// schedule far enough away that an immediate retry is clearly wrong.
 			alreadyRan = true
 			return t.Add(time.Millisecond)
 		}
@@ -127,6 +161,22 @@ func TestReindexer(t *testing.T) {
 		require.True(t, requireReindexOne(indexName))
 	})
 
+	t.Run("ReindexableIndexNamesSkipsMissingIndexes", func(t *testing.T) {
+		t.Parallel()
+
+		svc, _ := setup(t)
+
+		svc.Config.IndexNames = []string{
+			"does_not_exist",
+			"river_job_kind",
+			"river_job_prioritized_fetching_index",
+		}
+
+		indexNames, err := svc.reindexableIndexNames(ctx)
+		require.NoError(t, err)
+		require.Equal(t, []string{"river_job_kind", "river_job_prioritized_fetching_index"}, indexNames)
+	})
+
 	t.Run("ReindexesMinimalSubsetofIndexes", func(t *testing.T) {
 		t.Parallel()
 
@@ -163,7 +213,7 @@ func TestReindexer(t *testing.T) {
 		}
 	})
 
-	t.Run("ReindexesDefaultIndexes", func(t *testing.T) {
+	t.Run("ReindexesConfiguredIndexes", func(t *testing.T) {
 		t.Parallel()
 
 		svc, _ := setup(t)
@@ -243,16 +293,75 @@ func TestReindexer(t *testing.T) {
 		riversharedtest.WaitOrTimeout(t, stopped)
 	})
 
-	t.Run("DefaultConfigs", func(t *testing.T) {
+	t.Run("CopiesConfiguredIndexNamesAndAppliesOtherDefaults", func(t *testing.T) {
 		t.Parallel()
 
 		svc, bundle := setup(t)
-		svc = NewReindexer(&svc.Archetype, &ReindexerConfig{}, bundle.exec)
+		input := []string{"river_job_kind"}
+		svc = NewReindexer(&svc.Archetype, &ReindexerConfig{IndexNames: input}, bundle.exec)
 
-		require.Equal(t, defaultIndexNames, svc.Config.IndexNames)
+		require.Equal(t, input, svc.Config.IndexNames)
+		input[0] = "mutated"
+		require.Equal(t, []string{"river_job_kind"}, svc.Config.IndexNames)
 		require.Equal(t, ReindexerTimeoutDefault, svc.Config.Timeout)
 		require.Equal(t, svc.Config.ScheduleFunc(bundle.now), (&DefaultReindexerSchedule{}).Next(bundle.now))
 	})
+
+	t.Run("PanicsOnNilIndexNames", func(t *testing.T) {
+		t.Parallel()
+
+		svc, bundle := setup(t)
+
+		require.PanicsWithValue(t, "ReindexerConfig.IndexNames must be set", func() {
+			NewReindexer(&svc.Archetype, &ReindexerConfig{}, bundle.exec)
+		})
+	})
+}
+
+func TestReindexer_DiscoveryErrorSchedulesNextRun(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	var (
+		dbPool = riversharedtest.DBPool(ctx, t)
+		driver = riverpgxv5.New(dbPool)
+		schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+	)
+
+	runImmediatelyThenOnceAnHour := func() func(time.Time) time.Time {
+		alreadyRan := false
+		return func(t time.Time) time.Time {
+			if alreadyRan {
+				return t.Add(time.Hour)
+			}
+			alreadyRan = true
+			return t.Add(time.Millisecond)
+		}
+	}
+
+	execMock := newReindexerExecutorMock(driver.GetExecutor())
+	execMock.indexesExistFunc = func(ctx context.Context, params *riverdriver.IndexesExistParams) (map[string]bool, error) {
+		return nil, errors.New("indexes exist failed")
+	}
+
+	svc := NewReindexer(riversharedtest.BaseServiceArchetype(t), &ReindexerConfig{
+		IndexNames:   []string{"river_job_kind"},
+		ScheduleFunc: runImmediatelyThenOnceAnHour(),
+		Schema:       schema,
+	}, execMock)
+	svc.Logger = riversharedtest.LoggerWarn(t)
+	svc.StaggerStartupDisable(true)
+	t.Cleanup(svc.Stop)
+
+	require.NoError(t, svc.Start(ctx))
+	riversharedtest.WaitOrTimeout(t, execMock.indexesExistSignal)
+
+	select {
+	case <-execMock.indexesExistSignal:
+		require.FailNowf(t, "unexpected immediate retry", "IndexesExist was called %d times", execMock.indexesExistCalls.Load())
+	case <-time.After(100 * time.Millisecond):
+	}
 }
 
 func TestDefaultReindexerSchedule(t *testing.T) {
