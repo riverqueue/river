@@ -86,7 +86,7 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 	t.Run("JobCountByQueueAndState", func(t *testing.T) {
 		t.Parallel()
 
-		t.Run("CountsJobsInAvailableAndRunningForEachOfTheSpecifiedQueues", func(t *testing.T) {
+		t.Run("CountsAllStatesForSpecifiedQueues", func(t *testing.T) {
 			t.Parallel()
 
 			exec, _ := setup(ctx, t)
@@ -96,10 +96,10 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue1"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue1"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue1"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue1"), State: ptrutil.Ptr(rivertype.JobStateCompleted)})
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue2"), State: ptrutil.Ptr(rivertype.JobStateAvailable)})
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue2"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue3"), State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue3"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
 
 			countsByQueue, err := exec.JobCountByQueueAndState(ctx, &riverdriver.JobCountByQueueAndStateParams{
 				QueueNames: []string{"queue1", "queue2"},
@@ -109,62 +109,32 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 
 			require.Len(t, countsByQueue, 2)
 
-			require.Equal(t, "queue1", countsByQueue[0].Queue)
-			require.Equal(t, int64(2), countsByQueue[0].CountAvailable)
-			require.Equal(t, int64(3), countsByQueue[0].CountRunning)
-			require.Equal(t, "queue2", countsByQueue[1].Queue)
-			require.Equal(t, int64(1), countsByQueue[1].CountAvailable)
-			require.Equal(t, int64(1), countsByQueue[1].CountRunning)
+			require.Equal(t, 2, countsByQueue["queue1"][rivertype.JobStateAvailable])
+			require.Equal(t, 3, countsByQueue["queue1"][rivertype.JobStateRunning])
+			require.Equal(t, 1, countsByQueue["queue1"][rivertype.JobStateCompleted])
+			require.Equal(t, 0, countsByQueue["queue1"][rivertype.JobStateCancelled])
+
+			require.Equal(t, 1, countsByQueue["queue2"][rivertype.JobStateAvailable])
+			require.Equal(t, 1, countsByQueue["queue2"][rivertype.JobStateRunning])
 		})
 
-		t.Run("IncludesRequestedQueuesThatHaveNoJobs", func(t *testing.T) {
+		t.Run("ExcludesQueuesNotRequested", func(t *testing.T) {
 			t.Parallel()
 
 			exec, _ := setup(ctx, t)
 
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue1"), State: ptrutil.Ptr(rivertype.JobStateAvailable)})
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue2"), State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue2"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
 
 			countsByQueue, err := exec.JobCountByQueueAndState(ctx, &riverdriver.JobCountByQueueAndStateParams{
-				QueueNames: []string{"queue1", "queue2"},
+				QueueNames: []string{"queue1"},
 				Schema:     "",
 			})
 			require.NoError(t, err)
 
-			require.Len(t, countsByQueue, 2)
-
-			require.Equal(t, "queue1", countsByQueue[0].Queue)
-			require.Equal(t, int64(0), countsByQueue[0].CountAvailable)
-			require.Equal(t, int64(0), countsByQueue[0].CountRunning)
-
-			require.Equal(t, "queue2", countsByQueue[1].Queue)
-			require.Equal(t, int64(1), countsByQueue[1].CountAvailable)
-			require.Equal(t, int64(1), countsByQueue[1].CountRunning)
-		})
-
-		t.Run("InputQueueNamesAreDeduplicated", func(t *testing.T) {
-			t.Parallel()
-
-			exec, _ := setup(ctx, t)
-
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue2"), State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue2"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
-
-			countsByQueue, err := exec.JobCountByQueueAndState(ctx, &riverdriver.JobCountByQueueAndStateParams{
-				QueueNames: []string{"queue2", "queue1", "queue1"},
-				Schema:     "",
-			})
-			require.NoError(t, err)
-
-			require.Len(t, countsByQueue, 2)
-
-			require.Equal(t, "queue1", countsByQueue[0].Queue)
-			require.Equal(t, int64(0), countsByQueue[0].CountAvailable)
-			require.Equal(t, int64(0), countsByQueue[0].CountRunning)
-
-			require.Equal(t, "queue2", countsByQueue[1].Queue)
-			require.Equal(t, int64(1), countsByQueue[1].CountAvailable)
-			require.Equal(t, int64(1), countsByQueue[1].CountRunning)
+			require.Len(t, countsByQueue, 1)
+			require.Equal(t, 1, countsByQueue["queue1"][rivertype.JobStateAvailable])
+			require.Nil(t, countsByQueue["queue2"])
 		})
 	})
 

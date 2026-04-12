@@ -351,6 +351,35 @@ type HookPeriodicJobsStartParams struct {
 	DurableJobs []*DurablePeriodicJob
 }
 
+// HookQueueStateCount is an interface to a hook that runs each time the queue
+// state counter maintenance service performs a count.
+type HookQueueStateCount interface {
+	Hook
+
+	// QueueStateCount is invoked after the queue state counter has completed a
+	// count of jobs by queue and state.
+	QueueStateCount(ctx context.Context, params *HookQueueStateCountParams)
+}
+
+// HookQueueStateCountParams are parameters for HookQueueStateCount.
+type HookQueueStateCountParams struct {
+	// ByQueue is a map of queue name to its count results. All queues
+	// configured with this client are included, even if they don't currently
+	// contain jobs.
+	ByQueue map[string]HookQueueStateCountResult
+}
+
+// HookQueueStateCountResult contains coutns for a single queue.
+type HookQueueStateCountResult struct {
+	// ByState is a map of job state to the number of jobs in that state for the
+	// queue. All job states are included, even if they have no jobs in that
+	// state.
+	ByState map[JobState]int
+
+	// Total is the total number of jobs across all states for the queue.
+	Total int
+}
+
 // HookWorkBegin is an interface to a hook that runs after a job has been locked
 // for work and before it's worked.
 type HookWorkBegin interface {

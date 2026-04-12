@@ -290,51 +290,18 @@ func (e *Executor) JobCountByAllStates(ctx context.Context, params *riverdriver.
 	return countsMap, nil
 }
 
-func (e *Executor) JobCountByQueueAndState(ctx context.Context, params *riverdriver.JobCountByQueueAndStateParams) ([]*riverdriver.JobCountByQueueAndStateResult, error) {
+func (e *Executor) JobCountByQueueAndState(ctx context.Context, params *riverdriver.JobCountByQueueAndStateParams) (map[string]map[rivertype.JobState]int, error) {
 	rows, err := dbsqlc.New().JobCountByQueueAndState(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.QueueNames)
 	if err != nil {
 		return nil, interpretError(err)
 	}
-
-	// The PostgreSQL drivers implement this query with an `all_queues` CTE and
-	// LEFT JOINs, so they return one row per requested queue, including queues
-	// that currently have no jobs. The input queue list is deduplicated in SQL.
-	// The SQLite sqlc driver only reliably supports `sqlc.slice` in `IN (...)`,
-	// and we haven't found a workable way to bind a parameterized list through
-	// `json_each(...)` to produce equivalent SQL. The SQLite SQL query therefore
-	// returns only queues with matching rows, and this wrapper fills in missing
-	// queues to match PostgreSQL behavior.
-	countsByQueue := make(map[string]struct {
-		CountAvailable int64
-		CountRunning   int64
-	}, len(rows))
+	results := make(map[string]map[rivertype.JobState]int)
 	for _, row := range rows {
-		countsByQueue[row.Queue] = struct {
-			CountAvailable int64
-			CountRunning   int64
-		}{
-			CountAvailable: row.CountAvailable,
-			CountRunning:   row.CountRunning,
+		if results[row.Queue] == nil {
+			results[row.Queue] = make(map[rivertype.JobState]int)
 		}
+		results[row.Queue][rivertype.JobState(row.State)] = int(row.Count)
 	}
-
-	queueNames := slices.Clone(params.QueueNames)
-	slices.Sort(queueNames)
-	queueNames = slices.Compact(queueNames)
-
-	results := make([]*riverdriver.JobCountByQueueAndStateResult, 0, len(queueNames))
-	for _, queueName := range queueNames {
-		result := &riverdriver.JobCountByQueueAndStateResult{
-			Queue: queueName,
-		}
-		if counts, ok := countsByQueue[queueName]; ok {
-			result.CountAvailable = counts.CountAvailable
-			result.CountRunning = counts.CountRunning
-		}
-
-		results = append(results, result)
-	}
-
 	return results, nil
 }
 
