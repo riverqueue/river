@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -657,6 +658,7 @@ type clientTestSignals struct {
 	periodicJobEnqueuer   *maintenance.PeriodicJobEnqueuerTestSignals
 	queueCleaner          *maintenance.QueueCleanerTestSignals
 	queueMaintainerLeader *maintenance.QueueMaintainerLeaderTestSignals
+	queueStateCounter     *maintenance.QueueStateCounterTestSignals
 	reindexer             *maintenance.ReindexerTestSignals
 }
 
@@ -678,6 +680,9 @@ func (ts *clientTestSignals) Init(tb testutil.TestingTB) {
 	}
 	if ts.queueMaintainerLeader != nil {
 		ts.queueMaintainerLeader.Init(tb)
+	}
+	if ts.queueStateCounter != nil {
+		ts.queueStateCounter.Init(tb)
 	}
 	if ts.reindexer != nil {
 		ts.reindexer.Init(tb)
@@ -759,7 +764,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		config:               config,
 		driver:               driver,
 		hookLookupByJob:      hooklookup.NewJobHookLookup(),
-		hookLookupGlobal:     hooklookup.NewHookLookup(config.Hooks),
+		hookLookupGlobal:     nil, // initialized below after cross-referencing with middleware
 		producersByQueueName: make(map[string]*producer),
 		testSignals:          clientTestSignals{},
 		workCancel:           func(cause error) {}, // replaced on start, but here in case StopAndCancel is called before start up
@@ -780,9 +785,9 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	// the more abstract config.Middleware for middleware are set, but not both,
 	// so in practice we never append all three of these to each other.
 	{
-		middleware := config.Middleware
+		middlewares := config.Middleware
 		for _, jobInsertMiddleware := range config.JobInsertMiddleware {
-			middleware = append(middleware, jobInsertMiddleware)
+			middlewares = append(middlewares, jobInsertMiddleware)
 		}
 	outerLoop:
 		for _, workerMiddleware := range config.WorkerMiddleware {
@@ -798,16 +803,44 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 				}
 			}
 
-			middleware = append(middleware, workerMiddleware)
+			middlewares = append(middlewares, workerMiddleware)
 		}
 
-		for _, middleware := range middleware {
+		for _, middleware := range middlewares {
 			if withBaseService, ok := middleware.(baseservice.WithBaseService); ok {
 				baseservice.Init(archetype, withBaseService)
 			}
 		}
 
-		client.middlewareLookupGlobal = middlewarelookup.NewMiddlewareLookup(middleware)
+		// Cross-reference hooks and middleware: any middleware that also
+		// implements Hook is added to hooks, and any hook that also implements
+		// Middleware is added to middleware. Deduplication prevents double
+		// registration when the same struct is passed to both Config.Hooks and
+		// Config.Middleware.
+		hooks := config.Hooks
+
+		for _, middleware := range middlewares {
+			if hook, ok := middleware.(rivertype.Hook); ok {
+				// Only add if this middleware isn't already in hooks (it may
+				// have been passed to both config properties).
+				alreadyInHooks := slices.Contains(hooks, hook)
+				if !alreadyInHooks {
+					hooks = append(hooks, hook)
+				}
+			}
+		}
+
+		for _, hook := range config.Hooks {
+			if middleware, ok := hook.(rivertype.Middleware); ok {
+				alreadyInMiddleware := slices.Contains(middlewares, middleware)
+				if !alreadyInMiddleware {
+					middlewares = append(middlewares, middleware)
+				}
+			}
+		}
+
+		client.hookLookupGlobal = hooklookup.NewHookLookup(hooks)
+		client.middlewareLookupGlobal = middlewarelookup.NewMiddlewareLookup(middlewares)
 	}
 
 	pluginDriver, _ := driver.(driverPlugin[TTx])
@@ -959,6 +992,16 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			}, driver.GetExecutor())
 			maintenanceServices = append(maintenanceServices, queueCleaner)
 			client.testSignals.queueCleaner = &queueCleaner.TestSignals
+		}
+
+		{
+			queueStateCounter := maintenance.NewQueueStateCounter(archetype, &maintenance.QueueStateCounterConfig{
+				HookLookupGlobal: client.hookLookupGlobal,
+				QueueNames:       maputil.Keys(config.Queues),
+				Schema:           config.Schema,
+			}, driver.GetExecutor())
+			maintenanceServices = append(maintenanceServices, queueStateCounter)
+			client.testSignals.queueStateCounter = &queueStateCounter.TestSignals
 		}
 
 		{

@@ -202,7 +202,7 @@ type Executor interface {
 
 	JobCancel(ctx context.Context, params *JobCancelParams) (*rivertype.JobRow, error)
 	JobCountByAllStates(ctx context.Context, params *JobCountByAllStatesParams) (map[rivertype.JobState]int, error)
-	JobCountByQueueAndState(ctx context.Context, params *JobCountByQueueAndStateParams) ([]*JobCountByQueueAndStateResult, error)
+	JobCountByQueueAndState(ctx context.Context, params *JobCountByQueueAndStateParams) (map[string]map[rivertype.JobState]int, error)
 	JobCountByState(ctx context.Context, params *JobCountByStateParams) (int, error)
 	JobDelete(ctx context.Context, params *JobDeleteParams) (*rivertype.JobRow, error)
 	JobDeleteBefore(ctx context.Context, params *JobDeleteBeforeParams) (int, error)
@@ -357,12 +357,6 @@ type JobCountByAllStatesParams struct {
 type JobCountByQueueAndStateParams struct {
 	QueueNames []string
 	Schema     string
-}
-
-type JobCountByQueueAndStateResult struct {
-	CountAvailable int64
-	CountRunning   int64
-	Queue          string
 }
 
 type JobCountByStateParams struct {
