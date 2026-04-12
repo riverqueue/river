@@ -139,7 +139,9 @@ func (e *Elector) Start(ctx context.Context) error {
 	// We'll send to this channel anytime a leader resigns on the key with `name`
 	e.leaderResignedChan = make(chan struct{})
 
-	e.requestResignChan = make(chan struct{})
+	// Buffered to 1 so a send from handleLeadershipNotification doesn't block
+	// if keepLeadershipLoop hasn't entered its select yet.
+	e.requestResignChan = make(chan struct{}, 1)
 
 	var sub *notifier.Subscription
 	if e.notifier == nil {

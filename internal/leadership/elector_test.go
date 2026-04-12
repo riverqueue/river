@@ -344,6 +344,31 @@ func testElector[TElectorBundle any](
 		startstoptest.Stress(ctx, t, elector)
 	})
 
+	t.Run("RequestResignImmediatelyAfterElection", func(t *testing.T) {
+		t.Parallel()
+
+		elector, _ := setup(t, nil)
+
+		startElector(ctx, t, elector)
+
+		elector.testSignals.GainedLeadership.WaitOrTimeout()
+
+		// Send a resign request immediately after gaining leadership.
+		// GainedLeadership is signaled _before_ keepLeadershipLoop is
+		// entered, so the resign request arrives before the loop's
+		// select. This only works if requestResignChan is buffered;
+		// with an unbuffered channel the send would be dropped by the
+		// default case since nobody is receiving yet.
+		payload, err := json.Marshal(DBNotification{
+			Action: DBNotificationKindRequestResign,
+		})
+		require.NoError(t, err)
+		elector.handleLeadershipNotification(ctx, notifier.NotificationTopicLeadership, string(payload))
+
+		elector.testSignals.ResignedLeadership.WaitOrTimeout()
+		elector.testSignals.GainedLeadership.WaitOrTimeout()
+	})
+
 	t.Run("RequestResignStress", func(t *testing.T) {
 		t.Parallel()
 
