@@ -296,43 +296,31 @@ func (e *Executor) JobCountByQueueAndState(ctx context.Context, params *riverdri
 		return nil, interpretError(err)
 	}
 
-	// The PostgreSQL drivers implement this query with an `all_queues` CTE and
-	// LEFT JOINs, so they return one row per requested queue, including queues
-	// that currently have no jobs. The input queue list is deduplicated in SQL.
-	// The SQLite sqlc driver only reliably supports `sqlc.slice` in `IN (...)`,
-	// and we haven't found a workable way to bind a parameterized list through
-	// `json_each(...)` to produce equivalent SQL. The SQLite SQL query therefore
-	// returns only queues with matching rows, and this wrapper fills in missing
-	// queues to match PostgreSQL behavior.
-	countsByQueue := make(map[string]struct {
-		CountAvailable int64
-		CountRunning   int64
-	}, len(rows))
+	rowsByQueue := make(map[string]*riverdriver.JobCountByQueueAndStateResult, len(params.QueueNames))
 	for _, row := range rows {
-		countsByQueue[row.Queue] = struct {
-			CountAvailable int64
-			CountRunning   int64
-		}{
-			CountAvailable: row.CountAvailable,
-			CountRunning:   row.CountRunning,
+		result, ok := rowsByQueue[row.Queue]
+		if !ok {
+			result = &riverdriver.JobCountByQueueAndStateResult{
+				Queue:  row.Queue,
+				States: make(map[rivertype.JobState]int),
+			}
+			rowsByQueue[row.Queue] = result
 		}
+		result.States[rivertype.JobState(row.State)] = int(row.Count)
 	}
 
-	queueNames := slices.Clone(params.QueueNames)
-	slices.Sort(queueNames)
-	queueNames = slices.Compact(queueNames)
-
-	results := make([]*riverdriver.JobCountByQueueAndStateResult, 0, len(queueNames))
-	for _, queueName := range queueNames {
-		result := &riverdriver.JobCountByQueueAndStateResult{
-			Queue: queueName,
+	// Build results in the order of requested queue names, filling in zero
+	// counts for queues with no jobs.
+	results := make([]*riverdriver.JobCountByQueueAndStateResult, 0, len(params.QueueNames))
+	for _, queueName := range params.QueueNames {
+		if result, ok := rowsByQueue[queueName]; ok {
+			results = append(results, result)
+		} else {
+			results = append(results, &riverdriver.JobCountByQueueAndStateResult{
+				Queue:  queueName,
+				States: make(map[rivertype.JobState]int),
+			})
 		}
-		if counts, ok := countsByQueue[queueName]; ok {
-			result.CountAvailable = counts.CountAvailable
-			result.CountRunning = counts.CountRunning
-		}
-
-		results = append(results, result)
 	}
 
 	return results, nil

@@ -33,6 +33,16 @@ func (f HookPeriodicJobsStartFunc) Start(ctx context.Context, params *rivertype.
 	return f(ctx, params)
 }
 
+// HookQueueStateCountFunc is a convenience helper for implementing
+// rivertype.HookQueueStateCount using a simple function instead of a struct.
+type HookQueueStateCountFunc func(ctx context.Context, params *rivertype.HookQueueStateCountParams)
+
+func (f HookQueueStateCountFunc) IsHook() bool { return true }
+
+func (f HookQueueStateCountFunc) QueueStateCount(ctx context.Context, params *rivertype.HookQueueStateCountParams) {
+	f(ctx, params)
+}
+
 // HookWorkBeginFunc is a convenience helper for implementing
 // rivertype.HookWorkBegin using a simple function instead of a struct.
 type HookWorkBeginFunc func(ctx context.Context, job *rivertype.JobRow) error
