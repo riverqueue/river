@@ -62,10 +62,6 @@ func Example_batchInsert() {
 	subscribeChan, subscribeCancel := riverClient.Subscribe(river.EventKindJobCompleted)
 	defer subscribeCancel()
 
-	if err := riverClient.Start(ctx); err != nil {
-		panic(err)
-	}
-
 	results, err := riverClient.InsertMany(ctx, []river.InsertManyParams{
 		{Args: BatchInsertArgs{}},
 		{Args: BatchInsertArgs{}},
@@ -77,6 +73,12 @@ func Example_batchInsert() {
 		panic(err)
 	}
 	fmt.Printf("Inserted %d jobs\n", len(results))
+
+	// Start the client after inserting and printing so that the "Inserted"
+	// message is guaranteed to appear before any "Worked" messages.
+	if err := riverClient.Start(ctx); err != nil {
+		panic(err)
+	}
 
 	// Wait for jobs to complete. Only needed for purposes of the example test.
 	riversharedtest.WaitOrTimeoutN(testutil.PanicTB(), subscribeChan, 5)
