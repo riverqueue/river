@@ -487,6 +487,65 @@ func TestBatchCompleter(t *testing.T) {
 	})
 }
 
+func TestBatchCompleter_JobStatsSnapshotsPerUpdate(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		completer   *BatchCompleter
+		sharedStats *jobstats.JobStatistics
+		subscribeCh chan []CompleterJobUpdated
+	}
+
+	setup := func(t *testing.T) *testBundle {
+		t.Helper()
+
+		execMock := &partialExecutorMock{}
+		execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+			rows := make([]*rivertype.JobRow, len(params.ID))
+			for i := range params.ID {
+				rows[i] = &rivertype.JobRow{
+					ID:    params.ID[i],
+					State: params.State[i],
+				}
+			}
+			return rows, nil
+		}
+
+		subscribeCh := make(chan []CompleterJobUpdated, 2)
+		completer := NewBatchCompleter(riversharedtest.BaseServiceArchetype(t), "", execMock, &riverpilot.StandardPilot{}, subscribeCh)
+		completer.disableSleep = true
+
+		return &testBundle{
+			completer: completer,
+			sharedStats: &jobstats.JobStatistics{
+				QueueWaitDuration: 11 * time.Millisecond,
+				RunDuration:       13 * time.Millisecond,
+			},
+			subscribeCh: subscribeCh,
+		}
+	}
+
+	bundle := setup(t)
+
+	require.NoError(t, bundle.completer.JobSetStateIfRunning(ctx, bundle.sharedStats, riverdriver.JobSetStateCompleted(1, time.Now(), nil)))
+	require.NoError(t, bundle.completer.handleBatch(ctx))
+
+	firstUpdates := riversharedtest.WaitOrTimeout(t, bundle.subscribeCh)
+	require.Len(t, firstUpdates, 1)
+
+	require.NoError(t, bundle.completer.JobSetStateIfRunning(ctx, bundle.sharedStats, riverdriver.JobSetStateCompleted(2, time.Now(), nil)))
+	require.NoError(t, bundle.completer.handleBatch(ctx))
+
+	secondUpdates := riversharedtest.WaitOrTimeout(t, bundle.subscribeCh)
+	require.Len(t, secondUpdates, 1)
+
+	require.NotSame(t, bundle.sharedStats, firstUpdates[0].JobStats)
+	require.NotSame(t, bundle.sharedStats, secondUpdates[0].JobStats)
+	require.NotSame(t, firstUpdates[0].JobStats, secondUpdates[0].JobStats)
+}
+
 func TestInlineCompleter(t *testing.T) {
 	t.Parallel()
 

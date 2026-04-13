@@ -513,7 +513,9 @@ func (c *BatchCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobsta
 	c.setStateParamsMu.Lock()
 	defer c.setStateParamsMu.Unlock()
 
-	c.setStateParams[params.ID] = &batchCompleterSetState{params, stats}
+	statsSnapshot := *stats
+
+	c.setStateParams[params.ID] = &batchCompleterSetState{params, &statsSnapshot}
 	c.setStateStartTimes[params.ID] = now
 
 	return nil

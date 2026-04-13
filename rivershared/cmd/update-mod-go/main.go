@@ -42,7 +42,7 @@ func run() error {
 		return err
 	}
 
-	workFileData, err := os.ReadFile(workFilename) //nolint:gosec // validated by localPath
+	workFileData, err := os.ReadFile(workFilename)
 	if err != nil {
 		return fmt.Errorf("error reading file %q: %w", workFilename, err)
 	}
@@ -98,7 +98,7 @@ func localPath(baseDir, filename string) (string, error) {
 }
 
 func parseAndUpdateGoModFile(checkOnly bool, modFilename, workFilename, workGoVersion, workToolchainName string) (bool, error) {
-	modFileData, err := os.ReadFile(modFilename) //nolint:gosec // validated by localPath
+	modFileData, err := os.ReadFile(modFilename)
 	if err != nil {
 		return false, fmt.Errorf("error reading file %q: %w", modFilename, err)
 	}
