@@ -136,8 +136,10 @@ func (e *Elector) Start(ctx context.Context) error {
 		return nil
 	}
 
-	// We'll send to this channel anytime a leader resigns on the key with `name`
-	e.leaderResignedChan = make(chan struct{})
+	// We'll send to this channel anytime a leader resigns on the key with `name`.
+	// Buffered to 1 so a send doesn't block if the receiving loop hasn't entered
+	// its select yet (e.g. between gaining and maintaining leadership).
+	e.leaderResignedChan = make(chan struct{}, 1)
 
 	// Buffered to 1 so a send from handleLeadershipNotification doesn't block
 	// if keepLeadershipLoop hasn't entered its select yet.
