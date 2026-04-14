@@ -5559,6 +5559,10 @@ func Test_Client_Maintenance(t *testing.T) {
 		t.Parallel()
 
 		config := newTestConfig(t, "")
+		// `Reindexed` fires once per reindex run, not once per index. Configure
+		// one target so this client test stays scoped to proving the reindexer
+		// runs end-to-end without depending on the size of the default list.
+		config.ReindexerIndexNames = []string{"river_job_kind"}
 		config.ReindexerSchedule = &runOnceSchedule{}
 
 		client, _ := setup(t, config)
@@ -5566,8 +5570,6 @@ func Test_Client_Maintenance(t *testing.T) {
 		startAndWaitForQueueMaintainer(ctx, t, client)
 
 		svc := maintenance.GetService[*maintenance.Reindexer](client.queueMaintainer)
-		// There are two indexes to reindex by default:
-		svc.TestSignals.Reindexed.WaitOrTimeout()
 		svc.TestSignals.Reindexed.WaitOrTimeout()
 	})
 }
