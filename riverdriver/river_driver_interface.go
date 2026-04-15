@@ -224,8 +224,8 @@ type Executor interface {
 	JobSetStateIfRunningMany(ctx context.Context, params *JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
 	JobUpdate(ctx context.Context, params *JobUpdateParams) (*rivertype.JobRow, error)
 	JobUpdateFull(ctx context.Context, params *JobUpdateFullParams) (*rivertype.JobRow, error)
-	LeaderAttemptElect(ctx context.Context, params *LeaderElectParams) (bool, error)
-	LeaderAttemptReelect(ctx context.Context, params *LeaderElectParams) (bool, error)
+	LeaderAttemptElect(ctx context.Context, params *LeaderElectParams) (*Leader, error)
+	LeaderAttemptReelect(ctx context.Context, params *LeaderReelectParams) (*Leader, error)
 	LeaderDeleteExpired(ctx context.Context, params *LeaderDeleteExpiredParams) (int, error)
 	LeaderGetElectedLeader(ctx context.Context, params *LeaderGetElectedLeaderParams) (*Leader, error)
 	LeaderInsert(ctx context.Context, params *LeaderInsertParams) (*Leader, error)
@@ -701,7 +701,16 @@ type LeaderElectParams struct {
 	TTL      time.Duration
 }
 
+type LeaderReelectParams struct {
+	ElectedAt time.Time
+	LeaderID  string
+	Now       *time.Time
+	Schema    string
+	TTL       time.Duration
+}
+
 type LeaderResignParams struct {
+	ElectedAt       time.Time
 	LeaderID        string
 	LeadershipTopic string
 	Schema          string

@@ -9,7 +9,7 @@ import (
 	"context"
 )
 
-const leaderAttemptElect = `-- name: LeaderAttemptElect :execrows
+const leaderAttemptElect = `-- name: LeaderAttemptElect :one
 INSERT INTO /* TEMPLATE: schema */river_leader (
     leader_id,
     elected_at,
@@ -21,6 +21,7 @@ INSERT INTO /* TEMPLATE: schema */river_leader (
 )
 ON CONFLICT (name)
     DO NOTHING
+RETURNING elected_at, expires_at, leader_id, name
 `
 
 type LeaderAttemptElectParams struct {
@@ -29,43 +30,50 @@ type LeaderAttemptElectParams struct {
 	TTL      string
 }
 
-func (q *Queries) LeaderAttemptElect(ctx context.Context, db DBTX, arg *LeaderAttemptElectParams) (int64, error) {
-	result, err := db.ExecContext(ctx, leaderAttemptElect, arg.LeaderID, arg.Now, arg.TTL)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+func (q *Queries) LeaderAttemptElect(ctx context.Context, db DBTX, arg *LeaderAttemptElectParams) (*RiverLeader, error) {
+	row := db.QueryRowContext(ctx, leaderAttemptElect, arg.LeaderID, arg.Now, arg.TTL)
+	var i RiverLeader
+	err := row.Scan(
+		&i.ElectedAt,
+		&i.ExpiresAt,
+		&i.LeaderID,
+		&i.Name,
+	)
+	return &i, err
 }
 
-const leaderAttemptReelect = `-- name: LeaderAttemptReelect :execrows
-INSERT INTO /* TEMPLATE: schema */river_leader (
-    leader_id,
-    elected_at,
-    expires_at
-) VALUES (
-    ?1,
-    coalesce(cast(?2 AS text), datetime('now', 'subsec')),
-    datetime(coalesce(cast(?2 AS text), datetime('now', 'subsec')), 'subsec', cast(?3 as text))
-)
-ON CONFLICT (name)
-    DO UPDATE SET
-        expires_at = EXCLUDED.expires_at
-    WHERE
-        leader_id = EXCLUDED.leader_id
+const leaderAttemptReelect = `-- name: LeaderAttemptReelect :one
+UPDATE /* TEMPLATE: schema */river_leader
+SET expires_at = datetime(coalesce(cast(?1 AS text), datetime('now', 'subsec')), 'subsec', cast(?2 as text))
+WHERE
+    unixepoch(elected_at, 'subsec') = unixepoch(cast(?3 AS text), 'subsec')
+    AND expires_at >= coalesce(cast(?1 AS text), datetime('now', 'subsec'))
+    AND leader_id = ?4
+RETURNING elected_at, expires_at, leader_id, name
 `
 
 type LeaderAttemptReelectParams struct {
-	LeaderID string
-	Now      *string
-	TTL      string
+	Now       *string
+	TTL       string
+	ElectedAt string
+	LeaderID  string
 }
 
-func (q *Queries) LeaderAttemptReelect(ctx context.Context, db DBTX, arg *LeaderAttemptReelectParams) (int64, error) {
-	result, err := db.ExecContext(ctx, leaderAttemptReelect, arg.LeaderID, arg.Now, arg.TTL)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+func (q *Queries) LeaderAttemptReelect(ctx context.Context, db DBTX, arg *LeaderAttemptReelectParams) (*RiverLeader, error) {
+	row := db.QueryRowContext(ctx, leaderAttemptReelect,
+		arg.Now,
+		arg.TTL,
+		arg.ElectedAt,
+		arg.LeaderID,
+	)
+	var i RiverLeader
+	err := row.Scan(
+		&i.ElectedAt,
+		&i.ExpiresAt,
+		&i.LeaderID,
+		&i.Name,
+	)
+	return &i, err
 }
 
 const leaderDeleteExpired = `-- name: LeaderDeleteExpired :execrows
@@ -139,11 +147,18 @@ func (q *Queries) LeaderInsert(ctx context.Context, db DBTX, arg *LeaderInsertPa
 const leaderResign = `-- name: LeaderResign :execrows
 DELETE
 FROM /* TEMPLATE: schema */river_leader
-WHERE leader_id = ?1
+WHERE
+    unixepoch(elected_at, 'subsec') = unixepoch(cast(?1 AS text), 'subsec')
+    AND leader_id = ?2
 `
 
-func (q *Queries) LeaderResign(ctx context.Context, db DBTX, leaderID string) (int64, error) {
-	result, err := db.ExecContext(ctx, leaderResign, leaderID)
+type LeaderResignParams struct {
+	ElectedAt string
+	LeaderID  string
+}
+
+func (q *Queries) LeaderResign(ctx context.Context, db DBTX, arg *LeaderResignParams) (int64, error) {
+	result, err := db.ExecContext(ctx, leaderResign, arg.ElectedAt, arg.LeaderID)
 	if err != nil {
 		return 0, err
 	}

@@ -7,7 +7,7 @@ CREATE UNLOGGED TABLE river_leader(
     CONSTRAINT leader_id_length CHECK (char_length(leader_id) > 0 AND char_length(leader_id) < 128)
 );
 
--- name: LeaderAttemptElect :execrows
+-- name: LeaderAttemptElect :one
 INSERT INTO /* TEMPLATE: schema */river_leader (
     leader_id,
     elected_at,
@@ -19,23 +19,17 @@ INSERT INTO /* TEMPLATE: schema */river_leader (
     coalesce(sqlc.narg('now')::timestamptz, now()) + make_interval(secs => @ttl)
 )
 ON CONFLICT (name)
-    DO NOTHING;
+    DO NOTHING
+RETURNING *;
 
--- name: LeaderAttemptReelect :execrows
-INSERT INTO /* TEMPLATE: schema */river_leader (
-    leader_id,
-    elected_at,
-    expires_at
-) VALUES (
-    @leader_id,
-    coalesce(sqlc.narg('now')::timestamptz, now()),
-    coalesce(sqlc.narg('now')::timestamptz, now()) + make_interval(secs => @ttl)
-)
-ON CONFLICT (name)
-    DO UPDATE SET
-        expires_at = EXCLUDED.expires_at
-    WHERE
-        river_leader.leader_id = @leader_id;
+-- name: LeaderAttemptReelect :one
+UPDATE /* TEMPLATE: schema */river_leader
+SET expires_at = coalesce(sqlc.narg('now')::timestamptz, now()) + make_interval(secs => @ttl)
+WHERE
+    elected_at = @elected_at::timestamptz
+    AND expires_at >= coalesce(sqlc.narg('now')::timestamptz, now())
+    AND leader_id = @leader_id
+RETURNING *;
 
 -- name: LeaderDeleteExpired :execrows
 DELETE FROM /* TEMPLATE: schema */river_leader
@@ -60,7 +54,9 @@ INSERT INTO /* TEMPLATE: schema */river_leader(
 WITH currently_held_leaders AS (
     SELECT *
     FROM /* TEMPLATE: schema */river_leader
-    WHERE leader_id = @leader_id::text
+    WHERE
+        elected_at = @elected_at::timestamptz
+        AND leader_id = @leader_id::text
     FOR UPDATE
 ),
 notified_resignations AS (
