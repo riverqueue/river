@@ -90,7 +90,7 @@ func (b *CircuitBreaker) Trip() bool {
 
 	var (
 		horizonIndex = -1
-		now          = b.timeGenerator.NowUTC()
+		now          = b.timeGenerator.Now()
 	)
 	for i := len(b.trips) - 1; i >= 0; i-- {
 		if b.trips[i].Before(now.Add(-b.opts.Window)) {

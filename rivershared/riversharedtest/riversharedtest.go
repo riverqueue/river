@@ -240,34 +240,34 @@ func TestDatabaseURL() string {
 //
 // It exists separately from rivertest.TimeStub to avoid a circular dependency.
 type TimeStub struct {
-	mu     sync.RWMutex
-	nowUTC *time.Time
+	mu  sync.RWMutex
+	now *time.Time
 }
 
-func (t *TimeStub) NowUTC() time.Time {
+func (t *TimeStub) Now() time.Time {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
-	if t.nowUTC == nil {
-		return time.Now().UTC()
+	if t.now == nil {
+		return time.Now()
 	}
 
-	return *t.nowUTC
+	return *t.now
 }
 
-func (t *TimeStub) NowUTCOrNil() *time.Time {
+func (t *TimeStub) NowOrNil() *time.Time {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
-	return t.nowUTC
+	return t.now
 }
 
-func (t *TimeStub) StubNowUTC(nowUTC time.Time) time.Time {
+func (t *TimeStub) StubNow(now time.Time) time.Time {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.nowUTC = &nowUTC
-	return nowUTC
+	t.now = &now
+	return now
 }
 
 // WaitOrTimeout tries to wait on the given channel for a value to come through,

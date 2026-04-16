@@ -6061,7 +6061,7 @@ func Test_Client_RetryPolicy(t *testing.T) {
 
 		client := newTestClient(t, dbPool, config)
 
-		now := client.baseService.Time.StubNowUTC(time.Now().UTC())
+		now := client.baseService.Time.StubNow(time.Now().UTC())
 		t.Logf("Now: %s", now)
 
 		subscribeChan, cancel := client.Subscribe(EventKindJobCompleted, EventKindJobFailed)
@@ -6736,7 +6736,7 @@ func Test_Client_InsertNotificationsAreDeduplicatedAndDebounced(t *testing.T) {
 	riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
 	// Anchor all limiter checks to a known base time so debounce behavior is
 	// independent from scheduler jitter or machine load.
-	now := client.baseService.Time.StubNowUTC(time.Now().UTC())
+	now := client.baseService.Time.StubNow(time.Now().UTC())
 
 	type insertPayload struct {
 		Queue string `json:"queue"`
@@ -6771,7 +6771,7 @@ func Test_Client_InsertNotificationsAreDeduplicatedAndDebounced(t *testing.T) {
 	// Keep time fixed inside the cooldown window before issuing repeated queue1
 	// inserts. This guarantees that all of these inserts are ineligible for a
 	// second notification regardless of wall-clock runtime.
-	client.baseService.Time.StubNowUTC(now.Add(500 * time.Millisecond))
+	client.baseService.Time.StubNow(now.Add(500 * time.Millisecond))
 
 	for range 5 {
 		config.Logger.InfoContext(ctx, "inserting queue1 job")
@@ -6791,7 +6791,7 @@ func Test_Client_InsertNotificationsAreDeduplicatedAndDebounced(t *testing.T) {
 	expectImmediateNotification(t, "queue3") // Immediate first fire on queue3
 
 	// `ShouldTrigger` uses a strict `Before` check; move just past the boundary.
-	client.baseService.Time.StubNowUTC(now.Add(config.FetchCooldown + time.Nanosecond))
+	client.baseService.Time.StubNow(now.Add(config.FetchCooldown + time.Nanosecond))
 
 	// Now queue1 should immediately notify again.
 	expectImmediateNotification(t, "queue1")
@@ -6846,7 +6846,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 
 		client, bundle := setup(t, config)
 
-		now := client.baseService.Time.StubNowUTC(time.Now().UTC())
+		now := client.baseService.Time.StubNow(time.Now().UTC())
 
 		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
 		require.NoError(t, err)
@@ -6919,7 +6919,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 
 		client, bundle := setup(t, config)
 
-		now := client.baseService.Time.StubNowUTC(time.Now().UTC())
+		now := client.baseService.Time.StubNow(time.Now().UTC())
 
 		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
 		require.NoError(t, err)
@@ -6951,7 +6951,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 
 		client, bundle := setup(t, config)
 
-		now := client.baseService.Time.StubNowUTC(time.Now().UTC())
+		now := client.baseService.Time.StubNow(time.Now().UTC())
 
 		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
 		require.NoError(t, err)
@@ -7013,7 +7013,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 
 		client, bundle := setup(t, newTestConfig(t, ""))
 
-		now := client.baseService.Time.StubNowUTC(time.Now().UTC())
+		now := client.baseService.Time.StubNow(time.Now().UTC())
 
 		type JobArgs struct {
 			testutil.JobArgsReflectKind[JobArgs]
@@ -8117,7 +8117,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		t.Parallel()
 
 		archetype := riversharedtest.BaseServiceArchetype(t)
-		archetype.Time.StubNowUTC(time.Now().UTC())
+		archetype.Time.StubNow(time.Now().UTC())
 
 		uniqueOpts := UniqueOpts{
 			ByArgs:      true,
@@ -8147,7 +8147,7 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		t.Parallel()
 
 		archetype := riversharedtest.BaseServiceArchetype(t)
-		archetype.Time.StubNowUTC(time.Now().UTC())
+		archetype.Time.StubNow(time.Now().UTC())
 
 		states := []rivertype.JobState{
 			rivertype.JobStateAvailable,
@@ -8465,7 +8465,7 @@ func TestUniqueOpts(t *testing.T) {
 		// the current time, but make sure it's nicened up a little to be
 		// roughly in the middle of the hour and well clear of any period
 		// boundaries.
-		client.baseService.Time.StubNowUTC(
+		client.baseService.Time.StubNow(
 			time.Now().Truncate(1 * time.Hour).Add(37*time.Minute + 23*time.Second + 123*time.Millisecond).UTC(),
 		)
 

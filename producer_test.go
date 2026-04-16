@@ -375,7 +375,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		producer, bundle := setup(t)
 		producer.config.QueueReportInterval = 50 * time.Millisecond
 
-		now := producer.Time.StubNowUTC(time.Now().UTC())
+		now := producer.Time.StubNow(time.Now().UTC())
 
 		startProducer(t, ctx, ctx, producer)
 

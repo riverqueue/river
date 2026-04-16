@@ -65,15 +65,15 @@ func TestCircuitBreaker(t *testing.T) {
 			now      = time.Now()
 		)
 
-		timeStub.StubNowUTC(now)
+		timeStub.StubNow(now)
 		for range limit - 2 {
 			require.False(t, breaker.Trip())
 		}
 
-		timeStub.StubNowUTC(now.Add(window - 1*time.Second))
+		timeStub.StubNow(now.Add(window - 1*time.Second))
 		require.False(t, breaker.Trip())
 
-		timeStub.StubNowUTC(now.Add(window))
+		timeStub.StubNow(now.Add(window))
 		require.True(t, breaker.Trip())
 	})
 
@@ -86,17 +86,17 @@ func TestCircuitBreaker(t *testing.T) {
 			now      = time.Now()
 		)
 
-		timeStub.StubNowUTC(now)
+		timeStub.StubNow(now)
 		require.False(t, breaker.Trip())
 
-		timeStub.StubNowUTC(now.Add(window - 1*time.Second))
+		timeStub.StubNow(now.Add(window - 1*time.Second))
 		for range limit - 2 {
 			require.False(t, breaker.Trip())
 		}
 
 		// Does *not* trip because the first trip is reaped as it's fallen out
 		// of the window.
-		timeStub.StubNowUTC(now.Add(window + 1*time.Second))
+		timeStub.StubNow(now.Add(window + 1*time.Second))
 		require.False(t, breaker.Trip())
 	})
 
@@ -109,13 +109,13 @@ func TestCircuitBreaker(t *testing.T) {
 			now      = time.Now()
 		)
 
-		timeStub.StubNowUTC(now)
+		timeStub.StubNow(now)
 		for range limit - 1 {
 			require.False(t, breaker.Trip())
 		}
 
 		// Similar to the above, but multiple trips fall out of the window at once.
-		timeStub.StubNowUTC(now.Add(window + 1*time.Second))
+		timeStub.StubNow(now.Add(window + 1*time.Second))
 		require.False(t, breaker.Trip())
 	})
 
@@ -128,7 +128,7 @@ func TestCircuitBreaker(t *testing.T) {
 			now      = time.Now()
 		)
 
-		timeStub.StubNowUTC(now)
+		timeStub.StubNow(now)
 		for range limit - 1 {
 			require.False(t, breaker.Trip())
 		}
@@ -137,7 +137,7 @@ func TestCircuitBreaker(t *testing.T) {
 
 		// We're allowed to go right up the limit again because the call to
 		// ResetIfNotOpen reset everything.
-		timeStub.StubNowUTC(now)
+		timeStub.StubNow(now)
 		for range limit - 1 {
 			require.False(t, breaker.Trip())
 		}

@@ -96,7 +96,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 	}
 
 	stubSvc := &riversharedtest.TimeStub{}
-	stubSvc.StubNowUTC(time.Now().UTC())
+	stubSvc.StubNow(time.Now().UTC())
 
 	jobConstructorWithQueueFunc := func(name string, unique bool, queue string) func() (*rivertype.JobInsertParams, error) {
 		return func() (*rivertype.JobInsertParams, error) {
@@ -386,7 +386,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc, _ := setup(t)
 
-		now := svc.Time.StubNowUTC(time.Now())
+		now := svc.Time.StubNow(time.Now())
 
 		svc.periodicJobs = make(map[rivertype.PeriodicJobHandle]*PeriodicJob)
 		periodicJobHandles, err := svc.AddManySafely([]*PeriodicJob{
@@ -781,7 +781,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc, _ := setup(t)
 
-		now := svc.Time.StubNowUTC(time.Now())
+		now := svc.Time.StubNow(time.Now())
 
 		// no jobs
 		require.Equal(t, periodicJobEnqueuerVeryLongDuration, svc.timeUntilNextRun())

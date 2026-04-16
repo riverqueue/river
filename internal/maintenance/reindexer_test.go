@@ -80,7 +80,7 @@ func TestReindexer(t *testing.T) {
 		}
 
 		archetype := riversharedtest.BaseServiceArchetype(t)
-		bundle.now = archetype.Time.StubNowUTC(time.Now())
+		bundle.now = archetype.Time.StubNow(time.Now())
 
 		fromNow := func(d time.Duration) func(time.Time) time.Time {
 			return func(t time.Time) time.Time {

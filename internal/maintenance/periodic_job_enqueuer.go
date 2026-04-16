@@ -388,7 +388,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 
 			var (
 				insertParamsMany        []*rivertype.JobInsertParams
-				now                     = s.Time.NowUTC()
+				now                     = s.Time.Now()
 				periodicJobUpsertParams = &riverpilot.PeriodicJobUpsertManyParams{Schema: s.Config.Schema}
 			)
 
@@ -417,7 +417,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 					periodicJobUpsertParams.Jobs = append(periodicJobUpsertParams.Jobs, &riverpilot.PeriodicJobUpsertParams{
 						ID:        periodicJob.ID,
 						NextRunAt: periodicJob.nextRunAt,
-						UpdatedAt: s.Time.NowUTC(),
+						UpdatedAt: s.Time.Now(),
 					})
 				}
 
@@ -452,7 +452,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 					periodicJobUpsertParams = &riverpilot.PeriodicJobUpsertManyParams{Schema: s.Config.Schema}
 				)
 
-				now := s.Time.NowUTC()
+				now := s.Time.Now()
 
 				// Add a small margin to the current time so we're not only
 				// running jobs that are already ready, but also ones ready at
@@ -482,7 +482,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 							periodicJobUpsertParams.Jobs = append(periodicJobUpsertParams.Jobs, &riverpilot.PeriodicJobUpsertParams{
 								ID:        periodicJob.ID,
 								NextRunAt: periodicJob.nextRunAt,
-								UpdatedAt: s.Time.NowUTC(),
+								UpdatedAt: s.Time.Now(),
 							})
 						}
 					}
@@ -642,7 +642,7 @@ func (s *PeriodicJobEnqueuer) timeUntilNextRun() time.Duration {
 
 	var (
 		firstNextRunAt time.Time
-		now            = s.Time.NowUTC()
+		now            = s.Time.Now()
 	)
 
 	for _, periodicJob := range s.periodicJobs {

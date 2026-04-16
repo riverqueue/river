@@ -205,7 +205,7 @@ func TestWorker_Work(t *testing.T) {
 
 		stubTime := &riversharedtest.TimeStub{}
 		now := time.Now().UTC()
-		stubTime.StubNowUTC(now)
+		stubTime.StubNow(now)
 		bundle.config.Test.Time = stubTime
 
 		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
@@ -296,7 +296,7 @@ func TestWorker_Work(t *testing.T) {
 		bundle := setup(t)
 		hourFromNow := time.Now().UTC().Add(1 * time.Hour)
 		timeStub := &riversharedtest.TimeStub{}
-		timeStub.StubNowUTC(hourFromNow)
+		timeStub.StubNow(hourFromNow)
 		bundle.config.Test.Time = timeStub
 
 		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {

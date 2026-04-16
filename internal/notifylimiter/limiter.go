@@ -29,7 +29,7 @@ func NewLimiter(archetype *baseservice.Archetype, waitDuration time.Duration) *L
 
 func (l *Limiter) ShouldTrigger(topic string) bool {
 	// Calculate this beforehand to reduce mutex duration.
-	now := l.Time.NowUTC()
+	now := l.Time.Now()
 	lastSentHorizon := now.Add(-l.waitDuration)
 
 	l.mu.Lock()

@@ -1423,9 +1423,9 @@ func (c *Client[TTx]) JobCancelTx(ctx context.Context, tx TTx, jobID int64) (*ri
 func (c *Client[TTx]) jobCancel(ctx context.Context, exec riverdriver.Executor, jobID int64) (*rivertype.JobRow, error) {
 	return c.pilot.JobCancel(ctx, exec, &riverdriver.JobCancelParams{
 		ID:                jobID,
-		CancelAttemptedAt: c.baseService.Time.NowUTC(),
+		CancelAttemptedAt: c.baseService.Time.Now(),
 		ControlTopic:      string(notifier.NotificationTopicControl),
-		Now:               c.baseService.Time.NowUTCOrNil(),
+		Now:               c.baseService.Time.NowOrNil(),
 		Schema:            c.config.Schema,
 	})
 }
@@ -1504,7 +1504,7 @@ func (c *Client[TTx]) JobRetryTx(ctx context.Context, tx TTx, id int64) (*rivert
 func (c *Client[TTx]) jobRetry(ctx context.Context, exec riverdriver.Executor, id int64) (*rivertype.JobRow, error) {
 	return c.pilot.JobRetry(ctx, exec, &riverdriver.JobRetryParams{
 		ID:     id,
-		Now:    c.baseService.Time.NowUTCOrNil(),
+		Now:    c.baseService.Time.NowOrNil(),
 		Schema: c.config.Schema,
 	})
 }
@@ -1624,7 +1624,7 @@ func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, conf
 	// If the time is stubbed (in a test), use that for `created_at`. Otherwise,
 	// leave an empty value which will either use the database's `now()` or be defaulted
 	// by drivers as necessary.
-	createdAt := archetype.Time.NowUTCOrNil()
+	createdAt := archetype.Time.NowOrNil()
 
 	maxAttempts := cmp.Or(insertOpts.MaxAttempts, jobInsertOpts.MaxAttempts, config.MaxAttempts)
 	priority := cmp.Or(insertOpts.Priority, jobInsertOpts.Priority, rivercommon.PriorityDefault)
@@ -2554,7 +2554,7 @@ func (c *Client[TTx]) QueuePause(ctx context.Context, name string, opts *QueuePa
 
 	if err := tx.QueuePause(ctx, &riverdriver.QueuePauseParams{
 		Name:   name,
-		Now:    c.baseService.Time.NowUTCOrNil(),
+		Now:    c.baseService.Time.NowOrNil(),
 		Schema: c.config.Schema,
 	}); err != nil {
 		return err
@@ -2590,7 +2590,7 @@ func (c *Client[TTx]) QueuePauseTx(ctx context.Context, tx TTx, name string, opt
 
 	if err := executorTx.QueuePause(ctx, &riverdriver.QueuePauseParams{
 		Name:   name,
-		Now:    c.baseService.Time.NowUTCOrNil(),
+		Now:    c.baseService.Time.NowOrNil(),
 		Schema: c.config.Schema,
 	}); err != nil {
 		return err
@@ -2624,7 +2624,7 @@ func (c *Client[TTx]) QueueResume(ctx context.Context, name string, opts *QueueP
 
 	if err := tx.QueueResume(ctx, &riverdriver.QueueResumeParams{
 		Name:   name,
-		Now:    c.baseService.Time.NowUTCOrNil(),
+		Now:    c.baseService.Time.NowOrNil(),
 		Schema: c.config.Schema,
 	}); err != nil {
 		return err
@@ -2661,7 +2661,7 @@ func (c *Client[TTx]) QueueResumeTx(ctx context.Context, tx TTx, name string, op
 
 	if err := executorTx.QueueResume(ctx, &riverdriver.QueueResumeParams{
 		Name:   name,
-		Now:    c.baseService.Time.NowUTCOrNil(),
+		Now:    c.baseService.Time.NowOrNil(),
 		Schema: c.config.Schema,
 	}); err != nil {
 		return err

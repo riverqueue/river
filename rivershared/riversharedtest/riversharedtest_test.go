@@ -58,11 +58,11 @@ func TestTimeStub(t *testing.T) {
 
 		timeStub := &TimeStub{}
 
-		timeStub.StubNowUTC(initialTime)
-		require.Equal(t, initialTime, timeStub.NowUTC())
+		timeStub.StubNow(initialTime)
+		require.Equal(t, initialTime, timeStub.Now())
 
-		newTime := timeStub.StubNowUTC(initialTime.Add(1 * time.Second))
-		require.Equal(t, newTime, timeStub.NowUTC())
+		newTime := timeStub.StubNow(initialTime.Add(1 * time.Second))
+		require.Equal(t, newTime, timeStub.Now())
 	})
 
 	t.Run("Stress", func(t *testing.T) {
@@ -73,8 +73,8 @@ func TestTimeStub(t *testing.T) {
 		for range 10 {
 			go func() {
 				for range 50 {
-					timeStub.StubNowUTC(time.Now().UTC())
-					_ = timeStub.NowUTC()
+					timeStub.StubNow(time.Now().UTC())
+					_ = timeStub.Now()
 				}
 			}()
 		}

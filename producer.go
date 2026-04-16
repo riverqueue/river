@@ -291,7 +291,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		return p.exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
 			Metadata: []byte("{}"),
 			Name:     p.config.Queue,
-			Now:      p.Time.NowUTCOrNil(),
+			Now:      p.Time.NowOrNil(),
 			Schema:   p.config.Schema,
 		})
 	}()
@@ -759,7 +759,7 @@ func (p *producer) dispatchWork(workCtx context.Context, count int, fetchResultC
 		ClientID:       p.config.ClientID,
 		MaxAttemptedBy: maxAttemptedBy,
 		MaxToLock:      count,
-		Now:            p.Time.NowUTCOrNil(),
+		Now:            p.Time.NowOrNil(),
 		Queue:          p.config.Queue,
 		ProducerID:     p.id.Load(),
 		Schema:         p.config.Schema,
@@ -966,7 +966,7 @@ func (p *producer) reportProducerStatusOnce(ctx context.Context) {
 		ID:                    p.id.Load(),
 		QueueName:             p.config.Queue,
 		Schema:                p.config.Schema,
-		StaleUpdatedAtHorizon: p.Time.NowUTC().Add(-p.config.StaleProducerRetentionPeriod),
+		StaleUpdatedAtHorizon: p.Time.Now().Add(-p.config.StaleProducerRetentionPeriod),
 	})
 	if err != nil && errors.Is(context.Cause(ctx), startstop.ErrStop) {
 		return
@@ -1006,7 +1006,7 @@ func (p *producer) reportQueueStatusOnce(ctx context.Context) {
 	_, err := p.exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
 		Metadata: []byte("{}"),
 		Name:     p.config.Queue,
-		Now:      p.Time.NowUTCOrNil(),
+		Now:      p.Time.NowOrNil(),
 		Schema:   p.config.Schema,
 	})
 	if err != nil && errors.Is(context.Cause(ctx), startstop.ErrStop) {
