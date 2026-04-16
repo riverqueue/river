@@ -23,12 +23,14 @@ type Archetype struct {
 	// Logger is a structured logger.
 	Logger *slog.Logger
 
-	// Time returns a time generator to get the current time in UTC. Normally
-	// it's implemented as [UnStubbableTimeGenerator] which just calls
-	// through to `time.Now().UTC()`, but is riverinternaltest.timeStub in tests
-	// to allow the current time to be stubbed. Services should try to use this
-	// function instead of the vanilla ones from the `time` package for testing
-	// purposes.
+	// Time returns a time generator for in-process deadline/duration math and
+	// optional stubbed wall-clock timestamps in tests.
+	//
+	// The production path intentionally uses `time.Now()` rather than
+	// `time.Now().UTC()`: per the Go time package's monotonic clock semantics,
+	// normalizing through `UTC()` strips the monotonic reading. Services should
+	// use this clock for local timing math and normalize to UTC only at
+	// database or serialization boundaries.
 	Time TimeGeneratorWithStub
 }
 
@@ -86,9 +88,10 @@ func Init[TService WithBaseService](archetype *Archetype, service TService) TSer
 type TimeGeneratorWithStub interface {
 	rivertype.TimeGenerator
 
-	// StubNowUTC stubs the current time. It will panic if invoked outside of
-	// tests. Returns the same time passed as parameter for convenience.
-	StubNowUTC(nowUTC time.Time) time.Time
+	// StubNow stubs the current wall-clock time. It will panic if invoked
+	// outside of tests. Returns the same time passed as parameter for
+	// convenience.
+	StubNow(now time.Time) time.Time
 }
 
 // TimeGeneratorWithStubWrapper provides a wrapper around TimeGenerator that
@@ -99,7 +102,7 @@ type TimeGeneratorWithStubWrapper struct {
 	rivertype.TimeGenerator
 }
 
-func (g *TimeGeneratorWithStubWrapper) StubNowUTC(nowUTC time.Time) time.Time {
+func (g *TimeGeneratorWithStubWrapper) StubNow(now time.Time) time.Time {
 	panic("time not stubbable outside tests")
 }
 
@@ -107,10 +110,14 @@ func (g *TimeGeneratorWithStubWrapper) StubNowUTC(nowUTC time.Time) time.Time {
 // stubbed. It's always the generator used outside of tests.
 type UnStubbableTimeGenerator struct{}
 
-func (g *UnStubbableTimeGenerator) NowUTC() time.Time       { return time.Now() }
-func (g *UnStubbableTimeGenerator) NowUTCOrNil() *time.Time { return nil }
+// Now intentionally returns `time.Now()` without calling `.UTC()`. River uses
+// this clock for in-process duration and deadline math, and Go strips the
+// monotonic clock reading when changing a Time's location with methods like
+// `UTC()`. Normalize at database or serialization boundaries instead.
+func (g *UnStubbableTimeGenerator) Now() time.Time       { return time.Now() }
+func (g *UnStubbableTimeGenerator) NowOrNil() *time.Time { return nil }
 
-func (g *UnStubbableTimeGenerator) StubNowUTC(nowUTC time.Time) time.Time {
+func (g *UnStubbableTimeGenerator) StubNow(now time.Time) time.Time {
 	panic("time not stubbable outside tests")
 }
 

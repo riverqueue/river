@@ -29,20 +29,20 @@ func TestLimiter(t *testing.T) {
 
 		limiter, _ := setup()
 		now := time.Now()
-		limiter.Time.StubNowUTC(now)
+		limiter.Time.StubNow(now)
 
 		require.True(t, limiter.ShouldTrigger("a"))
 		for range 10 {
 			require.False(t, limiter.ShouldTrigger("a"))
 		}
 		// Move the time forward, by just less than waitDuration:
-		limiter.Time.StubNowUTC(now.Add(9 * time.Millisecond))
+		limiter.Time.StubNow(now.Add(9 * time.Millisecond))
 		require.False(t, limiter.ShouldTrigger("a"))
 
 		require.True(t, limiter.ShouldTrigger("b")) // First time being triggered on "b"
 
 		// Move the time forward to just past the waitDuration:
-		limiter.Time.StubNowUTC(now.Add(11 * time.Millisecond))
+		limiter.Time.StubNow(now.Add(11 * time.Millisecond))
 		require.True(t, limiter.ShouldTrigger("a"))
 		for range 10 {
 			require.False(t, limiter.ShouldTrigger("a"))
@@ -51,7 +51,7 @@ func TestLimiter(t *testing.T) {
 		require.False(t, limiter.ShouldTrigger("b")) // has only been 2ms since last trigger of "b"
 
 		// Move forward by another waitDuration (plus padding):
-		limiter.Time.StubNowUTC(now.Add(22 * time.Millisecond))
+		limiter.Time.StubNow(now.Add(22 * time.Millisecond))
 		require.True(t, limiter.ShouldTrigger("a"))
 		require.True(t, limiter.ShouldTrigger("b"))
 		require.False(t, limiter.ShouldTrigger("b"))
@@ -65,7 +65,7 @@ func TestLimiter(t *testing.T) {
 
 		limiter, _ := setup()
 		now := time.Now()
-		limiter.Time.StubNowUTC(now)
+		limiter.Time.StubNow(now)
 
 		counters := make(map[string]*atomic.Int64)
 		for _, topic := range []string{"a", "b", "c"} {
@@ -97,7 +97,7 @@ func TestLimiter(t *testing.T) {
 		require.Equal(t, int64(1), counters["b"].Load())
 		require.Equal(t, int64(1), counters["c"].Load())
 
-		limiter.Time.StubNowUTC(now.Add(11 * time.Millisecond))
+		limiter.Time.StubNow(now.Add(11 * time.Millisecond))
 
 		<-time.After(100 * time.Millisecond)
 

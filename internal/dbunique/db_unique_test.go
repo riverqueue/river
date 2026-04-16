@@ -29,7 +29,7 @@ func TestUniqueKey(t *testing.T) {
 	// Fixed timestamp for consistency across tests:
 	now := time.Now().UTC()
 	stubSvc := &riversharedtest.TimeStub{}
-	stubSvc.StubNowUTC(now)
+	stubSvc.StubNow(now)
 
 	tests := []struct {
 		name                   string

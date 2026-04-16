@@ -251,7 +251,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		executor, bundle := setup(t)
 
-		now := executor.Time.StubNowUTC(time.Now().UTC())
+		now := executor.Time.StubNow(time.Now().UTC())
 
 		workerErr := errors.New("job error")
 		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workerErr }, nil).MakeUnit(bundle.jobRow)

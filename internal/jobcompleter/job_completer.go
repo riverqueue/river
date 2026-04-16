@@ -78,10 +78,10 @@ func (c *InlineCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobst
 	c.wg.Add(1)
 	defer c.wg.Done()
 
-	start := c.Time.NowUTC()
+	start := c.Time.Now()
 
 	jobs, err := withRetries(ctx, &c.BaseService, c.disableSleep, func(ctx context.Context) ([]*rivertype.JobRow, error) {
-		jobs, err := c.pilot.JobSetStateIfRunningMany(ctx, c.exec, setStateParamsToMany(c.Time.NowUTCOrNil(), c.schema, params))
+		jobs, err := c.pilot.JobSetStateIfRunningMany(ctx, c.exec, setStateParamsToMany(c.Time.NowOrNil(), c.schema, params))
 		if err != nil {
 			return nil, err
 		}
@@ -92,7 +92,7 @@ func (c *InlineCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobst
 		return err
 	}
 
-	stats.CompleteDuration = c.Time.NowUTC().Sub(start)
+	stats.CompleteDuration = c.Time.Now().Sub(start)
 	c.subscribeCh <- []CompleterJobUpdated{{
 		Job:      jobs[0],
 		JobStats: stats,
@@ -185,11 +185,11 @@ func newAsyncCompleterWithConcurrency(archetype *baseservice.Archetype, schema s
 func (c *AsyncCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobstats.JobStatistics, params *riverdriver.JobSetStateIfRunningParams) error {
 	// Start clock outside of goroutine so that the time spent blocking waiting
 	// for an errgroup slot is accurately measured.
-	start := c.Time.NowUTC()
+	start := c.Time.Now()
 
 	c.errGroup.Go(func() error {
 		jobs, err := withRetries(ctx, &c.BaseService, c.disableSleep, func(ctx context.Context) ([]*rivertype.JobRow, error) {
-			rows, err := c.pilot.JobSetStateIfRunningMany(ctx, c.exec, setStateParamsToMany(c.Time.NowUTCOrNil(), c.schema, params))
+			rows, err := c.pilot.JobSetStateIfRunningMany(ctx, c.exec, setStateParamsToMany(c.Time.NowOrNil(), c.schema, params))
 			if err != nil {
 				return nil, err
 			}
@@ -200,7 +200,7 @@ func (c *AsyncCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobsta
 			return err
 		}
 
-		stats.CompleteDuration = c.Time.NowUTC().Sub(start)
+		stats.CompleteDuration = c.Time.Now().Sub(start)
 		c.subscribeCh <- []CompleterJobUpdated{{
 			Job:      jobs[0],
 			JobStats: stats,
@@ -479,7 +479,7 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 	events := sliceutil.Map(jobRows, func(jobRow *rivertype.JobRow) CompleterJobUpdated {
 		setState := setStateBatch[jobRow.ID]
 		startTime := setStateStartTimes[jobRow.ID]
-		setState.Stats.CompleteDuration = c.Time.NowUTC().Sub(startTime)
+		setState.Stats.CompleteDuration = c.Time.Now().Sub(startTime)
 		return CompleterJobUpdated{
 			Job:      jobRow,
 			JobStats: setState.Stats,
@@ -504,7 +504,7 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 }
 
 func (c *BatchCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobstats.JobStatistics, params *riverdriver.JobSetStateIfRunningParams) error {
-	now := c.Time.NowUTC()
+	now := c.Time.Now()
 	// If we've built up too much of a backlog because the completer's fallen
 	// behind, block completions until the complete loop's had a chance to catch
 	// up.

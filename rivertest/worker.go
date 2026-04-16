@@ -161,7 +161,7 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 		ID:                  job.ID,
 		Attempt:             job.Attempt + 1,
 		AttemptDoUpdate:     true,
-		AttemptedAt:         ptrutil.Ptr(timeGen.NowUTC()),
+		AttemptedAt:         ptrutil.Ptr(timeGen.Now()),
 		AttemptedAtDoUpdate: true,
 		AttemptedBy:         append(job.AttemptedBy, w.config.ID),
 		AttemptedByDoUpdate: true,

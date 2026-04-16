@@ -114,7 +114,7 @@ func buildUniqueKeyString(timeGen rivertype.TimeGenerator, uniqueOpts *UniqueOpt
 	}
 
 	if uniqueOpts.ByPeriod != time.Duration(0) {
-		lowerPeriodBound := ptrutil.ValOrDefaultFunc(params.ScheduledAt, timeGen.NowUTC).Truncate(uniqueOpts.ByPeriod)
+		lowerPeriodBound := ptrutil.ValOrDefaultFunc(params.ScheduledAt, timeGen.Now).Truncate(uniqueOpts.ByPeriod)
 		sb.WriteString("&period=" + lowerPeriodBound.Format(time.RFC3339))
 	}
 
