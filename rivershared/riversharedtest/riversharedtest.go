@@ -249,7 +249,7 @@ func (t *TimeStub) Now() time.Time {
 	defer t.mu.RUnlock()
 
 	if t.now == nil {
-		return time.Now().UTC()
+		return time.Now()
 	}
 
 	return *t.now

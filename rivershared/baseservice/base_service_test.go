@@ -17,7 +17,7 @@ func TestInit(t *testing.T) {
 	myService := Init(archetype, &MyService{})
 	require.NotNil(t, myService.Logger)
 	require.Equal(t, "baseservice.MyService", myService.Name)
-	require.WithinDuration(t, time.Now().UTC(), myService.Time.NowUTC(), 2*time.Second)
+	require.WithinDuration(t, time.Now(), myService.Time.Now(), 2*time.Second)
 }
 
 type MyService struct {
