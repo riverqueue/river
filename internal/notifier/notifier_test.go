@@ -671,6 +671,34 @@ func topicAndPayloadNotifyFunc(notifyChan chan TopicAndPayload) NotifyFunc {
 	}
 }
 
+func TestShouldIgnoreListenerError(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ContextCanceled", func(t *testing.T) {
+		t.Parallel()
+
+		require.True(t, shouldIgnoreListenerError(context.Canceled))
+	})
+
+	t.Run("WrappedContextCanceled", func(t *testing.T) {
+		t.Parallel()
+
+		require.True(t, shouldIgnoreListenerError(fmt.Errorf("wrapped: %w", context.Canceled)))
+	})
+
+	t.Run("TLSCloseNotifyAlert", func(t *testing.T) {
+		t.Parallel()
+
+		require.True(t, shouldIgnoreListenerError(errors.New("tls: failed to send closeNotify alert (but connection was closed anyway): write tcp 10.0.5.131:40192->10.0.7.96:5432: i/o timeout")))
+	})
+
+	t.Run("ArbitraryError", func(t *testing.T) {
+		t.Parallel()
+
+		require.False(t, shouldIgnoreListenerError(errors.New("some other error")))
+	})
+}
+
 func sendNotification(ctx context.Context, t *testing.T, exec riverdriver.Executor, schema, topic string, payload string) {
 	t.Helper()
 
