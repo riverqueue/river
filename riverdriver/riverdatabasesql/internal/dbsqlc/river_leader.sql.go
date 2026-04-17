@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const leaderAttemptElect = `-- name: LeaderAttemptElect :execrows
+const leaderAttemptElect = `-- name: LeaderAttemptElect :one
 INSERT INTO /* TEMPLATE: schema */river_leader (
     leader_id,
     elected_at,
@@ -24,6 +24,7 @@ INSERT INTO /* TEMPLATE: schema */river_leader (
 )
 ON CONFLICT (name)
     DO NOTHING
+RETURNING elected_at, expires_at, leader_id, name
 `
 
 type LeaderAttemptElectParams struct {
@@ -32,43 +33,50 @@ type LeaderAttemptElectParams struct {
 	TTL      float64
 }
 
-func (q *Queries) LeaderAttemptElect(ctx context.Context, db DBTX, arg *LeaderAttemptElectParams) (int64, error) {
-	result, err := db.ExecContext(ctx, leaderAttemptElect, arg.LeaderID, arg.Now, arg.TTL)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+func (q *Queries) LeaderAttemptElect(ctx context.Context, db DBTX, arg *LeaderAttemptElectParams) (*RiverLeader, error) {
+	row := db.QueryRowContext(ctx, leaderAttemptElect, arg.LeaderID, arg.Now, arg.TTL)
+	var i RiverLeader
+	err := row.Scan(
+		&i.ElectedAt,
+		&i.ExpiresAt,
+		&i.LeaderID,
+		&i.Name,
+	)
+	return &i, err
 }
 
-const leaderAttemptReelect = `-- name: LeaderAttemptReelect :execrows
-INSERT INTO /* TEMPLATE: schema */river_leader (
-    leader_id,
-    elected_at,
-    expires_at
-) VALUES (
-    $1,
-    coalesce($2::timestamptz, now()),
-    coalesce($2::timestamptz, now()) + make_interval(secs => $3)
-)
-ON CONFLICT (name)
-    DO UPDATE SET
-        expires_at = EXCLUDED.expires_at
-    WHERE
-        river_leader.leader_id = $1
+const leaderAttemptReelect = `-- name: LeaderAttemptReelect :one
+UPDATE /* TEMPLATE: schema */river_leader
+SET expires_at = coalesce($1::timestamptz, now()) + make_interval(secs => $2)
+WHERE
+    elected_at = $3::timestamptz
+    AND expires_at >= coalesce($1::timestamptz, now())
+    AND leader_id = $4
+RETURNING elected_at, expires_at, leader_id, name
 `
 
 type LeaderAttemptReelectParams struct {
-	LeaderID string
-	Now      *time.Time
-	TTL      float64
+	Now       *time.Time
+	TTL       float64
+	ElectedAt time.Time
+	LeaderID  string
 }
 
-func (q *Queries) LeaderAttemptReelect(ctx context.Context, db DBTX, arg *LeaderAttemptReelectParams) (int64, error) {
-	result, err := db.ExecContext(ctx, leaderAttemptReelect, arg.LeaderID, arg.Now, arg.TTL)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+func (q *Queries) LeaderAttemptReelect(ctx context.Context, db DBTX, arg *LeaderAttemptReelectParams) (*RiverLeader, error) {
+	row := db.QueryRowContext(ctx, leaderAttemptReelect,
+		arg.Now,
+		arg.TTL,
+		arg.ElectedAt,
+		arg.LeaderID,
+	)
+	var i RiverLeader
+	err := row.Scan(
+		&i.ElectedAt,
+		&i.ExpiresAt,
+		&i.LeaderID,
+		&i.Name,
+	)
+	return &i, err
 }
 
 const leaderDeleteExpired = `-- name: LeaderDeleteExpired :execrows
@@ -143,12 +151,14 @@ const leaderResign = `-- name: LeaderResign :execrows
 WITH currently_held_leaders AS (
     SELECT elected_at, expires_at, leader_id, name
     FROM /* TEMPLATE: schema */river_leader
-    WHERE leader_id = $1::text
+    WHERE
+        elected_at = $1::timestamptz
+        AND leader_id = $2::text
     FOR UPDATE
 ),
 notified_resignations AS (
     SELECT pg_notify(
-        concat(coalesce($2::text, current_schema()), '.', $3::text),
+        concat(coalesce($3::text, current_schema()), '.', $4::text),
         json_build_object('leader_id', leader_id, 'action', 'resigned')::text
     )
     FROM currently_held_leaders
@@ -157,13 +167,19 @@ DELETE FROM /* TEMPLATE: schema */river_leader USING notified_resignations
 `
 
 type LeaderResignParams struct {
+	ElectedAt       time.Time
 	LeaderID        string
 	Schema          sql.NullString
 	LeadershipTopic string
 }
 
 func (q *Queries) LeaderResign(ctx context.Context, db DBTX, arg *LeaderResignParams) (int64, error) {
-	result, err := db.ExecContext(ctx, leaderResign, arg.LeaderID, arg.Schema, arg.LeadershipTopic)
+	result, err := db.ExecContext(ctx, leaderResign,
+		arg.ElectedAt,
+		arg.LeaderID,
+		arg.Schema,
+		arg.LeadershipTopic,
+	)
 	if err != nil {
 		return 0, err
 	}

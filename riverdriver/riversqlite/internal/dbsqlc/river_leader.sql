@@ -7,7 +7,7 @@ CREATE TABLE river_leader (
     CONSTRAINT leader_id_length CHECK (length(leader_id) > 0 AND length(leader_id) < 128)
 );
 
--- name: LeaderAttemptElect :execrows
+-- name: LeaderAttemptElect :one
 INSERT INTO /* TEMPLATE: schema */river_leader (
     leader_id,
     elected_at,
@@ -18,23 +18,17 @@ INSERT INTO /* TEMPLATE: schema */river_leader (
     datetime(coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')), 'subsec', cast(@ttl as text))
 )
 ON CONFLICT (name)
-    DO NOTHING;
+    DO NOTHING
+RETURNING *;
 
--- name: LeaderAttemptReelect :execrows
-INSERT INTO /* TEMPLATE: schema */river_leader (
-    leader_id,
-    elected_at,
-    expires_at
-) VALUES (
-    @leader_id,
-    coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')),
-    datetime(coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')), 'subsec', cast(@ttl as text))
-)
-ON CONFLICT (name)
-    DO UPDATE SET
-        expires_at = EXCLUDED.expires_at
-    WHERE
-        leader_id = EXCLUDED.leader_id;
+-- name: LeaderAttemptReelect :one
+UPDATE /* TEMPLATE: schema */river_leader
+SET expires_at = datetime(coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')), 'subsec', cast(@ttl as text))
+WHERE
+    unixepoch(elected_at, 'subsec') = unixepoch(cast(@elected_at AS text), 'subsec')
+    AND expires_at >= coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec'))
+    AND leader_id = @leader_id
+RETURNING *;
 
 -- name: LeaderDeleteExpired :execrows
 DELETE FROM /* TEMPLATE: schema */river_leader
@@ -58,4 +52,6 @@ INSERT INTO /* TEMPLATE: schema */river_leader(
 -- name: LeaderResign :execrows
 DELETE
 FROM /* TEMPLATE: schema */river_leader
-WHERE leader_id = @leader_id;
+WHERE
+    unixepoch(elected_at, 'subsec') = unixepoch(cast(@elected_at AS text), 'subsec')
+    AND leader_id = @leader_id;

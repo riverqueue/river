@@ -20,12 +20,14 @@ import (
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
+	"github.com/riverqueue/river/rivertype"
 )
 
 const (
-	electIntervalDefault           = 5 * time.Second
-	electIntervalJitterDefault     = 1 * time.Second
-	electIntervalTTLPaddingDefault = 10 * time.Second
+	electIntervalDefault            = 5 * time.Second
+	electIntervalJitterDefault      = 1 * time.Second
+	electIntervalTTLPaddingDefault  = 10 * time.Second
+	leaderLocalDeadlineSafetyMargin = 1 * time.Second
 )
 
 type DBNotification struct {
@@ -45,22 +47,140 @@ type Notification struct {
 	Timestamp time.Time
 }
 
+// Subscription is a client-facing stream of leadership transitions.
+//
+// The elector publishes every transition (`false -> true -> false -> ...`) to
+// each subscription. Delivery is delegated to a subscriptionRelay so the
+// elector never blocks on a slow listener.
 type Subscription struct {
 	creationTime time.Time
-	ch           chan *Notification
+	relay        *subscriptionRelay
 
 	unlistenOnce *sync.Once
 	e            *Elector
 }
 
 func (s *Subscription) C() <-chan *Notification {
-	return s.ch
+	return s.relay.C()
+}
+
+func (s *Subscription) enqueue(notification *Notification) {
+	s.relay.enqueue(notification)
+}
+
+func (s *Subscription) stop() {
+	s.relay.stop()
 }
 
 func (s *Subscription) Unlisten() {
 	s.unlistenOnce.Do(func() {
 		s.e.unlisten(s)
 	})
+}
+
+// subscriptionRelay decouples elector publication from subscriber consumption.
+//
+// The elector may need to publish `true` and `false` transitions promptly while
+// maintenance components are still busy reacting to the previous one. A plain
+// buffered channel would either block the elector or force us to drop
+// transitions when the buffer filled. The relay solves that by:
+//   - appending every Notification to an in-memory FIFO queue
+//   - waking a dedicated goroutine via `pendingChan`
+//   - letting that goroutine drain queued notifications into the subscriber's
+//     public channel `ch`
+//
+// `pendingChan` is only a wakeup signal. It does not carry the notifications
+// themselves, so multiple sends may coalesce while the goroutine is already
+// awake. That is safe because the authoritative queue is pendingNotifications.
+type subscriptionRelay struct {
+	ch          chan *Notification // public per-subscription delivery channel
+	done        chan struct{}      // closes the relay goroutine during Unlisten/stop
+	pendingChan chan struct{}      // coalesced wakeup signal that queued work exists
+
+	// pendingNotifications preserves every leadership transition in order.
+	// A dedicated goroutine drains it into `ch` so slow subscribers cannot
+	// block the elector, but consumers like QueueMaintainerLeader still see
+	// each `false` transition instead of only the latest state.
+	pendingMu            sync.Mutex
+	pendingNotifications []*Notification
+}
+
+func newSubscriptionRelay() *subscriptionRelay {
+	relay := &subscriptionRelay{
+		ch:          make(chan *Notification, 1),
+		done:        make(chan struct{}),
+		pendingChan: make(chan struct{}, 1),
+	}
+
+	go relay.run()
+
+	return relay
+}
+
+func (r *subscriptionRelay) C() <-chan *Notification {
+	return r.ch
+}
+
+// enqueue appends a transition to the pending FIFO, then nudges the relay
+// goroutine. The notification argument is the exact transition to preserve in
+// order; unlike the notifier wakeup path elsewhere in the elector, these items
+// must not be coalesced or replaced.
+func (r *subscriptionRelay) enqueue(notification *Notification) {
+	r.pendingMu.Lock()
+	r.pendingNotifications = append(r.pendingNotifications, notification)
+	r.pendingMu.Unlock()
+
+	select {
+	case r.pendingChan <- struct{}{}:
+	default:
+	}
+}
+
+// nextPending pops the next queued notification for the relay goroutine.
+func (r *subscriptionRelay) nextPending() (*Notification, bool) {
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
+
+	if len(r.pendingNotifications) == 0 {
+		return nil, false
+	}
+
+	notification := r.pendingNotifications[0]
+	r.pendingNotifications = r.pendingNotifications[1:]
+	return notification, true
+}
+
+// run waits until queued work exists, then drains as many pending
+// notifications as possible into the subscriber channel before sleeping again.
+// It exits promptly when stop closes done.
+func (r *subscriptionRelay) run() {
+	for {
+		select {
+		case <-r.done:
+			return
+
+		case <-r.pendingChan:
+		}
+
+		for {
+			notification, ok := r.nextPending()
+			if !ok {
+				break
+			}
+
+			select {
+			case <-r.done:
+				return
+			case r.ch <- notification:
+			}
+		}
+	}
+}
+
+// stop terminates the relay goroutine. Callers must ensure they stop enqueueing
+// through the owning Subscription afterwards.
+func (r *subscriptionRelay) stop() {
+	close(r.done)
 }
 
 // Test-only properties.
@@ -102,16 +222,58 @@ type Elector struct {
 	baseservice.BaseService
 	startstop.BaseStartStop
 
-	config             *Config
-	exec               riverdriver.Executor
-	leaderResignedChan chan struct{}
-	notifier           *notifier.Notifier
-	requestResignChan  chan struct{}
-	testSignals        electorTestSignals
+	config      *Config
+	exec        riverdriver.Executor
+	notifier    *notifier.Notifier
+	testSignals electorTestSignals
+	wakeupChan  chan struct{}
 
-	mu            sync.Mutex
-	isLeader      bool
-	subscriptions []*Subscription
+	mu                   sync.Mutex
+	isLeader             bool
+	pendingRequestResign bool
+	subscriptions        []*Subscription
+}
+
+type leadershipTerm struct {
+	clientID     string
+	electedAt    time.Time
+	trustedUntil time.Time
+}
+
+func newLeadershipTerm(clientID string, electedAt, attemptStarted time.Time, ttl time.Duration) leadershipTerm {
+	term := leadershipTerm{
+		clientID:  clientID,
+		electedAt: electedAt,
+	}
+
+	trustDuration := ttl - leaderLocalDeadlineSafetyMargin
+	if trustDuration <= 0 {
+		term.trustedUntil = attemptStarted
+		return term
+	}
+
+	term.trustedUntil = attemptStarted.Add(trustDuration)
+	return term
+}
+
+func (t leadershipTerm) remaining(now time.Time) time.Duration {
+	if !t.trustedUntil.After(now) {
+		return 0
+	}
+
+	return t.trustedUntil.Sub(now)
+}
+
+func (t leadershipTerm) reelectAttemptTimeout(now time.Time) time.Duration {
+	remainingDuration := t.remaining(now)
+	if remainingDuration <= 0 {
+		return 0
+	}
+	if remainingDuration < deadlineTimeout {
+		return remainingDuration
+	}
+
+	return deadlineTimeout
 }
 
 // NewElector returns an Elector using the given adapter. The name should correspond
@@ -130,20 +292,26 @@ func NewElector(archetype *baseservice.Archetype, exec riverdriver.Executor, not
 	})
 }
 
+func trySendWakeup(ctx context.Context, wakeupChan chan struct{}) {
+	if ctx.Err() != nil {
+		return
+	}
+
+	select {
+	case <-ctx.Done():
+	case wakeupChan <- struct{}{}:
+	default:
+	}
+}
+
 func (e *Elector) Start(ctx context.Context) error {
 	ctx, shouldStart, started, stopped := e.StartInit(ctx)
 	if !shouldStart {
 		return nil
 	}
 
-	// We'll send to this channel anytime a leader resigns on the key with `name`.
-	// Buffered to 1 so a send doesn't block if the receiving loop hasn't entered
-	// its select yet (e.g. between gaining and maintaining leadership).
-	e.leaderResignedChan = make(chan struct{}, 1)
-
-	// Buffered to 1 so a send from handleLeadershipNotification doesn't block
-	// if keepLeadershipLoop hasn't entered its select yet.
-	e.requestResignChan = make(chan struct{}, 1)
+	// Buffered to 1 so notifications coalesce instead of blocking the elector.
+	e.wakeupChan = make(chan struct{}, 1)
 
 	var sub *notifier.Subscription
 	if e.notifier == nil {
@@ -175,7 +343,8 @@ func (e *Elector) Start(ctx context.Context) error {
 		}
 
 		for {
-			if err := e.attemptGainLeadershipLoop(ctx); err != nil {
+			term, err := e.runFollowerState(ctx)
+			if err != nil {
 				// Function above only returns an error if context was cancelled
 				// or overall context is done.
 				if !errors.Is(err, context.Canceled) && ctx.Err() == nil {
@@ -184,17 +353,14 @@ func (e *Elector) Start(ctx context.Context) error {
 				return
 			}
 
+			e.publishLeadershipState(true)
 			e.Logger.DebugContext(ctx, e.Name+": Gained leadership", "client_id", e.config.ClientID)
 			e.testSignals.GainedLeadership.Signal(struct{}{})
 
-			err := e.keepLeadershipLoop(ctx)
+			err = e.runLeaderState(ctx, term)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
 					return
-				}
-
-				if errors.Is(err, errLostLeadershipReelection) {
-					continue // lost leadership reelection; unusual but not a problem; don't log
 				}
 
 				e.Logger.ErrorContext(ctx, e.Name+": Error keeping leadership", "client_id", e.config.ClientID, "err", err)
@@ -205,13 +371,18 @@ func (e *Elector) Start(ctx context.Context) error {
 	return nil
 }
 
-func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
+// runFollowerState is the follower side of the elector state machine. It keeps
+// attempting election until this client becomes leader or the elector stops.
+func (e *Elector) runFollowerState(ctx context.Context) (leadershipTerm, error) {
 	var attempt int
 	for {
 		attempt++
 		e.Logger.DebugContext(ctx, e.Name+": Attempting to gain leadership", "client_id", e.config.ClientID)
+		// Use the local monotonic-bearing clock for the trust window. The
+		// DB-facing timestamp path stays on NowUTCOrNil below.
+		attemptStarted := e.Time.Now()
 
-		elected, err := attemptElectOrReelect(ctx, e.exec, false, &riverdriver.LeaderElectParams{
+		leader, err := attemptElect(ctx, e.exec, &riverdriver.LeaderElectParams{
 			LeaderID: e.config.ClientID,
 			Now:      e.Time.NowOrNil(),
 			Schema:   e.config.Schema,
@@ -219,16 +390,18 @@ func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
 		})
 		if err != nil {
 			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
-				return err
+				return leadershipTerm{}, err
 			}
-
-			sleepDuration := serviceutil.ExponentialBackoff(attempt, serviceutil.MaxAttemptsBeforeResetDefault)
-			e.Logger.ErrorContext(ctx, e.Name+": Error attempting to elect", e.errorSlogArgs(err, attempt, sleepDuration)...)
-			serviceutil.CancellableSleep(ctx, sleepDuration)
-			continue
+			if !errors.Is(err, rivertype.ErrNotFound) {
+				sleepDuration := serviceutil.ExponentialBackoff(attempt, serviceutil.MaxAttemptsBeforeResetDefault)
+				e.Logger.ErrorContext(ctx, e.Name+": Error attempting to elect", e.errorSlogArgs(err, attempt, sleepDuration)...)
+				serviceutil.CancellableSleep(ctx, sleepDuration)
+				continue
+			}
 		}
-		if elected {
-			return nil
+
+		if leader != nil {
+			return newLeadershipTerm(leader.LeaderID, leader.ElectedAt, attemptStarted, e.leaderTTL()), nil
 		}
 
 		attempt = 0
@@ -237,16 +410,12 @@ func (e *Elector) attemptGainLeadershipLoop(ctx context.Context) error {
 		e.testSignals.DeniedLeadership.Signal(struct{}{})
 
 		select {
-		// TODO: This could potentially leak memory / timers if we're seeing a ton
-		// of resignations. May want to make this reusable & cancel it when retrying?
-		// We may also want to consider a specialized ticker utility that can tick
-		// within a random range.
 		case <-serviceutil.CancellableSleepC(ctx, randutil.DurationBetween(e.config.ElectInterval, e.config.ElectInterval+e.config.ElectIntervalJitter)):
 			if ctx.Err() != nil { // context done
-				return ctx.Err()
+				return leadershipTerm{}, ctx.Err()
 			}
 
-		case <-e.leaderResignedChan:
+		case <-e.wakeupChan:
 			// Somebody just resigned, try to win the next election after a very
 			// short random interval (to prevent all clients from bidding at once).
 			serviceutil.CancellableSleep(ctx, randutil.DurationBetween(0, 50*time.Millisecond))
@@ -278,56 +447,28 @@ func (e *Elector) handleLeadershipNotification(ctx context.Context, topic notifi
 
 	switch notification.Action {
 	case DBNotificationKindRequestResign:
-		e.mu.Lock()
-		isLeader := e.isLeader
-		e.mu.Unlock()
-
-		if !isLeader {
+		if !e.markPendingRequestResign() {
 			return
 		}
 
-		select {
-		case <-ctx.Done():
-		case e.requestResignChan <- struct{}{}:
-		default:
-			// if context is not done and requestResignChan has an item in it
-			// already, do nothing
-		}
+		trySendWakeup(ctx, e.wakeupChan)
 	case DBNotificationKindResigned:
 		// If this a resignation from _this_ client, ignore the change.
 		if notification.LeaderID == e.config.ClientID {
 			return
 		}
 
-		select {
-		case <-ctx.Done():
-		case e.leaderResignedChan <- struct{}{}:
-		}
+		trySendWakeup(ctx, e.wakeupChan)
 	}
 }
 
-var errLostLeadershipReelection = errors.New("lost leadership with no error")
+// runLeaderState is the leader side of the elector state machine. It waits for
+// either a reelection interval, a forced resignation, or shutdown.
+func (e *Elector) runLeaderState(ctx context.Context, term leadershipTerm) error {
+	defer e.clearPendingRequestResign()
+	defer e.publishLeadershipState(false)
 
-func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
-	// notify all subscribers that we're the leader
-	e.notifySubscribers(true)
-
-	// On the way out clear any another item that may have been added to
-	// requestResignChan. Having isLeader set to false will prevent additional
-	// items from being queued after this one.
-	defer func() {
-		select {
-		case <-e.requestResignChan:
-		default:
-		}
-	}()
-
-	// Defer is LIFO. This will run after the resign below.
-	//
-	// This also sets e.isLeader = false.
-	defer e.notifySubscribers(false)
-
-	var lostLeadership bool
+	shouldResign := true
 
 	// Before the elector returns, run a delete with NOTIFY to give up any
 	// leadership that we have. If we do that here, we guarantee that any locks
@@ -336,52 +477,34 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 	//
 	// This doesn't use ctx because it runs *after* the ctx is done.
 	defer func() {
-		if !lostLeadership {
-			e.attemptResignLoop(ctx) // will resign using WithoutCancel context, but ctx sent for logging
+		if shouldResign {
+			e.attemptResignLoop(ctx, term) // will resign using WithoutCancel context, but ctx sent for logging
 		}
 	}()
 
-	const maxNumErrors = 5
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 
-	var (
-		numErrors = 0
-		timer     = time.NewTimer(0) // reset immediately below
-	)
-	<-timer.C
+	numErrors := 0
+	waitDuration := e.config.ElectInterval
 
 	for {
-		timer.Reset(e.config.ElectInterval)
+		resetTimer(timer, waitDuration)
 
 		select {
 		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
-
 			return ctx.Err()
 
-		case <-e.requestResignChan:
-			// Receive a notification telling current leader to resign.
+		case <-e.wakeupChan:
+			if !e.takePendingRequestResign() {
+				continue
+			}
 
 			e.Logger.InfoContext(ctx, e.Name+": Current leader received forced resignation", "client_id", e.config.ClientID)
-
-			if !timer.Stop() {
-				<-timer.C
-			}
 
 			// This client may win leadership again, but drop out of this
 			// function and make it start all over.
 			return nil
-
-		case <-e.leaderResignedChan:
-			// Used only in tests for force an immediately reelect attempt.
-			//
-			// This differs from the case above in that it drops through to
-			// attempting to reelect instead of returning from the function.
-
-			if !timer.Stop() {
-				<-timer.C
-			}
 
 		case <-timer.C:
 			// Reelect timer expired; attempt reelection below.
@@ -389,35 +512,61 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 
 		e.Logger.DebugContext(ctx, e.Name+": Current leader attempting reelect", "client_id", e.config.ClientID)
 
-		reelected, err := attemptElectOrReelect(ctx, e.exec, true, &riverdriver.LeaderElectParams{
-			LeaderID: e.config.ClientID,
-			Now:      e.Time.NowOrNil(),
-			Schema:   e.config.Schema,
-			TTL:      e.leaderTTL(),
-		})
+		// Use the local monotonic-bearing clock for the trust window. The
+		// DB-facing timestamp path stays on NowOrNil below.
+		attemptStarted := e.Time.Now()
+		attemptTimeout := term.reelectAttemptTimeout(attemptStarted)
+		if attemptTimeout <= 0 {
+			e.Logger.WarnContext(ctx, e.Name+": Current leader stepping down because the reelection deadline elapsed", "client_id", e.config.ClientID)
+			e.testSignals.LostLeadership.Signal(struct{}{})
+			return nil
+		}
+
+		leader, err := attemptReelectWithTimeout(ctx, e.exec, &riverdriver.LeaderReelectParams{
+			ElectedAt: term.electedAt,
+			LeaderID:  term.clientID,
+			Now:       e.Time.NowOrNil(),
+			Schema:    e.config.Schema,
+			TTL:       e.leaderTTL(),
+		}, attemptTimeout)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return err
 			}
-
-			numErrors++
-			if numErrors >= maxNumErrors {
-				return err
+			if errors.Is(err, rivertype.ErrNotFound) {
+				shouldResign = false
+				e.testSignals.LostLeadership.Signal(struct{}{})
+				return nil
 			}
 
+			numErrors++
 			sleepDuration := serviceutil.ExponentialBackoff(numErrors, 3)
+			remainingDuration := term.remaining(e.Time.Now())
+			if remainingDuration <= 0 {
+				e.Logger.WarnContext(ctx, e.Name+": Current leader stepping down because the reelection deadline elapsed after an error", "client_id", e.config.ClientID)
+				e.testSignals.LostLeadership.Signal(struct{}{})
+				return nil
+			}
+
 			e.Logger.ErrorContext(ctx, e.Name+": Error attempting reelection", e.errorSlogArgs(err, numErrors, sleepDuration)...)
+			if remainingDuration < sleepDuration {
+				sleepDuration = remainingDuration
+			}
 			serviceutil.CancellableSleep(ctx, sleepDuration)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+
+			// Retry immediately after the backoff because the time budget for this
+			// lease has already been reduced by the failed attempt above.
+			waitDuration = 0
 			continue
-		}
-		if !reelected {
-			lostLeadership = true
-			e.testSignals.LostLeadership.Signal(struct{}{})
-			return errLostLeadershipReelection
 		}
 
 		numErrors = 0
+		term = newLeadershipTerm(leader.LeaderID, leader.ElectedAt, attemptStarted, e.leaderTTL())
 		e.testSignals.MaintainedLeadership.Signal(struct{}{})
+		waitDuration = e.config.ElectInterval
 	}
 }
 
@@ -427,7 +576,7 @@ func (e *Elector) keepLeadershipLoop(ctx context.Context) error {
 // makes use of a background context to try and guarantee that leadership is
 // always surrendered in a timely manner so it can be picked up quickly by
 // another client, even in the event of a cancellation.
-func (e *Elector) attemptResignLoop(ctx context.Context) {
+func (e *Elector) attemptResignLoop(ctx context.Context, term leadershipTerm) {
 	e.Logger.DebugContext(ctx, e.Name+": Attempting to resign leadership", "client_id", e.config.ClientID)
 
 	// Make a good faith attempt to resign, even in the presence of errors, but
@@ -442,7 +591,7 @@ func (e *Elector) attemptResignLoop(ctx context.Context) {
 	ctx = context.WithoutCancel(ctx)
 
 	for attempt := 1; attempt <= maxNumErrors; attempt++ {
-		if err := e.attemptResign(ctx, attempt); err != nil {
+		if err := e.attemptResign(ctx, attempt, term); err != nil {
 			sleepDuration := serviceutil.ExponentialBackoff(attempt, maxNumErrors)
 			e.Logger.ErrorContext(ctx, e.Name+": Error attempting to resign", e.errorSlogArgs(err, attempt, sleepDuration)...)
 			serviceutil.CancellableSleep(ctx, sleepDuration)
@@ -456,7 +605,7 @@ func (e *Elector) attemptResignLoop(ctx context.Context) {
 
 // attemptResign attempts to resign any currently held leaderships for the
 // elector's name and leader ID.
-func (e *Elector) attemptResign(ctx context.Context, attempt int) error {
+func (e *Elector) attemptResign(ctx context.Context, attempt int, term leadershipTerm) error {
 	// Wait one second longer each time we try to resign:
 	timeout := time.Duration(attempt) * time.Second
 
@@ -464,7 +613,8 @@ func (e *Elector) attemptResign(ctx context.Context, attempt int) error {
 	defer cancel()
 
 	resigned, err := e.exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
-		LeaderID:        e.config.ClientID,
+		ElectedAt:       term.electedAt,
+		LeaderID:        term.clientID,
 		LeadershipTopic: string(notifier.NotificationTopicLeadership),
 		Schema:          e.config.Schema,
 	})
@@ -496,8 +646,8 @@ func (e *Elector) errorSlogArgs(err error, attempt int, sleepDuration time.Durat
 func (e *Elector) Listen() *Subscription {
 	sub := &Subscription{
 		creationTime: time.Now().UTC(),
-		ch:           make(chan *Notification, 1),
 		e:            e,
+		relay:        newSubscriptionRelay(),
 		unlistenOnce: &sync.Once{},
 	}
 
@@ -508,7 +658,7 @@ func (e *Elector) Listen() *Subscription {
 		IsLeader:  e.isLeader,
 		Timestamp: sub.creationTime,
 	}
-	sub.ch <- initialNotification
+	sub.enqueue(initialNotification)
 
 	e.subscriptions = append(e.subscriptions, sub)
 	return sub
@@ -519,6 +669,8 @@ func (e *Elector) unlisten(sub *Subscription) {
 	if !success {
 		panic("BUG: tried to unlisten for subscription not in list")
 	}
+
+	sub.stop()
 }
 
 // needs to be in a separate method so the defer will cleanly unlock the mutex,
@@ -528,7 +680,7 @@ func (e *Elector) tryUnlisten(sub *Subscription) bool {
 	defer e.mu.Unlock()
 
 	for i, s := range e.subscriptions {
-		if s.creationTime.Equal(sub.creationTime) {
+		if s == sub {
 			e.subscriptions = append(e.subscriptions[:i], e.subscriptions[i+1:]...)
 			return true
 		}
@@ -543,33 +695,79 @@ func (e *Elector) leaderTTL() time.Duration {
 	return e.config.ElectInterval + electIntervalTTLPaddingDefault
 }
 
-func (e *Elector) notifySubscribers(isLeader bool) {
+func (e *Elector) markPendingRequestResign() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if !e.isLeader {
+		return false
+	}
+
+	e.pendingRequestResign = true
+	return true
+}
+
+func (e *Elector) publishLeadershipState(isLeader bool) {
 	notifyTime := time.Now().UTC()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	e.isLeader = isLeader
+	if !isLeader {
+		e.pendingRequestResign = false
+	}
+
+	notification := &Notification{
+		IsLeader:  isLeader,
+		Timestamp: notifyTime,
+	}
 
 	for _, s := range e.subscriptions {
-		s.ch <- &Notification{
-			IsLeader:  isLeader,
-			Timestamp: notifyTime,
-		}
+		s.enqueue(notification)
 	}
+}
+
+func (e *Elector) clearPendingRequestResign() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.pendingRequestResign = false
+}
+
+func (e *Elector) takePendingRequestResign() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if !e.pendingRequestResign {
+		return false
+	}
+
+	e.pendingRequestResign = false
+	return true
 }
 
 const deadlineTimeout = 5 * time.Second
 
-// attemptElectOrReelect attempts to elect a leader for the given name. The
-// bool alreadyElected indicates whether this is a potential reelection of
-// an already-elected leader. If the election is successful because there is
-// no leader or the previous leader expired, the provided leaderID will be
-// set as the new leader with a TTL of ttl.
-//
-// Returns whether this leader was successfully elected or an error if one
-// occurred.
-func attemptElectOrReelect(ctx context.Context, exec riverdriver.Executor, alreadyElected bool, params *riverdriver.LeaderElectParams) (bool, error) {
-	ctx, cancel := context.WithTimeout(ctx, deadlineTimeout)
+func resetTimer(timer *time.Timer, duration time.Duration) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+
+	timer.Reset(duration)
+}
+
+// attemptElect attempts to elect a leader for the given name. If there is no
+// current leader or the previous leader expired, the provided leader ID is set
+// as the new leader with a TTL of `params.TTL`.
+func attemptElect(ctx context.Context, exec riverdriver.Executor, params *riverdriver.LeaderElectParams) (*riverdriver.Leader, error) {
+	return attemptElectWithTimeout(ctx, exec, params, deadlineTimeout)
+}
+
+func attemptElectWithTimeout(ctx context.Context, exec riverdriver.Executor, params *riverdriver.LeaderElectParams, timeout time.Duration) (*riverdriver.Leader, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	execTx, err := exec.Begin(ctx)
@@ -579,7 +777,7 @@ func attemptElectOrReelect(ctx context.Context, exec riverdriver.Executor, alrea
 			additionalDetail = " (a common cause of this is a database pool that's at its connection limit; you may need to increase maximum connections)"
 		}
 
-		return false, fmt.Errorf("error beginning transaction: %w%s", err, additionalDetail)
+		return nil, fmt.Errorf("error beginning transaction: %w%s", err, additionalDetail)
 	}
 	defer dbutil.RollbackWithoutCancel(ctx, execTx)
 
@@ -587,22 +785,26 @@ func attemptElectOrReelect(ctx context.Context, exec riverdriver.Executor, alrea
 		Now:    params.Now,
 		Schema: params.Schema,
 	}); err != nil {
-		return false, err
+		return nil, err
 	}
 
-	var elected bool
-	if alreadyElected {
-		elected, err = execTx.LeaderAttemptReelect(ctx, params)
-	} else {
-		elected, err = execTx.LeaderAttemptElect(ctx, params)
+	leader, err := execTx.LeaderAttemptElect(ctx, params)
+	if err != nil && !errors.Is(err, rivertype.ErrNotFound) {
+		return nil, err
+	}
+	if err := execTx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("error committing transaction: %w", err)
 	}
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
-	if err := execTx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("error committing transaction: %w", err)
-	}
+	return leader, nil
+}
 
-	return elected, nil
+func attemptReelectWithTimeout(ctx context.Context, exec riverdriver.Executor, params *riverdriver.LeaderReelectParams, timeout time.Duration) (*riverdriver.Leader, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	return exec.LeaderAttemptReelect(ctx, params)
 }

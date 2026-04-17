@@ -701,28 +701,29 @@ func (e *Executor) JobUpdateFull(ctx context.Context, params *riverdriver.JobUpd
 	return jobRowFromInternal(job)
 }
 
-func (e *Executor) LeaderAttemptElect(ctx context.Context, params *riverdriver.LeaderElectParams) (bool, error) {
-	numElectionsWon, err := dbsqlc.New().LeaderAttemptElect(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.LeaderAttemptElectParams{
+func (e *Executor) LeaderAttemptElect(ctx context.Context, params *riverdriver.LeaderElectParams) (*riverdriver.Leader, error) {
+	leader, err := dbsqlc.New().LeaderAttemptElect(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.LeaderAttemptElectParams{
 		LeaderID: params.LeaderID,
 		Now:      params.Now,
 		TTL:      params.TTL.Seconds(),
 	})
 	if err != nil {
-		return false, interpretError(err)
+		return nil, interpretError(err)
 	}
-	return numElectionsWon > 0, nil
+	return leaderFromInternal(leader), nil
 }
 
-func (e *Executor) LeaderAttemptReelect(ctx context.Context, params *riverdriver.LeaderElectParams) (bool, error) {
-	numElectionsWon, err := dbsqlc.New().LeaderAttemptReelect(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.LeaderAttemptReelectParams{
-		LeaderID: params.LeaderID,
-		Now:      params.Now,
-		TTL:      params.TTL.Seconds(),
+func (e *Executor) LeaderAttemptReelect(ctx context.Context, params *riverdriver.LeaderReelectParams) (*riverdriver.Leader, error) {
+	leader, err := dbsqlc.New().LeaderAttemptReelect(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.LeaderAttemptReelectParams{
+		ElectedAt: params.ElectedAt,
+		LeaderID:  params.LeaderID,
+		Now:       params.Now,
+		TTL:       params.TTL.Seconds(),
 	})
 	if err != nil {
-		return false, interpretError(err)
+		return nil, interpretError(err)
 	}
-	return numElectionsWon > 0, nil
+	return leaderFromInternal(leader), nil
 }
 
 func (e *Executor) LeaderDeleteExpired(ctx context.Context, params *riverdriver.LeaderDeleteExpiredParams) (int, error) {
@@ -757,6 +758,7 @@ func (e *Executor) LeaderInsert(ctx context.Context, params *riverdriver.LeaderI
 
 func (e *Executor) LeaderResign(ctx context.Context, params *riverdriver.LeaderResignParams) (bool, error) {
 	numResigned, err := dbsqlc.New().LeaderResign(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.LeaderResignParams{
+		ElectedAt:       params.ElectedAt,
 		LeaderID:        params.LeaderID,
 		LeadershipTopic: params.LeadershipTopic,
 		Schema:          pgtype.Text{String: params.Schema, Valid: params.Schema != ""},
