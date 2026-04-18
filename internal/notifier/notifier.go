@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -262,12 +263,38 @@ func (n *Notifier) listenerClose(ctx context.Context, skipLock bool) {
 
 	n.Logger.DebugContext(ctx, n.Name+": Listener closing")
 	if err := n.listener.Close(ctx); err != nil {
-		if !errors.Is(err, context.Canceled) {
+		if shouldIgnoreListenerError(err) {
 			n.Logger.ErrorContext(ctx, n.Name+": Error closing listener", "err", err)
 		}
 	}
 
 	n.isConnected = false
+}
+
+// shouldIgnoreListenerError returns true if the error is a certain type of
+// common error that we see when trying to close a listener.
+//
+// It's probably not strictly necessary to log errors on listener close, but it
+// seems not ideal to ignore them completely either. If this function were ever
+// to become to unwieldy though, we might want to go back to the drawing board.
+func shouldIgnoreListenerError(err error) bool {
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+
+	// In practice, this occurs a fair bit in some systems. See:
+	//
+	//     https://github.com/riverqueue/river/issues/256
+	//
+	// There's been an issue opened to make this a well-known error type, but
+	// it's not right now:
+	//
+	//     https://github.com/golang/go/issues/75600
+	if strings.Contains(err.Error(), "tls: failed to send closeNotify alert") {
+		return true
+	}
+
+	return false
 }
 
 const listenerTimeout = 10 * time.Second
