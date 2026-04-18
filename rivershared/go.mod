@@ -6,10 +6,10 @@ toolchain go1.25.7
 
 require (
 	github.com/jackc/pgx/v5 v5.9.1
-	github.com/riverqueue/river v0.34.0
-	github.com/riverqueue/river/riverdriver v0.34.0
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.34.0
-	github.com/riverqueue/river/rivertype v0.34.0
+	github.com/riverqueue/river v0.35.0
+	github.com/riverqueue/river/riverdriver v0.35.0
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.35.0
+	github.com/riverqueue/river/rivertype v0.35.0
 	github.com/stretchr/testify v1.11.1
 	github.com/tidwall/gjson v1.18.0
 	go.uber.org/goleak v1.3.0

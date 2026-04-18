@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-04-18
+
 ### Changed
 
 - Ignore errors like `tls: failed to send closeNotify alert (but connection was closed anyway)` when closing listeners. [PR #1216](https://github.com/riverqueue/river/pull/1216).
