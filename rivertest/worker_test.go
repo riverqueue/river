@@ -540,6 +540,54 @@ func TestWorker_WorkJob(t *testing.T) {
 		require.Equal(t, rivertype.JobStateCompleted, updatedJob.State)
 	})
 
+	t.Run("JobCancelTxWithInsertedJobRow", func(t *testing.T) {
+		t.Parallel()
+
+		testWorker, bundle := setup(t)
+
+		args := testArgs{}
+		insertRes, err := bundle.client.InsertTx(ctx, bundle.tx, args, nil)
+		require.NoError(t, err)
+
+		bundle.workFunc = func(ctx context.Context, job *river.Job[testArgs]) error {
+			_, err := river.JobCancelTx[*riverpgxv5.Driver](ctx, bundle.tx, job, errors.New("cancelled"))
+			require.NoError(t, err)
+			return nil
+		}
+
+		res, err := testWorker.WorkJob(ctx, t, bundle.tx, insertRes.Job)
+		require.NoError(t, err)
+		require.Equal(t, river.EventKindJobCancelled, res.EventKind)
+
+		updatedJob, err := bundle.driver.UnwrapExecutor(bundle.tx).JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: insertRes.Job.ID, Schema: ""})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateCancelled, updatedJob.State)
+	})
+
+	t.Run("JobFailTxWithInsertedJobRow", func(t *testing.T) {
+		t.Parallel()
+
+		testWorker, bundle := setup(t)
+
+		args := testArgs{}
+		insertRes, err := bundle.client.InsertTx(ctx, bundle.tx, args, &river.InsertOpts{MaxAttempts: 1})
+		require.NoError(t, err)
+
+		bundle.workFunc = func(ctx context.Context, job *river.Job[testArgs]) error {
+			_, err := river.JobFailTx[*riverpgxv5.Driver](ctx, bundle.tx, job, errors.New("failed"))
+			require.NoError(t, err)
+			return nil
+		}
+
+		res, err := testWorker.WorkJob(ctx, t, bundle.tx, insertRes.Job)
+		require.NoError(t, err)
+		require.Equal(t, river.EventKindJobFailed, res.EventKind)
+
+		updatedJob, err := bundle.driver.UnwrapExecutor(bundle.tx).JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: insertRes.Job.ID, Schema: ""})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateDiscarded, updatedJob.State)
+	})
+
 	t.Run("ErrorsWhenGivenAlreadyCompletedJob", func(t *testing.T) {
 		t.Parallel()
 

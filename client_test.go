@@ -7054,6 +7054,94 @@ func Test_Client_JobCompletion(t *testing.T) {
 		require.Equal(t, rivertype.JobStateCompleted, reloadedJob.State)
 		require.Equal(t, updatedJob.FinalizedAt, reloadedJob.FinalizedAt)
 	})
+
+	t.Run("JobThatIsCancelledManuallyIsNotTouchedByCompleter", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t, newTestConfig(t, ""))
+
+		now := client.baseService.Time.StubNow(time.Now().UTC())
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		var updatedJob *Job[JobArgs]
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			tx, err := bundle.dbPool.Begin(ctx)
+			require.NoError(t, err)
+
+			updatedJob, err = JobCancelTx[*riverpgxv5.Driver](ctx, tx, job, errors.New("no longer needed"))
+			require.NoError(t, err)
+
+			return tx.Commit(ctx)
+		}))
+
+		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, bundle.subscribeChan)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+		require.Equal(t, rivertype.JobStateCancelled, event.Job.State)
+		require.NotNil(t, updatedJob)
+		require.Equal(t, rivertype.JobStateCancelled, updatedJob.State)
+		require.NotNil(t, event.Job.FinalizedAt)
+		require.NotNil(t, updatedJob.FinalizedAt)
+		require.WithinDuration(t, now, *updatedJob.FinalizedAt, time.Microsecond)
+		require.WithinDuration(t, *updatedJob.FinalizedAt, *event.Job.FinalizedAt, time.Microsecond)
+
+		reloadedJob, err := client.JobGet(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+
+		require.Equal(t, rivertype.JobStateCancelled, reloadedJob.State)
+		require.Equal(t, updatedJob.FinalizedAt, reloadedJob.FinalizedAt)
+		require.Len(t, reloadedJob.Errors, 1)
+		require.Equal(t, "JobCancelError: no longer needed", reloadedJob.Errors[0].Error)
+	})
+
+	t.Run("JobThatIsFailedManuallyIsNotTouchedByCompleter", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t, newTestConfig(t, ""))
+
+		now := client.baseService.Time.StubNow(time.Now().UTC())
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		var updatedJob *Job[JobArgs]
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			tx, err := bundle.dbPool.Begin(ctx)
+			require.NoError(t, err)
+
+			updatedJob, err = JobFailTx[*riverpgxv5.Driver](ctx, tx, job, errors.New("final failure"))
+			require.NoError(t, err)
+
+			return tx.Commit(ctx)
+		}))
+
+		insertRes, err := client.Insert(ctx, JobArgs{}, &InsertOpts{MaxAttempts: 1})
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, bundle.subscribeChan)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+		require.Equal(t, rivertype.JobStateDiscarded, event.Job.State)
+		require.NotNil(t, updatedJob)
+		require.Equal(t, rivertype.JobStateDiscarded, updatedJob.State)
+		require.NotNil(t, event.Job.FinalizedAt)
+		require.NotNil(t, updatedJob.FinalizedAt)
+		require.WithinDuration(t, now, *updatedJob.FinalizedAt, time.Microsecond)
+		require.WithinDuration(t, *updatedJob.FinalizedAt, *event.Job.FinalizedAt, time.Microsecond)
+
+		reloadedJob, err := client.JobGet(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+
+		require.Equal(t, rivertype.JobStateDiscarded, reloadedJob.State)
+		require.Equal(t, updatedJob.FinalizedAt, reloadedJob.FinalizedAt)
+		require.Len(t, reloadedJob.Errors, 1)
+		require.Equal(t, "final failure", reloadedJob.Errors[0].Error)
+	})
 }
 
 type unregisteredJobArgs struct{}

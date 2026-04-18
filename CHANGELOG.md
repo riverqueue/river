@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `JobCancelTx` which marks a running job as cancelled atomically within a caller-supplied transaction, mirroring `JobCompleteTx` for the cancel path. [PR #1219](https://github.com/riverqueue/river/pull/1219)
+- Added `JobFailTx` which records an attempt error and transitions the job to retryable, available, or discarded (based on attempts remaining) atomically within a caller-supplied transaction. The returned job's `State` indicates whether the job will retry, letting callers keep external state (e.g. a web-app status row) in sync with the job's outcome. [PR #1219](https://github.com/riverqueue/river/pull/1219)
+
 ## [0.35.0] - 2026-04-18
 
 ### Changed
