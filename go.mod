@@ -6,7 +6,7 @@ toolchain go1.25.7
 
 require (
 	github.com/jackc/pgerrcode v0.0.0-20240316143900-6e2875d9b438
-	github.com/jackc/pgx/v5 v5.9.1
+	github.com/jackc/pgx/v5 v5.9.2
 	github.com/jackc/puddle/v2 v2.2.2
 	github.com/riverqueue/river/riverdriver v0.35.0
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.35.0
