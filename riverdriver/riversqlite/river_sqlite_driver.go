@@ -208,7 +208,7 @@ func (e *Executor) IndexDropIfExists(ctx context.Context, params *riverdriver.In
 
 func (e *Executor) IndexExists(ctx context.Context, params *riverdriver.IndexExistsParams) (bool, error) {
 	exists, err := dbsqlc.New().IndexExists(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.Index)
-	return exists > 0, interpretError(err)
+	return exists, interpretError(err)
 }
 
 func (e *Executor) IndexReindex(ctx context.Context, params *riverdriver.IndexReindexParams) error {
@@ -1450,7 +1450,7 @@ func (e *Executor) SchemaGetExpired(ctx context.Context, params *riverdriver.Sch
 
 func (e *Executor) TableExists(ctx context.Context, params *riverdriver.TableExistsParams) (bool, error) {
 	exists, err := dbsqlc.New().TableExists(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.Table)
-	return exists > 0, interpretError(err)
+	return exists, interpretError(err)
 }
 
 func (e *Executor) TableTruncate(ctx context.Context, params *riverdriver.TableTruncateParams) error {
