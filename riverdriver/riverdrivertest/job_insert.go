@@ -699,7 +699,7 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 					_, err := exec.JobInsertFull(ctx, params)
 					require.Error(t, err)
 					// two separate error messages here for Postgres and SQLite
-					require.Regexp(t, `(CHECK constraint failed: finalized_or_finalized_at_null|violates check constraint "finalized_or_finalized_at_null")`, err.Error())
+					require.Regexp(t, `(CHECK constraint failed: finalized_or_finalized_at_null|violates check constraint "finalized_or_finalized_at_null"|Check constraint 'finalized_or_finalized_at_null' is violated)`, err.Error())
 				})
 
 				t.Run(fmt.Sprintf("CanSetState%sWithFinalizedAt", capitalizeJobState(state)), func(t *testing.T) {
@@ -749,7 +749,7 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 					}))
 					require.Error(t, err)
 					// two separate error messages here for Postgres and SQLite
-					require.Regexp(t, `(CHECK constraint failed: finalized_or_finalized_at_null|violates check constraint "finalized_or_finalized_at_null")`, err.Error())
+					require.Regexp(t, `(CHECK constraint failed: finalized_or_finalized_at_null|violates check constraint "finalized_or_finalized_at_null"|Check constraint 'finalized_or_finalized_at_null' is violated)`, err.Error())
 				})
 			}
 		})

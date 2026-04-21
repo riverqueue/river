@@ -46,6 +46,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 }
 
 const (
+	databaseNameMySQL    = "mysql"
 	databaseNamePostgres = "postgres"
 	databaseNameSQLite   = "sqlite"
 	testClientID         = "test-client-id"
@@ -83,6 +84,25 @@ func exerciseDriverPool[TTx any](ctx context.Context, t *testing.T,
 		})
 	})
 
+	t.Run("SafeIdentifier", func(t *testing.T) {
+		t.Parallel()
+
+		_, driver := executorWithTx(ctx, t)
+
+		switch driver.DatabaseName() {
+		case databaseNamePostgres, databaseNameSQLite:
+			require.Equal(t, `"my_schema"`, driver.SafeIdentifier("my_schema"))
+			require.Equal(t, `"has space"`, driver.SafeIdentifier("has space"))
+			require.Equal(t, `"has""quote"`, driver.SafeIdentifier(`has"quote`))
+		case databaseNameMySQL:
+			require.Equal(t, "`my_schema`", driver.SafeIdentifier("my_schema"))
+			require.Equal(t, "`has space`", driver.SafeIdentifier("has space"))
+			require.Equal(t, "`has``backtick`", driver.SafeIdentifier("has`backtick"))
+		default:
+			require.FailNow(t, "Don't know how to check SafeIdentifier for: "+driver.DatabaseName())
+		}
+	})
+
 	t.Run("SupportsListenNotify", func(t *testing.T) {
 		t.Parallel()
 
@@ -91,7 +111,7 @@ func exerciseDriverPool[TTx any](ctx context.Context, t *testing.T,
 		switch driver.DatabaseName() {
 		case databaseNamePostgres:
 			require.True(t, driver.SupportsListenNotify())
-		case databaseNameSQLite:
+		case databaseNameMySQL, databaseNameSQLite:
 			require.False(t, driver.SupportsListenNotify())
 		default:
 			require.FailNow(t, "Don't know how to check SupportsListenNotify for: "+driver.DatabaseName())
@@ -109,6 +129,7 @@ func requireMissingRelation(t *testing.T, err error, schema, missingRelation str
 	} else {
 		// lib/pq: pq: relation %s.%s does not exist
 		// SQLite: no such table: %s.%s
-		require.Regexp(t, fmt.Sprintf(`(pq: relation "%s\.%s" does not exist|no such table: %s\.%s)`, schema, missingRelation, schema, missingRelation), err.Error())
+		// MySQL: Unknown database '%s'
+		require.Regexp(t, fmt.Sprintf(`(pq: relation "%s\.%s" does not exist|no such table: %s\.%s|Unknown database '%s')`, schema, missingRelation, schema, missingRelation, schema), err.Error())
 	}
 }

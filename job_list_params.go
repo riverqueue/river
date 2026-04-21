@@ -347,10 +347,10 @@ func (p *JobListParams) Kinds(kinds ...string) *JobListParams {
 //
 // https://www.postgresql.org/docs/current/functions-json.html
 //
-// This function isn't supported in SQLite due to SQLite not having an
-// equivalent operator to use, so there's no efficient way to implement it. We
-// recommend the use of Where using a condition with a comparison on the `->>`
-// operator instead.
+// This function isn't supported in MySQL or SQLite due to neither having a
+// direct equivalent to Postgres's `@>` operator. We recommend the use of
+// [JobListParams.Where] with a database-specific JSON comparison instead (e.g.
+// `JSON_EXTRACT` for MySQL, `->>` for SQLite).
 func (p *JobListParams) Metadata(json string) *JobListParams {
 	paramsCopy := p.copy()
 	paramsCopy.metadataCalled = true

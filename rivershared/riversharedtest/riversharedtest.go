@@ -112,6 +112,44 @@ var sqliteTestDir = sync.OnceValue(func() string { //nolint:gochecknoglobals
 	return path.Join(rootDir, "sqlite")
 })
 
+// A pool and sync.Once to initialize a MySQL pool, invoked by DBPoolMySQL.
+var (
+	dbPoolMySQL     *sql.DB   //nolint:gochecknoglobals
+	dbPoolMySQLOnce sync.Once //nolint:gochecknoglobals
+)
+
+// SkipIfMySQLNotEnabled skips the current test if MySQL tests are not enabled.
+// MySQL tests are opt-in because they require a running MySQL server. Set
+// RIVER_MYSQL_TESTS_ENABLED=1 or RIVER_MYSQL_TESTS_ENABLED=true to enable.
+func SkipIfMySQLNotEnabled(tb testing.TB) {
+	tb.Helper()
+
+	val := os.Getenv("RIVER_MYSQL_TESTS_ENABLED")
+	if val != "1" && val != "true" { //nolint:goconst
+		tb.Skip("Skipping MySQL tests; set RIVER_MYSQL_TESTS_ENABLED=1 to enable")
+	}
+}
+
+// DBPoolMySQL gets a lazily initialized database pool for MySQL testing.
+// Uses TEST_MYSQL_URL or defaults to root@tcp(localhost:3306)/?.
+func DBPoolMySQL(ctx context.Context, tb testing.TB) *sql.DB {
+	tb.Helper()
+
+	dbPoolMySQLOnce.Do(func() {
+		dsn := cmp.Or(
+			os.Getenv("TEST_MYSQL_URL"),
+			"root@tcp(localhost:3306)/?parseTime=true&multiStatements=true&loc=UTC&time_zone=%27%2B00%3A00%27",
+		)
+
+		var err error
+		dbPoolMySQL, err = sql.Open("mysql", dsn)
+		require.NoError(tb, err)
+	})
+	require.NotNil(tb, dbPoolMySQL)
+
+	return dbPoolMySQL
+}
+
 // DBPoolLibSQL gets a database pool appropriate for use with libSQL (a SQLite
 // fork) in testing.
 func DBPoolLibSQL(ctx context.Context, tb testing.TB, schema string) *sql.DB {
