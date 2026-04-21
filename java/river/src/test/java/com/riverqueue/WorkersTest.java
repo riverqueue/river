@@ -530,9 +530,10 @@ class WorkersTest {
             connection -> {
               var now = Instant.now();
               try (var statement =
-                      Sql.prepare(
+                      Sql.mutation(
+                          client.database(),
                           connection,
-                          Sql.query(client.database(), "leader_elect"),
+                          "leader_elect",
                           leaderId,
                           client.database().timestamp(now),
                           client.database().timestamp(now.plusSeconds(3600)));

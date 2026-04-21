@@ -5,6 +5,14 @@ require_relative "../../../spec/driver_shared_examples"
 require_relative "../../../spec/row_decoding_shared_examples"
 
 RSpec.describe River::Driver::Sequel do
+  it "selects the MySQL runtime and migrations for mysql2 connections" do
+    database = Sequel.mock
+    def database.database_type = :mysql
+    driver = described_class.new(database)
+    expect(driver).to be_a(River::Driver::MySQLRuntime)
+    expect(driver.migration_backend).to eq(:mysql)
+  end
+
   if DB
     context "with Postgres", database: :postgres do
       around(:each) { |ex| test_transaction(&ex) }

@@ -28,6 +28,8 @@ use tracing::{debug, error};
 use crate::__private::{DatabaseConnection as PilotDatabaseConnection, JobSetStateParams};
 use crate::client::attempts::remove_running_attempt;
 use crate::client::backoff::exponential_backoff;
+#[cfg(feature = "mysql")]
+use crate::client::mysql_backend_error;
 #[cfg(feature = "sqlite")]
 use crate::client::sqlite_backend_error;
 use crate::client::{ClientInner, RuntimeNotification, peers, tolerant_row};
@@ -144,6 +146,8 @@ impl CompletionBatcher {
         let backend_concurrency = match inner.database.kind() {
             #[cfg(feature = "postgres")]
             DatabaseKind::Postgres => COMPLETION_POSTGRES_CONCURRENCY,
+            #[cfg(feature = "mysql")]
+            DatabaseKind::MySql => 1,
             #[cfg(feature = "sqlite")]
             DatabaseKind::Sqlite => 1,
         };
@@ -485,8 +489,8 @@ async fn persist_with_retries(
 }
 
 /// Wakes producers for jobs that client shutdown returned to `available`, so
-/// another client picks them up without waiting for its next poll. SQLite
-/// writes its durable wakeup inside the completion transaction instead.
+/// another client picks them up without waiting for its next poll. MySQL and
+/// SQLite write their durable wakeups inside the completion transaction.
 #[cfg_attr(
     not(feature = "postgres"),
     allow(clippy::unused_async, reason = "only Postgres sends a notification")
@@ -511,7 +515,9 @@ async fn notify_interrupted_jobs(inner: &ClientInner, batch: &[CompletionUpdate]
             .send(RuntimeNotification::Insert((*queue).to_owned()));
     }
     match inner.database.pool() {
-        // SQLite clients wrote these notifications with the completion.
+        // Outbox clients wrote these notifications with the completion.
+        #[cfg(feature = "mysql")]
+        DatabasePool::MySql(_) => {}
         #[cfg(feature = "sqlite")]
         DatabasePool::Sqlite(_) => {}
         #[cfg(feature = "postgres")]
@@ -558,6 +564,73 @@ pub(super) async fn persist_completion_batch(
     batch: &[CompletionUpdate],
 ) -> Result<Vec<JobRow>, Error> {
     match inner.database.pool() {
+        #[cfg(feature = "mysql")]
+        DatabasePool::MySql(pool) => {
+            let mut transaction = crate::database::begin_mysql_write(pool).await?;
+            let mut rows = Vec::with_capacity(batch.len());
+            let now = Utc::now();
+            for update in batch {
+                let row = crate::database::mysql::complete_decoded(
+                    &mut transaction,
+                    &crate::database::mysql::CompleteJob {
+                        attempt: update.attempt,
+                        error: update.error.as_ref(),
+                        finalized_at: update.finalized_at,
+                        id: update.job_id,
+                        metadata_updates: (!update.metadata.is_empty()).then_some(&update.metadata),
+                        now,
+                        scheduled_at: update.scheduled_at,
+                        state: update.state,
+                    },
+                )
+                .await
+                .map_err(mysql_backend_error)?;
+                let row = match row {
+                    Some(row) => Some(row),
+                    None => crate::database::mysql::merge_metadata_if_not_running(
+                        &mut transaction,
+                        update.job_id,
+                        &update.metadata,
+                    )
+                    .await
+                    .map_err(mysql_backend_error)?,
+                };
+                rows.extend(row.and_then(tolerant_row));
+            }
+            let interrupted_queues = rows
+                .iter()
+                .filter(|row| row.state == JobState::Available)
+                .filter(|row| {
+                    batch.iter().any(|update| {
+                        update.job_id == row.id && update.event_kind == JobEventKind::Interrupted
+                    })
+                })
+                .map(|row| row.queue.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            for queue in interrupted_queues {
+                let payload = serde_json::json!({ "queue": queue }).to_string();
+                crate::database::mysql::notification_insert(
+                    &mut transaction,
+                    &[crate::database::mysql::NotificationInput {
+                        payload: &payload,
+                        topic: crate::NOTIFICATION_TOPIC_INSERT,
+                    }],
+                )
+                .await
+                .map_err(mysql_backend_error)?;
+            }
+            if inner.pilot.intercepts_job_set_state() {
+                after_jobs_set_state(
+                    inner,
+                    PilotDatabaseConnection::MySql(&mut transaction),
+                    &batch.iter().map(|update| update.job_id).collect::<Vec<_>>(),
+                    &rows,
+                )
+                .await?;
+            }
+            transaction.commit().await?;
+            Ok(rows)
+        }
         #[cfg(feature = "sqlite")]
         DatabasePool::Sqlite(pool) => {
             let mut transaction = crate::database::begin_sqlite_write(pool).await?;

@@ -9,6 +9,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageDirectories = [
   ".",
   "migrate",
+  "driver/mysql",
   "driver/pg",
   "driver/prisma",
   "driver/sqlite",

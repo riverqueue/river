@@ -36,7 +36,7 @@ pub use self::queues::{
     QueueGetRequest, QueueListRequest, QueuePauseRequest, QueueResumeRequest, QueueUpdateRequest,
     Queues,
 };
-#[cfg(feature = "sqlite")]
+#[cfg(any(feature = "sqlite", feature = "mysql"))]
 pub(crate) use self::record::FieldErrors;
 pub(crate) use self::record::{DecodedJob, UndecodableJob, tolerant_row};
 #[cfg(feature = "postgres")]
@@ -157,6 +157,10 @@ pub(crate) struct ClientInner {
     pub(crate) workers: Workers,
 }
 
+#[cfg(feature = "mysql")]
+fn mysql_backend_error(error: crate::database::mysql::BackendError) -> Error {
+    Error::Database(error.into())
+}
 #[cfg(feature = "sqlite")]
 fn sqlite_backend_error(error: crate::database::sqlite::BackendError) -> Error {
     Error::Database(error.into())
@@ -197,7 +201,7 @@ impl ClientInner {
     }
 
     /// Whether this client hears committed notifications through a notifier,
-    /// a Postgres listener or SQLite outbox poller, like River Go's client
+    /// a Postgres listener or MySQL/SQLite outbox poller, like River Go's client
     /// notifier. A poll-only client has none, and neither does a client of a
     /// Postgres server without `LISTEN`/`NOTIFY` once that's detected.
     pub(crate) fn has_notifier(&self) -> bool {
@@ -219,6 +223,8 @@ impl ClientInner {
                 #[cfg(feature = "postgres")]
                 schema: self.schema.clone(),
             },
+            #[cfg(feature = "mysql")]
+            DatabasePool::MySql(_) => PilotDatabaseConfig::MySql,
             #[cfg(feature = "sqlite")]
             DatabasePool::Sqlite(_) => PilotDatabaseConfig::Sqlite,
         }
@@ -236,6 +242,8 @@ impl ClientInner {
         match self.database.pool() {
             #[cfg(feature = "postgres")]
             DatabasePool::Postgres(pool) => PilotDatabasePool::Postgres(pool.clone()),
+            #[cfg(feature = "mysql")]
+            DatabasePool::MySql(pool) => PilotDatabasePool::MySql(pool.clone()),
             #[cfg(feature = "sqlite")]
             DatabasePool::Sqlite(pool) => PilotDatabasePool::Sqlite(pool.clone()),
         }

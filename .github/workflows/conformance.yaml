@@ -42,9 +42,27 @@ env:
 
 jobs:
   port_fixtures:
-    name: Port fixture tests
+    name: Port fixture tests (SQLite and MySQL)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
+
+    env:
+      RIVER_RUST_MYSQL_URL: mysql://root@127.0.0.1:3306/
+      RIVER_TEST_DATABASE_URL: mysql://root@127.0.0.1:3306/
+      TEST_MYSQL_URL: mysql://root@127.0.0.1:3306/
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_ROOT_HOST: "%"
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -u root"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
 
     steps:
       - uses: actions/checkout@v7
@@ -75,11 +93,20 @@ jobs:
       - name: Rust fixture tests
         run: make test/rust/conformance
 
+      - name: Rust MySQL fixture tests
+        run: make test/rust/conformance/mysql
+
       - name: JavaScript fixture tests
         run: make test/js/conformance
 
+      - name: JavaScript MySQL fixture tests
+        run: make test/js/conformance/mysql
+
       - name: Java fixture tests
         run: make test/java/conformance
+
+      - name: Java MySQL fixture tests
+        run: make test/java/conformance/mysql
 
       - uses: ruby/setup-ruby@v1
         with:
@@ -87,4 +114,11 @@ jobs:
           bundler-cache: true
 
       - name: Ruby fixture tests
+        env:
+          TEST_DATABASE: sqlite
         run: make test/ruby/conformance
+
+      - name: Ruby MySQL fixture tests
+        env:
+          TEST_MYSQL_URL: mysql2://root@127.0.0.1:3306/
+        run: make test/ruby/conformance/mysql

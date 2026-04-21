@@ -253,6 +253,11 @@ func exerciseMigration[TTx any](ctx context.Context, t *testing.T,
 	t.Run("MigrateVersionEightRejectsProSchema", func(t *testing.T) {
 		t.Parallel()
 
+		driver, _ := driverWithSchema(ctx, t, nil)
+		if driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+			t.Skip("SQLite table rebuild")
+		}
+
 		for _, testCase := range []struct {
 			name string
 			sql  string
@@ -279,9 +284,6 @@ func exerciseMigration[TTx any](ctx context.Context, t *testing.T,
 							},
 							Lines: []string{riverdriver.MigrationLineMain},
 						})
-						if driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
-							t.Skip("SQLite table rebuild")
-						}
 						exec := driver.GetExecutor()
 						job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Schema: schema})
 

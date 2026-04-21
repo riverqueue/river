@@ -361,11 +361,13 @@ request_type! {
 impl JobUpdateRequest<'_> {
     async fn run(self) -> Result<JobRow, Error> {
         let inner = &self.client.inner;
-        let mut session = self.target.session(inner, Access::Autocommit).await?;
-        session
+        let mut session = self.target.session(inner, Access::Transaction).await?;
+        let row = session
             .storage(inner)
             .job_update(self.id, self.params)
-            .await
+            .await?;
+        session.commit().await?;
+        Ok(row)
     }
 }
 

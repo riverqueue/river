@@ -94,6 +94,7 @@ jobs:
           # latest Postgres version:
           - go-version: "1.26"
             postgres-version: 18
+
       fail-fast: false
     timeout-minutes: 5
 
@@ -138,6 +139,29 @@ jobs:
       - name: Test
         if: ${{ !matrix.primary }}
         run: make test TEST_DATABASE=postgres
+
+  build_and_test_mysql:
+    env:
+      GOTOOLCHAIN: local
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27"
+
+      # MySQL is pre-installed on GitHub-hosted Ubuntu runners.
+      - name: Start MySQL
+        run: |
+          sudo systemctl start mysql
+          mysql -u root -proot -e "ALTER USER 'root'@'localhost' IDENTIFIED BY ''; FLUSH PRIVILEGES;"
+
+      - name: Test with race detector
+        run: make test/race TEST_DATABASE=mysql
 
   build_and_test_sqlite:
     name: build_and_test_sqlite (${{ matrix.go-version }}${{ matrix.primary && ', race' || '' }})

@@ -51,3 +51,4 @@ end
 require_relative "driver/postgres_capabilities"
 require_relative "driver/job_row_decoder"
 require_relative "driver/runtime"
+require_relative "driver/mysql_runtime"

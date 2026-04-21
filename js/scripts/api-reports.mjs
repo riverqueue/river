@@ -77,6 +77,11 @@ const reports = [
     output: "cli/etc/cli.api.md",
   },
   {
+    entry: "driver/mysql/dist/index.d.ts",
+    name: "@riverqueue/driver-mysql",
+    output: "driver/mysql/etc/driver-mysql.api.md",
+  },
+  {
     entry: "driver/pg/dist/index.d.ts",
     name: "@riverqueue/driver-pg",
     output: "driver/pg/etc/driver-pg.api.md",

@@ -1,7 +1,7 @@
 # Schema migrations
 
 River Ruby includes a migration API and the `river` command. The gems bundle
-byte-for-byte copies of River's canonical Postgres and SQLite migration SQL,
+byte-for-byte copies of River's canonical MySQL, Postgres, and SQLite migration SQL,
 pinned to release v0.48.0 through migration 008;
 only the upstream schema template placeholders are substituted when executing
 them.
@@ -9,7 +9,7 @@ them.
 ## Command line
 
 Install `riverqueue-sequel` or `riverqueue-activerecord` and the application's
-database gem (`pg` or `sqlite3`). The command auto-detects the River driver gem
+database gem (`mysql2`, `pg`, or `sqlite3`). The command auto-detects the River driver gem
 available in your bundle, preferring Sequel when both are available. This choice
 does not need to match your application's driver: both run the same migrations.
 Create the database first, then run:
@@ -17,6 +17,9 @@ Create the database first, then run:
 ```sh
 bundle exec river migrate-status --database-url postgres://localhost/my_app
 bundle exec river migrate-up --database-url postgres://localhost/my_app
+
+# MySQL, using either driver:
+bundle exec river migrate-up --database-url mysql2://localhost/my_app
 
 # SQLite, using Sequel:
 bundle exec river migrate-up --database-url sqlite://storage/river.sqlite3
@@ -52,13 +55,17 @@ migrator.migrate(dry_run: true, target: 8)
 migrator.migrate(direction: :down) # One version; no interactive confirmation.
 ```
 
-The API accepts either driver and optionally `schema:` for Postgres. `migrate`
+The API accepts either driver and optionally `schema:` for MySQL or Postgres. `migrate`
 returns the migration records applied (or planned in dry-run mode), with their
-version, name, and original up/down SQL. Each version's SQL and history update
+version, name, and original up/down SQL. On Postgres and SQLite, each version's SQL and history update
 commit in their own transaction. A failing version rolls back while earlier
 versions remain committed, so rerunning resumes safely. Do not wrap the migrator
 in an application transaction: some Postgres changes require a real commit
 before the next version can run.
+
+MySQL DDL commits implicitly. History is recorded after each successful version,
+but a failure can leave partially applied DDL. Inspect and repair that version
+before retrying. MySQL migrators hold a named lock for the selected database.
 
 An up migration targeting an already-applied version does nothing, even when
 newer migrations are pending.

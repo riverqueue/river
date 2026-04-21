@@ -95,7 +95,11 @@ class ProtocolStorageTest {
                   "UPDATE "
                       + database.prefix()
                       + "river_job SET state = 'running', attempt = 3, attempted_at = ?, errors = "
-                      + (postgres ? "ARRAY[?::jsonb]" : "json_array(json(?))")
+                      + (switch (database.dialect()) {
+                        case MYSQL -> "JSON_ARRAY(CAST(? AS JSON))";
+                        case POSTGRES -> "ARRAY[?::jsonb]";
+                        case SQLITE -> "json_array(json(?))";
+                      })
                       + " WHERE id = ?",
                   database.timestamp(Instant.EPOCH),
                   Json.encode(fixture.required("attempt_error")),
@@ -119,7 +123,7 @@ class ProtocolStorageTest {
                 .errorHandler(errors::add)
                 .retryPolicy(
                     job -> {
-                      if (!postgres) {
+                      if (database.dialect() == Database.Dialect.SQLITE) {
                         // Retry selection is between rescue's read and update. A second writer
                         // must already be excluded, or its commit would invalidate that snapshot.
                         try (var connection = database.connection();
@@ -138,7 +142,7 @@ class ProtocolStorageTest {
                 .start();
         var subscription =
             workers.subscribe(completed::complete, Workers.EventKind.JOB_COMPLETED)) {
-      if (!postgres) {
+      if (database.dialect() == Database.Dialect.SQLITE) {
         var conflict = writeConflict.get(5, TimeUnit.SECONDS);
         assertNotNull(conflict, "Rescue must reserve the writer before selecting jobs");
         assertEquals(5, conflict.getErrorCode(), "Expected SQLITE_BUSY for the competing writer");

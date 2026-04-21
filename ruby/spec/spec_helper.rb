@@ -14,9 +14,13 @@ if RSpec.configuration.files_to_run.length > 1
     minimum_coverage branch: 100, line: 100 if RiverTestDatabase::BACKEND == "all"
 
     # Drivers have their own spec suite where they're covered 100.0%, but
-    # they're not fully covered from this top level test suite.
-    add_filter("driver/riverqueue-sequel/")
-    add_filter("driver/riverqueue-activerecord/")
+    # they're not fully covered from this top level test suite. MySQL's
+    # adapter coverage is collected here alongside its shared driver tests.
+    unless RiverTestDatabase::BACKEND == "mysql"
+      add_filter("driver/riverqueue-sequel/")
+      add_filter("driver/riverqueue-activerecord/")
+    end
+    add_filter("/lib/driver/mysql_runtime.rb") unless RiverTestDatabase.enabled?(:mysql)
     add_filter("/spec/")
   end
 end

@@ -212,7 +212,13 @@ func exerciseExecutorTx[TTx any](ctx context.Context, t *testing.T,
 
 			exec := setup(ctx, t)
 
-			require.NoError(t, exec.Exec(ctx, "SELECT $1 || $2", "foo", "bar"))
+			_, driver := executorWithTx(ctx, t)
+			switch driver.DatabaseName() {
+			case riverdriver.DatabaseNameMySQL:
+				require.NoError(t, exec.Exec(ctx, "SELECT CONCAT(?, ?)", "foo", "bar"))
+			default:
+				require.NoError(t, exec.Exec(ctx, "SELECT $1 || $2", "foo", "bar"))
+			}
 		})
 	})
 
@@ -221,9 +227,8 @@ func exerciseExecutorTx[TTx any](ctx context.Context, t *testing.T,
 
 		{
 			driver, _ := driverWithSchema(ctx, t, nil)
-			if driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
-				t.Logf("Skipping PGAdvisoryXactLock test for SQLite")
-				return
+			if driver.DatabaseName() == riverdriver.DatabaseNameSQLite || driver.DatabaseName() == riverdriver.DatabaseNameMySQL {
+				t.Skipf("Skipping PGAdvisoryXactLock test for %s", driver.DatabaseName())
 			}
 		}
 
@@ -288,6 +293,44 @@ func exerciseExecutorTx[TTx any](ctx context.Context, t *testing.T,
 		require.Equal(t, 2, field2)
 		require.Equal(t, 3, field3)
 		require.Equal(t, "foo", fieldFoo)
+	})
+
+	t.Run("QueueMutationsWithExistingSnapshot", func(t *testing.T) {
+		t.Parallel()
+
+		for _, operation := range []string{"Pause", "Resume", "Update"} {
+			t.Run(operation, func(t *testing.T) {
+				t.Parallel()
+
+				driver, schema := driverWithSchema(ctx, t, nil)
+				if driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+					t.Skip("SQLite does not permit a second writer with an open read transaction")
+				}
+				exec := driver.GetExecutor()
+				queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Schema: schema})
+				tx, err := exec.Begin(ctx)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = tx.Rollback(ctx) })
+				_, err = tx.QueueGet(ctx, &riverdriver.QueueGetParams{Name: queue.Name, Schema: schema})
+				require.NoError(t, err)
+
+				deleted, err := exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{
+					Max: 10, Schema: schema, UpdatedAtHorizon: time.Now().Add(time.Hour),
+				})
+				require.NoError(t, err)
+				require.Equal(t, []string{queue.Name}, deleted)
+
+				switch operation {
+				case "Pause":
+					err = tx.QueuePause(ctx, &riverdriver.QueuePauseParams{Name: queue.Name, Schema: schema})
+				case "Resume":
+					err = tx.QueueResume(ctx, &riverdriver.QueueResumeParams{Name: queue.Name, Schema: schema})
+				case "Update":
+					_, err = tx.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{Metadata: []byte(`{}`), Name: queue.Name, Schema: schema})
+				}
+				require.ErrorIs(t, err, rivertype.ErrNotFound)
+			})
+		}
 	})
 
 	t.Run("WithTx", func(t *testing.T) {
@@ -370,6 +413,32 @@ func exerciseExecutorTx[TTx any](ctx context.Context, t *testing.T,
 				}
 			})
 		}
+
+		t.Run("Savepoints", func(t *testing.T) {
+			t.Parallel()
+
+			driver, schema := driverWithSchema(ctx, t, nil)
+			if driver.DatabaseName() != riverdriver.DatabaseNameMySQL {
+				t.Skip("uses MySQL session statistics to detect hidden savepoints")
+			}
+			tx, err := driver.GetExecutor().Begin(ctx)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+			var name string
+			var before, after int
+			require.NoError(t, tx.QueryRow(ctx, "SHOW SESSION STATUS LIKE 'Com_savepoint'").Scan(&name, &before))
+			require.NoError(t, dbutil.WithTx(ctx, tx, func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
+				_ = testfactory.Job(ctx, t, execTx, &testfactory.JobOpts{Schema: schema})
+				return nil
+			}))
+			require.NoError(t, tx.QueryRow(ctx, "SHOW SESSION STATUS LIKE 'Com_savepoint'").Scan(&name, &after))
+			if legacySubtransactions {
+				require.Greater(t, after, before, "legacy mode creates savepoints")
+			} else {
+				require.Equal(t, before, after, "driver internals must reuse the caller's transaction without savepoints")
+			}
+		})
 
 		t.Run("TransactionIDs", func(t *testing.T) {
 			t.Parallel()

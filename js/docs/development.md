@@ -206,6 +206,14 @@ both drivers' notification adapters without a Postgres server. The two
 raw JSON unique-key cases involving duplicate keys or integer-key insertion
 order are Rust-only because JavaScript objects cannot preserve them.
 
+`TEST_MYSQL_URL=mysql://root@localhost/ make test/js/conformance/mysql` runs
+the MySQL storage checks against the same Go fixtures: state masks and
+uniqueness conflicts, attempt errors, rescue/output metadata, exact snooze
+counters, and notification emission and reception. Each test owns a temporary
+database created with the canonical migrations. The shared Conformance workflow
+runs both fixture targets when Go changes; the MySQL integration jobs include
+these cases too.
+
 ## Preparing a release
 
 Run this section's commands from the repository root. The eight publishable packages are `js/package.json` (`riverqueue`), the three drivers under `js/driver/*`, and `js/{migrate,worker-threads,test,cli}`. They share one version, independently of Go and Rust. Examples are private and stay at `0.0.0`. `VERSION` has no leading `v`; JavaScript Git tags use `js/vX.Y.Z`.

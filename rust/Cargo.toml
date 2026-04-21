@@ -40,7 +40,7 @@ missing_debug_implementations = "warn"
 unsafe_code = "forbid"
 # `--cfg river_postgres_tests` builds the Postgres integration tests, which
 # need `RIVER_RUST_DATABASE_URL`; `make test/rust` sets it when the URL is set.
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(river_postgres_tests)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(river_postgres_tests)", "cfg(river_mysql_tests)"] }
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

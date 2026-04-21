@@ -11,6 +11,7 @@ on:
       - "Makefile"
       - "conformance/**"
       - "internal/cmd/syncrustmigrations/**"
+      - "riverdriver/rivermysql/migration/**"
       - "riverdriver/riverpgxv5/migration/**"
       - "riverdriver/riversqlite/migration/**"
       - "rust/**"
@@ -20,6 +21,7 @@ on:
       - "Makefile"
       - "conformance/**"
       - "internal/cmd/syncrustmigrations/**"
+      - "riverdriver/rivermysql/migration/**"
       - "riverdriver/riverpgxv5/migration/**"
       - "riverdriver/riversqlite/migration/**"
       - "rust/**"
@@ -53,7 +55,7 @@ jobs:
         with:
           tool: cargo-deny@0.20.2
 
-      - name: Lint, including Postgres-only and SQLite-only builds
+      - name: Lint, including each backend on its own
         run: make lint/rust
 
       - name: Documentation and examples
@@ -191,3 +193,34 @@ jobs:
         run: PGPASSWORD=postgres createdb -h localhost -U postgres river_rust_test
       - name: Rust unit, SQLite, and Postgres tests
         run: make test/rust
+
+  mysql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        mysql-version: ["8.0", "8.4"]
+    env:
+      RIVER_RUST_MYSQL_URL: mysql://root:root@127.0.0.1:3306/
+    services:
+      mysql:
+        image: mysql:${{ matrix.mysql-version }}
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_ROOT_HOST: "%"
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.work
+      - run: make test/rust/mysql

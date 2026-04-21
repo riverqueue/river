@@ -146,7 +146,7 @@ module River::Driver
     def job_get_available(queue:, max:, attempted_by:, kinds: nil, now: Time.now.utc)
       return [] if kinds&.empty?
 
-      predicate = "state = 'available' AND queue = #{runtime_quote(queue)} AND scheduled_at <= #{runtime_time(now)}"
+      predicate = "state = 'available' AND #{runtime_in_clause("queue", [queue])} AND scheduled_at <= #{runtime_time(now)}"
       predicate += " AND #{runtime_in_clause("kind", kinds)}" if kinds
       runtime_claim_jobs(predicate, max, attempted_by, now)
     end
@@ -181,7 +181,7 @@ module River::Driver
         # Lock each candidate until its transition finishes. Continue past jobs
         # that are still within their timeouts without consuming the rescue limit.
         after_id = rescued = 0
-        lock = runtime_postgres? ? "FOR UPDATE SKIP LOCKED" : ""
+        lock = runtime_locks_rows? ? "FOR UPDATE SKIP LOCKED" : ""
         while rescued < max
           ids = runtime_returning_ids(<<~SQL)
             SELECT id FROM river_job
@@ -256,7 +256,7 @@ module River::Driver
       transaction do
         # Hold each selected row until its transition (including uniqueness
         # conflict handling) finishes. A concurrent retry may change its due time.
-        lock = runtime_postgres? ? "FOR UPDATE SKIP LOCKED" : ""
+        lock = runtime_locks_rows? ? "FOR UPDATE SKIP LOCKED" : ""
         ids = runtime_query_rows(<<~SQL).map { |row| runtime_value(row, :id).to_i }
           SELECT id FROM river_job
           WHERE state IN ('retryable', 'scheduled') AND scheduled_at <= #{runtime_time(now)}
@@ -366,7 +366,7 @@ module River::Driver
     end
 
     def queue_get(name)
-      row = runtime_query_rows("SELECT #{runtime_queue_columns} FROM river_queue WHERE name = #{runtime_quote(name)}").first
+      row = runtime_query_rows("SELECT #{runtime_queue_columns} FROM river_queue WHERE #{runtime_in_clause("name", [name])}").first
       runtime_queue_from_row(row)
     end
 
@@ -473,7 +473,7 @@ module River::Driver
           SQL
         end
 
-        lock_clause = runtime_postgres? ? "FOR UPDATE SKIP LOCKED" : ""
+        lock_clause = runtime_locks_rows? ? "FOR UPDATE SKIP LOCKED" : ""
         # An administratively requeued job may already be at the counter limit.
         # Saturate instead of letting that row abort the entire claim batch.
         ids = runtime_returning_ids(<<~SQL)
@@ -609,10 +609,16 @@ module River::Driver
       where = clauses.empty? ? "" : "WHERE #{clauses.join(" AND ")}"
       runtime_job_rows(<<~SQL)
         #{where}
-        ORDER BY #{params.sort_by} #{params.sort_order.to_s.upcase}#{null_order}, id #{params.sort_order.to_s.upcase}
+        ORDER BY #{runtime_order_by(params, null_order)}
         LIMIT #{params.limit}
-        #{"FOR UPDATE SKIP LOCKED" if for_delete && runtime_postgres?}
+        #{"FOR UPDATE SKIP LOCKED" if for_delete && runtime_locks_rows?}
       SQL
+    end
+
+    private def runtime_locks_rows? = runtime_postgres?
+
+    private def runtime_order_by(params, null_order)
+      "#{params.sort_by} #{params.sort_order.to_s.upcase}#{null_order}, id #{params.sort_order.to_s.upcase}"
     end
 
     private def runtime_json(value)

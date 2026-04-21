@@ -16,7 +16,11 @@ implementation. Apply them before starting clients:
 riverqueue migrate-up --database-url postgres://localhost/app
 riverqueue migrate-up --database-url postgres://localhost/app --schema river
 riverqueue migrate-up --database-url sqlite://app.sqlite3
+riverqueue migrate-up --database-url mysql://localhost/app
 ```
+
+The CLI includes Postgres, MySQL, and SQLite support by default. For MySQL,
+select an existing database in the URL; `--schema` is a Postgres option.
 
 `migrate-down`, `migrate-list`, and `validate` take the same connection
 options. `--target-version N`, `--max-steps N`, and `--dry-run` limit or

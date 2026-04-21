@@ -1,4 +1,4 @@
-//! Deletes expired finalized jobs, idle queues, and (on SQLite) delivered
+//! Deletes expired finalized jobs, idle queues, and (on MySQL/SQLite) delivered
 //! notifications, ports of Go's `JobCleaner`, `QueueCleaner`, and
 //! `SQLiteNotificationCleaner`.
 
@@ -15,6 +15,8 @@ use crate::__private::{
 use crate::Error;
 use crate::client::ClientInner;
 use crate::database::DatabasePool;
+#[cfg(feature = "mysql")]
+use crate::database::mysql;
 #[cfg(feature = "sqlite")]
 use crate::database::sqlite;
 use crate::pilot::job_delete_error;
@@ -25,11 +27,11 @@ use super::{
 };
 
 /// Interval of the SQLite notification cleaner.
-#[cfg(feature = "sqlite")]
+#[cfg(any(feature = "sqlite", feature = "mysql"))]
 pub(super) const NOTIFICATION_CLEANER_INTERVAL: Duration = Duration::from_mins(1);
 
 /// Age after which SQLite notification outbox rows are deleted.
-#[cfg(feature = "sqlite")]
+#[cfg(any(feature = "sqlite", feature = "mysql"))]
 const NOTIFICATION_RETENTION: Duration = Duration::from_mins(5);
 
 fn horizon(
@@ -81,6 +83,21 @@ async fn clean_jobs_batch(
 ) -> Result<u64, MaintenanceError> {
     let timeout = context.inner.maintenance.job_cleaner_timeout;
     match context.inner.database.pool() {
+        #[cfg(feature = "mysql")]
+        DatabasePool::MySql(pool) => {
+            let operation = async {
+                let mut transaction = crate::database::begin_mysql_write(pool).await?;
+                let count = job_delete_before(
+                    &context.inner,
+                    DatabaseConnection::MySql(&mut transaction),
+                    params,
+                )
+                .await?;
+                transaction.commit().await?;
+                Ok::<_, MaintenanceError>(count)
+            };
+            super::mysql_cancellable(&context.cancel, timeout, operation).await
+        }
         #[cfg(feature = "sqlite")]
         DatabasePool::Sqlite(pool) => {
             let operation = async {
@@ -168,6 +185,10 @@ pub(crate) async fn standard_job_delete_before(
         DatabaseConnection::Postgres(connection) => {
             Ok(postgres_delete_finalized_jobs(connection, &inner.schema, params).await?)
         }
+        #[cfg(feature = "mysql")]
+        DatabaseConnection::MySql(connection) => mysql_delete_finalized_jobs(connection, params)
+            .await
+            .map_err(|error| Error::Database(error.into())),
         #[cfg(feature = "sqlite")]
         DatabaseConnection::Sqlite(connection) => sqlite_delete_finalized_jobs(connection, params)
             .await
@@ -216,6 +237,34 @@ pub(crate) async fn postgres_delete_finalized_jobs(
     Ok(result.rows_affected())
 }
 
+/// Runs the job cleaner's deletion on MySQL.
+#[cfg(feature = "mysql")]
+pub(crate) async fn mysql_delete_finalized_jobs(
+    connection: &mut sqlx::MySqlConnection,
+    params: &FinalizedJobDeleteParams,
+) -> Result<u64, mysql::BackendError> {
+    let queues_excluded = params
+        .queues_excluded
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let queues_included = params
+        .queues_included
+        .as_ref()
+        .map(|queues| queues.iter().map(String::as_str).collect::<Vec<_>>());
+    mysql::cleanup_jobs(
+        connection,
+        &mysql::CleanupJobs {
+            cancelled_before: params.cancelled_before,
+            completed_before: params.completed_before,
+            discarded_before: params.discarded_before,
+            limit: i32::try_from(params.limit).unwrap_or(i32::MAX),
+            queues_excluded: &queues_excluded,
+            queues_included: queues_included.as_deref(),
+        },
+    )
+    .await
+}
 /// Runs the job cleaner's deletion on SQLite.
 #[cfg(feature = "sqlite")]
 pub(crate) async fn sqlite_delete_finalized_jobs(
@@ -268,6 +317,21 @@ async fn clean_queues_batch(
     limit: i64,
 ) -> Result<usize, MaintenanceError> {
     match context.inner.database.pool() {
+        #[cfg(feature = "mysql")]
+        DatabasePool::MySql(pool) => {
+            let operation = async {
+                let mut transaction = crate::database::begin_mysql_write(pool).await?;
+                let deleted = mysql::queue_delete_expired(
+                    &mut transaction,
+                    updated_before,
+                    i32::try_from(limit).unwrap_or(i32::MAX),
+                )
+                .await?;
+                transaction.commit().await?;
+                Ok::<_, MaintenanceError>(deleted.len())
+            };
+            super::mysql_cancellable(&context.cancel, TIMEOUT_DEFAULT, operation).await
+        }
         #[cfg(feature = "sqlite")]
         DatabasePool::Sqlite(pool) => {
             let operation = async {
@@ -312,6 +376,40 @@ async fn clean_queues_batch(
     }
 }
 
+/// Deletes MySQL notification outbox rows old enough that every poller has
+/// consumed them, oldest first, in batches like River Go's
+/// `MySQLNotificationCleaner`.
+///
+/// Each batch commits on its own, releasing its row locks before the next batch. The horizon is fixed for the pass
+/// so rows expiring meanwhile don't extend it. Repeated timeouts switch to
+/// the reduced batch size.
+#[cfg(feature = "mysql")]
+pub(super) async fn clean_mysql_notifications(
+    context: &ServiceContext,
+    pool: &sqlx::MySqlPool,
+) -> Result<u64, MaintenanceError> {
+    let retention = chrono::Duration::from_std(NOTIFICATION_RETENTION)
+        .map_err(|error| Error::configuration_context("maintenance", error.to_string()))?;
+    let created_before = Utc::now() - retention;
+    let mut deleted = 0;
+    loop {
+        let limit = batch_size(&context.breakers.notification_cleaner);
+        let operation = async {
+            let mut connection = pool.acquire().await?;
+            Ok::<_, MaintenanceError>(
+                mysql::notification_cleanup(&mut connection, created_before, limit).await?,
+            )
+        };
+        let result = super::mysql_cancellable(&context.cancel, TIMEOUT_DEFAULT, operation).await;
+        record_batch(&context.breakers.notification_cleaner, &result);
+        let count = result?;
+        deleted += count;
+        if count < u64::try_from(limit).unwrap_or(u64::MAX) {
+            return Ok(deleted);
+        }
+        batch_backoff(&context.cancel).await?;
+    }
+}
 /// Deletes SQLite notification outbox rows old enough that every poller has
 /// consumed them, oldest first, in batches like River Go's
 /// `SQLiteNotificationCleaner`.

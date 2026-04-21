@@ -20,6 +20,7 @@ all-features = true
 [features]
 default = ["postgres"]
 postgres = ["riverqueue/postgres"]
+mysql = ["riverqueue/mysql"]
 sqlite = ["riverqueue/sqlite"]
 
 [dependencies]

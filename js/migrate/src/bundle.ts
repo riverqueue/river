@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { MigrationError } from "riverqueue";
 
 /** Database backend that a migration bundle targets. */
-export type MigrationBackend = "postgres" | "sqlite";
+export type MigrationBackend = "mysql" | "postgres" | "sqlite";
 
 /** One River migration version with SQL for both directions. */
 export interface Migration {
@@ -42,7 +42,7 @@ const MIGRATION_FILE_RE =
 export function loadMigrations(
   backend: MigrationBackend
 ): readonly Migration[] {
-  if (!["postgres", "sqlite"].includes(backend)) {
+  if (!["mysql", "postgres", "sqlite"].includes(backend)) {
     throw new MigrationError(
       `unsupported migration backend: ${JSON.stringify(backend)}`,
       { backend, operation: "load" }

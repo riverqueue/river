@@ -24,6 +24,8 @@ use crate::Error;
 use crate::client::ClientInner;
 use crate::client::attempts::signal_running_attempt;
 use crate::client::backoff::exponential_backoff;
+#[cfg(feature = "mysql")]
+use crate::client::mysql_backend_error;
 #[cfg(feature = "sqlite")]
 use crate::client::sqlite_backend_error;
 use crate::maintenance::LeadershipWakeup;
@@ -350,6 +352,103 @@ async fn listen_until_error(
     }
 }
 
+/// Polls MySQL's notification outbox until cancelled.
+///
+/// Like River Go's MySQL listener, the first successful poll connects after
+/// the outbox's current maximum ID and subscribes to River's topics, so
+/// earlier rows are never delivered. Poll failures are logged and retried
+/// with River's service backoff. The cursor is kept, so no durable
+/// notification is skipped.
+#[cfg(feature = "mysql")]
+pub(super) async fn run_mysql_notifications(
+    inner: Arc<ClientInner>,
+    pool: sqlx::MySqlPool,
+    cancel: CancellationToken,
+    queue_notifications: broadcast::Sender<RuntimeNotification>,
+    ready: ReadySlot,
+) -> Result<(), Error> {
+    let mut attempt = 0;
+    let mut listener = crate::database::mysql::NotificationListener::default();
+    let mut notification_tick =
+        tokio::time::interval(crate::database::mysql::DEFAULT_NOTIFICATION_POLL_INTERVAL);
+    notification_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            () = cancel.cancelled() => return Ok(()),
+            _ = notification_tick.tick() => {}
+        }
+        // Like the rest of a poll, waiting for a connection during an
+        // outage must not delay a stop, as Go's cancellable context doesn't.
+        let connection = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Ok(()),
+            connection = pool.acquire() => connection,
+        };
+        let polled = async {
+            let mut connection = connection?;
+            let receive = async {
+                if !listener.is_connected() {
+                    listener
+                        .connect(&mut connection)
+                        .await
+                        .map_err(mysql_backend_error)?;
+                }
+                for topic in [
+                    crate::NOTIFICATION_TOPIC_CONTROL,
+                    crate::NOTIFICATION_TOPIC_INSERT,
+                    crate::NOTIFICATION_TOPIC_LEADERSHIP,
+                ] {
+                    listener
+                        .listen(&mut connection, topic)
+                        .await
+                        .map_err(mysql_backend_error)?;
+                }
+                report_ready(&ready);
+                while let Some(notification) = listener
+                    .next(&mut connection)
+                    .await
+                    .map_err(mysql_backend_error)?
+                {
+                    dispatch_notification(
+                        &inner,
+                        &queue_notifications,
+                        &notification.topic,
+                        &notification.payload,
+                    );
+                }
+                Ok::<_, Error>(())
+            };
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => {
+                    // Discard a connection with an outstanding locking read so
+                    // neither shutdown nor the next borrower waits for its result.
+                    drop(connection.detach());
+                    Ok(())
+                }
+                result = receive => result,
+            }
+        }
+        .await;
+        if let Err(poll_error) = polled {
+            attempt += 1;
+            let sleep = exponential_backoff(attempt);
+            error!(
+                attempt,
+                error = %crate::error::Chain(&poll_error),
+                sleep_duration = ?sleep,
+                "River notification poll failed (will retry after backoff); producers keep polling"
+            );
+            tokio::select! {
+                () = cancel.cancelled() => return Ok(()),
+                () = tokio::time::sleep(sleep) => {}
+            }
+            continue;
+        }
+        attempt = 0;
+    }
+}
 /// Polls SQLite's notification outbox until cancelled.
 ///
 /// Like River Go's SQLite listener, the first successful poll connects after

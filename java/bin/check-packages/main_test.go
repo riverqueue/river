@@ -20,6 +20,7 @@ func TestCheckArchive(t *testing.T) {
 		wantError    string
 	}{
 		{name: "Conformance", extra: "com/riverqueue/conformance/Adapter.class", wantError: "development content"},
+		{name: "DependencyProductionClass", extra: "com/google/protobuf/UnredactedDebugFormatForTest.class", resource: "SELECT 1;"},
 		{name: "Fixture", extra: "fixtures/golden.json", wantError: "development content"},
 		{name: "InnerTestClass", extra: "com/riverqueue/ClientTest$Helper.class", wantError: "development content"},
 		{name: "JSON", extra: "com/riverqueue/protocol.json", wantError: "development content"},

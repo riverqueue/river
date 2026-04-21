@@ -68,7 +68,11 @@ RSpec.shared_examples "canonical migrations" do |adapter|
     migrator.migrate(target: 6)
     @driver.migration_connection do |connection|
       sql = "INSERT INTO river_job (args, kind, max_attempts, metadata) VALUES ('{\"value\":42}', 'migration_test', 25, '{\"keep\":true}')"
-      (@driver.migration_backend == :postgresql) ? connection.exec(sql) : connection.execute_batch(sql)
+      case @driver.migration_backend
+      when :mysql then connection.query(sql)
+      when :postgresql then connection.exec(sql)
+      else connection.execute_batch(sql)
+      end
     end
 
     migrator.migrate
@@ -105,13 +109,21 @@ RSpec.shared_examples "canonical migrations" do |adapter|
     migrator.migrate
     @driver.migration_connection do |connection|
       sql = "INSERT INTO river_migration (line, version) VALUES ('main', 9)"
-      (@driver.migration_backend == :postgresql) ? connection.exec(sql) : connection.execute_batch(sql)
+      case @driver.migration_backend
+      when :mysql then connection.query(sql)
+      when :postgresql then connection.exec(sql)
+      else connection.execute_batch(sql)
+      end
     end
 
     expect { migrator.migrate }.to raise_error(River::Error, /history/)
     @driver.migration_connection do |connection|
       sql = "DELETE FROM river_migration WHERE version IN (3, 9)"
-      (@driver.migration_backend == :postgresql) ? connection.exec(sql) : connection.execute_batch(sql)
+      case @driver.migration_backend
+      when :mysql then connection.query(sql)
+      when :postgresql then connection.exec(sql)
+      else connection.execute_batch(sql)
+      end
     end
 
     expect { migrator.status }.to raise_error(River::Error, /history/)
@@ -121,7 +133,11 @@ RSpec.shared_examples "canonical migrations" do |adapter|
     migrator.migrate
     @driver.migration_connection do |connection|
       sql = "INSERT INTO river_migration (line, version) VALUES ('pro', 1)"
-      (@driver.migration_backend == :postgresql) ? connection.exec(sql) : connection.execute_batch(sql)
+      case @driver.migration_backend
+      when :mysql then connection.query(sql)
+      when :postgresql then connection.exec(sql)
+      else connection.execute_batch(sql)
+      end
     end
 
     expect { migrator.migrate(direction: :down, target: 4) }.to raise_error(River::Error, /non-main/)

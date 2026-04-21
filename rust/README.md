@@ -1,6 +1,6 @@
 # River for Rust
 
-River is a fast, reliable background job system backed by Postgres or SQLite. Its Rust implementation uses Tokio and shares River's database schema and job protocol with the other languages, so services can insert and work jobs in the same database.
+River is a fast, reliable background job system backed by Postgres, MySQL, or SQLite. Its Rust implementation uses Tokio and shares River's database schema and job protocol with the other languages, so services can insert and work jobs in the same database.
 
 ## Installation
 
@@ -18,6 +18,7 @@ Rust version is 1.95.
 
 | Feature | Default | Enables |
 |---|---|---|
+| `mysql` | no | MySQL 8.0 or newer through SQLx |
 | `postgres` | yes | Postgres through SQLx |
 | `sqlite` | no | SQLite 3.45 or newer through SQLx |
 | `chrono-tz` | no | IANA zone names such as `America/New_York` in cron `CRON_TZ=` and `TZ=` prefixes |
@@ -34,6 +35,38 @@ compatible with River's (SQLx 0.9, Chrono 0.4, `serde_json` 1, and
 `tokio-util` 0.7), so the types match. River doesn't choose a TLS
 implementation for SQLx; enable one of SQLx's TLS features in your own SQLx
 dependency if your database connections use TLS.
+
+## MySQL
+
+Enable the `mysql` feature, and pass a SQLx `MySqlPool` to the client:
+
+```toml
+riverqueue = { version = "0.3.0", default-features = false, features = ["mysql"] }
+```
+
+```rust,no_run
+# #[cfg(feature = "mysql")]
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+use riverqueue::{Client, migrate::MySqlMigrator, sqlx::MySqlPool};
+
+let pool = MySqlPool::connect("mysql://localhost/app").await?;
+MySqlMigrator::new(pool.clone()).migrate_up().await?;
+let client = Client::builder(pool).build()?;
+# Ok(())
+# }
+```
+
+Create the database before migrating. Jobs, workers, queues, and `.tx(...)`
+requests use the same APIs as the other backends. MySQL clients poll River's
+transactional notification outbox for insertions, queue changes, cancellation,
+and leadership requests. River's own transactions use READ COMMITTED isolation;
+caller-owned transactions retain their configured isolation. Use
+`riverqueue::database::begin_mysql_write` for a cancellation-safe begin at
+READ COMMITTED.
+
+MySQL implicitly commits DDL, so a failed migration may leave successful
+statements applied. Migration history advances only after all statements in
+that migration succeed.
 
 ## Quick start
 
@@ -105,7 +138,7 @@ Insert jobs in the same transaction as application data by chaining `.tx(&mut tr
 - [Unique, periodic, and resumable jobs](riverqueue/README.md#reliability-features).
 - [Event subscriptions](riverqueue/README.md#events) for logging and metrics.
 - [Leader election and maintenance](riverqueue/README.md#leadership-and-maintenance) for scheduling, rescue, and cleanup.
-- [Postgres and SQLite support](riverqueue/README.md#database-support) with caller-owned SQLx pools.
+- [MySQL, Postgres, and SQLite support](riverqueue/README.md#database-support) with caller-owned SQLx pools.
 
 ## Crates
 

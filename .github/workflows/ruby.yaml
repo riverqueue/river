@@ -33,8 +33,8 @@ defaults:
 
 jobs:
   checks:
-    # Check coverage from the two backends without adding another CI job.
-    needs: [test, test_sqlite]
+    # Check coverage from all backends without adding another CI job.
+    needs: [test, test_sqlite, mysql]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -207,3 +207,49 @@ jobs:
         env:
           RAILS_VERSION: "~> 8.1.0"
         run: bundle install && bundle exec rspec
+
+  mysql:
+    name: Test (MySQL ${{ matrix.mysql-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        mysql-version: ["8.0", "8.4"]
+    env:
+      RIVER_REQUIRE_DATABASES: "1"
+      TEST_DATABASE: mysql
+      TEST_MYSQL_URL: mysql2://root@127.0.0.1:3306/
+    services:
+      mysql:
+        image: mysql:${{ matrix.mysql-version }}
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_ROOT_HOST: "%"
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -u root"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0"
+          working-directory: ruby
+          bundler-cache: true
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.work
+      - run: make generate/fixtures spec/core
+      - uses: actions/upload-artifact@v7
+        if: matrix.mysql-version == '8.4'
+        with:
+          name: ruby-coverage-mysql
+          path: ruby/coverage/.resultset.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1

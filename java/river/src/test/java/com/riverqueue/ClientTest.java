@@ -140,9 +140,10 @@ class ClientTest {
         client.transaction(
             connection -> {
               try (var statement =
-                      Sql.prepare(
+                      Sql.mutation(
+                          database,
                           connection,
-                          Sql.query(database, "claim"),
+                          "claim",
                           database.timestamp(NOW),
                           "old-worker",
                           "default",
@@ -436,6 +437,10 @@ class ClientTest {
   @Test
   void checkedHookFailureRollsBackInsideCallerTransaction() throws Exception {
     var base = database();
+    try (var connection = base.database().connection();
+        var statement = connection.createStatement()) {
+      statement.execute("CREATE TABLE " + base.database().prefix() + "hook_write (id INTEGER)");
+    }
     var river =
         base.withExtension(
             new Extension() {
@@ -445,7 +450,7 @@ class ClientTest {
                   throws java.sql.SQLException {
                 try (var statement = connection.createStatement()) {
                   statement.execute(
-                      "CREATE TABLE " + base.database().prefix() + "hook_write (id INTEGER)");
+                      "INSERT INTO " + base.database().prefix() + "hook_write VALUES (1)");
                 }
                 throw new java.sql.SQLException("hook rejected");
               }
@@ -460,15 +465,12 @@ class ClientTest {
                       connection, List.of(EMAIL.submission(new Email("rejected@example.com")))));
       assertEquals(RiverException.Code.DATABASE, failure.code());
       assertInstanceOf(java.sql.SQLException.class, failure.getCause());
-      try (var rows =
-          connection
-              .getMetaData()
-              .getTables(
-                  null,
-                  river.database().schema().isEmpty() ? null : river.database().schema(),
-                  "hook_write",
-                  null)) {
-        assertFalse(rows.next());
+      try (var statement = connection.createStatement();
+          var rows =
+              statement.executeQuery(
+                  "SELECT count(*) FROM " + base.database().prefix() + "hook_write")) {
+        assertTrue(rows.next());
+        assertEquals(0, rows.getInt(1));
       }
       var kept = base.insert(connection, EMAIL, new Email("kept@example.com")).job();
       connection.commit();

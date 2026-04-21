@@ -7,9 +7,11 @@ use chrono::{DateTime, Utc};
 #[cfg(feature = "postgres")]
 use sqlx::{AssertSqlSafe, Row};
 
-#[cfg(feature = "sqlite")]
+#[cfg(any(feature = "sqlite", feature = "mysql"))]
 use crate::client::InsertNotifyLimiter;
 use crate::database::DatabasePool;
+#[cfg(feature = "mysql")]
+use crate::database::mysql;
 #[cfg(feature = "postgres")]
 use crate::database::postgres_capabilities::CapabilitiesCache;
 #[cfg(feature = "sqlite")]
@@ -53,6 +55,20 @@ async fn schedule_batch(context: &ServiceContext, limit: i64) -> Result<usize, M
         + chrono::Duration::from_std(context.inner.maintenance.scheduler_interval)
             .unwrap_or_default();
     match context.inner.database.pool() {
+        #[cfg(feature = "mysql")]
+        DatabasePool::MySql(pool) => {
+            super::mysql_cancellable(
+                &context.cancel,
+                TIMEOUT_DEFAULT,
+                schedule_batch_mysql(
+                    pool,
+                    &context.inner.insert_notify_limiter,
+                    look_ahead,
+                    limit,
+                ),
+            )
+            .await
+        }
         #[cfg(feature = "sqlite")]
         DatabasePool::Sqlite(pool) => {
             super::sqlite_cancellable(
@@ -207,6 +223,67 @@ async fn delivers_notifications(
     .supports_listen_notify)
 }
 
+#[cfg(feature = "mysql")]
+async fn schedule_batch_mysql(
+    pool: &sqlx::MySqlPool,
+    notify_limiter: &InsertNotifyLimiter,
+    look_ahead: DateTime<Utc>,
+    limit: i64,
+) -> Result<usize, MaintenanceError> {
+    let mut transaction = crate::database::begin_mysql_write(pool).await?;
+    let candidates = mysql::schedule_candidates(
+        &mut transaction,
+        look_ahead,
+        i32::try_from(limit).unwrap_or(i32::MAX),
+    )
+    .await?;
+    let count = candidates.len();
+    let mut available_ids = Vec::new();
+    let mut conflict_ids = Vec::new();
+    let mut scheduled = Vec::new();
+    for candidate in candidates {
+        let Some(unique_key) = candidate.unique_key.as_deref() else {
+            available_ids.push(candidate.id);
+            continue;
+        };
+        if mysql::schedule_has_unique_collision(&mut transaction, candidate.id, unique_key).await? {
+            conflict_ids.push(candidate.id);
+        } else {
+            // Transition unique jobs one at a time so that a later duplicate
+            // in the same batch observes the earlier one as a collision.
+            let available =
+                mysql::schedule_set_available(&mut transaction, &[candidate.id]).await?;
+            scheduled.extend(available.into_iter().map(|job| Scheduled {
+                queue: job.queue,
+                scheduled_at: job.scheduled_at,
+            }));
+        }
+    }
+    if !available_ids.is_empty() {
+        let available = mysql::schedule_set_available(&mut transaction, &available_ids).await?;
+        scheduled.extend(available.into_iter().map(|job| Scheduled {
+            queue: job.queue,
+            scheduled_at: job.scheduled_at,
+        }));
+    }
+    if !conflict_ids.is_empty() {
+        mysql::schedule_discard_conflicts(&mut transaction, &conflict_ids, look_ahead).await?;
+    }
+    let notified = notified_queues(&scheduled);
+    for queue in notify_limiter.due(notified.iter().map(String::as_str)) {
+        let payload = crate::protocol::insert_notification_payload(queue);
+        mysql::notification_insert(
+            &mut transaction,
+            &[mysql::NotificationInput {
+                payload: &payload,
+                topic: crate::NOTIFICATION_TOPIC_INSERT,
+            }],
+        )
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(count)
+}
 #[cfg(feature = "sqlite")]
 async fn schedule_batch_sqlite(
     pool: &sqlx::SqlitePool,

@@ -11,12 +11,16 @@
 //! it to the connection, [`AnyBackend`], and [`Session`] enums; the
 //! operations themselves don't change.
 
+#[cfg(feature = "mysql")]
+mod mysql;
 #[cfg(feature = "postgres")]
 mod postgres;
 #[cfg(feature = "sqlite")]
 mod sqlite;
 
 use serde_json::{Map, Value};
+#[cfg(feature = "mysql")]
+use sqlx::MySql;
 #[cfg(feature = "postgres")]
 use sqlx::Postgres;
 #[cfg(feature = "sqlite")]
@@ -121,6 +125,8 @@ pub(crate) trait Backend {
 enum AnyBackend<'c> {
     #[cfg(feature = "postgres")]
     Postgres(postgres::PostgresBackend<'c>),
+    #[cfg(feature = "mysql")]
+    MySql(mysql::MySqlBackend<'c>),
     #[cfg(feature = "sqlite")]
     Sqlite(sqlite::SqliteBackend<'c>),
 }
@@ -131,6 +137,8 @@ macro_rules! dispatch {
         match $any {
             #[cfg(feature = "postgres")]
             AnyBackend::Postgres($backend) => $call,
+            #[cfg(feature = "mysql")]
+            AnyBackend::MySql($backend) => $call,
             #[cfg(feature = "sqlite")]
             AnyBackend::Sqlite($backend) => $call,
         }
@@ -240,6 +248,10 @@ impl<'c> Storage<'c> {
                     connection,
                     schema: &inner.schema,
                 })
+            }
+            #[cfg(feature = "mysql")]
+            DatabaseConnection::MySql(connection) => {
+                AnyBackend::MySql(mysql::MySqlBackend { connection })
             }
             #[cfg(feature = "sqlite")]
             DatabaseConnection::Sqlite(connection) => {
@@ -527,8 +539,12 @@ enum SessionConnection<'a> {
     PostgresConnection(PoolConnection<Postgres>),
     #[cfg(feature = "postgres")]
     PostgresTransaction(Transaction<'static, Postgres>),
+    #[cfg(feature = "mysql")]
+    MySqlConnection(PoolConnection<MySql>),
     #[cfg(feature = "sqlite")]
     SqliteConnection(PoolConnection<Sqlite>),
+    #[cfg(feature = "mysql")]
+    MySqlTransaction(Transaction<'static, MySql>),
     #[cfg(feature = "sqlite")]
     SqliteTransaction(Transaction<'static, Sqlite>),
 }
@@ -552,9 +568,17 @@ impl<'a> Session<'a> {
             (DatabasePool::Postgres(pool), Access::Transaction) => {
                 SessionConnection::PostgresTransaction(crate::database::begin_postgres(pool).await?)
             }
+            #[cfg(feature = "mysql")]
+            (DatabasePool::MySql(pool), Access::Autocommit) => {
+                SessionConnection::MySqlConnection(pool.acquire().await?)
+            }
             #[cfg(feature = "sqlite")]
             (DatabasePool::Sqlite(pool), Access::Autocommit) => {
                 SessionConnection::SqliteConnection(pool.acquire().await?)
+            }
+            #[cfg(feature = "mysql")]
+            (DatabasePool::MySql(pool), Access::Transaction) => {
+                SessionConnection::MySqlTransaction(crate::database::begin_mysql_write(pool).await?)
             }
             #[cfg(feature = "sqlite")]
             (DatabasePool::Sqlite(pool), Access::Transaction) => {
@@ -578,9 +602,15 @@ impl<'a> Session<'a> {
             SessionConnection::PostgresTransaction(transaction) => {
                 DatabaseConnection::Postgres(transaction)
             }
+            #[cfg(feature = "mysql")]
+            SessionConnection::MySqlConnection(connection) => DatabaseConnection::MySql(connection),
             #[cfg(feature = "sqlite")]
             SessionConnection::SqliteConnection(connection) => {
                 DatabaseConnection::Sqlite(connection)
+            }
+            #[cfg(feature = "mysql")]
+            SessionConnection::MySqlTransaction(transaction) => {
+                DatabaseConnection::MySql(transaction)
             }
             #[cfg(feature = "sqlite")]
             SessionConnection::SqliteTransaction(transaction) => {
@@ -598,11 +628,15 @@ impl<'a> Session<'a> {
         match self.connection {
             #[cfg(feature = "postgres")]
             SessionConnection::PostgresTransaction(transaction) => transaction.commit().await?,
+            #[cfg(feature = "mysql")]
+            SessionConnection::MySqlTransaction(transaction) => transaction.commit().await?,
             #[cfg(feature = "sqlite")]
             SessionConnection::SqliteTransaction(transaction) => transaction.commit().await?,
             SessionConnection::Caller(_) => {}
             #[cfg(feature = "postgres")]
             SessionConnection::PostgresConnection(_) => {}
+            #[cfg(feature = "mysql")]
+            SessionConnection::MySqlConnection(_) => {}
             #[cfg(feature = "sqlite")]
             SessionConnection::SqliteConnection(_) => {}
         }
@@ -635,8 +669,10 @@ pub(crate) async fn standard_job_delete_many(
 
 /// Creates the client's queue record or refreshes its `updated_at`.
 pub(crate) async fn touch_queue(inner: &ClientInner, name: &str) -> Result<Queue, Error> {
-    let mut session = Session::begin(&inner.database, Access::Autocommit).await?;
-    session.storage(inner).queue_touch(name).await
+    let mut session = Session::begin(&inner.database, Access::Transaction).await?;
+    let queue = session.storage(inner).queue_touch(name).await?;
+    session.commit().await?;
+    Ok(queue)
 }
 
 /// Returns the IDs among `ids` of running jobs with a cancellation request.

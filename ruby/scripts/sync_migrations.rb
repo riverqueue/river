@@ -11,7 +11,7 @@ source = File.expand_path(ARGV.fetch(0, File.expand_path("../..", __dir__)))
 root = File.expand_path("..", __dir__)
 destination = File.join(root, "migration")
 line = "main"
-drivers = {"postgresql" => "riverdriver/riverpgxv5", "sqlite" => "riverdriver/riversqlite"}
+drivers = {"mysql" => "riverdriver/rivermysql", "postgresql" => "riverdriver/riverpgxv5", "sqlite" => "riverdriver/riversqlite"}
 
 files = {}
 drivers.each do |backend, directory|

@@ -3,6 +3,7 @@
   "entryPoints": [
     "src/index.ts",
     "cli/src/index.ts",
+    "driver/mysql/src/index.ts",
     "driver/pg/src/index.ts",
     "driver/prisma/src/index.ts",
     "driver/sqlite/src/index.ts",
