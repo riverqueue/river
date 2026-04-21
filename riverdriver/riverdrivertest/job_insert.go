@@ -93,9 +93,8 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 					uniqueNonces[nonce] = true
 				}
 
-				// SQLite needs to set a special metadata key to be able to
-				// check for duplicates. Remove this for purposes of comparing
-				// inserted metadata.
+				// Some drivers use a special metadata key to detect duplicates.
+				// Remove it for purposes of comparing inserted metadata.
 				job.Metadata, err = sjson.DeleteBytes(job.Metadata, riverdriver.UniqueInsertMetadataKey)
 				require.NoError(t, err)
 
@@ -118,6 +117,33 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 				require.Equal(t, []byte("unique-key-fast-many-"+strconv.Itoa(i)), job.UniqueKey)
 				require.Equal(t, rivertype.JobStates(), job.UniqueStates)
 			}
+		})
+
+		t.Run("DuplicateIDWithoutUniqueKeyErrors", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+			id := rand.Int64()
+			params := &riverdriver.JobInsertFastManyParams{
+				Jobs: []*riverdriver.JobInsertFastParams{
+					{
+						EncodedArgs: []byte(`{}`),
+						ID:          &id,
+						Kind:        "test_kind",
+						MaxAttempts: rivercommon.MaxAttemptsDefault,
+						Priority:    rivercommon.PriorityDefault,
+						Queue:       rivercommon.QueueDefault,
+						State:       rivertype.JobStateAvailable,
+						Tags:        []string{},
+					},
+				},
+			}
+
+			_, err := exec.JobInsertFastMany(ctx, params)
+			require.NoError(t, err)
+
+			_, err = exec.JobInsertFastMany(ctx, params)
+			require.Error(t, err)
 		})
 
 		t.Run("MissingValuesDefaultAsExpected", func(t *testing.T) {
@@ -257,7 +283,7 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 				Jobs:   []*riverdriver.JobInsertFastParams{job, job},
 				Schema: schema,
 			})
-			if driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+			if driver.DatabaseName() != riverdriver.DatabaseNamePostgres {
 				require.ErrorContains(t, err, "unique key appears more than once in batch")
 			} else {
 				require.ErrorContains(t, err, "ON CONFLICT DO UPDATE command cannot affect row a second time")
@@ -794,7 +820,7 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 					_, err := exec.JobInsertFull(ctx, params)
 					require.Error(t, err)
 					// two separate error messages here for Postgres and SQLite
-					require.Regexp(t, `(CHECK constraint failed: finalized_or_finalized_at_null|violates check constraint "finalized_or_finalized_at_null")`, err.Error())
+					require.Regexp(t, `(CHECK constraint failed: finalized_or_finalized_at_null|violates check constraint "finalized_or_finalized_at_null"|Check constraint 'finalized_or_finalized_at_null' is violated)`, err.Error())
 				})
 
 				t.Run(fmt.Sprintf("CanSetState%sWithFinalizedAt", capitalizeJobState(state)), func(t *testing.T) {
@@ -844,7 +870,7 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 					}))
 					require.Error(t, err)
 					// two separate error messages here for Postgres and SQLite
-					require.Regexp(t, `(CHECK constraint failed: finalized_or_finalized_at_null|violates check constraint "finalized_or_finalized_at_null")`, err.Error())
+					require.Regexp(t, `(CHECK constraint failed: finalized_or_finalized_at_null|violates check constraint "finalized_or_finalized_at_null"|Check constraint 'finalized_or_finalized_at_null' is violated)`, err.Error())
 				})
 			}
 		})

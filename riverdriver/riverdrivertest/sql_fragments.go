@@ -8,6 +8,7 @@ import (
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/testfactory"
+	"github.com/riverqueue/river/rivertype"
 )
 
 func exerciseSQLFragments[TTx any](ctx context.Context, t *testing.T, executorWithTx func(ctx context.Context, t *testing.T) (riverdriver.Executor, riverdriver.Driver[TTx])) {
@@ -93,6 +94,28 @@ func exerciseSQLFragments[TTx any](ctx context.Context, t *testing.T, executorWi
 			require.Len(t, jobs, 2)
 			require.Equal(t, job1.ID, jobs[0].ID)
 			require.Equal(t, job2.ID, jobs[1].ID)
+		})
+
+		t.Run("LargeIntegerValues", func(t *testing.T) {
+			t.Parallel()
+
+			exec, driver := executorWithTx(ctx, t)
+
+			const id = int64(1 << 53)
+			_, err := exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{Jobs: []*riverdriver.JobInsertFastParams{
+				{ID: new(id), EncodedArgs: []byte(`{}`), Kind: "large_id", MaxAttempts: 1, Priority: 1, Queue: "default", State: rivertype.JobStateAvailable, Tags: []string{}},
+				{ID: new(id + 1), EncodedArgs: []byte(`{}`), Kind: "large_id", MaxAttempts: 1, Priority: 1, Queue: "default", State: rivertype.JobStateAvailable, Tags: []string{}},
+			}})
+			require.NoError(t, err)
+
+			fragment, arg, err := driver.SQLFragmentColumnIn("id", []int64{id})
+			require.NoError(t, err)
+			jobs, err := exec.JobList(ctx, &riverdriver.JobListParams{
+				Max: 100, NamedArgs: map[string]any{"id": arg}, OrderByClause: "id", WhereClause: fragment,
+			})
+			require.NoError(t, err)
+			require.Len(t, jobs, 1)
+			require.Equal(t, id, jobs[0].ID)
 		})
 
 		t.Run("StringValues", func(t *testing.T) {

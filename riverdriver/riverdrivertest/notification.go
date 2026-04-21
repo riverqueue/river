@@ -31,7 +31,7 @@ func exerciseNotification[TTx any](ctx context.Context, t *testing.T, executorWi
 				($7, $8, $9),
 				($10, $11, $12)
 		`
-		if driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+		if driver.DatabaseName() == riverdriver.DatabaseNameMySQL || driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
 			insertQuery = `
 				INSERT INTO river_notification (created_at, payload, topic)
 				VALUES

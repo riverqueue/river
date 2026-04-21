@@ -367,15 +367,15 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		t.Parallel()
 
 		exec, bundle := setup(ctx, t)
-		if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
-			t.Skip("only SQLite's JSON columns can hold a non-array errors value")
+		if bundle.driver.DatabaseName() == riverdriver.DatabaseNamePostgres {
+			t.Skip("Postgres uses native array columns")
 		}
 
 		now := precisionTestTime
 		attemptedAt := now.Add(-time.Hour)
 		badJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &attemptedAt, State: new(rivertype.JobStateRunning)})
 		goodJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &attemptedAt, State: new(rivertype.JobStateRunning)})
-		sqliteSetJobJSONColumn(ctx, t, exec, badJob.ID, "errors", `{"error":"existing value"}`)
+		setJobJSONColumn(ctx, t, exec, bundle.driver, "", badJob.ID, "errors", `{"error":"existing value"}`)
 
 		_, err := exec.JobRescueMany(ctx, &riverdriver.JobRescueManyParams{
 			ID:           []int64{badJob.ID, goodJob.ID},
@@ -859,8 +859,8 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			t.Parallel()
 
 			exec, bundle := setup(ctx, t)
-			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
-				t.Skip("only SQLite's JSON columns can hold values that don't decode")
+			if bundle.driver.DatabaseName() == riverdriver.DatabaseNamePostgres {
+				t.Skip("Postgres uses native array columns")
 			}
 
 			var (
@@ -879,7 +879,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 				undecodableJobIDs = []int64{undecodableJob.ID, conflictingJob.ID, scheduledJob.ID}
 			)
 			for _, jobID := range undecodableJobIDs {
-				sqliteSetJobJSONColumn(ctx, t, exec, jobID, "tags", undecodableValue)
+				setJobJSONColumn(ctx, t, exec, bundle.driver, "", jobID, "tags", undecodableValue)
 			}
 
 			// Conflicts with conflictingJob, which is discarded instead of scheduled.
@@ -1173,14 +1173,14 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			t.Parallel()
 
 			exec, bundle := setup(ctx, t)
-			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
-				t.Skip("only SQLite's JSON columns can hold a non-array errors value")
+			if bundle.driver.DatabaseName() == riverdriver.DatabaseNamePostgres {
+				t.Skip("Postgres uses native array columns")
 			}
 
 			now := precisionTestTime
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
-			sqliteSetJobJSONColumn(ctx, t, exec, job.ID, "errors", `{"error":"existing value"}`)
+			setJobJSONColumn(ctx, t, exec, bundle.driver, "", job.ID, "errors", `{"error":"existing value"}`)
 
 			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateErrorRetryable(job.ID, now, makeErrPayload(t, now), nil)))
 			require.NoError(t, err)
@@ -1254,15 +1254,15 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			t.Parallel()
 
 			exec, bundle := setup(ctx, t)
-			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
-				t.Skip("only SQLite's JSON columns can hold values that don't decode")
+			if bundle.driver.DatabaseName() == riverdriver.DatabaseNamePostgres {
+				t.Skip("Postgres uses native array columns")
 			}
 
 			now := precisionTestTime
 
 			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
 			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
-			sqliteSetJobJSONColumn(ctx, t, exec, job2.ID, "tags", `{"not":"an array"}`)
+			setJobJSONColumn(ctx, t, exec, bundle.driver, "", job2.ID, "tags", `{"not":"an array"}`)
 
 			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(
 				riverdriver.JobSetStateErrorRetryable(job1.ID, now, makeErrPayload(t, now), nil),
@@ -1487,6 +1487,22 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.Equal(t, rivertype.JobStateScheduled, jobUpdated.State)
 			require.Equal(t, "unique-key", string(jobUpdated.UniqueKey))
 		})
+	})
+
+	t.Run("JobSetStateIfRunningMany_MetadataDoesNotChangeCancellationDecision", func(t *testing.T) {
+		t.Parallel()
+
+		exec, _ := setup(ctx, t)
+
+		job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
+		rows, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(
+			riverdriver.JobSetStateErrorRetryable(job.ID, precisionTestTime, []byte(`{"error":"retry"}`), []byte(`{"cancel_attempted_at":"from metadata update"}`)),
+		))
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+		require.Equal(t, rivertype.JobStateRetryable, rows[0].State)
+		require.Nil(t, rows[0].FinalizedAt)
+		require.Equal(t, "from metadata update", gjson.GetBytes(rows[0].Metadata, "cancel_attempted_at").String())
 	})
 
 	t.Run("JobSetStateIfRunningMany_MultipleJobsAtOnce", func(t *testing.T) {

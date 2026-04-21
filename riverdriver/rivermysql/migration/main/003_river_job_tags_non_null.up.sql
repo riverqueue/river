@@ -1,0 +1,2 @@
+UPDATE /* TEMPLATE: schema */river_job SET tags = JSON_ARRAY() WHERE tags IS NULL;
+ALTER TABLE /* TEMPLATE: schema */river_job MODIFY COLUMN tags JSON NOT NULL DEFAULT (JSON_ARRAY());

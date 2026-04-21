@@ -11,9 +11,4 @@ require (
 	github.com/stretchr/testify v1.12.1
 )
 
-require (
-	github.com/jackc/pgx/v5 v5.11.0 // indirect
-	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/sync v0.23.0 // indirect
-	golang.org/x/text v0.42.0 // indirect
-)
+require go.yaml.in/yaml/v3 v3.0.5 // indirect

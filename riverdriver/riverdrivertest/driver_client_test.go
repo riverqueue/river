@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/lib/pq"
@@ -22,6 +23,7 @@ import (
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
+	"github.com/riverqueue/river/riverdriver/rivermysql"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
@@ -184,6 +186,26 @@ func TestClientWithDriverRiverLibSQL(t *testing.T) {
 				})
 			)
 			return driver, schema
+		},
+	)
+}
+
+func TestClientWithDriverRiverMySQL(t *testing.T) {
+	t.Parallel()
+
+	riversharedtest.SkipIfMySQLNotEnabled(t)
+
+	var (
+		ctx    = context.Background()
+		dbPool = riversharedtest.DBPoolMySQL(ctx, t)
+		driver = rivermysql.New(dbPool)
+	)
+
+	ExerciseClient(ctx, t,
+		func(ctx context.Context, t *testing.T) (riverdriver.Driver[*sql.Tx], string) {
+			t.Helper()
+
+			return driver, riverdbtest.TestSchema(ctx, t, driver, nil)
 		},
 	)
 }
@@ -439,7 +461,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 			Schema: bundle.schema,
 		})
 		require.NoError(t, getErr)
-		if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+		if bundle.driver.DatabaseName() != riverdriver.DatabaseNamePostgres {
 			require.ErrorContains(t, err, "unique key appears more than once in batch")
 		} else {
 			require.ErrorContains(t, err, "ON CONFLICT DO UPDATE command cannot affect row a second time")
@@ -458,7 +480,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 			{Args: noOpArgs{Name: "same"}, InsertOpts: &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true}}},
 			{Args: noOpArgs{Name: "same"}, InsertOpts: &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true}}},
 		})
-		if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+		if bundle.driver.DatabaseName() != riverdriver.DatabaseNamePostgres {
 			require.ErrorContains(t, err, "unique key appears more than once in batch")
 		} else {
 			require.ErrorContains(t, err, "ON CONFLICT DO UPDATE command cannot affect row a second time")
@@ -1562,9 +1584,12 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 
 		listParams := river.NewJobListParams()
 
-		if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+		switch bundle.driver.DatabaseName() {
+		case riverdriver.DatabaseNameSQLite:
 			listParams = listParams.Where("metadata ->> @json_path = @json_val", river.NamedArgs{"json_path": "$.foo", "json_val": "bar"})
-		} else {
+		case riverdriver.DatabaseNameMySQL:
+			listParams = listParams.Where("JSON_UNQUOTE(JSON_EXTRACT(metadata, @json_path)) = @json_val", river.NamedArgs{"json_path": "$.foo", "json_val": "bar"})
+		default:
 			// "bar" is quoted in this branch because `jsonb_path_query_first` needs to be compared to a JSON value
 			listParams = listParams.Where("jsonb_path_query_first(metadata, @json_path) = @json_val", river.NamedArgs{"json_path": "$.foo", "json_val": `"bar"`})
 		}
@@ -1882,7 +1907,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 				// The invalid value is left in place, and once repaired, the job
 				// shows the failed attempt.
 				require.Equal(t, sqliteMalformedValue, sqliteJobColumnText(ctx, t, bundle.exec, jobID, column))
-				sqliteSetJobJSONColumn(ctx, t, bundle.exec, jobID, column, repairedValue)
+				setJobJSONColumn(ctx, t, bundle.exec, bundle.driver, bundle.schema, jobID, column, repairedValue)
 			}
 
 			job, err := client.JobGet(ctx, jobID)
@@ -1909,8 +1934,8 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		t.Parallel()
 
 		config, bundle := setupConfig(t)
-		if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
-			t.Skip("only SQLite's JSON columns can hold values that don't decode")
+		if bundle.driver.DatabaseName() == riverdriver.DatabaseNamePostgres {
+			t.Skip("Postgres uses native array columns")
 		}
 		config.RetryPolicy = &retryPolicyAnHourLater{}
 
@@ -1924,8 +1949,8 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 			goodJob2         = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(noOpArgs{}.Kind()), Schema: bundle.schema})
 			undecodableValue = `{"not":"an array"}`
 		)
-		sqliteSetJobJSONColumn(ctx, t, bundle.exec, undecodableJob1.ID, "tags", undecodableValue)
-		sqliteSetJobJSONColumn(ctx, t, bundle.exec, undecodableJob2.ID, "tags", undecodableValue)
+		setJobJSONColumn(ctx, t, bundle.exec, bundle.driver, bundle.schema, undecodableJob1.ID, "tags", undecodableValue)
+		setJobJSONColumn(ctx, t, bundle.exec, bundle.driver, bundle.schema, undecodableJob2.ID, "tags", undecodableValue)
 
 		subscribeChan := subscribe(t, client)
 		startClient(ctx, t, client)
@@ -1951,7 +1976,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.ErrorContains(t, err, "error unmarshaling `tags`")
 
 		// Once repaired, the job shows the failed attempt.
-		sqliteSetJobJSONColumn(ctx, t, bundle.exec, undecodableJob1.ID, "tags", `["tag"]`)
+		setJobJSONColumn(ctx, t, bundle.exec, bundle.driver, bundle.schema, undecodableJob1.ID, "tags", `["tag"]`)
 		job, err := client.JobGet(ctx, undecodableJob1.ID)
 		require.NoError(t, err)
 		require.Equal(t, 1, job.Attempt)
