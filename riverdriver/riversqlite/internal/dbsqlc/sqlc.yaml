@@ -32,3 +32,10 @@ sql:
           ttl: "TTL"
 
         overrides:
+          - db_type: "jsonb"
+            go_type:
+              type: "[]byte"
+          - db_type: "jsonb"
+            go_type:
+              type: "[]byte"
+            nullable: true

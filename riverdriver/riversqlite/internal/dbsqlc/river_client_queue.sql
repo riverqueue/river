@@ -3,7 +3,7 @@ CREATE TABLE river_client_queue (
     name text NOT NULL,
     created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
     max_workers integer NOT NULL DEFAULT 0,
-    metadata blob NOT NULL DEFAULT (json('{}')),
+    metadata jsonb NOT NULL DEFAULT (jsonb('{}')),
     num_jobs_completed integer NOT NULL DEFAULT 0,
     num_jobs_running integer NOT NULL DEFAULT 0,
     updated_at timestamp NOT NULL,

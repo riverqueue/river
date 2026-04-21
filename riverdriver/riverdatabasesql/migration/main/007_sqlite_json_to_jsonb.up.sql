@@ -1,0 +1,2 @@
+-- No-op migration to keep version numbers in sync across all drivers.
+-- The SQLite driver uses this version for a JSONB conversion.
