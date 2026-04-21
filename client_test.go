@@ -8299,6 +8299,32 @@ func Test_NewClient_Overrides(t *testing.T) {
 	require.Len(t, client.config.WorkerMiddleware, 1)
 }
 
+func Test_NewClient_MySQLNotificationCleaner(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	var (
+		dbPool    = riversharedtest.DBPool(ctx, t)
+		pgxDriver = riverpgxv5.New(dbPool)
+		schema    = riverdbtest.TestSchema(ctx, t, pgxDriver, nil)
+	)
+
+	workers := NewWorkers()
+	AddWorker(workers, &noOpWorker{})
+
+	client, err := NewClient(NewDriverMySQLDatabaseName(dbPool), &Config{
+		Queues:   map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}},
+		Schema:   schema,
+		TestOnly: true,
+		Workers:  workers,
+	})
+	require.NoError(t, err)
+
+	notificationCleaner := maintenance.GetService[*maintenance.SQLiteNotificationCleaner](client.queueMaintainer)
+	require.Equal(t, schema, notificationCleaner.Config.Schema)
+}
+
 func Test_NewClient_PluginsAndHybrids(t *testing.T) {
 	t.Parallel()
 
@@ -9639,6 +9665,23 @@ func TestDefaultClientIDWithHost(t *testing.T) {
 	require.Equal(t, strings.Repeat("a", 60)+"_2024_03_07T04_39_12_123456", defaultClientIDWithHost(startedAt, strings.Repeat("a", 60)))
 	require.Equal(t, strings.Repeat("a", 60)+"_2024_03_07T04_39_12_123456", defaultClientIDWithHost(startedAt, strings.Repeat("a", 61)))
 }
+
+// DriverMySQLDatabaseName is a pgx driver that reports MySQL as its database
+// name so MySQL-specific client wiring can be tested without importing the
+// separate MySQL driver module.
+type DriverMySQLDatabaseName struct {
+	riverpgxv5.Driver
+}
+
+// NewDriverMySQLDatabaseName returns a new test driver that reports MySQL as
+// its database name.
+func NewDriverMySQLDatabaseName(dbPool *pgxpool.Pool) *DriverMySQLDatabaseName {
+	return &DriverMySQLDatabaseName{
+		Driver: *riverpgxv5.New(dbPool),
+	}
+}
+
+func (d *DriverMySQLDatabaseName) DatabaseName() string { return riverdriver.DatabaseNameMySQL }
 
 // DriverPollOnly simulates a driver without a listener. An example of this is
 // Postgres through `riverdatabasesql`, which is Postgres (so it can notify),

@@ -60,9 +60,8 @@ func (c *SQLiteNotificationCleanerConfig) mustValidate() *SQLiteNotificationClea
 	return c
 }
 
-// SQLiteNotificationCleaner periodically removes old rows from SQLite's
-// notification outbox. It is only needed for the SQLite driver's emulated
-// listen/notify support.
+// SQLiteNotificationCleaner periodically removes old rows from the durable
+// notification outbox used to emulate listen/notify for SQLite and MySQL.
 type SQLiteNotificationCleaner struct {
 	riversharedmaintenance.QueueMaintainerServiceBase
 	startstop.BaseStartStop
@@ -74,7 +73,7 @@ type SQLiteNotificationCleaner struct {
 	exec riverdriver.Executor
 }
 
-// NewSQLiteNotificationCleaner returns a SQLite notification cleaner.
+// NewSQLiteNotificationCleaner returns a notification outbox cleaner.
 func NewSQLiteNotificationCleaner(archetype *baseservice.Archetype, config *SQLiteNotificationCleanerConfig, exec riverdriver.Executor) *SQLiteNotificationCleaner {
 	return baseservice.Init(archetype, &SQLiteNotificationCleaner{
 		Config: (&SQLiteNotificationCleanerConfig{
@@ -113,7 +112,7 @@ func (s *SQLiteNotificationCleaner) Start(ctx context.Context) error { //nolint:
 			res, err := s.runOnce(ctx)
 			if err != nil {
 				if !errors.Is(err, context.Canceled) {
-					s.Logger.ErrorContext(ctx, s.Name+": Error cleaning SQLite notifications", slog.String("error", err.Error()))
+					s.Logger.ErrorContext(ctx, s.Name+": Error cleaning notification outbox", slog.String("error", err.Error()))
 				}
 				continue
 			}

@@ -27,6 +27,7 @@ generate/migrations: ## Sync changes of pgxv5 migrations to database/sql
 .PHONY: generate/sqlc
 generate/sqlc: ## Generate sqlc
 	cd riverdriver/riverdatabasesql/internal/dbsqlc && sqlc generate
+	cd riverdriver/rivermysql/internal/dbsqlc && sqlc generate
 	cd riverdriver/riverpgxv5/internal/dbsqlc && sqlc generate
 	cd riverdriver/riversqlite/internal/dbsqlc && sqlc generate
 
@@ -101,5 +102,6 @@ verify/migrations: ## Verify synced migrations
 .PHONY: verify/sqlc
 verify/sqlc: ## Verify generated sqlc
 	cd riverdriver/riverdatabasesql/internal/dbsqlc && sqlc diff
+	cd riverdriver/rivermysql/internal/dbsqlc && sqlc diff
 	cd riverdriver/riverpgxv5/internal/dbsqlc && sqlc diff
 	cd riverdriver/riversqlite/internal/dbsqlc && sqlc diff

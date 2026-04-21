@@ -6,12 +6,14 @@ toolchain go1.25.7
 
 require (
 	github.com/davecgh/go-spew v1.1.1
+	github.com/go-sql-driver/mysql v1.10.0
 	github.com/jackc/pgerrcode v0.0.0-20240316143900-6e2875d9b438
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/lib/pq v1.12.3
 	github.com/riverqueue/river v0.41.0
 	github.com/riverqueue/river/riverdriver v0.41.0
 	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.41.0
+	github.com/riverqueue/river/riverdriver/rivermysql v0.0.0-00010101000000-000000000000
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.41.0
 	github.com/riverqueue/river/riverdriver/riversqlite v0.41.0
 	github.com/riverqueue/river/rivershared v0.41.0
@@ -25,7 +27,12 @@ require (
 	turso.tech/database/tursogo v0.7.0
 )
 
+// Remove this replacement after rivermysql has had its first coordinated
+// release. It lets go mod tidy resolve the new sibling module in the meantime.
+replace github.com/riverqueue/river/riverdriver/rivermysql => ../rivermysql
+
 require (
+	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.0 // indirect
 	github.com/coder/websocket v1.8.12 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect

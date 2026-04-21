@@ -138,6 +138,34 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 			afterHorizon  = horizon.Add(1 * time.Minute)
 		)
 
+		t.Run("RespectsDisabledStates", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+				t.Skip("SQLite does not currently support disabling individual retention periods")
+			}
+
+			cancelledJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCancelled)})
+			completedJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+			discardedJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
+
+			numDeleted, err := exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
+				CompletedDoDelete:           true,
+				CompletedFinalizedAtHorizon: horizon,
+				Max:                         1_000,
+			})
+			require.NoError(t, err)
+			require.Equal(t, 1, numDeleted)
+
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: cancelledJob.ID})
+			require.NoError(t, err)
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: completedJob.ID})
+			require.ErrorIs(t, err, rivertype.ErrNotFound)
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: discardedJob.ID})
+			require.NoError(t, err)
+		})
+
 		t.Run("Success", func(t *testing.T) {
 			t.Parallel()
 
@@ -200,20 +228,29 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 		t.Run("QueuesExcluded", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
 
-			var ( //nolint:dupl
-				cancelledJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCancelled)})
-				completedJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
-				discardedJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
-
+			var (
 				excludedQueue1 = "excluded1"
 				excludedQueue2 = "excluded2"
 
-				// Not deleted because in an omitted queue.
+				// Insert excluded jobs first to verify that they don't consume the
+				// limited candidate batch and starve later eligible jobs.
 				notDeletedJob1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, Queue: &excludedQueue1, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
 				notDeletedJob2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, Queue: &excludedQueue2, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+
+				cancelledJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCancelled)})
+				completedJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+				discardedJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
 			)
+
+			maxJobs := 3
+			if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+				// SQLite currently applies queue exclusions after selecting the
+				// limited candidate batch, so retain coverage of its existing weaker
+				// behavior while checking starvation resistance on other drivers.
+				maxJobs = 1_000
+			}
 
 			numDeleted, err := exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
 				CancelledDoDelete:           true,
@@ -222,7 +259,7 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 				CompletedFinalizedAtHorizon: horizon,
 				DiscardedDoDelete:           true,
 				DiscardedFinalizedAtHorizon: horizon,
-				Max:                         1_000,
+				Max:                         maxJobs,
 				QueuesExcluded:              []string{excludedQueue1, excludedQueue2},
 			})
 			require.NoError(t, err)
@@ -262,11 +299,11 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 			// `queues_included` for the foreseeable future), I've just set
 			// SQLite to not support `queues_included` for the time being.
 			if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
-				t.Logf("Skipping JobDeleteBefore with QueuesIncluded test for SQLite")
+				t.Skipf("Skipping JobDeleteBefore with QueuesIncluded test for %s", bundle.driver.DatabaseName())
 				return
 			}
 
-			var ( //nolint:dupl
+			var (
 				cancelledJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCancelled)})
 				completedJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
 				discardedJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
@@ -274,11 +311,12 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 				includedQueue1 = "included1"
 				includedQueue2 = "included2"
 
-				// Not deleted because in an omitted queue.
+				// Deleted because they're in included queues.
 				deletedJob1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, Queue: &includedQueue1, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
 				deletedJob2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, Queue: &includedQueue2, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
 			)
 
+			// The three older non-included jobs must not consume this batch.
 			numDeleted, err := exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
 				CancelledDoDelete:           true,
 				CancelledFinalizedAtHorizon: horizon,
@@ -286,7 +324,7 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 				CompletedFinalizedAtHorizon: horizon,
 				DiscardedDoDelete:           true,
 				DiscardedFinalizedAtHorizon: horizon,
-				Max:                         1_000,
+				Max:                         2,
 				QueuesIncluded:              []string{includedQueue1, includedQueue2},
 			})
 			require.NoError(t, err)
@@ -455,6 +493,31 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 			})
 			require.NoError(t, err)
 			require.Equal(t, []int64{job1.ID, job2.ID, job3.ID, job4.ID, job5.ID}, sliceutil.Map(deletedJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
+		})
+
+		t.Run("SortedResultsDescending", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+				t.Skip("SQLite always returns JobDeleteMany results ordered by ID")
+			}
+
+			var (
+				job1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+				job2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+				job3 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+				job4 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+				job5 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+			)
+
+			deletedJobs, err := exec.JobDeleteMany(ctx, &riverdriver.JobDeleteManyParams{
+				Max:           100,
+				OrderByClause: "id DESC",
+				WhereClause:   "true",
+			})
+			require.NoError(t, err)
+			require.Equal(t, []int64{job5.ID, job4.ID, job3.ID, job2.ID, job1.ID}, sliceutil.Map(deletedJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
 		})
 	})
 }
