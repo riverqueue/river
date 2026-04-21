@@ -7,8 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+⚠️ Version 0.40.0 contains a new database migration, version 7, but running it is **only necessary if you're using SQLite**. It converts all uses of `json` to `jsonb`. If using Postgres, version 7 is a no-op. You can run it now or wait for another migration in the future and run the two together.
+
+See [documentation on running River migrations](https://riverqueue.com/docs/migrations). If migrating with the CLI, make sure to update it to its latest version:
+
+```shell
+go install github.com/riverqueue/river/cmd/river@latest
+river migrate-up --database-url "$DATABASE_URL"
+```
+
+If not using River's internal migration system, the raw SQL can alternatively be dumped with:
+
+```shell
+go install github.com/riverqueue/river/cmd/river@latest
+river migrate-get --database-url sqlite:// --version 6 --up > river7.up.sql
+river migrate-get --database-url sqlite:// --version 6 --down > river7.down.sql
+```
+
 ### Changed
 
+- Convert SQLite JSON columns to JSONB (including migration). [PR #1224](https://github.com/riverqueue/river/pull/1224).
 - Change SQLite driver operations over to use bulk inserts where possible now that sqlc has better support for `json_each`. [PR #1276](https://github.com/riverqueue/river/pull/1276)
 - Detect duplicate step names across `river.ResumableStep` and return a validation error. [PR #1281](https://github.com/riverqueue/river/pull/1281)
 

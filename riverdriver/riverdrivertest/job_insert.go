@@ -814,4 +814,133 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 		assertJobEqualsInput(t, results[0], jobParams1)
 		assertJobEqualsInput(t, results[1], jobParams2)
 	})
+
+	t.Run("SQLiteStoresJobJSONAsJSONB", func(t *testing.T) {
+		t.Parallel()
+
+		exec, bundle := setup(ctx, t)
+		if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+			t.Skip("SQLite-specific JSONB storage assertion")
+		}
+
+		requireJSONBValues := func(t *testing.T, id int64, expectedByColumn map[string]string) {
+			t.Helper()
+
+			for column, expectedJSON := range expectedByColumn {
+				var matchesJSONB bool
+				require.NoError(t, exec.QueryRow(ctx,
+					fmt.Sprintf("SELECT %s = jsonb(?) FROM river_job WHERE id = ?", column),
+					expectedJSON,
+					id,
+				).Scan(&matchesJSONB))
+				require.True(t, matchesJSONB, "column %s should be stored as JSONB", column)
+			}
+		}
+
+		var (
+			attemptError1 = `{"at":"2026-01-02T03:04:05Z","attempt":1,"error":"error 1","trace":""}`
+			attemptError2 = `{"at":"2026-01-02T03:04:06Z","attempt":2,"error":"error 2","trace":""}`
+			attemptError3 = `{"at":"2026-01-02T03:04:07Z","attempt":3,"error":"error 3","trace":""}`
+			idStart       = rand.Int64()
+		)
+
+		fastManyResults, err := exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+			Jobs: []*riverdriver.JobInsertFastParams{
+				{
+					EncodedArgs: []byte(`{"encoded": "fast-many"}`),
+					ID:          ptrutil.Ptr(idStart),
+					Kind:        "test_kind",
+					MaxAttempts: rivercommon.MaxAttemptsDefault,
+					Metadata:    []byte(`{"meta": "fast-many"}`),
+					Priority:    rivercommon.PriorityDefault,
+					Queue:       rivercommon.QueueDefault,
+					State:       rivertype.JobStateAvailable,
+					Tags:        []string{"fast-many"},
+				},
+			},
+		})
+		require.NoError(t, err)
+		require.Len(t, fastManyResults, 1)
+		requireJSONBValues(t, fastManyResults[0].Job.ID, map[string]string{
+			"args": `{"encoded":"fast-many"}`,
+			"tags": `["fast-many"]`,
+		})
+
+		fastManyNoReturningID := idStart + 1
+		rowsAffected, err := exec.JobInsertFastManyNoReturning(ctx, &riverdriver.JobInsertFastManyParams{
+			Jobs: []*riverdriver.JobInsertFastParams{
+				{
+					EncodedArgs: []byte(`{"encoded": "fast-many-no-returning"}`),
+					ID:          &fastManyNoReturningID,
+					Kind:        "test_kind",
+					MaxAttempts: rivercommon.MaxAttemptsDefault,
+					Metadata:    []byte(`{"meta": "fast-many-no-returning"}`),
+					Priority:    rivercommon.PriorityDefault,
+					Queue:       rivercommon.QueueDefault,
+					State:       rivertype.JobStateAvailable,
+					Tags:        []string{"fast-many-no-returning"},
+				},
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 1, rowsAffected)
+		requireJSONBValues(t, fastManyNoReturningID, map[string]string{
+			"args":     `{"encoded":"fast-many-no-returning"}`,
+			"metadata": `{"meta":"fast-many-no-returning"}`,
+			"tags":     `["fast-many-no-returning"]`,
+		})
+
+		fullResult, err := exec.JobInsertFull(ctx, testfactory.Job_Build(t, &testfactory.JobOpts{
+			AttemptedBy: []string{"full"},
+			EncodedArgs: []byte(`{"encoded": "full"}`),
+			Errors:      [][]byte{[]byte(attemptError1)},
+			Metadata:    []byte(`{"meta": "full"}`),
+			Tags:        []string{"full"},
+		}))
+		require.NoError(t, err)
+		requireJSONBValues(t, fullResult.ID, map[string]string{
+			"args":         `{"encoded":"full"}`,
+			"attempted_by": `["full"]`,
+			"errors":       `[` + attemptError1 + `]`,
+			"metadata":     `{"meta":"full"}`,
+			"tags":         `["full"]`,
+		})
+
+		fullManyResults, err := exec.JobInsertFullMany(ctx, &riverdriver.JobInsertFullManyParams{
+			Jobs: []*riverdriver.JobInsertFullParams{
+				testfactory.Job_Build(t, &testfactory.JobOpts{
+					AttemptedBy: []string{"full-many"},
+					EncodedArgs: []byte(`{"encoded": "full-many"}`),
+					Errors:      [][]byte{[]byte(attemptError2)},
+					Metadata:    []byte(`{"meta": "full-many"}`),
+					Tags:        []string{"full-many"},
+				}),
+			},
+		})
+		require.NoError(t, err)
+		require.Len(t, fullManyResults, 1)
+		requireJSONBValues(t, fullManyResults[0].ID, map[string]string{
+			"args":         `{"encoded":"full-many"}`,
+			"attempted_by": `["full-many"]`,
+			"errors":       `[` + attemptError2 + `]`,
+			"metadata":     `{"meta":"full-many"}`,
+			"tags":         `["full-many"]`,
+		})
+
+		updatedJob, err := exec.JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
+			ID:                  fullManyResults[0].ID,
+			AttemptedBy:         []string{"updated"},
+			AttemptedByDoUpdate: true,
+			Errors:              [][]byte{[]byte(attemptError3)},
+			ErrorsDoUpdate:      true,
+			Metadata:            []byte(`{"meta": "updated"}`),
+			MetadataDoUpdate:    true,
+		})
+		require.NoError(t, err)
+		requireJSONBValues(t, updatedJob.ID, map[string]string{
+			"attempted_by": `["updated"]`,
+			"errors":       `[` + attemptError3 + `]`,
+			"metadata":     `{"meta":"updated"}`,
+		})
+	})
 }

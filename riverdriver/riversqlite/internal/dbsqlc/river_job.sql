@@ -1,20 +1,20 @@
 CREATE TABLE river_job (
     id integer PRIMARY KEY, -- SQLite makes this autoincrementing automatically
-    args blob NOT NULL DEFAULT '{}',
+    args jsonb NOT NULL DEFAULT (jsonb('{}')),
     attempt integer NOT NULL DEFAULT 0,
     attempted_at timestamp,
-    attempted_by blob, -- JSON array of strings
+    attempted_by jsonb, -- JSON array of strings
     created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    errors blob, -- JSON array of error objects
+    errors jsonb, -- JSON array of error objects
     finalized_at timestamp,
     kind text NOT NULL,
     max_attempts integer NOT NULL,
-    metadata blob NOT NULL DEFAULT (json('{}')),
+    metadata jsonb NOT NULL DEFAULT (jsonb('{}')),
     priority integer NOT NULL DEFAULT 1,
     queue text NOT NULL DEFAULT 'default',
     state text NOT NULL DEFAULT 'available',
     scheduled_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    tags blob NOT NULL DEFAULT (json('[]')), -- JSON array of strings
+    tags jsonb NOT NULL DEFAULT (jsonb('[]')), -- JSON array of strings
     unique_key blob,
     unique_states integer,
     CONSTRAINT finalized_or_finalized_at_null CHECK (
@@ -44,7 +44,7 @@ SET
     finalized_at = CASE WHEN state = 'running' THEN finalized_at ELSE coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')) END,
     -- Mark the job as cancelled by query so that the rescuer knows not to
     -- rescue it, even if it gets stuck in the running state:
-    metadata = json_set(metadata, '$.cancel_attempted_at', cast(@cancel_attempted_at AS text))
+    metadata = jsonb_set(metadata, '$.cancel_attempted_at', cast(@cancel_attempted_at AS text))
 WHERE id = @id
     AND state NOT IN ('cancelled', 'completed', 'discarded')
     AND finalized_at IS NULL
@@ -206,16 +206,16 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     unique_states
 ) VALUES (
     cast(sqlc.narg('id') AS integer),
-    @args,
+    jsonb(@args),
     coalesce(cast(sqlc.narg('created_at') AS text), datetime('now', 'subsec')),
     @kind,
     @max_attempts,
-    json(cast(@metadata AS blob)),
+    jsonb(@metadata),
     @priority,
     @queue,
     coalesce(cast(sqlc.narg('scheduled_at') AS text), datetime('now', 'subsec')),
     @state,
-    json(cast(@tags AS blob)),
+    jsonb(@tags),
     CASE WHEN length(cast(@unique_key AS blob)) = 0 THEN NULL ELSE @unique_key END,
     @unique_states
 )
@@ -255,16 +255,16 @@ INSERT INTO /* TEMPLATE: schema */river_job(
 )
 SELECT
     cast(json_extract(value, '$.id') AS integer),
-    json(cast(json_extract(value, '$.args') AS blob)),
+    jsonb(json_extract(value, '$.args')),
     coalesce(cast(json_extract(value, '$.created_at') AS text), datetime('now', 'subsec')),
     cast(json_extract(value, '$.kind') AS text),
     cast(json_extract(value, '$.max_attempts') AS integer),
-    json(cast(json_extract(value, '$.metadata') AS blob)),
+    jsonb(json_extract(value, '$.metadata')),
     cast(json_extract(value, '$.priority') AS integer),
     cast(json_extract(value, '$.queue') AS text),
     coalesce(cast(json_extract(value, '$.scheduled_at') AS text), datetime('now', 'subsec')),
     cast(json_extract(value, '$.state') AS text),
-    json(cast(json_extract(value, '$.tags') AS blob)),
+    jsonb(json_extract(value, '$.tags')),
     CASE WHEN length(cast(json_extract(value, '$.unique_key') AS text)) = 0 THEN NULL ELSE unhex(cast(json_extract(value, '$.unique_key') AS text)) END,
     nullif(cast(json_extract(value, '$.unique_states') AS integer), 0)
 FROM json_each(cast(@jobs AS blob))
@@ -302,16 +302,16 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     unique_key,
     unique_states
 ) VALUES (
-    @args,
+    jsonb(@args),
     coalesce(cast(sqlc.narg('created_at') AS text), datetime('now', 'subsec')),
     @kind,
     @max_attempts,
-    json(cast(@metadata AS blob)),
+    jsonb(@metadata),
     @priority,
     @queue,
     coalesce(cast(sqlc.narg('scheduled_at') AS text), datetime('now', 'subsec')),
     @state,
-    json(cast(@tags AS blob)),
+    jsonb(@tags),
     CASE WHEN length(cast(@unique_key AS blob)) = 0 THEN NULL ELSE @unique_key END,
     @unique_states
 )
@@ -347,16 +347,16 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     unique_states
 )
 SELECT
-    json(cast(json_extract(value, '$.args') AS blob)),
+    jsonb(json_extract(value, '$.args')),
     coalesce(cast(json_extract(value, '$.created_at') AS text), datetime('now', 'subsec')),
     cast(json_extract(value, '$.kind') AS text),
     cast(json_extract(value, '$.max_attempts') AS integer),
-    json(cast(json_extract(value, '$.metadata') AS blob)),
+    jsonb(json_extract(value, '$.metadata')),
     cast(json_extract(value, '$.priority') AS integer),
     cast(json_extract(value, '$.queue') AS text),
     coalesce(cast(json_extract(value, '$.scheduled_at') AS text), datetime('now', 'subsec')),
     cast(json_extract(value, '$.state') AS text),
-    json(cast(json_extract(value, '$.tags') AS blob)),
+    jsonb(json_extract(value, '$.tags')),
     CASE WHEN length(cast(json_extract(value, '$.unique_key') AS text)) = 0 THEN NULL ELSE unhex(cast(json_extract(value, '$.unique_key') AS text)) END,
     nullif(cast(json_extract(value, '$.unique_states') AS integer), 0)
 FROM json_each(cast(@jobs AS blob))
@@ -397,21 +397,21 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     unique_key,
     unique_states
 ) VALUES (
-    @args,
+    jsonb(@args),
     @attempt,
     cast(sqlc.narg('attempted_at') as text),
-    CASE WHEN length(cast(@attempted_by AS blob)) = 0 THEN NULL ELSE json(@attempted_by) END,
+    CASE WHEN length(cast(@attempted_by AS blob)) = 0 THEN NULL ELSE jsonb(@attempted_by) END,
     coalesce(cast(sqlc.narg('created_at') AS text), datetime('now', 'subsec')),
-    CASE WHEN length(cast(@errors AS blob)) = 0 THEN NULL ELSE @errors END,
+    CASE WHEN length(cast(@errors AS blob)) = 0 THEN NULL ELSE jsonb(@errors) END,
     cast(sqlc.narg('finalized_at') as text),
     @kind,
     @max_attempts,
-    json(cast(@metadata AS blob)),
+    jsonb(@metadata),
     @priority,
     @queue,
     coalesce(cast(sqlc.narg('scheduled_at') AS text), datetime('now', 'subsec')),
     @state,
-    json(cast(@tags AS blob)),
+    jsonb(@tags),
     CASE WHEN length(cast(@unique_key AS blob)) = 0 THEN NULL ELSE @unique_key END,
     @unique_states
 ) RETURNING *;
@@ -437,21 +437,21 @@ INSERT INTO /* TEMPLATE: schema */river_job(
     unique_states
 )
 SELECT
-    json(cast(json_extract(value, '$.args') AS blob)),
+    jsonb(json_extract(value, '$.args')),
     cast(json_extract(value, '$.attempt') AS integer),
     cast(json_extract(value, '$.attempted_at') AS text),
-    CASE WHEN json_type(value, '$.attempted_by') IS NULL THEN NULL ELSE json(cast(json_extract(value, '$.attempted_by') AS blob)) END,
+    CASE WHEN json_type(value, '$.attempted_by') IS NULL THEN NULL ELSE jsonb(json_extract(value, '$.attempted_by')) END,
     coalesce(cast(json_extract(value, '$.created_at') AS text), datetime('now', 'subsec')),
-    CASE WHEN json_type(value, '$.errors') IS NULL THEN NULL ELSE json(cast(json_extract(value, '$.errors') AS blob)) END,
+    CASE WHEN json_type(value, '$.errors') IS NULL THEN NULL ELSE jsonb(json_extract(value, '$.errors')) END,
     cast(json_extract(value, '$.finalized_at') AS text),
     cast(json_extract(value, '$.kind') AS text),
     cast(json_extract(value, '$.max_attempts') AS integer),
-    json(cast(json_extract(value, '$.metadata') AS blob)),
+    jsonb(json_extract(value, '$.metadata')),
     cast(json_extract(value, '$.priority') AS integer),
     cast(json_extract(value, '$.queue') AS text),
     coalesce(cast(json_extract(value, '$.scheduled_at') AS text), datetime('now', 'subsec')),
     cast(json_extract(value, '$.state') AS text),
-    json(cast(json_extract(value, '$.tags') AS blob)),
+    jsonb(json_extract(value, '$.tags')),
     CASE WHEN length(cast(json_extract(value, '$.unique_key') AS text)) = 0 THEN NULL ELSE unhex(cast(json_extract(value, '$.unique_key') AS text)) END,
     nullif(cast(json_extract(value, '$.unique_states') AS integer), 0)
 FROM json_each(cast(@jobs AS blob))
@@ -486,10 +486,10 @@ LIMIT @max;
 -- name: JobRescue :exec
 UPDATE /* TEMPLATE: schema */river_job
 SET
-    errors = json_insert(coalesce(errors, json('[]')), '$[#]', json(cast(@error AS blob))),
+    errors = jsonb_insert(coalesce(errors, jsonb('[]')), '$[#]', jsonb(@error)),
     finalized_at = cast(sqlc.narg('finalized_at') as text),
     scheduled_at = @scheduled_at,
-    metadata = json_set(
+    metadata = jsonb_set(
         metadata,
         '$."river:rescue_count"',
         coalesce(
@@ -572,7 +572,7 @@ RETURNING *;
 
 -- name: JobScheduleSetDiscarded :many
 UPDATE /* TEMPLATE: schema */river_job
-SET metadata = json_patch(metadata, json('{"unique_key_conflict": "scheduler_discarded"}')),
+SET metadata = jsonb_patch(metadata, jsonb('{"unique_key_conflict": "scheduler_discarded"}')),
     finalized_at = coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')),
     state = 'discarded'
 WHERE id IN (sqlc.slice('id'))
@@ -582,7 +582,7 @@ RETURNING *;
 -- for JobSetStateIfRunning to use when falling back to non-running jobs.
 -- name: JobSetMetadataIfNotRunning :one
 UPDATE /* TEMPLATE: schema */river_job
-SET metadata = json_patch(metadata, json(cast(@metadata_updates AS blob)))
+SET metadata = jsonb_patch(metadata, jsonb(@metadata_updates))
 WHERE id = @id
     AND state != 'running'
 RETURNING *;
@@ -600,7 +600,7 @@ SET
                         THEN @attempt
                         ELSE attempt END,
     errors       = CASE WHEN cast(@errors_do_update AS boolean)
-                        THEN json_insert(coalesce(errors, json('[]')), '$[#]', json(cast(@error AS blob)))
+                        THEN jsonb_insert(coalesce(errors, jsonb('[]')), '$[#]', jsonb(@error))
                         ELSE errors END,
     finalized_at = CASE WHEN /* should_cancel */((@state = 'retryable' OR @state = 'scheduled') AND (metadata -> 'cancel_attempted_at') iS NOT NULL)
                         THEN coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec'))
@@ -608,7 +608,7 @@ SET
                         THEN @finalized_at
                         ELSE finalized_at END,
     metadata     = CASE WHEN cast(@metadata_do_merge AS boolean)
-                        THEN json_patch(metadata, json(cast(@metadata_updates AS blob)))
+                        THEN jsonb_patch(metadata, jsonb(@metadata_updates))
                         ELSE metadata END,
     scheduled_at = CASE WHEN /* NOT should_cancel */(cast(@state AS text) <> 'retryable' AND @state <> 'scheduled' OR (metadata -> 'cancel_attempted_at') IS NULL) AND cast(@scheduled_at_do_update AS boolean)
                         THEN @scheduled_at
@@ -623,7 +623,7 @@ RETURNING *;
 -- name: JobUpdate :one
 UPDATE /* TEMPLATE: schema */river_job
 SET
-    metadata = CASE WHEN cast(@metadata_do_merge AS boolean) THEN json_patch(metadata, json(cast(@metadata AS blob))) ELSE metadata END
+    metadata = CASE WHEN cast(@metadata_do_merge AS boolean) THEN jsonb_patch(metadata, jsonb(@metadata)) ELSE metadata END
 WHERE id = @id
 RETURNING *;
 
@@ -634,11 +634,11 @@ UPDATE /* TEMPLATE: schema */river_job
 SET
     attempt = CASE WHEN cast(@attempt_do_update AS boolean) THEN @attempt ELSE attempt END,
     attempted_at = CASE WHEN cast(@attempted_at_do_update AS boolean) THEN @attempted_at ELSE attempted_at END,
-    attempted_by = CASE WHEN cast(@attempted_by_do_update AS boolean) THEN @attempted_by ELSE attempted_by END,
-    errors = CASE WHEN cast(@errors_do_update AS boolean) THEN @errors ELSE errors END,
+    attempted_by = CASE WHEN cast(@attempted_by_do_update AS boolean) THEN jsonb(@attempted_by) ELSE attempted_by END,
+    errors = CASE WHEN cast(@errors_do_update AS boolean) THEN jsonb(@errors) ELSE errors END,
     finalized_at = CASE WHEN cast(@finalized_at_do_update AS boolean) THEN @finalized_at ELSE finalized_at END,
     max_attempts = CASE WHEN cast(@max_attempts_do_update AS boolean) THEN @max_attempts ELSE max_attempts END,
-    metadata = CASE WHEN cast(@metadata_do_update AS boolean) THEN json(cast(@metadata AS blob)) ELSE metadata END,
+    metadata = CASE WHEN cast(@metadata_do_update AS boolean) THEN jsonb(@metadata) ELSE metadata END,
     state = CASE WHEN cast(@state_do_update AS boolean) THEN @state ELSE state END
 WHERE id = @id
 RETURNING *;

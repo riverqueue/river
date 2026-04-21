@@ -1,3 +1,7 @@
+--
+-- Notification outbox.
+--
+
 CREATE TABLE /* TEMPLATE: schema */river_notification (
     id bigserial PRIMARY KEY,
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -8,3 +12,8 @@ CREATE TABLE /* TEMPLATE: schema */river_notification (
 
 CREATE INDEX river_notification_created_at_idx ON /* TEMPLATE: schema */river_notification (created_at);
 CREATE INDEX river_notification_topic_id_idx ON /* TEMPLATE: schema */river_notification (topic, id);
+
+--
+-- SQLite JSONB conversion.
+--
+-- No-op. PostgreSQL already stores River JSON columns as jsonb.
