@@ -20,19 +20,19 @@ INSERT INTO /* TEMPLATE: schema */river_queue (
     updated_at
 ) VALUES (
     coalesce(cast(?1 AS text), datetime('now', 'subsec')),
-    json(cast(?2 AS blob)),
+    jsonb(?2),
     ?3,
     cast(?4 AS text),
     coalesce(cast(?5 AS text), cast(?1 AS text), datetime('now', 'subsec'))
 ) ON CONFLICT (name) DO UPDATE
 SET
     updated_at = EXCLUDED.updated_at
-RETURNING name, created_at, metadata, paused_at, updated_at
+RETURNING name, created_at, json(metadata), paused_at, updated_at
 `
 
 type QueueCreateOrSetUpdatedAtParams struct {
 	Now       *string
-	Metadata  []byte
+	Metadata  interface{}
 	Name      string
 	PausedAt  *string
 	UpdatedAt *string
@@ -66,7 +66,7 @@ WHERE name IN (
     ORDER BY name ASC
     LIMIT ?2
 )
-RETURNING name, created_at, metadata, paused_at, updated_at
+RETURNING name, created_at, json(metadata), paused_at, updated_at
 `
 
 type QueueDeleteExpiredParams struct {
@@ -104,7 +104,7 @@ func (q *Queries) QueueDeleteExpired(ctx context.Context, db DBTX, arg *QueueDel
 }
 
 const queueGet = `-- name: QueueGet :one
-SELECT name, created_at, metadata, paused_at, updated_at
+SELECT name, created_at, json(metadata), paused_at, updated_at
 FROM /* TEMPLATE: schema */river_queue
 WHERE name = ?1
 `
@@ -123,7 +123,7 @@ func (q *Queries) QueueGet(ctx context.Context, db DBTX, name string) (*RiverQue
 }
 
 const queueList = `-- name: QueueList :many
-SELECT name, created_at, metadata, paused_at, updated_at
+SELECT name, created_at, json(metadata), paused_at, updated_at
 FROM /* TEMPLATE: schema */river_queue
 ORDER BY name ASC
 LIMIT ?1
@@ -257,15 +257,15 @@ func (q *Queries) QueueResume(ctx context.Context, db DBTX, arg *QueueResumePara
 const queueUpdate = `-- name: QueueUpdate :one
 UPDATE /* TEMPLATE: schema */river_queue
 SET
-    metadata = CASE WHEN cast(?1 AS boolean) THEN json(cast(?2 AS blob)) ELSE metadata END,
+    metadata = CASE WHEN cast(?1 AS boolean) THEN jsonb(?2) ELSE metadata END,
     updated_at = datetime('now', 'subsec')
 WHERE name = ?3
-RETURNING name, created_at, metadata, paused_at, updated_at
+RETURNING name, created_at, json(metadata), paused_at, updated_at
 `
 
 type QueueUpdateParams struct {
 	MetadataDoUpdate bool
-	Metadata         []byte
+	Metadata         interface{}
 	Name             string
 }
 

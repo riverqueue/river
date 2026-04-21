@@ -439,9 +439,9 @@ func (e *Executor) JobDeleteMany(ctx context.Context, params *riverdriver.JobDel
 //
 //nolint:gochecknoglobals
 var jobGetAvailableAttemptedBySQL = strings.TrimSpace(`
-    json_insert(
+    jsonb_insert(
         (
-            SELECT json_group_array(value)
+            SELECT jsonb_group_array(value)
             FROM (
                 SELECT *
                 FROM (
