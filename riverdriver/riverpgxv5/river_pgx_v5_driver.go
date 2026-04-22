@@ -235,14 +235,34 @@ func (e *Executor) JobCountByQueueAndState(ctx context.Context, params *riverdri
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	results := make([]*riverdriver.JobCountByQueueAndStateResult, len(rows))
-	for i, row := range rows {
-		results[i] = &riverdriver.JobCountByQueueAndStateResult{
-			CountAvailable: row.CountAvailable,
-			CountRunning:   row.CountRunning,
-			Queue:          row.Queue,
+
+	rowsByQueue := make(map[string]*riverdriver.JobCountByQueueAndStateResult, len(params.QueueNames))
+	for _, row := range rows {
+		result, ok := rowsByQueue[row.Queue]
+		if !ok {
+			result = &riverdriver.JobCountByQueueAndStateResult{
+				Queue:  row.Queue,
+				States: make(map[rivertype.JobState]int),
+			}
+			rowsByQueue[row.Queue] = result
+		}
+		result.States[rivertype.JobState(row.State)] = int(row.Count)
+	}
+
+	// Build results in the order of requested queue names, filling in zero
+	// counts for queues with no jobs.
+	results := make([]*riverdriver.JobCountByQueueAndStateResult, 0, len(params.QueueNames))
+	for _, queueName := range params.QueueNames {
+		if result, ok := rowsByQueue[queueName]; ok {
+			results = append(results, result)
+		} else {
+			results = append(results, &riverdriver.JobCountByQueueAndStateResult{
+				Queue:  queueName,
+				States: make(map[rivertype.JobState]int),
+			})
 		}
 	}
+
 	return results, nil
 }
 

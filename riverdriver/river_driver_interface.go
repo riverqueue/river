@@ -360,9 +360,8 @@ type JobCountByQueueAndStateParams struct {
 }
 
 type JobCountByQueueAndStateResult struct {
-	CountAvailable int64
-	CountRunning   int64
-	Queue          string
+	Queue  string
+	States map[rivertype.JobState]int
 }
 
 type JobCountByStateParams struct {

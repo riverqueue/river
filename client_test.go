@@ -24,6 +24,7 @@ import (
 	"github.com/tidwall/sjson"
 
 	"github.com/riverqueue/river/internal/dbunique"
+	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/middlewarelookup"
@@ -7629,6 +7630,46 @@ func Test_NewClient_Validations(t *testing.T) {
 			},
 		},
 		{
+			name: "Middleware implementing Hook is available in hook lookup",
+			configFunc: func(config *Config) {
+				config.Middleware = []rivertype.Middleware{&middlewareWithHook{}}
+			},
+			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
+				require.Len(t, client.hookLookupGlobal.ByHookKind(hooklookup.HookKindWorkBegin), 1)
+			},
+		},
+		{
+			name: "Hook implementing Middleware is available in middleware lookup",
+			configFunc: func(config *Config) {
+				config.Hooks = []rivertype.Hook{&hookWithMiddleware{}}
+			},
+			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
+				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindWorker), 1)
+			},
+		},
+		{
+			name: "Hook implementing Middleware in both configs is deduplicated in middleware lookup",
+			configFunc: func(config *Config) {
+				hm := &hookWithMiddleware{}
+				config.Hooks = []rivertype.Hook{hm}
+				config.Middleware = []rivertype.Middleware{hm}
+			},
+			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
+				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindWorker), 1)
+			},
+		},
+		{
+			name: "Middleware implementing Hook in both configs is deduplicated in hook lookup",
+			configFunc: func(config *Config) {
+				mh := &middlewareWithHook{}
+				config.Hooks = []rivertype.Hook{mh}
+				config.Middleware = []rivertype.Middleware{mh}
+			},
+			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
+				require.Len(t, client.hookLookupGlobal.ByHookKind(hooklookup.HookKindWorkBegin), 1)
+			},
+		},
+		{
 			name: "Middleware not allowed with JobInsertMiddleware",
 			configFunc: func(config *Config) {
 				config.JobInsertMiddleware = []rivertype.JobInsertMiddleware{&overridableJobMiddleware{}}
@@ -8627,3 +8668,31 @@ func (f JobArgsWithHooksFunc) Hooks() []rivertype.Hook {
 func (JobArgsWithHooksFunc) MarshalJSON() ([]byte, error) { return []byte("{}"), nil }
 
 func (JobArgsWithHooksFunc) UnmarshalJSON([]byte) error { return nil }
+
+// middlewareWithHook is a middleware that also implements HookWorkBegin,
+// used to test cross-pollination from middleware to hooks.
+type middlewareWithHook struct {
+	MiddlewareDefaults
+}
+
+func (m *middlewareWithHook) Work(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
+	return doInner(ctx)
+}
+
+func (m *middlewareWithHook) IsHook() bool { return true }
+
+func (m *middlewareWithHook) WorkBegin(ctx context.Context, job *rivertype.JobRow) error {
+	return nil
+}
+
+// hookWithMiddleware is a hook that also implements WorkerMiddleware,
+// used to test cross-pollination from hooks to middleware.
+type hookWithMiddleware struct {
+	HookDefaults
+}
+
+func (h *hookWithMiddleware) IsMiddleware() bool { return true }
+
+func (h *hookWithMiddleware) Work(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
+	return doInner(ctx)
+}
