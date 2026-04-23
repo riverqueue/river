@@ -234,11 +234,10 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 	if p.sortField == JobListOrderByFinalizedAt {
 		currentNonFinalizedStates := make([]rivertype.JobState, 0, len(p.states))
 		for _, state := range p.states {
-			//nolint:exhaustive
 			switch state {
-			case rivertype.JobStateCancelled, rivertype.JobStateCompleted, rivertype.JobStateDiscarded:
-			default:
+			case rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRetryable, rivertype.JobStateRunning, rivertype.JobStateScheduled:
 				currentNonFinalizedStates = append(currentNonFinalizedStates, state)
+			case rivertype.JobStateCancelled, rivertype.JobStateCompleted, rivertype.JobStateDiscarded:
 			}
 		}
 		// This indicates the user overrode the States list with only non-finalized

@@ -780,7 +780,8 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	// the more abstract config.Middleware for middleware are set, but not both,
 	// so in practice we never append all three of these to each other.
 	{
-		middleware := config.Middleware
+		middleware := defaultMiddleware()
+		middleware = append(middleware, config.Middleware...)
 		for _, jobInsertMiddleware := range config.JobInsertMiddleware {
 			middleware = append(middleware, jobInsertMiddleware)
 		}
@@ -1000,6 +1001,10 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	}
 
 	return client, nil
+}
+
+func defaultMiddleware() []rivertype.Middleware {
+	return []rivertype.Middleware{&resumableMiddleware{}}
 }
 
 // Start starts the client's job fetching and working loops. Once this is called,
