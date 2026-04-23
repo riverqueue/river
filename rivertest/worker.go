@@ -13,6 +13,7 @@ import (
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/middlewarelookup"
+	"github.com/riverqueue/river/internal/rivermiddleware"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
@@ -206,7 +207,7 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 		HookLookupGlobal:       hooklookup.NewHookLookup(w.config.Hooks),
 		HookLookupByJob:        hooklookup.NewJobHookLookup(),
 		JobRow:                 job,
-		MiddlewareLookupGlobal: middlewarelookup.NewMiddlewareLookup(w.config.Middleware),
+		MiddlewareLookupGlobal: middlewarelookup.NewMiddlewareLookup(append(rivermiddleware.DefaultMiddleware(), w.config.Middleware...)),
 		ProducerCallbacks: struct {
 			JobDone func(jobRow *rivertype.JobRow)
 			Stuck   func()

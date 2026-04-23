@@ -24,6 +24,14 @@ const (
 	// them.
 	MetadataKeyPeriodicJobID = "river:periodic_job_id"
 
+	// MetadataKeyResumableStep records the last successfully completed step for
+	// a resumable job so later attempts can skip ahead.
+	MetadataKeyResumableStep = "river:resumable_step"
+
+	// MetadataKeyResumableCursor records a resumable step cursor so a later
+	// attempt can resume a partially completed step.
+	MetadataKeyResumableCursor = "river:resumable_cursor"
+
 	// MetadataKeyRescueCount records how many times the job has been rescued.
 	MetadataKeyRescueCount = "river:rescue_count"
 
