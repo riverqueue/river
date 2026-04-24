@@ -77,8 +77,9 @@ func New(dbPool *sql.DB) *Driver {
 
 const argPlaceholder = "?"
 
-func (d *Driver) ArgPlaceholder() string { return argPlaceholder }
-func (d *Driver) DatabaseName() string   { return "sqlite" }
+func (d *Driver) ArgPlaceholder() string             { return argPlaceholder }
+func (d *Driver) DatabaseName() string               { return "sqlite" }
+func (d *Driver) SafeIdentifier(ident string) string { return dbutil.SafeIdentifier(ident) }
 
 func (d *Driver) GetExecutor() riverdriver.Executor {
 	return &Executor{d.dbPool, templateReplaceWrapper{d.dbPool, &d.replacer}, d, nil}

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/lib/pq"
@@ -18,6 +19,7 @@ import (
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
+	"github.com/riverqueue/river/riverdriver/rivermysql"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
@@ -105,6 +107,26 @@ func TestClientWithDriverRiverLibSQL(t *testing.T) {
 				})
 			)
 			return driver, schema
+		},
+	)
+}
+
+func TestClientWithDriverRiverMySQL(t *testing.T) {
+	t.Parallel()
+
+	riversharedtest.SkipIfMySQLNotEnabled(t)
+
+	var (
+		ctx    = context.Background()
+		dbPool = riversharedtest.DBPoolMySQL(ctx, t)
+		driver = rivermysql.New(dbPool)
+	)
+
+	ExerciseClient(ctx, t,
+		func(ctx context.Context, t *testing.T) (riverdriver.Driver[*sql.Tx], string) {
+			t.Helper()
+
+			return driver, riverdbtest.TestSchema(ctx, t, driver, nil)
 		},
 	)
 }
@@ -519,9 +541,9 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		})
 
 		listRes, err := client.JobList(ctx, river.NewJobListParams().Metadata(`{"foo":"bar"}`))
-		if bundle.driver.DatabaseName() == databaseNameSQLite {
-			t.Logf("Ignoring unsupported JobListResult.Metadata on SQLite")
-			require.EqualError(t, err, "JobListParams.Metadata is not supported on SQLite")
+		if bundle.driver.DatabaseName() == databaseNameMySQL || bundle.driver.DatabaseName() == databaseNameSQLite {
+			t.Logf("Ignoring unsupported JobListResult.Metadata on %s", bundle.driver.DatabaseName())
+			require.EqualError(t, err, "JobListParams.Metadata is not supported on MySQL or SQLite")
 			return
 		}
 		require.NoError(t, err)
@@ -583,9 +605,9 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		})
 
 		listRes, err := client.JobListTx(ctx, tx, river.NewJobListParams().Metadata(`{"foo":"bar"}`))
-		if bundle.driver.DatabaseName() == databaseNameSQLite {
-			t.Logf("Ignoring unsupported JobListTxResult.Metadata on SQLite")
-			require.EqualError(t, err, "JobListParams.Metadata is not supported on SQLite")
+		if bundle.driver.DatabaseName() == databaseNameMySQL || bundle.driver.DatabaseName() == databaseNameSQLite {
+			t.Logf("Ignoring unsupported JobListTxResult.Metadata on %s", bundle.driver.DatabaseName())
+			require.EqualError(t, err, "JobListParams.Metadata is not supported on MySQL or SQLite")
 			return
 		}
 		require.NoError(t, err)
@@ -607,9 +629,12 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 
 		listParams := river.NewJobListParams()
 
-		if bundle.driver.DatabaseName() == databaseNameSQLite {
+		switch bundle.driver.DatabaseName() {
+		case databaseNameSQLite:
 			listParams = listParams.Where("metadata ->> @json_path = @json_val", river.NamedArgs{"json_path": "$.foo", "json_val": "bar"})
-		} else {
+		case databaseNameMySQL:
+			listParams = listParams.Where("JSON_UNQUOTE(JSON_EXTRACT(metadata, @json_path)) = @json_val", river.NamedArgs{"json_path": "$.foo", "json_val": "bar"})
+		default:
 			// "bar" is quoted in this branch because `jsonb_path_query_first` needs to be compared to a JSON value
 			listParams = listParams.Where("jsonb_path_query_first(metadata, @json_path) = @json_val", river.NamedArgs{"json_path": "$.foo", "json_val": `"bar"`})
 		}

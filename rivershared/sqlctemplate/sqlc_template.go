@@ -89,6 +89,14 @@ type Replacement struct {
 // be initialized with a constructor. This lets it default to a usable instance
 // on drivers that may themselves not be initialized.
 type Replacer struct {
+	// UnnumberedPlaceholders, when true, causes Run to emit plain `?`
+	// placeholders instead of numbered `?1`, `?2`, etc. for named args
+	// injected via the template system. The args slice is reordered to
+	// match the positional order of placeholders in the SQL. This is
+	// needed for MySQL, whose database/sql driver does not support
+	// numbered `?N` syntax.
+	UnnumberedPlaceholders bool
+
 	cache   map[replacerCacheKey]string
 	cacheMu sync.RWMutex
 }
@@ -142,6 +150,14 @@ func (r *Replacer) RunSafely(ctx context.Context, argPlaceholder, sql string, ar
 	}
 
 	cacheKey, cacheEligible := replacerCacheKeyFrom(sql, container)
+
+	// Named args are interleaved with sqlc args during a left-to-right SQL
+	// walk, producing args in positional order. The cache can't reconstruct
+	// this ordering on hit, so skip caching when named args are present.
+	if len(container.NamedArgs) > 0 {
+		cacheEligible = false
+	}
+
 	if cacheEligible {
 		r.cacheMu.RLock()
 		var (
@@ -205,29 +221,88 @@ func (r *Replacer) RunSafely(ctx context.Context, argPlaceholder, sql string, ar
 	}
 
 	if len(container.NamedArgs) > 0 {
-		placeholderNum := len(args)
-
 		// For the benefit of the test suite's output being predictable, sort
 		// named args before processing them.
 		sortedNamedArgs := maputil.Keys(container.NamedArgs)
 		slices.Sort(sortedNamedArgs)
+
+		// Verify all named args are present in the SQL.
 		for _, arg := range sortedNamedArgs {
-			placeholderNum++
-
-			var (
-				symbol      = "@" + arg
-				symbolIndex = strings.Index(updatedSQL, symbol)
-				val         = container.NamedArgs[arg]
-			)
-
-			if symbolIndex == -1 {
-				return "", nil, fmt.Errorf("sqltemplate expected to find named arg %q, but it wasn't present", symbol)
+			if !strings.Contains(updatedSQL, "@"+arg) {
+				return "", nil, fmt.Errorf("sqltemplate expected to find named arg %q, but it wasn't present", "@"+arg)
 			}
-
-			// ReplaceAll because an input parameter may appear multiple times.
-			updatedSQL = strings.ReplaceAll(updatedSQL, symbol, argPlaceholder+strconv.Itoa(placeholderNum))
-			args = append(args, val)
 		}
+
+		// Walk the SQL once left-to-right, replacing @name references and
+		// existing sqlc placeholders with sequentially numbered (or
+		// unnumbered) placeholders, building the args slice in positional
+		// order as we go.
+		var (
+			newArgs    []any
+			out        strings.Builder
+			seqNum     int
+			sqlcArgIdx int
+		)
+
+		emitPlaceholder := func() {
+			seqNum++
+			if r.UnnumberedPlaceholders {
+				out.WriteByte('?')
+			} else {
+				out.WriteString(argPlaceholder)
+				out.WriteString(strconv.Itoa(seqNum))
+			}
+		}
+
+		for i := 0; i < len(updatedSQL); {
+			switch {
+			case updatedSQL[i] == '@':
+				matched := false
+				for _, name := range sortedNamedArgs {
+					symbol := "@" + name
+					if strings.HasPrefix(updatedSQL[i:], symbol) {
+						emitPlaceholder()
+						newArgs = append(newArgs, container.NamedArgs[name])
+						i += len(symbol)
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					out.WriteByte(updatedSQL[i])
+					i++
+				}
+
+			case updatedSQL[i] == argPlaceholder[0] && i+1 < len(updatedSQL) && updatedSQL[i+1] >= '1' && updatedSQL[i+1] <= '9':
+				// Numbered placeholder from sqlc ($N for Postgres, ?N for
+				// SQLite): parse the old number, look up the original arg,
+				// and re-emit with a new sequential number.
+				j := i + 1
+				for j < len(updatedSQL) && updatedSQL[j] >= '0' && updatedSQL[j] <= '9' {
+					j++
+				}
+				oldNum, _ := strconv.Atoi(updatedSQL[i+1 : j])
+				emitPlaceholder()
+				newArgs = append(newArgs, args[oldNum-1])
+				i = j
+
+			case r.UnnumberedPlaceholders && updatedSQL[i] == '?':
+				// Unnumbered positional ? from sqlc (MySQL).
+				emitPlaceholder()
+				if sqlcArgIdx < len(args) {
+					newArgs = append(newArgs, args[sqlcArgIdx])
+				}
+				sqlcArgIdx++
+				i++
+
+			default:
+				out.WriteByte(updatedSQL[i])
+				i++
+			}
+		}
+
+		updatedSQL = out.String()
+		args = newArgs
 	}
 
 	if cacheEligible {

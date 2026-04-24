@@ -11,7 +11,9 @@ require (
 	github.com/lib/pq v1.12.3
 	github.com/riverqueue/river v0.35.0
 	github.com/riverqueue/river/riverdriver v0.35.0
+	github.com/go-sql-driver/mysql v1.9.3
 	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.35.0
+	github.com/riverqueue/river/riverdriver/rivermysql v0.35.0
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.35.0
 	github.com/riverqueue/river/riverdriver/riversqlite v0.35.0
 	github.com/riverqueue/river/rivershared v0.35.0
@@ -27,6 +29,7 @@ require (
 require (
 	github.com/antlr4-go/antlr/v4 v4.13.0 // indirect
 	github.com/coder/websocket v1.8.12 // indirect
+	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect

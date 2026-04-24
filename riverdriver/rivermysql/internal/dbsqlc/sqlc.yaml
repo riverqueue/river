@@ -1,0 +1,41 @@
+version: "2"
+sql:
+  - engine: "mysql"
+    queries:
+      - river_job.sql
+      - river_leader.sql
+      - river_migration.sql
+      - river_queue.sql
+      - schema.sql
+    schema:
+      - river_client.sql
+      - river_client_queue.sql
+      - river_job.sql
+      - river_leader.sql
+      - river_migration.sql
+      - river_queue.sql
+      - schema.sql
+    gen:
+      go:
+        package: "dbsqlc"
+        out: "."
+        emit_exact_table_names: true
+        emit_methods_with_db_argument: true
+        emit_params_struct_pointers: true
+        emit_pointers_for_null_types: true
+        emit_result_struct_pointers: true
+
+        rename:
+          ids: "IDs"
+          ttl: "TTL"
+
+        overrides:
+          - db_type: "json"
+            go_type:
+              type: "[]byte"
+          - db_type: "json"
+            go_type:
+              type: "[]byte"
+            nullable: true
+          - db_type: "int"
+            go_type: "int64"

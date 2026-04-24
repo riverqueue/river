@@ -63,8 +63,9 @@ func New(dbPool *pgxpool.Pool) *Driver {
 
 const argPlaceholder = "$"
 
-func (d *Driver) ArgPlaceholder() string { return argPlaceholder }
-func (d *Driver) DatabaseName() string   { return "postgres" }
+func (d *Driver) ArgPlaceholder() string             { return argPlaceholder }
+func (d *Driver) DatabaseName() string               { return "postgres" }
+func (d *Driver) SafeIdentifier(ident string) string { return dbutil.SafeIdentifier(ident) }
 
 func (d *Driver) GetExecutor() riverdriver.Executor {
 	return &Executor{templateReplaceWrapper{d.dbPool, &d.replacer}, d}

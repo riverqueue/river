@@ -157,7 +157,13 @@ func exerciseExecutorTx[TTx any](ctx context.Context, t *testing.T,
 
 			exec := setup(ctx, t)
 
-			require.NoError(t, exec.Exec(ctx, "SELECT $1 || $2", "foo", "bar"))
+			_, driver := executorWithTx(ctx, t)
+			switch driver.DatabaseName() {
+			case databaseNameMySQL:
+				require.NoError(t, exec.Exec(ctx, "SELECT CONCAT(?, ?)", "foo", "bar"))
+			default:
+				require.NoError(t, exec.Exec(ctx, "SELECT $1 || $2", "foo", "bar"))
+			}
 		})
 	})
 
@@ -166,9 +172,8 @@ func exerciseExecutorTx[TTx any](ctx context.Context, t *testing.T,
 
 		{
 			driver, _ := driverWithSchema(ctx, t, nil)
-			if driver.DatabaseName() == databaseNameSQLite {
-				t.Logf("Skipping PGAdvisoryXactLock test for SQLite")
-				return
+			if driver.DatabaseName() == databaseNameSQLite || driver.DatabaseName() == databaseNameMySQL {
+				t.Skipf("Skipping PGAdvisoryXactLock test for %s", driver.DatabaseName())
 			}
 		}
 
