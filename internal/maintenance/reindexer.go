@@ -16,8 +16,6 @@ import (
 )
 
 const (
-	ReindexerIntervalDefault = 24 * time.Hour
-
 	// ReindexerTimeoutDefault is the default timeout of the reindexer.
 	//
 	// We've had user reports of builds taking 45 seconds on large tables, so
