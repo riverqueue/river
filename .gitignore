@@ -1,3 +1,4 @@
+/.envrc
 /go.work.sum
 /internal/cmd/riverbench/riverbench
 /river
