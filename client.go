@@ -280,6 +280,27 @@ type Config struct {
 	// than working them. If it's specified, then Workers must also be given.
 	Queues map[string]QueueConfig
 
+	// RepackerEnabled enables the table repacker maintenance service, which
+	// periodically runs REPACK (CONCURRENTLY) on the river_job table to reclaim
+	// space from dead tuples. This is not enabled by default.
+	//
+	// REPACK (CONCURRENTLY) requires Postgres >= 19. On older versions, the
+	// repacker falls back to VACUUM FULL, which takes an ACCESS EXCLUSIVE lock
+	// on the table and blocks all reads and writes for the duration of the
+	// operation. This is not safe for production use on Postgres < 19 and
+	// should only be used during planned maintenance windows.
+	RepackerEnabled bool
+
+	// RepackerSchedule is the schedule for running the table repacker. If nil,
+	// the table repacker will run at 01:00 UTC every day.
+	RepackerSchedule PeriodicSchedule
+
+	// RepackerTimeout is the amount of time to wait for the table repacker to
+	// run before cancelling it via context. Set to -1 to disable the timeout.
+	//
+	// Defaults to 5 minutes.
+	RepackerTimeout time.Duration
+
 	// ReindexerSchedule is the schedule for running the reindexer. If nil, the
 	// reindexer will run at midnight UTC every day.
 	ReindexerSchedule PeriodicSchedule
@@ -451,6 +472,9 @@ func (c *Config) WithDefaults() *Config {
 		PeriodicJobs:                c.PeriodicJobs,
 		PollOnly:                    c.PollOnly,
 		Queues:                      c.Queues,
+		RepackerEnabled:             c.RepackerEnabled,
+		RepackerSchedule:            c.RepackerSchedule,
+		RepackerTimeout:             cmp.Or(c.RepackerTimeout, maintenance.TableRepackerTimeoutDefault),
 		ReindexerIndexNames:         reindexerIndexNames,
 		ReindexerSchedule:           c.ReindexerSchedule,
 		ReindexerTimeout:            cmp.Or(c.ReindexerTimeout, maintenance.ReindexerTimeoutDefault),
@@ -498,6 +522,9 @@ func (c *Config) validate() error {
 	}
 	if len(c.Middleware) > 0 && (len(c.JobInsertMiddleware) > 0 || len(c.WorkerMiddleware) > 0) {
 		return errors.New("only one of the pair JobInsertMiddleware/WorkerMiddleware or Middleware may be provided (Middleware is recommended, and may contain both job insert and worker middleware)")
+	}
+	if c.RepackerTimeout < -1 {
+		return errors.New("RepackerTimeout cannot be negative, except for -1 (infinite)")
 	}
 	if c.ReindexerTimeout < -1 {
 		return errors.New("ReindexerTimeout cannot be negative, except for -1 (infinite)")
@@ -658,6 +685,7 @@ type clientTestSignals struct {
 	queueCleaner          *maintenance.QueueCleanerTestSignals
 	queueMaintainerLeader *maintenance.QueueMaintainerLeaderTestSignals
 	reindexer             *maintenance.ReindexerTestSignals
+	tableRepacker         *maintenance.TableRepackerTestSignals
 }
 
 func (ts *clientTestSignals) Init(tb testutil.TestingTB) {
@@ -681,6 +709,9 @@ func (ts *clientTestSignals) Init(tb testutil.TestingTB) {
 	}
 	if ts.reindexer != nil {
 		ts.reindexer.Init(tb)
+	}
+	if ts.tableRepacker != nil {
+		ts.tableRepacker.Init(tb)
 	}
 }
 
@@ -975,6 +1006,21 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			}, driver.GetExecutor())
 			maintenanceServices = append(maintenanceServices, reindexer)
 			client.testSignals.reindexer = &reindexer.TestSignals
+		}
+
+		if config.RepackerEnabled {
+			var scheduleFunc func(time.Time) time.Time
+			if config.RepackerSchedule != nil {
+				scheduleFunc = config.RepackerSchedule.Next
+			}
+
+			tableRepacker := maintenance.NewTableRepacker(archetype, &maintenance.TableRepackerConfig{
+				ScheduleFunc: scheduleFunc,
+				Schema:       config.Schema,
+				Timeout:      config.RepackerTimeout,
+			}, driver.GetExecutor())
+			maintenanceServices = append(maintenanceServices, tableRepacker)
+			client.testSignals.tableRepacker = &tableRepacker.TestSignals
 		}
 
 		if pluginPilot != nil {

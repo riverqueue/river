@@ -216,6 +216,34 @@ func exerciseSchemaIntrospection[TTx any](ctx context.Context, t *testing.T,
 		})
 	})
 
+	t.Run("TableRepack", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("RepacksTable", func(t *testing.T) {
+			t.Parallel()
+
+			// REPACK/VACUUM FULL can't run inside a transaction block, so this
+			// must use a full schema.
+			driver, schema := driverWithSchema(ctx, t, nil)
+
+			if driver.DatabaseName() == databaseNameSQLite {
+				err := driver.GetExecutor().TableRepack(ctx, &riverdriver.TableRepackParams{
+					Schema: schema,
+					Table:  "river_job",
+				})
+				require.ErrorIs(t, err, riverdriver.ErrNotImplemented)
+				return
+			}
+
+			err := driver.GetExecutor().TableRepack(ctx, &riverdriver.TableRepackParams{
+				Schema:        schema,
+				Table:         "river_job",
+				UseVacuumFull: true, // use VACUUM FULL so the test works on any Postgres version
+			})
+			require.NoError(t, err)
+		})
+	})
+
 	t.Run("SchemaGetExpired", func(t *testing.T) {
 		t.Parallel()
 

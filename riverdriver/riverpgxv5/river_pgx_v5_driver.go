@@ -991,6 +991,23 @@ func (e *Executor) TableExists(ctx context.Context, params *riverdriver.TableExi
 	return exists, interpretError(err)
 }
 
+func (e *Executor) TableRepack(ctx context.Context, params *riverdriver.TableRepackParams) error {
+	var maybeSchema string
+	if params.Schema != "" {
+		maybeSchema = dbutil.SafeIdentifier(params.Schema) + "."
+	}
+
+	var sql string
+	if params.UseVacuumFull {
+		sql = "VACUUM FULL " + maybeSchema + dbutil.SafeIdentifier(params.Table)
+	} else {
+		sql = "REPACK (CONCURRENTLY) " + maybeSchema + dbutil.SafeIdentifier(params.Table)
+	}
+
+	_, err := e.dbtx.Exec(ctx, sql)
+	return interpretError(err)
+}
+
 func (e *Executor) TableTruncate(ctx context.Context, params *riverdriver.TableTruncateParams) error {
 	var maybeSchema string
 	if params.Schema != "" {
