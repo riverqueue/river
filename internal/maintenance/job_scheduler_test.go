@@ -330,7 +330,8 @@ func TestJobScheduler(t *testing.T) {
 		addJob := func(queue string, fromNow time.Duration, state rivertype.JobState) {
 			t.Helper()
 			var finalizedAt *time.Time
-			switch state { //nolint:exhaustive
+			switch state {
+			case rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRetryable, rivertype.JobStateRunning, rivertype.JobStateScheduled:
 			case rivertype.JobStateCompleted, rivertype.JobStateCancelled, rivertype.JobStateDiscarded:
 				finalizedAt = ptrutil.Ptr(now.Add(fromNow))
 			}
