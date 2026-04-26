@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix accidentally inverted conditional on notifier error log check. [PR #1231](https://github.com/riverqueue/river/pull/1231).
+
 ## [0.35.0] - 2026-04-18
 
 ### Changed

@@ -263,7 +263,7 @@ func (n *Notifier) listenerClose(ctx context.Context, skipLock bool) {
 
 	n.Logger.DebugContext(ctx, n.Name+": Listener closing")
 	if err := n.listener.Close(ctx); err != nil {
-		if shouldIgnoreListenerError(err) {
+		if !shouldIgnoreListenerError(err) {
 			n.Logger.ErrorContext(ctx, n.Name+": Error closing listener", "err", err)
 		}
 	}
