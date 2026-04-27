@@ -276,6 +276,15 @@ type Executor interface {
 	// TableExists checks whether a table exists for the schema in the current
 	// search schema.
 	TableExists(ctx context.Context, params *TableExistsParams) (bool, error)
+
+	// TableRepack repacks a table to reclaim space from dead tuples. On
+	// Postgres >= 19, this uses `REPACK (CONCURRENTLY)` which doesn't take an
+	// exclusive lock. On older versions, it falls back to `VACUUM FULL` which
+	// does take an exclusive lock and blocks all access to the table.
+	//
+	// API is not stable. DO NOT USE.
+	TableRepack(ctx context.Context, params *TableRepackParams) error
+
 	TableTruncate(ctx context.Context, params *TableTruncateParams) error
 }
 
@@ -863,6 +872,20 @@ type SchemaGetExpiredParams struct {
 type TableExistsParams struct {
 	Schema string
 	Table  string
+}
+
+type TableRepackParams struct {
+	// Schema where the table is located. Empty string omits schema, causing
+	// Postgres to default to `search_path`.
+	Schema string
+
+	// Table is the name of the table to repack.
+	Table string
+
+	// UseVacuumFull forces the use of VACUUM FULL instead of REPACK
+	// (CONCURRENTLY). VACUUM FULL takes an exclusive lock and should only be
+	// used when REPACK is unavailable (Postgres < 19).
+	UseVacuumFull bool
 }
 
 type TableTruncateParams struct {

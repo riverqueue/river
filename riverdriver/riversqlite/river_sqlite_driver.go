@@ -1453,6 +1453,10 @@ func (e *Executor) TableExists(ctx context.Context, params *riverdriver.TableExi
 	return exists, interpretError(err)
 }
 
+func (e *Executor) TableRepack(_ context.Context, _ *riverdriver.TableRepackParams) error {
+	return riverdriver.ErrNotImplemented
+}
+
 func (e *Executor) TableTruncate(ctx context.Context, params *riverdriver.TableTruncateParams) error {
 	var maybeSchema string
 	if params.Schema != "" {

@@ -5572,6 +5572,21 @@ func Test_Client_Maintenance(t *testing.T) {
 		svc := maintenance.GetService[*maintenance.Reindexer](client.queueMaintainer)
 		svc.TestSignals.Reindexed.WaitOrTimeout()
 	})
+
+	t.Run("TableRepacker", func(t *testing.T) {
+		t.Parallel()
+
+		config := newTestConfig(t, "")
+		config.RepackerEnabled = true
+		config.RepackerSchedule = &runOnceSchedule{}
+
+		client, _ := setup(t, config)
+
+		startAndWaitForQueueMaintainer(ctx, t, client)
+
+		svc := maintenance.GetService[*maintenance.TableRepacker](client.queueMaintainer)
+		svc.TestSignals.Repacked.WaitOrTimeout()
+	})
 }
 
 type runOnceSchedule struct {

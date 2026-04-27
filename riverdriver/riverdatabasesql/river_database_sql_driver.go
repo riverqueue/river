@@ -995,6 +995,25 @@ func (e *Executor) SchemaGetExpired(ctx context.Context, params *riverdriver.Sch
 	return schemas, nil
 }
 
+func (e *Executor) TableRepack(ctx context.Context, params *riverdriver.TableRepackParams) error {
+	var maybeSchema string
+	if params.Schema != "" {
+		maybeSchema = dbutil.SafeIdentifier(params.Schema) + "."
+	}
+
+	table := maybeSchema + dbutil.SafeIdentifier(params.Table)
+
+	var sql string
+	if params.UseVacuumFull {
+		sql = "VACUUM FULL " + table
+	} else {
+		sql = "REPACK (CONCURRENTLY) " + table
+	}
+
+	_, err := e.dbtx.ExecContext(ctx, sql)
+	return interpretError(err)
+}
+
 func (e *Executor) TableExists(ctx context.Context, params *riverdriver.TableExistsParams) (bool, error) {
 	// Different from other operations because the schemaAndTable name is a parameter.
 	schemaAndTable := params.Table
