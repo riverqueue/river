@@ -768,6 +768,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 
 	client.queues = &QueueBundle{
 		addProducer:             client.addProducer,
+		removeProducer:          client.removeProducer,
 		clientFetchCooldown:     config.FetchCooldown,
 		clientFetchPollInterval: config.FetchPollInterval,
 		clientWillExecuteJobs:   config.willExecuteJobs(),
@@ -2209,6 +2210,21 @@ func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) (*p
 	return producer, nil
 }
 
+func (c *Client[TTx]) removeProducer(queueName string) error {
+	c.producersMu.Lock()
+	defer c.producersMu.Unlock()
+
+	producer, ok := c.producersByQueueName[queueName]
+	if !ok {
+		return &QueueNotFoundError{Name: queueName}
+	}
+
+	producer.Stop()
+	delete(c.producersByQueueName, queueName)
+
+	return nil
+}
+
 var nameRegex = regexp.MustCompile(`^(?:[a-z0-9])+(?:[_|\-]?[a-z0-9]+)*$`)
 
 func validateQueueName(queueName string) error {
@@ -2799,6 +2815,8 @@ type QueueBundle struct {
 	// Function that adds a producer to the associated client.
 	addProducer func(queueName string, queueConfig QueueConfig) (*producer, error)
 
+	removeProducer func(queueName string) error
+
 	clientFetchCooldown     time.Duration
 	clientFetchPollInterval time.Duration
 
@@ -2842,6 +2860,24 @@ func (b *QueueBundle) Add(queueName string, queueConfig QueueConfig) error {
 	}
 
 	return nil
+}
+
+// Remove removes a queue from the client, stopping the producer if the client
+// is running. The function will block until all jobs currently being worked in
+// the queue have completed. This blocking behavior may affect other operations,
+// including shutdown timing.
+//
+// Returns an error if the client is not configured to execute jobs or if the
+// specified queue does not exist.
+func (b *QueueBundle) Remove(queueName string) error {
+	if !b.clientWillExecuteJobs {
+		return errors.New("client is not configured to execute jobs, cannot remove queue")
+	}
+
+	b.startStopMu.Lock()
+	defer b.startStopMu.Unlock()
+
+	return b.removeProducer(queueName)
 }
 
 // Generates a default client ID using the current hostname and time.

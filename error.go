@@ -59,6 +59,21 @@ func (e *QueueAlreadyAddedError) Is(target error) bool {
 	return ok
 }
 
+// QueueNotFoundError is returned when attempting to remove a queue that does
+// not exist on the Client.
+type QueueNotFoundError struct {
+	Name string
+}
+
+func (e *QueueNotFoundError) Error() string {
+	return fmt.Sprintf("queue %q not found", e.Name)
+}
+
+func (e *QueueNotFoundError) Is(target error) bool {
+	_, ok := target.(*QueueNotFoundError)
+	return ok
+}
+
 // UnknownJobKindError is returned when a Client fetches and attempts to
 // work a job that has not been registered on the Client's Workers bundle (using AddWorker).
 type UnknownJobKindError = rivertype.UnknownJobKindError
