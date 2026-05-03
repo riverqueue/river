@@ -2,7 +2,6 @@ package river_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -42,13 +41,10 @@ func (w *WaitsForCancelOnlyWorker) Work(ctx context.Context, job *river.Job[Wait
 	return ctx.Err()
 }
 
-// Example_gracefulShutdown demonstrates a realistic-looking stop loop for
-// River. It listens for SIGINT/SIGTERM (like might be received by a Ctrl+C
-// locally or on a platform like Heroku to stop a process) and when received,
-// tries a soft stop that waits for work to finish. If it doesn't finish in
-// time, a second SIGINT/SIGTERM will initiate a hard stop that cancels all jobs
-// using context cancellation. A third will give up on the stop procedure and
-// exit uncleanly.
+// Example_gracefulShutdown demonstrates graceful stop using SoftStopTimeout.
+// When a SIGINT/SIGTERM arrives, the start context is cancelled, which
+// initiates a soft stop. If running jobs don't finish within the configured
+// SoftStopTimeout, their contexts are automatically cancelled (hard stop).
 func Example_gracefulShutdown() {
 	ctx := context.Background()
 
@@ -64,11 +60,12 @@ func Example_gracefulShutdown() {
 	river.AddWorker(workers, &WaitsForCancelOnlyWorker{jobStarted: jobStarted})
 
 	riverClient, err := river.NewClient(riverpgxv5.New(dbPool), initTestConfig(ctx, dbPool, &river.Config{
-		Logger: slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn, ReplaceAttr: slogutil.NoLevelTimeJobID})),
+		Logger: slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError, ReplaceAttr: slogutil.NoLevelTimeJobID})),
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: 100},
 		},
-		Workers: workers,
+		SoftStopTimeout: 100 * time.Millisecond,
+		Workers:         workers,
 	}))
 	if err != nil {
 		panic(err)
@@ -79,89 +76,37 @@ func Example_gracefulShutdown() {
 		panic(err)
 	}
 
-	if err := riverClient.Start(ctx); err != nil {
+	// Use signal.NotifyContext to cancel the start context on SIGINT/SIGTERM.
+	// When the signal fires, the client initiates a soft stop. If running jobs
+	// don't finish within SoftStopTimeout, their contexts are cancelled.
+	signalCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := riverClient.Start(signalCtx); err != nil {
 		panic(err)
 	}
-
-	sigintOrTerm := make(chan os.Signal, 1)
-	signal.Notify(sigintOrTerm, syscall.SIGINT, syscall.SIGTERM)
-
-	// This is meant to be a realistic-looking stop goroutine that might go in a
-	// real program. It waits for SIGINT/SIGTERM and when received, tries to stop
-	// gracefully by allowing a chance for jobs to finish. But if that isn't
-	// working, a second SIGINT/SIGTERM will tell it to terminate with prejudice and
-	// it'll issue a hard stop that cancels the context of all active jobs. In
-	// case that doesn't work, a third SIGINT/SIGTERM ignores River's stop procedure
-	// completely and exits uncleanly.
-	go func() {
-		<-sigintOrTerm
-		fmt.Printf("Received SIGINT/SIGTERM; initiating soft stop (try to wait for jobs to finish)\n")
-
-		softStopCtx, softStopCtxCancel := context.WithTimeout(ctx, 10*time.Second)
-		defer softStopCtxCancel()
-
-		go func() {
-			select {
-			case <-sigintOrTerm:
-				fmt.Printf("Received SIGINT/SIGTERM again; initiating hard stop (cancel everything)\n")
-				softStopCtxCancel()
-			case <-softStopCtx.Done():
-				fmt.Printf("Soft stop timeout; initiating hard stop (cancel everything)\n")
-			}
-		}()
-
-		err := riverClient.Stop(softStopCtx)
-		if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
-			panic(err)
-		}
-		if err == nil {
-			fmt.Printf("Soft stop succeeded\n")
-			return
-		}
-
-		hardStopCtx, hardStopCtxCancel := context.WithTimeout(ctx, 10*time.Second)
-		defer hardStopCtxCancel()
-
-		// As long as all jobs respect context cancellation, StopAndCancel will
-		// always work. However, in the case of a bug where a job blocks despite
-		// being cancelled, it may be necessary to either ignore River's stop
-		// result (what's shown here) or have a supervisor kill the process.
-		err = riverClient.StopAndCancel(hardStopCtx)
-		if err != nil && errors.Is(err, context.DeadlineExceeded) {
-			fmt.Printf("Hard stop timeout; ignoring stop procedure and exiting unsafely\n")
-		} else if err != nil {
-			panic(err)
-		}
-
-		// hard stop succeeded
-	}()
 
 	// Make sure our job starts being worked before doing anything else.
 	<-jobStarted
 
-	// Cheat a little by sending a SIGTERM manually for the purpose of this
-	// example (normally this will be sent by user or supervisory process). The
-	// first SIGTERM tries a soft stop in which jobs are given a chance to
-	// finish up.
-	sigintOrTerm <- syscall.SIGTERM
+	// Cheat by sending ourselves a SIGTERM for the purpose of this example
+	// (normally this is sent by user or supervisory process). The signal
+	// cancels the start context, initiating a soft stop.
+	selfProcess, _ := os.FindProcess(os.Getpid())
+	_ = selfProcess.Signal(syscall.SIGTERM)
 
-	// The soft stop will never work in this example because our job only
-	// respects context cancellation, but wait a short amount of time to give it
-	// a chance. After it elapses, send another SIGTERM to initiate a hard stop.
-	select {
-	case <-riverClient.Stopped():
-		// Will never be reached in this example because our job will only ever
-		// finish on context cancellation.
-		fmt.Printf("Soft stop succeeded\n")
+	// Wait for the first signal handler to consume the SIGTERM and cancel the
+	// start context before tearing it down.
+	<-signalCtx.Done()
+	stop()
 
-	case <-time.After(100 * time.Millisecond):
-		sigintOrTerm <- syscall.SIGTERM
-		<-riverClient.Stopped()
-	}
+	// Initiated inside river.Client when signalCtx is cancelled.
+	fmt.Printf("Received SIGINT/SIGTERM; initiating soft stop (waiting for cancelled jobs to finish)\n")
+
+	<-riverClient.Stopped()
 
 	// Output:
 	// Working job that doesn't finish until cancelled
-	// Received SIGINT/SIGTERM; initiating soft stop (try to wait for jobs to finish)
-	// Received SIGINT/SIGTERM again; initiating hard stop (cancel everything)
+	// Received SIGINT/SIGTERM; initiating soft stop (waiting for cancelled jobs to finish)
 	// Job cancelled
 }

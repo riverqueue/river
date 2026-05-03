@@ -87,17 +87,39 @@ that inserted job kinds have a worker that can run them.
 
 ### Stopping
 
-The client should also be stopped on program shutdown:
+The client should also be stopped on program shutdown. There's a number of ways
+to go about this (see [graceful shutdown]), but the shortest is to cancel the
+context send to `Start` when the program's ready to stop. For example, to stop
+on `SIGINT`/`SIGTERM`:
 
 ```go
-// Stop fetching new work and wait for active jobs to finish.
+riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
+    SoftStopTimeout: 10 * time.Second,
+    ...
+})
+if err != nil {
+    panic(err)
+}
+
+signalCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+defer stop()
+
+// Stop fetching new work and wait for active jobs to finish. Cancel jobs after
+// SoftStopTimeout elapses.
+if err := riverClient.Start(signalCtx); err != nil {
+    panic(err)
+}
+
+<-riverClient.Stopped()
+```
+
+Alternatively, use an explicit call to `Stop`:
+
+```go
 if err := riverClient.Stop(ctx); err != nil {
     panic(err)
 }
 ```
-
-There are some complexities around ensuring clients stop cleanly, but also in a
-timely manner. See [graceful shutdown] for more details on River's stop modes.
 
 [Insert-only clients](/docs/insert-only-clients) will insert jobs, but not work
 them, and don't need to be started or stopped.
