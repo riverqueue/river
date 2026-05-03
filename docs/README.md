@@ -82,21 +82,6 @@ if err := riverClient.Start(ctx); err != nil {
 }
 ```
 
-## Insert-only clients
-
-It's often desirable to have a client that'll be used for inserting jobs, but
-not working them. This is possible by omitting the `Queues` configuration, and
-skipping the call to `Start`:
-
-```go
-riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
-    Workers: workers,
-})
-if err != nil {
-    panic(err)
-}
-```
-
 `Workers` can also be omitted, but it's better to include it so River can check
 that inserted job kinds have a worker that can run them.
 
@@ -113,6 +98,9 @@ if err := riverClient.Stop(ctx); err != nil {
 
 There are some complexities around ensuring clients stop cleanly, but also in a
 timely manner. See [graceful shutdown] for more details on River's stop modes.
+
+[Insert-only clients](/docs/insert-only-clients) will insert jobs, but not work
+them, and don't need to be started or stopped.
 
 ## Inserting jobs
 
