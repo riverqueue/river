@@ -28,9 +28,9 @@ func JobCancel(err error) error {
 type JobSnoozeError = rivertype.JobSnoozeError
 
 // JobSnooze can be returned from a Worker's Work method to cause the job to be
-// tried again after the specified duration. This also has the effect of
-// incrementing the job's MaxAttempts by 1, meaning that jobs can be repeatedly
-// snoozed without ever being discarded.
+// tried again after the specified duration. This will not increment the job's
+// Attempt count, meaning that jobs can be repeatedly snoozed without ever being
+// discarded.
 //
 // A special duration of zero can be used to make the job immediately available
 // to be reworked. This may be useful in cases like where a long-running job is
