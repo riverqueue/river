@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `QeueueBundle.Remove` to remove an already added queue/producer. [PR #1235](https://github.com/riverqueue/river/pull/1235) and [PR #1240](https://github.com/riverqueue/river/pull/1240).
+
 ### Fixed
 
 - Fix unsafe concurrent producer map access in client. [PR #1236](https://github.com/riverqueue/river/pull/1236).

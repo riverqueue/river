@@ -406,6 +406,34 @@ func Test_Client_Common(t *testing.T) {
 		wg.Wait()
 	})
 
+	t.Run("Queues_Remove_Stress", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		startClient(ctx, t, client)
+		riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
+
+		var wg sync.WaitGroup
+
+		for i := range 5 {
+			wg.Add(1)
+			workerNum := i
+			go func() {
+				defer wg.Done()
+
+				for j := range 5 {
+					queueName := fmt.Sprintf("stress_queue_%d_%d", workerNum, j)
+
+					require.NoError(t, client.Queues().Add(queueName, QueueConfig{MaxWorkers: 1}))
+					require.NoError(t, client.Queues().Remove(ctx, queueName))
+				}
+			}()
+		}
+
+		wg.Wait()
+	})
+
 	t.Run("Queues_Remove_BeforeStart", func(t *testing.T) {
 		t.Parallel()
 
@@ -427,7 +455,7 @@ func Test_Client_Common(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		err = client.Queues().Remove(queueName)
+		err = client.Queues().Remove(ctx, queueName)
 		require.NoError(t, err)
 
 		startClient(ctx, t, client)
@@ -481,7 +509,7 @@ func Test_Client_Common(t *testing.T) {
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCompleted, event.Kind)
 
-		err = client.Queues().Remove(queueName)
+		err = client.Queues().Remove(ctx, queueName)
 		require.NoError(t, err)
 
 		insertRes, err := client.Insert(ctx, &JobArgs{}, &InsertOpts{
@@ -502,12 +530,110 @@ func Test_Client_Common(t *testing.T) {
 		require.Equal(t, rivertype.JobStateAvailable, job.State)
 	})
 
+	t.Run("Queues_Remove_ContextDone", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		jobStartedChan := make(chan struct{})
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			close(jobStartedChan)
+			<-ctx.Done()
+			return nil
+		}))
+
+		queueName := "remove_context_done_queue"
+		require.NoError(t, client.Queues().Add(queueName, QueueConfig{MaxWorkers: 2}))
+
+		startClient(ctx, t, client)
+		riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
+
+		_, err := client.Insert(ctx, &JobArgs{}, &InsertOpts{Queue: queueName})
+		require.NoError(t, err)
+
+		riversharedtest.WaitOrTimeout(t, jobStartedChan)
+
+		// Remove with an already-cancelled context should return immediately
+		// without removing the queue.
+		cancelledCtx, cancel := context.WithCancel(ctx)
+		cancel()
+
+		err = client.Queues().Remove(cancelledCtx, queueName)
+		require.ErrorIs(t, err, context.Canceled)
+
+		// Queue should still exist and be functional since Remove bailed out.
+		// Verify by successfully removing it with a valid context after
+		// cancelling the job via StopAndCancel.
+		require.NoError(t, client.StopAndCancel(ctx))
+
+		// Re-start so startClient's cleanup Stop doesn't fail.
+		require.NoError(t, client.Start(ctx))
+	})
+
+	t.Run("Queues_Remove_ContextCancelledThenRetry", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		jobStartedChan := make(chan struct{})
+		jobFinishChan := make(chan struct{})
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			close(jobStartedChan)
+			<-jobFinishChan // blocks until test releases it
+			return nil
+		}))
+
+		queueName := "remove_retry_queue"
+		require.NoError(t, client.Queues().Add(queueName, QueueConfig{MaxWorkers: 2}))
+
+		startClient(ctx, t, client)
+		riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
+
+		_, err := client.Insert(ctx, &JobArgs{}, &InsertOpts{Queue: queueName})
+		require.NoError(t, err)
+
+		riversharedtest.WaitOrTimeout(t, jobStartedChan)
+
+		// First Remove: use a very short timeout so that StopInit is called
+		// (which cancels the producer's fetch context) but the producer
+		// can't fully stop because the job is still running. Remove returns
+		// context.DeadlineExceeded and the queue stays in the map.
+		shortCtx, cancel := context.WithTimeout(ctx, time.Millisecond)
+		defer cancel()
+
+		err = client.Queues().Remove(shortCtx, queueName)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+
+		// Let the job finish so the producer can fully stop.
+		close(jobFinishChan)
+
+		// Second Remove: the producer's fetch context was already cancelled
+		// by the first attempt and the job has now finished, so the
+		// producer should stop promptly. Remove succeeds and deletes the
+		// queue from the map.
+		err = client.Queues().Remove(ctx, queueName)
+		require.NoError(t, err)
+
+		// A third remove should return QueueNotFoundError since it's gone.
+		err = client.Queues().Remove(ctx, queueName)
+		var queueNotFoundErr *QueueNotFoundError
+		require.ErrorAs(t, err, &queueNotFoundErr)
+	})
+
 	t.Run("Queues_Remove_NonExistentQueue", func(t *testing.T) {
 		t.Parallel()
 
 		client, _ := setup(t)
 
-		err := client.Queues().Remove("non_existent_queue")
+		err := client.Queues().Remove(ctx, "non_existent_queue")
 		require.Error(t, err)
 		var queueNotFoundErr *QueueNotFoundError
 		require.ErrorAs(t, err, &queueNotFoundErr)
@@ -522,7 +648,7 @@ func Test_Client_Common(t *testing.T) {
 		config.Workers = nil
 		client := newTestClient(t, bundle.dbPool, config)
 
-		err := client.Queues().Remove("any_queue")
+		err := client.Queues().Remove(ctx, "any_queue")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "client is not configured to execute jobs, cannot remove queue")
 	})
@@ -551,7 +677,7 @@ func Test_Client_Common(t *testing.T) {
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCompleted, event.Kind)
 
-		err = client.Queues().Remove(QueueDefault)
+		err = client.Queues().Remove(ctx, QueueDefault)
 		require.NoError(t, err)
 
 		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
@@ -601,7 +727,7 @@ func Test_Client_Common(t *testing.T) {
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCompleted, event.Kind)
 
-		err = client.Queues().Remove(queueName)
+		err = client.Queues().Remove(ctx, queueName)
 		require.NoError(t, err)
 
 		err = client.Queues().Add(queueName, QueueConfig{
@@ -634,7 +760,7 @@ func Test_Client_Common(t *testing.T) {
 		require.Equal(t, EventKindJobCompleted, event.Kind)
 		require.Equal(t, insertRes1.Job.ID, event.Job.ID)
 
-		require.NoError(t, client.Queues().Remove("test_queue"))
+		require.NoError(t, client.Queues().Remove(ctx, "test_queue"))
 
 		insertRes2, err := client.Insert(ctx, &noOpArgs{}, &InsertOpts{Queue: "test_queue"})
 		require.NoError(t, err)
