@@ -238,6 +238,63 @@ func TestSchemaTemplateParam(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, `SELECT 1 FROM "custom_schema".river_job`, updatedSQL)
 	})
+
+	t.Run("SchemaReplacementIsStable", func(t *testing.T) {
+		t.Parallel()
+
+		replacer, bundle := setup(t)
+
+		const sql = "SELECT 1 FROM /* TEMPLATE: schema */river_job"
+
+		// First call
+		updatedSQL1, _, err := replacer.RunSafely(
+			schemaTemplateParam(ctx, "my_schema"),
+			bundle.driver.ArgPlaceholder(),
+			sql,
+			nil,
+		)
+		require.NoError(t, err)
+		require.Equal(t, `SELECT 1 FROM "my_schema".river_job`, updatedSQL1)
+
+		// Second call with same SQL + same schema produces identical result.
+		// Because schema is marked Stable, the Replacer caches the output
+		// after the first call and short-circuits regex on subsequent calls.
+		updatedSQL2, _, err := replacer.RunSafely(
+			schemaTemplateParam(ctx, "my_schema"),
+			bundle.driver.ArgPlaceholder(),
+			sql,
+			nil,
+		)
+		require.NoError(t, err)
+		require.Equal(t, updatedSQL1, updatedSQL2)
+	})
+
+	t.Run("EmptySchemaReplacementIsStable", func(t *testing.T) {
+		t.Parallel()
+
+		replacer, bundle := setup(t)
+
+		const sql = "SELECT 1 FROM /* TEMPLATE: schema */river_job"
+
+		updatedSQL1, _, err := replacer.RunSafely(
+			schemaTemplateParam(ctx, ""),
+			bundle.driver.ArgPlaceholder(),
+			sql,
+			nil,
+		)
+		require.NoError(t, err)
+		require.Equal(t, "SELECT 1 FROM river_job", updatedSQL1)
+
+		// Repeat — same result from cache
+		updatedSQL2, _, err := replacer.RunSafely(
+			schemaTemplateParam(ctx, ""),
+			bundle.driver.ArgPlaceholder(),
+			sql,
+			nil,
+		)
+		require.NoError(t, err)
+		require.Equal(t, updatedSQL1, updatedSQL2)
+	})
 }
 
 type nilConnDBTX struct{}
