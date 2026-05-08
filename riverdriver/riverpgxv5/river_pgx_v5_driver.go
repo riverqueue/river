@@ -1310,6 +1310,6 @@ func schemaTemplateParam(ctx context.Context, schema string) context.Context {
 	}
 
 	return sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
-		"schema": {Value: schema},
+		"schema": {Value: schema, Stable: true},
 	}, nil)
 }
