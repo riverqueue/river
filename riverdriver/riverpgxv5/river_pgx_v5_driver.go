@@ -134,7 +134,7 @@ func (e *Executor) ColumnExists(ctx context.Context, params *riverdriver.ColumnE
 		schema = "'" + params.Schema + "'"
 	}
 	ctx = sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
-		"schema": {Value: schema, Stable: true},
+		"schema": {Value: schema},
 	}, nil)
 
 	exists, err := dbsqlc.New().ColumnExists(ctx, e.dbtx, &dbsqlc.ColumnExistsParams{
