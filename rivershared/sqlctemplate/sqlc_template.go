@@ -156,7 +156,14 @@ func (r *Replacer) RunSafely(ctx context.Context, argPlaceholder, sql string, ar
 		// If all input templates were stable, the finished SQL will have been cached.
 		if cachedSQLOK {
 			if len(container.NamedArgs) > 0 {
-				args = append(args, maputil.Values(container.NamedArgs)...)
+				// Named args must be appended in sorted order to match the
+				// placeholder positions baked into the cached SQL during
+				// RunSafely's cache miss path.
+				sortedNamedArgs := maputil.Keys(container.NamedArgs)
+				slices.Sort(sortedNamedArgs)
+				for _, name := range sortedNamedArgs {
+					args = append(args, container.NamedArgs[name])
+				}
 			}
 			return cachedSQL, args, nil
 		}
