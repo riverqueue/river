@@ -767,11 +767,11 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	}
 
 	client.queues = &QueueBundle{
-		addProducer:             client.addProducer,
-		removeProducer:          client.removeProducer,
 		clientFetchCooldown:     config.FetchCooldown,
 		clientFetchPollInterval: config.FetchPollInterval,
 		clientWillExecuteJobs:   config.willExecuteJobs(),
+		producerAdd:             client.producerAdd,
+		producerRemove:          client.producerRemove,
 	}
 
 	baseservice.Init(archetype, &client.baseService)
@@ -879,7 +879,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		client.services = append(client.services, client.elector)
 
 		for queue, queueConfig := range config.Queues {
-			if _, err := client.addProducer(queue, queueConfig); err != nil {
+			if _, err := client.producerAdd(queue, queueConfig); err != nil {
 				return nil, err
 			}
 		}
@@ -2177,7 +2177,7 @@ func (c *Client[TTx]) validateJobArgs(args JobArgs) error {
 	return nil
 }
 
-func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) (*producer, error) {
+func (c *Client[TTx]) producerAdd(queueName string, queueConfig QueueConfig) (*producer, error) {
 	c.producersMu.Lock()
 	defer c.producersMu.Unlock()
 
@@ -2210,7 +2210,7 @@ func (c *Client[TTx]) addProducer(queueName string, queueConfig QueueConfig) (*p
 	return producer, nil
 }
 
-func (c *Client[TTx]) removeProducer(queueName string) error {
+func (c *Client[TTx]) producerRemove(ctx context.Context, queueName string) error {
 	c.producersMu.Lock()
 	defer c.producersMu.Unlock()
 
@@ -2219,7 +2219,17 @@ func (c *Client[TTx]) removeProducer(queueName string) error {
 		return &QueueNotFoundError{Name: queueName}
 	}
 
-	producer.Stop()
+	shouldStop, stopped, finalizeStop := producer.StopInit()
+	if shouldStop {
+		select {
+		case <-ctx.Done():
+			finalizeStop(false)
+			return ctx.Err()
+		case <-stopped:
+			finalizeStop(true)
+		}
+	}
+
 	delete(c.producersByQueueName, queueName)
 
 	return nil
@@ -2812,17 +2822,14 @@ func (c *Client[TTx]) Schema() string { return c.config.Schema }
 // QueueBundle is a bundle for adding additional queues. It's made accessible
 // through Client.Queues.
 type QueueBundle struct {
-	// Function that adds a producer to the associated client.
-	addProducer func(queueName string, queueConfig QueueConfig) (*producer, error)
-
-	removeProducer func(queueName string) error
-
 	clientFetchCooldown     time.Duration
 	clientFetchPollInterval time.Duration
 
 	clientWillExecuteJobs bool
 
-	fetchCtx context.Context //nolint:containedctx
+	fetchCtx       context.Context                                                    //nolint:containedctx
+	producerAdd    func(queueName string, queueConfig QueueConfig) (*producer, error) // add producer to associated client
+	producerRemove func(ctx context.Context, queueName string) error                  // remove producer from associated client
 
 	// Mutex that's acquired when client is starting and stopping and when a
 	// queue is being added so that we can be sure that a client is fully
@@ -2847,7 +2854,7 @@ func (b *QueueBundle) Add(queueName string, queueConfig QueueConfig) error {
 	b.startStopMu.Lock()
 	defer b.startStopMu.Unlock()
 
-	producer, err := b.addProducer(queueName, queueConfig)
+	producer, err := b.producerAdd(queueName, queueConfig)
 	if err != nil {
 		return err
 	}
@@ -2863,13 +2870,18 @@ func (b *QueueBundle) Add(queueName string, queueConfig QueueConfig) error {
 }
 
 // Remove removes a queue from the client, stopping the producer if the client
-// is running. The function will block until all jobs currently being worked in
-// the queue have completed. This blocking behavior may affect other operations,
-// including shutdown timing.
+// is running. It waits for any jobs currently being worked in the queue to
+// complete before returning.
+//
+// If the provided context is done before the producer has fully stopped, Remove
+// returns the context's error and does not fully remove the queue, though the
+// queue's producer may have started stopping, leaving it in a stopped state
+// where it doesn't work new jobs. Call Remove again with a new context to
+// remove it completely.
 //
 // Returns an error if the client is not configured to execute jobs or if the
 // specified queue does not exist.
-func (b *QueueBundle) Remove(queueName string) error {
+func (b *QueueBundle) Remove(ctx context.Context, queueName string) error {
 	if !b.clientWillExecuteJobs {
 		return errors.New("client is not configured to execute jobs, cannot remove queue")
 	}
@@ -2877,7 +2889,7 @@ func (b *QueueBundle) Remove(queueName string) error {
 	b.startStopMu.Lock()
 	defer b.startStopMu.Unlock()
 
-	return b.removeProducer(queueName)
+	return b.producerRemove(ctx, queueName)
 }
 
 // Generates a default client ID using the current hostname and time.
