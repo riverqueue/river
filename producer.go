@@ -528,8 +528,10 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context) {
 		case msg := <-p.queueControlCh:
 			switch msg.Action {
 			case controlActionCancel:
-				// Separate this case to make linter happy:
-				p.Logger.DebugContext(workCtx, p.Name+": Unhandled queue control action", "action", msg.Action)
+				// This path is only expected to take effect in poll-only mode, and
+				// only works for the case of a single process. Multi-process setups
+				// will have to wait for the next poll event for a cancel to take effect.
+				p.maybeCancelJob(workCtx, msg.JobID)
 			case controlActionMetadataChanged:
 				p.Logger.DebugContext(workCtx, p.Name+": Queue metadata changed", slog.String("queue", p.config.Queue), slog.String("queue_in_message", msg.Queue))
 				p.testSignals.MetadataChanged.Signal(struct{}{})

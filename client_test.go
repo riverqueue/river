@@ -1043,6 +1043,46 @@ func Test_Client_Common(t *testing.T) {
 		})
 	})
 
+	t.Run("CancelRunningJobPollOnly", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+
+		client, err := NewClient(NewDriverPollOnly(bundle.dbPool), config)
+		require.NoError(t, err)
+
+		jobStartedChan := make(chan int64)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			jobStartedChan <- job.ID
+			<-ctx.Done()
+			return ctx.Err()
+		}))
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+		riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
+
+		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		startedJobID := riversharedtest.WaitOrTimeout(t, jobStartedChan)
+		require.Equal(t, insertRes.Job.ID, startedJobID)
+
+		updatedJob, err := client.JobCancel(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, updatedJob.State)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCancelled, event.Kind)
+		require.Equal(t, rivertype.JobStateCancelled, event.Job.State)
+		require.WithinDuration(t, time.Now(), *event.Job.FinalizedAt, 2*time.Second)
+	})
+
 	t.Run("CancelScheduledJob", func(t *testing.T) {
 		t.Parallel()
 
