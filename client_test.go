@@ -82,6 +82,62 @@ func (w *periodicJobWorker) Work(ctx context.Context, job *Job[periodicJobArgs])
 	return nil
 }
 
+type resumableClientTestArgs struct{}
+
+func (resumableClientTestArgs) Kind() string { return "resumable_client_test" }
+
+type resumableClientTestWorker struct {
+	WorkerDefaults[resumableClientTestArgs]
+
+	calls      []string
+	callsMu    sync.Mutex
+	failedOnce atomic.Bool
+}
+
+func (w *resumableClientTestWorker) Calls() []string {
+	w.callsMu.Lock()
+	defer w.callsMu.Unlock()
+
+	return append([]string(nil), w.calls...)
+}
+
+func (w *resumableClientTestWorker) Work(ctx context.Context, job *Job[resumableClientTestArgs]) error {
+	appendCall := func(call string) {
+		w.callsMu.Lock()
+		defer w.callsMu.Unlock()
+
+		w.calls = append(w.calls, call)
+	}
+
+	ResumableStep(ctx, "step1", nil, func(ctx context.Context) error {
+		appendCall("step1")
+		return nil
+	})
+
+	ResumableStepCursor(ctx, "step2", nil, func(ctx context.Context, cursor int) error {
+		appendCall("step2:" + strconv.Itoa(cursor))
+
+		for itemID := cursor + 1; itemID <= 2; itemID++ {
+			appendCall("item:" + strconv.Itoa(itemID))
+			if err := ResumableSetCursor(ctx, itemID); err != nil {
+				return err
+			}
+			if !w.failedOnce.Swap(true) {
+				return errors.New("retry me")
+			}
+		}
+
+		return nil
+	})
+
+	ResumableStep(ctx, "step3", nil, func(ctx context.Context) error {
+		appendCall("step3")
+		return nil
+	})
+
+	return nil
+}
+
 func makeAwaitWorker[T JobArgs](startedCh chan<- int64, doneCh chan struct{}) Worker[T] {
 	return WorkFunc(func(ctx context.Context, job *Job[T]) error {
 		client := ClientFromContext[pgx.Tx](ctx)
@@ -7306,6 +7362,58 @@ func Test_Client_JobCompletion(t *testing.T) {
 		require.Nil(t, reloadedJob.FinalizedAt)
 	})
 
+	t.Run("ResumableJobRetriesAndResumes", func(t *testing.T) {
+		t.Parallel()
+
+		config := newTestConfig(t, "")
+		config.RetryPolicy = &retrypolicytest.RetryPolicyNoJitter{}
+
+		worker := &resumableClientTestWorker{}
+		AddWorker(config.Workers, worker)
+
+		client, bundle := setup(t, config)
+
+		insertRes, err := client.Insert(ctx, resumableClientTestArgs{}, nil)
+		require.NoError(t, err)
+
+		// Wait for the first attempt to fail after step2 checkpoints cursor
+		// progress and intentionally returns "retry me", leaving the job queued
+		// for retry.
+		eventFailed := riversharedtest.WaitOrTimeout(t, bundle.subscribeChan)
+		require.Equal(t, EventKindJobFailed, eventFailed.Kind)
+		require.Equal(t, insertRes.Job.ID, eventFailed.Job.ID)
+
+		var retryableMetadata map[string]any
+		require.Contains(t, []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateRetryable}, eventFailed.Job.State)
+		require.NoError(t, json.Unmarshal(eventFailed.Job.Metadata, &retryableMetadata))
+		require.Equal(t, "step1", retryableMetadata["river:resumable_step"])
+		require.Equal(t, map[string]any{"step2": float64(1)}, retryableMetadata["river:resumable_cursor"])
+
+		// Wait for the retried attempt to resume and then complete successfully.
+		eventCompleted := riversharedtest.WaitOrTimeout(t, bundle.subscribeChan)
+		require.Equal(t, EventKindJobCompleted, eventCompleted.Kind)
+		require.Equal(t, insertRes.Job.ID, eventCompleted.Job.ID)
+
+		reloadedJob, err := client.JobGet(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateCompleted, reloadedJob.State)
+		require.Len(t, reloadedJob.Errors, 1)
+
+		var metadata map[string]any
+		require.NoError(t, json.Unmarshal(reloadedJob.Metadata, &metadata))
+		require.Equal(t, "step1", metadata["river:resumable_step"])
+		require.Equal(t, map[string]any{"step2": float64(1)}, metadata["river:resumable_cursor"])
+
+		require.Equal(t, []string{
+			"step1",
+			"step2:0",
+			"item:1",
+			"step2:1",
+			"item:2",
+			"step3",
+		}, worker.Calls())
+	})
+
 	t.Run("JobThatReturnsJobCancelErrorIsImmediatelyCancelled", func(t *testing.T) {
 		t.Parallel()
 
@@ -7972,7 +8080,7 @@ func Test_NewClient_Validations(t *testing.T) {
 			},
 			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
 				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindJobInsert), 1)
-				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindWorker), 1)
+				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindWorker), 2)
 			},
 		},
 		{
@@ -7983,7 +8091,7 @@ func Test_NewClient_Validations(t *testing.T) {
 			},
 			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
 				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindJobInsert), 2)
-				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindWorker), 2)
+				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindWorker), 3)
 			},
 		},
 		{
@@ -7995,7 +8103,7 @@ func Test_NewClient_Validations(t *testing.T) {
 			},
 			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
 				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindJobInsert), 1)
-				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindWorker), 1)
+				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindWorker), 2)
 			},
 		},
 		{

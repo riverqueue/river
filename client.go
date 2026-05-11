@@ -24,6 +24,7 @@ import (
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/notifylimiter"
 	"github.com/riverqueue/river/internal/rivercommon"
+	"github.com/riverqueue/river/internal/rivermiddleware"
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -782,7 +783,8 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	// the more abstract config.Middleware for middleware are set, but not both,
 	// so in practice we never append all three of these to each other.
 	{
-		middleware := config.Middleware
+		middleware := rivermiddleware.DefaultMiddleware()
+		middleware = append(middleware, config.Middleware...)
 		for _, jobInsertMiddleware := range config.JobInsertMiddleware {
 			middleware = append(middleware, jobInsertMiddleware)
 		}
