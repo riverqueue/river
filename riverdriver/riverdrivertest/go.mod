@@ -17,10 +17,10 @@ require (
 	github.com/riverqueue/river/rivershared v0.36.0
 	github.com/riverqueue/river/rivertype v0.36.0
 	github.com/stretchr/testify v1.11.1
-	github.com/tidwall/gjson v1.18.0
+	github.com/tidwall/gjson v1.19.0
 	github.com/tidwall/sjson v1.2.5
 	github.com/tursodatabase/libsql-client-go v0.0.0-20240902231107-85af5b9d094d
-	golang.org/x/text v0.36.0
+	golang.org/x/text v0.37.0
 	modernc.org/sqlite v1.50.0
 )
 
