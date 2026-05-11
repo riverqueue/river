@@ -3,18 +3,13 @@ package rivertest_test
 import (
 	"context"
 	"fmt"
-	"log/slog"
-	"os"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
-	"github.com/riverqueue/river/rivershared/util/slogutil"
-	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivertest"
 )
 
@@ -44,17 +39,12 @@ func Example_requireInserted() {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &RequiredWorker{})
 
-	var (
-		schema     = riverdbtest.TestSchema(ctx, testutil.PanicTB(), riverpgxv5.New(dbPool), nil)
-		schemaOpts = &rivertest.RequireInsertedOpts{Schema: schema}
-	)
-
-	riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
-		Logger:   slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn, ReplaceAttr: slogutil.NoLevelTime})),
-		Schema:   schema, // only necessary for the example test
-		TestOnly: true,   // suitable only for use in tests; remove for live environments
-		Workers:  workers,
+	config := initTestConfig(ctx, dbPool, &river.Config{
+		Workers: workers,
 	})
+	schemaOpts := &rivertest.RequireInsertedOpts{Schema: config.Schema}
+
+	riverClient, err := river.NewClient(riverpgxv5.New(dbPool), config)
 	if err != nil {
 		panic(err)
 	}
@@ -84,7 +74,7 @@ func Example_requireInserted() {
 	_ = rivertest.RequireInsertedTx[*riverpgxv5.Driver](ctx, t, tx, &RequiredArgs{}, &rivertest.RequireInsertedOpts{
 		Priority: 1,
 		Queue:    river.QueueDefault,
-		Schema:   schema,
+		Schema:   config.Schema,
 	})
 
 	// Insert and verify one on a pool instead of transaction.

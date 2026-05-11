@@ -1,8 +1,7 @@
-package river_test
+package riverdrivertest_test
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 
@@ -14,24 +13,6 @@ import (
 	"github.com/riverqueue/river/rivershared/util/slogutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 )
-
-//
-// This file used as a holding place for test helpers for examples so that the
-// helpers aren't included in Godoc and keep each example more succinct.
-//
-
-type NoOpArgs struct{}
-
-func (NoOpArgs) Kind() string { return "no_op" }
-
-type NoOpWorker struct {
-	river.WorkerDefaults[NoOpArgs]
-}
-
-func (w *NoOpWorker) Work(ctx context.Context, job *river.Job[NoOpArgs]) error {
-	fmt.Printf("NoOpWorker.Work ran\n")
-	return nil
-}
 
 // initTestConfig initializes properties on a given River config with defaults
 // suitable for example tests, including an isolated test schema and

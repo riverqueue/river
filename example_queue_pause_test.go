@@ -3,18 +3,13 @@ package river_test
 import (
 	"context"
 	"fmt"
-	"log/slog"
-	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
-	"github.com/riverqueue/river/rivershared/util/slogutil"
-	"github.com/riverqueue/river/rivershared/util/testutil"
 )
 
 type ReportingArgs struct{}
@@ -56,16 +51,13 @@ func Example_queuePause() {
 	jobWorkedCh := make(chan string)
 	river.AddWorker(workers, &ReportingWorker{jobWorkedCh: jobWorkedCh})
 
-	riverClient, err := river.NewClient(riverpgxv5.New(dbPool), &river.Config{
-		Logger: slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn, ReplaceAttr: slogutil.NoLevelTime})),
+	riverClient, err := river.NewClient(riverpgxv5.New(dbPool), initTestConfig(ctx, dbPool, &river.Config{
 		Queues: map[string]river.QueueConfig{
 			unreliableQueue: {MaxWorkers: 10},
 			reliableQueue:   {MaxWorkers: 10},
 		},
-		Schema:   riverdbtest.TestSchema(ctx, testutil.PanicTB(), riverpgxv5.New(dbPool), nil), // only necessary for the example test
-		TestOnly: true,                                                                         // suitable only for use in tests; remove for live environments
-		Workers:  workers,
-	})
+		Workers: workers,
+	}))
 	if err != nil {
 		panic(err)
 	}
