@@ -7291,8 +7291,6 @@ func Test_Client_JobCompletion(t *testing.T) {
 
 		client, bundle := setup(t, config)
 
-		now := client.baseService.Time.StubNow(time.Now().UTC())
-
 		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
 		require.NoError(t, err)
 
@@ -7304,7 +7302,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, rivertype.JobStateRetryable, reloadedJob.State)
-		require.WithinDuration(t, now.Add(retryPolicy.Interval()), reloadedJob.ScheduledAt, time.Microsecond)
+		require.WithinDuration(t, reloadedJob.AttemptedAt.Add(retryPolicy.Interval()), reloadedJob.ScheduledAt, time.Microsecond)
 		require.Nil(t, reloadedJob.FinalizedAt)
 	})
 
