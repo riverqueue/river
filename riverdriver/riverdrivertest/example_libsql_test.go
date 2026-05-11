@@ -3,15 +3,12 @@ package riverdrivertest_test
 import (
 	"context"
 	"database/sql"
-	"log/slog"
-	"os"
 
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
-	"github.com/riverqueue/river/rivershared/util/slogutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 )
 
@@ -36,14 +33,12 @@ func Example_libSQL() { //nolint:dupl
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &SortWorker{})
 
-	riverClient, err := river.NewClient(driver, &river.Config{
-		Logger: slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn, ReplaceAttr: slogutil.NoLevelTime})),
+	riverClient, err := river.NewClient(driver, initTestConfig(ctx, nil, &river.Config{
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: 100},
 		},
-		TestOnly: true, // suitable only for use in tests; remove for live environments
-		Workers:  workers,
-	})
+		Workers: workers,
+	}))
 	if err != nil {
 		panic(err)
 	}
