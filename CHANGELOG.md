@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Wrap `PeriodicJobEnqueuer.insertBatch` database calls in a 30-second timeout. Previously, a stalled pgx `Begin`/`Insert`/`Commit` could hang the periodic enqueuer indefinitely, halting all periodic job insertion until the process was restarted or leader re-elected.
+
 ## [0.37.0] - 2026-05-11
 
 ### Added

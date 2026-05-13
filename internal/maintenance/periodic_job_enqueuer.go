@@ -523,6 +523,9 @@ func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany 
 		return
 	}
 
+	ctx, cancel := context.WithTimeout(ctx, riversharedmaintenance.TimeoutDefault)
+	defer cancel()
+
 	tx, err := s.exec.Begin(ctx)
 	if err != nil {
 		s.Logger.ErrorContext(ctx, s.Name+": Error starting transaction", "error", err.Error())
