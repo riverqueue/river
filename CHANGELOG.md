@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-05-22
+
+### Added
+
+- Added new configuration `Config.SoftStopTimeout` to provide a cleaner way to gracefully stop a client. [PR #1239](https://github.com/riverqueue/river/pull/1239)
+
 ## [0.37.1] - 2026-05-15
 
 ### Fixed
