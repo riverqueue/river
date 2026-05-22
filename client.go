@@ -329,6 +329,32 @@ type Config struct {
 	// setting of Postgres `search_path`.
 	Schema string
 
+	// SoftStopTimeout is the maximum amount of time that the client will wait
+	// for running jobs to finish during a stop before their contexts are
+	// cancelled. After the timeout elapses, the client escalates to a hard stop
+	// by cancelling the context of all running jobs. This applies regardless of
+	// how stop is initiated — whether by calling Stop, StopAndCancel, or by
+	// cancelling the context passed to Start.
+	//
+	// In combination with signal.NotifyContext on the context passed to Start,
+	// this can simplify graceful stop to:
+	//
+	//	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	//	defer stop()
+	//
+	//	if err := client.Start(ctx); err != nil { ... }
+	//	<-client.Stopped()
+	//
+	// The signal cancels the Start context, which initiates a soft stop. If
+	// running jobs haven't finished after SoftStopTimeout, their contexts are
+	// automatically cancelled to trigger a hard stop.
+	//
+	// StopAndCancel bypasses the timeout entirely and cancels job contexts
+	// immediately.
+	//
+	// Defaults to no timeout (wait indefinitely for jobs to finish).
+	SoftStopTimeout time.Duration
+
 	// SkipJobKindValidation causes the job kind format validation check to be
 	// skipped. This is available as an interim stopgap for users that have
 	// invalid job kind names, but would rather disable the check rather than
@@ -458,6 +484,7 @@ func (c *Config) WithDefaults() *Config {
 		RescueStuckJobsAfter:        cmp.Or(c.RescueStuckJobsAfter, rescueAfter),
 		RetryPolicy:                 retryPolicy,
 		Schema:                      c.Schema,
+		SoftStopTimeout:             c.SoftStopTimeout,
 		SkipJobKindValidation:       c.SkipJobKindValidation,
 		SkipUnknownJobCheck:         c.SkipUnknownJobCheck,
 		Test:                        c.Test,
@@ -1084,10 +1111,19 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 			return err
 		}
 
-		// We use separate contexts for fetching and working to allow for a graceful
-		// stop. Both inherit from the provided context, so if it's cancelled, a
-		// more aggressive stop will be initiated.
-		workCtx, workCancel := context.WithCancelCause(ctx)
+		// We use separate contexts for fetching and working to allow for a
+		// graceful stop. When SoftStopTimeout is configured, the work context
+		// is detached from the start context so that cancelling the start
+		// context initiates a soft stop (with timeout escalation) rather than
+		// an immediate hard stop. When SoftStopTimeout is not configured, the
+		// work context inherits from the start context to preserve the
+		// existing behavior where cancelling the start context is equivalent
+		// to StopAndCancel.
+		workParentCtx := ctx
+		if c.config.SoftStopTimeout > 0 {
+			workParentCtx = context.WithoutCancel(ctx)
+		}
+		workCtx, workCancel := context.WithCancelCause(workParentCtx)
 
 		// Client available to executors and to various service hooks.
 		fetchCtx := withClient(fetchCtx, c)
@@ -1151,6 +1187,18 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		c.queues.startStopMu.Lock()
 		defer c.queues.startStopMu.Unlock()
 
+		// If SoftStopTimeout is configured, start a timer that will cancel
+		// the work context (escalating to a hard stop) if producers don't
+		// finish in time. StopAndCancel also calls workCancel, in which case
+		// this timer is a harmless no-op because the context is already done.
+		if c.config.SoftStopTimeout > 0 {
+			softStopTimer := time.AfterFunc(c.config.SoftStopTimeout, func() {
+				c.baseService.Logger.WarnContext(ctx, c.baseService.Name+": Soft stop timeout; cancelling remaining job contexts", slog.Duration("soft_stop_timeout", c.config.SoftStopTimeout))
+				c.workCancel(rivercommon.ErrStop)
+			})
+			defer softStopTimer.Stop()
+		}
+
 		// On stop, have the producers stop fetching first of all.
 		c.baseService.Logger.DebugContext(ctx, c.baseService.Name+": Stopping producers")
 		startstop.StopAllParallel(producersAsServices()...)
@@ -1183,6 +1231,10 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 // complete before exiting. If the provided context is done before shutdown has
 // completed, Stop will return immediately with the context's error.
 //
+// If SoftStopTimeout is configured, running job contexts will be automatically
+// cancelled after the timeout elapses, escalating to a hard stop. This also
+// applies when stop is initiated by cancelling the context passed to Start.
+//
 // There's no need to call this method if a hard stop has already been initiated
 // by cancelling the context passed to Start or by calling StopAndCancel.
 func (c *Client[TTx]) Stop(ctx context.Context) error {
@@ -1211,6 +1263,12 @@ func (c *Client[TTx]) Stop(ctx context.Context) error {
 // This can also be initiated by cancelling the context passed to Start. There is
 // no need to call this method if the context passed to Start is cancelled
 // instead.
+//
+// In most cases, using Stop with SoftStopTimeout configured is preferable to
+// calling StopAndCancel directly. SoftStopTimeout gives running jobs a chance
+// to finish before automatically escalating to context cancellation, providing
+// graceful stop semantics without requiring manual orchestration of Stop and
+// StopAndCancel.
 func (c *Client[TTx]) StopAndCancel(ctx context.Context) error {
 	c.baseService.Logger.InfoContext(ctx, c.baseService.Name+": Hard stop started; cancelling all work")
 	c.workCancel(rivercommon.ErrStop)

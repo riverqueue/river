@@ -2361,6 +2361,122 @@ func Test_Client_StopAndCancel(t *testing.T) {
 	})
 }
 
+func Test_Client_SoftStopTimeout(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type JobArgs struct {
+		testutil.JobArgsReflectKind[JobArgs]
+	}
+
+	t.Run("EscalatesToHardStopAfterTimeout", func(t *testing.T) {
+		t.Parallel()
+
+		config := newTestConfig(t, "")
+		config.SoftStopTimeout = 100 * time.Millisecond
+
+		jobDoneChan := make(chan struct{})
+		jobStartedChan := make(chan struct{})
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			close(jobStartedChan)
+			<-ctx.Done() // only finishes when context is cancelled
+			close(jobDoneChan)
+			return nil
+		}))
+
+		client := runNewTestClient(ctx, t, config)
+
+		_, err := client.Insert(ctx, JobArgs{}, nil)
+		require.NoError(t, err)
+
+		riversharedtest.WaitOrTimeout(t, jobStartedChan)
+
+		// Stop initiates a soft stop. The job won't finish on its own, but
+		// SoftStopTimeout should escalate to a hard stop after 100ms.
+		require.NoError(t, client.Stop(ctx))
+
+		// Verify the job's context was indeed cancelled.
+		select {
+		case <-jobDoneChan:
+		default:
+			t.Fatal("expected job to have been cancelled by soft stop timeout")
+		}
+	})
+
+	t.Run("SoftStopSucceedsBeforeTimeout", func(t *testing.T) {
+		t.Parallel()
+
+		config := newTestConfig(t, "")
+		config.SoftStopTimeout = 5 * time.Second
+
+		jobStartedChan := make(chan struct{})
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			close(jobStartedChan)
+			return nil // finishes immediately
+		}))
+
+		client := runNewTestClient(ctx, t, config)
+
+		_, err := client.Insert(ctx, JobArgs{}, nil)
+		require.NoError(t, err)
+
+		riversharedtest.WaitOrTimeout(t, jobStartedChan)
+
+		// Stop should succeed quickly since the job finishes on its own.
+		// The 5s timeout should not fire.
+		require.NoError(t, client.Stop(ctx))
+	})
+
+	t.Run("ContextCancellationEscalatesAfterTimeout", func(t *testing.T) {
+		t.Parallel()
+
+		config := newTestConfig(t, "")
+		config.SoftStopTimeout = 100 * time.Millisecond
+
+		jobDoneChan := make(chan struct{})
+		jobStartedChan := make(chan struct{})
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			close(jobStartedChan)
+			<-ctx.Done()
+			close(jobDoneChan)
+			return nil
+		}))
+
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+		)
+		config.Schema = schema
+
+		client, err := NewClient(driver, config)
+		require.NoError(t, err)
+
+		startCtx, startCtxCancel := context.WithCancel(ctx)
+		defer startCtxCancel()
+
+		require.NoError(t, client.Start(startCtx))
+
+		_, err = client.Insert(ctx, JobArgs{}, nil)
+		require.NoError(t, err)
+
+		riversharedtest.WaitOrTimeout(t, jobStartedChan)
+
+		// Cancel the start context. This should initiate a soft stop, then
+		// escalate to hard stop after SoftStopTimeout.
+		startCtxCancel()
+
+		riversharedtest.WaitOrTimeout(t, client.Stopped())
+
+		select {
+		case <-jobDoneChan:
+		default:
+			t.Fatal("expected job to have been cancelled by soft stop timeout")
+		}
+	})
+}
+
 type callbackWithCustomTimeoutArgs struct {
 	TimeoutValue time.Duration `json:"timeout"`
 }
