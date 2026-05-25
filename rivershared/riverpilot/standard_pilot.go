@@ -3,14 +3,18 @@ package riverpilot
 import (
 	"context"
 	"sync/atomic"
+	"time"
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivertype"
 )
 
+const standardPilotJobGetAvailableTimeoutDefault = 10 * time.Second
+
 type StandardPilot struct {
-	seq atomic.Int64
+	jobGetAvailableTimeout time.Duration
+	seq                    atomic.Int64
 }
 
 func (p *StandardPilot) JobCleanerQueuesExcluded() []string { return nil }
@@ -19,6 +23,10 @@ func (p *StandardPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Ex
 	if params.MaxToLock <= 0 {
 		return nil, nil
 	}
+
+	ctx, cancel := context.WithTimeoutCause(ctx, p.jobGetAvailableTimeoutOrDefault(), context.DeadlineExceeded)
+	defer cancel()
+
 	return exec.JobGetAvailable(ctx, params)
 }
 
@@ -73,6 +81,14 @@ func (p *StandardPilot) ProducerShutdown(ctx context.Context, exec riverdriver.E
 
 func (p *StandardPilot) QueueMetadataChanged(ctx context.Context, exec riverdriver.Executor, params *QueueMetadataChangedParams) error {
 	return nil
+}
+
+func (p *StandardPilot) jobGetAvailableTimeoutOrDefault() time.Duration {
+	if p.jobGetAvailableTimeout > 0 {
+		return p.jobGetAvailableTimeout
+	}
+
+	return standardPilotJobGetAvailableTimeoutDefault
 }
 
 type standardProducerState struct{}
