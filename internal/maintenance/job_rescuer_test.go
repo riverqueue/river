@@ -140,6 +140,7 @@ func TestJobRescuer(t *testing.T) {
 
 		stuckToRetryJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
 		stuckToRetryJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)})
+		stuckToRetryJobWithLastSeen := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Minute)), Metadata: fmt.Appendf(nil, `{"%s": %q}`, riversharedmaintenance.MetadataKeyLastSeenAt, bundle.rescueHorizon.Add(-1*time.Minute).UTC().Format(time.RFC3339Nano)), MaxAttempts: ptrutil.Ptr(5)})
 		stuckToRetryJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(1 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)}) // won't be rescued
 
 		// Already at max attempts:
@@ -183,6 +184,7 @@ func TestJobRescuer(t *testing.T) {
 		var err error
 		confirmRetried(stuckToRetryJob1)
 		confirmRetried(stuckToRetryJob2)
+		confirmRetried(stuckToRetryJobWithLastSeen)
 
 		job3After, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: stuckToRetryJob3.ID, Schema: rescuer.Config.Schema})
 		require.NoError(t, err)

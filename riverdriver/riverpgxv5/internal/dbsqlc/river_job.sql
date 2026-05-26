@@ -258,7 +258,13 @@ ORDER BY id;
 SELECT *
 FROM /* TEMPLATE: schema */river_job
 WHERE state = 'running'
-    AND attempted_at < @stuck_horizon::timestamptz
+    -- `last_seen_at` may still be present on a row from its last retry, so make
+    -- sure we have `max` to take `attempted_at` (set on the latest lock of the
+    -- job) if it's larger.
+    AND greatest(
+        attempted_at,
+        (metadata->>'river:last_seen_at')::timestamptz
+    ) < @stuck_horizon::timestamptz
 ORDER BY id
 LIMIT @max;
 

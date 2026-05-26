@@ -34,6 +34,8 @@ type pilotSpy struct {
 }
 
 type pilotSpyTestSignals struct {
+	JobBegin                 testsignal.TestSignal[int64]
+	JobEnd                   testsignal.TestSignal[int64]
 	JobGetAvailable          testsignal.TestSignal[struct{}]
 	JobSetStateIfRunningMany testsignal.TestSignal[struct{}]
 	PeriodicJobGetAll        testsignal.TestSignal[struct{}]
@@ -47,6 +49,8 @@ type pilotSpyTestSignals struct {
 }
 
 func (ts *pilotSpyTestSignals) Init(tb testutil.TestingTB) {
+	ts.JobBegin.Init(tb)
+	ts.JobEnd.Init(tb)
 	ts.JobGetAvailable.Init(tb)
 	ts.JobSetStateIfRunningMany.Init(tb)
 	ts.PeriodicJobGetAll.Init(tb)
@@ -59,6 +63,11 @@ func (ts *pilotSpyTestSignals) Init(tb testutil.TestingTB) {
 	ts.QueueMetadataChanged.Init(tb)
 }
 
+func (p *pilotSpy) JobBegin(ctx context.Context, job *rivertype.JobRow) {
+	p.testSignals.JobBegin.Signal(job.ID)
+	p.StandardPilot.JobBegin(ctx, job)
+}
+
 func (p *pilotSpy) JobCancel(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error) {
 	p.jobCancelCalls.Add(1)
 	return p.StandardPilot.JobCancel(ctx, exec, params)
@@ -67,6 +76,11 @@ func (p *pilotSpy) JobCancel(ctx context.Context, exec riverdriver.Executor, par
 func (p *pilotSpy) JobCleanerQueuesExcluded() []string {
 	p.jobCleanerQueuesExcludedCalls.Add(1)
 	return p.StandardPilot.JobCleanerQueuesExcluded()
+}
+
+func (p *pilotSpy) JobEnd(ctx context.Context, job *rivertype.JobRow) {
+	p.testSignals.JobEnd.Signal(job.ID)
+	p.StandardPilot.JobEnd(ctx, job)
 }
 
 func (p *pilotSpy) JobGetAvailable(ctx context.Context, exec riverdriver.Executor, state riverpilot.ProducerState, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
@@ -324,6 +338,8 @@ func Test_Client_PilotUsage(t *testing.T) {
 		riversharedtest.WaitOrTimeout(t, jobDone)
 		require.NotZero(t, insertRes.Job.ID)
 
+		require.Equal(t, insertRes.Job.ID, pilot.testSignals.JobBegin.WaitOrTimeout())
+		require.Equal(t, insertRes.Job.ID, pilot.testSignals.JobEnd.WaitOrTimeout())
 		pilot.testSignals.JobGetAvailable.WaitOrTimeout()
 		pilot.testSignals.JobSetStateIfRunningMany.WaitOrTimeout()
 		pilot.testSignals.ProducerInit.WaitOrTimeout()

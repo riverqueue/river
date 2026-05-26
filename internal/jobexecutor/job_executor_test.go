@@ -112,6 +112,25 @@ func (h *testErrorHandler) HandlePanic(ctx context.Context, job *rivertype.JobRo
 	return h.HandlePanicFunc(ctx, job, panicVal, trace)
 }
 
+type testPilotWithJobCallbacks struct {
+	riverpilot.StandardPilot
+
+	JobBeginFunc func(ctx context.Context, job *rivertype.JobRow)
+	JobEndFunc   func(ctx context.Context, job *rivertype.JobRow)
+}
+
+func (p *testPilotWithJobCallbacks) JobBegin(ctx context.Context, job *rivertype.JobRow) {
+	if p.JobBeginFunc != nil {
+		p.JobBeginFunc(ctx, job)
+	}
+}
+
+func (p *testPilotWithJobCallbacks) JobEnd(ctx context.Context, job *rivertype.JobRow) {
+	if p.JobEndFunc != nil {
+		p.JobEndFunc(ctx, job)
+	}
+}
+
 func TestJobExecutor_Execute(t *testing.T) {
 	t.Parallel()
 
@@ -993,6 +1012,90 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.Equal(t, rivertype.JobStateRetryable, job.State)
 
 		require.True(t, bundle.errorHandler.HandlePanicCalled)
+	})
+
+	t.Run("PilotJobCallbacksJobBeginAndEnd", func(t *testing.T) {
+		t.Parallel()
+
+		executor, bundle := setup(t)
+
+		var events []string
+
+		executor.Pilot = &testPilotWithJobCallbacks{
+			JobBeginFunc: func(ctx context.Context, job *rivertype.JobRow) {
+				require.Equal(t, bundle.jobRow.ID, job.ID)
+				events = append(events, "begin")
+			},
+			JobEndFunc: func(ctx context.Context, job *rivertype.JobRow) {
+				require.Equal(t, bundle.jobRow.ID, job.ID)
+				events = append(events, "end")
+			},
+		}
+		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error {
+			events = append(events, "work")
+			return nil
+		}, nil).MakeUnit(bundle.jobRow)
+
+		executor.Execute(ctx)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
+
+		require.Equal(t, []string{"begin", "work", "end"}, events)
+	})
+
+	t.Run("PilotJobCallbacksJobEndInvokedOnError", func(t *testing.T) {
+		t.Parallel()
+
+		executor, bundle := setup(t)
+
+		var events []string
+
+		executor.Pilot = &testPilotWithJobCallbacks{
+			JobBeginFunc: func(ctx context.Context, job *rivertype.JobRow) {
+				require.Equal(t, bundle.jobRow.ID, job.ID)
+				events = append(events, "begin")
+			},
+			JobEndFunc: func(ctx context.Context, job *rivertype.JobRow) {
+				require.Equal(t, bundle.jobRow.ID, job.ID)
+				events = append(events, "end")
+			},
+		}
+		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error {
+			events = append(events, "work")
+			return errors.New("work failed")
+		}, nil).MakeUnit(bundle.jobRow)
+
+		executor.Execute(ctx)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
+
+		require.Equal(t, []string{"begin", "work", "end"}, events)
+	})
+
+	t.Run("PilotJobCallbacksJobEndInvokedOnPanic", func(t *testing.T) {
+		t.Parallel()
+
+		executor, bundle := setup(t)
+
+		var events []string
+
+		executor.Pilot = &testPilotWithJobCallbacks{
+			JobBeginFunc: func(ctx context.Context, job *rivertype.JobRow) {
+				require.Equal(t, bundle.jobRow.ID, job.ID)
+				events = append(events, "begin")
+			},
+			JobEndFunc: func(ctx context.Context, job *rivertype.JobRow) {
+				require.Equal(t, bundle.jobRow.ID, job.ID)
+				events = append(events, "end")
+			},
+		}
+		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error {
+			events = append(events, "work")
+			panic("panic val")
+		}, nil).MakeUnit(bundle.jobRow)
+
+		executor.Execute(ctx)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
+
+		require.Equal(t, []string{"begin", "work", "end"}, events)
 	})
 
 	t.Run("CancelFuncCleanedUpEvenWithoutCancel", func(t *testing.T) {

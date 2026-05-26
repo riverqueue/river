@@ -19,6 +19,9 @@ import (
 type Pilot interface {
 	PilotPeriodicJob
 
+	// JobBegin is invoked when a job begins work.
+	JobBegin(ctx context.Context, job *rivertype.JobRow)
+
 	JobCancel(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error)
 
 	// JobCleanerQueuesExcluded returns queues that should be excluded from the
@@ -27,6 +30,10 @@ type Pilot interface {
 	// underlying database query uses an `IS NULL` check, though this could
 	// conceivably be changed.)
 	JobCleanerQueuesExcluded() []string
+
+	// JobEnd is invoked when a job ends work. It's still invoked even in the
+	// event of error or panic.
+	JobEnd(ctx context.Context, job *rivertype.JobRow)
 
 	JobGetAvailable(
 		ctx context.Context,
