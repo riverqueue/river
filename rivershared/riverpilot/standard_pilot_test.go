@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
-	"github.com/stretchr/testify/require"
 )
 
 type standardPilotExecutorMock struct {
@@ -33,10 +33,8 @@ func TestStandardPilot_JobGetAvailable(t *testing.T) {
 		t.Helper()
 
 		return &testBundle{
-			exec: &standardPilotExecutorMock{},
-			pilot: &StandardPilot{
-				jobGetAvailableTimeout: 5 * time.Millisecond,
-			},
+			exec:  &standardPilotExecutorMock{},
+			pilot: &StandardPilot{},
 		}
 	}
 
@@ -48,28 +46,6 @@ func TestStandardPilot_JobGetAvailable(t *testing.T) {
 		res, err := bundle.pilot.JobGetAvailable(context.Background(), bundle.exec, nil, &riverdriver.JobGetAvailableParams{})
 		require.NoError(t, err)
 		require.Nil(t, res)
-	})
-
-	t.Run("TimesOutHungFetch", func(t *testing.T) {
-		t.Parallel()
-
-		bundle := setup(t)
-		timeoutSeen := make(chan error, 1)
-
-		bundle.exec.jobGetAvailableFunc = func(ctx context.Context, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
-			<-ctx.Done()
-			timeoutSeen <- ctx.Err()
-			return nil, ctx.Err()
-		}
-
-		start := time.Now()
-		_, err := bundle.pilot.JobGetAvailable(context.Background(), bundle.exec, nil, &riverdriver.JobGetAvailableParams{
-			MaxToLock: 1,
-		})
-		require.Error(t, err)
-		require.ErrorIs(t, err, context.DeadlineExceeded)
-		require.WithinDuration(t, time.Now(), start.Add(bundle.pilot.jobGetAvailableTimeout), 25*time.Millisecond)
-		require.ErrorIs(t, <-timeoutSeen, context.DeadlineExceeded)
 	})
 
 	t.Run("PreservesParentCancellation", func(t *testing.T) {

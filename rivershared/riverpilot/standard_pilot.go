@@ -13,8 +13,7 @@ import (
 const standardPilotJobGetAvailableTimeoutDefault = 10 * time.Second
 
 type StandardPilot struct {
-	jobGetAvailableTimeout time.Duration
-	seq                    atomic.Int64
+	seq atomic.Int64
 }
 
 func (p *StandardPilot) JobCleanerQueuesExcluded() []string { return nil }
@@ -24,7 +23,7 @@ func (p *StandardPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Ex
 		return nil, nil
 	}
 
-	ctx, cancel := context.WithTimeoutCause(ctx, p.jobGetAvailableTimeoutOrDefault(), context.DeadlineExceeded)
+	ctx, cancel := context.WithTimeoutCause(ctx, standardPilotJobGetAvailableTimeoutDefault, context.DeadlineExceeded)
 	defer cancel()
 
 	return exec.JobGetAvailable(ctx, params)
@@ -81,14 +80,6 @@ func (p *StandardPilot) ProducerShutdown(ctx context.Context, exec riverdriver.E
 
 func (p *StandardPilot) QueueMetadataChanged(ctx context.Context, exec riverdriver.Executor, params *QueueMetadataChangedParams) error {
 	return nil
-}
-
-func (p *StandardPilot) jobGetAvailableTimeoutOrDefault() time.Duration {
-	if p.jobGetAvailableTimeout > 0 {
-		return p.jobGetAvailableTimeout
-	}
-
-	return standardPilotJobGetAvailableTimeoutDefault
 }
 
 type standardProducerState struct{}
