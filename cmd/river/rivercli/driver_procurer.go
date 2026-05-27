@@ -42,7 +42,7 @@ type MigratorInterface interface {
 	ExistingVersions(ctx context.Context) ([]rivermigrate.Migration, error)
 	GetVersion(version int) (rivermigrate.Migration, error)
 	Migrate(ctx context.Context, direction rivermigrate.Direction, opts *rivermigrate.MigrateOpts) (*rivermigrate.MigrateResult, error)
-	Validate(ctx context.Context) (*rivermigrate.ValidateResult, error)
+	Validate(ctx context.Context, opts *rivermigrate.ValidateOpts) (*rivermigrate.ValidateResult, error)
 }
 
 type pgxV5DriverProcurer struct {

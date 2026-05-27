@@ -68,7 +68,7 @@ type MigratorStub struct {
 	existingVersionsStub func(ctx context.Context) ([]rivermigrate.Migration, error)
 	getVersionStub       func(version int) (rivermigrate.Migration, error)
 	migrateStub          func(ctx context.Context, direction rivermigrate.Direction, opts *rivermigrate.MigrateOpts) (*rivermigrate.MigrateResult, error)
-	validateStub         func(ctx context.Context) (*rivermigrate.ValidateResult, error)
+	validateStub         func(ctx context.Context, opts *rivermigrate.ValidateOpts) (*rivermigrate.ValidateResult, error)
 }
 
 func (m *MigratorStub) AllVersions() []rivermigrate.Migration {
@@ -103,12 +103,12 @@ func (m *MigratorStub) Migrate(ctx context.Context, direction rivermigrate.Direc
 	return m.migrateStub(ctx, direction, opts)
 }
 
-func (m *MigratorStub) Validate(ctx context.Context) (*rivermigrate.ValidateResult, error) {
+func (m *MigratorStub) Validate(ctx context.Context, opts *rivermigrate.ValidateOpts) (*rivermigrate.ValidateResult, error) {
 	if m.validateStub == nil {
 		panic("Validate is not stubbed")
 	}
 
-	return m.validateStub(ctx)
+	return m.validateStub(ctx, opts)
 }
 
 var (
