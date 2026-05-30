@@ -647,7 +647,37 @@ func TestMigrator(t *testing.T) {
 		_, err := migrator.Migrate(ctx, DirectionUp, &MigrateOpts{})
 		require.NoError(t, err)
 
-		res, err := migrator.Validate(ctx)
+		res, err := migrator.Validate(ctx, nil)
+		require.NoError(t, err)
+		require.Equal(t, &ValidateResult{OK: true}, res)
+	})
+
+	t.Run("ValidateSuccessWithTargetVersion", func(t *testing.T) {
+		t.Parallel()
+
+		migrator, _ := setup(t)
+
+		_, err := migrator.Migrate(ctx, DirectionUp, &MigrateOpts{TargetVersion: migrationsBundle.MaxVersion})
+		require.NoError(t, err)
+
+		res, err := migrator.Validate(ctx, &ValidateOpts{TargetVersion: migrationsBundle.MaxVersion})
+		require.NoError(t, err)
+		require.Equal(t, &ValidateResult{OK: true}, res)
+	})
+
+	t.Run("ValidateTxSuccessWithTargetVersion", func(t *testing.T) {
+		t.Parallel()
+
+		const migrateVersionIncludingRiverJob = 2
+
+		migrator, bundle := setup(t)
+
+		tx := testTx(t, bundle.driver)
+
+		_, err := migrator.MigrateTx(ctx, tx, DirectionUp, &MigrateOpts{TargetVersion: migrateVersionIncludingRiverJob})
+		require.NoError(t, err)
+
+		res, err := migrator.ValidateTx(ctx, tx, &ValidateOpts{TargetVersion: migrateVersionIncludingRiverJob})
 		require.NoError(t, err)
 		require.Equal(t, &ValidateResult{OK: true}, res)
 	})
@@ -660,11 +690,35 @@ func TestMigrator(t *testing.T) {
 		_, err := migrator.Migrate(ctx, DirectionUp, &MigrateOpts{MaxSteps: migrationsBundle.MaxVersion})
 		require.NoError(t, err)
 
-		res, err := migrator.Validate(ctx)
+		res, err := migrator.Validate(ctx, nil)
 		require.NoError(t, err)
 		require.Equal(t, &ValidateResult{
 			Messages: []string{fmt.Sprintf("Unapplied migrations: [%d %d]", migrationsBundle.MaxVersion+1, migrationsBundle.MaxVersion+2)},
 		}, res)
+	})
+
+	t.Run("ValidateUnappliedMigrationsWithTargetVersion", func(t *testing.T) {
+		t.Parallel()
+
+		migrator, _ := setup(t)
+
+		_, err := migrator.Migrate(ctx, DirectionUp, &MigrateOpts{TargetVersion: migrationsBundle.MaxVersion - 1})
+		require.NoError(t, err)
+
+		res, err := migrator.Validate(ctx, &ValidateOpts{TargetVersion: migrationsBundle.MaxVersion + 1})
+		require.NoError(t, err)
+		require.Equal(t, &ValidateResult{
+			Messages: []string{fmt.Sprintf("Unapplied migrations: [%d %d]", migrationsBundle.MaxVersion, migrationsBundle.MaxVersion+1)},
+		}, res)
+	})
+
+	t.Run("ValidateWithTargetVersionInvalid", func(t *testing.T) {
+		t.Parallel()
+
+		migrator, _ := setup(t)
+
+		_, err := migrator.Validate(ctx, &ValidateOpts{TargetVersion: migrationsBundle.WithTestVersionsMaxVersion + 77})
+		require.EqualError(t, err, fmt.Sprintf("version %d is not a valid River migration version", migrationsBundle.WithTestVersionsMaxVersion+77))
 	})
 
 	t.Run("MigrateUpThenDownToZeroAndBackUp", func(t *testing.T) {

@@ -365,12 +365,20 @@ type ValidateResult struct {
 	OK bool
 }
 
+// ValidateOpts are options for a validate operation.
+type ValidateOpts struct {
+	// TargetVersion is a specific migration version to validate up to. The
+	// version must exist. When set, validation only checks that migrations up
+	// to and including TargetVersion have been applied.
+	TargetVersion int
+}
+
 // Validate validates the current state of migrations, returning an unsuccessful
 // validation and usable message in case there are migrations that haven't yet
 // been applied.
-func (m *Migrator[TTx]) Validate(ctx context.Context) (*ValidateResult, error) {
+func (m *Migrator[TTx]) Validate(ctx context.Context, opts *ValidateOpts) (*ValidateResult, error) {
 	return dbutil.WithTxV(ctx, m.driver.GetExecutor(), func(ctx context.Context, tx riverdriver.ExecutorTx) (*ValidateResult, error) {
-		return m.validate(ctx, tx)
+		return m.validate(ctx, tx, opts)
 	})
 }
 
@@ -379,8 +387,8 @@ func (m *Migrator[TTx]) Validate(ctx context.Context) (*ValidateResult, error) {
 // been applied.
 //
 // This variant lets a caller validate within a transaction.
-func (m *Migrator[TTx]) ValidateTx(ctx context.Context, tx TTx) (*ValidateResult, error) {
-	return m.validate(ctx, m.driver.UnwrapExecutor(tx))
+func (m *Migrator[TTx]) ValidateTx(ctx context.Context, tx TTx, opts *ValidateOpts) (*ValidateResult, error) {
+	return m.validate(ctx, m.driver.UnwrapExecutor(tx), opts)
 }
 
 // migrateDown runs down migrations.
@@ -472,7 +480,11 @@ func (m *Migrator[TTx]) migrateUp(ctx context.Context, exec riverdriver.Executor
 }
 
 // validate validates current migration state.
-func (m *Migrator[TTx]) validate(ctx context.Context, exec riverdriver.Executor) (*ValidateResult, error) {
+func (m *Migrator[TTx]) validate(ctx context.Context, exec riverdriver.Executor, opts *ValidateOpts) (*ValidateResult, error) {
+	if opts == nil {
+		opts = &ValidateOpts{}
+	}
+
 	existingMigrations, err := m.existingMigrations(ctx, exec)
 	if err != nil {
 		return nil, err
@@ -481,6 +493,18 @@ func (m *Migrator[TTx]) validate(ctx context.Context, exec riverdriver.Executor)
 	targetMigrations := maps.Clone(m.migrations)
 	for _, migrateRow := range existingMigrations {
 		delete(targetMigrations, migrateRow.Version)
+	}
+
+	if opts.TargetVersion > 0 {
+		if _, ok := m.migrations[opts.TargetVersion]; !ok {
+			return nil, fmt.Errorf("version %d is not a valid River migration version", opts.TargetVersion)
+		}
+
+		for version := range targetMigrations {
+			if version > opts.TargetVersion {
+				delete(targetMigrations, version)
+			}
+		}
 	}
 
 	notOKWithMessage := func(message string) *ValidateResult {
