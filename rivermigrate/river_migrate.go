@@ -547,17 +547,22 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Ex
 
 		targetIndex := slices.IndexFunc(sortedTargetMigrations, func(b Migration) bool { return b.Version == opts.TargetVersion })
 		if targetIndex == -1 {
-			return nil, fmt.Errorf("version %d is not in target list of valid migrations to apply", opts.TargetVersion)
-		}
+			// Error, but only if the migration doesn't exist or was never
+			// applied on a down migration. Up migrations with TargetVersion
+			// that's already applied should fall through with a no-op.
+			if _, ok := m.migrations[opts.TargetVersion]; !ok || direction == DirectionDown {
+				return nil, fmt.Errorf("version %d is not in target list of valid migrations to apply", opts.TargetVersion)
+			}
+		} else {
+			// Replace target list with list up to target index. Migrations are
+			// sorted according to the direction we're migrating in, so when down
+			// migration, the list is already reversed, so this will truncate it so
+			// it's the most current migration down to the target.
+			sortedTargetMigrations = sortedTargetMigrations[0 : targetIndex+1]
 
-		// Replace target list with list up to target index. Migrations are
-		// sorted according to the direction we're migrating in, so when down
-		// migration, the list is already reversed, so this will truncate it so
-		// it's the most current migration down to the target.
-		sortedTargetMigrations = sortedTargetMigrations[0 : targetIndex+1]
-
-		if direction == DirectionDown && len(sortedTargetMigrations) > 0 {
-			sortedTargetMigrations = sortedTargetMigrations[0 : len(sortedTargetMigrations)-1]
+			if direction == DirectionDown && len(sortedTargetMigrations) > 0 {
+				sortedTargetMigrations = sortedTargetMigrations[0 : len(sortedTargetMigrations)-1]
+			}
 		}
 	}
 
