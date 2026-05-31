@@ -450,6 +450,34 @@ func TestWorker_Work(t *testing.T) {
 		require.True(t, middlewareCalled)
 		require.True(t, middlewareWithBaseServiceCalled)
 	})
+
+	// Honors config.Schema: River lives in a named schema, worked through a
+	// transaction with an empty search_path so tables resolve only via schema
+	// qualification. Needs its own infrastructure, so it skips setup.
+	t.Run("CustomSchema", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = &river.Config{ID: "rivertest-worker", Schema: schema}
+		)
+
+		tx, err := dbPool.Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
+			require.Equal(t, rivertype.JobStateRunning, job.State)
+			return nil
+		})
+
+		tw := NewWorker(t, driver, config, worker)
+		res, err := tw.Work(ctx, t, tx, testArgs{Value: "test"}, nil)
+		require.NoError(t, err)
+		require.Equal(t, river.EventKindJobCompleted, res.EventKind)
+	})
 }
 
 func TestWorker_WorkJob(t *testing.T) {
@@ -555,5 +583,39 @@ func TestWorker_WorkJob(t *testing.T) {
 		res, err := testWorker.WorkJob(ctx, t, bundle.tx, job)
 		require.ErrorContains(t, err, "failed to update job to running state")
 		require.Nil(t, res)
+	})
+
+	// Honors config.Schema: River lives in a named schema, worked through a
+	// transaction with an empty search_path so tables resolve only via schema
+	// qualification. Needs its own infrastructure, so it skips setup.
+	t.Run("CustomSchema", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = &river.Config{ID: "rivertest-workjob", Schema: schema}
+		)
+
+		tx, err := dbPool.Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+		client, err := river.NewClient(driver, config)
+		require.NoError(t, err)
+
+		insertRes, err := client.InsertTx(ctx, tx, testArgs{Value: "test"}, nil)
+		require.NoError(t, err)
+
+		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
+			require.Equal(t, rivertype.JobStateRunning, job.State)
+			return nil
+		})
+
+		tw := NewWorker(t, driver, config, worker)
+		res, err := tw.WorkJob(ctx, t, tx, insertRes.Job)
+		require.NoError(t, err)
+		require.Equal(t, river.EventKindJobCompleted, res.EventKind)
 	})
 }

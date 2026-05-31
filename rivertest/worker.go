@@ -166,6 +166,7 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 		AttemptedAtDoUpdate: true,
 		AttemptedBy:         append(job.AttemptedBy, w.config.ID),
 		AttemptedByDoUpdate: true,
+		Schema:              w.config.Schema,
 		StateDoUpdate:       true,
 		State:               rivertype.JobStateRunning,
 	})
