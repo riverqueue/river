@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -17,8 +18,22 @@ type standardPilotExecutorMock struct {
 	jobGetAvailableFunc func(ctx context.Context, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error)
 }
 
+func (m *standardPilotExecutorMock) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
+	return &standardPilotExecutorTxMock{standardPilotExecutorMock: m}, nil
+}
+
 func (m *standardPilotExecutorMock) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
 	return m.jobGetAvailableFunc(ctx, params)
+}
+
+type standardPilotExecutorTxMock struct {
+	*standardPilotExecutorMock
+}
+
+func (m *standardPilotExecutorTxMock) Commit(ctx context.Context) error   { return nil }
+func (m *standardPilotExecutorTxMock) Rollback(ctx context.Context) error { return nil }
+func (m *standardPilotExecutorTxMock) SetLocalStatementTimeout(ctx context.Context, timeout time.Duration) error {
+	return nil
 }
 
 func TestStandardPilot_JobGetAvailable(t *testing.T) {

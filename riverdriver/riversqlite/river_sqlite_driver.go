@@ -1500,6 +1500,10 @@ func (t *ExecutorTx) Rollback(ctx context.Context) error {
 	return t.tx.Rollback()
 }
 
+func (t *ExecutorTx) SetLocalStatementTimeout(ctx context.Context, timeout time.Duration) error {
+	return nil
+}
+
 type ExecutorSubTx struct {
 	Executor
 
@@ -1557,6 +1561,10 @@ func (t *ExecutorSubTx) Rollback(ctx context.Context) error {
 		return err
 	}
 
+	return nil
+}
+
+func (t *ExecutorSubTx) SetLocalStatementTimeout(ctx context.Context, timeout time.Duration) error {
 	return nil
 }
 

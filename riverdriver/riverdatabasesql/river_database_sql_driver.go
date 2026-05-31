@@ -1050,6 +1050,10 @@ func (t *ExecutorTx) Rollback(ctx context.Context) error {
 	return t.tx.Rollback()
 }
 
+func (t *ExecutorTx) SetLocalStatementTimeout(ctx context.Context, timeout time.Duration) error {
+	return t.Exec(ctx, "SELECT set_config('statement_timeout', $1, true)", riverdriver.PostgresStatementTimeoutValue(timeout))
+}
+
 type ExecutorSubTx struct {
 	Executor
 
@@ -1101,6 +1105,10 @@ func (t *ExecutorSubTx) Rollback(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (t *ExecutorSubTx) SetLocalStatementTimeout(ctx context.Context, timeout time.Duration) error {
+	return t.Exec(ctx, "SELECT set_config('statement_timeout', $1, true)", riverdriver.PostgresStatementTimeoutValue(timeout))
 }
 
 func interpretError(err error) error {

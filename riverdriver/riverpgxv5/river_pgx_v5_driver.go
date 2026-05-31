@@ -1024,6 +1024,10 @@ func (t *ExecutorTx) Rollback(ctx context.Context) error {
 	return t.tx.Rollback(ctx)
 }
 
+func (t *ExecutorTx) SetLocalStatementTimeout(ctx context.Context, timeout time.Duration) error {
+	return t.Exec(ctx, "SELECT set_config('statement_timeout', $1, true)", riverdriver.PostgresStatementTimeoutValue(timeout))
+}
+
 type Listener struct {
 	afterConnectExec string // should only ever be used in testing
 	conn             *pgx.Conn

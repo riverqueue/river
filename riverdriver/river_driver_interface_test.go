@@ -49,6 +49,17 @@ func TestJobSetStateCancelled(t *testing.T) {
 	})
 }
 
+func TestPostgresStatementTimeoutValue(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "0ms", PostgresStatementTimeoutValue(0))
+	require.Equal(t, "1ms", PostgresStatementTimeoutValue(time.Nanosecond))
+	require.Equal(t, "1ms", PostgresStatementTimeoutValue(999*time.Microsecond))
+	require.Equal(t, "1ms", PostgresStatementTimeoutValue(time.Millisecond))
+	require.Equal(t, "2ms", PostgresStatementTimeoutValue(time.Millisecond+time.Nanosecond))
+	require.Equal(t, "1234ms", PostgresStatementTimeoutValue(1234*time.Millisecond))
+}
+
 func TestJobSetStateCompleted(t *testing.T) {
 	t.Parallel()
 

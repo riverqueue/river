@@ -3,6 +3,7 @@ package riverdrivertest
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -159,6 +160,27 @@ func exerciseExecutorTx[TTx any](ctx context.Context, t *testing.T,
 
 			require.NoError(t, exec.Exec(ctx, "SELECT $1 || $2", "foo", "bar"))
 		})
+	})
+
+	t.Run("SetLocalStatementTimeout", func(t *testing.T) {
+		t.Parallel()
+
+		exec, driver := executorWithTx(ctx, t)
+
+		tx, err := exec.Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+		require.NoError(t, tx.SetLocalStatementTimeout(ctx, 999*time.Microsecond))
+		require.NoError(t, tx.SetLocalStatementTimeout(ctx, 1234*time.Millisecond))
+
+		if driver.DatabaseName() == databaseNameSQLite {
+			return
+		}
+
+		var timeoutMilliseconds int64
+		require.NoError(t, tx.QueryRow(ctx, "SELECT setting::bigint FROM pg_settings WHERE name = 'statement_timeout'").Scan(&timeoutMilliseconds))
+		require.Equal(t, int64(1234), timeoutMilliseconds)
 	})
 
 	t.Run("PGAdvisoryXactLock", func(t *testing.T) {

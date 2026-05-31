@@ -295,6 +295,14 @@ type ExecutorTx interface {
 	//
 	// API is not stable. DO NOT USE.
 	Rollback(ctx context.Context) error
+
+	// SetLocalStatementTimeout sets a statement timeout local to the current
+	// transaction if supported by the underlying database. Some databases don't
+	// support this behavior, so this should be used in addition to context
+	// timeouts, not instead of them.
+	//
+	// API is not stable. DO NOT USE.
+	SetLocalStatementTimeout(ctx context.Context, timeout time.Duration) error
 }
 
 type GetListenenerParams struct {

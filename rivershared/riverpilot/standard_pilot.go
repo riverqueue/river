@@ -2,15 +2,15 @@ package riverpilot
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"time"
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/util/dbutil"
 	"github.com/riverqueue/river/rivertype"
 )
-
-const standardPilotJobGetAvailableTimeoutDefault = 10 * time.Second
 
 type StandardPilot struct {
 	seq atomic.Int64
@@ -23,10 +23,24 @@ func (p *StandardPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Ex
 		return nil, nil
 	}
 
-	ctx, cancel := context.WithTimeoutCause(ctx, standardPilotJobGetAvailableTimeoutDefault, context.DeadlineExceeded)
+	// Set an outer context timeout on locking jobs, and where possible (i.e. in
+	// Postgres, but not SQLite), set an inner `statement_timeout` inside a
+	// transaction so the configuration isn't durable. The error from the
+	// Postgres version will be better, so try to have that trigger first. It
+	// also minimizes the chances of a successful operation that locks jobs but
+	// then accidentally errors because it's run time was so close to the Go
+	// timeout.
+	const timeout = 30 * time.Second
+
+	ctx, cancel := context.WithTimeoutCause(ctx, timeout, context.DeadlineExceeded)
 	defer cancel()
 
-	return exec.JobGetAvailable(ctx, params)
+	return dbutil.WithTxV(ctx, exec, func(ctx context.Context, execTx riverdriver.ExecutorTx) ([]*rivertype.JobRow, error) {
+		if err := execTx.SetLocalStatementTimeout(ctx, timeout-1*time.Second); err != nil {
+			return nil, fmt.Errorf("error setting statement timeout: %w", err)
+		}
+		return execTx.JobGetAvailable(ctx, params)
+	})
 }
 
 func (p *StandardPilot) JobCancel(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error) {
