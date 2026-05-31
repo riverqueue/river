@@ -3,11 +3,14 @@ package riverpilot
 import (
 	"context"
 	"sync/atomic"
+	"time"
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivertype"
 )
+
+const standardPilotJobGetAvailableTimeoutDefault = 10 * time.Second
 
 type StandardPilot struct {
 	seq atomic.Int64
@@ -19,6 +22,10 @@ func (p *StandardPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Ex
 	if params.MaxToLock <= 0 {
 		return nil, nil
 	}
+
+	ctx, cancel := context.WithTimeoutCause(ctx, standardPilotJobGetAvailableTimeoutDefault, context.DeadlineExceeded)
+	defer cancel()
+
 	return exec.JobGetAvailable(ctx, params)
 }
 
