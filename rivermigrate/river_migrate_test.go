@@ -331,6 +331,11 @@ func TestMigrator(t *testing.T) {
 
 		err = dbExecError(ctx, bundle.driver.GetExecutor(), fmt.Sprintf("SELECT name FROM %s.test_table", bundle.schema))
 		require.Error(t, err)
+
+		// migrating to the same TargetVersion again should be a no-op
+		res, err = migrator.Migrate(ctx, DirectionDown, &MigrateOpts{TargetVersion: 4})
+		require.NoError(t, err)
+		require.Empty(t, res.Versions)
 	})
 
 	t.Run("MigrateDownWithTargetVersionMinusOne", func(t *testing.T) {
@@ -569,6 +574,11 @@ func TestMigrator(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(migrationsBundle.MaxVersion+2), sliceutil.Map(migrations, driverMigrationToInt))
+
+		// migrating to the same TargetVersion again should be a no-op
+		res, err = migrator.Migrate(ctx, DirectionUp, &MigrateOpts{TargetVersion: migrationsBundle.MaxVersion + 2})
+		require.NoError(t, err)
+		require.Empty(t, res.Versions)
 	})
 
 	t.Run("MigrateUpWithTargetVersionInvalid", func(t *testing.T) {
@@ -583,12 +593,6 @@ func TestMigrator(t *testing.T) {
 		{
 			_, err := migrator.Migrate(ctx, DirectionUp, &MigrateOpts{TargetVersion: 77})
 			require.EqualError(t, err, "version 77 is not a valid River migration version")
-		}
-
-		// migration exists but already applied
-		{
-			_, err := migrator.Migrate(ctx, DirectionUp, &MigrateOpts{TargetVersion: 3})
-			require.EqualError(t, err, "version 3 is not in target list of valid migrations to apply")
 		}
 	})
 
