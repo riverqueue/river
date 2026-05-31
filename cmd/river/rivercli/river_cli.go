@@ -708,7 +708,7 @@ func (c *validate) Run(ctx context.Context, opts *validateOpts) (bool, error) {
 		return false, err
 	}
 
-	res, err := migrator.Validate(ctx)
+	res, err := migrator.Validate(ctx, nil)
 	if err != nil {
 		return false, err
 	}

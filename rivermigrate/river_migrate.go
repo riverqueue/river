@@ -365,12 +365,20 @@ type ValidateResult struct {
 	OK bool
 }
 
+// ValidateOpts are options for a validate operation.
+type ValidateOpts struct {
+	// TargetVersion is a specific migration version to validate up to. The
+	// version must exist. When set, validation only checks that migrations up
+	// to and including TargetVersion have been applied.
+	TargetVersion int
+}
+
 // Validate validates the current state of migrations, returning an unsuccessful
 // validation and usable message in case there are migrations that haven't yet
 // been applied.
-func (m *Migrator[TTx]) Validate(ctx context.Context) (*ValidateResult, error) {
+func (m *Migrator[TTx]) Validate(ctx context.Context, opts *ValidateOpts) (*ValidateResult, error) {
 	return dbutil.WithTxV(ctx, m.driver.GetExecutor(), func(ctx context.Context, tx riverdriver.ExecutorTx) (*ValidateResult, error) {
-		return m.validate(ctx, tx)
+		return m.validate(ctx, tx, opts)
 	})
 }
 
@@ -379,8 +387,8 @@ func (m *Migrator[TTx]) Validate(ctx context.Context) (*ValidateResult, error) {
 // been applied.
 //
 // This variant lets a caller validate within a transaction.
-func (m *Migrator[TTx]) ValidateTx(ctx context.Context, tx TTx) (*ValidateResult, error) {
-	return m.validate(ctx, m.driver.UnwrapExecutor(tx))
+func (m *Migrator[TTx]) ValidateTx(ctx context.Context, tx TTx, opts *ValidateOpts) (*ValidateResult, error) {
+	return m.validate(ctx, m.driver.UnwrapExecutor(tx), opts)
 }
 
 // migrateDown runs down migrations.
@@ -472,7 +480,11 @@ func (m *Migrator[TTx]) migrateUp(ctx context.Context, exec riverdriver.Executor
 }
 
 // validate validates current migration state.
-func (m *Migrator[TTx]) validate(ctx context.Context, exec riverdriver.Executor) (*ValidateResult, error) {
+func (m *Migrator[TTx]) validate(ctx context.Context, exec riverdriver.Executor, opts *ValidateOpts) (*ValidateResult, error) {
+	if opts == nil {
+		opts = &ValidateOpts{}
+	}
+
 	existingMigrations, err := m.existingMigrations(ctx, exec)
 	if err != nil {
 		return nil, err
@@ -481,6 +493,18 @@ func (m *Migrator[TTx]) validate(ctx context.Context, exec riverdriver.Executor)
 	targetMigrations := maps.Clone(m.migrations)
 	for _, migrateRow := range existingMigrations {
 		delete(targetMigrations, migrateRow.Version)
+	}
+
+	if opts.TargetVersion > 0 {
+		if _, ok := m.migrations[opts.TargetVersion]; !ok {
+			return nil, fmt.Errorf("version %d is not a valid River migration version", opts.TargetVersion)
+		}
+
+		for version := range targetMigrations {
+			if version > opts.TargetVersion {
+				delete(targetMigrations, version)
+			}
+		}
 	}
 
 	notOKWithMessage := func(message string) *ValidateResult {
@@ -523,17 +547,22 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Ex
 
 		targetIndex := slices.IndexFunc(sortedTargetMigrations, func(b Migration) bool { return b.Version == opts.TargetVersion })
 		if targetIndex == -1 {
-			return nil, fmt.Errorf("version %d is not in target list of valid migrations to apply", opts.TargetVersion)
-		}
+			// Error, but only if the migration doesn't exist or was never
+			// applied on a down migration. Up migrations with TargetVersion
+			// that's already applied should fall through with a no-op.
+			if _, ok := m.migrations[opts.TargetVersion]; !ok || direction == DirectionDown {
+				return nil, fmt.Errorf("version %d is not in target list of valid migrations to apply", opts.TargetVersion)
+			}
+		} else {
+			// Replace target list with list up to target index. Migrations are
+			// sorted according to the direction we're migrating in, so when down
+			// migration, the list is already reversed, so this will truncate it so
+			// it's the most current migration down to the target.
+			sortedTargetMigrations = sortedTargetMigrations[0 : targetIndex+1]
 
-		// Replace target list with list up to target index. Migrations are
-		// sorted according to the direction we're migrating in, so when down
-		// migration, the list is already reversed, so this will truncate it so
-		// it's the most current migration down to the target.
-		sortedTargetMigrations = sortedTargetMigrations[0 : targetIndex+1]
-
-		if direction == DirectionDown && len(sortedTargetMigrations) > 0 {
-			sortedTargetMigrations = sortedTargetMigrations[0 : len(sortedTargetMigrations)-1]
+			if direction == DirectionDown && len(sortedTargetMigrations) > 0 {
+				sortedTargetMigrations = sortedTargetMigrations[0 : len(sortedTargetMigrations)-1]
+			}
 		}
 	}
 
