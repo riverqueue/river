@@ -46,11 +46,6 @@ func (w *SortWorker) Work(ctx context.Context, job *river.Job[SortArgs]) error {
 }
 ```
 
-Workers should respect context cancellation. In particular, if work may block
-on a channel, timer, or network operation, prefer a `select` that also watches
-`ctx.Done()`. A job that ignores cancellation may continue running even after
-River has timed it out or the job rescuer has moved it out of `running`.
-
 ## Registering workers
 
 Jobs are uniquely identified by their "kind" string. Workers are registered on
@@ -86,10 +81,6 @@ if err := riverClient.Start(ctx); err != nil {
     panic(err)
 }
 ```
-
-If jobs appear to be stuck in `running`, turn on info-level logging and look
-for `num_jobs_stuck` in the producer job counts log line. A common cause is a
-worker blocking without also checking `ctx.Done()`.
 
 `Workers` can also be omitted, but it's better to include it so River can check
 that inserted job kinds have a worker that can run them.
