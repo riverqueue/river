@@ -49,7 +49,7 @@ func (w *SortWorker) Work(ctx context.Context, job *river.Job[SortArgs]) error {
 Workers should respect context cancellation. In particular, if work may block
 on a channel, timer, or network operation, prefer a `select` that also watches
 `ctx.Done()`. A job that ignores cancellation may continue running even after
-River has timed it out or marked it rescued for retry.
+River has timed it out or the job rescuer has moved it out of `running`.
 
 ## Registering workers
 

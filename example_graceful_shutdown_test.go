@@ -35,7 +35,7 @@ func (w *WaitsForCancelOnlyWorker) Work(ctx context.Context, job *river.Job[Wait
 
 	// Real workers often block on channels, timers, or network calls. Make sure
 	// those waits also observe ctx.Done(), or the job may keep running after the
-	// client has timed it out or marked it rescued for retry.
+	// client has timed it out or the job rescuer has moved it out of running.
 	<-ctx.Done()
 	fmt.Printf("Job cancelled\n")
 

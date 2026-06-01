@@ -71,7 +71,8 @@ type Worker[T JobArgs] interface {
 	// process.
 	//
 	// A worker that ignores cancellation may continue running even after the
-	// client has timed out the job or marked it rescued for retry.
+	// client has timed out the job or the job rescuer has moved it out of
+	// running.
 	Work(ctx context.Context, job *Job[T]) error
 }
 
