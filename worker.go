@@ -64,9 +64,15 @@ type Worker[T JobArgs] interface {
 	// marked completed.
 	//
 	// It is important for any worker to respect context cancellation to enable
-	// the client to respond to shutdown requests; there is no way to cancel a
-	// running job that does not respect context cancellation, other than
-	// terminating the process.
+	// the client to respond to shutdown requests. In particular, workers that
+	// wait on channels, timers, or network operations should prefer a `select`
+	// that also watches `ctx.Done()`. There is no way to cancel a running job
+	// that does not respect context cancellation, other than terminating the
+	// process.
+	//
+	// A worker that ignores cancellation may continue running even after the
+	// client has timed out the job or the job rescuer has moved it out of
+	// running.
 	Work(ctx context.Context, job *Job[T]) error
 }
 
