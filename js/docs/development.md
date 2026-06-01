@@ -35,36 +35,55 @@ By default, tests connect to `postgres://localhost:5432/river_test`. Override wi
 
 ## Releasing a new version
 
+The publishable packages are the root `riverqueue` package and the driver
+packages under `driver/*`. The packages under `examples/*` are private examples
+and should stay at `0.0.0`.
+
 1. Fetch changes to the repo. Export `VERSION` by incrementing the last tag:
 
     ```shell
     git checkout master && git pull --rebase
     export VERSION=0.x.y
+    git checkout -b $USER-$VERSION
     ```
 
-2. Update version numbers in all `package.json` files:
+2. Update version numbers in the publishable `package.json` files:
 
     ```shell
-    pnpm --filter '*' exec -- npm version $VERSION --no-git-tag-version
-    npm version $VERSION --no-git-tag-version
+    pnpm version $VERSION --no-git-tag-version
+    pnpm --filter './driver/*' exec npm version $VERSION --no-git-tag-version
     ```
 
-3. Prepare a PR with the changes, updating `CHANGELOG.md` with any necessary additions at the same time. Have it reviewed and merged.
+3. Update `CHANGELOG.md` by moving the release notes from `Unreleased` into a
+   heading for the new version.
 
-4. Upon merge, pull down the changes, tag, and push:
+4. Optional: Verify the release locally. Notably, changes must be committed for
+   this to work.
+
+    ```shell
+    pnpm publish --dry-run
+    pnpm --filter './driver/*' publish --dry-run --access public
+    ```
+
+5. Prepare a PR with the version and changelog changes. Have it reviewed and
+   merged.
+
+6. Upon merge, pull down the changes, tag, and push:
 
     ```shell
     git checkout master && git pull --rebase
     git tag v$VERSION -m "release v$VERSION"
-    git push --tags
+    git push origin v$VERSION
     ```
 
-5. Publish packages to npm:
+7. Publish packages to npm. Publish the root package first because the driver
+   packages depend on it:
 
     ```shell
-    pnpm run build:all
     pnpm publish
-    pnpm --filter '@riverqueue/*' publish --access public
+    pnpm --filter './driver/*' publish --access public
     ```
 
-6. Cut a new GitHub release by visiting [new release](https://github.com/riverqueue/riverqueue-js/releases/new), selecting the new tag, and copying in the version's `CHANGELOG.md` content as the release body.
+8. Cut a new GitHub release by visiting [new release](https://github.com/riverqueue/riverqueue-js/releases/new),
+   selecting the new tag, and copying in the version's `CHANGELOG.md` content
+   as the release body.
