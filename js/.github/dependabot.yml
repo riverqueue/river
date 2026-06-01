@@ -1,0 +1,16 @@
+version: 2
+updates:
+  - cooldown:
+      default-days: 7
+    directories:
+      - "**/*"
+    groups:
+      npm-dependencies:
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 10
+    package-ecosystem: "npm"
+    schedule:
+      interval: "monthly"
+    versioning-strategy: increase

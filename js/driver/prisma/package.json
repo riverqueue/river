@@ -1,0 +1,45 @@
+{
+  "name": "@riverqueue/driver-prisma",
+  "version": "0.1.0",
+  "description": "Prisma driver for the riverqueue TypeScript client.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "pnpm run clean && pnpm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/riverqueue/riverqueue-js.git",
+    "directory": "driver/prisma"
+  },
+  "authors": ["Brandur Leach", "Blake Gentry"],
+  "license": "LGPL-3.0-or-later",
+  "dependencies": {
+    "riverqueue": "workspace:*"
+  },
+  "peerDependencies": {
+    "@prisma/client": ">=5.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  },
+  "keywords": [
+    "river",
+    "job-queue",
+    "postgresql",
+    "prisma",
+    "driver"
+  ]
+}

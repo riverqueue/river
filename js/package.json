@@ -1,19 +1,63 @@
 {
   "name": "riverqueue",
-  "version": "0.0.2",
-  "description": "A fast job queue for Go.",
-  "main": "index.js",
+  "version": "0.1.0",
+  "description": "TypeScript client for River, a fast and reliable background job framework for PostgreSQL.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc",
+    "build:all": "pnpm run build && pnpm --filter='./driver/*' run build",
+    "clean": "rm -rf dist",
+    "clean:all": "pnpm run clean && pnpm --filter='./driver/*' run clean",
+    "fmt": "prettier --write 'src/**/*.ts' 'driver/**/src/**/*.ts'",
+    "fmt:check": "prettier --check 'src/**/*.ts' 'driver/**/src/**/*.ts'",
+    "lint": "eslint 'src/**/*.ts' 'driver/**/src/**/*.ts'",
+    "lint:fix": "eslint --fix 'src/**/*.ts' 'driver/**/src/**/*.ts'",
+    "prepublishOnly": "pnpm run clean && pnpm run build",
+    "test": "vitest run --passWithNoTests",
+    "test:integration": "vitest run --passWithNoTests --config vitest.integration.config.ts"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/riverqueue/river-js.git"
+    "url": "git+https://github.com/riverqueue/riverqueue-js.git"
   },
-  "author": "Brandur Leach",
-  "license": "LGPL3+",
+  "authors": [
+    "Brandur Leach",
+    "Blake Gentry"
+  ],
+  "license": "LGPL-3.0-or-later",
   "bugs": {
-    "url": "https://github.com/riverqueue/river-js/issues"
+    "url": "https://github.com/riverqueue/riverqueue-js/issues"
   },
-  "homepage": "https://github.com/riverqueue/river-js#readme"
+  "homepage": "https://github.com/riverqueue/riverqueue-js#readme",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^25.6.0",
+    "@types/pg": "^8.20.0",
+    "eslint": "^10.3.0",
+    "eslint-config-prettier": "^10.1.8",
+    "pg": "^8.20.0",
+    "prettier": "^3.8.3",
+    "typescript": "^5.8.0",
+    "typescript-eslint": "^8.59.2",
+    "vitest": "^4.1.5"
+  },
+  "packageManager": "pnpm@10.22.0",
+  "keywords": [
+    "river",
+    "job-queue",
+    "background-jobs",
+    "postgresql",
+    "queue"
+  ]
 }
