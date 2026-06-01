@@ -202,6 +202,38 @@ describe("Client", () => {
       expect(driver.insertedParams[0]!.maxAttempts).toBe(5);
       expect(driver.insertedParams[1]!.maxAttempts).toBe(MAX_ATTEMPTS_DEFAULT);
     });
+
+    it("deduplicates jobs with the same unique key in a batch", async () => {
+      const uniqueOpts = { byArgs: true as const };
+      const results = await client.insertMany([
+        new InsertManyParams(new SortArgs(["same"]), { uniqueOpts }),
+        new InsertManyParams(new SortArgs(["same"]), { uniqueOpts }),
+        new InsertManyParams(new SortArgs(["different"]), { uniqueOpts }),
+      ]);
+
+      // Only two jobs sent to the driver (first "same" + "different").
+      expect(driver.insertedParams).toHaveLength(2);
+
+      // All three results returned in original order.
+      expect(results).toHaveLength(3);
+      expect(results[0]!.uniqueSkippedAsDuplicated).toBe(false);
+      expect(results[1]!.uniqueSkippedAsDuplicated).toBe(true); // batch dup
+      expect(results[2]!.uniqueSkippedAsDuplicated).toBe(false);
+
+      // The duplicate returns the same job as the first occurrence.
+      expect(results[1]!.job.id).toBe(results[0]!.job.id);
+    });
+
+    it("does not deduplicate jobs without unique keys", async () => {
+      const results = await client.insertMany([
+        new SortArgs(["a"]),
+        new SortArgs(["a"]),
+      ]);
+
+      // Both sent to the driver (no unique constraints).
+      expect(driver.insertedParams).toHaveLength(2);
+      expect(results).toHaveLength(2);
+    });
   });
 
   describe("validation", () => {

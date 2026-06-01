@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import pg from "pg";
-import { Client, JobArgsObject } from "riverqueue";
+import { Client, InsertManyParams, JobArgsObject } from "riverqueue";
 import type { JobArgs } from "riverqueue";
 import { PgDriver } from "./driver.js";
 
@@ -110,6 +110,31 @@ describe("PgDriver integration", () => {
     );
     expect(second.uniqueSkippedAsDuplicated).toBe(true);
     expect(second.job.id).toBe(first.job.id);
+  });
+
+  it("deduplicates batch with duplicate unique keys", async () => {
+    const uniqueOpts = { byArgs: true as const };
+    const results = await client.insertMany([
+      new InsertManyParams(
+        new JobArgsObject(`${filePrefix}_batch_uniq`, { key: "same" }),
+        { uniqueOpts }
+      ),
+      new InsertManyParams(
+        new JobArgsObject(`${filePrefix}_batch_uniq`, { key: "same" }),
+        { uniqueOpts }
+      ),
+      new InsertManyParams(
+        new JobArgsObject(`${filePrefix}_batch_uniq`, { key: "different" }),
+        { uniqueOpts }
+      ),
+    ]);
+
+    expect(results).toHaveLength(3);
+    expect(results[0]!.uniqueSkippedAsDuplicated).toBe(false);
+    expect(results[1]!.uniqueSkippedAsDuplicated).toBe(true);
+    expect(results[2]!.uniqueSkippedAsDuplicated).toBe(false);
+    expect(results[1]!.job.id).toBe(results[0]!.job.id);
+    expect(results[2]!.job.id).not.toBe(results[0]!.job.id);
   });
 
   it("allows unique jobs with different args", async () => {

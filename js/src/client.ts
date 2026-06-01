@@ -143,14 +143,54 @@ export class Client<TTx = unknown> {
       return this.makeInsertParams(arg, {});
     });
 
-    const results = await this.driver.jobInsertMany(
-      allParams,
+    // Deduplicate by unique key within the batch. PostgreSQL aborts a
+    // multi-row INSERT ... ON CONFLICT DO UPDATE if two rows conflict on
+    // the same unique key, so we must only send the first occurrence to the
+    // database and mark subsequent duplicates ourselves.
+    const { dedupedParams, resultMapping } =
+      this.deduplicateByUniqueKey(allParams);
+
+    const dbResults = await this.driver.jobInsertMany(
+      dedupedParams,
       this.driverOptions(opts?.tx)
     );
-    return results.map(([job, uniqueSkipped]) => ({
-      job,
-      uniqueSkippedAsDuplicated: uniqueSkipped,
-    }));
+
+    return resultMapping.map((mapping) => {
+      if ("duplicateOf" in mapping) {
+        const [job] = dbResults[mapping.duplicateOf] as [JobRow, boolean];
+        return { job, uniqueSkippedAsDuplicated: true };
+      }
+      const [job, uniqueSkipped] = dbResults[mapping.index] as [
+        JobRow,
+        boolean,
+      ];
+      return { job, uniqueSkippedAsDuplicated: uniqueSkipped };
+    });
+  }
+
+  private deduplicateByUniqueKey(params: JobInsertParams[]): {
+    dedupedParams: JobInsertParams[];
+    resultMapping: ({ index: number } | { duplicateOf: number })[];
+  } {
+    const uniqueKeyToIndex = new Map<string, number>();
+    const dedupedParams: JobInsertParams[] = [];
+    const resultMapping: ({ index: number } | { duplicateOf: number })[] = [];
+
+    for (const p of params) {
+      if (p.uniqueKey) {
+        const hexKey = Buffer.from(p.uniqueKey).toString("hex");
+        const existing = uniqueKeyToIndex.get(hexKey);
+        if (existing !== undefined) {
+          resultMapping.push({ duplicateOf: existing });
+          continue;
+        }
+        uniqueKeyToIndex.set(hexKey, dedupedParams.length);
+      }
+      resultMapping.push({ index: dedupedParams.length });
+      dedupedParams.push(p);
+    }
+
+    return { dedupedParams, resultMapping };
   }
 
   private driverOptions(tx?: TTx): DriverOptions<TTx> {
