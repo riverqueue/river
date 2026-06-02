@@ -1303,7 +1303,7 @@ func Test_Client_Common(t *testing.T) {
 		}
 
 		AddWorkerArgs(bundle.config.Workers, JobArgs{}, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
-			return SetMetadata(ctx, "worker_key", "worker_value")
+			return MetadataSet(ctx, "worker_key", "worker_value")
 		}))
 
 		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
@@ -1432,7 +1432,7 @@ func Test_Client_Common(t *testing.T) {
 
 		bundle.config.Hooks = []rivertype.Hook{
 			HookWorkEndFunc(func(ctx context.Context, job *rivertype.JobRow, err error) error {
-				require.NoError(t, SetMetadata(ctx, "hook_key", "hook_value"))
+				require.NoError(t, MetadataSet(ctx, "hook_key", "hook_value"))
 				return err
 			}),
 		}
@@ -1462,7 +1462,7 @@ func Test_Client_Common(t *testing.T) {
 
 		bundle.config.Hooks = []rivertype.Hook{
 			HookWorkBeginFunc(func(ctx context.Context, job *rivertype.JobRow) error {
-				return SetMetadata(ctx, "hook_begin_key", "hook_begin_value")
+				return MetadataSet(ctx, "hook_begin_key", "hook_begin_value")
 			}),
 		}
 
@@ -1502,7 +1502,7 @@ func Test_Client_Common(t *testing.T) {
 
 				return []rivertype.WorkerMiddleware{
 					WorkerMiddlewareFunc(func(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
-						require.NoError(t, SetMetadata(ctx, "middleware_key", "middleware_value"))
+						require.NoError(t, MetadataSet(ctx, "middleware_key", "middleware_value"))
 						return doInner(ctx)
 					}),
 				}

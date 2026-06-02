@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSetMetadata(t *testing.T) {
+func TestMetadataSet(t *testing.T) {
 	t.Parallel()
 
 	t.Run("RejectsReservedPrefix", func(t *testing.T) {
@@ -16,15 +16,15 @@ func TestSetMetadata(t *testing.T) {
 
 		ctx := context.WithValue(context.Background(), jobexecutor.ContextKeyMetadataUpdates, map[string]any{})
 
-		err := SetMetadata(ctx, "river:reserved", "value")
-		require.EqualError(t, err, "SetMetadata cannot be used with keys prefixed with `river:`")
+		err := MetadataSet(ctx, "river:reserved", "value")
+		require.EqualError(t, err, "MetadataSet cannot be used with keys prefixed with `river:`")
 	})
 
 	t.Run("RequiresWorkContext", func(t *testing.T) {
 		t.Parallel()
 
-		err := SetMetadata(context.Background(), "key", "value")
-		require.EqualError(t, err, "SetMetadata must be called within a worker, worker middleware, or work hook")
+		err := MetadataSet(context.Background(), "key", "value")
+		require.EqualError(t, err, "MetadataSet must be called within a worker, worker middleware, or work hook")
 	})
 
 	t.Run("SetsValueOnWorkContext", func(t *testing.T) {
@@ -33,7 +33,7 @@ func TestSetMetadata(t *testing.T) {
 		metadataUpdates := map[string]any{}
 		ctx := context.WithValue(context.Background(), jobexecutor.ContextKeyMetadataUpdates, metadataUpdates)
 
-		err := SetMetadata(ctx, "key", "value")
+		err := MetadataSet(ctx, "key", "value")
 		require.NoError(t, err)
 		require.Equal(t, "value", metadataUpdates["key"])
 	})
