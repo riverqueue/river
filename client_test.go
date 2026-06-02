@@ -70,6 +70,10 @@ type noOpWorker struct {
 
 func (w *noOpWorker) Work(ctx context.Context, job *Job[noOpArgs]) error { return nil }
 
+type metadataWorkerArgs struct{}
+
+func (metadataWorkerArgs) Kind() string { return "metadata_worker" }
+
 type periodicJobArgs struct{}
 
 func (periodicJobArgs) Kind() string { return "periodic_job" }
@@ -1293,6 +1297,33 @@ func Test_Client_Common(t *testing.T) {
 		require.True(t, workEndHookCalled)
 	})
 
+	t.Run("WithWorkerSettingMetadata", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		AddWorkerArgs(bundle.config.Workers, metadataWorkerArgs{}, WorkFunc(func(ctx context.Context, job *Job[metadataWorkerArgs]) error {
+			return SetMetadata(ctx, "worker_key", "worker_value")
+		}))
+
+		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
+		require.NoError(t, err)
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, metadataWorkerArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+
+		var metadata map[string]any
+		require.NoError(t, json.Unmarshal(event.Job.Metadata, &metadata))
+		require.Equal(t, "worker_value", metadata["worker_key"])
+	})
+
 	t.Run("WithInsertBeginHookOnJobArgs", func(t *testing.T) {
 		t.Parallel()
 
@@ -1392,6 +1423,36 @@ func Test_Client_Common(t *testing.T) {
 		require.Equal(t, insertRes.Job.ID, event.Job.ID)
 
 		require.True(t, hookWorkEndCalled.Load())
+	})
+
+	t.Run("WithWorkEndHookSettingMetadata", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		bundle.config.Hooks = []rivertype.Hook{
+			HookWorkEndFunc(func(ctx context.Context, job *rivertype.JobRow, err error) error {
+				require.NoError(t, SetMetadata(ctx, "hook_key", "hook_value"))
+				return err
+			}),
+		}
+
+		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
+		require.NoError(t, err)
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+
+		var metadata map[string]any
+		require.NoError(t, json.Unmarshal(event.Job.Metadata, &metadata))
+		require.Equal(t, "hook_value", metadata["hook_key"])
 	})
 
 	t.Run("WithGlobalWorkerMiddleware", func(t *testing.T) {
