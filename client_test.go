@@ -1455,6 +1455,35 @@ func Test_Client_Common(t *testing.T) {
 		require.Equal(t, "hook_value", metadata["hook_key"])
 	})
 
+	t.Run("WithWorkBeginHookSettingMetadata", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		bundle.config.Hooks = []rivertype.Hook{
+			HookWorkBeginFunc(func(ctx context.Context, job *rivertype.JobRow) error {
+				return SetMetadata(ctx, "hook_begin_key", "hook_begin_value")
+			}),
+		}
+
+		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
+		require.NoError(t, err)
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+
+		var metadata map[string]any
+		require.NoError(t, json.Unmarshal(event.Job.Metadata, &metadata))
+		require.Equal(t, "hook_begin_value", metadata["hook_begin_key"])
+	})
+
 	t.Run("WithWorkerMiddlewareSettingMetadata", func(t *testing.T) {
 		t.Parallel()
 
