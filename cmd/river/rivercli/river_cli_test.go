@@ -290,6 +290,38 @@ func TestBaseCommandSetNonParallel(t *testing.T) {
 		cmd.SetArgs([]string{"migrate-up", "--schema", schema})
 		require.NoError(t, cmd.Execute())
 	})
+
+	t.Run("PostgresCustomSchemaMigrateUpValidateDown", func(t *testing.T) {
+		t.Parallel()
+
+		cmd, _ := setup(t)
+
+		testDatabaseURL := riversharedtest.TestDatabaseURL()
+
+		config, err := pgxpool.ParseConfig(testDatabaseURL)
+		require.NoError(t, err)
+
+		dbPool, err := pgxpool.NewWithConfig(ctx, config)
+		require.NoError(t, err)
+
+		driver := riverpgxv5.New(dbPool)
+		schema := riverdbtest.TestSchema(ctx, t, driver, nil)
+
+		cmd.SetArgs([]string{"migrate-up", "--database-url", testDatabaseURL, "--schema", schema})
+		require.NoError(t, cmd.Execute())
+
+		cmd, _ = setup(t)
+		cmd.SetArgs([]string{"validate", "--database-url", testDatabaseURL, "--schema", schema})
+		require.NoError(t, cmd.Execute())
+
+		cmd, _ = setup(t)
+		cmd.SetArgs([]string{"migrate-down", "--database-url", testDatabaseURL, "--max-steps", "100", "--schema", schema})
+		require.NoError(t, cmd.Execute())
+
+		cmd, _ = setup(t)
+		cmd.SetArgs([]string{"validate", "--database-url", testDatabaseURL, "--schema", schema})
+		require.Error(t, cmd.Execute())
+	})
 }
 
 func TestBaseCommandSetPostgresTimeoutPrecedence(t *testing.T) {
