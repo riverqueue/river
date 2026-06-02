@@ -237,13 +237,11 @@ Built with %s
 // out into its own test block so that we don't have to mark the entire block
 // above as non-parallel because a few tests can't be made parallel.
 func TestBaseCommandSetNonParallel(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
-	type testBundle struct {
-		out *bytes.Buffer
-	}
-
-	setup := func(t *testing.T) (*cobra.Command, *testBundle) {
+	setup := func(t *testing.T) *cobra.Command {
 		t.Helper()
 
 		cli := NewCLI(&Config{
@@ -253,13 +251,11 @@ func TestBaseCommandSetNonParallel(t *testing.T) {
 		var out bytes.Buffer
 		cli.SetOut(&out)
 
-		return cli.BaseCommandSet(), &testBundle{
-			out: &out,
-		}
+		return cli.BaseCommandSet()
 	}
 
 	t.Run("PGEnvWithoutDatabaseURL", func(t *testing.T) {
-		cmd, _ := setup(t)
+		cmd := setup(t)
 
 		testDatabaseURL := riversharedtest.TestDatabaseURL()
 
@@ -294,7 +290,7 @@ func TestBaseCommandSetNonParallel(t *testing.T) {
 	t.Run("PostgresCustomSchemaMigrateUpValidateDown", func(t *testing.T) {
 		t.Parallel()
 
-		cmd, _ := setup(t)
+		cmd := setup(t)
 
 		testDatabaseURL := riversharedtest.TestDatabaseURL()
 
@@ -310,15 +306,15 @@ func TestBaseCommandSetNonParallel(t *testing.T) {
 		cmd.SetArgs([]string{"migrate-up", "--database-url", testDatabaseURL, "--schema", schema})
 		require.NoError(t, cmd.Execute())
 
-		cmd, _ = setup(t)
+		cmd = setup(t)
 		cmd.SetArgs([]string{"validate", "--database-url", testDatabaseURL, "--schema", schema})
 		require.NoError(t, cmd.Execute())
 
-		cmd, _ = setup(t)
+		cmd = setup(t)
 		cmd.SetArgs([]string{"migrate-down", "--database-url", testDatabaseURL, "--max-steps", "100", "--schema", schema})
 		require.NoError(t, cmd.Execute())
 
-		cmd, _ = setup(t)
+		cmd = setup(t)
 		cmd.SetArgs([]string{"validate", "--database-url", testDatabaseURL, "--schema", schema})
 		require.Error(t, cmd.Execute())
 	})
