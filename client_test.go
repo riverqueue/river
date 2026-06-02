@@ -70,10 +70,6 @@ type noOpWorker struct {
 
 func (w *noOpWorker) Work(ctx context.Context, job *Job[noOpArgs]) error { return nil }
 
-type metadataWorkerArgs struct{}
-
-func (metadataWorkerArgs) Kind() string { return "metadata_worker" }
-
 type periodicJobArgs struct{}
 
 func (periodicJobArgs) Kind() string { return "periodic_job" }
@@ -1302,7 +1298,11 @@ func Test_Client_Common(t *testing.T) {
 
 		_, bundle := setup(t)
 
-		AddWorkerArgs(bundle.config.Workers, metadataWorkerArgs{}, WorkFunc(func(ctx context.Context, job *Job[metadataWorkerArgs]) error {
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorkerArgs(bundle.config.Workers, JobArgs{}, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
 			return SetMetadata(ctx, "worker_key", "worker_value")
 		}))
 
@@ -1312,7 +1312,7 @@ func Test_Client_Common(t *testing.T) {
 		subscribeChan := subscribe(t, client)
 		startClient(ctx, t, client)
 
-		insertRes, err := client.Insert(ctx, metadataWorkerArgs{}, nil)
+		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
 		require.NoError(t, err)
 
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)

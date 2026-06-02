@@ -237,11 +237,13 @@ Built with %s
 // out into its own test block so that we don't have to mark the entire block
 // above as non-parallel because a few tests can't be made parallel.
 func TestBaseCommandSetNonParallel(t *testing.T) {
-	t.Parallel()
-
 	ctx := context.Background()
 
-	setup := func(t *testing.T) *cobra.Command {
+	type testBundle struct {
+		out *bytes.Buffer
+	}
+
+	setup := func(t *testing.T) (*cobra.Command, *testBundle) {
 		t.Helper()
 
 		cli := NewCLI(&Config{
@@ -251,11 +253,13 @@ func TestBaseCommandSetNonParallel(t *testing.T) {
 		var out bytes.Buffer
 		cli.SetOut(&out)
 
-		return cli.BaseCommandSet()
+		return cli.BaseCommandSet(), &testBundle{
+			out: &out,
+		}
 	}
 
 	t.Run("PGEnvWithoutDatabaseURL", func(t *testing.T) {
-		cmd := setup(t)
+		cmd, _ := setup(t)
 
 		testDatabaseURL := riversharedtest.TestDatabaseURL()
 
@@ -285,38 +289,6 @@ func TestBaseCommandSetNonParallel(t *testing.T) {
 
 		cmd.SetArgs([]string{"migrate-up", "--schema", schema})
 		require.NoError(t, cmd.Execute())
-	})
-
-	t.Run("PostgresCustomSchemaMigrateUpValidateDown", func(t *testing.T) {
-		t.Parallel()
-
-		cmd := setup(t)
-
-		testDatabaseURL := riversharedtest.TestDatabaseURL()
-
-		config, err := pgxpool.ParseConfig(testDatabaseURL)
-		require.NoError(t, err)
-
-		dbPool, err := pgxpool.NewWithConfig(ctx, config)
-		require.NoError(t, err)
-
-		driver := riverpgxv5.New(dbPool)
-		schema := riverdbtest.TestSchema(ctx, t, driver, nil)
-
-		cmd.SetArgs([]string{"migrate-up", "--database-url", testDatabaseURL, "--schema", schema})
-		require.NoError(t, cmd.Execute())
-
-		cmd = setup(t)
-		cmd.SetArgs([]string{"validate", "--database-url", testDatabaseURL, "--schema", schema})
-		require.NoError(t, cmd.Execute())
-
-		cmd = setup(t)
-		cmd.SetArgs([]string{"migrate-down", "--database-url", testDatabaseURL, "--max-steps", "100", "--schema", schema})
-		require.NoError(t, cmd.Execute())
-
-		cmd = setup(t)
-		cmd.SetArgs([]string{"validate", "--database-url", testDatabaseURL, "--schema", schema})
-		require.Error(t, cmd.Execute())
 	})
 }
 

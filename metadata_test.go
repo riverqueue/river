@@ -24,7 +24,7 @@ func TestSetMetadata(t *testing.T) {
 		t.Parallel()
 
 		err := SetMetadata(context.Background(), "key", "value")
-		require.EqualError(t, err, "SetMetadata must be called within a Worker, worker middleware, or work hook")
+		require.EqualError(t, err, "SetMetadata must be called within a worker, worker middleware, or work hook")
 	})
 
 	t.Run("SetsValueOnWorkContext", func(t *testing.T) {

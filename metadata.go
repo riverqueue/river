@@ -8,7 +8,7 @@ import (
 	"github.com/riverqueue/river/internal/jobexecutor"
 )
 
-var errMetadataNotSettable = errors.New("SetMetadata must be called within a Worker, worker middleware, or work hook")
+var errMetadataNotSettable = errors.New("SetMetadata must be called within a worker, worker middleware, or work hook")
 
 // SetMetadata records a metadata value to be merged into the job's metadata
 // when the current work attempt finishes.
