@@ -2092,8 +2092,10 @@ func Test_Client_Stop_Common(t *testing.T) {
 
 		client := runNewTestClient(ctx, t, newTestConfig(t, ""))
 
-		// Should shut down quickly:
-		ctx, cancel := context.WithTimeout(ctx, time.Second)
+		// Shutdown should still complete promptly, but the client may need a full
+		// leadership resign attempt before stopping, which can take about a second
+		// under race instrumentation.
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 
 		require.NoError(t, client.Stop(ctx))
