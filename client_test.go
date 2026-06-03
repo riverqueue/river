@@ -1293,6 +1293,37 @@ func Test_Client_Common(t *testing.T) {
 		require.True(t, workEndHookCalled)
 	})
 
+	t.Run("WithWorkerSettingMetadata", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorkerArgs(bundle.config.Workers, JobArgs{}, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			return MetadataSet(ctx, "worker_key", "worker_value")
+		}))
+
+		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
+		require.NoError(t, err)
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+
+		var metadata map[string]any
+		require.NoError(t, json.Unmarshal(event.Job.Metadata, &metadata))
+		require.Equal(t, "worker_value", metadata["worker_key"])
+	})
+
 	t.Run("WithInsertBeginHookOnJobArgs", func(t *testing.T) {
 		t.Parallel()
 
@@ -1392,6 +1423,110 @@ func Test_Client_Common(t *testing.T) {
 		require.Equal(t, insertRes.Job.ID, event.Job.ID)
 
 		require.True(t, hookWorkEndCalled.Load())
+	})
+
+	t.Run("WithWorkEndHookSettingMetadata", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		bundle.config.Hooks = []rivertype.Hook{
+			HookWorkEndFunc(func(ctx context.Context, job *rivertype.JobRow, err error) error {
+				require.NoError(t, MetadataSet(ctx, "hook_key", "hook_value"))
+				return err
+			}),
+		}
+
+		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
+		require.NoError(t, err)
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+
+		var metadata map[string]any
+		require.NoError(t, json.Unmarshal(event.Job.Metadata, &metadata))
+		require.Equal(t, "hook_value", metadata["hook_key"])
+	})
+
+	t.Run("WithWorkBeginHookSettingMetadata", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		bundle.config.Hooks = []rivertype.Hook{
+			HookWorkBeginFunc(func(ctx context.Context, job *rivertype.JobRow) error {
+				return MetadataSet(ctx, "hook_begin_key", "hook_begin_value")
+			}),
+		}
+
+		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
+		require.NoError(t, err)
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+
+		var metadata map[string]any
+		require.NoError(t, json.Unmarshal(event.Job.Metadata, &metadata))
+		require.Equal(t, "hook_begin_value", metadata["hook_begin_key"])
+	})
+
+	t.Run("WithWorkerMiddlewareSettingMetadata", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		worker := &workerWithMiddleware[JobArgs]{
+			workFunc: func(ctx context.Context, job *Job[JobArgs]) error {
+				return nil
+			},
+			middlewareFunc: func(job *rivertype.JobRow) []rivertype.WorkerMiddleware {
+				require.Equal(t, (JobArgs{}).Kind(), job.Kind)
+
+				return []rivertype.WorkerMiddleware{
+					WorkerMiddlewareFunc(func(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
+						require.NoError(t, MetadataSet(ctx, "middleware_key", "middleware_value"))
+						return doInner(ctx)
+					}),
+				}
+			},
+		}
+
+		AddWorker(bundle.config.Workers, worker)
+
+		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
+		require.NoError(t, err)
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+
+		var metadata map[string]any
+		require.NoError(t, json.Unmarshal(event.Job.Metadata, &metadata))
+		require.Equal(t, "middleware_value", metadata["middleware_key"])
 	})
 
 	t.Run("WithGlobalWorkerMiddleware", func(t *testing.T) {
@@ -1986,8 +2121,10 @@ func Test_Client_Stop_Common(t *testing.T) {
 
 		client := runNewTestClient(ctx, t, newTestConfig(t, ""))
 
-		// Should shut down quickly:
-		ctx, cancel := context.WithTimeout(ctx, time.Second)
+		// Shutdown should still complete promptly, but the client may need a full
+		// leadership resign attempt before stopping, which can take about a second
+		// under race instrumentation.
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 
 		require.NoError(t, client.Stop(ctx))
