@@ -3,6 +3,7 @@ package river
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -186,6 +187,9 @@ func (sm *subscriptionManager) distributeJobEvent(job *rivertype.JobRow, stats *
 			select {
 			case sub.Chan <- event:
 			default:
+				sm.Logger.WarnContext(context.Background(), sm.Name+": Subscription event dropped due to full buffer",
+					slog.String("event_kind", string(event.Kind)),
+				)
 			}
 		}
 	}
@@ -202,6 +206,9 @@ func (sm *subscriptionManager) distributeQueueEvent(event *Event) {
 			select {
 			case sub.Chan <- event:
 			default:
+				sm.Logger.WarnContext(context.Background(), sm.Name+": Subscription event dropped due to full buffer",
+					slog.String("event_kind", string(event.Kind)),
+				)
 			}
 		}
 	}

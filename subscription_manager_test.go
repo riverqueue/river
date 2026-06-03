@@ -1,7 +1,10 @@
 package river
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +16,7 @@ import (
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
@@ -137,5 +141,32 @@ func Test_SubscriptionManager(t *testing.T) {
 		close(bundle.subscribeCh)
 
 		startstoptest.Stress(ctx, t, svc)
+	})
+
+	t.Run("LogsDroppedQueueEvents", func(t *testing.T) {
+		t.Parallel()
+
+		var logBuf bytes.Buffer
+
+		manager := newSubscriptionManager(&baseservice.Archetype{
+			Logger: slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})),
+			Time:   riversharedtest.BaseServiceArchetype(t).Time,
+		}, nil)
+
+		sub, cancelSub := manager.SubscribeConfig(&SubscribeConfig{ChanSize: 1, Kinds: []EventKind{EventKindQueuePaused}})
+		t.Cleanup(cancelSub)
+
+		manager.distributeQueueEvent(&Event{
+			Kind:  EventKindQueuePaused,
+			Queue: &rivertype.Queue{Name: "default"},
+		})
+		manager.distributeQueueEvent(&Event{
+			Kind:  EventKindQueuePaused,
+			Queue: &rivertype.Queue{Name: "default"},
+		})
+
+		require.Len(t, sub, 1)
+		require.Contains(t, strings.TrimSpace(logBuf.String()), "Subscription event dropped due to full buffer")
+		require.Contains(t, logBuf.String(), "event_kind=queue_paused")
 	})
 }
