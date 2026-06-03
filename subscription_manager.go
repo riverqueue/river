@@ -222,7 +222,7 @@ func (sm *subscriptionManager) distributeQueueEventWithContext(ctx context.Conte
 // an overridden size.
 func (sm *subscriptionManager) SubscribeConfig(config *SubscribeConfig) (<-chan *Event, func()) {
 	if config.ChanSize < 0 {
-		panic("SubscribeConfig.ChanSize must be greater or equal to 1")
+		panic("SubscribeConfig.ChanSize must be greater or equal to 0")
 	}
 	if config.ChanSize == 0 {
 		config.ChanSize = subscribeChanSizeDefault

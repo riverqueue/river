@@ -169,4 +169,31 @@ func Test_SubscriptionManager(t *testing.T) {
 		require.Contains(t, strings.TrimSpace(logBuf.String()), "Subscription event dropped due to full buffer")
 		require.Contains(t, logBuf.String(), "event_kind=queue_paused")
 	})
+
+	t.Run("PanicOnNegativeChanSize", func(t *testing.T) {
+		t.Parallel()
+
+		manager := newSubscriptionManager(riversharedtest.BaseServiceArchetype(t), nil)
+
+		require.PanicsWithValue(t, "SubscribeConfig.ChanSize must be greater or equal to 0", func() {
+			_, _ = manager.SubscribeConfig(&SubscribeConfig{
+				ChanSize: -1,
+				Kinds:    []EventKind{EventKindQueuePaused},
+			})
+		})
+	})
+
+	t.Run("UsesDefaultChanSizeWhenZero", func(t *testing.T) {
+		t.Parallel()
+
+		manager := newSubscriptionManager(riversharedtest.BaseServiceArchetype(t), nil)
+
+		sub, cancelSub := manager.SubscribeConfig(&SubscribeConfig{
+			ChanSize: 0,
+			Kinds:    []EventKind{EventKindQueuePaused},
+		})
+		t.Cleanup(cancelSub)
+
+		require.Equal(t, subscribeChanSizeDefault, cap(sub))
+	})
 }

@@ -7291,7 +7291,7 @@ func Test_Client_SubscribeConfig(t *testing.T) {
 
 		client := newTestClient(t, dbPool, config)
 
-		require.PanicsWithValue(t, "SubscribeConfig.ChanSize must be greater or equal to 1", func() {
+		require.PanicsWithValue(t, "SubscribeConfig.ChanSize must be greater or equal to 0", func() {
 			_, _ = client.SubscribeConfig(&SubscribeConfig{
 				ChanSize: -1,
 			})
