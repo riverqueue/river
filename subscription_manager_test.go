@@ -175,7 +175,7 @@ func Test_SubscriptionManager(t *testing.T) {
 
 		manager := newSubscriptionManager(riversharedtest.BaseServiceArchetype(t), nil)
 
-		require.PanicsWithValue(t, "SubscribeConfig.ChanSize must be greater or equal to 0", func() {
+		require.PanicsWithValue(t, "SubscribeConfig.ChanSize must be greater or equal to 1", func() {
 			_, _ = manager.SubscribeConfig(&SubscribeConfig{
 				ChanSize: -1,
 				Kinds:    []EventKind{EventKindQueuePaused},

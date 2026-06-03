@@ -1328,7 +1328,7 @@ type SubscribeConfig struct {
 	// subscription. Incoming events that would overflow this buffer because a
 	// listener isn't reading from the channel in a timely manner will be dropped.
 	//
-	// Defaults to 1000 when set to 0.
+	// Defaults to 1000.
 	ChanSize int
 
 	// Kinds are the kinds of events that the subscription will receive.
