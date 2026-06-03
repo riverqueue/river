@@ -185,7 +185,7 @@ func (n *Notifier) deliverNotifications(ctx context.Context) {
 						if panicVal := recover(); panicVal != nil {
 							n.Logger.ErrorContext(ctx, n.Name+": Notification delivery panicked",
 								slog.String("panic_val", fmt.Sprintf("%v", panicVal)),
-								slog.String("topic", string(notification.Topic)),
+								slog.String("topic", notification.Topic),
 							)
 						}
 					}()
