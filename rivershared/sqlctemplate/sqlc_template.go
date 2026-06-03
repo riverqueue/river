@@ -272,6 +272,33 @@ func WithReplacements(ctx context.Context, replacements map[string]Replacement, 
 	})
 }
 
+// WithReplacementsDup duplicates the template replacements container in context.
+//
+// Normally, adding replacements modifies an existing container in context. Call
+// this function before WithReplacements to create a dup instead.
+//
+// TODO(brandur): This API isn't great. Reconsider it. Maybe WithReplacements
+// should always dup?
+func WithReplacementsDup(ctx context.Context) context.Context {
+	var (
+		namedArgs    map[string]any
+		replacements map[string]Replacement
+	)
+
+	if container, ok := ctx.Value(contextKey{}).(*contextContainer); ok {
+		namedArgs = maps.Clone(container.NamedArgs)
+		replacements = maps.Clone(container.Replacements)
+	} else {
+		namedArgs = make(map[string]any)
+		replacements = make(map[string]Replacement)
+	}
+
+	return context.WithValue(ctx, contextKey{}, &contextContainer{
+		NamedArgs:    namedArgs,
+		Replacements: replacements,
+	})
+}
+
 // Comparable struct that's used as a key for template caching.
 type replacerCacheKey struct {
 	namedArgs         string // all arg names concatenated together

@@ -586,6 +586,7 @@ func testElector[TElectorBundle any](
 				case 3:
 					return execTx.LeaderInsert(ctx, &riverdriver.LeaderInsertParams{
 						LeaderID: params.LeaderID,
+						Name:     params.Name,
 						Now:      params.Now,
 						Schema:   params.Schema,
 						TTL:      params.TTL,
@@ -736,6 +737,7 @@ func testElector[TElectorBundle any](
 				ElectedAt: &newElectedAt,
 				ExpiresAt: &newExpiresAt,
 				LeaderID:  leader.LeaderID,
+				Name:      "default",
 				Schema:    elector.config.Schema,
 				TTL:       elector.leaderTTL(),
 			})

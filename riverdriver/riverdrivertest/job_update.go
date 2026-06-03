@@ -532,6 +532,30 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.Equal(t, rivertype.JobStateDiscarded, updatedJob2.State)
 			require.Equal(t, "scheduler_discarded", gjson.GetBytes(updatedJob2.Metadata, "unique_key_conflict").String())
 		})
+
+		// Verifies that an empty QueuesIncluded slice is treated as nil (no
+		// filter) rather than as "match no queues".
+		t.Run("QueuesIncludedEmptySlice", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			var (
+				horizon       = time.Now()
+				beforeHorizon = horizon.Add(-1 * time.Minute)
+			)
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateScheduled)})
+
+			result, err := exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
+				Max:            100,
+				Now:            &horizon,
+				QueuesIncluded: []string{},
+			})
+			require.NoError(t, err)
+			require.Len(t, result, 1)
+			require.Equal(t, job.ID, result[0].Job.ID)
+		})
 	})
 
 	makeErrPayload := func(t *testing.T, now time.Time) []byte {

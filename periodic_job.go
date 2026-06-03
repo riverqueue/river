@@ -37,6 +37,10 @@ type PeriodicJobOpts struct {
 	// ID is an optional identifier for the job. Identifiers must be unique
 	// between all periodic jobs and adding a periodic job will error if they're
 	// not.
+	//
+	// If using Config.LeaderDomain, ID should be unique across all domains.  If
+	// it isn't, clients running in different domains may enqueue conflicting
+	// periodic jobs with the same ID.
 	ID string
 
 	// RunOnStart can be used to indicate that a periodic job should insert an

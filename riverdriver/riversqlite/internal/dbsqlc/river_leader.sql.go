@@ -13,11 +13,13 @@ const leaderAttemptElect = `-- name: LeaderAttemptElect :one
 INSERT INTO /* TEMPLATE: schema */river_leader (
     leader_id,
     elected_at,
-    expires_at
+    expires_at,
+    name
 ) VALUES (
     ?1,
     coalesce(cast(?2 AS text), datetime('now', 'subsec')),
-    datetime(coalesce(cast(?2 AS text), datetime('now', 'subsec')), 'subsec', cast(?3 as text))
+    datetime(coalesce(cast(?2 AS text), datetime('now', 'subsec')), 'subsec', cast(?3 as text)),
+    ?4
 )
 ON CONFLICT (name)
     DO NOTHING
@@ -28,10 +30,16 @@ type LeaderAttemptElectParams struct {
 	LeaderID string
 	Now      *string
 	TTL      string
+	Name     string
 }
 
 func (q *Queries) LeaderAttemptElect(ctx context.Context, db DBTX, arg *LeaderAttemptElectParams) (*RiverLeader, error) {
-	row := db.QueryRowContext(ctx, leaderAttemptElect, arg.LeaderID, arg.Now, arg.TTL)
+	row := db.QueryRowContext(ctx, leaderAttemptElect,
+		arg.LeaderID,
+		arg.Now,
+		arg.TTL,
+		arg.Name,
+	)
 	var i RiverLeader
 	err := row.Scan(
 		&i.ElectedAt,
@@ -49,6 +57,7 @@ WHERE
     unixepoch(elected_at, 'subsec') = unixepoch(cast(?3 AS text), 'subsec')
     AND expires_at >= coalesce(cast(?1 AS text), datetime('now', 'subsec'))
     AND leader_id = ?4
+    AND name = ?5
 RETURNING elected_at, expires_at, leader_id, name
 `
 
@@ -57,6 +66,7 @@ type LeaderAttemptReelectParams struct {
 	TTL       string
 	ElectedAt string
 	LeaderID  string
+	Name      string
 }
 
 func (q *Queries) LeaderAttemptReelect(ctx context.Context, db DBTX, arg *LeaderAttemptReelectParams) (*RiverLeader, error) {
@@ -65,6 +75,7 @@ func (q *Queries) LeaderAttemptReelect(ctx context.Context, db DBTX, arg *Leader
 		arg.TTL,
 		arg.ElectedAt,
 		arg.LeaderID,
+		arg.Name,
 	)
 	var i RiverLeader
 	err := row.Scan(
@@ -110,11 +121,13 @@ const leaderInsert = `-- name: LeaderInsert :one
 INSERT INTO /* TEMPLATE: schema */river_leader(
     elected_at,
     expires_at,
-    leader_id
+    leader_id,
+    name
 ) VALUES (
     coalesce(cast(?1 AS text), cast(?2 AS text), datetime('now', 'subsec')),
     coalesce(cast(?3 AS text), datetime(coalesce(cast(?2 AS text), datetime('now', 'subsec')), 'subsec', cast(?4 as text))),
-    ?5
+    ?5,
+    ?6
 ) RETURNING elected_at, expires_at, leader_id, name
 `
 
@@ -124,6 +137,7 @@ type LeaderInsertParams struct {
 	ExpiresAt *string
 	TTL       string
 	LeaderID  string
+	Name      string
 }
 
 func (q *Queries) LeaderInsert(ctx context.Context, db DBTX, arg *LeaderInsertParams) (*RiverLeader, error) {
@@ -133,6 +147,7 @@ func (q *Queries) LeaderInsert(ctx context.Context, db DBTX, arg *LeaderInsertPa
 		arg.ExpiresAt,
 		arg.TTL,
 		arg.LeaderID,
+		arg.Name,
 	)
 	var i RiverLeader
 	err := row.Scan(
