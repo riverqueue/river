@@ -3,6 +3,7 @@ package rivercommon
 import (
 	"errors"
 	"regexp"
+	"time"
 )
 
 // These constants are made available in rivercommon so that they're accessible
@@ -16,6 +17,16 @@ const (
 	PriorityDefault    = 1
 	QueueDefault       = "default"
 )
+
+// HotOperationTimeout attempts to standardize timeouts for some "hot"
+// operations like locking available jobs or completing finished jobs. It's
+// somewhat questionable whether it makes sense to share timing on these
+// queries, but for the time being it makes more sense than each part of the
+// code randomly choosing its own timing.
+//
+// We probably want to have another look at this in the not-too-distant future
+// to make sure we can't do anything a bit smarter when it comes to timeouts.
+const HotOperationTimeout = 10 * time.Second
 
 const (
 	// MetadataKeyPeriodicJobID is a metadata key inserted with a periodic job

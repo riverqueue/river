@@ -10,6 +10,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/riverqueue/river/internal/jobstats"
+	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riverpilot"
@@ -578,11 +579,9 @@ func withRetries[T any](logCtx context.Context, baseService *baseservice.BaseSer
 	)
 
 	for attempt := 1; attempt <= numRetries; attempt++ {
-		const timeout = 10 * time.Second
-
 		// I've found that we want at least ten seconds for a large batch,
 		// although it usually doesn't need that long.
-		ctx, cancel := context.WithTimeout(uncancelledCtx, timeout)
+		ctx, cancel := context.WithTimeout(uncancelledCtx, rivercommon.HotOperationTimeout)
 		defer cancel()
 
 		retVal, err := retryFunc(ctx)
@@ -603,7 +602,7 @@ func withRetries[T any](logCtx context.Context, baseService *baseservice.BaseSer
 				slog.Int("attempt", attempt),
 				slog.String("err", err.Error()),
 				slog.String("sleep_duration", sleepDuration.String()),
-				slog.String("timeout", timeout.String()),
+				slog.String("timeout", rivercommon.HotOperationTimeout.String()),
 			)
 			if !disableSleep {
 				serviceutil.CancellableSleep(logCtx, sleepDuration)
