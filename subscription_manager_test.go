@@ -156,11 +156,11 @@ func Test_SubscriptionManager(t *testing.T) {
 		sub, cancelSub := manager.SubscribeConfig(&SubscribeConfig{ChanSize: 1, Kinds: []EventKind{EventKindQueuePaused}})
 		t.Cleanup(cancelSub)
 
-		manager.distributeQueueEvent(&Event{
+		manager.distributeQueueEventWithContext(ctx, &Event{
 			Kind:  EventKindQueuePaused,
 			Queue: &rivertype.Queue{Name: "default"},
 		})
-		manager.distributeQueueEvent(&Event{
+		manager.distributeQueueEventWithContext(ctx, &Event{
 			Kind:  EventKindQueuePaused,
 			Queue: &rivertype.Queue{Name: "default"},
 		})

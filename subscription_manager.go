@@ -80,13 +80,13 @@ func (sm *subscriptionManager) Start(ctx context.Context) error {
 				// one has to be careful in tests.
 				sm.Logger.DebugContext(ctx, sm.Name+": Stopping; distributing subscriptions until channel is closed")
 				for updates := range sm.subscribeCh {
-					sm.distributeJobUpdates(updates)
+					sm.distributeJobUpdates(ctx, updates)
 				}
 
 				return
 
 			case updates := <-sm.subscribeCh:
-				sm.distributeJobUpdates(updates)
+				sm.distributeJobUpdates(ctx, updates)
 			}
 		}
 	}()
@@ -119,7 +119,7 @@ func (sm *subscriptionManager) safeDurationAverage(d time.Duration, n int) time.
 // Receives updates from the completer and prompts the client to update
 // statistics and distribute jobs into any listening subscriber channels.
 // (Subscriber channels are non-blocking so this should be quite fast.)
-func (sm *subscriptionManager) distributeJobUpdates(updates []jobcompleter.CompleterJobUpdated) {
+func (sm *subscriptionManager) distributeJobUpdates(ctx context.Context, updates []jobcompleter.CompleterJobUpdated) {
 	func() {
 		sm.statsMu.Lock()
 		defer sm.statsMu.Unlock()
@@ -142,7 +142,7 @@ func (sm *subscriptionManager) distributeJobUpdates(updates []jobcompleter.Compl
 	}
 
 	for _, update := range updates {
-		sm.distributeJobEvent(update.Job, jobStatisticsFromInternal(update.JobStats), update.Snoozed)
+		sm.distributeJobEvent(ctx, update.Job, jobStatisticsFromInternal(update.JobStats), update.Snoozed)
 	}
 }
 
@@ -152,7 +152,7 @@ func (sm *subscriptionManager) distributeJobUpdates(updates []jobcompleter.Compl
 // the queue.
 //
 // MUST be called with sm.mu already held.
-func (sm *subscriptionManager) distributeJobEvent(job *rivertype.JobRow, stats *JobStatistics, snoozed bool) {
+func (sm *subscriptionManager) distributeJobEvent(ctx context.Context, job *rivertype.JobRow, stats *JobStatistics, snoozed bool) {
 	var event *Event
 	if snoozed {
 		event = &Event{Kind: EventKindJobSnoozed, Job: job, JobStats: stats}
@@ -187,7 +187,7 @@ func (sm *subscriptionManager) distributeJobEvent(job *rivertype.JobRow, stats *
 			select {
 			case sub.Chan <- event:
 			default:
-				sm.Logger.WarnContext(context.Background(), sm.Name+": Subscription event dropped due to full buffer",
+				sm.Logger.WarnContext(ctx, sm.Name+": Subscription event dropped due to full buffer",
 					slog.String("event_kind", string(event.Kind)),
 				)
 			}
@@ -196,6 +196,10 @@ func (sm *subscriptionManager) distributeJobEvent(job *rivertype.JobRow, stats *
 }
 
 func (sm *subscriptionManager) distributeQueueEvent(event *Event) {
+	sm.distributeQueueEventWithContext(context.Background(), event)
+}
+
+func (sm *subscriptionManager) distributeQueueEventWithContext(ctx context.Context, event *Event) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -206,7 +210,7 @@ func (sm *subscriptionManager) distributeQueueEvent(event *Event) {
 			select {
 			case sub.Chan <- event:
 			default:
-				sm.Logger.WarnContext(context.Background(), sm.Name+": Subscription event dropped due to full buffer",
+				sm.Logger.WarnContext(ctx, sm.Name+": Subscription event dropped due to full buffer",
 					slog.String("event_kind", string(event.Kind)),
 				)
 			}
