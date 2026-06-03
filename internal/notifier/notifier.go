@@ -180,8 +180,18 @@ func (n *Notifier) deliverNotifications(ctx context.Context) {
 			}()
 
 			for _, notifyFunc := range notifyFuncs {
-				// TODO: panic recovery on delivery attempts
-				notifyFunc(NotificationTopic(notification.Topic), notification.Payload)
+				func() {
+					defer func() {
+						if panicVal := recover(); panicVal != nil {
+							n.Logger.ErrorContext(ctx, n.Name+": Notification delivery panicked",
+								slog.String("panic_val", fmt.Sprintf("%v", panicVal)),
+								slog.String("topic", string(notification.Topic)),
+							)
+						}
+					}()
+
+					notifyFunc(NotificationTopic(notification.Topic), notification.Payload)
+				}()
 			}
 		}
 	}

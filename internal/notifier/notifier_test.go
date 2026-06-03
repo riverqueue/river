@@ -401,6 +401,53 @@ func TestNotifier(t *testing.T) {
 		requireNoNotification(t, notifyChan2)
 	})
 
+	t.Run("PanicInSubscriberDoesNotBreakDelivery", func(t *testing.T) {
+		t.Parallel()
+
+		notifier := New(riversharedtest.BaseServiceArchetype(t), nil)
+
+		panicChan := make(chan TopicAndPayload, 10)
+		notifyChan := make(chan TopicAndPayload, 10)
+
+		notifier.subscriptions[testTopic1] = []*Subscription{
+			{
+				notifyFunc: func(topic NotificationTopic, payload string) {
+					panicChan <- TopicAndPayload{topic, payload}
+					panic("panic from notify func")
+				},
+				notifier: notifier,
+				topic:    testTopic1,
+			},
+			{
+				notifyFunc: topicAndPayloadNotifyFunc(notifyChan),
+				notifier:   notifier,
+				topic:      testTopic1,
+			},
+		}
+
+		runCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			notifier.deliverNotifications(runCtx)
+		}()
+
+		notifier.notificationBuf <- &riverdriver.Notification{Topic: string(testTopic1), Payload: "msg1"}
+
+		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riversharedtest.WaitOrTimeout(t, panicChan))
+		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riversharedtest.WaitOrTimeout(t, notifyChan))
+
+		notifier.notificationBuf <- &riverdriver.Notification{Topic: string(testTopic1), Payload: "msg2"}
+
+		require.Equal(t, TopicAndPayload{testTopic1, "msg2"}, riversharedtest.WaitOrTimeout(t, panicChan))
+		require.Equal(t, TopicAndPayload{testTopic1, "msg2"}, riversharedtest.WaitOrTimeout(t, notifyChan))
+
+		cancel()
+		riversharedtest.WaitOrTimeout(t, done)
+	})
+
 	// Stress test meant to suss out any races that there might be in the
 	// subscribe or interrupt loop code.
 	t.Run("MultipleSubscribersStress", func(t *testing.T) {
