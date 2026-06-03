@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added `rivermigrate.ValidateOpts.TargetVersion` so validation can check migrations up to a specific target version, matching the target-version behavior available on `Migrate` and `MigrateTx`. Notably, this is a breaking API change as the validate functions previously didn't take any options. [PR #1259](https://github.com/riverqueue/river/pull/1259)
 - When using `(*Migrator[TTx]).Migrate` with a `TargetVersion` that's already applied, River now no-ops idempotently instead of returning an error as a user convenience. [PR #1260](https://github.com/riverqueue/river/pull/1260)
+- Log dropped job and queue subscription events at warn level when a subscriber buffer is full, including `event_kind` for easier diagnosis. [PR #1271](https://github.com/riverqueue/river/pull/1271)
 
 ### Fixed
 
