@@ -14,6 +14,7 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/circuitbreaker"
+	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
@@ -50,6 +51,9 @@ type JobRescuerConfig struct {
 	// Interval is the amount of time to wait between runs of the rescuer.
 	Interval time.Duration
 
+	// Pilot controls driver-level behavior that can be customized by plugins.
+	Pilot riverpilot.Pilot
+
 	// RescueAfter is the amount of time for a job to be active before it is
 	// considered stuck and should be rescued.
 	RescueAfter time.Duration
@@ -69,6 +73,9 @@ func (c *JobRescuerConfig) mustValidate() *JobRescuerConfig {
 	}
 	if c.Interval <= 0 {
 		panic("RescuerConfig.Interval must be above zero")
+	}
+	if c.Pilot == nil {
+		panic("RescuerConfig.Pilot must be set")
 	}
 	if c.RescueAfter <= 0 {
 		panic("RescuerConfig.JobDuration must be above zero")
@@ -103,12 +110,17 @@ type JobRescuer struct {
 
 func NewRescuer(archetype *baseservice.Archetype, config *JobRescuerConfig, exec riverdriver.Executor) *JobRescuer {
 	batchSizes := config.WithDefaults()
+	pilot := config.Pilot
+	if pilot == nil {
+		pilot = &riverpilot.StandardPilot{}
+	}
 
 	return baseservice.Init(archetype, &JobRescuer{
 		Config: (&JobRescuerConfig{
 			BatchSizes:          batchSizes,
 			ClientRetryPolicy:   config.ClientRetryPolicy,
 			Interval:            cmp.Or(config.Interval, JobRescuerIntervalDefault),
+			Pilot:               pilot,
 			RescueAfter:         cmp.Or(config.RescueAfter, JobRescuerRescueAfterDefault),
 			Schema:              config.Schema,
 			WorkUnitFactoryFunc: config.WorkUnitFactoryFunc,
@@ -253,7 +265,7 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 		}
 
 		if len(rescueManyParams.ID) > 0 {
-			_, err = s.exec.JobRescueMany(ctx, &rescueManyParams)
+			_, err = s.Config.Pilot.JobRescueMany(ctx, s.exec, &rescueManyParams)
 			if err != nil {
 				return nil, fmt.Errorf("error rescuing stuck jobs: %w", err)
 			}

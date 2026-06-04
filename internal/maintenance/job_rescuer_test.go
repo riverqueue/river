@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
@@ -55,6 +57,19 @@ func (p *SimpleClientRetryPolicy) NextRetry(job *rivertype.JobRow) time.Time {
 	errorCount := len(job.Errors) + 1
 	retrySeconds := math.Pow(float64(errorCount), 4)
 	return job.AttemptedAt.Add(timeutil.SecondsAsDuration(retrySeconds))
+}
+
+type jobRescueManyPilotSpy struct {
+	riverpilot.StandardPilot
+
+	calls  atomic.Int64
+	params *riverdriver.JobRescueManyParams
+}
+
+func (p *jobRescueManyPilotSpy) JobRescueMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobRescueManyParams) (*struct{}, error) {
+	p.calls.Add(1)
+	p.params = params
+	return p.StandardPilot.JobRescueMany(ctx, exec, params)
 }
 
 func TestJobRescuer(t *testing.T) {
@@ -302,6 +317,22 @@ func TestJobRescuer(t *testing.T) {
 		stopped := cleaner.Stopped()
 		cancelFunc()
 		riversharedtest.WaitOrTimeout(t, stopped)
+	})
+
+	t.Run("UsesPilotJobRescueMany", func(t *testing.T) {
+		t.Parallel()
+
+		rescuer, bundle := setup(t)
+		pilot := &jobRescueManyPilotSpy{}
+		rescuer.Config.Pilot = pilot
+
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+
+		_, err := rescuer.runOnce(ctx)
+		require.NoError(t, err)
+
+		require.Equal(t, int64(1), pilot.calls.Load())
+		require.Equal(t, []int64{job.ID}, pilot.params.ID)
 	})
 
 	t.Run("CanRunMultipleTimes", func(t *testing.T) {
