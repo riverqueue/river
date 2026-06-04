@@ -41,6 +41,8 @@ type Pilot interface {
 		params *riverdriver.JobInsertFastManyParams,
 	) ([]*riverdriver.JobInsertFastResult, error)
 
+	JobRescueMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobRescueManyParams) (*struct{}, error)
+
 	JobRetry(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobRetryParams) (*rivertype.JobRow, error)
 
 	JobSetStateIfRunningMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
@@ -74,6 +76,10 @@ type PilotInitParams struct {
 	// it. This is used in special cases like poll-only clients to improve
 	// latency between job insert and when a job is worked.
 	NotifyNonTxJobInsert func(ctx context.Context, res []*rivertype.JobInsertResult)
+
+	// ProducerReportInterval is the amount of time between periodic reports of
+	// producer status.
+	ProducerReportInterval time.Duration
 
 	// WorkerMetadata is metadata about registered workers as received from the
 	// client's worker bundle. Only available when a client will work jobs (i.e.

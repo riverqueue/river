@@ -885,9 +885,10 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		client.pilot = &riverpilot.StandardPilot{}
 	}
 	client.pilot.PilotInit(archetype, (&riverpilot.PilotInitParams{
-		Insert:               client.insertMany,
-		NotifyNonTxJobInsert: client.notifyProducerWithoutListenerJobFetch,
-		WorkerMetadata:       workerMetadata,
+		Insert:                 client.insertMany,
+		NotifyNonTxJobInsert:   client.notifyProducerWithoutListenerJobFetch,
+		ProducerReportInterval: producerReportIntervalDefault,
+		WorkerMetadata:         workerMetadata,
 	}).Validate())
 	pluginPilot, _ := client.pilot.(pilotPlugin)
 
@@ -960,6 +961,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		{
 			jobRescuer := maintenance.NewRescuer(archetype, &maintenance.JobRescuerConfig{
 				ClientRetryPolicy: config.RetryPolicy,
+				Pilot:             client.pilot,
 				RescueAfter:       config.RescueStuckJobsAfter,
 				Schema:            config.Schema,
 				WorkUnitFactoryFunc: func(kind string) workunit.WorkUnitFactory {

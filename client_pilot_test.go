@@ -39,7 +39,7 @@ type pilotSpyTestSignals struct {
 	PeriodicJobGetAll        testsignal.TestSignal[struct{}]
 	PeriodicJobKeepAlive     testsignal.TestSignal[struct{}]
 	PeriodicJobUpsertMany    testsignal.TestSignal[struct{}]
-	PilotInit                testsignal.TestSignal[struct{}]
+	PilotInit                testsignal.TestSignal[*riverpilot.PilotInitParams]
 	ProducerInit             testsignal.TestSignal[struct{}]
 	ProducerKeepAlive        testsignal.TestSignal[struct{}]
 	ProducerShutdown         testsignal.TestSignal[struct{}]
@@ -106,7 +106,7 @@ func (p *pilotSpy) PeriodicJobUpsertMany(ctx context.Context, exec riverdriver.E
 
 func (p *pilotSpy) PilotInit(archetype *baseservice.Archetype, params *riverpilot.PilotInitParams) {
 	p.pilotInitCalls.Add(1)
-	p.testSignals.PilotInit.Signal(struct{}{})
+	p.testSignals.PilotInit.Signal(params)
 	p.StandardPilot.PilotInit(archetype, params)
 }
 
@@ -150,6 +150,7 @@ func Test_Client_PilotUsage(t *testing.T) {
 		}
 
 		pilot := &pilotSpy{}
+		pilot.testSignals.Init(t)
 		pluginDriver := newDriverWithPlugin(t, dbPool)
 		pluginDriver.pilot = pilot
 
@@ -187,6 +188,8 @@ func Test_Client_PilotUsage(t *testing.T) {
 		require.NotNil(t, client)
 		require.Equal(t, int64(1), pilot.jobCleanerQueuesExcludedCalls.Load())
 		require.Equal(t, int64(1), pilot.pilotInitCalls.Load())
+		pilotInitParams := pilot.testSignals.PilotInit.WaitOrTimeout()
+		require.Equal(t, producerReportIntervalDefault, pilotInitParams.ProducerReportInterval)
 	})
 
 	t.Run("JobCancelUsesPilot", func(t *testing.T) {

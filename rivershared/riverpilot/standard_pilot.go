@@ -39,6 +39,10 @@ func (p *StandardPilot) JobInsertMany(
 	return exec.JobInsertFastMany(ctx, params)
 }
 
+func (p *StandardPilot) JobRescueMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobRescueManyParams) (*struct{}, error) {
+	return exec.JobRescueMany(ctx, params)
+}
+
 func (p *StandardPilot) JobRetry(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobRetryParams) (*rivertype.JobRow, error) {
 	return exec.JobRetry(ctx, params)
 }
