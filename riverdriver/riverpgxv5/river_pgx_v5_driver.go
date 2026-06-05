@@ -64,7 +64,7 @@ func New(dbPool *pgxpool.Pool) *Driver {
 const argPlaceholder = "$"
 
 func (d *Driver) ArgPlaceholder() string { return argPlaceholder }
-func (d *Driver) DatabaseName() string   { return "postgres" }
+func (d *Driver) DatabaseName() string   { return riverdriver.DatabaseNamePostgres }
 
 func (d *Driver) GetExecutor() riverdriver.Executor {
 	return &Executor{templateReplaceWrapper{d.dbPool, &d.replacer}, d}
@@ -842,6 +842,11 @@ func (e *Executor) MigrationInsertManyAssumingMain(ctx context.Context, params *
 			Version:   int(internal.Version),
 		}
 	}), nil
+}
+
+func (e *Executor) NotificationDeleteBefore(ctx context.Context, params *riverdriver.NotificationDeleteBeforeParams) (int, error) {
+	numDeleted, err := dbsqlc.New().NotificationDeleteBefore(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.CreatedAtHorizon)
+	return int(numDeleted), interpretError(err)
 }
 
 func (e *Executor) NotifyMany(ctx context.Context, params *riverdriver.NotifyManyParams) error {

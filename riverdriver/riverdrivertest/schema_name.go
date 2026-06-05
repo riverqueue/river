@@ -26,7 +26,7 @@ func exerciseSchemaName[TTx any](ctx context.Context, t *testing.T,
 
 		// In SQLite schemas are files assigned to particular names, so this
 		// check isn't relevant in the same way.
-		if driver.DatabaseName() != databaseNamePostgres {
+		if driver.DatabaseName() != riverdriver.DatabaseNamePostgres {
 			t.Skip("Skipping; schema names with spaces only relevant for Postgres")
 		}
 

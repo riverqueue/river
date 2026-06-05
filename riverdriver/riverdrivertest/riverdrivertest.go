@@ -33,6 +33,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 
 	exerciseDriverPool(ctx, t, driverWithSchema, executorWithTx)
 	exerciseMigration(ctx, t, driverWithSchema, executorWithTx)
+	exerciseNotification(ctx, t, executorWithTx)
 	exerciseSQLFragments(ctx, t, executorWithTx)
 	exerciseExecutorTx(ctx, t, driverWithSchema, executorWithTx)
 	exerciseSchemaIntrospection(ctx, t, driverWithSchema, executorWithTx)
@@ -45,11 +46,7 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	exerciseQueue(ctx, t, executorWithTx)
 }
 
-const (
-	databaseNamePostgres = "postgres"
-	databaseNameSQLite   = "sqlite"
-	testClientID         = "test-client-id"
-)
+const testClientID = "test-client-id"
 
 func exerciseDriverPool[TTx any](ctx context.Context, t *testing.T,
 	driverWithSchema func(ctx context.Context, t *testing.T, opts *riverdbtest.TestSchemaOpts) (riverdriver.Driver[TTx], string),
@@ -89,10 +86,10 @@ func exerciseDriverPool[TTx any](ctx context.Context, t *testing.T,
 		_, driver := executorWithTx(ctx, t)
 
 		switch driver.DatabaseName() {
-		case databaseNamePostgres:
+		case riverdriver.DatabaseNamePostgres:
 			require.True(t, driver.SupportsListenNotify())
-		case databaseNameSQLite:
-			require.False(t, driver.SupportsListenNotify())
+		case riverdriver.DatabaseNameSQLite:
+			require.True(t, driver.SupportsListenNotify())
 		default:
 			require.FailNow(t, "Don't know how to check SupportsListenNotify for: "+driver.DatabaseName())
 		}

@@ -128,6 +128,10 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 			listener  = driver.GetListener(&riverdriver.GetListenenerParams{Schema: ""})
 		)
 
+		if driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+			t.Skip("SQLite has no search_path")
+		}
+
 		listener.SetAfterConnectExec("SET search_path TO 'public'")
 
 		connectListener(ctx, t, listener)

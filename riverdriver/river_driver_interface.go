@@ -24,6 +24,11 @@ import (
 
 const AllQueuesString = "*"
 
+const (
+	DatabaseNamePostgres = "postgres"
+	DatabaseNameSQLite   = "sqlite"
+)
+
 const MigrationLineMain = "main"
 
 var (
@@ -138,12 +143,14 @@ type Driver[TTx any] interface {
 	// API is not stable. DO NOT USE.
 	SupportsListener() bool
 
-	// SupportsListenNotify indicates whether the underlying database supports
-	// listen/notify. This differs from SupportsListener in that even if a
-	// driver doesn't a support a listener but the database supports the
-	// underlying listen/notify mechanism, it will still broadcast in case there
-	// are other clients/drivers on the database that do support a listener. If
-	// listen/notify can't be supported at all, no broadcast attempt is made.
+	// SupportsListenNotify indicates whether the driver can broadcast
+	// notifications that a listener can receive, either through a native
+	// database mechanism like Postgres LISTEN/NOTIFY or a driver-specific
+	// emulation. This differs from SupportsListener in that even if a driver
+	// doesn't support a listener but the database supports the underlying
+	// notification mechanism, it will still broadcast in case there are other
+	// clients/drivers on the database that do support a listener. If
+	// notifications can't be supported at all, no broadcast attempt is made.
 	//
 	// API is not stable. DO NOT USE.
 	SupportsListenNotify() bool
@@ -255,6 +262,14 @@ type Executor interface {
 	// on the main line. This operation is necessary for compatibility before
 	// the `line` column was added to the migrations table.
 	MigrationInsertManyAssumingMain(ctx context.Context, params *MigrationInsertManyAssumingMainParams) ([]*Migration, error)
+
+	// NotificationDeleteBefore deletes notifications before a certain time
+	// horizon.
+	//
+	// A "notification" in this context refers to a row in `river_notification`
+	// which is a special table implemented in some databases (e.g. SQLite) that
+	// simulates Postgres' listen/notify when not available.
+	NotificationDeleteBefore(ctx context.Context, params *NotificationDeleteBeforeParams) (int, error)
 
 	NotifyMany(ctx context.Context, params *NotifyManyParams) error
 	PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}, error)
@@ -775,6 +790,11 @@ type NotifyManyParams struct {
 	Schema  string
 }
 
+type NotificationDeleteBeforeParams struct {
+	CreatedAtHorizon time.Time
+	Schema           string
+}
+
 type ProducerKeepAliveParams struct {
 	ID                    int64
 	QueueName             string
@@ -883,8 +903,10 @@ func MigrationLineMainTruncateTables(version int) []string {
 		return []string{"river_job", "river_leader"}
 	case 4:
 		return []string{"river_job", "river_leader", "river_queue"}
-	case 0, 5, 6:
+	case 5, 6:
 		return []string{"river_job", "river_leader", "river_queue", "river_client", "river_client_queue"}
+	case 0, 7:
+		return []string{"river_job", "river_leader", "river_queue", "river_client", "river_client_queue", "river_notification"}
 	}
 
 	panic(fmt.Sprintf("unrecognized migration version: %d", version))

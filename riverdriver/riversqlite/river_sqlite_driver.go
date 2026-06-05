@@ -79,14 +79,20 @@ func New(dbPool *sql.DB) *Driver {
 const argPlaceholder = "?"
 
 func (d *Driver) ArgPlaceholder() string { return argPlaceholder }
-func (d *Driver) DatabaseName() string   { return "sqlite" }
+func (d *Driver) DatabaseName() string   { return riverdriver.DatabaseNameSQLite }
 
 func (d *Driver) GetExecutor() riverdriver.Executor {
 	return &Executor{d.dbPool, templateReplaceWrapper{d.dbPool, &d.replacer}, d, nil}
 }
 
 func (d *Driver) GetListener(params *riverdriver.GetListenenerParams) riverdriver.Listener {
-	panic(riverdriver.ErrNotImplemented)
+	return &Listener{
+		dbPool:       d.dbPool,
+		pollInterval: notificationPollIntervalDefault,
+		replacer:     &d.replacer,
+		schema:       params.Schema,
+		topics:       make(map[string]struct{}),
+	}
 }
 
 func (d *Driver) GetMigrationDefaultLines() []string { return []string{riverdriver.MigrationLineMain} }
@@ -122,8 +128,8 @@ func (d *Driver) SQLFragmentColumnIn(column string, values any) (string, any, er
 	return fmt.Sprintf("%s IN (SELECT value FROM json_each(cast(@%s AS blob)))", column, column), arg, nil
 }
 
-func (d *Driver) SupportsListener() bool       { return false }
-func (d *Driver) SupportsListenNotify() bool   { return false }
+func (d *Driver) SupportsListener() bool       { return true }
+func (d *Driver) SupportsListenNotify() bool   { return true }
 func (d *Driver) TimePrecision() time.Duration { return time.Millisecond }
 
 func (d *Driver) UnwrapExecutor(tx *sql.Tx) riverdriver.ExecutorTx {
@@ -1112,8 +1118,31 @@ func (e *Executor) MigrationInsertManyAssumingMain(ctx context.Context, params *
 	}), nil
 }
 
+func (e *Executor) NotificationDeleteBefore(ctx context.Context, params *riverdriver.NotificationDeleteBeforeParams) (int, error) {
+	numDeleted, err := dbsqlc.New().NotificationDeleteBefore(
+		schemaTemplateParam(ctx, params.Schema),
+		e.dbtx,
+		timeString(params.CreatedAtHorizon),
+	)
+	return int(numDeleted), interpretError(err)
+}
+
 func (e *Executor) NotifyMany(ctx context.Context, params *riverdriver.NotifyManyParams) error {
-	return riverdriver.ErrNotImplemented
+	if len(params.Payload) < 1 {
+		return nil
+	}
+
+	notifications, err := json.Marshal(sliceutil.Map(params.Payload, func(payload string) notificationPayload {
+		return notificationPayload{
+			Payload: payload,
+			Topic:   params.Topic,
+		}
+	}))
+	if err != nil {
+		return err
+	}
+
+	return dbsqlc.New().NotificationInsertMany(schemaTemplateParam(ctx, params.Schema), e.dbtx, notifications)
 }
 
 func (e *Executor) PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}, error) {
