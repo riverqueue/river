@@ -174,56 +174,82 @@ func (q *Queries) RiverMigrationGetByLine(ctx context.Context, db DBTX, line str
 	return items, nil
 }
 
-const riverMigrationInsert = `-- name: RiverMigrationInsert :one
+const riverMigrationInsertMany = `-- name: RiverMigrationInsertMany :many
 INSERT INTO /* TEMPLATE: schema */river_migration (
     line,
     version
-) VALUES (
+)
+SELECT
     ?1,
-    ?2
-) RETURNING line, version, created_at
+    value
+FROM json_each(cast(?2 AS blob))
+RETURNING line, version, created_at
 `
 
-type RiverMigrationInsertParams struct {
-	Line    string
-	Version int64
+type RiverMigrationInsertManyParams struct {
+	Line     string
+	Versions []byte
 }
 
-// Insert a migration.
-//
-// This is supposed to be a batch insert, but various limitations of the
-// combined SQLite + sqlc has left me unable to find a way of injecting many
-// arguments en masse (like how we slightly abuse arrays to pull it off for the
-// Postgres drivers), so we loop over many insert operations instead, with the
-// expectation that this may be fixable in the future. Because SQLite targets
-// will often be local and therefore with a very minimal round trip compared to
-// a network, looping over operations is probably okay performance-wise.
-func (q *Queries) RiverMigrationInsert(ctx context.Context, db DBTX, arg *RiverMigrationInsertParams) (*RiverMigration, error) {
-	row := db.QueryRowContext(ctx, riverMigrationInsert, arg.Line, arg.Version)
-	var i RiverMigration
-	err := row.Scan(&i.Line, &i.Version, &i.CreatedAt)
-	return &i, err
+func (q *Queries) RiverMigrationInsertMany(ctx context.Context, db DBTX, arg *RiverMigrationInsertManyParams) ([]*RiverMigration, error) {
+	rows, err := db.QueryContext(ctx, riverMigrationInsertMany, arg.Line, arg.Versions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverMigration
+	for rows.Next() {
+		var i RiverMigration
+		if err := rows.Scan(&i.Line, &i.Version, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
-const riverMigrationInsertAssumingMain = `-- name: RiverMigrationInsertAssumingMain :one
+const riverMigrationInsertManyAssumingMain = `-- name: RiverMigrationInsertManyAssumingMain :many
 INSERT INTO /* TEMPLATE: schema */river_migration (
     version
-) VALUES (
-    ?1
 )
+SELECT
+    value
+FROM json_each(cast(?1 AS blob))
 RETURNING
     created_at,
     version
 `
 
-type RiverMigrationInsertAssumingMainRow struct {
+type RiverMigrationInsertManyAssumingMainRow struct {
 	CreatedAt time.Time
 	Version   int64
 }
 
-func (q *Queries) RiverMigrationInsertAssumingMain(ctx context.Context, db DBTX, version int64) (*RiverMigrationInsertAssumingMainRow, error) {
-	row := db.QueryRowContext(ctx, riverMigrationInsertAssumingMain, version)
-	var i RiverMigrationInsertAssumingMainRow
-	err := row.Scan(&i.CreatedAt, &i.Version)
-	return &i, err
+func (q *Queries) RiverMigrationInsertManyAssumingMain(ctx context.Context, db DBTX, versions []byte) ([]*RiverMigrationInsertManyAssumingMainRow, error) {
+	rows, err := db.QueryContext(ctx, riverMigrationInsertManyAssumingMain, versions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverMigrationInsertManyAssumingMainRow
+	for rows.Next() {
+		var i RiverMigrationInsertManyAssumingMainRow
+		if err := rows.Scan(&i.CreatedAt, &i.Version); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

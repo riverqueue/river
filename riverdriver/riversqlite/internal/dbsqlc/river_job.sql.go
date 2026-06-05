@@ -678,15 +678,6 @@ type JobInsertFastParams struct {
 	UniqueStates *int64
 }
 
-// Insert a job.
-//
-// This is supposed to be a batch insert, but various limitations of the
-// combined SQLite + sqlc has left me unable to find a way of injecting many
-// arguments en masse (like how we slightly abuse arrays to pull it off for the
-// Postgres drivers), so we loop over many insert operations instead, with the
-// expectation that this may be fixable in the future. Because SQLite targets
-// will often be local and therefore with a very minimal round trip compared to
-// a network, looping over operations is probably okay performance-wise.
 func (q *Queries) JobInsertFast(ctx context.Context, db DBTX, arg *JobInsertFastParams) (*RiverJob, error) {
 	row := db.QueryRowContext(ctx, jobInsertFast,
 		arg.ID,
@@ -725,6 +716,154 @@ func (q *Queries) JobInsertFast(ctx context.Context, db DBTX, arg *JobInsertFast
 		&i.UniqueStates,
 	)
 	return &i, err
+}
+
+const jobInsertFastMany = `-- name: JobInsertFastMany :many
+INSERT INTO /* TEMPLATE: schema */river_job(
+    id,
+    args,
+    created_at,
+    kind,
+    max_attempts,
+    metadata,
+    priority,
+    queue,
+    scheduled_at,
+    state,
+    tags,
+    unique_key,
+    unique_states
+)
+SELECT
+    cast(json_extract(value, '$.id') AS integer),
+    json(cast(json_extract(value, '$.args') AS blob)),
+    coalesce(cast(json_extract(value, '$.created_at') AS text), datetime('now', 'subsec')),
+    cast(json_extract(value, '$.kind') AS text),
+    cast(json_extract(value, '$.max_attempts') AS integer),
+    json(cast(json_extract(value, '$.metadata') AS blob)),
+    cast(json_extract(value, '$.priority') AS integer),
+    cast(json_extract(value, '$.queue') AS text),
+    coalesce(cast(json_extract(value, '$.scheduled_at') AS text), datetime('now', 'subsec')),
+    cast(json_extract(value, '$.state') AS text),
+    json(cast(json_extract(value, '$.tags') AS blob)),
+    CASE WHEN length(cast(json_extract(value, '$.unique_key') AS text)) = 0 THEN NULL ELSE unhex(cast(json_extract(value, '$.unique_key') AS text)) END,
+    nullif(cast(json_extract(value, '$.unique_states') AS integer), 0)
+FROM json_each(cast(?1 AS blob))
+WHERE true
+ON CONFLICT (unique_key)
+    WHERE unique_key IS NOT NULL
+        AND unique_states IS NOT NULL
+        AND CASE state
+                WHEN 'available' THEN unique_states & (1 << 0)
+                WHEN 'cancelled' THEN unique_states & (1 << 1)
+                WHEN 'completed' THEN unique_states & (1 << 2)
+                WHEN 'discarded' THEN unique_states & (1 << 3)
+                WHEN 'pending'   THEN unique_states & (1 << 4)
+                WHEN 'retryable' THEN unique_states & (1 << 5)
+                WHEN 'running'   THEN unique_states & (1 << 6)
+                WHEN 'scheduled' THEN unique_states & (1 << 7)
+                ELSE 0
+            END >= 1
+    -- Something needs to be updated for a row to be returned on a conflict.
+    DO UPDATE SET kind = EXCLUDED.kind
+RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
+`
+
+func (q *Queries) JobInsertFastMany(ctx context.Context, db DBTX, jobs []byte) ([]*RiverJob, error) {
+	rows, err := db.QueryContext(ctx, jobInsertFastMany, jobs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverJob
+	for rows.Next() {
+		var i RiverJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Args,
+			&i.Attempt,
+			&i.AttemptedAt,
+			&i.AttemptedBy,
+			&i.CreatedAt,
+			&i.Errors,
+			&i.FinalizedAt,
+			&i.Kind,
+			&i.MaxAttempts,
+			&i.Metadata,
+			&i.Priority,
+			&i.Queue,
+			&i.State,
+			&i.ScheduledAt,
+			&i.Tags,
+			&i.UniqueKey,
+			&i.UniqueStates,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const jobInsertFastManyNoReturning = `-- name: JobInsertFastManyNoReturning :execrows
+INSERT INTO /* TEMPLATE: schema */river_job(
+    args,
+    created_at,
+    kind,
+    max_attempts,
+    metadata,
+    priority,
+    queue,
+    scheduled_at,
+    state,
+    tags,
+    unique_key,
+    unique_states
+)
+SELECT
+    json(cast(json_extract(value, '$.args') AS blob)),
+    coalesce(cast(json_extract(value, '$.created_at') AS text), datetime('now', 'subsec')),
+    cast(json_extract(value, '$.kind') AS text),
+    cast(json_extract(value, '$.max_attempts') AS integer),
+    json(cast(json_extract(value, '$.metadata') AS blob)),
+    cast(json_extract(value, '$.priority') AS integer),
+    cast(json_extract(value, '$.queue') AS text),
+    coalesce(cast(json_extract(value, '$.scheduled_at') AS text), datetime('now', 'subsec')),
+    cast(json_extract(value, '$.state') AS text),
+    json(cast(json_extract(value, '$.tags') AS blob)),
+    CASE WHEN length(cast(json_extract(value, '$.unique_key') AS text)) = 0 THEN NULL ELSE unhex(cast(json_extract(value, '$.unique_key') AS text)) END,
+    nullif(cast(json_extract(value, '$.unique_states') AS integer), 0)
+FROM json_each(cast(?1 AS blob))
+WHERE true
+ON CONFLICT (unique_key)
+    WHERE unique_key IS NOT NULL
+        AND unique_states IS NOT NULL
+        AND CASE state
+                WHEN 'available' THEN unique_states & (1 << 0)
+                WHEN 'cancelled' THEN unique_states & (1 << 1)
+                WHEN 'completed' THEN unique_states & (1 << 2)
+                WHEN 'discarded' THEN unique_states & (1 << 3)
+                WHEN 'pending'   THEN unique_states & (1 << 4)
+                WHEN 'retryable' THEN unique_states & (1 << 5)
+                WHEN 'running'   THEN unique_states & (1 << 6)
+                WHEN 'scheduled' THEN unique_states & (1 << 7)
+                ELSE 0
+            END >= 1
+DO NOTHING
+`
+
+func (q *Queries) JobInsertFastManyNoReturning(ctx context.Context, db DBTX, jobs []byte) (int64, error) {
+	result, err := db.ExecContext(ctx, jobInsertFastManyNoReturning, jobs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const jobInsertFastNoReturning = `-- name: JobInsertFastNoReturning :execrows
@@ -910,6 +1049,90 @@ func (q *Queries) JobInsertFull(ctx context.Context, db DBTX, arg *JobInsertFull
 		&i.UniqueStates,
 	)
 	return &i, err
+}
+
+const jobInsertFullMany = `-- name: JobInsertFullMany :many
+INSERT INTO /* TEMPLATE: schema */river_job(
+    args,
+    attempt,
+    attempted_at,
+    attempted_by,
+    created_at,
+    errors,
+    finalized_at,
+    kind,
+    max_attempts,
+    metadata,
+    priority,
+    queue,
+    scheduled_at,
+    state,
+    tags,
+    unique_key,
+    unique_states
+)
+SELECT
+    json(cast(json_extract(value, '$.args') AS blob)),
+    cast(json_extract(value, '$.attempt') AS integer),
+    cast(json_extract(value, '$.attempted_at') AS text),
+    CASE WHEN json_type(value, '$.attempted_by') IS NULL THEN NULL ELSE json(cast(json_extract(value, '$.attempted_by') AS blob)) END,
+    coalesce(cast(json_extract(value, '$.created_at') AS text), datetime('now', 'subsec')),
+    CASE WHEN json_type(value, '$.errors') IS NULL THEN NULL ELSE json(cast(json_extract(value, '$.errors') AS blob)) END,
+    cast(json_extract(value, '$.finalized_at') AS text),
+    cast(json_extract(value, '$.kind') AS text),
+    cast(json_extract(value, '$.max_attempts') AS integer),
+    json(cast(json_extract(value, '$.metadata') AS blob)),
+    cast(json_extract(value, '$.priority') AS integer),
+    cast(json_extract(value, '$.queue') AS text),
+    coalesce(cast(json_extract(value, '$.scheduled_at') AS text), datetime('now', 'subsec')),
+    cast(json_extract(value, '$.state') AS text),
+    json(cast(json_extract(value, '$.tags') AS blob)),
+    CASE WHEN length(cast(json_extract(value, '$.unique_key') AS text)) = 0 THEN NULL ELSE unhex(cast(json_extract(value, '$.unique_key') AS text)) END,
+    nullif(cast(json_extract(value, '$.unique_states') AS integer), 0)
+FROM json_each(cast(?1 AS blob))
+RETURNING id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
+`
+
+func (q *Queries) JobInsertFullMany(ctx context.Context, db DBTX, jobs []byte) ([]*RiverJob, error) {
+	rows, err := db.QueryContext(ctx, jobInsertFullMany, jobs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverJob
+	for rows.Next() {
+		var i RiverJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Args,
+			&i.Attempt,
+			&i.AttemptedAt,
+			&i.AttemptedBy,
+			&i.CreatedAt,
+			&i.Errors,
+			&i.FinalizedAt,
+			&i.Kind,
+			&i.MaxAttempts,
+			&i.Metadata,
+			&i.Priority,
+			&i.Queue,
+			&i.State,
+			&i.ScheduledAt,
+			&i.Tags,
+			&i.UniqueKey,
+			&i.UniqueStates,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const jobKindList = `-- name: JobKindList :many

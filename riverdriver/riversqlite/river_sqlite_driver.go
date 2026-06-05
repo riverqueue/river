@@ -23,6 +23,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -516,123 +517,47 @@ func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetSt
 }
 
 func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.JobInsertFastManyParams) ([]*riverdriver.JobInsertFastResult, error) {
-	var (
-		insertRes = make([]*riverdriver.JobInsertFastResult, len(params.Jobs))
+	// We use a special `(xmax != 0)` trick in Postgres to determine whether an
+	// upserted row was inserted or skipped, but as far as I can find, there's no
+	// such trick possible in SQLite. Instead, we roll a random nonce and insert
+	// it to metadata. If the same nonce comes back, we know we really inserted
+	// the row. If not, we're getting an existing row back.
+	uniqueNonce := randutil.Hex(8)
 
-		// We use a special `(xmax != 0)` trick in Postgres to determine whether
-		// an upserted row was inserted or skipped, but as far as I can find,
-		// there's no such trick possible in SQLite. Instead, we roll a random
-		// nonce and insert it to metadata. If the same nonce coes back, we know
-		// we really inserted the row. If not, we're getting an existing row back.
-		uniqueNonce = randutil.Hex(8)
-	)
-
-	if err := dbutil.WithTx(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) error { // TODO
-		ctx = schemaTemplateParam(ctx, params.Schema)
-		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
-
-		// Should be a batch insert, but that's currently impossible with SQLite/sqlc. https://github.com/sqlc-dev/sqlc/issues/3802
-		for i, params := range params.Jobs {
-			metadata, err := sjson.SetBytes(sliceutil.FirstNonEmpty(params.Metadata, []byte("{}")), rivercommon.MetadataKeyUniqueNonce, uniqueNonce)
-			if err != nil {
-				return err
-			}
-
-			tags, err := json.Marshal(params.Tags)
-			if err != nil {
-				return fmt.Errorf("error marshaling tags: %w", err)
-			}
-
-			var uniqueStates *int64
-			if params.UniqueStates != 0 {
-				uniqueStates = ptrutil.Ptr(int64(params.UniqueStates))
-			}
-
-			internal, err := dbsqlc.New().JobInsertFast(ctx, dbtx, &dbsqlc.JobInsertFastParams{
-				ID:           params.ID,
-				Args:         params.EncodedArgs,
-				CreatedAt:    timeStringNullable(params.CreatedAt),
-				Kind:         params.Kind,
-				MaxAttempts:  int64(params.MaxAttempts),
-				Metadata:     metadata,
-				Priority:     int64(params.Priority),
-				Queue:        params.Queue,
-				ScheduledAt:  timeStringNullable(params.ScheduledAt),
-				State:        string(params.State),
-				Tags:         tags,
-				UniqueKey:    params.UniqueKey,
-				UniqueStates: uniqueStates,
-			})
-			if err != nil {
-				return interpretError(err)
-			}
-
-			job, err := jobRowFromInternal(internal)
-			if err != nil {
-				return err
-			}
-
-			insertRes[i] = &riverdriver.JobInsertFastResult{
-				Job:                      job,
-				UniqueSkippedAsDuplicate: gjson.GetBytes(job.Metadata, rivercommon.MetadataKeyUniqueNonce).Str != uniqueNonce,
-			}
-		}
-
-		return nil
-	}); err != nil {
+	jobsParam, err := sqliteJobInsertFastManyJobsParam(params.Jobs, uniqueNonce)
+	if err != nil {
 		return nil, err
 	}
 
-	return insertRes, nil
+	jobs, err := dbsqlc.New().JobInsertFastMany(schemaTemplateParam(ctx, params.Schema), e.dbtx, jobsParam)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+
+	return sliceutil.MapError(jobs, func(internal *dbsqlc.RiverJob) (*riverdriver.JobInsertFastResult, error) {
+		job, err := jobRowFromInternal(internal)
+		if err != nil {
+			return nil, err
+		}
+
+		return &riverdriver.JobInsertFastResult{
+			Job:                      job,
+			UniqueSkippedAsDuplicate: gjson.GetBytes(job.Metadata, rivercommon.MetadataKeyUniqueNonce).Str != uniqueNonce,
+		}, nil
+	})
 }
 
 func (e *Executor) JobInsertFastManyNoReturning(ctx context.Context, params *riverdriver.JobInsertFastManyParams) (int, error) {
-	var totalRowsAffected int
-
-	if err := dbutil.WithTx(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
-		ctx = schemaTemplateParam(ctx, params.Schema)
-		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
-
-		// Should be a batch insert, but that's currently impossible with SQLite/sqlc. https://github.com/sqlc-dev/sqlc/issues/3802
-		for _, params := range params.Jobs {
-			tags, err := json.Marshal(params.Tags)
-			if err != nil {
-				// return nil, err
-				return fmt.Errorf("error marshaling tags: %w", err)
-			}
-
-			var uniqueStates *int64
-			if params.UniqueStates != 0 {
-				uniqueStates = ptrutil.Ptr(int64(params.UniqueStates))
-			}
-
-			rowsAffected, err := dbsqlc.New().JobInsertFastNoReturning(ctx, dbtx, &dbsqlc.JobInsertFastNoReturningParams{
-				Args:         params.EncodedArgs,
-				CreatedAt:    timeStringNullable(params.CreatedAt),
-				Kind:         params.Kind,
-				MaxAttempts:  int64(params.MaxAttempts),
-				Metadata:     sliceutil.FirstNonEmpty(params.Metadata, []byte("{}")),
-				Priority:     int64(params.Priority),
-				Queue:        params.Queue,
-				ScheduledAt:  timeStringNullable(params.ScheduledAt),
-				State:        string(params.State),
-				Tags:         tags,
-				UniqueKey:    params.UniqueKey,
-				UniqueStates: uniqueStates,
-			})
-			if err != nil {
-				return interpretError(err)
-			}
-
-			totalRowsAffected += int(rowsAffected)
-		}
-
-		return nil
-	}); err != nil {
+	jobsParam, err := sqliteJobInsertFastManyJobsParam(params.Jobs, "")
+	if err != nil {
 		return 0, err
 	}
 
-	return totalRowsAffected, nil
+	numInserted, err := dbsqlc.New().JobInsertFastManyNoReturning(schemaTemplateParam(ctx, params.Schema), e.dbtx, jobsParam)
+	if err != nil {
+		return 0, interpretError(err)
+	}
+	return int(numInserted), nil
 }
 
 func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobInsertFullParams) (*rivertype.JobRow, error) {
@@ -690,77 +615,16 @@ func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobIns
 }
 
 func (e *Executor) JobInsertFullMany(ctx context.Context, params *riverdriver.JobInsertFullManyParams) ([]*rivertype.JobRow, error) {
-	insertRes := make([]*rivertype.JobRow, len(params.Jobs))
-
-	if err := dbutil.WithTx(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
-		ctx = schemaTemplateParam(ctx, params.Schema)
-		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
-
-		// Should be a batch insert, but that's currently impossible with SQLite/sqlc. https://github.com/sqlc-dev/sqlc/issues/3802
-		for i, jobParams := range params.Jobs {
-			var attemptedBy []byte
-			if jobParams.AttemptedBy != nil {
-				var err error
-				attemptedBy, err = json.Marshal(jobParams.AttemptedBy)
-				if err != nil {
-					return err
-				}
-			}
-
-			var errors []byte
-			if len(jobParams.Errors) > 0 {
-				var err error
-				errors, err = json.Marshal(sliceutil.Map(jobParams.Errors, func(e []byte) json.RawMessage { return json.RawMessage(e) }))
-				if err != nil {
-					return err
-				}
-			}
-
-			tags, err := json.Marshal(jobParams.Tags)
-			if err != nil {
-				return err
-			}
-
-			var uniqueStates *int64
-			if jobParams.UniqueStates != 0 {
-				uniqueStates = ptrutil.Ptr(int64(jobParams.UniqueStates))
-			}
-
-			job, err := dbsqlc.New().JobInsertFull(ctx, dbtx, &dbsqlc.JobInsertFullParams{
-				Attempt:      int64(jobParams.Attempt),
-				AttemptedAt:  timeStringNullable(jobParams.AttemptedAt),
-				AttemptedBy:  attemptedBy,
-				Args:         jobParams.EncodedArgs,
-				CreatedAt:    timeStringNullable(jobParams.CreatedAt),
-				Errors:       errors,
-				FinalizedAt:  timeStringNullable(jobParams.FinalizedAt),
-				Kind:         jobParams.Kind,
-				MaxAttempts:  int64(jobParams.MaxAttempts),
-				Metadata:     sliceutil.FirstNonEmpty(jobParams.Metadata, []byte("{}")),
-				Priority:     int64(jobParams.Priority),
-				Queue:        jobParams.Queue,
-				ScheduledAt:  timeStringNullable(jobParams.ScheduledAt),
-				State:        string(jobParams.State),
-				Tags:         tags,
-				UniqueKey:    jobParams.UniqueKey,
-				UniqueStates: uniqueStates,
-			})
-			if err != nil {
-				return interpretError(err)
-			}
-
-			insertRes[i], err = jobRowFromInternal(job)
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
-	}); err != nil {
+	jobsParam, err := sqliteJobInsertFullManyJobsParam(params.Jobs)
+	if err != nil {
 		return nil, err
 	}
 
-	return insertRes, nil
+	jobs, err := dbsqlc.New().JobInsertFullMany(schemaTemplateParam(ctx, params.Schema), e.dbtx, jobsParam)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return sliceutil.MapError(jobs, jobRowFromInternal)
 }
 
 func (e *Executor) JobKindList(ctx context.Context, params *riverdriver.JobKindListParams) ([]string, error) {
@@ -965,7 +829,7 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 		ctx = schemaTemplateParam(ctx, params.Schema)
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 
-		// Should be a batch insert, but that's currently impossible with SQLite/sqlc. https://github.com/sqlc-dev/sqlc/issues/3802
+		// Should be a batch update, but that's currently impossible with SQLite/sqlc. https://github.com/sqlc-dev/sqlc/issues/3802
 		for i := range params.ID {
 			setStateParams := &dbsqlc.JobSetStateIfRunningParams{
 				ID:              params.ID[i],
@@ -1214,59 +1078,38 @@ func (e *Executor) MigrationGetByLine(ctx context.Context, params *riverdriver.M
 }
 
 func (e *Executor) MigrationInsertMany(ctx context.Context, params *riverdriver.MigrationInsertManyParams) ([]*riverdriver.Migration, error) {
-	migrations := make([]*riverdriver.Migration, len(params.Versions))
-
-	if err := dbutil.WithTx(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
-		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
-
-		// Should be a batch insert, but that's currently impossible with SQLite/sqlc. https://github.com/sqlc-dev/sqlc/issues/3802
-		for i, version := range params.Versions {
-			migration, err := dbsqlc.New().RiverMigrationInsert(schemaTemplateParam(ctx, params.Schema), dbtx, &dbsqlc.RiverMigrationInsertParams{
-				Line:    params.Line,
-				Version: int64(version),
-			})
-			if err != nil {
-				return interpretError(err)
-			}
-
-			migrations[i] = migrationFromInternal(migration)
-		}
-
-		return nil
-	}); err != nil {
+	versions, err := json.Marshal(params.Versions)
+	if err != nil {
 		return nil, err
 	}
 
-	return migrations, nil
+	migrations, err := dbsqlc.New().RiverMigrationInsertMany(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.RiverMigrationInsertManyParams{
+		Line:     params.Line,
+		Versions: versions,
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return sliceutil.Map(migrations, migrationFromInternal), nil
 }
 
 func (e *Executor) MigrationInsertManyAssumingMain(ctx context.Context, params *riverdriver.MigrationInsertManyAssumingMainParams) ([]*riverdriver.Migration, error) {
-	migrations := make([]*riverdriver.Migration, len(params.Versions))
-
-	if err := dbutil.WithTx(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
-		ctx = schemaTemplateParam(ctx, params.Schema)
-		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
-
-		// Should be a batch insert, but that's currently impossible with SQLite/sqlc. https://github.com/sqlc-dev/sqlc/issues/3802
-		for i, version := range params.Versions {
-			internal, err := dbsqlc.New().RiverMigrationInsertAssumingMain(ctx, dbtx, int64(version))
-			if err != nil {
-				return interpretError(err)
-			}
-
-			migrations[i] = &riverdriver.Migration{
-				CreatedAt: internal.CreatedAt.UTC(),
-				Line:      riverdriver.MigrationLineMain,
-				Version:   int(internal.Version),
-			}
-		}
-
-		return nil
-	}); err != nil {
+	versions, err := json.Marshal(params.Versions)
+	if err != nil {
 		return nil, err
 	}
 
-	return migrations, nil
+	migrations, err := dbsqlc.New().RiverMigrationInsertManyAssumingMain(schemaTemplateParam(ctx, params.Schema), e.dbtx, versions)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return sliceutil.Map(migrations, func(internal *dbsqlc.RiverMigrationInsertManyAssumingMainRow) *riverdriver.Migration {
+		return &riverdriver.Migration{
+			CreatedAt: internal.CreatedAt.UTC(),
+			Line:      riverdriver.MigrationLineMain,
+			Version:   int(internal.Version),
+		}
+	}), nil
 }
 
 func (e *Executor) NotifyMany(ctx context.Context, params *riverdriver.NotifyManyParams) error {
@@ -1594,6 +1437,95 @@ func (w templateReplaceWrapper) QueryRowContext(ctx context.Context, sql string,
 
 func durationAsString(duration time.Duration) string {
 	return strconv.FormatFloat(duration.Seconds(), 'f', 3, 64) + " seconds"
+}
+
+func sqliteJobInsertFastManyJobsParam(jobs []*riverdriver.JobInsertFastParams, uniqueNonce string) ([]byte, error) {
+	jobsParam := make([]map[string]any, len(jobs))
+
+	for i, job := range jobs {
+		metadata := sliceutil.FirstNonEmpty(job.Metadata, []byte("{}"))
+		if uniqueNonce != "" {
+			var err error
+			metadata, err = sjson.SetBytes(metadata, rivercommon.MetadataKeyUniqueNonce, uniqueNonce)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		tags, err := json.Marshal(job.Tags)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling tags: %w", err)
+		}
+
+		jobsParam[i] = map[string]any{
+			"args":          json.RawMessage(job.EncodedArgs),
+			"created_at":    timeStringNullable(job.CreatedAt),
+			"id":            job.ID,
+			"kind":          job.Kind,
+			"max_attempts":  int64(job.MaxAttempts),
+			"metadata":      json.RawMessage(metadata),
+			"priority":      int64(job.Priority),
+			"queue":         job.Queue,
+			"scheduled_at":  timeStringNullable(job.ScheduledAt),
+			"state":         string(job.State),
+			"tags":          json.RawMessage(tags),
+			"unique_key":    hex.EncodeToString(job.UniqueKey),
+			"unique_states": int64(job.UniqueStates),
+		}
+	}
+
+	return json.Marshal(jobsParam)
+}
+
+func sqliteJobInsertFullManyJobsParam(jobs []*riverdriver.JobInsertFullParams) ([]byte, error) {
+	jobsParam := make([]map[string]any, len(jobs))
+
+	for i, job := range jobs {
+		var attemptedBy json.RawMessage
+		if job.AttemptedBy != nil {
+			attemptedByBytes, err := json.Marshal(job.AttemptedBy)
+			if err != nil {
+				return nil, err
+			}
+			attemptedBy = attemptedByBytes
+		}
+
+		var errors json.RawMessage
+		if len(job.Errors) > 0 {
+			errorsBytes, err := json.Marshal(sliceutil.Map(job.Errors, func(e []byte) json.RawMessage { return json.RawMessage(e) }))
+			if err != nil {
+				return nil, err
+			}
+			errors = errorsBytes
+		}
+
+		tags, err := json.Marshal(job.Tags)
+		if err != nil {
+			return nil, err
+		}
+
+		jobsParam[i] = map[string]any{
+			"args":          json.RawMessage(job.EncodedArgs),
+			"attempt":       int64(job.Attempt),
+			"attempted_at":  timeStringNullable(job.AttemptedAt),
+			"attempted_by":  attemptedBy,
+			"created_at":    timeStringNullable(job.CreatedAt),
+			"errors":        errors,
+			"finalized_at":  timeStringNullable(job.FinalizedAt),
+			"kind":          job.Kind,
+			"max_attempts":  int64(job.MaxAttempts),
+			"metadata":      json.RawMessage(sliceutil.FirstNonEmpty(job.Metadata, []byte("{}"))),
+			"priority":      int64(job.Priority),
+			"queue":         job.Queue,
+			"scheduled_at":  timeStringNullable(job.ScheduledAt),
+			"state":         string(job.State),
+			"tags":          json.RawMessage(tags),
+			"unique_key":    hex.EncodeToString(job.UniqueKey),
+			"unique_states": int64(job.UniqueStates),
+		}
+	}
+
+	return json.Marshal(jobsParam)
 }
 
 func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
