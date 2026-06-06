@@ -4,8 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/stretchr/testify/require"
+
+	"github.com/riverqueue/river/internal/jobexecutor"
 )
 
 func TestMetadataSet(t *testing.T) {
