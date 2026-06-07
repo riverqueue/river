@@ -39,30 +39,24 @@ FROM /* TEMPLATE: schema */river_migration
 WHERE line = @line
 ORDER BY version;
 
--- Insert a migration.
---
--- This is supposed to be a batch insert, but various limitations of the
--- combined SQLite + sqlc has left me unable to find a way of injecting many
--- arguments en masse (like how we slightly abuse arrays to pull it off for the
--- Postgres drivers), so we loop over many insert operations instead, with the
--- expectation that this may be fixable in the future. Because SQLite targets
--- will often be local and therefore with a very minimal round trip compared to
--- a network, looping over operations is probably okay performance-wise.
--- name: RiverMigrationInsert :one
+-- name: RiverMigrationInsertMany :many
 INSERT INTO /* TEMPLATE: schema */river_migration (
     line,
     version
-) VALUES (
+)
+SELECT
     @line,
-    @version
-) RETURNING *;
+    value
+FROM json_each(cast(@versions AS blob))
+RETURNING *;
 
--- name: RiverMigrationInsertAssumingMain :one
+-- name: RiverMigrationInsertManyAssumingMain :many
 INSERT INTO /* TEMPLATE: schema */river_migration (
     version
-) VALUES (
-    @version
 )
+SELECT
+    value
+FROM json_each(cast(@versions AS blob))
 RETURNING
     created_at,
     version;
