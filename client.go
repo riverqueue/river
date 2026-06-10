@@ -1325,8 +1325,8 @@ const subscribeChanSizeDefault = 1_000
 // Client.SubscribeConfig.
 type SubscribeConfig struct {
 	// ChanSize is the size of the buffered channel that will be created for the
-	// subscription. Incoming events that overall this number because a listener
-	// isn't reading from the channel in a timely manner will be dropped.
+	// subscription. Incoming events that would overflow this buffer because a
+	// listener isn't reading from the channel in a timely manner will be dropped.
 	//
 	// Defaults to 1000.
 	ChanSize int
