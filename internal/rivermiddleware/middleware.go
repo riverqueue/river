@@ -34,6 +34,7 @@ func (*ResumableMiddleware) Work(ctx context.Context, job *rivertype.JobRow, doI
 	}
 
 	state := &ResumableState{
+		AllStepNames:  make(map[string]struct{}),
 		Cursors:       make(map[string]json.RawMessage),
 		ResumeMatched: true,
 		ResumeStep:    gjson.GetBytes(job.Metadata, rivercommon.MetadataKeyResumableStep).Str,
@@ -80,6 +81,7 @@ func (*ResumableMiddleware) Work(ctx context.Context, job *rivertype.JobRow, doI
 // ResumableState holds the state for a resumable job execution. It is stored in
 // the context and accessed by ResumableStep and ResumableStepCursor.
 type ResumableState struct {
+	AllStepNames  map[string]struct{}
 	CompletedStep string
 	Cursors       map[string]json.RawMessage
 	Err           error
