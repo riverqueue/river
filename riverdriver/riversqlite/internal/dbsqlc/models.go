@@ -61,6 +61,13 @@ type RiverMigration struct {
 	CreatedAt time.Time
 }
 
+type RiverNotification struct {
+	ID        int64
+	CreatedAt time.Time
+	Payload   string
+	Topic     string
+}
+
 type RiverQueue struct {
 	Name      string
 	CreatedAt time.Time

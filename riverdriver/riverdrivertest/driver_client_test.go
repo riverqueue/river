@@ -319,7 +319,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.NoError(t, err)
 
 		// SQLite can't support multiple concurrent transactions, so skip this extra check there.
-		if bundle.driver.DatabaseName() != databaseNameSQLite {
+		if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
 			_, otherExecTx := beginTx(ctx, t, bundle)
 
 			// Both jobs present because other transaction doesn't see the deletion.
@@ -404,7 +404,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
 
 		// SQLite can't support multiple concurrent transactions, so skip this extra check there.
-		if bundle.driver.DatabaseName() != databaseNameSQLite {
+		if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
 			_, otherExecTx := beginTx(ctx, t, bundle)
 
 			// Jobs present because other transaction doesn't see the deletions.
@@ -519,7 +519,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		})
 
 		listRes, err := client.JobList(ctx, river.NewJobListParams().Metadata(`{"foo":"bar"}`))
-		if bundle.driver.DatabaseName() == databaseNameSQLite {
+		if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
 			t.Logf("Ignoring unsupported JobListResult.Metadata on SQLite")
 			require.EqualError(t, err, "JobListParams.Metadata is not supported on SQLite")
 			return
@@ -583,7 +583,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		})
 
 		listRes, err := client.JobListTx(ctx, tx, river.NewJobListParams().Metadata(`{"foo":"bar"}`))
-		if bundle.driver.DatabaseName() == databaseNameSQLite {
+		if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
 			t.Logf("Ignoring unsupported JobListTxResult.Metadata on SQLite")
 			require.EqualError(t, err, "JobListParams.Metadata is not supported on SQLite")
 			return
@@ -607,7 +607,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 
 		listParams := river.NewJobListParams()
 
-		if bundle.driver.DatabaseName() == databaseNameSQLite {
+		if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
 			listParams = listParams.Where("metadata ->> @json_path = @json_val", river.NamedArgs{"json_path": "$.foo", "json_val": "bar"})
 		} else {
 			// "bar" is quoted in this branch because `jsonb_path_query_first` needs to be compared to a JSON value

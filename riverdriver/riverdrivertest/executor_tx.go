@@ -166,7 +166,7 @@ func exerciseExecutorTx[TTx any](ctx context.Context, t *testing.T,
 
 		{
 			driver, _ := driverWithSchema(ctx, t, nil)
-			if driver.DatabaseName() == databaseNameSQLite {
+			if driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
 				t.Logf("Skipping PGAdvisoryXactLock test for SQLite")
 				return
 			}

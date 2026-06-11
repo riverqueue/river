@@ -261,7 +261,7 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 			// since we only expect to need `queues_excluded` on SQLite (and not
 			// `queues_included` for the foreseeable future), I've just set
 			// SQLite to not support `queues_included` for the time being.
-			if bundle.driver.DatabaseName() == databaseNameSQLite {
+			if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
 				t.Logf("Skipping JobDeleteBefore with QueuesIncluded test for SQLite")
 				return
 			}

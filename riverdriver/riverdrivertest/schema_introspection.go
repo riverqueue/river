@@ -90,7 +90,7 @@ func exerciseSchemaIntrospection[TTx any](ctx context.Context, t *testing.T,
 			// the index name, but on Postgres it should go before the table.
 			// The schema is empty for SQLite anyway since we're operating in
 			// isolation in a particular database file.
-			if driver.DatabaseName() == databaseNameSQLite {
+			if driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
 				require.NoError(t, driver.GetExecutor().Exec(ctx, "CREATE INDEX river_job_index_drop_if_exists ON river_job (id)"))
 			} else {
 				require.NoError(t, driver.GetExecutor().Exec(ctx, fmt.Sprintf("CREATE INDEX river_job_index_drop_if_exists ON %s.river_job (id)", schema)))
@@ -142,7 +142,7 @@ func exerciseSchemaIntrospection[TTx any](ctx context.Context, t *testing.T,
 				Index:  "river_job_prioritized_fetching_index",
 				Schema: "custom_schema",
 			})
-			if bundle.driver.DatabaseName() == databaseNameSQLite {
+			if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
 				requireMissingRelation(t, err, "custom_schema", "sqlite_master")
 			} else {
 				require.NoError(t, err)
@@ -205,7 +205,7 @@ func exerciseSchemaIntrospection[TTx any](ctx context.Context, t *testing.T,
 				IndexNames: []string{"river_job_kind", "river_job_prioritized_fetching_index"},
 				Schema:     "custom_schema_that_does_not_exist",
 			})
-			if bundle.driver.DatabaseName() == databaseNameSQLite {
+			if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
 				requireMissingRelation(t, err, "custom_schema_that_does_not_exist", "sqlite_master")
 			} else {
 				require.NoError(t, err)
@@ -245,7 +245,7 @@ func exerciseSchemaIntrospection[TTx any](ctx context.Context, t *testing.T,
 			// empty because they're actually separate databases and can't be
 			// referenced with their fully qualified name. So instead, extract
 			// the name of the current database via pragma and use it as schema.
-			if driver1.DatabaseName() == databaseNameSQLite {
+			if driver1.DatabaseName() == riverdriver.DatabaseNameSQLite {
 				getCurrentSchema := func(exec riverdriver.Executor) string {
 					var databaseFile string
 					require.NoError(t, exec.QueryRow(ctx, "SELECT file FROM pragma_database_list WHERE name = ?1", "main").Scan(&databaseFile))

@@ -992,6 +992,13 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			client.testSignals.queueCleaner = &queueCleaner.TestSignals
 		}
 
+		if driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+			sqliteNotificationCleaner := maintenance.NewSQLiteNotificationCleaner(archetype, &maintenance.SQLiteNotificationCleanerConfig{
+				Schema: config.Schema,
+			}, driver.GetExecutor())
+			maintenanceServices = append(maintenanceServices, sqliteNotificationCleaner)
+		}
+
 		{
 			var scheduleFunc func(time.Time) time.Time
 			if config.ReindexerSchedule != nil {
@@ -2378,8 +2385,6 @@ type JobListResult struct {
 	LastCursor *JobListCursor
 }
 
-const databaseNameSQLite = "sqlite"
-
 var errJobListParamsMetadataNotSupportedSQLite = errors.New("JobListParams.Metadata is not supported on SQLite")
 
 // JobList returns a paginated list of jobs matching the provided filters. The
@@ -2401,7 +2406,7 @@ func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) (*JobL
 	}
 	params.schema = c.config.Schema
 
-	if c.driver.DatabaseName() == databaseNameSQLite && params.metadataCalled {
+	if c.driver.DatabaseName() == riverdriver.DatabaseNameSQLite && params.metadataCalled {
 		return nil, errJobListParamsMetadataNotSupportedSQLite
 	}
 
@@ -2442,7 +2447,7 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 	}
 	params.schema = c.config.Schema
 
-	if c.driver.DatabaseName() == databaseNameSQLite && params.metadataCalled {
+	if c.driver.DatabaseName() == riverdriver.DatabaseNameSQLite && params.metadataCalled {
 		return nil, errJobListParamsMetadataNotSupportedSQLite
 	}
 
