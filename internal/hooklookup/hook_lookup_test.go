@@ -21,6 +21,7 @@ func TestHookLookup(t *testing.T) {
 		return NewHookLookup([]rivertype.Hook{ //nolint:forcetypeassert
 			&testHookInsertAndWorkBegin{},
 			&testHookInsertBegin{},
+			&testHookMetricEmit{},
 			&testHookWorkBegin{},
 			&testHookWorkEnd{},
 		}).(*hookLookup), &testBundle{}
@@ -36,6 +37,9 @@ func TestHookLookup(t *testing.T) {
 			&testHookInsertBegin{},
 		}, hookLookup.ByHookKind(HookKindInsertBegin))
 		require.Equal(t, []rivertype.Hook{
+			&testHookMetricEmit{},
+		}, hookLookup.ByHookKind(HookKindMetricEmit))
+		require.Equal(t, []rivertype.Hook{
 			&testHookInsertAndWorkBegin{},
 			&testHookWorkBegin{},
 		}, hookLookup.ByHookKind(HookKindWorkBegin))
@@ -43,13 +47,16 @@ func TestHookLookup(t *testing.T) {
 			&testHookWorkEnd{},
 		}, hookLookup.ByHookKind(HookKindWorkEnd))
 
-		require.Len(t, hookLookup.hooksByKind, 3)
+		require.Len(t, hookLookup.hooksByKind, 4)
 
 		// Repeat lookups to make sure we get the same result.
 		require.Equal(t, []rivertype.Hook{
 			&testHookInsertAndWorkBegin{},
 			&testHookInsertBegin{},
 		}, hookLookup.ByHookKind(HookKindInsertBegin))
+		require.Equal(t, []rivertype.Hook{
+			&testHookMetricEmit{},
+		}, hookLookup.ByHookKind(HookKindMetricEmit))
 		require.Equal(t, []rivertype.Hook{
 			&testHookInsertAndWorkBegin{},
 			&testHookWorkBegin{},
@@ -75,6 +82,7 @@ func TestHookLookup(t *testing.T) {
 		}
 
 		parallelLookupLoop(HookKindInsertBegin)
+		parallelLookupLoop(HookKindMetricEmit)
 		parallelLookupLoop(HookKindWorkBegin)
 		parallelLookupLoop(HookKindInsertBegin)
 		parallelLookupLoop(HookKindWorkBegin)
@@ -100,6 +108,7 @@ func TestEmptyHookLookup(t *testing.T) {
 		hookLookup, _ := setup(t)
 
 		require.Nil(t, hookLookup.ByHookKind(HookKindInsertBegin))
+		require.Nil(t, hookLookup.ByHookKind(HookKindMetricEmit))
 		require.Nil(t, hookLookup.ByHookKind(HookKindWorkBegin))
 	})
 }
@@ -239,6 +248,17 @@ type testHookInsertBegin struct{ rivertype.Hook }
 
 func (t *testHookInsertBegin) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
 	return nil
+}
+
+//
+// testHookMetricEmit
+//
+
+var _ rivertype.HookMetricEmit = &testHookMetricEmit{}
+
+type testHookMetricEmit struct{ rivertype.Hook }
+
+func (t *testHookMetricEmit) MetricEmit(ctx context.Context, params *rivertype.HookMetricEmitParams) {
 }
 
 //

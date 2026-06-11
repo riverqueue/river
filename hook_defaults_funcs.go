@@ -23,6 +23,16 @@ func (f HookInsertBeginFunc) InsertBegin(ctx context.Context, params *rivertype.
 
 func (f HookInsertBeginFunc) IsHook() bool { return true }
 
+// HookMetricEmitFunc is a convenience helper for implementing
+// rivertype.HookMetricEmit using a simple function instead of a struct.
+type HookMetricEmitFunc func(ctx context.Context, params *rivertype.HookMetricEmitParams)
+
+func (f HookMetricEmitFunc) IsHook() bool { return true }
+
+func (f HookMetricEmitFunc) MetricEmit(ctx context.Context, params *rivertype.HookMetricEmitParams) {
+	f(ctx, params)
+}
+
 // HookPeriodicJobsStartFunc is a convenience helper for implementing
 // rivertype.HookPeriodicJobsStart using a simple function instead of a struct.
 type HookPeriodicJobsStartFunc func(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error
