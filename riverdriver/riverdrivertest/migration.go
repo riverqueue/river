@@ -58,7 +58,7 @@ func exerciseMigration[TTx any](ctx context.Context, t *testing.T,
 			t.Parallel()
 
 			driver, _ := driverWithSchema(ctx, t, nil)
-			expectedLatestTables := []string{"river_job", "river_leader", "river_queue", "river_client", "river_client_queue", "river_notification"}
+			expectedLatestTables := []string{"river_job", "river_leader", "river_queue", "river_notification"}
 
 			require.Empty(t, driver.GetMigrationTruncateTables(riverdriver.MigrationLineMain, 1))
 			require.Equal(t, []string{"river_job", "river_leader"},
