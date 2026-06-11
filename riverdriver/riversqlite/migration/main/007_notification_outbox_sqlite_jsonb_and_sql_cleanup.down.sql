@@ -31,42 +31,11 @@ CREATE TABLE /* TEMPLATE: schema */river_client_queue (
 );
 
 --
--- Revert addition of `DEFAULT 25` to `river_job.max_attempts`.
---
-
-ALTER TABLE /* TEMPLATE: schema */river_job
-    RENAME COLUMN max_attempts TO max_attempts_old;
-
-ALTER TABLE /* TEMPLATE: schema */river_job
-    ADD COLUMN max_attempts integer NOT NULL;
-
-UPDATE /* TEMPLATE: schema */river_job
-SET max_attempts = max_attempts_old;
-
-ALTER TABLE /* TEMPLATE: schema */river_job
-    DROP COLUMN max_attempts_old;
-
---
--- Changes `river_queue.updated_at` to revert the default of `CURRENT_TIMESTAMP`.
---
-
-ALTER TABLE /* TEMPLATE: schema */river_queue
-    RENAME COLUMN updated_at TO updated_at_old;
-
-ALTER TABLE /* TEMPLATE: schema */river_queue
-    ADD COLUMN updated_at timestamp NOT NULL;
-
-UPDATE /* TEMPLATE: schema */river_queue
-SET updated_at = updated_at_old;
-
-ALTER TABLE /* TEMPLATE: schema */river_queue
-    DROP COLUMN updated_at_old;
-
---
 -- SQLite JSONB conversion rollback.
 --
 -- Convert JSONB binary columns back to JSON text format and restore json()
--- defaults.
+-- defaults. The `river_job` rebuild also reverts the addition of `DEFAULT 25`
+-- to `river_job.max_attempts`.
 --
 -- SQLite doesn't allow `ALTER TABLE ADD COLUMN` with non-constant defaults like
 -- `json('{}')`, so rebuild each affected table instead.

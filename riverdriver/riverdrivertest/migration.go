@@ -2,6 +2,7 @@ package riverdrivertest
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -142,6 +143,77 @@ func exerciseMigration[TTx any](ctx context.Context, t *testing.T,
 				require.False(t, exists)
 			})
 		}
+	})
+
+	t.Run("MigrateDownFromVersionSevenWithJobData", func(t *testing.T) {
+		t.Parallel()
+
+		driver, schema := driverWithSchema(ctx, t, &riverdbtest.TestSchemaOpts{
+			DisableReuse: true,
+		})
+		exec := driver.GetExecutor()
+
+		job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Schema: schema})
+
+		migrator, err := rivermigrate.New(driver, &rivermigrate.Config{
+			Line:   riverdriver.MigrationLineMain,
+			Logger: riversharedtest.Logger(t),
+			Schema: schema,
+		})
+		require.NoError(t, err)
+
+		_, err = migrator.Migrate(ctx, rivermigrate.DirectionDown, &rivermigrate.MigrateOpts{
+			TargetVersion: 6,
+		})
+		require.NoError(t, err)
+
+		job, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: schema})
+		require.NoError(t, err)
+		require.NotZero(t, job.ID)
+	})
+
+	t.Run("MigrateUpFromVersionSixWithQueueData", func(t *testing.T) {
+		t.Parallel()
+
+		driver, schema := driverWithSchema(ctx, t, &riverdbtest.TestSchemaOpts{
+			DisableReuse: true,
+			LineTargetVersions: map[string]int{
+				riverdriver.MigrationLineMain: 6,
+			},
+		})
+		exec := driver.GetExecutor()
+
+		queueTable := "river_queue"
+		if driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+			queueTable = schema + ".river_queue"
+		}
+
+		_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{
+			Name:   ptrutil.Ptr("default"),
+			Schema: schema,
+		})
+
+		migrator, err := rivermigrate.New(driver, &rivermigrate.Config{
+			Line:   riverdriver.MigrationLineMain,
+			Logger: riversharedtest.Logger(t),
+			Schema: schema,
+		})
+		require.NoError(t, err)
+
+		_, err = migrator.Migrate(ctx, rivermigrate.DirectionUp, nil)
+		require.NoError(t, err)
+
+		queue, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{Schema: schema, Name: "default"})
+		require.NoError(t, err)
+		require.Equal(t, "default", queue.Name)
+		require.NotZero(t, queue.UpdatedAt)
+
+		require.NoError(t, exec.Exec(ctx, fmt.Sprintf("INSERT INTO %s (name) VALUES ('queue-with-defaults')", queueTable)))
+
+		queue, err = exec.QueueGet(ctx, &riverdriver.QueueGetParams{Schema: schema, Name: "queue-with-defaults"})
+		require.NoError(t, err)
+		require.Equal(t, "queue-with-defaults", queue.Name)
+		require.NotZero(t, queue.UpdatedAt)
 	})
 
 	type testBundle struct {
