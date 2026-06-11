@@ -26,6 +26,54 @@ func TestResumableStep(t *testing.T) {
 		return ctx, metadataUpdates, &rivertype.JobRow{Metadata: []byte(metadata)}
 	}
 
+	t.Run("DuplicateStepName", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, _, job := setup(t, `{}`)
+
+		var ran []string
+		err := (&rivermiddleware.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
+			ResumableStep(ctx, "step1", nil, func(ctx context.Context) error {
+				ran = append(ran, "first")
+				return nil
+			})
+			ResumableStep(ctx, "step1", nil, func(ctx context.Context) error {
+				ran = append(ran, "second")
+				return nil
+			})
+
+			return nil
+		})
+		require.EqualError(t, err, `river: duplicate resumable step name "step1"`)
+		require.Equal(t, []string{"first"}, ran)
+	})
+
+	t.Run("DuplicateStepNameWhenSkippingCompletedSteps", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, _, job := setup(t, `{"river:resumable_step":"step2"}`)
+
+		var ran []string
+		err := (&rivermiddleware.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
+			ResumableStep(ctx, "step1", nil, func(ctx context.Context) error {
+				ran = append(ran, "first")
+				return nil
+			})
+			ResumableStep(ctx, "step1", nil, func(ctx context.Context) error {
+				ran = append(ran, "second")
+				return nil
+			})
+			ResumableStep(ctx, "step2", nil, func(ctx context.Context) error {
+				ran = append(ran, "third")
+				return nil
+			})
+
+			return nil
+		})
+		require.EqualError(t, err, `river: duplicate resumable step name "step1"`)
+		require.Empty(t, ran)
+	})
+
 	t.Run("PanicsOutsideWorker", func(t *testing.T) {
 		t.Parallel()
 
@@ -130,6 +178,28 @@ func TestResumableStepCursor(t *testing.T) {
 
 		return ctx, metadataUpdates, &rivertype.JobRow{Metadata: []byte(metadata)}
 	}
+
+	t.Run("DuplicateStepNameSharedWithCursorStep", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, _, job := setup(t, `{}`)
+
+		var ran []string
+		err := (&rivermiddleware.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
+			ResumableStep(ctx, "step1", nil, func(ctx context.Context) error {
+				ran = append(ran, "step")
+				return nil
+			})
+			ResumableStepCursor(ctx, "step1", nil, func(ctx context.Context, cursor resumableCursor) error {
+				ran = append(ran, "cursor")
+				return nil
+			})
+
+			return nil
+		})
+		require.EqualError(t, err, `river: duplicate resumable step name "step1"`)
+		require.Equal(t, []string{"step"}, ran)
+	})
 
 	t.Run("ResumesCursor", func(t *testing.T) {
 		t.Parallel()

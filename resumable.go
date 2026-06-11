@@ -45,6 +45,8 @@ type StepOpts struct{}
 
 // ResumableStep runs a resumable step, skipping the step on a later retry if
 // an earlier attempt already completed it successfully.
+// Step names must be unique across all ResumableStep and ResumableStepCursor
+// calls in the same Worker execution.
 //
 // After a step returns an error, no subsequent steps will be run and the
 // overall job will be marked as failed with that error. Be careful to put all
@@ -55,6 +57,9 @@ type StepOpts struct{}
 func ResumableStep(ctx context.Context, name string, opts *StepOpts, stepFunc func(ctx context.Context) error) {
 	state := mustResumableState(ctx)
 	if state.Err != nil {
+		return
+	}
+	if !registerResumableStepName(state, name) {
 		return
 	}
 
@@ -81,6 +86,8 @@ func ResumableStep(ctx context.Context, name string, opts *StepOpts, stepFunc fu
 // ResumableStepCursor runs a resumable step that also receives a persisted
 // cursor value from an earlier failed attempt, if one was recorded with
 // ResumableSetCursor.
+// Step names must be unique across all ResumableStep and ResumableStepCursor
+// calls in the same Worker execution.
 //
 // The cursor type T is user-specified. It may be a primitive value like an
 // integer ID, or a more complex type like a struct with multiple fields. It's
@@ -100,6 +107,9 @@ func ResumableStep(ctx context.Context, name string, opts *StepOpts, stepFunc fu
 func ResumableStepCursor[TCursor any](ctx context.Context, name string, opts *StepOpts, stepFunc func(ctx context.Context, cursor TCursor) error) {
 	state := mustResumableState(ctx)
 	if state.Err != nil {
+		return
+	}
+	if !registerResumableStepName(state, name) {
 		return
 	}
 
@@ -147,6 +157,16 @@ func mustResumableState(ctx context.Context) *rivermiddleware.ResumableState {
 	}
 
 	return state
+}
+
+func registerResumableStepName(state *rivermiddleware.ResumableState, name string) bool {
+	if _, ok := state.AllStepNames[name]; ok {
+		state.Err = fmt.Errorf("river: duplicate resumable step name %q", name)
+		return false
+	}
+
+	state.AllStepNames[name] = struct{}{}
+	return true
 }
 
 func resumableStateFromContext(ctx context.Context) (*rivermiddleware.ResumableState, bool) {
