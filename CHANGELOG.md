@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-⚠️ Version 0.40.0 contains a new database migration, version 7, but running it is **only necessary if you're using SQLite**. It converts all uses of `json` to `jsonb`. If using Postgres, version 7 is a no-op. You can run it now or wait for another migration in the future and run the two together.
+⚠️ Version 0.40.0 contains a new database migration, version 7, that rolls up some database cleanups and a few SQLite features:
+
+- Drop tables `river_client` and `river_client_queue`. These were added prospectively, but in the end were never used for anything. [PR #1115](https://github.com/riverqueue/river/pull/1115).
+- Add a default value of 25 to `river_job.max_attempts`. Go code was previously injecting a max value, so this has no functional effect on existing behavior. [PR #1115](https://github.com/riverqueue/river/pull/1115).
+- Add a default value of `CURRENT_TIMESTAMP` to `river_queue.updated_at`. Go code was previously injecting the current time, so this has no functional effect on existing behavior. [PR #1115](https://github.com/riverqueue/river/pull/1115).
+- SQLite only: Convert `json` columns to `jsonb`. [PR #1224](https://github.com/riverqueue/river/pull/1224).
+- SQLite only: Add pseudo listen/notify mechanism in a new `river_notification` table. [PR #1275](https://github.com/riverqueue/river/pull/1275).
+
+For SQLite, running River apps must be stopped briefly while the migration is run and their code upgrade to 0.40.0 so they start reading and inserting new values in `jsonb` instead of `json`.
 
 See [documentation on running River migrations](https://riverqueue.com/docs/migrations). If migrating with the CLI, make sure to update it to its latest version:
 
@@ -23,6 +31,10 @@ go install github.com/riverqueue/river/cmd/river@latest
 river migrate-get --database-url sqlite:// --version 6 --up > river7.up.sql
 river migrate-get --database-url sqlite:// --version 6 --down > river7.down.sql
 ```
+
+### Added
+
+- SQLite picks up a new `river_notification` table that allows River to provide listen/notify-like functionality despite these functions not being supported outside of Postgres. [PR #1275](https://github.com/riverqueue/river/pull/1275).
 
 ### Changed
 
