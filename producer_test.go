@@ -33,6 +33,17 @@ import (
 
 const testClientID = "test-client-id"
 
+type countingPluginLookup struct {
+	pluginlookup.PluginLookupInterface
+
+	count int
+}
+
+func (l *countingPluginLookup) ByKind(kind pluginlookup.PluginKind) []any {
+	l.count++
+	return l.PluginLookupInterface.ByKind(kind)
+}
+
 func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	// We have encountered previous data races with the list of active jobs on
 	// Producer because we need to know the count of active jobs in order to
@@ -157,6 +168,143 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	case <-ctx.Done():
 		t.Error("timed out waiting for last job to run")
 	}
+}
+
+func TestProducer_MetricEmitHook(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		archetype    *baseservice.Archetype
+		config       *Config
+		exec         riverdriver.Executor
+		metrics      chan *rivertype.HookMetricEmitParams
+		pluginLookup *countingPluginLookup
+		producer     *producer
+		queue        string
+		schema       string
+	}
+
+	setup := func(t *testing.T) *testBundle {
+		t.Helper()
+
+		var (
+			archetype  = riversharedtest.BaseServiceArchetype(t)
+			driver     = riverpgxv5.New(riversharedtest.DBPool(ctx, t))
+			exec       = driver.GetExecutor()
+			jobUpdates = make(chan []jobcompleter.CompleterJobUpdated, 10)
+			metrics    = make(chan *rivertype.HookMetricEmitParams, 10)
+			pilot      = &riverpilot.StandardPilot{}
+			queueName  = "test_producer_metric_hook"
+			schema     = riverdbtest.TestSchema(ctx, t, driver, nil)
+		)
+
+		t.Cleanup(riverinternaltest.DiscardContinuously(jobUpdates))
+
+		completer := jobcompleter.NewInlineCompleter(archetype, schema, exec, pilot, jobUpdates)
+		t.Cleanup(completer.Stop)
+
+		metricHook := HookMetricEmitFunc(func(ctx context.Context, params *rivertype.HookMetricEmitParams) {
+			paramsCopy := *params
+			metrics <- &paramsCopy
+		})
+		pluginLookup := &countingPluginLookup{
+			PluginLookupInterface: pluginlookup.NewPluginLookup([]any{metricHook}),
+		}
+
+		producer := newProducer(archetype, exec, pilot, &producerConfig{
+			ClientID:                     testClientID,
+			Completer:                    completer,
+			ErrorHandler:                 newTestErrorHandler(),
+			FetchCooldown:                FetchCooldownDefault,
+			FetchPollInterval:            50 * time.Millisecond,
+			JobTimeout:                   JobTimeoutDefault,
+			MaxWorkers:                   1_000,
+			PluginLookupByJob:            pluginlookup.NewJobPluginLookup(),
+			PluginLookupGlobal:           pluginLookup,
+			Queue:                        queueName,
+			QueuePollInterval:            queuePollIntervalDefault,
+			QueueReportInterval:          queueReportIntervalDefault,
+			RetryPolicy:                  &DefaultClientRetryPolicy{},
+			SchedulerInterval:            riverinternaltest.SchedulerShortInterval,
+			Schema:                       schema,
+			StaleProducerRetentionPeriod: time.Minute,
+			Workers:                      NewWorkers(),
+		})
+
+		return &testBundle{
+			archetype:    archetype,
+			config:       newTestConfig(t, schema),
+			exec:         exec,
+			metrics:      metrics,
+			pluginLookup: pluginLookup,
+			producer:     producer,
+			queue:        queueName,
+			schema:       schema,
+		}
+	}
+
+	t.Run("EmitsMetricsForFetch", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		scheduledAt := time.Now().UTC().Add(-time.Second)
+		insertParams := make([]*riverdriver.JobInsertFastParams, 2)
+		for i := range insertParams {
+			params, err := insertParamsFromConfigArgsAndOptions(bundle.archetype, bundle.config, noOpArgs{}, &InsertOpts{
+				Queue: bundle.queue,
+			})
+			require.NoError(t, err)
+			params.ScheduledAt = &scheduledAt
+			insertParams[i] = (*riverdriver.JobInsertFastParams)(params)
+		}
+
+		_, err := bundle.exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+			Jobs:   insertParams,
+			Schema: bundle.schema,
+		})
+		require.NoError(t, err)
+
+		fetchResultCh := make(chan producerFetchResult, 1)
+		bundle.producer.dispatchWork(ctx, 2, fetchResultCh)
+
+		fetchResult := riversharedtest.WaitOrTimeout(t, fetchResultCh)
+		require.NoError(t, fetchResult.err)
+		require.Len(t, fetchResult.jobs, 2)
+		require.Equal(t, 1, bundle.pluginLookup.count)
+
+		metricsByName := make(map[rivertype.MetricName]rivertype.Metric)
+		for _, metric := range riversharedtest.WaitOrTimeoutN(t, bundle.metrics, 2) {
+			metricsByName[metric.Metric.Name()] = metric.Metric
+		}
+
+		durationMetric, durationMetricFound := metricsByName[rivertype.MetricNameJobGetAvailableDuration].(*rivertype.JobGetAvailableDurationMetric)
+		require.True(t, durationMetricFound)
+		require.Equal(t, bundle.queue, durationMetric.Queue)
+		require.GreaterOrEqual(t, durationMetric.Duration, time.Duration(0))
+
+		countMetric, countMetricFound := metricsByName[rivertype.MetricNameJobGetAvailableCount].(*rivertype.JobGetAvailableCountMetric)
+		require.True(t, countMetricFound)
+		require.Equal(t, bundle.queue, countMetric.Queue)
+		require.Equal(t, 2, countMetric.Count)
+	})
+
+	t.Run("SkipsMetricsWhenNoFetchAttempted", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		fetchResultCh := make(chan producerFetchResult, 1)
+		bundle.producer.dispatchWork(ctx, 0, fetchResultCh)
+
+		fetchResult := riversharedtest.WaitOrTimeout(t, fetchResultCh)
+		require.NoError(t, fetchResult.err)
+		require.Empty(t, fetchResult.jobs)
+		require.Equal(t, 1, bundle.pluginLookup.count)
+		require.Empty(t, bundle.metrics)
+	})
 }
 
 func TestProducer_PollOnly(t *testing.T) {

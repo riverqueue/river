@@ -226,11 +226,11 @@ type Config struct {
 	// lifecycle (see rivertype.Hook), installed globally.
 	//
 	// The effect of hooks in this list will depend on the specific hook
-	// interfaces they implement, so for example implementing
-	// rivertype.HookInsertBegin will cause the hook to be invoked before a job
-	// is inserted, or implementing rivertype.HookWorkBegin will cause it to be
-	// invoked before a job is worked. Hook structs may implement multiple hook
-	// interfaces.
+	// interfaces they implement. rivertype.HookInsertBegin will cause the hook
+	// to be invoked before a job is inserted. rivertype.HookMetricEmit will
+	// cause the hook to be invoked when River emits a metric. Implementing
+	// rivertype.HookWorkBegin will cause it to be invoked before a job is
+	// worked. Hook structs may implement multiple hook interfaces.
 	//
 	// Order in this list is significant. A hook that appears first will be
 	// entered before a hook that appears later. For any particular phase, order
