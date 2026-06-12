@@ -25,6 +25,7 @@ import (
 	"github.com/riverqueue/river/internal/middlewarelookup"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/notifylimiter"
+	"github.com/riverqueue/river/internal/pluginconfig"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/rivermiddleware"
 	"github.com/riverqueue/river/internal/workunit"
@@ -241,6 +242,9 @@ type Config struct {
 	// work hook runs and the insertion hooks on either side of it are skipped.
 	//
 	// Jobs may have their own specific hooks by implementing JobArgsWithHooks.
+	//
+	// If a type in Hooks also implements rivertype.Middleware, it will be
+	// installed as middleware too.
 	Hooks []rivertype.Hook
 
 	// Logger is the structured logger to use for logging purposes. If none is
@@ -274,7 +278,24 @@ type Config struct {
 	// middlewares will run one after another, and the work middleware between
 	// them will not run. When a job is worked, the work middleware runs and the
 	// insertion middlewares on either side of it are skipped.
+	//
+	// If a type in Middleware also implements rivertype.Hook, it will be
+	// installed as a hook too.
 	Middleware []rivertype.Middleware
+
+	// Plugins contains extensions installed globally as both hooks and
+	// middleware.
+	//
+	// A plugin must implement both rivertype.Hook and rivertype.Middleware. It
+	// may embed PluginDefaults, or embed both HookDefaults and
+	// MiddlewareDefaults directly, then implement any operation-specific hook or
+	// middleware interfaces it needs.
+	//
+	// Hooks and Middleware are still supported. If a type in Hooks also
+	// implements middleware, or a type in Middleware also implements hooks, River
+	// will install it on both sides automatically. The Plugins list exists as a
+	// generic place for new extensions to be registered.
+	Plugins []rivertype.Plugin
 
 	// PeriodicJobs are a set of periodic jobs to run at the specified intervals
 	// in the client.
@@ -500,6 +521,7 @@ func (c *Config) WithDefaults() *Config {
 		MaxAttempts:                 cmp.Or(c.MaxAttempts, MaxAttemptsDefault),
 		Middleware:                  c.Middleware,
 		PeriodicJobs:                c.PeriodicJobs,
+		Plugins:                     c.Plugins,
 		PollOnly:                    c.PollOnly,
 		Queues:                      c.Queues,
 		ReindexerIndexNames:         reindexerIndexNames,
@@ -802,7 +824,11 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		}
 	}
 
-	for _, hook := range config.Hooks {
+	configuredMiddleware := middlewareFromConfig(config)
+	effectiveHooks := pluginconfig.Hooks(config.Hooks, configuredMiddleware, config.Plugins)
+	effectiveMiddleware := pluginconfig.Middleware(config.Hooks, configuredMiddleware, config.Plugins)
+
+	for _, hook := range effectiveHooks {
 		if withBaseService, ok := hook.(baseservice.WithBaseService); ok {
 			baseservice.Init(archetype, withBaseService)
 		}
@@ -816,7 +842,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		config:               config,
 		driver:               driver,
 		hookLookupByJob:      hooklookup.NewJobHookLookup(),
-		hookLookupGlobal:     hooklookup.NewHookLookup(config.Hooks),
+		hookLookupGlobal:     hooklookup.NewHookLookup(effectiveHooks),
 		producersByQueueName: make(map[string]*producer),
 		testSignals:          clientTestSignals{},
 		workCancel:           func(cause error) {}, // replaced on start, but here in case StopAndCancel is called before start up
@@ -834,31 +860,12 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	client.baseService.Name = "Client" // Have to correct the name because base service isn't embedded like it usually is
 	client.insertNotifyLimiter = notifylimiter.NewLimiter(archetype, config.FetchCooldown)
 
-	// Validation ensures that config.JobInsertMiddleware/WorkerMiddleware or
-	// the more abstract config.Middleware for middleware are set, but not both,
-	// so in practice we never append all three of these to each other.
+	// effectiveMiddleware contains configured middleware, hook/middleware
+	// hybrids, and plugins. Default middleware stays first so user middleware
+	// wraps inside River's internal defaults like before.
 	{
 		middleware := rivermiddleware.DefaultMiddleware()
-		middleware = append(middleware, config.Middleware...)
-		for _, jobInsertMiddleware := range config.JobInsertMiddleware {
-			middleware = append(middleware, jobInsertMiddleware)
-		}
-	outerLoop:
-		for _, workerMiddleware := range config.WorkerMiddleware {
-			// Don't add the middleware if it also implements JobInsertMiddleware
-			// and the instance has been added to config.JobInsertMiddleware. This
-			// is a hedge to make sure we don't accidentally double add middleware
-			// as we've converted over to the unified config.Middleware setting.
-			if workerMiddlewareAsJobInsertMiddleware, ok := workerMiddleware.(rivertype.JobInsertMiddleware); ok {
-				for _, jobInsertMiddleware := range config.JobInsertMiddleware {
-					if workerMiddlewareAsJobInsertMiddleware == jobInsertMiddleware {
-						continue outerLoop
-					}
-				}
-			}
-
-			middleware = append(middleware, workerMiddleware)
-		}
+		middleware = append(middleware, effectiveMiddleware...)
 
 		for _, middleware := range middleware {
 			if withBaseService, ok := middleware.(baseservice.WithBaseService); ok {
@@ -1066,6 +1073,35 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	}
 
 	return client, nil
+}
+
+func middlewareFromConfig(config *Config) []rivertype.Middleware {
+	middleware := make([]rivertype.Middleware, 0,
+		len(config.Middleware)+len(config.JobInsertMiddleware)+len(config.WorkerMiddleware))
+	middleware = append(middleware, config.Middleware...)
+
+	for _, jobInsertMiddleware := range config.JobInsertMiddleware {
+		middleware = append(middleware, jobInsertMiddleware)
+	}
+
+outerLoop:
+	for _, workerMiddleware := range config.WorkerMiddleware {
+		// Don't add the middleware if it also implements JobInsertMiddleware
+		// and the instance has been added to config.JobInsertMiddleware. This
+		// is a hedge to make sure we don't accidentally double add middleware
+		// as we've converted over to the unified config.Middleware setting.
+		if workerMiddlewareAsJobInsertMiddleware, ok := workerMiddleware.(rivertype.JobInsertMiddleware); ok {
+			for _, jobInsertMiddleware := range config.JobInsertMiddleware {
+				if workerMiddlewareAsJobInsertMiddleware == jobInsertMiddleware {
+					continue outerLoop
+				}
+			}
+		}
+
+		middleware = append(middleware, workerMiddleware)
+	}
+
+	return middleware
 }
 
 // Start starts the client's job fetching and working loops. Once this is called,

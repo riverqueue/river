@@ -13,6 +13,7 @@ import (
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/middlewarelookup"
+	"github.com/riverqueue/river/internal/pluginconfig"
 	"github.com/riverqueue/river/internal/rivermiddleware"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -147,12 +148,15 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 	}
 	completer := jobcompleter.NewInlineCompleter(archetype, w.config.Schema, exec, w.client.Pilot(), subscribeCh)
 
-	for _, hook := range w.config.Hooks {
+	effectiveHooks := pluginconfig.Hooks(w.config.Hooks, w.config.Middleware, w.config.Plugins)
+	effectiveMiddleware := pluginconfig.Middleware(w.config.Hooks, w.config.Middleware, w.config.Plugins)
+
+	for _, hook := range effectiveHooks {
 		if withBaseService, ok := hook.(baseservice.WithBaseService); ok {
 			baseservice.Init(archetype, withBaseService)
 		}
 	}
-	for _, middleware := range w.config.Middleware {
+	for _, middleware := range effectiveMiddleware {
 		if withBaseService, ok := middleware.(baseservice.WithBaseService); ok {
 			baseservice.Init(archetype, withBaseService)
 		}
@@ -205,10 +209,10 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 				return nil
 			},
 		},
-		HookLookupGlobal:       hooklookup.NewHookLookup(w.config.Hooks),
+		HookLookupGlobal:       hooklookup.NewHookLookup(effectiveHooks),
 		HookLookupByJob:        hooklookup.NewJobHookLookup(),
 		JobRow:                 job,
-		MiddlewareLookupGlobal: middlewarelookup.NewMiddlewareLookup(append(rivermiddleware.DefaultMiddleware(), w.config.Middleware...)),
+		MiddlewareLookupGlobal: middlewarelookup.NewMiddlewareLookup(append(rivermiddleware.DefaultMiddleware(), effectiveMiddleware...)),
 		ProducerCallbacks: struct {
 			JobDone func(jobRow *rivertype.JobRow)
 			Stuck   func(ctx context.Context, jobRow *rivertype.JobRow)
