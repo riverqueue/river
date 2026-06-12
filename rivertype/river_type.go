@@ -447,6 +447,17 @@ type Middleware interface {
 	IsMiddleware() bool
 }
 
+// Plugin is a generic extension installed globally as both a hook and
+// middleware.
+//
+// Plugin structs should embed river.PluginDefaults, or embed both
+// river.HookDefaults and river.MiddlewareDefaults directly, then implement any
+// operation-specific hook or middleware interfaces they need.
+type Plugin interface {
+	Hook
+	Middleware
+}
+
 // JobInsertMiddleware provides an interface for middleware that integrations
 // can use to encapsulate common logic around job insertion.
 //
