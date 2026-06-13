@@ -34,6 +34,7 @@ import (
 )
 
 const (
+	producerHardStopError         = "job stopped because River client hard stopped"
 	producerReportIntervalDefault = time.Minute
 	queuePollIntervalDefault      = 2 * time.Second
 	queueReportIntervalDefault    = 10 * time.Minute
@@ -199,8 +200,10 @@ type producer struct {
 	exec         riverdriver.Executor
 	errorHandler jobexecutor.ErrorHandler
 	fetchLimiter *chanutil.DebouncedChan
-	state        riverpilot.ProducerState
+	hardStopCh   chan struct{} // signals that a "hard stop" has been initiated (set all running jobs to errored regardless of whether they stopped cleanly)
+	hardStopOnce *sync.Once    // closes hardStopChan exactly once
 	pilot        riverpilot.Pilot
+	state        riverpilot.ProducerState
 	workers      *Workers
 
 	// Receives job IDs to cancel. Written by notifier goroutine, only read from
@@ -214,7 +217,7 @@ type producer struct {
 
 	// Receives completed jobs from workers. Written by completed workers, only
 	// read from main goroutine.
-	jobResultCh chan *rivertype.JobRow
+	jobResultCh chan *producerJobResult
 
 	jobTimeout time.Duration
 
@@ -252,7 +255,9 @@ func newProducer(archetype *baseservice.Archetype, exec riverdriver.Executor, pi
 		config:         config.mustValidate(),
 		exec:           exec,
 		errorHandler:   errorHandler,
-		jobResultCh:    make(chan *rivertype.JobRow, config.MaxWorkers),
+		hardStopCh:     make(chan struct{}),
+		hardStopOnce:   &sync.Once{},
+		jobResultCh:    make(chan *producerJobResult, config.MaxWorkers),
 		jobTimeout:     config.JobTimeout,
 		pilot:          pilot,
 		queueControlCh: make(chan *controlEventPayload, 100),
@@ -290,6 +295,9 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 	if !shouldStart {
 		return nil
 	}
+
+	p.hardStopCh = make(chan struct{})
+	p.hardStopOnce = &sync.Once{}
 
 	isExpectedShutdownError := func(err error) bool {
 		return errors.Is(err, startstop.ErrStop) || strings.HasSuffix(err.Error(), "conn closed") || fetchCtx.Err() != nil
@@ -427,7 +435,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 
 		p.fetchAndRunLoop(fetchCtx, workCtx)
 		p.Logger.DebugContext(workCtx, p.Name+": Entering shutdown loop", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
-		p.executorShutdownLoop()
+		p.executorShutdownLoop(context.WithoutCancel(fetchCtx))
 
 		p.Logger.DebugContext(workCtx, p.Name+": Shutdown loop exited, awaiting subroutines", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
 		cancelSubroutines(fmt.Errorf("producer stopped: %w", startstop.ErrStop))
@@ -480,6 +488,11 @@ type controlEventPayload struct {
 
 type insertPayload struct {
 	Queue string `json:"queue"`
+}
+
+type producerJobResult struct {
+	executor *jobexecutor.JobExecutor
+	job      *rivertype.JobRow
 }
 
 func (p *producer) handleControlNotification(workCtx context.Context) func(notifier.NotificationTopic, string) {
@@ -675,12 +688,29 @@ func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan pr
 	}
 }
 
-func (p *producer) executorShutdownLoop() {
+func (p *producer) executorShutdownLoop(ctx context.Context) {
 	// No more jobs will be fetched or executed. However, we must wait for all
 	// in-progress jobs to complete.
 	for len(p.activeJobs) != 0 {
-		result := <-p.jobResultCh
-		p.removeActiveJob(result)
+		select {
+		case result := <-p.jobResultCh:
+			p.removeActiveJob(result)
+		case <-p.hardStopCh:
+			p.drainJobResults()
+			p.hardStopActiveJobs(ctx)
+			return
+		}
+	}
+}
+
+func (p *producer) drainJobResults() {
+	for {
+		select {
+		case result := <-p.jobResultCh:
+			p.removeActiveJob(result)
+		default:
+			return
+		}
 	}
 }
 
@@ -740,14 +770,100 @@ func (p *producer) addActiveJob(id int64, executor *jobexecutor.JobExecutor) {
 	p.activeJobs[id] = executor
 }
 
-func (p *producer) removeActiveJob(job *rivertype.JobRow) {
-	executor := p.activeJobs[job.ID]
-	delete(p.activeJobs, job.ID)
-	if executor == nil || executor.TryCloseSlot() {
+func (p *producer) hardStop() {
+	p.hardStopOnce.Do(func() { close(p.hardStopCh) })
+}
+
+func (p *producer) hardStopActiveJobs(ctx context.Context) {
+	if len(p.activeJobs) == 0 {
+		return
+	}
+
+	now := p.Time.Now()
+	params := &riverdriver.JobSetStateIfRunningManyParams{
+		Attempt:         make([]*int, 0, len(p.activeJobs)),
+		ErrData:         make([][]byte, 0, len(p.activeJobs)),
+		FinalizedAt:     make([]*time.Time, 0, len(p.activeJobs)),
+		ID:              make([]int64, 0, len(p.activeJobs)),
+		MetadataDoMerge: make([]bool, 0, len(p.activeJobs)),
+		MetadataUpdates: make([][]byte, 0, len(p.activeJobs)),
+		Now:             &now,
+		ScheduledAt:     make([]*time.Time, 0, len(p.activeJobs)),
+		Schema:          p.config.Schema,
+		State:           make([]rivertype.JobState, 0, len(p.activeJobs)),
+	}
+
+	p.hardStop()
+
+	for _, executor := range p.activeJobs {
+		job := executor.JobRow
+		errData, err := json.Marshal(rivertype.AttemptError{
+			At:      now,
+			Attempt: job.Attempt,
+			Error:   producerHardStopError,
+		})
+		if err != nil {
+			panic(fmt.Errorf("error serializing hard stop error: %w", err))
+		}
+
+		var setStateParams *riverdriver.JobSetStateIfRunningParams
+		if job.Attempt >= job.MaxAttempts {
+			setStateParams = riverdriver.JobSetStateDiscarded(job.ID, now, errData, nil)
+		} else {
+			setStateParams = riverdriver.JobSetStateErrorAvailable(job.ID, now, errData, nil)
+		}
+
+		params.Attempt = append(params.Attempt, setStateParams.Attempt)
+		params.ErrData = append(params.ErrData, setStateParams.ErrData)
+		params.FinalizedAt = append(params.FinalizedAt, setStateParams.FinalizedAt)
+		params.ID = append(params.ID, setStateParams.ID)
+		params.MetadataDoMerge = append(params.MetadataDoMerge, setStateParams.MetadataDoMerge)
+		params.MetadataUpdates = append(params.MetadataUpdates, setStateParams.MetadataUpdates)
+		params.ScheduledAt = append(params.ScheduledAt, setStateParams.ScheduledAt)
+		params.State = append(params.State, setStateParams.State)
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, rivercommon.HotOperationTimeout)
+	defer cancel()
+
+	hardStopSucceeded := true
+	if _, err := p.pilot.JobSetStateIfRunningMany(timeoutCtx, p.exec, params); err != nil {
+		hardStopSucceeded = false
+		p.Logger.ErrorContext(ctx, p.Name+": Error setting hard-stopped jobs to errored", slog.String("err", err.Error()), slog.Int("num_jobs", len(params.ID)), slog.String("queue", p.config.Queue))
+	} else {
+		p.Logger.WarnContext(ctx, p.Name+": Hard-stopped running jobs", slog.Int("num_jobs", len(params.ID)), slog.String("queue", p.config.Queue))
+	}
+
+	numActiveJobSlots := 0
+	for _, executor := range p.activeJobs {
+		if hardStopSucceeded {
+			executor.HardStop()
+		}
+		if executor.TryCloseSlot() {
+			numActiveJobSlots++
+		}
+		if p.state != nil {
+			p.state.JobFinish(executor.JobRow)
+		}
+	}
+	p.activeJobs = make(map[int64]*jobexecutor.JobExecutor)
+	p.numJobsActive.Add(-int32(numActiveJobSlots))
+}
+
+func (p *producer) removeActiveJob(result *producerJobResult) {
+	// Ignore stale results from executors hard-stopped out of active tracking.
+	if activeExecutor := p.activeJobs[result.job.ID]; activeExecutor != result.executor {
+		return
+	}
+
+	delete(p.activeJobs, result.job.ID)
+	if result.executor == nil || result.executor.TryCloseSlot() {
 		p.numJobsActive.Add(-1)
 	}
 	p.numJobsRan.Add(1)
-	p.state.JobFinish(job)
+	if p.state != nil {
+		p.state.JobFinish(result.job)
+	}
 }
 
 func (p *producer) handleWorkerStuck(ctx context.Context, executor *jobexecutor.JobExecutor, job *rivertype.JobRow) {
@@ -883,7 +999,7 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 				Stuck   func(ctx context.Context, jobRow *rivertype.JobRow)
 				Unstuck func()
 			}{
-				JobDone: p.handleWorkerDone,
+				JobDone: func(jobRow *rivertype.JobRow) { p.handleWorkerDone(executor, jobRow) },
 				Stuck:   func(ctx context.Context, jobRow *rivertype.JobRow) { p.handleWorkerStuck(ctx, executor, jobRow) },
 				Unstuck: p.handleWorkerUnstuck,
 			},
@@ -905,8 +1021,11 @@ func (p *producer) maxJobsToFetch() int {
 	return p.config.MaxWorkers - int(p.numJobsActive.Load())
 }
 
-func (p *producer) handleWorkerDone(job *rivertype.JobRow) {
-	p.jobResultCh <- job
+func (p *producer) handleWorkerDone(executor *jobexecutor.JobExecutor, job *rivertype.JobRow) {
+	p.jobResultCh <- &producerJobResult{
+		executor: executor,
+		job:      job,
+	}
 }
 
 func (p *producer) pollForSettingChanges(ctx context.Context, wg *sync.WaitGroup, lastPaused bool, lastMetadata []byte) {
