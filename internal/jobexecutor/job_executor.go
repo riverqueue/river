@@ -121,6 +121,7 @@ type JobExecutor struct {
 		Unstuck func()
 	}
 	SchedulerInterval      time.Duration
+	ShouldReportResultFunc func() bool
 	StuckThresholdOverride time.Duration
 	WorkerMiddleware       []rivertype.WorkerMiddleware
 	WorkUnit               workunit.WorkUnit
@@ -156,6 +157,11 @@ func (e *JobExecutor) Execute(ctx context.Context) {
 	res := e.execute(ctx)
 	if res.Err != nil && errors.Is(context.Cause(ctx), rivertype.ErrJobCancelledRemotely) {
 		res.Err = context.Cause(ctx)
+	}
+
+	if e.ShouldReportResultFunc != nil && !e.ShouldReportResultFunc() {
+		e.ProducerCallbacks.JobDone(e.JobRow)
+		return
 	}
 
 	var multiJobErrors withJobsAndErrorsByID
