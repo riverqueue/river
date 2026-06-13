@@ -1816,6 +1816,10 @@ SET metadata = CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata)
                     ELSE metadata END
 WHERE id = ?2
     AND state != 'running'
+    AND (NOT cast(?3 AS boolean) OR (
+        attempt = ?4
+        AND attempted_at = cast(?5 AS text)
+    ))
 RETURNING
     id,
     cast(CASE WHEN typeof(args) = 'text' AND NOT json_valid(args) THEN args ELSE json(args) END AS blob) AS args,
@@ -1838,8 +1842,11 @@ RETURNING
 `
 
 type JobSetMetadataIfNotRunningParams struct {
-	MetadataUpdates interface{}
-	ID              int64
+	MetadataUpdates        interface{}
+	ID                     int64
+	ExpectedAttemptDoCheck bool
+	ExpectedAttempt        int64
+	ExpectedAttemptedAt    string
 }
 
 type JobSetMetadataIfNotRunningRow struct {
@@ -1868,7 +1875,13 @@ type JobSetMetadataIfNotRunningRow struct {
 // Metadata that isn't valid JSON is left in place, and columns are listed out
 // to tolerate values that aren't valid JSON. See JobGetAvailable.
 func (q *Queries) JobSetMetadataIfNotRunning(ctx context.Context, db DBTX, arg *JobSetMetadataIfNotRunningParams) (*JobSetMetadataIfNotRunningRow, error) {
-	row := db.QueryRowContext(ctx, jobSetMetadataIfNotRunning, arg.MetadataUpdates, arg.ID)
+	row := db.QueryRowContext(ctx, jobSetMetadataIfNotRunning,
+		arg.MetadataUpdates,
+		arg.ID,
+		arg.ExpectedAttemptDoCheck,
+		arg.ExpectedAttempt,
+		arg.ExpectedAttemptedAt,
+	)
 	var i JobSetMetadataIfNotRunningRow
 	err := row.Scan(
 		&i.ID,
@@ -1928,6 +1941,10 @@ SET
                         ELSE ?1 END
 WHERE id = ?13
     AND state = 'running'
+    AND (NOT cast(?14 AS boolean) OR (
+        attempt = ?15
+        AND attempted_at = cast(?16 AS text)
+    ))
 RETURNING
     id,
     cast(CASE WHEN typeof(args) = 'text' AND NOT json_valid(args) THEN args ELSE json(args) END AS blob) AS args,
@@ -1950,19 +1967,22 @@ RETURNING
 `
 
 type JobSetStateIfRunningParams struct {
-	State               string
-	AttemptDoUpdate     bool
-	Attempt             int64
-	ErrorsDoUpdate      bool
-	Error               interface{}
-	Now                 *string
-	FinalizedAtDoUpdate bool
-	FinalizedAt         *string
-	MetadataDoMerge     bool
-	MetadataUpdates     interface{}
-	ScheduledAtDoUpdate bool
-	ScheduledAt         string
-	ID                  int64
+	State                  string
+	AttemptDoUpdate        bool
+	Attempt                int64
+	ErrorsDoUpdate         bool
+	Error                  interface{}
+	Now                    *string
+	FinalizedAtDoUpdate    bool
+	FinalizedAt            *string
+	MetadataDoMerge        bool
+	MetadataUpdates        interface{}
+	ScheduledAtDoUpdate    bool
+	ScheduledAt            string
+	ID                     int64
+	ExpectedAttemptDoCheck bool
+	ExpectedAttempt        int64
+	ExpectedAttemptedAt    string
 }
 
 type JobSetStateIfRunningRow struct {
@@ -2009,6 +2029,9 @@ func (q *Queries) JobSetStateIfRunning(ctx context.Context, db DBTX, arg *JobSet
 		arg.ScheduledAtDoUpdate,
 		arg.ScheduledAt,
 		arg.ID,
+		arg.ExpectedAttemptDoCheck,
+		arg.ExpectedAttempt,
+		arg.ExpectedAttemptedAt,
 	)
 	var i JobSetStateIfRunningRow
 	err := row.Scan(
@@ -2039,17 +2062,32 @@ UPDATE /* TEMPLATE: schema */river_job
 SET
     metadata = CASE WHEN cast(?1 AS boolean) THEN jsonb_patch(json(metadata), json(?2)) ELSE metadata END
 WHERE id = ?3
+    AND (NOT cast(?4 AS boolean) OR (
+        state = 'running'
+        AND attempt = cast(?5 AS integer)
+        AND attempted_at = cast(?6 AS text)
+    ))
 RETURNING id, json(args), attempt, attempted_at, json(attempted_by), created_at, json(errors), finalized_at, kind, max_attempts, json(metadata), priority, queue, state, scheduled_at, json(tags), unique_key, unique_states
 `
 
 type JobUpdateParams struct {
-	MetadataDoMerge bool
-	Metadata        interface{}
-	ID              int64
+	MetadataDoMerge        bool
+	Metadata               interface{}
+	ID                     int64
+	ExpectedAttemptDoCheck bool
+	ExpectedAttempt        int64
+	ExpectedAttemptedAt    *string
 }
 
 func (q *Queries) JobUpdate(ctx context.Context, db DBTX, arg *JobUpdateParams) (*RiverJob, error) {
-	row := db.QueryRowContext(ctx, jobUpdate, arg.MetadataDoMerge, arg.Metadata, arg.ID)
+	row := db.QueryRowContext(ctx, jobUpdate,
+		arg.MetadataDoMerge,
+		arg.Metadata,
+		arg.ID,
+		arg.ExpectedAttemptDoCheck,
+		arg.ExpectedAttempt,
+		arg.ExpectedAttemptedAt,
+	)
 	var i RiverJob
 	err := row.Scan(
 		&i.ID,

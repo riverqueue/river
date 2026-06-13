@@ -1,6 +1,7 @@
 package riverdriver
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -208,6 +209,36 @@ func TestJobSetStateErrorRetryable(t *testing.T) {
 		require.Equal(t, JobSetStateReasonFailed, result.Reason)
 		require.Equal(t, errData, result.ErrData)
 	})
+}
+
+func TestJobSetStateIfRunningManyParams(t *testing.T) {
+	t.Parallel()
+
+	for _, capacity := range []int{0, 4} {
+		t.Run(strconv.Itoa(capacity), func(t *testing.T) {
+			t.Parallel()
+
+			now := time.Now().UTC()
+			params := NewJobSetStateIfRunningManyParams("custom_schema", capacity)
+			params.Append(JobSetStateCompleted(1, now, nil))
+			require.Nil(t, params.ExpectedAttempt)
+			require.Nil(t, params.ExpectedAttemptDoCheck)
+			require.Nil(t, params.ExpectedAttemptedAt)
+
+			guarded := JobSetStateErrorAvailable(2, now, []byte(`{}`), nil)
+			guarded.ExpectedAttempt = new(3)
+			guarded.ExpectedAttemptedAt = &now
+			params.Append(guarded)
+			params.Append(JobSetStateCompleted(3, now, nil))
+			params.Append(guarded)
+
+			require.Equal(t, []int64{1, 2, 3, 2}, params.ID)
+			require.Equal(t, []int{0, 3, 0, 3}, params.ExpectedAttempt)
+			require.Equal(t, []bool{false, true, false, true}, params.ExpectedAttemptDoCheck)
+			require.Equal(t, []time.Time{{}, now, {}, now}, params.ExpectedAttemptedAt)
+			require.Equal(t, "custom_schema", params.Schema)
+		})
+	}
 }
 
 func TestJobSetStateInterrupted(t *testing.T) {

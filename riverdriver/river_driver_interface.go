@@ -616,9 +616,15 @@ type JobScheduleResult struct {
 // running job. Use one of the constructors below to ensure a correct
 // combination of parameters.
 type JobSetStateIfRunningParams struct {
-	ID              int64
-	Attempt         *int
-	ErrData         []byte
+	ID      int64
+	Attempt *int
+	ErrData []byte
+
+	// ExpectedAttempt and ExpectedAttemptedAt restrict the update to the given
+	// execution attempt. Both must be set together; nil disables the check.
+	ExpectedAttempt     *int
+	ExpectedAttemptedAt *time.Time
+
 	FinalizedAt     *time.Time
 	MetadataDoMerge bool
 	MetadataUpdates []byte
@@ -747,12 +753,21 @@ func JobSetStateSnoozedAvailable(id int64, scheduledAt time.Time, attempt int, m
 }
 
 // JobSetStateIfRunningManyParams are parameters to update the state of
-// currently running jobs. Use one of the constructors below to ensure a correct
-// combination of parameters.
+// currently running jobs. Build them with NewJobSetStateIfRunningManyParams and
+// Append to keep the per-job slices aligned.
 type JobSetStateIfRunningManyParams struct {
-	ID              []int64
-	Attempt         []*int
-	ErrData         [][]byte
+	ID      []int64
+	Attempt []*int
+	ErrData [][]byte
+
+	// ExpectedAttemptDoCheck enables the original execution attempt guard per
+	// job. When provided, all three slices must contain one entry per ID.
+	// Nil slices disable the check. Used by shutdown abandonment and late peer
+	// results so they cannot modify a job that has since been claimed again.
+	ExpectedAttempt        []int
+	ExpectedAttemptDoCheck []bool
+	ExpectedAttemptedAt    []time.Time
+
 	FinalizedAt     []*time.Time
 	MetadataDoMerge []bool
 	MetadataUpdates [][]byte
@@ -762,11 +777,61 @@ type JobSetStateIfRunningManyParams struct {
 	State           []rivertype.JobState
 }
 
+// NewJobSetStateIfRunningManyParams allocates parameters for a batch of up to
+// capacity jobs. Append adds each job's state change.
+func NewJobSetStateIfRunningManyParams(schema string, capacity int) *JobSetStateIfRunningManyParams {
+	return &JobSetStateIfRunningManyParams{
+		ID:              make([]int64, 0, capacity),
+		Attempt:         make([]*int, 0, capacity),
+		ErrData:         make([][]byte, 0, capacity),
+		FinalizedAt:     make([]*time.Time, 0, capacity),
+		MetadataDoMerge: make([]bool, 0, capacity),
+		MetadataUpdates: make([][]byte, 0, capacity),
+		ScheduledAt:     make([]*time.Time, 0, capacity),
+		Schema:          schema,
+		State:           make([]rivertype.JobState, 0, capacity),
+	}
+}
+
+// Append adds a state change, allocating attempt guards only if needed. Guarded
+// and unguarded changes may be mixed in the same batch.
+func (p *JobSetStateIfRunningManyParams) Append(params *JobSetStateIfRunningParams) {
+	p.ID = append(p.ID, params.ID)
+	p.Attempt = append(p.Attempt, params.Attempt)
+	p.ErrData = append(p.ErrData, params.ErrData)
+	p.FinalizedAt = append(p.FinalizedAt, params.FinalizedAt)
+	p.MetadataDoMerge = append(p.MetadataDoMerge, params.MetadataDoMerge)
+	p.MetadataUpdates = append(p.MetadataUpdates, params.MetadataUpdates)
+	p.ScheduledAt = append(p.ScheduledAt, params.ScheduledAt)
+	p.State = append(p.State, params.State)
+
+	i := len(p.ID) - 1
+	if params.ExpectedAttempt != nil && p.ExpectedAttempt == nil {
+		p.ExpectedAttempt = make([]int, i, cap(p.ID))
+		p.ExpectedAttemptDoCheck = make([]bool, i, cap(p.ID))
+		p.ExpectedAttemptedAt = make([]time.Time, i, cap(p.ID))
+	}
+	if p.ExpectedAttempt != nil {
+		p.ExpectedAttempt = append(p.ExpectedAttempt, 0)
+		p.ExpectedAttemptDoCheck = append(p.ExpectedAttemptDoCheck, params.ExpectedAttempt != nil)
+		p.ExpectedAttemptedAt = append(p.ExpectedAttemptedAt, time.Time{})
+		if params.ExpectedAttempt != nil {
+			p.ExpectedAttempt[i] = *params.ExpectedAttempt
+			p.ExpectedAttemptedAt[i] = *params.ExpectedAttemptedAt
+		}
+	}
+}
+
 type JobUpdateParams struct {
-	ID              int64
-	MetadataDoMerge bool
-	Metadata        []byte
-	Schema          string
+	ID int64
+
+	// ExpectedAttempt and ExpectedAttemptedAt restrict the update to a running
+	// execution attempt. Both must be set together; nil disables the check.
+	ExpectedAttempt     *int
+	ExpectedAttemptedAt *time.Time
+	MetadataDoMerge     bool
+	Metadata            []byte
+	Schema              string
 }
 
 type JobUpdateFullParams struct {

@@ -51,9 +51,9 @@ type CompleterJobUpdated struct {
 // completerJobUpdated maps a job row returned from JobSetStateIfRunningMany to
 // an update event, logging and returning false if the row isn't in a state
 // that an event should be emitted for (see
-// completerJobUpdatedFromStateAndReason).
+// CompleterJobUpdatedFromStateAndReason).
 func completerJobUpdated(ctx context.Context, baseService *baseservice.BaseService, job *rivertype.JobRow, stats *jobstats.JobStatistics, requestedReason riverdriver.JobSetStateReason) (CompleterJobUpdated, bool) {
-	update, emit := completerJobUpdatedFromStateAndReason(job, stats, requestedReason)
+	update, emit := CompleterJobUpdatedFromStateAndReason(job, stats, requestedReason)
 	if !emit {
 		baseService.Logger.DebugContext(ctx, baseService.Name+": Job wasn't finalized because its state was changed concurrently; skipping completion event",
 			slog.Int64("job_id", job.ID),
@@ -63,7 +63,7 @@ func completerJobUpdated(ctx context.Context, baseService *baseservice.BaseServi
 	return update, emit
 }
 
-// completerJobUpdatedFromStateAndReason maps a job row returned from
+// CompleterJobUpdatedFromStateAndReason maps a job row returned from
 // JobSetStateIfRunningMany to an update event. JobSetStateIfRunningMany returns
 // rows that it didn't update (because they were no longer running) in their
 // current state, so a returned row may be in a state that isn't the result of
@@ -71,7 +71,7 @@ func completerJobUpdated(ctx context.Context, baseService *baseservice.BaseServi
 // if Postgres returned the row's pre-statement version after a concurrent
 // transaction changed its state (e.g. a rescue). Returns false for those rows,
 // which shouldn't produce an event.
-func completerJobUpdatedFromStateAndReason(job *rivertype.JobRow, stats *jobstats.JobStatistics, requestedReason riverdriver.JobSetStateReason) (CompleterJobUpdated, bool) {
+func CompleterJobUpdatedFromStateAndReason(job *rivertype.JobRow, stats *jobstats.JobStatistics, requestedReason riverdriver.JobSetStateReason) (CompleterJobUpdated, bool) {
 	var reason riverdriver.JobSetStateReason
 	switch job.State {
 	case rivertype.JobStateAvailable:
@@ -134,6 +134,9 @@ type InlineCompleter struct {
 	wg sync.WaitGroup
 }
 
+// NewInlineCompleter creates a synchronous completer. A nil subscribeCh disables
+// events for direct calls without starting the service, which is useful for
+// completing work that outlives client shutdown.
 func NewInlineCompleter(archetype *baseservice.Archetype, schema string, exec riverdriver.Executor, pilot riverpilot.Pilot, subscribeCh SubscribeChan) *InlineCompleter {
 	return baseservice.Init(archetype, &InlineCompleter{
 		exec:        exec,
@@ -150,26 +153,19 @@ func (c *InlineCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobst
 	start := c.Time.Now()
 
 	jobs, err := withRetries(ctx, &c.BaseService, c.disableSleep, func(ctx context.Context) ([]*rivertype.JobRow, error) {
-		jobs, err := c.pilot.JobSetStateIfRunningMany(ctx, c.exec, setStateParamsToMany(c.Time.NowOrNil(), c.schema, params))
-		if err != nil {
-			return nil, err
-		}
-
-		return jobs, nil
+		return c.pilot.JobSetStateIfRunningMany(ctx, c.exec, setStateParamsToMany(c.Time.NowOrNil(), c.schema, params))
 	})
 	if err != nil {
 		return err
 	}
 
-	// The driver intentionally returns 0 rows when a job is deleted while the
-	// completer is finalizing it (see UnknownJobIgnored shared driver test).
-	// Guard against an index-out-of-range panic in that case.
+	// Deleted jobs and mismatched execution attempts return no rows.
 	if len(jobs) < 1 {
 		return nil
 	}
 
 	stats.CompleteDuration = c.Time.Now().Sub(start)
-	if update, ok := completerJobUpdated(ctx, &c.BaseService, jobs[0], stats, params.Reason); ok {
+	if update, ok := completerJobUpdated(ctx, &c.BaseService, jobs[0], stats, params.Reason); ok && c.subscribeCh != nil {
 		c.subscribeCh <- []CompleterJobUpdated{update}
 	}
 
@@ -204,18 +200,10 @@ func (c *InlineCompleter) Start(ctx context.Context) error {
 }
 
 func setStateParamsToMany(now *time.Time, schema string, params *riverdriver.JobSetStateIfRunningParams) *riverdriver.JobSetStateIfRunningManyParams {
-	return &riverdriver.JobSetStateIfRunningManyParams{
-		Attempt:         []*int{params.Attempt},
-		ErrData:         [][]byte{params.ErrData},
-		FinalizedAt:     []*time.Time{params.FinalizedAt},
-		ID:              []int64{params.ID},
-		MetadataDoMerge: []bool{params.MetadataDoMerge},
-		MetadataUpdates: [][]byte{params.MetadataUpdates},
-		Now:             now,
-		ScheduledAt:     []*time.Time{params.ScheduledAt},
-		Schema:          schema,
-		State:           []rivertype.JobState{params.State},
-	}
+	manyParams := riverdriver.NewJobSetStateIfRunningManyParams(schema, 1)
+	manyParams.Now = now
+	manyParams.Append(params)
+	return manyParams
 }
 
 // A default concurrency of 100 seems to perform better a much smaller number
@@ -497,33 +485,9 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 		})
 	}
 
-	// This could be written more simply using multiple map helpers, but it's
-	// done this way to allocate as few new slices as necessary.
-	mapBatch := func(setStateBatch map[int64]batchCompleterSetState) *riverdriver.JobSetStateIfRunningManyParams {
-		params := &riverdriver.JobSetStateIfRunningManyParams{
-			ID:              make([]int64, len(setStateBatch)),
-			Attempt:         make([]*int, len(setStateBatch)),
-			ErrData:         make([][]byte, len(setStateBatch)),
-			FinalizedAt:     make([]*time.Time, len(setStateBatch)),
-			MetadataDoMerge: make([]bool, len(setStateBatch)),
-			MetadataUpdates: make([][]byte, len(setStateBatch)),
-			ScheduledAt:     make([]*time.Time, len(setStateBatch)),
-			State:           make([]rivertype.JobState, len(setStateBatch)),
-		}
-		var i int
-		for _, setState := range setStateBatch {
-			params.ID[i] = setState.Params.ID
-			params.Attempt[i] = setState.Params.Attempt
-			params.ErrData[i] = setState.Params.ErrData
-			params.FinalizedAt[i] = setState.Params.FinalizedAt
-			params.MetadataDoMerge[i] = setState.Params.MetadataDoMerge
-			params.MetadataUpdates[i] = setState.Params.MetadataUpdates
-			params.ScheduledAt[i] = setState.Params.ScheduledAt
-			params.State[i] = setState.Params.State
-			i++
-		}
-		params.Schema = c.schema
-		return params
+	params := riverdriver.NewJobSetStateIfRunningManyParams(c.schema, len(setStateBatch))
+	for _, setState := range setStateBatch {
+		params.Append(setState.Params)
 	}
 
 	// Tease apart enormous batches into sub-batches.
@@ -531,10 +495,7 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 	// All the code below is concerned with doing that, with a fast loop that
 	// doesn't allocate any additional memory in case the entire batch is
 	// smaller than the sub-batch maximum size (which will be the common case).
-	var (
-		params  = mapBatch(setStateBatch)
-		jobRows []*rivertype.JobRow
-	)
+	var jobRows []*rivertype.JobRow
 	c.Logger.DebugContext(ctx, c.Name+": Completing batch of job(s)", "num_jobs", len(setStateBatch))
 	if len(setStateBatch) > c.completionMaxSize {
 		jobRows = make([]*rivertype.JobRow, 0, len(setStateBatch))
@@ -550,6 +511,11 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 				ScheduledAt:     params.ScheduledAt[i:endIndex],
 				Schema:          params.Schema,
 				State:           params.State[i:endIndex],
+			}
+			if params.ExpectedAttempt != nil {
+				subBatch.ExpectedAttempt = params.ExpectedAttempt[i:endIndex]
+				subBatch.ExpectedAttemptDoCheck = params.ExpectedAttemptDoCheck[i:endIndex]
+				subBatch.ExpectedAttemptedAt = params.ExpectedAttemptedAt[i:endIndex]
 			}
 			jobRowsSubBatch, err := completeSubBatch(subBatch)
 			if err != nil {
@@ -736,6 +702,13 @@ func isNonRetryableCompleterError(err error) bool {
 // 4) (not including jitter). However, if each attempt times out, that's up to
 // ~37 seconds (7 seconds + 3 * 10 seconds).
 const numRetries = 3
+
+// WithRetries runs a completion update with the completer's bounded retry
+// policy: three attempts with independent timeouts and exponential backoff.
+// Attempts ignore caller cancellation so shutdown can still persist results.
+func WithRetries[T any](ctx context.Context, baseService *baseservice.BaseService, retryFunc func(context.Context) (T, error)) (T, error) {
+	return withRetries(ctx, baseService, false, retryFunc)
+}
 
 func withRetries[T any](logCtx context.Context, baseService *baseservice.BaseService, disableSleep bool, retryFunc func(ctx context.Context) (T, error)) (T, error) {
 	uncancelledCtx := context.WithoutCancel(logCtx)

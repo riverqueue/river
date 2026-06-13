@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
@@ -145,6 +146,7 @@ func TestResumableSetStepTx(t *testing.T) {
 		require.NoError(t, err)
 
 		job.State = rivertype.JobStateRunning
+		job.AttemptedAt = new(time.Now().UTC())
 		_, err = ResumableSetStepTx[*riverpgxv5.Driver](ctx, bundle.tx, &Job[JobArgs]{JobRow: job})
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
 	})
@@ -159,10 +161,45 @@ func TestResumableSetStepTx(t *testing.T) {
 		_, err := bundle.client.JobDeleteTx(ctx, bundle.tx, job.ID)
 		require.NoError(t, err)
 		job.State = rivertype.JobStateRunning
+		job.AttemptedAt = new(time.Now().UTC())
 
 		require.PanicsWithValue(t, "to use ResumableSetStepTx or ResumableSetStepCursorTx in a rivertest.Worker, the job must be inserted into the database first", func() {
 			_, err := ResumableSetStepTx[*riverpgxv5.Driver](ctx, bundle.tx, &Job[JobArgs]{JobRow: job})
 			require.NoError(t, err)
 		})
+	})
+	t.Run("RejectsUnidentifiedOrStaleAttempt", func(t *testing.T) {
+		t.Parallel()
+
+		for _, mismatch := range []string{"MissingAttemptedAt", "StaleAttempt", "StaleAttemptedAt"} {
+			t.Run(mismatch, func(t *testing.T) {
+				t.Parallel()
+
+				ctx, bundle := setup(ctx, t, "step1")
+				ctx = context.WithValue(ctx, execution.ContextKeyInsideTestWorker{}, true)
+				job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
+				staleJob := *job
+				switch mismatch {
+				case "MissingAttemptedAt":
+					staleJob.AttemptedAt = nil
+				case "StaleAttempt":
+					staleJob.Attempt--
+				case "StaleAttemptedAt":
+					staleJob.AttemptedAt = new(job.AttemptedAt.Add(-time.Second))
+				}
+
+				// A stale row in rivertest must return an error, not the panic for
+				// a job that was never inserted into the database.
+				_, err := ResumableSetStepTx[*riverpgxv5.Driver](ctx, bundle.tx, &Job[JobArgs]{JobRow: &staleJob})
+				if mismatch == "MissingAttemptedAt" {
+					require.EqualError(t, err, "job must have been attempted")
+				} else {
+					require.ErrorIs(t, err, rivertype.ErrNotFound)
+				}
+				after, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
+				require.NoError(t, err)
+				require.Equal(t, job, after)
+			})
+		}
 	})
 }

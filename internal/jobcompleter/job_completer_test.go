@@ -103,7 +103,7 @@ func TestCompleterJobUpdatedFromStateAndReason(t *testing.T) {
 			job := &rivertype.JobRow{State: test.state}
 			stats := &jobstats.JobStatistics{}
 
-			update, ok := completerJobUpdatedFromStateAndReason(job, stats, test.requestedReason)
+			update, ok := CompleterJobUpdatedFromStateAndReason(job, stats, test.requestedReason)
 			require.Equal(t, test.expectedOK, ok)
 			if !test.expectedOK {
 				require.Equal(t, CompleterJobUpdated{}, update)
@@ -931,6 +931,59 @@ func testCompleter[TCompleter JobCompleter](
 		require.WithinDuration(t, finalizedAt1, *job1Updated.FinalizedAt, time.Microsecond)
 		require.WithinDuration(t, finalizedAt2, *job2Updated.FinalizedAt, time.Microsecond)
 		require.WithinDuration(t, finalizedAt3, *job3Updated.FinalizedAt, time.Microsecond)
+	})
+
+	t.Run("CompletesJobsWithExpectedAttempt", func(t *testing.T) {
+		t.Parallel()
+
+		completer, bundle := setup(t)
+
+		// Accumulate one mixed batch before starting, and force sub-batches so
+		// guards must survive both parameter conversion and batch splitting.
+		completer.Stop()
+		subscribeCh := make(chan []CompleterJobUpdated, 10)
+		completer.ResetSubscribeChan(subscribeCh)
+		if batchCompleter, ok := any(completer).(*BatchCompleter); ok {
+			batchCompleter.completionMaxSize = 2
+		}
+
+		jobs := make([]*rivertype.JobRow, 4)
+		for i := range jobs {
+			job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+				Attempt: new(2), Schema: bundle.schema, State: new(rivertype.JobStateRunning),
+			})
+			jobs[i] = job
+			params := riverdriver.JobSetStateCompleted(job.ID, time.Now(), []byte(`{"completed":true}`))
+			if i != 1 {
+				params.ExpectedAttempt = new(job.Attempt)
+				params.ExpectedAttemptedAt = job.AttemptedAt
+			}
+			switch i {
+			case 2:
+				params.ExpectedAttempt = new(job.Attempt - 1)
+			case 3:
+				params.ExpectedAttemptedAt = new(job.AttemptedAt.Add(-time.Second))
+			}
+			require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, params))
+		}
+
+		require.NoError(t, completer.Start(ctx))
+		completer.Stop()
+
+		var updatedIDs []int64
+		for updates := range subscribeCh {
+			for _, update := range updates {
+				updatedIDs = append(updatedIDs, update.Job.ID)
+			}
+		}
+		require.ElementsMatch(t, []int64{jobs[0].ID, jobs[1].ID}, updatedIDs)
+		for i, job := range jobs {
+			if i < 2 {
+				requireState(t, bundle, job.ID, rivertype.JobStateCompleted)
+			} else {
+				require.Equal(t, job, requireJob(t, bundle, job.ID), "stale results must not change any job fields")
+			}
+		}
 	})
 
 	// Some completers like BatchCompleter have special logic for when they're

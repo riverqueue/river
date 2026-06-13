@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"maps"
 	"math"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +34,16 @@ import (
 	"github.com/riverqueue/river/rivershared/util/urlutil"
 	"github.com/riverqueue/river/rivertype"
 )
+
+// batchJobResultError exercises the result protocol used by River Pro batch workers.
+type batchJobResultError struct {
+	errorsByID map[int64]error
+	jobs       []*rivertype.JobRow
+}
+
+func (r *batchJobResultError) Error() string               { return "batch job result" }
+func (r *batchJobResultError) ErrorsByID() map[int64]error { return r.errorsByID }
+func (r *batchJobResultError) Jobs() []*rivertype.JobRow   { return r.jobs }
 
 func TestClientWithDriverRiverDatabaseSQLLibPQ(t *testing.T) {
 	t.Parallel()
@@ -275,6 +287,16 @@ func newTestConfig(t *testing.T, schema string) *river.Config {
 		TestOnly: true, // disables staggered start in maintenance services
 		Workers:  workers,
 	}
+}
+
+type errorHandlerFunc func(context.Context, *rivertype.JobRow, error) *river.ErrorHandlerResult
+
+func (f errorHandlerFunc) HandleError(ctx context.Context, job *rivertype.JobRow, err error) *river.ErrorHandlerResult {
+	return f(ctx, job, err)
+}
+
+func (f errorHandlerFunc) HandlePanic(context.Context, *rivertype.JobRow, any, string) *river.ErrorHandlerResult {
+	return nil
 }
 
 // retryPolicyAnHourLater schedules every retry an hour out so that a failed job
@@ -1899,6 +1921,516 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 			attemptErr := job.Errors[len(job.Errors)-1]
 			require.Equal(t, 1, attemptErr.Attempt)
 			require.Contains(t, attemptErr.Error, "job row couldn't be decoded: error unmarshaling `"+column+"`")
+		}
+	})
+
+	t.Run("StopAbandonTimeoutBatchPeers", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		config.RetryPolicy = &retryPolicyAnHourLater{}
+		config.StopAbandonTimeout = 20 * time.Millisecond
+
+		peers := make([]*rivertype.JobRow, 3)
+		for i := range peers {
+			peers[i] = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+				Attempt:     new(1),
+				MaxAttempts: new(3),
+				Schema:      bundle.schema,
+				State:       new(rivertype.JobStateRunning),
+			})
+		}
+
+		var jobStarted testsignal.TestSignal[int64]
+		jobStarted.Init(t)
+		// Hold the batch past client shutdown, then return results for peers
+		// that were claimed inside the worker, outside the producer's tracking.
+		releaseJob := make(chan struct{})
+		release := sync.OnceFunc(func() { close(releaseJob) })
+		defer release()
+		river.AddWorker(config.Workers, river.WorkFunc(func(ctx context.Context, job *river.Job[cancelRunningJobArgs]) error {
+			jobStarted.Signal(job.ID)
+			<-releaseJob
+			return &batchJobResultError{
+				errorsByID: map[int64]error{
+					job.ID:      errors.New("leader error must be ignored"),
+					peers[1].ID: errors.New("peer failed"),
+					peers[2].ID: ctx.Err(),
+				},
+				jobs: append([]*rivertype.JobRow{job.JobRow}, peers...),
+			}
+		}))
+
+		client, err := river.NewClient(bundle.driver, config)
+		require.NoError(t, err)
+		events := subscribe(t, client)
+		startClient(ctx, t, client)
+		insertRes, err := client.Insert(ctx, &cancelRunningJobArgs{}, &river.InsertOpts{MaxAttempts: 3})
+		require.NoError(t, err)
+		require.Equal(t, insertRes.Job.ID, jobStarted.WaitOrTimeout())
+
+		stopCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		require.NoError(t, client.StopAndCancel(stopCtx))
+		event := riversharedtest.WaitOrTimeout(t, events)
+		require.NotNil(t, event)
+		require.Equal(t, river.EventKindJobFailed, event.Kind)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+		_, hasEvent := <-events
+		require.False(t, hasEvent)
+
+		// Another worker can already be retrying the abandoned leader. A late
+		// result from the old executor must leave this new attempt untouched.
+		locked, err := bundle.exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+			MaxToLock: 1,
+			Queue:     river.QueueDefault,
+			Schema:    bundle.schema,
+		})
+		require.NoError(t, err)
+		require.Len(t, locked.Jobs, 1)
+		require.Equal(t, insertRes.Job.ID, locked.Jobs[0].ID)
+		release()
+
+		for i, wantState := range []rivertype.JobState{rivertype.JobStateCompleted, rivertype.JobStateRetryable, rivertype.JobStateAvailable} {
+			require.Eventually(t, func() bool {
+				job, err := client.JobGet(ctx, peers[i].ID)
+				return err == nil && job.State == wantState
+			}, 5*time.Second, 5*time.Millisecond)
+		}
+		leader, err := client.JobGet(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, leader.State)
+		require.Equal(t, 2, leader.Attempt)
+		require.Len(t, leader.Errors, 1)
+		require.Contains(t, leader.Errors[0].Error, "StopAbandonTimeout")
+	})
+
+	t.Run("StopAbandonTimeoutBatchPeersRescued", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		config.RetryPolicy = &retryPolicyAnHourLater{}
+		config.StopAbandonTimeout = 20 * time.Millisecond
+
+		// Exercise each kind of late peer result against a newer execution.
+		peers := make([]*rivertype.JobRow, 6)
+		for i := range peers {
+			maxAttempts := 3
+			if i == 2 {
+				maxAttempts = 1
+			}
+			peers[i] = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+				Attempt:     new(1),
+				AttemptedAt: new(time.Now().Add(-time.Second)),
+				MaxAttempts: &maxAttempts,
+				Queue:       new("peers"),
+				Schema:      bundle.schema,
+				State:       new(rivertype.JobStateRunning),
+			})
+		}
+		// A healthy peer placed last proves all stale results were processed.
+		sentinel := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+			Attempt: new(1), Queue: new("peers"), Schema: bundle.schema, State: new(rivertype.JobStateRunning),
+		})
+
+		var jobStarted testsignal.TestSignal[int64]
+		jobStarted.Init(t)
+		// Hold results until shutdown and rescue have both finished.
+		releaseJob := make(chan struct{})
+		release := sync.OnceFunc(func() { close(releaseJob) })
+		defer release()
+		river.AddWorker(config.Workers, river.WorkFunc(func(ctx context.Context, job *river.Job[cancelRunningJobArgs]) error {
+			jobStarted.Signal(job.ID)
+			<-releaseJob
+			return &batchJobResultError{
+				errorsByID: map[int64]error{
+					peers[1].ID: errors.New("retry stale attempt"),
+					peers[2].ID: errors.New("discard stale attempt"),
+					peers[3].ID: river.JobCancel(errors.New("cancel stale attempt")),
+					peers[4].ID: river.JobSnooze(time.Hour),
+					peers[5].ID: ctx.Err(),
+				},
+				jobs: append(append([]*rivertype.JobRow{job.JobRow}, peers...), sentinel),
+			}
+		}))
+		client, err := river.NewClient(bundle.driver, config)
+		require.NoError(t, err)
+		startClient(ctx, t, client)
+		insertRes, err := client.Insert(ctx, &cancelRunningJobArgs{}, nil)
+		require.NoError(t, err)
+		require.Equal(t, insertRes.Job.ID, jobStarted.WaitOrTimeout())
+
+		stopCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		require.NoError(t, client.StopAndCancel(stopCtx))
+
+		rescueParams := &riverdriver.JobRescueManyParams{Schema: bundle.schema, StuckHorizon: time.Now()}
+		for _, peer := range peers {
+			rescueParams.ID = append(rescueParams.ID, peer.ID)
+			rescueParams.Error = append(rescueParams.Error, []byte(`{"attempt":1,"at":"2026-09-30T00:00:00Z","error":"rescued"}`))
+			rescueParams.FinalizedAt = append(rescueParams.FinalizedAt, nil)
+			rescueParams.ScheduledAt = append(rescueParams.ScheduledAt, time.Now().Add(-time.Second))
+			rescueParams.State = append(rescueParams.State, string(rivertype.JobStateAvailable))
+		}
+		_, err = bundle.exec.JobRescueMany(ctx, rescueParams)
+		require.NoError(t, err)
+		locked, err := bundle.exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+			ClientID: "another-client", MaxToLock: len(peers), Queue: "peers", Schema: bundle.schema,
+		})
+		require.NoError(t, err)
+		require.Len(t, locked.Jobs, len(peers))
+		for _, peer := range locked.Jobs {
+			require.Equal(t, 2, peer.Attempt)
+		}
+
+		release()
+		require.Eventually(t, func() bool {
+			job, err := client.JobGet(ctx, sentinel.ID)
+			return err == nil && job.State == rivertype.JobStateCompleted
+		}, 5*time.Second, 5*time.Millisecond)
+		for _, peer := range locked.Jobs {
+			job, err := client.JobGet(ctx, peer.ID)
+			require.NoError(t, err)
+			require.Equal(t, peer, job, "late peer results must leave the new attempt untouched")
+		}
+	})
+
+	t.Run("StopAbandonTimeoutBetweenPeerResults", func(t *testing.T) {
+		t.Parallel()
+
+		for _, order := range []string{"LeaderFirst", "LeaderLast"} {
+			t.Run(order, func(t *testing.T) {
+				t.Parallel()
+
+				config, bundle := setupConfig(t)
+				config.RetryPolicy = &retryPolicyAnHourLater{}
+				config.StopAbandonTimeout = 20 * time.Millisecond
+
+				peers := make([]*rivertype.JobRow, 2)
+				for i := range peers {
+					peers[i] = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+						Attempt: new(1), MaxAttempts: new(3), Schema: bundle.schema, State: new(rivertype.JobStateRunning),
+					})
+				}
+				var handlerStarted testsignal.TestSignal[struct{}]
+				handlerStarted.Init(t)
+				// Block processing the second peer after the first has completed.
+				releaseHandler := make(chan struct{})
+				release := sync.OnceFunc(func() { close(releaseHandler) })
+				defer release()
+				config.ErrorHandler = errorHandlerFunc(func(ctx context.Context, job *rivertype.JobRow, err error) *river.ErrorHandlerResult {
+					handlerStarted.Signal(struct{}{})
+					<-releaseHandler
+					return nil
+				})
+				river.AddWorker(config.Workers, river.WorkFunc(func(ctx context.Context, job *river.Job[cancelRunningJobArgs]) error {
+					jobs := append(slices.Clone(peers), job.JobRow)
+					if order == "LeaderFirst" {
+						jobs = append([]*rivertype.JobRow{job.JobRow}, peers...)
+					}
+					return &batchJobResultError{
+						errorsByID: map[int64]error{peers[1].ID: errors.New("peer failed")},
+						jobs:       jobs,
+					}
+				}))
+				client, err := river.NewClient(bundle.driver, config)
+				require.NoError(t, err)
+				events := subscribe(t, client)
+				startClient(ctx, t, client)
+				insertRes, err := client.Insert(ctx, &cancelRunningJobArgs{}, nil)
+				require.NoError(t, err)
+				handlerStarted.WaitOrTimeout()
+
+				stopCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				defer cancel()
+				require.NoError(t, client.StopAndCancel(stopCtx))
+				leader, err := client.JobGet(ctx, insertRes.Job.ID)
+				require.NoError(t, err)
+				leaderEventKind := river.EventKindJobFailed
+				if order == "LeaderFirst" {
+					require.Equal(t, rivertype.JobStateCompleted, leader.State)
+					require.Empty(t, leader.Errors)
+					leaderEventKind = river.EventKindJobCompleted
+				} else {
+					require.Equal(t, rivertype.JobStateAvailable, leader.State)
+					require.Len(t, leader.Errors, 1)
+					require.Contains(t, leader.Errors[0].Error, "StopAbandonTimeout")
+				}
+				firstPeer, err := client.JobGet(ctx, peers[0].ID)
+				require.NoError(t, err)
+				require.Equal(t, rivertype.JobStateCompleted, firstPeer.State)
+				eventsByID := make(map[int64]river.EventKind)
+				for event := range events {
+					require.NotContains(t, eventsByID, event.Job.ID, "each job should produce exactly one event")
+					eventsByID[event.Job.ID] = event.Kind
+				}
+				require.Equal(t, map[int64]river.EventKind{
+					insertRes.Job.ID: leaderEventKind,
+					peers[0].ID:      river.EventKindJobCompleted,
+				}, eventsByID)
+
+				release()
+				require.Eventually(t, func() bool {
+					job, err := client.JobGet(ctx, peers[1].ID)
+					return err == nil && job.State == rivertype.JobStateRetryable
+				}, 5*time.Second, 5*time.Millisecond)
+				leaderAfter, err := client.JobGet(ctx, insertRes.Job.ID)
+				require.NoError(t, err)
+				require.Equal(t, leader, leaderAfter, "late peer completion must leave the leader unchanged")
+			})
+		}
+	})
+
+	t.Run("StopAbandonTimeoutCancelledJob", func(t *testing.T) {
+		t.Parallel()
+
+		for _, testCase := range []struct {
+			maxAttempts int
+			name        string
+			wantKind    river.EventKind
+			wantState   rivertype.JobState
+		}{
+			{maxAttempts: 1, name: "AttemptsExhausted", wantKind: river.EventKindJobFailed, wantState: rivertype.JobStateDiscarded},
+			{maxAttempts: 3, name: "Retryable", wantKind: river.EventKindJobCancelled, wantState: rivertype.JobStateCancelled},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				t.Parallel()
+
+				config, bundle := setupConfig(t)
+				config.StopAbandonTimeout = 20 * time.Millisecond
+
+				var jobStarted, jobContextCancelled testsignal.TestSignal[int64]
+				jobStarted.Init(t)
+				jobContextCancelled.Init(t)
+				// Deliberately hold the worker past context cancellation until the
+				// test ends, including when an assertion fails.
+				releaseJob := make(chan struct{})
+				defer close(releaseJob)
+				river.AddWorker(config.Workers, river.WorkFunc(func(ctx context.Context, job *river.Job[cancelRunningJobArgs]) error {
+					jobStarted.Signal(job.ID)
+					<-ctx.Done()
+					jobContextCancelled.Signal(job.ID)
+					<-releaseJob
+					return ctx.Err()
+				}))
+
+				client, err := river.NewClient(bundle.driver, config)
+				require.NoError(t, err)
+				events := subscribe(t, client)
+				cancelledEvents, unsubscribe := client.Subscribe(river.EventKindJobCancelled)
+				t.Cleanup(unsubscribe)
+				startClient(ctx, t, client)
+
+				insertRes, err := client.Insert(ctx, &cancelRunningJobArgs{}, &river.InsertOpts{MaxAttempts: testCase.maxAttempts})
+				require.NoError(t, err)
+				require.Equal(t, insertRes.Job.ID, jobStarted.WaitOrTimeout())
+				job, err := client.JobCancel(ctx, insertRes.Job.ID)
+				require.NoError(t, err)
+				require.Equal(t, rivertype.JobStateRunning, job.State)
+				require.Contains(t, string(job.Metadata), `"cancel_attempted_at"`)
+
+				stopCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				defer cancel()
+				require.NoError(t, client.StopAndCancel(stopCtx))
+				require.Equal(t, job.ID, jobContextCancelled.WaitOrTimeout())
+
+				jobAfter, err := client.JobGet(ctx, job.ID)
+				require.NoError(t, err)
+				require.Equal(t, testCase.wantState, jobAfter.State)
+				require.NotNil(t, jobAfter.FinalizedAt)
+				require.Len(t, jobAfter.Errors, 1)
+				require.Contains(t, jobAfter.Errors[0].Error, "StopAbandonTimeout")
+
+				event := riversharedtest.WaitOrTimeout(t, events)
+				require.NotNil(t, event)
+				require.Equal(t, testCase.wantKind, event.Kind)
+				require.Equal(t, job.ID, event.Job.ID)
+				require.Equal(t, testCase.wantState, event.Job.State)
+				require.NotNil(t, event.JobStats)
+				_, hasEvent := <-events
+				require.False(t, hasEvent, "expected exactly one job event")
+
+				if testCase.wantKind == river.EventKindJobCancelled {
+					cancelledEvent := riversharedtest.WaitOrTimeout(t, cancelledEvents)
+					require.NotNil(t, cancelledEvent)
+					require.Equal(t, job.ID, cancelledEvent.Job.ID)
+				}
+				_, hasEvent = <-cancelledEvents
+				require.False(t, hasEvent, "unexpected cancellation event")
+			})
+		}
+	})
+
+	t.Run("StopAbandonTimeoutRescuedJob", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		config.Queues = map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 2}}
+		config.StopAbandonTimeout = 20 * time.Millisecond
+
+		var jobStarted testsignal.TestSignal[int64]
+		jobStarted.Init(t)
+		// Keep both workers executing while one job is rescued and another
+		// client claims its next attempt. Release them even if the test fails.
+		releaseJobs := make(chan struct{})
+		defer close(releaseJobs)
+		river.AddWorker(config.Workers, river.WorkFunc(func(ctx context.Context, job *river.Job[cancelRunningJobArgs]) error {
+			jobStarted.Signal(job.ID)
+			<-releaseJobs
+			return nil
+		}))
+		client, err := river.NewClient(bundle.driver, config)
+		require.NoError(t, err)
+		events := subscribe(t, client)
+		first, err := client.Insert(ctx, &cancelRunningJobArgs{}, nil)
+		require.NoError(t, err)
+		second, err := client.Insert(ctx, &cancelRunningJobArgs{}, nil)
+		require.NoError(t, err)
+		startClient(ctx, t, client)
+		require.ElementsMatch(t, []int64{first.Job.ID, second.Job.ID}, []int64{jobStarted.WaitOrTimeout(), jobStarted.WaitOrTimeout()})
+
+		now := time.Now().UTC()
+		rescueError, err := json.Marshal(rivertype.AttemptError{At: now, Attempt: 1, Error: "rescued before client shutdown"})
+		require.NoError(t, err)
+		_, err = bundle.exec.JobRescueMany(ctx, &riverdriver.JobRescueManyParams{
+			ID:           []int64{first.Job.ID},
+			Error:        [][]byte{rescueError},
+			FinalizedAt:  []*time.Time{nil},
+			ScheduledAt:  []time.Time{now.Add(-time.Second)},
+			Schema:       bundle.schema,
+			State:        []string{string(rivertype.JobStateAvailable)},
+			StuckHorizon: now.Add(time.Second),
+		})
+		require.NoError(t, err)
+		locked, err := bundle.exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+			ClientID:  "another-client",
+			MaxToLock: 1,
+			Queue:     river.QueueDefault,
+			Schema:    bundle.schema,
+		})
+		require.NoError(t, err)
+		require.Len(t, locked.Jobs, 1)
+		require.Equal(t, first.Job.ID, locked.Jobs[0].ID)
+		require.Equal(t, 2, locked.Jobs[0].Attempt)
+
+		stopCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		require.NoError(t, client.StopAndCancel(stopCtx))
+		rescuedJob, err := client.JobGet(ctx, first.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, locked.Jobs[0], rescuedJob, "abandonment must leave the new attempt untouched")
+		ownedJob, err := client.JobGet(ctx, second.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateAvailable, ownedJob.State)
+		require.Len(t, ownedJob.Errors, 1)
+		require.Contains(t, ownedJob.Errors[0].Error, "StopAbandonTimeout")
+
+		event := riversharedtest.WaitOrTimeout(t, events)
+		require.NotNil(t, event)
+		require.Equal(t, second.Job.ID, event.Job.ID)
+		require.Equal(t, river.EventKindJobFailed, event.Kind)
+		_, hasEvent := <-events
+		require.False(t, hasEvent, "the rescued job must not produce an abandonment event")
+	})
+
+	t.Run("StopAbandonTimeoutTransactionalUpdates", func(t *testing.T) {
+		t.Parallel()
+
+		for _, operation := range []string{"Complete", "ResumableStep", "ResumableStepCursor"} {
+			t.Run(operation, func(t *testing.T) {
+				t.Parallel()
+
+				for _, timing := range []string{"CurrentAttempt", "NewAttempt", "SameAttemptNumber", "StoppedBeforeRetry"} {
+					t.Run(timing, func(t *testing.T) {
+						t.Parallel()
+
+						config, bundle := setupConfig(t)
+						config.StopAbandonTimeout = 20 * time.Millisecond
+						var started testsignal.TestSignal[int64]
+						var finished testsignal.TestSignal[error]
+						started.Init(t)
+						finished.Init(t)
+						// Keep the original worker alive after shutdown and, optionally,
+						// a new claim. No transaction is held open during abandonment.
+						releaseJob := make(chan struct{})
+						release := sync.OnceFunc(func() { close(releaseJob) })
+						defer release()
+						river.AddWorker(config.Workers, river.WorkFunc(func(ctx context.Context, job *river.Job[cancelRunningJobArgs]) error {
+							started.Signal(job.ID)
+							<-releaseJob
+							ctx = context.WithoutCancel(ctx)
+							err := func() error {
+								execTx, err := bundle.exec.Begin(ctx)
+								if err != nil {
+									return err
+								}
+								defer execTx.Rollback(ctx)
+								tx := bundle.driver.UnwrapTx(execTx)
+								if err := river.MetadataSet(ctx, "from_worker", true); err != nil {
+									return err
+								}
+								if operation == "Complete" {
+									_, err = river.JobCompleteTx[riverdriver.Driver[TTx]](ctx, tx, job)
+								} else {
+									river.ResumableStep(ctx, "checkpoint", nil, func(ctx context.Context) error {
+										if operation == "ResumableStep" {
+											_, err = river.ResumableSetStepTx[riverdriver.Driver[TTx]](ctx, tx, job)
+										} else {
+											_, err = river.ResumableSetStepCursorTx[riverdriver.Driver[TTx]](ctx, tx, job, 123)
+										}
+										return err
+									})
+								}
+								if err != nil {
+									return err
+								}
+								return execTx.Commit(ctx)
+							}()
+							finished.Signal(err)
+							return err
+						}))
+						client, err := river.NewClient(bundle.driver, config)
+						require.NoError(t, err)
+						startClient(ctx, t, client)
+						insertRes, err := client.Insert(ctx, &cancelRunningJobArgs{}, nil)
+						require.NoError(t, err)
+						require.Equal(t, insertRes.Job.ID, started.WaitOrTimeout())
+
+						if timing != "CurrentAttempt" {
+							stopCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+							defer cancel()
+							require.NoError(t, client.StopAndCancel(stopCtx))
+						}
+						if timing == "NewAttempt" || timing == "SameAttemptNumber" {
+							locked, err := bundle.exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+								ClientID: "another-client", MaxToLock: 1, Queue: river.QueueDefault, Schema: bundle.schema,
+							})
+							require.NoError(t, err)
+							require.Len(t, locked.Jobs, 1)
+							require.Equal(t, insertRes.Job.ID, locked.Jobs[0].ID)
+							if timing == "SameAttemptNumber" {
+								// Snoozes/interruptions can reuse an attempt number, so the
+								// timestamp must be checked independently as well.
+								_, err := bundle.exec.JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
+									ID: insertRes.Job.ID, Attempt: 1, AttemptDoUpdate: true, Schema: bundle.schema,
+								})
+								require.NoError(t, err)
+							}
+						}
+						before, err := client.JobGet(ctx, insertRes.Job.ID)
+						require.NoError(t, err)
+						release()
+						if timing == "CurrentAttempt" {
+							require.NoError(t, finished.WaitOrTimeout())
+						} else {
+							require.ErrorIs(t, finished.WaitOrTimeout(), rivertype.ErrNotFound)
+							after, err := client.JobGet(ctx, insertRes.Job.ID)
+							require.NoError(t, err)
+							require.Equal(t, before, after, "a stale transaction must not change the job or its metadata")
+						}
+					})
+				}
+			})
 		}
 	})
 

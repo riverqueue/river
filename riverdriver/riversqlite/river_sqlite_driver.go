@@ -44,6 +44,7 @@ import (
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
 	"github.com/riverqueue/river/rivershared/uniquestates"
 	"github.com/riverqueue/river/rivershared/util/dbutil"
+	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/savepointutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
@@ -988,6 +989,11 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 				setStateParams.ErrorsDoUpdate = true
 				setStateParams.Error = params.ErrData[i]
 			}
+			if params.ExpectedAttemptDoCheck != nil && params.ExpectedAttemptDoCheck[i] {
+				setStateParams.ExpectedAttemptDoCheck = true
+				setStateParams.ExpectedAttempt = int64(params.ExpectedAttempt[i])
+				setStateParams.ExpectedAttemptedAt = timeString(params.ExpectedAttemptedAt[i])
+			}
 			if params.FinalizedAt[i] != nil {
 				setStateParams.FinalizedAtDoUpdate = true
 				setStateParams.FinalizedAt = timeStringNullable(params.FinalizedAt[i])
@@ -1006,8 +1012,11 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 				if errors.Is(err, sql.ErrNoRows) {
 					var metadataRow *dbsqlc.JobSetMetadataIfNotRunningRow
 					metadataRow, err = dbsqlc.New().JobSetMetadataIfNotRunning(ctx, dbtx, &dbsqlc.JobSetMetadataIfNotRunningParams{
-						ID:              params.ID[i],
-						MetadataUpdates: sliceutil.FirstNonEmpty(params.MetadataUpdates[i], []byte("{}")),
+						ExpectedAttempt:        setStateParams.ExpectedAttempt,
+						ExpectedAttemptDoCheck: setStateParams.ExpectedAttemptDoCheck,
+						ExpectedAttemptedAt:    setStateParams.ExpectedAttemptedAt,
+						ID:                     params.ID[i],
+						MetadataUpdates:        sliceutil.FirstNonEmpty(params.MetadataUpdates[i], []byte("{}")),
 					})
 					if err != nil {
 						if errors.Is(err, sql.ErrNoRows) {
@@ -1043,9 +1052,12 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 	}
 
 	job, err := dbsqlc.New().JobUpdate(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobUpdateParams{
-		ID:              params.ID,
-		MetadataDoMerge: params.MetadataDoMerge,
-		Metadata:        metadata,
+		ID:                     params.ID,
+		ExpectedAttempt:        int64(ptrutil.ValOrDefault(params.ExpectedAttempt, 0)),
+		ExpectedAttemptDoCheck: params.ExpectedAttempt != nil,
+		ExpectedAttemptedAt:    timeStringNullable(params.ExpectedAttemptedAt),
+		MetadataDoMerge:        params.MetadataDoMerge,
+		Metadata:               metadata,
 	})
 	if err != nil {
 		return nil, interpretError(err)

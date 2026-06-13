@@ -710,6 +710,10 @@ SET metadata = CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata)
                     ELSE metadata END
 WHERE id = @id
     AND state != 'running'
+    AND (NOT cast(@expected_attempt_do_check AS boolean) OR (
+        attempt = @expected_attempt
+        AND attempted_at = cast(@expected_attempted_at AS text)
+    ))
 RETURNING
     id,
     cast(CASE WHEN typeof(args) = 'text' AND NOT json_valid(args) THEN args ELSE json(args) END AS blob) AS args,
@@ -773,6 +777,10 @@ SET
                         ELSE @state END
 WHERE id = @id
     AND state = 'running'
+    AND (NOT cast(@expected_attempt_do_check AS boolean) OR (
+        attempt = @expected_attempt
+        AND attempted_at = cast(@expected_attempted_at AS text)
+    ))
 RETURNING
     id,
     cast(CASE WHEN typeof(args) = 'text' AND NOT json_valid(args) THEN args ELSE json(args) END AS blob) AS args,
@@ -798,6 +806,11 @@ UPDATE /* TEMPLATE: schema */river_job
 SET
     metadata = CASE WHEN cast(@metadata_do_merge AS boolean) THEN jsonb_patch(json(metadata), json(@metadata)) ELSE metadata END
 WHERE id = @id
+    AND (NOT cast(@expected_attempt_do_check AS boolean) OR (
+        state = 'running'
+        AND attempt = cast(@expected_attempt AS integer)
+        AND attempted_at = cast(sqlc.narg('expected_attempted_at') AS text)
+    ))
 RETURNING *;
 
 -- A generalized update for any property on a job. This brings in a large number
