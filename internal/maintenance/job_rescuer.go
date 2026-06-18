@@ -312,7 +312,8 @@ func (s *JobRescuer) makeRetryDecision(ctx context.Context, job *rivertype.JobRo
 			slog.String("job_kind", job.Kind), slog.Int64("job_id", job.ID))
 	}
 
-	if workUnit.Timeout() != 0 && now.Sub(*job.AttemptedAt) < workUnit.Timeout() {
+	timeout := workUnit.Timeout()
+	if timeout < 0 || timeout > 0 && now.Sub(*job.AttemptedAt) < timeout {
 		return jobRetryDecisionIgnore, time.Time{}
 	}
 
