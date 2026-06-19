@@ -9,6 +9,7 @@ import (
 
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobstats"
+	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
@@ -142,7 +143,7 @@ func (sm *subscriptionManager) distributeJobUpdates(ctx context.Context, updates
 	}
 
 	for _, update := range updates {
-		sm.distributeJobEvent(ctx, update.Job, jobStatisticsFromInternal(update.JobStats), update.Snoozed)
+		sm.distributeJobEvent(ctx, update.Job, jobStatisticsFromInternal(update.JobStats), update.Reason)
 	}
 }
 
@@ -152,27 +153,23 @@ func (sm *subscriptionManager) distributeJobUpdates(ctx context.Context, updates
 // the queue.
 //
 // MUST be called with sm.mu already held.
-func (sm *subscriptionManager) distributeJobEvent(ctx context.Context, job *rivertype.JobRow, stats *JobStatistics, snoozed bool) {
-	var event *Event
-	if snoozed {
-		event = &Event{Kind: EventKindJobSnoozed, Job: job, JobStats: stats}
-	} else {
-		switch job.State {
-		case rivertype.JobStateCancelled:
-			event = &Event{Kind: EventKindJobCancelled, Job: job, JobStats: stats}
-		case rivertype.JobStateCompleted:
-			event = &Event{Kind: EventKindJobCompleted, Job: job, JobStats: stats}
-		case rivertype.JobStateAvailable, rivertype.JobStateDiscarded, rivertype.JobStateRetryable, rivertype.JobStateRunning:
-			event = &Event{Kind: EventKindJobFailed, Job: job, JobStats: stats}
-		case rivertype.JobStatePending, rivertype.JobStateScheduled:
-			// job state may be set to scheduled, but only for snoozed jobs, so
-			// the case at the top should always take precedence before this
-			panic(fmt.Sprintf("completion subscriber unexpectedly received job in %s state, river bug", job.State))
-		default:
-			// linter exhaustive rule prevents this from being reached
-			panic("unreachable state to distribute, river bug")
-		}
+func (sm *subscriptionManager) distributeJobEvent(ctx context.Context, job *rivertype.JobRow, stats *JobStatistics, reason riverdriver.JobSetStateReason) {
+	var kind EventKind
+	switch reason {
+	case riverdriver.JobSetStateReasonCancelled:
+		kind = EventKindJobCancelled
+	case riverdriver.JobSetStateReasonCompleted:
+		kind = EventKindJobCompleted
+	case riverdriver.JobSetStateReasonFailed:
+		kind = EventKindJobFailed
+	case riverdriver.JobSetStateReasonInterrupted:
+		kind = EventKindJobInterrupted
+	case riverdriver.JobSetStateReasonSnoozed:
+		kind = EventKindJobSnoozed
+	default:
+		panic(fmt.Sprintf("completion subscriber unexpectedly received reason %q, river bug", reason))
 	}
+	event := &Event{Kind: kind, Job: job, JobStats: stats}
 
 	// All subscription channels are non-blocking so this is always fast and
 	// there's no risk of falling behind what producers are sending.

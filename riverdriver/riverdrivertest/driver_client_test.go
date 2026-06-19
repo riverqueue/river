@@ -212,6 +212,7 @@ func subscribe[TTx any](t *testing.T, client *river.Client[TTx]) <-chan *river.E
 		river.EventKindJobCancelled,
 		river.EventKindJobCompleted,
 		river.EventKindJobFailed,
+		river.EventKindJobInterrupted,
 		river.EventKindJobSnoozed,
 		river.EventKindQueuePaused,
 		river.EventKindQueueResumed,

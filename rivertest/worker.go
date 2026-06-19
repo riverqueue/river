@@ -252,24 +252,19 @@ func completerResultToWorkResult(tb testing.TB, completerResult jobcompleter.Com
 	tb.Helper()
 
 	var kind river.EventKind
-	if completerResult.Snoozed {
+	switch completerResult.Reason {
+	case riverdriver.JobSetStateReasonCancelled:
+		kind = river.EventKindJobCancelled
+	case riverdriver.JobSetStateReasonCompleted:
+		kind = river.EventKindJobCompleted
+	case riverdriver.JobSetStateReasonFailed:
+		kind = river.EventKindJobFailed
+	case riverdriver.JobSetStateReasonInterrupted:
+		kind = river.EventKindJobInterrupted
+	case riverdriver.JobSetStateReasonSnoozed:
 		kind = river.EventKindJobSnoozed
-	} else {
-		switch completerResult.Job.State {
-		case rivertype.JobStateCancelled:
-			kind = river.EventKindJobCancelled
-		case rivertype.JobStateCompleted:
-			kind = river.EventKindJobCompleted
-		case rivertype.JobStateScheduled:
-			kind = river.EventKindJobSnoozed
-		case rivertype.JobStateAvailable, rivertype.JobStateDiscarded, rivertype.JobStateRetryable, rivertype.JobStateRunning:
-			kind = river.EventKindJobFailed
-		case rivertype.JobStatePending:
-			panic("test worker internal error: completion subscriber unexpectedly received job in pending state, river bug")
-		default:
-			// linter exhaustive rule prevents this from being reached
-			panic("test worker internal error: unreachable state to distribute, river bug")
-		}
+	default:
+		panic(fmt.Sprintf("test worker internal error: completion subscriber unexpectedly received reason %q, river bug", completerResult.Reason))
 	}
 
 	return &WorkResult{

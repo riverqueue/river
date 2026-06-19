@@ -60,7 +60,7 @@ func Test_SubscriptionManager(t *testing.T) {
 		manager, bundle := setup(t)
 		t.Cleanup(func() { close(bundle.subscribeCh) })
 
-		sub, cancelSub := manager.SubscribeConfig(&SubscribeConfig{ChanSize: 10, Kinds: []EventKind{EventKindJobCompleted, EventKindJobSnoozed}})
+		sub, cancelSub := manager.SubscribeConfig(&SubscribeConfig{ChanSize: 10, Kinds: []EventKind{EventKindJobCompleted, EventKindJobInterrupted, EventKindJobSnoozed}})
 		t.Cleanup(cancelSub)
 
 		// Send some events
@@ -68,6 +68,7 @@ func Test_SubscriptionManager(t *testing.T) {
 		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(time.Now())})
 		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRetryable)})
 		job4 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled)})
+		job5 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
 
 		makeStats := func(complete, wait, run time.Duration) *jobstats.JobStatistics {
 			return &jobstats.JobStatistics{
@@ -78,25 +79,43 @@ func Test_SubscriptionManager(t *testing.T) {
 		}
 
 		bundle.subscribeCh <- []jobcompleter.CompleterJobUpdated{
-			{Job: job1, JobStats: makeStats(101, 102, 103)}, // completed, should be sent
-			{Job: job2, JobStats: makeStats(201, 202, 203)}, // cancelled, should be skipped
+			{Job: job1, JobStats: makeStats(101, 102, 103), Reason: riverdriver.JobSetStateReasonCompleted}, // completed, should be sent
+			{Job: job2, JobStats: makeStats(201, 202, 203), Reason: riverdriver.JobSetStateReasonCancelled}, // cancelled, should be skipped
 		}
 		bundle.subscribeCh <- []jobcompleter.CompleterJobUpdated{
-			{Job: job3, JobStats: makeStats(301, 302, 303)},                // retryable, should be skipped
-			{Job: job4, JobStats: makeStats(401, 402, 403), Snoozed: true}, // snoozed/scheduled, should be sent
+			{Job: job3, JobStats: makeStats(301, 302, 303), Reason: riverdriver.JobSetStateReasonFailed},      // retryable, should be skipped
+			{Job: job4, JobStats: makeStats(401, 402, 403), Reason: riverdriver.JobSetStateReasonSnoozed},     // snoozed/scheduled, should be sent
+			{Job: job5, JobStats: makeStats(501, 502, 503), Reason: riverdriver.JobSetStateReasonInterrupted}, // interrupted/available, should be sent
 		}
 
-		received := riversharedtest.WaitOrTimeoutN(t, sub, 2)
+		received := riversharedtest.WaitOrTimeoutN(t, sub, 3)
+		require.Equal(t, EventKindJobCompleted, received[0].Kind)
 		require.Equal(t, job1.ID, received[0].Job.ID)
 		require.Equal(t, rivertype.JobStateCompleted, received[0].Job.State)
 		require.Equal(t, time.Duration(101), received[0].JobStats.CompleteDuration)
 		require.Equal(t, time.Duration(102), received[0].JobStats.QueueWaitDuration)
 		require.Equal(t, time.Duration(103), received[0].JobStats.RunDuration)
+		require.Equal(t, EventKindJobSnoozed, received[1].Kind)
 		require.Equal(t, job4.ID, received[1].Job.ID)
 		require.Equal(t, rivertype.JobStateScheduled, received[1].Job.State)
 		require.Equal(t, time.Duration(401), received[1].JobStats.CompleteDuration)
 		require.Equal(t, time.Duration(402), received[1].JobStats.QueueWaitDuration)
 		require.Equal(t, time.Duration(403), received[1].JobStats.RunDuration)
+		require.Equal(t, EventKindJobInterrupted, received[2].Kind)
+		require.Equal(t, job5.ID, received[2].Job.ID)
+		require.Equal(t, rivertype.JobStateAvailable, received[2].Job.State)
+		require.Equal(t, time.Duration(501), received[2].JobStats.CompleteDuration)
+		require.Equal(t, time.Duration(502), received[2].JobStats.QueueWaitDuration)
+		require.Equal(t, time.Duration(503), received[2].JobStats.RunDuration)
+
+		manager.statsMu.Lock()
+		statsAggregate := manager.statsAggregate
+		statsNumJobs := manager.statsNumJobs
+		manager.statsMu.Unlock()
+		require.Equal(t, 5, statsNumJobs)
+		require.Equal(t, time.Duration(101+201+301+401+501), statsAggregate.CompleteDuration)
+		require.Equal(t, time.Duration(102+202+302+402+502), statsAggregate.QueueWaitDuration)
+		require.Equal(t, time.Duration(103+203+303+403+503), statsAggregate.RunDuration)
 
 		cancelSub()
 		select {

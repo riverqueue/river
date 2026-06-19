@@ -23,6 +23,11 @@ const (
 	// differentiate each type of occurrence.
 	EventKindJobFailed EventKind = "job_failed"
 
+	// EventKindJobInterrupted occurs when a running job is interrupted because
+	// its client is shutting down and is made immediately available to be worked
+	// again. An interruption does not consume an attempt or add an attempt error.
+	EventKindJobInterrupted EventKind = "job_interrupted"
+
 	// EventKindJobSnoozed occurs when a job is snoozed.
 	EventKindJobSnoozed EventKind = "job_snoozed"
 
@@ -37,12 +42,13 @@ const (
 // exported because end users should have no way of subscribing to all known
 // kinds for forward compatibility reasons.
 var allKinds = map[EventKind]struct{}{ //nolint:gochecknoglobals
-	EventKindJobCancelled: {},
-	EventKindJobCompleted: {},
-	EventKindJobFailed:    {},
-	EventKindJobSnoozed:   {},
-	EventKindQueuePaused:  {},
-	EventKindQueueResumed: {},
+	EventKindJobCancelled:   {},
+	EventKindJobCompleted:   {},
+	EventKindJobFailed:      {},
+	EventKindJobInterrupted: {},
+	EventKindJobSnoozed:     {},
+	EventKindQueuePaused:    {},
+	EventKindQueueResumed:   {},
 }
 
 // Event wraps an event that occurred within a River client, like a job being

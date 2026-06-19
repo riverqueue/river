@@ -342,6 +342,7 @@ func subscribe[TTx any](t *testing.T, client *Client[TTx]) <-chan *Event {
 		EventKindJobCancelled,
 		EventKindJobCompleted,
 		EventKindJobFailed,
+		EventKindJobInterrupted,
 		EventKindJobSnoozed,
 		EventKindQueuePaused,
 		EventKindQueueResumed,
@@ -2766,7 +2767,6 @@ func Test_Client_SoftStopTimeout(t *testing.T) {
 		}))
 
 		client := runNewTestClient(ctx, t, config)
-
 		_, err := client.Insert(ctx, JobArgs{}, nil)
 		require.NoError(t, err)
 
@@ -2782,6 +2782,76 @@ func Test_Client_SoftStopTimeout(t *testing.T) {
 		default:
 			t.Fatal("expected job to have been cancelled by soft stop timeout")
 		}
+	})
+
+	t.Run("ErroringJobGetsFreshAttempt", func(t *testing.T) {
+		t.Parallel()
+
+		config := newTestConfig(t, "")
+		config.SoftStopTimeout = 100 * time.Millisecond
+
+		firstRunDoneChan := make(chan struct{})
+		jobStartedChan := make(chan int64, 2)
+		var runCount atomic.Int32
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			jobStartedChan <- job.ID
+			switch runCount.Add(1) {
+			case 1:
+				<-ctx.Done()
+				close(firstRunDoneChan)
+				return ctx.Err()
+			default:
+				return errors.New("real job error")
+			}
+		}))
+
+		client := runNewTestClient(ctx, t, config)
+		subscribeChan, cancelSubscribe := client.Subscribe(EventKindJobInterrupted)
+		t.Cleanup(cancelSubscribe)
+
+		insertRes, err := client.Insert(ctx, JobArgs{}, &InsertOpts{MaxAttempts: 2})
+		require.NoError(t, err)
+
+		jobID := riversharedtest.WaitOrTimeout(t, jobStartedChan)
+		require.Equal(t, insertRes.Job.ID, jobID)
+
+		require.NoError(t, client.Stop(ctx))
+		riversharedtest.WaitOrTimeout(t, firstRunDoneChan)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.NotNil(t, event)
+		require.Equal(t, EventKindJobInterrupted, event.Kind)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+		require.Equal(t, rivertype.JobStateAvailable, event.Job.State)
+		require.NotNil(t, event.JobStats)
+
+		jobAfter, err := client.driver.GetExecutor().JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: jobID, Schema: client.config.Schema})
+		require.NoError(t, err)
+		require.Equal(t, 0, jobAfter.Attempt)
+		require.Nil(t, jobAfter.FinalizedAt)
+		require.Equal(t, 2, jobAfter.MaxAttempts)
+		require.Equal(t, rivertype.JobStateAvailable, jobAfter.State)
+		require.WithinDuration(t, time.Now(), jobAfter.ScheduledAt, 2*time.Second)
+		require.Empty(t, jobAfter.Errors)
+
+		require.NoError(t, client.Start(ctx))
+
+		jobID = riversharedtest.WaitOrTimeout(t, jobStartedChan)
+		require.Equal(t, insertRes.Job.ID, jobID)
+
+		var jobAfterRealError *rivertype.JobRow
+		require.Eventually(t, func() bool {
+			var err error
+			jobAfterRealError, err = client.driver.GetExecutor().JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: jobID, Schema: client.config.Schema})
+			require.NoError(t, err)
+			return jobAfterRealError.State != rivertype.JobStateRunning
+		}, 5*time.Second, 10*time.Millisecond)
+
+		require.Equal(t, 1, jobAfterRealError.Attempt)
+		require.Equal(t, rivertype.JobStateRetryable, jobAfterRealError.State)
+		require.Len(t, jobAfterRealError.Errors, 1)
+		require.Equal(t, "real job error", jobAfterRealError.Errors[0].Error)
+		require.Less(t, time.Until(jobAfterRealError.ScheduledAt), 3*time.Second)
 	})
 
 	t.Run("SoftStopSucceedsBeforeTimeout", func(t *testing.T) {
@@ -2820,7 +2890,7 @@ func Test_Client_SoftStopTimeout(t *testing.T) {
 			close(jobStartedChan)
 			<-ctx.Done()
 			close(jobDoneChan)
-			return nil
+			return ctx.Err()
 		}))
 
 		var (
@@ -2832,6 +2902,8 @@ func Test_Client_SoftStopTimeout(t *testing.T) {
 
 		client, err := NewClient(driver, config)
 		require.NoError(t, err)
+		subscribeChan, cancelSubscribe := client.Subscribe(EventKindJobInterrupted)
+		t.Cleanup(cancelSubscribe)
 
 		startCtx, startCtxCancel := context.WithCancel(ctx)
 		defer startCtxCancel()
@@ -2854,6 +2926,12 @@ func Test_Client_SoftStopTimeout(t *testing.T) {
 		default:
 			t.Fatal("expected job to have been cancelled by soft stop timeout")
 		}
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.NotNil(t, event)
+		require.Equal(t, EventKindJobInterrupted, event.Kind)
+		require.Equal(t, rivertype.JobStateAvailable, event.Job.State)
+		require.NotNil(t, event.JobStats)
 	})
 }
 

@@ -25,7 +25,7 @@ func TestJobSetStateCancelled(t *testing.T) {
 		require.Nil(t, result.MetadataUpdates)
 		require.False(t, result.MetadataDoMerge)
 		require.Empty(t, result.Schema)
-		require.False(t, result.Snoozed)
+		require.Equal(t, JobSetStateReasonCancelled, result.Reason)
 		require.Equal(t, rivertype.JobStateCancelled, result.State)
 	})
 
@@ -44,7 +44,7 @@ func TestJobSetStateCancelled(t *testing.T) {
 		require.Equal(t, metadata, result.MetadataUpdates)
 		require.True(t, result.MetadataDoMerge)
 		require.Empty(t, result.Schema)
-		require.False(t, result.Snoozed)
+		require.Equal(t, JobSetStateReasonCancelled, result.Reason)
 		require.Equal(t, rivertype.JobStateCancelled, result.State)
 	})
 }
@@ -65,7 +65,7 @@ func TestJobSetStateCompleted(t *testing.T) {
 		require.False(t, result.MetadataDoMerge)
 		require.Nil(t, result.MetadataUpdates)
 		require.Empty(t, result.Schema)
-		require.False(t, result.Snoozed)
+		require.Equal(t, JobSetStateReasonCompleted, result.Reason)
 		require.Equal(t, rivertype.JobStateCompleted, result.State)
 	})
 
@@ -82,7 +82,7 @@ func TestJobSetStateCompleted(t *testing.T) {
 		require.True(t, result.MetadataDoMerge)
 		require.Equal(t, metadata, result.MetadataUpdates)
 		require.Empty(t, result.Schema)
-		require.False(t, result.Snoozed)
+		require.Equal(t, JobSetStateReasonCompleted, result.Reason)
 		require.Equal(t, rivertype.JobStateCompleted, result.State)
 	})
 }
@@ -104,7 +104,7 @@ func TestJobSetStateDiscarded(t *testing.T) {
 		require.False(t, result.MetadataDoMerge)
 		require.Nil(t, result.MetadataUpdates)
 		require.Empty(t, result.Schema)
-		require.False(t, result.Snoozed)
+		require.Equal(t, JobSetStateReasonFailed, result.Reason)
 		require.Equal(t, rivertype.JobStateDiscarded, result.State)
 	})
 
@@ -123,7 +123,7 @@ func TestJobSetStateDiscarded(t *testing.T) {
 		require.Equal(t, metadata, result.MetadataUpdates)
 		require.True(t, result.MetadataDoMerge)
 		require.Empty(t, result.Schema)
-		require.False(t, result.Snoozed)
+		require.Equal(t, JobSetStateReasonFailed, result.Reason)
 		require.Equal(t, rivertype.JobStateDiscarded, result.State)
 	})
 }
@@ -139,13 +139,14 @@ func TestJobSetStateErrorAvailable(t *testing.T) {
 		errData := []byte("error available")
 		result := JobSetStateErrorAvailable(id, scheduledAt, errData, nil)
 		require.Equal(t, id, result.ID)
+		require.Nil(t, result.Attempt)
 		require.Equal(t, errData, result.ErrData)
 		require.False(t, result.MetadataDoMerge)
 		require.Nil(t, result.MetadataUpdates)
 		require.NotNil(t, result.ScheduledAt)
 		require.True(t, result.ScheduledAt.Equal(scheduledAt))
 		require.Empty(t, result.Schema)
-		require.False(t, result.Snoozed)
+		require.Equal(t, JobSetStateReasonFailed, result.Reason)
 		require.Equal(t, rivertype.JobStateAvailable, result.State)
 	})
 
@@ -158,12 +159,13 @@ func TestJobSetStateErrorAvailable(t *testing.T) {
 		metadata := []byte(`{"key": "value"}`)
 		result := JobSetStateErrorAvailable(id, scheduledAt, errData, metadata)
 		require.Equal(t, id, result.ID)
+		require.Nil(t, result.Attempt)
 		require.True(t, result.MetadataDoMerge)
 		require.Equal(t, metadata, result.MetadataUpdates)
 		require.NotNil(t, result.ScheduledAt)
 		require.True(t, result.ScheduledAt.Equal(scheduledAt))
 		require.Empty(t, result.Schema)
-		require.False(t, result.Snoozed)
+		require.Equal(t, JobSetStateReasonFailed, result.Reason)
 		require.Equal(t, errData, result.ErrData)
 	})
 }
@@ -185,7 +187,7 @@ func TestJobSetStateErrorRetryable(t *testing.T) {
 		require.True(t, result.ScheduledAt.Equal(scheduledAt))
 		require.Equal(t, errData, result.ErrData)
 		require.Empty(t, result.Schema)
-		require.False(t, result.Snoozed)
+		require.Equal(t, JobSetStateReasonFailed, result.Reason)
 		require.Equal(t, rivertype.JobStateRetryable, result.State)
 	})
 
@@ -203,8 +205,53 @@ func TestJobSetStateErrorRetryable(t *testing.T) {
 		require.NotNil(t, result.ScheduledAt)
 		require.True(t, result.ScheduledAt.Equal(scheduledAt))
 		require.Empty(t, result.Schema)
-		require.False(t, result.Snoozed)
+		require.Equal(t, JobSetStateReasonFailed, result.Reason)
 		require.Equal(t, errData, result.ErrData)
+	})
+}
+
+func TestJobSetStateInterrupted(t *testing.T) {
+	t.Parallel()
+
+	t.Run("EmptyMetadata", func(t *testing.T) {
+		t.Parallel()
+
+		id := int64(6)
+		scheduledAt := time.Now().Truncate(time.Second)
+		attempt := 2
+		result := JobSetStateInterrupted(id, scheduledAt, attempt, nil)
+		require.Equal(t, id, result.ID)
+		require.NotNil(t, result.Attempt)
+		require.Equal(t, attempt, *result.Attempt)
+		require.Nil(t, result.ErrData)
+		require.False(t, result.MetadataDoMerge)
+		require.Nil(t, result.MetadataUpdates)
+		require.Equal(t, JobSetStateReasonInterrupted, result.Reason)
+		require.NotNil(t, result.ScheduledAt)
+		require.True(t, result.ScheduledAt.Equal(scheduledAt))
+		require.Empty(t, result.Schema)
+		require.Equal(t, rivertype.JobStateAvailable, result.State)
+	})
+
+	t.Run("NonEmptyMetadata", func(t *testing.T) {
+		t.Parallel()
+
+		id := int64(6)
+		scheduledAt := time.Now().Truncate(time.Second)
+		attempt := 2
+		metadata := []byte("interrupted metadata")
+		result := JobSetStateInterrupted(id, scheduledAt, attempt, metadata)
+		require.Equal(t, id, result.ID)
+		require.NotNil(t, result.Attempt)
+		require.Equal(t, attempt, *result.Attempt)
+		require.Nil(t, result.ErrData)
+		require.True(t, result.MetadataDoMerge)
+		require.Equal(t, metadata, result.MetadataUpdates)
+		require.Equal(t, JobSetStateReasonInterrupted, result.Reason)
+		require.NotNil(t, result.ScheduledAt)
+		require.True(t, result.ScheduledAt.Equal(scheduledAt))
+		require.Empty(t, result.Schema)
+		require.Equal(t, rivertype.JobStateAvailable, result.State)
 	})
 }
 
@@ -226,7 +273,7 @@ func TestJobSetStateSnoozed(t *testing.T) { //nolint:dupl
 		require.NotNil(t, result.ScheduledAt)
 		require.True(t, result.ScheduledAt.Equal(scheduledAt))
 		require.Empty(t, result.Schema)
-		require.True(t, result.Snoozed)
+		require.Equal(t, JobSetStateReasonSnoozed, result.Reason)
 		require.Equal(t, rivertype.JobStateScheduled, result.State)
 	})
 
@@ -245,7 +292,7 @@ func TestJobSetStateSnoozed(t *testing.T) { //nolint:dupl
 		require.NotNil(t, result.ScheduledAt)
 		require.True(t, result.ScheduledAt.Equal(scheduledAt))
 		require.Empty(t, result.Schema)
-		require.True(t, result.Snoozed)
+		require.Equal(t, JobSetStateReasonSnoozed, result.Reason)
 		require.Equal(t, rivertype.JobStateScheduled, result.State)
 	})
 }
@@ -281,7 +328,7 @@ func TestJobSetStateSnoozedAvailable(t *testing.T) { //nolint:dupl
 		require.NotNil(t, result.ScheduledAt)
 		require.True(t, result.ScheduledAt.Equal(scheduledAt))
 		require.Empty(t, result.Schema)
-		require.True(t, result.Snoozed)
+		require.Equal(t, JobSetStateReasonSnoozed, result.Reason)
 		require.Equal(t, rivertype.JobStateAvailable, result.State)
 	})
 
@@ -301,7 +348,7 @@ func TestJobSetStateSnoozedAvailable(t *testing.T) { //nolint:dupl
 		require.NotNil(t, result.ScheduledAt)
 		require.True(t, result.ScheduledAt.Equal(scheduledAt))
 		require.Empty(t, result.Schema)
-		require.True(t, result.Snoozed)
+		require.Equal(t, JobSetStateReasonSnoozed, result.Reason)
 		require.Equal(t, rivertype.JobStateAvailable, result.State)
 	})
 }
