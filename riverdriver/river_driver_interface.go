@@ -588,8 +588,11 @@ func JobSetStateDiscarded(id int64, finalizedAt time.Time, errData []byte, metad
 	}
 }
 
-func JobSetStateErrorAvailable(id int64, scheduledAt time.Time, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
+// JobSetStateErrorAvailable makes an errored job immediately available.
+// attempt can be set to nil to leave attempt unchanged.
+func JobSetStateErrorAvailable(id int64, scheduledAt time.Time, attempt *int, errData []byte, metadataUpdates []byte) *JobSetStateIfRunningParams {
 	return &JobSetStateIfRunningParams{
+		Attempt:         attempt,
 		ID:              id,
 		ErrData:         errData,
 		MetadataDoMerge: len(metadataUpdates) > 0,

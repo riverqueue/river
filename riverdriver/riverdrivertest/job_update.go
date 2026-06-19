@@ -697,6 +697,44 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.Equal(t, "foo.go:123\nbar.go:456", jobAfter.Errors[0].Trace)
 		})
 
+		t.Run("SetsARunningJobToAvailableWithUpdatedAttempt", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			now := time.Now().UTC()
+			attempt := 2
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Attempt:     ptrutil.Ptr(3),
+				MaxAttempts: ptrutil.Ptr(3),
+				State:       ptrutil.Ptr(rivertype.JobStateRunning),
+				UniqueKey:   []byte("unique-key"),
+			})
+
+			params := riverdriver.JobSetStateErrorAvailable(job.ID, now, &attempt, makeErrPayload(t, now), nil)
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(params))
+			require.NoError(t, err)
+			jobAfter := jobsAfter[0]
+			require.Equal(t, attempt, jobAfter.Attempt)
+			require.Equal(t, rivertype.JobStateAvailable, jobAfter.State)
+			require.Equal(t, 3, jobAfter.MaxAttempts)
+			require.WithinDuration(t, now, jobAfter.ScheduledAt, time.Microsecond)
+
+			jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
+			require.NoError(t, err)
+			require.Equal(t, attempt, jobUpdated.Attempt)
+			require.Equal(t, rivertype.JobStateAvailable, jobUpdated.State)
+			require.Equal(t, 3, jobUpdated.MaxAttempts)
+			require.Equal(t, "unique-key", string(jobUpdated.UniqueKey))
+
+			require.Len(t, jobAfter.Errors, 1)
+			require.Equal(t, now, jobAfter.Errors[0].At)
+			require.Equal(t, 1, jobAfter.Errors[0].Attempt)
+			require.Equal(t, "fake error", jobAfter.Errors[0].Error)
+			require.Equal(t, "foo.go:123\nbar.go:456", jobAfter.Errors[0].Trace)
+		})
+
 		t.Run("DoesNotTouchAlreadyRetryableJobWithNoMetadataUpdates", func(t *testing.T) {
 			t.Parallel()
 

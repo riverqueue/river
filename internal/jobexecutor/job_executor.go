@@ -19,9 +19,11 @@ import (
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobstats"
 	"github.com/riverqueue/river/internal/middlewarelookup"
+	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -432,6 +434,7 @@ func (e *JobExecutor) reportError(ctx context.Context, jobRow *rivertype.JobRow,
 		cancelJob bool
 		cancelErr *rivertype.JobCancelError
 	)
+	softStopped := isSoftStopCancelError(ctx, res.Err)
 
 	logAttrs := []any{
 		slog.String("error", res.ErrorStr()),
@@ -443,6 +446,8 @@ func (e *JobExecutor) reportError(ctx context.Context, jobRow *rivertype.JobRow,
 	case errors.As(res.Err, &cancelErr):
 		cancelJob = true
 		e.Logger.DebugContext(ctx, e.Name+": Job cancelled explicitly", logAttrs...)
+	case softStopped:
+		e.Logger.InfoContext(ctx, e.Name+": Job stopped due to client shutdown; retrying", logAttrs...)
 	case res.Err != nil:
 		if jobRow.Attempt >= jobRow.MaxAttempts {
 			e.Logger.InfoContext(ctx, e.Name+": Job errored", logAttrs...)
@@ -453,9 +458,19 @@ func (e *JobExecutor) reportError(ctx context.Context, jobRow *rivertype.JobRow,
 		e.Logger.InfoContext(ctx, e.Name+": Job panicked", logAttrs...)
 	}
 
-	if e.ErrorHandler != nil && !cancelJob {
+	if e.ErrorHandler != nil && !cancelJob && !softStopped {
 		// Error handlers also have an opportunity to cancel the job.
 		cancelJob = e.invokeErrorHandler(ctx, res)
+	}
+
+	now := e.Time.Now()
+
+	if softStopped {
+		params := riverdriver.JobSetStateErrorAvailable(jobRow.ID, now, ptrutil.Ptr(max(jobRow.Attempt-1, 0)), nil, metadataUpdates)
+		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, params); err != nil {
+			e.Logger.ErrorContext(ctx, e.Name+": Failed to make soft-stopped job available", logAttrs...)
+		}
+		return
 	}
 
 	attemptErr := rivertype.AttemptError{
@@ -470,8 +485,6 @@ func (e *JobExecutor) reportError(ctx context.Context, jobRow *rivertype.JobRow,
 		e.Logger.ErrorContext(ctx, e.Name+": Failed to marshal attempt error", logAttrs...)
 		return
 	}
-
-	now := e.Time.Now()
 
 	if cancelJob {
 		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateCancelled(jobRow.ID, now, errData, metadataUpdates)); err != nil {
@@ -512,13 +525,22 @@ func (e *JobExecutor) reportError(ctx context.Context, jobRow *rivertype.JobRow,
 	// `available` if their retry was smaller than the scheduler's run interval.
 	var params *riverdriver.JobSetStateIfRunningParams
 	if nextRetryScheduledAt.Sub(e.Time.Now()) <= e.SchedulerInterval {
-		params = riverdriver.JobSetStateErrorAvailable(jobRow.ID, nextRetryScheduledAt, errData, metadataUpdates)
+		params = riverdriver.JobSetStateErrorAvailable(jobRow.ID, nextRetryScheduledAt, nil, errData, metadataUpdates)
 	} else {
 		params = riverdriver.JobSetStateErrorRetryable(jobRow.ID, nextRetryScheduledAt, errData, metadataUpdates)
 	}
 	if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, params); err != nil {
 		e.Logger.ErrorContext(ctx, e.Name+": Failed to report error for job", logAttrs...)
 	}
+}
+
+// isSoftStopCancelError reports whether a worker returned because the client
+// was stopping and cancelled its job context. The context cause distinguishes
+// client stop cancellation from ordinary worker cancellation or timeouts.
+func isSoftStopCancelError(ctx context.Context, err error) bool {
+	return err != nil &&
+		errors.Is(context.Cause(ctx), rivercommon.ErrStop) &&
+		(errors.Is(err, context.Canceled) || errors.Is(err, rivercommon.ErrStop))
 }
 
 type withJobsAndErrorsByID interface {
