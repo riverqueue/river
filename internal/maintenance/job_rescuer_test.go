@@ -65,6 +65,7 @@ func TestJobRescuer(t *testing.T) {
 	const (
 		rescuerJobKind            = "rescuer"
 		rescuerJobKindLongTimeout = "rescuer_long_timeout"
+		rescuerJobKindNoTimeout   = "rescuer_no_timeout"
 	)
 
 	type testBundle struct {
@@ -95,6 +96,8 @@ func TestJobRescuer(t *testing.T) {
 						return &callbackWorkUnitFactory{Callback: emptyCallback}
 					case rescuerJobKindLongTimeout:
 						return &callbackWorkUnitFactory{Callback: emptyCallback, timeout: JobRescuerRescueAfterDefault + 5*time.Minute}
+					case rescuerJobKindNoTimeout:
+						return &callbackWorkUnitFactory{Callback: emptyCallback, timeout: -1}
 					}
 					panic("unhandled kind: " + kind)
 				},
@@ -163,6 +166,8 @@ func TestJobRescuer(t *testing.T) {
 		longTimeOutJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKindLongTimeout), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)})
 		longTimeOutJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKindLongTimeout), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-6 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)})
 
+		noTimeoutJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKindNoTimeout), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-24 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+
 		require.NoError(t, rescuer.Start(ctx))
 
 		rescuer.TestSignals.FetchedBatch.WaitOrTimeout()
@@ -226,6 +231,10 @@ func TestJobRescuer(t *testing.T) {
 		notTimedOutJob2After, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: longTimeOutJob2.ID, Schema: rescuer.Config.Schema})
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateRetryable, notTimedOutJob2After.State)
+
+		noTimeoutJobAfter, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: noTimeoutJob.ID, Schema: rescuer.Config.Schema})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, noTimeoutJobAfter.State)
 	})
 
 	t.Run("RescuesInBatches", func(t *testing.T) {
