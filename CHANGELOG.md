@@ -42,6 +42,7 @@ river migrate-get --database-url sqlite:// --version 6 --down > river7.down.sql
 - Change SQLite driver operations over to use bulk inserts where possible now that sqlc has better support for `json_each`. [PR #1276](https://github.com/riverqueue/river/pull/1276)
 - Detect duplicate step names across `river.ResumableStep` and return a validation error. [PR #1281](https://github.com/riverqueue/river/pull/1281)
 - Earlier backpressure from `BatchCompleter` when it's throughput is saturated with fewer warnings to console. [PR #1292](https://github.com/riverqueue/river/pull/1292)
+- Series of minor optimizations in `BatchCompleter` raising throughput ~20% when it's the bottleneck in job processing (e.g. in benchmarks). [PR #1293](https://github.com/riverqueue/river/pull/1293)
 
 ### Fixed
 

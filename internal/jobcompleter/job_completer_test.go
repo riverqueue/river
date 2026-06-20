@@ -671,7 +671,6 @@ func TestBatchCompleter_NonRetryableCompletionFailureDoesNotRequeueBatch(t *test
 
 			completer.setStateParamsMu.RLock()
 			require.Empty(t, completer.setStateParams)
-			require.Empty(t, completer.setStateStartTimes)
 			completer.setStateParamsMu.RUnlock()
 		})
 	}
