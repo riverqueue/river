@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
@@ -136,6 +138,23 @@ func TestMigrator(t *testing.T) {
 
 		_, err = New(bundle.driver, &Config{Line: "alternat"})
 		require.EqualError(t, err, "migration line does not exist: alternat (did you mean one of `alternate`, `alternate2`?)")
+	})
+
+	t.Run("NewAdvisoryLockConfig", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		migrator, err := New(bundle.driver, &Config{
+			AdvisoryLock:       true,
+			AdvisoryLockPrefix: 123,
+			Logger:             bundle.logger,
+			Schema:             bundle.schema,
+		})
+		require.NoError(t, err)
+		require.True(t, migrator.advisoryLock)
+		require.Equal(t, int32(123), migrator.advisoryLockPrefix)
+		require.NotZero(t, migrator.advisoryLockKey())
 	})
 
 	t.Run("AllVersions", func(t *testing.T) {
@@ -556,6 +575,47 @@ func TestMigrator(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(migrationsBundle.MaxVersion),
 			sliceutil.Map(migrations, driverMigrationToInt))
+	})
+
+	t.Run("MigrateWithAdvisoryLock", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setup(t)
+
+		migrator, err := New(bundle.driver, &Config{
+			AdvisoryLock: true,
+			Logger:       bundle.logger,
+			Schema:       bundle.schema,
+		})
+		require.NoError(t, err)
+		migrator.migrations = maps.Clone(migrationsBundle.WithTestVersionsMap)
+
+		sleepMigrationVersion := migrationsBundle.WithTestVersionsMaxVersion + 1
+		migrator.migrations[sleepMigrationVersion] = Migration{
+			Name:    "sleep",
+			SQLDown: "SELECT 1;",
+			SQLUp:   "SELECT pg_sleep(1);",
+			Version: sleepMigrationVersion,
+		}
+
+		tryAcquireLock := func() bool {
+			var lockAcquired bool
+			err := dbutil.WithTx(ctx, bundle.driver.GetExecutor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
+				return execTx.QueryRow(ctx, "SELECT pg_try_advisory_xact_lock($1)", migrator.advisoryLockKey()).Scan(&lockAcquired)
+			})
+			require.NoError(t, err)
+			return lockAcquired
+		}
+
+		migrateDone := make(chan error, 1)
+		go func() {
+			_, err := migrator.Migrate(ctx, DirectionUp, &MigrateOpts{TargetVersion: sleepMigrationVersion})
+			migrateDone <- err
+		}()
+
+		require.Eventually(t, func() bool { return !tryAcquireLock() }, 2*time.Second, 10*time.Millisecond)
+		require.NoError(t, riversharedtest.WaitOrTimeout(t, migrateDone))
+		require.True(t, tryAcquireLock())
 	})
 
 	t.Run("MigrateUpWithTargetVersion", func(t *testing.T) {

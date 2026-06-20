@@ -22,6 +22,7 @@ import (
 	"github.com/riverqueue/river/rivershared/levenshtein"
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
 	"github.com/riverqueue/river/rivershared/util/dbutil"
+	"github.com/riverqueue/river/rivershared/util/hashutil"
 	"github.com/riverqueue/river/rivershared/util/maputil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 )
@@ -57,6 +58,32 @@ type Migration struct {
 
 // Config contains configuration for Migrator.
 type Config struct {
+	// AdvisoryLock enables acquiring a Postgres advisory lock before checking
+	// and applying migrations, and holding it until the migration run finishes.
+	// This serializes concurrent migrators using the same migration line and
+	// schema so that multiple programs starting at the same time don't all try
+	// to apply River migrations simultaneously.
+	//
+	// The lock is only available on Postgres drivers. Calling Migrate with this
+	// option enabled on a driver that doesn't implement Postgres advisory locks
+	// returns an error.
+	//
+	// Migrate holds the lock in a dedicated transaction while applying each
+	// migration in its existing per-migration transaction, so the underlying pool
+	// must be able to open more than one connection.
+	AdvisoryLock bool
+
+	// AdvisoryLockPrefix is a configurable 32-bit prefix that River will use
+	// when generating the migration advisory lock key. All advisory locks share
+	// the same 64-bit number space, so this allows a calling application to
+	// guarantee that a River advisory lock will never conflict with one of its
+	// own by cordoning each type to its own prefix.
+	//
+	// If this value isn't set, River defaults to generating key hashes across
+	// the entire 64-bit advisory lock number space, which is large enough that
+	// conflicts are exceedingly unlikely.
+	AdvisoryLockPrefix int32
+
 	// Line is the migration line to use. Most drivers will only have a single
 	// line, which is `main`.
 	//
@@ -80,11 +107,13 @@ type Config struct {
 type Migrator[TTx any] struct {
 	baseservice.BaseService
 
-	driver     riverdriver.Driver[TTx]
-	line       string
-	migrations map[int]Migration // allows us to inject test migrations
-	replacer   sqlctemplate.Replacer
-	schema     string
+	advisoryLock       bool
+	advisoryLockPrefix int32
+	driver             riverdriver.Driver[TTx]
+	line               string
+	migrations         map[int]Migration // allows us to inject test migrations
+	replacer           sqlctemplate.Replacer
+	schema             string
 }
 
 // New returns a new migrator with the given database driver and configuration.
@@ -161,10 +190,12 @@ func New[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Migrator[TTx
 	}
 
 	return baseservice.Init(archetype, &Migrator[TTx]{
-		driver:     driver,
-		line:       line,
-		migrations: validateAndInit(riverMigrations),
-		schema:     config.Schema,
+		advisoryLock:       config.AdvisoryLock,
+		advisoryLockPrefix: config.AdvisoryLockPrefix,
+		driver:             driver,
+		line:               line,
+		migrations:         validateAndInit(riverMigrations),
+		schema:             config.Schema,
 	}), nil
 }
 
@@ -313,18 +344,51 @@ func (m *Migrator[TTx]) GetVersion(version int) (Migration, error) {
 //	}
 func (m *Migrator[TTx]) Migrate(ctx context.Context, direction Direction, opts *MigrateOpts) (*MigrateResult, error) {
 	exec := m.driver.GetExecutor()
-	switch direction {
-	case DirectionDown:
-		return m.migrateDown(ctx, exec, direction, opts, false)
-	case DirectionUp:
-		return m.migrateUp(ctx, exec, direction, opts, false)
+
+	migrateFunc := func(ctx context.Context) (*MigrateResult, error) {
+		switch direction {
+		case DirectionDown:
+			return m.migrateDown(ctx, exec, direction, opts, false)
+		case DirectionUp:
+			return m.migrateUp(ctx, exec, direction, opts, false)
+		}
+
+		panic("invalid direction: " + direction)
 	}
 
-	panic("invalid direction: " + direction)
+	if m.advisoryLock {
+		return m.withAdvisoryLock(ctx, exec, migrateFunc)
+	}
+
+	return migrateFunc(ctx)
 }
 
-// Migrate migrates the database in the given direction (up or down). The opts
-// parameter may be omitted for convenience.
+func (m *Migrator[TTx]) withAdvisoryLock(ctx context.Context, exec riverdriver.Executor, migrateFunc func(context.Context) (*MigrateResult, error)) (*MigrateResult, error) {
+	lockTx, err := exec.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error beginning migration advisory lock transaction: %w", err)
+	}
+	defer dbutil.RollbackWithoutCancel(ctx, lockTx)
+
+	if _, err := lockTx.PGAdvisoryXactLock(ctx, m.advisoryLockKey()); err != nil {
+		return nil, fmt.Errorf("error acquiring migration advisory lock: %w", err)
+	}
+
+	return migrateFunc(ctx)
+}
+
+func (m *Migrator[TTx]) advisoryLockKey() int64 {
+	lockHash := hashutil.NewAdvisoryLockHash(m.advisoryLockPrefix)
+	lockHash.Write([]byte("river_migrate"))
+	lockHash.Write([]byte{0})
+	lockHash.Write([]byte(m.line))
+	lockHash.Write([]byte{0})
+	lockHash.Write([]byte(m.schema))
+	return lockHash.Key()
+}
+
+// MigrateTx migrates the database in the given direction (up or down). The
+// opts parameter may be omitted for convenience.
 //
 // By default, applies all outstanding migrations when moving in the up
 // direction, but for safety, only one step when moving in the down direction.
@@ -345,11 +409,19 @@ func (m *Migrator[TTx]) Migrate(ctx context.Context, direction Direction, opts *
 // Deprecated: Use Migrate instead. Certain migrations cannot be batched together
 // in a single transaction, so this method is not recommended.
 func (m *Migrator[TTx]) MigrateTx(ctx context.Context, tx TTx, direction Direction, opts *MigrateOpts) (*MigrateResult, error) {
+	exec := m.driver.UnwrapExecutor(tx)
+
+	if m.advisoryLock {
+		if _, err := exec.PGAdvisoryXactLock(ctx, m.advisoryLockKey()); err != nil {
+			return nil, fmt.Errorf("error acquiring migration advisory lock: %w", err)
+		}
+	}
+
 	switch direction {
 	case DirectionDown:
-		return m.migrateDown(ctx, m.driver.UnwrapExecutor(tx), direction, opts, true)
+		return m.migrateDown(ctx, exec, direction, opts, true)
 	case DirectionUp:
-		return m.migrateUp(ctx, m.driver.UnwrapExecutor(tx), direction, opts, true)
+		return m.migrateUp(ctx, exec, direction, opts, true)
 	}
 
 	panic("invalid direction: " + direction)
