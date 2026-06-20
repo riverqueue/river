@@ -84,6 +84,9 @@ type producerConfig struct {
 
 	HookLookupByJob        *hooklookup.JobHookLookup
 	HookLookupGlobal       hooklookup.HookLookupInterface
+	JobStuckHandler        JobStuckHandler
+	JobStuckCount          *atomic.Int32
+	JobStuckThreshold      time.Duration
 	JobTimeout             time.Duration
 	MaxWorkers             int
 	MiddlewareLookupGlobal middlewarelookup.MiddlewareLookupInterface
@@ -126,6 +129,15 @@ func (c *producerConfig) mustValidate() *producerConfig {
 	}
 	if c.FetchPollInterval <= 0 {
 		panic("producerConfig.FetchPollInterval must be greater than zero")
+	}
+	if c.JobStuckCount == nil {
+		c.JobStuckCount = &atomic.Int32{}
+	}
+	if c.JobStuckThreshold == 0 {
+		c.JobStuckThreshold = JobStuckThresholdDefault
+	}
+	if c.JobStuckThreshold < 0 {
+		panic("producerConfig.JobStuckThreshold must be greater or equal to zero")
 	}
 	if c.JobTimeout < -1 {
 		panic("producerConfig.JobTimeout must be greater or equal to zero")
@@ -729,10 +741,42 @@ func (p *producer) addActiveJob(id int64, executor *jobexecutor.JobExecutor) {
 }
 
 func (p *producer) removeActiveJob(job *rivertype.JobRow) {
+	executor := p.activeJobs[job.ID]
 	delete(p.activeJobs, job.ID)
-	p.numJobsActive.Add(-1)
+	if executor == nil || executor.TryCloseSlot() {
+		p.numJobsActive.Add(-1)
+	}
 	p.numJobsRan.Add(1)
 	p.state.JobFinish(job)
+}
+
+func (p *producer) handleWorkerStuck(ctx context.Context, executor *jobexecutor.JobExecutor, job *rivertype.JobRow) {
+	p.numJobsStuck.Add(1)
+	totalStuckJobs := int(p.config.JobStuckCount.Add(1))
+
+	if p.config.JobStuckHandler == nil {
+		return
+	}
+
+	result := p.config.JobStuckHandler(ctx, JobStuckHandlerParams{
+		ID:             job.ID,
+		Kind:           job.Kind,
+		Queue:          job.Queue,
+		TotalStuckJobs: totalStuckJobs,
+	})
+	if !result.AddWorkerSlot || !executor.TryCloseSlot() {
+		return
+	}
+
+	p.numJobsActive.Add(-1)
+	if p.fetchLimiter != nil {
+		p.fetchLimiter.Call()
+	}
+}
+
+func (p *producer) handleWorkerUnstuck() {
+	p.numJobsStuck.Add(-1)
+	p.config.JobStuckCount.Add(-1)
 }
 
 func (p *producer) maybeCancelJob(ctx context.Context, id int64) {
@@ -822,7 +866,8 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 		// jobCancel will always be called by the executor to prevent leaks.
 		jobCtx, jobCancel := context.WithCancelCause(workCtx)
 
-		executor := baseservice.Init(&p.Archetype, &jobexecutor.JobExecutor{
+		var executor *jobexecutor.JobExecutor
+		executor = baseservice.Init(&p.Archetype, &jobexecutor.JobExecutor{
 			CancelFunc:               jobCancel,
 			ClientJobTimeout:         p.jobTimeout,
 			ClientRetryPolicy:        p.retryPolicy,
@@ -835,15 +880,16 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 			JobRow:                   job,
 			ProducerCallbacks: struct {
 				JobDone func(jobRow *rivertype.JobRow)
-				Stuck   func()
+				Stuck   func(ctx context.Context, jobRow *rivertype.JobRow)
 				Unstuck func()
 			}{
 				JobDone: p.handleWorkerDone,
-				Stuck:   func() { p.numJobsStuck.Add(1) },
-				Unstuck: func() { p.numJobsStuck.Add(-1) },
+				Stuck:   func(ctx context.Context, jobRow *rivertype.JobRow) { p.handleWorkerStuck(ctx, executor, jobRow) },
+				Unstuck: p.handleWorkerUnstuck,
 			},
-			SchedulerInterval: p.config.SchedulerInterval,
-			WorkUnit:          workUnit,
+			SchedulerInterval:      p.config.SchedulerInterval,
+			StuckThresholdOverride: p.config.JobStuckThreshold,
+			WorkUnit:               workUnit,
 		})
 		p.addActiveJob(job.ID, executor)
 

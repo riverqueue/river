@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -116,7 +117,7 @@ type JobExecutor struct {
 	MiddlewareLookupGlobal   middlewarelookup.MiddlewareLookupInterface
 	ProducerCallbacks        struct {
 		JobDone func(jobRow *rivertype.JobRow)
-		Stuck   func()
+		Stuck   func(ctx context.Context, jobRow *rivertype.JobRow)
 		Unstuck func()
 	}
 	SchedulerInterval      time.Duration
@@ -125,8 +126,17 @@ type JobExecutor struct {
 	WorkUnit               workunit.WorkUnit
 
 	// Meant to be used from within the job executor only.
-	start time.Time
-	stats *jobstats.JobStatistics // initialized by the executor, and handed off to completer
+	slotClosed atomic.Bool
+	start      time.Time
+	stats      *jobstats.JobStatistics // initialized by the executor, and handed off to completer
+}
+
+// TryCloseSlot marks this executor's producer slot as closed. A closed slot
+// means the producer has already stopped counting this executor against its
+// active worker capacity, although the executor goroutine may still be running.
+// It returns true only the first time the slot is closed.
+func (e *JobExecutor) TryCloseSlot() bool {
+	return e.slotClosed.CompareAndSwap(false, true)
 }
 
 func (e *JobExecutor) Cancel(ctx context.Context) {
@@ -262,9 +272,8 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 // their job timeout (plus a small margin) and don't appear to be responding to
 // context cancellation (unfortunately, quite an easy error to make in Go).
 //
-// Currently we don't do anything if we notice a job is stuck.  Knowing about
-// stuck jobs is just used for informational purposes in the producer in
-// generating periodic stats.
+// Producers use stuck-job notifications for periodic stats and optional user
+// handlers.
 func (e *JobExecutor) watchStuck(ctx context.Context, jobTimeout time.Duration) context.CancelFunc {
 	// We add a WithoutCancel here so that this inner goroutine becomes
 	// immune to all context cancellations _except_ the one where it's
@@ -281,7 +290,7 @@ func (e *JobExecutor) watchStuck(ctx context.Context, jobTimeout time.Duration) 
 			// context cancelled as we leave JobExecutor.execute
 
 		case <-time.After(jobTimeout + cmp.Or(e.StuckThresholdOverride, stuckThresholdDefault)):
-			e.ProducerCallbacks.Stuck()
+			e.ProducerCallbacks.Stuck(ctx, e.JobRow)
 
 			e.Logger.WarnContext(ctx, e.Name+": Job appears to be stuck",
 				slog.Int64("job_id", e.JobRow.ID),
