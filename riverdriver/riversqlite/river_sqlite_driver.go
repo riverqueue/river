@@ -1,6 +1,5 @@
 // Package riversqlite provides a River driver implementation for SQLite. It's
-// also tested against libSQL (a SQLite fork), and that should continue to work
-// as long they keep to their commitment in maintaining API compatibility.
+// also tested against libSQL (a SQLite fork) and local Turso databases.
 //
 // This driver is currently in early testing. It's exercised reasonably
 // thoroughly in the test suite, but has minimal real world use as of yet.
@@ -19,7 +18,6 @@
 package riversqlite
 
 import (
-	"cmp"
 	"context"
 	"database/sql"
 	"embed"
@@ -65,7 +63,7 @@ type Driver struct {
 }
 
 // New returns a new SQLite driver for use with River. It also works with libSQL
-// (a SQLite fork).
+// (a SQLite fork) and local Turso databases.
 //
 // It takes an sql.DB to use for use with River. The pool should already be
 // configured to use the schema specified in the client's Schema field. The pool
@@ -181,17 +179,33 @@ func (e *Executor) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
 }
 
 func (e *Executor) ColumnExists(ctx context.Context, params *riverdriver.ColumnExistsParams) (bool, error) {
-	// Unfortunately this doesn't work in sqlc because of the "table value"
-	// pragma isn't supported. This seems like it should be fixable, but for now
-	// run the raw SQL to accomplish it.
-	const sql = `
+	// Unfortunately this doesn't work in sqlc because table-valued pragmas
+	// aren't supported. This seems like it should be fixable, but for now run
+	// raw SQL to accomplish it.
+	const sqlMain = `
+	SELECT EXISTS (
+		SELECT 1
+		FROM pragma_table_info(?)
+		WHERE name = ?
+	)`
+	const sqlSchema = `
 	SELECT EXISTS (
 		SELECT 1
 		FROM pragma_table_info
 		WHERE schema = ? AND arg = ? AND name = ?
 	)`
+
+	var (
+		sql  = sqlMain
+		args = []any{params.Table, params.Column}
+	)
+	if params.Schema != "" && params.Schema != "main" {
+		sql = sqlSchema
+		args = []any{params.Schema, params.Table, params.Column}
+	}
+
 	var exists int64
-	if err := e.dbtx.QueryRowContext(ctx, sql, cmp.Or(params.Schema, "main"), params.Table, params.Column).Scan(&exists); err != nil {
+	if err := e.dbtx.QueryRowContext(ctx, sql, args...).Scan(&exists); err != nil {
 		return false, interpretError(err)
 	}
 
@@ -450,14 +464,14 @@ func (e *Executor) JobDeleteMany(ctx context.Context, params *riverdriver.JobDel
 //
 //nolint:gochecknoglobals
 var jobGetAvailableAttemptedBySQL = strings.TrimSpace(`
-    jsonb_insert(
+    jsonb(json_insert(
         (
             SELECT jsonb_group_array(value)
             FROM (
                 SELECT *
                 FROM (
                     SELECT *
-                    FROM json_each(attempted_by)
+                    FROM json_each(coalesce(attempted_by, jsonb('[]')))
                     ORDER BY key DESC
                     LIMIT @max_attempted_by - 1
                 )
@@ -466,7 +480,7 @@ var jobGetAvailableAttemptedBySQL = strings.TrimSpace(`
         ),
         '$[#]',
         @attempted_by
-    )
+    ))
 `)
 
 func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
@@ -1172,7 +1186,7 @@ func (e *Executor) QueueCreateOrSetUpdatedAt(ctx context.Context, params *riverd
 func (e *Executor) QueueDeleteExpired(ctx context.Context, params *riverdriver.QueueDeleteExpiredParams) ([]string, error) {
 	queues, err := dbsqlc.New().QueueDeleteExpired(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueDeleteExpiredParams{
 		Max:              int64(params.Max),
-		UpdatedAtHorizon: params.UpdatedAtHorizon.UTC(),
+		UpdatedAtHorizon: timeString(params.UpdatedAtHorizon),
 	})
 	if err != nil {
 		return nil, interpretError(err)

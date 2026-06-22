@@ -487,7 +487,7 @@ LIMIT @max;
 -- name: JobRescue :exec
 UPDATE /* TEMPLATE: schema */river_job
 SET
-    errors = jsonb_insert(coalesce(errors, jsonb('[]')), '$[#]', jsonb(@error)),
+    errors = jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(@error))),
     finalized_at = cast(sqlc.narg('finalized_at') as text),
     scheduled_at = @scheduled_at,
     metadata = jsonb_set(
@@ -573,7 +573,7 @@ RETURNING *;
 
 -- name: JobScheduleSetDiscarded :many
 UPDATE /* TEMPLATE: schema */river_job
-SET metadata = jsonb_patch(metadata, jsonb('{"unique_key_conflict": "scheduler_discarded"}')),
+SET metadata = jsonb_patch(json(metadata), json('{"unique_key_conflict": "scheduler_discarded"}')),
     finalized_at = coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')),
     state = 'discarded'
 WHERE id IN (sqlc.slice('id'))
@@ -583,7 +583,7 @@ RETURNING *;
 -- for JobSetStateIfRunning to use when falling back to non-running jobs.
 -- name: JobSetMetadataIfNotRunning :one
 UPDATE /* TEMPLATE: schema */river_job
-SET metadata = jsonb_patch(metadata, jsonb(@metadata_updates))
+SET metadata = jsonb_patch(json(metadata), json(@metadata_updates))
 WHERE id = @id
     AND state != 'running'
 RETURNING *;
@@ -601,7 +601,7 @@ SET
                         THEN @attempt
                         ELSE attempt END,
     errors       = CASE WHEN cast(@errors_do_update AS boolean)
-                        THEN jsonb_insert(coalesce(errors, jsonb('[]')), '$[#]', jsonb(@error))
+                        THEN jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(@error)))
                         ELSE errors END,
     finalized_at = CASE WHEN /* should_cancel */((@state = 'retryable' OR @state = 'scheduled') AND (metadata -> 'cancel_attempted_at') iS NOT NULL)
                         THEN coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec'))
@@ -609,7 +609,7 @@ SET
                         THEN @finalized_at
                         ELSE finalized_at END,
     metadata     = CASE WHEN cast(@metadata_do_merge AS boolean)
-                        THEN jsonb_patch(metadata, jsonb(@metadata_updates))
+                        THEN jsonb_patch(json(metadata), json(@metadata_updates))
                         ELSE metadata END,
     scheduled_at = CASE WHEN /* NOT should_cancel */(cast(@state AS text) <> 'retryable' AND @state <> 'scheduled' OR (metadata -> 'cancel_attempted_at') IS NULL) AND cast(@scheduled_at_do_update AS boolean)
                         THEN @scheduled_at
@@ -624,7 +624,7 @@ RETURNING *;
 -- name: JobUpdate :one
 UPDATE /* TEMPLATE: schema */river_job
 SET
-    metadata = CASE WHEN cast(@metadata_do_merge AS boolean) THEN jsonb_patch(metadata, jsonb(@metadata)) ELSE metadata END
+    metadata = CASE WHEN cast(@metadata_do_merge AS boolean) THEN jsonb_patch(json(metadata), json(@metadata)) ELSE metadata END
 WHERE id = @id
 RETURNING *;
 

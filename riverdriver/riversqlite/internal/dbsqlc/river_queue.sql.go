@@ -8,7 +8,6 @@ package dbsqlc
 import (
 	"context"
 	"strings"
-	"time"
 )
 
 const queueCreateOrSetUpdatedAt = `-- name: QueueCreateOrSetUpdatedAt :one
@@ -62,7 +61,7 @@ DELETE FROM /* TEMPLATE: schema */river_queue
 WHERE name IN (
     SELECT name
     FROM /* TEMPLATE: schema */river_queue
-    WHERE river_queue.updated_at < ?1
+    WHERE river_queue.updated_at < cast(?1 AS text)
     ORDER BY name ASC
     LIMIT ?2
 )
@@ -70,7 +69,7 @@ RETURNING name, created_at, json(metadata), paused_at, updated_at
 `
 
 type QueueDeleteExpiredParams struct {
-	UpdatedAtHorizon time.Time
+	UpdatedAtHorizon string
 	Max              int64
 }
 

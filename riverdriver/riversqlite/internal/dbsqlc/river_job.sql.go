@@ -1243,7 +1243,7 @@ func (q *Queries) JobList(ctx context.Context, db DBTX, max int64) ([]*RiverJob,
 const jobRescue = `-- name: JobRescue :exec
 UPDATE /* TEMPLATE: schema */river_job
 SET
-    errors = jsonb_insert(coalesce(errors, jsonb('[]')), '$[#]', jsonb(?1)),
+    errors = jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(?1))),
     finalized_at = cast(?2 as text),
     scheduled_at = ?3,
     metadata = jsonb_set(
@@ -1524,7 +1524,7 @@ func (q *Queries) JobScheduleSetAvailable(ctx context.Context, db DBTX, id []int
 
 const jobScheduleSetDiscarded = `-- name: JobScheduleSetDiscarded :many
 UPDATE /* TEMPLATE: schema */river_job
-SET metadata = jsonb_patch(metadata, jsonb('{"unique_key_conflict": "scheduler_discarded"}')),
+SET metadata = jsonb_patch(json(metadata), json('{"unique_key_conflict": "scheduler_discarded"}')),
     finalized_at = coalesce(cast(?1 AS text), datetime('now', 'subsec')),
     state = 'discarded'
 WHERE id IN (/*SLICE:id*/?)
@@ -1591,7 +1591,7 @@ func (q *Queries) JobScheduleSetDiscarded(ctx context.Context, db DBTX, arg *Job
 
 const jobSetMetadataIfNotRunning = `-- name: JobSetMetadataIfNotRunning :one
 UPDATE /* TEMPLATE: schema */river_job
-SET metadata = jsonb_patch(metadata, jsonb(?1))
+SET metadata = jsonb_patch(json(metadata), json(?1))
 WHERE id = ?2
     AND state != 'running'
 RETURNING id, json(args), attempt, attempted_at, json(attempted_by), created_at, json(errors), finalized_at, kind, max_attempts, json(metadata), priority, queue, state, scheduled_at, json(tags), unique_key, unique_states
@@ -1640,7 +1640,7 @@ SET
                         THEN ?3
                         ELSE attempt END,
     errors       = CASE WHEN cast(?4 AS boolean)
-                        THEN jsonb_insert(coalesce(errors, jsonb('[]')), '$[#]', jsonb(?5))
+                        THEN jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(?5)))
                         ELSE errors END,
     finalized_at = CASE WHEN /* should_cancel */((?1 = 'retryable' OR ?1 = 'scheduled') AND (metadata -> 'cancel_attempted_at') iS NOT NULL)
                         THEN coalesce(cast(?6 AS text), datetime('now', 'subsec'))
@@ -1648,7 +1648,7 @@ SET
                         THEN ?8
                         ELSE finalized_at END,
     metadata     = CASE WHEN cast(?9 AS boolean)
-                        THEN jsonb_patch(metadata, jsonb(?10))
+                        THEN jsonb_patch(json(metadata), json(?10))
                         ELSE metadata END,
     scheduled_at = CASE WHEN /* NOT should_cancel */(cast(?1 AS text) <> 'retryable' AND ?1 <> 'scheduled' OR (metadata -> 'cancel_attempted_at') IS NULL) AND cast(?11 AS boolean)
                         THEN ?12
@@ -1723,7 +1723,7 @@ func (q *Queries) JobSetStateIfRunning(ctx context.Context, db DBTX, arg *JobSet
 const jobUpdate = `-- name: JobUpdate :one
 UPDATE /* TEMPLATE: schema */river_job
 SET
-    metadata = CASE WHEN cast(?1 AS boolean) THEN jsonb_patch(metadata, jsonb(?2)) ELSE metadata END
+    metadata = CASE WHEN cast(?1 AS boolean) THEN jsonb_patch(json(metadata), json(?2)) ELSE metadata END
 WHERE id = ?3
 RETURNING id, json(args), attempt, attempted_at, json(attempted_by), created_at, json(errors), finalized_at, kind, max_attempts, json(metadata), priority, queue, state, scheduled_at, json(tags), unique_key, unique_states
 `

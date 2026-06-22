@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
 	_ "modernc.org/sqlite"
+	_ "turso.tech/database/tursogo"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdbtest"
@@ -123,6 +124,28 @@ func TestClientWithDriverRiverSQLiteModernC(t *testing.T) {
 				schema = riverdbtest.TestSchema(ctx, t, driver, &riverdbtest.TestSchemaOpts{
 					ProcurePool: func(ctx context.Context, schema string) (any, string) {
 						return riversharedtest.DBPoolSQLite(ctx, t, schema), "" // could also be `main` instead of empty string
+					},
+				})
+			)
+			return driver, schema
+		},
+	)
+}
+
+func TestClientWithDriverRiverTurso(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	ExerciseClient(ctx, t,
+		func(ctx context.Context, t *testing.T) (riverdriver.Driver[*sql.Tx], string) {
+			t.Helper()
+
+			var (
+				driver = riversqlite.New(nil)
+				schema = riverdbtest.TestSchema(ctx, t, driver, &riverdbtest.TestSchemaOpts{
+					ProcurePool: func(ctx context.Context, schema string) (any, string) {
+						return riversharedtest.DBPoolTurso(ctx, t, schema), "" // could also be `main` instead of empty string
 					},
 				})
 			)

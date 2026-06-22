@@ -29,7 +29,7 @@ DELETE FROM /* TEMPLATE: schema */river_queue
 WHERE name IN (
     SELECT name
     FROM /* TEMPLATE: schema */river_queue
-    WHERE river_queue.updated_at < @updated_at_horizon
+    WHERE river_queue.updated_at < cast(@updated_at_horizon AS text)
     ORDER BY name ASC
     LIMIT @max
 )
