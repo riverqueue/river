@@ -181,15 +181,16 @@ type producer struct {
 	// Jobs which are currently being worked. Only used by main goroutine.
 	activeJobs map[int64]*jobexecutor.JobExecutor
 
-	completer    jobcompleter.JobCompleter
-	config       *producerConfig
-	id           atomic.Int64 // atomic because it's written at startup and read during shutdown
-	exec         riverdriver.Executor
-	errorHandler jobexecutor.ErrorHandler
-	fetchLimiter *chanutil.DebouncedChan
-	state        riverpilot.ProducerState
-	pilot        riverpilot.Pilot
-	workers      *Workers
+	completer       jobcompleter.JobCompleter
+	config          *producerConfig
+	id              atomic.Int64 // atomic because it's written at startup and read during shutdown
+	exec            riverdriver.Executor
+	errorHandler    jobexecutor.ErrorHandler
+	fetchLimiter    *chanutil.DebouncedChan
+	metricEmitHooks []rivertype.HookMetricEmit // memoized hooks of type HookMetricEmit for reuse in dispatchWork
+	state           riverpilot.ProducerState
+	pilot           riverpilot.Pilot
+	workers         *Workers
 
 	// Receives job IDs to cancel. Written by notifier goroutine, only read from
 	// main goroutine.
@@ -233,7 +234,7 @@ func newProducer(archetype *baseservice.Archetype, exec riverdriver.Executor, pi
 		errorHandler = &errorHandlerAdapter{config.ErrorHandler}
 	}
 
-	return baseservice.Init(archetype, &producer{
+	producer := baseservice.Init(archetype, &producer{
 		activeJobs:     make(map[int64]*jobexecutor.JobExecutor),
 		cancelCh:       make(chan int64, 1000),
 		completer:      config.Completer,
@@ -247,6 +248,10 @@ func newProducer(archetype *baseservice.Archetype, exec riverdriver.Executor, pi
 		retryPolicy:    config.RetryPolicy,
 		workers:        config.Workers,
 	})
+
+	producer.metricEmitHooks = producer.metricEmitHooksFromLookup()
+
+	return producer
 }
 
 // Start starts the producer. It backgrounds a goroutine which is stopped when
@@ -743,7 +748,33 @@ func (p *producer) maybeCancelJob(ctx context.Context, id int64) {
 	executor.Cancel(ctx)
 }
 
+func (p *producer) metricEmitHooksFromLookup() []rivertype.HookMetricEmit {
+	hookLookup := p.config.HookLookupGlobal
+	if hookLookup == nil {
+		return nil
+	}
+
+	hooks := hookLookup.ByHookKind(hooklookup.HookKindMetricEmit)
+	if len(hooks) < 1 {
+		return nil
+	}
+
+	metricEmitHooks := make([]rivertype.HookMetricEmit, len(hooks))
+	for i, hook := range hooks {
+		metricEmitHooks[i] = hook.(rivertype.HookMetricEmit) //nolint:forcetypeassert
+	}
+
+	return metricEmitHooks
+}
+
 func (p *producer) dispatchWork(workCtx context.Context, count int, fetchResultCh chan<- producerFetchResult) {
+	// When a queue is paused, innerFetchLoop dispatches with count zero so it can
+	// continue servicing state changes without attempting to lock jobs or emit metrics.
+	if count <= 0 {
+		fetchResultCh <- producerFetchResult{}
+		return
+	}
+
 	// This intentionally removes any deadlines or cancellation from the parent
 	// context because we don't want it to get cancelled if the producer is asked
 	// to shut down. In that situation, we want to finish fetching any jobs we are
@@ -756,6 +787,11 @@ func (p *producer) dispatchWork(workCtx context.Context, count int, fetchResultC
 	// Maximum size of the `attempted_by` array on each job row. This maximum is
 	// rarely hit, but exists to protect against degenerate cases.
 	const maxAttemptedBy = 100
+
+	var startedAt time.Time
+	if len(p.metricEmitHooks) > 0 {
+		startedAt = time.Now()
+	}
 
 	jobs, err := p.pilot.JobGetAvailable(ctx, p.exec, p.state, &riverdriver.JobGetAvailableParams{
 		ClientID:       p.config.ClientID,
@@ -771,7 +807,28 @@ func (p *producer) dispatchWork(workCtx context.Context, count int, fetchResultC
 		return
 	}
 
+	if len(p.metricEmitHooks) > 0 {
+		p.emitMetric(ctx, &rivertype.HookMetricEmitParams{
+			Metric: &rivertype.JobGetAvailableDurationMetric{
+				Duration: time.Since(startedAt),
+				Queue:    p.config.Queue,
+			},
+		})
+		p.emitMetric(ctx, &rivertype.HookMetricEmitParams{
+			Metric: &rivertype.JobGetAvailableCountMetric{
+				Count: len(jobs),
+				Queue: p.config.Queue,
+			},
+		})
+	}
+
 	fetchResultCh <- producerFetchResult{jobs: jobs}
+}
+
+func (p *producer) emitMetric(ctx context.Context, params *rivertype.HookMetricEmitParams) {
+	for _, hook := range p.metricEmitHooks {
+		hook.MetricEmit(ctx, params)
+	}
 }
 
 // Periodically logs an informational log line giving some insight into the

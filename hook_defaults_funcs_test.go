@@ -11,9 +11,15 @@ var (
 	_ rivertype.Hook            = HookInsertBeginFunc(func(ctx context.Context, params *rivertype.JobInsertParams) error { return nil })
 	_ rivertype.HookInsertBegin = HookInsertBeginFunc(func(ctx context.Context, params *rivertype.JobInsertParams) error { return nil })
 
+	_ rivertype.Hook           = HookMetricEmitFunc(func(ctx context.Context, params *rivertype.HookMetricEmitParams) {})
+	_ rivertype.HookMetricEmit = HookMetricEmitFunc(func(ctx context.Context, params *rivertype.HookMetricEmitParams) {})
+
 	_ rivertype.Hook                  = HookPeriodicJobsStartFunc(func(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error { return nil })
 	_ rivertype.HookPeriodicJobsStart = HookPeriodicJobsStartFunc(func(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error { return nil })
 
 	_ rivertype.Hook          = HookWorkBeginFunc(func(ctx context.Context, job *rivertype.JobRow) error { return nil })
 	_ rivertype.HookWorkBegin = HookWorkBeginFunc(func(ctx context.Context, job *rivertype.JobRow) error { return nil })
+
+	_ rivertype.Hook        = HookWorkEndFunc(func(ctx context.Context, job *rivertype.JobRow, err error) error { return err })
+	_ rivertype.HookWorkEnd = HookWorkEndFunc(func(ctx context.Context, job *rivertype.JobRow, err error) error { return err })
 )
