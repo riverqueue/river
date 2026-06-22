@@ -9,7 +9,10 @@ use (
 	./riverdriver/riverdatabasesql
 	./riverdriver/riverdrivertest
 	./riverdriver/riverpgxv5
+	./riverdriver/rivermysql
 	./riverdriver/riversqlite
 	./rivershared
 	./rivertype
 )
+
+replace github.com/riverqueue/river/riverdriver/rivermysql v0.35.0 => ./riverdriver/rivermysql

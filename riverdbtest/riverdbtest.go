@@ -471,7 +471,8 @@ type TestTxOpts struct {
 	// run using TestSchema. This is meant for environments where parallelism
 	// doesn't work as well, like SQLite, which will emit "busy" errors when
 	// multiple clients try to share a schema, even when they're in separate
-	// transactions.
+	// transactions. Also applies to MySQL, where InnoDB deadlocks are common
+	// when multiple transactions are sharing a database.
 	DisableSchemaSharing bool
 
 	// IsTestTxHelper should be set to true for if TestTx is being called from

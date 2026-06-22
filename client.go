@@ -2385,7 +2385,7 @@ type JobListResult struct {
 	LastCursor *JobListCursor
 }
 
-var errJobListParamsMetadataNotSupportedSQLite = errors.New("JobListParams.Metadata is not supported on SQLite")
+var errJobListParamsMetadataNotSupportedMySQLOrSQLite = errors.New("JobListParams.Metadata is not supported on MySQL or SQLite")
 
 // JobList returns a paginated list of jobs matching the provided filters. The
 // provided context is used for the underlying Postgres query and can be used to
@@ -2406,8 +2406,8 @@ func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) (*JobL
 	}
 	params.schema = c.config.Schema
 
-	if c.driver.DatabaseName() == riverdriver.DatabaseNameSQLite && params.metadataCalled {
-		return nil, errJobListParamsMetadataNotSupportedSQLite
+	if (c.driver.DatabaseName() == riverdriver.DatabaseNameMySQL || c.driver.DatabaseName() == riverdriver.DatabaseNameSQLite) && params.metadataCalled {
+		return nil, errJobListParamsMetadataNotSupportedMySQLOrSQLite
 	}
 
 	dbParams, err := params.toDBParams()
@@ -2447,8 +2447,8 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 	}
 	params.schema = c.config.Schema
 
-	if c.driver.DatabaseName() == riverdriver.DatabaseNameSQLite && params.metadataCalled {
-		return nil, errJobListParamsMetadataNotSupportedSQLite
+	if (c.driver.DatabaseName() == riverdriver.DatabaseNameMySQL || c.driver.DatabaseName() == riverdriver.DatabaseNameSQLite) && params.metadataCalled {
+		return nil, errJobListParamsMetadataNotSupportedMySQLOrSQLite
 	}
 
 	dbParams, err := params.toDBParams()
