@@ -38,16 +38,6 @@ func TestStandardPilot_JobGetAvailable(t *testing.T) {
 		}
 	}
 
-	t.Run("ReturnsNilWhenMaxToLockIsZero", func(t *testing.T) {
-		t.Parallel()
-
-		bundle := setup(t)
-
-		res, err := bundle.pilot.JobGetAvailable(context.Background(), bundle.exec, nil, &riverdriver.JobGetAvailableParams{})
-		require.NoError(t, err)
-		require.Nil(t, res)
-	})
-
 	t.Run("PreservesParentCancellation", func(t *testing.T) {
 		t.Parallel()
 
@@ -65,5 +55,15 @@ func TestStandardPilot_JobGetAvailable(t *testing.T) {
 			MaxToLock: 1,
 		})
 		require.ErrorIs(t, err, parentErr)
+	})
+
+	t.Run("ReturnsNilWhenMaxToLockIsZero", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		res, err := bundle.pilot.JobGetAvailable(context.Background(), bundle.exec, nil, &riverdriver.JobGetAvailableParams{})
+		require.NoError(t, err)
+		require.Nil(t, res)
 	})
 }
