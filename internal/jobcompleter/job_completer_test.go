@@ -459,7 +459,8 @@ func TestBatchCompleter(t *testing.T) {
 		t.Parallel()
 
 		completer, bundle := setup(t)
-		completer.maxBacklog = 10 // set to something artificially low
+		completer.backlogWaitThreshold = 10 // set to something artificially low
+		completer.completionMaxSize = 10
 		startCompleter(ctx, t, completer)
 
 		jobUpdateChan := make(chan CompleterJobUpdated, 100)
@@ -485,6 +486,195 @@ func TestBatchCompleter(t *testing.T) {
 		for range jobUpdateChan {
 		}
 	})
+}
+
+func TestBatchCompleter_BackpressureBeforeMaxBacklog(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	execMock := &partialExecutorMock{}
+	execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+		rows := make([]*rivertype.JobRow, len(params.ID))
+		for i := range params.ID {
+			rows[i] = &rivertype.JobRow{
+				ID:    params.ID[i],
+				State: params.State[i],
+			}
+		}
+		return rows, nil
+	}
+
+	subscribeCh := make(chan []CompleterJobUpdated, 1)
+	completer := NewBatchCompleter(riversharedtest.BaseServiceArchetype(t), "", execMock, &riverpilot.StandardPilot{}, subscribeCh)
+	completer.backlogWaitThreshold = 2
+	completer.completionMaxSize = 2
+	completer.disableSleep = true
+	completer.maxBacklog = 100
+
+	require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(1, time.Now(), nil)))
+	require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(2, time.Now(), nil)))
+	require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(3, time.Now(), nil)))
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(4, time.Now(), nil))
+	}()
+
+	require.Eventually(t, func() bool {
+		completer.setStateParamsMu.RLock()
+		defer completer.setStateParamsMu.RUnlock()
+		return completer.waitOnBacklogWaiting
+	}, riversharedtest.WaitTimeout(), 10*time.Millisecond)
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+		require.FailNow(t, "expected completion to wait for backlog pressure to clear")
+	default:
+	}
+
+	require.NoError(t, completer.handleBatch(ctx))
+	require.NoError(t, riversharedtest.WaitOrTimeout(t, errCh))
+}
+
+func TestBatchCompleter_BackpressureReleasedAfterNonRetryableCompletionFailure(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	execMock := &partialExecutorMock{}
+	execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+		return nil, context.Canceled
+	}
+
+	subscribeCh := make(chan []CompleterJobUpdated, 1)
+	completer := NewBatchCompleter(riversharedtest.BaseServiceArchetype(t), "", execMock, &riverpilot.StandardPilot{}, subscribeCh)
+	completer.backlogWaitThreshold = 2
+	completer.disableSleep = true
+	completer.maxBacklog = 100
+
+	require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(1, time.Now(), nil)))
+	require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(2, time.Now(), nil)))
+	require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(3, time.Now(), nil)))
+
+	require.Eventually(t, func() bool {
+		completer.setStateParamsMu.RLock()
+		defer completer.setStateParamsMu.RUnlock()
+		return completer.waitOnBacklogWaiting
+	}, riversharedtest.WaitTimeout(), 10*time.Millisecond)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(4, time.Now(), nil))
+	}()
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+		require.FailNow(t, "expected completion to wait for backlog pressure to clear")
+	default:
+	}
+
+	require.ErrorIs(t, completer.handleBatch(ctx), context.Canceled)
+	require.NoError(t, riversharedtest.WaitOrTimeout(t, errCh))
+}
+
+func TestBatchCompleter_BackpressureRequeuesBatchAfterCompletionFailure(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	expectedErr := errors.New("error from batch completion")
+	var numCalls int
+	execMock := &partialExecutorMock{}
+	execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+		numCalls++
+		if numCalls <= numRetries {
+			return nil, expectedErr
+		}
+
+		rows := make([]*rivertype.JobRow, len(params.ID))
+		for i := range params.ID {
+			rows[i] = &rivertype.JobRow{
+				ID:    params.ID[i],
+				State: params.State[i],
+			}
+		}
+		return rows, nil
+	}
+
+	subscribeCh := make(chan []CompleterJobUpdated, 1)
+	completer := NewBatchCompleter(riversharedtest.BaseServiceArchetype(t), "", execMock, &riverpilot.StandardPilot{}, subscribeCh)
+	completer.backlogWaitThreshold = 2
+	completer.completionMaxSize = 10
+	completer.disableSleep = true
+	completer.maxBacklog = 100
+
+	require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(1, time.Now(), nil)))
+	require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(2, time.Now(), nil)))
+	require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(3, time.Now(), nil)))
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(4, time.Now(), nil))
+	}()
+
+	require.Eventually(t, func() bool {
+		completer.setStateParamsMu.RLock()
+		defer completer.setStateParamsMu.RUnlock()
+		return completer.waitOnBacklogWaiting
+	}, riversharedtest.WaitTimeout(), 10*time.Millisecond)
+
+	require.ErrorIs(t, completer.handleBatch(ctx), expectedErr)
+
+	completer.setStateParamsMu.RLock()
+	require.Len(t, completer.setStateParams, 3)
+	completer.setStateParamsMu.RUnlock()
+
+	require.NoError(t, completer.handleBatch(ctx))
+	require.NoError(t, riversharedtest.WaitOrTimeout(t, errCh))
+}
+
+func TestBatchCompleter_NonRetryableCompletionFailureDoesNotRequeueBatch(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	for _, tt := range []struct {
+		err  error
+		name string
+	}{
+		{err: context.Canceled, name: "ContextCanceled"},
+		{err: riverdriver.ErrClosedPool, name: "ErrClosedPool"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var numCalls int
+			execMock := &partialExecutorMock{}
+			execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+				numCalls++
+				return nil, tt.err
+			}
+
+			subscribeCh := make(chan []CompleterJobUpdated, 1)
+			completer := NewBatchCompleter(riversharedtest.BaseServiceArchetype(t), "", execMock, &riverpilot.StandardPilot{}, subscribeCh)
+			completer.disableSleep = true
+
+			require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(1, time.Now(), nil)))
+			require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(2, time.Now(), nil)))
+			require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(3, time.Now(), nil)))
+
+			require.ErrorIs(t, completer.handleBatch(ctx), tt.err)
+			require.Equal(t, 1, numCalls)
+
+			completer.setStateParamsMu.RLock()
+			require.Empty(t, completer.setStateParams)
+			require.Empty(t, completer.setStateStartTimes)
+			completer.setStateParamsMu.RUnlock()
+		})
+	}
 }
 
 func TestBatchCompleter_JobStatsSnapshotsPerUpdate(t *testing.T) {
