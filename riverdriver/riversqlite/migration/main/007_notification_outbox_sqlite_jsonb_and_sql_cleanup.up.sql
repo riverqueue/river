@@ -135,7 +135,7 @@ CREATE TABLE /* TEMPLATE: schema */river_queue (
     created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
     metadata blob NOT NULL DEFAULT (jsonb('{}')),
     paused_at timestamp,
-    updated_at timestamp NOT NULL
+    updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 INSERT INTO /* TEMPLATE: schema */river_queue (
@@ -259,19 +259,3 @@ SET max_attempts = max_attempts_old;
 
 ALTER TABLE /* TEMPLATE: schema */river_job
     DROP COLUMN max_attempts_old;
-
---
--- Changes `river_queue.updated_at` to have a default of `CURRENT_TIMESTAMP`.
---
-
-ALTER TABLE /* TEMPLATE: schema */river_queue
-    RENAME COLUMN updated_at TO updated_at_old;
-
-ALTER TABLE /* TEMPLATE: schema */river_queue
-    ADD COLUMN updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP;
-
-UPDATE /* TEMPLATE: schema */river_queue
-SET updated_at = updated_at_old;
-
-ALTER TABLE /* TEMPLATE: schema */river_queue
-    DROP COLUMN updated_at_old;
