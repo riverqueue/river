@@ -195,11 +195,11 @@ func TestJobExecutor_Execute(t *testing.T) {
 			MiddlewareLookupGlobal:   middlewarelookup.NewMiddlewareLookup(nil),
 			ProducerCallbacks: struct {
 				JobDone func(jobRow *rivertype.JobRow)
-				Stuck   func()
+				Stuck   func(ctx context.Context, jobRow *rivertype.JobRow)
 				Unstuck func()
 			}{
 				JobDone: func(jobRow *rivertype.JobRow) {},
-				Stuck:   func() {},
+				Stuck:   func(ctx context.Context, jobRow *rivertype.JobRow) {},
 				Unstuck: func() {},
 			},
 			SchedulerInterval: riverinternaltest.SchedulerShortInterval,
@@ -720,7 +720,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 			informProducerStuckReceived   = make(chan struct{})
 			informProducerUnstuckReceived = make(chan struct{})
 		)
-		executor.ProducerCallbacks.Stuck = func() {
+		executor.ProducerCallbacks.Stuck = func(ctx context.Context, jobRow *rivertype.JobRow) {
 			t.Log("Job executor reported stuck")
 			close(informProducerStuckReceived)
 		}
@@ -761,7 +761,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 			informProducerStuckReceived   = make(chan struct{})
 			informProducerUnstuckReceived = make(chan struct{})
 		)
-		executor.ProducerCallbacks.Stuck = func() {
+		executor.ProducerCallbacks.Stuck = func(ctx context.Context, jobRow *rivertype.JobRow) {
 			t.Log("Job executor reported stuck")
 			close(informProducerStuckReceived)
 		}
@@ -809,7 +809,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 			informProducerStuckReceived   = make(chan struct{})
 			informProducerUnstuckReceived = make(chan struct{})
 		)
-		executor.ProducerCallbacks.Stuck = func() {
+		executor.ProducerCallbacks.Stuck = func(ctx context.Context, jobRow *rivertype.JobRow) {
 			t.Log("Job executor reported stuck")
 			close(informProducerStuckReceived)
 		}

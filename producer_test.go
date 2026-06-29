@@ -517,6 +517,105 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		require.Zero(t, producer.maxJobsToFetch()) // zero because all slots are occupied
 	})
 
+	t.Run("JobStuckHandler", func(t *testing.T) {
+		t.Parallel()
+
+		producer, bundle := setup(t)
+		producer.config.JobTimeout = 10 * time.Millisecond
+		producer.config.JobStuckThreshold = time.Millisecond
+		producer.config.MaxWorkers = 2
+		producer.jobTimeout = producer.config.JobTimeout
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+
+			Num int `json:"num"`
+		}
+
+		releaseJobs := make(chan struct{})
+		defer close(releaseJobs)
+
+		handlerParamsCh := make(chan JobStuckHandlerParams, 2)
+		producer.config.JobStuckHandler = func(ctx context.Context, params JobStuckHandlerParams) JobStuckHandlerResult {
+			handlerParamsCh <- params
+			return JobStuckHandlerResult{}
+		}
+
+		AddWorker(bundle.workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			<-releaseJobs
+			return nil
+		}))
+
+		mustInsert(ctx, t, producer, bundle, &JobArgs{Num: 1})
+		mustInsert(ctx, t, producer, bundle, &JobArgs{Num: 2})
+
+		startProducer(t, ctx, ctx, producer)
+
+		handlerParams := riversharedtest.WaitOrTimeoutN(t, handlerParamsCh, 2)
+		require.ElementsMatch(t, []int{1, 2}, []int{handlerParams[0].TotalStuckJobs, handlerParams[1].TotalStuckJobs})
+		for _, params := range handlerParams {
+			require.NotZero(t, params.ID)
+			require.Equal(t, (&JobArgs{}).Kind(), params.Kind)
+			require.Equal(t, producer.config.Queue, params.Queue)
+		}
+	})
+
+	t.Run("JobStuckHandlerOpensExecutorSlot", func(t *testing.T) {
+		t.Parallel()
+
+		producer, bundle := setup(t)
+		producer.config.JobTimeout = 20 * time.Millisecond
+		producer.config.JobStuckThreshold = time.Millisecond
+		producer.config.MaxWorkers = 1
+		producer.jobTimeout = producer.config.JobTimeout
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+
+			Num int `json:"num"`
+		}
+
+		handlerParamsCh := make(chan JobStuckHandlerParams, 2)
+		producer.config.JobStuckHandler = func(ctx context.Context, params JobStuckHandlerParams) JobStuckHandlerResult {
+			handlerParamsCh <- params
+			return JobStuckHandlerResult{AddWorkerSlot: true}
+		}
+
+		var (
+			firstStarted  = make(chan struct{})
+			releaseJobs   = make(chan struct{})
+			secondStarted = make(chan struct{})
+		)
+		defer close(releaseJobs)
+
+		AddWorker(bundle.workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			switch job.Args.Num {
+			case 1:
+				close(firstStarted)
+			case 2:
+				close(secondStarted)
+			default:
+				require.FailNow(t, "unexpected job num", "num=%d", job.Args.Num)
+			}
+
+			<-releaseJobs
+			return nil
+		}))
+
+		mustInsert(ctx, t, producer, bundle, &JobArgs{Num: 1})
+		mustInsert(ctx, t, producer, bundle, &JobArgs{Num: 2})
+
+		startProducer(t, ctx, ctx, producer)
+
+		riversharedtest.WaitOrTimeout(t, firstStarted)
+
+		handlerParams := riversharedtest.WaitOrTimeout(t, handlerParamsCh)
+		require.Equal(t, 1, handlerParams.TotalStuckJobs)
+
+		riversharedtest.WaitOrTimeout(t, secondStarted)
+		require.Equal(t, int32(1), producer.numJobsActive.Load())
+	})
+
 	t.Run("StartStopStress", func(t *testing.T) {
 		t.Parallel()
 

@@ -211,11 +211,11 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 		MiddlewareLookupGlobal: middlewarelookup.NewMiddlewareLookup(append(rivermiddleware.DefaultMiddleware(), w.config.Middleware...)),
 		ProducerCallbacks: struct {
 			JobDone func(jobRow *rivertype.JobRow)
-			Stuck   func()
+			Stuck   func(ctx context.Context, jobRow *rivertype.JobRow)
 			Unstuck func()
 		}{
 			JobDone: func(job *rivertype.JobRow) { close(executionDone) },
-			Stuck:   func() {},
+			Stuck:   func(ctx context.Context, jobRow *rivertype.JobRow) {},
 			Unstuck: func() {},
 		},
 		SchedulerInterval: maintenance.JobSchedulerIntervalDefault,

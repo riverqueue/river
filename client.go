@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/riverqueue/river/internal/dblist"
@@ -46,11 +47,12 @@ const (
 	FetchPollIntervalDefault = 1 * time.Second
 	FetchPollIntervalMin     = 1 * time.Millisecond
 
-	JobTimeoutDefault  = 1 * time.Minute
-	MaxAttemptsDefault = rivercommon.MaxAttemptsDefault
-	PriorityDefault    = rivercommon.PriorityDefault
-	QueueDefault       = rivercommon.QueueDefault
-	QueueNumWorkersMax = 10_000
+	JobStuckThresholdDefault = 10 * time.Second
+	JobTimeoutDefault        = 1 * time.Minute
+	MaxAttemptsDefault       = rivercommon.MaxAttemptsDefault
+	PriorityDefault          = rivercommon.PriorityDefault
+	QueueDefault             = rivercommon.QueueDefault
+	QueueNumWorkersMax       = 10_000
 )
 
 var (
@@ -191,6 +193,25 @@ type Config struct {
 	// Deprecated: Prefer the use of Middleware instead (which may contain
 	// instances of rivertype.JobInsertMiddleware).
 	JobInsertMiddleware []rivertype.JobInsertMiddleware
+
+	// JobStuckHandler is invoked when a producer detects that a job exceeded
+	// its timeout and did not return from context cancellation within the
+	// allotted JobStuckThreshold (and if it didn't, we usually assume it won't
+	// return at all). The handler receives minimal information about the stuck
+	// job and the total number of jobs currently considered stuck across the
+	// client.
+	//
+	// JobStuckHandler lets an implementation indicate that a new worker slot
+	// should be opened to replace the one now occupied by a stuck job. It can
+	// also be used (for example) to stop and exit the program if too many jobs
+	// have been reported stuck.
+	JobStuckHandler JobStuckHandler
+
+	// JobStuckThreshold is the amount of time after JobTimeout elapses to
+	// wait before a still-running job is considered stuck.
+	//
+	// Defaults to 10 seconds.
+	JobStuckThreshold time.Duration
 
 	// JobTimeout is the maximum amount of time a job is allowed to run before its
 	// context is cancelled. A timeout of zero means JobTimeoutDefault will be
@@ -471,6 +492,8 @@ func (c *Config) WithDefaults() *Config {
 		ID:                          valutil.ValOrDefaultFunc(c.ID, func() string { return defaultClientID(time.Now().UTC()) }),
 		Hooks:                       c.Hooks,
 		JobInsertMiddleware:         c.JobInsertMiddleware,
+		JobStuckHandler:             c.JobStuckHandler,
+		JobStuckThreshold:           cmp.Or(c.JobStuckThreshold, JobStuckThresholdDefault),
 		JobTimeout:                  cmp.Or(c.JobTimeout, JobTimeoutDefault),
 		Logger:                      logger,
 		MaxAttempts:                 cmp.Or(c.MaxAttempts, MaxAttemptsDefault),
@@ -520,6 +543,9 @@ func (c *Config) validate() error {
 	}
 	if c.JobTimeout < -1 {
 		return errors.New("JobTimeout cannot be negative, except for -1 (infinite)")
+	}
+	if c.JobStuckThreshold < 0 {
+		return errors.New("JobStuckThreshold cannot be less than zero")
 	}
 	if c.MaxAttempts < 0 {
 		return errors.New("MaxAttempts cannot be less than zero")
@@ -670,6 +696,7 @@ type Client[TTx any] struct {
 	queues                 *QueueBundle
 	services               []startstop.Service
 	stopped                <-chan struct{}
+	stuckJobCount          atomic.Int32
 	subscriptionManager    *subscriptionManager
 	testSignals            clientTestSignals
 
@@ -2260,6 +2287,9 @@ func (c *Client[TTx]) producerAdd(queueName string, queueConfig QueueConfig) (*p
 		FetchPollInterval:            cmp.Or(queueConfig.FetchPollInterval, c.config.FetchPollInterval),
 		HookLookupByJob:              c.hookLookupByJob,
 		HookLookupGlobal:             c.hookLookupGlobal,
+		JobStuckHandler:              c.config.JobStuckHandler,
+		JobStuckCount:                &c.stuckJobCount,
+		JobStuckThreshold:            c.config.JobStuckThreshold,
 		JobTimeout:                   c.config.JobTimeout,
 		MaxWorkers:                   queueConfig.MaxWorkers,
 		MiddlewareLookupGlobal:       c.middlewareLookupGlobal,

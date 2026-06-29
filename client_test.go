@@ -8094,6 +8094,8 @@ func Test_NewClient_Defaults(t *testing.T) {
 	require.Nil(t, client.config.ErrorHandler)
 	require.Equal(t, FetchCooldownDefault, client.config.FetchCooldown)
 	require.Equal(t, FetchPollIntervalDefault, client.config.FetchPollInterval)
+	require.Nil(t, client.config.JobStuckHandler)
+	require.Equal(t, JobStuckThresholdDefault, client.config.JobStuckThreshold)
 	require.Equal(t, JobTimeoutDefault, client.config.JobTimeout)
 	require.Nil(t, client.config.Hooks)
 	require.NotZero(t, client.baseService.Logger)
@@ -8117,6 +8119,9 @@ func Test_NewClient_Overrides(t *testing.T) {
 	)
 
 	errorHandler := &testErrorHandler{}
+	jobStuckHandler := JobStuckHandler(func(ctx context.Context, params JobStuckHandlerParams) JobStuckHandlerResult {
+		return JobStuckHandlerResult{}
+	})
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
 	workers := NewWorkers()
@@ -8146,6 +8151,8 @@ func Test_NewClient_Overrides(t *testing.T) {
 		FetchPollInterval:           124 * time.Millisecond,
 		Hooks:                       []rivertype.Hook{&noOpHook{}},
 		JobInsertMiddleware:         []rivertype.JobInsertMiddleware{&noOpInsertMiddleware{}},
+		JobStuckHandler:             jobStuckHandler,
+		JobStuckThreshold:           126 * time.Millisecond,
 		JobTimeout:                  125 * time.Millisecond,
 		Logger:                      logger,
 		MaxAttempts:                 5,
@@ -8184,6 +8191,8 @@ func Test_NewClient_Overrides(t *testing.T) {
 	require.Equal(t, 123*time.Millisecond, client.config.FetchCooldown)
 	require.Equal(t, 124*time.Millisecond, client.config.FetchPollInterval)
 	require.Len(t, client.config.JobInsertMiddleware, 1)
+	require.NotNil(t, client.config.JobStuckHandler)
+	require.Equal(t, 126*time.Millisecond, client.config.JobStuckThreshold)
 	require.Equal(t, 125*time.Millisecond, client.config.JobTimeout)
 	require.Equal(t, []rivertype.Hook{&noOpHook{}}, client.config.Hooks)
 	require.Equal(t, logger, client.baseService.Logger)
@@ -8365,6 +8374,13 @@ func Test_NewClient_Validations(t *testing.T) {
 				// A client config value of zero gets interpreted as the default max attempts:
 				require.Equal(t, MaxAttemptsDefault, client.config.MaxAttempts)
 			},
+		},
+		{
+			name: "JobStuckThreshold cannot be less than zero",
+			configFunc: func(config *Config) {
+				config.JobStuckThreshold = -1
+			},
+			wantErr: errors.New("JobStuckThreshold cannot be less than zero"),
 		},
 		{
 			name: "Middleware can be configured independently",

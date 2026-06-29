@@ -35,6 +35,7 @@ river migrate-get --database-url sqlite:// --version 6 --down > river7.down.sql
 ### Added
 
 - SQLite picks up a new `river_notification` table that allows River to provide listen/notify-like functionality despite these functions not being supported outside of Postgres. [PR #1275](https://github.com/riverqueue/river/pull/1275).
+- Added `JobStuckHandler`, giving clients a hook to handle "stuck" jobs (i.e. ones which are passed timeout and haven't responded to context cancellation) and potentially open a new worker slot if so desired. [PR #1291](https://github.com/riverqueue/river/pull/1291).
 
 ### Changed
 
