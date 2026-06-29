@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-07-02
+
 ⚠️ Version 0.40.0 contains a new database migration, version 7, that rolls up some database cleanups and a few SQLite features:
 
 - Drop tables `river_client` and `river_client_queue`. These were added prospectively, but in the end were never used for anything. [PR #1115](https://github.com/riverqueue/river/pull/1115).
