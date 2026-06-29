@@ -131,14 +131,36 @@ func TestJobSetStateDiscarded(t *testing.T) {
 func TestJobSetStateErrorAvailable(t *testing.T) {
 	t.Parallel()
 
+	t.Run("Attempt", func(t *testing.T) {
+		t.Parallel()
+
+		id := int64(4)
+		scheduledAt := time.Now().Truncate(time.Second)
+		errData := []byte("error available")
+		attempt := 3
+		result := JobSetStateErrorAvailable(id, scheduledAt, &attempt, errData, nil)
+		require.Equal(t, id, result.ID)
+		require.NotNil(t, result.Attempt)
+		require.Equal(t, attempt, *result.Attempt)
+		require.Equal(t, errData, result.ErrData)
+		require.False(t, result.MetadataDoMerge)
+		require.Nil(t, result.MetadataUpdates)
+		require.NotNil(t, result.ScheduledAt)
+		require.True(t, result.ScheduledAt.Equal(scheduledAt))
+		require.Empty(t, result.Schema)
+		require.False(t, result.Snoozed)
+		require.Equal(t, rivertype.JobStateAvailable, result.State)
+	})
+
 	t.Run("EmptyMetadata", func(t *testing.T) {
 		t.Parallel()
 
 		id := int64(4)
 		scheduledAt := time.Now().Truncate(time.Second)
 		errData := []byte("error available")
-		result := JobSetStateErrorAvailable(id, scheduledAt, errData, nil)
+		result := JobSetStateErrorAvailable(id, scheduledAt, nil, errData, nil)
 		require.Equal(t, id, result.ID)
+		require.Nil(t, result.Attempt)
 		require.Equal(t, errData, result.ErrData)
 		require.False(t, result.MetadataDoMerge)
 		require.Nil(t, result.MetadataUpdates)
@@ -156,8 +178,9 @@ func TestJobSetStateErrorAvailable(t *testing.T) {
 		scheduledAt := time.Now().Truncate(time.Second)
 		errData := []byte("error available")
 		metadata := []byte(`{"key": "value"}`)
-		result := JobSetStateErrorAvailable(id, scheduledAt, errData, metadata)
+		result := JobSetStateErrorAvailable(id, scheduledAt, nil, errData, metadata)
 		require.Equal(t, id, result.ID)
+		require.Nil(t, result.Attempt)
 		require.True(t, result.MetadataDoMerge)
 		require.Equal(t, metadata, result.MetadataUpdates)
 		require.NotNil(t, result.ScheduledAt)
