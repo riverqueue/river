@@ -12,6 +12,7 @@ import (
 
 	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
+	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/middlewarelookup"
 	"github.com/riverqueue/river/internal/notifier"
@@ -159,6 +160,86 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 	case <-ctx.Done():
 		t.Error("timed out waiting for last job to run")
 	}
+}
+
+func TestProducer_HardStopActiveJobs(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	require := require.New(t)
+
+	var (
+		archetype = riversharedtest.BaseServiceArchetype(t)
+		dbPool    = riversharedtest.DBPool(ctx, t)
+		driver    = riverpgxv5.New(dbPool)
+		exec      = driver.GetExecutor()
+		pilot     = &riverpilot.StandardPilot{}
+		schema    = riverdbtest.TestSchema(ctx, t, driver, nil)
+	)
+
+	completer := jobcompleter.NewInlineCompleter(archetype, schema, exec, pilot, make(chan []jobcompleter.CompleterJobUpdated, 10))
+
+	producer := newProducer(archetype, exec, pilot, &producerConfig{
+		ClientID:                     testClientID,
+		Completer:                    completer,
+		ErrorHandler:                 newTestErrorHandler(),
+		FetchCooldown:                FetchCooldownDefault,
+		FetchPollInterval:            FetchPollIntervalDefault,
+		HookLookupByJob:              hooklookup.NewJobHookLookup(),
+		HookLookupGlobal:             hooklookup.NewHookLookup(nil),
+		JobTimeout:                   JobTimeoutDefault,
+		MaxWorkers:                   10,
+		MiddlewareLookupGlobal:       middlewarelookup.NewMiddlewareLookup(nil),
+		Queue:                        rivercommon.QueueDefault,
+		QueuePollInterval:            queuePollIntervalDefault,
+		QueueReportInterval:          queueReportIntervalDefault,
+		RetryPolicy:                  &DefaultClientRetryPolicy{},
+		SchedulerInterval:            maintenance.JobSchedulerIntervalDefault,
+		Schema:                       schema,
+		StaleProducerRetentionPeriod: time.Minute,
+		Workers:                      NewWorkers(),
+	})
+
+	runningState := rivertype.JobStateRunning
+	retryableJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+		Attempt:     ptrutil.Ptr(1),
+		MaxAttempts: ptrutil.Ptr(3),
+		Schema:      schema,
+		State:       &runningState,
+	})
+	discardedJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+		Attempt:     ptrutil.Ptr(3),
+		MaxAttempts: ptrutil.Ptr(3),
+		Schema:      schema,
+		State:       &runningState,
+	})
+
+	producer.addActiveJob(retryableJob.ID, &jobexecutor.JobExecutor{JobRow: retryableJob})
+	producer.addActiveJob(discardedJob.ID, &jobexecutor.JobExecutor{JobRow: discardedJob})
+
+	producer.hardStop()
+	producer.executorShutdownLoop(ctx)
+
+	require.Empty(producer.activeJobs)
+	require.Zero(producer.numJobsActive.Load())
+
+	retryableJobAfter, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: retryableJob.ID, Schema: schema})
+	require.NoError(err)
+	require.Equal(rivertype.JobStateAvailable, retryableJobAfter.State)
+	require.Len(retryableJobAfter.Errors, 1)
+	require.Equal(producerHardStopError, retryableJobAfter.Errors[0].Error)
+	require.Equal(retryableJob.Attempt, retryableJobAfter.Errors[0].Attempt)
+	require.Empty(retryableJobAfter.Errors[0].Trace)
+	require.Nil(retryableJobAfter.FinalizedAt)
+
+	discardedJobAfter, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: discardedJob.ID, Schema: schema})
+	require.NoError(err)
+	require.Equal(rivertype.JobStateDiscarded, discardedJobAfter.State)
+	require.Len(discardedJobAfter.Errors, 1)
+	require.Equal(producerHardStopError, discardedJobAfter.Errors[0].Error)
+	require.Equal(discardedJob.Attempt, discardedJobAfter.Errors[0].Attempt)
+	require.Empty(discardedJobAfter.Errors[0].Trace)
+	require.NotNil(discardedJobAfter.FinalizedAt)
 }
 
 func TestProducer_PollOnly(t *testing.T) {

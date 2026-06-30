@@ -111,6 +111,7 @@ type JobExecutor struct {
 	ClientRetryPolicy        ClientRetryPolicy
 	DefaultClientRetryPolicy ClientRetryPolicy
 	ErrorHandler             ErrorHandler
+	hardStopped              atomic.Bool
 	HookLookupByJob          *hooklookup.JobHookLookup
 	HookLookupGlobal         hooklookup.HookLookupInterface
 	JobRow                   *rivertype.JobRow
@@ -158,6 +159,12 @@ func (e *JobExecutor) Execute(ctx context.Context) {
 		res.Err = context.Cause(ctx)
 	}
 
+	// Hard-stopped jobs have already been moved out of running by the producer.
+	if e.hardStopped.Load() {
+		e.ProducerCallbacks.JobDone(e.JobRow)
+		return
+	}
+
 	var multiJobErrors withJobsAndErrorsByID
 	if res.Err != nil {
 		multiJobErrors, _ = res.Err.(withJobsAndErrorsByID)
@@ -175,6 +182,12 @@ func (e *JobExecutor) Execute(ctx context.Context) {
 	}
 
 	e.ProducerCallbacks.JobDone(e.JobRow)
+}
+
+// HardStop suppresses completion reporting for a job that's been forcibly
+// errored by its producer during shutdown.
+func (e *JobExecutor) HardStop() {
+	e.hardStopped.Store(true)
 }
 
 // Executes the job, handling a panic if necessary (and various other error

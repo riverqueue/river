@@ -43,8 +43,8 @@ func (w *WaitsForCancelOnlyWorker) Work(ctx context.Context, job *river.Job[Wait
 
 // Example_gracefulShutdown demonstrates graceful stop using SoftStopTimeout.
 // When a SIGINT/SIGTERM arrives, the start context is cancelled, which
-// initiates a soft stop. If running jobs don't finish within the configured
-// SoftStopTimeout, their contexts are automatically cancelled (hard stop).
+// initiates a graceful stop. If running jobs don't finish within the configured
+// SoftStopTimeout, their contexts are automatically cancelled.
 func Example_gracefulShutdown() {
 	ctx := context.Background()
 
@@ -77,7 +77,7 @@ func Example_gracefulShutdown() {
 	}
 
 	// Use signal.NotifyContext to cancel the start context on SIGINT/SIGTERM.
-	// When the signal fires, the client initiates a soft stop. If running jobs
+	// When the signal fires, the client initiates a graceful stop. If running jobs
 	// don't finish within SoftStopTimeout, their contexts are cancelled.
 	signalCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
