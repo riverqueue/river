@@ -57,6 +57,51 @@ func (q *Queries) IndexExists(ctx context.Context, db DBTX, arg *IndexExistsPara
 	return exists, err
 }
 
+const indexReindexArtifacts = `-- name: IndexReindexArtifacts :many
+WITH index_artifacts AS (
+    SELECT
+        c.relname::text AS index_name,
+        substring(c.relname FROM length($1::text) + 1) AS suffix
+    FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = coalesce($2::text, current_schema())
+        AND c.relkind = 'i'
+        AND left(c.relname, length($1::text)) = $1::text
+)
+SELECT index_name
+FROM index_artifacts
+WHERE suffix ~ '^_cc(new|old)[0-9]*$'
+ORDER BY index_name
+`
+
+type IndexReindexArtifactsParams struct {
+	Index  string
+	Schema sql.NullString
+}
+
+func (q *Queries) IndexReindexArtifacts(ctx context.Context, db DBTX, arg *IndexReindexArtifactsParams) ([]string, error) {
+	rows, err := db.QueryContext(ctx, indexReindexArtifacts, arg.Index, arg.Schema)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var index_name string
+		if err := rows.Scan(&index_name); err != nil {
+			return nil, err
+		}
+		items = append(items, index_name)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const indexesExist = `-- name: IndexesExist :many
 WITH index_names AS (
     SELECT unnest($2::text[]) as index_name

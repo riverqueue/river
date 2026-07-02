@@ -230,6 +230,22 @@ func TestTestSchemaReuse(t *testing.T) { //nolint:paralleltest
 	// they also may not be.
 	requireIdle(t, schema1)
 	requireIdle(t, schema2)
+
+	var (
+		previouslyIdleSchemasForDisableReuse = append([]string(nil), idleSchemas[databaseAndLinesKey]...)
+		schema3                              string
+	)
+
+	t.Run("DisableReuse", func(t *testing.T) { //nolint:paralleltest
+		schema3 = TestSchema(ctx, t, driver, &TestSchemaOpts{DisableReuse: true})
+		requireNotIdle(t, schema3)
+		require.NotContains(t, previouslyIdleSchemasForDisableReuse, schema3)
+	})
+
+	requireNotIdle(t, schema3)
+	for _, schema := range previouslyIdleSchemasForDisableReuse {
+		requireIdle(t, schema)
+	}
 }
 
 func TestPackageFromFunc(t *testing.T) {

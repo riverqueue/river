@@ -64,13 +64,13 @@ func TestReindexer(t *testing.T) {
 		schema     string
 	}
 
-	setup := func(t *testing.T) (*Reindexer, *testBundle) {
+	setupWithOpts := func(t *testing.T, testSchemaOpts *riverdbtest.TestSchemaOpts) (*Reindexer, *testBundle) {
 		t.Helper()
 
 		var (
 			dbPool = riversharedtest.DBPool(ctx, t)
 			driver = riverpgxv5.New(dbPool)
-			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			schema = riverdbtest.TestSchema(ctx, t, driver, testSchemaOpts)
 		)
 
 		bundle := &testBundle{
@@ -98,6 +98,12 @@ func TestReindexer(t *testing.T) {
 		t.Cleanup(svc.Stop)
 
 		return svc, bundle
+	}
+
+	setup := func(t *testing.T) (*Reindexer, *testBundle) {
+		t.Helper()
+
+		return setupWithOpts(t, nil)
 	}
 
 	runImmediatelyThenOnceAnHour := func() func(time.Time) time.Time {
@@ -141,7 +147,13 @@ func TestReindexer(t *testing.T) {
 	t.Run("ReindexSkippedWithReindexArtifact", func(t *testing.T) {
 		t.Parallel()
 
-		svc, bundle := setup(t)
+		svc, bundle := setupWithOpts(t, &riverdbtest.TestSchemaOpts{DisableReuse: true})
+
+		mockExec := newReindexerExecutorMock(bundle.exec)
+		mockExec.indexReindexFunc = func(ctx context.Context, params *riverdriver.IndexReindexParams) error {
+			return nil
+		}
+		svc.exec = mockExec
 
 		requireReindexOne := func(indexName string) bool {
 			didReindex, err := svc.reindexOne(ctx, indexName)
@@ -151,20 +163,20 @@ func TestReindexer(t *testing.T) {
 
 		indexName := svc.Config.IndexNames[0]
 
-		// With a `_ccnew` index in place, the reindexer refuses to run.
-		require.NoError(t, bundle.exec.Exec(ctx, fmt.Sprintf("CREATE INDEX %s_ccnew ON %s.river_job (id)", indexName, bundle.schema)))
-		require.False(t, requireReindexOne(indexName))
+		for _, artifactSuffix := range []string{"_ccnew", "_ccnew1", "_ccnew31", "_ccold", "_ccold1"} {
+			artifactName := indexName + artifactSuffix
+			require.NoError(t, bundle.exec.Exec(ctx, fmt.Sprintf("CREATE INDEX %s ON %s.river_job (id)", artifactName, bundle.schema)))
+			require.False(t, requireReindexOne(indexName))
+			require.NoError(t, bundle.exec.IndexDropIfExists(ctx, &riverdriver.IndexDropIfExistsParams{Index: artifactName, Schema: bundle.schema}))
+		}
 
-		// With the index dropped again, reindexing can now occur.
-		require.NoError(t, bundle.exec.Exec(ctx, fmt.Sprintf("DROP INDEX %s.%s_ccnew", bundle.schema, indexName)))
-		require.True(t, requireReindexOne(indexName))
-
-		// `_ccold` also prevents reindexing.
-		require.NoError(t, bundle.exec.Exec(ctx, fmt.Sprintf("CREATE INDEX %s_ccold ON %s.river_job (id)", indexName, bundle.schema)))
-		require.False(t, requireReindexOne(indexName))
-
-		// And with `_ccold` dropped, reindexing can proceed.
-		require.NoError(t, bundle.exec.Exec(ctx, fmt.Sprintf("DROP INDEX %s.%s_ccold", bundle.schema, indexName)))
+		for _, artifactSuffix := range []string{"_ccnewa", "_ccnew_1", "_ccoldx", "_ccold_1", "x_ccnew1"} {
+			artifactName := indexName + artifactSuffix
+			require.NoError(t, bundle.exec.Exec(ctx, fmt.Sprintf("CREATE INDEX %s ON %s.river_job (id)", artifactName, bundle.schema)))
+			t.Cleanup(func() {
+				require.NoError(t, bundle.exec.IndexDropIfExists(ctx, &riverdriver.IndexDropIfExistsParams{Index: artifactName, Schema: bundle.schema}))
+			})
+		}
 		require.True(t, requireReindexOne(indexName))
 	})
 
@@ -249,7 +261,7 @@ func TestReindexer(t *testing.T) {
 	t.Run("ReindexDeletesArtifactsWhenCancelledWithStop", func(t *testing.T) {
 		t.Parallel()
 
-		svc, bundle := setup(t)
+		svc, bundle := setupWithOpts(t, &riverdbtest.TestSchemaOpts{DisableReuse: true})
 		svc.skipReindexArtifactCheck = true
 
 		requireIndexExists := func(indexName string) bool {
@@ -259,16 +271,25 @@ func TestReindexer(t *testing.T) {
 		}
 
 		var (
-			indexName    = svc.Config.IndexNames[0]
-			indexNameNew = indexName + "_ccnew"
-			indexNameOld = indexName + "_ccold"
+			indexName            = svc.Config.IndexNames[0]
+			indexNameNew         = indexName + "_ccnew"
+			indexNameNewNumber   = indexName + "_ccnew1"
+			indexNameNonArtifact = indexName + "_ccnewa"
+			indexNameOld         = indexName + "_ccold"
+			indexNameOldNumber   = indexName + "_ccold2"
 		)
 
 		require.NoError(t, bundle.exec.Exec(ctx, fmt.Sprintf("CREATE INDEX %s ON %s.river_job (id)", indexNameNew, bundle.schema)))
+		require.NoError(t, bundle.exec.Exec(ctx, fmt.Sprintf("CREATE INDEX %s ON %s.river_job (id)", indexNameNewNumber, bundle.schema)))
+		require.NoError(t, bundle.exec.Exec(ctx, fmt.Sprintf("CREATE INDEX %s ON %s.river_job (id)", indexNameNonArtifact, bundle.schema)))
 		require.NoError(t, bundle.exec.Exec(ctx, fmt.Sprintf("CREATE INDEX %s ON %s.river_job (id)", indexNameOld, bundle.schema)))
+		require.NoError(t, bundle.exec.Exec(ctx, fmt.Sprintf("CREATE INDEX %s ON %s.river_job (id)", indexNameOldNumber, bundle.schema)))
 
 		require.True(t, requireIndexExists(indexNameNew))
+		require.True(t, requireIndexExists(indexNameNewNumber))
+		require.True(t, requireIndexExists(indexNameNonArtifact))
 		require.True(t, requireIndexExists(indexNameOld))
+		require.True(t, requireIndexExists(indexNameOldNumber))
 
 		{
 			// Pre-cancel context to simulate a reindexer being stopped while
@@ -286,7 +307,10 @@ func TestReindexer(t *testing.T) {
 		}
 
 		require.False(t, requireIndexExists(indexNameNew))
+		require.False(t, requireIndexExists(indexNameNewNumber))
+		require.True(t, requireIndexExists(indexNameNonArtifact))
 		require.False(t, requireIndexExists(indexNameOld))
+		require.False(t, requireIndexExists(indexNameOldNumber))
 	})
 
 	t.Run("StopsImmediately", func(t *testing.T) {

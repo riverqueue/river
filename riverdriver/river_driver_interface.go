@@ -206,6 +206,7 @@ type Executor interface {
 	//
 	// API is not stable. DO NOT USE.
 	IndexReindex(ctx context.Context, params *IndexReindexParams) error
+	IndexReindexArtifacts(ctx context.Context, params *IndexReindexArtifactsParams) ([]string, error)
 
 	JobCancel(ctx context.Context, params *JobCancelParams) (*rivertype.JobRow, error)
 	JobCountByAllStates(ctx context.Context, params *JobCountByAllStatesParams) (map[rivertype.JobState]int, error)
@@ -859,6 +860,11 @@ type Row interface {
 }
 
 type IndexReindexParams struct {
+	Index  string
+	Schema string
+}
+
+type IndexReindexArtifactsParams struct {
 	Index  string
 	Schema string
 }
