@@ -26,12 +26,12 @@ go install github.com/riverqueue/river/cmd/river@latest
 river migrate-up --database-url "$DATABASE_URL"
 ```
 
-If not using River's internal migration system, the raw SQL can alternatively be dumped with:
+If not using River's internal migration system, the raw SQL can alternatively be dumped with (or change `--database-url` to a Postgres URI for Postgres versions):
 
 ```shell
 go install github.com/riverqueue/river/cmd/river@latest
-river migrate-get --database-url sqlite:// --version 6 --up > river7.up.sql
-river migrate-get --database-url sqlite:// --version 6 --down > river7.down.sql
+river migrate-get --database-url sqlite:// --version 7 --up > river7.up.sql
+river migrate-get --database-url sqlite:// --version 7 --down > river7.down.sql
 ```
 
 ### Added
