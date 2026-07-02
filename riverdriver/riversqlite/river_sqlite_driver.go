@@ -209,7 +209,7 @@ func (e *Executor) IndexDropIfExists(ctx context.Context, params *riverdriver.In
 		maybeSchema = dbutil.SafeIdentifier(params.Schema) + "."
 	}
 
-	_, err := e.dbtx.ExecContext(ctx, "DROP INDEX IF EXISTS "+maybeSchema+params.Index)
+	_, err := e.dbtx.ExecContext(ctx, "DROP INDEX IF EXISTS "+maybeSchema+dbutil.SafeIdentifier(params.Index))
 	return interpretError(err)
 }
 
@@ -224,8 +224,12 @@ func (e *Executor) IndexReindex(ctx context.Context, params *riverdriver.IndexRe
 		maybeSchema = dbutil.SafeIdentifier(params.Schema) + "."
 	}
 
-	_, err := e.dbtx.ExecContext(ctx, "REINDEX "+maybeSchema+params.Index)
+	_, err := e.dbtx.ExecContext(ctx, "REINDEX "+maybeSchema+dbutil.SafeIdentifier(params.Index))
 	return interpretError(err)
+}
+
+func (e *Executor) IndexReindexArtifacts(ctx context.Context, params *riverdriver.IndexReindexArtifactsParams) ([]string, error) {
+	return nil, nil
 }
 
 func (e *Executor) IndexesExist(ctx context.Context, params *riverdriver.IndexesExistParams) (map[string]bool, error) {

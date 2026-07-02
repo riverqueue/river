@@ -97,7 +97,7 @@ func exerciseSchemaIntrospection[TTx any](ctx context.Context, t *testing.T,
 			}
 
 			err := driver.GetExecutor().IndexDropIfExists(ctx, &riverdriver.IndexDropIfExistsParams{
-				Index:  "river_job_index_drop_if_exists ",
+				Index:  "river_job_index_drop_if_exists",
 				Schema: schema,
 			})
 			require.NoError(t, err)
@@ -175,6 +175,61 @@ func exerciseSchemaIntrospection[TTx any](ctx context.Context, t *testing.T,
 			Schema: schema,
 		})
 		require.NoError(t, err)
+	})
+
+	t.Run("IndexReindexArtifacts", func(t *testing.T) {
+		t.Parallel()
+
+		driver, schema := driverWithSchema(ctx, t, nil)
+		exec := driver.GetExecutor()
+
+		baseIndexName := "river_job_reindex_artifacts_index"
+		artifactNames := []string{
+			baseIndexName + "_ccnew",
+			baseIndexName + "_ccnew1",
+			baseIndexName + "_ccnew31",
+			baseIndexName + "_ccold",
+			baseIndexName + "_ccold2",
+		}
+		nonArtifactNames := []string{
+			baseIndexName + "_ccnewa",
+			baseIndexName + "_ccnew_1",
+			baseIndexName + "_ccoldx",
+			baseIndexName + "_ccold_2",
+			baseIndexName + "x_ccnew1",
+		}
+
+		indexNames := make([]string, 0, len(artifactNames)+len(nonArtifactNames))
+		indexNames = append(indexNames, artifactNames...)
+		indexNames = append(indexNames, nonArtifactNames...)
+		for _, indexName := range indexNames {
+			require.NoError(t, exec.IndexDropIfExists(ctx, &riverdriver.IndexDropIfExistsParams{Index: indexName, Schema: schema}))
+		}
+		t.Cleanup(func() {
+			for _, indexName := range indexNames {
+				require.NoError(t, exec.IndexDropIfExists(ctx, &riverdriver.IndexDropIfExistsParams{Index: indexName, Schema: schema}))
+			}
+		})
+
+		for _, indexName := range indexNames {
+			if driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+				require.NoError(t, exec.Exec(ctx, fmt.Sprintf("CREATE INDEX %s ON river_job (id)", indexName)))
+			} else {
+				require.NoError(t, exec.Exec(ctx, fmt.Sprintf("CREATE INDEX %s ON %s.river_job (id)", indexName, schema)))
+			}
+		}
+
+		reindexArtifactNames, err := exec.IndexReindexArtifacts(ctx, &riverdriver.IndexReindexArtifactsParams{
+			Index:  baseIndexName,
+			Schema: schema,
+		})
+		require.NoError(t, err)
+
+		if driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+			require.Empty(t, reindexArtifactNames)
+		} else {
+			require.Equal(t, artifactNames, reindexArtifactNames)
+		}
 	})
 
 	t.Run("IndexesExist", func(t *testing.T) {

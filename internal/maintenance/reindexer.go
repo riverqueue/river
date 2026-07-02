@@ -221,7 +221,8 @@ func (s *Reindexer) reindexOne(ctx context.Context, indexName string) (bool, err
 	// exist before trying to reindex. When using `CONCURRENTLY`, Postgres
 	// creates a new index suffixed with `_ccnew` before swapping it in as the
 	// new index. The existing index is renamed `_ccold` before being dropped
-	// concurrently.
+	// concurrently. If multiple failed artifacts exist, Postgres may add a
+	// numeric suffix like `_ccnew1` or `_ccold2` to keep names unique.
 	//
 	// If one of these artifacts exists, it probably means that a previous
 	// reindex attempt timed out, and attempting to reindex again is likely
@@ -234,16 +235,15 @@ func (s *Reindexer) reindexOne(ctx context.Context, indexName string) (bool, err
 	//
 	// https://www.postgresql.org/docs/current/sql-reindex.html#SQL-REINDEX-CONCURRENTLY
 	if !s.skipReindexArtifactCheck {
-		for _, reindexArtifactName := range []string{indexName + "_ccnew", indexName + "_ccold"} {
-			reindexArtifactExists, err := s.exec.IndexExists(ctx, &riverdriver.IndexExistsParams{Index: reindexArtifactName, Schema: s.Config.Schema})
-			if err != nil {
-				return false, err
-			}
-			if reindexArtifactExists {
-				s.Logger.WarnContext(ctx, s.Name+": Found reindex artifact likely resulting from previous partially completed reindex attempt; skipping reindex",
-					slog.String("artifact_name", reindexArtifactName), slog.String("index_name", indexName), slog.Duration("timeout", s.Config.Timeout))
-				return false, nil
-			}
+		reindexArtifactNames, err := s.exec.IndexReindexArtifacts(ctx, &riverdriver.IndexReindexArtifactsParams{Index: indexName, Schema: s.Config.Schema})
+		if err != nil {
+			return false, err
+		}
+
+		if len(reindexArtifactNames) > 0 {
+			s.Logger.WarnContext(ctx, s.Name+": Found reindex artifact likely resulting from previous partially completed reindex attempt; skipping reindex",
+				slog.Any("artifact_names", reindexArtifactNames), slog.String("index_name", indexName), slog.Duration("timeout", s.Config.Timeout))
+			return false, nil
 		}
 	}
 
@@ -268,7 +268,12 @@ func (s *Reindexer) reindexOne(ctx context.Context, indexName string) (bool, err
 
 			s.Logger.InfoContext(ctx, s.Name+": Signaled to stop during index build; attempting to clean up concurrent artifacts")
 
-			for _, reindexArtifactName := range []string{indexName + "_ccnew", indexName + "_ccold"} {
+			reindexArtifactNames, err := s.exec.IndexReindexArtifacts(ctx, &riverdriver.IndexReindexArtifactsParams{Index: indexName, Schema: s.Config.Schema})
+			if err != nil {
+				s.Logger.ErrorContext(ctx, s.Name+": Error listing reindex artifacts", slog.String("error", err.Error()))
+			}
+
+			for _, reindexArtifactName := range reindexArtifactNames {
 				if err := s.exec.IndexDropIfExists(ctx, &riverdriver.IndexDropIfExistsParams{Index: reindexArtifactName, Schema: s.Config.Schema}); err != nil {
 					s.Logger.ErrorContext(ctx, s.Name+": Error dropping reindex artifact", slog.String("artifact_name", reindexArtifactName), slog.String("error", err.Error()))
 				}

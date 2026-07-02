@@ -51,9 +51,10 @@ var (
 // TestSchemaOpts are options for TestSchema. Most of the time these can be left
 // as nil.
 type TestSchemaOpts struct {
-	// DisableReuse specifies that schema will not be checked in for reuse at
-	// the end of tests. This is desirable in certain like cases like where a
-	// test case is making modifications to schema.
+	// DisableReuse specifies that a schema will not be checked out from the
+	// idle schema pool or checked in for reuse at the end of tests. This is
+	// desirable in cases like where a test case is making modifications to
+	// schema.
 	//
 	// Not being able to reuse the schema introduces overhead to tests because
 	// it means more schemas will need to be generated to replace one not
@@ -320,44 +321,47 @@ func TestSchema[TTx any](ctx context.Context, tb testutil.TestingTB, driver rive
 		return userFacingSchema
 	}
 
-	// See if there are any idle schemas that were previously generated during
-	// this run and have since been checked back into the pool. If so, pop it
-	// off and run cleanup on it. If not, continue on to generating a new schema
-	// below. This function never blocks, so we'll prefer generating extra
-	// schemas rather than optimizing amongst a minimal set that's already there.
-	if schema := func() string {
-		idleSchemasMu.Lock()
-		defer idleSchemasMu.Unlock()
+	if !opts.DisableReuse {
+		// See if there are any idle schemas that were previously generated
+		// during this run and have since been checked back into the pool. If
+		// so, pop it off and run cleanup on it. If not, continue on to
+		// generating a new schema below. This function never blocks, so we'll
+		// prefer generating extra schemas rather than optimizing amongst a
+		// minimal set that's already there.
+		if schema := func() string {
+			idleSchemasMu.Lock()
+			defer idleSchemasMu.Unlock()
 
-		linesIdleSchemas := idleSchemas[databaseAndLinesKey]
+			linesIdleSchemas := idleSchemas[databaseAndLinesKey]
 
-		if len(linesIdleSchemas) < 1 {
-			return ""
+			if len(linesIdleSchemas) < 1 {
+				return ""
+			}
+
+			schema := linesIdleSchemas[0]
+			idleSchemas[databaseAndLinesKey] = linesIdleSchemas[1:]
+			return schema
+		}(); schema != "" {
+			// Should be called BEFORE maybeProcurePool. maybeProcurePool may open a
+			// pool, and in case it does, we want a cleanup in it that closes the pool
+			// to run before this cleanup hook that checks the test schema back in.
+			// Cleanup is FILO, so clean up must appear first to run last.
+			addCleanupHook(schema)
+
+			var (
+				start            = time.Now()
+				userFacingSchema = maybeProcurePool(schema)
+			)
+
+			if len(truncateTables) > 0 {
+				require.NoError(tb, driver.GetExecutor().TableTruncate(ctx, &riverdriver.TableTruncateParams{Schema: userFacingSchema, Table: truncateTables}))
+			}
+
+			tb.Logf("Reusing idle %s schema %q [user facing: %q] after cleaning in %s [%d generated] [%d reused]",
+				driver.DatabaseName(), schema, userFacingSchema, time.Since(start), stats.numGenerated.Load(), stats.numReused.Add(1))
+
+			return userFacingSchema
 		}
-
-		schema := linesIdleSchemas[0]
-		idleSchemas[databaseAndLinesKey] = linesIdleSchemas[1:]
-		return schema
-	}(); schema != "" {
-		// Should be called BEFORE maybeProcurePool. maybeProcurePool may open a
-		// pool, and in case it does, we want a cleanup in it that closes the pool
-		// to run before this cleanup hook that checks the test schema back in.
-		// Cleanup is FILO, so clean up must appear first to run last.
-		addCleanupHook(schema)
-
-		var (
-			start            = time.Now()
-			userFacingSchema = maybeProcurePool(schema)
-		)
-
-		if len(truncateTables) > 0 {
-			require.NoError(tb, driver.GetExecutor().TableTruncate(ctx, &riverdriver.TableTruncateParams{Schema: userFacingSchema, Table: truncateTables}))
-		}
-
-		tb.Logf("Reusing idle %s schema %q [user facing: %q] after cleaning in %s [%d generated] [%d reused]",
-			driver.DatabaseName(), schema, userFacingSchema, time.Since(start), stats.numGenerated.Load(), stats.numReused.Add(1))
-
-		return userFacingSchema
 	}
 
 	// e.g. river_2025_04_14t22_13_58_schema_10

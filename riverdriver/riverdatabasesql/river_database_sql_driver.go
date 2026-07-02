@@ -147,7 +147,7 @@ func (e *Executor) IndexDropIfExists(ctx context.Context, params *riverdriver.In
 		maybeSchema = dbutil.SafeIdentifier(params.Schema) + "."
 	}
 
-	_, err := e.dbtx.ExecContext(ctx, "DROP INDEX CONCURRENTLY IF EXISTS "+maybeSchema+params.Index)
+	_, err := e.dbtx.ExecContext(ctx, "DROP INDEX CONCURRENTLY IF EXISTS "+maybeSchema+dbutil.SafeIdentifier(params.Index))
 	return interpretError(err)
 }
 
@@ -168,8 +168,19 @@ func (e *Executor) IndexReindex(ctx context.Context, params *riverdriver.IndexRe
 		maybeSchema = dbutil.SafeIdentifier(params.Schema) + "."
 	}
 
-	_, err := e.dbtx.ExecContext(ctx, "REINDEX INDEX CONCURRENTLY "+maybeSchema+params.Index)
+	_, err := e.dbtx.ExecContext(ctx, "REINDEX INDEX CONCURRENTLY "+maybeSchema+dbutil.SafeIdentifier(params.Index))
 	return interpretError(err)
+}
+
+func (e *Executor) IndexReindexArtifacts(ctx context.Context, params *riverdriver.IndexReindexArtifactsParams) ([]string, error) {
+	artifacts, err := dbsqlc.New().IndexReindexArtifacts(ctx, e.dbtx, &dbsqlc.IndexReindexArtifactsParams{
+		Index:  params.Index,
+		Schema: sql.NullString{String: params.Schema, Valid: params.Schema != ""},
+	})
+	if err != nil {
+		return nil, interpretError(err)
+	}
+	return artifacts, nil
 }
 
 func (e *Executor) IndexesExist(ctx context.Context, params *riverdriver.IndexesExistParams) (map[string]bool, error) {

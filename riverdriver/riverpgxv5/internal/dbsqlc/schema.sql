@@ -17,6 +17,22 @@ SELECT EXISTS (
         AND pg_class.relkind = 'i'
 );
 
+-- name: IndexReindexArtifacts :many
+WITH index_artifacts AS (
+    SELECT
+        c.relname::text AS index_name,
+        substring(c.relname FROM length(@index::text) + 1) AS suffix
+    FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = coalesce(sqlc.narg('schema')::text, current_schema())
+        AND c.relkind = 'i'
+        AND left(c.relname, length(@index::text)) = @index::text
+)
+SELECT index_name
+FROM index_artifacts
+WHERE suffix ~ '^_cc(new|old)[0-9]*$'
+ORDER BY index_name;
+
 -- name: IndexesExist :many
 WITH index_names AS (
     SELECT unnest(@index_names::text[]) as index_name
