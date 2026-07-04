@@ -65,6 +65,17 @@ const (
 	BatchSizeReduced = 1_000
 )
 
+const (
+	// MetadataKeyLastSeenAt records the last time a running job was seen by a
+	// worker. It lives in this package so River Pro can reuse the same metadata
+	// key without depending on an internal package.
+	//
+	// The SQL operations use a hard-coded `river:last_seen_at` because Postgres
+	// doesn't easily parameterize in the places we tend to want to use it, and
+	// sqlctemplate's support for replacing strings isn't very pretty.
+	MetadataKeyLastSeenAt = "river:last_seen_at"
+)
+
 // BatchSizes containing batch size information for maintenance services. It's
 // mean to be embedded on each service's configuration struct so as to provide a
 // common way of organizing and initializing batch sizes for improved

@@ -591,7 +591,13 @@ const jobGetStuck = `-- name: JobGetStuck :many
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 FROM /* TEMPLATE: schema */river_job
 WHERE state = 'running'
-    AND attempted_at < $1::timestamptz
+    -- ` + "`" + `last_seen_at` + "`" + ` may still be present on a row from its last retry, so make
+    -- sure we have ` + "`" + `max` + "`" + ` to take ` + "`" + `attempted_at` + "`" + ` (set on the latest lock of the
+    -- job) if it's larger.
+    AND greatest(
+        attempted_at,
+        (metadata->>'river:last_seen_at')::timestamptz
+    ) < $1::timestamptz
 ORDER BY id
 LIMIT $2
 `

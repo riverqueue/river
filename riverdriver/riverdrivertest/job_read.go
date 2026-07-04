@@ -2,6 +2,7 @@ package riverdrivertest
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
+	riversharedmaintenance "github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
@@ -519,8 +521,14 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			afterHorizon  = horizon.Add(1 * time.Minute)
 		)
 
-		stuckJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+		metadataWithLastSeen := func(t time.Time) []byte {
+			return fmt.Appendf(nil, `{"%s": %q}`, riversharedmaintenance.MetadataKeyLastSeenAt,
+				t.UTC().Round(time.Millisecond).Format("2006-01-02 15:04:05.999-07:00"))
+		}
+
+		stuckJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, Metadata: []byte(`{"other":"value"}`), State: ptrutil.Ptr(rivertype.JobStateRunning)})
 		stuckJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+		stuckJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
 
 		t.Logf("horizon   = %s", horizon)
 		t.Logf("stuckJob1 = %s", stuckJob1.AttemptedAt)
@@ -528,7 +536,7 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 
 		t.Logf("stuckJob1 full = %s", spew.Sdump(stuckJob1))
 
-		// Not returned because we put a maximum of two.
+		// Not returned because we put a maximum of three.
 		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
 
 		// Not stuck because not in running state.
@@ -537,13 +545,19 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 		// Not stuck because after queried horizon.
 		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &afterHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
 
-		// Max two stuck
+		// Not stuck because last seen is after queried horizon.
+		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, Metadata: metadataWithLastSeen(afterHorizon), State: ptrutil.Ptr(rivertype.JobStateRunning)})
+
+		// Not stuck because attempted at is after queried horizon.
+		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &afterHorizon, Metadata: metadataWithLastSeen(beforeHorizon), State: ptrutil.Ptr(rivertype.JobStateRunning)})
+
+		// Max three stuck.
 		stuckJobs, err := exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
-			Max:          2,
+			Max:          3,
 			StuckHorizon: horizon,
 		})
 		require.NoError(t, err)
-		require.Equal(t, []int64{stuckJob1.ID, stuckJob2.ID},
+		require.Equal(t, []int64{stuckJob1.ID, stuckJob2.ID, stuckJob3.ID},
 			sliceutil.Map(stuckJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
 	})
 

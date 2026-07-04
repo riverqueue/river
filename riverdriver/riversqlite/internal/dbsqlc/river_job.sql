@@ -185,7 +185,15 @@ ORDER BY id;
 SELECT *
 FROM /* TEMPLATE: schema */river_job
 WHERE state = 'running'
-    AND attempted_at < cast(@stuck_horizon AS text)
+    -- `last_seen_at` may still be present on a row from its last retry, so make
+    -- sure we have `max` to take `attempted_at` (set on the latest lock of the
+    -- job) if it's larger.
+    --
+    -- `coalesce` is necessary because `max(NULL, ...)` always returns `NULL`.
+    AND max(
+        attempted_at,
+        coalesce(json_extract(metadata, '$."river:last_seen_at"'), attempted_at)
+    ) < cast(@stuck_horizon AS text)
 ORDER BY id
 LIMIT @max;
 

@@ -22,6 +22,7 @@ import (
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -115,6 +116,7 @@ type JobExecutor struct {
 	HookLookupGlobal         hooklookup.HookLookupInterface
 	JobRow                   *rivertype.JobRow
 	MiddlewareLookupGlobal   middlewarelookup.MiddlewareLookupInterface
+	Pilot                    riverpilot.Pilot
 	ProducerCallbacks        struct {
 		JobDone func(jobRow *rivertype.JobRow)
 		Stuck   func(ctx context.Context, jobRow *rivertype.JobRow)
@@ -153,7 +155,16 @@ func (e *JobExecutor) Execute(ctx context.Context) {
 		QueueWaitDuration: e.start.Sub(e.JobRow.ScheduledAt),
 	}
 
+	if e.Pilot != nil {
+		e.Pilot.JobBegin(ctx, e.JobRow)
+	}
+
 	res := e.execute(ctx)
+
+	if e.Pilot != nil {
+		e.Pilot.JobEnd(ctx, e.JobRow)
+	}
+
 	if res.Err != nil && errors.Is(context.Cause(ctx), rivertype.ErrJobCancelledRemotely) {
 		res.Err = context.Cause(ctx)
 	}

@@ -878,6 +878,7 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 			HookLookupGlobal:         p.config.HookLookupGlobal,
 			MiddlewareLookupGlobal:   p.config.MiddlewareLookupGlobal,
 			JobRow:                   job,
+			Pilot:                    p.pilot,
 			ProducerCallbacks: struct {
 				JobDone func(jobRow *rivertype.JobRow)
 				Stuck   func(ctx context.Context, jobRow *rivertype.JobRow)

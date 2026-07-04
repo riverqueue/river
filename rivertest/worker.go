@@ -209,6 +209,7 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 		HookLookupByJob:        hooklookup.NewJobHookLookup(),
 		JobRow:                 job,
 		MiddlewareLookupGlobal: middlewarelookup.NewMiddlewareLookup(append(rivermiddleware.DefaultMiddleware(), w.config.Middleware...)),
+		Pilot:                  w.client.Pilot(),
 		ProducerCallbacks: struct {
 			JobDone func(jobRow *rivertype.JobRow)
 			Stuck   func(ctx context.Context, jobRow *rivertype.JobRow)

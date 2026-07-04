@@ -14,7 +14,19 @@ type StandardPilot struct {
 	seq atomic.Int64
 }
 
+func (p *StandardPilot) JobBegin(ctx context.Context, job *rivertype.JobRow) {
+	// No-op
+}
+
+func (p *StandardPilot) JobCancel(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error) {
+	return exec.JobCancel(ctx, params)
+}
+
 func (p *StandardPilot) JobCleanerQueuesExcluded() []string { return nil }
+
+func (p *StandardPilot) JobEnd(ctx context.Context, job *rivertype.JobRow) {
+	// No-op
+}
 
 func (p *StandardPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Executor, state ProducerState, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
 	if params.MaxToLock <= 0 {
@@ -25,10 +37,6 @@ func (p *StandardPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Ex
 	defer cancel()
 
 	return exec.JobGetAvailable(ctx, params)
-}
-
-func (p *StandardPilot) JobCancel(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error) {
-	return exec.JobCancel(ctx, params)
 }
 
 func (p *StandardPilot) JobInsertMany(
