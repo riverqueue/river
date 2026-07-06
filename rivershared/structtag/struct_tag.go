@@ -83,7 +83,7 @@ func SortedFieldsWithTag(args rivertype.JobArgs, tagValue string) ([]string, err
 // don't cause a stack overflow.
 func sortedFieldsWithTagUncached(typ reflect.Type, tagValue string, path []string, typesSeen map[reflect.Type]struct{}) ([]string, error) {
 	// Handle pointer to struct
-	if typ.Kind() == reflect.Ptr {
+	if typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
 	}
 
@@ -188,7 +188,7 @@ func typeStructOrPointerToStruct(typ reflect.Type) bool {
 		return true
 	}
 
-	if typ.Kind() == reflect.Ptr && typ.Elem().Kind() == reflect.Struct {
+	if typ.Kind() == reflect.Pointer && typ.Elem().Kind() == reflect.Struct {
 		return true
 	}
 

@@ -1,6 +1,7 @@
 package circuitbreaker
 
 import (
+	"slices"
 	"time"
 
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -92,8 +93,8 @@ func (b *CircuitBreaker) Trip() bool {
 		horizonIndex = -1
 		now          = b.timeGenerator.Now()
 	)
-	for i := len(b.trips) - 1; i >= 0; i-- {
-		if b.trips[i].Before(now.Add(-b.opts.Window)) {
+	for i, v := range slices.Backward(b.trips) {
+		if v.Before(now.Add(-b.opts.Window)) {
 			horizonIndex = i
 			break
 		}

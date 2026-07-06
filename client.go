@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2011,9 +2012,9 @@ func (c *Client[TTx]) insertManyShared(
 	if len(jobInsertMiddleware) > 0 {
 		// Wrap middlewares in reverse order so the one defined first is wrapped
 		// as the outermost function and is first to receive the operation.
-		for i := len(jobInsertMiddleware) - 1; i >= 0; i-- {
-			middlewareItem := jobInsertMiddleware[i].(rivertype.JobInsertMiddleware) //nolint:forcetypeassert // capture the current middleware item
-			previousDoInner := doInner                                               // Capture the current doInner function
+		for _, v := range slices.Backward(jobInsertMiddleware) {
+			middlewareItem := v.(rivertype.JobInsertMiddleware) //nolint:forcetypeassert // capture the current middleware item
+			previousDoInner := doInner                          // Capture the current doInner function
 			doInner = func(ctx context.Context) ([]*rivertype.JobInsertResult, error) {
 				return middlewareItem.InsertMany(ctx, insertParams, previousDoInner)
 			}
