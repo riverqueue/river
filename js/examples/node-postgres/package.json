@@ -10,7 +10,7 @@
   "dependencies": {
     "riverqueue": "workspace:*",
     "@riverqueue/driver-pg": "workspace:*",
-    "pg": "^8.13.0"
+    "pg": "^8.22.0"
   },
   "devDependencies": {
     "@types/pg": "^8.11.0",

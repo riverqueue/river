@@ -34,7 +34,7 @@
   },
   "devDependencies": {
     "@types/pg": "^8.11.0",
-    "pg": "^8.13.0",
+    "pg": "^8.22.0",
     "typescript": "^5.8.0"
   },
   "keywords": [
