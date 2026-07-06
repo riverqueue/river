@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"slices"
 
 	"github.com/riverqueue/river/rivertype"
 )
@@ -22,17 +23,17 @@ func MiddlewareChain(globalMiddleware []rivertype.Middleware, workerMiddleware [
 
 	// Wrap middlewares in reverse order so the one defined first is wrapped
 	// as the outermost function and is first to receive the operation.
-	for i := len(globalMiddleware) - 1; i >= 0; i-- {
-		middlewareItem := globalMiddleware[i].(rivertype.WorkerMiddleware) //nolint:forcetypeassert // capture the current middleware item
-		previousDoInner := doInner                                         // capture the current doInner function
+	for _, v := range slices.Backward(globalMiddleware) {
+		middlewareItem := v.(rivertype.WorkerMiddleware) //nolint:forcetypeassert // capture the current middleware item
+		previousDoInner := doInner                       // capture the current doInner function
 		doInner = func(ctx context.Context) error {
 			return middlewareItem.Work(ctx, jobRow, previousDoInner)
 		}
 	}
 
-	for i := len(workerMiddleware) - 1; i >= 0; i-- {
-		middlewareItem := workerMiddleware[i] // capture the current middleware item
-		previousDoInner := doInner            // capture the current doInner function
+	for _, v := range slices.Backward(workerMiddleware) {
+		middlewareItem := v        // capture the current middleware item
+		previousDoInner := doInner // capture the current doInner function
 		doInner = func(ctx context.Context) error {
 			return middlewareItem.Work(ctx, jobRow, previousDoInner)
 		}

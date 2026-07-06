@@ -11,10 +11,15 @@ linters:
     - exhaustruct # checks that properties in structs are exhaustively defined; may be a good idea
     - testpackage # requires tests in test packages like `river_test`
 
+    # disabled because it's deprecated, and `default: all` already enables its
+    # replacement (`gomodguard_v2`)
+    - gomodguard
+
     # disabled because they're annoying/bad
     - cyclop # screams into the void at "cyclomatic complexity"
     - funcorder # very particular about where unexported functions can go, lots of churn.
     - funlen # screams when functions are more than 60 lines long; what are we even doing here guys
+    - goconst # wants repeated test strings and other obvious literals to be constants; lots of churn.
     - interfacebloat # we do in fact want >10 methods on the Adapter interface or wherever we see fit.
     - gocognit # yells that "cognitive complexity" is too high; why
     - gocyclo # ANOTHER "cyclomatic complexity" checker (see also "cyclop" and "gocyclo")
