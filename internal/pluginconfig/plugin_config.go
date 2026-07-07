@@ -2,11 +2,11 @@ package pluginconfig
 
 import "github.com/riverqueue/river/rivertype"
 
-// Hooks returns the effective hook list from configured hooks, middleware, and
-// plugins. Explicit hooks are preserved first, followed by middleware that also
-// implement hooks, then plugins.
-func Hooks(hooks []rivertype.Hook, middleware []rivertype.Middleware, plugins []rivertype.Plugin) []rivertype.Hook {
-	effectiveHooks := make([]rivertype.Hook, 0, len(hooks)+len(middleware)+len(plugins))
+// Hooks returns the effective hook list from configured hooks and middleware.
+// Explicit hooks are preserved first, followed by middleware that also
+// implement hooks.
+func Hooks(hooks []rivertype.Hook, middleware []rivertype.Middleware) []rivertype.Hook {
+	effectiveHooks := make([]rivertype.Hook, 0, len(hooks)+len(middleware))
 
 	effectiveHooks = append(effectiveHooks, hooks...)
 
@@ -19,18 +19,14 @@ func Hooks(hooks []rivertype.Hook, middleware []rivertype.Middleware, plugins []
 		effectiveHooks = append(effectiveHooks, hook)
 	}
 
-	for _, plugin := range plugins {
-		effectiveHooks = append(effectiveHooks, plugin)
-	}
-
 	return effectiveHooks
 }
 
-// Middleware returns the effective middleware list from configured hooks,
-// middleware, and plugins. Explicit middleware are preserved first, followed by
-// hooks that also implement middleware, then plugins.
-func Middleware(hooks []rivertype.Hook, middleware []rivertype.Middleware, plugins []rivertype.Plugin) []rivertype.Middleware {
-	effectiveMiddleware := make([]rivertype.Middleware, 0, len(hooks)+len(middleware)+len(plugins))
+// Middleware returns the effective middleware list from configured hooks and
+// middleware. Explicit middleware are preserved first, followed by hooks that
+// also implement middleware.
+func Middleware(hooks []rivertype.Hook, middleware []rivertype.Middleware) []rivertype.Middleware {
+	effectiveMiddleware := make([]rivertype.Middleware, 0, len(hooks)+len(middleware))
 
 	effectiveMiddleware = append(effectiveMiddleware, middleware...)
 
@@ -41,10 +37,6 @@ func Middleware(hooks []rivertype.Hook, middleware []rivertype.Middleware, plugi
 		}
 
 		effectiveMiddleware = append(effectiveMiddleware, middlewareItem)
-	}
-
-	for _, plugin := range plugins {
-		effectiveMiddleware = append(effectiveMiddleware, plugin)
 	}
 
 	return effectiveMiddleware

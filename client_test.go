@@ -81,6 +81,7 @@ var (
 
 	_ rivertype.HookInsertBegin     = hookMiddlewareValuePlugin{}
 	_ rivertype.JobInsertMiddleware = hookMiddlewareValuePlugin{}
+	_ rivertype.Plugin              = hookMiddlewareValuePlugin{}
 )
 
 type hookMiddlewareEmbeddedDefaultsPlugin struct {
@@ -90,6 +91,8 @@ type hookMiddlewareEmbeddedDefaultsPlugin struct {
 	insertBeginCount int
 	insertManyCount  int
 }
+
+func (p *hookMiddlewareEmbeddedDefaultsPlugin) IsPlugin() bool { return true }
 
 func (p *hookMiddlewareEmbeddedDefaultsPlugin) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
 	p.insertBeginCount++
@@ -133,6 +136,8 @@ func (p hookMiddlewareValuePlugin) InsertMany(ctx context.Context, manyParams []
 }
 
 func (p hookMiddlewareValuePlugin) IsHook() bool { return true }
+
+func (p hookMiddlewareValuePlugin) IsPlugin() bool { return true }
 
 func (p hookMiddlewareValuePlugin) IsMiddleware() bool { return true }
 

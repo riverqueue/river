@@ -25,7 +25,6 @@ import (
 	"github.com/riverqueue/river/internal/middlewarelookup"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/notifylimiter"
-	"github.com/riverqueue/river/internal/pluginconfig"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/rivermiddleware"
 	"github.com/riverqueue/river/internal/workunit"
@@ -245,6 +244,8 @@ type Config struct {
 	//
 	// If a type in Hooks also implements rivertype.Middleware, it will be
 	// installed as middleware too.
+	//
+	// Deprecated: Use Plugins instead.
 	Hooks []rivertype.Hook
 
 	// Logger is the structured logger to use for logging purposes. If none is
@@ -281,20 +282,22 @@ type Config struct {
 	//
 	// If a type in Middleware also implements rivertype.Hook, it will be
 	// installed as a hook too.
+	//
+	// Deprecated: Use Plugins instead.
 	Middleware []rivertype.Middleware
 
-	// Plugins contains extensions installed globally as both hooks and
-	// middleware.
+	// Plugins contains extensions installed globally as hooks, middleware, or
+	// both.
 	//
-	// A plugin must implement both rivertype.Hook and rivertype.Middleware. It
-	// may embed PluginDefaults, or embed both HookDefaults and
-	// MiddlewareDefaults directly, then implement any operation-specific hook or
-	// middleware interfaces it needs.
+	// A type qualifies as a plugin by implementing [rivertype.Plugin]. Most
+	// existing hook and middleware implementations already do this by embedding
+	// HookDefaults or MiddlewareDefaults. If a type participates on both sides,
+	// it may embed PluginDefaults, or embed both HookDefaults and
+	// MiddlewareDefaults directly and define its own IsPlugin method, then
+	// implement any operation-specific hook or middleware interfaces it needs.
 	//
-	// Hooks and Middleware are still supported. If a type in Hooks also
-	// implements middleware, or a type in Middleware also implements hooks, River
-	// will install it on both sides automatically. The Plugins list exists as a
-	// generic place for new extensions to be registered.
+	// Hooks and Middleware are still supported for backward compatibility, but
+	// Plugins is the preferred place to register new extensions.
 	Plugins []rivertype.Plugin
 
 	// PeriodicJobs are a set of periodic jobs to run at the specified intervals
@@ -540,6 +543,83 @@ func (c *Config) WithDefaults() *Config {
 		queuePollInterval:           c.queuePollInterval,
 		schedulerInterval:           cmp.Or(c.schedulerInterval, maintenance.JobSchedulerIntervalDefault),
 	}
+}
+
+func effectiveHooksForConfig(config *Config) []rivertype.Hook {
+	configuredMiddleware := middlewareFromConfig(config)
+	hooks := make([]rivertype.Hook, 0, len(config.Hooks)+len(configuredMiddleware)+len(config.Plugins))
+	hooks = append(hooks, config.Hooks...)
+
+	for _, middleware := range configuredMiddleware {
+		if hook, ok := middleware.(rivertype.Hook); ok {
+			hooks = append(hooks, hook)
+		}
+	}
+
+	for _, plugin := range config.Plugins {
+		if plugin == nil {
+			continue
+		}
+
+		if hook, ok := plugin.(rivertype.Hook); ok {
+			hooks = append(hooks, hook)
+		}
+	}
+
+	return hooks
+}
+
+func effectiveMiddlewareForConfig(config *Config) []rivertype.Middleware {
+	configuredMiddleware := middlewareFromConfig(config)
+	middleware := make([]rivertype.Middleware, 0, len(config.Hooks)+len(configuredMiddleware)+len(config.Plugins))
+	middleware = append(middleware, configuredMiddleware...)
+
+	for _, hook := range config.Hooks {
+		if middlewareItem, ok := hook.(rivertype.Middleware); ok {
+			middleware = append(middleware, middlewareItem)
+		}
+	}
+
+	for _, plugin := range config.Plugins {
+		if plugin == nil {
+			continue
+		}
+
+		if middlewareItem, ok := plugin.(rivertype.Middleware); ok {
+			middleware = append(middleware, middlewareItem)
+		}
+	}
+
+	return middleware
+}
+
+func middlewareFromConfig(config *Config) []rivertype.Middleware {
+	middleware := make([]rivertype.Middleware, 0,
+		len(config.Middleware)+len(config.JobInsertMiddleware)+len(config.WorkerMiddleware))
+	middleware = append(middleware, config.Middleware...)
+
+	for _, jobInsertMiddleware := range config.JobInsertMiddleware {
+		middleware = append(middleware, jobInsertMiddleware)
+	}
+
+outerLoop:
+	for _, workerMiddleware := range config.WorkerMiddleware {
+		// Don't add the middleware if it also implements JobInsertMiddleware
+		// and the instance has been added to config.JobInsertMiddleware. This
+		// is a hedge to make sure we don't accidentally double add middleware
+		// as we've converted over to the unified config.Middleware setting.
+		if workerMiddlewareAsJobInsertMiddleware, ok := workerMiddleware.(rivertype.JobInsertMiddleware); ok {
+			for _, jobInsertMiddleware := range config.JobInsertMiddleware {
+				if workerMiddlewareAsJobInsertMiddleware == jobInsertMiddleware {
+					continue outerLoop
+				}
+			}
+		}
+
+		middleware = append(middleware, workerMiddleware)
+	}
+
+	return middleware
 }
 
 func (c *Config) validate() error {
@@ -824,9 +904,8 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		}
 	}
 
-	configuredMiddleware := middlewareFromConfig(config)
-	effectiveHooks := pluginconfig.Hooks(config.Hooks, configuredMiddleware, config.Plugins)
-	effectiveMiddleware := pluginconfig.Middleware(config.Hooks, configuredMiddleware, config.Plugins)
+	effectiveHooks := effectiveHooksForConfig(config)
+	effectiveMiddleware := effectiveMiddlewareForConfig(config)
 
 	for _, hook := range effectiveHooks {
 		if withBaseService, ok := hook.(baseservice.WithBaseService); ok {
@@ -1073,35 +1152,6 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	}
 
 	return client, nil
-}
-
-func middlewareFromConfig(config *Config) []rivertype.Middleware {
-	middleware := make([]rivertype.Middleware, 0,
-		len(config.Middleware)+len(config.JobInsertMiddleware)+len(config.WorkerMiddleware))
-	middleware = append(middleware, config.Middleware...)
-
-	for _, jobInsertMiddleware := range config.JobInsertMiddleware {
-		middleware = append(middleware, jobInsertMiddleware)
-	}
-
-outerLoop:
-	for _, workerMiddleware := range config.WorkerMiddleware {
-		// Don't add the middleware if it also implements JobInsertMiddleware
-		// and the instance has been added to config.JobInsertMiddleware. This
-		// is a hedge to make sure we don't accidentally double add middleware
-		// as we've converted over to the unified config.Middleware setting.
-		if workerMiddlewareAsJobInsertMiddleware, ok := workerMiddleware.(rivertype.JobInsertMiddleware); ok {
-			for _, jobInsertMiddleware := range config.JobInsertMiddleware {
-				if workerMiddlewareAsJobInsertMiddleware == jobInsertMiddleware {
-					continue outerLoop
-				}
-			}
-		}
-
-		middleware = append(middleware, workerMiddleware)
-	}
-
-	return middleware
 }
 
 // Start starts the client's job fetching and working loops. Once this is called,

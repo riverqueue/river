@@ -13,7 +13,6 @@ import (
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/middlewarelookup"
-	"github.com/riverqueue/river/internal/pluginconfig"
 	"github.com/riverqueue/river/internal/rivermiddleware"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -148,8 +147,8 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 	}
 	completer := jobcompleter.NewInlineCompleter(archetype, w.config.Schema, exec, w.client.Pilot(), subscribeCh)
 
-	effectiveHooks := pluginconfig.Hooks(w.config.Hooks, w.config.Middleware, w.config.Plugins)
-	effectiveMiddleware := pluginconfig.Middleware(w.config.Hooks, w.config.Middleware, w.config.Plugins)
+	effectiveHooks := effectiveHooksForConfig(w.config)
+	effectiveMiddleware := effectiveMiddlewareForConfig(w.config)
 
 	for _, hook := range effectiveHooks {
 		if withBaseService, ok := hook.(baseservice.WithBaseService); ok {
@@ -242,6 +241,86 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 		tb.Fatal("test worker internal error: no job completions received")
 	}
 	panic("unreachable")
+}
+
+//nolint:staticcheck
+func effectiveHooksForConfig(config *river.Config) []rivertype.Hook {
+	configuredMiddleware := middlewareFromConfig(config)
+	hooks := make([]rivertype.Hook, 0, len(config.Hooks)+len(configuredMiddleware)+len(config.Plugins))
+	hooks = append(hooks, config.Hooks...)
+
+	for _, middleware := range configuredMiddleware {
+		if hook, ok := middleware.(rivertype.Hook); ok {
+			hooks = append(hooks, hook)
+		}
+	}
+
+	for _, plugin := range config.Plugins {
+		if plugin == nil {
+			continue
+		}
+
+		if hook, ok := plugin.(rivertype.Hook); ok {
+			hooks = append(hooks, hook)
+		}
+	}
+
+	return hooks
+}
+
+//nolint:staticcheck
+func effectiveMiddlewareForConfig(config *river.Config) []rivertype.Middleware {
+	configuredMiddleware := middlewareFromConfig(config)
+	middleware := make([]rivertype.Middleware, 0, len(config.Hooks)+len(configuredMiddleware)+len(config.Plugins))
+	middleware = append(middleware, configuredMiddleware...)
+
+	for _, hook := range config.Hooks {
+		if middlewareItem, ok := hook.(rivertype.Middleware); ok {
+			middleware = append(middleware, middlewareItem)
+		}
+	}
+
+	for _, plugin := range config.Plugins {
+		if plugin == nil {
+			continue
+		}
+
+		if middlewareItem, ok := plugin.(rivertype.Middleware); ok {
+			middleware = append(middleware, middlewareItem)
+		}
+	}
+
+	return middleware
+}
+
+//nolint:staticcheck
+func middlewareFromConfig(config *river.Config) []rivertype.Middleware {
+	middleware := make([]rivertype.Middleware, 0,
+		len(config.Middleware)+len(config.JobInsertMiddleware)+len(config.WorkerMiddleware))
+	middleware = append(middleware, config.Middleware...)
+
+	for _, jobInsertMiddleware := range config.JobInsertMiddleware {
+		middleware = append(middleware, jobInsertMiddleware)
+	}
+
+outerLoop:
+	for _, workerMiddleware := range config.WorkerMiddleware {
+		// Don't add the middleware if it also implements JobInsertMiddleware
+		// and the instance has been added to config.JobInsertMiddleware. This
+		// is a hedge to make sure we don't accidentally double add middleware
+		// as we've converted over to the unified config.Middleware setting.
+		if workerMiddlewareAsJobInsertMiddleware, ok := workerMiddleware.(rivertype.JobInsertMiddleware); ok {
+			for _, jobInsertMiddleware := range config.JobInsertMiddleware {
+				if workerMiddlewareAsJobInsertMiddleware == jobInsertMiddleware {
+					continue outerLoop
+				}
+			}
+		}
+
+		middleware = append(middleware, workerMiddleware)
+	}
+
+	return middleware
 }
 
 // WorkResult is the result of working a job in the test Worker.

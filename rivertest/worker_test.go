@@ -389,7 +389,7 @@ func TestWorker_Work(t *testing.T) {
 			return nil
 		}
 
-		bundle.config.Hooks = []rivertype.Hook{
+		bundle.config.Plugins = []rivertype.Plugin{
 			hookWithBaseService,
 			river.HookWorkBeginFunc(func(ctx context.Context, job *rivertype.JobRow) error {
 				hookCalled = true
@@ -430,9 +430,9 @@ func TestWorker_Work(t *testing.T) {
 			return doInner(ctx)
 		}
 
-		bundle.config.Middleware = []rivertype.Middleware{
+		bundle.config.Plugins = []rivertype.Plugin{
 			middlewareWithBaseService,
-			river.WorkerMiddlewareFunc(func(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
+			river.WorkerMiddlewareFunc(func(ctx context.Context, job *rivertype.JobRow, doInner func(context.Context) error) error {
 				middlewareCalled = true
 				return doInner(ctx)
 			}),
