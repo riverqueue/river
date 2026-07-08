@@ -17,14 +17,13 @@ import (
 
 	"github.com/riverqueue/river/internal/dblist"
 	"github.com/riverqueue/river/internal/dbunique"
-	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/leadership"
 	"github.com/riverqueue/river/internal/maintenance"
-	"github.com/riverqueue/river/internal/middlewarelookup"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/notifylimiter"
+	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/rivermiddleware"
 	"github.com/riverqueue/river/internal/workunit"
@@ -545,54 +544,6 @@ func (c *Config) WithDefaults() *Config {
 	}
 }
 
-func effectiveHooksForConfig(config *Config) []rivertype.Hook {
-	configuredMiddleware := middlewareFromConfig(config)
-	hooks := make([]rivertype.Hook, 0, len(config.Hooks)+len(configuredMiddleware)+len(config.Plugins))
-	hooks = append(hooks, config.Hooks...)
-
-	for _, middleware := range configuredMiddleware {
-		if hook, ok := middleware.(rivertype.Hook); ok {
-			hooks = append(hooks, hook)
-		}
-	}
-
-	for _, plugin := range config.Plugins {
-		if plugin == nil {
-			continue
-		}
-
-		if hook, ok := plugin.(rivertype.Hook); ok {
-			hooks = append(hooks, hook)
-		}
-	}
-
-	return hooks
-}
-
-func effectiveMiddlewareForConfig(config *Config) []rivertype.Middleware {
-	configuredMiddleware := middlewareFromConfig(config)
-	middleware := make([]rivertype.Middleware, 0, len(config.Hooks)+len(configuredMiddleware)+len(config.Plugins))
-	middleware = append(middleware, configuredMiddleware...)
-
-	for _, hook := range config.Hooks {
-		if middlewareItem, ok := hook.(rivertype.Middleware); ok {
-			middleware = append(middleware, middlewareItem)
-		}
-	}
-
-	for _, plugin := range config.Plugins {
-		if plugin == nil {
-			continue
-		}
-
-		if middlewareItem, ok := plugin.(rivertype.Middleware); ok {
-			middleware = append(middleware, middlewareItem)
-		}
-	}
-
-	return middleware
-}
-
 func middlewareFromConfig(config *Config) []rivertype.Middleware {
 	middleware := make([]rivertype.Middleware, 0,
 		len(config.Middleware)+len(config.JobInsertMiddleware)+len(config.WorkerMiddleware))
@@ -780,28 +731,27 @@ type Client[TTx any] struct {
 	baseService   baseservice.BaseService
 	baseStartStop startstop.BaseStartStop
 
-	clientNotifyBundle     *ClientNotifyBundle[TTx]
-	completer              jobcompleter.JobCompleter
-	config                 *Config
-	driver                 riverdriver.Driver[TTx]
-	elector                *leadership.Elector
-	hookLookupByJob        *hooklookup.JobHookLookup
-	hookLookupGlobal       hooklookup.HookLookupInterface
-	insertNotifyLimiter    *notifylimiter.Limiter
-	middlewareLookupGlobal middlewarelookup.MiddlewareLookupInterface
-	notifier               *notifier.Notifier // may be nil in poll-only mode
-	periodicJobs           *PeriodicJobBundle
-	pilot                  riverpilot.Pilot
-	producersByQueueName   map[string]*producer
-	producersMu            sync.RWMutex
-	queueMaintainer        *maintenance.QueueMaintainer
-	queueMaintainerLeader  *maintenance.QueueMaintainerLeader
-	queues                 *QueueBundle
-	services               []startstop.Service
-	stopped                <-chan struct{}
-	stuckJobCount          atomic.Int32
-	subscriptionManager    *subscriptionManager
-	testSignals            clientTestSignals
+	clientNotifyBundle    *ClientNotifyBundle[TTx]
+	completer             jobcompleter.JobCompleter
+	config                *Config
+	driver                riverdriver.Driver[TTx]
+	elector               *leadership.Elector
+	pluginLookupByJob     *pluginlookup.JobPluginLookup
+	pluginLookupGlobal    pluginlookup.PluginLookupInterface
+	insertNotifyLimiter   *notifylimiter.Limiter
+	notifier              *notifier.Notifier // may be nil in poll-only mode
+	periodicJobs          *PeriodicJobBundle
+	pilot                 riverpilot.Pilot
+	producersByQueueName  map[string]*producer
+	producersMu           sync.RWMutex
+	queueMaintainer       *maintenance.QueueMaintainer
+	queueMaintainerLeader *maintenance.QueueMaintainerLeader
+	queues                *QueueBundle
+	services              []startstop.Service
+	stopped               <-chan struct{}
+	stuckJobCount         atomic.Int32
+	subscriptionManager   *subscriptionManager
+	testSignals           clientTestSignals
 
 	// workCancel cancels the context used for all work goroutines. Normal Stop
 	// does not cancel that context.
@@ -904,11 +854,14 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		}
 	}
 
-	effectiveHooks := effectiveHooksForConfig(config)
-	effectiveMiddleware := effectiveMiddlewareForConfig(config)
+	var (
+		configuredMiddleware = middlewareFromConfig(config)
+		allMiddleware        = append(rivermiddleware.DefaultMiddleware(), configuredMiddleware...)
+		allPlugins           = pluginlookup.NormalizePlugins(config.Hooks, allMiddleware, config.Plugins)
+	)
 
-	for _, hook := range effectiveHooks {
-		if withBaseService, ok := hook.(baseservice.WithBaseService); ok {
+	for _, plugin := range allPlugins {
+		if withBaseService, ok := plugin.(baseservice.WithBaseService); ok {
 			baseservice.Init(archetype, withBaseService)
 		}
 	}
@@ -920,8 +873,8 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		},
 		config:               config,
 		driver:               driver,
-		hookLookupByJob:      hooklookup.NewJobHookLookup(),
-		hookLookupGlobal:     hooklookup.NewHookLookup(effectiveHooks),
+		pluginLookupByJob:    pluginlookup.NewJobPluginLookup(),
+		pluginLookupGlobal:   pluginlookup.NewPluginLookup(allPlugins),
 		producersByQueueName: make(map[string]*producer),
 		testSignals:          clientTestSignals{},
 		workCancel:           func(cause error) {}, // replaced on start, but here in case StopAndCancel is called before start up
@@ -938,22 +891,6 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	baseservice.Init(archetype, &client.baseService)
 	client.baseService.Name = "Client" // Have to correct the name because base service isn't embedded like it usually is
 	client.insertNotifyLimiter = notifylimiter.NewLimiter(archetype, config.FetchCooldown)
-
-	// effectiveMiddleware contains configured middleware, hook/middleware
-	// hybrids, and plugins. Default middleware stays first so user middleware
-	// wraps inside River's internal defaults like before.
-	{
-		middleware := rivermiddleware.DefaultMiddleware()
-		middleware = append(middleware, effectiveMiddleware...)
-
-		for _, middleware := range middleware {
-			if withBaseService, ok := middleware.(baseservice.WithBaseService); ok {
-				baseservice.Init(archetype, withBaseService)
-			}
-		}
-
-		client.middlewareLookupGlobal = middlewarelookup.NewMiddlewareLookup(middleware)
-	}
 
 	pluginDriver, _ := driver.(driverPlugin[TTx])
 	if pluginDriver != nil {
@@ -1082,7 +1019,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		{
 			periodicJobEnqueuer, err := maintenance.NewPeriodicJobEnqueuer(archetype, &maintenance.PeriodicJobEnqueuerConfig{
 				AdvisoryLockPrefix: config.AdvisoryLockPrefix,
-				HookLookupGlobal:   client.hookLookupGlobal,
+				PluginLookupGlobal: client.pluginLookupGlobal,
 				Insert:             client.insertMany,
 				Pilot:              client.pilot,
 				Schema:             config.Schema,
@@ -2062,8 +1999,8 @@ func (c *Client[TTx]) insertManyShared(
 	doInner := func(ctx context.Context) ([]*rivertype.JobInsertResult, error) {
 		for _, params := range insertParams {
 			for _, hook := range append(
-				c.hookLookupGlobal.ByHookKind(hooklookup.HookKindInsertBegin),
-				c.hookLookupByJob.ByJobArgs(params.Args).ByHookKind(hooklookup.HookKindInsertBegin)...,
+				c.pluginLookupGlobal.ByKind(pluginlookup.HookKindInsertBegin),
+				c.pluginLookupByJob.ByJobArgs(params.Args).ByKind(pluginlookup.HookKindInsertBegin)...,
 			) {
 				if err := hook.(rivertype.HookInsertBegin).InsertBegin(ctx, params); err != nil { //nolint:forcetypeassert
 					return nil, err
@@ -2094,7 +2031,7 @@ func (c *Client[TTx]) insertManyShared(
 		return insertResults, nil
 	}
 
-	jobInsertMiddleware := c.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindJobInsert)
+	jobInsertMiddleware := c.pluginLookupGlobal.ByKind(pluginlookup.MiddlewareKindJobInsert)
 	if len(jobInsertMiddleware) > 0 {
 		// Wrap middlewares in reverse order so the one defined first is wrapped
 		// as the outermost function and is first to receive the operation.
@@ -2372,14 +2309,13 @@ func (c *Client[TTx]) producerAdd(queueName string, queueConfig QueueConfig) (*p
 		ErrorHandler:                 c.config.ErrorHandler,
 		FetchCooldown:                cmp.Or(queueConfig.FetchCooldown, c.config.FetchCooldown),
 		FetchPollInterval:            cmp.Or(queueConfig.FetchPollInterval, c.config.FetchPollInterval),
-		HookLookupByJob:              c.hookLookupByJob,
-		HookLookupGlobal:             c.hookLookupGlobal,
+		PluginLookupByJob:            c.pluginLookupByJob,
+		PluginLookupGlobal:           c.pluginLookupGlobal,
 		JobStuckHandler:              c.config.JobStuckHandler,
 		JobStuckCount:                &c.stuckJobCount,
 		JobStuckThreshold:            c.config.JobStuckThreshold,
 		JobTimeout:                   c.config.JobTimeout,
 		MaxWorkers:                   queueConfig.MaxWorkers,
-		MiddlewareLookupGlobal:       c.middlewareLookupGlobal,
 		Notifier:                     c.notifier,
 		Queue:                        queueName,
 		QueueEventCallback:           c.subscriptionManager.distributeQueueEvent,

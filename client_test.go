@@ -26,8 +26,8 @@ import (
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/maintenance"
-	"github.com/riverqueue/river/internal/middlewarelookup"
 	"github.com/riverqueue/river/internal/notifier"
+	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/retrypolicytest"
@@ -8579,8 +8579,8 @@ func Test_NewClient_Validations(t *testing.T) {
 				config.Middleware = []rivertype.Middleware{&overridableJobMiddleware{}}
 			},
 			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
-				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindJobInsert), 1)
-				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindWorker), 2)
+				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.MiddlewareKindJobInsert), 1)
+				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.MiddlewareKindWorker), 2)
 			},
 		},
 		{
@@ -8590,8 +8590,8 @@ func Test_NewClient_Validations(t *testing.T) {
 				config.WorkerMiddleware = []rivertype.WorkerMiddleware{&overridableJobMiddleware{}}
 			},
 			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
-				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindJobInsert), 2)
-				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindWorker), 3)
+				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.MiddlewareKindJobInsert), 2)
+				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.MiddlewareKindWorker), 3)
 			},
 		},
 		{
@@ -8602,8 +8602,8 @@ func Test_NewClient_Validations(t *testing.T) {
 				config.WorkerMiddleware = []rivertype.WorkerMiddleware{middleware}
 			},
 			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
-				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindJobInsert), 1)
-				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindWorker), 2)
+				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.MiddlewareKindJobInsert), 1)
+				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.MiddlewareKindWorker), 2)
 			},
 		},
 		{

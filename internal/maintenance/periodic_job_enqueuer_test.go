@@ -15,7 +15,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/riverqueue/river/internal/dbunique"
-	"github.com/riverqueue/river/internal/hooklookup"
+	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
@@ -1055,7 +1055,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		require.NoError(t, err)
 
 		var periodicJobsStartHookCalled bool
-		svc.Config.HookLookupGlobal = hooklookup.NewHookLookup([]rivertype.Hook{
+		svc.Config.PluginLookupGlobal = pluginlookup.NewPluginLookup([]rivertype.Plugin{
 			HookPeriodicJobsStartFunc(func(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error {
 				periodicJobsStartHookCalled = true
 
@@ -1117,7 +1117,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		}
 
 		var periodicJobsStartHookCalled bool
-		svc.Config.HookLookupGlobal = hooklookup.NewHookLookup([]rivertype.Hook{
+		svc.Config.PluginLookupGlobal = pluginlookup.NewPluginLookup([]rivertype.Plugin{
 			HookPeriodicJobsStartFunc(func(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error {
 				periodicJobsStartHookCalled = true
 
@@ -1182,7 +1182,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc, _ := setup(t)
 
-		svc.Config.HookLookupGlobal = hooklookup.NewHookLookup([]rivertype.Hook{
+		svc.Config.PluginLookupGlobal = pluginlookup.NewPluginLookup([]rivertype.Plugin{
 			HookPeriodicJobsStartFunc(func(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error {
 				return errors.New("hook start error")
 			}),
@@ -1231,7 +1231,8 @@ func (p *PilotPeriodicJobMock) PeriodicJobUpsertMany(ctx context.Context, exec r
 
 type HookPeriodicJobsStartFunc func(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error
 
-func (f HookPeriodicJobsStartFunc) IsHook() bool { return true }
+func (f HookPeriodicJobsStartFunc) IsHook() bool   { return true }
+func (f HookPeriodicJobsStartFunc) IsPlugin() bool { return true }
 
 func (f HookPeriodicJobsStartFunc) Start(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error {
 	return f(ctx, params)

@@ -26,6 +26,7 @@ func DefaultMiddleware() []rivertype.Middleware {
 type ResumableMiddleware struct{}
 
 func (*ResumableMiddleware) IsMiddleware() bool { return true }
+func (*ResumableMiddleware) IsPlugin() bool     { return true }
 
 func (*ResumableMiddleware) Work(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
 	metadataUpdates, hasMetadataUpdates := jobexecutor.MetadataUpdatesFromWorkContext(ctx)

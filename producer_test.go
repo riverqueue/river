@@ -10,11 +10,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/maintenance"
-	"github.com/riverqueue/river/internal/middlewarelookup"
 	"github.com/riverqueue/river/internal/notifier"
+	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/sharedtx"
@@ -100,11 +99,10 @@ func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
 		// Fetch constantly to more aggressively trigger the potential data race:
 		FetchCooldown:                time.Millisecond,
 		FetchPollInterval:            time.Millisecond,
-		HookLookupByJob:              hooklookup.NewJobHookLookup(),
-		HookLookupGlobal:             hooklookup.NewHookLookup(nil),
+		PluginLookupByJob:            pluginlookup.NewJobPluginLookup(),
+		PluginLookupGlobal:           pluginlookup.NewPluginLookup(nil),
 		JobTimeout:                   JobTimeoutDefault,
 		MaxWorkers:                   1000,
-		MiddlewareLookupGlobal:       middlewarelookup.NewMiddlewareLookup(nil),
 		Notifier:                     notifier,
 		Queue:                        rivercommon.QueueDefault,
 		QueuePollInterval:            queuePollIntervalDefault,
@@ -196,11 +194,10 @@ func TestProducer_PollOnly(t *testing.T) {
 			ErrorHandler:                 newTestErrorHandler(),
 			FetchCooldown:                FetchCooldownDefault,
 			FetchPollInterval:            50 * time.Millisecond, // more aggressive than normal because we have no notifier
-			HookLookupByJob:              hooklookup.NewJobHookLookup(),
-			HookLookupGlobal:             hooklookup.NewHookLookup(nil),
+			PluginLookupByJob:            pluginlookup.NewJobPluginLookup(),
+			PluginLookupGlobal:           pluginlookup.NewPluginLookup(nil),
 			JobTimeout:                   JobTimeoutDefault,
 			MaxWorkers:                   1_000,
-			MiddlewareLookupGlobal:       middlewarelookup.NewMiddlewareLookup(nil),
 			Notifier:                     nil, // no notifier
 			Queue:                        queueName,
 			QueuePollInterval:            queuePollIntervalDefault,
@@ -250,11 +247,10 @@ func TestProducer_WithNotifier(t *testing.T) {
 			ErrorHandler:                 newTestErrorHandler(),
 			FetchCooldown:                FetchCooldownDefault,
 			FetchPollInterval:            50 * time.Millisecond, // more aggressive than normal so in case we miss the event, tests still pass quickly
-			HookLookupByJob:              hooklookup.NewJobHookLookup(),
-			HookLookupGlobal:             hooklookup.NewHookLookup(nil),
+			PluginLookupByJob:            pluginlookup.NewJobPluginLookup(),
+			PluginLookupGlobal:           pluginlookup.NewPluginLookup(nil),
 			JobTimeout:                   JobTimeoutDefault,
 			MaxWorkers:                   1_000,
-			MiddlewareLookupGlobal:       middlewarelookup.NewMiddlewareLookup(nil),
 			Notifier:                     notifier,
 			Queue:                        queueName,
 			QueuePollInterval:            queuePollIntervalDefault,

@@ -10,7 +10,7 @@ import (
 
 	"github.com/tidwall/sjson"
 
-	"github.com/riverqueue/river/internal/hooklookup"
+	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -89,7 +89,7 @@ type InsertFunc func(ctx context.Context, tx riverdriver.ExecutorTx, insertParam
 type PeriodicJobEnqueuerConfig struct {
 	AdvisoryLockPrefix int32
 
-	HookLookupGlobal hooklookup.HookLookupInterface
+	PluginLookupGlobal pluginlookup.PluginLookupInterface
 
 	// Insert is the function to call to insert jobs into the database.
 	Insert InsertFunc
@@ -150,9 +150,9 @@ func NewPeriodicJobEnqueuer(archetype *baseservice.Archetype, config *PeriodicJo
 		nextHandle++
 	}
 
-	hookLookupGlobal := config.HookLookupGlobal
-	if hookLookupGlobal == nil {
-		hookLookupGlobal = hooklookup.NewHookLookup([]rivertype.Hook{})
+	pluginLookupGlobal := config.PluginLookupGlobal
+	if pluginLookupGlobal == nil {
+		pluginLookupGlobal = pluginlookup.NewPluginLookup(nil)
 	}
 
 	pilot := config.Pilot
@@ -163,7 +163,7 @@ func NewPeriodicJobEnqueuer(archetype *baseservice.Archetype, config *PeriodicJo
 	svc := baseservice.Init(archetype, &PeriodicJobEnqueuer{
 		Config: (&PeriodicJobEnqueuerConfig{
 			AdvisoryLockPrefix: config.AdvisoryLockPrefix,
-			HookLookupGlobal:   hookLookupGlobal,
+			PluginLookupGlobal: pluginLookupGlobal,
 			Insert:             config.Insert,
 			PeriodicJobs:       config.PeriodicJobs,
 			Pilot:              pilot,
@@ -331,7 +331,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 			return err
 		}
 
-		for _, hook := range s.Config.HookLookupGlobal.ByHookKind(hooklookup.HookKindPeriodicJobsStart) {
+		for _, hook := range s.Config.PluginLookupGlobal.ByKind(pluginlookup.HookKindPeriodicJobsStart) {
 			if err := hook.(rivertype.HookPeriodicJobsStart).Start(ctx, &rivertype.HookPeriodicJobsStartParams{ //nolint:forcetypeassert
 				DurableJobs: sliceutil.Map(initialPeriodicJobs, func(job *riverpilot.PeriodicJob) *rivertype.DurablePeriodicJob {
 					return (*rivertype.DurablePeriodicJob)(job)

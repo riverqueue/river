@@ -8,11 +8,10 @@ import (
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/internal/execution"
-	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/maintenance"
-	"github.com/riverqueue/river/internal/middlewarelookup"
+	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/rivermiddleware"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -208,10 +207,9 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 				return nil
 			},
 		},
-		HookLookupGlobal:       hooklookup.NewHookLookup(effectiveHooks),
-		HookLookupByJob:        hooklookup.NewJobHookLookup(),
-		JobRow:                 job,
-		MiddlewareLookupGlobal: middlewarelookup.NewMiddlewareLookup(append(rivermiddleware.DefaultMiddleware(), effectiveMiddleware...)),
+		PluginLookupByJob:  pluginlookup.NewJobPluginLookup(),
+		PluginLookupGlobal: pluginlookup.NewPluginLookup(pluginlookup.NormalizePlugins(effectiveHooks, append(rivermiddleware.DefaultMiddleware(), effectiveMiddleware...), nil)),
+		JobRow:             job,
 		ProducerCallbacks: struct {
 			JobDone func(jobRow *rivertype.JobRow)
 			Stuck   func(ctx context.Context, jobRow *rivertype.JobRow)
