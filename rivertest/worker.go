@@ -146,16 +146,14 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 	}
 	completer := jobcompleter.NewInlineCompleter(archetype, w.config.Schema, exec, w.client.Pilot(), subscribeCh)
 
-	effectiveHooks := effectiveHooksForConfig(w.config)
-	effectiveMiddleware := effectiveMiddlewareForConfig(w.config)
+	var (
+		configuredMiddleware = middlewareFromConfig(w.config)
+		allMiddleware        = append(rivermiddleware.DefaultMiddleware(), configuredMiddleware...)
+		allPlugins           = pluginlookup.NormalizePlugins(w.config.Hooks, allMiddleware, w.config.Plugins) //nolint:staticcheck // Bridge legacy Hooks into the test worker's unified plugin path.
+	)
 
-	for _, hook := range effectiveHooks {
-		if withBaseService, ok := hook.(baseservice.WithBaseService); ok {
-			baseservice.Init(archetype, withBaseService)
-		}
-	}
-	for _, middleware := range effectiveMiddleware {
-		if withBaseService, ok := middleware.(baseservice.WithBaseService); ok {
+	for _, plugin := range allPlugins {
+		if withBaseService, ok := plugin.(baseservice.WithBaseService); ok {
 			baseservice.Init(archetype, withBaseService)
 		}
 	}
@@ -208,7 +206,7 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 			},
 		},
 		PluginLookupByJob:  pluginlookup.NewJobPluginLookup(),
-		PluginLookupGlobal: pluginlookup.NewPluginLookup(pluginlookup.NormalizePlugins(effectiveHooks, append(rivermiddleware.DefaultMiddleware(), effectiveMiddleware...), nil)),
+		PluginLookupGlobal: pluginlookup.NewPluginLookup(allPlugins),
 		JobRow:             job,
 		ProducerCallbacks: struct {
 			JobDone func(jobRow *rivertype.JobRow)
@@ -239,56 +237,6 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 		tb.Fatal("test worker internal error: no job completions received")
 	}
 	panic("unreachable")
-}
-
-//nolint:staticcheck
-func effectiveHooksForConfig(config *river.Config) []rivertype.Hook {
-	configuredMiddleware := middlewareFromConfig(config)
-	hooks := make([]rivertype.Hook, 0, len(config.Hooks)+len(configuredMiddleware)+len(config.Plugins))
-	hooks = append(hooks, config.Hooks...)
-
-	for _, middleware := range configuredMiddleware {
-		if hook, ok := middleware.(rivertype.Hook); ok {
-			hooks = append(hooks, hook)
-		}
-	}
-
-	for _, plugin := range config.Plugins {
-		if plugin == nil {
-			continue
-		}
-
-		if hook, ok := plugin.(rivertype.Hook); ok {
-			hooks = append(hooks, hook)
-		}
-	}
-
-	return hooks
-}
-
-//nolint:staticcheck
-func effectiveMiddlewareForConfig(config *river.Config) []rivertype.Middleware {
-	configuredMiddleware := middlewareFromConfig(config)
-	middleware := make([]rivertype.Middleware, 0, len(config.Hooks)+len(configuredMiddleware)+len(config.Plugins))
-	middleware = append(middleware, configuredMiddleware...)
-
-	for _, hook := range config.Hooks {
-		if middlewareItem, ok := hook.(rivertype.Middleware); ok {
-			middleware = append(middleware, middlewareItem)
-		}
-	}
-
-	for _, plugin := range config.Plugins {
-		if plugin == nil {
-			continue
-		}
-
-		if middlewareItem, ok := plugin.(rivertype.Middleware); ok {
-			middleware = append(middleware, middlewareItem)
-		}
-	}
-
-	return middleware
 }
 
 //nolint:staticcheck
