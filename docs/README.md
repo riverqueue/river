@@ -121,8 +121,8 @@ if err := riverClient.Stop(ctx); err != nil {
 }
 ```
 
-[Insert-only clients](/docs/insert-only-clients) will insert jobs, but not work
-them, and don't need to be started or stopped.
+[Insert-only clients](https://riverqueue.com/docs/insert-only-clients) will
+insert jobs, but not work them, and don't need to be started or stopped.
 
 ## Inserting jobs
 
