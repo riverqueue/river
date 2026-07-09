@@ -204,6 +204,40 @@ func TestPluginLookup(t *testing.T) {
 
 		wg.Wait()
 	})
+
+	t.Run("LooksUpLegacyHooksAndMiddleware", func(t *testing.T) {
+		t.Parallel()
+
+		legacyHook := &testLegacyHookInsertBegin{}
+		legacyMiddleware := &testLegacyMiddlewareJobInsert{}
+
+		lookup, isPluginLookup := NewPluginLookup(NormalizePlugins(
+			[]rivertype.Hook{legacyHook},
+			[]rivertype.Middleware{legacyMiddleware},
+			nil,
+		)).(*pluginLookup)
+		require.True(t, isPluginLookup)
+
+		hookPlugins := lookup.ByKind(HookKindInsertBegin)
+		require.Len(t, hookPlugins, 1)
+
+		hook, isHookInsertBegin := hookPlugins[0].(rivertype.HookInsertBegin)
+		require.True(t, isHookInsertBegin)
+		require.NoError(t, hook.InsertBegin(context.Background(), &rivertype.JobInsertParams{}))
+		require.True(t, legacyHook.insertBeginCalled)
+
+		middlewarePlugins := lookup.ByKind(MiddlewareKindJobInsert)
+		require.Len(t, middlewarePlugins, 1)
+
+		middleware, isJobInsertMiddleware := middlewarePlugins[0].(rivertype.JobInsertMiddleware)
+		require.True(t, isJobInsertMiddleware)
+		_, err := middleware.InsertMany(context.Background(), []*rivertype.JobInsertParams{{}}, func(context.Context) ([]*rivertype.JobInsertResult, error) {
+			legacyMiddleware.doInnerCalled = true
+			return nil, nil
+		})
+		require.NoError(t, err)
+		require.True(t, legacyMiddleware.doInnerCalled)
+	})
 }
 
 //
@@ -347,5 +381,38 @@ type testMiddlewareWorker struct{ rivertype.Middleware }
 func (t *testMiddlewareWorker) IsPlugin() bool { return true }
 
 func (t *testMiddlewareWorker) Work(ctx context.Context, job *rivertype.JobRow, doInner func(context.Context) error) error {
+	return doInner(ctx)
+}
+
+//
+// testLegacyHookInsertBegin
+//
+
+var _ rivertype.HookInsertBegin = &testLegacyHookInsertBegin{}
+
+type testLegacyHookInsertBegin struct {
+	insertBeginCalled bool
+}
+
+func (t *testLegacyHookInsertBegin) IsHook() bool { return true }
+
+func (t *testLegacyHookInsertBegin) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
+	t.insertBeginCalled = true
+	return nil
+}
+
+//
+// testLegacyMiddlewareJobInsert
+//
+
+var _ rivertype.JobInsertMiddleware = &testLegacyMiddlewareJobInsert{}
+
+type testLegacyMiddlewareJobInsert struct {
+	doInnerCalled bool
+}
+
+func (t *testLegacyMiddlewareJobInsert) IsMiddleware() bool { return true }
+
+func (t *testLegacyMiddlewareJobInsert) InsertMany(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
 	return doInner(ctx)
 }
