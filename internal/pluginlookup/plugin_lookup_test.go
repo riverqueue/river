@@ -110,6 +110,36 @@ func TestJobPluginLookup(t *testing.T) {
 	})
 }
 
+func TestNormalizePlugins(t *testing.T) {
+	t.Parallel()
+
+	t.Run("PluginsPrecedeHooksAndMiddleware", func(t *testing.T) {
+		t.Parallel()
+
+		hookPlugin := &testHookMiddlewarePlugin{}
+		middlewarePlugin := &testHookMiddlewarePlugin{}
+		plugin := &testHookMiddlewarePlugin{}
+
+		lookup, isPluginLookup := NewPluginLookup(NormalizePlugins(
+			[]rivertype.Hook{hookPlugin},
+			[]rivertype.Middleware{middlewarePlugin},
+			[]rivertype.Plugin{plugin},
+		)).(*pluginLookup)
+		require.True(t, isPluginLookup)
+
+		require.Equal(t, []rivertype.Plugin{
+			plugin,
+			hookPlugin,
+			middlewarePlugin,
+		}, lookup.ByKind(HookKindInsertBegin))
+		require.Equal(t, []rivertype.Plugin{
+			plugin,
+			hookPlugin,
+			middlewarePlugin,
+		}, lookup.ByKind(MiddlewareKindJobInsert))
+	})
+}
+
 func TestPluginLookup(t *testing.T) {
 	t.Parallel()
 
@@ -306,6 +336,29 @@ func (t *testHookInsertBegin) IsPlugin() bool { return true }
 func (t *testHookInsertBegin) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
 	return nil
 }
+
+//
+// testHookMiddlewarePlugin
+//
+
+var (
+	_ rivertype.HookInsertBegin     = &testHookMiddlewarePlugin{}
+	_ rivertype.JobInsertMiddleware = &testHookMiddlewarePlugin{}
+)
+
+type testHookMiddlewarePlugin struct{}
+
+func (t *testHookMiddlewarePlugin) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
+	return nil
+}
+
+func (t *testHookMiddlewarePlugin) InsertMany(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
+	return doInner(ctx)
+}
+
+func (t *testHookMiddlewarePlugin) IsHook() bool       { return true }
+func (t *testHookMiddlewarePlugin) IsMiddleware() bool { return true }
+func (t *testHookMiddlewarePlugin) IsPlugin() bool     { return true }
 
 //
 // testHookWorkBegin

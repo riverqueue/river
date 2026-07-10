@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/riverqueue/river/internal/rivermiddleware"
+	"github.com/riverqueue/river/internal/riverplugin"
 )
 
 var (
@@ -150,7 +150,7 @@ func ResumableStepCursor[TCursor any](ctx context.Context, name string, opts *St
 	delete(state.Cursors, name)
 }
 
-func mustResumableState(ctx context.Context) *rivermiddleware.ResumableState {
+func mustResumableState(ctx context.Context) *riverplugin.ResumableState {
 	state, ok := resumableStateFromContext(ctx)
 	if !ok {
 		panic(errResumableStepNotInWorker)
@@ -159,7 +159,7 @@ func mustResumableState(ctx context.Context) *rivermiddleware.ResumableState {
 	return state
 }
 
-func registerResumableStepName(state *rivermiddleware.ResumableState, name string) bool {
+func registerResumableStepName(state *riverplugin.ResumableState, name string) bool {
 	if _, ok := state.AllStepNames[name]; ok {
 		state.Err = fmt.Errorf("river: duplicate resumable step name %q", name)
 		return false
@@ -169,13 +169,13 @@ func registerResumableStepName(state *rivermiddleware.ResumableState, name strin
 	return true
 }
 
-func resumableStateFromContext(ctx context.Context) (*rivermiddleware.ResumableState, bool) {
-	state := ctx.Value(rivermiddleware.ResumableContextKey{})
+func resumableStateFromContext(ctx context.Context) (*riverplugin.ResumableState, bool) {
+	state := ctx.Value(riverplugin.ResumableContextKey{})
 	if state == nil {
 		return nil, false
 	}
 
-	typedState, ok := state.(*rivermiddleware.ResumableState)
+	typedState, ok := state.(*riverplugin.ResumableState)
 	if !ok || typedState == nil {
 		return nil, false
 	}

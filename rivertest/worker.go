@@ -12,7 +12,7 @@ import (
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/pluginlookup"
-	"github.com/riverqueue/river/internal/rivermiddleware"
+	"github.com/riverqueue/river/internal/riverplugin"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
@@ -146,10 +146,13 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 	}
 	completer := jobcompleter.NewInlineCompleter(archetype, w.config.Schema, exec, w.client.Pilot(), subscribeCh)
 
-	var (
-		configuredMiddleware = middlewareFromConfig(w.config)
-		allMiddleware        = append(rivermiddleware.DefaultMiddleware(), configuredMiddleware...)
-		allPlugins           = pluginlookup.NormalizePlugins(w.config.Hooks, allMiddleware, w.config.Plugins) //nolint:staticcheck // Bridge legacy Hooks into the test worker's unified plugin path.
+	allPlugins := pluginlookup.NormalizePlugins(
+		w.config.Hooks, //nolint:staticcheck // Bridge legacy Hooks into the test worker's unified plugin path.
+		middlewareFromConfig(w.config),
+		append(
+			riverplugin.DefaultPlugins(),
+			w.config.Plugins...,
+		),
 	)
 
 	for _, plugin := range allPlugins {

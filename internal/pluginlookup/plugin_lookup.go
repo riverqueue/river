@@ -89,26 +89,30 @@ func NewPluginLookup(plugins []rivertype.Plugin) PluginLookupInterface {
 // NormalizePlugins converts hook, middleware, and plugin registrations into a
 // single plugin slice while preserving legacy hook and middleware registrations
 // that don't yet opt into Plugin.
+//
+// Plugins passed explicitly are ordered before hooks and middleware, so
+// Config.Plugins entries take precedence over plugins bridged from Config.Hooks
+// or Config.Middleware. Relative order is preserved within each input slice.
 func NormalizePlugins(hooks []rivertype.Hook, middlewares []rivertype.Middleware, plugins []rivertype.Plugin) []rivertype.Plugin {
 	normalizedPlugins := make([]rivertype.Plugin, 0, len(hooks)+len(middlewares)+len(plugins))
+
+	normalizedPlugins = append(normalizedPlugins, plugins...)
 
 	for _, hook := range hooks {
 		if plugin, ok := hook.(rivertype.Plugin); ok {
 			normalizedPlugins = append(normalizedPlugins, plugin)
-			continue
+		} else {
+			normalizedPlugins = append(normalizedPlugins, newHookPlugin(hook))
 		}
-
-		normalizedPlugins = append(normalizedPlugins, newHookPlugin(hook))
 	}
+
 	for _, middleware := range middlewares {
 		if plugin, ok := middleware.(rivertype.Plugin); ok {
 			normalizedPlugins = append(normalizedPlugins, plugin)
-			continue
+		} else {
+			normalizedPlugins = append(normalizedPlugins, newMiddlewarePlugin(middleware))
 		}
-
-		normalizedPlugins = append(normalizedPlugins, newMiddlewarePlugin(middleware))
 	}
-	normalizedPlugins = append(normalizedPlugins, plugins...)
 
 	return normalizedPlugins
 }

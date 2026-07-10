@@ -25,7 +25,7 @@ import (
 	"github.com/riverqueue/river/internal/notifylimiter"
 	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/rivermiddleware"
+	"github.com/riverqueue/river/internal/riverplugin"
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -854,10 +854,10 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		}
 	}
 
-	var (
-		configuredMiddleware = middlewareFromConfig(config)
-		allMiddleware        = append(rivermiddleware.DefaultMiddleware(), configuredMiddleware...)
-		allPlugins           = pluginlookup.NormalizePlugins(config.Hooks, allMiddleware, config.Plugins)
+	allPlugins := pluginlookup.NormalizePlugins(
+		config.Hooks,
+		middlewareFromConfig(config),
+		append(riverplugin.DefaultPlugins(), config.Plugins...),
 	)
 
 	for _, plugin := range allPlugins {
