@@ -55,15 +55,15 @@ func TestJobPluginLookup(t *testing.T) {
 		require.Nil(t, jobPluginLookup.ByJobArgs(&jobArgsNoHooks{}).ByKind(PluginKindHookInsertBegin))
 		require.Nil(t, jobPluginLookup.ByJobArgs(&jobArgsNoHooks{}).ByKind(PluginKindHookWorkBegin))
 		require.Nil(t, jobPluginLookup.ByJobArgs(&jobArgsNoHooks{}).ByKind(PluginKindHookWorkEnd))
-		require.Equal(t, []rivertype.Plugin{
+		require.Equal(t, []any{
 			&testHookInsertAndWorkBegin{},
 			&testHookInsertBegin{},
 		}, jobPluginLookup.ByJobArgs(&jobArgsWithCustomHooks{}).ByKind(PluginKindHookInsertBegin))
-		require.Equal(t, []rivertype.Plugin{
+		require.Equal(t, []any{
 			&testHookInsertAndWorkBegin{},
 			&testHookWorkBegin{},
 		}, jobPluginLookup.ByJobArgs(&jobArgsWithCustomHooks{}).ByKind(PluginKindHookWorkBegin))
-		require.Equal(t, []rivertype.Plugin{
+		require.Equal(t, []any{
 			&testHookWorkEnd{},
 		}, jobPluginLookup.ByJobArgs(&jobArgsWithCustomHooks{}).ByKind(PluginKindHookWorkEnd))
 
@@ -73,15 +73,15 @@ func TestJobPluginLookup(t *testing.T) {
 		require.Nil(t, jobPluginLookup.ByJobArgs(&jobArgsNoHooks{}).ByKind(PluginKindHookInsertBegin))
 		require.Nil(t, jobPluginLookup.ByJobArgs(&jobArgsNoHooks{}).ByKind(PluginKindHookWorkBegin))
 		require.Nil(t, jobPluginLookup.ByJobArgs(&jobArgsNoHooks{}).ByKind(PluginKindHookWorkEnd))
-		require.Equal(t, []rivertype.Plugin{
+		require.Equal(t, []any{
 			&testHookInsertAndWorkBegin{},
 			&testHookInsertBegin{},
 		}, jobPluginLookup.ByJobArgs(&jobArgsWithCustomHooks{}).ByKind(PluginKindHookInsertBegin))
-		require.Equal(t, []rivertype.Plugin{
+		require.Equal(t, []any{
 			&testHookInsertAndWorkBegin{},
 			&testHookWorkBegin{},
 		}, jobPluginLookup.ByJobArgs(&jobArgsWithCustomHooks{}).ByKind(PluginKindHookWorkBegin))
-		require.Equal(t, []rivertype.Plugin{
+		require.Equal(t, []any{
 			&testHookWorkEnd{},
 		}, jobPluginLookup.ByJobArgs(&jobArgsWithCustomHooks{}).ByKind(PluginKindHookWorkEnd))
 	})
@@ -130,7 +130,7 @@ func TestNormalizePlugins(t *testing.T) {
 		plugin := &testHookMiddlewarePlugin{}
 		plugins := NormalizePlugins(nil, nil, []rivertype.Plugin{plugin, plugin})
 
-		require.Equal(t, []rivertype.Plugin{plugin, plugin}, plugins)
+		require.Equal(t, []any{plugin, plugin}, plugins)
 	})
 
 	t.Run("PluginsPrecedeHooksAndMiddleware", func(t *testing.T) {
@@ -147,12 +147,12 @@ func TestNormalizePlugins(t *testing.T) {
 		)).(*pluginLookup)
 		require.True(t, isPluginLookup)
 
-		require.Equal(t, []rivertype.Plugin{
+		require.Equal(t, []any{
 			plugin,
 			hookPlugin,
 			middlewarePlugin,
 		}, lookup.ByKind(PluginKindHookInsertBegin))
-		require.Equal(t, []rivertype.Plugin{
+		require.Equal(t, []any{
 			plugin,
 			hookPlugin,
 			middlewarePlugin,
@@ -169,7 +169,7 @@ func TestNormalizePlugins(t *testing.T) {
 			[]rivertype.Plugin{plugin},
 		)
 
-		require.Equal(t, []rivertype.Plugin{plugin}, plugins)
+		require.Equal(t, []any{plugin}, plugins)
 	})
 }
 
@@ -181,7 +181,7 @@ func TestPluginLookup(t *testing.T) {
 	setup := func(t *testing.T) (*pluginLookup, *testBundle) { //nolint:unparam
 		t.Helper()
 
-		lookup, isPluginLookup := NewPluginLookup([]rivertype.Plugin{
+		lookup, isPluginLookup := NewPluginLookup([]any{
 			&testHookInsertAndWorkBegin{},
 			&testHookInsertBegin{},
 			&testHookWorkBegin{},
@@ -200,23 +200,23 @@ func TestPluginLookup(t *testing.T) {
 
 		pluginLookup, _ := setup(t)
 
-		require.Equal(t, []rivertype.Plugin{
+		require.Equal(t, []any{
 			&testHookInsertAndWorkBegin{},
 			&testHookInsertBegin{},
 		}, pluginLookup.ByKind(PluginKindHookInsertBegin))
-		require.Equal(t, []rivertype.Plugin{
+		require.Equal(t, []any{
 			&testHookInsertAndWorkBegin{},
 			&testHookWorkBegin{},
 		}, pluginLookup.ByKind(PluginKindHookWorkBegin))
-		require.Equal(t, []rivertype.Plugin{
+		require.Equal(t, []any{
 			&testHookWorkEnd{},
 		}, pluginLookup.ByKind(PluginKindHookWorkEnd))
 
-		require.Equal(t, []rivertype.Plugin{
+		require.Equal(t, []any{
 			&testMiddlewareJobInsertAndWorker{},
 			&testMiddlewareJobInsert{},
 		}, pluginLookup.ByKind(PluginKindMiddlewareJobInsert))
-		require.Equal(t, []rivertype.Plugin{
+		require.Equal(t, []any{
 			&testMiddlewareJobInsertAndWorker{},
 			&testMiddlewareWorker{},
 		}, pluginLookup.ByKind(PluginKindMiddlewareWorker))
@@ -224,22 +224,22 @@ func TestPluginLookup(t *testing.T) {
 		require.Len(t, pluginLookup.pluginsByKind, 5)
 
 		// Repeat lookups to make sure we get the same result.
-		require.Equal(t, []rivertype.Plugin{
+		require.Equal(t, []any{
 			&testHookInsertAndWorkBegin{},
 			&testHookInsertBegin{},
 		}, pluginLookup.ByKind(PluginKindHookInsertBegin))
-		require.Equal(t, []rivertype.Plugin{
+		require.Equal(t, []any{
 			&testHookInsertAndWorkBegin{},
 			&testHookWorkBegin{},
 		}, pluginLookup.ByKind(PluginKindHookWorkBegin))
-		require.Equal(t, []rivertype.Plugin{
+		require.Equal(t, []any{
 			&testHookWorkEnd{},
 		}, pluginLookup.ByKind(PluginKindHookWorkEnd))
-		require.Equal(t, []rivertype.Plugin{
+		require.Equal(t, []any{
 			&testMiddlewareJobInsertAndWorker{},
 			&testMiddlewareJobInsert{},
 		}, pluginLookup.ByKind(PluginKindMiddlewareJobInsert))
-		require.Equal(t, []rivertype.Plugin{
+		require.Equal(t, []any{
 			&testMiddlewareJobInsertAndWorker{},
 			&testMiddlewareWorker{},
 		}, pluginLookup.ByKind(PluginKindMiddlewareWorker))

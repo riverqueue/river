@@ -907,7 +907,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor, bundle := setup(t)
 
 		// Add a middleware so we can verify it's in the trace too:
-		executor.PluginLookupGlobal = pluginlookup.NewPluginLookup([]rivertype.Plugin{
+		executor.PluginLookupGlobal = pluginlookup.NewPluginLookup([]any{
 			&testMiddleware{
 				work: func(ctx context.Context, job *rivertype.JobRow, next func(context.Context) error) error {
 					return next(ctx)
@@ -1078,7 +1078,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 			workBeginCalled bool
 			workEndCalled   bool
 		)
-		executor.PluginLookupGlobal = pluginlookup.NewPluginLookup([]rivertype.Plugin{
+		executor.PluginLookupGlobal = pluginlookup.NewPluginLookup([]any{
 			HookWorkBeginFunc(func(ctx context.Context, job *rivertype.JobRow) error {
 				workBeginCalled = true
 				return nil
@@ -1108,7 +1108,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 			workEnd1Called bool
 			workEnd2Called bool
 		)
-		executor.PluginLookupGlobal = pluginlookup.NewPluginLookup([]rivertype.Plugin{
+		executor.PluginLookupGlobal = pluginlookup.NewPluginLookup([]any{
 			HookWorkEndFunc(func(ctx context.Context, job *rivertype.JobRow, err error) error {
 				workEnd1Called = true
 				require.EqualError(t, err, "job error")
@@ -1142,7 +1142,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 			workEnd1Called bool
 			workEnd2Called bool
 		)
-		executor.PluginLookupGlobal = pluginlookup.NewPluginLookup([]rivertype.Plugin{
+		executor.PluginLookupGlobal = pluginlookup.NewPluginLookup([]any{
 			HookWorkEndFunc(func(ctx context.Context, job *rivertype.JobRow, err error) error {
 				workEnd1Called = true
 				require.EqualError(t, err, "job error")

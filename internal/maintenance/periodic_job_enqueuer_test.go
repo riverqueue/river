@@ -1055,7 +1055,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		require.NoError(t, err)
 
 		var periodicJobsStartHookCalled bool
-		svc.Config.PluginLookupGlobal = pluginlookup.NewPluginLookup([]rivertype.Plugin{
+		svc.Config.PluginLookupGlobal = pluginlookup.NewPluginLookup([]any{
 			HookPeriodicJobsStartFunc(func(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error {
 				periodicJobsStartHookCalled = true
 
@@ -1117,7 +1117,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		}
 
 		var periodicJobsStartHookCalled bool
-		svc.Config.PluginLookupGlobal = pluginlookup.NewPluginLookup([]rivertype.Plugin{
+		svc.Config.PluginLookupGlobal = pluginlookup.NewPluginLookup([]any{
 			HookPeriodicJobsStartFunc(func(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error {
 				periodicJobsStartHookCalled = true
 
@@ -1182,7 +1182,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc, _ := setup(t)
 
-		svc.Config.PluginLookupGlobal = pluginlookup.NewPluginLookup([]rivertype.Plugin{
+		svc.Config.PluginLookupGlobal = pluginlookup.NewPluginLookup([]any{
 			HookPeriodicJobsStartFunc(func(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error {
 				return errors.New("hook start error")
 			}),
