@@ -8665,8 +8665,8 @@ func Test_NewClient_Validations(t *testing.T) {
 				config.Middleware = []rivertype.Middleware{&overridableJobMiddleware{}}
 			},
 			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
-				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.MiddlewareKindJobInsert), 1)
-				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.MiddlewareKindWorker), 2)
+				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.PluginKindMiddlewareJobInsert), 1)
+				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.PluginKindMiddlewareWorker), 2)
 			},
 		},
 		{
@@ -8676,8 +8676,8 @@ func Test_NewClient_Validations(t *testing.T) {
 				config.WorkerMiddleware = []rivertype.WorkerMiddleware{&overridableJobMiddleware{}}
 			},
 			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
-				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.MiddlewareKindJobInsert), 2)
-				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.MiddlewareKindWorker), 3)
+				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.PluginKindMiddlewareJobInsert), 2)
+				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.PluginKindMiddlewareWorker), 3)
 			},
 		},
 		{
@@ -8688,8 +8688,8 @@ func Test_NewClient_Validations(t *testing.T) {
 				config.WorkerMiddleware = []rivertype.WorkerMiddleware{middleware}
 			},
 			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
-				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.MiddlewareKindJobInsert), 1)
-				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.MiddlewareKindWorker), 2)
+				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.PluginKindMiddlewareJobInsert), 1)
+				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.PluginKindMiddlewareWorker), 2)
 			},
 		},
 		{

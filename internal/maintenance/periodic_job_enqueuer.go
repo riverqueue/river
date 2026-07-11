@@ -331,7 +331,7 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 			return err
 		}
 
-		for _, hook := range s.Config.PluginLookupGlobal.ByKind(pluginlookup.HookKindPeriodicJobsStart) {
+		for _, hook := range s.Config.PluginLookupGlobal.ByKind(pluginlookup.PluginKindHookPeriodicJobsStart) {
 			if err := hook.(rivertype.HookPeriodicJobsStart).Start(ctx, &rivertype.HookPeriodicJobsStartParams{ //nolint:forcetypeassert
 				DurableJobs: sliceutil.Map(initialPeriodicJobs, func(job *riverpilot.PeriodicJob) *rivertype.DurablePeriodicJob {
 					return (*rivertype.DurablePeriodicJob)(job)

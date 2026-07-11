@@ -16,26 +16,12 @@ import (
 type PluginKind string
 
 const (
-	PluginKindInsertBegin       PluginKind = "insert_begin"
-	PluginKindJobInsert         PluginKind = "job_insert"
-	PluginKindPeriodicJobsStart PluginKind = "periodic_job_start"
-	PluginKindWorkBegin         PluginKind = "work_begin"
-	PluginKindWorkEnd           PluginKind = "work_end"
-	PluginKindWorker            PluginKind = "worker"
-)
-
-type (
-	HookKind       = PluginKind
-	MiddlewareKind = PluginKind
-)
-
-const (
-	HookKindInsertBegin       HookKind       = PluginKindInsertBegin
-	HookKindPeriodicJobsStart HookKind       = PluginKindPeriodicJobsStart
-	HookKindWorkBegin         HookKind       = PluginKindWorkBegin
-	HookKindWorkEnd           HookKind       = PluginKindWorkEnd
-	MiddlewareKindJobInsert   MiddlewareKind = PluginKindJobInsert
-	MiddlewareKindWorker      MiddlewareKind = PluginKindWorker
+	PluginKindHookInsertBegin       PluginKind = "hook_insert_begin"
+	PluginKindHookPeriodicJobsStart PluginKind = "hook_periodic_jobs_start"
+	PluginKindHookWorkBegin         PluginKind = "hook_work_begin"
+	PluginKindHookWorkEnd           PluginKind = "hook_work_end"
+	PluginKindMiddlewareJobInsert   PluginKind = "middleware_job_insert"
+	PluginKindMiddlewareWorker      PluginKind = "middleware_worker"
 )
 
 //
@@ -86,22 +72,22 @@ func NewPluginLookup(plugins []rivertype.Plugin) PluginLookupInterface {
 		}
 
 		if _, ok := extension.(rivertype.HookInsertBegin); ok {
-			pluginsByKind[PluginKindInsertBegin] = append(pluginsByKind[PluginKindInsertBegin], plugin)
+			pluginsByKind[PluginKindHookInsertBegin] = append(pluginsByKind[PluginKindHookInsertBegin], plugin)
 		}
 		if _, ok := extension.(rivertype.HookPeriodicJobsStart); ok {
-			pluginsByKind[PluginKindPeriodicJobsStart] = append(pluginsByKind[PluginKindPeriodicJobsStart], plugin)
+			pluginsByKind[PluginKindHookPeriodicJobsStart] = append(pluginsByKind[PluginKindHookPeriodicJobsStart], plugin)
 		}
 		if _, ok := extension.(rivertype.HookWorkBegin); ok {
-			pluginsByKind[PluginKindWorkBegin] = append(pluginsByKind[PluginKindWorkBegin], plugin)
+			pluginsByKind[PluginKindHookWorkBegin] = append(pluginsByKind[PluginKindHookWorkBegin], plugin)
 		}
 		if _, ok := extension.(rivertype.HookWorkEnd); ok {
-			pluginsByKind[PluginKindWorkEnd] = append(pluginsByKind[PluginKindWorkEnd], plugin)
+			pluginsByKind[PluginKindHookWorkEnd] = append(pluginsByKind[PluginKindHookWorkEnd], plugin)
 		}
 		if _, ok := extension.(rivertype.JobInsertMiddleware); ok {
-			pluginsByKind[PluginKindJobInsert] = append(pluginsByKind[PluginKindJobInsert], plugin)
+			pluginsByKind[PluginKindMiddlewareJobInsert] = append(pluginsByKind[PluginKindMiddlewareJobInsert], plugin)
 		}
 		if _, ok := extension.(rivertype.WorkerMiddleware); ok {
-			pluginsByKind[PluginKindWorker] = append(pluginsByKind[PluginKindWorker], plugin)
+			pluginsByKind[PluginKindMiddlewareWorker] = append(pluginsByKind[PluginKindMiddlewareWorker], plugin)
 		}
 	}
 

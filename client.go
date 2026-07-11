@@ -1994,8 +1994,8 @@ func (c *Client[TTx]) insertManyShared(
 	doInner := func(ctx context.Context) ([]*rivertype.JobInsertResult, error) {
 		for _, params := range insertParams {
 			for _, hook := range append(
-				c.pluginLookupGlobal.ByKind(pluginlookup.HookKindInsertBegin),
-				c.pluginLookupByJob.ByJobArgs(params.Args).ByKind(pluginlookup.HookKindInsertBegin)...,
+				c.pluginLookupGlobal.ByKind(pluginlookup.PluginKindHookInsertBegin),
+				c.pluginLookupByJob.ByJobArgs(params.Args).ByKind(pluginlookup.PluginKindHookInsertBegin)...,
 			) {
 				if err := hook.(rivertype.HookInsertBegin).InsertBegin(ctx, params); err != nil { //nolint:forcetypeassert
 					return nil, err
@@ -2026,7 +2026,7 @@ func (c *Client[TTx]) insertManyShared(
 		return insertResults, nil
 	}
 
-	jobInsertMiddleware := c.pluginLookupGlobal.ByKind(pluginlookup.MiddlewareKindJobInsert)
+	jobInsertMiddleware := c.pluginLookupGlobal.ByKind(pluginlookup.PluginKindMiddlewareJobInsert)
 	if len(jobInsertMiddleware) > 0 {
 		// Wrap middlewares in reverse order so the one defined first is wrapped
 		// as the outermost function and is first to receive the operation.
