@@ -24,17 +24,6 @@ const (
 	PluginKindMiddlewareWorker      PluginKind = "middleware_worker"
 )
 
-//
-// PluginLookupInterface
-//
-
-// PluginLookupInterface looks up plugins by kind. It's commonly implemented by
-// PluginLookup, but may also be EmptyPluginLookup as a memory allocation
-// optimization for bundles where no plugins are present.
-type PluginLookupInterface interface {
-	ByKind(kind PluginKind) []rivertype.Plugin
-}
-
 // InitBaseServices initializes base services embedded in plugins, including
 // those hidden behind wrappers for legacy hooks and middleware.
 func InitBaseServices(archetype *baseservice.Archetype, plugins []rivertype.Plugin) {
@@ -48,50 +37,6 @@ func InitBaseServices(archetype *baseservice.Archetype, plugins []rivertype.Plug
 			baseservice.Init(archetype, withBaseService)
 		}
 	}
-}
-
-// NewPluginLookup returns a new plugin lookup interface based on the given
-// plugins that satisfies PluginLookupInterface. This is often pluginLookup,
-// but may be emptyPluginLookup as an optimization for the common case of an
-// empty plugin bundle.
-func NewPluginLookup(plugins []rivertype.Plugin) PluginLookupInterface {
-	if len(plugins) < 1 {
-		return &emptyPluginLookup{}
-	}
-
-	pluginsByKind := make(map[PluginKind][]rivertype.Plugin)
-
-	for _, plugin := range plugins {
-		if plugin == nil {
-			continue
-		}
-
-		extension := any(plugin)
-		if legacyPlugin, ok := plugin.(*legacyPlugin); ok {
-			extension = legacyPlugin.extension
-		}
-
-		if _, ok := extension.(rivertype.HookInsertBegin); ok {
-			pluginsByKind[PluginKindHookInsertBegin] = append(pluginsByKind[PluginKindHookInsertBegin], plugin)
-		}
-		if _, ok := extension.(rivertype.HookPeriodicJobsStart); ok {
-			pluginsByKind[PluginKindHookPeriodicJobsStart] = append(pluginsByKind[PluginKindHookPeriodicJobsStart], plugin)
-		}
-		if _, ok := extension.(rivertype.HookWorkBegin); ok {
-			pluginsByKind[PluginKindHookWorkBegin] = append(pluginsByKind[PluginKindHookWorkBegin], plugin)
-		}
-		if _, ok := extension.(rivertype.HookWorkEnd); ok {
-			pluginsByKind[PluginKindHookWorkEnd] = append(pluginsByKind[PluginKindHookWorkEnd], plugin)
-		}
-		if _, ok := extension.(rivertype.JobInsertMiddleware); ok {
-			pluginsByKind[PluginKindMiddlewareJobInsert] = append(pluginsByKind[PluginKindMiddlewareJobInsert], plugin)
-		}
-		if _, ok := extension.(rivertype.WorkerMiddleware); ok {
-			pluginsByKind[PluginKindMiddlewareWorker] = append(pluginsByKind[PluginKindMiddlewareWorker], plugin)
-		}
-	}
-
-	return &pluginLookup{pluginsByKind: pluginsByKind}
 }
 
 // NormalizePlugins converts hook, middleware, and plugin registrations into a
@@ -157,27 +102,59 @@ func NormalizePlugins(hooks []rivertype.Hook, middlewares []rivertype.Middleware
 	return normalizedPlugins
 }
 
-// pluginPointerIdentity identifies a non-zero-sized pointer-backed extension so
-// NormalizePlugins can collapse the same instance registered through multiple
-// plugin, hook, or middleware config fields. Zero-sized pointers are excluded
-// because Go allows distinct zero-sized values to have the same address.
-type pluginPointerIdentity struct {
-	pointer uintptr
-	typeOf  reflect.Type
+//
+// PluginLookupInterface
+//
+
+// PluginLookupInterface looks up plugins by kind. It's commonly implemented by
+// PluginLookup, but may also be EmptyPluginLookup as a memory allocation
+// optimization for bundles where no plugins are present.
+type PluginLookupInterface interface {
+	ByKind(kind PluginKind) []rivertype.Plugin
 }
 
-func pluginPointerIdentityFor(plugin any) (pluginPointerIdentity, bool) {
-	value := reflect.ValueOf(plugin)
-	if !value.IsValid() || value.Kind() != reflect.Ptr || value.Type().Elem().Size() == 0 {
-		return pluginPointerIdentity{}, false
+// NewPluginLookup returns a new plugin lookup interface based on the given
+// plugins that satisfies PluginLookupInterface. This is often pluginLookup,
+// but may be emptyPluginLookup as an optimization for the common case of an
+// empty plugin bundle.
+func NewPluginLookup(plugins []rivertype.Plugin) PluginLookupInterface {
+	if len(plugins) < 1 {
+		return &emptyPluginLookup{}
 	}
 
-	return pluginPointerIdentity{pointer: value.Pointer(), typeOf: value.Type()}, true
-}
+	pluginsByKind := make(map[PluginKind][]rivertype.Plugin)
 
-type pluginRegistration struct {
-	original any
-	plugin   rivertype.Plugin
+	for _, plugin := range plugins {
+		if plugin == nil {
+			continue
+		}
+
+		extension := any(plugin)
+		if legacyPlugin, ok := plugin.(*legacyPlugin); ok {
+			extension = legacyPlugin.extension
+		}
+
+		if _, ok := extension.(rivertype.HookInsertBegin); ok {
+			pluginsByKind[PluginKindHookInsertBegin] = append(pluginsByKind[PluginKindHookInsertBegin], plugin)
+		}
+		if _, ok := extension.(rivertype.HookPeriodicJobsStart); ok {
+			pluginsByKind[PluginKindHookPeriodicJobsStart] = append(pluginsByKind[PluginKindHookPeriodicJobsStart], plugin)
+		}
+		if _, ok := extension.(rivertype.HookWorkBegin); ok {
+			pluginsByKind[PluginKindHookWorkBegin] = append(pluginsByKind[PluginKindHookWorkBegin], plugin)
+		}
+		if _, ok := extension.(rivertype.HookWorkEnd); ok {
+			pluginsByKind[PluginKindHookWorkEnd] = append(pluginsByKind[PluginKindHookWorkEnd], plugin)
+		}
+		if _, ok := extension.(rivertype.JobInsertMiddleware); ok {
+			pluginsByKind[PluginKindMiddlewareJobInsert] = append(pluginsByKind[PluginKindMiddlewareJobInsert], plugin)
+		}
+		if _, ok := extension.(rivertype.WorkerMiddleware); ok {
+			pluginsByKind[PluginKindMiddlewareWorker] = append(pluginsByKind[PluginKindMiddlewareWorker], plugin)
+		}
+	}
+
+	return &pluginLookup{pluginsByKind: pluginsByKind}
 }
 
 //
@@ -283,6 +260,37 @@ func (p *legacyPlugin) WorkEnd(ctx context.Context, job *rivertype.JobRow, err e
 		return err
 	}
 	return hook.WorkEnd(ctx, job, err)
+}
+
+//
+// pluginPointerIdentity
+//
+
+// pluginPointerIdentity identifies a non-zero-sized pointer-backed extension so
+// NormalizePlugins can collapse the same instance registered through multiple
+// plugin, hook, or middleware config fields. Zero-sized pointers are excluded
+// because Go allows distinct zero-sized values to have the same address.
+type pluginPointerIdentity struct {
+	pointer uintptr
+	typeOf  reflect.Type
+}
+
+func pluginPointerIdentityFor(plugin any) (pluginPointerIdentity, bool) {
+	value := reflect.ValueOf(plugin)
+	if !value.IsValid() || value.Kind() != reflect.Ptr || value.Type().Elem().Size() == 0 {
+		return pluginPointerIdentity{}, false
+	}
+
+	return pluginPointerIdentity{pointer: value.Pointer(), typeOf: value.Type()}, true
+}
+
+//
+// pluginRegistration
+//
+
+type pluginRegistration struct {
+	original any
+	plugin   rivertype.Plugin
 }
 
 //
