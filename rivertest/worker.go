@@ -146,20 +146,16 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 	}
 	completer := jobcompleter.NewInlineCompleter(archetype, w.config.Schema, exec, w.client.Pilot(), subscribeCh)
 
-	allPlugins := pluginlookup.NormalizePlugins(
-		w.config.Hooks, //nolint:staticcheck // Bridge legacy Hooks into the test worker's unified plugin path.
-		middlewareFromConfig(w.config),
-		append(
-			riverplugin.DefaultPlugins(),
-			w.config.Plugins...,
-		),
+	var (
+		configuredMiddleware = middlewareFromConfig(w.config)
+		plugins              = append(riverplugin.DefaultPlugins(), w.config.Plugins...)
+		allPlugins           = pluginlookup.NormalizePlugins(
+			w.config.Hooks, //nolint:staticcheck // Bridge legacy Hooks into the test worker's unified plugin path.
+			configuredMiddleware,
+			plugins,
+		)
 	)
-
-	for _, plugin := range allPlugins {
-		if withBaseService, ok := plugin.(baseservice.WithBaseService); ok {
-			baseservice.Init(archetype, withBaseService)
-		}
-	}
+	pluginlookup.InitBaseServices(archetype, allPlugins)
 
 	updatedJobRow, err := exec.JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
 		ID:                  job.ID,

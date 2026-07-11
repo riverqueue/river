@@ -82,6 +82,9 @@ var (
 	_ rivertype.HookInsertBegin     = hookMiddlewareValuePlugin{}
 	_ rivertype.JobInsertMiddleware = hookMiddlewareValuePlugin{}
 	_ rivertype.Plugin              = hookMiddlewareValuePlugin{}
+
+	_ rivertype.HookInsertBegin     = &legacyHookMiddlewarePlugin{}
+	_ rivertype.JobInsertMiddleware = &legacyHookMiddlewarePlugin{}
 )
 
 type hookMiddlewareEmbeddedDefaultsPlugin struct {
@@ -145,6 +148,27 @@ type hookMiddlewareValuePluginCounts struct {
 	insertBeginCount int
 	insertManyCount  int
 }
+
+type legacyHookMiddlewarePlugin struct {
+	baseservice.BaseService
+
+	insertBeginCount int
+	insertManyCount  int
+}
+
+func (p *legacyHookMiddlewarePlugin) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
+	p.insertBeginCount++
+	return nil
+}
+
+func (p *legacyHookMiddlewarePlugin) InsertMany(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
+	p.insertManyCount++
+	return doInner(ctx)
+}
+
+func (p *legacyHookMiddlewarePlugin) IsHook() bool { return true }
+
+func (p *legacyHookMiddlewarePlugin) IsMiddleware() bool { return true }
 
 type periodicJobArgs struct{}
 
@@ -8315,7 +8339,7 @@ func Test_NewClient_PluginsAndHybrids(t *testing.T) {
 		require.Equal(t, expectedCount, plugin.insertManyCount)
 	}
 
-	t.Run("DuplicatesAcrossHooksMiddlewareAndPluginsRunMultipleTimes", func(t *testing.T) {
+	t.Run("DuplicatePointerAcrossHooksMiddlewareAndPluginsRunsOnce", func(t *testing.T) {
 		t.Parallel()
 
 		bundle := setup(t)
@@ -8324,7 +8348,7 @@ func Test_NewClient_PluginsAndHybrids(t *testing.T) {
 		bundle.config.Middleware = []rivertype.Middleware{plugin}
 		bundle.config.Plugins = []rivertype.Plugin{plugin}
 
-		insertAndRequireCounts(t, bundle, plugin, 3)
+		insertAndRequireCounts(t, bundle, plugin, 1)
 	})
 
 	t.Run("HookAlsoRegisteredAsMiddleware", func(t *testing.T) {
@@ -8335,6 +8359,58 @@ func Test_NewClient_PluginsAndHybrids(t *testing.T) {
 		bundle.config.Hooks = []rivertype.Hook{plugin}
 
 		insertAndRequireCounts(t, bundle, plugin, 1)
+	})
+
+	t.Run("LegacyHybridRegisteredInHooksAndMiddlewareRunsOnce", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		plugin := &legacyHookMiddlewarePlugin{}
+		bundle.config.Hooks = []rivertype.Hook{plugin}
+		bundle.config.Middleware = []rivertype.Middleware{plugin}
+
+		client := newTestClient(t, bundle.dbPool, bundle.config)
+
+		_, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		require.NotEmpty(t, plugin.Name)
+		require.Equal(t, 1, plugin.insertBeginCount)
+		require.Equal(t, 1, plugin.insertManyCount)
+	})
+
+	t.Run("LegacyHybridRegisteredInHooksRunsBothAndIsInitialized", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		plugin := &legacyHookMiddlewarePlugin{}
+		bundle.config.Hooks = []rivertype.Hook{plugin}
+
+		client := newTestClient(t, bundle.dbPool, bundle.config)
+
+		_, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		require.NotEmpty(t, plugin.Name)
+		require.Equal(t, 1, plugin.insertBeginCount)
+		require.Equal(t, 1, plugin.insertManyCount)
+	})
+
+	t.Run("LegacyHybridRegisteredInMiddlewareRunsBothAndIsInitialized", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		plugin := &legacyHookMiddlewarePlugin{}
+		bundle.config.Middleware = []rivertype.Middleware{plugin}
+
+		client := newTestClient(t, bundle.dbPool, bundle.config)
+
+		_, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		require.NotEmpty(t, plugin.Name)
+		require.Equal(t, 1, plugin.insertBeginCount)
+		require.Equal(t, 1, plugin.insertManyCount)
 	})
 
 	t.Run("MiddlewareAlsoRegisteredAsHook", func(t *testing.T) {

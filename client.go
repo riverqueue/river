@@ -854,17 +854,12 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		}
 	}
 
-	allPlugins := pluginlookup.NormalizePlugins(
-		config.Hooks,
-		middlewareFromConfig(config),
-		append(riverplugin.DefaultPlugins(), config.Plugins...),
+	var (
+		configuredMiddleware = middlewareFromConfig(config)
+		plugins              = append(riverplugin.DefaultPlugins(), config.Plugins...)
+		allPlugins           = pluginlookup.NormalizePlugins(config.Hooks, configuredMiddleware, plugins)
 	)
-
-	for _, plugin := range allPlugins {
-		if withBaseService, ok := plugin.(baseservice.WithBaseService); ok {
-			baseservice.Init(archetype, withBaseService)
-		}
-	}
+	pluginlookup.InitBaseServices(archetype, allPlugins)
 
 	client := &Client[TTx]{
 		clientNotifyBundle: &ClientNotifyBundle[TTx]{

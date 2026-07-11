@@ -346,7 +346,9 @@ var (
 	_ rivertype.JobInsertMiddleware = &testHookMiddlewarePlugin{}
 )
 
-type testHookMiddlewarePlugin struct{}
+type testHookMiddlewarePlugin struct {
+	_ byte
+}
 
 func (t *testHookMiddlewarePlugin) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
 	return nil

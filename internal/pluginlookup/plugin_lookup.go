@@ -2,8 +2,10 @@ package pluginlookup
 
 import (
 	"context"
+	"reflect"
 	"sync"
 
+	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -47,6 +49,21 @@ type PluginLookupInterface interface {
 	ByKind(kind PluginKind) []rivertype.Plugin
 }
 
+// InitBaseServices initializes base services embedded in plugins, including
+// those hidden behind wrappers for legacy hooks and middleware.
+func InitBaseServices(archetype *baseservice.Archetype, plugins []rivertype.Plugin) {
+	for _, plugin := range plugins {
+		if legacyPlugin, ok := plugin.(*legacyPlugin); ok {
+			legacyPlugin.initBaseService(archetype)
+			continue
+		}
+
+		if withBaseService, ok := plugin.(baseservice.WithBaseService); ok {
+			baseservice.Init(archetype, withBaseService)
+		}
+	}
+}
+
 // NewPluginLookup returns a new plugin lookup interface based on the given
 // plugins that satisfies PluginLookupInterface. This is often pluginLookup,
 // but may be emptyPluginLookup as an optimization for the common case of an
@@ -63,22 +80,27 @@ func NewPluginLookup(plugins []rivertype.Plugin) PluginLookupInterface {
 			continue
 		}
 
-		if _, ok := plugin.(rivertype.HookInsertBegin); ok {
+		extension := any(plugin)
+		if legacyPlugin, ok := plugin.(*legacyPlugin); ok {
+			extension = legacyPlugin.extension
+		}
+
+		if _, ok := extension.(rivertype.HookInsertBegin); ok {
 			pluginsByKind[PluginKindInsertBegin] = append(pluginsByKind[PluginKindInsertBegin], plugin)
 		}
-		if _, ok := plugin.(rivertype.HookPeriodicJobsStart); ok {
+		if _, ok := extension.(rivertype.HookPeriodicJobsStart); ok {
 			pluginsByKind[PluginKindPeriodicJobsStart] = append(pluginsByKind[PluginKindPeriodicJobsStart], plugin)
 		}
-		if _, ok := plugin.(rivertype.HookWorkBegin); ok {
+		if _, ok := extension.(rivertype.HookWorkBegin); ok {
 			pluginsByKind[PluginKindWorkBegin] = append(pluginsByKind[PluginKindWorkBegin], plugin)
 		}
-		if _, ok := plugin.(rivertype.HookWorkEnd); ok {
+		if _, ok := extension.(rivertype.HookWorkEnd); ok {
 			pluginsByKind[PluginKindWorkEnd] = append(pluginsByKind[PluginKindWorkEnd], plugin)
 		}
-		if _, ok := plugin.(rivertype.JobInsertMiddleware); ok {
+		if _, ok := extension.(rivertype.JobInsertMiddleware); ok {
 			pluginsByKind[PluginKindJobInsert] = append(pluginsByKind[PluginKindJobInsert], plugin)
 		}
-		if _, ok := plugin.(rivertype.WorkerMiddleware); ok {
+		if _, ok := extension.(rivertype.WorkerMiddleware); ok {
 			pluginsByKind[PluginKindWorker] = append(pluginsByKind[PluginKindWorker], plugin)
 		}
 	}
@@ -93,28 +115,63 @@ func NewPluginLookup(plugins []rivertype.Plugin) PluginLookupInterface {
 // Plugins passed explicitly are ordered before hooks and middleware, so
 // Config.Plugins entries take precedence over plugins bridged from Config.Hooks
 // or Config.Middleware. Relative order is preserved within each input slice.
+// Repeated registrations of the same pointer are collapsed so a legacy hybrid
+// registered as both a hook and middleware runs only once for each operation.
 func NormalizePlugins(hooks []rivertype.Hook, middlewares []rivertype.Middleware, plugins []rivertype.Plugin) []rivertype.Plugin {
-	normalizedPlugins := make([]rivertype.Plugin, 0, len(hooks)+len(middlewares)+len(plugins))
+	var (
+		normalizedPlugins = make([]rivertype.Plugin, 0, len(hooks)+len(middlewares)+len(plugins))
+		seenPointers      = make(map[pluginPointerIdentity]struct{})
+	)
 
-	normalizedPlugins = append(normalizedPlugins, plugins...)
+	appendPlugin := func(original any, plugin rivertype.Plugin) {
+		if identity, ok := pluginPointerIdentityFor(original); ok {
+			if _, ok := seenPointers[identity]; ok {
+				return
+			}
+			seenPointers[identity] = struct{}{}
+		}
+
+		normalizedPlugins = append(normalizedPlugins, plugin)
+	}
+
+	for _, plugin := range plugins {
+		appendPlugin(plugin, plugin)
+	}
 
 	for _, hook := range hooks {
 		if plugin, ok := hook.(rivertype.Plugin); ok {
-			normalizedPlugins = append(normalizedPlugins, plugin)
+			appendPlugin(hook, plugin)
 		} else {
-			normalizedPlugins = append(normalizedPlugins, newHookPlugin(hook))
+			appendPlugin(hook, newLegacyPlugin(hook))
 		}
 	}
 
 	for _, middleware := range middlewares {
 		if plugin, ok := middleware.(rivertype.Plugin); ok {
-			normalizedPlugins = append(normalizedPlugins, plugin)
+			appendPlugin(middleware, plugin)
 		} else {
-			normalizedPlugins = append(normalizedPlugins, newMiddlewarePlugin(middleware))
+			appendPlugin(middleware, newLegacyPlugin(middleware))
 		}
 	}
 
 	return normalizedPlugins
+}
+
+// pluginPointerIdentity identifies a pointer-backed extension so
+// NormalizePlugins can collapse the same instance registered through multiple
+// plugin, hook, or middleware config fields.
+type pluginPointerIdentity struct {
+	pointer uintptr
+	typeOf  reflect.Type
+}
+
+func pluginPointerIdentityFor(plugin any) (pluginPointerIdentity, bool) {
+	value := reflect.ValueOf(plugin)
+	if !value.IsValid() || value.Kind() != reflect.Ptr {
+		return pluginPointerIdentity{}, false
+	}
+
+	return pluginPointerIdentity{pointer: value.Pointer(), typeOf: value.Type()}, true
 }
 
 //
@@ -149,86 +206,77 @@ func (c *emptyPluginLookup) ByKind(kind PluginKind) []rivertype.Plugin {
 }
 
 //
-// hookPlugin
+// legacyPlugin
 //
 
-// hookPlugin wraps a legacy hook so it can participate in plugin lookup.
-type hookPlugin struct {
-	hook rivertype.Hook
+// legacyPlugin wraps a legacy hook or middleware so it can participate in
+// plugin lookup. It forwards both hook and middleware capabilities so a legacy
+// extension that implements both still works when registered through either
+// legacy config field.
+type legacyPlugin struct {
+	extension any
 }
 
-func newHookPlugin(hook rivertype.Hook) rivertype.Plugin {
-	return &hookPlugin{hook: hook}
+func newLegacyPlugin(extension any) rivertype.Plugin {
+	return &legacyPlugin{extension: extension}
 }
 
-func (p *hookPlugin) IsPlugin() bool { return true }
-func (p *hookPlugin) IsHook() bool   { return true }
+func (p *legacyPlugin) initBaseService(archetype *baseservice.Archetype) {
+	if withBaseService, ok := p.extension.(baseservice.WithBaseService); ok {
+		baseservice.Init(archetype, withBaseService)
+	}
+}
 
-func (p *hookPlugin) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
-	hook, ok := p.hook.(rivertype.HookInsertBegin)
+func (p *legacyPlugin) IsHook() bool       { return true }
+func (p *legacyPlugin) IsMiddleware() bool { return true }
+func (p *legacyPlugin) IsPlugin() bool     { return true }
+
+func (p *legacyPlugin) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
+	hook, ok := p.extension.(rivertype.HookInsertBegin)
 	if !ok {
 		return nil
 	}
 	return hook.InsertBegin(ctx, params)
 }
 
-func (p *hookPlugin) Start(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error {
-	hook, ok := p.hook.(rivertype.HookPeriodicJobsStart)
-	if !ok {
-		return nil
-	}
-	return hook.Start(ctx, params)
-}
-
-func (p *hookPlugin) WorkBegin(ctx context.Context, job *rivertype.JobRow) error {
-	hook, ok := p.hook.(rivertype.HookWorkBegin)
-	if !ok {
-		return nil
-	}
-	return hook.WorkBegin(ctx, job)
-}
-
-func (p *hookPlugin) WorkEnd(ctx context.Context, job *rivertype.JobRow, err error) error {
-	hook, ok := p.hook.(rivertype.HookWorkEnd)
-	if !ok {
-		return err
-	}
-	return hook.WorkEnd(ctx, job, err)
-}
-
-//
-// middlewarePlugin
-//
-
-// middlewarePlugin wraps a legacy middleware so it can participate in plugin
-// lookup.
-type middlewarePlugin struct {
-	middleware rivertype.Middleware
-}
-
-func newMiddlewarePlugin(middleware rivertype.Middleware) rivertype.Plugin {
-	return &middlewarePlugin{middleware: middleware}
-}
-
-func (p *middlewarePlugin) IsPlugin() bool { return true }
-func (p *middlewarePlugin) IsMiddleware() bool {
-	return true
-}
-
-func (p *middlewarePlugin) InsertMany(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
-	middleware, ok := p.middleware.(rivertype.JobInsertMiddleware)
+func (p *legacyPlugin) InsertMany(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
+	middleware, ok := p.extension.(rivertype.JobInsertMiddleware)
 	if !ok {
 		return doInner(ctx)
 	}
 	return middleware.InsertMany(ctx, manyParams, doInner)
 }
 
-func (p *middlewarePlugin) Work(ctx context.Context, job *rivertype.JobRow, doInner func(context.Context) error) error {
-	middleware, ok := p.middleware.(rivertype.WorkerMiddleware)
+func (p *legacyPlugin) Start(ctx context.Context, params *rivertype.HookPeriodicJobsStartParams) error {
+	hook, ok := p.extension.(rivertype.HookPeriodicJobsStart)
+	if !ok {
+		return nil
+	}
+	return hook.Start(ctx, params)
+}
+
+func (p *legacyPlugin) Work(ctx context.Context, job *rivertype.JobRow, doInner func(context.Context) error) error {
+	middleware, ok := p.extension.(rivertype.WorkerMiddleware)
 	if !ok {
 		return doInner(ctx)
 	}
 	return middleware.Work(ctx, job, doInner)
+}
+
+func (p *legacyPlugin) WorkBegin(ctx context.Context, job *rivertype.JobRow) error {
+	hook, ok := p.extension.(rivertype.HookWorkBegin)
+	if !ok {
+		return nil
+	}
+	return hook.WorkBegin(ctx, job)
+}
+
+func (p *legacyPlugin) WorkEnd(ctx context.Context, job *rivertype.JobRow, err error) error {
+	hook, ok := p.extension.(rivertype.HookWorkEnd)
+	if !ok {
+		return err
+	}
+	return hook.WorkEnd(ctx, job, err)
 }
 
 //
