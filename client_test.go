@@ -8351,6 +8351,16 @@ func Test_NewClient_PluginsAndHybrids(t *testing.T) {
 		insertAndRequireCounts(t, bundle, plugin, 1)
 	})
 
+	t.Run("DuplicatePointerWithinHooksRunsMultipleTimes", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		plugin := &hookMiddlewarePlugin{}
+		bundle.config.Hooks = []rivertype.Hook{plugin, plugin}
+
+		insertAndRequireCounts(t, bundle, plugin, 2)
+	})
+
 	t.Run("HookAlsoRegisteredAsMiddleware", func(t *testing.T) {
 		t.Parallel()
 

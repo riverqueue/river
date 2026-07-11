@@ -113,6 +113,26 @@ func TestJobPluginLookup(t *testing.T) {
 func TestNormalizePlugins(t *testing.T) {
 	t.Parallel()
 
+	t.Run("DistinctZeroSizedPointersArePreserved", func(t *testing.T) {
+		t.Parallel()
+
+		plugins := NormalizePlugins(nil, nil, []rivertype.Plugin{
+			&testZeroSizedHookMiddlewarePlugin{},
+			&testZeroSizedHookMiddlewarePlugin{},
+		})
+
+		require.Len(t, plugins, 2)
+	})
+
+	t.Run("DuplicatesWithinAGroupArePreserved", func(t *testing.T) {
+		t.Parallel()
+
+		plugin := &testHookMiddlewarePlugin{}
+		plugins := NormalizePlugins(nil, nil, []rivertype.Plugin{plugin, plugin})
+
+		require.Equal(t, []rivertype.Plugin{plugin, plugin}, plugins)
+	})
+
 	t.Run("PluginsPrecedeHooksAndMiddleware", func(t *testing.T) {
 		t.Parallel()
 
@@ -137,6 +157,19 @@ func TestNormalizePlugins(t *testing.T) {
 			hookPlugin,
 			middlewarePlugin,
 		}, lookup.ByKind(MiddlewareKindJobInsert))
+	})
+
+	t.Run("SamePointerAcrossGroupsIsCollapsed", func(t *testing.T) {
+		t.Parallel()
+
+		plugin := &testHookMiddlewarePlugin{}
+		plugins := NormalizePlugins(
+			[]rivertype.Hook{plugin},
+			[]rivertype.Middleware{plugin},
+			[]rivertype.Plugin{plugin},
+		)
+
+		require.Equal(t, []rivertype.Plugin{plugin}, plugins)
 	})
 }
 
@@ -438,6 +471,30 @@ func (t *testMiddlewareWorker) IsPlugin() bool { return true }
 func (t *testMiddlewareWorker) Work(ctx context.Context, job *rivertype.JobRow, doInner func(context.Context) error) error {
 	return doInner(ctx)
 }
+
+//
+// testZeroSizedHookMiddlewarePlugin
+//
+
+var (
+	_ rivertype.HookInsertBegin     = &testZeroSizedHookMiddlewarePlugin{}
+	_ rivertype.JobInsertMiddleware = &testZeroSizedHookMiddlewarePlugin{}
+	_ rivertype.Plugin              = &testZeroSizedHookMiddlewarePlugin{}
+)
+
+type testZeroSizedHookMiddlewarePlugin struct{}
+
+func (t *testZeroSizedHookMiddlewarePlugin) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
+	return nil
+}
+
+func (t *testZeroSizedHookMiddlewarePlugin) InsertMany(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
+	return doInner(ctx)
+}
+
+func (t *testZeroSizedHookMiddlewarePlugin) IsHook() bool       { return true }
+func (t *testZeroSizedHookMiddlewarePlugin) IsMiddleware() bool { return true }
+func (t *testZeroSizedHookMiddlewarePlugin) IsPlugin() bool     { return true }
 
 //
 // testLegacyHookInsertBegin

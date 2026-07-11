@@ -115,51 +115,66 @@ func NewPluginLookup(plugins []rivertype.Plugin) PluginLookupInterface {
 // Plugins passed explicitly are ordered before hooks and middleware, so
 // Config.Plugins entries take precedence over plugins bridged from Config.Hooks
 // or Config.Middleware. Relative order is preserved within each input slice.
-// Repeated registrations of the same pointer are collapsed so a legacy hybrid
-// registered as both a hook and middleware runs only once for each operation.
+// Repeated registrations of the same non-zero-sized pointer are collapsed so a
+// legacy hybrid registered as both a hook and middleware runs only once for
+// each operation. Registrations repeated within one input slice are preserved.
 func NormalizePlugins(hooks []rivertype.Hook, middlewares []rivertype.Middleware, plugins []rivertype.Plugin) []rivertype.Plugin {
 	var (
 		normalizedPlugins = make([]rivertype.Plugin, 0, len(hooks)+len(middlewares)+len(plugins))
 		seenPointers      = make(map[pluginPointerIdentity]struct{})
 	)
 
-	appendPlugin := func(original any, plugin rivertype.Plugin) {
-		if identity, ok := pluginPointerIdentityFor(original); ok {
-			if _, ok := seenPointers[identity]; ok {
-				return
+	appendGroup := func(group []pluginRegistration) {
+		groupPointers := make(map[pluginPointerIdentity]struct{})
+		for _, registration := range group {
+			if identity, ok := pluginPointerIdentityFor(registration.original); ok {
+				if _, ok := seenPointers[identity]; ok {
+					continue
+				}
+				groupPointers[identity] = struct{}{}
 			}
+
+			normalizedPlugins = append(normalizedPlugins, registration.plugin)
+		}
+
+		for identity := range groupPointers {
 			seenPointers[identity] = struct{}{}
 		}
-
-		normalizedPlugins = append(normalizedPlugins, plugin)
 	}
 
+	pluginRegistrations := make([]pluginRegistration, 0, len(plugins))
 	for _, plugin := range plugins {
-		appendPlugin(plugin, plugin)
+		pluginRegistrations = append(pluginRegistrations, pluginRegistration{original: plugin, plugin: plugin})
 	}
+	appendGroup(pluginRegistrations)
 
+	hookRegistrations := make([]pluginRegistration, 0, len(hooks))
 	for _, hook := range hooks {
 		if plugin, ok := hook.(rivertype.Plugin); ok {
-			appendPlugin(hook, plugin)
+			hookRegistrations = append(hookRegistrations, pluginRegistration{original: hook, plugin: plugin})
 		} else {
-			appendPlugin(hook, newLegacyPlugin(hook))
+			hookRegistrations = append(hookRegistrations, pluginRegistration{original: hook, plugin: newLegacyPlugin(hook)})
 		}
 	}
+	appendGroup(hookRegistrations)
 
+	middlewareRegistrations := make([]pluginRegistration, 0, len(middlewares))
 	for _, middleware := range middlewares {
 		if plugin, ok := middleware.(rivertype.Plugin); ok {
-			appendPlugin(middleware, plugin)
+			middlewareRegistrations = append(middlewareRegistrations, pluginRegistration{original: middleware, plugin: plugin})
 		} else {
-			appendPlugin(middleware, newLegacyPlugin(middleware))
+			middlewareRegistrations = append(middlewareRegistrations, pluginRegistration{original: middleware, plugin: newLegacyPlugin(middleware)})
 		}
 	}
+	appendGroup(middlewareRegistrations)
 
 	return normalizedPlugins
 }
 
-// pluginPointerIdentity identifies a pointer-backed extension so
+// pluginPointerIdentity identifies a non-zero-sized pointer-backed extension so
 // NormalizePlugins can collapse the same instance registered through multiple
-// plugin, hook, or middleware config fields.
+// plugin, hook, or middleware config fields. Zero-sized pointers are excluded
+// because Go allows distinct zero-sized values to have the same address.
 type pluginPointerIdentity struct {
 	pointer uintptr
 	typeOf  reflect.Type
@@ -167,11 +182,16 @@ type pluginPointerIdentity struct {
 
 func pluginPointerIdentityFor(plugin any) (pluginPointerIdentity, bool) {
 	value := reflect.ValueOf(plugin)
-	if !value.IsValid() || value.Kind() != reflect.Ptr {
+	if !value.IsValid() || value.Kind() != reflect.Ptr || value.Type().Elem().Size() == 0 {
 		return pluginPointerIdentity{}, false
 	}
 
 	return pluginPointerIdentity{pointer: value.Pointer(), typeOf: value.Type()}, true
+}
+
+type pluginRegistration struct {
+	original any
+	plugin   rivertype.Plugin
 }
 
 //
