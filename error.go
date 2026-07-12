@@ -59,6 +59,24 @@ func (e *QueueAlreadyAddedError) Is(target error) bool {
 	return ok
 }
 
+// QueueAddCleanupError is returned when adding a queue fails after its
+// producer was initialized and River cannot clean up that producer. The queue
+// remains registered so that Remove can retry cleanup without losing track of
+// it.
+type QueueAddCleanupError struct {
+	AddErr     error
+	CleanupErr error
+	Name       string
+}
+
+func (e *QueueAddCleanupError) Error() string {
+	return fmt.Sprintf("queue %q add failed: %v; cleanup failed: %v", e.Name, e.AddErr, e.CleanupErr)
+}
+
+func (e *QueueAddCleanupError) Unwrap() []error {
+	return []error{e.AddErr, e.CleanupErr}
+}
+
 // QueueNotFoundError is returned when attempting to remove a queue that does
 // not exist on the Client.
 type QueueNotFoundError struct {

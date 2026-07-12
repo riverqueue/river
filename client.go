@@ -823,11 +823,12 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	}
 
 	client.queues = &QueueBundle{
-		clientFetchCooldown:     config.FetchCooldown,
-		clientFetchPollInterval: config.FetchPollInterval,
-		clientWillExecuteJobs:   config.willExecuteJobs(),
-		producerAdd:             client.producerAdd,
-		producerRemove:          client.producerRemove,
+		clientFetchCooldown:      config.FetchCooldown,
+		clientFetchPollInterval:  config.FetchPollInterval,
+		clientWillExecuteJobs:    config.willExecuteJobs(),
+		producerAdd:              client.producerAdd,
+		producerRemove:           client.producerRemove,
+		producerRemoveOnAddError: client.producerRemoveOnAddError,
 	}
 
 	baseservice.Init(archetype, &client.baseService)
@@ -2316,6 +2317,11 @@ func (c *Client[TTx]) producerRemove(ctx context.Context, queueName string) erro
 	if !ok {
 		return &QueueNotFoundError{Name: queueName}
 	}
+	if producer.startupCleanupPending.Load() {
+		if err := producer.abortStartup(ctx); err != nil {
+			return err
+		}
+	}
 
 	shouldStop, stopped, finalizeStop := producer.StopInit()
 	if shouldStop {
@@ -2331,6 +2337,15 @@ func (c *Client[TTx]) producerRemove(ctx context.Context, queueName string) erro
 	delete(c.producersByQueueName, queueName)
 
 	return nil
+}
+
+func (c *Client[TTx]) producerRemoveOnAddError(queueName string, producer *producer) {
+	c.producersMu.Lock()
+	defer c.producersMu.Unlock()
+
+	if c.producersByQueueName[queueName] == producer && !producer.startupCleanupPending.Load() {
+		delete(c.producersByQueueName, queueName)
+	}
 }
 
 var nameRegex = regexp.MustCompile(`^(?:[a-z0-9])+(?:[_|\-]?[a-z0-9]+)*$`)
@@ -2923,9 +2938,10 @@ type QueueBundle struct {
 
 	clientWillExecuteJobs bool
 
-	fetchCtx       context.Context                                                    //nolint:containedctx
-	producerAdd    func(queueName string, queueConfig QueueConfig) (*producer, error) // add producer to associated client
-	producerRemove func(ctx context.Context, queueName string) error                  // remove producer from associated client
+	fetchCtx                 context.Context                                                    //nolint:containedctx
+	producerAdd              func(queueName string, queueConfig QueueConfig) (*producer, error) // add producer to associated client
+	producerRemove           func(ctx context.Context, queueName string) error                  // remove producer from associated client
+	producerRemoveOnAddError func(queueName string, producer *producer)
 
 	// Mutex that's acquired when client is starting and stopping and when a
 	// queue is being added so that we can be sure that a client is fully
@@ -2958,6 +2974,7 @@ func (b *QueueBundle) Add(queueName string, queueConfig QueueConfig) error {
 	// Start the queue if the client is already started.
 	if b.fetchCtx != nil && b.fetchCtx.Err() == nil {
 		if err := producer.StartWorkContext(b.fetchCtx, b.workCtx); err != nil {
+			b.producerRemoveOnAddError(queueName, producer)
 			return err
 		}
 	}
