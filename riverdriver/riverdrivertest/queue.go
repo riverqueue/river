@@ -138,17 +138,52 @@ func exerciseQueue[TTx any](ctx context.Context, t *testing.T, executorWithTx fu
 		_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-23 * time.Hour))})
 
 		horizon := now.Add(-24 * time.Hour)
-		deletedQueueNames, err := exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{Max: 2, UpdatedAtHorizon: horizon})
+		deletedQueueNames, err := exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{Max: 2, Now: &now, UpdatedAtHorizon: horizon})
 		require.NoError(t, err)
 
 		// queue2 and queue3 should be deleted, with queue4 being skipped due to max of 2:
 		require.Equal(t, []string{queue2.Name, queue3.Name}, deletedQueueNames)
 
 		// Try again, make sure queue4 gets deleted this time:
-		deletedQueueNames, err = exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{Max: 2, UpdatedAtHorizon: horizon})
+		deletedQueueNames, err = exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{Max: 2, Now: &now, UpdatedAtHorizon: horizon})
 		require.NoError(t, err)
 
 		require.Equal(t, []string{queue4.Name}, deletedQueueNames)
+	})
+
+	t.Run("QueueDeleteExpiredRetainsRuntimeState", func(t *testing.T) {
+		t.Parallel()
+
+		exec, _ := setup(ctx, t)
+
+		now := time.Unix(2_000_000_000, 0).UTC()
+		updatedAt := now.Add(-48 * time.Hour)
+		for _, name := range []string{"expired-rollup", "malformed-negative-rollup", "malformed-null-rollup", "malformed-rollup", "no-rollup", "unexpired-rollup"} {
+			_, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
+				Name:      name,
+				UpdatedAt: &updatedAt,
+			})
+			require.NoError(t, err)
+		}
+
+		for _, query := range []string{
+			`UPDATE river_queue SET metadata = '{"river:rate_limit_rollup":{"expires_at_unix":1999999999}}' WHERE name = 'expired-rollup' RETURNING 1`,
+			`UPDATE river_queue SET metadata = '{"river:rate_limit_rollup":{"expires_at_unix":-1}}' WHERE name = 'malformed-negative-rollup' RETURNING 1`,
+			`UPDATE river_queue SET metadata = '{"river:rate_limit_rollup":null}' WHERE name = 'malformed-null-rollup' RETURNING 1`,
+			`UPDATE river_queue SET metadata = '{"river:rate_limit_rollup":{"expires_at_unix":"invalid"}}' WHERE name = 'malformed-rollup' RETURNING 1`,
+			`UPDATE river_queue SET metadata = '{"river:rate_limit_rollup":{"expires_at_unix":2000003600}}' WHERE name = 'unexpired-rollup' RETURNING 1`,
+		} {
+			err := exec.QueryRow(ctx, query).Scan(new(int))
+			require.NoError(t, err)
+		}
+
+		deletedQueueNames, err := exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{
+			Max:              10,
+			Now:              &now,
+			UpdatedAtHorizon: now.Add(-24 * time.Hour),
+		})
+		require.NoError(t, err)
+		require.ElementsMatch(t, []string{"expired-rollup", "no-rollup"}, deletedQueueNames)
 	})
 
 	t.Run("QueueGet", func(t *testing.T) {

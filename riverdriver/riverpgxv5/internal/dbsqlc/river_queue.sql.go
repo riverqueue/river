@@ -58,23 +58,33 @@ func (q *Queries) QueueCreateOrSetUpdatedAt(ctx context.Context, db DBTX, arg *Q
 
 const queueDeleteExpired = `-- name: QueueDeleteExpired :many
 DELETE FROM /* TEMPLATE: schema */river_queue
-WHERE name IN (
-    SELECT name
+WHERE ctid IN (
+    SELECT ctid
     FROM /* TEMPLATE: schema */river_queue
     WHERE river_queue.updated_at < $1
+        AND CASE
+            WHEN NOT (river_queue.metadata ? 'river:rate_limit_rollup') THEN true
+            WHEN jsonb_typeof(river_queue.metadata -> 'river:rate_limit_rollup' -> 'expires_at_unix') = 'number'
+                AND river_queue.metadata -> 'river:rate_limit_rollup' ->> 'expires_at_unix' ~ '^[0-9]+$'
+                THEN (river_queue.metadata -> 'river:rate_limit_rollup' ->> 'expires_at_unix')::numeric
+                    <= extract(epoch FROM coalesce($2::timestamptz, now()))
+            ELSE false
+        END
     ORDER BY name ASC
-    LIMIT $2::bigint
+    LIMIT $3::bigint
+    FOR UPDATE SKIP LOCKED
 )
 RETURNING name, created_at, metadata, paused_at, updated_at
 `
 
 type QueueDeleteExpiredParams struct {
 	UpdatedAtHorizon time.Time
+	Now              *time.Time
 	Max              int64
 }
 
 func (q *Queries) QueueDeleteExpired(ctx context.Context, db DBTX, arg *QueueDeleteExpiredParams) ([]*RiverQueue, error) {
-	rows, err := db.Query(ctx, queueDeleteExpired, arg.UpdatedAtHorizon, arg.Max)
+	rows, err := db.Query(ctx, queueDeleteExpired, arg.UpdatedAtHorizon, arg.Now, arg.Max)
 	if err != nil {
 		return nil, err
 	}

@@ -26,12 +26,21 @@ RETURNING *;
 
 -- name: QueueDeleteExpired :many
 DELETE FROM /* TEMPLATE: schema */river_queue
-WHERE name IN (
-    SELECT name
+WHERE ctid IN (
+    SELECT ctid
     FROM /* TEMPLATE: schema */river_queue
     WHERE river_queue.updated_at < @updated_at_horizon
+        AND CASE
+            WHEN NOT (river_queue.metadata ? 'river:rate_limit_rollup') THEN true
+            WHEN jsonb_typeof(river_queue.metadata -> 'river:rate_limit_rollup' -> 'expires_at_unix') = 'number'
+                AND river_queue.metadata -> 'river:rate_limit_rollup' ->> 'expires_at_unix' ~ '^[0-9]+$'
+                THEN (river_queue.metadata -> 'river:rate_limit_rollup' ->> 'expires_at_unix')::numeric
+                    <= extract(epoch FROM coalesce(sqlc.narg('now')::timestamptz, now()))
+            ELSE false
+        END
     ORDER BY name ASC
     LIMIT @max::bigint
+    FOR UPDATE SKIP LOCKED
 )
 RETURNING *;
 

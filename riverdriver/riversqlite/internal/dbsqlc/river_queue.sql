@@ -30,6 +30,17 @@ WHERE name IN (
     SELECT name
     FROM /* TEMPLATE: schema */river_queue
     WHERE river_queue.updated_at < @updated_at_horizon
+        AND CASE
+            WHEN json_type(river_queue.metadata, '$') != 'object'
+                OR NOT EXISTS (
+                    SELECT 1 FROM json_each(river_queue.metadata) WHERE key = 'river:rate_limit_rollup'
+                ) THEN true
+            WHEN json_type(river_queue.metadata, '$."river:rate_limit_rollup".expires_at_unix') = 'integer'
+                AND cast(json_extract(river_queue.metadata, '$."river:rate_limit_rollup".expires_at_unix') AS integer) >= 0
+                THEN cast(json_extract(river_queue.metadata, '$."river:rate_limit_rollup".expires_at_unix') AS integer)
+                    <= unixepoch(coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')))
+            ELSE false
+        END
     ORDER BY name ASC
     LIMIT @max
 )

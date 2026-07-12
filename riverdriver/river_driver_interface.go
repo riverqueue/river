@@ -815,6 +815,7 @@ type QueueCreateOrSetUpdatedAtParams struct {
 
 type QueueDeleteExpiredParams struct {
 	Max              int
+	Now              *time.Time
 	Schema           string
 	UpdatedAtHorizon time.Time
 }
