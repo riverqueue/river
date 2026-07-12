@@ -23,6 +23,7 @@ import (
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/notifylimiter"
+	"github.com/riverqueue/river/internal/pluginconfig"
 	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverplugin"
@@ -544,35 +545,6 @@ func (c *Config) WithDefaults() *Config {
 	}
 }
 
-func middlewareFromConfig(config *Config) []rivertype.Middleware {
-	middleware := make([]rivertype.Middleware, 0,
-		len(config.Middleware)+len(config.JobInsertMiddleware)+len(config.WorkerMiddleware))
-	middleware = append(middleware, config.Middleware...)
-
-	for _, jobInsertMiddleware := range config.JobInsertMiddleware {
-		middleware = append(middleware, jobInsertMiddleware)
-	}
-
-outerLoop:
-	for _, workerMiddleware := range config.WorkerMiddleware {
-		// Don't add the middleware if it also implements JobInsertMiddleware
-		// and the instance has been added to config.JobInsertMiddleware. This
-		// is a hedge to make sure we don't accidentally double add middleware
-		// as we've converted over to the unified config.Middleware setting.
-		if workerMiddlewareAsJobInsertMiddleware, ok := workerMiddleware.(rivertype.JobInsertMiddleware); ok {
-			for _, jobInsertMiddleware := range config.JobInsertMiddleware {
-				if workerMiddlewareAsJobInsertMiddleware == jobInsertMiddleware {
-					continue outerLoop
-				}
-			}
-		}
-
-		middleware = append(middleware, workerMiddleware)
-	}
-
-	return middleware
-}
-
 func (c *Config) validate() error {
 	if c.CancelledJobRetentionPeriod < -1 {
 		return errors.New("CancelledJobRetentionPeriod time cannot be less than zero, except for -1 (infinite)")
@@ -855,7 +827,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	}
 
 	var (
-		configuredMiddleware = middlewareFromConfig(config)
+		configuredMiddleware = pluginconfig.Middleware(config.Middleware, config.JobInsertMiddleware, config.WorkerMiddleware)
 		plugins              = append(riverplugin.DefaultPlugins(), config.Plugins...)
 		allPlugins           = pluginlookup.NormalizePlugins(config.Hooks, configuredMiddleware, plugins)
 	)

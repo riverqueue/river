@@ -11,6 +11,7 @@ import (
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/maintenance"
+	"github.com/riverqueue/river/internal/pluginconfig"
 	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/riverplugin"
 	"github.com/riverqueue/river/riverdriver"
@@ -147,9 +148,13 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 	completer := jobcompleter.NewInlineCompleter(archetype, w.config.Schema, exec, w.client.Pilot(), subscribeCh)
 
 	var (
-		configuredMiddleware = middlewareFromConfig(w.config)
-		plugins              = append(riverplugin.DefaultPlugins(), w.config.Plugins...)
-		allPlugins           = pluginlookup.NormalizePlugins(
+		configuredMiddleware = pluginconfig.Middleware(
+			w.config.Middleware,          //nolint:staticcheck // Bridge legacy middleware into the test worker's unified plugin path.
+			w.config.JobInsertMiddleware, //nolint:staticcheck // Bridge legacy middleware into the test worker's unified plugin path.
+			w.config.WorkerMiddleware,    //nolint:staticcheck // Bridge legacy middleware into the test worker's unified plugin path.
+		)
+		plugins    = append(riverplugin.DefaultPlugins(), w.config.Plugins...)
+		allPlugins = pluginlookup.NormalizePlugins(
 			w.config.Hooks, //nolint:staticcheck // Bridge legacy Hooks into the test worker's unified plugin path.
 			configuredMiddleware,
 			plugins,
@@ -236,36 +241,6 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 		tb.Fatal("test worker internal error: no job completions received")
 	}
 	panic("unreachable")
-}
-
-//nolint:staticcheck
-func middlewareFromConfig(config *river.Config) []rivertype.Middleware {
-	middleware := make([]rivertype.Middleware, 0,
-		len(config.Middleware)+len(config.JobInsertMiddleware)+len(config.WorkerMiddleware))
-	middleware = append(middleware, config.Middleware...)
-
-	for _, jobInsertMiddleware := range config.JobInsertMiddleware {
-		middleware = append(middleware, jobInsertMiddleware)
-	}
-
-outerLoop:
-	for _, workerMiddleware := range config.WorkerMiddleware {
-		// Don't add the middleware if it also implements JobInsertMiddleware
-		// and the instance has been added to config.JobInsertMiddleware. This
-		// is a hedge to make sure we don't accidentally double add middleware
-		// as we've converted over to the unified config.Middleware setting.
-		if workerMiddlewareAsJobInsertMiddleware, ok := workerMiddleware.(rivertype.JobInsertMiddleware); ok {
-			for _, jobInsertMiddleware := range config.JobInsertMiddleware {
-				if workerMiddlewareAsJobInsertMiddleware == jobInsertMiddleware {
-					continue outerLoop
-				}
-			}
-		}
-
-		middleware = append(middleware, workerMiddleware)
-	}
-
-	return middleware
 }
 
 // WorkResult is the result of working a job in the test Worker.
