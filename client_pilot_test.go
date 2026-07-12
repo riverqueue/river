@@ -30,6 +30,7 @@ type pilotSpy struct {
 	jobInsertManyCalls            atomic.Int64
 	jobRetryCalls                 atomic.Int64
 	pilotInitCalls                atomic.Int64
+	pilotInitParams               *riverpilot.PilotInitParams
 	producerInitErr               error
 	producerInitID                int64
 	producerShutdownErr           error
@@ -110,6 +111,7 @@ func (p *pilotSpy) PeriodicJobUpsertMany(ctx context.Context, exec riverdriver.E
 
 func (p *pilotSpy) PilotInit(archetype *baseservice.Archetype, params *riverpilot.PilotInitParams) {
 	p.pilotInitCalls.Add(1)
+	p.pilotInitParams = params
 	p.testSignals.PilotInit.Signal(struct{}{})
 	p.StandardPilot.PilotInit(archetype, params)
 }
@@ -335,6 +337,7 @@ func Test_Client_PilotUsage(t *testing.T) {
 		require.NotZero(t, insertRes.Job.ID)
 
 		pilot.testSignals.JobGetAvailable.WaitOrTimeout()
+		require.Equal(t, 5*time.Minute, pilot.pilotInitParams.ProducerStaleRetentionPeriod)
 		pilot.testSignals.JobSetStateIfRunningMany.WaitOrTimeout()
 		pilot.testSignals.ProducerInit.WaitOrTimeout()
 		pilot.testSignals.ProducerKeepAlive.WaitOrTimeout()

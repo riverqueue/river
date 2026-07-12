@@ -48,12 +48,13 @@ const (
 	FetchPollIntervalDefault = 1 * time.Second
 	FetchPollIntervalMin     = 1 * time.Millisecond
 
-	JobStuckThresholdDefault = 10 * time.Second
-	JobTimeoutDefault        = 1 * time.Minute
-	MaxAttemptsDefault       = rivercommon.MaxAttemptsDefault
-	PriorityDefault          = rivercommon.PriorityDefault
-	QueueDefault             = rivercommon.QueueDefault
-	QueueNumWorkersMax       = 10_000
+	JobStuckThresholdDefault            = 10 * time.Second
+	JobTimeoutDefault                   = 1 * time.Minute
+	MaxAttemptsDefault                  = rivercommon.MaxAttemptsDefault
+	PriorityDefault                     = rivercommon.PriorityDefault
+	producerStaleRetentionPeriodDefault = 5 * time.Minute
+	QueueDefault                        = rivercommon.QueueDefault
+	QueueNumWorkersMax                  = 10_000
 )
 
 var (
@@ -896,9 +897,10 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		client.pilot = &riverpilot.StandardPilot{}
 	}
 	client.pilot.PilotInit(archetype, (&riverpilot.PilotInitParams{
-		Insert:               client.insertMany,
-		NotifyNonTxJobInsert: client.notifyProducerWithoutListenerJobFetch,
-		WorkerMetadata:       workerMetadata,
+		Insert:                       client.insertMany,
+		NotifyNonTxJobInsert:         client.notifyProducerWithoutListenerJobFetch,
+		ProducerStaleRetentionPeriod: producerStaleRetentionPeriodDefault,
+		WorkerMetadata:               workerMetadata,
 	}).Validate())
 	pluginPilot, _ := client.pilot.(pilotPlugin)
 
@@ -2302,7 +2304,7 @@ func (c *Client[TTx]) producerAdd(queueName string, queueConfig QueueConfig) (*p
 		RetryPolicy:                  c.config.RetryPolicy,
 		SchedulerInterval:            c.config.schedulerInterval,
 		Schema:                       c.config.Schema,
-		StaleProducerRetentionPeriod: 5 * time.Minute,
+		StaleProducerRetentionPeriod: producerStaleRetentionPeriodDefault,
 		Workers:                      c.config.Workers,
 	})
 	c.producersByQueueName[queueName] = producer
