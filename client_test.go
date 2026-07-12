@@ -6348,6 +6348,32 @@ func Test_Client_QueueGet(t *testing.T) {
 		require.Nil(t, queueRes.PausedAt)
 	})
 
+	t.Run("HidesReservedMetadata", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+		exec := client.driver.GetExecutor()
+
+		queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{
+			Metadata: []byte(`{"foo":"bar"}`),
+			Schema:   bundle.schema,
+		})
+		err := exec.QueryRow(ctx,
+			`UPDATE `+dbutil.SafeIdentifier(bundle.schema)+`.river_queue SET metadata = metadata || '{"river:rate_limit_rollup":{"version":1}}' WHERE name = $1 RETURNING 1`,
+			queue.Name,
+		).Scan(new(int))
+		require.NoError(t, err)
+
+		queueRes, err := client.QueueGet(ctx, queue.Name)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"foo":"bar"}`, string(queueRes.Metadata))
+
+		listRes, err := client.QueueList(ctx, NewQueueListParams())
+		require.NoError(t, err)
+		require.Len(t, listRes.Queues, 1)
+		require.JSONEq(t, `{"foo":"bar"}`, string(listRes.Queues[0].Metadata))
+	})
+
 	t.Run("ReturnsErrNotFoundIfQueueDoesNotExist", func(t *testing.T) {
 		t.Parallel()
 
@@ -6606,9 +6632,14 @@ func Test_Client_QueueUpdate(t *testing.T) {
 
 		queue := testfactory.Queue(ctx, t, client.driver.GetExecutor(), &testfactory.QueueOpts{Schema: bundle.schema})
 		require.Equal(t, []byte(`{}`), queue.Metadata)
+		err = client.driver.GetExecutor().QueryRow(ctx,
+			`UPDATE `+dbutil.SafeIdentifier(bundle.schema)+`.river_queue SET metadata = metadata || '{"river:rate_limit_rollup":{"version":1}}' WHERE name = $1 RETURNING 1`,
+			queue.Name,
+		).Scan(new(int))
+		require.NoError(t, err)
 
 		queue, err = client.QueueUpdate(ctx, queue.Name, &QueueUpdateParams{
-			Metadata: []byte(`{"foo":"bar"}`),
+			Metadata: []byte(`{"foo":"bar","river:attempted_override":true}`),
 		})
 		require.NoError(t, err)
 		require.JSONEq(t, `{"foo":"bar"}`, string(queue.Metadata))
@@ -6620,6 +6651,18 @@ func Test_Client_QueueUpdate(t *testing.T) {
 			Metadata: []byte(`{"foo":"bar"}`),
 			Queue:    queue.Name,
 		}, notif.payload)
+
+		var (
+			attemptedOverrideIsNull bool
+			rollup                  []byte
+		)
+		err = client.driver.GetExecutor().QueryRow(ctx,
+			`SELECT metadata -> 'river:rate_limit_rollup', metadata -> 'river:attempted_override' IS NULL FROM `+dbutil.SafeIdentifier(bundle.schema)+`.river_queue WHERE name = $1`,
+			queue.Name,
+		).Scan(&rollup, &attemptedOverrideIsNull)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"version":1}`, string(rollup))
+		require.True(t, attemptedOverrideIsNull)
 
 		queue, err = client.QueueUpdate(ctx, queue.Name, &QueueUpdateParams{
 			Metadata: []byte(`{"foo":"baz"}`),

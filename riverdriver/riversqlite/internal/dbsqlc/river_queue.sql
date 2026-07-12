@@ -73,7 +73,25 @@ WHERE CASE WHEN cast(@name AS text) = '*' THEN true ELSE name = @name END;
 -- name: QueueUpdate :one
 UPDATE /* TEMPLATE: schema */river_queue
 SET
-    metadata = CASE WHEN cast(@metadata_do_update AS boolean) THEN jsonb(@metadata) ELSE metadata END,
+    metadata = CASE WHEN cast(@metadata_do_update AS boolean) THEN
+        jsonb_patch(
+            CASE WHEN json_type(jsonb(@metadata), '$') = 'object' THEN
+                jsonb(@metadata)
+            ELSE
+                jsonb_object('river:user_metadata', jsonb(@metadata))
+            END,
+            CASE WHEN json_type(river_queue.metadata, '$') = 'object' THEN
+                coalesce(
+                    (
+                        SELECT jsonb_group_object(key, jsonb(value))
+                        FROM json_each(river_queue.metadata)
+                        WHERE key GLOB 'river:*' AND key != 'river:user_metadata'
+                    ),
+                    jsonb('{}')
+                )
+            ELSE jsonb('{}') END
+        )
+    ELSE metadata END,
     updated_at = datetime('now', 'subsec')
 WHERE name = @name
 RETURNING *;

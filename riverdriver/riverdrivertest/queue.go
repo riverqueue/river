@@ -78,6 +78,19 @@ func exerciseQueue[TTx any](ctx context.Context, t *testing.T, executorWithTx fu
 			require.WithinDuration(t, now, *queue.PausedAt, bundle.driver.TimePrecision())
 		})
 
+		t.Run("RemovesReservedMetadata", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			queue, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
+				Metadata: []byte(`{"foo":"bar","river:rate_limit_rollup":{"version":1}}`),
+				Name:     "queue-with-reserved-create-metadata",
+			})
+			require.NoError(t, err)
+			require.JSONEq(t, `{"foo":"bar"}`, string(queue.Metadata))
+		})
+
 		t.Run("UpdatesTheUpdatedAtOfExistingQueue", func(t *testing.T) {
 			t.Parallel()
 
@@ -502,6 +515,95 @@ func exerciseQueue[TTx any](ctx context.Context, t *testing.T, executorWithTx fu
 			})
 			require.NoError(t, err)
 			require.JSONEq(t, `{"baz": "qux"}`, string(updatedQueue.Metadata))
+		})
+
+		t.Run("PreservesAndHidesReservedMetadata", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			_, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
+				Metadata: []byte(`{"foo":"bar"}`),
+				Name:     "queue-with-reserved-update-metadata",
+			})
+			require.NoError(t, err)
+			err = exec.QueryRow(ctx, `UPDATE river_queue SET metadata = '{"foo":"bar","river:rate_limit_rollup":{"version":1}}' WHERE name = 'queue-with-reserved-update-metadata' RETURNING 1`).Scan(new(int))
+			require.NoError(t, err)
+
+			updatedQueue, err := exec.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
+				Metadata:         []byte(`{"baz":"qux","river:attempted_override":true}`),
+				MetadataDoUpdate: true,
+				Name:             "queue-with-reserved-update-metadata",
+			})
+			require.NoError(t, err)
+			require.JSONEq(t, `{"baz":"qux"}`, string(updatedQueue.Metadata))
+
+			var attemptedOverrideIsNull bool
+			var rollup []byte
+			err = exec.QueryRow(ctx, `SELECT metadata -> 'river:rate_limit_rollup', metadata -> 'river:attempted_override' IS NULL FROM river_queue WHERE name = 'queue-with-reserved-update-metadata'`).Scan(&rollup, &attemptedOverrideIsNull)
+			require.NoError(t, err)
+			require.JSONEq(t, `{"version":1}`, string(rollup))
+			require.True(t, attemptedOverrideIsNull)
+		})
+
+		t.Run("PreservesArbitraryUserMetadata", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			_, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
+				Metadata: []byte(`[1,2]`),
+				Name:     "queue-with-array-metadata",
+			})
+			require.NoError(t, err)
+			updatedQueue, err := exec.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
+				Metadata:         []byte(`{"foo":"bar"}`),
+				MetadataDoUpdate: true,
+				Name:             "queue-with-array-metadata",
+			})
+			require.NoError(t, err)
+			require.JSONEq(t, `{"foo":"bar"}`, string(updatedQueue.Metadata))
+
+			_, err = exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
+				Metadata: []byte(`{"foo":"bar"}`),
+				Name:     "queue-with-wrapped-metadata",
+			})
+			require.NoError(t, err)
+			err = exec.QueryRow(ctx, `UPDATE river_queue SET metadata = '{"river:rate_limit_rollup":{"version":1}}' WHERE name = 'queue-with-wrapped-metadata' RETURNING 1`).Scan(new(int))
+			require.NoError(t, err)
+			updatedQueue, err = exec.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
+				Metadata:         []byte(`[1,2]`),
+				MetadataDoUpdate: true,
+				Name:             "queue-with-wrapped-metadata",
+			})
+			require.NoError(t, err)
+			require.JSONEq(t, `[1,2]`, string(updatedQueue.Metadata))
+
+			var rollup []byte
+			var userMetadata []byte
+			err = exec.QueryRow(ctx, `SELECT metadata -> 'river:rate_limit_rollup', metadata -> 'river:user_metadata' FROM river_queue WHERE name = 'queue-with-wrapped-metadata'`).Scan(&rollup, &userMetadata)
+			require.NoError(t, err)
+			require.JSONEq(t, `{"version":1}`, string(rollup))
+			require.JSONEq(t, `[1,2]`, string(userMetadata))
+		})
+
+		t.Run("TreatsReservedPrefixAsCaseSensitive", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			_, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
+				Metadata: []byte(`{"River:user":"old"}`),
+				Name:     "queue-with-mixed-case-key",
+			})
+			require.NoError(t, err)
+			updatedQueue, err := exec.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
+				Metadata:         []byte(`{"River:user":"new"}`),
+				MetadataDoUpdate: true,
+				Name:             "queue-with-mixed-case-key",
+			})
+			require.NoError(t, err)
+			require.JSONEq(t, `{"River:user":"new"}`, string(updatedQueue.Metadata))
 		})
 
 		t.Run("DoesNotUpdateFieldsIfDoUpdateIsFalse", func(t *testing.T) {

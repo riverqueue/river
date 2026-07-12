@@ -2907,7 +2907,7 @@ func (c *Client[TTx]) queueUpdate(ctx context.Context, executorTx riverdriver.Ex
 
 	controlEvent := &controlEventPayload{
 		Action:   controlActionMetadataChanged,
-		Metadata: params.Metadata,
+		Metadata: queue.Metadata,
 		Queue:    queue.Name,
 	}
 

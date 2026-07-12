@@ -257,7 +257,25 @@ func (q *Queries) QueueResume(ctx context.Context, db DBTX, arg *QueueResumePara
 const queueUpdate = `-- name: QueueUpdate :one
 UPDATE /* TEMPLATE: schema */river_queue
 SET
-    metadata = CASE WHEN cast(?1 AS boolean) THEN jsonb(?2) ELSE metadata END,
+    metadata = CASE WHEN cast(?1 AS boolean) THEN
+        jsonb_patch(
+            CASE WHEN json_type(jsonb(?2), '$') = 'object' THEN
+                jsonb(?2)
+            ELSE
+                jsonb_object('river:user_metadata', jsonb(?2))
+            END,
+            CASE WHEN json_type(river_queue.metadata, '$') = 'object' THEN
+                coalesce(
+                    (
+                        SELECT jsonb_group_object(key, jsonb(value))
+                        FROM json_each(river_queue.metadata)
+                        WHERE key GLOB 'river:*' AND key != 'river:user_metadata'
+                    ),
+                    jsonb('{}')
+                )
+            ELSE jsonb('{}') END
+        )
+    ELSE metadata END,
     updated_at = datetime('now', 'subsec')
 WHERE name = ?3
 RETURNING name, created_at, json(metadata), paused_at, updated_at
