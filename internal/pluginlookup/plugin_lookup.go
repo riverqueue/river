@@ -1,7 +1,6 @@
 package pluginlookup
 
 import (
-	"reflect"
 	"sync"
 
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -39,51 +38,13 @@ func InitBaseServices(archetype *baseservice.Archetype, plugins []any) {
 //
 // Plugins passed explicitly are ordered before hooks and middleware, so
 // Config.Plugins entries take precedence over plugins bridged from Config.Hooks
-// or Config.Middleware. Relative order is preserved within each input slice.
-// Repeated occurrences of the same non-zero-sized pointer are collapsed so a
-// legacy hybrid configured as both a hook and middleware runs only once for
-// each operation. Repeated values within one input slice are preserved.
+// or Config.Middleware. Relative order is preserved within each input slice,
+// and repeated values are preserved wherever they occur.
 func NormalizePlugins(hooks []rivertype.Hook, middlewares []rivertype.Middleware, plugins []rivertype.Plugin) []any {
-	var (
-		normalizedPlugins = make([]any, 0, len(hooks)+len(middlewares)+len(plugins))
-		seenPointers      = make(map[pluginPointerIdentity]struct{})
-	)
-
-	appendGroup := func(group []any) {
-		groupPointers := make(map[pluginPointerIdentity]struct{})
-		for _, plugin := range group {
-			if identity, ok := pluginPointerIdentityFor(plugin); ok {
-				if _, ok := seenPointers[identity]; ok {
-					continue
-				}
-				groupPointers[identity] = struct{}{}
-			}
-
-			normalizedPlugins = append(normalizedPlugins, plugin)
-		}
-
-		for identity := range groupPointers {
-			seenPointers[identity] = struct{}{}
-		}
-	}
-
-	pluginGroup := make([]any, 0, len(plugins))
-	for _, plugin := range plugins {
-		pluginGroup = append(pluginGroup, plugin)
-	}
-	appendGroup(pluginGroup)
-
-	hookGroup := make([]any, 0, len(hooks))
-	for _, hook := range hooks {
-		hookGroup = append(hookGroup, hook)
-	}
-	appendGroup(hookGroup)
-
-	middlewareGroup := make([]any, 0, len(middlewares))
-	for _, middleware := range middlewares {
-		middlewareGroup = append(middlewareGroup, middleware)
-	}
-	appendGroup(middlewareGroup)
+	normalizedPlugins := make([]any, 0, len(hooks)+len(middlewares)+len(plugins))
+	normalizedPlugins = append(normalizedPlugins, toAnySlice(plugins)...)
+	normalizedPlugins = append(normalizedPlugins, toAnySlice(hooks)...)
+	normalizedPlugins = append(normalizedPlugins, toAnySlice(middlewares)...)
 
 	return normalizedPlugins
 }
@@ -175,26 +136,12 @@ func (c *emptyPluginLookup) ByKind(kind PluginKind) []any {
 	return nil
 }
 
-//
-// pluginPointerIdentity
-//
-
-// pluginPointerIdentity identifies a non-zero-sized pointer-backed extension so
-// NormalizePlugins can collapse the same instance registered through multiple
-// plugin, hook, or middleware config fields. Zero-sized pointers are excluded
-// because Go allows distinct zero-sized values to have the same address.
-type pluginPointerIdentity struct {
-	pointer uintptr
-	typeOf  reflect.Type
-}
-
-func pluginPointerIdentityFor(plugin any) (pluginPointerIdentity, bool) {
-	value := reflect.ValueOf(plugin)
-	if !value.IsValid() || value.Kind() != reflect.Ptr || value.Type().Elem().Size() == 0 {
-		return pluginPointerIdentity{}, false
+func toAnySlice[T any](values []T) []any {
+	plugins := make([]any, 0, len(values))
+	for _, value := range values {
+		plugins = append(plugins, value)
 	}
-
-	return pluginPointerIdentity{pointer: value.Pointer(), typeOf: value.Type()}, true
+	return plugins
 }
 
 //
@@ -234,7 +181,7 @@ func (c *JobPluginLookup) ByJobArgs(args rivertype.JobArgs) PluginLookupInterfac
 		hooks = argsWithHooks.Hooks()
 	}
 
-	lookup = NewPluginLookup(NormalizePlugins(hooks, nil, nil))
+	lookup = NewPluginLookup(toAnySlice(hooks))
 	c.pluginLookupByKind[kind] = lookup
 	return lookup
 }

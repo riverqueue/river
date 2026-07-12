@@ -140,11 +140,13 @@ func TestNormalizePlugins(t *testing.T) {
 		middlewarePlugin := &testHookMiddlewarePlugin{}
 		plugin := &testHookMiddlewarePlugin{}
 
-		lookup, isPluginLookup := NewPluginLookup(NormalizePlugins(
+		plugins := NormalizePlugins(
 			[]rivertype.Hook{hookPlugin},
 			[]rivertype.Middleware{middlewarePlugin},
 			[]rivertype.Plugin{plugin},
-		)).(*pluginLookup)
+		)
+
+		lookup, isPluginLookup := NewPluginLookup(plugins).(*pluginLookup)
 		require.True(t, isPluginLookup)
 
 		require.Equal(t, []any{
@@ -159,7 +161,7 @@ func TestNormalizePlugins(t *testing.T) {
 		}, lookup.ByKind(PluginKindMiddlewareJobInsert))
 	})
 
-	t.Run("SamePointerAcrossGroupsIsCollapsed", func(t *testing.T) {
+	t.Run("SamePointerAcrossGroupsIsPreserved", func(t *testing.T) {
 		t.Parallel()
 
 		plugin := &testHookMiddlewarePlugin{}
@@ -169,7 +171,20 @@ func TestNormalizePlugins(t *testing.T) {
 			[]rivertype.Plugin{plugin},
 		)
 
-		require.Equal(t, []any{plugin}, plugins)
+		require.Equal(t, []any{plugin, plugin, plugin}, plugins)
+	})
+
+	t.Run("SameZeroSizedPointerAcrossGroupsIsPreserved", func(t *testing.T) {
+		t.Parallel()
+
+		plugin := &testZeroSizedHookMiddlewarePlugin{}
+		plugins := NormalizePlugins(
+			[]rivertype.Hook{plugin},
+			[]rivertype.Middleware{plugin},
+			nil,
+		)
+
+		require.Equal(t, []any{plugin, plugin}, plugins)
 	})
 }
 
@@ -274,11 +289,13 @@ func TestPluginLookup(t *testing.T) {
 		legacyHook := &testLegacyHookInsertBegin{}
 		legacyMiddleware := &testLegacyMiddlewareJobInsert{}
 
-		lookup, isPluginLookup := NewPluginLookup(NormalizePlugins(
+		plugins := NormalizePlugins(
 			[]rivertype.Hook{legacyHook},
 			[]rivertype.Middleware{legacyMiddleware},
 			nil,
-		)).(*pluginLookup)
+		)
+
+		lookup, isPluginLookup := NewPluginLookup(plugins).(*pluginLookup)
 		require.True(t, isPluginLookup)
 
 		hookPlugins := lookup.ByKind(PluginKindHookInsertBegin)

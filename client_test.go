@@ -8339,7 +8339,7 @@ func Test_NewClient_PluginsAndHybrids(t *testing.T) {
 		require.Equal(t, expectedCount, plugin.insertManyCount)
 	}
 
-	t.Run("DuplicatePointerAcrossHooksMiddlewareAndPluginsRunsOnce", func(t *testing.T) {
+	t.Run("DuplicatePointerAcrossHooksMiddlewareAndPluginsRunsMultipleTimes", func(t *testing.T) {
 		t.Parallel()
 
 		bundle := setup(t)
@@ -8348,7 +8348,7 @@ func Test_NewClient_PluginsAndHybrids(t *testing.T) {
 		bundle.config.Middleware = []rivertype.Middleware{plugin}
 		bundle.config.Plugins = []rivertype.Plugin{plugin}
 
-		insertAndRequireCounts(t, bundle, plugin, 1)
+		insertAndRequireCounts(t, bundle, plugin, 3)
 	})
 
 	t.Run("DuplicatePointerWithinHooksRunsMultipleTimes", func(t *testing.T) {
@@ -8371,7 +8371,7 @@ func Test_NewClient_PluginsAndHybrids(t *testing.T) {
 		insertAndRequireCounts(t, bundle, plugin, 1)
 	})
 
-	t.Run("LegacyHybridRegisteredInHooksAndMiddlewareRunsOnce", func(t *testing.T) {
+	t.Run("LegacyHybridRegisteredInHooksAndMiddlewareRunsMultipleTimes", func(t *testing.T) {
 		t.Parallel()
 
 		bundle := setup(t)
@@ -8385,8 +8385,8 @@ func Test_NewClient_PluginsAndHybrids(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NotEmpty(t, plugin.Name)
-		require.Equal(t, 1, plugin.insertBeginCount)
-		require.Equal(t, 1, plugin.insertManyCount)
+		require.Equal(t, 2, plugin.insertBeginCount)
+		require.Equal(t, 2, plugin.insertManyCount)
 	})
 
 	t.Run("LegacyHybridRegisteredInHooksRunsBothAndIsInitialized", func(t *testing.T) {
