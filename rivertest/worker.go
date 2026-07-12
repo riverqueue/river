@@ -148,17 +148,9 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 	completer := jobcompleter.NewInlineCompleter(archetype, w.config.Schema, exec, w.client.Pilot(), subscribeCh)
 
 	var (
-		configuredMiddleware = pluginconfig.Middleware(
-			w.config.Middleware,          //nolint:staticcheck // Bridge legacy middleware into the test worker's unified plugin path.
-			w.config.JobInsertMiddleware, //nolint:staticcheck // Bridge legacy middleware into the test worker's unified plugin path.
-			w.config.WorkerMiddleware,    //nolint:staticcheck // Bridge legacy middleware into the test worker's unified plugin path.
-		)
+		middleware = pluginconfig.CombinedMiddleware(w.config.Middleware, w.config.JobInsertMiddleware, w.config.WorkerMiddleware) //nolint:staticcheck
 		plugins    = append(riverplugin.DefaultPlugins(), w.config.Plugins...)
-		allPlugins = pluginlookup.NormalizePlugins(
-			w.config.Hooks, //nolint:staticcheck // Bridge legacy Hooks into the test worker's unified plugin path.
-			configuredMiddleware,
-			plugins,
-		)
+		allPlugins = pluginlookup.NormalizePlugins(w.config.Hooks, middleware, plugins) //nolint:staticcheck
 	)
 	pluginlookup.InitBaseServices(archetype, allPlugins)
 

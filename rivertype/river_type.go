@@ -451,9 +451,7 @@ type Middleware interface {
 //
 // Plugin structs should embed river.PluginDefaults, or embed either
 // river.HookDefaults or river.MiddlewareDefaults, then implement any
-// operation-specific hook or middleware interfaces they need. If a type embeds
-// both defaults directly, it must also implement IsPlugin itself to avoid the
-// embedded method-name collision.
+// operation-specific hook or middleware interfaces they need.
 type Plugin interface {
 	IsPlugin() bool
 }

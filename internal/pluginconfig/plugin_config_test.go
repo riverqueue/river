@@ -8,7 +8,7 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-func TestMiddleware(t *testing.T) {
+func TestCombinedMiddleware(t *testing.T) {
 	t.Parallel()
 
 	t.Run("CombinesMiddlewareInOrder", func(t *testing.T) {
@@ -24,7 +24,7 @@ func TestMiddleware(t *testing.T) {
 			middleware,
 			jobInsertMiddleware,
 			workerMiddleware,
-		}, Middleware(
+		}, CombinedMiddleware(
 			[]rivertype.Middleware{middleware},
 			[]rivertype.JobInsertMiddleware{jobInsertMiddleware},
 			[]rivertype.WorkerMiddleware{workerMiddleware},
@@ -36,7 +36,7 @@ func TestMiddleware(t *testing.T) {
 
 		middleware := &testJobInsertAndWorkerMiddleware{}
 
-		require.Equal(t, []rivertype.Middleware{middleware}, Middleware(
+		require.Equal(t, []rivertype.Middleware{middleware}, CombinedMiddleware(
 			nil,
 			[]rivertype.JobInsertMiddleware{middleware},
 			[]rivertype.WorkerMiddleware{middleware},

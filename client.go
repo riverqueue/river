@@ -191,7 +191,7 @@ type Config struct {
 	// JobInsertMiddleware are optional functions that can be called around job
 	// insertion.
 	//
-	// Deprecated: Prefer the use of Middleware instead (which may contain
+	// Deprecated: Prefer the use of Plugins instead (which may contain
 	// instances of rivertype.JobInsertMiddleware).
 	JobInsertMiddleware []rivertype.JobInsertMiddleware
 
@@ -446,7 +446,7 @@ type Config struct {
 	// WorkerMiddleware are optional functions that can be called around
 	// all job executions.
 	//
-	// Deprecated: Prefer the use of Middleware instead (which may contain
+	// Deprecated: Prefer the use of Plugins instead (which may contain
 	// instances of rivertype.WorkerMiddleware).
 	WorkerMiddleware []rivertype.WorkerMiddleware
 
@@ -827,9 +827,9 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	}
 
 	var (
-		configuredMiddleware = pluginconfig.Middleware(config.Middleware, config.JobInsertMiddleware, config.WorkerMiddleware)
-		plugins              = append(riverplugin.DefaultPlugins(), config.Plugins...)
-		allPlugins           = pluginlookup.NormalizePlugins(config.Hooks, configuredMiddleware, plugins)
+		middleware = pluginconfig.CombinedMiddleware(config.Middleware, config.JobInsertMiddleware, config.WorkerMiddleware)
+		plugins    = append(riverplugin.DefaultPlugins(), config.Plugins...)
+		allPlugins = pluginlookup.NormalizePlugins(config.Hooks, middleware, plugins)
 	)
 	pluginlookup.InitBaseServices(archetype, allPlugins)
 
