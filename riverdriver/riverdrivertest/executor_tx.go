@@ -214,6 +214,55 @@ func exerciseExecutorTx[TTx any](ctx context.Context, t *testing.T,
 		require.True(t, tryAcquireLock(otherExec))
 	})
 
+	t.Run("PGAdvisoryXactLockShared", func(t *testing.T) {
+		t.Parallel()
+
+		{
+			driver, _ := driverWithSchema(ctx, t, nil)
+			if driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+				t.Logf("Skipping PGAdvisoryXactLockShared test for SQLite")
+				return
+			}
+		}
+
+		lockHash := hashutil.NewAdvisoryLockHash(0)
+		lockHash.Write([]byte(t.Name()))
+		lockHash.Write([]byte(randutil.Hex(10)))
+		key := lockHash.Key()
+
+		exec1 := setup(ctx, t)
+		tx1, err := exec1.Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = tx1.Rollback(ctx) })
+
+		exec2 := setup(ctx, t)
+		tx2, err := exec2.Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = tx2.Rollback(ctx) })
+
+		exec3 := setup(ctx, t)
+		tx3, err := exec3.Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = tx3.Rollback(ctx) })
+
+		_, err = tx1.PGAdvisoryXactLockShared(ctx, key)
+		require.NoError(t, err)
+		_, err = tx2.PGAdvisoryXactLockShared(ctx, key)
+		require.NoError(t, err)
+
+		tryAcquireExclusive := func() bool {
+			var lockAcquired bool
+			require.NoError(t, tx3.QueryRow(ctx, "SELECT pg_try_advisory_xact_lock($1)", key).Scan(&lockAcquired))
+			return lockAcquired
+		}
+
+		require.False(t, tryAcquireExclusive())
+		require.NoError(t, tx1.Rollback(ctx))
+		require.False(t, tryAcquireExclusive())
+		require.NoError(t, tx2.Rollback(ctx))
+		require.True(t, tryAcquireExclusive())
+	})
+
 	t.Run("QueryRow", func(t *testing.T) {
 		t.Parallel()
 

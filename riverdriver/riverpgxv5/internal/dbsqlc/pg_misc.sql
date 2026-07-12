@@ -1,6 +1,9 @@
 -- name: PGAdvisoryXactLock :exec
 SELECT pg_advisory_xact_lock(@key);
 
+-- name: PGAdvisoryXactLockShared :exec
+SELECT pg_advisory_xact_lock_shared(@key);
+
 -- name: PGNotifyMany :exec
 WITH topic_to_notify AS (
     SELECT

@@ -1153,6 +1153,10 @@ func (e *Executor) PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}
 	return nil, riverdriver.ErrNotImplemented
 }
 
+func (e *Executor) PGAdvisoryXactLockShared(ctx context.Context, key int64) (*struct{}, error) {
+	return nil, riverdriver.ErrNotImplemented
+}
+
 func (e *Executor) QueueCreateOrSetUpdatedAt(ctx context.Context, params *riverdriver.QueueCreateOrSetUpdatedAtParams) (*rivertype.Queue, error) {
 	queue, err := dbsqlc.New().QueueCreateOrSetUpdatedAt(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueCreateOrSetUpdatedAtParams{
 		Metadata:  sliceutil.FirstNonEmpty(params.Metadata, []byte("{}")),

@@ -20,6 +20,15 @@ func (q *Queries) PGAdvisoryXactLock(ctx context.Context, db DBTX, key int64) er
 	return err
 }
 
+const pGAdvisoryXactLockShared = `-- name: PGAdvisoryXactLockShared :exec
+SELECT pg_advisory_xact_lock_shared($1)
+`
+
+func (q *Queries) PGAdvisoryXactLockShared(ctx context.Context, db DBTX, key int64) error {
+	_, err := db.Exec(ctx, pGAdvisoryXactLockShared, key)
+	return err
+}
+
 const pGNotifyMany = `-- name: PGNotifyMany :exec
 WITH topic_to_notify AS (
     SELECT

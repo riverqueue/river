@@ -888,6 +888,11 @@ func (e *Executor) PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}
 	return &struct{}{}, interpretError(err)
 }
 
+func (e *Executor) PGAdvisoryXactLockShared(ctx context.Context, key int64) (*struct{}, error) {
+	err := dbsqlc.New().PGAdvisoryXactLockShared(ctx, e.dbtx, key)
+	return &struct{}{}, interpretError(err)
+}
+
 func (e *Executor) QueueCreateOrSetUpdatedAt(ctx context.Context, params *riverdriver.QueueCreateOrSetUpdatedAtParams) (*rivertype.Queue, error) {
 	queue, err := dbsqlc.New().QueueCreateOrSetUpdatedAt(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueCreateOrSetUpdatedAtParams{
 		Metadata:  cmp.Or(string(params.Metadata), "{}"),
