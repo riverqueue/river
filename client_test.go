@@ -26,8 +26,8 @@ import (
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/maintenance"
-	"github.com/riverqueue/river/internal/middlewarelookup"
 	"github.com/riverqueue/river/internal/notifier"
+	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/retrypolicytest"
@@ -69,6 +69,106 @@ type noOpWorker struct {
 }
 
 func (w *noOpWorker) Work(ctx context.Context, job *Job[noOpArgs]) error { return nil }
+
+var (
+	_ rivertype.HookInsertBegin     = &hookMiddlewareEmbeddedDefaultsPlugin{}
+	_ rivertype.JobInsertMiddleware = &hookMiddlewareEmbeddedDefaultsPlugin{}
+	_ rivertype.Plugin              = &hookMiddlewareEmbeddedDefaultsPlugin{}
+
+	_ rivertype.HookInsertBegin     = &hookMiddlewarePlugin{}
+	_ rivertype.JobInsertMiddleware = &hookMiddlewarePlugin{}
+	_ rivertype.Plugin              = &hookMiddlewarePlugin{}
+
+	_ rivertype.HookInsertBegin     = hookMiddlewareValuePlugin{}
+	_ rivertype.JobInsertMiddleware = hookMiddlewareValuePlugin{}
+	_ rivertype.Plugin              = hookMiddlewareValuePlugin{}
+
+	_ rivertype.HookInsertBegin     = &legacyHookMiddlewarePlugin{}
+	_ rivertype.JobInsertMiddleware = &legacyHookMiddlewarePlugin{}
+)
+
+type hookMiddlewareEmbeddedDefaultsPlugin struct {
+	HookDefaults
+	MiddlewareDefaults
+
+	insertBeginCount int
+	insertManyCount  int
+}
+
+func (p *hookMiddlewareEmbeddedDefaultsPlugin) IsPlugin() bool { return true }
+
+func (p *hookMiddlewareEmbeddedDefaultsPlugin) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
+	p.insertBeginCount++
+	return nil
+}
+
+func (p *hookMiddlewareEmbeddedDefaultsPlugin) InsertMany(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
+	p.insertManyCount++
+	return doInner(ctx)
+}
+
+type hookMiddlewarePlugin struct {
+	PluginDefaults
+
+	insertBeginCount int
+	insertManyCount  int
+}
+
+func (p *hookMiddlewarePlugin) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
+	p.insertBeginCount++
+	return nil
+}
+
+func (p *hookMiddlewarePlugin) InsertMany(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
+	p.insertManyCount++
+	return doInner(ctx)
+}
+
+type hookMiddlewareValuePlugin struct {
+	counts *hookMiddlewareValuePluginCounts
+}
+
+func (p hookMiddlewareValuePlugin) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
+	p.counts.insertBeginCount++
+	return nil
+}
+
+func (p hookMiddlewareValuePlugin) InsertMany(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
+	p.counts.insertManyCount++
+	return doInner(ctx)
+}
+
+func (p hookMiddlewareValuePlugin) IsHook() bool { return true }
+
+func (p hookMiddlewareValuePlugin) IsPlugin() bool { return true }
+
+func (p hookMiddlewareValuePlugin) IsMiddleware() bool { return true }
+
+type hookMiddlewareValuePluginCounts struct {
+	insertBeginCount int
+	insertManyCount  int
+}
+
+type legacyHookMiddlewarePlugin struct {
+	baseservice.BaseService
+
+	insertBeginCount int
+	insertManyCount  int
+}
+
+func (p *legacyHookMiddlewarePlugin) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
+	p.insertBeginCount++
+	return nil
+}
+
+func (p *legacyHookMiddlewarePlugin) InsertMany(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
+	p.insertManyCount++
+	return doInner(ctx)
+}
+
+func (p *legacyHookMiddlewarePlugin) IsHook() bool { return true }
+
+func (p *legacyHookMiddlewarePlugin) IsMiddleware() bool { return true }
 
 type periodicJobArgs struct{}
 
@@ -8204,6 +8304,183 @@ func Test_NewClient_Overrides(t *testing.T) {
 	require.Len(t, client.config.WorkerMiddleware, 1)
 }
 
+func Test_NewClient_PluginsAndHybrids(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		config *Config
+		dbPool *pgxpool.Pool
+	}
+
+	setup := func(t *testing.T) *testBundle {
+		t.Helper()
+
+		dbPool := riversharedtest.DBPool(ctx, t)
+		driver := riverpgxv5.New(dbPool)
+		schema := riverdbtest.TestSchema(ctx, t, driver, nil)
+
+		return &testBundle{
+			config: newTestConfig(t, schema),
+			dbPool: dbPool,
+		}
+	}
+
+	insertAndRequireCounts := func(t *testing.T, bundle *testBundle, plugin *hookMiddlewarePlugin, expectedCount int) {
+		t.Helper()
+
+		client := newTestClient(t, bundle.dbPool, bundle.config)
+
+		_, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		require.Equal(t, expectedCount, plugin.insertBeginCount)
+		require.Equal(t, expectedCount, plugin.insertManyCount)
+	}
+
+	t.Run("DuplicatePointerAcrossHooksMiddlewareAndPluginsRunsMultipleTimes", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		plugin := &hookMiddlewarePlugin{}
+		bundle.config.Hooks = []rivertype.Hook{plugin}
+		bundle.config.Middleware = []rivertype.Middleware{plugin}
+		bundle.config.Plugins = []rivertype.Plugin{plugin}
+
+		insertAndRequireCounts(t, bundle, plugin, 3)
+	})
+
+	t.Run("DuplicatePointerWithinHooksRunsMultipleTimes", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		plugin := &hookMiddlewarePlugin{}
+		bundle.config.Hooks = []rivertype.Hook{plugin, plugin}
+
+		insertAndRequireCounts(t, bundle, plugin, 2)
+	})
+
+	t.Run("HookAlsoRegisteredAsMiddleware", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		plugin := &hookMiddlewarePlugin{}
+		bundle.config.Hooks = []rivertype.Hook{plugin}
+
+		insertAndRequireCounts(t, bundle, plugin, 1)
+	})
+
+	t.Run("LegacyHybridRegisteredInHooksAndMiddlewareRunsMultipleTimes", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		plugin := &legacyHookMiddlewarePlugin{}
+		bundle.config.Hooks = []rivertype.Hook{plugin}
+		bundle.config.Middleware = []rivertype.Middleware{plugin}
+
+		client := newTestClient(t, bundle.dbPool, bundle.config)
+
+		_, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		require.NotEmpty(t, plugin.Name)
+		require.Equal(t, 2, plugin.insertBeginCount)
+		require.Equal(t, 2, plugin.insertManyCount)
+	})
+
+	t.Run("LegacyHybridRegisteredInHooksRunsBothAndIsInitialized", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		plugin := &legacyHookMiddlewarePlugin{}
+		bundle.config.Hooks = []rivertype.Hook{plugin}
+
+		client := newTestClient(t, bundle.dbPool, bundle.config)
+
+		_, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		require.NotEmpty(t, plugin.Name)
+		require.Equal(t, 1, plugin.insertBeginCount)
+		require.Equal(t, 1, plugin.insertManyCount)
+	})
+
+	t.Run("LegacyHybridRegisteredInMiddlewareRunsBothAndIsInitialized", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		plugin := &legacyHookMiddlewarePlugin{}
+		bundle.config.Middleware = []rivertype.Middleware{plugin}
+
+		client := newTestClient(t, bundle.dbPool, bundle.config)
+
+		_, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		require.NotEmpty(t, plugin.Name)
+		require.Equal(t, 1, plugin.insertBeginCount)
+		require.Equal(t, 1, plugin.insertManyCount)
+	})
+
+	t.Run("MiddlewareAlsoRegisteredAsHook", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		plugin := &hookMiddlewarePlugin{}
+		bundle.config.Middleware = []rivertype.Middleware{plugin}
+
+		insertAndRequireCounts(t, bundle, plugin, 1)
+	})
+
+	t.Run("PluginRegisteredAsHookAndMiddleware", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		plugin := &hookMiddlewarePlugin{}
+		bundle.config.Plugins = []rivertype.Plugin{plugin}
+
+		insertAndRequireCounts(t, bundle, plugin, 1)
+	})
+
+	t.Run("PluginRegisteredWithEmbeddedDefaults", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		plugin := &hookMiddlewareEmbeddedDefaultsPlugin{}
+		bundle.config.Plugins = []rivertype.Plugin{plugin}
+
+		client := newTestClient(t, bundle.dbPool, bundle.config)
+
+		_, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		require.Equal(t, 1, plugin.insertBeginCount)
+		require.Equal(t, 1, plugin.insertManyCount)
+	})
+
+	t.Run("SeparateEqualValueInstancesRunSeparately", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		counts := &hookMiddlewareValuePluginCounts{}
+		bundle.config.Hooks = []rivertype.Hook{
+			hookMiddlewareValuePlugin{counts: counts},
+		}
+		bundle.config.Middleware = []rivertype.Middleware{
+			hookMiddlewareValuePlugin{counts: counts},
+		}
+
+		client := newTestClient(t, bundle.dbPool, bundle.config)
+
+		_, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		require.Equal(t, 2, counts.insertBeginCount)
+		require.Equal(t, 2, counts.insertManyCount)
+	})
+}
+
 func Test_NewClient_ReindexerIndexNamesExplicitEmptyOverride(t *testing.T) {
 	t.Parallel()
 
@@ -8388,8 +8665,8 @@ func Test_NewClient_Validations(t *testing.T) {
 				config.Middleware = []rivertype.Middleware{&overridableJobMiddleware{}}
 			},
 			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
-				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindJobInsert), 1)
-				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindWorker), 2)
+				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.PluginKindMiddlewareJobInsert), 1)
+				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.PluginKindMiddlewareWorker), 2)
 			},
 		},
 		{
@@ -8399,8 +8676,8 @@ func Test_NewClient_Validations(t *testing.T) {
 				config.WorkerMiddleware = []rivertype.WorkerMiddleware{&overridableJobMiddleware{}}
 			},
 			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
-				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindJobInsert), 2)
-				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindWorker), 3)
+				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.PluginKindMiddlewareJobInsert), 2)
+				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.PluginKindMiddlewareWorker), 3)
 			},
 		},
 		{
@@ -8411,8 +8688,8 @@ func Test_NewClient_Validations(t *testing.T) {
 				config.WorkerMiddleware = []rivertype.WorkerMiddleware{middleware}
 			},
 			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
-				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindJobInsert), 1)
-				require.Len(t, client.middlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindWorker), 2)
+				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.PluginKindMiddlewareJobInsert), 1)
+				require.Len(t, client.pluginLookupGlobal.ByKind(pluginlookup.PluginKindMiddlewareWorker), 2)
 			},
 		},
 		{

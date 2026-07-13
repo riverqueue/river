@@ -69,6 +69,8 @@ type Middleware struct {
 	newSlogHandler   func(w io.Writer) slog.Handler
 }
 
+func (m *Middleware) IsPlugin() bool { return true }
+
 // MiddlewareConfig is configuration for Middleware.
 type MiddlewareConfig struct {
 	// MaxSizeBytes is the maximum size of log data that'll be persisted in

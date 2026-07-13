@@ -8,12 +8,12 @@ import (
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/internal/execution"
-	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/maintenance"
-	"github.com/riverqueue/river/internal/middlewarelookup"
-	"github.com/riverqueue/river/internal/rivermiddleware"
+	"github.com/riverqueue/river/internal/pluginconfig"
+	"github.com/riverqueue/river/internal/pluginlookup"
+	"github.com/riverqueue/river/internal/riverplugin"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
@@ -147,16 +147,12 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 	}
 	completer := jobcompleter.NewInlineCompleter(archetype, w.config.Schema, exec, w.client.Pilot(), subscribeCh)
 
-	for _, hook := range w.config.Hooks {
-		if withBaseService, ok := hook.(baseservice.WithBaseService); ok {
-			baseservice.Init(archetype, withBaseService)
-		}
-	}
-	for _, middleware := range w.config.Middleware {
-		if withBaseService, ok := middleware.(baseservice.WithBaseService); ok {
-			baseservice.Init(archetype, withBaseService)
-		}
-	}
+	var (
+		middleware = pluginconfig.CombinedMiddleware(w.config.Middleware, w.config.JobInsertMiddleware, w.config.WorkerMiddleware) //nolint:staticcheck
+		plugins    = append(riverplugin.DefaultPlugins(), w.config.Plugins...)
+		allPlugins = pluginlookup.NormalizePlugins(w.config.Hooks, middleware, plugins) //nolint:staticcheck
+	)
+	pluginlookup.InitBaseServices(archetype, allPlugins)
 
 	updatedJobRow, err := exec.JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
 		ID:                  job.ID,
@@ -205,10 +201,9 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 				return nil
 			},
 		},
-		HookLookupGlobal:       hooklookup.NewHookLookup(w.config.Hooks),
-		HookLookupByJob:        hooklookup.NewJobHookLookup(),
-		JobRow:                 job,
-		MiddlewareLookupGlobal: middlewarelookup.NewMiddlewareLookup(append(rivermiddleware.DefaultMiddleware(), w.config.Middleware...)),
+		PluginLookupByJob:  pluginlookup.NewJobPluginLookup(),
+		PluginLookupGlobal: pluginlookup.NewPluginLookup(allPlugins),
+		JobRow:             job,
 		ProducerCallbacks: struct {
 			JobDone func(jobRow *rivertype.JobRow)
 			Stuck   func(ctx context.Context, jobRow *rivertype.JobRow)

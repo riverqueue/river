@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/riverqueue/river/internal/hooklookup"
+	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -26,7 +26,7 @@ type wrapperWorkUnit[T JobArgs] struct {
 	worker Worker[T]
 }
 
-func (w *wrapperWorkUnit[T]) HookLookup(lookup *hooklookup.JobHookLookup) hooklookup.HookLookupInterface {
+func (w *wrapperWorkUnit[T]) PluginLookup(lookup *pluginlookup.JobPluginLookup) pluginlookup.PluginLookupInterface {
 	var job T
 	return lookup.ByJobArgs(job)
 }

@@ -9,6 +9,8 @@ import (
 var (
 	_ rivertype.JobInsertMiddleware = &JobInsertMiddlewareDefaults{}
 	_ rivertype.WorkerMiddleware    = &WorkerMiddlewareDefaults{}
+	_ rivertype.Plugin              = &JobInsertMiddlewareDefaults{}
+	_ rivertype.Plugin              = &WorkerMiddlewareDefaults{}
 
 	_ rivertype.JobInsertMiddleware = JobInsertMiddlewareFunc(func(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(ctx context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
 		return doInner(ctx)
@@ -16,11 +18,17 @@ var (
 	_ rivertype.Middleware = JobInsertMiddlewareFunc(func(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(ctx context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
 		return doInner(ctx)
 	})
+	_ rivertype.Plugin = JobInsertMiddlewareFunc(func(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(ctx context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
+		return doInner(ctx)
+	})
 
 	_ rivertype.Middleware = WorkerMiddlewareFunc(func(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
 		return doInner(ctx)
 	})
 	_ rivertype.WorkerMiddleware = WorkerMiddlewareFunc(func(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
+		return doInner(ctx)
+	})
+	_ rivertype.Plugin = WorkerMiddlewareFunc(func(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
 		return doInner(ctx)
 	})
 )

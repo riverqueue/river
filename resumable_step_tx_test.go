@@ -11,7 +11,7 @@ import (
 	"github.com/riverqueue/river/internal/execution"
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/rivermiddleware"
+	"github.com/riverqueue/river/internal/riverplugin"
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -47,7 +47,7 @@ func TestResumableSetStepTx(t *testing.T) {
 		require.NoError(t, err)
 		ctx = context.WithValue(ctx, rivercommon.ContextKeyClient{}, client)
 		ctx = context.WithValue(ctx, jobexecutor.ContextKeyMetadataUpdates, make(map[string]any))
-		ctx = context.WithValue(ctx, rivermiddleware.ResumableContextKey{}, &rivermiddleware.ResumableState{
+		ctx = context.WithValue(ctx, riverplugin.ResumableContextKey{}, &riverplugin.ResumableState{
 			Cursors:  make(map[string]json.RawMessage),
 			StepName: stepName,
 		})

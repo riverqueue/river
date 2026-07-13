@@ -1,4 +1,4 @@
-package rivermiddleware
+package riverplugin
 
 import (
 	"context"
@@ -13,10 +13,10 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-// DefaultMiddleware returns the default middleware that River applies to all
-// jobs. This includes internal middleware like the resumable step middleware.
-func DefaultMiddleware() []rivertype.Middleware {
-	return []rivertype.Middleware{&ResumableMiddleware{}}
+// DefaultPlugins returns the default plugins that River applies to all jobs.
+// This includes internal middleware like the resumable step middleware.
+func DefaultPlugins() []rivertype.Plugin {
+	return []rivertype.Plugin{&ResumableMiddleware{}}
 }
 
 // ResumableMiddleware is internal middleware that enables resumable step
@@ -26,6 +26,7 @@ func DefaultMiddleware() []rivertype.Middleware {
 type ResumableMiddleware struct{}
 
 func (*ResumableMiddleware) IsMiddleware() bool { return true }
+func (*ResumableMiddleware) IsPlugin() bool     { return true }
 
 func (*ResumableMiddleware) Work(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
 	metadataUpdates, hasMetadataUpdates := jobexecutor.MetadataUpdatesFromWorkContext(ctx)

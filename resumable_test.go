@@ -10,7 +10,7 @@ import (
 
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/rivercommon"
-	"github.com/riverqueue/river/internal/rivermiddleware"
+	"github.com/riverqueue/river/internal/riverplugin"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -32,7 +32,7 @@ func TestResumableStep(t *testing.T) {
 		ctx, _, job := setup(t, `{}`)
 
 		var ran []string
-		err := (&rivermiddleware.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
+		err := (&riverplugin.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
 			ResumableStep(ctx, "step1", nil, func(ctx context.Context) error {
 				ran = append(ran, "first")
 				return nil
@@ -54,7 +54,7 @@ func TestResumableStep(t *testing.T) {
 		ctx, _, job := setup(t, `{"river:resumable_step":"step2"}`)
 
 		var ran []string
-		err := (&rivermiddleware.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
+		err := (&riverplugin.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
 			ResumableStep(ctx, "step1", nil, func(ctx context.Context) error {
 				ran = append(ran, "first")
 				return nil
@@ -88,7 +88,7 @@ func TestResumableStep(t *testing.T) {
 		ctx, metadataUpdates, job := setup(t, `{}`)
 
 		var ran []string
-		err := (&rivermiddleware.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
+		err := (&riverplugin.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
 			ResumableStep(ctx, "step1", nil, func(ctx context.Context) error {
 				ran = append(ran, "step1")
 				return nil
@@ -111,7 +111,7 @@ func TestResumableStep(t *testing.T) {
 		ctx, metadataUpdates, job = setup(t, `{"river:resumable_step":"step1"}`)
 		ran = nil
 
-		err = (&rivermiddleware.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
+		err = (&riverplugin.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
 			ResumableStep(ctx, "step1", nil, func(ctx context.Context) error {
 				ran = append(ran, "step1")
 				return nil
@@ -140,7 +140,7 @@ func TestResumableStep(t *testing.T) {
 		defer cancel()
 
 		var ran []string
-		err := (&rivermiddleware.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
+		err := (&riverplugin.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
 			ResumableStep(ctx, "step1", nil, func(ctx context.Context) error {
 				ran = append(ran, "step1")
 				cancel()
@@ -185,7 +185,7 @@ func TestResumableStepCursor(t *testing.T) {
 		ctx, _, job := setup(t, `{}`)
 
 		var ran []string
-		err := (&rivermiddleware.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
+		err := (&riverplugin.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
 			ResumableStep(ctx, "step1", nil, func(ctx context.Context) error {
 				ran = append(ran, "step")
 				return nil
@@ -210,7 +210,7 @@ func TestResumableStepCursor(t *testing.T) {
 			cursorResult resumableCursor
 			ran          []int
 		)
-		err := (&rivermiddleware.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
+		err := (&riverplugin.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
 			ResumableStep(ctx, "step1", nil, func(ctx context.Context) error {
 				ran = append(ran, 1)
 				return nil
@@ -240,7 +240,7 @@ func TestResumableStepCursor(t *testing.T) {
 		cursorResult = resumableCursor{}
 		ran = nil
 
-		err = (&rivermiddleware.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
+		err = (&riverplugin.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
 			ResumableStep(ctx, "step1", nil, func(ctx context.Context) error {
 				ran = append(ran, 1)
 				return nil
@@ -271,7 +271,7 @@ func TestResumableStepCursor(t *testing.T) {
 		ctx, metadataUpdates, job := setup(t, `{"river:resumable_cursor":{"step2":{"id":42}},"river:resumable_step":"step1"}`)
 
 		var ran []int
-		err := (&rivermiddleware.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
+		err := (&riverplugin.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
 			ResumableStep(ctx, "step1", nil, func(ctx context.Context) error {
 				ran = append(ran, 1)
 				return nil
@@ -306,7 +306,7 @@ func TestResumableStepCursor(t *testing.T) {
 
 		ctx, _, _ := setup(t, `{}`)
 
-		err := (&rivermiddleware.ResumableMiddleware{}).Work(ctx, &rivertype.JobRow{Metadata: []byte(`{}`)}, func(ctx context.Context) error {
+		err := (&riverplugin.ResumableMiddleware{}).Work(ctx, &rivertype.JobRow{Metadata: []byte(`{}`)}, func(ctx context.Context) error {
 			return ResumableSetCursor(ctx, 1)
 		})
 		require.ErrorIs(t, err, errResumableCursorNotInStep)
@@ -321,7 +321,7 @@ func TestResumableStepCursor(t *testing.T) {
 
 		ctx, metadataUpdates, job := setup(t, `{}`)
 
-		err := (&rivermiddleware.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
+		err := (&riverplugin.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
 			ResumableStepCursor(ctx, "step1", nil, func(ctx context.Context, cursor int) error {
 				require.Zero(t, cursor)
 				require.NoError(t, ResumableSetCursor(ctx, 123))
@@ -343,7 +343,7 @@ func TestResumableStepCursor(t *testing.T) {
 
 		ctx, metadataUpdates, job = setup(t, `{"river:resumable_cursor":{"step1":123,"step2":{"id":"abc"}},"river:resumable_step":"step1"}`)
 
-		err = (&rivermiddleware.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
+		err = (&riverplugin.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
 			ResumableStepCursor(ctx, "step1", nil, func(ctx context.Context, cursor int) error {
 				require.Equal(t, 123, cursor)
 				return nil

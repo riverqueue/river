@@ -65,7 +65,7 @@ func Example_globalHooks() { //nolint:dupl
 
 	riverClient, err := river.NewClient(riverpgxv5.New(dbPool), initTestConfig(ctx, dbPool, &river.Config{
 		// Order is significant. See output below.
-		Hooks: []rivertype.Hook{
+		Plugins: []rivertype.Plugin{
 			&BothInsertAndWorkBeginHook{},
 			&InsertBeginHook{},
 			&WorkBeginHook{},

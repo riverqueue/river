@@ -15,10 +15,9 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/riverqueue/river/internal/execution"
-	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobstats"
-	"github.com/riverqueue/river/internal/middlewarelookup"
+	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/workunit"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -111,10 +110,9 @@ type JobExecutor struct {
 	ClientRetryPolicy        ClientRetryPolicy
 	DefaultClientRetryPolicy ClientRetryPolicy
 	ErrorHandler             ErrorHandler
-	HookLookupByJob          *hooklookup.JobHookLookup
-	HookLookupGlobal         hooklookup.HookLookupInterface
+	PluginLookupByJob        *pluginlookup.JobPluginLookup
+	PluginLookupGlobal       pluginlookup.PluginLookupInterface
 	JobRow                   *rivertype.JobRow
-	MiddlewareLookupGlobal   middlewarelookup.MiddlewareLookupInterface
 	ProducerCallbacks        struct {
 		JobDone func(jobRow *rivertype.JobRow)
 		Stuck   func(ctx context.Context, jobRow *rivertype.JobRow)
@@ -220,8 +218,8 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 	doInner := execution.Func(func(ctx context.Context) error {
 		{
 			for _, hook := range append(
-				e.HookLookupGlobal.ByHookKind(hooklookup.HookKindWorkBegin),
-				e.WorkUnit.HookLookup(e.HookLookupByJob).ByHookKind(hooklookup.HookKindWorkBegin)...,
+				e.PluginLookupGlobal.ByKind(pluginlookup.PluginKindHookWorkBegin),
+				e.WorkUnit.PluginLookup(e.PluginLookupByJob).ByKind(pluginlookup.PluginKindHookWorkBegin)...,
 			) {
 				if err := hook.(rivertype.HookWorkBegin).WorkBegin(ctx, e.JobRow); err != nil { //nolint:forcetypeassert
 					return err
@@ -248,8 +246,8 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 
 		{
 			for _, hook := range append(
-				e.HookLookupGlobal.ByHookKind(hooklookup.HookKindWorkEnd),
-				e.WorkUnit.HookLookup(e.HookLookupByJob).ByHookKind(hooklookup.HookKindWorkEnd)...,
+				e.PluginLookupGlobal.ByKind(pluginlookup.PluginKindHookWorkEnd),
+				e.WorkUnit.PluginLookup(e.PluginLookupByJob).ByKind(pluginlookup.PluginKindHookWorkEnd)...,
 			) {
 				err = hook.(rivertype.HookWorkEnd).WorkEnd(ctx, e.JobRow, err) //nolint:forcetypeassert
 			}
@@ -258,8 +256,13 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		return err
 	})
 
+	globalMiddleware := make([]rivertype.Middleware, 0, len(e.PluginLookupGlobal.ByKind(pluginlookup.PluginKindMiddlewareWorker)))
+	for _, plugin := range e.PluginLookupGlobal.ByKind(pluginlookup.PluginKindMiddlewareWorker) {
+		globalMiddleware = append(globalMiddleware, plugin.(rivertype.Middleware)) //nolint:forcetypeassert
+	}
+
 	executeFunc := execution.MiddlewareChain(
-		e.MiddlewareLookupGlobal.ByMiddlewareKind(middlewarelookup.MiddlewareKindWorker),
+		globalMiddleware,
 		e.WorkUnit.Middleware(),
 		doInner,
 		e.JobRow,

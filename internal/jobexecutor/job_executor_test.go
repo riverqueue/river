@@ -10,9 +10,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
-	"github.com/riverqueue/river/internal/middlewarelookup"
+	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/retrypolicytest"
@@ -38,8 +37,8 @@ type customizableWorkUnit struct {
 	work       func() error
 }
 
-func (w *customizableWorkUnit) HookLookup(lookup *hooklookup.JobHookLookup) hooklookup.HookLookupInterface {
-	return hooklookup.NewHookLookup(nil)
+func (w *customizableWorkUnit) PluginLookup(lookup *pluginlookup.JobPluginLookup) pluginlookup.PluginLookupInterface {
+	return pluginlookup.NewPluginLookup(nil)
 }
 
 func (w *customizableWorkUnit) Middleware() []rivertype.WorkerMiddleware {
@@ -189,10 +188,9 @@ func TestJobExecutor_Execute(t *testing.T) {
 			Completer:                bundle.completer,
 			DefaultClientRetryPolicy: &retrypolicytest.RetryPolicyNoJitter{},
 			ErrorHandler:             bundle.errorHandler,
-			HookLookupByJob:          hooklookup.NewJobHookLookup(),
-			HookLookupGlobal:         hooklookup.NewHookLookup(nil),
+			PluginLookupByJob:        pluginlookup.NewJobPluginLookup(),
+			PluginLookupGlobal:       pluginlookup.NewPluginLookup(nil),
 			JobRow:                   bundle.jobRow,
-			MiddlewareLookupGlobal:   middlewarelookup.NewMiddlewareLookup(nil),
 			ProducerCallbacks: struct {
 				JobDone func(jobRow *rivertype.JobRow)
 				Stuck   func(ctx context.Context, jobRow *rivertype.JobRow)
@@ -909,7 +907,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		executor, bundle := setup(t)
 
 		// Add a middleware so we can verify it's in the trace too:
-		executor.MiddlewareLookupGlobal = middlewarelookup.NewMiddlewareLookup([]rivertype.Middleware{
+		executor.PluginLookupGlobal = pluginlookup.NewPluginLookup([]any{
 			&testMiddleware{
 				work: func(ctx context.Context, job *rivertype.JobRow, next func(context.Context) error) error {
 					return next(ctx)
@@ -1080,7 +1078,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 			workBeginCalled bool
 			workEndCalled   bool
 		)
-		executor.HookLookupGlobal = hooklookup.NewHookLookup([]rivertype.Hook{
+		executor.PluginLookupGlobal = pluginlookup.NewPluginLookup([]any{
 			HookWorkBeginFunc(func(ctx context.Context, job *rivertype.JobRow) error {
 				workBeginCalled = true
 				return nil
@@ -1110,7 +1108,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 			workEnd1Called bool
 			workEnd2Called bool
 		)
-		executor.HookLookupGlobal = hooklookup.NewHookLookup([]rivertype.Hook{
+		executor.PluginLookupGlobal = pluginlookup.NewPluginLookup([]any{
 			HookWorkEndFunc(func(ctx context.Context, job *rivertype.JobRow, err error) error {
 				workEnd1Called = true
 				require.EqualError(t, err, "job error")
@@ -1144,7 +1142,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 			workEnd1Called bool
 			workEnd2Called bool
 		)
-		executor.HookLookupGlobal = hooklookup.NewHookLookup([]rivertype.Hook{
+		executor.PluginLookupGlobal = pluginlookup.NewPluginLookup([]any{
 			HookWorkEndFunc(func(ctx context.Context, job *rivertype.JobRow, err error) error {
 				workEnd1Called = true
 				require.EqualError(t, err, "job error")
@@ -1181,7 +1179,8 @@ func (f HookWorkBeginFunc) WorkBegin(ctx context.Context, job *rivertype.JobRow)
 	return f(ctx, job)
 }
 
-func (f HookWorkBeginFunc) IsHook() bool { return true }
+func (f HookWorkBeginFunc) IsHook() bool   { return true }
+func (f HookWorkBeginFunc) IsPlugin() bool { return true }
 
 type HookWorkEndFunc func(ctx context.Context, job *rivertype.JobRow, err error) error
 
@@ -1189,13 +1188,15 @@ func (f HookWorkEndFunc) WorkEnd(ctx context.Context, job *rivertype.JobRow, err
 	return f(ctx, job, err)
 }
 
-func (f HookWorkEndFunc) IsHook() bool { return true }
+func (f HookWorkEndFunc) IsHook() bool   { return true }
+func (f HookWorkEndFunc) IsPlugin() bool { return true }
 
 type testMiddleware struct {
 	work func(ctx context.Context, job *rivertype.JobRow, next func(context.Context) error) error
 }
 
 func (m *testMiddleware) IsMiddleware() bool { return true }
+func (m *testMiddleware) IsPlugin() bool     { return true }
 
 func (m *testMiddleware) Work(ctx context.Context, job *rivertype.JobRow, next func(context.Context) error) error {
 	return m.work(ctx, job, next)

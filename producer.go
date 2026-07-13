@@ -13,11 +13,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/riverqueue/river/internal/hooklookup"
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobexecutor"
-	"github.com/riverqueue/river/internal/middlewarelookup"
 	"github.com/riverqueue/river/internal/notifier"
+	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/util/chanutil"
 	"github.com/riverqueue/river/internal/workunit"
@@ -82,14 +81,13 @@ type producerConfig struct {
 	// LISTEN/NOTIFY, but this provides a fallback.
 	FetchPollInterval time.Duration
 
-	HookLookupByJob        *hooklookup.JobHookLookup
-	HookLookupGlobal       hooklookup.HookLookupInterface
-	JobStuckHandler        JobStuckHandler
-	JobStuckCount          *atomic.Int32
-	JobStuckThreshold      time.Duration
-	JobTimeout             time.Duration
-	MaxWorkers             int
-	MiddlewareLookupGlobal middlewarelookup.MiddlewareLookupInterface
+	PluginLookupByJob  *pluginlookup.JobPluginLookup
+	PluginLookupGlobal pluginlookup.PluginLookupInterface
+	JobStuckHandler    JobStuckHandler
+	JobStuckCount      *atomic.Int32
+	JobStuckThreshold  time.Duration
+	JobTimeout         time.Duration
+	MaxWorkers         int
 
 	// Notifier is a notifier for subscribing to new job inserts and job
 	// control. If nil, the producer will operate in poll-only mode.
@@ -874,9 +872,8 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 			Completer:                p.completer,
 			DefaultClientRetryPolicy: &DefaultClientRetryPolicy{},
 			ErrorHandler:             p.errorHandler,
-			HookLookupByJob:          p.config.HookLookupByJob,
-			HookLookupGlobal:         p.config.HookLookupGlobal,
-			MiddlewareLookupGlobal:   p.config.MiddlewareLookupGlobal,
+			PluginLookupByJob:        p.config.PluginLookupByJob,
+			PluginLookupGlobal:       p.config.PluginLookupGlobal,
 			JobRow:                   job,
 			ProducerCallbacks: struct {
 				JobDone func(jobRow *rivertype.JobRow)

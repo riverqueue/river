@@ -7,11 +7,14 @@ import (
 )
 
 // MiddlewareDefaults should be embedded on any middleware implementation. It
-// helps identify a struct as middleware, and guarantees forward compatibility in
-// case additions are necessary to the rivertype.Middleware interface.
+// helps identify a struct as middleware and a plugin, and guarantees forward
+// compatibility in case additions are necessary to the rivertype.Middleware
+// interface.
 type MiddlewareDefaults struct{}
 
 func (d *MiddlewareDefaults) IsMiddleware() bool { return true }
+
+func (d *MiddlewareDefaults) IsPlugin() bool { return true }
 
 // JobInsertMiddlewareDefaults is an embeddable struct that provides default
 // implementations for the rivertype.JobInsertMiddleware. Use of this struct is
@@ -35,6 +38,8 @@ func (f JobInsertMiddlewareFunc) InsertMany(ctx context.Context, manyParams []*r
 
 func (f JobInsertMiddlewareFunc) IsMiddleware() bool { return true }
 
+func (f JobInsertMiddlewareFunc) IsPlugin() bool { return true }
+
 // WorkerInsertMiddlewareDefaults is an embeddable struct that provides default
 // implementations for the rivertype.WorkerMiddleware. Use of this struct is
 // recommended in case rivertype.WorkerMiddleware is expanded in the future so
@@ -51,8 +56,10 @@ func (d *WorkerMiddlewareDefaults) Work(ctx context.Context, job *rivertype.JobR
 // rivertype.WorkerMiddleware using a simple function instead of a struct.
 type WorkerMiddlewareFunc func(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error
 
+func (f WorkerMiddlewareFunc) IsMiddleware() bool { return true }
+
+func (f WorkerMiddlewareFunc) IsPlugin() bool { return true }
+
 func (f WorkerMiddlewareFunc) Work(ctx context.Context, job *rivertype.JobRow, doInner func(ctx context.Context) error) error {
 	return f(ctx, job, doInner)
 }
-
-func (f WorkerMiddlewareFunc) IsMiddleware() bool { return true }
