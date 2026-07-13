@@ -363,6 +363,42 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.Equal(t, rivertype.JobStateDiscarded, job.State)
 	})
 
+	// "Decrements attempt" means restoring attempt to the value it had before
+	// JobGetAvailable incremented it for this run.
+	t.Run("SoftStopCancelMakesJobAvailableAndDecrementsAttempt", func(t *testing.T) {
+		t.Parallel()
+
+		executor, bundle := setup(t)
+
+		bundle.jobRow.Attempt = bundle.jobRow.MaxAttempts
+		_, err := bundle.exec.JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
+			ID:              bundle.jobRow.ID,
+			AttemptDoUpdate: true,
+			Attempt:         bundle.jobRow.Attempt,
+		})
+		require.NoError(t, err)
+
+		workCtx, cancel := context.WithCancelCause(ctx)
+		cancel(rivercommon.ErrStop)
+
+		executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return context.Canceled }, nil).MakeUnit(bundle.jobRow)
+
+		executor.Execute(workCtx)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
+
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
+		require.NoError(t, err)
+		require.Nil(t, job.FinalizedAt)
+		require.Equal(t, bundle.jobRow.Attempt-1, job.Attempt)
+		require.Equal(t, bundle.jobRow.MaxAttempts, job.MaxAttempts)
+		require.Equal(t, rivertype.JobStateAvailable, job.State)
+		require.WithinDuration(t, time.Now(), job.ScheduledAt, 2*time.Second)
+		require.Empty(t, job.Errors)
+	})
+
 	t.Run("JobCancelErrorCancelsJobEvenWithRemainingAttempts", func(t *testing.T) {
 		t.Parallel()
 
