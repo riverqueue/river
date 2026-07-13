@@ -25,6 +25,7 @@ import (
 const AllQueuesString = "*"
 
 const (
+	DatabaseNameMySQL    = "mysql"
 	DatabaseNamePostgres = "postgres"
 	DatabaseNameSQLite   = "sqlite"
 )
@@ -127,6 +128,13 @@ type Driver[TTx any] interface {
 	//
 	// API is not stable. DO NOT USE.
 	PoolSet(dbPool any) error
+
+	// SafeIdentifier returns a safely quoted identifier (e.g. a table or
+	// schema name) for use in SQL queries. Each driver quotes using its
+	// native syntax: double quotes for Postgres/SQLite, backticks for MySQL.
+	//
+	// API is not stable. DO NOT USE.
+	SafeIdentifier(ident string) string
 
 	// SQLFragmentColumnIn generates an SQL fragment to be included as a
 	// predicate in a `WHERE` query for the existence of a set of values in a
