@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Guard against empty job slice returned by `JobSetStateIfRunningMany` when a job has been deleted mid-run. [PR #1308](https://github.com/riverqueue/river/pull/1308).
+
 ### Changed
 
 - Both hooks and middleware should now be registered under a general `Config.Plugins` instead, a change that simpifies things somewhat, and better handles cases where a hook or middleware might be _both_ a hook and a middleware as opposed to only one or the other. `Config.Hooks` and `Config.Middleware` are still available for use, but considered deprecated in favor of the more general `Config.Plugins`. [PR #1284](https://github.com/riverqueue/river/pull/1284).

@@ -110,6 +110,28 @@ func TestInlineJobCompleter_Complete(t *testing.T) {
 	require.Equal(t, numRetries, attempt)
 }
 
+func TestInlineJobCompleter_CompleteDeletedJob(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	// The driver intentionally returns 0 rows when a job is deleted while the
+	// completer is finalizing it (UnknownJobIgnored contract). Verify that the
+	// InlineCompleter does not panic in that case.
+	execMock := &partialExecutorMock{}
+	execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+		return []*rivertype.JobRow{}, nil
+	}
+
+	subscribeCh := make(chan []CompleterJobUpdated, 10)
+	t.Cleanup(riverinternaltest.DiscardContinuously(subscribeCh))
+
+	completer := NewInlineCompleter(riversharedtest.BaseServiceArchetype(t), "", execMock, &riverpilot.StandardPilot{}, subscribeCh)
+	t.Cleanup(completer.Stop)
+
+	require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(1, time.Now(), nil)))
+}
+
 func TestInlineJobCompleter_Subscribe(t *testing.T) {
 	t.Parallel()
 
@@ -226,6 +248,29 @@ func TestAsyncJobCompleter_Complete(t *testing.T) {
 	// Finish the final two completions:
 	resultCh <- nil
 	resultCh <- nil
+}
+
+func TestAsyncJobCompleter_CompleteDeletedJob(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	// The driver intentionally returns 0 rows when a job is deleted while the
+	// completer is finalizing it (UnknownJobIgnored contract). Verify that the
+	// AsyncCompleter does not panic in that case.
+	execMock := &partialExecutorMock{}
+	execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+		return []*rivertype.JobRow{}, nil
+	}
+
+	subscribeCh := make(chan []CompleterJobUpdated, 10)
+	t.Cleanup(riverinternaltest.DiscardContinuously(subscribeCh))
+
+	completer := newAsyncCompleterWithConcurrency(riversharedtest.BaseServiceArchetype(t), "", execMock, &riverpilot.StandardPilot{}, 2, subscribeCh)
+	require.NoError(t, completer.Start(ctx))
+	t.Cleanup(completer.Stop)
+
+	require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(1, time.Now(), nil)))
 }
 
 func TestAsyncJobCompleter_Subscribe(t *testing.T) {
