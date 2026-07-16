@@ -95,7 +95,7 @@ func (c *InlineCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobst
 	// The driver intentionally returns 0 rows when a job is deleted while the
 	// completer is finalizing it (see UnknownJobIgnored shared driver test).
 	// Guard against an index-out-of-range panic in that case.
-	if len(jobs) == 0 {
+	if len(jobs) < 1 {
 		return nil
 	}
 
@@ -210,7 +210,7 @@ func (c *AsyncCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobsta
 		// The driver intentionally returns 0 rows when a job is deleted while the
 		// completer is finalizing it (see UnknownJobIgnored shared driver test).
 		// Guard against an index-out-of-range panic in that case.
-		if len(jobs) == 0 {
+		if len(jobs) < 1 {
 			return nil
 		}
 
