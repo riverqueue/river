@@ -92,6 +92,13 @@ func (c *InlineCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobst
 		return err
 	}
 
+	// The driver intentionally returns 0 rows when a job is deleted while the
+	// completer is finalizing it (see UnknownJobIgnored shared driver test).
+	// Guard against an index-out-of-range panic in that case.
+	if len(jobs) == 0 {
+		return nil
+	}
+
 	stats.CompleteDuration = c.Time.Now().Sub(start)
 	c.subscribeCh <- []CompleterJobUpdated{{
 		Job:      jobs[0],
@@ -198,6 +205,13 @@ func (c *AsyncCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobsta
 		})
 		if err != nil {
 			return err
+		}
+
+		// The driver intentionally returns 0 rows when a job is deleted while the
+		// completer is finalizing it (see UnknownJobIgnored shared driver test).
+		// Guard against an index-out-of-range panic in that case.
+		if len(jobs) == 0 {
+			return nil
 		}
 
 		stats.CompleteDuration = c.Time.Now().Sub(start)
