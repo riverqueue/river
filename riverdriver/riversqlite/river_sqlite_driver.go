@@ -833,7 +833,7 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 }
 
 func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
-	setRes := make([]*rivertype.JobRow, len(params.ID))
+	setRes := make([]*rivertype.JobRow, 0, len(params.ID))
 
 	if err := dbutil.WithTx(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
 		ctx = schemaTemplateParam(ctx, params.Schema)
@@ -880,7 +880,7 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 					})
 					if err != nil {
 						if errors.Is(err, sql.ErrNoRows) {
-							return nil
+							continue
 						}
 
 						return fmt.Errorf("error setting job metadata: %w", err)
@@ -889,10 +889,11 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 					return fmt.Errorf("error setting job state: %w", err)
 				}
 			}
-			setRes[i], err = jobRowFromInternal(job)
+			jobRow, err := jobRowFromInternal(job)
 			if err != nil {
 				return err
 			}
+			setRes = append(setRes, jobRow)
 		}
 
 		return nil
