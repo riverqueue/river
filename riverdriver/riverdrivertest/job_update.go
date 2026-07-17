@@ -658,8 +658,9 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			// The operation doesn't return anything like a "not found" in case
 			// of an unknown job so that it doesn't fail in case a job is
 			// deleted in the interim as a completer is trying to finalize it.
-			_, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateCompleted(0, time.Now().UTC(), nil)))
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateCompleted(0, time.Now().UTC(), nil)))
 			require.NoError(t, err)
+			require.Empty(t, jobsAfter)
 		})
 	})
 
@@ -934,11 +935,13 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
 
 		jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(
+			riverdriver.JobSetStateCompleted(0, now, nil),
 			riverdriver.JobSetStateCompleted(job1.ID, now, []byte(`{"a":"b"}`)),
 			riverdriver.JobSetStateErrorRetryable(job2.ID, future, makeErrPayload(t, now), nil),
 			riverdriver.JobSetStateCancelled(job3.ID, now, makeErrPayload(t, now), nil),
 		))
 		require.NoError(t, err)
+		require.Len(t, jobsAfter, 3)
 		completedJob := jobsAfter[0]
 		require.Equal(t, rivertype.JobStateCompleted, completedJob.State)
 		require.WithinDuration(t, now, *completedJob.FinalizedAt, time.Microsecond)
