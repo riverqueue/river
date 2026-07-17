@@ -235,6 +235,30 @@ func JobStates() []JobState {
 	}
 }
 
+// MetricName identifies a metric emitted through HookMetricEmit.
+type MetricName string
+
+const (
+	// MetricNameJobGetAvailableDuration is the duration of a successful
+	// JobGetAvailable call.
+	MetricNameJobGetAvailableDuration MetricName = "job_get_available_duration"
+
+	// MetricNameJobGetAvailableCount is the number of jobs locked by a
+	// successful JobGetAvailable call.
+	MetricNameJobGetAvailableCount MetricName = "job_get_available_count"
+)
+
+// Metric is a strongly typed metric payload emitted through HookMetricEmit.
+//
+// River provides all Metric implementations. New metric types may be added in
+// future versions without changing HookMetricEmit's method signature.
+type Metric interface {
+	// Name identifies the emitted metric.
+	Name() MetricName
+
+	isMetric()
+}
+
 // AttemptError is an error from a single job attempt that failed due to an
 // error or a panic.
 type AttemptError struct {
@@ -303,6 +327,8 @@ type JobInsertParams struct {
 //
 // List of hook interfaces that may be implemented:
 // - HookInsertBegin
+// - HookMetricEmit
+// - HookPeriodicJobsStart
 // - HookWorkBegin
 // - HookWorkEnd
 //
@@ -322,6 +348,57 @@ type HookInsertBegin interface {
 	// InsertBegin is invoked just before a job is inserted to the database.
 	InsertBegin(ctx context.Context, params *JobInsertParams) error
 }
+
+// HookMetricEmit is an interface to a hook that receives metrics emitted by
+// River.
+type HookMetricEmit interface {
+	Hook
+
+	// MetricEmit is invoked each time River emits a metric. This is invoked in
+	// very hot paths like job fetching, and should therefore not block on
+	// network I/O or anything else, and should usually pass metrics through to
+	// an asynchronous instrumentation package like OpenTelemetry.
+	MetricEmit(ctx context.Context, params *HookMetricEmitParams)
+}
+
+// HookMetricEmitParams are parameters for HookMetricEmit.
+type HookMetricEmitParams struct {
+	// Metric is the emitted metric payload. Use a type switch to access
+	// metric-specific fields.
+	Metric Metric
+}
+
+// JobGetAvailableDurationMetric is emitted after a successful JobGetAvailable
+// call with the call's duration.
+type JobGetAvailableDurationMetric struct {
+	// Duration is how long the JobGetAvailable call took.
+	Duration time.Duration
+
+	// Queue is the queue that jobs were locked from.
+	Queue string
+}
+
+func (m *JobGetAvailableDurationMetric) Name() MetricName {
+	return MetricNameJobGetAvailableDuration
+}
+
+func (m *JobGetAvailableDurationMetric) isMetric() {}
+
+// JobGetAvailableCountMetric is emitted after a successful JobGetAvailable
+// call with the number of jobs locked.
+type JobGetAvailableCountMetric struct {
+	// Count is the number of jobs locked.
+	Count int
+
+	// Queue is the queue that jobs were locked from.
+	Queue string
+}
+
+func (m *JobGetAvailableCountMetric) Name() MetricName {
+	return MetricNameJobGetAvailableCount
+}
+
+func (m *JobGetAvailableCountMetric) isMetric() {}
 
 // HookPeriodicJobsStart is an interface to a hook that runs when the periodic
 // job enqueuer starts on a newly elected leader.
@@ -452,6 +529,20 @@ type Middleware interface {
 // Plugin structs should embed river.PluginDefaults, or embed either
 // river.HookDefaults or river.MiddlewareDefaults, then implement any
 // operation-specific hook or middleware interfaces they need.
+//
+// For example, a plugin that receives emitted metrics:
+//
+//	type MetricsPlugin struct {
+//		river.PluginDefaults
+//	}
+//
+//	func (p *MetricsPlugin) MetricEmit(ctx context.Context, params *rivertype.HookMetricEmitParams) {
+//		// Export params.Metric asynchronously.
+//	}
+//
+//	config := &river.Config{
+//		Plugins: []rivertype.Plugin{&MetricsPlugin{}},
+//	}
 type Plugin interface {
 	IsPlugin() bool
 }

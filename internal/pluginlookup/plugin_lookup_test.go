@@ -30,6 +30,7 @@ func TestEmptyPluginLookup(t *testing.T) {
 		pluginLookup, _ := setup(t)
 
 		require.Nil(t, pluginLookup.ByKind(PluginKindHookInsertBegin))
+		require.Nil(t, pluginLookup.ByKind(PluginKindHookMetricEmit))
 		require.Nil(t, pluginLookup.ByKind(PluginKindHookWorkBegin))
 		require.Nil(t, pluginLookup.ByKind(PluginKindMiddlewareJobInsert))
 		require.Nil(t, pluginLookup.ByKind(PluginKindMiddlewareWorker))
@@ -199,6 +200,7 @@ func TestPluginLookup(t *testing.T) {
 		lookup, isPluginLookup := NewPluginLookup([]any{
 			&testHookInsertAndWorkBegin{},
 			&testHookInsertBegin{},
+			&testHookMetricEmit{},
 			&testHookWorkBegin{},
 			&testHookWorkEnd{},
 			&testMiddlewareJobInsertAndWorker{},
@@ -220,6 +222,9 @@ func TestPluginLookup(t *testing.T) {
 			&testHookInsertBegin{},
 		}, pluginLookup.ByKind(PluginKindHookInsertBegin))
 		require.Equal(t, []any{
+			&testHookMetricEmit{},
+		}, pluginLookup.ByKind(PluginKindHookMetricEmit))
+		require.Equal(t, []any{
 			&testHookInsertAndWorkBegin{},
 			&testHookWorkBegin{},
 		}, pluginLookup.ByKind(PluginKindHookWorkBegin))
@@ -236,13 +241,16 @@ func TestPluginLookup(t *testing.T) {
 			&testMiddlewareWorker{},
 		}, pluginLookup.ByKind(PluginKindMiddlewareWorker))
 
-		require.Len(t, pluginLookup.pluginsByKind, 5)
+		require.Len(t, pluginLookup.pluginsByKind, 6)
 
 		// Repeat lookups to make sure we get the same result.
 		require.Equal(t, []any{
 			&testHookInsertAndWorkBegin{},
 			&testHookInsertBegin{},
 		}, pluginLookup.ByKind(PluginKindHookInsertBegin))
+		require.Equal(t, []any{
+			&testHookMetricEmit{},
+		}, pluginLookup.ByKind(PluginKindHookMetricEmit))
 		require.Equal(t, []any{
 			&testHookInsertAndWorkBegin{},
 			&testHookWorkBegin{},
@@ -276,6 +284,7 @@ func TestPluginLookup(t *testing.T) {
 		}
 
 		parallelLookupLoop(PluginKindHookInsertBegin)
+		parallelLookupLoop(PluginKindHookMetricEmit)
 		parallelLookupLoop(PluginKindHookWorkBegin)
 		parallelLookupLoop(PluginKindHookInsertBegin)
 		parallelLookupLoop(PluginKindHookWorkBegin)
@@ -385,6 +394,19 @@ func (t *testHookInsertBegin) IsPlugin() bool { return true }
 
 func (t *testHookInsertBegin) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
 	return nil
+}
+
+//
+// testHookMetricEmit
+//
+
+var _ rivertype.HookMetricEmit = &testHookMetricEmit{}
+
+type testHookMetricEmit struct{ rivertype.Hook }
+
+func (t *testHookMetricEmit) IsPlugin() bool { return true }
+
+func (t *testHookMetricEmit) MetricEmit(ctx context.Context, params *rivertype.HookMetricEmitParams) {
 }
 
 //

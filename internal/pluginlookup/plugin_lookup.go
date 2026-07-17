@@ -15,6 +15,7 @@ type PluginKind string
 
 const (
 	PluginKindHookInsertBegin       PluginKind = "hook_insert_begin"
+	PluginKindHookMetricEmit        PluginKind = "hook_metric_emit"
 	PluginKindHookPeriodicJobsStart PluginKind = "hook_periodic_jobs_start"
 	PluginKindHookWorkBegin         PluginKind = "hook_work_begin"
 	PluginKindHookWorkEnd           PluginKind = "hook_work_end"
@@ -84,6 +85,9 @@ func NewPluginLookup(plugins []any) PluginLookupInterface {
 
 		if _, ok := plugin.(rivertype.HookInsertBegin); ok {
 			pluginsByKind[PluginKindHookInsertBegin] = append(pluginsByKind[PluginKindHookInsertBegin], plugin)
+		}
+		if _, ok := plugin.(rivertype.HookMetricEmit); ok {
+			pluginsByKind[PluginKindHookMetricEmit] = append(pluginsByKind[PluginKindHookMetricEmit], plugin)
 		}
 		if _, ok := plugin.(rivertype.HookPeriodicJobsStart); ok {
 			pluginsByKind[PluginKindHookPeriodicJobsStart] = append(pluginsByKind[PluginKindHookPeriodicJobsStart], plugin)
