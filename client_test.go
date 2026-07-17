@@ -2804,19 +2804,14 @@ func Test_Client_JobContextInheritsFromProvidedContext(t *testing.T) {
 	ctx = context.WithValue(ctx, customContextKey("BestGoPostgresQueue"), "River")
 	client := runNewTestClient(ctx, t, config)
 
-	insertCtx, insertCancel := context.WithTimeout(ctx, time.Second)
+	insertCtx, insertCancel := context.WithTimeout(ctx, riversharedtest.WaitTimeout())
 	t.Cleanup(insertCancel)
 
 	// enqueue job:
 	_, err := client.Insert(insertCtx, callbackWithCustomTimeoutArgs{TimeoutValue: 5 * time.Minute}, nil)
 	require.NoError(t, err)
 
-	var jobCtx context.Context
-	select {
-	case jobCtx = <-jobCtxCh:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for job to start")
-	}
+	jobCtx := riversharedtest.WaitOrTimeout(t, jobCtxCh)
 
 	require.Equal(t, "River", jobCtx.Value(customContextKey("BestGoPostgresQueue")), "job should persist the context value from the client context")
 	jobDeadline, ok := jobCtx.Deadline()
