@@ -26,12 +26,21 @@ RETURNING *;
 
 -- name: QueueDeleteExpired :many
 DELETE FROM /* TEMPLATE: schema */river_queue
-WHERE name IN (
-    SELECT name
+WHERE ctid IN (
+    SELECT ctid
     FROM /* TEMPLATE: schema */river_queue
     WHERE river_queue.updated_at < @updated_at_horizon
+        AND CASE
+            WHEN NOT (river_queue.metadata ? 'river:rate_limit_rollup') THEN true
+            WHEN jsonb_typeof(river_queue.metadata -> 'river:rate_limit_rollup' -> 'expires_at_unix') = 'number'
+                AND river_queue.metadata -> 'river:rate_limit_rollup' ->> 'expires_at_unix' ~ '^[0-9]+$'
+                THEN (river_queue.metadata -> 'river:rate_limit_rollup' ->> 'expires_at_unix')::numeric
+                    <= extract(epoch FROM coalesce(sqlc.narg('now')::timestamptz, now()))
+            ELSE false
+        END
     ORDER BY name ASC
     LIMIT @max::bigint
+    FOR UPDATE SKIP LOCKED
 )
 RETURNING *;
 
@@ -72,7 +81,22 @@ WHERE CASE WHEN @name::text = '*' THEN true ELSE name = @name END;
 -- name: QueueUpdate :one
 UPDATE /* TEMPLATE: schema */river_queue
 SET
-    metadata = CASE WHEN @metadata_do_update::boolean THEN @metadata::jsonb ELSE metadata END,
+    metadata = CASE WHEN @metadata_do_update::boolean THEN
+        CASE WHEN jsonb_typeof(@metadata::jsonb) = 'object' THEN
+            @metadata::jsonb
+        ELSE
+            jsonb_build_object('river:user_metadata', @metadata::jsonb)
+        END || coalesce(
+                (
+                    SELECT jsonb_object_agg(key, value)
+                    FROM jsonb_each(
+                        CASE WHEN jsonb_typeof(river_queue.metadata) = 'object' THEN river_queue.metadata ELSE '{}'::jsonb END
+                    )
+                    WHERE key LIKE 'river:%' AND key != 'river:user_metadata'
+                ),
+                '{}'::jsonb
+            )
+    ELSE metadata END,
     updated_at = now()
 WHERE name = @name
 RETURNING *;

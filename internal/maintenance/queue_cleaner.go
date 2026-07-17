@@ -161,10 +161,12 @@ func (s *QueueCleaner) runOnce(ctx context.Context) (*queueCleanerRunOnceResult,
 			ctx, cancelFunc := context.WithTimeout(ctx, riversharedmaintenance.TimeoutDefault)
 			defer cancelFunc()
 
+			now := s.Time.Now()
 			queuesDeleted, err := s.exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{
 				Max:              s.batchSize(),
+				Now:              &now,
 				Schema:           s.Config.Schema,
-				UpdatedAtHorizon: time.Now().Add(-s.Config.RetentionPeriod),
+				UpdatedAtHorizon: now.Add(-s.Config.RetentionPeriod),
 			})
 			if err != nil {
 				return nil, fmt.Errorf("error deleting expired queues: %w", err)

@@ -2,6 +2,7 @@ package river
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -29,6 +30,10 @@ type pilotSpy struct {
 	jobInsertManyCalls            atomic.Int64
 	jobRetryCalls                 atomic.Int64
 	pilotInitCalls                atomic.Int64
+	pilotInitParams               *riverpilot.PilotInitParams
+	producerInitErr               error
+	producerInitID                int64
+	producerShutdownErr           error
 
 	testSignals pilotSpyTestSignals
 }
@@ -106,12 +111,16 @@ func (p *pilotSpy) PeriodicJobUpsertMany(ctx context.Context, exec riverdriver.E
 
 func (p *pilotSpy) PilotInit(archetype *baseservice.Archetype, params *riverpilot.PilotInitParams) {
 	p.pilotInitCalls.Add(1)
+	p.pilotInitParams = params
 	p.testSignals.PilotInit.Signal(struct{}{})
 	p.StandardPilot.PilotInit(archetype, params)
 }
 
 func (p *pilotSpy) ProducerInit(ctx context.Context, exec riverdriver.Executor, params *riverpilot.ProducerInitParams) (int64, riverpilot.ProducerState, error) {
 	p.testSignals.ProducerInit.Signal(struct{}{})
+	if p.producerInitErr != nil {
+		return p.producerInitID, nil, p.producerInitErr
+	}
 	return p.StandardPilot.ProducerInit(ctx, exec, params)
 }
 
@@ -122,6 +131,9 @@ func (p *pilotSpy) ProducerKeepAlive(ctx context.Context, exec riverdriver.Execu
 
 func (p *pilotSpy) ProducerShutdown(ctx context.Context, exec riverdriver.Executor, params *riverpilot.ProducerShutdownParams) error {
 	p.testSignals.ProducerShutdown.Signal(struct{}{})
+	if p.producerShutdownErr != nil {
+		return p.producerShutdownErr
+	}
 	return p.StandardPilot.ProducerShutdown(ctx, exec, params)
 }
 
@@ -325,6 +337,7 @@ func Test_Client_PilotUsage(t *testing.T) {
 		require.NotZero(t, insertRes.Job.ID)
 
 		pilot.testSignals.JobGetAvailable.WaitOrTimeout()
+		require.Equal(t, 5*time.Minute, pilot.pilotInitParams.ProducerStaleRetentionPeriod)
 		pilot.testSignals.JobSetStateIfRunningMany.WaitOrTimeout()
 		pilot.testSignals.ProducerInit.WaitOrTimeout()
 		pilot.testSignals.ProducerKeepAlive.WaitOrTimeout()
@@ -333,5 +346,53 @@ func Test_Client_PilotUsage(t *testing.T) {
 		stopClient()
 
 		pilot.testSignals.ProducerShutdown.WaitOrTimeout()
+	})
+
+	t.Run("QueueAddCleansUpFailedProducerStartup", func(t *testing.T) {
+		t.Parallel()
+
+		client, pilot := setup(t, nil)
+		pilot.testSignals.Init(t)
+		startClient(ctx, t, client)
+
+		startupErr := errors.New("producer startup failed")
+		pilot.producerInitErr = startupErr
+		pilot.producerInitID = 123
+
+		err := client.Queues().Add("dynamic_queue", QueueConfig{MaxWorkers: 1})
+		require.ErrorIs(t, err, startupErr)
+		pilot.testSignals.ProducerShutdown.WaitOrTimeout()
+
+		pilot.producerInitErr = nil
+		require.NoError(t, client.Queues().Add("dynamic_queue", QueueConfig{MaxWorkers: 1}))
+	})
+
+	t.Run("QueueAddRetainsProducerUntilCleanupSucceeds", func(t *testing.T) {
+		t.Parallel()
+
+		client, pilot := setup(t, nil)
+		pilot.testSignals.Init(t)
+		startClient(ctx, t, client)
+
+		startupErr := errors.New("producer startup failed")
+		cleanupErr := errors.New("producer cleanup failed")
+		pilot.producerInitErr = startupErr
+		pilot.producerInitID = 123
+		pilot.producerShutdownErr = cleanupErr
+
+		err := client.Queues().Add("dynamic_queue", QueueConfig{MaxWorkers: 1})
+		var queueAddCleanupErr *QueueAddCleanupError
+		require.ErrorAs(t, err, &queueAddCleanupErr)
+		require.ErrorIs(t, err, startupErr)
+		require.ErrorIs(t, err, cleanupErr)
+
+		err = client.Queues().Add("dynamic_queue", QueueConfig{MaxWorkers: 1})
+		require.ErrorIs(t, err, &QueueAlreadyAddedError{})
+
+		pilot.producerShutdownErr = nil
+		require.NoError(t, client.Queues().Remove(ctx, "dynamic_queue"))
+
+		pilot.producerInitErr = nil
+		require.NoError(t, client.Queues().Add("dynamic_queue", QueueConfig{MaxWorkers: 1}))
 	})
 }

@@ -30,6 +30,17 @@ WHERE name IN (
     SELECT name
     FROM /* TEMPLATE: schema */river_queue
     WHERE river_queue.updated_at < @updated_at_horizon
+        AND CASE
+            WHEN json_type(river_queue.metadata, '$') != 'object'
+                OR NOT EXISTS (
+                    SELECT 1 FROM json_each(river_queue.metadata) WHERE key = 'river:rate_limit_rollup'
+                ) THEN true
+            WHEN json_type(river_queue.metadata, '$."river:rate_limit_rollup".expires_at_unix') = 'integer'
+                AND cast(json_extract(river_queue.metadata, '$."river:rate_limit_rollup".expires_at_unix') AS integer) >= 0
+                THEN cast(json_extract(river_queue.metadata, '$."river:rate_limit_rollup".expires_at_unix') AS integer)
+                    <= unixepoch(coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')))
+            ELSE false
+        END
     ORDER BY name ASC
     LIMIT @max
 )
@@ -73,7 +84,25 @@ WHERE CASE WHEN cast(@name AS text) = '*' THEN true ELSE name = @name END;
 -- name: QueueUpdate :one
 UPDATE /* TEMPLATE: schema */river_queue
 SET
-    metadata = CASE WHEN cast(@metadata_do_update AS boolean) THEN jsonb(@metadata) ELSE metadata END,
+    metadata = CASE WHEN cast(@metadata_do_update AS boolean) THEN
+        jsonb_patch(
+            CASE WHEN json_type(jsonb(@metadata), '$') = 'object' THEN
+                jsonb(@metadata)
+            ELSE
+                jsonb_object('river:user_metadata', jsonb(@metadata))
+            END,
+            CASE WHEN json_type(river_queue.metadata, '$') = 'object' THEN
+                coalesce(
+                    (
+                        SELECT jsonb_group_object(key, jsonb(value))
+                        FROM json_each(river_queue.metadata)
+                        WHERE key GLOB 'river:*' AND key != 'river:user_metadata'
+                    ),
+                    jsonb('{}')
+                )
+            ELSE jsonb('{}') END
+        )
+    ELSE metadata END,
     updated_at = datetime('now', 'subsec')
 WHERE name = @name
 RETURNING *;

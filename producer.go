@@ -221,8 +221,9 @@ type producer struct {
 	numJobsActive atomic.Int32
 	numJobsStuck  atomic.Int32
 
-	numJobsRan atomic.Uint64
-	paused     bool
+	numJobsRan            atomic.Uint64
+	paused                bool
+	startupCleanupPending atomic.Bool
 	// Receives control messages from the notifier goroutine. Written by notifier
 	// goroutine, only read from main goroutine.
 	queueControlCh chan *controlEventPayload
@@ -292,6 +293,21 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 	isExpectedShutdownError := func(err error) bool {
 		return errors.Is(err, startstop.ErrStop) || strings.HasSuffix(err.Error(), "conn closed") || fetchCtx.Err() != nil
 	}
+	producerInitialized := false
+	finishStartupError := func(startErr error) error {
+		stopped()
+		if !producerInitialized {
+			return startErr
+		}
+
+		p.startupCleanupPending.Store(true)
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(fetchCtx), 5*time.Second)
+		defer cancel()
+		if cleanupErr := p.abortStartup(cleanupCtx); cleanupErr != nil {
+			return &QueueAddCleanupError{AddErr: startErr, CleanupErr: cleanupErr, Name: p.config.Queue}
+		}
+		return startErr
+	}
 
 	fetchedQueue, err := func() (*rivertype.Queue, error) {
 		ctx, cancel := context.WithTimeout(fetchCtx, 10*time.Second)
@@ -334,15 +350,19 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		Queue:      p.config.Queue,
 		Schema:     p.config.Schema,
 	})
+	if id != 0 {
+		p.id.Store(id)
+		producerInitialized = true
+	}
 	if err != nil {
-		stopped()
-		if isExpectedShutdownError(err) {
+		startupErr := finishStartupError(err)
+		var cleanupErr *QueueAddCleanupError
+		if isExpectedShutdownError(err) && !errors.As(startupErr, &cleanupErr) {
 			return nil
 		}
 		p.Logger.ErrorContext(fetchCtx, p.Name+": Error initializing producer state", slog.String("err", err.Error()))
-		return err
+		return startupErr
 	}
-	p.id.Store(id)
 
 	p.fetchLimiter = chanutil.NewDebouncedChan(fetchCtx, p.config.FetchCooldown, true)
 
@@ -367,20 +387,23 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		}
 		insertSub, err = p.config.Notifier.Listen(fetchCtx, notifier.NotificationTopicInsert, handleInsertNotification)
 		if err != nil {
-			stopped()
-			if strings.HasSuffix(err.Error(), "conn closed") || errors.Is(err, context.Canceled) {
+			startupErr := finishStartupError(err)
+			var cleanupErr *QueueAddCleanupError
+			if (strings.HasSuffix(err.Error(), "conn closed") || errors.Is(err, context.Canceled)) && !errors.As(startupErr, &cleanupErr) {
 				return nil
 			}
-			return err
+			return startupErr
 		}
 
 		controlSub, err = p.config.Notifier.Listen(fetchCtx, notifier.NotificationTopicControl, p.handleControlNotification(workCtx))
 		if err != nil {
-			stopped()
-			if strings.HasSuffix(err.Error(), "conn closed") || errors.Is(err, context.Canceled) {
+			insertSub.Unlisten(context.WithoutCancel(fetchCtx))
+			startupErr := finishStartupError(err)
+			var cleanupErr *QueueAddCleanupError
+			if (strings.HasSuffix(err.Error(), "conn closed") || errors.Is(err, context.Canceled)) && !errors.As(startupErr, &cleanupErr) {
 				return nil
 			}
-			return err
+			return startupErr
 		}
 	}
 
@@ -435,6 +458,18 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		p.finalizeShutdown(context.WithoutCancel(fetchCtx))
 	}()
 
+	return nil
+}
+
+func (p *producer) abortStartup(ctx context.Context) error {
+	if err := p.pilot.ProducerShutdown(ctx, p.exec, &riverpilot.ProducerShutdownParams{
+		ProducerID: p.id.Load(),
+		Queue:      p.config.Queue,
+		Schema:     p.config.Schema,
+	}); err != nil {
+		return err
+	}
+	p.startupCleanupPending.Store(false)
 	return nil
 }
 

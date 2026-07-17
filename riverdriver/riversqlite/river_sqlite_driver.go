@@ -1154,9 +1154,13 @@ func (e *Executor) PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}
 	return nil, riverdriver.ErrNotImplemented
 }
 
+func (e *Executor) PGAdvisoryXactLockShared(ctx context.Context, key int64) (*struct{}, error) {
+	return nil, riverdriver.ErrNotImplemented
+}
+
 func (e *Executor) QueueCreateOrSetUpdatedAt(ctx context.Context, params *riverdriver.QueueCreateOrSetUpdatedAtParams) (*rivertype.Queue, error) {
 	queue, err := dbsqlc.New().QueueCreateOrSetUpdatedAt(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueCreateOrSetUpdatedAtParams{
-		Metadata:  sliceutil.FirstNonEmpty(params.Metadata, []byte("{}")),
+		Metadata:  sliceutil.FirstNonEmpty(rivercommon.QueueMetadataForUserWrite(params.Metadata), []byte("{}")),
 		Name:      params.Name,
 		Now:       timeStringNullable(params.Now),
 		PausedAt:  timeStringNullable(params.PausedAt),
@@ -1171,6 +1175,7 @@ func (e *Executor) QueueCreateOrSetUpdatedAt(ctx context.Context, params *riverd
 func (e *Executor) QueueDeleteExpired(ctx context.Context, params *riverdriver.QueueDeleteExpiredParams) ([]string, error) {
 	queues, err := dbsqlc.New().QueueDeleteExpired(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueDeleteExpiredParams{
 		Max:              int64(params.Max),
+		Now:              timeStringNullable(params.Now),
 		UpdatedAtHorizon: params.UpdatedAtHorizon.UTC(),
 	})
 	if err != nil {
@@ -1250,7 +1255,7 @@ func (e *Executor) QueueResume(ctx context.Context, params *riverdriver.QueueRes
 
 func (e *Executor) QueueUpdate(ctx context.Context, params *riverdriver.QueueUpdateParams) (*rivertype.Queue, error) {
 	queue, err := dbsqlc.New().QueueUpdate(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.QueueUpdateParams{
-		Metadata:         sliceutil.FirstNonEmpty(params.Metadata, []byte("{}")),
+		Metadata:         sliceutil.FirstNonEmpty(rivercommon.QueueMetadataForUserWrite(params.Metadata), []byte("{}")),
 		MetadataDoUpdate: params.MetadataDoUpdate,
 		Name:             params.Name,
 	})
@@ -1658,7 +1663,7 @@ func queueFromInternal(internal *dbsqlc.RiverQueue) *rivertype.Queue {
 	}
 	return &rivertype.Queue{
 		CreatedAt: internal.CreatedAt.UTC(),
-		Metadata:  internal.Metadata,
+		Metadata:  rivercommon.QueueMetadataWithoutReserved(internal.Metadata),
 		Name:      internal.Name,
 		PausedAt:  pausedAt,
 		UpdatedAt: internal.UpdatedAt.UTC(),

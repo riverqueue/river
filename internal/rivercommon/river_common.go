@@ -1,8 +1,10 @@
 package rivercommon
 
 import (
+	"encoding/json"
 	"errors"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -12,11 +14,47 @@ import (
 const (
 	// AllQueuesString is a special string that can be used to indicate all
 	// queues in some operations, particularly pause and resume.
-	AllQueuesString    = "*"
-	MaxAttemptsDefault = 25
-	PriorityDefault    = 1
-	QueueDefault       = "default"
+	AllQueuesString              = "*"
+	MaxAttemptsDefault           = 25
+	PriorityDefault              = 1
+	QueueDefault                 = "default"
+	QueueMetadataKeyUserMetadata = "river:user_metadata"
 )
+
+// QueueMetadataForUserWrite removes reserved keys from user-supplied queue
+// metadata while preserving every nonreserved value.
+func QueueMetadataForUserWrite(metadata []byte) []byte {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(metadata, &object); err != nil {
+		return metadata
+	}
+
+	for key := range object {
+		if strings.HasPrefix(key, "river:") {
+			delete(object, key)
+		}
+	}
+
+	metadataWithoutReserved, err := json.Marshal(object)
+	if err != nil {
+		return metadata
+	}
+	return metadataWithoutReserved
+}
+
+// QueueMetadataWithoutReserved removes River's reserved top-level metadata
+// keys before queue metadata crosses a public API boundary. A wrapped
+// non-object user value is restored to its original representation.
+func QueueMetadataWithoutReserved(metadata []byte) []byte {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(metadata, &object); err != nil {
+		return metadata
+	}
+	if userMetadata, ok := object[QueueMetadataKeyUserMetadata]; ok {
+		return userMetadata
+	}
+	return QueueMetadataForUserWrite(metadata)
+}
 
 // HotOperationTimeout attempts to standardize timeouts for some "hot"
 // operations like locking available jobs or completing finished jobs. It's

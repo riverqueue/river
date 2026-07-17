@@ -63,19 +63,31 @@ WHERE name IN (
     SELECT name
     FROM /* TEMPLATE: schema */river_queue
     WHERE river_queue.updated_at < ?1
+        AND CASE
+            WHEN json_type(river_queue.metadata, '$') != 'object'
+                OR NOT EXISTS (
+                    SELECT 1 FROM json_each(river_queue.metadata) WHERE key = 'river:rate_limit_rollup'
+                ) THEN true
+            WHEN json_type(river_queue.metadata, '$."river:rate_limit_rollup".expires_at_unix') = 'integer'
+                AND cast(json_extract(river_queue.metadata, '$."river:rate_limit_rollup".expires_at_unix') AS integer) >= 0
+                THEN cast(json_extract(river_queue.metadata, '$."river:rate_limit_rollup".expires_at_unix') AS integer)
+                    <= unixepoch(coalesce(cast(?2 AS text), datetime('now', 'subsec')))
+            ELSE false
+        END
     ORDER BY name ASC
-    LIMIT ?2
+    LIMIT ?3
 )
 RETURNING name, created_at, json(metadata), paused_at, updated_at
 `
 
 type QueueDeleteExpiredParams struct {
 	UpdatedAtHorizon time.Time
+	Now              *string
 	Max              int64
 }
 
 func (q *Queries) QueueDeleteExpired(ctx context.Context, db DBTX, arg *QueueDeleteExpiredParams) ([]*RiverQueue, error) {
-	rows, err := db.QueryContext(ctx, queueDeleteExpired, arg.UpdatedAtHorizon, arg.Max)
+	rows, err := db.QueryContext(ctx, queueDeleteExpired, arg.UpdatedAtHorizon, arg.Now, arg.Max)
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +269,25 @@ func (q *Queries) QueueResume(ctx context.Context, db DBTX, arg *QueueResumePara
 const queueUpdate = `-- name: QueueUpdate :one
 UPDATE /* TEMPLATE: schema */river_queue
 SET
-    metadata = CASE WHEN cast(?1 AS boolean) THEN jsonb(?2) ELSE metadata END,
+    metadata = CASE WHEN cast(?1 AS boolean) THEN
+        jsonb_patch(
+            CASE WHEN json_type(jsonb(?2), '$') = 'object' THEN
+                jsonb(?2)
+            ELSE
+                jsonb_object('river:user_metadata', jsonb(?2))
+            END,
+            CASE WHEN json_type(river_queue.metadata, '$') = 'object' THEN
+                coalesce(
+                    (
+                        SELECT jsonb_group_object(key, jsonb(value))
+                        FROM json_each(river_queue.metadata)
+                        WHERE key GLOB 'river:*' AND key != 'river:user_metadata'
+                    ),
+                    jsonb('{}')
+                )
+            ELSE jsonb('{}') END
+        )
+    ELSE metadata END,
     updated_at = datetime('now', 'subsec')
 WHERE name = ?3
 RETURNING name, created_at, json(metadata), paused_at, updated_at

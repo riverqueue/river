@@ -3,6 +3,7 @@ package maintenance
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +19,36 @@ import (
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
+
+type queueCleanerExecutorMock struct {
+	riverdriver.Executor
+
+	queueDeleteExpiredFunc func(ctx context.Context, params *riverdriver.QueueDeleteExpiredParams) ([]string, error)
+}
+
+func (m *queueCleanerExecutorMock) QueueDeleteExpired(ctx context.Context, params *riverdriver.QueueDeleteExpiredParams) ([]string, error) {
+	return m.queueDeleteExpiredFunc(ctx, params)
+}
+
+type queueCleanerTimeGenerator struct {
+	now      time.Time
+	nowCalls atomic.Int32
+}
+
+func (g *queueCleanerTimeGenerator) Now() time.Time {
+	g.nowCalls.Add(1)
+	return g.now
+}
+
+func (g *queueCleanerTimeGenerator) NowOrNil() *time.Time {
+	now := g.Now()
+	return &now
+}
+
+func (g *queueCleanerTimeGenerator) StubNow(now time.Time) time.Time {
+	g.now = now
+	return now
+}
 
 func TestQueueCleaner(t *testing.T) {
 	t.Parallel()
@@ -69,6 +100,34 @@ func TestQueueCleaner(t *testing.T) {
 		cleaner.TestSignals = QueueCleanerTestSignals{} // deinit so channels don't fill
 
 		startstoptest.Stress(ctx, t, cleaner)
+	})
+
+	t.Run("UsesOneNowForExpiration", func(t *testing.T) {
+		t.Parallel()
+
+		cleaner, bundle := setup(t)
+		now := time.Date(2026, time.July, 10, 12, 0, 0, 0, time.UTC)
+		timeGenerator := &queueCleanerTimeGenerator{now: now}
+
+		var capturedParams *riverdriver.QueueDeleteExpiredParams
+		cleaner.Time = timeGenerator
+		cleaner.exec = &queueCleanerExecutorMock{
+			Executor: bundle.exec,
+			queueDeleteExpiredFunc: func(ctx context.Context, params *riverdriver.QueueDeleteExpiredParams) ([]string, error) {
+				paramsCopy := *params
+				capturedParams = &paramsCopy
+				return nil, nil
+			},
+		}
+
+		res, err := cleaner.runOnce(ctx)
+		require.NoError(t, err)
+		require.Empty(t, res.QueuesDeleted)
+		require.Equal(t, int32(1), timeGenerator.nowCalls.Load())
+		require.NotNil(t, capturedParams)
+		require.NotNil(t, capturedParams.Now)
+		require.Equal(t, now, *capturedParams.Now)
+		require.Equal(t, now.Add(-cleaner.Config.RetentionPeriod), capturedParams.UpdatedAtHorizon)
 	})
 
 	t.Run("DeletesExpiredQueues", func(t *testing.T) {

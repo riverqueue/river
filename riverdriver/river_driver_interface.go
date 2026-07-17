@@ -274,6 +274,7 @@ type Executor interface {
 
 	NotifyMany(ctx context.Context, params *NotifyManyParams) error
 	PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}, error)
+	PGAdvisoryXactLockShared(ctx context.Context, key int64) (*struct{}, error)
 
 	QueueCreateOrSetUpdatedAt(ctx context.Context, params *QueueCreateOrSetUpdatedAtParams) (*rivertype.Queue, error)
 	QueueDeleteExpired(ctx context.Context, params *QueueDeleteExpiredParams) ([]string, error)
@@ -814,6 +815,7 @@ type QueueCreateOrSetUpdatedAtParams struct {
 
 type QueueDeleteExpiredParams struct {
 	Max              int
+	Now              *time.Time
 	Schema           string
 	UpdatedAtHorizon time.Time
 }

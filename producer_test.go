@@ -25,6 +25,7 @@ import (
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
+	"github.com/riverqueue/river/rivershared/util/dbutil"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
@@ -745,6 +746,22 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		producer.config.QueuePollInterval = 50 * time.Millisecond
 
 		startProducer(t, ctx, ctx, producer)
+		if producer.config.Notifier == nil {
+			producer.testSignals.PolledQueueConfig.WaitOrTimeout()
+
+			schemaAndTable := "river_queue"
+			if producer.config.Schema != "" {
+				schemaAndTable = dbutil.SafeIdentifier(producer.config.Schema) + ".river_queue"
+			}
+			err := bundle.exec.QueryRow(ctx,
+				`UPDATE `+schemaAndTable+` SET metadata = metadata || '{"river:rate_limit_rollup":{"version":1}}' WHERE name = $1 RETURNING 1`,
+				producer.config.Queue,
+			).Scan(new(int))
+			require.NoError(t, err)
+
+			producer.testSignals.PolledQueueConfig.WaitOrTimeout()
+			producer.testSignals.MetadataChanged.RequireEmpty()
+		}
 
 		updateMetadata := func(newMetadata []byte) {
 			t.Helper()

@@ -75,6 +75,11 @@ type PilotInitParams struct {
 	// latency between job insert and when a job is worked.
 	NotifyNonTxJobInsert func(ctx context.Context, res []*rivertype.JobInsertResult)
 
+	// ProducerStaleRetentionPeriod is how long an unresponsive producer remains
+	// live before River may reap it. Pilot maintenance that interprets producer
+	// state must use the same horizon.
+	ProducerStaleRetentionPeriod time.Duration
+
 	// WorkerMetadata is metadata about registered workers as received from the
 	// client's worker bundle. Only available when a client will work jobs (i.e.
 	// has Workers configured), so while it's safe to assume the presence of
