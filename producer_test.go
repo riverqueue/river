@@ -574,7 +574,11 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		handlerParamsCh := make(chan JobStuckHandlerParams, 2)
 		producer.config.JobStuckHandler = func(ctx context.Context, params JobStuckHandlerParams) JobStuckHandlerResult {
 			handlerParamsCh <- params
-			return JobStuckHandlerResult{AddWorkerSlot: true}
+
+			// Only replace the first stuck job. The second job may also pass the
+			// short test timeout before the assertion runs on a busy machine, but
+			// it should continue occupying its executor slot in that case.
+			return JobStuckHandlerResult{AddWorkerSlot: params.TotalStuckJobs == 1}
 		}
 
 		var (
