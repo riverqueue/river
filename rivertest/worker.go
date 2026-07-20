@@ -148,11 +148,13 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 	completer := jobcompleter.NewInlineCompleter(archetype, w.config.Schema, exec, w.client.Pilot(), subscribeCh)
 
 	var (
+		hooks      = w.config.Hooks
 		middleware = pluginconfig.CombinedMiddleware(w.config.Middleware, w.config.JobInsertMiddleware, w.config.WorkerMiddleware) //nolint:staticcheck
 		plugins    = append(riverplugin.DefaultPlugins(), w.config.Plugins...)
-		allPlugins = pluginlookup.NormalizePlugins(w.config.Hooks, middleware, plugins) //nolint:staticcheck
 	)
-	pluginlookup.InitBaseServices(archetype, allPlugins)
+	pluginlookup.InitBaseServices(archetype, hooks)
+	pluginlookup.InitBaseServices(archetype, middleware)
+	pluginlookup.InitBaseServices(archetype, plugins)
 
 	updatedJobRow, err := exec.JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
 		ID:                  job.ID,
@@ -202,7 +204,7 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 			},
 		},
 		PluginLookupByJob:  pluginlookup.NewJobPluginLookup(),
-		PluginLookupGlobal: pluginlookup.NewPluginLookup(allPlugins),
+		PluginLookupGlobal: pluginlookup.NewPluginLookupFromConfig(hooks, middleware, plugins),
 		JobRow:             job,
 		ProducerCallbacks: struct {
 			JobDone func(jobRow *rivertype.JobRow)
