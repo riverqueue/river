@@ -352,6 +352,7 @@ func TestJobRescuer(t *testing.T) {
 		require.Equal(t, rescuer.Config.Default, pilot.jobGetStuckParams.Max)
 		require.Equal(t, int64(1), pilot.jobRescueManyCalls.Load())
 		require.Equal(t, []int64{job.ID}, pilot.jobRescueManyParams.ID)
+		require.Equal(t, pilot.jobGetStuckParams.StuckHorizon, pilot.jobRescueManyParams.StuckHorizon)
 	})
 
 	t.Run("CanRunMultipleTimes", func(t *testing.T) {
