@@ -354,8 +354,8 @@ type HookInsertBegin interface {
 type HookMetricEmit interface {
 	Hook
 
-	// MetricEmit is invoked each time River emits a metric. This is invoked in
-	// very hot paths like job fetching, and should therefore not block on
+	// MetricEmit is invoked each time River emits a metric. Metrics are emitted
+	// in very hot paths like job fetching, and should therefore not block on
 	// network I/O or anything else, and should usually pass metrics through to
 	// an asynchronous instrumentation package like OpenTelemetry.
 	MetricEmit(ctx context.Context, params *HookMetricEmitParams)
