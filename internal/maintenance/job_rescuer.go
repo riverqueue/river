@@ -291,7 +291,7 @@ func (s *JobRescuer) getStuckJobs(ctx context.Context) ([]*rivertype.JobRow, err
 
 	stuckHorizon := time.Now().Add(-s.Config.RescueAfter)
 
-	return s.exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
+	return s.Config.Pilot.JobGetStuck(ctx, s.exec, &riverdriver.JobGetStuckParams{
 		Max:          s.batchSize(),
 		Schema:       s.Config.Schema,
 		StuckHorizon: stuckHorizon,

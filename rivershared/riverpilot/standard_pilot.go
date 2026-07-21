@@ -27,6 +27,10 @@ func (p *StandardPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Ex
 	return exec.JobGetAvailable(ctx, params)
 }
 
+func (p *StandardPilot) JobGetStuck(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error) {
+	return exec.JobGetStuck(ctx, params)
+}
+
 func (p *StandardPilot) JobCancel(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error) {
 	return exec.JobCancel(ctx, params)
 }
