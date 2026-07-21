@@ -141,6 +141,61 @@ func TestJobRescuer(t *testing.T) {
 		require.Equal(t, JobRescuerIntervalDefault, cleaner.Config.Interval)
 	})
 
+	t.Run("PausesWhileProducersUnhealthy", func(t *testing.T) {
+		t.Parallel()
+
+		rescuer, bundle := setup(t)
+		var producersHealthy atomic.Bool
+		rescuer.Config.ProducersHealthyFunc = producersHealthy.Load
+
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-time.Minute)), MaxAttempts: ptrutil.Ptr(5)})
+
+		res, err := rescuer.runOnce(ctx)
+		require.NoError(t, err)
+		require.Equal(t, &rescuerRunOnceResult{}, res)
+		rescuer.TestSignals.SkippedRun.WaitOrTimeout()
+		require.True(t, rescuer.pausedForUnhealthyProducers)
+
+		jobAfter, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, jobAfter.State)
+
+		producersHealthy.Store(true)
+
+		res, err = rescuer.runOnce(ctx)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), res.NumJobsRetried)
+		require.False(t, rescuer.pausedForUnhealthyProducers)
+
+		jobAfter, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRetryable, jobAfter.State)
+	})
+
+	t.Run("RechecksHealthBeforeRescue", func(t *testing.T) {
+		t.Parallel()
+
+		rescuer, bundle := setup(t)
+		var healthChecks atomic.Int64
+		rescuer.Config.ProducersHealthyFunc = func() bool {
+			// Stay healthy through the pre-fetch and post-fetch checks, then become
+			// unhealthy immediately before the job state update.
+			return healthChecks.Add(1) < 3
+		}
+
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-time.Minute)), MaxAttempts: ptrutil.Ptr(5)})
+
+		res, err := rescuer.runOnce(ctx)
+		require.NoError(t, err)
+		require.Equal(t, &rescuerRunOnceResult{}, res)
+		rescuer.TestSignals.SkippedRun.WaitOrTimeout()
+		rescuer.TestSignals.UpdatedBatch.RequireEmpty()
+
+		jobAfter, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, jobAfter.State)
+	})
+
 	t.Run("StartStopStress", func(t *testing.T) {
 		t.Parallel()
 

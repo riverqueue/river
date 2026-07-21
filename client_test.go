@@ -5859,6 +5859,22 @@ func Test_Client_Maintenance(t *testing.T) {
 		requireJobHasState(jobNotYetStuck3.ID, jobNotYetStuck3.State)
 	})
 
+	t.Run("JobRescuerProducerHealth", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t, newTestConfig(t, ""))
+		jobRescuer := maintenance.GetService[*maintenance.JobRescuer](client.queueMaintainer)
+		producer := client.producersByQueueName[QueueDefault]
+
+		require.True(t, jobRescuer.Config.ProducersHealthyFunc())
+
+		producer.heartbeatUnhealthy.Store(true)
+		require.False(t, jobRescuer.Config.ProducersHealthyFunc())
+
+		producer.heartbeatUnhealthy.Store(false)
+		require.True(t, jobRescuer.Config.ProducersHealthyFunc())
+	})
+
 	t.Run("JobScheduler", func(t *testing.T) {
 		t.Parallel()
 
