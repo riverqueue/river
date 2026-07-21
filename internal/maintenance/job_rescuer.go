@@ -191,11 +191,14 @@ type metadataWithCancelAttemptedAt struct {
 }
 
 func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error) {
+	var afterID int64
+
 	res := &rescuerRunOnceResult{}
+	stuckHorizon := time.Now().Add(-s.Config.RescueAfter)
 
 	for {
-		stuckHorizon := time.Now().Add(-s.Config.RescueAfter)
-		stuckJobs, err := s.getStuckJobs(ctx, stuckHorizon)
+		batchSize := s.batchSize()
+		stuckJobs, err := s.getStuckJobs(ctx, afterID, batchSize, stuckHorizon)
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				s.reducedBatchSizeBreaker.Trip()
@@ -207,6 +210,9 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 		s.reducedBatchSizeBreaker.ResetIfNotOpen()
 
 		s.TestSignals.FetchedBatch.Signal(struct{}{})
+		if len(stuckJobs) > 0 {
+			afterID = stuckJobs[len(stuckJobs)-1].ID
+		}
 
 		now := time.Now().UTC()
 
@@ -277,7 +283,7 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 
 		// Number of rows fetched was less than query `LIMIT` which means work is
 		// done for this round:
-		if len(stuckJobs) < s.batchSize() {
+		if len(stuckJobs) < batchSize {
 			break
 		}
 
@@ -287,12 +293,13 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 	return res, nil
 }
 
-func (s *JobRescuer) getStuckJobs(ctx context.Context, stuckHorizon time.Time) ([]*rivertype.JobRow, error) {
+func (s *JobRescuer) getStuckJobs(ctx context.Context, afterID int64, batchSize int, stuckHorizon time.Time) ([]*rivertype.JobRow, error) {
 	ctx, cancelFunc := context.WithTimeout(ctx, riversharedmaintenance.TimeoutDefault)
 	defer cancelFunc()
 
 	return s.Config.Pilot.JobGetStuck(ctx, s.exec, &riverdriver.JobGetStuckParams{
-		Max:          s.batchSize(),
+		AfterID:      afterID,
+		Max:          batchSize,
 		Schema:       s.Config.Schema,
 		StuckHorizon: stuckHorizon,
 	})

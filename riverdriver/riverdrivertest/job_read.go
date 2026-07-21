@@ -528,8 +528,8 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 
 		t.Logf("stuckJob1 full = %s", spew.Sdump(stuckJob1))
 
-		// Not returned because we put a maximum of two.
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+		// Not returned on the first page because we put a maximum of two.
+		stuckJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
 
 		// Not stuck because not in running state.
 		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
@@ -544,6 +544,15 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 		})
 		require.NoError(t, err)
 		require.Equal(t, []int64{stuckJob1.ID, stuckJob2.ID},
+			sliceutil.Map(stuckJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
+
+		stuckJobs, err = exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
+			AfterID:      stuckJob2.ID,
+			Max:          2,
+			StuckHorizon: horizon,
+		})
+		require.NoError(t, err)
+		require.Equal(t, []int64{stuckJob3.ID},
 			sliceutil.Map(stuckJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
 	})
 

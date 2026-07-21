@@ -292,6 +292,32 @@ func TestJobRescuer(t *testing.T) {
 		}
 	})
 
+	t.Run("RescuesPastFullBatchOfJobsWithNoTimeout", func(t *testing.T) {
+		t.Parallel()
+
+		rescuer, bundle := setup(t)
+		rescuer.Config.Default = 3
+
+		noTimeoutJobs := make([]*rivertype.JobRow, rescuer.Config.Default+1)
+		for i := range noTimeoutJobs {
+			noTimeoutJobs[i] = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKindNoTimeout), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-24 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+		}
+		jobToRescue := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+
+		_, err := rescuer.runOnce(ctx)
+		require.NoError(t, err)
+
+		for _, job := range noTimeoutJobs {
+			jobAfter, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: rescuer.Config.Schema})
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateRunning, jobAfter.State)
+		}
+
+		jobToRescueAfter, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: jobToRescue.ID, Schema: rescuer.Config.Schema})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRetryable, jobToRescueAfter.State)
+	})
+
 	t.Run("CustomizableInterval", func(t *testing.T) {
 		t.Parallel()
 
