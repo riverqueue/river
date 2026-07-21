@@ -191,16 +191,17 @@ type producer struct {
 	// Jobs which are currently being worked. Only used by main goroutine.
 	activeJobs map[int64]*jobexecutor.JobExecutor
 
-	completer       jobcompleter.JobCompleter
-	config          *producerConfig
-	id              atomic.Int64 // atomic because it's written at startup and read during shutdown
-	exec            riverdriver.Executor
-	errorHandler    jobexecutor.ErrorHandler
-	fetchLimiter    *chanutil.DebouncedChan
-	metricEmitHooks []rivertype.HookMetricEmit // memoized hooks of type HookMetricEmit for reuse in dispatchWork
-	state           riverpilot.ProducerState
-	pilot           riverpilot.Pilot
-	workers         *Workers
+	completer          jobcompleter.JobCompleter
+	config             *producerConfig
+	id                 atomic.Int64 // atomic because it's written at startup and read during shutdown
+	exec               riverdriver.Executor
+	errorHandler       jobexecutor.ErrorHandler
+	fetchLimiter       *chanutil.DebouncedChan
+	heartbeatUnhealthy atomic.Bool                // atomic because it's written by the status loop and read by the fetch loop
+	metricEmitHooks    []rivertype.HookMetricEmit // memoized hooks of type HookMetricEmit for reuse in dispatchWork
+	state              riverpilot.ProducerState
+	pilot              riverpilot.Pilot
+	workers            *Workers
 
 	// Receives job IDs to cancel. Written by notifier goroutine, only read from
 	// main goroutine.
@@ -348,6 +349,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		return err
 	}
 	p.id.Store(id)
+	p.heartbeatUnhealthy.Store(false)
 
 	p.fetchLimiter = chanutil.NewDebouncedChan(fetchCtx, p.config.FetchCooldown, true)
 
@@ -639,7 +641,7 @@ func (p *producer) jitteredFetchPollInterval() time.Duration {
 
 func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan producerFetchResult) {
 	var limit int
-	if p.paused {
+	if p.paused || p.heartbeatUnhealthy.Load() {
 		limit = 0
 	} else {
 		limit = p.maxJobsToFetch()
@@ -810,8 +812,10 @@ func (p *producer) metricEmitHooksFromLookup() []rivertype.HookMetricEmit {
 }
 
 func (p *producer) dispatchWork(workCtx context.Context, count int, fetchResultCh chan<- producerFetchResult) {
-	// When a queue is paused, innerFetchLoop dispatches with count zero so it can
-	// continue servicing state changes without attempting to lock jobs or emit metrics.
+	// When fetching is disabled because the queue is paused or producer
+	// heartbeats are unhealthy, innerFetchLoop dispatches with count zero so it
+	// can continue servicing state changes without attempting to lock jobs or
+	// emit metrics.
 	if count <= 0 {
 		fetchResultCh <- producerFetchResult{}
 		return
@@ -1064,23 +1068,64 @@ func (p *producer) reportProducerStatusOnce(ctx context.Context) {
 	defer cancel()
 
 	p.Logger.DebugContext(ctx, p.Name+": Reporting producer status", slog.Int64("id", p.id.Load()), slog.String("queue", p.config.Queue))
-	err := p.pilot.ProducerKeepAlive(ctx, p.exec, &riverdriver.ProducerKeepAliveParams{
+	params := &riverdriver.ProducerKeepAliveParams{
 		ID:                    p.id.Load(),
 		QueueName:             p.config.Queue,
 		Schema:                p.config.Schema,
 		StaleUpdatedAtHorizon: p.Time.Now().Add(-p.config.StaleProducerRetentionPeriod),
-	})
+	}
+
+	const (
+		producerReportMaxAttempts   = 2
+		producerReportRetryInterval = time.Second
+	)
+
+	var (
+		attempts int
+		err      error
+	)
+	// Retry once within this report's timeout so that a transient database error
+	// doesn't stop all fetching until the next minute-long report interval.
+	for attempts < producerReportMaxAttempts {
+		attempts++
+		err = p.pilot.ProducerKeepAlive(ctx, p.exec, params)
+		if err == nil || ctx.Err() != nil {
+			break
+		}
+
+		if attempts < producerReportMaxAttempts {
+			p.Logger.WarnContext(ctx, p.Name+": Producer status update failed; retrying",
+				slog.Int("attempt", attempts),
+				slog.Int64("id", p.id.Load()),
+				slog.String("queue", p.config.Queue),
+				slog.Duration("retry_interval", producerReportRetryInterval),
+				slog.String("err", err.Error()),
+			)
+			serviceutil.CancellableSleep(ctx, producerReportRetryInterval)
+		}
+	}
 	if err != nil && errors.Is(context.Cause(ctx), startstop.ErrStop) {
 		return
 	}
 	if err != nil {
-		p.Logger.ErrorContext(ctx, p.Name+": Producer status update, error updating in database",
+		p.heartbeatUnhealthy.Store(true)
+		p.Logger.ErrorContext(ctx, p.Name+": Producer status update failed; pausing job fetching",
+			slog.Int("attempts", attempts),
 			slog.Int64("id", p.id.Load()),
 			slog.String("queue", p.config.Queue),
 			slog.String("err", err.Error()),
 		)
 		return
 	}
+
+	if p.heartbeatUnhealthy.Swap(false) {
+		p.Logger.InfoContext(ctx, p.Name+": Producer status updates recovered; resuming job fetching",
+			slog.Int64("id", p.id.Load()),
+			slog.String("queue", p.config.Queue),
+		)
+		p.fetchLimiter.Call()
+	}
+
 	p.testSignals.ReportedProducerStatus.Signal(struct{}{})
 }
 

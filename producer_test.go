@@ -3,8 +3,10 @@ package river
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +27,7 @@ import (
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
+	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
@@ -42,6 +45,34 @@ type countingPluginLookup struct {
 func (l *countingPluginLookup) ByKind(kind pluginlookup.PluginKind) []any {
 	l.count++
 	return l.PluginLookupInterface.ByKind(kind)
+}
+
+type producerHeartbeatPilot struct {
+	riverpilot.StandardPilot
+
+	failKeepAlive         atomic.Bool
+	failNextKeepAlive     atomic.Bool
+	jobGetAvailableCalls  atomic.Int64
+	jobGetAvailableSignal testsignal.TestSignal[struct{}]
+	keepAliveCalls        atomic.Int64
+}
+
+func (p *producerHeartbeatPilot) Init(tb testutil.TestingTB) {
+	p.jobGetAvailableSignal.Init(tb)
+}
+
+func (p *producerHeartbeatPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Executor, state riverpilot.ProducerState, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
+	p.jobGetAvailableCalls.Add(1)
+	p.jobGetAvailableSignal.Signal(struct{}{})
+	return p.StandardPilot.JobGetAvailable(ctx, exec, state, params)
+}
+
+func (p *producerHeartbeatPilot) ProducerKeepAlive(ctx context.Context, exec riverdriver.Executor, params *riverdriver.ProducerKeepAliveParams) error {
+	p.keepAliveCalls.Add(1)
+	if p.failKeepAlive.Load() || p.failNextKeepAlive.Swap(false) {
+		return errors.New("producer heartbeat failed")
+	}
+	return p.StandardPilot.ProducerKeepAlive(ctx, exec, params)
 }
 
 func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
@@ -508,6 +539,63 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		mustInsert(ctx, t, producer, bundle, &noOpArgs{})
 
 		startProducer(t, ctx, ctx, producer)
+
+		update := riversharedtest.WaitOrTimeout(t, bundle.jobUpdates)
+		require.Equal(t, rivertype.JobStateCompleted, update.Job.State)
+	})
+
+	t.Run("HeartbeatFailureRetriesBeforeStoppingFetches", func(t *testing.T) {
+		t.Parallel()
+
+		producer, _ := setup(t)
+
+		pilot := &producerHeartbeatPilot{}
+		pilot.Init(t)
+		pilot.failNextKeepAlive.Store(true)
+		producer.pilot = pilot
+
+		producer.reportProducerStatusOnce(ctx)
+
+		require.Equal(t, int64(2), pilot.keepAliveCalls.Load())
+		require.False(t, producer.heartbeatUnhealthy.Load())
+	})
+
+	t.Run("HeartbeatFailureStopsFetchingUntilRecovery", func(t *testing.T) {
+		t.Parallel()
+
+		producer, bundle := setup(t)
+		producer.config.FetchPollInterval = time.Hour
+		producer.config.ProducerReportInterval = time.Hour
+
+		pilot := &producerHeartbeatPilot{}
+		pilot.Init(t)
+		producer.pilot = pilot
+
+		AddWorker(bundle.workers, &noOpWorker{})
+		startProducer(t, ctx, ctx, producer)
+
+		// Wait for the initial empty fetch so there are no fetches in flight when
+		// the producer becomes unhealthy.
+		pilot.jobGetAvailableSignal.WaitOrTimeout()
+
+		pilot.failKeepAlive.Store(true)
+		producer.reportProducerStatusOnce(ctx)
+		require.True(t, producer.heartbeatUnhealthy.Load())
+
+		jobGetAvailableCalls := pilot.jobGetAvailableCalls.Load()
+		mustInsert(ctx, t, producer, bundle, &noOpArgs{})
+		producer.TriggerJobFetch()
+
+		select {
+		case update := <-bundle.jobUpdates:
+			t.Fatalf("Unexpected job update while producer heartbeat was unhealthy: %+v", update)
+		case <-time.After(200 * time.Millisecond):
+		}
+		require.Equal(t, jobGetAvailableCalls, pilot.jobGetAvailableCalls.Load())
+
+		pilot.failKeepAlive.Store(false)
+		producer.reportProducerStatusOnce(ctx)
+		require.False(t, producer.heartbeatUnhealthy.Load())
 
 		update := riversharedtest.WaitOrTimeout(t, bundle.jobUpdates)
 		require.Equal(t, rivertype.JobStateCompleted, update.Job.State)
