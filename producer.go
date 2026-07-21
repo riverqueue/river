@@ -33,7 +33,7 @@ import (
 )
 
 const (
-	producerReportIntervalDefault = time.Minute
+	producerReportIntervalDefault = 30 * time.Second
 	queuePollIntervalDefault      = 2 * time.Second
 	queueReportIntervalDefault    = 10 * time.Minute
 )
