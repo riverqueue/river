@@ -33,11 +33,13 @@ const (
 // JobRescuerTestSignals are internal signals used exclusively in tests.
 type JobRescuerTestSignals struct {
 	FetchedBatch testsignal.TestSignal[struct{}] // notifies when runOnce has fetched a batch of jobs
+	SkippedRun   testsignal.TestSignal[struct{}] // notifies when runOnce was skipped because a producer was unhealthy
 	UpdatedBatch testsignal.TestSignal[struct{}] // notifies when runOnce has updated rescued jobs from a batch
 }
 
 func (ts *JobRescuerTestSignals) Init(tb testutil.TestingTB) {
 	ts.FetchedBatch.Init(tb)
+	ts.SkippedRun.Init(tb)
 	ts.UpdatedBatch.Init(tb)
 }
 
@@ -53,6 +55,11 @@ type JobRescuerConfig struct {
 
 	// Pilot controls driver-level behavior that can be customized by plugins.
 	Pilot riverpilot.Pilot
+
+	// ProducersHealthyFunc returns whether all producers in this client are
+	// healthy. Job rescue is paused when it returns false. This is an in-process
+	// safeguard; producers in other clients aren't visible through it.
+	ProducersHealthyFunc func() bool
 
 	// RescueAfter is the amount of time for a job to be active before it is
 	// considered stuck and should be rescued.
@@ -99,6 +106,9 @@ type JobRescuer struct {
 
 	exec riverdriver.Executor
 
+	// Tracks the logging transition into and out of a producer health pause.
+	pausedForUnhealthyProducers bool
+
 	// Circuit breaker that tracks consecutive timeout failures from the central
 	// query. The query starts by using the full/default batch size, but after
 	// this breaker trips (after N consecutive timeouts occur in a row), it
@@ -114,16 +124,21 @@ func NewRescuer(archetype *baseservice.Archetype, config *JobRescuerConfig, exec
 	if pilot == nil {
 		pilot = &riverpilot.StandardPilot{}
 	}
+	producersHealthyFunc := config.ProducersHealthyFunc
+	if producersHealthyFunc == nil {
+		producersHealthyFunc = func() bool { return true }
+	}
 
 	return baseservice.Init(archetype, &JobRescuer{
 		Config: (&JobRescuerConfig{
-			BatchSizes:          batchSizes,
-			ClientRetryPolicy:   config.ClientRetryPolicy,
-			Interval:            cmp.Or(config.Interval, JobRescuerIntervalDefault),
-			Pilot:               pilot,
-			RescueAfter:         cmp.Or(config.RescueAfter, JobRescuerRescueAfterDefault),
-			Schema:              config.Schema,
-			WorkUnitFactoryFunc: config.WorkUnitFactoryFunc,
+			BatchSizes:           batchSizes,
+			ClientRetryPolicy:    config.ClientRetryPolicy,
+			Interval:             cmp.Or(config.Interval, JobRescuerIntervalDefault),
+			Pilot:                pilot,
+			ProducersHealthyFunc: producersHealthyFunc,
+			RescueAfter:          cmp.Or(config.RescueAfter, JobRescuerRescueAfterDefault),
+			Schema:               config.Schema,
+			WorkUnitFactoryFunc:  config.WorkUnitFactoryFunc,
 		}).mustValidate(),
 		exec:                    exec,
 		reducedBatchSizeBreaker: riversharedmaintenance.ReducedBatchSizeBreaker(batchSizes),
@@ -190,10 +205,31 @@ type metadataWithCancelAttemptedAt struct {
 	CancelAttemptedAt time.Time `json:"cancel_attempted_at"`
 }
 
+func (s *JobRescuer) producersHealthy(ctx context.Context) bool {
+	if s.Config.ProducersHealthyFunc() {
+		if s.pausedForUnhealthyProducers {
+			s.pausedForUnhealthyProducers = false
+			s.Logger.InfoContext(ctx, s.Name+": Producers healthy; resuming job rescue")
+		}
+		return true
+	}
+
+	if !s.pausedForUnhealthyProducers {
+		s.pausedForUnhealthyProducers = true
+		s.Logger.WarnContext(ctx, s.Name+": Producer unhealthy; pausing job rescue")
+	}
+	s.TestSignals.SkippedRun.Signal(struct{}{})
+	return false
+}
+
 func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error) {
 	res := &rescuerRunOnceResult{}
 
 	for {
+		if !s.producersHealthy(ctx) {
+			return res, nil
+		}
+
 		stuckJobs, err := s.getStuckJobs(ctx)
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
@@ -205,9 +241,18 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 
 		s.reducedBatchSizeBreaker.ResetIfNotOpen()
 
+		// Producer health may have changed while the query was in flight. Check
+		// again before preparing or applying any job state transitions.
+		if !s.producersHealthy(ctx) {
+			return res, nil
+		}
+
 		s.TestSignals.FetchedBatch.Signal(struct{}{})
 
-		now := time.Now().UTC()
+		var (
+			batchRes rescuerRunOnceResult
+			now      = time.Now().UTC()
+		)
 
 		rescueManyParams := riverdriver.JobRescueManyParams{
 			ID:          make([]int64, 0, len(stuckJobs)),
@@ -243,7 +288,7 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 			}
 
 			if !metadata.CancelAttemptedAt.IsZero() {
-				res.NumJobsCancelled++
+				batchRes.NumJobsCancelled++
 				addRescueParam(rivertype.JobStateCancelled, &now, job.ScheduledAt) // reused previous scheduled value
 				continue
 			}
@@ -252,24 +297,33 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 
 			switch retryDecision {
 			case jobRetryDecisionDiscard:
-				res.NumJobsDiscarded++
+				batchRes.NumJobsDiscarded++
 				addRescueParam(rivertype.JobStateDiscarded, &now, job.ScheduledAt) // reused previous scheduled value
 
 			case jobRetryDecisionIgnore:
 				// job not timed out yet due to kind-specific timeout value; ignore
 
 			case jobRetryDecisionRetry:
-				res.NumJobsRetried++
+				batchRes.NumJobsRetried++
 				addRescueParam(rivertype.JobStateRetryable, nil, retryAt)
 			}
 		}
 
 		if len(rescueManyParams.ID) > 0 {
+			// Recheck as close as possible to the state transition. Counts for this
+			// batch aren't added to the result unless its update is applied.
+			if !s.producersHealthy(ctx) {
+				return res, nil
+			}
+
 			_, err = s.Config.Pilot.JobRescueMany(ctx, s.exec, &rescueManyParams)
 			if err != nil {
 				return nil, fmt.Errorf("error rescuing stuck jobs: %w", err)
 			}
 		}
+		res.NumJobsCancelled += batchRes.NumJobsCancelled
+		res.NumJobsDiscarded += batchRes.NumJobsDiscarded
+		res.NumJobsRetried += batchRes.NumJobsRetried
 
 		s.TestSignals.UpdatedBatch.Signal(struct{}{})
 

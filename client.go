@@ -960,10 +960,11 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 
 		{
 			jobRescuer := maintenance.NewRescuer(archetype, &maintenance.JobRescuerConfig{
-				ClientRetryPolicy: config.RetryPolicy,
-				Pilot:             client.pilot,
-				RescueAfter:       config.RescueStuckJobsAfter,
-				Schema:            config.Schema,
+				ClientRetryPolicy:    config.RetryPolicy,
+				Pilot:                client.pilot,
+				ProducersHealthyFunc: client.producersHealthy,
+				RescueAfter:          config.RescueStuckJobsAfter,
+				Schema:               config.Schema,
 				WorkUnitFactoryFunc: func(kind string) workunit.WorkUnitFactory {
 					if workerInfo, ok := config.Workers.workersMap[kind]; ok {
 						return workerInfo.workUnitFactory
@@ -2322,6 +2323,18 @@ func (c *Client[TTx]) producerRemove(ctx context.Context, queueName string) erro
 	delete(c.producersByQueueName, queueName)
 
 	return nil
+}
+
+func (c *Client[TTx]) producersHealthy() bool {
+	c.producersMu.RLock()
+	defer c.producersMu.RUnlock()
+
+	for _, producer := range c.producersByQueueName {
+		if producer.heartbeatUnhealthy.Load() {
+			return false
+		}
+	}
+	return true
 }
 
 var nameRegex = regexp.MustCompile(`^(?:[a-z0-9])+(?:[_|\-]?[a-z0-9]+)*$`)
