@@ -516,12 +516,13 @@ type JobListParams struct {
 }
 
 type JobRescueManyParams struct {
-	ID          []int64
-	Error       [][]byte
-	FinalizedAt []*time.Time
-	ScheduledAt []time.Time
-	Schema      string
-	State       []string
+	ID           []int64
+	Error        [][]byte
+	FinalizedAt  []*time.Time
+	ScheduledAt  []time.Time
+	Schema       string
+	State        []string
+	StuckHorizon time.Time
 }
 
 type JobRetryParams struct {

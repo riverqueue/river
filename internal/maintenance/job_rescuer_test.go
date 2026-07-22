@@ -59,16 +59,24 @@ func (p *SimpleClientRetryPolicy) NextRetry(job *rivertype.JobRow) time.Time {
 	return job.AttemptedAt.Add(timeutil.SecondsAsDuration(retrySeconds))
 }
 
-type jobRescueManyPilotSpy struct {
+type jobRescuerPilotSpy struct {
 	riverpilot.StandardPilot
 
-	calls  atomic.Int64
-	params *riverdriver.JobRescueManyParams
+	jobGetStuckCalls    atomic.Int64
+	jobGetStuckParams   *riverdriver.JobGetStuckParams
+	jobRescueManyCalls  atomic.Int64
+	jobRescueManyParams *riverdriver.JobRescueManyParams
 }
 
-func (p *jobRescueManyPilotSpy) JobRescueMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobRescueManyParams) (*struct{}, error) {
-	p.calls.Add(1)
-	p.params = params
+func (p *jobRescuerPilotSpy) JobGetStuck(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error) {
+	p.jobGetStuckCalls.Add(1)
+	p.jobGetStuckParams = params
+	return p.StandardPilot.JobGetStuck(ctx, exec, params)
+}
+
+func (p *jobRescuerPilotSpy) JobRescueMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobRescueManyParams) (*struct{}, error) {
+	p.jobRescueManyCalls.Add(1)
+	p.jobRescueManyParams = params
 	return p.StandardPilot.JobRescueMany(ctx, exec, params)
 }
 
@@ -328,11 +336,11 @@ func TestJobRescuer(t *testing.T) {
 		riversharedtest.WaitOrTimeout(t, stopped)
 	})
 
-	t.Run("UsesPilotJobRescueMany", func(t *testing.T) {
+	t.Run("UsesPilot", func(t *testing.T) {
 		t.Parallel()
 
 		rescuer, bundle := setup(t)
-		pilot := &jobRescueManyPilotSpy{}
+		pilot := &jobRescuerPilotSpy{}
 		rescuer.Config.Pilot = pilot
 
 		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
@@ -340,8 +348,11 @@ func TestJobRescuer(t *testing.T) {
 		_, err := rescuer.runOnce(ctx)
 		require.NoError(t, err)
 
-		require.Equal(t, int64(1), pilot.calls.Load())
-		require.Equal(t, []int64{job.ID}, pilot.params.ID)
+		require.Equal(t, int64(1), pilot.jobGetStuckCalls.Load())
+		require.Equal(t, rescuer.Config.Default, pilot.jobGetStuckParams.Max)
+		require.Equal(t, int64(1), pilot.jobRescueManyCalls.Load())
+		require.Equal(t, []int64{job.ID}, pilot.jobRescueManyParams.ID)
+		require.Equal(t, pilot.jobGetStuckParams.StuckHorizon, pilot.jobRescueManyParams.StuckHorizon)
 	})
 
 	t.Run("CanRunMultipleTimes", func(t *testing.T) {

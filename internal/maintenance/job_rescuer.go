@@ -194,7 +194,8 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 	res := &rescuerRunOnceResult{}
 
 	for {
-		stuckJobs, err := s.getStuckJobs(ctx)
+		stuckHorizon := time.Now().Add(-s.Config.RescueAfter)
+		stuckJobs, err := s.getStuckJobs(ctx, stuckHorizon)
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				s.reducedBatchSizeBreaker.Trip()
@@ -210,12 +211,13 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 		now := time.Now().UTC()
 
 		rescueManyParams := riverdriver.JobRescueManyParams{
-			ID:          make([]int64, 0, len(stuckJobs)),
-			Error:       make([][]byte, 0, len(stuckJobs)),
-			FinalizedAt: make([]*time.Time, 0, len(stuckJobs)),
-			ScheduledAt: make([]time.Time, 0, len(stuckJobs)),
-			Schema:      s.Config.Schema,
-			State:       make([]string, 0, len(stuckJobs)),
+			ID:           make([]int64, 0, len(stuckJobs)),
+			Error:        make([][]byte, 0, len(stuckJobs)),
+			FinalizedAt:  make([]*time.Time, 0, len(stuckJobs)),
+			ScheduledAt:  make([]time.Time, 0, len(stuckJobs)),
+			Schema:       s.Config.Schema,
+			State:        make([]string, 0, len(stuckJobs)),
+			StuckHorizon: stuckHorizon,
 		}
 
 		for _, job := range stuckJobs {
@@ -285,13 +287,11 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 	return res, nil
 }
 
-func (s *JobRescuer) getStuckJobs(ctx context.Context) ([]*rivertype.JobRow, error) {
+func (s *JobRescuer) getStuckJobs(ctx context.Context, stuckHorizon time.Time) ([]*rivertype.JobRow, error) {
 	ctx, cancelFunc := context.WithTimeout(ctx, riversharedmaintenance.TimeoutDefault)
 	defer cancelFunc()
 
-	stuckHorizon := time.Now().Add(-s.Config.RescueAfter)
-
-	return s.exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
+	return s.Config.Pilot.JobGetStuck(ctx, s.exec, &riverdriver.JobGetStuckParams{
 		Max:          s.batchSize(),
 		Schema:       s.Config.Schema,
 		StuckHorizon: stuckHorizon,
