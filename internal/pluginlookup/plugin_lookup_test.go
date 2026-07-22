@@ -111,82 +111,28 @@ func TestJobPluginLookup(t *testing.T) {
 	})
 }
 
-func TestNormalizePlugins(t *testing.T) {
+func TestNewPluginLookupFromConfig(t *testing.T) {
 	t.Parallel()
 
-	t.Run("DistinctZeroSizedPointersArePreserved", func(t *testing.T) {
-		t.Parallel()
+	hookPlugin := &testHookMiddlewarePlugin{}
+	middlewarePlugin := &testHookMiddlewarePlugin{}
+	plugin := &testHookMiddlewarePlugin{}
 
-		plugins := NormalizePlugins(nil, nil, []rivertype.Plugin{
-			&testZeroSizedHookMiddlewarePlugin{},
-			&testZeroSizedHookMiddlewarePlugin{},
-		})
+	lookup, isPluginLookup := NewPluginLookupFromConfig(
+		[]rivertype.Hook{hookPlugin},
+		[]rivertype.Middleware{middlewarePlugin},
+		[]rivertype.Plugin{plugin},
+	).(*pluginLookup)
+	require.True(t, isPluginLookup)
 
-		require.Len(t, plugins, 2)
-	})
-
-	t.Run("DuplicatesWithinAGroupArePreserved", func(t *testing.T) {
-		t.Parallel()
-
-		plugin := &testHookMiddlewarePlugin{}
-		plugins := NormalizePlugins(nil, nil, []rivertype.Plugin{plugin, plugin})
-
-		require.Equal(t, []any{plugin, plugin}, plugins)
-	})
-
-	t.Run("PluginsPrecedeHooksAndMiddleware", func(t *testing.T) {
-		t.Parallel()
-
-		hookPlugin := &testHookMiddlewarePlugin{}
-		middlewarePlugin := &testHookMiddlewarePlugin{}
-		plugin := &testHookMiddlewarePlugin{}
-
-		plugins := NormalizePlugins(
-			[]rivertype.Hook{hookPlugin},
-			[]rivertype.Middleware{middlewarePlugin},
-			[]rivertype.Plugin{plugin},
-		)
-
-		lookup, isPluginLookup := NewPluginLookup(plugins).(*pluginLookup)
-		require.True(t, isPluginLookup)
-
-		require.Equal(t, []any{
-			plugin,
-			hookPlugin,
-			middlewarePlugin,
-		}, lookup.ByKind(PluginKindHookInsertBegin))
-		require.Equal(t, []any{
-			plugin,
-			hookPlugin,
-			middlewarePlugin,
-		}, lookup.ByKind(PluginKindMiddlewareJobInsert))
-	})
-
-	t.Run("SamePointerAcrossGroupsIsPreserved", func(t *testing.T) {
-		t.Parallel()
-
-		plugin := &testHookMiddlewarePlugin{}
-		plugins := NormalizePlugins(
-			[]rivertype.Hook{plugin},
-			[]rivertype.Middleware{plugin},
-			[]rivertype.Plugin{plugin},
-		)
-
-		require.Equal(t, []any{plugin, plugin, plugin}, plugins)
-	})
-
-	t.Run("SameZeroSizedPointerAcrossGroupsIsPreserved", func(t *testing.T) {
-		t.Parallel()
-
-		plugin := &testZeroSizedHookMiddlewarePlugin{}
-		plugins := NormalizePlugins(
-			[]rivertype.Hook{plugin},
-			[]rivertype.Middleware{plugin},
-			nil,
-		)
-
-		require.Equal(t, []any{plugin, plugin}, plugins)
-	})
+	require.Equal(t, []any{
+		plugin,
+		hookPlugin,
+	}, lookup.ByKind(PluginKindHookInsertBegin))
+	require.Equal(t, []any{
+		plugin,
+		middlewarePlugin,
+	}, lookup.ByKind(PluginKindMiddlewareJobInsert))
 }
 
 func TestPluginLookup(t *testing.T) {
@@ -298,13 +244,11 @@ func TestPluginLookup(t *testing.T) {
 		legacyHook := &testLegacyHookInsertBegin{}
 		legacyMiddleware := &testLegacyMiddlewareJobInsert{}
 
-		plugins := NormalizePlugins(
+		lookup, isPluginLookup := NewPluginLookupFromConfig(
 			[]rivertype.Hook{legacyHook},
 			[]rivertype.Middleware{legacyMiddleware},
 			nil,
-		)
-
-		lookup, isPluginLookup := NewPluginLookup(plugins).(*pluginLookup)
+		).(*pluginLookup)
 		require.True(t, isPluginLookup)
 
 		hookPlugins := lookup.ByKind(PluginKindHookInsertBegin)
@@ -510,30 +454,6 @@ func (t *testMiddlewareWorker) IsPlugin() bool { return true }
 func (t *testMiddlewareWorker) Work(ctx context.Context, job *rivertype.JobRow, doInner func(context.Context) error) error {
 	return doInner(ctx)
 }
-
-//
-// testZeroSizedHookMiddlewarePlugin
-//
-
-var (
-	_ rivertype.HookInsertBegin     = &testZeroSizedHookMiddlewarePlugin{}
-	_ rivertype.JobInsertMiddleware = &testZeroSizedHookMiddlewarePlugin{}
-	_ rivertype.Plugin              = &testZeroSizedHookMiddlewarePlugin{}
-)
-
-type testZeroSizedHookMiddlewarePlugin struct{}
-
-func (t *testZeroSizedHookMiddlewarePlugin) InsertBegin(ctx context.Context, params *rivertype.JobInsertParams) error {
-	return nil
-}
-
-func (t *testZeroSizedHookMiddlewarePlugin) InsertMany(ctx context.Context, manyParams []*rivertype.JobInsertParams, doInner func(context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
-	return doInner(ctx)
-}
-
-func (t *testZeroSizedHookMiddlewarePlugin) IsHook() bool       { return true }
-func (t *testZeroSizedHookMiddlewarePlugin) IsMiddleware() bool { return true }
-func (t *testZeroSizedHookMiddlewarePlugin) IsPlugin() bool     { return true }
 
 //
 // testLegacyHookInsertBegin

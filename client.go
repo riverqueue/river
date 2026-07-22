@@ -242,10 +242,9 @@ type Config struct {
 	//
 	// Jobs may have their own specific hooks by implementing JobArgsWithHooks.
 	//
-	// If a type in Hooks also implements rivertype.Middleware, it will be
-	// installed as middleware too.
-	//
-	// Deprecated: Use Plugins instead.
+	// Entries in Hooks are installed only as hooks, even if they also implement
+	// rivertype.Middleware. Use Plugins for an extension that should act as
+	// both a hook and middleware.
 	Hooks []rivertype.Hook
 
 	// Logger is the structured logger to use for logging purposes. If none is
@@ -280,10 +279,9 @@ type Config struct {
 	// them will not run. When a job is worked, the work middleware runs and the
 	// insertion middlewares on either side of it are skipped.
 	//
-	// If a type in Middleware also implements rivertype.Hook, it will be
-	// installed as a hook too.
-	//
-	// Deprecated: Use Plugins instead.
+	// Entries in Middleware are installed only as middleware, even if they also
+	// implement rivertype.Hook. Use Plugins for an extension that should act as
+	// both middleware and a hook.
 	Middleware []rivertype.Middleware
 
 	// Plugins contains extensions installed globally as hooks, middleware, or
@@ -296,8 +294,8 @@ type Config struct {
 	// MiddlewareDefaults directly and define its own IsPlugin method, then
 	// implement any operation-specific hook or middleware interfaces it needs.
 	//
-	// Hooks and Middleware are still supported for backward compatibility, but
-	// Plugins is the preferred place to register new extensions.
+	// Use Hooks or Middleware when an extension should be installed only as the
+	// corresponding kind. Use Plugins when it should be eligible as both.
 	Plugins []rivertype.Plugin
 
 	// PeriodicJobs are a set of periodic jobs to run at the specified intervals
@@ -829,9 +827,10 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 	var (
 		middleware = pluginconfig.CombinedMiddleware(config.Middleware, config.JobInsertMiddleware, config.WorkerMiddleware)
 		plugins    = append(riverplugin.DefaultPlugins(), config.Plugins...)
-		allPlugins = pluginlookup.NormalizePlugins(config.Hooks, middleware, plugins)
 	)
-	pluginlookup.InitBaseServices(archetype, allPlugins)
+	pluginlookup.InitBaseServices(archetype, config.Hooks)
+	pluginlookup.InitBaseServices(archetype, middleware)
+	pluginlookup.InitBaseServices(archetype, plugins)
 
 	client := &Client[TTx]{
 		clientNotifyBundle: &ClientNotifyBundle[TTx]{
@@ -841,7 +840,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		config:               config,
 		driver:               driver,
 		pluginLookupByJob:    pluginlookup.NewJobPluginLookup(),
-		pluginLookupGlobal:   pluginlookup.NewPluginLookup(allPlugins),
+		pluginLookupGlobal:   pluginlookup.NewPluginLookupFromConfig(config.Hooks, middleware, plugins),
 		producersByQueueName: make(map[string]*producer),
 		testSignals:          clientTestSignals{},
 		workCancel:           func(cause error) {}, // replaced on start, but here in case StopAndCancel is called before start up
