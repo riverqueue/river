@@ -29,6 +29,11 @@ func (f HookInsertBeginFunc) IsPlugin() bool { return true }
 
 // HookMetricEmitFunc is a convenience helper for implementing
 // rivertype.HookMetricEmit using a simple function instead of a struct.
+//
+// Notably, this function is invoked each time River emits a metric. Metrics are
+// emitted in very hot paths like job fetching, and should therefore not block
+// on network I/O or anything else, and should usually pass metrics through to
+// an asynchronous instrumentation package like OpenTelemetry.
 type HookMetricEmitFunc func(ctx context.Context, params *rivertype.HookMetricEmitParams)
 
 func (f HookMetricEmitFunc) IsHook() bool { return true }
