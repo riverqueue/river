@@ -80,6 +80,10 @@ func (p *jobRescuerPilotSpy) JobRescueMany(ctx context.Context, exec riverdriver
 	return p.StandardPilot.JobRescueMany(ctx, exec, params)
 }
 
+type jobRescuerPilotWithoutJobRescuer struct {
+	riverpilot.Pilot
+}
+
 func TestJobRescuer(t *testing.T) {
 	t.Parallel()
 
@@ -379,6 +383,25 @@ func TestJobRescuer(t *testing.T) {
 		require.Equal(t, int64(1), pilot.jobRescueManyCalls.Load())
 		require.Equal(t, []int64{job.ID}, pilot.jobRescueManyParams.ID)
 		require.Equal(t, pilot.jobGetStuckParams.StuckHorizon, pilot.jobRescueManyParams.StuckHorizon)
+	})
+
+	t.Run("UsesExecutorFallbackForPilotWithoutJobRescuer", func(t *testing.T) {
+		t.Parallel()
+
+		rescuer, bundle := setup(t)
+		rescuer.Config.Pilot = &jobRescuerPilotWithoutJobRescuer{Pilot: rescuer.Config.Pilot}
+
+		_, implementsJobRescuer := rescuer.Config.Pilot.(riverpilot.PilotJobRescuer)
+		require.False(t, implementsJobRescuer)
+
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+
+		_, err := rescuer.runOnce(ctx)
+		require.NoError(t, err)
+
+		jobAfter, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: rescuer.Config.Schema})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRetryable, jobAfter.State)
 	})
 
 	t.Run("CanRunMultipleTimes", func(t *testing.T) {

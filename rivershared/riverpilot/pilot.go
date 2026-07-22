@@ -35,15 +35,11 @@ type Pilot interface {
 		params *riverdriver.JobGetAvailableParams,
 	) ([]*rivertype.JobRow, error)
 
-	JobGetStuck(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error)
-
 	JobInsertMany(
 		ctx context.Context,
 		exec riverdriver.Executor,
 		params *riverdriver.JobInsertFastManyParams,
 	) ([]*riverdriver.JobInsertFastResult, error)
-
-	JobRescueMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobRescueManyParams) (*struct{}, error)
 
 	JobRetry(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobRetryParams) (*rivertype.JobRow, error)
 
@@ -98,6 +94,22 @@ func (p *PilotInitParams) Validate() *PilotInitParams {
 		panic("need PilotInitParams.NotifyNonTxJobInsert ")
 	}
 	return p
+}
+
+// PilotJobRescuer contains optional Pilot functionality related to rescuing
+// stuck jobs. Pilots that don't implement it fall back to the standard
+// executor-backed behavior.
+//
+// This is temporarily separate from Pilot so implementations built against
+// older River versions remain compatible. It can be embedded into Pilot after
+// downstream implementations have had a release cycle to adopt it.
+//
+// Once all supported River Pro releases implement PilotJobRescuer, embed this
+// interface into Pilot, replace JobRescuer's capability assertions with direct
+// Pilot calls, and remove its executor fallbacks.
+type PilotJobRescuer interface {
+	JobGetStuck(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error)
+	JobRescueMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobRescueManyParams) (*struct{}, error)
 }
 
 // PilotPeriodicJob contains pilot functions related to periodic jobs. This is
