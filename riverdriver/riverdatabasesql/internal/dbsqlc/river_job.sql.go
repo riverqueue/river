@@ -609,18 +609,20 @@ const jobGetStuck = `-- name: JobGetStuck :many
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 FROM /* TEMPLATE: schema */river_job
 WHERE state = 'running'
-    AND attempted_at < $1::timestamptz
+    AND id > $1::bigint
+    AND attempted_at < $2::timestamptz
 ORDER BY id
-LIMIT $2
+LIMIT $3
 `
 
 type JobGetStuckParams struct {
+	AfterID      int64
 	StuckHorizon time.Time
 	Max          int32
 }
 
 func (q *Queries) JobGetStuck(ctx context.Context, db DBTX, arg *JobGetStuckParams) ([]*RiverJob, error) {
-	rows, err := db.QueryContext(ctx, jobGetStuck, arg.StuckHorizon, arg.Max)
+	rows, err := db.QueryContext(ctx, jobGetStuck, arg.AfterID, arg.StuckHorizon, arg.Max)
 	if err != nil {
 		return nil, err
 	}

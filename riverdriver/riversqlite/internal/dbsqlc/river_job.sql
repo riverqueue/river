@@ -185,6 +185,7 @@ ORDER BY id;
 SELECT *
 FROM /* TEMPLATE: schema */river_job
 WHERE state = 'running'
+    AND id > @after_id
     AND attempted_at < cast(@stuck_horizon AS text)
 ORDER BY id
 LIMIT @max;

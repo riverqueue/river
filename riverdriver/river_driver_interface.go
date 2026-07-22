@@ -438,6 +438,7 @@ type JobGetByKindManyParams struct {
 }
 
 type JobGetStuckParams struct {
+	AfterID      int64
 	Max          int
 	Schema       string
 	StuckHorizon time.Time

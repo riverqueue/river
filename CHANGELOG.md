@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Guard against empty job slice returned by `JobSetStateIfRunningMany` when a job has been deleted mid-run. [PR #1308](https://github.com/riverqueue/river/pull/1308).
+- Fixed `JobRescuer` pagination so a full batch of running jobs with disabled or longer worker-specific timeouts can't prevent later stuck jobs from being rescued. [PR #1318](https://github.com/riverqueue/river/pull/1318).
 
 ## [0.40.0] - 2026-07-02
 

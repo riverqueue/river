@@ -258,6 +258,7 @@ ORDER BY id;
 SELECT *
 FROM /* TEMPLATE: schema */river_job
 WHERE state = 'running'
+    AND id > @after_id::bigint
     AND attempted_at < @stuck_horizon::timestamptz
 ORDER BY id
 LIMIT @max;

@@ -343,6 +343,7 @@ func (e *Executor) JobGetByKindMany(ctx context.Context, params *riverdriver.Job
 
 func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error) {
 	jobs, err := dbsqlc.New().JobGetStuck(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobGetStuckParams{
+		AfterID:      params.AfterID,
 		Max:          int32(min(params.Max, math.MaxInt32)), //nolint:gosec
 		StuckHorizon: params.StuckHorizon,
 	})
