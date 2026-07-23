@@ -176,6 +176,7 @@ river migrate-get --database-url sqlite:// --version 7 --down > river7.down.sql
 ### Added
 
 - Added root River CLI flag `--statement-timeout` so Postgres session statement timeout can be set explicitly for commands like migrations. Explicit flag values take priority over database URL query params, and query params still take priority over built-in defaults. [PR #1142](https://github.com/riverqueue/river/pull/1142).
+- Add metadata assertions to rivertest. [PR #1137](https://github.com/riverqueue/river/pull/1137).
 
 ### Fixed
 
