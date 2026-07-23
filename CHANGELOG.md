@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-07-23
+
 ### Added
 
 - Added `rivertype.HookMetricEmit` for receiving metrics emitted by River. Initial metrics report the duration of successful job fetches with `JobGetAvailableDurationMetric` and the number of jobs fetched with `JobGetAvailableCountMetric`. [PR #1285](https://github.com/riverqueue/river/pull/1285).
