@@ -1,0 +1,4 @@
+interface:
+  display_name: "River Job Lint"
+  short_description: "Audit River jobs for cancellable channel waits"
+  default_prompt: "Use $river-job-lint to audit River job code for channel operations that can ignore cancellation."
