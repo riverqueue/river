@@ -273,7 +273,7 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 		}
 
 		if len(rescueManyParams.ID) > 0 {
-			_, err = s.Config.Pilot.JobRescueMany(ctx, s.exec, &rescueManyParams)
+			_, err = s.rescueMany(ctx, &rescueManyParams)
 			if err != nil {
 				return nil, fmt.Errorf("error rescuing stuck jobs: %w", err)
 			}
@@ -297,12 +297,21 @@ func (s *JobRescuer) getStuckJobs(ctx context.Context, afterID int64, batchSize 
 	ctx, cancelFunc := context.WithTimeout(ctx, riversharedmaintenance.TimeoutDefault)
 	defer cancelFunc()
 
-	return s.Config.Pilot.JobGetStuck(ctx, s.exec, &riverdriver.JobGetStuckParams{
+	params := &riverdriver.JobGetStuckParams{
 		AfterID:      afterID,
 		Max:          batchSize,
 		Schema:       s.Config.Schema,
 		StuckHorizon: stuckHorizon,
-	})
+	}
+
+	if pilot, ok := s.Config.Pilot.(riverpilot.PilotJobRescuer); ok {
+		return pilot.JobGetStuck(ctx, s.exec, params)
+	}
+
+	// Compatibility fallback for Pilot implementations from before
+	// PilotJobRescuer. Once Pilot embeds PilotJobRescuer, replace the assertion
+	// above and this fallback with a direct call to s.Config.Pilot.JobGetStuck.
+	return s.exec.JobGetStuck(ctx, params)
 }
 
 // jobRetryDecision is a signal from makeRetryDecision as to what to do with a
@@ -346,4 +355,15 @@ func (s *JobRescuer) makeRetryDecision(ctx context.Context, job *rivertype.JobRo
 	}
 
 	return jobRetryDecisionDiscard, time.Time{}
+}
+
+func (s *JobRescuer) rescueMany(ctx context.Context, params *riverdriver.JobRescueManyParams) (*struct{}, error) {
+	if pilot, ok := s.Config.Pilot.(riverpilot.PilotJobRescuer); ok {
+		return pilot.JobRescueMany(ctx, s.exec, params)
+	}
+
+	// Compatibility fallback for Pilot implementations from before
+	// PilotJobRescuer. Once Pilot embeds PilotJobRescuer, replace the assertion
+	// above and this fallback with a direct call to s.Config.Pilot.JobRescueMany.
+	return s.exec.JobRescueMany(ctx, params)
 }
