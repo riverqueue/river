@@ -232,6 +232,10 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 	}
 
 	if p.sortField == JobListOrderByFinalizedAt {
+		if len(p.states) == 0 {
+			return nil, errors.New("cannot order by finalized_at without finalized state filters")
+		}
+
 		currentNonFinalizedStates := make([]rivertype.JobState, 0, len(p.states))
 		for _, state := range p.states {
 			switch state {
@@ -240,9 +244,9 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 			case rivertype.JobStateCancelled, rivertype.JobStateCompleted, rivertype.JobStateDiscarded:
 			}
 		}
-		// This indicates the user overrode the States list with only non-finalized
-		// states prior to then requesting FinalizedAt ordering.
-		if len(currentNonFinalizedStates) == 0 {
+		// FinalizedAt ordering is only supported when filtering to finalized
+		// states because non-finalized jobs have no finalized_at value.
+		if len(currentNonFinalizedStates) > 0 {
 			return nil, fmt.Errorf("cannot order by finalized_at with non-finalized state filters %+v", currentNonFinalizedStates)
 		}
 	}

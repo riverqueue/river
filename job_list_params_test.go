@@ -187,3 +187,60 @@ func Test_JobListCursor_MarshalJSON(t *testing.T) {
 		require.EqualError(t, err, "json: error calling MarshalText for type *river.JobListCursor: cursor initialized with only a job can't be marshaled; try a cursor from JobListResult instead")
 	})
 }
+
+func Test_JobListParams_toDBParams(t *testing.T) {
+	t.Parallel()
+
+	t.Run("FinalizedAtWithDefaultStates", func(t *testing.T) {
+		t.Parallel()
+
+		dbParams, err := NewJobListParams().OrderBy(JobListOrderByFinalizedAt, SortOrderAsc).toDBParams()
+		require.NoError(t, err)
+		require.Equal(t, []rivertype.JobState{
+			rivertype.JobStateCancelled,
+			rivertype.JobStateCompleted,
+			rivertype.JobStateDiscarded,
+		}, dbParams.States)
+	})
+
+	t.Run("FinalizedAtWithExplicitFinalizedStates", func(t *testing.T) {
+		t.Parallel()
+
+		dbParams, err := NewJobListParams().
+			States(rivertype.JobStateCompleted).
+			OrderBy(JobListOrderByFinalizedAt, SortOrderDesc).
+			toDBParams()
+		require.NoError(t, err)
+		require.Equal(t, []rivertype.JobState{rivertype.JobStateCompleted}, dbParams.States)
+	})
+
+	t.Run("FinalizedAtWithMixedStates", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewJobListParams().
+			States(rivertype.JobStateAvailable, rivertype.JobStateCompleted).
+			OrderBy(JobListOrderByFinalizedAt, SortOrderAsc).
+			toDBParams()
+		require.EqualError(t, err, "cannot order by finalized_at with non-finalized state filters [available]")
+	})
+
+	t.Run("FinalizedAtWithNonFinalizedStates", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewJobListParams().
+			States(rivertype.JobStatePending, rivertype.JobStateRunning).
+			OrderBy(JobListOrderByFinalizedAt, SortOrderAsc).
+			toDBParams()
+		require.EqualError(t, err, "cannot order by finalized_at with non-finalized state filters [pending running]")
+	})
+
+	t.Run("FinalizedAtWithoutStates", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewJobListParams().
+			States().
+			OrderBy(JobListOrderByFinalizedAt, SortOrderAsc).
+			toDBParams()
+		require.EqualError(t, err, "cannot order by finalized_at without finalized state filters")
+	})
+}
