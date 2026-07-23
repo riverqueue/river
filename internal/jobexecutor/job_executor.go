@@ -80,11 +80,12 @@ func MetadataUpdatesFromWorkContext(ctx context.Context) (map[string]any, bool) 
 }
 
 type jobExecutorResult struct {
-	Err             error
-	MetadataUpdates map[string]any
-	NextRetry       time.Time
-	PanicTrace      string
-	PanicVal        any
+	Err                error
+	JobArgsUnmarshaled bool
+	MetadataUpdates    map[string]any
+	NextRetry          time.Time
+	PanicTrace         string
+	PanicVal           any
 }
 
 // ErrorStr returns an appropriate string to persist to the database based on
@@ -183,6 +184,7 @@ func (e *JobExecutor) Execute(ctx context.Context) {
 func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 	metadataUpdates := make(map[string]any)
 	ctx = context.WithValue(ctx, ContextKeyMetadataUpdates, metadataUpdates)
+	jobArgsUnmarshaled := false
 
 	defer func() {
 		if recovery := recover(); recovery != nil {
@@ -193,7 +195,8 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 			)
 
 			res = &jobExecutorResult{
-				MetadataUpdates: metadataUpdates,
+				JobArgsUnmarshaled: jobArgsUnmarshaled,
+				MetadataUpdates:    metadataUpdates,
 				// Skip the first 4 frames which are:
 				//
 				// 1. The `runtime.Callers` function.
@@ -230,6 +233,7 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		if err := e.WorkUnit.UnmarshalJob(); err != nil {
 			return err
 		}
+		jobArgsUnmarshaled = true
 
 		jobTimeout := cmp.Or(e.WorkUnit.Timeout(), e.ClientJobTimeout)
 
@@ -268,7 +272,11 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		e.JobRow,
 	)
 
-	return &jobExecutorResult{Err: executeFunc(ctx), MetadataUpdates: metadataUpdates}
+	return &jobExecutorResult{
+		Err:                executeFunc(ctx),
+		JobArgsUnmarshaled: jobArgsUnmarshaled,
+		MetadataUpdates:    metadataUpdates,
+	}
 }
 
 // Watches for jobs that may have become stuck. i.e. They've run longer than
@@ -491,7 +499,7 @@ func (e *JobExecutor) reportError(ctx context.Context, jobRow *rivertype.JobRow,
 	}
 
 	var nextRetryScheduledAt time.Time
-	if e.WorkUnit != nil {
+	if e.WorkUnit != nil && res.JobArgsUnmarshaled {
 		nextRetryScheduledAt = e.WorkUnit.NextRetry()
 	}
 	if nextRetryScheduledAt.IsZero() {

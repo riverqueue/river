@@ -31,10 +31,11 @@ import (
 // of the workUnit.  Unlike in other packages, this one does not make use of any
 // types from the top level river package (like `river.Job[T]`).
 type customizableWorkUnit struct {
-	middleware []rivertype.WorkerMiddleware
-	nextRetry  func() time.Time
-	timeout    time.Duration
-	work       func() error
+	middleware   []rivertype.WorkerMiddleware
+	nextRetry    func() time.Time
+	timeout      time.Duration
+	unmarshalErr error
+	work         func() error
 }
 
 func (w *customizableWorkUnit) PluginLookup(lookup *pluginlookup.JobPluginLookup) pluginlookup.PluginLookupInterface {
@@ -57,7 +58,7 @@ func (w *customizableWorkUnit) Timeout() time.Duration {
 }
 
 func (w *customizableWorkUnit) UnmarshalJob() error {
-	return nil
+	return w.unmarshalErr
 }
 
 func (w *customizableWorkUnit) Work(ctx context.Context) error {
@@ -486,6 +487,42 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateRetryable, job.State)
 		require.WithinDuration(t, nextRetryAt, job.ScheduledAt, time.Microsecond)
+	})
+
+	t.Run("ErrorUnmarshalingUsesClientRetryPolicy", func(t *testing.T) {
+		t.Parallel()
+
+		executor, bundle := setup(t)
+		executor.ClientRetryPolicy = &retrypolicytest.RetryPolicyCustom{}
+
+		var nextRetryCalled, workCalled bool
+		unmarshalErr := errors.New("invalid job args")
+		executor.WorkUnit = &customizableWorkUnit{
+			nextRetry: func() time.Time {
+				nextRetryCalled = true
+				return time.Now().Add(1 * time.Hour)
+			},
+			unmarshalErr: unmarshalErr,
+			work: func() error {
+				workCalled = true
+				return nil
+			},
+		}
+		expectedRetryAt := executor.ClientRetryPolicy.NextRetry(bundle.jobRow)
+
+		executor.Execute(ctx)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
+
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRetryable, job.State)
+		require.Equal(t, unmarshalErr.Error(), job.Errors[0].Error)
+		require.WithinDuration(t, expectedRetryAt, job.ScheduledAt, time.Microsecond)
+		require.False(t, nextRetryCalled)
+		require.False(t, workCalled)
 	})
 
 	t.Run("InvalidNextRetryAt", func(t *testing.T) {

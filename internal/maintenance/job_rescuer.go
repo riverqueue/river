@@ -336,8 +336,17 @@ func (s *JobRescuer) makeRetryDecision(ctx context.Context, job *rivertype.JobRo
 
 	workUnit := workUnitFactory.MakeUnit(job)
 	if err := workUnit.UnmarshalJob(); err != nil {
-		s.Logger.ErrorContext(ctx, s.Name+": Error unmarshaling job args: %s"+err.Error(),
-			slog.String("job_kind", job.Kind), slog.Int64("job_id", job.ID))
+		s.Logger.ErrorContext(ctx, s.Name+": Error unmarshaling job args",
+			slog.String("error", err.Error()),
+			slog.String("job_kind", job.Kind),
+			slog.Int64("job_id", job.ID),
+		)
+
+		if job.Attempt < max(job.MaxAttempts, 0) {
+			return jobRetryDecisionRetry, s.Config.ClientRetryPolicy.NextRetry(job)
+		}
+
+		return jobRetryDecisionDiscard, time.Time{}
 	}
 
 	timeout := workUnit.Timeout()

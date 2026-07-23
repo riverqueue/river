@@ -2,6 +2,7 @@ package maintenance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sync/atomic"
@@ -27,29 +28,47 @@ import (
 
 // callbackWorkUnitFactory wraps a Worker to implement workUnitFactory.
 type callbackWorkUnitFactory struct {
-	Callback func(ctx context.Context, jobRow *rivertype.JobRow) error
-	timeout  time.Duration // defaults to 0, which signals default timeout
+	Callback     func(ctx context.Context, jobRow *rivertype.JobRow) error
+	timeout      time.Duration // defaults to 0, which signals default timeout
+	unmarshalErr error
 }
 
 func (w *callbackWorkUnitFactory) MakeUnit(jobRow *rivertype.JobRow) workunit.WorkUnit {
-	return &callbackWorkUnit{callback: w.Callback, jobRow: jobRow, timeout: w.timeout}
+	return &callbackWorkUnit{
+		callback:     w.Callback,
+		jobRow:       jobRow,
+		timeout:      w.timeout,
+		unmarshalErr: w.unmarshalErr,
+	}
 }
 
 // callbackWorkUnit implements workUnit for a job and Worker.
 type callbackWorkUnit struct {
-	callback func(ctx context.Context, jobRow *rivertype.JobRow) error
-	jobRow   *rivertype.JobRow
-	timeout  time.Duration // defaults to 0, which signals default timeout
+	callback     func(ctx context.Context, jobRow *rivertype.JobRow) error
+	jobRow       *rivertype.JobRow
+	timeout      time.Duration // defaults to 0, which signals default timeout
+	unmarshalErr error
 }
 
 func (w *callbackWorkUnit) PluginLookup(cache *pluginlookup.JobPluginLookup) pluginlookup.PluginLookupInterface {
 	return nil
 }
 func (w *callbackWorkUnit) Middleware() []rivertype.WorkerMiddleware { return nil }
-func (w *callbackWorkUnit) NextRetry() time.Time                     { return time.Now().Add(30 * time.Second) }
-func (w *callbackWorkUnit) Timeout() time.Duration                   { return w.timeout }
-func (w *callbackWorkUnit) Work(ctx context.Context) error           { return w.callback(ctx, w.jobRow) }
-func (w *callbackWorkUnit) UnmarshalJob() error                      { return nil }
+func (w *callbackWorkUnit) NextRetry() time.Time {
+	if w.unmarshalErr != nil {
+		panic("NextRetry must not be called after UnmarshalJob returns an error")
+	}
+	return time.Now().Add(30 * time.Second)
+}
+
+func (w *callbackWorkUnit) Timeout() time.Duration {
+	if w.unmarshalErr != nil {
+		panic("Timeout must not be called after UnmarshalJob returns an error")
+	}
+	return w.timeout
+}
+func (w *callbackWorkUnit) Work(ctx context.Context) error { return w.callback(ctx, w.jobRow) }
+func (w *callbackWorkUnit) UnmarshalJob() error            { return w.unmarshalErr }
 
 type SimpleClientRetryPolicy struct{}
 
@@ -364,6 +383,57 @@ func TestJobRescuer(t *testing.T) {
 		stopped := cleaner.Stopped()
 		cancelFunc()
 		riversharedtest.WaitOrTimeout(t, stopped)
+	})
+
+	t.Run("UnmarshalErrorDiscardsAtMaxAttempts", func(t *testing.T) {
+		t.Parallel()
+
+		rescuer, _ := setup(t)
+
+		rescuer.Config.WorkUnitFactoryFunc = func(kind string) workunit.WorkUnitFactory {
+			return &callbackWorkUnitFactory{
+				unmarshalErr: errors.New("invalid job args"),
+			}
+		}
+
+		attemptedAt := time.Now().Add(-2 * JobRescuerRescueAfterDefault)
+		job := &rivertype.JobRow{
+			ID:          123,
+			Attempt:     5,
+			AttemptedAt: &attemptedAt,
+			Kind:        rescuerJobKind,
+			MaxAttempts: 5,
+		}
+
+		decision, retryAt := rescuer.makeRetryDecision(ctx, job, time.Now())
+		require.Equal(t, jobRetryDecisionDiscard, decision)
+		require.Zero(t, retryAt)
+	})
+
+	t.Run("UnmarshalErrorRetriesWithClientPolicy", func(t *testing.T) {
+		t.Parallel()
+
+		rescuer, _ := setup(t)
+
+		rescuer.Config.WorkUnitFactoryFunc = func(kind string) workunit.WorkUnitFactory {
+			return &callbackWorkUnitFactory{
+				unmarshalErr: errors.New("invalid job args"),
+			}
+		}
+
+		attemptedAt := time.Now().Add(-2 * JobRescuerRescueAfterDefault)
+		job := &rivertype.JobRow{
+			ID:          123,
+			Attempt:     1,
+			AttemptedAt: &attemptedAt,
+			Kind:        rescuerJobKind,
+			MaxAttempts: 5,
+		}
+		expectedRetryAt := rescuer.Config.ClientRetryPolicy.NextRetry(job)
+
+		decision, retryAt := rescuer.makeRetryDecision(ctx, job, time.Now())
+		require.Equal(t, jobRetryDecisionRetry, decision)
+		require.Equal(t, expectedRetryAt, retryAt)
 	})
 
 	t.Run("UsesPilot", func(t *testing.T) {
