@@ -245,6 +245,12 @@ func TestSchema[TTx any](ctx context.Context, tb testutil.TestingTB, driver rive
 
 		var sb strings.Builder
 		sb.WriteString(driver.DatabaseName())
+		if opts.ProcurePool != nil {
+			// SQLite and Turso both use riversqlite and therefore report the same
+			// database name, but their database files aren't compatible. Keep their
+			// idle schemas separate based on the function that procures their pool.
+			fmt.Fprintf(&sb, ",procure_pool:%p", opts.ProcurePool)
+		}
 
 		for _, line := range lines {
 			sb.WriteString(",")

@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
 	_ "modernc.org/sqlite"
+	_ "turso.tech/database/tursogo"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdbtest"
@@ -249,6 +250,45 @@ func TestDriverRiverSQLiteModernC(t *testing.T) { //nolint:dupl
 				// wise.
 				DisableSchemaSharing: true,
 
+				ProcurePool: procurePool,
+			})
+			return driver.UnwrapExecutor(tx), driver
+		})
+}
+
+func TestDriverRiverTurso(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx         = context.Background()
+		procurePool = func(ctx context.Context, schema string) (any, string) {
+			return riversharedtest.DBPoolTurso(ctx, t, schema), "" // could also be `main` instead of empty string
+		}
+	)
+
+	riverdrivertest.Exercise(ctx, t,
+		func(ctx context.Context, t *testing.T, opts *riverdbtest.TestSchemaOpts) (riverdriver.Driver[*sql.Tx], string) {
+			t.Helper()
+
+			if opts == nil {
+				opts = &riverdbtest.TestSchemaOpts{}
+			}
+			opts.ProcurePool = procurePool
+
+			var (
+				// Driver will have its pool set by TestSchema.
+				driver = riversqlite.New(nil)
+				schema = riverdbtest.TestSchema(ctx, t, driver, opts)
+			)
+			return driver, schema
+		},
+		func(ctx context.Context, t *testing.T) (riverdriver.Executor, riverdriver.Driver[*sql.Tx]) {
+			t.Helper()
+
+			// Driver will have its pool set by TestSchema.
+			driver := riversqlite.New(nil)
+
+			tx, _ := riverdbtest.TestTx(ctx, t, driver, &riverdbtest.TestTxOpts{
 				ProcurePool: procurePool,
 			})
 			return driver.UnwrapExecutor(tx), driver

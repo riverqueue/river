@@ -106,6 +106,7 @@ func requireMissingRelation(t *testing.T, err error, schema, missingRelation str
 	} else {
 		// lib/pq: pq: relation %s.%s does not exist
 		// SQLite: no such table: %s.%s
-		require.Regexp(t, fmt.Sprintf(`(pq: relation "%s\.%s" does not exist|no such table: %s\.%s)`, schema, missingRelation, schema, missingRelation), err.Error())
+		// Turso: turso: error: Invalid argument supplied: no such database: %s
+		require.Regexp(t, fmt.Sprintf(`(pq: relation "%s\.%s" does not exist|no such table: %s\.%s|no such database: %s)`, schema, missingRelation, schema, missingRelation, schema), err.Error())
 	}
 }

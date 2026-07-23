@@ -127,12 +127,24 @@ func DBPoolSQLite(ctx context.Context, tb testing.TB, schema string) *sql.DB {
 	return dbPoolSQLite(ctx, tb, schema, "sqlite")
 }
 
+// DBPoolTurso gets a database pool appropriate for use with Turso in testing.
+func DBPoolTurso(ctx context.Context, tb testing.TB, schema string) *sql.DB {
+	tb.Helper()
+
+	return dbPoolSQLite(ctx, tb, schema, "turso")
+}
+
 func dbPoolSQLite(ctx context.Context, tb testing.TB, schema, driverName string) *sql.DB { //nolint:unparam
 	tb.Helper()
 
 	var databaseURLBuilder strings.Builder
 
-	databaseURLBuilder.WriteString("file:" + filepath.Join(sqliteTestDir(), schema+".sqlite3"))
+	databasePath := filepath.Join(sqliteTestDir(), schema+".sqlite3")
+	if driverName == "turso" {
+		databaseURLBuilder.WriteString(databasePath)
+	} else {
+		databaseURLBuilder.WriteString("file:" + databasePath)
+	}
 
 	// This innocuous line turns out to be quite important at the tail.
 	//
@@ -163,7 +175,12 @@ func dbPoolSQLite(ctx context.Context, tb testing.TB, schema, driverName string)
 	// I write all this because this line is a little dangerous. Removing it
 	// will probably still allow a basic test run to pass so it might seem okay,
 	// but actually it opens the door to intermittency hell.
-	databaseURLBuilder.WriteString("?_pragma=journal_mode(WAL)")
+	//
+	// Turso ignores `_pragma` so we don't bother passing it. Turso has better
+	// defaults and WAL is enabled out of the box.
+	if driverName != "turso" {
+		databaseURLBuilder.WriteString("?_pragma=journal_mode(WAL)")
+	}
 
 	dbPool, err := sql.Open(driverName, databaseURLBuilder.String())
 	require.NoError(tb, err)
