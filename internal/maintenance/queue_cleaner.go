@@ -18,6 +18,7 @@ import (
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
+	"github.com/riverqueue/river/rivershared/util/timeoututil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
 )
 
@@ -156,11 +157,7 @@ func (s *QueueCleaner) runOnce(ctx context.Context) (*queueCleanerRunOnceResult,
 	res := &queueCleanerRunOnceResult{QueuesDeleted: make([]string, 0, 10)}
 
 	for {
-		// Wrapped in a function so that defers run as expected.
-		queuesDeleted, err := func() ([]string, error) {
-			ctx, cancelFunc := context.WithTimeout(ctx, riversharedmaintenance.TimeoutDefault)
-			defer cancelFunc()
-
+		queuesDeleted, err := timeoututil.WithTimeoutV(ctx, riversharedmaintenance.TimeoutDefault, s.Name+".runOnce", func(ctx context.Context) ([]string, error) {
 			queuesDeleted, err := s.exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{
 				Max:              s.batchSize(),
 				Schema:           s.Config.Schema,
@@ -173,7 +170,7 @@ func (s *QueueCleaner) runOnce(ctx context.Context) (*queueCleanerRunOnceResult,
 			s.reducedBatchSizeBreaker.ResetIfNotOpen()
 
 			return queuesDeleted, nil
-		}()
+		})
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				s.reducedBatchSizeBreaker.Trip()

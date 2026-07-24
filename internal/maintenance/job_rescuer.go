@@ -21,6 +21,7 @@ import (
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
+	"github.com/riverqueue/river/rivershared/util/timeoututil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -294,9 +295,6 @@ func (s *JobRescuer) runOnce(ctx context.Context) (*rescuerRunOnceResult, error)
 }
 
 func (s *JobRescuer) getStuckJobs(ctx context.Context, afterID int64, batchSize int, stuckHorizon time.Time) ([]*rivertype.JobRow, error) {
-	ctx, cancelFunc := context.WithTimeout(ctx, riversharedmaintenance.TimeoutDefault)
-	defer cancelFunc()
-
 	params := &riverdriver.JobGetStuckParams{
 		AfterID:      afterID,
 		Max:          batchSize,
@@ -304,14 +302,16 @@ func (s *JobRescuer) getStuckJobs(ctx context.Context, afterID int64, batchSize 
 		StuckHorizon: stuckHorizon,
 	}
 
-	if pilot, ok := s.Config.Pilot.(riverpilot.PilotJobRescuer); ok {
-		return pilot.JobGetStuck(ctx, s.exec, params)
-	}
+	return timeoututil.WithTimeoutV(ctx, riversharedmaintenance.TimeoutDefault, s.Name+".getStuckJobs", func(ctx context.Context) ([]*rivertype.JobRow, error) {
+		if pilot, ok := s.Config.Pilot.(riverpilot.PilotJobRescuer); ok {
+			return pilot.JobGetStuck(ctx, s.exec, params)
+		}
 
-	// Compatibility fallback for Pilot implementations from before
-	// PilotJobRescuer. Once Pilot embeds PilotJobRescuer, replace the assertion
-	// above and this fallback with a direct call to s.Config.Pilot.JobGetStuck.
-	return s.exec.JobGetStuck(ctx, params)
+		// Compatibility fallback for Pilot implementations from before
+		// PilotJobRescuer. Once Pilot embeds PilotJobRescuer, replace the assertion
+		// above and this fallback with a direct call to s.Config.Pilot.JobGetStuck.
+		return s.exec.JobGetStuck(ctx, params)
+	})
 }
 
 // jobRetryDecision is a signal from makeRetryDecision as to what to do with a

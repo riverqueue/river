@@ -16,6 +16,7 @@ import (
 	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
+	"github.com/riverqueue/river/rivershared/util/timeoututil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -683,10 +684,7 @@ func withRetries[T any](logCtx context.Context, baseService *baseservice.BaseSer
 	for attempt := 1; attempt <= numRetries; attempt++ {
 		// I've found that we want at least ten seconds for a large batch,
 		// although it usually doesn't need that long.
-		ctx, cancel := context.WithTimeout(uncancelledCtx, rivercommon.HotOperationTimeout)
-		defer cancel()
-
-		retVal, err := retryFunc(ctx)
+		retVal, err := timeoututil.WithTimeoutV(uncancelledCtx, rivercommon.HotOperationTimeout, baseService.Name+".withRetries", retryFunc)
 		if err != nil {
 			// A cancelled context or a closed pool will never succeed.
 			if isNonRetryableCompleterError(err) {

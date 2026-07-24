@@ -13,6 +13,7 @@ import (
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/testutil"
+	"github.com/riverqueue/river/rivershared/util/timeoututil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
 )
 
@@ -133,20 +134,19 @@ type sqliteNotificationCleanerRunOnceResult struct {
 }
 
 func (s *SQLiteNotificationCleaner) runOnce(ctx context.Context) (*sqliteNotificationCleanerRunOnceResult, error) {
-	ctx, cancelFunc := context.WithTimeout(ctx, s.Config.Timeout)
-	defer cancelFunc()
+	return timeoututil.WithTimeoutV(ctx, s.Config.Timeout, s.Name+".runOnce", func(ctx context.Context) (*sqliteNotificationCleanerRunOnceResult, error) {
+		numDeleted, err := s.exec.NotificationDeleteBefore(ctx, &riverdriver.NotificationDeleteBeforeParams{
+			CreatedAtHorizon: time.Now().Add(-s.Config.RetentionPeriod),
+			Schema:           s.Config.Schema,
+		})
+		if err != nil {
+			return nil, err
+		}
 
-	numDeleted, err := s.exec.NotificationDeleteBefore(ctx, &riverdriver.NotificationDeleteBeforeParams{
-		CreatedAtHorizon: time.Now().Add(-s.Config.RetentionPeriod),
-		Schema:           s.Config.Schema,
+		s.TestSignals.DeletedBatch.Signal(struct{}{})
+
+		return &sqliteNotificationCleanerRunOnceResult{
+			NumNotificationsDeleted: numDeleted,
+		}, nil
 	})
-	if err != nil {
-		return nil, err
-	}
-
-	s.TestSignals.DeletedBatch.Signal(struct{}{})
-
-	return &sqliteNotificationCleanerRunOnceResult{
-		NumNotificationsDeleted: numDeleted,
-	}, nil
 }

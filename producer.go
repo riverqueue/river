@@ -28,6 +28,7 @@ import (
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
+	"github.com/riverqueue/river/rivershared/util/timeoututil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -298,10 +299,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		return errors.Is(err, startstop.ErrStop) || strings.HasSuffix(err.Error(), "conn closed") || fetchCtx.Err() != nil
 	}
 
-	fetchedQueue, err := func() (*rivertype.Queue, error) {
-		ctx, cancel := context.WithTimeout(fetchCtx, 10*time.Second)
-		defer cancel()
-
+	fetchedQueue, err := timeoututil.WithTimeoutV(fetchCtx, 10*time.Second, p.Name+".StartWorkContext", func(ctx context.Context) (*rivertype.Queue, error) {
 		p.Logger.DebugContext(ctx, p.Name+": Fetching initial queue settings", slog.String("queue", p.config.Queue))
 		return p.exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
 			Metadata: []byte("{}"),
@@ -309,7 +307,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 			Now:      p.Time.NowOrNil(),
 			Schema:   p.config.Schema,
 		})
-	}()
+	})
 	if err != nil {
 		stopped()
 		if isExpectedShutdownError(err) {
@@ -696,23 +694,22 @@ func (p *producer) finalizeShutdown(ctx context.Context) {
 	)
 
 	attemptShutdown := func(timeout time.Duration) error {
-		ctx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-
-		if err := p.pilot.ProducerShutdown(ctx, p.exec, &riverpilot.ProducerShutdownParams{
-			ProducerID: p.id.Load(),
-			Queue:      p.config.Queue,
-			Schema:     p.config.Schema,
-		}); err != nil {
-			// Don't retry on these errors:
-			// - context.Canceled: parent context is canceled, so retrying with a new timeout won't help
-			// - ErrClosedPool: the database connection pool is closed, so retrying won't succeed
-			if errors.Is(err, context.Canceled) || errors.Is(err, riverdriver.ErrClosedPool) {
-				return nil
+		return timeoututil.WithTimeout(ctx, timeout, p.Name+".finalizeShutdown", func(ctx context.Context) error {
+			if err := p.pilot.ProducerShutdown(ctx, p.exec, &riverpilot.ProducerShutdownParams{
+				ProducerID: p.id.Load(),
+				Queue:      p.config.Queue,
+				Schema:     p.config.Schema,
+			}); err != nil {
+				// Don't retry on these errors:
+				// - context.Canceled: parent context is canceled, so retrying with a new timeout won't help
+				// - ErrClosedPool: the database connection pool is closed, so retrying won't succeed
+				if errors.Is(err, context.Canceled) || errors.Is(err, riverdriver.ErrClosedPool) {
+					return nil
+				}
+				return err
 			}
-			return err
-		}
-		return nil
+			return nil
+		})
 	}
 
 	// Progressive retry with increasing timeouts:
@@ -973,15 +970,12 @@ func (p *producer) pollForSettingChanges(ctx context.Context, wg *sync.WaitGroup
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			updatedQueue, err := func() (*rivertype.Queue, error) {
-				ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-				defer cancel()
-
+			updatedQueue, err := timeoututil.WithTimeoutV(ctx, 10*time.Second, p.Name+".pollForSettingChanges", func(ctx context.Context) (*rivertype.Queue, error) {
 				return p.exec.QueueGet(ctx, &riverdriver.QueueGetParams{
 					Name:   p.config.Queue,
 					Schema: p.config.Schema,
 				})
-			}()
+			})
 			if err != nil {
 				// Don't log if this is part of a standard shutdown.
 				if !errors.Is(context.Cause(ctx), startstop.ErrStop) {
@@ -1060,15 +1054,14 @@ func (p *producer) reportProducerStatusLoop(ctx context.Context, wg *sync.WaitGr
 }
 
 func (p *producer) reportProducerStatusOnce(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	p.Logger.DebugContext(ctx, p.Name+": Reporting producer status", slog.Int64("id", p.id.Load()), slog.String("queue", p.config.Queue))
-	err := p.pilot.ProducerKeepAlive(ctx, p.exec, &riverdriver.ProducerKeepAliveParams{
-		ID:                    p.id.Load(),
-		QueueName:             p.config.Queue,
-		Schema:                p.config.Schema,
-		StaleUpdatedAtHorizon: p.Time.Now().Add(-p.config.StaleProducerRetentionPeriod),
+	err := timeoututil.WithTimeout(ctx, 10*time.Second, p.Name+".reportProducerStatusOnce", func(ctx context.Context) error {
+		p.Logger.DebugContext(ctx, p.Name+": Reporting producer status", slog.Int64("id", p.id.Load()), slog.String("queue", p.config.Queue))
+		return p.pilot.ProducerKeepAlive(ctx, p.exec, &riverdriver.ProducerKeepAliveParams{
+			ID:                    p.id.Load(),
+			QueueName:             p.config.Queue,
+			Schema:                p.config.Schema,
+			StaleUpdatedAtHorizon: p.Time.Now().Add(-p.config.StaleProducerRetentionPeriod),
+		})
 	})
 	if err != nil && errors.Is(context.Cause(ctx), startstop.ErrStop) {
 		return
@@ -1101,15 +1094,15 @@ func (p *producer) reportQueueStatusLoop(ctx context.Context, wg *sync.WaitGroup
 }
 
 func (p *producer) reportQueueStatusOnce(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	p.Logger.DebugContext(ctx, p.Name+": Reporting queue status", slog.String("queue", p.config.Queue))
-	_, err := p.exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
-		Metadata: []byte("{}"),
-		Name:     p.config.Queue,
-		Now:      p.Time.NowOrNil(),
-		Schema:   p.config.Schema,
+	err := timeoututil.WithTimeout(ctx, 10*time.Second, p.Name+".reportQueueStatusOnce", func(ctx context.Context) error {
+		p.Logger.DebugContext(ctx, p.Name+": Reporting queue status", slog.String("queue", p.config.Queue))
+		_, err := p.exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
+			Metadata: []byte("{}"),
+			Name:     p.config.Queue,
+			Now:      p.Time.NowOrNil(),
+			Schema:   p.config.Schema,
+		})
+		return err
 	})
 	if err != nil && errors.Is(context.Cause(ctx), startstop.ErrStop) {
 		return
