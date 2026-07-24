@@ -7,6 +7,7 @@ import (
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/util/timeoututil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -21,10 +22,9 @@ func (p *StandardPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Ex
 		return nil, nil
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, rivercommon.HotOperationTimeout)
-	defer cancel()
-
-	return exec.JobGetAvailable(ctx, params)
+	return timeoututil.WithTimeoutV(ctx, rivercommon.HotOperationTimeout, "StandardPilot.JobGetAvailable", func(ctx context.Context) ([]*rivertype.JobRow, error) {
+		return exec.JobGetAvailable(ctx, params)
+	})
 }
 
 func (p *StandardPilot) JobGetStuck(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error) {
