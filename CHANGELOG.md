@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.40.0] - 2026-07-23
+## [0.41.0] - 2026-07-23
 
 ### Added
 
@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added `Config.Plugins` for extensions that should be installed as both hooks and middleware. `Config.Hooks` and `Config.Middleware` remain available for hook-only and middleware-only registration. [PR #1284](https://github.com/riverqueue/river/pull/1284).
 - Reduce producer keep alive interval from 1 minute to 30 seconds. [PR #1319](https://github.com/riverqueue/river/pull/1319).
+- Add context helpers that name timeouts for easy attribution on where they happened. [PR #1329](https://github.com/riverqueue/river/pull/1329).
 
 ### Fixed
 
