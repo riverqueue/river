@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivershared/util/timeoututil"
 )
 
 // SafeIdentifier returns a safely quoted identifier (e.g. a table or schem
@@ -27,9 +28,6 @@ func SafeIdentifier(ident string) string {
 func RollbackWithoutCancel[TExec riverdriver.ExecutorTx](ctx context.Context, execTx TExec) error {
 	ctxWithoutCancel := context.WithoutCancel(ctx)
 
-	ctx, cancel := context.WithTimeout(ctxWithoutCancel, 5*time.Second)
-	defer cancel()
-
 	// It might not be the worst idea to log an unexpected error on rollback
 	// here instead of returning it. I had this in place initially, but there's
 	// a number of common errors that need to be ignored like "conn closed",
@@ -40,7 +38,7 @@ func RollbackWithoutCancel[TExec riverdriver.ExecutorTx](ctx context.Context, ex
 	// function like `ShouldIgnoreRollbackError` that'd need a lot of plumbing
 	// and it becomes questionable as to whether it's all worth it as Rollback
 	// producing a non-standard error would be quite unusual.
-	return execTx.Rollback(ctx)
+	return timeoututil.WithTimeout(ctxWithoutCancel, 5*time.Second, "dbutil.RollbackWithoutCancel", execTx.Rollback)
 }
 
 // WithTx starts and commits a transaction on a driver executor around

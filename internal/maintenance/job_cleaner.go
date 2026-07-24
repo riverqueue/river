@@ -17,6 +17,7 @@ import (
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
+	"github.com/riverqueue/river/rivershared/util/timeoututil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
 )
 
@@ -183,8 +184,7 @@ func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, err
 	res := &jobCleanerRunOnceResult{}
 
 	for {
-		// Wrapped in a function so that defers run as expected.
-		numDeleted, err := func() (int, error) {
+		numDeleted, err := timeoututil.WithTimeoutV(ctx, s.Config.Timeout, s.Name+".runOnce", func(ctx context.Context) (int, error) {
 			// In the special case that all retentions are indefinite, don't
 			// bother issuing the query at all as an optimization.
 			if s.Config.CompletedJobRetentionPeriod == -1 &&
@@ -192,9 +192,6 @@ func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, err
 				s.Config.DiscardedJobRetentionPeriod == -1 {
 				return 0, nil
 			}
-
-			ctx, cancelFunc := context.WithTimeout(ctx, s.Config.Timeout)
-			defer cancelFunc()
 
 			numDeleted, err := s.exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
 				CancelledDoDelete:           s.Config.CancelledJobRetentionPeriod != -1,
@@ -214,7 +211,7 @@ func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, err
 			s.reducedBatchSizeBreaker.ResetIfNotOpen()
 
 			return numDeleted, nil
-		}()
+		})
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				s.reducedBatchSizeBreaker.Trip()

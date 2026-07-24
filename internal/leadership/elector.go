@@ -20,6 +20,7 @@ import (
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
+	"github.com/riverqueue/river/rivershared/util/timeoututil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -609,25 +610,24 @@ func (e *Elector) attemptResign(ctx context.Context, attempt int, term leadershi
 	// Wait one second longer each time we try to resign:
 	timeout := time.Duration(attempt) * time.Second
 
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	return timeoututil.WithTimeout(ctx, timeout, e.Name+".attemptResign", func(ctx context.Context) error {
+		resigned, err := e.exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
+			ElectedAt:       term.electedAt,
+			LeaderID:        term.clientID,
+			LeadershipTopic: string(notifier.NotificationTopicLeadership),
+			Schema:          e.config.Schema,
+		})
+		if err != nil {
+			return err
+		}
 
-	resigned, err := e.exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
-		ElectedAt:       term.electedAt,
-		LeaderID:        term.clientID,
-		LeadershipTopic: string(notifier.NotificationTopicLeadership),
-		Schema:          e.config.Schema,
+		if resigned {
+			e.Logger.DebugContext(ctx, e.Name+": Resigned leadership successfully", "client_id", e.config.ClientID)
+			e.testSignals.ResignedLeadership.Signal(struct{}{})
+		}
+
+		return nil
 	})
-	if err != nil {
-		return err
-	}
-
-	if resigned {
-		e.Logger.DebugContext(ctx, e.Name+": Resigned leadership successfully", "client_id", e.config.ClientID)
-		e.testSignals.ResignedLeadership.Signal(struct{}{})
-	}
-
-	return nil
 }
 
 // Produces a common set of key/value pairs for logging when an error occurs.
@@ -767,44 +767,42 @@ func attemptElect(ctx context.Context, exec riverdriver.Executor, params *riverd
 }
 
 func attemptElectWithTimeout(ctx context.Context, exec riverdriver.Executor, params *riverdriver.LeaderElectParams, timeout time.Duration) (*riverdriver.Leader, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	return timeoututil.WithTimeoutV(ctx, timeout, "leadership.attemptElect", func(ctx context.Context) (*riverdriver.Leader, error) {
+		execTx, err := exec.Begin(ctx)
+		if err != nil {
+			var additionalDetail string
+			if errors.Is(err, context.DeadlineExceeded) {
+				additionalDetail = " (a common cause of this is a database pool that's at its connection limit; you may need to increase maximum connections)"
+			}
 
-	execTx, err := exec.Begin(ctx)
-	if err != nil {
-		var additionalDetail string
-		if errors.Is(err, context.DeadlineExceeded) {
-			additionalDetail = " (a common cause of this is a database pool that's at its connection limit; you may need to increase maximum connections)"
+			return nil, fmt.Errorf("error beginning transaction: %w%s", err, additionalDetail)
+		}
+		defer dbutil.RollbackWithoutCancel(ctx, execTx)
+
+		if _, err := execTx.LeaderDeleteExpired(ctx, &riverdriver.LeaderDeleteExpiredParams{
+			Now:    params.Now,
+			Schema: params.Schema,
+		}); err != nil {
+			return nil, err
 		}
 
-		return nil, fmt.Errorf("error beginning transaction: %w%s", err, additionalDetail)
-	}
-	defer dbutil.RollbackWithoutCancel(ctx, execTx)
+		leader, err := execTx.LeaderAttemptElect(ctx, params)
+		if err != nil && !errors.Is(err, rivertype.ErrNotFound) {
+			return nil, err
+		}
+		if err := execTx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("error committing transaction: %w", err)
+		}
+		if err != nil {
+			return nil, err
+		}
 
-	if _, err := execTx.LeaderDeleteExpired(ctx, &riverdriver.LeaderDeleteExpiredParams{
-		Now:    params.Now,
-		Schema: params.Schema,
-	}); err != nil {
-		return nil, err
-	}
-
-	leader, err := execTx.LeaderAttemptElect(ctx, params)
-	if err != nil && !errors.Is(err, rivertype.ErrNotFound) {
-		return nil, err
-	}
-	if err := execTx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("error committing transaction: %w", err)
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	return leader, nil
+		return leader, nil
+	})
 }
 
 func attemptReelectWithTimeout(ctx context.Context, exec riverdriver.Executor, params *riverdriver.LeaderReelectParams, timeout time.Duration) (*riverdriver.Leader, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	return exec.LeaderAttemptReelect(ctx, params)
+	return timeoututil.WithTimeoutV(ctx, timeout, "leadership.attemptReelect", func(ctx context.Context) (*riverdriver.Leader, error) {
+		return exec.LeaderAttemptReelect(ctx, params)
+	})
 }

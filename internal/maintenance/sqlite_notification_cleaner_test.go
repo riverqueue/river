@@ -102,4 +102,15 @@ func TestSQLiteNotificationCleaner(t *testing.T) {
 
 		startstoptest.Stress(ctx, t, cleaner)
 	})
+
+	t.Run("TimeoutErrorIncludesOperation", func(t *testing.T) {
+		t.Parallel()
+
+		cleaner, _ := setup(t)
+		cleaner.Config.Timeout = time.Nanosecond
+
+		_, err := cleaner.runOnce(ctx)
+		require.ErrorContains(t, err, cleaner.Name+".runOnce timed out after 1ns")
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
+	"github.com/riverqueue/river/rivershared/util/timeoututil"
 )
 
 type NotificationTopic string
@@ -309,20 +310,19 @@ func (n *Notifier) listenerConnect(ctx context.Context, skipLock bool) error {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, listenerTimeout)
-	defer cancel()
+	return timeoututil.WithTimeout(ctx, listenerTimeout, n.Name+".listenerConnect", func(ctx context.Context) error {
+		n.Logger.DebugContext(ctx, n.Name+": Listener connecting")
+		if err := n.listener.Connect(ctx); err != nil {
+			if !errors.Is(err, context.Canceled) {
+				n.Logger.ErrorContext(ctx, n.Name+": Error connecting listener", "err", err)
+			}
 
-	n.Logger.DebugContext(ctx, n.Name+": Listener connecting")
-	if err := n.listener.Connect(ctx); err != nil {
-		if !errors.Is(err, context.Canceled) {
-			n.Logger.ErrorContext(ctx, n.Name+": Error connecting listener", "err", err)
+			return err
 		}
 
-		return err
-	}
-
-	n.isConnected = true
-	return nil
+		n.isConnected = true
+		return nil
+	})
 }
 
 // Listens on a topic with an appropriate logging statement. Should be preferred
@@ -331,15 +331,14 @@ func (n *Notifier) listenerConnect(ctx context.Context, skipLock bool) error {
 // Not protected by mutex because it doesn't modify any notifier state and the
 // underlying listener has a mutex around its operations.
 func (n *Notifier) listenerListen(ctx context.Context, topic NotificationTopic) error {
-	ctx, cancel := context.WithTimeout(ctx, listenerTimeout)
-	defer cancel()
+	return timeoututil.WithTimeout(ctx, listenerTimeout, n.Name+".listenerListen", func(ctx context.Context) error {
+		n.Logger.DebugContext(ctx, n.Name+": Listening on topic", "topic", topic)
+		if err := n.listener.Listen(ctx, string(topic)); err != nil {
+			return fmt.Errorf("error listening on topic %q: %w", topic, err)
+		}
 
-	n.Logger.DebugContext(ctx, n.Name+": Listening on topic", "topic", topic)
-	if err := n.listener.Listen(ctx, string(topic)); err != nil {
-		return fmt.Errorf("error listening on topic %q: %w", topic, err)
-	}
-
-	return nil
+		return nil
+	})
 }
 
 // Unlistens on a topic with an appropriate logging statement. Should be
@@ -348,15 +347,14 @@ func (n *Notifier) listenerListen(ctx context.Context, topic NotificationTopic) 
 // Not protected by mutex because it doesn't modify any notifier state and the
 // underlying listener has a mutex around its operations.
 func (n *Notifier) listenerUnlisten(ctx context.Context, topic NotificationTopic) error {
-	ctx, cancel := context.WithTimeout(ctx, listenerTimeout)
-	defer cancel()
+	return timeoututil.WithTimeout(ctx, listenerTimeout, n.Name+".listenerUnlisten", func(ctx context.Context) error {
+		n.Logger.DebugContext(ctx, n.Name+": Unlistening on topic", "topic", topic)
+		if err := n.listener.Unlisten(ctx, string(topic)); err != nil {
+			return fmt.Errorf("error unlistening on topic %q: %w", topic, err)
+		}
 
-	n.Logger.DebugContext(ctx, n.Name+": Unlistening on topic", "topic", topic)
-	if err := n.listener.Unlisten(ctx, string(topic)); err != nil {
-		return fmt.Errorf("error unlistening on topic %q: %w", topic, err)
-	}
-
-	return nil
+		return nil
+	})
 }
 
 // Enters a single blocking wait for notifications on the underlying listener.

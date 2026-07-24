@@ -18,6 +18,7 @@ import (
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
+	"github.com/riverqueue/river/rivershared/util/timeoututil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
 )
 
@@ -163,11 +164,7 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 	res := &schedulerRunOnceResult{}
 
 	for {
-		// Wrapped in a function so that defers run as expected.
-		numScheduled, err := func() (int, error) {
-			ctx, cancelFunc := context.WithTimeout(ctx, riversharedmaintenance.TimeoutDefault)
-			defer cancelFunc()
-
+		numScheduled, err := timeoututil.WithTimeoutV(ctx, riversharedmaintenance.TimeoutDefault, s.Name+".runOnce", func(ctx context.Context) (int, error) {
 			execTx, err := s.exec.Begin(ctx)
 			if err != nil {
 				return 0, fmt.Errorf("error starting transaction: %w", err)
@@ -212,7 +209,7 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 			}
 
 			return len(scheduledJobResults), execTx.Commit(ctx)
-		}()
+		})
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				s.reducedBatchSizeBreaker.Trip()
