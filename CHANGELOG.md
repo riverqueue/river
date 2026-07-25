@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `JobRescuer` incorrectly rescuing jobs whose worker timeout of zero inherits a client-level `Config.JobTimeout` of `-1` (no timeout). [PR #1331](https://github.com/riverqueue/river/pull/1331).
+
 ## [0.41.0] - 2026-07-23
 
 ### Added

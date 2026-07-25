@@ -156,6 +156,22 @@ func TestJobRescuer(t *testing.T) {
 		return rescuer, bundle
 	}
 
+	t.Run("DoesNotRescueWorkerInheritingDisabledClientTimeout", func(t *testing.T) {
+		t.Parallel()
+
+		rescuer, bundle := setup(t)
+		rescuer.Config.ClientJobTimeout = -1
+
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-24 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+
+		_, err := rescuer.runOnce(ctx)
+		require.NoError(t, err)
+
+		jobAfter, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: rescuer.Config.Schema})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, jobAfter.State)
+	})
+
 	t.Run("Defaults", func(t *testing.T) {
 		t.Parallel()
 

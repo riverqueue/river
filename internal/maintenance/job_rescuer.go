@@ -45,6 +45,10 @@ func (ts *JobRescuerTestSignals) Init(tb testutil.TestingTB) {
 type JobRescuerConfig struct {
 	riversharedmaintenance.BatchSizes
 
+	// ClientJobTimeout is the default job timeout used when a worker returns a
+	// timeout of zero.
+	ClientJobTimeout time.Duration
+
 	// ClientRetryPolicy is the default retry policy to use for workers that don't
 	// override NextRetry.
 	ClientRetryPolicy jobexecutor.ClientRetryPolicy
@@ -119,6 +123,7 @@ func NewRescuer(archetype *baseservice.Archetype, config *JobRescuerConfig, exec
 	return baseservice.Init(archetype, &JobRescuer{
 		Config: (&JobRescuerConfig{
 			BatchSizes:          batchSizes,
+			ClientJobTimeout:    config.ClientJobTimeout,
 			ClientRetryPolicy:   config.ClientRetryPolicy,
 			Interval:            cmp.Or(config.Interval, JobRescuerIntervalDefault),
 			Pilot:               pilot,
@@ -349,7 +354,7 @@ func (s *JobRescuer) makeRetryDecision(ctx context.Context, job *rivertype.JobRo
 		return jobRetryDecisionDiscard, time.Time{}
 	}
 
-	timeout := workUnit.Timeout()
+	timeout := cmp.Or(workUnit.Timeout(), s.Config.ClientJobTimeout)
 	if timeout < 0 || timeout > 0 && now.Sub(*job.AttemptedAt) < timeout {
 		return jobRetryDecisionIgnore, time.Time{}
 	}
