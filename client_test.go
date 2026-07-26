@@ -5859,6 +5859,28 @@ func Test_Client_Maintenance(t *testing.T) {
 		requireJobHasState(jobNotYetStuck3.ID, jobNotYetStuck3.State)
 	})
 
+	t.Run("JobRescuerDoesNotRescueWorkerInheritingDisabledClientTimeout", func(t *testing.T) {
+		t.Parallel()
+
+		config := newTestConfig(t, "")
+		config.JobTimeout = -1
+		config.RescueStuckJobsAfter = 5 * time.Minute
+
+		client, bundle := setup(t, config)
+
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(time.Now().Add(-time.Hour))})
+
+		startAndWaitForQueueMaintainer(ctx, t, client)
+
+		rescuer := maintenance.GetService[*maintenance.JobRescuer](client.queueMaintainer)
+		rescuer.TestSignals.FetchedBatch.WaitOrTimeout()
+		rescuer.TestSignals.UpdatedBatch.WaitOrTimeout()
+
+		jobAfter, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, jobAfter.State)
+	})
+
 	t.Run("JobScheduler", func(t *testing.T) {
 		t.Parallel()
 

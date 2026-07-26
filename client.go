@@ -959,6 +959,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 
 		{
 			jobRescuer := maintenance.NewRescuer(archetype, &maintenance.JobRescuerConfig{
+				ClientJobTimeout:  config.JobTimeout,
 				ClientRetryPolicy: config.RetryPolicy,
 				Pilot:             client.pilot,
 				RescueAfter:       config.RescueStuckJobsAfter,
