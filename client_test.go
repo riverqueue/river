@@ -994,6 +994,40 @@ func Test_Client_Common(t *testing.T) {
 		require.WithinDuration(t, time.Now(), *updatedJob.FinalizedAt, 2*time.Second)
 	})
 
+	t.Run("JobRetryUsesConfiguredTime", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		configuredNow := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Microsecond)
+		timeStub := &riversharedtest.TimeStub{}
+		timeStub.StubNow(configuredNow)
+		config.Test.Time = timeStub
+		client := newTestClient(t, bundle.dbPool, config)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			return errors.New("retry using configured time")
+		}))
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobFailed, event.Kind)
+		require.Equal(t, rivertype.JobStateRetryable, event.Job.State)
+		require.WithinDuration(t, configuredNow.Add(time.Second), event.Job.ScheduledAt, 150*time.Millisecond)
+
+		updatedJob, err := client.JobGet(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.WithinDuration(t, configuredNow.Add(time.Second), updatedJob.ScheduledAt, 150*time.Millisecond)
+	})
+
 	t.Run("JobSnoozeErrorReturned", func(t *testing.T) {
 		t.Parallel()
 
@@ -1023,6 +1057,39 @@ func Test_Client_Common(t *testing.T) {
 		require.Equal(t, 0, updatedJob.Attempt)
 		require.Equal(t, rivertype.JobStateScheduled, updatedJob.State)
 		require.WithinDuration(t, time.Now().Add(15*time.Minute), updatedJob.ScheduledAt, 2*time.Second)
+	})
+
+	t.Run("JobSnoozeUsesConfiguredTime", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		configuredNow := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Microsecond)
+		timeStub := &riversharedtest.TimeStub{}
+		timeStub.StubNow(configuredNow)
+		config.Test.Time = timeStub
+		client := newTestClient(t, bundle.dbPool, config)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			return JobSnooze(15 * time.Minute)
+		}))
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobSnoozed, event.Kind)
+		require.Equal(t, configuredNow.Add(15*time.Minute), event.Job.ScheduledAt)
+
+		updatedJob, err := client.JobGet(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, configuredNow.Add(15*time.Minute), updatedJob.ScheduledAt)
 	})
 
 	t.Run("JobSnoozeWithZeroDurationSetsAvailableImmediately", func(t *testing.T) {

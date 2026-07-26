@@ -5,6 +5,7 @@ import (
 	"math/rand/v2"
 	"time"
 
+	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -27,7 +28,13 @@ type ClientRetryPolicy interface {
 
 // DefaultClientRetryPolicy is River's default retry policy.
 type DefaultClientRetryPolicy struct {
+	baseService baseservice.BaseService
 	timeNowFunc func() time.Time
+}
+
+// GetBaseService returns the retry policy's base service.
+func (p *DefaultClientRetryPolicy) GetBaseService() *baseservice.BaseService {
+	return &p.baseService
 }
 
 // NextRetry gets the next retry given for the given job, accounting for when it
@@ -60,6 +67,9 @@ func (p *DefaultClientRetryPolicy) NextRetry(job *rivertype.JobRow) time.Time {
 func (p *DefaultClientRetryPolicy) timeNowUTC() time.Time {
 	if p.timeNowFunc != nil {
 		return p.timeNowFunc()
+	}
+	if p.baseService.Time != nil {
+		return p.baseService.Time.Now().UTC()
 	}
 
 	return time.Now().UTC()
