@@ -22,7 +22,7 @@ require (
 	github.com/tursodatabase/libsql-client-go v0.0.0-20260528064733-9d5d30a29a60
 	golang.org/x/text v0.40.0
 	modernc.org/sqlite v1.54.0
-	turso.tech/database/tursogo v0.7.0
+	turso.tech/database/tursogo v0.7.1
 )
 
 require (
@@ -40,7 +40,7 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
-	github.com/tursodatabase/turso-go-platform-libs v0.7.0 // indirect
+	github.com/tursodatabase/turso-go-platform-libs v0.7.1 // indirect
 	go.uber.org/goleak v1.3.0 // indirect
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
 	golang.org/x/sync v0.22.0 // indirect
