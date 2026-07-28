@@ -17,6 +17,7 @@ import (
 	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/pluginlookup"
+	"github.com/riverqueue/river/internal/retrypolicy"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/util/chanutil"
 	"github.com/riverqueue/river/internal/workunit"
@@ -907,7 +908,7 @@ func (p *producer) heartbeatLogLoop(ctx context.Context, wg *sync.WaitGroup) {
 }
 
 func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.JobRow) {
-	defaultClientRetryPolicy := baseservice.Init(&p.Archetype, &DefaultClientRetryPolicy{})
+	defaultClientRetryPolicy := retrypolicy.NewDefault(p.Time)
 
 	for _, job := range jobs {
 		workInfo, ok := p.workers.workersMap[job.Kind]

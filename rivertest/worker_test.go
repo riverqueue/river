@@ -290,6 +290,27 @@ func TestWorker_Work(t *testing.T) {
 		require.Contains(t, logBuf.String(), expectedErr.Error())
 	})
 
+	t.Run("UsesACustomClockForDefaultRetry", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		configuredNow := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Microsecond)
+		timeStub := &riversharedtest.TimeStub{}
+		timeStub.StubNow(configuredNow)
+		bundle.config.Test.Time = timeStub
+
+		expectedErr := errors.New("retry using configured time")
+		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
+			return expectedErr
+		})
+		tw := NewWorker(t, bundle.driver, bundle.config, worker)
+
+		res, err := tw.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, nil)
+		require.ErrorIs(t, err, expectedErr)
+		require.Equal(t, river.EventKindJobFailed, res.EventKind)
+		require.WithinDuration(t, configuredNow.Add(time.Second), res.Job.ScheduledAt, 150*time.Millisecond)
+	})
+
 	t.Run("UsesACustomClockWhenProvided", func(t *testing.T) {
 		t.Parallel()
 
