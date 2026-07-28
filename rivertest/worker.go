@@ -155,7 +155,6 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 	pluginlookup.InitBaseServices(archetype, hooks)
 	pluginlookup.InitBaseServices(archetype, middleware)
 	pluginlookup.InitBaseServices(archetype, plugins)
-	defaultClientRetryPolicy := baseservice.Init(archetype, &river.DefaultClientRetryPolicy{})
 
 	updatedJobRow, err := exec.JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
 		ID:                  job.ID,
@@ -193,7 +192,7 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 		ClientJobTimeout:         w.config.JobTimeout,
 		ClientRetryPolicy:        w.config.RetryPolicy,
 		Completer:                completer,
-		DefaultClientRetryPolicy: defaultClientRetryPolicy,
+		DefaultClientRetryPolicy: baseservice.Init(archetype, &river.DefaultClientRetryPolicy{}),
 		ErrorHandler: &errorHandlerWrapper{
 			HandleErrorFunc: func(ctx context.Context, job *rivertype.JobRow, err error) *jobexecutor.ErrorHandlerResult {
 				resultErr = err
