@@ -128,8 +128,8 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 			listener  = driver.GetListener(&riverdriver.GetListenenerParams{Schema: ""})
 		)
 
-		if driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
-			t.Skip("SQLite has no search_path")
+		if driver.DatabaseName() == riverdriver.DatabaseNameMySQL || driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+			t.Skipf("%s has no search_path", driver.DatabaseName())
 		}
 
 		listener.SetAfterConnectExec("SET search_path TO 'public'")
@@ -145,6 +145,10 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 			driver, _ = driverWithPool(ctx, t, nil)
 			listener  = driver.GetListener(&riverdriver.GetListenenerParams{Schema: ""})
 		)
+
+		if driver.DatabaseName() == riverdriver.DatabaseNameMySQL {
+			t.Skip("MySQL has no search_path")
+		}
 
 		connectListener(ctx, t, listener)
 		require.Empty(t, listener.Schema())

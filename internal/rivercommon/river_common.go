@@ -46,9 +46,9 @@ const (
 	// MetadataKeyRescueCount records how many times the job has been rescued.
 	MetadataKeyRescueCount = "river:rescue_count"
 
-	// MetadataKeyUniqueNonce is a special metadata key used by the SQLite driver to
-	// determine whether an upsert is was skipped or not because the `(xmax != 0)`
-	// trick we use in Postgres doesn't work in SQLite.
+	// MetadataKeyUniqueNonce is a special metadata key used by the MySQL and
+	// SQLite drivers to determine whether an upsert was skipped because the
+	// `(xmax != 0)` trick used in Postgres isn't available.
 	MetadataKeyUniqueNonce = "river:unique_nonce"
 )
 

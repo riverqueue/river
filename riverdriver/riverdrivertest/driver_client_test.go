@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/lib/pq"
@@ -19,10 +20,12 @@ import (
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
+	"github.com/riverqueue/river/riverdriver/rivermysql"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/testfactory"
+	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivershared/util/urlutil"
 	"github.com/riverqueue/river/rivertype"
@@ -106,6 +109,26 @@ func TestClientWithDriverRiverLibSQL(t *testing.T) {
 				})
 			)
 			return driver, schema
+		},
+	)
+}
+
+func TestClientWithDriverRiverMySQL(t *testing.T) {
+	t.Parallel()
+
+	riversharedtest.SkipIfMySQLNotEnabled(t)
+
+	var (
+		ctx    = context.Background()
+		dbPool = riversharedtest.DBPoolMySQL(ctx, t)
+		driver = rivermysql.New(dbPool)
+	)
+
+	ExerciseClient(ctx, t,
+		func(ctx context.Context, t *testing.T) (riverdriver.Driver[*sql.Tx], string) {
+			t.Helper()
+
+			return driver, riverdbtest.TestSchema(ctx, t, driver, nil)
 		},
 	)
 }
@@ -552,6 +575,28 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.Equal(t, job.ID, listRes.Jobs[0].ID)
 	})
 
+	t.Run("JobListPaginatesByScheduledAt", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+		if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+			t.Skip("SQLite cursor pagination is covered by the main client suite")
+		}
+
+		now := time.Now().UTC()
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{ScheduledAt: &now, Schema: bundle.schema})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{ScheduledAt: ptrutil.Ptr(now.Add(time.Second)), Schema: bundle.schema})
+
+		listRes, err := client.JobList(ctx,
+			river.NewJobListParams().
+				OrderBy(river.JobListOrderByScheduledAt, river.SortOrderAsc).
+				After(river.JobListCursorFromJob(job1)),
+		)
+		require.NoError(t, err)
+		require.Len(t, listRes.Jobs, 1)
+		require.Equal(t, job2.ID, listRes.Jobs[0].ID)
+	})
+
 	t.Run("JobListTx", func(t *testing.T) {
 		t.Parallel()
 
@@ -630,9 +675,12 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 
 		listParams := river.NewJobListParams()
 
-		if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+		switch bundle.driver.DatabaseName() {
+		case riverdriver.DatabaseNameSQLite:
 			listParams = listParams.Where("metadata ->> @json_path = @json_val", river.NamedArgs{"json_path": "$.foo", "json_val": "bar"})
-		} else {
+		case riverdriver.DatabaseNameMySQL:
+			listParams = listParams.Where("JSON_UNQUOTE(JSON_EXTRACT(metadata, @json_path)) = @json_val", river.NamedArgs{"json_path": "$.foo", "json_val": "bar"})
+		default:
 			// "bar" is quoted in this branch because `jsonb_path_query_first` needs to be compared to a JSON value
 			listParams = listParams.Where("jsonb_path_query_first(metadata, @json_path) = @json_val", river.NamedArgs{"json_path": "$.foo", "json_val": `"bar"`})
 		}

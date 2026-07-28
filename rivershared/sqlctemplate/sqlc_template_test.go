@@ -259,7 +259,7 @@ func TestReplacer(t *testing.T) {
 				AND state = @state;
 			`
 
-		// Initially cached value
+		// Initially cached value.
 		{
 			ctx := WithReplacements(ctx, map[string]Replacement{
 				"schema": {Stable: true, Value: "test_schema."},
@@ -417,6 +417,254 @@ func TestReplacer(t *testing.T) {
 			SELECT count(*)
 			FROM test_schema.river_job
 			WHERE kind = $1 AND status = $2;
+		`, updatedSQL)
+	})
+
+	t.Run("UnnumberedPlaceholders_NoNamedArgs", func(t *testing.T) {
+		t.Parallel()
+
+		replacer := &Replacer{UnnumberedPlaceholders: true}
+
+		ctx := WithReplacements(ctx, map[string]Replacement{
+			"schema": {Value: "test_schema."},
+		}, nil)
+
+		updatedSQL, args, err := replacer.RunSafely(ctx, "?", `
+			SELECT count(*)
+			FROM /* TEMPLATE: schema */river_job
+			WHERE state = ?;
+		`, []any{"available"})
+		require.NoError(t, err)
+		require.Equal(t, []any{"available"}, args)
+		require.Equal(t, `
+			SELECT count(*)
+			FROM test_schema.river_job
+			WHERE state = ?;
+		`, updatedSQL)
+	})
+
+	t.Run("UnnumberedPlaceholders_NamedArgsNoInitialArgs", func(t *testing.T) {
+		t.Parallel()
+
+		replacer := &Replacer{UnnumberedPlaceholders: true}
+
+		ctx := WithReplacements(ctx, map[string]Replacement{
+			"where_clause": {Value: "kind = @kind"},
+		}, map[string]any{
+			"kind": "no_op",
+		})
+
+		updatedSQL, args, err := replacer.RunSafely(ctx, "?", `
+			SELECT count(*)
+			FROM river_job
+			WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */;
+		`, nil)
+		require.NoError(t, err)
+		require.Equal(t, []any{"no_op"}, args)
+		require.Equal(t, `
+			SELECT count(*)
+			FROM river_job
+			WHERE kind = ?;
+		`, updatedSQL)
+	})
+
+	t.Run("UnnumberedPlaceholders_NamedArgsWithInitialArgs", func(t *testing.T) {
+		t.Parallel()
+
+		replacer := &Replacer{UnnumberedPlaceholders: true}
+
+		ctx := WithReplacements(ctx, map[string]Replacement{
+			"where_clause": {Value: "kind = @kind"},
+		}, map[string]any{
+			"kind": "no_op",
+		})
+
+		// The named arg @kind appears in the WHERE clause before the
+		// sqlc-generated ? for LIMIT. UnnumberedPlaceholders reorders args so
+		// that they match the positional ? order in the final SQL.
+		updatedSQL, args, err := replacer.RunSafely(ctx, "?", `
+			SELECT count(*)
+			FROM river_job
+			WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */
+			LIMIT ?;
+		`, []any{100})
+		require.NoError(t, err)
+		require.Equal(t, []any{"no_op", 100}, args)
+		require.Equal(t, `
+			SELECT count(*)
+			FROM river_job
+			WHERE kind = ?
+			LIMIT ?;
+		`, updatedSQL)
+	})
+
+	t.Run("UnnumberedPlaceholders_NamedArgRepeated", func(t *testing.T) {
+		t.Parallel()
+
+		replacer := &Replacer{UnnumberedPlaceholders: true}
+
+		ctx := WithReplacements(ctx, map[string]Replacement{
+			"where_clause": {Value: "kind = @kind OR queue = @kind"},
+		}, map[string]any{
+			"kind": "no_op",
+		})
+
+		// When a named arg appears multiple times, it should produce a ? for
+		// each occurrence with the value duplicated in the args slice.
+		updatedSQL, args, err := replacer.RunSafely(ctx, "?", `
+			SELECT *
+			FROM river_job
+			WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */
+			LIMIT ?;
+		`, []any{100})
+		require.NoError(t, err)
+		require.Equal(t, []any{"no_op", "no_op", 100}, args)
+		require.Equal(t, `
+			SELECT *
+			FROM river_job
+			WHERE kind = ? OR queue = ?
+			LIMIT ?;
+		`, updatedSQL)
+	})
+
+	t.Run("UnnumberedPlaceholders_MultipleNamedArgs", func(t *testing.T) {
+		t.Parallel()
+
+		replacer := &Replacer{UnnumberedPlaceholders: true}
+
+		ctx := WithReplacements(ctx, map[string]Replacement{
+			"schema":       {Stable: true, Value: "test_schema."},
+			"where_clause": {Value: "kind = @kind AND status = @status"},
+		}, map[string]any{
+			"kind":   "no_op",
+			"status": "succeeded",
+		})
+
+		updatedSQL, args, err := replacer.RunSafely(ctx, "?", `
+			SELECT count(*)
+			FROM /* TEMPLATE: schema */river_job
+			WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */
+			LIMIT ?;
+		`, []any{100})
+		require.NoError(t, err)
+		require.Equal(t, []any{"no_op", "succeeded", 100}, args)
+		require.Equal(t, `
+			SELECT count(*)
+			FROM test_schema.river_job
+			WHERE kind = ? AND status = ?
+			LIMIT ?;
+		`, updatedSQL)
+	})
+
+	t.Run("UnnumberedPlaceholders_QuotedAndCommentedSymbols", func(t *testing.T) {
+		t.Parallel()
+
+		replacer := &Replacer{UnnumberedPlaceholders: true}
+
+		ctx := WithReplacements(ctx, map[string]Replacement{
+			"where_clause": {Value: "kind = @kind"},
+		}, map[string]any{
+			"kind": "no_op",
+		})
+
+		updatedSQL, args, err := replacer.RunSafely(ctx, "?", `
+			SELECT '?' AS question, '@kind' AS literal
+			FROM river_job
+			WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */
+			/* ? @kind */
+			LIMIT ?;
+		`, []any{100})
+		require.NoError(t, err)
+		require.Equal(t, []any{"no_op", 100}, args)
+		require.Equal(t, `
+			SELECT '?' AS question, '@kind' AS literal
+			FROM river_job
+			WHERE kind = ?
+			/* ? @kind */
+			LIMIT ?;
+		`, updatedSQL)
+	})
+
+	t.Run("UnnumberedPlaceholders_NotCachedWithNamedArgs", func(t *testing.T) {
+		t.Parallel()
+
+		replacer := &Replacer{UnnumberedPlaceholders: true}
+
+		ctx := WithReplacements(ctx, map[string]Replacement{
+			"schema":       {Stable: true, Value: "test_schema."},
+			"where_clause": {Stable: true, Value: "kind = @kind"},
+		}, map[string]any{
+			"kind": "no_op",
+		})
+
+		sql := `
+			SELECT count(*)
+			FROM /* TEMPLATE: schema */river_job
+			WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */
+			LIMIT ?;
+		`
+
+		// Unnumbered mode with named args skips caching because the
+		// cached SQL can't preserve the positional arg ordering.
+		updatedSQL, args, err := replacer.RunSafely(ctx, "?", sql, []any{100})
+		require.NoError(t, err)
+		require.Equal(t, []any{"no_op", 100}, args)
+		require.Equal(t, `
+			SELECT count(*)
+			FROM test_schema.river_job
+			WHERE kind = ?
+			LIMIT ?;
+		`, updatedSQL)
+
+		require.Empty(t, replacer.cache)
+
+		// Second call still produces correct results.
+		updatedSQL, args, err = replacer.RunSafely(ctx, "?", sql, []any{200})
+		require.NoError(t, err)
+		require.Equal(t, []any{"no_op", 200}, args)
+		require.Equal(t, `
+			SELECT count(*)
+			FROM test_schema.river_job
+			WHERE kind = ?
+			LIMIT ?;
+		`, updatedSQL)
+	})
+
+	t.Run("UnnumberedPlaceholders_CachedWithoutNamedArgs", func(t *testing.T) {
+		t.Parallel()
+
+		replacer := &Replacer{UnnumberedPlaceholders: true}
+
+		ctx := WithReplacements(ctx, map[string]Replacement{
+			"schema": {Stable: true, Value: "test_schema."},
+		}, nil)
+
+		sql := `
+			SELECT count(*)
+			FROM /* TEMPLATE: schema */river_job
+			LIMIT ?;
+		`
+
+		// Without named args, caching works normally in unnumbered mode.
+		updatedSQL, args, err := replacer.RunSafely(ctx, "?", sql, []any{100})
+		require.NoError(t, err)
+		require.Equal(t, []any{100}, args)
+		require.Equal(t, `
+			SELECT count(*)
+			FROM test_schema.river_job
+			LIMIT ?;
+		`, updatedSQL)
+
+		require.Len(t, replacer.cache, 1)
+
+		// Second call uses cache.
+		updatedSQL, args, err = replacer.RunSafely(ctx, "?", sql, []any{200})
+		require.NoError(t, err)
+		require.Equal(t, []any{200}, args)
+		require.Equal(t, `
+			SELECT count(*)
+			FROM test_schema.river_job
+			LIMIT ?;
 		`, updatedSQL)
 	})
 

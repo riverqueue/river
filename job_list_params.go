@@ -180,6 +180,8 @@ type JobListParams struct {
 	where          []dblist.WherePredicate
 }
 
+const jobListMetadataPredicatePostgres = `metadata @> @metadata_fragment::jsonb`
+
 // NewJobListParams creates a new JobListParams to return available jobs sorted
 // by time in ascending order, returning 100 jobs at most.
 func NewJobListParams() *JobListParams {
@@ -278,9 +280,9 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 		} else {
 			namedArgs["cursor_time"] = p.after.time
 			if sortOrder == dblist.SortOrderAsc {
-				p.where = append(p.where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`("%s" > @cursor_time OR ("%s" = @cursor_time AND "id" > @after_id))`, timeField, timeField)})
+				p.where = append(p.where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`(%s > @cursor_time OR (%s = @cursor_time AND id > @after_id))`, timeField, timeField)})
 			} else {
-				p.where = append(p.where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`("%s" < @cursor_time OR ("%s" = @cursor_time AND "id" < @after_id))`, timeField, timeField)})
+				p.where = append(p.where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`(%s < @cursor_time OR (%s = @cursor_time AND id < @after_id))`, timeField, timeField)})
 			}
 		}
 	}
@@ -296,6 +298,16 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 		States:     p.states,
 		Where:      p.where,
 	}, nil
+}
+
+func (p *JobListParams) withMetadataPredicateSQL(predicateSQL string) *JobListParams {
+	paramsCopy := p.copy()
+	for i := range paramsCopy.where {
+		if paramsCopy.where[i].SQL == jobListMetadataPredicatePostgres {
+			paramsCopy.where[i].SQL = predicateSQL
+		}
+	}
+	return paramsCopy
 }
 
 // After returns an updated filter set that will only return jobs
@@ -359,7 +371,7 @@ func (p *JobListParams) Metadata(json string) *JobListParams {
 	paramsCopy.metadataCalled = true
 	paramsCopy.where = append(paramsCopy.where, dblist.WherePredicate{
 		NamedArgs: map[string]any{"metadata_fragment": json},
-		SQL:       `metadata @> @metadata_fragment::jsonb`,
+		SQL:       jobListMetadataPredicatePostgres,
 	})
 	return paramsCopy
 }

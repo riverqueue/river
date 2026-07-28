@@ -77,6 +77,8 @@ jobs:
           # Run the latest Go version against all supported Postgres versions:
           - go-version: "1.26"
             postgres-version: 18
+            # MySQL tests are opt-in and only need to run in one matrix job.
+            mysql-enabled: true
           - go-version: "1.26"
             postgres-version: 17
           - go-version: "1.26"
@@ -91,6 +93,7 @@ jobs:
           # latest Postgres version:
           - go-version: "1.25"
             postgres-version: 18
+
       fail-fast: false
     timeout-minutes: 5
 
@@ -128,7 +131,17 @@ jobs:
       - name: Set up database
         run: psql -c "CREATE DATABASE river_test" $ADMIN_DATABASE_URL
 
+      # MySQL is pre-installed on GitHub-hosted Ubuntu runners. Start the
+      # service and configure passwordless root access for MySQL-enabled runs.
+      - name: Start MySQL
+        if: matrix.mysql-enabled
+        run: |
+          sudo systemctl start mysql
+          mysql -u root -proot -e "ALTER USER 'root'@'localhost' IDENTIFIED BY ''; FLUSH PRIVILEGES;"
+
       - name: Test
+        env:
+          RIVER_MYSQL_TESTS_ENABLED: ${{ matrix.mysql-enabled && 'true' || '' }}
         run: make test/race
 
   cli:

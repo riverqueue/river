@@ -498,6 +498,7 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 		job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("kind2")})
 
 		// Not returned.
+		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("KIND1")})
 		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("kind3")})
 
 		jobs, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{

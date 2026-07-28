@@ -80,6 +80,25 @@ func exerciseDriverPool[TTx any](ctx context.Context, t *testing.T,
 		})
 	})
 
+	t.Run("SafeIdentifier", func(t *testing.T) {
+		t.Parallel()
+
+		_, driver := executorWithTx(ctx, t)
+
+		switch driver.DatabaseName() {
+		case riverdriver.DatabaseNamePostgres, riverdriver.DatabaseNameSQLite:
+			require.Equal(t, `"my_schema"`, driver.SafeIdentifier("my_schema"))
+			require.Equal(t, `"has space"`, driver.SafeIdentifier("has space"))
+			require.Equal(t, `"has""quote"`, driver.SafeIdentifier(`has"quote`))
+		case riverdriver.DatabaseNameMySQL:
+			require.Equal(t, "`my_schema`", driver.SafeIdentifier("my_schema"))
+			require.Equal(t, "`has space`", driver.SafeIdentifier("has space"))
+			require.Equal(t, "`has``backtick`", driver.SafeIdentifier("has`backtick"))
+		default:
+			require.FailNow(t, "Don't know how to check SafeIdentifier for: "+driver.DatabaseName())
+		}
+	})
+
 	t.Run("SupportsListenNotify", func(t *testing.T) {
 		t.Parallel()
 
@@ -89,6 +108,8 @@ func exerciseDriverPool[TTx any](ctx context.Context, t *testing.T,
 		case riverdriver.DatabaseNamePostgres:
 			require.True(t, driver.SupportsListenNotify())
 		case riverdriver.DatabaseNameSQLite:
+			require.True(t, driver.SupportsListenNotify())
+		case riverdriver.DatabaseNameMySQL:
 			require.True(t, driver.SupportsListenNotify())
 		default:
 			require.FailNow(t, "Don't know how to check SupportsListenNotify for: "+driver.DatabaseName())
@@ -107,6 +128,7 @@ func requireMissingRelation(t *testing.T, err error, schema, missingRelation str
 		// lib/pq: pq: relation %s.%s does not exist
 		// SQLite: no such table: %s.%s
 		// Turso: turso: error: Invalid argument supplied: no such database: %s
-		require.Regexp(t, fmt.Sprintf(`(pq: relation "%s\.%s" does not exist|no such table: %s\.%s|no such database: %s)`, schema, missingRelation, schema, missingRelation, schema), err.Error())
+		// MySQL: Unknown database '%s'
+		require.Regexp(t, fmt.Sprintf(`(pq: relation "%s\.%s" does not exist|no such table: %s\.%s|no such database: %s|Unknown database '%s')`, schema, missingRelation, schema, missingRelation, schema, schema), err.Error())
 	}
 }
