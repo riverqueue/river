@@ -383,7 +383,7 @@ func (e *JobExecutor) reportResult(ctx context.Context, jobRow *rivertype.JobRow
 			slog.String("job_kind", jobRow.Kind),
 			slog.Duration("duration", snoozeErr.Duration),
 		)
-		nextAttemptScheduledAt := time.Now().Add(snoozeErr.Duration)
+		nextAttemptScheduledAt := e.Time.Now().Add(snoozeErr.Duration)
 
 		snoozesValue := gjson.GetBytes(jobRow.Metadata, "snoozes").Int()
 		if res.MetadataUpdates == nil {

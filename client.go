@@ -25,6 +25,7 @@ import (
 	"github.com/riverqueue/river/internal/notifylimiter"
 	"github.com/riverqueue/river/internal/pluginconfig"
 	"github.com/riverqueue/river/internal/pluginlookup"
+	"github.com/riverqueue/river/internal/retrypolicy"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverplugin"
 	"github.com/riverqueue/river/internal/workunit"
@@ -822,6 +823,9 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		} else {
 			archetype.Time = &baseservice.TimeGeneratorWithStubWrapper{TimeGenerator: config.Test.Time}
 		}
+	}
+	if _, ok := config.RetryPolicy.(*DefaultClientRetryPolicy); ok {
+		config.RetryPolicy = retrypolicy.NewDefault(archetype.Time)
 	}
 
 	var (

@@ -13,6 +13,7 @@ import (
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/pluginconfig"
 	"github.com/riverqueue/river/internal/pluginlookup"
+	"github.com/riverqueue/river/internal/retrypolicy"
 	"github.com/riverqueue/river/internal/riverplugin"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
@@ -155,6 +156,10 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 	pluginlookup.InitBaseServices(archetype, hooks)
 	pluginlookup.InitBaseServices(archetype, middleware)
 	pluginlookup.InitBaseServices(archetype, plugins)
+	clientRetryPolicy := w.config.RetryPolicy
+	if _, ok := clientRetryPolicy.(*river.DefaultClientRetryPolicy); ok {
+		clientRetryPolicy = retrypolicy.NewDefault(archetype.Time)
+	}
 
 	updatedJobRow, err := exec.JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
 		ID:                  job.ID,
@@ -190,9 +195,9 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 	executor := baseservice.Init(archetype, &jobexecutor.JobExecutor{
 		CancelFunc:               jobCancel,
 		ClientJobTimeout:         w.config.JobTimeout,
-		ClientRetryPolicy:        w.config.RetryPolicy,
+		ClientRetryPolicy:        clientRetryPolicy,
 		Completer:                completer,
-		DefaultClientRetryPolicy: &river.DefaultClientRetryPolicy{},
+		DefaultClientRetryPolicy: retrypolicy.NewDefault(archetype.Time),
 		ErrorHandler: &errorHandlerWrapper{
 			HandleErrorFunc: func(ctx context.Context, job *rivertype.JobRow, err error) *jobexecutor.ErrorHandlerResult {
 				resultErr = err

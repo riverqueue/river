@@ -28,6 +28,7 @@ import (
 	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/pluginlookup"
+	"github.com/riverqueue/river/internal/retrypolicy"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/retrypolicytest"
@@ -994,6 +995,75 @@ func Test_Client_Common(t *testing.T) {
 		require.WithinDuration(t, time.Now(), *updatedJob.FinalizedAt, 2*time.Second)
 	})
 
+	t.Run("JobRetryFallbackUsesConfiguredTime", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		configuredNow := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Microsecond)
+		timeStub := &riversharedtest.TimeStub{}
+		timeStub.StubNow(configuredNow)
+		config.RetryPolicy = &retrypolicytest.RetryPolicyInvalid{}
+		config.Test.Time = timeStub
+		client := newTestClient(t, bundle.dbPool, config)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			return errors.New("retry using configured fallback time")
+		}))
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobFailed, event.Kind)
+		require.Equal(t, rivertype.JobStateRetryable, event.Job.State)
+		require.WithinDuration(t, configuredNow.Add(time.Second), event.Job.ScheduledAt, 150*time.Millisecond)
+
+		updatedJob, err := client.JobGet(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.WithinDuration(t, configuredNow.Add(time.Second), updatedJob.ScheduledAt, 150*time.Millisecond)
+	})
+
+	t.Run("JobRetryUsesConfiguredTime", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		configuredNow := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Microsecond)
+		timeStub := &riversharedtest.TimeStub{}
+		timeStub.StubNow(configuredNow)
+		config.Test.Time = timeStub
+		client := newTestClient(t, bundle.dbPool, config)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			return errors.New("retry using configured time")
+		}))
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobFailed, event.Kind)
+		require.Equal(t, rivertype.JobStateRetryable, event.Job.State)
+		require.WithinDuration(t, configuredNow.Add(time.Second), event.Job.ScheduledAt, 150*time.Millisecond)
+
+		updatedJob, err := client.JobGet(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.WithinDuration(t, configuredNow.Add(time.Second), updatedJob.ScheduledAt, 150*time.Millisecond)
+	})
+
 	t.Run("JobSnoozeErrorReturned", func(t *testing.T) {
 		t.Parallel()
 
@@ -1023,6 +1093,39 @@ func Test_Client_Common(t *testing.T) {
 		require.Equal(t, 0, updatedJob.Attempt)
 		require.Equal(t, rivertype.JobStateScheduled, updatedJob.State)
 		require.WithinDuration(t, time.Now().Add(15*time.Minute), updatedJob.ScheduledAt, 2*time.Second)
+	})
+
+	t.Run("JobSnoozeUsesConfiguredTime", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		configuredNow := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Microsecond)
+		timeStub := &riversharedtest.TimeStub{}
+		timeStub.StubNow(configuredNow)
+		config.Test.Time = timeStub
+		client := newTestClient(t, bundle.dbPool, config)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			return JobSnooze(15 * time.Minute)
+		}))
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobSnoozed, event.Kind)
+		require.Equal(t, configuredNow.Add(15*time.Minute), event.Job.ScheduledAt)
+
+		updatedJob, err := client.JobGet(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, configuredNow.Add(15*time.Minute), updatedJob.ScheduledAt)
 	})
 
 	t.Run("JobSnoozeWithZeroDurationSetsAvailableImmediately", func(t *testing.T) {
@@ -8218,7 +8321,7 @@ func Test_NewClient_Defaults(t *testing.T) {
 	require.NotZero(t, client.baseService.Logger)
 	require.Equal(t, MaxAttemptsDefault, client.config.MaxAttempts)
 	require.Equal(t, maintenance.ReindexerTimeoutDefault, client.config.ReindexerTimeout)
-	require.IsType(t, &DefaultClientRetryPolicy{}, client.config.RetryPolicy)
+	require.IsType(t, &retrypolicy.Default{}, client.config.RetryPolicy)
 	require.False(t, client.config.SkipUnknownJobCheck)
 	require.IsType(t, nil, client.config.Test.Time)
 	require.IsType(t, &baseservice.UnStubbableTimeGenerator{}, client.baseService.Time)
@@ -8240,11 +8343,13 @@ func Test_NewClient_Overrides(t *testing.T) {
 		return JobStuckHandlerResult{}
 	})
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	timeStub := &riversharedtest.TimeStub{}
+	timeStub.StubNow(time.Now().UTC())
 
 	workers := NewWorkers()
 	AddWorker(workers, &noOpWorker{})
 
-	retryPolicy := &DefaultClientRetryPolicy{}
+	retryPolicy := &retrypolicytest.RetryPolicyNoJitter{}
 
 	type noOpHook struct {
 		HookDefaults
@@ -8280,6 +8385,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 		RetryPolicy:                 retryPolicy,
 		Schema:                      schema,
 		SkipUnknownJobCheck:         true,
+		Test:                        TestConfig{Time: timeStub},
 		TestOnly:                    true, // disables staggered start in maintenance services
 		Workers:                     workers,
 		WorkerMiddleware:            []rivertype.WorkerMiddleware{&noOpWorkerMiddleware{}},
@@ -8316,6 +8422,8 @@ func Test_NewClient_Overrides(t *testing.T) {
 	require.Equal(t, 5, client.config.MaxAttempts)
 	require.Equal(t, 125*time.Millisecond, client.config.ReindexerTimeout)
 	require.Equal(t, retryPolicy, client.config.RetryPolicy)
+	require.Equal(t, logger, retryPolicy.Logger)
+	require.Same(t, timeStub, retryPolicy.Time)
 	require.Equal(t, schema, client.config.Schema)
 	require.True(t, client.config.SkipUnknownJobCheck)
 	require.Len(t, client.config.WorkerMiddleware, 1)
