@@ -13,28 +13,13 @@ import (
 func TestEmptyPluginLookup(t *testing.T) {
 	t.Parallel()
 
-	type testBundle struct{}
+	pluginLookup := NewPluginLookup(nil)
 
-	setup := func(t *testing.T) (*emptyPluginLookup, *testBundle) {
-		t.Helper()
-
-		lookup, isEmptyLookup := NewPluginLookup(nil).(*emptyPluginLookup)
-		require.True(t, isEmptyLookup)
-
-		return lookup, &testBundle{}
-	}
-
-	t.Run("AlwaysReturnsNil", func(t *testing.T) {
-		t.Parallel()
-
-		pluginLookup, _ := setup(t)
-
-		require.Nil(t, pluginLookup.ByKind(PluginKindHookInsertBegin))
-		require.Nil(t, pluginLookup.ByKind(PluginKindHookMetricEmit))
-		require.Nil(t, pluginLookup.ByKind(PluginKindHookWorkBegin))
-		require.Nil(t, pluginLookup.ByKind(PluginKindMiddlewareJobInsert))
-		require.Nil(t, pluginLookup.ByKind(PluginKindMiddlewareWorker))
-	})
+	require.Nil(t, pluginLookup.ByKind(PluginKindHookInsertBegin))
+	require.Nil(t, pluginLookup.ByKind(PluginKindHookMetricEmit))
+	require.Nil(t, pluginLookup.ByKind(PluginKindHookWorkBegin))
+	require.Nil(t, pluginLookup.ByKind(PluginKindMiddlewareJobInsert))
+	require.Nil(t, pluginLookup.ByKind(PluginKindMiddlewareWorker))
 }
 
 func TestJobPluginLookup(t *testing.T) {
@@ -45,7 +30,7 @@ func TestJobPluginLookup(t *testing.T) {
 	setup := func(t *testing.T) (*JobPluginLookup, *testBundle) { //nolint:unparam
 		t.Helper()
 
-		return NewJobPluginLookup(), &testBundle{}
+		return NewJobPluginLookup(nil), &testBundle{}
 	}
 
 	t.Run("LooksUpHooks", func(t *testing.T) {
@@ -87,6 +72,35 @@ func TestJobPluginLookup(t *testing.T) {
 		}, jobPluginLookup.ByJobArgs(&jobArgsWithCustomHooks{}).ByKind(PluginKindHookWorkEnd))
 	})
 
+	t.Run("LooksUpPlugins", func(t *testing.T) {
+		t.Parallel()
+
+		jobPluginLookup, _ := setup(t)
+		args := &jobArgsWithCustomHooksAndPlugins{}
+
+		require.Equal(t, []any{
+			&testHookMiddlewarePlugin{},
+			&testHookInsertBegin{},
+		}, jobPluginLookup.ByJobArgs(args).ByKind(PluginKindHookInsertBegin))
+		require.Equal(t, []any{
+			&testHookWorkEnd{},
+		}, jobPluginLookup.ByJobArgs(args).ByKind(PluginKindHookWorkEnd))
+		require.Equal(t, []any{
+			&testHookMiddlewarePlugin{},
+			&testMiddlewareJobInsertAndWorker{},
+		}, jobPluginLookup.ByJobArgs(args).ByKind(PluginKindMiddlewareJobInsert))
+		require.Equal(t, []any{
+			&testMiddlewareJobInsertAndWorker{},
+		}, jobPluginLookup.ByJobArgs(args).ByKind(PluginKindMiddlewareWorker))
+		require.Equal(t, []rivertype.Hook{
+			&testHookMiddlewarePlugin{},
+			&testHookWorkEnd{},
+			&testHookInsertBegin{},
+		}, jobPluginLookup.ByJobArgs(args).Hooks())
+
+		require.Len(t, jobPluginLookup.pluginLookupByKind, 1)
+	})
+
 	t.Run("Stress", func(t *testing.T) {
 		t.Parallel()
 
@@ -118,12 +132,12 @@ func TestNewPluginLookupFromConfig(t *testing.T) {
 	middlewarePlugin := &testHookMiddlewarePlugin{}
 	plugin := &testHookMiddlewarePlugin{}
 
-	lookup, isPluginLookup := NewPluginLookupFromConfig(
+	lookup := NewPluginLookupFromConfig(
+		nil,
 		[]rivertype.Hook{hookPlugin},
 		[]rivertype.Middleware{middlewarePlugin},
 		[]rivertype.Plugin{plugin},
-	).(*pluginLookup)
-	require.True(t, isPluginLookup)
+	)
 
 	require.Equal(t, []any{
 		plugin,
@@ -140,10 +154,10 @@ func TestPluginLookup(t *testing.T) {
 
 	type testBundle struct{}
 
-	setup := func(t *testing.T) (*pluginLookup, *testBundle) { //nolint:unparam
+	setup := func(t *testing.T) (*PluginLookup, *testBundle) { //nolint:unparam
 		t.Helper()
 
-		lookup, isPluginLookup := NewPluginLookup([]any{
+		lookup := NewPluginLookup([]any{
 			&testHookInsertAndWorkBegin{},
 			&testHookInsertBegin{},
 			&testHookMetricEmit{},
@@ -152,8 +166,7 @@ func TestPluginLookup(t *testing.T) {
 			&testMiddlewareJobInsertAndWorker{},
 			&testMiddlewareJobInsert{},
 			&testMiddlewareWorker{},
-		}).(*pluginLookup)
-		require.True(t, isPluginLookup)
+		})
 
 		return lookup, &testBundle{}
 	}
@@ -244,12 +257,12 @@ func TestPluginLookup(t *testing.T) {
 		legacyHook := &testLegacyHookInsertBegin{}
 		legacyMiddleware := &testLegacyMiddlewareJobInsert{}
 
-		lookup, isPluginLookup := NewPluginLookupFromConfig(
+		lookup := NewPluginLookupFromConfig(
+			nil,
 			[]rivertype.Hook{legacyHook},
 			[]rivertype.Middleware{legacyMiddleware},
 			nil,
-		).(*pluginLookup)
-		require.True(t, isPluginLookup)
+		)
 
 		hookPlugins := lookup.ByKind(PluginKindHookInsertBegin)
 		require.Len(t, hookPlugins, 1)
@@ -304,6 +317,32 @@ func (jobArgsWithCustomHooks) Hooks() []rivertype.Hook {
 }
 
 func (jobArgsWithCustomHooks) Kind() string { return "with_custom_hooks" }
+
+//
+// jobArgsWithCustomHooksAndPlugins
+//
+
+var (
+	_ rivertype.JobArgs  = &jobArgsWithCustomHooksAndPlugins{}
+	_ jobArgsWithHooks   = &jobArgsWithCustomHooksAndPlugins{}
+	_ jobArgsWithPlugins = &jobArgsWithCustomHooksAndPlugins{}
+)
+
+type jobArgsWithCustomHooksAndPlugins struct{}
+
+func (jobArgsWithCustomHooksAndPlugins) Hooks() []rivertype.Hook {
+	return []rivertype.Hook{&testHookInsertBegin{}}
+}
+
+func (jobArgsWithCustomHooksAndPlugins) Kind() string { return "with_custom_hooks_and_plugins" }
+
+func (jobArgsWithCustomHooksAndPlugins) Plugins() []rivertype.Plugin {
+	return []rivertype.Plugin{
+		&testHookMiddlewarePlugin{},
+		&testMiddlewareJobInsertAndWorker{},
+		&testHookWorkEnd{},
+	}
+}
 
 //
 // testHookInsertAndWorkBegin

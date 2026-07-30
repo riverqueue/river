@@ -84,7 +84,7 @@ type producerConfig struct {
 	FetchPollInterval time.Duration
 
 	PluginLookupByJob  *pluginlookup.JobPluginLookup
-	PluginLookupGlobal pluginlookup.PluginLookupInterface
+	PluginLookupGlobal *pluginlookup.PluginLookup
 	JobStuckHandler    JobStuckHandler
 	JobStuckCount      *atomic.Int32
 	JobStuckThreshold  time.Duration

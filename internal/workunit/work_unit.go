@@ -19,7 +19,7 @@ type WorkUnit interface {
 	// PluginLookup procures the a hook lookup bundle for the wrapped job using
 	// the given job hook lookup bundle. Hooks are looked up by job args and
 	// otherwise not available to jobexecutor.
-	PluginLookup(lookup *pluginlookup.JobPluginLookup) pluginlookup.PluginLookupInterface
+	PluginLookup(lookup *pluginlookup.JobPluginLookup) *pluginlookup.PluginLookup
 
 	Middleware() []rivertype.WorkerMiddleware
 	NextRetry() time.Time

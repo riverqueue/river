@@ -112,7 +112,7 @@ type JobExecutor struct {
 	DefaultClientRetryPolicy ClientRetryPolicy
 	ErrorHandler             ErrorHandler
 	PluginLookupByJob        *pluginlookup.JobPluginLookup
-	PluginLookupGlobal       pluginlookup.PluginLookupInterface
+	PluginLookupGlobal       *pluginlookup.PluginLookup
 	JobRow                   *rivertype.JobRow
 	ProducerCallbacks        struct {
 		JobDone func(jobRow *rivertype.JobRow)
@@ -217,12 +217,13 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		)
 		return &jobExecutorResult{Err: &rivertype.UnknownJobKindError{Kind: e.JobRow.Kind}, MetadataUpdates: metadataUpdates}
 	}
+	pluginLookupByJob := e.WorkUnit.PluginLookup(e.PluginLookupByJob)
 
 	doInner := execution.Func(func(ctx context.Context) error {
 		{
 			for _, hook := range append(
 				e.PluginLookupGlobal.ByKind(pluginlookup.PluginKindHookWorkBegin),
-				e.WorkUnit.PluginLookup(e.PluginLookupByJob).ByKind(pluginlookup.PluginKindHookWorkBegin)...,
+				pluginLookupByJob.ByKind(pluginlookup.PluginKindHookWorkBegin)...,
 			) {
 				if err := hook.(rivertype.HookWorkBegin).WorkBegin(ctx, e.JobRow); err != nil { //nolint:forcetypeassert
 					return err
@@ -251,7 +252,7 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		{
 			for _, hook := range append(
 				e.PluginLookupGlobal.ByKind(pluginlookup.PluginKindHookWorkEnd),
-				e.WorkUnit.PluginLookup(e.PluginLookupByJob).ByKind(pluginlookup.PluginKindHookWorkEnd)...,
+				pluginLookupByJob.ByKind(pluginlookup.PluginKindHookWorkEnd)...,
 			) {
 				err = hook.(rivertype.HookWorkEnd).WorkEnd(ctx, e.JobRow, err) //nolint:forcetypeassert
 			}
@@ -260,13 +261,19 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		return err
 	})
 
-	globalMiddleware := make([]rivertype.Middleware, 0, len(e.PluginLookupGlobal.ByKind(pluginlookup.PluginKindMiddlewareWorker)))
+	pluginMiddleware := make([]rivertype.Middleware, 0,
+		len(e.PluginLookupGlobal.ByKind(pluginlookup.PluginKindMiddlewareWorker))+
+			len(pluginLookupByJob.ByKind(pluginlookup.PluginKindMiddlewareWorker)),
+	)
 	for _, plugin := range e.PluginLookupGlobal.ByKind(pluginlookup.PluginKindMiddlewareWorker) {
-		globalMiddleware = append(globalMiddleware, plugin.(rivertype.Middleware)) //nolint:forcetypeassert
+		pluginMiddleware = append(pluginMiddleware, plugin.(rivertype.Middleware)) //nolint:forcetypeassert
+	}
+	for _, plugin := range pluginLookupByJob.ByKind(pluginlookup.PluginKindMiddlewareWorker) {
+		pluginMiddleware = append(pluginMiddleware, plugin.(rivertype.Middleware)) //nolint:forcetypeassert
 	}
 
 	executeFunc := execution.MiddlewareChain(
-		globalMiddleware,
+		pluginMiddleware,
 		e.WorkUnit.Middleware(),
 		doInner,
 		e.JobRow,

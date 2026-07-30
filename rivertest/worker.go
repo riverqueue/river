@@ -153,9 +153,6 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 		middleware = pluginconfig.CombinedMiddleware(w.config.Middleware, w.config.JobInsertMiddleware, w.config.WorkerMiddleware) //nolint:staticcheck
 		plugins    = append(riverplugin.DefaultPlugins(), w.config.Plugins...)
 	)
-	pluginlookup.InitBaseServices(archetype, hooks)
-	pluginlookup.InitBaseServices(archetype, middleware)
-	pluginlookup.InitBaseServices(archetype, plugins)
 	clientRetryPolicy := w.config.RetryPolicy
 	if _, ok := clientRetryPolicy.(*river.DefaultClientRetryPolicy); ok {
 		clientRetryPolicy = retrypolicy.NewDefault(archetype.Time)
@@ -208,8 +205,8 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 				return nil
 			},
 		},
-		PluginLookupByJob:  pluginlookup.NewJobPluginLookup(),
-		PluginLookupGlobal: pluginlookup.NewPluginLookupFromConfig(hooks, middleware, plugins),
+		PluginLookupByJob:  pluginlookup.NewJobPluginLookup(archetype),
+		PluginLookupGlobal: pluginlookup.NewPluginLookupFromConfig(archetype, hooks, middleware, plugins),
 		JobRow:             job,
 		ProducerCallbacks: struct {
 			JobDone func(jobRow *rivertype.JobRow)
