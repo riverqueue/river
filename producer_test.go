@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/jobcompleter"
-	"github.com/riverqueue/river/internal/maintenance"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/rivercommon"
@@ -33,6 +33,27 @@ import (
 
 const testClientID = "test-client-id"
 
+// beforeJobGetAvailablePilot calls a hook before delegating JobGetAvailable to
+// the wrapped pilot.
+type beforeJobGetAvailablePilot struct {
+	riverpilot.Pilot
+
+	beforeJobGetAvailableFunc func(params *riverdriver.JobGetAvailableParams)
+}
+
+func (p *beforeJobGetAvailablePilot) JobGetAvailable(
+	ctx context.Context,
+	exec riverdriver.Executor,
+	state riverpilot.ProducerState,
+	params *riverdriver.JobGetAvailableParams,
+) ([]*rivertype.JobRow, error) {
+	if p.beforeJobGetAvailableFunc != nil {
+		p.beforeJobGetAvailableFunc(params)
+	}
+
+	return p.Pilot.JobGetAvailable(ctx, exec, state, params)
+}
+
 type countingPluginLookup struct {
 	pluginlookup.PluginLookupInterface
 
@@ -42,132 +63,6 @@ type countingPluginLookup struct {
 func (l *countingPluginLookup) ByKind(kind pluginlookup.PluginKind) []any {
 	l.count++
 	return l.PluginLookupInterface.ByKind(kind)
-}
-
-func Test_Producer_CanSafelyCompleteJobsWhileFetchingNewOnes(t *testing.T) {
-	// We have encountered previous data races with the list of active jobs on
-	// Producer because we need to know the count of active jobs in order to
-	// determine how many we can fetch for the next batch, while we're managing
-	// the map of active jobs in a different goroutine.
-	//
-	// This test attempts to exercise that race condition so that the race
-	// detector can tell us if we're protected against it.
-	t.Parallel()
-
-	ctx := context.Background()
-	require := require.New(t)
-	dbPool := riversharedtest.DBPool(ctx, t)
-
-	const maxJobCount = 10000
-	// This doesn't strictly mean that there are no more jobs left to process,
-	// merely that the final job we inserted is now being processed, which is
-	// close enough for our purposes here.
-	lastJobRun := make(chan struct{})
-
-	archetype := riversharedtest.BaseServiceArchetype(t)
-
-	var (
-		driver   = riverpgxv5.New(dbPool)
-		schema   = riverdbtest.TestSchema(ctx, t, driver, nil)
-		config   = newTestConfig(t, schema)
-		exec     = driver.GetExecutor()
-		listener = driver.GetListener(&riverdriver.GetListenenerParams{Schema: schema})
-		pilot    = &riverpilot.StandardPilot{}
-	)
-
-	subscribeChan := make(chan []jobcompleter.CompleterJobUpdated, 100)
-	t.Cleanup(riverinternaltest.DiscardContinuously(subscribeChan))
-
-	completer := jobcompleter.NewInlineCompleter(archetype, schema, exec, &riverpilot.StandardPilot{}, subscribeChan)
-	t.Cleanup(completer.Stop)
-
-	type WithJobNumArgs struct {
-		testutil.JobArgsReflectKind[WithJobNumArgs]
-
-		JobNum int `json:"job_num"`
-	}
-
-	workers := NewWorkers()
-	AddWorker(workers, WorkFunc(func(ctx context.Context, job *Job[WithJobNumArgs]) error {
-		var jobArgs WithJobNumArgs
-		require.NoError(json.Unmarshal(job.EncodedArgs, &jobArgs))
-
-		if jobArgs.JobNum == maxJobCount-1 {
-			select {
-			case <-ctx.Done():
-			case lastJobRun <- struct{}{}:
-			}
-		}
-		return nil
-	}))
-
-	notifier := notifier.New(archetype, listener)
-
-	producer := newProducer(archetype, exec, pilot, &producerConfig{
-		ClientID:     testClientID,
-		Completer:    completer,
-		ErrorHandler: newTestErrorHandler(),
-		// Fetch constantly to more aggressively trigger the potential data race:
-		FetchCooldown:                time.Millisecond,
-		FetchPollInterval:            time.Millisecond,
-		PluginLookupByJob:            pluginlookup.NewJobPluginLookup(),
-		PluginLookupGlobal:           pluginlookup.NewPluginLookup(nil),
-		JobTimeout:                   JobTimeoutDefault,
-		MaxWorkers:                   1000,
-		Notifier:                     notifier,
-		Queue:                        rivercommon.QueueDefault,
-		QueuePollInterval:            queuePollIntervalDefault,
-		QueueReportInterval:          queueReportIntervalDefault,
-		RetryPolicy:                  &DefaultClientRetryPolicy{},
-		SchedulerInterval:            maintenance.JobSchedulerIntervalDefault,
-		Schema:                       schema,
-		StaleProducerRetentionPeriod: time.Minute,
-		Workers:                      workers,
-	})
-
-	params := make([]*riverdriver.JobInsertFastParams, maxJobCount)
-	for i := range params {
-		insertParams, err := insertParamsFromConfigArgsAndOptions(archetype, config, WithJobNumArgs{JobNum: i}, nil)
-		require.NoError(err)
-
-		params[i] = (*riverdriver.JobInsertFastParams)(insertParams)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	t.Cleanup(cancel)
-
-	go func() {
-		// The producer should never exceed its MaxWorkerCount. If it does, panic so
-		// we can get a trace.
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			numActiveJobs := producer.numJobsActive.Load()
-			if int(numActiveJobs) > producer.config.MaxWorkers {
-				panic(fmt.Sprintf("producer exceeded MaxWorkerCount=%d, actual count=%d", producer.config.MaxWorkers, numActiveJobs))
-			}
-		}
-	}()
-
-	_, err := exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
-		Jobs:   params,
-		Schema: producer.config.Schema,
-	})
-	require.NoError(err)
-
-	require.NoError(producer.StartWorkContext(ctx, ctx))
-	t.Cleanup(producer.Stop)
-
-	select {
-	case <-lastJobRun:
-		t.Logf("Last job reported in; cancelling context")
-		cancel()
-	case <-ctx.Done():
-		t.Error("timed out waiting for last job to run")
-	}
 }
 
 func TestProducer_MetricEmitHook(t *testing.T) {
@@ -606,6 +501,174 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 
 		update := riversharedtest.WaitOrTimeout(t, bundle.jobUpdates)
 		require.Equal(t, rivertype.JobStateRetryable, update.Job.State)
+	})
+
+	t.Run("CompletesJobWhileFetchingNewOnes", func(t *testing.T) {
+		t.Parallel()
+
+		// Exercise the case where a job finishes while the producer is fetching
+		// more jobs. One of two worker slots is occupied, so the next fetch
+		// computes a limit of one before the test holds it pending.
+		// Completing the active job must be processed without waiting for the
+		// fetch, reopening both slots before the fetched job occupies one.
+		// A third queued job verifies that the producer continues fetching and
+		// runs the remaining work.
+		//
+		// The test also reads capacity throughout these active-job changes,
+		// exercising the shared-state boundary so the race detector can catch
+		// unsynchronized access.
+
+		producer, bundle := setup(t)
+		producer.config.FetchCooldown = time.Millisecond
+		producer.config.FetchPollInterval = time.Hour
+		producer.config.MaxWorkers = 2
+
+		const numJobs = 3
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+
+			JobIndex int `json:"job_index"`
+		}
+
+		capacityReadCtx, stopCapacityRead := context.WithCancel(ctx)
+
+		var (
+			capacityChanged    = make(chan int)
+			capacityReadDone   = make(chan struct{})
+			fetchCount         atomic.Int32
+			jobStarted         = make(chan int, numJobs)
+			releaseJob         = make([]chan struct{}, numJobs)
+			secondFetchStarted = make(chan int, 1)
+			thirdFetchStarted  = make(chan int, 1)
+			unblockSecondFetch = make(chan struct{}, 1)
+			unblockThirdFetch  = make(chan struct{}, 1)
+		)
+
+		for jobIndex := range numJobs {
+			releaseJob[jobIndex] = make(chan struct{}, 1)
+		}
+
+		AddWorker(bundle.workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			jobIndex := job.Args.JobIndex
+			if jobIndex < 0 || jobIndex >= numJobs {
+				return fmt.Errorf("unexpected job index: %d", jobIndex)
+			}
+
+			jobStarted <- jobIndex
+			<-releaseJob[jobIndex]
+			return nil
+		}))
+
+		producer.pilot = &beforeJobGetAvailablePilot{
+			Pilot: producer.pilot,
+			beforeJobGetAvailableFunc: func(params *riverdriver.JobGetAvailableParams) {
+				switch fetchCount.Add(1) {
+				case 2:
+					secondFetchStarted <- params.MaxToLock
+					<-unblockSecondFetch
+				case 3:
+					thirdFetchStarted <- params.MaxToLock
+					<-unblockThirdFetch
+				}
+			},
+		}
+
+		mustInsert(ctx, t, producer, bundle, &JobArgs{JobIndex: 0})
+
+		startProducer(t, ctx, ctx, producer)
+		t.Cleanup(func() {
+			for _, release := range releaseJob {
+				close(release)
+			}
+			close(unblockSecondFetch)
+			close(unblockThirdFetch)
+			stopCapacityRead()
+		})
+
+		require.Equal(t, 0, riversharedtest.WaitOrTimeout(t, jobStarted))
+
+		mustInsert(ctx, t, producer, bundle, &JobArgs{JobIndex: 1})
+		mustInsert(ctx, t, producer, bundle, &JobArgs{JobIndex: 2})
+		producer.TriggerJobFetch()
+
+		secondFetchLimit := riversharedtest.WaitOrTimeout(t, secondFetchStarted)
+		require.Equal(t, 1, secondFetchLimit)
+
+		go func() {
+			defer close(capacityReadDone)
+
+			lastCapacity := -1
+			for {
+				capacity := producer.maxJobsToFetch()
+				if capacity != lastCapacity {
+					select {
+					case capacityChanged <- capacity:
+						lastCapacity = capacity
+					case <-capacityReadCtx.Done():
+						return
+					}
+				}
+
+				select {
+				case <-capacityReadCtx.Done():
+					return
+				default:
+				}
+			}
+		}()
+		t.Cleanup(func() {
+			stopCapacityRead()
+			riversharedtest.WaitOrTimeout(t, capacityReadDone)
+		})
+
+		// Keep reading maxJobsToFetch between transitions so reads can overlap
+		// active-job changes. Wait for each observed transition before causing
+		// the next.
+		waitForCapacity := func(expected int) {
+			t.Helper()
+
+			require.Equal(t, expected, riversharedtest.WaitOrTimeout(t, capacityChanged))
+			require.Equal(t, producer.config.MaxWorkers-expected, int(producer.numJobsActive.Load()))
+			require.Equal(t, expected, producer.maxJobsToFetch())
+		}
+
+		// The second fetch is blocked with a limit of one while job 0 occupies a
+		// slot. Complete job 0 and verify that the producer processes its result,
+		// reopening both slots before the fetch resumes.
+		waitForCapacity(1)
+		releaseJob[0] <- struct{}{}
+
+		waitForCapacity(2)
+		unblockSecondFetch <- struct{}{}
+
+		// The fetch keeps its original limit of one, so it starts only job 1 and
+		// leaves job 2 queued. The third fetch may calculate its limit while job 1
+		// is still active (one slot) or after its completion is processed (two
+		// slots).
+		require.Equal(t, 1, riversharedtest.WaitOrTimeout(t, jobStarted))
+		waitForCapacity(1)
+
+		releaseJob[1] <- struct{}{}
+		waitForCapacity(2)
+
+		thirdFetchLimit := riversharedtest.WaitOrTimeout(t, thirdFetchStarted)
+		require.Contains(t, []int{1, 2}, thirdFetchLimit)
+		unblockThirdFetch <- struct{}{}
+
+		// After job 2 starts, wait for the reader to observe the final transition
+		// back to capacity one. Stop it before releasing job 2, then require all
+		// three jobs to complete.
+		require.Equal(t, 2, riversharedtest.WaitOrTimeout(t, jobStarted))
+		waitForCapacity(1)
+		stopCapacityRead()
+		riversharedtest.WaitOrTimeout(t, capacityReadDone)
+
+		releaseJob[2] <- struct{}{}
+		updates := riversharedtest.WaitOrTimeoutN(t, bundle.jobUpdates, numJobs)
+		for _, update := range updates {
+			require.Equal(t, rivertype.JobStateCompleted, update.Job.State)
+		}
 	})
 
 	t.Run("MaxWorkers", func(t *testing.T) {
