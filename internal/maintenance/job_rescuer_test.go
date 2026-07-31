@@ -50,7 +50,7 @@ type callbackWorkUnit struct {
 	unmarshalErr error
 }
 
-func (w *callbackWorkUnit) PluginLookup(cache *pluginlookup.JobPluginLookup) pluginlookup.PluginLookupInterface {
+func (w *callbackWorkUnit) PluginLookup(cache *pluginlookup.JobPluginLookup) *pluginlookup.PluginLookup {
 	return nil
 }
 func (w *callbackWorkUnit) Middleware() []rivertype.WorkerMiddleware { return nil }

@@ -54,31 +54,19 @@ func (p *beforeJobGetAvailablePilot) JobGetAvailable(
 	return p.Pilot.JobGetAvailable(ctx, exec, state, params)
 }
 
-type countingPluginLookup struct {
-	pluginlookup.PluginLookupInterface
-
-	count int
-}
-
-func (l *countingPluginLookup) ByKind(kind pluginlookup.PluginKind) []any {
-	l.count++
-	return l.PluginLookupInterface.ByKind(kind)
-}
-
 func TestProducer_MetricEmitHook(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 
 	type testBundle struct {
-		archetype    *baseservice.Archetype
-		config       *Config
-		exec         riverdriver.Executor
-		metrics      chan *rivertype.HookMetricEmitParams
-		pluginLookup *countingPluginLookup
-		producer     *producer
-		queue        string
-		schema       string
+		archetype *baseservice.Archetype
+		config    *Config
+		exec      riverdriver.Executor
+		metrics   chan *rivertype.HookMetricEmitParams
+		producer  *producer
+		queue     string
+		schema    string
 	}
 
 	setup := func(t *testing.T) *testBundle {
@@ -104,9 +92,7 @@ func TestProducer_MetricEmitHook(t *testing.T) {
 			paramsCopy := *params
 			metrics <- &paramsCopy
 		})
-		pluginLookup := &countingPluginLookup{
-			PluginLookupInterface: pluginlookup.NewPluginLookup([]any{metricHook}),
-		}
+		pluginLookup := pluginlookup.NewPluginLookup([]any{metricHook})
 
 		producer := newProducer(archetype, exec, pilot, &producerConfig{
 			ClientID:                     testClientID,
@@ -116,7 +102,7 @@ func TestProducer_MetricEmitHook(t *testing.T) {
 			FetchPollInterval:            50 * time.Millisecond,
 			JobTimeout:                   JobTimeoutDefault,
 			MaxWorkers:                   1_000,
-			PluginLookupByJob:            pluginlookup.NewJobPluginLookup(),
+			PluginLookupByJob:            pluginlookup.NewJobPluginLookup(nil),
 			PluginLookupGlobal:           pluginLookup,
 			Queue:                        queueName,
 			QueuePollInterval:            queuePollIntervalDefault,
@@ -129,14 +115,13 @@ func TestProducer_MetricEmitHook(t *testing.T) {
 		})
 
 		return &testBundle{
-			archetype:    archetype,
-			config:       newTestConfig(t, schema),
-			exec:         exec,
-			metrics:      metrics,
-			pluginLookup: pluginLookup,
-			producer:     producer,
-			queue:        queueName,
-			schema:       schema,
+			archetype: archetype,
+			config:    newTestConfig(t, schema),
+			exec:      exec,
+			metrics:   metrics,
+			producer:  producer,
+			queue:     queueName,
+			schema:    schema,
 		}
 	}
 
@@ -168,7 +153,7 @@ func TestProducer_MetricEmitHook(t *testing.T) {
 		fetchResult := riversharedtest.WaitOrTimeout(t, fetchResultCh)
 		require.NoError(t, fetchResult.err)
 		require.Len(t, fetchResult.jobs, 2)
-		require.Equal(t, 1, bundle.pluginLookup.count)
+		require.Len(t, bundle.producer.metricEmitHooks, 1)
 
 		metricsByName := make(map[rivertype.MetricName]rivertype.Metric)
 		for _, metric := range riversharedtest.WaitOrTimeoutN(t, bundle.metrics, 2) {
@@ -197,7 +182,7 @@ func TestProducer_MetricEmitHook(t *testing.T) {
 		fetchResult := riversharedtest.WaitOrTimeout(t, fetchResultCh)
 		require.NoError(t, fetchResult.err)
 		require.Empty(t, fetchResult.jobs)
-		require.Equal(t, 1, bundle.pluginLookup.count)
+		require.Len(t, bundle.producer.metricEmitHooks, 1)
 		require.Empty(t, bundle.metrics)
 	})
 }
@@ -237,7 +222,7 @@ func TestProducer_PollOnly(t *testing.T) {
 			ErrorHandler:                 newTestErrorHandler(),
 			FetchCooldown:                FetchCooldownDefault,
 			FetchPollInterval:            50 * time.Millisecond, // more aggressive than normal because we have no notifier
-			PluginLookupByJob:            pluginlookup.NewJobPluginLookup(),
+			PluginLookupByJob:            pluginlookup.NewJobPluginLookup(nil),
 			PluginLookupGlobal:           pluginlookup.NewPluginLookup(nil),
 			JobTimeout:                   JobTimeoutDefault,
 			MaxWorkers:                   1_000,
@@ -290,7 +275,7 @@ func TestProducer_WithNotifier(t *testing.T) {
 			ErrorHandler:                 newTestErrorHandler(),
 			FetchCooldown:                FetchCooldownDefault,
 			FetchPollInterval:            50 * time.Millisecond, // more aggressive than normal so in case we miss the event, tests still pass quickly
-			PluginLookupByJob:            pluginlookup.NewJobPluginLookup(),
+			PluginLookupByJob:            pluginlookup.NewJobPluginLookup(nil),
 			PluginLookupGlobal:           pluginlookup.NewPluginLookup(nil),
 			JobTimeout:                   JobTimeoutDefault,
 			MaxWorkers:                   1_000,

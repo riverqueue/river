@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `JobArgsWithPlugins` for installing plugins that apply only to a specific job type. [PR #1337](https://github.com/riverqueue/river/pull/1337).
+
 ## [0.41.1] - 2026-07-29
 
 ### Fixed

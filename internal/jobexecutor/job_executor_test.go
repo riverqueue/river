@@ -38,7 +38,7 @@ type customizableWorkUnit struct {
 	work         func() error
 }
 
-func (w *customizableWorkUnit) PluginLookup(lookup *pluginlookup.JobPluginLookup) pluginlookup.PluginLookupInterface {
+func (w *customizableWorkUnit) PluginLookup(lookup *pluginlookup.JobPluginLookup) *pluginlookup.PluginLookup {
 	return pluginlookup.NewPluginLookup(nil)
 }
 
@@ -189,7 +189,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 			Completer:                bundle.completer,
 			DefaultClientRetryPolicy: &retrypolicytest.RetryPolicyNoJitter{},
 			ErrorHandler:             bundle.errorHandler,
-			PluginLookupByJob:        pluginlookup.NewJobPluginLookup(),
+			PluginLookupByJob:        pluginlookup.NewJobPluginLookup(nil),
 			PluginLookupGlobal:       pluginlookup.NewPluginLookup(nil),
 			JobRow:                   bundle.jobRow,
 			ProducerCallbacks: struct {

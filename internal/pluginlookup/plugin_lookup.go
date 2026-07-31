@@ -23,37 +23,24 @@ const (
 	PluginKindMiddlewareWorker      PluginKind = "middleware_worker"
 )
 
-// InitBaseServices initializes base services embedded in plugins.
-func InitBaseServices[T any](archetype *baseservice.Archetype, plugins []T) {
-	for _, plugin := range plugins {
-		if withBaseService, ok := any(plugin).(baseservice.WithBaseService); ok {
-			baseservice.Init(archetype, withBaseService)
-		}
-	}
-}
-
 //
-// PluginLookupInterface
+// PluginLookup
 //
 
-// PluginLookupInterface looks up plugins by kind. It's commonly implemented by
-// PluginLookup, but may also be EmptyPluginLookup as a memory allocation
-// optimization for bundles where no plugins are present.
-type PluginLookupInterface interface {
-	ByKind(kind PluginKind) []any
+// PluginLookup looks up plugins by kind. Its zero value is an empty lookup.
+type PluginLookup struct {
+	hooks         []rivertype.Hook
+	pluginsByKind map[PluginKind][]any
 }
 
-// NewPluginLookup returns a new plugin lookup interface based on the given
-// plugins that satisfies PluginLookupInterface. This is often pluginLookup,
-// but may be emptyPluginLookup as an optimization for the common case of an
-// empty plugin bundle. Each input is considered for every hook and middleware
-// kind it implements.
+// NewPluginLookup returns a new plugin lookup based on the given plugins. Each
+// input is considered for every hook and middleware kind it implements.
 //
 // The plugins parameter is []any rather than []rivertype.Plugin because the
 // lookup may contain legacy hooks and middleware that don't implement
 // rivertype.Plugin. Keeping their original concrete values avoids compatibility
 // wrappers that would need to forward every operation-specific interface.
-func NewPluginLookup(plugins []any) PluginLookupInterface {
+func NewPluginLookup(plugins []any) *PluginLookup {
 	return newPluginLookup(plugins, plugins)
 }
 
@@ -61,7 +48,15 @@ func NewPluginLookup(plugins []any) PluginLookupInterface {
 // hooks, middleware, and plugins. Explicit plugins may participate as either
 // hooks or middleware, while entries from the legacy Hooks and Middleware
 // configuration fields participate only as the kind they were configured as.
-func NewPluginLookupFromConfig(hooks []rivertype.Hook, middlewares []rivertype.Middleware, plugins []rivertype.Plugin) PluginLookupInterface {
+// Base services embedded in any configured extension are initialized with
+// archetype when it's non-nil.
+func NewPluginLookupFromConfig(archetype *baseservice.Archetype, hooks []rivertype.Hook, middlewares []rivertype.Middleware, plugins []rivertype.Plugin) *PluginLookup {
+	if archetype != nil {
+		initBaseServices(archetype, hooks)
+		initBaseServices(archetype, middlewares)
+		initBaseServices(archetype, plugins)
+	}
+
 	pluginValues := toAnySlice(plugins)
 
 	hookValues := make([]any, 0, len(plugins)+len(hooks))
@@ -75,32 +70,53 @@ func NewPluginLookupFromConfig(hooks []rivertype.Hook, middlewares []rivertype.M
 	return newPluginLookup(hookValues, middlewareValues)
 }
 
-func newPluginLookup(hooks, middlewares []any) PluginLookupInterface {
+func (c *PluginLookup) ByKind(kind PluginKind) []any {
+	return c.pluginsByKind[kind]
+}
+
+// Hooks returns all the hooks in the lookup in configuration order.
+func (c *PluginLookup) Hooks() []rivertype.Hook {
+	return c.hooks
+}
+
+func initBaseServices[T any](archetype *baseservice.Archetype, plugins []T) {
+	for _, plugin := range plugins {
+		if withBaseService, ok := any(plugin).(baseservice.WithBaseService); ok {
+			baseservice.Init(archetype, withBaseService)
+		}
+	}
+}
+
+func newPluginLookup(hooks, middlewares []any) *PluginLookup {
+	lookup := &PluginLookup{}
 	if len(hooks) < 1 && len(middlewares) < 1 {
-		return &emptyPluginLookup{}
+		return lookup
 	}
 
-	pluginsByKind := make(map[PluginKind][]any)
+	lookup.pluginsByKind = make(map[PluginKind][]any)
 
 	for _, plugin := range hooks {
 		if plugin == nil {
 			continue
 		}
 
+		if hook, ok := plugin.(rivertype.Hook); ok {
+			lookup.hooks = append(lookup.hooks, hook)
+		}
 		if _, ok := plugin.(rivertype.HookInsertBegin); ok {
-			pluginsByKind[PluginKindHookInsertBegin] = append(pluginsByKind[PluginKindHookInsertBegin], plugin)
+			lookup.pluginsByKind[PluginKindHookInsertBegin] = append(lookup.pluginsByKind[PluginKindHookInsertBegin], plugin)
 		}
 		if _, ok := plugin.(rivertype.HookMetricEmit); ok {
-			pluginsByKind[PluginKindHookMetricEmit] = append(pluginsByKind[PluginKindHookMetricEmit], plugin)
+			lookup.pluginsByKind[PluginKindHookMetricEmit] = append(lookup.pluginsByKind[PluginKindHookMetricEmit], plugin)
 		}
 		if _, ok := plugin.(rivertype.HookPeriodicJobsStart); ok {
-			pluginsByKind[PluginKindHookPeriodicJobsStart] = append(pluginsByKind[PluginKindHookPeriodicJobsStart], plugin)
+			lookup.pluginsByKind[PluginKindHookPeriodicJobsStart] = append(lookup.pluginsByKind[PluginKindHookPeriodicJobsStart], plugin)
 		}
 		if _, ok := plugin.(rivertype.HookWorkBegin); ok {
-			pluginsByKind[PluginKindHookWorkBegin] = append(pluginsByKind[PluginKindHookWorkBegin], plugin)
+			lookup.pluginsByKind[PluginKindHookWorkBegin] = append(lookup.pluginsByKind[PluginKindHookWorkBegin], plugin)
 		}
 		if _, ok := plugin.(rivertype.HookWorkEnd); ok {
-			pluginsByKind[PluginKindHookWorkEnd] = append(pluginsByKind[PluginKindHookWorkEnd], plugin)
+			lookup.pluginsByKind[PluginKindHookWorkEnd] = append(lookup.pluginsByKind[PluginKindHookWorkEnd], plugin)
 		}
 	}
 
@@ -110,45 +126,14 @@ func newPluginLookup(hooks, middlewares []any) PluginLookupInterface {
 		}
 
 		if _, ok := plugin.(rivertype.JobInsertMiddleware); ok {
-			pluginsByKind[PluginKindMiddlewareJobInsert] = append(pluginsByKind[PluginKindMiddlewareJobInsert], plugin)
+			lookup.pluginsByKind[PluginKindMiddlewareJobInsert] = append(lookup.pluginsByKind[PluginKindMiddlewareJobInsert], plugin)
 		}
 		if _, ok := plugin.(rivertype.WorkerMiddleware); ok {
-			pluginsByKind[PluginKindMiddlewareWorker] = append(pluginsByKind[PluginKindMiddlewareWorker], plugin)
+			lookup.pluginsByKind[PluginKindMiddlewareWorker] = append(lookup.pluginsByKind[PluginKindMiddlewareWorker], plugin)
 		}
 	}
 
-	return &pluginLookup{pluginsByKind: pluginsByKind}
-}
-
-//
-// pluginLookup
-//
-
-// pluginLookup looks up and caches plugins based on their kind, saving work
-// when looking up plugin bundles for specific operations, a common operation
-// that gets repeated over and over again. This struct may be used as a lookup
-// for globally installed plugins or plugins for specific job kinds through the
-// use of JobPluginLookup.
-type pluginLookup struct {
-	pluginsByKind map[PluginKind][]any
-}
-
-func (c *pluginLookup) ByKind(kind PluginKind) []any {
-	return c.pluginsByKind[kind]
-}
-
-//
-// emptyPluginLookup
-//
-
-// emptyPluginLookup is an empty version of PluginLookup that's zero
-// allocation. For most applications, most job args won't have plugins, so this
-// prevents us from allocating dozens/hundreds of small PluginLookup objects
-// that go unused.
-type emptyPluginLookup struct{}
-
-func (c *emptyPluginLookup) ByKind(kind PluginKind) []any {
-	return nil
+	return lookup
 }
 
 func toAnySlice[T any](values []T) []any {
@@ -164,45 +149,60 @@ func toAnySlice[T any](values []T) []any {
 //
 
 type JobPluginLookup struct {
-	pluginLookupByKind map[string]PluginLookupInterface
+	archetype *baseservice.Archetype
+
 	mu                 sync.RWMutex
+	pluginLookupByKind map[string]*PluginLookup
 }
 
-func NewJobPluginLookup() *JobPluginLookup {
+func NewJobPluginLookup(archetype *baseservice.Archetype) *JobPluginLookup {
 	return &JobPluginLookup{
-		pluginLookupByKind: make(map[string]PluginLookupInterface),
+		archetype:          archetype,
+		pluginLookupByKind: make(map[string]*PluginLookup),
 	}
 }
 
-// ByJobArgs returns a PluginLookupInterface by job args, which is a
-// PluginLookup if the job args had specific hooks (i.e. implements
-// JobArgsWithHooks and returns a non-empty set of hooks), or an
-// EmptyPluginLookup otherwise.
-func (c *JobPluginLookup) ByJobArgs(args rivertype.JobArgs) PluginLookupInterface {
+// ByJobArgs returns a plugin lookup for the given job args.
+func (c *JobPluginLookup) ByJobArgs(args rivertype.JobArgs) *PluginLookup {
 	kind := args.Kind()
 
 	c.mu.RLock()
-	lookup, ok := c.pluginLookupByKind[kind]
+	entry, ok := c.pluginLookupByKind[kind]
 	c.mu.RUnlock()
 	if ok {
-		return lookup
+		return entry
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if entry, ok := c.pluginLookupByKind[kind]; ok {
+		return entry
+	}
 
-	var hooks []rivertype.Hook
+	var (
+		hooks   []rivertype.Hook
+		plugins []rivertype.Plugin
+	)
 	if argsWithHooks, ok := args.(jobArgsWithHooks); ok {
 		hooks = argsWithHooks.Hooks()
 	}
+	if argsWithPlugins, ok := args.(jobArgsWithPlugins); ok {
+		plugins = argsWithPlugins.Plugins()
+	}
 
-	lookup = newPluginLookup(toAnySlice(hooks), nil)
-	c.pluginLookupByKind[kind] = lookup
-	return lookup
+	entry = NewPluginLookupFromConfig(c.archetype, hooks, nil, plugins)
+	c.pluginLookupByKind[kind] = entry
+	return entry
 }
 
 // Same as river.JobArgsWithHooks, but duplicated here so that can still live in
 // the top level package.
 type jobArgsWithHooks interface {
 	Hooks() []rivertype.Hook
+}
+
+// Same as river.JobArgsWithPlugins, but duplicated here so that can still live
+// in the top level package.
+type jobArgsWithPlugins interface {
+	Plugins() []rivertype.Plugin
 }

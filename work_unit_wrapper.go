@@ -26,7 +26,7 @@ type wrapperWorkUnit[T JobArgs] struct {
 	worker Worker[T]
 }
 
-func (w *wrapperWorkUnit[T]) PluginLookup(lookup *pluginlookup.JobPluginLookup) pluginlookup.PluginLookupInterface {
+func (w *wrapperWorkUnit[T]) PluginLookup(lookup *pluginlookup.JobPluginLookup) *pluginlookup.PluginLookup {
 	var job T
 	return lookup.ByJobArgs(job)
 }

@@ -89,7 +89,7 @@ type InsertFunc func(ctx context.Context, tx riverdriver.ExecutorTx, insertParam
 type PeriodicJobEnqueuerConfig struct {
 	AdvisoryLockPrefix int32
 
-	PluginLookupGlobal pluginlookup.PluginLookupInterface
+	PluginLookupGlobal *pluginlookup.PluginLookup
 
 	// Insert is the function to call to insert jobs into the database.
 	Insert InsertFunc

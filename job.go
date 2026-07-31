@@ -92,3 +92,23 @@ type JobArgsWithInsertOpts interface {
 	// system defaults. These can also be overridden at insertion time.
 	InsertOpts() InsertOpts
 }
+
+// JobArgsWithPlugins is an interface that job args can implement to attach
+// specific plugins (i.e. other than those globally installed to a client) to
+// certain kinds of jobs.
+type JobArgsWithPlugins interface {
+	// Plugins returns specific plugins to run for this job type. Plugin hooks
+	// run after global hooks, and plugin middleware is combined with other
+	// middleware configured for the job.
+	//
+	// A plugin implementing rivertype.JobInsertMiddleware runs once around an
+	// insertion batch containing one or more jobs of this type. Its InsertMany
+	// method receives the complete batch, which may also contain other job
+	// types.
+	//
+	// Warning: Plugins returned should be based on the job type only and be
+	// invariant of the specific contents of a job. Plugins are extracted by
+	// instantiating a generic instance of the job even when a specific instance
+	// is available, so any conditional logic within will be ignored.
+	Plugins() []rivertype.Plugin
+}
