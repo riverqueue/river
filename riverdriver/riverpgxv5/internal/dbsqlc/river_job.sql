@@ -472,6 +472,15 @@ LIMIT @max;
 SELECT *
 FROM /* TEMPLATE: schema */river_job
 WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */
+    AND (
+        coalesce(cardinality(@tags::text[]), 0) = 0
+        OR EXISTS (
+            SELECT 1
+            FROM unnest(tags) AS job_tag(value)
+            INNER JOIN unnest(@tags::text[]) AS filter_tag(value)
+                ON lower(job_tag.value) = lower(filter_tag.value)
+        )
+    )
 ORDER BY /* TEMPLATE_BEGIN: order_by_clause */ id /* TEMPLATE_END */
 LIMIT @max::int;
 

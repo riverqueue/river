@@ -1194,12 +1194,26 @@ const jobList = `-- name: JobList :many
 SELECT id, json(args), attempt, attempted_at, json(attempted_by), created_at, json(errors), finalized_at, kind, max_attempts, json(metadata), priority, queue, state, scheduled_at, json(tags), unique_key, unique_states
 FROM /* TEMPLATE: schema */river_job
 WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */
+    AND (
+        json_array_length(cast(?1 AS blob)) = 0
+        OR EXISTS (
+            SELECT 1
+            FROM json_each(river_job.tags) AS job_tag
+            INNER JOIN json_each(cast(?1 AS blob)) AS filter_tag
+                ON lower(cast(job_tag.value AS text)) = lower(cast(filter_tag.value AS text))
+        )
+    )
 ORDER BY /* TEMPLATE_BEGIN: order_by_clause */ id /* TEMPLATE_END */
-LIMIT ?1
+LIMIT ?2
 `
 
-func (q *Queries) JobList(ctx context.Context, db DBTX, max int64) ([]*RiverJob, error) {
-	rows, err := db.QueryContext(ctx, jobList, max)
+type JobListParams struct {
+	Tags []byte
+	Max  int64
+}
+
+func (q *Queries) JobList(ctx context.Context, db DBTX, arg *JobListParams) ([]*RiverJob, error) {
+	rows, err := db.QueryContext(ctx, jobList, arg.Tags, arg.Max)
 	if err != nil {
 		return nil, err
 	}

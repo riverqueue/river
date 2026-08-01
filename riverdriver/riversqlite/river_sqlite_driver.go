@@ -676,7 +676,15 @@ func (e *Executor) JobList(ctx context.Context, params *riverdriver.JobListParam
 		"where_clause":    {Value: params.WhereClause},
 	}, params.NamedArgs)
 
-	jobs, err := dbsqlc.New().JobList(schemaTemplateParam(ctx, params.Schema), e.dbtx, int64(params.Max))
+	tags, err := json.Marshal(sliceutil.FirstNonEmpty(params.Tags, []string{}))
+	if err != nil {
+		return nil, fmt.Errorf("error encoding tags: %w", err)
+	}
+
+	jobs, err := dbsqlc.New().JobList(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobListParams{
+		Max:  int64(params.Max),
+		Tags: tags,
+	})
 	if err != nil {
 		return nil, interpretError(err)
 	}

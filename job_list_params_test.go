@@ -243,4 +243,12 @@ func Test_JobListParams_toDBParams(t *testing.T) {
 			toDBParams()
 		require.EqualError(t, err, "cannot order by finalized_at without finalized state filters")
 	})
+
+	t.Run("Tags", func(t *testing.T) {
+		t.Parallel()
+
+		dbParams, err := NewJobListParams().Tags("alpha", "beta").toDBParams()
+		require.NoError(t, err)
+		require.Equal(t, []string{"alpha", "beta"}, dbParams.Tags)
+	})
 }

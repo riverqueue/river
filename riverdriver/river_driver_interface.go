@@ -409,6 +409,7 @@ type JobDeleteManyParams struct {
 	NamedArgs     map[string]any
 	OrderByClause string
 	Schema        string
+	Tags          []string
 	WhereClause   string
 }
 
@@ -513,6 +514,7 @@ type JobListParams struct {
 	NamedArgs     map[string]any
 	OrderByClause string
 	Schema        string
+	Tags          []string
 	WhereClause   string
 }
 

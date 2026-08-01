@@ -177,6 +177,7 @@ type JobListParams struct {
 	sortField      JobListOrderByField
 	sortOrder      SortOrder
 	states         []rivertype.JobState
+	tags           []string
 	where          []dblist.WherePredicate
 }
 
@@ -214,6 +215,7 @@ func (p *JobListParams) copy() *JobListParams {
 		sortOrder:      p.sortOrder,
 		schema:         p.schema,
 		states:         append([]rivertype.JobState(nil), p.states...),
+		tags:           append([]string(nil), p.tags...),
 		where:          append([]dblist.WherePredicate(nil), p.where...),
 	}
 }
@@ -294,6 +296,7 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 		Queues:     p.queues,
 		Schema:     p.schema,
 		States:     p.states,
+		Tags:       p.tags,
 		Where:      p.where,
 	}, nil
 }
@@ -416,6 +419,15 @@ func (p *JobListParams) States(states ...rivertype.JobState) *JobListParams {
 	paramsCopy.states = make([]rivertype.JobState, len(states))
 	paramsCopy.overrodeState = true
 	copy(paramsCopy.states, states)
+	return paramsCopy
+}
+
+// Tags returns an updated filter set that will only return jobs containing at
+// least one of the given tags. Tag matching is case-insensitive.
+func (p *JobListParams) Tags(tags ...string) *JobListParams {
+	paramsCopy := p.copy()
+	paramsCopy.tags = make([]string, len(tags))
+	copy(paramsCopy.tags, tags)
 	return paramsCopy
 }
 

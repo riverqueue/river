@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `JobListParams.Tags` for filtering jobs by one or more case-insensitive tags. [PR #1339](https://github.com/riverqueue/river/pull/1339).
+
 ## [0.42.0] - 2026-07-31
 
 ### Added

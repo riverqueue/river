@@ -573,7 +573,10 @@ func (e *Executor) JobList(ctx context.Context, params *riverdriver.JobListParam
 		"where_clause":    {Value: params.WhereClause},
 	}, params.NamedArgs)
 
-	jobs, err := dbsqlc.New().JobList(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.Max)
+	jobs, err := dbsqlc.New().JobList(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobListParams{
+		Max:  params.Max,
+		Tags: params.Tags,
+	})
 	if err != nil {
 		return nil, interpretError(err)
 	}

@@ -33,6 +33,7 @@ type JobListParams struct {
 	Queues     []string
 	Schema     string
 	States     []rivertype.JobState
+	Tags       []string
 	Where      []WherePredicate
 }
 
@@ -186,6 +187,7 @@ func JobMakeDriverParams(ctx context.Context, params *JobListParams, sqlFragment
 		NamedArgs:     namedArgs,
 		OrderByClause: orderByBuilder.String(),
 		Schema:        params.Schema,
+		Tags:          params.Tags,
 		WhereClause:   whereBuilder.String(),
 	}, nil
 }
