@@ -5,10 +5,14 @@ updates:
     directories:
       - "**/*"
     groups:
-      npm-dependencies:
-        update-types:
-          - "minor"
-          - "patch"
+      development-dependencies:
+        dependency-type: "development"
+        patterns:
+          - "*"
+      production-dependencies:
+        dependency-type: "production"
+        patterns:
+          - "*"
     open-pull-requests-limit: 10
     package-ecosystem: "npm"
     schedule:
