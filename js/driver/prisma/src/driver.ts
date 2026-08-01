@@ -117,14 +117,12 @@ export class PrismaDriver implements Driver<PrismaClientLike> {
       attemptedBy: (row.attempted_by as string[]) ?? null,
       createdAt: row.created_at as Date,
       errors: row.errors
-        ? (row.errors as Record<string, unknown>[]).map(
-            (e): AttemptError => ({
-              at: new Date(e.at as string),
-              attempt: e.attempt as number,
-              error: e.error as string,
-              trace: e.trace as string,
-            })
-          )
+        ? (row.errors as Record<string, unknown>[]).map((e): AttemptError => ({
+            at: new Date(e.at as string),
+            attempt: e.attempt as number,
+            error: e.error as string,
+            trace: e.trace as string,
+          }))
         : null,
       finalizedAt: (row.finalized_at as Date) ?? null,
       kind: row.kind as string,
