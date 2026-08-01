@@ -2,8 +2,7 @@ version: 2
 updates:
   - cooldown:
       default-days: 7
-    directories:
-      - "**/*"
+    directory: "/"
     groups:
       development-dependencies:
         dependency-type: "development"
