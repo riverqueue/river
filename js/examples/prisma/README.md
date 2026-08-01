@@ -6,7 +6,7 @@ The example defines two job types (`SortArgs` and `SendEmailArgs`) and shows sin
 
 ## Prerequisites
 
-- Node.js >= 18
+- Node.js ^20.19, ^22.12, or >= 24
 - pnpm
 - PostgreSQL with [River's schema](https://riverqueue.com/docs) migrated
 
@@ -21,17 +21,17 @@ pnpm install
 Generate the Prisma client:
 
 ```sh
-cd examples/prisma
-npx prisma generate
+pnpm --dir examples/prisma run generate
 ```
 
 Build the River packages and the example:
 
 ```sh
 pnpm run build:all
-cd examples/prisma
-pnpm run build
+pnpm --filter=riverqueue-example-prisma run build
 ```
+
+The example build regenerates the Prisma client automatically.
 
 ## Running
 

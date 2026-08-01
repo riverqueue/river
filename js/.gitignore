@@ -1,4 +1,5 @@
 node_modules/
 dist/
+examples/prisma/src/generated/prisma/
 *.tsbuildinfo
 .DS_Store

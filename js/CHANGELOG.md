@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Updated the Prisma example and `@riverqueue/driver-prisma` usage documentation for Prisma 7. The example now uses `@prisma/adapter-pg`, `prisma.config.ts`, and an explicitly generated ESM TypeScript client; its build automatically runs `prisma generate` before compilation. Prisma 7 requires Node.js `^20.19`, `^22.12`, or `>=24`. [PR #31](https://github.com/riverqueue/riverqueue-js/pull/31).
+
 ## [0.1.0] - 2026-06-01
 
 ### Added

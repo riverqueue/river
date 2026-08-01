@@ -19,11 +19,15 @@ export interface PrismaClientLike {
 /**
  * A River driver for Prisma.
  *
- *     import { PrismaClient } from "@prisma/client";
+ *     import { PrismaPg } from "@prisma/adapter-pg";
  *     import { Client } from "riverqueue";
  *     import { PrismaDriver } from "@riverqueue/driver-prisma";
+ *     import { PrismaClient } from "./generated/prisma/client.js";
  *
- *     const prisma = new PrismaClient();
+ *     const adapter = new PrismaPg({
+ *       connectionString: process.env.DATABASE_URL,
+ *     });
+ *     const prisma = new PrismaClient({ adapter });
  *     const client = new Client(new PrismaDriver(prisma));
  *
  * For transactions, pass the transaction client as the `tx` option:

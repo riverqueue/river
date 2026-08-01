@@ -98,8 +98,6 @@ jobs:
 
       - run: pnpm run build:all
 
-      - run: cd examples/prisma && npx prisma generate
-
       - run: pnpm --filter='./examples/*' run build
 
       - run: pnpm --filter='./examples/*' run start

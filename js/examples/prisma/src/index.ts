@@ -1,7 +1,8 @@
-import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { Client, InsertManyParams } from "riverqueue";
 import type { JobArgs, InsertOpts } from "riverqueue";
 import { PrismaDriver } from "@riverqueue/driver-prisma";
+import { PrismaClient } from "./generated/prisma/client.js";
 
 // Define a job that sorts strings. `kind` uniquely identifies the job type and
 // must match the worker name on the Go side.
@@ -45,10 +46,10 @@ class SendEmailArgs implements JobArgs {
 }
 
 async function main() {
-  const prisma = new PrismaClient({
-    datasourceUrl:
-      process.env.DATABASE_URL ?? "postgres://localhost:5432/river_dev",
-  });
+  const connectionString =
+    process.env.DATABASE_URL ?? "postgres://localhost:5432/river_dev";
+  const adapter = new PrismaPg({ connectionString });
+  const prisma = new PrismaClient({ adapter });
 
   const client = new Client(new PrismaDriver(prisma));
 

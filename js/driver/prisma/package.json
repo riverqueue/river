@@ -33,6 +33,8 @@
     "@prisma/client": ">=5.0.0"
   },
   "devDependencies": {
+    "@prisma/client": "7.9.0",
+    "prisma": "7.9.0",
     "typescript": "^5.8.0"
   },
   "keywords": [
