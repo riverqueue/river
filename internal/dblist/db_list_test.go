@@ -45,7 +45,7 @@ func TestJobListNoJobs(t *testing.T) {
 			States:     []rivertype.JobState{rivertype.JobStateCompleted},
 			LimitCount: 1,
 			OrderBy:    []JobListOrderBy{{Expr: "id", Order: SortOrderAsc}},
-		}, bundle.driver.SQLFragmentColumnIn)
+		}, bundle.driver)
 		require.NoError(t, err)
 
 		_, err = bundle.exec.JobList(ctx, listParams)
@@ -64,7 +64,7 @@ func TestJobListNoJobs(t *testing.T) {
 			Where: []WherePredicate{
 				{NamedArgs: map[string]any{"foo": "bar"}, SQL: "queue = 'test' AND priority = 1 AND args->>'foo' = @foo"},
 			},
-		}, bundle.driver.SQLFragmentColumnIn)
+		}, bundle.driver)
 		require.NoError(t, err)
 
 		_, err = bundle.exec.JobList(ctx, listParams)
@@ -112,7 +112,7 @@ func TestJobListWithJobs(t *testing.T) {
 	execTest := func(ctx context.Context, t *testing.T, bundle *testBundle, params *JobListParams, testFunc testListFunc) {
 		t.Helper()
 
-		listParams, err := JobMakeDriverParams(ctx, params, bundle.driver.SQLFragmentColumnIn)
+		listParams, err := JobMakeDriverParams(ctx, params, bundle.driver)
 		require.NoError(t, err)
 
 		t.Logf("testing JobList in Executor")
@@ -326,7 +326,7 @@ func TestJobListWithJobs(t *testing.T) {
 			},
 		}
 
-		_, err := JobMakeDriverParams(ctx, params, bundle.driver.SQLFragmentColumnIn)
+		_, err := JobMakeDriverParams(ctx, params, bundle.driver)
 		require.EqualError(t, err, `expected "1" to contain named arg symbol @not_present`)
 	})
 
@@ -344,7 +344,7 @@ func TestJobListWithJobs(t *testing.T) {
 			},
 		}
 
-		_, err := JobMakeDriverParams(ctx, params, bundle.driver.SQLFragmentColumnIn)
+		_, err := JobMakeDriverParams(ctx, params, bundle.driver)
 		require.EqualError(t, err, "named argument @duplicate already registered")
 	})
 }

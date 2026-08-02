@@ -124,9 +124,8 @@ type JobRow struct {
 	// `available` when they're first inserted.
 	State JobState
 
-	// Tags are an arbitrary list of keywords to add to the job. They have no
-	// functional behavior and are meant entirely as a user-specified construct
-	// to help group and categorize jobs.
+	// Tags are an arbitrary list of keywords attached to the job. They don't
+	// affect job execution, but clients can use them to group and filter jobs.
 	Tags []string
 
 	// UniqueKey is a unique key for the job within its kind that's used for

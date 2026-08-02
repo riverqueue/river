@@ -471,15 +471,6 @@ LIMIT @max;
 SELECT *
 FROM /* TEMPLATE: schema */river_job
 WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */
-    AND (
-        json_array_length(cast(@tags AS blob)) = 0
-        OR EXISTS (
-            SELECT 1
-            FROM json_each(river_job.tags) AS job_tag
-            INNER JOIN json_each(cast(@tags AS blob)) AS filter_tag
-                ON lower(cast(job_tag.value AS text)) = lower(cast(filter_tag.value AS text))
-        )
-    )
 ORDER BY /* TEMPLATE_BEGIN: order_by_clause */ id /* TEMPLATE_END */
 LIMIT @max;
 

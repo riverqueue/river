@@ -518,7 +518,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 
 		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
 			Schema: bundle.schema,
-			Tags:   []string{"all-args-tag"},
+			Tags:   []string{"all-args-tag", "all-args-secondary"},
 		})
 
 		listRes, err := client.JobList(ctx,
@@ -528,7 +528,8 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 				Priorities(int16(min(job.Priority, math.MaxInt16))). //nolint:gosec
 				Queues(job.Queue).
 				States(job.State).
-				Tags("ALL-ARGS-TAG"),
+				TagsAll("all-args-tag").
+				TagsAny("all-args-secondary"),
 		)
 		require.NoError(t, err)
 		require.Len(t, listRes.Jobs, 1)
@@ -561,17 +562,49 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 
 		client, bundle := setup(t)
 
-		var (
-			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Tags: []string{"alpha", "shared"}})
-			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Tags: []string{"beta"}})
-			_    = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Tags: []string{"gamma"}})
-		)
+		jobAlphaBeta := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Tags: []string{"alpha", "beta", "shared"}})
+		jobAlpha := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Tags: []string{"alpha"}})
+		jobBeta := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Tags: []string{"beta"}})
+		jobUpperAlpha := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Tags: []string{"ALPHA"}})
+		_ = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Tags: []string{"gamma"}})
+		_ = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
 
-		listRes, err := client.JobList(ctx, river.NewJobListParams().Tags("ALPHA", "BETA"))
+		listRes, err := client.JobList(ctx, river.NewJobListParams().TagsAny("alpha", "beta"))
 		require.NoError(t, err)
-		require.Len(t, listRes.Jobs, 2)
-		require.Equal(t, job1.ID, listRes.Jobs[0].ID)
-		require.Equal(t, job2.ID, listRes.Jobs[1].ID)
+		require.Len(t, listRes.Jobs, 3)
+		require.Equal(t, jobAlphaBeta.ID, listRes.Jobs[0].ID)
+		require.Equal(t, jobAlpha.ID, listRes.Jobs[1].ID)
+		require.Equal(t, jobBeta.ID, listRes.Jobs[2].ID)
+
+		listRes, err = client.JobList(ctx, river.NewJobListParams().TagsAll("alpha", "beta"))
+		require.NoError(t, err)
+		require.Len(t, listRes.Jobs, 1)
+		require.Equal(t, jobAlphaBeta.ID, listRes.Jobs[0].ID)
+
+		listRes, err = client.JobList(ctx, river.NewJobListParams().TagsAll("shared").TagsAny("alpha", "gamma"))
+		require.NoError(t, err)
+		require.Len(t, listRes.Jobs, 1)
+		require.Equal(t, jobAlphaBeta.ID, listRes.Jobs[0].ID)
+
+		listRes, err = client.JobList(ctx, river.NewJobListParams().TagsAny("ALPHA"))
+		require.NoError(t, err)
+		require.Len(t, listRes.Jobs, 1)
+		require.Equal(t, jobUpperAlpha.ID, listRes.Jobs[0].ID)
+
+		params := river.NewJobListParams().TagsAny("alpha", "beta").First(1)
+		listRes, err = client.JobList(ctx, params)
+		require.NoError(t, err)
+		require.Len(t, listRes.Jobs, 1)
+		require.Equal(t, jobAlphaBeta.ID, listRes.Jobs[0].ID)
+
+		listRes, err = client.JobList(ctx, params.After(listRes.LastCursor))
+		require.NoError(t, err)
+		require.Len(t, listRes.Jobs, 1)
+		require.Equal(t, jobAlpha.ID, listRes.Jobs[0].ID)
+
+		listRes, err = client.JobList(ctx, river.NewJobListParams().TagsAny("alpha").TagsAny())
+		require.NoError(t, err)
+		require.Len(t, listRes.Jobs, 6)
 	})
 
 	t.Run("JobListTx", func(t *testing.T) {
@@ -602,7 +635,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 
 		job := testfactory.Job(ctx, t, execTx, &testfactory.JobOpts{
 			Schema: bundle.schema,
-			Tags:   []string{"all-args-tag"},
+			Tags:   []string{"all-args-tag", "all-args-secondary"},
 		})
 
 		listRes, err := client.JobListTx(ctx, tx,
@@ -612,7 +645,8 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 				Priorities(int16(min(job.Priority, math.MaxInt16))). //nolint:gosec
 				Queues(job.Queue).
 				States(job.State).
-				Tags("ALL-ARGS-TAG"),
+				TagsAll("all-args-tag").
+				TagsAny("all-args-secondary"),
 		)
 		require.NoError(t, err)
 		require.Len(t, listRes.Jobs, 1)

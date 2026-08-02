@@ -82,6 +82,14 @@ func (d *Driver) GetMigrationTruncateTables(line string, version int) []string {
 func (d *Driver) PoolIsSet() bool          { return d.dbPool != nil }
 func (d *Driver) PoolSet(dbPool any) error { return riverdriver.ErrNotImplemented }
 
+func (d *Driver) SQLFragmentColumnContainsAll(column, namedArg string, values []string) (string, any, error) {
+	return fmt.Sprintf("%s @> @%s", column, namedArg), pq.Array(values), nil
+}
+
+func (d *Driver) SQLFragmentColumnContainsAny(column, namedArg string, values []string) (string, any, error) {
+	return fmt.Sprintf("%s && @%s", column, namedArg), pq.Array(values), nil
+}
+
 func (d *Driver) SQLFragmentColumnIn(column string, values any) (string, any, error) {
 	// Identical to the Pgx implementation except for use of `pg.Array`.
 	return fmt.Sprintf("%s = any(@%s)", column, column), pq.Array(values), nil
@@ -573,10 +581,7 @@ func (e *Executor) JobList(ctx context.Context, params *riverdriver.JobListParam
 		"where_clause":    {Value: params.WhereClause},
 	}, params.NamedArgs)
 
-	jobs, err := dbsqlc.New().JobList(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobListParams{
-		Max:  params.Max,
-		Tags: params.Tags,
-	})
+	jobs, err := dbsqlc.New().JobList(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.Max)
 	if err != nil {
 		return nil, interpretError(err)
 	}

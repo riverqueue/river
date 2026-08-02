@@ -177,7 +177,8 @@ type JobListParams struct {
 	sortField      JobListOrderByField
 	sortOrder      SortOrder
 	states         []rivertype.JobState
-	tags           []string
+	tagsAll        []string
+	tagsAny        []string
 	where          []dblist.WherePredicate
 }
 
@@ -215,7 +216,8 @@ func (p *JobListParams) copy() *JobListParams {
 		sortOrder:      p.sortOrder,
 		schema:         p.schema,
 		states:         append([]rivertype.JobState(nil), p.states...),
-		tags:           append([]string(nil), p.tags...),
+		tagsAll:        append([]string(nil), p.tagsAll...),
+		tagsAny:        append([]string(nil), p.tagsAny...),
 		where:          append([]dblist.WherePredicate(nil), p.where...),
 	}
 }
@@ -296,7 +298,8 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 		Queues:     p.queues,
 		Schema:     p.schema,
 		States:     p.states,
-		Tags:       p.tags,
+		TagsAll:    p.tagsAll,
+		TagsAny:    p.tagsAny,
 		Where:      p.where,
 	}, nil
 }
@@ -422,12 +425,29 @@ func (p *JobListParams) States(states ...rivertype.JobState) *JobListParams {
 	return paramsCopy
 }
 
-// Tags returns an updated filter set that will only return jobs containing at
-// least one of the given tags. Tag matching is case-insensitive.
-func (p *JobListParams) Tags(tags ...string) *JobListParams {
+// TagsAll returns an updated filter set that will only return jobs containing
+// all of the given tags. Matching is exact and case-sensitive. TagsAll is
+// combined with TagsAny and all other filters using AND.
+//
+// Calling TagsAll replaces any tags supplied to a previous TagsAll call.
+// Calling it with no tags removes the filter.
+func (p *JobListParams) TagsAll(tags ...string) *JobListParams {
 	paramsCopy := p.copy()
-	paramsCopy.tags = make([]string, len(tags))
-	copy(paramsCopy.tags, tags)
+	paramsCopy.tagsAll = make([]string, len(tags))
+	copy(paramsCopy.tagsAll, tags)
+	return paramsCopy
+}
+
+// TagsAny returns an updated filter set that will only return jobs containing
+// at least one of the given tags. Matching is exact and case-sensitive.
+// TagsAny is combined with TagsAll and all other filters using AND.
+//
+// Calling TagsAny replaces any tags supplied to a previous TagsAny call.
+// Calling it with no tags removes the filter.
+func (p *JobListParams) TagsAny(tags ...string) *JobListParams {
+	paramsCopy := p.copy()
+	paramsCopy.tagsAny = make([]string, len(tags))
+	copy(paramsCopy.tagsAny, tags)
 	return paramsCopy
 }
 

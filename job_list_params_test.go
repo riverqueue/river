@@ -244,11 +244,43 @@ func Test_JobListParams_toDBParams(t *testing.T) {
 		require.EqualError(t, err, "cannot order by finalized_at without finalized state filters")
 	})
 
-	t.Run("Tags", func(t *testing.T) {
+	t.Run("TagsAll", func(t *testing.T) {
 		t.Parallel()
 
-		dbParams, err := NewJobListParams().Tags("alpha", "beta").toDBParams()
+		tags := []string{"alpha", "beta"}
+		params := NewJobListParams().TagsAll(tags...)
+		tags[0] = "modified"
+
+		dbParams, err := params.toDBParams()
 		require.NoError(t, err)
-		require.Equal(t, []string{"alpha", "beta"}, dbParams.Tags)
+		require.Equal(t, []string{"alpha", "beta"}, dbParams.TagsAll)
+
+		dbParams, err = params.TagsAll("gamma").toDBParams()
+		require.NoError(t, err)
+		require.Equal(t, []string{"gamma"}, dbParams.TagsAll)
+
+		dbParams, err = params.TagsAll().toDBParams()
+		require.NoError(t, err)
+		require.Empty(t, dbParams.TagsAll)
+	})
+
+	t.Run("TagsAny", func(t *testing.T) {
+		t.Parallel()
+
+		tags := []string{"alpha", "beta"}
+		params := NewJobListParams().TagsAny(tags...)
+		tags[0] = "modified"
+
+		dbParams, err := params.toDBParams()
+		require.NoError(t, err)
+		require.Equal(t, []string{"alpha", "beta"}, dbParams.TagsAny)
+
+		dbParams, err = params.TagsAny("gamma").toDBParams()
+		require.NoError(t, err)
+		require.Equal(t, []string{"gamma"}, dbParams.TagsAny)
+
+		dbParams, err = params.TagsAny().toDBParams()
+		require.NoError(t, err)
+		require.Empty(t, dbParams.TagsAny)
 	})
 }

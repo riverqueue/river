@@ -1166,26 +1166,12 @@ const jobList = `-- name: JobList :many
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 FROM /* TEMPLATE: schema */river_job
 WHERE /* TEMPLATE_BEGIN: where_clause */ true /* TEMPLATE_END */
-    AND (
-        coalesce(cardinality($1::text[]), 0) = 0
-        OR EXISTS (
-            SELECT 1
-            FROM unnest(tags) AS job_tag(value)
-            INNER JOIN unnest($1::text[]) AS filter_tag(value)
-                ON lower(job_tag.value) = lower(filter_tag.value)
-        )
-    )
 ORDER BY /* TEMPLATE_BEGIN: order_by_clause */ id /* TEMPLATE_END */
-LIMIT $2::int
+LIMIT $1::int
 `
 
-type JobListParams struct {
-	Tags []string
-	Max  int32
-}
-
-func (q *Queries) JobList(ctx context.Context, db DBTX, arg *JobListParams) ([]*RiverJob, error) {
-	rows, err := db.QueryContext(ctx, jobList, pq.Array(arg.Tags), arg.Max)
+func (q *Queries) JobList(ctx context.Context, db DBTX, max int32) ([]*RiverJob, error) {
+	rows, err := db.QueryContext(ctx, jobList, max)
 	if err != nil {
 		return nil, err
 	}
