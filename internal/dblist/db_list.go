@@ -33,6 +33,8 @@ type JobListParams struct {
 	Queues     []string
 	Schema     string
 	States     []rivertype.JobState
+	TagsAll    []string
+	TagsAny    []string
 	Where      []WherePredicate
 }
 
@@ -41,15 +43,21 @@ type WherePredicate struct {
 	SQL       string
 }
 
+type sqlFragmentBuilder interface {
+	SQLFragmentColumnContainsAll(column, namedArg string, values []string) (string, any, error)
+	SQLFragmentColumnContainsAny(column, namedArg string, values []string) (string, any, error)
+	SQLFragmentColumnIn(column string, values any) (string, any, error)
+}
+
 // JobMakeDriverParams converts client-level parameters for job and delete to
 // driver-level parameters for use with an executor, which generally goes by
 // converting typed fields for IDs, kinds, queues, etc. to lower-level SQL.
 //
 // This was originally implemented for listing jobs, but since the logic is so
 // similar, it also performs the same function for JobDeleteMany. This works
-// because `riverdriver.JobListParams` is identical to `JobDeleteMany` and
-// therefore pointer-level converts to it.
-func JobMakeDriverParams(ctx context.Context, params *JobListParams, sqlFragmentColumnIn func(column string, values any) (string, any, error)) (*riverdriver.JobListParams, error) {
+// because `riverdriver.JobDeleteManyParams` has `JobListParams` as its
+// underlying type and therefore pointer-level converts to it.
+func JobMakeDriverParams(ctx context.Context, params *JobListParams, sqlFragmentBuilder sqlFragmentBuilder) (*riverdriver.JobListParams, error) {
 	var (
 		namedArgs    = make(map[string]any)
 		whereBuilder strings.Builder
@@ -75,7 +83,7 @@ func JobMakeDriverParams(ctx context.Context, params *JobListParams, sqlFragment
 		writeAndAfterFirst()
 
 		const column = "id"
-		sqlFragment, arg, err := sqlFragmentColumnIn(column, params.IDs)
+		sqlFragment, arg, err := sqlFragmentBuilder.SQLFragmentColumnIn(column, params.IDs)
 		if err != nil {
 			return nil, fmt.Errorf("error building SQL fragment for %q: %w", column, err)
 		}
@@ -87,7 +95,7 @@ func JobMakeDriverParams(ctx context.Context, params *JobListParams, sqlFragment
 		writeAndAfterFirst()
 
 		const column = "kind"
-		sqlFragment, arg, err := sqlFragmentColumnIn(column, params.Kinds)
+		sqlFragment, arg, err := sqlFragmentBuilder.SQLFragmentColumnIn(column, params.Kinds)
 		if err != nil {
 			return nil, fmt.Errorf("error building SQL fragment for %q: %w", column, err)
 		}
@@ -99,7 +107,7 @@ func JobMakeDriverParams(ctx context.Context, params *JobListParams, sqlFragment
 		writeAndAfterFirst()
 
 		const column = "priority"
-		sqlFragment, arg, err := sqlFragmentColumnIn(column, params.Priorities)
+		sqlFragment, arg, err := sqlFragmentBuilder.SQLFragmentColumnIn(column, params.Priorities)
 		if err != nil {
 			return nil, fmt.Errorf("error building SQL fragment for %q: %w", column, err)
 		}
@@ -111,7 +119,7 @@ func JobMakeDriverParams(ctx context.Context, params *JobListParams, sqlFragment
 		writeAndAfterFirst()
 
 		const column = "queue"
-		sqlFragment, arg, err := sqlFragmentColumnIn(column, params.Queues)
+		sqlFragment, arg, err := sqlFragmentBuilder.SQLFragmentColumnIn(column, params.Queues)
 		if err != nil {
 			return nil, fmt.Errorf("error building SQL fragment for %q: %w", column, err)
 		}
@@ -123,13 +131,43 @@ func JobMakeDriverParams(ctx context.Context, params *JobListParams, sqlFragment
 		writeAndAfterFirst()
 
 		const column = "state"
-		sqlFragment, arg, err := sqlFragmentColumnIn(column,
+		sqlFragment, arg, err := sqlFragmentBuilder.SQLFragmentColumnIn(column,
 			sliceutil.Map(params.States, func(v rivertype.JobState) string { return string(v) }))
 		if err != nil {
 			return nil, fmt.Errorf("error building SQL fragment for %q: %w", column, err)
 		}
 		whereBuilder.WriteString(sqlFragment)
 		namedArgs[column] = arg
+	}
+
+	if len(params.TagsAll) > 0 {
+		writeAndAfterFirst()
+
+		const (
+			column   = "tags"
+			namedArg = "tags_all"
+		)
+		sqlFragment, arg, err := sqlFragmentBuilder.SQLFragmentColumnContainsAll(column, namedArg, params.TagsAll)
+		if err != nil {
+			return nil, fmt.Errorf("error building SQL fragment for %q: %w", namedArg, err)
+		}
+		whereBuilder.WriteString(sqlFragment)
+		namedArgs[namedArg] = arg
+	}
+
+	if len(params.TagsAny) > 0 {
+		writeAndAfterFirst()
+
+		const (
+			column   = "tags"
+			namedArg = "tags_any"
+		)
+		sqlFragment, arg, err := sqlFragmentBuilder.SQLFragmentColumnContainsAny(column, namedArg, params.TagsAny)
+		if err != nil {
+			return nil, fmt.Errorf("error building SQL fragment for %q: %w", namedArg, err)
+		}
+		whereBuilder.WriteString(sqlFragment)
+		namedArgs[namedArg] = arg
 	}
 
 	for _, where := range params.Where {

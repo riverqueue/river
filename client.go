@@ -2398,7 +2398,7 @@ func (c *Client[TTx]) jobDeleteMany(ctx context.Context, exec riverdriver.Execut
 		return nil, errors.New("delete with no filters not allowed to prevent accidental deletion of all jobs; either specify a predicate (e.g. JobDeleteManyParams.IDs, JobDeleteManyParams.Kinds, ...) or call JobDeleteManyParams.All")
 	}
 
-	listParams, err := dblist.JobMakeDriverParams(ctx, params.toDBParams(), c.driver.SQLFragmentColumnIn)
+	listParams, err := dblist.JobMakeDriverParams(ctx, params.toDBParams(), c.driver)
 	if err != nil {
 		return nil, err
 	}
@@ -2451,7 +2451,7 @@ func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) (*JobL
 		return nil, err
 	}
 
-	listParams, err := dblist.JobMakeDriverParams(ctx, dbParams, c.driver.SQLFragmentColumnIn)
+	listParams, err := dblist.JobMakeDriverParams(ctx, dbParams, c.driver)
 	if err != nil {
 		return nil, err
 	}
@@ -2492,7 +2492,7 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 		return nil, err
 	}
 
-	listParams, err := dblist.JobMakeDriverParams(ctx, dbParams, c.driver.SQLFragmentColumnIn)
+	listParams, err := dblist.JobMakeDriverParams(ctx, dbParams, c.driver)
 	if err != nil {
 		return nil, err
 	}

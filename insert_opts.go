@@ -65,9 +65,9 @@ type InsertOpts struct {
 	// JobArgsWithInsertOpts, however, it will work in both cases.
 	ScheduledAt time.Time
 
-	// Tags are an arbitrary list of keywords to add to the job. They have no
-	// functional behavior and are meant entirely as a user-specified construct
-	// to help group and categorize jobs.
+	// Tags are an arbitrary list of keywords to add to the job. They don't
+	// affect job execution, but can be used with JobListParams.TagsAll and
+	// JobListParams.TagsAny to group and filter jobs.
 	//
 	// Tags should conform to the regex `\A[\w][\w\-]+[\w]\z` and be a maximum
 	// of 255 characters long. No special characters are allowed.

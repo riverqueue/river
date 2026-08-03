@@ -128,6 +128,22 @@ type Driver[TTx any] interface {
 	// API is not stable. DO NOT USE.
 	PoolSet(dbPool any) error
 
+	// SQLFragmentColumnContainsAll generates an SQL fragment to be included as
+	// a predicate in a `WHERE` query for a collection column containing all of
+	// the given values. PostgreSQL uses array containment while SQLite compares
+	// values from a JSON array.
+	//
+	// API is not stable. DO NOT USE.
+	SQLFragmentColumnContainsAll(column, namedArg string, values []string) (string, any, error)
+
+	// SQLFragmentColumnContainsAny generates an SQL fragment to be included as
+	// a predicate in a `WHERE` query for a collection column containing at least
+	// one of the given values. PostgreSQL uses array overlap while SQLite
+	// compares values from a JSON array.
+	//
+	// API is not stable. DO NOT USE.
+	SQLFragmentColumnContainsAny(column, namedArg string, values []string) (string, any, error)
+
 	// SQLFragmentColumnIn generates an SQL fragment to be included as a
 	// predicate in a `WHERE` query for the existence of a set of values in a
 	// column like `id IN (...)`. The actual implementation depends on support
@@ -404,13 +420,7 @@ type JobDeleteBeforeParams struct {
 	Schema                      string
 }
 
-type JobDeleteManyParams struct {
-	Max           int32
-	NamedArgs     map[string]any
-	OrderByClause string
-	Schema        string
-	WhereClause   string
-}
+type JobDeleteManyParams JobListParams
 
 type JobGetAvailableParams struct {
 	ClientID       string

@@ -92,6 +92,14 @@ func (d *Driver) GetMigrationTruncateTables(line string, version int) []string {
 func (d *Driver) PoolIsSet() bool          { return d.dbPool != nil }
 func (d *Driver) PoolSet(dbPool any) error { return riverdriver.ErrNotImplemented }
 
+func (d *Driver) SQLFragmentColumnContainsAll(column, namedArg string, values []string) (string, any, error) {
+	return fmt.Sprintf("%s @> @%s", column, namedArg), values, nil
+}
+
+func (d *Driver) SQLFragmentColumnContainsAny(column, namedArg string, values []string) (string, any, error) {
+	return fmt.Sprintf("%s && @%s", column, namedArg), values, nil
+}
+
 func (d *Driver) SQLFragmentColumnIn(column string, values any) (string, any, error) {
 	return fmt.Sprintf("%s = any(@%s)", column, column), values, nil
 }

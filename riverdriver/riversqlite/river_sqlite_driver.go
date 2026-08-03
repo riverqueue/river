@@ -117,6 +117,37 @@ func (d *Driver) PoolSet(dbPool any) error {
 	return nil
 }
 
+func (d *Driver) SQLFragmentColumnContainsAll(column, namedArg string, values []string) (string, any, error) {
+	arg, err := json.Marshal(values)
+	if err != nil {
+		return "", nil, err
+	}
+
+	return fmt.Sprintf(`NOT EXISTS (
+    SELECT 1
+    FROM json_each(cast(@%s AS blob)) AS filter_value
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM json_each(%s) AS column_value
+        WHERE column_value.value = filter_value.value
+    )
+)`, namedArg, column), arg, nil
+}
+
+func (d *Driver) SQLFragmentColumnContainsAny(column, namedArg string, values []string) (string, any, error) {
+	arg, err := json.Marshal(values)
+	if err != nil {
+		return "", nil, err
+	}
+
+	return fmt.Sprintf(`EXISTS (
+    SELECT 1
+    FROM json_each(%s) AS column_value
+    INNER JOIN json_each(cast(@%s AS blob)) AS filter_value
+        ON column_value.value = filter_value.value
+)`, column, namedArg), arg, nil
+}
+
 func (d *Driver) SQLFragmentColumnIn(column string, values any) (string, any, error) {
 	arg, err := json.Marshal(values)
 	if err != nil {
