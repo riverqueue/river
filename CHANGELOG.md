@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `testsignal` no longer imports `riversharedtest`, so testify, go-spew, and goleak are no longer linked into production binaries that use River. `WaitTimeout` moved to `rivershared/util/testutil`, with `riversharedtest.WaitTimeout` kept as a wrapper around it.
+- `testsignal` no longer imports `riversharedtest`, so testify, go-spew, goleak, and yaml are no longer linked into production binaries that use River. `WaitTimeout` moved to `rivershared/util/testutil`, with `riversharedtest.WaitTimeout` kept as a wrapper around it. [PR #1342](https://github.com/riverqueue/river/pull/1342).
 
 ## [0.42.0] - 2026-07-31
 
