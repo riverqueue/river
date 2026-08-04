@@ -3,7 +3,6 @@ package testsignal
 import (
 	"time"
 
-	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 )
 
@@ -86,7 +85,7 @@ func (s *TestSignal[T]) WaitOrTimeout() T {
 		panic("test only signal is not initialized; called outside of tests?")
 	}
 
-	timeout := riversharedtest.WaitTimeout()
+	timeout := testutil.WaitTimeout()
 
 	select {
 	case val := <-s.internalChan:
