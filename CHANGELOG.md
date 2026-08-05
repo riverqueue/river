@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-08-05
+
 ### Added
 
 - Added `JobListParams.TagsAll` and `JobListParams.TagsAny` for filtering jobs that match every or any exact tag, respectively. [PR #1339](https://github.com/riverqueue/river/pull/1339).
