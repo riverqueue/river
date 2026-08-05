@@ -342,12 +342,11 @@ func WaitOrTimeoutN[T any](tb testutil.TestingTB, waitChan <-chan T, numValues i
 // extra leeway in GitHub Actions where we occasionally seem to observe subpar
 // performance which leads to timeouts and test intermittency, while still
 // keeping a tight a timeout for local test runs where this is never a problem.
+//
+// The implementation lives in testutil so that testsignal, which is compiled
+// into production binaries, can use it without importing this package.
 func WaitTimeout() time.Duration {
-	if os.Getenv("GITHUB_ACTIONS") == "true" {
-		return 10 * time.Second
-	}
-
-	return 3 * time.Second
+	return testutil.WaitTimeout()
 }
 
 var IgnoredKnownGoroutineLeaks = []goleak.Option{ //nolint:gochecknoglobals
