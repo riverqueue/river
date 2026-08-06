@@ -52,6 +52,28 @@ linters:
             - desc: Don't use `riverinternaltest` package outside of test environments.
               pkg: github.com/riverqueue/river/internal/riverinternaltest
 
+        # The next two blocks have the same intent: don't allow testsignal,
+        # which is used in non-test code, to have non-stdlib dependencies.
+        # Previously, we ran into a problem where it was accidentally importing
+        # riversharedtest, which was importing Goleak, Testify, YAML (through
+        # Testify), etc. which added 10 kB overhead to all binaries built with
+        # River. testsignal does use testutil, so the second block makes sure
+        # that testutil has no stdlib dependencies so that testsignal doesn't
+        # pick one up transitively.
+        testsignal-no-test-deps:
+          files:
+            - "**/testsignal/*.go"
+            - "!$test"
+          allow:
+            - $gostd
+            - "github.com/riverqueue/river/rivershared/util/testutil$"
+        testutil-no-test-deps:
+          files:
+            - "**/util/testutil/*.go"
+            - "!$test"
+          allow:
+            - $gostd
+
     forbidigo:
       forbid:
         - msg: Use `require` variants instead.
