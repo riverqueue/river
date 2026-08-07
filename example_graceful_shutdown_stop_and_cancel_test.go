@@ -20,8 +20,8 @@ import (
 
 // Example_gracefulShutdownStopCancel demonstrates graceful stop with explicit
 // fallback to StopAndCancel. When a SIGINT/SIGTERM arrives, Stop initiates a
-// soft stop. If running jobs don't finish before the soft stop context expires,
-// StopAndCancel cancels their contexts (hard stop). This example is intended to
+// graceful stop. If running jobs don't finish before the graceful stop context
+// expires, StopAndCancel cancels their contexts. This example is intended to
 // demonstrate advanced use of StopAndCancel. Generally, prefer the method shown
 // in Example_gracefulShutdown over the one here.
 func Example_gracefulShutdownStopAndCancel() {
@@ -59,8 +59,8 @@ func Example_gracefulShutdownStopAndCancel() {
 	}
 
 	// Use signal.NotifyContext to detect SIGINT/SIGTERM, but don't pass the
-	// signal context to Start. Cancelling the Start context cancels running job
-	// contexts immediately, which is equivalent to StopAndCancel.
+	// signal context to Start. Cancelling the Start context would cancel running
+	// job contexts immediately, which is equivalent to StopAndCancel.
 	signalCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
