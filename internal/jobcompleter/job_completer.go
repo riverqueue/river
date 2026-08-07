@@ -45,7 +45,7 @@ type SubscribeFunc func(update CompleterJobUpdated)
 type CompleterJobUpdated struct {
 	Job      *rivertype.JobRow
 	JobStats *jobstats.JobStatistics
-	Snoozed  bool
+	Reason   riverdriver.JobSetStateReason
 }
 
 type InlineCompleter struct {
@@ -104,7 +104,7 @@ func (c *InlineCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobst
 	c.subscribeCh <- []CompleterJobUpdated{{
 		Job:      jobs[0],
 		JobStats: stats,
-		Snoozed:  params.Snoozed,
+		Reason:   params.Reason,
 	}}
 
 	return nil
@@ -219,7 +219,7 @@ func (c *AsyncCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobsta
 		c.subscribeCh <- []CompleterJobUpdated{{
 			Job:      jobs[0],
 			JobStats: stats,
-			Snoozed:  params.Snoozed,
+			Reason:   params.Reason,
 		}}
 
 		return nil
@@ -503,19 +503,21 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 
 	var (
 		completeTime = c.Time.Now()
-		events       = make([]CompleterJobUpdated, len(jobRows))
+		events       = make([]CompleterJobUpdated, 0, len(jobRows))
 	)
-	for i, jobRow := range jobRows {
+	for _, jobRow := range jobRows {
 		setState := setStateBatch[jobRow.ID]
 		setState.Stats.CompleteDuration = completeTime.Sub(setState.StartTime)
-		events[i] = CompleterJobUpdated{
+		events = append(events, CompleterJobUpdated{
 			Job:      jobRow,
 			JobStats: setState.Stats,
-			Snoozed:  setState.Params.Snoozed,
-		}
+			Reason:   setState.Params.Reason,
+		})
 	}
 
-	c.subscribeCh <- events
+	if len(events) > 0 {
+		c.subscribeCh <- events
+	}
 
 	func() {
 		c.setStateParamsMu.Lock()

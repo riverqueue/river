@@ -326,9 +326,9 @@ func testCompleterSubscribe(t *testing.T, constructor func(schema string, exec r
 	completer.Stop() // closes subscribeChan
 
 	updates := riversharedtest.WaitOrTimeoutN(t, jobUpdateChan, 4)
-	for range 4 {
-		require.Equal(t, rivertype.JobStateCompleted, updates[0].Job.State)
-		require.False(t, updates[0].Snoozed)
+	for _, update := range updates {
+		require.Equal(t, rivertype.JobStateCompleted, update.Job.State)
+		require.Equal(t, riverdriver.JobSetStateReasonCompleted, update.Reason)
 	}
 	go completer.Stop()
 	// drain all remaining jobs
@@ -1008,6 +1008,7 @@ func testCompleter[TCompleter JobCompleter](
 			job5 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning)})
 			job6 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning)})
 			job7 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			job8 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning)})
 		)
 
 		require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCancelled(job1.ID, time.Now(), []byte("{}"), nil)))
@@ -1015,8 +1016,9 @@ func testCompleter[TCompleter JobCompleter](
 		require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateDiscarded(job3.ID, time.Now(), []byte("{}"), nil)))
 		require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateErrorAvailable(job4.ID, time.Now(), []byte("{}"), nil)))
 		require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateErrorRetryable(job5.ID, time.Now(), []byte("{}"), nil)))
-		require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateSnoozed(job6.ID, time.Now(), 10, nil)))
-		require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateSnoozedAvailable(job7.ID, time.Now(), 10, nil)))
+		require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateInterrupted(job6.ID, time.Now(), job6.Attempt, nil)))
+		require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateSnoozed(job7.ID, time.Now(), 10, nil)))
+		require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateSnoozedAvailable(job8.ID, time.Now(), 10, nil)))
 
 		completer.Stop()
 
@@ -1025,8 +1027,9 @@ func testCompleter[TCompleter JobCompleter](
 		requireState(t, bundle, job3.ID, rivertype.JobStateDiscarded)
 		requireState(t, bundle, job4.ID, rivertype.JobStateAvailable)
 		requireState(t, bundle, job5.ID, rivertype.JobStateRetryable)
-		requireState(t, bundle, job6.ID, rivertype.JobStateScheduled)
-		requireState(t, bundle, job7.ID, rivertype.JobStateAvailable)
+		requireState(t, bundle, job6.ID, rivertype.JobStateAvailable)
+		requireState(t, bundle, job7.ID, rivertype.JobStateScheduled)
+		requireState(t, bundle, job8.ID, rivertype.JobStateAvailable)
 	})
 
 	t.Run("Subscription", func(t *testing.T) {
@@ -1037,23 +1040,23 @@ func testCompleter[TCompleter JobCompleter](
 		var (
 			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning)})
 			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning)})
 		)
 
 		require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(job1.ID, time.Now(), nil)))
-		require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateSnoozedAvailable(job2.ID, time.Now(), job2.Attempt, nil)))
+		require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateInterrupted(job2.ID, time.Now(), job2.Attempt, nil)))
+		require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateSnoozedAvailable(job3.ID, time.Now(), job3.Attempt, nil)))
 
 		completer.Stop()
 
 		// Unfortunately we have to do this awkward loop to wait for all updates
 		// because updates are sent through the channel as batches. The sync and
-		// async completer don't work in batches and therefore send batches of
-		// one item each while the batch completer will send both. Put
-		// otherwise, expect the sync and async completers to iterate this loop
-		// twice and batch completer to iterate it once.
+		// async completers send batches of one item each, while the batch
+		// completer may group updates.
 		var jobUpdates []CompleterJobUpdated
 		for {
 			jobUpdates = append(jobUpdates, riversharedtest.WaitOrTimeout(t, bundle.subscribeCh)...)
-			if len(jobUpdates) >= 2 {
+			if len(jobUpdates) >= 3 {
 				break
 			}
 		}
@@ -1070,10 +1073,13 @@ func testCompleter[TCompleter JobCompleter](
 
 		job1Update := findUpdate(job1.ID)
 		require.Equal(t, rivertype.JobStateCompleted, job1Update.Job.State)
-		require.False(t, job1Update.Snoozed)
+		require.Equal(t, riverdriver.JobSetStateReasonCompleted, job1Update.Reason)
 		job2Update := findUpdate(job2.ID)
 		require.Equal(t, rivertype.JobStateAvailable, job2Update.Job.State)
-		require.True(t, job2Update.Snoozed)
+		require.Equal(t, riverdriver.JobSetStateReasonInterrupted, job2Update.Reason)
+		job3Update := findUpdate(job3.ID)
+		require.Equal(t, rivertype.JobStateAvailable, job3Update.Job.State)
+		require.Equal(t, riverdriver.JobSetStateReasonSnoozed, job3Update.Reason)
 	})
 
 	t.Run("MultipleCycles", func(t *testing.T) {
