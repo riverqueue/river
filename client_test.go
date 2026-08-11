@@ -8316,6 +8316,26 @@ func Test_Client_Start_Error(t *testing.T) {
 		require.Equal(t, pgerrcode.InvalidCatalogName, pgErr.Code)
 	})
 
+	t.Run("DatabaseErrorAfterSuccessfulStart", func(t *testing.T) {
+		t.Parallel()
+
+		dbPool := riversharedtest.DBPoolClone(ctx, t)
+		driver := NewDriverPollOnly(dbPool)
+		schema := riverdbtest.TestSchema(ctx, t, driver, nil)
+
+		client, err := NewClient(driver, newTestConfig(t, schema))
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, client.Stop(ctx)) })
+
+		require.NoError(t, client.Start(ctx))
+		require.NoError(t, client.Stop(ctx))
+
+		dbPool.Close()
+
+		err = client.Start(ctx)
+		require.ErrorIs(t, err, riverdriver.ErrClosedPool)
+	})
+
 	t.Run("CanRestartAfterFailure", func(t *testing.T) {
 		t.Parallel()
 

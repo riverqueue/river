@@ -18,11 +18,23 @@ import (
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
+	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivertype"
 )
 
 // Verify interface compliance.
 var _ riverdriver.Driver[pgx.Tx] = New(nil)
+
+type executorInitDriverTestDBTX struct {
+	*pgxpool.Pool
+
+	QueryRowStarted testsignal.TestSignal[struct{}]
+}
+
+func (d *executorInitDriverTestDBTX) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	d.QueryRowStarted.Signal(struct{}{})
+	return d.Pool.QueryRow(ctx, sql, args...)
+}
 
 func TestNew(t *testing.T) {
 	t.Parallel()
@@ -41,6 +53,49 @@ func TestNew(t *testing.T) {
 		driver := New(nil)
 		require.Nil(t, driver.dbPool)
 	})
+}
+
+func TestExecutor_InitDriverDoesNotBlockTransaction(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	config := testPoolConfig()
+	config.MaxConns = 1
+	dbPool := testPool(ctx, t, config)
+	driver := New(dbPool)
+
+	tx, err := dbPool.Begin(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+	poolDBTX := &executorInitDriverTestDBTX{Pool: dbPool}
+	poolDBTX.QueryRowStarted.Init(t)
+	poolExecutor := &Executor{
+		dbtx:   templateReplaceWrapper{dbtx: poolDBTX, replacer: &driver.replacer},
+		driver: driver,
+	}
+
+	initCtx, initCancel := context.WithTimeout(ctx, 10*time.Second)
+	t.Cleanup(initCancel)
+
+	var poolInitFinished testsignal.TestSignal[error]
+	poolInitFinished.Init(t)
+	go func() { poolInitFinished.Signal(poolExecutor.InitDriver(initCtx)) }()
+	poolDBTX.QueryRowStarted.WaitOrTimeout()
+
+	var txInitFinished testsignal.TestSignal[error]
+	txInitFinished.Init(t)
+	go func() { txInitFinished.Signal(driver.UnwrapExecutor(tx).InitDriver(ctx)) }()
+
+	select {
+	case err := <-txInitFinished.WaitC():
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		require.FailNow(t, "transactional driver initialization blocked behind pool initialization")
+	}
+
+	require.NoError(t, tx.Rollback(ctx))
+	require.NoError(t, poolInitFinished.WaitOrTimeout())
 }
 
 func TestListener_Close(t *testing.T) {

@@ -5,17 +5,33 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
+	"github.com/riverqueue/river/rivershared/testsignal"
+	"github.com/riverqueue/river/rivershared/util/urlutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
 // Verify interface compliance.
 var _ riverdriver.Driver[*sql.Tx] = New(nil)
+
+type executorInitDriverTestDBTX struct {
+	*sql.DB
+
+	QueryRowStarted testsignal.TestSignal[struct{}]
+}
+
+func (d *executorInitDriverTestDBTX) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	d.QueryRowStarted.Signal(struct{}{})
+	return d.DB.QueryRowContext(ctx, query, args...)
+}
 
 func TestNew(t *testing.T) {
 	t.Parallel()
@@ -46,6 +62,51 @@ func TestNew(t *testing.T) {
 			driver.GetListener(&riverdriver.GetListenenerParams{})
 		})
 	})
+}
+
+func TestExecutor_InitDriverDoesNotBlockTransaction(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dbPool, err := sql.Open("pgx", urlutil.DatabaseSQLCompatibleURL(riversharedtest.TestDatabaseURL()))
+	require.NoError(t, err)
+	dbPool.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, dbPool.Close()) })
+
+	driver := New(dbPool)
+	tx, err := dbPool.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tx.Rollback() })
+
+	poolDBTX := &executorInitDriverTestDBTX{DB: dbPool}
+	poolDBTX.QueryRowStarted.Init(t)
+	poolExecutor := &Executor{
+		dbPool: dbPool,
+		dbtx:   templateReplaceWrapper{dbtx: poolDBTX, replacer: &driver.replacer},
+		driver: driver,
+	}
+
+	initCtx, initCancel := context.WithTimeout(ctx, 10*time.Second)
+	t.Cleanup(initCancel)
+
+	var poolInitFinished testsignal.TestSignal[error]
+	poolInitFinished.Init(t)
+	go func() { poolInitFinished.Signal(poolExecutor.InitDriver(initCtx)) }()
+	poolDBTX.QueryRowStarted.WaitOrTimeout()
+
+	var txInitFinished testsignal.TestSignal[error]
+	txInitFinished.Init(t)
+	go func() { txInitFinished.Signal(driver.UnwrapExecutor(tx).InitDriver(ctx)) }()
+
+	select {
+	case err := <-txInitFinished.WaitC():
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		require.FailNow(t, "transactional driver initialization blocked behind pool initialization")
+	}
+
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, poolInitFinished.WaitOrTimeout())
 }
 
 func TestNewWithPgxListener(t *testing.T) {

@@ -1,6 +1,11 @@
 -- name: PGAdvisoryXactLock :exec
 SELECT pg_advisory_xact_lock(@key);
 
+-- name: PGGetProductAndVersion :one
+SELECT
+    version()::text AS product,
+    current_setting('server_version_num')::int AS version_num;
+
 -- name: PGNotifyMany :exec
 WITH topic_to_notify AS (
     SELECT
