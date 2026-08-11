@@ -41,9 +41,6 @@ func TestQueueMaintainerLeader(t *testing.T) {
 			ClientID:        "test_client_id",
 			Elector:         elector,
 			QueueMaintainer: maintainer,
-			RequestResignFunc: func(ctx context.Context) error {
-				return nil
-			},
 		})
 		leader.TestSignals.Init(t)
 
@@ -59,32 +56,14 @@ func TestQueueMaintainerLeader(t *testing.T) {
 		maintainer := NewQueueMaintainer(riversharedtest.BaseServiceArchetype(t), []startstop.Service{failingSvc})
 		maintainer.StaggerStartupDisable(true)
 
-		resignCalled := make(chan struct{})
-		archetype := riversharedtest.BaseServiceArchetype(t)
+		leader := setup(t, maintainer)
+		sub := leader.config.Elector.Listen()
+		t.Cleanup(sub.Unlisten)
 
-		var (
-			dbPool = riversharedtest.DBPool(ctx, t)
-			driver = riverpgxv5.New(dbPool)
-			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
-		)
-
-		elector := leadership.NewElector(archetype, driver.GetExecutor(), nil, &leadership.Config{
-			ClientID: "test_client_id",
-			Schema:   schema,
-		})
-		require.NoError(t, elector.Start(ctx))
-		t.Cleanup(elector.Stop)
-
-		leader := NewQueueMaintainerLeader(archetype, &QueueMaintainerLeaderConfig{
-			ClientID:        "test_client_id",
-			Elector:         elector,
-			QueueMaintainer: maintainer,
-			RequestResignFunc: func(ctx context.Context) error {
-				close(resignCalled)
-				return nil
-			},
-		})
-		leader.TestSignals.Init(t)
+		// Setup starts the elector. Subscribe before the maintainer can fail so
+		// the leadership loss is observable even if it immediately wins again.
+		for !riversharedtest.WaitOrTimeout(t, sub.C()).IsLeader {
+		}
 
 		require.NoError(t, leader.Start(ctx))
 		t.Cleanup(leader.Stop)
@@ -97,8 +76,10 @@ func TestQueueMaintainerLeader(t *testing.T) {
 		}
 
 		leader.TestSignals.StartRetriesExhausted.WaitOrTimeout()
-		riversharedtest.WaitOrTimeout(t, resignCalled)
-		require.Equal(t, int64(queueMaintainerMaxStartAttempts), startAttempts.Load())
+		require.False(t, riversharedtest.WaitOrTimeout(t, sub.C()).IsLeader)
+		// A new term permits maintenance startup to retry again.
+		require.True(t, riversharedtest.WaitOrTimeout(t, sub.C()).IsLeader)
+		require.GreaterOrEqual(t, startAttempts.Load(), int64(queueMaintainerMaxStartAttempts))
 	})
 
 	t.Run("StartsMaintainerOnLeadershipGain", func(t *testing.T) {

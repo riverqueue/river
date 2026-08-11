@@ -20,6 +20,7 @@ package riversqlite
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -38,10 +39,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
-
-	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riversqlite/internal/dbsqlc"
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
@@ -199,12 +196,32 @@ func (e *Executor) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
 		return e.execTx.Begin(ctx)
 	}
 
-	tx, err := e.dbPool.BeginTx(ctx, nil)
+	conn, err := e.dbPool.Conn(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	executorTx := &ExecutorTx{tx: tx}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		// Turso can execute BEGIN, then report context cancellation without
+		// rolling back. Discard the connection while we still own it so an
+		// open transaction can't be returned to the pool.
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		_ = conn.Close()
+		return nil, err
+	}
+
+	// database/sql rolls back on cancellation, but a transaction begun on a
+	// dedicated connection doesn't return that connection to the pool. Close
+	// it on cancellation too; Close waits for the rollback to finish.
+	stopCloseFunc := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	executorTx := &ExecutorTx{
+		releaseConnFunc: func() {
+			stopCloseFunc()
+			_ = conn.Close()
+		},
+		tx: tx,
+	}
 	executorTx.Executor = Executor{nil, templateReplaceWrapper{tx, &e.driver.replacer}, e.driver, executorTx}
 
 	return executorTx, nil
@@ -293,6 +310,8 @@ func (e *Executor) IndexesExist(ctx context.Context, params *riverdriver.Indexes
 
 	return exists, nil
 }
+
+func (e *Executor) InitDriver(context.Context) error { return nil }
 
 func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error) {
 	// Unlike Postgres, this must be carried out in two operations because
@@ -573,6 +592,11 @@ func (e *Executor) JobGetByKindMany(ctx context.Context, params *riverdriver.Job
 	return sliceutil.MapError(jobs, jobRowFromInternal)
 }
 
+func (e *Executor) JobGetCancelRequested(ctx context.Context, params *riverdriver.JobGetCancelRequestedParams) ([]int64, error) {
+	ids, err := dbsqlc.New().JobGetCancelRequested(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.ID)
+	return ids, interpretError(err)
+}
+
 func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error) {
 	jobs, err := dbsqlc.New().JobGetStuck(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobGetStuckParams{
 		AfterID:      params.AfterID,
@@ -611,7 +635,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.Jo
 
 		return &riverdriver.JobInsertFastResult{
 			Job:                      job,
-			UniqueSkippedAsDuplicate: gjson.GetBytes(job.Metadata, rivercommon.MetadataKeyUniqueNonce).Str != uniqueNonce,
+			UniqueSkippedAsDuplicate: riverdriver.UniqueInsertMetadataIsDuplicate(job.Metadata, uniqueNonce),
 		}, nil
 	})
 }
@@ -1216,6 +1240,10 @@ func (e *Executor) NotifyMany(ctx context.Context, params *riverdriver.NotifyMan
 	return dbsqlc.New().NotificationInsertMany(schemaTemplateParam(ctx, params.Schema), e.dbtx, notifications)
 }
 
+func (e *Executor) Ping(ctx context.Context) error {
+	return e.Exec(ctx, "SELECT 1")
+}
+
 func (e *Executor) PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}, error) {
 	return nil, riverdriver.ErrNotImplemented
 }
@@ -1420,7 +1448,8 @@ func (e *Executor) TableTruncate(ctx context.Context, params *riverdriver.TableT
 type ExecutorTx struct {
 	Executor
 
-	tx *sql.Tx
+	releaseConnFunc func()
+	tx              *sql.Tx
 }
 
 func (t *ExecutorTx) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
@@ -1434,11 +1463,17 @@ func (t *ExecutorTx) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) 
 }
 
 func (t *ExecutorTx) Commit(ctx context.Context) error {
+	if t.releaseConnFunc != nil {
+		defer t.releaseConnFunc()
+	}
 	// unfortunately, `database/sql` does not take a context ...
 	return t.tx.Commit()
 }
 
 func (t *ExecutorTx) Rollback(ctx context.Context) error {
+	if t.releaseConnFunc != nil {
+		defer t.releaseConnFunc()
+	}
 	// unfortunately, `database/sql` does not take a context ...
 	return t.tx.Rollback()
 }
@@ -1546,7 +1581,7 @@ func sqliteJobInsertFastManyJobsParam(jobs []*riverdriver.JobInsertFastParams, u
 		metadata := sliceutil.FirstNonEmpty(job.Metadata, []byte("{}"))
 		if uniqueNonce != "" {
 			var err error
-			metadata, err = sjson.SetBytes(metadata, rivercommon.MetadataKeyUniqueNonce, uniqueNonce)
+			metadata, err = riverdriver.UniqueInsertMetadataWithNonce(metadata, uniqueNonce)
 			if err != nil {
 				return nil, err
 			}

@@ -2,7 +2,9 @@ package riverdrivertest
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -52,6 +54,56 @@ func exerciseExecutorTx[TTx any](ctx context.Context, t *testing.T,
 				_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
 				require.ErrorIs(t, err, rivertype.ErrNotFound)
 			}
+		})
+
+		t.Run("CancelledBeginLeavesPoolUsable", func(t *testing.T) {
+			t.Parallel()
+
+			driver, _ := driverWithSchema(ctx, t, nil)
+			exec := driver.GetExecutor()
+
+			// Race cancellation against BEGIN. A driver may start the
+			// transaction but return an error if cancellation arrives just
+			// afterwards. Subsequent transactions must still work.
+			for range 100 {
+				beginCtx, cancel := context.WithCancel(ctx)
+				var cancelGroup sync.WaitGroup
+				cancelGroup.Go(cancel)
+				tx, err := exec.Begin(beginCtx)
+				cancelGroup.Wait()
+				if err == nil {
+					_ = tx.Rollback(ctx)
+				}
+
+				tx, err = exec.Begin(ctx)
+				require.NoError(t, err)
+				require.NoError(t, tx.Commit(ctx))
+			}
+		})
+
+		t.Run("CancelledSQLiteTransactionReleasesConnection", func(t *testing.T) {
+			t.Parallel()
+
+			driver, _ := driverWithSchema(ctx, t, nil)
+			if driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+				t.Skip("SQLite pools use one connection and database/sql rolls back automatically on cancellation")
+			}
+			exec := driver.GetExecutor()
+
+			beginCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			tx, err := exec.Begin(beginCtx)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = tx.Rollback(ctx) })
+			cancel()
+
+			// No explicit rollback: cancellation alone must return the only
+			// connection to the pool after database/sql rolls back.
+			nextCtx, nextCancel := context.WithTimeout(ctx, 5*time.Second)
+			defer nextCancel()
+			nextTx, err := exec.Begin(nextCtx)
+			require.NoError(t, err)
+			require.NoError(t, nextTx.Rollback(ctx))
 		})
 
 		t.Run("NestedTransactions", func(t *testing.T) {

@@ -60,10 +60,10 @@ WITH currently_held_leaders AS (
     FOR UPDATE
 ),
 notified_resignations AS (
-    SELECT pg_notify(
+    SELECT CASE WHEN @notify::boolean THEN pg_notify(
         concat(coalesce(sqlc.narg('schema')::text, current_schema()), '.', @leadership_topic::text),
         json_build_object('leader_id', leader_id, 'action', 'resigned')::text
-    )
+    ) END
     FROM currently_held_leaders
 )
 DELETE FROM /* TEMPLATE: schema */river_leader USING notified_resignations;

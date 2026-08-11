@@ -182,6 +182,14 @@ FROM /* TEMPLATE: schema */river_job
 WHERE kind IN (sqlc.slice('kind'))
 ORDER BY id;
 
+-- name: JobGetCancelRequested :many
+SELECT id
+FROM /* TEMPLATE: schema */river_job
+WHERE id IN (sqlc.slice('id'))
+    AND (metadata -> 'cancel_attempted_at') IS NOT NULL
+    AND state = 'running'
+ORDER BY id;
+
 -- name: JobGetStuck :many
 SELECT *
 FROM /* TEMPLATE: schema */river_job

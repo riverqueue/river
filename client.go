@@ -1075,10 +1075,9 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		}
 
 		client.queueMaintainerLeader = maintenance.NewQueueMaintainerLeader(archetype, &maintenance.QueueMaintainerLeaderConfig{
-			ClientID:          config.ID,
-			Elector:           client.elector,
-			QueueMaintainer:   client.queueMaintainer,
-			RequestResignFunc: client.clientNotifyBundle.RequestResign,
+			ClientID:        config.ID,
+			Elector:         client.elector,
+			QueueMaintainer: client.queueMaintainer,
 		})
 		client.services = append(client.services, client.queueMaintainerLeader)
 		client.testSignals.queueMaintainerLeader = &client.queueMaintainerLeader.TestSignals
@@ -1136,8 +1135,29 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		// available, the client appears to have started even though it's completely
 		// non-functional. Here we try to make an initial assessment of health and
 		// return quickly in case of an apparent problem.
-		if err := c.driver.GetExecutor().Exec(fetchCtx, "SELECT 1"); err != nil {
+		executor := c.driver.GetExecutor()
+		if err := executor.Ping(fetchCtx); err != nil {
 			return fmt.Errorf("error making initial connection to database: %w", err)
+		}
+		if err := executor.InitDriver(fetchCtx); err != nil {
+			return fmt.Errorf("error initializing driver: %w", err)
+		}
+
+		// Database capabilities are only known after initialization. A notifier
+		// created by NewClient must be removed before any services start if the
+		// server can't deliver notifications (for example, older Yugabyte).
+		if c.notifier != nil && !c.driver.SupportsListener() {
+			c.config.Logger.InfoContext(fetchCtx, "Database does not support listener; entering poll only mode")
+			c.services = slices.DeleteFunc(c.services, func(service startstop.Service) bool {
+				return service == c.notifier
+			})
+			c.notifier = nil
+			if c.elector != nil {
+				c.elector.SetNotifier(nil)
+			}
+			for _, producer := range c.producersByQueueName {
+				producer.config.Notifier = nil
+			}
 		}
 
 		// Each time we start, we need a fresh completer subscribe channel to
@@ -1455,8 +1475,9 @@ func (c *Client[TTx]) Driver() riverdriver.Driver[TTx] {
 //
 // If the job is currently running, it is not immediately cancelled, but is
 // instead marked for cancellation. The client running the job will also be
-// notified (via LISTEN/NOTIFY) to cancel the running job's context. Although
-// the job's context will be cancelled, since Go does not provide a mechanism to
+// notified to cancel the running job's context. When running without a notifier,
+// clients poll for cancellation requests every two seconds. Although the job's
+// context will be cancelled, since Go does not provide a mechanism to
 // interrupt a running goroutine the job will continue running until it returns.
 // As always, it is important for workers to respect context cancellation and
 // return promptly when the job context is done.
@@ -1511,8 +1532,9 @@ func (c *Client[TTx]) JobCancel(ctx context.Context, jobID int64) (*rivertype.Jo
 //
 // If the job is currently running, it is not immediately cancelled, but is
 // instead marked for cancellation. The client running the job will also be
-// notified (via LISTEN/NOTIFY) to cancel the running job's context. Although
-// the job's context will be cancelled, since Go does not provide a mechanism to
+// notified to cancel the running job's context. When running without a notifier,
+// clients poll for cancellation requests every two seconds. Although the job's
+// context will be cancelled, since Go does not provide a mechanism to
 // interrupt a running goroutine the job will continue running until it returns.
 // As always, it is important for workers to respect context cancellation and
 // return promptly when the job context is done.

@@ -155,6 +155,8 @@ type Driver[TTx any] interface {
 
 	// SupportsListener gets whether this driver supports a listener. Drivers
 	// that don't support a listener support poll only mode only.
+	// Before InitDriver, this reports the driver's default capability; callers
+	// must recheck after initialization to account for the database server.
 	//
 	// API is not stable. DO NOT USE.
 	SupportsListener() bool
@@ -167,6 +169,8 @@ type Driver[TTx any] interface {
 	// notification mechanism, it will still broadcast in case there are other
 	// clients/drivers on the database that do support a listener. If
 	// notifications can't be supported at all, no broadcast attempt is made.
+	// Like SupportsListener, this is refined by InitDriver. Executors also
+	// initialize lazily before sending notifications for clients that never start.
 	//
 	// API is not stable. DO NOT USE.
 	SupportsListenNotify() bool
@@ -224,6 +228,11 @@ type Executor interface {
 	IndexReindex(ctx context.Context, params *IndexReindexParams) error
 	IndexReindexArtifacts(ctx context.Context, params *IndexReindexArtifactsParams) ([]string, error)
 
+	// InitDriver initializes driver-specific state using information read from
+	// the database. Implementations must be safe to call concurrently and
+	// repeatedly, and should cache successfully initialized state.
+	InitDriver(ctx context.Context) error
+
 	JobCancel(ctx context.Context, params *JobCancelParams) (*rivertype.JobRow, error)
 	JobCountByAllStates(ctx context.Context, params *JobCountByAllStatesParams) (map[rivertype.JobState]int, error)
 	JobCountByQueueAndState(ctx context.Context, params *JobCountByQueueAndStateParams) ([]*JobCountByQueueAndStateResult, error)
@@ -235,6 +244,11 @@ type Executor interface {
 	JobGetByID(ctx context.Context, params *JobGetByIDParams) (*rivertype.JobRow, error)
 	JobGetByIDMany(ctx context.Context, params *JobGetByIDManyParams) ([]*rivertype.JobRow, error)
 	JobGetByKindMany(ctx context.Context, params *JobGetByKindManyParams) ([]*rivertype.JobRow, error)
+
+	// JobGetCancelRequested returns IDs of running jobs with a cancellation request,
+	// restricted to the provided IDs.
+	JobGetCancelRequested(ctx context.Context, params *JobGetCancelRequestedParams) ([]int64, error)
+
 	JobGetStuck(ctx context.Context, params *JobGetStuckParams) ([]*rivertype.JobRow, error)
 	JobInsertFastMany(ctx context.Context, params *JobInsertFastManyParams) ([]*JobInsertFastResult, error)
 	JobInsertFastManyNoReturning(ctx context.Context, params *JobInsertFastManyParams) (int, error)
@@ -289,6 +303,10 @@ type Executor interface {
 	NotificationDeleteBefore(ctx context.Context, params *NotificationDeleteBeforeParams) (int, error)
 
 	NotifyMany(ctx context.Context, params *NotifyManyParams) error
+
+	// Ping checks that the database is reachable.
+	Ping(ctx context.Context) error
+
 	PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}, error)
 
 	QueueCreateOrSetUpdatedAt(ctx context.Context, params *QueueCreateOrSetUpdatedAtParams) (*rivertype.Queue, error)
@@ -444,6 +462,12 @@ type JobGetByIDManyParams struct {
 
 type JobGetByKindManyParams struct {
 	Kind   []string
+	Schema string
+}
+
+// JobGetCancelRequestedParams restricts cancellation checks to specific job IDs.
+type JobGetCancelRequestedParams struct {
+	ID     []int64
 	Schema string
 }
 

@@ -563,6 +563,48 @@ func (q *Queries) JobGetByKindMany(ctx context.Context, db DBTX, kind []string) 
 	return items, nil
 }
 
+const jobGetCancelRequested = `-- name: JobGetCancelRequested :many
+SELECT id
+FROM /* TEMPLATE: schema */river_job
+WHERE id IN (/*SLICE:id*/?)
+    AND (metadata -> 'cancel_attempted_at') IS NOT NULL
+    AND state = 'running'
+ORDER BY id
+`
+
+func (q *Queries) JobGetCancelRequested(ctx context.Context, db DBTX, id []int64) ([]int64, error) {
+	query := jobGetCancelRequested
+	var queryParams []interface{}
+	if len(id) > 0 {
+		for _, v := range id {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:id*/?", strings.Repeat(",?", len(id))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:id*/?", "NULL", 1)
+	}
+	rows, err := db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const jobGetStuck = `-- name: JobGetStuck :many
 SELECT id, json(args), attempt, attempted_at, json(attempted_by), created_at, json(errors), finalized_at, kind, max_attempts, json(metadata), priority, queue, state, scheduled_at, json(tags), unique_key, unique_states
 FROM /* TEMPLATE: schema */river_job

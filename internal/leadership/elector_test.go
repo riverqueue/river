@@ -19,6 +19,7 @@ import (
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
+	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/dbutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -238,6 +239,60 @@ func TestElectorHandleLeadershipNotification(t *testing.T) {
 
 		elector.handleLeadershipNotification(ctx, notifier.NotificationTopicLeadership, string(mustMarshalJSON(t, validLeadershipChange())))
 
+		require.Empty(t, elector.wakeupChan)
+	})
+}
+
+func TestElectorRequestResign(t *testing.T) {
+	t.Parallel()
+
+	setup := func(t *testing.T) *Elector {
+		t.Helper()
+
+		elector := NewElector(riversharedtest.BaseServiceArchetype(t), nil, nil, &Config{ClientID: "test_client_id"})
+		elector.wakeupChan = make(chan struct{}, 1)
+		elector.publishLeadershipState(true)
+		return elector
+	}
+
+	t.Run("CoalescesRequests", func(t *testing.T) {
+		t.Parallel()
+
+		elector := setup(t)
+
+		var requested testsignal.TestSignal[struct{}]
+		requested.Init(t)
+		go func() {
+			for range 5 {
+				elector.RequestResign(context.Background(), elector.term)
+			}
+			requested.Signal(struct{}{})
+		}()
+		requested.WaitOrTimeout()
+		require.True(t, elector.pendingRequestResign)
+		require.Len(t, elector.wakeupChan, 1)
+	})
+
+	t.Run("IgnoresCancelledContext", func(t *testing.T) {
+		t.Parallel()
+
+		elector := setup(t)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		elector.RequestResign(ctx, elector.term)
+		require.False(t, elector.pendingRequestResign)
+		require.Empty(t, elector.wakeupChan)
+	})
+
+	t.Run("IgnoresFollower", func(t *testing.T) {
+		t.Parallel()
+
+		elector := setup(t)
+
+		elector.publishLeadershipState(false)
+		elector.RequestResign(context.Background(), elector.term)
+		require.False(t, elector.pendingRequestResign)
 		require.Empty(t, elector.wakeupChan)
 	})
 }
@@ -789,6 +844,50 @@ func testElector[TElectorBundle any](
 
 		elector.testSignals.ResignedLeadership.WaitOrTimeout()
 		elector.testSignals.GainedLeadership.WaitOrTimeout()
+	})
+
+	t.Run("RequestResignLocally", func(t *testing.T) {
+		t.Parallel()
+
+		elector, _ := setup(t, nil)
+
+		startElector(ctx, t, elector)
+		elector.testSignals.GainedLeadership.WaitOrTimeout()
+
+		// Late subscribers must receive the current term as well.
+		sub := elector.Listen()
+		t.Cleanup(sub.Unlisten)
+		first := riversharedtest.WaitOrTimeout(t, sub.C())
+		require.True(t, first.IsLeader)
+		require.Positive(t, first.Term)
+
+		elector.RequestResign(ctx, first.Term)
+		require.False(t, riversharedtest.WaitOrTimeout(t, sub.C()).IsLeader)
+		second := riversharedtest.WaitOrTimeout(t, sub.C())
+		require.True(t, second.IsLeader)
+		require.Greater(t, second.Term, first.Term)
+
+		// A failure from the old maintainer must not resign the new term.
+		elector.RequestResign(ctx, first.Term)
+		select {
+		case notification := <-sub.C():
+			t.Fatalf("stale request changed leadership: %+v", notification)
+		case <-time.After(100 * time.Millisecond):
+		}
+
+		elector.Stop()
+		require.False(t, riversharedtest.WaitOrTimeout(t, sub.C()).IsLeader)
+		require.NoError(t, elector.Start(ctx))
+		third := riversharedtest.WaitOrTimeout(t, sub.C())
+		require.True(t, third.IsLeader)
+		require.Greater(t, third.Term, second.Term)
+
+		elector.RequestResign(ctx, second.Term)
+		select {
+		case notification := <-sub.C():
+			t.Fatalf("stale request after restart changed leadership: %+v", notification)
+		case <-time.After(100 * time.Millisecond):
+		}
 	})
 
 	t.Run("RequestResignStress", func(t *testing.T) {

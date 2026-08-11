@@ -48,10 +48,10 @@ WITH locked_job AS (
 notification AS (
     SELECT
         id,
-        pg_notify(
+        CASE WHEN @notify::boolean THEN pg_notify(
             concat(coalesce(sqlc.narg('schema')::text, current_schema()), '.', @control_topic::text),
             json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text
-        )
+        ) END
     FROM
         locked_job
     WHERE
@@ -254,6 +254,14 @@ FROM /* TEMPLATE: schema */river_job
 WHERE kind = any(@kind::text[])
 ORDER BY id;
 
+-- name: JobGetCancelRequested :many
+SELECT id
+FROM /* TEMPLATE: schema */river_job
+WHERE id = any(@id::bigint[])
+    AND metadata ? 'cancel_attempted_at'
+    AND state = 'running'
+ORDER BY id;
+
 -- name: JobGetStuck :many
 SELECT *
 FROM /* TEMPLATE: schema */river_job
@@ -318,7 +326,9 @@ ON CONFLICT (unique_key)
         AND /* TEMPLATE: schema */river_job_state_in_bitmask(unique_states, state)
     -- Something needs to be updated for a row to be returned on a conflict.
     DO UPDATE SET kind = EXCLUDED.kind
-RETURNING sqlc.embed(river_job), (xmax != 0) AS unique_skipped_as_duplicate;
+RETURNING
+    sqlc.embed(river_job),
+    /* TEMPLATE_BEGIN: unique_skipped_as_duplicate */ (xmax != 0) /* TEMPLATE_END */ AS unique_skipped_as_duplicate;
 
 -- name: JobInsertFastManyNoReturning :execrows
 INSERT INTO /* TEMPLATE: schema */river_job(
