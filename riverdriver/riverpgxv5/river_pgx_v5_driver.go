@@ -724,6 +724,10 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 	return jobRowsFromInternalPartial(jobs), nil
 }
 
+// JobSetStateIfRunningManyConcurrency returns the number of completion calls
+// that can safely run concurrently through a pgx pool.
+func (e *Executor) JobSetStateIfRunningManyConcurrency() int { return 2 }
+
 func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateParams) (*rivertype.JobRow, error) {
 	metadata := params.Metadata
 	if metadata == nil {
@@ -1141,6 +1145,10 @@ type ExecutorTx struct {
 func (t *ExecutorTx) Commit(ctx context.Context) error {
 	return t.tx.Commit(ctx)
 }
+
+// JobSetStateIfRunningManyConcurrency overrides the embedded Executor's value
+// because a single transaction can't run statements concurrently.
+func (t *ExecutorTx) JobSetStateIfRunningManyConcurrency() int { return 1 }
 
 func (t *ExecutorTx) Rollback(ctx context.Context) error {
 	return t.tx.Rollback(ctx)
