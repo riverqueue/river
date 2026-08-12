@@ -1,0 +1,48 @@
+name: Rust scheduled soak
+
+on:
+  schedule:
+    - cron: "17 3 * * 0"
+  workflow_dispatch:
+    inputs:
+      duration:
+        default: 6h
+        description: Mixed Go/Rust soak duration
+        required: true
+        type: string
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 390
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres-version: [14, 15, 16, 17, 18]
+    env:
+      RIVER_CONFORMANCE_DATABASE_URL: postgres://postgres:postgres@localhost:5432/river_rust_soak?sslmode=disable
+      RIVER_CONFORMANCE_SOAK_DURATION: ${{ inputs.duration || '6h' }}
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres-version }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Create test database
+        run: PGPASSWORD=postgres createdb -h localhost -U postgres river_rust_soak
+      - name: Mixed soak
+        run: make test/conformance/soak

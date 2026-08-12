@@ -1,0 +1,43 @@
+{
+  "$schema": "schema/protocol.schema.json",
+  "capabilities": {
+    "barriers": "complete",
+    "cancel": "complete",
+    "custom_schema": "complete",
+    "deterministic_controls": "complete",
+    "extensions": "complete",
+    "fast_insert": "complete",
+    "fault_injection": "complete",
+    "get": "complete",
+    "insert": "complete",
+    "job_crud": "complete",
+    "leadership": "complete",
+    "maintenance": "complete",
+    "lifecycle": "complete",
+    "migrate": "complete",
+    "notifications": "complete",
+    "periodic_jobs": "complete",
+    "poll_only": "complete",
+    "queues": "complete",
+    "reset": "complete",
+    "resumable_jobs": "complete",
+    "retry": "complete",
+    "subscriptions": "complete",
+    "transactions": "complete",
+    "unique_jobs": "complete",
+    "work": "complete"
+  },
+  "go": {
+    "module": "github.com/riverqueue/river",
+    "version": "0.43.0-development"
+  },
+  "migration": {
+    "latest": 7,
+    "line": "main"
+  },
+  "protocol_revision": 1,
+  "rust": {
+    "crate": "riverqueue",
+    "version": "0.43.0-alpha.1"
+  }
+}

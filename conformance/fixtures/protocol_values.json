@@ -1,0 +1,155 @@
+{
+  "$schema": "../schema/protocol-values.schema.json",
+  "attempt_error": {
+    "at": "2026-01-02T03:04:05.6789Z",
+    "attempt": 3,
+    "error": "worker failed: escaped \"detail\"",
+    "trace": "frame one\nframe two"
+  },
+  "job_states": [
+    {
+      "state": "available",
+      "unique_bit": 1
+    },
+    {
+      "state": "cancelled",
+      "unique_bit": 2
+    },
+    {
+      "state": "completed",
+      "unique_bit": 4
+    },
+    {
+      "state": "discarded",
+      "unique_bit": 8
+    },
+    {
+      "state": "pending",
+      "unique_bit": 16
+    },
+    {
+      "state": "retryable",
+      "unique_bit": 32
+    },
+    {
+      "state": "running",
+      "unique_bit": 64
+    },
+    {
+      "state": "scheduled",
+      "unique_bit": 128
+    }
+  ],
+  "metadata_keys": {
+    "output": "output",
+    "periodic_job_id": "river:periodic_job_id",
+    "rescue_count": "river:rescue_count",
+    "resumable_cursor": "river:resumable_cursor",
+    "resumable_step": "river:resumable_step",
+    "unique_nonce": "river:unique_nonce"
+  },
+  "notifications": [
+    {
+      "name": "cancel",
+      "payload": {
+        "action": "cancel",
+        "job_id": 42,
+        "queue": "priority"
+      },
+      "topic": "river_control"
+    },
+    {
+      "name": "insert",
+      "payload": {
+        "queue": "priority"
+      },
+      "topic": "river_insert"
+    },
+    {
+      "name": "metadata_changed",
+      "payload": {
+        "action": "metadata_changed",
+        "metadata": {
+          "owner": "rust"
+        },
+        "queue": "priority"
+      },
+      "topic": "river_control"
+    },
+    {
+      "name": "pause",
+      "payload": {
+        "action": "pause",
+        "queue": "priority"
+      },
+      "topic": "river_control"
+    },
+    {
+      "name": "request_resign",
+      "payload": {
+        "action": "request_resign",
+        "leader_id": ""
+      },
+      "topic": "river_leadership"
+    },
+    {
+      "name": "resigned",
+      "payload": {
+        "action": "resigned",
+        "leader_id": "client-1"
+      },
+      "topic": "river_leadership"
+    },
+    {
+      "name": "resume",
+      "payload": {
+        "action": "resume",
+        "queue": "priority"
+      },
+      "topic": "river_control"
+    }
+  ],
+  "protocol_revision": 1,
+  "retry_cases": [
+    {
+      "error_count": 1,
+      "expected_delay_ns": 1007585966,
+      "job_id": 42,
+      "now": "2026-01-02T03:04:05.6789Z",
+      "seed": 0
+    },
+    {
+      "error_count": 2,
+      "expected_delay_ns": 15351903370,
+      "job_id": 42,
+      "now": "2026-01-02T03:04:05.6789Z",
+      "seed": 123
+    },
+    {
+      "error_count": 3,
+      "expected_delay_ns": 83973474471,
+      "job_id": 9007199254740991,
+      "now": "2026-01-02T03:04:05.6789Z",
+      "seed": 18446744073709551615
+    },
+    {
+      "error_count": 11,
+      "expected_delay_ns": 14472375008645,
+      "job_id": 1,
+      "now": "2026-01-02T03:04:05.6789Z",
+      "seed": 456
+    },
+    {
+      "error_count": 310,
+      "expected_delay_ns": 9223372036854775807,
+      "job_id": 42,
+      "now": "2026-01-02T03:04:05.6789Z",
+      "seed": 123
+    }
+  ],
+  "topics": {
+    "control": "river_control",
+    "insert": "river_insert",
+    "leadership": "river_leadership"
+  }
+}

@@ -1,0 +1,106 @@
+name: Rust
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks@0.49.0
+
+      - name: Verify generated compatibility artifacts
+        run: make verify/conformance verify/rust-migrations
+
+      - name: Lint
+        run: make lint/rust
+
+      - name: Documentation and examples
+        run: make doc/rust
+
+      - name: Dependency and license policy
+        run: make check/rust/dependencies
+
+      - name: Package archives
+        run: make check/rust/package
+
+      - name: Public API compatibility
+        run: make check/rust/semver
+
+  msrv:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        rust-version: ["1.95", "1.96", "1.97"]
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust-version }}
+      - name: Check workspace
+        run: cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked
+
+  postgres-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres-version: [14, 15, 16, 17, 18]
+    env:
+      RIVER_CONFORMANCE_DATABASE_URL: postgres://postgres:postgres@localhost:5432/river_rust_test?sslmode=disable
+      RIVER_CONFORMANCE_PERFORMANCE: "1"
+      RIVER_CONFORMANCE_SOAK_DURATION: 10m
+      RIVER_RUST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/river_rust_test?sslmode=disable
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres-version }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Create test database
+        run: PGPASSWORD=postgres createdb -h localhost -U postgres river_rust_test
+      - name: Rust PostgreSQL suite
+        run: make test/rust/postgres
+      - name: Mixed correctness and chaos
+        run: make test/conformance
+      - name: Release performance
+        run: make test/conformance/performance
+      - name: Ten-minute mixed soak
+        run: make test/conformance/soak

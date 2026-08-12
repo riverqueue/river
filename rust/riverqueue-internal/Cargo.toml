@@ -1,0 +1,19 @@
+[package]
+name = "riverqueue-internal"
+description = "Unstable implementation details shared by River Rust crates"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio-util.workspace = true
+
+[lints]
+workspace = true

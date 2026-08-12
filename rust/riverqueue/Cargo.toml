@@ -1,0 +1,40 @@
+[package]
+name = "riverqueue"
+description = "Fast and reliable background jobs for Rust and PostgreSQL"
+keywords = ["background", "jobs", "postgres", "queue", "tokio"]
+categories = ["asynchronous", "database"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+postgres-tests = []
+
+[dependencies]
+async-trait.workspace = true
+base64.workspace = true
+chrono.workspace = true
+cron.workspace = true
+futures-util.workspace = true
+riverqueue-internal = { path = "../riverqueue-internal", version = "=0.43.0-alpha.1" }
+riverqueue-macros = { path = "../riverqueue-macros", version = "=0.43.0-alpha.1" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.43.0-alpha.1" }
+serde.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

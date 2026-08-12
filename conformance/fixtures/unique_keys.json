@@ -1,0 +1,160 @@
+{
+  "$schema": "../schema/unique-keys.schema.json",
+  "cases": [
+    {
+      "args": {
+        "zeta": "quoted \\\"value\\\" and \\\\ slash",
+        "alpha": "\u003calpha\u003e\u0026\u2028line",
+        "maximum": 9007199254740991
+      },
+      "expected_sha256": "7a84c62c8d470ca388a0a1e41c311b9eb1ea21f7b88157ceb876fc82e698b6af",
+      "expected_state_mask": 245,
+      "kind": "conformance_all_args",
+      "name": "all_args_sorted_and_escaped",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": true,
+        "by_period_nanos": 0,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_paths": null
+    },
+    {
+      "args": {
+        "exponent": 1e+100,
+        "fraction": 1.25,
+        "maximum": 9223372036854775807,
+        "minimum": -9223372036854775808,
+        "unsigned_maximum": 18446744073709551615
+      },
+      "expected_sha256": "2c1533b3ab43068407d14e82ddb34a295a51375ae3a27fef6931123f07677f38",
+      "expected_state_mask": 245,
+      "kind": "conformance_numeric_boundaries",
+      "name": "numeric_boundaries",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": true,
+        "by_period_nanos": 0,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_paths": null
+    },
+    {
+      "args": {
+        "account": {
+          "id": "acct-123",
+          "ignored": "not selected"
+        },
+        "ignored": true,
+        "label": "selected"
+      },
+      "expected_sha256": "6130dc4f753402d1faeb6bbc3e6c21415245bb282ad1fd16bcbfeebde525e726",
+      "expected_state_mask": 245,
+      "kind": "conformance_selected_args",
+      "name": "selected_nested_args",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": true,
+        "by_period_nanos": 0,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_paths": [
+        "account.id",
+        "label"
+      ]
+    },
+    {
+      "args": {
+        "id": 42
+      },
+      "expected_sha256": "5396f06a082abd7a929915135ebd363a9a47d800176b03ce7736f93a5ba9e22e",
+      "expected_state_mask": 245,
+      "kind": "conformance_simple",
+      "name": "period_from_now",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": false,
+        "by_period_nanos": 5400000000000,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_paths": null
+    },
+    {
+      "args": {
+        "id": 42
+      },
+      "expected_sha256": "b7f3c49952996b760b8b3ff6cf48f426e03a6ef0f004fb6faa51725365cf309a",
+      "expected_state_mask": 245,
+      "kind": "conformance_simple",
+      "name": "period_from_schedule",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": false,
+        "by_period_nanos": 3600000000000,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": "2026-01-02T05:21:05.6789Z",
+      "selected_unique_paths": null
+    },
+    {
+      "args": {
+        "id": 42
+      },
+      "expected_sha256": "d20ce47da8e8015e68b020bbca2b17494139519ae05f8985e5992db4d8dd8a09",
+      "expected_state_mask": 245,
+      "kind": "conformance_simple",
+      "name": "queue_without_kind",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": false,
+        "by_period_nanos": 0,
+        "by_queue": true,
+        "exclude_kind": true
+      },
+      "queue": "priority_emails",
+      "scheduled_at": null,
+      "selected_unique_paths": null
+    },
+    {
+      "args": {
+        "id": 42
+      },
+      "expected_sha256": "6f20262e7b1fa9beaf98255f23030800376636484a98b20c2c04a303bab5a8d5",
+      "expected_state_mask": 213,
+      "kind": "conformance_simple",
+      "name": "all_dimensions_custom_states",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": true,
+        "by_period_nanos": 60000000000,
+        "by_queue": true,
+        "by_state": [
+          "available",
+          "completed",
+          "pending",
+          "running",
+          "scheduled"
+        ],
+        "exclude_kind": false
+      },
+      "queue": "priority_emails",
+      "scheduled_at": "2026-01-02T05:21:05.6789Z",
+      "selected_unique_paths": null
+    }
+  ],
+  "protocol_revision": 1
+}

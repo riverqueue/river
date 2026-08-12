@@ -1,0 +1,18 @@
+[package]
+name = "riverqueue-test"
+description = "Test helpers for River's Rust client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+
+[dependencies]
+chrono.workspace = true
+riverqueue = { path = "../riverqueue", version = "=0.43.0-alpha.1" }
+serde_json.workspace = true
+tokio-util.workspace = true
+
+[lints]
+workspace = true

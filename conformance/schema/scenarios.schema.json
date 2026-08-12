@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "protocol_revision": { "minimum": 1, "type": "integer" },
+    "scenarios": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "name": { "pattern": "^[a-z0-9_]+$", "type": "string" },
+          "tier": { "enum": ["chaos", "codec", "mixed", "performance", "runtime", "storage"] }
+        },
+        "required": ["name", "tier"],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": ["$schema", "protocol_revision", "scenarios"],
+  "title": "River conformance scenario inventory",
+  "type": "object"
+}

@@ -1,0 +1,25 @@
+[package]
+name = "riverqueue-migrate"
+description = "Database migrations for River's Rust client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+postgres-tests = []
+
+[dependencies]
+riverqueue-internal = { path = "../riverqueue-internal", version = "=0.43.0-alpha.1" }
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

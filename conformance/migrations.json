@@ -1,0 +1,61 @@
+{
+  "files": [
+    {
+      "path": "riverdriver/riverpgxv5/migration/main/001_create_river_migration.down.sql",
+      "sha256": "34c87dc594bf7520bc3ae69f6f0da8d2d9a472616ab38b37e63d4e3838da06d2"
+    },
+    {
+      "path": "riverdriver/riverpgxv5/migration/main/001_create_river_migration.up.sql",
+      "sha256": "79def9ab1643beee7776c499559ec199a03b5b26036c122dc3ba13ec3d078dc0"
+    },
+    {
+      "path": "riverdriver/riverpgxv5/migration/main/002_initial_schema.down.sql",
+      "sha256": "8e7e73755b3e9cd1d46f0dffeadd427b86af13cea2f41f3d30af1624329db9b9"
+    },
+    {
+      "path": "riverdriver/riverpgxv5/migration/main/002_initial_schema.up.sql",
+      "sha256": "8915c00d08ed98625865c705b6fd0bd14c113b7cdd0cb218ee894eca1d32ad03"
+    },
+    {
+      "path": "riverdriver/riverpgxv5/migration/main/003_river_job_tags_non_null.down.sql",
+      "sha256": "bca44f6f0e926411c9e26e7ce2598bbdb5102b286f380135d9a5bcd96a77cbb8"
+    },
+    {
+      "path": "riverdriver/riverpgxv5/migration/main/003_river_job_tags_non_null.up.sql",
+      "sha256": "dedb183bb302c005bc72caf2901ff693bbab11413308c5e0567ddffb51e667ef"
+    },
+    {
+      "path": "riverdriver/riverpgxv5/migration/main/004_pending_and_more.down.sql",
+      "sha256": "91b5ced7b9d707a0de73f5b312596935950b70229f58aa9bf3ca362aa7a408c8"
+    },
+    {
+      "path": "riverdriver/riverpgxv5/migration/main/004_pending_and_more.up.sql",
+      "sha256": "3f7418b0cf78ede9a9ec730bdfc4389a84e05989531b205fc4ece0d2bb10e390"
+    },
+    {
+      "path": "riverdriver/riverpgxv5/migration/main/005_migration_unique_client.down.sql",
+      "sha256": "de84dca49a5d618d2a4973b13a69830fbebb0f9635babfa50c6f19577193425b"
+    },
+    {
+      "path": "riverdriver/riverpgxv5/migration/main/005_migration_unique_client.up.sql",
+      "sha256": "b760f487152c7d92102869d46b8a64dc1e2094d5675e690ffbe52a747eee8431"
+    },
+    {
+      "path": "riverdriver/riverpgxv5/migration/main/006_bulk_unique.down.sql",
+      "sha256": "726483f6e5aa7dd02cdd974cd7bf716973a8d0a97ba6dbc5dc5304aaf54c7ad7"
+    },
+    {
+      "path": "riverdriver/riverpgxv5/migration/main/006_bulk_unique.up.sql",
+      "sha256": "3b133f7ce4662d3dc8bd4a57628e0e116a300b2635a79315557aa1369849f0fb"
+    },
+    {
+      "path": "riverdriver/riverpgxv5/migration/main/007_notification_outbox_sqlite_jsonb_and_sql_cleanup.down.sql",
+      "sha256": "9131aae235187dbdaaa822dab2a475a884e917d9af05e3c98fb95c152eaa769a"
+    },
+    {
+      "path": "riverdriver/riverpgxv5/migration/main/007_notification_outbox_sqlite_jsonb_and_sql_cleanup.up.sql",
+      "sha256": "47ec8031b88e69004de2def5bc3109d969f71ee4c33a1e7dac2fb8c9dd19182d"
+    }
+  ],
+  "line": "main"
+}
