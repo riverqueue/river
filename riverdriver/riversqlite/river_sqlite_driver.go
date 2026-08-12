@@ -1717,7 +1717,7 @@ func timeString(t time.Time) string {
 	// looking more common formats like RFC3339). They'll store fine, produce no
 	// warnings, and then just won't compare properly against built-ins, causing
 	// everything to fail in non-obvious ways.
-	const sqliteFormat = "2006-01-02 15:04:05.999"
+	const sqliteFormat = "2006-01-02 15:04:05.000"
 
 	return t.UTC().Round(time.Millisecond).Format(sqliteFormat)
 }
