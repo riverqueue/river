@@ -16,7 +16,8 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{
-    AssertSqlSafe, Executor, FromRow, PgConnection, PgPool, Postgres, postgres::PgListener,
+    AssertSqlSafe, Executor, FromRow, PgConnection, PgPool, Postgres, Row,
+    postgres::{PgListener, PgRow},
     types::Json,
 };
 use tokio::{
@@ -1275,7 +1276,6 @@ fn join_client_result(
     Ok(())
 }
 
-#[derive(FromRow)]
 pub(crate) struct JobRecord {
     attempt: i16,
     attempted_at: Option<DateTime<Utc>>,
@@ -1298,11 +1298,44 @@ pub(crate) struct JobRecord {
     unique_states: Option<String>,
 }
 
+impl<'row> FromRow<'row, PgRow> for JobRecord {
+    fn from_row(row: &'row PgRow) -> Result<Self, sqlx::Error> {
+        // `job_projection` fixes the first 18 columns in this order, and every
+        // JobRecord query appends the insert-only duplicate flag at index 18.
+        // Positional decoding avoids repeated column-name lookups on hot fetch
+        // and completion paths.
+        Ok(Self {
+            attempt: row.try_get(1)?,
+            attempted_at: row.try_get(2)?,
+            attempted_by: row.try_get(3)?,
+            created_at: row.try_get(4)?,
+            encoded_args: row.try_get(5)?,
+            errors: row.try_get(6)?,
+            finalized_at: row.try_get(7)?,
+            id: row.try_get(0)?,
+            kind: row.try_get(8)?,
+            max_attempts: row.try_get(9)?,
+            metadata: row.try_get(10)?,
+            priority: row.try_get(11)?,
+            queue: row.try_get(12)?,
+            scheduled_at: row.try_get(13)?,
+            state: row.try_get(14)?,
+            tags: row.try_get(15)?,
+            unique_key: row.try_get(16)?,
+            unique_skipped_as_duplicate: row.try_get(18)?,
+            unique_states: row.try_get(17)?,
+        })
+    }
+}
+
 impl JobRecord {
     pub(crate) fn into_job_row(self) -> Result<JobRow, Error> {
-        let metadata = self.metadata.0.as_object().cloned().ok_or_else(|| {
-            Error::InvalidJob(format!("job {} metadata is not an object", self.id))
-        })?;
+        let Value::Object(metadata) = self.metadata.0 else {
+            return Err(Error::InvalidJob(format!(
+                "job {} metadata is not an object",
+                self.id
+            )));
+        };
         let unique_states = self
             .unique_states
             .map(|bits| {
@@ -1371,11 +1404,30 @@ async fn run_completion_batcher(
     inner: Arc<ClientInner>,
     mut receiver: mpsc::Receiver<CompletionUpdate>,
 ) -> Result<(), Error> {
-    const COMPLETION_BATCH_DELAY: Duration = Duration::from_millis(5);
+    const COMPLETION_BATCH_DELAY: Duration = Duration::from_millis(10);
+    const COMPLETION_BATCH_CONCURRENCY: usize = 2;
     const COMPLETION_BATCH_SIZE: usize = 5_000;
     const COMPLETION_BATCH_THRESHOLD: usize = COMPLETION_BATCH_SIZE;
+    let mut batches = JoinSet::new();
 
-    while let Some(first) = receiver.recv().await {
+    loop {
+        let first = if batches.is_empty() {
+            receiver.recv().await
+        } else {
+            tokio::select! {
+                update = receiver.recv() => update,
+                result = batches.join_next() => {
+                    let result = result
+                        .expect("completion batch task is present")
+                        .map_err(Error::from_join)?;
+                    finish_completion_batch(&inner, result);
+                    continue;
+                }
+            }
+        };
+        let Some(first) = first else {
+            break;
+        };
         let mut batch = Vec::with_capacity(COMPLETION_BATCH_SIZE);
         batch.push(first);
         let delay = tokio::time::sleep(COMPLETION_BATCH_DELAY);
@@ -1398,36 +1450,60 @@ async fn run_completion_batcher(
             }
         }
 
-        let records = persist_completion_batch(&inner, &batch).await;
-        match records {
-            Ok(records) => {
-                let mut rows = HashMap::with_capacity(records.len());
-                for record in records {
-                    let id = record.id;
-                    rows.insert(id, record);
-                }
-                for update in &batch {
-                    let job_id = update.job_id;
-                    finish_batched_completion(&inner, update, rows.remove(&job_id));
-                }
+        while batches.len() >= COMPLETION_BATCH_CONCURRENCY {
+            let result = batches
+                .join_next()
+                .await
+                .expect("completion batch task is present")
+                .map_err(Error::from_join)?;
+            finish_completion_batch(&inner, result);
+        }
+        let batch_inner = Arc::clone(&inner);
+        batches.spawn(async move {
+            let records = persist_completion_batch(&batch_inner, &batch).await;
+            (batch, records)
+        });
+        while let Some(result) = batches.try_join_next() {
+            finish_completion_batch(&inner, result.map_err(Error::from_join)?);
+        }
+    }
+    while let Some(result) = batches.join_next().await {
+        finish_completion_batch(&inner, result.map_err(Error::from_join)?);
+    }
+    Ok(())
+}
+
+fn finish_completion_batch(
+    inner: &ClientInner,
+    (batch, records): (Vec<CompletionUpdate>, Result<Vec<JobRecord>, sqlx::Error>),
+) {
+    match records {
+        Ok(records) => {
+            let mut rows = HashMap::with_capacity(records.len());
+            for record in records {
+                let id = record.id;
+                rows.insert(id, record);
             }
-            Err(error) => {
-                error!(
-                    error = %error,
-                    count = batch.len(),
-                    "failed to persist River job completion batch"
-                );
-                for update in &batch {
-                    inner
-                        .running
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .remove(&update.job_id);
-                }
+            for update in &batch {
+                let job_id = update.job_id;
+                finish_batched_completion(inner, update, rows.remove(&job_id));
+            }
+        }
+        Err(error) => {
+            error!(
+                error = %error,
+                count = batch.len(),
+                "failed to persist River job completion batch"
+            );
+            for update in &batch {
+                inner
+                    .running
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&update.job_id);
             }
         }
     }
-    Ok(())
 }
 
 async fn persist_completion_batch(
