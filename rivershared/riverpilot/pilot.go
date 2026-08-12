@@ -59,6 +59,15 @@ type Pilot interface {
 	QueueMetadataChanged(ctx context.Context, exec riverdriver.Executor, params *QueueMetadataChangedParams) error
 }
 
+// PilotJobCompletionConcurrency is implemented by pilots whose completion
+// logic can safely run multiple JobSetStateIfRunningMany calls concurrently.
+// Pilots without this capability use one completion call at a time.
+//
+// API is not stable. DO NOT USE.
+type PilotJobCompletionConcurrency interface {
+	JobSetStateIfRunningManyConcurrency() int
+}
+
 // PilotInitParams are parameters for initializing a pilot.
 //
 // API is not stable. DO NOT USE.

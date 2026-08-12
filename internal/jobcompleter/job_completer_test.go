@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -29,6 +30,7 @@ import (
 type partialExecutorMock struct {
 	riverdriver.Executor
 
+	CompletionConcurrency          int
 	JobSetStateIfRunningManyCalled bool
 	JobSetStateIfRunningManyFunc   func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
 	mu                             sync.Mutex
@@ -37,10 +39,14 @@ type partialExecutorMock struct {
 // NewPartialExecutorMock returns a new mock with all mock functions set to call
 // down into the given real executor.
 func NewPartialExecutorMock(exec riverdriver.Executor) *partialExecutorMock {
-	return &partialExecutorMock{
+	mock := &partialExecutorMock{
 		Executor:                     exec,
 		JobSetStateIfRunningManyFunc: exec.JobSetStateIfRunningMany,
 	}
+	if provider, ok := exec.(riverdriver.ExecutorJobCompletionConcurrency); ok {
+		mock.CompletionConcurrency = provider.JobSetStateIfRunningManyConcurrency()
+	}
+	return mock
 }
 
 func (m *partialExecutorMock) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
@@ -56,6 +62,10 @@ func (m *partialExecutorMock) JobSetStateIfRunningMany(ctx context.Context, para
 	return m.JobSetStateIfRunningManyFunc(ctx, params)
 }
 
+func (m *partialExecutorMock) JobSetStateIfRunningManyConcurrency() int {
+	return m.CompletionConcurrency
+}
+
 func (m *partialExecutorMock) setCalled(setCalledFunc func()) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -66,6 +76,14 @@ type partialExecutorTxMock struct {
 	riverdriver.ExecutorTx
 
 	partial *partialExecutorMock
+}
+
+type unspecifiedCompletionConcurrencyExecutor struct {
+	riverdriver.Executor
+}
+
+type unspecifiedCompletionConcurrencyPilot struct {
+	riverpilot.Pilot
 }
 
 func (m *partialExecutorTxMock) JobSetStateIfRunningMany(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
@@ -716,6 +734,37 @@ func TestBatchCompleter_BackpressureRequeuesBatchAfterCompletionFailure(t *testi
 	require.NoError(t, riversharedtest.WaitOrTimeout(t, errCh))
 }
 
+func TestBatchCompleter_CompletionConcurrency(t *testing.T) {
+	t.Parallel()
+
+	standardPilot := &riverpilot.StandardPilot{}
+
+	t.Run("BothOptIn", func(t *testing.T) {
+		t.Parallel()
+
+		exec := &partialExecutorMock{CompletionConcurrency: 2}
+
+		require.Equal(t, 2, completionConcurrency(exec, standardPilot))
+	})
+
+	t.Run("ExecutorDoesNotOptIn", func(t *testing.T) {
+		t.Parallel()
+
+		exec := &unspecifiedCompletionConcurrencyExecutor{}
+
+		require.Equal(t, 1, completionConcurrency(exec, standardPilot))
+	})
+
+	t.Run("PilotDoesNotOptIn", func(t *testing.T) {
+		t.Parallel()
+
+		exec := &partialExecutorMock{CompletionConcurrency: 2}
+		pilot := &unspecifiedCompletionConcurrencyPilot{Pilot: standardPilot}
+
+		require.Equal(t, 1, completionConcurrency(exec, pilot))
+	})
+}
+
 func TestBatchCompleter_ConcurrentBatchRequiresFullBacklog(t *testing.T) {
 	t.Parallel()
 
@@ -723,7 +772,7 @@ func TestBatchCompleter_ConcurrentBatchRequiresFullBacklog(t *testing.T) {
 	var calls testsignal.TestSignal[int]
 	calls.Init(t)
 	release := make(chan struct{}, 2)
-	execMock := &partialExecutorMock{}
+	execMock := &partialExecutorMock{CompletionConcurrency: 2}
 	execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
 		calls.Signal(len(params.ID))
 		<-release
@@ -781,6 +830,85 @@ func TestBatchCompleter_ConcurrentBatchRequiresFullBacklog(t *testing.T) {
 	require.Equal(t, 2, calls.WaitOrTimeout())
 	release <- struct{}{}
 	release <- struct{}{}
+	completer.Stop()
+}
+
+func TestBatchCompleter_ConcurrentBatchesSerializeDuplicateJob(t *testing.T) {
+	t.Parallel()
+
+	type call struct {
+		ids     []int64
+		release chan struct{}
+	}
+
+	ctx := context.Background()
+	calls := make(chan call, 3)
+	releaseAll := make(chan struct{})
+	execMock := &partialExecutorMock{CompletionConcurrency: 2}
+	execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+		currentCall := call{ids: slices.Clone(params.ID), release: make(chan struct{})}
+		calls <- currentCall
+		select {
+		case <-currentCall.release:
+		case <-releaseAll:
+		}
+
+		rows := make([]*rivertype.JobRow, len(params.ID))
+		for i, id := range params.ID {
+			rows[i] = &rivertype.JobRow{ID: id, State: params.State[i]}
+		}
+		return rows, nil
+	}
+
+	subscribeCh := make(chan []CompleterJobUpdated, 3)
+	completer := NewBatchCompleter(
+		riversharedtest.BaseServiceArchetype(t),
+		"",
+		execMock,
+		&riverpilot.StandardPilot{},
+		subscribeCh,
+	)
+	completer.completionMaxSize = 2
+	require.NoError(t, completer.Start(ctx))
+	t.Cleanup(func() {
+		close(releaseAll)
+		completer.Stop()
+	})
+	riversharedtest.WaitOrTimeout(t, completer.Started())
+
+	enqueue := func(id int64) {
+		t.Helper()
+
+		require.NoError(t, completer.JobSetStateIfRunning(
+			ctx,
+			&jobstats.JobStatistics{},
+			riverdriver.JobSetStateCompleted(id, time.Now(), nil),
+		))
+	}
+
+	enqueue(1)
+	enqueue(2)
+	firstCall := riversharedtest.WaitOrTimeout(t, calls)
+	require.ElementsMatch(t, []int64{1, 2}, firstCall.ids)
+
+	enqueue(1)
+	enqueue(3)
+	enqueue(4)
+	secondCall := riversharedtest.WaitOrTimeout(t, calls)
+	require.ElementsMatch(t, []int64{3, 4}, secondCall.ids)
+	close(secondCall.release)
+
+	select {
+	case unexpectedCall := <-calls:
+		close(unexpectedCall.release)
+		require.Failf(t, "duplicate job ran concurrently", "got IDs %v", unexpectedCall.ids)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(firstCall.release)
+	thirdCall := riversharedtest.WaitOrTimeout(t, calls)
+	require.Equal(t, []int64{1}, thirdCall.ids)
+	close(thirdCall.release)
 	completer.Stop()
 }
 
