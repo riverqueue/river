@@ -55,6 +55,10 @@ func (p *StandardPilot) JobSetStateIfRunningMany(ctx context.Context, exec river
 	return exec.JobSetStateIfRunningMany(ctx, params)
 }
 
+// JobSetStateIfRunningManyConcurrency returns the number of completion calls
+// that can safely run concurrently through the standard pilot.
+func (p *StandardPilot) JobSetStateIfRunningManyConcurrency() int { return 2 }
+
 func (p *StandardPilot) PeriodicJobKeepAliveAndReap(ctx context.Context, exec riverdriver.Executor, params *PeriodicJobKeepAliveAndReapParams) ([]*PeriodicJob, error) {
 	return nil, nil
 }

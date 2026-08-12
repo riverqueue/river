@@ -726,6 +726,10 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 	return sliceutil.MapError(jobs, jobRowFromInternal)
 }
 
+// JobSetStateIfRunningManyConcurrency returns the number of completion calls
+// that can safely run concurrently through a database/sql pool.
+func (e *Executor) JobSetStateIfRunningManyConcurrency() int { return 2 }
+
 func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateParams) (*rivertype.JobRow, error) {
 	metadata := params.Metadata
 	if metadata == nil {
