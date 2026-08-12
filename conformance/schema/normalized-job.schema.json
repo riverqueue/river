@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "args": {},
+    "attempt": { "minimum": 0, "type": "integer" },
+    "attempted_at": { "format": "date-time", "type": ["string", "null"] },
+    "attempted_by": { "items": { "type": "string" }, "type": "array" },
+    "created_at": { "format": "date-time", "type": "string" },
+    "errors": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "at": { "format": "date-time", "type": "string" },
+          "attempt": { "minimum": 0, "type": "integer" },
+          "error": { "type": "string" },
+          "trace": { "type": "string" }
+        },
+        "required": ["at", "attempt", "error", "trace"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "finalized_at": { "format": "date-time", "type": ["string", "null"] },
+    "id": { "minimum": 1, "type": "integer" },
+    "kind": { "type": "string" },
+    "max_attempts": { "minimum": 1, "type": "integer" },
+    "metadata": { "type": "object" },
+    "priority": { "maximum": 4, "minimum": 1, "type": "integer" },
+    "queue": { "type": "string" },
+    "scheduled_at": { "format": "date-time", "type": "string" },
+    "state": {
+      "enum": ["available", "cancelled", "completed", "discarded", "pending", "retryable", "running", "scheduled"]
+    },
+    "tags": { "items": { "type": "string" }, "type": "array" },
+    "unique_key": { "pattern": "^[0-9a-f]{64}$", "type": ["string", "null"] },
+    "unique_states": {
+      "items": {
+        "enum": ["available", "cancelled", "completed", "discarded", "pending", "retryable", "running", "scheduled"]
+      },
+      "type": ["array", "null"]
+    }
+  },
+  "required": [
+    "args", "attempt", "attempted_at", "attempted_by", "created_at", "errors",
+    "finalized_at", "id", "kind", "max_attempts", "metadata", "priority",
+    "queue", "scheduled_at", "state", "tags", "unique_key", "unique_states"
+  ],
+  "title": "Normalized River job",
+  "type": "object"
+}

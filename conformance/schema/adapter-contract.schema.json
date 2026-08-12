@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "adapter_version": { "minimum": 1, "type": "integer" },
+    "methods": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "capability": { "pattern": "^[a-z0-9_]+$", "type": "string" },
+          "description": { "minLength": 1, "type": "string" },
+          "name": { "pattern": "^[a-z0-9_]+$", "type": "string" }
+        },
+        "required": ["capability", "description", "name"],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "protocol_revision": { "minimum": 1, "type": "integer" }
+  },
+  "required": ["$schema", "adapter_version", "methods", "protocol_revision"],
+  "title": "River language-neutral conformance adapter contract",
+  "type": "object"
+}

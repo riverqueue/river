@@ -1,0 +1,14 @@
+{
+  "$schema": "../schema/scenarios.schema.json",
+  "protocol_revision": 1,
+  "scenarios": [
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifyBatchInsertion" }], "name": "sqlite_batch_atomicity", "tier": "storage" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifyDeterministicControls" }, { "path": "conformance/harness/unique_test.go", "symbol": "verifyUniqueKeyGoldens" }], "name": "sqlite_deterministic_retry_unique", "tier": "codec" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteCrossLanguageInsertion" }], "name": "sqlite_insert_get_unique_cross_language", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifyDifferentialCRUD" }], "name": "sqlite_job_crud", "tier": "storage" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteMigrations" }], "name": "sqlite_migration_cross_language", "tier": "storage" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "TestMixedGoRustSQLiteConformance" }], "name": "sqlite_profile_handshake", "tier": "codec" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteTimestampEncoding" }], "name": "sqlite_timestamp_rounding_ordering", "tier": "codec" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteTransactions" }], "name": "sqlite_transactions", "tier": "storage" }
+  ]
+}
