@@ -1282,7 +1282,7 @@ pub(crate) struct JobRecord {
     attempted_by: Option<Vec<String>>,
     created_at: DateTime<Utc>,
     encoded_args: Json<Value>,
-    errors: Json<Vec<AttemptError>>,
+    errors: Vec<Json<AttemptError>>,
     finalized_at: Option<DateTime<Utc>>,
     id: i64,
     kind: String,
@@ -1359,7 +1359,7 @@ impl JobRecord {
             attempted_by: self.attempted_by.unwrap_or_default(),
             created_at: self.created_at,
             encoded_args: self.encoded_args.0,
-            errors: self.errors.0,
+            errors: self.errors.into_iter().map(|error| error.0).collect(),
             finalized_at: self.finalized_at,
             id: self.id,
             kind: self.kind,
@@ -2831,7 +2831,7 @@ pub(crate) fn job_projection(alias: &str) -> String {
     format!(
         "{alias}.id, {alias}.attempt, {alias}.attempted_at, {alias}.attempted_by, \
          {alias}.created_at, {alias}.args AS encoded_args, \
-         coalesce(array_to_json({alias}.errors), '[]'::json) AS errors, \
+         coalesce({alias}.errors, '{{}}'::jsonb[]) AS errors, \
          {alias}.finalized_at, {alias}.kind, {alias}.max_attempts, {alias}.metadata, \
          {alias}.priority, {alias}.queue, {alias}.scheduled_at, {alias}.state::text AS state, \
          {alias}.tags::text[] AS tags, {alias}.unique_key, {alias}.unique_states::text AS unique_states"
