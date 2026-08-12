@@ -790,6 +790,29 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.Equal(t, job1.ScheduledAt, jobUpdated.ScheduledAt)
 		})
 
+		t.Run("SetsAJobWithCancelAttemptedAtAndAvailableErrorToCancelled", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			now := time.Now().UTC()
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Metadata:    fmt.Appendf(nil, `{"cancel_attempted_at":"%s"}`, now.Format(time.RFC3339)),
+				State:       new(rivertype.JobStateRunning),
+				ScheduledAt: new(now.Add(-10 * time.Second)),
+			})
+
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateErrorAvailable(job.ID, now, makeErrPayload(t, now), nil)))
+			require.NoError(t, err)
+			jobAfter := jobsAfter[0]
+			require.Equal(t, rivertype.JobStateCancelled, jobAfter.State)
+			require.NotNil(t, jobAfter.FinalizedAt)
+			require.WithinDuration(t, time.Now().UTC(), *jobAfter.FinalizedAt, 2*time.Second)
+			require.WithinDuration(t, job.ScheduledAt, jobAfter.ScheduledAt, time.Microsecond)
+			require.Len(t, jobAfter.Errors, 1)
+			require.Contains(t, jobAfter.Errors[0].Error, "fake error")
+		})
+
 		t.Run("SetsAJobWithCancelAttemptedAtToCancelled", func(t *testing.T) {
 			t.Parallel()
 

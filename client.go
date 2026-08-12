@@ -1773,15 +1773,6 @@ func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, conf
 		State:       rivertype.JobStateAvailable,
 		Tags:        tags,
 	}
-	if !uniqueOpts.isEmpty() {
-		internalUniqueOpts := (*dbunique.UniqueOpts)(&uniqueOpts)
-		insertParams.UniqueKey, err = dbunique.UniqueKey(archetype.Time, internalUniqueOpts, insertParams)
-		if err != nil {
-			return nil, err
-		}
-		insertParams.UniqueStates = internalUniqueOpts.StateBitmask()
-	}
-
 	switch {
 	case !insertOpts.ScheduledAt.IsZero():
 		insertParams.ScheduledAt = &insertOpts.ScheduledAt
@@ -1797,6 +1788,14 @@ func insertParamsFromConfigArgsAndOptions(archetype *baseservice.Archetype, conf
 
 	if insertOpts.Pending {
 		insertParams.State = rivertype.JobStatePending
+	}
+	if !uniqueOpts.isEmpty() {
+		internalUniqueOpts := (*dbunique.UniqueOpts)(&uniqueOpts)
+		insertParams.UniqueKey, err = dbunique.UniqueKey(archetype.Time, internalUniqueOpts, insertParams)
+		if err != nil {
+			return nil, err
+		}
+		insertParams.UniqueStates = internalUniqueOpts.StateBitmask()
 	}
 
 	return insertParams, nil
