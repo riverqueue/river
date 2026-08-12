@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Jobs that didn't finish in time organically while a client was stopping and had to have their context cancelled no longer have this cancellation counted as an error. `attempt` is reset to the number it was before the job started working, `errors` is left unchanged, and `state` is made `available` so jobs are eligible to be retried immediately. [PR #1290](https://github.com/riverqueue/river/pull/1290)
 
+### Fixed
+
+- Write timestamps in SQLite to always include three digits after the second like `.000`. Previously, they may have been truncated down to just `.0` in the case of trailing zeroes. [PR #1349](https://github.com/riverqueue/river/pull/1349)
+
 ## [0.43.0] - 2026-08-05
 
 ### Added
