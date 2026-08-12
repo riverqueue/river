@@ -25,12 +25,34 @@ import (
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
+	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
 const testClientID = "test-client-id"
+
+// afterJobGetAvailablePilot calls a hook after delegating JobGetAvailable to
+// the wrapped pilot.
+type afterJobGetAvailablePilot struct {
+	riverpilot.Pilot
+
+	afterJobGetAvailableFunc func(jobs []*rivertype.JobRow, err error)
+}
+
+func (p *afterJobGetAvailablePilot) JobGetAvailable(
+	ctx context.Context,
+	exec riverdriver.Executor,
+	state riverpilot.ProducerState,
+	params *riverdriver.JobGetAvailableParams,
+) ([]*rivertype.JobRow, error) {
+	jobs, err := p.Pilot.JobGetAvailable(ctx, exec, state, params)
+	if p.afterJobGetAvailableFunc != nil {
+		p.afterJobGetAvailableFunc(jobs, err)
+	}
+	return jobs, err
+}
 
 // beforeJobGetAvailablePilot calls a hook before delegating JobGetAvailable to
 // the wrapped pilot.
@@ -485,6 +507,47 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 
 		update := riversharedtest.WaitOrTimeout(t, bundle.jobUpdates)
 		require.Equal(t, rivertype.JobStateRetryable, update.Job.State)
+	})
+
+	t.Run("CancellationWhileFetchResultPendingReachesJob", func(t *testing.T) {
+		t.Parallel()
+
+		producer, bundle := setup(t)
+		producer.config.FetchPollInterval = time.Hour
+
+		var fetchReturned, releaseFetch, workerCancelled testsignal.TestSignal[int64]
+		fetchReturned.Init(t)
+		releaseFetch.Init(t)
+		workerCancelled.Init(t)
+		producer.pilot = &afterJobGetAvailablePilot{
+			Pilot: producer.pilot,
+			afterJobGetAvailableFunc: func(jobs []*rivertype.JobRow, err error) {
+				if err != nil || len(jobs) == 0 {
+					fetchReturned.Signal(0)
+					return
+				}
+				fetchReturned.Signal(jobs[0].ID)
+				<-releaseFetch.WaitC()
+			},
+		}
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+		AddWorker(bundle.workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			<-ctx.Done()
+			workerCancelled.Signal(job.ID)
+			return ctx.Err()
+		}))
+		mustInsert(ctx, t, producer, bundle, &JobArgs{})
+		startProducer(t, ctx, ctx, producer)
+
+		jobID := fetchReturned.WaitOrTimeout()
+		require.Positive(t, jobID)
+		producer.cancelCh <- jobID
+		releaseFetch.Signal(jobID)
+
+		require.Equal(t, jobID, workerCancelled.WaitOrTimeout())
 	})
 
 	t.Run("CompletesJobWhileFetchingNewOnes", func(t *testing.T) {
