@@ -311,6 +311,15 @@ type Executor interface {
 	TableTruncate(ctx context.Context, params *TableTruncateParams) error
 }
 
+// ExecutorJobCompletionConcurrency is implemented by executors that can safely
+// run multiple JobSetStateIfRunningMany calls concurrently. Executors without
+// this capability use one completion call at a time.
+//
+// API is not stable. DO NOT IMPLEMENT.
+type ExecutorJobCompletionConcurrency interface {
+	JobSetStateIfRunningManyConcurrency() int
+}
+
 // ExecutorTx is an executor which is a transaction. In addition to standard
 // Executor operations, it may be committed or rolled back.
 //

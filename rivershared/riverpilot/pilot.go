@@ -96,6 +96,15 @@ func (p *PilotInitParams) Validate() *PilotInitParams {
 	return p
 }
 
+// PilotJobCompletionConcurrency is implemented by pilots whose completion
+// logic can safely run multiple JobSetStateIfRunningMany calls concurrently.
+// Pilots without this capability use one completion call at a time.
+//
+// API is not stable. DO NOT USE.
+type PilotJobCompletionConcurrency interface {
+	JobSetStateIfRunningManyConcurrency() int
+}
+
 // PilotJobRescuer contains optional Pilot functionality related to rescuing
 // stuck jobs. Pilots that don't implement it fall back to the standard
 // executor-backed behavior.

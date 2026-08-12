@@ -2,7 +2,9 @@ package riverdrivertest
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -158,6 +160,86 @@ func exerciseExecutorTx[TTx any](ctx context.Context, t *testing.T,
 			exec := setup(ctx, t)
 
 			require.NoError(t, exec.Exec(ctx, "SELECT $1 || $2", "foo", "bar"))
+		})
+	})
+
+	t.Run("JobSetStateIfRunningManyConcurrency", func(t *testing.T) {
+		t.Parallel()
+
+		completeManyParams := func(schema string, now time.Time, ids ...int64) *riverdriver.JobSetStateIfRunningManyParams {
+			params := &riverdriver.JobSetStateIfRunningManyParams{Now: &now, Schema: schema}
+			for _, id := range ids {
+				params.ID = append(params.ID, id)
+				params.Attempt = append(params.Attempt, nil)
+				params.ErrData = append(params.ErrData, nil)
+				params.FinalizedAt = append(params.FinalizedAt, &now)
+				params.MetadataDoMerge = append(params.MetadataDoMerge, false)
+				params.MetadataUpdates = append(params.MetadataUpdates, nil)
+				params.ScheduledAt = append(params.ScheduledAt, nil)
+				params.State = append(params.State, rivertype.JobStateCompleted)
+			}
+			return params
+		}
+
+		t.Run("PoolExecutorRunsConcurrentBatches", func(t *testing.T) {
+			t.Parallel()
+
+			driver, schema := driverWithSchema(ctx, t, nil)
+			exec := driver.GetExecutor()
+
+			concurrency := 1
+			if capability, ok := exec.(riverdriver.ExecutorJobCompletionConcurrency); ok {
+				concurrency = capability.JobSetStateIfRunningManyConcurrency()
+			}
+			require.GreaterOrEqual(t, concurrency, 1)
+			require.LessOrEqual(t, concurrency, 2)
+
+			var (
+				now  = time.Now().UTC()
+				jobs = make([]*rivertype.JobRow, 2*concurrency)
+			)
+			for i := range jobs {
+				jobs[i] = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Schema: schema, State: new(rivertype.JobStateRunning)})
+			}
+
+			// Run the advertised number of disjoint batches at once.
+			var (
+				errs = make(chan error, concurrency)
+				wg   sync.WaitGroup
+			)
+			for i := range concurrency {
+				wg.Go(func() {
+					_, err := exec.JobSetStateIfRunningMany(ctx, completeManyParams(schema, now, jobs[2*i].ID, jobs[2*i+1].ID))
+					errs <- err
+				})
+			}
+			wg.Wait()
+			close(errs)
+			for err := range errs {
+				require.NoError(t, err)
+			}
+
+			for _, job := range jobs {
+				updatedJob, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: schema})
+				require.NoError(t, err)
+				require.Equal(t, rivertype.JobStateCompleted, updatedJob.State)
+			}
+		})
+
+		t.Run("TransactionExecutorIsSerial", func(t *testing.T) {
+			t.Parallel()
+
+			exec := setup(ctx, t)
+
+			tx, err := exec.Begin(ctx)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+			// A transaction can't run statements concurrently, even when the
+			// pool executor it came from can.
+			if capability, ok := tx.(riverdriver.ExecutorJobCompletionConcurrency); ok {
+				require.Equal(t, 1, capability.JobSetStateIfRunningManyConcurrency())
+			}
 		})
 	})
 
