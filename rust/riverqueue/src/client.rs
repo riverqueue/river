@@ -20,7 +20,7 @@ use sqlx::{
     types::Json,
 };
 use tokio::{
-    sync::{Notify, OwnedSemaphorePermit, Semaphore, broadcast, mpsc, oneshot, watch},
+    sync::{OwnedSemaphorePermit, Semaphore, broadcast, mpsc, oneshot, watch},
     task::JoinSet,
 };
 use tokio_util::sync::CancellationToken;
@@ -41,6 +41,10 @@ use crate::{
 };
 
 const ATTEMPTED_BY_MAX: i32 = 100;
+const EVENT_BUFFER_CAPACITY: usize = 10_000;
+// Large queues otherwise become limited by a single PostgreSQL claim round trip.
+// Concurrent `SKIP LOCKED` claims safely divide the available worker slots.
+const PARALLEL_FETCH_MINIMUM: usize = 1_000;
 const QUEUE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Leader-owned maintenance timing and retention settings.
@@ -400,7 +404,7 @@ impl ClientBuilder {
         }
 
         let periodic_jobs = PeriodicJobs::from_jobs(self.periodic_jobs)?;
-        let (events, _) = broadcast::channel(1_000);
+        let (events, _) = broadcast::channel(EVENT_BUFFER_CAPACITY);
         let (queue_changes, _) = watch::channel(0_u64);
         let (queue_notifications, _) = broadcast::channel(1_024);
         Ok(Client {
@@ -988,7 +992,7 @@ impl Client {
         let join = tokio::spawn(async move {
             let result = async {
                 let notifications = inner.queue_notifications.clone();
-                let (completion_sender, completion_receiver) = mpsc::channel(1_024);
+                let (completion_sender, completion_receiver) = mpsc::channel(10_000);
                 let mut queues = JoinSet::new();
                 queues.spawn(run_dynamic_queues(
                     Arc::clone(&inner),
@@ -1342,12 +1346,25 @@ impl JobRecord {
 struct CompletionUpdate {
     attempt: i16,
     error_json: Option<Value>,
+    event_kind: EventKind,
     finalized_at: Option<DateTime<Utc>>,
     job_id: i64,
     metadata: Map<String, Value>,
-    response: oneshot::Sender<Result<Option<JobRecord>, String>>,
     scheduled_at: Option<DateTime<Utc>>,
     state: JobState,
+    timing: CompletionTiming,
+}
+
+#[derive(Clone, Copy)]
+struct CompletionTiming {
+    completion_started: std::time::Instant,
+    queue_wait_duration: Duration,
+    run_duration: Duration,
+}
+
+enum PersistResult {
+    Enqueued,
+    Finished(Option<Box<Event>>),
 }
 
 async fn run_completion_batcher(
@@ -1356,7 +1373,7 @@ async fn run_completion_batcher(
 ) -> Result<(), Error> {
     const COMPLETION_BATCH_DELAY: Duration = Duration::from_millis(5);
     const COMPLETION_BATCH_SIZE: usize = 5_000;
-    const COMPLETION_BATCH_THRESHOLD: usize = 100;
+    const COMPLETION_BATCH_THRESHOLD: usize = COMPLETION_BATCH_SIZE;
 
     while let Some(first) = receiver.recv().await {
         let mut batch = Vec::with_capacity(COMPLETION_BATCH_SIZE);
@@ -1381,50 +1398,7 @@ async fn run_completion_batcher(
             }
         }
 
-        let params = Value::Array(
-            batch
-                .iter()
-                .map(|update| {
-                    serde_json::json!({
-                        "attempt": update.attempt,
-                        "attempt_error": &update.error_json,
-                        "finalized_at": &update.finalized_at,
-                        "id": update.job_id,
-                        "metadata": &update.metadata,
-                        "scheduled_at": &update.scheduled_at,
-                        "state": update.state.as_str(),
-                    })
-                })
-                .collect(),
-        );
-        let table = inner.schema.qualify("river_job");
-        let state_type = inner.schema.qualify("river_job_state");
-        let sql = format!(
-            "WITH updates AS (\
-                SELECT * FROM jsonb_to_recordset($1::jsonb) AS update_params(\
-                    id bigint, attempt smallint, attempt_error jsonb, finalized_at timestamptz, \
-                    metadata jsonb, scheduled_at timestamptz, state text)\
-             ) \
-             UPDATE {table} AS job SET \
-                attempt = updates.attempt, \
-                errors = CASE WHEN updates.attempt_error IS NULL THEN job.errors \
-                    ELSE array_append(coalesce(job.errors, '{{}}'), updates.attempt_error) END, \
-                finalized_at = CASE WHEN updates.state IN ('retryable', 'scheduled') \
-                    AND job.metadata ? 'cancel_attempted_at' \
-                    THEN coalesce(updates.finalized_at, now()) ELSE updates.finalized_at END, \
-                metadata = job.metadata || updates.metadata, \
-                scheduled_at = coalesce(updates.scheduled_at, job.scheduled_at), \
-                state = CASE WHEN updates.state IN ('retryable', 'scheduled') \
-                    AND job.metadata ? 'cancel_attempted_at' \
-                    THEN 'cancelled'::{state_type} ELSE updates.state::{state_type} END \
-             FROM updates WHERE job.id = updates.id AND job.state = 'running' \
-             RETURNING {}, false AS unique_skipped_as_duplicate",
-            job_projection("job")
-        );
-        let records = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
-            .bind(Json(params))
-            .fetch_all(&inner.pool)
-            .await;
+        let records = persist_completion_batch(&inner, &batch).await;
         match records {
             Ok(records) => {
                 let mut rows = HashMap::with_capacity(records.len());
@@ -1432,23 +1406,137 @@ async fn run_completion_batcher(
                     let id = record.id;
                     rows.insert(id, record);
                 }
-                for update in batch {
-                    let result = match rows.remove(&update.job_id) {
-                        Some(record) => Ok(Some(record)),
-                        None => Ok(None),
-                    };
-                    let _ = update.response.send(result);
+                for update in &batch {
+                    let job_id = update.job_id;
+                    finish_batched_completion(&inner, update, rows.remove(&job_id));
                 }
             }
             Err(error) => {
-                let message = error.to_string();
-                for update in batch {
-                    let _ = update.response.send(Err(message.clone()));
+                error!(
+                    error = %error,
+                    count = batch.len(),
+                    "failed to persist River job completion batch"
+                );
+                for update in &batch {
+                    inner
+                        .running
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .remove(&update.job_id);
                 }
             }
         }
     }
     Ok(())
+}
+
+async fn persist_completion_batch(
+    inner: &ClientInner,
+    batch: &[CompletionUpdate],
+) -> Result<Vec<JobRecord>, sqlx::Error> {
+    let attempts = batch
+        .iter()
+        .map(|update| update.attempt)
+        .collect::<Vec<_>>();
+    let errors = batch
+        .iter()
+        .map(|update| update.error_json.clone().map(Json))
+        .collect::<Vec<_>>();
+    let finalized_at = batch
+        .iter()
+        .map(|update| update.finalized_at)
+        .collect::<Vec<_>>();
+    let ids = batch.iter().map(|update| update.job_id).collect::<Vec<_>>();
+    let metadata = batch
+        .iter()
+        .map(|update| Json(Value::Object(update.metadata.clone())))
+        .collect::<Vec<_>>();
+    let scheduled_at = batch
+        .iter()
+        .map(|update| update.scheduled_at)
+        .collect::<Vec<_>>();
+    let states = batch
+        .iter()
+        .map(|update| update.state.as_str())
+        .collect::<Vec<_>>();
+    let table = inner.schema.qualify("river_job");
+    let state_type = inner.schema.qualify("river_job_state");
+    let sql = format!(
+        "WITH updates AS (\
+            SELECT * FROM unnest(\
+                $1::bigint[], $2::smallint[], $3::jsonb[], $4::timestamptz[], \
+                $5::jsonb[], $6::timestamptz[], $7::text[]\
+            ) AS update_params(\
+                id, attempt, attempt_error, finalized_at, metadata, scheduled_at, state)\
+         ) \
+         UPDATE {table} AS job SET \
+            attempt = updates.attempt, \
+            errors = CASE WHEN updates.attempt_error IS NULL THEN job.errors \
+                ELSE array_append(coalesce(job.errors, '{{}}'), updates.attempt_error) END, \
+            finalized_at = CASE WHEN updates.state IN ('retryable', 'scheduled') \
+                AND job.metadata ? 'cancel_attempted_at' \
+                THEN coalesce(updates.finalized_at, now()) ELSE updates.finalized_at END, \
+            metadata = job.metadata || updates.metadata, \
+            scheduled_at = coalesce(updates.scheduled_at, job.scheduled_at), \
+            state = CASE WHEN updates.state IN ('retryable', 'scheduled') \
+                AND job.metadata ? 'cancel_attempted_at' \
+                THEN 'cancelled'::{state_type} ELSE updates.state::{state_type} END \
+         FROM updates WHERE job.id = updates.id AND job.state = 'running' \
+         RETURNING {}, false AS unique_skipped_as_duplicate",
+        job_projection("job")
+    );
+    sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+        .bind(ids)
+        .bind(attempts)
+        .bind(errors)
+        .bind(finalized_at)
+        .bind(metadata)
+        .bind(scheduled_at)
+        .bind(states)
+        .fetch_all(&inner.pool)
+        .await
+}
+
+fn finish_batched_completion(
+    inner: &ClientInner,
+    update: &CompletionUpdate,
+    record: Option<JobRecord>,
+) {
+    if let Some(record) = record {
+        match record.into_job_row() {
+            Ok(row) => {
+                let event_kind = if row.state == JobState::Cancelled {
+                    EventKind::JobCancelled
+                } else {
+                    update.event_kind
+                };
+                let mut event = Event::job(event_kind, row);
+                event.job_statistics = Some(JobStatistics {
+                    complete_duration: update.timing.completion_started.elapsed(),
+                    queue_wait_duration: update.timing.queue_wait_duration,
+                    run_duration: update.timing.run_duration,
+                });
+                let _ = inner.events.send(event);
+            }
+            Err(operation_error) => {
+                error!(
+                    error = %operation_error,
+                    job_id = update.job_id,
+                    "failed to decode completed River job"
+                );
+            }
+        }
+    } else {
+        debug!(
+            job_id = update.job_id,
+            "job result ignored because job is no longer running"
+        );
+    }
+    inner
+        .running
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(&update.job_id);
 }
 
 #[derive(Deserialize)]
@@ -1709,7 +1797,6 @@ async fn run_queue(
 ) -> Result<(), Error> {
     crate::storage::touch_queue(&inner, &queue).await?;
     let permits = Arc::new(Semaphore::new(config.max_workers));
-    let worker_available = Arc::new(Notify::new());
     let mut jobs = JoinSet::new();
     let mut last_fetch = tokio::time::Instant::now() - config.fetch_cooldown;
     let mut heartbeat = tokio::time::interval(QUEUE_HEARTBEAT_INTERVAL);
@@ -1731,7 +1818,6 @@ async fn run_queue(
                 }
                 true
             },
-            () = worker_available.notified() => true,
             notification = notifications.recv() => match notification {
                 Ok(notification_queue) => notification_queue == "*" || notification_queue == queue,
                 Err(broadcast::error::RecvError::Lagged(_)) => true,
@@ -1749,7 +1835,30 @@ async fn run_queue(
         if available == 0 {
             continue;
         }
-        let rows = fetch_jobs(&inner, &queue, available).await?;
+        let rows = if available >= PARALLEL_FETCH_MINIMUM && !inner.pilot.intercepts_fetch() {
+            let first_maximum = available / 2;
+            let second_maximum = available - first_maximum;
+            let (first, second) = tokio::join!(
+                fetch_jobs(&inner, &queue, first_maximum),
+                fetch_jobs(&inner, &queue, second_maximum),
+            );
+            match (first, second) {
+                (Ok(mut first), Ok(second)) => {
+                    first.extend(second);
+                    first
+                }
+                (Ok(rows), Err(fetch_error)) | (Err(fetch_error), Ok(rows)) => {
+                    error!(
+                        error = %fetch_error,
+                        "one parallel River job fetch failed; working the successfully fetched jobs"
+                    );
+                    rows
+                }
+                (Err(fetch_error), Err(_)) => return Err(fetch_error),
+            }
+        } else {
+            fetch_jobs(&inner, &queue, available).await?
+        };
         last_fetch = tokio::time::Instant::now();
         for row in rows {
             let permit = Arc::clone(&permits)
@@ -1759,17 +1868,8 @@ async fn run_queue(
             let inner = Arc::clone(&inner);
             let completion_sender = completion_sender.clone();
             let work_cancel = work_cancel.child_token();
-            let worker_available = Arc::clone(&worker_available);
             jobs.spawn(async move {
-                execute_job(
-                    inner,
-                    row,
-                    work_cancel,
-                    completion_sender,
-                    permit,
-                    worker_available,
-                )
-                .await;
+                execute_job(inner, row, work_cancel, completion_sender, permit).await;
             });
         }
         while let Some(result) = jobs.try_join_next() {
@@ -1792,15 +1892,9 @@ async fn fetch_jobs(
     queue: &str,
     maximum: usize,
 ) -> Result<Vec<JobRow>, Error> {
-    let fetch_started = std::time::Instant::now();
+    let fetch_started = (!inner.hooks.is_empty()).then(std::time::Instant::now);
     let table = inner.schema.qualify("river_job");
     let queue_table = inner.schema.qualify("river_queue");
-    let kinds = inner
-        .workers
-        .kinds()
-        .into_iter()
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
     let maximum = i32::try_from(maximum)
         .map_err(|_| Error::InvalidJob("fetch maximum exceeds i32".to_owned()))?;
     let oss_sql = format!(
@@ -1808,18 +1902,23 @@ async fn fetch_jobs(
             SELECT id FROM {table} WHERE state = 'available' AND queue = $1 AND scheduled_at <= now() \
                 AND NOT EXISTS (SELECT 1 FROM {queue_table} WHERE name = $1 AND paused_at IS NOT NULL) \
             ORDER BY priority, scheduled_at, id LIMIT $2 FOR UPDATE SKIP LOCKED\
-         ), updated AS (\
-            UPDATE {table} AS job SET state = 'running', attempt = job.attempt + 1, attempted_at = now(), \
+         ) UPDATE {table} AS job \
+            SET state = 'running', attempt = job.attempt + 1, attempted_at = now(), \
                 attempted_by = array_append(\
                     CASE WHEN array_length(job.attempted_by, 1) >= $4 \
                          THEN job.attempted_by[array_length(job.attempted_by, 1) + 2 - $4:] \
                          ELSE job.attempted_by END, $3) \
-            FROM locked WHERE job.id = locked.id RETURNING job.*\
-         ) SELECT {}, false AS unique_skipped_as_duplicate FROM updated AS job \
-         ORDER BY priority, scheduled_at, id",
+            FROM locked WHERE job.id = locked.id \
+            RETURNING {}, false AS unique_skipped_as_duplicate",
         job_projection("job")
     );
     let records = if inner.pilot.intercepts_fetch() {
+        let kinds = inner
+            .workers
+            .kinds()
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
         let mut transaction = inner.pool.begin().await?;
         let selected_ids = inner
             .pilot
@@ -1837,15 +1936,13 @@ async fn fetch_jobs(
             .map_err(|error| Error::Runtime(format!("pilot fetch selection: {error}")))?;
         let records = if let Some(selected_ids) = selected_ids {
             let sql = format!(
-                "WITH updated AS (\
-                UPDATE {table} AS job SET state = 'running', attempt = job.attempt + 1, \
+                "UPDATE {table} AS job SET state = 'running', attempt = job.attempt + 1, \
                     attempted_at = now(), attempted_by = array_append(\
                         CASE WHEN array_length(job.attempted_by, 1) >= $3 \
                              THEN job.attempted_by[array_length(job.attempted_by, 1) + 2 - $3:] \
                              ELSE job.attempted_by END, $2) \
-                WHERE id = ANY($1::bigint[]) AND state = 'available' RETURNING job.*\
-             ) SELECT {}, false AS unique_skipped_as_duplicate FROM updated AS job \
-             ORDER BY priority, scheduled_at, id",
+                WHERE id = ANY($1::bigint[]) AND state = 'available' \
+                RETURNING {}, false AS unique_skipped_as_duplicate",
                 job_projection("job")
             );
             sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
@@ -1866,13 +1963,15 @@ async fn fetch_jobs(
         .into_iter()
         .map(JobRecord::into_job_row)
         .collect::<Result<Vec<_>, _>>()?;
-    for metric in [
-        Metric::JobGetAvailableDuration(fetch_started.elapsed()),
-        Metric::JobGetAvailableCount(u64::try_from(rows.len()).unwrap_or(u64::MAX)),
-    ] {
-        for hook in &inner.hooks {
-            if let Err(hook_error) = hook.metric_emit(metric).await {
-                error!(error = %hook_error, "River metric hook failed");
+    if let Some(fetch_started) = fetch_started {
+        for metric in [
+            Metric::JobGetAvailableDuration(fetch_started.elapsed()),
+            Metric::JobGetAvailableCount(u64::try_from(rows.len()).unwrap_or(u64::MAX)),
+        ] {
+            for hook in &inner.hooks {
+                if let Err(hook_error) = hook.metric_emit(metric).await {
+                    error!(error = %hook_error, "River metric hook failed");
+                }
             }
         }
     }
@@ -1905,7 +2004,6 @@ async fn execute_job(
     hard_cancel: CancellationToken,
     completion_sender: mpsc::Sender<CompletionUpdate>,
     worker_permit: OwnedSemaphorePermit,
-    worker_available: Arc<Notify>,
 ) {
     let span = info_span!("river_job", job_id = row.id, job_kind = %row.kind, queue = %row.queue);
     async move {
@@ -2053,31 +2151,42 @@ async fn execute_job(
             error!(error = %handler_error, "River stuck handler failed");
         }
         let metadata_updates = context.metadata_updates().await;
-        drop(worker_permit);
-        worker_available.notify_one();
-        let completion_started = std::time::Instant::now();
-        match persist_result(
+        let timing = CompletionTiming {
+            completion_started: std::time::Instant::now(),
+            queue_wait_duration,
+            run_duration,
+        };
+        let completion_enqueued = match persist_result(
             &inner,
             &row,
             result,
             metadata_updates,
             error_handler_result,
             &completion_sender,
+            timing,
         )
         .await
         {
-            Ok(Some(mut event)) => {
+            Ok(PersistResult::Finished(Some(event))) => {
+                let mut event = *event;
                 event.job_statistics = Some(JobStatistics {
-                    complete_duration: completion_started.elapsed(),
+                    complete_duration: timing.completion_started.elapsed(),
                     queue_wait_duration,
                     run_duration,
                 });
                 let _ = inner.events.send(event);
+                false
             }
-            Ok(None) => {}
+            Ok(PersistResult::Enqueued) => true,
+            Ok(PersistResult::Finished(None)) => false,
             Err(operation_error) => {
                 error!(error = %operation_error, "failed to persist River job result");
+                false
             }
+        };
+        drop(worker_permit);
+        if completion_enqueued {
+            return;
         }
         inner
             .running
@@ -2203,7 +2312,8 @@ async fn persist_result(
     metadata_updates: Map<String, Value>,
     error_handler_result: ErrorHandlerResult,
     completion_sender: &mpsc::Sender<CompletionUpdate>,
-) -> Result<Option<Event>, Error> {
+    timing: CompletionTiming,
+) -> Result<PersistResult, Error> {
     let now = Utc::now();
     let (state, finalized_at, scheduled_at, attempt, attempt_error, metadata, event_kind) =
         match result {
@@ -2273,7 +2383,9 @@ async fn persist_result(
             }
             Err(failure) => {
                 if matches!(failure.kind, WorkerFailureKind::Interrupted) {
-                    return persist_interrupted(inner, row, metadata_updates).await;
+                    return persist_interrupted(inner, row, metadata_updates)
+                        .await
+                        .map(|event| PersistResult::Finished(event.map(Box::new)));
                 }
                 let worker_retry_after = inner
                     .workers
@@ -2348,7 +2460,25 @@ async fn persist_result(
         .as_ref()
         .map(serde_json::to_value)
         .transpose()?;
-    let record = if inner.pilot.intercepts_completion() {
+    if !inner.pilot.intercepts_completion() {
+        completion_sender
+            .send(CompletionUpdate {
+                attempt,
+                error_json,
+                event_kind,
+                finalized_at,
+                job_id: row.id,
+                metadata,
+                scheduled_at,
+                state,
+                timing,
+            })
+            .await
+            .map_err(|_| Error::Runtime("completion batcher stopped".to_owned()))?;
+        return Ok(PersistResult::Enqueued);
+    }
+
+    let record = {
         let mut transaction = inner.pool.begin().await?;
         let completion_action = inner
             .pilot
@@ -2392,32 +2522,13 @@ async fn persist_result(
         };
         transaction.commit().await?;
         record
-    } else {
-        let (response_sender, response_receiver) = oneshot::channel();
-        completion_sender
-            .send(CompletionUpdate {
-                attempt,
-                error_json,
-                finalized_at,
-                job_id: row.id,
-                metadata,
-                response: response_sender,
-                scheduled_at,
-                state,
-            })
-            .await
-            .map_err(|_| Error::Runtime("completion batcher stopped".to_owned()))?;
-        response_receiver
-            .await
-            .map_err(|_| Error::Runtime("completion batcher dropped its response".to_owned()))?
-            .map_err(Error::Runtime)?
     };
     let Some(record) = record else {
         debug!(
             job_id = row.id,
             "job result ignored because job is no longer running"
         );
-        return Ok(None);
+        return Ok(PersistResult::Finished(None));
     };
     let row = record.into_job_row()?;
     let event_kind = if row.state == JobState::Cancelled {
@@ -2425,7 +2536,9 @@ async fn persist_result(
     } else {
         event_kind
     };
-    Ok(Some(Event::job(event_kind, row)))
+    Ok(PersistResult::Finished(Some(Box::new(Event::job(
+        event_kind, row,
+    )))))
 }
 
 #[allow(clippy::too_many_arguments)]

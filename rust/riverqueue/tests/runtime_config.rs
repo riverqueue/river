@@ -25,6 +25,25 @@ struct RuntimeArgs {}
 
 struct RuntimeWorker;
 
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "rust_runtime_burst")]
+struct BurstArgs {}
+
+struct BurstWorker;
+
+#[async_trait]
+impl Worker<BurstArgs> for BurstWorker {
+    type Error = Infallible;
+
+    async fn work(
+        &self,
+        _context: WorkContext,
+        _job: Job<BurstArgs>,
+    ) -> Result<WorkOutcome, Self::Error> {
+        Ok(WorkOutcome::Complete)
+    }
+}
+
 #[derive(Clone)]
 struct RuntimeHook {
     counts: Arc<RuntimeCounts>,
@@ -214,6 +233,85 @@ async fn setup_runtime(database_url: &str) -> (Client, Arc<RuntimeCounts>) {
         .build()
         .unwrap();
     (client, counts)
+}
+
+#[tokio::test]
+async fn completion_burst_does_not_lag_large_subscription() {
+    const JOB_COUNT: usize = 6_000;
+
+    let Ok(database_url) = std::env::var("RIVER_RUST_DATABASE_URL") else {
+        eprintln!("skipping PostgreSQL runtime test without RIVER_RUST_DATABASE_URL");
+        return;
+    };
+
+    let pool = PgPool::connect(&database_url).await.unwrap();
+    let schema = riverqueue::SchemaName::new("rust_runtime_burst_test").unwrap();
+    sqlx::raw_sql(AssertSqlSafe(
+        "DROP SCHEMA IF EXISTS rust_runtime_burst_test CASCADE; \
+         CREATE SCHEMA rust_runtime_burst_test",
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    Migrator::new(pool.clone())
+        .with_schema(schema.clone())
+        .migrate_up()
+        .await
+        .unwrap();
+
+    let mut workers = WorkerRegistry::new();
+    workers.register::<BurstArgs, _>(BurstWorker).unwrap();
+    let client = Client::builder(pool.clone())
+        .id("rust-runtime-burst-test")
+        .poll_only(true)
+        .schema(schema.clone())
+        .workers(workers)
+        .queue(
+            "default",
+            QueueConfig {
+                fetch_cooldown: Duration::from_millis(1),
+                fetch_poll_interval: Duration::from_millis(10),
+                max_workers: 1_000,
+            },
+        )
+        .build()
+        .unwrap();
+    let mut completed = client
+        .subscribe_config(SubscribeConfig {
+            buffer_capacity: JOB_COUNT,
+            kinds: vec![EventKind::JobCompleted],
+        })
+        .unwrap();
+    let jobs = (0..JOB_COUNT).map(|_| (BurstArgs {}, riverqueue::InsertOpts::default()));
+    assert_eq!(
+        client.insert_many_fast(jobs).await.unwrap(),
+        u64::try_from(JOB_COUNT).unwrap()
+    );
+
+    let mut run_handle = client.start().unwrap();
+    run_handle.wait_ready().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        for _ in 0..JOB_COUNT {
+            let event = completed.recv().await.unwrap();
+            assert_eq!(event.kind, EventKind::JobCompleted);
+        }
+    })
+    .await
+    .unwrap();
+    run_handle.shutdown().await.unwrap();
+
+    let completed_count: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
+        "SELECT count(*) FROM {} WHERE state = 'completed'",
+        schema.qualify("river_job")
+    )))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(completed_count, i64::try_from(JOB_COUNT).unwrap());
+    sqlx::raw_sql("DROP SCHEMA rust_runtime_burst_test CASCADE")
+        .execute(&pool)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

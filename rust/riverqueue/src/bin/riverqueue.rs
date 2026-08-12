@@ -6,7 +6,7 @@ use std::{
     error::Error as StdError,
     io,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -14,14 +14,15 @@ use std::{
 
 use async_trait::async_trait;
 use riverqueue::{
-    Client, InsertOpts, Job, JobArgs, QueueConfig, SchemaName, WorkContext, WorkOutcome, Worker,
-    WorkerRegistry,
+    Client, EventKind, EventReceiver, EventRecvError, InsertOpts, Job, JobArgs, QueueConfig,
+    SchemaName, SubscribeConfig, WorkContext, WorkOutcome, Worker, WorkerRegistry,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{
     AssertSqlSafe, PgPool,
     postgres::{PgConnectOptions, PgPoolOptions},
 };
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 const DEFAULT_BACKLOG: u64 = 75_000;
@@ -97,12 +98,6 @@ enum Command {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct DatabaseCounts {
-    failed: i64,
-    worked: u64,
-}
-
-#[derive(Clone, Copy, Debug)]
 struct DatabaseStatistics {
     failed: i64,
     p95_seconds: Option<f64>,
@@ -116,8 +111,67 @@ struct Producer {
     client: Client,
     inserted: Arc<AtomicU64>,
     next_number: u64,
-    pool: PgPool,
-    schema: SchemaName,
+    worked: Arc<AtomicU64>,
+}
+
+#[derive(Clone)]
+struct BenchmarkProgress {
+    completion_notify: Arc<Notify>,
+    failed: Arc<AtomicU64>,
+    last_worked_elapsed_nanos: Arc<AtomicU64>,
+    started_at: Arc<OnceLock<Instant>>,
+    worked: Arc<AtomicU64>,
+}
+
+impl BenchmarkProgress {
+    fn new() -> Self {
+        Self {
+            completion_notify: Arc::new(Notify::new()),
+            failed: Arc::new(AtomicU64::new(0)),
+            last_worked_elapsed_nanos: Arc::new(AtomicU64::new(0)),
+            started_at: Arc::new(OnceLock::new()),
+            worked: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    async fn count_events(
+        &self,
+        mut events: EventReceiver,
+        cancellation: CancellationToken,
+        num_total_jobs: Option<u64>,
+    ) -> Result<(), String> {
+        loop {
+            tokio::select! {
+                () = cancellation.cancelled() => return Ok(()),
+                event = events.recv() => match event {
+                    Ok(event) if event.kind == EventKind::JobCompleted => {
+                        if let Some(started_at) = self.started_at.get() {
+                            self.last_worked_elapsed_nanos.store(
+                                u64::try_from(started_at.elapsed().as_nanos())
+                                    .unwrap_or(u64::MAX),
+                                Ordering::Relaxed,
+                            );
+                        }
+                        let worked_now = self.worked.fetch_add(1, Ordering::Relaxed) + 1;
+                        if num_total_jobs.is_some_and(|total| worked_now >= total) {
+                            self.completion_notify.notify_one();
+                        }
+                    }
+                    Ok(_) => {
+                        self.failed.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(EventRecvError::Lagged(count)) => {
+                        self.failed.store(u64::MAX, Ordering::Relaxed);
+                        return Err(format!("benchmark event receiver lagged by {count} events"));
+                    }
+                    Err(EventRecvError::Closed) => {
+                        self.failed.store(u64::MAX, Ordering::Relaxed);
+                        return Err("benchmark event receiver closed".to_owned());
+                    }
+                },
+            }
+        }
+    }
 }
 
 #[tokio::main]
@@ -329,22 +383,28 @@ async fn run_benchmark(options: BenchOptions) -> Result<(), Box<dyn StdError + S
         .connect_with(postgres_connect_options(&options.database_url)?)
         .await?;
     reset_jobs(&pool, &options.schema, options.vacuum).await?;
-
-    let mut workers = WorkerRegistry::new();
-    workers.register::<BenchmarkArgs, _>(BenchmarkWorker)?;
-    let client = Client::builder(pool.clone())
-        .id("riverqueue-benchmark")
-        .workers(workers)
-        .queue(
-            riverqueue::QUEUE_DEFAULT,
-            QueueConfig {
-                fetch_cooldown: Duration::from_millis(2),
-                fetch_poll_interval: Duration::from_millis(20),
-                max_workers: options.max_workers,
-            },
-        )
-        .build()?;
+    let client = benchmark_client(pool.clone(), options.max_workers)?;
+    let events = client.subscribe_config(SubscribeConfig {
+        buffer_capacity: usize::try_from(options.backlog).unwrap_or(usize::MAX),
+        kinds: vec![
+            EventKind::JobCancelled,
+            EventKind::JobCompleted,
+            EventKind::JobFailed,
+        ],
+    })?;
     let inserted = Arc::new(AtomicU64::new(0));
+    let progress = BenchmarkProgress::new();
+    let event_cancel = CancellationToken::new();
+    let event_task = tokio::spawn({
+        let cancellation = event_cancel.child_token();
+        let num_total_jobs = options.num_total_jobs;
+        let progress = progress.clone();
+        async move {
+            progress
+                .count_events(events, cancellation, num_total_jobs)
+                .await
+        }
+    });
     let mut next_number = 0_u64;
     let initial_jobs = options.num_total_jobs.unwrap_or(options.backlog);
     insert_jobs(
@@ -359,6 +419,10 @@ async fn run_benchmark(options: BenchOptions) -> Result<(), Box<dyn StdError + S
     let mut run = client.start()?;
     run.wait_ready().await?;
     let started_at = Instant::now();
+    progress
+        .started_at
+        .set(started_at)
+        .expect("benchmark start time is set once");
     let stop_producer = CancellationToken::new();
     let mut producer = options.num_total_jobs.is_none().then(|| {
         tokio::spawn(run_producer(Producer {
@@ -368,25 +432,39 @@ async fn run_benchmark(options: BenchOptions) -> Result<(), Box<dyn StdError + S
             client: client.clone(),
             inserted: Arc::clone(&inserted),
             next_number,
-            pool: pool.clone(),
-            schema: options.schema.clone(),
+            worked: Arc::clone(&progress.worked),
         }))
     });
 
-    let run_result =
-        monitor_benchmark(&pool, &options, &inserted, started_at, producer.as_mut()).await;
+    let run_result = monitor_benchmark(
+        &options,
+        &inserted,
+        &progress.worked,
+        &progress.failed,
+        &progress.completion_notify,
+        started_at,
+        producer.as_mut(),
+    )
+    .await;
     stop_producer.cancel();
     if let Some(producer) = producer {
         producer.await.map_err(|error| join_error(&error))??;
     }
     run.shutdown().await?;
+    event_cancel.cancel();
+    event_task.await.map_err(|error| join_error(&error))??;
     run_result?;
 
     let final_stats = database_statistics(&pool, &options.schema).await?;
     if final_stats.failed > 0 {
         return Err(format!("{} benchmark jobs failed", final_stats.failed).into());
     }
-    let elapsed = started_at.elapsed();
+    let last_worked_elapsed_nanos = progress.last_worked_elapsed_nanos.load(Ordering::Relaxed);
+    let elapsed = if last_worked_elapsed_nanos == 0 {
+        started_at.elapsed()
+    } else {
+        Duration::from_nanos(last_worked_elapsed_nanos)
+    };
     println!(
         "bench: total jobs worked [ {:10} ], total jobs inserted [ {:10} ], overall job/sec [ {:10.1} ], p95 [ {:>10} ], running {}",
         final_stats.worked,
@@ -396,6 +474,23 @@ async fn run_benchmark(options: BenchOptions) -> Result<(), Box<dyn StdError + S
         display_duration(elapsed),
     );
     Ok(())
+}
+
+fn benchmark_client(pool: PgPool, max_workers: usize) -> Result<Client, riverqueue::Error> {
+    let mut workers = WorkerRegistry::new();
+    workers.register::<BenchmarkArgs, _>(BenchmarkWorker)?;
+    Client::builder(pool)
+        .id("riverqueue-benchmark")
+        .workers(workers)
+        .queue(
+            riverqueue::QUEUE_DEFAULT,
+            QueueConfig {
+                fetch_cooldown: Duration::from_millis(2),
+                fetch_poll_interval: Duration::from_millis(20),
+                max_workers,
+            },
+        )
+        .build()
 }
 
 fn postgres_connect_options(database_url: &str) -> Result<PgConnectOptions, sqlx::Error> {
@@ -464,11 +559,10 @@ async fn insert_jobs(
 
 async fn run_producer(mut producer: Producer) -> Result<(), Box<dyn StdError + Send + Sync>> {
     loop {
-        let statistics = database_counts(&producer.pool, &producer.schema).await?;
         let jobs_left = producer
             .inserted
             .load(Ordering::Relaxed)
-            .saturating_sub(statistics.worked);
+            .saturating_sub(producer.worked.load(Ordering::Relaxed));
         if jobs_left < producer.backlog {
             insert_jobs(
                 &producer.client,
@@ -487,9 +581,11 @@ async fn run_producer(mut producer: Producer) -> Result<(), Box<dyn StdError + S
 }
 
 async fn monitor_benchmark(
-    pool: &PgPool,
     options: &BenchOptions,
     inserted: &AtomicU64,
+    worked: &AtomicU64,
+    failed: &AtomicU64,
+    completion_notify: &Notify,
     started_at: Instant,
     mut producer: Option<&mut tokio::task::JoinHandle<Result<(), Box<dyn StdError + Send + Sync>>>>,
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {
@@ -501,13 +597,13 @@ async fn monitor_benchmark(
     let mut last_worked = 0_u64;
 
     loop {
-        let statistics = database_counts(pool, &options.schema).await?;
-        if statistics.failed > 0 {
-            return Err(format!("{} benchmark jobs failed", statistics.failed).into());
+        let failed_now = failed.load(Ordering::Relaxed);
+        if failed_now > 0 {
+            return Err(format!("{failed_now} benchmark jobs failed").into());
         }
         if options
             .num_total_jobs
-            .is_some_and(|total| statistics.worked >= total)
+            .is_some_and(|total| worked.load(Ordering::Relaxed) >= total)
         {
             return Ok(());
         }
@@ -518,17 +614,17 @@ async fn monitor_benchmark(
         tokio::select! {
             _ = interval.tick() => {
                 let now = Instant::now();
-                let worked = database_counts(pool, &options.schema).await?;
                 let inserted_now = inserted.load(Ordering::Relaxed);
+                let worked_now = worked.load(Ordering::Relaxed);
                 let jobs_inserted = inserted_now.saturating_sub(last_inserted);
-                let jobs_worked = worked.worked.saturating_sub(last_worked);
+                let jobs_worked = worked_now.saturating_sub(last_worked);
                 println!(
                     "bench: jobs worked [ {jobs_worked:10} ], inserted [ {jobs_inserted:10} ], job/sec [ {:10.1} ] [{}]",
                     throughput(jobs_worked, ITERATION_PERIOD),
                     display_duration(now.duration_since(started_at)),
                 );
                 last_inserted = inserted_now;
-                last_worked = worked.worked;
+                last_worked = worked_now;
             }
             result = async {
                 match producer.as_mut() {
@@ -547,6 +643,7 @@ async fn monitor_benchmark(
                 result?;
                 return Ok(());
             }
+            () = completion_notify.notified(), if options.num_total_jobs.is_some() => {}
             () = async {
                 match deadline {
                     Some(deadline) => tokio::time::sleep_until(deadline.into()).await,
@@ -555,26 +652,6 @@ async fn monitor_benchmark(
             } => return Ok(()),
         }
     }
-}
-
-async fn database_counts(
-    pool: &PgPool,
-    schema: &SchemaName,
-) -> Result<DatabaseCounts, sqlx::Error> {
-    let table = schema.qualify("river_job");
-    let sql = format!(
-        "SELECT \
-            count(*) FILTER (WHERE state IN ('cancelled', 'discarded'))::bigint, \
-            count(*) FILTER (WHERE state = 'completed')::bigint \
-         FROM {table}"
-    );
-    let (failed, worked) = sqlx::query_as::<_, (i64, i64)>(AssertSqlSafe(sql))
-        .fetch_one(pool)
-        .await?;
-    Ok(DatabaseCounts {
-        failed,
-        worked: u64::try_from(worked).unwrap_or_default(),
-    })
 }
 
 async fn database_statistics(
