@@ -11,6 +11,29 @@ process, while the harness may call different adapters concurrently. IDs and
 transaction-independent records returned by one implementation may be passed
 to any other implementation attached to the database.
 
+The Go implementation is the reference side. By default the candidate is the
+Rust adapter in this repository. Any future implementation, including a
+JavaScript port, can run the same suite by setting
+`RIVER_CONFORMANCE_CANDIDATE` to a JSON object:
+
+```json
+{
+  "application_name": "river-conformance-javascript",
+  "command": ["node", "dist/conformance-adapter.js"],
+  "implementation": "javascript",
+  "restart_command": ["node", "dist/conformance-adapter.js"],
+  "version": "0.43.0-alpha.1"
+}
+```
+
+`command` starts the ordinary candidate. `restart_command` must start a
+prebuilt process because crash/restart cases cannot rely on a build wrapper
+surviving process termination. `application_name` is the PostgreSQL
+`application_name` used for connection-fault tests. `version` is optional; if
+present, the handshake must match it exactly. The candidate must advertise the
+exact versioned method set in `contract.json`; missing and extra methods both
+fail before behavioral scenarios run.
+
 ## Discovery and administration
 
 - `handshake`: protocol and adapter versions, implementation identity,
@@ -22,10 +45,15 @@ to any other implementation attached to the database.
 
 ## Jobs and queues
 
-- `insert`, `insert_many_fast`, `get`, `list`, `update`, `retry`, `cancel`,
-  `delete`, and `delete_many`.
-- `queue_get`, `queue_list`, `queue_pause`, `queue_resume`, and `queue_update`.
+- `insert`, typed `insert_many`, `insert_many_fast`, `get`, `list`, `update`,
+  `retry`, `cancel`, `delete`, and `delete_many`. Typed batch results preserve
+  input order and include each normalized job and its unique-conflict flag.
+- `queue_get`, `queue_list`, `queue_pause`, `queue_resume`, `queue_update`, and
+  runtime `queue_add`/`queue_remove`.
 - `start`, `stop`, `wait`, and the compatibility shorthand `work`.
+- `runtime_stats` exposes normalized hook, middleware, periodic, resumable,
+  and event-subscription observations without exposing language-specific API
+  shapes.
 - `barrier_create` and `barrier_release` coordinate the `barrier_wait` worker
   without timing races.
 - `benchmark_enqueue` performs an in-process insertion workload so JSON-RPC
@@ -35,18 +63,24 @@ The built-in `conformance_echo` job accepts `message`, `behavior`, and
 `duration_ms`. Behaviors cover success, retryable error, panic, worker cancel,
 discard, one-time snooze, recorded output, barrier waiting, timed work,
 cooperative remote cancellation, and intentionally ignored cancellation. The
-last behavior is only run in a disposable adapter process that the harness may
-kill.
+suite also covers a snoozed job that is immediately refetched and then
+cancelled, which exercises cancellation registration and stale-attempt cleanup
+in both directions. The last behavior is only run in a disposable adapter
+process that the harness may kill.
 
 ## Transaction handles
 
 `tx_begin` creates a connection-local transaction under a caller-chosen
-handle. Transaction operations cover insert, get/list/update/delete/bulk
-delete, cancel/retry, and queue get/list/update/pause/resume. `tx_commit` and
-`tx_rollback` consume a handle. `tx_fail` deliberately aborts PostgreSQL state
-to verify rollback behavior. Handles never cross adapter processes because a
-database transaction is connection-local. Their effects are deliberately
-observed from the other language before and after commit.
+handle. Transaction operations cover insert, typed `tx_insert_many`, fast
+`tx_insert_many_fast`, get/list/update/delete/bulk delete, cancel/retry, and
+queue get/list/update/pause/resume. `tx_commit` and `tx_rollback` consume a
+handle. `tx_fail` deliberately aborts PostgreSQL state to verify rollback
+behavior. Handles never cross adapter processes because a database transaction
+is connection-local. Their effects are deliberately observed from the other
+language before and after commit. Transactional insert notifications are also
+commit-bound: jobs remain invisible before commit, commit wakes an opposite-
+language worker whose poll interval is 60 seconds, and rollback produces no
+wakeup.
 
 Job lists accept shared ID/kind/metadata/priority/queue/state/tag filters,
 ordering, direction, limits, and opaque `after` cursors. Responses return the

@@ -27,6 +27,7 @@ func TestPerformanceGate(t *testing.T) {
 	}
 	databaseURL := os.Getenv("RIVER_CONFORMANCE_DATABASE_URL")
 	require.NotEmpty(t, databaseURL)
+	scenarios := newScenarioTracker(t, scenarioOwnerPerformance)
 	jobs := 200
 	if value := os.Getenv("RIVER_CONFORMANCE_PERFORMANCE_JOBS"); value != "" {
 		parsed, err := strconv.Atoi(value)
@@ -37,7 +38,8 @@ func TestPerformanceGate(t *testing.T) {
 
 	root := repoRoot(t)
 	goAdapter := startAdapter(t, root, databaseURL, "go-performance", "go", "run", "./internal/cmd/riverconformanceadapter")
-	rustAdapter := startAdapter(t, root, databaseURL, "rust-performance", "cargo", "run", "--release", "--quiet", "--manifest-path", "rust/Cargo.toml", "-p", "riverqueue-conformance")
+	candidateSpec := conformanceCandidateSpec(t, root, true)
+	rustAdapter := startAdapterCommand(t, root, databaseURL, candidateSpec.Implementation+"-performance", candidateSpec.Command)
 	goAdapter.call(t, "migrate", map[string]any{}, nil)
 
 	for _, mode := range []string{"enqueue", "worker", "mixed"} {
@@ -55,6 +57,7 @@ func TestPerformanceGate(t *testing.T) {
 			"Rust must sustain at least 80%% of Go throughput in %s", mode)
 		require.LessOrEqual(t, rustMetrics.p95, goMetrics.p95*5/4,
 			"Rust p95 must be at most 1.25x Go in %s", mode)
+		scenarios.pass("release_" + mode + "_performance")
 	}
 }
 
@@ -70,10 +73,12 @@ func TestMixedSoak(t *testing.T) {
 	require.Positive(t, duration)
 	databaseURL := os.Getenv("RIVER_CONFORMANCE_DATABASE_URL")
 	require.NotEmpty(t, databaseURL)
+	scenarios := newScenarioTracker(t, scenarioOwnerSoak)
 
 	root := repoRoot(t)
 	goAdapter := startAdapter(t, root, databaseURL, "go-soak", "go", "run", "./internal/cmd/riverconformanceadapter")
-	rustAdapter := startAdapter(t, root, databaseURL, "rust-soak", "cargo", "run", "--quiet", "--manifest-path", "rust/Cargo.toml", "-p", "riverqueue-conformance")
+	candidateSpec := conformanceCandidateSpec(t, root, false)
+	rustAdapter := startAdapterCommand(t, root, databaseURL, candidateSpec.Implementation+"-soak", candidateSpec.Command)
 	goAdapter.call(t, "migrate", map[string]any{}, nil)
 	goAdapter.call(t, "reset", map[string]any{}, nil)
 	goAdapter.call(t, "start", map[string]any{"client_id": "go-soak", "max_workers": 8}, nil)
@@ -111,6 +116,7 @@ func TestMixedSoak(t *testing.T) {
 	goAdapter.call(t, "stop", map[string]any{}, nil)
 	rustAdapter.call(t, "stop", map[string]any{}, nil)
 	t.Logf("completed %d mixed jobs over %s", jobsCompleted, duration)
+	scenarios.pass("mixed_connection_pool_bound", "mixed_soak")
 }
 
 func medianMetrics(runs []benchmarkMetrics) benchmarkMetrics {

@@ -10,9 +10,21 @@ protocol capabilities. `schema/protocol.schema.json` validates that manifest.
 Canonical migration hashes, codec goldens, declarative scenarios, and the
 process-adapter contract live alongside them.
 
+`scenarios/core.json` is checked against an executable Go registry. Every ID
+has exactly one owning harness test, and an owning test can only pass after it
+reports its complete registered set. Missing, stale, duplicate, mis-tiered, or
+merely declarative scenario entries therefore fail conformance validation.
+
 An implementation may claim compatibility only when its protocol revision and
 capabilities match this manifest and the Go-only, Rust-only, and mixed adapter
 suites pass.
+
+The mixed harness is candidate-neutral. It always runs Go as the reference and
+uses Rust by default, while `RIVER_CONFORMANCE_CANDIDATE` can point it at any
+process implementing the versioned JSON-RPC contract. See
+[`adapter/README.md`](adapter/README.md) for the candidate descriptor. This is
+the intended entry point for a future JavaScript implementation; it does not
+require copying either engine's language-specific tests.
 
 The normal artifact gate is `make verify/conformance`. Database-backed tiers
 use a disposable URL:

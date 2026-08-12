@@ -13,12 +13,17 @@ use std::{
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
 use riverqueue::{
-    AttemptError, Client, DefaultRetryPolicy, InsertOpts, Job, JobArgs, JobDeleteManyParams,
-    JobListCursor, JobListOrderBy, JobListParams, JobRow, JobState, JobUpdateParams,
-    MaintenanceConfig, Queue, QueueConfig, QueueListParams, RetryPolicy, RunHandle, SchemaName,
-    SortDirection, UniqueOpts, WorkContext, WorkOutcome, Worker, WorkerRegistry,
+    AttemptError, Client, DefaultRetryPolicy, ErrorHandler, ErrorHandlerResult, EventKind,
+    EventReceiver, Hook, InsertContext, InsertMiddleware, InsertOpts, InsertResult,
+    IntervalSchedule, Job, JobArgs, JobDeleteManyParams, JobListCursor, JobListOrderBy,
+    JobListParams, JobRow, JobState, JobUpdateParams, MaintenanceConfig, PeriodicJob,
+    PeriodicJobOpts, PeriodicJobs, Plugin, Queue, QueueConfig, QueueListParams, RetryPolicy,
+    RunHandle, SchemaName, SortDirection, SubscribeConfig, UniqueKeyInput, UniqueOpts, WorkContext,
+    WorkMiddleware, WorkOutcome, WorkResult, Worker, WorkerRegistry, build_unique_key,
 };
-use riverqueue_migrate::{MIGRATION_LINE_MAIN, MIGRATION_VERSION_LATEST, Migrator};
+use riverqueue_migrate::{
+    Direction, MIGRATION_LINE_MAIN, MIGRATION_VERSION_LATEST, MigrateOpts, Migrator,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sqlx::{
@@ -27,8 +32,71 @@ use sqlx::{
 };
 use tokio::sync::watch;
 
-const ADAPTER_VERSION: u32 = 6;
+const ADAPTER_VERSION: u32 = 9;
 const PROTOCOL_REVISION: u32 = 1;
+
+const ADAPTER_METHODS: &[&str] = &[
+    "barrier_create",
+    "barrier_release",
+    "benchmark_enqueue",
+    "cancel",
+    "clock_set",
+    "connection_count",
+    "delete",
+    "delete_many",
+    "fault_disconnect_application",
+    "fault_disconnect_listeners",
+    "fault_expire_leader",
+    "get",
+    "handshake",
+    "insert",
+    "insert_many",
+    "insert_many_fast",
+    "leader",
+    "list",
+    "listener_count",
+    "migrate",
+    "queue_add",
+    "queue_get",
+    "queue_list",
+    "queue_pause",
+    "queue_remove",
+    "queue_resume",
+    "queue_update",
+    "raw_insert_full_row",
+    "raw_insert_no_notify",
+    "request_resign",
+    "reset",
+    "retry",
+    "retry_delay",
+    "rng_seed",
+    "runtime_stats",
+    "start",
+    "stop",
+    "tx_begin",
+    "tx_cancel",
+    "tx_commit",
+    "tx_delete",
+    "tx_delete_many",
+    "tx_fail",
+    "tx_get",
+    "tx_insert",
+    "tx_insert_many",
+    "tx_insert_many_fast",
+    "tx_list",
+    "tx_queue_get",
+    "tx_queue_list",
+    "tx_queue_pause",
+    "tx_queue_resume",
+    "tx_queue_update",
+    "tx_retry",
+    "tx_rollback",
+    "tx_update",
+    "unique_key",
+    "update",
+    "wait",
+    "work",
+];
 
 const CAPABILITIES: &[&str] = &[
     "barriers",
@@ -83,6 +151,43 @@ struct ResponseError {
     message: String,
 }
 
+#[derive(Deserialize)]
+struct UniqueKeyParams {
+    args: Value,
+    kind: String,
+    now: DateTime<Utc>,
+    options: UniqueKeyOptions,
+    queue: String,
+    scheduled_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Deserialize)]
+struct UniqueKeyOptions {
+    by_args: bool,
+    by_period_nanos: u64,
+    by_queue: bool,
+    by_state: Option<Vec<JobState>>,
+    exclude_kind: bool,
+}
+
+fn unique_key_for_args<A>(params: &UniqueKeyParams, opts: &UniqueOpts) -> Result<[u8; 32], String>
+where
+    A: JobArgs + serde::de::DeserializeOwned,
+{
+    let args =
+        serde_json::from_value::<A>(params.args.clone()).map_err(|error| error.to_string())?;
+    build_unique_key(&UniqueKeyInput {
+        args: &args,
+        encoded_args: &params.args,
+        now: params.now,
+        opts,
+        queue: &params.queue,
+        scheduled_at: params.scheduled_at,
+    })
+    .map_err(|error| error.to_string())?
+    .ok_or_else(|| "unique fixture options produced no key".to_owned())
+}
+
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
 #[river(kind = "conformance_echo")]
 struct ConformanceArgs {
@@ -93,12 +198,52 @@ struct ConformanceArgs {
     message: String,
 }
 
+#[derive(Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "conformance_all_args")]
+struct UniqueAllArgs {
+    alpha: String,
+    maximum: i64,
+    zeta: String,
+}
+
+#[derive(Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "conformance_numeric_boundaries")]
+struct UniqueNumericArgs {
+    exponent: f64,
+    fraction: f64,
+    maximum: i64,
+    minimum: i64,
+    unsigned_maximum: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct UniqueSelectedAccount {
+    id: String,
+    ignored: String,
+}
+
+#[derive(Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "conformance_selected_args", unique("account.id", "label"))]
+struct UniqueSelectedArgs {
+    account: UniqueSelectedAccount,
+    ignored: bool,
+    label: String,
+}
+
+#[derive(Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "conformance_simple")]
+struct UniqueSimpleArgs {
+    id: i64,
+}
+
 struct ConformanceWorker {
     barriers: Arc<BarrierRegistry>,
     pool: PgPool,
+    probe: Arc<RuntimeProbe>,
 }
 
 #[async_trait]
+#[allow(clippy::match_same_arms)]
 impl Worker<ConformanceArgs> for ConformanceWorker {
     type Error = io::Error;
 
@@ -115,7 +260,7 @@ impl Worker<ConformanceArgs> for ConformanceWorker {
             "cancel" => Ok(WorkOutcome::Cancel),
             "cooperative_cancel" => {
                 context.cancellation_token().cancelled().await;
-                Ok(WorkOutcome::Cancel)
+                Err(io::Error::other("work cancelled"))
             }
             "discard" => Ok(WorkOutcome::Discard),
             "error" => Err(io::Error::other("conformance retryable error")),
@@ -132,9 +277,38 @@ impl Worker<ConformanceArgs> for ConformanceWorker {
                 tokio::time::sleep(Duration::from_millis(job.args.duration_ms)).await;
                 Ok(WorkOutcome::Complete)
             }
-            "snooze_once" if !job.row.metadata.contains_key("snoozes") => Ok(WorkOutcome::Snooze(
-                Duration::from_millis(job.args.duration_ms.max(1)),
-            )),
+            "snooze_once" | "snooze_then_cancel" if !job.row.metadata.contains_key("snoozes") => {
+                Ok(WorkOutcome::Snooze(Duration::from_millis(
+                    job.args.duration_ms.max(1),
+                )))
+            }
+            "snooze_then_cancel" => {
+                context.cancellation_token().cancelled().await;
+                Err(io::Error::other("work cancelled"))
+            }
+            "resumable" => {
+                let first_probe = Arc::clone(&self.probe);
+                context
+                    .resumable_step("first", move || async move {
+                        first_probe.increment_resumable_first()?;
+                        Ok::<_, io::Error>(())
+                    })
+                    .await
+                    .map_err(io::Error::other)?;
+                let second_probe = Arc::clone(&self.probe);
+                context
+                    .resumable_step("second", move || async move {
+                        second_probe.increment_resumable_second()?;
+                        if job.row.attempt == 1 {
+                            Err(io::Error::other("fail second resumable step once"))
+                        } else {
+                            Ok(())
+                        }
+                    })
+                    .await
+                    .map_err(io::Error::other)?;
+                Ok(WorkOutcome::Complete)
+            }
             "transactional_complete" => {
                 context
                     .metadata_set("transactional_completion", json!(true))
@@ -149,6 +323,221 @@ impl Worker<ConformanceArgs> for ConformanceWorker {
             }
             _ => Ok(WorkOutcome::Complete),
         }
+    }
+}
+
+#[derive(Default)]
+struct RuntimeProbe {
+    state: Mutex<RuntimeProbeState>,
+}
+
+#[derive(Default)]
+struct RuntimeProbeState {
+    error_handler_calls: usize,
+    events: Vec<String>,
+    periodic_starts: usize,
+    resumable_first_runs: usize,
+    resumable_second_runs: usize,
+    trace: Vec<String>,
+}
+
+impl RuntimeProbe {
+    fn add_event(&self, kind: EventKind) -> io::Result<()> {
+        self.state
+            .lock()
+            .map_err(|_| io::Error::other("runtime probe lock poisoned"))?
+            .events
+            .push(event_kind_name(kind).to_owned());
+        Ok(())
+    }
+
+    fn add_trace(&self, entry: &str) -> io::Result<()> {
+        self.state
+            .lock()
+            .map_err(|_| io::Error::other("runtime probe lock poisoned"))?
+            .trace
+            .push(entry.to_owned());
+        Ok(())
+    }
+
+    fn increment_periodic_starts(&self) -> io::Result<()> {
+        self.state
+            .lock()
+            .map_err(|_| io::Error::other("runtime probe lock poisoned"))?
+            .periodic_starts += 1;
+        Ok(())
+    }
+
+    fn increment_error_handler_calls(&self) -> io::Result<()> {
+        self.state
+            .lock()
+            .map_err(|_| io::Error::other("runtime probe lock poisoned"))?
+            .error_handler_calls += 1;
+        Ok(())
+    }
+
+    fn increment_resumable_first(&self) -> io::Result<()> {
+        self.state
+            .lock()
+            .map_err(|_| io::Error::other("runtime probe lock poisoned"))?
+            .resumable_first_runs += 1;
+        Ok(())
+    }
+
+    fn increment_resumable_second(&self) -> io::Result<()> {
+        self.state
+            .lock()
+            .map_err(|_| io::Error::other("runtime probe lock poisoned"))?
+            .resumable_second_runs += 1;
+        Ok(())
+    }
+
+    fn snapshot(&self) -> io::Result<Value> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("runtime probe lock poisoned"))?;
+        Ok(json!({
+            "error_handler_calls": state.error_handler_calls,
+            "events": state.events,
+            "periodic_starts": state.periodic_starts,
+            "resumable_first_runs": state.resumable_first_runs,
+            "resumable_second_runs": state.resumable_second_runs,
+            "trace": state.trace,
+        }))
+    }
+}
+
+struct ConformanceErrorHandler(Arc<RuntimeProbe>);
+
+#[async_trait]
+impl ErrorHandler for ConformanceErrorHandler {
+    async fn handle_error(
+        &self,
+        _context: &WorkContext,
+        _job: &JobRow,
+        _result: &WorkResult,
+    ) -> Result<ErrorHandlerResult, riverqueue::Error> {
+        self.0
+            .increment_error_handler_calls()
+            .map_err(|error| riverqueue::Error::Runtime(error.to_string()))?;
+        Ok(ErrorHandlerResult {
+            cancel: true,
+            ..ErrorHandlerResult::default()
+        })
+    }
+}
+
+struct ProbeHook(Arc<RuntimeProbe>);
+
+#[async_trait]
+impl Hook for ProbeHook {
+    async fn insert_begin(&self, _insert: &mut InsertContext) -> Result<(), riverqueue::Error> {
+        self.0
+            .add_trace("hook:insert_begin")
+            .map_err(|error| riverqueue::Error::Runtime(error.to_string()))
+    }
+
+    async fn periodic_jobs_start(&self, _jobs: &PeriodicJobs) -> Result<(), riverqueue::Error> {
+        self.0
+            .increment_periodic_starts()
+            .map_err(|error| riverqueue::Error::Runtime(error.to_string()))?;
+        self.0
+            .add_trace("hook:periodic_start")
+            .map_err(|error| riverqueue::Error::Runtime(error.to_string()))
+    }
+
+    async fn work_begin(
+        &self,
+        _context: &WorkContext,
+        _job: &mut JobRow,
+    ) -> Result<(), riverqueue::Error> {
+        self.0
+            .add_trace("hook:work_begin")
+            .map_err(|error| riverqueue::Error::Runtime(error.to_string()))
+    }
+
+    async fn work_end(
+        &self,
+        _context: &WorkContext,
+        _job: &JobRow,
+        _result: &WorkResult,
+    ) -> Result<(), riverqueue::Error> {
+        self.0
+            .add_trace("hook:work_end")
+            .map_err(|error| riverqueue::Error::Runtime(error.to_string()))
+    }
+}
+
+struct ProbeInsertMiddleware(Arc<RuntimeProbe>);
+
+#[async_trait]
+impl InsertMiddleware for ProbeInsertMiddleware {
+    async fn before_insert(&self, _insert: &mut InsertContext) -> Result<(), riverqueue::Error> {
+        self.0
+            .add_trace("middleware:insert_before")
+            .map_err(|error| riverqueue::Error::Runtime(error.to_string()))
+    }
+
+    async fn after_insert(
+        &self,
+        _job: &JobRow,
+        _unique_skipped_as_duplicate: bool,
+    ) -> Result<(), riverqueue::Error> {
+        self.0
+            .add_trace("middleware:insert_after")
+            .map_err(|error| riverqueue::Error::Runtime(error.to_string()))
+    }
+}
+
+struct ProbeWorkMiddleware(Arc<RuntimeProbe>);
+
+#[async_trait]
+impl WorkMiddleware for ProbeWorkMiddleware {
+    async fn before_work(
+        &self,
+        _context: &WorkContext,
+        _job: &mut JobRow,
+    ) -> Result<(), riverqueue::Error> {
+        self.0
+            .add_trace("middleware:work_before")
+            .map_err(|error| riverqueue::Error::Runtime(error.to_string()))
+    }
+
+    async fn after_work(
+        &self,
+        _context: &WorkContext,
+        _job: &JobRow,
+        _result: &WorkResult,
+    ) -> Result<(), riverqueue::Error> {
+        self.0
+            .add_trace("middleware:work_after")
+            .map_err(|error| riverqueue::Error::Runtime(error.to_string()))
+    }
+}
+
+struct ConformancePlugin(Arc<RuntimeProbe>);
+
+impl Plugin for ConformancePlugin {
+    fn hooks(&self) -> Vec<Arc<dyn Hook>> {
+        vec![Arc::new(ProbeHook(Arc::clone(&self.0)))]
+    }
+
+    fn insert_middleware(&self) -> Vec<Arc<dyn InsertMiddleware>> {
+        vec![Arc::new(ProbeInsertMiddleware(Arc::clone(&self.0)))]
+    }
+
+    fn work_middleware(&self) -> Vec<Arc<dyn WorkMiddleware>> {
+        vec![Arc::new(ProbeWorkMiddleware(Arc::clone(&self.0)))]
+    }
+}
+
+struct FixedRetryPolicy(Duration);
+
+impl RetryPolicy for FixedRetryPolicy {
+    fn next_retry(&self, _job: &JobRow, _error: &str, now: DateTime<Utc>) -> Duration {
+        let _ = now;
+        self.0
     }
 }
 
@@ -273,7 +662,9 @@ struct UniqueOptsParams {
 
 struct RunningClient {
     client: Client,
+    events: EventReceiver,
     handle: RunHandle,
+    probe: Arc<RuntimeProbe>,
 }
 
 struct Adapter {
@@ -348,6 +739,7 @@ impl Adapter {
                 "capabilities": CAPABILITIES,
                 "implementation": "rust",
                 "implementation_version": env!("CARGO_PKG_VERSION"),
+                "methods": ADAPTER_METHODS,
                 "migration_lines": {MIGRATION_LINE_MAIN: MIGRATION_VERSION_LATEST},
                 "protocol_revision": PROTOCOL_REVISION,
             })),
@@ -360,11 +752,39 @@ impl Adapter {
                     .execute(&self.pool)
                     .await?;
                 }
-                let applied = Migrator::new(self.pool.clone())
-                    .with_schema(schema)
-                    .migrate_up()
+                let migrator = Migrator::new(self.pool.clone()).with_schema(schema);
+                let direction = match params
+                    .get("direction")
+                    .and_then(Value::as_str)
+                    .unwrap_or("up")
+                {
+                    "down" => Direction::Down,
+                    "up" => Direction::Up,
+                    value => return Err(format!("unknown migration direction {value:?}").into()),
+                };
+                let result = migrator
+                    .migrate(
+                        direction,
+                        MigrateOpts {
+                            dry_run: params
+                                .get("dry_run")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                            max_steps: optional_i64(&params, "max_steps")
+                                .map(usize::try_from)
+                                .transpose()?,
+                            target_version: optional_i64(&params, "target_version"),
+                        },
+                    )
                     .await?;
-                Ok(json!({"applied": applied}))
+                let applied = result
+                    .versions
+                    .iter()
+                    .map(|version| version.version)
+                    .collect::<Vec<_>>();
+                let existing = migrator.existing_versions().await?;
+                let valid = migrator.validate(None).await?.ok;
+                Ok(json!({"applied": applied, "existing": existing, "valid": valid}))
             }
             "reset" => {
                 if self.running.is_some() || !self.transactions.is_empty() {
@@ -412,6 +832,29 @@ impl Adapter {
                 );
                 Ok(json!({"delay_ns": u64::try_from(delay.as_nanos())?}))
             }
+            "unique_key" => {
+                let params: UniqueKeyParams = serde_json::from_value(params)?;
+                let opts = UniqueOpts {
+                    by_args: params.options.by_args,
+                    by_period: (params.options.by_period_nanos > 0)
+                        .then(|| Duration::from_nanos(params.options.by_period_nanos)),
+                    by_queue: params.options.by_queue,
+                    by_state: params.options.by_state.clone(),
+                    exclude_kind: params.options.exclude_kind,
+                };
+                let key = match params.kind.as_str() {
+                    "conformance_all_args" => unique_key_for_args::<UniqueAllArgs>(&params, &opts),
+                    "conformance_numeric_boundaries" => {
+                        unique_key_for_args::<UniqueNumericArgs>(&params, &opts)
+                    }
+                    "conformance_selected_args" => {
+                        unique_key_for_args::<UniqueSelectedArgs>(&params, &opts)
+                    }
+                    "conformance_simple" => unique_key_for_args::<UniqueSimpleArgs>(&params, &opts),
+                    kind => Err(format!("unsupported unique fixture kind {kind:?}")),
+                }?;
+                Ok(json!({"sha256": hex(&key), "state_mask": opts.state_bitmask()}))
+            }
             "barrier_create" => {
                 let name = required_string(&params, "name")?;
                 self.barriers.create(&name)?;
@@ -429,6 +872,11 @@ impl Adapter {
                     .insert(params.args(), params.opts.into_opts())
                     .await?;
                 Ok(normalize_job(&result.job.row))
+            }
+            "insert_many" => {
+                let jobs = insert_many_params(&params)?;
+                let results = self.client()?.insert_many(jobs).await?;
+                Ok(normalize_insert_many_results(&results))
             }
             "benchmark_enqueue" => {
                 let jobs = usize::try_from(required_i64(&params, "jobs")?)?;
@@ -532,6 +980,22 @@ impl Adapter {
                     .await?;
                 Ok(normalize_job(&row))
             }
+            "queue_add" => {
+                let running = self
+                    .running
+                    .as_ref()
+                    .ok_or("queue_add requires a running client")?;
+                let max_workers = optional_i64(&params, "max_workers").unwrap_or(1);
+                running.client.queue_add(
+                    required_string(&params, "name")?,
+                    QueueConfig {
+                        fetch_cooldown: Duration::from_millis(1),
+                        fetch_poll_interval: Duration::from_millis(10),
+                        max_workers: usize::try_from(max_workers)?,
+                    },
+                )?;
+                Ok(json!({}))
+            }
             "queue_get" => {
                 let queue = self
                     .client()?
@@ -558,6 +1022,17 @@ impl Adapter {
                     client.queue_pause(&name).await?;
                 } else {
                     client.queue_resume(&name).await?;
+                }
+                Ok(json!({}))
+            }
+            "queue_remove" => {
+                let running = self
+                    .running
+                    .as_ref()
+                    .ok_or("queue_remove requires a running client")?;
+                let name = required_string(&params, "name")?;
+                if running.client.queue_remove(&name)?.is_none() {
+                    return Err(format!("queue {name:?} is not configured").into());
                 }
                 Ok(json!({}))
             }
@@ -680,6 +1155,14 @@ impl Adapter {
                     return Err("client already running".into());
                 }
                 let client_id = required_string(&params, "client_id")?;
+                let error_handler_cancel = params
+                    .get("error_handler_cancel")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let fetch_poll_interval = optional_i64(&params, "fetch_poll_interval_ms")
+                    .map(duration_millis)
+                    .transpose()?
+                    .unwrap_or(Duration::from_millis(10));
                 let queue = params
                     .get("queue")
                     .and_then(Value::as_str)
@@ -691,10 +1174,12 @@ impl Adapter {
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 let schema = schema_name(params.get("schema").and_then(Value::as_str))?;
+                let probe = Arc::new(RuntimeProbe::default());
                 let mut workers = WorkerRegistry::new();
                 workers.register::<ConformanceArgs, _>(ConformanceWorker {
                     barriers: Arc::clone(&self.barriers),
                     pool: self.pool.clone(),
+                    probe: Arc::clone(&probe),
                 })?;
                 let mut maintenance = MaintenanceConfig::default();
                 if let Some(milliseconds) = optional_i64(&params, "elect_interval_ms") {
@@ -709,7 +1194,7 @@ impl Adapter {
                 if let Some(milliseconds) = optional_i64(&params, "scheduler_interval_ms") {
                     maintenance.scheduler_interval = duration_millis(milliseconds)?;
                 }
-                let client = Client::builder(self.pool.clone())
+                let mut builder = Client::builder(self.pool.clone())
                     .id(client_id)
                     .job_stuck_threshold(Duration::from_millis(100))
                     .maintenance(maintenance)
@@ -720,14 +1205,69 @@ impl Adapter {
                         queue,
                         QueueConfig {
                             fetch_cooldown: Duration::from_millis(1),
-                            fetch_poll_interval: Duration::from_millis(10),
+                            fetch_poll_interval,
                             max_workers: usize::try_from(max_workers)?,
                         },
-                    )
-                    .build()?;
+                    );
+                if params
+                    .get("instrumented")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    builder = builder.plugin(ConformancePlugin(Arc::clone(&probe)));
+                }
+                if error_handler_cancel {
+                    builder = builder.error_handler(ConformanceErrorHandler(Arc::clone(&probe)));
+                }
+                if let Some(milliseconds) = optional_i64(&params, "job_stuck_threshold_ms") {
+                    builder = builder.job_stuck_threshold(duration_millis(milliseconds)?);
+                }
+                if let Some(milliseconds) = optional_i64(&params, "job_timeout_ms") {
+                    builder = builder.job_timeout(Some(duration_millis(milliseconds)?));
+                }
+                if params
+                    .get("periodic_run_on_start")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    builder = builder.periodic_job(PeriodicJob::with_defaults(
+                        IntervalSchedule::new(Duration::from_hours(1))?,
+                        || ConformanceArgs {
+                            behavior: String::new(),
+                            duration_ms: 0,
+                            message: "periodic run on start".to_owned(),
+                        },
+                        PeriodicJobOpts {
+                            id: Some("conformance-periodic".to_owned()),
+                            run_on_start: true,
+                        },
+                    ));
+                }
+                if let Some(milliseconds) = optional_i64(&params, "retry_delay_ms") {
+                    builder =
+                        builder.retry_policy(FixedRetryPolicy(duration_millis(milliseconds)?));
+                }
+                let client = builder.build()?;
+                let events = client.subscribe_config(SubscribeConfig {
+                    buffer_capacity: 1_000,
+                    kinds: vec![
+                        EventKind::JobCancelled,
+                        EventKind::JobCompleted,
+                        EventKind::JobFailed,
+                        EventKind::JobInterrupted,
+                        EventKind::JobSnoozed,
+                        EventKind::QueuePaused,
+                        EventKind::QueueResumed,
+                    ],
+                })?;
                 let mut handle = client.start()?;
                 handle.wait_ready().await?;
-                self.running = Some(RunningClient { client, handle });
+                self.running = Some(RunningClient {
+                    client,
+                    events,
+                    handle,
+                    probe,
+                });
                 Ok(json!({}))
             }
             "stop" => {
@@ -742,6 +1282,18 @@ impl Adapter {
                     running.handle.shutdown().await?;
                 }
                 Ok(json!({}))
+            }
+            "runtime_stats" => {
+                let running = self
+                    .running
+                    .as_mut()
+                    .ok_or("runtime_stats requires a running client")?;
+                while let Ok(event) =
+                    tokio::time::timeout(Duration::from_millis(1), running.events.recv()).await
+                {
+                    running.probe.add_event(event?.kind)?;
+                }
+                Ok(running.probe.snapshot()?)
             }
             "wait" => {
                 let id = required_i64(&params, "id")?;
@@ -761,9 +1313,13 @@ impl Adapter {
                 workers.register::<ConformanceArgs, _>(ConformanceWorker {
                     barriers: Arc::clone(&self.barriers),
                     pool: self.pool.clone(),
+                    probe: Arc::new(RuntimeProbe::default()),
                 })?;
                 let client = Client::builder(self.pool.clone())
-                    .id("rust-conformance-adapter")
+                    .id(params
+                        .get("client_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("rust-conformance-adapter"))
                     .schema(schema_name(params.get("schema").and_then(Value::as_str))?)
                     .workers(workers)
                     .queue(
@@ -802,6 +1358,22 @@ impl Adapter {
                     .insert_tx(transaction, insert.args(), insert.opts.into_opts())
                     .await?;
                 Ok(normalize_job(&row.job.row))
+            }
+            "tx_insert_many" | "tx_insert_many_fast" => {
+                let handle = required_string(&params, "handle")?;
+                let jobs = insert_many_params(params.get("jobs").ok_or("missing jobs")?)?;
+                let client = self.client()?;
+                let transaction = self
+                    .transactions
+                    .get_mut(&handle)
+                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                if method == "tx_insert_many_fast" {
+                    let count = client.insert_many_fast_tx(transaction, jobs).await?;
+                    Ok(json!({"count": count}))
+                } else {
+                    let results = client.insert_many_tx(transaction, jobs).await?;
+                    Ok(normalize_insert_many_results(&results))
+                }
             }
             "tx_get" => {
                 let handle = required_string(&params, "handle")?;
@@ -1172,6 +1744,30 @@ fn normalize_job(row: &JobRow) -> Value {
     })
 }
 
+fn insert_many_params(
+    params: &Value,
+) -> Result<Vec<(ConformanceArgs, InsertOpts)>, Box<dyn std::error::Error + Send + Sync>> {
+    let jobs = if params.is_array() {
+        params.clone()
+    } else {
+        params.get("jobs").cloned().ok_or("missing jobs")?
+    };
+    let jobs: Vec<InsertParams> = serde_json::from_value(jobs)?;
+    Ok(jobs
+        .into_iter()
+        .map(|params| (params.args(), params.opts.into_opts()))
+        .collect())
+}
+
+fn normalize_insert_many_results<A: JobArgs>(results: &[InsertResult<A>]) -> Value {
+    json!({
+        "results": results.iter().map(|result| json!({
+            "job": normalize_job(&result.job.row),
+            "unique_skipped_as_duplicate": result.unique_skipped_as_duplicate,
+        })).collect::<Vec<_>>(),
+    })
+}
+
 fn normalize_job_list(
     rows: &[JobRow],
     params: &JobListParams,
@@ -1198,6 +1794,19 @@ fn normalize_queue(queue: &Queue) -> Value {
         "paused_at": queue.paused_at.map(format_time),
         "updated_at": format_time(queue.updated_at),
     })
+}
+
+fn event_kind_name(kind: EventKind) -> &'static str {
+    match kind {
+        EventKind::JobCancelled => "job_cancelled",
+        EventKind::JobCompleted => "job_completed",
+        EventKind::JobFailed => "job_failed",
+        EventKind::JobInterrupted => "job_interrupted",
+        EventKind::JobSnoozed => "job_snoozed",
+        EventKind::QueuePaused => "queue_paused",
+        EventKind::QueueResumed => "queue_resumed",
+        _ => "unknown",
+    }
 }
 
 fn format_time(time: DateTime<Utc>) -> String {

@@ -29,7 +29,7 @@ func TestCompatibilityArtifacts(t *testing.T) {
 
 		var manifest struct {
 			Capabilities map[string]string `json:"capabilities"`
-			Rust struct {
+			Rust         struct {
 				Version string `json:"version"`
 			} `json:"rust"`
 		}
@@ -42,6 +42,37 @@ func TestCompatibilityArtifacts(t *testing.T) {
 		cargoManifest, err := os.ReadFile(filepath.Join(root, "rust/Cargo.toml"))
 		require.NoError(t, err)
 		require.Contains(t, string(cargoManifest), "version = \""+manifest.Rust.Version+"\"")
+	})
+
+	t.Run("AdapterContractComplete", func(t *testing.T) {
+		t.Parallel()
+
+		var manifest struct {
+			Capabilities     map[string]string `json:"capabilities"`
+			ProtocolRevision int               `json:"protocol_revision"`
+		}
+		readJSON(t, "conformance/manifest.json", &manifest)
+		var contract struct {
+			AdapterVersion int `json:"adapter_version"`
+			Methods        []struct {
+				Capability  string `json:"capability"`
+				Description string `json:"description"`
+				Name        string `json:"name"`
+			} `json:"methods"`
+			ProtocolRevision int `json:"protocol_revision"`
+		}
+		readJSON(t, "conformance/adapter/contract.json", &contract)
+		require.Positive(t, contract.AdapterVersion)
+		require.Equal(t, manifest.ProtocolRevision, contract.ProtocolRevision)
+		names := make([]string, 0, len(contract.Methods))
+		for _, method := range contract.Methods {
+			require.Contains(t, manifest.Capabilities, method.Capability, "method %s", method.Name)
+			require.NotEmpty(t, method.Description, "method %s", method.Name)
+			require.NotContains(t, names, method.Name)
+			names = append(names, method.Name)
+		}
+		require.True(t, slices.IsSorted(names))
+		require.Contains(t, names, "handshake")
 	})
 
 	t.Run("MigrationInventoryComplete", func(t *testing.T) {
@@ -68,6 +99,10 @@ func TestCompatibilityArtifacts(t *testing.T) {
 
 		var scenarios struct {
 			Scenarios []struct {
+				Evidence []struct {
+					Path   string `json:"path"`
+					Symbol string `json:"symbol"`
+				} `json:"evidence"`
 				Name string `json:"name"`
 				Tier string `json:"tier"`
 			} `json:"scenarios"`
@@ -77,10 +112,30 @@ func TestCompatibilityArtifacts(t *testing.T) {
 		tiers := make(map[string]bool)
 		for _, scenario := range scenarios.Scenarios {
 			require.NotContains(t, names, scenario.Name)
+			binding, ok := scenarioRegistry[scenario.Name]
+			require.True(t, ok, "scenario %q has no executable test binding", scenario.Name)
+			require.Equal(t, binding.tier, scenario.Tier, "scenario %q tier", scenario.Name)
+			require.NotEmpty(t, scenario.Evidence, "scenario %q has no executable evidence", scenario.Name)
+			for _, evidence := range scenario.Evidence {
+				require.True(t, strings.HasPrefix(evidence.Path, "conformance/harness/"),
+					"scenario %q evidence must point into the executable harness", scenario.Name)
+				require.NotContains(t, evidence.Path, "..")
+				contents, err := os.ReadFile(filepath.Join(root, evidence.Path))
+				require.NoError(t, err, "scenario %q evidence path", scenario.Name)
+				require.Contains(t, string(contents), "func "+evidence.Symbol+"(",
+					"scenario %q evidence symbol", scenario.Name)
+			}
 			names = append(names, scenario.Name)
 			tiers[scenario.Tier] = true
 		}
 		require.True(t, slices.IsSorted(names))
+		registeredNames := make([]string, 0, len(scenarioRegistry))
+		for name := range scenarioRegistry {
+			registeredNames = append(registeredNames, name)
+		}
+		slices.Sort(registeredNames)
+		require.Equal(t, registeredNames, names,
+			"core.json and the executable scenario registry must have identical IDs")
 		for _, tier := range []string{"chaos", "codec", "mixed", "performance", "runtime", "storage"} {
 			require.True(t, tiers[tier], "missing scenario tier %s", tier)
 		}
@@ -90,6 +145,7 @@ func TestCompatibilityArtifacts(t *testing.T) {
 		t.Parallel()
 
 		for _, path := range []string{
+			"conformance/adapter/contract.json",
 			"conformance/fixtures/protocol_values.json",
 			"conformance/fixtures/unique_keys.json",
 			"conformance/manifest.json",

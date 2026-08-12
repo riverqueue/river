@@ -8,10 +8,23 @@
       "items": {
         "additionalProperties": false,
         "properties": {
+          "evidence": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "path": { "pattern": "^[a-zA-Z0-9_./-]+$", "type": "string" },
+                "symbol": { "minLength": 1, "type": "string" }
+              },
+              "required": ["path", "symbol"],
+              "type": "object"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
           "name": { "pattern": "^[a-z0-9_]+$", "type": "string" },
           "tier": { "enum": ["chaos", "codec", "mixed", "performance", "runtime", "storage"] }
         },
-        "required": ["name", "tier"],
+        "required": ["evidence", "name", "tier"],
         "type": "object"
       },
       "type": "array"

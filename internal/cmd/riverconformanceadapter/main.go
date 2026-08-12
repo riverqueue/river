@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -23,15 +24,79 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
 	"github.com/riverqueue/river/rivertype"
 )
 
 const (
-	adapterVersion   = 6
+	adapterVersion   = 9
 	protocolRevision = 1
 )
+
+var adapterMethods = []string{ //nolint:gochecknoglobals
+	"barrier_create",
+	"barrier_release",
+	"benchmark_enqueue",
+	"cancel",
+	"clock_set",
+	"connection_count",
+	"delete",
+	"delete_many",
+	"fault_disconnect_application",
+	"fault_disconnect_listeners",
+	"fault_expire_leader",
+	"get",
+	"handshake",
+	"insert",
+	"insert_many",
+	"insert_many_fast",
+	"leader",
+	"list",
+	"listener_count",
+	"migrate",
+	"queue_add",
+	"queue_get",
+	"queue_list",
+	"queue_pause",
+	"queue_remove",
+	"queue_resume",
+	"queue_update",
+	"raw_insert_full_row",
+	"raw_insert_no_notify",
+	"request_resign",
+	"reset",
+	"retry",
+	"retry_delay",
+	"rng_seed",
+	"runtime_stats",
+	"start",
+	"stop",
+	"tx_begin",
+	"tx_cancel",
+	"tx_commit",
+	"tx_delete",
+	"tx_delete_many",
+	"tx_fail",
+	"tx_get",
+	"tx_insert",
+	"tx_insert_many",
+	"tx_insert_many_fast",
+	"tx_list",
+	"tx_queue_get",
+	"tx_queue_list",
+	"tx_queue_pause",
+	"tx_queue_resume",
+	"tx_queue_update",
+	"tx_retry",
+	"tx_rollback",
+	"tx_update",
+	"unique_key",
+	"update",
+	"wait",
+	"work",
+}
 
 var capabilities = []string{ //nolint:gochecknoglobals
 	"barriers",
@@ -88,11 +153,55 @@ type conformanceArgs struct {
 
 func (conformanceArgs) Kind() string { return "conformance_echo" }
 
+type uniqueAllArgs struct {
+	Alpha   string `json:"alpha"`
+	Maximum int64  `json:"maximum"`
+	Zeta    string `json:"zeta"`
+}
+
+func (uniqueAllArgs) Kind() string { return "conformance_all_args" }
+
+type uniqueNumericArgs struct {
+	Exponent        float64 `json:"exponent"`
+	Fraction        float64 `json:"fraction"`
+	Maximum         int64   `json:"maximum"`
+	Minimum         int64   `json:"minimum"`
+	UnsignedMaximum uint64  `json:"unsigned_maximum"`
+}
+
+func (uniqueNumericArgs) Kind() string { return "conformance_numeric_boundaries" }
+
+type uniqueSelectedAccount struct {
+	ID      string `json:"id"      river:"unique"`
+	Ignored string `json:"ignored"`
+}
+
+type uniqueSelectedArgs struct {
+	Account uniqueSelectedAccount `json:"account"`
+	Ignored bool                  `json:"ignored"`
+	Label   string                `json:"label"   river:"unique"`
+}
+
+func (uniqueSelectedArgs) Kind() string { return "conformance_selected_args" }
+
+type uniqueSimpleArgs struct {
+	ID int64 `json:"id"`
+}
+
+func (uniqueSimpleArgs) Kind() string { return "conformance_simple" }
+
+type fixedClock struct{ now time.Time }
+
+func (c fixedClock) Now() time.Time { return c.now }
+
+func (fixedClock) NowOrNil() *time.Time { return nil }
+
 type conformanceWorker struct {
 	river.WorkerDefaults[conformanceArgs]
 
 	barriers *barrierRegistry
 	pool     *pgxpool.Pool
+	probe    *runtimeProbe
 }
 
 func (w *conformanceWorker) Work(ctx context.Context, job *river.Job[conformanceArgs]) error {
@@ -120,7 +229,7 @@ func (w *conformanceWorker) Work(ctx context.Context, job *river.Job[conformance
 			return err
 		}
 		time.Sleep(duration)
-	case "snooze_once":
+	case "snooze_once", "snooze_then_cancel":
 		var metadata map[string]any
 		if err := json.Unmarshal(job.Metadata, &metadata); err != nil {
 			return err
@@ -132,6 +241,22 @@ func (w *conformanceWorker) Work(ctx context.Context, job *river.Job[conformance
 			}
 			return river.JobSnooze(duration)
 		}
+		if job.Args.Behavior == "snooze_then_cancel" {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+	case "resumable":
+		river.ResumableStep(ctx, "first", nil, func(ctx context.Context) error {
+			w.probe.incrementResumableFirst()
+			return nil
+		})
+		river.ResumableStep(ctx, "second", nil, func(ctx context.Context) error {
+			w.probe.incrementResumableSecond()
+			if job.Attempt == 1 {
+				return errors.New("fail second resumable step once")
+			}
+			return nil
+		})
 	case "transactional_complete":
 		if err := river.MetadataSet(ctx, "transactional_completion", true); err != nil {
 			return err
@@ -147,6 +272,126 @@ func (w *conformanceWorker) Work(ctx context.Context, job *river.Job[conformance
 		return tx.Commit(ctx)
 	}
 	return nil
+}
+
+type runtimeProbe struct {
+	errorHandlerCalls   int
+	events              []string
+	mu                  sync.Mutex
+	periodicStarts      int
+	resumableFirstRuns  int
+	resumableSecondRuns int
+	trace               []string
+}
+
+func (p *runtimeProbe) incrementErrorHandlerCalls() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.errorHandlerCalls++
+}
+
+func (p *runtimeProbe) addEvent(kind river.EventKind) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, string(kind))
+}
+
+func (p *runtimeProbe) addTrace(entry string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.trace = append(p.trace, entry)
+}
+
+func (p *runtimeProbe) incrementPeriodicStarts() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.periodicStarts++
+}
+
+func (p *runtimeProbe) incrementResumableFirst() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.resumableFirstRuns++
+}
+
+func (p *runtimeProbe) incrementResumableSecond() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.resumableSecondRuns++
+}
+
+func (p *runtimeProbe) snapshot() map[string]any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return map[string]any{
+		"error_handler_calls":   p.errorHandlerCalls,
+		"events":                slices.Clone(p.events),
+		"periodic_starts":       p.periodicStarts,
+		"resumable_first_runs":  p.resumableFirstRuns,
+		"resumable_second_runs": p.resumableSecondRuns,
+		"trace":                 slices.Clone(p.trace),
+	}
+}
+
+type conformanceErrorHandler struct {
+	probe *runtimeProbe
+}
+
+func (h *conformanceErrorHandler) HandleError(ctx context.Context, job *rivertype.JobRow, err error) *river.ErrorHandlerResult {
+	h.probe.incrementErrorHandlerCalls()
+	return &river.ErrorHandlerResult{SetCancelled: true}
+}
+
+func (h *conformanceErrorHandler) HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *river.ErrorHandlerResult {
+	h.probe.incrementErrorHandlerCalls()
+	return &river.ErrorHandlerResult{SetCancelled: true}
+}
+
+type conformancePlugin struct {
+	river.PluginDefaults
+
+	probe *runtimeProbe
+}
+
+func (p *conformancePlugin) InsertBegin(_ context.Context, _ *rivertype.JobInsertParams) error { //nolint:unparam // River hook signature requires an error result.
+	p.probe.addTrace("hook:insert_begin")
+	return nil
+}
+
+func (p *conformancePlugin) InsertMany(ctx context.Context, _ []*rivertype.JobInsertParams, doInner func(context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
+	p.probe.addTrace("middleware:insert_before")
+	results, err := doInner(ctx)
+	p.probe.addTrace("middleware:insert_after")
+	return results, err
+}
+
+func (p *conformancePlugin) Start(_ context.Context, _ *rivertype.HookPeriodicJobsStartParams) error { //nolint:unparam // River hook signature requires an error result.
+	p.probe.incrementPeriodicStarts()
+	p.probe.addTrace("hook:periodic_start")
+	return nil
+}
+
+func (p *conformancePlugin) WorkBegin(_ context.Context, _ *rivertype.JobRow) error { //nolint:unparam // River hook signature requires an error result.
+	p.probe.addTrace("hook:work_begin")
+	return nil
+}
+
+func (p *conformancePlugin) Work(ctx context.Context, _ *rivertype.JobRow, doInner func(context.Context) error) error {
+	p.probe.addTrace("middleware:work_before")
+	err := doInner(ctx)
+	p.probe.addTrace("middleware:work_after")
+	return err
+}
+
+func (p *conformancePlugin) WorkEnd(_ context.Context, _ *rivertype.JobRow, err error) error {
+	p.probe.addTrace("hook:work_end")
+	return err
+}
+
+type fixedRetryPolicy struct{ delay time.Duration }
+
+func (p fixedRetryPolicy) NextRetry(job *rivertype.JobRow) time.Time {
+	return time.Now().UTC().Add(p.delay)
 }
 
 type barrierRegistry struct {
@@ -240,6 +485,68 @@ type uniqueOptsParams struct {
 	ExcludeKind bool                 `json:"exclude_kind"`
 }
 
+type uniqueKeyParams struct {
+	Args    json.RawMessage `json:"args"`
+	Kind    string          `json:"kind"`
+	Now     time.Time       `json:"now"`
+	Options struct {
+		ByArgs        bool                 `json:"by_args"`
+		ByPeriodNanos int64                `json:"by_period_nanos"`
+		ByQueue       bool                 `json:"by_queue"`
+		ByState       []rivertype.JobState `json:"by_state"`
+		ExcludeKind   bool                 `json:"exclude_kind"`
+	} `json:"options"`
+	Queue       string     `json:"queue"`
+	ScheduledAt *time.Time `json:"scheduled_at"`
+}
+
+func (p uniqueKeyParams) jobArgs() (rivertype.JobArgs, error) {
+	var args rivertype.JobArgs
+	switch p.Kind {
+	case "conformance_all_args":
+		args = &uniqueAllArgs{}
+	case "conformance_numeric_boundaries":
+		var encoded struct {
+			Exponent        float64     `json:"exponent"`
+			Fraction        float64     `json:"fraction"`
+			Maximum         json.Number `json:"maximum"`
+			Minimum         json.Number `json:"minimum"`
+			UnsignedMaximum json.Number `json:"unsigned_maximum"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(p.Args))
+		decoder.UseNumber()
+		if err := decoder.Decode(&encoded); err != nil {
+			return nil, err
+		}
+		maximum, err := strconv.ParseInt(encoded.Maximum.String(), 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		minimum, err := strconv.ParseInt(encoded.Minimum.String(), 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		unsignedMaximum, err := strconv.ParseUint(encoded.UnsignedMaximum.String(), 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		return &uniqueNumericArgs{
+			Exponent: encoded.Exponent, Fraction: encoded.Fraction, Maximum: maximum,
+			Minimum: minimum, UnsignedMaximum: unsignedMaximum,
+		}, nil
+	case "conformance_selected_args":
+		args = &uniqueSelectedArgs{}
+	case "conformance_simple":
+		args = &uniqueSimpleArgs{}
+	default:
+		return nil, fmt.Errorf("unsupported unique fixture kind %q", p.Kind)
+	}
+	if err := json.Unmarshal(p.Args, args); err != nil {
+		return nil, err
+	}
+	return args, nil
+}
+
 func (p insertOptsParams) opts() (*river.InsertOpts, error) {
 	opts := &river.InsertOpts{
 		Metadata:    p.Metadata,
@@ -273,7 +580,10 @@ func (p insertOptsParams) opts() (*river.InsertOpts, error) {
 }
 
 type runningClient struct {
-	client *river.Client[pgx.Tx]
+	client             *river.Client[pgx.Tx]
+	probe              *runtimeProbe
+	subscription       <-chan *river.Event
+	subscriptionCancel func()
 }
 
 type adapterState struct {
@@ -344,6 +654,7 @@ func run(ctx context.Context) error {
 		stopCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		_ = state.running.client.StopAndCancel(stopCtx)
+		state.running.subscriptionCancel()
 	}
 	return scanner.Err()
 }
@@ -357,13 +668,18 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			"capabilities":           capabilities,
 			"implementation":         "go",
 			"implementation_version": "0.43.0-development",
+			"methods":                adapterMethods,
 			"migration_lines":        map[string]int{"main": 7},
 			"protocol_revision":      protocolRevision,
 		}, nil
 
 	case "migrate":
 		var params struct {
-			Schema string `json:"schema"`
+			Direction     string `json:"direction"`
+			DryRun        bool   `json:"dry_run"`
+			MaxSteps      *int   `json:"max_steps"`
+			Schema        string `json:"schema"`
+			TargetVersion *int   `json:"target_version"`
 		}
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			return nil, err
@@ -380,7 +696,21 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		result, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil)
+		direction := rivermigrate.DirectionUp
+		if params.Direction != "" {
+			direction = rivermigrate.Direction(params.Direction)
+		}
+		var opts *rivermigrate.MigrateOpts
+		if params.DryRun || params.MaxSteps != nil || params.TargetVersion != nil {
+			opts = &rivermigrate.MigrateOpts{DryRun: params.DryRun}
+			if params.MaxSteps != nil {
+				opts.MaxSteps = *params.MaxSteps
+			}
+			if params.TargetVersion != nil {
+				opts.TargetVersion = *params.TargetVersion
+			}
+		}
+		result, err := migrator.Migrate(ctx, direction, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -388,7 +718,19 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		for i, version := range result.Versions {
 			versions[i] = version.Version
 		}
-		return map[string]any{"applied": versions}, nil
+		existingMigrations, err := migrator.ExistingVersions(ctx)
+		if err != nil {
+			return nil, err
+		}
+		existing := make([]int, len(existingMigrations))
+		for i, migration := range existingMigrations {
+			existing[i] = migration.Version
+		}
+		validation, err := migrator.Validate(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"applied": versions, "existing": existing, "valid": validation.OK}, nil
 
 	case "reset":
 		if s.running != nil || len(s.transactions) > 0 {
@@ -447,6 +789,38 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		delay := deterministicRetryDelay(*s.clock, params.JobID, params.ErrorCount, s.rngSeed)
 		return map[string]any{"delay_ns": delay.Nanoseconds()}, nil
 
+	case "unique_key":
+		var params uniqueKeyParams
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		args, err := params.jobArgs()
+		if err != nil {
+			return nil, err
+		}
+		opts := &dbunique.UniqueOpts{
+			ByArgs:      params.Options.ByArgs,
+			ByPeriod:    time.Duration(params.Options.ByPeriodNanos),
+			ByQueue:     params.Options.ByQueue,
+			ByState:     params.Options.ByState,
+			ExcludeKind: params.Options.ExcludeKind,
+		}
+		key, err := dbunique.UniqueKey(fixedClock{now: params.Now}, opts, &rivertype.JobInsertParams{
+			Args:         args,
+			EncodedArgs:  params.Args,
+			Kind:         params.Kind,
+			Queue:        params.Queue,
+			ScheduledAt:  params.ScheduledAt,
+			UniqueStates: opts.StateBitmask(),
+		})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"sha256":     hex.EncodeToString(key),
+			"state_mask": opts.StateBitmask(),
+		}, nil
+
 	case "barrier_create", "barrier_release":
 		var params struct {
 			Name string `json:"name"`
@@ -477,6 +851,21 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			return nil, err
 		}
 		return normalizeJob(result.Job), nil
+
+	case "insert_many":
+		jobs, err := decodeInsertManyParams(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		results, err := client.InsertMany(ctx, jobs)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeInsertManyResults(results), nil
 
 	case "benchmark_enqueue":
 		var params struct {
@@ -620,6 +1009,30 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		}
 		return normalizeJob(job), nil
 
+	case "queue_add":
+		if s.running == nil {
+			return nil, errors.New("queue_add requires a running client")
+		}
+		var params struct {
+			MaxWorkers int    `json:"max_workers"`
+			Name       string `json:"name"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.MaxWorkers == 0 {
+			params.MaxWorkers = 1
+		}
+		err := s.running.client.Queues().Add(params.Name, river.QueueConfig{MaxWorkers: params.MaxWorkers})
+		var alreadyAddedErr *river.QueueAlreadyAddedError
+		if errors.As(err, &alreadyAddedErr) {
+			if err := s.running.client.Queues().Remove(ctx, params.Name); err != nil {
+				return nil, err
+			}
+			err = s.running.client.Queues().Add(params.Name, river.QueueConfig{MaxWorkers: params.MaxWorkers})
+		}
+		return map[string]any{}, err
+
 	case "queue_get":
 		var params struct {
 			Name string `json:"name"`
@@ -678,6 +1091,18 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			err = client.QueueResume(ctx, params.Name, nil)
 		}
 		return map[string]any{}, err
+
+	case "queue_remove":
+		if s.running == nil {
+			return nil, errors.New("queue_remove requires a running client")
+		}
+		var params struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		return map[string]any{}, s.running.client.Queues().Remove(ctx, params.Name)
 
 	case "queue_update":
 		var params struct {
@@ -812,11 +1237,18 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			return nil, errors.New("client already running")
 		}
 		var params struct {
-			ClientID   string `json:"client_id"`
-			MaxWorkers int    `json:"max_workers"`
-			PollOnly   bool   `json:"poll_only"`
-			Queue      string `json:"queue"`
-			Schema     string `json:"schema"`
+			ClientID            string  `json:"client_id"`
+			ErrorHandlerCancel  bool    `json:"error_handler_cancel"`
+			FetchPollIntervalMS *uint64 `json:"fetch_poll_interval_ms"`
+			Instrumented        bool    `json:"instrumented"`
+			JobStuckThresholdMS *uint64 `json:"job_stuck_threshold_ms"`
+			JobTimeoutMS        *uint64 `json:"job_timeout_ms"`
+			MaxWorkers          int     `json:"max_workers"`
+			PeriodicRunOnStart  bool    `json:"periodic_run_on_start"`
+			PollOnly            bool    `json:"poll_only"`
+			Queue               string  `json:"queue"`
+			RetryDelayMS        *uint64 `json:"retry_delay_ms"`
+			Schema              string  `json:"schema"`
 		}
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			return nil, err
@@ -827,14 +1259,44 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		if params.Queue == "" {
 			params.Queue = river.QueueDefault
 		}
-		client, err := newWorkerClient(s.pool, s.barriers, params.ClientID, params.Queue, params.Schema, params.MaxWorkers, params.PollOnly)
+		probe := &runtimeProbe{}
+		client, err := newWorkerClient(s.pool, s.barriers, workerClientConfig{
+			errorHandlerCancel:  params.ErrorHandlerCancel,
+			fetchPollIntervalMS: params.FetchPollIntervalMS,
+			id:                  params.ClientID,
+			instrumented:        params.Instrumented,
+			jobStuckThresholdMS: params.JobStuckThresholdMS,
+			jobTimeoutMS:        params.JobTimeoutMS,
+			maxWorkers:          params.MaxWorkers,
+			periodicRunOnStart:  params.PeriodicRunOnStart,
+			pollOnly:            params.PollOnly,
+			probe:               probe,
+			queue:               params.Queue,
+			retryDelayMS:        params.RetryDelayMS,
+			schema:              params.Schema,
+		})
 		if err != nil {
 			return nil, err
 		}
+		subscription, subscriptionCancel := client.Subscribe(
+			river.EventKindJobCancelled,
+			river.EventKindJobCompleted,
+			river.EventKindJobFailed,
+			river.EventKindJobInterrupted,
+			river.EventKindJobSnoozed,
+			river.EventKindQueuePaused,
+			river.EventKindQueueResumed,
+		)
 		if err := client.Start(ctx); err != nil {
+			subscriptionCancel()
 			return nil, err
 		}
-		s.running = &runningClient{client: client}
+		s.running = &runningClient{
+			client:             client,
+			probe:              probe,
+			subscription:       subscription,
+			subscriptionCancel: subscriptionCancel,
+		}
 		return map[string]any{}, nil
 
 	case "stop":
@@ -851,12 +1313,29 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		defer cancel()
 		if params.Cancel {
 			err := s.running.client.StopAndCancel(stopCtx)
+			s.running.subscriptionCancel()
 			s.running = nil
 			return map[string]any{}, err
 		}
 		err := s.running.client.Stop(stopCtx)
+		s.running.subscriptionCancel()
 		s.running = nil
 		return map[string]any{}, err
+
+	case "runtime_stats":
+		if s.running == nil {
+			return nil, errors.New("runtime_stats requires a running client")
+		}
+		for {
+			select {
+			case event := <-s.running.subscription:
+				if event != nil {
+					s.running.probe.addEvent(event.Kind)
+				}
+			default:
+				return s.running.probe.snapshot(), nil
+			}
+		}
 
 	case "wait":
 		var params struct {
@@ -878,8 +1357,9 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 
 	case "work":
 		var params struct {
-			ID     int64  `json:"id"`
-			Schema string `json:"schema"`
+			ClientID string `json:"client_id"`
+			ID       int64  `json:"id"`
+			Schema   string `json:"schema"`
 		}
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			return nil, err
@@ -887,7 +1367,17 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		if params.ID < 1 {
 			return nil, errors.New("id must be positive")
 		}
-		client, err := newWorkerClient(s.pool, s.barriers, "go-conformance-adapter", river.QueueDefault, params.Schema, 1, false)
+		if params.ClientID == "" {
+			params.ClientID = "go-conformance-adapter"
+		}
+		probe := &runtimeProbe{}
+		client, err := newWorkerClient(s.pool, s.barriers, workerClientConfig{
+			id:         params.ClientID,
+			maxWorkers: 1,
+			probe:      probe,
+			queue:      river.QueueDefault,
+			schema:     params.Schema,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -946,6 +1436,36 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			return nil, err
 		}
 		return normalizeJob(result.Job), nil
+
+	case "tx_insert_many", "tx_insert_many_fast":
+		var params struct {
+			Handle string          `json:"handle"`
+			Jobs   json.RawMessage `json:"jobs"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+		}
+		jobs, err := decodeInsertManyParams(params.Jobs)
+		if err != nil {
+			return nil, err
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		if req.Method == "tx_insert_many_fast" {
+			count, err := client.InsertManyFastTx(ctx, tx, jobs)
+			return map[string]any{"count": count}, err
+		}
+		results, err := client.InsertManyTx(ctx, tx, jobs)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeInsertManyResults(results), nil
 
 	case "tx_get", "tx_cancel", "tx_delete", "tx_retry":
 		var params struct {
@@ -1225,23 +1745,87 @@ func (s *adapterState) clientForSchema(schema string) (*river.Client[pgx.Tx], er
 	return river.NewClient(riverpgxv5.New(s.pool), &river.Config{Logger: adapterLogger(), Schema: schema})
 }
 
-func newWorkerClient(pool *pgxpool.Pool, barriers *barrierRegistry, id, queue, schema string, maxWorkers int, pollOnly bool) (*river.Client[pgx.Tx], error) {
+type workerClientConfig struct {
+	errorHandlerCancel  bool
+	fetchPollIntervalMS *uint64
+	id                  string
+	instrumented        bool
+	jobStuckThresholdMS *uint64
+	jobTimeoutMS        *uint64
+	maxWorkers          int
+	periodicRunOnStart  bool
+	pollOnly            bool
+	probe               *runtimeProbe
+	queue               string
+	retryDelayMS        *uint64
+	schema              string
+}
+
+func newWorkerClient(pool *pgxpool.Pool, barriers *barrierRegistry, config workerClientConfig) (*river.Client[pgx.Tx], error) {
 	workers := river.NewWorkers()
-	if err := river.AddWorkerSafely(workers, &conformanceWorker{barriers: barriers, pool: pool}); err != nil {
+	if err := river.AddWorkerSafely(workers, &conformanceWorker{barriers: barriers, pool: pool, probe: config.probe}); err != nil {
 		return nil, err
 	}
-	return river.NewClient(riverpgxv5.New(pool), &river.Config{
+	riverConfig := &river.Config{
+		ErrorHandler:      nil,
 		FetchCooldown:     time.Millisecond,
 		FetchPollInterval: 10 * time.Millisecond,
-		ID:                id,
+		ID:                config.id,
 		Logger:            adapterLogger(),
-		PollOnly:          pollOnly,
+		PollOnly:          config.pollOnly,
 		Queues: map[string]river.QueueConfig{
-			queue: {MaxWorkers: maxWorkers},
+			config.queue: {MaxWorkers: config.maxWorkers},
 		},
-		Schema:  schema,
-		Workers: workers,
-	})
+		Schema:   config.schema,
+		TestOnly: true,
+		Workers:  workers,
+	}
+	if config.fetchPollIntervalMS != nil {
+		duration, err := durationFromMilliseconds(*config.fetchPollIntervalMS)
+		if err != nil {
+			return nil, err
+		}
+		riverConfig.FetchPollInterval = duration
+	}
+	if config.errorHandlerCancel {
+		riverConfig.ErrorHandler = &conformanceErrorHandler{probe: config.probe}
+	}
+	if config.instrumented {
+		riverConfig.Plugins = []rivertype.Plugin{&conformancePlugin{probe: config.probe}}
+	}
+	if config.jobStuckThresholdMS != nil {
+		duration, err := durationFromMilliseconds(*config.jobStuckThresholdMS)
+		if err != nil {
+			return nil, err
+		}
+		riverConfig.JobStuckThreshold = duration
+	}
+	if config.jobTimeoutMS != nil {
+		duration, err := durationFromMilliseconds(*config.jobTimeoutMS)
+		if err != nil {
+			return nil, err
+		}
+		riverConfig.JobTimeout = duration
+	}
+	if config.periodicRunOnStart {
+		riverConfig.PeriodicJobs = []*river.PeriodicJob{river.NewPeriodicJob(
+			river.PeriodicInterval(time.Hour),
+			func() (river.JobArgs, *river.InsertOpts) {
+				return conformanceArgs{Message: "periodic run on start"}, &river.InsertOpts{
+					Metadata: []byte(`{"periodic":true}`),
+				}
+			},
+			&river.PeriodicJobOpts{ID: "conformance-periodic", RunOnStart: true},
+		)}
+	}
+	if config.retryDelayMS != nil {
+		duration, err := durationFromMilliseconds(*config.retryDelayMS)
+		if err != nil {
+			return nil, err
+		}
+		riverConfig.RetryPolicy = fixedRetryPolicy{delay: duration}
+	}
+	return river.NewClient(riverpgxv5.New(pool), riverConfig)
 }
 
 func adapterLogger() *slog.Logger {
@@ -1310,6 +1894,39 @@ func normalizeJobs(jobs []*rivertype.JobRow) []any {
 		normalized[i] = normalizeJob(job)
 	}
 	return normalized
+}
+
+func decodeInsertManyParams(encoded json.RawMessage) ([]river.InsertManyParams, error) {
+	var envelope struct {
+		Jobs []insertParams `json:"jobs"`
+	}
+	if len(encoded) > 0 && encoded[0] == '[' {
+		if err := json.Unmarshal(encoded, &envelope.Jobs); err != nil {
+			return nil, err
+		}
+	} else if err := json.Unmarshal(encoded, &envelope); err != nil {
+		return nil, err
+	}
+	jobs := make([]river.InsertManyParams, len(envelope.Jobs))
+	for i, job := range envelope.Jobs {
+		opts, err := job.Opts.opts()
+		if err != nil {
+			return nil, err
+		}
+		jobs[i] = river.InsertManyParams{Args: job.args(), InsertOpts: opts}
+	}
+	return jobs, nil
+}
+
+func normalizeInsertManyResults(results []*rivertype.JobInsertResult) map[string]any {
+	normalized := make([]any, len(results))
+	for i, result := range results {
+		normalized[i] = map[string]any{
+			"job":                         normalizeJob(result.Job),
+			"unique_skipped_as_duplicate": result.UniqueSkippedAsDuplicate,
+		}
+	}
+	return map[string]any{"results": normalized}
 }
 
 func normalizeJobListResult(result *river.JobListResult) (map[string]any, error) {
