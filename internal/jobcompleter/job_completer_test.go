@@ -22,6 +22,7 @@ import (
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testfactory"
+	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -713,6 +714,74 @@ func TestBatchCompleter_BackpressureRequeuesBatchAfterCompletionFailure(t *testi
 
 	require.NoError(t, completer.handleBatch(ctx))
 	require.NoError(t, riversharedtest.WaitOrTimeout(t, errCh))
+}
+
+func TestBatchCompleter_ConcurrentBatchRequiresFullBacklog(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	var calls testsignal.TestSignal[int]
+	calls.Init(t)
+	release := make(chan struct{}, 2)
+	execMock := &partialExecutorMock{}
+	execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+		calls.Signal(len(params.ID))
+		<-release
+
+		rows := make([]*rivertype.JobRow, len(params.ID))
+		for i, id := range params.ID {
+			rows[i] = &rivertype.JobRow{ID: id, State: params.State[i]}
+		}
+		return rows, nil
+	}
+
+	subscribeCh := make(chan []CompleterJobUpdated, 2)
+	completer := NewBatchCompleter(
+		riversharedtest.BaseServiceArchetype(t),
+		"",
+		execMock,
+		&riverpilot.StandardPilot{},
+		subscribeCh,
+	)
+	completer.completionMaxSize = 2
+	require.NoError(t, completer.Start(ctx))
+	t.Cleanup(func() {
+		for range 2 {
+			select {
+			case release <- struct{}{}:
+			default:
+			}
+		}
+		completer.Stop()
+	})
+	riversharedtest.WaitOrTimeout(t, completer.Started())
+
+	enqueue := func(id int64) {
+		t.Helper()
+
+		require.NoError(t, completer.JobSetStateIfRunning(
+			ctx,
+			&jobstats.JobStatistics{},
+			riverdriver.JobSetStateCompleted(id, time.Now(), nil),
+		))
+	}
+
+	enqueue(1)
+	enqueue(2)
+	require.Equal(t, 2, calls.WaitOrTimeout())
+
+	enqueue(3)
+	select {
+	case count := <-calls.WaitC():
+		require.Failf(t, "unexpected sparse concurrent batch", "got batch size %d", count)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	enqueue(4)
+	require.Equal(t, 2, calls.WaitOrTimeout())
+	release <- struct{}{}
+	release <- struct{}{}
+	completer.Stop()
 }
 
 func TestBatchCompleter_NonRetryableCompletionFailureDoesNotRequeueBatch(t *testing.T) {
