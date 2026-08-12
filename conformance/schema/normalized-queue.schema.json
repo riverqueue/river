@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "created_at": { "format": "date-time", "type": "string" },
+    "metadata": { "type": "object" },
+    "name": { "type": "string" },
+    "paused_at": { "format": "date-time", "type": ["string", "null"] },
+    "updated_at": { "format": "date-time", "type": "string" }
+  },
+  "required": ["created_at", "metadata", "name", "paused_at", "updated_at"],
+  "title": "Normalized River queue",
+  "type": "object"
+}

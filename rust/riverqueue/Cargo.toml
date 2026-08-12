@@ -1,0 +1,79 @@
+[package]
+name = "riverqueue"
+description = "Fast and reliable background jobs for Rust"
+keywords = ["background", "jobs", "postgres", "queue", "sqlite"]
+categories = ["asynchronous", "database-implementations"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = ["postgres"]
+postgres = ["riverqueue-internal/postgres", "sqlx/postgres"]
+postgres-tests = ["postgres"]
+sqlite = ["riverqueue-internal/sqlite", "sqlx/sqlite"]
+
+[dependencies]
+async-trait.workspace = true
+base64.workspace = true
+chrono.workspace = true
+cron.workspace = true
+futures-util.workspace = true
+riverqueue-internal = { path = "../riverqueue-internal", version = "=0.44.0-alpha.1", default-features = false }
+riverqueue-macros = { path = "../riverqueue-macros", version = "=0.44.0-alpha.1" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.44.0-alpha.1", features = ["postgres", "sqlite"] }
+serde.workspace = true
+tokio.workspace = true
+
+[[bin]]
+name = "riverqueue"
+path = "src/bin/riverqueue.rs"
+required-features = ["postgres"]
+
+[[example]]
+name = "basic_worker"
+required-features = ["postgres"]
+
+[[example]]
+name = "cancellation"
+required-features = ["postgres"]
+
+[[example]]
+name = "custom_schema"
+required-features = ["postgres"]
+
+[[example]]
+name = "transactions"
+required-features = ["postgres"]
+
+[[test]]
+name = "postgres"
+required-features = ["postgres"]
+
+[[test]]
+name = "sqlite_runtime"
+required-features = ["sqlite"]
+
+[[test]]
+name = "sqlite_storage"
+required-features = ["sqlite"]
+
+[lints]
+workspace = true
