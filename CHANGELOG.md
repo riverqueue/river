@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- When both the driver and pilot support it, which the PostgreSQL drivers do, the batch job completer now persists up to two full batches of job completions concurrently, improving completion throughput under heavy load. Results for the same job are still applied in order, but subscribers may receive completion events for different jobs in a different order than before, and the completer may briefly use one additional database connection. [PR #XXXX](https://github.com/riverqueue/river/pull/XXXX).
 - `UniqueOpts.ByPeriod` now derives a job's period from its effective scheduled time (`InsertOpts.ScheduledAt` when set, otherwise the insertion time), so scheduled jobs are deduplicated against other jobs scheduled in the same period rather than against jobs inserted in the same period. Periods are also now always measured in UTC, so processes and `ScheduledAt` values in different time zones produce the same unique key for the same period. Unique keys for scheduled `ByPeriod` jobs, and for any `ByPeriod` job inserted from a process whose local time zone isn't UTC, differ from those produced by previous versions. During a rolling upgrade, old and new clients may therefore each insert one job for such a period; jobs that aren't scheduled and are inserted from UTC processes are unaffected. [PR #1377](https://github.com/riverqueue/river/pull/1377).
 
 ### Fixed
