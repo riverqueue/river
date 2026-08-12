@@ -110,6 +110,10 @@ pub enum EventRecvError {
 }
 
 /// A filtered receiver for locally generated client events.
+///
+/// Job events are emitted only after their state transition commits. Concurrent
+/// jobs and completion batches have no global event-ordering guarantee; use the
+/// job ID and persisted timestamps when an application needs stable ordering.
 pub struct EventReceiver {
     dropped: Arc<AtomicU64>,
     receiver: mpsc::Receiver<Event>,

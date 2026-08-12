@@ -108,3 +108,106 @@ where
     let result = worker.work(context.clone(), job).await;
     TestWorkResult { context, result }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{convert::Infallible, time::Duration};
+
+    use async_trait::async_trait;
+    use riverqueue::{InsertOpts, WorkContext};
+    use serde::{Deserialize, Serialize};
+
+    use super::*;
+
+    #[derive(Clone, Debug, Deserialize, Serialize)]
+    struct TestArgs {
+        message: String,
+    }
+
+    impl JobArgs for TestArgs {
+        const KIND: &'static str = "riverqueue_test_helper";
+
+        fn default_insert_opts() -> InsertOpts {
+            InsertOpts {
+                max_attempts: 7,
+                priority: 3,
+                queue: "testing".to_owned(),
+                ..InsertOpts::default()
+            }
+        }
+    }
+
+    struct TestWorker;
+
+    #[async_trait]
+    impl Worker<TestArgs> for TestWorker {
+        type Error = Infallible;
+
+        async fn work(
+            &self,
+            context: WorkContext,
+            job: Job<TestArgs>,
+        ) -> Result<WorkOutcome, Self::Error> {
+            assert_eq!(job.args.message, "work once");
+            assert_eq!(job.row.id, 42);
+            context
+                .record_output(&serde_json::json!({"worked": true}))
+                .await
+                .unwrap();
+            context
+                .metadata_set("worker_metadata", serde_json::json!("set"))
+                .await;
+            Ok(WorkOutcome::Snooze(Duration::from_secs(30)))
+        }
+    }
+
+    #[test]
+    fn test_job_builder_applies_overrides_and_argument_defaults() {
+        let metadata = Map::from_iter([("test".to_owned(), serde_json::json!(true))]);
+        let job = TestJobBuilder::new(TestArgs {
+            message: "builder".to_owned(),
+        })
+        .attempt(4)
+        .id(99)
+        .metadata(metadata)
+        .state(JobState::Retryable)
+        .build()
+        .unwrap();
+
+        assert_eq!(job.args.message, "builder");
+        assert_eq!(job.row.attempt, 4);
+        assert_eq!(job.row.attempted_by, ["riverqueue-test"]);
+        assert_eq!(
+            job.row.encoded_args,
+            serde_json::json!({"message": "builder"})
+        );
+        assert_eq!(job.row.id, 99);
+        assert_eq!(job.row.kind, TestArgs::KIND);
+        assert_eq!(job.row.max_attempts, 7);
+        assert_eq!(job.row.metadata["test"], true);
+        assert_eq!(job.row.priority, 3);
+        assert_eq!(job.row.queue, "testing");
+        assert_eq!(job.row.state, JobState::Retryable);
+        assert!(job.row.attempted_at.is_some());
+        assert!(job.row.finalized_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn work_once_runs_worker_with_detached_context() {
+        let job = TestJobBuilder::new(TestArgs {
+            message: "work once".to_owned(),
+        })
+        .id(42)
+        .build()
+        .unwrap();
+
+        let worked = work_once(&TestWorker, job).await;
+
+        assert_eq!(
+            worked.result.unwrap(),
+            WorkOutcome::Snooze(Duration::from_secs(30))
+        );
+        assert!(worked.context.client().is_none());
+        assert!(!worked.context.cancellation_token().is_cancelled());
+    }
+}

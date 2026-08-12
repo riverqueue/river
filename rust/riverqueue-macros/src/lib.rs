@@ -311,3 +311,81 @@ fn validate_queue(queue: &LitStr) -> syn::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn derive(source: &str) -> syn::Result<proc_macro2::TokenStream> {
+        expand_job_args(&syn::parse_str(source).expect("valid Rust syntax"))
+    }
+
+    #[test]
+    fn accepts_complete_job_args_configuration() {
+        let expanded = derive(
+            r#"
+            #[derive(serde::Serialize)]
+            #[serde(rename_all = "camelCase")]
+            #[river(
+                kind = "email.send",
+                aliases("email_send_v1"),
+                max_attempts = 8,
+                pending = true,
+                priority = 2,
+                queue = "email-critical",
+                unique("account.id")
+            )]
+            struct EmailArgs {
+                account: Account,
+                #[river(unique)]
+                message_id: String,
+            }
+            "#,
+        )
+        .unwrap()
+        .to_string();
+
+        assert!(expanded.contains("email.send"));
+        assert!(expanded.contains("email_send_v1"));
+        assert!(expanded.contains("messageId"));
+        assert!(expanded.contains("account.id"));
+    }
+
+    #[test]
+    fn rejects_invalid_job_args_configuration() {
+        let cases = [
+            (
+                "struct MissingKind { value: String }",
+                "JobArgs requires #[river(kind = \"...\")]",
+            ),
+            (
+                r#"#[river(kind = "x")] struct InvalidKind { value: String }"#,
+                "invalid River job kind",
+            ),
+            (
+                r#"#[river(kind = "valid", aliases("valid"))] struct DuplicateKind { value: String }"#,
+                "a kind alias cannot equal the primary kind",
+            ),
+            (
+                r#"#[river(kind = "valid", priority = 5)] struct InvalidPriority { value: String }"#,
+                "priority must be between 1 and 4",
+            ),
+            (
+                r#"#[river(kind = "valid", queue = "Invalid")] struct InvalidQueue { value: String }"#,
+                "invalid River queue name",
+            ),
+            (
+                r#"#[river(kind = "valid", unique("missing.id"))] struct InvalidPath { value: String }"#,
+                "unique JSON path must start with a serialized field name",
+            ),
+        ];
+
+        for (source, message) in cases {
+            let error = derive(source).expect_err("configuration should be rejected");
+            assert!(
+                error.to_string().contains(message),
+                "unexpected error for {source}: {error}"
+            );
+        }
+    }
+}

@@ -198,6 +198,9 @@ impl RetryPolicy for DefaultRetryPolicy {
 /// Result override returned by an error handler.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ErrorHandlerResult {
+    /// Cancel immediately regardless of remaining attempts, matching River's
+    /// cross-language error-handler cancellation override.
+    pub cancel: bool,
     /// Discard immediately regardless of remaining attempts.
     pub discard: bool,
     /// Override the retry delay.

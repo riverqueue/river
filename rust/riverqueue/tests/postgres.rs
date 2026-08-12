@@ -3,7 +3,7 @@
 use std::{
     convert::Infallible,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
@@ -17,7 +17,7 @@ use riverqueue::internal::{
 use riverqueue::{
     Client, EventKind, InsertOpts, IntervalSchedule, Job, JobArgs, JobListParams, JobRow, JobState,
     JobUpdateParams, MaintenanceConfig, PeriodicJob, PeriodicJobOpts, QueueConfig, QueueListParams,
-    ReindexerSchedule, UniqueOpts, WorkContext, WorkOutcome, Worker, WorkerRegistry,
+    ReindexerSchedule, UniqueOpts, WorkContext, WorkOutcome, Worker, WorkerRegistry, WorkerTimeout,
 };
 use riverqueue_migrate::{Direction, MigrateOpts};
 use riverqueue_migrate::{MIGRATION_VERSION_LATEST, Migrator};
@@ -106,6 +106,220 @@ impl Worker<IgnoresCancelArgs> for IgnoresCancelWorker {
         _job: Job<IgnoresCancelArgs>,
     ) -> Result<WorkOutcome, Self::Error> {
         std::future::pending().await
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "rust_rescue_default_timeout")]
+struct RescueDefaultTimeoutArgs {}
+
+struct RescueDefaultTimeoutWorker;
+
+#[async_trait]
+impl Worker<RescueDefaultTimeoutArgs> for RescueDefaultTimeoutWorker {
+    type Error = Infallible;
+
+    async fn work(
+        &self,
+        _context: WorkContext,
+        _job: Job<RescueDefaultTimeoutArgs>,
+    ) -> Result<WorkOutcome, Self::Error> {
+        Ok(WorkOutcome::Complete)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "rust_rescue_disabled_timeout")]
+struct RescueDisabledTimeoutArgs {}
+
+struct RescueDisabledTimeoutWorker;
+
+#[async_trait]
+impl Worker<RescueDisabledTimeoutArgs> for RescueDisabledTimeoutWorker {
+    type Error = Infallible;
+
+    fn timeout(&self, _job: &Job<RescueDisabledTimeoutArgs>) -> WorkerTimeout {
+        WorkerTimeout::Disabled
+    }
+
+    async fn work(
+        &self,
+        _context: WorkContext,
+        _job: Job<RescueDisabledTimeoutArgs>,
+    ) -> Result<WorkOutcome, Self::Error> {
+        Ok(WorkOutcome::Complete)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "rust_rescue_long_timeout")]
+struct RescueLongTimeoutArgs {}
+
+struct RescueLongTimeoutWorker;
+
+#[async_trait]
+impl Worker<RescueLongTimeoutArgs> for RescueLongTimeoutWorker {
+    type Error = Infallible;
+
+    fn timeout(&self, _job: &Job<RescueLongTimeoutArgs>) -> WorkerTimeout {
+        WorkerTimeout::After(Duration::from_hours(1))
+    }
+
+    async fn work(
+        &self,
+        _context: WorkContext,
+        _job: Job<RescueLongTimeoutArgs>,
+    ) -> Result<WorkOutcome, Self::Error> {
+        Ok(WorkOutcome::Complete)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "rust_rescue_retry_override")]
+struct RescueRetryOverrideArgs {}
+
+struct RescueRetryOverrideWorker;
+
+#[async_trait]
+impl Worker<RescueRetryOverrideArgs> for RescueRetryOverrideWorker {
+    type Error = Infallible;
+
+    fn next_retry(
+        &self,
+        _job: &Job<RescueRetryOverrideArgs>,
+        _error: &str,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<Duration> {
+        Some(Duration::from_hours(2))
+    }
+
+    async fn work(
+        &self,
+        _context: WorkContext,
+        _job: Job<RescueRetryOverrideArgs>,
+    ) -> Result<WorkOutcome, Self::Error> {
+        Ok(WorkOutcome::Complete)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "rust_resumable_checkpoint")]
+struct ResumableCheckpointArgs {
+    mode: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+struct ResumableCursor {
+    offset: i64,
+}
+
+struct ResumableCheckpointWorker {
+    cursor_values: Arc<Mutex<Vec<ResumableCursor>>>,
+    pool: PgPool,
+    validate_runs: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Worker<ResumableCheckpointArgs> for ResumableCheckpointWorker {
+    type Error = riverqueue::Error;
+
+    fn next_retry(
+        &self,
+        job: &Job<ResumableCheckpointArgs>,
+        _error: &str,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<Duration> {
+        (job.args.mode == "cursor_retry").then_some(Duration::from_millis(500))
+    }
+
+    async fn work(
+        &self,
+        context: WorkContext,
+        job: Job<ResumableCheckpointArgs>,
+    ) -> Result<WorkOutcome, Self::Error> {
+        match job.args.mode.as_str() {
+            "cursor_retry" => {
+                context
+                    .resumable_step("validate", || async {
+                        self.validate_runs.fetch_add(1, Ordering::SeqCst);
+                        Ok::<_, riverqueue::Error>(())
+                    })
+                    .await?;
+                let cursor_context = context.clone();
+                let cursor_values = Arc::clone(&self.cursor_values);
+                let attempt = job.row.attempt;
+                context
+                    .resumable_step_with_cursor(
+                        "process",
+                        move |cursor: ResumableCursor| async move {
+                            cursor_values.lock().unwrap().push(cursor.clone());
+                            if attempt == 1 {
+                                cursor_context
+                                    .resumable_set_cursor(&ResumableCursor { offset: 42 })
+                                    .await?;
+                                return Err(riverqueue::Error::Runtime(
+                                    "intentional resumable cursor failure".to_owned(),
+                                ));
+                            }
+                            Ok(())
+                        },
+                    )
+                    .await?;
+            }
+            "commit_cursor" | "rollback_cursor" => {
+                let checkpoint_client = context.client().unwrap().clone();
+                let checkpoint_context = context.clone();
+                let job_id = job.row.id;
+                let mode = job.args.mode.clone();
+                let pool = self.pool.clone();
+                context
+                    .resumable_step_with_cursor("tx_cursor", move |_: ResumableCursor| async move {
+                        let mut transaction = pool.begin().await?;
+                        checkpoint_context
+                            .resumable_set_step_cursor_tx(
+                                &checkpoint_client,
+                                &mut transaction,
+                                job_id,
+                                &ResumableCursor { offset: 7 },
+                            )
+                            .await?;
+                        if mode == "commit_cursor" {
+                            transaction.commit().await?;
+                        } else {
+                            transaction.rollback().await?;
+                        }
+                        Ok::<_, riverqueue::Error>(())
+                    })
+                    .await?;
+            }
+            "commit_step" | "rollback_step" => {
+                let checkpoint_client = context.client().unwrap().clone();
+                let checkpoint_context = context.clone();
+                let job_id = job.row.id;
+                let mode = job.args.mode.clone();
+                let pool = self.pool.clone();
+                context
+                    .resumable_step("tx_step", move || async move {
+                        let mut transaction = pool.begin().await?;
+                        checkpoint_context
+                            .resumable_set_step_tx(&checkpoint_client, &mut transaction, job_id)
+                            .await?;
+                        if mode == "commit_step" {
+                            transaction.commit().await?;
+                        } else {
+                            transaction.rollback().await?;
+                        }
+                        Ok::<_, riverqueue::Error>(())
+                    })
+                    .await?;
+            }
+            mode => {
+                return Err(riverqueue::Error::Runtime(format!(
+                    "unknown test mode {mode}"
+                )));
+            }
+        }
+        Ok(WorkOutcome::Complete)
     }
 }
 
@@ -297,6 +511,435 @@ impl Worker<TransactionalArgs> for TransactionalWorker {
         transaction.commit().await?;
         Ok(WorkOutcome::Complete)
     }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn concurrent_unique_inserts_return_the_conflicting_job() {
+    const INSERT_COUNT: usize = 32;
+
+    let Ok(database_url) = std::env::var("RIVER_RUST_DATABASE_URL") else {
+        eprintln!("skipping PostgreSQL runtime test without RIVER_RUST_DATABASE_URL");
+        return;
+    };
+    let pool = PgPool::connect(&database_url).await.unwrap();
+    let schema = SchemaName::new("rust_unique_concurrency_test").unwrap();
+    sqlx::raw_sql(
+        "DROP SCHEMA IF EXISTS rust_unique_concurrency_test CASCADE; \
+         CREATE SCHEMA rust_unique_concurrency_test",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    Migrator::new(pool.clone())
+        .with_schema(schema.clone())
+        .migrate_up()
+        .await
+        .unwrap();
+    let client = Client::builder(pool.clone())
+        .schema(schema)
+        .build()
+        .unwrap();
+
+    let all_states = vec![
+        JobState::Available,
+        JobState::Cancelled,
+        JobState::Completed,
+        JobState::Discarded,
+        JobState::Pending,
+        JobState::Retryable,
+        JobState::Running,
+        JobState::Scheduled,
+    ];
+    let fixed_scheduled_at = chrono::Utc::now() - chrono::Duration::minutes(1);
+    let cases = [
+        (
+            "by_args",
+            InsertOpts {
+                unique: UniqueOpts {
+                    by_args: true,
+                    ..UniqueOpts::default()
+                },
+                ..InsertOpts::default()
+            },
+        ),
+        (
+            "by_args_and_queue",
+            InsertOpts {
+                queue: "unique_queue".to_owned(),
+                unique: UniqueOpts {
+                    by_args: true,
+                    by_queue: true,
+                    ..UniqueOpts::default()
+                },
+                ..InsertOpts::default()
+            },
+        ),
+        (
+            "by_args_and_states",
+            InsertOpts {
+                unique: UniqueOpts {
+                    by_args: true,
+                    by_state: Some(all_states),
+                    ..UniqueOpts::default()
+                },
+                ..InsertOpts::default()
+            },
+        ),
+        (
+            "by_args_and_period",
+            InsertOpts {
+                scheduled_at: Some(fixed_scheduled_at),
+                unique: UniqueOpts {
+                    by_args: true,
+                    by_period: Some(Duration::from_mins(1)),
+                    ..UniqueOpts::default()
+                },
+                ..InsertOpts::default()
+            },
+        ),
+    ];
+
+    for (message, opts) in cases {
+        let barrier = Arc::new(tokio::sync::Barrier::new(INSERT_COUNT));
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..INSERT_COUNT {
+            let barrier = Arc::clone(&barrier);
+            let client = client.clone();
+            let message = message.to_owned();
+            let opts = opts.clone();
+            tasks.spawn(async move {
+                barrier.wait().await;
+                client.insert(EchoArgs { message }, opts).await
+            });
+        }
+
+        let mut results = Vec::with_capacity(INSERT_COUNT);
+        while let Some(result) = tasks.join_next().await {
+            results.push(result.unwrap().unwrap());
+        }
+        let job_id = results[0].job.row.id;
+        assert!(results.iter().all(|result| result.job.row.id == job_id));
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| !result.unique_skipped_as_duplicate)
+                .count(),
+            1,
+            "unique case {message} should insert exactly one job"
+        );
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| result.unique_skipped_as_duplicate)
+                .count(),
+            INSERT_COUNT - 1,
+            "unique case {message} should return the winner to every conflicting insert"
+        );
+    }
+
+    sqlx::raw_sql("DROP SCHEMA rust_unique_concurrency_test CASCADE")
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn insert_many_variants_preserve_order_and_transactionality() {
+    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
+        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
+    let pool = PgPool::connect(&database_url).await.unwrap();
+    let schema = SchemaName::new("rust_insert_many_test").unwrap();
+    sqlx::raw_sql(
+        "DROP SCHEMA IF EXISTS rust_insert_many_test CASCADE; \
+         CREATE SCHEMA rust_insert_many_test",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    Migrator::new(pool.clone())
+        .with_schema(schema.clone())
+        .migrate_up()
+        .await
+        .unwrap();
+    let client = Client::builder(pool.clone())
+        .schema(schema.clone())
+        .build()
+        .unwrap();
+    let table = schema.qualify("river_job");
+
+    let past_scheduled_at = chrono::Utc::now() - chrono::Duration::minutes(1);
+    let ordered = client
+        .insert_many([
+            (
+                EchoArgs {
+                    message: "ordered-one".to_owned(),
+                },
+                InsertOpts::default(),
+            ),
+            (
+                EchoArgs {
+                    message: "ordered-two".to_owned(),
+                },
+                InsertOpts::default(),
+            ),
+            (
+                EchoArgs {
+                    message: "ordered-past-scheduled".to_owned(),
+                },
+                InsertOpts {
+                    scheduled_at: Some(past_scheduled_at),
+                    ..InsertOpts::default()
+                },
+            ),
+        ])
+        .await
+        .unwrap();
+    assert_eq!(
+        ordered
+            .iter()
+            .map(|result| result.job.args.message.as_str())
+            .collect::<Vec<_>>(),
+        ["ordered-one", "ordered-two", "ordered-past-scheduled"]
+    );
+    assert!(
+        ordered
+            .windows(2)
+            .all(|pair| pair[0].job.row.id < pair[1].job.row.id)
+    );
+    assert_eq!(ordered[2].job.row.state, JobState::Scheduled);
+
+    let unique_opts = InsertOpts {
+        unique: UniqueOpts {
+            by_args: true,
+            ..UniqueOpts::default()
+        },
+        ..InsertOpts::default()
+    };
+    let unique = client
+        .insert_many([
+            (
+                EchoArgs {
+                    message: "unique-batch".to_owned(),
+                },
+                unique_opts.clone(),
+            ),
+            (
+                EchoArgs {
+                    message: "unique-batch".to_owned(),
+                },
+                unique_opts.clone(),
+            ),
+        ])
+        .await
+        .unwrap();
+    assert_eq!(unique[0].job.row.id, unique[1].job.row.id);
+    assert!(!unique[0].unique_skipped_as_duplicate);
+    assert!(unique[1].unique_skipped_as_duplicate);
+
+    let mut transaction = pool.begin().await.unwrap();
+    let rolled_back = client
+        .insert_many_tx(
+            &mut transaction,
+            ["tx-rollback-one", "tx-rollback-two"].map(|message| {
+                (
+                    EchoArgs {
+                        message: message.to_owned(),
+                    },
+                    InsertOpts {
+                        tags: vec!["tx-rollback".to_owned()],
+                        ..InsertOpts::default()
+                    },
+                )
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rolled_back[0].job.args.message, "tx-rollback-one");
+    assert_eq!(rolled_back[1].job.args.message, "tx-rollback-two");
+    transaction.rollback().await.unwrap();
+    let rolled_back_count: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
+        "SELECT count(*) FROM {table} WHERE 'tx-rollback' = ANY(tags)"
+    )))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(rolled_back_count, 0);
+
+    let mut transaction = pool.begin().await.unwrap();
+    client
+        .insert_many_tx(
+            &mut transaction,
+            ["tx-commit-one", "tx-commit-two"].map(|message| {
+                (
+                    EchoArgs {
+                        message: message.to_owned(),
+                    },
+                    InsertOpts {
+                        tags: vec!["tx-commit".to_owned()],
+                        ..InsertOpts::default()
+                    },
+                )
+            }),
+        )
+        .await
+        .unwrap();
+    transaction.commit().await.unwrap();
+    let committed_messages: Vec<String> = sqlx::query_scalar(AssertSqlSafe(format!(
+        "SELECT args ->> 'message' FROM {table} WHERE 'tx-commit' = ANY(tags) ORDER BY id"
+    )))
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(committed_messages, ["tx-commit-one", "tx-commit-two"]);
+
+    let invalid_batch = client
+        .insert_many([
+            (
+                EchoArgs {
+                    message: "atomic-valid".to_owned(),
+                },
+                InsertOpts {
+                    tags: vec!["atomic-ordinary".to_owned()],
+                    ..InsertOpts::default()
+                },
+            ),
+            (
+                EchoArgs {
+                    message: "atomic-invalid".to_owned(),
+                },
+                InsertOpts {
+                    priority: 0,
+                    ..InsertOpts::default()
+                },
+            ),
+        ])
+        .await;
+    assert!(invalid_batch.is_err());
+    let atomic_ordinary_count: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
+        "SELECT count(*) FROM {table} WHERE 'atomic-ordinary' = ANY(tags)"
+    )))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(atomic_ordinary_count, 0);
+
+    let mut transaction = pool.begin().await.unwrap();
+    assert_eq!(
+        client
+            .insert_many_fast_tx(
+                &mut transaction,
+                ["fast-rollback-one", "fast-rollback-two"].map(|message| {
+                    (
+                        EchoArgs {
+                            message: message.to_owned(),
+                        },
+                        InsertOpts {
+                            tags: vec!["fast-rollback".to_owned()],
+                            ..InsertOpts::default()
+                        },
+                    )
+                }),
+            )
+            .await
+            .unwrap(),
+        2
+    );
+    transaction.rollback().await.unwrap();
+    let fast_rollback_count: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
+        "SELECT count(*) FROM {table} WHERE 'fast-rollback' = ANY(tags)"
+    )))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(fast_rollback_count, 0);
+
+    let mut transaction = pool.begin().await.unwrap();
+    assert_eq!(
+        client
+            .insert_many_fast_tx(
+                &mut transaction,
+                ["fast-commit-one", "fast-commit-two"].map(|message| {
+                    (
+                        EchoArgs {
+                            message: message.to_owned(),
+                        },
+                        InsertOpts {
+                            tags: vec!["fast-commit".to_owned()],
+                            ..InsertOpts::default()
+                        },
+                    )
+                }),
+            )
+            .await
+            .unwrap(),
+        2
+    );
+    transaction.commit().await.unwrap();
+    let fast_committed_messages: Vec<String> = sqlx::query_scalar(AssertSqlSafe(format!(
+        "SELECT args ->> 'message' FROM {table} WHERE 'fast-commit' = ANY(tags) ORDER BY id"
+    )))
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        fast_committed_messages,
+        ["fast-commit-one", "fast-commit-two"]
+    );
+
+    client
+        .insert(
+            EchoArgs {
+                message: "fast-unique-conflict".to_owned(),
+            },
+            unique_opts,
+        )
+        .await
+        .unwrap();
+    let mut transaction = pool.begin().await.unwrap();
+    let fast_atomic = client
+        .insert_many_fast_tx(
+            &mut transaction,
+            [
+                (
+                    EchoArgs {
+                        message: "fast-atomic-valid".to_owned(),
+                    },
+                    InsertOpts {
+                        tags: vec!["fast-atomic".to_owned()],
+                        ..InsertOpts::default()
+                    },
+                ),
+                (
+                    EchoArgs {
+                        message: "fast-unique-conflict".to_owned(),
+                    },
+                    InsertOpts {
+                        unique: UniqueOpts {
+                            by_args: true,
+                            ..UniqueOpts::default()
+                        },
+                        ..InsertOpts::default()
+                    },
+                ),
+            ],
+        )
+        .await;
+    assert!(fast_atomic.is_err());
+    transaction.rollback().await.unwrap();
+    let fast_atomic_count: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
+        "SELECT count(*) FROM {table} WHERE 'fast-atomic' = ANY(tags)"
+    )))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(fast_atomic_count, 0);
+
+    sqlx::raw_sql("DROP SCHEMA rust_insert_many_test CASCADE")
+        .execute(&pool)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1045,6 +1688,247 @@ async fn migrates_inserts_and_works_a_job() {
     }
     cleanup_handle.shutdown().await.unwrap();
     sqlx::query("DROP INDEX rust_maintenance_reindex_idx")
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn rescuer_honors_worker_timeout_and_retry_overrides() {
+    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
+        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
+    let pool = PgPool::connect(&database_url).await.unwrap();
+    let schema = SchemaName::new("rust_rescuer_timeout_test").unwrap();
+    sqlx::raw_sql(
+        "DROP SCHEMA IF EXISTS rust_rescuer_timeout_test CASCADE; \
+         CREATE SCHEMA rust_rescuer_timeout_test",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    Migrator::new(pool.clone())
+        .with_schema(schema.clone())
+        .migrate_up()
+        .await
+        .unwrap();
+
+    let table = schema.qualify("river_job");
+    let insert_sql = format!(
+        "INSERT INTO {table} \
+            (args, attempt, attempted_at, attempted_by, kind, max_attempts, state) \
+         VALUES ('{{}}'::jsonb, 1, now() - interval '1 second', ARRAY['dead-client'], $1, $2, 'running') \
+         RETURNING id"
+    );
+    let default_timeout_id: i64 = sqlx::query_scalar(AssertSqlSafe(insert_sql.clone()))
+        .bind(RescueDefaultTimeoutArgs::KIND)
+        .bind(1_i16)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let disabled_timeout_id: i64 = sqlx::query_scalar(AssertSqlSafe(insert_sql.clone()))
+        .bind(RescueDisabledTimeoutArgs::KIND)
+        .bind(1_i16)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let long_timeout_id: i64 = sqlx::query_scalar(AssertSqlSafe(insert_sql.clone()))
+        .bind(RescueLongTimeoutArgs::KIND)
+        .bind(1_i16)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let retry_override_id: i64 = sqlx::query_scalar(AssertSqlSafe(insert_sql))
+        .bind(RescueRetryOverrideArgs::KIND)
+        .bind(2_i16)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let mut workers = WorkerRegistry::new();
+    workers
+        .register::<RescueDefaultTimeoutArgs, _>(RescueDefaultTimeoutWorker)
+        .unwrap();
+    workers
+        .register::<RescueDisabledTimeoutArgs, _>(RescueDisabledTimeoutWorker)
+        .unwrap();
+    workers
+        .register::<RescueLongTimeoutArgs, _>(RescueLongTimeoutWorker)
+        .unwrap();
+    workers
+        .register::<RescueRetryOverrideArgs, _>(RescueRetryOverrideWorker)
+        .unwrap();
+    let client = Client::builder(pool.clone())
+        .id("rust-rescuer-timeout-client")
+        .job_timeout(Some(Duration::from_millis(100)))
+        .maintenance(MaintenanceConfig {
+            elect_interval: Duration::from_millis(20),
+            rescue_after: Duration::from_millis(20),
+            rescuer_interval: Duration::from_millis(20),
+            reindexer_index_names: Vec::new(),
+            ..MaintenanceConfig::default()
+        })
+        .queue("default", QueueConfig::new(1))
+        .schema(schema)
+        .workers(workers)
+        .build()
+        .unwrap();
+    let handle = client.start().unwrap();
+
+    let default_timeout = wait_for_state(&client, default_timeout_id, JobState::Discarded).await;
+    assert_eq!(default_timeout.metadata["river:rescue_count"], 1);
+    assert_eq!(default_timeout.errors.len(), 1);
+    let retry_override = wait_for_state(&client, retry_override_id, JobState::Retryable).await;
+    assert_eq!(retry_override.metadata["river:rescue_count"], 1);
+    assert_eq!(retry_override.errors.len(), 1);
+    assert!(
+        retry_override.scheduled_at > chrono::Utc::now() + chrono::Duration::minutes(90),
+        "worker retry override was not applied: {:?}",
+        retry_override.scheduled_at
+    );
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    for id in [disabled_timeout_id, long_timeout_id] {
+        let row = client.job_get(id).await.unwrap();
+        assert_eq!(row.state, JobState::Running);
+        assert!(row.errors.is_empty());
+        assert!(!row.metadata.contains_key("river:rescue_count"));
+    }
+
+    handle.shutdown().await.unwrap();
+    sqlx::raw_sql("DROP SCHEMA rust_rescuer_timeout_test CASCADE")
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn resumable_cursor_and_transactional_checkpoints() {
+    let detached_context = WorkContext::new(CancellationToken::new());
+    let cursor_error = detached_context
+        .resumable_set_cursor(&ResumableCursor { offset: 1 })
+        .await
+        .unwrap_err();
+    assert!(
+        cursor_error
+            .to_string()
+            .contains("resumable cursor can only be set inside a resumable cursor step")
+    );
+
+    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
+        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
+    let pool = PgPool::connect(&database_url).await.unwrap();
+    let schema = SchemaName::new("rust_resumable_checkpoint_test").unwrap();
+    sqlx::raw_sql(
+        "DROP SCHEMA IF EXISTS rust_resumable_checkpoint_test CASCADE; \
+         CREATE SCHEMA rust_resumable_checkpoint_test",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    Migrator::new(pool.clone())
+        .with_schema(schema.clone())
+        .migrate_up()
+        .await
+        .unwrap();
+
+    let cursor_values = Arc::new(Mutex::new(Vec::new()));
+    let validate_runs = Arc::new(AtomicUsize::new(0));
+    let mut workers = WorkerRegistry::new();
+    workers
+        .register::<ResumableCheckpointArgs, _>(ResumableCheckpointWorker {
+            cursor_values: Arc::clone(&cursor_values),
+            pool: pool.clone(),
+            validate_runs: Arc::clone(&validate_runs),
+        })
+        .unwrap();
+    let client = Client::builder(pool.clone())
+        .id("rust-resumable-checkpoint-test")
+        .maintenance(MaintenanceConfig {
+            elect_interval: Duration::from_millis(20),
+            reindexer_index_names: Vec::new(),
+            scheduler_interval: Duration::from_millis(20),
+            ..MaintenanceConfig::default()
+        })
+        .poll_only(true)
+        .queue(
+            "default",
+            QueueConfig {
+                fetch_cooldown: Duration::from_millis(1),
+                fetch_poll_interval: Duration::from_millis(10),
+                max_workers: 5,
+            },
+        )
+        .schema(schema)
+        .workers(workers)
+        .build()
+        .unwrap();
+    let mut job_ids = std::collections::HashMap::new();
+    for mode in [
+        "commit_cursor",
+        "commit_step",
+        "cursor_retry",
+        "rollback_cursor",
+        "rollback_step",
+    ] {
+        let inserted = client
+            .insert(
+                ResumableCheckpointArgs {
+                    mode: mode.to_owned(),
+                },
+                InsertOpts {
+                    max_attempts: 2,
+                    ..InsertOpts::default()
+                },
+            )
+            .await
+            .unwrap();
+        job_ids.insert(mode, inserted.job.row.id);
+    }
+    let handle = client.start().unwrap();
+
+    let first_failure = wait_for_state(&client, job_ids["cursor_retry"], JobState::Retryable).await;
+    assert_eq!(first_failure.metadata["river:resumable_step"], "validate");
+    assert_eq!(
+        first_failure.metadata["river:resumable_cursor"]["process"],
+        serde_json::json!({"offset": 42})
+    );
+    assert_eq!(first_failure.errors.len(), 1);
+
+    let resumed = wait_for_state(&client, job_ids["cursor_retry"], JobState::Completed).await;
+    assert_eq!(resumed.attempt, 2);
+    assert_eq!(validate_runs.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *cursor_values.lock().unwrap(),
+        [ResumableCursor::default(), ResumableCursor { offset: 42 }]
+    );
+
+    let committed_cursor =
+        wait_for_state(&client, job_ids["commit_cursor"], JobState::Completed).await;
+    assert_eq!(
+        committed_cursor.metadata["river:resumable_step"],
+        "tx_cursor"
+    );
+    assert_eq!(
+        committed_cursor.metadata["river:resumable_cursor"]["tx_cursor"],
+        serde_json::json!({"offset": 7})
+    );
+    let committed_step = wait_for_state(&client, job_ids["commit_step"], JobState::Completed).await;
+    assert_eq!(committed_step.metadata["river:resumable_step"], "tx_step");
+    assert!(
+        !committed_step
+            .metadata
+            .contains_key("river:resumable_cursor")
+    );
+
+    for mode in ["rollback_cursor", "rollback_step"] {
+        let rolled_back = wait_for_state(&client, job_ids[mode], JobState::Completed).await;
+        assert!(!rolled_back.metadata.contains_key("river:resumable_step"));
+        assert!(!rolled_back.metadata.contains_key("river:resumable_cursor"));
+    }
+
+    handle.shutdown().await.unwrap();
+    sqlx::raw_sql("DROP SCHEMA rust_resumable_checkpoint_test CASCADE")
         .execute(&pool)
         .await
         .unwrap();

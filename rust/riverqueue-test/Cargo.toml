@@ -14,5 +14,10 @@ riverqueue = { path = "../riverqueue", version = "=0.43.0-alpha.1" }
 serde_json.workspace = true
 tokio-util.workspace = true
 
+[dev-dependencies]
+async-trait.workspace = true
+serde.workspace = true
+tokio.workspace = true
+
 [lints]
 workspace = true

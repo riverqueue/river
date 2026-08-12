@@ -43,6 +43,8 @@ use crate::{
 
 const ATTEMPTED_BY_MAX: i32 = 100;
 const EVENT_BUFFER_CAPACITY: usize = 10_000;
+const PENDING_CANCELLATION_LIMIT: usize = 10_000;
+const PENDING_CANCELLATION_RETENTION: Duration = Duration::from_mins(1);
 // Large queues otherwise become limited by a single PostgreSQL claim round trip.
 // Concurrent `SKIP LOCKED` claims safely divide the available worker slots.
 const PARALLEL_FETCH_MINIMUM: usize = 1_000;
@@ -413,6 +415,7 @@ impl ClientBuilder {
                 default_max_attempts: self.default_max_attempts,
                 error_handler: self.error_handler,
                 events,
+                fetch_registration_windows: AtomicU64::new(0),
                 hooks: self.hooks,
                 id: self.id,
                 job_stuck_threshold: self.job_stuck_threshold,
@@ -420,6 +423,7 @@ impl ClientBuilder {
                 maintenance: self.maintenance,
                 insert_middleware: self.insert_middleware,
                 periodic_jobs,
+                pending_cancellations: Mutex::new(HashMap::new()),
                 pilot: self.pilot,
                 poll_only: self.poll_only,
                 pool: self.pool,
@@ -444,13 +448,15 @@ pub(crate) struct ClientInner {
     default_max_attempts: i16,
     error_handler: Option<Arc<dyn ErrorHandler>>,
     pub(crate) events: broadcast::Sender<Event>,
+    fetch_registration_windows: AtomicU64,
     pub(crate) hooks: Vec<Arc<dyn Hook>>,
     pub(crate) id: String,
     job_stuck_threshold: Duration,
-    job_timeout: Option<Duration>,
+    pub(crate) job_timeout: Option<Duration>,
     pub(crate) maintenance: MaintenanceConfig,
     insert_middleware: Vec<Arc<dyn InsertMiddleware>>,
     pub(crate) periodic_jobs: PeriodicJobs,
+    pending_cancellations: Mutex<HashMap<i64, std::time::Instant>>,
     pub(crate) pilot: Arc<dyn Pilot>,
     poll_only: bool,
     pub(crate) pool: PgPool,
@@ -1150,7 +1156,7 @@ impl Client {
         let unique_states = unique_key.map(|_| i32::from(opts.unique.state_bitmask()));
         let state = if opts.pending {
             JobState::Pending
-        } else if opts.scheduled_at.is_some_and(|scheduled| scheduled > now) {
+        } else if opts.scheduled_at.is_some() {
             JobState::Scheduled
         } else {
             JobState::Available
@@ -1158,23 +1164,22 @@ impl Client {
         let table = self.inner.schema.qualify("river_job");
         let state_type = self.inner.schema.qualify("river_job_state");
         let state_function = self.inner.schema.qualify("river_job_state_in_bitmask");
+        // The no-op update is intentional and matches River Go. `DO NOTHING`
+        // followed by a select in this CTE cannot see a conflicting row that
+        // committed after the statement snapshot was taken.
         let sql = format!(
             "WITH inserted AS (\
                 INSERT INTO {table} (args, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, unique_key, unique_states) \
                 VALUES ($1, $2, $3, $4, $5, $6, coalesce($7, now()), $8::text::{state_type}, $9, $10, $11::integer::bit(8)) \
                 ON CONFLICT (unique_key) WHERE unique_key IS NOT NULL AND unique_states IS NOT NULL AND {state_function}(unique_states, state) \
-                DO NOTHING RETURNING *\
+                DO UPDATE SET kind = EXCLUDED.kind \
+                RETURNING *, (xmax != 0) AS unique_skipped_as_duplicate\
              ), notified AS (\
                 SELECT pg_notify(concat(coalesce($12::text, current_schema()), '.', $13::text), json_build_object('queue', queue)::text) \
-                FROM inserted WHERE state = 'available'\
+                FROM inserted WHERE state = 'available' AND NOT unique_skipped_as_duplicate\
              ) \
-             SELECT {}, false AS unique_skipped_as_duplicate FROM inserted AS job LEFT JOIN notified ON true \
-             UNION ALL \
-             SELECT {}, true AS unique_skipped_as_duplicate FROM {table} AS job \
-             WHERE NOT EXISTS (SELECT 1 FROM inserted) AND $10::bytea IS NOT NULL \
-               AND unique_key = $10 AND unique_states IS NOT NULL AND {state_function}(unique_states, state) \
-             LIMIT 1",
-            job_projection("job"),
+             SELECT {}, job.unique_skipped_as_duplicate \
+             FROM inserted AS job LEFT JOIN notified ON true",
             job_projection("job")
         );
         let record = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
@@ -1417,6 +1422,17 @@ async fn run_completion_batcher(
     let mut batches = JoinSet::new();
 
     loop {
+        // Never build a third coordinator-owned batch while both persistence
+        // slots are occupied. The bounded receiver applies backpressure until
+        // one of the two database writes finishes.
+        while batches.len() >= COMPLETION_BATCH_CONCURRENCY {
+            let result = batches
+                .join_next()
+                .await
+                .expect("completion batch task is present")
+                .map_err(Error::from_join)?;
+            finish_completion_batch(&inner, result);
+        }
         let first = if batches.is_empty() {
             receiver.recv().await
         } else {
@@ -1456,7 +1472,10 @@ async fn run_completion_batcher(
             }
         }
 
-        while batches.len() >= COMPLETION_BATCH_CONCURRENCY {
+        // A second database write is worthwhile only when work has already
+        // filled a complete batch. Partial batches wait for the active writer,
+        // retaining the low-query behavior of the serial architecture.
+        while !batches.is_empty() && batch.len() < COMPLETION_BATCH_THRESHOLD {
             let result = batches
                 .join_next()
                 .await
@@ -1551,12 +1570,12 @@ async fn persist_completion_batch(
             attempt = updates.attempt, \
             errors = CASE WHEN updates.attempt_error IS NULL THEN job.errors \
                 ELSE array_append(coalesce(job.errors, '{{}}'), updates.attempt_error) END, \
-            finalized_at = CASE WHEN updates.state IN ('retryable', 'scheduled') \
+            finalized_at = CASE WHEN updates.state IN ('available', 'retryable', 'scheduled') \
                 AND job.metadata ? 'cancel_attempted_at' \
                 THEN coalesce(updates.finalized_at, now()) ELSE updates.finalized_at END, \
             metadata = job.metadata || updates.metadata, \
             scheduled_at = coalesce(updates.scheduled_at, job.scheduled_at), \
-            state = CASE WHEN updates.state IN ('retryable', 'scheduled') \
+            state = CASE WHEN updates.state IN ('available', 'retryable', 'scheduled') \
                 AND job.metadata ? 'cancel_attempted_at' \
                 THEN 'cancelled'::{state_type} ELSE updates.state::{state_type} END \
          FROM updates WHERE job.id = updates.id AND job.state = 'running' \
@@ -1626,6 +1645,104 @@ fn remove_running_attempt(
         .is_some_and(|active| active == cancellation)
     {
         running.remove(&job_id);
+    }
+}
+
+fn register_running_attempt(
+    running: &Mutex<HashMap<i64, CancellationToken>>,
+    pending_cancellations: &Mutex<HashMap<i64, std::time::Instant>>,
+    job_id: i64,
+    cancellation: &CancellationToken,
+) {
+    // Keep the locks in this order here and in `signal_running_attempt` so a
+    // cancellation cannot fall between checking the active map and recording
+    // a just-fetched attempt.
+    let mut running = running
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    running.insert(job_id, cancellation.clone());
+    let should_cancel = pending_cancellations
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(&job_id)
+        .is_some();
+    drop(running);
+    if should_cancel {
+        cancellation.cancel();
+    }
+}
+
+fn signal_running_attempt(
+    running: &Mutex<HashMap<i64, CancellationToken>>,
+    pending_cancellations: &Mutex<HashMap<i64, std::time::Instant>>,
+    fetch_registration_windows: &AtomicU64,
+    job_id: i64,
+) {
+    let running = running
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(cancellation) = running.get(&job_id).cloned() {
+        drop(running);
+        cancellation.cancel();
+        return;
+    }
+    if fetch_registration_windows.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+
+    let now = std::time::Instant::now();
+    let mut pending = pending_cancellations
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    pending.retain(|_, received_at| {
+        now.saturating_duration_since(*received_at) <= PENDING_CANCELLATION_RETENTION
+    });
+    if pending.len() >= PENDING_CANCELLATION_LIMIT
+        && let Some(oldest_job_id) = pending
+            .iter()
+            .min_by_key(|(_, received_at)| **received_at)
+            .map(|(job_id, _)| *job_id)
+    {
+        pending.remove(&oldest_job_id);
+    }
+    pending.insert(job_id, now);
+}
+
+struct FetchRegistrationGuard<'a> {
+    inner: &'a ClientInner,
+}
+
+impl<'a> FetchRegistrationGuard<'a> {
+    fn new(inner: &'a ClientInner) -> Self {
+        inner
+            .fetch_registration_windows
+            .fetch_add(1, Ordering::SeqCst);
+        Self { inner }
+    }
+}
+
+impl Drop for FetchRegistrationGuard<'_> {
+    fn drop(&mut self) {
+        // Synchronize the last-window transition with
+        // `signal_running_attempt`, which holds this lock while deciding
+        // whether to retain an unmatched cancellation.
+        let _running = self
+            .inner
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self
+            .inner
+            .fetch_registration_windows
+            .fetch_sub(1, Ordering::SeqCst)
+            == 1
+        {
+            self.inner
+                .pending_cancellations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clear();
+        }
     }
 }
 
@@ -1723,16 +1840,13 @@ async fn run_notifications(
         };
         match payload.action.as_str() {
             "cancel" => {
-                let cancellation = payload.job_id.and_then(|job_id| {
-                    inner
-                        .running
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .get(&job_id)
-                        .cloned()
-                });
-                if let Some(cancellation) = cancellation {
-                    cancellation.cancel();
+                if let Some(job_id) = payload.job_id {
+                    signal_running_attempt(
+                        &inner.running,
+                        &inner.pending_cancellations,
+                        &inner.fetch_registration_windows,
+                        job_id,
+                    );
                 }
             }
             "pause" | "resume" => {
@@ -1876,6 +1990,7 @@ fn reconcile_queues(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 async fn run_queue(
     inner: Arc<ClientInner>,
     completion_sender: mpsc::Sender<CompletionUpdate>,
@@ -1925,6 +2040,7 @@ async fn run_queue(
         if available == 0 {
             continue;
         }
+        let registration_guard = FetchRegistrationGuard::new(&inner);
         let rows = if available >= PARALLEL_FETCH_MINIMUM && !inner.pilot.intercepts_fetch() {
             let first_maximum = available / 2;
             let second_maximum = available - first_maximum;
@@ -1955,13 +2071,29 @@ async fn run_queue(
                 .acquire_owned()
                 .await
                 .map_err(|_| Error::InvalidJob("queue worker semaphore closed".to_owned()))?;
+            let hard_cancel = work_cancel.child_token();
+            let cancellation = hard_cancel.child_token();
+            register_running_attempt(
+                &inner.running,
+                &inner.pending_cancellations,
+                row.id,
+                &cancellation,
+            );
             let inner = Arc::clone(&inner);
             let completion_sender = completion_sender.clone();
-            let work_cancel = work_cancel.child_token();
             jobs.spawn(async move {
-                execute_job(inner, row, work_cancel, completion_sender, permit).await;
+                execute_job(
+                    inner,
+                    row,
+                    hard_cancel,
+                    cancellation,
+                    completion_sender,
+                    permit,
+                )
+                .await;
             });
         }
+        drop(registration_guard);
         while let Some(result) = jobs.try_join_next() {
             if let Err(join_error) = result {
                 error!(error = %join_error, "River queue task failed");
@@ -2092,12 +2224,12 @@ async fn execute_job(
     inner: Arc<ClientInner>,
     row: JobRow,
     hard_cancel: CancellationToken,
+    cancellation: CancellationToken,
     completion_sender: mpsc::Sender<CompletionUpdate>,
     worker_permit: OwnedSemaphorePermit,
 ) {
     let span = info_span!("river_job", job_id = row.id, job_kind = %row.kind, queue = %row.queue);
     async move {
-        let cancellation = hard_cancel.child_token();
         let queue_wait_duration = row
             .attempted_at
             .and_then(|attempted_at| {
@@ -2106,11 +2238,6 @@ async fn execute_job(
                     .ok()
             })
             .unwrap_or_default();
-        inner
-            .running
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(row.id, cancellation.clone());
         let context = WorkContext::for_job(
             Client {
                 inner: Arc::clone(&inner),
@@ -2196,6 +2323,17 @@ async fn execute_job(
             }
         };
 
+        // A cooperative worker can observe cancellation and return before this
+        // select polls the cancellation branch. Preserve the cancellation cause
+        // in that race so remote cancellation still gets its canonical outcome.
+        if cancellation_cause.is_none() && cancellation.is_cancelled() {
+            cancellation_cause = Some(if hard_cancel.is_cancelled() {
+                CancellationCause::Shutdown
+            } else {
+                CancellationCause::Remote
+            });
+        }
+
         let run_duration = work_started.elapsed();
         let mut result = result;
         let was_aborted = result
@@ -2215,6 +2353,15 @@ async fn execute_job(
             failure.error.push_str("job interrupted by client shutdown");
             failure.kind = WorkerFailureKind::Interrupted;
             failure.trace.clear();
+        }
+        if cancellation_cause == Some(CancellationCause::Remote)
+            && !matches!(result, Ok(WorkOutcome::Complete))
+        {
+            result = Err(WorkerFailure {
+                error: "JobCancelError: job cancelled remotely".to_owned(),
+                kind: WorkerFailureKind::Cancelled,
+                trace: String::new(),
+            });
         }
         let work_result = public_work_result(&result);
         let mut error_handler_result = ErrorHandlerResult::default();
@@ -2299,6 +2446,7 @@ struct WorkerFailure {
 #[derive(Debug)]
 enum WorkerFailureKind {
     Aborted,
+    Cancelled,
     Error,
     Interrupted,
     Panic,
@@ -2386,6 +2534,7 @@ fn public_work_result(result: &WorkerResult) -> WorkResult {
         Ok(WorkOutcome::Snooze(duration)) => WorkResult::Snoozed(*duration),
         Err(failure) => match failure.kind {
             WorkerFailureKind::Aborted => WorkResult::Aborted,
+            WorkerFailureKind::Cancelled => WorkResult::Cancelled,
             WorkerFailureKind::Error => WorkResult::Failed(failure.error.clone()),
             WorkerFailureKind::Interrupted => WorkResult::Interrupted,
             WorkerFailureKind::Panic => WorkResult::Panicked(failure.error.clone()),
@@ -2476,20 +2625,25 @@ async fn persist_result(
                         .await
                         .map(|event| PersistResult::Finished(event.map(Box::new)));
                 }
-                let worker_retry_after = inner
-                    .workers
-                    .next_retry(row, &failure.error, now)
-                    .unwrap_or_else(|retry_error| {
-                        debug!(error = %retry_error, "could not evaluate worker retry override");
-                        None
-                    });
                 let attempt_error = AttemptError {
                     at: row.attempted_at.unwrap_or(now),
                     attempt: row.attempt,
                     error: failure.error,
                     trace: failure.trace,
                 };
-                if error_handler_result.discard || row.attempt >= row.max_attempts {
+                if matches!(failure.kind, WorkerFailureKind::Cancelled)
+                    || error_handler_result.cancel
+                {
+                    (
+                        JobState::Cancelled,
+                        Some(now),
+                        None,
+                        row.attempt,
+                        Some(attempt_error),
+                        metadata_updates,
+                        EventKind::JobCancelled,
+                    )
+                } else if error_handler_result.discard || row.attempt >= row.max_attempts {
                     (
                         JobState::Discarded,
                         Some(now),
@@ -2500,6 +2654,13 @@ async fn persist_result(
                         EventKind::JobFailed,
                     )
                 } else {
+                    let worker_retry_after = inner
+                        .workers
+                        .next_retry(row, &attempt_error.error, now)
+                        .unwrap_or_else(|retry_error| {
+                            debug!(error = %retry_error, "could not evaluate worker retry override");
+                            None
+                        });
                     let delay = error_handler_result
                         .retry_after
                         .or(worker_retry_after)
@@ -2535,11 +2696,11 @@ async fn persist_result(
         "UPDATE {table} AS job SET \
             attempt = $2, \
             errors = CASE WHEN $3::jsonb IS NULL THEN errors ELSE array_append(coalesce(errors, '{{}}'), $3::jsonb) END, \
-            finalized_at = CASE WHEN $7::text IN ('retryable', 'scheduled') AND metadata ? 'cancel_attempted_at' \
+            finalized_at = CASE WHEN $7::text IN ('available', 'retryable', 'scheduled') AND metadata ? 'cancel_attempted_at' \
                                 THEN coalesce($4, now()) ELSE $4 END, \
             metadata = metadata || $5::jsonb, \
             scheduled_at = coalesce($6, scheduled_at), \
-            state = CASE WHEN $7::text IN ('retryable', 'scheduled') AND metadata ? 'cancel_attempted_at' \
+            state = CASE WHEN $7::text IN ('available', 'retryable', 'scheduled') AND metadata ? 'cancel_attempted_at' \
                          THEN 'cancelled'::{state_type} ELSE $7::text::{state_type} END \
          WHERE id = $1 AND state = 'running' \
          RETURNING {}, false AS unique_skipped_as_duplicate",
@@ -2728,7 +2889,7 @@ impl PreparedFastInsert {
         let scheduled_at = opts.scheduled_at.unwrap_or(now);
         let state = if opts.pending {
             JobState::Pending
-        } else if scheduled_at > now {
+        } else if opts.scheduled_at.is_some() {
             JobState::Scheduled
         } else {
             JobState::Available
@@ -2971,6 +3132,52 @@ mod tests {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .get(&job_id)
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn pending_cancellation_reaches_fetched_attempt() {
+        let job_id = 42;
+        let cancellation = CancellationToken::new();
+        let fetch_registration_windows = AtomicU64::new(1);
+        let pending_cancellations = Mutex::new(HashMap::new());
+        let running = Mutex::new(HashMap::new());
+
+        signal_running_attempt(
+            &running,
+            &pending_cancellations,
+            &fetch_registration_windows,
+            job_id,
+        );
+        register_running_attempt(&running, &pending_cancellations, job_id, &cancellation);
+
+        assert!(cancellation.is_cancelled());
+        assert!(
+            pending_cancellations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn unmatched_cancellation_is_not_retained_without_fetch() {
+        let fetch_registration_windows = AtomicU64::new(0);
+        let pending_cancellations = Mutex::new(HashMap::new());
+        let running = Mutex::new(HashMap::new());
+
+        signal_running_attempt(
+            &running,
+            &pending_cancellations,
+            &fetch_registration_windows,
+            42,
+        );
+
+        assert!(
+            pending_cancellations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty()
         );
     }
 

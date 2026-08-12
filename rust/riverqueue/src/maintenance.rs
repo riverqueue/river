@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
 
 use crate::{
-    AttemptError, Client, Error, JobState, ReindexerSchedule,
+    AttemptError, Client, Error, JobState, ReindexerSchedule, WorkerTimeout,
     client::{ClientInner, JobRecord, job_projection},
 };
 
@@ -316,6 +316,7 @@ async fn schedule_jobs(inner: &ClientInner, cancel: &CancellationToken) -> Resul
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn rescue_jobs(inner: &ClientInner, cancel: &CancellationToken) -> Result<(), Error> {
     let table = inner.schema.qualify("river_job");
     let sql = format!(
@@ -360,18 +361,58 @@ async fn rescue_jobs(inner: &ClientInner, cancel: &CancellationToken) -> Result<
         let now = Utc::now();
         for record in records {
             let row = record.into_job_row()?;
-            let (finalized_at, scheduled_at, state) =
-                if row.metadata.contains_key("cancel_attempted_at") {
-                    (Some(now), row.scheduled_at, JobState::Cancelled)
-                } else if row.attempt >= row.max_attempts || !inner.workers.contains_kind(&row.kind)
-                {
+            let (finalized_at, scheduled_at, state) = if row
+                .metadata
+                .contains_key("cancel_attempted_at")
+            {
+                (Some(now), row.scheduled_at, JobState::Cancelled)
+            } else if !inner.workers.contains_kind(&row.kind) {
+                (Some(now), row.scheduled_at, JobState::Discarded)
+            } else {
+                let timeout = match inner.workers.timeout(&row) {
+                    Ok(WorkerTimeout::After(timeout)) => Some(timeout),
+                    Ok(WorkerTimeout::ClientDefault) => inner.job_timeout,
+                    Ok(WorkerTimeout::Disabled) => None,
+                    Err(timeout_error) => {
+                        debug!(
+                            error = %timeout_error,
+                            job_id = row.id,
+                            "could not evaluate rescued worker timeout; rescuing job"
+                        );
+                        Some(Duration::ZERO)
+                    }
+                };
+                let timeout_elapsed = timeout.is_some_and(|timeout| {
+                    row.attempted_at
+                        .and_then(|attempted_at| {
+                            now.signed_duration_since(attempted_at).to_std().ok()
+                        })
+                        .is_some_and(|elapsed| elapsed >= timeout)
+                });
+                if !timeout_elapsed {
+                    continue;
+                }
+                if row.attempt >= row.max_attempts {
                     (Some(now), row.scheduled_at, JobState::Discarded)
                 } else {
+                    let retry_delay = match inner.workers.next_retry(&row, "", now) {
+                        Ok(Some(retry_delay)) => retry_delay,
+                        Ok(None) => inner.retry_policy.next_retry(&row, "", now),
+                        Err(retry_error) => {
+                            debug!(
+                                error = %retry_error,
+                                job_id = row.id,
+                                "could not evaluate rescued worker retry policy; using client policy"
+                            );
+                            inner.retry_policy.next_retry(&row, "", now)
+                        }
+                    };
                     let retry_at = now
-                        + chrono::Duration::from_std(inner.retry_policy.next_retry(&row, "", now))
+                        + chrono::Duration::from_std(retry_delay)
                             .map_err(|error| Error::InvalidJob(error.to_string()))?;
                     (None, retry_at, JobState::Retryable)
-                };
+                }
+            };
             let attempt_error = AttemptError {
                 at: now,
                 attempt: row.attempt.max(0),
