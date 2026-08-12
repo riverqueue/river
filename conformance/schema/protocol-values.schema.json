@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "attempt_error": {
+      "additionalProperties": false,
+      "properties": {
+        "at": { "format": "date-time", "type": "string" },
+        "attempt": { "minimum": 0, "type": "integer" },
+        "error": { "type": "string" },
+        "trace": { "type": "string" }
+      },
+      "required": ["at", "attempt", "error", "trace"],
+      "type": "object"
+    },
+    "job_states": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "state": { "enum": ["available", "cancelled", "completed", "discarded", "pending", "retryable", "running", "scheduled"] },
+          "unique_bit": { "maximum": 128, "minimum": 1, "type": "integer" }
+        },
+        "required": ["state", "unique_bit"],
+        "type": "object"
+      },
+      "minItems": 8,
+      "type": "array"
+    },
+    "metadata_keys": { "additionalProperties": { "type": "string" }, "type": "object" },
+    "notifications": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "payload": { "type": "object" },
+          "topic": { "type": "string" }
+        },
+        "required": ["name", "payload", "topic"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "protocol_revision": { "minimum": 1, "type": "integer" },
+    "retry_cases": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "error_count": { "minimum": 1, "type": "integer" },
+          "expected_delay_ns": { "minimum": 0, "type": "integer" },
+          "job_id": { "minimum": 1, "type": "integer" },
+          "now": { "format": "date-time", "type": "string" },
+          "seed": { "minimum": 0, "type": "integer" }
+        },
+        "required": ["error_count", "expected_delay_ns", "job_id", "now", "seed"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "topics": { "additionalProperties": { "type": "string" }, "type": "object" }
+  },
+  "required": ["$schema", "attempt_error", "job_states", "metadata_keys", "notifications", "protocol_revision", "retry_cases", "topics"],
+  "title": "River protocol value goldens",
+  "type": "object"
+}

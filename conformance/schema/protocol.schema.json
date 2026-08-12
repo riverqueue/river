@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "capabilities": {
+      "additionalProperties": {
+        "enum": ["complete", "in_progress", "not_applicable", "planned"]
+      },
+      "type": "object"
+    },
+    "go": {
+      "additionalProperties": false,
+      "properties": {
+        "module": { "type": "string" },
+        "version": { "type": "string" }
+      },
+      "required": ["module", "version"],
+      "type": "object"
+    },
+    "migration": {
+      "additionalProperties": false,
+      "properties": {
+        "latest": { "minimum": 1, "type": "integer" },
+        "line": { "minLength": 1, "type": "string" }
+      },
+      "required": ["latest", "line"],
+      "type": "object"
+    },
+    "protocol_revision": { "minimum": 1, "type": "integer" },
+    "rust": {
+      "additionalProperties": false,
+      "properties": {
+        "crate": { "type": "string" },
+        "version": { "type": "string" }
+      },
+      "required": ["crate", "version"],
+      "type": "object"
+    }
+  },
+  "required": ["capabilities", "go", "migration", "protocol_revision", "rust"],
+  "title": "River protocol compatibility manifest",
+  "type": "object"
+}

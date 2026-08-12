@@ -1,0 +1,22 @@
+{
+  "$schema": "../schema/scenarios.schema.json",
+  "protocol_revision": 1,
+  "scenarios": [
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteAttemptedByHistory" }], "name": "sqlite_runtime_attempted_by_ordering", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteCompetingWorkers" }], "name": "sqlite_runtime_competing_workers", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteCrossLanguageWork" }], "name": "sqlite_runtime_cross_language_work", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteAdvancedRuntime" }], "name": "sqlite_runtime_extensions_resumable_subscriptions", "tier": "runtime" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifyExternalTerminalCompletionRace" }], "name": "sqlite_runtime_external_terminal_completion_race", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteLeadershipFailover" }], "name": "sqlite_runtime_leadership_failover", "tier": "runtime" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteLifecycle" }], "name": "sqlite_runtime_lifecycle_shutdown", "tier": "runtime" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifyNotificationWakeups" }], "name": "sqlite_runtime_notification_wakeups", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLitePeriodicScheduler" }], "name": "sqlite_runtime_periodic_scheduler", "tier": "runtime" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLitePollOnly" }], "name": "sqlite_runtime_poll_only_recovery", "tier": "runtime" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "TestMixedGoRustSQLiteRuntimeConformance" }], "name": "sqlite_runtime_profile_handshake", "tier": "codec" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteQueues" }], "name": "sqlite_runtime_queue_crud_reconfigure_pause", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifyNotificationWakeups" }], "name": "sqlite_runtime_remote_cancellation", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifyRemoteQueueSubscriptionEvents" }], "name": "sqlite_runtime_remote_queue_subscription_events", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteTransactionalNotification" }], "name": "sqlite_runtime_transactional_notification", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteUnknownKind" }], "name": "sqlite_runtime_unknown_kind_error", "tier": "mixed" }
+  ]
+}

@@ -1,0 +1,47 @@
+[package]
+name = "riverqueue-migrate"
+description = "Database migrations for River's Rust client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = ["postgres"]
+postgres = ["riverqueue-internal/postgres", "sqlx/postgres"]
+postgres-tests = ["postgres"]
+sqlite = ["riverqueue-internal/sqlite", "sqlx/sqlite"]
+
+[dependencies]
+riverqueue-internal = { path = "../riverqueue-internal", version = "=0.44.0-alpha.1", default-features = false }
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[[bin]]
+name = "riverqueue-migrate"
+path = "src/bin/riverqueue-migrate.rs"
+
+[[example]]
+name = "migrate"
+required-features = ["postgres"]
+
+[[test]]
+name = "postgres"
+required-features = ["postgres"]
+
+[[test]]
+name = "sqlite"
+required-features = ["sqlite"]
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
