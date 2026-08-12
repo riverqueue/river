@@ -192,6 +192,10 @@ type producer struct {
 
 	// Jobs which are currently being worked. Only used by main goroutine.
 	activeJobs map[int64]*jobexecutor.JobExecutor
+	// Cancellation notifications received while a fetch is in flight. The map
+	// is cleared when that fetch returns, after matching fetched jobs are
+	// cancelled. Only used by the main goroutine.
+	pendingCancelJobs map[int64]struct{}
 
 	completer       jobcompleter.JobCompleter
 	config          *producerConfig
@@ -247,18 +251,19 @@ func newProducer(archetype *baseservice.Archetype, exec riverdriver.Executor, pi
 	}
 
 	producer := baseservice.Init(archetype, &producer{
-		activeJobs:     make(map[int64]*jobexecutor.JobExecutor),
-		cancelCh:       make(chan int64, 1000),
-		completer:      config.Completer,
-		config:         config.mustValidate(),
-		exec:           exec,
-		errorHandler:   errorHandler,
-		jobResultCh:    make(chan *rivertype.JobRow, config.MaxWorkers),
-		jobTimeout:     config.JobTimeout,
-		pilot:          pilot,
-		queueControlCh: make(chan *controlEventPayload, 100),
-		retryPolicy:    config.RetryPolicy,
-		workers:        config.Workers,
+		activeJobs:        make(map[int64]*jobexecutor.JobExecutor),
+		cancelCh:          make(chan int64, 1000),
+		completer:         config.Completer,
+		config:            config.mustValidate(),
+		exec:              exec,
+		errorHandler:      errorHandler,
+		jobResultCh:       make(chan *rivertype.JobRow, config.MaxWorkers),
+		jobTimeout:        config.JobTimeout,
+		pendingCancelJobs: make(map[int64]struct{}),
+		pilot:             pilot,
+		queueControlCh:    make(chan *controlEventPayload, 100),
+		retryPolicy:       config.RetryPolicy,
+		workers:           config.Workers,
 	})
 
 	producer.metricEmitHooks = producer.metricEmitHooksFromLookup()
@@ -668,11 +673,14 @@ func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan pr
 					p.fetchWhenSlotsAreAvailable = true
 				}
 			}
+			clear(p.pendingCancelJobs)
 			return
 		case result := <-p.jobResultCh:
 			p.removeActiveJob(result)
 		case jobID := <-p.cancelCh:
-			p.maybeCancelJob(workCtx, jobID)
+			if !p.maybeCancelJob(workCtx, jobID) {
+				p.pendingCancelJobs[jobID] = struct{}{}
+			}
 		}
 	}
 }
@@ -780,12 +788,13 @@ func (p *producer) handleWorkerUnstuck() {
 	p.config.JobStuckCount.Add(-1)
 }
 
-func (p *producer) maybeCancelJob(ctx context.Context, id int64) {
+func (p *producer) maybeCancelJob(ctx context.Context, id int64) bool {
 	executor, ok := p.activeJobs[id]
 	if !ok {
-		return
+		return false
 	}
 	executor.Cancel(ctx)
+	return true
 }
 
 func (p *producer) metricEmitHooksFromLookup() []rivertype.HookMetricEmit {
@@ -946,6 +955,10 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 			WorkUnit:               workUnit,
 		})
 		p.addActiveJob(job.ID, executor)
+		if _, ok := p.pendingCancelJobs[job.ID]; ok {
+			delete(p.pendingCancelJobs, job.ID)
+			executor.Cancel(workCtx)
+		}
 
 		go executor.Execute(jobCtx)
 	}

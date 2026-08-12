@@ -9531,6 +9531,26 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		require.Equal(t, internalUniqueOpts.StateBitmask(), params.UniqueStates)
 	})
 
+	t.Run("UniqueOptsUseScheduledAtForPeriod", func(t *testing.T) {
+		t.Parallel()
+
+		archetype := riversharedtest.BaseServiceArchetype(t)
+		now := time.Date(2026, time.August, 12, 12, 34, 56, 0, time.UTC)
+		archetype.Time.StubNow(now)
+		scheduledAt := now.Add(48*time.Hour + 5*time.Minute)
+		uniqueOpts := UniqueOpts{ByPeriod: 24 * time.Hour}
+
+		params, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{
+			ScheduledAt: scheduledAt,
+			UniqueOpts:  uniqueOpts,
+		})
+		require.NoError(t, err)
+
+		expectedKey, err := dbunique.UniqueKey(archetype.Time, (*dbunique.UniqueOpts)(&uniqueOpts), params)
+		require.NoError(t, err)
+		require.Equal(t, expectedKey, params.UniqueKey)
+	})
+
 	t.Run("UniqueOptsWithPartialArgs", func(t *testing.T) {
 		t.Parallel()
 
