@@ -1378,6 +1378,7 @@ impl JobRecord {
 
 struct CompletionUpdate {
     attempt: i16,
+    cancellation: CancellationToken,
     error_json: Option<Value>,
     event_kind: EventKind,
     finalized_at: Option<DateTime<Utc>>,
@@ -1385,6 +1386,11 @@ struct CompletionUpdate {
     metadata: Map<String, Value>,
     scheduled_at: Option<DateTime<Utc>>,
     state: JobState,
+    timing: CompletionTiming,
+}
+
+struct CompletionAttempt {
+    cancellation: CancellationToken,
     timing: CompletionTiming,
 }
 
@@ -1496,11 +1502,7 @@ fn finish_completion_batch(
                 "failed to persist River job completion batch"
             );
             for update in &batch {
-                inner
-                    .running
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .remove(&update.job_id);
+                remove_running_attempt(&inner.running, update.job_id, &update.cancellation);
             }
         }
     }
@@ -1608,11 +1610,23 @@ fn finish_batched_completion(
             "job result ignored because job is no longer running"
         );
     }
-    inner
-        .running
+    remove_running_attempt(&inner.running, update.job_id, &update.cancellation);
+}
+
+fn remove_running_attempt(
+    running: &Mutex<HashMap<i64, CancellationToken>>,
+    job_id: i64,
+    cancellation: &CancellationToken,
+) {
+    let mut running = running
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .remove(&update.job_id);
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if running
+        .get(&job_id)
+        .is_some_and(|active| active == cancellation)
+    {
+        running.remove(&job_id);
+    }
 }
 
 #[derive(Deserialize)]
@@ -2227,26 +2241,29 @@ async fn execute_job(
             error!(error = %handler_error, "River stuck handler failed");
         }
         let metadata_updates = context.metadata_updates().await;
-        let timing = CompletionTiming {
-            completion_started: std::time::Instant::now(),
-            queue_wait_duration,
-            run_duration,
+        let completion = CompletionAttempt {
+            cancellation: cancellation.clone(),
+            timing: CompletionTiming {
+                completion_started: std::time::Instant::now(),
+                queue_wait_duration,
+                run_duration,
+            },
         };
         let completion_enqueued = match persist_result(
             &inner,
             &row,
+            &completion,
             result,
             metadata_updates,
             error_handler_result,
             &completion_sender,
-            timing,
         )
         .await
         {
             Ok(PersistResult::Finished(Some(event))) => {
                 let mut event = *event;
                 event.job_statistics = Some(JobStatistics {
-                    complete_duration: timing.completion_started.elapsed(),
+                    complete_duration: completion.timing.completion_started.elapsed(),
                     queue_wait_duration,
                     run_duration,
                 });
@@ -2264,11 +2281,7 @@ async fn execute_job(
         if completion_enqueued {
             return;
         }
-        inner
-            .running
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&row.id);
+        remove_running_attempt(&inner.running, row.id, &cancellation);
     }
     .instrument(span)
     .await;
@@ -2384,11 +2397,11 @@ fn public_work_result(result: &WorkerResult) -> WorkResult {
 async fn persist_result(
     inner: &ClientInner,
     row: &JobRow,
+    completion: &CompletionAttempt,
     result: WorkerResult,
     metadata_updates: Map<String, Value>,
     error_handler_result: ErrorHandlerResult,
     completion_sender: &mpsc::Sender<CompletionUpdate>,
-    timing: CompletionTiming,
 ) -> Result<PersistResult, Error> {
     let now = Utc::now();
     let (state, finalized_at, scheduled_at, attempt, attempt_error, metadata, event_kind) =
@@ -2540,6 +2553,7 @@ async fn persist_result(
         completion_sender
             .send(CompletionUpdate {
                 attempt,
+                cancellation: completion.cancellation.clone(),
                 error_json,
                 event_kind,
                 finalized_at,
@@ -2547,7 +2561,7 @@ async fn persist_result(
                 metadata,
                 scheduled_at,
                 state,
-                timing,
+                timing: completion.timing,
             })
             .await
             .map_err(|_| Error::Runtime("completion batcher stopped".to_owned()))?;
@@ -2928,6 +2942,37 @@ fn is_word(character: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completion_cleanup_preserves_newer_attempt() {
+        let job_id = 42;
+        let first = CancellationToken::new();
+        let second = CancellationToken::new();
+        let running = Mutex::new(HashMap::from([(job_id, first.clone())]));
+
+        running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(job_id, second.clone());
+
+        remove_running_attempt(&running, job_id, &first);
+        assert_eq!(
+            running
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(&job_id),
+            Some(&second)
+        );
+
+        remove_running_attempt(&running, job_id, &second);
+        assert!(
+            running
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(&job_id)
+                .is_none()
+        );
+    }
 
     fn retry_row(error_count: usize) -> JobRow {
         let now = DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
