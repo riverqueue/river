@@ -40,6 +40,7 @@ import (
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
+	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/dbutil"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
@@ -48,6 +49,18 @@ import (
 	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivertype"
 )
+
+type clientJobCancelTestSignals struct {
+	ContinueWork testsignal.TestSignal[struct{}]
+	JobStarted   testsignal.TestSignal[int64]
+}
+
+func (s *clientJobCancelTestSignals) Init(tb testing.TB) {
+	tb.Helper()
+
+	s.ContinueWork.Init(tb)
+	s.JobStarted.Init(tb)
+}
 
 type invalidKindArgs struct{}
 
@@ -1210,12 +1223,81 @@ func Test_Client_Common(t *testing.T) {
 		require.WithinDuration(t, time.Now(), *jobAfterCancel.FinalizedAt, 2*time.Second)
 	}
 
+	cancelRunningJobBeforeWorkReturnsTestHelper := func(t *testing.T) {
+		t.Helper()
+
+		config, bundle := setupConfig(t)
+		config.RetryPolicy = &retrypolicytest.RetryPolicySlow{}
+
+		client, err := NewClient(NewDriverWithoutListenNotify(bundle.dbPool), config)
+		require.NoError(t, err)
+
+		var signals clientJobCancelTestSignals
+		signals.Init(t)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+
+			Result string `json:"result"`
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			signals.JobStarted.Signal(job.ID)
+			<-signals.ContinueWork.WaitC()
+
+			switch job.Args.Result {
+			case "error":
+				return errors.New("retry later")
+			case "snooze":
+				return JobSnooze(time.Hour)
+			default:
+				return fmt.Errorf("unknown test result: %s", job.Args.Result)
+			}
+		}))
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+		t.Cleanup(func() { signals.ContinueWork.Signal(struct{}{}) })
+
+		for _, result := range []string{"error", "snooze"} {
+			insertRes, err := client.Insert(ctx, &JobArgs{Result: result}, nil)
+			require.NoError(t, err)
+			require.Equal(t, insertRes.Job.ID, signals.JobStarted.WaitOrTimeout())
+
+			var jobAfterCancel *rivertype.JobRow
+			err = pgx.BeginFunc(ctx, bundle.dbPool, func(tx pgx.Tx) error {
+				var err error
+				jobAfterCancel, err = client.JobCancelTx(ctx, tx, insertRes.Job.ID)
+				return err
+			})
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateRunning, jobAfterCancel.State)
+
+			signals.ContinueWork.Signal(struct{}{})
+
+			event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+			require.Equal(t, EventKindJobCancelled, event.Kind)
+			require.Equal(t, insertRes.Job.ID, event.Job.ID)
+			require.Equal(t, rivertype.JobStateCancelled, event.Job.State)
+
+			reloadedJob, err := client.JobGet(ctx, insertRes.Job.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateCancelled, reloadedJob.State)
+		}
+	}
+
 	t.Run("CancelRunningJob", func(t *testing.T) {
 		t.Parallel()
 
 		cancelRunningJobTestHelper(t, nil, func(ctx context.Context, dbPool *pgxpool.Pool, client *Client[pgx.Tx], jobID int64) (*rivertype.JobRow, error) {
 			return client.JobCancel(ctx, jobID)
 		})
+	})
+
+	t.Run("CancelRunningJobBeforeWorkReturns", func(t *testing.T) {
+		t.Parallel()
+
+		cancelRunningJobBeforeWorkReturnsTestHelper(t)
 	})
 
 	t.Run("CancelRunningJobWithLongPollInterval", func(t *testing.T) {
@@ -8077,7 +8159,7 @@ func Test_Client_JobCompletion(t *testing.T) {
 		require.NotNil(t, reloadedJob.FinalizedAt)
 	})
 
-	t.Run("JobThatIsCompletedManuallyIsNotTouchedByCompleter", func(t *testing.T) {
+	t.Run("JobThatIsCompletedManuallyBeforeReturningErrIsNotTouchedByCompleter", func(t *testing.T) {
 		t.Parallel()
 
 		client, bundle := setup(t, newTestConfig(t, ""))
@@ -8096,17 +8178,22 @@ func Test_Client_JobCompletion(t *testing.T) {
 			updatedJob, err = JobCompleteTx[*riverpgxv5.Driver](ctx, tx, job)
 			require.NoError(t, err)
 
-			return tx.Commit(ctx)
+			if err := tx.Commit(ctx); err != nil {
+				return err
+			}
+
+			return errors.New("error after committed completion")
 		}))
 
 		insertRes, err := client.Insert(ctx, JobArgs{}, nil)
 		require.NoError(t, err)
 
 		event := riversharedtest.WaitOrTimeout(t, bundle.subscribeChan)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
 		require.Equal(t, insertRes.Job.ID, event.Job.ID)
 		require.Equal(t, rivertype.JobStateCompleted, event.Job.State)
-		require.Equal(t, rivertype.JobStateCompleted, updatedJob.State)
 		require.NotNil(t, updatedJob)
+		require.Equal(t, rivertype.JobStateCompleted, updatedJob.State)
 		require.NotNil(t, event.Job.FinalizedAt)
 		require.NotNil(t, updatedJob.FinalizedAt)
 

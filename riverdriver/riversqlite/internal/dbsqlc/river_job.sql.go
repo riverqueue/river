@@ -1633,16 +1633,16 @@ func (q *Queries) JobSetMetadataIfNotRunning(ctx context.Context, db DBTX, arg *
 const jobSetStateIfRunning = `-- name: JobSetStateIfRunning :one
 UPDATE /* TEMPLATE: schema */river_job
 SET
-    -- should_cancel: (job_input.state IN ('retryable', 'scheduled') AND river_job.metadata ? 'cancel_attempted_at')
+    -- should_cancel: (job_input.state IN ('available', 'retryable', 'scheduled') AND river_job.metadata ? 'cancel_attempted_at')
     --
-    -- or inverted:   (cast(@state AS text) <> 'retryable' AND @state <> 'scheduled' OR NOT (metadata -> 'cancel_attempted_at'))
-    attempt      = CASE WHEN /* NOT should_cancel */(cast(?1 AS text) <> 'retryable' AND ?1 <> 'scheduled' OR (metadata -> 'cancel_attempted_at') IS NULL) AND cast(?2 AS boolean)
+    -- or inverted:   (cast(@state AS text) <> 'available' AND @state <> 'retryable' AND @state <> 'scheduled' OR NOT (metadata -> 'cancel_attempted_at'))
+    attempt      = CASE WHEN /* NOT should_cancel */(cast(?1 AS text) <> 'available' AND ?1 <> 'retryable' AND ?1 <> 'scheduled' OR (metadata -> 'cancel_attempted_at') IS NULL) AND cast(?2 AS boolean)
                         THEN ?3
                         ELSE attempt END,
     errors       = CASE WHEN cast(?4 AS boolean)
                         THEN jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(?5)))
                         ELSE errors END,
-    finalized_at = CASE WHEN /* should_cancel */((?1 = 'retryable' OR ?1 = 'scheduled') AND (metadata -> 'cancel_attempted_at') iS NOT NULL)
+    finalized_at = CASE WHEN /* should_cancel */((?1 = 'available' OR ?1 = 'retryable' OR ?1 = 'scheduled') AND (metadata -> 'cancel_attempted_at') IS NOT NULL)
                         THEN coalesce(cast(?6 AS text), datetime('now', 'subsec'))
                         WHEN cast(?7 AS boolean)
                         THEN ?8
@@ -1650,10 +1650,10 @@ SET
     metadata     = CASE WHEN cast(?9 AS boolean)
                         THEN jsonb_patch(json(metadata), json(?10))
                         ELSE metadata END,
-    scheduled_at = CASE WHEN /* NOT should_cancel */(cast(?1 AS text) <> 'retryable' AND ?1 <> 'scheduled' OR (metadata -> 'cancel_attempted_at') IS NULL) AND cast(?11 AS boolean)
+    scheduled_at = CASE WHEN /* NOT should_cancel */(cast(?1 AS text) <> 'available' AND ?1 <> 'retryable' AND ?1 <> 'scheduled' OR (metadata -> 'cancel_attempted_at') IS NULL) AND cast(?11 AS boolean)
                         THEN ?12
                         ELSE scheduled_at END,
-    state        = CASE WHEN /* should_cancel */((?1 = 'retryable' OR ?1 = 'scheduled') AND (metadata -> 'cancel_attempted_at') IS NOT NULL)
+    state        = CASE WHEN /* should_cancel */((?1 = 'available' OR ?1 = 'retryable' OR ?1 = 'scheduled') AND (metadata -> 'cancel_attempted_at') IS NOT NULL)
                         THEN 'cancelled'
                         ELSE ?1 END
 WHERE id = ?13

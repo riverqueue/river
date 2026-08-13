@@ -594,16 +594,16 @@ RETURNING *;
 -- name: JobSetStateIfRunning :one
 UPDATE /* TEMPLATE: schema */river_job
 SET
-    -- should_cancel: (job_input.state IN ('retryable', 'scheduled') AND river_job.metadata ? 'cancel_attempted_at')
+    -- should_cancel: (job_input.state IN ('available', 'retryable', 'scheduled') AND river_job.metadata ? 'cancel_attempted_at')
     --
-    -- or inverted:   (cast(@state AS text) <> 'retryable' AND @state <> 'scheduled' OR NOT (metadata -> 'cancel_attempted_at'))
-    attempt      = CASE WHEN /* NOT should_cancel */(cast(@state AS text) <> 'retryable' AND @state <> 'scheduled' OR (metadata -> 'cancel_attempted_at') IS NULL) AND cast(@attempt_do_update AS boolean)
+    -- or inverted:   (cast(@state AS text) <> 'available' AND @state <> 'retryable' AND @state <> 'scheduled' OR NOT (metadata -> 'cancel_attempted_at'))
+    attempt      = CASE WHEN /* NOT should_cancel */(cast(@state AS text) <> 'available' AND @state <> 'retryable' AND @state <> 'scheduled' OR (metadata -> 'cancel_attempted_at') IS NULL) AND cast(@attempt_do_update AS boolean)
                         THEN @attempt
                         ELSE attempt END,
     errors       = CASE WHEN cast(@errors_do_update AS boolean)
                         THEN jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(@error)))
                         ELSE errors END,
-    finalized_at = CASE WHEN /* should_cancel */((@state = 'retryable' OR @state = 'scheduled') AND (metadata -> 'cancel_attempted_at') iS NOT NULL)
+    finalized_at = CASE WHEN /* should_cancel */((@state = 'available' OR @state = 'retryable' OR @state = 'scheduled') AND (metadata -> 'cancel_attempted_at') IS NOT NULL)
                         THEN coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec'))
                         WHEN cast(@finalized_at_do_update AS boolean)
                         THEN @finalized_at
@@ -611,10 +611,10 @@ SET
     metadata     = CASE WHEN cast(@metadata_do_merge AS boolean)
                         THEN jsonb_patch(json(metadata), json(@metadata_updates))
                         ELSE metadata END,
-    scheduled_at = CASE WHEN /* NOT should_cancel */(cast(@state AS text) <> 'retryable' AND @state <> 'scheduled' OR (metadata -> 'cancel_attempted_at') IS NULL) AND cast(@scheduled_at_do_update AS boolean)
+    scheduled_at = CASE WHEN /* NOT should_cancel */(cast(@state AS text) <> 'available' AND @state <> 'retryable' AND @state <> 'scheduled' OR (metadata -> 'cancel_attempted_at') IS NULL) AND cast(@scheduled_at_do_update AS boolean)
                         THEN @scheduled_at
                         ELSE scheduled_at END,
-    state        = CASE WHEN /* should_cancel */((@state = 'retryable' OR @state = 'scheduled') AND (metadata -> 'cancel_attempted_at') IS NOT NULL)
+    state        = CASE WHEN /* should_cancel */((@state = 'available' OR @state = 'retryable' OR @state = 'scheduled') AND (metadata -> 'cancel_attempted_at') IS NOT NULL)
                         THEN 'cancelled'
                         ELSE @state END
 WHERE id = @id

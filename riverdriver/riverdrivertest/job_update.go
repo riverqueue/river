@@ -788,43 +788,50 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		})
 
 		t.Run("SetsAJobWithCancelAttemptedAtToCancelled", func(t *testing.T) {
+			t.Parallel()
+
 			// If a job has cancel_attempted_at in its metadata, it means that the user
 			// tried to cancel the job with the Cancel API but that the job
 			// finished/errored before the producer received the cancel notification.
-			//
-			// In this case, we want to move the job to cancelled instead of retryable
-			// so that the job is not retried.
-			t.Parallel()
+			// In this case, move the job to cancelled so that it is not retried.
+			tests := []struct {
+				name         string
+				setStateFunc func(id int64, scheduledAt time.Time, errData []byte, metadataUpdates []byte) *riverdriver.JobSetStateIfRunningParams
+			}{
+				{name: "ImmediatelyAvailable", setStateFunc: riverdriver.JobSetStateErrorAvailable},
+				{name: "Retryable", setStateFunc: riverdriver.JobSetStateErrorRetryable},
+			}
 
-			exec, _ := setup(ctx, t)
+			for _, test := range tests {
+				t.Run(test.name, func(t *testing.T) {
+					t.Parallel()
 
-			now := time.Now().UTC()
+					exec, _ := setup(ctx, t)
 
-			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				Metadata:    fmt.Appendf(nil, `{"cancel_attempted_at":"%s"}`, time.Now().UTC().Format(time.RFC3339)),
-				State:       ptrutil.Ptr(rivertype.JobStateRunning),
-				ScheduledAt: ptrutil.Ptr(now.Add(-10 * time.Second)),
-			})
+					now := time.Now().UTC()
+					job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+						Metadata:    fmt.Appendf(nil, `{"cancel_attempted_at":"%s"}`, time.Now().UTC().Format(time.RFC3339)),
+						State:       ptrutil.Ptr(rivertype.JobStateRunning),
+						ScheduledAt: ptrutil.Ptr(now.Add(-10 * time.Second)),
+					})
 
-			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateErrorRetryable(job.ID, now, makeErrPayload(t, now), nil)))
-			require.NoError(t, err)
-			jobAfter := jobsAfter[0]
-			require.Equal(t, rivertype.JobStateCancelled, jobAfter.State)
-			require.NotNil(t, jobAfter.FinalizedAt)
-			// Loose assertion against FinalizedAt just to make sure it was set (it uses
-			// the database's now() instead of a passed-in time):
-			require.WithinDuration(t, time.Now().UTC(), *jobAfter.FinalizedAt, 2*time.Second)
-			// ScheduledAt should not be touched:
-			require.WithinDuration(t, job.ScheduledAt, jobAfter.ScheduledAt, time.Microsecond)
+					jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(test.setStateFunc(job.ID, now, makeErrPayload(t, now), nil)))
+					require.NoError(t, err)
+					jobAfter := jobsAfter[0]
+					require.Equal(t, rivertype.JobStateCancelled, jobAfter.State)
+					require.NotNil(t, jobAfter.FinalizedAt)
+					require.WithinDuration(t, time.Now().UTC(), *jobAfter.FinalizedAt, 2*time.Second)
+					require.WithinDuration(t, job.ScheduledAt, jobAfter.ScheduledAt, time.Microsecond)
 
-			// Errors should still be appended to:
-			require.Len(t, jobAfter.Errors, 1)
-			require.Contains(t, jobAfter.Errors[0].Error, "fake error")
+					require.Len(t, jobAfter.Errors, 1)
+					require.Contains(t, jobAfter.Errors[0].Error, "fake error")
 
-			jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
-			require.NoError(t, err)
-			require.Equal(t, rivertype.JobStateCancelled, jobUpdated.State)
-			require.WithinDuration(t, job.ScheduledAt, jobAfter.ScheduledAt, time.Microsecond)
+					jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
+					require.NoError(t, err)
+					require.Equal(t, rivertype.JobStateCancelled, jobUpdated.State)
+					require.WithinDuration(t, job.ScheduledAt, jobAfter.ScheduledAt, time.Microsecond)
+				})
+			}
 		})
 	})
 
