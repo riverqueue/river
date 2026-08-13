@@ -2,13 +2,17 @@ package riverdrivertest
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivershared/testfactory"
+	"github.com/riverqueue/river/rivertype"
 )
 
 type testListenerBundle[TTx any] struct {
@@ -68,6 +72,49 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 
 		listener, _ := setupListener(ctx, t, driverWithPool)
 		require.NoError(t, listener.Close(ctx))
+	})
+
+	t.Run("JobCancelNotifiesOnCommit", func(t *testing.T) {
+		t.Parallel()
+
+		listener, bundle := setupListener(ctx, t, driverWithPool)
+
+		connectListener(ctx, t, listener)
+		require.NoError(t, listener.Listen(ctx, string(notifier.NotificationTopicControl)))
+
+		var (
+			rolledBackJob = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: listener.Schema(), State: new(rivertype.JobStateRunning)})
+			committedJob  = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: listener.Schema(), State: new(rivertype.JobStateRunning)})
+		)
+
+		cancelInTx := func(t *testing.T, jobID int64) riverdriver.ExecutorTx {
+			t.Helper()
+
+			tx, err := bundle.exec.Begin(ctx)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+			_, err = tx.JobCancel(ctx, &riverdriver.JobCancelParams{
+				CancelAttemptedAt: time.Now().UTC(),
+				ControlTopic:      string(notifier.NotificationTopicControl),
+				ID:                jobID,
+				Schema:            listener.Schema(),
+			})
+			require.NoError(t, err)
+
+			return tx
+		}
+
+		// A cancellation rolled back with its transaction never notifies.
+		require.NoError(t, cancelInTx(t, rolledBackJob.ID).Rollback(ctx))
+
+		// Notifications are delivered in commit order, so if the rolled back
+		// cancellation had notified, it would arrive first.
+		require.NoError(t, cancelInTx(t, committedJob.ID).Commit(ctx))
+
+		notification := waitForNotification(ctx, t, listener)
+		require.Equal(t, string(notifier.NotificationTopicControl), notification.Topic)
+		require.JSONEq(t, fmt.Sprintf(`{"action":"cancel","job_id":%d,"queue":%q}`, committedJob.ID, committedJob.Queue), notification.Payload)
 	})
 
 	t.Run("RoundTrip", func(t *testing.T) {

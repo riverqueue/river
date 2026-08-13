@@ -178,6 +178,23 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.ErrorIs(t, err, rivertype.ErrNotFound)
 			require.Nil(t, jobAfter)
 		})
+
+		t.Run("CancelsWithoutControlTopic", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+
+			// Without a control topic there's no channel to notify, so the
+			// cancellation succeeds without a notification on every driver.
+			jobAfter, err := exec.JobCancel(ctx, &riverdriver.JobCancelParams{
+				ID:                job.ID,
+				CancelAttemptedAt: time.Now(),
+			})
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateCancelled, jobAfter.State)
+		})
 	})
 
 	t.Run("JobRescueMany", func(t *testing.T) {

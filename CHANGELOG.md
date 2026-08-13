@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed error and panic handlers receiving the wrong job row when a single execution reports errors for multiple jobs. [PR #XXXX](https://github.com/riverqueue/river/pull/XXXX).
+- Fixed remote cancellation of running jobs on SQLite, which previously never reached the client working the job. `JobCancel` now writes a control notification in the same transaction as the cancellation, so it's delivered only once the cancellation commits. [PR #XXXX](https://github.com/riverqueue/river/pull/XXXX).
 - Fixed a job cancellation that arrives while a producer is fetching jobs being lost. A fetched job whose cancellation arrived during the fetch is now cancelled before it starts working instead of running to completion. [PR #XXXX](https://github.com/riverqueue/river/pull/XXXX).
 - Fixed SQLite job list pagination skipping or repeating jobs by formatting cursor timestamps consistently with stored timestamps. [PR #1374](https://github.com/riverqueue/river/pull/1374).
 - Improved PostgreSQL job listing performance when filtering by one finalized state (`completed`, `cancelled`, or `discarded`) and sorting by finalized time, including in River UI. [PR #1374](https://github.com/riverqueue/river/pull/1374).
