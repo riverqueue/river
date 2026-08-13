@@ -2,6 +2,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    fmt,
     str::FromStr,
     sync::Arc,
     time::Duration,
@@ -10,6 +11,7 @@ use std::{
 use chrono::{DateTime, Utc};
 use cron::Schedule;
 use serde_json::Value;
+use thiserror::Error as ThisError;
 use tokio::sync::Mutex;
 
 use crate::{Client, Error, InsertOpts, JobArgs};
@@ -28,11 +30,18 @@ impl IntervalSchedule {
     /// Creates a fixed schedule. Intervals shorter than one second are rejected.
     pub fn new(interval: Duration) -> Result<Self, Error> {
         if interval < Duration::from_secs(1) {
-            return Err(Error::InvalidJob(
+            return Err(Error::invalid_job_context(
+                "periodic job",
                 "periodic interval must be at least one second".to_owned(),
             ));
         }
         Ok(Self(interval))
+    }
+
+    /// Returns the fixed interval between occurrences.
+    #[must_use]
+    pub const fn interval(&self) -> Duration {
+        self.0
     }
 }
 
@@ -50,16 +59,44 @@ pub struct CronSchedule(Schedule);
 
 impl CronSchedule {
     /// Parses a cron expression using the `cron` crate's seconds-aware syntax.
-    pub fn parse(expression: &str) -> Result<Self, Error> {
-        Schedule::from_str(expression).map(Self).map_err(|error| {
-            Error::InvalidJob(format!("invalid periodic cron expression: {error}"))
-        })
+    pub fn parse(expression: &str) -> Result<Self, CronScheduleParseError> {
+        expression.parse()
+    }
+}
+
+impl FromStr for CronSchedule {
+    type Err = CronScheduleParseError;
+
+    fn from_str(expression: &str) -> Result<Self, Self::Err> {
+        Schedule::from_str(expression)
+            .map(Self)
+            .map_err(CronScheduleParseError::new)
+    }
+}
+
+impl fmt::Display for CronSchedule {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
     }
 }
 
 impl PeriodicSchedule for CronSchedule {
     fn next(&self, current: DateTime<Utc>) -> Option<DateTime<Utc>> {
         self.0.after(&current).next()
+    }
+}
+
+/// Error returned when parsing a [`CronSchedule`].
+#[derive(Debug, ThisError)]
+#[error("invalid periodic cron expression")]
+pub struct CronScheduleParseError {
+    #[source]
+    source: cron::error::Error,
+}
+
+impl CronScheduleParseError {
+    fn new(source: cron::error::Error) -> Self {
+        Self { source }
     }
 }
 
@@ -77,13 +114,51 @@ impl PeriodicSchedule for NeverSchedule {
 #[derive(Clone, Debug, Default)]
 pub struct PeriodicJobOpts {
     /// Optional identifier, unique within one client.
-    pub id: Option<String>,
+    pub(crate) id: Option<String>,
     /// Inserts once whenever this client becomes leader.
-    pub run_on_start: bool,
+    pub(crate) run_on_start: bool,
+}
+
+impl PeriodicJobOpts {
+    /// Creates periodic-job options with no ID and no initial run.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            id: None,
+            run_on_start: false,
+        }
+    }
+
+    /// Returns the optional identifier.
+    #[must_use]
+    pub fn id(&self) -> Option<&str> {
+        self.id.as_deref()
+    }
+
+    /// Returns whether an occurrence is inserted whenever leadership begins.
+    #[must_use]
+    pub const fn runs_on_start(&self) -> bool {
+        self.run_on_start
+    }
+
+    /// Inserts once whenever this client becomes leader.
+    #[must_use]
+    pub const fn run_on_start(mut self) -> Self {
+        self.run_on_start = true;
+        self
+    }
+
+    /// Sets an identifier unique within one client.
+    #[must_use]
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
 }
 
 #[derive(Clone)]
 pub(crate) struct PeriodicInsert {
+    pub(crate) defaults: InsertOpts,
     pub(crate) encoded_args: Value,
     pub(crate) kind: &'static str,
     pub(crate) opts: InsertOpts,
@@ -99,9 +174,48 @@ pub struct PeriodicJob {
 }
 
 impl PeriodicJob {
-    /// Creates a periodic job whose constructor may skip an occurrence by
-    /// returning `None`.
-    pub fn new<A, S, F>(schedule: S, constructor: F, opts: PeriodicJobOpts) -> Self
+    /// Creates a periodic job that inserts one job using its type defaults on
+    /// every scheduled occurrence.
+    pub fn new<A, S, F>(schedule: S, constructor: F) -> Self
+    where
+        A: JobArgs,
+        F: Fn() -> A + Send + Sync + 'static,
+        S: PeriodicSchedule,
+    {
+        Self::with_options(schedule, constructor, PeriodicJobOpts::new())
+    }
+
+    /// Creates a periodic job with registration options.
+    pub fn with_options<A, S, F>(schedule: S, constructor: F, opts: PeriodicJobOpts) -> Self
+    where
+        A: JobArgs,
+        F: Fn() -> A + Send + Sync + 'static,
+        S: PeriodicSchedule,
+    {
+        Self::conditional_with_options(
+            schedule,
+            move || Some((constructor(), InsertOpts::default())),
+            opts,
+        )
+    }
+
+    /// Creates a periodic job whose constructor can skip an occurrence or set
+    /// per-occurrence insertion options.
+    pub fn conditional<A, S, F>(schedule: S, constructor: F) -> Self
+    where
+        A: JobArgs,
+        F: Fn() -> Option<(A, InsertOpts)> + Send + Sync + 'static,
+        S: PeriodicSchedule,
+    {
+        Self::conditional_with_options(schedule, constructor, PeriodicJobOpts::new())
+    }
+
+    /// Creates a conditional periodic job with registration options.
+    pub fn conditional_with_options<A, S, F>(
+        schedule: S,
+        constructor: F,
+        opts: PeriodicJobOpts,
+    ) -> Self
     where
         A: JobArgs,
         F: Fn() -> Option<(A, InsertOpts)> + Send + Sync + 'static,
@@ -113,6 +227,7 @@ impl PeriodicJob {
                     return Ok(None);
                 };
                 Ok(Some(PeriodicInsert {
+                    defaults: A::default_insert_opts(),
                     encoded_args: serde_json::to_value(args)?,
                     kind: A::KIND,
                     opts,
@@ -123,19 +238,14 @@ impl PeriodicJob {
             schedule: Arc::new(schedule),
         }
     }
+}
 
-    /// Creates a periodic job that always inserts using type defaults.
-    pub fn with_defaults<A, S, F>(schedule: S, constructor: F, opts: PeriodicJobOpts) -> Self
-    where
-        A: JobArgs,
-        F: Fn() -> A + Send + Sync + 'static,
-        S: PeriodicSchedule,
-    {
-        Self::new(
-            schedule,
-            move || Some((constructor(), A::default_insert_opts())),
-            opts,
-        )
+impl fmt::Debug for PeriodicJob {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PeriodicJob")
+            .field("opts", &self.opts)
+            .finish_non_exhaustive()
     }
 }
 
@@ -156,9 +266,24 @@ pub(crate) struct PeriodicRegistry {
 }
 
 /// Dynamically configurable periodic jobs for a client.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct PeriodicJobs {
     pub(crate) registry: Arc<Mutex<PeriodicRegistry>>,
+}
+
+impl fmt::Debug for PeriodicJobs {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = formatter.debug_struct("PeriodicJobs");
+        match self.registry.try_lock() {
+            Ok(registry) => {
+                debug.field("len", &registry.entries.len());
+            }
+            Err(_) => {
+                debug.field("state", &"locked");
+            }
+        }
+        debug.finish_non_exhaustive()
+    }
 }
 
 impl PeriodicJobs {
@@ -249,19 +374,21 @@ impl PeriodicJobs {
         for (job, target) in due {
             let result = (job.constructor)();
             match result {
-                Ok(Some(mut insert)) => {
-                    insert.opts.scheduled_at.get_or_insert(target);
-                    insert
-                        .opts
-                        .metadata
-                        .insert("periodic".to_owned(), true.into());
+                Ok(Some(insert)) => {
+                    let mut opts = InsertOpts::resolve(
+                        client.default_max_attempts(),
+                        insert.defaults.clone(),
+                        insert.opts.clone(),
+                    );
+                    opts.scheduled_at.get_or_insert(target);
+                    opts.metadata.insert("periodic".to_owned(), true.into());
                     if let Some(id) = &job.opts.id {
-                        insert.opts.metadata.insert(
+                        opts.metadata.insert(
                             crate::METADATA_KEY_PERIODIC_JOB_ID.to_owned(),
                             id.clone().into(),
                         );
                     }
-                    if let Err(error) = client.insert_periodic(insert).await {
+                    if let Err(error) = client.insert_periodic(insert, opts).await {
                         tracing::error!(error = %error, "River periodic job insertion failed");
                     }
                 }
@@ -295,14 +422,16 @@ fn validate_jobs(jobs: &[PeriodicJob], existing_ids: &HashSet<String>) -> Result
     for job in jobs {
         if let Some(id) = &job.opts.id {
             if id.is_empty() {
-                return Err(Error::InvalidJob(
+                return Err(Error::invalid_job_context(
+                    "periodic job",
                     "periodic job ID cannot be empty".to_owned(),
                 ));
             }
             if !ids.insert(id.clone()) {
-                return Err(Error::InvalidJob(format!(
-                    "periodic job with ID already registered: {id}"
-                )));
+                return Err(Error::invalid_job_context(
+                    "periodic job",
+                    format!("periodic job with ID already registered: {id}"),
+                ));
             }
         }
     }
@@ -322,19 +451,16 @@ mod tests {
     }
 
     fn job(id: &str) -> PeriodicJob {
-        PeriodicJob::with_defaults(
+        PeriodicJob::with_options(
             NeverSchedule,
             || TestArgs,
-            PeriodicJobOpts {
-                id: Some(id.to_owned()),
-                run_on_start: false,
-            },
+            PeriodicJobOpts::new().with_id(id),
         )
     }
 
     #[tokio::test]
     async fn dynamic_registration_is_atomic_and_removable() {
-        let jobs = PeriodicJobs::default();
+        let jobs = PeriodicJobs::from_jobs(Vec::new()).unwrap();
         let first = jobs.add(job("first")).await.unwrap();
         let added = jobs
             .add_many(vec![job("second"), job("third")])

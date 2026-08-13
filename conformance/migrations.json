@@ -1,4 +1,5 @@
 {
+  "database": "postgres",
   "files": [
     {
       "path": "riverdriver/riverpgxv5/migration/main/001_create_river_migration.down.sql",

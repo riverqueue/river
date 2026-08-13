@@ -1,12 +1,56 @@
 //! Ordered hooks, middleware, and plugin registration.
 
-use std::{sync::Arc, time::Duration};
+use std::{fmt, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::{Error, InsertOpts, JobRow, PeriodicJobs, WorkContext};
+use crate::{Error, InsertParams, JobRow, PeriodicJobs, WorkContext};
+
+/// Cloneable worker error passed to hooks and error handlers.
+#[derive(Clone)]
+pub struct WorkError {
+    message: String,
+    source: Arc<dyn std::error::Error + Send + Sync>,
+}
+
+impl WorkError {
+    pub(crate) fn new(error: Box<dyn std::error::Error + Send + Sync>) -> Self {
+        let message = error.to_string();
+        Self {
+            message,
+            source: error.into(),
+        }
+    }
+
+    /// Returns the concrete worker error for inspection or downcasting.
+    #[must_use]
+    pub fn source_ref(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+        self.source.as_ref()
+    }
+}
+
+impl fmt::Debug for WorkError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WorkError")
+            .field("message", &self.message)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Display for WorkError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for WorkError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
 
 /// Name of an internal runtime metric emitted to hooks.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,17 +85,18 @@ impl Metric {
 
 /// Mutable type-erased insertion data visible to extensions.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct InsertContext {
     /// Serialized arguments that will be persisted and hashed.
     pub encoded_args: Value,
     /// Stable job kind.
     pub kind: String,
     /// Insertion options.
-    pub opts: InsertOpts,
+    pub opts: InsertParams,
 }
 
 /// Public summary of a worker result passed to extensions.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum WorkResult {
     /// Worker requested cancellation.
@@ -61,7 +106,7 @@ pub enum WorkResult {
     /// Worker requested terminal discard.
     Discarded,
     /// Worker returned an error.
-    Failed(String),
+    Failed(WorkError),
     /// Worker panicked.
     Panicked(String),
     /// Worker was aborted after ignoring cancellation.
@@ -77,7 +122,8 @@ pub enum WorkResult {
 pub trait Hook: Send + Sync + 'static {
     /// Decodes a persisted row before River constructs a typed insertion
     /// result. This is the inverse of any storage transformation performed by
-    /// [`Hook::insert_begin`].
+    /// [`Hook::insert_begin`]. Decode hooks run in reverse registration order
+    /// so nested transformations compose correctly.
     async fn decode_insert_result(&self, _job: &mut JobRow) -> Result<(), Error> {
         Ok(())
     }
@@ -196,15 +242,14 @@ impl RetryPolicy for DefaultRetryPolicy {
 }
 
 /// Result override returned by an error handler.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ErrorHandlerResult {
-    /// Cancel immediately regardless of remaining attempts, matching River's
-    /// cross-language error-handler cancellation override.
-    pub cancel: bool,
-    /// Discard immediately regardless of remaining attempts.
-    pub discard: bool,
-    /// Override the retry delay.
-    pub retry_after: Option<Duration>,
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ErrorHandlerDecision {
+    /// Continue normal retry or discard handling.
+    #[default]
+    Continue,
+    /// Cancel immediately regardless of remaining attempts.
+    Cancel,
 }
 
 /// Handler invoked for worker errors, panics, and forced task abortion.
@@ -216,8 +261,8 @@ pub trait ErrorHandler: Send + Sync + 'static {
         _context: &WorkContext,
         _job: &JobRow,
         _result: &WorkResult,
-    ) -> Result<ErrorHandlerResult, Error> {
-        Ok(ErrorHandlerResult::default())
+    ) -> Result<ErrorHandlerDecision, Error> {
+        Ok(ErrorHandlerDecision::default())
     }
 
     /// Observes a job that exceeded its cancellation grace period.

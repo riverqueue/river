@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -22,16 +23,18 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	_ "modernc.org/sqlite"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivermigrate"
 	"github.com/riverqueue/river/rivertype"
 )
 
 const (
-	adapterVersion   = 9
+	adapterVersion   = 11
 	protocolRevision = 1
 )
 
@@ -63,8 +66,10 @@ var adapterMethods = []string{ //nolint:gochecknoglobals
 	"queue_remove",
 	"queue_resume",
 	"queue_update",
+	"raw_finalize",
 	"raw_insert_full_row",
 	"raw_insert_no_notify",
+	"raw_job_timestamps",
 	"request_resign",
 	"reset",
 	"retry",
@@ -124,6 +129,73 @@ var capabilities = []string{ //nolint:gochecknoglobals
 	"transactions",
 	"unique_jobs",
 	"work",
+}
+
+var sqliteAdapterMethods = []string{ //nolint:gochecknoglobals
+	"cancel",
+	"clock_set",
+	"delete",
+	"delete_many",
+	"get",
+	"handshake",
+	"insert",
+	"insert_many",
+	"insert_many_fast",
+	"list",
+	"migrate",
+	"raw_job_timestamps",
+	"reset",
+	"retry",
+	"retry_delay",
+	"rng_seed",
+	"tx_begin",
+	"tx_cancel",
+	"tx_commit",
+	"tx_delete",
+	"tx_delete_many",
+	"tx_get",
+	"tx_insert",
+	"tx_insert_many",
+	"tx_insert_many_fast",
+	"tx_list",
+	"tx_retry",
+	"tx_rollback",
+	"tx_update",
+	"unique_key",
+	"update",
+}
+
+var sqliteCapabilities = []string{ //nolint:gochecknoglobals
+	"cancel",
+	"deterministic_controls",
+	"fast_insert",
+	"get",
+	"insert",
+	"job_crud",
+	"lifecycle",
+	"migrate",
+	"reset",
+	"retry",
+	"transactions",
+	"unique_jobs",
+}
+
+var sqliteRuntimeCapabilities = []string{ //nolint:gochecknoglobals
+	"barriers", "cancel", "deterministic_controls", "extensions", "fast_insert", "get", "insert",
+	"job_crud", "leadership", "lifecycle", "migrate", "notifications",
+	"periodic_jobs", "poll_only", "queues", "reset", "resumable_jobs", "retry", "scheduler",
+	"subscriptions", "transactions", "unique_jobs", "work",
+}
+
+var sqliteRuntimeMethods = []string{ //nolint:gochecknoglobals
+	"barrier_create", "barrier_release", "cancel", "clock_set", "delete", "delete_many", "get",
+	"handshake", "insert", "insert_many", "insert_many_fast", "leader", "list", "migrate",
+	"queue_add", "queue_get", "queue_list", "queue_pause", "queue_remove", "queue_resume",
+	"queue_update", "raw_finalize", "raw_insert_no_notify", "raw_job_timestamps", "request_resign", "reset", "retry", "retry_delay",
+	"rng_seed", "runtime_stats", "start", "stop", "tx_begin", "tx_cancel", "tx_commit",
+	"tx_delete", "tx_delete_many", "tx_get", "tx_insert", "tx_insert_many", "tx_insert_many_fast",
+	"tx_list", "tx_queue_get", "tx_queue_list", "tx_queue_pause", "tx_queue_resume",
+	"tx_queue_update", "tx_retry", "tx_rollback", "tx_update", "unique_key", "update", "wait", "work",
 }
 
 type request struct {
@@ -206,8 +278,14 @@ type conformanceWorker struct {
 
 func (w *conformanceWorker) Work(ctx context.Context, job *river.Job[conformanceArgs]) error {
 	switch job.Args.Behavior {
-	case "barrier_wait":
-		return w.barriers.wait(ctx, job.Args.Message)
+	case "barrier_output", "barrier_wait":
+		if err := w.barriers.wait(ctx, job.Args.Message); err != nil {
+			return err
+		}
+		if job.Args.Behavior == "barrier_output" {
+			return river.RecordOutput(ctx, map[string]any{"race": "worker"})
+		}
+		return nil
 	case "cancel":
 		return river.JobCancel(errors.New("cancelled by conformance worker"))
 	case "cooperative_cancel":
@@ -258,6 +336,9 @@ func (w *conformanceWorker) Work(ctx context.Context, job *river.Job[conformance
 			return nil
 		})
 	case "transactional_complete":
+		if w.pool == nil {
+			return errors.New("transactional completion is unavailable for this backend")
+		}
 		if err := river.MetadataSet(ctx, "transactional_completion", true); err != nil {
 			return err
 		}
@@ -579,6 +660,66 @@ func (p insertOptsParams) opts() (*river.InsertOpts, error) {
 	return opts, nil
 }
 
+func handleUniqueKey(rawParams json.RawMessage) (any, error) {
+	var params uniqueKeyParams
+	if err := json.Unmarshal(rawParams, &params); err != nil {
+		return nil, err
+	}
+	args, err := params.jobArgs()
+	if err != nil {
+		return nil, err
+	}
+	opts := &dbunique.UniqueOpts{
+		ByArgs:      params.Options.ByArgs,
+		ByPeriod:    time.Duration(params.Options.ByPeriodNanos),
+		ByQueue:     params.Options.ByQueue,
+		ByState:     params.Options.ByState,
+		ExcludeKind: params.Options.ExcludeKind,
+	}
+	key, err := dbunique.UniqueKey(fixedClock{now: params.Now}, opts, &rivertype.JobInsertParams{
+		Args:         args,
+		EncodedArgs:  params.Args,
+		Kind:         params.Kind,
+		Queue:        params.Queue,
+		ScheduledAt:  params.ScheduledAt,
+		UniqueStates: opts.StateBitmask(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"sha256":     hex.EncodeToString(key),
+		"state_mask": opts.StateBitmask(),
+	}, nil
+}
+
+func handleQueueAdd(
+	ctx context.Context,
+	rawParams json.RawMessage,
+	addFunc func(string, river.QueueConfig) error,
+	removeFunc func(context.Context, string) error,
+) (any, error) {
+	var params struct {
+		MaxWorkers int    `json:"max_workers"`
+		Name       string `json:"name"`
+	}
+	if err := json.Unmarshal(rawParams, &params); err != nil {
+		return nil, err
+	}
+	if params.MaxWorkers == 0 {
+		params.MaxWorkers = 1
+	}
+	err := addFunc(params.Name, river.QueueConfig{MaxWorkers: params.MaxWorkers})
+	var alreadyAddedErr *river.QueueAlreadyAddedError
+	if errors.As(err, &alreadyAddedErr) {
+		if err := removeFunc(ctx, params.Name); err != nil {
+			return nil, err
+		}
+		err = addFunc(params.Name, river.QueueConfig{MaxWorkers: params.MaxWorkers})
+	}
+	return map[string]any{}, err
+}
+
 type runningClient struct {
 	client             *river.Client[pgx.Tx]
 	probe              *runtimeProbe
@@ -595,6 +736,27 @@ type adapterState struct {
 	transactions map[string]pgx.Tx
 }
 
+type requestHandler interface {
+	handle(ctx context.Context, request *request) (any, error)
+}
+
+type sqliteAdapterState struct {
+	barriers     *barrierRegistry
+	clock        *time.Time
+	pool         *sql.DB
+	profile      string
+	rngSeed      uint64
+	running      *sqliteRunningClient
+	transactions map[string]*sql.Tx
+}
+
+type sqliteRunningClient struct {
+	client             *river.Client[*sql.Tx]
+	probe              *runtimeProbe
+	subscription       <-chan *river.Event
+	subscriptionCancel func()
+}
+
 func main() {
 	if err := run(context.Background()); err != nil {
 		fmt.Fprintln(os.Stderr, "River Go conformance adapter:", err)
@@ -606,6 +768,48 @@ func run(ctx context.Context) error {
 	databaseURL := os.Getenv("RIVER_CONFORMANCE_DATABASE_URL")
 	if databaseURL == "" {
 		return errors.New("RIVER_CONFORMANCE_DATABASE_URL is required")
+	}
+	databaseKind := os.Getenv("RIVER_CONFORMANCE_DATABASE_KIND")
+	if databaseKind == "sqlite" {
+		profile := os.Getenv("RIVER_CONFORMANCE_PROFILE")
+		if profile == "" {
+			profile = "portable-storage-v1"
+		}
+		if profile != "portable-storage-v1" && profile != "sqlite-runtime-v1" {
+			return fmt.Errorf("unsupported SQLite conformance profile %q", profile)
+		}
+		pool, err := sql.Open("sqlite", databaseURL)
+		if err != nil {
+			return err
+		}
+		defer pool.Close()
+		pool.SetMaxOpenConns(1)
+		if _, err := pool.ExecContext(ctx, "PRAGMA journal_mode = WAL"); err != nil {
+			return fmt.Errorf("enable SQLite WAL: %w", err)
+		}
+		if _, err := pool.ExecContext(ctx, "PRAGMA busy_timeout = 5000"); err != nil {
+			return fmt.Errorf("set SQLite busy timeout: %w", err)
+		}
+		if _, err := pool.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
+			return fmt.Errorf("enable SQLite foreign keys: %w", err)
+		}
+		state := &sqliteAdapterState{
+			barriers:     newBarrierRegistry(),
+			pool:         pool,
+			profile:      profile,
+			transactions: make(map[string]*sql.Tx),
+		}
+		err = runRequestLoop(ctx, state)
+		if state.running != nil {
+			stopCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			_ = state.running.client.StopAndCancel(stopCtx)
+			state.running.subscriptionCancel()
+		}
+		return err
+	}
+	if databaseKind != "" && databaseKind != "postgres" {
+		return fmt.Errorf("unsupported RIVER_CONFORMANCE_DATABASE_KIND %q", databaseKind)
 	}
 	poolConfig, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
@@ -622,7 +826,17 @@ func run(ctx context.Context) error {
 		pool:         pool,
 		transactions: make(map[string]pgx.Tx),
 	}
+	err = runRequestLoop(ctx, state)
+	if state.running != nil {
+		stopCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		_ = state.running.client.StopAndCancel(stopCtx)
+		state.running.subscriptionCancel()
+	}
+	return err
+}
 
+func runRequestLoop(ctx context.Context, state requestHandler) error {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	encoder := json.NewEncoder(os.Stdout)
@@ -650,12 +864,6 @@ func run(ctx context.Context) error {
 			return err
 		}
 	}
-	if state.running != nil {
-		stopCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		_ = state.running.client.StopAndCancel(stopCtx)
-		state.running.subscriptionCancel()
-	}
 	return scanner.Err()
 }
 
@@ -665,11 +873,13 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 	case "handshake":
 		return map[string]any{
 			"adapter_version":        adapterVersion,
+			"backend":                "postgres",
 			"capabilities":           capabilities,
 			"implementation":         "go",
-			"implementation_version": "0.43.0-development",
+			"implementation_version": "0.44.0-development",
 			"methods":                adapterMethods,
 			"migration_lines":        map[string]int{"main": 7},
+			"profile":                "postgres-full-v1",
 			"protocol_revision":      protocolRevision,
 		}, nil
 
@@ -790,36 +1000,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		return map[string]any{"delay_ns": delay.Nanoseconds()}, nil
 
 	case "unique_key":
-		var params uniqueKeyParams
-		if err := json.Unmarshal(req.Params, &params); err != nil {
-			return nil, err
-		}
-		args, err := params.jobArgs()
-		if err != nil {
-			return nil, err
-		}
-		opts := &dbunique.UniqueOpts{
-			ByArgs:      params.Options.ByArgs,
-			ByPeriod:    time.Duration(params.Options.ByPeriodNanos),
-			ByQueue:     params.Options.ByQueue,
-			ByState:     params.Options.ByState,
-			ExcludeKind: params.Options.ExcludeKind,
-		}
-		key, err := dbunique.UniqueKey(fixedClock{now: params.Now}, opts, &rivertype.JobInsertParams{
-			Args:         args,
-			EncodedArgs:  params.Args,
-			Kind:         params.Kind,
-			Queue:        params.Queue,
-			ScheduledAt:  params.ScheduledAt,
-			UniqueStates: opts.StateBitmask(),
-		})
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{
-			"sha256":     hex.EncodeToString(key),
-			"state_mask": opts.StateBitmask(),
-		}, nil
+		return handleUniqueKey(req.Params)
 
 	case "barrier_create", "barrier_release":
 		var params struct {
@@ -1009,29 +1190,61 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		}
 		return normalizeJob(job), nil
 
-	case "queue_add":
-		if s.running == nil {
-			return nil, errors.New("queue_add requires a running client")
-		}
+	case "raw_finalize":
 		var params struct {
-			MaxWorkers int    `json:"max_workers"`
-			Name       string `json:"name"`
+			ID       int64          `json:"id"`
+			Metadata map[string]any `json:"metadata"`
+			State    string         `json:"state"`
 		}
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			return nil, err
 		}
-		if params.MaxWorkers == 0 {
-			params.MaxWorkers = 1
+		if params.State != "completed" && params.State != "discarded" {
+			return nil, errors.New("state must be completed or discarded")
 		}
-		err := s.running.client.Queues().Add(params.Name, river.QueueConfig{MaxWorkers: params.MaxWorkers})
-		var alreadyAddedErr *river.QueueAlreadyAddedError
-		if errors.As(err, &alreadyAddedErr) {
-			if err := s.running.client.Queues().Remove(ctx, params.Name); err != nil {
-				return nil, err
-			}
-			err = s.running.client.Queues().Add(params.Name, river.QueueConfig{MaxWorkers: params.MaxWorkers})
+		metadata, err := json.Marshal(params.Metadata)
+		if err != nil {
+			return nil, err
 		}
-		return map[string]any{}, err
+		attemptError, err := json.Marshal(map[string]any{
+			"at":      "2026-02-03T04:05:06.789Z",
+			"attempt": 1,
+			"error":   "external discard",
+			"trace":   "external trace",
+		})
+		if err != nil {
+			return nil, err
+		}
+		commandTag, err := s.pool.Exec(ctx, `
+			UPDATE river_job
+			SET errors = CASE WHEN $2 = 'discarded' THEN array_append(errors, $4::jsonb) ELSE errors END,
+				finalized_at = $5::timestamptz,
+				metadata = metadata || $3::jsonb,
+				state = $2::river_job_state
+			WHERE id = $1 AND state = 'running'`,
+			params.ID, params.State, metadata, attemptError, "2026-02-03T04:05:06.789Z",
+		)
+		if err != nil {
+			return nil, err
+		}
+		if commandTag.RowsAffected() != 1 {
+			return nil, errors.New("running job not found")
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		job, err := client.JobGet(ctx, params.ID)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "queue_add":
+		if s.running == nil {
+			return nil, errors.New("queue_add requires a running client")
+		}
+		return handleQueueAdd(ctx, req.Params, s.running.client.Queues().Add, s.running.client.Queues().Remove)
 
 	case "queue_get":
 		var params struct {
@@ -1231,6 +1444,18 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			return nil, err
 		}
 		return normalizeJob(job), nil
+
+	case "raw_job_timestamps":
+		id, err := requestID(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		var createdAt, scheduledAt string
+		err = s.pool.QueryRow(ctx, `
+			SELECT created_at::text, scheduled_at::text
+			FROM river_job
+			WHERE id = $1`, id).Scan(&createdAt, &scheduledAt)
+		return map[string]any{"created_at": createdAt, "scheduled_at": scheduledAt}, err
 
 	case "start":
 		if s.running != nil {
@@ -1696,6 +1921,834 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 	return nil, fmt.Errorf("method not found: %s", req.Method)
 }
 
+//nolint:cyclop,funlen,gocognit,maintidx
+func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, error) {
+	switch req.Method {
+	case "handshake":
+		methods, profileCapabilities := sqliteAdapterMethods, sqliteCapabilities
+		if s.profile == "sqlite-runtime-v1" {
+			methods, profileCapabilities = sqliteRuntimeMethods, sqliteRuntimeCapabilities
+		}
+		return map[string]any{
+			"adapter_version":        adapterVersion,
+			"backend":                "sqlite",
+			"capabilities":           profileCapabilities,
+			"implementation":         "go",
+			"implementation_version": "0.44.0-development",
+			"methods":                methods,
+			"migration_lines":        map[string]int{"main": 7},
+			"profile":                s.profile,
+			"protocol_revision":      protocolRevision,
+		}, nil
+
+	case "migrate":
+		var params struct {
+			Direction     string `json:"direction"`
+			DryRun        bool   `json:"dry_run"`
+			MaxSteps      *int   `json:"max_steps"`
+			Schema        string `json:"schema"`
+			TargetVersion *int   `json:"target_version"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.Schema != "" {
+			return nil, errors.New("SQLite conformance does not support custom schemas")
+		}
+		migrator, err := rivermigrate.New(riversqlite.New(s.pool), &rivermigrate.Config{Logger: adapterLogger()})
+		if err != nil {
+			return nil, err
+		}
+		direction := rivermigrate.DirectionUp
+		if params.Direction != "" {
+			direction = rivermigrate.Direction(params.Direction)
+		}
+		var opts *rivermigrate.MigrateOpts
+		if params.DryRun || params.MaxSteps != nil || params.TargetVersion != nil {
+			opts = &rivermigrate.MigrateOpts{DryRun: params.DryRun}
+			if params.MaxSteps != nil {
+				opts.MaxSteps = *params.MaxSteps
+			}
+			if params.TargetVersion != nil {
+				opts.TargetVersion = *params.TargetVersion
+			}
+		}
+		result, err := migrator.Migrate(ctx, direction, opts)
+		if err != nil {
+			return nil, err
+		}
+		versions := make([]int, len(result.Versions))
+		for i, version := range result.Versions {
+			versions[i] = version.Version
+		}
+		existingMigrations, err := migrator.ExistingVersions(ctx)
+		if err != nil {
+			return nil, err
+		}
+		existing := make([]int, len(existingMigrations))
+		for i, migration := range existingMigrations {
+			existing[i] = migration.Version
+		}
+		validation, err := migrator.Validate(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"applied": versions, "existing": existing, "valid": validation.OK}, nil
+
+	case "reset":
+		if len(s.transactions) > 0 {
+			return nil, errors.New("reset requires no open transaction")
+		}
+		for _, table := range []string{
+			"river_notification", "river_job", "river_queue", "river_leader",
+		} {
+			// #nosec G202 -- Table names are fixed constants above, never request input.
+			if _, err := s.pool.ExecContext(ctx, "DELETE FROM "+table); err != nil {
+				return nil, err
+			}
+		}
+		return map[string]any{}, nil
+
+	case "clock_set":
+		var params struct {
+			Now time.Time `json:"now"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		s.clock = &params.Now
+		return map[string]any{}, nil
+
+	case "rng_seed":
+		var params struct {
+			Seed uint64 `json:"seed"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		s.rngSeed = params.Seed
+		return map[string]any{}, nil
+
+	case "retry_delay":
+		if s.clock == nil {
+			return nil, errors.New("clock_set is required before retry_delay")
+		}
+		var params struct {
+			ErrorCount uint32 `json:"error_count"`
+			JobID      int64  `json:"job_id"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.ErrorCount < 1 {
+			return nil, errors.New("error_count must be positive")
+		}
+		delay := deterministicRetryDelay(*s.clock, params.JobID, params.ErrorCount, s.rngSeed)
+		return map[string]any{"delay_ns": delay.Nanoseconds()}, nil
+
+	case "unique_key":
+		return handleUniqueKey(req.Params)
+
+	case "insert":
+		var params insertParams
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.Schema != "" {
+			return nil, errors.New("SQLite conformance does not support custom schemas")
+		}
+		opts, err := params.Opts.opts()
+		if err != nil {
+			return nil, err
+		}
+		result, err := s.client().Insert(ctx, params.args(), opts)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(result.Job), nil
+
+	case "insert_many", "insert_many_fast":
+		jobs, err := decodeInsertManyParams(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		if req.Method == "insert_many_fast" {
+			count, err := s.client().InsertManyFast(ctx, jobs)
+			return map[string]any{"count": count}, err
+		}
+		results, err := s.client().InsertMany(ctx, jobs)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeInsertManyResults(results), nil
+
+	case "raw_insert_no_notify":
+		var params insertParams
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		encodedArgs, err := json.Marshal(params.args())
+		if err != nil {
+			return nil, err
+		}
+		kind := params.Kind
+		if kind == "" {
+			kind = "conformance_echo"
+		}
+		maxAttempts := 25
+		if params.Opts.MaxAttempts != nil {
+			maxAttempts = *params.Opts.MaxAttempts
+		}
+		var id int64
+		err = s.pool.QueryRowContext(ctx,
+			"INSERT INTO river_job (args, kind, max_attempts) VALUES (jsonb(?), ?, ?) RETURNING id",
+			string(encodedArgs), kind, maxAttempts,
+		).Scan(&id)
+		if err != nil {
+			return nil, err
+		}
+		job, err := s.client().JobGet(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "get": //nolint:usestdlibvars // JSON-RPC method names are lowercase protocol values.
+		var params struct {
+			ID     int64  `json:"id"`
+			Schema string `json:"schema"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.Schema != "" {
+			return nil, errors.New("SQLite conformance does not support custom schemas")
+		}
+		job, err := s.client().JobGet(ctx, params.ID)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "list":
+		params, err := makeJobListParams(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		result, err := s.client().JobList(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJobListResult(result)
+
+	case "cancel", "delete", "retry": //nolint:usestdlibvars // JSON-RPC method names are lowercase protocol values.
+		id, err := requestID(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		client := s.client()
+		var job *rivertype.JobRow
+		switch req.Method {
+		case "cancel":
+			job, err = client.JobCancel(ctx, id)
+		case "delete": //nolint:usestdlibvars // JSON-RPC method names are lowercase protocol values.
+			job, err = client.JobDelete(ctx, id)
+		case "retry":
+			job, err = client.JobRetry(ctx, id)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "delete_many":
+		params, err := makeJobDeleteManyParams(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		result, err := s.client().JobDeleteMany(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"jobs": normalizeJobs(result.Jobs)}, nil
+
+	case "update":
+		var params struct {
+			ID     int64 `json:"id"`
+			Output any   `json:"output"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		job, err := s.client().JobUpdate(ctx, params.ID, &river.JobUpdateParams{Output: params.Output})
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "raw_finalize":
+		var params struct {
+			ID       int64          `json:"id"`
+			Metadata map[string]any `json:"metadata"`
+			State    string         `json:"state"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.State != "completed" && params.State != "discarded" {
+			return nil, errors.New("state must be completed or discarded")
+		}
+		metadata, err := json.Marshal(params.Metadata)
+		if err != nil {
+			return nil, err
+		}
+		attemptError, err := json.Marshal(map[string]any{
+			"at":      "2026-02-03T04:05:06.789Z",
+			"attempt": 1,
+			"error":   "external discard",
+			"trace":   "external trace",
+		})
+		if err != nil {
+			return nil, err
+		}
+		result, err := s.pool.ExecContext(ctx, `
+			UPDATE river_job
+			SET errors = CASE WHEN ? = 'discarded'
+					THEN jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(?)))
+					ELSE errors END,
+				finalized_at = ?,
+				metadata = jsonb_patch(json(metadata), json(?)),
+				state = ?
+			WHERE id = ? AND state = 'running'`,
+			params.State, string(attemptError), "2026-02-03 04:05:06.789",
+			string(metadata), params.State, params.ID,
+		)
+		if err != nil {
+			return nil, err
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if rowsAffected != 1 {
+			return nil, errors.New("running job not found")
+		}
+		job, err := s.client().JobGet(ctx, params.ID)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "raw_job_timestamps":
+		id, err := requestID(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		var createdAt, scheduledAt string
+		err = s.pool.QueryRowContext(ctx, `
+			SELECT CAST(created_at AS TEXT), CAST(scheduled_at AS TEXT)
+			FROM river_job
+			WHERE id = ?`, id).Scan(&createdAt, &scheduledAt)
+		return map[string]any{"created_at": createdAt, "scheduled_at": scheduledAt}, err
+
+	case "barrier_create", "barrier_release":
+		var params struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if req.Method == "barrier_create" {
+			return map[string]any{}, s.barriers.create(params.Name)
+		}
+		return map[string]any{}, s.barriers.release(params.Name)
+
+	case "queue_add":
+		if s.running == nil {
+			return nil, errors.New("queue_add requires a running client")
+		}
+		return handleQueueAdd(ctx, req.Params, s.running.client.Queues().Add, s.running.client.Queues().Remove)
+
+	case "queue_get":
+		var params struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		queue, err := s.client().QueueGet(ctx, params.Name)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeQueue(queue), nil
+
+	case "queue_list":
+		var params struct {
+			Limit int `json:"limit"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.Limit == 0 {
+			params.Limit = 100
+		}
+		result, err := s.client().QueueList(ctx, river.NewQueueListParams().First(params.Limit))
+		if err != nil {
+			return nil, err
+		}
+		queues := make([]any, len(result.Queues))
+		for i, queue := range result.Queues {
+			queues[i] = normalizeQueue(queue)
+		}
+		return map[string]any{"queues": queues}, nil
+
+	case "queue_pause", "queue_resume":
+		var params struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if req.Method == "queue_pause" {
+			return map[string]any{}, s.client().QueuePause(ctx, params.Name, nil)
+		}
+		return map[string]any{}, s.client().QueueResume(ctx, params.Name, nil)
+
+	case "queue_remove":
+		if s.running == nil {
+			return nil, errors.New("queue_remove requires a running client")
+		}
+		var params struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		return map[string]any{}, s.running.client.Queues().Remove(ctx, params.Name)
+
+	case "queue_update":
+		var params struct {
+			Metadata json.RawMessage `json:"metadata"`
+			Name     string          `json:"name"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		queue, err := s.client().QueueUpdate(ctx, params.Name, &river.QueueUpdateParams{Metadata: params.Metadata})
+		if err != nil {
+			return nil, err
+		}
+		return normalizeQueue(queue), nil
+
+	case "leader":
+		var leaderID string
+		var electedAt time.Time
+		err := s.pool.QueryRowContext(ctx,
+			"SELECT leader_id, elected_at FROM river_leader WHERE name = 'default' AND expires_at >= CURRENT_TIMESTAMP",
+		).Scan(&leaderID, &electedAt)
+		if errors.Is(err, sql.ErrNoRows) {
+			return map[string]any{"elected_at": nil, "leader_id": nil}, nil
+		}
+		return map[string]any{"elected_at": formatTime(electedAt), "leader_id": leaderID}, err
+
+	case "request_resign":
+		return map[string]any{}, s.client().Notify().RequestResign(ctx)
+
+	case "start":
+		if s.running != nil {
+			return nil, errors.New("client already running")
+		}
+		var params struct {
+			ClientID            string  `json:"client_id"`
+			ErrorHandlerCancel  bool    `json:"error_handler_cancel"`
+			FetchPollIntervalMS *uint64 `json:"fetch_poll_interval_ms"`
+			Instrumented        bool    `json:"instrumented"`
+			JobStuckThresholdMS *uint64 `json:"job_stuck_threshold_ms"`
+			JobTimeoutMS        *uint64 `json:"job_timeout_ms"`
+			MaxWorkers          int     `json:"max_workers"`
+			PeriodicRunOnStart  bool    `json:"periodic_run_on_start"`
+			PollOnly            bool    `json:"poll_only"`
+			Queue               string  `json:"queue"`
+			RetryDelayMS        *uint64 `json:"retry_delay_ms"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.MaxWorkers == 0 {
+			params.MaxWorkers = 4
+		}
+		if params.Queue == "" {
+			params.Queue = river.QueueDefault
+		}
+		probe := &runtimeProbe{}
+		client, err := newSQLiteWorkerClient(s.pool, s.barriers, workerClientConfig{
+			errorHandlerCancel: params.ErrorHandlerCancel, fetchPollIntervalMS: params.FetchPollIntervalMS,
+			id: params.ClientID, instrumented: params.Instrumented,
+			jobStuckThresholdMS: params.JobStuckThresholdMS, jobTimeoutMS: params.JobTimeoutMS,
+			maxWorkers: params.MaxWorkers, periodicRunOnStart: params.PeriodicRunOnStart,
+			pollOnly: params.PollOnly, probe: probe, queue: params.Queue, retryDelayMS: params.RetryDelayMS,
+		})
+		if err != nil {
+			return nil, err
+		}
+		subscription, subscriptionCancel := client.Subscribe(
+			river.EventKindJobCancelled, river.EventKindJobCompleted, river.EventKindJobFailed,
+			river.EventKindJobInterrupted, river.EventKindJobSnoozed,
+			river.EventKindQueuePaused, river.EventKindQueueResumed,
+		)
+		if err := client.Start(ctx); err != nil {
+			subscriptionCancel()
+			return nil, err
+		}
+		s.running = &sqliteRunningClient{client: client, probe: probe, subscription: subscription, subscriptionCancel: subscriptionCancel}
+		return map[string]any{}, nil
+
+	case "stop":
+		if s.running == nil {
+			return nil, errors.New("client is not running")
+		}
+		var params struct {
+			Cancel bool `json:"cancel"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		stopCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		var err error
+		if params.Cancel {
+			err = s.running.client.StopAndCancel(stopCtx)
+		} else {
+			err = s.running.client.Stop(stopCtx)
+		}
+		s.running.subscriptionCancel()
+		s.running = nil
+		return map[string]any{}, err
+
+	case "runtime_stats":
+		if s.running == nil {
+			return nil, errors.New("runtime_stats requires a running client")
+		}
+		for {
+			select {
+			case event := <-s.running.subscription:
+				if event != nil {
+					s.running.probe.addEvent(event.Kind)
+				}
+			default:
+				return s.running.probe.snapshot(), nil
+			}
+		}
+
+	case "wait":
+		var params struct {
+			ID     int64                `json:"id"`
+			States []rivertype.JobState `json:"states"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		job, err := waitForStates(ctx, s.client(), params.ID, params.States)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "work":
+		var params struct {
+			ClientID string `json:"client_id"`
+			ID       int64  `json:"id"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.ClientID == "" {
+			params.ClientID = "go-conformance-adapter"
+		}
+		probe := &runtimeProbe{}
+		client, err := newSQLiteWorkerClient(s.pool, s.barriers, workerClientConfig{
+			id: params.ClientID, maxWorkers: 1, probe: probe, queue: river.QueueDefault,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if err := client.Start(ctx); err != nil {
+			return nil, err
+		}
+		job, waitErr := waitForStates(ctx, client, params.ID, nil)
+		stopCtx, stopCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer stopCancel()
+		stopErr := client.Stop(stopCtx)
+		if waitErr != nil {
+			return nil, waitErr
+		}
+		if stopErr != nil {
+			return nil, stopErr
+		}
+		return normalizeJob(job), nil
+
+	case "tx_begin":
+		handle, err := requestHandle(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := s.transactions[handle]; ok {
+			return nil, fmt.Errorf("transaction %q already exists", handle)
+		}
+		tx, err := s.pool.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		s.transactions[handle] = tx
+		return map[string]any{}, nil
+
+	case "tx_insert":
+		var params struct {
+			Handle string       `json:"handle"`
+			Job    insertParams `json:"job"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+		}
+		opts, err := params.Job.Opts.opts()
+		if err != nil {
+			return nil, err
+		}
+		result, err := s.client().InsertTx(ctx, tx, params.Job.args(), opts)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(result.Job), nil
+
+	case "tx_insert_many", "tx_insert_many_fast":
+		var params struct {
+			Handle string          `json:"handle"`
+			Jobs   json.RawMessage `json:"jobs"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+		}
+		jobs, err := decodeInsertManyParams(params.Jobs)
+		if err != nil {
+			return nil, err
+		}
+		if req.Method == "tx_insert_many_fast" {
+			count, err := s.client().InsertManyFastTx(ctx, tx, jobs)
+			return map[string]any{"count": count}, err
+		}
+		results, err := s.client().InsertManyTx(ctx, tx, jobs)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeInsertManyResults(results), nil
+
+	case "tx_get", "tx_cancel", "tx_delete", "tx_retry":
+		var params struct {
+			Handle string `json:"handle"`
+			ID     int64  `json:"id"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+		}
+		client := s.client()
+		var job *rivertype.JobRow
+		var err error
+		switch req.Method {
+		case "tx_cancel":
+			job, err = client.JobCancelTx(ctx, tx, params.ID)
+		case "tx_delete":
+			job, err = client.JobDeleteTx(ctx, tx, params.ID)
+		case "tx_get":
+			job, err = client.JobGetTx(ctx, tx, params.ID)
+		case "tx_retry":
+			job, err = client.JobRetryTx(ctx, tx, params.ID)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "tx_update":
+		var params struct {
+			Handle string `json:"handle"`
+			ID     int64  `json:"id"`
+			Output any    `json:"output"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+		}
+		job, err := s.client().JobUpdateTx(ctx, tx, params.ID, &river.JobUpdateParams{Output: params.Output})
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "tx_list":
+		handle, err := requestHandle(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[handle]
+		if !ok {
+			return nil, fmt.Errorf("transaction %q not found", handle)
+		}
+		params, err := makeJobListParams(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		result, err := s.client().JobListTx(ctx, tx, params)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJobListResult(result)
+
+	case "tx_delete_many":
+		handle, err := requestHandle(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[handle]
+		if !ok {
+			return nil, fmt.Errorf("transaction %q not found", handle)
+		}
+		params, err := makeJobDeleteManyParams(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		result, err := s.client().JobDeleteManyTx(ctx, tx, params)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"jobs": normalizeJobs(result.Jobs)}, nil
+
+	case "tx_queue_get":
+		var params struct {
+			Handle string `json:"handle"`
+			Name   string `json:"name"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+		}
+		queue, err := s.client().QueueGetTx(ctx, tx, params.Name)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeQueue(queue), nil
+
+	case "tx_queue_list":
+		var params struct {
+			Handle string `json:"handle"`
+			Limit  int    `json:"limit"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.Limit == 0 {
+			params.Limit = 100
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+		}
+		result, err := s.client().QueueListTx(ctx, tx, river.NewQueueListParams().First(params.Limit))
+		if err != nil {
+			return nil, err
+		}
+		queues := make([]any, len(result.Queues))
+		for i, queue := range result.Queues {
+			queues[i] = normalizeQueue(queue)
+		}
+		return map[string]any{"queues": queues}, nil
+
+	case "tx_queue_pause", "tx_queue_resume":
+		var params struct {
+			Handle string `json:"handle"`
+			Name   string `json:"name"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+		}
+		var err error
+		if req.Method == "tx_queue_pause" {
+			err = s.client().QueuePauseTx(ctx, tx, params.Name, nil)
+		} else {
+			err = s.client().QueueResumeTx(ctx, tx, params.Name, nil)
+		}
+		return map[string]any{}, err
+
+	case "tx_queue_update":
+		var params struct {
+			Handle   string          `json:"handle"`
+			Metadata json.RawMessage `json:"metadata"`
+			Name     string          `json:"name"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+		}
+		queue, err := s.client().QueueUpdateTx(ctx, tx, params.Name, &river.QueueUpdateParams{Metadata: params.Metadata})
+		if err != nil {
+			return nil, err
+		}
+		return normalizeQueue(queue), nil
+
+	case "tx_commit", "tx_rollback":
+		handle, err := requestHandle(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[handle]
+		if !ok {
+			return nil, fmt.Errorf("transaction %q not found", handle)
+		}
+		delete(s.transactions, handle)
+		if req.Method == "tx_commit" {
+			return map[string]any{}, tx.Commit()
+		}
+		return map[string]any{}, tx.Rollback()
+	}
+
+	return nil, fmt.Errorf("method not found for SQLite profile: %s", req.Method)
+}
+
+func (s *sqliteAdapterState) client() *river.Client[*sql.Tx] {
+	if s.running != nil {
+		return s.running.client
+	}
+	client, err := river.NewClient(riversqlite.New(s.pool), &river.Config{Logger: adapterLogger()})
+	if err != nil {
+		panic(fmt.Sprintf("build SQLite conformance client: %v", err))
+	}
+	return client
+}
+
 func deterministicRetryDelay(now time.Time, jobID int64, errorCount uint32, seed uint64) time.Duration {
 	const maxRetryNanos = int64(math.MaxInt64)
 	baseSeconds := math.Pow(float64(errorCount), 4)
@@ -1762,6 +2815,22 @@ type workerClientConfig struct {
 }
 
 func newWorkerClient(pool *pgxpool.Pool, barriers *barrierRegistry, config workerClientConfig) (*river.Client[pgx.Tx], error) {
+	riverConfig, err := newWorkerConfig(pool, barriers, config)
+	if err != nil {
+		return nil, err
+	}
+	return river.NewClient(riverpgxv5.New(pool), riverConfig)
+}
+
+func newSQLiteWorkerClient(pool *sql.DB, barriers *barrierRegistry, config workerClientConfig) (*river.Client[*sql.Tx], error) {
+	riverConfig, err := newWorkerConfig(nil, barriers, config)
+	if err != nil {
+		return nil, err
+	}
+	return river.NewClient(riversqlite.New(pool), riverConfig)
+}
+
+func newWorkerConfig(pool *pgxpool.Pool, barriers *barrierRegistry, config workerClientConfig) (*river.Config, error) {
 	workers := river.NewWorkers()
 	if err := river.AddWorkerSafely(workers, &conformanceWorker{barriers: barriers, pool: pool, probe: config.probe}); err != nil {
 		return nil, err
@@ -1825,7 +2894,7 @@ func newWorkerClient(pool *pgxpool.Pool, barriers *barrierRegistry, config worke
 		}
 		riverConfig.RetryPolicy = fixedRetryPolicy{delay: duration}
 	}
-	return river.NewClient(riverpgxv5.New(pool), riverConfig)
+	return riverConfig, nil
 }
 
 func adapterLogger() *slog.Logger {
@@ -1848,6 +2917,9 @@ func normalizeJob(job *rivertype.JobRow) map[string]any {
 	var metadata any
 	if err := json.Unmarshal(job.Metadata, &metadata); err != nil {
 		metadata = nil
+	}
+	if metadataObject, ok := metadata.(map[string]any); ok {
+		delete(metadataObject, "river:unique_nonce")
 	}
 	attemptedBy := job.AttemptedBy
 	if attemptedBy == nil {
@@ -1990,7 +3062,7 @@ func requestHandle(paramsJSON json.RawMessage) (string, error) {
 	return params.Handle, nil
 }
 
-func waitForStates(ctx context.Context, client *river.Client[pgx.Tx], id int64, states []rivertype.JobState) (*rivertype.JobRow, error) {
+func waitForStates[TTx any](ctx context.Context, client *river.Client[TTx], id int64, states []rivertype.JobState) (*rivertype.JobRow, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if len(states) == 0 {

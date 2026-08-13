@@ -1,4 +1,4 @@
-// Command syncrustmigrations mirrors River's canonical PostgreSQL migrations
+// Command syncrustmigrations mirrors River's canonical database migrations
 // into the publishable Rust migration crate and records their hashes for
 // cross-language conformance.
 package main
@@ -16,15 +16,17 @@ import (
 	"strings"
 )
 
-const (
-	canonicalDir = "riverdriver/riverpgxv5/migration/main"
-	manifestPath = "conformance/migrations.json"
-	mirrorDir    = "rust/riverqueue-migrate/migrations/main"
-)
+type database struct {
+	canonicalDir string
+	manifestPath string
+	mirrorDir    string
+	name         string
+}
 
 type manifest struct {
-	Files []manifestFile `json:"files"`
-	Line  string         `json:"line"`
+	Database string         `json:"database"`
+	Files    []manifestFile `json:"files"`
+	Line     string         `json:"line"`
 }
 
 type manifestFile struct {
@@ -36,7 +38,27 @@ func main() {
 	check := flag.Bool("check", false, "check generated files without writing")
 	flag.Parse()
 
-	entries, err := os.ReadDir(canonicalDir)
+	databases := []database{
+		{
+			canonicalDir: "riverdriver/riverpgxv5/migration/main",
+			manifestPath: "conformance/migrations.json",
+			mirrorDir:    "rust/riverqueue-migrate/migrations/main",
+			name:         "postgres",
+		},
+		{
+			canonicalDir: "riverdriver/riversqlite/migration/main",
+			manifestPath: "conformance/migrations-sqlite.json",
+			mirrorDir:    "rust/riverqueue-migrate/migrations/sqlite/main",
+			name:         "sqlite",
+		},
+	}
+	for _, database := range databases {
+		syncDatabase(database, *check)
+	}
+}
+
+func syncDatabase(database database, check bool) {
+	entries, err := os.ReadDir(database.canonicalDir)
 	if err != nil {
 		fatal(err)
 	}
@@ -49,9 +71,9 @@ func main() {
 	}
 	slices.Sort(names)
 
-	generatedManifest := manifest{Line: "main"}
+	generatedManifest := manifest{Database: database.name, Line: "main"}
 	for _, name := range names {
-		sourcePath := filepath.Join(canonicalDir, name)
+		sourcePath := filepath.Join(database.canonicalDir, name)
 		contents, err := os.ReadFile(sourcePath)
 		if err != nil {
 			fatal(err)
@@ -62,23 +84,43 @@ func main() {
 			SHA256: hex.EncodeToString(hash[:]),
 		})
 
-		mirrorPath := filepath.Join(mirrorDir, name)
-		if *check {
+		mirrorPath := filepath.Join(database.mirrorDir, name)
+		if check {
 			checkFile(mirrorPath, contents)
 		} else {
 			writeFile(mirrorPath, contents)
 		}
 	}
+	removeStaleMirrors(database.mirrorDir, names, check)
 
 	manifestContents, err := json.MarshalIndent(&generatedManifest, "", "  ")
 	if err != nil {
 		fatal(err)
 	}
 	manifestContents = append(manifestContents, '\n')
-	if *check {
-		checkFile(manifestPath, manifestContents)
+	if check {
+		checkFile(database.manifestPath, manifestContents)
 	} else {
-		writeFile(manifestPath, manifestContents)
+		writeFile(database.manifestPath, manifestContents)
+	}
+}
+
+func removeStaleMirrors(directory string, expected []string, check bool) {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") || slices.Contains(expected, entry.Name()) {
+			continue
+		}
+		path := filepath.Join(directory, entry.Name())
+		if check {
+			fatal(fmt.Errorf("generated file is stale: %s (run make generate/rust-migrations)", path))
+		}
+		if err := os.Remove(path); err != nil {
+			fatal(err)
+		}
 	}
 }
 

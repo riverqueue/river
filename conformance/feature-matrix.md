@@ -1,7 +1,9 @@
-# PostgreSQL feature matrix
+# Backend feature matrix
 
-This matrix covers River on PostgreSQL. Every entry is complete for the matched
-preview pair in `manifest.json`.
+The full matrix covers River on PostgreSQL. Every PostgreSQL entry is complete
+for the matched preview pair in `manifest.json`. SQLite has an executable
+backend-neutral `portable-storage-v1` profile and an executable
+`sqlite-runtime-v1` superset.
 
 | Area | Compatibility surface | Status |
 |---|---|---|
@@ -11,7 +13,7 @@ preview pair in `manifest.json`.
 | Unique insert | Args, selected fields, period, queue, states, kind exclusion and Go-compatible hashing | Complete |
 | Transactions | Insert, CRUD, cancel, completion, commit/rollback and aborted transaction visibility | Complete |
 | Fetch | Priority/schedule/ID ordering, kind filtering, paused queues and `SKIP LOCKED` | Complete |
-| Completion | Batched complete, retry, discard, snooze, cancel and cancellation override | Complete |
+| Completion | Batched complete, retry, discard, snooze, cancel, cancellation override and external-terminal races | Complete |
 | Runtime | Typed workers, panic capture, timeout, stuck detection, task abort and graceful/hard stop | Complete |
 | Queues | CRUD, pause/resume, dynamic add/reconfigure/remove and persisted metadata | Complete |
 | Notifications | Insert, control, leadership, listener reconnect and polling recovery | Complete |
@@ -24,9 +26,27 @@ preview pair in `manifest.json`.
 
 ## Scope decisions
 
-- PostgreSQL is the only Rust backend in this release. Go driver abstractions,
-  SQLite-specific APIs, Go command packages, and Go test-only exports are
-  outside the Rust compatibility surface.
+- PostgreSQL remains the only backend with custom schemas, `COPY`, `SKIP
+  LOCKED`, backend fault injection, rescuer/cleaner and UTC-reindex maintenance,
+  performance, and soak compatibility claims.
+- SQLite compatibility currently covers main-line migrations; deterministic
+  retry and unique-key controls; typed and backend-optimized insertion; job
+  get/list/update/cancel/retry/delete; cross-language cursor ordering; exact
+  millisecond timestamp storage; and transaction commit, rollback, batch
+  atomicity, and visibility. Every storage direction is exercised Go-to-Rust
+  and Rust-to-Go against one WAL database.
+- SQLite `sqlite-runtime-v1` additionally covers work in both directions,
+  competing workers, queue CRUD/dynamic reconfiguration/pause/resume,
+  transactional and ordinary notification wakeups, cancellation, leadership
+  and failover, scheduler/periodic work, poll-only recovery, resumable retries,
+  hook/middleware ordering, local subscriptions, cross-client pause/resume
+  subscription delivery, and graceful lifecycle behavior. Subscriber lag
+  counters are not exposed by the version 1 process
+  adapter and remain covered only by language-local tests; a future contract
+  revision should add normalized lag observations before claiming them here.
+- SQLite custom schemas, PostgreSQL aborted-transaction behavior, `COPY`,
+  `SKIP LOCKED`, backend fault injection, rescuer/cleaner maintenance,
+  reindexing, performance, and soak are explicitly outside the SQLite profiles.
 - Rust uses builders, typed async workers, cancellation tokens and explicit
   transaction connections rather than reproducing Go API shapes.
 - `riverqueue-internal` is an exact-version extension seam, published only

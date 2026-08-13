@@ -11,18 +11,20 @@ use std::{
 
 use async_trait::async_trait;
 use riverqueue::internal::{
-    CompletionAction, CompletionParams, FetchParams, MaintenanceService, Pilot, PilotError,
-    RuntimeService, SchemaName,
+    CompletionAction, CompletionParams, DatabaseConfig, DatabaseConnection, DatabasePool,
+    FetchParams, MaintenanceService, Pilot, PilotError, RuntimeService, SchemaName,
 };
 use riverqueue::{
-    Client, EventKind, InsertOpts, IntervalSchedule, Job, JobArgs, JobListParams, JobRow, JobState,
-    JobUpdateParams, MaintenanceConfig, PeriodicJob, PeriodicJobOpts, QueueConfig, QueueListParams,
-    ReindexerSchedule, UniqueOpts, WorkContext, WorkOutcome, Worker, WorkerRegistry, WorkerTimeout,
+    BoxError, Client, EventKind, ExtensionClaimParams, InsertBatch, InsertOpts, IntervalSchedule,
+    Job, JobArgs, JobListOrderBy, JobListParams, JobRow, JobState, JobUpdateParams,
+    MaintenanceConfig, PeriodicJob, PeriodicJobOpts, QueueConfig, QueueListParams, RetryPolicy,
+    UniqueOpts, WorkContext, WorkError, WorkOutcome, Worker, WorkerRegistry, WorkerTimeout,
+    database::{PostgresDatabase, PostgresReindexConfig, PostgresReindexSchedule},
 };
 use riverqueue_migrate::{Direction, MigrateOpts};
-use riverqueue_migrate::{MIGRATION_VERSION_LATEST, Migrator};
+use riverqueue_migrate::{MIGRATION_VERSION_LATEST, PostgresMigrator};
 use serde::{Deserialize, Serialize};
-use sqlx::{AssertSqlSafe, PgConnection, PgPool};
+use sqlx::{AssertSqlSafe, PgPool};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
@@ -33,7 +35,6 @@ struct EchoArgs {
 
 struct EchoWorker;
 
-#[async_trait]
 impl Worker<EchoArgs> for EchoWorker {
     type Error = Infallible;
 
@@ -57,7 +58,6 @@ struct CancelArgs {}
 
 struct CancelWorker;
 
-#[async_trait]
 impl Worker<CancelArgs> for CancelWorker {
     type Error = Infallible;
 
@@ -77,7 +77,6 @@ struct FailArgs {}
 
 struct FailWorker;
 
-#[async_trait]
 impl Worker<FailArgs> for FailWorker {
     type Error = std::io::Error;
 
@@ -96,7 +95,6 @@ struct IgnoresCancelArgs {}
 
 struct IgnoresCancelWorker;
 
-#[async_trait]
 impl Worker<IgnoresCancelArgs> for IgnoresCancelWorker {
     type Error = Infallible;
 
@@ -115,7 +113,6 @@ struct RescueDefaultTimeoutArgs {}
 
 struct RescueDefaultTimeoutWorker;
 
-#[async_trait]
 impl Worker<RescueDefaultTimeoutArgs> for RescueDefaultTimeoutWorker {
     type Error = Infallible;
 
@@ -134,7 +131,6 @@ struct RescueDisabledTimeoutArgs {}
 
 struct RescueDisabledTimeoutWorker;
 
-#[async_trait]
 impl Worker<RescueDisabledTimeoutArgs> for RescueDisabledTimeoutWorker {
     type Error = Infallible;
 
@@ -157,7 +153,6 @@ struct RescueLongTimeoutArgs {}
 
 struct RescueLongTimeoutWorker;
 
-#[async_trait]
 impl Worker<RescueLongTimeoutArgs> for RescueLongTimeoutWorker {
     type Error = Infallible;
 
@@ -180,14 +175,13 @@ struct RescueRetryOverrideArgs {}
 
 struct RescueRetryOverrideWorker;
 
-#[async_trait]
 impl Worker<RescueRetryOverrideArgs> for RescueRetryOverrideWorker {
     type Error = Infallible;
 
     fn next_retry(
         &self,
         _job: &Job<RescueRetryOverrideArgs>,
-        _error: &str,
+        _error: &WorkError,
         _now: chrono::DateTime<chrono::Utc>,
     ) -> Option<Duration> {
         Some(Duration::from_hours(2))
@@ -219,14 +213,13 @@ struct ResumableCheckpointWorker {
     validate_runs: Arc<AtomicUsize>,
 }
 
-#[async_trait]
 impl Worker<ResumableCheckpointArgs> for ResumableCheckpointWorker {
     type Error = riverqueue::Error;
 
     fn next_retry(
         &self,
         job: &Job<ResumableCheckpointArgs>,
-        _error: &str,
+        _error: &WorkError,
         _now: chrono::DateTime<chrono::Utc>,
     ) -> Option<Duration> {
         (job.args.mode == "cursor_retry").then_some(Duration::from_millis(500))
@@ -257,7 +250,7 @@ impl Worker<ResumableCheckpointArgs> for ResumableCheckpointWorker {
                                 cursor_context
                                     .resumable_set_cursor(&ResumableCursor { offset: 42 })
                                     .await?;
-                                return Err(riverqueue::Error::Runtime(
+                                return Err(riverqueue::Error::runtime(
                                     "intentional resumable cursor failure".to_owned(),
                                 ));
                             }
@@ -267,9 +260,7 @@ impl Worker<ResumableCheckpointArgs> for ResumableCheckpointWorker {
                     .await?;
             }
             "commit_cursor" | "rollback_cursor" => {
-                let checkpoint_client = context.client().unwrap().clone();
                 let checkpoint_context = context.clone();
-                let job_id = job.row.id;
                 let mode = job.args.mode.clone();
                 let pool = self.pool.clone();
                 context
@@ -277,9 +268,7 @@ impl Worker<ResumableCheckpointArgs> for ResumableCheckpointWorker {
                         let mut transaction = pool.begin().await?;
                         checkpoint_context
                             .resumable_set_step_cursor_tx(
-                                &checkpoint_client,
                                 &mut transaction,
-                                job_id,
                                 &ResumableCursor { offset: 7 },
                             )
                             .await?;
@@ -293,16 +282,14 @@ impl Worker<ResumableCheckpointArgs> for ResumableCheckpointWorker {
                     .await?;
             }
             "commit_step" | "rollback_step" => {
-                let checkpoint_client = context.client().unwrap().clone();
                 let checkpoint_context = context.clone();
-                let job_id = job.row.id;
                 let mode = job.args.mode.clone();
                 let pool = self.pool.clone();
                 context
                     .resumable_step("tx_step", move || async move {
                         let mut transaction = pool.begin().await?;
                         checkpoint_context
-                            .resumable_set_step_tx(&checkpoint_client, &mut transaction, job_id)
+                            .resumable_set_step_tx(&mut transaction)
                             .await?;
                         if mode == "commit_step" {
                             transaction.commit().await?;
@@ -314,7 +301,7 @@ impl Worker<ResumableCheckpointArgs> for ResumableCheckpointWorker {
                     .await?;
             }
             mode => {
-                return Err(riverqueue::Error::Runtime(format!(
+                return Err(riverqueue::Error::runtime(format!(
                     "unknown test mode {mode}"
                 )));
             }
@@ -350,6 +337,40 @@ struct TestPilot {
     runtime_stops: Arc<AtomicUsize>,
 }
 
+#[derive(Clone)]
+struct ContinueCompletionPilot {
+    completions: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Pilot for ContinueCompletionPilot {
+    fn intercepts_completion(&self) -> bool {
+        true
+    }
+
+    async fn before_job_completion(
+        &self,
+        _connection: DatabaseConnection<'_>,
+        _params: &CompletionParams,
+    ) -> Result<CompletionAction, PilotError> {
+        self.completions.fetch_add(1, Ordering::SeqCst);
+        Ok(CompletionAction::Continue)
+    }
+}
+
+struct LongRetryPolicy;
+
+impl RetryPolicy for LongRetryPolicy {
+    fn next_retry(
+        &self,
+        _job: &JobRow,
+        _error: &str,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> Duration {
+        Duration::from_hours(1)
+    }
+}
+
 #[async_trait]
 impl Pilot for TestPilot {
     fn intercepts_completion(&self) -> bool {
@@ -362,12 +383,13 @@ impl Pilot for TestPilot {
 
     async fn select_job_ids(
         &self,
-        connection: &mut PgConnection,
+        connection: DatabaseConnection<'_>,
         params: &FetchParams,
     ) -> Result<Option<Vec<i64>>, PilotError> {
         self.fetches.fetch_add(1, Ordering::SeqCst);
-        let table = params.schema.qualify("river_job");
-        let queue_table = params.schema.qualify("river_queue");
+        let schema = params.database.postgres_schema().unwrap();
+        let table = schema.qualify("river_job");
+        let queue_table = schema.qualify("river_queue");
         let sql = format!(
             "SELECT id FROM {table} WHERE state = 'available' AND queue = $1 \
              AND scheduled_at <= now() AND kind = ANY($2::text[]) \
@@ -379,18 +401,22 @@ impl Pilot for TestPilot {
                 .bind(&params.queue)
                 .bind(&params.kinds)
                 .bind(params.maximum)
-                .fetch_all(connection)
+                .fetch_all(connection.into_postgres().unwrap())
                 .await?,
         ))
     }
 
     async fn before_job_completion(
         &self,
-        connection: &mut PgConnection,
+        connection: DatabaseConnection<'_>,
         params: &CompletionParams,
     ) -> Result<CompletionAction, PilotError> {
         self.completions.fetch_add(1, Ordering::SeqCst);
-        let table = params.schema.qualify("river_job");
+        let table = params
+            .database
+            .postgres_schema()
+            .unwrap()
+            .qualify("river_job");
         let sql = format!(
             "UPDATE {table} SET state = 'completed', finalized_at = now(), \
              metadata = metadata || $2::jsonb || '{{\"extension_handled\": true}}'::jsonb \
@@ -399,7 +425,7 @@ impl Pilot for TestPilot {
         sqlx::query(AssertSqlSafe(sql))
             .bind(params.job_id)
             .bind(sqlx::types::Json(&params.metadata_updates))
-            .execute(connection)
+            .execute(connection.into_postgres().unwrap())
             .await?;
         Ok(CompletionAction::Handled)
     }
@@ -428,8 +454,8 @@ struct TestMaintenance {
 impl MaintenanceService for TestMaintenance {
     async fn run(
         &self,
-        _pool: PgPool,
-        _schema: SchemaName,
+        _pool: DatabasePool,
+        _database: DatabaseConfig,
         cancellation: CancellationToken,
     ) -> Result<(), PilotError> {
         self.starts.fetch_add(1, Ordering::SeqCst);
@@ -448,8 +474,8 @@ struct TestRuntime {
 impl RuntimeService for TestRuntime {
     async fn run(
         &self,
-        _pool: PgPool,
-        _schema: SchemaName,
+        _pool: DatabasePool,
+        _database: DatabaseConfig,
         cancellation: CancellationToken,
     ) -> Result<(), PilotError> {
         self.starts.fetch_add(1, Ordering::SeqCst);
@@ -459,7 +485,6 @@ impl RuntimeService for TestRuntime {
     }
 }
 
-#[async_trait]
 impl Worker<ResumableArgs> for ResumableWorker {
     type Error = riverqueue::Error;
 
@@ -488,29 +513,55 @@ impl Worker<ResumableArgs> for ResumableWorker {
     }
 }
 
-#[async_trait]
 impl Worker<TransactionalArgs> for TransactionalWorker {
     type Error = riverqueue::Error;
 
     async fn work(
         &self,
         context: WorkContext,
-        job: Job<TransactionalArgs>,
+        _job: Job<TransactionalArgs>,
     ) -> Result<WorkOutcome, Self::Error> {
         assert_eq!(context.client().unwrap().id(), "rust-maintenance-client");
         context
             .metadata_set("transactional_completion", serde_json::json!(true))
             .await;
         let mut transaction = self.pool.begin().await?;
-        let completed = context
-            .job_complete_tx(&mut transaction, job.row.id)
-            .await?;
+        let completed = context.job_complete_tx(&mut transaction).await?;
         assert_eq!(completed.state, JobState::Completed);
         assert_eq!(completed.metadata["transactional_completion"], true);
         assert_eq!(completed.metadata["extension_handled"], true);
         transaction.commit().await?;
         Ok(WorkOutcome::Complete)
     }
+}
+
+#[tokio::test]
+async fn cancellation_wins_over_rescheduling_completion_updates() {
+    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
+        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
+    let pool = PgPool::connect(&database_url).await.unwrap();
+    let schema = SchemaName::new("rust_cancellation_winner_test").unwrap();
+    sqlx::raw_sql(
+        "DROP SCHEMA IF EXISTS rust_cancellation_winner_test CASCADE; \
+         CREATE SCHEMA rust_cancellation_winner_test",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    PostgresMigrator::new(pool.clone())
+        .with_schema(schema.clone())
+        .migrate_up()
+        .await
+        .unwrap();
+
+    for direct_completion in [false, true] {
+        assert_cancellation_wins(&pool, &schema, direct_completion).await;
+    }
+
+    sqlx::raw_sql("DROP SCHEMA rust_cancellation_winner_test CASCADE")
+        .execute(&pool)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -531,13 +582,12 @@ async fn concurrent_unique_inserts_return_the_conflicting_job() {
     .execute(&pool)
     .await
     .unwrap();
-    Migrator::new(pool.clone())
+    PostgresMigrator::new(pool.clone())
         .with_schema(schema.clone())
         .migrate_up()
         .await
         .unwrap();
-    let client = Client::builder(pool.clone())
-        .schema(schema)
+    let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema))
         .build()
         .unwrap();
 
@@ -555,48 +605,27 @@ async fn concurrent_unique_inserts_return_the_conflicting_job() {
     let cases = [
         (
             "by_args",
-            InsertOpts {
-                unique: UniqueOpts {
-                    by_args: true,
-                    ..UniqueOpts::default()
-                },
-                ..InsertOpts::default()
-            },
+            InsertOpts::default().with_unique(UniqueOpts::new().by_args()),
         ),
         (
             "by_args_and_queue",
-            InsertOpts {
-                queue: "unique_queue".to_owned(),
-                unique: UniqueOpts {
-                    by_args: true,
-                    by_queue: true,
-                    ..UniqueOpts::default()
-                },
-                ..InsertOpts::default()
-            },
+            InsertOpts::default()
+                .with_queue("unique_queue")
+                .with_unique(UniqueOpts::new().by_args().by_queue()),
         ),
         (
             "by_args_and_states",
-            InsertOpts {
-                unique: UniqueOpts {
-                    by_args: true,
-                    by_state: Some(all_states),
-                    ..UniqueOpts::default()
-                },
-                ..InsertOpts::default()
-            },
+            InsertOpts::default().with_unique(UniqueOpts::new().by_args().by_states(all_states)),
         ),
         (
             "by_args_and_period",
-            InsertOpts {
-                scheduled_at: Some(fixed_scheduled_at),
-                unique: UniqueOpts {
-                    by_args: true,
-                    by_period: Some(Duration::from_mins(1)),
-                    ..UniqueOpts::default()
-                },
-                ..InsertOpts::default()
-            },
+            InsertOpts::default()
+                .with_scheduled_at(fixed_scheduled_at)
+                .with_unique(
+                    UniqueOpts::new()
+                        .by_args()
+                        .by_period(Duration::from_mins(1)),
+                ),
         ),
     ];
 
@@ -610,7 +639,7 @@ async fn concurrent_unique_inserts_return_the_conflicting_job() {
             let opts = opts.clone();
             tasks.spawn(async move {
                 barrier.wait().await;
-                client.insert(EchoArgs { message }, opts).await
+                client.insert_with(EchoArgs { message }, opts).await
             });
         }
 
@@ -645,6 +674,151 @@ async fn concurrent_unique_inserts_return_the_conflicting_job() {
 }
 
 #[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one backend regression verifies atomic selection, ordering, row updates, and decode rollback"
+)]
+async fn extension_claim_returns_ordered_rows_and_rolls_back_decode_errors() {
+    let Ok(database_url) = std::env::var("RIVER_RUST_DATABASE_URL") else {
+        eprintln!("skipping PostgreSQL claim test without RIVER_RUST_DATABASE_URL");
+        return;
+    };
+    let pool = PgPool::connect(&database_url).await.unwrap();
+    let schema = SchemaName::new("rust_extension_claim_test").unwrap();
+    sqlx::raw_sql(
+        "DROP SCHEMA IF EXISTS rust_extension_claim_test CASCADE; \
+         CREATE SCHEMA rust_extension_claim_test",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    PostgresMigrator::new(pool.clone())
+        .with_schema(schema.clone())
+        .migrate_up()
+        .await
+        .unwrap();
+    let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.clone()))
+        .id("postgres-extension-claimer")
+        .build()
+        .unwrap();
+    let table = schema.qualify("river_job");
+    let now = chrono::Utc::now();
+    let matches = serde_json::Map::from_iter([
+        ("group".to_owned(), serde_json::json!("shared")),
+        ("mode".to_owned(), serde_json::json!("open")),
+    ]);
+    let leader = client
+        .insert_with(
+            EchoArgs {
+                message: "leader".to_owned(),
+            },
+            InsertOpts::default().with_metadata(matches.clone()),
+        )
+        .await
+        .unwrap();
+    let mut expected = Vec::new();
+    for (message, priority, scheduled_at) in [
+        ("third", 2, now - chrono::Duration::minutes(3)),
+        ("second", 1, now - chrono::Duration::minutes(1)),
+        ("first", 1, now - chrono::Duration::minutes(2)),
+    ] {
+        let inserted = client
+            .insert_with(
+                EchoArgs {
+                    message: message.to_owned(),
+                },
+                InsertOpts::default()
+                    .with_metadata(matches.clone())
+                    .with_priority(priority),
+            )
+            .await
+            .unwrap();
+        let update_sql = format!("UPDATE {table} SET scheduled_at = $1 WHERE id = $2");
+        sqlx::query(AssertSqlSafe(update_sql))
+            .bind(scheduled_at)
+            .bind(inserted.job.row.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        expected.push(inserted);
+    }
+    client
+        .insert_with(
+            EchoArgs {
+                message: "wrong metadata".to_owned(),
+            },
+            InsertOpts::default().with_metadata(serde_json::Map::from_iter([
+                ("group".to_owned(), serde_json::json!("shared")),
+                ("mode".to_owned(), serde_json::json!("closed")),
+            ])),
+        )
+        .await
+        .unwrap();
+
+    let rows = client
+        .extension_claim_jobs(ExtensionClaimParams {
+            excluded_job_id: leader.job.row.id,
+            kind: EchoArgs::KIND.to_owned(),
+            maximum: 3,
+            metadata_matches: matches,
+            metadata_updates: serde_json::Map::from_iter([(
+                "claim".to_owned(),
+                serde_json::json!("leader"),
+            )]),
+            queue: "default".to_owned(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+        [
+            expected[2].job.row.id,
+            expected[1].job.row.id,
+            expected[0].job.row.id,
+        ]
+    );
+    for row in &rows {
+        assert_eq!(row.state, JobState::Running);
+        assert_eq!(row.attempt, 1);
+        assert_eq!(row.attempted_by, ["postgres-extension-claimer"]);
+        assert_eq!(row.metadata["claim"], "leader");
+    }
+
+    let invalid = client.insert(FailArgs {}).await.unwrap();
+    let corrupt_sql = format!("UPDATE {table} SET errors = ARRAY['{{}}'::jsonb] WHERE id = $1");
+    sqlx::query(AssertSqlSafe(corrupt_sql))
+        .bind(invalid.job.row.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let error = client
+        .extension_claim_jobs(ExtensionClaimParams {
+            excluded_job_id: 0,
+            kind: FailArgs::KIND.to_owned(),
+            maximum: 1,
+            metadata_matches: serde_json::Map::new(),
+            metadata_updates: serde_json::Map::new(),
+            queue: "default".to_owned(),
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(error, riverqueue::Error::Database(_)));
+    let state_sql = format!("SELECT state::text, attempt FROM {table} WHERE id = $1");
+    let (state, attempt): (String, i16) = sqlx::query_as(AssertSqlSafe(state_sql))
+        .bind(invalid.job.row.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(state, "available");
+    assert_eq!(attempt, 0);
+
+    sqlx::raw_sql("DROP SCHEMA rust_extension_claim_test CASCADE")
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn insert_many_variants_preserve_order_and_transactionality() {
     let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
@@ -658,20 +832,51 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
     .execute(&pool)
     .await
     .unwrap();
-    Migrator::new(pool.clone())
+    PostgresMigrator::new(pool.clone())
         .with_schema(schema.clone())
         .migrate_up()
         .await
         .unwrap();
-    let client = Client::builder(pool.clone())
-        .schema(schema.clone())
+    let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.clone()))
         .build()
         .unwrap();
     let table = schema.qualify("river_job");
 
+    let empty_many = client
+        .insert_many(Vec::<EchoArgs>::new())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        empty_many.to_string(),
+        "invalid job: job: no jobs to insert"
+    );
+    let empty_batch = client.insert_batch(InsertBatch::new()).await.unwrap_err();
+    assert_eq!(
+        empty_batch.to_string(),
+        "invalid job: job: no jobs to insert"
+    );
+    let mut empty_transaction = pool.begin().await.unwrap();
+    let empty_many_tx = client
+        .insert_many_tx(&mut empty_transaction, Vec::<EchoArgs>::new())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        empty_many_tx.to_string(),
+        "invalid job: job: no jobs to insert"
+    );
+    let empty_batch_tx = client
+        .insert_batch_tx(&mut empty_transaction, InsertBatch::new())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        empty_batch_tx.to_string(),
+        "invalid job: job: no jobs to insert"
+    );
+    empty_transaction.commit().await.unwrap();
+
     let past_scheduled_at = chrono::Utc::now() - chrono::Duration::minutes(1);
     let ordered = client
-        .insert_many([
+        .insert_many_with([
             (
                 EchoArgs {
                     message: "ordered-one".to_owned(),
@@ -688,10 +893,7 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
                 EchoArgs {
                     message: "ordered-past-scheduled".to_owned(),
                 },
-                InsertOpts {
-                    scheduled_at: Some(past_scheduled_at),
-                    ..InsertOpts::default()
-                },
+                InsertOpts::default().with_scheduled_at(past_scheduled_at),
             ),
         ])
         .await
@@ -710,15 +912,65 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
     );
     assert_eq!(ordered[2].job.row.state, JobState::Scheduled);
 
-    let unique_opts = InsertOpts {
-        unique: UniqueOpts {
-            by_args: true,
-            ..UniqueOpts::default()
-        },
-        ..InsertOpts::default()
-    };
-    let unique = client
+    let defaults = client
         .insert_many([
+            EchoArgs {
+                message: "default-one".to_owned(),
+            },
+            EchoArgs {
+                message: "default-two".to_owned(),
+            },
+        ])
+        .await
+        .unwrap();
+    assert_eq!(defaults.len(), 2);
+
+    let mut heterogeneous = InsertBatch::new();
+    heterogeneous
+        .push(EchoArgs {
+            message: "heterogeneous".to_owned(),
+        })
+        .unwrap()
+        .push_with(
+            CancelArgs {},
+            InsertOpts::default().with_queue("heterogeneous-queue"),
+        )
+        .unwrap();
+    let heterogeneous = client.insert_batch(heterogeneous).await.unwrap();
+    assert_eq!(heterogeneous.len(), 2);
+    assert_eq!(heterogeneous[0].job.kind, EchoArgs::KIND);
+    assert_eq!(heterogeneous[1].job.kind, CancelArgs::KIND);
+    assert_eq!(heterogeneous[1].job.queue, "heterogeneous-queue");
+
+    let time_without_states = client
+        .job_list(
+            &JobListParams::default()
+                .with_ids(ordered.iter().map(|result| result.job.row.id))
+                .with_order_by(JobListOrderBy::Time),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        time_without_states
+            .iter()
+            .map(|row| row.id)
+            .collect::<Vec<_>>(),
+        ordered
+            .iter()
+            .map(|result| result.job.row.id)
+            .collect::<Vec<_>>()
+    );
+    let finalized_without_states = client
+        .job_list(&JobListParams::default().with_order_by(JobListOrderBy::FinalizedAt))
+        .await;
+    assert!(matches!(
+        finalized_without_states,
+        Err(riverqueue::Error::InvalidJob(_))
+    ));
+
+    let unique_opts = InsertOpts::default().with_unique(UniqueOpts::new().by_args());
+    let unique = client
+        .insert_many_with([
             (
                 EchoArgs {
                     message: "unique-batch".to_owned(),
@@ -740,17 +992,14 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
 
     let mut transaction = pool.begin().await.unwrap();
     let rolled_back = client
-        .insert_many_tx(
+        .insert_many_tx_with(
             &mut transaction,
             ["tx-rollback-one", "tx-rollback-two"].map(|message| {
                 (
                     EchoArgs {
                         message: message.to_owned(),
                     },
-                    InsertOpts {
-                        tags: vec!["tx-rollback".to_owned()],
-                        ..InsertOpts::default()
-                    },
+                    InsertOpts::default().with_tags(["tx-rollback"]),
                 )
             }),
         )
@@ -769,17 +1018,14 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
 
     let mut transaction = pool.begin().await.unwrap();
     client
-        .insert_many_tx(
+        .insert_many_tx_with(
             &mut transaction,
             ["tx-commit-one", "tx-commit-two"].map(|message| {
                 (
                     EchoArgs {
                         message: message.to_owned(),
                     },
-                    InsertOpts {
-                        tags: vec!["tx-commit".to_owned()],
-                        ..InsertOpts::default()
-                    },
+                    InsertOpts::default().with_tags(["tx-commit"]),
                 )
             }),
         )
@@ -795,24 +1041,18 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
     assert_eq!(committed_messages, ["tx-commit-one", "tx-commit-two"]);
 
     let invalid_batch = client
-        .insert_many([
+        .insert_many_with([
             (
                 EchoArgs {
                     message: "atomic-valid".to_owned(),
                 },
-                InsertOpts {
-                    tags: vec!["atomic-ordinary".to_owned()],
-                    ..InsertOpts::default()
-                },
+                InsertOpts::default().with_tags(["atomic-ordinary"]),
             ),
             (
                 EchoArgs {
                     message: "atomic-invalid".to_owned(),
                 },
-                InsertOpts {
-                    priority: 0,
-                    ..InsertOpts::default()
-                },
+                InsertOpts::default().with_priority(0),
             ),
         ])
         .await;
@@ -826,19 +1066,62 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
     assert_eq!(atomic_ordinary_count, 0);
 
     let mut transaction = pool.begin().await.unwrap();
+    client
+        .insert_tx(
+            &mut transaction,
+            EchoArgs {
+                message: "ordinary-savepoint-control".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+    let ordinary_savepoint = client
+        .insert_many_tx_with(
+            &mut transaction,
+            [
+                (
+                    EchoArgs {
+                        message: "ordinary-savepoint-prefix".to_owned(),
+                    },
+                    InsertOpts::default().with_tags(["ordinary-savepoint-batch"]),
+                ),
+                (
+                    EchoArgs {
+                        message: "ordinary-savepoint-invalid".to_owned(),
+                    },
+                    InsertOpts::default().with_priority(0),
+                ),
+            ],
+        )
+        .await;
+    assert!(ordinary_savepoint.is_err());
+    transaction.commit().await.unwrap();
+    let ordinary_control_count: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
+        "SELECT count(*) FROM {table} WHERE args ->> 'message' = 'ordinary-savepoint-control'"
+    )))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let ordinary_batch_count: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
+        "SELECT count(*) FROM {table} WHERE 'ordinary-savepoint-batch' = ANY(tags)"
+    )))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(ordinary_control_count, 1);
+    assert_eq!(ordinary_batch_count, 0);
+
+    let mut transaction = pool.begin().await.unwrap();
     assert_eq!(
         client
-            .insert_many_fast_tx(
+            .insert_many_fast_tx_with(
                 &mut transaction,
                 ["fast-rollback-one", "fast-rollback-two"].map(|message| {
                     (
                         EchoArgs {
                             message: message.to_owned(),
                         },
-                        InsertOpts {
-                            tags: vec!["fast-rollback".to_owned()],
-                            ..InsertOpts::default()
-                        },
+                        InsertOpts::default().with_tags(["fast-rollback"]),
                     )
                 }),
             )
@@ -858,17 +1141,14 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
     let mut transaction = pool.begin().await.unwrap();
     assert_eq!(
         client
-            .insert_many_fast_tx(
+            .insert_many_fast_tx_with(
                 &mut transaction,
                 ["fast-commit-one", "fast-commit-two"].map(|message| {
                     (
                         EchoArgs {
                             message: message.to_owned(),
                         },
-                        InsertOpts {
-                            tags: vec!["fast-commit".to_owned()],
-                            ..InsertOpts::default()
-                        },
+                        InsertOpts::default().with_tags(["fast-commit"]),
                     )
                 }),
             )
@@ -889,7 +1169,7 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
     );
 
     client
-        .insert(
+        .insert_with(
             EchoArgs {
                 message: "fast-unique-conflict".to_owned(),
             },
@@ -898,42 +1178,49 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
         .await
         .unwrap();
     let mut transaction = pool.begin().await.unwrap();
+    client
+        .insert_tx(
+            &mut transaction,
+            EchoArgs {
+                message: "fast-savepoint-control".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
     let fast_atomic = client
-        .insert_many_fast_tx(
+        .insert_many_fast_tx_with(
             &mut transaction,
             [
                 (
                     EchoArgs {
                         message: "fast-atomic-valid".to_owned(),
                     },
-                    InsertOpts {
-                        tags: vec!["fast-atomic".to_owned()],
-                        ..InsertOpts::default()
-                    },
+                    InsertOpts::default().with_tags(["fast-atomic"]),
                 ),
                 (
                     EchoArgs {
                         message: "fast-unique-conflict".to_owned(),
                     },
-                    InsertOpts {
-                        unique: UniqueOpts {
-                            by_args: true,
-                            ..UniqueOpts::default()
-                        },
-                        ..InsertOpts::default()
-                    },
+                    InsertOpts::default().with_unique(UniqueOpts::new().by_args()),
                 ),
             ],
         )
         .await;
     assert!(fast_atomic.is_err());
-    transaction.rollback().await.unwrap();
+    transaction.commit().await.unwrap();
+    let fast_control_count: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
+        "SELECT count(*) FROM {table} WHERE args ->> 'message' = 'fast-savepoint-control'"
+    )))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     let fast_atomic_count: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
         "SELECT count(*) FROM {table} WHERE 'fast-atomic' = ANY(tags)"
     )))
     .fetch_one(&pool)
     .await
     .unwrap();
+    assert_eq!(fast_control_count, 1);
     assert_eq!(fast_atomic_count, 0);
 
     sqlx::raw_sql("DROP SCHEMA rust_insert_many_test CASCADE")
@@ -948,7 +1235,7 @@ async fn migrates_inserts_and_works_a_job() {
     let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
         .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
     let pool = PgPool::connect(&database_url).await.unwrap();
-    let migrator = Migrator::new(pool.clone());
+    let migrator = PostgresMigrator::new(pool.clone());
     migrator.migrate_up().await.unwrap();
     assert_eq!(
         migrator.existing_versions().await.unwrap(),
@@ -961,16 +1248,10 @@ async fn migrates_inserts_and_works_a_job() {
     .execute(&pool)
     .await
     .unwrap();
-    let custom_migrator = Migrator::new(pool.clone())
-        .with_schema(riverqueue::SchemaName::new("rust_migration_test").unwrap());
+    let custom_migrator = PostgresMigrator::new(pool.clone())
+        .with_schema(riverqueue::database::SchemaName::new("rust_migration_test").unwrap());
     let first_up = custom_migrator
-        .migrate(
-            Direction::Up,
-            MigrateOpts {
-                target_version: Some(4),
-                ..MigrateOpts::default()
-            },
-        )
+        .migrate(Direction::Up, MigrateOpts::new().with_target_version(4))
         .await
         .unwrap();
     assert_eq!(
@@ -985,13 +1266,7 @@ async fn migrates_inserts_and_works_a_job() {
     custom_migrator.migrate_up().await.unwrap();
     assert!(custom_migrator.validate(None).await.unwrap().ok);
     custom_migrator
-        .migrate(
-            Direction::Down,
-            MigrateOpts {
-                target_version: Some(3),
-                ..MigrateOpts::default()
-            },
-        )
+        .migrate(Direction::Down, MigrateOpts::new().with_target_version(3))
         .await
         .unwrap();
     assert_eq!(
@@ -1002,11 +1277,7 @@ async fn migrates_inserts_and_works_a_job() {
     let dry_run = custom_migrator
         .migrate(
             Direction::Down,
-            MigrateOpts {
-                dry_run: true,
-                max_steps: Some(2),
-                ..MigrateOpts::default()
-            },
+            MigrateOpts::new().with_dry_run(true).with_max_steps(2),
         )
         .await
         .unwrap();
@@ -1016,13 +1287,7 @@ async fn migrates_inserts_and_works_a_job() {
         (1..=MIGRATION_VERSION_LATEST).collect::<Vec<_>>()
     );
     custom_migrator
-        .migrate(
-            Direction::Down,
-            MigrateOpts {
-                target_version: Some(-1),
-                ..MigrateOpts::default()
-            },
-        )
+        .migrate(Direction::Down, MigrateOpts::new().with_target_version(-1))
         .await
         .unwrap();
     assert!(
@@ -1062,39 +1327,32 @@ async fn migrates_inserts_and_works_a_job() {
         .unwrap();
 
     let fast_count = client
-        .insert_many_fast([
+        .insert_many_fast_with([
             (
                 EchoArgs {
                     message: "fast one".to_owned(),
                 },
-                InsertOpts {
-                    metadata: serde_json::Map::from_iter([(
+                InsertOpts::default()
+                    .with_metadata(serde_json::Map::from_iter([(
                         "source".to_owned(),
                         serde_json::json!("copy"),
-                    )]),
-                    tags: vec!["fast-one".to_owned()],
-                    ..InsertOpts::default()
-                },
+                    )]))
+                    .with_tags(["fast-one"]),
             ),
             (
                 EchoArgs {
                     message: "fast two".to_owned(),
                 },
-                InsertOpts {
-                    pending: true,
-                    tags: vec!["fast-two".to_owned()],
-                    ..InsertOpts::default()
-                },
+                InsertOpts::default()
+                    .with_pending(true)
+                    .with_tags(["fast-two"]),
             ),
         ])
         .await
         .unwrap();
     assert_eq!(fast_count, 2);
     let fast_rows = client
-        .job_list(&JobListParams {
-            tags_any: vec!["fast-one".to_owned(), "fast-two".to_owned()],
-            ..JobListParams::default()
-        })
+        .job_list(&JobListParams::default().with_tags_any(["fast-one", "fast-two"]))
         .await
         .unwrap();
     assert_eq!(fast_rows.len(), 2);
@@ -1106,23 +1364,17 @@ async fn migrates_inserts_and_works_a_job() {
     );
 
     let inserted = client
-        .insert(
-            EchoArgs {
-                message: "from Rust".to_owned(),
-            },
-            InsertOpts::default(),
-        )
+        .insert(EchoArgs {
+            message: "from Rust".to_owned(),
+        })
         .await
         .unwrap();
     assert_eq!(inserted.job.row.state, JobState::Available);
 
     let non_running = client
-        .insert(
-            EchoArgs {
-                message: "not running".to_owned(),
-            },
-            InsertOpts::default(),
-        )
+        .insert(EchoArgs {
+            message: "not running".to_owned(),
+        })
         .await
         .unwrap();
     let mut transaction = pool.begin().await.unwrap();
@@ -1173,19 +1425,13 @@ async fn migrates_inserts_and_works_a_job() {
             .await
             .unwrap()
             .unwrap();
-        if event.job.unwrap().id == inserted.job.row.id {
+        if event.as_job().unwrap().job.id == inserted.job.row.id {
             break;
         }
     }
 
     let failed = client
-        .insert(
-            FailArgs {},
-            InsertOpts {
-                max_attempts: 1,
-                ..InsertOpts::default()
-            },
-        )
+        .insert_with(FailArgs {}, InsertOpts::default().with_max_attempts(1))
         .await
         .unwrap();
     let failed = wait_for_state(&client, failed.job.row.id, JobState::Discarded).await;
@@ -1193,13 +1439,7 @@ async fn migrates_inserts_and_works_a_job() {
     assert_eq!(failed.errors[0].error, "intentional failure");
 
     let resumable = client
-        .insert(
-            ResumableArgs {},
-            InsertOpts {
-                max_attempts: 2,
-                ..InsertOpts::default()
-            },
-        )
+        .insert_with(ResumableArgs {}, InsertOpts::default().with_max_attempts(2))
         .await
         .unwrap();
     let resumable = wait_for_state(&client, resumable.job.row.id, JobState::Completed).await;
@@ -1207,10 +1447,7 @@ async fn migrates_inserts_and_works_a_job() {
     assert_eq!(resumable_first_runs.load(Ordering::SeqCst), 1);
     assert_eq!(resumable_second_runs.load(Ordering::SeqCst), 2);
 
-    let cancelling = client
-        .insert(CancelArgs {}, InsertOpts::default())
-        .await
-        .unwrap();
+    let cancelling = client.insert(CancelArgs {}).await.unwrap();
     wait_for_state(&client, cancelling.job.row.id, JobState::Running).await;
     client.job_cancel(cancelling.job.row.id).await.unwrap();
     let cancelled = wait_for_state(&client, cancelling.job.row.id, JobState::Cancelled).await;
@@ -1220,37 +1457,26 @@ async fn migrates_inserts_and_works_a_job() {
     client
         .queue_add(
             "dynamic",
-            QueueConfig {
-                fetch_cooldown: Duration::from_millis(1),
-                fetch_poll_interval: Duration::from_millis(10),
-                max_workers: 1,
-            },
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
         )
         .unwrap();
     let dynamic = client
-        .insert(
+        .insert_with(
             EchoArgs {
                 message: "dynamic queue".to_owned(),
             },
-            InsertOpts {
-                queue: "dynamic".to_owned(),
-                ..InsertOpts::default()
-            },
+            InsertOpts::default().with_queue("dynamic"),
         )
         .await
         .unwrap();
     wait_for_state(&client, dynamic.job.row.id, JobState::Completed).await;
     assert!(client.queue_remove("dynamic").unwrap().is_some());
 
-    let unique_options = InsertOpts {
-        unique: UniqueOpts {
-            by_args: true,
-            ..UniqueOpts::default()
-        },
-        ..InsertOpts::default()
-    };
+    let unique_options = InsertOpts::default().with_unique(UniqueOpts::new().by_args());
     let unique_first = client
-        .insert(
+        .insert_with(
             EchoArgs {
                 message: "unique".to_owned(),
             },
@@ -1259,7 +1485,7 @@ async fn migrates_inserts_and_works_a_job() {
         .await
         .unwrap();
     let unique_second = client
-        .insert(
+        .insert_with(
             EchoArgs {
                 message: "unique".to_owned(),
             },
@@ -1302,12 +1528,9 @@ async fn migrates_inserts_and_works_a_job() {
         .build()
         .unwrap();
     let interrupted = interrupt_client
-        .insert(
+        .insert_with(
             IgnoresCancelArgs {},
-            InsertOpts {
-                queue: "interrupt".to_owned(),
-                ..InsertOpts::default()
-            },
+            InsertOpts::default().with_queue("interrupt"),
         )
         .await
         .unwrap();
@@ -1328,7 +1551,7 @@ async fn migrates_inserts_and_works_a_job() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(event.job.unwrap().id, interrupted.job.row.id);
+    assert_eq!(event.as_job().unwrap().job.id, interrupted.job.row.id);
 
     let queue = client.queue_get("default").await.unwrap();
     assert_eq!(queue.name, "default");
@@ -1367,20 +1590,14 @@ async fn migrates_inserts_and_works_a_job() {
     assert!(queues.iter().any(|queue| queue.name == "dynamic"));
 
     let listed = client
-        .job_list(&JobListParams {
-            kinds: vec![EchoArgs::KIND.to_owned()],
-            ..JobListParams::default()
-        })
+        .job_list(&JobListParams::default().with_kinds([EchoArgs::KIND]))
         .await
         .unwrap();
     assert!(listed.iter().any(|row| row.id == inserted.job.row.id));
     let updated = client
         .job_update(
             inserted.job.row.id,
-            JobUpdateParams {
-                output: Some(serde_json::json!({"ok": true})),
-                ..JobUpdateParams::default()
-            },
+            JobUpdateParams::default().with_output(serde_json::json!({"ok": true})),
         )
         .await
         .unwrap();
@@ -1403,7 +1620,6 @@ async fn migrates_inserts_and_works_a_job() {
             EchoArgs {
                 message: "from Rust".to_owned(),
             },
-            InsertOpts::default(),
         )
         .await
         .unwrap();
@@ -1442,7 +1658,12 @@ async fn migrates_inserts_and_works_a_job() {
             .encoded_args["message"],
         "raw from Rust"
     );
-    let _pool_connection = client.pool().acquire().await.unwrap();
+    let _pool_connection = client
+        .postgres_pool()
+        .expect("client is configured for PostgreSQL")
+        .acquire()
+        .await
+        .unwrap();
 
     let mut transaction = pool.begin().await.unwrap();
     let tx_row = client
@@ -1454,10 +1675,7 @@ async fn migrates_inserts_and_works_a_job() {
         .job_update_tx(
             &mut transaction,
             tx_row.id,
-            JobUpdateParams {
-                output: Some(serde_json::json!("transactional")),
-                ..JobUpdateParams::default()
-            },
+            JobUpdateParams::default().with_output(serde_json::json!("transactional")),
         )
         .await
         .unwrap();
@@ -1486,22 +1704,21 @@ async fn migrates_inserts_and_works_a_job() {
     let pilot_runtime_stops = Arc::new(AtomicUsize::new(0));
     let maintenance_client = Client::builder(pool.clone())
         .id("rust-maintenance-client")
-        .maintenance(MaintenanceConfig {
-            elect_interval: Duration::from_millis(20),
-            rescue_after: Duration::from_millis(20),
-            rescuer_interval: Duration::from_millis(20),
-            scheduler_interval: Duration::from_millis(20),
-            ..MaintenanceConfig::default()
-        })
-        .periodic_job(PeriodicJob::with_defaults(
+        .maintenance(
+            MaintenanceConfig::default()
+                .with_elect_interval(Duration::from_millis(20))
+                .with_rescue_after(Duration::from_millis(20))
+                .with_rescuer_interval(Duration::from_millis(20))
+                .with_scheduler_interval(Duration::from_millis(20)),
+        )
+        .periodic_job(PeriodicJob::with_options(
             IntervalSchedule::new(Duration::from_mins(1)).unwrap(),
             || EchoArgs {
                 message: "periodic run on start".to_owned(),
             },
-            PeriodicJobOpts {
-                id: Some("rust-periodic".to_owned()),
-                run_on_start: true,
-            },
+            PeriodicJobOpts::new()
+                .with_id("rust-periodic")
+                .run_on_start(),
         ))
         .pilot(TestPilot {
             completions: Arc::clone(&pilot_completions),
@@ -1514,28 +1731,24 @@ async fn migrates_inserts_and_works_a_job() {
         .workers(maintenance_workers)
         .queue(
             "default",
-            QueueConfig {
-                fetch_cooldown: Duration::from_millis(1),
-                fetch_poll_interval: Duration::from_millis(10),
-                max_workers: 1,
-            },
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
         )
         .build()
         .unwrap();
     let scheduled = maintenance_client
-        .insert(
+        .insert_with(
             EchoArgs {
                 message: "scheduled by leader".to_owned(),
             },
-            InsertOpts {
-                scheduled_at: Some(chrono::Utc::now() + chrono::Duration::milliseconds(100)),
-                ..InsertOpts::default()
-            },
+            InsertOpts::default()
+                .with_scheduled_at(chrono::Utc::now() + chrono::Duration::milliseconds(100)),
         )
         .await
         .unwrap();
     let transactional = maintenance_client
-        .insert(TransactionalArgs {}, InsertOpts::default())
+        .insert(TransactionalArgs {})
         .await
         .unwrap();
     let stuck_id: i64 = sqlx::query_scalar(
@@ -1632,24 +1845,28 @@ async fn migrates_inserts_and_works_a_job() {
 
     let mut cleanup_workers = WorkerRegistry::new();
     cleanup_workers.register::<EchoArgs, _>(EchoWorker).unwrap();
-    let cleanup_client = Client::builder(pool.clone())
-        .id("rust-cleanup-client")
-        .maintenance(MaintenanceConfig {
-            cancelled_job_retention: Some(Duration::from_millis(1)),
-            completed_job_retention: Some(Duration::from_millis(1)),
-            discarded_job_retention: Some(Duration::from_millis(1)),
-            elect_interval: Duration::from_millis(20),
-            job_cleaner_interval: Duration::from_millis(20),
-            queue_cleaner_interval: Duration::from_millis(20),
-            queue_retention: Duration::from_millis(1),
-            reindexer_index_names: vec!["rust_maintenance_reindex_idx".to_owned()],
-            reindexer_schedule: ReindexerSchedule::Interval(Duration::from_millis(50)),
-            ..MaintenanceConfig::default()
-        })
-        .workers(cleanup_workers)
-        .queue("cleanup_active", QueueConfig::new(1))
-        .build()
-        .unwrap();
+    let cleanup_client = Client::builder(
+        PostgresDatabase::new(pool.clone()).reindex(
+            PostgresReindexConfig::default()
+                .with_index_names(["rust_maintenance_reindex_idx"])
+                .with_schedule(PostgresReindexSchedule::Interval(Duration::from_millis(50))),
+        ),
+    )
+    .id("rust-cleanup-client")
+    .maintenance(
+        MaintenanceConfig::default()
+            .with_cancelled_job_retention(Some(Duration::from_millis(1)))
+            .with_completed_job_retention(Some(Duration::from_millis(1)))
+            .with_discarded_job_retention(Some(Duration::from_millis(1)))
+            .with_elect_interval(Duration::from_millis(20))
+            .with_job_cleaner_interval(Duration::from_millis(20))
+            .with_queue_cleaner_interval(Duration::from_millis(20))
+            .with_queue_retention(Duration::from_millis(1)),
+    )
+    .workers(cleanup_workers)
+    .queue("cleanup_active", QueueConfig::new(1))
+    .build()
+    .unwrap();
     let cleanup_handle = cleanup_client.start().unwrap();
     let cleanup_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
@@ -1694,6 +1911,10 @@ async fn migrates_inserts_and_works_a_job() {
 }
 
 #[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one end-to-end rescuer scenario compares all worker timeout and retry overrides"
+)]
 async fn rescuer_honors_worker_timeout_and_retry_overrides() {
     let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
         .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
@@ -1706,7 +1927,7 @@ async fn rescuer_honors_worker_timeout_and_retry_overrides() {
     .execute(&pool)
     .await
     .unwrap();
-    Migrator::new(pool.clone())
+    PostgresMigrator::new(pool.clone())
         .with_schema(schema.clone())
         .migrate_up()
         .await
@@ -1757,21 +1978,23 @@ async fn rescuer_honors_worker_timeout_and_retry_overrides() {
     workers
         .register::<RescueRetryOverrideArgs, _>(RescueRetryOverrideWorker)
         .unwrap();
-    let client = Client::builder(pool.clone())
-        .id("rust-rescuer-timeout-client")
-        .job_timeout(Some(Duration::from_millis(100)))
-        .maintenance(MaintenanceConfig {
-            elect_interval: Duration::from_millis(20),
-            rescue_after: Duration::from_millis(20),
-            rescuer_interval: Duration::from_millis(20),
-            reindexer_index_names: Vec::new(),
-            ..MaintenanceConfig::default()
-        })
-        .queue("default", QueueConfig::new(1))
-        .schema(schema)
-        .workers(workers)
-        .build()
-        .unwrap();
+    let client = Client::builder(
+        PostgresDatabase::new(pool.clone())
+            .schema(schema)
+            .reindex(PostgresReindexConfig::default().with_index_names([] as [&str; 0])),
+    )
+    .id("rust-rescuer-timeout-client")
+    .job_timeout(Some(Duration::from_millis(100)))
+    .maintenance(
+        MaintenanceConfig::default()
+            .with_elect_interval(Duration::from_millis(20))
+            .with_rescue_after(Duration::from_millis(20))
+            .with_rescuer_interval(Duration::from_millis(20)),
+    )
+    .queue("default", QueueConfig::new(1))
+    .workers(workers)
+    .build()
+    .unwrap();
     let handle = client.start().unwrap();
 
     let default_timeout = wait_for_state(&client, default_timeout_id, JobState::Discarded).await;
@@ -1826,7 +2049,7 @@ async fn resumable_cursor_and_transactional_checkpoints() {
     .execute(&pool)
     .await
     .unwrap();
-    Migrator::new(pool.clone())
+    PostgresMigrator::new(pool.clone())
         .with_schema(schema.clone())
         .migrate_up()
         .await
@@ -1842,27 +2065,27 @@ async fn resumable_cursor_and_transactional_checkpoints() {
             validate_runs: Arc::clone(&validate_runs),
         })
         .unwrap();
-    let client = Client::builder(pool.clone())
-        .id("rust-resumable-checkpoint-test")
-        .maintenance(MaintenanceConfig {
-            elect_interval: Duration::from_millis(20),
-            reindexer_index_names: Vec::new(),
-            scheduler_interval: Duration::from_millis(20),
-            ..MaintenanceConfig::default()
-        })
-        .poll_only(true)
-        .queue(
-            "default",
-            QueueConfig {
-                fetch_cooldown: Duration::from_millis(1),
-                fetch_poll_interval: Duration::from_millis(10),
-                max_workers: 5,
-            },
-        )
-        .schema(schema)
-        .workers(workers)
-        .build()
-        .unwrap();
+    let client = Client::builder(
+        PostgresDatabase::new(pool.clone())
+            .schema(schema)
+            .reindex(PostgresReindexConfig::default().with_index_names([] as [&str; 0])),
+    )
+    .id("rust-resumable-checkpoint-test")
+    .maintenance(
+        MaintenanceConfig::default()
+            .with_elect_interval(Duration::from_millis(20))
+            .with_scheduler_interval(Duration::from_millis(20)),
+    )
+    .without_notifications()
+    .queue(
+        "default",
+        QueueConfig::new(5)
+            .with_fetch_cooldown(Duration::from_millis(1))
+            .with_fetch_poll_interval(Duration::from_millis(10)),
+    )
+    .workers(workers)
+    .build()
+    .unwrap();
     let mut job_ids = std::collections::HashMap::new();
     for mode in [
         "commit_cursor",
@@ -1872,14 +2095,11 @@ async fn resumable_cursor_and_transactional_checkpoints() {
         "rollback_step",
     ] {
         let inserted = client
-            .insert(
+            .insert_with(
                 ResumableCheckpointArgs {
                     mode: mode.to_owned(),
                 },
-                InsertOpts {
-                    max_attempts: 2,
-                    ..InsertOpts::default()
-                },
+                InsertOpts::default().with_max_attempts(2),
             )
             .await
             .unwrap();
@@ -1934,14 +2154,99 @@ async fn resumable_cursor_and_transactional_checkpoints() {
         .unwrap();
 }
 
+async fn assert_cancellation_wins(pool: &PgPool, schema: &SchemaName, direct_completion: bool) {
+    const ATTEMPT: i16 = 7;
+
+    let pilot_completions = Arc::new(AtomicUsize::new(0));
+    let mut workers = WorkerRegistry::new();
+    workers.register::<EchoArgs, _>(EchoWorker).unwrap();
+    let builder = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.clone()))
+        .id(if direct_completion {
+            "rust-cancellation-direct"
+        } else {
+            "rust-cancellation-batch"
+        })
+        .retry_policy(LongRetryPolicy)
+        .workers(workers)
+        .queue(
+            "default",
+            QueueConfig::new(1).with_fetch_poll_interval(Duration::from_mins(1)),
+        )
+        .without_notifications();
+    let client = if direct_completion {
+        builder
+            .pilot(ContinueCompletionPilot {
+                completions: Arc::clone(&pilot_completions),
+            })
+            .build()
+            .unwrap()
+    } else {
+        builder.build().unwrap()
+    };
+
+    let original_scheduled_at = chrono::Utc::now() + chrono::Duration::hours(2);
+    let table = schema.qualify("river_job");
+    let mut claimed_rows = Vec::new();
+    let mut expected = Vec::new();
+    for message in ["long snooze", "short snooze", "retryable error"] {
+        let inserted = client
+            .insert_with(
+                EchoArgs {
+                    message: message.to_owned(),
+                },
+                InsertOpts::default()
+                    .with_max_attempts(20)
+                    .with_scheduled_at(original_scheduled_at),
+            )
+            .await
+            .unwrap();
+        sqlx::query(AssertSqlSafe(format!(
+            "UPDATE {table} SET attempt = $2, attempted_at = now(), state = 'running' WHERE id = $1"
+        )))
+        .bind(inserted.job.row.id)
+        .bind(ATTEMPT)
+        .execute(pool)
+        .await
+        .unwrap();
+        let marked = client.job_cancel(inserted.job.row.id).await.unwrap();
+        assert_eq!(marked.state, JobState::Running);
+        assert!(marked.metadata.contains_key("cancel_attempted_at"));
+        expected.push((marked.id, marked.attempt, marked.scheduled_at));
+        claimed_rows.push(marked);
+    }
+
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+    let results: Vec<Result<WorkOutcome, BoxError>> = vec![
+        Ok(WorkOutcome::Snooze(Duration::from_hours(1))),
+        Ok(WorkOutcome::Snooze(Duration::ZERO)),
+        Err(Box::new(std::io::Error::other("retryable failure"))),
+    ];
+    client
+        .extension_persist_claimed_outcomes(
+            &WorkContext::new(CancellationToken::new()),
+            claimed_rows.into_iter().zip(results).collect(),
+        )
+        .await
+        .unwrap();
+
+    for (id, attempt, scheduled_at) in expected {
+        let cancelled = wait_for_state(&client, id, JobState::Cancelled).await;
+        assert_eq!(cancelled.attempt, attempt);
+        assert_eq!(cancelled.scheduled_at, scheduled_at);
+    }
+    assert_eq!(
+        pilot_completions.load(Ordering::SeqCst),
+        usize::from(direct_completion) * 3
+    );
+    run.shutdown().await.unwrap();
+}
+
 async fn wait_for_job_matching(client: &Client, predicate: impl Fn(&JobRow) -> bool) -> JobRow {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let rows = client
-            .job_list(&JobListParams {
-                limit: 10_000,
-                ..JobListParams::default()
-            })
+            .job_list(&JobListParams::default().with_limit(10_000))
             .await
             .unwrap();
         if let Some(row) = rows.into_iter().find(&predicate) {

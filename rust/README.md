@@ -1,16 +1,16 @@
 # River for Rust (preview)
 
 This workspace contains the native Rust implementation of River. It targets
-the same PostgreSQL persistence and coordination protocol as the Go library,
-while exposing an API designed for Rust and Tokio.
+the same persistence and coordination protocol as the Go library while
+exposing an API designed for Rust and Tokio. PostgreSQL is the mature shared-
+database backend; SQLite implements the same logical protocol through River's
+sealed built-in backend boundary.
 
 The PostgreSQL surface is implemented and checked against the pinned Go
 baseline. The crates remain pre-release while the release process is
 unfinished. The compatibility contract lives in
-[`../docs/rust-compatibility.md`](../docs/rust-compatibility.md), the full
-implementation plan in
-[`../docs/rust-port-plan.md`](../docs/rust-port-plan.md), and shared
-cross-language fixtures in [`../conformance`](../conformance).
+[`../docs/rust-compatibility.md`](../docs/rust-compatibility.md), and shared
+cross-language fixtures live in [`../conformance`](../conformance).
 
 ## Workspace crates
 
@@ -23,9 +23,11 @@ cross-language fixtures in [`../conformance`](../conformance).
   unstable extension SPI; applications should not use it directly.
 - `riverqueue-conformance`: private verification package.
 
-The primary API uses a caller-owned `sqlx::PgPool`, Tokio, typed workers, and
-`CancellationToken`. It intentionally does not mirror Go's public API or expose
-the Go driver interface.
+The primary API uses a caller-owned SQLx pool, Tokio, typed workers, and
+`CancellationToken`. `Client` is deliberately non-generic and accepts built-in
+PostgreSQL or SQLite sources; it does not expose Go's driver interface or a
+third-party SQL dialect trait. This leaves room for a future built-in MySQL
+backend without propagating a driver type through workers and extensions.
 
 ## Quick start
 
@@ -36,7 +38,8 @@ use sqlx::PgPool;
 # async fn example(pool: PgPool) -> Result<(), riverqueue::Error> {
 let client = Client::builder(pool).build()?;
 // `EmailArgs` is a Serialize/Deserialize type deriving `JobArgs`.
-// client.insert(EmailArgs { /* ... */ }, InsertOpts::default()).await?;
+// client.insert(EmailArgs { /* ... */ }).await?;
+// client.insert_with(EmailArgs { /* ... */ }, InsertOpts::default()).await?;
 # let _ = (client, InsertOpts::default());
 # Ok(())
 # }
@@ -83,3 +86,7 @@ verification disabled because their exact-version workspace dependencies do
 not exist in the registry before the first coordinated release. It does not
 publish anything. Release tags use `riverqueue-vX.Y.Z`, independently of Go
 module tags.
+
+The repository's [Rust API design record](../docs/rust-api-design.md)
+documents the compatibility boundaries and the reasoning behind the public
+API and sealed database architecture.

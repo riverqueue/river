@@ -12,10 +12,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use async_trait::async_trait;
 use riverqueue::{
     Client, EventKind, EventReceiver, EventRecvError, InsertOpts, Job, JobArgs, QueueConfig,
-    SchemaName, SubscribeConfig, WorkContext, WorkOutcome, Worker, WorkerRegistry,
+    SubscribeConfig, WorkContext, WorkOutcome, Worker, WorkerRegistry, database::SchemaName,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{
@@ -65,7 +64,6 @@ struct BenchmarkArgs {
 
 struct BenchmarkWorker;
 
-#[async_trait]
 impl Worker<BenchmarkArgs> for BenchmarkWorker {
     type Error = Infallible;
 
@@ -144,7 +142,7 @@ impl BenchmarkProgress {
             tokio::select! {
                 () = cancellation.cancelled() => return Ok(()),
                 event = events.recv() => match event {
-                    Ok(event) if event.kind == EventKind::JobCompleted => {
+                    Ok(event) if event.kind() == EventKind::JobCompleted => {
                         if let Some(started_at) = self.started_at.get() {
                             self.last_worked_elapsed_nanos.store(
                                 u64::try_from(started_at.elapsed().as_nanos())
@@ -384,14 +382,14 @@ async fn run_benchmark(options: BenchOptions) -> Result<(), Box<dyn StdError + S
         .await?;
     reset_jobs(&pool, &options.schema, options.vacuum).await?;
     let client = benchmark_client(pool.clone(), options.max_workers)?;
-    let events = client.subscribe_config(SubscribeConfig {
-        buffer_capacity: usize::try_from(options.backlog).unwrap_or(usize::MAX),
-        kinds: vec![
+    let events = client.subscribe_config(
+        SubscribeConfig::new([
             EventKind::JobCancelled,
             EventKind::JobCompleted,
             EventKind::JobFailed,
-        ],
-    })?;
+        ])?
+        .with_buffer_capacity(usize::try_from(options.backlog).unwrap_or(usize::MAX))?,
+    )?;
     let inserted = Arc::new(AtomicU64::new(0));
     let progress = BenchmarkProgress::new();
     let event_cancel = CancellationToken::new();
@@ -484,11 +482,9 @@ fn benchmark_client(pool: PgPool, max_workers: usize) -> Result<Client, riverque
         .workers(workers)
         .queue(
             riverqueue::QUEUE_DEFAULT,
-            QueueConfig {
-                fetch_cooldown: Duration::from_millis(2),
-                fetch_poll_interval: Duration::from_millis(20),
-                max_workers,
-            },
+            QueueConfig::new(max_workers)
+                .with_fetch_cooldown(Duration::from_millis(2))
+                .with_fetch_poll_interval(Duration::from_millis(20)),
         )
         .build()
 }
@@ -550,7 +546,7 @@ async fn insert_jobs(
                 )
             })
             .collect::<Vec<_>>();
-        let count = client.insert_many_fast(jobs).await?;
+        let count = client.insert_many_fast_with(jobs).await?;
         inserted.fetch_add(count, Ordering::Relaxed);
         remaining -= count;
     }

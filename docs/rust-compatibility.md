@@ -1,9 +1,10 @@
 # Rust compatibility and deployment
 
-River Rust is a native API over the same PostgreSQL protocol as River Go. A
-Go/Rust pair is supported only when `conformance/manifest.json` lists the Go
-and Rust versions, protocol revision, migration line, and a complete capability
-set.
+River Rust is a native API over the database protocols implemented by River
+Go. PostgreSQL is the complete compatibility baseline, and SQLite has explicit
+portable storage and runtime profiles. A Go/Rust pair is supported only when
+`conformance/manifest.json` lists the Go and Rust versions, protocol revision,
+migration lines, and a complete applicable capability set.
 
 ## Matched versions
 
@@ -11,8 +12,8 @@ set.
   versions may differ.
 - The checked manifest, rather than numeric similarity alone, declares a
   matched pair.
-- PostgreSQL migrations in the Go repository remain canonical. CI verifies the
-  checked Rust mirror byte-for-byte by SHA-256.
+- PostgreSQL and SQLite migrations in the Go repository remain canonical. CI
+  verifies each checked Rust mirror byte-for-byte by SHA-256.
 - Protocol-visible changes update the manifest, normalized schemas, fixtures,
   scenario inventory, and both adapters together. Language-local API changes
   do not require a protocol revision.
@@ -33,9 +34,11 @@ set.
 5. Keep at least one matched Go deployment available through the observation
    window.
 
-Clients may use `poll_only(true)` where dedicated PostgreSQL listener
-connections are undesirable. Polling remains the recovery path even when
-listeners are enabled.
+Clients may use `without_notifications()` where dedicated PostgreSQL listener
+connections or SQLite outbox polling are undesirable. Backend fetch polling
+continues to discover eligible work. PostgreSQL polling also remains the
+recovery path when listeners are enabled; SQLite normally uses a durable
+notification outbox and polling rather than `LISTEN`/`NOTIFY`.
 
 The matched Go baseline fetches jobs by queue rather than registered kind. If
 a worker is missing for a fetched kind, both implementations record the same
@@ -56,12 +59,18 @@ change's specific rollback window. Never deploy clients with different
 protocol revisions against the same database unless the compatibility document
 for that revision explicitly permits it.
 
-## Custom schemas and pools
+## Backends, schemas, and pools
 
-Pass the same validated schema to `riverqueue_migrate::Migrator` and
-`riverqueue::Client`. PostgreSQL identifiers are validated and quoted
-centrally. A `Client` clones but does not close its caller-owned `sqlx::PgPool`,
-so applications remain responsible for pool sizing and shutdown.
+For PostgreSQL, pass the same validated schema to `PostgresMigrator` and
+`PostgresDatabase`. PostgreSQL identifiers are validated and quoted centrally.
+SQLite uses its canonical main schema and `SqliteMigrator`. A `Client` clones
+but does not close its caller-owned SQLx pool, so applications remain
+responsible for connection options, pool sizing, and shutdown.
+
+The public client and worker APIs are backend-neutral. Backend-specific
+behavior stays behind River's sealed built-in database boundary; see
+[rust-api-design.md](rust-api-design.md) for the rationale and the requirements
+for a future MySQL backend.
 
 ## Cancellation limit
 
@@ -77,6 +86,10 @@ initial release does not promise native-thread termination.
   MSRV, semver, dependency, and license checks are green.
 - PostgreSQL integration and Go/Rust conformance pass on every PostgreSQL major
   supported by River Go.
+- SQLite migration, storage, transaction, runtime, notification, leadership,
+  scheduler/periodic, and lifecycle scenarios pass in every supported Go/Rust
+  direction. Rescuer/cleaner maintenance is not claimed by the SQLite runtime
+  profile until it has portable shared scenarios.
 - Release-mode performance and the required soak duration pass.
 - The feature matrix has no OSS PostgreSQL gap.
 

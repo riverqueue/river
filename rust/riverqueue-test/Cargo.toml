@@ -8,14 +8,21 @@ license.workspace = true
 readme = "README.md"
 repository.workspace = true
 
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = ["postgres"]
+postgres = ["riverqueue/postgres"]
+sqlite = ["riverqueue/sqlite"]
+
 [dependencies]
 chrono.workspace = true
-riverqueue = { path = "../riverqueue", version = "=0.43.0-alpha.1" }
+riverqueue = { path = "../riverqueue", version = "=0.44.0-alpha.1", default-features = false }
 serde_json.workspace = true
 tokio-util.workspace = true
 
 [dev-dependencies]
-async-trait.workspace = true
 serde.workspace = true
 tokio.workspace = true
 

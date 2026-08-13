@@ -5,6 +5,7 @@ toolchain go1.26.6
 use (
 	.
 	./cmd/river
+	./internal/cmd/riverconformanceadapter
 	./riverdriver
 	./riverdriver/riverdatabasesql
 	./riverdriver/riverdrivertest

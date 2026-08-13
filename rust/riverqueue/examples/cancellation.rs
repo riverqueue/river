@@ -1,6 +1,5 @@
 use std::{convert::Infallible, error::Error, time::Duration};
 
-use async_trait::async_trait;
 use riverqueue::{
     Client, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome, Worker, WorkerRegistry,
 };
@@ -15,7 +14,6 @@ struct CancellableReport {
 
 struct CancellableReportWorker;
 
-#[async_trait]
 impl Worker<CancellableReport> for CancellableReportWorker {
     type Error = Infallible;
 
@@ -44,9 +42,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .queue("default", QueueConfig::new(1))
         .build()?;
     let run = client.start()?;
-    let job = client
-        .insert_default(CancellableReport { report_id: 42 })
-        .await?;
+    let job = client.insert(CancellableReport { report_id: 42 }).await?;
 
     client.job_cancel(job.job.row.id).await?;
     run.shutdown().await?;

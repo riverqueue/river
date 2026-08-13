@@ -1,13 +1,27 @@
-//! Applies River's canonical PostgreSQL migration history.
-
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
-use std::time::{Duration, Instant};
+#[cfg(not(any(feature = "postgres", feature = "sqlite")))]
+compile_error!("riverqueue-migrate requires at least one database feature: `postgres` or `sqlite`");
 
+use std::time::Duration;
+#[cfg(feature = "postgres")]
+use std::time::Instant;
+
+#[cfg(feature = "postgres")]
 use riverqueue_internal::SchemaName;
+#[cfg(feature = "postgres")]
 use sqlx::{PgPool, Row};
 use thiserror::Error;
 
+#[cfg(feature = "sqlite")]
+mod sqlite;
+
+#[cfg(feature = "sqlite")]
+pub use sqlite::{SQLITE_MIGRATIONS, SqliteMigrator};
+
+#[cfg(feature = "postgres")]
 const TEMPLATE_SCHEMA: &str = "/* TEMPLATE: schema */";
 
 /// River's main migration line.
@@ -16,6 +30,7 @@ pub const MIGRATION_LINE_MAIN: &str = "main";
 /// Latest migration version bundled with this release.
 pub const MIGRATION_VERSION_LATEST: i64 = 7;
 
+#[cfg(feature = "postgres")]
 macro_rules! migration {
     ($version:literal, $name:literal, $file:literal) => {
         Migration {
@@ -29,6 +44,7 @@ macro_rules! migration {
 
 /// One canonical River migration.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct Migration {
     /// Down migration SQL.
     pub down_sql: &'static str,
@@ -53,15 +69,67 @@ pub enum Direction {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MigrateOpts {
     /// Report SQL without applying it.
-    pub dry_run: bool,
+    dry_run: bool,
     /// Maximum number of steps. Down migrations default to one step.
-    pub max_steps: Option<usize>,
+    max_steps: Option<usize>,
     /// Target schema version. Down excludes the target; `-1` removes River.
-    pub target_version: Option<i64>,
+    target_version: Option<i64>,
+}
+
+impl MigrateOpts {
+    /// Creates migration options with no target, step limit, or dry run.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            dry_run: false,
+            max_steps: None,
+            target_version: None,
+        }
+    }
+
+    /// Returns whether SQL is reported without being applied.
+    #[must_use]
+    pub const fn dry_run(&self) -> bool {
+        self.dry_run
+    }
+
+    /// Returns the maximum number of migration steps.
+    #[must_use]
+    pub const fn max_steps(&self) -> Option<usize> {
+        self.max_steps
+    }
+
+    /// Returns the requested target version.
+    #[must_use]
+    pub const fn target_version(&self) -> Option<i64> {
+        self.target_version
+    }
+
+    /// Reports selected SQL without applying it.
+    #[must_use]
+    pub const fn with_dry_run(mut self, dry_run: bool) -> Self {
+        self.dry_run = dry_run;
+        self
+    }
+
+    /// Limits the number of migration steps.
+    #[must_use]
+    pub const fn with_max_steps(mut self, maximum: usize) -> Self {
+        self.max_steps = Some(maximum);
+        self
+    }
+
+    /// Migrates toward a target schema version. `-1` removes River.
+    #[must_use]
+    pub const fn with_target_version(mut self, version: i64) -> Self {
+        self.target_version = Some(version);
+        self
+    }
 }
 
 /// One migration selected or applied by an operation.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct MigrateVersion {
     /// Database execution time, or zero for a dry run.
     pub duration: Duration,
@@ -75,6 +143,7 @@ pub struct MigrateVersion {
 
 /// Result of a migration operation.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct MigrateResult {
     /// Direction requested.
     pub direction: Direction,
@@ -84,6 +153,7 @@ pub struct MigrateResult {
 
 /// Result of checking whether required migrations are applied.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct ValidateResult {
     /// Human-readable validation failures.
     pub messages: Vec<String>,
@@ -92,7 +162,8 @@ pub struct ValidateResult {
 }
 
 /// Canonical PostgreSQL migration bundle.
-pub const MIGRATIONS: [Migration; 7] = [
+#[cfg(feature = "postgres")]
+pub const POSTGRES_MIGRATIONS: [Migration; 7] = [
     migration!(1, "create_river_migration", "001_create_river_migration"),
     migration!(2, "initial_schema", "002_initial_schema"),
     migration!(3, "river_job_tags_non_null", "003_river_job_tags_non_null"),
@@ -114,23 +185,31 @@ pub enum Error {
     #[error("invalid migration request: {0}")]
     Invalid(String),
 
-    /// Database operation failed.
+    /// PostgreSQL operation failed.
+    #[cfg(feature = "postgres")]
     #[error("PostgreSQL: {0}")]
-    Sqlx(#[from] sqlx::Error),
+    Postgres(#[from] sqlx::Error),
+
+    /// SQLite operation failed.
+    #[cfg(feature = "sqlite")]
+    #[error("SQLite: {0}")]
+    Sqlite(#[source] sqlx::Error),
 }
 
-/// Applies and validates River's migration history.
+/// Applies and validates River's PostgreSQL migration history.
+#[cfg(feature = "postgres")]
 #[derive(Clone, Debug)]
-pub struct Migrator {
+pub struct PostgresMigrator {
     pool: PgPool,
     schema: SchemaName,
 }
 
-impl Migrator {
+#[cfg(feature = "postgres")]
+impl PostgresMigrator {
     /// Returns every migration bundled with this crate.
     #[must_use]
     pub fn all_versions(&self) -> &'static [Migration] {
-        &MIGRATIONS
+        &POSTGRES_MIGRATIONS
     }
 
     /// Creates a migrator for PostgreSQL's current schema.
@@ -201,56 +280,9 @@ impl Migrator {
         direction: Direction,
         opts: MigrateOpts,
     ) -> Result<MigrateResult, Error> {
-        if let Some(target) = opts.target_version
-            && target != -1
-            && !MIGRATIONS
-                .iter()
-                .any(|migration| migration.version == target)
-        {
-            return Err(Error::Invalid(format!(
-                "version {target} is not a River migration"
-            )));
-        }
-
+        validate_target(&POSTGRES_MIGRATIONS, opts.target_version, true)?;
         let applied = self.existing_versions().await?;
-        for version in &applied {
-            if !MIGRATIONS
-                .iter()
-                .any(|migration| migration.version == *version)
-            {
-                return Err(Error::Invalid(format!(
-                    "database contains unknown River migration {version}"
-                )));
-            }
-        }
-
-        let mut selected = match direction {
-            Direction::Up => MIGRATIONS
-                .iter()
-                .filter(|migration| !applied.contains(&migration.version))
-                .filter(|migration| {
-                    opts.target_version
-                        .is_none_or(|target| target == -1 || migration.version <= target)
-                })
-                .copied()
-                .collect::<Vec<_>>(),
-            Direction::Down => MIGRATIONS
-                .iter()
-                .rev()
-                .filter(|migration| applied.contains(&migration.version))
-                .filter(|migration| {
-                    opts.target_version
-                        .is_none_or(|target| target == -1 || migration.version > target)
-                })
-                .copied()
-                .collect::<Vec<_>>(),
-        };
-        let maximum = opts.max_steps.or_else(|| {
-            (direction == Direction::Down && opts.target_version.is_none()).then_some(1)
-        });
-        if let Some(maximum) = maximum {
-            selected.truncate(maximum);
-        }
+        let selected = select_migrations(&POSTGRES_MIGRATIONS, direction, opts, &applied)?;
 
         let mut versions = Vec::with_capacity(selected.len());
         for migration in selected {
@@ -279,33 +311,13 @@ impl Migrator {
 
     /// Checks that every migration through an optional target is applied.
     pub async fn validate(&self, target_version: Option<i64>) -> Result<ValidateResult, Error> {
-        if let Some(target) = target_version
-            && !MIGRATIONS
-                .iter()
-                .any(|migration| migration.version == target)
-        {
-            return Err(Error::Invalid(format!(
-                "version {target} is not a River migration"
-            )));
-        }
+        validate_target(&POSTGRES_MIGRATIONS, target_version, false)?;
         let applied = self.existing_versions().await?;
-        let missing = MIGRATIONS
-            .iter()
-            .filter(|migration| target_version.is_none_or(|target| migration.version <= target))
-            .filter(|migration| !applied.contains(&migration.version))
-            .map(|migration| migration.version)
-            .collect::<Vec<_>>();
-        if missing.is_empty() {
-            Ok(ValidateResult {
-                messages: Vec::new(),
-                ok: true,
-            })
-        } else {
-            Ok(ValidateResult {
-                messages: vec![format!("unapplied migrations: {missing:?}")],
-                ok: false,
-            })
-        }
+        Ok(validate_migrations(
+            &POSTGRES_MIGRATIONS,
+            target_version,
+            &applied,
+        ))
     }
 
     async fn apply(
@@ -364,4 +376,93 @@ impl Migrator {
     fn render(&self, sql: &str) -> String {
         sql.replace(TEMPLATE_SCHEMA, &self.schema.migration_prefix())
     }
+}
+
+fn select_migrations(
+    migrations: &'static [Migration],
+    direction: Direction,
+    opts: MigrateOpts,
+    applied: &[i64],
+) -> Result<Vec<Migration>, Error> {
+    for version in applied {
+        if !migrations
+            .iter()
+            .any(|migration| migration.version == *version)
+        {
+            return Err(Error::Invalid(format!(
+                "database contains unknown River migration {version}"
+            )));
+        }
+    }
+
+    let mut selected = match direction {
+        Direction::Up => migrations
+            .iter()
+            .filter(|migration| !applied.contains(&migration.version))
+            .filter(|migration| {
+                opts.target_version
+                    .is_none_or(|target| target == -1 || migration.version <= target)
+            })
+            .copied()
+            .collect::<Vec<_>>(),
+        Direction::Down => migrations
+            .iter()
+            .rev()
+            .filter(|migration| applied.contains(&migration.version))
+            .filter(|migration| {
+                opts.target_version
+                    .is_none_or(|target| target == -1 || migration.version > target)
+            })
+            .copied()
+            .collect::<Vec<_>>(),
+    };
+    let maximum = opts
+        .max_steps
+        .or_else(|| (direction == Direction::Down && opts.target_version.is_none()).then_some(1));
+    if let Some(maximum) = maximum {
+        selected.truncate(maximum);
+    }
+    Ok(selected)
+}
+
+fn validate_migrations(
+    migrations: &[Migration],
+    target_version: Option<i64>,
+    applied: &[i64],
+) -> ValidateResult {
+    let missing = migrations
+        .iter()
+        .filter(|migration| target_version.is_none_or(|target| migration.version <= target))
+        .filter(|migration| !applied.contains(&migration.version))
+        .map(|migration| migration.version)
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        ValidateResult {
+            messages: Vec::new(),
+            ok: true,
+        }
+    } else {
+        ValidateResult {
+            messages: vec![format!("unapplied migrations: {missing:?}")],
+            ok: false,
+        }
+    }
+}
+
+fn validate_target(
+    migrations: &[Migration],
+    target_version: Option<i64>,
+    allow_empty: bool,
+) -> Result<(), Error> {
+    if let Some(target) = target_version
+        && !(allow_empty && target == -1)
+        && !migrations
+            .iter()
+            .any(|migration| migration.version == target)
+    {
+        return Err(Error::Invalid(format!(
+            "version {target} is not a River migration"
+        )));
+    }
+    Ok(())
 }

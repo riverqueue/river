@@ -1,9 +1,7 @@
-//! PostgreSQL client, insertion, and worker runtime.
+//! Database-backed client, insertion, and worker runtime.
 
 use std::{
     collections::HashMap,
-    error::Error as StdError,
-    fmt::Write as _,
     sync::{
         Arc, Mutex, RwLock, Weak,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -11,15 +9,23 @@ use std::{
     time::Duration,
 };
 
-use chrono::{DateTime, NaiveTime, SecondsFormat, Utc};
+#[cfg(feature = "postgres")]
+use chrono::SecondsFormat;
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
+use sqlx::AssertSqlSafe;
+#[cfg(feature = "sqlite")]
+use sqlx::SqlitePool;
+#[cfg(feature = "postgres")]
 use sqlx::{
-    AssertSqlSafe, Executor, FromRow, PgConnection, PgPool, Postgres, Row,
+    Executor, FromRow, PgConnection, PgPool, Postgres, Row,
     postgres::{PgListener, PgRow},
     types::Json,
 };
+#[cfg(feature = "postgres")]
+use std::fmt::Write as _;
 use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore, broadcast, mpsc, oneshot, watch},
     task::JoinSet,
@@ -27,16 +33,27 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, error, info_span, warn};
 
-use riverqueue_internal::{CompletionAction, CompletionParams, FetchParams, NoopPilot, Pilot};
+use riverqueue_internal::{
+    CompletionAction, CompletionParams, DatabaseConnection as PilotDatabaseConnection, FetchParams,
+    JobInsertParams as PilotJobInsertParams,
+};
+use riverqueue_internal::{
+    DatabaseConfig as PilotDatabaseConfig, DatabasePool as PilotDatabasePool, NoopPilot, Pilot,
+};
 
 use crate::{
-    AttemptError, DefaultRetryPolicy, Error, ErrorHandler, ErrorHandlerResult, Event, EventKind,
-    EventReceiver, FETCH_COOLDOWN_DEFAULT, FETCH_COOLDOWN_MIN, FETCH_POLL_INTERVAL_DEFAULT, Hook,
-    InsertContext, InsertMiddleware, InsertOpts, InsertResult, JOB_STUCK_THRESHOLD_DEFAULT,
-    JOB_TIMEOUT_DEFAULT, Job, JobArgs, JobRow, JobState, JobStatistics, MAX_ATTEMPTS_DEFAULT,
-    Metric, Plugin, QUEUE_NUM_WORKERS_MAX, RawInsertResult, RetryPolicy, SchemaName,
-    SubscribeConfig, WorkContext, WorkMiddleware, WorkOutcome, WorkResult, WorkerRegistry,
-    WorkerTimeout,
+    AttemptError, BoxError, DefaultRetryPolicy, Error, ErrorHandler, ErrorHandlerDecision, Event,
+    EventKind, EventReceiver, ExtensionClaimParams, ExtensionInsertParams, FETCH_COOLDOWN_DEFAULT,
+    FETCH_COOLDOWN_MIN, FETCH_POLL_INTERVAL_DEFAULT, Hook, InsertBatch, InsertBatchResult,
+    InsertContext, InsertMiddleware, InsertOpts, InsertParams, InsertResult,
+    JOB_STUCK_THRESHOLD_DEFAULT, JOB_TIMEOUT_DEFAULT, Job, JobArgs, JobEventKind, JobRow, JobState,
+    JobStatistics, MAX_ATTEMPTS_DEFAULT, Metric, Plugin, QUEUE_NUM_WORKERS_MAX, QueueEventKind,
+    RawInsertResult, RetryPolicy, SchemaName, SubscribeConfig, WorkContext, WorkError,
+    WorkMiddleware, WorkOutcome, WorkResult, WorkerRegistry, WorkerTimeout,
+    database::{
+        Database, DatabaseExecutor, DatabaseKind, DatabasePool, DatabaseTransactionExecutor,
+        ErasedExecutor, ExecutorInner, IntoDatabase,
+    },
     periodic::{PeriodicInsert, PeriodicJob, PeriodicJobs},
     unique::build_unique_key_parts,
 };
@@ -48,40 +65,110 @@ const PENDING_CANCELLATION_RETENTION: Duration = Duration::from_mins(1);
 // Large queues otherwise become limited by a single PostgreSQL claim round trip.
 // Concurrent `SKIP LOCKED` claims safely divide the available worker slots.
 const PARALLEL_FETCH_MINIMUM: usize = 1_000;
+const QUEUE_CONFIG_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const QUEUE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Leader-owned maintenance timing and retention settings.
 #[derive(Clone, Debug)]
 pub struct MaintenanceConfig {
     /// Retention for cancelled jobs; `None` disables deletion.
-    pub cancelled_job_retention: Option<Duration>,
+    pub(crate) cancelled_job_retention: Option<Duration>,
     /// Retention for completed jobs; `None` disables deletion.
-    pub completed_job_retention: Option<Duration>,
+    pub(crate) completed_job_retention: Option<Duration>,
     /// Retention for discarded jobs; `None` disables deletion.
-    pub discarded_job_retention: Option<Duration>,
+    pub(crate) discarded_job_retention: Option<Duration>,
     /// Leader election and renewal interval.
-    pub elect_interval: Duration,
+    pub(crate) elect_interval: Duration,
     /// Job cleaner interval.
-    pub job_cleaner_interval: Duration,
+    pub(crate) job_cleaner_interval: Duration,
     /// Timeout for each job-cleaner deletion statement.
-    pub job_cleaner_timeout: Duration,
+    pub(crate) job_cleaner_timeout: Duration,
     /// Age at which running jobs may be rescued.
-    pub rescue_after: Duration,
+    pub(crate) rescue_after: Duration,
     /// Stuck-job rescuer interval.
-    pub rescuer_interval: Duration,
+    pub(crate) rescuer_interval: Duration,
     /// Retention for inactive queue records.
-    pub queue_retention: Duration,
+    pub(crate) queue_retention: Duration,
     /// Inactive queue cleaner interval.
-    pub queue_cleaner_interval: Duration,
-    /// PostgreSQL indexes periodically rebuilt with `REINDEX CONCURRENTLY`.
-    /// An empty list disables reindexing.
-    pub reindexer_index_names: Vec<String>,
-    /// Schedule for reindexer runs.
-    pub reindexer_schedule: ReindexerSchedule,
-    /// Statement timeout for each reindex operation.
-    pub reindexer_timeout: Duration,
+    pub(crate) queue_cleaner_interval: Duration,
     /// Due-job scheduler interval.
-    pub scheduler_interval: Duration,
+    pub(crate) scheduler_interval: Duration,
+}
+
+macro_rules! maintenance_option {
+    ($getter:ident, $setter:ident, $field:ident) => {
+        #[doc = concat!("Returns `", stringify!($field), "`.")]
+        #[must_use]
+        pub const fn $getter(&self) -> Option<Duration> {
+            self.$field
+        }
+
+        #[doc = concat!("Sets `", stringify!($field), "`.")]
+        #[must_use]
+        pub const fn $setter(mut self, value: Option<Duration>) -> Self {
+            self.$field = value;
+            self
+        }
+    };
+}
+
+macro_rules! maintenance_duration {
+    ($getter:ident, $setter:ident, $field:ident) => {
+        #[doc = concat!("Returns `", stringify!($field), "`.")]
+        #[must_use]
+        pub const fn $getter(&self) -> Duration {
+            self.$field
+        }
+
+        #[doc = concat!("Sets `", stringify!($field), "`.")]
+        #[must_use]
+        pub const fn $setter(mut self, value: Duration) -> Self {
+            self.$field = value;
+            self
+        }
+    };
+}
+
+impl MaintenanceConfig {
+    maintenance_option!(
+        cancelled_job_retention,
+        with_cancelled_job_retention,
+        cancelled_job_retention
+    );
+    maintenance_option!(
+        completed_job_retention,
+        with_completed_job_retention,
+        completed_job_retention
+    );
+    maintenance_option!(
+        discarded_job_retention,
+        with_discarded_job_retention,
+        discarded_job_retention
+    );
+    maintenance_duration!(elect_interval, with_elect_interval, elect_interval);
+    maintenance_duration!(
+        job_cleaner_interval,
+        with_job_cleaner_interval,
+        job_cleaner_interval
+    );
+    maintenance_duration!(
+        job_cleaner_timeout,
+        with_job_cleaner_timeout,
+        job_cleaner_timeout
+    );
+    maintenance_duration!(rescue_after, with_rescue_after, rescue_after);
+    maintenance_duration!(rescuer_interval, with_rescuer_interval, rescuer_interval);
+    maintenance_duration!(queue_retention, with_queue_retention, queue_retention);
+    maintenance_duration!(
+        queue_cleaner_interval,
+        with_queue_cleaner_interval,
+        queue_cleaner_interval
+    );
+    maintenance_duration!(
+        scheduler_interval,
+        with_scheduler_interval,
+        scheduler_interval
+    );
 }
 
 impl Default for MaintenanceConfig {
@@ -97,35 +184,8 @@ impl Default for MaintenanceConfig {
             rescuer_interval: Duration::from_secs(30),
             queue_retention: Duration::from_hours(24),
             queue_cleaner_interval: Duration::from_hours(1),
-            reindexer_index_names: vec![
-                "river_job_args_index".to_owned(),
-                "river_job_kind".to_owned(),
-                "river_job_metadata_index".to_owned(),
-                "river_job_pkey".to_owned(),
-                "river_job_prioritized_fetching_index".to_owned(),
-                "river_job_state_and_finalized_at_index".to_owned(),
-                "river_job_unique_idx".to_owned(),
-            ],
-            reindexer_schedule: ReindexerSchedule::default(),
-            reindexer_timeout: Duration::from_mins(1),
             scheduler_interval: Duration::from_secs(5),
         }
-    }
-}
-
-/// Schedule used by River's leader-owned PostgreSQL reindexer.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum ReindexerSchedule {
-    /// Run each day at the supplied UTC wall-clock time.
-    DailyUtc(NaiveTime),
-    /// Run after each elapsed interval from client startup.
-    Interval(Duration),
-}
-
-impl Default for ReindexerSchedule {
-    fn default() -> Self {
-        Self::DailyUtc(NaiveTime::MIN)
     }
 }
 
@@ -133,11 +193,11 @@ impl Default for ReindexerSchedule {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QueueConfig {
     /// Minimum delay between fetches.
-    pub fetch_cooldown: Duration,
+    pub(crate) fetch_cooldown: Duration,
     /// Fallback polling interval.
-    pub fetch_poll_interval: Duration,
+    pub(crate) fetch_poll_interval: Duration,
     /// Maximum jobs run concurrently by this client.
-    pub max_workers: usize,
+    pub(crate) max_workers: usize,
 }
 
 impl QueueConfig {
@@ -151,20 +211,59 @@ impl QueueConfig {
         }
     }
 
+    /// Returns the minimum delay between fetches.
+    #[must_use]
+    pub const fn fetch_cooldown(&self) -> Duration {
+        self.fetch_cooldown
+    }
+
+    /// Returns the fallback polling interval.
+    #[must_use]
+    pub const fn fetch_poll_interval(&self) -> Duration {
+        self.fetch_poll_interval
+    }
+
+    /// Returns the maximum jobs run concurrently.
+    #[must_use]
+    pub const fn max_workers(&self) -> usize {
+        self.max_workers
+    }
+
+    /// Sets the minimum delay between fetches.
+    #[must_use]
+    pub const fn with_fetch_cooldown(mut self, interval: Duration) -> Self {
+        self.fetch_cooldown = interval;
+        self
+    }
+
+    /// Sets the fallback polling interval.
+    #[must_use]
+    pub const fn with_fetch_poll_interval(mut self, interval: Duration) -> Self {
+        self.fetch_poll_interval = interval;
+        self
+    }
+
+    /// Sets the maximum jobs run concurrently.
+    #[must_use]
+    pub const fn with_max_workers(mut self, maximum: usize) -> Self {
+        self.max_workers = maximum;
+        self
+    }
+
     fn validate(&self, name: &str) -> Result<(), Error> {
         validate_queue(name)?;
         if !(1..=QUEUE_NUM_WORKERS_MAX).contains(&self.max_workers) {
-            return Err(Error::InvalidJob(format!(
+            return Err(Error::configuration(format!(
                 "queue {name:?} max_workers must be between 1 and {QUEUE_NUM_WORKERS_MAX}"
             )));
         }
         if self.fetch_cooldown < FETCH_COOLDOWN_MIN {
-            return Err(Error::InvalidJob(
+            return Err(Error::configuration(
                 "fetch cooldown must be at least one millisecond".to_owned(),
             ));
         }
         if self.fetch_poll_interval < self.fetch_cooldown {
-            return Err(Error::InvalidJob(
+            return Err(Error::configuration(
                 "fetch poll interval cannot be shorter than fetch cooldown".to_owned(),
             ));
         }
@@ -174,6 +273,7 @@ impl QueueConfig {
 
 /// Builder for a River client.
 pub struct ClientBuilder {
+    database: Database,
     default_max_attempts: i16,
     error_handler: Option<Arc<dyn ErrorHandler>>,
     hooks: Vec<Arc<dyn Hook>>,
@@ -185,20 +285,32 @@ pub struct ClientBuilder {
     periodic_jobs: Vec<PeriodicJob>,
     pilot: Arc<dyn Pilot>,
     poll_only: bool,
-    pool: PgPool,
     queues: HashMap<String, QueueConfig>,
     retry_policy: Arc<dyn RetryPolicy>,
-    schema: SchemaName,
-    skip_job_kind_validation: bool,
-    skip_unknown_job_check: bool,
+    allow_legacy_job_kinds: bool,
+    allow_unregistered_job_kinds: bool,
     soft_stop_timeout: Option<Duration>,
     pub(crate) workers: WorkerRegistry,
     work_middleware: Vec<Arc<dyn WorkMiddleware>>,
 }
 
+impl std::fmt::Debug for ClientBuilder {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ClientBuilder")
+            .field("database_kind", &self.database.kind())
+            .field("id", &self.id)
+            .field("queue_count", &self.queues.len())
+            .field("worker_kinds", &self.workers.kinds())
+            .field("hook_count", &self.hooks.len())
+            .field("periodic_job_count", &self.periodic_jobs.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl ClientBuilder {
-    /// Sets the maximum attempts used by `insert_default` when the job type
-    /// leaves its insertion default unchanged.
+    /// Sets the maximum attempts used by [`Client::insert`] when the job type
+    /// does not override it.
     #[must_use]
     pub fn default_max_attempts(mut self, maximum: i16) -> Self {
         self.default_max_attempts = maximum;
@@ -269,10 +381,11 @@ impl ClientBuilder {
         self
     }
 
-    /// Uses periodic polling without PostgreSQL `LISTEN` connections.
+    /// Disables the backend notification channel or outbox poller while
+    /// retaining queue fetch polling.
     #[must_use]
-    pub fn poll_only(mut self, poll_only: bool) -> Self {
-        self.poll_only = poll_only;
+    pub fn without_notifications(mut self) -> Self {
+        self.poll_only = true;
         self
     }
 
@@ -300,26 +413,18 @@ impl ClientBuilder {
         self
     }
 
-    /// Uses an explicit PostgreSQL schema.
-    #[must_use]
-    pub fn schema(mut self, schema: SchemaName) -> Self {
-        self.schema = schema;
-        self
-    }
-
     /// Temporarily permits legacy job kinds that do not match River's format.
     #[must_use]
-    #[deprecated(note = "legacy escape hatch; valid River job kinds are required")]
-    pub fn skip_job_kind_validation(mut self, skip: bool) -> Self {
-        self.skip_job_kind_validation = skip;
+    pub fn allow_legacy_job_kinds(mut self) -> Self {
+        self.allow_legacy_job_kinds = true;
         self
     }
 
     /// Allows inserting kinds with no worker in this client's registry.
     /// Insert-only clients already permit every kind.
     #[must_use]
-    pub fn skip_unknown_job_check(mut self, skip: bool) -> Self {
-        self.skip_unknown_job_check = skip;
+    pub fn allow_unregistered_job_kinds(mut self) -> Self {
+        self.allow_unregistered_job_kinds = true;
         self
     }
 
@@ -346,14 +451,18 @@ impl ClientBuilder {
     }
 
     /// Validates configuration and builds the client.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "central validation keeps builder failures deterministic before allocating runtime state"
+    )]
     pub fn build(self) -> Result<Client, Error> {
         if self.default_max_attempts < 1 {
-            return Err(Error::InvalidJob(
+            return Err(Error::configuration(
                 "default max attempts must be greater than zero".to_owned(),
             ));
         }
         if self.id.is_empty() || self.id.len() > 100 {
-            return Err(Error::InvalidJob(
+            return Err(Error::configuration(
                 "client ID must contain between 1 and 100 bytes".to_owned(),
             ));
         }
@@ -361,7 +470,7 @@ impl ClientBuilder {
             .soft_stop_timeout
             .is_some_and(|timeout| timeout.is_zero())
         {
-            return Err(Error::InvalidJob(
+            return Err(Error::configuration(
                 "soft stop timeout must be positive when configured".to_owned(),
             ));
         }
@@ -382,36 +491,59 @@ impl ClientBuilder {
                 self.maintenance.queue_cleaner_interval,
             ),
             ("queue retention", self.maintenance.queue_retention),
-            ("reindexer timeout", self.maintenance.reindexer_timeout),
             ("scheduler interval", self.maintenance.scheduler_interval),
         ] {
             if interval.is_zero() {
-                return Err(Error::InvalidJob(format!("{name} must be positive")));
+                return Err(Error::configuration(format!("{name} must be positive")));
             }
         }
+        #[cfg(feature = "postgres")]
+        let reindex = self.database.postgres_reindex();
+        #[cfg(feature = "postgres")]
+        if reindex.is_some_and(|config| config.timeout().is_zero()) {
+            return Err(Error::configuration(
+                "reindexer timeout must be positive".to_owned(),
+            ));
+        }
+        #[cfg(feature = "postgres")]
         if matches!(
-            self.maintenance.reindexer_schedule,
-            ReindexerSchedule::Interval(interval) if interval.is_zero()
+            reindex.map(crate::database::PostgresReindexConfig::schedule),
+            Some(crate::database::PostgresReindexSchedule::Interval(interval)) if interval.is_zero()
         ) {
-            return Err(Error::InvalidJob(
+            return Err(Error::configuration(
                 "reindexer interval must be positive".to_owned(),
             ));
         }
-        for index_name in &self.maintenance.reindexer_index_names {
+        #[cfg(feature = "postgres")]
+        for index_name in reindex
+            .into_iter()
+            .flat_map(crate::database::PostgresReindexConfig::index_names)
+        {
             validate_identifier(index_name, "reindexer index")?;
         }
         if !self.queues.is_empty() && self.workers.kinds().is_empty() {
-            return Err(Error::InvalidJob(
+            return Err(Error::configuration(
                 "workers must be configured when queues are configured".to_owned(),
             ));
         }
+        for metadata_key in self.pilot.job_cleaner_metadata_exclusions() {
+            validate_metadata_key(metadata_key)?;
+        }
 
         let periodic_jobs = PeriodicJobs::from_jobs(self.periodic_jobs)?;
+        #[cfg(feature = "postgres")]
+        let schema = self
+            .database
+            .postgres_schema()
+            .cloned()
+            .unwrap_or_else(SchemaName::current);
         let (events, _) = broadcast::channel(EVENT_BUFFER_CAPACITY);
         let (queue_changes, _) = watch::channel(0_u64);
         let (queue_notifications, _) = broadcast::channel(1_024);
         Ok(Client {
             inner: Arc::new(ClientInner {
+                completion_sender: Mutex::new(None),
+                database: self.database,
                 default_max_attempts: self.default_max_attempts,
                 error_handler: self.error_handler,
                 events,
@@ -426,17 +558,18 @@ impl ClientBuilder {
                 pending_cancellations: Mutex::new(HashMap::new()),
                 pilot: self.pilot,
                 poll_only: self.poll_only,
-                pool: self.pool,
                 queue_changes,
                 queue_notifications,
                 queues: RwLock::new(self.queues),
                 retry_policy: self.retry_policy,
                 running: Mutex::new(HashMap::new()),
-                schema: self.schema,
-                skip_job_kind_validation: self.skip_job_kind_validation,
-                skip_unknown_job_check: self.skip_unknown_job_check,
+                #[cfg(feature = "postgres")]
+                schema,
+                allow_legacy_job_kinds: self.allow_legacy_job_kinds,
+                allow_unregistered_job_kinds: self.allow_unregistered_job_kinds,
                 soft_stop_timeout: self.soft_stop_timeout,
                 started: AtomicBool::new(false),
+                unique_nonce: AtomicU64::new(0),
                 workers: self.workers,
                 work_middleware: self.work_middleware,
             }),
@@ -445,6 +578,8 @@ impl ClientBuilder {
 }
 
 pub(crate) struct ClientInner {
+    completion_sender: Mutex<Option<mpsc::WeakSender<CompletionUpdate>>>,
+    pub(crate) database: Database,
     default_max_attempts: i16,
     error_handler: Option<Arc<dyn ErrorHandler>>,
     pub(crate) events: broadcast::Sender<Event>,
@@ -459,25 +594,157 @@ pub(crate) struct ClientInner {
     pending_cancellations: Mutex<HashMap<i64, std::time::Instant>>,
     pub(crate) pilot: Arc<dyn Pilot>,
     poll_only: bool,
-    pub(crate) pool: PgPool,
     queue_changes: watch::Sender<u64>,
-    queue_notifications: broadcast::Sender<String>,
+    queue_notifications: broadcast::Sender<RuntimeNotification>,
     queues: RwLock<HashMap<String, QueueConfig>>,
     pub(crate) retry_policy: Arc<dyn RetryPolicy>,
     running: Mutex<HashMap<i64, CancellationToken>>,
+    #[cfg(feature = "postgres")]
     pub(crate) schema: SchemaName,
-    skip_job_kind_validation: bool,
-    skip_unknown_job_check: bool,
+    allow_legacy_job_kinds: bool,
+    allow_unregistered_job_kinds: bool,
     soft_stop_timeout: Option<Duration>,
     started: AtomicBool,
+    unique_nonce: AtomicU64,
     pub(crate) workers: WorkerRegistry,
     work_middleware: Vec<Arc<dyn WorkMiddleware>>,
 }
 
-/// A River client backed by a caller-owned SQLx PostgreSQL pool.
+#[cfg(feature = "sqlite")]
+fn sqlite_backend_error(error: crate::database::sqlite::BackendError) -> Error {
+    Error::Database(Box::new(error))
+}
+
+fn transaction_pool_error(operation: &'static str) -> Error {
+    Error::configuration(format!(
+        "{operation} requires a caller-managed transaction, not a pool or bare connection"
+    ))
+}
+
+#[cfg(feature = "postgres")]
+async fn begin_postgres_savepoint(connection: &mut PgConnection, name: &str) -> Result<(), Error> {
+    sqlx::query(AssertSqlSafe(format!("SAVEPOINT {name}")))
+        .execute(connection)
+        .await?;
+    Ok(())
+}
+
+#[cfg(feature = "sqlite")]
+async fn begin_sqlite_savepoint(
+    connection: &mut sqlx::SqliteConnection,
+    name: &str,
+) -> Result<(), Error> {
+    sqlx::query(AssertSqlSafe(format!("SAVEPOINT {name}")))
+        .execute(connection)
+        .await?;
+    Ok(())
+}
+
+#[cfg(feature = "postgres")]
+async fn finish_postgres_savepoint<T>(
+    connection: &mut PgConnection,
+    name: &str,
+    result: Result<T, Error>,
+) -> Result<T, Error> {
+    if result.is_err() {
+        sqlx::query(AssertSqlSafe(format!("ROLLBACK TO SAVEPOINT {name}")))
+            .execute(&mut *connection)
+            .await?;
+    }
+    sqlx::query(AssertSqlSafe(format!("RELEASE SAVEPOINT {name}")))
+        .execute(connection)
+        .await?;
+    result
+}
+
+#[cfg(feature = "sqlite")]
+async fn finish_sqlite_savepoint<T>(
+    connection: &mut sqlx::SqliteConnection,
+    name: &str,
+    result: Result<T, Error>,
+) -> Result<T, Error> {
+    if result.is_err() {
+        sqlx::query(AssertSqlSafe(format!("ROLLBACK TO SAVEPOINT {name}")))
+            .execute(&mut *connection)
+            .await?;
+    }
+    sqlx::query(AssertSqlSafe(format!("RELEASE SAVEPOINT {name}")))
+        .execute(connection)
+        .await?;
+    result
+}
+
+impl ClientInner {
+    pub(crate) fn erase_executor<'executor, E>(
+        &self,
+        executor: E,
+    ) -> Result<ErasedExecutor<'executor>, crate::database::DatabaseMismatch>
+    where
+        E: DatabaseExecutor<'executor>,
+    {
+        self.database.executor(executor)
+    }
+
+    #[cfg(feature = "postgres")]
+    pub(crate) const fn database(&self) -> &Database {
+        &self.database
+    }
+
+    #[cfg(feature = "postgres")]
+    pub(crate) fn postgres_pool(&self) -> Option<&PgPool> {
+        match self.database.pool() {
+            DatabasePool::Postgres(pool) => Some(pool),
+            #[cfg(feature = "sqlite")]
+            DatabasePool::Sqlite(_) => None,
+        }
+    }
+
+    #[cfg(feature = "sqlite")]
+    pub(crate) fn sqlite_pool(&self) -> Option<&SqlitePool> {
+        match self.database.pool() {
+            #[cfg(feature = "postgres")]
+            DatabasePool::Postgres(_) => None,
+            DatabasePool::Sqlite(pool) => Some(pool),
+        }
+    }
+
+    pub(crate) fn pilot_database_config(&self) -> PilotDatabaseConfig {
+        match self.database.pool() {
+            #[cfg(feature = "postgres")]
+            DatabasePool::Postgres(_) => PilotDatabaseConfig::Postgres {
+                #[cfg(feature = "postgres")]
+                schema: self.schema.clone(),
+            },
+            #[cfg(feature = "sqlite")]
+            DatabasePool::Sqlite(_) => PilotDatabaseConfig::Sqlite,
+        }
+    }
+
+    pub(crate) fn pilot_database_pool(&self) -> PilotDatabasePool {
+        match self.database.pool() {
+            #[cfg(feature = "postgres")]
+            DatabasePool::Postgres(pool) => PilotDatabasePool::Postgres(pool.clone()),
+            #[cfg(feature = "sqlite")]
+            DatabasePool::Sqlite(pool) => PilotDatabasePool::Sqlite(pool.clone()),
+        }
+    }
+}
+
+/// A River client backed by a caller-owned pool for a built-in database.
 #[derive(Clone)]
 pub struct Client {
     pub(crate) inner: Arc<ClientInner>,
+}
+
+impl std::fmt::Debug for Client {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Client")
+            .field("database_kind", &self.database_kind())
+            .field("id", &self.id())
+            .field("started", &self.inner.started.load(Ordering::Acquire))
+            .finish_non_exhaustive()
+    }
 }
 
 /// Non-owning handle used by exact-version extension services.
@@ -485,6 +752,15 @@ pub struct Client {
 #[derive(Clone)]
 pub struct WeakClient {
     inner: Weak<ClientInner>,
+}
+
+impl std::fmt::Debug for WeakClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WeakClient")
+            .field("alive", &(self.inner.strong_count() > 0))
+            .finish_non_exhaustive()
+    }
 }
 
 impl WeakClient {
@@ -498,8 +774,13 @@ impl WeakClient {
 impl Client {
     /// Creates a builder for an insert-only client.
     #[must_use]
-    pub fn builder(pool: PgPool) -> ClientBuilder {
+    pub fn builder<D>(database: D) -> ClientBuilder
+    where
+        D: IntoDatabase,
+    {
+        let database = Database::from_source(database);
         ClientBuilder {
+            database,
             default_max_attempts: MAX_ATTEMPTS_DEFAULT,
             error_handler: None,
             hooks: Vec::new(),
@@ -511,12 +792,10 @@ impl Client {
             periodic_jobs: Vec::new(),
             pilot: Arc::new(NoopPilot),
             poll_only: false,
-            pool,
             queues: HashMap::new(),
             retry_policy: Arc::new(DefaultRetryPolicy::default()),
-            schema: SchemaName::current(),
-            skip_job_kind_validation: false,
-            skip_unknown_job_check: false,
+            allow_legacy_job_kinds: false,
+            allow_unregistered_job_kinds: false,
             soft_stop_timeout: None,
             workers: WorkerRegistry::new(),
             work_middleware: Vec::new(),
@@ -538,6 +817,117 @@ impl Client {
         &self.inner.id
     }
 
+    /// Atomically claims complete job rows for an exact-version extension.
+    ///
+    /// Eligible jobs are available, due, and match the supplied kind, queue,
+    /// and top-level metadata values. River records the attempt and client ID,
+    /// applies the metadata updates in the same transaction, and returns rows
+    /// ordered by priority, scheduled time, and ID.
+    #[doc(hidden)]
+    pub async fn extension_claim_jobs(
+        &self,
+        params: ExtensionClaimParams,
+    ) -> Result<Vec<JobRow>, Error> {
+        if params.maximum <= 0 {
+            return Ok(Vec::new());
+        }
+        #[cfg(feature = "sqlite")]
+        if let Some(pool) = self.inner.sqlite_pool() {
+            let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+            let rows = crate::database::sqlite::claim_filtered(
+                &mut transaction,
+                &crate::database::sqlite::ClaimFilteredJobs {
+                    client_id: &self.inner.id,
+                    excluded_job_id: params.excluded_job_id,
+                    kind: &params.kind,
+                    limit: params.maximum,
+                    max_attempted_by: ATTEMPTED_BY_MAX,
+                    metadata_matches: &params.metadata_matches,
+                    metadata_updates: &params.metadata_updates,
+                    now: Utc::now(),
+                    queue: &params.queue,
+                },
+            )
+            .await;
+            return match rows {
+                Ok(mut rows) => {
+                    sort_claimed_jobs(&mut rows);
+                    transaction.commit().await?;
+                    Ok(rows)
+                }
+                Err(error) => {
+                    transaction.rollback().await?;
+                    Err(sqlite_backend_error(error))
+                }
+            };
+        }
+        #[cfg(feature = "postgres")]
+        {
+            let pool = self
+                .inner
+                .postgres_pool()
+                .expect("PostgreSQL claim path requires a PostgreSQL pool");
+            let table = self.inner.schema.qualify("river_job");
+            let sql = format!(
+                "WITH locked AS (\
+                    SELECT id FROM {table} \
+                    WHERE state = 'available' AND queue = $1 AND kind = $2 \
+                      AND id != $3 AND scheduled_at <= now() \
+                      AND metadata @> $4::jsonb \
+                    ORDER BY priority ASC, scheduled_at ASC, id ASC \
+                    LIMIT $5 FOR UPDATE SKIP LOCKED\
+                 ) UPDATE {table} AS job \
+                    SET state = 'running', attempt = job.attempt + 1, \
+                        attempted_at = now(), attempted_by = array_append(\
+                            CASE WHEN array_length(job.attempted_by, 1) >= $7 \
+                                 THEN job.attempted_by[array_length(job.attempted_by, 1) + 2 - $7:] \
+                                 ELSE job.attempted_by END, $6), \
+                        metadata = job.metadata || $8::jsonb \
+                    FROM locked WHERE job.id = locked.id \
+                    RETURNING {}, false AS unique_skipped_as_duplicate",
+                job_projection("job")
+            );
+            let mut transaction = pool.begin().await?;
+            let records = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+                .bind(&params.queue)
+                .bind(&params.kind)
+                .bind(params.excluded_job_id)
+                .bind(Json(&params.metadata_matches))
+                .bind(params.maximum)
+                .bind(&self.inner.id)
+                .bind(ATTEMPTED_BY_MAX)
+                .bind(Json(&params.metadata_updates))
+                .fetch_all(&mut *transaction)
+                .await;
+            let records = match records {
+                Ok(records) => records,
+                Err(error) => {
+                    transaction.rollback().await?;
+                    return Err(error.into());
+                }
+            };
+            let rows = records
+                .into_iter()
+                .map(JobRecord::into_job_row)
+                .collect::<Result<Vec<_>, _>>();
+            return match rows {
+                Ok(mut rows) => {
+                    sort_claimed_jobs(&mut rows);
+                    transaction.commit().await?;
+                    Ok(rows)
+                }
+                Err(error) => {
+                    transaction.rollback().await?;
+                    Err(error)
+                }
+            };
+        }
+        #[allow(unreachable_code)]
+        Err(Error::runtime(
+            "database dispatch selected no supported backend".to_owned(),
+        ))
+    }
+
     /// Computes the configured retry delay for an exact-version extension.
     #[doc(hidden)]
     #[must_use]
@@ -552,23 +942,180 @@ impl Client {
         self.inner.maintenance.scheduler_interval
     }
 
+    /// Reports outcomes for jobs claimed and executed by an exact-version
+    /// extension through River's canonical completion pipeline.
+    ///
+    /// The extension's handler context supplies metadata updates shared by the
+    /// execution. Each failed outcome runs the error handler for its own job,
+    /// then every outcome uses ordinary retry selection, completion
+    /// interception, persistence batching, event delivery, and statistics.
+    /// Work middleware and work hooks are deliberately not invoked again: they
+    /// surround the extension's handler once, before it reports these results.
+    /// Outcomes racing an external terminal transition preserve the persisted
+    /// state while retaining the submitted event reason.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the client runtime is not accepting completions,
+    /// or when synchronous extension interception or result normalization
+    /// fails. Ordinary batched persistence failures are reported by the
+    /// running completion service, matching regular worker behavior.
+    #[doc(hidden)]
+    pub async fn extension_persist_claimed_outcomes(
+        &self,
+        execution_context: &WorkContext,
+        outcomes: Vec<(JobRow, Result<WorkOutcome, BoxError>)>,
+    ) -> Result<(), Error> {
+        if outcomes.is_empty() {
+            return Ok(());
+        }
+        let metadata_updates = execution_context.metadata_updates().await;
+        let completion_sender = self
+            .inner
+            .completion_sender
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(mpsc::WeakSender::upgrade)
+            .ok_or_else(|| {
+                Error::runtime_context(
+                    "completion pipeline",
+                    "client runtime is not accepting job completions".to_owned(),
+                )
+            })?;
+        let mut first_error = None;
+        for (row, result) in outcomes {
+            if let Err(error) = self
+                .extension_persist_claimed_outcome(
+                    row,
+                    result,
+                    execution_context.cancellation_token(),
+                    &metadata_updates,
+                    &completion_sender,
+                )
+                .await
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    async fn extension_persist_claimed_outcome(
+        &self,
+        row: JobRow,
+        result: Result<WorkOutcome, BoxError>,
+        execution_cancellation: &CancellationToken,
+        metadata_updates: &Map<String, Value>,
+        completion_sender: &mpsc::Sender<CompletionUpdate>,
+    ) -> Result<(), Error> {
+        let cancellation = CancellationToken::new();
+        let context = WorkContext::for_job(
+            self.clone(),
+            execution_cancellation.clone(),
+            row.id,
+            &row.metadata,
+        );
+        for (key, value) in metadata_updates {
+            context.metadata_set(key.clone(), value.clone()).await;
+        }
+        let result = result.map_err(worker_failure_from_source);
+        let work_result = public_work_result(&result);
+        let mut error_handler_result = ErrorHandlerDecision::default();
+        if let Some(error_handler) = &self.inner.error_handler
+            && matches!(work_result, WorkResult::Failed(_))
+        {
+            match error_handler
+                .handle_error(&context, &row, &work_result)
+                .await
+            {
+                Ok(decision) => error_handler_result = decision,
+                Err(error) => error!(error = %error, "River error handler failed"),
+            }
+        }
+        let queue_wait_duration = row
+            .attempted_at
+            .and_then(|attempted_at| {
+                (attempted_at - row.scheduled_at.max(row.created_at))
+                    .to_std()
+                    .ok()
+            })
+            .unwrap_or_default();
+        let completion = CompletionAttempt {
+            cancellation,
+            timing: CompletionTiming {
+                completion_started: std::time::Instant::now(),
+                queue_wait_duration,
+                run_duration: Duration::ZERO,
+            },
+        };
+        match persist_result(
+            &self.inner,
+            &row,
+            &completion,
+            result,
+            context.metadata_updates().await,
+            error_handler_result,
+            completion_sender,
+        )
+        .await?
+        {
+            PersistResult::Finished(Some(event)) => {
+                let Event::Job(event) = *event else {
+                    unreachable!("job persistence returns only job events")
+                };
+                let event = Event::job_with_statistics(
+                    event.kind,
+                    event.job,
+                    JobStatistics {
+                        complete_duration: completion.timing.completion_started.elapsed(),
+                        queue_wait_duration,
+                        run_duration: Duration::ZERO,
+                    },
+                );
+                let _ = self.inner.events.send(event);
+            }
+            PersistResult::Enqueued | PersistResult::Finished(None) => {}
+        }
+        Ok(())
+    }
+
     /// Returns the dynamic periodic-job bundle for this client.
     #[must_use]
     pub fn periodic_jobs(&self) -> PeriodicJobs {
         self.inner.periodic_jobs.clone()
     }
 
-    /// Returns the caller-owned PostgreSQL pool for exact-version helpers.
-    #[doc(hidden)]
+    /// Returns the selected database backend.
     #[must_use]
-    pub fn pool(&self) -> &PgPool {
-        &self.inner.pool
+    pub fn database_kind(&self) -> DatabaseKind {
+        self.inner.database.kind()
     }
 
-    /// Returns the validated PostgreSQL schema selection.
+    /// Returns the caller-owned PostgreSQL pool, if this is a PostgreSQL
+    /// client.
     #[must_use]
-    pub fn schema(&self) -> &SchemaName {
-        &self.inner.schema
+    #[cfg(feature = "postgres")]
+    pub fn postgres_pool(&self) -> Option<&PgPool> {
+        self.inner.postgres_pool()
+    }
+
+    /// Returns the validated PostgreSQL schema selection, or `None` for a
+    /// backend without PostgreSQL schemas.
+    #[must_use]
+    pub fn postgres_schema(&self) -> Option<&SchemaName> {
+        self.inner.database.postgres_schema()
+    }
+
+    /// Returns the caller-owned SQLite pool, if this is a SQLite client.
+    #[must_use]
+    #[cfg(feature = "sqlite")]
+    pub fn sqlite_pool(&self) -> Option<&SqlitePool> {
+        self.inner.sqlite_pool()
     }
 
     /// Adds or reconfigures a queue. A running client starts or restarts the
@@ -581,7 +1128,7 @@ impl Client {
         let name = name.into();
         config.validate(&name)?;
         if self.inner.workers.kinds().is_empty() {
-            return Err(Error::InvalidJob(
+            return Err(Error::configuration(
                 "workers must be configured when queues are configured".to_owned(),
             ));
         }
@@ -589,7 +1136,7 @@ impl Client {
             .inner
             .queues
             .write()
-            .map_err(|_| Error::Runtime("queue configuration lock poisoned".to_owned()))?
+            .map_err(|_| Error::runtime("queue configuration lock poisoned".to_owned()))?
             .insert(name, config);
         self.inner.queue_changes.send_modify(|generation| {
             *generation = generation.wrapping_add(1);
@@ -603,7 +1150,7 @@ impl Client {
             .queues
             .read()
             .map(|queues| queues.clone())
-            .map_err(|_| Error::Runtime("queue configuration lock poisoned".to_owned()))
+            .map_err(|_| Error::runtime("queue configuration lock poisoned".to_owned()))
     }
 
     /// Stops and removes a configured queue. Persisted jobs and queue rows are
@@ -613,7 +1160,7 @@ impl Client {
             .inner
             .queues
             .write()
-            .map_err(|_| Error::Runtime("queue configuration lock poisoned".to_owned()))?
+            .map_err(|_| Error::runtime("queue configuration lock poisoned".to_owned()))?
             .remove(name);
         if previous.is_some() {
             self.inner.queue_changes.send_modify(|generation| {
@@ -625,32 +1172,26 @@ impl Client {
 
     /// Subscribes to selected local client events with a bounded buffer.
     pub fn subscribe(&self, kinds: &[EventKind]) -> Result<EventReceiver, Error> {
-        self.subscribe_config(SubscribeConfig {
-            buffer_capacity: 1_000,
-            kinds: kinds.to_vec(),
-        })
+        self.subscribe_config(SubscribeConfig::new(kinds.iter().copied())?)
     }
 
     /// Subscribes with an explicit bounded-buffer capacity. When the receiver
     /// falls behind, the next receive reports how many events were dropped.
     pub fn subscribe_config(&self, config: SubscribeConfig) -> Result<EventReceiver, Error> {
-        let SubscribeConfig {
-            buffer_capacity,
-            kinds,
-        } = config;
+        let (buffer_capacity, kinds) = config.into_parts();
         if self
             .inner
             .queues
             .read()
-            .map_err(|_| Error::Runtime("queue configuration lock poisoned".to_owned()))?
+            .map_err(|_| Error::runtime("queue configuration lock poisoned".to_owned()))?
             .is_empty()
         {
-            return Err(Error::InvalidJob(
+            return Err(Error::configuration(
                 "event subscriptions require a client configured to work queues".to_owned(),
             ));
         }
         if buffer_capacity == 0 {
-            return Err(Error::InvalidJob(
+            return Err(Error::configuration(
                 "event subscription buffer capacity must be positive".to_owned(),
             ));
         }
@@ -659,13 +1200,13 @@ impl Client {
         let (sender, receiver) = mpsc::channel(buffer_capacity);
         let dropped = Arc::new(AtomicU64::new(0));
         let dropped_for_task = Arc::clone(&dropped);
-        tokio::runtime::Handle::try_current().map_err(|_| {
-            Error::Runtime("event subscriptions require an active Tokio runtime".to_owned())
+        tokio::runtime::Handle::try_current().map_err(|_| Error::RuntimeUnavailable {
+            operation: "event subscriptions",
         })?;
         tokio::spawn(async move {
             loop {
                 match source.recv().await {
-                    Ok(event) if kinds.contains(&event.kind) => match sender.try_send(event) {
+                    Ok(event) if kinds.contains(&event.kind()) => match sender.try_send(event) {
                         Ok(()) => {}
                         Err(mpsc::error::TrySendError::Full(_)) => {
                             dropped_for_task.fetch_add(1, Ordering::Relaxed);
@@ -683,64 +1224,449 @@ impl Client {
         Ok(EventReceiver::new(dropped, receiver))
     }
 
-    /// Inserts a typed job using the pool.
-    pub async fn insert<A: JobArgs>(
+    /// Inserts a typed job using its job-type, client, and River defaults.
+    pub async fn insert<A: JobArgs>(&self, args: A) -> Result<InsertResult<A>, Error> {
+        self.insert_with(args, InsertOpts::default()).await
+    }
+
+    /// Inserts a typed job with options overlaid on its job-type defaults.
+    pub async fn insert_with<A: JobArgs>(
         &self,
         args: A,
         opts: InsertOpts,
     ) -> Result<InsertResult<A>, Error> {
-        let result = self.insert_on(&self.inner.pool, args, opts).await?;
+        let result = match self.inner.database.pool() {
+            #[cfg(feature = "postgres")]
+            DatabasePool::Postgres(pool) => self.insert_on(pool, args, opts).await?,
+            #[cfg(feature = "sqlite")]
+            DatabasePool::Sqlite(pool) => self.insert_on(pool, args, opts).await?,
+        };
         self.signal_insert(&result.job.row, result.unique_skipped_as_duplicate);
         Ok(result)
     }
 
-    /// Inserts a typed job using defaults declared by its argument type.
-    pub async fn insert_default<A: JobArgs>(&self, args: A) -> Result<InsertResult<A>, Error> {
-        let mut opts = A::default_insert_opts();
-        if opts.max_attempts == MAX_ATTEMPTS_DEFAULT {
-            opts.max_attempts = self.inner.default_max_attempts;
+    /// Atomically inserts a batch containing one or more job argument types.
+    ///
+    /// Results correspond positionally to the batch items. Each item retains
+    /// its own [`JobArgs`] defaults and uniqueness definition.
+    pub async fn insert_batch(&self, batch: InsertBatch) -> Result<Vec<InsertBatchResult>, Error> {
+        validate_nonempty_batch(&batch)?;
+        let results = match self.inner.database.pool() {
+            #[cfg(feature = "postgres")]
+            DatabasePool::Postgres(pool) => {
+                let mut transaction = pool.begin().await?;
+                let results = self.insert_batch_tx(&mut transaction, batch).await?;
+                transaction.commit().await?;
+                results
+            }
+            #[cfg(feature = "sqlite")]
+            DatabasePool::Sqlite(pool) => {
+                let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+                let results = self.insert_batch_tx(&mut transaction, batch).await?;
+                transaction.commit().await?;
+                results
+            }
+        };
+        for result in &results {
+            self.signal_insert(&result.job, result.unique_skipped_as_duplicate);
         }
-        self.insert(args, opts).await
+        Ok(results)
     }
 
-    /// Inserts a typed batch atomically using the pool.
+    /// Atomically inserts a heterogeneous batch in a caller-managed
+    /// transaction.
+    pub async fn insert_batch_tx<'executor, E>(
+        &self,
+        executor: E,
+        batch: InsertBatch,
+    ) -> Result<Vec<InsertBatchResult>, Error>
+    where
+        E: DatabaseTransactionExecutor<'executor>,
+    {
+        validate_nonempty_batch(&batch)?;
+        match self
+            .inner
+            .erase_executor(executor)
+            .map_err(Error::from)?
+            .into_inner()
+        {
+            #[cfg(feature = "postgres")]
+            ExecutorInner::PostgresConnection(connection) => {
+                let savepoint = self.batch_savepoint("heterogeneous");
+                begin_postgres_savepoint(connection, &savepoint).await?;
+                let result = self.insert_batch_postgres(connection, batch).await;
+                finish_postgres_savepoint(connection, &savepoint, result).await
+            }
+            #[cfg(feature = "sqlite")]
+            ExecutorInner::SqliteConnection(connection) => {
+                let savepoint = self.batch_savepoint("heterogeneous");
+                begin_sqlite_savepoint(connection, &savepoint).await?;
+                let result = self.insert_batch_sqlite(connection, batch).await;
+                finish_sqlite_savepoint(connection, &savepoint, result).await
+            }
+            #[cfg(feature = "postgres")]
+            ExecutorInner::PostgresPool(_) => Err(transaction_pool_error("insert_batch_tx")),
+            #[cfg(feature = "sqlite")]
+            ExecutorInner::SqlitePool(_) => Err(transaction_pool_error("insert_batch_tx")),
+        }
+    }
+
+    #[cfg(feature = "postgres")]
+    async fn insert_batch_postgres(
+        &self,
+        connection: &mut PgConnection,
+        batch: InsertBatch,
+    ) -> Result<Vec<InsertBatchResult>, Error> {
+        self.insert_batch_on_postgres(connection, batch).await
+    }
+
+    #[cfg(feature = "postgres")]
+    async fn insert_batch_on_postgres(
+        &self,
+        connection: &mut PgConnection,
+        batch: InsertBatch,
+    ) -> Result<Vec<InsertBatchResult>, Error> {
+        let mut results = Vec::with_capacity(batch.len());
+        for item in batch.items {
+            self.validate_known_kind(item.kind)?;
+            let opts =
+                InsertOpts::resolve(self.inner.default_max_attempts, item.defaults, item.opts);
+            let (mut job, unique_skipped_as_duplicate) = self
+                .insert_encoded_on(
+                    &mut *connection,
+                    item.kind,
+                    item.unique_fields,
+                    &item.encoded_args,
+                    opts,
+                )
+                .await?;
+            for hook in self.inner.hooks.iter().rev() {
+                hook.decode_insert_result(&mut job).await?;
+            }
+            results.push(InsertBatchResult {
+                job,
+                unique_skipped_as_duplicate,
+            });
+        }
+        Ok(results)
+    }
+
+    #[cfg(feature = "sqlite")]
+    async fn insert_batch_sqlite(
+        &self,
+        connection: &mut sqlx::SqliteConnection,
+        batch: InsertBatch,
+    ) -> Result<Vec<InsertBatchResult>, Error> {
+        let mut results = Vec::with_capacity(batch.len());
+        for item in batch.items {
+            self.validate_known_kind(item.kind)?;
+            let opts =
+                InsertOpts::resolve(self.inner.default_max_attempts, item.defaults, item.opts);
+            let (mut job, unique_skipped_as_duplicate) = self
+                .insert_encoded_on(
+                    &mut *connection,
+                    item.kind,
+                    item.unique_fields,
+                    &item.encoded_args,
+                    opts,
+                )
+                .await?;
+            for hook in self.inner.hooks.iter().rev() {
+                hook.decode_insert_result(&mut job).await?;
+            }
+            results.push(InsertBatchResult {
+                job,
+                unique_skipped_as_duplicate,
+            });
+        }
+        Ok(results)
+    }
+
+    /// Inserts a homogeneous typed batch atomically using each job type's
+    /// insertion defaults.
     pub async fn insert_many<A, I>(&self, jobs: I) -> Result<Vec<InsertResult<A>>, Error>
+    where
+        A: JobArgs,
+        I: IntoIterator<Item = A>,
+    {
+        self.insert_many_with(jobs.into_iter().map(|args| (args, InsertOpts::default())))
+            .await
+    }
+
+    /// Inserts a homogeneous typed batch atomically with per-job insertion
+    /// options.
+    pub async fn insert_many_with<A, I>(&self, jobs: I) -> Result<Vec<InsertResult<A>>, Error>
     where
         A: JobArgs,
         I: IntoIterator<Item = (A, InsertOpts)>,
     {
-        let mut transaction = self.inner.pool.begin().await?;
-        let results = self.insert_many_tx(&mut transaction, jobs).await?;
-        transaction.commit().await?;
+        let jobs = collect_nonempty_jobs(jobs)?;
+        let results = match self.inner.database.pool() {
+            #[cfg(feature = "postgres")]
+            DatabasePool::Postgres(pool) => {
+                let mut transaction = pool.begin().await?;
+                let results = self.insert_many_tx_with(&mut transaction, jobs).await?;
+                transaction.commit().await?;
+                results
+            }
+            #[cfg(feature = "sqlite")]
+            DatabasePool::Sqlite(pool) => {
+                let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+                let results = self.insert_many_tx_with(&mut transaction, jobs).await?;
+                transaction.commit().await?;
+                results
+            }
+        };
         for result in &results {
             self.signal_insert(&result.job.row, result.unique_skipped_as_duplicate);
         }
         Ok(results)
     }
 
-    /// Inserts a typed batch with PostgreSQL `COPY FROM`. The operation is
-    /// atomic and returns the inserted row count. As in River Go, a unique
-    /// conflict fails the whole operation rather than returning an existing
-    /// row. Per-job begin hooks and insertion middleware run before the copy;
-    /// successful completion is reported through the fast-insert callbacks
-    /// because PostgreSQL does not return the inserted rows.
+    /// Inserts a typed batch using the backend's optimized atomic path and
+    /// returns only the inserted row count. PostgreSQL uses COPY; SQLite uses
+    /// a transactional fallback. A unique conflict fails the whole operation.
+    /// Per-job begin hooks and insertion middleware run before persistence;
+    /// successful completion uses the fast-insert callbacks because no rows
+    /// are returned.
     pub async fn insert_many_fast<A, I>(&self, jobs: I) -> Result<u64, Error>
+    where
+        A: JobArgs,
+        I: IntoIterator<Item = A>,
+    {
+        self.insert_many_fast_with(jobs.into_iter().map(|args| (args, InsertOpts::default())))
+            .await
+    }
+
+    /// Inserts a typed batch with per-job options using the backend's
+    /// optimized insertion path.
+    pub async fn insert_many_fast_with<A, I>(&self, jobs: I) -> Result<u64, Error>
     where
         A: JobArgs,
         I: IntoIterator<Item = (A, InsertOpts)>,
     {
-        let mut transaction = self.inner.pool.begin().await?;
-        let count = self.insert_many_fast_tx(&mut transaction, jobs).await?;
-        transaction.commit().await?;
+        let count = match self.inner.database.pool() {
+            #[cfg(feature = "postgres")]
+            DatabasePool::Postgres(pool) => {
+                let mut transaction = pool.begin().await?;
+                let count = self
+                    .insert_many_fast_tx_with(&mut transaction, jobs)
+                    .await?;
+                transaction.commit().await?;
+                count
+            }
+            #[cfg(feature = "sqlite")]
+            DatabasePool::Sqlite(pool) => {
+                let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+                let count = self
+                    .insert_many_fast_tx_with(&mut transaction, jobs)
+                    .await?;
+                transaction.commit().await?;
+                count
+            }
+        };
         if count > 0 {
-            let _ = self.inner.queue_notifications.send("*".to_owned());
+            let _ = self
+                .inner
+                .queue_notifications
+                .send(RuntimeNotification::Insert("*".to_owned()));
         }
         Ok(count)
     }
 
-    /// Inserts a typed batch with `COPY FROM` inside a caller-managed
-    /// transaction.
-    pub async fn insert_many_fast_tx<A, I>(
+    #[cfg(feature = "sqlite")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps fast-insert hooks, interception, persistence, and callbacks in one ordered path"
+    )]
+    async fn insert_many_fast_sqlite<A, I>(
+        &self,
+        connection: &mut sqlx::SqliteConnection,
+        jobs: I,
+    ) -> Result<u64, Error>
+    where
+        A: JobArgs,
+        I: IntoIterator<Item = (A, InsertOpts)>,
+    {
+        let now = Utc::now();
+        let mut prepared = Vec::new();
+        for (args, opts) in jobs {
+            self.validate_known_kind(A::KIND)?;
+            let mut insert = InsertContext {
+                encoded_args: serde_json::to_value(args)?,
+                kind: A::KIND.to_owned(),
+                opts: InsertOpts::resolve(
+                    self.inner.default_max_attempts,
+                    A::default_insert_opts(),
+                    opts,
+                ),
+            };
+            for hook in &self.inner.hooks {
+                hook.insert_begin(&mut insert).await?;
+            }
+            if self.inner.pilot.intercepts_insert() {
+                let InsertContext {
+                    encoded_args,
+                    kind,
+                    opts,
+                } = &mut insert;
+                self.inner
+                    .pilot
+                    .before_job_insert(
+                        PilotDatabaseConnection::Sqlite(&mut *connection),
+                        &mut PilotJobInsertParams {
+                            encoded_args,
+                            kind,
+                            metadata: &mut opts.metadata,
+                            queue: &mut opts.queue,
+                        },
+                    )
+                    .await
+                    .map_err(|source| Error::Extension {
+                        phase: "job insertion",
+                        source,
+                    })?;
+            }
+            for middleware in &self.inner.insert_middleware {
+                middleware.before_insert(&mut insert).await?;
+            }
+            validate_insert_parts(
+                &insert.kind,
+                &insert.opts,
+                self.inner.allow_legacy_job_kinds,
+            )?;
+            prepared.push(PreparedFastInsert::new(insert, A::unique_fields(), now)?);
+        }
+        if prepared.is_empty() {
+            return Err(Error::invalid_job("no jobs to insert".to_owned()));
+        }
+
+        let mut queues = std::collections::BTreeSet::new();
+        for job in &prepared {
+            let nonce = job.unique_key.map(|_| {
+                format!(
+                    "{}-{}",
+                    self.inner.id,
+                    self.inner.unique_nonce.fetch_add(1, Ordering::Relaxed)
+                )
+            });
+            let inserted = crate::database::sqlite::insert(
+                &mut *connection,
+                &crate::database::sqlite::InsertJob {
+                    attempt: 0,
+                    attempted_at: None,
+                    attempted_by: &[],
+                    created_at: job.now,
+                    encoded_args: &job.encoded_args,
+                    errors: &[],
+                    finalized_at: None,
+                    id: None,
+                    kind: &job.kind,
+                    max_attempts: job.max_attempts,
+                    metadata: &job.metadata,
+                    priority: job.priority,
+                    queue: &job.queue,
+                    scheduled_at: job.scheduled_at,
+                    state: job.state,
+                    tags: &job.tags,
+                    unique_key: job.unique_key.as_ref().map(<[u8; 32]>::as_slice),
+                    unique_nonce: nonce.as_deref(),
+                    unique_states: job.unique_states,
+                },
+            )
+            .await
+            .map_err(sqlite_backend_error)?;
+            if inserted.unique_skipped_as_duplicate {
+                return Err(Error::invalid_job(
+                    "fast insertion encountered a unique conflict".to_owned(),
+                ));
+            }
+            if inserted.job.state == JobState::Available {
+                queues.insert(inserted.job.queue);
+            }
+        }
+        for queue in queues {
+            let payload = serde_json::json!({"queue": queue}).to_string();
+            crate::database::sqlite::notification_insert(
+                &mut *connection,
+                &[crate::database::sqlite::NotificationInput {
+                    payload: &payload,
+                    topic: crate::NOTIFICATION_TOPIC_INSERT,
+                }],
+            )
+            .await
+            .map_err(sqlite_backend_error)?;
+        }
+        let count = u64::try_from(prepared.len()).unwrap_or(u64::MAX);
+        for middleware in self.inner.insert_middleware.iter().rev() {
+            middleware.after_insert_many_fast(count).await?;
+        }
+        for hook in &self.inner.hooks {
+            hook.insert_many_fast_end(count).await?;
+        }
+        Ok(count)
+    }
+
+    /// Inserts a typed batch using the backend's optimized path inside a
+    /// caller-managed transaction.
+    pub async fn insert_many_fast_tx<'executor, A, I, E>(
+        &self,
+        executor: E,
+        jobs: I,
+    ) -> Result<u64, Error>
+    where
+        A: JobArgs,
+        I: IntoIterator<Item = A>,
+        E: DatabaseTransactionExecutor<'executor>,
+    {
+        self.insert_many_fast_tx_with(
+            executor,
+            jobs.into_iter().map(|args| (args, InsertOpts::default())),
+        )
+        .await
+    }
+
+    /// Inserts a typed batch with per-job options using the backend's
+    /// optimized path inside a caller-managed transaction.
+    pub async fn insert_many_fast_tx_with<'executor, A, I, E>(
+        &self,
+        executor: E,
+        jobs: I,
+    ) -> Result<u64, Error>
+    where
+        A: JobArgs,
+        I: IntoIterator<Item = (A, InsertOpts)>,
+        E: DatabaseTransactionExecutor<'executor>,
+    {
+        match self
+            .inner
+            .erase_executor(executor)
+            .map_err(Error::from)?
+            .into_inner()
+        {
+            #[cfg(feature = "postgres")]
+            ExecutorInner::PostgresConnection(connection) => {
+                let savepoint = self.batch_savepoint("fast");
+                begin_postgres_savepoint(connection, &savepoint).await?;
+                let result = self.insert_many_fast_postgres(connection, jobs).await;
+                finish_postgres_savepoint(connection, &savepoint, result).await
+            }
+            #[cfg(feature = "sqlite")]
+            ExecutorInner::SqliteConnection(connection) => {
+                let savepoint = self.batch_savepoint("fast");
+                begin_sqlite_savepoint(connection, &savepoint).await?;
+                let result = self.insert_many_fast_sqlite(connection, jobs).await;
+                finish_sqlite_savepoint(connection, &savepoint, result).await
+            }
+            #[cfg(feature = "postgres")]
+            ExecutorInner::PostgresPool(_) => Err(transaction_pool_error("insert_many_fast_tx")),
+            #[cfg(feature = "sqlite")]
+            ExecutorInner::SqlitePool(_) => Err(transaction_pool_error("insert_many_fast_tx")),
+        }
+    }
+
+    #[cfg(feature = "postgres")]
+    async fn insert_many_fast_postgres<A, I>(
         &self,
         connection: &mut PgConnection,
         jobs: I,
@@ -752,7 +1678,7 @@ impl Client {
         let now = Utc::now();
         let mut prepared = Vec::new();
         for (args, opts) in jobs {
-            if !self.inner.skip_unknown_job_check
+            if !self.inner.allow_unregistered_job_kinds
                 && !self.inner.workers.kinds().is_empty()
                 && !self.inner.workers.contains_kind(A::KIND)
             {
@@ -761,10 +1687,37 @@ impl Client {
             let mut insert = InsertContext {
                 encoded_args: serde_json::to_value(args)?,
                 kind: A::KIND.to_owned(),
-                opts,
+                opts: InsertOpts::resolve(
+                    self.inner.default_max_attempts,
+                    A::default_insert_opts(),
+                    opts,
+                ),
             };
             for hook in &self.inner.hooks {
                 hook.insert_begin(&mut insert).await?;
+            }
+            if self.inner.pilot.intercepts_insert() {
+                let InsertContext {
+                    encoded_args,
+                    kind,
+                    opts,
+                } = &mut insert;
+                self.inner
+                    .pilot
+                    .before_job_insert(
+                        PilotDatabaseConnection::Postgres(&mut *connection),
+                        &mut PilotJobInsertParams {
+                            encoded_args,
+                            kind,
+                            metadata: &mut opts.metadata,
+                            queue: &mut opts.queue,
+                        },
+                    )
+                    .await
+                    .map_err(|source| Error::Extension {
+                        phase: "job insertion",
+                        source,
+                    })?;
             }
             for middleware in &self.inner.insert_middleware {
                 middleware.before_insert(&mut insert).await?;
@@ -772,12 +1725,12 @@ impl Client {
             validate_insert_parts(
                 &insert.kind,
                 &insert.opts,
-                self.inner.skip_job_kind_validation,
+                self.inner.allow_legacy_job_kinds,
             )?;
             prepared.push(PreparedFastInsert::new(insert, A::unique_fields(), now)?);
         }
         if prepared.is_empty() {
-            return Err(Error::InvalidJob("no jobs to insert".to_owned()));
+            return Err(Error::invalid_job("no jobs to insert".to_owned()));
         }
 
         let table = self.inner.schema.qualify("river_job");
@@ -816,11 +1769,94 @@ impl Client {
         Ok(count)
     }
 
-    /// Inserts a typed batch on a caller-managed transaction. The caller
-    /// chooses commit or rollback visibility.
-    pub async fn insert_many_tx<A, I>(
+    /// Inserts a homogeneous typed batch on a caller-managed transaction using
+    /// each job type's insertion defaults.
+    pub async fn insert_many_tx<'executor, A, I, E>(
+        &self,
+        executor: E,
+        jobs: I,
+    ) -> Result<Vec<InsertResult<A>>, Error>
+    where
+        A: JobArgs,
+        I: IntoIterator<Item = A>,
+        E: DatabaseTransactionExecutor<'executor>,
+    {
+        self.insert_many_tx_with(
+            executor,
+            jobs.into_iter().map(|args| (args, InsertOpts::default())),
+        )
+        .await
+    }
+
+    /// Inserts a homogeneous typed batch with per-job options on a
+    /// caller-managed transaction. The caller chooses commit or rollback
+    /// visibility.
+    pub async fn insert_many_tx_with<'executor, A, I, E>(
+        &self,
+        executor: E,
+        jobs: I,
+    ) -> Result<Vec<InsertResult<A>>, Error>
+    where
+        A: JobArgs,
+        I: IntoIterator<Item = (A, InsertOpts)>,
+        E: DatabaseTransactionExecutor<'executor>,
+    {
+        let jobs = collect_nonempty_jobs(jobs)?;
+        match self
+            .inner
+            .erase_executor(executor)
+            .map_err(Error::from)?
+            .into_inner()
+        {
+            #[cfg(feature = "postgres")]
+            ExecutorInner::PostgresConnection(connection) => {
+                let savepoint = self.batch_savepoint("regular");
+                begin_postgres_savepoint(connection, &savepoint).await?;
+                let result = self.insert_many_postgres(connection, jobs).await;
+                finish_postgres_savepoint(connection, &savepoint, result).await
+            }
+            #[cfg(feature = "sqlite")]
+            ExecutorInner::SqliteConnection(connection) => {
+                let savepoint = self.batch_savepoint("regular");
+                begin_sqlite_savepoint(connection, &savepoint).await?;
+                let result = self.insert_many_sqlite(connection, jobs).await;
+                finish_sqlite_savepoint(connection, &savepoint, result).await
+            }
+            #[cfg(feature = "postgres")]
+            ExecutorInner::PostgresPool(_) => Err(transaction_pool_error("insert_many_tx")),
+            #[cfg(feature = "sqlite")]
+            ExecutorInner::SqlitePool(_) => Err(transaction_pool_error("insert_many_tx")),
+        }
+    }
+
+    fn batch_savepoint(&self, operation: &str) -> String {
+        let nonce = self.inner.unique_nonce.fetch_add(1, Ordering::Relaxed);
+        format!("river_{operation}_insert_many_{nonce}")
+    }
+
+    #[cfg(feature = "postgres")]
+    async fn insert_many_postgres<A, I>(
         &self,
         connection: &mut PgConnection,
+        jobs: I,
+    ) -> Result<Vec<InsertResult<A>>, Error>
+    where
+        A: JobArgs,
+        I: IntoIterator<Item = (A, InsertOpts)>,
+    {
+        let jobs = jobs.into_iter();
+        let (lower, _) = jobs.size_hint();
+        let mut results = Vec::with_capacity(lower);
+        for (args, opts) in jobs {
+            results.push(self.insert_on(&mut *connection, args, opts).await?);
+        }
+        Ok(results)
+    }
+
+    #[cfg(feature = "sqlite")]
+    async fn insert_many_sqlite<A, I>(
+        &self,
+        connection: &mut sqlx::SqliteConnection,
         jobs: I,
     ) -> Result<Vec<InsertResult<A>>, Error>
     where
@@ -845,10 +1881,38 @@ impl Client {
         encoded_args: Value,
         opts: InsertOpts,
     ) -> Result<RawInsertResult, Error> {
+        let opts =
+            InsertOpts::resolve(self.inner.default_max_attempts, InsertOpts::default(), opts);
+        self.insert_raw_params(kind, unique_fields, encoded_args, opts)
+            .await
+    }
+
+    /// Inserts an encoded job with already-resolved parameters through River's
+    /// exact-version extension seam.
+    #[doc(hidden)]
+    pub async fn insert_raw_params(
+        &self,
+        kind: &str,
+        unique_fields: &[&str],
+        encoded_args: Value,
+        opts: InsertParams,
+    ) -> Result<RawInsertResult, Error> {
         self.validate_known_kind(kind)?;
-        let (job, unique_skipped_as_duplicate) = self
-            .insert_encoded_on(&self.inner.pool, kind, unique_fields, &encoded_args, opts)
-            .await?;
+        let (mut job, unique_skipped_as_duplicate) = match self.inner.database.pool() {
+            #[cfg(feature = "postgres")]
+            DatabasePool::Postgres(pool) => {
+                self.insert_encoded_on(pool, kind, unique_fields, &encoded_args, opts)
+                    .await?
+            }
+            #[cfg(feature = "sqlite")]
+            DatabasePool::Sqlite(pool) => {
+                self.insert_encoded_on(pool, kind, unique_fields, &encoded_args, opts)
+                    .await?
+            }
+        };
+        for hook in self.inner.hooks.iter().rev() {
+            hook.decode_insert_result(&mut job).await?;
+        }
         self.signal_insert(&job, unique_skipped_as_duplicate);
         Ok(RawInsertResult {
             job,
@@ -858,65 +1922,287 @@ impl Client {
 
     /// Inserts an encoded job inside a caller-managed transaction.
     #[doc(hidden)]
-    pub async fn insert_raw_tx(
+    pub async fn insert_raw_tx<'executor, E>(
         &self,
-        connection: &mut PgConnection,
+        connection: E,
         kind: &str,
         unique_fields: &[&str],
         encoded_args: Value,
         opts: InsertOpts,
-    ) -> Result<RawInsertResult, Error> {
+    ) -> Result<RawInsertResult, Error>
+    where
+        E: DatabaseTransactionExecutor<'executor>,
+    {
+        let opts =
+            InsertOpts::resolve(self.inner.default_max_attempts, InsertOpts::default(), opts);
+        self.insert_raw_params_tx(connection, kind, unique_fields, encoded_args, opts)
+            .await
+    }
+
+    /// Inserts an encoded job with already-resolved parameters inside a
+    /// caller-managed transaction.
+    #[doc(hidden)]
+    pub async fn insert_raw_params_tx<'executor, E>(
+        &self,
+        connection: E,
+        kind: &str,
+        unique_fields: &[&str],
+        encoded_args: Value,
+        opts: InsertParams,
+    ) -> Result<RawInsertResult, Error>
+    where
+        E: DatabaseTransactionExecutor<'executor>,
+    {
         self.validate_known_kind(kind)?;
-        let (job, unique_skipped_as_duplicate) = self
+        let (mut job, unique_skipped_as_duplicate) = self
             .insert_encoded_on(connection, kind, unique_fields, &encoded_args, opts)
             .await?;
+        for hook in self.inner.hooks.iter().rev() {
+            hook.decode_insert_result(&mut job).await?;
+        }
         Ok(RawInsertResult {
             job,
             unique_skipped_as_duplicate,
         })
     }
 
-    /// Inserts a typed job on a caller-managed transaction or connection.
-    pub async fn insert_tx<A: JobArgs>(
+    /// Reinserts persisted fields through River's canonical insertion
+    /// pipeline inside a caller-managed transaction.
+    ///
+    /// This exact-version operation lets the backend allocate the ID rather
+    /// than explicitly retaining a source ID, and resets execution state while
+    /// retaining the supplied creation, schedule, and uniqueness wire values.
+    /// Begin hooks, insertion interception, middleware, end callbacks, and the
+    /// backend notification all run exactly once.
+    #[doc(hidden)]
+    pub async fn extension_insert_tx<'executor, E>(
         &self,
-        connection: &mut PgConnection,
+        transaction: E,
+        params: ExtensionInsertParams,
+    ) -> Result<RawInsertResult, Error>
+    where
+        E: DatabaseTransactionExecutor<'executor>,
+    {
+        let mut source_row = JobRow {
+            attempt: 0,
+            attempted_at: None,
+            attempted_by: Vec::new(),
+            created_at: params.created_at,
+            encoded_args: params.encoded_args,
+            errors: Vec::new(),
+            finalized_at: None,
+            id: 0,
+            kind: params.kind,
+            max_attempts: params.max_attempts,
+            metadata: params.metadata,
+            priority: params.priority,
+            queue: params.queue,
+            scheduled_at: params.scheduled_at,
+            state: JobState::Available,
+            tags: params.tags,
+            unique_key: params.unique_key,
+            unique_states: params.unique_states,
+        };
+        // Exact-version callers supply persisted wire fields. Normalize them
+        // before the ordinary begin pipeline so storage transforms are not
+        // applied twice, then decode the newly persisted result below just as
+        // a typed insertion does.
+        for hook in self.inner.hooks.iter().rev() {
+            hook.decode_insert_result(&mut source_row).await?;
+        }
+        let unique_states = match (&source_row.unique_key, &source_row.unique_states) {
+            (None, None) => None,
+            (Some(_), Some(states)) => Some(
+                states
+                    .iter()
+                    .fold(0, |bitmask, state| bitmask | state.unique_bit()),
+            ),
+            _ => {
+                return Err(Error::invalid_job_context(
+                    "exact-version insertion",
+                    "unique_key and unique_states must either both be set or both be absent"
+                        .to_owned(),
+                ));
+            }
+        };
+        let opts = InsertParams {
+            max_attempts: source_row.max_attempts,
+            metadata: source_row.metadata,
+            pending: false,
+            priority: source_row.priority,
+            queue: source_row.queue,
+            scheduled_at: Some(source_row.scheduled_at),
+            tags: source_row.tags,
+            unique: crate::UniqueOpts::default(),
+        };
+        let executor = self
+            .inner
+            .erase_executor(transaction)
+            .map_err(Error::from)?
+            .into_inner();
+        let (mut job, unique_skipped_as_duplicate) = self
+            .insert_encoded_inner(
+                executor,
+                &source_row.kind,
+                &[],
+                &source_row.encoded_args,
+                opts,
+                Some(ExtensionInsertWire {
+                    created_at: source_row.created_at,
+                    unique_key: source_row.unique_key,
+                    unique_states,
+                }),
+            )
+            .await?;
+        for hook in self.inner.hooks.iter().rev() {
+            hook.decode_insert_result(&mut job).await?;
+        }
+        Ok(RawInsertResult {
+            job,
+            unique_skipped_as_duplicate,
+        })
+    }
+
+    /// Inserts a typed job on a caller-managed transaction using
+    /// its job-type, client, and River defaults.
+    pub async fn insert_tx<'executor, A, E>(
+        &self,
+        connection: E,
+        args: A,
+    ) -> Result<InsertResult<A>, Error>
+    where
+        A: JobArgs,
+        E: DatabaseTransactionExecutor<'executor>,
+    {
+        self.insert_tx_with(connection, args, InsertOpts::default())
+            .await
+    }
+
+    /// Inserts a typed job with options on a caller-managed transaction.
+    pub async fn insert_tx_with<'executor, A, E>(
+        &self,
+        connection: E,
         args: A,
         opts: InsertOpts,
-    ) -> Result<InsertResult<A>, Error> {
+    ) -> Result<InsertResult<A>, Error>
+    where
+        A: JobArgs,
+        E: DatabaseTransactionExecutor<'executor>,
+    {
         self.insert_on(connection, args, opts).await
+    }
+
+    /// Resolves typed insertion options for an exact-version extension.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn resolve_insert_opts<A: JobArgs>(&self, opts: InsertOpts) -> InsertParams {
+        InsertOpts::resolve(
+            self.inner.default_max_attempts,
+            A::default_insert_opts(),
+            opts,
+        )
     }
 
     /// Gets one job by ID.
     pub async fn job_get(&self, id: i64) -> Result<JobRow, Error> {
+        #[cfg(feature = "sqlite")]
+        if let Some(pool) = self.inner.sqlite_pool() {
+            let mut connection = pool.acquire().await?;
+            return crate::database::sqlite::get(&mut connection, id)
+                .await
+                .map_err(sqlite_backend_error)?
+                .ok_or(Error::NotFound);
+        }
+        #[cfg(feature = "postgres")]
+        let Some(pool) = self.inner.postgres_pool() else {
+            return Err(Error::runtime(
+                "database dispatch selected no supported backend".to_owned(),
+            ));
+        };
+        #[cfg(feature = "postgres")]
         let table = self.inner.schema.qualify("river_job");
+        #[cfg(feature = "postgres")]
         let sql = format!(
             "SELECT {}, false AS unique_skipped_as_duplicate FROM {table} AS job WHERE id = $1 LIMIT 1",
             job_projection("job")
         );
+        #[cfg(feature = "postgres")]
         let record = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
             .bind(id)
-            .fetch_optional(&self.inner.pool)
+            .fetch_optional(pool)
             .await?
             .ok_or(Error::NotFound)?;
-        record.into_job_row()
+        #[cfg(feature = "postgres")]
+        return record.into_job_row();
+        #[allow(unreachable_code)]
+        Err(Error::runtime(
+            "database dispatch selected no supported backend".to_owned(),
+        ))
     }
 
     /// Cancels a job and returns its current row.
     pub async fn job_cancel(&self, id: i64) -> Result<JobRow, Error> {
-        let mut transaction = self.inner.pool.begin().await?;
-        let row = self.job_cancel_tx(&mut transaction, id).await?;
-        transaction.commit().await?;
-        Ok(row)
+        match self.inner.database.pool() {
+            #[cfg(feature = "postgres")]
+            DatabasePool::Postgres(pool) => {
+                let mut transaction = pool.begin().await?;
+                let row = self.job_cancel_tx(&mut transaction, id).await?;
+                transaction.commit().await?;
+                Ok(row)
+            }
+            #[cfg(feature = "sqlite")]
+            DatabasePool::Sqlite(pool) => {
+                let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+                let now = Utc::now();
+                let updated = crate::database::sqlite::cancel(&mut transaction, id, now)
+                    .await
+                    .map_err(sqlite_backend_error)?;
+                let was_updated = updated.is_some();
+                let row = match updated {
+                    Some(row) => row,
+                    None => crate::database::sqlite::get(&mut transaction, id)
+                        .await
+                        .map_err(sqlite_backend_error)?
+                        .ok_or(Error::NotFound)?,
+                };
+                if was_updated {
+                    let payload = serde_json::json!({
+                        "action": "cancel",
+                        "job_id": id,
+                        "queue": row.queue,
+                    })
+                    .to_string();
+                    crate::database::sqlite::notification_insert(
+                        &mut transaction,
+                        &[crate::database::sqlite::NotificationInput {
+                            payload: &payload,
+                            topic: crate::NOTIFICATION_TOPIC_CONTROL,
+                        }],
+                    )
+                    .await
+                    .map_err(sqlite_backend_error)?;
+                }
+                transaction.commit().await?;
+                signal_running_attempt(
+                    &self.inner.running,
+                    &self.inner.pending_cancellations,
+                    &self.inner.fetch_registration_windows,
+                    id,
+                );
+                Ok(row)
+            }
+        }
     }
 
     /// Cancels a job inside a caller-managed transaction. The notification is
     /// delivered only if the caller commits.
-    pub async fn job_cancel_tx(
-        &self,
-        connection: &mut PgConnection,
-        id: i64,
-    ) -> Result<JobRow, Error> {
+    pub async fn job_cancel_tx<'executor, E>(&self, connection: E, id: i64) -> Result<JobRow, Error>
+    where
+        E: DatabaseTransactionExecutor<'executor>,
+    {
+        #[cfg(feature = "postgres")]
         let table = self.inner.schema.qualify("river_job");
+        #[cfg(feature = "postgres")]
         let sql = format!(
             "WITH locked AS (\
                 SELECT id, queue, state, finalized_at FROM {table} WHERE id = $1 FOR UPDATE\
@@ -937,48 +2223,158 @@ impl Client {
             job_projection("job"),
             job_projection("job")
         );
-        let record = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
-            .bind(id)
-            .bind(self.inner.schema.as_deref())
-            .bind(crate::NOTIFICATION_TOPIC_CONTROL)
-            .fetch_optional(connection)
-            .await?
-            .ok_or(Error::NotFound)?;
-        record.into_job_row()
+        #[cfg(feature = "postgres")]
+        let postgres_query = || {
+            sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql.clone()))
+                .bind(id)
+                .bind(self.inner.schema.as_deref())
+                .bind(crate::NOTIFICATION_TOPIC_CONTROL)
+        };
+        match self
+            .inner
+            .erase_executor(connection)
+            .map_err(Error::from)?
+            .into_inner()
+        {
+            #[cfg(feature = "postgres")]
+            ExecutorInner::PostgresConnection(connection) => postgres_query()
+                .fetch_optional(connection)
+                .await?
+                .ok_or(Error::NotFound)?
+                .into_job_row(),
+            #[cfg(feature = "sqlite")]
+            ExecutorInner::SqliteConnection(connection) => {
+                let updated = crate::database::sqlite::cancel(connection, id, Utc::now())
+                    .await
+                    .map_err(sqlite_backend_error)?;
+                let was_updated = updated.is_some();
+                let row = match updated {
+                    Some(row) => row,
+                    None => crate::database::sqlite::get(connection, id)
+                        .await
+                        .map_err(sqlite_backend_error)?
+                        .ok_or(Error::NotFound)?,
+                };
+                if was_updated {
+                    let payload = serde_json::json!({
+                        "action": "cancel",
+                        "job_id": id,
+                        "queue": row.queue,
+                    })
+                    .to_string();
+                    crate::database::sqlite::notification_insert(
+                        connection,
+                        &[crate::database::sqlite::NotificationInput {
+                            payload: &payload,
+                            topic: crate::NOTIFICATION_TOPIC_CONTROL,
+                        }],
+                    )
+                    .await
+                    .map_err(sqlite_backend_error)?;
+                }
+                Ok(row)
+            }
+            #[cfg(feature = "postgres")]
+            ExecutorInner::PostgresPool(_) => Err(transaction_pool_error("job_cancel_tx")),
+            #[cfg(feature = "sqlite")]
+            ExecutorInner::SqlitePool(_) => Err(transaction_pool_error("job_cancel_tx")),
+        }
     }
 
     /// Requests that the current leader resign after committing an internal
     /// transaction.
     pub async fn request_resign(&self) -> Result<(), Error> {
-        let mut transaction = self.inner.pool.begin().await?;
-        self.request_resign_tx(&mut transaction).await?;
-        transaction.commit().await?;
-        Ok(())
+        match self.inner.database.pool() {
+            #[cfg(feature = "postgres")]
+            DatabasePool::Postgres(pool) => {
+                let mut transaction = pool.begin().await?;
+                self.request_resign_tx(&mut transaction).await?;
+                transaction.commit().await?;
+                Ok(())
+            }
+            #[cfg(feature = "sqlite")]
+            DatabasePool::Sqlite(pool) => {
+                let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+                crate::database::sqlite::notification_insert(
+                    &mut transaction,
+                    &[crate::database::sqlite::NotificationInput {
+                        payload: r#"{"action":"request_resign"}"#,
+                        topic: crate::NOTIFICATION_TOPIC_LEADERSHIP,
+                    }],
+                )
+                .await
+                .map_err(sqlite_backend_error)?;
+                transaction.commit().await?;
+                let _ = self
+                    .inner
+                    .queue_notifications
+                    .send(RuntimeNotification::LeadershipRequestResign);
+                Ok(())
+            }
+        }
     }
 
     /// Requests leader resignation in a caller-managed transaction.
-    pub async fn request_resign_tx(&self, connection: &mut PgConnection) -> Result<(), Error> {
-        sqlx::query(
-            "SELECT pg_notify(concat(coalesce($1::text, current_schema()), '.', $2::text), $3::text)",
-        )
-        .bind(self.inner.schema.as_deref())
-        .bind(crate::NOTIFICATION_TOPIC_LEADERSHIP)
-        .bind(r#"{"action":"request_resign"}"#)
-        .execute(connection)
-        .await?;
-        Ok(())
+    pub async fn request_resign_tx<'executor, E>(&self, connection: E) -> Result<(), Error>
+    where
+        E: DatabaseTransactionExecutor<'executor>,
+    {
+        match self
+            .inner
+            .erase_executor(connection)
+            .map_err(Error::from)?
+            .into_inner()
+        {
+            #[cfg(feature = "postgres")]
+            ExecutorInner::PostgresConnection(connection) => {
+                sqlx::query(
+                    "SELECT pg_notify(concat(coalesce($1::text, current_schema()), '.', $2::text), $3::text)",
+                )
+                .bind(self.inner.schema.as_deref())
+                .bind(crate::NOTIFICATION_TOPIC_LEADERSHIP)
+                .bind(r#"{"action":"request_resign"}"#)
+                .execute(connection)
+                .await?;
+                Ok(())
+            }
+            #[cfg(feature = "sqlite")]
+            ExecutorInner::SqliteConnection(connection) => {
+                crate::database::sqlite::notification_insert(
+                    connection,
+                    &[crate::database::sqlite::NotificationInput {
+                        payload: r#"{"action":"request_resign"}"#,
+                        topic: crate::NOTIFICATION_TOPIC_LEADERSHIP,
+                    }],
+                )
+                .await
+                .map_err(sqlite_backend_error)?;
+                Ok(())
+            }
+            #[cfg(feature = "postgres")]
+            ExecutorInner::PostgresPool(_) => Err(transaction_pool_error("request_resign_tx")),
+            #[cfg(feature = "sqlite")]
+            ExecutorInner::SqlitePool(_) => Err(transaction_pool_error("request_resign_tx")),
+        }
     }
 
     /// Starts configured queues and returns a lifecycle handle.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps startup ordering and ownership visible"
+    )]
     pub fn start(&self) -> Result<RunHandle, Error> {
+        let runtime =
+            tokio::runtime::Handle::try_current().map_err(|_| Error::RuntimeUnavailable {
+                operation: "starting a client",
+            })?;
         if self
             .inner
             .queues
             .read()
-            .map_err(|_| Error::Runtime("queue configuration lock poisoned".to_owned()))?
+            .map_err(|_| Error::runtime("queue configuration lock poisoned".to_owned()))?
             .is_empty()
         {
-            return Err(Error::InvalidJob(
+            return Err(Error::configuration(
                 "at least one queue is required to start a client".to_owned(),
             ));
         }
@@ -988,7 +2384,7 @@ impl Client {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
-            return Err(Error::Runtime("client is already running".to_owned()));
+            return Err(Error::runtime("client is already running".to_owned()));
         }
         let fetch_cancel = CancellationToken::new();
         let work_cancel = CancellationToken::new();
@@ -996,10 +2392,15 @@ impl Client {
         let fetch_for_task = fetch_cancel.clone();
         let work_for_task = work_cancel.clone();
         let (ready_sender, ready) = oneshot::channel();
-        let join = tokio::spawn(async move {
+        let join = runtime.spawn(async move {
             let result = async {
                 let notifications = inner.queue_notifications.clone();
                 let (completion_sender, completion_receiver) = mpsc::channel(10_000);
+                *inner
+                    .completion_sender
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some(completion_sender.downgrade());
                 let mut queues = JoinSet::new();
                 queues.spawn(run_dynamic_queues(
                     Arc::clone(&inner),
@@ -1012,12 +2413,26 @@ impl Client {
                 if inner.poll_only {
                     let _ = ready_sender.send(Ok(()));
                 } else {
-                    queues.spawn(run_notifications(
-                        Arc::clone(&inner),
-                        fetch_for_task.child_token(),
-                        notifications.clone(),
-                        ready_sender,
-                    ));
+                    match inner.database.kind() {
+                        #[cfg(feature = "postgres")]
+                        DatabaseKind::Postgres => {
+                            queues.spawn(run_notifications(
+                                Arc::clone(&inner),
+                                fetch_for_task.child_token(),
+                                notifications.clone(),
+                                ready_sender,
+                            ));
+                        }
+                        #[cfg(feature = "sqlite")]
+                        DatabaseKind::Sqlite => {
+                            queues.spawn(run_sqlite_notifications(
+                                Arc::clone(&inner),
+                                fetch_for_task.child_token(),
+                                notifications.clone(),
+                                ready_sender,
+                            ));
+                        }
+                    }
                 }
                 queues.spawn(crate::maintenance::run_maintenance(
                     Arc::clone(&inner),
@@ -1025,17 +2440,16 @@ impl Client {
                     notifications.subscribe(),
                 ));
                 for service in inner.pilot.runtime_services() {
-                    let pool = inner.pool.clone();
-                    let schema = inner.schema.clone();
+                    let pool = inner.pilot_database_pool();
+                    let database = inner.pilot_database_config();
                     let service_cancel = fetch_for_task.child_token();
                     queues.spawn(async move {
                         service
-                            .run(pool, schema, service_cancel)
+                            .run(pool, database, service_cancel)
                             .await
-                            .map_err(|service_error| {
-                                Error::Runtime(format!(
-                                    "River pilot runtime service failed: {service_error}"
-                                ))
+                            .map_err(|service_error| Error::Extension {
+                                phase: "runtime service",
+                                source: service_error,
                             })
                     });
                 }
@@ -1053,11 +2467,11 @@ impl Client {
             result
         });
         Ok(RunHandle {
-            fetch_cancel,
-            join,
+            fetch_cancel: Some(fetch_cancel),
+            join: Some(join),
             ready: Some(ready),
             soft_stop_timeout: self.inner.soft_stop_timeout,
-            work_cancel,
+            work_cancel: Some(work_cancel),
         })
     }
 
@@ -1069,14 +2483,19 @@ impl Client {
     ) -> Result<InsertResult<A>, Error>
     where
         A: JobArgs,
-        E: Executor<'executor, Database = Postgres>,
+        E: DatabaseExecutor<'executor>,
     {
         self.validate_known_kind(A::KIND)?;
         let encoded_args = serde_json::to_value(&args)?;
+        let opts = InsertOpts::resolve(
+            self.inner.default_max_attempts,
+            A::default_insert_opts(),
+            opts,
+        );
         let (mut row, unique_skipped_as_duplicate) = self
             .insert_encoded_on(executor, A::KIND, A::unique_fields(), &encoded_args, opts)
             .await?;
-        for hook in &self.inner.hooks {
+        for hook in self.inner.hooks.iter().rev() {
             hook.decode_insert_result(&mut row).await?;
         }
         let args = serde_json::from_value(row.encoded_args.clone())?;
@@ -1086,42 +2505,151 @@ impl Client {
         })
     }
 
-    pub(crate) async fn insert_periodic(&self, insert: PeriodicInsert) -> Result<JobRow, Error> {
-        let mut opts = insert.opts;
-        if opts.max_attempts == MAX_ATTEMPTS_DEFAULT {
-            opts.max_attempts = self.inner.default_max_attempts;
+    pub(crate) async fn insert_periodic(
+        &self,
+        insert: PeriodicInsert,
+        opts: InsertParams,
+    ) -> Result<JobRow, Error> {
+        validate_insert_parts(insert.kind, &opts, self.inner.allow_legacy_job_kinds)?;
+        let (mut row, unique_skipped_as_duplicate) = match self.inner.database.pool() {
+            #[cfg(feature = "postgres")]
+            DatabasePool::Postgres(pool) => {
+                self.insert_encoded_on(
+                    pool,
+                    insert.kind,
+                    insert.unique_fields,
+                    &insert.encoded_args,
+                    opts,
+                )
+                .await?
+            }
+            #[cfg(feature = "sqlite")]
+            DatabasePool::Sqlite(pool) => {
+                self.insert_encoded_on(
+                    pool,
+                    insert.kind,
+                    insert.unique_fields,
+                    &insert.encoded_args,
+                    opts,
+                )
+                .await?
+            }
+        };
+        for hook in self.inner.hooks.iter().rev() {
+            hook.decode_insert_result(&mut row).await?;
         }
-        validate_insert_parts(insert.kind, &opts, self.inner.skip_job_kind_validation)?;
-        let (row, unique_skipped_as_duplicate) = self
-            .insert_encoded_on(
-                &self.inner.pool,
-                insert.kind,
-                insert.unique_fields,
-                &insert.encoded_args,
-                opts,
-            )
-            .await?;
         self.signal_insert(&row, unique_skipped_as_duplicate);
         Ok(row)
     }
 
+    pub(crate) fn default_max_attempts(&self) -> i16 {
+        self.inner.default_max_attempts
+    }
+
     fn signal_insert(&self, row: &JobRow, unique_skipped_as_duplicate: bool) {
         if row.state == JobState::Available && !unique_skipped_as_duplicate {
-            let _ = self.inner.queue_notifications.send(row.queue.clone());
+            let _ = self
+                .inner
+                .queue_notifications
+                .send(RuntimeNotification::Insert(row.queue.clone()));
         }
     }
 
+    pub(crate) fn signal_queue_control(&self, queue: &str) {
+        let _ = self
+            .inner
+            .queue_notifications
+            .send(RuntimeNotification::QueueControl(queue.to_owned()));
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps backend insert hook ordering identical across dispatch branches"
+    )]
     async fn insert_encoded_on<'executor, E>(
         &self,
         executor: E,
         kind: &str,
         unique_fields: &[&str],
         encoded_args: &Value,
-        opts: InsertOpts,
+        opts: InsertParams,
     ) -> Result<(JobRow, bool), Error>
     where
-        E: Executor<'executor, Database = Postgres>,
+        E: DatabaseExecutor<'executor>,
     {
+        // Resolve and validate the backend before invoking user hooks or
+        // middleware so a mismatched executor cannot cause side effects.
+        let executor = self
+            .inner
+            .erase_executor(executor)
+            .map_err(Error::from)?
+            .into_inner();
+        if self.inner.pilot.intercepts_insert() {
+            match executor {
+                #[cfg(feature = "postgres")]
+                ExecutorInner::PostgresPool(pool) => {
+                    let mut transaction = pool.begin().await?;
+                    let result = self
+                        .insert_encoded_inner(
+                            ExecutorInner::PostgresConnection(&mut transaction),
+                            kind,
+                            unique_fields,
+                            encoded_args,
+                            opts,
+                            None,
+                        )
+                        .await?;
+                    transaction.commit().await?;
+                    return Ok(result);
+                }
+                #[cfg(feature = "sqlite")]
+                ExecutorInner::SqlitePool(pool) => {
+                    let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+                    let result = self
+                        .insert_encoded_inner(
+                            ExecutorInner::SqliteConnection(&mut transaction),
+                            kind,
+                            unique_fields,
+                            encoded_args,
+                            opts,
+                            None,
+                        )
+                        .await?;
+                    transaction.commit().await?;
+                    return Ok(result);
+                }
+                executor => {
+                    return self
+                        .insert_encoded_inner(
+                            executor,
+                            kind,
+                            unique_fields,
+                            encoded_args,
+                            opts,
+                            None,
+                        )
+                        .await;
+                }
+            }
+        }
+        self.insert_encoded_inner(executor, kind, unique_fields, encoded_args, opts, None)
+            .await
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        reason = "keeps backend insertion and exact-version wire semantics aligned"
+    )]
+    async fn insert_encoded_inner(
+        &self,
+        mut executor: ExecutorInner<'_>,
+        kind: &str,
+        unique_fields: &[&str],
+        encoded_args: &Value,
+        opts: InsertParams,
+        wire: Option<ExtensionInsertWire>,
+    ) -> Result<(JobRow, bool), Error> {
         let mut insert = InsertContext {
             encoded_args: encoded_args.clone(),
             kind: kind.to_owned(),
@@ -1130,79 +2658,261 @@ impl Client {
         for hook in &self.inner.hooks {
             hook.insert_begin(&mut insert).await?;
         }
+        if self.inner.pilot.intercepts_insert() {
+            let connection = match &mut executor {
+                #[cfg(feature = "postgres")]
+                ExecutorInner::PostgresConnection(connection) => {
+                    PilotDatabaseConnection::Postgres(connection)
+                }
+                #[cfg(feature = "sqlite")]
+                ExecutorInner::SqliteConnection(connection) => {
+                    PilotDatabaseConnection::Sqlite(connection)
+                }
+                #[cfg(any(feature = "postgres", feature = "sqlite"))]
+                _ => {
+                    return Err(Error::runtime_context(
+                        "job insertion interception",
+                        "insertion pilot requires a transaction connection".to_owned(),
+                    ));
+                }
+            };
+            let InsertContext {
+                encoded_args,
+                kind,
+                opts,
+            } = &mut insert;
+            self.inner
+                .pilot
+                .before_job_insert(
+                    connection,
+                    &mut PilotJobInsertParams {
+                        encoded_args,
+                        kind,
+                        metadata: &mut opts.metadata,
+                        queue: &mut opts.queue,
+                    },
+                )
+                .await
+                .map_err(|source| Error::Extension {
+                    phase: "job insertion",
+                    source,
+                })?;
+        }
         for middleware in &self.inner.insert_middleware {
             middleware.before_insert(&mut insert).await?;
         }
-        validate_insert_parts(
-            &insert.kind,
-            &insert.opts,
-            self.inner.skip_job_kind_validation,
-        )?;
+        if wire.is_none() {
+            validate_insert_parts(
+                &insert.kind,
+                &insert.opts,
+                self.inner.allow_legacy_job_kinds,
+            )?;
+        }
         let InsertContext {
             encoded_args,
             kind,
             opts,
         } = insert;
         let now = Utc::now();
-        let unique_key = build_unique_key_parts(
-            &kind,
-            unique_fields,
-            &encoded_args,
-            now,
-            &opts.unique,
-            &opts.queue,
-            opts.scheduled_at,
-        )?;
-        let unique_states = unique_key.map(|_| i32::from(opts.unique.state_bitmask()));
-        let state = if opts.pending {
-            JobState::Pending
-        } else if opts.scheduled_at.is_some() {
-            JobState::Scheduled
+        let (created_at, state, unique_key, unique_states) = if let Some(wire) = wire {
+            (
+                Some(wire.created_at),
+                JobState::Available,
+                wire.unique_key,
+                wire.unique_states,
+            )
         } else {
-            JobState::Available
+            let unique_key = build_unique_key_parts(
+                &kind,
+                unique_fields,
+                &encoded_args,
+                now,
+                &opts.unique,
+                &opts.queue,
+                opts.scheduled_at,
+            )?
+            .map(|key| key.to_vec());
+            let unique_states = unique_key.as_ref().map(|_| opts.unique.state_bitmask());
+            let state = if opts.pending {
+                JobState::Pending
+            } else if opts.scheduled_at.is_some() {
+                JobState::Scheduled
+            } else {
+                JobState::Available
+            };
+            (None, state, unique_key, unique_states)
         };
+        #[cfg(feature = "postgres")]
         let table = self.inner.schema.qualify("river_job");
+        #[cfg(feature = "postgres")]
         let state_type = self.inner.schema.qualify("river_job_state");
+        #[cfg(feature = "postgres")]
         let state_function = self.inner.schema.qualify("river_job_state_in_bitmask");
         // The no-op update is intentional and matches River Go. `DO NOTHING`
         // followed by a select in this CTE cannot see a conflicting row that
         // committed after the statement snapshot was taken.
+        #[cfg(feature = "postgres")]
         let sql = format!(
             "WITH inserted AS (\
-                INSERT INTO {table} (args, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, unique_key, unique_states) \
-                VALUES ($1, $2, $3, $4, $5, $6, coalesce($7, now()), $8::text::{state_type}, $9, $10, $11::integer::bit(8)) \
+                INSERT INTO {table} (args, created_at, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, unique_key, unique_states) \
+                VALUES ($1, coalesce($2, now()), $3, $4, $5, $6, $7, coalesce($8, now()), $9::text::{state_type}, $10, $11, $12::integer::bit(8)) \
                 ON CONFLICT (unique_key) WHERE unique_key IS NOT NULL AND unique_states IS NOT NULL AND {state_function}(unique_states, state) \
                 DO UPDATE SET kind = EXCLUDED.kind \
                 RETURNING *, (xmax != 0) AS unique_skipped_as_duplicate\
              ), notified AS (\
-                SELECT pg_notify(concat(coalesce($12::text, current_schema()), '.', $13::text), json_build_object('queue', queue)::text) \
+                SELECT pg_notify(concat(coalesce($13::text, current_schema()), '.', $14::text), json_build_object('queue', queue)::text) \
                 FROM inserted WHERE state = 'available' AND NOT unique_skipped_as_duplicate\
              ) \
              SELECT {}, job.unique_skipped_as_duplicate \
              FROM inserted AS job LEFT JOIN notified ON true",
             job_projection("job")
         );
-        let record = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
-            .bind(Json(&encoded_args))
-            .bind(&kind)
-            .bind(opts.max_attempts)
-            .bind(Json(&opts.metadata))
-            .bind(opts.priority)
-            .bind(&opts.queue)
-            .bind(opts.scheduled_at)
-            .bind(state.as_str())
-            .bind(&opts.tags)
-            .bind(unique_key.map(|key| key.to_vec()))
-            .bind(unique_states)
-            .bind(self.inner.schema.as_deref())
-            .bind(crate::NOTIFICATION_TOPIC_INSERT)
-            .fetch_optional(executor)
-            .await?
-            .ok_or_else(|| {
-                Error::InvalidJob("unique insert found no conflicting row".to_owned())
-            })?;
-        let unique_skipped_as_duplicate = record.unique_skipped_as_duplicate;
-        let row = record.into_job_row()?;
+        #[cfg(feature = "postgres")]
+        let postgres_query = || {
+            sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql.clone()))
+                .bind(Json(&encoded_args))
+                .bind(created_at)
+                .bind(&kind)
+                .bind(opts.max_attempts)
+                .bind(Json(&opts.metadata))
+                .bind(opts.priority)
+                .bind(&opts.queue)
+                .bind(opts.scheduled_at)
+                .bind(state.as_str())
+                .bind(&opts.tags)
+                .bind(unique_key.clone())
+                .bind(unique_states.map(i32::from))
+                .bind(self.inner.schema.as_deref())
+                .bind(crate::NOTIFICATION_TOPIC_INSERT)
+        };
+        let (row, unique_skipped_as_duplicate) = match executor {
+            #[cfg(feature = "postgres")]
+            ExecutorInner::PostgresConnection(connection) => {
+                let record = postgres_query()
+                    .fetch_optional(connection)
+                    .await?
+                    .ok_or_else(|| {
+                        Error::invalid_job("unique insert found no conflicting row".to_owned())
+                    })?;
+                let duplicate = record.unique_skipped_as_duplicate;
+                (record.into_job_row()?, duplicate)
+            }
+            #[cfg(feature = "postgres")]
+            ExecutorInner::PostgresPool(pool) => {
+                let record = postgres_query()
+                    .fetch_optional(pool)
+                    .await?
+                    .ok_or_else(|| {
+                        Error::invalid_job("unique insert found no conflicting row".to_owned())
+                    })?;
+                let duplicate = record.unique_skipped_as_duplicate;
+                (record.into_job_row()?, duplicate)
+            }
+            #[cfg(feature = "sqlite")]
+            ExecutorInner::SqliteConnection(connection) => {
+                let nonce = unique_key.as_ref().map(|_| {
+                    format!(
+                        "{}-{}",
+                        self.inner.id,
+                        self.inner.unique_nonce.fetch_add(1, Ordering::Relaxed)
+                    )
+                });
+                let inserted = crate::database::sqlite::insert(
+                    connection,
+                    &crate::database::sqlite::InsertJob {
+                        attempt: 0,
+                        attempted_at: None,
+                        attempted_by: &[],
+                        created_at: created_at.unwrap_or(now),
+                        encoded_args: &encoded_args,
+                        errors: &[],
+                        finalized_at: None,
+                        id: None,
+                        kind: &kind,
+                        max_attempts: opts.max_attempts,
+                        metadata: &opts.metadata,
+                        priority: opts.priority,
+                        queue: &opts.queue,
+                        scheduled_at: opts.scheduled_at.unwrap_or(now),
+                        state,
+                        tags: &opts.tags,
+                        unique_key: unique_key.as_deref(),
+                        unique_nonce: nonce.as_deref(),
+                        unique_states,
+                    },
+                )
+                .await
+                .map_err(sqlite_backend_error)?;
+                if inserted.job.state == JobState::Available
+                    && !inserted.unique_skipped_as_duplicate
+                {
+                    let payload = serde_json::json!({"queue": inserted.job.queue}).to_string();
+                    crate::database::sqlite::notification_insert(
+                        connection,
+                        &[crate::database::sqlite::NotificationInput {
+                            payload: &payload,
+                            topic: crate::NOTIFICATION_TOPIC_INSERT,
+                        }],
+                    )
+                    .await
+                    .map_err(sqlite_backend_error)?;
+                }
+                (inserted.job, inserted.unique_skipped_as_duplicate)
+            }
+            #[cfg(feature = "sqlite")]
+            ExecutorInner::SqlitePool(pool) => {
+                let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+                let nonce = unique_key.as_ref().map(|_| {
+                    format!(
+                        "{}-{}",
+                        self.inner.id,
+                        self.inner.unique_nonce.fetch_add(1, Ordering::Relaxed)
+                    )
+                });
+                let inserted = crate::database::sqlite::insert(
+                    &mut transaction,
+                    &crate::database::sqlite::InsertJob {
+                        attempt: 0,
+                        attempted_at: None,
+                        attempted_by: &[],
+                        created_at: created_at.unwrap_or(now),
+                        encoded_args: &encoded_args,
+                        errors: &[],
+                        finalized_at: None,
+                        id: None,
+                        kind: &kind,
+                        max_attempts: opts.max_attempts,
+                        metadata: &opts.metadata,
+                        priority: opts.priority,
+                        queue: &opts.queue,
+                        scheduled_at: opts.scheduled_at.unwrap_or(now),
+                        state,
+                        tags: &opts.tags,
+                        unique_key: unique_key.as_deref(),
+                        unique_nonce: nonce.as_deref(),
+                        unique_states,
+                    },
+                )
+                .await
+                .map_err(sqlite_backend_error)?;
+                if inserted.job.state == JobState::Available
+                    && !inserted.unique_skipped_as_duplicate
+                {
+                    let payload = serde_json::json!({"queue": inserted.job.queue}).to_string();
+                    crate::database::sqlite::notification_insert(
+                        &mut transaction,
+                        &[crate::database::sqlite::NotificationInput {
+                            payload: &payload,
+                            topic: crate::NOTIFICATION_TOPIC_INSERT,
+                        }],
+                    )
+                    .await
+                    .map_err(sqlite_backend_error)?;
+                }
+                transaction.commit().await?;
+                (inserted.job, inserted.unique_skipped_as_duplicate)
+            }
+        };
         for middleware in self.inner.insert_middleware.iter().rev() {
             middleware
                 .after_insert(&row, unique_skipped_as_duplicate)
@@ -1215,7 +2925,7 @@ impl Client {
     }
 
     fn validate_known_kind(&self, kind: &str) -> Result<(), Error> {
-        if !self.inner.skip_unknown_job_check
+        if !self.inner.allow_unregistered_job_kinds
             && !self.inner.workers.kinds().is_empty()
             && !self.inner.workers.contains_kind(kind)
         {
@@ -1226,16 +2936,43 @@ impl Client {
 }
 
 /// Controls one running client instance.
+///
+/// Dropping the handle requests immediate cancellation but cannot wait for
+/// in-flight database work to finish. Use [`RunHandle::shutdown`] or
+/// [`RunHandle::shutdown_now`] when shutdown must be observed before returning,
+/// or [`RunHandle::detach`] to deliberately leave the client running.
+#[must_use = "dropping the handle requests immediate client shutdown; call detach to run it independently"]
 pub struct RunHandle {
-    fetch_cancel: CancellationToken,
-    join: tokio::task::JoinHandle<Result<(), Error>>,
+    fetch_cancel: Option<CancellationToken>,
+    join: Option<tokio::task::JoinHandle<Result<(), Error>>>,
     ready: Option<oneshot::Receiver<Result<(), String>>>,
     soft_stop_timeout: Option<Duration>,
-    work_cancel: CancellationToken,
+    work_cancel: Option<CancellationToken>,
+}
+
+impl std::fmt::Debug for RunHandle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RunHandle")
+            .field("attached", &self.join.is_some())
+            .field("ready_observed", &self.ready.is_none())
+            .finish_non_exhaustive()
+    }
 }
 
 impl RunHandle {
-    /// Waits until PostgreSQL notification subscriptions are active.
+    /// Leaves the client running independently of this handle.
+    ///
+    /// This permanently relinquishes lifecycle control. The runtime then ends
+    /// only on an internal error or process shutdown. Most applications should
+    /// retain the handle and use an awaited shutdown method instead.
+    pub fn detach(mut self) {
+        self.fetch_cancel.take();
+        self.work_cancel.take();
+        self.join.take();
+    }
+
+    /// Waits until the selected backend's notification path is active.
     ///
     /// Poll-only clients are ready immediately. Calling this more than once is
     /// harmless.
@@ -1245,32 +2982,62 @@ impl RunHandle {
         };
         ready
             .await
-            .map_err(|_| Error::Runtime("client stopped before becoming ready".to_owned()))?
-            .map_err(Error::Runtime)
+            .map_err(|_| Error::runtime("client stopped before becoming ready".to_owned()))?
+            .map_err(Error::runtime)
     }
 
     /// Stops fetching and waits indefinitely for active jobs.
     pub async fn shutdown(mut self) -> Result<(), Error> {
-        self.fetch_cancel.cancel();
+        if let Some(cancellation) = self.fetch_cancel.take() {
+            cancellation.cancel();
+        }
+        let Some(mut join) = self.join.take() else {
+            return Ok(());
+        };
         if let Some(timeout) = self.soft_stop_timeout {
             tokio::select! {
-                result = &mut self.join => return join_client_result(result),
-                () = tokio::time::sleep(timeout) => self.work_cancel.cancel(),
+                result = &mut join => return join_client_result(result),
+                () = tokio::time::sleep(timeout) => {
+                    if let Some(cancellation) = self.work_cancel.take() {
+                        cancellation.cancel();
+                    }
+                },
             }
         }
-        join_client_result(self.join.await)
+        join_client_result(join.await)
     }
 
     /// Stops fetching and cancels active job contexts.
-    pub async fn shutdown_now(self) -> Result<(), Error> {
-        self.fetch_cancel.cancel();
-        self.work_cancel.cancel();
-        self.wait().await
+    pub async fn shutdown_now(mut self) -> Result<(), Error> {
+        if let Some(cancellation) = self.fetch_cancel.take() {
+            cancellation.cancel();
+        }
+        if let Some(cancellation) = self.work_cancel.take() {
+            cancellation.cancel();
+        }
+        match self.join.take() {
+            Some(join) => join_client_result(join.await),
+            None => Ok(()),
+        }
     }
 
     /// Waits for the client to stop.
-    pub async fn wait(self) -> Result<(), Error> {
-        join_client_result(self.join.await)
+    pub async fn wait(mut self) -> Result<(), Error> {
+        match self.join.take() {
+            Some(join) => join_client_result(join.await),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for RunHandle {
+    fn drop(&mut self) {
+        if let Some(cancellation) = &self.fetch_cancel {
+            cancellation.cancel();
+        }
+        if let Some(cancellation) = &self.work_cancel {
+            cancellation.cancel();
+        }
     }
 }
 
@@ -1281,6 +3048,22 @@ fn join_client_result(
     Ok(())
 }
 
+fn collect_nonempty_jobs<T>(jobs: impl IntoIterator<Item = T>) -> Result<Vec<T>, Error> {
+    let jobs = jobs.into_iter().collect::<Vec<_>>();
+    if jobs.is_empty() {
+        return Err(Error::invalid_job("no jobs to insert".to_owned()));
+    }
+    Ok(jobs)
+}
+
+fn validate_nonempty_batch(batch: &InsertBatch) -> Result<(), Error> {
+    if batch.is_empty() {
+        return Err(Error::invalid_job("no jobs to insert".to_owned()));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "postgres")]
 pub(crate) struct JobRecord {
     attempt: i16,
     attempted_at: Option<DateTime<Utc>>,
@@ -1303,6 +3086,7 @@ pub(crate) struct JobRecord {
     unique_states: Option<String>,
 }
 
+#[cfg(feature = "postgres")]
 impl<'row> FromRow<'row, PgRow> for JobRecord {
     fn from_row(row: &'row PgRow) -> Result<Self, sqlx::Error> {
         // `job_projection` fixes the first 18 columns in this order, and every
@@ -1333,10 +3117,11 @@ impl<'row> FromRow<'row, PgRow> for JobRecord {
     }
 }
 
+#[cfg(feature = "postgres")]
 impl JobRecord {
     pub(crate) fn into_job_row(self) -> Result<JobRow, Error> {
         let Value::Object(metadata) = self.metadata.0 else {
-            return Err(Error::InvalidJob(format!(
+            return Err(Error::invalid_job(format!(
                 "job {} metadata is not an object",
                 self.id
             )));
@@ -1345,7 +3130,7 @@ impl JobRecord {
             .unique_states
             .map(|bits| {
                 let bitmask = u8::from_str_radix(&bits, 2).map_err(|error| {
-                    Error::InvalidJob(format!(
+                    Error::invalid_job(format!(
                         "job {} has invalid unique states {bits:?}: {error}",
                         self.id
                     ))
@@ -1373,7 +3158,8 @@ impl JobRecord {
             priority: self.priority,
             queue: self.queue,
             scheduled_at: self.scheduled_at,
-            state: JobState::try_from(self.state.as_str()).map_err(Error::InvalidJob)?,
+            state: JobState::try_from(self.state.as_str())
+                .map_err(|error| Error::invalid_job(error.to_string()))?,
             tags: self.tags,
             unique_key: self.unique_key,
             unique_states,
@@ -1385,13 +3171,29 @@ struct CompletionUpdate {
     attempt: i16,
     cancellation: CancellationToken,
     error_json: Option<Value>,
-    event_kind: EventKind,
+    event_kind: JobEventKind,
     finalized_at: Option<DateTime<Utc>>,
     job_id: i64,
     metadata: Map<String, Value>,
     scheduled_at: Option<DateTime<Utc>>,
     state: JobState,
     timing: CompletionTiming,
+}
+
+fn persisted_completion_event_kind(state: JobState, requested: JobEventKind) -> JobEventKind {
+    match state {
+        JobState::Available => match requested {
+            JobEventKind::Failed | JobEventKind::Interrupted | JobEventKind::Snoozed => requested,
+            JobEventKind::Cancelled | JobEventKind::Completed => JobEventKind::Failed,
+        },
+        JobState::Cancelled => JobEventKind::Cancelled,
+        JobState::Completed => JobEventKind::Completed,
+        JobState::Discarded | JobState::Retryable => JobEventKind::Failed,
+        JobState::Scheduled => JobEventKind::Snoozed,
+        JobState::Pending | JobState::Running => {
+            panic!("completion event received a job that was not finalized")
+        }
+    }
 }
 
 struct CompletionAttempt {
@@ -1416,16 +3218,23 @@ async fn run_completion_batcher(
     mut receiver: mpsc::Receiver<CompletionUpdate>,
 ) -> Result<(), Error> {
     const COMPLETION_BATCH_DELAY: Duration = Duration::from_millis(10);
+    #[cfg(feature = "postgres")]
     const COMPLETION_BATCH_CONCURRENCY: usize = 2;
     const COMPLETION_BATCH_SIZE: usize = 5_000;
     const COMPLETION_BATCH_THRESHOLD: usize = COMPLETION_BATCH_SIZE;
     let mut batches = JoinSet::new();
+    let batch_concurrency = match inner.database.kind() {
+        #[cfg(feature = "postgres")]
+        DatabaseKind::Postgres => COMPLETION_BATCH_CONCURRENCY,
+        #[cfg(feature = "sqlite")]
+        DatabaseKind::Sqlite => 1,
+    };
 
     loop {
         // Never build a third coordinator-owned batch while both persistence
         // slots are occupied. The bounded receiver applies backpressure until
         // one of the two database writes finishes.
-        while batches.len() >= COMPLETION_BATCH_CONCURRENCY {
+        while batches.len() >= batch_concurrency {
             let result = batches
                 .join_next()
                 .await
@@ -1500,7 +3309,7 @@ async fn run_completion_batcher(
 
 fn finish_completion_batch(
     inner: &ClientInner,
-    (batch, records): (Vec<CompletionUpdate>, Result<Vec<JobRecord>, sqlx::Error>),
+    (batch, records): (Vec<CompletionUpdate>, Result<Vec<JobRow>, Error>),
 ) {
     match records {
         Ok(records) => {
@@ -1527,39 +3336,86 @@ fn finish_completion_batch(
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeps PostgreSQL batch and transactionally equivalent SQLite completion together"
+)]
 async fn persist_completion_batch(
     inner: &ClientInner,
     batch: &[CompletionUpdate],
-) -> Result<Vec<JobRecord>, sqlx::Error> {
-    let attempts = batch
-        .iter()
-        .map(|update| update.attempt)
-        .collect::<Vec<_>>();
-    let errors = batch
-        .iter()
-        .map(|update| update.error_json.clone().map(Json))
-        .collect::<Vec<_>>();
-    let finalized_at = batch
-        .iter()
-        .map(|update| update.finalized_at)
-        .collect::<Vec<_>>();
-    let ids = batch.iter().map(|update| update.job_id).collect::<Vec<_>>();
-    let metadata = batch
-        .iter()
-        .map(|update| Json(Value::Object(update.metadata.clone())))
-        .collect::<Vec<_>>();
-    let scheduled_at = batch
-        .iter()
-        .map(|update| update.scheduled_at)
-        .collect::<Vec<_>>();
-    let states = batch
-        .iter()
-        .map(|update| update.state.as_str())
-        .collect::<Vec<_>>();
-    let table = inner.schema.qualify("river_job");
-    let state_type = inner.schema.qualify("river_job_state");
-    let sql = format!(
-        "WITH updates AS (\
+) -> Result<Vec<JobRow>, Error> {
+    #[cfg(feature = "sqlite")]
+    if let Some(pool) = inner.sqlite_pool() {
+        let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+        let mut rows = Vec::with_capacity(batch.len());
+        for update in batch {
+            let attempt_error = update
+                .error_json
+                .clone()
+                .map(serde_json::from_value::<AttemptError>)
+                .transpose()?;
+            let row = crate::database::sqlite::complete(
+                &mut transaction,
+                &crate::database::sqlite::CompleteJob {
+                    attempt: Some(update.attempt),
+                    error: attempt_error.as_ref(),
+                    finalized_at: update.finalized_at,
+                    id: update.job_id,
+                    metadata_updates: Some(&update.metadata),
+                    now: Utc::now(),
+                    scheduled_at: update.scheduled_at,
+                    state: update.state,
+                },
+            )
+            .await
+            .map_err(sqlite_backend_error)?;
+            if let Some(row) = row {
+                rows.push(row);
+            } else if let Some(row) = crate::database::sqlite::merge_metadata_if_not_running(
+                &mut transaction,
+                update.job_id,
+                &update.metadata,
+            )
+            .await
+            .map_err(sqlite_backend_error)?
+            {
+                rows.push(row);
+            }
+        }
+        transaction.commit().await?;
+        return Ok(rows);
+    }
+    #[cfg(feature = "postgres")]
+    {
+        let attempts = batch
+            .iter()
+            .map(|update| update.attempt)
+            .collect::<Vec<_>>();
+        let errors = batch
+            .iter()
+            .map(|update| update.error_json.clone().map(Json))
+            .collect::<Vec<_>>();
+        let finalized_at = batch
+            .iter()
+            .map(|update| update.finalized_at)
+            .collect::<Vec<_>>();
+        let ids = batch.iter().map(|update| update.job_id).collect::<Vec<_>>();
+        let metadata = batch
+            .iter()
+            .map(|update| Json(Value::Object(update.metadata.clone())))
+            .collect::<Vec<_>>();
+        let scheduled_at = batch
+            .iter()
+            .map(|update| update.scheduled_at)
+            .collect::<Vec<_>>();
+        let states = batch
+            .iter()
+            .map(|update| update.state.as_str())
+            .collect::<Vec<_>>();
+        let table = inner.schema.qualify("river_job");
+        let state_type = inner.schema.qualify("river_job_state");
+        let sql = format!(
+            "WITH updates AS (\
             SELECT * FROM unnest(\
                 $1::bigint[], $2::smallint[], $3::jsonb[], $4::timestamptz[], \
                 $5::jsonb[], $6::timestamptz[], $7::text[]\
@@ -1567,62 +3423,68 @@ async fn persist_completion_batch(
                 id, attempt, attempt_error, finalized_at, metadata, scheduled_at, state)\
          ) \
          UPDATE {table} AS job SET \
-            attempt = updates.attempt, \
-            errors = CASE WHEN updates.attempt_error IS NULL THEN job.errors \
+            attempt = CASE WHEN job.state = 'running' \
+                AND NOT (updates.state IN ('available', 'retryable', 'scheduled') \
+                    AND job.metadata ? 'cancel_attempted_at') \
+                THEN updates.attempt ELSE job.attempt END, \
+            errors = CASE WHEN job.state != 'running' OR updates.attempt_error IS NULL THEN job.errors \
                 ELSE array_append(coalesce(job.errors, '{{}}'), updates.attempt_error) END, \
-            finalized_at = CASE WHEN updates.state IN ('available', 'retryable', 'scheduled') \
+            finalized_at = CASE WHEN job.state != 'running' THEN job.finalized_at \
+                WHEN updates.state IN ('available', 'retryable', 'scheduled') \
                 AND job.metadata ? 'cancel_attempted_at' \
                 THEN coalesce(updates.finalized_at, now()) ELSE updates.finalized_at END, \
             metadata = job.metadata || updates.metadata, \
-            scheduled_at = coalesce(updates.scheduled_at, job.scheduled_at), \
-            state = CASE WHEN updates.state IN ('available', 'retryable', 'scheduled') \
+            scheduled_at = CASE WHEN job.state = 'running' \
+                AND NOT (updates.state IN ('available', 'retryable', 'scheduled') \
+                    AND job.metadata ? 'cancel_attempted_at') \
+                THEN coalesce(updates.scheduled_at, job.scheduled_at) ELSE job.scheduled_at END, \
+            state = CASE WHEN job.state != 'running' THEN job.state \
+                WHEN updates.state IN ('available', 'retryable', 'scheduled') \
                 AND job.metadata ? 'cancel_attempted_at' \
                 THEN 'cancelled'::{state_type} ELSE updates.state::{state_type} END \
-         FROM updates WHERE job.id = updates.id AND job.state = 'running' \
+         FROM updates WHERE job.id = updates.id \
          RETURNING {}, false AS unique_skipped_as_duplicate",
-        job_projection("job")
-    );
-    sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
-        .bind(ids)
-        .bind(attempts)
-        .bind(errors)
-        .bind(finalized_at)
-        .bind(metadata)
-        .bind(scheduled_at)
-        .bind(states)
-        .fetch_all(&inner.pool)
-        .await
+            job_projection("job")
+        );
+        let records = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+            .bind(ids)
+            .bind(attempts)
+            .bind(errors)
+            .bind(finalized_at)
+            .bind(metadata)
+            .bind(scheduled_at)
+            .bind(states)
+            .fetch_all(
+                inner
+                    .postgres_pool()
+                    .expect("PostgreSQL completion path requires a PostgreSQL pool"),
+            )
+            .await?;
+        return records.into_iter().map(JobRecord::into_job_row).collect();
+    }
+    #[allow(unreachable_code)]
+    Err(Error::runtime(
+        "database dispatch selected no supported backend".to_owned(),
+    ))
 }
 
 fn finish_batched_completion(
     inner: &ClientInner,
     update: &CompletionUpdate,
-    record: Option<JobRecord>,
+    record: Option<JobRow>,
 ) {
-    if let Some(record) = record {
-        match record.into_job_row() {
-            Ok(row) => {
-                let event_kind = if row.state == JobState::Cancelled {
-                    EventKind::JobCancelled
-                } else {
-                    update.event_kind
-                };
-                let mut event = Event::job(event_kind, row);
-                event.job_statistics = Some(JobStatistics {
-                    complete_duration: update.timing.completion_started.elapsed(),
-                    queue_wait_duration: update.timing.queue_wait_duration,
-                    run_duration: update.timing.run_duration,
-                });
-                let _ = inner.events.send(event);
-            }
-            Err(operation_error) => {
-                error!(
-                    error = %operation_error,
-                    job_id = update.job_id,
-                    "failed to decode completed River job"
-                );
-            }
-        }
+    if let Some(row) = record {
+        let event_kind = persisted_completion_event_kind(row.state, update.event_kind);
+        let event = Event::job_with_statistics(
+            event_kind,
+            row,
+            JobStatistics {
+                complete_duration: update.timing.completion_started.elapsed(),
+                queue_wait_duration: update.timing.queue_wait_duration,
+                run_duration: update.timing.run_duration,
+            },
+        );
+        let _ = inner.events.send(event);
     } else {
         debug!(
             job_id = update.job_id,
@@ -1764,24 +3626,42 @@ struct LeadershipNotification {
     leader_id: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) enum RuntimeNotification {
+    Insert(String),
+    LeadershipChanged,
+    LeadershipRequestResign,
+    QueueControl(String),
+}
+
+#[cfg(feature = "postgres")]
 async fn run_notifications(
     inner: Arc<ClientInner>,
     cancel: CancellationToken,
-    queue_notifications: broadcast::Sender<String>,
+    queue_notifications: broadcast::Sender<RuntimeNotification>,
     ready: oneshot::Sender<Result<(), String>>,
 ) -> Result<(), Error> {
     let schema = match inner.schema.as_deref() {
         Some(schema) => schema.to_owned(),
         None => sqlx::query_scalar::<_, Option<String>>("SELECT current_schema()")
-            .fetch_one(&inner.pool)
+            .fetch_one(
+                inner
+                    .postgres_pool()
+                    .expect("PostgreSQL notifications require a PostgreSQL pool"),
+            )
             .await?
-            .ok_or_else(|| Error::InvalidJob("PostgreSQL current_schema() is null".to_owned()))?,
+            .ok_or_else(|| Error::invalid_job("PostgreSQL current_schema() is null".to_owned()))?,
     };
     let control_topic = format!("{schema}.{}", crate::NOTIFICATION_TOPIC_CONTROL);
     let insert_topic = format!("{schema}.{}", crate::NOTIFICATION_TOPIC_INSERT);
     let leadership_topic = format!("{schema}.{}", crate::NOTIFICATION_TOPIC_LEADERSHIP);
     let listener_result = async {
-        let mut listener = PgListener::connect_with(&inner.pool).await?;
+        let mut listener = PgListener::connect_with(
+            inner
+                .postgres_pool()
+                .expect("PostgreSQL notifications require a PostgreSQL pool"),
+        )
+        .await?;
         listener.listen(&control_topic).await?;
         listener.listen(&insert_topic).await?;
         listener.listen(&leadership_topic).await?;
@@ -1807,7 +3687,7 @@ async fn run_notifications(
         if notification.channel() == insert_topic {
             if let Ok(payload) = serde_json::from_str::<InsertNotification>(notification.payload())
             {
-                let _ = queue_notifications.send(payload.queue);
+                let _ = queue_notifications.send(RuntimeNotification::Insert(payload.queue));
             }
             continue;
         }
@@ -1820,12 +3700,12 @@ async fn run_notifications(
                 {
                     continue;
                 }
-                let marker = if payload.action == "request_resign" {
-                    "__river_leadership_request_resign__"
+                let notification = if payload.action == "request_resign" {
+                    RuntimeNotification::LeadershipRequestResign
                 } else {
-                    "__river_leadership__"
+                    RuntimeNotification::LeadershipChanged
                 };
-                let _ = queue_notifications.send(marker.to_owned());
+                let _ = queue_notifications.send(notification);
             }
             continue;
         }
@@ -1851,7 +3731,7 @@ async fn run_notifications(
             }
             "pause" | "resume" => {
                 if let Some(queue) = payload.queue {
-                    let _ = queue_notifications.send(queue);
+                    let _ = queue_notifications.send(RuntimeNotification::QueueControl(queue));
                 }
             }
             _ => debug!(
@@ -1862,12 +3742,125 @@ async fn run_notifications(
     }
 }
 
+#[cfg(feature = "sqlite")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeps SQLite outbox topic decoding and dispatch in one ordered polling loop"
+)]
+async fn run_sqlite_notifications(
+    inner: Arc<ClientInner>,
+    cancel: CancellationToken,
+    queue_notifications: broadcast::Sender<RuntimeNotification>,
+    ready: oneshot::Sender<Result<(), String>>,
+) -> Result<(), Error> {
+    let pool = inner
+        .sqlite_pool()
+        .expect("SQLite notifications require a SQLite pool");
+    let initial = async {
+        let mut connection = pool.acquire().await?;
+        crate::database::sqlite::notification_last_id(&mut connection)
+            .await
+            .map_err(sqlite_backend_error)
+    }
+    .await;
+    let mut after_id = match initial {
+        Ok(last_id) => {
+            let _ = ready.send(Ok(()));
+            last_id
+        }
+        Err(error) => {
+            let _ = ready.send(Err(error.to_string()));
+            return Err(error);
+        }
+    };
+    let mut notification_tick =
+        tokio::time::interval(crate::database::sqlite::DEFAULT_NOTIFICATION_POLL_INTERVAL);
+    notification_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            () = cancel.cancelled() => return Ok(()),
+            _ = notification_tick.tick() => {}
+        }
+        let notifications = {
+            let mut connection = pool.acquire().await?;
+            crate::database::sqlite::notification_poll(&mut connection, after_id, 1_000)
+                .await
+                .map_err(sqlite_backend_error)?
+        };
+        for notification in notifications {
+            after_id = notification.id;
+            match notification.topic.as_str() {
+                crate::NOTIFICATION_TOPIC_INSERT => {
+                    if let Ok(payload) =
+                        serde_json::from_str::<InsertNotification>(&notification.payload)
+                    {
+                        let _ =
+                            queue_notifications.send(RuntimeNotification::Insert(payload.queue));
+                    }
+                }
+                crate::NOTIFICATION_TOPIC_LEADERSHIP => {
+                    if let Ok(payload) =
+                        serde_json::from_str::<LeadershipNotification>(&notification.payload)
+                    {
+                        if payload.action == "resigned"
+                            && payload.leader_id.as_deref() == Some(inner.id.as_str())
+                        {
+                            continue;
+                        }
+                        let notification = if payload.action == "request_resign" {
+                            RuntimeNotification::LeadershipRequestResign
+                        } else {
+                            RuntimeNotification::LeadershipChanged
+                        };
+                        let _ = queue_notifications.send(notification);
+                    }
+                }
+                crate::NOTIFICATION_TOPIC_CONTROL => {
+                    let Ok(payload) =
+                        serde_json::from_str::<ControlNotification>(&notification.payload)
+                    else {
+                        warn!(
+                            payload = notification.payload,
+                            "ignored invalid River control notification"
+                        );
+                        continue;
+                    };
+                    match payload.action.as_str() {
+                        "cancel" => {
+                            if let Some(job_id) = payload.job_id {
+                                signal_running_attempt(
+                                    &inner.running,
+                                    &inner.pending_cancellations,
+                                    &inner.fetch_registration_windows,
+                                    job_id,
+                                );
+                            }
+                        }
+                        "pause" | "resume" => {
+                            if let Some(queue) = payload.queue {
+                                let _ = queue_notifications
+                                    .send(RuntimeNotification::QueueControl(queue));
+                            }
+                        }
+                        _ => debug!(
+                            action = payload.action,
+                            "ignored unknown River control action"
+                        ),
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 async fn run_dynamic_queues(
     inner: Arc<ClientInner>,
     completion_sender: mpsc::Sender<CompletionUpdate>,
     fetch_cancel: CancellationToken,
     work_cancel: CancellationToken,
-    notifications: broadcast::Sender<String>,
+    notifications: broadcast::Sender<RuntimeNotification>,
     mut changes: watch::Receiver<u64>,
 ) -> Result<(), Error> {
     let mut active = HashMap::<String, (QueueConfig, CancellationToken, u64)>::new();
@@ -1904,7 +3897,7 @@ async fn run_dynamic_queues(
             }
             result = tasks.join_next(), if !tasks.is_empty() => {
                 let (name, generation, queue_cancel, result) = result
-                    .ok_or_else(|| Error::Runtime("dynamic queue task set closed".to_owned()))?
+                    .ok_or_else(|| Error::runtime("dynamic queue task set closed".to_owned()))?
                     .map_err(Error::from_join)?;
                 if active
                     .get(&name)
@@ -1939,7 +3932,7 @@ fn reconcile_queues(
     completion_sender: &mpsc::Sender<CompletionUpdate>,
     fetch_cancel: &CancellationToken,
     work_cancel: &CancellationToken,
-    notifications: &broadcast::Sender<String>,
+    notifications: &broadcast::Sender<RuntimeNotification>,
     active: &mut HashMap<String, (QueueConfig, CancellationToken, u64)>,
     tasks: &mut JoinSet<(String, u64, CancellationToken, Result<(), Error>)>,
     next_generation: &mut u64,
@@ -1947,7 +3940,7 @@ fn reconcile_queues(
     let configured = inner
         .queues
         .read()
-        .map_err(|_| Error::Runtime("queue configuration lock poisoned".to_owned()))?
+        .map_err(|_| Error::runtime("queue configuration lock poisoned".to_owned()))?
         .clone();
     for (name, (running_config, queue_cancel, _)) in &*active {
         if configured.get(name) != Some(running_config) {
@@ -1998,38 +3991,70 @@ async fn run_queue(
     config: QueueConfig,
     fetch_cancel: CancellationToken,
     work_cancel: CancellationToken,
-    mut notifications: broadcast::Receiver<String>,
+    mut notifications: broadcast::Receiver<RuntimeNotification>,
 ) -> Result<(), Error> {
-    crate::storage::touch_queue(&inner, &queue).await?;
+    let initial_queue = crate::storage::touch_queue(&inner, &queue).await?;
+    let mut paused = initial_queue.paused_at.is_some();
     let permits = Arc::new(Semaphore::new(config.max_workers));
     let mut jobs = JoinSet::new();
     let mut last_fetch = tokio::time::Instant::now() - config.fetch_cooldown;
     let mut heartbeat = tokio::time::interval(QUEUE_HEARTBEAT_INTERVAL);
     let mut poll = tokio::time::interval(config.fetch_poll_interval);
+    let mut queue_config_poll = tokio::time::interval(QUEUE_CONFIG_POLL_INTERVAL);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    queue_config_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
-        let should_fetch = tokio::select! {
+        let (mut should_fetch, refresh_queue_state) = tokio::select! {
             () = fetch_cancel.cancelled() => break,
             _ = heartbeat.tick() => {
                 crate::storage::touch_queue(&inner, &queue).await?;
-                false
+                (false, false)
             },
-            _ = poll.tick() => true,
+            _ = queue_config_poll.tick() => (false, true),
+            _ = poll.tick() => (true, false),
             result = jobs.join_next(), if !jobs.is_empty() => {
                 if let Some(Err(join_error)) = result {
                     error!(error = %join_error, "River queue task failed");
                 }
-                true
+                (true, false)
             },
             notification = notifications.recv() => match notification {
-                Ok(notification_queue) => notification_queue == "*" || notification_queue == queue,
-                Err(broadcast::error::RecvError::Lagged(_)) => true,
-                Err(broadcast::error::RecvError::Closed) => false,
+                Ok(RuntimeNotification::Insert(notification_queue)) => (
+                    notification_queue == "*" || notification_queue == queue,
+                    false,
+                ),
+                Ok(RuntimeNotification::QueueControl(notification_queue)) => (
+                    false,
+                    notification_queue == "*" || notification_queue == queue,
+                ),
+                Ok(
+                    RuntimeNotification::LeadershipChanged
+                        | RuntimeNotification::LeadershipRequestResign,
+                )
+                | Err(broadcast::error::RecvError::Closed) => (false, false),
+                Err(broadcast::error::RecvError::Lagged(_)) => (true, true),
             },
         };
-        if !should_fetch {
+
+        if refresh_queue_state
+            && let Some(queue_row) = crate::storage::load_queue(&inner, &queue).await?
+        {
+            let next_paused = queue_row.paused_at.is_some();
+            if next_paused != paused {
+                paused = next_paused;
+                let event_kind = if paused {
+                    QueueEventKind::Paused
+                } else {
+                    QueueEventKind::Resumed
+                };
+                let _ = inner.events.send(Event::queue(event_kind, queue_row));
+                should_fetch |= !paused;
+            }
+        }
+
+        if !should_fetch || paused {
             continue;
         }
         let since_fetch = last_fetch.elapsed();
@@ -2041,7 +4066,16 @@ async fn run_queue(
             continue;
         }
         let registration_guard = FetchRegistrationGuard::new(&inner);
-        let rows = if available >= PARALLEL_FETCH_MINIMUM && !inner.pilot.intercepts_fetch() {
+        let use_parallel_fetch = match inner.database.kind() {
+            #[cfg(feature = "postgres")]
+            DatabaseKind::Postgres => true,
+            #[cfg(feature = "sqlite")]
+            DatabaseKind::Sqlite => false,
+        };
+        let rows = if use_parallel_fetch
+            && available >= PARALLEL_FETCH_MINIMUM
+            && !inner.pilot.intercepts_fetch()
+        {
             let first_maximum = available / 2;
             let second_maximum = available - first_maximum;
             let (first, second) = tokio::join!(
@@ -2070,7 +4104,7 @@ async fn run_queue(
             let permit = Arc::clone(&permits)
                 .acquire_owned()
                 .await
-                .map_err(|_| Error::InvalidJob("queue worker semaphore closed".to_owned()))?;
+                .map_err(|_| Error::invalid_job("queue worker semaphore closed".to_owned()))?;
             let hard_cancel = work_cancel.child_token();
             let cancellation = hard_cancel.child_token();
             register_running_attempt(
@@ -2109,18 +4143,86 @@ async fn run_queue(
     Ok(())
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeps hooks and metrics identical across backend fetch paths"
+)]
 async fn fetch_jobs(
     inner: &ClientInner,
     queue: &str,
     maximum: usize,
 ) -> Result<Vec<JobRow>, Error> {
     let fetch_started = (!inner.hooks.is_empty()).then(std::time::Instant::now);
-    let table = inner.schema.qualify("river_job");
-    let queue_table = inner.schema.qualify("river_queue");
     let maximum = i32::try_from(maximum)
-        .map_err(|_| Error::InvalidJob("fetch maximum exceeds i32".to_owned()))?;
-    let oss_sql = format!(
-        "WITH locked AS (\
+        .map_err(|_| Error::invalid_job("fetch maximum exceeds i32".to_owned()))?;
+    #[cfg(feature = "sqlite")]
+    if let Some(pool) = inner.sqlite_pool() {
+        let params = crate::database::sqlite::ClaimJobs {
+            client_id: &inner.id,
+            limit: maximum,
+            max_attempted_by: ATTEMPTED_BY_MAX,
+            now: Utc::now(),
+            queue,
+        };
+        let rows = if inner.pilot.intercepts_fetch() {
+            let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+            let selected_ids = inner
+                .pilot
+                .select_job_ids(
+                    PilotDatabaseConnection::Sqlite(&mut transaction),
+                    &FetchParams {
+                        client_id: inner.id.clone(),
+                        database: inner.pilot_database_config(),
+                        kinds: inner
+                            .workers
+                            .kinds()
+                            .into_iter()
+                            .map(str::to_owned)
+                            .collect(),
+                        maximum,
+                        queue: queue.to_owned(),
+                    },
+                )
+                .await
+                .map_err(|source| Error::Extension {
+                    phase: "fetch selection",
+                    source,
+                })?;
+            let rows = match selected_ids {
+                Some(ids) => {
+                    crate::database::sqlite::claim_selected(&mut transaction, &params, &ids).await
+                }
+                None => crate::database::sqlite::claim(&mut transaction, &params).await,
+            }
+            .map_err(sqlite_backend_error)?;
+            transaction.commit().await?;
+            rows
+        } else {
+            let mut connection = pool.acquire().await?;
+            crate::database::sqlite::claim(&mut connection, &params)
+                .await
+                .map_err(sqlite_backend_error)?
+        };
+        if let Some(fetch_started) = fetch_started {
+            for metric in [
+                Metric::JobGetAvailableDuration(fetch_started.elapsed()),
+                Metric::JobGetAvailableCount(u64::try_from(rows.len()).unwrap_or(u64::MAX)),
+            ] {
+                for hook in &inner.hooks {
+                    if let Err(hook_error) = hook.metric_emit(metric).await {
+                        error!(error = %hook_error, "River metric hook failed");
+                    }
+                }
+            }
+        }
+        return Ok(rows);
+    }
+    #[cfg(feature = "postgres")]
+    {
+        let table = inner.schema.qualify("river_job");
+        let queue_table = inner.schema.qualify("river_queue");
+        let oss_sql = format!(
+            "WITH locked AS (\
             SELECT id FROM {table} WHERE state = 'available' AND queue = $1 AND scheduled_at <= now() \
                 AND NOT EXISTS (SELECT 1 FROM {queue_table} WHERE name = $1 AND paused_at IS NOT NULL) \
             ORDER BY priority, scheduled_at, id LIMIT $2 FOR UPDATE SKIP LOCKED\
@@ -2132,74 +4234,96 @@ async fn fetch_jobs(
                          ELSE job.attempted_by END, $3) \
             FROM locked WHERE job.id = locked.id \
             RETURNING {}, false AS unique_skipped_as_duplicate",
-        job_projection("job")
-    );
-    let records = if inner.pilot.intercepts_fetch() {
-        let kinds = inner
-            .workers
-            .kinds()
-            .into_iter()
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        let mut transaction = inner.pool.begin().await?;
-        let selected_ids = inner
-            .pilot
-            .select_job_ids(
-                &mut transaction,
-                &FetchParams {
-                    client_id: inner.id.clone(),
-                    kinds: kinds.clone(),
-                    maximum,
-                    queue: queue.to_owned(),
-                    schema: inner.schema.clone(),
-                },
-            )
-            .await
-            .map_err(|error| Error::Runtime(format!("pilot fetch selection: {error}")))?;
-        let records = if let Some(selected_ids) = selected_ids {
-            let sql = format!(
-                "UPDATE {table} AS job SET state = 'running', attempt = job.attempt + 1, \
+            job_projection("job")
+        );
+        let records = if inner.pilot.intercepts_fetch() {
+            let kinds = inner
+                .workers
+                .kinds()
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            let mut transaction = inner
+                .postgres_pool()
+                .expect("PostgreSQL fetch extension requires a PostgreSQL pool")
+                .begin()
+                .await?;
+            let selected_ids = inner
+                .pilot
+                .select_job_ids(
+                    PilotDatabaseConnection::Postgres(&mut transaction),
+                    &FetchParams {
+                        client_id: inner.id.clone(),
+                        database: inner.pilot_database_config(),
+                        kinds: kinds.clone(),
+                        maximum,
+                        queue: queue.to_owned(),
+                    },
+                )
+                .await
+                .map_err(|source| Error::Extension {
+                    phase: "fetch selection",
+                    source,
+                })?;
+            let records = if let Some(selected_ids) = selected_ids {
+                let sql = format!(
+                    "UPDATE {table} AS job SET state = 'running', attempt = job.attempt + 1, \
                     attempted_at = now(), attempted_by = array_append(\
                         CASE WHEN array_length(job.attempted_by, 1) >= $3 \
                              THEN job.attempted_by[array_length(job.attempted_by, 1) + 2 - $3:] \
                              ELSE job.attempted_by END, $2) \
                 WHERE id = ANY($1::bigint[]) AND state = 'available' \
                 RETURNING {}, false AS unique_skipped_as_duplicate",
-                job_projection("job")
-            );
-            sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
-                .bind(selected_ids)
-                .bind(&inner.id)
-                .bind(ATTEMPTED_BY_MAX)
-                .fetch_all(&mut *transaction)
-                .await?
+                    job_projection("job")
+                );
+                sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+                    .bind(selected_ids)
+                    .bind(&inner.id)
+                    .bind(ATTEMPTED_BY_MAX)
+                    .fetch_all(&mut *transaction)
+                    .await?
+            } else {
+                fetch_oss_records(&mut *transaction, oss_sql, queue, maximum, &inner.id).await?
+            };
+            transaction.commit().await?;
+            records
         } else {
-            fetch_oss_records(&mut *transaction, oss_sql, queue, maximum, &inner.id).await?
+            fetch_oss_records(
+                inner
+                    .postgres_pool()
+                    .expect("PostgreSQL fetch path requires a PostgreSQL pool"),
+                oss_sql,
+                queue,
+                maximum,
+                &inner.id,
+            )
+            .await?
         };
-        transaction.commit().await?;
-        records
-    } else {
-        fetch_oss_records(&inner.pool, oss_sql, queue, maximum, &inner.id).await?
-    };
-    let rows = records
-        .into_iter()
-        .map(JobRecord::into_job_row)
-        .collect::<Result<Vec<_>, _>>()?;
-    if let Some(fetch_started) = fetch_started {
-        for metric in [
-            Metric::JobGetAvailableDuration(fetch_started.elapsed()),
-            Metric::JobGetAvailableCount(u64::try_from(rows.len()).unwrap_or(u64::MAX)),
-        ] {
-            for hook in &inner.hooks {
-                if let Err(hook_error) = hook.metric_emit(metric).await {
-                    error!(error = %hook_error, "River metric hook failed");
+        let rows = records
+            .into_iter()
+            .map(JobRecord::into_job_row)
+            .collect::<Result<Vec<_>, _>>()?;
+        if let Some(fetch_started) = fetch_started {
+            for metric in [
+                Metric::JobGetAvailableDuration(fetch_started.elapsed()),
+                Metric::JobGetAvailableCount(u64::try_from(rows.len()).unwrap_or(u64::MAX)),
+            ] {
+                for hook in &inner.hooks {
+                    if let Err(hook_error) = hook.metric_emit(metric).await {
+                        error!(error = %hook_error, "River metric hook failed");
+                    }
                 }
             }
         }
+        return Ok(rows);
     }
-    Ok(rows)
+    #[allow(unreachable_code)]
+    Err(Error::runtime(
+        "database dispatch selected no supported backend".to_owned(),
+    ))
 }
 
+#[cfg(feature = "postgres")]
 async fn fetch_oss_records<'executor, E>(
     executor: E,
     sql: String,
@@ -2243,6 +4367,7 @@ async fn execute_job(
                 inner: Arc::clone(&inner),
             },
             cancellation.clone(),
+            row.id,
             &row.metadata,
         );
         let mut worker_row = row.clone();
@@ -2343,6 +4468,7 @@ async fn execute_job(
             result = Err(WorkerFailure {
                 error: resumable_failure,
                 kind: WorkerFailureKind::Error,
+                source: None,
                 trace: String::new(),
             });
         }
@@ -2352,6 +4478,7 @@ async fn execute_job(
             failure.error.clear();
             failure.error.push_str("job interrupted by client shutdown");
             failure.kind = WorkerFailureKind::Interrupted;
+            failure.source = None;
             failure.trace.clear();
         }
         if cancellation_cause == Some(CancellationCause::Remote)
@@ -2360,11 +4487,12 @@ async fn execute_job(
             result = Err(WorkerFailure {
                 error: "JobCancelError: job cancelled remotely".to_owned(),
                 kind: WorkerFailureKind::Cancelled,
+                source: None,
                 trace: String::new(),
             });
         }
         let work_result = public_work_result(&result);
-        let mut error_handler_result = ErrorHandlerResult::default();
+        let mut error_handler_result = ErrorHandlerDecision::default();
         if let Some(error_handler) = &inner.error_handler
             && matches!(
                 work_result,
@@ -2408,8 +4536,10 @@ async fn execute_job(
         .await
         {
             Ok(PersistResult::Finished(Some(event))) => {
-                let mut event = *event;
-                event.job_statistics = Some(JobStatistics {
+                let Event::Job(job_event) = *event else {
+                    unreachable!("job persistence returns only job events")
+                };
+                let event = Event::job_with_statistics(job_event.kind, job_event.job, JobStatistics {
                     complete_duration: completion.timing.completion_started.elapsed(),
                     queue_wait_duration,
                     run_duration,
@@ -2440,6 +4570,7 @@ type WorkerResult = Result<WorkOutcome, WorkerFailure>;
 struct WorkerFailure {
     error: String,
     kind: WorkerFailureKind,
+    source: Option<WorkError>,
     trace: String,
 }
 
@@ -2460,7 +4591,7 @@ enum CancellationCause {
 }
 
 async fn finish_cancelled_task(
-    worker_task: &mut tokio::task::JoinHandle<Result<WorkOutcome, Box<dyn StdError + Send + Sync>>>,
+    worker_task: &mut tokio::task::JoinHandle<Result<WorkOutcome, WorkError>>,
     stuck_threshold: Duration,
 ) -> WorkerResult {
     if let Ok(result) = tokio::time::timeout(stuck_threshold, &mut *worker_task).await {
@@ -2475,25 +4606,28 @@ async fn finish_cancelled_task(
         Ok(Err(join_error)) if join_error.is_cancelled() => Err(WorkerFailure {
             error: "job aborted after ignoring cancellation".to_owned(),
             kind: WorkerFailureKind::Aborted,
+            source: None,
             trace: String::new(),
         }),
         Ok(result) => worker_join_result(result),
         Err(_) => Err(WorkerFailure {
             error: "job remained stuck after Tokio task abort".to_owned(),
             kind: WorkerFailureKind::Aborted,
+            source: None,
             trace: String::new(),
         }),
     }
 }
 
 fn worker_join_result(
-    result: Result<Result<WorkOutcome, Box<dyn StdError + Send + Sync>>, tokio::task::JoinError>,
+    result: Result<Result<WorkOutcome, WorkError>, tokio::task::JoinError>,
 ) -> WorkerResult {
     match result {
         Ok(Ok(outcome)) => Ok(outcome),
         Ok(Err(worker_error)) => Err(WorkerFailure {
             error: worker_error.to_string(),
             kind: WorkerFailureKind::Error,
+            source: Some(worker_error),
             trace: String::new(),
         }),
         Err(join_error) => Err(WorkerFailure {
@@ -2507,22 +4641,33 @@ fn worker_join_result(
             } else {
                 WorkerFailureKind::Aborted
             },
+            source: None,
             trace: format!("{join_error:?}"),
         }),
     }
 }
 
-fn boxed_extension_error(error: Error) -> Box<dyn StdError + Send + Sync> {
-    Box::new(error)
+fn worker_failure_from_source(error: BoxError) -> WorkerFailure {
+    let error = WorkError::new(error);
+    WorkerFailure {
+        error: error.to_string(),
+        kind: WorkerFailureKind::Error,
+        source: Some(error),
+        trace: String::new(),
+    }
 }
 
-fn erased_work_result(result: &Result<WorkOutcome, Box<dyn StdError + Send + Sync>>) -> WorkResult {
+fn boxed_extension_error(error: Error) -> WorkError {
+    WorkError::new(Box::new(error))
+}
+
+fn erased_work_result(result: &Result<WorkOutcome, WorkError>) -> WorkResult {
     match result {
         Ok(WorkOutcome::Cancel) => WorkResult::Cancelled,
         Ok(WorkOutcome::Complete) => WorkResult::Completed,
         Ok(WorkOutcome::Discard) => WorkResult::Discarded,
         Ok(WorkOutcome::Snooze(duration)) => WorkResult::Snoozed(*duration),
-        Err(error) => WorkResult::Failed(error.to_string()),
+        Err(error) => WorkResult::Failed(error.clone()),
     }
 }
 
@@ -2535,7 +4680,11 @@ fn public_work_result(result: &WorkerResult) -> WorkResult {
         Err(failure) => match failure.kind {
             WorkerFailureKind::Aborted => WorkResult::Aborted,
             WorkerFailureKind::Cancelled => WorkResult::Cancelled,
-            WorkerFailureKind::Error => WorkResult::Failed(failure.error.clone()),
+            WorkerFailureKind::Error => {
+                WorkResult::Failed(failure.source.clone().unwrap_or_else(|| {
+                    WorkError::new(Box::new(std::io::Error::other(failure.error.clone())))
+                }))
+            }
             WorkerFailureKind::Interrupted => WorkResult::Interrupted,
             WorkerFailureKind::Panic => WorkResult::Panicked(failure.error.clone()),
         },
@@ -2549,7 +4698,7 @@ async fn persist_result(
     completion: &CompletionAttempt,
     result: WorkerResult,
     metadata_updates: Map<String, Value>,
-    error_handler_result: ErrorHandlerResult,
+    error_handler_result: ErrorHandlerDecision,
     completion_sender: &mpsc::Sender<CompletionUpdate>,
 ) -> Result<PersistResult, Error> {
     let now = Utc::now();
@@ -2562,7 +4711,7 @@ async fn persist_result(
                 row.attempt,
                 None,
                 metadata_updates,
-                EventKind::JobCompleted,
+                JobEventKind::Completed,
             ),
             Ok(WorkOutcome::Cancel) => (
                 JobState::Cancelled,
@@ -2576,7 +4725,7 @@ async fn persist_result(
                     trace: String::new(),
                 }),
                 metadata_updates,
-                EventKind::JobCancelled,
+                JobEventKind::Cancelled,
             ),
             Ok(WorkOutcome::Discard) => (
                 JobState::Discarded,
@@ -2590,12 +4739,12 @@ async fn persist_result(
                     trace: String::new(),
                 }),
                 metadata_updates,
-                EventKind::JobFailed,
+                JobEventKind::Failed,
             ),
             Ok(WorkOutcome::Snooze(duration)) => {
                 let scheduled_at = now
                     + chrono::Duration::from_std(duration)
-                        .map_err(|error| Error::InvalidJob(error.to_string()))?;
+                        .map_err(|error| Error::invalid_job(error.to_string()))?;
                 let state = if duration <= inner.maintenance.scheduler_interval {
                     JobState::Available
                 } else {
@@ -2616,7 +4765,7 @@ async fn persist_result(
                     row.attempt - 1,
                     None,
                     metadata,
-                    EventKind::JobSnoozed,
+                    JobEventKind::Snoozed,
                 )
             }
             Err(failure) => {
@@ -2625,6 +4774,9 @@ async fn persist_result(
                         .await
                         .map(|event| PersistResult::Finished(event.map(Box::new)));
                 }
+                let retry_error = failure.source.clone().unwrap_or_else(|| {
+                    WorkError::new(Box::new(std::io::Error::other(failure.error.clone())))
+                });
                 let attempt_error = AttemptError {
                     at: row.attempted_at.unwrap_or(now),
                     attempt: row.attempt,
@@ -2632,7 +4784,7 @@ async fn persist_result(
                     trace: failure.trace,
                 };
                 if matches!(failure.kind, WorkerFailureKind::Cancelled)
-                    || error_handler_result.cancel
+                    || error_handler_result == ErrorHandlerDecision::Cancel
                 {
                     (
                         JobState::Cancelled,
@@ -2641,9 +4793,9 @@ async fn persist_result(
                         row.attempt,
                         Some(attempt_error),
                         metadata_updates,
-                        EventKind::JobCancelled,
+                        JobEventKind::Cancelled,
                     )
-                } else if error_handler_result.discard || row.attempt >= row.max_attempts {
+                } else if row.attempt >= row.max_attempts {
                     (
                         JobState::Discarded,
                         Some(now),
@@ -2651,27 +4803,24 @@ async fn persist_result(
                         row.attempt,
                         Some(attempt_error),
                         metadata_updates,
-                        EventKind::JobFailed,
+                        JobEventKind::Failed,
                     )
                 } else {
                     let worker_retry_after = inner
                         .workers
-                        .next_retry(row, &attempt_error.error, now)
+                        .next_retry(row, &retry_error, now)
                         .unwrap_or_else(|retry_error| {
                             debug!(error = %retry_error, "could not evaluate worker retry override");
                             None
                         });
-                    let delay = error_handler_result
-                        .retry_after
-                        .or(worker_retry_after)
-                        .unwrap_or_else(|| {
-                            inner
-                                .retry_policy
-                                .next_retry(row, &attempt_error.error, now)
-                        });
+                    let delay = worker_retry_after.unwrap_or_else(|| {
+                        inner
+                            .retry_policy
+                            .next_retry(row, &attempt_error.error, now)
+                    });
                     let scheduled_at = now
                         + chrono::Duration::from_std(delay)
-                            .map_err(|error| Error::InvalidJob(error.to_string()))?;
+                            .map_err(|error| Error::invalid_job(error.to_string()))?;
                     let state = if delay <= inner.maintenance.scheduler_interval {
                         JobState::Available
                     } else {
@@ -2684,25 +4833,36 @@ async fn persist_result(
                         row.attempt,
                         Some(attempt_error),
                         metadata_updates,
-                        EventKind::JobFailed,
+                        JobEventKind::Failed,
                     )
                 }
             }
         };
 
+    #[cfg(feature = "postgres")]
     let table = inner.schema.qualify("river_job");
+    #[cfg(feature = "postgres")]
     let state_type = inner.schema.qualify("river_job_state");
+    #[cfg(feature = "postgres")]
     let sql = format!(
         "UPDATE {table} AS job SET \
-            attempt = $2, \
-            errors = CASE WHEN $3::jsonb IS NULL THEN errors ELSE array_append(coalesce(errors, '{{}}'), $3::jsonb) END, \
-            finalized_at = CASE WHEN $7::text IN ('available', 'retryable', 'scheduled') AND metadata ? 'cancel_attempted_at' \
+            attempt = CASE WHEN state = 'running' \
+                                AND NOT ($7::text IN ('available', 'retryable', 'scheduled') \
+                                    AND metadata ? 'cancel_attempted_at') \
+                           THEN $2 ELSE attempt END, \
+            errors = CASE WHEN state != 'running' OR $3::jsonb IS NULL THEN errors ELSE array_append(coalesce(errors, '{{}}'), $3::jsonb) END, \
+            finalized_at = CASE WHEN state != 'running' THEN finalized_at \
+                                WHEN $7::text IN ('available', 'retryable', 'scheduled') AND metadata ? 'cancel_attempted_at' \
                                 THEN coalesce($4, now()) ELSE $4 END, \
             metadata = metadata || $5::jsonb, \
-            scheduled_at = coalesce($6, scheduled_at), \
-            state = CASE WHEN $7::text IN ('available', 'retryable', 'scheduled') AND metadata ? 'cancel_attempted_at' \
+            scheduled_at = CASE WHEN state = 'running' \
+                                     AND NOT ($7::text IN ('available', 'retryable', 'scheduled') \
+                                         AND metadata ? 'cancel_attempted_at') \
+                                THEN coalesce($6, scheduled_at) ELSE scheduled_at END, \
+            state = CASE WHEN state != 'running' THEN state \
+                         WHEN $7::text IN ('available', 'retryable', 'scheduled') AND metadata ? 'cancel_attempted_at' \
                          THEN 'cancelled'::{state_type} ELSE $7::text::{state_type} END \
-         WHERE id = $1 AND state = 'running' \
+         WHERE id = $1 \
          RETURNING {}, false AS unique_skipped_as_duplicate",
         job_projection("job")
     );
@@ -2725,74 +4885,148 @@ async fn persist_result(
                 timing: completion.timing,
             })
             .await
-            .map_err(|_| Error::Runtime("completion batcher stopped".to_owned()))?;
+            .map_err(|_| Error::runtime("completion batcher stopped".to_owned()))?;
         return Ok(PersistResult::Enqueued);
     }
 
-    let record = {
-        let mut transaction = inner.pool.begin().await?;
-        let completion_action = inner
-            .pilot
-            .before_job_completion(
-                &mut transaction,
-                &CompletionParams {
-                    job_id: row.id,
-                    metadata_updates: metadata.clone(),
-                    schema: inner.schema.clone(),
-                    state: state.as_str().to_owned(),
-                },
-            )
-            .await
-            .map_err(|error| Error::Runtime(format!("pilot job completion: {error}")))?;
-        let record = match completion_action {
-            CompletionAction::Continue => {
-                persist_completion_update(
-                    &mut *transaction,
-                    &sql,
-                    row.id,
-                    attempt,
-                    error_json.as_ref(),
-                    finalized_at,
-                    &metadata,
-                    scheduled_at,
-                    state,
+    #[cfg(feature = "sqlite")]
+    if let Some(pool) = inner.sqlite_pool() {
+        let record = {
+            let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+            let completion_action = inner
+                .pilot
+                .before_job_completion(
+                    PilotDatabaseConnection::Sqlite(&mut transaction),
+                    &CompletionParams {
+                        database: inner.pilot_database_config(),
+                        job_id: row.id,
+                        metadata_updates: metadata.clone(),
+                        state: state.as_str().to_owned(),
+                    },
                 )
-                .await?
-            }
-            CompletionAction::Handled => {
-                let sql = format!(
-                    "SELECT {}, false AS unique_skipped_as_duplicate FROM {table} AS job \
-                 WHERE id = $1 LIMIT 1",
-                    job_projection("job")
-                );
-                sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
-                    .bind(row.id)
-                    .fetch_optional(&mut *transaction)
-                    .await?
-            }
+                .await
+                .map_err(|source| Error::Extension {
+                    phase: "job completion",
+                    source,
+                })?;
+            let record = match completion_action {
+                CompletionAction::Continue => {
+                    let updated = crate::database::sqlite::complete(
+                        &mut transaction,
+                        &crate::database::sqlite::CompleteJob {
+                            attempt: Some(attempt),
+                            error: attempt_error.as_ref(),
+                            finalized_at,
+                            id: row.id,
+                            metadata_updates: Some(&metadata),
+                            now,
+                            scheduled_at,
+                            state,
+                        },
+                    )
+                    .await
+                    .map_err(sqlite_backend_error)?;
+                    match updated {
+                        Some(row) => Some(row),
+                        None => crate::database::sqlite::merge_metadata_if_not_running(
+                            &mut transaction,
+                            row.id,
+                            &metadata,
+                        )
+                        .await
+                        .map_err(sqlite_backend_error)?,
+                    }
+                }
+                CompletionAction::Handled => crate::database::sqlite::get(&mut transaction, row.id)
+                    .await
+                    .map_err(sqlite_backend_error)?,
+            };
+            transaction.commit().await?;
+            record
         };
-        transaction.commit().await?;
-        record
-    };
-    let Some(record) = record else {
-        debug!(
-            job_id = row.id,
-            "job result ignored because job is no longer running"
-        );
-        return Ok(PersistResult::Finished(None));
-    };
-    let row = record.into_job_row()?;
-    let event_kind = if row.state == JobState::Cancelled {
-        EventKind::JobCancelled
-    } else {
-        event_kind
-    };
-    Ok(PersistResult::Finished(Some(Box::new(Event::job(
-        event_kind, row,
-    )))))
+        let Some(row) = record else {
+            debug!(
+                job_id = row.id,
+                "job result ignored because the job no longer exists"
+            );
+            return Ok(PersistResult::Finished(None));
+        };
+        let event_kind = persisted_completion_event_kind(row.state, event_kind);
+        return Ok(PersistResult::Finished(Some(Box::new(Event::job(
+            event_kind, row,
+        )))));
+    }
+    #[cfg(feature = "postgres")]
+    if let Some(pool) = inner.postgres_pool() {
+        let record = {
+            let mut transaction = pool.begin().await?;
+            let completion_action = inner
+                .pilot
+                .before_job_completion(
+                    PilotDatabaseConnection::Postgres(&mut transaction),
+                    &CompletionParams {
+                        database: inner.pilot_database_config(),
+                        job_id: row.id,
+                        metadata_updates: metadata.clone(),
+                        state: state.as_str().to_owned(),
+                    },
+                )
+                .await
+                .map_err(|source| Error::Extension {
+                    phase: "job completion",
+                    source,
+                })?;
+            let record = match completion_action {
+                CompletionAction::Continue => {
+                    persist_completion_update(
+                        &mut *transaction,
+                        &sql,
+                        row.id,
+                        attempt,
+                        error_json.as_ref(),
+                        finalized_at,
+                        &metadata,
+                        scheduled_at,
+                        state,
+                    )
+                    .await?
+                }
+                CompletionAction::Handled => {
+                    let sql = format!(
+                        "SELECT {}, false AS unique_skipped_as_duplicate FROM {table} AS job \
+                 WHERE id = $1 LIMIT 1",
+                        job_projection("job")
+                    );
+                    sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+                        .bind(row.id)
+                        .fetch_optional(&mut *transaction)
+                        .await?
+                }
+            };
+            transaction.commit().await?;
+            record
+        };
+        let Some(record) = record else {
+            debug!(
+                job_id = row.id,
+                "job result ignored because the job no longer exists"
+            );
+            return Ok(PersistResult::Finished(None));
+        };
+        let row = record.into_job_row()?;
+        let event_kind = persisted_completion_event_kind(row.state, event_kind);
+        return Ok(PersistResult::Finished(Some(Box::new(Event::job(
+            event_kind, row,
+        )))));
+    }
+    #[allow(unreachable_code)]
+    Err(Error::runtime(
+        "database dispatch selected no supported backend".to_owned(),
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(feature = "postgres")]
 async fn persist_completion_update<'executor, E>(
     executor: E,
     sql: &str,
@@ -2826,28 +5060,105 @@ async fn persist_interrupted(
     row: &JobRow,
     metadata_updates: Map<String, Value>,
 ) -> Result<Option<Event>, Error> {
-    let table = inner.schema.qualify("river_job");
-    let sql = format!(
-        "UPDATE {table} AS job SET attempt = greatest(job.attempt - 1, 0), \
-         attempted_at = NULL, finalized_at = NULL, metadata = metadata || $2::jsonb, \
-         scheduled_at = now(), state = 'available' WHERE id = $1 AND state = 'running' \
+    #[cfg(feature = "sqlite")]
+    if let Some(pool) = inner.sqlite_pool() {
+        let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+        let updated = crate::database::sqlite::interrupt(
+            &mut transaction,
+            row.id,
+            &metadata_updates,
+            Utc::now(),
+        )
+        .await
+        .map_err(sqlite_backend_error)?;
+        let updated = match updated {
+            Some(row) => Some(row),
+            None => crate::database::sqlite::merge_metadata_if_not_running(
+                &mut transaction,
+                row.id,
+                &metadata_updates,
+            )
+            .await
+            .map_err(sqlite_backend_error)?,
+        };
+        if let Some(updated) = &updated
+            && updated.state == JobState::Available
+        {
+            let payload = serde_json::json!({"queue": updated.queue}).to_string();
+            crate::database::sqlite::notification_insert(
+                &mut transaction,
+                &[crate::database::sqlite::NotificationInput {
+                    payload: &payload,
+                    topic: crate::NOTIFICATION_TOPIC_INSERT,
+                }],
+            )
+            .await
+            .map_err(sqlite_backend_error)?;
+        }
+        transaction.commit().await?;
+        return Ok(updated.map(|row| {
+            Event::job(
+                persisted_completion_event_kind(row.state, JobEventKind::Interrupted),
+                row,
+            )
+        }));
+    }
+    #[cfg(feature = "postgres")]
+    {
+        let table = inner.schema.qualify("river_job");
+        let sql = format!(
+            "UPDATE {table} AS job SET \
+         attempt = CASE WHEN state = 'running' THEN greatest(job.attempt - 1, 0) ELSE attempt END, \
+         attempted_at = CASE WHEN state = 'running' THEN NULL ELSE attempted_at END, \
+         finalized_at = CASE WHEN state = 'running' THEN NULL ELSE finalized_at END, \
+         metadata = metadata || $2::jsonb, \
+         scheduled_at = CASE WHEN state = 'running' THEN now() ELSE scheduled_at END, \
+         state = CASE WHEN state = 'running' THEN 'available'::{state_type} ELSE state END \
+         WHERE id = $1 \
          RETURNING {}, false AS unique_skipped_as_duplicate",
-        job_projection("job")
-    );
-    let record = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
-        .bind(row.id)
-        .bind(Json(metadata_updates))
-        .fetch_optional(&inner.pool)
-        .await?;
-    Ok(record
-        .map(JobRecord::into_job_row)
-        .transpose()?
-        .map(|row| Event::job(EventKind::JobInterrupted, row)))
+            job_projection("job"),
+            state_type = inner.schema.qualify("river_job_state")
+        );
+        let record = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+            .bind(row.id)
+            .bind(Json(metadata_updates))
+            .fetch_optional(
+                inner
+                    .postgres_pool()
+                    .expect("PostgreSQL completion path requires a PostgreSQL pool"),
+            )
+            .await?;
+        return Ok(record.map(JobRecord::into_job_row).transpose()?.map(|row| {
+            Event::job(
+                persisted_completion_event_kind(row.state, JobEventKind::Interrupted),
+                row,
+            )
+        }));
+    }
+    #[allow(unreachable_code)]
+    Err(Error::runtime(
+        "database dispatch selected no supported backend".to_owned(),
+    ))
 }
 
 fn default_client_id() -> String {
     let host = std::env::var("HOSTNAME").unwrap_or_else(|_| "localhost".to_owned());
     format!("{host}-{}", std::process::id())
+}
+
+fn sort_claimed_jobs(rows: &mut [JobRow]) {
+    rows.sort_by(|left, right| {
+        left.priority
+            .cmp(&right.priority)
+            .then_with(|| left.scheduled_at.cmp(&right.scheduled_at))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+}
+
+struct ExtensionInsertWire {
+    created_at: DateTime<Utc>,
+    unique_key: Option<Vec<u8>>,
+    unique_states: Option<u8>,
 }
 
 struct PreparedFastInsert {
@@ -2911,6 +5222,7 @@ impl PreparedFastInsert {
     }
 }
 
+#[cfg(feature = "postgres")]
 fn encode_fast_copy(jobs: &[PreparedFastInsert]) -> Vec<u8> {
     let mut output = String::new();
     for job in jobs {
@@ -2957,6 +5269,7 @@ fn encode_fast_copy(jobs: &[PreparedFastInsert]) -> Vec<u8> {
     output.into_bytes()
 }
 
+#[cfg(feature = "postgres")]
 fn postgres_array(values: &[String]) -> String {
     let values = values
         .iter()
@@ -2988,6 +5301,7 @@ pub(crate) fn default_retry_delay(row: &JobRow, now: DateTime<Utc>, seed: u64) -
     base.mul_f64(0.9 + ratio * 0.2)
 }
 
+#[cfg(feature = "postgres")]
 pub(crate) fn job_projection(alias: &str) -> String {
     format!(
         "{alias}.id, {alias}.attempt, {alias}.attempted_at, {alias}.attempted_by, \
@@ -3001,32 +5315,32 @@ pub(crate) fn job_projection(alias: &str) -> String {
 
 fn validate_insert_parts(
     kind: &str,
-    opts: &InsertOpts,
-    skip_job_kind_validation: bool,
+    opts: &InsertParams,
+    allow_legacy_job_kinds: bool,
 ) -> Result<(), Error> {
     let mut kind_characters = kind.chars();
-    if !skip_job_kind_validation
+    if !allow_legacy_job_kinds
         && (kind.len() < 2
             || kind.len() >= 128
             || !kind_characters.next().is_some_and(is_word)
             || !kind_characters.all(valid_kind_character))
     {
-        return Err(Error::InvalidJob(format!("invalid job kind {kind:?}")));
+        return Err(Error::invalid_job(format!("invalid job kind {kind:?}")));
     }
     if opts.max_attempts < 1 {
-        return Err(Error::InvalidJob(
+        return Err(Error::invalid_job(
             "max_attempts must be greater than zero".to_owned(),
         ));
     }
     if !(1..=4).contains(&opts.priority) {
-        return Err(Error::InvalidJob(
+        return Err(Error::invalid_job(
             "priority must be between one and four".to_owned(),
         ));
     }
     validate_queue(&opts.queue)?;
     for tag in &opts.tags {
         if tag.len() > 255 || tag.len() < 3 {
-            return Err(Error::InvalidJob(
+            return Err(Error::invalid_job(
                 "tags must contain between 3 and 255 bytes".to_owned(),
             ));
         }
@@ -3037,10 +5351,10 @@ fn validate_insert_parts(
             || !is_word(last)
             || !characters.all(|character| is_word(character) || character == '-')
         {
-            return Err(Error::InvalidJob(format!("invalid tag {tag:?}")));
+            return Err(Error::invalid_job(format!("invalid tag {tag:?}")));
         }
     }
-    opts.unique.validate().map_err(Error::InvalidJob)
+    opts.unique.validate().map_err(Error::invalid_job)
 }
 
 fn valid_kind_character(character: char) -> bool {
@@ -3053,7 +5367,7 @@ fn valid_kind_character(character: char) -> bool {
 
 pub(crate) fn validate_queue(queue: &str) -> Result<(), Error> {
     if queue.is_empty() || queue.len() > 64 {
-        return Err(Error::InvalidJob(
+        return Err(Error::invalid_job(
             "queue name must contain between 1 and 64 bytes".to_owned(),
         ));
     }
@@ -3062,7 +5376,7 @@ pub(crate) fn validate_queue(queue: &str) -> Result<(), Error> {
         .next()
         .is_some_and(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
     {
-        return Err(Error::InvalidJob(format!("invalid queue name {queue:?}")));
+        return Err(Error::invalid_job(format!("invalid queue name {queue:?}")));
     }
     let mut previous_separator = false;
     for character in queue.chars() {
@@ -3070,16 +5384,17 @@ pub(crate) fn validate_queue(queue: &str) -> Result<(), Error> {
         if !(character.is_ascii_lowercase() || character.is_ascii_digit() || separator)
             || (separator && previous_separator)
         {
-            return Err(Error::InvalidJob(format!("invalid queue name {queue:?}")));
+            return Err(Error::invalid_job(format!("invalid queue name {queue:?}")));
         }
         previous_separator = separator;
     }
     if previous_separator {
-        return Err(Error::InvalidJob(format!("invalid queue name {queue:?}")));
+        return Err(Error::invalid_job(format!("invalid queue name {queue:?}")));
     }
     Ok(())
 }
 
+#[cfg(feature = "postgres")]
 fn validate_identifier(identifier: &str, description: &str) -> Result<(), Error> {
     let mut characters = identifier.chars();
     if identifier.is_empty()
@@ -3089,7 +5404,7 @@ fn validate_identifier(identifier: &str, description: &str) -> Result<(), Error>
             .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
         || !characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
     {
-        return Err(Error::InvalidJob(format!(
+        return Err(Error::invalid_job(format!(
             "invalid PostgreSQL {description} identifier {identifier:?}"
         )));
     }
@@ -3100,9 +5415,84 @@ fn is_word(character: char) -> bool {
     character == '_' || character.is_ascii_alphanumeric()
 }
 
+fn validate_metadata_key(key: &str) -> Result<(), Error> {
+    let mut characters = key.chars();
+    if key.is_empty()
+        || !characters
+            .next()
+            .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
+        || !characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
+    {
+        return Err(Error::configuration(format!(
+            "invalid job cleaner metadata exclusion key {key:?}"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completion_events_follow_persisted_state() {
+        let cases = [
+            (
+                JobState::Available,
+                JobEventKind::Failed,
+                JobEventKind::Failed,
+            ),
+            (
+                JobState::Available,
+                JobEventKind::Interrupted,
+                JobEventKind::Interrupted,
+            ),
+            (
+                JobState::Available,
+                JobEventKind::Cancelled,
+                JobEventKind::Failed,
+            ),
+            (
+                JobState::Available,
+                JobEventKind::Completed,
+                JobEventKind::Failed,
+            ),
+            (
+                JobState::Available,
+                JobEventKind::Snoozed,
+                JobEventKind::Snoozed,
+            ),
+            (
+                JobState::Cancelled,
+                JobEventKind::Failed,
+                JobEventKind::Cancelled,
+            ),
+            (
+                JobState::Completed,
+                JobEventKind::Failed,
+                JobEventKind::Completed,
+            ),
+            (
+                JobState::Discarded,
+                JobEventKind::Completed,
+                JobEventKind::Failed,
+            ),
+            (
+                JobState::Retryable,
+                JobEventKind::Completed,
+                JobEventKind::Failed,
+            ),
+            (
+                JobState::Scheduled,
+                JobEventKind::Failed,
+                JobEventKind::Snoozed,
+            ),
+        ];
+
+        for (state, requested, expected) in cases {
+            assert_eq!(persisted_completion_event_kind(state, requested), expected);
+        }
+    }
 
     #[test]
     fn completion_cleanup_preserves_newer_attempt() {

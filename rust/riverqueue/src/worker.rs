@@ -13,28 +13,33 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
-use sqlx::PgConnection;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::{Client, Error, Job, JobArgs, JobRow, JobUpdateParams};
+use crate::{
+    Client, Error, Job, JobArgs, JobRow, JobUpdateParams, WorkError,
+    database::DatabaseTransactionExecutor,
+};
 
 /// Context available while a job is running.
 #[derive(Clone)]
 pub struct WorkContext {
     cancellation: CancellationToken,
     client: Option<Client>,
+    job_id: Option<i64>,
     metadata_updates: Arc<Mutex<Map<String, Value>>>,
     resumable: Arc<Mutex<ResumableState>>,
 }
 
 impl WorkContext {
     /// Creates a context supervised by River.
+    #[doc(hidden)]
     #[must_use]
     pub fn new(cancellation: CancellationToken) -> Self {
         Self {
             cancellation,
             client: None,
+            job_id: None,
             metadata_updates: Arc::new(Mutex::new(Map::new())),
             resumable: Arc::new(Mutex::new(ResumableState::default())),
         }
@@ -56,17 +61,11 @@ impl WorkContext {
     /// Completes the running job inside a caller-managed transaction, merging
     /// metadata recorded on this context and invoking the exact-version
     /// completion extension seam.
-    pub async fn job_complete_tx(
-        &self,
-        connection: &mut PgConnection,
-        job_id: i64,
-    ) -> Result<JobRow, Error> {
-        let client = self.client.as_ref().ok_or_else(|| {
-            Error::Runtime(
-                "transactional completion requires a WorkContext supplied to a running River worker"
-                    .to_owned(),
-            )
-        })?;
+    pub async fn job_complete_tx<'executor, E>(&self, connection: E) -> Result<JobRow, Error>
+    where
+        E: DatabaseTransactionExecutor<'executor>,
+    {
+        let (client, job_id) = self.current_job()?;
         client
             .job_complete_tx_with_metadata(connection, job_id, self.metadata_updates().await)
             .await
@@ -88,7 +87,7 @@ impl WorkContext {
     /// failed attempt.
     pub async fn resumable_step<F, Fut, E>(&self, name: &str, step: F) -> Result<(), Error>
     where
-        E: StdError,
+        E: StdError + Send + Sync + 'static,
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<(), E>>,
     {
@@ -108,7 +107,10 @@ impl WorkContext {
             Err(error) => {
                 let message = format!("resumable step {name:?}: {error}");
                 state.failure = Some(message.clone());
-                Err(Error::Runtime(message))
+                Err(Error::ResumableStep {
+                    name: name.to_owned(),
+                    source: Box::new(error),
+                })
             }
         }
     }
@@ -120,7 +122,7 @@ impl WorkContext {
         step: F,
     ) -> Result<(), Error>
     where
-        E: StdError,
+        E: StdError + Send + Sync + 'static,
         F: FnOnce(T) -> Fut,
         Fut: Future<Output = Result<(), E>>,
         T: Default + DeserializeOwned,
@@ -139,9 +141,11 @@ impl WorkContext {
                 .map(serde_json::from_value)
                 .transpose()
                 .map_err(|error| {
-                    Error::Runtime(format!(
-                        "unmarshal resumable cursor for step {name:?}: {error}"
-                    ))
+                    Error::runtime_source(
+                        "resumable cursor",
+                        format!("cannot decode cursor for step {name:?}"),
+                        error,
+                    )
                 })?
                 .unwrap_or_default()
         };
@@ -157,7 +161,10 @@ impl WorkContext {
             Err(error) => {
                 let message = format!("resumable step {name:?}: {error}");
                 state.failure = Some(message.clone());
-                Err(Error::Runtime(message))
+                Err(Error::ResumableStep {
+                    name: name.to_owned(),
+                    source: Box::new(error),
+                })
             }
         }
     }
@@ -167,7 +174,8 @@ impl WorkContext {
         let cursor = serde_json::to_value(cursor)?;
         let mut state = self.resumable.lock().await;
         let step_name = state.step_name.clone().ok_or_else(|| {
-            Error::Runtime(
+            Error::runtime_context(
+                "worker context",
                 "resumable cursor can only be set inside a resumable cursor step".to_owned(),
             )
         })?;
@@ -176,39 +184,43 @@ impl WorkContext {
     }
 
     /// Persists the current resumable step in a caller-managed transaction.
-    pub async fn resumable_set_step_tx(
-        &self,
-        client: &Client,
-        connection: &mut PgConnection,
-        job_id: i64,
-    ) -> Result<JobRow, Error> {
-        self.resumable_checkpoint_tx::<Value>(client, connection, job_id, None)
+    pub async fn resumable_set_step_tx<'executor, E>(&self, connection: E) -> Result<JobRow, Error>
+    where
+        E: DatabaseTransactionExecutor<'executor>,
+    {
+        self.resumable_checkpoint_tx::<Value, _>(connection, None)
             .await
     }
 
     /// Persists the current resumable step and cursor in a caller-managed
     /// transaction.
-    pub async fn resumable_set_step_cursor_tx<T: Serialize>(
+    pub async fn resumable_set_step_cursor_tx<'executor, T, E>(
         &self,
-        client: &Client,
-        connection: &mut PgConnection,
-        job_id: i64,
+        connection: E,
         cursor: &T,
-    ) -> Result<JobRow, Error> {
-        self.resumable_checkpoint_tx(client, connection, job_id, Some(cursor))
-            .await
+    ) -> Result<JobRow, Error>
+    where
+        E: DatabaseTransactionExecutor<'executor>,
+        T: Serialize,
+    {
+        self.resumable_checkpoint_tx(connection, Some(cursor)).await
     }
 
-    async fn resumable_checkpoint_tx<T: Serialize>(
+    async fn resumable_checkpoint_tx<'executor, T, E>(
         &self,
-        client: &Client,
-        connection: &mut PgConnection,
-        job_id: i64,
+        connection: E,
         cursor: Option<&T>,
-    ) -> Result<JobRow, Error> {
+    ) -> Result<JobRow, Error>
+    where
+        E: DatabaseTransactionExecutor<'executor>,
+        T: Serialize,
+    {
         let mut state = self.resumable.lock().await;
         let step_name = state.step_name.clone().ok_or_else(|| {
-            Error::Runtime("resumable checkpoint must be set inside a resumable step".to_owned())
+            Error::runtime_context(
+                "worker context",
+                "resumable checkpoint must be set inside a resumable step".to_owned(),
+            )
         })?;
         state.completed_step = Some(step_name.clone());
         if let Some(cursor) = cursor {
@@ -228,6 +240,7 @@ impl WorkContext {
             );
         }
         drop(state);
+        let (client, job_id) = self.current_job()?;
         client
             .job_update_tx(
                 connection,
@@ -246,18 +259,19 @@ impl WorkContext {
         cursor_step: bool,
     ) -> Result<StepAction, Error> {
         if name.is_empty() {
-            return Err(Error::Runtime(
+            return Err(Error::runtime_context(
+                "worker context",
                 "resumable step name cannot be empty".to_owned(),
             ));
         }
         let mut state = self.resumable.lock().await;
         if let Some(failure) = &state.failure {
-            return Err(Error::Runtime(failure.clone()));
+            return Err(Error::runtime_context("worker context", failure.clone()));
         }
         if !state.all_step_names.insert(name.to_owned()) {
             let message = format!("duplicate resumable step name {name:?}");
             state.failure = Some(message.clone());
-            return Err(Error::Runtime(message));
+            return Err(Error::runtime_context("worker context", message));
         }
         if !state.resume_matched {
             if state.resume_step.as_deref() == Some(name) {
@@ -274,13 +288,32 @@ impl WorkContext {
         Ok(StepAction::Run)
     }
 
-    pub(crate) async fn metadata_updates(&self) -> Map<String, Value> {
+    fn current_job(&self) -> Result<(&Client, i64), Error> {
+        self.client
+            .as_ref()
+            .zip(self.job_id)
+            .ok_or_else(|| {
+                Error::runtime_context(
+                    "worker context",
+                    "transactional context operation requires a WorkContext supplied to a running River worker"
+                        .to_owned(),
+                )
+            })
+    }
+
+    /// Returns a snapshot of metadata recorded during this attempt.
+    ///
+    /// This exact-version seam is used by `riverqueue-test` to return an
+    /// immutable result after invoking a worker directly.
+    #[doc(hidden)]
+    pub async fn metadata_updates(&self) -> Map<String, Value> {
         self.metadata_updates.lock().await.clone()
     }
 
     pub(crate) fn for_job(
         client: Client,
         cancellation: CancellationToken,
+        job_id: i64,
         metadata: &Map<String, Value>,
     ) -> Self {
         let mut state = ResumableState::default();
@@ -296,6 +329,7 @@ impl WorkContext {
         Self {
             cancellation,
             client: Some(client),
+            job_id: Some(job_id),
             metadata_updates: Arc::new(Mutex::new(Map::new())),
             resumable: Arc::new(Mutex::new(state)),
         }
@@ -377,7 +411,6 @@ pub enum WorkerTimeout {
 }
 
 /// A typed asynchronous job worker.
-#[async_trait]
 pub trait Worker<A>: Send + Sync + 'static
 where
     A: JobArgs,
@@ -387,7 +420,12 @@ where
 
     /// Overrides the client retry delay for this job. Returning `None` uses the
     /// client policy.
-    fn next_retry(&self, _job: &Job<A>, _error: &str, _now: DateTime<Utc>) -> Option<Duration> {
+    fn next_retry(
+        &self,
+        _job: &Job<A>,
+        _error: &WorkError,
+        _now: DateTime<Utc>,
+    ) -> Option<Duration> {
         None
     }
 
@@ -397,7 +435,15 @@ where
     }
 
     /// Executes a job.
-    async fn work(&self, context: WorkContext, job: Job<A>) -> Result<WorkOutcome, Self::Error>;
+    ///
+    /// Implementations can use `async fn`; the explicit return type guarantees
+    /// that the resulting future can run on River's multithreaded Tokio
+    /// runtime without requiring each implementation to box its future.
+    fn work(
+        &self,
+        context: WorkContext,
+        job: Job<A>,
+    ) -> impl Future<Output = Result<WorkOutcome, Self::Error>> + Send;
 }
 
 #[async_trait]
@@ -405,17 +451,35 @@ trait ErasedWorker: Send + Sync {
     fn next_retry(
         &self,
         row: &JobRow,
-        error: &str,
+        error: &WorkError,
         now: DateTime<Utc>,
     ) -> Result<Option<Duration>, Box<dyn StdError + Send + Sync>>;
 
     fn timeout(&self, row: &JobRow) -> Result<WorkerTimeout, Box<dyn StdError + Send + Sync>>;
 
-    async fn work(
+    async fn work(&self, context: WorkContext, row: &JobRow) -> Result<WorkOutcome, WorkError>;
+}
+
+struct FunctionWorker<F> {
+    function: F,
+}
+
+impl<A, E, F, Fut> Worker<A> for FunctionWorker<F>
+where
+    A: JobArgs,
+    E: StdError + Send + Sync + 'static,
+    F: Fn(WorkContext, Job<A>) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<WorkOutcome, E>> + Send,
+{
+    type Error = E;
+
+    fn work(
         &self,
         context: WorkContext,
-        row: &JobRow,
-    ) -> Result<WorkOutcome, Box<dyn StdError + Send + Sync>>;
+        job: Job<A>,
+    ) -> impl Future<Output = Result<WorkOutcome, Self::Error>> + Send {
+        (self.function)(context, job)
+    }
 }
 
 struct RegisteredWorker<A, W> {
@@ -432,7 +496,7 @@ where
     fn next_retry(
         &self,
         row: &JobRow,
-        error: &str,
+        error: &WorkError,
         now: DateTime<Utc>,
     ) -> Result<Option<Duration>, Box<dyn StdError + Send + Sync>> {
         let args = serde_json::from_value(row.encoded_args.clone())?;
@@ -458,12 +522,9 @@ where
         ))
     }
 
-    async fn work(
-        &self,
-        context: WorkContext,
-        row: &JobRow,
-    ) -> Result<WorkOutcome, Box<dyn StdError + Send + Sync>> {
-        let args = serde_json::from_value(row.encoded_args.clone())?;
+    async fn work(&self, context: WorkContext, row: &JobRow) -> Result<WorkOutcome, WorkError> {
+        let args = serde_json::from_value(row.encoded_args.clone())
+            .map_err(|error| WorkError::new(Box::new(error)))?;
         self.worker
             .work(
                 context,
@@ -473,7 +534,7 @@ where
                 },
             )
             .await
-            .map_err(|error| Box::new(error) as Box<dyn StdError + Send + Sync>)
+            .map_err(|error| WorkError::new(Box::new(error)))
     }
 }
 
@@ -481,6 +542,15 @@ where
 #[derive(Clone, Default)]
 pub struct WorkerRegistry {
     workers: HashMap<&'static str, Arc<dyn ErasedWorker>>,
+}
+
+impl std::fmt::Debug for WorkerRegistry {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WorkerRegistry")
+            .field("kinds", &self.kinds())
+            .finish_non_exhaustive()
+    }
 }
 
 impl WorkerRegistry {
@@ -505,7 +575,7 @@ impl WorkerRegistry {
     pub(crate) fn next_retry(
         &self,
         row: &JobRow,
-        error: &str,
+        error: &WorkError,
         now: DateTime<Utc>,
     ) -> Result<Option<Duration>, Box<dyn StdError + Send + Sync>> {
         self.worker_for(row)?.next_retry(row, error, now)
@@ -525,30 +595,35 @@ impl WorkerRegistry {
         W: Worker<A>,
     {
         if A::KIND.is_empty() || A::KIND.len() >= 128 {
-            return Err(Error::InvalidJob(format!(
-                "job kind must contain between 1 and 127 bytes: {:?}",
-                A::KIND
-            )));
+            return Err(Error::invalid_job_context(
+                "worker registration",
+                format!(
+                    "job kind must contain between 1 and 127 bytes: {:?}",
+                    A::KIND
+                ),
+            ));
         }
         let mut kinds = vec![A::KIND];
         for alias in A::kind_aliases() {
             if alias.is_empty() || alias.len() >= 128 {
-                return Err(Error::InvalidJob(format!(
-                    "job kind alias must contain between 1 and 127 bytes: {alias:?}"
-                )));
+                return Err(Error::invalid_job_context(
+                    "worker registration",
+                    format!("job kind alias must contain between 1 and 127 bytes: {alias:?}"),
+                ));
             }
             if kinds.contains(alias) || self.workers.contains_key(alias) {
-                return Err(Error::InvalidJob(format!(
-                    "worker already registered for kind {alias:?}"
-                )));
+                return Err(Error::invalid_job_context(
+                    "worker registration",
+                    format!("worker already registered for kind {alias:?}"),
+                ));
             }
             kinds.push(alias);
         }
         if self.workers.contains_key(A::KIND) {
-            return Err(Error::InvalidJob(format!(
-                "worker already registered for kind {:?}",
-                A::KIND
-            )));
+            return Err(Error::invalid_job_context(
+                "worker registration",
+                format!("worker already registered for kind {:?}", A::KIND),
+            ));
         }
         let worker: Arc<dyn ErasedWorker> = Arc::new(RegisteredWorker::<A, W> {
             worker,
@@ -560,12 +635,31 @@ impl WorkerRegistry {
         Ok(self)
     }
 
+    /// Registers an asynchronous function or closure as a worker.
+    ///
+    /// Use [`Worker`] instead when a job kind needs to override its timeout or
+    /// retry schedule.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the job kind or one of its aliases is invalid or
+    /// already registered.
+    pub fn register_fn<A, E, F, Fut>(&mut self, function: F) -> Result<&mut Self, Error>
+    where
+        A: JobArgs,
+        E: StdError + Send + Sync + 'static,
+        F: Fn(WorkContext, Job<A>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<WorkOutcome, E>> + Send,
+    {
+        self.register::<A, _>(FunctionWorker { function })
+    }
+
     pub(crate) async fn work(
         &self,
         context: WorkContext,
         row: &JobRow,
-    ) -> Result<WorkOutcome, Box<dyn StdError + Send + Sync>> {
-        let worker = self.worker_for(row)?;
+    ) -> Result<WorkOutcome, WorkError> {
+        let worker = self.worker_for(row).map_err(WorkError::new)?;
         worker.work(context, row).await
     }
 
@@ -576,5 +670,160 @@ impl WorkerRegistry {
         self.workers.get(row.kind.as_str()).ok_or_else(|| {
             Box::new(Error::UnknownJobKind(row.kind.clone())) as Box<dyn StdError + Send + Sync>
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fmt,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    use chrono::Utc;
+    use serde::{Deserialize, Serialize};
+    use serde_json::{Map, json};
+
+    use super::*;
+    use crate::JobState;
+
+    #[derive(Debug)]
+    struct FunctionError;
+
+    impl fmt::Display for FunctionError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("function worker failed")
+        }
+    }
+
+    impl StdError for FunctionError {}
+
+    #[derive(Debug, Deserialize, Serialize)]
+    struct FunctionJobArgs {
+        fail: bool,
+    }
+
+    impl JobArgs for FunctionJobArgs {
+        const KIND: &'static str = "function_worker";
+
+        fn kind_aliases() -> &'static [&'static str] {
+            &["function_worker_v1"]
+        }
+    }
+
+    async fn function_worker(
+        context: WorkContext,
+        job: Job<FunctionJobArgs>,
+    ) -> Result<WorkOutcome, FunctionError> {
+        if job.args.fail {
+            return Err(FunctionError);
+        }
+        context
+            .record_output(&json!({"function": true}))
+            .await
+            .unwrap();
+        Ok(WorkOutcome::Complete)
+    }
+
+    fn job_row(kind: &str, fail: bool) -> JobRow {
+        let now = Utc::now();
+        JobRow {
+            attempt: 1,
+            attempted_at: Some(now),
+            attempted_by: vec!["test".to_owned()],
+            created_at: now,
+            encoded_args: json!({"fail": fail}),
+            errors: Vec::new(),
+            finalized_at: None,
+            id: 1,
+            kind: kind.to_owned(),
+            max_attempts: 25,
+            metadata: Map::new(),
+            priority: 1,
+            queue: "default".to_owned(),
+            scheduled_at: now,
+            state: JobState::Running,
+            tags: Vec::new(),
+            unique_key: None,
+            unique_states: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn register_fn_accepts_capturing_closure() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_for_worker = Arc::clone(&calls);
+        let mut workers = WorkerRegistry::new();
+        workers
+            .register_fn(move |_context: WorkContext, _job: Job<FunctionJobArgs>| {
+                let calls = Arc::clone(&calls_for_worker);
+                async move {
+                    calls.fetch_add(1, Ordering::Relaxed);
+                    Ok::<_, FunctionError>(WorkOutcome::Snooze(Duration::from_secs(1)))
+                }
+            })
+            .unwrap();
+
+        let outcome = workers
+            .work(
+                WorkContext::new(CancellationToken::new()),
+                &job_row(FunctionJobArgs::KIND, false),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(outcome, WorkOutcome::Snooze(Duration::from_secs(1)));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn register_fn_handles_aliases_and_typed_errors() {
+        let mut workers = WorkerRegistry::new();
+        workers.register_fn(function_worker).unwrap();
+
+        assert_eq!(
+            workers.kinds(),
+            [FunctionJobArgs::KIND, "function_worker_v1"]
+        );
+
+        let error = workers
+            .work(
+                WorkContext::new(CancellationToken::new()),
+                &job_row("function_worker_v1", true),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.source_ref().downcast_ref::<FunctionError>().is_some());
+    }
+
+    #[test]
+    fn register_fn_rejects_duplicate_kinds() {
+        let mut workers = WorkerRegistry::new();
+        workers.register_fn(function_worker).unwrap();
+
+        let Err(error) = workers.register_fn(function_worker) else {
+            panic!("duplicate registration should fail");
+        };
+
+        assert!(error.to_string().contains("already registered"));
+    }
+
+    #[test]
+    fn registry_debug_lists_kinds_without_worker_internals() {
+        let mut registry = WorkerRegistry::new();
+        registry
+            .register_fn(
+                |_context: WorkContext, _job: Job<FunctionJobArgs>| async move {
+                    Ok::<_, std::io::Error>(WorkOutcome::Complete)
+                },
+            )
+            .unwrap();
+
+        let debug = format!("{registry:?}");
+        assert!(debug.contains(FunctionJobArgs::KIND));
+        assert!(!debug.contains("dyn ErasedWorker"));
     }
 }

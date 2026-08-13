@@ -8,6 +8,14 @@ license.workspace = true
 readme = "README.md"
 repository.workspace = true
 
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = ["postgres"]
+postgres = ["sqlx/postgres"]
+sqlite = ["sqlx/sqlite"]
+
 [dependencies]
 async-trait.workspace = true
 serde_json.workspace = true

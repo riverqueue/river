@@ -5,11 +5,15 @@ request and response is one JSON object followed by a newline. Standard output
 is reserved for protocol messages; all diagnostics and library logs go to
 standard error.
 
-The harness starts each adapter with `RIVER_CONFORMANCE_DATABASE_URL` pointing
-at a disposable PostgreSQL database. Requests are sequential within an adapter
-process, while the harness may call different adapters concurrently. IDs and
-transaction-independent records returned by one implementation may be passed
-to any other implementation attached to the database.
+The harness starts each adapter with `RIVER_CONFORMANCE_DATABASE_URL`, an
+explicit `RIVER_CONFORMANCE_DATABASE_KIND` (`postgres` or `sqlite`), and, for
+SQLite, `RIVER_CONFORMANCE_PROFILE`. PostgreSQL
+uses an externally provisioned disposable database. The SQLite harness creates
+one temporary file and both adapters enable WAL, foreign keys, a five-second
+busy timeout, and a one-connection pool. Requests are sequential within an
+adapter process, while the harness may call different adapters concurrently.
+IDs and transaction-independent records returned by one implementation may be
+passed to any other implementation attached to the database.
 
 The Go implementation is the reference side. By default the candidate is the
 Rust adapter in this repository. Any future implementation, including a
@@ -22,7 +26,7 @@ JavaScript port, can run the same suite by setting
   "command": ["node", "dist/conformance-adapter.js"],
   "implementation": "javascript",
   "restart_command": ["node", "dist/conformance-adapter.js"],
-  "version": "0.43.0-alpha.1"
+  "version": "0.44.0-alpha.1"
 }
 ```
 
@@ -30,9 +34,28 @@ JavaScript port, can run the same suite by setting
 prebuilt process because crash/restart cases cannot rely on a build wrapper
 surviving process termination. `application_name` is the PostgreSQL
 `application_name` used for connection-fault tests. `version` is optional; if
-present, the handshake must match it exactly. The candidate must advertise the
-exact versioned method set in `contract.json`; missing and extra methods both
-fail before behavioral scenarios run.
+present, the handshake must match it exactly. For PostgreSQL, the candidate must
+advertise the exact versioned method set in `contract.json`. For SQLite, it must
+advertise the exact capabilities and methods in either `profiles/sqlite.json`
+or `profiles/sqlite-runtime.json`, as selected by the profile environment
+variable. Missing and extra methods both fail before behavioral scenarios run.
+
+The SQLite `portable-storage-v1` profile intentionally reuses the same adapter
+methods and harness helpers for deterministic controls, unique keys, migrations,
+insertion, job CRUD/list cursors, raw timestamp encoding, and transactions. It
+does not claim custom schemas, queue/runtime behavior, notifications,
+leadership, PostgreSQL transaction-abort semantics, `SKIP LOCKED`, fault
+injection, performance, or soak coverage.
+
+The `sqlite-runtime-v1` profile is a tested superset. It adds cross-language
+workers, competing claims, queue CRUD and dynamic reconfiguration, pause/resume
+behavior, durable insert/control notification wakeups, remote cancellation,
+leadership and failover, scheduler and periodic work, local subscriptions,
+cross-client pause/resume subscription delivery, extensions, and graceful
+lifecycle behavior. PostgreSQL-specific schemas,
+`COPY`, `SKIP LOCKED`, backend disconnect/transaction-abort fault injection,
+reindexing, rescuer/cleaner maintenance, performance, and soak remain outside
+that profile.
 
 ## Discovery and administration
 
@@ -53,9 +76,11 @@ fail before behavioral scenarios run.
 - `start`, `stop`, `wait`, and the compatibility shorthand `work`.
 - `runtime_stats` exposes normalized hook, middleware, periodic, resumable,
   and event-subscription observations without exposing language-specific API
-  shapes.
-- `barrier_create` and `barrier_release` coordinate the `barrier_wait` worker
-  without timing races.
+  shapes. Version 1 observes delivered event kinds but does not expose
+  subscriber lag counters; adding normalized lag observations requires a
+  contract revision.
+- `barrier_create` and `barrier_release` coordinate the `barrier_wait` and
+  output-recording `barrier_output` workers without timing races.
 - `benchmark_enqueue` performs an in-process insertion workload so JSON-RPC
   framing is not included in enqueue timings.
 
@@ -91,6 +116,9 @@ other.
 
 - `raw_insert_no_notify` proves polling recovers work when notification
   delivery is lost.
+- `raw_finalize` forces a running row to an external terminal state so the
+  suite can prove late worker completion preserves that state and error while
+  merging worker metadata and delivering the canonical worker-outcome event.
 - `fault_disconnect_listeners` terminates the adapter's PostgreSQL listener
   backends and the harness waits for reconnection.
 - `fault_disconnect_application` terminates all non-caller connections for one

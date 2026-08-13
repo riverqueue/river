@@ -33,7 +33,7 @@ generate/migrations: ## Sync changes of pgxv5 migrations to database/sql
 	rsync -au --delete "riverdriver/riverpgxv5/migration/" "riverdriver/riverdatabasesql/migration/"
 
 .PHONY: generate/rust-migrations
-generate/rust-migrations: ## Sync PostgreSQL migrations and hashes to Rust
+generate/rust-migrations: ## Sync database migrations and hashes to Rust
 	go run ./internal/cmd/syncrustmigrations
 
 .PHONY: generate/sqlc
@@ -95,6 +95,10 @@ test/rust/postgres: ## Run all Rust tests, including PostgreSQL integration test
 test/conformance: ## Run mixed Go/Rust tests (requires RIVER_CONFORMANCE_DATABASE_URL)
 	go test -tags riverconformance ./conformance/harness -run TestMixedGoRustConformance -count=1
 
+.PHONY: test/conformance/sqlite
+test/conformance/sqlite: ## Run mixed Go/Rust SQLite storage and runtime conformance
+	go test -tags riverconformance ./conformance/harness -run '^TestMixedGoRustSQLite(Conformance|RuntimeConformance)$$' -count=1
+
 .PHONY: test/conformance/performance
 test/conformance/performance: ## Run release-mode Go/Rust performance gates
 	go test -tags riverconformance ./conformance/harness -run TestPerformanceGate -count=1
@@ -106,6 +110,7 @@ test/conformance/soak: ## Run mixed soak for RIVER_CONFORMANCE_SOAK_DURATION
 .PHONY: doc/rust
 doc/rust: ## Build Rust API documentation and compiled examples
 	cd rust && RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
+	cd rust && RUSTDOCFLAGS="-D warnings" cargo test --workspace --all-features --doc --locked
 	cd rust && cargo check --workspace --examples --all-features --locked
 
 .PHONY: check/rust/dependencies

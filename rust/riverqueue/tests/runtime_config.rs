@@ -12,14 +12,16 @@ use std::{
 
 use async_trait::async_trait;
 use riverqueue::{
-    Client, EventKind, EventRecvError, Hook, InsertContext, InsertMiddleware, Job, JobArgs, JobRow,
-    JobState, Metric, PeriodicJobs, Plugin, QueueConfig, SubscribeConfig, WorkContext,
-    WorkMiddleware, WorkOutcome, WorkResult, Worker, WorkerRegistry,
+    Client, EventKind, EventRecvError, Hook, InsertContext, InsertMiddleware, InsertOpts, Job,
+    JobArgs, JobRow, JobState, Metric, PeriodicJobs, Plugin, QueueConfig, SubscribeConfig,
+    WorkContext, WorkMiddleware, WorkOutcome, WorkResult, Worker, WorkerRegistry,
+    database::PostgresDatabase,
 };
-use riverqueue_migrate::Migrator;
+use riverqueue_migrate::PostgresMigrator;
 use serde::{Deserialize, Serialize};
 use sqlx::{AssertSqlSafe, PgPool};
 use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
 #[river(kind = "rust_runtime_config")]
@@ -33,7 +35,6 @@ struct BurstArgs {}
 
 struct BurstWorker;
 
-#[async_trait]
 impl Worker<BurstArgs> for BurstWorker {
     type Error = Infallible;
 
@@ -54,7 +55,6 @@ struct CancelSnoozeWorker {
     started: Arc<Semaphore>,
 }
 
-#[async_trait]
 impl Worker<CancelSnoozeArgs> for CancelSnoozeWorker {
     type Error = Infallible;
 
@@ -89,7 +89,6 @@ struct ShutdownWorker {
     started: Arc<Semaphore>,
 }
 
-#[async_trait]
 impl Worker<ShutdownArgs> for ShutdownWorker {
     type Error = Infallible;
 
@@ -108,7 +107,6 @@ impl Worker<ShutdownArgs> for ShutdownWorker {
     }
 }
 
-#[async_trait]
 impl Worker<TerminalRaceArgs> for TerminalRaceWorker {
     type Error = Infallible;
 
@@ -261,7 +259,6 @@ impl WorkMiddleware for RuntimeWorkMiddleware {
     }
 }
 
-#[async_trait]
 impl Worker<RuntimeArgs> for RuntimeWorker {
     type Error = Infallible;
 
@@ -278,7 +275,7 @@ impl Worker<RuntimeArgs> for RuntimeWorker {
 
 async fn setup_runtime(database_url: &str) -> (Client, Arc<RuntimeCounts>) {
     let pool = PgPool::connect(database_url).await.unwrap();
-    let schema = riverqueue::SchemaName::new("rust_runtime_config_test").unwrap();
+    let schema = riverqueue::database::SchemaName::new("rust_runtime_config_test").unwrap();
     sqlx::raw_sql(AssertSqlSafe(
         "DROP SCHEMA IF EXISTS rust_runtime_config_test CASCADE; \
          CREATE SCHEMA rust_runtime_config_test",
@@ -286,7 +283,7 @@ async fn setup_runtime(database_url: &str) -> (Client, Arc<RuntimeCounts>) {
     .execute(&pool)
     .await
     .unwrap();
-    Migrator::new(pool.clone())
+    PostgresMigrator::new(pool.clone())
         .with_schema(schema.clone())
         .migrate_up()
         .await
@@ -295,22 +292,19 @@ async fn setup_runtime(database_url: &str) -> (Client, Arc<RuntimeCounts>) {
     let mut workers = WorkerRegistry::new();
     workers.register::<RuntimeArgs, _>(RuntimeWorker).unwrap();
     let counts = Arc::new(RuntimeCounts::default());
-    let client = Client::builder(pool)
+    let client = Client::builder(PostgresDatabase::new(pool).schema(schema))
         .default_max_attempts(7)
         .plugin(RuntimePlugin {
             counts: Arc::clone(&counts),
         })
         .id("rust-runtime-config-test")
-        .poll_only(true)
-        .schema(schema)
+        .without_notifications()
         .workers(workers)
         .queue(
             "default",
-            QueueConfig {
-                fetch_cooldown: Duration::from_millis(1),
-                fetch_poll_interval: Duration::from_millis(10),
-                max_workers: 1,
-            },
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
         )
         .build()
         .unwrap();
@@ -327,7 +321,7 @@ async fn completion_burst_does_not_lag_large_subscription() {
     };
 
     let pool = PgPool::connect(&database_url).await.unwrap();
-    let schema = riverqueue::SchemaName::new("rust_runtime_burst_test").unwrap();
+    let schema = riverqueue::database::SchemaName::new("rust_runtime_burst_test").unwrap();
     sqlx::raw_sql(AssertSqlSafe(
         "DROP SCHEMA IF EXISTS rust_runtime_burst_test CASCADE; \
          CREATE SCHEMA rust_runtime_burst_test",
@@ -335,7 +329,7 @@ async fn completion_burst_does_not_lag_large_subscription() {
     .execute(&pool)
     .await
     .unwrap();
-    Migrator::new(pool.clone())
+    PostgresMigrator::new(pool.clone())
         .with_schema(schema.clone())
         .migrate_up()
         .await
@@ -343,30 +337,29 @@ async fn completion_burst_does_not_lag_large_subscription() {
 
     let mut workers = WorkerRegistry::new();
     workers.register::<BurstArgs, _>(BurstWorker).unwrap();
-    let client = Client::builder(pool.clone())
+    let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.clone()))
         .id("rust-runtime-burst-test")
-        .poll_only(true)
-        .schema(schema.clone())
+        .without_notifications()
         .workers(workers)
         .queue(
             "default",
-            QueueConfig {
-                fetch_cooldown: Duration::from_millis(1),
-                fetch_poll_interval: Duration::from_millis(10),
-                max_workers: 1_000,
-            },
+            QueueConfig::new(1_000)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
         )
         .build()
         .unwrap();
     let mut completed = client
-        .subscribe_config(SubscribeConfig {
-            buffer_capacity: JOB_COUNT,
-            kinds: vec![EventKind::JobCompleted],
-        })
+        .subscribe_config(
+            SubscribeConfig::new([EventKind::JobCompleted])
+                .unwrap()
+                .with_buffer_capacity(JOB_COUNT)
+                .unwrap(),
+        )
         .unwrap();
     let jobs = (0..JOB_COUNT).map(|_| (BurstArgs {}, riverqueue::InsertOpts::default()));
     assert_eq!(
-        client.insert_many_fast(jobs).await.unwrap(),
+        client.insert_many_fast_with(jobs).await.unwrap(),
         u64::try_from(JOB_COUNT).unwrap()
     );
     let expected_ids = sqlx::query_scalar::<_, i64>(AssertSqlSafe(format!(
@@ -386,8 +379,8 @@ async fn completion_burst_does_not_lag_large_subscription() {
         let mut received_ids = HashSet::with_capacity(JOB_COUNT);
         for _ in 0..JOB_COUNT {
             let event = completed.recv().await.unwrap();
-            assert_eq!(event.kind, EventKind::JobCompleted);
-            let id = event.job.expect("completion event has a job").id;
+            assert_eq!(event.kind(), EventKind::JobCompleted);
+            let id = event.as_job().expect("completion event has a job").job.id;
             assert!(
                 received_ids.insert(id),
                 "duplicate completion event for job {id}"
@@ -421,11 +414,91 @@ async fn completion_burst_does_not_lag_large_subscription() {
 }
 
 #[tokio::test]
+async fn extension_claimed_outcomes_use_postgres_completion_batcher() {
+    let Ok(database_url) = std::env::var("RIVER_RUST_DATABASE_URL") else {
+        eprintln!("skipping PostgreSQL runtime test without RIVER_RUST_DATABASE_URL");
+        return;
+    };
+    let pool = PgPool::connect(&database_url).await.unwrap();
+    let schema = riverqueue::database::SchemaName::new("rust_extension_completion_test").unwrap();
+    sqlx::raw_sql(AssertSqlSafe(
+        "DROP SCHEMA IF EXISTS rust_extension_completion_test CASCADE; \
+         CREATE SCHEMA rust_extension_completion_test",
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    PostgresMigrator::new(pool.clone())
+        .with_schema(schema.clone())
+        .migrate_up()
+        .await
+        .unwrap();
+
+    let mut workers = WorkerRegistry::new();
+    workers.register::<BurstArgs, _>(BurstWorker).unwrap();
+    let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.clone()))
+        .id("rust-extension-completion-test")
+        .without_notifications()
+        .workers(workers)
+        .queue(
+            "default",
+            QueueConfig::new(1).with_fetch_poll_interval(Duration::from_mins(1)),
+        )
+        .build()
+        .unwrap();
+    let mut events = client.subscribe(&[EventKind::JobCompleted]).unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    let inserted = client
+        .insert_with(
+            BurstArgs {},
+            InsertOpts::default()
+                .with_scheduled_at(chrono::Utc::now() + chrono::Duration::hours(1)),
+        )
+        .await
+        .unwrap();
+    let table = schema.qualify("river_job");
+    sqlx::query(AssertSqlSafe(format!(
+        "UPDATE {table} SET state = 'running', attempt = 1, attempted_at = now() WHERE id = $1"
+    )))
+    .bind(inserted.job.row.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let row = client.job_get(inserted.job.row.id).await.unwrap();
+    let context = WorkContext::new(CancellationToken::new());
+    context
+        .metadata_set("shared_completion", serde_json::json!(true))
+        .await;
+    client
+        .extension_persist_claimed_outcomes(&context, vec![(row, Ok(WorkOutcome::Complete))])
+        .await
+        .unwrap();
+
+    let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let event = event.as_job().unwrap();
+    assert_eq!(event.job.id, inserted.job.row.id);
+    assert_eq!(event.job.state, JobState::Completed);
+    assert_eq!(event.job.metadata["shared_completion"], true);
+    assert!(event.statistics.is_some());
+
+    run.shutdown().await.unwrap();
+    sqlx::raw_sql("DROP SCHEMA rust_extension_completion_test CASCADE")
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn external_terminal_state_wins_worker_completion_race() {
     let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
         .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
     let pool = PgPool::connect(&database_url).await.unwrap();
-    let schema = riverqueue::SchemaName::new("rust_runtime_terminal_race_test").unwrap();
+    let schema = riverqueue::database::SchemaName::new("rust_runtime_terminal_race_test").unwrap();
     sqlx::raw_sql(AssertSqlSafe(
         "DROP SCHEMA IF EXISTS rust_runtime_terminal_race_test CASCADE; \
          CREATE SCHEMA rust_runtime_terminal_race_test",
@@ -433,7 +506,7 @@ async fn external_terminal_state_wins_worker_completion_race() {
     .execute(&pool)
     .await
     .unwrap();
-    Migrator::new(pool.clone())
+    PostgresMigrator::new(pool.clone())
         .with_schema(schema.clone())
         .migrate_up()
         .await
@@ -448,33 +521,35 @@ async fn external_terminal_state_wins_worker_completion_race() {
             started: Arc::clone(&started),
         })
         .unwrap();
-    let client = Client::builder(pool.clone())
+    let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.clone()))
         .id("rust-runtime-terminal-race-test")
-        .poll_only(true)
-        .schema(schema.clone())
+        .without_notifications()
         .workers(workers)
         .queue(
             "default",
-            QueueConfig {
-                fetch_cooldown: Duration::from_millis(1),
-                fetch_poll_interval: Duration::from_millis(10),
-                max_workers: 1,
-            },
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
         )
         .build()
         .unwrap();
     let mut terminal_events = client
-        .subscribe(&[EventKind::JobCompleted, EventKind::JobFailed])
+        .subscribe(&[
+            EventKind::JobCancelled,
+            EventKind::JobCompleted,
+            EventKind::JobFailed,
+        ])
         .unwrap();
     let run_handle = client.start().unwrap();
     let table = schema.qualify("river_job");
     let state_type = schema.qualify("river_job_state");
 
-    for external_state in [JobState::Completed, JobState::Discarded] {
-        let inserted = client
-            .insert(TerminalRaceArgs {}, riverqueue::InsertOpts::default())
-            .await
-            .unwrap();
+    for external_state in [
+        JobState::Cancelled,
+        JobState::Completed,
+        JobState::Discarded,
+    ] {
+        let inserted = client.insert(TerminalRaceArgs {}).await.unwrap();
         started.acquire().await.unwrap().forget();
         sqlx::query(AssertSqlSafe(format!(
             "UPDATE {table} SET finalized_at = now(), \
@@ -488,19 +563,27 @@ async fn external_terminal_state_wins_worker_completion_race() {
         .await
         .unwrap();
         finish.add_permits(1);
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        let event = tokio::time::timeout(Duration::from_secs(5), terminal_events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let expected_event = match external_state {
+            JobState::Cancelled => EventKind::JobCancelled,
+            JobState::Completed => EventKind::JobCompleted,
+            JobState::Discarded => EventKind::JobFailed,
+            _ => unreachable!("test uses terminal external states"),
+        };
+        assert_eq!(event.kind(), expected_event);
+        let event = event.as_job().unwrap();
+        assert_eq!(event.job.id, inserted.job.row.id);
+        assert_eq!(event.job.state, external_state);
+        assert_eq!(event.job.metadata["worker_completion"], true);
 
         let row = client.job_get(inserted.job.row.id).await.unwrap();
         assert_eq!(row.state, external_state);
         assert_eq!(row.metadata["external_terminal"], true);
-        assert!(!row.metadata.contains_key("worker_completion"));
+        assert_eq!(row.metadata["worker_completion"], true);
     }
-    assert!(
-        tokio::time::timeout(Duration::from_millis(50), terminal_events.recv())
-            .await
-            .is_err(),
-        "worker emitted an event for an externally finalized job"
-    );
 
     run_handle.shutdown().await.unwrap();
     sqlx::raw_sql("DROP SCHEMA rust_runtime_terminal_race_test CASCADE")
@@ -514,7 +597,7 @@ async fn remote_cancellation_overrides_worker_snooze() {
     let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
         .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
     let pool = PgPool::connect(&database_url).await.unwrap();
-    let schema = riverqueue::SchemaName::new("rust_runtime_cancel_snooze_test").unwrap();
+    let schema = riverqueue::database::SchemaName::new("rust_runtime_cancel_snooze_test").unwrap();
     sqlx::raw_sql(AssertSqlSafe(
         "DROP SCHEMA IF EXISTS rust_runtime_cancel_snooze_test CASCADE; \
          CREATE SCHEMA rust_runtime_cancel_snooze_test",
@@ -522,7 +605,7 @@ async fn remote_cancellation_overrides_worker_snooze() {
     .execute(&pool)
     .await
     .unwrap();
-    Migrator::new(pool.clone())
+    PostgresMigrator::new(pool.clone())
         .with_schema(schema.clone())
         .migrate_up()
         .await
@@ -535,27 +618,21 @@ async fn remote_cancellation_overrides_worker_snooze() {
             started: Arc::clone(&started),
         })
         .unwrap();
-    let client = Client::builder(pool.clone())
+    let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.clone()))
         .id("rust-runtime-cancel-snooze-test")
-        .schema(schema.clone())
         .workers(workers)
         .queue(
             "default",
-            QueueConfig {
-                fetch_cooldown: Duration::from_millis(1),
-                fetch_poll_interval: Duration::from_millis(10),
-                max_workers: 1,
-            },
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
         )
         .build()
         .unwrap();
     let mut cancelled_events = client.subscribe(&[EventKind::JobCancelled]).unwrap();
     let mut run_handle = client.start().unwrap();
     run_handle.wait_ready().await.unwrap();
-    let inserted = client
-        .insert(CancelSnoozeArgs {}, riverqueue::InsertOpts::default())
-        .await
-        .unwrap();
+    let inserted = client.insert(CancelSnoozeArgs {}).await.unwrap();
     started.acquire().await.unwrap().forget();
     client.job_cancel(inserted.job.row.id).await.unwrap();
 
@@ -563,7 +640,7 @@ async fn remote_cancellation_overrides_worker_snooze() {
         .await
         .unwrap()
         .unwrap();
-    let row = event.job.expect("cancellation event has a job");
+    let row = &event.as_job().expect("cancellation event has a job").job;
     assert_eq!(row.id, inserted.job.row.id);
     assert_eq!(row.state, JobState::Cancelled);
     assert_eq!(
@@ -585,7 +662,7 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
     let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
         .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
     let pool = PgPool::connect(&database_url).await.unwrap();
-    let schema = riverqueue::SchemaName::new("rust_runtime_shutdown_test").unwrap();
+    let schema = riverqueue::database::SchemaName::new("rust_runtime_shutdown_test").unwrap();
     sqlx::raw_sql(AssertSqlSafe(
         "DROP SCHEMA IF EXISTS rust_runtime_shutdown_test CASCADE; \
          CREATE SCHEMA rust_runtime_shutdown_test",
@@ -593,7 +670,7 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
     .execute(&pool)
     .await
     .unwrap();
-    Migrator::new(pool.clone())
+    PostgresMigrator::new(pool.clone())
         .with_schema(schema.clone())
         .migrate_up()
         .await
@@ -608,30 +685,25 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
             started: Arc::clone(&graceful_started),
         })
         .unwrap();
-    let graceful_client = Client::builder(pool.clone())
-        .id("rust-runtime-graceful-shutdown-test")
-        .poll_only(true)
-        .schema(schema.clone())
-        .workers(graceful_workers)
-        .queue(
-            "graceful",
-            QueueConfig {
-                fetch_cooldown: Duration::from_millis(1),
-                fetch_poll_interval: Duration::from_millis(10),
-                max_workers: 1,
-            },
-        )
-        .build()
-        .unwrap();
+    let graceful_client =
+        Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.clone()))
+            .id("rust-runtime-graceful-shutdown-test")
+            .without_notifications()
+            .workers(graceful_workers)
+            .queue(
+                "graceful",
+                QueueConfig::new(1)
+                    .with_fetch_cooldown(Duration::from_millis(1))
+                    .with_fetch_poll_interval(Duration::from_millis(10)),
+            )
+            .build()
+            .unwrap();
     let active = graceful_client
-        .insert(
+        .insert_with(
             ShutdownArgs {
                 ignore_cancellation: false,
             },
-            riverqueue::InsertOpts {
-                queue: "graceful".to_owned(),
-                ..riverqueue::InsertOpts::default()
-            },
+            riverqueue::InsertOpts::default().with_queue("graceful"),
         )
         .await
         .unwrap();
@@ -639,14 +711,11 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
     graceful_handle.wait_ready().await.unwrap();
     graceful_started.acquire().await.unwrap().forget();
     let unfetched = graceful_client
-        .insert(
+        .insert_with(
             ShutdownArgs {
                 ignore_cancellation: false,
             },
-            riverqueue::InsertOpts {
-                queue: "graceful".to_owned(),
-                ..riverqueue::InsertOpts::default()
-            },
+            riverqueue::InsertOpts::default().with_queue("graceful"),
         )
         .await
         .unwrap();
@@ -687,35 +756,30 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
             started: Arc::clone(&escalation_started),
         })
         .unwrap();
-    let escalation_client = Client::builder(pool.clone())
-        .id("rust-runtime-soft-stop-escalation-test")
-        .job_stuck_threshold(Duration::from_millis(10))
-        .poll_only(true)
-        .schema(schema.clone())
-        .soft_stop_timeout(Some(Duration::from_millis(50)))
-        .workers(escalation_workers)
-        .queue(
-            "escalation",
-            QueueConfig {
-                fetch_cooldown: Duration::from_millis(1),
-                fetch_poll_interval: Duration::from_millis(10),
-                max_workers: 1,
-            },
-        )
-        .build()
-        .unwrap();
+    let escalation_client =
+        Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.clone()))
+            .id("rust-runtime-soft-stop-escalation-test")
+            .job_stuck_threshold(Duration::from_millis(10))
+            .without_notifications()
+            .soft_stop_timeout(Some(Duration::from_millis(50)))
+            .workers(escalation_workers)
+            .queue(
+                "escalation",
+                QueueConfig::new(1)
+                    .with_fetch_cooldown(Duration::from_millis(1))
+                    .with_fetch_poll_interval(Duration::from_millis(10)),
+            )
+            .build()
+            .unwrap();
     let mut interrupted_events = escalation_client
         .subscribe(&[EventKind::JobInterrupted])
         .unwrap();
     let stuck = escalation_client
-        .insert(
+        .insert_with(
             ShutdownArgs {
                 ignore_cancellation: true,
             },
-            riverqueue::InsertOpts {
-                queue: "escalation".to_owned(),
-                ..riverqueue::InsertOpts::default()
-            },
+            riverqueue::InsertOpts::default().with_queue("escalation"),
         )
         .await
         .unwrap();
@@ -736,7 +800,7 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(event.job.unwrap().id, stuck.job.row.id);
+    assert_eq!(event.as_job().unwrap().job.id, stuck.job.row.id);
 
     sqlx::raw_sql("DROP SCHEMA rust_runtime_shutdown_test CASCADE")
         .execute(&pool)
@@ -752,44 +816,41 @@ async fn poll_only_and_subscription_configuration() {
     };
     let (client, counts) = setup_runtime(&database_url).await;
     let mut completed = client
-        .subscribe_config(SubscribeConfig {
-            buffer_capacity: 4,
-            kinds: vec![EventKind::JobCompleted],
-        })
+        .subscribe_config(
+            SubscribeConfig::new([EventKind::JobCompleted])
+                .unwrap()
+                .with_buffer_capacity(4)
+                .unwrap(),
+        )
         .unwrap();
     let mut run_handle = client.start().unwrap();
     run_handle.wait_ready().await.unwrap();
     assert_eq!(
         client
-            .insert_many_fast([
+            .insert_many_fast_with([
                 (
                     RuntimeArgs {},
-                    riverqueue::InsertOpts {
-                        pending: true,
-                        ..riverqueue::InsertOpts::default()
-                    },
+                    riverqueue::InsertOpts::default().with_pending(true),
                 ),
                 (
                     RuntimeArgs {},
-                    riverqueue::InsertOpts {
-                        pending: true,
-                        ..riverqueue::InsertOpts::default()
-                    },
+                    riverqueue::InsertOpts::default().with_pending(true),
                 ),
             ])
             .await
             .unwrap(),
         2
     );
-    let inserted = client.insert_default(RuntimeArgs {}).await.unwrap();
+    let inserted = client.insert(RuntimeArgs {}).await.unwrap();
     assert_eq!(inserted.job.row.max_attempts, 7);
     assert_eq!(inserted.job.row.metadata["middleware"], true);
     let event = tokio::time::timeout(Duration::from_secs(2), completed.recv())
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(event.job.unwrap().id, inserted.job.row.id);
-    let statistics = event.job_statistics.unwrap();
+    let job_event = event.as_job().unwrap();
+    assert_eq!(job_event.job.id, inserted.job.row.id);
+    let statistics = job_event.statistics.unwrap();
     assert!(statistics.run_duration >= Duration::from_millis(5));
     assert!(statistics.complete_duration > Duration::ZERO);
     assert!(counts.metrics.load(Ordering::SeqCst) >= 2);
@@ -801,24 +862,102 @@ async fn poll_only_and_subscription_configuration() {
     assert_eq!(counts.work_after.load(Ordering::SeqCst), 2);
 
     let mut lagged = client
-        .subscribe_config(SubscribeConfig {
-            buffer_capacity: 1,
-            kinds: vec![EventKind::QueuePaused, EventKind::QueueResumed],
-        })
+        .subscribe_config(
+            SubscribeConfig::new([EventKind::QueuePaused, EventKind::QueueResumed])
+                .unwrap()
+                .with_buffer_capacity(1)
+                .unwrap(),
+        )
+        .unwrap();
+    let mut transitions = client
+        .subscribe(&[EventKind::QueuePaused, EventKind::QueueResumed])
         .unwrap();
     client.queue_pause("default").await.unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), transitions.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .kind(),
+        EventKind::QueuePaused
+    );
     client.queue_resume("default").await.unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), transitions.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .kind(),
+        EventKind::QueueResumed
+    );
     client.queue_pause("default").await.unwrap();
-    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), transitions.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .kind(),
+        EventKind::QueuePaused
+    );
     assert!(matches!(
         lagged.recv().await,
         Err(EventRecvError::Lagged(2))
     ));
-    assert_eq!(lagged.recv().await.unwrap().kind, EventKind::QueuePaused);
+    assert_eq!(lagged.recv().await.unwrap().kind(), EventKind::QueuePaused);
 
     run_handle.shutdown().await.unwrap();
     assert_eq!(
         client.job_get(inserted.job.row.id).await.unwrap().state,
         JobState::Completed
     );
+}
+
+#[test]
+fn start_without_runtime_returns_error_and_is_restartable() {
+    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
+        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
+    let schema = riverqueue::database::SchemaName::new("rust_runtime_missing_test").unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let pool = runtime.block_on(async {
+        let pool = PgPool::connect(&database_url).await.unwrap();
+        sqlx::raw_sql(AssertSqlSafe(
+            "DROP SCHEMA IF EXISTS rust_runtime_missing_test CASCADE; \
+             CREATE SCHEMA rust_runtime_missing_test",
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        PostgresMigrator::new(pool.clone())
+            .with_schema(schema.clone())
+            .migrate_up()
+            .await
+            .unwrap();
+        pool
+    });
+    let mut workers = WorkerRegistry::new();
+    workers.register::<BurstArgs, _>(BurstWorker).unwrap();
+    let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema))
+        .queue("default", QueueConfig::new(1))
+        .workers(workers)
+        .build()
+        .unwrap();
+
+    let Err(error) = client.start() else {
+        panic!("start should require Tokio");
+    };
+    assert!(error.to_string().contains("active Tokio runtime"));
+
+    runtime.block_on(async {
+        let mut run = client
+            .start()
+            .expect("failed start must not poison the client");
+        run.wait_ready().await.unwrap();
+        run.shutdown_now().await.unwrap();
+        sqlx::raw_sql("DROP SCHEMA rust_runtime_missing_test CASCADE")
+            .execute(&pool)
+            .await
+            .unwrap();
+    });
+    drop(client);
+    runtime.shutdown_background();
 }

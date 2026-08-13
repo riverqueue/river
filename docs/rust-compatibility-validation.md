@@ -2,10 +2,11 @@
 
 ## Status and scope
 
-River's Rust implementation is a preview PostgreSQL backend for the protocol
-implemented by River Go. It is intended to share a database with Go clients,
-workers, migrators, leaders, and maintenance services. The Rust API is native
-Rust rather than a transliteration of Go's public API.
+River's Rust implementation is a preview backend for the protocol implemented
+by River Go. PostgreSQL is intended to share a database with Go clients,
+workers, migrators, leaders, and maintenance services. SQLite implements the
+same logical queue semantics and database layout as River Go's SQLite driver.
+The Rust API is native Rust rather than a transliteration of Go's public API.
 
 Compatibility is claimed for the matched pair in
 [`conformance/manifest.json`](../conformance/manifest.json) only after the
@@ -23,10 +24,13 @@ The compatibility boundary includes:
 - leadership, maintenance ownership, lifecycle behavior, events, hooks,
   middleware, retry/error policy, periodic jobs, and resumable jobs.
 
-SQLite and Go's database-driver interfaces are outside the Rust scope. River
-Pro remains in its own private repository and is validated there against this
-public worktree; private capabilities and implementation details must never be
-added to the public adapter contract or fixtures.
+River's Go driver interface itself is outside the Rust API boundary. Rust uses
+a sealed, built-in backend boundary instead: PostgreSQL and SQLite are current
+implementations, and a future MySQL backend can be added without making worker
+or client types generic. River Pro remains in its own private repository and is
+validated there against this public worktree; private capabilities and
+implementation details must never be added to the public adapter contract or
+fixtures.
 
 ## Evidence layers
 
@@ -51,7 +55,10 @@ linking either Go or Rust code into it.
 The scenario registry is executable rather than an aspirational checklist.
 Every owning test reports the stable IDs it completed, cleanup verifies that it
 completed its exact registered set, and artifact validation requires that set
-and its tiers to match [`conformance/scenarios/core.json`](../conformance/scenarios/core.json).
+and its tiers to match the applicable inventory: PostgreSQL
+[`core.json`](../conformance/scenarios/core.json), SQLite portable storage
+[`sqlite-storage.json`](../conformance/scenarios/sqlite-storage.json), or SQLite
+runtime [`sqlite-runtime.json`](../conformance/scenarios/sqlite-runtime.json).
 Adding a catalog entry without executing it, or executing an unregistered
 scenario, fails validation.
 
@@ -88,8 +95,9 @@ protocol differences:
 
 - Rust uses `Client::builder`, typed async workers, `WorkOutcome`, builders,
   and explicit SQLx transaction references instead of Go API shapes.
-- Rust currently supports PostgreSQL only. Go's SQLite and driver abstractions
-  remain Go-local.
+- PostgreSQL uses native `LISTEN`/`NOTIFY`, schemas, advisory locks, and `COPY`.
+  SQLite serializes writers and polls its durable notification outbox. These
+  backend mechanisms differ, while job and queue semantics remain aligned.
 - Go-specific per-job hook/plugin declaration interfaces map to Rust hooks and
   middleware registered on the client. A Rust hook can select by kind from its
   insert/work context; the declaration site is not reproduced.
@@ -115,10 +123,11 @@ Every protocol-visible change should use this sequence:
 
 1. Classify the change as persisted protocol, shared runtime semantics, or a
    language-local API.
-2. Change migrations only in the canonical Go PostgreSQL migration directory.
-   `make generate/rust-migrations` produces the Rust package mirror and shared
-   hashes; `make verify/rust-migrations` rejects drift. The Rust SQL files are
-   generated copies, not a second migration authority.
+2. Change migrations only in the canonical Go driver migration directory for
+   that database. `make generate/rust-migrations` produces the PostgreSQL and
+   SQLite Rust package mirrors and shared hashes;
+   `make verify/rust-migrations` rejects drift. The Rust SQL files are generated
+   copies, not a second migration authority.
 3. Add or update a language-neutral fixture for deterministic encodings. For a
    procedural behavior, add a stable scenario ID and implement it through the
    shared adapter contract.
@@ -142,6 +151,8 @@ make verify
 make test
 make lint
 make test/race
+
+make test/conformance/sqlite
 
 RIVER_RUST_DATABASE_URL=postgres://localhost/river_rust_test \
   make test/rust/postgres

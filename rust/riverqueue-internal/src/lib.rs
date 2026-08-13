@@ -1,15 +1,19 @@
-//! Unstable implementation details shared by River's Rust crates.
-//!
-//! Nothing in this crate is a public compatibility promise. Applications
-//! should depend on `riverqueue` instead.
-
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
+
+#[cfg(not(any(feature = "postgres", feature = "sqlite")))]
+compile_error!(
+    "riverqueue-internal requires at least one database feature: `postgres` or `sqlite`"
+);
 
 use std::{fmt, time::Duration};
 
 use async_trait::async_trait;
 use serde_json::{Map, Value};
+#[cfg(feature = "postgres")]
 use sqlx::{PgConnection, PgPool};
+#[cfg(feature = "sqlite")]
+use sqlx::{SqliteConnection, SqlitePool};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
@@ -112,6 +116,165 @@ impl fmt::Display for SchemaName {
 /// Error type used across the exact-version internal pilot seam.
 pub type PilotError = Box<dyn std::error::Error + Send + Sync>;
 
+/// Built-in backend selected for an exact-version extension call.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DatabaseKind {
+    /// PostgreSQL.
+    #[cfg(feature = "postgres")]
+    Postgres,
+    /// SQLite.
+    #[cfg(feature = "sqlite")]
+    Sqlite,
+}
+
+/// Backend configuration passed through River's exact-version extension seam.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub enum DatabaseConfig {
+    /// PostgreSQL backend configuration.
+    #[cfg(feature = "postgres")]
+    Postgres { schema: SchemaName },
+    /// SQLite backend configuration.
+    #[cfg(feature = "sqlite")]
+    Sqlite,
+}
+
+impl DatabaseConfig {
+    /// Returns the selected backend.
+    #[must_use]
+    pub const fn kind(&self) -> DatabaseKind {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Postgres { .. } => DatabaseKind::Postgres,
+            #[cfg(feature = "sqlite")]
+            Self::Sqlite => DatabaseKind::Sqlite,
+        }
+    }
+
+    /// Returns PostgreSQL's configured schema, if selected.
+    #[must_use]
+    #[cfg(feature = "postgres")]
+    pub const fn postgres_schema(&self) -> Option<&SchemaName> {
+        match self {
+            Self::Postgres { schema } => Some(schema),
+            #[cfg(feature = "sqlite")]
+            Self::Sqlite => None,
+        }
+    }
+}
+
+/// Borrowed transaction connection passed to an exact-version extension.
+#[doc(hidden)]
+pub enum DatabaseConnection<'connection> {
+    /// PostgreSQL transaction connection.
+    #[cfg(feature = "postgres")]
+    Postgres(&'connection mut PgConnection),
+    /// SQLite transaction connection.
+    #[cfg(feature = "sqlite")]
+    Sqlite(&'connection mut SqliteConnection),
+}
+
+impl<'connection> DatabaseConnection<'connection> {
+    /// Returns the selected backend.
+    #[must_use]
+    pub const fn kind(&self) -> DatabaseKind {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Postgres(_) => DatabaseKind::Postgres,
+            #[cfg(feature = "sqlite")]
+            Self::Sqlite(_) => DatabaseKind::Sqlite,
+        }
+    }
+
+    /// Returns the PostgreSQL connection, if selected.
+    #[must_use]
+    #[cfg(feature = "postgres")]
+    pub fn into_postgres(self) -> Option<&'connection mut PgConnection> {
+        match self {
+            Self::Postgres(connection) => Some(connection),
+            #[cfg(feature = "sqlite")]
+            Self::Sqlite(_) => None,
+        }
+    }
+
+    /// Returns the SQLite connection, if selected.
+    #[must_use]
+    #[cfg(feature = "sqlite")]
+    pub fn into_sqlite(self) -> Option<&'connection mut SqliteConnection> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Postgres(_) => None,
+            Self::Sqlite(connection) => Some(connection),
+        }
+    }
+}
+
+impl fmt::Debug for DatabaseConnection<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DatabaseConnection")
+            .field("kind", &self.kind())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Caller-owned pool passed to an exact-version background service.
+#[doc(hidden)]
+#[derive(Clone)]
+pub enum DatabasePool {
+    /// PostgreSQL pool.
+    #[cfg(feature = "postgres")]
+    Postgres(PgPool),
+    /// SQLite pool.
+    #[cfg(feature = "sqlite")]
+    Sqlite(SqlitePool),
+}
+
+impl DatabasePool {
+    /// Returns the selected backend.
+    #[must_use]
+    pub const fn kind(&self) -> DatabaseKind {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Postgres(_) => DatabaseKind::Postgres,
+            #[cfg(feature = "sqlite")]
+            Self::Sqlite(_) => DatabaseKind::Sqlite,
+        }
+    }
+
+    /// Returns the caller-owned PostgreSQL pool, if selected.
+    #[must_use]
+    #[cfg(feature = "postgres")]
+    pub const fn postgres(&self) -> Option<&PgPool> {
+        match self {
+            Self::Postgres(pool) => Some(pool),
+            #[cfg(feature = "sqlite")]
+            Self::Sqlite(_) => None,
+        }
+    }
+
+    /// Returns the caller-owned SQLite pool, if selected.
+    #[must_use]
+    #[cfg(feature = "sqlite")]
+    pub const fn sqlite(&self) -> Option<&SqlitePool> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Postgres(_) => None,
+            Self::Sqlite(pool) => Some(pool),
+        }
+    }
+}
+
+impl fmt::Debug for DatabasePool {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DatabasePool")
+            .field("kind", &self.kind())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Inputs available while selecting jobs under a fetch transaction.
 #[derive(Clone, Debug)]
 pub struct FetchParams {
@@ -123,8 +286,8 @@ pub struct FetchParams {
     pub maximum: i32,
     /// Queue being fetched.
     pub queue: String,
-    /// River schema.
-    pub schema: SchemaName,
+    /// Selected database backend configuration.
+    pub database: DatabaseConfig,
 }
 
 /// Inputs available while selecting stuck jobs under a rescue transaction.
@@ -134,21 +297,48 @@ pub struct RescueParams {
     pub maximum: i64,
     /// Age at which the OSS runtime considers a running job stuck.
     pub rescue_after: Duration,
-    /// River schema.
-    pub schema: SchemaName,
+    /// Selected database backend configuration.
+    pub database: DatabaseConfig,
 }
 
 /// Data available before River persists a worker result.
 #[derive(Clone, Debug)]
 pub struct CompletionParams {
+    /// Selected database backend configuration.
+    pub database: DatabaseConfig,
     /// Job ID being finalized or rescheduled.
     pub job_id: i64,
     /// Metadata additions produced by work.
     pub metadata_updates: Map<String, Value>,
-    /// River schema.
-    pub schema: SchemaName,
     /// Proposed River state string.
     pub state: String,
+}
+
+/// Mutable job insertion fields exposed to an exact-version extension.
+///
+/// The references point into River's resolved insertion context. Changes are
+/// validated and persisted by the ordinary insertion pipeline after the
+/// extension returns.
+#[doc(hidden)]
+pub struct JobInsertParams<'insert> {
+    /// Serialized job arguments.
+    pub encoded_args: &'insert mut Value,
+    /// Stable job kind.
+    pub kind: &'insert mut String,
+    /// Arbitrary job metadata.
+    pub metadata: &'insert mut Map<String, Value>,
+    /// Queue in which the job will run.
+    pub queue: &'insert mut String,
+}
+
+impl fmt::Debug for JobInsertParams<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("JobInsertParams")
+            .field("kind", self.kind)
+            .field("queue", self.queue)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Whether the OSS completer should perform its normal row update.
@@ -167,8 +357,8 @@ pub trait MaintenanceService: Send + Sync + 'static {
     /// Runs until cancellation and returns if the service fails.
     async fn run(
         &self,
-        pool: PgPool,
-        schema: SchemaName,
+        pool: DatabasePool,
+        database: DatabaseConfig,
         cancellation: CancellationToken,
     ) -> Result<(), PilotError>;
 }
@@ -182,8 +372,8 @@ pub trait RuntimeService: Send + Sync + 'static {
     /// Runs until cancellation and returns if the service fails.
     async fn run(
         &self,
-        pool: PgPool,
-        schema: SchemaName,
+        pool: DatabasePool,
+        database: DatabaseConfig,
         cancellation: CancellationToken,
     ) -> Result<(), PilotError>;
 }
@@ -195,10 +385,9 @@ pub trait RuntimeService: Send + Sync + 'static {
 /// implementations.
 #[async_trait]
 pub trait Pilot: Send + Sync + 'static {
-    /// Whether the OSS per-job cleaner must leave workflow jobs for an
-    /// extension-owned workflow-aware cleaner.
-    fn excludes_workflow_jobs_from_cleaner(&self) -> bool {
-        false
+    /// Metadata keys whose jobs are owned by an extension-specific cleaner.
+    fn job_cleaner_metadata_exclusions(&self) -> &'static [&'static str] {
+        &[]
     }
 
     /// Whether fetches must enter the exact-version interception transaction.
@@ -222,12 +411,35 @@ pub trait Pilot: Send + Sync + 'static {
         false
     }
 
+    /// Whether inserts must enter the exact-version interception transaction.
+    ///
+    /// Returning `true` makes pool-based insertion acquire a transaction so
+    /// [`Pilot::before_job_insert`] can observe backend state on the same
+    /// connection as the eventual insert.
+    fn intercepts_insert(&self) -> bool {
+        false
+    }
+
+    /// Mutates or validates a resolved insertion using its transaction
+    /// connection.
+    ///
+    /// River invokes ordinary begin hooks first, then this method, then insert
+    /// middleware. The insert and its backend notification remain in the same
+    /// transaction.
+    async fn before_job_insert(
+        &self,
+        _connection: DatabaseConnection<'_>,
+        _params: &mut JobInsertParams<'_>,
+    ) -> Result<(), PilotError> {
+        Ok(())
+    }
+
     /// Optionally selects and locks fetch candidates using the provided
     /// transaction connection. Returned IDs are claimed by the OSS runtime in
     /// the same transaction. `None` delegates selection to River OSS.
     async fn select_job_ids(
         &self,
-        _connection: &mut PgConnection,
+        _connection: DatabaseConnection<'_>,
         _params: &FetchParams,
     ) -> Result<Option<Vec<i64>>, PilotError> {
         Ok(None)
@@ -237,7 +449,7 @@ pub trait Pilot: Send + Sync + 'static {
     /// rescued by the OSS runtime in the same transaction.
     async fn select_rescue_job_ids(
         &self,
-        _connection: &mut PgConnection,
+        _connection: DatabaseConnection<'_>,
         _params: &RescueParams,
     ) -> Result<Option<Vec<i64>>, PilotError> {
         Ok(None)
@@ -246,7 +458,7 @@ pub trait Pilot: Send + Sync + 'static {
     /// Intercepts completion within River's completion transaction.
     async fn before_job_completion(
         &self,
-        _connection: &mut PgConnection,
+        _connection: DatabaseConnection<'_>,
         _params: &CompletionParams,
     ) -> Result<CompletionAction, PilotError> {
         Ok(CompletionAction::Continue)

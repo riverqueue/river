@@ -704,6 +704,7 @@ version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1f111c8c41e7c61a49cd34e44c7619462967221a6443b0ec299e0ac30cfb9b1"
 dependencies = [
+ "cc",
  "pkg-config",
  "vcpkg",
 ]
@@ -950,7 +951,7 @@ dependencies = [
 
 [[package]]
 name = "riverqueue"
-version = "0.43.0-alpha.1"
+version = "0.44.0-alpha.1"
 dependencies = [
  "async-trait",
  "base64",
@@ -972,7 +973,7 @@ dependencies = [
 
 [[package]]
 name = "riverqueue-conformance"
-version = "0.43.0-alpha.1"
+version = "0.44.0-alpha.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -986,7 +987,7 @@ dependencies = [
 
 [[package]]
 name = "riverqueue-internal"
-version = "0.43.0-alpha.1"
+version = "0.44.0-alpha.1"
 dependencies = [
  "async-trait",
  "serde_json",
@@ -997,7 +998,7 @@ dependencies = [
 
 [[package]]
 name = "riverqueue-macros"
-version = "0.43.0-alpha.1"
+version = "0.44.0-alpha.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1006,7 +1007,7 @@ dependencies = [
 
 [[package]]
 name = "riverqueue-migrate"
-version = "0.43.0-alpha.1"
+version = "0.44.0-alpha.1"
 dependencies = [
  "riverqueue-internal",
  "serde_json",
@@ -1017,9 +1018,8 @@ dependencies = [
 
 [[package]]
 name = "riverqueue-test"
-version = "0.43.0-alpha.1"
+version = "0.44.0-alpha.1"
 dependencies = [
- "async-trait",
  "chrono",
  "riverqueue",
  "serde",

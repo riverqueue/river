@@ -12,27 +12,31 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
+use riverqueue::database::SchemaName;
 use riverqueue::{
-    AttemptError, Client, DefaultRetryPolicy, ErrorHandler, ErrorHandlerResult, EventKind,
+    AttemptError, Client, DefaultRetryPolicy, ErrorHandler, ErrorHandlerDecision, EventKind,
     EventReceiver, Hook, InsertContext, InsertMiddleware, InsertOpts, InsertResult,
-    IntervalSchedule, Job, JobArgs, JobDeleteManyParams, JobListCursor, JobListOrderBy,
-    JobListParams, JobRow, JobState, JobUpdateParams, MaintenanceConfig, PeriodicJob,
-    PeriodicJobOpts, PeriodicJobs, Plugin, Queue, QueueConfig, QueueListParams, RetryPolicy,
-    RunHandle, SchemaName, SortDirection, SubscribeConfig, UniqueKeyInput, UniqueOpts, WorkContext,
-    WorkMiddleware, WorkOutcome, WorkResult, Worker, WorkerRegistry, build_unique_key,
+    IntervalSchedule, Job, JobArgs, JobDeleteManyParams, JobListCursor, JobListParams, JobRow,
+    JobState, JobUpdateParams, MaintenanceConfig, PeriodicJob, PeriodicJobOpts, PeriodicJobs,
+    Plugin, Queue, QueueConfig, QueueListParams, RetryPolicy, RunHandle, SortDirection,
+    SubscribeConfig, UniqueKeyInput, UniqueOpts, WorkContext, WorkMiddleware, WorkOutcome,
+    WorkResult, Worker, WorkerRegistry, build_unique_key,
+    database::{PostgresDatabase, SqliteDatabase},
 };
 use riverqueue_migrate::{
-    Direction, MIGRATION_LINE_MAIN, MIGRATION_VERSION_LATEST, MigrateOpts, Migrator,
+    Direction, MIGRATION_LINE_MAIN, MIGRATION_VERSION_LATEST, MigrateOpts, PostgresMigrator,
+    SqliteMigrator,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sqlx::{
-    AssertSqlSafe, PgPool, Postgres, Transaction,
+    AssertSqlSafe, PgPool, Postgres, Sqlite, SqlitePool, Transaction,
     postgres::{PgConnectOptions, PgPoolOptions},
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
 };
 use tokio::sync::watch;
 
-const ADAPTER_VERSION: u32 = 9;
+const ADAPTER_VERSION: u32 = 11;
 const PROTOCOL_REVISION: u32 = 1;
 
 const ADAPTER_METHODS: &[&str] = &[
@@ -63,8 +67,10 @@ const ADAPTER_METHODS: &[&str] = &[
     "queue_remove",
     "queue_resume",
     "queue_update",
+    "raw_finalize",
     "raw_insert_full_row",
     "raw_insert_no_notify",
+    "raw_job_timestamps",
     "request_resign",
     "reset",
     "retry",
@@ -126,6 +132,138 @@ const CAPABILITIES: &[&str] = &[
     "work",
 ];
 
+const SQLITE_ADAPTER_METHODS: &[&str] = &[
+    "cancel",
+    "clock_set",
+    "delete",
+    "delete_many",
+    "get",
+    "handshake",
+    "insert",
+    "insert_many",
+    "insert_many_fast",
+    "list",
+    "migrate",
+    "raw_job_timestamps",
+    "reset",
+    "retry",
+    "retry_delay",
+    "rng_seed",
+    "tx_begin",
+    "tx_cancel",
+    "tx_commit",
+    "tx_delete",
+    "tx_delete_many",
+    "tx_get",
+    "tx_insert",
+    "tx_insert_many",
+    "tx_insert_many_fast",
+    "tx_list",
+    "tx_retry",
+    "tx_rollback",
+    "tx_update",
+    "unique_key",
+    "update",
+];
+
+const SQLITE_CAPABILITIES: &[&str] = &[
+    "cancel",
+    "deterministic_controls",
+    "fast_insert",
+    "get",
+    "insert",
+    "job_crud",
+    "lifecycle",
+    "migrate",
+    "reset",
+    "retry",
+    "transactions",
+    "unique_jobs",
+];
+
+const SQLITE_RUNTIME_METHODS: &[&str] = &[
+    "barrier_create",
+    "barrier_release",
+    "cancel",
+    "clock_set",
+    "delete",
+    "delete_many",
+    "get",
+    "handshake",
+    "insert",
+    "insert_many",
+    "insert_many_fast",
+    "leader",
+    "list",
+    "migrate",
+    "queue_add",
+    "queue_get",
+    "queue_list",
+    "queue_pause",
+    "queue_remove",
+    "queue_resume",
+    "queue_update",
+    "raw_finalize",
+    "raw_insert_no_notify",
+    "raw_job_timestamps",
+    "request_resign",
+    "reset",
+    "retry",
+    "retry_delay",
+    "rng_seed",
+    "runtime_stats",
+    "start",
+    "stop",
+    "tx_begin",
+    "tx_cancel",
+    "tx_commit",
+    "tx_delete",
+    "tx_delete_many",
+    "tx_get",
+    "tx_insert",
+    "tx_insert_many",
+    "tx_insert_many_fast",
+    "tx_list",
+    "tx_queue_get",
+    "tx_queue_list",
+    "tx_queue_pause",
+    "tx_queue_resume",
+    "tx_queue_update",
+    "tx_retry",
+    "tx_rollback",
+    "tx_update",
+    "unique_key",
+    "update",
+    "wait",
+    "work",
+];
+
+const SQLITE_RUNTIME_CAPABILITIES: &[&str] = &[
+    "barriers",
+    "cancel",
+    "deterministic_controls",
+    "extensions",
+    "fast_insert",
+    "get",
+    "insert",
+    "job_crud",
+    "leadership",
+    "lifecycle",
+    "migrate",
+    "notifications",
+    "periodic_jobs",
+    "poll_only",
+    "queues",
+    "reset",
+    "resumable_jobs",
+    "retry",
+    "scheduler",
+    "subscriptions",
+    "transactions",
+    "unique_jobs",
+    "work",
+];
+
 #[derive(Debug, Deserialize)]
 struct Request {
     id: Value,
@@ -168,6 +306,18 @@ struct UniqueKeyOptions {
     by_queue: bool,
     by_state: Option<Vec<JobState>>,
     exclude_kind: bool,
+}
+
+impl UniqueKeyOptions {
+    fn to_unique_opts(&self) -> UniqueOpts {
+        build_unique_opts(
+            self.by_args,
+            (self.by_period_nanos > 0).then(|| Duration::from_nanos(self.by_period_nanos)),
+            self.by_queue,
+            self.by_state.clone(),
+            self.exclude_kind,
+        )
+    }
 }
 
 fn unique_key_for_args<A>(params: &UniqueKeyParams, opts: &UniqueOpts) -> Result<[u8; 32], String>
@@ -238,11 +388,10 @@ struct UniqueSimpleArgs {
 
 struct ConformanceWorker {
     barriers: Arc<BarrierRegistry>,
-    pool: PgPool,
+    pool: Option<PgPool>,
     probe: Arc<RuntimeProbe>,
 }
 
-#[async_trait]
 #[allow(clippy::match_same_arms)]
 impl Worker<ConformanceArgs> for ConformanceWorker {
     type Error = io::Error;
@@ -253,8 +402,14 @@ impl Worker<ConformanceArgs> for ConformanceWorker {
         job: Job<ConformanceArgs>,
     ) -> Result<WorkOutcome, Self::Error> {
         match job.args.behavior.as_str() {
-            "barrier_wait" => {
+            "barrier_output" | "barrier_wait" => {
                 self.barriers.wait(&job.args.message).await?;
+                if job.args.behavior == "barrier_output" {
+                    context
+                        .record_output(&json!({"race": "worker"}))
+                        .await
+                        .map_err(io::Error::other)?;
+                }
                 Ok(WorkOutcome::Complete)
             }
             "cancel" => Ok(WorkOutcome::Cancel),
@@ -313,9 +468,12 @@ impl Worker<ConformanceArgs> for ConformanceWorker {
                 context
                     .metadata_set("transactional_completion", json!(true))
                     .await;
-                let mut transaction = self.pool.begin().await.map_err(io::Error::other)?;
+                let pool = self.pool.as_ref().ok_or_else(|| {
+                    io::Error::other("transactional completion requires PostgreSQL")
+                })?;
+                let mut transaction = pool.begin().await.map_err(io::Error::other)?;
                 context
-                    .job_complete_tx(&mut transaction, job.row.id)
+                    .job_complete_tx(&mut transaction)
                     .await
                     .map_err(io::Error::other)?;
                 transaction.commit().await.map_err(io::Error::other)?;
@@ -417,14 +575,11 @@ impl ErrorHandler for ConformanceErrorHandler {
         _context: &WorkContext,
         _job: &JobRow,
         _result: &WorkResult,
-    ) -> Result<ErrorHandlerResult, riverqueue::Error> {
+    ) -> Result<ErrorHandlerDecision, riverqueue::Error> {
         self.0
             .increment_error_handler_calls()
-            .map_err(|error| riverqueue::Error::Runtime(error.to_string()))?;
-        Ok(ErrorHandlerResult {
-            cancel: true,
-            ..ErrorHandlerResult::default()
-        })
+            .map_err(|error| riverqueue::Error::runtime(error.to_string()))?;
+        Ok(ErrorHandlerDecision::Cancel)
     }
 }
 
@@ -435,16 +590,16 @@ impl Hook for ProbeHook {
     async fn insert_begin(&self, _insert: &mut InsertContext) -> Result<(), riverqueue::Error> {
         self.0
             .add_trace("hook:insert_begin")
-            .map_err(|error| riverqueue::Error::Runtime(error.to_string()))
+            .map_err(|error| riverqueue::Error::runtime(error.to_string()))
     }
 
     async fn periodic_jobs_start(&self, _jobs: &PeriodicJobs) -> Result<(), riverqueue::Error> {
         self.0
             .increment_periodic_starts()
-            .map_err(|error| riverqueue::Error::Runtime(error.to_string()))?;
+            .map_err(|error| riverqueue::Error::runtime(error.to_string()))?;
         self.0
             .add_trace("hook:periodic_start")
-            .map_err(|error| riverqueue::Error::Runtime(error.to_string()))
+            .map_err(|error| riverqueue::Error::runtime(error.to_string()))
     }
 
     async fn work_begin(
@@ -454,7 +609,7 @@ impl Hook for ProbeHook {
     ) -> Result<(), riverqueue::Error> {
         self.0
             .add_trace("hook:work_begin")
-            .map_err(|error| riverqueue::Error::Runtime(error.to_string()))
+            .map_err(|error| riverqueue::Error::runtime(error.to_string()))
     }
 
     async fn work_end(
@@ -465,7 +620,7 @@ impl Hook for ProbeHook {
     ) -> Result<(), riverqueue::Error> {
         self.0
             .add_trace("hook:work_end")
-            .map_err(|error| riverqueue::Error::Runtime(error.to_string()))
+            .map_err(|error| riverqueue::Error::runtime(error.to_string()))
     }
 }
 
@@ -476,7 +631,7 @@ impl InsertMiddleware for ProbeInsertMiddleware {
     async fn before_insert(&self, _insert: &mut InsertContext) -> Result<(), riverqueue::Error> {
         self.0
             .add_trace("middleware:insert_before")
-            .map_err(|error| riverqueue::Error::Runtime(error.to_string()))
+            .map_err(|error| riverqueue::Error::runtime(error.to_string()))
     }
 
     async fn after_insert(
@@ -486,7 +641,7 @@ impl InsertMiddleware for ProbeInsertMiddleware {
     ) -> Result<(), riverqueue::Error> {
         self.0
             .add_trace("middleware:insert_after")
-            .map_err(|error| riverqueue::Error::Runtime(error.to_string()))
+            .map_err(|error| riverqueue::Error::runtime(error.to_string()))
     }
 }
 
@@ -501,7 +656,7 @@ impl WorkMiddleware for ProbeWorkMiddleware {
     ) -> Result<(), riverqueue::Error> {
         self.0
             .add_trace("middleware:work_before")
-            .map_err(|error| riverqueue::Error::Runtime(error.to_string()))
+            .map_err(|error| riverqueue::Error::runtime(error.to_string()))
     }
 
     async fn after_work(
@@ -512,7 +667,7 @@ impl WorkMiddleware for ProbeWorkMiddleware {
     ) -> Result<(), riverqueue::Error> {
         self.0
             .add_trace("middleware:work_after")
-            .map_err(|error| riverqueue::Error::Runtime(error.to_string()))
+            .map_err(|error| riverqueue::Error::runtime(error.to_string()))
     }
 }
 
@@ -660,11 +815,49 @@ struct UniqueOptsParams {
     exclude_kind: bool,
 }
 
+impl UniqueOptsParams {
+    fn to_unique_opts(&self) -> UniqueOpts {
+        build_unique_opts(
+            self.by_args,
+            self.by_period_ms.map(Duration::from_millis),
+            self.by_queue,
+            self.by_state.clone(),
+            self.exclude_kind,
+        )
+    }
+}
+
 struct RunningClient {
     client: Client,
     events: EventReceiver,
     handle: RunHandle,
     probe: Arc<RuntimeProbe>,
+}
+
+fn build_unique_opts(
+    by_args: bool,
+    by_period: Option<Duration>,
+    by_queue: bool,
+    by_state: Option<Vec<JobState>>,
+    exclude_kind: bool,
+) -> UniqueOpts {
+    let mut opts = UniqueOpts::new();
+    if by_args {
+        opts = opts.by_args();
+    }
+    if let Some(period) = by_period {
+        opts = opts.by_period(period);
+    }
+    if by_queue {
+        opts = opts.by_queue();
+    }
+    if let Some(states) = by_state {
+        opts = opts.by_states(states);
+    }
+    if exclude_kind {
+        opts = opts.without_kind();
+    }
+    opts
 }
 
 struct Adapter {
@@ -674,6 +867,21 @@ struct Adapter {
     rng_seed: u64,
     running: Option<RunningClient>,
     transactions: HashMap<String, Transaction<'static, Postgres>>,
+}
+
+enum AdapterBackend {
+    Postgres(Adapter),
+    Sqlite(SqliteAdapter),
+}
+
+struct SqliteAdapter {
+    barriers: Arc<BarrierRegistry>,
+    clock: Option<DateTime<Utc>>,
+    pool: SqlitePool,
+    profile: String,
+    rng_seed: u64,
+    running: Option<RunningClient>,
+    transactions: HashMap<String, Transaction<'static, Sqlite>>,
 }
 
 #[tokio::main]
@@ -686,15 +894,51 @@ async fn main() {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let database_url = std::env::var("RIVER_CONFORMANCE_DATABASE_URL")?;
-    let options =
-        PgConnectOptions::from_str(&database_url)?.application_name("river-conformance-rust");
-    let mut adapter = Adapter {
-        barriers: Arc::new(BarrierRegistry::default()),
-        clock: None,
-        pool: PgPoolOptions::new().connect_with(options).await?,
-        rng_seed: 0,
-        running: None,
-        transactions: HashMap::new(),
+    let mut adapter = match std::env::var("RIVER_CONFORMANCE_DATABASE_KIND")
+        .as_deref()
+        .unwrap_or("postgres")
+    {
+        "postgres" => {
+            let options = PgConnectOptions::from_str(&database_url)?
+                .application_name("river-conformance-rust");
+            AdapterBackend::Postgres(Adapter {
+                barriers: Arc::new(BarrierRegistry::default()),
+                clock: None,
+                pool: PgPoolOptions::new().connect_with(options).await?,
+                rng_seed: 0,
+                running: None,
+                transactions: HashMap::new(),
+            })
+        }
+        "sqlite" => {
+            let profile = std::env::var("RIVER_CONFORMANCE_PROFILE")
+                .unwrap_or_else(|_| "portable-storage-v1".to_owned());
+            if !matches!(
+                profile.as_str(),
+                "portable-storage-v1" | "sqlite-runtime-v1"
+            ) {
+                return Err(format!("unsupported SQLite conformance profile {profile:?}").into());
+            }
+            let options = SqliteConnectOptions::new()
+                .filename(database_url)
+                .create_if_missing(true)
+                .foreign_keys(true)
+                .busy_timeout(Duration::from_secs(5))
+                .journal_mode(SqliteJournalMode::Wal);
+            AdapterBackend::Sqlite(SqliteAdapter {
+                barriers: Arc::new(BarrierRegistry::default()),
+                clock: None,
+                pool: SqlitePoolOptions::new()
+                    .max_connections(5)
+                    .connect_with(options)
+                    .await?,
+                profile,
+                rng_seed: 0,
+                running: None,
+                transactions: HashMap::new(),
+            })
+        }
+        kind => return Err(format!("unsupported RIVER_CONFORMANCE_DATABASE_KIND {kind:?}").into()),
     };
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
@@ -712,10 +956,28 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         stdout.write_all(b"\n")?;
         stdout.flush()?;
     }
-    if let Some(running) = adapter.running.take() {
-        running.handle.shutdown_now().await?;
+    match adapter {
+        AdapterBackend::Postgres(mut adapter) => {
+            if let Some(running) = adapter.running.take() {
+                running.handle.shutdown_now().await?;
+            }
+        }
+        AdapterBackend::Sqlite(mut adapter) => {
+            if let Some(running) = adapter.running.take() {
+                running.handle.shutdown_now().await?;
+            }
+        }
     }
     Ok(())
+}
+
+impl AdapterBackend {
+    async fn respond(&mut self, request: Request) -> Response {
+        match self {
+            Self::Postgres(adapter) => adapter.respond(request).await,
+            Self::Sqlite(adapter) => adapter.respond(request).await,
+        }
+    }
 }
 
 impl Adapter {
@@ -736,11 +998,13 @@ impl Adapter {
         match method {
             "handshake" => Ok(json!({
                 "adapter_version": ADAPTER_VERSION,
+                "backend": "postgres",
                 "capabilities": CAPABILITIES,
                 "implementation": "rust",
                 "implementation_version": env!("CARGO_PKG_VERSION"),
                 "methods": ADAPTER_METHODS,
                 "migration_lines": {MIGRATION_LINE_MAIN: MIGRATION_VERSION_LATEST},
+                "profile": "postgres-full-v1",
                 "protocol_revision": PROTOCOL_REVISION,
             })),
             "migrate" => {
@@ -752,7 +1016,7 @@ impl Adapter {
                     .execute(&self.pool)
                     .await?;
                 }
-                let migrator = Migrator::new(self.pool.clone()).with_schema(schema);
+                let migrator = PostgresMigrator::new(self.pool.clone()).with_schema(schema);
                 let direction = match params
                     .get("direction")
                     .and_then(Value::as_str)
@@ -762,21 +1026,7 @@ impl Adapter {
                     "up" => Direction::Up,
                     value => return Err(format!("unknown migration direction {value:?}").into()),
                 };
-                let result = migrator
-                    .migrate(
-                        direction,
-                        MigrateOpts {
-                            dry_run: params
-                                .get("dry_run")
-                                .and_then(Value::as_bool)
-                                .unwrap_or(false),
-                            max_steps: optional_i64(&params, "max_steps")
-                                .map(usize::try_from)
-                                .transpose()?,
-                            target_version: optional_i64(&params, "target_version"),
-                        },
-                    )
-                    .await?;
+                let result = migrator.migrate(direction, migrate_opts(&params)?).await?;
                 let applied = result
                     .versions
                     .iter()
@@ -834,14 +1084,7 @@ impl Adapter {
             }
             "unique_key" => {
                 let params: UniqueKeyParams = serde_json::from_value(params)?;
-                let opts = UniqueOpts {
-                    by_args: params.options.by_args,
-                    by_period: (params.options.by_period_nanos > 0)
-                        .then(|| Duration::from_nanos(params.options.by_period_nanos)),
-                    by_queue: params.options.by_queue,
-                    by_state: params.options.by_state.clone(),
-                    exclude_kind: params.options.exclude_kind,
-                };
+                let opts = params.options.to_unique_opts();
                 let key = match params.kind.as_str() {
                     "conformance_all_args" => unique_key_for_args::<UniqueAllArgs>(&params, &opts),
                     "conformance_numeric_boundaries" => {
@@ -869,13 +1112,13 @@ impl Adapter {
                 let params: InsertParams = serde_json::from_value(params)?;
                 let client = self.client_for_schema(&params.schema)?;
                 let result = client
-                    .insert(params.args(), params.opts.into_opts())
+                    .insert_with(params.args(), params.opts.into_opts())
                     .await?;
                 Ok(normalize_job(&result.job.row))
             }
             "insert_many" => {
                 let jobs = insert_many_params(&params)?;
-                let results = self.client()?.insert_many(jobs).await?;
+                let results = self.client()?.insert_many_with(jobs).await?;
                 Ok(normalize_insert_many_results(&results))
             }
             "benchmark_enqueue" => {
@@ -889,7 +1132,7 @@ impl Adapter {
                 for index in 0..jobs {
                     let inserted_at = std::time::Instant::now();
                     client
-                        .insert(
+                        .insert_with(
                             ConformanceArgs {
                                 behavior: String::new(),
                                 duration_ms: 0,
@@ -915,7 +1158,7 @@ impl Adapter {
                     .into_iter()
                     .map(|params| (params.args(), params.opts.into_opts()))
                     .collect::<Vec<_>>();
-                let count = self.client()?.insert_many_fast(jobs).await?;
+                let count = self.client()?.insert_many_fast_with(jobs).await?;
                 Ok(json!({"count": count}))
             }
             "get" => {
@@ -949,13 +1192,12 @@ impl Adapter {
             }
             "delete_many" => {
                 let list = list_params(&params)?;
-                let rows = self
-                    .client()?
-                    .job_delete_many(&JobDeleteManyParams {
-                        all: params.get("all").and_then(Value::as_bool).unwrap_or(false),
-                        filter: list,
-                    })
-                    .await?;
+                let delete = if params.get("all").and_then(Value::as_bool).unwrap_or(false) {
+                    JobDeleteManyParams::all()
+                } else {
+                    JobDeleteManyParams::matching(list)
+                };
+                let rows = self.client()?.job_delete_many(&delete).await?;
                 Ok(json!({"jobs": rows.iter().map(normalize_job).collect::<Vec<_>>() }))
             }
             "retry" => {
@@ -976,7 +1218,7 @@ impl Adapter {
                 let output = params.get("output").cloned();
                 let row = self
                     .client()?
-                    .job_update(id, JobUpdateParams { metadata, output })
+                    .job_update(id, job_update_params(metadata, output))
                     .await?;
                 Ok(normalize_job(&row))
             }
@@ -988,11 +1230,9 @@ impl Adapter {
                 let max_workers = optional_i64(&params, "max_workers").unwrap_or(1);
                 running.client.queue_add(
                     required_string(&params, "name")?,
-                    QueueConfig {
-                        fetch_cooldown: Duration::from_millis(1),
-                        fetch_poll_interval: Duration::from_millis(10),
-                        max_workers: usize::try_from(max_workers)?,
-                    },
+                    QueueConfig::new(usize::try_from(max_workers)?)
+                        .with_fetch_cooldown(Duration::from_millis(1))
+                        .with_fetch_poll_interval(Duration::from_millis(10)),
                 )?;
                 Ok(json!({}))
             }
@@ -1007,9 +1247,7 @@ impl Adapter {
                 let limit = optional_i64(&params, "limit").unwrap_or(100);
                 let queues = self
                     .client()?
-                    .queue_list(&QueueListParams {
-                        limit: i32::try_from(limit)?,
-                    })
+                    .queue_list(&queue_list_params(i32::try_from(limit)?))
                     .await?;
                 Ok(json!({
                     "queues": queues.iter().map(normalize_queue).collect::<Vec<_>>()
@@ -1111,6 +1349,33 @@ impl Adapter {
                     .await?;
                 Ok(json!({}))
             }
+            "raw_finalize" => {
+                let id = required_i64(&params, "id")?;
+                let state = required_string(&params, "state")?;
+                if !matches!(state.as_str(), "completed" | "discarded") {
+                    return Err("state must be completed or discarded".into());
+                }
+                let metadata = params.get("metadata").cloned().unwrap_or_else(|| json!({}));
+                let result = sqlx::query(
+                    r#"UPDATE river_job
+                       SET errors = CASE WHEN $2 = 'discarded'
+                               THEN array_append(errors, '{"at":"2026-02-03T04:05:06.789Z","attempt":1,"error":"external discard","trace":"external trace"}'::jsonb)
+                               ELSE errors END,
+                           finalized_at = '2026-02-03T04:05:06.789Z'::timestamptz,
+                           metadata = metadata || $3::jsonb,
+                           state = $2::river_job_state
+                       WHERE id = $1 AND state = 'running'"#,
+                )
+                .bind(id)
+                .bind(state)
+                .bind(sqlx::types::Json(metadata))
+                .execute(&self.pool)
+                .await?;
+                if result.rows_affected() != 1 {
+                    return Err("running job not found".into());
+                }
+                Ok(normalize_job(&self.client()?.job_get(id).await?))
+            }
             "raw_insert_no_notify" => {
                 let params: InsertParams = serde_json::from_value(params)?;
                 let kind = if params.kind.is_empty() {
@@ -1150,6 +1415,16 @@ impl Adapter {
                 .await?;
                 Ok(normalize_job(&self.client()?.job_get(id).await?))
             }
+            "raw_job_timestamps" => {
+                let id = required_i64(&params, "id")?;
+                let (created_at, scheduled_at) = sqlx::query_as::<_, (String, String)>(
+                    "SELECT created_at::text, scheduled_at::text FROM river_job WHERE id = $1",
+                )
+                .bind(id)
+                .fetch_one(&self.pool)
+                .await?;
+                Ok(json!({"created_at": created_at, "scheduled_at": scheduled_at}))
+            }
             "start" => {
                 if self.running.is_some() {
                     return Err("client already running".into());
@@ -1178,37 +1453,38 @@ impl Adapter {
                 let mut workers = WorkerRegistry::new();
                 workers.register::<ConformanceArgs, _>(ConformanceWorker {
                     barriers: Arc::clone(&self.barriers),
-                    pool: self.pool.clone(),
+                    pool: Some(self.pool.clone()),
                     probe: Arc::clone(&probe),
                 })?;
                 let mut maintenance = MaintenanceConfig::default();
                 if let Some(milliseconds) = optional_i64(&params, "elect_interval_ms") {
-                    maintenance.elect_interval = duration_millis(milliseconds)?;
+                    maintenance = maintenance.with_elect_interval(duration_millis(milliseconds)?);
                 }
                 if let Some(milliseconds) = optional_i64(&params, "rescue_after_ms") {
-                    maintenance.rescue_after = duration_millis(milliseconds)?;
+                    maintenance = maintenance.with_rescue_after(duration_millis(milliseconds)?);
                 }
                 if let Some(milliseconds) = optional_i64(&params, "rescuer_interval_ms") {
-                    maintenance.rescuer_interval = duration_millis(milliseconds)?;
+                    maintenance = maintenance.with_rescuer_interval(duration_millis(milliseconds)?);
                 }
                 if let Some(milliseconds) = optional_i64(&params, "scheduler_interval_ms") {
-                    maintenance.scheduler_interval = duration_millis(milliseconds)?;
+                    maintenance =
+                        maintenance.with_scheduler_interval(duration_millis(milliseconds)?);
                 }
-                let mut builder = Client::builder(self.pool.clone())
-                    .id(client_id)
-                    .job_stuck_threshold(Duration::from_millis(100))
-                    .maintenance(maintenance)
-                    .poll_only(poll_only)
-                    .schema(schema)
-                    .workers(workers)
-                    .queue(
-                        queue,
-                        QueueConfig {
-                            fetch_cooldown: Duration::from_millis(1),
-                            fetch_poll_interval,
-                            max_workers: usize::try_from(max_workers)?,
-                        },
-                    );
+                let mut builder =
+                    Client::builder(PostgresDatabase::new(self.pool.clone()).schema(schema))
+                        .id(client_id)
+                        .job_stuck_threshold(Duration::from_millis(100))
+                        .maintenance(maintenance)
+                        .workers(workers)
+                        .queue(
+                            queue,
+                            QueueConfig::new(usize::try_from(max_workers)?)
+                                .with_fetch_cooldown(Duration::from_millis(1))
+                                .with_fetch_poll_interval(fetch_poll_interval),
+                        );
+                if poll_only {
+                    builder = builder.without_notifications();
+                }
                 if params
                     .get("instrumented")
                     .and_then(Value::as_bool)
@@ -1230,17 +1506,16 @@ impl Adapter {
                     .and_then(Value::as_bool)
                     .unwrap_or(false)
                 {
-                    builder = builder.periodic_job(PeriodicJob::with_defaults(
+                    builder = builder.periodic_job(PeriodicJob::with_options(
                         IntervalSchedule::new(Duration::from_hours(1))?,
                         || ConformanceArgs {
                             behavior: String::new(),
                             duration_ms: 0,
                             message: "periodic run on start".to_owned(),
                         },
-                        PeriodicJobOpts {
-                            id: Some("conformance-periodic".to_owned()),
-                            run_on_start: true,
-                        },
+                        PeriodicJobOpts::new()
+                            .with_id("conformance-periodic")
+                            .run_on_start(),
                     ));
                 }
                 if let Some(milliseconds) = optional_i64(&params, "retry_delay_ms") {
@@ -1248,18 +1523,15 @@ impl Adapter {
                         builder.retry_policy(FixedRetryPolicy(duration_millis(milliseconds)?));
                 }
                 let client = builder.build()?;
-                let events = client.subscribe_config(SubscribeConfig {
-                    buffer_capacity: 1_000,
-                    kinds: vec![
-                        EventKind::JobCancelled,
-                        EventKind::JobCompleted,
-                        EventKind::JobFailed,
-                        EventKind::JobInterrupted,
-                        EventKind::JobSnoozed,
-                        EventKind::QueuePaused,
-                        EventKind::QueueResumed,
-                    ],
-                })?;
+                let events = client.subscribe_config(SubscribeConfig::new([
+                    EventKind::JobCancelled,
+                    EventKind::JobCompleted,
+                    EventKind::JobFailed,
+                    EventKind::JobInterrupted,
+                    EventKind::JobSnoozed,
+                    EventKind::QueuePaused,
+                    EventKind::QueueResumed,
+                ])?)?;
                 let mut handle = client.start()?;
                 handle.wait_ready().await?;
                 self.running = Some(RunningClient {
@@ -1291,7 +1563,7 @@ impl Adapter {
                 while let Ok(event) =
                     tokio::time::timeout(Duration::from_millis(1), running.events.recv()).await
                 {
-                    running.probe.add_event(event?.kind)?;
+                    running.probe.add_event(event?.kind())?;
                 }
                 Ok(running.probe.snapshot()?)
             }
@@ -1312,25 +1584,25 @@ impl Adapter {
                 let mut workers = WorkerRegistry::new();
                 workers.register::<ConformanceArgs, _>(ConformanceWorker {
                     barriers: Arc::clone(&self.barriers),
-                    pool: self.pool.clone(),
+                    pool: Some(self.pool.clone()),
                     probe: Arc::new(RuntimeProbe::default()),
                 })?;
-                let client = Client::builder(self.pool.clone())
-                    .id(params
-                        .get("client_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or("rust-conformance-adapter"))
-                    .schema(schema_name(params.get("schema").and_then(Value::as_str))?)
-                    .workers(workers)
-                    .queue(
-                        "default",
-                        QueueConfig {
-                            fetch_cooldown: Duration::from_millis(1),
-                            fetch_poll_interval: Duration::from_millis(10),
-                            max_workers: 1,
-                        },
-                    )
-                    .build()?;
+                let client = Client::builder(
+                    PostgresDatabase::new(self.pool.clone())
+                        .schema(schema_name(params.get("schema").and_then(Value::as_str))?),
+                )
+                .id(params
+                    .get("client_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("rust-conformance-adapter"))
+                .workers(workers)
+                .queue(
+                    "default",
+                    QueueConfig::new(1)
+                        .with_fetch_cooldown(Duration::from_millis(1))
+                        .with_fetch_poll_interval(Duration::from_millis(10)),
+                )
+                .build()?;
                 let handle = client.start()?;
                 let row = wait_for_state(&client, id, None).await;
                 let stop = handle.shutdown().await;
@@ -1355,7 +1627,7 @@ impl Adapter {
                     .get_mut(&handle)
                     .ok_or_else(|| format!("transaction {handle:?} not found"))?;
                 let row = client
-                    .insert_tx(transaction, insert.args(), insert.opts.into_opts())
+                    .insert_tx_with(transaction, insert.args(), insert.opts.into_opts())
                     .await?;
                 Ok(normalize_job(&row.job.row))
             }
@@ -1368,10 +1640,10 @@ impl Adapter {
                     .get_mut(&handle)
                     .ok_or_else(|| format!("transaction {handle:?} not found"))?;
                 if method == "tx_insert_many_fast" {
-                    let count = client.insert_many_fast_tx(transaction, jobs).await?;
+                    let count = client.insert_many_fast_tx_with(transaction, jobs).await?;
                     Ok(json!({"count": count}))
                 } else {
-                    let results = client.insert_many_tx(transaction, jobs).await?;
+                    let results = client.insert_many_tx_with(transaction, jobs).await?;
                     Ok(normalize_insert_many_results(&results))
                 }
             }
@@ -1431,7 +1703,7 @@ impl Adapter {
                     .get_mut(&handle)
                     .ok_or_else(|| format!("transaction {handle:?} not found"))?;
                 let row = client
-                    .job_update_tx(transaction, id, JobUpdateParams { metadata, output })
+                    .job_update_tx(transaction, id, job_update_params(metadata, output))
                     .await?;
                 Ok(normalize_job(&row))
             }
@@ -1450,14 +1722,17 @@ impl Adapter {
                 let handle = required_string(&params, "handle")?;
                 let filter = list_params(&params)?;
                 let all = params.get("all").and_then(Value::as_bool).unwrap_or(false);
+                let delete = if all {
+                    JobDeleteManyParams::all()
+                } else {
+                    JobDeleteManyParams::matching(filter)
+                };
                 let client = self.client()?;
                 let transaction = self
                     .transactions
                     .get_mut(&handle)
                     .ok_or_else(|| format!("transaction {handle:?} not found"))?;
-                let rows = client
-                    .job_delete_many_tx(transaction, &JobDeleteManyParams { all, filter })
-                    .await?;
+                let rows = client.job_delete_many_tx(transaction, &delete).await?;
                 Ok(json!({"jobs": rows.iter().map(normalize_job).collect::<Vec<_>>() }))
             }
             "tx_queue_get" => {
@@ -1481,12 +1756,7 @@ impl Adapter {
                     .get_mut(&handle)
                     .ok_or_else(|| format!("transaction {handle:?} not found"))?;
                 let queues = client
-                    .queue_list_tx(
-                        transaction,
-                        &QueueListParams {
-                            limit: i32::try_from(limit)?,
-                        },
-                    )
+                    .queue_list_tx(transaction, &queue_list_params(i32::try_from(limit)?))
                     .await?;
                 Ok(json!({
                     "queues": queues.iter().map(normalize_queue).collect::<Vec<_>>()
@@ -1559,54 +1829,788 @@ impl Adapter {
 
     fn client_for_schema(&self, schema: &str) -> Result<Client, riverqueue::Error> {
         let schema = SchemaName::new(schema)
-            .map_err(|error| riverqueue::Error::InvalidJob(error.to_string()))?;
+            .map_err(|error| riverqueue::Error::invalid_job(error.to_string()))?;
         if let Some(running) = &self.running {
-            if running.client.schema() != &schema {
-                return Err(riverqueue::Error::InvalidJob(format!(
-                    "running client schema {} does not match requested schema {schema}",
-                    running.client.schema()
+            if running.client.postgres_schema() != Some(&schema) {
+                return Err(riverqueue::Error::invalid_job(format!(
+                    "running client schema {:?} does not match requested schema {schema}",
+                    running.client.postgres_schema()
                 )));
             }
             return Ok(running.client.clone());
         }
-        Client::builder(self.pool.clone()).schema(schema).build()
+        Client::builder(PostgresDatabase::new(self.pool.clone()).schema(schema)).build()
     }
+}
+
+impl SqliteAdapter {
+    async fn respond(&mut self, request: Request) -> Response {
+        let result = self.handle(&request.method, request.params).await;
+        match result {
+            Ok(result) => Response::success(request.id, result),
+            Err(error) => Response::error(request.id, -32_000, error.to_string()),
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn handle(
+        &mut self,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+        match method {
+            "handshake" => {
+                let (methods, capabilities) = if self.profile == "sqlite-runtime-v1" {
+                    (SQLITE_RUNTIME_METHODS, SQLITE_RUNTIME_CAPABILITIES)
+                } else {
+                    (SQLITE_ADAPTER_METHODS, SQLITE_CAPABILITIES)
+                };
+                Ok(json!({
+                    "adapter_version": ADAPTER_VERSION,
+                    "backend": "sqlite",
+                    "capabilities": capabilities,
+                    "implementation": "rust",
+                    "implementation_version": env!("CARGO_PKG_VERSION"),
+                    "methods": methods,
+                    "migration_lines": {MIGRATION_LINE_MAIN: MIGRATION_VERSION_LATEST},
+                    "profile": self.profile,
+                    "protocol_revision": PROTOCOL_REVISION,
+                }))
+            }
+            "migrate" => {
+                if params
+                    .get("schema")
+                    .and_then(Value::as_str)
+                    .is_some_and(|schema| !schema.is_empty())
+                {
+                    return Err("SQLite conformance does not support custom schemas".into());
+                }
+                let migrator = SqliteMigrator::new(self.pool.clone());
+                let direction = match params
+                    .get("direction")
+                    .and_then(Value::as_str)
+                    .unwrap_or("up")
+                {
+                    "down" => Direction::Down,
+                    "up" => Direction::Up,
+                    value => return Err(format!("unknown migration direction {value:?}").into()),
+                };
+                let result = migrator.migrate(direction, migrate_opts(&params)?).await?;
+                let applied = result
+                    .versions
+                    .iter()
+                    .map(|version| version.version)
+                    .collect::<Vec<_>>();
+                let existing = migrator.existing_versions().await?;
+                let valid = migrator.validate(None).await?.ok;
+                Ok(json!({"applied": applied, "existing": existing, "valid": valid}))
+            }
+            "reset" => {
+                if !self.transactions.is_empty() {
+                    return Err("reset requires no open transaction".into());
+                }
+                for table in [
+                    "river_notification",
+                    "river_job",
+                    "river_queue",
+                    "river_leader",
+                ] {
+                    sqlx::query(AssertSqlSafe(format!("DELETE FROM {table}")))
+                        .execute(&self.pool)
+                        .await?;
+                }
+                Ok(json!({}))
+            }
+            "clock_set" => {
+                self.clock =
+                    Some(DateTime::parse_from_rfc3339(&required_string(&params, "now")?)?.to_utc());
+                Ok(json!({}))
+            }
+            "rng_seed" => {
+                self.rng_seed = params
+                    .get("seed")
+                    .and_then(Value::as_u64)
+                    .ok_or("seed must be an unsigned integer")?;
+                Ok(json!({}))
+            }
+            "retry_delay" => {
+                let now = self
+                    .clock
+                    .ok_or("clock_set is required before retry_delay")?;
+                let error_count = usize::try_from(required_i64(&params, "error_count")?)?;
+                if error_count == 0 {
+                    return Err("error_count must be positive".into());
+                }
+                let row = retry_row(required_i64(&params, "job_id")?, now, error_count - 1);
+                let delay = DefaultRetryPolicy::with_seed(self.rng_seed).next_retry(
+                    &row,
+                    "conformance retry",
+                    now,
+                );
+                Ok(json!({"delay_ns": u64::try_from(delay.as_nanos())?}))
+            }
+            "unique_key" => {
+                let params: UniqueKeyParams = serde_json::from_value(params)?;
+                let opts = params.options.to_unique_opts();
+                let key = match params.kind.as_str() {
+                    "conformance_all_args" => unique_key_for_args::<UniqueAllArgs>(&params, &opts),
+                    "conformance_numeric_boundaries" => {
+                        unique_key_for_args::<UniqueNumericArgs>(&params, &opts)
+                    }
+                    "conformance_selected_args" => {
+                        unique_key_for_args::<UniqueSelectedArgs>(&params, &opts)
+                    }
+                    "conformance_simple" => unique_key_for_args::<UniqueSimpleArgs>(&params, &opts),
+                    kind => Err(format!("unsupported unique fixture kind {kind:?}")),
+                }?;
+                Ok(json!({"sha256": hex(&key), "state_mask": opts.state_bitmask()}))
+            }
+            "barrier_create" => {
+                let name = required_string(&params, "name")?;
+                self.barriers.create(&name)?;
+                Ok(json!({}))
+            }
+            "barrier_release" => {
+                let name = required_string(&params, "name")?;
+                self.barriers.release(&name)?;
+                Ok(json!({}))
+            }
+            "insert" => {
+                let params: InsertParams = serde_json::from_value(params)?;
+                if !params.schema.is_empty() {
+                    return Err("SQLite conformance does not support custom schemas".into());
+                }
+                let result = self
+                    .client()?
+                    .insert_with(params.args(), params.opts.into_opts())
+                    .await?;
+                Ok(normalize_job(&result.job.row))
+            }
+            "insert_many" => {
+                let jobs = insert_many_params(&params)?;
+                let results = self.client()?.insert_many_with(jobs).await?;
+                Ok(normalize_insert_many_results(&results))
+            }
+            "insert_many_fast" => {
+                let params = params.get("jobs").cloned().ok_or("missing jobs")?;
+                let params: Vec<InsertParams> = serde_json::from_value(params)?;
+                let jobs = params
+                    .into_iter()
+                    .map(|params| (params.args(), params.opts.into_opts()))
+                    .collect::<Vec<_>>();
+                let count = self.client()?.insert_many_fast_with(jobs).await?;
+                Ok(json!({"count": count}))
+            }
+            "raw_insert_no_notify" => {
+                let params: InsertParams = serde_json::from_value(params)?;
+                let encoded_args = serde_json::to_string(&params.args())?;
+                let kind = if params.kind.is_empty() {
+                    "conformance_echo".to_owned()
+                } else {
+                    params.kind
+                };
+                let max_attempts = params.opts.max_attempts.unwrap_or(25);
+                let id = sqlx::query_scalar::<_, i64>(
+                    "INSERT INTO river_job (args, kind, max_attempts) VALUES (jsonb(?), ?, ?) RETURNING id",
+                )
+                .bind(encoded_args)
+                .bind(kind)
+                .bind(max_attempts)
+                .fetch_one(&self.pool)
+                .await?;
+                Ok(normalize_job(&self.client()?.job_get(id).await?))
+            }
+            "get" => {
+                if params
+                    .get("schema")
+                    .and_then(Value::as_str)
+                    .is_some_and(|schema| !schema.is_empty())
+                {
+                    return Err("SQLite conformance does not support custom schemas".into());
+                }
+                let row = self.client()?.job_get(required_i64(&params, "id")?).await?;
+                Ok(normalize_job(&row))
+            }
+            "list" => {
+                let list = list_params(&params)?;
+                let rows = self.client()?.job_list(&list).await?;
+                normalize_job_list(&rows, &list)
+            }
+            "cancel" => {
+                let row = self
+                    .client()?
+                    .job_cancel(required_i64(&params, "id")?)
+                    .await?;
+                Ok(normalize_job(&row))
+            }
+            "delete" => {
+                let row = self
+                    .client()?
+                    .job_delete(required_i64(&params, "id")?)
+                    .await?;
+                Ok(normalize_job(&row))
+            }
+            "delete_many" => {
+                let list = list_params(&params)?;
+                let delete = if params.get("all").and_then(Value::as_bool).unwrap_or(false) {
+                    JobDeleteManyParams::all()
+                } else {
+                    JobDeleteManyParams::matching(list)
+                };
+                let rows = self.client()?.job_delete_many(&delete).await?;
+                Ok(json!({"jobs": rows.iter().map(normalize_job).collect::<Vec<_>>() }))
+            }
+            "retry" => {
+                let row = self
+                    .client()?
+                    .job_retry(required_i64(&params, "id")?)
+                    .await?;
+                Ok(normalize_job(&row))
+            }
+            "update" => {
+                let id = required_i64(&params, "id")?;
+                let metadata = params
+                    .get("metadata")
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()?
+                    .unwrap_or_default();
+                let output = params.get("output").cloned();
+                let row = self
+                    .client()?
+                    .job_update(id, job_update_params(metadata, output))
+                    .await?;
+                Ok(normalize_job(&row))
+            }
+            "raw_finalize" => {
+                let id = required_i64(&params, "id")?;
+                let state = required_string(&params, "state")?;
+                if !matches!(state.as_str(), "completed" | "discarded") {
+                    return Err("state must be completed or discarded".into());
+                }
+                let metadata = params.get("metadata").cloned().unwrap_or_else(|| json!({}));
+                let result = sqlx::query(
+                    r#"UPDATE river_job
+                       SET errors = CASE WHEN ?2 = 'discarded'
+                               THEN jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json('{"at":"2026-02-03T04:05:06.789Z","attempt":1,"error":"external discard","trace":"external trace"}')))
+                               ELSE errors END,
+                           finalized_at = '2026-02-03 04:05:06.789',
+                           metadata = jsonb_patch(json(metadata), json(?3)),
+                           state = ?2
+                       WHERE id = ?1 AND state = 'running'"#,
+                )
+                .bind(id)
+                .bind(state)
+                .bind(sqlx::types::Json(metadata))
+                .execute(&self.pool)
+                .await?;
+                if result.rows_affected() != 1 {
+                    return Err("running job not found".into());
+                }
+                Ok(normalize_job(&self.client()?.job_get(id).await?))
+            }
+            "raw_job_timestamps" => {
+                let id = required_i64(&params, "id")?;
+                let (created_at, scheduled_at) = sqlx::query_as::<_, (String, String)>(
+                    "SELECT CAST(created_at AS TEXT), CAST(scheduled_at AS TEXT) FROM river_job WHERE id = ?",
+                )
+                .bind(id)
+                .fetch_one(&self.pool)
+                .await?;
+                Ok(json!({"created_at": created_at, "scheduled_at": scheduled_at}))
+            }
+            "queue_add" => {
+                let running = self
+                    .running
+                    .as_ref()
+                    .ok_or("queue_add requires a running client")?;
+                let max_workers = optional_i64(&params, "max_workers").unwrap_or(1);
+                running.client.queue_add(
+                    required_string(&params, "name")?,
+                    QueueConfig::new(usize::try_from(max_workers)?)
+                        .with_fetch_cooldown(Duration::from_millis(1))
+                        .with_fetch_poll_interval(Duration::from_millis(10)),
+                )?;
+                Ok(json!({}))
+            }
+            "queue_get" => {
+                let queue = self
+                    .client()?
+                    .queue_get(&required_string(&params, "name")?)
+                    .await?;
+                Ok(normalize_queue(&queue))
+            }
+            "queue_list" => {
+                let limit = optional_i64(&params, "limit").unwrap_or(100);
+                let queues = self
+                    .client()?
+                    .queue_list(&queue_list_params(i32::try_from(limit)?))
+                    .await?;
+                Ok(json!({
+                    "queues": queues.iter().map(normalize_queue).collect::<Vec<_>>()
+                }))
+            }
+            "queue_pause" | "queue_resume" => {
+                let name = required_string(&params, "name")?;
+                let client = self.client()?;
+                if method == "queue_pause" {
+                    client.queue_pause(&name).await?;
+                } else {
+                    client.queue_resume(&name).await?;
+                }
+                Ok(json!({}))
+            }
+            "queue_remove" => {
+                let running = self
+                    .running
+                    .as_ref()
+                    .ok_or("queue_remove requires a running client")?;
+                let name = required_string(&params, "name")?;
+                if running.client.queue_remove(&name)?.is_none() {
+                    return Err(format!("queue {name:?} is not configured").into());
+                }
+                Ok(json!({}))
+            }
+            "queue_update" => {
+                let name = required_string(&params, "name")?;
+                let metadata = params
+                    .get("metadata")
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()?
+                    .unwrap_or_default();
+                let queue = self.client()?.queue_update(&name, metadata).await?;
+                Ok(normalize_queue(&queue))
+            }
+            "leader" => {
+                let leader = sqlx::query_as::<_, (String, String)>(
+                    "SELECT leader_id, elected_at FROM river_leader WHERE name = 'default' AND expires_at >= strftime('%Y-%m-%d %H:%M:%f', 'now')",
+                )
+                .fetch_optional(&self.pool)
+                .await?;
+                Ok(match leader {
+                    Some((leader_id, elected_at)) => json!({
+                        "elected_at": format_time(parse_sqlite_time(&elected_at)?),
+                        "leader_id": leader_id,
+                    }),
+                    None => json!({"elected_at": null, "leader_id": null}),
+                })
+            }
+            "request_resign" => {
+                self.client()?.request_resign().await?;
+                Ok(json!({}))
+            }
+            "start" => {
+                if self.running.is_some() {
+                    return Err("client already running".into());
+                }
+                let client_id = required_string(&params, "client_id")?;
+                let error_handler_cancel = params
+                    .get("error_handler_cancel")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let fetch_poll_interval = optional_i64(&params, "fetch_poll_interval_ms")
+                    .map(duration_millis)
+                    .transpose()?
+                    .unwrap_or(Duration::from_millis(10));
+                let queue = params
+                    .get("queue")
+                    .and_then(Value::as_str)
+                    .unwrap_or("default")
+                    .to_owned();
+                let max_workers = optional_i64(&params, "max_workers").unwrap_or(4);
+                let poll_only = params
+                    .get("poll_only")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let probe = Arc::new(RuntimeProbe::default());
+                let mut workers = WorkerRegistry::new();
+                workers.register::<ConformanceArgs, _>(ConformanceWorker {
+                    barriers: Arc::clone(&self.barriers),
+                    pool: None,
+                    probe: Arc::clone(&probe),
+                })?;
+                let mut maintenance = MaintenanceConfig::default();
+                if let Some(milliseconds) = optional_i64(&params, "elect_interval_ms") {
+                    maintenance = maintenance.with_elect_interval(duration_millis(milliseconds)?);
+                }
+                if let Some(milliseconds) = optional_i64(&params, "rescue_after_ms") {
+                    maintenance = maintenance.with_rescue_after(duration_millis(milliseconds)?);
+                }
+                if let Some(milliseconds) = optional_i64(&params, "rescuer_interval_ms") {
+                    maintenance = maintenance.with_rescuer_interval(duration_millis(milliseconds)?);
+                }
+                if let Some(milliseconds) = optional_i64(&params, "scheduler_interval_ms") {
+                    maintenance =
+                        maintenance.with_scheduler_interval(duration_millis(milliseconds)?);
+                }
+                let mut builder = Client::builder(SqliteDatabase::new(self.pool.clone()))
+                    .id(client_id)
+                    .job_stuck_threshold(Duration::from_millis(100))
+                    .maintenance(maintenance)
+                    .workers(workers)
+                    .queue(
+                        queue,
+                        QueueConfig::new(usize::try_from(max_workers)?)
+                            .with_fetch_cooldown(Duration::from_millis(1))
+                            .with_fetch_poll_interval(fetch_poll_interval),
+                    );
+                if poll_only {
+                    builder = builder.without_notifications();
+                }
+                if params
+                    .get("instrumented")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    builder = builder.plugin(ConformancePlugin(Arc::clone(&probe)));
+                }
+                if error_handler_cancel {
+                    builder = builder.error_handler(ConformanceErrorHandler(Arc::clone(&probe)));
+                }
+                if let Some(milliseconds) = optional_i64(&params, "job_stuck_threshold_ms") {
+                    builder = builder.job_stuck_threshold(duration_millis(milliseconds)?);
+                }
+                if let Some(milliseconds) = optional_i64(&params, "job_timeout_ms") {
+                    builder = builder.job_timeout(Some(duration_millis(milliseconds)?));
+                }
+                if params
+                    .get("periodic_run_on_start")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    builder = builder.periodic_job(PeriodicJob::with_options(
+                        IntervalSchedule::new(Duration::from_hours(1))?,
+                        || ConformanceArgs {
+                            behavior: String::new(),
+                            duration_ms: 0,
+                            message: "periodic run on start".to_owned(),
+                        },
+                        PeriodicJobOpts::new()
+                            .with_id("conformance-periodic")
+                            .run_on_start(),
+                    ));
+                }
+                if let Some(milliseconds) = optional_i64(&params, "retry_delay_ms") {
+                    builder =
+                        builder.retry_policy(FixedRetryPolicy(duration_millis(milliseconds)?));
+                }
+                let client = builder.build()?;
+                let events = client.subscribe_config(SubscribeConfig::new([
+                    EventKind::JobCancelled,
+                    EventKind::JobCompleted,
+                    EventKind::JobFailed,
+                    EventKind::JobInterrupted,
+                    EventKind::JobSnoozed,
+                    EventKind::QueuePaused,
+                    EventKind::QueueResumed,
+                ])?)?;
+                let mut handle = client.start()?;
+                handle.wait_ready().await?;
+                self.running = Some(RunningClient {
+                    client,
+                    events,
+                    handle,
+                    probe,
+                });
+                Ok(json!({}))
+            }
+            "stop" => {
+                let running = self.running.take().ok_or("client is not running")?;
+                if params
+                    .get("cancel")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    running.handle.shutdown_now().await?;
+                } else {
+                    running.handle.shutdown().await?;
+                }
+                Ok(json!({}))
+            }
+            "runtime_stats" => {
+                let running = self
+                    .running
+                    .as_mut()
+                    .ok_or("runtime_stats requires a running client")?;
+                while let Ok(event) =
+                    tokio::time::timeout(Duration::from_millis(1), running.events.recv()).await
+                {
+                    running.probe.add_event(event?.kind())?;
+                }
+                Ok(running.probe.snapshot()?)
+            }
+            "wait" => {
+                let id = required_i64(&params, "id")?;
+                let row = if let Some(running) = &self.running {
+                    wait_for_state(&running.client, id, params.get("states")).await?
+                } else {
+                    wait_for_state(&self.client()?, id, params.get("states")).await?
+                };
+                Ok(normalize_job(&row))
+            }
+            "work" => {
+                let id = required_i64(&params, "id")?;
+                if self.running.is_some() {
+                    return Err("work requires no already-running client".into());
+                }
+                let mut workers = WorkerRegistry::new();
+                workers.register::<ConformanceArgs, _>(ConformanceWorker {
+                    barriers: Arc::clone(&self.barriers),
+                    pool: None,
+                    probe: Arc::new(RuntimeProbe::default()),
+                })?;
+                let client = Client::builder(SqliteDatabase::new(self.pool.clone()))
+                    .id(params
+                        .get("client_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("rust-conformance-adapter"))
+                    .workers(workers)
+                    .queue(
+                        "default",
+                        QueueConfig::new(1)
+                            .with_fetch_cooldown(Duration::from_millis(1))
+                            .with_fetch_poll_interval(Duration::from_millis(10)),
+                    )
+                    .build()?;
+                let handle = client.start()?;
+                let row = wait_for_state(&client, id, None).await;
+                let stop = handle.shutdown().await;
+                stop?;
+                Ok(normalize_job(&row?))
+            }
+            "tx_begin" => {
+                let handle = required_string(&params, "handle")?;
+                if self.transactions.contains_key(&handle) {
+                    return Err(format!("transaction {handle:?} already exists").into());
+                }
+                self.transactions
+                    .insert(handle, self.pool.begin_with("BEGIN IMMEDIATE").await?);
+                Ok(json!({}))
+            }
+            "tx_insert" => {
+                let handle = required_string(&params, "handle")?;
+                let insert: InsertParams =
+                    serde_json::from_value(params.get("job").cloned().ok_or("missing job")?)?;
+                let client = self.client()?;
+                let transaction = self
+                    .transactions
+                    .get_mut(&handle)
+                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let row = client
+                    .insert_tx_with(transaction, insert.args(), insert.opts.into_opts())
+                    .await?;
+                Ok(normalize_job(&row.job.row))
+            }
+            "tx_insert_many" | "tx_insert_many_fast" => {
+                let handle = required_string(&params, "handle")?;
+                let jobs = insert_many_params(params.get("jobs").ok_or("missing jobs")?)?;
+                let client = self.client()?;
+                let transaction = self
+                    .transactions
+                    .get_mut(&handle)
+                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                if method == "tx_insert_many_fast" {
+                    let count = client.insert_many_fast_tx_with(transaction, jobs).await?;
+                    Ok(json!({"count": count}))
+                } else {
+                    let results = client.insert_many_tx_with(transaction, jobs).await?;
+                    Ok(normalize_insert_many_results(&results))
+                }
+            }
+            "tx_get" => {
+                let handle = required_string(&params, "handle")?;
+                let id = required_i64(&params, "id")?;
+                let client = self.client()?;
+                let transaction = self
+                    .transactions
+                    .get_mut(&handle)
+                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                Ok(normalize_job(&client.job_get_tx(transaction, id).await?))
+            }
+            "tx_cancel" => {
+                let handle = required_string(&params, "handle")?;
+                let id = required_i64(&params, "id")?;
+                let client = self.client()?;
+                let transaction = self
+                    .transactions
+                    .get_mut(&handle)
+                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                Ok(normalize_job(&client.job_cancel_tx(transaction, id).await?))
+            }
+            "tx_delete" => {
+                let handle = required_string(&params, "handle")?;
+                let id = required_i64(&params, "id")?;
+                let client = self.client()?;
+                let transaction = self
+                    .transactions
+                    .get_mut(&handle)
+                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                Ok(normalize_job(&client.job_delete_tx(transaction, id).await?))
+            }
+            "tx_retry" => {
+                let handle = required_string(&params, "handle")?;
+                let id = required_i64(&params, "id")?;
+                let client = self.client()?;
+                let transaction = self
+                    .transactions
+                    .get_mut(&handle)
+                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                Ok(normalize_job(&client.job_retry_tx(transaction, id).await?))
+            }
+            "tx_update" => {
+                let handle = required_string(&params, "handle")?;
+                let id = required_i64(&params, "id")?;
+                let metadata = params
+                    .get("metadata")
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()?
+                    .unwrap_or_default();
+                let output = params.get("output").cloned();
+                let client = self.client()?;
+                let transaction = self
+                    .transactions
+                    .get_mut(&handle)
+                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let row = client
+                    .job_update_tx(transaction, id, job_update_params(metadata, output))
+                    .await?;
+                Ok(normalize_job(&row))
+            }
+            "tx_list" => {
+                let handle = required_string(&params, "handle")?;
+                let list = list_params(&params)?;
+                let client = self.client()?;
+                let transaction = self
+                    .transactions
+                    .get_mut(&handle)
+                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let rows = client.job_list_tx(transaction, &list).await?;
+                normalize_job_list(&rows, &list)
+            }
+            "tx_delete_many" => {
+                let handle = required_string(&params, "handle")?;
+                let filter = list_params(&params)?;
+                let all = params.get("all").and_then(Value::as_bool).unwrap_or(false);
+                let delete = if all {
+                    JobDeleteManyParams::all()
+                } else {
+                    JobDeleteManyParams::matching(filter)
+                };
+                let client = self.client()?;
+                let transaction = self
+                    .transactions
+                    .get_mut(&handle)
+                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let rows = client.job_delete_many_tx(transaction, &delete).await?;
+                Ok(json!({"jobs": rows.iter().map(normalize_job).collect::<Vec<_>>() }))
+            }
+            "tx_queue_get" => {
+                let handle = required_string(&params, "handle")?;
+                let name = required_string(&params, "name")?;
+                let client = self.client()?;
+                let transaction = self
+                    .transactions
+                    .get_mut(&handle)
+                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                Ok(normalize_queue(
+                    &client.queue_get_tx(transaction, &name).await?,
+                ))
+            }
+            "tx_queue_list" => {
+                let handle = required_string(&params, "handle")?;
+                let limit = optional_i64(&params, "limit").unwrap_or(100);
+                let client = self.client()?;
+                let transaction = self
+                    .transactions
+                    .get_mut(&handle)
+                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let queues = client
+                    .queue_list_tx(transaction, &queue_list_params(i32::try_from(limit)?))
+                    .await?;
+                Ok(json!({
+                    "queues": queues.iter().map(normalize_queue).collect::<Vec<_>>()
+                }))
+            }
+            "tx_queue_pause" | "tx_queue_resume" => {
+                let handle = required_string(&params, "handle")?;
+                let name = required_string(&params, "name")?;
+                let client = self.client()?;
+                let transaction = self
+                    .transactions
+                    .get_mut(&handle)
+                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                if method == "tx_queue_pause" {
+                    client.queue_pause_tx(transaction, &name).await?;
+                } else {
+                    client.queue_resume_tx(transaction, &name).await?;
+                }
+                Ok(json!({}))
+            }
+            "tx_queue_update" => {
+                let handle = required_string(&params, "handle")?;
+                let name = required_string(&params, "name")?;
+                let metadata = params
+                    .get("metadata")
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()?
+                    .unwrap_or_default();
+                let client = self.client()?;
+                let transaction = self
+                    .transactions
+                    .get_mut(&handle)
+                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                Ok(normalize_queue(
+                    &client.queue_update_tx(transaction, &name, metadata).await?,
+                ))
+            }
+            "tx_commit" | "tx_rollback" => {
+                let handle = required_string(&params, "handle")?;
+                let transaction = self
+                    .transactions
+                    .remove(&handle)
+                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                if method == "tx_commit" {
+                    transaction.commit().await?;
+                } else {
+                    transaction.rollback().await?;
+                }
+                Ok(json!({}))
+            }
+            _ => Err(format!("method not found for SQLite profile: {method}").into()),
+        }
+    }
+
+    fn client(&self) -> Result<Client, riverqueue::Error> {
+        if let Some(running) = &self.running {
+            return Ok(running.client.clone());
+        }
+        Client::builder(SqliteDatabase::new(self.pool.clone())).build()
+    }
+}
+
+fn parse_sqlite_time(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
+    chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f")
+        .map(|value| value.and_utc())
 }
 
 fn schema_name(schema: Option<&str>) -> Result<SchemaName, riverqueue::Error> {
     SchemaName::new(schema.unwrap_or_default())
-        .map_err(|error| riverqueue::Error::InvalidJob(error.to_string()))
+        .map_err(|error| riverqueue::Error::invalid_job(error.to_string()))
 }
 
 fn retry_row(id: i64, now: DateTime<Utc>, previous_errors: usize) -> JobRow {
-    JobRow {
-        attempt: i16::try_from(previous_errors.saturating_add(1)).unwrap_or(i16::MAX),
-        attempted_at: Some(now),
-        attempted_by: vec!["conformance".to_owned()],
-        created_at: now,
-        encoded_args: json!({}),
-        errors: vec![
-            AttemptError {
-                at: now,
-                attempt: 1,
-                error: "previous failure".to_owned(),
-                trace: String::new(),
-            };
-            previous_errors
-        ],
-        finalized_at: None,
-        id,
-        kind: "conformance_echo".to_owned(),
-        max_attempts: 1_000,
-        metadata: Map::new(),
-        priority: 1,
-        queue: "default".to_owned(),
-        scheduled_at: now,
-        state: JobState::Retryable,
-        tags: Vec::new(),
-        unique_key: None,
-        unique_states: None,
-    }
+    let mut row = JobRow::new(id, "conformance_echo", json!({}), now);
+    row.attempt = i16::try_from(previous_errors.saturating_add(1)).unwrap_or(i16::MAX);
+    row.attempted_at = Some(now);
+    row.attempted_by = vec!["conformance".to_owned()];
+    row.errors = vec![AttemptError::new(now, 1, "previous failure"); previous_errors];
+    row.max_attempts = 1_000;
+    row.metadata = Map::new();
+    row.state = JobState::Retryable;
+    row
 }
 
 impl InsertParams {
@@ -1621,28 +2625,25 @@ impl InsertParams {
 
 impl InsertOptsParams {
     fn into_opts(self) -> InsertOpts {
-        let mut opts = InsertOpts {
-            metadata: self.metadata,
-            pending: self.pending,
-            scheduled_at: self.scheduled_at,
-            tags: self.tags,
-            unique: UniqueOpts {
-                by_args: self.unique.by_args,
-                by_period: self.unique.by_period_ms.map(Duration::from_millis),
-                by_queue: self.unique.by_queue,
-                by_state: self.unique.by_state,
-                exclude_kind: self.unique.exclude_kind,
-            },
-            ..InsertOpts::default()
+        let scheduled_at = self.scheduled_at;
+        let unique = self.unique.to_unique_opts();
+        let mut opts = InsertOpts::default()
+            .with_metadata(self.metadata)
+            .with_pending(self.pending)
+            .with_tags(self.tags)
+            .with_unique(unique);
+        opts = match scheduled_at {
+            Some(scheduled_at) => opts.with_scheduled_at(scheduled_at),
+            None => opts.without_schedule(),
         };
         if let Some(max_attempts) = self.max_attempts {
-            opts.max_attempts = max_attempts;
+            opts = opts.with_max_attempts(max_attempts);
         }
         if let Some(priority) = self.priority {
-            opts.priority = priority;
+            opts = opts.with_priority(priority);
         }
         if let Some(queue) = self.queue {
-            opts.queue = queue;
+            opts = opts.with_queue(queue);
         }
         opts
     }
@@ -1661,7 +2662,7 @@ fn list_params(params: &Value) -> Result<JobListParams, Box<dyn std::error::Erro
         .map(serde_json::from_value)
         .transpose()?;
     if let Some(order_by) = params.get("order_by").and_then(Value::as_str) {
-        list.order_by = JobListOrderBy::try_from(order_by).map_err(io::Error::other)?;
+        list.order_by = order_by.parse()?;
     }
     list.priorities = string_or_number_array::<i16>(params, "priorities")?;
     list.queues = string_array(params, "queues")?;
@@ -1716,7 +2717,21 @@ async fn wait_for_state(
     }
 }
 
+fn job_update_params(metadata: Map<String, Value>, output: Option<Value>) -> JobUpdateParams {
+    let params = JobUpdateParams::default().with_metadata(metadata);
+    match output {
+        Some(output) => params.with_output(output),
+        None => params,
+    }
+}
+
+fn queue_list_params(limit: i32) -> QueueListParams {
+    QueueListParams::default().with_limit(limit)
+}
+
 fn normalize_job(row: &JobRow) -> Value {
+    let mut metadata = row.metadata.clone();
+    metadata.remove(riverqueue::METADATA_KEY_UNIQUE_NONCE);
     json!({
         "args": row.encoded_args,
         "attempt": row.attempt,
@@ -1733,7 +2748,7 @@ fn normalize_job(row: &JobRow) -> Value {
         "id": row.id,
         "kind": row.kind,
         "max_attempts": row.max_attempts,
-        "metadata": row.metadata,
+        "metadata": metadata,
         "priority": row.priority,
         "queue": row.queue,
         "scheduled_at": format_time(row.scheduled_at),
@@ -1777,9 +2792,7 @@ fn normalize_job_list(
         .map(|row| JobListCursor::from_job(row, params))
         .transpose()
         .map_err(io::Error::other)?
-        .map(|cursor| cursor.encode())
-        .transpose()
-        .map_err(io::Error::other)?;
+        .map(|cursor| cursor.encode());
     Ok(json!({
         "cursor": cursor,
         "jobs": rows.iter().map(normalize_job).collect::<Vec<_>>(),
@@ -1831,6 +2844,22 @@ fn hex(bytes: &[u8]) -> String {
 
 fn optional_i64(params: &Value, name: &str) -> Option<i64> {
     params.get(name).and_then(Value::as_i64)
+}
+
+fn migrate_opts(params: &Value) -> Result<MigrateOpts, Box<dyn std::error::Error + Send + Sync>> {
+    let mut opts = MigrateOpts::new().with_dry_run(
+        params
+            .get("dry_run")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    );
+    if let Some(max_steps) = optional_i64(params, "max_steps") {
+        opts = opts.with_max_steps(usize::try_from(max_steps)?);
+    }
+    if let Some(target_version) = optional_i64(params, "target_version") {
+        opts = opts.with_target_version(target_version);
+    }
+    Ok(opts)
 }
 
 fn duration_millis(

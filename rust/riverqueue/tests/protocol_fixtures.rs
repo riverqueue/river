@@ -93,34 +93,15 @@ fn go_protocol_values_match_rust() {
 }
 
 fn retry_row(id: i64, now: DateTime<Utc>, previous_errors: usize) -> JobRow {
-    JobRow {
-        attempt: i16::try_from(previous_errors + 1).unwrap(),
-        attempted_at: Some(now),
-        attempted_by: vec!["fixture".to_owned()],
-        created_at: now,
-        encoded_args: serde_json::json!({}),
-        errors: vec![
-            AttemptError {
-                at: now,
-                attempt: 1,
-                error: "previous failure".to_owned(),
-                trace: String::new(),
-            };
-            previous_errors
-        ],
-        finalized_at: None,
-        id,
-        kind: "fixture_retry".to_owned(),
-        max_attempts: 1_000,
-        metadata: Map::new(),
-        priority: 1,
-        queue: "default".to_owned(),
-        scheduled_at: now,
-        state: JobState::Retryable,
-        tags: Vec::new(),
-        unique_key: None,
-        unique_states: None,
-    }
+    let mut row = JobRow::new(id, "fixture_retry", serde_json::json!({}), now);
+    row.attempt = i16::try_from(previous_errors + 1).unwrap();
+    row.attempted_at = Some(now);
+    row.attempted_by = vec!["fixture".to_owned()];
+    row.errors = vec![AttemptError::new(now, 1, "previous failure"); previous_errors];
+    row.max_attempts = 1_000;
+    row.metadata = Map::new();
+    row.state = JobState::Retryable;
+    row
 }
 
 #[test]

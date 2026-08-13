@@ -1,27 +1,40 @@
-//! Leader election and leader-owned PostgreSQL maintenance.
+//! Leader election and leader-owned database maintenance.
 
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
+#[cfg(feature = "postgres")]
 use sqlx::{AssertSqlSafe, Row, types::Json};
 use tokio::sync::broadcast;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
 
+use riverqueue_internal::{DatabaseConnection as PilotDatabaseConnection, RescueParams};
+
+#[cfg(feature = "postgres")]
+use crate::client::{JobRecord, job_projection};
+#[cfg(feature = "postgres")]
+use crate::database::PostgresReindexSchedule;
+#[cfg(feature = "sqlite")]
+use crate::database::sqlite;
 use crate::{
-    AttemptError, Client, Error, JobState, ReindexerSchedule, WorkerTimeout,
-    client::{ClientInner, JobRecord, job_projection},
+    AttemptError, Client, Error, JobState, WorkerTimeout,
+    client::{ClientInner, RuntimeNotification},
 };
 
 const BATCH_SIZE: i64 = 10_000;
 const LEADER_TTL_PADDING: Duration = Duration::from_secs(10);
+#[cfg(feature = "sqlite")]
+const NOTIFICATION_RETENTION: Duration = Duration::from_mins(5);
+#[cfg(feature = "sqlite")]
+const NOTIFICATION_CLEANER_INTERVAL: Duration = Duration::from_mins(1);
 
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn run_maintenance(
     inner: Arc<ClientInner>,
     cancel: CancellationToken,
-    mut notifications: broadcast::Receiver<String>,
+    mut notifications: broadcast::Receiver<RuntimeNotification>,
 ) -> Result<(), Error> {
     for hook in &inner.hooks {
         if let Err(hook_error) = hook.periodic_jobs_start(&inner.periodic_jobs).await {
@@ -30,14 +43,18 @@ pub(crate) async fn run_maintenance(
     }
 
     let mut cleaner_last = None;
+    #[cfg(feature = "sqlite")]
+    let mut notification_cleaner_last = None;
     let mut queue_cleaner_last = None;
     let mut rescuer_last = None;
+    #[cfg(feature = "postgres")]
     let mut reindexer_next = None;
     let mut scheduler_last = None;
     let mut election_last = None;
     let mut extension_cancel = CancellationToken::new();
     let mut extension_tasks = JoinSet::new();
     let mut is_leader = false;
+    let mut leadership_confirmed_until = None;
     let mut ticker =
         tokio::time::interval(inner.maintenance.elect_interval.min(Duration::from_secs(1)));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -48,8 +65,8 @@ pub(crate) async fn run_maintenance(
             _ = ticker.tick() => {}
             notification = notifications.recv() => {
                 let requested_resignation = matches!(
-                    notification.as_deref(),
-                    Ok("__river_leadership_request_resign__")
+                    &notification,
+                    Ok(RuntimeNotification::LeadershipRequestResign)
                 );
                 let resigned = requested_resignation && is_leader;
                 if resigned
@@ -58,13 +75,17 @@ pub(crate) async fn run_maintenance(
                         error!(error = %operation_error, "River leader requested resignation failed");
                     } else {
                         is_leader = false;
+                        leadership_confirmed_until = None;
                         extension_cancel.cancel();
                         inner.periodic_jobs.reset_for_leadership().await;
                     }
                 }
                 if matches!(
-                    notification.as_deref(),
-                    Ok("__river_leadership__" | "__river_leadership_request_resign__")
+                    &notification,
+                    Ok(
+                        RuntimeNotification::LeadershipChanged
+                            | RuntimeNotification::LeadershipRequestResign
+                    )
                 ) {
                     // Give peers one election interval to acquire the lease
                     // after an explicit resignation. Without this cooldown,
@@ -76,22 +97,40 @@ pub(crate) async fn run_maintenance(
         }
         if is_due(&mut election_last, inner.maintenance.elect_interval) {
             let was_leader = is_leader;
-            is_leader = match try_hold_leadership(&inner).await {
-                Ok(is_leader) => is_leader,
+            match try_hold_leadership(&inner).await {
+                Ok(held) => {
+                    is_leader = held;
+                    leadership_confirmed_until = held.then(|| {
+                        tokio::time::Instant::now()
+                            + inner.maintenance.elect_interval
+                            + LEADER_TTL_PADDING
+                    });
+                }
                 Err(operation_error) => {
                     error!(error = %operation_error, "River leader election failed");
-                    false
+                    // A failed renewal does not establish that another client
+                    // owns the lease. Preserve a previously confirmed lease
+                    // until its local deadline and retry; demote once that
+                    // deadline passes rather than running leader services
+                    // indefinitely through a database outage.
+                    if is_leader
+                        && leadership_confirmed_until
+                            .is_none_or(|deadline| tokio::time::Instant::now() >= deadline)
+                    {
+                        is_leader = false;
+                        leadership_confirmed_until = None;
+                    }
                 }
-            };
+            }
             if is_leader && !was_leader {
                 inner.periodic_jobs.reset_for_leadership().await;
                 extension_cancel = CancellationToken::new();
                 for service in inner.pilot.maintenance_services() {
-                    let pool = inner.pool.clone();
-                    let schema = inner.schema.clone();
+                    let pool = inner.pilot_database_pool();
+                    let database = inner.pilot_database_config();
                     let service_cancel = extension_cancel.child_token();
                     extension_tasks
-                        .spawn(async move { service.run(pool, schema, service_cancel).await });
+                        .spawn(async move { service.run(pool, database, service_cancel).await });
                 }
             } else if was_leader && !is_leader {
                 inner.periodic_jobs.reset_for_leadership().await;
@@ -145,12 +184,20 @@ pub(crate) async fn run_maintenance(
         {
             error!(error = %operation_error, "River queue cleaner failed");
         }
-        if !inner.maintenance.reindexer_index_names.is_empty()
-            && reindex_is_due(
-                &mut reindexer_next,
-                inner.maintenance.reindexer_schedule,
-                Utc::now(),
+        #[cfg(feature = "sqlite")]
+        if inner.sqlite_pool().is_some()
+            && is_due(
+                &mut notification_cleaner_last,
+                NOTIFICATION_CLEANER_INTERVAL,
             )
+            && let Err(operation_error) = clean_notifications(&inner, &cancel).await
+        {
+            error!(error = %operation_error, "River SQLite notification cleaner failed");
+        }
+        #[cfg(feature = "postgres")]
+        if let Some(reindex_config) = inner.database().postgres_reindex()
+            && !reindex_config.index_names().is_empty()
+            && reindex_is_due(&mut reindexer_next, reindex_config.schedule(), Utc::now())
             && let Err(operation_error) = reindex(&inner).await
         {
             error!(error = %operation_error, "River reindexer failed");
@@ -176,15 +223,36 @@ pub(crate) async fn run_maintenance(
     Ok(())
 }
 
+#[cfg(feature = "sqlite")]
+async fn clean_notifications(inner: &ClientInner, cancel: &CancellationToken) -> Result<(), Error> {
+    let pool = inner
+        .sqlite_pool()
+        .expect("notification cleanup is only dispatched for SQLite");
+    let retention = chrono::Duration::from_std(NOTIFICATION_RETENTION)
+        .map_err(|error| Error::configuration_context("maintenance", error.to_string()))?;
+    let created_before = Utc::now() - retention;
+    loop {
+        let mut connection = pool.acquire().await?;
+        let count = sqlite::notification_cleanup(&mut connection, created_before, BATCH_SIZE)
+            .await
+            .map_err(sqlite_error)?;
+        if count < BATCH_SIZE as u64 || cancel.is_cancelled() {
+            return Ok(());
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
+#[cfg(feature = "postgres")]
 fn reindex_is_due(
     next: &mut Option<DateTime<Utc>>,
-    schedule: ReindexerSchedule,
+    schedule: PostgresReindexSchedule,
     now: DateTime<Utc>,
 ) -> bool {
     let due = next.is_some_and(|next| now >= next);
     if next.is_none() || due {
         *next = Some(match schedule {
-            ReindexerSchedule::DailyUtc(time) => {
+            PostgresReindexSchedule::DailyUtc(time) => {
                 let today = now.date_naive().and_time(time).and_utc();
                 if today > now {
                     today
@@ -196,7 +264,7 @@ fn reindex_is_due(
                         .and_utc()
                 }
             }
-            ReindexerSchedule::Interval(interval) => {
+            PostgresReindexSchedule::Interval(interval) => {
                 now + chrono::Duration::from_std(interval)
                     .expect("validated reindexer interval fits chrono duration")
             }
@@ -216,42 +284,143 @@ fn is_due(last: &mut Option<tokio::time::Instant>, interval: Duration) -> bool {
 }
 
 async fn try_hold_leadership(inner: &ClientInner) -> Result<bool, Error> {
-    let table = inner.schema.qualify("river_leader");
-    let ttl = (inner.maintenance.elect_interval + LEADER_TTL_PADDING).as_secs_f64();
-    let sql = format!(
-        "WITH expired AS (DELETE FROM {table} WHERE expires_at < now()), \
+    #[cfg(feature = "sqlite")]
+    if let Some(pool) = inner.sqlite_pool() {
+        let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+        let now = Utc::now();
+        sqlite::leader_delete_expired(&mut transaction, now)
+            .await
+            .map_err(sqlite_error)?;
+        let leader = sqlite::leader_get(&mut transaction)
+            .await
+            .map_err(sqlite_error)?;
+        let ttl = inner.maintenance.elect_interval + LEADER_TTL_PADDING;
+        let held = match leader {
+            Some(leader) if leader.leader_id == inner.id => {
+                sqlite::leader_reelect(&mut transaction, &leader, now, ttl)
+                    .await
+                    .map_err(sqlite_error)?
+                    .is_some()
+            }
+            Some(_) => false,
+            None => sqlite::leader_elect(&mut transaction, &inner.id, now, ttl)
+                .await
+                .map_err(sqlite_error)?
+                .is_some(),
+        };
+        transaction.commit().await?;
+        return Ok(held);
+    }
+    #[cfg(feature = "postgres")]
+    {
+        let pool = inner
+            .postgres_pool()
+            .expect("client database is PostgreSQL or SQLite");
+        let table = inner.schema.qualify("river_leader");
+        let ttl = (inner.maintenance.elect_interval + LEADER_TTL_PADDING).as_secs_f64();
+        let sql = format!(
+            "WITH expired AS (DELETE FROM {table} WHERE expires_at < now()), \
          elected AS (INSERT INTO {table} (leader_id, elected_at, expires_at) \
              VALUES ($1, now(), now() + make_interval(secs => $2)) \
              ON CONFLICT (name) DO UPDATE SET expires_at = now() + make_interval(secs => $2) \
              WHERE {table}.leader_id = excluded.leader_id AND {table}.expires_at >= now() \
              RETURNING leader_id) \
          SELECT EXISTS(SELECT 1 FROM elected)"
-    );
-    Ok(sqlx::query_scalar::<_, bool>(AssertSqlSafe(sql))
-        .bind(&inner.id)
-        .bind(ttl)
-        .fetch_one(&inner.pool)
-        .await?)
+        );
+        return Ok(sqlx::query_scalar::<_, bool>(AssertSqlSafe(sql))
+            .bind(&inner.id)
+            .bind(ttl)
+            .fetch_one(pool)
+            .await?);
+    }
+    #[allow(unreachable_code)]
+    Err(Error::runtime_context(
+        "maintenance",
+        "database dispatch selected no supported backend".to_owned(),
+    ))
 }
 
 async fn resign(inner: &ClientInner) -> Result<(), Error> {
-    let table = inner.schema.qualify("river_leader");
-    let sql = format!(
-        "WITH resigned AS (DELETE FROM {table} WHERE leader_id = $1 RETURNING leader_id), \
+    #[cfg(feature = "sqlite")]
+    if let Some(pool) = inner.sqlite_pool() {
+        let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+        if let Some(leader) = sqlite::leader_get(&mut transaction)
+            .await
+            .map_err(sqlite_error)?
+            && leader.leader_id == inner.id
+        {
+            let resigned = sqlite::leader_resign(&mut transaction, &leader)
+                .await
+                .map_err(sqlite_error)?;
+            if resigned {
+                let payload = serde_json::json!({
+                    "action": "resigned",
+                    "leader_id": inner.id,
+                })
+                .to_string();
+                sqlite::notification_insert(
+                    &mut transaction,
+                    &[sqlite::NotificationInput {
+                        payload: &payload,
+                        topic: crate::NOTIFICATION_TOPIC_LEADERSHIP,
+                    }],
+                )
+                .await
+                .map_err(sqlite_error)?;
+            }
+        }
+        transaction.commit().await?;
+        return Ok(());
+    }
+    #[cfg(feature = "postgres")]
+    {
+        let pool = inner
+            .postgres_pool()
+            .expect("client database is PostgreSQL or SQLite");
+        let table = inner.schema.qualify("river_leader");
+        let sql = format!(
+            "WITH resigned AS (DELETE FROM {table} WHERE leader_id = $1 RETURNING leader_id), \
          notified AS (SELECT pg_notify(concat(coalesce($2::text, current_schema()), '.', $3::text), \
              json_build_object('action', 'resigned', 'leader_id', leader_id)::text) FROM resigned) \
          SELECT count(*) FROM notified"
-    );
-    sqlx::query_scalar::<_, i64>(AssertSqlSafe(sql))
-        .bind(&inner.id)
-        .bind(inner.schema.as_deref())
-        .bind(crate::NOTIFICATION_TOPIC_LEADERSHIP)
-        .fetch_one(&inner.pool)
-        .await?;
-    Ok(())
+        );
+        sqlx::query_scalar::<_, i64>(AssertSqlSafe(sql))
+            .bind(&inner.id)
+            .bind(inner.schema.as_deref())
+            .bind(crate::NOTIFICATION_TOPIC_LEADERSHIP)
+            .fetch_one(pool)
+            .await?;
+        return Ok(());
+    }
+    #[allow(unreachable_code)]
+    Err(Error::runtime_context(
+        "maintenance",
+        "database dispatch selected no supported backend".to_owned(),
+    ))
 }
 
 async fn schedule_jobs(inner: &ClientInner, cancel: &CancellationToken) -> Result<(), Error> {
+    #[cfg(feature = "sqlite")]
+    if let Some(pool) = inner.sqlite_pool() {
+        return schedule_jobs_sqlite(pool, cancel).await;
+    }
+    #[cfg(feature = "postgres")]
+    return schedule_jobs_postgres(inner, cancel).await;
+    #[allow(unreachable_code)]
+    Err(Error::runtime_context(
+        "maintenance",
+        "database dispatch selected no supported backend".to_owned(),
+    ))
+}
+
+#[cfg(feature = "postgres")]
+async fn schedule_jobs_postgres(
+    inner: &ClientInner,
+    cancel: &CancellationToken,
+) -> Result<(), Error> {
+    let pool = inner
+        .postgres_pool()
+        .expect("client database is PostgreSQL or SQLite");
     let table = inner.schema.qualify("river_job");
     let state_function = inner.schema.qualify("river_job_state_in_bitmask");
     let state_type = inner.schema.qualify("river_job_state");
@@ -285,7 +454,7 @@ async fn schedule_jobs(inner: &ClientInner, cancel: &CancellationToken) -> Resul
          ) SELECT queue, state FROM updated"
     );
     loop {
-        let mut transaction = inner.pool.begin().await?;
+        let mut transaction = pool.begin().await?;
         let rows = sqlx::query(AssertSqlSafe(sql.clone()))
             .bind(BATCH_SIZE)
             .fetch_all(&mut *transaction)
@@ -316,8 +485,99 @@ async fn schedule_jobs(inner: &ClientInner, cancel: &CancellationToken) -> Resul
     }
 }
 
+#[cfg(feature = "sqlite")]
+async fn schedule_jobs_sqlite(
+    pool: &sqlx::SqlitePool,
+    cancel: &CancellationToken,
+) -> Result<(), Error> {
+    loop {
+        let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+        let now = Utc::now();
+        let candidates = sqlite::schedule_candidates(
+            &mut transaction,
+            now,
+            i32::try_from(BATCH_SIZE).expect("batch size fits i32"),
+        )
+        .await
+        .map_err(sqlite_error)?;
+        let count = candidates.len();
+        let mut available_ids = Vec::new();
+        let mut conflict_ids = Vec::new();
+        let mut available_queues = BTreeSet::new();
+        for candidate in candidates {
+            let Some(unique_key) = candidate.unique_key.as_deref() else {
+                available_ids.push(candidate.id);
+                continue;
+            };
+            if sqlite::schedule_has_unique_collision(&mut transaction, candidate.id, unique_key)
+                .await
+                .map_err(sqlite_error)?
+            {
+                conflict_ids.push(candidate.id);
+            } else {
+                let available = sqlite::schedule_set_available(&mut transaction, &[candidate.id])
+                    .await
+                    .map_err(sqlite_error)?;
+                available_queues.extend(available.into_iter().map(|job| job.queue));
+            }
+        }
+        if !available_ids.is_empty() {
+            let available = sqlite::schedule_set_available(&mut transaction, &available_ids)
+                .await
+                .map_err(sqlite_error)?;
+            available_queues.extend(available.into_iter().map(|job| job.queue));
+        }
+        if !conflict_ids.is_empty() {
+            sqlite::schedule_discard_conflicts(&mut transaction, &conflict_ids, now)
+                .await
+                .map_err(sqlite_error)?;
+        }
+        for queue in available_queues {
+            let payload = serde_json::json!({"queue": queue}).to_string();
+            sqlite::notification_insert(
+                &mut transaction,
+                &[sqlite::NotificationInput {
+                    payload: &payload,
+                    topic: crate::NOTIFICATION_TOPIC_INSERT,
+                }],
+            )
+            .await
+            .map_err(sqlite_error)?;
+        }
+        transaction.commit().await?;
+        if count < usize::try_from(BATCH_SIZE).expect("batch size fits usize")
+            || cancel.is_cancelled()
+        {
+            return Ok(());
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 async fn rescue_jobs(inner: &ClientInner, cancel: &CancellationToken) -> Result<(), Error> {
+    #[cfg(feature = "sqlite")]
+    if let Some(pool) = inner.sqlite_pool() {
+        return rescue_jobs_sqlite(inner, pool, cancel).await;
+    }
+    #[cfg(feature = "postgres")]
+    return rescue_jobs_postgres(inner, cancel).await;
+    #[allow(unreachable_code)]
+    Err(Error::runtime_context(
+        "maintenance",
+        "database dispatch selected no supported backend".to_owned(),
+    ))
+}
+
+#[allow(clippy::too_many_lines)]
+#[cfg(feature = "postgres")]
+async fn rescue_jobs_postgres(
+    inner: &ClientInner,
+    cancel: &CancellationToken,
+) -> Result<(), Error> {
+    let pool = inner
+        .postgres_pool()
+        .expect("client database is PostgreSQL or SQLite");
     let table = inner.schema.qualify("river_job");
     let sql = format!(
         "SELECT {}, false AS unique_skipped_as_duplicate FROM {table} AS job \
@@ -326,30 +586,40 @@ async fn rescue_jobs(inner: &ClientInner, cancel: &CancellationToken) -> Result<
         job_projection("job")
     );
     loop {
-        let mut transaction = inner.pool.begin().await?;
+        let mut transaction = pool.begin().await?;
         let records = if inner.pilot.intercepts_rescue() {
             let ids = inner
                 .pilot
                 .select_rescue_job_ids(
-                    &mut transaction,
-                    &riverqueue_internal::RescueParams {
+                    PilotDatabaseConnection::Postgres(&mut transaction),
+                    &RescueParams {
+                        database: inner.pilot_database_config(),
                         maximum: BATCH_SIZE,
                         rescue_after: inner.maintenance.rescue_after,
-                        schema: inner.schema.clone(),
                     },
                 )
                 .await
-                .map_err(|error| Error::Runtime(format!("pilot rescue selection: {error}")))?
-                .unwrap_or_default();
-            let selected_sql = format!(
-                "SELECT {}, false AS unique_skipped_as_duplicate FROM {table} AS job \
-                 WHERE id = ANY($1::bigint[]) ORDER BY id FOR UPDATE",
-                job_projection("job")
-            );
-            sqlx::query_as::<_, JobRecord>(AssertSqlSafe(selected_sql))
-                .bind(ids)
-                .fetch_all(&mut *transaction)
-                .await?
+                .map_err(|source| Error::Extension {
+                    phase: "rescue selection",
+                    source,
+                })?;
+            if let Some(ids) = ids {
+                let selected_sql = format!(
+                    "SELECT {}, false AS unique_skipped_as_duplicate FROM {table} AS job \
+                     WHERE id = ANY($1::bigint[]) ORDER BY id FOR UPDATE",
+                    job_projection("job")
+                );
+                sqlx::query_as::<_, JobRecord>(AssertSqlSafe(selected_sql))
+                    .bind(ids)
+                    .fetch_all(&mut *transaction)
+                    .await?
+            } else {
+                sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql.clone()))
+                    .bind(inner.maintenance.rescue_after.as_secs_f64())
+                    .bind(BATCH_SIZE)
+                    .fetch_all(&mut *transaction)
+                    .await?
+            }
         } else {
             sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql.clone()))
                 .bind(inner.maintenance.rescue_after.as_secs_f64())
@@ -395,7 +665,10 @@ async fn rescue_jobs(inner: &ClientInner, cancel: &CancellationToken) -> Result<
                 if row.attempt >= row.max_attempts {
                     (Some(now), row.scheduled_at, JobState::Discarded)
                 } else {
-                    let retry_delay = match inner.workers.next_retry(&row, "", now) {
+                    let rescued_error = crate::WorkError::new(Box::new(std::io::Error::other(
+                        "job rescued after its worker stopped responding",
+                    )));
+                    let retry_delay = match inner.workers.next_retry(&row, &rescued_error, now) {
                         Ok(Some(retry_delay)) => retry_delay,
                         Ok(None) => inner.retry_policy.next_retry(&row, "", now),
                         Err(retry_error) => {
@@ -408,8 +681,9 @@ async fn rescue_jobs(inner: &ClientInner, cancel: &CancellationToken) -> Result<
                         }
                     };
                     let retry_at = now
-                        + chrono::Duration::from_std(retry_delay)
-                            .map_err(|error| Error::InvalidJob(error.to_string()))?;
+                        + chrono::Duration::from_std(retry_delay).map_err(|error| {
+                            Error::invalid_job_context("maintenance", error.to_string())
+                        })?;
                     (None, retry_at, JobState::Retryable)
                 }
             };
@@ -450,34 +724,256 @@ async fn rescue_jobs(inner: &ClientInner, cancel: &CancellationToken) -> Result<
     }
 }
 
+#[allow(clippy::too_many_lines)]
+#[cfg(feature = "sqlite")]
+async fn rescue_jobs_sqlite(
+    inner: &ClientInner,
+    pool: &sqlx::SqlitePool,
+    cancel: &CancellationToken,
+) -> Result<(), Error> {
+    let mut after_id = 0;
+    loop {
+        let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+        let now = Utc::now();
+        let attempted_before = now
+            - chrono::Duration::from_std(inner.maintenance.rescue_after)
+                .map_err(|error| Error::configuration_context("maintenance", error.to_string()))?;
+        let selected_ids = if inner.pilot.intercepts_rescue() {
+            inner
+                .pilot
+                .select_rescue_job_ids(
+                    PilotDatabaseConnection::Sqlite(&mut transaction),
+                    &RescueParams {
+                        database: inner.pilot_database_config(),
+                        maximum: BATCH_SIZE,
+                        rescue_after: inner.maintenance.rescue_after,
+                    },
+                )
+                .await
+                .map_err(|source| Error::Extension {
+                    phase: "rescue selection",
+                    source,
+                })?
+        } else {
+            None
+        };
+        let rows = match selected_ids {
+            Some(ids) => sqlite::jobs_by_ids(&mut transaction, &ids).await,
+            None => {
+                sqlite::stuck_jobs(
+                    &mut transaction,
+                    after_id,
+                    attempted_before,
+                    i32::try_from(BATCH_SIZE).expect("batch size fits i32"),
+                )
+                .await
+            }
+        }
+        .map_err(sqlite_error)?;
+        let count = rows.len();
+        for row in rows {
+            after_id = row.id;
+            let (finalized_at, scheduled_at, state) = if row
+                .metadata
+                .contains_key("cancel_attempted_at")
+            {
+                (Some(now), row.scheduled_at, JobState::Cancelled)
+            } else if !inner.workers.contains_kind(&row.kind) {
+                (Some(now), row.scheduled_at, JobState::Discarded)
+            } else {
+                let timeout = match inner.workers.timeout(&row) {
+                    Ok(WorkerTimeout::After(timeout)) => Some(timeout),
+                    Ok(WorkerTimeout::ClientDefault) => inner.job_timeout,
+                    Ok(WorkerTimeout::Disabled) => None,
+                    Err(timeout_error) => {
+                        debug!(
+                            error = %timeout_error,
+                            job_id = row.id,
+                            "could not evaluate rescued worker timeout; rescuing job"
+                        );
+                        Some(Duration::ZERO)
+                    }
+                };
+                let timeout_elapsed = timeout.is_some_and(|timeout| {
+                    row.attempted_at
+                        .and_then(|attempted_at| {
+                            now.signed_duration_since(attempted_at).to_std().ok()
+                        })
+                        .is_some_and(|elapsed| elapsed >= timeout)
+                });
+                if !timeout_elapsed {
+                    continue;
+                }
+                if row.attempt >= row.max_attempts {
+                    (Some(now), row.scheduled_at, JobState::Discarded)
+                } else {
+                    let rescued_error = crate::WorkError::new(Box::new(std::io::Error::other(
+                        "job rescued after its worker stopped responding",
+                    )));
+                    let retry_delay = match inner.workers.next_retry(&row, &rescued_error, now) {
+                        Ok(Some(retry_delay)) => retry_delay,
+                        Ok(None) => inner.retry_policy.next_retry(&row, "", now),
+                        Err(retry_error) => {
+                            debug!(
+                                error = %retry_error,
+                                job_id = row.id,
+                                "could not evaluate rescued worker retry policy; using client policy"
+                            );
+                            inner.retry_policy.next_retry(&row, "", now)
+                        }
+                    };
+                    let retry_at = now
+                        + chrono::Duration::from_std(retry_delay).map_err(|error| {
+                            Error::invalid_job_context("maintenance", error.to_string())
+                        })?;
+                    (None, retry_at, JobState::Retryable)
+                }
+            };
+            let attempt_error = AttemptError {
+                at: now,
+                attempt: row.attempt.max(0),
+                error: "Stuck job rescued by JobRescuer".to_owned(),
+                trace: String::new(),
+            };
+            sqlite::rescue(
+                &mut transaction,
+                &sqlite::RescueJob {
+                    error: &attempt_error,
+                    finalized_at,
+                    id: row.id,
+                    scheduled_at,
+                    state,
+                },
+            )
+            .await
+            .map_err(sqlite_error)?;
+        }
+        transaction.commit().await?;
+        if count < usize::try_from(BATCH_SIZE).expect("batch size fits usize")
+            || cancel.is_cancelled()
+        {
+            return Ok(());
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
 async fn clean_jobs(inner: &ClientInner, cancel: &CancellationToken) -> Result<(), Error> {
-    let table = inner.schema.qualify("river_job");
-    let cancelled = inner.maintenance.cancelled_job_retention;
-    let completed = inner.maintenance.completed_job_retention;
-    let discarded = inner.maintenance.discarded_job_retention;
-    let sql = format!(
-        "DELETE FROM {table} WHERE id IN (SELECT id FROM {table} WHERE ( \
+    #[cfg(feature = "sqlite")]
+    if let Some(pool) = inner.sqlite_pool() {
+        return clean_jobs_sqlite(inner, pool, cancel).await;
+    }
+    #[cfg(feature = "postgres")]
+    return clean_jobs_postgres(inner, cancel).await;
+    #[allow(unreachable_code)]
+    Err(Error::runtime_context(
+        "maintenance",
+        "database dispatch selected no supported backend".to_owned(),
+    ))
+}
+
+#[cfg(feature = "postgres")]
+async fn clean_jobs_postgres(inner: &ClientInner, cancel: &CancellationToken) -> Result<(), Error> {
+    #[cfg(feature = "postgres")]
+    {
+        let pool = inner
+            .postgres_pool()
+            .expect("client database is PostgreSQL or SQLite");
+        let table = inner.schema.qualify("river_job");
+        let cancelled = inner.maintenance.cancelled_job_retention;
+        let completed = inner.maintenance.completed_job_retention;
+        let discarded = inner.maintenance.discarded_job_retention;
+        let metadata_exclusions = inner.pilot.job_cleaner_metadata_exclusions();
+        let metadata_exclusion_sql = metadata_exclusions
+            .iter()
+            .enumerate()
+            .map(|(index, _)| format!("NOT (metadata ? ${})", index + 8))
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        let metadata_exclusion_sql = if metadata_exclusion_sql.is_empty() {
+            "true".to_owned()
+        } else {
+            metadata_exclusion_sql
+        };
+        let sql = format!(
+            "DELETE FROM {table} WHERE id IN (SELECT id FROM {table} WHERE ( \
           (state = 'cancelled' AND $1 AND finalized_at < now() - make_interval(secs => $2)) OR \
           (state = 'completed' AND $3 AND finalized_at < now() - make_interval(secs => $4)) OR \
           (state = 'discarded' AND $5 AND finalized_at < now() - make_interval(secs => $6))) \
-         AND (NOT $8 OR NOT (metadata ? 'workflow_id')) \
+         AND ({metadata_exclusion_sql}) \
          ORDER BY id LIMIT $7)"
-    );
+        );
+        loop {
+            let mut query = sqlx::query(AssertSqlSafe(sql.clone()))
+                .bind(cancelled.is_some())
+                .bind(cancelled.unwrap_or_default().as_secs_f64())
+                .bind(completed.is_some())
+                .bind(completed.unwrap_or_default().as_secs_f64())
+                .bind(discarded.is_some())
+                .bind(discarded.unwrap_or_default().as_secs_f64())
+                .bind(BATCH_SIZE);
+            for metadata_key in metadata_exclusions {
+                query = query.bind(*metadata_key);
+            }
+            let operation = query.execute(pool);
+            let result = tokio::time::timeout(inner.maintenance.job_cleaner_timeout, operation)
+                .await
+                .map_err(|_| {
+                    Error::runtime_context(
+                        "maintenance",
+                        "River job cleaner query timed out".to_owned(),
+                    )
+                })??;
+            if result.rows_affected() < BATCH_SIZE as u64 || cancel.is_cancelled() {
+                return Ok(());
+            }
+            tokio::task::yield_now().await;
+        }
+    }
+}
+
+#[cfg(feature = "sqlite")]
+async fn clean_jobs_sqlite(
+    inner: &ClientInner,
+    pool: &sqlx::SqlitePool,
+    cancel: &CancellationToken,
+) -> Result<(), Error> {
     loop {
-        let operation = sqlx::query(AssertSqlSafe(sql.clone()))
-            .bind(cancelled.is_some())
-            .bind(cancelled.unwrap_or_default().as_secs_f64())
-            .bind(completed.is_some())
-            .bind(completed.unwrap_or_default().as_secs_f64())
-            .bind(discarded.is_some())
-            .bind(discarded.unwrap_or_default().as_secs_f64())
-            .bind(BATCH_SIZE)
-            .bind(inner.pilot.excludes_workflow_jobs_from_cleaner())
-            .execute(&inner.pool);
-        let result = tokio::time::timeout(inner.maintenance.job_cleaner_timeout, operation)
+        let now = Utc::now();
+        let threshold = |retention: Option<Duration>| -> Result<DateTime<Utc>, Error> {
+            retention.map_or(Ok(DateTime::<Utc>::MIN_UTC), |retention| {
+                chrono::Duration::from_std(retention)
+                    .map(|retention| now - retention)
+                    .map_err(|error| Error::configuration_context("maintenance", error.to_string()))
+            })
+        };
+        let operation = async {
+            let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+            let count = sqlite::cleanup_jobs(
+                &mut transaction,
+                &sqlite::CleanupJobs {
+                    cancelled_before: threshold(inner.maintenance.cancelled_job_retention)?,
+                    completed_before: threshold(inner.maintenance.completed_job_retention)?,
+                    discarded_before: threshold(inner.maintenance.discarded_job_retention)?,
+                    metadata_exclusions: inner.pilot.job_cleaner_metadata_exclusions(),
+                    limit: i32::try_from(BATCH_SIZE).expect("batch size fits i32"),
+                    queues_excluded: &[],
+                },
+            )
             .await
-            .map_err(|_| Error::Runtime("River job cleaner query timed out".to_owned()))??;
-        if result.rows_affected() < BATCH_SIZE as u64 || cancel.is_cancelled() {
+            .map_err(sqlite_error)?;
+            transaction.commit().await?;
+            Ok::<_, Error>(count)
+        };
+        let count = tokio::time::timeout(inner.maintenance.job_cleaner_timeout, operation)
+            .await
+            .map_err(|_| {
+                Error::runtime_context(
+                    "maintenance",
+                    "River job cleaner query timed out".to_owned(),
+                )
+            })??;
+        if count < BATCH_SIZE as u64 || cancel.is_cancelled() {
             return Ok(());
         }
         tokio::task::yield_now().await;
@@ -485,28 +981,70 @@ async fn clean_jobs(inner: &ClientInner, cancel: &CancellationToken) -> Result<(
 }
 
 async fn clean_queues(inner: &ClientInner, cancel: &CancellationToken) -> Result<(), Error> {
-    let table = inner.schema.qualify("river_queue");
-    let sql = format!(
-        "DELETE FROM {table} WHERE name IN (SELECT name FROM {table} \
-         WHERE updated_at < now() - make_interval(secs => $1) ORDER BY name LIMIT $2)"
-    );
-    loop {
-        let result = sqlx::query(AssertSqlSafe(sql.clone()))
-            .bind(inner.maintenance.queue_retention.as_secs_f64())
-            .bind(BATCH_SIZE)
-            .execute(&inner.pool)
-            .await?;
-        if result.rows_affected() < BATCH_SIZE as u64 || cancel.is_cancelled() {
-            return Ok(());
+    #[cfg(feature = "sqlite")]
+    if let Some(pool) = inner.sqlite_pool() {
+        loop {
+            let retention = chrono::Duration::from_std(inner.maintenance.queue_retention)
+                .map_err(|error| Error::configuration_context("maintenance", error.to_string()))?;
+            let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+            let deleted = sqlite::queue_delete_expired(
+                &mut transaction,
+                Utc::now() - retention,
+                i32::try_from(BATCH_SIZE).expect("batch size fits i32"),
+            )
+            .await
+            .map_err(sqlite_error)?;
+            transaction.commit().await?;
+            if deleted.len() < usize::try_from(BATCH_SIZE).expect("batch size fits usize")
+                || cancel.is_cancelled()
+            {
+                return Ok(());
+            }
+            tokio::task::yield_now().await;
         }
-        tokio::task::yield_now().await;
     }
+    #[cfg(feature = "postgres")]
+    {
+        let pool = inner
+            .postgres_pool()
+            .expect("client database is PostgreSQL or SQLite");
+        let table = inner.schema.qualify("river_queue");
+        let sql = format!(
+            "DELETE FROM {table} WHERE name IN (SELECT name FROM {table} \
+         WHERE updated_at < now() - make_interval(secs => $1) ORDER BY name LIMIT $2)"
+        );
+        loop {
+            let result = sqlx::query(AssertSqlSafe(sql.clone()))
+                .bind(inner.maintenance.queue_retention.as_secs_f64())
+                .bind(BATCH_SIZE)
+                .execute(pool)
+                .await?;
+            if result.rows_affected() < BATCH_SIZE as u64 || cancel.is_cancelled() {
+                return Ok(());
+            }
+            tokio::task::yield_now().await;
+        }
+    }
+    #[allow(unreachable_code)]
+    Err(Error::runtime_context(
+        "maintenance",
+        "database dispatch selected no supported backend".to_owned(),
+    ))
 }
 
+#[cfg(feature = "postgres")]
 async fn reindex(inner: &ClientInner) -> Result<(), Error> {
-    let mut connection = inner.pool.acquire().await?;
-    let timeout_millis = i64::try_from(inner.maintenance.reindexer_timeout.as_millis())
-        .map_err(|_| Error::InvalidJob("reindexer timeout is too large".to_owned()))?;
+    let pool = inner
+        .postgres_pool()
+        .expect("reindex is only invoked for PostgreSQL clients");
+    let mut connection = pool.acquire().await?;
+    let reindex = inner
+        .database()
+        .postgres_reindex()
+        .expect("reindex is only invoked for PostgreSQL clients");
+    let timeout_millis = i64::try_from(reindex.timeout().as_millis()).map_err(|_| {
+        Error::invalid_job_context("maintenance", "reindexer timeout is too large".to_owned())
+    })?;
     sqlx::query("SELECT set_config('statement_timeout', $1, false)")
         .bind(timeout_millis.to_string())
         .execute(&mut *connection)
@@ -520,11 +1058,16 @@ async fn reindex(inner: &ClientInner) -> Result<(), Error> {
     Ok(())
 }
 
+#[cfg(feature = "postgres")]
 async fn reindex_all(
     inner: &ClientInner,
     connection: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
 ) -> Result<(), Error> {
-    for index_name in &inner.maintenance.reindexer_index_names {
+    let reindex = inner
+        .database()
+        .postgres_reindex()
+        .expect("reindex is only invoked for PostgreSQL clients");
+    for index_name in reindex.index_names() {
         let exists: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM pg_indexes WHERE schemaname = coalesce($1, current_schema()) AND indexname = $2)",
         )
@@ -565,13 +1108,18 @@ async fn reindex_all(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(feature = "sqlite")]
+fn sqlite_error(error: sqlite::BackendError) -> Error {
+    Error::Database(Box::new(error))
+}
+
+#[cfg(all(test, feature = "postgres"))]
 mod tests {
     use std::time::Duration;
 
     use chrono::{NaiveTime, TimeZone, Utc};
 
-    use super::{ReindexerSchedule, reindex_is_due};
+    use super::{PostgresReindexSchedule, reindex_is_due};
 
     #[test]
     fn reindex_schedule_daily_utc_and_interval() {
@@ -580,13 +1128,13 @@ mod tests {
         let mut next = None;
         assert!(!reindex_is_due(
             &mut next,
-            ReindexerSchedule::DailyUtc(NaiveTime::MIN),
+            PostgresReindexSchedule::DailyUtc(NaiveTime::MIN),
             before_midnight,
         ));
         assert_eq!(next, Some(midnight));
         assert!(reindex_is_due(
             &mut next,
-            ReindexerSchedule::DailyUtc(NaiveTime::MIN),
+            PostgresReindexSchedule::DailyUtc(NaiveTime::MIN),
             midnight,
         ));
         assert_eq!(
@@ -597,7 +1145,7 @@ mod tests {
         let mut next = None;
         assert!(!reindex_is_due(
             &mut next,
-            ReindexerSchedule::Interval(Duration::from_secs(30)),
+            PostgresReindexSchedule::Interval(Duration::from_secs(30)),
             before_midnight,
         ));
         assert_eq!(next, Some(before_midnight + chrono::Duration::seconds(30)));

@@ -1,10 +1,13 @@
-//! Test helpers for River applications.
-
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 use chrono::Utc;
-use riverqueue::{Error, Job, JobArgs, JobRow, JobState, WorkContext, WorkOutcome, Worker};
-use serde_json::Map;
+use riverqueue::{
+    Error, Job, JobArgs, JobRow, JobState, MAX_ATTEMPTS_DEFAULT, PRIORITY_DEFAULT, QUEUE_DEFAULT,
+    WorkContext, WorkOutcome, Worker,
+};
+use serde_json::{Map, Value};
 use tokio_util::sync::CancellationToken;
 
 /// Protocol revision understood by the Rust test helpers.
@@ -43,29 +46,20 @@ impl<A: JobArgs> TestJobBuilder<A> {
     pub fn build(self) -> Result<Job<A>, Error> {
         let now = Utc::now();
         let encoded_args = serde_json::to_value(&self.args)?;
-        Ok(Job {
-            args: self.args,
-            row: JobRow {
-                attempt: self.attempt,
-                attempted_at: Some(now),
-                attempted_by: vec!["riverqueue-test".to_owned()],
-                created_at: now,
-                encoded_args,
-                errors: Vec::new(),
-                finalized_at: None,
-                id: self.id,
-                kind: A::KIND.to_owned(),
-                max_attempts: A::default_insert_opts().max_attempts,
-                metadata: self.metadata,
-                priority: A::default_insert_opts().priority,
-                queue: A::default_insert_opts().queue,
-                scheduled_at: now,
-                state: self.state,
-                tags: Vec::new(),
-                unique_key: None,
-                unique_states: None,
-            },
-        })
+        let defaults = A::default_insert_opts();
+        let max_attempts = defaults.max_attempts().unwrap_or(MAX_ATTEMPTS_DEFAULT);
+        let priority = defaults.priority().unwrap_or(PRIORITY_DEFAULT);
+        let queue = defaults.queue().unwrap_or(QUEUE_DEFAULT).to_owned();
+        let mut row = JobRow::new(self.id, A::KIND, encoded_args, now);
+        row.attempt = self.attempt;
+        row.attempted_at = Some(now);
+        row.attempted_by = vec!["riverqueue-test".to_owned()];
+        row.max_attempts = max_attempts;
+        row.metadata = self.metadata;
+        row.priority = priority;
+        row.queue = queue;
+        row.state = self.state;
+        Ok(Job::new(self.args, row))
     }
 
     /// Sets the database ID.
@@ -91,11 +85,27 @@ impl<A: JobArgs> TestJobBuilder<A> {
 }
 
 /// Result of running one worker directly in a unit test.
+#[non_exhaustive]
 pub struct TestWorkResult<E> {
     /// Context used for the invocation, including output and metadata updates.
     pub context: WorkContext,
+    metadata_updates: Map<String, Value>,
     /// Worker outcome or typed error.
     pub result: Result<WorkOutcome, E>,
+}
+
+impl<E> TestWorkResult<E> {
+    /// Returns a snapshot of metadata recorded by the worker.
+    #[must_use]
+    pub const fn metadata_updates(&self) -> &Map<String, Value> {
+        &self.metadata_updates
+    }
+
+    /// Returns output recorded by the worker, if any.
+    #[must_use]
+    pub fn output(&self) -> Option<&Value> {
+        self.metadata_updates.get(riverqueue::METADATA_KEY_OUTPUT)
+    }
 }
 
 /// Runs a typed worker once without a database or background runtime.
@@ -106,14 +116,22 @@ where
 {
     let context = WorkContext::new(CancellationToken::new());
     let result = worker.work(context.clone(), job).await;
-    TestWorkResult { context, result }
+    let metadata_updates = context.metadata_updates().await;
+    TestWorkResult {
+        context,
+        metadata_updates,
+        result,
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{convert::Infallible, time::Duration};
+    use std::{
+        convert::Infallible,
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
 
-    use async_trait::async_trait;
     use riverqueue::{InsertOpts, WorkContext};
     use serde::{Deserialize, Serialize};
 
@@ -128,18 +146,29 @@ mod tests {
         const KIND: &'static str = "riverqueue_test_helper";
 
         fn default_insert_opts() -> InsertOpts {
-            InsertOpts {
-                max_attempts: 7,
-                priority: 3,
-                queue: "testing".to_owned(),
-                ..InsertOpts::default()
-            }
+            InsertOpts::default()
+                .with_max_attempts(7)
+                .with_priority(3)
+                .with_queue("testing")
+        }
+    }
+
+    static DEFAULT_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Debug, Deserialize, Serialize)]
+    struct DefaultsOnceArgs {}
+
+    impl JobArgs for DefaultsOnceArgs {
+        const KIND: &'static str = "riverqueue_test_defaults_once";
+
+        fn default_insert_opts() -> InsertOpts {
+            DEFAULT_CALLS.fetch_add(1, Ordering::Relaxed);
+            InsertOpts::default()
         }
     }
 
     struct TestWorker;
 
-    #[async_trait]
     impl Worker<TestArgs> for TestWorker {
         type Error = Infallible;
 
@@ -192,6 +221,15 @@ mod tests {
         assert!(job.row.finalized_at.is_none());
     }
 
+    #[test]
+    fn test_job_builder_evaluates_argument_defaults_once() {
+        DEFAULT_CALLS.store(0, Ordering::Relaxed);
+
+        TestJobBuilder::new(DefaultsOnceArgs {}).build().unwrap();
+
+        assert_eq!(DEFAULT_CALLS.load(Ordering::Relaxed), 1);
+    }
+
     #[tokio::test]
     async fn work_once_runs_worker_with_detached_context() {
         let job = TestJobBuilder::new(TestArgs {
@@ -203,6 +241,11 @@ mod tests {
 
         let worked = work_once(&TestWorker, job).await;
 
+        assert_eq!(worked.output(), Some(&serde_json::json!({"worked": true})));
+        assert_eq!(
+            worked.metadata_updates()["worker_metadata"],
+            serde_json::json!("set")
+        );
         assert_eq!(
             worked.result.unwrap(),
             WorkOutcome::Snooze(Duration::from_secs(30))

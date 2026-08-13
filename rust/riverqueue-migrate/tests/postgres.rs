@@ -1,7 +1,7 @@
 #![cfg(feature = "postgres-tests")]
 
 use riverqueue_internal::SchemaName;
-use riverqueue_migrate::{Direction, MIGRATION_VERSION_LATEST, MigrateOpts, Migrator};
+use riverqueue_migrate::{Direction, MIGRATION_VERSION_LATEST, MigrateOpts, PostgresMigrator};
 use serde_json::Value;
 use sqlx::{AssertSqlSafe, PgPool};
 
@@ -16,22 +16,19 @@ async fn upgrades_from_every_historical_version() {
     let reference_schema = "rust_migrate_reference";
     recreate_schema(&pool, reference_schema).await;
     let reference =
-        Migrator::new(pool.clone()).with_schema(SchemaName::new(reference_schema).unwrap());
+        PostgresMigrator::new(pool.clone()).with_schema(SchemaName::new(reference_schema).unwrap());
     reference.migrate_up().await.unwrap();
     let expected = schema_snapshot(&pool, reference_schema).await;
 
     for version in 1..=MIGRATION_VERSION_LATEST {
         let schema = format!("rust_migrate_from_{version}");
         recreate_schema(&pool, &schema).await;
-        let migrator =
-            Migrator::new(pool.clone()).with_schema(SchemaName::new(schema.clone()).unwrap());
+        let migrator = PostgresMigrator::new(pool.clone())
+            .with_schema(SchemaName::new(schema.clone()).unwrap());
         migrator
             .migrate(
                 Direction::Up,
-                MigrateOpts {
-                    target_version: Some(version),
-                    ..MigrateOpts::default()
-                },
+                MigrateOpts::new().with_target_version(version),
             )
             .await
             .unwrap();
@@ -46,10 +43,7 @@ async fn upgrades_from_every_historical_version() {
             migrator
                 .migrate(
                     Direction::Down,
-                    MigrateOpts {
-                        target_version: Some(version),
-                        ..MigrateOpts::default()
-                    },
+                    MigrateOpts::new().with_target_version(version),
                 )
                 .await
                 .unwrap();

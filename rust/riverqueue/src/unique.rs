@@ -53,7 +53,7 @@ pub(crate) fn build_unique_key_parts(
     if opts.is_empty() {
         return Ok(None);
     }
-    opts.validate().map_err(Error::InvalidJob)?;
+    opts.validate().map_err(Error::invalid_job)?;
 
     let mut key = String::new();
     if !opts.exclude_kind {
@@ -126,7 +126,10 @@ fn go_compatible_json(value: &Value) -> Result<String, Error> {
 
 fn select_unique_args(value: &Value, paths: &[&str]) -> Result<Value, Error> {
     let object = value.as_object().ok_or_else(|| {
-        Error::InvalidJob("job arguments must encode to a JSON object".to_owned())
+        Error::invalid_job_context(
+            "job uniqueness",
+            "job arguments must encode to a JSON object".to_owned(),
+        )
     })?;
     if paths.is_empty() {
         let sorted = object
@@ -165,19 +168,32 @@ fn insert_path(target: &mut Map<String, Value>, path: &str, value: Value) {
 }
 
 fn truncate_period(timestamp: DateTime<Utc>, period: Duration) -> Result<DateTime<Utc>, Error> {
-    let period_nanos = i128::try_from(period.as_nanos())
-        .map_err(|_| Error::InvalidJob("unique period is too large".to_owned()))?;
+    let period_nanos = i128::try_from(period.as_nanos()).map_err(|_| {
+        Error::invalid_job_context("job uniqueness", "unique period is too large".to_owned())
+    })?;
     let unix_nanos = i128::from(timestamp.timestamp()) * 1_000_000_000
         + i128::from(timestamp.timestamp_subsec_nanos());
     let absolute_nanos = unix_nanos + SECONDS_FROM_YEAR_ONE_TO_UNIX_EPOCH * 1_000_000_000;
     let truncated_absolute = absolute_nanos - absolute_nanos.rem_euclid(period_nanos);
     let truncated_unix = truncated_absolute - SECONDS_FROM_YEAR_ONE_TO_UNIX_EPOCH * 1_000_000_000;
-    let seconds = i64::try_from(truncated_unix.div_euclid(1_000_000_000))
-        .map_err(|_| Error::InvalidJob("truncated timestamp is out of range".to_owned()))?;
-    let nanos = u32::try_from(truncated_unix.rem_euclid(1_000_000_000))
-        .map_err(|_| Error::InvalidJob("truncated timestamp is out of range".to_owned()))?;
-    DateTime::from_timestamp(seconds, nanos)
-        .ok_or_else(|| Error::InvalidJob("truncated timestamp is out of range".to_owned()))
+    let seconds = i64::try_from(truncated_unix.div_euclid(1_000_000_000)).map_err(|_| {
+        Error::invalid_job_context(
+            "job uniqueness",
+            "truncated timestamp is out of range".to_owned(),
+        )
+    })?;
+    let nanos = u32::try_from(truncated_unix.rem_euclid(1_000_000_000)).map_err(|_| {
+        Error::invalid_job_context(
+            "job uniqueness",
+            "truncated timestamp is out of range".to_owned(),
+        )
+    })?;
+    DateTime::from_timestamp(seconds, nanos).ok_or_else(|| {
+        Error::invalid_job_context(
+            "job uniqueness",
+            "truncated timestamp is out of range".to_owned(),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -226,6 +242,25 @@ mod tests {
     }
 
     #[derive(Deserialize, JobArgsDerive, Serialize)]
+    #[river(kind = "optional_unique_test")]
+    struct ArgsWithOptionalUnique {
+        #[river(unique)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        selected: Option<String>,
+    }
+
+    #[derive(Deserialize, JobArgsDerive, Serialize)]
+    #[serde(rename_all(serialize = "kebab-case", deserialize = "camelCase"))]
+    #[river(kind = "serialize_name_test")]
+    struct ArgsWithSerializationNames {
+        #[river(unique)]
+        first_value: String,
+        #[river(unique)]
+        #[serde(rename(serialize = "wire-name", deserialize = "inputName"))]
+        r#type: String,
+    }
+
+    #[derive(Deserialize, JobArgsDerive, Serialize)]
     #[river(
         kind = "new_kind",
         aliases("old_kind", "older_kind"),
@@ -264,13 +299,62 @@ mod tests {
     }
 
     #[test]
+    fn hashes_serde_serialization_names() {
+        let args = ArgsWithSerializationNames {
+            first_value: "first".to_owned(),
+            r#type: "second".to_owned(),
+        };
+        let encoded = serde_json::to_value(&args).unwrap();
+        let key = build_unique_key(&UniqueKeyInput {
+            args: &args,
+            encoded_args: &encoded,
+            now: Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap(),
+            opts: &UniqueOpts {
+                by_args: true,
+                ..UniqueOpts::default()
+            },
+            queue: "default",
+            scheduled_at: None,
+        })
+        .unwrap()
+        .unwrap();
+
+        let expected = Sha256::digest(
+            b"&kind=serialize_name_test&args={\"first-value\":\"first\",\"wire-name\":\"second\"}",
+        );
+        assert_eq!(key.as_slice(), expected.as_slice());
+    }
+
+    #[test]
+    fn hashes_absent_optional_unique_fields_as_omitted() {
+        let args = ArgsWithOptionalUnique { selected: None };
+        let encoded = serde_json::to_value(&args).unwrap();
+        let key = build_unique_key(&UniqueKeyInput {
+            args: &args,
+            encoded_args: &encoded,
+            now: Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap(),
+            opts: &UniqueOpts {
+                by_args: true,
+                ..UniqueOpts::default()
+            },
+            queue: "default",
+            scheduled_at: None,
+        })
+        .unwrap()
+        .unwrap();
+
+        let expected = Sha256::digest(b"&kind=optional_unique_test&args={}");
+        assert_eq!(key.as_slice(), expected.as_slice());
+    }
+
+    #[test]
     fn job_args_derive_provides_aliases_and_insert_defaults() {
         assert_eq!(ArgsWithDefaults::kind_aliases(), ["old_kind", "older_kind"]);
         let opts = ArgsWithDefaults::default_insert_opts();
-        assert_eq!(opts.max_attempts, 7);
-        assert!(opts.pending);
-        assert_eq!(opts.priority, 3);
-        assert_eq!(opts.queue, "critical_jobs");
+        assert_eq!(opts.max_attempts(), Some(7));
+        assert_eq!(opts.pending(), Some(true));
+        assert_eq!(opts.priority(), Some(3));
+        assert_eq!(opts.queue(), Some("critical_jobs"));
     }
 
     #[test]
