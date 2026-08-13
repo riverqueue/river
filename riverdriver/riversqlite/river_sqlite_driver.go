@@ -327,6 +327,22 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 
 			return nil, interpretError(err)
 		}
+
+		payload, err := json.Marshal(map[string]any{
+			"action": "cancel",
+			"job_id": job.ID,
+			"queue":  job.Queue,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if err := execTx.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+			Payload: []string{string(payload)},
+			Schema:  params.Schema,
+			Topic:   params.ControlTopic,
+		}); err != nil {
+			return nil, fmt.Errorf("error inserting job cancellation notification: %w", err)
+		}
 		return jobRowFromInternal(job)
 	})
 }

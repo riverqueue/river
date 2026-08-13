@@ -339,7 +339,7 @@ func (e *JobExecutor) watchStuck(ctx context.Context, jobTimeout time.Duration) 
 	return cancel
 }
 
-func (e *JobExecutor) invokeErrorHandler(ctx context.Context, res *jobExecutorResult) bool {
+func (e *JobExecutor) invokeErrorHandler(ctx context.Context, jobRow *rivertype.JobRow, res *jobExecutorResult) bool {
 	invokeAndHandlePanic := func(funcName string, errorHandler func() *ErrorHandlerResult) *ErrorHandlerResult {
 		defer func() {
 			if panicVal := recover(); panicVal != nil {
@@ -357,12 +357,12 @@ func (e *JobExecutor) invokeErrorHandler(ctx context.Context, res *jobExecutorRe
 	switch {
 	case res.Err != nil:
 		errorHandlerRes = invokeAndHandlePanic("HandleError", func() *ErrorHandlerResult {
-			return e.ErrorHandler.HandleError(ctx, e.JobRow, res.Err)
+			return e.ErrorHandler.HandleError(ctx, jobRow, res.Err)
 		})
 
 	case res.PanicVal != nil:
 		errorHandlerRes = invokeAndHandlePanic("HandlePanic", func() *ErrorHandlerResult {
-			return e.ErrorHandler.HandlePanic(ctx, e.JobRow, res.PanicVal, res.PanicTrace)
+			return e.ErrorHandler.HandlePanic(ctx, jobRow, res.PanicVal, res.PanicTrace)
 		})
 	}
 
@@ -477,7 +477,7 @@ func (e *JobExecutor) reportError(ctx context.Context, jobRow *rivertype.JobRow,
 
 	if e.ErrorHandler != nil && !cancelJob && !softStopped {
 		// Error handlers also have an opportunity to cancel the job.
-		cancelJob = e.invokeErrorHandler(ctx, res)
+		cancelJob = e.invokeErrorHandler(ctx, jobRow, res)
 	}
 
 	now := e.Time.Now()
