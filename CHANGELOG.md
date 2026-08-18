@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-08-18
+
 ### Added
 
 - Added `EventKindJobInterrupted`, emitted when a running job is interrupted because its client is shutting down, the job was cancelled, and has been made immediately available to be worked again. [PR #1290](https://github.com/riverqueue/river/pull/1290).
