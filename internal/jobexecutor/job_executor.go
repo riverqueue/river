@@ -60,9 +60,21 @@ var errExecutorDefaultCancel = errors.New("context cancelled as executor finishe
 type contextKey string
 
 // ContextKeyMetadataUpdates is the context key for the metadata updates map
-// stored in the context. It's exposed from this internal package solely so
-// that it can be used in tests for JobCompleteTx.
+// stored in the context. It's exposed from this internal package so it can
+// be read and mutated by JobCompleteTx, JobFailTx, and JobCancelTx (and by
+// their tests), as well as by RecordOutput and the riverlog middleware.
 const ContextKeyMetadataUpdates contextKey = "river_metadata_updates"
+
+// ContextKeyNextRetry is the context key for the NextRetryFunc closure stored
+// in the context by the executor. It's exposed from this internal package
+// solely so that it can be used by JobFailTx.
+const ContextKeyNextRetry contextKey = "river_next_retry"
+
+// NextRetryFunc returns the scheduled-at time for the next retry of the
+// current job, and whether the job should transition via JobStateAvailable
+// (true) instead of JobStateRetryable (false). The Available branch applies
+// when the next retry is within the client's scheduler interval.
+type NextRetryFunc func(ctx context.Context, now time.Time, jobRow *rivertype.JobRow) (scheduledAt time.Time, useAvailable bool)
 
 // MetadataUpdatesFromWorkContext returns the metadata updates stored in the
 // work context, if any.
@@ -78,6 +90,25 @@ func MetadataUpdatesFromWorkContext(ctx context.Context) (map[string]any, bool) 
 		return nil, false
 	}
 	return typedMetadataUpdates, true
+}
+
+// NextRetryFromWorkContext returns a function that computes the next retry
+// time for the current job using the same logic the executor uses when
+// reporting an error from a worker: the worker's NextRetry override (if any),
+// falling back to the client retry policy, falling back to the default retry
+// policy if the result is in the past.
+//
+// When run on a non-work context, it returns nil, false.
+func NextRetryFromWorkContext(ctx context.Context) (NextRetryFunc, bool) {
+	nextRetry := ctx.Value(ContextKeyNextRetry)
+	if nextRetry == nil {
+		return nil, false
+	}
+	typedNextRetry, ok := nextRetry.(NextRetryFunc)
+	if !ok {
+		return nil, false
+	}
+	return typedNextRetry, true
 }
 
 type jobExecutorResult struct {
@@ -186,6 +217,12 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 	metadataUpdates := make(map[string]any)
 	ctx = context.WithValue(ctx, ContextKeyMetadataUpdates, metadataUpdates)
 	jobArgsUnmarshaled := false
+
+	// The closure reads jobArgsUnmarshaled at call time, so exactly like reportError it consults the worker's
+	// NextRetry override only once the work unit's job args have unmarshaled successfully.
+	ctx = context.WithValue(ctx, ContextKeyNextRetry, NextRetryFunc(func(ctx context.Context, now time.Time, jobRow *rivertype.JobRow) (time.Time, bool) {
+		return e.nextRetry(ctx, now, jobRow, jobArgsUnmarshaled)
+	}))
 
 	defer func() {
 		if recovery := recover(); recovery != nil {
@@ -517,8 +554,38 @@ func (e *JobExecutor) reportError(ctx context.Context, jobRow *rivertype.JobRow,
 		return
 	}
 
+	nextRetryScheduledAt, useAvailable := e.nextRetry(ctx, now, jobRow, res.JobArgsUnmarshaled)
+
+	// Normally, errored jobs are set `retryable` for the future and it's the
+	// scheduler's job to set them back to `available` so they can be reworked.
+	// This isn't friendly for smaller retry times though because it means that
+	// effectively no retry time smaller than the scheduler's run interval is
+	// respected. Here, we offset that with a branch that makes jobs immediately
+	// `available` if their retry was smaller than the scheduler's run interval.
+	var params *riverdriver.JobSetStateIfRunningParams
+	if useAvailable {
+		params = riverdriver.JobSetStateErrorAvailable(jobRow.ID, nextRetryScheduledAt, errData, metadataUpdates)
+	} else {
+		params = riverdriver.JobSetStateErrorRetryable(jobRow.ID, nextRetryScheduledAt, errData, metadataUpdates)
+	}
+	if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, params); err != nil {
+		e.Logger.ErrorContext(ctx, e.Name+": Failed to report error for job", logAttrs...)
+	}
+}
+
+// nextRetry computes the next retry time for the given job using the worker's
+// NextRetry override (if any), the client retry policy, and a default policy
+// fallback when the result is in the past. It also returns useAvailable=true
+// when the retry is within the scheduler interval, signaling that the job
+// should transition directly to JobStateAvailable instead of JobStateRetryable.
+//
+// jobArgsUnmarshaled must report whether the work unit's job args were
+// unmarshaled successfully. The worker's NextRetry override is consulted only
+// when they were, because a work unit whose args never unmarshaled has no
+// usable job to base an override on.
+func (e *JobExecutor) nextRetry(ctx context.Context, now time.Time, jobRow *rivertype.JobRow, jobArgsUnmarshaled bool) (time.Time, bool) {
 	var nextRetryScheduledAt time.Time
-	if e.WorkUnit != nil && res.JobArgsUnmarshaled {
+	if e.WorkUnit != nil && jobArgsUnmarshaled {
 		nextRetryScheduledAt = e.WorkUnit.NextRetry()
 	}
 	if nextRetryScheduledAt.IsZero() {
@@ -534,21 +601,8 @@ func (e *JobExecutor) reportError(ctx context.Context, jobRow *rivertype.JobRow,
 		nextRetryScheduledAt = e.DefaultClientRetryPolicy.NextRetry(jobRow)
 	}
 
-	// Normally, errored jobs are set `retryable` for the future and it's the
-	// scheduler's job to set them back to `available` so they can be reworked.
-	// This isn't friendly for smaller retry times though because it means that
-	// effectively no retry time smaller than the scheduler's run interval is
-	// respected. Here, we offset that with a branch that makes jobs immediately
-	// `available` if their retry was smaller than the scheduler's run interval.
-	var params *riverdriver.JobSetStateIfRunningParams
-	if nextRetryScheduledAt.Sub(e.Time.Now()) <= e.SchedulerInterval {
-		params = riverdriver.JobSetStateErrorAvailable(jobRow.ID, nextRetryScheduledAt, errData, metadataUpdates)
-	} else {
-		params = riverdriver.JobSetStateErrorRetryable(jobRow.ID, nextRetryScheduledAt, errData, metadataUpdates)
-	}
-	if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, params); err != nil {
-		e.Logger.ErrorContext(ctx, e.Name+": Failed to report error for job", logAttrs...)
-	}
+	useAvailable := nextRetryScheduledAt.Sub(e.Time.Now()) <= e.SchedulerInterval
+	return nextRetryScheduledAt, useAvailable
 }
 
 // isSoftStopCancelError reports whether a worker returned because the client
