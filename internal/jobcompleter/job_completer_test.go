@@ -72,6 +72,41 @@ func (m *partialExecutorTxMock) JobSetStateIfRunningMany(ctx context.Context, pa
 	return m.partial.JobSetStateIfRunningMany(ctx, params)
 }
 
+func TestCompleterJobUpdatedFromStateAndReason(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		expectedReason  riverdriver.JobSetStateReason
+		name            string
+		requestedReason riverdriver.JobSetStateReason
+		state           rivertype.JobState
+	}{
+		{expectedReason: riverdriver.JobSetStateReasonFailed, name: "AvailableFailed", requestedReason: riverdriver.JobSetStateReasonFailed, state: rivertype.JobStateAvailable},
+		{expectedReason: riverdriver.JobSetStateReasonInterrupted, name: "AvailableInterrupted", requestedReason: riverdriver.JobSetStateReasonInterrupted, state: rivertype.JobStateAvailable},
+		{expectedReason: riverdriver.JobSetStateReasonFailed, name: "AvailableRequestedCompleted", requestedReason: riverdriver.JobSetStateReasonCompleted, state: rivertype.JobStateAvailable},
+		{expectedReason: riverdriver.JobSetStateReasonSnoozed, name: "AvailableSnoozed", requestedReason: riverdriver.JobSetStateReasonSnoozed, state: rivertype.JobStateAvailable},
+		{expectedReason: riverdriver.JobSetStateReasonCancelled, name: "Cancelled", requestedReason: riverdriver.JobSetStateReasonFailed, state: rivertype.JobStateCancelled},
+		{expectedReason: riverdriver.JobSetStateReasonCompleted, name: "Completed", requestedReason: riverdriver.JobSetStateReasonFailed, state: rivertype.JobStateCompleted},
+		{expectedReason: riverdriver.JobSetStateReasonFailed, name: "Discarded", requestedReason: riverdriver.JobSetStateReasonCompleted, state: rivertype.JobStateDiscarded},
+		{expectedReason: riverdriver.JobSetStateReasonFailed, name: "Retryable", requestedReason: riverdriver.JobSetStateReasonCompleted, state: rivertype.JobStateRetryable},
+		{expectedReason: riverdriver.JobSetStateReasonSnoozed, name: "Scheduled", requestedReason: riverdriver.JobSetStateReasonFailed, state: rivertype.JobStateScheduled},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			job := &rivertype.JobRow{State: test.state}
+			stats := &jobstats.JobStatistics{}
+
+			update := completerJobUpdatedFromStateAndReason(job, stats, test.requestedReason)
+			require.Same(t, job, update.Job)
+			require.Same(t, stats, update.JobStats)
+			require.Equal(t, test.expectedReason, update.Reason)
+		})
+	}
+}
+
 func TestInlineJobCompleter_Complete(t *testing.T) {
 	t.Parallel()
 

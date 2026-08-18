@@ -1447,7 +1447,7 @@ updated AS (
     SET
         attempt = CASE
             WHEN river_job.state = 'running'
-                 AND NOT (job_input.state IN ('retryable','scheduled') AND river_job.metadata ? 'cancel_attempted_at')
+                 AND NOT (job_input.state IN ('available','retryable','scheduled') AND river_job.metadata ? 'cancel_attempted_at')
                  AND job_input.attempt_do_update
             THEN job_input.attempt
             ELSE river_job.attempt
@@ -1460,7 +1460,7 @@ updated AS (
         END,
         finalized_at = CASE
             WHEN river_job.state = 'running'
-                 AND (job_input.state IN ('retryable','scheduled') AND river_job.metadata ? 'cancel_attempted_at')
+                 AND (job_input.state IN ('available','retryable','scheduled') AND river_job.metadata ? 'cancel_attempted_at')
             THEN coalesce($13::timestamptz, now())
             WHEN river_job.state = 'running'
                  AND job_input.finalized_at_do_update
@@ -1474,14 +1474,14 @@ updated AS (
         END,
         scheduled_at = CASE
             WHEN river_job.state = 'running'
-                 AND NOT (job_input.state IN ('retryable','scheduled') AND river_job.metadata ? 'cancel_attempted_at')
+                 AND NOT (job_input.state IN ('available','retryable','scheduled') AND river_job.metadata ? 'cancel_attempted_at')
                  AND job_input.scheduled_at_do_update
             THEN job_input.scheduled_at
             ELSE river_job.scheduled_at
         END,
         state = CASE
             WHEN river_job.state = 'running'
-                 AND (job_input.state IN ('retryable','scheduled') AND river_job.metadata ? 'cancel_attempted_at')
+                 AND (job_input.state IN ('available','retryable','scheduled') AND river_job.metadata ? 'cancel_attempted_at')
             THEN 'cancelled'::/* TEMPLATE: schema */river_job_state
             WHEN river_job.state = 'running'
             THEN job_input.state

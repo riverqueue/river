@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Write timestamps in SQLite to always include three digits after the second like `.000`. Previously, they may have been truncated down to just `.0` in the case of trailing zeroes. [PR #1349](https://github.com/riverqueue/river/pull/1349)
+- Job completion events now reflect the job's persisted outcome when it differs from the transition requested by the worker. For example, a job completed with `JobCompleteTx` before its worker returns an error emits `job_completed`, and a remotely cancelled job whose worker errors or snoozes emits `job_cancelled`. Applications subscribed only to `job_failed` or `job_snoozed` should note that these events may instead be delivered to `job_completed` or `job_cancelled` subscribers. [PR #1350](https://github.com/riverqueue/river/pull/1350)
 
 ## [0.43.0] - 2026-08-05
 

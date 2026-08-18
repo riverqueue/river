@@ -589,6 +589,28 @@ func TestWorker_WorkJob(t *testing.T) {
 		require.Equal(t, rivertype.JobStateCompleted, updatedJob.State)
 	})
 
+	t.Run("JobCompleteTxWithInsertedJobRowThenError", func(t *testing.T) {
+		t.Parallel()
+
+		testWorker, bundle := setup(t)
+
+		args := testArgs{}
+		insertRes, err := bundle.client.InsertTx(ctx, bundle.tx, args, nil)
+		require.NoError(t, err)
+
+		bundle.workFunc = func(ctx context.Context, job *river.Job[testArgs]) error {
+			_, err := river.JobCompleteTx[*riverpgxv5.Driver](ctx, bundle.tx, job)
+			require.NoError(t, err)
+
+			return errors.New("error after completion")
+		}
+
+		res, err := testWorker.WorkJob(ctx, t, bundle.tx, insertRes.Job)
+		require.EqualError(t, err, "error after completion")
+		require.Equal(t, river.EventKindJobCompleted, res.EventKind)
+		require.Equal(t, rivertype.JobStateCompleted, res.Job.State)
+	})
+
 	t.Run("ErrorsWhenGivenAlreadyCompletedJob", func(t *testing.T) {
 		t.Parallel()
 

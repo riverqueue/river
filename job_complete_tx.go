@@ -24,6 +24,11 @@ import (
 //		// handle error
 //	}
 //
+// After successfully committing the transaction, the worker should normally
+// return nil. If it returns an error instead, the committed completion takes
+// precedence. the job remains completed and a resulting subscribe event has
+// kind EventKindJobCompleted. The error has no effect.
+//
 // Returns the updated, completed job.
 func JobCompleteTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs](ctx context.Context, tx TTx, job *Job[TArgs]) (*Job[TArgs], error) {
 	if job.State != rivertype.JobStateRunning {
