@@ -37,6 +37,10 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		}
 	}
 
+	// Deliberately includes sub-millisecond precision so tests can verify that
+	// drivers normalize timestamps to their declared precision.
+	precisionTestTime := time.Date(2025, 4, 30, 13, 26, 39, 123400000, time.UTC)
+
 	t.Run("JobCancel", func(t *testing.T) {
 		t.Parallel()
 
@@ -147,7 +151,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 
 		exec, bundle := setup(ctx, t)
 
-		now := time.Now().UTC()
+		now := precisionTestTime
 
 		job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 			Metadata: []byte(`{"river:rescue_count": 5, "something": "else"}`),
@@ -187,15 +191,15 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		require.NoError(t, err)
 		require.Equal(t, "message1", updatedJob1.Errors[0].Error)
 		require.Nil(t, updatedJob1.FinalizedAt)
-		require.WithinDuration(t, now, updatedJob1.ScheduledAt, bundle.driver.TimePrecision())
+		require.Equal(t, now.Truncate(bundle.driver.TimePrecision()), updatedJob1.ScheduledAt)
 		require.Equal(t, rivertype.JobStateAvailable, updatedJob1.State)
 		require.JSONEq(t, `{"river:rescue_count": 6, "something": "else"}`, string(updatedJob1.Metadata))
 
 		updatedJob2, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID})
 		require.NoError(t, err)
 		require.Equal(t, "message2", updatedJob2.Errors[0].Error)
-		require.WithinDuration(t, now, *updatedJob2.FinalizedAt, bundle.driver.TimePrecision())
-		require.WithinDuration(t, now, updatedJob2.ScheduledAt, bundle.driver.TimePrecision())
+		require.Equal(t, now.Truncate(bundle.driver.TimePrecision()), *updatedJob2.FinalizedAt)
+		require.Equal(t, now.Truncate(bundle.driver.TimePrecision()), updatedJob2.ScheduledAt)
 		require.Equal(t, rivertype.JobStateDiscarded, updatedJob2.State)
 		require.JSONEq(t, `{"river:rescue_count": 1}`, string(updatedJob2.Metadata))
 	})
@@ -585,9 +589,9 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		t.Run("CompletesARunningJob", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
 
-			now := time.Now().UTC()
+			now := precisionTestTime
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				State:     ptrutil.Ptr(rivertype.JobStateRunning),
@@ -598,7 +602,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
 			require.Equal(t, rivertype.JobStateCompleted, jobAfter.State)
-			require.WithinDuration(t, now, *jobAfter.FinalizedAt, time.Microsecond)
+			require.Equal(t, now.Truncate(bundle.driver.TimePrecision()), *jobAfter.FinalizedAt)
 
 			jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
 			require.NoError(t, err)
@@ -670,9 +674,9 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		t.Run("SetsARunningJobToRetryable", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
 
-			now := time.Now().UTC()
+			now := precisionTestTime
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				State:     ptrutil.Ptr(rivertype.JobStateRunning),
@@ -683,7 +687,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
 			require.Equal(t, rivertype.JobStateRetryable, jobAfter.State)
-			require.WithinDuration(t, now, jobAfter.ScheduledAt, time.Microsecond)
+			require.Equal(t, now.Truncate(bundle.driver.TimePrecision()), jobAfter.ScheduledAt)
 
 			jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
 			require.NoError(t, err)
@@ -701,7 +705,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		t.Run("SetsAnInterruptedRunningJobToAvailableWithUpdatedAttempt", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
 
 			now := time.Now().UTC()
 			attempt := 2
@@ -720,7 +724,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.Equal(t, attempt, jobAfter.Attempt)
 			require.Equal(t, rivertype.JobStateAvailable, jobAfter.State)
 			require.Equal(t, 3, jobAfter.MaxAttempts)
-			require.WithinDuration(t, now, jobAfter.ScheduledAt, time.Microsecond)
+			require.WithinDuration(t, now, jobAfter.ScheduledAt, bundle.driver.TimePrecision())
 
 			jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
 			require.NoError(t, err)
@@ -841,7 +845,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		t.Run("CancelsARunningJob", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
 
 			now := time.Now().UTC()
 
@@ -855,7 +859,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
 			require.Equal(t, rivertype.JobStateCancelled, jobAfter.State)
-			require.WithinDuration(t, now, *jobAfter.FinalizedAt, time.Microsecond)
+			require.WithinDuration(t, now, *jobAfter.FinalizedAt, bundle.driver.TimePrecision())
 
 			jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
 			require.NoError(t, err)
@@ -870,7 +874,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		t.Run("DiscardsARunningJob", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
 
 			now := time.Now().UTC()
 
@@ -884,7 +888,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.NoError(t, err)
 			jobAfter := jobsAfter[0]
 			require.Equal(t, rivertype.JobStateDiscarded, jobAfter.State)
-			require.WithinDuration(t, now, *jobAfter.FinalizedAt, time.Microsecond)
+			require.WithinDuration(t, now, *jobAfter.FinalizedAt, bundle.driver.TimePrecision())
 			require.Equal(t, "unique-key", string(jobAfter.UniqueKey))
 			require.Equal(t, rivertype.JobStates(), jobAfter.UniqueStates)
 
@@ -900,7 +904,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		t.Run("SnoozesARunningJob_WithNoPreexistingMetadata", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
 
 			now := time.Now().UTC()
 			snoozeUntil := now.Add(1 * time.Minute)
@@ -918,7 +922,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.Equal(t, job.MaxAttempts, jobAfter.MaxAttempts)
 			require.JSONEq(t, `{"snoozes": 1}`, string(jobAfter.Metadata))
 			require.Equal(t, rivertype.JobStateScheduled, jobAfter.State)
-			require.WithinDuration(t, snoozeUntil, jobAfter.ScheduledAt, time.Microsecond)
+			require.WithinDuration(t, snoozeUntil, jobAfter.ScheduledAt, bundle.driver.TimePrecision())
 
 			jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
 			require.NoError(t, err)
@@ -932,7 +936,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		t.Run("SnoozesARunningJob_WithPreexistingMetadata", func(t *testing.T) {
 			t.Parallel()
 
-			exec, _ := setup(ctx, t)
+			exec, bundle := setup(ctx, t)
 
 			now := time.Now().UTC()
 			snoozeUntil := now.Add(1 * time.Minute)
@@ -951,7 +955,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.Equal(t, job.MaxAttempts, jobAfter.MaxAttempts)
 			require.JSONEq(t, `{"foo": "bar", "snoozes": 6}`, string(jobAfter.Metadata))
 			require.Equal(t, rivertype.JobStateScheduled, jobAfter.State)
-			require.WithinDuration(t, snoozeUntil, jobAfter.ScheduledAt, time.Microsecond)
+			require.WithinDuration(t, snoozeUntil, jobAfter.ScheduledAt, bundle.driver.TimePrecision())
 
 			jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: ""})
 			require.NoError(t, err)
@@ -966,7 +970,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 	t.Run("JobSetStateIfRunningMany_MultipleJobsAtOnce", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		exec, bundle := setup(ctx, t)
 
 		now := time.Now().UTC()
 		future := now.Add(10 * time.Second)
@@ -985,12 +989,12 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		require.Len(t, jobsAfter, 3)
 		completedJob := jobsAfter[0]
 		require.Equal(t, rivertype.JobStateCompleted, completedJob.State)
-		require.WithinDuration(t, now, *completedJob.FinalizedAt, time.Microsecond)
+		require.WithinDuration(t, now, *completedJob.FinalizedAt, bundle.driver.TimePrecision())
 		require.JSONEq(t, `{"a":"b"}`, string(completedJob.Metadata))
 
 		retryableJob := jobsAfter[1]
 		require.Equal(t, rivertype.JobStateRetryable, retryableJob.State)
-		require.WithinDuration(t, future, retryableJob.ScheduledAt, time.Microsecond)
+		require.WithinDuration(t, future, retryableJob.ScheduledAt, bundle.driver.TimePrecision())
 		// validate error payload:
 		require.Len(t, retryableJob.Errors, 1)
 		require.Equal(t, now, retryableJob.Errors[0].At)
@@ -1000,7 +1004,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 
 		cancelledJob := jobsAfter[2]
 		require.Equal(t, rivertype.JobStateCancelled, cancelledJob.State)
-		require.WithinDuration(t, now, *cancelledJob.FinalizedAt, time.Microsecond)
+		require.WithinDuration(t, now, *cancelledJob.FinalizedAt, bundle.driver.TimePrecision())
 	})
 
 	t.Run("JobUpdate", func(t *testing.T) {
@@ -1051,7 +1055,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
 
-			now := time.Now().UTC()
+			now := precisionTestTime
 
 			updatedJob, err := exec.JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
 				ID:                  job.ID,
@@ -1074,10 +1078,10 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			})
 			require.NoError(t, err)
 			require.Equal(t, 7, updatedJob.Attempt)
-			require.WithinDuration(t, now, *updatedJob.AttemptedAt, bundle.driver.TimePrecision())
+			require.Equal(t, now.Truncate(bundle.driver.TimePrecision()), *updatedJob.AttemptedAt)
 			require.Equal(t, []string{"worker1"}, updatedJob.AttemptedBy)
 			require.Equal(t, "message", updatedJob.Errors[0].Error)
-			require.WithinDuration(t, now, *updatedJob.FinalizedAt, bundle.driver.TimePrecision())
+			require.Equal(t, now.Truncate(bundle.driver.TimePrecision()), *updatedJob.FinalizedAt)
 			require.Equal(t, 99, updatedJob.MaxAttempts)
 			require.JSONEq(t, `{"foo":"bar"}`, string(updatedJob.Metadata))
 			require.Equal(t, rivertype.JobStateDiscarded, updatedJob.State)
