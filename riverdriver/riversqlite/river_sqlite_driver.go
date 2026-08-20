@@ -1622,7 +1622,7 @@ func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
 		}
 	}
 
-	var errors []rivertype.AttemptError
+	errors := make([]rivertype.AttemptError, 0)
 	if internal.Errors != nil {
 		if err := json.Unmarshal(internal.Errors, &errors); err != nil {
 			return nil, fmt.Errorf("error unmarshaling `errors`: %w", err)

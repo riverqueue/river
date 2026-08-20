@@ -602,6 +602,7 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 			require.Nil(t, job.AttemptedAt)
 			require.WithinDuration(t, time.Now().UTC(), job.CreatedAt, 2*time.Second)
 			require.JSONEq(t, `{"encoded": "args"}`, string(job.EncodedArgs))
+			require.NotNil(t, job.Errors)
 			require.Empty(t, job.Errors)
 			require.Nil(t, job.FinalizedAt)
 			require.Equal(t, "test_kind", job.Kind)
