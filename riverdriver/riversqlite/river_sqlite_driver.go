@@ -725,7 +725,7 @@ func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRes
 				ID:          params.ID[i],
 				Error:       params.Error[i],
 				FinalizedAt: timeStringNullable(params.FinalizedAt[i]),
-				ScheduledAt: params.ScheduledAt[i].UTC(),
+				ScheduledAt: timeString(params.ScheduledAt[i]),
 				State:       params.State[i],
 			}); err != nil {
 				return interpretError(err)
@@ -905,7 +905,7 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 			}
 			if params.FinalizedAt[i] != nil {
 				setStateParams.FinalizedAtDoUpdate = true
-				setStateParams.FinalizedAt = params.FinalizedAt[i]
+				setStateParams.FinalizedAt = timeStringNullable(params.FinalizedAt[i])
 			}
 			if params.MetadataDoMerge[i] {
 				setStateParams.MetadataDoMerge = true
@@ -913,7 +913,7 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 			}
 			if params.ScheduledAt[i] != nil {
 				setStateParams.ScheduledAtDoUpdate = true
-				setStateParams.ScheduledAt = *params.ScheduledAt[i]
+				setStateParams.ScheduledAt = timeString(*params.ScheduledAt[i])
 			}
 
 			job, err := dbsqlc.New().JobSetStateIfRunning(ctx, dbtx, setStateParams)
@@ -969,11 +969,6 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 }
 
 func (e *Executor) JobUpdateFull(ctx context.Context, params *riverdriver.JobUpdateFullParams) (*rivertype.JobRow, error) {
-	attemptedAt := params.AttemptedAt
-	if attemptedAt != nil {
-		attemptedAt = ptrutil.Ptr(attemptedAt.UTC())
-	}
-
 	attemptedBy, err := json.Marshal(params.AttemptedBy)
 	if err != nil {
 		return nil, err
@@ -982,11 +977,6 @@ func (e *Executor) JobUpdateFull(ctx context.Context, params *riverdriver.JobUpd
 	errors, err := json.Marshal(sliceutil.Map(params.Errors, func(e []byte) json.RawMessage { return json.RawMessage(e) }))
 	if err != nil {
 		return nil, err
-	}
-
-	finalizedAt := params.FinalizedAt
-	if finalizedAt != nil {
-		finalizedAt = ptrutil.Ptr(finalizedAt.UTC())
 	}
 
 	metadata := params.Metadata
@@ -998,14 +988,14 @@ func (e *Executor) JobUpdateFull(ctx context.Context, params *riverdriver.JobUpd
 		ID:                  params.ID,
 		Attempt:             int64(params.Attempt),
 		AttemptDoUpdate:     params.AttemptDoUpdate,
-		AttemptedAt:         attemptedAt,
+		AttemptedAt:         timeStringNullable(params.AttemptedAt),
 		AttemptedAtDoUpdate: params.AttemptedAtDoUpdate,
 		AttemptedBy:         attemptedBy,
 		AttemptedByDoUpdate: params.AttemptedByDoUpdate,
 		ErrorsDoUpdate:      params.ErrorsDoUpdate,
 		Errors:              errors,
 		FinalizedAtDoUpdate: params.FinalizedAtDoUpdate,
-		FinalizedAt:         finalizedAt,
+		FinalizedAt:         timeStringNullable(params.FinalizedAt),
 		MaxAttemptsDoUpdate: params.MaxAttemptsDoUpdate,
 		MaxAttempts:         int64(min(params.MaxAttempts, math.MaxInt64)),
 		MetadataDoUpdate:    params.MetadataDoUpdate,

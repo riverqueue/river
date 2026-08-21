@@ -489,7 +489,7 @@ UPDATE /* TEMPLATE: schema */river_job
 SET
     errors = jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(@error))),
     finalized_at = cast(sqlc.narg('finalized_at') as text),
-    scheduled_at = @scheduled_at,
+    scheduled_at = cast(@scheduled_at AS text),
     metadata = jsonb_set(
         metadata,
         '$."river:rescue_count"',
@@ -606,13 +606,13 @@ SET
     finalized_at = CASE WHEN /* should_cancel */((@state = 'available' OR @state = 'retryable' OR @state = 'scheduled') AND (metadata -> 'cancel_attempted_at') IS NOT NULL)
                         THEN coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec'))
                         WHEN cast(@finalized_at_do_update AS boolean)
-                        THEN @finalized_at
+                        THEN cast(sqlc.narg('finalized_at') AS text)
                         ELSE finalized_at END,
     metadata     = CASE WHEN cast(@metadata_do_merge AS boolean)
                         THEN jsonb_patch(json(metadata), json(@metadata_updates))
                         ELSE metadata END,
     scheduled_at = CASE WHEN /* NOT should_cancel */(cast(@state AS text) <> 'available' AND @state <> 'retryable' AND @state <> 'scheduled' OR (metadata -> 'cancel_attempted_at') IS NULL) AND cast(@scheduled_at_do_update AS boolean)
-                        THEN @scheduled_at
+                        THEN cast(@scheduled_at AS text)
                         ELSE scheduled_at END,
     state        = CASE WHEN /* should_cancel */((@state = 'available' OR @state = 'retryable' OR @state = 'scheduled') AND (metadata -> 'cancel_attempted_at') IS NOT NULL)
                         THEN 'cancelled'
@@ -634,10 +634,10 @@ RETURNING *;
 UPDATE /* TEMPLATE: schema */river_job
 SET
     attempt = CASE WHEN cast(@attempt_do_update AS boolean) THEN @attempt ELSE attempt END,
-    attempted_at = CASE WHEN cast(@attempted_at_do_update AS boolean) THEN @attempted_at ELSE attempted_at END,
+    attempted_at = CASE WHEN cast(@attempted_at_do_update AS boolean) THEN cast(sqlc.narg('attempted_at') AS text) ELSE attempted_at END,
     attempted_by = CASE WHEN cast(@attempted_by_do_update AS boolean) THEN jsonb(@attempted_by) ELSE attempted_by END,
     errors = CASE WHEN cast(@errors_do_update AS boolean) THEN jsonb(@errors) ELSE errors END,
-    finalized_at = CASE WHEN cast(@finalized_at_do_update AS boolean) THEN @finalized_at ELSE finalized_at END,
+    finalized_at = CASE WHEN cast(@finalized_at_do_update AS boolean) THEN cast(sqlc.narg('finalized_at') AS text) ELSE finalized_at END,
     max_attempts = CASE WHEN cast(@max_attempts_do_update AS boolean) THEN @max_attempts ELSE max_attempts END,
     metadata = CASE WHEN cast(@metadata_do_update AS boolean) THEN jsonb(@metadata) ELSE metadata END,
     state = CASE WHEN cast(@state_do_update AS boolean) THEN @state ELSE state END

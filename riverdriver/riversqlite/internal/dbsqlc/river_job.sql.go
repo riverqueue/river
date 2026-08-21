@@ -9,7 +9,6 @@ import (
 	"context"
 	"database/sql"
 	"strings"
-	"time"
 )
 
 const jobCancel = `-- name: JobCancel :one
@@ -1245,7 +1244,7 @@ UPDATE /* TEMPLATE: schema */river_job
 SET
     errors = jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(?1))),
     finalized_at = cast(?2 as text),
-    scheduled_at = ?3,
+    scheduled_at = cast(?3 AS text),
     metadata = jsonb_set(
         metadata,
         '$."river:rescue_count"',
@@ -1264,7 +1263,7 @@ WHERE id = ?5
 type JobRescueParams struct {
 	Error       interface{}
 	FinalizedAt *string
-	ScheduledAt time.Time
+	ScheduledAt string
 	State       string
 	ID          int64
 }
@@ -1645,13 +1644,13 @@ SET
     finalized_at = CASE WHEN /* should_cancel */((?1 = 'available' OR ?1 = 'retryable' OR ?1 = 'scheduled') AND (metadata -> 'cancel_attempted_at') IS NOT NULL)
                         THEN coalesce(cast(?6 AS text), datetime('now', 'subsec'))
                         WHEN cast(?7 AS boolean)
-                        THEN ?8
+                        THEN cast(?8 AS text)
                         ELSE finalized_at END,
     metadata     = CASE WHEN cast(?9 AS boolean)
                         THEN jsonb_patch(json(metadata), json(?10))
                         ELSE metadata END,
     scheduled_at = CASE WHEN /* NOT should_cancel */(cast(?1 AS text) <> 'available' AND ?1 <> 'retryable' AND ?1 <> 'scheduled' OR (metadata -> 'cancel_attempted_at') IS NULL) AND cast(?11 AS boolean)
-                        THEN ?12
+                        THEN cast(?12 AS text)
                         ELSE scheduled_at END,
     state        = CASE WHEN /* should_cancel */((?1 = 'available' OR ?1 = 'retryable' OR ?1 = 'scheduled') AND (metadata -> 'cancel_attempted_at') IS NOT NULL)
                         THEN 'cancelled'
@@ -1669,11 +1668,11 @@ type JobSetStateIfRunningParams struct {
 	Error               interface{}
 	Now                 *string
 	FinalizedAtDoUpdate bool
-	FinalizedAt         *time.Time
+	FinalizedAt         *string
 	MetadataDoMerge     bool
 	MetadataUpdates     interface{}
 	ScheduledAtDoUpdate bool
-	ScheduledAt         time.Time
+	ScheduledAt         string
 	ID                  int64
 }
 
@@ -1764,10 +1763,10 @@ const jobUpdateFull = `-- name: JobUpdateFull :one
 UPDATE /* TEMPLATE: schema */river_job
 SET
     attempt = CASE WHEN cast(?1 AS boolean) THEN ?2 ELSE attempt END,
-    attempted_at = CASE WHEN cast(?3 AS boolean) THEN ?4 ELSE attempted_at END,
+    attempted_at = CASE WHEN cast(?3 AS boolean) THEN cast(?4 AS text) ELSE attempted_at END,
     attempted_by = CASE WHEN cast(?5 AS boolean) THEN jsonb(?6) ELSE attempted_by END,
     errors = CASE WHEN cast(?7 AS boolean) THEN jsonb(?8) ELSE errors END,
-    finalized_at = CASE WHEN cast(?9 AS boolean) THEN ?10 ELSE finalized_at END,
+    finalized_at = CASE WHEN cast(?9 AS boolean) THEN cast(?10 AS text) ELSE finalized_at END,
     max_attempts = CASE WHEN cast(?11 AS boolean) THEN ?12 ELSE max_attempts END,
     metadata = CASE WHEN cast(?13 AS boolean) THEN jsonb(?14) ELSE metadata END,
     state = CASE WHEN cast(?15 AS boolean) THEN ?16 ELSE state END
@@ -1779,13 +1778,13 @@ type JobUpdateFullParams struct {
 	AttemptDoUpdate     bool
 	Attempt             int64
 	AttemptedAtDoUpdate bool
-	AttemptedAt         *time.Time
+	AttemptedAt         *string
 	AttemptedByDoUpdate bool
 	AttemptedBy         interface{}
 	ErrorsDoUpdate      bool
 	Errors              interface{}
 	FinalizedAtDoUpdate bool
-	FinalizedAt         *time.Time
+	FinalizedAt         *string
 	MaxAttemptsDoUpdate bool
 	MaxAttempts         int64
 	MetadataDoUpdate    bool
