@@ -28,7 +28,7 @@ jobs:
     strategy:
       matrix:
         go-version:
-          - "1.26"
+          - "1.27"
         postgres-version: [17]
       fail-fast: false
     timeout-minutes: 5
@@ -75,21 +75,21 @@ jobs:
       matrix:
         include:
           # Run the latest Go version against all supported Postgres versions:
-          - go-version: "1.26"
+          - go-version: "1.27"
             postgres-version: 18
-          - go-version: "1.26"
+          - go-version: "1.27"
             postgres-version: 17
-          - go-version: "1.26"
+          - go-version: "1.27"
             postgres-version: 16
-          - go-version: "1.26"
+          - go-version: "1.27"
             postgres-version: 15
-          - go-version: "1.26"
+          - go-version: "1.27"
             postgres-version: 14
 
           # Also run the previous Go version (the Go version previous to current
           # is the only other officially supported Go version) against the
           # latest Postgres version:
-          - go-version: "1.25"
+          - go-version: "1.26"
             postgres-version: 18
       fail-fast: false
     timeout-minutes: 5
@@ -299,7 +299,7 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     env:
-      GOLANGCI_LINT_VERSION: v2.12.2
+      GOLANGCI_LINT_VERSION: v2.13.1
     permissions:
       contents: read
       # allow read access to pull request. Use with `only-new-issues` option.

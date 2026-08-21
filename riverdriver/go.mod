@@ -1,8 +1,8 @@
 module github.com/riverqueue/river/riverdriver
 
-go 1.25.0
+go 1.26.0
 
-toolchain go1.25.7
+toolchain go1.26.6
 
 require (
 	github.com/riverqueue/river/rivertype v0.44.1

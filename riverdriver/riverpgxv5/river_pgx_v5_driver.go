@@ -75,6 +75,7 @@ func (d *Driver) GetListener(params *riverdriver.GetListenenerParams) riverdrive
 }
 
 func (d *Driver) GetMigrationDefaultLines() []string { return []string{riverdriver.MigrationLineMain} }
+
 func (d *Driver) GetMigrationFS(line string) fs.FS {
 	if line == riverdriver.MigrationLineMain {
 		return migrationFS
