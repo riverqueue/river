@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.1] - 2026-08-21
+
 ### Fixed
 
 - SQLite job completion, rescue, and full-update paths now serialize timestamps using River's standard millisecond format instead of relying on database driver serialization, preventing inconsistent timestamp representations from being persisted. [PR #1353](https://github.com/riverqueue/river/pull/1353)
+- SQLite drivers now return a non-nil empty `JobRow.Errors` slice for jobs without errors, matching the behavior of PostgreSQL drivers and ensuring the field serializes to `[]` instead of `null`. [PR #1354](https://github.com/riverqueue/river/pull/1354).
 
 ## [0.44.0] - 2026-08-18
 
