@@ -14,8 +14,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "modernc.org/sqlite"
-
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 )
 
 // Command is an interface to a River CLI subcommand. Commands generally only
@@ -68,7 +66,7 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 			urlWithoutProtocol string
 		)
 		if pgEnvConfigured() {
-			databaseURL = ptrutil.Ptr("")
+			databaseURL = new("")
 			protocol = "postgres"
 		} else if bundle.DatabaseURL != nil {
 			databaseURL = bundle.DatabaseURL

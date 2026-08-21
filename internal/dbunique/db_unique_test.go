@@ -11,7 +11,6 @@ import (
 
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/uniquestates"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -420,7 +419,7 @@ func TestUniqueKey(t *testing.T) {
 				}
 			},
 			modifyInsertParamsFunc: func(insertParams *rivertype.JobInsertParams) {
-				insertParams.ScheduledAt = ptrutil.Ptr(now.Add(time.Hour))
+				insertParams.ScheduledAt = new(now.Add(time.Hour))
 			},
 			uniqueOpts:   UniqueOpts{ByPeriod: time.Hour},
 			expectedJSON: "&kind=worker_4&period=" + now.Add(time.Hour).Truncate(time.Hour).Format(time.RFC3339),

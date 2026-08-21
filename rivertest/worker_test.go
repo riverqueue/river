@@ -19,7 +19,6 @@ import (
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/testfactory"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -619,8 +618,8 @@ func TestWorker_WorkJob(t *testing.T) {
 
 		job := testfactory.Job(ctx, t, bundle.driver.UnwrapExecutor(bundle.tx), &testfactory.JobOpts{
 			EncodedArgs: []byte(`{"value": "test"}`),
-			Kind:        ptrutil.Ptr("rivertest_work_test"),
-			State:       ptrutil.Ptr(rivertype.JobStateCompleted),
+			Kind:        new("rivertest_work_test"),
+			State:       new(rivertype.JobStateCompleted),
 		})
 
 		res, err := testWorker.WorkJob(ctx, t, bundle.tx, job)

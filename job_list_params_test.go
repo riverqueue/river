@@ -8,7 +8,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -87,9 +86,9 @@ func Test_JobListCursor_jobListCursorFromJobAndParams(t *testing.T) {
 
 			now := time.Now().UTC()
 			jobRow := &rivertype.JobRow{
-				AttemptedAt: ptrutil.Ptr(now.Add(-5 * time.Second)),
+				AttemptedAt: new(now.Add(-5 * time.Second)),
 				CreatedAt:   now.Add(-11 * time.Second),
-				FinalizedAt: ptrutil.Ptr(now.Add(-1 * time.Second)),
+				FinalizedAt: new(now.Add(-1 * time.Second)),
 				ID:          int64(i),
 				Kind:        "test_kind",
 				Queue:       "test_queue",
@@ -110,7 +109,7 @@ func Test_JobListCursor_jobListCursorFromJobAndParams(t *testing.T) {
 
 		now := time.Now().UTC()
 		jobRow := &rivertype.JobRow{
-			AttemptedAt: ptrutil.Ptr(now.Add(-5 * time.Second)),
+			AttemptedAt: new(now.Add(-5 * time.Second)),
 			CreatedAt:   now.Add(-11 * time.Second),
 			ID:          4,
 			Kind:        "test",

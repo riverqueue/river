@@ -14,7 +14,6 @@ import (
 	"github.com/riverqueue/river/rivermigrate"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/testfactory"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 )
 
 func exerciseMigration[TTx any](ctx context.Context, t *testing.T,
@@ -189,7 +188,7 @@ func exerciseMigration[TTx any](ctx context.Context, t *testing.T,
 		}
 
 		_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{
-			Name:   ptrutil.Ptr("default"),
+			Name:   new("default"),
 			Schema: schema,
 		})
 
@@ -291,8 +290,8 @@ func exerciseMigration[TTx any](ctx context.Context, t *testing.T,
 		// not touched
 		_ = testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
 
-		migration1 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{Line: ptrutil.Ptr("alternate")})
-		migration2 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{Line: ptrutil.Ptr("alternate")})
+		migration1 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{Line: new("alternate")})
+		migration2 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{Line: new("alternate")})
 
 		migrations, err := exec.MigrationDeleteByLineAndVersionMany(ctx, &riverdriver.MigrationDeleteByLineAndVersionManyParams{
 			Line: "alternate",
@@ -371,8 +370,8 @@ func exerciseMigration[TTx any](ctx context.Context, t *testing.T,
 		// not returned
 		_ = testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{})
 
-		migration1 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{Line: ptrutil.Ptr("alternate")})
-		migration2 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{Line: ptrutil.Ptr("alternate")})
+		migration1 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{Line: new("alternate")})
+		migration2 := testfactory.Migration(ctx, t, exec, &testfactory.MigrationOpts{Line: new("alternate")})
 
 		migrations, err := exec.MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
 			Line: "alternate",

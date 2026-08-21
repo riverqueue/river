@@ -11,7 +11,6 @@ import (
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/testfactory"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -71,7 +70,7 @@ func exerciseQueue[TTx any](ctx context.Context, t *testing.T, executorWithTx fu
 			now := time.Now().UTC().Add(-5 * time.Minute)
 			queue, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
 				Name:     "new-queue",
-				PausedAt: ptrutil.Ptr(now),
+				PausedAt: new(now),
 			})
 			require.NoError(t, err)
 			require.Equal(t, "new-queue", queue.Name)
@@ -118,11 +117,11 @@ func exerciseQueue[TTx any](ctx context.Context, t *testing.T, executorWithTx fu
 		exec, _ := setup(ctx, t)
 
 		now := time.Now()
-		_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now)})
-		queue2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-25 * time.Hour))})
-		queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-26 * time.Hour))})
-		queue4 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-48 * time.Hour))})
-		_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: ptrutil.Ptr(now.Add(-23 * time.Hour))})
+		_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: new(now)})
+		queue2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: new(now.Add(-25 * time.Hour))})
+		queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: new(now.Add(-26 * time.Hour))})
+		queue4 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: new(now.Add(-48 * time.Hour))})
+		_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{UpdatedAt: new(now.Add(-23 * time.Hour))})
 
 		horizon := now.Add(-24 * time.Hour)
 		deletedQueueNames, err := exec.QueueDeleteExpired(ctx, &riverdriver.QueueDeleteExpiredParams{Max: 2, UpdatedAtHorizon: horizon})
@@ -188,7 +187,7 @@ func exerciseQueue[TTx any](ctx context.Context, t *testing.T, executorWithTx fu
 		require.Empty(t, queues)
 
 		// Make queue1, already paused:
-		queue1 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`), PausedAt: ptrutil.Ptr(time.Now())})
+		queue1 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`), PausedAt: new(time.Now())})
 		require.NoError(t, err)
 
 		queue2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{})
@@ -220,10 +219,10 @@ func exerciseQueue[TTx any](ctx context.Context, t *testing.T, executorWithTx fu
 
 			exec, _ := setup(ctx, t)
 
-			_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_zzz")})
-			queue2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_aaa")})
-			queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_bbb")})
-			_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("different_prefix_queue")})
+			_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: new("queue_zzz")})
+			queue2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: new("queue_aaa")})
+			queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: new("queue_bbb")})
+			_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: new("different_prefix_queue")})
 
 			queueNames, err := exec.QueueNameList(ctx, &riverdriver.QueueNameListParams{
 				After:   "queue2",
@@ -241,9 +240,9 @@ func exerciseQueue[TTx any](ctx context.Context, t *testing.T, executorWithTx fu
 
 			exec, _ := setup(ctx, t)
 
-			queue1 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_zzz")})
-			queue2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_aaa")})
-			queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue_bbb")})
+			queue1 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: new("queue_zzz")})
+			queue2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: new("queue_aaa")})
+			queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: new("queue_bbb")})
 
 			queueNames, err := exec.QueueNameList(ctx, &riverdriver.QueueNameListParams{
 				After:   "queue2",
@@ -261,9 +260,9 @@ func exerciseQueue[TTx any](ctx context.Context, t *testing.T, executorWithTx fu
 
 			exec, _ := setup(ctx, t)
 
-			queue1 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("prefix_queue")})
-			_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("another_queue")})
-			queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("suffix_queue")})
+			queue1 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: new("prefix_queue")})
+			_ = testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: new("another_queue")})
+			queue3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Name: new("suffix_queue")})
 
 			queueNames, err := exec.QueueNameList(ctx, &riverdriver.QueueNameListParams{
 				After:   "",
@@ -312,7 +311,7 @@ func exerciseQueue[TTx any](ctx context.Context, t *testing.T, executorWithTx fu
 			now := time.Now().UTC()
 
 			queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{
-				UpdatedAt: ptrutil.Ptr(now.Add(-5 * time.Minute)),
+				UpdatedAt: new(now.Add(-5 * time.Minute)),
 			})
 			require.Nil(t, queue.PausedAt)
 
@@ -393,8 +392,8 @@ func exerciseQueue[TTx any](ctx context.Context, t *testing.T, executorWithTx fu
 			now := time.Now().UTC()
 
 			queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{
-				PausedAt:  ptrutil.Ptr(now.Add(-5 * time.Minute)),
-				UpdatedAt: ptrutil.Ptr(now.Add(-5 * time.Minute)),
+				PausedAt:  new(now.Add(-5 * time.Minute)),
+				UpdatedAt: new(now.Add(-5 * time.Minute)),
 			})
 
 			require.NoError(t, exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
@@ -418,7 +417,7 @@ func exerciseQueue[TTx any](ctx context.Context, t *testing.T, executorWithTx fu
 			now := time.Now().UTC()
 
 			queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{
-				UpdatedAt: ptrutil.Ptr(now.Add(-5 * time.Minute)),
+				UpdatedAt: new(now.Add(-5 * time.Minute)),
 			})
 
 			require.NoError(t, exec.QueueResume(ctx, &riverdriver.QueueResumeParams{

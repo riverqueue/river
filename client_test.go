@@ -42,7 +42,6 @@ import (
 	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/dbutil"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
@@ -3358,9 +3357,9 @@ func Test_Client_JobDeleteMany(t *testing.T) {
 		client, bundle := setup(t)
 
 		var (
-			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Kind: ptrutil.Ptr("special_kind"), Priority: ptrutil.Ptr(1)})
-			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Kind: ptrutil.Ptr("special_kind"), Priority: ptrutil.Ptr(2)})
-			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Kind: ptrutil.Ptr("other_kind"), Priority: ptrutil.Ptr(1)})
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Kind: new("special_kind"), Priority: new(1)})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Kind: new("special_kind"), Priority: new(2)})
+			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Kind: new("other_kind"), Priority: new(1)})
 		)
 
 		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().IDs(job1.ID, job2.ID, job3.ID).Priorities(1, 2).Kinds("special_kind"))
@@ -3377,9 +3376,9 @@ func Test_Client_JobDeleteMany(t *testing.T) {
 		client, bundle := setup(t)
 
 		var (
-			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Priority: ptrutil.Ptr(1)})
-			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Priority: ptrutil.Ptr(2)})
-			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Priority: ptrutil.Ptr(3)})
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Priority: new(1)})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Priority: new(2)})
+			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Priority: new(3)})
 		)
 
 		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().Priorities(1))
@@ -3402,9 +3401,9 @@ func Test_Client_JobDeleteMany(t *testing.T) {
 		client, bundle := setup(t)
 
 		var (
-			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind_1"), Schema: bundle.schema})
-			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind_1"), Schema: bundle.schema})
-			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind_2"), Schema: bundle.schema})
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("test_kind_1"), Schema: bundle.schema})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("test_kind_1"), Schema: bundle.schema})
+			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("test_kind_2"), Schema: bundle.schema})
 		)
 
 		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().Kinds("test_kind_1"))
@@ -3426,9 +3425,9 @@ func Test_Client_JobDeleteMany(t *testing.T) {
 		client, bundle := setup(t)
 
 		var (
-			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue_1"), Schema: bundle.schema})
-			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue_1"), Schema: bundle.schema})
-			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue_2"), Schema: bundle.schema})
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: new("queue_1"), Schema: bundle.schema})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: new("queue_1"), Schema: bundle.schema})
+			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: new("queue_2"), Schema: bundle.schema})
 		)
 
 		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().Queues("queue_1"))
@@ -3450,10 +3449,10 @@ func Test_Client_JobDeleteMany(t *testing.T) {
 		client, bundle := setup(t)
 
 		var (
-			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable), Schema: bundle.schema})
-			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable), Schema: bundle.schema})
-			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), Schema: bundle.schema})
-			job4 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStatePending), Schema: bundle.schema})
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateAvailable), Schema: bundle.schema})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateAvailable), Schema: bundle.schema})
+			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCompleted), Schema: bundle.schema})
+			job4 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStatePending), Schema: bundle.schema})
 		)
 
 		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().States(rivertype.JobStateAvailable))
@@ -3485,9 +3484,9 @@ func Test_Client_JobDeleteMany(t *testing.T) {
 
 		var (
 			now  = time.Now().UTC()
-			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateAvailable), ScheduledAt: &now})
-			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateAvailable), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
-			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateCompleted), ScheduledAt: ptrutil.Ptr(now.Add(-2 * time.Second))})
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateAvailable), ScheduledAt: &now})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateAvailable), ScheduledAt: new(now.Add(-5 * time.Second))})
+			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateCompleted), ScheduledAt: new(now.Add(-2 * time.Second))})
 		)
 
 		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().UnsafeAll())
@@ -3512,7 +3511,7 @@ func Test_Client_JobDeleteMany(t *testing.T) {
 
 		var (
 			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
-			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateRunning)})
 		)
 
 		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().IDs(job1.ID, job2.ID))
@@ -5148,9 +5147,9 @@ func Test_Client_JobList(t *testing.T) {
 
 		client, bundle := setup(t)
 
-		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Kind: ptrutil.Ptr("special_kind"), Priority: ptrutil.Ptr(1)})
-		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Kind: ptrutil.Ptr("special_kind"), Priority: ptrutil.Ptr(2)})
-		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Kind: ptrutil.Ptr("other_kind"), Priority: ptrutil.Ptr(1)})
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Kind: new("special_kind"), Priority: new(1)})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Kind: new("special_kind"), Priority: new(2)})
+		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Kind: new("other_kind"), Priority: new(1)})
 
 		listRes, err := client.JobList(ctx, NewJobListParams().IDs(job1.ID, job2.ID, job3.ID).Priorities(1, 2).Kinds("special_kind"))
 		require.NoError(t, err)
@@ -5162,9 +5161,9 @@ func Test_Client_JobList(t *testing.T) {
 
 		client, bundle := setup(t)
 
-		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Priority: ptrutil.Ptr(1)})
-		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Priority: ptrutil.Ptr(2)})
-		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Priority: ptrutil.Ptr(3)})
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Priority: new(1)})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Priority: new(2)})
+		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, Priority: new(3)})
 
 		listRes, err := client.JobList(ctx, NewJobListParams().Priorities(1))
 		require.NoError(t, err)
@@ -5180,9 +5179,9 @@ func Test_Client_JobList(t *testing.T) {
 
 		client, bundle := setup(t)
 
-		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind_1"), Schema: bundle.schema})
-		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind_1"), Schema: bundle.schema})
-		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind_2"), Schema: bundle.schema})
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("test_kind_1"), Schema: bundle.schema})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("test_kind_1"), Schema: bundle.schema})
+		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("test_kind_2"), Schema: bundle.schema})
 
 		listRes, err := client.JobList(ctx, NewJobListParams().Kinds("test_kind_1"))
 		require.NoError(t, err)
@@ -5199,9 +5198,9 @@ func Test_Client_JobList(t *testing.T) {
 
 		client, bundle := setup(t)
 
-		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue_1"), Schema: bundle.schema})
-		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue_1"), Schema: bundle.schema})
-		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue_2"), Schema: bundle.schema})
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: new("queue_1"), Schema: bundle.schema})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: new("queue_1"), Schema: bundle.schema})
+		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: new("queue_2"), Schema: bundle.schema})
 
 		listRes, err := client.JobList(ctx, NewJobListParams().Queues("queue_1"))
 		require.NoError(t, err)
@@ -5218,10 +5217,10 @@ func Test_Client_JobList(t *testing.T) {
 
 		client, bundle := setup(t)
 
-		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable), Schema: bundle.schema})
-		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable), Schema: bundle.schema})
-		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning), Schema: bundle.schema})
-		job4 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStatePending), Schema: bundle.schema})
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateAvailable), Schema: bundle.schema})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateAvailable), Schema: bundle.schema})
+		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning), Schema: bundle.schema})
+		job4 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStatePending), Schema: bundle.schema})
 
 		listRes, err := client.JobList(ctx, NewJobListParams().States(rivertype.JobStateAvailable))
 		require.NoError(t, err)
@@ -5268,8 +5267,8 @@ func Test_Client_JobList(t *testing.T) {
 			rivertype.JobStateScheduled,
 		}
 		for _, state := range states {
-			job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(state), ScheduledAt: &now, Schema: bundle.schema})
-			job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(state), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second)), Schema: bundle.schema})
+			job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(state), ScheduledAt: &now, Schema: bundle.schema})
+			job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(state), ScheduledAt: new(now.Add(-5 * time.Second)), Schema: bundle.schema})
 
 			listRes, err := client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).States(state))
 			require.NoError(t, err)
@@ -5294,8 +5293,8 @@ func Test_Client_JobList(t *testing.T) {
 			rivertype.JobStateDiscarded,
 		}
 		for _, state := range states {
-			job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(state), FinalizedAt: ptrutil.Ptr(now.Add(-10 * time.Second))})
-			job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(state), FinalizedAt: ptrutil.Ptr(now.Add(-15 * time.Second))})
+			job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(state), FinalizedAt: new(now.Add(-10 * time.Second))})
+			job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(state), FinalizedAt: new(now.Add(-15 * time.Second))})
 
 			listRes, err := client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).States(state))
 			require.NoError(t, err)
@@ -5313,8 +5312,8 @@ func Test_Client_JobList(t *testing.T) {
 		client, bundle := setup(t)
 
 		now := time.Now().UTC()
-		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: &now})
-		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateRunning), AttemptedAt: &now})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateRunning), AttemptedAt: new(now.Add(-5 * time.Second))})
 
 		listRes, err := client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).States(rivertype.JobStateRunning))
 		require.NoError(t, err)
@@ -5332,9 +5331,9 @@ func Test_Client_JobList(t *testing.T) {
 		client, bundle := setup(t)
 
 		now := time.Now().UTC()
-		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateAvailable), ScheduledAt: &now})
-		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateAvailable), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
-		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning), ScheduledAt: ptrutil.Ptr(now.Add(-2 * time.Second))})
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateAvailable), ScheduledAt: &now})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateAvailable), ScheduledAt: new(now.Add(-5 * time.Second))})
+		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateRunning), ScheduledAt: new(now.Add(-2 * time.Second))})
 
 		listRes, err := client.JobList(ctx, nil)
 		require.NoError(t, err)
@@ -5378,8 +5377,8 @@ func Test_Client_JobList(t *testing.T) {
 
 		now := time.Now().UTC()
 		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, ScheduledAt: &now})
-		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, ScheduledAt: ptrutil.Ptr(now.Add(1 * time.Second))})
-		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, ScheduledAt: ptrutil.Ptr(now.Add(2 * time.Second))})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, ScheduledAt: new(now.Add(1 * time.Second))})
+		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, ScheduledAt: new(now.Add(2 * time.Second))})
 
 		listRes, err := client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByScheduledAt, SortOrderAsc).After(JobListCursorFromJob(job1)))
 		require.NoError(t, err)
@@ -5407,12 +5406,12 @@ func Test_Client_JobList(t *testing.T) {
 		client, bundle := setup(t)
 
 		now := time.Now().UTC()
-		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateAvailable), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
-		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateAvailable), ScheduledAt: &now})
-		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second)), AttemptedAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
-		job4 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning), ScheduledAt: ptrutil.Ptr(now.Add(-6 * time.Second)), AttemptedAt: &now})
-		job5 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateCompleted), ScheduledAt: ptrutil.Ptr(now.Add(-7 * time.Second)), FinalizedAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
-		job6 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateCompleted), ScheduledAt: ptrutil.Ptr(now.Add(-7 * time.Second)), FinalizedAt: &now})
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateAvailable), ScheduledAt: new(now.Add(-5 * time.Second))})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateAvailable), ScheduledAt: &now})
+		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateRunning), ScheduledAt: new(now.Add(-5 * time.Second)), AttemptedAt: new(now.Add(-5 * time.Second))})
+		job4 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateRunning), ScheduledAt: new(now.Add(-6 * time.Second)), AttemptedAt: &now})
+		job5 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateCompleted), ScheduledAt: new(now.Add(-7 * time.Second)), FinalizedAt: new(now.Add(-5 * time.Second))})
+		job6 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateCompleted), ScheduledAt: new(now.Add(-7 * time.Second)), FinalizedAt: &now})
 
 		listRes, err := client.JobList(ctx, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc).States(rivertype.JobStateAvailable).After(JobListCursorFromJob(job1)))
 		require.NoError(t, err)
@@ -5515,10 +5514,10 @@ func Test_Client_JobList(t *testing.T) {
 
 		var (
 			job = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
-				MaxAttempts: ptrutil.Ptr(27),
-				Queue:       ptrutil.Ptr("custom_queue"),
+				MaxAttempts: new(27),
+				Queue:       new("custom_queue"),
 				Schema:      bundle.schema,
-				State:       ptrutil.Ptr(rivertype.JobStateDiscarded),
+				State:       new(rivertype.JobStateDiscarded),
 			})
 			_ = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
 		)
@@ -5979,18 +5978,18 @@ func Test_Client_Maintenance(t *testing.T) {
 		// Take care to insert jobs before starting the client because otherwise
 		// there's a race condition where the cleaner could run its initial
 		// pass before our insertion is complete.
-		ineligibleJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-		ineligibleJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning)})
-		ineligibleJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateScheduled)})
+		ineligibleJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateAvailable)})
+		ineligibleJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateRunning)})
+		ineligibleJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateScheduled)})
 
-		jobBeyondHorizon1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
-		jobBeyondHorizon2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
-		jobBeyondHorizon3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
+		jobBeyondHorizon1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateCancelled), FinalizedAt: new(deleteHorizon.Add(-1 * time.Hour))})
+		jobBeyondHorizon2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateCompleted), FinalizedAt: new(deleteHorizon.Add(-1 * time.Hour))})
+		jobBeyondHorizon3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateDiscarded), FinalizedAt: new(deleteHorizon.Add(-1 * time.Hour))})
 
 		// Will not be deleted.
-		jobWithinHorizon1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(1 * time.Hour))})
-		jobWithinHorizon2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(1 * time.Hour))})
-		jobWithinHorizon3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(1 * time.Hour))})
+		jobWithinHorizon1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateCancelled), FinalizedAt: new(deleteHorizon.Add(1 * time.Hour))})
+		jobWithinHorizon2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateCompleted), FinalizedAt: new(deleteHorizon.Add(1 * time.Hour))})
+		jobWithinHorizon3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateDiscarded), FinalizedAt: new(deleteHorizon.Add(1 * time.Hour))})
 
 		startAndWaitForQueueMaintainer(ctx, t, client)
 
@@ -6036,9 +6035,9 @@ func Test_Client_Maintenance(t *testing.T) {
 		// Take care to insert jobs before starting the client because otherwise
 		// there's a race condition where the cleaner could run its initial
 		// pass before our insertion is complete.
-		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
-		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
-		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateCancelled), FinalizedAt: new(deleteHorizon.Add(-1 * time.Hour))})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateCompleted), FinalizedAt: new(deleteHorizon.Add(-1 * time.Hour))})
+		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateDiscarded), FinalizedAt: new(deleteHorizon.Add(-1 * time.Hour))})
 
 		startAndWaitForQueueMaintainer(ctx, t, client)
 
@@ -6068,25 +6067,25 @@ func Test_Client_Maintenance(t *testing.T) {
 		// Take care to insert jobs before starting the client because otherwise
 		// there's a race condition where the rescuer could run its initial
 		// pass before our insertion is complete.
-		ineligibleJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(time.Minute))})
-		ineligibleJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(time.Minute))})
-		ineligibleJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(now.Add(-time.Minute))})
+		ineligibleJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("noOp"), Schema: bundle.schema, State: new(rivertype.JobStateScheduled), ScheduledAt: new(now.Add(time.Minute))})
+		ineligibleJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("noOp"), Schema: bundle.schema, State: new(rivertype.JobStateRetryable), ScheduledAt: new(now.Add(time.Minute))})
+		ineligibleJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("noOp"), Schema: bundle.schema, State: new(rivertype.JobStateCompleted), FinalizedAt: new(now.Add(-time.Minute))})
 
 		// large attempt number ensures these don't immediately start executing again:
-		jobStuckToRetry1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning), Attempt: ptrutil.Ptr(20), AttemptedAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
-		jobStuckToRetry2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning), Attempt: ptrutil.Ptr(20), AttemptedAt: ptrutil.Ptr(now.Add(-30 * time.Minute))})
+		jobStuckToRetry1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("noOp"), Schema: bundle.schema, State: new(rivertype.JobStateRunning), Attempt: new(20), AttemptedAt: new(now.Add(-1 * time.Hour))})
+		jobStuckToRetry2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("noOp"), Schema: bundle.schema, State: new(rivertype.JobStateRunning), Attempt: new(20), AttemptedAt: new(now.Add(-30 * time.Minute))})
 		jobStuckToDiscard := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
-			State:       ptrutil.Ptr(rivertype.JobStateRunning),
-			Attempt:     ptrutil.Ptr(20),
-			AttemptedAt: ptrutil.Ptr(now.Add(-5*time.Minute - time.Second)),
-			MaxAttempts: ptrutil.Ptr(1),
+			State:       new(rivertype.JobStateRunning),
+			Attempt:     new(20),
+			AttemptedAt: new(now.Add(-5*time.Minute - time.Second)),
+			MaxAttempts: new(1),
 			Schema:      bundle.schema,
 		})
 
 		// Will not be rescued.
-		jobNotYetStuck1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(now.Add(-4 * time.Minute))})
-		jobNotYetStuck2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(now.Add(-1 * time.Minute))})
-		jobNotYetStuck3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(now.Add(-10 * time.Second))})
+		jobNotYetStuck1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("noOp"), Schema: bundle.schema, State: new(rivertype.JobStateRunning), AttemptedAt: new(now.Add(-4 * time.Minute))})
+		jobNotYetStuck2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("noOp"), Schema: bundle.schema, State: new(rivertype.JobStateRunning), AttemptedAt: new(now.Add(-1 * time.Minute))})
+		jobNotYetStuck3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("noOp"), Schema: bundle.schema, State: new(rivertype.JobStateRunning), AttemptedAt: new(now.Add(-10 * time.Second))})
 
 		startAndWaitForQueueMaintainer(ctx, t, client)
 
@@ -6131,7 +6130,7 @@ func Test_Client_Maintenance(t *testing.T) {
 
 		client, bundle := setup(t, config)
 
-		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("noOp"), Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(time.Now().Add(-time.Hour))})
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("noOp"), Schema: bundle.schema, State: new(rivertype.JobStateRunning), AttemptedAt: new(time.Now().Add(-time.Hour))})
 
 		startAndWaitForQueueMaintainer(ctx, t, client)
 
@@ -6157,18 +6156,18 @@ func Test_Client_Maintenance(t *testing.T) {
 		// Take care to insert jobs before starting the client because otherwise
 		// there's a race condition where the scheduler could run its initial
 		// pass before our insertion is complete.
-		ineligibleJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-		ineligibleJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateRunning)})
-		ineligibleJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
+		ineligibleJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateAvailable)})
+		ineligibleJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateRunning)})
+		ineligibleJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateCompleted), FinalizedAt: new(now.Add(-1 * time.Hour))})
 
-		jobInPast1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
-		jobInPast2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Minute))})
-		jobInPast3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
+		jobInPast1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateScheduled), ScheduledAt: new(now.Add(-1 * time.Hour))})
+		jobInPast2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateScheduled), ScheduledAt: new(now.Add(-1 * time.Minute))})
+		jobInPast3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateScheduled), ScheduledAt: new(now.Add(-5 * time.Second))})
 
 		// Will not be scheduled.
-		jobInFuture1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(now.Add(1 * time.Hour))})
-		jobInFuture2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(now.Add(1 * time.Minute))})
-		jobInFuture3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(now.Add(10 * time.Second))})
+		jobInFuture1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateCancelled), FinalizedAt: new(now.Add(1 * time.Hour))})
+		jobInFuture2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateCompleted), FinalizedAt: new(now.Add(1 * time.Minute))})
+		jobInFuture3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateDiscarded), FinalizedAt: new(now.Add(10 * time.Second))})
 
 		startAndWaitForQueueMaintainer(ctx, t, client)
 
@@ -6625,14 +6624,14 @@ func Test_Client_Maintenance(t *testing.T) {
 		// Take care to insert queues before starting the client because otherwise
 		// there's a race condition where the cleaner could run its initial
 		// pass before our insertion is complete.
-		queueBeyondHorizon1 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Schema: schema, UpdatedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
-		queueBeyondHorizon2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Schema: schema, UpdatedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
-		queueBeyondHorizon3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Schema: schema, UpdatedAt: ptrutil.Ptr(deleteHorizon.Add(-1 * time.Hour))})
+		queueBeyondHorizon1 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Schema: schema, UpdatedAt: new(deleteHorizon.Add(-1 * time.Hour))})
+		queueBeyondHorizon2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Schema: schema, UpdatedAt: new(deleteHorizon.Add(-1 * time.Hour))})
+		queueBeyondHorizon3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Schema: schema, UpdatedAt: new(deleteHorizon.Add(-1 * time.Hour))})
 
 		// Will not be deleted.
-		queueWithinHorizon1 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Schema: schema, UpdatedAt: ptrutil.Ptr(deleteHorizon.Add(1 * time.Hour))})
-		queueWithinHorizon2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Schema: schema, UpdatedAt: ptrutil.Ptr(deleteHorizon.Add(1 * time.Hour))})
-		queueWithinHorizon3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Schema: schema, UpdatedAt: ptrutil.Ptr(deleteHorizon.Add(1 * time.Hour))})
+		queueWithinHorizon1 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Schema: schema, UpdatedAt: new(deleteHorizon.Add(1 * time.Hour))})
+		queueWithinHorizon2 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Schema: schema, UpdatedAt: new(deleteHorizon.Add(1 * time.Hour))})
+		queueWithinHorizon3 := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Schema: schema, UpdatedAt: new(deleteHorizon.Add(1 * time.Hour))})
 
 		startClient(ctx, t, client)
 

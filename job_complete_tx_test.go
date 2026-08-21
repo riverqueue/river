@@ -16,7 +16,6 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/testfactory"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -59,7 +58,7 @@ func TestJobCompleteTx(t *testing.T) {
 		ctx, bundle := setup(ctx, t)
 
 		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
-			State: ptrutil.Ptr(rivertype.JobStateRunning),
+			State: new(rivertype.JobStateRunning),
 		})
 
 		completedJob, err := JobCompleteTx[*riverpgxv5.Driver](ctx, bundle.tx, &Job[JobArgs]{JobRow: job})
@@ -85,7 +84,7 @@ func TestJobCompleteTx(t *testing.T) {
 		ctx = context.WithValue(ctx, jobexecutor.ContextKeyMetadataUpdates, metadataUpdates)
 
 		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
-			State: ptrutil.Ptr(rivertype.JobStateRunning),
+			State: new(rivertype.JobStateRunning),
 		})
 
 		completedJob, err := JobCompleteTx[*riverpgxv5.Driver](ctx, bundle.tx, &Job[JobArgs]{JobRow: job})
@@ -109,7 +108,7 @@ func TestJobCompleteTx(t *testing.T) {
 		ctx = context.WithValue(ctx, jobexecutor.ContextKeyMetadataUpdates, map[string]any{"foo": make(chan int)})
 
 		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
-			State: ptrutil.Ptr(rivertype.JobStateRunning),
+			State: new(rivertype.JobStateRunning),
 		})
 
 		_, err := JobCompleteTx[*riverpgxv5.Driver](ctx, bundle.tx, &Job[JobArgs]{JobRow: job})
@@ -133,7 +132,7 @@ func TestJobCompleteTx(t *testing.T) {
 		ctx, bundle := setup(ctx, t)
 
 		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
-			State: ptrutil.Ptr(rivertype.JobStateAvailable),
+			State: new(rivertype.JobStateAvailable),
 		})
 
 		// delete the job
@@ -152,7 +151,7 @@ func TestJobCompleteTx(t *testing.T) {
 		ctx, bundle := setup(ctx, t)
 		ctx = context.WithValue(ctx, execution.ContextKeyInsideTestWorker{}, true)
 
-		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateAvailable)})
 		// delete the job as though it was never inserted:
 		_, err := bundle.client.JobDeleteTx(ctx, bundle.tx, job.ID)
 		require.NoError(t, err)

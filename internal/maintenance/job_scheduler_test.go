@@ -17,7 +17,6 @@ import (
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivershared/uniquestates"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -122,20 +121,20 @@ func TestJobScheduler(t *testing.T) {
 		now := time.Now().UTC()
 
 		// none of these should get updated
-		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: ptrutil.Ptr(now), State: ptrutil.Ptr(rivertype.JobStateCompleted)})
-		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
-		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: ptrutil.Ptr(now), State: ptrutil.Ptr(rivertype.JobStateCancelled)})
-		job4 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: ptrutil.Ptr(now), State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
-		job5 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: new(now), State: new(rivertype.JobStateCompleted)})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
+		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: new(now), State: new(rivertype.JobStateCancelled)})
+		job4 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: new(now), State: new(rivertype.JobStateDiscarded)})
+		job5 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateAvailable)})
 
-		scheduledJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
-		scheduledJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
-		scheduledJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(scheduler.config.Interval - time.Millisecond))}) // won't be scheduled
-		scheduledJob4 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(30 * time.Second))})                             // won't be scheduled
+		scheduledJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateScheduled), ScheduledAt: new(now.Add(-1 * time.Hour))})
+		scheduledJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateScheduled), ScheduledAt: new(now.Add(-5 * time.Second))})
+		scheduledJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateScheduled), ScheduledAt: new(now.Add(scheduler.config.Interval - time.Millisecond))}) // won't be scheduled
+		scheduledJob4 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateScheduled), ScheduledAt: new(now.Add(30 * time.Second))})                             // won't be scheduled
 
-		retryableJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
-		retryableJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
-		retryableJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(30 * time.Second))}) // won't be scheduled
+		retryableJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateRetryable), ScheduledAt: new(now.Add(-1 * time.Hour))})
+		retryableJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateRetryable), ScheduledAt: new(now.Add(-5 * time.Second))})
+		retryableJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateRetryable), ScheduledAt: new(now.Add(30 * time.Second))}) // won't be scheduled
 
 		require.NoError(t, scheduler.Start(ctx))
 
@@ -173,20 +172,20 @@ func TestJobScheduler(t *testing.T) {
 		}
 		uniqueMap := uniquestates.UniqueStatesToBitmask(uniqueStates)
 
-		retryableJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("1"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
-		retryableJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("2"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))})
-		retryableJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("3"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))}) // dupe
-		retryableJob4 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("4"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))}) // dupe
-		retryableJob5 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("5"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))}) // dupe
-		retryableJob6 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("6"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))}) // dupe
-		retryableJob7 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("7"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-5 * time.Second))}) // dupe
+		retryableJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("1"), UniqueStates: uniqueMap, State: new(rivertype.JobStateRetryable), ScheduledAt: new(now.Add(-1 * time.Hour))})
+		retryableJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("2"), UniqueStates: uniqueMap, State: new(rivertype.JobStateRetryable), ScheduledAt: new(now.Add(-5 * time.Second))})
+		retryableJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("3"), UniqueStates: uniqueMap, State: new(rivertype.JobStateRetryable), ScheduledAt: new(now.Add(-5 * time.Second))}) // dupe
+		retryableJob4 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("4"), UniqueStates: uniqueMap, State: new(rivertype.JobStateRetryable), ScheduledAt: new(now.Add(-5 * time.Second))}) // dupe
+		retryableJob5 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("5"), UniqueStates: uniqueMap, State: new(rivertype.JobStateRetryable), ScheduledAt: new(now.Add(-5 * time.Second))}) // dupe
+		retryableJob6 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("6"), UniqueStates: uniqueMap, State: new(rivertype.JobStateRetryable), ScheduledAt: new(now.Add(-5 * time.Second))}) // dupe
+		retryableJob7 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("7"), UniqueStates: uniqueMap, State: new(rivertype.JobStateRetryable), ScheduledAt: new(now.Add(-5 * time.Second))}) // dupe
 
 		// Will cause conflicts with above jobs when retried:
-		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("3"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("4"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
-		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("5"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStatePending)})
-		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("6"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateRunning)})
-		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("7"), UniqueStates: uniqueMap, State: ptrutil.Ptr(rivertype.JobStateScheduled)})
+		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("3"), UniqueStates: uniqueMap, State: new(rivertype.JobStateAvailable)})
+		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("4"), UniqueStates: uniqueMap, State: new(rivertype.JobStateCompleted)})
+		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("5"), UniqueStates: uniqueMap, State: new(rivertype.JobStatePending)})
+		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("6"), UniqueStates: uniqueMap, State: new(rivertype.JobStateRunning)})
+		testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{UniqueKey: []byte("7"), UniqueStates: uniqueMap, State: new(rivertype.JobStateScheduled)})
 
 		require.NoError(t, scheduler.Start(ctx))
 
@@ -221,9 +220,9 @@ func TestJobScheduler(t *testing.T) {
 				jobState = rivertype.JobStateRetryable
 			}
 			job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
-				Queue:       ptrutil.Ptr("scheduler_test"),
+				Queue:       new("scheduler_test"),
 				State:       &jobState,
-				ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour)),
+				ScheduledAt: new(now.Add(-1 * time.Hour)),
 			})
 			jobs[i] = job
 		}
@@ -290,7 +289,7 @@ func TestJobScheduler(t *testing.T) {
 		scheduler.config.Interval = time.Minute // should only trigger once for the initial run
 		now := time.Now().UTC()
 
-		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour))})
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateScheduled), ScheduledAt: new(now.Add(-1 * time.Hour))})
 
 		require.NoError(t, scheduler.Start(ctx))
 
@@ -298,7 +297,7 @@ func TestJobScheduler(t *testing.T) {
 
 		scheduler.Stop()
 
-		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRetryable), ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Minute))})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateRetryable), ScheduledAt: new(now.Add(-1 * time.Minute))})
 
 		require.NoError(t, scheduler.Start(ctx))
 
@@ -333,14 +332,14 @@ func TestJobScheduler(t *testing.T) {
 			switch state {
 			case rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRetryable, rivertype.JobStateRunning, rivertype.JobStateScheduled:
 			case rivertype.JobStateCompleted, rivertype.JobStateCancelled, rivertype.JobStateDiscarded:
-				finalizedAt = ptrutil.Ptr(now.Add(fromNow))
+				finalizedAt = new(now.Add(fromNow))
 			}
 			testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				FinalizedAt: finalizedAt,
 				Queue:       &queue,
 				Schema:      schema,
 				State:       &state,
-				ScheduledAt: ptrutil.Ptr(now.Add(fromNow)),
+				ScheduledAt: new(now.Add(fromNow)),
 			})
 		}
 

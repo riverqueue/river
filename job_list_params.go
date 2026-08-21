@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/riverqueue/river/internal/dblist"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -38,9 +37,9 @@ func jobListCursorFromJobAndParams(job *rivertype.JobRow, listParams *JobListPar
 	// Don't include a `default` so `exhaustive` lint can detect omissions.
 	switch listParams.sortField {
 	case JobListOrderByID:
-		cursorTime = ptrutil.Ptr(time.Time{})
+		cursorTime = new(time.Time{})
 	case JobListOrderByTime:
-		cursorTime = ptrutil.Ptr(jobListTimeValue(job))
+		cursorTime = new(jobListTimeValue(job))
 	case JobListOrderByFinalizedAt:
 		if job.FinalizedAt != nil {
 			cursorTime = job.FinalizedAt

@@ -1,8 +1,10 @@
 package ptrutil
 
 // Ptr returns a pointer to the given value.
+//
+// Deprecated: use new(value) instead.
 func Ptr[T any](v T) *T {
-	return &v
+	return new(v)
 }
 
 // ValOrDefault returns the value of the given pointer as long as it's non-nil,

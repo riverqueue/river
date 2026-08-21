@@ -93,13 +93,6 @@ linters:
       excludes:
         - G404 # use of non-crypto random; overly broad for our use case
 
-    modernize:
-      disable:
-        # Keep the Go 1.26 upgrade focused; apply its modernizations separately.
-        - errorsastype
-        - newexpr
-        - stditerators
-
     revive:
       rules:
         - name: unused-parameter

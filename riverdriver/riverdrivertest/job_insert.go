@@ -20,7 +20,6 @@ import (
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/testfactory"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -60,15 +59,15 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
 			for i := range insertParams {
 				insertParams[i] = &riverdriver.JobInsertFastParams{
-					ID:           ptrutil.Ptr(idStart + int64(i)),
-					CreatedAt:    ptrutil.Ptr(now.Add(time.Duration(i) * 5 * time.Second)),
+					ID:           new(idStart + int64(i)),
+					CreatedAt:    new(now.Add(time.Duration(i) * 5 * time.Second)),
 					EncodedArgs:  []byte(`{"encoded": "args"}`),
 					Kind:         "test_kind",
 					MaxAttempts:  rivercommon.MaxAttemptsDefault,
 					Metadata:     []byte(`{"meta": "data"}`),
 					Priority:     rivercommon.PriorityDefault,
 					Queue:        rivercommon.QueueDefault,
-					ScheduledAt:  ptrutil.Ptr(now.Add(time.Duration(i) * time.Minute)),
+					ScheduledAt:  new(now.Add(time.Duration(i) * time.Minute)),
 					State:        rivertype.JobStateAvailable,
 					Tags:         []string{"tag"},
 					UniqueKey:    []byte("unique-key-fast-many-" + strconv.Itoa(i)),
@@ -279,7 +278,7 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
 			for i := range insertParams {
 				insertParams[i] = &riverdriver.JobInsertFastParams{
-					CreatedAt:    ptrutil.Ptr(now.Add(time.Duration(i) * 5 * time.Second)),
+					CreatedAt:    new(now.Add(time.Duration(i) * 5 * time.Second)),
 					EncodedArgs:  []byte(`{"encoded": "args"}`),
 					Kind:         "test_kind",
 					MaxAttempts:  rivercommon.MaxAttemptsDefault,
@@ -471,7 +470,7 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 					Metadata:    []byte(`{"meta": "data"}`),
 					Priority:    rivercommon.PriorityDefault,
 					Queue:       rivercommon.QueueDefault,
-					ScheduledAt: ptrutil.Ptr(time.Now().UTC()),
+					ScheduledAt: new(time.Now().UTC()),
 					State:       rivertype.JobStateAvailable,
 					Tags:        []string{"tag"},
 				}
@@ -550,7 +549,7 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 			insertParams := make([]*riverdriver.JobInsertFastParams, 10)
 			for i := range insertParams {
 				insertParams[i] = &riverdriver.JobInsertFastParams{
-					CreatedAt:    ptrutil.Ptr(now.Add(time.Duration(i) * 5 * time.Second)),
+					CreatedAt:    new(now.Add(time.Duration(i) * 5 * time.Second)),
 					EncodedArgs:  []byte(`{"encoded": "args"}`),
 					Kind:         "test_kind",
 					MaxAttempts:  rivercommon.MaxAttemptsDefault,
@@ -711,7 +710,7 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 					// Create a job with the target state but with a finalized_at, expect
 					// no error:
 					_, err := exec.JobInsertFull(ctx, testfactory.Job_Build(t, &testfactory.JobOpts{
-						FinalizedAt: ptrutil.Ptr(time.Now()),
+						FinalizedAt: new(time.Now()),
 						State:       &state,
 					}))
 					require.NoError(t, err)
@@ -745,7 +744,7 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 					// Create a job with the target state but with a finalized_at, expect
 					// an error:
 					_, err := exec.JobInsertFull(ctx, testfactory.Job_Build(t, &testfactory.JobOpts{
-						FinalizedAt: ptrutil.Ptr(time.Now()),
+						FinalizedAt: new(time.Now()),
 						State:       &state,
 					}))
 					require.Error(t, err)
@@ -762,10 +761,10 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 		exec, bundle := setup(ctx, t)
 
 		jobParams1 := testfactory.Job_Build(t, &testfactory.JobOpts{
-			State: ptrutil.Ptr(rivertype.JobStateCompleted),
+			State: new(rivertype.JobStateCompleted),
 		})
 		jobParams2 := testfactory.Job_Build(t, &testfactory.JobOpts{
-			State: ptrutil.Ptr(rivertype.JobStateRunning),
+			State: new(rivertype.JobStateRunning),
 		})
 
 		results, err := exec.JobInsertFullMany(ctx, &riverdriver.JobInsertFullManyParams{
@@ -849,7 +848,7 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 			Jobs: []*riverdriver.JobInsertFastParams{
 				{
 					EncodedArgs: []byte(`{"encoded": "fast-many"}`),
-					ID:          ptrutil.Ptr(idStart),
+					ID:          new(idStart),
 					Kind:        "test_kind",
 					MaxAttempts: rivercommon.MaxAttemptsDefault,
 					Metadata:    []byte(`{"meta": "fast-many"}`),

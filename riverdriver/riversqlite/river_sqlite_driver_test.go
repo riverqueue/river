@@ -11,7 +11,6 @@ import (
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -45,9 +44,9 @@ func TestTimeStringNullable(t *testing.T) {
 	t.Parallel()
 
 	require.Nil(t, timeStringNullable(nil))
-	require.Equal(t, "2025-04-30 13:26:39.100", *timeStringNullable(ptrutil.Ptr(time.Date(2025, 4, 30, 13, 26, 39, 100000000, time.UTC))))
-	require.Equal(t, "2025-04-30 13:26:39.123", *timeStringNullable(ptrutil.Ptr(time.Date(2025, 4, 30, 13, 26, 39, 123456789, time.UTC))))
-	require.Equal(t, "2025-04-30 13:26:39.124", *timeStringNullable(ptrutil.Ptr(time.Date(2025, 4, 30, 13, 26, 39, 123800000, time.UTC)))) // test rounding
+	require.Equal(t, "2025-04-30 13:26:39.100", *timeStringNullable(new(time.Date(2025, 4, 30, 13, 26, 39, 100000000, time.UTC))))
+	require.Equal(t, "2025-04-30 13:26:39.123", *timeStringNullable(new(time.Date(2025, 4, 30, 13, 26, 39, 123456789, time.UTC))))
+	require.Equal(t, "2025-04-30 13:26:39.124", *timeStringNullable(new(time.Date(2025, 4, 30, 13, 26, 39, 123800000, time.UTC)))) // test rounding
 }
 
 func TestSchemaTemplateParam(t *testing.T) {

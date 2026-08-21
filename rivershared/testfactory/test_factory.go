@@ -58,7 +58,7 @@ func Job_Build(tb testing.TB, opts *JobOpts) *riverdriver.JobInsertFullParams {
 		rivertype.JobStateRetryable,
 		rivertype.JobStateRunning,
 	}, *opts.State)) {
-		attemptedAt = ptrutil.Ptr(time.Now())
+		attemptedAt = new(time.Now())
 	}
 
 	encodedArgs := opts.EncodedArgs
@@ -72,7 +72,7 @@ func Job_Build(tb testing.TB, opts *JobOpts) *riverdriver.JobInsertFullParams {
 		rivertype.JobStateCancelled,
 		rivertype.JobStateDiscarded,
 	}, *opts.State)) {
-		finalizedAt = ptrutil.Ptr(time.Now())
+		finalizedAt = new(time.Now())
 	}
 
 	metadata := opts.Metadata

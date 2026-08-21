@@ -10,7 +10,6 @@ import (
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/testfactory"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -116,7 +115,7 @@ func Benchmark[TTx any](ctx context.Context, b *testing.B,
 				params.State[j] = rivertype.JobStateCompleted
 			case 2:
 				// Snooze the job
-				params.Attempt[j] = ptrutil.Ptr(1)
+				params.Attempt[j] = new(1)
 				params.ScheduledAt[j] = &now
 				params.State[j] = rivertype.JobStateScheduled
 			default:

@@ -21,7 +21,6 @@ import (
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -162,7 +161,7 @@ func TestJobRescuer(t *testing.T) {
 		rescuer, bundle := setup(t)
 		rescuer.Config.ClientJobTimeout = -1
 
-		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-24 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKind), State: new(rivertype.JobStateRunning), AttemptedAt: new(bundle.rescueHorizon.Add(-24 * time.Hour)), MaxAttempts: new(5)})
 
 		_, err := rescuer.runOnce(ctx)
 		require.NoError(t, err)
@@ -203,32 +202,32 @@ func TestJobRescuer(t *testing.T) {
 
 		rescuer, bundle := setup(t)
 
-		stuckToRetryJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
-		stuckToRetryJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)})
-		stuckToRetryJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(1 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)}) // won't be rescued
+		stuckToRetryJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKind), State: new(rivertype.JobStateRunning), AttemptedAt: new(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: new(5)})
+		stuckToRetryJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKind), State: new(rivertype.JobStateRunning), AttemptedAt: new(bundle.rescueHorizon.Add(-1 * time.Minute)), MaxAttempts: new(5)})
+		stuckToRetryJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKind), State: new(rivertype.JobStateRunning), AttemptedAt: new(bundle.rescueHorizon.Add(1 * time.Minute)), MaxAttempts: new(5)}) // won't be rescued
 
 		// Already at max attempts:
-		stuckToDiscardJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), Attempt: ptrutil.Ptr(5), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
-		stuckToDiscardJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), Attempt: ptrutil.Ptr(5), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(1 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)}) // won't be rescued
+		stuckToDiscardJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKind), State: new(rivertype.JobStateRunning), Attempt: new(5), AttemptedAt: new(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: new(5)})
+		stuckToDiscardJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKind), State: new(rivertype.JobStateRunning), Attempt: new(5), AttemptedAt: new(bundle.rescueHorizon.Add(1 * time.Minute)), MaxAttempts: new(5)}) // won't be rescued
 
 		// Marked as cancelled by query:
 		cancelTime := time.Now().UTC().Format(time.RFC3339Nano)
-		stuckToCancelJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), Metadata: fmt.Appendf(nil, `{"cancel_attempted_at": %q}`, cancelTime), MaxAttempts: ptrutil.Ptr(5)})
-		stuckToCancelJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(1 * time.Minute)), Metadata: fmt.Appendf(nil, `{"cancel_attempted_at": %q}`, cancelTime), MaxAttempts: ptrutil.Ptr(5)}) // won't be rescued
+		stuckToCancelJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKind), State: new(rivertype.JobStateRunning), AttemptedAt: new(bundle.rescueHorizon.Add(-1 * time.Hour)), Metadata: fmt.Appendf(nil, `{"cancel_attempted_at": %q}`, cancelTime), MaxAttempts: new(5)})
+		stuckToCancelJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKind), State: new(rivertype.JobStateRunning), AttemptedAt: new(bundle.rescueHorizon.Add(1 * time.Minute)), Metadata: fmt.Appendf(nil, `{"cancel_attempted_at": %q}`, cancelTime), MaxAttempts: new(5)}) // won't be rescued
 
 		// these aren't touched because they're in ineligible states
-		notRunningJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), FinalizedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), State: ptrutil.Ptr(rivertype.JobStateCompleted), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
-		notRunningJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), FinalizedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), State: ptrutil.Ptr(rivertype.JobStateDiscarded), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
-		notRunningJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), FinalizedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), State: ptrutil.Ptr(rivertype.JobStateCancelled), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+		notRunningJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKind), FinalizedAt: new(bundle.rescueHorizon.Add(-1 * time.Hour)), State: new(rivertype.JobStateCompleted), AttemptedAt: new(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: new(5)})
+		notRunningJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKind), FinalizedAt: new(bundle.rescueHorizon.Add(-1 * time.Hour)), State: new(rivertype.JobStateDiscarded), AttemptedAt: new(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: new(5)})
+		notRunningJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKind), FinalizedAt: new(bundle.rescueHorizon.Add(-1 * time.Hour)), State: new(rivertype.JobStateCancelled), AttemptedAt: new(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: new(5)})
 
 		// Jobs with worker-specific long timeouts. The first isn't rescued
 		// because the difference between its `attempted_at` and now is still
 		// within the timeout threshold. The second _is_ rescued because it
 		// started earlier and even with the longer timeout, has still timed out.
-		longTimeOutJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKindLongTimeout), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)})
-		longTimeOutJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKindLongTimeout), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-6 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)})
+		longTimeOutJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKindLongTimeout), State: new(rivertype.JobStateRunning), AttemptedAt: new(bundle.rescueHorizon.Add(-1 * time.Minute)), MaxAttempts: new(5)})
+		longTimeOutJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKindLongTimeout), State: new(rivertype.JobStateRunning), AttemptedAt: new(bundle.rescueHorizon.Add(-6 * time.Minute)), MaxAttempts: new(5)})
 
-		noTimeoutJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKindNoTimeout), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-24 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+		noTimeoutJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKindNoTimeout), State: new(rivertype.JobStateRunning), AttemptedAt: new(bundle.rescueHorizon.Add(-24 * time.Hour)), MaxAttempts: new(5)})
 
 		require.NoError(t, rescuer.Start(ctx))
 
@@ -312,7 +311,7 @@ func TestJobRescuer(t *testing.T) {
 		jobs := make([]*rivertype.JobRow, numJobs)
 
 		for i := range numJobs {
-			job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+			job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKind), State: new(rivertype.JobStateRunning), AttemptedAt: new(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: new(5)})
 			jobs[i] = job
 		}
 
@@ -339,9 +338,9 @@ func TestJobRescuer(t *testing.T) {
 
 		noTimeoutJobs := make([]*rivertype.JobRow, rescuer.Config.Default+1)
 		for i := range noTimeoutJobs {
-			noTimeoutJobs[i] = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKindNoTimeout), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-24 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+			noTimeoutJobs[i] = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKindNoTimeout), State: new(rivertype.JobStateRunning), AttemptedAt: new(bundle.rescueHorizon.Add(-24 * time.Hour)), MaxAttempts: new(5)})
 		}
-		jobToRescue := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+		jobToRescue := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKind), State: new(rivertype.JobStateRunning), AttemptedAt: new(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: new(5)})
 
 		_, err := rescuer.runOnce(ctx)
 		require.NoError(t, err)
@@ -459,7 +458,7 @@ func TestJobRescuer(t *testing.T) {
 		pilot := &jobRescuerPilotSpy{}
 		rescuer.Config.Pilot = pilot
 
-		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKind), State: new(rivertype.JobStateRunning), AttemptedAt: new(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: new(5)})
 
 		_, err := rescuer.runOnce(ctx)
 		require.NoError(t, err)
@@ -480,7 +479,7 @@ func TestJobRescuer(t *testing.T) {
 		_, implementsJobRescuer := rescuer.Config.Pilot.(riverpilot.PilotJobRescuer)
 		require.False(t, implementsJobRescuer)
 
-		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKind), State: new(rivertype.JobStateRunning), AttemptedAt: new(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: new(5)})
 
 		_, err := rescuer.runOnce(ctx)
 		require.NoError(t, err)
@@ -496,7 +495,7 @@ func TestJobRescuer(t *testing.T) {
 		rescuer, bundle := setup(t)
 		rescuer.Config.Interval = time.Minute // should only trigger once for the initial run
 
-		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), Attempt: ptrutil.Ptr(5), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: ptrutil.Ptr(5)})
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKind), State: new(rivertype.JobStateRunning), Attempt: new(5), AttemptedAt: new(bundle.rescueHorizon.Add(-1 * time.Hour)), MaxAttempts: new(5)})
 
 		require.NoError(t, rescuer.Start(ctx))
 
@@ -505,7 +504,7 @@ func TestJobRescuer(t *testing.T) {
 
 		rescuer.Stop()
 
-		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: ptrutil.Ptr(rescuerJobKind), State: ptrutil.Ptr(rivertype.JobStateRunning), Attempt: ptrutil.Ptr(5), AttemptedAt: ptrutil.Ptr(bundle.rescueHorizon.Add(-1 * time.Minute)), MaxAttempts: ptrutil.Ptr(5)})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(rescuerJobKind), State: new(rivertype.JobStateRunning), Attempt: new(5), AttemptedAt: new(bundle.rescueHorizon.Add(-1 * time.Minute)), MaxAttempts: new(5)})
 
 		require.NoError(t, rescuer.Start(ctx))
 

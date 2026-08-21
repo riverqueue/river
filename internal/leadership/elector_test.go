@@ -20,7 +20,6 @@ import (
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivershared/util/dbutil"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -275,9 +274,9 @@ func TestElectorRunLeaderState(t *testing.T) {
 		elector.publishLeadershipState(true)
 
 		leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
-			ElectedAt: ptrutil.Ptr(initialNow),
-			ExpiresAt: ptrutil.Ptr(initialNow.Add(elector.leaderTTL())),
-			LeaderID:  ptrutil.Ptr(elector.config.ClientID),
+			ElectedAt: new(initialNow),
+			ExpiresAt: new(initialNow.Add(elector.leaderTTL())),
+			LeaderID:  new(elector.config.ClientID),
 		})
 
 		elector.exec = &leaderReelectExecutorMock{
@@ -318,9 +317,9 @@ func TestElectorRunLeaderState(t *testing.T) {
 		elector.publishLeadershipState(true)
 
 		leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
-			ElectedAt: ptrutil.Ptr(initialNow),
-			ExpiresAt: ptrutil.Ptr(initialNow.Add(elector.leaderTTL())),
-			LeaderID:  ptrutil.Ptr(elector.config.ClientID),
+			ElectedAt: new(initialNow),
+			ExpiresAt: new(initialNow.Add(elector.leaderTTL())),
+			LeaderID:  new(elector.config.ClientID),
 		})
 
 		var numAttempts int

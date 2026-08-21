@@ -25,7 +25,6 @@ import (
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivertype"
@@ -829,8 +828,8 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		AddWorker(bundle.workers, &noOpWorker{})
 
 		testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{
-			Name:     ptrutil.Ptr(producer.config.Queue),
-			PausedAt: ptrutil.Ptr(time.Now()),
+			Name:     new(producer.config.Queue),
+			PausedAt: new(time.Now()),
 			Schema:   producer.config.Schema,
 		})
 

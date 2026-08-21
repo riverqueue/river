@@ -103,9 +103,7 @@ func sortedFieldsWithTagUncached(typ reflect.Type, tagValue string, path []strin
 	var uniqueFields []string
 
 	// Iterate over all fields
-	for i := range typ.NumField() {
-		field := typ.Field(i)
-
+	for field := range typ.Fields() {
 		if !field.IsExported() {
 			continue
 		}

@@ -12,7 +12,6 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/testfactory"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -93,11 +92,11 @@ func TestJobListWithJobs(t *testing.T) {
 			exec   = driver.UnwrapExecutor(tx)
 		)
 
-		job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("priority"), Priority: ptrutil.Ptr(1)})
-		job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{EncodedArgs: []byte(`{"job_num": 2}`), Priority: ptrutil.Ptr(2)})
-		job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Metadata: []byte(`{"some_key": "some_value"}`), Priority: ptrutil.Ptr(3)})
-		job4 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning), Priority: ptrutil.Ptr(1)})
-		job5 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("alternate_kind"), Priority: ptrutil.Ptr(2)})
+		job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: new("priority"), Priority: new(1)})
+		job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{EncodedArgs: []byte(`{"job_num": 2}`), Priority: new(2)})
+		job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Metadata: []byte(`{"some_key": "some_value"}`), Priority: new(3)})
+		job4 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning), Priority: new(1)})
+		job5 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("alternate_kind"), Priority: new(2)})
 
 		return &testBundle{
 			baselineTime: time.Now(),

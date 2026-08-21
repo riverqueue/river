@@ -16,7 +16,6 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivershared/uniquestates"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -86,7 +85,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			nowStr := now.Format(time.RFC3339Nano)
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				State:     ptrutil.Ptr(rivertype.JobStateRunning),
+				State:     new(rivertype.JobStateRunning),
 				UniqueKey: []byte("unique-key"),
 			})
 			require.Equal(t, rivertype.JobStateRunning, job.State)
@@ -115,7 +114,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 				exec, _ := setup(ctx, t)
 
 				job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-					FinalizedAt: ptrutil.Ptr(time.Now()),
+					FinalizedAt: new(time.Now()),
 					State:       &startingState,
 				})
 
@@ -155,11 +154,11 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 
 		job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 			Metadata: []byte(`{"river:rescue_count": 5, "something": "else"}`),
-			State:    ptrutil.Ptr(rivertype.JobStateRunning),
+			State:    new(rivertype.JobStateRunning),
 		})
 		job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 			Metadata: []byte(`{}`),
-			State:    ptrutil.Ptr(rivertype.JobStateRunning),
+			State:    new(rivertype.JobStateRunning),
 		})
 
 		_, err := exec.JobRescueMany(ctx, &riverdriver.JobRescueManyParams{
@@ -213,7 +212,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			exec, _ := setup(ctx, t)
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				State: ptrutil.Ptr(rivertype.JobStateRunning),
+				State: new(rivertype.JobStateRunning),
 			})
 
 			jobAfter, err := exec.JobRetry(ctx, &riverdriver.JobRetryParams{
@@ -257,7 +256,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 
 				job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 					FinalizedAt: finalizedAt,
-					ScheduledAt: ptrutil.Ptr(now.Add(1 * time.Hour)),
+					ScheduledAt: new(now.Add(1 * time.Hour)),
 					State:       &state,
 				})
 
@@ -290,8 +289,8 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				FinalizedAt: &now,
-				ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour)),
-				State:       ptrutil.Ptr(rivertype.JobStateCompleted),
+				ScheduledAt: new(now.Add(-1 * time.Hour)),
+				State:       new(rivertype.JobStateCompleted),
 			})
 
 			jobAfter, err := exec.JobRetry(ctx, &riverdriver.JobRetryParams{
@@ -313,7 +312,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			now := time.Now().UTC()
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Hour)),
+				ScheduledAt: new(now.Add(-1 * time.Hour)),
 			})
 
 			jobAfter, err := exec.JobRetry(ctx, &riverdriver.JobRetryParams{
@@ -354,18 +353,18 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 				afterHorizon  = horizon.Add(1 * time.Minute)
 			)
 
-			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRetryable)})
-			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateScheduled)})
-			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateScheduled)})
+			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: new(rivertype.JobStateRetryable)})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: new(rivertype.JobStateScheduled)})
+			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: new(rivertype.JobStateScheduled)})
 
 			// States that aren't scheduled.
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, ScheduledAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: new(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, ScheduledAt: &beforeHorizon, State: new(rivertype.JobStateCompleted)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, ScheduledAt: &beforeHorizon, State: new(rivertype.JobStateDiscarded)})
 
 			// Right state, but after horizon.
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &afterHorizon, State: ptrutil.Ptr(rivertype.JobStateRetryable)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &afterHorizon, State: ptrutil.Ptr(rivertype.JobStateScheduled)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &afterHorizon, State: new(rivertype.JobStateRetryable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &afterHorizon, State: new(rivertype.JobStateScheduled)})
 
 			// First two scheduled because of limit.
 			result, err := exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
@@ -429,13 +428,13 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 
 			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				ScheduledAt:  &beforeHorizon,
-				State:        ptrutil.Ptr(rivertype.JobStateRetryable),
+				State:        new(rivertype.JobStateRetryable),
 				UniqueKey:    []byte("unique-key-1"),
 				UniqueStates: uniquestates.UniqueStatesToBitmask(nonRetryableUniqueStates),
 			})
 			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				ScheduledAt:  &beforeHorizon,
-				State:        ptrutil.Ptr(rivertype.JobStateRetryable),
+				State:        new(rivertype.JobStateRetryable),
 				UniqueKey:    []byte("unique-key-2"),
 				UniqueStates: uniquestates.UniqueStatesToBitmask(nonRetryableUniqueStates),
 			})
@@ -443,7 +442,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			// scheduled.
 			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				ScheduledAt:  &beforeHorizon,
-				State:        ptrutil.Ptr(rivertype.JobStateRetryable),
+				State:        new(rivertype.JobStateRetryable),
 				UniqueKey:    []byte("unique-key-3"),
 				UniqueStates: uniquestates.UniqueStatesToBitmask(defaultUniqueStates),
 			})
@@ -452,7 +451,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			// the same unique properties:
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				ScheduledAt:  &beforeHorizon,
-				State:        ptrutil.Ptr(rivertype.JobStateRunning),
+				State:        new(rivertype.JobStateRunning),
 				UniqueKey:    []byte("unique-key-1"),
 				UniqueStates: uniquestates.UniqueStatesToBitmask(nonRetryableUniqueStates),
 			})
@@ -460,7 +459,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			// isn't in the unique states:
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				ScheduledAt:  &beforeHorizon,
-				State:        ptrutil.Ptr(rivertype.JobStateCompleted),
+				State:        new(rivertype.JobStateCompleted),
 				UniqueKey:    []byte("unique-key-2"),
 				UniqueStates: uniquestates.UniqueStatesToBitmask(nonRetryableUniqueStates),
 			})
@@ -508,13 +507,13 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 
 			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				ScheduledAt:  &beforeHorizon,
-				State:        ptrutil.Ptr(rivertype.JobStateRetryable),
+				State:        new(rivertype.JobStateRetryable),
 				UniqueKey:    []byte("unique-key-1"),
 				UniqueStates: uniquestates.UniqueStatesToBitmask(nonRetryableUniqueStates),
 			})
 			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				ScheduledAt:  &beforeHorizon,
-				State:        ptrutil.Ptr(rivertype.JobStateRetryable),
+				State:        new(rivertype.JobStateRetryable),
 				UniqueKey:    []byte("unique-key-1"),
 				UniqueStates: uniquestates.UniqueStatesToBitmask(nonRetryableUniqueStates),
 			})
@@ -594,7 +593,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			now := precisionTestTime
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				State:     ptrutil.Ptr(rivertype.JobStateRunning),
+				State:     new(rivertype.JobStateRunning),
 				UniqueKey: []byte("unique-key"),
 			})
 
@@ -618,7 +617,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			now := time.Now().UTC()
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				State:     ptrutil.Ptr(rivertype.JobStateRetryable),
+				State:     new(rivertype.JobStateRetryable),
 				UniqueKey: []byte("unique-key"),
 			})
 
@@ -643,7 +642,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				Metadata:  []byte(`{"foo":"baz", "something":"else"}`),
-				State:     ptrutil.Ptr(rivertype.JobStateRunning),
+				State:     new(rivertype.JobStateRunning),
 				UniqueKey: []byte("unique-key"),
 			})
 
@@ -679,7 +678,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			now := precisionTestTime
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				State:     ptrutil.Ptr(rivertype.JobStateRunning),
+				State:     new(rivertype.JobStateRunning),
 				UniqueKey: []byte("unique-key"),
 			})
 
@@ -711,9 +710,9 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			attempt := 2
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				Attempt:     ptrutil.Ptr(3),
-				MaxAttempts: ptrutil.Ptr(3),
-				State:       ptrutil.Ptr(rivertype.JobStateRunning),
+				Attempt:     new(3),
+				MaxAttempts: new(3),
+				State:       new(rivertype.JobStateRunning),
 				UniqueKey:   []byte("unique-key"),
 			})
 
@@ -744,8 +743,8 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			now := time.Now().UTC()
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				State:       ptrutil.Ptr(rivertype.JobStateRetryable),
-				ScheduledAt: ptrutil.Ptr(now.Add(10 * time.Second)),
+				State:       new(rivertype.JobStateRetryable),
+				ScheduledAt: new(now.Add(10 * time.Second)),
 			})
 
 			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateErrorRetryable(job.ID, now, makeErrPayload(t, now), nil)))
@@ -769,8 +768,8 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 
 			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				Metadata:    []byte(`{"baz":"qux", "foo":"bar"}`),
-				State:       ptrutil.Ptr(rivertype.JobStateRetryable),
-				ScheduledAt: ptrutil.Ptr(now.Add(10 * time.Second)),
+				State:       new(rivertype.JobStateRetryable),
+				ScheduledAt: new(now.Add(10 * time.Second)),
 			})
 
 			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(
@@ -815,8 +814,8 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 					now := time.Now().UTC()
 					job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 						Metadata:    fmt.Appendf(nil, `{"cancel_attempted_at":"%s"}`, time.Now().UTC().Format(time.RFC3339)),
-						State:       ptrutil.Ptr(rivertype.JobStateRunning),
-						ScheduledAt: ptrutil.Ptr(now.Add(-10 * time.Second)),
+						State:       new(rivertype.JobStateRunning),
+						ScheduledAt: new(now.Add(-10 * time.Second)),
 					})
 
 					jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(test.setStateFunc(job.ID, now, makeErrPayload(t, now), nil)))
@@ -850,7 +849,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			now := time.Now().UTC()
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				State:        ptrutil.Ptr(rivertype.JobStateRunning),
+				State:        new(rivertype.JobStateRunning),
 				UniqueKey:    []byte("unique-key"),
 				UniqueStates: 0xFF,
 			})
@@ -879,7 +878,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			now := time.Now().UTC()
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				State:        ptrutil.Ptr(rivertype.JobStateRunning),
+				State:        new(rivertype.JobStateRunning),
 				UniqueKey:    []byte("unique-key"),
 				UniqueStates: 0xFF,
 			})
@@ -910,8 +909,8 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			snoozeUntil := now.Add(1 * time.Minute)
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				Attempt:   ptrutil.Ptr(5),
-				State:     ptrutil.Ptr(rivertype.JobStateRunning),
+				Attempt:   new(5),
+				State:     new(rivertype.JobStateRunning),
 				UniqueKey: []byte("unique-key"),
 			})
 
@@ -942,8 +941,8 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			snoozeUntil := now.Add(1 * time.Minute)
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				Attempt:   ptrutil.Ptr(5),
-				State:     ptrutil.Ptr(rivertype.JobStateRunning),
+				Attempt:   new(5),
+				State:     new(rivertype.JobStateRunning),
 				UniqueKey: []byte("unique-key"),
 				Metadata:  []byte(`{"foo": "bar", "snoozes": 5}`),
 			})
@@ -975,9 +974,9 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		now := time.Now().UTC()
 		future := now.Add(10 * time.Second)
 
-		job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
-		job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
-		job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
+		job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
+		job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
+		job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
 
 		jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(
 			riverdriver.JobSetStateCompleted(0, now, nil),
