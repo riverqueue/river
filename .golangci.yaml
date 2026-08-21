@@ -9,6 +9,7 @@ linters:
 
     # disabled because we're not compliant, but which we should think about
     - exhaustruct # checks that properties in structs are exhaustively defined; may be a good idea
+    - exhaustruct_v5 # they actually did another one
     - testpackage # requires tests in test packages like `river_test`
 
     # disabled because it's deprecated, and `default: all` already enables its
@@ -91,6 +92,13 @@ linters:
     gosec:
       excludes:
         - G404 # use of non-crypto random; overly broad for our use case
+
+    modernize:
+      disable:
+        # Keep the Go 1.26 upgrade focused; apply its modernizations separately.
+        - errorsastype
+        - newexpr
+        - stditerators
 
     revive:
       rules:

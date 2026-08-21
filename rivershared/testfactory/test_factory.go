@@ -52,12 +52,12 @@ func Job_Build(tb testing.TB, opts *JobOpts) *riverdriver.JobInsertFullParams {
 	tb.Helper()
 
 	attemptedAt := opts.AttemptedAt
-	if attemptedAt == nil && (opts.State != nil && (slices.Contains([]rivertype.JobState{
+	if attemptedAt == nil && (opts.State != nil && slices.Contains([]rivertype.JobState{
 		rivertype.JobStateCompleted,
 		rivertype.JobStateDiscarded,
 		rivertype.JobStateRetryable,
 		rivertype.JobStateRunning,
-	}, *opts.State))) {
+	}, *opts.State)) {
 		attemptedAt = ptrutil.Ptr(time.Now())
 	}
 
@@ -67,11 +67,11 @@ func Job_Build(tb testing.TB, opts *JobOpts) *riverdriver.JobInsertFullParams {
 	}
 
 	finalizedAt := opts.FinalizedAt
-	if finalizedAt == nil && (opts.State != nil && (slices.Contains([]rivertype.JobState{
+	if finalizedAt == nil && (opts.State != nil && slices.Contains([]rivertype.JobState{
 		rivertype.JobStateCompleted,
 		rivertype.JobStateCancelled,
 		rivertype.JobStateDiscarded,
-	}, *opts.State))) {
+	}, *opts.State)) {
 		finalizedAt = ptrutil.Ptr(time.Now())
 	}
 

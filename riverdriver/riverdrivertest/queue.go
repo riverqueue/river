@@ -361,14 +361,14 @@ func exerciseQueue[TTx any](ctx context.Context, t *testing.T, executorWithTx fu
 			})
 			require.NoError(t, err)
 			require.NotNil(t, queue1Fetched.PausedAt)
-			require.WithinDuration(t, now, *(queue1Fetched.PausedAt), 500*time.Millisecond)
+			require.WithinDuration(t, now, *queue1Fetched.PausedAt, 500*time.Millisecond)
 
 			queue2Fetched, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{
 				Name: queue2.Name,
 			})
 			require.NoError(t, err)
 			require.NotNil(t, queue2Fetched.PausedAt)
-			require.WithinDuration(t, now, *(queue2Fetched.PausedAt), 500*time.Millisecond)
+			require.WithinDuration(t, now, *queue2Fetched.PausedAt, 500*time.Millisecond)
 		})
 
 		t.Run("AllQueuesNoQueues", func(t *testing.T) {
