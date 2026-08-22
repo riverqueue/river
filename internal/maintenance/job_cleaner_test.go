@@ -14,7 +14,6 @@ import (
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -80,21 +79,21 @@ func TestJobCleaner(t *testing.T) {
 		cleaner, bundle := setup(t)
 
 		// none of these get removed
-		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
-		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateScheduled)})
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateAvailable)})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
+		job3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateScheduled)})
 
-		cancelledJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
-		cancelledJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(-1 * time.Minute))})
-		cancelledJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(1 * time.Minute))}) // won't be deleted
+		cancelledJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCancelled), FinalizedAt: new(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
+		cancelledJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCancelled), FinalizedAt: new(bundle.cancelledDeleteHorizon.Add(-1 * time.Minute))})
+		cancelledJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCancelled), FinalizedAt: new(bundle.cancelledDeleteHorizon.Add(1 * time.Minute))}) // won't be deleted
 
-		completedJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
-		completedJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Minute))})
-		completedJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(1 * time.Minute))}) // won't be deleted
+		completedJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCompleted), FinalizedAt: new(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
+		completedJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCompleted), FinalizedAt: new(bundle.completedDeleteHorizon.Add(-1 * time.Minute))})
+		completedJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCompleted), FinalizedAt: new(bundle.completedDeleteHorizon.Add(1 * time.Minute))}) // won't be deleted
 
-		discardedJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
-		discardedJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(-1 * time.Minute))})
-		discardedJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(1 * time.Minute))}) // won't be deleted
+		discardedJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateDiscarded), FinalizedAt: new(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
+		discardedJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateDiscarded), FinalizedAt: new(bundle.discardedDeleteHorizon.Add(-1 * time.Minute))})
+		discardedJob3 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateDiscarded), FinalizedAt: new(bundle.discardedDeleteHorizon.Add(1 * time.Minute))}) // won't be deleted
 
 		require.NoError(t, cleaner.Start(ctx))
 
@@ -138,9 +137,9 @@ func TestJobCleaner(t *testing.T) {
 		cleaner.Config.CompletedJobRetentionPeriod = -1
 		cleaner.Config.DiscardedJobRetentionPeriod = -1
 
-		cancelledJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
-		completedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
-		discardedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
+		cancelledJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCancelled), FinalizedAt: new(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
+		completedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCompleted), FinalizedAt: new(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
+		discardedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateDiscarded), FinalizedAt: new(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
 
 		require.NoError(t, cleaner.Start(ctx))
 
@@ -162,9 +161,9 @@ func TestJobCleaner(t *testing.T) {
 		cleaner, bundle := setup(t)
 		cleaner.Config.CancelledJobRetentionPeriod = -1
 
-		cancelledJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
-		completedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
-		discardedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
+		cancelledJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCancelled), FinalizedAt: new(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
+		completedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCompleted), FinalizedAt: new(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
+		discardedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateDiscarded), FinalizedAt: new(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
 
 		require.NoError(t, cleaner.Start(ctx))
 
@@ -186,9 +185,9 @@ func TestJobCleaner(t *testing.T) {
 		cleaner, bundle := setup(t)
 		cleaner.Config.CompletedJobRetentionPeriod = -1
 
-		cancelledJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
-		completedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
-		discardedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
+		cancelledJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCancelled), FinalizedAt: new(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
+		completedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCompleted), FinalizedAt: new(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
+		discardedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateDiscarded), FinalizedAt: new(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
 
 		require.NoError(t, cleaner.Start(ctx))
 
@@ -210,9 +209,9 @@ func TestJobCleaner(t *testing.T) {
 		cleaner, bundle := setup(t)
 		cleaner.Config.DiscardedJobRetentionPeriod = -1
 
-		cancelledJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
-		completedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
-		discardedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
+		cancelledJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCancelled), FinalizedAt: new(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
+		completedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCompleted), FinalizedAt: new(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
+		discardedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateDiscarded), FinalizedAt: new(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
 
 		require.NoError(t, cleaner.Start(ctx))
 
@@ -241,7 +240,7 @@ func TestJobCleaner(t *testing.T) {
 		jobs := make([]*rivertype.JobRow, numJobs)
 
 		for i := range numJobs {
-			job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
+			job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCompleted), FinalizedAt: new(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
 			jobs[i] = job
 		}
 
@@ -307,7 +306,7 @@ func TestJobCleaner(t *testing.T) {
 		cleaner, bundle := setup(t)
 		cleaner.Config.Interval = time.Minute // should only trigger once for the initial run
 
-		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
+		job1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCompleted), FinalizedAt: new(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
 
 		require.NoError(t, cleaner.Start(ctx))
 
@@ -315,7 +314,7 @@ func TestJobCleaner(t *testing.T) {
 
 		cleaner.Stop()
 
-		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Minute))})
+		job2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCompleted), FinalizedAt: new(bundle.completedDeleteHorizon.Add(-1 * time.Minute))})
 
 		require.NoError(t, cleaner.Start(ctx))
 
@@ -334,16 +333,16 @@ func TestJobCleaner(t *testing.T) {
 		cleaner, bundle := setup(t)
 
 		var (
-			cancelledJob = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled), FinalizedAt: ptrutil.Ptr(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
-			completedJob = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted), FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
-			discardedJob = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded), FinalizedAt: ptrutil.Ptr(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
+			cancelledJob = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCancelled), FinalizedAt: new(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
+			completedJob = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCompleted), FinalizedAt: new(bundle.completedDeleteHorizon.Add(-1 * time.Hour))})
+			discardedJob = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateDiscarded), FinalizedAt: new(bundle.discardedDeleteHorizon.Add(-1 * time.Hour))})
 
 			omittedQueue1 = "omitted1"
 			omittedQueue2 = "omitted1"
 
 			// Not deleted because in an omitted queue.
-			omittedQueueJob1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour)), Queue: &omittedQueue1, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
-			omittedQueueJob2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: ptrutil.Ptr(bundle.completedDeleteHorizon.Add(-1 * time.Hour)), Queue: &omittedQueue2, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+			omittedQueueJob1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: new(bundle.completedDeleteHorizon.Add(-1 * time.Hour)), Queue: &omittedQueue1, State: new(rivertype.JobStateCompleted)})
+			omittedQueueJob2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: new(bundle.completedDeleteHorizon.Add(-1 * time.Hour)), Queue: &omittedQueue2, State: new(rivertype.JobStateCompleted)})
 		)
 
 		cleaner.Config.QueuesExcluded = []string{omittedQueue1, omittedQueue2}

@@ -99,8 +99,7 @@ func exerciseDriverPool[TTx any](ctx context.Context, t *testing.T,
 func requireMissingRelation(t *testing.T, err error, schema, missingRelation string) {
 	t.Helper()
 
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 		require.Equal(t, pgerrcode.UndefinedTable, pgErr.Code)
 		require.Equal(t, fmt.Sprintf(`relation "%s.%s" does not exist`, schema, missingRelation), pgErr.Message)
 	} else {

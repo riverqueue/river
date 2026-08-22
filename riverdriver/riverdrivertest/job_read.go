@@ -13,7 +13,6 @@ import (
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/testfactory"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -43,11 +42,11 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 
 			exec, _ := setup(ctx, t)
 
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCancelled)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateCompleted)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateCancelled)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateCompleted)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateDiscarded)})
 
 			countsByState, err := exec.JobCountByAllStates(ctx, &riverdriver.JobCountByAllStatesParams{
 				Schema: "",
@@ -91,15 +90,15 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 
 			exec, _ := setup(ctx, t)
 
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue1"), State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue1"), State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue1"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue1"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue1"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue2"), State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue2"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue3"), State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue3"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: new("queue1"), State: new(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: new("queue1"), State: new(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: new("queue1"), State: new(rivertype.JobStateRunning)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: new("queue1"), State: new(rivertype.JobStateRunning)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: new("queue1"), State: new(rivertype.JobStateRunning)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: new("queue2"), State: new(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: new("queue2"), State: new(rivertype.JobStateRunning)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: new("queue3"), State: new(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: new("queue3"), State: new(rivertype.JobStateRunning)})
 
 			countsByQueue, err := exec.JobCountByQueueAndState(ctx, &riverdriver.JobCountByQueueAndStateParams{
 				QueueNames: []string{"queue1", "queue2"},
@@ -122,8 +121,8 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 
 			exec, _ := setup(ctx, t)
 
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue2"), State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue2"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: new("queue2"), State: new(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: new("queue2"), State: new(rivertype.JobStateRunning)})
 
 			countsByQueue, err := exec.JobCountByQueueAndState(ctx, &riverdriver.JobCountByQueueAndStateParams{
 				QueueNames: []string{"queue1", "queue2"},
@@ -147,8 +146,8 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 
 			exec, _ := setup(ctx, t)
 
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue2"), State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: ptrutil.Ptr("queue2"), State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: new("queue2"), State: new(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: new("queue2"), State: new(rivertype.JobStateRunning)})
 
 			countsByQueue, err := exec.JobCountByQueueAndState(ctx, &riverdriver.JobCountByQueueAndStateParams{
 				QueueNames: []string{"queue2", "queue1", "queue1"},
@@ -177,14 +176,14 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			exec, _ := setup(ctx, t)
 
 			// Included because they're the queried state.
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateAvailable)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateAvailable)})
 
 			// Excluded because they're not.
-			finalizedAt := ptrutil.Ptr(time.Now())
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: finalizedAt, State: ptrutil.Ptr(rivertype.JobStateCancelled)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: finalizedAt, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: finalizedAt, State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
+			finalizedAt := new(time.Now())
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: finalizedAt, State: new(rivertype.JobStateCancelled)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: finalizedAt, State: new(rivertype.JobStateCompleted)})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: finalizedAt, State: new(rivertype.JobStateDiscarded)})
 
 			numJobs, err := exec.JobCountByState(ctx, &riverdriver.JobCountByStateParams{
 				State: rivertype.JobStateAvailable,
@@ -259,7 +258,7 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			exec, _ := setup(ctx, t)
 
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				Queue: ptrutil.Ptr("other-queue"),
+				Queue: new("other-queue"),
 			})
 
 			// Job is in a non-default queue so it's not found.
@@ -281,7 +280,7 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			now := time.Now().UTC()
 
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				ScheduledAt: ptrutil.Ptr(now.Add(1 * time.Minute)),
+				ScheduledAt: new(now.Add(1 * time.Minute)),
 			})
 
 			// Job is scheduled a while from now so it's not found.
@@ -304,18 +303,18 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			now := time.Now().Add(1 * time.Minute)
 			// Job 1 is scheduled after now so it's not found:
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				ScheduledAt: ptrutil.Ptr(now.Add(1 * time.Minute)),
+				ScheduledAt: new(now.Add(1 * time.Minute)),
 			})
 			// Job 2 is scheduled just before now so it's found:
 			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				ScheduledAt: ptrutil.Ptr(now.Add(-1 * time.Microsecond)),
+				ScheduledAt: new(now.Add(-1 * time.Microsecond)),
 			})
 
 			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
 				ClientID:       testClientID,
 				MaxAttemptedBy: maxAttemptedBy,
 				MaxToLock:      maxToLock,
-				Now:            ptrutil.Ptr(now),
+				Now:            new(now),
 				Queue:          rivercommon.QueueDefault,
 			})
 			require.NoError(t, err)
@@ -494,11 +493,11 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 
 		exec, _ := setup(ctx, t)
 
-		job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("kind1")})
-		job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("kind2")})
+		job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("kind1")})
+		job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("kind2")})
 
 		// Not returned.
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("kind3")})
+		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("kind3")})
 
 		jobs, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
 			Kind: []string{job1.Kind, job2.Kind},
@@ -519,8 +518,8 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			afterHorizon  = horizon.Add(1 * time.Minute)
 		)
 
-		stuckJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
-		stuckJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+		stuckJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: new(rivertype.JobStateRunning)})
+		stuckJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: new(rivertype.JobStateRunning)})
 
 		t.Logf("horizon   = %s", horizon)
 		t.Logf("stuckJob1 = %s", stuckJob1.AttemptedAt)
@@ -529,13 +528,13 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 		t.Logf("stuckJob1 full = %s", spew.Sdump(stuckJob1))
 
 		// Not returned on the first page because we put a maximum of two.
-		stuckJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+		stuckJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: new(rivertype.JobStateRunning)})
 
 		// Not stuck because not in running state.
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateAvailable)})
 
 		// Not stuck because after queried horizon.
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &afterHorizon, State: ptrutil.Ptr(rivertype.JobStateRunning)})
+		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &afterHorizon, State: new(rivertype.JobStateRunning)})
 
 		// Max two stuck
 		stuckJobs, err := exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
@@ -564,10 +563,10 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 
 			exec, _ := setup(ctx, t)
 
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_zzz")})
-			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_aaa")})
-			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_bbb")})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("different_prefix_job")})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("job_zzz")})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("job_aaa")})
+			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("job_bbb")})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("different_prefix_job")})
 
 			jobKinds, err := exec.JobKindList(ctx, &riverdriver.JobKindListParams{
 				After:   "job2",
@@ -585,9 +584,9 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 
 			exec, _ := setup(ctx, t)
 
-			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_zzz")})
-			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_aaa")})
-			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("job_bbb")})
+			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("job_zzz")})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("job_aaa")})
+			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("job_bbb")})
 
 			jobKinds, err := exec.JobKindList(ctx, &riverdriver.JobKindListParams{
 				After:   "job2",
@@ -605,10 +604,10 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 
 			exec, _ := setup(ctx, t)
 
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("mid_job_kind")})
-			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("prefix_job")})
-			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("suffix_job")})
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("nojobhere")})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("mid_job_kind")})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("prefix_job")})
+			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("suffix_job")})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("nojobhere")})
 
 			jobKinds, err := exec.JobKindList(ctx, &riverdriver.JobKindListParams{
 				After:   "",
@@ -633,7 +632,7 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			now := time.Now().UTC()
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				Attempt:      ptrutil.Ptr(3),
+				Attempt:      new(3),
 				AttemptedAt:  &now,
 				CreatedAt:    &now,
 				EncodedArgs:  []byte(`{"encoded": "args"}`),
@@ -641,7 +640,7 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 				FinalizedAt:  &now,
 				Metadata:     []byte(`{"meta": "data"}`),
 				ScheduledAt:  &now,
-				State:        ptrutil.Ptr(rivertype.JobStateCompleted),
+				State:        new(rivertype.JobStateCompleted),
 				Tags:         []string{"tag"},
 				UniqueKey:    []byte("unique-key"),
 				UniqueStates: 0xFF,
@@ -684,8 +683,8 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 
 			exec, _ := setup(ctx, t)
 
-			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind1")})
-			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind2")})
+			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("test_kind1")})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("test_kind2")})
 
 			{
 				fetchedJobs, err := exec.JobList(ctx, &riverdriver.JobListParams{

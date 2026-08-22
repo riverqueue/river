@@ -8,7 +8,6 @@ import (
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/testfactory"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 )
 
 func exerciseSQLFragments[TTx any](ctx context.Context, t *testing.T, executorWithTx func(ctx context.Context, t *testing.T) (riverdriver.Executor, riverdriver.Driver[TTx])) {
@@ -102,9 +101,9 @@ func exerciseSQLFragments[TTx any](ctx context.Context, t *testing.T, executorWi
 			exec, driver := executorWithTx(ctx, t)
 
 			var (
-				job1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("kind1")})
-				job2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("kind2")})
-				_    = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("kind3")})
+				job1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("kind1")})
+				job2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("kind2")})
+				_    = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("kind3")})
 			)
 
 			sqlFragment, arg, err := driver.SQLFragmentColumnIn("kind", []string{job1.Kind, job2.Kind})

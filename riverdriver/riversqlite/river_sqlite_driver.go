@@ -46,7 +46,6 @@ import (
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
 	"github.com/riverqueue/river/rivershared/uniquestates"
 	"github.com/riverqueue/river/rivershared/util/dbutil"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/savepointutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
@@ -643,7 +642,7 @@ func (e *Executor) JobInsertFull(ctx context.Context, params *riverdriver.JobIns
 
 	var uniqueStates *int64
 	if params.UniqueStates != 0 {
-		uniqueStates = ptrutil.Ptr(int64(params.UniqueStates))
+		uniqueStates = new(int64(params.UniqueStates))
 	}
 
 	job, err := dbsqlc.New().JobInsertFull(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobInsertFullParams{

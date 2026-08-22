@@ -17,7 +17,6 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/testfactory"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -65,7 +64,7 @@ func TestResumableSetStepTx(t *testing.T) {
 		ctx, bundle := setup(ctx, t, "step1")
 
 		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
-			State: ptrutil.Ptr(rivertype.JobStateRunning),
+			State: new(rivertype.JobStateRunning),
 		})
 
 		updatedJob, err := ResumableSetStepTx[*riverpgxv5.Driver](ctx, bundle.tx, &Job[JobArgs]{JobRow: job})
@@ -86,7 +85,7 @@ func TestResumableSetStepTx(t *testing.T) {
 		ctx, bundle := setup(ctx, t, "step2")
 
 		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
-			State: ptrutil.Ptr(rivertype.JobStateRunning),
+			State: new(rivertype.JobStateRunning),
 		})
 
 		type Cursor struct {
@@ -127,7 +126,7 @@ func TestResumableSetStepTx(t *testing.T) {
 		ctx, bundle := setup(ctx, t, "") // empty step name
 
 		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
-			State: ptrutil.Ptr(rivertype.JobStateRunning),
+			State: new(rivertype.JobStateRunning),
 		})
 
 		_, err := ResumableSetStepTx[*riverpgxv5.Driver](ctx, bundle.tx, &Job[JobArgs]{JobRow: job})
@@ -140,7 +139,7 @@ func TestResumableSetStepTx(t *testing.T) {
 		ctx, bundle := setup(ctx, t, "step1")
 
 		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
-			State: ptrutil.Ptr(rivertype.JobStateAvailable),
+			State: new(rivertype.JobStateAvailable),
 		})
 		_, err := bundle.exec.JobDelete(ctx, &riverdriver.JobDeleteParams{ID: job.ID})
 		require.NoError(t, err)
@@ -156,7 +155,7 @@ func TestResumableSetStepTx(t *testing.T) {
 		ctx, bundle := setup(ctx, t, "step1")
 		ctx = context.WithValue(ctx, execution.ContextKeyInsideTestWorker{}, true)
 
-		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateAvailable)})
 		_, err := bundle.client.JobDeleteTx(ctx, bundle.tx, job.ID)
 		require.NoError(t, err)
 		job.State = rivertype.JobStateRunning

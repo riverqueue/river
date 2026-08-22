@@ -11,7 +11,6 @@ import (
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/testfactory"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -42,7 +41,7 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 			exec, _ := setup(ctx, t)
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				State: ptrutil.Ptr(rivertype.JobStateRunning),
+				State: new(rivertype.JobStateRunning),
 			})
 
 			jobAfter, err := exec.JobDelete(ctx, &riverdriver.JobDeleteParams{
@@ -85,7 +84,7 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 
 				job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 					FinalizedAt: finalizedAt,
-					ScheduledAt: ptrutil.Ptr(now.Add(1 * time.Hour)),
+					ScheduledAt: new(now.Add(1 * time.Hour)),
 					State:       &state,
 				})
 
@@ -143,16 +142,16 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 
 			exec, _ := setup(ctx, t)
 
-			deletedJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCancelled)})
-			deletedJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
-			deletedJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
+			deletedJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: new(rivertype.JobStateCancelled)})
+			deletedJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: new(rivertype.JobStateCompleted)})
+			deletedJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: new(rivertype.JobStateDiscarded)})
 
 			// Not deleted because not appropriate state.
-			notDeletedJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateAvailable)})
-			notDeletedJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			notDeletedJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateAvailable)})
+			notDeletedJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
 
 			// Not deleted because after the delete horizon.
-			notDeletedJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &afterHorizon, State: ptrutil.Ptr(rivertype.JobStateCancelled)})
+			notDeletedJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &afterHorizon, State: new(rivertype.JobStateCancelled)})
 
 			// Max two deleted on the first pass.
 			numDeleted, err := exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
@@ -202,17 +201,17 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 
 			exec, _ := setup(ctx, t)
 
-			var ( //nolint:dupl
-				cancelledJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCancelled)})
-				completedJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
-				discardedJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
+			var (
+				cancelledJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: new(rivertype.JobStateCancelled)})
+				completedJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: new(rivertype.JobStateCompleted)})
+				discardedJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: new(rivertype.JobStateDiscarded)})
 
 				excludedQueue1 = "excluded1"
 				excludedQueue2 = "excluded2"
 
 				// Not deleted because in an omitted queue.
-				notDeletedJob1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, Queue: &excludedQueue1, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
-				notDeletedJob2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, Queue: &excludedQueue2, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+				notDeletedJob1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, Queue: &excludedQueue1, State: new(rivertype.JobStateCompleted)})
+				notDeletedJob2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, Queue: &excludedQueue2, State: new(rivertype.JobStateCompleted)})
 			)
 
 			numDeleted, err := exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
@@ -266,17 +265,17 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 				return
 			}
 
-			var ( //nolint:dupl
-				cancelledJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCancelled)})
-				completedJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
-				discardedJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: ptrutil.Ptr(rivertype.JobStateDiscarded)})
+			var (
+				cancelledJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: new(rivertype.JobStateCancelled)})
+				completedJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: new(rivertype.JobStateCompleted)})
+				discardedJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: new(rivertype.JobStateDiscarded)})
 
 				includedQueue1 = "included1"
 				includedQueue2 = "included2"
 
 				// Not deleted because in an omitted queue.
-				deletedJob1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, Queue: &includedQueue1, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
-				deletedJob2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, Queue: &includedQueue2, State: ptrutil.Ptr(rivertype.JobStateCompleted)})
+				deletedJob1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, Queue: &includedQueue1, State: new(rivertype.JobStateCompleted)})
+				deletedJob2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, Queue: &includedQueue2, State: new(rivertype.JobStateCompleted)})
 			)
 
 			numDeleted, err := exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
@@ -319,7 +318,7 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 			now := time.Now().UTC()
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				Attempt:      ptrutil.Ptr(3),
+				Attempt:      new(3),
 				AttemptedAt:  &now,
 				CreatedAt:    &now,
 				EncodedArgs:  []byte(`{"encoded": "args"}`),
@@ -327,7 +326,7 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 				FinalizedAt:  &now,
 				Metadata:     []byte(`{"meta": "data"}`),
 				ScheduledAt:  &now,
-				State:        ptrutil.Ptr(rivertype.JobStateCompleted),
+				State:        new(rivertype.JobStateCompleted),
 				Tags:         []string{"tag"},
 				UniqueKey:    []byte("unique-key"),
 				UniqueStates: 0xFF,
@@ -377,7 +376,7 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 
 			exec, _ := setup(ctx, t)
 
-			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: ptrutil.Ptr(rivertype.JobStateRunning)})
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
 
 			deletedJobs, err := exec.JobDeleteMany(ctx, &riverdriver.JobDeleteManyParams{
 				Max:           100,
@@ -399,8 +398,8 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 
 			{
 				var (
-					job1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind1")})
-					job2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind2")})
+					job1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("test_kind1")})
+					job2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("test_kind2")})
 				)
 
 				deletedJobs, err := exec.JobDeleteMany(ctx, &riverdriver.JobDeleteManyParams{
@@ -419,8 +418,8 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 
 			{
 				var (
-					job1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind3")})
-					job2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("test_kind4")})
+					job1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("test_kind3")})
+					job2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("test_kind4")})
 				)
 
 				deletedJobs, err := exec.JobDeleteMany(ctx, &riverdriver.JobDeleteManyParams{

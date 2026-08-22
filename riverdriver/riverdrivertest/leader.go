@@ -10,7 +10,6 @@ import (
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/testfactory"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -72,7 +71,7 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 			exec, _ := setup(ctx, t)
 
 			leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
-				LeaderID: ptrutil.Ptr(testClientID),
+				LeaderID: new(testClientID),
 			})
 
 			leaderAttempt, err := exec.LeaderAttemptElect(ctx, &riverdriver.LeaderElectParams{
@@ -118,7 +117,7 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 			exec, _ := setup(ctx, t)
 
 			leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
-				LeaderID: ptrutil.Ptr("other-client-id"),
+				LeaderID: new("other-client-id"),
 			})
 
 			updatedLeader, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderReelectParams{
@@ -141,7 +140,7 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 			exec, bundle := setup(ctx, t)
 
 			leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
-				LeaderID: ptrutil.Ptr(testClientID),
+				LeaderID: new(testClientID),
 			})
 
 			// Re-elect the same leader. Use a larger TTL to see if time is updated,
@@ -171,9 +170,9 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 
 			now := time.Now().UTC()
 			leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
-				ElectedAt: ptrutil.Ptr(now.Add(-2 * time.Hour)),
-				ExpiresAt: ptrutil.Ptr(now.Add(-1 * time.Hour)),
-				LeaderID:  ptrutil.Ptr(testClientID),
+				ElectedAt: new(now.Add(-2 * time.Hour)),
+				ExpiresAt: new(now.Add(-1 * time.Hour)),
+				LeaderID:  new(testClientID),
 			})
 
 			updatedLeader, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderReelectParams{
@@ -196,7 +195,7 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 			exec, _ := setup(ctx, t)
 
 			leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
-				LeaderID: ptrutil.Ptr(testClientID),
+				LeaderID: new(testClientID),
 			})
 
 			updatedLeader, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderReelectParams{
@@ -218,7 +217,7 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 			exec, bundle := setup(ctx, t)
 
 			leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
-				LeaderID: ptrutil.Ptr(testClientID),
+				LeaderID: new(testClientID),
 			})
 
 			updatedLeader, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderReelectParams{
@@ -254,9 +253,9 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 			}
 
 			_ = testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
-				ElectedAt: ptrutil.Ptr(now.Add(-2 * time.Hour)),
-				ExpiresAt: ptrutil.Ptr(now.Add(-1 * time.Hour)),
-				LeaderID:  ptrutil.Ptr(testClientID),
+				ElectedAt: new(now.Add(-2 * time.Hour)),
+				ExpiresAt: new(now.Add(-1 * time.Hour)),
+				LeaderID:  new(testClientID),
 			})
 
 			{
@@ -275,13 +274,13 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 
 			// Elected in the future.
 			_ = testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
-				ElectedAt: ptrutil.Ptr(now.Add(1 * time.Hour)),
-				ExpiresAt: ptrutil.Ptr(now.Add(2 * time.Hour)),
-				LeaderID:  ptrutil.Ptr(testClientID),
+				ElectedAt: new(now.Add(1 * time.Hour)),
+				ExpiresAt: new(now.Add(2 * time.Hour)),
+				LeaderID:  new(testClientID),
 			})
 
 			numDeleted, err := exec.LeaderDeleteExpired(ctx, &riverdriver.LeaderDeleteExpiredParams{
-				Now: ptrutil.Ptr(now.Add(2*time.Hour + 1*time.Second)),
+				Now: new(now.Add(2*time.Hour + 1*time.Second)),
 			})
 			require.NoError(t, err)
 			require.Equal(t, 1, numDeleted)
@@ -337,7 +336,7 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 		now := time.Now().UTC()
 
 		_ = testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
-			LeaderID: ptrutil.Ptr(testClientID),
+			LeaderID: new(testClientID),
 			Now:      &now,
 		})
 
@@ -367,7 +366,7 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 			}
 
 			leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
-				LeaderID: ptrutil.Ptr(testClientID),
+				LeaderID: new(testClientID),
 			})
 
 			{
@@ -387,7 +386,7 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 			exec, _ := setup(ctx, t)
 
 			leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
-				LeaderID: ptrutil.Ptr("other-client-id"),
+				LeaderID: new("other-client-id"),
 			})
 
 			resigned, err := exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{
@@ -407,9 +406,9 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 			now := time.Now().UTC()
 
 			oldLeader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
-				ElectedAt: ptrutil.Ptr(now.Add(-2 * time.Hour)),
-				ExpiresAt: ptrutil.Ptr(now.Add(-1 * time.Hour)),
-				LeaderID:  ptrutil.Ptr(testClientID),
+				ElectedAt: new(now.Add(-2 * time.Hour)),
+				ExpiresAt: new(now.Add(-1 * time.Hour)),
+				LeaderID:  new(testClientID),
 			})
 
 			numDeleted, err := exec.LeaderDeleteExpired(ctx, &riverdriver.LeaderDeleteExpiredParams{Now: &now})
@@ -417,8 +416,8 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 			require.Equal(t, 1, numDeleted)
 
 			newLeader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
-				ElectedAt: ptrutil.Ptr(now),
-				LeaderID:  ptrutil.Ptr(testClientID),
+				ElectedAt: new(now),
+				LeaderID:  new(testClientID),
 			})
 
 			resigned, err := exec.LeaderResign(ctx, &riverdriver.LeaderResignParams{

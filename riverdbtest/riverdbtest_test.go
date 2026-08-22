@@ -15,7 +15,6 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/testfactory"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -47,8 +46,8 @@ func TestTestSchema(t *testing.T) {
 
 		require.NotEqual(t, schema1, schema2)
 
-		job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("schema1_job"), Schema: schema1})
-		job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: ptrutil.Ptr("schema2_job"), Schema: schema2})
+		job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("schema1_job"), Schema: schema1})
+		job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("schema2_job"), Schema: schema2})
 
 		// Each job is found in its appropriate schema. Make sure to check kind
 		// because for many test runs IDs will be identical across schemas

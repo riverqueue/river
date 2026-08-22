@@ -18,7 +18,6 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -162,7 +161,7 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 		ID:                  job.ID,
 		Attempt:             job.Attempt + 1,
 		AttemptDoUpdate:     true,
-		AttemptedAt:         ptrutil.Ptr(timeGen.Now()),
+		AttemptedAt:         new(timeGen.Now()),
 		AttemptedAtDoUpdate: true,
 		AttemptedBy:         append(job.AttemptedBy, w.config.ID),
 		AttemptedByDoUpdate: true,

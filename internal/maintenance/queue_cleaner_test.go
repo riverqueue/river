@@ -15,7 +15,6 @@ import (
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -78,13 +77,13 @@ func TestQueueCleaner(t *testing.T) {
 
 		now := time.Now()
 		// None of these should get removed:
-		queue1 := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue1"), UpdatedAt: ptrutil.Ptr(now)})
-		queue2 := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue2"), UpdatedAt: ptrutil.Ptr(now.Add(-23 * time.Hour))})
+		queue1 := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Name: new("queue1"), UpdatedAt: new(now)})
+		queue2 := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Name: new("queue2"), UpdatedAt: new(now.Add(-23 * time.Hour))})
 
 		// These get deleted:
-		queue3 := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue3"), UpdatedAt: ptrutil.Ptr(now.Add(-25 * time.Hour))})
-		queue4 := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue4"), UpdatedAt: ptrutil.Ptr(now.Add(-26 * time.Hour))})
-		queue5 := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue5"), UpdatedAt: ptrutil.Ptr(now.Add(-48 * time.Hour))})
+		queue3 := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Name: new("queue3"), UpdatedAt: new(now.Add(-25 * time.Hour))})
+		queue4 := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Name: new("queue4"), UpdatedAt: new(now.Add(-26 * time.Hour))})
+		queue5 := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Name: new("queue5"), UpdatedAt: new(now.Add(-48 * time.Hour))})
 
 		require.NoError(t, cleaner.Start(ctx))
 
@@ -133,8 +132,8 @@ func TestQueueCleaner(t *testing.T) {
 
 		for i := range numQueues {
 			queue := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{
-				Name:      ptrutil.Ptr(fmt.Sprintf("queue%d", i)),
-				UpdatedAt: ptrutil.Ptr(bundle.deleteHorizon.Add(-25 * time.Hour)),
+				Name:      new(fmt.Sprintf("queue%d", i)),
+				UpdatedAt: new(bundle.deleteHorizon.Add(-25 * time.Hour)),
 			})
 			queues[i] = queue
 		}
@@ -204,7 +203,7 @@ func TestQueueCleaner(t *testing.T) {
 		cleaner, bundle := setup(t)
 		cleaner.Config.Interval = time.Minute // should only trigger once for the initial run
 
-		queue1 := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue1"), UpdatedAt: ptrutil.Ptr(bundle.deleteHorizon.Add(-1 * time.Hour))})
+		queue1 := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Name: new("queue1"), UpdatedAt: new(bundle.deleteHorizon.Add(-1 * time.Hour))})
 
 		require.NoError(t, cleaner.Start(ctx))
 
@@ -212,7 +211,7 @@ func TestQueueCleaner(t *testing.T) {
 
 		cleaner.Stop()
 
-		queue2 := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Name: ptrutil.Ptr("queue2"), UpdatedAt: ptrutil.Ptr(bundle.deleteHorizon.Add(-1 * time.Minute))})
+		queue2 := testfactory.Queue(ctx, t, bundle.exec, &testfactory.QueueOpts{Name: new("queue2"), UpdatedAt: new(bundle.deleteHorizon.Add(-1 * time.Minute))})
 
 		require.NoError(t, cleaner.Start(ctx))
 

@@ -23,7 +23,6 @@ import (
 	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/testfactory"
-	"github.com/riverqueue/river/rivershared/util/ptrutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -152,7 +151,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 					// Needs to be explicitly set to a "now" horizon that's aligned with the
 					// JobGetAvailable call. InsertMany applies a default scheduled_at in Go
 					// so it can't pick up the Postgres-level `now()` default.
-					ScheduledAt: ptrutil.Ptr(now),
+					ScheduledAt: new(now),
 					State:       rivertype.JobStateAvailable,
 				},
 			},
@@ -162,7 +161,7 @@ func TestJobExecutor_Execute(t *testing.T) {
 		// Fetch the job to make sure it's marked as running:
 		jobs, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
 			MaxToLock: 1,
-			Now:       ptrutil.Ptr(now),
+			Now:       new(now),
 			Queue:     rivercommon.QueueDefault,
 		})
 		require.NoError(t, err)
@@ -664,9 +663,9 @@ func TestJobExecutor_Execute(t *testing.T) {
 			now := time.Now().UTC()
 			_, err := exec.JobInsertFullMany(ctx, &riverdriver.JobInsertFullManyParams{
 				Jobs: []*riverdriver.JobInsertFullParams{
-					testfactory.Job_Build(t, &testfactory.JobOpts{Kind: ptrutil.Ptr("jobexecutor_test"), ScheduledAt: &now}),
-					testfactory.Job_Build(t, &testfactory.JobOpts{Kind: ptrutil.Ptr("jobexecutor_test"), ScheduledAt: &now}),
-					testfactory.Job_Build(t, &testfactory.JobOpts{Kind: ptrutil.Ptr("jobexecutor_test"), ScheduledAt: &now}),
+					testfactory.Job_Build(t, &testfactory.JobOpts{Kind: new("jobexecutor_test"), ScheduledAt: &now}),
+					testfactory.Job_Build(t, &testfactory.JobOpts{Kind: new("jobexecutor_test"), ScheduledAt: &now}),
+					testfactory.Job_Build(t, &testfactory.JobOpts{Kind: new("jobexecutor_test"), ScheduledAt: &now}),
 				},
 			})
 			require.NoError(t, err)
