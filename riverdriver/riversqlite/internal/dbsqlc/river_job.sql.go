@@ -109,6 +109,7 @@ WITH queue_stats AS (
         COUNT(CASE WHEN river_job.state = 'running' THEN 1 END) AS count_running
     FROM /* TEMPLATE: schema */river_job
     WHERE river_job.queue IN (/*SLICE:queue_names*/?)
+        AND river_job.state IN ('available', 'running')
     GROUP BY river_job.queue
 )
 

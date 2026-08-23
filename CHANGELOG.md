@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Fixed periodic jobs advancing their durable next run time when job insertion fails. [PR #1359](https://github.com/riverqueue/river/pull/1359).
+- Improved SQLite queue count performance on large job tables by limiting counts to available and running jobs so the existing state and queue index can be used. [PR #1360](https://github.com/riverqueue/river/pull/1360).
 
 ## [0.44.1] - 2026-08-21
 
