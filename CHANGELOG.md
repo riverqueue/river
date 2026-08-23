@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Upgrade supported Go versions to 1.26 and 1.27. [PR #1356](https://github.com/riverqueue/river/pull/1356).
 
+### Fixed
+
+- Fixed periodic jobs advancing their durable next run time when job insertion fails. [PR #1359](https://github.com/riverqueue/river/pull/1359).
+
 ## [0.44.1] - 2026-08-21
 
 ### Fixed

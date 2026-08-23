@@ -884,6 +884,38 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		require.WithinDuration(t, now.Add(2*time.Hour), svc.periodicJobs[svc.periodicJobIDs["pilot_startup_durable_2h"]].nextRunAt, time.Microsecond)
 	})
 
+	t.Run("InsertErrorDoesNotAdvanceDurableNextRun", func(t *testing.T) {
+		t.Parallel()
+
+		svc, bundle := setup(t)
+
+		svc.Config.Insert = func(ctx context.Context, tx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) ([]*rivertype.JobInsertResult, error) {
+			return nil, errors.New("insert failed before database write")
+		}
+
+		var periodicJobUpsertManyMockCalled bool
+		bundle.pilotMock.PeriodicJobUpsertManyMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobUpsertManyParams) ([]*riverpilot.PeriodicJob, error) {
+			periodicJobUpsertManyMockCalled = true
+			return nil, nil
+		}
+
+		now := time.Now().UTC()
+		svc.insertBatch(ctx, []*rivertype.JobInsertParams{{
+			Kind:  "periodic_insert_error",
+			Queue: rivercommon.QueueDefault,
+			State: rivertype.JobStateAvailable,
+		}}, &riverpilot.PeriodicJobUpsertManyParams{
+			Jobs: []*riverpilot.PeriodicJobUpsertParams{{
+				ID:        "periodic_insert_error",
+				NextRunAt: now.Add(time.Minute),
+				UpdatedAt: now,
+			}},
+			Schema: bundle.schema,
+		})
+
+		require.False(t, periodicJobUpsertManyMockCalled)
+	})
+
 	t.Run("InvokesPilotDueDurableJobRunsOnce", func(t *testing.T) {
 		t.Parallel()
 
