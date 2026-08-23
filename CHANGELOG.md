@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A `JobCancel()` sent while a client's notifier is disconnected/reconnecting is no longer lost. Previously, the cancellation's `NOTIFY` could commit while nothing was `LISTEN`ing (Postgres `NOTIFY` is fire-and-forget), leaving the running job unaware of the cancellation until `JobRescuer`'s much longer stuck-job sweep. Each client now reconciles its currently running jobs against `cancel_attempted_at` by primary key every time its notifier (re)establishes healthy listening, closing the gap with no added steady-state query load. [PR #1361](https://github.com/riverqueue/river/pull/1361), as discussed in [#1358](https://github.com/riverqueue/river/issues/1358).
 - Fixed `AddWorkerSafely` leaving a worker's primary kind and earlier aliases registered when a later kind alias conflicts with an existing registration. Failed registrations now leave the worker registry unchanged. [PR #1440](https://github.com/riverqueue/river/pull/1440).
 - Fixed the notifier retrying without backoff and flooding logs when the context passed to `Client.Start` reaches its deadline. [PR #1495](https://github.com/riverqueue/river/pull/1495).
 - Fixed `JobSnooze` accepting negative durations despite documenting that they panic. [PR #1529](https://github.com/riverqueue/river/pull/1529).
