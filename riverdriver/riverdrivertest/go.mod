@@ -9,19 +9,19 @@ require (
 	github.com/jackc/pgerrcode v0.0.0-20240316143900-6e2875d9b438
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/lib/pq v1.12.3
-	github.com/riverqueue/river v0.44.1
-	github.com/riverqueue/river/riverdriver v0.44.1
-	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.44.1
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.44.1
-	github.com/riverqueue/river/riverdriver/riversqlite v0.44.1
-	github.com/riverqueue/river/rivershared v0.44.1
-	github.com/riverqueue/river/rivertype v0.44.1
-	github.com/stretchr/testify v1.11.1
+	github.com/riverqueue/river v0.45.0
+	github.com/riverqueue/river/riverdriver v0.45.0
+	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.45.0
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.45.0
+	github.com/riverqueue/river/riverdriver/riversqlite v0.45.0
+	github.com/riverqueue/river/rivershared v0.45.0
+	github.com/riverqueue/river/rivertype v0.45.0
+	github.com/stretchr/testify v1.12.1
 	github.com/tidwall/gjson v1.19.0
 	github.com/tidwall/sjson v1.2.5
 	github.com/tursodatabase/libsql-client-go v0.0.0-20260528064733-9d5d30a29a60
 	golang.org/x/text v0.41.0
-	modernc.org/sqlite v1.56.0
+	modernc.org/sqlite v1.57.0
 	turso.tech/database/tursogo v0.7.2
 )
 
@@ -36,16 +36,15 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
-	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tursodatabase/turso-go-platform-libs v0.7.2 // indirect
 	go.uber.org/goleak v1.3.0 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

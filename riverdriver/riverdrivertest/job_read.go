@@ -116,6 +116,34 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			require.Equal(t, int64(1), countsByQueue[1].CountRunning)
 		})
 
+		t.Run("IgnoresJobsInOtherStates", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			for _, state := range []rivertype.JobState{
+				rivertype.JobStateCancelled,
+				rivertype.JobStateCompleted,
+				rivertype.JobStateDiscarded,
+				rivertype.JobStatePending,
+				rivertype.JobStateRetryable,
+				rivertype.JobStateScheduled,
+			} {
+				_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Queue: new("queue1"), State: new(state)})
+			}
+
+			countsByQueue, err := exec.JobCountByQueueAndState(ctx, &riverdriver.JobCountByQueueAndStateParams{
+				QueueNames: []string{"queue1"},
+				Schema:     "",
+			})
+			require.NoError(t, err)
+
+			require.Len(t, countsByQueue, 1)
+			require.Equal(t, "queue1", countsByQueue[0].Queue)
+			require.Equal(t, int64(0), countsByQueue[0].CountAvailable)
+			require.Equal(t, int64(0), countsByQueue[0].CountRunning)
+		})
+
 		t.Run("IncludesRequestedQueuesThatHaveNoJobs", func(t *testing.T) {
 			t.Parallel()
 
