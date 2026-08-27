@@ -165,4 +165,18 @@ func TestResumableSetStepTx(t *testing.T) {
 			require.NoError(t, err)
 		})
 	})
+
+	t.Run("UsesTransactionDriverInsteadOfWorkerDriver", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, bundle := setup(ctx, t, "step1")
+
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+			State: new(rivertype.JobStateRunning),
+		})
+
+		updatedJob, err := ResumableSetStepTx[*wrappedPgxTxDriver](ctx, &wrappedPgxTx{Tx: bundle.tx}, &Job[JobArgs]{JobRow: job})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, updatedJob.State)
+	})
 }

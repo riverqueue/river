@@ -3,11 +3,49 @@ package river
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/riverqueue/river/internal/rivercommon"
+	"github.com/riverqueue/river/rivershared/riverpilot"
 )
 
 var errClientNotInContext = errors.New("river: client not found in context, can only be used in a Worker")
+
+type clientContextData struct {
+	Pilot  riverpilot.Pilot
+	Schema string
+	Time   time.Time
+}
+
+type clientContextProvider interface {
+	clientContextData() *clientContextData
+}
+
+func clientContextDataFromContext(ctx context.Context) *clientContextData {
+	client, exists := ctx.Value(rivercommon.ContextKeyClient{}).(clientContextProvider)
+	if !exists || client == nil {
+		panic(errClientNotInContext)
+	}
+
+	data := client.clientContextData()
+	if data == nil {
+		panic(errClientNotInContext)
+	}
+
+	return data
+}
+
+func (c *Client[TTx]) clientContextData() *clientContextData {
+	if c == nil {
+		return nil
+	}
+
+	return &clientContextData{
+		Pilot:  c.Pilot(),
+		Schema: c.Schema(),
+		Time:   c.baseService.Time.Now(),
+	}
+}
 
 func withClient[TTx any](ctx context.Context, client *Client[TTx]) context.Context {
 	return context.WithValue(ctx, rivercommon.ContextKeyClient{}, client)

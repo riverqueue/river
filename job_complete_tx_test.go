@@ -20,6 +20,24 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
+type wrappedPgxTx struct {
+	pgx.Tx
+}
+
+type wrappedPgxTxDriver struct {
+	*riverpgxv5.Driver
+}
+
+func (d *wrappedPgxTxDriver) UnwrapExecutor(tx *wrappedPgxTx) riverdriver.ExecutorTx {
+	var driver *riverpgxv5.Driver
+	return driver.UnwrapExecutor(tx.Tx)
+}
+
+func (d *wrappedPgxTxDriver) UnwrapTx(execTx riverdriver.ExecutorTx) *wrappedPgxTx {
+	var driver *riverpgxv5.Driver
+	return &wrappedPgxTx{Tx: driver.UnwrapTx(execTx)}
+}
+
 func TestJobCompleteTx(t *testing.T) {
 	t.Parallel()
 
@@ -161,5 +179,19 @@ func TestJobCompleteTx(t *testing.T) {
 			_, err := JobCompleteTx[*riverpgxv5.Driver](ctx, bundle.tx, &Job[JobArgs]{JobRow: job})
 			require.NoError(t, err)
 		})
+	})
+
+	t.Run("UsesTransactionDriverInsteadOfWorkerDriver", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, bundle := setup(ctx, t)
+
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+			State: new(rivertype.JobStateRunning),
+		})
+
+		completedJob, err := JobCompleteTx[*wrappedPgxTxDriver](ctx, &wrappedPgxTx{Tx: bundle.tx}, &Job[JobArgs]{JobRow: job})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateCompleted, completedJob.State)
 	})
 }
