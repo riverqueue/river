@@ -26,7 +26,7 @@ import (
 // Must be called from within a ResumableStep or ResumableStepCursor callback.
 // The current step name to persist is read from context.
 func ResumableSetStepTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs](ctx context.Context, tx TTx, job *Job[TArgs]) (*Job[TArgs], error) {
-	return resumableSetStepTx(ctx, tx, job, nil)
+	return resumableSetStepTx[TDriver](ctx, tx, job, nil)
 }
 
 // ResumableSetStepCursorTx immediately persists the current resumable step and
@@ -48,10 +48,10 @@ func ResumableSetStepCursorTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs Jo
 		return nil, err
 	}
 
-	return resumableSetStepTx(ctx, tx, job, json.RawMessage(cursorBytes))
+	return resumableSetStepTx[TDriver](ctx, tx, job, json.RawMessage(cursorBytes))
 }
 
-func resumableSetStepTx[TTx any, TArgs JobArgs](ctx context.Context, tx TTx, job *Job[TArgs], cursor json.RawMessage) (*Job[TArgs], error) {
+func resumableSetStepTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs](ctx context.Context, tx TTx, job *Job[TArgs], cursor json.RawMessage) (*Job[TArgs], error) {
 	if job.State != rivertype.JobStateRunning {
 		return nil, errors.New("job must be running")
 	}
@@ -66,10 +66,9 @@ func resumableSetStepTx[TTx any, TArgs JobArgs](ctx context.Context, tx TTx, job
 
 	step := state.StepName
 
-	client := ClientFromContext[TTx](ctx)
-	if client == nil {
-		return nil, errors.New("client not found in context, can only work within a River worker")
-	}
+	clientData := clientContextDataFromContext(ctx)
+
+	var driver TDriver
 
 	metadataUpdates := map[string]any{
 		rivercommon.MetadataKeyResumableStep: step,
@@ -99,11 +98,11 @@ func resumableSetStepTx[TTx any, TArgs JobArgs](ctx context.Context, tx TTx, job
 		return nil, err
 	}
 
-	updatedJob, err := client.Driver().UnwrapExecutor(tx).JobUpdate(ctx, &riverdriver.JobUpdateParams{
+	updatedJob, err := driver.UnwrapExecutor(tx).JobUpdate(ctx, &riverdriver.JobUpdateParams{
 		ID:              job.ID,
 		MetadataDoMerge: true,
 		Metadata:        metadataUpdatesBytes,
-		Schema:          client.config.Schema,
+		Schema:          clientData.Schema,
 	})
 	if err != nil {
 		if errors.Is(err, rivertype.ErrNotFound) {
