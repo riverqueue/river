@@ -68,7 +68,7 @@ func TestDriverRiverDatabaseSQLPgx(t *testing.T) {
 		ctx     = context.Background()
 		dbPool  = riversharedtest.DBPool(ctx, t)
 		stdPool = stdlib.OpenDBFromPool(dbPool)
-		driver  = riverdatabasesql.New(stdPool)
+		driver  = riverdatabasesql.NewWithPgxListener(stdPool, dbPool)
 	)
 	t.Cleanup(func() { require.NoError(t, stdPool.Close()) })
 

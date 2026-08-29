@@ -18,10 +18,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/lib/pq"
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql/internal/dbsqlc"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
 	"github.com/riverqueue/river/rivershared/uniquestates"
 	"github.com/riverqueue/river/rivershared/util/dbutil"
@@ -36,8 +38,9 @@ var migrationFS embed.FS
 
 // Driver is an implementation of riverdriver.Driver for database/sql.
 type Driver struct {
-	dbPool   *sql.DB
-	replacer sqlctemplate.Replacer
+	dbPool         *sql.DB
+	listenerDriver *riverpgxv5.Driver
+	replacer       sqlctemplate.Replacer
 }
 
 // New returns a new database/sql River driver for use with River.
@@ -51,6 +54,38 @@ func New(dbPool *sql.DB) *Driver {
 	}
 }
 
+// NewWithPgxListener returns a new database/sql River driver with a Pgx-backed
+// listener. The database/sql pool continues to be used for all database
+// operations other than listening for notifications. The Pgx pool is used only
+// to acquire dedicated connections for Postgres LISTEN commands. It panics if
+// listenerPool is nil; use New for a poll-only driver.
+//
+// Both pools are owned by the caller, must connect to the same database, and
+// must resolve the same schema. When the River client has no explicit schema,
+// both pools' search paths must produce the same current schema. Neither pool
+// may be closed while associated River objects are running.
+//
+// Listener connections are hijacked from listenerPool and never returned. A
+// pool dedicated to one River client can generally set MinConns to zero and
+// MaxConns to one. Each concurrently running client still needs its own listener
+// connection. Because hijacked connections no longer count
+// against the pool's maximum, sharing a listener pool between clients may cause
+// total live connections to exceed that maximum. Closing listenerPool does not
+// close hijacked connections; stopping the associated River clients does.
+//
+// Applications using PgBouncer must configure the listener pool to use session
+// pooling or connect it directly to Postgres.
+func NewWithPgxListener(dbPool *sql.DB, listenerPool *pgxpool.Pool) *Driver {
+	if listenerPool == nil {
+		panic("riverdatabasesql: listener pool must not be nil")
+	}
+
+	return &Driver{
+		dbPool:         dbPool,
+		listenerDriver: riverpgxv5.New(listenerPool),
+	}
+}
+
 const argPlaceholder = "$"
 
 func (d *Driver) ArgPlaceholder() string { return argPlaceholder }
@@ -61,7 +96,11 @@ func (d *Driver) GetExecutor() riverdriver.Executor {
 }
 
 func (d *Driver) GetListener(params *riverdriver.GetListenenerParams) riverdriver.Listener {
-	panic(riverdriver.ErrNotImplemented)
+	if d.listenerDriver == nil {
+		panic(riverdriver.ErrNotImplemented)
+	}
+
+	return d.listenerDriver.GetListener(params)
 }
 
 func (d *Driver) GetMigrationDefaultLines() []string { return []string{riverdriver.MigrationLineMain} }
@@ -96,7 +135,7 @@ func (d *Driver) SQLFragmentColumnIn(column string, values any) (string, any, er
 	return fmt.Sprintf("%s = any(@%s)", column, column), pq.Array(values), nil
 }
 
-func (d *Driver) SupportsListener() bool       { return false }
+func (d *Driver) SupportsListener() bool       { return d.listenerDriver != nil }
 func (d *Driver) SupportsListenNotify() bool   { return true }
 func (d *Driver) TimePrecision() time.Duration { return time.Microsecond }
 

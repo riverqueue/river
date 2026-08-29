@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `riverdatabasesql.NewWithPgxListener` for using a dedicated Pgx pool to receive Postgres notifications while continuing to execute jobs and transactions through `database/sql`. [PR #1366](https://github.com/riverqueue/river/pull/1366).
+
 ## [0.45.0] - 2026-08-25
 
 ### Changed

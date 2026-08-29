@@ -23,6 +23,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/testfactory"
+	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivershared/util/urlutil"
 	"github.com/riverqueue/river/rivertype"
@@ -57,7 +58,7 @@ func TestClientWithDriverRiverDatabaseSQLPgx(t *testing.T) {
 		ctx     = context.Background()
 		dbPool  = riversharedtest.DBPool(ctx, t)
 		stdPool = stdlib.OpenDBFromPool(dbPool)
-		driver  = riverdatabasesql.New(stdPool)
+		driver  = riverdatabasesql.NewWithPgxListener(stdPool, dbPool)
 	)
 	t.Cleanup(func() { require.NoError(t, stdPool.Close()) })
 
@@ -68,6 +69,59 @@ func TestClientWithDriverRiverDatabaseSQLPgx(t *testing.T) {
 			return driver, riverdbtest.TestSchema(ctx, t, driver, nil)
 		},
 	)
+}
+
+func TestClientWithDriverRiverDatabaseSQLPgxJobCompleteTx(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx     = context.Background()
+		dbPool  = riversharedtest.DBPool(ctx, t)
+		stdPool = stdlib.OpenDBFromPool(dbPool)
+		driver  = riverdatabasesql.NewWithPgxListener(stdPool, dbPool)
+		schema  = riverdbtest.TestSchema(ctx, t, driver, nil)
+	)
+	t.Cleanup(func() { require.NoError(t, stdPool.Close()) })
+
+	var jobCompleted testsignal.TestSignal[int64]
+	jobCompleted.Init(t)
+
+	type JobArgs struct {
+		testutil.JobArgsReflectKind[JobArgs]
+	}
+
+	config := newTestConfig(t, schema)
+	config.FetchPollInterval = time.Minute
+	river.AddWorker(config.Workers, river.WorkFunc(func(ctx context.Context, job *river.Job[JobArgs]) error {
+		tx, err := stdPool.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		updatedJob, err := river.JobCompleteTx[*riverdatabasesql.Driver](ctx, tx, job)
+		if err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+
+		jobCompleted.Signal(updatedJob.ID)
+		return nil
+	}))
+
+	client, err := river.NewClient(driver, config)
+	require.NoError(t, err)
+	startClient(ctx, t, client)
+
+	insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
+	require.NoError(t, err)
+	require.Equal(t, insertRes.Job.ID, jobCompleted.WaitOrTimeout())
+
+	completedJob, err := client.JobGet(ctx, insertRes.Job.ID)
+	require.NoError(t, err)
+	require.Equal(t, rivertype.JobStateCompleted, completedJob.State)
 }
 
 func TestClientWithDriverRiverPgxV5(t *testing.T) {
@@ -299,6 +353,47 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.Equal(t, river.EventKindJobCompleted, event.Kind)
 		require.Equal(t, insertRes.Job.ID, event.Job.ID)
 		require.Equal(t, insertRes.Job.Kind, event.Job.Kind)
+	})
+
+	t.Run("CancelRunningJobWithListener", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		if bundle.driver.DatabaseName() != riverdriver.DatabaseNamePostgres || !bundle.driver.SupportsListener() {
+			t.Skip("requires a Postgres listener")
+		}
+		config.FetchPollInterval = time.Minute
+
+		client, err := river.NewClient(bundle.driver, config)
+		require.NoError(t, err)
+
+		var jobStarted testsignal.TestSignal[int64]
+		jobStarted.Init(t)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		river.AddWorker(bundle.config.Workers, river.WorkFunc(func(ctx context.Context, job *river.Job[JobArgs]) error {
+			jobStarted.Signal(job.ID)
+			<-ctx.Done()
+			return ctx.Err()
+		}))
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+		require.Equal(t, insertRes.Job.ID, jobStarted.WaitOrTimeout())
+
+		updatedJob, err := client.JobCancel(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, updatedJob.State)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, river.EventKindJobCancelled, event.Kind)
+		require.Equal(t, rivertype.JobStateCancelled, event.Job.State)
 	})
 
 	t.Run("JobDelete", func(t *testing.T) {

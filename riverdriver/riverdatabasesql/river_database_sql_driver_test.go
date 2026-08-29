@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/riverdriver"
@@ -32,6 +33,37 @@ func TestNew(t *testing.T) {
 
 		driver := New(nil)
 		require.Nil(t, driver.dbPool)
+	})
+}
+
+func TestNewWithPgxListener(t *testing.T) {
+	t.Parallel()
+
+	t.Run("PanicsOnNilListenerPool", func(t *testing.T) {
+		t.Parallel()
+
+		require.PanicsWithValue(t, "riverdatabasesql: listener pool must not be nil", func() {
+			NewWithPgxListener(&sql.DB{}, nil)
+		})
+	})
+
+	t.Run("UsesSeparateListenerPool", func(t *testing.T) {
+		t.Parallel()
+
+		dbPool := &sql.DB{}
+		listenerPool := &pgxpool.Pool{}
+		driver := NewWithPgxListener(dbPool, listenerPool)
+
+		require.Equal(t, dbPool, driver.dbPool)
+		require.NotNil(t, driver.listenerDriver)
+		require.True(t, driver.SupportsListener())
+		require.Equal(t, dbPool, driver.GetExecutor().(*Executor).dbPool) //nolint:forcetypeassert
+
+		listener1 := driver.GetListener(&riverdriver.GetListenenerParams{Schema: "schema_one"})
+		listener2 := driver.GetListener(&riverdriver.GetListenenerParams{Schema: "schema_two"})
+		require.NotSame(t, listener1, listener2)
+		require.Equal(t, "schema_one", listener1.Schema())
+		require.Equal(t, "schema_two", listener2.Schema())
 	})
 }
 
