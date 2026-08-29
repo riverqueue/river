@@ -58,6 +58,26 @@ func TestClientWithDriverRiverDatabaseSQLPgx(t *testing.T) {
 		ctx     = context.Background()
 		dbPool  = riversharedtest.DBPool(ctx, t)
 		stdPool = stdlib.OpenDBFromPool(dbPool)
+		driver  = riverdatabasesql.New(stdPool)
+	)
+	t.Cleanup(func() { require.NoError(t, stdPool.Close()) })
+
+	ExerciseClient(ctx, t,
+		func(ctx context.Context, t *testing.T) (riverdriver.Driver[*sql.Tx], string) {
+			t.Helper()
+
+			return driver, riverdbtest.TestSchema(ctx, t, driver, nil)
+		},
+	)
+}
+
+func TestClientWithDriverRiverDatabaseSQLPgxWithPgxListener(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx     = context.Background()
+		dbPool  = riversharedtest.DBPool(ctx, t)
+		stdPool = stdlib.OpenDBFromPool(dbPool)
 		driver  = riverdatabasesql.NewWithPgxListener(stdPool, dbPool)
 	)
 	t.Cleanup(func() { require.NoError(t, stdPool.Close()) })
@@ -71,7 +91,7 @@ func TestClientWithDriverRiverDatabaseSQLPgx(t *testing.T) {
 	)
 }
 
-func TestClientWithDriverRiverDatabaseSQLPgxJobCompleteTx(t *testing.T) {
+func TestClientWithDriverRiverDatabaseSQLPgxWithPgxListenerJobCompleteTx(t *testing.T) {
 	t.Parallel()
 
 	var (

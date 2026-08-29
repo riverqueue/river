@@ -20,7 +20,7 @@ var _ riverdriver.Driver[*sql.Tx] = New(nil)
 func TestNew(t *testing.T) {
 	t.Parallel()
 
-	t.Run("AllowsNilDatabasePool", func(t *testing.T) {
+	t.Run("DatabasePool", func(t *testing.T) {
 		t.Parallel()
 
 		dbPool := &sql.DB{}
@@ -28,11 +28,23 @@ func TestNew(t *testing.T) {
 		require.Equal(t, dbPool, driver.dbPool)
 	})
 
-	t.Run("AllowsNilDatabasePool", func(t *testing.T) {
+	t.Run("NoDatabasePool", func(t *testing.T) {
 		t.Parallel()
 
 		driver := New(nil)
 		require.Nil(t, driver.dbPool)
+	})
+
+	t.Run("PollOnly", func(t *testing.T) {
+		t.Parallel()
+
+		driver := New(&sql.DB{})
+		require.Nil(t, driver.listenerDriver)
+		require.False(t, driver.SupportsListener())
+		require.True(t, driver.SupportsListenNotify())
+		require.PanicsWithValue(t, riverdriver.ErrNotImplemented, func() {
+			driver.GetListener(&riverdriver.GetListenenerParams{})
+		})
 	})
 }
 
