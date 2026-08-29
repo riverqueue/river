@@ -61,7 +61,37 @@ func TestDriverRiverDatabaseSQLLibPQ(t *testing.T) {
 		})
 }
 
-func TestDriverRiverDatabaseSQLPgx(t *testing.T) {
+func TestDriverRiverDatabaseSQLPgxNoListener(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx     = context.Background()
+		dbPool  = riversharedtest.DBPool(ctx, t)
+		stdPool = stdlib.OpenDBFromPool(dbPool)
+		driver  = riverdatabasesql.New(stdPool)
+	)
+	t.Cleanup(func() { require.NoError(t, stdPool.Close()) })
+
+	riverdrivertest.Exercise(ctx, t,
+		func(ctx context.Context, t *testing.T, opts *riverdbtest.TestSchemaOpts) (riverdriver.Driver[*sql.Tx], string) {
+			t.Helper()
+
+			return driver, riverdbtest.TestSchema(ctx, t, driver, opts)
+		},
+		func(ctx context.Context, t *testing.T) (riverdriver.Executor, riverdriver.Driver[*sql.Tx]) {
+			t.Helper()
+
+			tx, schema := riverdbtest.TestTx(ctx, t, driver, nil)
+
+			// The same thing as the built-in riverdbtest.TestTxPgx does.
+			_, err := tx.ExecContext(ctx, "SET search_path TO '"+schema+"'")
+			require.NoError(t, err)
+
+			return driver.UnwrapExecutor(tx), driver
+		})
+}
+
+func TestDriverRiverDatabaseSQLPgxWithPgxListener(t *testing.T) {
 	t.Parallel()
 
 	var (
