@@ -67,11 +67,11 @@ func New(dbPool *sql.DB) *Driver {
 //
 // Listener connections are hijacked from listenerPool and never returned. A
 // pool dedicated to one River client can generally set MinConns to zero and
-// MaxConns to one. Each concurrently running client still needs its own listener
-// connection. Because hijacked connections no longer count
-// against the pool's maximum, sharing a listener pool between clients may cause
-// total live connections to exceed that maximum. Closing listenerPool does not
-// close hijacked connections; stopping the associated River clients does.
+// MaxConns to one. Each concurrently running client still needs its own
+// listener connection. Because hijacked connections no longer count against the
+// pool's maximum, sharing a listener pool between clients may cause total live
+// connections to exceed that maximum. Closing listenerPool does not close
+// hijacked connections; stopping the associated River clients does.
 //
 // Applications using PgBouncer must configure the listener pool to use session
 // pooling or connect it directly to Postgres.
