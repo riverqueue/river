@@ -1374,7 +1374,9 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			return nil, err
 		}
-		if params.ApplicationName != "river-conformance-go" && params.ApplicationName != "river-conformance-rust" {
+		if params.ApplicationName != "river-conformance-go" &&
+			params.ApplicationName != "river-conformance-javascript" &&
+			params.ApplicationName != "river-conformance-rust" {
 			return nil, errors.New("unsupported conformance application_name")
 		}
 		var count int

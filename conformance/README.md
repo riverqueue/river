@@ -17,15 +17,16 @@ after it reports its complete registered set. Missing, stale, duplicate,
 mis-tiered, or merely declarative entries therefore fail validation.
 
 An implementation may claim compatibility only when its protocol revision and
-capabilities match this manifest and the Go-only, Rust-only, and mixed adapter
+capabilities match this manifest and its implementation-local and mixed adapter
 suites pass.
 
 The mixed harness is candidate-neutral. It always runs Go as the reference and
-uses Rust by default, while `RIVER_CONFORMANCE_CANDIDATE` can point it at any
-process implementing the versioned JSON-RPC contract. See
+uses the checked Rust descriptor by default. `RIVER_CONFORMANCE_CANDIDATE_FILE`
+can point it at a descriptor supplied by another repository, while
+`RIVER_CONFORMANCE_CANDIDATE` accepts the same object inline. See
 [`adapter/README.md`](adapter/README.md) for the candidate descriptor. This is
-the intended entry point for a future JavaScript implementation; it does not
-require copying either engine's language-specific tests.
+the entry point for JavaScript and future implementations; it does not require
+copying another engine's language-specific tests.
 
 The normal artifact gate is `make verify/conformance`. The full PostgreSQL tier
 uses an externally provisioned disposable URL:
@@ -44,9 +45,9 @@ adapters, and needs no database environment variable:
 make test/conformance/sqlite
 ```
 
-Both commands use `RIVER_CONFORMANCE_CANDIDATE` when supplied. This lets a
-future JavaScript adapter run the same PostgreSQL contract and SQLite profiles
-without a language-specific checklist.
+Both commands use either candidate setting when supplied. This lets a
+JavaScript adapter run the same PostgreSQL contract and SQLite profiles without
+a language-specific checklist.
 
 Performance and soak gates are explicit because they take longer:
 
