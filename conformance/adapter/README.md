@@ -26,7 +26,7 @@ JavaScript port, can run the same suite by setting
   "command": ["node", "dist/conformance-adapter.js"],
   "implementation": "javascript",
   "restart_command": ["node", "dist/conformance-adapter.js"],
-  "version": "0.44.0-alpha.1"
+  "version": "0.46.0-alpha.1"
 }
 ```
 

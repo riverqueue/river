@@ -16,7 +16,7 @@ homepage = "https://riverqueue.com"
 license = "MPL-2.0"
 repository = "https://github.com/riverqueue/river"
 rust-version = "1.95"
-version = "0.44.0-alpha.1"
+version = "0.46.0-alpha.1"
 
 [workspace.dependencies]
 async-trait = "0.1.92"
