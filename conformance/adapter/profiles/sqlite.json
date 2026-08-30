@@ -28,6 +28,8 @@
     "insert_many_fast",
     "list",
     "migrate",
+    "raw_insert_exact_json",
+    "raw_job_exact_json",
     "raw_job_timestamps",
     "reset",
     "retry",

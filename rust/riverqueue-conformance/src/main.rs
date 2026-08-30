@@ -28,7 +28,7 @@ use riverqueue_migrate::{
     SqliteMigrator,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value, json, value::RawValue};
 use sqlx::{
     AssertSqlSafe, PgPool, Postgres, Sqlite, SqlitePool, Transaction,
     postgres::{PgConnectOptions, PgPoolOptions},
@@ -36,7 +36,7 @@ use sqlx::{
 };
 use tokio::sync::watch;
 
-const ADAPTER_VERSION: u32 = 11;
+const ADAPTER_VERSION: u32 = 12;
 const PROTOCOL_REVISION: u32 = 1;
 
 const ADAPTER_METHODS: &[&str] = &[
@@ -68,8 +68,10 @@ const ADAPTER_METHODS: &[&str] = &[
     "queue_resume",
     "queue_update",
     "raw_finalize",
+    "raw_insert_exact_json",
     "raw_insert_full_row",
     "raw_insert_no_notify",
+    "raw_job_exact_json",
     "raw_job_timestamps",
     "request_resign",
     "reset",
@@ -144,6 +146,8 @@ const SQLITE_ADAPTER_METHODS: &[&str] = &[
     "insert_many_fast",
     "list",
     "migrate",
+    "raw_insert_exact_json",
+    "raw_job_exact_json",
     "raw_job_timestamps",
     "reset",
     "retry",
@@ -204,7 +208,9 @@ const SQLITE_RUNTIME_METHODS: &[&str] = &[
     "queue_resume",
     "queue_update",
     "raw_finalize",
+    "raw_insert_exact_json",
     "raw_insert_no_notify",
+    "raw_job_exact_json",
     "raw_job_timestamps",
     "request_resign",
     "reset",
@@ -270,7 +276,7 @@ struct Request {
     jsonrpc: String,
     method: String,
     #[serde(default)]
-    params: Value,
+    params: Option<Box<RawValue>>,
 }
 
 #[derive(Serialize)]
@@ -348,22 +354,20 @@ struct ConformanceArgs {
     message: String,
 }
 
-#[derive(Debug, Deserialize, JobArgs, Serialize)]
-#[river(kind = "conformance_all_args")]
-struct UniqueAllArgs {
-    alpha: String,
-    maximum: i64,
-    zeta: String,
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(transparent)]
+struct UniqueAllArgs(Value);
+
+impl JobArgs for UniqueAllArgs {
+    const KIND: &'static str = "conformance_all_args";
 }
 
-#[derive(Debug, Deserialize, JobArgs, Serialize)]
-#[river(kind = "conformance_numeric_boundaries")]
-struct UniqueNumericArgs {
-    exponent: f64,
-    fraction: f64,
-    maximum: i64,
-    minimum: i64,
-    unsigned_maximum: u64,
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(transparent)]
+struct UniqueNumericArgs(Value);
+
+impl JobArgs for UniqueNumericArgs {
+    const KIND: &'static str = "conformance_numeric_boundaries";
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -982,7 +986,11 @@ impl AdapterBackend {
 
 impl Adapter {
     async fn respond(&mut self, request: Request) -> Response {
-        let result = self.handle(&request.method, request.params).await;
+        let params = match decode_request_params(request.params.as_deref()) {
+            Ok(params) => params,
+            Err(error) => return Response::error(request.id, -32_602, error.to_string()),
+        };
+        let result = self.handle(&request.method, params).await;
         match result {
             Ok(result) => Response::success(request.id, result),
             Err(error) => Response::error(request.id, -32_000, error.to_string()),
@@ -1394,6 +1402,19 @@ impl Adapter {
                 .await?;
                 Ok(normalize_job(&self.client()?.job_get(id).await?))
             }
+            "raw_insert_exact_json" => {
+                let id = sqlx::query_scalar::<_, i64>(
+                    r#"INSERT INTO river_job (args, kind, max_attempts, metadata)
+                       VALUES (
+                           '{"decimal":0.12345678901234567890123456789,"integer":9223372036854775807}'::jsonb,
+                           'conformance_exact_json', 25,
+                           '{"negative":-9223372036854775808}'::jsonb
+                       ) RETURNING id"#,
+                )
+                .fetch_one(&self.pool)
+                .await?;
+                Ok(json!({"id": id}))
+            }
             "raw_insert_full_row" => {
                 let id = sqlx::query_scalar::<_, i64>(
                     r#"INSERT INTO river_job (
@@ -1402,7 +1423,7 @@ impl Adapter {
                         scheduled_at, state, tags, unique_key, unique_states
                     ) VALUES (
                         '{"nested":{"enabled":true},"values":[1,"two",null]}'::jsonb,
-                        3, '2026-01-02T03:04:06.123456Z', ARRAY['go-client','rust-client'],
+                        3, '2026-01-02T03:04:06.123456Z', ARRAY['go-client','candidate-client'],
                         '2026-01-02T03:04:05.6789Z',
                         ARRAY['{"at":"2026-01-02T03:04:06.123456Z","attempt":3,"error":"worker failed: escaped \"detail\"","trace":"frame one\nframe two"}'::jsonb],
                         '2026-01-02T03:04:07.000001Z', 'conformance_full_row', 4,
@@ -1414,6 +1435,10 @@ impl Adapter {
                 .fetch_one(&self.pool)
                 .await?;
                 Ok(normalize_job(&self.client()?.job_get(id).await?))
+            }
+            "raw_job_exact_json" => {
+                let row = self.client()?.job_get(required_i64(&params, "id")?).await?;
+                exact_json_tokens(&row)
             }
             "raw_job_timestamps" => {
                 let id = required_i64(&params, "id")?;
@@ -1845,7 +1870,11 @@ impl Adapter {
 
 impl SqliteAdapter {
     async fn respond(&mut self, request: Request) -> Response {
-        let result = self.handle(&request.method, request.params).await;
+        let params = match decode_request_params(request.params.as_deref()) {
+            Ok(params) => params,
+            Err(error) => return Response::error(request.id, -32_602, error.to_string()),
+        };
+        let result = self.handle(&request.method, params).await;
         match result {
             Ok(result) => Response::success(request.id, result),
             Err(error) => Response::error(request.id, -32_000, error.to_string()),
@@ -2020,6 +2049,19 @@ impl SqliteAdapter {
                 .await?;
                 Ok(normalize_job(&self.client()?.job_get(id).await?))
             }
+            "raw_insert_exact_json" => {
+                let id = sqlx::query_scalar::<_, i64>(
+                    r#"INSERT INTO river_job (args, kind, max_attempts, metadata)
+                       VALUES (
+                           jsonb('{"decimal":0.12345678901234567890123456789,"integer":9223372036854775807}'),
+                           'conformance_exact_json', 25,
+                           jsonb('{"negative":-9223372036854775808}')
+                       ) RETURNING id"#,
+                )
+                .fetch_one(&self.pool)
+                .await?;
+                Ok(json!({"id": id}))
+            }
             "get" => {
                 if params
                     .get("schema")
@@ -2118,6 +2160,10 @@ impl SqliteAdapter {
                 .fetch_one(&self.pool)
                 .await?;
                 Ok(json!({"created_at": created_at, "scheduled_at": scheduled_at}))
+            }
+            "raw_job_exact_json" => {
+                let row = self.client()?.job_get(required_i64(&params, "id")?).await?;
+                exact_json_tokens(&row)
             }
             "queue_add" => {
                 let running = self
@@ -2591,6 +2637,50 @@ impl SqliteAdapter {
     }
 }
 
+fn decode_request_params(raw: Option<&RawValue>) -> Result<Value, serde_json::Error> {
+    let Some(raw) = raw else {
+        return Ok(Value::Null);
+    };
+    let rewritten = preserve_negative_zero_tokens(raw.get());
+    serde_json::from_str(&rewritten)
+}
+
+fn preserve_negative_zero_tokens(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut escaped = false;
+    let mut in_string = false;
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if !in_string
+            && byte == b'-'
+            && bytes.get(index + 1) == Some(&b'0')
+            && bytes.get(index + 2).is_none_or(|next| {
+                matches!(*next, b' ' | b'\t' | b'\r' | b'\n' | b',' | b']' | b'}')
+            })
+        {
+            output.extend_from_slice(b"-0.0");
+            index += 2;
+            continue;
+        }
+        output.push(byte);
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+        } else if byte == b'"' {
+            in_string = true;
+        }
+        index += 1;
+    }
+    String::from_utf8(output).expect("valid JSON remains UTF-8")
+}
+
 fn parse_sqlite_time(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
     chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f")
         .map(|value| value.and_utc())
@@ -2727,6 +2817,24 @@ fn job_update_params(metadata: Map<String, Value>, output: Option<Value>) -> Job
 
 fn queue_list_params(limit: i32) -> QueueListParams {
     QueueListParams::default().with_limit(limit)
+}
+
+fn exact_json_tokens(row: &JobRow) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    let args = row
+        .encoded_args
+        .as_object()
+        .ok_or_else(|| io::Error::other("exact job args are not an object"))?;
+    let token = |source: &Map<String, Value>, key: &str| {
+        source
+            .get(key)
+            .map(Value::to_string)
+            .ok_or_else(|| io::Error::other(format!("exact JSON key {key:?} not found")))
+    };
+    Ok(json!({
+        "decimal": token(args, "decimal")?,
+        "integer": token(args, "integer")?,
+        "negative": token(&row.metadata, "negative")?,
+    }))
 }
 
 fn normalize_job(row: &JobRow) -> Value {
@@ -2938,6 +3046,28 @@ impl Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_json_preserves_negative_zero_and_exact_numbers() {
+        let raw = RawValue::from_string(
+            r#"{"text":"-0","zero":-0,"large":9223372036854775807,"decimal":0.12345678901234567890123456789}"#
+                .to_owned(),
+        )
+        .unwrap();
+        let value = decode_request_params(Some(&raw)).unwrap();
+
+        assert!(
+            value["zero"]
+                .as_f64()
+                .is_some_and(|value| value == 0.0 && value.is_sign_negative())
+        );
+        assert_eq!(value["large"].to_string(), "9223372036854775807");
+        assert_eq!(
+            value["decimal"].to_string(),
+            "0.12345678901234567890123456789"
+        );
+        assert_eq!(value["text"], "-0");
+    }
 
     #[test]
     fn timestamp_format_matches_go_rfc3339_nano() {

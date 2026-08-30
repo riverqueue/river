@@ -81,47 +81,73 @@ pub(crate) fn build_unique_key_parts(
 }
 
 fn go_compatible_json(value: &Value) -> Result<String, Error> {
-    let encoded = serde_json::to_string(value)?;
-    let mut output = String::with_capacity(encoded.len());
-    let mut escaped = false;
-    let mut in_string = false;
-    for character in encoded.chars() {
-        if in_string && !escaped {
-            match character {
-                '<' => {
-                    output.push_str("\\u003c");
-                    continue;
-                }
-                '>' => {
-                    output.push_str("\\u003e");
-                    continue;
-                }
-                '&' => {
-                    output.push_str("\\u0026");
-                    continue;
-                }
-                '\u{2028}' => {
-                    output.push_str("\\u2028");
-                    continue;
-                }
-                '\u{2029}' => {
-                    output.push_str("\\u2029");
-                    continue;
-                }
-                _ => {}
+    let mut output = String::new();
+    write_go_compatible_json(value, &mut output)?;
+    Ok(output)
+}
+
+fn write_go_compatible_json(value: &Value, output: &mut String) -> Result<(), Error> {
+    match value {
+        Value::Null => output.push_str("null"),
+        Value::Bool(value) => output.push_str(if *value { "true" } else { "false" }),
+        Value::Number(value) => {
+            let encoded = value.to_string();
+            if encoded_json_number_is_zero(&encoded)
+                && value.as_f64().is_some_and(f64::is_sign_negative)
+            {
+                output.push_str("-0");
+            } else {
+                output.push_str(&encoded);
             }
         }
-
-        output.push(character);
-        if character == '"' && !escaped {
-            in_string = !in_string;
+        Value::String(value) => output.push_str(&go_compatible_json_string(value)?),
+        Value::Array(values) => {
+            output.push('[');
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    output.push(',');
+                }
+                write_go_compatible_json(value, output)?;
+            }
+            output.push(']');
         }
-        escaped = in_string && character == '\\' && !escaped;
-        if character != '\\' {
-            escaped = false;
+        Value::Object(values) => {
+            output.push('{');
+            let mut entries = values.iter().collect::<Vec<_>>();
+            entries.sort_unstable_by_key(|(key, _)| *key);
+            for (index, (key, value)) in entries.into_iter().enumerate() {
+                if index > 0 {
+                    output.push(',');
+                }
+                output.push_str(&go_compatible_json_string(key)?);
+                output.push(':');
+                write_go_compatible_json(value, output)?;
+            }
+            output.push('}');
         }
     }
-    Ok(output)
+    Ok(())
+}
+
+fn encoded_json_number_is_zero(encoded: &str) -> bool {
+    let coefficient = encoded
+        .strip_prefix('-')
+        .unwrap_or(encoded)
+        .split_once(['e', 'E'])
+        .map_or(
+            encoded.strip_prefix('-').unwrap_or(encoded),
+            |(value, _)| value,
+        );
+    coefficient.bytes().all(|byte| matches!(byte, b'0' | b'.'))
+}
+
+fn go_compatible_json_string(value: &str) -> Result<String, Error> {
+    Ok(serde_json::to_string(value)?
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029"))
 }
 
 fn select_unique_args(value: &Value, paths: &[&str]) -> Result<Value, Error> {
@@ -359,10 +385,12 @@ mod tests {
 
     #[test]
     fn matches_go_generated_golden_keys() {
-        let fixture: Fixture = serde_json::from_str(include_str!(
-            "../../../conformance/fixtures/unique_keys.json"
-        ))
-        .unwrap();
+        // `serde_json`'s arbitrary-precision parser normalizes the integer
+        // token `-0` to `0`. Typed Rust arguments retain negative zero, so keep
+        // the fixture on that production path while preserving its sign.
+        let fixture_source = include_str!("../../../conformance/fixtures/unique_keys.json")
+            .replace("\"zero\": -0,", "\"zero\": -0.0,");
+        let fixture: Fixture = serde_json::from_str(&fixture_source).unwrap();
         assert_eq!(fixture.protocol_revision, 1);
 
         for case in fixture.cases {
@@ -400,6 +428,12 @@ mod tests {
                 case.name
             );
         }
+    }
+
+    #[test]
+    fn preserves_negative_zero_for_go_json() {
+        let value = serde_json::to_value(-0.0_f64).unwrap();
+        assert_eq!(go_compatible_json(&value).unwrap(), "-0");
     }
 
     fn hex_to_bytes(encoded: &str) -> [u8; 32] {

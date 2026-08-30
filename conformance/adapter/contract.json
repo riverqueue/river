@@ -1,6 +1,6 @@
 {
   "$schema": "../schema/adapter-contract.schema.json",
-  "adapter_version": 11,
+  "adapter_version": 12,
   "methods": [
     { "capability": "barriers", "description": "Create a named worker barrier.", "name": "barrier_create" },
     { "capability": "barriers", "description": "Release a named worker barrier.", "name": "barrier_release" },
@@ -30,8 +30,10 @@
     { "capability": "queues", "description": "Resume a persisted queue.", "name": "queue_resume" },
     { "capability": "queues", "description": "Update persisted queue metadata.", "name": "queue_update" },
     { "capability": "job_crud", "description": "Force a running job into an external terminal state for completion-race tests.", "name": "raw_finalize" },
+    { "capability": "job_crud", "description": "Insert exact JSON numeric fixtures directly and return their job ID.", "name": "raw_insert_exact_json" },
     { "capability": "job_crud", "description": "Insert a normalized full-field row for codec checks.", "name": "raw_insert_full_row" },
     { "capability": "notifications", "description": "Insert directly without a notification.", "name": "raw_insert_no_notify" },
+    { "capability": "job_crud", "description": "Read exact numeric tokens from job JSON through the implementation driver.", "name": "raw_job_exact_json" },
     { "capability": "job_crud", "description": "Read the database's raw persisted job timestamp representation.", "name": "raw_job_timestamps" },
     { "capability": "leadership", "description": "Request leader resignation.", "name": "request_resign" },
     { "capability": "reset", "description": "Truncate River runtime tables in a disposable schema.", "name": "reset" },

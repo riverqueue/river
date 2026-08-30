@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	adapterVersion        = 11
+	adapterVersion        = 12
 	implementationVersion = "0.46.0"
 	protocolRevision      = 1
 )
@@ -68,8 +68,10 @@ var adapterMethods = []string{ //nolint:gochecknoglobals
 	"queue_resume",
 	"queue_update",
 	"raw_finalize",
+	"raw_insert_exact_json",
 	"raw_insert_full_row",
 	"raw_insert_no_notify",
+	"raw_job_exact_json",
 	"raw_job_timestamps",
 	"request_resign",
 	"reset",
@@ -144,6 +146,8 @@ var sqliteAdapterMethods = []string{ //nolint:gochecknoglobals
 	"insert_many_fast",
 	"list",
 	"migrate",
+	"raw_insert_exact_json",
+	"raw_job_exact_json",
 	"raw_job_timestamps",
 	"reset",
 	"retry",
@@ -192,7 +196,7 @@ var sqliteRuntimeMethods = []string{ //nolint:gochecknoglobals
 	"barrier_create", "barrier_release", "cancel", "clock_set", "delete", "delete_many", "get",
 	"handshake", "insert", "insert_many", "insert_many_fast", "leader", "list", "migrate",
 	"queue_add", "queue_get", "queue_list", "queue_pause", "queue_remove", "queue_resume",
-	"queue_update", "raw_finalize", "raw_insert_no_notify", "raw_job_timestamps", "request_resign", "reset", "retry", "retry_delay",
+	"queue_update", "raw_finalize", "raw_insert_exact_json", "raw_insert_no_notify", "raw_job_exact_json", "raw_job_timestamps", "request_resign", "reset", "retry", "retry_delay",
 	"rng_seed", "runtime_stats", "start", "stop", "tx_begin", "tx_cancel", "tx_commit",
 	"tx_delete", "tx_delete_many", "tx_get", "tx_insert", "tx_insert_many", "tx_insert_many_fast",
 	"tx_list", "tx_queue_get", "tx_queue_list", "tx_queue_pause", "tx_queue_resume",
@@ -1418,6 +1422,17 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		}
 		return normalizeJob(job), nil
 
+	case "raw_insert_exact_json":
+		var id int64
+		err := s.pool.QueryRow(ctx, `
+			INSERT INTO river_job (args, kind, max_attempts, metadata)
+			VALUES (
+				'{"decimal":0.12345678901234567890123456789,"integer":9223372036854775807}'::jsonb,
+				'conformance_exact_json', 25,
+				'{"negative":-9223372036854775808}'::jsonb
+			) RETURNING id`).Scan(&id)
+		return map[string]any{"id": id}, err
+
 	case "raw_insert_full_row":
 		var id int64
 		err := s.pool.QueryRow(ctx, `
@@ -1427,7 +1442,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 				scheduled_at, state, tags, unique_key, unique_states
 			) VALUES (
 				'{"nested":{"enabled":true},"values":[1,"two",null]}'::jsonb,
-				3, '2026-01-02T03:04:06.123456Z', ARRAY['go-client','rust-client'],
+				3, '2026-01-02T03:04:06.123456Z', ARRAY['go-client','candidate-client'],
 				'2026-01-02T03:04:05.6789Z',
 				ARRAY['{"at":"2026-01-02T03:04:06.123456Z","attempt":3,"error":"worker failed: escaped \"detail\"","trace":"frame one\nframe two"}'::jsonb],
 				'2026-01-02T03:04:07.000001Z', 'conformance_full_row', 4,
@@ -1447,6 +1462,21 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			return nil, err
 		}
 		return normalizeJob(job), nil
+
+	case "raw_job_exact_json":
+		id, err := requestID(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		job, err := client.JobGet(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return exactJSONTokens(job)
 
 	case "raw_job_timestamps":
 		id, err := requestID(req.Params)
@@ -2116,6 +2146,17 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		}
 		return normalizeJob(job), nil
 
+	case "raw_insert_exact_json":
+		var id int64
+		err := s.pool.QueryRowContext(ctx, `
+			INSERT INTO river_job (args, kind, max_attempts, metadata)
+			VALUES (
+				jsonb('{"decimal":0.12345678901234567890123456789,"integer":9223372036854775807}'),
+				'conformance_exact_json', 25,
+				jsonb('{"negative":-9223372036854775808}')
+			) RETURNING id`).Scan(&id)
+		return map[string]any{"id": id}, err
+
 	case "get": //nolint:usestdlibvars // JSON-RPC method names are lowercase protocol values.
 		var params struct {
 			ID     int64  `json:"id"`
@@ -2253,6 +2294,17 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			FROM river_job
 			WHERE id = ?`, id).Scan(&createdAt, &scheduledAt)
 		return map[string]any{"created_at": createdAt, "scheduled_at": scheduledAt}, err
+
+	case "raw_job_exact_json":
+		id, err := requestID(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		job, err := s.client().JobGet(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return exactJSONTokens(job)
 
 	case "barrier_create", "barrier_release":
 		var params struct {
@@ -2910,6 +2962,41 @@ func errorResponse(id any, code int, err error) response {
 		ID:      id,
 		JSONRPC: "2.0",
 	}
+}
+
+func exactJSONTokens(job *rivertype.JobRow) (map[string]any, error) {
+	var args map[string]json.RawMessage
+	if err := json.Unmarshal(job.EncodedArgs, &args); err != nil {
+		return nil, fmt.Errorf("decode exact args: %w", err)
+	}
+	var metadata map[string]json.RawMessage
+	if err := json.Unmarshal(job.Metadata, &metadata); err != nil {
+		return nil, fmt.Errorf("decode exact metadata: %w", err)
+	}
+	requiredToken := func(source map[string]json.RawMessage, key string) (string, error) {
+		raw, ok := source[key]
+		if !ok {
+			return "", fmt.Errorf("exact JSON key %q not found", key)
+		}
+		return string(raw), nil
+	}
+	decimal, err := requiredToken(args, "decimal")
+	if err != nil {
+		return nil, err
+	}
+	integer, err := requiredToken(args, "integer")
+	if err != nil {
+		return nil, err
+	}
+	negative, err := requiredToken(metadata, "negative")
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"decimal":  decimal,
+		"integer":  integer,
+		"negative": negative,
+	}, nil
 }
 
 func normalizeJob(job *rivertype.JobRow) map[string]any {
