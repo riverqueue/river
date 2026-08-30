@@ -349,40 +349,53 @@ impl PeriodicJobs {
     }
 
     pub(crate) async fn run_due(&self, client: &Client, now: DateTime<Utc>) {
+        struct DueJob {
+            advance_handle: Option<PeriodicJobHandle>,
+            job: PeriodicJob,
+            target: DateTime<Utc>,
+        }
+
         let due = {
             let mut registry = self.registry.lock().await;
             let mut due = Vec::new();
-            for entry in registry.entries.values_mut() {
+            for (handle, entry) in &mut registry.entries {
                 if entry.needs_initialization {
                     entry.needs_initialization = false;
                     entry.next_run = entry.job.schedule.next(now);
                     if entry.job.opts.run_on_start {
-                        due.push((entry.job.clone(), now));
+                        due.push(DueJob {
+                            advance_handle: None,
+                            job: entry.job.clone(),
+                            target: now,
+                        });
                     }
                     continue;
                 }
                 if let Some(target) = entry.next_run
                     && target <= now
                 {
-                    due.push((entry.job.clone(), target));
-                    entry.next_run = entry.job.schedule.next(target);
+                    due.push(DueJob {
+                        advance_handle: Some(*handle),
+                        job: entry.job.clone(),
+                        target,
+                    });
                 }
             }
             due
         };
 
-        for (job, target) in due {
-            let result = (job.constructor)();
-            match result {
+        for due_job in due {
+            let result = (due_job.job.constructor)();
+            let advance = match result {
                 Ok(Some(insert)) => {
                     let mut opts = InsertOpts::resolve(
                         client.default_max_attempts(),
                         insert.defaults.clone(),
                         insert.opts.clone(),
                     );
-                    opts.scheduled_at.get_or_insert(target);
+                    opts.scheduled_at.get_or_insert(due_job.target);
                     opts.metadata.insert("periodic".to_owned(), true.into());
-                    if let Some(id) = &job.opts.id {
+                    if let Some(id) = &due_job.job.opts.id {
                         opts.metadata.insert(
                             crate::METADATA_KEY_PERIODIC_JOB_ID.to_owned(),
                             id.clone().into(),
@@ -390,11 +403,25 @@ impl PeriodicJobs {
                     }
                     if let Err(error) = client.insert_periodic(insert, opts).await {
                         tracing::error!(error = %error, "River periodic job insertion failed");
+                        false
+                    } else {
+                        true
                     }
                 }
-                Ok(None) => {}
+                Ok(None) => true,
                 Err(error) => {
                     tracing::error!(error = %error, "River periodic job constructor failed");
+                    true
+                }
+            };
+
+            if advance && let Some(handle) = due_job.advance_handle {
+                let mut registry = self.registry.lock().await;
+                if let Some(entry) = registry.entries.get_mut(&handle)
+                    && !entry.needs_initialization
+                    && entry.next_run == Some(due_job.target)
+                {
+                    entry.next_run = entry.job.schedule.next(due_job.target);
                 }
             }
         }
@@ -440,8 +467,33 @@ fn validate_jobs(jobs: &[PeriodicJob], existing_ids: &HashSet<String>) -> Result
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "postgres")]
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use super::*;
+    #[cfg(feature = "postgres")]
+    use async_trait::async_trait;
     use serde::{Deserialize, Serialize};
+    #[cfg(feature = "postgres")]
+    use sqlx::postgres::PgPoolOptions;
+
+    #[cfg(feature = "postgres")]
+    use crate::{InsertContext, InsertMiddleware};
+
+    #[cfg(feature = "postgres")]
+    struct FailingInsertMiddleware(Arc<AtomicUsize>);
+
+    #[cfg(feature = "postgres")]
+    #[async_trait]
+    impl InsertMiddleware for FailingInsertMiddleware {
+        async fn before_insert(&self, _insert: &mut InsertContext) -> Result<(), Error> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(Error::runtime("periodic insert failed"))
+        }
+    }
 
     #[derive(Clone, Deserialize, Serialize)]
     struct TestArgs;
@@ -483,6 +535,37 @@ mod tests {
 
         jobs.clear().await;
         assert!(jobs.registry.lock().await.entries.is_empty());
+    }
+
+    #[cfg(feature = "postgres")]
+    #[tokio::test]
+    async fn insert_failure_does_not_advance_next_run() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let jobs = PeriodicJobs::from_jobs(vec![PeriodicJob::new(
+            IntervalSchedule::new(Duration::from_secs(1)).unwrap(),
+            || TestArgs,
+        )])
+        .unwrap();
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/river_periodic_test")
+            .unwrap();
+        let client = Client::builder(pool)
+            .insert_middleware(FailingInsertMiddleware(attempts.clone()))
+            .build()
+            .unwrap();
+        let now = Utc::now();
+        let target = now + chrono::Duration::seconds(1);
+
+        jobs.run_due(&client, now).await;
+        jobs.run_due(&client, target).await;
+        jobs.run_due(&client, target).await;
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        let registry = jobs.registry.lock().await;
+        assert_eq!(
+            registry.entries.values().next().unwrap().next_run,
+            Some(target)
+        );
     }
 
     #[test]

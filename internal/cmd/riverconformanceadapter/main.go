@@ -34,8 +34,9 @@ import (
 )
 
 const (
-	adapterVersion   = 11
-	protocolRevision = 1
+	adapterVersion        = 11
+	implementationVersion = "0.46.0"
+	protocolRevision      = 1
 )
 
 var adapterMethods = []string{ //nolint:gochecknoglobals
@@ -876,7 +877,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			"backend":                "postgres",
 			"capabilities":           capabilities,
 			"implementation":         "go",
-			"implementation_version": "0.44.0-development",
+			"implementation_version": implementationVersion,
 			"methods":                adapterMethods,
 			"migration_lines":        map[string]int{"main": 7},
 			"profile":                "postgres-full-v1",
@@ -1934,7 +1935,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			"backend":                "sqlite",
 			"capabilities":           profileCapabilities,
 			"implementation":         "go",
-			"implementation_version": "0.44.0-development",
+			"implementation_version": implementationVersion,
 			"methods":                methods,
 			"migration_lines":        map[string]int{"main": 7},
 			"profile":                s.profile,
