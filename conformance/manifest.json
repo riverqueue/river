@@ -29,7 +29,7 @@
   },
   "go": {
     "module": "github.com/riverqueue/river",
-    "version": "0.44.0-development"
+    "version": "0.46.0"
   },
   "migration": {
     "latest": 7,
@@ -38,6 +38,6 @@
   "protocol_revision": 1,
   "rust": {
     "crate": "riverqueue",
-    "version": "0.44.0-alpha.1"
+    "version": "0.46.0-alpha.1"
   }
 }

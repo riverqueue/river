@@ -26,8 +26,8 @@ base64.workspace = true
 chrono.workspace = true
 cron.workspace = true
 futures-util.workspace = true
-riverqueue-internal = { path = "../riverqueue-internal", version = "=0.44.0-alpha.1", default-features = false }
-riverqueue-macros = { path = "../riverqueue-macros", version = "=0.44.0-alpha.1" }
+riverqueue-internal = { path = "../riverqueue-internal", version = "=0.46.0-alpha.1", default-features = false }
+riverqueue-macros = { path = "../riverqueue-macros", version = "=0.46.0-alpha.1" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -38,7 +38,7 @@ tokio-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.44.0-alpha.1", features = ["postgres", "sqlite"] }
+riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.46.0-alpha.1", features = ["postgres", "sqlite"] }
 serde.workspace = true
 tokio.workspace = true
 
