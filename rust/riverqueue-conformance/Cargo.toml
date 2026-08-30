@@ -10,8 +10,8 @@ license.workspace = true
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
-riverqueue = { path = "../riverqueue", version = "=0.44.0-alpha.1", default-features = false, features = ["postgres", "sqlite"] }
-riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.44.0-alpha.1", default-features = false, features = ["postgres", "sqlite"] }
+riverqueue = { path = "../riverqueue", version = "=0.46.0-alpha.1", default-features = false, features = ["postgres", "sqlite"] }
+riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.46.0-alpha.1", default-features = false, features = ["postgres", "sqlite"] }
 serde.workspace = true
 serde_json.workspace = true
 sqlx = { workspace = true, features = ["postgres", "sqlite"] }
