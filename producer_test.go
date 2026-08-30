@@ -3,8 +3,10 @@ package river
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/jobcompleter"
+	"github.com/riverqueue/river/internal/jobexecutor"
+	"github.com/riverqueue/river/internal/jobstats"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/rivercommon"
@@ -51,6 +55,51 @@ func (p *beforeJobGetAvailablePilot) JobGetAvailable(
 	}
 
 	return p.Pilot.JobGetAvailable(ctx, exec, state, params)
+}
+
+type blockingJobCompleter struct {
+	jobcompleter.JobCompleter
+
+	releaseCh chan struct{}
+	startedCh chan struct{}
+}
+
+func (c *blockingJobCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobstats.JobStatistics, params *riverdriver.JobSetStateIfRunningParams) error {
+	close(c.startedCh)
+	<-c.releaseCh
+	return nil
+}
+
+type jobSetStateIfRunningManyErrorPilot struct {
+	riverpilot.Pilot
+
+	err error
+}
+
+func (p *jobSetStateIfRunningManyErrorPilot) JobSetStateIfRunningMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+	return nil, p.err
+}
+
+type jobSetStateIfRunningManyRecordingPilot struct {
+	riverpilot.Pilot
+
+	paramsCh chan *riverdriver.JobSetStateIfRunningManyParams
+}
+
+func (p *jobSetStateIfRunningManyRecordingPilot) JobSetStateIfRunningMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+	p.paramsCh <- params
+	return p.Pilot.JobSetStateIfRunningMany(ctx, exec, params)
+}
+
+type recordingJobCompleter struct {
+	jobcompleter.JobCompleter
+
+	paramsCh chan *riverdriver.JobSetStateIfRunningParams
+}
+
+func (c *recordingJobCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobstats.JobStatistics, params *riverdriver.JobSetStateIfRunningParams) error {
+	c.paramsCh <- params
+	return nil
 }
 
 func TestProducer_MetricEmitHook(t *testing.T) {
@@ -183,6 +232,210 @@ func TestProducer_MetricEmitHook(t *testing.T) {
 		require.Empty(t, fetchResult.jobs)
 		require.Len(t, bundle.producer.metricEmitHooks, 1)
 		require.Empty(t, bundle.metrics)
+	})
+}
+
+func TestProducer_AbandonActiveJobs(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		exec       riverdriver.Executor
+		jobUpdates chan []jobcompleter.CompleterJobUpdated
+		producer   *producer
+		schema     string
+	}
+
+	setup := func(t *testing.T, pilot riverpilot.Pilot) *testBundle {
+		t.Helper()
+
+		var (
+			archetype = riversharedtest.BaseServiceArchetype(t)
+			driver    = riverpgxv5.New(riversharedtest.DBPool(ctx, t))
+			exec      = driver.GetExecutor()
+			schema    = riverdbtest.TestSchema(ctx, t, driver, nil)
+		)
+		if pilot == nil {
+			pilot = &riverpilot.StandardPilot{}
+		}
+
+		jobUpdates := make(chan []jobcompleter.CompleterJobUpdated, 1)
+		completer := jobcompleter.NewInlineCompleter(archetype, schema, exec, pilot, make(chan []jobcompleter.CompleterJobUpdated, 10))
+		producer := newProducer(archetype, exec, pilot, &producerConfig{
+			ClientID:                     testClientID,
+			Completer:                    completer,
+			ErrorHandler:                 newTestErrorHandler(),
+			FetchCooldown:                FetchCooldownDefault,
+			FetchPollInterval:            FetchPollIntervalDefault,
+			JobTimeout:                   JobTimeoutDefault,
+			JobUpdateCallback:            func(ctx context.Context, updates []jobcompleter.CompleterJobUpdated) { jobUpdates <- updates },
+			MaxWorkers:                   10,
+			PluginLookupByJob:            pluginlookup.NewJobPluginLookup(nil),
+			PluginLookupGlobal:           pluginlookup.NewPluginLookup(nil),
+			Queue:                        rivercommon.QueueDefault,
+			QueuePollInterval:            queuePollIntervalDefault,
+			QueueReportInterval:          queueReportIntervalDefault,
+			RetryPolicy:                  &DefaultClientRetryPolicy{},
+			SchedulerInterval:            riverinternaltest.SchedulerShortInterval,
+			Schema:                       schema,
+			StaleProducerRetentionPeriod: time.Minute,
+			Workers:                      NewWorkers(),
+		})
+
+		return &testBundle{exec: exec, jobUpdates: jobUpdates, producer: producer, schema: schema}
+	}
+
+	t.Run("AbandonDoesNotWinAfterWorkerFinalizationStarts", func(t *testing.T) {
+		t.Parallel()
+
+		finalizationReleaseCh := make(chan struct{})
+		releaseFinalization := sync.OnceFunc(func() { close(finalizationReleaseCh) })
+		t.Cleanup(releaseFinalization)
+		finalizationStartedCh := make(chan struct{})
+		executor := &jobexecutor.JobExecutor{
+			Completer: &blockingJobCompleter{
+				releaseCh: finalizationReleaseCh,
+				startedCh: finalizationStartedCh,
+			},
+		}
+		activeJob := newProducerActiveJob(executor)
+
+		finalizationResultCh := make(chan error, 1)
+		go func() {
+			finalizationResultCh <- executor.Completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(1, time.Now(), nil))
+		}()
+
+		riversharedtest.WaitOrTimeout(t, finalizationStartedCh)
+		require.False(t, activeJob.tryAbandon())
+
+		releaseFinalization()
+		require.NoError(t, riversharedtest.WaitOrTimeout(t, finalizationResultCh))
+		require.False(t, activeJob.isAbandoned())
+	})
+
+	t.Run("AbandonWinsBeforeWorkerFinalizationStarts", func(t *testing.T) {
+		t.Parallel()
+
+		paramsCh := make(chan *riverdriver.JobSetStateIfRunningParams, 1)
+		executor := &jobexecutor.JobExecutor{
+			Completer: &recordingJobCompleter{paramsCh: paramsCh},
+		}
+		activeJob := newProducerActiveJob(executor)
+
+		require.True(t, activeJob.tryAbandon())
+		require.NoError(t, executor.Completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(1, time.Now(), nil)))
+		require.Empty(t, paramsCh)
+		require.False(t, activeJob.tryAbandon())
+		require.False(t, executor.ShouldReportResultFunc())
+	})
+
+	t.Run("DatabaseErrorAbandonsExecutor", func(t *testing.T) {
+		t.Parallel()
+
+		pilotErr := errors.New("database error")
+		bundle := setup(t, &jobSetStateIfRunningManyErrorPilot{Pilot: &riverpilot.StandardPilot{}, err: pilotErr})
+
+		runningState := rivertype.JobStateRunning
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+			Attempt:     ptrutil.Ptr(1),
+			MaxAttempts: ptrutil.Ptr(3),
+			Schema:      bundle.schema,
+			State:       &runningState,
+		})
+		executor := &jobexecutor.JobExecutor{JobRow: job}
+		bundle.producer.addActiveJob(job.ID, executor)
+		activeJob := bundle.producer.activeJobs[job.ID]
+
+		bundle.producer.abandon()
+		bundle.producer.executorShutdownLoop(ctx)
+
+		require.Empty(t, bundle.producer.activeJobs)
+		require.Zero(t, bundle.producer.numJobsActive.Load())
+		require.Empty(t, bundle.jobUpdates)
+		require.True(t, activeJob.isAbandoned())
+		require.False(t, activeJob.tryAbandon())
+
+		jobAfter, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, jobAfter.State)
+		require.Empty(t, jobAfter.Errors)
+	})
+
+	t.Run("UpdatesJobsInSingleBatchAndEmitsEvents", func(t *testing.T) {
+		t.Parallel()
+
+		recordingPilot := &jobSetStateIfRunningManyRecordingPilot{
+			Pilot:    &riverpilot.StandardPilot{},
+			paramsCh: make(chan *riverdriver.JobSetStateIfRunningManyParams, 10),
+		}
+		bundle := setup(t, recordingPilot)
+
+		availableState := rivertype.JobStateAvailable
+		runningState := rivertype.JobStateRunning
+		alreadyAvailableJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+			Attempt:     ptrutil.Ptr(1),
+			MaxAttempts: ptrutil.Ptr(3),
+			Schema:      bundle.schema,
+			State:       &availableState,
+		})
+		retryableJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+			Attempt:     ptrutil.Ptr(1),
+			MaxAttempts: ptrutil.Ptr(3),
+			Schema:      bundle.schema,
+			State:       &runningState,
+		})
+		discardedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+			Attempt:     ptrutil.Ptr(3),
+			MaxAttempts: ptrutil.Ptr(3),
+			Schema:      bundle.schema,
+			State:       &runningState,
+		})
+
+		bundle.producer.addActiveJob(alreadyAvailableJob.ID, &jobexecutor.JobExecutor{JobRow: alreadyAvailableJob})
+		bundle.producer.addActiveJob(retryableJob.ID, &jobexecutor.JobExecutor{JobRow: retryableJob})
+		bundle.producer.addActiveJob(discardedJob.ID, &jobexecutor.JobExecutor{JobRow: discardedJob})
+
+		bundle.producer.abandon()
+		bundle.producer.executorShutdownLoop(ctx)
+
+		require.Empty(t, bundle.producer.activeJobs)
+		require.Zero(t, bundle.producer.numJobsActive.Load())
+		batchParams := riversharedtest.WaitOrTimeout(t, recordingPilot.paramsCh)
+		require.ElementsMatch(t, []int64{alreadyAvailableJob.ID, retryableJob.ID, discardedJob.ID}, batchParams.ID)
+		require.Empty(t, recordingPilot.paramsCh)
+
+		updates := riversharedtest.WaitOrTimeout(t, bundle.jobUpdates)
+		require.Len(t, updates, 2)
+		require.ElementsMatch(t, []int64{retryableJob.ID, discardedJob.ID}, []int64{updates[0].Job.ID, updates[1].Job.ID})
+		for _, update := range updates {
+			require.NotNil(t, update.JobStats)
+			require.Equal(t, riverdriver.JobSetStateReasonFailed, update.Reason)
+		}
+		require.Empty(t, bundle.jobUpdates)
+
+		alreadyAvailableJobAfter, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: alreadyAvailableJob.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateAvailable, alreadyAvailableJobAfter.State)
+		require.Empty(t, alreadyAvailableJobAfter.Errors)
+
+		retryableJobAfter, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: retryableJob.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateAvailable, retryableJobAfter.State)
+		require.Len(t, retryableJobAfter.Errors, 1)
+		require.Equal(t, producerJobAbandonedError, retryableJobAfter.Errors[0].Error)
+		require.Equal(t, retryableJob.Attempt, retryableJobAfter.Errors[0].Attempt)
+		require.Empty(t, retryableJobAfter.Errors[0].Trace)
+		require.Nil(t, retryableJobAfter.FinalizedAt)
+
+		discardedJobAfter, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: discardedJob.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateDiscarded, discardedJobAfter.State)
+		require.Len(t, discardedJobAfter.Errors, 1)
+		require.Equal(t, producerJobAbandonedError, discardedJobAfter.Errors[0].Error)
+		require.Equal(t, discardedJob.Attempt, discardedJobAfter.Errors[0].Attempt)
+		require.Empty(t, discardedJobAfter.Errors[0].Trace)
+		require.NotNil(t, discardedJobAfter.FinalizedAt)
 	})
 }
 

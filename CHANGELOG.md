@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added `Config.StopAbandonTimeout` to bound how long a client waits after job contexts are cancelled during shutdown. When the timeout elapses, jobs that have not begun finalizing are abandoned, recorded as failed, and set as errored (or discarded if retries are exhausted). Worker goroutines cannot be forcibly terminated and continue running until the process exits. [PR #1289](https://github.com/riverqueue/river/pull/1289).
 - Added `EventKindJobInterrupted`, emitted when a running job is interrupted because its client is shutting down, the job was cancelled, and has been made immediately available to be worked again. [PR #1290](https://github.com/riverqueue/river/pull/1290).
 
 ### Changed
