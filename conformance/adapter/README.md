@@ -16,9 +16,10 @@ IDs and transaction-independent records returned by one implementation may be
 passed to any other implementation attached to the database.
 
 The Go implementation is the reference side. By default the candidate is the
-Rust adapter in this repository. Any future implementation, including a
-JavaScript port, can run the same suite by setting
-`RIVER_CONFORMANCE_CANDIDATE` to a JSON object:
+Rust adapter described by [`candidates/rust.json`](candidates/rust.json). A
+JavaScript or future implementation can run the same suite by placing an object
+matching [`candidate.schema.json`](../schema/candidate.schema.json) in its own
+repository and setting `RIVER_CONFORMANCE_CANDIDATE_FILE` to its path:
 
 ```json
 {
@@ -29,6 +30,15 @@ JavaScript port, can run the same suite by setting
   "version": "0.46.0-alpha.1"
 }
 ```
+
+For one-off runs, `RIVER_CONFORMANCE_CANDIDATE` accepts the descriptor as an
+inline JSON object. Set only one of the file and inline variables. Relative
+descriptor paths and every candidate command run from the River repository
+root, so a descriptor outside this checkout should use an absolute adapter path
+or a command whose arguments select that external project. The optional
+`release_command` replaces `command` for the performance gate. The checked
+Rust descriptor demonstrates every field without making Rust part of the
+protocol.
 
 `command` starts the ordinary candidate. `restart_command` must start a
 prebuilt process because crash/restart cases cannot rely on a build wrapper

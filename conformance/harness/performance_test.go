@@ -39,24 +39,26 @@ func TestPerformanceGate(t *testing.T) {
 	root := repoRoot(t)
 	goAdapter := startAdapter(t, root, databaseURL, "go-performance", "go", "run", "./internal/cmd/riverconformanceadapter")
 	candidateSpec := conformanceCandidateSpec(t, root, true)
-	rustAdapter := startAdapterCommand(t, root, databaseURL, candidateSpec.Implementation+"-performance", candidateSpec.Command)
+	candidateAdapter := startAdapterCommand(t, root, databaseURL, candidateSpec.Implementation+"-performance", candidateSpec.Command)
 	goAdapter.call(t, "migrate", map[string]any{}, nil)
 
 	for _, mode := range []string{"enqueue", "worker", "mixed"} {
 		_ = runAdapterBenchmark(t, goAdapter, mode, max(20, jobs/10))
-		_ = runAdapterBenchmark(t, rustAdapter, mode, max(20, jobs/10))
+		_ = runAdapterBenchmark(t, candidateAdapter, mode, max(20, jobs/10))
 
-		goRuns, rustRuns := make([]benchmarkMetrics, 0, 3), make([]benchmarkMetrics, 0, 3)
+		goRuns, candidateRuns := make([]benchmarkMetrics, 0, 3), make([]benchmarkMetrics, 0, 3)
 		for range 3 {
 			goRuns = append(goRuns, runAdapterBenchmark(t, goAdapter, mode, jobs))
-			rustRuns = append(rustRuns, runAdapterBenchmark(t, rustAdapter, mode, jobs))
+			candidateRuns = append(candidateRuns, runAdapterBenchmark(t, candidateAdapter, mode, jobs))
 		}
-		goMetrics, rustMetrics := medianMetrics(goRuns), medianMetrics(rustRuns)
-		t.Logf("%s: Go %.1f jobs/s p95=%s; Rust %.1f jobs/s p95=%s", mode, goMetrics.throughput, goMetrics.p95, rustMetrics.throughput, rustMetrics.p95)
-		require.GreaterOrEqual(t, rustMetrics.throughput, goMetrics.throughput*0.80,
-			"Rust must sustain at least 80%% of Go throughput in %s", mode)
-		require.LessOrEqual(t, rustMetrics.p95, goMetrics.p95*5/4,
-			"Rust p95 must be at most 1.25x Go in %s", mode)
+		goMetrics, candidateMetrics := medianMetrics(goRuns), medianMetrics(candidateRuns)
+		t.Logf("%s: Go %.1f jobs/s p95=%s; %s %.1f jobs/s p95=%s",
+			mode, goMetrics.throughput, goMetrics.p95,
+			candidateSpec.Implementation, candidateMetrics.throughput, candidateMetrics.p95)
+		require.GreaterOrEqual(t, candidateMetrics.throughput, goMetrics.throughput*0.80,
+			"%s must sustain at least 80%% of Go throughput in %s", candidateSpec.Implementation, mode)
+		require.LessOrEqual(t, candidateMetrics.p95, goMetrics.p95*5/4,
+			"%s p95 must be at most 1.25x Go in %s", candidateSpec.Implementation, mode)
 		scenarios.pass("release_" + mode + "_performance")
 	}
 }
@@ -78,11 +80,13 @@ func TestMixedSoak(t *testing.T) {
 	root := repoRoot(t)
 	goAdapter := startAdapter(t, root, databaseURL, "go-soak", "go", "run", "./internal/cmd/riverconformanceadapter")
 	candidateSpec := conformanceCandidateSpec(t, root, false)
-	rustAdapter := startAdapterCommand(t, root, databaseURL, candidateSpec.Implementation+"-soak", candidateSpec.Command)
+	candidateAdapter := startAdapterCommand(t, root, databaseURL, candidateSpec.Implementation+"-soak", candidateSpec.Command)
 	goAdapter.call(t, "migrate", map[string]any{}, nil)
 	goAdapter.call(t, "reset", map[string]any{}, nil)
 	goAdapter.call(t, "start", map[string]any{"client_id": "go-soak", "max_workers": 8}, nil)
-	rustAdapter.call(t, "start", map[string]any{"client_id": "rust-soak", "max_workers": 8}, nil)
+	candidateAdapter.call(t, "start", map[string]any{
+		"client_id": candidateSpec.Implementation + "-soak", "max_workers": 8,
+	}, nil)
 
 	deadline := time.Now().Add(duration)
 	jobsCompleted := 0
@@ -91,7 +95,7 @@ func TestMixedSoak(t *testing.T) {
 		for index := range 20 {
 			inserter := goAdapter
 			if index%2 == 1 {
-				inserter = rustAdapter
+				inserter = candidateAdapter
 			}
 			var job normalizedJob
 			inserter.call(t, "insert", map[string]any{"message": fmt.Sprintf("soak-%d", jobsCompleted+index)}, &job)
@@ -99,13 +103,13 @@ func TestMixedSoak(t *testing.T) {
 		}
 		for _, id := range ids {
 			var job normalizedJob
-			rustAdapter.call(t, "wait", map[string]any{"id": id}, &job)
+			candidateAdapter.call(t, "wait", map[string]any{"id": id}, &job)
 			require.Equal(t, "completed", job.State)
 			require.Equal(t, 1, job.Attempt)
 			require.Len(t, job.AttemptedBy, 1)
 		}
 		jobsCompleted += len(ids)
-		for _, adapter := range []*adapter{goAdapter, rustAdapter} {
+		for _, adapter := range []*adapter{goAdapter, candidateAdapter} {
 			var connections struct {
 				Count int `json:"count"`
 			}
@@ -114,7 +118,7 @@ func TestMixedSoak(t *testing.T) {
 		}
 	}
 	goAdapter.call(t, "stop", map[string]any{}, nil)
-	rustAdapter.call(t, "stop", map[string]any{}, nil)
+	candidateAdapter.call(t, "stop", map[string]any{}, nil)
 	t.Logf("completed %d mixed jobs over %s", jobsCompleted, duration)
 	scenarios.pass("mixed_connection_pool_bound", "mixed_soak")
 }

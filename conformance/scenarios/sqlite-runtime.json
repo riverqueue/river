@@ -12,7 +12,7 @@
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifyNotificationWakeups" }], "name": "sqlite_runtime_notification_wakeups", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLitePeriodicScheduler" }], "name": "sqlite_runtime_periodic_scheduler", "tier": "runtime" },
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLitePollOnly" }], "name": "sqlite_runtime_poll_only_recovery", "tier": "runtime" },
-    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "TestMixedGoRustSQLiteRuntimeConformance" }], "name": "sqlite_runtime_profile_handshake", "tier": "codec" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "TestMixedSQLiteRuntimeConformance" }], "name": "sqlite_runtime_profile_handshake", "tier": "codec" },
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteQueues" }], "name": "sqlite_runtime_queue_crud_reconfigure_pause", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifyNotificationWakeups" }], "name": "sqlite_runtime_remote_cancellation", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifyRemoteQueueSubscriptionEvents" }], "name": "sqlite_runtime_remote_queue_subscription_events", "tier": "mixed" },
