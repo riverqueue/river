@@ -35,6 +35,7 @@ type adapterSpec struct {
 	ApplicationName string   `json:"application_name"`
 	Command         []string `json:"command"`
 	Implementation  string   `json:"implementation"`
+	ReleaseCommand  []string `json:"release_command"`
 	RestartCommand  []string `json:"restart_command"`
 	Version         string   `json:"version"`
 }
@@ -130,7 +131,7 @@ type normalizedQueue struct {
 	UpdatedAt string         `json:"updated_at"`
 }
 
-func TestMixedGoRustConformance(t *testing.T) {
+func TestMixedConformance(t *testing.T) {
 	// The adapters intentionally share one externally supplied disposable
 	// database, so this integration test cannot run in parallel with other
 	// conformance tiers.
@@ -143,11 +144,11 @@ func TestMixedGoRustConformance(t *testing.T) {
 	repositoryRoot := repoRoot(t)
 	goAdapter := startAdapter(t, repositoryRoot, databaseURL, "go", "go", "run", "./internal/cmd/riverconformanceadapter")
 	candidateSpec := conformanceCandidateSpec(t, repositoryRoot, false)
-	rustAdapter := startAdapterCommand(t, repositoryRoot, databaseURL, candidateSpec.Implementation, candidateSpec.Command)
+	candidateAdapter := startAdapterCommand(t, repositoryRoot, databaseURL, candidateSpec.Implementation, candidateSpec.Command)
 
-	var goHandshake, rustHandshake adapterHandshake
+	var goHandshake, candidateHandshake adapterHandshake
 	goAdapter.call(t, "handshake", map[string]any{}, &goHandshake)
-	rustAdapter.call(t, "handshake", map[string]any{}, &rustHandshake)
+	candidateAdapter.call(t, "handshake", map[string]any{}, &candidateHandshake)
 	var manifest struct {
 		Capabilities map[string]string `json:"capabilities"`
 		Go           struct {
@@ -158,9 +159,6 @@ func TestMixedGoRustConformance(t *testing.T) {
 			Line   string `json:"line"`
 		} `json:"migration"`
 		ProtocolRevision int `json:"protocol_revision"`
-		Rust             struct {
-			Version string `json:"version"`
-		} `json:"rust"`
 	}
 	manifestBytes, err := os.ReadFile(filepath.Join(repositoryRoot, "conformance/manifest.json"))
 	require.NoError(t, err)
@@ -172,25 +170,23 @@ func TestMixedGoRustConformance(t *testing.T) {
 	}
 
 	require.Equal(t, "go", goHandshake.Implementation)
-	require.Equal(t, candidateSpec.Implementation, rustHandshake.Implementation)
+	require.Equal(t, candidateSpec.Implementation, candidateHandshake.Implementation)
 	require.Equal(t, "postgres", goHandshake.Backend)
-	require.Equal(t, goHandshake.Backend, rustHandshake.Backend)
+	require.Equal(t, goHandshake.Backend, candidateHandshake.Backend)
 	require.Equal(t, "postgres-full-v1", goHandshake.Profile)
-	require.Equal(t, goHandshake.Profile, rustHandshake.Profile)
+	require.Equal(t, goHandshake.Profile, candidateHandshake.Profile)
 	require.Positive(t, goHandshake.AdapterVersion)
-	require.Equal(t, goHandshake.AdapterVersion, rustHandshake.AdapterVersion)
+	require.Equal(t, goHandshake.AdapterVersion, candidateHandshake.AdapterVersion)
 	require.Equal(t, manifest.Go.Version, goHandshake.ImplementationVersion)
 	if candidateSpec.Version != "" {
-		require.Equal(t, candidateSpec.Version, rustHandshake.ImplementationVersion)
-	} else if candidateSpec.Implementation == "rust" {
-		require.Equal(t, manifest.Rust.Version, rustHandshake.ImplementationVersion)
+		require.Equal(t, candidateSpec.Version, candidateHandshake.ImplementationVersion)
 	}
 	require.Equal(t, manifest.ProtocolRevision, goHandshake.ProtocolRevision)
-	require.Equal(t, goHandshake.ProtocolRevision, rustHandshake.ProtocolRevision)
+	require.Equal(t, goHandshake.ProtocolRevision, candidateHandshake.ProtocolRevision)
 	require.Equal(t, map[string]int{manifest.Migration.Line: manifest.Migration.Latest}, goHandshake.MigrationLines)
-	require.Equal(t, goHandshake.MigrationLines, rustHandshake.MigrationLines)
+	require.Equal(t, goHandshake.MigrationLines, candidateHandshake.MigrationLines)
 	require.ElementsMatch(t, expectedCapabilities, goHandshake.Capabilities)
-	require.ElementsMatch(t, goHandshake.Capabilities, rustHandshake.Capabilities)
+	require.ElementsMatch(t, goHandshake.Capabilities, candidateHandshake.Capabilities)
 	var adapterContract struct {
 		AdapterVersion int `json:"adapter_version"`
 		Methods        []struct {
@@ -208,65 +204,65 @@ func TestMixedGoRustConformance(t *testing.T) {
 	require.Equal(t, adapterContract.AdapterVersion, goHandshake.AdapterVersion)
 	require.Equal(t, adapterContract.ProtocolRevision, goHandshake.ProtocolRevision)
 	require.Equal(t, expectedMethods, goHandshake.Methods)
-	require.Equal(t, goHandshake.Methods, rustHandshake.Methods)
-	verifyDeterministicControls(t, repositoryRoot, goAdapter, rustAdapter)
-	verifyUniqueKeyGoldens(t, repositoryRoot, goAdapter, rustAdapter)
-	verifyHistoricalMigrations(t, manifest.Migration.Latest, goAdapter, rustAdapter)
+	require.Equal(t, goHandshake.Methods, candidateHandshake.Methods)
+	verifyDeterministicControls(t, repositoryRoot, goAdapter, candidateAdapter)
+	verifyUniqueKeyGoldens(t, repositoryRoot, goAdapter, candidateAdapter)
+	verifyHistoricalMigrations(t, manifest.Migration.Latest, goAdapter, candidateAdapter)
 
 	goAdapter.call(t, "migrate", map[string]any{}, nil)
 	goAdapter.call(t, "reset", map[string]any{}, nil)
 
 	var goInserted normalizedJob
-	goAdapter.call(t, "insert", map[string]any{"message": "Go to Rust"}, &goInserted)
+	goAdapter.call(t, "insert", map[string]any{"message": "reference to candidate"}, &goInserted)
 	require.Equal(t, "available", goInserted.State)
 	require.Equal(t, "conformance_echo", goInserted.Kind)
 
-	var rustObserved normalizedJob
-	rustAdapter.call(t, "get", map[string]any{"id": goInserted.ID}, &rustObserved)
-	require.Equal(t, goInserted, rustObserved)
-	rustAdapter.call(t, "work", map[string]any{
+	var candidateObserved normalizedJob
+	candidateAdapter.call(t, "get", map[string]any{"id": goInserted.ID}, &candidateObserved)
+	require.Equal(t, goInserted, candidateObserved)
+	candidateAdapter.call(t, "work", map[string]any{
 		"client_id": candidateSpec.Implementation + "-conformance-adapter", "id": goInserted.ID,
-	}, &rustObserved)
-	require.Equal(t, "completed", rustObserved.State)
-	require.Equal(t, 1, rustObserved.Attempt)
-	require.Equal(t, []string{candidateSpec.Implementation + "-conformance-adapter"}, rustObserved.AttemptedBy)
+	}, &candidateObserved)
+	require.Equal(t, "completed", candidateObserved.State)
+	require.Equal(t, 1, candidateObserved.Attempt)
+	require.Equal(t, []string{candidateSpec.Implementation + "-conformance-adapter"}, candidateObserved.AttemptedBy)
 
-	rustAdapter.call(t, "reset", map[string]any{}, nil)
-	rustAdapter.call(t, "migrate", map[string]any{}, nil)
-	var rustInserted normalizedJob
-	rustAdapter.call(t, "insert", map[string]any{"message": "Rust to Go"}, &rustInserted)
-	require.Equal(t, "available", rustInserted.State)
+	candidateAdapter.call(t, "reset", map[string]any{}, nil)
+	candidateAdapter.call(t, "migrate", map[string]any{}, nil)
+	var candidateInserted normalizedJob
+	candidateAdapter.call(t, "insert", map[string]any{"message": "candidate to reference"}, &candidateInserted)
+	require.Equal(t, "available", candidateInserted.State)
 
 	var goObserved normalizedJob
-	goAdapter.call(t, "get", map[string]any{"id": rustInserted.ID}, &goObserved)
-	require.Equal(t, rustInserted, goObserved)
+	goAdapter.call(t, "get", map[string]any{"id": candidateInserted.ID}, &goObserved)
+	require.Equal(t, candidateInserted, goObserved)
 	goAdapter.call(t, "work", map[string]any{
-		"client_id": "go-conformance-adapter", "id": rustInserted.ID,
+		"client_id": "go-conformance-adapter", "id": candidateInserted.ID,
 	}, &goObserved)
 	require.Equal(t, "completed", goObserved.State)
 	require.Equal(t, 1, goObserved.Attempt)
 	require.Equal(t, []string{"go-conformance-adapter"}, goObserved.AttemptedBy)
 
-	verifyCustomSchemas(t, goAdapter, rustAdapter)
-	verifyConcurrentUniqueConflicts(t, goAdapter, rustAdapter)
+	verifyCustomSchemas(t, goAdapter, candidateAdapter)
+	verifyConcurrentUniqueConflicts(t, goAdapter, candidateAdapter)
 	scenarios.pass("cross_language_unique_conflict")
-	verifyBatchInsertion(t, goAdapter, rustAdapter)
+	verifyBatchInsertion(t, goAdapter, candidateAdapter)
 	scenarios.pass(
 		"transactional_batch_insertion",
 		"transactional_fast_batch_insertion",
 		"typed_batch_insertion",
 	)
-	verifyDifferentialCRUD(t, goAdapter, rustAdapter, true)
-	verifyJobRowRoundTrip(t, goAdapter, rustAdapter)
-	verifyMixedUnknownKind(t, goAdapter, rustAdapter)
-	verifyTransactionalCRUD(t, goAdapter, rustAdapter)
+	verifyDifferentialCRUD(t, goAdapter, candidateAdapter, true)
+	verifyJobRowRoundTrip(t, goAdapter, candidateAdapter)
+	verifyMixedUnknownKind(t, goAdapter, candidateAdapter)
+	verifyTransactionalCRUD(t, goAdapter, candidateAdapter)
 	verifySingleImplementationRuntime(t, goAdapter)
-	verifySingleImplementationRuntime(t, rustAdapter)
-	verifyExternalTerminalCompletionRace(t, goAdapter, rustAdapter)
-	verifyExternalTerminalCompletionRace(t, rustAdapter, goAdapter)
+	verifySingleImplementationRuntime(t, candidateAdapter)
+	verifyExternalTerminalCompletionRace(t, goAdapter, candidateAdapter)
+	verifyExternalTerminalCompletionRace(t, candidateAdapter, goAdapter)
 	scenarios.pass("external_terminal_completion_race")
 	verifyAdvancedRuntime(t, goAdapter)
-	verifyAdvancedRuntime(t, rustAdapter)
+	verifyAdvancedRuntime(t, candidateAdapter)
 	scenarios.pass(
 		"dynamic_queue_add_reconfigure_remove",
 		"error_handler_cancel_override",
@@ -274,25 +270,25 @@ func TestMixedGoRustConformance(t *testing.T) {
 		"periodic_run_on_start",
 		"resumable_retry",
 	)
-	verifyNotificationWakeups(t, goAdapter, rustAdapter)
+	verifyNotificationWakeups(t, goAdapter, candidateAdapter)
 	scenarios.pass(
 		"cooperative_remote_cancellation",
 		"notification_only_wakeups",
 		"pause_resume_notification",
 		"remote_cancel_notification",
 	)
-	verifyRemoteQueueSubscriptionEvents(t, goAdapter, rustAdapter)
+	verifyRemoteQueueSubscriptionEvents(t, goAdapter, candidateAdapter)
 	scenarios.pass("remote_queue_subscription_events")
-	verifyTransactionalNotificationWakeups(t, goAdapter, rustAdapter)
+	verifyTransactionalNotificationWakeups(t, goAdapter, candidateAdapter)
 	scenarios.pass("transactional_insert_notification_commit_only")
-	verifyRefetchedAttemptCancellation(t, rustAdapter, goAdapter)
-	verifyRefetchedAttemptCancellation(t, goAdapter, rustAdapter)
+	verifyRefetchedAttemptCancellation(t, candidateAdapter, goAdapter)
+	verifyRefetchedAttemptCancellation(t, goAdapter, candidateAdapter)
 	scenarios.pass("refetched_attempt_cancellation")
 	verifyTimeoutCancellation(t, goAdapter)
-	verifyTimeoutCancellation(t, rustAdapter)
+	verifyTimeoutCancellation(t, candidateAdapter)
 	scenarios.pass("timeout_cancellation")
 	verifyCompletionBurst(t, goAdapter)
-	verifyCompletionBurst(t, rustAdapter)
+	verifyCompletionBurst(t, candidateAdapter)
 	scenarios.pass("completion_batching")
 
 	goAdapter.call(t, "reset", map[string]any{}, nil)
@@ -305,34 +301,34 @@ func TestMixedGoRustConformance(t *testing.T) {
 	var txObserved normalizedJob
 	goAdapter.call(t, "tx_get", map[string]any{"handle": "go-commit", "id": goTxInserted.ID}, &txObserved)
 	require.Equal(t, goTxInserted, txObserved)
-	require.Contains(t, rustAdapter.callError(t, "get", map[string]any{"id": goTxInserted.ID}), "not found")
+	require.Contains(t, candidateAdapter.callError(t, "get", map[string]any{"id": goTxInserted.ID}), "not found")
 	goAdapter.call(t, "tx_commit", map[string]any{"handle": "go-commit"}, nil)
-	rustAdapter.call(t, "get", map[string]any{"id": goTxInserted.ID}, &txObserved)
+	candidateAdapter.call(t, "get", map[string]any{"id": goTxInserted.ID}, &txObserved)
 	require.Equal(t, goTxInserted, txObserved)
 
-	rustAdapter.call(t, "tx_begin", map[string]any{"handle": "rust-rollback"}, nil)
-	var rustTxInserted normalizedJob
-	rustAdapter.call(t, "tx_insert", map[string]any{
-		"handle": "rust-rollback",
+	candidateAdapter.call(t, "tx_begin", map[string]any{"handle": "candidate-rollback"}, nil)
+	var candidateTxInserted normalizedJob
+	candidateAdapter.call(t, "tx_insert", map[string]any{
+		"handle": "candidate-rollback",
 		"job":    map[string]any{"message": "transaction rollback"},
-	}, &rustTxInserted)
-	rustAdapter.call(t, "tx_get", map[string]any{"handle": "rust-rollback", "id": rustTxInserted.ID}, &txObserved)
-	require.Equal(t, rustTxInserted, txObserved)
-	rustAdapter.call(t, "tx_rollback", map[string]any{"handle": "rust-rollback"}, nil)
-	require.Contains(t, goAdapter.callError(t, "get", map[string]any{"id": rustTxInserted.ID}), "not found")
+	}, &candidateTxInserted)
+	candidateAdapter.call(t, "tx_get", map[string]any{"handle": "candidate-rollback", "id": candidateTxInserted.ID}, &txObserved)
+	require.Equal(t, candidateTxInserted, txObserved)
+	candidateAdapter.call(t, "tx_rollback", map[string]any{"handle": "candidate-rollback"}, nil)
+	require.Contains(t, goAdapter.callError(t, "get", map[string]any{"id": candidateTxInserted.ID}), "not found")
 
 	var cancellable normalizedJob
 	goAdapter.call(t, "insert", map[string]any{"message": "transactional cancellation"}, &cancellable)
-	rustAdapter.call(t, "tx_begin", map[string]any{"handle": "rust-cancel"}, nil)
-	rustAdapter.call(t, "tx_cancel", map[string]any{"handle": "rust-cancel", "id": cancellable.ID}, &txObserved)
+	candidateAdapter.call(t, "tx_begin", map[string]any{"handle": "candidate-cancel"}, nil)
+	candidateAdapter.call(t, "tx_cancel", map[string]any{"handle": "candidate-cancel", "id": cancellable.ID}, &txObserved)
 	require.Equal(t, "cancelled", txObserved.State)
 	goAdapter.call(t, "get", map[string]any{"id": cancellable.ID}, &txObserved)
 	require.Equal(t, "available", txObserved.State)
-	rustAdapter.call(t, "tx_commit", map[string]any{"handle": "rust-cancel"}, nil)
+	candidateAdapter.call(t, "tx_commit", map[string]any{"handle": "candidate-cancel"}, nil)
 	goAdapter.call(t, "get", map[string]any{"id": cancellable.ID}, &txObserved)
 	require.Equal(t, "cancelled", txObserved.State)
 
-	for _, transactionAdapter := range []*adapter{goAdapter, rustAdapter} {
+	for _, transactionAdapter := range []*adapter{goAdapter, candidateAdapter} {
 		handle := transactionAdapter.name + "-failed-transaction"
 		transactionAdapter.call(t, "tx_begin", map[string]any{"handle": handle}, nil)
 		var failedTxJob normalizedJob
@@ -352,10 +348,10 @@ func TestMixedGoRustConformance(t *testing.T) {
 	var fastResult struct {
 		Count int `json:"count"`
 	}
-	rustAdapter.call(t, "insert_many_fast", map[string]any{"jobs": []map[string]any{
-		{"message": "rust fast one", "opts": map[string]any{"tags": []string{"fast-rust"}}},
-		{"message": "rust fast two", "opts": map[string]any{"tags": []string{"fast-rust"}}},
-		{"message": "rust fast pending", "opts": map[string]any{"pending": true, "tags": []string{"fast-rust"}}},
+	candidateAdapter.call(t, "insert_many_fast", map[string]any{"jobs": []map[string]any{
+		{"message": "candidate fast one", "opts": map[string]any{"tags": []string{"fast-candidate"}}},
+		{"message": "candidate fast two", "opts": map[string]any{"tags": []string{"fast-candidate"}}},
+		{"message": "candidate fast pending", "opts": map[string]any{"pending": true, "tags": []string{"fast-candidate"}}},
 	}}, &fastResult)
 	require.Equal(t, 3, fastResult.Count)
 	goAdapter.call(t, "insert_many_fast", map[string]any{"jobs": []map[string]any{
@@ -366,39 +362,39 @@ func TestMixedGoRustConformance(t *testing.T) {
 	var listed struct {
 		Jobs []normalizedJob `json:"jobs"`
 	}
-	rustAdapter.call(t, "list", map[string]any{"kinds": []string{"conformance_echo"}}, &listed)
+	candidateAdapter.call(t, "list", map[string]any{"kinds": []string{"conformance_echo"}}, &listed)
 	require.Len(t, listed.Jobs, 5)
 
 	uniqueParams := map[string]any{
 		"message": "cross-language unique",
 		"opts":    map[string]any{"unique": map[string]any{"by_args": true}},
 	}
-	var uniqueGo, uniqueRust normalizedJob
+	var uniqueGo, uniqueCandidate normalizedJob
 	goAdapter.call(t, "insert", uniqueParams, &uniqueGo)
-	rustAdapter.call(t, "insert", uniqueParams, &uniqueRust)
-	require.Equal(t, uniqueGo, uniqueRust)
+	candidateAdapter.call(t, "insert", uniqueParams, &uniqueCandidate)
+	require.Equal(t, uniqueGo, uniqueCandidate)
 
 	goAdapter.call(t, "start", map[string]any{
 		"client_id": "go-mixed-worker", "max_workers": 4,
 	}, nil)
 	candidateClientID := candidateSpec.Implementation + "-mixed-worker"
-	rustAdapter.call(t, "start", map[string]any{
+	candidateAdapter.call(t, "start", map[string]any{
 		"client_id": candidateClientID, "max_workers": 4,
 	}, nil)
 	firstLeader := waitForLeader(t, goAdapter, "")
 	firstTerm := readLeader(t, goAdapter)
 	goAdapter.call(t, "request_resign", map[string]any{}, nil)
 	secondTerm := waitForLeaderTerm(t, goAdapter, firstTerm.ElectedAt)
-	rustAdapter.call(t, "request_resign", map[string]any{}, nil)
+	candidateAdapter.call(t, "request_resign", map[string]any{}, nil)
 	thirdTerm := waitForLeaderTerm(t, goAdapter, secondTerm.ElectedAt)
 
 	var leaderAdapter, followerAdapter *adapter
 	var leaderID, followerID string
 	if thirdTerm.LeaderID == "go-mixed-worker" {
 		leaderAdapter, leaderID = goAdapter, "go-mixed-worker"
-		followerAdapter, followerID = rustAdapter, candidateClientID
+		followerAdapter, followerID = candidateAdapter, candidateClientID
 	} else {
-		leaderAdapter, leaderID = rustAdapter, candidateClientID
+		leaderAdapter, leaderID = candidateAdapter, candidateClientID
 		followerAdapter, followerID = goAdapter, "go-mixed-worker"
 	}
 	leaderAdapter.call(t, "stop", map[string]any{}, nil)
@@ -414,8 +410,8 @@ func TestMixedGoRustConformance(t *testing.T) {
 	require.NotEmpty(t, firstLeader)
 
 	waitForListener(t, goAdapter)
-	waitForListener(t, rustAdapter)
-	for _, adapter := range []*adapter{goAdapter, rustAdapter} {
+	waitForListener(t, candidateAdapter)
+	for _, adapter := range []*adapter{goAdapter, candidateAdapter} {
 		var disconnected struct {
 			Count int `json:"count"`
 		}
@@ -433,17 +429,17 @@ func TestMixedGoRustConformance(t *testing.T) {
 		"application_name": candidateSpec.ApplicationName,
 	}, &disconnectedApplication)
 	require.GreaterOrEqual(t, disconnectedApplication.Count, 1)
-	rustAdapter.call(t, "fault_disconnect_application", map[string]any{
+	candidateAdapter.call(t, "fault_disconnect_application", map[string]any{
 		"application_name": "river-conformance-go",
 	}, &disconnectedApplication)
 	require.GreaterOrEqual(t, disconnectedApplication.Count, 1)
 	waitForListener(t, goAdapter)
-	waitForListener(t, rustAdapter)
+	waitForListener(t, candidateAdapter)
 	time.Sleep(500 * time.Millisecond)
 
 	var notificationLost normalizedJob
 	goAdapter.call(t, "raw_insert_no_notify", map[string]any{"message": "poll recovery"}, &notificationLost)
-	rustAdapter.call(t, "wait", map[string]any{"id": notificationLost.ID}, &txObserved)
+	candidateAdapter.call(t, "wait", map[string]any{"id": notificationLost.ID}, &txObserved)
 	require.Equal(t, "completed", txObserved.State)
 
 	var competitionIDs []int64
@@ -451,7 +447,7 @@ func TestMixedGoRustConformance(t *testing.T) {
 		var inserted normalizedJob
 		adapter := goAdapter
 		if i%2 == 1 {
-			adapter = rustAdapter
+			adapter = candidateAdapter
 		}
 		adapter.call(t, "insert", map[string]any{"message": fmt.Sprintf("competition %d", i)}, &inserted)
 		competitionIDs = append(competitionIDs, inserted.ID)
@@ -470,11 +466,11 @@ func TestMixedGoRustConformance(t *testing.T) {
 	var pausedJob normalizedJob
 	goAdapter.call(t, "queue_pause", map[string]any{"name": "default"}, nil)
 	time.Sleep(100 * time.Millisecond)
-	rustAdapter.call(t, "insert", map[string]any{"message": "paused cross-language"}, &pausedJob)
+	candidateAdapter.call(t, "insert", map[string]any{"message": "paused cross-language"}, &pausedJob)
 	time.Sleep(100 * time.Millisecond)
-	rustAdapter.call(t, "get", map[string]any{"id": pausedJob.ID}, &txObserved)
+	candidateAdapter.call(t, "get", map[string]any{"id": pausedJob.ID}, &txObserved)
 	require.Equal(t, "available", txObserved.State)
-	rustAdapter.call(t, "queue_resume", map[string]any{"name": "default"}, nil)
+	candidateAdapter.call(t, "queue_resume", map[string]any{"name": "default"}, nil)
 	goAdapter.call(t, "wait", map[string]any{"id": pausedJob.ID}, &txObserved)
 	require.Equal(t, "completed", txObserved.State)
 
@@ -483,12 +479,12 @@ func TestMixedGoRustConformance(t *testing.T) {
 		"behavior": "cooperative_cancel", "message": "remote cancellation",
 	}, &remoteCancel)
 	goAdapter.call(t, "wait", map[string]any{"id": remoteCancel.ID, "states": []string{"running"}}, &txObserved)
-	rustAdapter.call(t, "cancel", map[string]any{"id": remoteCancel.ID}, &txObserved)
+	candidateAdapter.call(t, "cancel", map[string]any{"id": remoteCancel.ID}, &txObserved)
 	goAdapter.call(t, "wait", map[string]any{"id": remoteCancel.ID}, &txObserved)
 	require.Equal(t, "cancelled", txObserved.State)
 
 	goAdapter.call(t, "stop", map[string]any{}, nil)
-	rustAdapter.call(t, "stop", map[string]any{}, nil)
+	candidateAdapter.call(t, "stop", map[string]any{}, nil)
 
 	goAdapter.call(t, "reset", map[string]any{}, nil)
 	stuck := startAdapterCommand(t, repositoryRoot, databaseURL, "candidate-stuck", candidateSpec.RestartCommand)
@@ -548,14 +544,14 @@ func TestMixedGoRustConformance(t *testing.T) {
 		"barrier_wait_and_release",
 		"bulk_delete_safety",
 		"copy_from_both_implementations",
-		"custom_schema_go_migrate_rust_work",
-		"custom_schema_rust_migrate_go_work",
+		"custom_schema_reference_migrate_candidate_work",
+		"custom_schema_candidate_migrate_reference_work",
 		"deterministic_retry_clock_rng",
 		"differential_job_crud",
 		"differential_job_list_filters_and_cursors",
 		"differential_queue_crud",
-		"go_insert_rust_work",
-		"go_migrator_rust_runtime",
+		"reference_insert_candidate_work",
+		"reference_migrator_candidate_runtime",
 		"historical_migration_down_up",
 		"ignored_cancellation_hard_abort",
 		"job_row_round_trip_all_fields",
@@ -567,8 +563,8 @@ func TestMixedGoRustConformance(t *testing.T) {
 		"mixed_unknown_kind_error",
 		"panic_attempt_trace",
 		"process_kill_restart_and_rescue",
-		"rust_insert_go_work",
-		"rust_migrator_go_runtime",
+		"candidate_insert_reference_work",
+		"candidate_migrator_reference_runtime",
 		"single_implementation_worker_outcomes",
 		"snooze_once_metadata_transition",
 		"transaction_abort_rollback_visibility",
@@ -582,7 +578,7 @@ func TestMixedGoRustConformance(t *testing.T) {
 	)
 }
 
-func TestMixedGoRustSQLiteConformance(t *testing.T) {
+func TestMixedSQLiteConformance(t *testing.T) {
 	t.Parallel()
 	scenarios := newScenarioTracker(t, scenarioOwnerSQLiteStorage)
 
@@ -592,7 +588,7 @@ func TestMixedGoRustSQLiteConformance(t *testing.T) {
 		t, repositoryRoot, databaseURL, "sqlite", "go", "go", "run", "./internal/cmd/riverconformanceadapter",
 	)
 	candidateSpec := conformanceCandidateSpec(t, repositoryRoot, false)
-	rustAdapter := startAdapterCommandForBackend(
+	candidateAdapter := startAdapterCommandForBackend(
 		t, repositoryRoot, databaseURL, "sqlite", candidateSpec.Implementation, candidateSpec.Command,
 	)
 
@@ -607,7 +603,7 @@ func TestMixedGoRustSQLiteConformance(t *testing.T) {
 		implementation string
 	}{
 		{adapter: goAdapter, implementation: "go"},
-		{adapter: rustAdapter, implementation: candidateSpec.Implementation},
+		{adapter: candidateAdapter, implementation: candidateSpec.Implementation},
 	} {
 		var handshake adapterHandshake
 		testCase.adapter.call(t, "handshake", map[string]any{}, &handshake)
@@ -621,24 +617,24 @@ func TestMixedGoRustSQLiteConformance(t *testing.T) {
 	}
 	scenarios.pass("sqlite_profile_handshake")
 
-	verifyDeterministicControls(t, repositoryRoot, goAdapter, rustAdapter)
-	verifyUniqueKeyGoldens(t, repositoryRoot, goAdapter, rustAdapter)
+	verifyDeterministicControls(t, repositoryRoot, goAdapter, candidateAdapter)
+	verifyUniqueKeyGoldens(t, repositoryRoot, goAdapter, candidateAdapter)
 	scenarios.pass("sqlite_deterministic_retry_unique")
-	verifySQLiteMigrations(t, goAdapter, rustAdapter)
+	verifySQLiteMigrations(t, goAdapter, candidateAdapter)
 	scenarios.pass("sqlite_migration_cross_language")
-	verifySQLiteCrossLanguageInsertion(t, goAdapter, rustAdapter)
+	verifySQLiteCrossLanguageInsertion(t, goAdapter, candidateAdapter)
 	scenarios.pass("sqlite_insert_get_unique_cross_language")
-	verifyBatchInsertion(t, goAdapter, rustAdapter)
+	verifyBatchInsertion(t, goAdapter, candidateAdapter)
 	scenarios.pass("sqlite_batch_atomicity")
-	verifyDifferentialCRUD(t, goAdapter, rustAdapter, false)
+	verifyDifferentialCRUD(t, goAdapter, candidateAdapter, false)
 	scenarios.pass("sqlite_job_crud")
-	verifySQLiteTransactions(t, goAdapter, rustAdapter)
+	verifySQLiteTransactions(t, goAdapter, candidateAdapter)
 	scenarios.pass("sqlite_transactions")
-	verifySQLiteTimestampEncoding(t, goAdapter, rustAdapter)
+	verifySQLiteTimestampEncoding(t, goAdapter, candidateAdapter)
 	scenarios.pass("sqlite_timestamp_rounding_ordering")
 }
 
-func TestMixedGoRustSQLiteRuntimeConformance(t *testing.T) {
+func TestMixedSQLiteRuntimeConformance(t *testing.T) {
 	t.Parallel()
 	scenarios := newScenarioTracker(t, scenarioOwnerSQLiteRuntime)
 
@@ -650,7 +646,7 @@ func TestMixedGoRustSQLiteRuntimeConformance(t *testing.T) {
 		"go", "go", "run", "./internal/cmd/riverconformanceadapter",
 	)
 	candidateSpec := conformanceCandidateSpec(t, repositoryRoot, false)
-	rustAdapter := startAdapterCommandForProfile(
+	candidateAdapter := startAdapterCommandForProfile(
 		t, repositoryRoot, databaseURL, "sqlite", profileName,
 		candidateSpec.Implementation, candidateSpec.Command,
 	)
@@ -666,7 +662,7 @@ func TestMixedGoRustSQLiteRuntimeConformance(t *testing.T) {
 		implementation string
 	}{
 		{adapter: goAdapter, implementation: "go"},
-		{adapter: rustAdapter, implementation: candidateSpec.Implementation},
+		{adapter: candidateAdapter, implementation: candidateSpec.Implementation},
 	} {
 		var handshake adapterHandshake
 		testCase.adapter.call(t, "handshake", map[string]any{}, &handshake)
@@ -681,51 +677,51 @@ func TestMixedGoRustSQLiteRuntimeConformance(t *testing.T) {
 	scenarios.pass("sqlite_runtime_profile_handshake")
 
 	goAdapter.call(t, "migrate", map[string]any{}, nil)
-	verifySQLiteCrossLanguageWork(t, goAdapter, rustAdapter)
+	verifySQLiteCrossLanguageWork(t, goAdapter, candidateAdapter)
 	scenarios.pass("sqlite_runtime_cross_language_work")
-	verifyExternalTerminalCompletionRace(t, goAdapter, rustAdapter)
-	verifyExternalTerminalCompletionRace(t, rustAdapter, goAdapter)
+	verifyExternalTerminalCompletionRace(t, goAdapter, candidateAdapter)
+	verifyExternalTerminalCompletionRace(t, candidateAdapter, goAdapter)
 	scenarios.pass("sqlite_runtime_external_terminal_completion_race")
-	verifySQLiteUnknownKind(t, goAdapter, rustAdapter)
+	verifySQLiteUnknownKind(t, goAdapter, candidateAdapter)
 	scenarios.pass("sqlite_runtime_unknown_kind_error")
-	verifySQLiteAttemptedByHistory(t, goAdapter, rustAdapter)
+	verifySQLiteAttemptedByHistory(t, goAdapter, candidateAdapter)
 	scenarios.pass("sqlite_runtime_attempted_by_ordering")
-	verifySQLiteCompetingWorkers(t, goAdapter, rustAdapter)
+	verifySQLiteCompetingWorkers(t, goAdapter, candidateAdapter)
 	scenarios.pass("sqlite_runtime_competing_workers")
-	verifySQLiteQueues(t, goAdapter, rustAdapter)
+	verifySQLiteQueues(t, goAdapter, candidateAdapter)
 	scenarios.pass("sqlite_runtime_queue_crud_reconfigure_pause")
-	verifyNotificationWakeups(t, goAdapter, rustAdapter)
+	verifyNotificationWakeups(t, goAdapter, candidateAdapter)
 	scenarios.pass(
 		"sqlite_runtime_notification_wakeups",
 		"sqlite_runtime_remote_cancellation",
 	)
-	verifyRemoteQueueSubscriptionEvents(t, goAdapter, rustAdapter)
+	verifyRemoteQueueSubscriptionEvents(t, goAdapter, candidateAdapter)
 	scenarios.pass("sqlite_runtime_remote_queue_subscription_events")
-	verifySQLiteTransactionalNotification(t, goAdapter, rustAdapter)
+	verifySQLiteTransactionalNotification(t, goAdapter, candidateAdapter)
 	scenarios.pass("sqlite_runtime_transactional_notification")
-	verifySQLiteLeadershipFailover(t, goAdapter, rustAdapter)
+	verifySQLiteLeadershipFailover(t, goAdapter, candidateAdapter)
 	scenarios.pass("sqlite_runtime_leadership_failover")
-	verifySQLitePeriodicScheduler(t, goAdapter, rustAdapter)
+	verifySQLitePeriodicScheduler(t, goAdapter, candidateAdapter)
 	scenarios.pass("sqlite_runtime_periodic_scheduler")
-	for _, adapter := range []*adapter{goAdapter, rustAdapter} {
+	for _, adapter := range []*adapter{goAdapter, candidateAdapter} {
 		verifySQLiteAdvancedRuntime(t, adapter)
 	}
 	scenarios.pass("sqlite_runtime_extensions_resumable_subscriptions")
-	verifySQLitePollOnly(t, goAdapter, rustAdapter)
+	verifySQLitePollOnly(t, goAdapter, candidateAdapter)
 	scenarios.pass("sqlite_runtime_poll_only_recovery")
-	verifySQLiteLifecycle(t, goAdapter, rustAdapter)
+	verifySQLiteLifecycle(t, goAdapter, candidateAdapter)
 	scenarios.pass("sqlite_runtime_lifecycle_shutdown")
 }
 
-func verifySQLiteCompetingWorkers(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifySQLiteCompetingWorkers(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	goAdapter.call(t, "reset", map[string]any{}, nil)
 	goAdapter.call(t, "start", map[string]any{
 		"client_id": "go-sqlite-competitor", "max_workers": 2,
 	}, nil)
-	rustAdapter.call(t, "start", map[string]any{
-		"client_id": "rust-sqlite-competitor", "max_workers": 2,
+	candidateAdapter.call(t, "start", map[string]any{
+		"client_id": "candidate-sqlite-competitor", "max_workers": 2,
 	}, nil)
 	const jobCount = 40
 	jobs := make([]map[string]any, jobCount)
@@ -741,7 +737,7 @@ func verifySQLiteCompetingWorkers(t *testing.T, goAdapter, rustAdapter *adapter)
 	}
 	goAdapter.call(t, "insert_many_fast", map[string]any{"jobs": jobs}, &inserted)
 	require.Equal(t, jobCount, inserted.Count)
-	worked := waitForListedJobCount(t, rustAdapter, map[string]any{
+	worked := waitForListedJobCount(t, candidateAdapter, map[string]any{
 		"states": []string{"completed"}, "tags_all": []string{"sqlite_competing_workers"},
 	}, jobCount)
 	workerIDs := make(map[string]bool)
@@ -751,9 +747,9 @@ func verifySQLiteCompetingWorkers(t *testing.T, goAdapter, rustAdapter *adapter)
 		}
 	}
 	require.True(t, workerIDs["go-sqlite-competitor"], "Go worker claimed no jobs")
-	require.True(t, workerIDs["rust-sqlite-competitor"], "Rust worker claimed no jobs")
+	require.True(t, workerIDs["candidate-sqlite-competitor"], "Candidate worker claimed no jobs")
 	goAdapter.call(t, "stop", map[string]any{}, nil)
-	rustAdapter.call(t, "stop", map[string]any{}, nil)
+	candidateAdapter.call(t, "stop", map[string]any{}, nil)
 }
 
 func verifyExternalTerminalCompletionRace(t *testing.T, worker, externalizer *adapter) {
@@ -912,15 +908,15 @@ func verifySQLiteAttemptedByHistory(t *testing.T, inserter, worker *adapter) {
 	}
 }
 
-func verifySQLiteCrossLanguageWork(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifySQLiteCrossLanguageWork(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	for _, pair := range []struct {
 		inserter *adapter
 		worker   *adapter
 	}{
-		{inserter: goAdapter, worker: rustAdapter},
-		{inserter: rustAdapter, worker: goAdapter},
+		{inserter: goAdapter, worker: candidateAdapter},
+		{inserter: candidateAdapter, worker: goAdapter},
 	} {
 		pair.inserter.call(t, "reset", map[string]any{}, nil)
 		var inserted, worked normalizedJob
@@ -935,24 +931,24 @@ func verifySQLiteCrossLanguageWork(t *testing.T, goAdapter, rustAdapter *adapter
 	}
 }
 
-func verifySQLiteLeadershipFailover(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifySQLiteLeadershipFailover(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	goAdapter.call(t, "reset", map[string]any{}, nil)
 	goAdapter.call(t, "start", map[string]any{
 		"client_id": "go-sqlite-leader", "max_workers": 1,
 	}, nil)
-	rustAdapter.call(t, "start", map[string]any{
-		"client_id": "rust-sqlite-leader", "max_workers": 1,
+	candidateAdapter.call(t, "start", map[string]any{
+		"client_id": "candidate-sqlite-leader", "max_workers": 1,
 	}, nil)
 	first := waitForLeader(t, goAdapter, "")
 	var leader, follower *adapter
 	var followerID string
 	if first == "go-sqlite-leader" {
-		leader, follower, followerID = goAdapter, rustAdapter, "rust-sqlite-leader"
+		leader, follower, followerID = goAdapter, candidateAdapter, "candidate-sqlite-leader"
 	} else {
-		require.Equal(t, "rust-sqlite-leader", first)
-		leader, follower, followerID = rustAdapter, goAdapter, "go-sqlite-leader"
+		require.Equal(t, "candidate-sqlite-leader", first)
+		leader, follower, followerID = candidateAdapter, goAdapter, "go-sqlite-leader"
 	}
 	leader.call(t, "stop", map[string]any{}, nil)
 	require.Equal(t, followerID, waitForLeader(t, follower, first))
@@ -962,10 +958,10 @@ func verifySQLiteLeadershipFailover(t *testing.T, goAdapter, rustAdapter *adapte
 	follower.call(t, "stop", map[string]any{}, nil)
 }
 
-func verifySQLiteLifecycle(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifySQLiteLifecycle(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
-	for _, worker := range []*adapter{goAdapter, rustAdapter} {
+	for _, worker := range []*adapter{goAdapter, candidateAdapter} {
 		worker.call(t, "reset", map[string]any{}, nil)
 		worker.call(t, "start", map[string]any{
 			"client_id": worker.name + "-sqlite-lifecycle", "max_workers": 1,
@@ -983,10 +979,10 @@ func verifySQLiteLifecycle(t *testing.T, goAdapter, rustAdapter *adapter) {
 	}
 }
 
-func verifySQLitePeriodicScheduler(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifySQLitePeriodicScheduler(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
-	for _, worker := range []*adapter{goAdapter, rustAdapter} {
+	for _, worker := range []*adapter{goAdapter, candidateAdapter} {
 		worker.call(t, "reset", map[string]any{}, nil)
 		worker.call(t, "start", map[string]any{
 			"client_id": worker.name + "-sqlite-maintenance", "instrumented": true,
@@ -1031,15 +1027,15 @@ func verifySQLitePeriodicScheduler(t *testing.T, goAdapter, rustAdapter *adapter
 	}
 }
 
-func verifySQLitePollOnly(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifySQLitePollOnly(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	for _, pair := range []struct {
 		inserter *adapter
 		worker   *adapter
 	}{
-		{inserter: goAdapter, worker: rustAdapter},
-		{inserter: rustAdapter, worker: goAdapter},
+		{inserter: goAdapter, worker: candidateAdapter},
+		{inserter: candidateAdapter, worker: goAdapter},
 	} {
 		pair.worker.call(t, "reset", map[string]any{}, nil)
 		pair.worker.call(t, "start", map[string]any{
@@ -1056,15 +1052,15 @@ func verifySQLitePollOnly(t *testing.T, goAdapter, rustAdapter *adapter) {
 	}
 }
 
-func verifySQLiteQueues(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifySQLiteQueues(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	for _, pair := range []struct {
 		observer *adapter
 		writer   *adapter
 	}{
-		{observer: rustAdapter, writer: goAdapter},
-		{observer: goAdapter, writer: rustAdapter},
+		{observer: candidateAdapter, writer: goAdapter},
+		{observer: goAdapter, writer: candidateAdapter},
 	} {
 		pair.writer.call(t, "reset", map[string]any{}, nil)
 		pair.writer.call(t, "start", map[string]any{
@@ -1086,8 +1082,8 @@ func verifySQLiteQueues(t *testing.T, goAdapter, rustAdapter *adapter) {
 		pair.writer.call(t, "queue_list", map[string]any{}, &queues)
 		require.Contains(t, queues.Queues, updated)
 	}
-	verifyTransactionalCRUD(t, goAdapter, rustAdapter)
-	for _, worker := range []*adapter{goAdapter, rustAdapter} {
+	verifyTransactionalCRUD(t, goAdapter, candidateAdapter)
+	for _, worker := range []*adapter{goAdapter, candidateAdapter} {
 		worker.call(t, "reset", map[string]any{}, nil)
 		worker.call(t, "start", map[string]any{
 			"client_id": worker.name + "-sqlite-dynamic-queue", "instrumented": true,
@@ -1121,15 +1117,15 @@ func verifySQLiteQueues(t *testing.T, goAdapter, rustAdapter *adapter) {
 	}
 }
 
-func verifySQLiteTransactionalNotification(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifySQLiteTransactionalNotification(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	for _, pair := range []struct {
 		controller *adapter
 		worker     *adapter
 	}{
-		{controller: rustAdapter, worker: goAdapter},
-		{controller: goAdapter, worker: rustAdapter},
+		{controller: candidateAdapter, worker: goAdapter},
+		{controller: goAdapter, worker: candidateAdapter},
 	} {
 		pair.worker.call(t, "reset", map[string]any{}, nil)
 		pair.worker.call(t, "start", map[string]any{
@@ -1165,15 +1161,15 @@ func verifySQLiteTransactionalNotification(t *testing.T, goAdapter, rustAdapter 
 	}
 }
 
-func verifySQLiteUnknownKind(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifySQLiteUnknownKind(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	for _, pair := range []struct {
 		inserter *adapter
 		worker   *adapter
 	}{
-		{inserter: goAdapter, worker: rustAdapter},
-		{inserter: rustAdapter, worker: goAdapter},
+		{inserter: goAdapter, worker: candidateAdapter},
+		{inserter: candidateAdapter, worker: goAdapter},
 	} {
 		pair.inserter.call(t, "reset", map[string]any{}, nil)
 		var unknown normalizedJob
@@ -1200,15 +1196,15 @@ func verifySQLiteUnknownKind(t *testing.T, goAdapter, rustAdapter *adapter) {
 	}
 }
 
-func verifySQLiteCrossLanguageInsertion(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifySQLiteCrossLanguageInsertion(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	for _, pair := range []struct {
 		observer *adapter
 		writer   *adapter
 	}{
-		{observer: rustAdapter, writer: goAdapter},
-		{observer: goAdapter, writer: rustAdapter},
+		{observer: candidateAdapter, writer: goAdapter},
+		{observer: goAdapter, writer: candidateAdapter},
 	} {
 		pair.writer.call(t, "reset", map[string]any{}, nil)
 		params := map[string]any{
@@ -1236,7 +1232,7 @@ func verifySQLiteCrossLanguageInsertion(t *testing.T, goAdapter, rustAdapter *ad
 	}
 }
 
-func verifySQLiteMigrations(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifySQLiteMigrations(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	type migrationResult struct {
@@ -1250,11 +1246,11 @@ func verifySQLiteMigrations(t *testing.T, goAdapter, rustAdapter *adapter) {
 	require.Equal(t, expected, result.Applied)
 	require.Equal(t, expected, result.Existing)
 	require.True(t, result.Valid)
-	rustAdapter.call(t, "migrate", map[string]any{}, &result)
+	candidateAdapter.call(t, "migrate", map[string]any{}, &result)
 	require.Empty(t, result.Applied)
 	require.Equal(t, expected, result.Existing)
 	require.True(t, result.Valid)
-	rustAdapter.call(t, "migrate", map[string]any{
+	candidateAdapter.call(t, "migrate", map[string]any{
 		"direction": "down", "target_version": -1,
 	}, &result)
 	require.Empty(t, result.Existing)
@@ -1264,7 +1260,7 @@ func verifySQLiteMigrations(t *testing.T, goAdapter, rustAdapter *adapter) {
 	require.True(t, result.Valid)
 }
 
-func verifySQLiteTimestampEncoding(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifySQLiteTimestampEncoding(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	goAdapter.call(t, "reset", map[string]any{}, nil)
@@ -1275,7 +1271,7 @@ func verifySQLiteTimestampEncoding(t *testing.T, goAdapter, rustAdapter *adapter
 	}
 	testCases := []timestampCase{
 		{expected: "2026-01-02T03:04:05.123Z", input: "2026-01-02T03:04:05.1234Z", writer: goAdapter},
-		{expected: "2026-01-02T03:04:05.124Z", input: "2026-01-02T03:04:05.1238Z", writer: rustAdapter},
+		{expected: "2026-01-02T03:04:05.124Z", input: "2026-01-02T03:04:05.1238Z", writer: candidateAdapter},
 	}
 	insertedIDs := make([]int64, 0, len(testCases))
 	for index, testCase := range testCases {
@@ -1289,7 +1285,7 @@ func verifySQLiteTimestampEncoding(t *testing.T, goAdapter, rustAdapter *adapter
 		}, &inserted)
 		require.Equal(t, testCase.expected, inserted.ScheduledAt)
 		insertedIDs = append(insertedIDs, inserted.ID)
-		for _, observer := range []*adapter{goAdapter, rustAdapter} {
+		for _, observer := range []*adapter{goAdapter, candidateAdapter} {
 			var observed normalizedJob
 			observer.call(t, "get", map[string]any{"id": inserted.ID}, &observed)
 			require.Equal(t, testCase.expected, observed.ScheduledAt)
@@ -1303,7 +1299,7 @@ func verifySQLiteTimestampEncoding(t *testing.T, goAdapter, rustAdapter *adapter
 			require.NoError(t, err)
 		}
 	}
-	for _, observer := range []*adapter{goAdapter, rustAdapter} {
+	for _, observer := range []*adapter{goAdapter, candidateAdapter} {
 		var listed struct {
 			Jobs []normalizedJob `json:"jobs"`
 		}
@@ -1315,15 +1311,15 @@ func verifySQLiteTimestampEncoding(t *testing.T, goAdapter, rustAdapter *adapter
 	}
 }
 
-func verifySQLiteTransactions(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifySQLiteTransactions(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	for _, pair := range []struct {
 		actor    *adapter
 		observer *adapter
 	}{
-		{actor: goAdapter, observer: rustAdapter},
-		{actor: rustAdapter, observer: goAdapter},
+		{actor: goAdapter, observer: candidateAdapter},
+		{actor: candidateAdapter, observer: goAdapter},
 	} {
 		pair.actor.call(t, "reset", map[string]any{}, nil)
 		handle := "sqlite-commit-" + pair.actor.name
@@ -1392,15 +1388,15 @@ func verifySQLiteTransactions(t *testing.T, goAdapter, rustAdapter *adapter) {
 	}
 }
 
-func verifyBatchInsertion(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifyBatchInsertion(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	for _, pair := range []struct {
 		actor    *adapter
 		observer *adapter
 	}{
-		{actor: goAdapter, observer: rustAdapter},
-		{actor: rustAdapter, observer: goAdapter},
+		{actor: goAdapter, observer: candidateAdapter},
+		{actor: candidateAdapter, observer: goAdapter},
 	} {
 		pair.actor.call(t, "reset", map[string]any{}, nil)
 		require.Contains(t, pair.actor.callError(t, "insert_many", map[string]any{
@@ -1469,7 +1465,7 @@ func verifyBatchInsertion(t *testing.T, goAdapter, rustAdapter *adapter) {
 	}
 }
 
-func verifyConcurrentUniqueConflicts(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifyConcurrentUniqueConflicts(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	allStates := []string{
@@ -1516,8 +1512,8 @@ func verifyConcurrentUniqueConflicts(t *testing.T, goAdapter, rustAdapter *adapt
 			loser  *adapter
 			winner *adapter
 		}{
-			{loser: rustAdapter, winner: goAdapter},
-			{loser: goAdapter, winner: rustAdapter},
+			{loser: candidateAdapter, winner: goAdapter},
+			{loser: goAdapter, winner: candidateAdapter},
 		} {
 			loser, winner := direction.loser, direction.winner
 			goAdapter.call(t, "reset", map[string]any{}, nil)
@@ -1649,15 +1645,15 @@ func verifyHistoricalMigrations(t *testing.T, latest int, adapters ...*adapter) 
 	}
 }
 
-func verifyDifferentialCRUD(t *testing.T, goAdapter, rustAdapter *adapter, includeQueues bool) {
+func verifyDifferentialCRUD(t *testing.T, goAdapter, candidateAdapter *adapter, includeQueues bool) {
 	t.Helper()
 
 	for _, pair := range []struct {
 		reader *adapter
 		writer *adapter
 	}{
-		{reader: rustAdapter, writer: goAdapter},
-		{reader: goAdapter, writer: rustAdapter},
+		{reader: candidateAdapter, writer: goAdapter},
+		{reader: goAdapter, writer: candidateAdapter},
 	} {
 		writerTag := "writer_" + pair.writer.name
 		pair.writer.call(t, "reset", map[string]any{}, nil)
@@ -1809,15 +1805,15 @@ func verifyDifferentialCRUD(t *testing.T, goAdapter, rustAdapter *adapter, inclu
 	}
 }
 
-func verifyJobRowRoundTrip(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifyJobRowRoundTrip(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	for _, pair := range []struct {
 		inserter *adapter
 		observer *adapter
 	}{
-		{inserter: goAdapter, observer: rustAdapter},
-		{inserter: rustAdapter, observer: goAdapter},
+		{inserter: goAdapter, observer: candidateAdapter},
+		{inserter: candidateAdapter, observer: goAdapter},
 	} {
 		pair.inserter.call(t, "reset", map[string]any{}, nil)
 		var inserted, observed normalizedJob
@@ -1831,7 +1827,7 @@ func verifyJobRowRoundTrip(t *testing.T, goAdapter, rustAdapter *adapter) {
 		require.Equal(t, 3, observed.Attempt)
 		require.NotNil(t, observed.AttemptedAt)
 		require.Equal(t, "2026-01-02T03:04:06.123456Z", *observed.AttemptedAt)
-		require.Equal(t, []string{"go-client", "rust-client"}, observed.AttemptedBy)
+		require.Equal(t, []string{"go-client", "candidate-client"}, observed.AttemptedBy)
 		require.Equal(t, "2026-01-02T03:04:05.6789Z", observed.CreatedAt)
 		require.Len(t, observed.Errors, 1)
 		require.Equal(t, "2026-01-02T03:04:06.123456Z", observed.Errors[0].At)
@@ -1860,7 +1856,7 @@ func verifyJobRowRoundTrip(t *testing.T, goAdapter, rustAdapter *adapter) {
 	}
 }
 
-func verifyMixedUnknownKind(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifyMixedUnknownKind(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	goAdapter.call(t, "reset", map[string]any{}, nil)
@@ -1872,12 +1868,12 @@ func verifyMixedUnknownKind(t *testing.T, goAdapter, rustAdapter *adapter) {
 	goAdapter.call(t, "start", map[string]any{
 		"client_id": "go-skip-unknown", "max_workers": 1,
 	}, nil)
-	rustAdapter.call(t, "start", map[string]any{
-		"client_id": "rust-skip-unknown", "max_workers": 1,
+	candidateAdapter.call(t, "start", map[string]any{
+		"client_id": "candidate-skip-unknown", "max_workers": 1,
 	}, nil)
 
 	knownIDs := make([]int64, 0, 2)
-	for _, inserter := range []*adapter{goAdapter, rustAdapter} {
+	for _, inserter := range []*adapter{goAdapter, candidateAdapter} {
 		var known normalizedJob
 		inserter.call(t, "insert", map[string]any{
 			"message": "known kind from " + inserter.name,
@@ -1886,12 +1882,12 @@ func verifyMixedUnknownKind(t *testing.T, goAdapter, rustAdapter *adapter) {
 	}
 	for _, id := range knownIDs {
 		var completed normalizedJob
-		rustAdapter.call(t, "wait", map[string]any{"id": id}, &completed)
+		candidateAdapter.call(t, "wait", map[string]any{"id": id}, &completed)
 		require.Equal(t, "completed", completed.State)
 		require.Equal(t, 1, completed.Attempt)
 	}
 	var observed normalizedJob
-	rustAdapter.call(t, "wait", map[string]any{
+	candidateAdapter.call(t, "wait", map[string]any{
 		"id": unknown.ID, "states": []string{"discarded"},
 	}, &observed)
 	require.Equal(t, "discarded", observed.State)
@@ -1903,18 +1899,18 @@ func verifyMixedUnknownKind(t *testing.T, goAdapter, rustAdapter *adapter) {
 	)
 
 	goAdapter.call(t, "stop", map[string]any{}, nil)
-	rustAdapter.call(t, "stop", map[string]any{}, nil)
+	candidateAdapter.call(t, "stop", map[string]any{}, nil)
 }
 
-func verifyNotificationWakeups(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifyNotificationWakeups(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	for _, pair := range []struct {
 		controller *adapter
 		worker     *adapter
 	}{
-		{controller: rustAdapter, worker: goAdapter},
-		{controller: goAdapter, worker: rustAdapter},
+		{controller: candidateAdapter, worker: goAdapter},
+		{controller: goAdapter, worker: candidateAdapter},
 	} {
 		pair.worker.call(t, "reset", map[string]any{}, nil)
 		pair.worker.call(t, "start", map[string]any{
@@ -1972,15 +1968,15 @@ func verifyNotificationWakeups(t *testing.T, goAdapter, rustAdapter *adapter) {
 	}
 }
 
-func verifyRemoteQueueSubscriptionEvents(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifyRemoteQueueSubscriptionEvents(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	for _, pair := range []struct {
 		controller *adapter
 		observer   *adapter
 	}{
-		{controller: rustAdapter, observer: goAdapter},
-		{controller: goAdapter, observer: rustAdapter},
+		{controller: candidateAdapter, observer: goAdapter},
+		{controller: goAdapter, observer: candidateAdapter},
 	} {
 		pair.observer.call(t, "reset", map[string]any{}, nil)
 		pair.observer.call(t, "start", map[string]any{
@@ -2022,15 +2018,15 @@ func verifyRemoteQueueSubscriptionEvents(t *testing.T, goAdapter, rustAdapter *a
 	}
 }
 
-func verifyTransactionalNotificationWakeups(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifyTransactionalNotificationWakeups(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	for _, pair := range []struct {
 		controller *adapter
 		worker     *adapter
 	}{
-		{controller: rustAdapter, worker: goAdapter},
-		{controller: goAdapter, worker: rustAdapter},
+		{controller: candidateAdapter, worker: goAdapter},
+		{controller: goAdapter, worker: candidateAdapter},
 	} {
 		for _, method := range []string{"tx_insert_many", "tx_insert_many_fast"} {
 			for _, commit := range []bool{false, true} {
@@ -2117,15 +2113,15 @@ func waitForQueuePaused(t *testing.T, observer *adapter, name string, paused boo
 	t.Fatalf("%s did not observe queue %s paused=%t", observer.name, name, paused)
 }
 
-func verifyTransactionalCRUD(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifyTransactionalCRUD(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	for _, pair := range []struct {
 		actor    *adapter
 		observer *adapter
 	}{
-		{actor: goAdapter, observer: rustAdapter},
-		{actor: rustAdapter, observer: goAdapter},
+		{actor: goAdapter, observer: candidateAdapter},
+		{actor: candidateAdapter, observer: goAdapter},
 	} {
 		pair.actor.call(t, "reset", map[string]any{}, nil)
 		pair.actor.call(t, "start", map[string]any{
@@ -2261,7 +2257,7 @@ func verifyTransactionalCRUD(t *testing.T, goAdapter, rustAdapter *adapter) {
 	}
 }
 
-func verifyCustomSchemas(t *testing.T, goAdapter, rustAdapter *adapter) {
+func verifyCustomSchemas(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	for _, testCase := range []struct {
@@ -2272,17 +2268,17 @@ func verifyCustomSchemas(t *testing.T, goAdapter, rustAdapter *adapter) {
 		worker   *adapter
 	}{
 		{
-			inserter: rustAdapter,
+			inserter: candidateAdapter,
 			migrator: goAdapter,
 			name:     "river_conformance_go_migrated",
 			observer: goAdapter,
-			worker:   rustAdapter,
+			worker:   candidateAdapter,
 		},
 		{
 			inserter: goAdapter,
-			migrator: rustAdapter,
-			name:     "river_conformance_rust_migrated",
-			observer: rustAdapter,
+			migrator: candidateAdapter,
+			name:     "river_conformance_candidate_migrated",
+			observer: candidateAdapter,
 			worker:   goAdapter,
 		},
 	} {
@@ -2966,30 +2962,39 @@ func waitForListener(t *testing.T, observer *adapter) {
 func conformanceCandidateSpec(t *testing.T, root string, release bool) adapterSpec {
 	t.Helper()
 
-	if encoded := os.Getenv("RIVER_CONFORMANCE_CANDIDATE"); encoded != "" {
-		var spec adapterSpec
-		require.NoError(t, json.Unmarshal([]byte(encoded), &spec))
-		require.NotEmpty(t, spec.Command)
-		require.NotEmpty(t, spec.Implementation)
-		if len(spec.RestartCommand) == 0 {
-			spec.RestartCommand = slices.Clone(spec.Command)
+	encoded := os.Getenv("RIVER_CONFORMANCE_CANDIDATE")
+	descriptorPath := os.Getenv("RIVER_CONFORMANCE_CANDIDATE_FILE")
+	require.False(t, encoded != "" && descriptorPath != "",
+		"set only one of RIVER_CONFORMANCE_CANDIDATE or RIVER_CONFORMANCE_CANDIDATE_FILE")
+
+	var descriptor []byte
+	if encoded != "" {
+		descriptor = []byte(encoded)
+	} else {
+		if descriptorPath == "" {
+			descriptorPath = "conformance/adapter/candidates/rust.json"
 		}
-		require.NotEmpty(t, spec.ApplicationName)
-		return spec
+		if !filepath.IsAbs(descriptorPath) {
+			descriptorPath = filepath.Join(root, descriptorPath)
+		}
+		var err error
+		//nolint:gosec // The caller explicitly selects a local candidate descriptor.
+		descriptor, err = os.ReadFile(descriptorPath)
+		require.NoError(t, err)
 	}
 
-	command := []string{
-		"cargo", "run", "--quiet", "--manifest-path", "rust/Cargo.toml", "-p", "riverqueue-conformance",
+	var spec adapterSpec
+	require.NoError(t, json.Unmarshal(descriptor, &spec))
+	require.NotEmpty(t, spec.ApplicationName)
+	require.NotEmpty(t, spec.Command)
+	require.NotEmpty(t, spec.Implementation)
+	if release && len(spec.ReleaseCommand) > 0 {
+		spec.Command = slices.Clone(spec.ReleaseCommand)
 	}
-	if release {
-		command = slices.Insert(command, 2, "--release")
+	if len(spec.RestartCommand) == 0 {
+		spec.RestartCommand = slices.Clone(spec.Command)
 	}
-	return adapterSpec{
-		ApplicationName: "river-conformance-rust",
-		Command:         command,
-		Implementation:  "rust",
-		RestartCommand:  []string{filepath.Join(root, "rust", "target", "debug", "riverqueue-conformance")},
-	}
+	return spec
 }
 
 func startAdapterCommand(t *testing.T, root, databaseURL, name string, command []string) *adapter {

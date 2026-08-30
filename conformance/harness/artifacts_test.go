@@ -133,6 +133,33 @@ func TestCompatibilityArtifacts(t *testing.T) {
 		}
 	})
 
+	t.Run("CandidateDescriptorValid", func(t *testing.T) {
+		t.Parallel()
+
+		var descriptor struct {
+			ApplicationName string   `json:"application_name"`
+			Command         []string `json:"command"`
+			Implementation  string   `json:"implementation"`
+			ReleaseCommand  []string `json:"release_command"`
+			RestartCommand  []string `json:"restart_command"`
+			Version         string   `json:"version"`
+		}
+		readJSON(t, "conformance/adapter/candidates/rust.json", &descriptor)
+		require.Equal(t, "river-conformance-rust", descriptor.ApplicationName)
+		require.NotEmpty(t, descriptor.Command)
+		require.Equal(t, "rust", descriptor.Implementation)
+		require.NotEmpty(t, descriptor.ReleaseCommand)
+		require.NotEmpty(t, descriptor.RestartCommand)
+
+		var manifest struct {
+			Rust struct {
+				Version string `json:"version"`
+			} `json:"rust"`
+		}
+		readJSON(t, "conformance/manifest.json", &manifest)
+		require.Equal(t, manifest.Rust.Version, descriptor.Version)
+	})
+
 	t.Run("MigrationInventoryComplete", func(t *testing.T) {
 		t.Parallel()
 
@@ -179,6 +206,7 @@ func TestCompatibilityArtifacts(t *testing.T) {
 		t.Parallel()
 
 		for _, path := range []string{
+			"conformance/adapter/candidates/rust.json",
 			"conformance/adapter/contract.json",
 			"conformance/adapter/profiles/sqlite-runtime.json",
 			"conformance/adapter/profiles/sqlite.json",

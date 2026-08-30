@@ -25,7 +25,7 @@ generate: generate/rust-migrations
 generate: generate/sqlc
 
 .PHONY: generate/conformance
-generate/conformance: ## Generate shared Go/Rust protocol fixtures
+generate/conformance: ## Generate language-neutral protocol fixtures
 	go run ./internal/cmd/generateconformance
 
 .PHONY: generate/migrations
@@ -92,15 +92,15 @@ test/rust/postgres: ## Run all Rust tests, including PostgreSQL integration test
 	cd rust && cargo test --workspace --all-features --locked
 
 .PHONY: test/conformance
-test/conformance: ## Run mixed Go/Rust tests (requires RIVER_CONFORMANCE_DATABASE_URL)
-	go test -tags riverconformance ./conformance/harness -run TestMixedGoRustConformance -count=1
+test/conformance: ## Run Go and configured candidate conformance (requires database URL)
+	go test -tags riverconformance ./conformance/harness -run TestMixedConformance -count=1
 
 .PHONY: test/conformance/sqlite
-test/conformance/sqlite: ## Run mixed Go/Rust SQLite storage and runtime conformance
-	go test -tags riverconformance ./conformance/harness -run '^TestMixedGoRustSQLite(Conformance|RuntimeConformance)$$' -count=1
+test/conformance/sqlite: ## Run candidate-neutral SQLite storage and runtime conformance
+	go test -tags riverconformance ./conformance/harness -run '^TestMixedSQLite(Conformance|RuntimeConformance)$$' -count=1
 
 .PHONY: test/conformance/performance
-test/conformance/performance: ## Run release-mode Go/Rust performance gates
+test/conformance/performance: ## Run Go and configured candidate performance gates
 	go test -tags riverconformance ./conformance/harness -run TestPerformanceGate -count=1
 
 .PHONY: test/conformance/soak
@@ -171,7 +171,7 @@ verify: verify/rust-migrations
 verify: verify/sqlc
 
 .PHONY: verify/conformance
-verify/conformance: ## Verify shared Go/Rust protocol fixtures
+verify/conformance: ## Verify language-neutral protocol fixtures
 	go run ./internal/cmd/generateconformance -check
 
 .PHONY: verify/migrations

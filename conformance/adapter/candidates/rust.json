@@ -1,0 +1,9 @@
+{
+  "$schema": "../../schema/candidate.schema.json",
+  "application_name": "river-conformance-rust",
+  "command": ["cargo", "run", "--quiet", "--manifest-path", "rust/Cargo.toml", "-p", "riverqueue-conformance"],
+  "implementation": "rust",
+  "release_command": ["cargo", "run", "--release", "--quiet", "--manifest-path", "rust/Cargo.toml", "-p", "riverqueue-conformance"],
+  "restart_command": ["rust/target/debug/riverqueue-conformance"],
+  "version": "0.46.0-alpha.1"
+}
