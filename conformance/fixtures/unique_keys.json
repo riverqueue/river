@@ -24,6 +24,29 @@
     },
     {
       "args": {
+        "2": 2,
+        "10": 10,
+        "zero": -0,
+        "😀": 1,
+        "": 2
+      },
+      "expected_sha256": "fcdf33e0c39c1fc7e956876345a985f2418bd69c6e4d6a5c794abf1e78cdfdb6",
+      "expected_state_mask": 245,
+      "kind": "conformance_all_args",
+      "name": "map_order_and_negative_zero",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": true,
+        "by_period_nanos": 0,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_paths": null
+    },
+    {
+      "args": {
         "exponent": 1e+100,
         "fraction": 1.25,
         "maximum": 9223372036854775807,

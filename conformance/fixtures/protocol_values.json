@@ -70,7 +70,7 @@
       "payload": {
         "action": "metadata_changed",
         "metadata": {
-          "owner": "rust"
+          "owner": "candidate"
         },
         "queue": "priority"
       },

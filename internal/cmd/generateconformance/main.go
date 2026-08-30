@@ -333,7 +333,7 @@ func makeProtocolFixture(now time.Time) protocolFixture {
 	}{
 		{name: "cancel", payload: map[string]any{"action": "cancel", "job_id": 42, "queue": "priority"}, topic: notifier.NotificationTopicControl},
 		{name: "insert", payload: map[string]any{"queue": "priority"}, topic: notifier.NotificationTopicInsert},
-		{name: "metadata_changed", payload: map[string]any{"action": "metadata_changed", "metadata": map[string]any{"owner": "rust"}, "queue": "priority"}, topic: notifier.NotificationTopicControl},
+		{name: "metadata_changed", payload: map[string]any{"action": "metadata_changed", "metadata": map[string]any{"owner": "candidate"}, "queue": "priority"}, topic: notifier.NotificationTopicControl},
 		{name: "pause", payload: map[string]any{"action": "pause", "queue": "priority"}, topic: notifier.NotificationTopicControl},
 		{name: "request_resign", payload: leadership.DBNotification{Action: leadership.DBNotificationKindRequestResign}, topic: notifier.NotificationTopicLeadership},
 		{name: "resigned", payload: leadership.DBNotification{Action: leadership.DBNotificationKindResigned, LeaderID: "client-1"}, topic: notifier.NotificationTopicLeadership},

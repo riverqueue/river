@@ -1,10 +1,10 @@
 package harness_test
 
 const (
-	scenarioOwnerMixed         = "TestMixedGoRustConformance"
+	scenarioOwnerMixed         = "TestMixedConformance"
 	scenarioOwnerPerformance   = "TestPerformanceGate"
-	scenarioOwnerSQLiteRuntime = "TestMixedGoRustSQLiteRuntimeConformance"
-	scenarioOwnerSQLiteStorage = "TestMixedGoRustSQLiteConformance"
+	scenarioOwnerSQLiteRuntime = "TestMixedSQLiteRuntimeConformance"
+	scenarioOwnerSQLiteStorage = "TestMixedSQLiteConformance"
 	scenarioOwnerSoak          = "TestMixedSoak"
 )
 
@@ -22,12 +22,14 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"adapter_handshake_and_capabilities":                {owner: scenarioOwnerMixed, tier: "codec"},
 	"barrier_wait_and_release":                          {owner: scenarioOwnerMixed, tier: "runtime"},
 	"bulk_delete_safety":                                {owner: scenarioOwnerMixed, tier: "storage"},
+	"candidate_insert_reference_work":                   {owner: scenarioOwnerMixed, tier: "mixed"},
+	"candidate_migrator_reference_runtime":              {owner: scenarioOwnerMixed, tier: "storage"},
 	"completion_batching":                               {owner: scenarioOwnerMixed, tier: "performance"},
 	"cooperative_remote_cancellation":                   {owner: scenarioOwnerMixed, tier: "runtime"},
 	"copy_from_both_implementations":                    {owner: scenarioOwnerMixed, tier: "storage"},
 	"cross_language_unique_conflict":                    {owner: scenarioOwnerMixed, tier: "codec"},
-	"custom_schema_go_migrate_rust_work":                {owner: scenarioOwnerMixed, tier: "mixed"},
-	"custom_schema_rust_migrate_go_work":                {owner: scenarioOwnerMixed, tier: "mixed"},
+	"custom_schema_candidate_migrate_reference_work":    {owner: scenarioOwnerMixed, tier: "mixed"},
+	"custom_schema_reference_migrate_candidate_work":    {owner: scenarioOwnerMixed, tier: "mixed"},
 	"deterministic_retry_clock_rng":                     {owner: scenarioOwnerMixed, tier: "codec"},
 	"differential_job_crud":                             {owner: scenarioOwnerMixed, tier: "storage"},
 	"differential_job_list_filters_and_cursors":         {owner: scenarioOwnerMixed, tier: "storage"},
@@ -36,8 +38,6 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"error_handler_cancel_override":                     {owner: scenarioOwnerMixed, tier: "runtime"},
 	"extension_hook_middleware_order":                   {owner: scenarioOwnerMixed, tier: "runtime"},
 	"external_terminal_completion_race":                 {owner: scenarioOwnerMixed, tier: "mixed"},
-	"go_insert_rust_work":                               {owner: scenarioOwnerMixed, tier: "mixed"},
-	"go_migrator_rust_runtime":                          {owner: scenarioOwnerMixed, tier: "storage"},
 	"historical_migration_down_up":                      {owner: scenarioOwnerMixed, tier: "storage"},
 	"ignored_cancellation_hard_abort":                   {owner: scenarioOwnerMixed, tier: "chaos"},
 	"job_row_round_trip_all_fields":                     {owner: scenarioOwnerMixed, tier: "codec"},
@@ -54,6 +54,8 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"pause_resume_notification":                         {owner: scenarioOwnerMixed, tier: "mixed"},
 	"periodic_run_on_start":                             {owner: scenarioOwnerMixed, tier: "runtime"},
 	"process_kill_restart_and_rescue":                   {owner: scenarioOwnerMixed, tier: "chaos"},
+	"reference_insert_candidate_work":                   {owner: scenarioOwnerMixed, tier: "mixed"},
+	"reference_migrator_candidate_runtime":              {owner: scenarioOwnerMixed, tier: "storage"},
 	"refetched_attempt_cancellation":                    {owner: scenarioOwnerMixed, tier: "runtime"},
 	"release_enqueue_performance":                       {owner: scenarioOwnerPerformance, tier: "performance"},
 	"release_mixed_performance":                         {owner: scenarioOwnerPerformance, tier: "performance"},
@@ -61,8 +63,6 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"remote_cancel_notification":                        {owner: scenarioOwnerMixed, tier: "mixed"},
 	"remote_queue_subscription_events":                  {owner: scenarioOwnerMixed, tier: "mixed"},
 	"resumable_retry":                                   {owner: scenarioOwnerMixed, tier: "runtime"},
-	"rust_insert_go_work":                               {owner: scenarioOwnerMixed, tier: "mixed"},
-	"rust_migrator_go_runtime":                          {owner: scenarioOwnerMixed, tier: "storage"},
 	"single_implementation_worker_outcomes":             {owner: scenarioOwnerMixed, tier: "runtime"},
 	"snooze_once_metadata_transition":                   {owner: scenarioOwnerMixed, tier: "runtime"},
 	"timeout_cancellation":                              {owner: scenarioOwnerMixed, tier: "runtime"},
