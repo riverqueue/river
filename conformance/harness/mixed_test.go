@@ -869,9 +869,11 @@ func verifySQLiteAdvancedRuntime(t *testing.T, adapter *adapter) {
 	})
 	requireOrderedSubsequence(t, stats.Trace, []string{
 		"hook:work_begin",
+		"hook:work_end",
+	})
+	requireOrderedSubsequence(t, stats.Trace, []string{
 		"middleware:work_before",
 		"middleware:work_after",
-		"hook:work_end",
 	})
 	adapter.call(t, "stop", map[string]any{}, nil)
 }
@@ -1816,6 +1818,22 @@ func verifyJobRowRoundTrip(t *testing.T, goAdapter, candidateAdapter *adapter) {
 		{inserter: candidateAdapter, observer: goAdapter},
 	} {
 		pair.inserter.call(t, "reset", map[string]any{}, nil)
+		var exactInserted struct {
+			ID int64 `json:"id"`
+		}
+		pair.inserter.call(t, "raw_insert_exact_json", map[string]any{}, &exactInserted)
+		var exactAtInserter, exactAtObserver struct {
+			Decimal  string `json:"decimal"`
+			Integer  string `json:"integer"`
+			Negative string `json:"negative"`
+		}
+		pair.inserter.call(t, "raw_job_exact_json", map[string]any{"id": exactInserted.ID}, &exactAtInserter)
+		pair.observer.call(t, "raw_job_exact_json", map[string]any{"id": exactInserted.ID}, &exactAtObserver)
+		require.Equal(t, exactAtInserter, exactAtObserver)
+		require.Equal(t, "0.12345678901234567890123456789", exactAtObserver.Decimal)
+		require.Equal(t, "9223372036854775807", exactAtObserver.Integer)
+		require.Equal(t, "-9223372036854775808", exactAtObserver.Negative)
+
 		var inserted, observed normalizedJob
 		pair.inserter.call(t, "raw_insert_full_row", map[string]any{}, &inserted)
 		pair.observer.call(t, "get", map[string]any{"id": inserted.ID}, &observed)
@@ -2421,6 +2439,9 @@ func verifyAdvancedRuntime(t *testing.T, adapter *adapter) {
 	adapter.call(t, "queue_remove", map[string]any{"name": "dynamic"}, nil)
 
 	adapter.call(t, "queue_pause", map[string]any{"name": "default"}, nil)
+	waitForRuntimeStats(t, adapter, func(stats runtimeStats) bool {
+		return slices.Contains(stats.Events, "queue_paused")
+	})
 	adapter.call(t, "queue_resume", map[string]any{"name": "default"}, nil)
 	stats := waitForRuntimeStats(t, adapter, func(stats runtimeStats) bool {
 		return stats.ResumableFirstRuns == 1 && stats.ResumableSecondRuns == 2 &&
@@ -2436,9 +2457,11 @@ func verifyAdvancedRuntime(t *testing.T, adapter *adapter) {
 	})
 	requireOrderedSubsequence(t, stats.Trace, []string{
 		"hook:work_begin",
+		"hook:work_end",
+	})
+	requireOrderedSubsequence(t, stats.Trace, []string{
 		"middleware:work_before",
 		"middleware:work_after",
-		"hook:work_end",
 	})
 	adapter.call(t, "stop", map[string]any{}, nil)
 
