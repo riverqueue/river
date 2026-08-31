@@ -14,6 +14,10 @@ busy timeout, and a one-connection pool. Requests are sequential within an
 adapter process, while the harness may call different adapters concurrently.
 IDs and transaction-independent records returned by one implementation may be
 passed to any other implementation attached to the database.
+Job IDs are exact signed 64-bit JSON integer tokens, not JavaScript `number`
+values. Adapters must accept and emit values above `Number.MAX_SAFE_INTEGER`
+without rounding in CRUD parameters, normalized rows, list filters, or opaque
+cursors.
 
 The Go implementation is the reference side. By default the candidate is the
 Rust adapter described by [`candidates/rust.json`](candidates/rust.json). A

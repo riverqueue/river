@@ -30,7 +30,7 @@
     { "capability": "queues", "description": "Resume a persisted queue.", "name": "queue_resume" },
     { "capability": "queues", "description": "Update persisted queue metadata.", "name": "queue_update" },
     { "capability": "job_crud", "description": "Force a running job into an external terminal state for completion-race tests.", "name": "raw_finalize" },
-    { "capability": "job_crud", "description": "Insert exact JSON numeric fixtures directly and return their job ID.", "name": "raw_insert_exact_json" },
+    { "capability": "job_crud", "description": "Insert exact JSON numeric fixtures with an optional exact signed-64-bit job ID and return that ID.", "name": "raw_insert_exact_json" },
     { "capability": "job_crud", "description": "Insert a normalized full-field row for codec checks.", "name": "raw_insert_full_row" },
     { "capability": "notifications", "description": "Insert directly without a notification.", "name": "raw_insert_no_notify" },
     { "capability": "job_crud", "description": "Read exact numeric tokens from job JSON through the implementation driver.", "name": "raw_job_exact_json" },

@@ -150,10 +150,10 @@ func TestMixedConformance(t *testing.T) {
 	goAdapter.call(t, "handshake", map[string]any{}, &goHandshake)
 	candidateAdapter.call(t, "handshake", map[string]any{}, &candidateHandshake)
 	var manifest struct {
-		Capabilities map[string]string `json:"capabilities"`
-		Go           struct {
+		Capabilities    map[string]string `json:"capabilities"`
+		Implementations map[string]struct {
 			Version string `json:"version"`
-		} `json:"go"`
+		} `json:"implementations"`
 		Migration struct {
 			Latest int    `json:"latest"`
 			Line   string `json:"line"`
@@ -177,10 +177,13 @@ func TestMixedConformance(t *testing.T) {
 	require.Equal(t, goHandshake.Profile, candidateHandshake.Profile)
 	require.Positive(t, goHandshake.AdapterVersion)
 	require.Equal(t, goHandshake.AdapterVersion, candidateHandshake.AdapterVersion)
-	require.Equal(t, manifest.Go.Version, goHandshake.ImplementationVersion)
+	require.Equal(t, manifest.Implementations[goHandshake.Implementation].Version,
+		goHandshake.ImplementationVersion)
 	if candidateSpec.Version != "" {
 		require.Equal(t, candidateSpec.Version, candidateHandshake.ImplementationVersion)
 	}
+	require.Equal(t, manifest.Implementations[candidateHandshake.Implementation].Version,
+		candidateHandshake.ImplementationVersion)
 	require.Equal(t, manifest.ProtocolRevision, goHandshake.ProtocolRevision)
 	require.Equal(t, goHandshake.ProtocolRevision, candidateHandshake.ProtocolRevision)
 	require.Equal(t, map[string]int{manifest.Migration.Line: manifest.Migration.Latest}, goHandshake.MigrationLines)
@@ -254,6 +257,8 @@ func TestMixedConformance(t *testing.T) {
 	)
 	verifyDifferentialCRUD(t, goAdapter, candidateAdapter, true)
 	verifyJobRowRoundTrip(t, goAdapter, candidateAdapter)
+	verifyUnsafeInt64JobIDs(t, goAdapter, candidateAdapter)
+	scenarios.pass("unsafe_int64_job_ids_rpc_list_cursors")
 	verifyMixedUnknownKind(t, goAdapter, candidateAdapter)
 	verifyTransactionalCRUD(t, goAdapter, candidateAdapter)
 	verifySingleImplementationRuntime(t, goAdapter)
@@ -628,6 +633,8 @@ func TestMixedSQLiteConformance(t *testing.T) {
 	scenarios.pass("sqlite_batch_atomicity")
 	verifyDifferentialCRUD(t, goAdapter, candidateAdapter, false)
 	scenarios.pass("sqlite_job_crud")
+	verifyUnsafeInt64JobIDs(t, goAdapter, candidateAdapter)
+	scenarios.pass("sqlite_unsafe_int64_job_ids_rpc_list_cursors")
 	verifySQLiteTransactions(t, goAdapter, candidateAdapter)
 	scenarios.pass("sqlite_transactions")
 	verifySQLiteTimestampEncoding(t, goAdapter, candidateAdapter)
@@ -1242,23 +1249,63 @@ func verifySQLiteMigrations(t *testing.T, goAdapter, candidateAdapter *adapter) 
 		Existing []int `json:"existing"`
 		Valid    bool  `json:"valid"`
 	}
-	expected := []int{1, 2, 3, 4, 5, 6, 7}
+	expectedLatest := []int{1, 2, 3, 4, 5, 6, 7}
+	for initializerIndex, initializer := range []*adapter{goAdapter, candidateAdapter} {
+		observer := []*adapter{candidateAdapter, goAdapter}[initializerIndex]
+		for version := 1; version <= len(expectedLatest); version++ {
+			var result migrationResult
+			initializer.call(t, "migrate", map[string]any{
+				"direction": "down", "target_version": -1,
+			}, &result)
+			require.Empty(t, result.Existing)
+
+			initializer.call(t, "migrate", map[string]any{
+				"direction": "up", "target_version": version,
+			}, &result)
+			require.Equal(t, expectedLatest[:version], result.Applied)
+			require.Equal(t, expectedLatest[:version], result.Existing)
+			require.Equal(t, version == len(expectedLatest), result.Valid)
+
+			observer.call(t, "migrate", map[string]any{
+				"direction": "down", "dry_run": true, "target_version": version,
+			}, &result)
+			require.Empty(t, result.Applied)
+			require.Equal(t, expectedLatest[:version], result.Existing)
+
+			observer.call(t, "migrate", map[string]any{}, &result)
+			require.Equal(t, expectedLatest[version:], result.Applied)
+			require.Equal(t, expectedLatest, result.Existing)
+			require.True(t, result.Valid)
+			var inserted, observed normalizedJob
+			observer.call(t, "insert", map[string]any{
+				"message": fmt.Sprintf("SQLite historical migration %d", version),
+			}, &inserted)
+			initializer.call(t, "get", map[string]any{"id": inserted.ID}, &observed)
+			require.Equal(t, inserted, observed)
+
+			initializer.call(t, "migrate", map[string]any{
+				"direction": "down", "target_version": version,
+			}, &result)
+			require.Equal(t, expectedLatest[:version], result.Existing)
+			observer.call(t, "migrate", map[string]any{
+				"direction": "down", "dry_run": true, "target_version": version,
+			}, &result)
+			require.Empty(t, result.Applied)
+			require.Equal(t, expectedLatest[:version], result.Existing)
+
+			observer.call(t, "migrate", map[string]any{}, &result)
+			require.Equal(t, expectedLatest, result.Existing)
+			require.True(t, result.Valid)
+			observer.call(t, "migrate", map[string]any{
+				"direction": "down", "target_version": -1,
+			}, &result)
+			require.Empty(t, result.Existing)
+		}
+	}
 	var result migrationResult
 	goAdapter.call(t, "migrate", map[string]any{}, &result)
-	require.Equal(t, expected, result.Applied)
-	require.Equal(t, expected, result.Existing)
-	require.True(t, result.Valid)
-	candidateAdapter.call(t, "migrate", map[string]any{}, &result)
-	require.Empty(t, result.Applied)
-	require.Equal(t, expected, result.Existing)
-	require.True(t, result.Valid)
-	candidateAdapter.call(t, "migrate", map[string]any{
-		"direction": "down", "target_version": -1,
-	}, &result)
-	require.Empty(t, result.Existing)
-	goAdapter.call(t, "migrate", map[string]any{}, &result)
-	require.Equal(t, expected, result.Applied)
-	require.Equal(t, expected, result.Existing)
+	require.Equal(t, expectedLatest, result.Applied)
+	require.Equal(t, expectedLatest, result.Existing)
 	require.True(t, result.Valid)
 }
 
@@ -1805,6 +1852,80 @@ func verifyDifferentialCRUD(t *testing.T, goAdapter, candidateAdapter *adapter, 
 		pair.writer.call(t, "queue_list", map[string]any{}, &writerQueues)
 		require.Equal(t, writerQueues, readerQueues)
 	}
+}
+
+func verifyUnsafeInt64JobIDs(t *testing.T, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
+
+	const firstUnsafeID int64 = 9_007_199_254_740_993
+	type jobPage struct {
+		Cursor *string         `json:"cursor"`
+		Jobs   []normalizedJob `json:"jobs"`
+	}
+	for pairIndex, pair := range []struct {
+		reader *adapter
+		writer *adapter
+	}{
+		{reader: candidateAdapter, writer: goAdapter},
+		{reader: goAdapter, writer: candidateAdapter},
+	} {
+		pair.writer.call(t, "reset", map[string]any{}, nil)
+		ids := []int64{
+			firstUnsafeID + int64(pairIndex*10),
+			firstUnsafeID + int64(pairIndex*10) + 1,
+		}
+		for _, id := range ids {
+			var inserted struct {
+				ID int64 `json:"id"`
+			}
+			pair.writer.call(t, "raw_insert_exact_json", map[string]any{"id": id}, &inserted)
+			require.Equal(t, id, inserted.ID)
+
+			var observed normalizedJob
+			pair.reader.call(t, "get", map[string]any{"id": id}, &observed)
+			require.Equal(t, id, observed.ID)
+		}
+
+		listParams := func(after *string) map[string]any {
+			params := map[string]any{
+				"direction": "asc",
+				"ids":       ids,
+				"limit":     1,
+				"order_by":  "id",
+			}
+			if after != nil {
+				params["after"] = *after
+			}
+			return params
+		}
+		var readerFirst, writerFirst jobPage
+		pair.reader.call(t, "list", listParams(nil), &readerFirst)
+		pair.writer.call(t, "list", listParams(nil), &writerFirst)
+		require.Equal(t, writerFirst, readerFirst)
+		require.Equal(t, []int64{ids[0]}, normalizedJobIDs(writerFirst.Jobs))
+		require.NotNil(t, writerFirst.Cursor)
+
+		var readerSecond, writerSecond jobPage
+		pair.reader.call(t, "list", listParams(writerFirst.Cursor), &readerSecond)
+		pair.writer.call(t, "list", listParams(readerFirst.Cursor), &writerSecond)
+		require.Equal(t, writerSecond, readerSecond)
+		require.Equal(t, []int64{ids[1]}, normalizedJobIDs(writerSecond.Jobs))
+
+		var cancelled, observed normalizedJob
+		pair.reader.call(t, "cancel", map[string]any{"id": ids[0]}, &cancelled)
+		pair.writer.call(t, "get", map[string]any{"id": ids[0]}, &observed)
+		require.Equal(t, cancelled, observed)
+		require.Equal(t, ids[0], cancelled.ID)
+		require.Equal(t, "cancelled", cancelled.State)
+	}
+}
+
+func normalizedJobIDs(jobs []normalizedJob) []int64 {
+	ids := make([]int64, len(jobs))
+	for index, job := range jobs {
+		ids[index] = job.ID
+	}
+	return ids
 }
 
 func verifyJobRowRoundTrip(t *testing.T, goAdapter, candidateAdapter *adapter) {

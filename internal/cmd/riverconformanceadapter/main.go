@@ -1423,14 +1423,21 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		return normalizeJob(job), nil
 
 	case "raw_insert_exact_json":
+		var params struct {
+			ID *int64 `json:"id"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
 		var id int64
 		err := s.pool.QueryRow(ctx, `
-			INSERT INTO river_job (args, kind, max_attempts, metadata)
+			INSERT INTO river_job (id, args, kind, max_attempts, metadata)
 			VALUES (
+				COALESCE($1, nextval(pg_get_serial_sequence('river_job', 'id'))),
 				'{"decimal":0.12345678901234567890123456789,"integer":9223372036854775807}'::jsonb,
 				'conformance_exact_json', 25,
 				'{"negative":-9223372036854775808}'::jsonb
-			) RETURNING id`).Scan(&id)
+			) RETURNING id`, params.ID).Scan(&id)
 		return map[string]any{"id": id}, err
 
 	case "raw_insert_full_row":
@@ -2147,14 +2154,21 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		return normalizeJob(job), nil
 
 	case "raw_insert_exact_json":
+		var params struct {
+			ID *int64 `json:"id"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
 		var id int64
 		err := s.pool.QueryRowContext(ctx, `
-			INSERT INTO river_job (args, kind, max_attempts, metadata)
+			INSERT INTO river_job (id, args, kind, max_attempts, metadata)
 			VALUES (
+				?,
 				jsonb('{"decimal":0.12345678901234567890123456789,"integer":9223372036854775807}'),
 				'conformance_exact_json', 25,
 				jsonb('{"negative":-9223372036854775808}')
-			) RETURNING id`).Scan(&id)
+			) RETURNING id`, params.ID).Scan(&id)
 		return map[string]any{"id": id}, err
 
 	case "get": //nolint:usestdlibvars // JSON-RPC method names are lowercase protocol values.
