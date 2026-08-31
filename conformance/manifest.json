@@ -27,17 +27,26 @@
     "unique_jobs": "complete",
     "work": "complete"
   },
-  "go": {
-    "module": "github.com/riverqueue/river",
-    "version": "0.46.0"
+  "implementations": {
+    "go": {
+      "package": "github.com/riverqueue/river",
+      "registry": "go",
+      "version": "0.46.0"
+    },
+    "javascript": {
+      "package": "riverqueue",
+      "registry": "npm",
+      "version": "0.46.0-alpha.1"
+    },
+    "rust": {
+      "package": "riverqueue",
+      "registry": "crates.io",
+      "version": "0.46.0-alpha.1"
+    }
   },
   "migration": {
     "latest": 7,
     "line": "main"
   },
-  "protocol_revision": 1,
-  "rust": {
-    "crate": "riverqueue",
-    "version": "0.46.0-alpha.1"
-  }
+  "protocol_revision": 1
 }

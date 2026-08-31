@@ -37,6 +37,14 @@ type allArgs struct {
 
 func (allArgs) Kind() string { return "conformance_all_args" }
 
+type mapOrderArgs struct{}
+
+func (mapOrderArgs) Kind() string { return "conformance_all_args" }
+
+func (mapOrderArgs) MarshalJSON() ([]byte, error) { //nolint:unparam // json.Marshaler requires an error result.
+	return []byte(`{"2":2,"10":10,"zero":-0,"😀":1,"":2}`), nil
+}
+
 type numericBoundaryArgs struct {
 	Exponent        float64 `json:"exponent"`
 	Fraction        float64 `json:"fraction"`
@@ -159,6 +167,13 @@ func main() {
 				Zeta:    "quoted \\\"value\\\" and \\\\ slash",
 			},
 			name:  "all_args_sorted_and_escaped",
+			now:   now,
+			opts:  dbunique.UniqueOpts{ByArgs: true},
+			queue: "default",
+		},
+		{
+			args:  mapOrderArgs{},
+			name:  "map_order_and_negative_zero",
 			now:   now,
 			opts:  dbunique.UniqueOpts{ByArgs: true},
 			queue: "default",

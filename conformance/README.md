@@ -4,8 +4,9 @@ This directory describes the database protocol shared by River implementations.
 It complements language-specific unit tests; it does not make the internal Go
 `riverdriver` interface public.
 
-`manifest.json` declares the matched implementation versions and enumerates
-protocol capabilities. `schema/protocol.schema.json` validates that manifest.
+`manifest.json` declares matched implementation versions in an extensible map
+of package identities and registries, and enumerates protocol capabilities.
+`schema/protocol.schema.json` validates that manifest.
 `feature-matrix.md` records the backend scope decision for each area.
 Canonical migration hashes, codec goldens, declarative scenarios, and the
 process-adapter contract live alongside them.
@@ -63,7 +64,10 @@ Direct three-engine tiers start Go, Rust, and JavaScript simultaneously against
 one PostgreSQL database. Supply JavaScript as the ordinary candidate; Rust is
 the default peer descriptor. The smoke tier deterministically fills one blocked
 worker slot in every engine, forces leadership through all three runtimes,
-terminates each engine's database connections, and checks recovery and
+terminates each engine's database connections, directly exercises JavaScript
+to Rust and Rust to JavaScript notification/work/cancellation, kills each of
+those worker processes in turn, and verifies that the other engine assumes
+leadership and rescues the abandoned attempt. It also checks recovery and
 connection bounds:
 
 ```sh

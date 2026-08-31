@@ -27,11 +27,14 @@ func TestCompatibilityArtifacts(t *testing.T) {
 	t.Run("CapabilitiesComplete", func(t *testing.T) {
 		t.Parallel()
 
+		type implementation struct {
+			Package  string `json:"package"`
+			Registry string `json:"registry"`
+			Version  string `json:"version"`
+		}
 		var manifest struct {
-			Capabilities map[string]string `json:"capabilities"`
-			Rust         struct {
-				Version string `json:"version"`
-			} `json:"rust"`
+			Capabilities    map[string]string         `json:"capabilities"`
+			Implementations map[string]implementation `json:"implementations"`
 		}
 		readJSON(t, "conformance/manifest.json", &manifest)
 		require.NotEmpty(t, manifest.Capabilities)
@@ -39,9 +42,20 @@ func TestCompatibilityArtifacts(t *testing.T) {
 			require.Equal(t, "complete", status, "capability %s", capability)
 		}
 
+		implementationNames := make([]string, 0, len(manifest.Implementations))
+		for name, implementation := range manifest.Implementations {
+			implementationNames = append(implementationNames, name)
+			require.NotEmpty(t, implementation.Package, "implementation %s package", name)
+			require.NotEmpty(t, implementation.Registry, "implementation %s registry", name)
+			require.NotEmpty(t, implementation.Version, "implementation %s version", name)
+		}
+		slices.Sort(implementationNames)
+		require.Equal(t, []string{"go", "javascript", "rust"}, implementationNames)
+
 		cargoManifest, err := os.ReadFile(filepath.Join(root, "rust/Cargo.toml"))
 		require.NoError(t, err)
-		require.Contains(t, string(cargoManifest), "version = \""+manifest.Rust.Version+"\"")
+		require.Contains(t, string(cargoManifest),
+			"version = \""+manifest.Implementations["rust"].Version+"\"")
 	})
 
 	t.Run("AdapterContractComplete", func(t *testing.T) {
@@ -152,12 +166,12 @@ func TestCompatibilityArtifacts(t *testing.T) {
 		require.NotEmpty(t, descriptor.RestartCommand)
 
 		var manifest struct {
-			Rust struct {
+			Implementations map[string]struct {
 				Version string `json:"version"`
-			} `json:"rust"`
+			} `json:"implementations"`
 		}
 		readJSON(t, "conformance/manifest.json", &manifest)
-		require.Equal(t, manifest.Rust.Version, descriptor.Version)
+		require.Equal(t, manifest.Implementations[descriptor.Implementation].Version, descriptor.Version)
 	})
 
 	t.Run("MigrationInventoryComplete", func(t *testing.T) {
