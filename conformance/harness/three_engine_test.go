@@ -304,7 +304,7 @@ func TestThreeEnginePerformanceGate(t *testing.T) {
 		}
 		referenceThroughput := min(metrics[0].throughput, metrics[2].throughput)
 		referenceP95 := max(metrics[0].p95, metrics[2].p95)
-		gate := benchmarkGateForMode(mode)
+		gate := benchmarkGateForMode(mode, candidateSpec.Implementation)
 		t.Logf("%s: Go %.1f jobs/s p95=%s; %s %.1f jobs/s p95=%s; %s %.1f jobs/s p95=%s",
 			mode, metrics[0].throughput, metrics[0].p95,
 			candidateSpec.Implementation, metrics[1].throughput, metrics[1].p95,

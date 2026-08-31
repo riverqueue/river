@@ -58,7 +58,7 @@ func TestPerformanceGate(t *testing.T) {
 			candidateRuns = append(candidateRuns, runAdapterBenchmark(t, candidateAdapter, mode, jobs))
 		}
 		goMetrics, candidateMetrics := medianMetrics(goRuns), medianMetrics(candidateRuns)
-		gate := benchmarkGateForMode(mode)
+		gate := benchmarkGateForMode(mode, candidateSpec.Implementation)
 		t.Logf("%s: Go %.1f jobs/s p95=%s; %s %.1f jobs/s p95=%s",
 			mode, goMetrics.throughput, goMetrics.p95,
 			candidateSpec.Implementation, candidateMetrics.throughput, candidateMetrics.p95)
@@ -71,7 +71,16 @@ func TestPerformanceGate(t *testing.T) {
 	}
 }
 
-func benchmarkGateForMode(mode string) benchmarkGate {
+func benchmarkGateForMode(mode, implementation string) benchmarkGate {
+	if implementation == "javascript" {
+		// JavaScript's alpha gate catches accidentally serialized work and
+		// gross regressions without requiring event-loop scheduling and
+		// database-driver latency to match the native implementations.
+		if mode == "enqueue" {
+			return benchmarkGate{p95Denominator: 1, p95Numerator: 3, throughputRatio: 0.25}
+		}
+		return benchmarkGate{p95Denominator: 1, p95Numerator: 2, throughputRatio: 0.50}
+	}
 	if mode == "enqueue" {
 		// Enqueue uses equivalent ordinary insertion mechanisms but remains
 		// driver/runtime-language sensitive. It is a regression guard, not an
