@@ -23,8 +23,14 @@ type DriverProcurer interface {
 	QueryRow(ctx context.Context, sql string, args ...any) riverdriver.Row
 }
 
+// DriverProcurerPgxV5 optionally initializes a custom procurer with a pgx/v5 pool.
 type DriverProcurerPgxV5 interface {
 	InitPgxV5(pool *pgxpool.Pool)
+}
+
+// DriverProcurerSQLite optionally initializes a custom procurer with a SQLite pool.
+type DriverProcurerSQLite interface {
+	InitSQLite(pool *sql.DB)
 }
 
 // BenchmarkerInterface is an interface to a Benchmarker. Its reason for

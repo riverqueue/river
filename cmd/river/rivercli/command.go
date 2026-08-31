@@ -101,7 +101,12 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 				}
 				defer dbPool.Close()
 
-				driverProcurer = &sqliteDriverProcurer{dbPool: dbPool}
+				driverProcurerSQLite, isSQLiteProcurer := driverProcurer.(DriverProcurerSQLite)
+				if driverProcurer != nil && isSQLiteProcurer {
+					driverProcurerSQLite.InitSQLite(dbPool)
+				} else {
+					driverProcurer = &sqliteDriverProcurer{dbPool: dbPool}
+				}
 
 			default:
 				return false, fmt.Errorf("unsupported database URL (`%s`); try one with a `postgres://`, `postgresql://`, or `sqlite://` scheme/prefix", *bundle.DatabaseURL)
