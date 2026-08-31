@@ -1,11 +1,14 @@
 package harness_test
 
 const (
-	scenarioOwnerMixed         = "TestMixedConformance"
-	scenarioOwnerPerformance   = "TestPerformanceGate"
-	scenarioOwnerSQLiteRuntime = "TestMixedSQLiteRuntimeConformance"
-	scenarioOwnerSQLiteStorage = "TestMixedSQLiteConformance"
-	scenarioOwnerSoak          = "TestMixedSoak"
+	scenarioOwnerMixed                  = "TestMixedConformance"
+	scenarioOwnerPerformance            = "TestPerformanceGate"
+	scenarioOwnerSQLiteRuntime          = "TestMixedSQLiteRuntimeConformance"
+	scenarioOwnerSQLiteStorage          = "TestMixedSQLiteConformance"
+	scenarioOwnerSoak                   = "TestMixedSoak"
+	scenarioOwnerThreeEngine            = "TestThreeEngineConformance"
+	scenarioOwnerThreeEnginePerformance = "TestThreeEnginePerformanceGate"
+	scenarioOwnerThreeEngineSoak        = "TestThreeEngineSoak"
 )
 
 type scenarioBinding struct {
@@ -66,6 +69,12 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"single_implementation_worker_outcomes":             {owner: scenarioOwnerMixed, tier: "runtime"},
 	"snooze_once_metadata_transition":                   {owner: scenarioOwnerMixed, tier: "runtime"},
 	"timeout_cancellation":                              {owner: scenarioOwnerMixed, tier: "runtime"},
+	"three_engine_competition":                          {owner: scenarioOwnerThreeEngine, tier: "mixed"},
+	"three_engine_fault_recovery":                       {owner: scenarioOwnerThreeEngine, tier: "chaos"},
+	"three_engine_leader_failover":                      {owner: scenarioOwnerThreeEngine, tier: "mixed"},
+	"three_engine_release_performance":                  {owner: scenarioOwnerThreeEnginePerformance, tier: "performance"},
+	"three_engine_resource_bound":                       {owner: scenarioOwnerThreeEngine, tier: "performance"},
+	"three_engine_soak":                                 {owner: scenarioOwnerThreeEngineSoak, tier: "performance"},
 	"transaction_abort_rollback_visibility":             {owner: scenarioOwnerMixed, tier: "storage"},
 	"transaction_commit_visibility":                     {owner: scenarioOwnerMixed, tier: "storage"},
 	"transaction_rollback_visibility":                   {owner: scenarioOwnerMixed, tier: "storage"},
