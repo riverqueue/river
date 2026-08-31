@@ -9,6 +9,7 @@
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteMigrations" }], "name": "sqlite_migration_cross_language", "tier": "storage" },
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "TestMixedSQLiteConformance" }], "name": "sqlite_profile_handshake", "tier": "codec" },
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteTimestampEncoding" }], "name": "sqlite_timestamp_rounding_ordering", "tier": "codec" },
-    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteTransactions" }], "name": "sqlite_transactions", "tier": "storage" }
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteTransactions" }], "name": "sqlite_transactions", "tier": "storage" },
+    { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifyUnsafeInt64JobIDs" }], "name": "sqlite_unsafe_int64_job_ids_rpc_list_cursors", "tier": "codec" }
   ]
 }

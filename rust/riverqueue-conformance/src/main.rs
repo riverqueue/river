@@ -1423,13 +1423,15 @@ impl Adapter {
             }
             "raw_insert_exact_json" => {
                 let id = sqlx::query_scalar::<_, i64>(
-                    r#"INSERT INTO river_job (args, kind, max_attempts, metadata)
+                    r#"INSERT INTO river_job (id, args, kind, max_attempts, metadata)
                        VALUES (
+                           COALESCE($1, nextval(pg_get_serial_sequence('river_job', 'id'))),
                            '{"decimal":0.12345678901234567890123456789,"integer":9223372036854775807}'::jsonb,
                            'conformance_exact_json', 25,
                            '{"negative":-9223372036854775808}'::jsonb
                        ) RETURNING id"#,
                 )
+				.bind(optional_i64(&params, "id"))
                 .fetch_one(&self.pool)
                 .await?;
                 Ok(json!({"id": id}))
@@ -2070,13 +2072,15 @@ impl SqliteAdapter {
             }
             "raw_insert_exact_json" => {
                 let id = sqlx::query_scalar::<_, i64>(
-                    r#"INSERT INTO river_job (args, kind, max_attempts, metadata)
+                    r#"INSERT INTO river_job (id, args, kind, max_attempts, metadata)
                        VALUES (
+                           ?1,
                            jsonb('{"decimal":0.12345678901234567890123456789,"integer":9223372036854775807}'),
                            'conformance_exact_json', 25,
                            jsonb('{"negative":-9223372036854775808}')
                        ) RETURNING id"#,
                 )
+				.bind(optional_i64(&params, "id"))
                 .fetch_one(&self.pool)
                 .await?;
                 Ok(json!({"id": id}))
