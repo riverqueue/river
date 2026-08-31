@@ -59,6 +59,34 @@ RIVER_CONFORMANCE_DATABASE_URL=postgres://localhost/river_conformance \
 RIVER_CONFORMANCE_SOAK_DURATION=10m make test/conformance/soak
 ```
 
+Direct three-engine tiers start Go, Rust, and JavaScript simultaneously against
+one PostgreSQL database. Supply JavaScript as the ordinary candidate; Rust is
+the default peer descriptor. The smoke tier deterministically fills one blocked
+worker slot in every engine, forces leadership through all three runtimes,
+terminates each engine's database connections, and checks recovery and
+connection bounds:
+
+```sh
+RIVER_CONFORMANCE_DATABASE_URL=postgres://localhost/river_conformance \
+RIVER_CONFORMANCE_CANDIDATE='{...javascript descriptor...}' \
+  make test/conformance/three-engine
+
+RIVER_CONFORMANCE_DATABASE_URL=postgres://localhost/river_conformance \
+RIVER_CONFORMANCE_CANDIDATE='{...javascript descriptor...}' \
+RIVER_CONFORMANCE_THREE_ENGINE_PERFORMANCE=1 \
+  make test/conformance/three-engine/performance
+
+RIVER_CONFORMANCE_DATABASE_URL=postgres://localhost/river_conformance \
+RIVER_CONFORMANCE_CANDIDATE='{...javascript descriptor...}' \
+RIVER_CONFORMANCE_THREE_ENGINE_SOAK_DURATION=10m \
+  make test/conformance/three-engine/soak
+```
+
+`RIVER_CONFORMANCE_PEER` and `RIVER_CONFORMANCE_PEER_FILE` can replace the
+default Rust peer with another descriptor. The tier still requires exactly one
+Go, Rust, and JavaScript implementation so it cannot accidentally degrade into
+a duplicated pairwise test.
+
 The worker and mixed release benchmarks use the same deterministic 10 ms
 timed worker in both languages. Mixed mode provisions enough worker slots to
 keep p95 focused on insertion-to-execution latency rather than incidental
