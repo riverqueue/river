@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"database/sql"
 	"fmt"
 	"maps"
 	"net/url"
@@ -28,6 +29,7 @@ type DriverProcurerStub struct {
 	getBenchmarkerStub func(config *riverbench.Config) BenchmarkerInterface
 	getMigratorStub    func(config *rivermigrate.Config) (MigratorInterface, error)
 	initPgxV5Stub      func(pool *pgxpool.Pool)
+	initSQLiteStub     func(pool *sql.DB)
 	queryRowStub       func(ctx context.Context, sql string, args ...any) riverdriver.Row
 }
 
@@ -53,6 +55,14 @@ func (p *DriverProcurerStub) InitPgxV5(pool *pgxpool.Pool) {
 	}
 
 	p.initPgxV5Stub(pool)
+}
+
+func (p *DriverProcurerStub) InitSQLite(pool *sql.DB) {
+	if p.initSQLiteStub == nil {
+		panic("InitSQLite is not stubbed")
+	}
+
+	p.initSQLiteStub(pool)
 }
 
 func (p *DriverProcurerStub) QueryRow(ctx context.Context, sql string, args ...any) riverdriver.Row {
@@ -440,6 +450,52 @@ func TestBaseCommandSetDriverProcurerPgxV5(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 
 	require.True(t, calledStub)
+
+	require.Equal(t, strings.TrimSpace(`
+-- River main migration 001 [up]
+SELECT 'up 1' FROM river_table
+		`), strings.TrimSpace(out.String()))
+}
+
+func TestBaseCommandSetDriverProcurerSQLite(t *testing.T) {
+	t.Parallel()
+
+	getMigratorCalled := false
+	initSQLiteCalled := false
+
+	migratorStub := &MigratorStub{}
+	migratorStub.allVersionsStub = func() []rivermigrate.Migration { return []rivermigrate.Migration{testMigration01} }
+	migratorStub.getVersionStub = func(version int) (rivermigrate.Migration, error) {
+		if version == 1 {
+			return testMigration01, nil
+		}
+
+		return rivermigrate.Migration{}, fmt.Errorf("unknown version: %d", version)
+	}
+	migratorStub.existingVersionsStub = func(ctx context.Context) ([]rivermigrate.Migration, error) { return nil, nil }
+
+	cli := NewCLI(&Config{
+		DriverProcurer: &DriverProcurerStub{
+			getMigratorStub: func(config *rivermigrate.Config) (MigratorInterface, error) {
+				getMigratorCalled = true
+				return migratorStub, nil
+			},
+			initSQLiteStub: func(pool *sql.DB) {
+				initSQLiteCalled = true
+			},
+		},
+		Name: "River",
+	})
+
+	var out bytes.Buffer
+	cli.SetOut(&out)
+
+	cmd := cli.BaseCommandSet()
+	cmd.SetArgs([]string{"migrate-get", "--up", "--version", "1", "--database-url", "sqlite://"})
+	require.NoError(t, cmd.Execute())
+
+	require.True(t, getMigratorCalled)
+	require.True(t, initSQLiteCalled)
 
 	require.Equal(t, strings.TrimSpace(`
 -- River main migration 001 [up]
