@@ -45,8 +45,12 @@ func TestThreeEngineConformance(t *testing.T) {
 	}
 	clientIDs := []string{threeEngineGoID, threeEngineCandidateID, threeEnginePeerID}
 	adapterByClientID := map[string]*adapter{}
+	adapterByImplementation := map[string]*adapter{}
+	specByImplementation := map[string]adapterSpec{}
 	for index, current := range adapters {
 		adapterByClientID[clientIDs[index]] = current
+		adapterByImplementation[specs[index].Implementation] = current
+		specByImplementation[specs[index].Implementation] = specs[index]
 		var handshake adapterHandshake
 		current.call(t, "handshake", map[string]any{}, &handshake)
 		require.Equal(t, specs[index].Implementation, handshake.Implementation)
@@ -128,14 +132,136 @@ func TestThreeEngineConformance(t *testing.T) {
 	for _, current := range adapters {
 		current.call(t, "stop", map[string]any{}, nil)
 	}
+	verifyThreeEngineDirectedJavaScriptRust(t, goAdapter, adapterByImplementation)
+	verifyThreeEngineProcessKillRescueFailover(t, root, databaseURL, goAdapter, specByImplementation)
 
 	scenarios := newScenarioTracker(t, scenarioOwnerThreeEngine)
 	scenarios.pass(
 		"three_engine_competition",
+		"three_engine_cross_engine_process_kill_rescue_failover",
+		"three_engine_directed_javascript_rust_work_notification_cancellation",
 		"three_engine_fault_recovery",
 		"three_engine_leader_failover",
 		"three_engine_resource_bound",
 	)
+}
+
+func verifyThreeEngineDirectedJavaScriptRust(
+	t *testing.T,
+	goAdapter *adapter,
+	adapterByImplementation map[string]*adapter,
+) {
+	t.Helper()
+
+	for _, direction := range []struct {
+		controller string
+		worker     string
+	}{
+		{controller: "javascript", worker: "rust"},
+		{controller: "rust", worker: "javascript"},
+	} {
+		controller := adapterByImplementation[direction.controller]
+		worker := adapterByImplementation[direction.worker]
+		require.NotNil(t, controller)
+		require.NotNil(t, worker)
+		goAdapter.call(t, "reset", map[string]any{}, nil)
+		workerID := direction.worker + "-directed-worker"
+		worker.call(t, "start", map[string]any{
+			"client_id": workerID, "fetch_poll_interval_ms": 60_000, "max_workers": 1,
+		}, nil)
+		waitForListener(t, worker)
+
+		startedAt := time.Now()
+		var worked normalizedJob
+		controller.call(t, "insert", map[string]any{
+			"message": direction.controller + " notification to " + direction.worker,
+		}, &worked)
+		goAdapter.call(t, "wait", map[string]any{"id": worked.ID}, &worked)
+		require.Equal(t, "completed", worked.State)
+		require.Equal(t, []string{workerID}, worked.AttemptedBy)
+		require.Less(t, time.Since(startedAt), 5*time.Second,
+			"%s did not wake %s through the cross-engine notification path",
+			direction.controller, direction.worker)
+
+		var cancelled normalizedJob
+		controller.call(t, "insert", map[string]any{
+			"behavior": "cooperative_cancel",
+			"message":  direction.controller + " cancellation to " + direction.worker,
+		}, &cancelled)
+		goAdapter.call(t, "wait", map[string]any{
+			"id": cancelled.ID, "states": []string{"running"},
+		}, &cancelled)
+		require.Equal(t, []string{workerID}, cancelled.AttemptedBy)
+		controller.call(t, "cancel", map[string]any{"id": cancelled.ID}, &cancelled)
+		goAdapter.call(t, "wait", map[string]any{"id": cancelled.ID}, &cancelled)
+		require.Equal(t, "cancelled", cancelled.State)
+		require.Len(t, cancelled.Errors, 1)
+		require.Equal(t, "JobCancelError: job cancelled remotely", cancelled.Errors[0].Error)
+
+		worker.call(t, "stop", map[string]any{}, nil)
+	}
+}
+
+func verifyThreeEngineProcessKillRescueFailover(
+	t *testing.T,
+	root string,
+	databaseURL string,
+	goAdapter *adapter,
+	specByImplementation map[string]adapterSpec,
+) {
+	t.Helper()
+
+	for _, direction := range []struct {
+		crashing string
+		recovery string
+	}{
+		{crashing: "javascript", recovery: "rust"},
+		{crashing: "rust", recovery: "javascript"},
+	} {
+		crashingSpec, ok := specByImplementation[direction.crashing]
+		require.True(t, ok)
+		recoverySpec, ok := specByImplementation[direction.recovery]
+		require.True(t, ok)
+		goAdapter.call(t, "reset", map[string]any{}, nil)
+
+		queue := "three_engine_crash_" + direction.crashing
+		crashingID := direction.crashing + "-process-kill"
+		crashing := startAdapterCommand(t, root, databaseURL,
+			direction.crashing+"-process-kill", crashingSpec.RestartCommand)
+		crashing.call(t, "start", map[string]any{
+			"client_id": crashingID, "elect_interval_ms": 20, "max_workers": 1,
+			"queue": queue,
+		}, nil)
+		require.Equal(t, crashingID, waitForLeader(t, goAdapter, ""))
+
+		var job normalizedJob
+		goAdapter.call(t, "insert", map[string]any{
+			"behavior": "sleep", "duration_ms": 1_000,
+			"message": "process-kill rescue from " + direction.crashing + " to " + direction.recovery,
+			"opts":    map[string]any{"queue": queue},
+		}, &job)
+		goAdapter.call(t, "wait", map[string]any{
+			"id": job.ID, "states": []string{"running"},
+		}, &job)
+		require.Equal(t, []string{crashingID}, job.AttemptedBy)
+		crashing.kill(t)
+		goAdapter.call(t, "fault_expire_leader", map[string]any{}, nil)
+
+		recoveryID := direction.recovery + "-process-recovery"
+		recovery := startAdapterCommand(t, root, databaseURL,
+			direction.recovery+"-process-recovery", recoverySpec.RestartCommand)
+		recovery.call(t, "start", map[string]any{
+			"client_id": recoveryID, "elect_interval_ms": 20, "job_timeout_ms": 5_000,
+			"max_workers": 1, "queue": queue, "rescue_after_ms": 250,
+			"rescuer_interval_ms": 20, "scheduler_interval_ms": 20,
+		}, nil)
+		require.Equal(t, recoveryID, waitForLeader(t, goAdapter, crashingID))
+		goAdapter.call(t, "wait", map[string]any{"id": job.ID}, &job)
+		require.Equal(t, "completed", job.State)
+		require.Equal(t, 2, job.Attempt)
+		require.Equal(t, []string{crashingID, recoveryID}, job.AttemptedBy)
+		recovery.call(t, "stop", map[string]any{}, nil)
+	}
 }
 
 func TestThreeEnginePerformanceGate(t *testing.T) {

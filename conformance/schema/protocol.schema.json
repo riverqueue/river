@@ -9,13 +9,23 @@
       },
       "type": "object"
     },
-    "go": {
-      "additionalProperties": false,
-      "properties": {
-        "module": { "type": "string" },
-        "version": { "type": "string" }
+    "implementations": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "package": { "minLength": 1, "type": "string" },
+          "registry": {
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9._-]*$",
+            "type": "string"
+          },
+          "version": { "minLength": 1, "type": "string" }
+        },
+        "required": ["package", "registry", "version"],
+        "type": "object"
       },
-      "required": ["module", "version"],
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_-]*$" },
       "type": "object"
     },
     "migration": {
@@ -27,18 +37,9 @@
       "required": ["latest", "line"],
       "type": "object"
     },
-    "protocol_revision": { "minimum": 1, "type": "integer" },
-    "rust": {
-      "additionalProperties": false,
-      "properties": {
-        "crate": { "type": "string" },
-        "version": { "type": "string" }
-      },
-      "required": ["crate", "version"],
-      "type": "object"
-    }
+    "protocol_revision": { "minimum": 1, "type": "integer" }
   },
-  "required": ["capabilities", "go", "migration", "protocol_revision", "rust"],
+  "required": ["capabilities", "implementations", "migration", "protocol_revision"],
   "title": "River protocol compatibility manifest",
   "type": "object"
 }
