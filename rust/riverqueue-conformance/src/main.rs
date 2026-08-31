@@ -903,8 +903,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or("postgres")
     {
         "postgres" => {
-            let options = PgConnectOptions::from_str(&database_url)?
-                .application_name("river-conformance-rust");
+            let options =
+                postgres_connect_options(&database_url)?.application_name("river-conformance-rust");
             AdapterBackend::Postgres(Adapter {
                 barriers: Arc::new(BarrierRegistry::default()),
                 clock: None,
@@ -973,6 +973,25 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
+}
+
+fn postgres_connect_options(database_url: &str) -> Result<PgConnectOptions, sqlx::Error> {
+    let mut options = PgConnectOptions::from_str(database_url)?;
+    if !database_url_has_userinfo(database_url)
+        && let Some(username) = ["PGUSER", "USER", "LOGNAME"]
+            .into_iter()
+            .find_map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()))
+    {
+        options = options.username(&username);
+    }
+    Ok(options)
+}
+
+fn database_url_has_userinfo(database_url: &str) -> bool {
+    database_url
+        .split_once("://")
+        .and_then(|(_, remainder)| remainder.split('/').next())
+        .is_some_and(|authority| authority.contains('@'))
 }
 
 impl AdapterBackend {
@@ -3046,6 +3065,19 @@ impl Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_explicit_postgres_userinfo() {
+        assert!(!database_url_has_userinfo(
+            "postgres://localhost/river_conformance"
+        ));
+        assert!(database_url_has_userinfo(
+            "postgres://river@localhost/river_conformance"
+        ));
+        assert!(database_url_has_userinfo(
+            "postgres://river:secret@localhost/river_conformance"
+        ));
+    }
 
     #[test]
     fn request_json_preserves_negative_zero_and_exact_numbers() {
