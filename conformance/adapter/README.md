@@ -31,7 +31,7 @@ repository and setting `RIVER_CONFORMANCE_CANDIDATE_FILE` to its path:
   "command": ["node", "dist/conformance-adapter.js"],
   "implementation": "javascript",
   "restart_command": ["node", "dist/conformance-adapter.js"],
-  "version": "0.46.0-alpha.1"
+  "version": "0.47.0-alpha.1"
 }
 ```
 

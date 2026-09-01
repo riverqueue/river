@@ -31,17 +31,17 @@
     "go": {
       "package": "github.com/riverqueue/river",
       "registry": "go",
-      "version": "0.46.0"
+      "version": "0.47.0"
     },
     "javascript": {
       "package": "riverqueue",
       "registry": "npm",
-      "version": "0.46.0-alpha.1"
+      "version": "0.47.0-alpha.1"
     },
     "rust": {
       "package": "riverqueue",
       "registry": "crates.io",
-      "version": "0.46.0-alpha.1"
+      "version": "0.47.0-alpha.1"
     }
   },
   "migration": {
