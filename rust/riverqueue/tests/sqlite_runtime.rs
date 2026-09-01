@@ -131,6 +131,7 @@ enum CompletionBehavior {
 #[derive(Clone, Copy)]
 enum SelectionBehavior {
     Fail,
+    FailFirst,
     Success,
 }
 
@@ -266,7 +267,10 @@ impl Pilot for SqlitePilot {
         sqlx::query("INSERT INTO pilot_effect (operation, job_id) VALUES ('fetch', 0)")
             .execute(&mut *connection)
             .await?;
-        if matches!(self.fetch, Some(SelectionBehavior::Fail)) {
+        if matches!(self.fetch, Some(SelectionBehavior::Fail))
+            || matches!(self.fetch, Some(SelectionBehavior::FailFirst))
+                && self.fetch_calls.load(Ordering::SeqCst) == 1
+        {
             return Err(std::io::Error::other("fetch interception failed").into());
         }
         let ids = sqlx::query_scalar(
@@ -760,6 +764,95 @@ async fn sqlite_pilot_fetch_error_rolls_back_selection_side_effects() {
     );
 
     let _ = run.shutdown_now().await;
+}
+
+#[tokio::test]
+async fn sqlite_pilot_fetch_transient_error_retries_without_stopping_the_queue() {
+    let pool = setup().await;
+    let worked = Arc::new(Semaphore::new(0));
+    let mut pilot = SqlitePilot::new();
+    pilot.fetch = Some(SelectionBehavior::FailFirst);
+    let client = Client::builder(pool.clone())
+        .id("sqlite-pilot-fetch-retry")
+        .pilot(pilot.clone())
+        .workers(runtime_workers(Arc::clone(&worked)))
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .build()
+        .unwrap();
+    let inserted = client.insert(RuntimeArgs { value: 1 }).await.unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    tokio::time::timeout(Duration::from_secs(5), worked.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while client.job_get(inserted.job.row.id).await.unwrap().state != JobState::Completed {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    run.shutdown().await.unwrap();
+
+    let fetch_calls = pilot.fetch_calls.load(Ordering::SeqCst);
+    let effects: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM pilot_effect WHERE operation = 'fetch'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(fetch_calls >= 2);
+    assert_eq!(usize::try_from(effects).unwrap() + 1, fetch_calls);
+}
+
+#[tokio::test]
+async fn sqlite_queue_start_retries_transient_write_contention() {
+    let (pool, database_path) = setup_file_pool(Duration::from_millis(1)).await;
+    let worked = Arc::new(Semaphore::new(0));
+    let client = Client::builder(pool.clone())
+        .id("sqlite-queue-start-retry")
+        .workers(runtime_workers(Arc::clone(&worked)))
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .build()
+        .unwrap();
+    let inserted = client.insert(RuntimeArgs { value: 1 }).await.unwrap();
+    let writer = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    let release_writer = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        writer.rollback().await.unwrap();
+    });
+
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+    release_writer.await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), worked.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while client.job_get(inserted.job.row.id).await.unwrap().state != JobState::Completed {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    run.shutdown().await.unwrap();
+    pool.close().await;
+    remove_sqlite_files(&database_path);
 }
 
 #[tokio::test]
