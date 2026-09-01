@@ -251,8 +251,8 @@ func verifyThreeEngineProcessKillRescueFailover(
 		recovery := startAdapterCommand(t, root, databaseURL,
 			direction.recovery+"-process-recovery", recoverySpec.RestartCommand)
 		recovery.call(t, "start", map[string]any{
-			"client_id": recoveryID, "elect_interval_ms": 20, "job_timeout_ms": 5_000,
-			"max_workers": 1, "queue": queue, "rescue_after_ms": 250,
+			"client_id": recoveryID, "elect_interval_ms": 20, "job_timeout_ms": 1_500,
+			"max_workers": 1, "queue": queue, "rescue_after_ms": 1_500,
 			"rescuer_interval_ms": 20, "scheduler_interval_ms": 20,
 		}, nil)
 		require.Equal(t, recoveryID, waitForLeader(t, goAdapter, crashingID))

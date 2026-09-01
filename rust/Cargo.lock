@@ -951,7 +951,7 @@ dependencies = [
 
 [[package]]
 name = "riverqueue"
-version = "0.46.0-alpha.1"
+version = "0.47.0-alpha.1"
 dependencies = [
  "async-trait",
  "base64",
@@ -973,7 +973,7 @@ dependencies = [
 
 [[package]]
 name = "riverqueue-conformance"
-version = "0.46.0-alpha.1"
+version = "0.47.0-alpha.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -987,7 +987,7 @@ dependencies = [
 
 [[package]]
 name = "riverqueue-internal"
-version = "0.46.0-alpha.1"
+version = "0.47.0-alpha.1"
 dependencies = [
  "async-trait",
  "serde_json",
@@ -998,7 +998,7 @@ dependencies = [
 
 [[package]]
 name = "riverqueue-macros"
-version = "0.46.0-alpha.1"
+version = "0.47.0-alpha.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1007,7 +1007,7 @@ dependencies = [
 
 [[package]]
 name = "riverqueue-migrate"
-version = "0.46.0-alpha.1"
+version = "0.47.0-alpha.1"
 dependencies = [
  "riverqueue-internal",
  "serde_json",
@@ -1018,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "riverqueue-test"
-version = "0.46.0-alpha.1"
+version = "0.47.0-alpha.1"
 dependencies = [
  "chrono",
  "riverqueue",
