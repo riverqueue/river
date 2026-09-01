@@ -1313,7 +1313,16 @@ impl Adapter {
                 Ok(normalize_queue(&queue))
             }
             "request_resign" => {
-                self.client()?.request_resign().await?;
+                if let Some(handle) = params.get("handle").and_then(Value::as_str) {
+                    let client = self.client()?.clone();
+                    let transaction = self
+                        .transactions
+                        .get_mut(handle)
+                        .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                    client.request_resign_tx(transaction).await?;
+                } else {
+                    self.client()?.request_resign().await?;
+                }
                 Ok(json!({}))
             }
             "leader" => {
@@ -2266,7 +2275,16 @@ impl SqliteAdapter {
                 })
             }
             "request_resign" => {
-                self.client()?.request_resign().await?;
+                if let Some(handle) = params.get("handle").and_then(Value::as_str) {
+                    let client = self.client()?.clone();
+                    let transaction = self
+                        .transactions
+                        .get_mut(handle)
+                        .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                    client.request_resign_tx(transaction).await?;
+                } else {
+                    self.client()?.request_resign().await?;
+                }
                 Ok(json!({}))
             }
             "start" => {
