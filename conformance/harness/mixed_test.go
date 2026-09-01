@@ -250,6 +250,7 @@ func TestMixedConformance(t *testing.T) {
 	verifyConcurrentUniqueConflicts(t, goAdapter, candidateAdapter)
 	scenarios.pass("cross_language_unique_conflict")
 	verifyBatchInsertion(t, goAdapter, candidateAdapter)
+	verifyLargeBatchInsertion(t, goAdapter, candidateAdapter)
 	scenarios.pass(
 		"transactional_batch_insertion",
 		"transactional_fast_batch_insertion",
@@ -378,6 +379,8 @@ func TestMixedConformance(t *testing.T) {
 	goAdapter.call(t, "insert", uniqueParams, &uniqueGo)
 	candidateAdapter.call(t, "insert", uniqueParams, &uniqueCandidate)
 	require.Equal(t, uniqueGo, uniqueCandidate)
+
+	verifyLeadershipRequestLifecycle(t, goAdapter, candidateAdapter)
 
 	goAdapter.call(t, "start", map[string]any{
 		"client_id": "go-mixed-worker", "max_workers": 4,
@@ -943,6 +946,8 @@ func verifySQLiteCrossLanguageWork(t *testing.T, goAdapter, candidateAdapter *ad
 func verifySQLiteLeadershipFailover(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
+	verifyLeadershipRequestLifecycle(t, goAdapter, candidateAdapter)
+
 	goAdapter.call(t, "reset", map[string]any{}, nil)
 	goAdapter.call(t, "start", map[string]any{
 		"client_id": "go-sqlite-leader", "max_workers": 1,
@@ -965,6 +970,42 @@ func verifySQLiteLeadershipFailover(t *testing.T, goAdapter, candidateAdapter *a
 	follower.call(t, "request_resign", map[string]any{}, nil)
 	_ = waitForLeaderTerm(t, follower, term.ElectedAt)
 	follower.call(t, "stop", map[string]any{}, nil)
+}
+
+func verifyLeadershipRequestLifecycle(t *testing.T, first, second *adapter) {
+	t.Helper()
+
+	for _, pair := range []struct {
+		leader    *adapter
+		requester *adapter
+	}{
+		{leader: first, requester: second},
+		{leader: second, requester: first},
+	} {
+		pair.leader.call(t, "reset", map[string]any{}, nil)
+		pair.leader.call(t, "start", map[string]any{
+			"client_id": pair.leader.name + "-resign-lifecycle", "max_workers": 1,
+		}, nil)
+		initial := waitForLeaderTerm(t, pair.leader, "")
+
+		pair.requester.call(t, "request_resign", map[string]any{}, nil)
+		afterDirect := waitForLeaderTerm(t, pair.leader, initial.ElectedAt)
+
+		rollbackHandle := pair.requester.name + "-resign-rollback"
+		pair.requester.call(t, "tx_begin", map[string]any{"handle": rollbackHandle}, nil)
+		pair.requester.call(t, "request_resign", map[string]any{"handle": rollbackHandle}, nil)
+		pair.requester.call(t, "tx_rollback", map[string]any{"handle": rollbackHandle}, nil)
+		time.Sleep(100 * time.Millisecond)
+		require.Equal(t, afterDirect.ElectedAt, readLeader(t, pair.leader).ElectedAt,
+			"rolled-back resignation changed the leadership term")
+
+		commitHandle := pair.requester.name + "-resign-commit"
+		pair.requester.call(t, "tx_begin", map[string]any{"handle": commitHandle}, nil)
+		pair.requester.call(t, "request_resign", map[string]any{"handle": commitHandle}, nil)
+		pair.requester.call(t, "tx_commit", map[string]any{"handle": commitHandle}, nil)
+		_ = waitForLeaderTerm(t, pair.leader, afterDirect.ElectedAt)
+		pair.leader.call(t, "stop", map[string]any{}, nil)
+	}
 }
 
 func verifySQLiteLifecycle(t *testing.T, goAdapter, candidateAdapter *adapter) {
@@ -1511,6 +1552,31 @@ func verifyBatchInsertion(t *testing.T, goAdapter, candidateAdapter *adapter) {
 
 		verifyTransactionalBatchInsertion(t, pair.actor, pair.observer, false)
 		verifyTransactionalBatchInsertion(t, pair.actor, pair.observer, true)
+	}
+}
+
+func verifyLargeBatchInsertion(t *testing.T, adapters ...*adapter) {
+	t.Helper()
+
+	const batchSize = 6_000
+	for _, actor := range adapters {
+		actor.call(t, "reset", map[string]any{}, nil)
+		jobs := make([]map[string]any, batchSize)
+		for index := range jobs {
+			jobs[index] = map[string]any{
+				"message": fmt.Sprintf("large ordinary batch %s %d", actor.name, index),
+				"opts": map[string]any{
+					"metadata": map[string]any{"batch_index": index},
+				},
+			}
+		}
+		var inserted struct {
+			Results []normalizedInsertResult `json:"results"`
+		}
+		actor.call(t, "insert_many", map[string]any{"jobs": jobs}, &inserted)
+		require.Len(t, inserted.Results, batchSize)
+		require.Equal(t, float64(0), inserted.Results[0].Job.Metadata["batch_index"])
+		require.Equal(t, float64(batchSize-1), inserted.Results[batchSize-1].Job.Metadata["batch_index"])
 	}
 }
 
@@ -2440,6 +2506,22 @@ func verifyCustomSchemas(t *testing.T, goAdapter, candidateAdapter *adapter) {
 			"id": inserted.ID, "schema": testCase.name,
 		}, &observed)
 		require.Equal(t, worked, observed)
+	}
+
+	boundarySchema := strings.Repeat("s", 46)
+	goAdapter.call(t, "migrate", map[string]any{"schema": boundarySchema}, nil)
+	for _, current := range []*adapter{goAdapter, candidateAdapter} {
+		var inserted normalizedJob
+		current.call(t, "insert", map[string]any{
+			"message": "maximum portable schema", "schema": boundarySchema,
+		}, &inserted)
+		require.Positive(t, inserted.ID)
+		require.Contains(t, current.callError(t, "insert", map[string]any{
+			"message": "schema too long", "schema": strings.Repeat("s", 47),
+		}), "46")
+		require.NotEmpty(t, current.callError(t, "insert", map[string]any{
+			"message": "invalid schema", "schema": "river-invalid",
+		}))
 	}
 }
 

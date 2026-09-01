@@ -18,7 +18,7 @@ sqlite = ["riverqueue/sqlite"]
 
 [dependencies]
 chrono.workspace = true
-riverqueue = { path = "../riverqueue", version = "=0.46.0-alpha.1", default-features = false }
+riverqueue = { path = "../riverqueue", version = "=0.47.0-alpha.1", default-features = false }
 serde_json.workspace = true
 tokio-util.workspace = true
 

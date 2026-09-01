@@ -35,7 +35,7 @@ import (
 
 const (
 	adapterVersion        = 12
-	implementationVersion = "0.46.0"
+	implementationVersion = "0.47.0"
 	protocolRevision      = 1
 )
 
@@ -1341,9 +1341,22 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		return normalizeQueue(queue), nil
 
 	case "request_resign":
+		var params struct {
+			Handle string `json:"handle"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
 		client, err := s.client()
 		if err != nil {
 			return nil, err
+		}
+		if params.Handle != "" {
+			tx, ok := s.transactions[params.Handle]
+			if !ok {
+				return nil, fmt.Errorf("transaction %q not found", params.Handle)
+			}
+			return map[string]any{}, client.Notify().RequestResignTx(ctx, tx)
 		}
 		return map[string]any{}, client.Notify().RequestResign(ctx)
 
@@ -2421,6 +2434,19 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		return map[string]any{"elected_at": formatTime(electedAt), "leader_id": leaderID}, err
 
 	case "request_resign":
+		var params struct {
+			Handle string `json:"handle"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.Handle != "" {
+			tx, ok := s.transactions[params.Handle]
+			if !ok {
+				return nil, fmt.Errorf("transaction %q not found", params.Handle)
+			}
+			return map[string]any{}, s.client().Notify().RequestResignTx(ctx, tx)
+		}
 		return map[string]any{}, s.client().Notify().RequestResign(ctx)
 
 	case "start":
