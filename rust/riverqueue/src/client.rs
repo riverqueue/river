@@ -3993,7 +3993,23 @@ async fn run_queue(
     work_cancel: CancellationToken,
     mut notifications: broadcast::Receiver<RuntimeNotification>,
 ) -> Result<(), Error> {
-    let initial_queue = crate::storage::touch_queue(&inner, &queue).await?;
+    const START_RETRY_INTERVAL: Duration = Duration::from_millis(10);
+    const START_TIMEOUT: Duration = Duration::from_secs(10);
+
+    let start_time = tokio::time::Instant::now();
+    let initial_queue = loop {
+        match crate::storage::touch_queue(&inner, &queue).await {
+            Ok(queue_row) => break queue_row,
+            Err(queue_error) if start_time.elapsed() < START_TIMEOUT => {
+                debug!(error = %queue_error, "River queue startup failed; retrying");
+                tokio::select! {
+                    () = fetch_cancel.cancelled() => return Ok(()),
+                    () = tokio::time::sleep(START_RETRY_INTERVAL) => {}
+                }
+            }
+            Err(queue_error) => return Err(queue_error),
+        }
+    };
     let mut paused = initial_queue.paused_at.is_some();
     let permits = Arc::new(Semaphore::new(config.max_workers));
     let mut jobs = JoinSet::new();
@@ -4009,7 +4025,9 @@ async fn run_queue(
         let (mut should_fetch, refresh_queue_state) = tokio::select! {
             () = fetch_cancel.cancelled() => break,
             _ = heartbeat.tick() => {
-                crate::storage::touch_queue(&inner, &queue).await?;
+                if let Err(queue_error) = crate::storage::touch_queue(&inner, &queue).await {
+                    error!(error = %queue_error, "River queue heartbeat failed; retrying");
+                }
                 (false, false)
             },
             _ = queue_config_poll.tick() => (false, true),
@@ -4038,19 +4056,26 @@ async fn run_queue(
             },
         };
 
-        if refresh_queue_state
-            && let Some(queue_row) = crate::storage::load_queue(&inner, &queue).await?
-        {
-            let next_paused = queue_row.paused_at.is_some();
-            if next_paused != paused {
-                paused = next_paused;
-                let event_kind = if paused {
-                    QueueEventKind::Paused
-                } else {
-                    QueueEventKind::Resumed
-                };
-                let _ = inner.events.send(Event::queue(event_kind, queue_row));
-                should_fetch |= !paused;
+        if refresh_queue_state {
+            match crate::storage::load_queue(&inner, &queue).await {
+                Ok(Some(queue_row)) => {
+                    let next_paused = queue_row.paused_at.is_some();
+                    if next_paused != paused {
+                        paused = next_paused;
+                        let event_kind = if paused {
+                            QueueEventKind::Paused
+                        } else {
+                            QueueEventKind::Resumed
+                        };
+                        let _ = inner.events.send(Event::queue(event_kind, queue_row));
+                        should_fetch |= !paused;
+                    }
+                }
+                Ok(None) => {}
+                Err(queue_error) => {
+                    error!(error = %queue_error, "River queue state refresh failed; retrying");
+                    continue;
+                }
             }
         }
 
@@ -4094,10 +4119,25 @@ async fn run_queue(
                     );
                     rows
                 }
-                (Err(fetch_error), Err(_)) => return Err(fetch_error),
+                (Err(fetch_error), Err(second_fetch_error)) => {
+                    last_fetch = tokio::time::Instant::now();
+                    error!(
+                        error = %fetch_error,
+                        secondary_error = %second_fetch_error,
+                        "River job fetch failed; retrying"
+                    );
+                    continue;
+                }
             }
         } else {
-            fetch_jobs(&inner, &queue, available).await?
+            match fetch_jobs(&inner, &queue, available).await {
+                Ok(rows) => rows,
+                Err(fetch_error) => {
+                    last_fetch = tokio::time::Instant::now();
+                    error!(error = %fetch_error, "River job fetch failed; retrying");
+                    continue;
+                }
+            }
         };
         last_fetch = tokio::time::Instant::now();
         for row in rows {
