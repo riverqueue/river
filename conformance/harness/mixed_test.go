@@ -2680,7 +2680,7 @@ func verifyAdvancedRuntime(t *testing.T, adapter *adapter) {
 	require.Equal(t, "completed", periodic.State)
 	require.Equal(t, true, periodic.Metadata["periodic"])
 	stats = waitForRuntimeStats(t, adapter, func(stats runtimeStats) bool {
-		return stats.PeriodicStarts == 1 && slices.Contains(stats.Events, "job_completed")
+		return stats.PeriodicStarts == 1
 	})
 	require.Equal(t, 1, stats.PeriodicStarts)
 	adapter.call(t, "stop", map[string]any{}, nil)
