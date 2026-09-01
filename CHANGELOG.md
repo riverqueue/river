@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+- A `JobCancel()` sent while a client's notifier is disconnected/reconnecting is no longer lost. Previously, the cancellation's `NOTIFY` could commit while nothing was `LISTEN`ing (Postgres `NOTIFY` is fire-and-forget), leaving the running job unaware of the cancellation until `JobRescuer`'s much longer stuck-job sweep. Each client now reconciles its currently running jobs against `cancel_attempted_at` by primary key every time its notifier (re)establishes healthy listening, closing the gap with no added steady-state query load. [PR #1361](https://github.com/riverqueue/river/pull/1361), as discussed in [#1358](https://github.com/riverqueue/river/issues/1358).
+- `JobCancel()` against a job running in the same process is now delivered immediately for clients with no notifier at all, including an explicit `Config.PollOnly` on an otherwise listener-capable driver. Previously, the local delivery path only activated for drivers that can't support `LISTEN`/`NOTIFY` at all, so `PollOnly: true` on the Postgres or SQLite drivers fell all the way back to `JobRescuer`'s stuck-job sweep for a job it could have cancelled synchronously in-process. [PR #1361](https://github.com/riverqueue/river/pull/1361).
 
 ## [0.47.0] - 2026-09-01
 

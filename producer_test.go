@@ -3,8 +3,10 @@ package river
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -51,6 +53,182 @@ func (p *beforeJobGetAvailablePilot) JobGetAvailable(
 	}
 
 	return p.Pilot.JobGetAvailable(ctx, exec, state, params)
+}
+
+// producerTestListenerMock wraps a real riverdriver.Listener so tests can
+// override individual operations. Unlike notifier.ListenerMock (unexported to
+// the internal/notifier package), this lives in package river so it can be
+// used to drive a real *notifier.Notifier from producer-level tests.
+type producerTestListenerMock struct {
+	riverdriver.Listener
+
+	connectFunc             func(ctx context.Context) error
+	waitForNotificationFunc func(ctx context.Context) (*riverdriver.Notification, error)
+}
+
+func newProducerTestListenerMock(listener riverdriver.Listener) *producerTestListenerMock {
+	return &producerTestListenerMock{
+		Listener:                listener,
+		connectFunc:             listener.Connect,
+		waitForNotificationFunc: listener.WaitForNotification,
+	}
+}
+
+func (l *producerTestListenerMock) Connect(ctx context.Context) error { return l.connectFunc(ctx) }
+
+func (l *producerTestListenerMock) WaitForNotification(ctx context.Context) (*riverdriver.Notification, error) {
+	return l.waitForNotificationFunc(ctx)
+}
+
+// TestProducer_JobCancelSurvivesNotifierReconnect is a deterministic repro of
+// https://github.com/riverqueue/river/issues/1358: a `NOTIFY` sent while the
+// notifier is disconnected/reconnecting is lost (Postgres `NOTIFY` is
+// fire-and-forget), so a job cancelled during that window previously ran to
+// completion unaware. It forces exactly one simulated connection loss between
+// the job starting and `JobCancel` being applied, holds the notifier at the
+// start of its reconnect attempt until the cancellation has landed, then lets
+// it finish reconnecting and asserts the job observes the cancellation.
+func TestProducer_JobCancelSurvivesNotifierReconnect(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	var (
+		archetype  = riversharedtest.BaseServiceArchetype(t)
+		dbPool     = riversharedtest.DBPool(ctx, t)
+		driver     = riverpgxv5.New(dbPool)
+		exec       = driver.GetExecutor()
+		jobUpdates = make(chan []jobcompleter.CompleterJobUpdated, 10)
+		schema     = riverdbtest.TestSchema(ctx, t, driver, nil)
+		queueName  = fmt.Sprintf("test-reconnect-cancel-%05d", randutil.IntBetween(1, 100_000))
+		pilot      = &riverpilot.StandardPilot{}
+	)
+
+	completer := jobcompleter.NewInlineCompleter(archetype, schema, exec, pilot, jobUpdates)
+	require.NoError(t, completer.Start(ctx))
+	t.Cleanup(completer.Stop)
+
+	realListener := driver.GetListener(&riverdriver.GetListenenerParams{Schema: schema})
+	mockListener := newProducerTestListenerMock(realListener)
+
+	var (
+		forceDisconnect      atomic.Bool // set by the test to inject one simulated connection loss
+		reconnecting         atomic.Bool // set once that loss has been injected; cleared once Connect is released
+		releaseReconnect     = make(chan struct{})
+		releaseReconnectOnce sync.Once
+	)
+	closeReleaseReconnect := func() { releaseReconnectOnce.Do(func() { close(releaseReconnect) }) }
+	mockListener.waitForNotificationFunc = func(ctx context.Context) (*riverdriver.Notification, error) {
+		if forceDisconnect.CompareAndSwap(true, false) {
+			reconnecting.Store(true)
+			return nil, errors.New("simulated connection loss")
+		}
+		return realListener.WaitForNotification(ctx)
+	}
+	mockListener.connectFunc = func(ctx context.Context) error {
+		if reconnecting.Load() {
+			<-releaseReconnect
+			reconnecting.Store(false)
+		}
+		return realListener.Connect(ctx)
+	}
+
+	notif := notifier.New(archetype, mockListener)
+	require.NoError(t, notif.Start(ctx))
+	t.Cleanup(notif.Stop)
+	// Cleanups run LIFO, so registering this after notif.Stop makes it run
+	// first: an assertion failure anywhere in the test body must not leave
+	// notif.Stop() deadlocked waiting on a mocked Connect call that's
+	// holding the reconnect gate open forever.
+	t.Cleanup(closeReleaseReconnect)
+
+	jobStarted := make(chan int64, 1)
+	workers := NewWorkers()
+
+	type JobArgs struct {
+		testutil.JobArgsReflectKind[JobArgs]
+	}
+
+	AddWorker(workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+		jobStarted <- job.ID
+		<-ctx.Done()
+		return ctx.Err()
+	}))
+
+	prod := newProducer(archetype, exec, pilot, &producerConfig{
+		ClientID:                     testClientID,
+		Completer:                    completer,
+		ErrorHandler:                 newTestErrorHandler(),
+		FetchCooldown:                FetchCooldownDefault,
+		FetchPollInterval:            50 * time.Millisecond,
+		PluginLookupByJob:            pluginlookup.NewJobPluginLookup(nil),
+		PluginLookupGlobal:           pluginlookup.NewPluginLookup(nil),
+		JobTimeout:                   JobTimeoutDefault,
+		MaxWorkers:                   10,
+		Notifier:                     notif,
+		Queue:                        queueName,
+		QueuePollInterval:            queuePollIntervalDefault,
+		QueueReportInterval:          queueReportIntervalDefault,
+		RetryPolicy:                  &DefaultClientRetryPolicy{},
+		SchedulerInterval:            riverinternaltest.SchedulerShortInterval,
+		Schema:                       schema,
+		StaleProducerRetentionPeriod: time.Minute,
+		Workers:                      workers,
+	})
+
+	config := newTestConfig(t, schema)
+	insertParams, err := insertParamsFromConfigArgsAndOptions(&prod.Archetype, config, &JobArgs{}, &InsertOpts{Queue: queueName})
+	require.NoError(t, err)
+	_, err = exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+		Jobs:   []*riverdriver.JobInsertFastParams{(*riverdriver.JobInsertFastParams)(insertParams)},
+		Schema: schema,
+	})
+	require.NoError(t, err)
+
+	workCtx, workCancel := context.WithCancel(ctx)
+
+	require.NoError(t, prod.StartWorkContext(ctx, workCtx))
+	// Cleanups run LIFO: cancel workCtx (unblocking the worker) before
+	// prod.Stop tries to wait for it to exit, so cleanup can't deadlock
+	// regardless of whether the fix under test actually cancelled the job
+	// itself.
+	t.Cleanup(prod.Stop)
+	t.Cleanup(workCancel)
+
+	jobID := riversharedtest.WaitOrTimeout(t, jobStarted)
+
+	// Arm the injected disconnect, then wake the notifier's currently-blocked
+	// WaitForNotification call with a harmless notification on an unrelated
+	// queue so it loops back around and picks up the injected error
+	// immediately (rather than waiting on the notifier's own ping interval).
+	forceDisconnect.Store(true)
+	require.NoError(t, exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{
+		Topic:   string(notifier.NotificationTopicInsert),
+		Payload: []string{`{"queue":"` + queueName + `-unrelated-wakeup"}`},
+		Schema:  schema,
+	}))
+
+	// Wait until the notifier has actually observed the injected error and is
+	// blocked trying to reconnect.
+	require.Eventually(t, reconnecting.Load, 5*time.Second, 5*time.Millisecond,
+		"notifier never reached its reconnect attempt after the injected connection loss")
+
+	// While the notifier is down, cancel the running job. The NOTIFY this
+	// sends is lost because nothing is LISTENing right now.
+	_, err = exec.JobCancel(ctx, &riverdriver.JobCancelParams{
+		ID:                jobID,
+		CancelAttemptedAt: time.Now().UTC(),
+		ControlTopic:      string(notifier.NotificationTopicControl),
+		Schema:            schema,
+	})
+	require.NoError(t, err)
+
+	// Now let the notifier finish reconnecting.
+	closeReleaseReconnect()
+
+	update := riversharedtest.WaitOrTimeout(t, jobUpdates)
+	require.Equal(t, rivertype.JobStateCancelled, update[0].Job.State,
+		"job should have observed cancellation after the notifier reconnected and reconciled active jobs against cancel_attempted_at")
 }
 
 func TestProducer_MetricEmitHook(t *testing.T) {

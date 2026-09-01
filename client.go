@@ -1456,11 +1456,22 @@ func (c *Client[TTx]) JobCancel(ctx context.Context, jobID int64) (*rivertype.Jo
 		return nil, err
 	}
 
-	c.notifyProducerWithoutListenerQueueControlEvent(job.Queue, &controlEventPayload{
-		Action: controlActionCancel,
-		JobID:  job.ID,
-		Queue:  job.Queue,
-	})
+	// Only a running job has an in-process executor to interrupt (an
+	// available/scheduled/retryable job was cancelled directly above, and a
+	// finalized job needed no cancellation at all), so there's nothing for a
+	// non-running job to dispatch. This also matters for correctness, not
+	// just efficiency: it keeps a burst of cancellations against jobs that
+	// were never running (e.g. cancelling many freshly-inserted jobs before
+	// the client has even been started) from filling the producer's
+	// control-event channel, which TriggerQueueControlEvent below sends to
+	// unconditionally and would otherwise block this call indefinitely.
+	if job.State == rivertype.JobStateRunning {
+		c.notifyProducerOfCancelWithoutNotifier(job.Queue, &controlEventPayload{
+			Action: controlActionCancel,
+			JobID:  job.ID,
+			Queue:  job.Queue,
+		})
+	}
 
 	return job, nil
 }
@@ -2861,6 +2872,58 @@ func (c *Client[TTx]) QueueUpdateTx(ctx context.Context, tx TTx, name string, pa
 // triggered the notification because it's not committed yet.
 func (c *Client[TTx]) notifyProducerWithoutListenerQueueControlEvent(queue string, controlEvent *controlEventPayload) {
 	if c.driver.SupportsListener() {
+		return
+	}
+
+	c.producersMu.RLock()
+	defer c.producersMu.RUnlock()
+
+	if len(c.producersByQueueName) < 1 {
+		return
+	}
+
+	if producer, ok := c.producersByQueueName[queue]; ok {
+		producer.TriggerQueueControlEvent(controlEvent)
+	}
+}
+
+// Notifies an internal producer of a job cancellation so a job running in
+// this same process observes it immediately, for clients that have no
+// notifier to deliver it via listen/notify.
+//
+// This deliberately does NOT share notifyProducerWithoutListenerQueueControlEvent
+// above despite the near-identical dispatch: the two helpers guard on
+// different conditions for a reason, and unifying them would either reopen
+// this gap or introduce new bugs in the other one.
+//
+//   - This helper guards on c.notifier == nil (this client has no notifier,
+//     for any reason, including an explicit Config.PollOnly on an otherwise
+//     listener-capable driver). Queue control events guard on
+//     driver.SupportsListener() instead, because pause/resume/metadata
+//     changes already have an independent, documented convergence path in
+//     poll-only mode (producer.pollForSettingChanges, on QueuePollInterval) —
+//     using this same client.notifier == nil guard there would double-deliver
+//     metadata changes not deduplicated the way pause/resume are, and would
+//     panic on QueueUpdate's nil control event when metadata is empty.
+//   - Job cancellation has no such fallback: nothing else ever re-checks a
+//     running job's cancel_attempted_at in poll-only mode, so a lost signal
+//     here is only caught by JobRescuer's much longer stuck-job sweep.
+//
+// The dispatch below (via TriggerQueueControlEvent) sends unconditionally and
+// blocks if the target producer's control-event channel is full — the same
+// characteristic notifyProducerWithoutListenerQueueControlEvent above already
+// has for genuinely listener-incapable drivers. The caller (JobCancel) is
+// responsible for only invoking this for jobs it knows are actually running,
+// both because there's nothing to dispatch for a job with no in-process
+// executor and to avoid a burst of cancellations against non-running jobs
+// (e.g. many freshly-inserted jobs cancelled before the client is started)
+// filling that channel and blocking indefinitely.
+//
+// Should only ever be invoked *outside* a transaction. If invoked within a
+// transaction, the producer wouldn't yet be able to access the state that
+// triggered the notification because it's not committed yet.
+func (c *Client[TTx]) notifyProducerOfCancelWithoutNotifier(queue string, controlEvent *controlEventPayload) {
+	if c.notifier != nil {
 		return
 	}
 

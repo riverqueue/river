@@ -1368,6 +1368,112 @@ func Test_Client_Common(t *testing.T) {
 		require.WithinDuration(t, time.Now(), *event.Job.FinalizedAt, 2*time.Second)
 	})
 
+	// Unlike CancelRunningJobPollOnly above (which uses a fake driver that
+	// reports SupportsListener() == false to simulate a driver that can't
+	// listen/notify at all), this uses the real pgx driver with an explicit
+	// Config.PollOnly, which is the actually-common "I don't want a notifier"
+	// case. driver.SupportsListener() is true here, so a same-process
+	// cancellation delivered via JobCancel() has nothing to do with the
+	// listen/notify path at all: it must go through the client's local,
+	// no-notifier dispatch instead.
+	t.Run("CancelRunningJobExplicitPollOnly", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		config.PollOnly = true
+
+		client, err := NewClient(bundle.driver, config)
+		require.NoError(t, err)
+
+		jobStartedChan := make(chan int64)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			jobStartedChan <- job.ID
+			<-ctx.Done()
+			return ctx.Err()
+		}))
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+		riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
+
+		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		startedJobID := riversharedtest.WaitOrTimeout(t, jobStartedChan)
+		require.Equal(t, insertRes.Job.ID, startedJobID)
+
+		updatedJob, err := client.JobCancel(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, updatedJob.State)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCancelled, event.Kind)
+		require.Equal(t, rivertype.JobStateCancelled, event.Job.State)
+		require.WithinDuration(t, time.Now(), *event.Job.FinalizedAt, 2*time.Second)
+	})
+
+	// A non-running job (available, scheduled, or retryable) is cancelled
+	// directly in the database and has no in-process executor to notify, so
+	// JobCancel must not dispatch a local control event for it. This matters
+	// beyond efficiency: notifyProducerOfCancelWithoutNotifier's dispatch
+	// blocks if the target producer's control-event channel (buffered to
+	// 100) fills up, which an unstarted (or otherwise not-yet-draining)
+	// producer never does. Cancelling more than that many never-started jobs
+	// against an explicit-PollOnly client (which has no notifier and so
+	// would otherwise take the local dispatch path) must not block.
+	t.Run("CancelManyNonRunningJobsExplicitPollOnlyDoesNotBlock", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		config.PollOnly = true
+
+		client, err := NewClient(bundle.driver, config)
+		require.NoError(t, err)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			return nil
+		}))
+
+		const numJobs = 101 // more than the producer's 100-slot control-event buffer
+
+		jobIDs := make([]int64, numJobs)
+		for i := range jobIDs {
+			insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
+			require.NoError(t, err)
+			jobIDs[i] = insertRes.Job.ID
+		}
+
+		// Deliberately cancelling before the client is started: nothing is
+		// running yet, and nothing is consuming the (not-yet-existent)
+		// producer's control-event channel either.
+		cancelDone := make(chan error, 1)
+		go func() {
+			for _, jobID := range jobIDs {
+				if _, err := client.JobCancel(ctx, jobID); err != nil {
+					cancelDone <- err
+					return
+				}
+			}
+			cancelDone <- nil
+		}()
+
+		select {
+		case err := <-cancelDone:
+			require.NoError(t, err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("cancelling non-running jobs blocked, presumably on the producer's control-event channel")
+		}
+	})
+
 	t.Run("CancelScheduledJob", func(t *testing.T) {
 		t.Parallel()
 
@@ -1433,14 +1539,26 @@ func Test_Client_Common(t *testing.T) {
 			testutil.JobArgsReflectKind[JobArgs]
 		}
 
+		jobStartedChan := make(chan int64)
+		continueChan := make(chan struct{})
+
 		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			jobStartedChan <- job.ID
+			<-continueChan
 			return nil
 		}))
 
 		startClient(ctx, t, client)
+		t.Cleanup(func() { close(continueChan) })
 
 		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
 		require.NoError(t, err)
+
+		// Only a running job dispatches a local control event (see
+		// notifyProducerOfCancelWithoutNotifier), so make sure the job has
+		// actually started before cancelling it.
+		startedJobID := riversharedtest.WaitOrTimeout(t, jobStartedChan)
+		require.Equal(t, insertRes.Job.ID, startedJobID)
 
 		_, err = client.JobCancel(ctx, insertRes.Job.ID)
 		require.NoError(t, err)
