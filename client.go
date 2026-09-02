@@ -1110,8 +1110,12 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		// available, the client appears to have started even though it's completely
 		// non-functional. Here we try to make an initial assessment of health and
 		// return quickly in case of an apparent problem.
-		if err := c.driver.GetExecutor().Exec(fetchCtx, "SELECT 1"); err != nil {
+		executor := c.driver.GetExecutor()
+		if err := executor.Ping(fetchCtx); err != nil {
 			return fmt.Errorf("error making initial connection to database: %w", err)
+		}
+		if err := executor.InitDriver(fetchCtx); err != nil {
+			return fmt.Errorf("error initializing driver: %w", err)
 		}
 
 		// Each time we start, we need a fresh completer subscribe channel to

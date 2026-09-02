@@ -54,6 +54,26 @@ func exerciseDriverPool[TTx any](ctx context.Context, t *testing.T,
 ) {
 	t.Helper()
 
+	t.Run("InitDriver", func(t *testing.T) {
+		t.Parallel()
+
+		exec, _ := executorWithTx(ctx, t)
+		require.NoError(t, exec.InitDriver(ctx))
+		require.NoError(t, exec.InitDriver(ctx))
+	})
+
+	t.Run("Ping", func(t *testing.T) {
+		t.Parallel()
+
+		exec, _ := executorWithTx(ctx, t)
+		require.NoError(t, exec.InitDriver(ctx))
+		require.NoError(t, exec.Ping(ctx))
+
+		cancelledCtx, cancel := context.WithCancel(ctx)
+		cancel()
+		require.ErrorIs(t, exec.Ping(cancelledCtx), context.Canceled)
+	})
+
 	t.Run("PoolIsSet", func(t *testing.T) {
 		t.Parallel()
 
