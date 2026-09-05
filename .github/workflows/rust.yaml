@@ -6,6 +6,13 @@ on:
       - master
   pull_request:
 
+permissions:
+  contents: read
+
+env:
+  # Keep the cross-run cache small; Cargo still reuses compiled dependencies.
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   quality:
     runs-on: ubuntu-latest
@@ -19,8 +26,19 @@ jobs:
         with:
           go-version: "1.27"
       - uses: dtolnay/rust-toolchain@stable
+        id: rust
         with:
           components: clippy,rustfmt
+      - name: Cache Rust dependencies and build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust/target
+          key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
+          restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny@0.20.2
@@ -57,8 +75,19 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
+        id: rust
         with:
           toolchain: ${{ matrix.rust-version }}
+      - name: Cache Rust dependencies and build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust/target
+          key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
+          restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-
       - name: Check workspace
         run: cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked
 
@@ -69,6 +98,17 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+        id: rust
+      - name: Cache Rust dependencies and build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust/target
+          key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
+          restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-
       - name: PostgreSQL defaults
         run: cargo check --manifest-path rust/Cargo.toml -p riverqueue -p riverqueue-migrate --all-targets --locked
       - name: SQLite only
@@ -114,6 +154,17 @@ jobs:
         with:
           go-version: "1.27"
       - uses: dtolnay/rust-toolchain@stable
+        id: rust
+      - name: Cache Rust dependencies and build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust/target
+          key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
+          restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-
       - name: Create test database
         run: PGPASSWORD=postgres createdb -h localhost -U postgres river_rust_test
       - name: Rust PostgreSQL suite
