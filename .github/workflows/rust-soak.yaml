@@ -11,6 +11,13 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+
+env:
+  # Keep the cross-run cache small; Cargo still reuses compiled dependencies.
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   soak:
     runs-on: ubuntu-latest
@@ -42,6 +49,17 @@ jobs:
         with:
           go-version: "1.26"
       - uses: dtolnay/rust-toolchain@stable
+        id: rust
+      - name: Cache Rust dependencies and build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust/target
+          key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
+          restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-
       - name: Create test database
         run: PGPASSWORD=postgres createdb -h localhost -U postgres river_rust_soak
       - name: Mixed soak
