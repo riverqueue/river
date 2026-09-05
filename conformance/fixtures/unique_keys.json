@@ -2,6 +2,79 @@
   "$schema": "../schema/unique-keys.schema.json",
   "cases": [
     {
+      "args": {},
+      "expected_sha256": "23aa86692d9807ab10e433e378f1c0804573f5e345818461b919322dd381b4c3",
+      "expected_state_mask": 245,
+      "kind": "conformance_selected_args",
+      "name": "all_selected_fields_omitted",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": true,
+        "by_period_nanos": 0,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_paths": [
+        "account.id",
+        "account.region",
+        "label",
+        "path/key"
+      ]
+    },
+    {
+      "args": {
+        "account": {
+          "id": "acct",
+          "ignored": "irrelevant",
+          "region": "west"
+        },
+        "path/key": "slash"
+      },
+      "expected_sha256": "7d62e81ac25cfa2dec69ad5a41e0b78188ee1b299bed329b453da6b3abca70bd",
+      "expected_state_mask": 245,
+      "kind": "conformance_selected_args",
+      "name": "selected_siblings_and_slash_key",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": true,
+        "by_period_nanos": 0,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_paths": [
+        "account.id",
+        "account.region",
+        "label",
+        "path/key"
+      ]
+    },
+    {
+      "args": {
+        "nested": {
+          "z": 1,
+          "a": 2
+        }
+      },
+      "expected_sha256": "46ff499cb031d0458bb00ef87e7b83321eefb6e7534497c279c4ae0f474cdde0",
+      "expected_state_mask": 245,
+      "kind": "conformance_all_args",
+      "name": "nested_struct_wire_order",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": true,
+        "by_period_nanos": 0,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_paths": null
+    },
+    {
       "args": {
         "zeta": "quoted \\\"value\\\" and \\\\ slash",
         "alpha": "\u003calpha\u003e\u0026\u2028line",
@@ -92,7 +165,9 @@
       "scheduled_at": null,
       "selected_unique_paths": [
         "account.id",
-        "label"
+        "account.region",
+        "label",
+        "path/key"
       ]
     },
     {

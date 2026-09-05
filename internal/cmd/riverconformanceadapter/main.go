@@ -249,14 +249,16 @@ type uniqueNumericArgs struct {
 func (uniqueNumericArgs) Kind() string { return "conformance_numeric_boundaries" }
 
 type uniqueSelectedAccount struct {
-	ID      string `json:"id"      river:"unique"`
+	ID      string `json:"id"               river:"unique"`
 	Ignored string `json:"ignored"`
+	Region  string `json:"region,omitempty" river:"unique"`
 }
 
 type uniqueSelectedArgs struct {
 	Account uniqueSelectedAccount `json:"account"`
 	Ignored bool                  `json:"ignored"`
-	Label   string                `json:"label"   river:"unique"`
+	Label   string                `json:"label"              river:"unique"`
+	PathKey string                `json:"path/key,omitempty" river:"unique"`
 }
 
 func (uniqueSelectedArgs) Kind() string { return "conformance_selected_args" }
@@ -328,12 +330,38 @@ func (w *conformanceWorker) Work(ctx context.Context, job *river.Job[conformance
 			<-ctx.Done()
 			return ctx.Err()
 		}
-	case "resumable":
+	case "resumable_cursor":
+		river.ResumableStep(ctx, "first", nil, func(ctx context.Context) error {
+			return river.MetadataSet(ctx, "first_attempt", job.Attempt)
+		})
+		river.ResumableStepCursor(ctx, "second", nil, func(ctx context.Context, cursor int) error {
+			if job.Attempt == 1 {
+				if err := river.ResumableSetCursor(ctx, 7); err != nil {
+					return err
+				}
+				return errors.New("retry with cursor")
+			}
+			if cursor != 7 {
+				return fmt.Errorf("expected cursor 7, got %d", cursor)
+			}
+			return river.MetadataSet(ctx, "cursor_observed", cursor)
+		})
+		river.ResumableStep(ctx, "third", nil, func(ctx context.Context) error {
+			if job.Attempt == 2 {
+				return errors.New("retry after consuming cursor")
+			}
+			return nil
+		})
+	case "resumable", "resumable_duplicate":
 		river.ResumableStep(ctx, "first", nil, func(ctx context.Context) error {
 			w.probe.incrementResumableFirst()
 			return nil
 		})
-		river.ResumableStep(ctx, "second", nil, func(ctx context.Context) error {
+		secondName := "second"
+		if job.Args.Behavior == "resumable_duplicate" {
+			secondName = "first"
+		}
+		river.ResumableStep(ctx, secondName, nil, func(ctx context.Context) error {
 			w.probe.incrementResumableSecond()
 			if job.Attempt == 1 {
 				return errors.New("fail second resumable step once")
