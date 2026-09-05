@@ -21,7 +21,7 @@ const (
 	threeEnginePeerID      = "peer-three-engine"
 )
 
-func TestThreeEngineConformance(t *testing.T) {
+func TestThreeEngineConformance(t *testing.T) { //nolint:paralleltest // Owns the shared PostgreSQL database.
 	// All three adapters intentionally compete in one externally supplied
 	// disposable database, so this test cannot run in parallel.
 	databaseURL := os.Getenv("RIVER_CONFORMANCE_DATABASE_URL")
@@ -133,9 +133,11 @@ func TestThreeEngineConformance(t *testing.T) {
 		current.call(t, "stop", map[string]any{}, nil)
 	}
 	verifyThreeEngineDirectedJavaScriptRust(t, goAdapter, adapterByImplementation)
+	verifyResumableInteroperability(t, adapterByImplementation["javascript"], adapterByImplementation["rust"])
 	verifyThreeEngineProcessKillRescueFailover(t, root, databaseURL, goAdapter, specByImplementation)
 
 	scenarios := newScenarioTracker(t, scenarioOwnerThreeEngine)
+	scenarios.pass("three_engine_resumable_cursor")
 	scenarios.pass(
 		"three_engine_competition",
 		"three_engine_cross_engine_process_kill_rescue_failover",
@@ -264,7 +266,7 @@ func verifyThreeEngineProcessKillRescueFailover(
 	}
 }
 
-func TestThreeEnginePerformanceGate(t *testing.T) {
+func TestThreeEnginePerformanceGate(t *testing.T) { //nolint:paralleltest // Owns the shared PostgreSQL database.
 	// All three release adapters intentionally share one externally supplied
 	// database, so this test cannot run in parallel.
 	if os.Getenv("RIVER_CONFORMANCE_THREE_ENGINE_PERFORMANCE") != "1" {
@@ -320,7 +322,7 @@ func TestThreeEnginePerformanceGate(t *testing.T) {
 	newScenarioTracker(t, scenarioOwnerThreeEnginePerformance).pass("three_engine_release_performance")
 }
 
-func TestThreeEngineSoak(t *testing.T) {
+func TestThreeEngineSoak(t *testing.T) { //nolint:paralleltest // Owns the shared PostgreSQL database.
 	// All three adapters intentionally share one externally supplied database,
 	// so this test cannot run in parallel.
 	durationString := os.Getenv("RIVER_CONFORMANCE_THREE_ENGINE_SOAK_DURATION")
