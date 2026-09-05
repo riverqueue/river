@@ -107,6 +107,14 @@ cancelled, which exercises cancellation registration and stale-attempt cleanup
 in both directions. The last behavior is only run in a disposable adapter
 process that the harness may kill.
 
+The `resumable_cursor` behavior preserves `first_attempt`, records cursor `7`
+in its second step, and fails the second and third steps once each. The harness
+moves successive attempts between implementations and asserts that completed
+steps stay skipped and consumed cursors are cleared. `resumable_duplicate`
+repeats a step name and must fail even when the repeated step is being skipped.
+The ordinary `resumable` behavior also accepts an empty saved checkpoint and
+rejects a malformed cursor object before user work begins.
+
 ## Transaction handles
 
 `tx_begin` creates a connection-local transaction under a caller-chosen

@@ -51,6 +51,11 @@ assert_eq!(worked.output(), Some(&serde_json::json!({"image_id": 42})));
 # }
 ```
 
+`work_once` restores and finalizes resumable state, including failures that the
+worker catches. Its result distinguishes `TestWorkError::Worker` from
+`TestWorkError::Resumable` while preserving the original error source. Pass
+`metadata_updates` into the next job's metadata to test a resumed attempt.
+
 The helper does not run client hooks, middleware, database transactions,
 retries, or completion persistence. Use River's integration and shared
 conformance suites when those boundaries are under test.

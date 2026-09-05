@@ -16,6 +16,8 @@
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteQueues" }], "name": "sqlite_runtime_queue_crud_reconfigure_pause", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifyNotificationWakeups" }], "name": "sqlite_runtime_remote_cancellation", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifyRemoteQueueSubscriptionEvents" }], "name": "sqlite_runtime_remote_queue_subscription_events", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/resumable_test.go", "symbol": "verifyResumableInteroperability" }], "name": "sqlite_runtime_resumable_cross_engine_cursor", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/resumable_test.go", "symbol": "verifyResumableValidation" }], "name": "sqlite_runtime_resumable_validation", "tier": "runtime" },
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteTransactionalNotification" }], "name": "sqlite_runtime_transactional_notification", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteUnknownKind" }], "name": "sqlite_runtime_unknown_kind_error", "tier": "mixed" }
   ]

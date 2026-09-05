@@ -63,7 +63,11 @@ pub(crate) fn build_unique_key_parts(
     if opts.by_args {
         key.push_str("&args=");
         let args = select_unique_args(encoded_args, unique_fields)?;
-        key.push_str(&go_compatible_json(&args)?);
+        // Go appends no JSON bytes when every explicitly selected field is
+        // absent (for example, all unique fields use omitempty).
+        if unique_fields.is_empty() || args.as_object().is_some_and(|args| !args.is_empty()) {
+            key.push_str(&go_compatible_json(&args)?);
+        }
     }
     if let Some(period) = opts.by_period {
         key.push_str("&period=");
@@ -113,9 +117,7 @@ fn write_go_compatible_json(value: &Value, output: &mut String) -> Result<(), Er
         }
         Value::Object(values) => {
             output.push('{');
-            let mut entries = values.iter().collect::<Vec<_>>();
-            entries.sort_unstable_by_key(|(key, _)| *key);
-            for (index, (key, value)) in entries.into_iter().enumerate() {
+            for (index, (key, value)) in values.iter().enumerate() {
                 if index > 0 {
                     output.push(',');
                 }
@@ -158,16 +160,23 @@ fn select_unique_args(value: &Value, paths: &[&str]) -> Result<Value, Error> {
         )
     })?;
     if paths.is_empty() {
-        let sorted = object
-            .iter()
+        let mut entries = object.iter().collect::<Vec<_>>();
+        entries.sort_unstable_by_key(|(key, _)| *key);
+        let sorted = entries
+            .into_iter()
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect::<Map<_, _>>();
         return Ok(Value::Object(sorted));
     }
 
     let mut selected = Map::new();
+    let mut paths = paths.to_vec();
+    paths.sort_unstable();
     for path in paths {
-        if let Some(value) = value.pointer(&format!("/{}", path.replace('.', "/"))) {
+        if let Some(value) = path
+            .split('.')
+            .try_fold(value, |value, segment| value.get(segment))
+        {
             insert_path(&mut selected, path, value.clone());
         }
     }
@@ -369,8 +378,44 @@ mod tests {
         .unwrap()
         .unwrap();
 
-        let expected = Sha256::digest(b"&kind=optional_unique_test&args={}");
+        let expected = Sha256::digest(b"&kind=optional_unique_test&args=");
         assert_eq!(key.as_slice(), expected.as_slice());
+    }
+
+    #[test]
+    fn preserves_nested_struct_serialization_order() {
+        #[derive(Serialize)]
+        struct Nested {
+            z: i32,
+            a: i32,
+        }
+        #[derive(Serialize)]
+        struct Args {
+            nested: Nested,
+        }
+        let encoded = serde_json::to_value(Args {
+            nested: Nested { z: 1, a: 2 },
+        })
+        .unwrap();
+        let selected = select_unique_args(&encoded, &[]).unwrap();
+        assert_eq!(
+            go_compatible_json(&selected).unwrap(),
+            r#"{"nested":{"z":1,"a":2}}"#
+        );
+    }
+
+    #[test]
+    fn selects_sibling_paths_and_literal_slashes_and_tildes() {
+        let args = serde_json::json!({"account": {"region": "west", "id": "acct"}, "path/key": "slash", "key~1": "tilde"});
+        let selected = select_unique_args(
+            &args,
+            &["path/key", "key~1", "account.region", "account.id"],
+        )
+        .unwrap();
+        assert_eq!(
+            go_compatible_json(&selected).unwrap(),
+            r#"{"account":{"id":"acct","region":"west"},"key~1":"tilde","path/key":"slash"}"#
+        );
     }
 
     #[test]

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"testing"
@@ -25,7 +26,7 @@ type benchmarkGate struct {
 	throughputRatio float64
 }
 
-func TestPerformanceGate(t *testing.T) {
+func TestPerformanceGate(t *testing.T) { //nolint:paralleltest // Owns the shared PostgreSQL database.
 	// This opt-in release gate owns the shared conformance database for the
 	// duration of all three same-host comparison runs.
 	if os.Getenv("RIVER_CONFORMANCE_PERFORMANCE") != "1" {
@@ -90,7 +91,7 @@ func benchmarkGateForMode(mode, implementation string) benchmarkGate {
 	return benchmarkGate{p95Denominator: 4, p95Numerator: 5, throughputRatio: 0.80}
 }
 
-func TestMixedSoak(t *testing.T) {
+func TestMixedSoak(t *testing.T) { //nolint:paralleltest // Owns the shared PostgreSQL database.
 	// This opt-in soak owns the shared conformance database. CI sets 10m,
 	// release candidates use 1h, and the scheduled job uses 6h.
 	durationString := os.Getenv("RIVER_CONFORMANCE_SOAK_DURATION")
@@ -158,7 +159,7 @@ func medianMetrics(runs []benchmarkMetrics) benchmarkMetrics {
 		p95s[index] = run.p95
 	}
 	sort.Float64s(throughputs)
-	sort.Slice(p95s, func(left, right int) bool { return p95s[left] < p95s[right] })
+	slices.Sort(p95s)
 	return benchmarkMetrics{p95: p95s[len(p95s)/2], throughput: throughputs[len(throughputs)/2]}
 }
 
@@ -235,7 +236,7 @@ func runAdapterBenchmark(t *testing.T, adapter *adapter, mode string, jobs int) 
 	}
 	adapter.call(t, "stop", map[string]any{}, nil)
 	elapsed := time.Since(startedAt)
-	sort.Slice(latencies, func(left, right int) bool { return latencies[left] < latencies[right] })
+	slices.Sort(latencies)
 	p95Index := max(0, int(math.Ceil(float64(len(latencies))*0.95))-1)
 	return benchmarkMetrics{
 		p95:        latencies[p95Index],

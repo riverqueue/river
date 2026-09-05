@@ -5,10 +5,9 @@
 use chrono::Utc;
 use riverqueue::{
     Error, Job, JobArgs, JobRow, JobState, MAX_ATTEMPTS_DEFAULT, PRIORITY_DEFAULT, QUEUE_DEFAULT,
-    WorkContext, WorkOutcome, Worker,
+    WorkContext, WorkError, WorkOutcome, Worker,
 };
 use serde_json::{Map, Value};
-use tokio_util::sync::CancellationToken;
 
 /// Protocol revision understood by the Rust test helpers.
 pub const PROTOCOL_REVISION: u32 = 1;
@@ -90,8 +89,36 @@ pub struct TestWorkResult<E> {
     /// Context used for the invocation, including output and metadata updates.
     pub context: WorkContext,
     metadata_updates: Map<String, Value>,
-    /// Worker outcome or typed error.
-    pub result: Result<WorkOutcome, E>,
+    /// Worker outcome, typed worker error, or runtime checkpoint error.
+    pub result: Result<WorkOutcome, TestWorkError<E>>,
+}
+
+/// Failure from a direct worker invocation or River's resumable coordinator.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum TestWorkError<E> {
+    /// Invalid checkpoint metadata or a step error the worker suppresses.
+    Resumable(WorkError),
+    /// Original, unerased error returned by the worker.
+    Worker(E),
+}
+
+impl<E: std::fmt::Display> std::fmt::Display for TestWorkError<E> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Resumable(error) => error.fmt(formatter),
+            Self::Worker(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl<E: std::error::Error + 'static> std::error::Error for TestWorkError<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Resumable(error) => Some(error),
+            Self::Worker(error) => Some(error),
+        }
+    }
 }
 
 impl<E> TestWorkResult<E> {
@@ -109,13 +136,28 @@ impl<E> TestWorkResult<E> {
 }
 
 /// Runs a typed worker once without a database or background runtime.
+///
+/// Initializes resumable steps from the job's metadata and records checkpoints
+/// on failure, including step errors caught by the worker. This helper does not
+/// simulate queue scheduling, timeouts, middleware, or database transactions.
 pub async fn work_once<A, W>(worker: &W, job: Job<A>) -> TestWorkResult<W::Error>
 where
     A: JobArgs,
     W: Worker<A>,
 {
-    let context = WorkContext::new(CancellationToken::new());
-    let result = worker.work(context.clone(), job).await;
+    let context = WorkContext::for_test_job(&job.row);
+    let mut result = match context.resumable_validate().await {
+        Ok(()) => worker
+            .work(context.clone(), job)
+            .await
+            .map_err(TestWorkError::Worker),
+        Err(error) => Err(TestWorkError::Resumable(error)),
+    };
+    if let Some(error) = context.resumable_finish(result.is_err()).await
+        && result.is_ok()
+    {
+        result = Err(TestWorkError::Resumable(error));
+    }
     let metadata_updates = context.metadata_updates().await;
     TestWorkResult {
         context,
@@ -136,6 +178,85 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use super::*;
+
+    struct ResumableWorker {
+        calls: AtomicUsize,
+    }
+
+    impl Worker<TestArgs> for ResumableWorker {
+        type Error = Infallible;
+
+        async fn work(
+            &self,
+            context: WorkContext,
+            job: Job<TestArgs>,
+        ) -> Result<WorkOutcome, Self::Error> {
+            let _ = context
+                .resumable_step("first", || async {
+                    self.calls.fetch_add(1, Ordering::Relaxed);
+                    Ok::<_, std::io::Error>(())
+                })
+                .await;
+            let _ = context
+                .resumable_step("second", || async {
+                    if job.row.attempt == 1 {
+                        Err(std::io::Error::other("try again"))
+                    } else {
+                        Ok(())
+                    }
+                })
+                .await;
+            Ok(WorkOutcome::Complete)
+        }
+    }
+
+    #[tokio::test]
+    async fn work_once_checkpoints_suppressed_step_errors_and_resumes() {
+        let worker = ResumableWorker {
+            calls: AtomicUsize::new(0),
+        };
+        let args = TestArgs {
+            message: "resume".to_owned(),
+        };
+        let first = work_once(&worker, TestJobBuilder::new(args.clone()).build().unwrap()).await;
+        assert!(matches!(first.result, Err(TestWorkError::Resumable(_))));
+        assert_eq!(
+            first.metadata_updates()[riverqueue::METADATA_KEY_RESUMABLE_STEP],
+            "first"
+        );
+        let second = work_once(
+            &worker,
+            TestJobBuilder::new(args)
+                .attempt(2)
+                .metadata(first.metadata_updates().clone())
+                .build()
+                .unwrap(),
+        )
+        .await;
+        assert!(matches!(second.result, Ok(WorkOutcome::Complete)));
+        assert_eq!(worker.calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn work_once_rejects_invalid_checkpoint_before_work() {
+        let worker = ResumableWorker {
+            calls: AtomicUsize::new(0),
+        };
+        let job = TestJobBuilder::new(TestArgs {
+            message: "invalid".to_owned(),
+        })
+        .metadata(
+            serde_json::json!({ "river:resumable_cursor": [] })
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
+        .build()
+        .unwrap();
+        let outcome = work_once(&worker, job).await;
+        assert!(matches!(outcome.result, Err(TestWorkError::Resumable(_))));
+        assert_eq!(worker.calls.load(Ordering::Relaxed), 0);
+    }
 
     #[derive(Clone, Debug, Deserialize, Serialize)]
     struct TestArgs {

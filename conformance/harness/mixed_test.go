@@ -5,6 +5,7 @@ package harness_test
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -131,7 +132,7 @@ type normalizedQueue struct {
 	UpdatedAt string         `json:"updated_at"`
 }
 
-func TestMixedConformance(t *testing.T) {
+func TestMixedConformance(t *testing.T) { //nolint:paralleltest // Owns the shared PostgreSQL database.
 	// The adapters intentionally share one externally supplied disposable
 	// database, so this integration test cannot run in parallel with other
 	// conformance tiers.
@@ -269,6 +270,10 @@ func TestMixedConformance(t *testing.T) {
 	scenarios.pass("external_terminal_completion_race")
 	verifyAdvancedRuntime(t, goAdapter)
 	verifyAdvancedRuntime(t, candidateAdapter)
+	verifyResumableValidation(t, goAdapter)
+	verifyResumableValidation(t, candidateAdapter)
+	verifyResumableInteroperability(t, goAdapter, candidateAdapter)
+	scenarios.pass("resumable_cross_engine_cursor", "resumable_validation")
 	scenarios.pass(
 		"dynamic_queue_add_reconfigure_remove",
 		"error_handler_cancel_override",
@@ -450,7 +455,7 @@ func TestMixedConformance(t *testing.T) {
 	candidateAdapter.call(t, "wait", map[string]any{"id": notificationLost.ID}, &txObserved)
 	require.Equal(t, "completed", txObserved.State)
 
-	var competitionIDs []int64
+	competitionIDs := make([]int64, 0, 40)
 	for i := range 40 {
 		var inserted normalizedJob
 		adapter := goAdapter
@@ -717,6 +722,10 @@ func TestMixedSQLiteRuntimeConformance(t *testing.T) {
 		verifySQLiteAdvancedRuntime(t, adapter)
 	}
 	scenarios.pass("sqlite_runtime_extensions_resumable_subscriptions")
+	verifyResumableValidation(t, goAdapter)
+	verifyResumableValidation(t, candidateAdapter)
+	verifyResumableInteroperability(t, goAdapter, candidateAdapter)
+	scenarios.pass("sqlite_runtime_resumable_cross_engine_cursor", "sqlite_runtime_resumable_validation")
 	verifySQLitePollOnly(t, goAdapter, candidateAdapter)
 	scenarios.pass("sqlite_runtime_poll_only_recovery")
 	verifySQLiteLifecycle(t, goAdapter, candidateAdapter)
@@ -1575,8 +1584,8 @@ func verifyLargeBatchInsertion(t *testing.T, adapters ...*adapter) {
 		}
 		actor.call(t, "insert_many", map[string]any{"jobs": jobs}, &inserted)
 		require.Len(t, inserted.Results, batchSize)
-		require.Equal(t, float64(0), inserted.Results[0].Job.Metadata["batch_index"])
-		require.Equal(t, float64(batchSize-1), inserted.Results[batchSize-1].Job.Metadata["batch_index"])
+		require.EqualValues(t, 0, inserted.Results[0].Job.Metadata["batch_index"])
+		require.EqualValues(t, batchSize-1, inserted.Results[batchSize-1].Job.Metadata["batch_index"])
 	}
 }
 
@@ -1640,7 +1649,7 @@ func verifyConcurrentUniqueConflicts(t *testing.T, goAdapter, candidateAdapter *
 			params := map[string]any{
 				"handle": winnerHandle,
 				"job": map[string]any{
-					"message": fmt.Sprintf("concurrent unique %s", testCase.name),
+					"message": "concurrent unique " + testCase.name,
 					"opts":    testCase.opts,
 				},
 			}
@@ -2841,8 +2850,8 @@ func verifyTransactionalBatchInsertion(t *testing.T, actor, observer *adapter, f
 			require.Equal(t, 2, result.Count)
 		} else {
 			require.Len(t, result.Results, 2)
-			require.Equal(t, float64(0), result.Results[0].Job.Metadata["batch_index"])
-			require.Equal(t, float64(1), result.Results[1].Job.Metadata["batch_index"])
+			require.EqualValues(t, 0, result.Results[0].Job.Metadata["batch_index"])
+			require.EqualValues(t, 1, result.Results[1].Job.Metadata["batch_index"])
 		}
 
 		var listed struct {
@@ -2993,7 +3002,7 @@ func (adapter *adapter) call(t *testing.T, method string, params any, result any
 		t.Fatalf("%s adapter %s failed (%d): %s\nstderr: %s", adapter.name, method, response.Error.Code, response.Error.Message, adapter.stderr.String())
 	}
 	if result != nil {
-		require.NoError(t, json.Unmarshal(response.Result, result))
+		require.NoError(t, decodeAdapterResult(response.Result, result))
 	}
 }
 
@@ -3030,7 +3039,7 @@ func (adapter *adapter) callWithoutTest(method string, params any, result any) e
 		return fmt.Errorf("%s adapter %s failed (%d): %s", adapter.name, method, response.Error.Code, response.Error.Message)
 	}
 	if result != nil {
-		if err := json.Unmarshal(response.Result, result); err != nil {
+		if err := decodeAdapterResult(response.Result, result); err != nil {
 			return err
 		}
 	}
@@ -3253,7 +3262,7 @@ func startAdapterCommandForProfile(
 	)
 }
 
-func startAdapter(t *testing.T, root, databaseURL, name, executable string, args ...string) *adapter {
+func startAdapter(t *testing.T, root, databaseURL, name, executable string, args ...string) *adapter { //nolint:unparam // Mirrors the backend/profile adapter entry points.
 	t.Helper()
 
 	return startAdapterForBackend(t, root, databaseURL, "postgres", name, executable, args...)
@@ -3275,7 +3284,11 @@ func startAdapterForProfile(
 ) *adapter {
 	t.Helper()
 
-	command := exec.Command(executable, args...)
+	// Keep cancellation after the adapter's graceful cleanup (LIFO), rather
+	// than using t.Context(), which is cancelled before cleanup begins.
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	command := exec.CommandContext(ctx, executable, args...)
 	command.Dir = root
 	command.Env = append(
 		os.Environ(),
