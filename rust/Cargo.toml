@@ -27,7 +27,7 @@ futures-util = "0.3.34"
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = { version = "1.0.151", features = ["arbitrary_precision", "raw_value"] }
+serde_json = { version = "1.0.151", features = ["arbitrary_precision", "preserve_order", "raw_value"] }
 sha2 = "0.11.0"
 sqlx = { version = "0.9.0", default-features = false, features = ["chrono", "derive", "json", "runtime-tokio", "tls-rustls"] }
 syn = { version = "2.0", features = ["full"] }

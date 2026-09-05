@@ -370,18 +370,27 @@ impl JobArgs for UniqueNumericArgs {
     const KIND: &'static str = "conformance_numeric_boundaries";
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
 struct UniqueSelectedAccount {
     id: String,
     ignored: String,
 }
 
 #[derive(Debug, Deserialize, JobArgs, Serialize)]
-#[river(kind = "conformance_selected_args", unique("account.id", "label"))]
+#[river(
+    kind = "conformance_selected_args",
+    unique("account.id", "account.region", "label", "path/key")
+)]
 struct UniqueSelectedArgs {
+    #[serde(default)]
     account: UniqueSelectedAccount,
+    #[serde(default)]
     ignored: bool,
+    #[serde(default)]
     label: String,
+    #[serde(default, rename = "path/key")]
+    path_key: String,
 }
 
 #[derive(Debug, Deserialize, JobArgs, Serialize)]
@@ -394,6 +403,42 @@ struct ConformanceWorker {
     barriers: Arc<BarrierRegistry>,
     pool: Option<PgPool>,
     probe: Arc<RuntimeProbe>,
+}
+
+async fn work_resumable_cursor(context: &WorkContext, attempt: i16) {
+    // Intentionally suppress errors: attempt finalization must still retain
+    // the failed step and its cursor, like Go's resumable coordinator.
+    let _ = context
+        .resumable_step("first", || async {
+            context.metadata_set("first_attempt", json!(attempt)).await;
+            Ok::<_, io::Error>(())
+        })
+        .await;
+    let _ = context
+        .resumable_step_with_cursor("second", |cursor: i64| async move {
+            if attempt == 1 {
+                context
+                    .resumable_set_cursor(&7)
+                    .await
+                    .map_err(io::Error::other)?;
+                return Err(io::Error::other("retry with cursor"));
+            }
+            if cursor != 7 {
+                return Err(io::Error::other(format!("expected cursor 7, got {cursor}")));
+            }
+            context.metadata_set("cursor_observed", json!(cursor)).await;
+            Ok(())
+        })
+        .await;
+    let _ = context
+        .resumable_step("third", || async {
+            if attempt == 2 {
+                Err(io::Error::other("retry after consuming cursor"))
+            } else {
+                Ok(())
+            }
+        })
+        .await;
 }
 
 #[allow(clippy::match_same_arms)]
@@ -445,7 +490,11 @@ impl Worker<ConformanceArgs> for ConformanceWorker {
                 context.cancellation_token().cancelled().await;
                 Err(io::Error::other("work cancelled"))
             }
-            "resumable" => {
+            "resumable_cursor" => {
+                work_resumable_cursor(&context, job.row.attempt).await;
+                Ok(WorkOutcome::Complete)
+            }
+            "resumable" | "resumable_duplicate" => {
                 let first_probe = Arc::clone(&self.probe);
                 context
                     .resumable_step("first", move || async move {
@@ -456,14 +505,21 @@ impl Worker<ConformanceArgs> for ConformanceWorker {
                     .map_err(io::Error::other)?;
                 let second_probe = Arc::clone(&self.probe);
                 context
-                    .resumable_step("second", move || async move {
-                        second_probe.increment_resumable_second()?;
-                        if job.row.attempt == 1 {
-                            Err(io::Error::other("fail second resumable step once"))
+                    .resumable_step(
+                        if job.args.behavior == "resumable_duplicate" {
+                            "first"
                         } else {
-                            Ok(())
-                        }
-                    })
+                            "second"
+                        },
+                        move || async move {
+                            second_probe.increment_resumable_second()?;
+                            if job.row.attempt == 1 {
+                                Err(io::Error::other("fail second resumable step once"))
+                            } else {
+                                Ok(())
+                            }
+                        },
+                    )
                     .await
                     .map_err(io::Error::other)?;
                 Ok(WorkOutcome::Complete)

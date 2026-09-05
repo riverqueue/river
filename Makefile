@@ -74,6 +74,12 @@ lint/rust: ## Run Rust formatting and clippy checks
 
 lint:: lint/rust
 
+.PHONY: lint/conformance
+lint/conformance: ## Lint the opt-in shared interoperability suite
+	golangci-lint run --build-tags riverconformance ./conformance/harness
+
+lint:: lint/conformance
+
 .PHONY: test
 test:: ## Run test suite for all submodules
 define test-target

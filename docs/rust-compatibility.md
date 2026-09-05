@@ -18,6 +18,23 @@ migration lines, and a complete applicable capability set.
   scenario inventory, and both adapters together. Language-local API changes
   do not require a protocol revision.
 
+## Unique arguments and resumable work
+
+Cross-language uniqueness requires matching selected argument paths and JSON
+serialization, not merely equivalent decoded values. Like Go, Rust sorts the
+selected top-level keys but preserves nested object order. A nested Go struct
+therefore needs the same serialized field order in the Rust type; a Go map
+needs matching sorted nested keys. Prefer selecting individual scalar fields
+when nested object order should not be part of identity. Missing explicitly
+selected fields contribute no bytes, whereas an explicit `null` is a value.
+
+Resumable step names and cursor shapes are persisted protocol. Keep names
+stable across deployments and languages. Await steps sequentially; nested
+steps are supported, but concurrent steps do not define a checkpoint order.
+A caught step failure still fails the attempt and preserves its checkpoint.
+The shared suite moves cursor-bearing attempts between engines in both
+directions, including retries that skip previously completed steps.
+
 ## Rolling deployment
 
 1. Confirm the old and new services advertise the manifest's protocol

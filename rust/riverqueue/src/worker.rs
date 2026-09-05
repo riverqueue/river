@@ -85,33 +85,29 @@ impl WorkContext {
 
     /// Runs a named resumable step, skipping work completed by an earlier
     /// failed attempt.
+    ///
+    /// Await steps sequentially. Nested steps are supported, but concurrent
+    /// steps do not define a checkpoint order.
     pub async fn resumable_step<F, Fut, E>(&self, name: &str, step: F) -> Result<(), Error>
     where
         E: StdError + Send + Sync + 'static,
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<(), E>>,
     {
-        match self.begin_resumable_step(name, false).await? {
-            StepAction::Run => {}
+        let previous_step_name = match self.begin_resumable_step(name, false).await? {
+            StepAction::Run(previous) => previous,
             StepAction::Skip => return Ok(()),
-        }
+        };
 
         let result = step().await;
         let mut state = self.resumable.lock().await;
-        state.step_name = None;
+        state.step_name = previous_step_name;
         match result {
             Ok(()) => {
                 state.completed_step = Some(name.to_owned());
                 Ok(())
             }
-            Err(error) => {
-                let message = format!("resumable step {name:?}: {error}");
-                state.failure = Some(message.clone());
-                Err(Error::ResumableStep {
-                    name: name.to_owned(),
-                    source: Box::new(error),
-                })
-            }
+            Err(error) => Err(state.fail_step(name, error)),
         }
     }
 
@@ -127,10 +123,10 @@ impl WorkContext {
         Fut: Future<Output = Result<(), E>>,
         T: Default + DeserializeOwned,
     {
-        match self.begin_resumable_step(name, true).await? {
-            StepAction::Run => {}
+        let previous_step_name = match self.begin_resumable_step(name, true).await? {
+            StepAction::Run(previous) => previous,
             StepAction::Skip => return Ok(()),
-        }
+        };
 
         let cursor = {
             let state = self.resumable.lock().await;
@@ -140,32 +136,25 @@ impl WorkContext {
                 .cloned()
                 .map(serde_json::from_value)
                 .transpose()
-                .map_err(|error| {
-                    Error::runtime_source(
-                        "resumable cursor",
-                        format!("cannot decode cursor for step {name:?}"),
-                        error,
-                    )
-                })?
-                .unwrap_or_default()
+        };
+        let cursor = match cursor {
+            Ok(cursor) => cursor.unwrap_or_default(),
+            Err(error) => {
+                let mut state = self.resumable.lock().await;
+                state.step_name = previous_step_name;
+                return Err(state.fail_step(name, error));
+            }
         };
         let result = step(cursor).await;
         let mut state = self.resumable.lock().await;
-        state.step_name = None;
+        state.step_name = previous_step_name;
         match result {
             Ok(()) => {
                 state.completed_step = Some(name.to_owned());
                 state.cursors.remove(name);
                 Ok(())
             }
-            Err(error) => {
-                let message = format!("resumable step {name:?}: {error}");
-                state.failure = Some(message.clone());
-                Err(Error::ResumableStep {
-                    name: name.to_owned(),
-                    source: Box::new(error),
-                })
-            }
+            Err(error) => Err(state.fail_step(name, error)),
         }
     }
 
@@ -266,11 +255,18 @@ impl WorkContext {
         }
         let mut state = self.resumable.lock().await;
         if let Some(failure) = &state.failure {
-            return Err(Error::runtime_context("worker context", failure.clone()));
+            return Err(Error::runtime_source(
+                "worker context",
+                failure.to_string(),
+                failure.clone(),
+            ));
         }
         if !state.all_step_names.insert(name.to_owned()) {
             let message = format!("duplicate resumable step name {name:?}");
-            state.failure = Some(message.clone());
+            state.failure = Some(WorkError::new(Box::new(Error::runtime_context(
+                "worker context",
+                message.clone(),
+            ))));
             return Err(Error::runtime_context("worker context", message));
         }
         if !state.resume_matched {
@@ -284,8 +280,8 @@ impl WorkContext {
                 return Ok(StepAction::Skip);
             }
         }
-        state.step_name = Some(name.to_owned());
-        Ok(StepAction::Run)
+        let previous = state.step_name.replace(name.to_owned());
+        Ok(StepAction::Run(previous))
     }
 
     fn current_job(&self) -> Result<(&Client, i64), Error> {
@@ -316,16 +312,7 @@ impl WorkContext {
         job_id: i64,
         metadata: &Map<String, Value>,
     ) -> Self {
-        let mut state = ResumableState::default();
-        state.resume_step = metadata
-            .get(crate::METADATA_KEY_RESUMABLE_STEP)
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        state.resume_matched = state.resume_step.is_none();
-        if let Some(Value::Object(cursors)) = metadata.get(crate::METADATA_KEY_RESUMABLE_CURSOR) {
-            state.cursors.clone_from(cursors);
-            state.had_cursors = !cursors.is_empty();
-        }
+        let state = ResumableState::from_metadata(metadata);
         Self {
             cancellation,
             client: Some(client),
@@ -335,9 +322,42 @@ impl WorkContext {
         }
     }
 
-    pub(crate) async fn resumable_finish(&self, worker_failed: bool) -> Option<String> {
+    /// Creates a detached attempt context using persisted resumable metadata.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn for_test_job(job: &JobRow) -> Self {
+        let mut context = Self::new(CancellationToken::new());
+        context.resumable = Arc::new(Mutex::new(ResumableState::from_metadata(&job.metadata)));
+        context
+    }
+
+    /// Validates checkpoint metadata before invoking user work.
+    #[doc(hidden)]
+    pub async fn resumable_validate(&self) -> Result<(), WorkError> {
+        match &self.resumable.lock().await.failure {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
+    }
+
+    /// Resolves attempt-scoped resumable errors and metadata for runtime/test parity.
+    #[doc(hidden)]
+    pub async fn resumable_finish(&self, worker_failed: bool) -> Option<WorkError> {
         let state = self.resumable.lock().await;
-        if worker_failed && let Some(completed_step) = &state.completed_step {
+        let failure = state.failure.clone().or_else(|| {
+            (!worker_failed && !state.resume_matched).then(|| {
+                WorkError::new(Box::new(Error::runtime_context(
+                    "worker context",
+                    format!(
+                        "resumable step {:?} not found in worker",
+                        state.resume_step.as_deref().unwrap_or_default()
+                    ),
+                )))
+            })
+        });
+        if (worker_failed || failure.is_some())
+            && let Some(completed_step) = &state.completed_step
+        {
             let mut updates = self.metadata_updates.lock().await;
             updates.insert(
                 crate::METADATA_KEY_RESUMABLE_STEP.to_owned(),
@@ -354,31 +374,76 @@ impl WorkContext {
                 );
             }
         }
-        state.failure.clone().or_else(|| {
-            (!worker_failed && !state.resume_matched).then(|| {
-                format!(
-                    "resumable step {:?} not found in worker",
-                    state.resume_step.as_deref().unwrap_or_default()
-                )
-            })
-        })
+        failure
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct ResumableState {
     all_step_names: HashSet<String>,
     completed_step: Option<String>,
     cursors: Map<String, Value>,
-    failure: Option<String>,
+    failure: Option<WorkError>,
     had_cursors: bool,
     resume_matched: bool,
     resume_step: Option<String>,
     step_name: Option<String>,
 }
 
+impl Default for ResumableState {
+    fn default() -> Self {
+        Self {
+            all_step_names: HashSet::new(),
+            completed_step: None,
+            cursors: Map::new(),
+            failure: None,
+            had_cursors: false,
+            resume_matched: true,
+            resume_step: None,
+            step_name: None,
+        }
+    }
+}
+
+impl ResumableState {
+    fn from_metadata(metadata: &Map<String, Value>) -> Self {
+        let mut state = Self::default();
+        state.resume_step = metadata
+            .get(crate::METADATA_KEY_RESUMABLE_STEP)
+            .and_then(Value::as_str)
+            .filter(|step| !step.is_empty())
+            .map(str::to_owned);
+        state.resume_matched = state.resume_step.is_none();
+        match metadata.get(crate::METADATA_KEY_RESUMABLE_CURSOR) {
+            Some(Value::Object(cursors)) => {
+                state.cursors.clone_from(cursors);
+                state.had_cursors = !cursors.is_empty();
+            }
+            Some(Value::Array(_)) => {
+                state.failure = Some(WorkError::new(Box::new(Error::invalid_job(
+                    "river:resumable_cursor must be an object when present",
+                ))));
+            }
+            _ => {}
+        }
+        state
+    }
+
+    fn fail_step(&mut self, name: &str, error: impl StdError + Send + Sync + 'static) -> Error {
+        let source = WorkError::new(Box::new(error));
+        self.failure = Some(WorkError::new(Box::new(Error::ResumableStep {
+            name: name.to_owned(),
+            source: Box::new(source.clone()),
+        })));
+        Error::ResumableStep {
+            name: name.to_owned(),
+            source: Box::new(source),
+        }
+    }
+}
+
 enum StepAction {
-    Run,
+    Run(Option<String>),
     Skip,
 }
 
@@ -750,6 +815,98 @@ mod tests {
             unique_key: None,
             unique_states: None,
         }
+    }
+
+    #[tokio::test]
+    async fn resumable_context_runs_without_a_checkpoint() {
+        for metadata in [json!({}), json!({"river:resumable_step": ""})] {
+            let mut row = job_row(FunctionJobArgs::KIND, false);
+            row.metadata = metadata.as_object().unwrap().clone();
+            let context = WorkContext::for_test_job(&row);
+            let mut ran = false;
+            context
+                .resumable_step("first", || async {
+                    ran = true;
+                    Ok::<_, FunctionError>(())
+                })
+                .await
+                .unwrap();
+            assert!(ran);
+            assert!(context.resumable_finish(false).await.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn resumable_cursor_decode_failure_is_sticky() {
+        let mut row = job_row(FunctionJobArgs::KIND, false);
+        row.metadata = json!({
+            "river:resumable_step": "first",
+            "river:resumable_cursor": { "second": "not a number" }
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let context = WorkContext::for_test_job(&row);
+        context
+            .resumable_step("first", || async {
+                panic!("already completed");
+                #[allow(unreachable_code)]
+                Ok::<_, FunctionError>(())
+            })
+            .await
+            .unwrap();
+        let error = context
+            .resumable_step_with_cursor("second", |_: i64| async {
+                panic!("invalid cursor must not reach worker");
+                #[allow(unreachable_code)]
+                Ok::<_, FunctionError>(())
+            })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("invalid type"));
+        assert!(context.resumable_set_cursor(&1).await.is_err());
+        assert!(context.resumable_finish(false).await.is_some());
+        assert_eq!(
+            context.metadata_updates().await[crate::METADATA_KEY_RESUMABLE_STEP],
+            "first"
+        );
+    }
+
+    #[tokio::test]
+    async fn resumable_nested_steps_restore_parent_and_error_sources() {
+        let context = WorkContext::new(CancellationToken::new());
+        let error = context
+            .resumable_step_with_cursor("outer", |_: i64| async {
+                context
+                    .resumable_step("inner", || async { Ok::<_, Error>(()) })
+                    .await?;
+                context.resumable_set_cursor(&7).await?;
+                Err::<(), _>(Error::ResumableStep {
+                    name: "source".to_owned(),
+                    source: Box::new(FunctionError),
+                })
+            })
+            .await
+            .unwrap_err();
+        let mut source: &(dyn StdError + 'static) = &error;
+        while !source.is::<FunctionError>() {
+            source = source.source().expect("preserved source");
+        }
+        let finished = context.resumable_finish(false).await.unwrap();
+        let mut source: &(dyn StdError + 'static) = &finished;
+        while !source.is::<FunctionError>() {
+            source = source.source().expect("preserved suppressed source");
+        }
+        assert_eq!(
+            context.metadata_updates().await,
+            json!({
+                "river:resumable_step": "inner",
+                "river:resumable_cursor": {"outer": 7}
+            })
+            .as_object()
+            .unwrap()
+            .clone()
+        );
     }
 
     #[tokio::test]

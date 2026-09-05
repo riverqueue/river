@@ -45,6 +45,16 @@ func (mapOrderArgs) MarshalJSON() ([]byte, error) { //nolint:unparam // json.Mar
 	return []byte(`{"2":2,"10":10,"zero":-0,"😀":1,"":2}`), nil
 }
 
+type nestedOrderArgs struct {
+	Nested struct {
+		// Deliberately non-alphabetical: nested struct wire order is significant.
+		Z int `json:"z"`
+		A int `json:"a"`
+	} `json:"nested"`
+}
+
+func (nestedOrderArgs) Kind() string { return "conformance_all_args" }
+
 type numericBoundaryArgs struct {
 	Exponent        float64 `json:"exponent"`
 	Fraction        float64 `json:"fraction"`
@@ -56,14 +66,16 @@ type numericBoundaryArgs struct {
 func (numericBoundaryArgs) Kind() string { return "conformance_numeric_boundaries" }
 
 type selectedAccount struct {
-	ID      string `json:"id"      river:"unique"`
-	Ignored string `json:"ignored"`
+	ID      string `json:"id,omitempty"      river:"unique"`
+	Ignored string `json:"ignored,omitempty"`
+	Region  string `json:"region,omitempty"  river:"unique"`
 }
 
 type selectedArgs struct {
-	Account selectedAccount `json:"account"`
-	Ignored bool            `json:"ignored"`
-	Label   string          `json:"label"   river:"unique"`
+	Account selectedAccount `json:"account,omitzero"`
+	Ignored bool            `json:"ignored,omitempty"`
+	Label   string          `json:"label,omitempty"    river:"unique"`
+	PathKey string          `json:"path/key,omitempty" river:"unique"`
 }
 
 func (selectedArgs) Kind() string { return "conformance_selected_args" }
@@ -161,6 +173,32 @@ func main() {
 	}
 	references := []referenceCase{
 		{
+			args:                selectedArgs{},
+			name:                "all_selected_fields_omitted",
+			now:                 now,
+			opts:                dbunique.UniqueOpts{ByArgs: true},
+			queue:               "default",
+			selectedUniquePaths: []string{"account.id", "account.region", "label", "path/key"},
+		},
+		{
+			args:                selectedArgs{Account: selectedAccount{ID: "acct", Ignored: "irrelevant", Region: "west"}, PathKey: "slash"},
+			name:                "selected_siblings_and_slash_key",
+			now:                 now,
+			opts:                dbunique.UniqueOpts{ByArgs: true},
+			queue:               "default",
+			selectedUniquePaths: []string{"account.id", "account.region", "label", "path/key"},
+		},
+		{
+			args: nestedOrderArgs{Nested: struct {
+				Z int `json:"z"`
+				A int `json:"a"`
+			}{Z: 1, A: 2}},
+			name:  "nested_struct_wire_order",
+			now:   now,
+			opts:  dbunique.UniqueOpts{ByArgs: true},
+			queue: "default",
+		},
+		{
 			args: allArgs{
 				Alpha:   "<alpha>&\u2028line",
 				Maximum: 9_007_199_254_740_991,
@@ -201,7 +239,7 @@ func main() {
 			now:                 now,
 			opts:                dbunique.UniqueOpts{ByArgs: true},
 			queue:               "default",
-			selectedUniquePaths: []string{"account.id", "label"},
+			selectedUniquePaths: []string{"account.id", "account.region", "label", "path/key"},
 		},
 		{
 			args:  simpleArgs{ID: 42},

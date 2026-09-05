@@ -4414,6 +4414,7 @@ async fn execute_job(
         let worker_context = context.clone();
         let worker_inner = Arc::clone(&inner);
         let mut worker_task = tokio::spawn(async move {
+            worker_context.resumable_validate().await?;
             for hook in &worker_inner.hooks {
                 hook.work_begin(&worker_context, &mut worker_row)
                     .await
@@ -4504,11 +4505,12 @@ async fn execute_job(
         let was_aborted = result
             .as_ref()
             .is_err_and(|failure| matches!(failure.kind, WorkerFailureKind::Aborted));
-        if let Some(resumable_failure) = context.resumable_finish(result.is_err()).await {
+        if let Some(resumable_failure) = context.resumable_finish(result.is_err()).await
+            && result.is_ok() {
             result = Err(WorkerFailure {
-                error: resumable_failure,
+                error: resumable_failure.to_string(),
                 kind: WorkerFailureKind::Error,
-                source: None,
+                source: Some(resumable_failure),
                 trace: String::new(),
             });
         }
