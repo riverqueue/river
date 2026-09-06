@@ -2823,6 +2823,138 @@ func Test_Client_StopAndCancel(t *testing.T) {
 	})
 }
 
+func Test_Client_StopAbandonTimeout(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type JobArgs struct {
+		testutil.JobArgsReflectKind[JobArgs]
+	}
+
+	setup := func(t *testing.T, configFunc func(config *Config), insertOpts *InsertOpts) (*Client[pgx.Tx], *rivertype.JobRow, <-chan *Event, chan struct{}, chan struct{}, func()) {
+		t.Helper()
+
+		config := newTestConfig(t, "")
+		configFunc(config)
+
+		jobContextDoneChan := make(chan struct{})
+		jobReleasedChan := make(chan struct{})
+		jobStartedChan := make(chan struct{})
+		releaseJobChan := make(chan struct{})
+		releaseJob := sync.OnceFunc(func() { close(releaseJobChan) })
+
+		AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			close(jobStartedChan)
+			<-ctx.Done()
+			close(jobContextDoneChan)
+			<-releaseJobChan
+			close(jobReleasedChan)
+			return nil
+		}))
+
+		client := runNewTestClient(ctx, t, config)
+		subscribeChan := subscribe(t, client)
+		t.Cleanup(releaseJob)
+
+		insertRes, err := client.Insert(ctx, JobArgs{}, insertOpts)
+		require.NoError(t, err)
+
+		riversharedtest.WaitOrTimeout(t, jobStartedChan)
+
+		return client, insertRes.Job, subscribeChan, jobContextDoneChan, jobReleasedChan, releaseJob
+	}
+
+	requireAbandonEvent := func(t *testing.T, subscribeChan <-chan *Event, jobID int64, state rivertype.JobState) {
+		t.Helper()
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.NotNil(t, event)
+		require.Equal(t, EventKindJobFailed, event.Kind)
+		require.Equal(t, jobID, event.Job.ID)
+		require.Equal(t, state, event.Job.State)
+		require.NotNil(t, event.JobStats)
+
+		_, ok := <-subscribeChan
+		require.False(t, ok, "expected exactly one job event")
+	}
+
+	requireAbandoned := func(t *testing.T, client *Client[pgx.Tx], jobID int64, state rivertype.JobState) {
+		t.Helper()
+
+		jobAfter, err := client.JobGet(ctx, jobID)
+		require.NoError(t, err)
+		require.Equal(t, state, jobAfter.State)
+		require.Len(t, jobAfter.Errors, 1)
+		require.Equal(t, producerJobAbandonedError, jobAfter.Errors[0].Error)
+		require.Equal(t, 1, jobAfter.Errors[0].Attempt)
+		require.Empty(t, jobAfter.Errors[0].Trace)
+		if state == rivertype.JobStateDiscarded {
+			require.NotNil(t, jobAfter.FinalizedAt)
+		} else {
+			require.Nil(t, jobAfter.FinalizedAt)
+		}
+	}
+
+	t.Run("AfterSoftStopTimeout", func(t *testing.T) {
+		t.Parallel()
+
+		client, job, subscribeChan, jobContextDoneChan, jobReleasedChan, releaseJob := setup(t, func(config *Config) {
+			config.StopAbandonTimeout = 100 * time.Millisecond
+			config.SoftStopTimeout = 100 * time.Millisecond
+		}, nil)
+
+		stopCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		require.NoError(t, client.Stop(stopCtx))
+
+		riversharedtest.WaitOrTimeout(t, jobContextDoneChan)
+		requireAbandoned(t, client, job.ID, rivertype.JobStateAvailable)
+		requireAbandonEvent(t, subscribeChan, job.ID, rivertype.JobStateAvailable)
+
+		releaseJob()
+		riversharedtest.WaitOrTimeout(t, jobReleasedChan)
+	})
+
+	t.Run("AfterStopAndCancel", func(t *testing.T) {
+		t.Parallel()
+
+		client, job, subscribeChan, jobContextDoneChan, jobReleasedChan, releaseJob := setup(t, func(config *Config) {
+			config.StopAbandonTimeout = 100 * time.Millisecond
+		}, nil)
+
+		stopCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		require.NoError(t, client.StopAndCancel(stopCtx))
+
+		riversharedtest.WaitOrTimeout(t, jobContextDoneChan)
+		requireAbandoned(t, client, job.ID, rivertype.JobStateAvailable)
+		requireAbandonEvent(t, subscribeChan, job.ID, rivertype.JobStateAvailable)
+
+		releaseJob()
+		riversharedtest.WaitOrTimeout(t, jobReleasedChan)
+	})
+
+	t.Run("AtMaxAttempts", func(t *testing.T) {
+		t.Parallel()
+
+		client, job, subscribeChan, jobContextDoneChan, jobReleasedChan, releaseJob := setup(t, func(config *Config) {
+			config.StopAbandonTimeout = 100 * time.Millisecond
+		}, &InsertOpts{MaxAttempts: 1})
+
+		stopCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		require.NoError(t, client.StopAndCancel(stopCtx))
+
+		riversharedtest.WaitOrTimeout(t, jobContextDoneChan)
+		requireAbandoned(t, client, job.ID, rivertype.JobStateDiscarded)
+		requireAbandonEvent(t, subscribeChan, job.ID, rivertype.JobStateDiscarded)
+
+		releaseJob()
+		riversharedtest.WaitOrTimeout(t, jobReleasedChan)
+	})
+}
+
 func Test_Client_SoftStopTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -2832,7 +2964,7 @@ func Test_Client_SoftStopTimeout(t *testing.T) {
 		testutil.JobArgsReflectKind[JobArgs]
 	}
 
-	t.Run("EscalatesToHardStopAfterTimeout", func(t *testing.T) {
+	t.Run("CancelsJobsAfterTimeout", func(t *testing.T) {
 		t.Parallel()
 
 		config := newTestConfig(t, "")
@@ -2853,8 +2985,8 @@ func Test_Client_SoftStopTimeout(t *testing.T) {
 
 		riversharedtest.WaitOrTimeout(t, jobStartedChan)
 
-		// Stop initiates a soft stop. The job won't finish on its own, but
-		// SoftStopTimeout should escalate to a hard stop after 100ms.
+		// Stop initiates a graceful stop. The job won't finish on its own, but
+		// SoftStopTimeout should cancel its context after 100ms.
 		require.NoError(t, client.Stop(ctx))
 
 		// Verify the job's context was indeed cancelled.
@@ -2959,7 +3091,7 @@ func Test_Client_SoftStopTimeout(t *testing.T) {
 		require.NoError(t, client.Stop(ctx))
 	})
 
-	t.Run("ContextCancellationEscalatesAfterTimeout", func(t *testing.T) {
+	t.Run("StartContextCancellationCancelsJobsAfterTimeout", func(t *testing.T) {
 		t.Parallel()
 
 		config := newTestConfig(t, "")
@@ -2996,8 +3128,8 @@ func Test_Client_SoftStopTimeout(t *testing.T) {
 
 		riversharedtest.WaitOrTimeout(t, jobStartedChan)
 
-		// Cancel the start context. This should initiate a soft stop, then
-		// escalate to hard stop after SoftStopTimeout.
+		// Cancel the start context. This should initiate a graceful stop, then
+		// cancel job contexts after SoftStopTimeout.
 		startCtxCancel()
 
 		riversharedtest.WaitOrTimeout(t, client.Stopped())
@@ -8867,6 +8999,22 @@ func Test_NewClient_Validations(t *testing.T) {
 			wantErr: fmt.Errorf("FetchPollInterval cannot be shorter than FetchCooldown (%s)", 20*time.Millisecond),
 		},
 		{
+			name: "StopAbandonTimeout cannot be negative",
+			configFunc: func(config *Config) {
+				config.StopAbandonTimeout = -1
+			},
+			wantErr: errors.New("StopAbandonTimeout cannot be less than zero"),
+		},
+		{
+			name: "StopAbandonTimeout may be overridden",
+			configFunc: func(config *Config) {
+				config.StopAbandonTimeout = 23 * time.Second
+			},
+			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
+				require.Equal(t, 23*time.Second, client.config.StopAbandonTimeout)
+			},
+		},
+		{
 			name:       "FetchPollInterval cannot be less than MinFetchPollInterval",
 			configFunc: func(config *Config) { config.FetchPollInterval = time.Millisecond - 1 },
 			wantErr:    errors.New("FetchPollInterval must be at least 1ms"),
@@ -9067,6 +9215,22 @@ func Test_NewClient_Validations(t *testing.T) {
 				config.Schema = "invalid-schema@name"
 			},
 			wantErr: errors.New("Schema name can only contain letters, numbers, and underscores, and must start with a letter or underscore"),
+		},
+		{
+			name: "SoftStopTimeout cannot be negative",
+			configFunc: func(config *Config) {
+				config.SoftStopTimeout = -1
+			},
+			wantErr: errors.New("SoftStopTimeout cannot be less than zero"),
+		},
+		{
+			name: "SoftStopTimeout may be overridden",
+			configFunc: func(config *Config) {
+				config.SoftStopTimeout = 23 * time.Second
+			},
+			validateResult: func(t *testing.T, client *Client[pgx.Tx]) { //nolint:thelper
+				require.Equal(t, 23*time.Second, client.config.SoftStopTimeout)
+			},
 		},
 		{
 			name: "Queues can be nil when Workers is also nil",
