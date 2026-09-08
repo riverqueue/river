@@ -501,7 +501,9 @@ FROM (
         unnest(@scheduled_at::timestamptz[]) AS scheduled_at,
         unnest(@state::text[])::/* TEMPLATE: schema */river_job_state AS state
 ) AS updated_job
-WHERE river_job.id = updated_job.id;
+WHERE river_job.id = updated_job.id
+    AND river_job.state = 'running'
+    AND river_job.attempted_at < @stuck_horizon::timestamptz;
 
 -- name: JobRetry :one
 WITH job_to_update AS (

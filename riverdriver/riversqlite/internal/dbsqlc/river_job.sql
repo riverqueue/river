@@ -503,7 +503,9 @@ SET
         ) + 1
     ),
     state = @state
-WHERE id = @id;
+WHERE id = @id
+    AND state = 'running'
+    AND attempted_at < cast(@stuck_horizon AS text);
 
 -- Differs by necessity from other drivers because SQLite doesn't support
 -- `UPDATE` inside CTEs so we can't retry if running but select otherwise.

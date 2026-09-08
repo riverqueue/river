@@ -1231,26 +1231,30 @@ SET
     state = updated_job.state
 FROM (
     SELECT
-        unnest($1::bigint[]) AS id,
-        unnest($2::jsonb[]) AS error,
-        nullif(unnest($3::timestamptz[]), '0001-01-01 00:00:00 +0000') AS finalized_at,
-        unnest($4::timestamptz[]) AS scheduled_at,
-        unnest($5::text[])::/* TEMPLATE: schema */river_job_state AS state
+        unnest($2::bigint[]) AS id,
+        unnest($3::jsonb[]) AS error,
+        nullif(unnest($4::timestamptz[]), '0001-01-01 00:00:00 +0000') AS finalized_at,
+        unnest($5::timestamptz[]) AS scheduled_at,
+        unnest($6::text[])::/* TEMPLATE: schema */river_job_state AS state
 ) AS updated_job
 WHERE river_job.id = updated_job.id
+    AND river_job.state = 'running'
+    AND river_job.attempted_at < $1::timestamptz
 `
 
 type JobRescueManyParams struct {
-	ID          []int64
-	Error       []string
-	FinalizedAt []time.Time
-	ScheduledAt []time.Time
-	State       []string
+	StuckHorizon time.Time
+	ID           []int64
+	Error        []string
+	FinalizedAt  []time.Time
+	ScheduledAt  []time.Time
+	State        []string
 }
 
 // Run by the rescuer to queue for retry or discard depending on job state.
 func (q *Queries) JobRescueMany(ctx context.Context, db DBTX, arg *JobRescueManyParams) error {
 	_, err := db.ExecContext(ctx, jobRescueMany,
+		arg.StuckHorizon,
 		pq.Array(arg.ID),
 		pq.Array(arg.Error),
 		pq.Array(arg.FinalizedAt),

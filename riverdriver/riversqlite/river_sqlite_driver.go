@@ -722,11 +722,12 @@ func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRes
 		// Should be a batch rescue, but that's currently impossible with SQLite/sqlc. https://github.com/sqlc-dev/sqlc/issues/3802
 		for i := range params.ID {
 			if err := dbsqlc.New().JobRescue(ctx, dbtx, &dbsqlc.JobRescueParams{
-				ID:          params.ID[i],
-				Error:       params.Error[i],
-				FinalizedAt: timeStringNullable(params.FinalizedAt[i]),
-				ScheduledAt: timeString(params.ScheduledAt[i]),
-				State:       params.State[i],
+				ID:           params.ID[i],
+				Error:        params.Error[i],
+				FinalizedAt:  timeStringNullable(params.FinalizedAt[i]),
+				ScheduledAt:  timeString(params.ScheduledAt[i]),
+				State:        params.State[i],
+				StuckHorizon: timeString(params.StuckHorizon),
 			}); err != nil {
 				return interpretError(err)
 			}
