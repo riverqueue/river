@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"math"
+	"slices"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivershared/testsignal"
+	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivershared/util/urlutil"
 	"github.com/riverqueue/river/rivertype"
@@ -652,6 +654,265 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.Equal(t, job.ID, listRes.Jobs[0].ID)
 	})
 
+	t.Run("JobListCustomStateConditions", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			args          river.NamedArgs
+			name          string
+			sql           string
+			wantAvailable bool
+			wantCompleted bool
+		}{
+			{nil, "ContradictoryFinalizedAt", "finalized_at IS NULL", false, false},
+			{river.NamedArgs{"other_state": "available"}, "ContradictoryState", "state = @other_state", false, false},
+			{river.NamedArgs{"other_state": "completed"}, "GroupedOr", "(state = @other_state OR finalized_at IS NULL)", false, true},
+			{nil, "UngroupedOr", "false OR finalized_at IS NULL", true, false},
+			{river.NamedArgs{"other_state": "completed"}, "UngroupedOrWithNamedArgument", "state = @other_state OR finalized_at IS NULL", true, true},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				client, bundle := setup(t)
+				available := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+				completed := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+					FinalizedAt: new(time.Now().UTC().Truncate(time.Second)), Schema: bundle.schema, State: new(rivertype.JobStateCompleted),
+				})
+				params := river.NewJobListParams().States(rivertype.JobStateCompleted).
+					OrderBy(river.JobListOrderByTime, river.SortOrderDesc).Where(tt.sql, tt.args)
+				result, err := client.JobList(ctx, params)
+				require.NoError(t, err)
+				gotIDs := make([]int64, 0, len(result.Jobs))
+				var wantIDs []int64
+				for _, job := range result.Jobs {
+					gotIDs = append(gotIDs, job.ID)
+				}
+				if tt.wantAvailable {
+					wantIDs = append(wantIDs, available.ID)
+				}
+				if tt.wantCompleted {
+					wantIDs = append(wantIDs, completed.ID)
+				}
+				require.ElementsMatch(t, wantIDs, gotIDs)
+			})
+		}
+	})
+
+	t.Run("JobListCustomStatePagination", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+		if bundle.driver.DatabaseName() != riverdriver.DatabaseNamePostgres {
+			t.Skip("uses PostgreSQL array syntax and time cursors")
+		}
+		now := time.Now().UTC().Truncate(time.Second)
+		wantIDs := make([]int64, 0, 3)
+		for range 3 {
+			job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+				FinalizedAt: &now, Metadata: []byte(`{"selected":true}`), Schema: bundle.schema, State: new(rivertype.JobStateCompleted),
+			})
+			wantIDs = append(wantIDs, job.ID)
+		}
+		slices.Reverse(wantIDs)
+		params := river.NewJobListParams().States(rivertype.JobStateCompleted).
+			OrderBy(river.JobListOrderByTime, river.SortOrderDesc).First(1).
+			Where("(state = ANY(@state) OR finalized_at IS NULL)").
+			Where("id > @minimum_id", river.NamedArgs{"minimum_id": 0}).Metadata(`{"selected":true}`)
+		var gotIDs []int64
+		pageParams := params
+		for page := range 4 {
+			result, err := client.JobList(ctx, pageParams)
+			require.NoError(t, err)
+			if page == 3 {
+				require.Empty(t, result.Jobs)
+				break
+			}
+			require.Len(t, result.Jobs, 1)
+			gotIDs = append(gotIDs, result.Jobs[0].ID)
+			pageParams = params.After(result.LastCursor)
+		}
+		require.Equal(t, wantIDs, gotIDs)
+	})
+
+	t.Run("JobListFinalized", func(t *testing.T) {
+		t.Parallel()
+
+		type testBundle struct {
+			driver riverdriver.Driver[TTx]
+			exec   riverdriver.Executor
+			jobs   map[rivertype.JobState][]*rivertype.JobRow
+			now    time.Time
+			schema string
+		}
+
+		setup := func(t *testing.T) (*river.Client[TTx], *testBundle) {
+			t.Helper()
+
+			client, bundle := setup(t)
+			now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+			jobs := make(map[rivertype.JobState][]*rivertype.JobRow)
+
+			// IDs and timestamps deliberately disagree. Each timestamp has three
+			// jobs, so a two-job page ends partway through a group of equal times.
+			for _, state := range []rivertype.JobState{rivertype.JobStateCancelled, rivertype.JobStateCompleted, rivertype.JobStateDiscarded} {
+				for _, offset := range []time.Duration{time.Second, 0, time.Second, 0, time.Second, 0} {
+					job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+						FinalizedAt: new(now.Add(offset)),
+						Kind:        new("selected"),
+						Priority:    new(2),
+						Queue:       new("selected"),
+						Schema:      bundle.schema,
+						State:       new(state),
+						Tags:        []string{"alpha", "beta"},
+					})
+					jobs[state] = append(jobs[state], job)
+				}
+			}
+
+			return client, &testBundle{
+				driver: bundle.driver,
+				exec:   bundle.exec,
+				jobs:   jobs,
+				now:    now,
+				schema: bundle.schema,
+			}
+		}
+
+		t.Run("Filters", func(t *testing.T) {
+			t.Parallel()
+
+			for _, tt := range []struct {
+				includeID bool
+				name      string
+				optsFunc  func(*testfactory.JobOpts)
+			}{
+				{false, "IDs", func(opts *testfactory.JobOpts) {}},
+				{true, "Kinds", func(opts *testfactory.JobOpts) { opts.Kind = new("other") }},
+				{true, "Priorities", func(opts *testfactory.JobOpts) { opts.Priority = new(3) }},
+				{true, "Queues", func(opts *testfactory.JobOpts) { opts.Queue = new("other") }},
+				{true, "States", func(opts *testfactory.JobOpts) { opts.State = new(rivertype.JobStateDiscarded) }},
+				{true, "TagsAll", func(opts *testfactory.JobOpts) { opts.Tags = []string{"beta"} }},
+				{true, "TagsAny", func(opts *testfactory.JobOpts) { opts.Tags = []string{"alpha"} }},
+			} {
+				t.Run(tt.name, func(t *testing.T) {
+					t.Parallel()
+
+					client, bundle := setup(t)
+
+					// All filters match the completed jobs. The extra job fails only
+					// the filter named by this case, so no other filter can hide it.
+					opts := &testfactory.JobOpts{
+						FinalizedAt: &bundle.now,
+						Kind:        new("selected"),
+						Priority:    new(2),
+						Queue:       new("selected"),
+						Schema:      bundle.schema,
+						State:       new(rivertype.JobStateCompleted),
+						Tags:        []string{"alpha", "beta"},
+					}
+					tt.optsFunc(opts)
+					excludedJob := testfactory.Job(ctx, t, bundle.exec, opts)
+					wantIDs := sliceutil.Map(bundle.jobs[rivertype.JobStateCompleted], func(job *rivertype.JobRow) int64 { return job.ID })
+					filterIDs := slices.Clone(wantIDs)
+					if tt.includeID {
+						filterIDs = append(filterIDs, excludedJob.ID)
+					}
+
+					listRes, err := client.JobList(ctx, river.NewJobListParams().
+						IDs(filterIDs...).Kinds("selected").Priorities(2).Queues("selected").
+						States(rivertype.JobStateCompleted).TagsAll("alpha").TagsAny("beta", "gamma").
+						OrderBy(river.JobListOrderByTime, river.SortOrderDesc))
+					require.NoError(t, err)
+					require.ElementsMatch(t, wantIDs, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+				})
+			}
+		})
+
+		t.Run("Ordering", func(t *testing.T) {
+			t.Parallel()
+
+			for _, tt := range []struct {
+				name   string
+				params *river.JobListParams
+				want   []int
+			}{
+				{"FinalizedAtAsc", river.NewJobListParams().OrderBy(river.JobListOrderByFinalizedAt, river.SortOrderAsc), []int{1, 3}},
+				{"FinalizedAtDesc", river.NewJobListParams().OrderBy(river.JobListOrderByFinalizedAt, river.SortOrderDesc), []int{4, 2}},
+				{"TimeAsc", river.NewJobListParams().OrderBy(river.JobListOrderByTime, river.SortOrderAsc), []int{1, 3}},
+				{"TimeDesc", river.NewJobListParams().OrderBy(river.JobListOrderByTime, river.SortOrderDesc), []int{4, 2}},
+			} {
+				t.Run(tt.name, func(t *testing.T) {
+					t.Parallel()
+
+					client, bundle := setup(t)
+
+					for _, state := range []rivertype.JobState{rivertype.JobStateCancelled, rivertype.JobStateCompleted, rivertype.JobStateDiscarded} {
+						jobs := bundle.jobs[state]
+						listRes, err := client.JobList(ctx, tt.params.States(state).First(2))
+						require.NoError(t, err)
+						require.Equal(t, []int64{jobs[tt.want[0]].ID, jobs[tt.want[1]].ID},
+							sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }), "state: %s", state)
+					}
+				})
+			}
+		})
+
+		t.Run("Pagination", func(t *testing.T) {
+			t.Parallel()
+
+			for _, tt := range []struct {
+				name   string
+				params *river.JobListParams
+				want   []int
+			}{
+				{"FinalizedAtAsc", river.NewJobListParams().OrderBy(river.JobListOrderByFinalizedAt, river.SortOrderAsc), []int{1, 3, 5, 0, 2, 4}},
+				{"FinalizedAtDesc", river.NewJobListParams().OrderBy(river.JobListOrderByFinalizedAt, river.SortOrderDesc), []int{4, 2, 0, 5, 3, 1}},
+				{"TimeAsc", river.NewJobListParams().OrderBy(river.JobListOrderByTime, river.SortOrderAsc), []int{1, 3, 5, 0, 2, 4}},
+				{"TimeDesc", river.NewJobListParams().OrderBy(river.JobListOrderByTime, river.SortOrderDesc), []int{4, 2, 0, 5, 3, 1}},
+			} {
+				t.Run(tt.name, func(t *testing.T) {
+					t.Parallel()
+
+					client, bundle := setup(t)
+
+					// SQLite stores timestamps as text, but list cursors bind time.Time
+					// directly. Re-enable once cursor binding uses the stored format.
+					if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+						t.Skip("SQLite time cursor arguments do not match the stored timestamp format")
+					}
+
+					for _, state := range []rivertype.JobState{rivertype.JobStateCancelled, rivertype.JobStateCompleted, rivertype.JobStateDiscarded} {
+						params := tt.params.States(state).First(2)
+						jobs := bundle.jobs[state]
+						wantIDs := sliceutil.Map(tt.want, func(index int) int64 { return jobs[index].ID })
+
+						firstPage, err := client.JobList(ctx, params)
+						require.NoError(t, err)
+						require.Equal(t, wantIDs[:2], sliceutil.Map(firstPage.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }), "state: %s", state)
+
+						// Resume in the middle of a timestamp group with a serialized cursor.
+						encoded, err := firstPage.LastCursor.MarshalText()
+						require.NoError(t, err)
+						var cursor river.JobListCursor
+						require.NoError(t, cursor.UnmarshalText(encoded))
+						secondPage, err := client.JobList(ctx, params.After(&cursor))
+						require.NoError(t, err)
+						require.Equal(t, wantIDs[2:4], sliceutil.Map(secondPage.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }), "state: %s", state)
+
+						// The next boundary splits the other timestamp group. Use a job-derived cursor.
+						thirdPage, err := client.JobList(ctx, params.After(river.JobListCursorFromJob(secondPage.Jobs[1])))
+						require.NoError(t, err)
+						require.Equal(t, wantIDs[4:], sliceutil.Map(thirdPage.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }), "state: %s", state)
+
+						emptyPage, err := client.JobList(ctx, params.After(thirdPage.LastCursor))
+						require.NoError(t, err)
+						require.Empty(t, emptyPage.Jobs)
+					}
+				})
+			}
+		})
+	})
+
 	t.Run("JobListMetadata", func(t *testing.T) {
 		t.Parallel()
 
@@ -671,6 +932,51 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.NoError(t, err)
 		require.Len(t, listRes.Jobs, 1)
 		require.Equal(t, job.ID, listRes.Jobs[0].ID)
+	})
+
+	t.Run("JobListStateFilters", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			name           string
+			params         *river.JobListParams
+			wantJobIndexes []int
+		}{
+			{"Default", river.NewJobListParams(), []int{0, 1, 2, 3}},
+			{"ExplicitEmpty", river.NewJobListParams().States(), []int{0, 1, 2, 3}},
+			{"FinalizedDefaults", river.NewJobListParams().OrderBy(river.JobListOrderByFinalizedAt, river.SortOrderDesc), []int{1, 2, 3}},
+			{"Mixed", river.NewJobListParams().States(rivertype.JobStateCompleted, rivertype.JobStateAvailable).OrderBy(river.JobListOrderByTime, river.SortOrderDesc), []int{0, 2}},
+			{"NonFinalized", river.NewJobListParams().States(rivertype.JobStateAvailable).OrderBy(river.JobListOrderByTime, river.SortOrderDesc), []int{0}},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				client, bundle := setup(t)
+
+				now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+				allIDs := make([]int64, 0, 4)
+				for _, state := range []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCancelled, rivertype.JobStateCompleted, rivertype.JobStateDiscarded} {
+					opts := &testfactory.JobOpts{Schema: bundle.schema, State: new(state)}
+					if state != rivertype.JobStateAvailable {
+						opts.FinalizedAt = &now
+					}
+					job := testfactory.Job(ctx, t, bundle.exec, opts)
+					allIDs = append(allIDs, job.ID)
+				}
+				wantIDs := make([]int64, 0, len(tt.wantJobIndexes))
+				for _, index := range tt.wantJobIndexes {
+					wantIDs = append(wantIDs, allIDs[index])
+				}
+
+				result, err := client.JobList(ctx, tt.params)
+				require.NoError(t, err)
+				gotIDs := make([]int64, 0, len(result.Jobs))
+				for _, job := range result.Jobs {
+					gotIDs = append(gotIDs, job.ID)
+				}
+				require.ElementsMatch(t, wantIDs, gotIDs)
+			})
+		}
 	})
 
 	t.Run("JobListTags", func(t *testing.T) {
