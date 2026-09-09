@@ -36,6 +36,41 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		}
 	}
 
+	setStateManyParams := func(params ...*riverdriver.JobSetStateIfRunningParams) *riverdriver.JobSetStateIfRunningManyParams {
+		batchParams := &riverdriver.JobSetStateIfRunningManyParams{}
+		for _, param := range params {
+			var (
+				attempt     *int
+				errData     []byte
+				finalizedAt *time.Time
+				scheduledAt *time.Time
+			)
+			if param.Attempt != nil {
+				attempt = param.Attempt
+			}
+			if param.ErrData != nil {
+				errData = param.ErrData
+			}
+			if param.FinalizedAt != nil {
+				finalizedAt = param.FinalizedAt
+			}
+			if param.ScheduledAt != nil {
+				scheduledAt = param.ScheduledAt
+			}
+
+			batchParams.ID = append(batchParams.ID, param.ID)
+			batchParams.Attempt = append(batchParams.Attempt, attempt)
+			batchParams.ErrData = append(batchParams.ErrData, errData)
+			batchParams.FinalizedAt = append(batchParams.FinalizedAt, finalizedAt)
+			batchParams.MetadataDoMerge = append(batchParams.MetadataDoMerge, param.MetadataDoMerge)
+			batchParams.MetadataUpdates = append(batchParams.MetadataUpdates, param.MetadataUpdates)
+			batchParams.ScheduledAt = append(batchParams.ScheduledAt, scheduledAt)
+			batchParams.State = append(batchParams.State, param.State)
+		}
+
+		return batchParams
+	}
+
 	// Deliberately includes sub-millisecond precision so tests can verify that
 	// drivers normalize timestamps to their declared precision.
 	precisionTestTime := time.Date(2025, 4, 30, 13, 26, 39, 123400000, time.UTC)
@@ -153,12 +188,14 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		now := precisionTestTime
 
 		job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-			Metadata: []byte(`{"river:rescue_count": 5, "something": "else"}`),
-			State:    new(rivertype.JobStateRunning),
+			AttemptedAt: new(now.Add(-time.Hour)),
+			Metadata:    []byte(`{"river:rescue_count": 5, "something": "else"}`),
+			State:       new(rivertype.JobStateRunning),
 		})
 		job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-			Metadata: []byte(`{}`),
-			State:    new(rivertype.JobStateRunning),
+			AttemptedAt: new(now.Add(-time.Hour)),
+			Metadata:    []byte(`{}`),
+			State:       new(rivertype.JobStateRunning),
 		})
 
 		_, err := exec.JobRescueMany(ctx, &riverdriver.JobRescueManyParams{
@@ -183,6 +220,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 				string(rivertype.JobStateAvailable),
 				string(rivertype.JobStateDiscarded),
 			},
+			StuckHorizon: now,
 		})
 		require.NoError(t, err)
 
@@ -201,6 +239,191 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		require.Equal(t, now.Truncate(bundle.driver.TimePrecision()), updatedJob2.ScheduledAt)
 		require.Equal(t, rivertype.JobStateDiscarded, updatedJob2.State)
 		require.JSONEq(t, `{"river:rescue_count": 1}`, string(updatedJob2.Metadata))
+	})
+
+	t.Run("JobRescueMany_CompletedAfterFetch", func(t *testing.T) {
+		t.Parallel()
+
+		for _, rescueState := range []rivertype.JobState{
+			rivertype.JobStateCancelled,
+			rivertype.JobStateDiscarded,
+			rivertype.JobStateRetryable,
+		} {
+			t.Run(string(rescueState), func(t *testing.T) {
+				t.Parallel()
+
+				exec, bundle := setup(ctx, t)
+
+				now := precisionTestTime.Truncate(bundle.driver.TimePrecision())
+				jobOpts := &testfactory.JobOpts{
+					AttemptedAt: new(now.Add(-2 * time.Hour)),
+					Metadata:    []byte(`{"river:rescue_count": 5, "something": "else"}`),
+					ScheduledAt: new(now.Add(-2 * time.Hour)),
+					State:       new(rivertype.JobStateRunning),
+				}
+				job := testfactory.Job(ctx, t, exec, jobOpts)
+				stillRunningJob := testfactory.Job(ctx, t, exec, jobOpts)
+
+				stuckJobs, err := exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
+					Max:          10,
+					StuckHorizon: now.Add(-time.Hour),
+				})
+				require.NoError(t, err)
+				require.Len(t, stuckJobs, 2)
+				require.Equal(t, job.ID, stuckJobs[0].ID)
+				require.Equal(t, stillRunningJob.ID, stuckJobs[1].ID)
+
+				// Reproduce the interleaving deterministically: the worker completes
+				// after the rescuer fetches the job, but before its rescue write.
+				completedJobs, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(
+					riverdriver.JobSetStateCompleted(job.ID, now, []byte(`{"worker": "finished"}`)),
+				))
+				require.NoError(t, err)
+				require.Len(t, completedJobs, 1)
+				require.Equal(t, rivertype.JobStateCompleted, completedJobs[0].State)
+
+				completedJob, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
+				require.NoError(t, err)
+
+				rescueAt := now.Add(time.Minute)
+				var finalizedAt *time.Time
+				if rescueState != rivertype.JobStateRetryable {
+					finalizedAt = &rescueAt
+				}
+
+				_, err = exec.JobRescueMany(ctx, &riverdriver.JobRescueManyParams{
+					ID:           []int64{stuckJobs[0].ID, stuckJobs[1].ID},
+					Error:        [][]byte{[]byte(`{"error": "stale rescue"}`), []byte(`{"error": "stuck job rescued"}`)},
+					FinalizedAt:  []*time.Time{finalizedAt, finalizedAt},
+					ScheduledAt:  []time.Time{rescueAt, rescueAt},
+					State:        []string{string(rescueState), string(rescueState)},
+					StuckHorizon: now.Add(-time.Hour),
+				})
+				require.NoError(t, err)
+
+				rescuedJob, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: stillRunningJob.ID})
+				require.NoError(t, err)
+				require.Equal(t, rescueState, rescuedJob.State)
+				require.Equal(t, finalizedAt, rescuedJob.FinalizedAt)
+				require.Equal(t, rescueAt, rescuedJob.ScheduledAt)
+				require.Len(t, rescuedJob.Errors, 1)
+				require.Equal(t, "stuck job rescued", rescuedJob.Errors[0].Error)
+				require.JSONEq(t, `{"river:rescue_count": 6, "something": "else"}`, string(rescuedJob.Metadata))
+
+				jobAfterRescue, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
+				require.NoError(t, err)
+				// Check the entire row, including errors, metadata, and timestamps.
+				require.Equal(t, completedJob, jobAfterRescue)
+			})
+		}
+	})
+
+	t.Run("JobRescueMany_ReclaimedAfterFetch", func(t *testing.T) {
+		t.Parallel()
+
+		for _, release := range []struct {
+			name         string
+			setStateFunc func(int64, time.Time) *riverdriver.JobSetStateIfRunningParams
+		}{
+			{"Failed", func(id int64, now time.Time) *riverdriver.JobSetStateIfRunningParams {
+				return riverdriver.JobSetStateErrorAvailable(id, now, []byte(`{"error":"worker failed"}`), nil)
+			}},
+			{"Interrupted", func(id int64, now time.Time) *riverdriver.JobSetStateIfRunningParams {
+				return riverdriver.JobSetStateInterrupted(id, now, 0, nil)
+			}},
+		} {
+			t.Run(release.name, func(t *testing.T) {
+				t.Parallel()
+
+				exec, bundle := setup(ctx, t)
+
+				now := precisionTestTime.Truncate(bundle.driver.TimePrecision())
+				horizon := now.Add(-time.Hour)
+				job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+					Attempt:     new(1),
+					AttemptedAt: new(now.Add(-2 * time.Hour)),
+					Metadata:    []byte(`{"river:rescue_count":5}`),
+					ScheduledAt: new(now.Add(-2 * time.Hour)),
+					State:       new(rivertype.JobStateRunning),
+				})
+
+				stuckJobs, err := exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{Max: 10, StuckHorizon: horizon})
+				require.NoError(t, err)
+				require.Len(t, stuckJobs, 1)
+				require.Equal(t, job.ID, stuckJobs[0].ID)
+
+				// The old worker releases the job and a new worker claims it before
+				// the rescuer writes its stale snapshot. State alone still matches.
+				releasedJobs, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(release.setStateFunc(job.ID, now)))
+				require.NoError(t, err)
+				require.Len(t, releasedJobs, 1)
+				require.Equal(t, rivertype.JobStateAvailable, releasedJobs[0].State)
+
+				claimedJobs, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+					ClientID:       "new-worker",
+					MaxAttemptedBy: 10,
+					MaxToLock:      1,
+					Now:            &now,
+					Queue:          job.Queue,
+				})
+				require.NoError(t, err)
+				require.Len(t, claimedJobs, 1)
+				require.Equal(t, job.ID, claimedJobs[0].ID)
+				require.Equal(t, rivertype.JobStateRunning, claimedJobs[0].State)
+				require.True(t, claimedJobs[0].AttemptedAt.After(horizon))
+
+				_, err = exec.JobRescueMany(ctx, &riverdriver.JobRescueManyParams{
+					ID:           []int64{stuckJobs[0].ID},
+					Error:        [][]byte{[]byte(`{"error":"stale rescue"}`)},
+					FinalizedAt:  []*time.Time{nil},
+					ScheduledAt:  []time.Time{now.Add(time.Minute)},
+					State:        []string{string(rivertype.JobStateRetryable)},
+					StuckHorizon: horizon,
+				})
+				require.NoError(t, err)
+
+				jobAfter, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
+				require.NoError(t, err)
+				require.Equal(t, claimedJobs[0], jobAfter)
+			})
+		}
+	})
+
+	t.Run("JobRescueMany_StuckHorizon", func(t *testing.T) {
+		t.Parallel()
+
+		exec, bundle := setup(ctx, t)
+
+		horizon := precisionTestTime.Truncate(bundle.driver.TimePrecision())
+		params := &riverdriver.JobRescueManyParams{StuckHorizon: horizon}
+		jobs := make([]*rivertype.JobRow, 0, 3)
+		for _, offset := range []time.Duration{-bundle.driver.TimePrecision(), 0, bundle.driver.TimePrecision()} {
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				AttemptedAt: new(horizon.Add(offset)),
+				State:       new(rivertype.JobStateRunning),
+			})
+			jobs = append(jobs, job)
+			params.ID = append(params.ID, job.ID)
+			params.Error = append(params.Error, []byte(`{"error":"stuck job rescued"}`))
+			params.FinalizedAt = append(params.FinalizedAt, nil)
+			params.ScheduledAt = append(params.ScheduledAt, horizon)
+			params.State = append(params.State, string(rivertype.JobStateRetryable))
+		}
+
+		_, err := exec.JobRescueMany(ctx, params)
+		require.NoError(t, err)
+
+		for i, job := range jobs {
+			jobAfter, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
+			require.NoError(t, err)
+			if i == 0 {
+				require.Equal(t, rivertype.JobStateRetryable, jobAfter.State)
+				require.Len(t, jobAfter.Errors, 1)
+			} else {
+				// As in JobGetStuck, jobs at or after the horizon are ineligible.
+				require.Equal(t, job, jobAfter)
+			}
+		}
 	})
 
 	t.Run("JobRetry", func(t *testing.T) {
@@ -545,41 +768,6 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		})
 		require.NoError(t, err)
 		return errPayload
-	}
-
-	setStateManyParams := func(params ...*riverdriver.JobSetStateIfRunningParams) *riverdriver.JobSetStateIfRunningManyParams {
-		batchParams := &riverdriver.JobSetStateIfRunningManyParams{}
-		for _, param := range params {
-			var (
-				attempt     *int
-				errData     []byte
-				finalizedAt *time.Time
-				scheduledAt *time.Time
-			)
-			if param.Attempt != nil {
-				attempt = param.Attempt
-			}
-			if param.ErrData != nil {
-				errData = param.ErrData
-			}
-			if param.FinalizedAt != nil {
-				finalizedAt = param.FinalizedAt
-			}
-			if param.ScheduledAt != nil {
-				scheduledAt = param.ScheduledAt
-			}
-
-			batchParams.ID = append(batchParams.ID, param.ID)
-			batchParams.Attempt = append(batchParams.Attempt, attempt)
-			batchParams.ErrData = append(batchParams.ErrData, errData)
-			batchParams.FinalizedAt = append(batchParams.FinalizedAt, finalizedAt)
-			batchParams.MetadataDoMerge = append(batchParams.MetadataDoMerge, param.MetadataDoMerge)
-			batchParams.MetadataUpdates = append(batchParams.MetadataUpdates, param.MetadataUpdates)
-			batchParams.ScheduledAt = append(batchParams.ScheduledAt, scheduledAt)
-			batchParams.State = append(batchParams.State, param.State)
-		}
-
-		return batchParams
 	}
 
 	t.Run("JobSetStateIfRunningMany_JobSetStateCompleted", func(t *testing.T) {

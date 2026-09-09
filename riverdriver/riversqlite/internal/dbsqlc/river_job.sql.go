@@ -1259,14 +1259,17 @@ SET
     ),
     state = ?4
 WHERE id = ?5
+    AND state = 'running'
+    AND attempted_at < cast(?6 AS text)
 `
 
 type JobRescueParams struct {
-	Error       interface{}
-	FinalizedAt *string
-	ScheduledAt string
-	State       string
-	ID          int64
+	Error        interface{}
+	FinalizedAt  *string
+	ScheduledAt  string
+	State        string
+	ID           int64
+	StuckHorizon string
 }
 
 // Rescue a job.
@@ -1286,6 +1289,7 @@ func (q *Queries) JobRescue(ctx context.Context, db DBTX, arg *JobRescueParams) 
 		arg.ScheduledAt,
 		arg.State,
 		arg.ID,
+		arg.StuckHorizon,
 	)
 	return err
 }

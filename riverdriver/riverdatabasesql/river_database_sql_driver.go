@@ -630,11 +630,12 @@ func (e *Executor) JobList(ctx context.Context, params *riverdriver.JobListParam
 
 func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRescueManyParams) (*struct{}, error) {
 	if err := dbsqlc.New().JobRescueMany(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobRescueManyParams{
-		ID:          params.ID,
-		Error:       sliceutil.Map(params.Error, func(e []byte) string { return string(e) }),
-		FinalizedAt: sliceutil.Map(params.FinalizedAt, func(t *time.Time) time.Time { return ptrutil.ValOrDefault(t, time.Time{}) }),
-		ScheduledAt: params.ScheduledAt,
-		State:       params.State,
+		ID:           params.ID,
+		Error:        sliceutil.Map(params.Error, func(e []byte) string { return string(e) }),
+		FinalizedAt:  sliceutil.Map(params.FinalizedAt, func(t *time.Time) time.Time { return ptrutil.ValOrDefault(t, time.Time{}) }),
+		ScheduledAt:  params.ScheduledAt,
+		State:        params.State,
+		StuckHorizon: params.StuckHorizon,
 	}); err != nil {
 		return nil, interpretError(err)
 	}
