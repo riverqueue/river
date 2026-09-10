@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"math"
 	"os"
 	"path"
@@ -702,10 +703,23 @@ func (e *Executor) JobKindList(ctx context.Context, params *riverdriver.JobKindL
 }
 
 func (e *Executor) JobList(ctx context.Context, params *riverdriver.JobListParams) ([]*rivertype.JobRow, error) {
+	// List cursors and custom conditions can contain time values. Bind them
+	// in the same format as stored timestamps so comparisons work in SQLite.
+	// Keep the caller's arguments intact for repeated or concurrent use.
+	namedArgs := maps.Clone(params.NamedArgs)
+	for name, arg := range namedArgs {
+		switch arg := arg.(type) {
+		case time.Time:
+			namedArgs[name] = timeString(arg)
+		case *time.Time:
+			namedArgs[name] = timeStringNullable(arg)
+		}
+	}
+
 	ctx = sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
 		"order_by_clause": {Value: params.OrderByClause},
 		"where_clause":    {Value: params.WhereClause},
-	}, params.NamedArgs)
+	}, namedArgs)
 
 	jobs, err := dbsqlc.New().JobList(schemaTemplateParam(ctx, params.Schema), e.dbtx, int64(params.Max))
 	if err != nil {

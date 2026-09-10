@@ -270,20 +270,51 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 
 	orderBy = append(orderBy, dblist.JobListOrderBy{Expr: "id", Order: sortOrder})
 
+	// Preserve custom SQL and its argument types without trying to parse it.
+	// In particular, an ungrouped OR may bypass the typed state filter, and
+	// custom SQL can reference the existing @state array argument. Metadata
+	// predicates also live in p.where; conservatively keep that path unchanged.
+	states := p.states
+
+	// Copy conditions so reusing params does not accumulate generated cursor
+	// predicates or mix them into the caller's custom SQL.
+	where := append([]dblist.WherePredicate(nil), p.where...)
+	if len(p.where) == 0 && len(states) == 1 {
+		// Equality lets Postgres use the timestamp ordering of an index on
+		// (state, finalized_at). ANY does not establish that state is fixed.
+		where = append(where, dblist.WherePredicate{
+			NamedArgs: map[string]any{"state": string(states[0])},
+			SQL:       "state = @state",
+		})
+
+		// Supported schemas enforce non-null finalized_at for these states.
+		// Make that explicit so Postgres can use the existing partial index.
+		if timeField == "finalized_at" {
+			switch states[0] {
+			case rivertype.JobStateCancelled, rivertype.JobStateCompleted, rivertype.JobStateDiscarded:
+				where = append(where, dblist.WherePredicate{SQL: "finalized_at IS NOT NULL"})
+			case rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRetryable, rivertype.JobStateRunning, rivertype.JobStateScheduled:
+			}
+		}
+
+		// The state filter is already represented in where.
+		states = nil
+	}
+
 	if p.after != nil {
 		namedArgs := map[string]any{"after_id": p.after.id}
 		if p.after.time.IsZero() { // order by ID only
 			if sortOrder == dblist.SortOrderAsc {
-				p.where = append(p.where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: "(id > @after_id)"})
+				where = append(where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: "(id > @after_id)"})
 			} else {
-				p.where = append(p.where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: "(id < @after_id)"})
+				where = append(where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: "(id < @after_id)"})
 			}
 		} else {
 			namedArgs["cursor_time"] = p.after.time
 			if sortOrder == dblist.SortOrderAsc {
-				p.where = append(p.where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`("%s" > @cursor_time OR ("%s" = @cursor_time AND "id" > @after_id))`, timeField, timeField)})
+				where = append(where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`("%s" > @cursor_time OR ("%s" = @cursor_time AND "id" > @after_id))`, timeField, timeField)})
 			} else {
-				p.where = append(p.where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`("%s" < @cursor_time OR ("%s" = @cursor_time AND "id" < @after_id))`, timeField, timeField)})
+				where = append(where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`("%s" < @cursor_time OR ("%s" = @cursor_time AND "id" < @after_id))`, timeField, timeField)})
 			}
 		}
 	}
@@ -296,10 +327,10 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 		Priorities: p.priorities,
 		Queues:     p.queues,
 		Schema:     p.schema,
-		States:     p.states,
+		States:     states,
 		TagsAll:    p.tagsAll,
 		TagsAny:    p.tagsAny,
-		Where:      p.where,
+		Where:      where,
 	}, nil
 }
 
