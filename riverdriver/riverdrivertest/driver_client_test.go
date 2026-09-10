@@ -703,7 +703,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 
 		client, bundle := setup(t)
 		if bundle.driver.DatabaseName() != riverdriver.DatabaseNamePostgres {
-			t.Skip("uses PostgreSQL array syntax and time cursors")
+			t.Skip("uses PostgreSQL array and JSON containment syntax")
 		}
 		now := time.Now().UTC().Truncate(time.Second)
 		wantIDs := make([]int64, 0, 3)
@@ -738,7 +738,6 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		t.Parallel()
 
 		type testBundle struct {
-			driver riverdriver.Driver[TTx]
 			exec   riverdriver.Executor
 			jobs   map[rivertype.JobState][]*rivertype.JobRow
 			now    time.Time
@@ -749,7 +748,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 			t.Helper()
 
 			client, bundle := setup(t)
-			now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+			now := time.Date(2026, 9, 9, 12, 0, 0, 123000000, time.UTC)
 			jobs := make(map[rivertype.JobState][]*rivertype.JobRow)
 
 			// IDs and timestamps deliberately disagree. Each timestamp has three
@@ -770,7 +769,6 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 			}
 
 			return client, &testBundle{
-				driver: bundle.driver,
 				exec:   bundle.exec,
 				jobs:   jobs,
 				now:    now,
@@ -875,12 +873,6 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 
 					client, bundle := setup(t)
 
-					// SQLite stores timestamps as text, but list cursors bind time.Time
-					// directly. Re-enable once cursor binding uses the stored format.
-					if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
-						t.Skip("SQLite time cursor arguments do not match the stored timestamp format")
-					}
-
 					for _, state := range []rivertype.JobState{rivertype.JobStateCancelled, rivertype.JobStateCompleted, rivertype.JobStateDiscarded} {
 						params := tt.params.States(state).First(2)
 						jobs := bundle.jobs[state]
@@ -932,6 +924,48 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.NoError(t, err)
 		require.Len(t, listRes.Jobs, 1)
 		require.Equal(t, job.ID, listRes.Jobs[0].ID)
+	})
+
+	t.Run("JobListScheduledPagination", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			name  string
+			order river.SortOrder
+		}{
+			{"Ascending", river.SortOrderAsc},
+			{"Descending", river.SortOrderDesc},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				client, bundle := setup(t)
+
+				// The time comparison must recognize equality so the ID cursor
+				// can advance through available jobs sharing a scheduled time.
+				now := time.Date(2026, 9, 9, 12, 0, 0, 123000000, time.UTC)
+				opts := &testfactory.JobOpts{Kind: new("selected"), ScheduledAt: &now, Schema: bundle.schema}
+				job1 := testfactory.Job(ctx, t, bundle.exec, opts)
+				job2 := testfactory.Job(ctx, t, bundle.exec, opts)
+				wantIDs := []int64{job1.ID, job2.ID}
+				if tt.order == river.SortOrderDesc {
+					slices.Reverse(wantIDs)
+				}
+				params := river.NewJobListParams().States(rivertype.JobStateAvailable).
+					OrderBy(river.JobListOrderByScheduledAt, tt.order).First(1).
+					Where("kind = @kind_name", river.NamedArgs{"kind_name": "selected"})
+
+				firstPage, err := client.JobList(ctx, params)
+				require.NoError(t, err)
+				require.Equal(t, wantIDs[:1], sliceutil.Map(firstPage.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+				secondPage, err := client.JobList(ctx, params.After(firstPage.LastCursor))
+				require.NoError(t, err)
+				require.Equal(t, wantIDs[1:], sliceutil.Map(secondPage.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+				emptyPage, err := client.JobList(ctx, params.After(secondPage.LastCursor))
+				require.NoError(t, err)
+				require.Empty(t, emptyPage.Jobs)
+			})
+		}
 	})
 
 	t.Run("JobListStateFilters", func(t *testing.T) {
@@ -1027,6 +1061,53 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		listRes, err = client.JobList(ctx, river.NewJobListParams().TagsAny("alpha").TagsAny())
 		require.NoError(t, err)
 		require.Len(t, listRes.Jobs, 6)
+	})
+
+	t.Run("JobListTimeArguments", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			name          string
+			valueFunc     func(time.Time) any
+			wantFinalized bool
+		}{
+			{"NilTimePointer", func(time.Time) any { return (*time.Time)(nil) }, false},
+			{"Time", func(value time.Time) any { return value }, true},
+			{"TimePointer", func(value time.Time) any { return &value }, true},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				_, bundle := setup(t)
+
+				now := time.Date(2026, 9, 9, 12, 0, 0, 123000000, time.UTC)
+				available := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("selected"), Schema: bundle.schema})
+				completed := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+					FinalizedAt: &now, Kind: new("selected"), Schema: bundle.schema, State: new(rivertype.JobStateCompleted),
+				})
+				wantID := available.ID
+				if tt.wantFinalized {
+					wantID = completed.ID
+				}
+
+				// Match the same instant in another zone, including milliseconds.
+				// Use the driver directly to verify it leaves reusable arguments intact.
+				arg := tt.valueFunc(now.In(time.FixedZone("test", -7*60*60)))
+				params := &riverdriver.JobListParams{
+					Max:           100,
+					NamedArgs:     map[string]any{"kind": "selected", "time": arg},
+					OrderByClause: "id ASC",
+					Schema:        bundle.schema,
+					WhereClause:   "kind = @kind AND (finalized_at = @time OR (finalized_at IS NULL AND @time IS NULL))",
+				}
+				for range 2 {
+					jobs, err := bundle.exec.JobList(ctx, params)
+					require.NoError(t, err)
+					require.Equal(t, []int64{wantID}, sliceutil.Map(jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+				}
+				require.Equal(t, map[string]any{"kind": "selected", "time": arg}, params.NamedArgs)
+			})
+		}
 	})
 
 	t.Run("JobListTx", func(t *testing.T) {
