@@ -7,7 +7,7 @@ toolchain go1.26.6
 require (
 	github.com/davecgh/go-spew v1.1.1
 	github.com/jackc/pgerrcode v0.0.0-20240316143900-6e2875d9b438
-	github.com/jackc/pgx/v5 v5.10.0
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/lib/pq v1.12.3
 	github.com/riverqueue/river v0.47.0
 	github.com/riverqueue/river/riverdriver v0.47.0
@@ -20,7 +20,7 @@ require (
 	github.com/tidwall/gjson v1.19.0
 	github.com/tidwall/sjson v1.2.5
 	github.com/tursodatabase/libsql-client-go v0.0.0-20260528064733-9d5d30a29a60
-	golang.org/x/text v0.41.0
+	golang.org/x/text v0.42.0
 	modernc.org/sqlite v1.58.0
 	turso.tech/database/tursogo v0.7.2
 )
@@ -43,7 +43,7 @@ require (
 	go.uber.org/goleak v1.3.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
-	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	modernc.org/libc v1.75.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
