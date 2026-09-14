@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -49,6 +50,13 @@ type RequireInsertedOpts struct {
 	//
 	// No assertion is made if left the zero value.
 	MaxAttempts int
+
+	// Metadata is a subset of job metadata to assert against. Only the keys and
+	// values provided are compared, and any extra metadata on the job is
+	// ignored.
+	//
+	// No assertion is made if left nil or empty.
+	Metadata map[string]any
 
 	// Priority is the expected priority for the inserted job.
 	//
@@ -501,6 +509,16 @@ func compareJobToInsertOpts(t testingT, jobRow *rivertype.JobRow, expectedOpts *
 		}
 	}
 
+	if len(expectedOpts.Metadata) > 0 {
+		metadataMatches, metadataFailures := compareMetadataSubset(t, jobRow.Metadata, expectedOpts.Metadata, requireNotInserted)
+
+		if !metadataMatches && requireNotInserted {
+			return true
+		}
+
+		failures = append(failures, metadataFailures...)
+	}
+
 	if expectedOpts.Priority != 0 {
 		if jobRow.Priority == expectedOpts.Priority {
 			if requireNotInserted {
@@ -592,6 +610,94 @@ func compareJobToInsertOpts(t testingT, jobRow *rivertype.JobRow, expectedOpts *
 	// have built up failures and are ready to emit a final failure message.
 	failuref(t, "Job with kind '%s'%s %s", jobRow.Kind, positionStr(), strings.Join(failures, ", "))
 	return false
+}
+
+func compareMetadataSubset(t testingT, jobMetadataBytes []byte, expectedMetadata map[string]any, requireNotInserted bool) (bool, []string) {
+	t.Helper()
+
+	jobMetadata := map[string]any{}
+	if len(jobMetadataBytes) > 0 {
+		if err := json.Unmarshal(jobMetadataBytes, &jobMetadata); err != nil {
+			failuref(t, "Internal failure: error unmarshaling job metadata: %s", err)
+		}
+	}
+
+	keys := make([]string, 0, len(expectedMetadata))
+	for key := range expectedMetadata {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+
+	failures := make([]string, 0, len(keys))
+	allMatch := true
+	for _, key := range keys {
+		expectedValue := expectedMetadata[key]
+
+		actualValue, ok := jobMetadata[key]
+		if !ok {
+			allMatch = false
+			if requireNotInserted {
+				return false, nil
+			}
+			failures = append(failures, fmt.Sprintf("metadata missing key '%s'", key))
+			continue
+		}
+
+		if expectedValue == nil {
+			if actualValue == nil {
+				if requireNotInserted {
+					failures = append(failures, fmt.Sprintf("metadata[%s] equal to excluded null", key))
+				}
+			} else {
+				allMatch = false
+				if requireNotInserted {
+					return false, nil
+				}
+				failures = append(failures, fmt.Sprintf("metadata[%s] %s not equal to expected null", key, formatMetadataValue(actualValue)))
+			}
+			continue
+		}
+
+		normalizedExpected, err := normalizeMetadataValue(expectedValue)
+		if err != nil {
+			failuref(t, "Internal failure: error normalizing metadata for key '%s': %s", key, err)
+		}
+
+		if reflect.DeepEqual(actualValue, normalizedExpected) {
+			if requireNotInserted {
+				failures = append(failures, fmt.Sprintf("metadata[%s] equal to excluded %s", key, formatMetadataValue(normalizedExpected)))
+			}
+		} else {
+			allMatch = false
+			if requireNotInserted {
+				return false, nil
+			}
+			failures = append(failures, fmt.Sprintf("metadata[%s] %s not equal to expected %s", key, formatMetadataValue(actualValue), formatMetadataValue(normalizedExpected)))
+		}
+	}
+
+	return allMatch, failures
+}
+
+func formatMetadataValue(value any) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Sprintf("%v", value)
+	}
+	return string(encoded)
+}
+
+func normalizeMetadataValue(value any) (any, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+
+	var normalized any
+	if err := json.Unmarshal(encoded, &normalized); err != nil {
+		return nil, err
+	}
+	return normalized, nil
 }
 
 // failuref takes a printf-style directive and is a shortcut for failing an
