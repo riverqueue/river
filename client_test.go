@@ -1476,6 +1476,63 @@ func Test_Client_Common(t *testing.T) {
 		client.producersByQueueName[QueueDefault].testSignals.QueueControlEventTriggered.RequireEmpty()
 	})
 
+	t.Run("ConcurrentCancelSingleFinalizerAndFreshReturn", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		// Scheduled far out so no producer can ever work it.
+		insertRes, err := client.Insert(ctx, &noOpArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(5 * time.Minute)})
+		require.NoError(t, err)
+
+		const cancelRounds = 20
+
+		var firstFinalizedAt *time.Time
+
+		for range cancelRounds {
+			var (
+				group sync.WaitGroup
+				rows  [2]*rivertype.JobRow
+				errs  [2]error
+			)
+
+			group.Go(func() {
+				rows[0], errs[0] = client.JobCancel(ctx, insertRes.Job.ID)
+			})
+			group.Go(func() {
+				rows[1], errs[1] = client.JobCancel(ctx, insertRes.Job.ID)
+			})
+			group.Wait()
+
+			for i := range 2 {
+				require.NoError(t, errs[i])
+				require.Equal(t, rivertype.JobStateCancelled, rows[i].State)
+			}
+
+			require.Equal(t, *rows[0].FinalizedAt, *rows[1].FinalizedAt)
+
+			if firstFinalizedAt == nil {
+				firstFinalizedAt = rows[0].FinalizedAt
+			}
+			require.Equal(t, *firstFinalizedAt, *rows[0].FinalizedAt,
+				"finalized_at must be written exactly once; later cancels must not re-stamp it")
+		}
+
+		finalRow, err := client.JobGet(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateCancelled, finalRow.State)
+		require.Equal(t, *firstFinalizedAt, *finalRow.FinalizedAt)
+
+		select {
+		case event := <-subscribeChan:
+			t.Fatalf("expected no job events for operator cancels of a never-worked job, got: %v", event)
+		case <-time.After(500 * time.Millisecond):
+		}
+	})
+
 	t.Run("AlternateSchema", func(t *testing.T) {
 		t.Parallel()
 
