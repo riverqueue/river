@@ -88,7 +88,7 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 				// SQLite needs to set a special metadata key to be able to
 				// check for duplicates. Remove this for purposes of comparing
 				// inserted metadata.
-				job.Metadata, err = sjson.DeleteBytes(job.Metadata, rivercommon.MetadataKeyUniqueNonce)
+				job.Metadata, err = sjson.DeleteBytes(job.Metadata, riverdriver.UniqueInsertMetadataKey)
 				require.NoError(t, err)
 
 				require.Equal(t, idStart+int64(i), job.ID)

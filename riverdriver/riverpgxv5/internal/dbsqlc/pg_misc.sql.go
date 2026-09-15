@@ -20,6 +20,24 @@ func (q *Queries) PGAdvisoryXactLock(ctx context.Context, db DBTX, key int64) er
 	return err
 }
 
+const pGGetProductAndVersion = `-- name: PGGetProductAndVersion :one
+SELECT
+    version()::text AS product,
+    current_setting('server_version_num')::int AS version_num
+`
+
+type PGGetProductAndVersionRow struct {
+	Product    string
+	VersionNum int32
+}
+
+func (q *Queries) PGGetProductAndVersion(ctx context.Context, db DBTX) (*PGGetProductAndVersionRow, error) {
+	row := db.QueryRow(ctx, pGGetProductAndVersion)
+	var i PGGetProductAndVersionRow
+	err := row.Scan(&i.Product, &i.VersionNum)
+	return &i, err
+}
+
 const pGNotifyMany = `-- name: PGNotifyMany :exec
 WITH topic_to_notify AS (
     SELECT
