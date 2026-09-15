@@ -5772,6 +5772,95 @@ func Test_Client_JobRetry(t *testing.T) {
 		require.ErrorIs(t, err, ErrNotFound)
 		require.Nil(t, job)
 	})
+
+	// ConcurrentRetryLoserSeesWinnersCommitNotStaleSnapshot pins the documented
+	// JobRetryTx contract: "A retried job isn't visible to be worked until the
+	// transaction commits, and if the transaction rolls back, so too is the
+	// retried job" — a caller that waits for that transaction must therefore
+	// observe the committed outcome, not a pre-commit snapshot.
+	//
+	// The retry CTE (river_job.sql) serializes concurrent retries on a
+	// `SELECT ... FOR UPDATE`. When two retries race over one finalized row, the
+	// loser's update correctly matches zero rows (EvalPlanQual re-checks the
+	// "already available with a prior scheduled_at" guard against the winner's
+	// committed version), but the query's fallback UNION arm — `id NOT IN
+	// (SELECT id FROM updated_job)` — is a plain, non-locking re-read. It runs
+	// on the loser's statement snapshot, which predates the winner's commit, so
+	// the loser is handed back the stale pre-commit row: still `cancelled`,
+	// `finalized_at` still set, even though the retry it waited for is
+	// committed and the row is `available`.
+	//
+	// Unlike a wall-clock race, this interleaving is forced deterministically
+	// here: the winner retries inside an open transaction, the loser is parked
+	// on the row lock (confirmed via pg_stat_activity before proceeding), and
+	// only then does the winner commit. Red without a locking (or otherwise
+	// post-EPQ) read in the fallback arm.
+	t.Run("ConcurrentRetryLoserSeesWinnersCommitNotStaleSnapshot", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		insertRes, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{ScheduledAt: time.Now().Add(time.Hour)})
+		require.NoError(t, err)
+
+		cancelledJob, err := client.JobCancel(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateCancelled, cancelledJob.State)
+
+		// Winner: retry in a transaction held open across the loser's attempt.
+		winnerTx, err := bundle.dbPool.Begin(ctx)
+		require.NoError(t, err)
+		defer func() { _ = winnerTx.Rollback(context.WithoutCancel(ctx)) }()
+
+		winnerRow, err := client.JobRetryTx(ctx, winnerTx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateAvailable, winnerRow.State)
+		require.Nil(t, winnerRow.FinalizedAt)
+
+		// Loser: fresh transaction whose first statement pins its snapshot and
+		// reports its backend PID; the retry itself then blocks on the winner's
+		// row lock.
+		loserTx, err := bundle.dbPool.Begin(ctx)
+		require.NoError(t, err)
+		defer func() { _ = loserTx.Rollback(context.WithoutCancel(ctx)) }()
+
+		var loserPID int
+		require.NoError(t, loserTx.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&loserPID))
+
+		type retryResult struct {
+			row *rivertype.JobRow
+			err error
+		}
+		loserDone := make(chan retryResult, 1)
+		go func() {
+			row, err := client.JobRetryTx(ctx, loserTx, insertRes.Job.ID)
+			loserDone <- retryResult{row, err}
+		}()
+
+		require.Eventually(t, func() bool {
+			var waitEventType string
+			err := bundle.dbPool.QueryRow(ctx,
+				"SELECT COALESCE(wait_event_type, '') FROM pg_stat_activity WHERE pid = $1", loserPID).
+				Scan(&waitEventType)
+			return err == nil && waitEventType == "Lock"
+		}, 5*time.Second, 10*time.Millisecond, "loser retry never entered a lock wait on the job row")
+
+		require.NoError(t, winnerTx.Commit(ctx))
+
+		loser := <-loserDone
+		require.NoError(t, loser.err)
+
+		require.Equal(t, rivertype.JobStateAvailable, loser.row.State,
+			"loser of a retry race returned a stale pre-commit row; its fallback read must see the winner's commit")
+		require.Nil(t, loser.row.FinalizedAt,
+			"loser must observe the winner's finalization clear, not its own snapshot's")
+
+		// The row itself was never double-touched: exactly one retry happened.
+		finalRow, err := client.JobGet(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateAvailable, finalRow.State)
+		require.Equal(t, winnerRow.ScheduledAt, finalRow.ScheduledAt)
+	})
 }
 
 func Test_Client_JobUpdate(t *testing.T) {
