@@ -80,12 +80,12 @@ struct FailWorker;
 impl Worker<FailArgs> for FailWorker {
     type Error = std::io::Error;
 
-    async fn work(
+    fn work(
         &self,
         _context: WorkContext,
         _job: Job<FailArgs>,
-    ) -> Result<WorkOutcome, Self::Error> {
-        Err(std::io::Error::other("intentional failure"))
+    ) -> impl std::future::Future<Output = Result<WorkOutcome, Self::Error>> + Send {
+        std::future::ready(Err(std::io::Error::other("intentional failure")))
     }
 }
 
@@ -116,12 +116,12 @@ struct RescueDefaultTimeoutWorker;
 impl Worker<RescueDefaultTimeoutArgs> for RescueDefaultTimeoutWorker {
     type Error = Infallible;
 
-    async fn work(
+    fn work(
         &self,
         _context: WorkContext,
         _job: Job<RescueDefaultTimeoutArgs>,
-    ) -> Result<WorkOutcome, Self::Error> {
-        Ok(WorkOutcome::Complete)
+    ) -> impl std::future::Future<Output = Result<WorkOutcome, Self::Error>> + Send {
+        std::future::ready(Ok(WorkOutcome::Complete))
     }
 }
 
@@ -138,12 +138,12 @@ impl Worker<RescueDisabledTimeoutArgs> for RescueDisabledTimeoutWorker {
         WorkerTimeout::Disabled
     }
 
-    async fn work(
+    fn work(
         &self,
         _context: WorkContext,
         _job: Job<RescueDisabledTimeoutArgs>,
-    ) -> Result<WorkOutcome, Self::Error> {
-        Ok(WorkOutcome::Complete)
+    ) -> impl std::future::Future<Output = Result<WorkOutcome, Self::Error>> + Send {
+        std::future::ready(Ok(WorkOutcome::Complete))
     }
 }
 
@@ -160,12 +160,12 @@ impl Worker<RescueLongTimeoutArgs> for RescueLongTimeoutWorker {
         WorkerTimeout::After(Duration::from_hours(1))
     }
 
-    async fn work(
+    fn work(
         &self,
         _context: WorkContext,
         _job: Job<RescueLongTimeoutArgs>,
-    ) -> Result<WorkOutcome, Self::Error> {
-        Ok(WorkOutcome::Complete)
+    ) -> impl std::future::Future<Output = Result<WorkOutcome, Self::Error>> + Send {
+        std::future::ready(Ok(WorkOutcome::Complete))
     }
 }
 
@@ -187,12 +187,12 @@ impl Worker<RescueRetryOverrideArgs> for RescueRetryOverrideWorker {
         Some(Duration::from_hours(2))
     }
 
-    async fn work(
+    fn work(
         &self,
         _context: WorkContext,
         _job: Job<RescueRetryOverrideArgs>,
-    ) -> Result<WorkOutcome, Self::Error> {
-        Ok(WorkOutcome::Complete)
+    ) -> impl std::future::Future<Output = Result<WorkOutcome, Self::Error>> + Send {
+        std::future::ready(Ok(WorkOutcome::Complete))
     }
 }
 

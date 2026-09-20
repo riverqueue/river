@@ -38,12 +38,12 @@ struct BurstWorker;
 impl Worker<BurstArgs> for BurstWorker {
     type Error = Infallible;
 
-    async fn work(
+    fn work(
         &self,
         _context: WorkContext,
         _job: Job<BurstArgs>,
-    ) -> Result<WorkOutcome, Self::Error> {
-        Ok(WorkOutcome::Complete)
+    ) -> impl std::future::Future<Output = Result<WorkOutcome, Self::Error>> + Send {
+        std::future::ready(Ok(WorkOutcome::Complete))
     }
 }
 
