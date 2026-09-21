@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // SharedTx can be used to wrap a test transaction in cases where multiple
@@ -186,6 +187,10 @@ func (r *SharedTxRows) FieldDescriptions() []pgconn.FieldDescription {
 func (r *SharedTxRows) Next() bool             { return r.innerRows.Next() }
 func (r *SharedTxRows) RawValues() [][]byte    { return r.innerRows.RawValues() }
 func (r *SharedTxRows) Scan(dest ...any) error { return r.innerRows.Scan(dest...) }
+
+// TypeMap returns the type map used to decode the underlying rows.
+func (r *SharedTxRows) TypeMap() *pgtype.Map { return r.innerRows.TypeMap() }
+
 func (r *SharedTxRows) Values() ([]any, error) { return r.innerRows.Values() }
 
 // SharedSubTx wraps a pgx.Tx such that it unlocks SharedTx when it commits or
