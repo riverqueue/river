@@ -94,6 +94,7 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"notification_only_wakeups":                                      {owner: scenarioOwnerMixed, tier: "mixed"},
 	"panic_attempt_trace":                                            {owner: scenarioOwnerMixed, tier: "runtime"},
 	"pause_resume_notification":                                      {owner: scenarioOwnerMixed, tier: "mixed"},
+	"periodic_due_job_available":                                     {owner: scenarioOwnerMaintenance, tier: "runtime"},
 	"periodic_run_on_start":                                          {owner: scenarioOwnerMixed, tier: "runtime"},
 	"pool_pressure_completion":                                       {owner: scenarioOwnerMixed, tier: "performance"},
 	"process_kill_restart_and_rescue":                                {owner: scenarioOwnerMixed, tier: "chaos"},

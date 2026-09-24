@@ -404,7 +404,6 @@ impl PeriodicJobs {
                         insert.defaults.clone(),
                         insert.opts.clone(),
                     );
-                    opts.scheduled_at.get_or_insert(due_job.target);
                     opts.metadata.insert("periodic".to_owned(), true.into());
                     if let Some(id) = &due_job.job.opts.id {
                         opts.metadata.insert(
@@ -412,7 +411,7 @@ impl PeriodicJobs {
                             id.clone().into(),
                         );
                     }
-                    if let Err(error) = client.insert_periodic(insert, opts).await {
+                    if let Err(error) = client.insert_periodic(insert, opts, due_job.target).await {
                         tracing::error!(error = %error, "River periodic job insertion failed");
                         outcome.insert_failed = true;
                         false

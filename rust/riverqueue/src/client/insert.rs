@@ -553,12 +553,14 @@ impl Client {
         &self,
         insert: PeriodicInsert,
         opts: InsertParams,
+        target: DateTime<Utc>,
     ) -> Result<JobRow, Error> {
-        let job = self.prepare_encoded(
+        let job = self.prepare_periodic(
             insert.kind,
             insert.unique_fields,
             insert.encoded_args,
             opts,
+            target,
             Utc::now(),
         )?;
         let rows = self.run_insert(None, vec![job], InsertMode::Rows).await?;
@@ -582,6 +584,32 @@ impl Client {
             opts,
         );
         self.prepare_encoded(A::KIND, A::unique_fields(), encoded_args, opts, now)
+    }
+
+    /// Prepares a periodic job due at `target`, as River Go's periodic job
+    /// enqueuer does.
+    ///
+    /// When the constructor leaves the schedule unset, the job runs at its
+    /// target time: it is inserted `available` with `scheduled_at` set to the
+    /// target, and a `by_period` unique key describes the target's period.
+    /// An explicit schedule from the constructor keeps the ordinary
+    /// `scheduled` state, and a pending job stays pending.
+    pub(super) fn prepare_periodic(
+        &self,
+        kind: &str,
+        unique_fields: &[&str],
+        encoded_args: Box<RawValue>,
+        mut opts: InsertParams,
+        target: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<InsertContext, Error> {
+        let due_at_target = opts.scheduled_at.is_none();
+        opts.scheduled_at.get_or_insert(target);
+        let mut job = self.prepare_encoded(kind, unique_fields, encoded_args, opts, now)?;
+        if due_at_target && job.state == JobState::Scheduled {
+            job.state = JobState::Available;
+        }
+        Ok(job)
     }
 
     /// Validates an encoded job and computes its unique key and initial

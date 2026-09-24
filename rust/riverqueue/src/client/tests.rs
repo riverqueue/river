@@ -332,3 +332,49 @@ async fn intercepting_extensions_can_only_lower_completion_concurrency() {
     assert_eq!(concurrency(Some(ConcurrencyPilot(1))), 1);
     assert_eq!(concurrency(Some(ConcurrencyPilot(8))), 2);
 }
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn periodic_jobs_run_at_their_target_unless_scheduled_explicitly() {
+    let pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap();
+    let client = Client::builder(pool).build().unwrap();
+    let now = Utc::now();
+    let target = now - chrono::Duration::milliseconds(5);
+    let prepare = |opts: InsertParams| {
+        client
+            .prepare_periodic(
+                "periodic_test",
+                &[],
+                serde_json::value::to_raw_value(&serde_json::json!({})).unwrap(),
+                opts,
+                target,
+                now,
+            )
+            .unwrap()
+    };
+    let defaults = || {
+        InsertOpts::resolve(
+            MAX_ATTEMPTS_DEFAULT,
+            InsertOpts::default(),
+            InsertOpts::default(),
+        )
+    };
+
+    // A due job runs immediately at its target, as Go's enqueuer inserts it.
+    let due = prepare(defaults());
+    assert_eq!(due.state, JobState::Available);
+    assert_eq!(due.opts.scheduled_at, Some(target));
+
+    // An explicit schedule from the constructor is kept and waits.
+    let later = now + chrono::Duration::minutes(5);
+    let mut explicit = defaults();
+    explicit.scheduled_at = Some(later);
+    let explicit = prepare(explicit);
+    assert_eq!(explicit.state, JobState::Scheduled);
+    assert_eq!(explicit.opts.scheduled_at, Some(later));
+
+    // A pending job stays pending.
+    let mut pending = defaults();
+    pending.pending = true;
+    assert_eq!(prepare(pending).state, JobState::Pending);
+}
