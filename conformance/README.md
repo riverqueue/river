@@ -127,3 +127,27 @@ The worker and mixed release benchmarks use the same deterministic 10 ms
 timed worker in both languages. Mixed mode provisions enough worker slots to
 keep p95 focused on insertion-to-execution latency rather than incidental
 queue backlog; throughput still covers the complete concurrent pipeline.
+
+## Continuous integration
+
+- `ci.yaml` runs the harness unit tests with the Go suite and verifies the
+  generated fixtures, the feature inventory, and the Rust migration mirrors
+  (`make verify/conformance verify/feature-inventory verify/rust-migrations`).
+- `rust.yaml` lints (including PostgreSQL-only and SQLite-only builds),
+  documents, packages, and semver-checks the Rust crates, runs the unit and
+  SQLite tests on each supported Rust version, runs the SQLite tiers, and for
+  PostgreSQL 14 through 18 runs the Rust PostgreSQL tests, the mixed and
+  insert-only tiers, and a ten-minute soak. Performance runs there are
+  advisory.
+- `release-candidate.yaml` is started manually before a release and gates on
+  the Go with Rust performance tier and a one-hour soak;
+  `rust-soak.yaml` runs a six-hour soak weekly.
+
+River CI runs only Go, the Rust implementation in this repository, and the
+language-neutral artifacts. It never checks out another repository. An
+implementation maintained elsewhere, such as JavaScript, runs this harness
+from its own CI against a pinned River revision, with its own candidate
+descriptor, and adds the multi-engine tiers there, since they need at least
+two candidates.
+
+Every CI conformance job sets `RIVER_CONFORMANCE_REQUIRED=1`.

@@ -1,0 +1,62 @@
+name: Release candidate
+
+# Manual gate before releasing the Rust crates: blocking performance gates and
+# a one-hour soak for Go with Rust on every supported PostgreSQL version.
+
+on:
+  workflow_dispatch:
+    inputs:
+      soak-duration:
+        default: 1h
+        description: Soak duration per job
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  # Keep the cross-run cache small; Cargo still reuses compiled dependencies.
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  release-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres-version: [14, 15, 16, 17, 18]
+    env:
+      RIVER_CONFORMANCE_DATABASE_URL: postgres://postgres:postgres@localhost:5432/river_release_candidate?sslmode=disable
+      RIVER_CONFORMANCE_REQUIRED: "1"
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres-version }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Create test database
+        run: PGPASSWORD=postgres createdb -h localhost -U postgres river_release_candidate
+      - name: Go and Rust release performance
+        env:
+          RIVER_CONFORMANCE_PERFORMANCE: "1"
+        run: make test/conformance/performance
+      - name: Go and Rust soak
+        env:
+          RIVER_CONFORMANCE_SOAK_DURATION: ${{ inputs.soak-duration }}
+        run: make test/conformance/soak

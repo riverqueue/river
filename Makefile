@@ -72,12 +72,14 @@ define lint-target
 endef
 $(foreach mod,$(submodules),$(eval $(call lint-target,$(mod))))
 
+# Rust targets are separate from `lint` and `test` so Go-only contributors and
+# the Go CI jobs do not need a Rust toolchain; the Rust workflow runs them.
 .PHONY: lint/rust
-lint/rust: ## Run Rust formatting and clippy checks
+lint/rust: ## Run Rust formatting and clippy checks, including single-backend builds
 	cd rust && cargo fmt --all -- --check
 	cd rust && cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-
-lint:: lint/rust
+	cd rust && cargo clippy -p riverqueue -p riverqueue-migrate -p riverqueue-cli -p riverqueue-test --no-default-features --features postgres --all-targets --locked -- -D warnings
+	cd rust && cargo clippy -p riverqueue -p riverqueue-migrate -p riverqueue-cli -p riverqueue-test --no-default-features --features sqlite --all-targets --locked -- -D warnings
 
 .PHONY: lint/conformance
 lint/conformance: ## Lint the opt-in shared interoperability suite
@@ -92,15 +94,28 @@ define test-target
 endef
 $(foreach mod,$(submodules),$(eval $(call test-target,$(mod))))
 
+# PostgreSQL integration tests need RIVER_RUST_DATABASE_URL. Without it
+# test/rust still runs unit, doc, and SQLite integration tests, and fails in CI
+# so a missing URL cannot turn the PostgreSQL suite into a silent pass.
 .PHONY: test/rust
-test/rust: ## Run the Rust workspace test suite
-	cd rust && cargo test --workspace --locked
-
-test:: test/rust
+test/rust: ## Run Rust unit and SQLite tests, plus PostgreSQL tests when RIVER_RUST_DATABASE_URL is set
+	@if [ -n "$$RIVER_RUST_DATABASE_URL" ]; then \
+		cd rust && cargo test --workspace --all-features --locked; \
+	elif [ -n "$$CI" ]; then \
+		echo "RIVER_RUST_DATABASE_URL is required in CI to run the Rust PostgreSQL tests" >&2; exit 1; \
+	else \
+		echo "RIVER_RUST_DATABASE_URL is unset; skipping Rust PostgreSQL integration tests"; \
+		cd rust && cargo test --workspace --features riverqueue/sqlite,riverqueue-migrate/sqlite --locked; \
+	fi
 
 .PHONY: test/rust/postgres
-test/rust/postgres: ## Run all Rust tests, including PostgreSQL integration tests
+test/rust/postgres: ## Run all Rust tests, including PostgreSQL integration tests (requires RIVER_RUST_DATABASE_URL)
+	@test -n "$$RIVER_RUST_DATABASE_URL" || { echo "RIVER_RUST_DATABASE_URL is required" >&2; exit 1; }
 	cd rust && cargo test --workspace --all-features --locked
+
+.PHONY: test/rust/sqlite
+test/rust/sqlite: ## Run Rust unit, doc, and SQLite integration tests without a PostgreSQL database
+	cd rust && cargo test --workspace --features riverqueue/sqlite,riverqueue-migrate/sqlite --locked
 
 .PHONY: test/conformance
 test/conformance: ## Run Go and configured candidate conformance (requires database URL)
@@ -148,13 +163,20 @@ check/rust/dependencies: ## Audit Rust advisories, licenses, bans, and sources
 check/rust/package: ## Build publishable crate archives without publishing
 	cd rust && cargo package --workspace --exclude riverqueue-conformance --allow-dirty --locked --no-verify
 
+# The baseline is the latest published riverqueue-v* tag, and
+# cargo-semver-checks infers the allowed change from the version bump. It
+# skips every lint while the workspace version is a pre-release, so
+# comparing unreleased revisions with each other checks nothing. Until a
+# Rust release is tagged the check reports that there is no baseline. Set
+# RUST_SEMVER_BASELINE_REV to compare with another revision.
 .PHONY: check/rust/semver
-check/rust/semver: ## Check Rust APIs against the latest Rust tag or initial baseline
-	@if test -n "$(RUST_SEMVER_BASELINE_REV)"; then \
-		cd rust && cargo semver-checks --workspace --baseline-rev "$(RUST_SEMVER_BASELINE_REV)"; \
+check/rust/semver: ## Check Rust APIs against RUST_SEMVER_BASELINE_REV (default: latest Rust tag)
+	@if test -z "$(RUST_SEMVER_BASELINE_REV)"; then \
+		echo "No published Rust release tag (riverqueue-v*); no public API baseline to compare"; \
+	elif ! git cat-file -e "$(RUST_SEMVER_BASELINE_REV):rust/Cargo.toml" 2>/dev/null; then \
+		echo "Baseline $(RUST_SEMVER_BASELINE_REV) predates the Rust crates; no public API to compare"; \
 	else \
-		echo "No prior riverqueue tag; validating initial rustdoc baseline"; \
-		cd rust && cargo semver-checks --workspace --baseline-root .; \
+		cd rust && cargo semver-checks --workspace --exclude riverqueue-conformance --baseline-rev "$(RUST_SEMVER_BASELINE_REV)"; \
 	fi
 
 .PHONY: test/race
