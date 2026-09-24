@@ -432,3 +432,23 @@ async fn hard_shutdown_interrupts_only_cooperative_cancellations() {
     assert_eq!(real_error.errors.len(), 1);
     assert_eq!(real_error.errors[0].error, "real failure during shutdown");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_attempted_at_matches_go_time_json() {
+    let database = TestDatabase::new(Duration::from_secs(5)).await;
+    let client = Client::builder(database.pool.clone())
+        .id("sqlite-resilience-cancel-time")
+        .build()
+        .unwrap();
+    let job = client.insert(ResilienceArgs {}).await.unwrap();
+    let cancelled = client.job_cancel(job.job.row.id).await.unwrap();
+    let cancel_attempted_at = cancelled.metadata["cancel_attempted_at"].as_str().unwrap();
+    assert!(cancel_attempted_at.ends_with('Z'), "{cancel_attempted_at}");
+    if let Some((_, fraction)) = cancel_attempted_at.trim_end_matches('Z').split_once('.') {
+        assert!(
+            !fraction.ends_with('0'),
+            "trailing zeros are trimmed: {cancel_attempted_at}"
+        );
+    }
+    chrono::DateTime::parse_from_rfc3339(cancel_attempted_at).unwrap();
+}

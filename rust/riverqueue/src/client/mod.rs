@@ -607,7 +607,7 @@ impl Client {
                 UPDATE {table} AS job SET \
                     state = CASE WHEN state = 'running' THEN state ELSE 'cancelled' END, \
                     finalized_at = CASE WHEN state = 'running' THEN finalized_at ELSE now() END, \
-                    metadata = jsonb_set(metadata, '{{cancel_attempted_at}}'::text[], to_jsonb(now()), true) \
+                    metadata = jsonb_set(metadata, '{{cancel_attempted_at}}'::text[], to_jsonb($4::text), true) \
                 FROM notified WHERE job.id = notified.id RETURNING job.*\
              ) \
              SELECT {}, false AS unique_skipped_as_duplicate FROM updated AS job \
@@ -623,6 +623,7 @@ impl Client {
                 .bind(id)
                 .bind(self.inner.schema.as_deref())
                 .bind(crate::NOTIFICATION_TOPIC_CONTROL)
+                .bind(go_time_json(Utc::now()))
         };
         match self
             .inner
@@ -783,6 +784,22 @@ impl Client {
             return Err(Error::UnknownJobKind(kind.to_owned()));
         }
         Ok(())
+    }
+}
+
+/// Formats a time as River Go's `time.Time` JSON (RFC 3339 with nanoseconds
+/// and trailing zeros trimmed, in UTC), which River stores for
+/// `cancel_attempted_at`.
+pub(crate) fn go_time_json(time: DateTime<Utc>) -> String {
+    let formatted = time.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+    let Some((seconds, fraction)) = formatted.trim_end_matches('Z').split_once('.') else {
+        return formatted;
+    };
+    let fraction = fraction.trim_end_matches('0');
+    if fraction.is_empty() {
+        format!("{seconds}Z")
+    } else {
+        format!("{seconds}.{fraction}Z")
     }
 }
 

@@ -224,3 +224,36 @@ async fn completion_retries_stop_immediately_for_a_closed_pool() {
     assert!(result.is_err());
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn go_time_json_matches_go_rfc3339_nano() {
+    use chrono::TimeZone as _;
+
+    let base = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+    assert_eq!(go_time_json(base), "2026-01-02T03:04:05Z");
+    assert_eq!(
+        go_time_json(base + chrono::Duration::nanoseconds(120_000_000)),
+        "2026-01-02T03:04:05.12Z"
+    );
+    assert_eq!(
+        go_time_json(base + chrono::Duration::nanoseconds(123_456_789)),
+        "2026-01-02T03:04:05.123456789Z"
+    );
+}
+
+#[test]
+fn schedule_delays_clamp_like_go_durations() {
+    use chrono::TimeZone as _;
+
+    let now = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+    assert_eq!(
+        scheduled_after(now, Duration::from_secs(90)),
+        now + chrono::Duration::seconds(90)
+    );
+    let clamped = scheduled_after(now, Duration::MAX);
+    assert_eq!(
+        clamped,
+        now + chrono::Duration::nanoseconds(i64::MAX),
+        "delays saturate at Go's maximum time.Duration"
+    );
+}

@@ -33,6 +33,9 @@ pub(super) async fn execute_job(
         let mut worker_row = row.clone();
         let worker_context = context.clone();
         let worker_inner = Arc::clone(&inner);
+        // Like River Go's executor start time, which it records as the
+        // attempt error's `at`.
+        let attempt_started_at = Utc::now();
         let (timeout_sender, timeout_receiver) = oneshot::channel();
         let mut worker_task = AbortOnDrop(tokio::spawn(async move {
             worker_context.resumable_validate().await?;
@@ -181,6 +184,7 @@ pub(super) async fn execute_job(
         let completion_enqueued = match persist_result(
             &inner,
             &row,
+            attempt_started_at,
             &completion,
             result,
             metadata_updates,
@@ -407,9 +411,11 @@ pub(super) fn public_work_result(result: &WorkerResult) -> WorkResult {
 }
 
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn persist_result(
     inner: &ClientInner,
     row: &JobRow,
+    attempt_started_at: DateTime<Utc>,
     completion: &CompletionAttempt,
     result: WorkerResult,
     metadata_updates: Map<String, Value>,
@@ -434,7 +440,7 @@ pub(super) async fn persist_result(
                 None,
                 None,
                 Some(AttemptError {
-                    at: row.attempted_at.unwrap_or(now),
+                    at: attempt_started_at,
                     attempt: row.attempt,
                     error: "job cancelled by worker".to_owned(),
                     trace: String::new(),
@@ -448,7 +454,7 @@ pub(super) async fn persist_result(
                 None,
                 None,
                 Some(AttemptError {
-                    at: row.attempted_at.unwrap_or(now),
+                    at: attempt_started_at,
                     attempt: row.attempt,
                     error: "job discarded by worker".to_owned(),
                     trace: String::new(),
@@ -457,9 +463,7 @@ pub(super) async fn persist_result(
                 JobEventKind::Failed,
             ),
             Ok(WorkOutcome::Snooze(duration)) => {
-                let scheduled_at = now
-                    + chrono::Duration::from_std(duration)
-                        .map_err(|error| Error::invalid_job(error.to_string()))?;
+                let scheduled_at = scheduled_after(now, duration);
                 let state = if duration <= inner.maintenance.scheduler_interval {
                     JobState::Available
                 } else {
@@ -501,7 +505,7 @@ pub(super) async fn persist_result(
                     WorkError::new(Box::new(std::io::Error::other(failure.error.clone())))
                 });
                 let attempt_error = AttemptError {
-                    at: row.attempted_at.unwrap_or(now),
+                    at: attempt_started_at,
                     attempt: row.attempt,
                     error: failure.error,
                     trace: failure.trace,
@@ -541,9 +545,7 @@ pub(super) async fn persist_result(
                             .retry_policy
                             .next_retry(row, &attempt_error.error, now)
                     });
-                    let scheduled_at = now
-                        + chrono::Duration::from_std(delay)
-                            .map_err(|error| Error::invalid_job(error.to_string()))?;
+                    let scheduled_at = scheduled_after(now, delay);
                     let state = if delay <= inner.maintenance.scheduler_interval {
                         JobState::Available
                     } else {
