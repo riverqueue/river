@@ -321,8 +321,8 @@ pub struct CompletionParams {
 /// extension returns.
 #[doc(hidden)]
 pub struct JobInsertParams<'insert> {
-    /// Serialized job arguments.
-    pub encoded_args: &'insert mut Value,
+    /// Serialized job arguments as exact JSON text.
+    pub encoded_args: &'insert mut Box<serde_json::value::RawValue>,
     /// Stable job kind.
     pub kind: &'insert mut String,
     /// Arbitrary job metadata.

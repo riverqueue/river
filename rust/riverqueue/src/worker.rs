@@ -564,7 +564,7 @@ where
         error: &WorkError,
         now: DateTime<Utc>,
     ) -> Result<Option<Duration>, Box<dyn StdError + Send + Sync>> {
-        let args = serde_json::from_value(row.encoded_args.clone())?;
+        let args = row.decode_args()?;
         Ok(Worker::<A>::next_retry(
             &self.worker,
             &Job {
@@ -577,7 +577,7 @@ where
     }
 
     fn timeout(&self, row: &JobRow) -> Result<WorkerTimeout, Box<dyn StdError + Send + Sync>> {
-        let args = serde_json::from_value(row.encoded_args.clone())?;
+        let args = row.decode_args()?;
         Ok(Worker::<A>::timeout(
             &self.worker,
             &Job {
@@ -588,7 +588,8 @@ where
     }
 
     async fn work(&self, context: WorkContext, row: &JobRow) -> Result<WorkOutcome, WorkError> {
-        let args = serde_json::from_value(row.encoded_args.clone())
+        let args = row
+            .decode_args()
             .map_err(|error| WorkError::new(Box::new(error)))?;
         self.worker
             .work(
@@ -800,7 +801,7 @@ mod tests {
             attempted_at: Some(now),
             attempted_by: vec!["test".to_owned()],
             created_at: now,
-            encoded_args: json!({"fail": fail}),
+            encoded_args: serde_json::value::to_raw_value(&json!({"fail": fail})).unwrap(),
             errors: Vec::new(),
             finalized_at: None,
             id: 1,

@@ -4,7 +4,6 @@ use std::{fmt, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use serde_json::Value;
 
 use crate::{Error, InsertParams, JobRow, PeriodicJobs, WorkContext};
 
@@ -87,8 +86,10 @@ impl Metric {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct InsertContext {
-    /// Serialized arguments that will be persisted and hashed.
-    pub encoded_args: Value,
+    /// Serialized arguments that will be persisted and hashed, as exact JSON
+    /// text. Replace them with [`encode_args`](crate::encoding::encode_args)
+    /// to keep Go-compatible unique keys.
+    pub encoded_args: Box<serde_json::value::RawValue>,
     /// Stable job kind.
     pub kind: String,
     /// Insertion options.

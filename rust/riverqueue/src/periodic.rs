@@ -10,7 +10,6 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use cron::Schedule;
-use serde_json::Value;
 use thiserror::Error as ThisError;
 use tokio::sync::Mutex;
 
@@ -159,7 +158,7 @@ impl PeriodicJobOpts {
 #[derive(Clone)]
 pub(crate) struct PeriodicInsert {
     pub(crate) defaults: InsertOpts,
-    pub(crate) encoded_args: Value,
+    pub(crate) encoded_args: Box<serde_json::value::RawValue>,
     pub(crate) kind: &'static str,
     pub(crate) opts: InsertOpts,
     pub(crate) unique_fields: &'static [&'static str],
@@ -228,7 +227,7 @@ impl PeriodicJob {
                 };
                 Ok(Some(PeriodicInsert {
                     defaults: A::default_insert_opts(),
-                    encoded_args: serde_json::to_value(args)?,
+                    encoded_args: crate::encoding::encode_args(&args)?,
                     kind: A::KIND,
                     opts,
                     unique_fields: A::unique_fields(),

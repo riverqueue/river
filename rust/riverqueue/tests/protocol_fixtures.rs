@@ -4,8 +4,11 @@ use chrono::{DateTime, Utc};
 use riverqueue::{
     AttemptError, DefaultRetryPolicy, JobRow, JobState, METADATA_KEY_OUTPUT,
     METADATA_KEY_PERIODIC_JOB_ID, METADATA_KEY_RESCUE_COUNT, METADATA_KEY_RESUMABLE_CURSOR,
-    METADATA_KEY_RESUMABLE_STEP, METADATA_KEY_UNIQUE_NONCE, NOTIFICATION_TOPIC_CONTROL,
-    NOTIFICATION_TOPIC_INSERT, NOTIFICATION_TOPIC_LEADERSHIP, RetryPolicy,
+    METADATA_KEY_RESUMABLE_STEP, METADATA_KEY_UNIQUE_NONCE, RetryPolicy,
+    protocol::{
+        NOTIFICATION_TOPIC_CONTROL, NOTIFICATION_TOPIC_INSERT, NOTIFICATION_TOPIC_LEADERSHIP,
+        unique_state_bit,
+    },
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -53,7 +56,7 @@ fn go_protocol_values_match_rust() {
     assert!(fixture.attempt_error.error.contains("escaped"));
     assert_eq!(fixture.job_states.len(), JobState::ALL.len());
     for state in fixture.job_states {
-        assert_eq!(state.unique_bit, state.state.unique_bit());
+        assert_eq!(state.unique_bit, unique_state_bit(state.state));
     }
     for (name, expected) in [
         ("output", METADATA_KEY_OUTPUT),
@@ -93,7 +96,12 @@ fn go_protocol_values_match_rust() {
 }
 
 fn retry_row(id: i64, now: DateTime<Utc>, previous_errors: usize) -> JobRow {
-    let mut row = JobRow::new(id, "fixture_retry", serde_json::json!({}), now);
+    let mut row = JobRow::new(
+        id,
+        "fixture_retry",
+        riverqueue::encoding::encode_args(&serde_json::json!({})).unwrap(),
+        now,
+    );
     row.attempt = i16::try_from(previous_errors + 1).unwrap();
     row.attempted_at = Some(now);
     row.attempted_by = vec!["fixture".to_owned()];

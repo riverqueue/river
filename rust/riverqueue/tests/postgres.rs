@@ -1628,7 +1628,8 @@ async fn migrates_inserts_and_works_a_job() {
             &mut transaction,
             EchoArgs::KIND,
             &[],
-            serde_json::json!({"message": "raw from Rust"}),
+            serde_json::value::to_raw_value(&serde_json::json!({"message": "raw from Rust"}))
+                .unwrap(),
             InsertOpts::default(),
         )
         .await
@@ -1655,7 +1656,8 @@ async fn migrates_inserts_and_works_a_job() {
             .job_get(raw_transaction_insert.job.id)
             .await
             .unwrap()
-            .encoded_args["message"],
+            .decode_args::<serde_json::Value>()
+            .unwrap()["message"],
         "raw from Rust"
     );
     let _pool_connection = client

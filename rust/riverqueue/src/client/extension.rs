@@ -279,7 +279,7 @@ impl Client {
         &self,
         kind: &str,
         unique_fields: &[&str],
-        encoded_args: Value,
+        encoded_args: Box<RawValue>,
         opts: InsertOpts,
     ) -> Result<RawInsertResult, Error> {
         let opts =
@@ -295,7 +295,7 @@ impl Client {
         &self,
         kind: &str,
         unique_fields: &[&str],
-        encoded_args: Value,
+        encoded_args: Box<RawValue>,
         opts: InsertParams,
     ) -> Result<RawInsertResult, Error> {
         self.validate_known_kind(kind)?;
@@ -328,7 +328,7 @@ impl Client {
         connection: E,
         kind: &str,
         unique_fields: &[&str],
-        encoded_args: Value,
+        encoded_args: Box<RawValue>,
         opts: InsertOpts,
     ) -> Result<RawInsertResult, Error>
     where
@@ -348,7 +348,7 @@ impl Client {
         connection: E,
         kind: &str,
         unique_fields: &[&str],
-        encoded_args: Value,
+        encoded_args: Box<RawValue>,
         opts: InsertParams,
     ) -> Result<RawInsertResult, Error>
     where

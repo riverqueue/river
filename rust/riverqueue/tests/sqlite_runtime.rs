@@ -98,14 +98,13 @@ impl Hook for CompletionHook {
 #[async_trait]
 impl Hook for WrapperTransformHook {
     async fn decode_insert_result(&self, job: &mut JobRow) -> Result<(), riverqueue::Error> {
-        let wrapped = job
-            .encoded_args
-            .as_object_mut()
-            .and_then(|object| object.remove(self.0))
-            .ok_or_else(|| {
-                riverqueue::Error::runtime(format!("missing outer insertion wrapper {:?}", self.0))
-            })?;
-        job.encoded_args = wrapped;
+        // Unwrap without reparsing the inner arguments so their exact bytes
+        // are preserved.
+        let mut outer: std::collections::HashMap<String, Box<serde_json::value::RawValue>> =
+            job.decode_args()?;
+        job.encoded_args = outer.remove(self.0).ok_or_else(|| {
+            riverqueue::Error::runtime(format!("missing outer insertion wrapper {:?}", self.0))
+        })?;
         Ok(())
     }
 
@@ -113,9 +112,11 @@ impl Hook for WrapperTransformHook {
         &self,
         insert: &mut riverqueue::InsertContext,
     ) -> Result<(), riverqueue::Error> {
-        let inner = std::mem::replace(&mut insert.encoded_args, serde_json::Value::Null);
-        insert.encoded_args =
-            serde_json::Value::Object(serde_json::Map::from_iter([(self.0.to_owned(), inner)]));
+        insert.encoded_args = serde_json::value::RawValue::from_string(format!(
+            "{{{}:{}}}",
+            serde_json::to_string(self.0)?,
+            insert.encoded_args.get()
+        ))?;
         Ok(())
     }
 }
@@ -1148,12 +1149,12 @@ async fn sqlite_reinsert_preserves_wire_fields_and_runs_the_canonical_pipeline()
         .insert_raw(
             CancelArgs::KIND,
             &[],
-            serde_json::json!({"raw": true}),
+            serde_json::value::to_raw_value(&serde_json::json!({"raw": true})).unwrap(),
             InsertOpts::default().with_pending(true),
         )
         .await
         .unwrap();
-    assert_eq!(raw.job.encoded_args, serde_json::json!({"raw": true}));
+    assert_eq!(raw.job.encoded_args.get(), r#"{"raw":true}"#);
     let stored_raw_args: String =
         sqlx::query_scalar("SELECT json(args) FROM river_job WHERE id = ?")
             .bind(raw.job.id)
@@ -1178,15 +1179,18 @@ async fn sqlite_reinsert_preserves_wire_fields_and_runs_the_canonical_pipeline()
         .unwrap()
         .job
         .row;
-    assert_eq!(original.encoded_args, serde_json::json!({"value": 41}));
+    assert_eq!(original.encoded_args.get(), r#"{"value":41}"#);
     let stored_source_args: String =
         sqlx::query_scalar("SELECT json(args) FROM river_job WHERE id = ?")
             .bind(original.id)
             .fetch_one(&pool)
             .await
             .unwrap();
-    let stored_source_args: serde_json::Value = serde_json::from_str(&stored_source_args).unwrap();
-    assert_eq!(stored_source_args["B"]["A"]["value"], 41);
+    let stored_source_args = serde_json::value::RawValue::from_string(stored_source_args).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(stored_source_args.get()).unwrap()["B"]["A"]["value"],
+        41
+    );
     let sentinel = producer
         .insert_with(
             RuntimeArgs { value: 42 },
@@ -1240,10 +1244,7 @@ async fn sqlite_reinsert_preserves_wire_fields_and_runs_the_canonical_pipeline()
     assert!(!reinserted.unique_skipped_as_duplicate);
     assert_eq!(pilot.insert_calls.load(Ordering::SeqCst), 2);
 
-    assert_eq!(
-        reinserted.job.encoded_args,
-        serde_json::json!({"value": 41})
-    );
+    assert_eq!(reinserted.job.encoded_args.get(), r#"{"value":41}"#);
     let stored_args: String = sqlx::query_scalar("SELECT json(args) FROM river_job WHERE id = ?")
         .bind(reinserted.job.id)
         .fetch_one(&pool)

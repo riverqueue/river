@@ -44,7 +44,7 @@ impl<A: JobArgs> TestJobBuilder<A> {
     /// Builds the typed test job.
     pub fn build(self) -> Result<Job<A>, Error> {
         let now = Utc::now();
-        let encoded_args = serde_json::to_value(&self.args)?;
+        let encoded_args = riverqueue::encoding::encode_args(&self.args)?;
         let defaults = A::default_insert_opts();
         let max_attempts = defaults.max_attempts().unwrap_or(MAX_ATTEMPTS_DEFAULT);
         let priority = defaults.priority().unwrap_or(PRIORITY_DEFAULT);
@@ -327,10 +327,7 @@ mod tests {
         assert_eq!(job.args.message, "builder");
         assert_eq!(job.row.attempt, 4);
         assert_eq!(job.row.attempted_by, ["riverqueue-test"]);
-        assert_eq!(
-            job.row.encoded_args,
-            serde_json::json!({"message": "builder"})
-        );
+        assert_eq!(job.row.encoded_args.get(), r#"{"message":"builder"}"#);
         assert_eq!(job.row.id, 99);
         assert_eq!(job.row.kind, TestArgs::KIND);
         assert_eq!(job.row.max_attempts, 7);

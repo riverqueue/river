@@ -204,6 +204,8 @@ let client = Client::builder(pool).build()?;
 
 - [`job`] — arguments, insertion options, persisted rows, outcomes, and unique
   job configuration.
+- [`encoding`] — the Go-compatible JSON encoding River uses for job arguments,
+  which keeps unique keys identical across Go and Rust.
 - [`worker`] — typed workers, function registration, cancellation, outputs,
   and resumable work.
 - [`event`] — valid event payloads and bounded subscriptions.
@@ -212,6 +214,8 @@ let client = Client::builder(pool).build()?;
 - [`extension`] — hooks, middleware, policies, and metrics.
 - [`database`] — sealed built-in backend source and executor types.
 - [`error`] — structured, source-preserving public errors.
+- [`protocol`] — wire values such as notification topics and unique keys for
+  tools that interoperate with River's tables directly.
 
 The workspace has complete examples for ordinary workers, cancellation,
 transactions, custom PostgreSQL schemas, and migrations. The higher-level
