@@ -75,20 +75,24 @@ func TestCompleterJobUpdatedFromStateAndReason(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
+		expectedOK      bool
 		expectedReason  riverdriver.JobSetStateReason
 		name            string
 		requestedReason riverdriver.JobSetStateReason
 		state           rivertype.JobState
 	}{
-		{expectedReason: riverdriver.JobSetStateReasonFailed, name: "AvailableFailed", requestedReason: riverdriver.JobSetStateReasonFailed, state: rivertype.JobStateAvailable},
-		{expectedReason: riverdriver.JobSetStateReasonInterrupted, name: "AvailableInterrupted", requestedReason: riverdriver.JobSetStateReasonInterrupted, state: rivertype.JobStateAvailable},
-		{expectedReason: riverdriver.JobSetStateReasonFailed, name: "AvailableRequestedCompleted", requestedReason: riverdriver.JobSetStateReasonCompleted, state: rivertype.JobStateAvailable},
-		{expectedReason: riverdriver.JobSetStateReasonSnoozed, name: "AvailableSnoozed", requestedReason: riverdriver.JobSetStateReasonSnoozed, state: rivertype.JobStateAvailable},
-		{expectedReason: riverdriver.JobSetStateReasonCancelled, name: "Cancelled", requestedReason: riverdriver.JobSetStateReasonFailed, state: rivertype.JobStateCancelled},
-		{expectedReason: riverdriver.JobSetStateReasonCompleted, name: "Completed", requestedReason: riverdriver.JobSetStateReasonFailed, state: rivertype.JobStateCompleted},
-		{expectedReason: riverdriver.JobSetStateReasonFailed, name: "Discarded", requestedReason: riverdriver.JobSetStateReasonCompleted, state: rivertype.JobStateDiscarded},
-		{expectedReason: riverdriver.JobSetStateReasonFailed, name: "Retryable", requestedReason: riverdriver.JobSetStateReasonCompleted, state: rivertype.JobStateRetryable},
-		{expectedReason: riverdriver.JobSetStateReasonSnoozed, name: "Scheduled", requestedReason: riverdriver.JobSetStateReasonFailed, state: rivertype.JobStateScheduled},
+		{expectedOK: true, expectedReason: riverdriver.JobSetStateReasonFailed, name: "AvailableFailed", requestedReason: riverdriver.JobSetStateReasonFailed, state: rivertype.JobStateAvailable},
+		{expectedOK: true, expectedReason: riverdriver.JobSetStateReasonInterrupted, name: "AvailableInterrupted", requestedReason: riverdriver.JobSetStateReasonInterrupted, state: rivertype.JobStateAvailable},
+		{expectedOK: true, expectedReason: riverdriver.JobSetStateReasonFailed, name: "AvailableRequestedCompleted", requestedReason: riverdriver.JobSetStateReasonCompleted, state: rivertype.JobStateAvailable},
+		{expectedOK: true, expectedReason: riverdriver.JobSetStateReasonSnoozed, name: "AvailableSnoozed", requestedReason: riverdriver.JobSetStateReasonSnoozed, state: rivertype.JobStateAvailable},
+		{expectedOK: true, expectedReason: riverdriver.JobSetStateReasonCancelled, name: "Cancelled", requestedReason: riverdriver.JobSetStateReasonFailed, state: rivertype.JobStateCancelled},
+		{expectedOK: true, expectedReason: riverdriver.JobSetStateReasonCompleted, name: "Completed", requestedReason: riverdriver.JobSetStateReasonFailed, state: rivertype.JobStateCompleted},
+		{expectedOK: true, expectedReason: riverdriver.JobSetStateReasonFailed, name: "Discarded", requestedReason: riverdriver.JobSetStateReasonCompleted, state: rivertype.JobStateDiscarded},
+		{expectedOK: false, name: "Pending", requestedReason: riverdriver.JobSetStateReasonCompleted, state: rivertype.JobStatePending},
+		{expectedOK: true, expectedReason: riverdriver.JobSetStateReasonFailed, name: "Retryable", requestedReason: riverdriver.JobSetStateReasonCompleted, state: rivertype.JobStateRetryable},
+		{expectedOK: false, name: "Running", requestedReason: riverdriver.JobSetStateReasonCompleted, state: rivertype.JobStateRunning},
+		{expectedOK: true, expectedReason: riverdriver.JobSetStateReasonSnoozed, name: "Scheduled", requestedReason: riverdriver.JobSetStateReasonFailed, state: rivertype.JobStateScheduled},
+		{expectedOK: false, name: "UnknownState", requestedReason: riverdriver.JobSetStateReasonCompleted, state: rivertype.JobState("unknown_state")},
 	}
 
 	for _, test := range tests {
@@ -98,7 +102,12 @@ func TestCompleterJobUpdatedFromStateAndReason(t *testing.T) {
 			job := &rivertype.JobRow{State: test.state}
 			stats := &jobstats.JobStatistics{}
 
-			update := completerJobUpdatedFromStateAndReason(job, stats, test.requestedReason)
+			update, ok := completerJobUpdatedFromStateAndReason(job, stats, test.requestedReason)
+			require.Equal(t, test.expectedOK, ok)
+			if !test.expectedOK {
+				require.Equal(t, CompleterJobUpdated{}, update)
+				return
+			}
 			require.Same(t, job, update.Job)
 			require.Same(t, stats, update.JobStats)
 			require.Equal(t, test.expectedReason, update.Reason)
@@ -1114,6 +1123,58 @@ func testCompleter[TCompleter JobCompleter](
 		job3Update := findUpdate(job3.ID)
 		require.Equal(t, rivertype.JobStateAvailable, job3Update.Job.State)
 		require.Equal(t, riverdriver.JobSetStateReasonSnoozed, job3Update.Reason)
+	})
+
+	// JobSetStateIfRunningMany returns rows it didn't update in their current
+	// state. A job moved to `pending` out of band while its completion is in
+	// flight, or a stale `running` version that Postgres returns when a
+	// concurrent transaction (like a rescue) changes the job's state first,
+	// must not produce a completion event or crash the completer.
+	t.Run("NonFinalizedJobsSkipped", func(t *testing.T) {
+		t.Parallel()
+
+		completer, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateRunning)})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStatePending)})
+			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateRunning)})
+		)
+
+		// Simulate the concurrent state change race for job3 by returning its
+		// row as it was before the statement.
+		execMock := NewPartialExecutorMock(bundle.exec)
+		execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+			jobRows, err := bundle.exec.JobSetStateIfRunningMany(ctx, params)
+			if err != nil {
+				return nil, err
+			}
+			for i, jobRow := range jobRows {
+				if jobRow.ID == job3.ID {
+					jobRows[i] = job3
+				}
+			}
+			return jobRows, nil
+		}
+		setExec(completer, execMock)
+
+		require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(job1.ID, time.Now(), nil)))
+		require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(job2.ID, time.Now(), nil)))
+		require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(job3.ID, time.Now(), nil)))
+
+		completer.Stop()
+
+		// Stop closes the subscribe channel, so this collects every update.
+		var jobUpdates []CompleterJobUpdated
+		for updates := range bundle.subscribeCh {
+			jobUpdates = append(jobUpdates, updates...)
+		}
+		require.Len(t, jobUpdates, 1)
+		require.Equal(t, job1.ID, jobUpdates[0].Job.ID)
+		require.Equal(t, riverdriver.JobSetStateReasonCompleted, jobUpdates[0].Reason)
+
+		requireState(t, bundle, job1.ID, rivertype.JobStateCompleted)
+		requireState(t, bundle, job2.ID, rivertype.JobStatePending)
 	})
 
 	t.Run("MultipleCycles", func(t *testing.T) {
