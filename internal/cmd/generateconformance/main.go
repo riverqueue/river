@@ -26,8 +26,9 @@ import (
 )
 
 const (
-	protocolFixturePath = "conformance/fixtures/protocol_values.json"
-	uniqueFixturePath   = "conformance/fixtures/unique_keys.json"
+	featureInventoryPath = "conformance/feature-inventory.json"
+	protocolFixturePath  = "conformance/fixtures/protocol_values.json"
+	uniqueFixturePath    = "conformance/fixtures/unique_keys.json"
 )
 
 type allArgs struct {
@@ -210,14 +211,15 @@ func (clock staticClock) Now() time.Time { return clock.now }
 func (staticClock) NowOrNil() *time.Time { return nil }
 
 type protocolFixture struct {
-	Schema           string                                `json:"$schema"`
-	AttemptError     rivertype.AttemptError                `json:"attempt_error"`
-	JobStates        []protocolState                       `json:"job_states"`
-	MetadataKeys     map[string]string                     `json:"metadata_keys"`
-	Notifications    []protocolNotification                `json:"notifications"`
-	ProtocolRevision int                                   `json:"protocol_revision"`
-	RetryCases       []protocolRetryCase                   `json:"retry_cases"`
-	Topics           map[string]notifier.NotificationTopic `json:"topics"`
+	Schema               string                                `json:"$schema"`
+	AttemptError         rivertype.AttemptError                `json:"attempt_error"`
+	JobStates            []protocolState                       `json:"job_states"`
+	MetadataKeys         map[string]string                     `json:"metadata_keys"`
+	Notifications        []protocolNotification                `json:"notifications"`
+	ProtocolRevision     int                                   `json:"protocol_revision"`
+	ReservedMetadataKeys []reservedMetadataKey                 `json:"reserved_metadata_keys"`
+	RetryCases           []protocolRetryCase                   `json:"retry_cases"`
+	Topics               map[string]notifier.NotificationTopic `json:"topics"`
 }
 
 type protocolNotification struct {
@@ -238,6 +240,13 @@ type protocolRetryCase struct {
 	MinDelayNS int64     `json:"min_delay_ns"`
 	Now        time.Time `json:"now"`
 	Seed       uint64    `json:"seed"`
+}
+
+// reservedMetadataKey is a job metadata key River itself reads or writes,
+// as extracted from Go source and SQL into the feature inventory.
+type reservedMetadataKey struct {
+	Applicability string `json:"applicability"`
+	Key           string `json:"key"`
 }
 
 type protocolState struct {
@@ -539,6 +548,11 @@ func makeProtocolFixture(now time.Time) protocolFixture {
 		fatal(err)
 	}
 	fixture.Notifications = notifications
+	reserved, err := readReservedMetadataKeys()
+	if err != nil {
+		fatal(err)
+	}
+	fixture.ReservedMetadataKeys = reserved
 	for _, testCase := range []struct {
 		errorCount uint32
 		jobID      int64
@@ -694,6 +708,39 @@ func newProtocolNotification(name, topic, source string, fields []jsonField, val
 		}
 	}
 	return protocolNotification{Fields: fields, Name: name, Payload: payload.Bytes(), Source: source, Topic: topic}, nil
+}
+
+// readReservedMetadataKeys returns the metadata keys the feature inventory
+// extracted from Go source and SQL, with their applicability.
+func readReservedMetadataKeys() ([]reservedMetadataKey, error) {
+	contents, err := os.ReadFile(featureInventoryPath)
+	if err != nil {
+		return nil, err
+	}
+	var inventory struct {
+		Items []struct {
+			Applicability string `json:"applicability"`
+			Area          string `json:"area"`
+			ID            string `json:"id"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(contents, &inventory); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", featureInventoryPath, err)
+	}
+	var keys []reservedMetadataKey
+	for _, item := range inventory.Items {
+		if item.Area == "metadata_key" {
+			keys = append(keys, reservedMetadataKey{
+				Applicability: item.Applicability,
+				Key:           strings.TrimPrefix(item.ID, "metadata_key."),
+			})
+		}
+	}
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("%s lists no metadata keys", featureInventoryPath)
+	}
+	slices.SortFunc(keys, func(a, b reservedMetadataKey) int { return strings.Compare(a.Key, b.Key) })
+	return keys, nil
 }
 
 func writeGenerated(check bool, path string, value any) {

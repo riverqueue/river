@@ -75,6 +75,7 @@
     { "evidence": [{ "path": "conformance/harness/performance_test.go", "symbol": "TestPerformanceGate" }], "name": "release_worker_performance", "tier": "performance" },
     { "evidence": [{ "path": "conformance/harness/coordination_scenarios_test.go", "symbol": "verifyRemoteCancelNotification" }], "name": "remote_cancel_notification", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/coordination_scenarios_test.go", "symbol": "verifyRemoteQueueSubscriptionEvents" }], "name": "remote_queue_subscription_events", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/lifecycle_scenarios_test.go", "symbol": "verifyReservedMetadata" }], "name": "reserved_metadata_cross_engine", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/resumable_test.go", "symbol": "verifyResumableInteroperability" }], "name": "resumable_cross_engine_cursor", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/runtime_scenarios_test.go", "symbol": "verifyResumableRetry" }], "name": "resumable_retry", "tier": "runtime" },
     { "evidence": [{ "path": "conformance/harness/resumable_test.go", "symbol": "verifyResumableValidation" }], "name": "resumable_validation", "tier": "runtime" },

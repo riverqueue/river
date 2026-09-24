@@ -1,0 +1,2863 @@
+{
+  "$schema": "schema/feature-inventory.schema.json",
+  "items": [
+    {
+      "applicability": "not_applicable",
+      "area": "client",
+      "detail": "func() riverdriver.Driver[TTx]",
+      "id": "client.Driver",
+      "rationale": "Unstable Go accessor for the internal driver seam.",
+      "source": "client.go:river.Client.Driver"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func() string",
+      "id": "client.ID",
+      "rationale": "Accessor for the configured or generated client ID (see config.ID).",
+      "source": "client.go:river.Client.ID"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, river.JobArgs, *river.InsertOpts) (*rivertype.JobInsertResult, error)",
+      "id": "client.Insert",
+      "rationale": "Each implementation provides Insert in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "candidate_insert_reference_work",
+        "reference_insert_candidate_work"
+      ],
+      "source": "client.go:river.Client.Insert"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, []river.InsertManyParams) ([]*rivertype.JobInsertResult, error)",
+      "id": "client.InsertMany",
+      "rationale": "Each implementation provides InsertMany in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "typed_batch_insertion"
+      ],
+      "source": "client.go:river.Client.InsertMany"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, []river.InsertManyParams) (int, error)",
+      "id": "client.InsertManyFast",
+      "rationale": "Each implementation provides InsertManyFast in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "fast_insert_both_implementations"
+      ],
+      "source": "client.go:river.Client.InsertManyFast"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, TTx, []river.InsertManyParams) (int, error)",
+      "id": "client.InsertManyFastTx",
+      "rationale": "Each implementation provides InsertManyFast inside a caller-managed transaction in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "transactional_fast_batch_insertion"
+      ],
+      "source": "client.go:river.Client.InsertManyFastTx"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, TTx, []river.InsertManyParams) ([]*rivertype.JobInsertResult, error)",
+      "id": "client.InsertManyTx",
+      "rationale": "Each implementation provides InsertMany inside a caller-managed transaction in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "transactional_batch_insertion"
+      ],
+      "source": "client.go:river.Client.InsertManyTx"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, TTx, river.JobArgs, *river.InsertOpts) (*rivertype.JobInsertResult, error)",
+      "id": "client.InsertTx",
+      "rationale": "Each implementation provides Insert inside a caller-managed transaction in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "transaction_commit_visibility",
+        "transaction_rollback_visibility"
+      ],
+      "source": "client.go:river.Client.InsertTx"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, int64) (*rivertype.JobRow, error)",
+      "id": "client.JobCancel",
+      "rationale": "Each implementation provides JobCancel in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "differential_job_crud",
+        "remote_cancel_notification"
+      ],
+      "source": "client.go:river.Client.JobCancel"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, TTx, int64) (*rivertype.JobRow, error)",
+      "id": "client.JobCancelTx",
+      "rationale": "Each implementation provides JobCancel inside a caller-managed transaction in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "transactional_cross_language_cancel"
+      ],
+      "source": "client.go:river.Client.JobCancelTx"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, int64) (*rivertype.JobRow, error)",
+      "id": "client.JobDelete",
+      "rationale": "Each implementation provides JobDelete in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "differential_job_crud"
+      ],
+      "source": "client.go:river.Client.JobDelete"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, *river.JobDeleteManyParams) (*river.JobDeleteManyResult, error)",
+      "id": "client.JobDeleteMany",
+      "rationale": "Each implementation provides JobDeleteMany in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "bulk_delete_safety"
+      ],
+      "source": "client.go:river.Client.JobDeleteMany"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, TTx, *river.JobDeleteManyParams) (*river.JobDeleteManyResult, error)",
+      "id": "client.JobDeleteManyTx",
+      "rationale": "Each implementation provides JobDeleteMany inside a caller-managed transaction in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "transactional_crud_commit_rollback"
+      ],
+      "source": "client.go:river.Client.JobDeleteManyTx"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, TTx, int64) (*rivertype.JobRow, error)",
+      "id": "client.JobDeleteTx",
+      "rationale": "Each implementation provides JobDelete inside a caller-managed transaction in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "transactional_crud_commit_rollback"
+      ],
+      "source": "client.go:river.Client.JobDeleteTx"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, int64) (*rivertype.JobRow, error)",
+      "id": "client.JobGet",
+      "rationale": "Each implementation provides JobGet in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "differential_job_crud"
+      ],
+      "source": "client.go:river.Client.JobGet"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, TTx, int64) (*rivertype.JobRow, error)",
+      "id": "client.JobGetTx",
+      "rationale": "Each implementation provides JobGet inside a caller-managed transaction in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "transactional_crud_commit_rollback"
+      ],
+      "source": "client.go:river.Client.JobGetTx"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, *river.JobListParams) (*river.JobListResult, error)",
+      "id": "client.JobList",
+      "rationale": "Each implementation provides JobList in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "differential_job_list_filters_and_cursors"
+      ],
+      "source": "client.go:river.Client.JobList"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, TTx, *river.JobListParams) (*river.JobListResult, error)",
+      "id": "client.JobListTx",
+      "rationale": "Each implementation provides JobList inside a caller-managed transaction in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "transactional_crud_commit_rollback"
+      ],
+      "source": "client.go:river.Client.JobListTx"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, int64) (*rivertype.JobRow, error)",
+      "id": "client.JobRetry",
+      "rationale": "Each implementation provides JobRetry in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "differential_job_crud"
+      ],
+      "source": "client.go:river.Client.JobRetry"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, TTx, int64) (*rivertype.JobRow, error)",
+      "id": "client.JobRetryTx",
+      "rationale": "Each implementation provides JobRetry inside a caller-managed transaction in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "transactional_crud_commit_rollback"
+      ],
+      "source": "client.go:river.Client.JobRetryTx"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, int64, *river.JobUpdateParams) (*rivertype.JobRow, error)",
+      "id": "client.JobUpdate",
+      "rationale": "Each implementation provides JobUpdate in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "differential_job_crud"
+      ],
+      "source": "client.go:river.Client.JobUpdate"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, TTx, int64, *river.JobUpdateParams) (*rivertype.JobRow, error)",
+      "id": "client.JobUpdateTx",
+      "rationale": "Each implementation provides JobUpdate inside a caller-managed transaction in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "transactional_crud_commit_rollback"
+      ],
+      "source": "client.go:river.Client.JobUpdateTx"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func() *river.ClientNotifyBundle[TTx]",
+      "id": "client.Notify",
+      "rationale": "Go bundle for sending control notifications such as a leader resignation request; the adapter's request_resign method uses it.",
+      "scenarios": [
+        "mixed_request_resign_terms"
+      ],
+      "source": "client.go:river.Client.Notify"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func() *river.PeriodicJobBundle",
+      "id": "client.PeriodicJobs",
+      "rationale": "Language-native API to add or remove periodic jobs at runtime; the enqueue behavior itself is classified under config.PeriodicJobs.",
+      "source": "client.go:river.Client.PeriodicJobs"
+    },
+    {
+      "applicability": "not_applicable",
+      "area": "client",
+      "detail": "func() riverpilot.Pilot",
+      "id": "client.Pilot",
+      "rationale": "Unstable Go accessor for the extension seam.",
+      "source": "client.go:river.Client.Pilot"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, string) (*rivertype.Queue, error)",
+      "id": "client.QueueGet",
+      "rationale": "Each implementation provides QueueGet in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "differential_queue_crud"
+      ],
+      "source": "client.go:river.Client.QueueGet"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, TTx, string) (*rivertype.Queue, error)",
+      "id": "client.QueueGetTx",
+      "rationale": "Each implementation provides QueueGet inside a caller-managed transaction in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "transactional_queue_operations"
+      ],
+      "source": "client.go:river.Client.QueueGetTx"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, *river.QueueListParams) (*river.QueueListResult, error)",
+      "id": "client.QueueList",
+      "rationale": "Each implementation provides QueueList in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "differential_queue_crud"
+      ],
+      "source": "client.go:river.Client.QueueList"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, TTx, *river.QueueListParams) (*river.QueueListResult, error)",
+      "id": "client.QueueListTx",
+      "rationale": "Each implementation provides QueueList inside a caller-managed transaction in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "transactional_queue_operations"
+      ],
+      "source": "client.go:river.Client.QueueListTx"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, string, *river.QueuePauseOpts) error",
+      "id": "client.QueuePause",
+      "rationale": "Each implementation provides QueuePause in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "pause_resume_notification"
+      ],
+      "source": "client.go:river.Client.QueuePause"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, TTx, string, *river.QueuePauseOpts) error",
+      "id": "client.QueuePauseTx",
+      "rationale": "Each implementation provides QueuePause inside a caller-managed transaction in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "transactional_queue_operations"
+      ],
+      "source": "client.go:river.Client.QueuePauseTx"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, string, *river.QueuePauseOpts) error",
+      "id": "client.QueueResume",
+      "rationale": "Each implementation provides QueueResume in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "pause_resume_notification"
+      ],
+      "source": "client.go:river.Client.QueueResume"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, TTx, string, *river.QueuePauseOpts) error",
+      "id": "client.QueueResumeTx",
+      "rationale": "Each implementation provides QueueResume inside a caller-managed transaction in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "transactional_queue_operations"
+      ],
+      "source": "client.go:river.Client.QueueResumeTx"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, string, *river.QueueUpdateParams) (*rivertype.Queue, error)",
+      "id": "client.QueueUpdate",
+      "rationale": "Each implementation provides QueueUpdate in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "differential_queue_crud"
+      ],
+      "source": "client.go:river.Client.QueueUpdate"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context, TTx, string, *river.QueueUpdateParams) (*rivertype.Queue, error)",
+      "id": "client.QueueUpdateTx",
+      "rationale": "Each implementation provides QueueUpdate inside a caller-managed transaction in its own idiom; exercised through the corresponding adapter method.",
+      "scenarios": [
+        "transactional_queue_operations"
+      ],
+      "source": "client.go:river.Client.QueueUpdateTx"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func() *river.QueueBundle",
+      "id": "client.Queues",
+      "rationale": "Language-native API to add, reconfigure, and remove worked queues at runtime; the adapter's queue_add/queue_remove use it.",
+      "scenarios": [
+        "dynamic_queue_add_reconfigure_remove"
+      ],
+      "source": "client.go:river.Client.Queues"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func() string",
+      "id": "client.Schema",
+      "rationale": "Accessor for the configured schema (see config.Schema).",
+      "source": "client.go:river.Client.Schema"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context) error",
+      "id": "client.Start",
+      "rationale": "Language-native client start.",
+      "scenarios": [
+        "sqlite_runtime_lifecycle_shutdown"
+      ],
+      "source": "client.go:river.Client.Start"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context) error",
+      "id": "client.Stop",
+      "rationale": "Language-native graceful stop that lets running jobs finish.",
+      "scenarios": [
+        "sqlite_runtime_lifecycle_shutdown"
+      ],
+      "source": "client.go:river.Client.Stop"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(context.Context) error",
+      "id": "client.StopAndCancel",
+      "rationale": "Language-native hard stop that cancels running jobs; the adapter's stop with cancel uses it.",
+      "scenarios": [
+        "ignored_cancellation_hard_abort"
+      ],
+      "source": "client.go:river.Client.StopAndCancel"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func() <-chan struct {}",
+      "id": "client.Stopped",
+      "rationale": "Go channel closed when the client has fully stopped; other languages signal completion in their own idiom.",
+      "source": "client.go:river.Client.Stopped"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "client",
+      "detail": "func(...river.EventKind) (<-chan *river.Event, func())",
+      "id": "client.Subscribe",
+      "rationale": "Language-native local event subscription; the adapter reports observed events via runtime_stats.",
+      "scenarios": [
+        "remote_queue_subscription_events",
+        "sqlite_runtime_extensions_resumable_subscriptions"
+      ],
+      "source": "client.go:river.Client.Subscribe"
+    },
+    {
+      "applicability": "not_applicable",
+      "area": "client",
+      "detail": "func(*river.SubscribeConfig) (<-chan *river.Event, func())",
+      "id": "client.SubscribeConfig",
+      "rationale": "Go-specific variant of Subscribe that overrides the channel buffer size.",
+      "source": "client.go:river.Client.SubscribeConfig"
+    },
+    {
+      "applicability": "not_applicable",
+      "area": "config",
+      "detail": "int32",
+      "id": "config.AdvisoryLockPrefix",
+      "rationale": "Copied into the periodic job enqueuer's configuration but not used to derive any lock key in this version; it has no persisted or cross-process effect to match.",
+      "source": "client.go:river.Config.AdvisoryLockPrefix"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "config",
+      "detail": "time.Duration",
+      "gap": "No shared job cleaner scenario yet; retention periods are covered only by implementation-local tests.",
+      "id": "config.CancelledJobRetentionPeriod",
+      "rationale": "The job cleaner deletes cancelled rows after this period; deletion is visible to every implementation sharing the database.",
+      "source": "client.go:river.Config.CancelledJobRetentionPeriod"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "config",
+      "detail": "time.Duration",
+      "gap": "No shared job cleaner scenario yet; retention periods are covered only by implementation-local tests.",
+      "id": "config.CompletedJobRetentionPeriod",
+      "rationale": "The job cleaner deletes completed rows after this period; deletion is visible to every implementation sharing the database.",
+      "source": "client.go:river.Config.CompletedJobRetentionPeriod"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "config",
+      "detail": "time.Duration",
+      "gap": "No shared job cleaner scenario yet; retention periods are covered only by implementation-local tests.",
+      "id": "config.DiscardedJobRetentionPeriod",
+      "rationale": "The job cleaner deletes discarded rows after this period; deletion is visible to every implementation sharing the database.",
+      "source": "client.go:river.Config.DiscardedJobRetentionPeriod"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "config",
+      "detail": "river.ErrorHandler",
+      "id": "config.ErrorHandler",
+      "rationale": "Language-native error/panic callback. Its persisted effect (overriding the outcome, e.g. cancel) is exercised through the adapter's error_handler_cancel start option.",
+      "scenarios": [
+        "error_handler_cancel_override"
+      ],
+      "source": "client.go:river.Config.ErrorHandler"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "config",
+      "detail": "time.Duration",
+      "id": "config.FetchCooldown",
+      "rationale": "Per-process minimum interval between fetches (a throughput throttle). Implementations expose an equivalent knob; it has no cross-process contract.",
+      "source": "client.go:river.Config.FetchCooldown"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "config",
+      "detail": "time.Duration",
+      "id": "config.FetchPollInterval",
+      "rationale": "Per-process polling fallback interval. The adapter's fetch_poll_interval_ms option exercises both the polling fallback and notification-only wakeups with polling effectively disabled.",
+      "scenarios": [
+        "lost_notification_poll_recovery",
+        "notification_only_wakeups"
+      ],
+      "source": "client.go:river.Config.FetchPollInterval"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "config",
+      "detail": "[]rivertype.Hook",
+      "id": "config.Hooks",
+      "rationale": "Registration of global hooks in each language's idiom. Hook ordering semantics are exercised through plugin registration in extension_hook_middleware_order.",
+      "source": "client.go:river.Config.Hooks"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "config",
+      "detail": "string",
+      "id": "config.ID",
+      "rationale": "Persisted in attempted_by and used as leader_id; scenarios assert attempted_by client IDs across implementations.",
+      "scenarios": [
+        "process_kill_restart_and_rescue",
+        "sqlite_runtime_attempted_by_ordering"
+      ],
+      "source": "client.go:river.Config.ID"
+    },
+    {
+      "applicability": "internal",
+      "area": "config",
+      "detail": "time.Duration",
+      "id": "config.JobCleanerTimeout",
+      "rationale": "Timeout for individual job cleaner queries; bounds local work only and changes no persisted outcome.",
+      "source": "client.go:river.Config.JobCleanerTimeout"
+    },
+    {
+      "applicability": "not_applicable",
+      "area": "config",
+      "detail": "[]rivertype.JobInsertMiddleware",
+      "id": "config.JobInsertMiddleware",
+      "rationale": "Deprecated Go field superseded by Plugins. The insert-middleware concept is classified under extension.rivertype.JobInsertMiddleware.",
+      "source": "client.go:river.Config.JobInsertMiddleware"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "config",
+      "detail": "river.JobStuckHandler",
+      "id": "config.JobStuckHandler",
+      "rationale": "Language-native callback invoked when a timed-out job does not return; lets the client open a replacement worker slot.",
+      "scenarios": [
+        "stuck_job_detection"
+      ],
+      "source": "client.go:river.Config.JobStuckHandler"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "config",
+      "detail": "time.Duration",
+      "id": "config.JobStuckThreshold",
+      "rationale": "In-process grace period after JobTimeout before a job is treated as stuck and its slot replaced. Observable only as extra concurrency, not in persisted rows.",
+      "scenarios": [
+        "stuck_job_detection"
+      ],
+      "source": "client.go:river.Config.JobStuckThreshold"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "config",
+      "detail": "time.Duration",
+      "id": "config.JobTimeout",
+      "rationale": "Timed-out attempts are cancelled and recorded as errors with retry scheduling, which other implementations observe.",
+      "scenarios": [
+        "timeout_cancellation"
+      ],
+      "source": "client.go:river.Config.JobTimeout"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "config",
+      "detail": "*slog.Logger",
+      "id": "config.Logger",
+      "rationale": "Each implementation uses its own logging facility.",
+      "source": "client.go:river.Config.Logger"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "config",
+      "detail": "int",
+      "id": "config.MaxAttempts",
+      "rationale": "Client-wide default applied to inserted rows' max_attempts (25). Implementations expose an equivalent default; the per-insert value is classified as insert_opts.MaxAttempts.",
+      "source": "client.go:river.Config.MaxAttempts"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "config",
+      "detail": "[]rivertype.Middleware",
+      "id": "config.Middleware",
+      "rationale": "Registration of global middleware in each language's idiom. Middleware ordering semantics are exercised through plugin registration in extension_hook_middleware_order.",
+      "source": "client.go:river.Config.Middleware"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "config",
+      "detail": "[]*river.PeriodicJob",
+      "id": "config.PeriodicJobs",
+      "rationale": "Only the elected leader enqueues periodic jobs, tagging them with reserved metadata; duplicate or missing enqueues are visible across implementations.",
+      "scenarios": [
+        "mixed_leader_death_failover_both_directions",
+        "periodic_run_on_start",
+        "sqlite_runtime_periodic_scheduler"
+      ],
+      "source": "client.go:river.Config.PeriodicJobs"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "config",
+      "detail": "[]rivertype.Plugin",
+      "id": "config.Plugins",
+      "rationale": "Language-native plugin registration; the adapter's instrumented option installs a plugin and the scenario checks hook and middleware ordering.",
+      "scenarios": [
+        "extension_hook_middleware_order"
+      ],
+      "source": "client.go:river.Config.Plugins"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "config",
+      "detail": "bool",
+      "id": "config.PollOnly",
+      "rationale": "Disables LISTEN in favor of polling. Implementations provide an equivalent notification-free mode.",
+      "scenarios": [
+        "sqlite_runtime_poll_only_recovery"
+      ],
+      "source": "client.go:river.Config.PollOnly"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "config",
+      "detail": "map[string]river.QueueConfig",
+      "id": "config.Queues",
+      "rationale": "Queues a client works are persisted as river_queue rows and determine which jobs it fetches.",
+      "scenarios": [
+        "differential_queue_crud",
+        "dynamic_queue_add_reconfigure_remove"
+      ],
+      "source": "client.go:river.Config.Queues"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "config",
+      "detail": "[]string",
+      "gap": "No shared reindexer scenario yet; the schedule and index names are covered only by implementation-local tests.",
+      "id": "config.ReindexerIndexNames",
+      "rationale": "Determines which River indexes the leader reindexes.",
+      "source": "client.go:river.Config.ReindexerIndexNames"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "config",
+      "detail": "river.PeriodicSchedule",
+      "gap": "No shared reindexer scenario yet; the schedule and index names are covered only by implementation-local tests.",
+      "id": "config.ReindexerSchedule",
+      "rationale": "Determines when the leader reindexes River indexes (midnight UTC by default).",
+      "source": "client.go:river.Config.ReindexerSchedule"
+    },
+    {
+      "applicability": "internal",
+      "area": "config",
+      "detail": "time.Duration",
+      "id": "config.ReindexerTimeout",
+      "rationale": "Per-reindex operation timeout; bounds local work only.",
+      "source": "client.go:river.Config.ReindexerTimeout"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "config",
+      "detail": "time.Duration",
+      "id": "config.RescueStuckJobsAfter",
+      "rationale": "Running jobs older than this are rescued by the leader, incrementing river:rescue_count and retrying or discarding them.",
+      "scenarios": [
+        "candidate_process_kill_reference_rescue",
+        "process_kill_restart_and_rescue",
+        "reference_process_kill_candidate_rescue"
+      ],
+      "source": "client.go:river.Config.RescueStuckJobsAfter"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "config",
+      "detail": "river.ClientRetryPolicy",
+      "id": "config.RetryPolicy",
+      "rationale": "Determines scheduled_at for retryable jobs, which is persisted and observed by every implementation.",
+      "scenarios": [
+        "default_retry_policy_schedule",
+        "deterministic_retry_clock_rng"
+      ],
+      "source": "client.go:river.Config.RetryPolicy"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "config",
+      "detail": "string",
+      "id": "config.Schema",
+      "rationale": "Custom schemas qualify every table and notification topic.",
+      "scenarios": [
+        "custom_schema_candidate_migrate_reference_work",
+        "custom_schema_reference_migrate_candidate_work"
+      ],
+      "source": "client.go:river.Config.Schema"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "config",
+      "detail": "bool",
+      "id": "config.SkipJobKindValidation",
+      "rationale": "Deprecated escape hatch that skips kind-format validation at insert time; implementations may offer an equivalent legacy-kind option.",
+      "source": "client.go:river.Config.SkipJobKindValidation"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "config",
+      "detail": "bool",
+      "id": "config.SkipUnknownJobCheck",
+      "rationale": "Allows inserting kinds without a locally registered worker; implementations offer an equivalent option for clients inserting work for other processes.",
+      "source": "client.go:river.Config.SkipUnknownJobCheck"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "config",
+      "detail": "time.Duration",
+      "id": "config.SoftStopTimeout",
+      "rationale": "Local graceful-stop deadline before escalating to cancellation; each implementation offers an equivalent shutdown control.",
+      "source": "client.go:river.Config.SoftStopTimeout"
+    },
+    {
+      "applicability": "not_applicable",
+      "area": "config",
+      "detail": "river.TestConfig",
+      "id": "config.Test",
+      "rationale": "Go test-environment settings (time generator, unique enforcement toggle). Conformance drives time through the adapter's clock_set instead.",
+      "source": "client.go:river.Config.Test"
+    },
+    {
+      "applicability": "not_applicable",
+      "area": "config",
+      "detail": "bool",
+      "id": "config.TestOnly",
+      "rationale": "Go test-suite switch that removes startup jitter; not part of any production behavior.",
+      "source": "client.go:river.Config.TestOnly"
+    },
+    {
+      "applicability": "not_applicable",
+      "area": "config",
+      "detail": "[]rivertype.WorkerMiddleware",
+      "id": "config.WorkerMiddleware",
+      "rationale": "Deprecated Go field superseded by Plugins. The worker-middleware concept is classified under extension.rivertype.WorkerMiddleware.",
+      "source": "client.go:river.Config.WorkerMiddleware"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "config",
+      "detail": "*river.Workers",
+      "id": "config.Workers",
+      "rationale": "Language-native worker registry mapping kinds to handlers.",
+      "source": "client.go:river.Config.Workers"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func() string",
+      "id": "driver.Driver.ArgPlaceholder",
+      "rationale": "Go database-driver adapter plumbing; other implementations integrate their database libraries directly.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Driver.ArgPlaceholder"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func() string",
+      "id": "driver.Driver.DatabaseName",
+      "rationale": "Go database-driver adapter plumbing; other implementations integrate their database libraries directly.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Driver.DatabaseName"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func() Executor",
+      "id": "driver.Driver.GetExecutor",
+      "rationale": "Go database-driver adapter plumbing; other implementations integrate their database libraries directly.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Driver.GetExecutor"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(params *GetListenenerParams) Listener",
+      "id": "driver.Driver.GetListener",
+      "rationale": "Go database-driver adapter plumbing; other implementations integrate their database libraries directly.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Driver.GetListener"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func() []string",
+      "id": "driver.Driver.GetMigrationDefaultLines",
+      "rationale": "Go database-driver adapter plumbing; other implementations integrate their database libraries directly.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Driver.GetMigrationDefaultLines"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(line string) fs.FS",
+      "id": "driver.Driver.GetMigrationFS",
+      "rationale": "Go database-driver adapter plumbing; other implementations integrate their database libraries directly.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Driver.GetMigrationFS"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func() []string",
+      "id": "driver.Driver.GetMigrationLines",
+      "rationale": "Go database-driver adapter plumbing; other implementations integrate their database libraries directly.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Driver.GetMigrationLines"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(line string, version int) []string",
+      "id": "driver.Driver.GetMigrationTruncateTables",
+      "rationale": "Go database-driver adapter plumbing; other implementations integrate their database libraries directly.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Driver.GetMigrationTruncateTables"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func() bool",
+      "id": "driver.Driver.PoolIsSet",
+      "rationale": "Go database-driver adapter plumbing; other implementations integrate their database libraries directly.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Driver.PoolIsSet"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(dbPool any) error",
+      "id": "driver.Driver.PoolSet",
+      "rationale": "Go database-driver adapter plumbing; other implementations integrate their database libraries directly.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Driver.PoolSet"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(column, namedArg string, values []string) (string, any, error)",
+      "id": "driver.Driver.SQLFragmentColumnContainsAll",
+      "rationale": "Go database-driver adapter plumbing; other implementations integrate their database libraries directly.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Driver.SQLFragmentColumnContainsAll"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(column, namedArg string, values []string) (string, any, error)",
+      "id": "driver.Driver.SQLFragmentColumnContainsAny",
+      "rationale": "Go database-driver adapter plumbing; other implementations integrate their database libraries directly.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Driver.SQLFragmentColumnContainsAny"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(column string, values any) (string, any, error)",
+      "id": "driver.Driver.SQLFragmentColumnIn",
+      "rationale": "Go database-driver adapter plumbing; other implementations integrate their database libraries directly.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Driver.SQLFragmentColumnIn"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func() bool",
+      "id": "driver.Driver.SupportsListenNotify",
+      "rationale": "Go database-driver adapter plumbing; other implementations integrate their database libraries directly.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Driver.SupportsListenNotify"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func() bool",
+      "id": "driver.Driver.SupportsListener",
+      "rationale": "Go database-driver adapter plumbing; other implementations integrate their database libraries directly.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Driver.SupportsListener"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func() time.Duration",
+      "id": "driver.Driver.TimePrecision",
+      "rationale": "Go database-driver adapter plumbing; other implementations integrate their database libraries directly.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Driver.TimePrecision"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(tx TTx) ExecutorTx",
+      "id": "driver.Driver.UnwrapExecutor",
+      "rationale": "Go database-driver adapter plumbing; other implementations integrate their database libraries directly.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Driver.UnwrapExecutor"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(execTx ExecutorTx) TTx",
+      "id": "driver.Driver.UnwrapTx",
+      "rationale": "Go database-driver adapter plumbing; other implementations integrate their database libraries directly.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Driver.UnwrapTx"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context) (ExecutorTx, error)",
+      "id": "driver.Executor.Begin",
+      "rationale": "Go driver-seam primitive for raw statement execution or transactions.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.Begin"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *ColumnExistsParams) (bool, error)",
+      "id": "driver.Executor.ColumnExists",
+      "rationale": "Go driver-seam method for schema introspection used by the migrator.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.ColumnExists"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, sql string, args ...any) error",
+      "id": "driver.Executor.Exec",
+      "rationale": "Go driver-seam primitive for raw statement execution or transactions.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.Exec"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *IndexDropIfExistsParams) error",
+      "id": "driver.Executor.IndexDropIfExists",
+      "rationale": "Go driver-seam method for index introspection and maintenance used by the reindexer and tests.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.IndexDropIfExists"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *IndexExistsParams) (bool, error)",
+      "id": "driver.Executor.IndexExists",
+      "rationale": "Go driver-seam method for index introspection and maintenance used by the reindexer and tests.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.IndexExists"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *IndexReindexParams) error",
+      "id": "driver.Executor.IndexReindex",
+      "rationale": "Go driver-seam method for index introspection and maintenance used by the reindexer and tests.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.IndexReindex"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *IndexReindexArtifactsParams) ([]string, error)",
+      "id": "driver.Executor.IndexReindexArtifacts",
+      "rationale": "Go driver-seam method for index introspection and maintenance used by the reindexer and tests.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.IndexReindexArtifacts"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *IndexesExistParams) (map[string]bool, error)",
+      "id": "driver.Executor.IndexesExist",
+      "rationale": "Go driver-seam method for index introspection and maintenance used by the reindexer and tests.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.IndexesExist"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobCancelParams) (*rivertype.JobRow, error)",
+      "id": "driver.Executor.JobCancel",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobCancel"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobCountByAllStatesParams) (map[rivertype.JobState]int, error)",
+      "id": "driver.Executor.JobCountByAllStates",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobCountByAllStates"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobCountByQueueAndStateParams) ([]*JobCountByQueueAndStateResult, error)",
+      "id": "driver.Executor.JobCountByQueueAndState",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobCountByQueueAndState"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobCountByStateParams) (int, error)",
+      "id": "driver.Executor.JobCountByState",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobCountByState"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobDeleteParams) (*rivertype.JobRow, error)",
+      "id": "driver.Executor.JobDelete",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobDelete"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobDeleteBeforeParams) (int, error)",
+      "id": "driver.Executor.JobDeleteBefore",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobDeleteBefore"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobDeleteManyParams) ([]*rivertype.JobRow, error)",
+      "id": "driver.Executor.JobDeleteMany",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobDeleteMany"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobGetAvailableParams) ([]*rivertype.JobRow, error)",
+      "id": "driver.Executor.JobGetAvailable",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobGetAvailable"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobGetByIDParams) (*rivertype.JobRow, error)",
+      "id": "driver.Executor.JobGetByID",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobGetByID"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobGetByIDManyParams) ([]*rivertype.JobRow, error)",
+      "id": "driver.Executor.JobGetByIDMany",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobGetByIDMany"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobGetByKindManyParams) ([]*rivertype.JobRow, error)",
+      "id": "driver.Executor.JobGetByKindMany",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobGetByKindMany"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobGetStuckParams) ([]*rivertype.JobRow, error)",
+      "id": "driver.Executor.JobGetStuck",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobGetStuck"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobInsertFastManyParams) ([]*JobInsertFastResult, error)",
+      "id": "driver.Executor.JobInsertFastMany",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobInsertFastMany"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobInsertFastManyParams) (int, error)",
+      "id": "driver.Executor.JobInsertFastManyNoReturning",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobInsertFastManyNoReturning"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobInsertFullParams) (*rivertype.JobRow, error)",
+      "id": "driver.Executor.JobInsertFull",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobInsertFull"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, jobs *JobInsertFullManyParams) ([]*rivertype.JobRow, error)",
+      "id": "driver.Executor.JobInsertFullMany",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobInsertFullMany"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobKindListParams) ([]string, error)",
+      "id": "driver.Executor.JobKindList",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobKindList"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobListParams) ([]*rivertype.JobRow, error)",
+      "id": "driver.Executor.JobList",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobList"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobRescueManyParams) (*struct{}, error)",
+      "id": "driver.Executor.JobRescueMany",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobRescueMany"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobRetryParams) (*rivertype.JobRow, error)",
+      "id": "driver.Executor.JobRetry",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobRetry"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobScheduleParams) ([]*JobScheduleResult, error)",
+      "id": "driver.Executor.JobSchedule",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobSchedule"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)",
+      "id": "driver.Executor.JobSetStateIfRunningMany",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobSetStateIfRunningMany"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobUpdateParams) (*rivertype.JobRow, error)",
+      "id": "driver.Executor.JobUpdate",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobUpdate"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobUpdateFullParams) (*rivertype.JobRow, error)",
+      "id": "driver.Executor.JobUpdateFull",
+      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobUpdateFull"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *LeaderElectParams) (*Leader, error)",
+      "id": "driver.Executor.LeaderAttemptElect",
+      "rationale": "Go driver-seam method for leader election queries; leadership behavior is covered by the leadership notification items and failover scenarios.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.LeaderAttemptElect"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *LeaderReelectParams) (*Leader, error)",
+      "id": "driver.Executor.LeaderAttemptReelect",
+      "rationale": "Go driver-seam method for leader election queries; leadership behavior is covered by the leadership notification items and failover scenarios.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.LeaderAttemptReelect"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *LeaderDeleteExpiredParams) (int, error)",
+      "id": "driver.Executor.LeaderDeleteExpired",
+      "rationale": "Go driver-seam method for leader election queries; leadership behavior is covered by the leadership notification items and failover scenarios.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.LeaderDeleteExpired"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *LeaderGetElectedLeaderParams) (*Leader, error)",
+      "id": "driver.Executor.LeaderGetElectedLeader",
+      "rationale": "Go driver-seam method for leader election queries; leadership behavior is covered by the leadership notification items and failover scenarios.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.LeaderGetElectedLeader"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *LeaderInsertParams) (*Leader, error)",
+      "id": "driver.Executor.LeaderInsert",
+      "rationale": "Go driver-seam method for leader election queries; leadership behavior is covered by the leadership notification items and failover scenarios.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.LeaderInsert"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *LeaderResignParams) (bool, error)",
+      "id": "driver.Executor.LeaderResign",
+      "rationale": "Go driver-seam method for leader election queries; leadership behavior is covered by the leadership notification items and failover scenarios.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.LeaderResign"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *MigrationDeleteAssumingMainManyParams) ([]*Migration, error)",
+      "id": "driver.Executor.MigrationDeleteAssumingMainMany",
+      "rationale": "Go driver-seam method for migration bookkeeping queries; schema versions are covered by the migration items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.MigrationDeleteAssumingMainMany"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *MigrationDeleteByLineAndVersionManyParams) ([]*Migration, error)",
+      "id": "driver.Executor.MigrationDeleteByLineAndVersionMany",
+      "rationale": "Go driver-seam method for migration bookkeeping queries; schema versions are covered by the migration items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.MigrationDeleteByLineAndVersionMany"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *MigrationGetAllAssumingMainParams) ([]*Migration, error)",
+      "id": "driver.Executor.MigrationGetAllAssumingMain",
+      "rationale": "Go driver-seam method for migration bookkeeping queries; schema versions are covered by the migration items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.MigrationGetAllAssumingMain"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *MigrationGetByLineParams) ([]*Migration, error)",
+      "id": "driver.Executor.MigrationGetByLine",
+      "rationale": "Go driver-seam method for migration bookkeeping queries; schema versions are covered by the migration items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.MigrationGetByLine"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *MigrationInsertManyParams) ([]*Migration, error)",
+      "id": "driver.Executor.MigrationInsertMany",
+      "rationale": "Go driver-seam method for migration bookkeeping queries; schema versions are covered by the migration items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.MigrationInsertMany"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *MigrationInsertManyAssumingMainParams) ([]*Migration, error)",
+      "id": "driver.Executor.MigrationInsertManyAssumingMain",
+      "rationale": "Go driver-seam method for migration bookkeeping queries; schema versions are covered by the migration items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.MigrationInsertManyAssumingMain"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *NotificationDeleteBeforeParams) (int, error)",
+      "id": "driver.Executor.NotificationDeleteBefore",
+      "rationale": "Go driver-seam method for notification queries; notification behavior is covered by the notification items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.NotificationDeleteBefore"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *NotifyManyParams) error",
+      "id": "driver.Executor.NotifyMany",
+      "rationale": "Go driver-seam method for notification queries; notification behavior is covered by the notification items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.NotifyMany"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, key int64) (*struct{}, error)",
+      "id": "driver.Executor.PGAdvisoryXactLock",
+      "rationale": "Go driver-seam method for PostgreSQL advisory lock helper.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.PGAdvisoryXactLock"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, sql string, args ...any) Row",
+      "id": "driver.Executor.QueryRow",
+      "rationale": "Go driver-seam primitive for raw statement execution or transactions.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.QueryRow"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *QueueCreateOrSetUpdatedAtParams) (*rivertype.Queue, error)",
+      "id": "driver.Executor.QueueCreateOrSetUpdatedAt",
+      "rationale": "Go driver-seam method for queue queries; their persisted effects are covered by the client queue items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.QueueCreateOrSetUpdatedAt"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *QueueDeleteExpiredParams) ([]string, error)",
+      "id": "driver.Executor.QueueDeleteExpired",
+      "rationale": "Go driver-seam method for queue queries; their persisted effects are covered by the client queue items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.QueueDeleteExpired"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *QueueGetParams) (*rivertype.Queue, error)",
+      "id": "driver.Executor.QueueGet",
+      "rationale": "Go driver-seam method for queue queries; their persisted effects are covered by the client queue items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.QueueGet"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *QueueListParams) ([]*rivertype.Queue, error)",
+      "id": "driver.Executor.QueueList",
+      "rationale": "Go driver-seam method for queue queries; their persisted effects are covered by the client queue items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.QueueList"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *QueueNameListParams) ([]string, error)",
+      "id": "driver.Executor.QueueNameList",
+      "rationale": "Go driver-seam method for queue queries; their persisted effects are covered by the client queue items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.QueueNameList"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *QueuePauseParams) error",
+      "id": "driver.Executor.QueuePause",
+      "rationale": "Go driver-seam method for queue queries; their persisted effects are covered by the client queue items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.QueuePause"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *QueueResumeParams) error",
+      "id": "driver.Executor.QueueResume",
+      "rationale": "Go driver-seam method for queue queries; their persisted effects are covered by the client queue items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.QueueResume"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *QueueUpdateParams) (*rivertype.Queue, error)",
+      "id": "driver.Executor.QueueUpdate",
+      "rationale": "Go driver-seam method for queue queries; their persisted effects are covered by the client queue items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.QueueUpdate"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *SchemaCreateParams) error",
+      "id": "driver.Executor.SchemaCreate",
+      "rationale": "Go driver-seam method for schema management used by maintenance and tests.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.SchemaCreate"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *SchemaDropParams) error",
+      "id": "driver.Executor.SchemaDrop",
+      "rationale": "Go driver-seam method for schema management used by maintenance and tests.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.SchemaDrop"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *SchemaGetExpiredParams) ([]string, error)",
+      "id": "driver.Executor.SchemaGetExpired",
+      "rationale": "Go driver-seam method for schema management used by maintenance and tests.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.SchemaGetExpired"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *TableExistsParams) (bool, error)",
+      "id": "driver.Executor.TableExists",
+      "rationale": "Go driver-seam method for table introspection and truncation used by the migrator and tests.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.TableExists"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *TableTruncateParams) error",
+      "id": "driver.Executor.TableTruncate",
+      "rationale": "Go driver-seam method for table introspection and truncation used by the migrator and tests.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.TableTruncate"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func() int",
+      "id": "driver.ExecutorJobCompletionConcurrency.JobSetStateIfRunningManyConcurrency",
+      "rationale": "Optional Go driver capability controlling concurrent completion batches; local performance tuning only.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.ExecutorJobCompletionConcurrency.JobSetStateIfRunningManyConcurrency"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context) error",
+      "id": "driver.ExecutorTx.Commit",
+      "rationale": "Go transaction wrapper in the driver seam; transaction semantics are covered by the client transaction items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.ExecutorTx.Commit"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "embeds Executor",
+      "id": "driver.ExecutorTx.Executor",
+      "rationale": "Go transaction wrapper in the driver seam; transaction semantics are covered by the client transaction items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.ExecutorTx"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context) error",
+      "id": "driver.ExecutorTx.Rollback",
+      "rationale": "Go transaction wrapper in the driver seam; transaction semantics are covered by the client transaction items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.ExecutorTx.Rollback"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context) error",
+      "id": "driver.Listener.Close",
+      "rationale": "Go LISTEN connection wrapper in the driver seam; notification behavior is covered by the notification_topic and notification_payload items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Listener.Close"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context) error",
+      "id": "driver.Listener.Connect",
+      "rationale": "Go LISTEN connection wrapper in the driver seam; notification behavior is covered by the notification_topic and notification_payload items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Listener.Connect"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, topic string) error",
+      "id": "driver.Listener.Listen",
+      "rationale": "Go LISTEN connection wrapper in the driver seam; notification behavior is covered by the notification_topic and notification_payload items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Listener.Listen"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context) error",
+      "id": "driver.Listener.Ping",
+      "rationale": "Go LISTEN connection wrapper in the driver seam; notification behavior is covered by the notification_topic and notification_payload items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Listener.Ping"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func() string",
+      "id": "driver.Listener.Schema",
+      "rationale": "Go LISTEN connection wrapper in the driver seam; notification behavior is covered by the notification_topic and notification_payload items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Listener.Schema"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(sql string)",
+      "id": "driver.Listener.SetAfterConnectExec",
+      "rationale": "Go LISTEN connection wrapper in the driver seam; notification behavior is covered by the notification_topic and notification_payload items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Listener.SetAfterConnectExec"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, topic string) error",
+      "id": "driver.Listener.Unlisten",
+      "rationale": "Go LISTEN connection wrapper in the driver seam; notification behavior is covered by the notification_topic and notification_payload items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Listener.Unlisten"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context) (*Notification, error)",
+      "id": "driver.Listener.WaitForNotification",
+      "rationale": "Go LISTEN connection wrapper in the driver seam; notification behavior is covered by the notification_topic and notification_payload items.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Listener.WaitForNotification"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(dest ...any) error",
+      "id": "driver.Row.Scan",
+      "rationale": "Go row-scanning wrapper in the driver seam.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Row.Scan"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "event_kind",
+      "detail": "EventKindJobCancelled",
+      "id": "event_kind.job_cancelled",
+      "rationale": "Local subscription event in each implementation's idiom; not yet asserted by a shared scenario.",
+      "source": "event.go:river.EventKindJobCancelled"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "event_kind",
+      "detail": "EventKindJobCompleted",
+      "id": "event_kind.job_completed",
+      "rationale": "Local subscription event; the adapter reports observed events via runtime_stats.",
+      "scenarios": [
+        "sqlite_runtime_extensions_resumable_subscriptions"
+      ],
+      "source": "event.go:river.EventKindJobCompleted"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "event_kind",
+      "detail": "EventKindJobFailed",
+      "id": "event_kind.job_failed",
+      "rationale": "Local subscription event; the adapter reports observed events via runtime_stats.",
+      "scenarios": [
+        "sqlite_runtime_extensions_resumable_subscriptions"
+      ],
+      "source": "event.go:river.EventKindJobFailed"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "event_kind",
+      "detail": "EventKindJobInterrupted",
+      "id": "event_kind.job_interrupted",
+      "rationale": "Local subscription event in each implementation's idiom; not yet asserted by a shared scenario.",
+      "source": "event.go:river.EventKindJobInterrupted"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "event_kind",
+      "detail": "EventKindJobSnoozed",
+      "id": "event_kind.job_snoozed",
+      "rationale": "Local subscription event in each implementation's idiom; not yet asserted by a shared scenario.",
+      "source": "event.go:river.EventKindJobSnoozed"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "event_kind",
+      "detail": "EventKindQueuePaused",
+      "id": "event_kind.queue_paused",
+      "rationale": "Local subscription event raised when a pause control notification arrives, including from another implementation.",
+      "scenarios": [
+        "remote_queue_subscription_events",
+        "sqlite_runtime_remote_queue_subscription_events"
+      ],
+      "source": "event.go:river.EventKindQueuePaused"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "event_kind",
+      "detail": "EventKindQueueResumed",
+      "id": "event_kind.queue_resumed",
+      "rationale": "Local subscription event raised when a resume control notification arrives, including from another implementation.",
+      "scenarios": [
+        "remote_queue_subscription_events",
+        "sqlite_runtime_remote_queue_subscription_events"
+      ],
+      "source": "event.go:river.EventKindQueueResumed"
+    },
+    {
+      "applicability": "internal",
+      "area": "extension",
+      "detail": "func(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error)",
+      "id": "extension.riverpilot.Pilot.JobCancel",
+      "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
+      "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.JobCancel"
+    },
+    {
+      "applicability": "internal",
+      "area": "extension",
+      "detail": "func() []string",
+      "id": "extension.riverpilot.Pilot.JobCleanerQueuesExcluded",
+      "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
+      "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.JobCleanerQueuesExcluded"
+    },
+    {
+      "applicability": "internal",
+      "area": "extension",
+      "detail": "func(ctx context.Context, exec riverdriver.Executor, state ProducerState, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error)",
+      "id": "extension.riverpilot.Pilot.JobGetAvailable",
+      "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
+      "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.JobGetAvailable"
+    },
+    {
+      "applicability": "internal",
+      "area": "extension",
+      "detail": "func(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobInsertFastManyParams) ([]*riverdriver.JobInsertFastResult, error)",
+      "id": "extension.riverpilot.Pilot.JobInsertMany",
+      "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
+      "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.JobInsertMany"
+    },
+    {
+      "applicability": "internal",
+      "area": "extension",
+      "detail": "func(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobRetryParams) (*rivertype.JobRow, error)",
+      "id": "extension.riverpilot.Pilot.JobRetry",
+      "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
+      "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.JobRetry"
+    },
+    {
+      "applicability": "internal",
+      "area": "extension",
+      "detail": "func(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)",
+      "id": "extension.riverpilot.Pilot.JobSetStateIfRunningMany",
+      "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
+      "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.JobSetStateIfRunningMany"
+    },
+    {
+      "applicability": "internal",
+      "area": "extension",
+      "detail": "func(archetype *baseservice.Archetype, params *PilotInitParams)",
+      "id": "extension.riverpilot.Pilot.PilotInit",
+      "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
+      "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.PilotInit"
+    },
+    {
+      "applicability": "internal",
+      "area": "extension",
+      "detail": "embeds PilotPeriodicJob",
+      "id": "extension.riverpilot.Pilot.PilotPeriodicJob",
+      "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
+      "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot"
+    },
+    {
+      "applicability": "internal",
+      "area": "extension",
+      "detail": "func(ctx context.Context, exec riverdriver.Executor, params *ProducerInitParams) (int64, ProducerState, error)",
+      "id": "extension.riverpilot.Pilot.ProducerInit",
+      "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
+      "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.ProducerInit"
+    },
+    {
+      "applicability": "internal",
+      "area": "extension",
+      "detail": "func(ctx context.Context, exec riverdriver.Executor, params *riverdriver.ProducerKeepAliveParams) error",
+      "id": "extension.riverpilot.Pilot.ProducerKeepAlive",
+      "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
+      "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.ProducerKeepAlive"
+    },
+    {
+      "applicability": "internal",
+      "area": "extension",
+      "detail": "func(ctx context.Context, exec riverdriver.Executor, params *ProducerShutdownParams) error",
+      "id": "extension.riverpilot.Pilot.ProducerShutdown",
+      "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
+      "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.ProducerShutdown"
+    },
+    {
+      "applicability": "internal",
+      "area": "extension",
+      "detail": "func(ctx context.Context, exec riverdriver.Executor, params *QueueMetadataChangedParams) error",
+      "id": "extension.riverpilot.Pilot.QueueMetadataChanged",
+      "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
+      "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.QueueMetadataChanged"
+    },
+    {
+      "applicability": "internal",
+      "area": "extension",
+      "detail": "func() int",
+      "id": "extension.riverpilot.PilotJobCompletionConcurrency.JobSetStateIfRunningManyConcurrency",
+      "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
+      "source": "rivershared/riverpilot/pilot.go:riverpilot.PilotJobCompletionConcurrency.JobSetStateIfRunningManyConcurrency"
+    },
+    {
+      "applicability": "internal",
+      "area": "extension",
+      "detail": "func(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error)",
+      "id": "extension.riverpilot.PilotJobRescuer.JobGetStuck",
+      "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
+      "source": "rivershared/riverpilot/pilot.go:riverpilot.PilotJobRescuer.JobGetStuck"
+    },
+    {
+      "applicability": "internal",
+      "area": "extension",
+      "detail": "func(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobRescueManyParams) (*struct{}, error)",
+      "id": "extension.riverpilot.PilotJobRescuer.JobRescueMany",
+      "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
+      "source": "rivershared/riverpilot/pilot.go:riverpilot.PilotJobRescuer.JobRescueMany"
+    },
+    {
+      "applicability": "internal",
+      "area": "extension",
+      "detail": "func(ctx context.Context, exec riverdriver.Executor, params *PeriodicJobGetAllParams) ([]*PeriodicJob, error)",
+      "id": "extension.riverpilot.PilotPeriodicJob.PeriodicJobGetAll",
+      "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
+      "source": "rivershared/riverpilot/pilot.go:riverpilot.PilotPeriodicJob.PeriodicJobGetAll"
+    },
+    {
+      "applicability": "internal",
+      "area": "extension",
+      "detail": "func(ctx context.Context, exec riverdriver.Executor, params *PeriodicJobKeepAliveAndReapParams) ([]*PeriodicJob, error)",
+      "id": "extension.riverpilot.PilotPeriodicJob.PeriodicJobKeepAliveAndReap",
+      "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
+      "source": "rivershared/riverpilot/pilot.go:riverpilot.PilotPeriodicJob.PeriodicJobKeepAliveAndReap"
+    },
+    {
+      "applicability": "internal",
+      "area": "extension",
+      "detail": "func(ctx context.Context, exec riverdriver.Executor, params *PeriodicJobUpsertManyParams) ([]*PeriodicJob, error)",
+      "id": "extension.riverpilot.PilotPeriodicJob.PeriodicJobUpsertMany",
+      "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
+      "source": "rivershared/riverpilot/pilot.go:riverpilot.PilotPeriodicJob.PeriodicJobUpsertMany"
+    },
+    {
+      "applicability": "internal",
+      "area": "extension",
+      "detail": "func(job *rivertype.JobRow)",
+      "id": "extension.riverpilot.ProducerState.JobFinish",
+      "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
+      "source": "rivershared/riverpilot/pilot.go:riverpilot.ProducerState.JobFinish"
+    },
+    {
+      "applicability": "not_applicable",
+      "area": "extension",
+      "detail": "func() bool",
+      "id": "extension.rivertype.Hook.IsHook",
+      "rationale": "Go marker method used to discriminate hook, middleware, and plugin values; other languages express this with their own type systems.",
+      "source": "rivertype/river_type.go:rivertype.Hook.IsHook"
+    },
+    {
+      "applicability": "not_applicable",
+      "area": "extension",
+      "detail": "embeds Hook",
+      "id": "extension.rivertype.HookInsertBegin.Hook",
+      "rationale": "Go interface composition marking the value as a hook or middleware; other languages express this with their own type systems.",
+      "source": "rivertype/river_type.go:rivertype.HookInsertBegin"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "extension",
+      "detail": "func(ctx context.Context, params *JobInsertParams) error",
+      "id": "extension.rivertype.HookInsertBegin.InsertBegin",
+      "rationale": "Insert-begin hook in each language's idiom; ordering is checked through the adapter's instrumented plugin.",
+      "scenarios": [
+        "extension_hook_middleware_order"
+      ],
+      "source": "rivertype/river_type.go:rivertype.HookInsertBegin.InsertBegin"
+    },
+    {
+      "applicability": "not_applicable",
+      "area": "extension",
+      "detail": "embeds Hook",
+      "id": "extension.rivertype.HookMetricEmit.Hook",
+      "rationale": "Go interface composition marking the value as a hook or middleware; other languages express this with their own type systems.",
+      "source": "rivertype/river_type.go:rivertype.HookMetricEmit"
+    },
+    {
+      "applicability": "not_applicable",
+      "area": "extension",
+      "detail": "func(ctx context.Context, params *HookMetricEmitParams)",
+      "id": "extension.rivertype.HookMetricEmit.MetricEmit",
+      "rationale": "Go-specific metric hook; other implementations expose telemetry through their own instrumentation.",
+      "source": "rivertype/river_type.go:rivertype.HookMetricEmit.MetricEmit"
+    },
+    {
+      "applicability": "not_applicable",
+      "area": "extension",
+      "detail": "embeds Hook",
+      "id": "extension.rivertype.HookPeriodicJobsStart.Hook",
+      "rationale": "Go interface composition marking the value as a hook or middleware; other languages express this with their own type systems.",
+      "source": "rivertype/river_type.go:rivertype.HookPeriodicJobsStart"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "extension",
+      "detail": "func(ctx context.Context, params *HookPeriodicJobsStartParams) error",
+      "id": "extension.rivertype.HookPeriodicJobsStart.Start",
+      "rationale": "Periodic-jobs-start hook in each language's idiom; the adapter's instrumented plugin counts invocations.",
+      "scenarios": [
+        "periodic_run_on_start"
+      ],
+      "source": "rivertype/river_type.go:rivertype.HookPeriodicJobsStart.Start"
+    },
+    {
+      "applicability": "not_applicable",
+      "area": "extension",
+      "detail": "embeds Hook",
+      "id": "extension.rivertype.HookWorkBegin.Hook",
+      "rationale": "Go interface composition marking the value as a hook or middleware; other languages express this with their own type systems.",
+      "source": "rivertype/river_type.go:rivertype.HookWorkBegin"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "extension",
+      "detail": "func(ctx context.Context, job *JobRow) error",
+      "id": "extension.rivertype.HookWorkBegin.WorkBegin",
+      "rationale": "Work-begin hook in each language's idiom; ordering is checked through the adapter's instrumented plugin.",
+      "scenarios": [
+        "extension_hook_middleware_order"
+      ],
+      "source": "rivertype/river_type.go:rivertype.HookWorkBegin.WorkBegin"
+    },
+    {
+      "applicability": "not_applicable",
+      "area": "extension",
+      "detail": "embeds Hook",
+      "id": "extension.rivertype.HookWorkEnd.Hook",
+      "rationale": "Go interface composition marking the value as a hook or middleware; other languages express this with their own type systems.",
+      "source": "rivertype/river_type.go:rivertype.HookWorkEnd"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "extension",
+      "detail": "func(ctx context.Context, job *JobRow, err error) error",
+      "id": "extension.rivertype.HookWorkEnd.WorkEnd",
+      "rationale": "Work-end hook in each language's idiom; ordering is checked through the adapter's instrumented plugin.",
+      "scenarios": [
+        "extension_hook_middleware_order"
+      ],
+      "source": "rivertype/river_type.go:rivertype.HookWorkEnd.WorkEnd"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "extension",
+      "detail": "func(ctx context.Context, manyParams []*JobInsertParams, doInner func(context.Context) ([]*JobInsertResult, error)) ([]*JobInsertResult, error)",
+      "id": "extension.rivertype.JobInsertMiddleware.InsertMany",
+      "rationale": "Insert middleware in each language's idiom; ordering is checked through the adapter's instrumented plugin.",
+      "scenarios": [
+        "extension_hook_middleware_order"
+      ],
+      "source": "rivertype/river_type.go:rivertype.JobInsertMiddleware.InsertMany"
+    },
+    {
+      "applicability": "not_applicable",
+      "area": "extension",
+      "detail": "embeds Middleware",
+      "id": "extension.rivertype.JobInsertMiddleware.Middleware",
+      "rationale": "Go interface composition marking the value as a hook or middleware; other languages express this with their own type systems.",
+      "source": "rivertype/river_type.go:rivertype.JobInsertMiddleware"
+    },
+    {
+      "applicability": "not_applicable",
+      "area": "extension",
+      "detail": "func() bool",
+      "id": "extension.rivertype.Middleware.IsMiddleware",
+      "rationale": "Go marker method used to discriminate hook, middleware, and plugin values; other languages express this with their own type systems.",
+      "source": "rivertype/river_type.go:rivertype.Middleware.IsMiddleware"
+    },
+    {
+      "applicability": "not_applicable",
+      "area": "extension",
+      "detail": "func() bool",
+      "id": "extension.rivertype.Plugin.IsPlugin",
+      "rationale": "Go marker method used to discriminate hook, middleware, and plugin values; other languages express this with their own type systems.",
+      "source": "rivertype/river_type.go:rivertype.Plugin.IsPlugin"
+    },
+    {
+      "applicability": "not_applicable",
+      "area": "extension",
+      "detail": "embeds Middleware",
+      "id": "extension.rivertype.WorkerMiddleware.Middleware",
+      "rationale": "Go interface composition marking the value as a hook or middleware; other languages express this with their own type systems.",
+      "source": "rivertype/river_type.go:rivertype.WorkerMiddleware"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "extension",
+      "detail": "func(ctx context.Context, job *JobRow, doInner func(context.Context) error) error",
+      "id": "extension.rivertype.WorkerMiddleware.Work",
+      "rationale": "Work middleware in each language's idiom; ordering is checked through the adapter's instrumented plugin.",
+      "scenarios": [
+        "extension_hook_middleware_order"
+      ],
+      "source": "rivertype/river_type.go:rivertype.WorkerMiddleware.Work"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "insert_opts",
+      "detail": "int",
+      "id": "insert_opts.MaxAttempts",
+      "rationale": "Persisted max_attempts decides between retry and discard.",
+      "scenarios": [
+        "mixed_unknown_kind_error",
+        "single_implementation_worker_outcomes"
+      ],
+      "source": "insert_opts.go:river.InsertOpts.MaxAttempts"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "insert_opts",
+      "detail": "[]uint8",
+      "id": "insert_opts.Metadata",
+      "rationale": "Persisted job metadata.",
+      "scenarios": [
+        "differential_job_crud",
+        "job_row_round_trip_all_fields"
+      ],
+      "source": "insert_opts.go:river.InsertOpts.Metadata"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "insert_opts",
+      "detail": "bool",
+      "id": "insert_opts.Pending",
+      "rationale": "Inserts rows in the pending state.",
+      "scenarios": [
+        "fast_insert_both_implementations",
+        "typed_batch_insertion"
+      ],
+      "source": "insert_opts.go:river.InsertOpts.Pending"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "insert_opts",
+      "detail": "int",
+      "id": "insert_opts.Priority",
+      "rationale": "Persisted priority; affects fetch order.",
+      "scenarios": [
+        "differential_job_crud",
+        "typed_batch_insertion"
+      ],
+      "source": "insert_opts.go:river.InsertOpts.Priority"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "insert_opts",
+      "detail": "string",
+      "id": "insert_opts.Queue",
+      "rationale": "Persisted queue; determines which clients fetch the job.",
+      "scenarios": [
+        "cross_language_unique_conflict",
+        "ignored_cancellation_hard_abort"
+      ],
+      "source": "insert_opts.go:river.InsertOpts.Queue"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "insert_opts",
+      "detail": "time.Time",
+      "id": "insert_opts.ScheduledAt",
+      "rationale": "Persisted scheduled_at; future times insert as scheduled.",
+      "scenarios": [
+        "clock_boundary_scheduling",
+        "differential_job_list_filters_and_cursors"
+      ],
+      "source": "insert_opts.go:river.InsertOpts.ScheduledAt"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "insert_opts",
+      "detail": "[]string",
+      "id": "insert_opts.Tags",
+      "rationale": "Persisted tags.",
+      "scenarios": [
+        "differential_job_crud",
+        "typed_batch_insertion"
+      ],
+      "source": "insert_opts.go:river.InsertOpts.Tags"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "insert_opts",
+      "detail": "river.UniqueOpts",
+      "id": "insert_opts.UniqueOpts",
+      "rationale": "Controls persisted unique_key and unique_states.",
+      "scenarios": [
+        "cross_language_unique_conflict",
+        "unique_hash_goldens"
+      ],
+      "source": "insert_opts.go:river.InsertOpts.UniqueOpts"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "job_delete_many_params",
+      "detail": "func(int) *river.JobDeleteManyParams",
+      "id": "job_delete_many_params.First",
+      "rationale": "Portable bulk-delete filter; the adapter's delete_many method accepts it.",
+      "scenarios": [
+        "bulk_delete_safety"
+      ],
+      "source": "delete_many_params.go:river.JobDeleteManyParams.First"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "job_delete_many_params",
+      "detail": "func(...int64) *river.JobDeleteManyParams",
+      "id": "job_delete_many_params.IDs",
+      "rationale": "Portable bulk-delete filter; the adapter's delete_many method accepts it.",
+      "scenarios": [
+        "bulk_delete_safety"
+      ],
+      "source": "delete_many_params.go:river.JobDeleteManyParams.IDs"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "job_delete_many_params",
+      "detail": "func(...string) *river.JobDeleteManyParams",
+      "id": "job_delete_many_params.Kinds",
+      "rationale": "Portable bulk-delete filter; the adapter's delete_many method accepts it.",
+      "scenarios": [
+        "bulk_delete_safety"
+      ],
+      "source": "delete_many_params.go:river.JobDeleteManyParams.Kinds"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "job_delete_many_params",
+      "detail": "func(...int16) *river.JobDeleteManyParams",
+      "id": "job_delete_many_params.Priorities",
+      "rationale": "Portable bulk-delete filter by priority; not yet accepted by the adapter's delete_many method.",
+      "source": "delete_many_params.go:river.JobDeleteManyParams.Priorities"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "job_delete_many_params",
+      "detail": "func(...string) *river.JobDeleteManyParams",
+      "id": "job_delete_many_params.Queues",
+      "rationale": "Portable bulk-delete filter; the adapter's delete_many method accepts it.",
+      "scenarios": [
+        "bulk_delete_safety"
+      ],
+      "source": "delete_many_params.go:river.JobDeleteManyParams.Queues"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "job_delete_many_params",
+      "detail": "func(...rivertype.JobState) *river.JobDeleteManyParams",
+      "id": "job_delete_many_params.States",
+      "rationale": "Portable bulk-delete filter; the adapter's delete_many method accepts it.",
+      "scenarios": [
+        "bulk_delete_safety"
+      ],
+      "source": "delete_many_params.go:river.JobDeleteManyParams.States"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "job_delete_many_params",
+      "detail": "func() *river.JobDeleteManyParams",
+      "id": "job_delete_many_params.UnsafeAll",
+      "rationale": "Portable bulk-delete filter; the adapter's delete_many method accepts it.",
+      "scenarios": [
+        "bulk_delete_safety"
+      ],
+      "source": "delete_many_params.go:river.JobDeleteManyParams.UnsafeAll"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "job_list_params",
+      "detail": "func(*river.JobListCursor) *river.JobListParams",
+      "id": "job_list_params.After",
+      "rationale": "Portable job list filter/ordering/cursor option; the adapter's list method accepts it.",
+      "scenarios": [
+        "differential_job_list_filters_and_cursors"
+      ],
+      "source": "job_list_params.go:river.JobListParams.After"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "job_list_params",
+      "detail": "func(int) *river.JobListParams",
+      "id": "job_list_params.First",
+      "rationale": "Portable job list filter/ordering/cursor option; the adapter's list method accepts it.",
+      "scenarios": [
+        "differential_job_list_filters_and_cursors"
+      ],
+      "source": "job_list_params.go:river.JobListParams.First"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "job_list_params",
+      "detail": "func(...int64) *river.JobListParams",
+      "id": "job_list_params.IDs",
+      "rationale": "Portable job list filter/ordering/cursor option; the adapter's list method accepts it.",
+      "scenarios": [
+        "differential_job_list_filters_and_cursors"
+      ],
+      "source": "job_list_params.go:river.JobListParams.IDs"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "job_list_params",
+      "detail": "func(...string) *river.JobListParams",
+      "id": "job_list_params.Kinds",
+      "rationale": "Portable job list filter/ordering/cursor option; the adapter's list method accepts it.",
+      "scenarios": [
+        "differential_job_list_filters_and_cursors"
+      ],
+      "source": "job_list_params.go:river.JobListParams.Kinds"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "job_list_params",
+      "detail": "func(string) *river.JobListParams",
+      "id": "job_list_params.Metadata",
+      "rationale": "Portable job list filter/ordering/cursor option; the adapter's list method accepts it.",
+      "scenarios": [
+        "differential_job_list_filters_and_cursors"
+      ],
+      "source": "job_list_params.go:river.JobListParams.Metadata"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "job_list_params",
+      "detail": "func(river.JobListOrderByField, river.SortOrder) *river.JobListParams",
+      "id": "job_list_params.OrderBy",
+      "rationale": "Portable job list filter/ordering/cursor option; the adapter's list method accepts it.",
+      "scenarios": [
+        "differential_job_list_filters_and_cursors"
+      ],
+      "source": "job_list_params.go:river.JobListParams.OrderBy"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "job_list_params",
+      "detail": "func(...int16) *river.JobListParams",
+      "id": "job_list_params.Priorities",
+      "rationale": "Portable job list filter/ordering/cursor option; the adapter's list method accepts it.",
+      "scenarios": [
+        "differential_job_list_filters_and_cursors"
+      ],
+      "source": "job_list_params.go:river.JobListParams.Priorities"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "job_list_params",
+      "detail": "func(...string) *river.JobListParams",
+      "id": "job_list_params.Queues",
+      "rationale": "Portable job list filter/ordering/cursor option; the adapter's list method accepts it.",
+      "scenarios": [
+        "differential_job_list_filters_and_cursors"
+      ],
+      "source": "job_list_params.go:river.JobListParams.Queues"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "job_list_params",
+      "detail": "func(...rivertype.JobState) *river.JobListParams",
+      "id": "job_list_params.States",
+      "rationale": "Portable job list filter/ordering/cursor option; the adapter's list method accepts it.",
+      "scenarios": [
+        "differential_job_list_filters_and_cursors"
+      ],
+      "source": "job_list_params.go:river.JobListParams.States"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "job_list_params",
+      "detail": "func(...string) *river.JobListParams",
+      "id": "job_list_params.TagsAll",
+      "rationale": "Portable job list filter/ordering/cursor option; the adapter's list method accepts it.",
+      "scenarios": [
+        "differential_job_list_filters_and_cursors"
+      ],
+      "source": "job_list_params.go:river.JobListParams.TagsAll"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "job_list_params",
+      "detail": "func(...string) *river.JobListParams",
+      "id": "job_list_params.TagsAny",
+      "rationale": "Portable job list filter/ordering/cursor option; the adapter's list method accepts it.",
+      "scenarios": [
+        "differential_job_list_filters_and_cursors"
+      ],
+      "source": "job_list_params.go:river.JobListParams.TagsAny"
+    },
+    {
+      "applicability": "not_applicable",
+      "area": "job_list_params",
+      "detail": "func(string, ...river.NamedArgs) *river.JobListParams",
+      "id": "job_list_params.Where",
+      "rationale": "Accepts a raw SQL predicate with Go named arguments; tied to the Go driver's SQL dialect and not part of the portable list contract.",
+      "source": "job_list_params.go:river.JobListParams.Where"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "job_state",
+      "detail": "JobStateAvailable",
+      "id": "job_state.available",
+      "rationale": "Persisted river_job.state value.",
+      "scenarios": [
+        "differential_job_crud",
+        "single_implementation_worker_outcomes"
+      ],
+      "source": "rivertype/river_type.go:rivertype.JobStateAvailable"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "job_state",
+      "detail": "JobStateCancelled",
+      "id": "job_state.cancelled",
+      "rationale": "Persisted river_job.state value.",
+      "scenarios": [
+        "differential_job_crud",
+        "remote_cancel_notification"
+      ],
+      "source": "rivertype/river_type.go:rivertype.JobStateCancelled"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "job_state",
+      "detail": "JobStateCompleted",
+      "id": "job_state.completed",
+      "rationale": "Persisted river_job.state value.",
+      "scenarios": [
+        "single_implementation_worker_outcomes"
+      ],
+      "source": "rivertype/river_type.go:rivertype.JobStateCompleted"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "job_state",
+      "detail": "JobStateDiscarded",
+      "id": "job_state.discarded",
+      "rationale": "Persisted river_job.state value.",
+      "scenarios": [
+        "job_row_round_trip_all_fields",
+        "single_implementation_worker_outcomes"
+      ],
+      "source": "rivertype/river_type.go:rivertype.JobStateDiscarded"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "job_state",
+      "detail": "JobStatePending",
+      "id": "job_state.pending",
+      "rationale": "Persisted river_job.state value.",
+      "scenarios": [
+        "typed_batch_insertion"
+      ],
+      "source": "rivertype/river_type.go:rivertype.JobStatePending"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "job_state",
+      "detail": "JobStateRetryable",
+      "id": "job_state.retryable",
+      "rationale": "Persisted river_job.state value.",
+      "scenarios": [
+        "deterministic_retry_clock_rng",
+        "single_implementation_worker_outcomes"
+      ],
+      "source": "rivertype/river_type.go:rivertype.JobStateRetryable"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "job_state",
+      "detail": "JobStateRunning",
+      "id": "job_state.running",
+      "rationale": "Persisted river_job.state value.",
+      "scenarios": [
+        "single_implementation_worker_outcomes"
+      ],
+      "source": "rivertype/river_type.go:rivertype.JobStateRunning"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "job_state",
+      "detail": "JobStateScheduled",
+      "id": "job_state.scheduled",
+      "rationale": "Persisted river_job.state value.",
+      "scenarios": [
+        "clock_boundary_scheduling",
+        "differential_job_list_filters_and_cursors"
+      ],
+      "source": "rivertype/river_type.go:rivertype.JobStateScheduled"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "metadata_key",
+      "detail": "sql:jsonb_set",
+      "id": "metadata_key.cancel_attempted_at",
+      "rationale": "Written by cancellation of a running job; tells the rescuer not to rescue it.",
+      "scenarios": [
+        "reserved_metadata_cross_engine"
+      ],
+      "source": "riverdriver/riverpgxv5/internal/dbsqlc/river_job.sql:JobCancel, riverdriver/riversqlite/internal/dbsqlc/river_job.sql:JobCancel"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "metadata_key",
+      "detail": "go:const, go:metadata_updates_index",
+      "id": "metadata_key.output",
+      "rationale": "Recorded job output; the adapter's update output writes it and the other implementation reads it.",
+      "scenarios": [
+        "differential_job_crud",
+        "reserved_metadata_cross_engine"
+      ],
+      "source": "client.go:river.Client.jobUpdate, recorded_output.go:river.RecordOutput, rivertype/river_type.go:rivertype.MetadataKeyOutput"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "metadata_key",
+      "detail": "go:sjson.SetBytes",
+      "id": "metadata_key.periodic",
+      "rationale": "Marks jobs inserted by the periodic job enqueuer.",
+      "scenarios": [
+        "periodic_run_on_start"
+      ],
+      "source": "internal/maintenance/periodic_job_enqueuer.go:maintenance.PeriodicJobEnqueuer.insertParamsFromConstructor"
+    },
+    {
+      "applicability": "not_applicable",
+      "area": "metadata_key",
+      "detail": "go:const, go:gjson.GetBytes, go:json_tag, go:metadata_updates_index",
+      "id": "metadata_key.river:log",
+      "rationale": "Written only by the optional Go riverlog middleware. Other implementations need not write it and preserve it like any other metadata.",
+      "source": "riverlog/river_log.go:riverlog.Middleware.Work, riverlog/river_log.go:riverlog.appendLogDataWithCap, riverlog/river_log.go:riverlog.metadataKey, riverlog/river_log.go:riverlog.metadataWithLog"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "metadata_key",
+      "detail": "go:const, go:sjson.SetBytes",
+      "id": "metadata_key.river:periodic_job_id",
+      "rationale": "Identifies the periodic job that enqueued a job.",
+      "scenarios": [
+        "periodic_run_on_start",
+        "sqlite_runtime_periodic_scheduler"
+      ],
+      "source": "internal/maintenance/periodic_job_enqueuer.go:maintenance.PeriodicJobEnqueuer.insertParamsFromConstructor, internal/rivercommon/river_common.go:rivercommon.MetadataKeyPeriodicJobID"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "metadata_key",
+      "detail": "go:const, sql:jsonb_build_object, sql:jsonb_set",
+      "id": "metadata_key.river:rescue_count",
+      "rationale": "Incremented by the rescuer each time a stuck job is rescued.",
+      "scenarios": [
+        "reserved_metadata_cross_engine"
+      ],
+      "source": "internal/rivercommon/river_common.go:rivercommon.MetadataKeyRescueCount, riverdriver/riverpgxv5/internal/dbsqlc/river_job.sql:JobRescueMany, riverdriver/riversqlite/internal/dbsqlc/river_job.sql:JobRescue"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "metadata_key",
+      "detail": "go:const, go:gjson.GetBytes, go:metadata_updates_index",
+      "id": "metadata_key.river:resumable_cursor",
+      "rationale": "Resumable job cursor state carried across attempts and engines.",
+      "scenarios": [
+        "resumable_cross_engine_cursor",
+        "resumable_validation"
+      ],
+      "source": "internal/rivercommon/river_common.go:rivercommon.MetadataKeyResumableCursor, internal/riverplugin/plugin.go:riverplugin.ResumableMiddleware.Work, resumable_step_tx.go:river.resumableSetStepTx"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "metadata_key",
+      "detail": "go:const, go:gjson.GetBytes, go:metadata_updates_index",
+      "id": "metadata_key.river:resumable_step",
+      "rationale": "Last completed resumable step carried across attempts and engines.",
+      "scenarios": [
+        "resumable_cross_engine_cursor",
+        "resumable_retry",
+        "resumable_validation"
+      ],
+      "source": "internal/rivercommon/river_common.go:rivercommon.MetadataKeyResumableStep, internal/riverplugin/plugin.go:riverplugin.ResumableMiddleware.Work, resumable_step_tx.go:river.resumableSetStepTx"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "metadata_key",
+      "detail": "go:const, go:gjson.GetBytes, go:sjson.SetBytes",
+      "id": "metadata_key.river:unique_nonce",
+      "rationale": "SQLite fast-insert nonce used to detect whether a unique insert was skipped as a duplicate.",
+      "scenarios": [
+        "sqlite_insert_get_unique_cross_language"
+      ],
+      "source": "internal/rivercommon/river_common.go:rivercommon.MetadataKeyUniqueNonce, riverdriver/riversqlite/river_sqlite_driver.go:riversqlite.Executor.JobInsertFastMany, riverdriver/riversqlite/river_sqlite_driver.go:riversqlite.sqliteJobInsertFastManyJobsParam"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "metadata_key",
+      "detail": "go:gjson.GetBytes, go:metadata_updates_index",
+      "id": "metadata_key.snoozes",
+      "rationale": "Snooze counter; snoozing increments it without consuming an attempt.",
+      "scenarios": [
+        "reserved_metadata_cross_engine",
+        "snooze_once_metadata_transition"
+      ],
+      "source": "internal/jobexecutor/job_executor.go:jobexecutor.JobExecutor.reportResult"
+    },
+    {
+      "applicability": "internal",
+      "area": "metadata_key",
+      "detail": "sql:json_literal",
+      "id": "metadata_key.unique_key_conflict",
+      "rationale": "Diagnostic marker the scheduler writes when it discards a scheduled or retryable job whose unique key conflicts with a live job. No reader acts on it and no shared scenario covers scheduler-time unique conflicts yet; promote to protocol_visible when one exists.",
+      "source": "riverdriver/riverpgxv5/internal/dbsqlc/river_job.sql:JobSchedule, riverdriver/riversqlite/internal/dbsqlc/river_job.sql:JobScheduleSetDiscarded"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "migration",
+      "detail": "create_river_migration up:79def9ab1643 down:34c87dc594bf",
+      "id": "migration.postgres.001",
+      "rationale": "Main-line PostgreSQL schema version.",
+      "scenarios": [
+        "candidate_migrator_reference_runtime",
+        "historical_migration_down_up",
+        "reference_migrator_candidate_runtime"
+      ],
+      "source": "riverdriver/riverpgxv5/migration/main/001_create_river_migration.{up,down}.sql"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "migration",
+      "detail": "initial_schema up:8915c00d08ed down:8e7e73755b3e",
+      "id": "migration.postgres.002",
+      "rationale": "Main-line PostgreSQL schema version.",
+      "scenarios": [
+        "candidate_migrator_reference_runtime",
+        "historical_migration_down_up",
+        "reference_migrator_candidate_runtime"
+      ],
+      "source": "riverdriver/riverpgxv5/migration/main/002_initial_schema.{up,down}.sql"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "migration",
+      "detail": "river_job_tags_non_null up:dedb183bb302 down:bca44f6f0e92",
+      "id": "migration.postgres.003",
+      "rationale": "Main-line PostgreSQL schema version.",
+      "scenarios": [
+        "candidate_migrator_reference_runtime",
+        "historical_migration_down_up",
+        "reference_migrator_candidate_runtime"
+      ],
+      "source": "riverdriver/riverpgxv5/migration/main/003_river_job_tags_non_null.{up,down}.sql"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "migration",
+      "detail": "pending_and_more up:3f7418b0cf78 down:91b5ced7b9d7",
+      "id": "migration.postgres.004",
+      "rationale": "Main-line PostgreSQL schema version.",
+      "scenarios": [
+        "candidate_migrator_reference_runtime",
+        "historical_migration_down_up",
+        "reference_migrator_candidate_runtime"
+      ],
+      "source": "riverdriver/riverpgxv5/migration/main/004_pending_and_more.{up,down}.sql"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "migration",
+      "detail": "migration_unique_client up:b760f487152c down:de84dca49a5d",
+      "id": "migration.postgres.005",
+      "rationale": "Main-line PostgreSQL schema version.",
+      "scenarios": [
+        "candidate_migrator_reference_runtime",
+        "historical_migration_down_up",
+        "reference_migrator_candidate_runtime"
+      ],
+      "source": "riverdriver/riverpgxv5/migration/main/005_migration_unique_client.{up,down}.sql"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "migration",
+      "detail": "bulk_unique up:3b133f7ce466 down:726483f6e5aa",
+      "id": "migration.postgres.006",
+      "rationale": "Main-line PostgreSQL schema version.",
+      "scenarios": [
+        "candidate_migrator_reference_runtime",
+        "historical_migration_down_up",
+        "reference_migrator_candidate_runtime"
+      ],
+      "source": "riverdriver/riverpgxv5/migration/main/006_bulk_unique.{up,down}.sql"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "migration",
+      "detail": "notification_outbox_sqlite_jsonb_and_sql_cleanup up:47ec8031b88e down:9131aae23518",
+      "id": "migration.postgres.007",
+      "rationale": "Main-line PostgreSQL schema version.",
+      "scenarios": [
+        "candidate_migrator_reference_runtime",
+        "historical_migration_down_up",
+        "reference_migrator_candidate_runtime"
+      ],
+      "source": "riverdriver/riverpgxv5/migration/main/007_notification_outbox_sqlite_jsonb_and_sql_cleanup.{up,down}.sql"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "migration",
+      "detail": "create_river_migration up:d15597cb0bb8 down:34c87dc594bf",
+      "id": "migration.sqlite.001",
+      "rationale": "Main-line SQLite schema version.",
+      "scenarios": [
+        "sqlite_migration_cross_language"
+      ],
+      "source": "riverdriver/riversqlite/migration/main/001_create_river_migration.{up,down}.sql"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "migration",
+      "detail": "initial_schema up:58bc64db39fa down:900508ba08d0",
+      "id": "migration.sqlite.002",
+      "rationale": "Main-line SQLite schema version.",
+      "scenarios": [
+        "sqlite_migration_cross_language"
+      ],
+      "source": "riverdriver/riversqlite/migration/main/002_initial_schema.{up,down}.sql"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "migration",
+      "detail": "river_job_tags_non_null up:ae9961ea15b2 down:223eb849addf",
+      "id": "migration.sqlite.003",
+      "rationale": "Main-line SQLite schema version.",
+      "scenarios": [
+        "sqlite_migration_cross_language"
+      ],
+      "source": "riverdriver/riversqlite/migration/main/003_river_job_tags_non_null.{up,down}.sql"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "migration",
+      "detail": "pending_and_more up:8c11c8d2bf63 down:28065bbe82db",
+      "id": "migration.sqlite.004",
+      "rationale": "Main-line SQLite schema version.",
+      "scenarios": [
+        "sqlite_migration_cross_language"
+      ],
+      "source": "riverdriver/riversqlite/migration/main/004_pending_and_more.{up,down}.sql"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "migration",
+      "detail": "migration_unique_client up:67c32e81494b down:9960dc49a229",
+      "id": "migration.sqlite.005",
+      "rationale": "Main-line SQLite schema version.",
+      "scenarios": [
+        "sqlite_migration_cross_language"
+      ],
+      "source": "riverdriver/riversqlite/migration/main/005_migration_unique_client.{up,down}.sql"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "migration",
+      "detail": "bulk_unique up:ea4cc3b27dd0 down:b9e778134d15",
+      "id": "migration.sqlite.006",
+      "rationale": "Main-line SQLite schema version.",
+      "scenarios": [
+        "sqlite_migration_cross_language"
+      ],
+      "source": "riverdriver/riversqlite/migration/main/006_bulk_unique.{up,down}.sql"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "migration",
+      "detail": "notification_outbox_sqlite_jsonb_and_sql_cleanup up:213cd4c25101 down:3adbfaf2319c",
+      "id": "migration.sqlite.007",
+      "rationale": "Main-line SQLite schema version.",
+      "scenarios": [
+        "sqlite_migration_cross_language"
+      ],
+      "source": "riverdriver/riversqlite/migration/main/007_notification_outbox_sqlite_jsonb_and_sql_cleanup.{up,down}.sql"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "notification_payload",
+      "detail": "action controlAction; job_id int64 omitempty; metadata json.RawMessage omitempty; queue string",
+      "id": "notification_payload.control",
+      "rationale": "JSON shape of control notifications.",
+      "scenarios": [
+        "pause_resume_notification",
+        "remote_cancel_notification",
+        "remote_queue_subscription_events"
+      ],
+      "source": "producer.go:river.controlEventPayload"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "notification_payload",
+      "detail": "controlActionCancel",
+      "id": "notification_payload.control.action.cancel",
+      "rationale": "Cancels a running job on the client working it.",
+      "scenarios": [
+        "remote_cancel_notification",
+        "transactional_cross_language_cancel"
+      ],
+      "source": "producer.go:river.controlActionCancel"
+    },
+    {
+      "applicability": "internal",
+      "area": "notification_payload",
+      "detail": "controlActionMetadataChanged",
+      "id": "notification_payload.control.action.metadata_changed",
+      "rationale": "Emitted on queue metadata updates. The standard producer only forwards it to the extension seam (riverpilot.Pilot.QueueMetadataChanged), which does nothing by default, so there is no observable cross-language behavior to test yet.",
+      "source": "producer.go:river.controlActionMetadataChanged"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "notification_payload",
+      "detail": "controlActionPause",
+      "id": "notification_payload.control.action.pause",
+      "rationale": "Pauses fetching for a queue on every client.",
+      "scenarios": [
+        "pause_resume_notification",
+        "remote_queue_subscription_events"
+      ],
+      "source": "producer.go:river.controlActionPause"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "notification_payload",
+      "detail": "controlActionResume",
+      "id": "notification_payload.control.action.resume",
+      "rationale": "Resumes fetching for a queue on every client.",
+      "scenarios": [
+        "pause_resume_notification",
+        "remote_queue_subscription_events"
+      ],
+      "source": "producer.go:river.controlActionResume"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "notification_payload",
+      "detail": "queue string",
+      "id": "notification_payload.insert",
+      "rationale": "JSON shape of insert wakeup notifications.",
+      "scenarios": [
+        "notification_only_wakeups",
+        "transactional_insert_notification_commit_only"
+      ],
+      "source": "producer.go:river.insertPayload"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "notification_payload",
+      "detail": "action DBNotificationKind; leader_id string",
+      "id": "notification_payload.leadership",
+      "rationale": "JSON shape of leadership notifications.",
+      "scenarios": [
+        "mixed_leader_failover_both_directions",
+        "mixed_request_resign_terms"
+      ],
+      "source": "internal/leadership/elector.go:leadership.DBNotification"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "notification_payload",
+      "detail": "DBNotificationKindRequestResign",
+      "id": "notification_payload.leadership.action.request_resign",
+      "rationale": "Asks the current leader to resign.",
+      "scenarios": [
+        "mixed_request_resign_terms"
+      ],
+      "source": "internal/leadership/elector.go:leadership.DBNotificationKindRequestResign"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "notification_payload",
+      "detail": "DBNotificationKindResigned",
+      "id": "notification_payload.leadership.action.resigned",
+      "rationale": "Announces a resignation so followers attempt election immediately.",
+      "scenarios": [
+        "mixed_leader_failover_both_directions",
+        "mixed_request_resign_terms"
+      ],
+      "source": "internal/leadership/elector.go:leadership.DBNotificationKindResigned"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "notification_payload",
+      "detail": "action=cancel; job_id; queue",
+      "id": "notification_payload.sql.job_cancel",
+      "rationale": "Cancel notification emitted by the cancel query itself.",
+      "scenarios": [
+        "remote_cancel_notification",
+        "transactional_cross_language_cancel"
+      ],
+      "source": "riverdriver/riverpgxv5/internal/dbsqlc/river_job.sql:JobCancel"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "notification_payload",
+      "detail": "action=resigned; leader_id",
+      "id": "notification_payload.sql.leader_resign",
+      "rationale": "Resignation notification emitted by the resign query itself.",
+      "scenarios": [
+        "mixed_leader_failover_both_directions"
+      ],
+      "source": "riverdriver/riverpgxv5/internal/dbsqlc/river_leader.sql:LeaderResign"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "notification_topic",
+      "detail": "NotificationTopicControl",
+      "id": "notification_topic.river_control",
+      "rationale": "Control channel for cancel, pause, resume, and metadata changes.",
+      "scenarios": [
+        "pause_resume_notification",
+        "remote_cancel_notification"
+      ],
+      "source": "internal/notifier/notifier.go:notifier.NotificationTopicControl"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "notification_topic",
+      "detail": "NotificationTopicInsert",
+      "id": "notification_topic.river_insert",
+      "rationale": "Insert wakeup channel.",
+      "scenarios": [
+        "notification_only_wakeups",
+        "transactional_insert_notification_commit_only"
+      ],
+      "source": "internal/notifier/notifier.go:notifier.NotificationTopicInsert"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "notification_topic",
+      "detail": "NotificationTopicLeadership",
+      "id": "notification_topic.river_leadership",
+      "rationale": "Leadership resignation channel.",
+      "scenarios": [
+        "mixed_leader_failover_both_directions",
+        "mixed_request_resign_terms"
+      ],
+      "source": "internal/notifier/notifier.go:notifier.NotificationTopicLeadership"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "periodic_job_opts",
+      "detail": "string",
+      "id": "periodic_job_opts.ID",
+      "rationale": "Persisted as river:periodic_job_id metadata on enqueued periodic jobs.",
+      "scenarios": [
+        "periodic_run_on_start",
+        "sqlite_runtime_periodic_scheduler"
+      ],
+      "source": "periodic_job.go:river.PeriodicJobOpts.ID"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "periodic_job_opts",
+      "detail": "bool",
+      "id": "periodic_job_opts.RunOnStart",
+      "rationale": "Makes a newly elected leader enqueue the periodic job immediately.",
+      "scenarios": [
+        "periodic_run_on_start"
+      ],
+      "source": "periodic_job.go:river.PeriodicJobOpts.RunOnStart"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "queue_config",
+      "detail": "time.Duration",
+      "id": "queue_config.FetchCooldown",
+      "rationale": "Per-queue override of config.FetchCooldown; local throughput throttle.",
+      "source": "client.go:river.QueueConfig.FetchCooldown"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "queue_config",
+      "detail": "time.Duration",
+      "id": "queue_config.FetchPollInterval",
+      "rationale": "Per-queue override of config.FetchPollInterval; local polling fallback.",
+      "source": "client.go:river.QueueConfig.FetchPollInterval"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "queue_config",
+      "detail": "int",
+      "id": "queue_config.MaxWorkers",
+      "rationale": "Local per-queue concurrency limit; the adapter's queue_add max_workers reconfigures it.",
+      "scenarios": [
+        "dynamic_queue_add_reconfigure_remove"
+      ],
+      "source": "client.go:river.QueueConfig.MaxWorkers"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "queue_list_params",
+      "detail": "func(int) *river.QueueListParams",
+      "id": "queue_list_params.First",
+      "rationale": "Queue list limit; the adapter's queue_list method accepts it.",
+      "scenarios": [
+        "differential_queue_crud"
+      ],
+      "source": "queue_list_params.go:river.QueueListParams.First"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "unique_opts",
+      "detail": "bool",
+      "id": "unique_opts.ByArgs",
+      "rationale": "Contributes to the persisted unique_key/unique_states that every implementation must compute identically.",
+      "scenarios": [
+        "cross_language_unique_conflict",
+        "unique_hash_goldens"
+      ],
+      "source": "insert_opts.go:river.UniqueOpts.ByArgs"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "unique_opts",
+      "detail": "time.Duration",
+      "id": "unique_opts.ByPeriod",
+      "rationale": "Contributes to the persisted unique_key/unique_states that every implementation must compute identically.",
+      "scenarios": [
+        "cross_language_unique_conflict",
+        "unique_hash_goldens"
+      ],
+      "source": "insert_opts.go:river.UniqueOpts.ByPeriod"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "unique_opts",
+      "detail": "bool",
+      "id": "unique_opts.ByQueue",
+      "rationale": "Contributes to the persisted unique_key/unique_states that every implementation must compute identically.",
+      "scenarios": [
+        "cross_language_unique_conflict",
+        "unique_hash_goldens"
+      ],
+      "source": "insert_opts.go:river.UniqueOpts.ByQueue"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "unique_opts",
+      "detail": "[]rivertype.JobState",
+      "id": "unique_opts.ByState",
+      "rationale": "Contributes to the persisted unique_key/unique_states that every implementation must compute identically.",
+      "scenarios": [
+        "cross_language_unique_conflict",
+        "unique_hash_goldens"
+      ],
+      "source": "insert_opts.go:river.UniqueOpts.ByState"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "unique_opts",
+      "detail": "bool",
+      "id": "unique_opts.ExcludeKind",
+      "rationale": "Omits kind from the persisted unique_key hash input.",
+      "scenarios": [
+        "unique_hash_goldens"
+      ],
+      "source": "insert_opts.go:river.UniqueOpts.ExcludeKind"
+    }
+  ],
+  "protocol_revision": 1
+}

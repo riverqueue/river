@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "items": {
+      "items": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": { "properties": { "applicability": { "const": "protocol_visible" } } },
+            "then": { "anyOf": [{ "required": ["scenarios"] }, { "required": ["gap"] }] }
+          },
+          {
+            "if": { "properties": { "applicability": { "enum": ["api_equivalent", "driver_specific", "internal", "not_applicable"] } } },
+            "then": { "required": ["rationale"] }
+          }
+        ],
+        "properties": {
+          "applicability": {
+            "enum": ["api_equivalent", "driver_specific", "internal", "not_applicable", "protocol_visible", "unclassified"]
+          },
+          "area": { "pattern": "^[a-z0-9_]+$", "type": "string" },
+          "detail": { "minLength": 1, "type": "string" },
+          "gap": {
+            "description": "Why a protocol-visible item has no shared scenario yet.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "id": { "minLength": 1, "pattern": "^[a-z0-9_]+\\.\\S+$", "type": "string" },
+          "rationale": { "minLength": 1, "type": "string" },
+          "scenarios": {
+            "items": { "pattern": "^[a-z0-9_]+$", "type": "string" },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "source": { "minLength": 1, "type": "string" }
+        },
+        "required": ["applicability", "area", "detail", "id", "source"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "protocol_revision": { "minimum": 1, "type": "integer" }
+  },
+  "required": ["$schema", "items", "protocol_revision"],
+  "title": "River cross-language feature inventory",
+  "type": "object"
+}

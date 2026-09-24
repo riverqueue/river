@@ -215,6 +215,52 @@
     }
   ],
   "protocol_revision": 1,
+  "reserved_metadata_keys": [
+    {
+      "applicability": "protocol_visible",
+      "key": "cancel_attempted_at"
+    },
+    {
+      "applicability": "protocol_visible",
+      "key": "output"
+    },
+    {
+      "applicability": "protocol_visible",
+      "key": "periodic"
+    },
+    {
+      "applicability": "not_applicable",
+      "key": "river:log"
+    },
+    {
+      "applicability": "protocol_visible",
+      "key": "river:periodic_job_id"
+    },
+    {
+      "applicability": "protocol_visible",
+      "key": "river:rescue_count"
+    },
+    {
+      "applicability": "protocol_visible",
+      "key": "river:resumable_cursor"
+    },
+    {
+      "applicability": "protocol_visible",
+      "key": "river:resumable_step"
+    },
+    {
+      "applicability": "protocol_visible",
+      "key": "river:unique_nonce"
+    },
+    {
+      "applicability": "protocol_visible",
+      "key": "snoozes"
+    },
+    {
+      "applicability": "internal",
+      "key": "unique_key_conflict"
+    }
+  ],
   "retry_cases": [
     {
       "error_count": 1,
