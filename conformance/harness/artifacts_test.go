@@ -147,14 +147,24 @@ func TestCompatibilityArtifacts(t *testing.T) {
 			ProtocolRevision int      `json:"protocol_revision"`
 		}
 		profiles := make(map[string]profileArtifact)
-		for _, path := range []string{
-			"conformance/adapter/profiles/sqlite-runtime.json",
-			"conformance/adapter/profiles/sqlite.json",
-		} {
+		var manifest struct {
+			Capabilities map[string]string `json:"capabilities"`
+		}
+		readJSON(t, "conformance/manifest.json", &manifest)
+		paths, err := filepath.Glob(filepath.Join(root, "conformance/adapter/profiles/*.json"))
+		require.NoError(t, err)
+		require.NotEmpty(t, paths)
+		for _, path := range paths {
+			relative, err := filepath.Rel(root, path)
+			require.NoError(t, err)
 			var profile profileArtifact
-			readJSON(t, path, &profile)
+			readJSON(t, relative, &profile)
 			profiles[profile.Name] = profile
-			require.Equal(t, "sqlite", profile.Backend)
+			require.Contains(t, []string{"postgres", "sqlite"}, profile.Backend)
+			for _, capability := range profile.Capabilities {
+				require.Equal(t, "complete", manifest.Capabilities[capability],
+					"profile %q claims capability %q, which the manifest does not mark complete", profile.Name, capability)
+			}
 			require.NotEmpty(t, profile.Name)
 			require.Equal(t, contract.ProtocolRevision, profile.ProtocolRevision)
 			require.True(t, slices.IsSorted(profile.Capabilities))
@@ -167,6 +177,22 @@ func TestCompatibilityArtifacts(t *testing.T) {
 					"profile method %q requires capability %q", method, capability)
 			}
 		}
+		// postgres-full-v1 is the whole contract and every complete capability.
+		full, ok := profiles["postgres-full-v1"]
+		require.True(t, ok, "profiles/postgres-full.json is missing")
+		fullMethods := make([]string, 0, len(contract.Methods))
+		for _, method := range contract.Methods {
+			fullMethods = append(fullMethods, method.Name)
+		}
+		require.Equal(t, fullMethods, full.Methods)
+		var complete []string
+		for capability, status := range manifest.Capabilities {
+			if status == "complete" {
+				complete = append(complete, capability)
+			}
+		}
+		slices.Sort(complete)
+		require.Equal(t, complete, full.Capabilities)
 		for name, profile := range profiles {
 			if profile.Extends == "" {
 				continue
@@ -239,6 +265,7 @@ func TestCompatibilityArtifacts(t *testing.T) {
 			profile string
 		}{
 			{path: "conformance/scenarios/core.json"},
+			{path: "conformance/scenarios/insert-only.json", profile: "insert-only-v1"},
 			{path: "conformance/scenarios/sqlite-runtime.json", profile: "sqlite-runtime-v1"},
 			{path: "conformance/scenarios/sqlite-storage.json", profile: "portable-storage-v1"},
 		} {

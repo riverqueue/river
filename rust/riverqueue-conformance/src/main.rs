@@ -145,6 +145,7 @@ const CAPABILITIES: &[&str] = &[
     "reset",
     "resumable_jobs",
     "retry",
+    "scheduler",
     "subscriptions",
     "transactions",
     "unique_jobs",
