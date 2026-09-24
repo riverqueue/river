@@ -48,7 +48,30 @@ type CompleterJobUpdated struct {
 	Reason   riverdriver.JobSetStateReason
 }
 
-func completerJobUpdatedFromStateAndReason(job *rivertype.JobRow, stats *jobstats.JobStatistics, requestedReason riverdriver.JobSetStateReason) CompleterJobUpdated {
+// completerJobUpdated maps a job row returned from JobSetStateIfRunningMany to
+// an update event, logging and returning false if the row isn't in a state
+// that an event should be emitted for (see
+// completerJobUpdatedFromStateAndReason).
+func completerJobUpdated(ctx context.Context, baseService *baseservice.BaseService, job *rivertype.JobRow, stats *jobstats.JobStatistics, requestedReason riverdriver.JobSetStateReason) (CompleterJobUpdated, bool) {
+	update, emit := completerJobUpdatedFromStateAndReason(job, stats, requestedReason)
+	if !emit {
+		baseService.Logger.DebugContext(ctx, baseService.Name+": Job wasn't finalized because its state was changed concurrently; skipping completion event",
+			slog.Int64("job_id", job.ID),
+			slog.String("job_state", string(job.State)),
+		)
+	}
+	return update, emit
+}
+
+// completerJobUpdatedFromStateAndReason maps a job row returned from
+// JobSetStateIfRunningMany to an update event. JobSetStateIfRunningMany returns
+// rows that it didn't update (because they were no longer running) in their
+// current state, so a returned row may be in a state that isn't the result of
+// a completion, like `pending` if it was moved there out of band, or `running`
+// if Postgres returned the row's pre-statement version after a concurrent
+// transaction changed its state (e.g. a rescue). Returns false for those rows,
+// which shouldn't produce an event.
+func completerJobUpdatedFromStateAndReason(job *rivertype.JobRow, stats *jobstats.JobStatistics, requestedReason riverdriver.JobSetStateReason) (CompleterJobUpdated, bool) {
 	var reason riverdriver.JobSetStateReason
 	switch job.State {
 	case rivertype.JobStateAvailable:
@@ -77,20 +100,20 @@ func completerJobUpdatedFromStateAndReason(job *rivertype.JobRow, stats *jobstat
 
 	case rivertype.JobStatePending, rivertype.JobStateRunning:
 		// Neither state represents a finalized job, so emitting a completion
-		// event would be misleading. Reaching this case indicates a River bug or
-		// that the job's state was changed out of band during finalization.
-		panic("completion subscriber received a job that wasn't finalized, river bug")
+		// event would be misleading.
+		return CompleterJobUpdated{}, false
 
 	default:
-		// linter exhaustive rule prevents this from being reached.
-		panic("completion subscriber received a job with an unknown state, river bug")
+		// An unknown state (e.g. one added by a newer migration) isn't
+		// something this completer finalized either.
+		return CompleterJobUpdated{}, false
 	}
 
 	return CompleterJobUpdated{
 		Job:      job,
 		JobStats: stats,
 		Reason:   reason,
-	}
+	}, true
 }
 
 type InlineCompleter struct {
@@ -146,7 +169,9 @@ func (c *InlineCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobst
 	}
 
 	stats.CompleteDuration = c.Time.Now().Sub(start)
-	c.subscribeCh <- []CompleterJobUpdated{completerJobUpdatedFromStateAndReason(jobs[0], stats, params.Reason)}
+	if update, ok := completerJobUpdated(ctx, &c.BaseService, jobs[0], stats, params.Reason); ok {
+		c.subscribeCh <- []CompleterJobUpdated{update}
+	}
 
 	return nil
 }
@@ -257,7 +282,9 @@ func (c *AsyncCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobsta
 		}
 
 		stats.CompleteDuration = c.Time.Now().Sub(start)
-		c.subscribeCh <- []CompleterJobUpdated{completerJobUpdatedFromStateAndReason(jobs[0], stats, params.Reason)}
+		if update, ok := completerJobUpdated(ctx, &c.BaseService, jobs[0], stats, params.Reason); ok {
+			c.subscribeCh <- []CompleterJobUpdated{update}
+		}
 
 		return nil
 	})
@@ -545,7 +572,9 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 	for _, jobRow := range jobRows {
 		setState := setStateBatch[jobRow.ID]
 		setState.Stats.CompleteDuration = completeTime.Sub(setState.StartTime)
-		events = append(events, completerJobUpdatedFromStateAndReason(jobRow, setState.Stats, setState.Params.Reason))
+		if update, ok := completerJobUpdated(ctx, &c.BaseService, jobRow, setState.Stats, setState.Params.Reason); ok {
+			events = append(events, update)
+		}
 	}
 
 	if len(events) > 0 {
