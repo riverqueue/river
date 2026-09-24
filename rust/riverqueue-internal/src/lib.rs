@@ -355,6 +355,24 @@ pub enum RescueAction {
     Handled,
 }
 
+/// A job River just cancelled or retried, passed to extension post-hooks in
+/// the same transaction as the update.
+#[derive(Clone, Debug)]
+pub struct JobUpdatedParams {
+    /// Selected database backend configuration.
+    pub database: DatabaseConfig,
+    /// Job ID.
+    pub id: i64,
+    /// Job kind.
+    pub kind: String,
+    /// Job metadata after the update.
+    pub metadata: Map<String, Value>,
+    /// Job queue.
+    pub queue: String,
+    /// River state string after the update.
+    pub state: String,
+}
+
 /// A job row as persisted by River's set-state-if-running update.
 ///
 /// The fields match `riverqueue::JobRow`, which this crate cannot name;
@@ -479,6 +497,13 @@ pub trait Pilot: Send + Sync + 'static {
         Vec::new()
     }
 
+    /// Whether job cancellation and retry must run
+    /// [`Pilot::after_job_cancel`] and [`Pilot::after_job_retry`]. Returning
+    /// `true` also makes pool-based cancel and retry use a transaction.
+    fn intercepts_job_cancel_retry(&self) -> bool {
+        false
+    }
+
     /// Whether fetches must enter the exact-version interception transaction.
     /// Returning `false` lets OSS claim jobs with one PostgreSQL statement;
     /// implementations that override `select_job_ids` return `true`.
@@ -568,6 +593,28 @@ pub trait Pilot: Send + Sync + 'static {
         _params: &RescueManyParams,
     ) -> Result<RescueAction, PilotError> {
         Ok(RescueAction::Continue)
+    }
+
+    /// Runs after River cancels a job, in the same transaction and with the
+    /// updated row. Called only when [`Pilot::intercepts_job_cancel_retry`]
+    /// returns `true`; an error rolls back the cancellation.
+    async fn after_job_cancel(
+        &self,
+        _connection: DatabaseConnection<'_>,
+        _job: &JobUpdatedParams,
+    ) -> Result<(), PilotError> {
+        Ok(())
+    }
+
+    /// Runs after River retries a job, in the same transaction and with the
+    /// updated row. Called only when [`Pilot::intercepts_job_cancel_retry`]
+    /// returns `true`; an error rolls back the retry.
+    async fn after_job_retry(
+        &self,
+        _connection: DatabaseConnection<'_>,
+        _job: &JobUpdatedParams,
+    ) -> Result<(), PilotError> {
+        Ok(())
     }
 
     /// Observes a batch of job state transitions inside River's transaction.

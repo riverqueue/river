@@ -569,6 +569,13 @@ impl Client {
                         .map_err(sqlite_backend_error)?
                         .ok_or(Error::NotFound)?,
                 };
+                crate::storage::after_job_cancel_or_retry(
+                    &self.inner,
+                    PilotDatabaseConnection::Sqlite(&mut transaction),
+                    &row,
+                    crate::storage::JobUpdate::Cancel,
+                )
+                .await?;
                 if was_updated {
                     let payload = serde_json::json!({
                         "action": "cancel",
@@ -642,11 +649,21 @@ impl Client {
             .into_inner()
         {
             #[cfg(feature = "postgres")]
-            ExecutorInner::PostgresConnection(connection) => postgres_query()
-                .fetch_optional(connection)
-                .await?
-                .ok_or(Error::NotFound)?
-                .into_job_row(),
+            ExecutorInner::PostgresConnection(connection) => {
+                let row = postgres_query()
+                    .fetch_optional(&mut *connection)
+                    .await?
+                    .ok_or(Error::NotFound)?
+                    .into_job_row()?;
+                crate::storage::after_job_cancel_or_retry(
+                    &self.inner,
+                    PilotDatabaseConnection::Postgres(connection),
+                    &row,
+                    crate::storage::JobUpdate::Cancel,
+                )
+                .await?;
+                Ok(row)
+            }
             #[cfg(feature = "sqlite")]
             ExecutorInner::SqliteConnection(connection) => {
                 let updated = crate::database::sqlite::cancel(connection, id, Utc::now())
@@ -660,6 +677,13 @@ impl Client {
                         .map_err(sqlite_backend_error)?
                         .ok_or(Error::NotFound)?,
                 };
+                crate::storage::after_job_cancel_or_retry(
+                    &self.inner,
+                    PilotDatabaseConnection::Sqlite(&mut *connection),
+                    &row,
+                    crate::storage::JobUpdate::Cancel,
+                )
+                .await?;
                 if was_updated {
                     let payload = serde_json::json!({
                         "action": "cancel",
