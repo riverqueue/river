@@ -14,8 +14,8 @@ use std::{
 };
 
 use riverqueue::{
-    Client, InsertOpts, Job, JobArgs, JobState, MaintenanceConfig, QueueConfig, WorkCancelled,
-    WorkContext, WorkOutcome, WorkerRegistry,
+    Client, InsertOpts, Job, JobArgs, JobState, MaintenanceConfig, QueueConfig, UniqueOpts,
+    WorkCancelled, WorkContext, WorkOutcome, WorkerRegistry,
 };
 use riverqueue_migrate::SqliteMigrator;
 use serde::{Deserialize, Serialize};
@@ -503,4 +503,29 @@ async fn notification_poll_failures_do_not_stop_the_client() {
     })
     .await;
     run.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unique_duplicates_are_detected_across_clients_with_the_same_id() {
+    let database = TestDatabase::new(Duration::from_secs(5)).await;
+    // Default client IDs repeat across restarted containers, so duplicate
+    // detection must not depend on them.
+    let first = Client::builder(database.pool.clone())
+        .id("sqlite-resilience-same-id")
+        .build()
+        .unwrap();
+    let second = Client::builder(database.pool.clone())
+        .id("sqlite-resilience-same-id")
+        .build()
+        .unwrap();
+    let opts = InsertOpts::default().with_unique(UniqueOpts::new().by_args());
+
+    let inserted = first
+        .insert_with(ResilienceArgs {}, opts.clone())
+        .await
+        .unwrap();
+    assert!(!inserted.unique_skipped_as_duplicate);
+    let duplicate = second.insert_with(ResilienceArgs {}, opts).await.unwrap();
+    assert!(duplicate.unique_skipped_as_duplicate);
+    assert_eq!(duplicate.job.row.id, inserted.job.row.id);
 }

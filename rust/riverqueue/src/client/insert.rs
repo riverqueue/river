@@ -325,13 +325,7 @@ impl Client {
 
         let mut queues = std::collections::BTreeSet::new();
         for job in &prepared {
-            let nonce = job.unique_key.map(|_| {
-                format!(
-                    "{}-{}",
-                    self.inner.id,
-                    self.inner.unique_nonce.fetch_add(1, Ordering::Relaxed)
-                )
-            });
+            let nonce = job.unique_key.map(|_| self.unique_insert_nonce());
             let inserted = crate::database::sqlite::insert(
                 &mut *connection,
                 &crate::database::sqlite::InsertJob {
@@ -609,6 +603,35 @@ impl Client {
             #[cfg(feature = "sqlite")]
             ExecutorInner::SqlitePool(_) => Err(transaction_pool_error("insert_many_tx")),
         }
+    }
+
+    /// Returns a nonce that marks a SQLite unique insert as this call's own.
+    ///
+    /// SQLite reports a skipped duplicate by checking whether the returned
+    /// row carries the nonce the insert wrote. Like River Go's
+    /// `randutil.Hex(8)`, the nonce must not repeat across processes: client
+    /// IDs and counters can (a restarted container keeps its hostname and
+    /// PID), so 128 unpredictable bits are drawn from the standard library's
+    /// randomly keyed hasher.
+    #[cfg(feature = "sqlite")]
+    pub(super) fn unique_insert_nonce(&self) -> String {
+        use std::hash::{BuildHasher as _, Hasher as _};
+
+        let counter = self.inner.unique_nonce.fetch_add(1, Ordering::Relaxed);
+        let mut halves = [0_u64; 2];
+        for (index, half) in halves.iter_mut().enumerate() {
+            let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+            hasher.write_u64(counter);
+            hasher.write_usize(index);
+            hasher.write_u128(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos(),
+            );
+            *half = hasher.finish();
+        }
+        format!("{:016x}{:016x}", halves[0], halves[1])
     }
 
     pub(super) fn batch_savepoint(&self, operation: &str) -> String {
@@ -1015,13 +1038,7 @@ impl Client {
             }
             #[cfg(feature = "sqlite")]
             ExecutorInner::SqliteConnection(connection) => {
-                let nonce = unique_key.as_ref().map(|_| {
-                    format!(
-                        "{}-{}",
-                        self.inner.id,
-                        self.inner.unique_nonce.fetch_add(1, Ordering::Relaxed)
-                    )
-                });
+                let nonce = unique_key.as_ref().map(|_| self.unique_insert_nonce());
                 let inserted = crate::database::sqlite::insert(
                     connection,
                     &crate::database::sqlite::InsertJob {
@@ -1067,13 +1084,7 @@ impl Client {
             #[cfg(feature = "sqlite")]
             ExecutorInner::SqlitePool(pool) => {
                 let mut transaction = crate::database::begin_sqlite_write(pool).await?;
-                let nonce = unique_key.as_ref().map(|_| {
-                    format!(
-                        "{}-{}",
-                        self.inner.id,
-                        self.inner.unique_nonce.fetch_add(1, Ordering::Relaxed)
-                    )
-                });
+                let nonce = unique_key.as_ref().map(|_| self.unique_insert_nonce());
                 let inserted = crate::database::sqlite::insert(
                     &mut transaction,
                     &crate::database::sqlite::InsertJob {
