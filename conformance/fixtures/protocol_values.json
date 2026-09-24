@@ -50,22 +50,66 @@
   },
   "notifications": [
     {
+      "fields": [
+        {
+          "name": "action",
+          "omitempty": false
+        },
+        {
+          "name": "job_id",
+          "omitempty": true
+        },
+        {
+          "name": "metadata",
+          "omitempty": true
+        },
+        {
+          "name": "queue",
+          "omitempty": false
+        }
+      ],
       "name": "cancel",
       "payload": {
         "action": "cancel",
         "job_id": 42,
         "queue": "priority"
       },
+      "source": "producer.go:controlEventPayload; riverdriver/riverpgxv5/internal/dbsqlc/river_job.sql:JobCancel",
       "topic": "river_control"
     },
     {
+      "fields": [
+        {
+          "name": "queue",
+          "omitempty": false
+        }
+      ],
       "name": "insert",
       "payload": {
         "queue": "priority"
       },
+      "source": "producer.go:insertPayload",
       "topic": "river_insert"
     },
     {
+      "fields": [
+        {
+          "name": "action",
+          "omitempty": false
+        },
+        {
+          "name": "job_id",
+          "omitempty": true
+        },
+        {
+          "name": "metadata",
+          "omitempty": true
+        },
+        {
+          "name": "queue",
+          "omitempty": false
+        }
+      ],
       "name": "metadata_changed",
       "payload": {
         "action": "metadata_changed",
@@ -74,38 +118,99 @@
         },
         "queue": "priority"
       },
+      "source": "producer.go:controlEventPayload",
       "topic": "river_control"
     },
     {
+      "fields": [
+        {
+          "name": "action",
+          "omitempty": false
+        },
+        {
+          "name": "job_id",
+          "omitempty": true
+        },
+        {
+          "name": "metadata",
+          "omitempty": true
+        },
+        {
+          "name": "queue",
+          "omitempty": false
+        }
+      ],
       "name": "pause",
       "payload": {
         "action": "pause",
         "queue": "priority"
       },
+      "source": "producer.go:controlEventPayload",
       "topic": "river_control"
     },
     {
+      "fields": [
+        {
+          "name": "action",
+          "omitempty": false
+        },
+        {
+          "name": "leader_id",
+          "omitempty": false
+        }
+      ],
       "name": "request_resign",
       "payload": {
         "action": "request_resign",
         "leader_id": ""
       },
+      "source": "internal/leadership/elector.go:DBNotification",
       "topic": "river_leadership"
     },
     {
+      "fields": [
+        {
+          "name": "action",
+          "omitempty": false
+        },
+        {
+          "name": "leader_id",
+          "omitempty": false
+        }
+      ],
       "name": "resigned",
       "payload": {
         "action": "resigned",
         "leader_id": "client-1"
       },
+      "source": "internal/leadership/elector.go:DBNotification; riverdriver/riverpgxv5/internal/dbsqlc/river_leader.sql:LeaderResign",
       "topic": "river_leadership"
     },
     {
+      "fields": [
+        {
+          "name": "action",
+          "omitempty": false
+        },
+        {
+          "name": "job_id",
+          "omitempty": true
+        },
+        {
+          "name": "metadata",
+          "omitempty": true
+        },
+        {
+          "name": "queue",
+          "omitempty": false
+        }
+      ],
       "name": "resume",
       "payload": {
         "action": "resume",
         "queue": "priority"
       },
+      "source": "producer.go:controlEventPayload",
       "topic": "river_control"
     }
   ],
@@ -113,36 +218,49 @@
   "retry_cases": [
     {
       "error_count": 1,
-      "expected_delay_ns": 1007585966,
       "job_id": 42,
+      "max_delay_ns": 1100000000,
+      "min_delay_ns": 900000000,
       "now": "2026-01-02T03:04:05.6789Z",
       "seed": 0
     },
     {
       "error_count": 2,
-      "expected_delay_ns": 15351903370,
       "job_id": 42,
+      "max_delay_ns": 17600000000,
+      "min_delay_ns": 14400000000,
       "now": "2026-01-02T03:04:05.6789Z",
       "seed": 123
     },
     {
       "error_count": 3,
-      "expected_delay_ns": 83973474471,
       "job_id": 9007199254740991,
+      "max_delay_ns": 89100000000,
+      "min_delay_ns": 72900000000,
       "now": "2026-01-02T03:04:05.6789Z",
       "seed": 18446744073709551615
     },
     {
       "error_count": 11,
-      "expected_delay_ns": 14472375008645,
       "job_id": 1,
+      "max_delay_ns": 16105100000000,
+      "min_delay_ns": 13176900000000,
       "now": "2026-01-02T03:04:05.6789Z",
       "seed": 456
     },
     {
-      "error_count": 310,
-      "expected_delay_ns": 9223372036854775807,
+      "error_count": 309,
       "job_id": 42,
+      "max_delay_ns": 9223372036854775807,
+      "min_delay_ns": 8204959224899999744,
+      "now": "2026-01-02T03:04:05.6789Z",
+      "seed": 789
+    },
+    {
+      "error_count": 310,
+      "job_id": 42,
+      "max_delay_ns": 9223372036854775807,
+      "min_delay_ns": 9223372036854775807,
       "now": "2026-01-02T03:04:05.6789Z",
       "seed": 123
     }

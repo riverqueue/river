@@ -29,30 +29,47 @@
     },
     "metadata_keys": { "additionalProperties": { "type": "string" }, "type": "object" },
     "notifications": {
+      "description": "Payloads derived from the Go payload structs and action constants, in struct field order. Keys of payloads built in SQL are checked against the same structs.",
       "items": {
         "additionalProperties": false,
         "properties": {
+          "fields": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "name": { "minLength": 1, "type": "string" },
+                "omitempty": { "type": "boolean" }
+              },
+              "required": ["name", "omitempty"],
+              "type": "object"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
           "name": { "type": "string" },
           "payload": { "type": "object" },
+          "source": { "minLength": 1, "type": "string" },
           "topic": { "type": "string" }
         },
-        "required": ["name", "payload", "topic"],
+        "required": ["fields", "name", "payload", "source", "topic"],
         "type": "object"
       },
       "type": "array"
     },
     "protocol_revision": { "minimum": 1, "type": "integer" },
     "retry_cases": {
+      "description": "Bounds on the delay River's default retry policy schedules after error_count failures. Implementations with seedable jitter may use seed; any delay within the bounds conforms.",
       "items": {
         "additionalProperties": false,
         "properties": {
           "error_count": { "minimum": 1, "type": "integer" },
-          "expected_delay_ns": { "minimum": 0, "type": "integer" },
           "job_id": { "minimum": 1, "type": "integer" },
+          "max_delay_ns": { "minimum": 0, "type": "integer" },
+          "min_delay_ns": { "minimum": 0, "type": "integer" },
           "now": { "format": "date-time", "type": "string" },
           "seed": { "minimum": 0, "type": "integer" }
         },
-        "required": ["error_count", "expected_delay_ns", "job_id", "now", "seed"],
+        "required": ["error_count", "job_id", "max_delay_ns", "min_delay_ns", "now", "seed"],
         "type": "object"
       },
       "type": "array"

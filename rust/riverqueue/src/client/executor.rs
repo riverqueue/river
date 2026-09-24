@@ -645,7 +645,10 @@ pub(crate) fn default_retry_delay(row: &JobRow, now: DateTime<Utc>, seed: u64) -
     let hash = hasher.finalize();
     let sample = u32::from_be_bytes(hash[..4].try_into().unwrap());
     let ratio = f64::from(sample) / f64::from(u32::MAX);
+    // Jitter can push a delay just below the cap past it; Go caps after
+    // jitter as well.
     base.mul_f64(0.9 + ratio * 0.2)
+        .min(Duration::from_nanos(MAX_RETRY_NANOS))
 }
 
 /// Coerces a metadata value to an integer exactly like Go's `gjson.Int`, which

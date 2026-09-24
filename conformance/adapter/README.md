@@ -131,8 +131,11 @@ an adapter whose implementation does not expose them; the Go reference is one.
 - `handshake`: protocol and adapter versions, implementation identity,
   capabilities, and migration lines.
 - `migrate`, `reset`.
-- `clock_set`, `rng_seed`, and `retry_delay` drive deterministic retry
-  goldens without relying on process-global randomness or wall time.
+- `clock_set`, `rng_seed`, and `retry_delay` evaluate the implementation's
+  production default retry policy at a fixed clock. The delay must fall within
+  the bounds in `fixtures/protocol_values.json`, which are generated from
+  River's Go retry policy. Implementations with seedable jitter use the seed;
+  the Go reference's jitter is process-random and ignores it.
 - `cron_next` takes `expression`, an RFC 3339 `from` time, and `count`, and
   returns up to `count` successive occurrences as RFC 3339 strings in the
   reference time's offset. It must accept exactly River Go's documented cron

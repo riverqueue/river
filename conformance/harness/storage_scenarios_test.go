@@ -997,16 +997,20 @@ func verifyHistoricalMigrations(t *testing.T, latest int, adapters ...*adapter) 
 	}
 }
 
+// verifyDeterministicControls evaluates each implementation's production
+// default retry policy at fixed clock and seed inputs and requires the delay
+// to fall within the bounds generated from River's Go retry policy.
 func verifyDeterministicControls(t *testing.T, repositoryRoot string, adapters ...*adapter) {
 	t.Helper()
 
 	var fixture struct {
 		RetryCases []struct {
-			ErrorCount      int    `json:"error_count"`
-			ExpectedDelayNS uint64 `json:"expected_delay_ns"`
-			JobID           int64  `json:"job_id"`
-			Now             string `json:"now"`
-			Seed            uint64 `json:"seed"`
+			ErrorCount int    `json:"error_count"`
+			JobID      int64  `json:"job_id"`
+			MaxDelayNS int64  `json:"max_delay_ns"`
+			MinDelayNS int64  `json:"min_delay_ns"`
+			Now        string `json:"now"`
+			Seed       uint64 `json:"seed"`
 		} `json:"retry_cases"`
 	}
 	contents, err := os.ReadFile(filepath.Join(repositoryRoot, "conformance/fixtures/protocol_values.json"))
@@ -1018,13 +1022,14 @@ func verifyDeterministicControls(t *testing.T, repositoryRoot string, adapters .
 			adapter.call(t, "clock_set", map[string]any{"now": testCase.Now}, nil)
 			adapter.call(t, "rng_seed", map[string]any{"seed": testCase.Seed}, nil)
 			var result struct {
-				DelayNS uint64 `json:"delay_ns"`
+				DelayNS int64 `json:"delay_ns"`
 			}
 			adapter.call(t, "retry_delay", map[string]any{
 				"error_count": testCase.ErrorCount,
 				"job_id":      testCase.JobID,
 			}, &result)
-			require.Equal(t, testCase.ExpectedDelayNS, result.DelayNS, "%s adapter", adapter.name)
+			require.GreaterOrEqual(t, result.DelayNS, testCase.MinDelayNS, "%s adapter error_count %d", adapter.name, testCase.ErrorCount)
+			require.LessOrEqual(t, result.DelayNS, testCase.MaxDelayNS, "%s adapter error_count %d", adapter.name, testCase.ErrorCount)
 		}
 	}
 }

@@ -196,6 +196,13 @@ fn retry_delay_is_seeded_bounded_and_capped() {
         default_retry_delay(&retry_row(309), now, 123),
         Duration::from_nanos(i64::MAX as u64)
     );
+    // Just below the cap, upward jitter must not exceed it.
+    for seed in 0..64 {
+        assert!(
+            default_retry_delay(&retry_row(308), now, seed)
+                <= Duration::from_nanos(i64::MAX as u64)
+        );
+    }
 }
 
 #[tokio::test]
