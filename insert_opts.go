@@ -158,10 +158,15 @@ type UniqueOpts struct {
 	// 	}
 	ByArgs bool
 
-	// ByPeriod defines uniqueness within a given period. On an insert time is
-	// rounded down to the nearest multiple of the given period, and a job is
-	// only inserted if there isn't an existing job that will run between then
-	// and the next multiple of the period.
+	// ByPeriod defines uniqueness within a given period. On an insert, the
+	// job's scheduled time (ScheduledAt, or the current time for jobs that
+	// aren't scheduled) is rounded down to the nearest multiple of the given
+	// period, and a job is only inserted if there isn't an existing job that
+	// will run between then and the next multiple of the period.
+	//
+	// Periods are measured in UTC, so the same period produces the same
+	// unique key regardless of the time zone of the inserting process or of
+	// a provided ScheduledAt.
 	//
 	// Default is no unique period, meaning that as long as any other unique
 	// property is enabled, uniqueness will be enforced across all jobs of the

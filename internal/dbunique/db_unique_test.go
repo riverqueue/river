@@ -519,6 +519,92 @@ func TestUniqueKey(t *testing.T) {
 	}
 }
 
+func TestUniqueKeyPeriodUsesUTC(t *testing.T) {
+	t.Parallel()
+
+	var (
+		// A fixed zone avoids depending on the host's time zone database.
+		chicago     = time.FixedZone("CDT", -5*60*60)
+		nowUTC      = time.Date(2026, time.September, 24, 12, 34, 56, 0, time.UTC)
+		uniqueOpts  = &UniqueOpts{ByPeriod: time.Hour}
+		wantPreHash = "&kind=worker_1&period=2026-09-24T12:00:00Z"
+	)
+
+	type testBundle struct {
+		params  *rivertype.JobInsertParams
+		timeGen *riversharedtest.TimeStub
+	}
+
+	setup := func(t *testing.T) *testBundle {
+		t.Helper()
+
+		timeGen := &riversharedtest.TimeStub{}
+		timeGen.StubNow(nowUTC)
+
+		return &testBundle{
+			params: &rivertype.JobInsertParams{
+				Args:        JobArgsStaticKind{kind: "worker_1"},
+				EncodedArgs: []byte(`{}`),
+				Kind:        "worker_1",
+				Queue:       "default",
+			},
+			timeGen: timeGen,
+		}
+	}
+
+	requirePreHash := func(t *testing.T, bundle *testBundle, want string) {
+		t.Helper()
+
+		preHash, err := buildUniqueKeyString(bundle.timeGen, uniqueOpts, bundle.params)
+		require.NoError(t, err)
+		require.Equal(t, want, preHash)
+
+		wantKey := sha256.Sum256([]byte(want))
+		uniqueKey, err := UniqueKey(bundle.timeGen, uniqueOpts, bundle.params)
+		require.NoError(t, err)
+		require.Equal(t, wantKey[:], uniqueKey)
+	}
+
+	t.Run("NonUTCClock", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		bundle.timeGen.StubNow(nowUTC.In(chicago))
+
+		requirePreHash(t, bundle, wantPreHash)
+	})
+
+	t.Run("NonUTCScheduledAt", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		bundle.params.ScheduledAt = new(nowUTC.In(chicago))
+
+		requirePreHash(t, bundle, wantPreHash)
+	})
+
+	t.Run("PeriodBoundaryIsAbsolute", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		// 06:59:59 in a UTC-05:00 zone is 11:59:59 UTC, so the job belongs to
+		// the 11:00 UTC period rather than to a period derived from its local
+		// wall-clock representation.
+		bundle.params.ScheduledAt = new(time.Date(2026, time.September, 24, 6, 59, 59, 0, chicago))
+
+		requirePreHash(t, bundle, "&kind=worker_1&period=2026-09-24T11:00:00Z")
+	})
+
+	t.Run("UTCClock", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		requirePreHash(t, bundle, wantPreHash)
+	})
+}
+
 func TestDefaultUniqueStatesSorted(t *testing.T) {
 	t.Parallel()
 
