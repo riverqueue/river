@@ -28,7 +28,7 @@ use crate::{
     client::{UndecodableJob, decode_attempt_error, go_time_json, saturating_i16},
 };
 
-const JOB_COLUMNS: &str = r#"
+pub(crate) const JOB_COLUMNS: &str = r#"
     id,
     attempt,
     attempted_at,
@@ -258,7 +258,7 @@ impl JobRecord {
 /// A job row decoded on its own so one malformed row cannot fail a batch.
 pub(crate) type DecodedJob = Result<JobRow, UndecodableJob>;
 
-fn decode_job_row(row: &SqliteRow) -> DecodedJob {
+pub(crate) fn decode_job_row(row: &SqliteRow) -> DecodedJob {
     JobRecord::from_row(row)
         .map_err(BackendError::from)
         .and_then(JobRecord::into_job)

@@ -2,29 +2,74 @@
 
 #[allow(clippy::wildcard_imports)]
 use super::*;
+use crate::__private::{ExtensionClaimParams, ExtensionInsertParams, RawInsertResult};
 
-impl Client {
+/// Client operations reserved for River's own companion crates.
+///
+/// Reached through `riverqueue::__private`, this wrapper keeps these
+/// operations off [`Client`]'s public API.
+#[derive(Clone, Copy, Debug)]
+pub struct ExtensionClient<'client> {
+    client: &'client Client,
+}
+
+impl<'client> ExtensionClient<'client> {
+    /// Wraps a client.
+    #[must_use]
+    pub const fn new(client: &'client Client) -> Self {
+        Self { client }
+    }
+
+    /// Returns the wrapped client.
+    #[must_use]
+    pub const fn client(&self) -> &'client Client {
+        self.client
+    }
+
+    /// Creates a non-owning handle for an extension service.
+    #[must_use]
+    pub fn downgrade(&self) -> WeakClient {
+        self.client.downgrade()
+    }
+
+    /// Resolves typed insertion options the same way a typed insert does.
+    #[must_use]
+    pub fn resolve_insert_opts<A: JobArgs>(&self, opts: InsertOpts) -> InsertParams {
+        self.client.resolve_insert_opts::<A>(opts)
+    }
+}
+
+impl ExtensionClient<'_> {
     /// Atomically claims complete job rows for an exact-version extension.
     ///
     /// Eligible jobs are available, due, and match the supplied kind, queue,
     /// and top-level metadata values. River records the attempt and client ID,
     /// applies the metadata updates in the same transaction, and returns rows
     /// ordered by priority, scheduled time, and ID.
-    #[doc(hidden)]
-    pub async fn extension_claim_jobs(
-        &self,
-        params: ExtensionClaimParams,
-    ) -> Result<Vec<JobRow>, Error> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the claim query or its transaction fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a PostgreSQL client has no PostgreSQL pool, which River's
+    /// builder never constructs.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "each backend's claim transaction reads best inline"
+    )]
+    pub async fn claim_jobs(&self, params: ExtensionClaimParams) -> Result<Vec<JobRow>, Error> {
         if params.maximum <= 0 {
             return Ok(Vec::new());
         }
         #[cfg(feature = "sqlite")]
-        if let Some(pool) = self.inner.sqlite_pool() {
+        if let Some(pool) = self.client.inner.sqlite_pool() {
             let mut transaction = crate::database::begin_sqlite_write(pool).await?;
             let rows = crate::database::sqlite::claim_filtered(
                 &mut transaction,
                 &crate::database::sqlite::ClaimFilteredJobs {
-                    client_id: &self.inner.id,
+                    client_id: &self.client.inner.id,
                     excluded_job_id: params.excluded_job_id,
                     kind: &params.kind,
                     limit: params.maximum,
@@ -51,10 +96,11 @@ impl Client {
         #[cfg(feature = "postgres")]
         {
             let pool = self
+                .client
                 .inner
                 .postgres_pool()
                 .expect("PostgreSQL claim path requires a PostgreSQL pool");
-            let table = self.inner.schema.qualify("river_job");
+            let table = self.client.inner.schema.qualify("river_job");
             let sql = format!(
                 "WITH locked AS (\
                     SELECT id FROM {table} \
@@ -81,7 +127,7 @@ impl Client {
                 .bind(params.excluded_job_id)
                 .bind(Json(&params.metadata_matches))
                 .bind(params.maximum)
-                .bind(&self.inner.id)
+                .bind(&self.client.inner.id)
                 .bind(ATTEMPTED_BY_MAX)
                 .bind(Json(&params.metadata_updates))
                 .fetch_all(&mut *transaction)
@@ -116,17 +162,15 @@ impl Client {
     }
 
     /// Computes the configured retry delay for an exact-version extension.
-    #[doc(hidden)]
     #[must_use]
-    pub fn extension_retry_delay(&self, row: &JobRow, error: &str, now: DateTime<Utc>) -> Duration {
-        self.inner.retry_policy.next_retry(row, error, now)
+    pub fn retry_delay(&self, row: &JobRow, error: &str, now: DateTime<Utc>) -> Duration {
+        self.client.inner.retry_policy.next_retry(row, error, now)
     }
 
     /// Returns the scheduler horizon used by exact-version completion helpers.
-    #[doc(hidden)]
     #[must_use]
-    pub fn extension_scheduler_interval(&self) -> Duration {
-        self.inner.maintenance.scheduler_interval
+    pub fn scheduler_interval(&self) -> Duration {
+        self.client.inner.maintenance.scheduler_interval
     }
 
     /// Reports outcomes for jobs claimed and executed by an exact-version
@@ -148,8 +192,7 @@ impl Client {
     /// Persistence failures, including errors from the extension's set-state
     /// hook, are retried and reported by the running completion service,
     /// matching regular worker behavior.
-    #[doc(hidden)]
-    pub async fn extension_persist_claimed_outcomes(
+    pub async fn persist_claimed_outcomes(
         &self,
         execution_context: &WorkContext,
         outcomes: Vec<(JobRow, Result<WorkOutcome, BoxError>)>,
@@ -159,6 +202,7 @@ impl Client {
         }
         let metadata_updates = execution_context.metadata_updates();
         let completion_sender = self
+            .client
             .inner
             .completion_sender
             .lock()
@@ -174,7 +218,7 @@ impl Client {
         let mut first_error = None;
         for (row, result) in outcomes {
             if let Err(error) = self
-                .extension_persist_claimed_outcome(
+                .persist_claimed_outcome(
                     row,
                     result,
                     execution_context.cancellation_token(),
@@ -193,7 +237,7 @@ impl Client {
         Ok(())
     }
 
-    pub(super) async fn extension_persist_claimed_outcome(
+    async fn persist_claimed_outcome(
         &self,
         row: JobRow,
         result: Result<WorkOutcome, BoxError>,
@@ -203,7 +247,7 @@ impl Client {
     ) -> Result<(), Error> {
         let cancellation = CancellationToken::new();
         let context = WorkContext::for_job(
-            self.clone(),
+            self.client.clone(),
             execution_cancellation.clone(),
             row.id,
             &row.metadata,
@@ -214,7 +258,7 @@ impl Client {
         let result = result.map_err(worker_failure_from_source);
         let work_result = public_work_result(&result);
         let mut error_handler_result = ErrorHandlerDecision::default();
-        if let Some(error_handler) = &self.inner.error_handler
+        if let Some(error_handler) = &self.client.inner.error_handler
             && matches!(work_result, WorkResult::Failed(_))
         {
             match error_handler
@@ -242,7 +286,7 @@ impl Client {
             },
         };
         persist_result(
-            &self.inner,
+            &self.client.inner,
             &row,
             Utc::now(),
             &completion,
@@ -253,11 +297,8 @@ impl Client {
         )
         .await
     }
-}
 
-impl Client {
     /// Inserts an encoded job through River's exact-version extension seam.
-    #[doc(hidden)]
     pub async fn insert_raw(
         &self,
         kind: &str,
@@ -265,15 +306,17 @@ impl Client {
         encoded_args: Box<RawValue>,
         opts: InsertOpts,
     ) -> Result<RawInsertResult, Error> {
-        let opts =
-            InsertOpts::resolve(self.inner.default_max_attempts, InsertOpts::default(), opts);
+        let opts = InsertOpts::resolve(
+            self.client.inner.default_max_attempts,
+            InsertOpts::default(),
+            opts,
+        );
         self.insert_raw_params(kind, unique_fields, encoded_args, opts)
             .await
     }
 
     /// Inserts an encoded job with already-resolved parameters through River's
     /// exact-version extension seam.
-    #[doc(hidden)]
     pub async fn insert_raw_params(
         &self,
         kind: &str,
@@ -281,13 +324,14 @@ impl Client {
         encoded_args: Box<RawValue>,
         opts: InsertParams,
     ) -> Result<RawInsertResult, Error> {
-        self.validate_known_kind(kind)?;
-        let job = self.prepare_encoded(kind, unique_fields, encoded_args, opts, Utc::now())?;
+        self.client.validate_known_kind(kind)?;
+        let job =
+            self.client
+                .prepare_encoded(kind, unique_fields, encoded_args, opts, Utc::now())?;
         self.insert_raw_job(None, job).await
     }
 
     /// Inserts an encoded job inside a caller-managed transaction.
-    #[doc(hidden)]
     pub async fn insert_raw_tx<'executor, E>(
         &self,
         connection: E,
@@ -299,15 +343,17 @@ impl Client {
     where
         E: DatabaseTransactionExecutor<'executor>,
     {
-        let opts =
-            InsertOpts::resolve(self.inner.default_max_attempts, InsertOpts::default(), opts);
+        let opts = InsertOpts::resolve(
+            self.client.inner.default_max_attempts,
+            InsertOpts::default(),
+            opts,
+        );
         self.insert_raw_params_tx(connection, kind, unique_fields, encoded_args, opts)
             .await
     }
 
     /// Inserts an encoded job with already-resolved parameters inside a
     /// caller-managed transaction.
-    #[doc(hidden)]
     pub async fn insert_raw_params_tx<'executor, E>(
         &self,
         connection: E,
@@ -320,12 +366,15 @@ impl Client {
         E: DatabaseTransactionExecutor<'executor>,
     {
         let executor = self
+            .client
             .inner
             .erase_executor(connection)
             .map_err(Error::from)?
             .into_inner();
-        self.validate_known_kind(kind)?;
-        let job = self.prepare_encoded(kind, unique_fields, encoded_args, opts, Utc::now())?;
+        self.client.validate_known_kind(kind)?;
+        let job =
+            self.client
+                .prepare_encoded(kind, unique_fields, encoded_args, opts, Utc::now())?;
         self.insert_raw_job(Some(executor), job).await
     }
 
@@ -337,8 +386,7 @@ impl Client {
     /// retaining the supplied creation, schedule, and uniqueness wire values.
     /// Insertion middleware, begin hooks, insertion interception, and the
     /// backend notification all run exactly once.
-    #[doc(hidden)]
-    pub async fn extension_insert_tx<'executor, E>(
+    pub async fn insert_tx<'executor, E>(
         &self,
         transaction: E,
         params: ExtensionInsertParams,
@@ -347,6 +395,7 @@ impl Client {
         E: DatabaseTransactionExecutor<'executor>,
     {
         let executor = self
+            .client
             .inner
             .erase_executor(transaction)
             .map_err(Error::from)?
@@ -375,7 +424,7 @@ impl Client {
         // before the ordinary begin pipeline so storage transforms are not
         // applied twice, then decode the newly persisted result below just as
         // a typed insertion does.
-        for hook in self.inner.hooks.iter().rev() {
+        for hook in self.client.inner.hooks.iter().rev() {
             hook.decode_insert_result(&mut source_row).await?;
         }
         let unique_states = match (&source_row.unique_key, &source_row.unique_states) {
@@ -420,6 +469,7 @@ impl Client {
         job: InsertContext,
     ) -> Result<RawInsertResult, Error> {
         let rows = self
+            .client
             .run_insert(executor, vec![job], InsertMode::Rows)
             .await?;
         let row = rows.into_iter().next().ok_or_else(|| {

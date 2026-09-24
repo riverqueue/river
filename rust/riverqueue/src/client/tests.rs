@@ -306,7 +306,7 @@ async fn intercepting_extensions_can_only_lower_completion_concurrency() {
     struct ConcurrencyPilot(usize);
 
     #[async_trait::async_trait]
-    impl riverqueue_internal::Pilot for ConcurrencyPilot {
+    impl crate::__private::Pilot for ConcurrencyPilot {
         fn intercepts_job_set_state(&self) -> bool {
             true
         }
@@ -320,7 +320,7 @@ async fn intercepting_extensions_can_only_lower_completion_concurrency() {
     let concurrency = |pilot: Option<ConcurrencyPilot>| {
         let builder = Client::builder(pool.clone());
         let client = match pilot {
-            Some(pilot) => builder.pilot(pilot),
+            Some(pilot) => builder.with_pilot(pilot),
             None => builder,
         }
         .build()

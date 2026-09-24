@@ -118,15 +118,6 @@ impl MaintenanceConfig {
         self
     }
 
-    /// Overrides bulk maintenance batch sizes. Intended for tests that need
-    /// to exercise multi-batch behavior with small data sets.
-    #[doc(hidden)]
-    #[must_use]
-    pub const fn with_batch_sizes(mut self, default: i64, reduced: i64) -> Self {
-        self.batch_sizes = crate::maintenance::BatchSizes { default, reduced };
-        self
-    }
-
     pub(crate) const fn effective_rescue_after(&self) -> Duration {
         self.rescue_after_effective
     }
@@ -348,10 +339,9 @@ impl ClientBuilder {
         self
     }
 
-    /// Installs an exact-version internal pilot from a matched companion crate.
-    #[doc(hidden)]
+    /// Installs a pilot from a companion crate.
     #[must_use]
-    pub fn pilot<P: Pilot>(mut self, pilot: P) -> Self {
+    pub(crate) fn with_pilot<P: Pilot>(mut self, pilot: P) -> Self {
         self.pilot = Arc::new(pilot);
         self
     }

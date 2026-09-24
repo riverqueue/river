@@ -16,6 +16,7 @@ mod tests;
 mod validate;
 
 pub use self::builder::{ClientBuilder, MaintenanceConfig, QueueConfig};
+pub use self::extension::ExtensionClient;
 pub use self::insert::{
     InsertBatchRequest, InsertManyFastRequest, InsertManyItem, InsertManyRequest, InsertRequest,
 };
@@ -68,23 +69,23 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, error, info_span, warn};
 
-use riverqueue_internal::{
+use crate::__private::{
     DatabaseConfig as PilotDatabaseConfig, DatabasePool as PilotDatabasePool, NoopPilot, Pilot,
 };
-use riverqueue_internal::{
+use crate::__private::{
     DatabaseConnection as PilotDatabaseConnection, FetchParams,
-    JobInsertParams as PilotJobInsertParams, JobSetStateParams, JobSetStateRow,
+    JobInsertParams as PilotJobInsertParams, JobSetStateParams,
 };
 
 use crate::{
     AttemptError, BoxError, DefaultRetryPolicy, Error, ErrorHandler, ErrorHandlerDecision, Event,
-    EventKind, EventReceiver, ExtensionClaimParams, ExtensionInsertParams, FETCH_COOLDOWN_DEFAULT,
-    FETCH_COOLDOWN_MIN, FETCH_POLL_INTERVAL_DEFAULT, Hook, InsertBatch, InsertBatchResult,
-    InsertContext, InsertMiddleware, InsertOpts, InsertParams, InsertResult,
-    JOB_STUCK_THRESHOLD_DEFAULT, JOB_TIMEOUT_DEFAULT, Job, JobArgs, JobEventKind, JobRow, JobState,
-    JobStatistics, MAX_ATTEMPTS_DEFAULT, Metric, Plugin, QUEUE_NUM_WORKERS_MAX, QueueEventKind,
-    RawInsertResult, RetryPolicy, SchemaName, SubscribeConfig, WorkCancelled, WorkContext,
-    WorkError, WorkMiddleware, WorkOutcome, WorkResult, WorkerRegistry, WorkerTimeout,
+    EventKind, EventReceiver, FETCH_COOLDOWN_DEFAULT, FETCH_COOLDOWN_MIN,
+    FETCH_POLL_INTERVAL_DEFAULT, Hook, InsertBatch, InsertBatchResult, InsertContext,
+    InsertMiddleware, InsertOpts, InsertParams, InsertResult, JOB_STUCK_THRESHOLD_DEFAULT,
+    JOB_TIMEOUT_DEFAULT, Job, JobArgs, JobEventKind, JobRow, JobState, JobStatistics,
+    MAX_ATTEMPTS_DEFAULT, Metric, Plugin, QUEUE_NUM_WORKERS_MAX, QueueEventKind, RetryPolicy,
+    SchemaName, SubscribeConfig, WorkCancelled, WorkContext, WorkError, WorkMiddleware,
+    WorkOutcome, WorkResult, WorkerRegistry, WorkerTimeout,
     database::{
         Database, DatabaseExecutor, DatabaseKind, DatabasePool, DatabaseTransactionExecutor,
         ErasedExecutor, ExecutorInner, IntoDatabase,
@@ -287,8 +288,7 @@ impl std::fmt::Debug for Client {
     }
 }
 
-/// Non-owning handle used by exact-version extension services.
-#[doc(hidden)]
+/// Non-owning handle used by extension services.
 #[derive(Clone)]
 pub struct WeakClient {
     inner: Weak<ClientInner>,
@@ -342,10 +342,9 @@ impl Client {
         }
     }
 
-    /// Creates a non-owning handle for an exact-version extension service.
-    #[doc(hidden)]
+    /// Creates a non-owning handle for an extension service.
     #[must_use]
-    pub fn downgrade(&self) -> WeakClient {
+    pub(crate) fn downgrade(&self) -> WeakClient {
         WeakClient {
             inner: Arc::downgrade(&self.inner),
         }

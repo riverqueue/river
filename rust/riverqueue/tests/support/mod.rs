@@ -9,7 +9,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(feature = "postgres")]
-use riverqueue::internal::SchemaName;
+use riverqueue::database::SchemaName;
 #[cfg(feature = "postgres")]
 use riverqueue_migrate::PostgresMigrator;
 #[cfg(feature = "sqlite")]
@@ -63,7 +63,7 @@ impl PostgresSchema {
             .await
             .expect("connect to RIVER_RUST_DATABASE_URL");
         let mut name = format!("{prefix}_{}", unique_suffix());
-        name.truncate(riverqueue::internal::SCHEMA_MAX_LEN);
+        name.truncate(riverqueue::migrate::SCHEMA_MAX_LEN);
         sqlx::raw_sql(AssertSqlSafe(format!("CREATE SCHEMA \"{name}\"")))
             .execute(&pool)
             .await

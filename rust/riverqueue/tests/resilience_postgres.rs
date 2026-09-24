@@ -17,11 +17,12 @@ use std::{
 };
 
 use async_trait::async_trait;
+use riverqueue::__private::ClientBuilderExt;
 use riverqueue::{
+    __private::{DatabaseConnection, JobSetStateParams, Pilot, PilotError},
     BoxError, Client, ErrorHandler, EventKind, InsertOpts, Job, JobArgs, JobRow, JobState,
     QueueConfig, WorkCancelled, WorkContext, WorkOutcome, WorkerRegistry,
     database::{PostgresDatabase, SchemaName},
-    internal::{DatabaseConnection, JobSetStateParams, Pilot, PilotError},
 };
 use riverqueue_migrate::PostgresMigrator;
 use serde::{Deserialize, Serialize};
@@ -1060,10 +1061,12 @@ impl Pilot for SetStatePilot {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             return Err(std::io::Error::other("first set-state hook call fails").into());
         }
-        self.seen
-            .lock()
-            .unwrap()
-            .extend(params.jobs.iter().map(|job| (job.id, job.state.clone())));
+        self.seen.lock().unwrap().extend(
+            params
+                .jobs
+                .iter()
+                .map(|job| (job.id, job.state.as_str().to_owned())),
+        );
         let deleted = params
             .jobs
             .iter()

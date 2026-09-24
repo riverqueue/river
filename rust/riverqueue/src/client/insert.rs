@@ -539,10 +539,9 @@ impl Client {
         }
     }
 
-    /// Resolves typed insertion options for an exact-version extension.
-    #[doc(hidden)]
+    /// Resolves typed insertion options for an extension.
     #[must_use]
-    pub fn resolve_insert_opts<A: JobArgs>(&self, opts: InsertOpts) -> InsertParams {
+    pub(crate) fn resolve_insert_opts<A: JobArgs>(&self, opts: InsertOpts) -> InsertParams {
         InsertOpts::resolve(
             self.inner.default_max_attempts,
             A::default_insert_opts(),
@@ -790,6 +789,7 @@ impl Client {
                     encoded_args,
                     kind,
                     opts,
+                    state,
                     ..
                 } = job;
                 self.inner
@@ -801,6 +801,7 @@ impl Client {
                             kind,
                             metadata: &mut opts.metadata,
                             queue: &mut opts.queue,
+                            state,
                         },
                     )
                     .await
@@ -847,6 +848,10 @@ impl Client {
             }
             rows.push(row);
         }
+        if intercepts {
+            self.after_jobs_inserted(connection.reborrow(), &rows)
+                .await?;
+        }
         let queues = rows
             .iter()
             .filter(|row| row.job.state == JobState::Available && !row.unique_skipped_as_duplicate)
@@ -857,6 +862,36 @@ impl Client {
             InsertMode::Fast => InsertedJobs::Count(u64::try_from(rows.len()).unwrap_or(u64::MAX)),
             InsertMode::Rows => InsertedJobs::Rows(rows),
         })
+    }
+
+    /// Runs the extension's post-insert hook on the rows an insertion wrote.
+    async fn after_jobs_inserted(
+        &self,
+        mut connection: InsertConnection<'_>,
+        rows: &[InsertedJob],
+    ) -> Result<(), Error> {
+        let inserted = rows
+            .iter()
+            .filter(|row| !row.unique_skipped_as_duplicate)
+            .map(|row| row.job.clone())
+            .collect::<Vec<_>>();
+        if inserted.is_empty() {
+            return Ok(());
+        }
+        self.inner
+            .pilot
+            .after_jobs_inserted(
+                connection.pilot_connection(),
+                &crate::__private::JobsInsertedParams {
+                    database: self.inner.pilot_database_config(),
+                    jobs: &inserted,
+                },
+            )
+            .await
+            .map_err(|source| Error::Extension {
+                phase: "job insertion",
+                source,
+            })
     }
 
     /// Sends one insert notification per queue, in the insertion's

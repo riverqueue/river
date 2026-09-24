@@ -10,13 +10,14 @@ use std::time::Duration;
 use std::time::Instant;
 
 #[cfg(feature = "postgres")]
-use riverqueue_internal::SchemaName;
-#[cfg(feature = "postgres")]
 use sqlx::{PgPool, Row};
 use thiserror::Error;
 
+mod schema;
 #[cfg(feature = "sqlite")]
 mod sqlite;
+
+pub use schema::{SCHEMA_MAX_LEN, SchemaName, SchemaNameError};
 
 #[cfg(feature = "sqlite")]
 pub use sqlite::{SQLITE_MIGRATIONS, SqliteMigrator};

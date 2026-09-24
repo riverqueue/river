@@ -901,7 +901,6 @@ dependencies = [
  "base64",
  "chrono",
  "futures-util",
- "riverqueue-internal",
  "riverqueue-macros",
  "riverqueue-migrate",
  "serde",
@@ -941,18 +940,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "riverqueue-internal"
-version = "0.47.0-alpha.1"
-dependencies = [
- "async-trait",
- "chrono",
- "serde_json",
- "sqlx",
- "thiserror",
- "tokio-util",
-]
-
-[[package]]
 name = "riverqueue-macros"
 version = "0.47.0-alpha.1"
 dependencies = [
@@ -968,7 +955,6 @@ dependencies = [
 name = "riverqueue-migrate"
 version = "0.47.0-alpha.1"
 dependencies = [
- "riverqueue-internal",
  "serde_json",
  "sqlx",
  "thiserror",

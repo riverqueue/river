@@ -68,8 +68,7 @@ stale.
   JavaScript numbers or reproducing Go goroutine APIs. Shared scenarios
   exercise job IDs above `Number.MAX_SAFE_INTEGER`, including JSON-RPC
   requests, responses, list filters, and cursors.
-- `riverqueue-internal` is an exact-version extension seam, published only
-  because the public crates require it as dependency plumbing. It is not a
-  stable API compatibility promise.
+- `riverqueue::__private` is a hidden extension module for crates released
+  in lockstep with `riverqueue`. It is not a stable API compatibility promise.
 - The Rust crates and JavaScript packages are unpublished preview packages
   until the release process is complete.

@@ -1,10 +1,11 @@
+use riverqueue::__private::Database;
 #[cfg(feature = "postgres")]
 use riverqueue::database::PostgresDatabase;
+#[cfg(feature = "postgres")]
+use riverqueue::database::SchemaName;
 #[cfg(feature = "sqlite")]
 use riverqueue::database::SqliteDatabase;
-use riverqueue::database::{Database, DatabaseKind, DatabaseTransactionExecutor, IntoDatabase};
-#[cfg(feature = "postgres")]
-use riverqueue_internal::SchemaName;
+use riverqueue::database::{DatabaseKind, DatabaseTransactionExecutor, IntoDatabase};
 use sqlx::Transaction;
 #[cfg(feature = "postgres")]
 use sqlx::{

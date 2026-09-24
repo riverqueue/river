@@ -4,8 +4,8 @@
 
 use chrono::Utc;
 use riverqueue::{
-    Error, Job, JobArgs, JobRow, JobState, MAX_ATTEMPTS_DEFAULT, PRIORITY_DEFAULT, QUEUE_DEFAULT,
-    WorkContext, WorkError, WorkOutcome, Worker,
+    __private, Error, Job, JobArgs, JobRow, JobState, MAX_ATTEMPTS_DEFAULT, PRIORITY_DEFAULT,
+    QUEUE_DEFAULT, WorkContext, WorkError, WorkOutcome, Worker,
 };
 use serde_json::{Map, Value};
 
@@ -145,20 +145,20 @@ where
     A: JobArgs,
     W: Worker<A>,
 {
-    let context = WorkContext::for_test_job(&job.row);
-    let mut result = match context.resumable_validate().await {
+    let context = __private::work_context_for_job(&job.row);
+    let mut result = match __private::work_context_resumable_validate(&context).await {
         Ok(()) => worker
             .work(context.clone(), job)
             .await
             .map_err(TestWorkError::Worker),
         Err(error) => Err(TestWorkError::Resumable(error)),
     };
-    if let Some(error) = context.resumable_finish(result.is_err()).await
+    if let Some(error) = __private::work_context_resumable_finish(&context, result.is_err()).await
         && result.is_ok()
     {
         result = Err(TestWorkError::Resumable(error));
     }
-    let metadata_updates = context.metadata_updates();
+    let metadata_updates = __private::work_context_metadata_updates(&context);
     TestWorkResult {
         context,
         metadata_updates,

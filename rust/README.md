@@ -20,8 +20,6 @@ unfinished. Shared cross-language fixtures live in
 - `riverqueue-cli`: the `riverqueue` command-line program for migrations and
   benchmarks.
 - `riverqueue-test`: typed fixtures and worker-test helpers.
-- `riverqueue-internal`: published exact-version dependency plumbing and
-  unstable extension SPI; applications should not use it directly.
 - `riverqueue-conformance`: private verification package.
 
 The primary API uses a caller-owned SQLx pool, Tokio, typed workers, and

@@ -10,16 +10,17 @@ use std::{
 };
 
 use async_trait::async_trait;
-use riverqueue::internal::{
+use riverqueue::__private::{ClientBuilderExt, ExtensionClaimParams, ExtensionClient};
+use riverqueue::__private::{
     DatabaseConfig, DatabaseConnection, DatabasePool, FetchParams, JobSetStateParams,
-    MaintenanceService, Pilot, PilotError, RuntimeService, SchemaName,
+    MaintenanceService, Pilot, PilotError, RuntimeService,
 };
 use riverqueue::{
-    BoxError, Client, EventKind, ExtensionClaimParams, InsertBatch, InsertOpts, IntervalSchedule,
-    Job, JobArgs, JobListOrderBy, JobListParams, JobRow, JobState, JobUpdateParams,
-    MaintenanceConfig, PeriodicJob, PeriodicJobOpts, QueueConfig, QueueListParams, RetryPolicy,
-    UniqueOpts, WorkContext, WorkError, WorkOutcome, Worker, WorkerRegistry, WorkerTimeout,
-    database::{PostgresDatabase, PostgresReindexConfig, PostgresReindexSchedule},
+    BoxError, Client, EventKind, InsertBatch, InsertOpts, IntervalSchedule, Job, JobArgs,
+    JobListOrderBy, JobListParams, JobRow, JobState, JobUpdateParams, MaintenanceConfig,
+    PeriodicJob, PeriodicJobOpts, QueueConfig, QueueListParams, RetryPolicy, UniqueOpts,
+    WorkContext, WorkError, WorkOutcome, Worker, WorkerRegistry, WorkerTimeout,
+    database::{PostgresDatabase, PostgresReindexConfig, PostgresReindexSchedule, SchemaName},
 };
 use riverqueue_migrate::{Direction, MigrateOpts};
 use riverqueue_migrate::{MIGRATION_VERSION_LATEST, PostgresMigrator};
@@ -421,7 +422,7 @@ impl Pilot for TestPilot {
         let completed = params
             .jobs
             .iter()
-            .filter(|job| job.state == "completed")
+            .filter(|job| job.state == JobState::Completed)
             .map(|job| job.id)
             .collect::<Vec<_>>();
         let sql = format!(
@@ -757,8 +758,8 @@ async fn extension_claim_returns_ordered_rows_and_rolls_back_decode_errors() {
         .await
         .unwrap();
 
-    let rows = client
-        .extension_claim_jobs(ExtensionClaimParams {
+    let rows = ExtensionClient::new(&client)
+        .claim_jobs(ExtensionClaimParams {
             excluded_job_id: leader.job.row.id,
             kind: EchoArgs::KIND.to_owned(),
             maximum: 3,
@@ -795,8 +796,8 @@ async fn extension_claim_returns_ordered_rows_and_rolls_back_decode_errors() {
         .execute(&pool)
         .await
         .unwrap();
-    let error = client
-        .extension_claim_jobs(ExtensionClaimParams {
+    let error = ExtensionClient::new(&client)
+        .claim_jobs(ExtensionClaimParams {
             excluded_job_id: 0,
             kind: FailArgs::KIND.to_owned(),
             maximum: 1,
@@ -1605,7 +1606,7 @@ async fn migrates_inserts_and_works_a_job() {
         .tx(&mut transaction)
         .await
         .unwrap();
-    let raw_transaction_insert = client
+    let raw_transaction_insert = riverqueue::__private::ExtensionClient::new(&client)
         .insert_raw_tx(
             &mut transaction,
             EchoArgs::KIND,
@@ -2013,7 +2014,7 @@ async fn rescuer_honors_worker_timeout_and_retry_overrides() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn resumable_cursor_and_transactional_checkpoints() {
-    let detached_context = WorkContext::new(CancellationToken::new());
+    let detached_context = riverqueue::__private::work_context(CancellationToken::new());
     let cursor_error = detached_context
         .resumable_set_cursor(&ResumableCursor { offset: 1 })
         .await
@@ -2206,9 +2207,9 @@ async fn assert_cancellation_wins(pool: &PgPool, schema: &SchemaName, direct_com
         Ok(WorkOutcome::Snooze(Duration::ZERO)),
         Err(Box::new(std::io::Error::other("retryable failure"))),
     ];
-    client
-        .extension_persist_claimed_outcomes(
-            &WorkContext::new(CancellationToken::new()),
+    ExtensionClient::new(&client)
+        .persist_claimed_outcomes(
+            &riverqueue::__private::work_context(CancellationToken::new()),
             claimed_rows.into_iter().zip(results).collect(),
         )
         .await

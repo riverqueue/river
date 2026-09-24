@@ -10,24 +10,13 @@ use std::time::Duration;
 
 #[cfg(feature = "postgres")]
 use chrono::NaiveTime;
-pub use riverqueue_internal::SchemaName;
+pub use riverqueue_migrate::{SchemaName, SchemaNameError};
 #[cfg(feature = "postgres")]
 use sqlx::{PgConnection, PgPool, Postgres};
 #[cfg(feature = "sqlite")]
 use sqlx::{Sqlite, SqliteConnection, SqlitePool};
 use sqlx::{Transaction, pool::PoolConnection};
 use thiserror::Error;
-
-/// Encodes a UTC timestamp in River's canonical SQLite wire format.
-///
-/// This exact-version helper keeps companion crates aligned with River and
-/// Go's millisecond-rounded, timezone-free SQLite representation.
-#[cfg(feature = "sqlite")]
-#[doc(hidden)]
-#[must_use]
-pub fn sqlite_timestamp(time: chrono::DateTime<chrono::Utc>) -> String {
-    sqlite::sqlite_time(time)
-}
 
 #[cfg(feature = "sqlite")]
 pub(crate) async fn begin_sqlite_write(
@@ -36,8 +25,14 @@ pub(crate) async fn begin_sqlite_write(
     pool.begin_with("BEGIN IMMEDIATE").await
 }
 
+pub(crate) mod erased;
 #[cfg(feature = "sqlite")]
 pub(crate) mod sqlite;
+
+pub(crate) use erased::{
+    Database, DatabaseInner, ErasedExecutor, ErasedTransaction, ExecutorInner,
+};
+pub(crate) use private::DatabaseExecutorSealed as DatabaseExecutor;
 
 /// A database backend understood by River.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -248,128 +243,6 @@ impl fmt::Debug for SqliteDatabase {
     }
 }
 
-/// A type-erased built-in River database source.
-///
-/// This type is public only so the sealed [`IntoDatabase`] contract can be
-/// composed across River's exact-version crates. Its backend representation is
-/// intentionally private.
-#[doc(hidden)]
-#[derive(Clone)]
-pub struct Database {
-    inner: DatabaseInner,
-}
-
-impl Database {
-    /// Erases a sealed built-in database source.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn from_source<D: IntoDatabase>(database: D) -> Self {
-        into_database(database)
-    }
-
-    /// Returns the configured backend kind.
-    #[must_use]
-    pub const fn kind(&self) -> DatabaseKind {
-        match &self.inner {
-            #[cfg(feature = "postgres")]
-            DatabaseInner::Postgres(_) => DatabaseKind::Postgres,
-            #[cfg(feature = "sqlite")]
-            DatabaseInner::Sqlite(_) => DatabaseKind::Sqlite,
-        }
-    }
-
-    /// Returns the PostgreSQL schema, or `None` for a backend without
-    /// PostgreSQL schemas.
-    #[must_use]
-    pub fn postgres_schema(&self) -> Option<&SchemaName> {
-        match &self.inner {
-            #[cfg(feature = "postgres")]
-            DatabaseInner::Postgres(source) => Some(source.schema_name()),
-            #[cfg(feature = "sqlite")]
-            DatabaseInner::Sqlite(_) => None,
-        }
-    }
-
-    #[cfg(feature = "postgres")]
-    #[cfg_attr(
-        not(feature = "sqlite"),
-        expect(
-            clippy::unnecessary_wraps,
-            reason = "another backend may be compiled in"
-        )
-    )]
-    pub(crate) fn postgres_reindex(&self) -> Option<&PostgresReindexConfig> {
-        match &self.inner {
-            DatabaseInner::Postgres(source) => Some(source.reindex_config()),
-            #[cfg(feature = "sqlite")]
-            DatabaseInner::Sqlite(_) => None,
-        }
-    }
-
-    /// Erases and validates an executor before a backend operation uses it.
-    #[doc(hidden)]
-    pub fn executor<'executor, E>(
-        &self,
-        executor: E,
-    ) -> Result<ErasedExecutor<'executor>, DatabaseMismatch>
-    where
-        E: DatabaseExecutor<'executor>,
-    {
-        let executor = private::DatabaseExecutorSealed::erase(executor);
-        if self.kind() != executor.kind() {
-            return Err(DatabaseMismatch {
-                actual: executor.kind(),
-                expected: self.kind(),
-            });
-        }
-        Ok(executor)
-    }
-
-    /// Erases and validates an actual SQLx transaction while preserving its
-    /// transaction-only capability for exact-version companion crates.
-    #[doc(hidden)]
-    pub fn transaction<'executor, E>(
-        &self,
-        transaction: E,
-    ) -> Result<ErasedTransaction<'executor>, DatabaseMismatch>
-    where
-        E: DatabaseTransactionExecutor<'executor>,
-    {
-        let executor = self.executor(transaction)?;
-        Ok(ErasedTransaction {
-            inner: executor.into_inner(),
-        })
-    }
-
-    /// Returns a backend-specific borrowed pool for internal dispatch.
-    pub(crate) const fn pool(&self) -> DatabasePool<'_> {
-        match &self.inner {
-            #[cfg(feature = "postgres")]
-            DatabaseInner::Postgres(source) => DatabasePool::Postgres(source.pool()),
-            #[cfg(feature = "sqlite")]
-            DatabaseInner::Sqlite(source) => DatabasePool::Sqlite(source.pool()),
-        }
-    }
-}
-
-impl fmt::Debug for Database {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("Database")
-            .field("kind", &self.kind())
-            .field("postgres_schema", &self.postgres_schema())
-            .finish_non_exhaustive()
-    }
-}
-
-#[derive(Clone)]
-enum DatabaseInner {
-    #[cfg(feature = "postgres")]
-    Postgres(PostgresDatabase),
-    #[cfg(feature = "sqlite")]
-    Sqlite(SqliteDatabase),
-}
-
 /// Error returned when an operation receives an executor for another backend.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 #[error("database executor mismatch: expected {expected}, received {actual}")]
@@ -400,18 +273,6 @@ impl DatabaseMismatch {
 pub trait IntoDatabase: private::IntoDatabaseSealed {}
 
 impl<T> IntoDatabase for T where T: private::IntoDatabaseSealed {}
-
-/// An SQLx pool or connection accepted by River's internal operation dispatch.
-///
-/// This trait has no public methods and is sealed. A client rejects an executor
-/// whose backend differs from its database before issuing a query.
-#[doc(hidden)]
-pub trait DatabaseExecutor<'executor>: private::DatabaseExecutorSealed<'executor> {}
-
-impl<'executor, T> DatabaseExecutor<'executor> for T where
-    T: private::DatabaseExecutorSealed<'executor>
-{
-}
 
 /// A caller-owned SQLx transaction accepted by River's transactional
 /// operations.
@@ -448,12 +309,12 @@ impl<'executor, T> DatabaseExecutor<'executor> for T where
 /// # }
 /// ```
 pub trait DatabaseTransactionExecutor<'executor>:
-    DatabaseExecutor<'executor> + private::DatabaseTransactionExecutorSealed<'executor>
+    private::DatabaseTransactionExecutorSealed<'executor>
 {
 }
 
 impl<'executor, T> DatabaseTransactionExecutor<'executor> for T where
-    T: DatabaseExecutor<'executor> + private::DatabaseTransactionExecutorSealed<'executor>
+    T: private::DatabaseTransactionExecutorSealed<'executor>
 {
 }
 
@@ -470,106 +331,10 @@ pub(crate) enum DatabasePool<'pool> {
     Sqlite(&'pool SqlitePool),
 }
 
-/// A type-erased borrowed SQLx executor.
-///
-/// The value is created only through the sealed [`DatabaseExecutor`] contract.
-#[doc(hidden)]
-pub struct ErasedExecutor<'executor> {
-    inner: ExecutorInner<'executor>,
-}
-
-/// Transaction-preserving exact-version executor erasure.
-#[doc(hidden)]
-pub struct ErasedTransaction<'executor> {
-    inner: ExecutorInner<'executor>,
-}
-
-impl ErasedTransaction<'_> {
-    /// Borrows the backend connection for exact-version SQL while retaining
-    /// the marker needed to call River's transaction-only methods later.
-    #[doc(hidden)]
-    pub fn connection(&mut self) -> riverqueue_internal::DatabaseConnection<'_> {
-        match &mut self.inner {
-            #[cfg(feature = "postgres")]
-            ExecutorInner::PostgresConnection(connection) => {
-                riverqueue_internal::DatabaseConnection::Postgres(connection)
-            }
-            #[cfg(feature = "sqlite")]
-            ExecutorInner::SqliteConnection(connection) => {
-                riverqueue_internal::DatabaseConnection::Sqlite(connection)
-            }
-            #[cfg(feature = "postgres")]
-            ExecutorInner::PostgresPool(_) => unreachable!("transactions cannot contain pools"),
-            #[cfg(feature = "sqlite")]
-            ExecutorInner::SqlitePool(_) => unreachable!("transactions cannot contain pools"),
-        }
-    }
-}
-
-impl<'executor> ErasedExecutor<'executor> {
-    /// Converts a connection-backed executor for an exact-version extension.
-    /// Pool-backed executors return `None`.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn into_connection(self) -> Option<riverqueue_internal::DatabaseConnection<'executor>> {
-        match self.inner {
-            #[cfg(feature = "postgres")]
-            ExecutorInner::PostgresConnection(connection) => Some(
-                riverqueue_internal::DatabaseConnection::Postgres(connection),
-            ),
-            #[cfg(feature = "postgres")]
-            ExecutorInner::PostgresPool(_) => None,
-            #[cfg(feature = "sqlite")]
-            ExecutorInner::SqliteConnection(connection) => {
-                Some(riverqueue_internal::DatabaseConnection::Sqlite(connection))
-            }
-            #[cfg(feature = "sqlite")]
-            ExecutorInner::SqlitePool(_) => None,
-        }
-    }
-
-    /// Returns the executor's backend kind.
-    #[must_use]
-    pub const fn kind(&self) -> DatabaseKind {
-        match &self.inner {
-            #[cfg(feature = "postgres")]
-            ExecutorInner::PostgresConnection(_) | ExecutorInner::PostgresPool(_) => {
-                DatabaseKind::Postgres
-            }
-            #[cfg(feature = "sqlite")]
-            ExecutorInner::SqliteConnection(_) | ExecutorInner::SqlitePool(_) => {
-                DatabaseKind::Sqlite
-            }
-        }
-    }
-
-    pub(crate) fn into_inner(self) -> ExecutorInner<'executor> {
-        self.inner
-    }
-}
-
-pub(crate) enum ExecutorInner<'executor> {
-    #[cfg(feature = "postgres")]
-    PostgresConnection(&'executor mut PgConnection),
-    #[cfg(feature = "postgres")]
-    #[allow(
-        dead_code,
-        reason = "transactional operations reject pools without reading them"
-    )]
-    PostgresPool(&'executor PgPool),
-    #[cfg(feature = "sqlite")]
-    SqliteConnection(&'executor mut SqliteConnection),
-    #[cfg(feature = "sqlite")]
-    #[allow(
-        dead_code,
-        reason = "transactional operations reject pools without reading them"
-    )]
-    SqlitePool(&'executor SqlitePool),
-}
-
 mod private {
     use super::{
-        Database, DatabaseInner, ErasedExecutor, ExecutorInner, PoolConnection, Transaction,
+        Database, DatabaseInner, ErasedExecutor, ErasedTransaction, ExecutorInner, PoolConnection,
+        Transaction,
     };
     #[cfg(feature = "postgres")]
     use super::{PgConnection, PgPool, Postgres, PostgresDatabase};
@@ -739,7 +504,7 @@ mod private {
     {
     }
 
-    impl<'executor> DatabaseExecutorSealed<'executor> for &'executor mut super::ErasedTransaction<'_> {
+    impl<'executor> DatabaseExecutorSealed<'executor> for &'executor mut ErasedTransaction<'_> {
         fn erase(self) -> ErasedExecutor<'executor> {
             let inner = match &mut self.inner {
                 #[cfg(feature = "postgres")]
@@ -760,7 +525,7 @@ mod private {
     }
 
     impl<'executor> DatabaseTransactionExecutorSealed<'executor>
-        for &'executor mut super::ErasedTransaction<'_>
+        for &'executor mut ErasedTransaction<'_>
     {
     }
 }
