@@ -4,9 +4,11 @@
   "scenarios": [
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteAttemptedByHistory" }], "name": "sqlite_runtime_attempted_by_ordering", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteCompetingWorkers" }], "name": "sqlite_runtime_competing_workers", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/resilience_test.go", "symbol": "TestResilienceSQLiteConformance" }], "name": "sqlite_runtime_completion_under_writer_lock", "tier": "chaos" },
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteCrossLanguageWork" }], "name": "sqlite_runtime_cross_language_work", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteAdvancedRuntime" }], "name": "sqlite_runtime_extensions_resumable_subscriptions", "tier": "runtime" },
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifyExternalTerminalCompletionRace" }], "name": "sqlite_runtime_external_terminal_completion_race", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/resilience_test.go", "symbol": "TestResilienceSQLiteConformance" }], "name": "sqlite_runtime_go_integer_ranges", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteLeadershipFailover" }], "name": "sqlite_runtime_leadership_failover", "tier": "runtime" },
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifySQLiteLifecycle" }], "name": "sqlite_runtime_lifecycle_shutdown", "tier": "runtime" },
     { "evidence": [{ "path": "conformance/harness/mixed_test.go", "symbol": "verifyNotificationWakeups" }], "name": "sqlite_runtime_notification_wakeups", "tier": "mixed" },

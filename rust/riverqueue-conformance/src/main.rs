@@ -483,6 +483,10 @@ async fn work_resumable_cursor(context: &WorkContext, attempt: i16) {
 impl Worker<ConformanceArgs> for ConformanceWorker {
     type Error = io::Error;
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one match maps every shared conformance behavior"
+    )]
     async fn work(
         &self,
         context: WorkContext,
@@ -499,6 +503,14 @@ impl Worker<ConformanceArgs> for ConformanceWorker {
                 Ok(WorkOutcome::Complete)
             }
             "cancel" => Ok(WorkOutcome::Cancel),
+            "cancel_error" => {
+                context.cancellation_token().cancelled().await;
+                Err(io::Error::other("conformance failure after cancellation"))
+            }
+            "cancel_panic" => {
+                context.cancellation_token().cancelled().await;
+                panic!("conformance panic after cancellation")
+            }
             "cooperative_cancel" => {
                 context.cancellation_token().cancelled().await;
                 Err(io::Error::other(WorkCancelled))

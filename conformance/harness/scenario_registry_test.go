@@ -3,6 +3,8 @@ package harness_test
 const (
 	scenarioOwnerMixed                  = "TestMixedConformance"
 	scenarioOwnerPerformance            = "TestPerformanceGate"
+	scenarioOwnerResilience             = "TestResilienceConformance"
+	scenarioOwnerSQLiteResilience       = "TestResilienceSQLiteConformance"
 	scenarioOwnerSQLiteRuntime          = "TestMixedSQLiteRuntimeConformance"
 	scenarioOwnerSQLiteStorage          = "TestMixedSQLiteConformance"
 	scenarioOwnerSoak                   = "TestMixedSoak"
@@ -27,12 +29,16 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"bulk_delete_safety":                                                   {owner: scenarioOwnerMixed, tier: "storage"},
 	"candidate_insert_reference_work":                                      {owner: scenarioOwnerMixed, tier: "mixed"},
 	"candidate_migrator_reference_runtime":                                 {owner: scenarioOwnerMixed, tier: "storage"},
+	"claimed_row_decode_isolation":                                         {owner: scenarioOwnerResilience, tier: "mixed"},
 	"completion_batching":                                                  {owner: scenarioOwnerMixed, tier: "performance"},
+	"completion_row_lock_wait":                                             {owner: scenarioOwnerResilience, tier: "chaos"},
+	"completion_transient_failure_retry":                                   {owner: scenarioOwnerResilience, tier: "chaos"},
 	"cooperative_remote_cancellation":                                      {owner: scenarioOwnerMixed, tier: "runtime"},
 	"copy_from_both_implementations":                                       {owner: scenarioOwnerMixed, tier: "storage"},
 	"cross_language_unique_conflict":                                       {owner: scenarioOwnerMixed, tier: "codec"},
 	"custom_schema_candidate_migrate_reference_work":                       {owner: scenarioOwnerMixed, tier: "mixed"},
 	"custom_schema_reference_migrate_candidate_work":                       {owner: scenarioOwnerMixed, tier: "mixed"},
+	"database_unavailable_reconnect":                                       {owner: scenarioOwnerResilience, tier: "chaos"},
 	"deterministic_retry_clock_rng":                                        {owner: scenarioOwnerMixed, tier: "codec"},
 	"differential_job_crud":                                                {owner: scenarioOwnerMixed, tier: "storage"},
 	"differential_job_list_filters_and_cursors":                            {owner: scenarioOwnerMixed, tier: "storage"},
@@ -41,6 +47,7 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"error_handler_cancel_override":                                        {owner: scenarioOwnerMixed, tier: "runtime"},
 	"extension_hook_middleware_order":                                      {owner: scenarioOwnerMixed, tier: "runtime"},
 	"external_terminal_completion_race":                                    {owner: scenarioOwnerMixed, tier: "mixed"},
+	"hard_shutdown_soft_stop_classification":                               {owner: scenarioOwnerResilience, tier: "runtime"},
 	"historical_migration_down_up":                                         {owner: scenarioOwnerMixed, tier: "storage"},
 	"ignored_cancellation_hard_abort":                                      {owner: scenarioOwnerMixed, tier: "chaos"},
 	"job_row_round_trip_all_fields":                                        {owner: scenarioOwnerMixed, tier: "codec"},
@@ -68,6 +75,7 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"resumable_cross_engine_cursor":                                        {owner: scenarioOwnerMixed, tier: "mixed"},
 	"resumable_retry":                                                      {owner: scenarioOwnerMixed, tier: "runtime"},
 	"resumable_validation":                                                 {owner: scenarioOwnerMixed, tier: "runtime"},
+	"shutdown_after_cancel_attempt":                                        {owner: scenarioOwnerResilience, tier: "runtime"},
 	"single_implementation_worker_outcomes":                                {owner: scenarioOwnerMixed, tier: "runtime"},
 	"snooze_once_metadata_transition":                                      {owner: scenarioOwnerMixed, tier: "runtime"},
 	"timeout_cancellation":                                                 {owner: scenarioOwnerMixed, tier: "runtime"},
@@ -104,9 +112,11 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"sqlite_unsafe_int64_job_ids_rpc_list_cursors":                         {owner: scenarioOwnerSQLiteStorage, profile: "portable-storage-v1", tier: "codec"},
 	"sqlite_runtime_attempted_by_ordering":                                 {owner: scenarioOwnerSQLiteRuntime, profile: "sqlite-runtime-v1", tier: "mixed"},
 	"sqlite_runtime_competing_workers":                                     {owner: scenarioOwnerSQLiteRuntime, profile: "sqlite-runtime-v1", tier: "mixed"},
+	"sqlite_runtime_completion_under_writer_lock":                          {owner: scenarioOwnerSQLiteResilience, profile: "sqlite-runtime-v1", tier: "chaos"},
 	"sqlite_runtime_cross_language_work":                                   {owner: scenarioOwnerSQLiteRuntime, profile: "sqlite-runtime-v1", tier: "mixed"},
 	"sqlite_runtime_extensions_resumable_subscriptions":                    {owner: scenarioOwnerSQLiteRuntime, profile: "sqlite-runtime-v1", tier: "runtime"},
 	"sqlite_runtime_external_terminal_completion_race":                     {owner: scenarioOwnerSQLiteRuntime, profile: "sqlite-runtime-v1", tier: "mixed"},
+	"sqlite_runtime_go_integer_ranges":                                     {owner: scenarioOwnerSQLiteResilience, profile: "sqlite-runtime-v1", tier: "mixed"},
 	"sqlite_runtime_leadership_failover":                                   {owner: scenarioOwnerSQLiteRuntime, profile: "sqlite-runtime-v1", tier: "runtime"},
 	"sqlite_runtime_lifecycle_shutdown":                                    {owner: scenarioOwnerSQLiteRuntime, profile: "sqlite-runtime-v1", tier: "runtime"},
 	"sqlite_runtime_notification_wakeups":                                  {owner: scenarioOwnerSQLiteRuntime, profile: "sqlite-runtime-v1", tier: "mixed"},

@@ -295,6 +295,12 @@ func (w *conformanceWorker) Work(ctx context.Context, job *river.Job[conformance
 		return nil
 	case "cancel":
 		return river.JobCancel(errors.New("cancelled by conformance worker"))
+	case "cancel_error":
+		<-ctx.Done()
+		return errors.New("conformance failure after cancellation")
+	case "cancel_panic":
+		<-ctx.Done()
+		panic("conformance panic after cancellation")
 	case "cooperative_cancel":
 		<-ctx.Done()
 		return ctx.Err()

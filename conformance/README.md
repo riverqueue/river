@@ -37,6 +37,13 @@ RIVER_CONFORMANCE_DATABASE_URL=postgres://localhost/river_conformance \
   make test/conformance
 ```
 
+The PostgreSQL tier also runs a resilience suite. The harness starts a second
+Go adapter and the candidate behind its own TCP proxy, so it can make the
+database unavailable to one worker (resetting its connections and refusing new
+ones) while the reference adapter keeps working, and it injects completion
+failures, row locks, and unusual rows with direct SQL. The database URL must be
+in URL form for the proxy to rewrite its address.
+
 The SQLite gate runs both the backend-neutral `portable-storage-v1` subset and
 the `sqlite-runtime-v1` worker/queue profile. It provisions an isolated
 temporary database per test, enables WAL and a five-second busy timeout in both
