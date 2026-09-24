@@ -3,6 +3,9 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
+/// A boxed application shutdown signal awaited by a started client.
+type ShutdownSignal = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
 impl Client {
     /// Starts configured queues and returns a lifecycle handle.
     ///
@@ -18,7 +21,58 @@ impl Client {
     /// dedicated listener connection with the pool's connect options. It is
     /// not taken from, and does not count against, the pool's
     /// `max_connections`.
+    ///
+    /// A client can run once at a time. After it stops, it can be started
+    /// again.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeUnavailable`] when called outside a Tokio
+    /// runtime, a configuration error when the client has no queues, and a
+    /// runtime error when the client is already running.
     pub fn start(&self) -> Result<RunHandle, Error> {
+        self.start_inner(None)
+    }
+
+    /// Starts the client like [`Client::start`] and stops it gracefully once
+    /// `signal` completes.
+    ///
+    /// Completing `signal` has the same effect as [`Stopper::stop`]: the
+    /// client stops fetching jobs and lets running jobs finish, and the
+    /// builder's `soft_stop_timeout` escalates to cancelling them when set.
+    /// Hard stops remain available through [`RunHandle::stopper`] and
+    /// [`RunHandle::shutdown_now`]. The client drops `signal` without
+    /// awaiting it further once it stops for any other reason.
+    ///
+    /// This mirrors the graceful shutdown hooks of Tokio servers such as
+    /// axum's `with_graceful_shutdown`, so one application signal can stop an
+    /// HTTP server and River together. An application
+    /// [`CancellationToken`] works as a signal through
+    /// [`CancellationToken::cancelled_owned`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(client: riverqueue::Client) -> Result<(), riverqueue::Error> {
+    /// let mut run = client.start_with_graceful_shutdown(async {
+    ///     let _ = tokio::signal::ctrl_c().await;
+    /// })?;
+    /// // Returns after Ctrl-C once in-flight jobs have finished.
+    /// run.wait().await
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Client::start`].
+    pub fn start_with_graceful_shutdown<F>(&self, signal: F) -> Result<RunHandle, Error>
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.start_inner(Some(Box::pin(signal)))
+    }
+
+    fn start_inner(&self, shutdown_signal: Option<ShutdownSignal>) -> Result<RunHandle, Error> {
         let runtime =
             tokio::runtime::Handle::try_current().map_err(|_| Error::RuntimeUnavailable {
                 operation: "starting a client",
@@ -42,29 +96,29 @@ impl Client {
         {
             return Err(Error::runtime("client is already running".to_owned()));
         }
-        let fetch_cancel = CancellationToken::new();
-        let work_cancel = CancellationToken::new();
+        let stopper = Stopper {
+            fetch_cancel: CancellationToken::new(),
+            work_cancel: CancellationToken::new(),
+        };
         let inner = Arc::clone(&self.inner);
         let (ready_sender, ready) = oneshot::channel();
         let supervisor = Supervisor {
-            fetch_cancel: fetch_cancel.clone(),
+            fetch_cancel: stopper.fetch_cancel.clone(),
             inner: Arc::clone(&inner),
             restarts: HashMap::new(),
             services: HashMap::new(),
             tasks: JoinSet::new(),
-            work_cancel: work_cancel.clone(),
+            work_cancel: stopper.work_cancel.clone(),
         };
         let join = runtime.spawn(async move {
-            let result = supervisor.run(ready_sender).await;
+            let result = supervisor.run(ready_sender, shutdown_signal).await;
             inner.started.store(false, Ordering::Release);
             result
         });
         Ok(RunHandle {
-            fetch_cancel: Some(fetch_cancel),
             join: Some(join),
-            ready: Some(ready),
-            soft_stop_timeout: self.inner.soft_stop_timeout,
-            work_cancel: Some(work_cancel),
+            ready: Readiness::Pending(ready),
+            stopper,
         })
     }
 }
@@ -108,7 +162,11 @@ struct Supervisor {
 }
 
 impl Supervisor {
-    async fn run(mut self, ready: ReadySender) -> Result<(), Error> {
+    async fn run(
+        mut self,
+        ready: ReadySender,
+        shutdown_signal: Option<ShutdownSignal>,
+    ) -> Result<(), Error> {
         let inner = Arc::clone(&self.inner);
         let (completion_sender, completion_receiver) = mpsc::channel(10_000);
         *inner
@@ -141,8 +199,26 @@ impl Supervisor {
             self.spawn_service(Service::Extension(index), Duration::ZERO, None);
         }
 
+        let stop_watch = watch_stop(
+            self.fetch_cancel.clone(),
+            self.work_cancel.clone(),
+            inner.soft_stop_timeout,
+            shutdown_signal,
+        );
+        tokio::pin!(stop_watch);
+        let mut stop_watch_done = false;
         let mut fatal = None;
-        while let Some(joined) = self.tasks.join_next_with_id().await {
+        loop {
+            let joined = tokio::select! {
+                joined = self.tasks.join_next_with_id() => joined,
+                () = &mut stop_watch, if !stop_watch_done => {
+                    stop_watch_done = true;
+                    continue;
+                }
+            };
+            let Some(joined) = joined else {
+                break;
+            };
             let (task_id, outcome) = match joined {
                 Ok((task_id, outcome)) => (task_id, outcome),
                 Err(join_error) => (join_error.id(), Err(Error::from_join(join_error))),
@@ -263,27 +339,168 @@ impl Supervisor {
     }
 }
 
+/// Requests a soft stop when `shutdown_signal` completes, then escalates any
+/// soft stop to a hard stop after `soft_stop_timeout`.
+///
+/// The escalation belongs to the client rather than to a caller awaiting
+/// [`RunHandle::shutdown`], so it applies however the stop was requested and
+/// dropping a shutdown future never changes it. This matches Go's client,
+/// which starts its soft stop timer when fetching stops.
+async fn watch_stop(
+    fetch_cancel: CancellationToken,
+    work_cancel: CancellationToken,
+    soft_stop_timeout: Option<Duration>,
+    shutdown_signal: Option<ShutdownSignal>,
+) {
+    match shutdown_signal {
+        Some(signal) => tokio::select! {
+            () = fetch_cancel.cancelled() => {}
+            () = signal => {
+                tracing::info!("River client received its shutdown signal; stopping gracefully");
+                fetch_cancel.cancel();
+            }
+        },
+        None => fetch_cancel.cancelled().await,
+    }
+    let Some(timeout) = soft_stop_timeout else {
+        return;
+    };
+    tokio::select! {
+        () = work_cancel.cancelled() => {}
+        () = tokio::time::sleep(timeout) => {
+            warn!(
+                soft_stop_timeout = ?timeout,
+                "River client soft stop timed out; cancelling remaining jobs"
+            );
+            work_cancel.cancel();
+        }
+    }
+}
+
+/// Requests that a running client stop.
+///
+/// A stopper is a cheap, cloneable trigger obtained from
+/// [`RunHandle::stopper`]. It lets any task, such as a signal handler, stop a
+/// client while another task owns the [`RunHandle`] and awaits
+/// [`RunHandle::wait`]. Its methods only request a stop and return
+/// immediately; observe completion through the handle.
+///
+/// Requests are idempotent and ordered by severity: calling [`Stopper::stop`]
+/// after [`Stopper::stop_now`] does not undo the hard stop, and requests made
+/// after the client stopped do nothing. A stopper only affects the run it came
+/// from, not a later restart of the same [`Client`].
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn example(client: riverqueue::Client) -> Result<(), riverqueue::Error> {
+/// let mut run = client.start()?;
+/// let stopper = run.stopper();
+/// tokio::spawn(async move {
+///     let _ = tokio::signal::ctrl_c().await;
+///     // Stop fetching and let running jobs finish.
+///     stopper.stop();
+///     let _ = tokio::signal::ctrl_c().await;
+///     // A second Ctrl-C cancels jobs that are still running.
+///     stopper.stop_now();
+/// });
+/// run.wait().await
+/// # }
+/// ```
+#[derive(Clone, Debug)]
+pub struct Stopper {
+    fetch_cancel: CancellationToken,
+    work_cancel: CancellationToken,
+}
+
+impl Stopper {
+    /// Requests a soft stop, like Go's `Client.Stop`.
+    ///
+    /// The client stops fetching new jobs and lets running jobs finish before
+    /// it stops. When the builder's `soft_stop_timeout` is set, jobs still
+    /// running after that timeout are cancelled as if by
+    /// [`Stopper::stop_now`].
+    pub fn stop(&self) {
+        self.fetch_cancel.cancel();
+    }
+
+    /// Requests a hard stop, like Go's `Client.StopAndCancel`.
+    ///
+    /// The client stops fetching new jobs and cancels the
+    /// [`WorkContext::cancellation_token`] of every running job. The client
+    /// still waits for workers to return: a job that returns promptly after
+    /// cancellation is made available again without using up its attempt,
+    /// and one that ignores cancellation for longer than the job stuck
+    /// threshold is aborted. A job whose cancellation was requested with
+    /// `job_cancel` is cancelled rather than made available.
+    pub fn stop_now(&self) {
+        self.fetch_cancel.cancel();
+        self.work_cancel.cancel();
+    }
+}
+
 /// Controls one running client instance.
 ///
-/// Dropping the handle requests immediate cancellation but cannot wait for
-/// in-flight database work to finish. Use [`RunHandle::shutdown`] or
-/// [`RunHandle::shutdown_now`] when shutdown must be observed before returning,
+/// [`RunHandle::wait`], [`RunHandle::shutdown`], and
+/// [`RunHandle::shutdown_now`] take `&mut self`, can be called repeatedly, and
+/// are cancel safe: dropping one of their futures, for example from
+/// `tokio::time::timeout` or `tokio::select!`, leaves the client and the
+/// handle as they were, apart from any stop the method already requested. To
+/// stop the client from another task, obtain a [`Stopper`] with
+/// [`RunHandle::stopper`] or start the client with
+/// [`Client::start_with_graceful_shutdown`].
+///
+/// The client's result is reported to the first call that observes it
+/// stopping; later calls return `Ok(())`.
+///
+/// Dropping the handle requests a hard stop, like [`Stopper::stop_now`], but
+/// cannot wait for in-flight work to be recorded. Use [`RunHandle::shutdown`]
+/// or [`RunHandle::shutdown_now`] when shutdown must finish before returning,
 /// or [`RunHandle::detach`] to deliberately leave the client running.
+///
+/// # Examples
+///
+/// Stop gracefully, but cancel jobs that are still running after 30 seconds:
+///
+/// ```no_run
+/// # async fn example(client: riverqueue::Client) -> Result<(), riverqueue::Error> {
+/// use std::time::Duration;
+///
+/// let mut run = client.start()?;
+/// // ... serve until the application stops ...
+/// if tokio::time::timeout(Duration::from_secs(30), run.shutdown())
+///     .await
+///     .is_err()
+/// {
+///     run.shutdown_now().await?;
+/// }
+/// # Ok(())
+/// # }
+/// ```
+///
+/// [`Client`] also offers `soft_stop_timeout` on its builder, which performs
+/// this escalation inside the client however the stop was requested.
 #[must_use = "dropping the handle requests immediate client shutdown; call detach to run it independently"]
 pub struct RunHandle {
-    fetch_cancel: Option<CancellationToken>,
     join: Option<tokio::task::JoinHandle<Result<(), Error>>>,
-    ready: Option<oneshot::Receiver<Result<(), String>>>,
-    soft_stop_timeout: Option<Duration>,
-    work_cancel: Option<CancellationToken>,
+    ready: Readiness,
+    stopper: Stopper,
+}
+
+/// Whether the client's notification path has become ready.
+#[derive(Debug)]
+enum Readiness {
+    Failed(String),
+    Pending(oneshot::Receiver<Result<(), String>>),
+    Ready,
 }
 
 impl std::fmt::Debug for RunHandle {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("RunHandle")
-            .field("attached", &self.join.is_some())
-            .field("ready_observed", &self.ready.is_none())
+            .field("running", &self.join.is_some())
+            .field("ready", &matches!(self.ready, Readiness::Ready))
             .finish_non_exhaustive()
     }
 }
@@ -291,80 +508,121 @@ impl std::fmt::Debug for RunHandle {
 impl RunHandle {
     /// Leaves the client running independently of this handle.
     ///
-    /// This permanently relinquishes lifecycle control. The runtime then ends
-    /// only on an internal error or process shutdown. Most applications should
-    /// retain the handle and use an awaited shutdown method instead.
+    /// This relinquishes waiting for the client: it runs until a [`Stopper`]
+    /// obtained earlier from [`RunHandle::stopper`] or the signal passed to
+    /// [`Client::start_with_graceful_shutdown`] stops it, an essential service
+    /// fails, or the process exits. Nothing observes its result, and jobs
+    /// running when the process exits are left `running` for the rescuer.
+    /// Most applications should keep the handle and await
+    /// [`RunHandle::shutdown`] instead.
     pub fn detach(mut self) {
-        self.fetch_cancel.take();
-        self.work_cancel.take();
+        // Without a join handle, dropping the handle requests no stop.
         self.join.take();
+    }
+
+    /// Requests a soft stop and waits for the client to stop.
+    ///
+    /// This is [`Stopper::stop`] followed by [`RunHandle::wait`]. The stop is
+    /// requested when the future is first polled.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. Dropping the future after its first poll
+    /// leaves the soft stop in progress, including any `soft_stop_timeout`
+    /// escalation, and never escalates to a hard stop by itself. The handle
+    /// remains usable: call [`RunHandle::shutdown_now`] to cancel running jobs
+    /// or [`RunHandle::wait`] to keep waiting.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error that stopped the client, as [`RunHandle::wait`] does.
+    pub async fn shutdown(&mut self) -> Result<(), Error> {
+        self.stopper.stop();
+        self.wait().await
+    }
+
+    /// Requests a hard stop and waits for the client to stop.
+    ///
+    /// This is [`Stopper::stop_now`] followed by [`RunHandle::wait`]. The stop
+    /// is requested when the future is first polled.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. Dropping the future after its first poll
+    /// leaves the hard stop in progress, and the handle remains usable.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error that stopped the client, as [`RunHandle::wait`] does.
+    pub async fn shutdown_now(&mut self) -> Result<(), Error> {
+        self.stopper.stop_now();
+        self.wait().await
+    }
+
+    /// Returns a [`Stopper`] that can stop this client from any task.
+    pub fn stopper(&self) -> Stopper {
+        self.stopper.clone()
+    }
+
+    /// Waits for the client to stop, without requesting a stop.
+    ///
+    /// Returns immediately when the client has already stopped and its
+    /// result was reported by an earlier call, or when the handle was never
+    /// attached to a running client.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. Dropping the future leaves the client
+    /// running and the handle usable; a later call keeps waiting.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from an essential service, such as producers or the
+    /// completer, whose failure stopped the client, or
+    /// [`Error::RuntimeTask`] when the client's supervisor task panicked or was
+    /// cancelled by its runtime shutting down.
+    pub async fn wait(&mut self) -> Result<(), Error> {
+        let Some(join) = self.join.as_mut() else {
+            return Ok(());
+        };
+        let result = join.await;
+        self.join = None;
+        join_client_result(result)
     }
 
     /// Waits until the selected backend's notification path is active.
     ///
-    /// Poll-only clients are ready immediately. Calling this more than once is
-    /// harmless.
+    /// Poll-only clients are ready immediately. Once readiness is observed,
+    /// later calls return the same result immediately.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. Dropping the future leaves the client
+    /// running, and a later call keeps waiting.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the client stops before becoming ready, or when
+    /// its notification path failed to start.
     pub async fn wait_ready(&mut self) -> Result<(), Error> {
-        let Some(ready) = self.ready.take() else {
-            return Ok(());
-        };
-        ready
-            .await
-            .map_err(|_| Error::runtime("client stopped before becoming ready".to_owned()))?
-            .map_err(Error::runtime)
-    }
-
-    /// Stops fetching and waits indefinitely for active jobs.
-    pub async fn shutdown(mut self) -> Result<(), Error> {
-        if let Some(cancellation) = self.fetch_cancel.take() {
-            cancellation.cancel();
+        if let Readiness::Pending(receiver) = &mut self.ready {
+            self.ready = match receiver.await {
+                Ok(Ok(())) => Readiness::Ready,
+                Ok(Err(message)) => Readiness::Failed(message),
+                Err(_) => Readiness::Failed("client stopped before becoming ready".to_owned()),
+            };
         }
-        let Some(mut join) = self.join.take() else {
-            return Ok(());
-        };
-        if let Some(timeout) = self.soft_stop_timeout {
-            tokio::select! {
-                result = &mut join => return join_client_result(result),
-                () = tokio::time::sleep(timeout) => {
-                    if let Some(cancellation) = self.work_cancel.take() {
-                        cancellation.cancel();
-                    }
-                },
-            }
-        }
-        join_client_result(join.await)
-    }
-
-    /// Stops fetching and cancels active job contexts.
-    pub async fn shutdown_now(mut self) -> Result<(), Error> {
-        if let Some(cancellation) = self.fetch_cancel.take() {
-            cancellation.cancel();
-        }
-        if let Some(cancellation) = self.work_cancel.take() {
-            cancellation.cancel();
-        }
-        match self.join.take() {
-            Some(join) => join_client_result(join.await),
-            None => Ok(()),
-        }
-    }
-
-    /// Waits for the client to stop.
-    pub async fn wait(mut self) -> Result<(), Error> {
-        match self.join.take() {
-            Some(join) => join_client_result(join.await),
-            None => Ok(()),
+        match &self.ready {
+            Readiness::Failed(message) => Err(Error::runtime(message.clone())),
+            Readiness::Pending(_) | Readiness::Ready => Ok(()),
         }
     }
 }
 
 impl Drop for RunHandle {
     fn drop(&mut self) {
-        if let Some(cancellation) = &self.fetch_cancel {
-            cancellation.cancel();
-        }
-        if let Some(cancellation) = &self.work_cancel {
-            cancellation.cancel();
+        if self.join.is_some() {
+            self.stopper.stop_now();
         }
     }
 }

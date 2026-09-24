@@ -962,7 +962,7 @@ async fn periodic_start_hooks_and_run_on_start_follow_each_leadership_gain() {
             .unwrap_or_else(|_| panic!("expected {expected} leadership gains"));
         }
     };
-    let handle = client.start().unwrap();
+    let mut handle = client.start().unwrap();
     wait_for(1).await;
     client.request_resign().await.unwrap();
     wait_for(2).await;
@@ -1014,7 +1014,7 @@ async fn maintenance_start_retries_then_requests_resignation() {
             .unwrap()
         }
     };
-    let handle = client.start().unwrap();
+    let mut handle = client.start().unwrap();
     let first_term = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if let Some(elected_at) = elected_at().await {

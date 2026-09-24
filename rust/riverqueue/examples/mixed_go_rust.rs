@@ -96,7 +96,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .allow_unregistered_job_kinds()
         .build()?;
     let mut completed = client.subscribe(&[EventKind::JobCompleted])?;
-    let run = client.start()?;
+    let mut run = client.start()?;
 
     // Stand in for the Go producer so the example runs on its own.
     let inserted = client

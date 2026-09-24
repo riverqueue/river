@@ -309,7 +309,7 @@ async fn completion_retries_while_a_foreign_writer_holds_the_lock() {
         .unwrap();
     let job = client.insert(GatedArgs { fail: false }).await.unwrap();
 
-    let run = client.start().unwrap();
+    let mut run = client.start().unwrap();
     gate.wait_started().await;
     let foreign = TestDatabase::connect(&database.path, Duration::from_secs(5), 1).await;
     let writer = foreign.begin_with("BEGIN IMMEDIATE").await.unwrap();
@@ -340,7 +340,7 @@ async fn completion_cancels_on_a_null_cancel_attempted_at_key() {
         .unwrap();
     let job = client.insert(GatedArgs { fail: true }).await.unwrap();
 
-    let run = client.start().unwrap();
+    let mut run = client.start().unwrap();
     gate.wait_started().await;
     // River Go treats the key's presence, not its value, as a cancellation.
     sqlx::query(
@@ -383,7 +383,7 @@ async fn hard_shutdown_interrupts_only_cooperative_cancellations() {
         .await
         .unwrap();
 
-    let run = client.start().unwrap();
+    let mut run = client.start().unwrap();
     for _ in 0..3 {
         gate.wait_started().await;
     }

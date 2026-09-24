@@ -1282,12 +1282,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     match adapter {
         AdapterBackend::Postgres(mut adapter) => {
-            if let Some(running) = adapter.running.take() {
+            if let Some(mut running) = adapter.running.take() {
                 running.handle.shutdown_now().await?;
             }
         }
         AdapterBackend::Sqlite(mut adapter) => {
-            if let Some(running) = adapter.running.take() {
+            if let Some(mut running) = adapter.running.take() {
                 running.handle.shutdown_now().await?;
             }
         }
@@ -1930,7 +1930,7 @@ impl Adapter {
                 Ok(json!({}))
             }
             "stop" => {
-                let running = self.running.take().ok_or("client is not running")?;
+                let mut running = self.running.take().ok_or("client is not running")?;
                 if params
                     .get("cancel")
                     .and_then(Value::as_bool)
@@ -1990,7 +1990,7 @@ impl Adapter {
                         .with_fetch_poll_interval(Duration::from_millis(10)),
                 )
                 .build()?;
-                let handle = client.start()?;
+                let mut handle = client.start()?;
                 let row = wait_for_state(&client, id, None).await;
                 let stop = handle.shutdown().await;
                 stop?;
@@ -2733,7 +2733,7 @@ impl SqliteAdapter {
                 Ok(json!({}))
             }
             "stop" => {
-                let running = self.running.take().ok_or("client is not running")?;
+                let mut running = self.running.take().ok_or("client is not running")?;
                 if params
                     .get("cancel")
                     .and_then(Value::as_bool)
@@ -2790,7 +2790,7 @@ impl SqliteAdapter {
                             .with_fetch_poll_interval(Duration::from_millis(10)),
                     )
                     .build()?;
-                let handle = client.start()?;
+                let mut handle = client.start()?;
                 let row = wait_for_state(&client, id, None).await;
                 let stop = handle.shutdown().await;
                 stop?;

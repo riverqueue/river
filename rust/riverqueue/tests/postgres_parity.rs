@@ -363,7 +363,7 @@ async fn leader_renews_while_maintenance_is_blocked() {
     .workers(noop_workers())
     .build()
     .unwrap();
-    let handle = client.start().unwrap();
+    let mut handle = client.start().unwrap();
 
     let blocked_deletes = || {
         let pool = database.pool.clone();

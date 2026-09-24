@@ -399,8 +399,16 @@ impl ClientBuilder {
         self
     }
 
-    /// Escalates graceful shutdown to job cancellation after this duration.
-    /// `None` waits indefinitely.
+    /// Escalates a soft stop to a hard stop after this duration, like Go's
+    /// `SoftStopTimeout`. `None`, the default, lets running jobs finish
+    /// without a limit.
+    ///
+    /// The client starts this timer when fetching stops, however the stop was
+    /// requested: [`RunHandle::shutdown`](crate::RunHandle::shutdown),
+    /// [`Stopper::stop`](crate::Stopper::stop), or the signal passed to
+    /// [`Client::start_with_graceful_shutdown`]. Jobs still running when it
+    /// expires are cancelled as if by
+    /// [`Stopper::stop_now`](crate::Stopper::stop_now).
     #[must_use]
     pub fn soft_stop_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.soft_stop_timeout = timeout;

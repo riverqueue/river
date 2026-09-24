@@ -533,7 +533,7 @@ async fn external_terminal_state_wins_worker_completion_race() {
             EventKind::JobFailed,
         ])
         .unwrap();
-    let run_handle = client.start().unwrap();
+    let mut run_handle = client.start().unwrap();
     let table = schema.qualify("river_job");
     let state_type = schema.qualify("river_job_state");
 
@@ -708,7 +708,7 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
         .opts(riverqueue::InsertOpts::default().with_queue("graceful"))
         .await
         .unwrap();
-    let graceful_shutdown = tokio::spawn(graceful_handle.shutdown());
+    let graceful_shutdown = tokio::spawn(async move { graceful_handle.shutdown().await });
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(
         !graceful_shutdown.is_finished(),

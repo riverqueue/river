@@ -28,7 +28,7 @@ pub mod worker;
 
 pub use client::{
     Client, ClientBuilder, InsertBatchRequest, InsertManyFastRequest, InsertManyItem,
-    InsertManyRequest, InsertRequest, MaintenanceConfig, QueueConfig, RunHandle,
+    InsertManyRequest, InsertRequest, MaintenanceConfig, QueueConfig, RunHandle, Stopper,
 };
 pub(crate) use database::SchemaName;
 pub use error::{BoxError, ConfigurationError, Error, JobValidationError, RuntimeError};
