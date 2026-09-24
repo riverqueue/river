@@ -50,9 +50,9 @@ func verifyCustomSchema(t *testing.T, schema string, migrator, worker *adapter) 
 	worker.requireCallError(t, "insert", map[string]any{
 		"message": "schema too long", "schema": strings.Repeat("s", 47),
 	}, "rejected")
-	worker.requireCallError(t, "insert", map[string]any{
-		"message": "invalid schema", "schema": "river-invalid",
-	}, "rejected")
+	// Any other schema name works in both implementations as long as it's
+	// quoted, like Go's `SafeIdentifier`, so only the length is portable to
+	// reject here.
 }
 
 // verifyConcurrentUniqueConflicts proves that a unique insert blocks on

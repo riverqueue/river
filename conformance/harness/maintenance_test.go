@@ -27,24 +27,25 @@ type maintenanceImplementation struct {
 	name            string
 }
 
-// maintenanceTuning shortens candidate intervals that River Go does not
-// expose. The Go adapter ignores these keys because Go runs each service as
-// soon as it gains leadership.
+// maintenanceTuning shortens intervals River Go doesn't expose. Only
+// implementations whose descriptor lists an option receive it; the others,
+// like River Go, run each service as soon as they gain leadership.
 func maintenanceTuning() map[string]any {
 	return map[string]any{
-		"elect_interval_ms":         50,
-		"job_cleaner_interval_ms":   50,
-		"queue_cleaner_interval_ms": 50,
-		"rescuer_interval_ms":       50,
-		"scheduler_interval_ms":     50,
+		"elect_interval_ms":     50,
+		"rescuer_interval_ms":   50,
+		"scheduler_interval_ms": 50,
 	}
 }
 
 func startParams(schema, clientID string, extra map[string]any) map[string]any {
-	params := maintenanceTuning()
-	params["client_id"] = clientID
-	params["max_workers"] = 1
-	params["schema"] = schema
+	params := map[string]any{
+		"client_id":                 clientID,
+		"job_cleaner_interval_ms":   50,
+		"max_workers":               1,
+		"queue_cleaner_interval_ms": 50,
+		"schema":                    schema,
+	}
 	maps.Copy(params, extra)
 	return params
 }
@@ -141,9 +142,8 @@ func TestMaintenanceConformance(t *testing.T) { //nolint:paralleltest // Owns th
 
 	t.Run("QueueNamesAndUnknownQueueControl", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
 		for _, implementation := range implementations {
-			message := implementation.adapter.callError(t, "queue_pause", map[string]any{"name": "maintenance_missing_queue"})
-			require.NotEmpty(t, message, implementation.name)
-			implementation.adapter.callError(t, "queue_resume", map[string]any{"name": "maintenance_missing_queue"})
+			implementation.adapter.requireCallError(t, "queue_pause", map[string]any{"name": "maintenance_missing_queue"}, "not_found")
+			implementation.adapter.requireCallError(t, "queue_resume", map[string]any{"name": "maintenance_missing_queue"}, "not_found")
 			implementation.adapter.call(t, "queue_pause", map[string]any{"name": "*"}, nil)
 			implementation.adapter.call(t, "queue_resume", map[string]any{"name": "*"}, nil)
 
@@ -261,9 +261,9 @@ func verifyCronScheduleGoldens(t *testing.T, repositoryRoot string, adapters ...
 	}
 	for _, expression := range fixture.CronInvalid {
 		for _, adapter := range adapters {
-			adapter.callError(t, "cron_next", map[string]any{
+			adapter.requireCallError(t, "cron_next", map[string]any{
 				"count": 1, "expression": expression, "from": "2026-01-02T03:04:05Z",
-			})
+			}, "rejected")
 		}
 	}
 }
@@ -309,12 +309,12 @@ func verifyJobCleanerRetention(t *testing.T, harness *maintenanceHarness, migrat
 
 	// Completed jobs are retained forever (-1); the other finalized states
 	// expire after one hour.
-	implementation.adapter.call(t, "start", startParams(schema, implementation.name+"-job-cleaner", map[string]any{
+	implementation.adapter.startWithTuning(t, startParams(schema, implementation.name+"-job-cleaner", map[string]any{
 		"cancelled_job_retention_ms": 3_600_000,
 		"completed_job_retention_ms": -1,
 		"discarded_job_retention_ms": 3_600_000,
 		"queue":                      "maintenance_idle",
-	}), nil)
+	}), maintenanceTuning())
 	// Both expired rows are removed by one cleaner statement, so observing
 	// their deletion proves a complete pass ran.
 	harness.waitFor(implementation.name+" job cleaner", 30*time.Second, func() bool {
@@ -335,9 +335,9 @@ func verifyQueueCleaner(t *testing.T, harness *maintenanceHarness, migrator *ada
 	harness.exec("INSERT INTO " + queues + " (name, created_at, metadata, updated_at) VALUES ('stale', now(), '{}', now() - interval '25 hours')")
 	harness.exec("INSERT INTO " + queues + " (name, created_at, metadata, updated_at) VALUES ('recent', now(), '{}', now() - interval '1 hour')")
 
-	implementation.adapter.call(t, "start", startParams(schema, implementation.name+"-queue-cleaner", map[string]any{
+	implementation.adapter.startWithTuning(t, startParams(schema, implementation.name+"-queue-cleaner", map[string]any{
 		"queue": "maintenance_active",
-	}), nil)
+	}), maintenanceTuning())
 	queueExists := func(name string) bool {
 		return harness.queryInt("SELECT count(*) FROM "+queues+" WHERE name = $1", name) == 1
 	}
@@ -371,11 +371,11 @@ func verifyReindexer(t *testing.T, harness *maintenanceHarness, migrator *adapte
 
 	// Indexes are processed in order, so once the last one is rebuilt the
 	// missing index and the one with a leftover artifact were already skipped.
-	implementation.adapter.call(t, "start", startParams(schema, implementation.name+"-reindexer", map[string]any{
+	implementation.adapter.startWithTuning(t, startParams(schema, implementation.name+"-reindexer", map[string]any{
 		"queue":                 "maintenance_idle",
 		"reindexer_index_names": []string{"maint_missing_idx", "maint_artifact_idx", "maint_rebuilt_idx"},
 		"reindexer_interval_ms": 200,
-	}), nil)
+	}), maintenanceTuning())
 	harness.waitFor(implementation.name+" reindex", 30*time.Second, func() bool {
 		return indexFilenode(harness, schema, "maint_rebuilt_idx") != rebuiltFilenode
 	})
@@ -400,11 +400,11 @@ func verifyRescuerFullBatch(t *testing.T, harness *maintenanceHarness, migrator 
 		FROM generate_series(1, 10000)`, jobs))
 	eligible := insertRawJob(harness, schema, "maintenance_unregistered_kind", "running", new(2*time.Hour), nil)
 
-	implementation.adapter.call(t, "start", startParams(schema, implementation.name+"-rescue-batch", map[string]any{
+	implementation.adapter.startWithTuning(t, startParams(schema, implementation.name+"-rescue-batch", map[string]any{
 		"job_timeout_disabled": true,
 		"queue":                "maintenance_idle",
 		"rescue_after_ms":      60_000,
-	}), nil)
+	}), maintenanceTuning())
 	harness.waitFor(implementation.name+" rescue past a full batch", 60*time.Second, func() bool {
 		return harness.queryInt("SELECT count(*) FROM "+jobs+" WHERE id = $1 AND state = 'discarded'", eligible) == 1
 	})
@@ -433,10 +433,10 @@ func verifyRescuerStaleSelection(t *testing.T, harness *maintenanceHarness, migr
 	_, err = tx.Exec(ctx, "SELECT id FROM "+jobs+" WHERE id = ANY($1) FOR UPDATE", []int64{completed, reclaimed})
 	require.NoError(t, err)
 
-	implementation.adapter.call(t, "start", startParams(schema, implementation.name+"-rescue-stale", map[string]any{
+	implementation.adapter.startWithTuning(t, startParams(schema, implementation.name+"-rescue-stale", map[string]any{
 		"queue":           "maintenance_idle",
 		"rescue_after_ms": 60_000,
-	}), nil)
+	}), maintenanceTuning())
 	// Implementations that select without row locks (like Go) block here
 	// until the harness commits; ones that skip locked rows rescue the
 	// eligible job first. Either way the held jobs must end up untouched.
@@ -495,10 +495,10 @@ func verifySameClientIDTermReplacement(t *testing.T, harness *maintenanceHarness
 		return harness.queryInt("SELECT count(*) FROM " + table(schema, "river_job") +
 			" WHERE metadata ->> 'river:periodic_job_id' = 'conformance-periodic'")
 	}
-	implementation.adapter.call(t, "start", startParams(schema, clientID, map[string]any{
+	implementation.adapter.startWithTuning(t, startParams(schema, clientID, map[string]any{
 		"periodic_run_on_start": true,
 		"queue":                 "maintenance_idle",
-	}), nil)
+	}), maintenanceTuning())
 	var first leaseRow
 	harness.waitFor(implementation.name+" first term", 30*time.Second, func() bool {
 		lease, ok := readLease(harness, schema)
@@ -542,9 +542,9 @@ func verifyRenewalUnderSlowMaintenance(t *testing.T, harness *maintenanceHarness
 	_, err = tx.Exec(ctx, "SELECT id FROM "+jobs+" WHERE id = $1 FOR UPDATE", expired)
 	require.NoError(t, err)
 
-	implementation.adapter.call(t, "start", startParams(schema, implementation.name+"-slow-renewal", map[string]any{
+	implementation.adapter.startWithTuning(t, startParams(schema, implementation.name+"-slow-renewal", map[string]any{
 		"queue": "maintenance_idle",
-	}), nil)
+	}), maintenanceTuning())
 	harness.waitFor(implementation.name+" blocked job cleaner", 30*time.Second, func() bool {
 		return harness.lockWaiters(implementation.applicationName) > 0
 	})

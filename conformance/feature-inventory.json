@@ -469,27 +469,33 @@
       "applicability": "protocol_visible",
       "area": "config",
       "detail": "time.Duration",
-      "gap": "No shared job cleaner scenario yet; retention periods are covered only by implementation-local tests.",
       "id": "config.CancelledJobRetentionPeriod",
       "rationale": "The job cleaner deletes cancelled rows after this period; deletion is visible to every implementation sharing the database.",
+      "scenarios": [
+        "maintenance_job_cleaner_retention"
+      ],
       "source": "client.go:river.Config.CancelledJobRetentionPeriod"
     },
     {
       "applicability": "protocol_visible",
       "area": "config",
       "detail": "time.Duration",
-      "gap": "No shared job cleaner scenario yet; retention periods are covered only by implementation-local tests.",
       "id": "config.CompletedJobRetentionPeriod",
       "rationale": "The job cleaner deletes completed rows after this period; deletion is visible to every implementation sharing the database.",
+      "scenarios": [
+        "maintenance_job_cleaner_retention"
+      ],
       "source": "client.go:river.Config.CompletedJobRetentionPeriod"
     },
     {
       "applicability": "protocol_visible",
       "area": "config",
       "detail": "time.Duration",
-      "gap": "No shared job cleaner scenario yet; retention periods are covered only by implementation-local tests.",
       "id": "config.DiscardedJobRetentionPeriod",
       "rationale": "The job cleaner deletes discarded rows after this period; deletion is visible to every implementation sharing the database.",
+      "scenarios": [
+        "maintenance_job_cleaner_retention"
+      ],
       "source": "client.go:river.Config.DiscardedJobRetentionPeriod"
     },
     {
@@ -667,18 +673,22 @@
       "applicability": "protocol_visible",
       "area": "config",
       "detail": "[]string",
-      "gap": "No shared reindexer scenario yet; the schedule and index names are covered only by implementation-local tests.",
       "id": "config.ReindexerIndexNames",
       "rationale": "Determines which River indexes the leader reindexes.",
+      "scenarios": [
+        "maintenance_reindexer_skips_artifacts"
+      ],
       "source": "client.go:river.Config.ReindexerIndexNames"
     },
     {
       "applicability": "protocol_visible",
       "area": "config",
       "detail": "river.PeriodicSchedule",
-      "gap": "No shared reindexer scenario yet; the schedule and index names are covered only by implementation-local tests.",
       "id": "config.ReindexerSchedule",
       "rationale": "Determines when the leader reindexes River indexes (midnight UTC by default).",
+      "scenarios": [
+        "maintenance_reindexer_skips_artifacts"
+      ],
       "source": "client.go:river.Config.ReindexerSchedule"
     },
     {

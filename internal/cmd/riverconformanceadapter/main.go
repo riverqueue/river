@@ -730,10 +730,11 @@ type insertParams struct {
 }
 
 // conformanceBehaviors are the worker behaviors the contract defines.
-var conformanceBehaviors = []string{ //nolint:gochecknoglobals
-	"", "barrier_output", "barrier_wait", "cancel", "cooperative_cancel", "discard", "error",
-	"ignored_cancel", "output", "panic", "resumable", "resumable_cursor", "resumable_duplicate",
-	"sleep", "snooze_once", "snooze_then_cancel", "transactional_complete",
+var conformanceBehaviors = []string{ //nolint:gochecknoglobals // contract enum
+	"", "barrier_output", "barrier_wait", "cancel", "cancel_error", "cancel_panic",
+	"cooperative_cancel", "discard", "error", "ignored_cancel", "output", "panic", "resumable",
+	"resumable_cursor", "resumable_duplicate", "sleep", "snooze_once", "snooze_then_cancel",
+	"transactional_complete",
 }
 
 // rejectRawOnlyFields rejects the fields only raw inserts and single inserts
@@ -3171,12 +3172,18 @@ type workerClientConfig struct {
 // intervals, are accepted by other adapters and ignored here because Go runs
 // each service once as soon as it gains leadership.
 type maintenanceParams struct {
-	CancelledJobRetentionMS *int64   `json:"cancelled_job_retention_ms"`
-	CompletedJobRetentionMS *int64   `json:"completed_job_retention_ms"`
-	DiscardedJobRetentionMS *int64   `json:"discarded_job_retention_ms"`
-	JobTimeoutDisabled      bool     `json:"job_timeout_disabled"`
-	ReindexerIndexNames     []string `json:"reindexer_index_names"`
-	ReindexerIntervalMS     *uint64  `json:"reindexer_interval_ms"`
+	CancelledJobRetentionMS *int64 `json:"cancelled_job_retention_ms"`
+	CompletedJobRetentionMS *int64 `json:"completed_job_retention_ms"`
+	DiscardedJobRetentionMS *int64 `json:"discarded_job_retention_ms"`
+
+	// River Go doesn't expose the cleaners' intervals. The contract lets an
+	// adapter ignore these, so the Go reference accepts and ignores them.
+	JobCleanerIntervalMS   *uint64 `json:"job_cleaner_interval_ms"`
+	QueueCleanerIntervalMS *uint64 `json:"queue_cleaner_interval_ms"`
+
+	JobTimeoutDisabled  bool     `json:"job_timeout_disabled"`
+	ReindexerIndexNames []string `json:"reindexer_index_names"`
+	ReindexerIntervalMS *uint64  `json:"reindexer_interval_ms"`
 }
 
 func (p maintenanceParams) apply(config *river.Config) error {

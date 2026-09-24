@@ -37,6 +37,7 @@
     "cancel",
     "clock_set",
     "connection_count",
+    "cron_next",
     "delete",
     "delete_many",
     "fault_disconnect_application",
