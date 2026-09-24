@@ -25,6 +25,46 @@ use riverqueue_internal::DatabaseConnection;
 /// Queue name that addresses every persisted queue in pause and resume.
 const QUEUE_ALL: &str = "*";
 
+/// Which job operation an extension post-hook follows.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum JobUpdate {
+    Cancel,
+    Retry,
+}
+
+/// Runs the extension's cancel or retry post-hook in the operation's
+/// transaction when it intercepts those operations. An error rolls back the
+/// caller's transaction along with the update.
+pub(crate) async fn after_job_cancel_or_retry(
+    inner: &ClientInner,
+    connection: DatabaseConnection<'_>,
+    row: &JobRow,
+    update: JobUpdate,
+) -> Result<(), Error> {
+    if !inner.pilot.intercepts_job_cancel_retry() {
+        return Ok(());
+    }
+    let params = riverqueue_internal::JobUpdatedParams {
+        database: inner.pilot_database_config(),
+        id: row.id,
+        kind: row.kind.clone(),
+        metadata: row.metadata.clone(),
+        queue: row.queue.clone(),
+        state: row.state.as_str().to_owned(),
+    };
+    let (phase, result) = match update {
+        JobUpdate::Cancel => (
+            "job cancel",
+            inner.pilot.after_job_cancel(connection, &params).await,
+        ),
+        JobUpdate::Retry => (
+            "job retry",
+            inner.pilot.after_job_retry(connection, &params).await,
+        ),
+    };
+    result.map_err(|source| Error::Extension { phase, source })
+}
+
 impl Client {
     /// Completes a running job inside a caller-managed transaction. If this is
     /// called from its worker, the normal completer observes that the row is no
@@ -359,7 +399,7 @@ impl Client {
         {
             let pool = sqlite_pool(self)?;
             let mut transaction = crate::database::begin_sqlite_write(pool).await?;
-            let row = job_retry_sqlite(&mut transaction, id).await?;
+            let row = job_retry_sqlite(self, &mut transaction, id).await?;
             transaction.commit().await?;
             return Ok(row);
         }
@@ -381,7 +421,9 @@ impl Client {
                 job_retry_postgres(self, connection, id).await
             }
             #[cfg(feature = "sqlite")]
-            ExecutorInner::SqliteConnection(connection) => job_retry_sqlite(connection, id).await,
+            ExecutorInner::SqliteConnection(connection) => {
+                job_retry_sqlite(self, connection, id).await
+            }
             #[cfg(feature = "postgres")]
             ExecutorInner::PostgresPool(_) => {
                 unreachable!("transaction_executor rejects pools")
@@ -998,18 +1040,27 @@ async fn job_retry_postgres(
         job_projection("job"),
         job_projection("job")
     );
-    sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+    let row = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
         .bind(id)
         .bind(client.inner.schema.as_deref())
         .bind(crate::NOTIFICATION_TOPIC_INSERT)
-        .fetch_optional(connection)
+        .fetch_optional(&mut *connection)
         .await?
         .ok_or(Error::NotFound)?
-        .into_job_row()
+        .into_job_row()?;
+    after_job_cancel_or_retry(
+        &client.inner,
+        DatabaseConnection::Postgres(connection),
+        &row,
+        JobUpdate::Retry,
+    )
+    .await?;
+    Ok(row)
 }
 
 #[cfg(feature = "sqlite")]
 async fn job_retry_sqlite(
+    client: &Client,
     connection: &mut sqlx::SqliteConnection,
     id: i64,
 ) -> Result<JobRow, Error> {
@@ -1037,6 +1088,13 @@ async fn job_retry_sqlite(
         .await
         .map_err(database_error)?;
     }
+    after_job_cancel_or_retry(
+        &client.inner,
+        DatabaseConnection::Sqlite(connection),
+        &row,
+        JobUpdate::Retry,
+    )
+    .await?;
     Ok(row)
 }
 

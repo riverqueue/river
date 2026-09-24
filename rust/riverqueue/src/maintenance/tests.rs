@@ -19,7 +19,9 @@ use sqlx::{AssertSqlSafe, PgPool, postgres::PgPoolOptions};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use riverqueue_internal::{DatabaseConnection, Pilot, PilotError, RescueAction, RescueManyParams};
+use riverqueue_internal::{
+    DatabaseConnection, JobUpdatedParams, Pilot, PilotError, RescueAction, RescueManyParams,
+};
 use riverqueue_migrate::PostgresMigrator;
 
 use super::{
@@ -29,8 +31,8 @@ use super::{
     rescuer, scheduler,
 };
 use crate::{
-    Client, Job, JobArgs, MaintenanceConfig, QueueConfig, SchemaName, UniqueOpts, WorkContext,
-    WorkOutcome, Worker, WorkerRegistry, WorkerTimeout,
+    Client, Job, JobArgs, JobState, MaintenanceConfig, QueueConfig, SchemaName, UniqueOpts,
+    WorkContext, WorkOutcome, Worker, WorkerRegistry, WorkerTimeout,
     database::{PostgresDatabase, PostgresReindexConfig},
 };
 
@@ -656,6 +658,88 @@ async fn elector_loses_leadership_when_same_id_term_is_replaced() {
 
     cancel.cancel();
     run.await.unwrap();
+    database.cleanup().await;
+}
+
+#[derive(Clone, Default)]
+struct HookPilot {
+    cancels: Arc<std::sync::Mutex<Vec<(i64, String)>>>,
+    retries: Arc<std::sync::Mutex<Vec<(i64, String)>>>,
+    fail: bool,
+}
+
+#[async_trait]
+impl Pilot for HookPilot {
+    fn intercepts_job_cancel_retry(&self) -> bool {
+        true
+    }
+
+    async fn after_job_cancel(
+        &self,
+        _connection: DatabaseConnection<'_>,
+        job: &JobUpdatedParams,
+    ) -> Result<(), PilotError> {
+        self.cancels
+            .lock()
+            .unwrap()
+            .push((job.id, job.state.clone()));
+        if self.fail {
+            return Err(std::io::Error::other("cancel hook failed").into());
+        }
+        Ok(())
+    }
+
+    async fn after_job_retry(
+        &self,
+        _connection: DatabaseConnection<'_>,
+        job: &JobUpdatedParams,
+    ) -> Result<(), PilotError> {
+        self.retries
+            .lock()
+            .unwrap()
+            .push((job.id, job.state.clone()));
+        if self.fail {
+            return Err(std::io::Error::other("retry hook failed").into());
+        }
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_and_retry_post_hooks_share_the_transaction() {
+    let database = TestDatabase::new("rmt_cancel_retry").await;
+    let pilot = HookPilot::default();
+    let client = database.client().pilot(pilot.clone()).build().unwrap();
+    let id = database.insert_job(RawJob::default()).await;
+
+    let cancelled = client.job_cancel(id).await.unwrap();
+    assert_eq!(cancelled.state, JobState::Cancelled);
+    assert_eq!(
+        *pilot.cancels.lock().unwrap(),
+        [(id, "cancelled".to_owned())]
+    );
+    let retried = client.job_retry(id).await.unwrap();
+    assert_eq!(retried.state, JobState::Available);
+    assert_eq!(
+        *pilot.retries.lock().unwrap(),
+        [(id, "available".to_owned())]
+    );
+
+    // A failing hook rolls back the operation it follows.
+    let failing = database
+        .client()
+        .pilot(HookPilot {
+            fail: true,
+            ..HookPilot::default()
+        })
+        .build()
+        .unwrap();
+    assert!(failing.job_cancel(id).await.is_err());
+    assert_eq!(database.state(id).await.as_deref(), Some("available"));
+    let mut transaction = database.pool.begin().await.unwrap();
+    assert!(client.job_cancel_tx(&mut transaction, id).await.is_ok());
+    transaction.rollback().await.unwrap();
+    assert_eq!(database.state(id).await.as_deref(), Some("available"));
     database.cleanup().await;
 }
 
