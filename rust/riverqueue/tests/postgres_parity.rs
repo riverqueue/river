@@ -309,3 +309,121 @@ async fn extension_notify_many_is_transactional() {
     drop(listener);
     database.cleanup().await;
 }
+
+#[tokio::test]
+async fn rescue_after_defaults_and_validation_match_go() {
+    use riverqueue::MaintenanceConfig;
+
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_lazy("postgres://localhost/unused")
+        .unwrap();
+    // Like Go's `RescueStuckJobsAfter`, a rescue age shorter than the job
+    // timeout is rejected, while an equal one is accepted.
+    let error = Client::builder(pool.clone())
+        .job_timeout(Some(Duration::from_mins(5)))
+        .maintenance(MaintenanceConfig::default().with_rescue_after(Duration::from_mins(4)))
+        .build()
+        .unwrap_err();
+    assert!(error.to_string().contains("rescue after"), "{error}");
+    Client::builder(pool.clone())
+        .job_timeout(Some(Duration::from_mins(5)))
+        .maintenance(MaintenanceConfig::default().with_rescue_after(Duration::from_mins(5)))
+        .build()
+        .unwrap();
+    assert_eq!(MaintenanceConfig::default().rescue_after(), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn leader_renews_while_maintenance_is_blocked() {
+    use riverqueue::MaintenanceConfig;
+
+    let database = PostgresSchema::new("rpp_slow_maintenance").await;
+    let expired = insert_raw_job(&database, "completed", Some(48 * 3_600)).await;
+
+    // Hold the expired row so the job cleaner's delete blocks on it.
+    let mut blocker = database.pool.begin().await.unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT id FROM {} WHERE id = $1 FOR UPDATE",
+        database.table("river_job")
+    )))
+    .bind(expired)
+    .execute(&mut *blocker)
+    .await
+    .unwrap();
+
+    let client = Client::builder(
+        PostgresDatabase::new(database.pool.clone()).schema(database.schema.clone()),
+    )
+    .maintenance(
+        MaintenanceConfig::default()
+            .with_elect_interval(Duration::from_millis(50))
+            .with_job_cleaner_interval(Duration::from_millis(50)),
+    )
+    .queue("default", QueueConfig::new(1))
+    .workers(noop_workers())
+    .build()
+    .unwrap();
+    let handle = client.start().unwrap();
+
+    let blocked_deletes = || {
+        let pool = database.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM pg_stat_activity \
+                 WHERE datname = current_database() AND wait_event_type = 'Lock' \
+                   AND query LIKE 'DELETE FROM%river_job%'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let lease = || {
+        let pool = database.pool.clone();
+        let table = database.table("river_leader");
+        async move {
+            sqlx::query_as::<_, (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
+                sqlx::AssertSqlSafe(format!("SELECT elected_at, expires_at FROM {table}")),
+            )
+            .fetch_optional(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while blocked_deletes().await == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the job cleaner should block on the locked row");
+
+    // The lease keeps being renewed within the same term while maintenance is
+    // stuck, rather than waiting for the blocked service.
+    let (elected_at, mut expires_at) = lease().await.unwrap();
+    for _ in 0..3 {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let (current_elected_at, current_expires_at) = lease().await.unwrap();
+                assert_eq!(current_elected_at, elected_at);
+                if current_expires_at > expires_at {
+                    expires_at = current_expires_at;
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the leader should renew while maintenance is blocked");
+    }
+    assert!(blocked_deletes().await > 0);
+
+    // Shutdown cancels the blocked statement server-side instead of waiting.
+    tokio::time::timeout(Duration::from_secs(10), handle.shutdown())
+        .await
+        .expect("shutdown should cancel blocked maintenance")
+        .unwrap();
+    assert_eq!(blocked_deletes().await, 0);
+    blocker.rollback().await.unwrap();
+    database.cleanup().await;
+}
