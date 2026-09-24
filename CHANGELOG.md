@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fixed SQLite job list pagination skipping or repeating jobs by formatting cursor timestamps consistently with stored timestamps. [PR #1374](https://github.com/riverqueue/river/pull/1374).
 - Improved PostgreSQL job listing performance when filtering by one finalized state (`completed`, `cancelled`, or `discarded`) and sorting by finalized time, including in River UI. [PR #1374](https://github.com/riverqueue/river/pull/1374).
+- Fixed `JobList` pagination skipping or repeating jobs when ordering by `JobListOrderByTime` with multiple states. Cursors now use the same time field as the list's ordering (the one for the first listed state) rather than the one for each job's own state. Jobs where that field is null, like `finalized_at` for unfinalized jobs, are paginated correctly and consistently sort last in ascending order and first in descending order on all drivers. Ordering by `JobListOrderByTime` with an empty `States()` filter now uses `scheduled_at` instead of returning an error. [PR #1384](https://github.com/riverqueue/river/pull/1384).
 - Fixed `JobRescuer` overwriting jobs that complete, leave the running state, or are claimed again by another worker after being fetched for rescue, preserving their state, errors, metadata, and timestamps across PostgreSQL and SQLite drivers. Fixes [#1302](https://github.com/riverqueue/river/issues/1302). [PR #1373](https://github.com/riverqueue/river/pull/1373).
 
 ## [0.47.0] - 2026-09-01

@@ -19,8 +19,21 @@ const (
 	SortOrderDesc
 )
 
+// NullsOrder specifies where null values sort relative to non-null values.
+// When unspecified, the database's default is used, which differs between
+// Postgres (nulls are larger than any other value) and SQLite (nulls are
+// smaller than any other value).
+type NullsOrder int
+
+const (
+	NullsOrderUnspecified NullsOrder = iota
+	NullsOrderFirst
+	NullsOrderLast
+)
+
 type JobListOrderBy struct {
 	Expr  string
+	Nulls NullsOrder
 	Order SortOrder
 }
 
@@ -67,6 +80,7 @@ func JobMakeDriverParams(ctx context.Context, params *JobListParams, sqlFragment
 	for i, o := range params.OrderBy {
 		orderBy[i] = JobListOrderBy{
 			Expr:  o.Expr,
+			Nulls: o.Nulls,
 			Order: o.Order,
 		}
 	}
@@ -213,6 +227,13 @@ func JobMakeDriverParams(ctx context.Context, params *JobListParams, sqlFragment
 			orderByBuilder.WriteString(" DESC")
 		case SortOrderUnspecified:
 			return nil, errors.New("should not have gotten SortOrderUnspecified by this point before executing list (bug?)")
+		}
+		switch orderBy.Nulls {
+		case NullsOrderFirst:
+			orderByBuilder.WriteString(" NULLS FIRST")
+		case NullsOrderLast:
+			orderByBuilder.WriteString(" NULLS LAST")
+		case NullsOrderUnspecified:
 		}
 		if i < len(params.OrderBy)-1 {
 			orderByBuilder.WriteString(", ")
