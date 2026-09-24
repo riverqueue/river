@@ -1,16 +1,17 @@
 //! Leader-owned periodic job scheduling.
 
+mod cron;
+
+pub use self::cron::{CronSchedule, CronScheduleParseError, CronTimeZone};
+
 use std::{
     collections::{HashMap, HashSet},
     fmt,
-    str::FromStr,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::Duration,
 };
 
 use chrono::{DateTime, Utc};
-use cron::Schedule;
-use thiserror::Error as ThisError;
 use tokio::sync::Notify;
 
 use crate::{Client, Error, InsertOpts, JobArgs};
@@ -49,53 +50,6 @@ impl PeriodicSchedule for IntervalSchedule {
         chrono::Duration::from_std(self.0)
             .ok()
             .and_then(|interval| current.checked_add_signed(interval))
-    }
-}
-
-/// A cron-expression periodic schedule interpreted in UTC.
-#[derive(Clone, Debug)]
-pub struct CronSchedule(Schedule);
-
-impl CronSchedule {
-    /// Parses a cron expression using the `cron` crate's seconds-aware syntax.
-    pub fn parse(expression: &str) -> Result<Self, CronScheduleParseError> {
-        expression.parse()
-    }
-}
-
-impl FromStr for CronSchedule {
-    type Err = CronScheduleParseError;
-
-    fn from_str(expression: &str) -> Result<Self, Self::Err> {
-        Schedule::from_str(expression)
-            .map(Self)
-            .map_err(CronScheduleParseError::new)
-    }
-}
-
-impl fmt::Display for CronSchedule {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
-    }
-}
-
-impl PeriodicSchedule for CronSchedule {
-    fn next(&self, current: DateTime<Utc>) -> Option<DateTime<Utc>> {
-        self.0.after(&current).next()
-    }
-}
-
-/// Error returned when parsing a [`CronSchedule`].
-#[derive(Debug, ThisError)]
-#[error("invalid periodic cron expression")]
-pub struct CronScheduleParseError {
-    #[source]
-    source: cron::error::Error,
-}
-
-impl CronScheduleParseError {
-    fn new(source: cron::error::Error) -> Self {
-        Self { source }
     }
 }
 

@@ -23,7 +23,6 @@ version = "0.47.0-alpha.1"
 async-trait = "0.1.92"
 base64 = "0.22.1"
 chrono = { version = "0.4.45", features = ["serde"] }
-cron = "0.17.0"
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 proc-macro2 = "1.0.107"
 quote = "1.0.47"

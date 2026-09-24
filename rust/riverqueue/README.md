@@ -134,7 +134,10 @@ have no global completion order.
   states. The derive macro follows Serde's serialization names. Missing optional
   fields are omitted to match River Go.
 - Periodic jobs are leader-owned and can be configured statically or at
-  runtime. Stable IDs prevent duplicate registration.
+  runtime. Stable IDs prevent duplicate registration. `CronSchedule` accepts
+  River Go's standard five-field cron syntax and descriptors such as `@hourly`
+  and `@every 90s` with identical semantics, evaluated in the process's local
+  time zone like Go unless another `CronTimeZone` is chosen.
 - Resumable steps persist the last completed step and optional cursor. Use the
   transactional checkpoint helpers when progress and business data must commit
   together.
