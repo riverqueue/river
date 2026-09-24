@@ -841,6 +841,7 @@ impl RawInsertResult {
 }
 
 /// Complete persisted job fields for exact-version record conversion.
+#[derive(Debug)]
 pub struct JobRowParts {
     pub id: i64,
     pub attempt: i16,

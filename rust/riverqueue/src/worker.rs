@@ -418,6 +418,17 @@ impl WorkContext {
     }
 }
 
+impl std::fmt::Debug for WorkContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WorkContext")
+            .field("job_id", &self.job_id)
+            .field("cancelled", &self.cancellation.is_cancelled())
+            .field("metadata_updates", &*self.lock_metadata())
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug)]
 struct ResumableState {
     all_step_names: HashSet<String>,
@@ -1235,6 +1246,19 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone()
+        );
+    }
+
+    #[test]
+    fn work_context_debug_shows_attempt_state() {
+        let cancellation = CancellationToken::new();
+        let context = WorkContext::new(cancellation.clone());
+        context.metadata_set("attempts", 3).unwrap();
+        cancellation.cancel();
+
+        assert_eq!(
+            format!("{context:?}"),
+            r#"WorkContext { job_id: None, cancelled: true, metadata_updates: {"attempts": Number(3)}, .. }"#
         );
     }
 
