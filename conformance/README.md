@@ -110,6 +110,19 @@ RIVER_CONFORMANCE_MULTI_ENGINE_SOAK_DURATION=10m \
   make test/conformance/multi-engine/soak
 ```
 
+Some scenarios simulate what cannot be forced quickly. Leader death and
+cross-engine rescue kill a real adapter process and then expire its lease
+with `fault_expire_leader`, standing in for the lease TTL running out. The
+rolling deployment scenario replaces each engine's process in turn while both
+implementations keep inserting and working; "version skew" here means
+independently built and restarted implementations at the same protocol
+revision and migration line, not different protocol revisions, which the
+handshake rejects. Skew between released versions is exercised when an
+implementation maintained in another repository runs the suite against a
+pinned River revision. Stuck-job detection asserts only that the runtime reports the
+job stuck; what happens to the stuck attempt afterwards is
+implementation-specific.
+
 The worker and mixed release benchmarks use the same deterministic 10 ms
 timed worker in both languages. Mixed mode provisions enough worker slots to
 keep p95 focused on insertion-to-execution latency rather than incidental
