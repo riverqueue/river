@@ -7,13 +7,20 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
+// conformanceTestsStarted counts conformance tests that began executing so a
+// required run can detect a -run pattern that matched nothing.
+var conformanceTestsStarted atomic.Int32 //nolint:gochecknoglobals // shared with TestMain
+
 func TestCompatibilityArtifacts(t *testing.T) {
 	t.Parallel()
+
+	conformanceTestsStarted.Add(1)
 
 	root := compatibilityRepositoryRoot(t)
 	readJSON := func(t *testing.T, path string, target any) {

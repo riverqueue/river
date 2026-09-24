@@ -1,5 +1,3 @@
-//go:build riverconformance
-
 package harness_test
 
 import (
@@ -29,7 +27,9 @@ func decodeAdapterResult(encoded []byte, result any) error {
 func TestDecodeAdapterResult(t *testing.T) {
 	t.Parallel()
 
-	var job normalizedJob
+	var job struct {
+		Metadata map[string]any `json:"metadata"`
+	}
 	require.NoError(t, decodeAdapterResult([]byte(`{"metadata":{"output":1,"nested":{"stale":true}}}`), &job))
 	require.NoError(t, decodeAdapterResult([]byte(`{"metadata":{"nested":{"current":true}}}`), &job))
 	require.Equal(t, map[string]any{"nested": map[string]any{"current": true}}, job.Metadata)

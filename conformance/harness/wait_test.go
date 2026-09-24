@@ -18,29 +18,6 @@ func normalizedJobIDs(jobs []normalizedJob) []int64 {
 	return ids
 }
 
-func waitForQueuePaused(t *testing.T, observer *adapter, name string, paused bool, queue *normalizedQueue) {
-	t.Helper()
-
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		observer.call(t, "queue_get", map[string]any{"name": name}, queue)
-		if (queue.PausedAt != nil) == paused {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("%s did not observe queue %s paused=%t", observer.name, name, paused)
-}
-
-type runtimeStats struct {
-	ErrorHandlerCalls   int      `json:"error_handler_calls"`
-	Events              []string `json:"events"`
-	PeriodicStarts      int      `json:"periodic_starts"`
-	ResumableFirstRuns  int      `json:"resumable_first_runs"`
-	ResumableSecondRuns int      `json:"resumable_second_runs"`
-	Trace               []string `json:"trace"`
-}
-
 func waitForListedJob(t *testing.T, adapter *adapter, params map[string]any) normalizedJob {
 	t.Helper()
 
@@ -62,7 +39,15 @@ func waitForListedJob(t *testing.T, adapter *adapter, params map[string]any) nor
 func waitForListedJobCount(t *testing.T, adapter *adapter, params map[string]any, count int) []normalizedJob {
 	t.Helper()
 
-	deadline := time.Now().Add(5 * time.Second)
+	return waitForListedJobCountWithin(t, adapter, params, count, 5*time.Second)
+}
+
+// waitForListedJobCountWithin polls a job list until it contains exactly
+// count jobs or the timeout elapses.
+func waitForListedJobCountWithin(t *testing.T, adapter *adapter, params map[string]any, count int, timeout time.Duration) []normalizedJob {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		var result struct {
 			Jobs []normalizedJob `json:"jobs"`
