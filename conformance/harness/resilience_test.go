@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -50,9 +51,10 @@ func TestResilienceConformance(t *testing.T) { //nolint:paralleltest // Owns the
 	candidateProxy := startFaultProxy(ctx, t, databaseURL)
 	workers := []resilienceWorker{
 		{
-			adapter: startReferenceAdapter(t, repositoryRoot, goProxy.url, "go-proxied"),
-			name:    "go",
-			proxy:   goProxy,
+			adapter:   startReferenceAdapter(t, repositoryRoot, goProxy.url, "go-proxied"),
+			name:      "go",
+			proxy:     goProxy,
+			reference: true,
 		},
 		{
 			adapter: startCandidateAdapter(t, repositoryRoot, candidateProxy.url, candidateSpec.Implementation, candidateSpec, candidateSpec.Command),
@@ -210,40 +212,173 @@ func TestResilienceConformance(t *testing.T) { //nolint:paralleltest // Owns the
 		scenarios.pass("hard_shutdown_soft_stop_classification", "shutdown_after_cancel_attempt")
 	})
 
+	// A claimed row that an implementation can't decode must not strand the
+	// rows claimed with it. Like River Go, an implementation fails the
+	// undecodable row's attempt without working it: the error handler sees the
+	// partially decoded row, the attempt error starts with
+	// `job row couldn't be decoded: `, the job is retried with the client's
+	// retry policy or discarded at its maximum attempts, and the undecodable
+	// value is left as it was. Array metadata is valid for Go but can't be
+	// decoded by every implementation, so each implementation either works
+	// such a row or fails it this way.
 	t.Run("ClaimedRowDecodeIsolation", func(t *testing.T) { //nolint:paralleltest // Shares the conformance database.
+		const retryDelay = time.Hour
+		setArrayMetadata := func(t *testing.T, id int64) {
+			t.Helper()
+			execSQL(ctx, t, database, `UPDATE river_job SET metadata = '[1]'::jsonb
+				WHERE id = `+strconv.FormatInt(id, 10))
+		}
+
 		for _, worker := range workers {
 			reference.call(t, "reset", map[string]any{}, nil)
-			var ordinary, sparseErrors, oddMetadata normalizedJob
+			var ordinary, sparseErrors, oddErrors, retried, discarded normalizedJob
 			reference.call(t, "insert", map[string]any{"message": "ordinary"}, &ordinary)
 			reference.call(t, "insert", map[string]any{"message": "sparse errors"}, &sparseErrors)
-			reference.call(t, "insert", map[string]any{
-				"message": "array metadata", "opts": map[string]any{"max_attempts": 1},
-			}, &oddMetadata)
 			// Go decodes attempt errors with encoding/json, which tolerates
-			// missing and unknown fields. Array metadata is valid for Go but
-			// cannot be decoded by every implementation.
+			// missing and unknown fields.
 			execSQL(ctx, t, database, `UPDATE river_job
 				SET errors = ARRAY['{"error": "sparse", "extra": true}'::jsonb]
 				WHERE id = `+strconv.FormatInt(sparseErrors.ID, 10))
-			execSQL(ctx, t, database, `UPDATE river_job SET metadata = '[1]'::jsonb
-				WHERE id = `+strconv.FormatInt(oddMetadata.ID, 10))
-
-			worker.adapter.call(t, "start", map[string]any{"client_id": worker.name + "-decode"}, nil)
-			for _, id := range []int64{ordinary.ID, sparseErrors.ID} {
-				waitForReferenceCompleted(t, reference, id, 30*time.Second)
+			decodable := []int64{ordinary.ID, sparseErrors.ID}
+			// Attempt errors in a shape River doesn't write decode leniently.
+			// The Go reference joins once upstream River decodes them this
+			// way; until then it fails the whole fetch on such a row.
+			const oddErrorsSQL = `ARRAY['{"at": "2024-01-02 03:04:05+00", "attempt": "1", "error": {"message": "boom"}, "trace": ["frame"]}'::jsonb, '42'::jsonb]`
+			if !worker.reference {
+				reference.call(t, "insert", map[string]any{"message": "odd errors"}, &oddErrors)
+				execSQL(ctx, t, database, `UPDATE river_job SET errors = `+oddErrorsSQL+`
+					WHERE id = `+strconv.FormatInt(oddErrors.ID, 10))
+				decodable = append(decodable, oddErrors.ID)
 			}
-			// Whatever an implementation makes of the odd row, it must not
-			// strand it (or the rows claimed with it) as running.
-			pollUntil(t, 30*time.Second, worker.name+" finalizing the odd row", func() bool {
-				var state string
+			reference.call(t, "insert", map[string]any{"message": "array metadata retried"}, &retried)
+			reference.call(t, "insert", map[string]any{
+				"message": "array metadata discarded", "opts": map[string]any{"max_attempts": 1},
+			}, &discarded)
+			setArrayMetadata(t, retried.ID)
+			setArrayMetadata(t, discarded.ID)
+
+			worker.adapter.call(t, "start", map[string]any{
+				"client_id":      worker.name + "-decode",
+				"retry_delay_ms": retryDelay.Milliseconds(),
+			}, nil)
+			// Poll through SQL, since the reference can't yet read the row with
+			// odd attempt errors.
+			for _, id := range decodable {
+				var (
+					attempt int
+					state   string
+				)
+				pollUntil(t, 30*time.Second, worker.name+" completing a decodable row", func() bool {
+					require.NoError(t, database.QueryRow(ctx,
+						"SELECT state::text, attempt FROM river_job WHERE id = $1", id).Scan(&state, &attempt))
+					return state == "completed"
+				})
+				require.Equal(t, 1, attempt, "%s job %d", worker.name, id)
+			}
+			if !worker.reference {
+				var worked normalizedJob
+				worker.adapter.call(t, "get", map[string]any{"id": oddErrors.ID}, &worked)
+				require.Equal(t, []normalizedAttemptError{
+					{At: "2024-01-02T03:04:05Z", Attempt: 1, Error: `{"message":"boom"}`, Trace: `["frame"]`},
+					{At: "0001-01-01T00:00:00Z", Error: "42"},
+				}, worked.Errors, worker.name)
+				var errorsText string
 				require.NoError(t, database.QueryRow(ctx,
-					"SELECT state::text FROM river_job WHERE id = $1", oddMetadata.ID).Scan(&state))
-				return state == "completed" || state == "discarded"
+					"SELECT errors::text FROM river_job WHERE id = $1", oddErrors.ID).Scan(&errorsText))
+				var expectedText string
+				require.NoError(t, database.QueryRow(ctx, "SELECT ("+oddErrorsSQL+")::text").Scan(&expectedText))
+				require.Equal(t, expectedText, errorsText, "%s rewrote attempt errors it only read", worker.name)
+			}
+			failed := 0
+			for _, row := range []struct {
+				failedState string
+				id          int64
+			}{
+				{failedState: "retryable", id: retried.ID},
+				{failedState: "discarded", id: discarded.ID},
+			} {
+				if requireUndecodableRowOutcome(ctx, t, database, worker.name, row.id, row.failedState) {
+					failed++
+				}
+			}
+			stats := waitForRuntimeStats(t, worker.adapter, func(stats runtimeStats) bool {
+				return countRuntimeEvent(stats, "job_completed") == len(decodable)+2-failed &&
+					countRuntimeEvent(stats, "job_failed") == failed
+			})
+			require.Zero(t, stats.ErrorHandlerCalls, worker.name)
+			worker.adapter.call(t, "stop", map[string]any{}, nil)
+
+			// The error handler sees an undecodable row's failed attempt, and
+			// its decision applies to it.
+			var handled, afterHandled normalizedJob
+			reference.call(t, "insert", map[string]any{"message": "array metadata handled"}, &handled)
+			setArrayMetadata(t, handled.ID)
+			reference.call(t, "insert", map[string]any{"message": "ordinary after handler"}, &afterHandled)
+			worker.adapter.call(t, "start", map[string]any{
+				"client_id":            worker.name + "-decode-handler",
+				"error_handler_cancel": true,
+			}, nil)
+			waitForReferenceCompleted(t, reference, afterHandled.ID, 30*time.Second)
+			handlerCalls := 0
+			if requireUndecodableRowOutcome(ctx, t, database, worker.name, handled.ID, "cancelled") {
+				handlerCalls = 1
+			}
+			waitForRuntimeStats(t, worker.adapter, func(stats runtimeStats) bool {
+				return stats.ErrorHandlerCalls == handlerCalls
 			})
 			worker.adapter.call(t, "stop", map[string]any{}, nil)
 		}
 		scenarios.pass("claimed_row_decode_isolation")
 	})
+}
+
+// requireUndecodableRowOutcome waits for a worker to finish with a claimed row
+// whose metadata is a JSON array, then checks the outcome through SQL, since
+// not every implementation can read the row back. An implementation that can
+// decode the row completes it. One that can't fails the attempt the way River
+// Go fails an undecodable row, reaching failedState, and reports true. Either
+// way, the metadata is left as it was.
+func requireUndecodableRowOutcome(ctx context.Context, t *testing.T, database *pgx.Conn, workerName string, id int64, failedState string) bool {
+	t.Helper()
+
+	var (
+		attempt, errorCount    int
+		lastError, lastAttempt *string
+		metadata, state        string
+		retryLater, finalized  bool
+	)
+	pollUntil(t, 30*time.Second, workerName+" finishing a row it may not decode", func() bool {
+		require.NoError(t, database.QueryRow(ctx, `SELECT state::text, attempt,
+				coalesce(array_length(errors, 1), 0),
+				errors[array_length(errors, 1)] ->> 'error',
+				errors[array_length(errors, 1)] ->> 'attempt',
+				metadata::text, scheduled_at > now() + interval '30 minutes',
+				finalized_at IS NOT NULL
+			FROM river_job WHERE id = $1`, id).Scan(
+			&state, &attempt, &errorCount, &lastError, &lastAttempt,
+			&metadata, &retryLater, &finalized))
+		return state != "available" && state != "running"
+	})
+	require.Equal(t, 1, attempt, "%s job %d", workerName, id)
+	require.Equal(t, "[1]", metadata, "%s rewrote metadata it couldn't decode", workerName)
+	if state == "completed" {
+		require.Zero(t, errorCount, "%s job %d", workerName, id)
+		return false
+	}
+
+	require.Equal(t, failedState, state, "%s job %d", workerName, id)
+	require.Equal(t, 1, errorCount, "%s job %d", workerName, id)
+	require.NotNil(t, lastError, "%s job %d", workerName, id)
+	require.True(t, strings.HasPrefix(*lastError, "job row couldn't be decoded: "),
+		"%s job %d attempt error: %s", workerName, id, *lastError)
+	require.Equal(t, "1", *lastAttempt, "%s job %d", workerName, id)
+	switch failedState {
+	case "retryable":
+		require.True(t, retryLater, "%s job %d wasn't retried with the client retry policy", workerName, id)
+	case "cancelled", "discarded":
+		require.True(t, finalized, "%s job %d", workerName, id)
+	}
+	return true
 }
 
 // TestResilienceSQLiteConformance checks SQLite behavior under a foreign
@@ -322,9 +457,10 @@ func TestResilienceSQLiteConformance(t *testing.T) { //nolint:tparallel // Subte
 }
 
 type resilienceWorker struct {
-	adapter *adapter
-	name    string
-	proxy   *faultProxy
+	adapter   *adapter
+	name      string
+	proxy     *faultProxy
+	reference bool
 }
 
 // faultProxy forwards TCP connections to PostgreSQL and can make the database
