@@ -26,10 +26,14 @@ fails a run in which no conformance test executed.
 
 An implementation may claim compatibility only when its protocol revision and
 capabilities match this manifest and its implementation-local and mixed adapter
-suites pass.
+suites pass. A capability that is not `complete` must record why in
+`capability_decisions`; `postgres-full-v1` adapters advertise exactly the
+complete capabilities.
 
 The mixed harness is candidate-neutral. It always runs Go as the reference and
-uses the checked Rust descriptor by default. `RIVER_CONFORMANCE_CANDIDATE_FILE`
+uses the checked Rust descriptor by default. Nothing in the harness names a
+candidate language: thresholds, supported profiles, optional start tuning,
+and build steps come from the candidate's descriptor. `RIVER_CONFORMANCE_CANDIDATE_FILE`
 can point it at a descriptor supplied by another repository, while
 `RIVER_CONFORMANCE_CANDIDATE` accepts the same object inline. See
 [`adapter/README.md`](adapter/README.md) for the candidate descriptor. This is
@@ -74,36 +78,37 @@ RIVER_CONFORMANCE_DATABASE_URL=postgres://localhost/river_conformance \
 RIVER_CONFORMANCE_SOAK_DURATION=10m make test/conformance/soak
 ```
 
-Direct three-engine tiers start Go, Rust, and JavaScript simultaneously against
-one PostgreSQL database. Supply JavaScript as the ordinary candidate; Rust is
-the default peer descriptor. The smoke tier deterministically fills one blocked
-worker slot in every engine, forces leadership through all three runtimes,
-terminates each engine's database connections, directly exercises JavaScript
-to Rust and Rust to JavaScript notification/work/cancellation, kills each of
-those worker processes in turn, and verifies that the other engine assumes
-leadership and rescues the abandoned attempt. It also checks recovery and
-connection bounds:
+Direct multi-engine tiers start the Go reference and every configured
+candidate simultaneously against one PostgreSQL database. The ordinary
+candidate descriptor is joined by one or more peer descriptors from
+`RIVER_CONFORMANCE_PEER` (an inline descriptor object or array) or
+`RIVER_CONFORMANCE_PEER_FILE` (descriptor paths separated by the platform's
+path-list separator); the checked Rust descriptor is the default peer. At
+least two distinct candidates are required so the tier cannot degrade into a
+duplicated pairwise test. The smoke tier fills one blocked worker slot in
+every engine, moves leadership through every runtime, terminates each
+engine's database connections, runs work, notification, and cancellation
+directly between every ordered pair of candidates, and kills each candidate
+in turn so a different implementation assumes leadership and rescues the
+abandoned attempt. `TestMultiEngineSQLiteConformance` runs the SQLite
+storage and runtime checks between every pair of candidates without the
+reference:
 
 ```sh
 RIVER_CONFORMANCE_DATABASE_URL=postgres://localhost/river_conformance \
-RIVER_CONFORMANCE_CANDIDATE='{...javascript descriptor...}' \
-  make test/conformance/three-engine
+RIVER_CONFORMANCE_CANDIDATE_FILE=/path/to/javascript.json \
+  make test/conformance/multi-engine
 
 RIVER_CONFORMANCE_DATABASE_URL=postgres://localhost/river_conformance \
-RIVER_CONFORMANCE_CANDIDATE='{...javascript descriptor...}' \
-RIVER_CONFORMANCE_THREE_ENGINE_PERFORMANCE=1 \
-  make test/conformance/three-engine/performance
+RIVER_CONFORMANCE_CANDIDATE_FILE=/path/to/javascript.json \
+RIVER_CONFORMANCE_MULTI_ENGINE_PERFORMANCE=1 \
+  make test/conformance/multi-engine/performance
 
 RIVER_CONFORMANCE_DATABASE_URL=postgres://localhost/river_conformance \
-RIVER_CONFORMANCE_CANDIDATE='{...javascript descriptor...}' \
-RIVER_CONFORMANCE_THREE_ENGINE_SOAK_DURATION=10m \
-  make test/conformance/three-engine/soak
+RIVER_CONFORMANCE_CANDIDATE_FILE=/path/to/javascript.json \
+RIVER_CONFORMANCE_MULTI_ENGINE_SOAK_DURATION=10m \
+  make test/conformance/multi-engine/soak
 ```
-
-`RIVER_CONFORMANCE_PEER` and `RIVER_CONFORMANCE_PEER_FILE` can replace the
-default Rust peer with another descriptor. The tier still requires exactly one
-Go, Rust, and JavaScript implementation so it cannot accidentally degrade into
-a duplicated pairwise test.
 
 The worker and mixed release benchmarks use the same deterministic 10 ms
 timed worker in both languages. Mixed mode provisions enough worker slots to

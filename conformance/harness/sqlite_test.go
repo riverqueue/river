@@ -22,10 +22,9 @@ func TestMixedSQLiteConformance(t *testing.T) {
 	scenarios := newScenarioTracker(t, scenarioOwnerSQLiteStorage)
 	repositoryRoot := repoRoot(t)
 	databaseURL := filepath.Join(t.TempDir(), "river-conformance.sqlite")
-	goAdapter := startAdapterForBackend(
-		t, repositoryRoot, databaseURL, "sqlite", "go", "go", "run", "./internal/cmd/riverconformanceadapter",
-	)
+	goAdapter := startReferenceAdapterForProfile(t, repositoryRoot, databaseURL, "sqlite", "", "go")
 	candidateSpec := conformanceCandidateSpec(t, repositoryRoot, false)
+	candidateSpec.requireProfile(t, profilePortableStorage)
 	candidateAdapter := startAdapterCommandForBackend(
 		t, repositoryRoot, databaseURL, "sqlite", candidateSpec.Implementation, candidateSpec.Command,
 	)
@@ -94,11 +93,9 @@ func TestMixedSQLiteRuntimeConformance(t *testing.T) {
 	repositoryRoot := repoRoot(t)
 	databaseURL := filepath.Join(t.TempDir(), "river-conformance-runtime.sqlite")
 	const profileName = "sqlite-runtime-v1"
-	goAdapter := startAdapterForProfile(
-		t, repositoryRoot, databaseURL, "sqlite", profileName,
-		"go", "go", "run", "./internal/cmd/riverconformanceadapter",
-	)
+	goAdapter := startReferenceAdapterForProfile(t, repositoryRoot, databaseURL, "sqlite", profileName, "go")
 	candidateSpec := conformanceCandidateSpec(t, repositoryRoot, false)
+	candidateSpec.requireProfile(t, profileSQLiteRuntime)
 	candidateAdapter := startAdapterCommandForProfile(
 		t, repositoryRoot, databaseURL, "sqlite", profileName,
 		candidateSpec.Implementation, candidateSpec.Command,

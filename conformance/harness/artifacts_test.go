@@ -31,7 +31,7 @@ func TestCompatibilityArtifacts(t *testing.T) {
 		require.NoError(t, json.Unmarshal(contents, target))
 	}
 
-	t.Run("CapabilitiesComplete", func(t *testing.T) {
+	t.Run("CapabilitiesDecided", func(t *testing.T) {
 		t.Parallel()
 
 		type implementation struct {
@@ -40,29 +40,35 @@ func TestCompatibilityArtifacts(t *testing.T) {
 			Version  string `json:"version"`
 		}
 		var manifest struct {
-			Capabilities    map[string]string         `json:"capabilities"`
-			Implementations map[string]implementation `json:"implementations"`
+			Capabilities        map[string]string         `json:"capabilities"`
+			CapabilityDecisions map[string]string         `json:"capability_decisions"`
+			Implementations     map[string]implementation `json:"implementations"`
 		}
 		readJSON(t, "conformance/manifest.json", &manifest)
 		require.NotEmpty(t, manifest.Capabilities)
 		for capability, status := range manifest.Capabilities {
-			require.Equal(t, "complete", status, "capability %s", capability)
+			require.Contains(t, []string{"complete", "in_progress", "not_applicable", "planned"}, status,
+				"capability %s", capability)
+			if status == "complete" {
+				require.NotContains(t, manifest.CapabilityDecisions, capability,
+					"complete capability %s needs no applicability decision", capability)
+			} else {
+				require.NotEmpty(t, manifest.CapabilityDecisions[capability],
+					"capability %s is %s and must record its applicability decision", capability, status)
+			}
+		}
+		for capability := range manifest.CapabilityDecisions {
+			require.Contains(t, manifest.Capabilities, capability, "decision for unknown capability %s", capability)
 		}
 
-		implementationNames := make([]string, 0, len(manifest.Implementations))
+		// Go is the reference; every other entry is a candidate, and the
+		// set of candidates is open.
+		require.Contains(t, manifest.Implementations, "go")
 		for name, implementation := range manifest.Implementations {
-			implementationNames = append(implementationNames, name)
 			require.NotEmpty(t, implementation.Package, "implementation %s package", name)
 			require.NotEmpty(t, implementation.Registry, "implementation %s registry", name)
 			require.NotEmpty(t, implementation.Version, "implementation %s version", name)
 		}
-		slices.Sort(implementationNames)
-		require.Equal(t, []string{"go", "javascript", "rust"}, implementationNames)
-
-		cargoManifest, err := os.ReadFile(filepath.Join(root, "rust/Cargo.toml"))
-		require.NoError(t, err)
-		require.Contains(t, string(cargoManifest),
-			"version = \""+manifest.Implementations["rust"].Version+"\"")
 	})
 
 	t.Run("AdapterContractComplete", func(t *testing.T) {
@@ -154,23 +160,8 @@ func TestCompatibilityArtifacts(t *testing.T) {
 		}
 	})
 
-	t.Run("CandidateDescriptorValid", func(t *testing.T) {
+	t.Run("CandidateDescriptorsValid", func(t *testing.T) {
 		t.Parallel()
-
-		var descriptor struct {
-			ApplicationName string   `json:"application_name"`
-			Command         []string `json:"command"`
-			Implementation  string   `json:"implementation"`
-			ReleaseCommand  []string `json:"release_command"`
-			RestartCommand  []string `json:"restart_command"`
-			Version         string   `json:"version"`
-		}
-		readJSON(t, "conformance/adapter/candidates/rust.json", &descriptor)
-		require.Equal(t, "river-conformance-rust", descriptor.ApplicationName)
-		require.NotEmpty(t, descriptor.Command)
-		require.Equal(t, "rust", descriptor.Implementation)
-		require.NotEmpty(t, descriptor.ReleaseCommand)
-		require.NotEmpty(t, descriptor.RestartCommand)
 
 		var manifest struct {
 			Implementations map[string]struct {
@@ -178,7 +169,19 @@ func TestCompatibilityArtifacts(t *testing.T) {
 			} `json:"implementations"`
 		}
 		readJSON(t, "conformance/manifest.json", &manifest)
-		require.Equal(t, manifest.Implementations[descriptor.Implementation].Version, descriptor.Version)
+		paths, err := filepath.Glob(filepath.Join(root, "conformance/adapter/candidates/*.json"))
+		require.NoError(t, err)
+		require.NotEmpty(t, paths)
+		for _, path := range paths {
+			contents, err := os.ReadFile(path)
+			require.NoError(t, err)
+			descriptor := decodeDescriptor(t, contents)
+			require.Equal(t, strings.TrimSuffix(filepath.Base(path), ".json"), descriptor.Implementation,
+				"%s must be named after its implementation", path)
+			require.NotEqual(t, "go", descriptor.Implementation, "Go is the reference, not a candidate")
+			require.Contains(t, manifest.Implementations, descriptor.Implementation)
+			require.Equal(t, manifest.Implementations[descriptor.Implementation].Version, descriptor.Version)
+		}
 	})
 
 	t.Run("MigrationInventoryComplete", func(t *testing.T) {

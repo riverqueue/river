@@ -99,7 +99,7 @@ test/rust/postgres: ## Run all Rust tests, including PostgreSQL integration test
 
 .PHONY: test/conformance
 test/conformance: ## Run Go and configured candidate conformance (requires database URL)
-	go test -tags riverconformance ./conformance/harness -run '^Test(Maintenance|Mixed|Resilience)Conformance$$' -count=1
+	go test -tags riverconformance ./conformance/harness -run '^Test(Maintenance|Mixed|Resilience)Conformance$$' -count=1 -timeout 30m
 
 .PHONY: test/conformance/sqlite
 test/conformance/sqlite: ## Run candidate-neutral SQLite storage and runtime conformance
@@ -107,23 +107,23 @@ test/conformance/sqlite: ## Run candidate-neutral SQLite storage and runtime con
 
 .PHONY: test/conformance/performance
 test/conformance/performance: ## Run Go and configured candidate performance gates
-	go test -tags riverconformance ./conformance/harness -run TestPerformanceGate -count=1
+	go test -tags riverconformance ./conformance/harness -run '^TestPerformanceGate$$' -count=1 -timeout 30m
 
 .PHONY: test/conformance/soak
 test/conformance/soak: ## Run mixed soak for RIVER_CONFORMANCE_SOAK_DURATION
-	go test -tags riverconformance ./conformance/harness -run TestMixedSoak -count=1 -timeout 6h15m
+	go test -tags riverconformance ./conformance/harness -run '^TestMixedSoak$$' -count=1 -timeout 6h15m
 
-.PHONY: test/conformance/three-engine
-test/conformance/three-engine: ## Run direct Go/Rust/JavaScript competition, failover, and fault smoke
-	go test -tags riverconformance ./conformance/harness -run TestThreeEngineConformance -count=1
+.PHONY: test/conformance/multi-engine
+test/conformance/multi-engine: ## Run direct multi-engine competition, failover, fault, and SQLite pair checks
+	go test -tags riverconformance ./conformance/harness -run '^TestMultiEngine(Conformance|SQLiteConformance)$$' -count=1
 
-.PHONY: test/conformance/three-engine/performance
-test/conformance/three-engine/performance: ## Compare release-built Go/Rust/JavaScript adapters
-	go test -tags riverconformance ./conformance/harness -run TestThreeEnginePerformanceGate -count=1
+.PHONY: test/conformance/multi-engine/performance
+test/conformance/multi-engine/performance: ## Compare release-built reference and candidate adapters together
+	go test -tags riverconformance ./conformance/harness -run '^TestMultiEnginePerformanceGate$$' -count=1
 
-.PHONY: test/conformance/three-engine/soak
-test/conformance/three-engine/soak: ## Run direct three-engine soak
-	go test -tags riverconformance ./conformance/harness -run TestThreeEngineSoak -count=1 -timeout 6h15m
+.PHONY: test/conformance/multi-engine/soak
+test/conformance/multi-engine/soak: ## Run direct multi-engine soak
+	go test -tags riverconformance ./conformance/harness -run '^TestMultiEngineSoak$$' -count=1 -timeout 6h15m
 
 .PHONY: doc/rust
 doc/rust: ## Build Rust API documentation and compiled examples

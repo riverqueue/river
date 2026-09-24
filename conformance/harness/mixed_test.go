@@ -30,6 +30,7 @@ func TestMixedConformance(t *testing.T) {
 	observer := newPostgresObserver(t, databaseURL)
 	goAdapter := startReferenceAdapter(t, repositoryRoot, databaseURL, "go")
 	candidateSpec := conformanceCandidateSpec(t, repositoryRoot, false)
+	candidateSpec.requireProfile(t, profilePostgresFull)
 	candidateAdapter := startCandidateAdapter(t, repositoryRoot, databaseURL, candidateSpec.Implementation, candidateSpec, candidateSpec.Command)
 	scenarios.attach(goAdapter, candidateAdapter)
 	pair := mixedPair{candidate: candidateAdapter, candidateSpec: candidateSpec, reference: goAdapter}
@@ -384,8 +385,9 @@ func verifyPostgresHandshakes(t *testing.T, repositoryRoot string, candidateSpec
 	manifest := readManifest(t, repositoryRoot)
 	expectedCapabilities := make([]string, 0, len(manifest.Capabilities))
 	for capability, status := range manifest.Capabilities {
-		require.Equal(t, "complete", status, "manifest capability %s", capability)
-		expectedCapabilities = append(expectedCapabilities, capability)
+		if status == "complete" {
+			expectedCapabilities = append(expectedCapabilities, capability)
+		}
 	}
 
 	require.Equal(t, "go", goHandshake.Implementation)

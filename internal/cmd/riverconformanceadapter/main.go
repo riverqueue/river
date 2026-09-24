@@ -18,6 +18,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -752,8 +753,7 @@ func handleQueueAdd(
 		params.MaxWorkers = 1
 	}
 	err := addFunc(params.Name, river.QueueConfig{MaxWorkers: params.MaxWorkers})
-	var alreadyAddedErr *river.QueueAlreadyAddedError
-	if errors.As(err, &alreadyAddedErr) {
+	if _, alreadyAdded := errors.AsType[*river.QueueAlreadyAddedError](err); alreadyAdded {
 		if err := removeFunc(ctx, params.Name); err != nil {
 			return nil, err
 		}
@@ -826,11 +826,13 @@ func run(ctx context.Context) error {
 		}
 		defer pool.Close()
 		pool.SetMaxOpenConns(1)
-		if _, err := pool.ExecContext(ctx, "PRAGMA journal_mode = WAL"); err != nil {
-			return fmt.Errorf("enable SQLite WAL: %w", err)
-		}
+		// Set the busy timeout first: another adapter may be switching the
+		// same new database to WAL at the same moment.
 		if _, err := pool.ExecContext(ctx, "PRAGMA busy_timeout = 5000"); err != nil {
 			return fmt.Errorf("set SQLite busy timeout: %w", err)
+		}
+		if _, err := pool.ExecContext(ctx, "PRAGMA journal_mode = WAL"); err != nil {
+			return fmt.Errorf("enable SQLite WAL: %w", err)
 		}
 		if _, err := pool.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
 			return fmt.Errorf("enable SQLite foreign keys: %w", err)
@@ -858,6 +860,11 @@ func run(ctx context.Context) error {
 		return err
 	}
 	poolConfig.ConnConfig.RuntimeParams["application_name"] = "river-conformance-go"
+	// Fault scenarios terminate this adapter's backends while they sit idle
+	// in the pool. Checking liveness on every acquire keeps a terminated
+	// connection from failing the next request; SQLx pools, used by other
+	// adapters, test connections before acquire by default as well.
+	poolConfig.ShouldPing = func(context.Context, pgxpool.ShouldPingParams) bool { return true }
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return err
@@ -1431,10 +1438,12 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			return nil, err
 		}
-		if params.ApplicationName != "river-conformance-go" &&
-			params.ApplicationName != "river-conformance-javascript" &&
-			params.ApplicationName != "river-conformance-rust" {
-			return nil, errors.New("unsupported conformance application_name")
+		// Only conformance adapters may be disconnected. Every descriptor's
+		// application name carries this prefix, so the check stays
+		// candidate-neutral.
+		if !strings.HasPrefix(params.ApplicationName, "river-conformance-") ||
+			params.ApplicationName == "river-conformance-harness" {
+			return nil, errors.New("application_name must name a conformance adapter")
 		}
 		var count int
 		err := s.pool.QueryRow(ctx, "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = $1 AND pid != pg_backend_pid()) AS terminated", params.ApplicationName).Scan(&count)

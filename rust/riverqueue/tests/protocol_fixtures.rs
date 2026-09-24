@@ -119,3 +119,13 @@ fn retry_duration_cap_matches_go_time_duration() {
         9_223_372_036_854_775_807
     );
 }
+
+#[test]
+fn conformance_manifest_pins_this_version() {
+    let manifest: Value =
+        serde_json::from_str(include_str!("../../../conformance/manifest.json")).unwrap();
+    assert_eq!(
+        manifest["implementations"]["rust"]["version"],
+        env!("CARGO_PKG_VERSION")
+    );
+}

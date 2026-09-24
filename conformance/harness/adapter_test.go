@@ -38,15 +38,6 @@ type adapter struct {
 	stderr            lockedBuffer
 }
 
-type adapterSpec struct {
-	ApplicationName string   `json:"application_name"`
-	Command         []string `json:"command"`
-	Implementation  string   `json:"implementation"`
-	ReleaseCommand  []string `json:"release_command"`
-	RestartCommand  []string `json:"restart_command"`
-	Version         string   `json:"version"`
-}
-
 type adapterHandshake struct {
 	AdapterVersion        int            `json:"adapter_version"`
 	Backend               string         `json:"backend"`
@@ -286,44 +277,6 @@ func repoRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(filename), "..", ".."))
 }
 
-func conformanceCandidateSpec(t *testing.T, root string, release bool) adapterSpec {
-	t.Helper()
-
-	encoded := os.Getenv("RIVER_CONFORMANCE_CANDIDATE")
-	descriptorPath := os.Getenv("RIVER_CONFORMANCE_CANDIDATE_FILE")
-	require.False(t, encoded != "" && descriptorPath != "",
-		"set only one of RIVER_CONFORMANCE_CANDIDATE or RIVER_CONFORMANCE_CANDIDATE_FILE")
-
-	var descriptor []byte
-	if encoded != "" {
-		descriptor = []byte(encoded)
-	} else {
-		if descriptorPath == "" {
-			descriptorPath = "conformance/adapter/candidates/rust.json"
-		}
-		if !filepath.IsAbs(descriptorPath) {
-			descriptorPath = filepath.Join(root, descriptorPath)
-		}
-		var err error
-		//nolint:gosec // The caller explicitly selects a local candidate descriptor.
-		descriptor, err = os.ReadFile(descriptorPath)
-		require.NoError(t, err)
-	}
-
-	var spec adapterSpec
-	require.NoError(t, json.Unmarshal(descriptor, &spec))
-	require.NotEmpty(t, spec.ApplicationName)
-	require.NotEmpty(t, spec.Command)
-	require.NotEmpty(t, spec.Implementation)
-	if release && len(spec.ReleaseCommand) > 0 {
-		spec.Command = slices.Clone(spec.ReleaseCommand)
-	}
-	if len(spec.RestartCommand) == 0 {
-		spec.RestartCommand = slices.Clone(spec.Command)
-	}
-	return spec
-}
-
 // startCandidateAdapter starts a candidate adapter from its descriptor on
 // PostgreSQL and records its application name for harness observations.
 func startCandidateAdapter(t *testing.T, root, databaseURL, name string, spec adapterSpec, command []string) *adapter {
@@ -338,9 +291,17 @@ func startCandidateAdapter(t *testing.T, root, databaseURL, name string, spec ad
 func startReferenceAdapter(t *testing.T, root, databaseURL, name string) *adapter {
 	t.Helper()
 
-	started := startAdapter(t, root, databaseURL, name, "go", "run", "./internal/cmd/riverconformanceadapter")
+	started := startAdapterCommand(t, root, databaseURL, name, referenceAdapterCommand(t, root))
 	started.applicationName = referenceApplicationName
 	return started
+}
+
+// startReferenceAdapterForProfile starts the Go reference adapter for a
+// database kind and profile.
+func startReferenceAdapterForProfile(t *testing.T, root, databaseURL, databaseKind, profile, name string) *adapter {
+	t.Helper()
+
+	return startAdapterCommandForProfile(t, root, databaseURL, databaseKind, profile, name, referenceAdapterCommand(t, root))
 }
 
 func startAdapterCommand(t *testing.T, root, databaseURL, name string, command []string) *adapter {
@@ -371,21 +332,6 @@ func startAdapterCommandForProfile(
 	return startAdapterForProfile(
 		t, root, databaseURL, databaseKind, profile, name, command[0], command[1:]...,
 	)
-}
-
-func startAdapter(t *testing.T, root, databaseURL, name, executable string, args ...string) *adapter {
-	t.Helper()
-
-	return startAdapterForBackend(t, root, databaseURL, "postgres", name, executable, args...)
-}
-
-func startAdapterForBackend(
-	t *testing.T,
-	root, databaseURL, databaseKind, name, executable string,
-	args ...string,
-) *adapter {
-	t.Helper()
-	return startAdapterForProfile(t, root, databaseURL, databaseKind, "", name, executable, args...)
 }
 
 func startAdapterForProfile(
