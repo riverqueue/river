@@ -25,7 +25,7 @@ use sqlx::{Row, sqlite::SqliteRow};
 use crate::{
     AttemptError, JobListOrderBy, JobRow, JobState, METADATA_KEY_UNIQUE_NONCE, Queue,
     SortDirection,
-    client::{UndecodableJob, decode_attempt_error, saturating_i16},
+    client::{UndecodableJob, decode_attempt_error, go_time_json, saturating_i16},
 };
 
 const JOB_COLUMNS: &str = r#"
@@ -837,7 +837,7 @@ pub(crate) async fn cancel(
     id: i64,
     now: DateTime<Utc>,
 ) -> Result<Option<JobRow>, BackendError> {
-    let cancel_attempted_at = json_text(&now)?;
+    let cancel_attempted_at = json_text(&go_time_json(now))?;
     let sql = format!(
         r#"
         UPDATE river_job

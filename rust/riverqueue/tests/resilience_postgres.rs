@@ -112,6 +112,11 @@ fn blocking_workers(gate: &Gate, timeline: &Arc<BlockingTimeline>) -> WorkerRegi
     workers
 }
 
+/// A job that snoozes for longer than any representable schedule.
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "rust_postgres_resilience_snooze")]
+struct SnoozeForeverArgs {}
+
 /// Lets a test hold a gated job inside its worker until released.
 #[derive(Clone)]
 struct Gate {
@@ -230,6 +235,13 @@ fn gated_workers(gate: &Gate) -> WorkerRegistry {
         .register_fn(|_context: WorkContext, _job: Job<ResilienceArgs>| async {
             Ok::<_, Infallible>(WorkOutcome::Complete)
         })
+        .unwrap();
+    workers
+        .register_fn(
+            |_context: WorkContext, _job: Job<SnoozeForeverArgs>| async {
+                Ok::<_, Infallible>(WorkOutcome::Snooze(Duration::MAX))
+            },
+        )
         .unwrap();
     let shutdown_gate = gate.clone();
     workers
@@ -695,6 +707,37 @@ async fn shutdown_leaves_a_job_still_stuck_after_abort_running() {
     assert!(started.elapsed() < Duration::from_secs(1));
     assert!(timeline.blocking_finished.lock().unwrap().is_none());
     assert_eq!(schema.job_state(blocked.job.row.id).await, "running");
+
+    schema.drop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn out_of_range_snooze_is_clamped_and_cancel_time_matches_go() {
+    let schema = TestSchema::new("wire").await;
+    let client = gated_client(&schema, "postgres-resilience-wire", &Gate::default());
+    let snoozed = client.insert(SnoozeForeverArgs {}).await.unwrap();
+
+    let run = client.start().unwrap();
+    wait_until(Duration::from_secs(10), "the snooze", || async {
+        schema.job_state(snoozed.job.row.id).await == "scheduled"
+    })
+    .await;
+    run.shutdown().await.unwrap();
+    let snoozed = client.job_get(snoozed.job.row.id).await.unwrap();
+    assert_eq!(snoozed.attempt, 0);
+    assert!(snoozed.scheduled_at > chrono::Utc::now() + chrono::Duration::days(365 * 200));
+
+    // River Go writes `cancel_attempted_at` as `time.Time` JSON.
+    let cancelled = client.job_cancel(snoozed.id).await.unwrap();
+    let cancel_attempted_at = cancelled.metadata["cancel_attempted_at"].as_str().unwrap();
+    assert!(cancel_attempted_at.ends_with('Z'), "{cancel_attempted_at}");
+    if let Some((_, fraction)) = cancel_attempted_at.trim_end_matches('Z').split_once('.') {
+        assert!(
+            !fraction.ends_with('0'),
+            "trailing zeros are trimmed: {cancel_attempted_at}"
+        );
+    }
+    chrono::DateTime::parse_from_rfc3339(cancel_attempted_at).unwrap();
 
     schema.drop().await;
 }

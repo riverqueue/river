@@ -243,6 +243,7 @@ impl Client {
         match persist_result(
             &self.inner,
             &row,
+            Utc::now(),
             &completion,
             result,
             context.metadata_updates(),
