@@ -296,14 +296,63 @@ pub struct FetchParams {
 }
 
 /// Inputs available while selecting stuck jobs under a rescue transaction.
+///
+/// Mirrors Go's `JobGetStuckParams`: selections page by ID after `after_id`
+/// and consider only jobs attempted before `stuck_horizon`.
 #[derive(Clone, Debug)]
 pub struct RescueParams {
-    /// Maximum rows to lock.
+    /// Only jobs with a greater ID belong to this batch.
+    pub after_id: i64,
+    /// Selected database backend configuration.
+    pub database: DatabaseConfig,
+    /// Maximum rows to select.
     pub maximum: i64,
     /// Age at which the OSS runtime considers a running job stuck.
     pub rescue_after: Duration,
+    /// Jobs attempted at or after this time are not stuck. Computed once per
+    /// rescuer pass.
+    pub stuck_horizon: DateTime<Utc>,
+}
+
+/// One stuck job's transition exactly as the OSS rescuer would persist it.
+#[derive(Clone, Debug)]
+pub struct RescueJob {
+    /// Attempt error JSON appended to the job's `errors`.
+    pub attempt_error: Value,
+    /// Finalization time, set for `cancelled` and `discarded`.
+    pub finalized_at: Option<DateTime<Utc>>,
+    /// Job ID.
+    pub id: i64,
+    /// Next scheduled time.
+    pub scheduled_at: DateTime<Utc>,
+    /// Target River state string.
+    pub state: String,
+}
+
+/// Inputs of a batched rescue, mirroring Go's `JobRescueManyParams`.
+///
+/// OSS only applies each transition to jobs still `running` with
+/// `attempted_at` before `stuck_horizon`, so a job completed or claimed again
+/// after selection is left untouched. Implementations that handle the rescue
+/// themselves should apply the same guard.
+#[derive(Clone, Debug)]
+pub struct RescueManyParams {
     /// Selected database backend configuration.
     pub database: DatabaseConfig,
+    /// Transitions OSS would write, in ID order.
+    pub jobs: Vec<RescueJob>,
+    /// Horizon the batch was selected with.
+    pub stuck_horizon: DateTime<Utc>,
+}
+
+/// Whether the OSS rescuer should perform its normal guarded update.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RescueAction {
+    /// Continue through the OSS rescue update.
+    #[default]
+    Continue,
+    /// The extension persisted the rescue itself.
+    Handled,
 }
 
 /// A job row as persisted by River's set-state-if-running update.
@@ -423,9 +472,11 @@ pub trait RuntimeService: Send + Sync + 'static {
 /// implementations.
 #[async_trait]
 pub trait Pilot: Send + Sync + 'static {
-    /// Metadata keys whose jobs are owned by an extension-specific cleaner.
-    fn job_cleaner_metadata_exclusions(&self) -> &'static [&'static str] {
-        &[]
+    /// Queues whose finalized jobs are owned by an extension-specific cleaner
+    /// and skipped by River's job cleaner, like Go's
+    /// `Pilot.JobCleanerQueuesExcluded`. Read on every cleaner pass.
+    fn job_cleaner_queue_exclusions(&self) -> Vec<String> {
+        Vec::new()
     }
 
     /// Whether fetches must enter the exact-version interception transaction.
@@ -495,14 +546,28 @@ pub trait Pilot: Send + Sync + 'static {
         Ok(None)
     }
 
-    /// Optionally selects and locks stuck-job candidates. Returned IDs are
-    /// rescued by the OSS runtime in the same transaction.
+    /// Optionally selects stuck-job candidates, honoring the params' cursor
+    /// and horizon. Returned IDs are evaluated by the OSS rescuer in the same
+    /// transaction; returning `maximum` IDs asks for another batch.
     async fn select_rescue_job_ids(
         &self,
         _connection: DatabaseConnection<'_>,
         _params: &RescueParams,
     ) -> Result<Option<Vec<i64>>, PilotError> {
         Ok(None)
+    }
+
+    /// Optionally persists a batch of rescues in the rescuer's transaction.
+    ///
+    /// Called only when [`Pilot::intercepts_rescue`] returns `true`, after
+    /// OSS decided each selected job's transition. Returning
+    /// [`RescueAction::Continue`] lets OSS apply its guarded update.
+    async fn rescue_jobs(
+        &self,
+        _connection: DatabaseConnection<'_>,
+        _params: &RescueManyParams,
+    ) -> Result<RescueAction, PilotError> {
+        Ok(RescueAction::Continue)
     }
 
     /// Observes a batch of job state transitions inside River's transaction.

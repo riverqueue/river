@@ -105,21 +105,6 @@ pub(super) fn is_word(character: char) -> bool {
     character == '_' || character.is_ascii_alphanumeric()
 }
 
-pub(super) fn validate_metadata_key(key: &str) -> Result<(), Error> {
-    let mut characters = key.chars();
-    if key.is_empty()
-        || !characters
-            .next()
-            .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
-        || !characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
-    {
-        return Err(Error::configuration(format!(
-            "invalid job cleaner metadata exclusion key {key:?}"
-        )));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::validate_queue;

@@ -1691,7 +1691,9 @@ async fn migrates_inserts_and_works_a_job() {
         .maintenance(
             MaintenanceConfig::default()
                 .with_elect_interval(Duration::from_millis(20))
-                .with_rescue_after(Duration::from_millis(20))
+                // Like Go, the rescue age cannot be shorter than the default
+                // one-minute job timeout.
+                .with_rescue_after(Duration::from_mins(1))
                 .with_rescuer_interval(Duration::from_millis(20))
                 .with_scheduler_interval(Duration::from_millis(20)),
         )
@@ -1737,7 +1739,7 @@ async fn migrates_inserts_and_works_a_job() {
         .unwrap();
     let stuck_id: i64 = sqlx::query_scalar(
         "INSERT INTO river_job (args, attempt, attempted_at, attempted_by, kind, max_attempts, state) \
-         VALUES ('{}'::jsonb, 1, now() - interval '1 second', ARRAY['dead-client'], \
+         VALUES ('{}'::jsonb, 1, now() - interval '2 hours', ARRAY['dead-client'], \
                  'unregistered_stuck_kind', 2, 'running') RETURNING id",
     )
     .fetch_one(&pool)
@@ -1972,7 +1974,7 @@ async fn rescuer_honors_worker_timeout_and_retry_overrides() {
     .maintenance(
         MaintenanceConfig::default()
             .with_elect_interval(Duration::from_millis(20))
-            .with_rescue_after(Duration::from_millis(20))
+            .with_rescue_after(Duration::from_millis(100))
             .with_rescuer_interval(Duration::from_millis(20)),
     )
     .queue("default", QueueConfig::new(1))

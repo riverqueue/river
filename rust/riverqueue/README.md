@@ -145,6 +145,39 @@ have no global completion order.
   Exact-version companion crates use a hidden, source-preserving extension
   seam; it is not a third-party driver API.
 
+## Leadership and maintenance
+
+Like River Go, one client at a time holds a database lease and runs the
+leader-owned services: the job scheduler, stuck-job rescuer, job and queue
+cleaners, periodic job enqueuer, PostgreSQL reindexer, and SQLite notification
+cleaner. The elector renews the lease on its own schedule and bounds every
+attempt by the time the current term can still be trusted, measured from when
+the attempt started. Each service runs in its own task under a per-term
+cancellation token, so losing the lease, a trust window elapsing, or shutdown
+stops maintenance immediately. On PostgreSQL, in-flight maintenance
+statements are also cancelled on the server and bounded by a transaction-local
+`statement_timeout`, and an interrupted `REINDEX CONCURRENTLY` drops the
+artifacts it created.
+
+Renewal and resignation are guarded by the term's `elected_at`, so a client
+never extends or deletes a newer term, even one taken over by another client
+with the same ID. The default client ID combines the host name, the creation
+time, and a random suffix so that containers sharing a host name do not share
+an identity; set a stable `id` only when it is unique per process.
+
+The rescuer considers a job stuck after `rescue_after`, which defaults to one
+hour, or to the job timeout plus one hour when a job timeout is configured, and
+must not be shorter than the job timeout. As in Go, the leader discards stuck
+jobs of kinds its own worker registry does not know, so clients that share a
+schema but register different kinds can discard each other's stuck jobs while
+leading; keep worker registries aligned across such a fleet. The same
+leader-owned services run on SQLite, where they act on rows written by any
+implementation, exactly as Go's SQLite driver does.
+
+Periodic jobs are scheduled from the time each term begins, and `run_on_start`
+jobs are inserted once per gained term. When a periodic insert fails, Go skips
+that occurrence; Rust keeps it due and retries it after one second.
+
 ## Database support
 
 River accepts only built-in, sealed database backends rather than exposing a
