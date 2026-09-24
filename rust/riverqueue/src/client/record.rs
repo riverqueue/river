@@ -9,7 +9,7 @@ pub(crate) struct JobRecord {
     attempted_at: Option<DateTime<Utc>>,
     attempted_by: Option<Vec<String>>,
     created_at: DateTime<Utc>,
-    encoded_args: Json<Value>,
+    encoded_args: Json<Box<RawValue>>,
     errors: Vec<Json<AttemptError>>,
     finalized_at: Option<DateTime<Utc>>,
     id: i64,

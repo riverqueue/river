@@ -19,9 +19,11 @@ use riverqueue::{
     IntervalSchedule, Job, JobArgs, JobDeleteManyParams, JobListCursor, JobListParams, JobRow,
     JobState, JobUpdateParams, MaintenanceConfig, PeriodicJob, PeriodicJobOpts, PeriodicJobs,
     Plugin, Queue, QueueConfig, QueueListParams, RetryPolicy, RunHandle, SortDirection,
-    SubscribeConfig, UniqueKeyInput, UniqueOpts, WorkContext, WorkMiddleware, WorkOutcome,
-    WorkResult, Worker, WorkerRegistry, build_unique_key,
+    SubscribeConfig, UniqueOpts, WorkContext, WorkMiddleware, WorkOutcome, WorkResult, Worker,
+    WorkerRegistry,
     database::{PostgresDatabase, SqliteDatabase},
+    encoding::encode_args,
+    protocol::{UniqueKeyInput, unique_key, unique_states_bitmask},
 };
 use riverqueue_migrate::{
     Direction, MIGRATION_LINE_MAIN, MIGRATION_VERSION_LATEST, MigrateOpts, PostgresMigrator,
@@ -297,7 +299,8 @@ struct ResponseError {
 
 #[derive(Deserialize)]
 struct UniqueKeyParams {
-    args: Value,
+    /// Exact argument bytes; unique keys hash them without reinterpretation.
+    args: Box<RawValue>,
     kind: String,
     now: DateTime<Utc>,
     options: UniqueKeyOptions,
@@ -326,19 +329,52 @@ impl UniqueKeyOptions {
     }
 }
 
+/// Answers `unique_key` from the raw request so fixture arguments are hashed
+/// byte for byte, including number tokens such as `-0` and `1e+100`.
+fn respond_unique_key(request: &Request) -> Response {
+    let result = request
+        .params
+        .as_deref()
+        .ok_or_else(|| "unique_key requires params".to_owned())
+        .and_then(|params| {
+            serde_json::from_str::<UniqueKeyParams>(params.get()).map_err(|error| error.to_string())
+        })
+        .and_then(|params| {
+            let opts = params.options.to_unique_opts();
+            let key = match params.kind.as_str() {
+                "conformance_all_args" => unique_key_for_args::<UniqueAllArgs>(&params, &opts),
+                "conformance_numeric_boundaries" => {
+                    unique_key_for_args::<UniqueNumericArgs>(&params, &opts)
+                }
+                "conformance_selected_args" => {
+                    unique_key_for_args::<UniqueSelectedArgs>(&params, &opts)
+                }
+                "conformance_simple" => unique_key_for_args::<UniqueSimpleArgs>(&params, &opts),
+                kind => Err(format!("unsupported unique fixture kind {kind:?}")),
+            }?;
+            Ok(json!({"sha256": hex(&key), "state_mask": unique_states_bitmask(&opts)}))
+        });
+    match result {
+        Ok(result) => Response::success(request.id.clone(), result),
+        Err(error) => Response::error(request.id.clone(), -32_000, error),
+    }
+}
+
 fn unique_key_for_args<A>(params: &UniqueKeyParams, opts: &UniqueOpts) -> Result<[u8; 32], String>
 where
     A: JobArgs + serde::de::DeserializeOwned,
 {
-    let args =
-        serde_json::from_value::<A>(params.args.clone()).map_err(|error| error.to_string())?;
-    build_unique_key(&UniqueKeyInput {
-        args: &args,
+    // Decode to confirm the fixture matches the job type, as River Go does
+    // when it resolves unique struct tags.
+    serde_json::from_str::<A>(params.args.get()).map_err(|error| error.to_string())?;
+    unique_key(&UniqueKeyInput {
         encoded_args: &params.args,
+        kind: A::KIND,
         now: params.now,
         opts,
         queue: &params.queue,
         scheduled_at: params.scheduled_at,
+        unique_fields: A::unique_fields(),
     })
     .map_err(|error| error.to_string())?
     .ok_or_else(|| "unique fixture options produced no key".to_owned())
@@ -388,7 +424,7 @@ struct UniqueSelectedArgs {
     #[serde(default)]
     ignored: bool,
     #[serde(default)]
-    label: String,
+    label: Option<String>,
     #[serde(default, rename = "path/key")]
     path_key: String,
 }
@@ -1061,6 +1097,9 @@ impl AdapterBackend {
 
 impl Adapter {
     async fn respond(&mut self, request: Request) -> Response {
+        if request.method == "unique_key" {
+            return respond_unique_key(&request);
+        }
         let params = match decode_request_params(request.params.as_deref()) {
             Ok(params) => params,
             Err(error) => return Response::error(request.id, -32_602, error.to_string()),
@@ -1157,29 +1196,13 @@ impl Adapter {
                 if error_count == 0 {
                     return Err("error_count must be positive".into());
                 }
-                let row = retry_row(required_i64(&params, "job_id")?, now, error_count - 1);
+                let row = retry_row(required_i64(&params, "job_id")?, now, error_count - 1)?;
                 let delay = DefaultRetryPolicy::with_seed(self.rng_seed).next_retry(
                     &row,
                     "conformance retry",
                     now,
                 );
                 Ok(json!({"delay_ns": u64::try_from(delay.as_nanos())?}))
-            }
-            "unique_key" => {
-                let params: UniqueKeyParams = serde_json::from_value(params)?;
-                let opts = params.options.to_unique_opts();
-                let key = match params.kind.as_str() {
-                    "conformance_all_args" => unique_key_for_args::<UniqueAllArgs>(&params, &opts),
-                    "conformance_numeric_boundaries" => {
-                        unique_key_for_args::<UniqueNumericArgs>(&params, &opts)
-                    }
-                    "conformance_selected_args" => {
-                        unique_key_for_args::<UniqueSelectedArgs>(&params, &opts)
-                    }
-                    "conformance_simple" => unique_key_for_args::<UniqueSimpleArgs>(&params, &opts),
-                    kind => Err(format!("unsupported unique fixture kind {kind:?}")),
-                }?;
-                Ok(json!({"sha256": hex(&key), "state_mask": opts.state_bitmask()}))
             }
             "barrier_create" => {
                 let name = required_string(&params, "name")?;
@@ -1956,6 +1979,9 @@ impl Adapter {
 
 impl SqliteAdapter {
     async fn respond(&mut self, request: Request) -> Response {
+        if request.method == "unique_key" {
+            return respond_unique_key(&request);
+        }
         let params = match decode_request_params(request.params.as_deref()) {
             Ok(params) => params,
             Err(error) => return Response::error(request.id, -32_602, error.to_string()),
@@ -2056,29 +2082,13 @@ impl SqliteAdapter {
                 if error_count == 0 {
                     return Err("error_count must be positive".into());
                 }
-                let row = retry_row(required_i64(&params, "job_id")?, now, error_count - 1);
+                let row = retry_row(required_i64(&params, "job_id")?, now, error_count - 1)?;
                 let delay = DefaultRetryPolicy::with_seed(self.rng_seed).next_retry(
                     &row,
                     "conformance retry",
                     now,
                 );
                 Ok(json!({"delay_ns": u64::try_from(delay.as_nanos())?}))
-            }
-            "unique_key" => {
-                let params: UniqueKeyParams = serde_json::from_value(params)?;
-                let opts = params.options.to_unique_opts();
-                let key = match params.kind.as_str() {
-                    "conformance_all_args" => unique_key_for_args::<UniqueAllArgs>(&params, &opts),
-                    "conformance_numeric_boundaries" => {
-                        unique_key_for_args::<UniqueNumericArgs>(&params, &opts)
-                    }
-                    "conformance_selected_args" => {
-                        unique_key_for_args::<UniqueSelectedArgs>(&params, &opts)
-                    }
-                    "conformance_simple" => unique_key_for_args::<UniqueSimpleArgs>(&params, &opts),
-                    kind => Err(format!("unsupported unique fixture kind {kind:?}")),
-                }?;
-                Ok(json!({"sha256": hex(&key), "state_mask": opts.state_bitmask()}))
             }
             "barrier_create" => {
                 let name = required_string(&params, "name")?;
@@ -2735,47 +2745,7 @@ impl SqliteAdapter {
 }
 
 fn decode_request_params(raw: Option<&RawValue>) -> Result<Value, serde_json::Error> {
-    let Some(raw) = raw else {
-        return Ok(Value::Null);
-    };
-    let rewritten = preserve_negative_zero_tokens(raw.get());
-    serde_json::from_str(&rewritten)
-}
-
-fn preserve_negative_zero_tokens(source: &str) -> String {
-    let bytes = source.as_bytes();
-    let mut output = Vec::with_capacity(bytes.len());
-    let mut escaped = false;
-    let mut in_string = false;
-    let mut index = 0;
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if !in_string
-            && byte == b'-'
-            && bytes.get(index + 1) == Some(&b'0')
-            && bytes.get(index + 2).is_none_or(|next| {
-                matches!(*next, b' ' | b'\t' | b'\r' | b'\n' | b',' | b']' | b'}')
-            })
-        {
-            output.extend_from_slice(b"-0.0");
-            index += 2;
-            continue;
-        }
-        output.push(byte);
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if byte == b'\\' {
-                escaped = true;
-            } else if byte == b'"' {
-                in_string = false;
-            }
-        } else if byte == b'"' {
-            in_string = true;
-        }
-        index += 1;
-    }
-    String::from_utf8(output).expect("valid JSON remains UTF-8")
+    raw.map_or(Ok(Value::Null), |raw| serde_json::from_str(raw.get()))
 }
 
 fn parse_sqlite_time(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
@@ -2788,8 +2758,12 @@ fn schema_name(schema: Option<&str>) -> Result<SchemaName, riverqueue::Error> {
         .map_err(|error| riverqueue::Error::invalid_job(error.to_string()))
 }
 
-fn retry_row(id: i64, now: DateTime<Utc>, previous_errors: usize) -> JobRow {
-    let mut row = JobRow::new(id, "conformance_echo", json!({}), now);
+fn retry_row(
+    id: i64,
+    now: DateTime<Utc>,
+    previous_errors: usize,
+) -> Result<JobRow, serde_json::Error> {
+    let mut row = JobRow::new(id, "conformance_echo", encode_args(&json!({}))?, now);
     row.attempt = i16::try_from(previous_errors.saturating_add(1)).unwrap_or(i16::MAX);
     row.attempted_at = Some(now);
     row.attempted_by = vec!["conformance".to_owned()];
@@ -2797,7 +2771,7 @@ fn retry_row(id: i64, now: DateTime<Utc>, previous_errors: usize) -> JobRow {
     row.max_attempts = 1_000;
     row.metadata = Map::new();
     row.state = JobState::Retryable;
-    row
+    Ok(row)
 }
 
 impl InsertParams {
@@ -2917,20 +2891,21 @@ fn queue_list_params(limit: i32) -> QueueListParams {
 }
 
 fn exact_json_tokens(row: &JobRow) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-    let args = row
-        .encoded_args
-        .as_object()
-        .ok_or_else(|| io::Error::other("exact job args are not an object"))?;
-    let token = |source: &Map<String, Value>, key: &str| {
-        source
-            .get(key)
-            .map(Value::to_string)
+    let args: HashMap<String, Box<RawValue>> = row.decode_args()?;
+    let arg_token = |key: &str| {
+        args.get(key)
+            .map(|value| value.get().to_owned())
             .ok_or_else(|| io::Error::other(format!("exact JSON key {key:?} not found")))
     };
+    let negative = row
+        .metadata
+        .get("negative")
+        .map(Value::to_string)
+        .ok_or_else(|| io::Error::other("exact JSON key \"negative\" not found"))?;
     Ok(json!({
-        "decimal": token(args, "decimal")?,
-        "integer": token(args, "integer")?,
-        "negative": token(&row.metadata, "negative")?,
+        "decimal": arg_token("decimal")?,
+        "integer": arg_token("integer")?,
+        "negative": negative,
     }))
 }
 
@@ -3158,25 +3133,23 @@ mod tests {
     }
 
     #[test]
-    fn request_json_preserves_negative_zero_and_exact_numbers() {
-        let raw = RawValue::from_string(
-            r#"{"text":"-0","zero":-0,"large":9223372036854775807,"decimal":0.12345678901234567890123456789}"#
-                .to_owned(),
-        )
+    fn unique_key_hashes_exact_request_argument_tokens() {
+        // Go-generated golden `map_order_and_negative_zero`: the `-0` token
+        // and member order must reach the hash unchanged.
+        let request: Request = serde_json::from_str(concat!(
+            r#"{"id":1,"jsonrpc":"2.0","method":"unique_key","params":{"#,
+            "\"args\":{\"2\":2,\"10\":10,\"zero\":-0,\"😀\":1,\"\u{e000}\":2},",
+            r#""kind":"conformance_all_args","now":"2026-01-02T03:04:05.6789Z","#,
+            r#""options":{"by_args":true,"by_period_nanos":0,"by_queue":false,"exclude_kind":false},"#,
+            r#""queue":"default","scheduled_at":null}}"#,
+        ))
         .unwrap();
-        let value = decode_request_params(Some(&raw)).unwrap();
+        let response = serde_json::to_value(respond_unique_key(&request)).unwrap();
 
-        assert!(
-            value["zero"]
-                .as_f64()
-                .is_some_and(|value| value == 0.0 && value.is_sign_negative())
-        );
-        assert_eq!(value["large"].to_string(), "9223372036854775807");
         assert_eq!(
-            value["decimal"].to_string(),
-            "0.12345678901234567890123456789"
+            response["result"]["sha256"],
+            "fcdf33e0c39c1fc7e956876345a985f2418bd69c6e4d6a5c794abf1e78cdfdb6"
         );
-        assert_eq!(value["text"], "-0");
     }
 
     #[test]

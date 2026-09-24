@@ -146,7 +146,7 @@ fn retry_row(error_count: usize) -> JobRow {
         attempted_at: Some(now),
         attempted_by: vec!["test".to_owned()],
         created_at: now,
-        encoded_args: serde_json::json!({}),
+        encoded_args: serde_json::value::to_raw_value(&serde_json::json!({})).unwrap(),
         errors: vec![
             AttemptError {
                 at: now,

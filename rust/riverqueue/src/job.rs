@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, value::RawValue};
 
 use crate::{PRIORITY_DEFAULT, QUEUE_DEFAULT};
 
@@ -71,6 +71,10 @@ impl InsertBatch {
     /// # Errors
     ///
     /// Returns an error when the arguments cannot be encoded as JSON.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the batch takes ownership of its jobs"
+    )]
     pub fn push_with<A: JobArgs>(
         &mut self,
         args: A,
@@ -78,7 +82,7 @@ impl InsertBatch {
     ) -> Result<&mut Self, serde_json::Error> {
         self.items.push(InsertBatchItem {
             defaults: A::default_insert_opts(),
-            encoded_args: serde_json::to_value(args)?,
+            encoded_args: crate::encoding::encode_args(&args)?,
             kind: A::KIND,
             opts,
             unique_fields: A::unique_fields(),
@@ -115,7 +119,7 @@ impl InsertBatch {
 #[derive(Debug)]
 pub(crate) struct InsertBatchItem {
     pub(crate) defaults: InsertOpts,
-    pub(crate) encoded_args: Value,
+    pub(crate) encoded_args: Box<RawValue>,
     pub(crate) kind: &'static str,
     pub(crate) opts: InsertOpts,
     pub(crate) unique_fields: &'static [&'static str],
@@ -422,7 +426,7 @@ pub struct ExtensionInsertParams {
     /// Original creation time.
     pub created_at: DateTime<Utc>,
     /// Serialized job arguments.
-    pub encoded_args: Value,
+    pub encoded_args: Box<RawValue>,
     /// Stable job kind.
     pub kind: String,
     /// Maximum attempts, including the first.
@@ -498,7 +502,17 @@ impl<A> Job<A> {
 }
 
 /// Persisted River job fields.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+///
+/// Arguments are kept as the exact JSON text stored with the job, so values
+/// written by other River clients (including numbers beyond `f64` precision
+/// and member order) are preserved when a row is read and passed along. Use
+/// [`JobRow::decode_args`] to decode them into a typed value.
+///
+/// Metadata is decoded into a [`serde_json::Map`]. It is exact for strings,
+/// booleans, and integers within the `i64`/`u64` range; other numbers are
+/// approximated as `f64` in this view. River merges metadata updates in the
+/// database, so values it does not change are never rewritten.
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct JobRow {
     /// Database-generated ID.
@@ -511,8 +525,8 @@ pub struct JobRow {
     pub attempted_by: Vec<String>,
     /// Creation time.
     pub created_at: DateTime<Utc>,
-    /// Encoded job arguments.
-    pub encoded_args: Value,
+    /// Encoded job arguments as the exact JSON text stored with the job.
+    pub encoded_args: Box<RawValue>,
     /// Failed attempts in chronological order.
     pub errors: Vec<AttemptError>,
     /// Terminal-state time.
@@ -547,7 +561,7 @@ pub struct JobRowParts {
     pub attempted_at: Option<DateTime<Utc>>,
     pub attempted_by: Vec<String>,
     pub created_at: DateTime<Utc>,
-    pub encoded_args: Value,
+    pub encoded_args: Box<RawValue>,
     pub errors: Vec<AttemptError>,
     pub finalized_at: Option<DateTime<Utc>>,
     pub kind: String,
@@ -589,8 +603,16 @@ impl JobRow {
         }
     }
     /// Creates a minimal persisted row suitable for tests and adapters.
+    ///
+    /// Use [`encode_args`](crate::encoding::encode_args) to encode typed
+    /// arguments the same way River does when inserting them.
     #[must_use]
-    pub fn new(id: i64, kind: impl Into<String>, encoded_args: Value, now: DateTime<Utc>) -> Self {
+    pub fn new(
+        id: i64,
+        kind: impl Into<String>,
+        encoded_args: Box<RawValue>,
+        now: DateTime<Utc>,
+    ) -> Self {
         Self {
             attempt: 0,
             attempted_at: None,
@@ -611,6 +633,15 @@ impl JobRow {
             unique_key: None,
             unique_states: None,
         }
+    }
+
+    /// Decodes the job's arguments into `T`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the stored arguments do not deserialize as `T`.
+    pub fn decode_args<T: DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
+        serde_json::from_str(self.encoded_args.get())
     }
 
     /// Returns recorded output from metadata.
@@ -689,8 +720,7 @@ impl JobState {
     }
 
     /// Bit used by `river_job.unique_states`.
-    #[must_use]
-    pub const fn unique_bit(self) -> u8 {
+    pub(crate) const fn unique_bit(self) -> u8 {
         match self {
             Self::Available => 0b0000_0001,
             Self::Cancelled => 0b0000_0010,
@@ -851,8 +881,7 @@ impl UniqueOpts {
     }
 
     /// Canonical persisted bitmask for the configured states.
-    #[must_use]
-    pub fn state_bitmask(&self) -> u8 {
+    pub(crate) fn state_bitmask(&self) -> u8 {
         self.by_state
             .as_deref()
             .unwrap_or(&JobState::UNIQUE_DEFAULT)

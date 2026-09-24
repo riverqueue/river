@@ -273,7 +273,7 @@ impl Client {
         for (args, opts) in jobs {
             self.validate_known_kind(A::KIND)?;
             let mut insert = InsertContext {
-                encoded_args: serde_json::to_value(args)?,
+                encoded_args: crate::encoding::encode_args(&args)?,
                 kind: A::KIND.to_owned(),
                 opts: InsertOpts::resolve(
                     self.inner.default_max_attempts,
@@ -465,7 +465,7 @@ impl Client {
                 return Err(Error::UnknownJobKind(A::KIND.to_owned()));
             }
             let mut insert = InsertContext {
-                encoded_args: serde_json::to_value(args)?,
+                encoded_args: crate::encoding::encode_args(&args)?,
                 kind: A::KIND.to_owned(),
                 opts: InsertOpts::resolve(
                     self.inner.default_max_attempts,
@@ -707,7 +707,7 @@ impl Client {
         E: DatabaseExecutor<'executor>,
     {
         self.validate_known_kind(A::KIND)?;
-        let encoded_args = serde_json::to_value(&args)?;
+        let encoded_args = crate::encoding::encode_args(&args)?;
         let opts = InsertOpts::resolve(
             self.inner.default_max_attempts,
             A::default_insert_opts(),
@@ -719,7 +719,7 @@ impl Client {
         for hook in self.inner.hooks.iter().rev() {
             hook.decode_insert_result(&mut row).await?;
         }
-        let args = serde_json::from_value(row.encoded_args.clone())?;
+        let args = row.decode_args()?;
         Ok(InsertResult {
             job: Job { args, row },
             unique_skipped_as_duplicate,
@@ -774,7 +774,7 @@ impl Client {
         executor: E,
         kind: &str,
         unique_fields: &[&str],
-        encoded_args: &Value,
+        encoded_args: &RawValue,
         opts: InsertParams,
     ) -> Result<(JobRow, bool), Error>
     where
@@ -849,12 +849,12 @@ impl Client {
         mut executor: ExecutorInner<'_>,
         kind: &str,
         unique_fields: &[&str],
-        encoded_args: &Value,
+        encoded_args: &RawValue,
         opts: InsertParams,
         wire: Option<ExtensionInsertWire>,
     ) -> Result<(JobRow, bool), Error> {
         let mut insert = InsertContext {
-            encoded_args: encoded_args.clone(),
+            encoded_args: encoded_args.to_owned(),
             kind: kind.to_owned(),
             opts,
         };
@@ -1150,7 +1150,7 @@ pub(super) struct ExtensionInsertWire {
 }
 
 pub(super) struct PreparedFastInsert {
-    pub(super) encoded_args: Value,
+    pub(super) encoded_args: Box<RawValue>,
     pub(super) kind: String,
     pub(super) max_attempts: i16,
     pub(super) metadata: Map<String, Value>,

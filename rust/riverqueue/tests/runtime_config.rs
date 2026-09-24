@@ -179,7 +179,9 @@ impl Hook for RuntimeHook {
         job: &mut JobRow,
     ) -> Result<(), riverqueue::Error> {
         self.counts.work_before.fetch_add(1, Ordering::SeqCst);
-        job.encoded_args["hook_decrypted"] = true.into();
+        let mut args: serde_json::Value = job.decode_args()?;
+        args["hook_decrypted"] = true.into();
+        job.encoded_args = riverqueue::encoding::encode_args(&args)?;
         Ok(())
     }
 
@@ -253,7 +255,10 @@ impl WorkMiddleware for RuntimeWorkMiddleware {
         _context: &WorkContext,
         job: &mut JobRow,
     ) -> Result<(), riverqueue::Error> {
-        assert_eq!(job.encoded_args["hook_decrypted"], true);
+        assert_eq!(
+            job.decode_args::<serde_json::Value>()?["hook_decrypted"],
+            true
+        );
         self.0.work_before.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -267,7 +272,10 @@ impl Worker<RuntimeArgs> for RuntimeWorker {
         _context: WorkContext,
         job: Job<RuntimeArgs>,
     ) -> Result<WorkOutcome, Self::Error> {
-        assert_eq!(job.row.encoded_args["hook_decrypted"], true);
+        assert_eq!(
+            job.row.decode_args::<serde_json::Value>().unwrap()["hook_decrypted"],
+            true
+        );
         tokio::time::sleep(Duration::from_millis(5)).await;
         Ok(WorkOutcome::Complete)
     }

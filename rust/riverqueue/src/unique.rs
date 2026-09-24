@@ -1,50 +1,43 @@
 //! Go-compatible unique job hashing.
+//!
+//! River Go builds a job's unique key from its exact encoded argument bytes
+//! with `gjson` and `sjson`. This module reproduces those semantics over raw
+//! JSON text rather than a parsed [`serde_json::Value`], so number tokens,
+//! string escapes, and nested member order are hashed exactly as encoded:
+//!
+//! * With no selected unique fields, every top-level member is hashed with
+//!   keys sorted bytewise and duplicate keys collapsed to their first value.
+//! * With selected fields, each selected dotted path is looked up and written
+//!   into a new object in sorted path order. Missing values are omitted, and
+//!   explicit `null` values are retained. When every selected path is
+//!   missing, no argument bytes are hashed.
+//! * Nested values are hashed as their original raw text.
+//! * Keys are rewritten the way `sjson` writes them: a key made only of
+//!   printable ASCII without `"` or `\` is written verbatim, even when the
+//!   encoded arguments escaped it; any other key is re-encoded with Go's
+//!   `encoding/json` string escaping.
+//!
+//! `gjson` interprets `.`, `*`, `?`, `|`, `#`, `@`, `\`, and a leading `:` as
+//! path syntax, so River Go hashes keys containing them inconsistently, and
+//! it fails on an empty key. Rather than silently diverging, River rejects
+//! such keys when they would participate in a unique key.
 
-use std::time::Duration;
+use std::{borrow::Cow, time::Duration};
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use serde_json::{Map, Value};
+use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 
-use crate::{Error, JobArgs, UniqueOpts};
+use crate::{Error, UniqueOpts};
 
 const SECONDS_FROM_YEAR_ONE_TO_UNIX_EPOCH: i128 = 62_135_596_800;
 
-/// Inputs used to construct a unique key.
-pub struct UniqueKeyInput<'a, A> {
-    /// Typed job arguments.
-    pub args: &'a A,
-    /// Encoded arguments generated for insertion.
-    pub encoded_args: &'a Value,
-    /// Job insertion options.
-    pub opts: &'a UniqueOpts,
-    /// Queue name.
-    pub queue: &'a str,
-    /// Scheduled time or current time when absent.
-    pub scheduled_at: Option<DateTime<Utc>>,
-    /// Injectable current time.
-    pub now: DateTime<Utc>,
-}
-
-/// Builds the SHA-256 key used by River's Go implementation.
-pub fn build_unique_key<A: JobArgs>(
-    input: &UniqueKeyInput<'_, A>,
-) -> Result<Option<[u8; 32]>, Error> {
-    build_unique_key_parts(
-        A::KIND,
-        A::unique_fields(),
-        input.encoded_args,
-        input.now,
-        input.opts,
-        input.queue,
-        input.scheduled_at,
-    )
-}
-
+/// Builds the SHA-256 unique key River Go would build for the same inputs.
+/// Returns `None` when `opts` enables no uniqueness dimension.
 pub(crate) fn build_unique_key_parts(
     kind: &str,
     unique_fields: &[&str],
-    encoded_args: &Value,
+    encoded_args: &RawValue,
     now: DateTime<Utc>,
     opts: &UniqueOpts,
     queue: &str,
@@ -62,11 +55,10 @@ pub(crate) fn build_unique_key_parts(
     }
     if opts.by_args {
         key.push_str("&args=");
-        let args = select_unique_args(encoded_args, unique_fields)?;
-        // Go appends no JSON bytes when every explicitly selected field is
-        // absent (for example, all unique fields use omitempty).
-        if unique_fields.is_empty() || args.as_object().is_some_and(|args| !args.is_empty()) {
-            key.push_str(&go_compatible_json(&args)?);
+        if unique_fields.is_empty() {
+            write_all_args(encoded_args.get(), &mut key)?;
+        } else {
+            write_selected_args(encoded_args.get(), unique_fields, &mut key)?;
         }
     }
     if let Some(period) = opts.by_period {
@@ -84,121 +76,341 @@ pub(crate) fn build_unique_key_parts(
     Ok(Some(Sha256::digest(key.as_bytes()).into()))
 }
 
-fn go_compatible_json(value: &Value) -> Result<String, Error> {
-    let mut output = String::new();
-    write_go_compatible_json(value, &mut output)?;
-    Ok(output)
+/// Writes every top-level member sorted by key, like River Go's `@keys`
+/// traversal.
+fn write_all_args(encoded_args: &str, output: &mut String) -> Result<(), Error> {
+    let mut members = object_members(encoded_args)?;
+    for member in &members {
+        validate_path_segment(&member.key, "argument key")?;
+    }
+    // A stable sort keeps the first of any duplicate keys first; `gjson`
+    // resolves a duplicated key to its first value.
+    members.sort_by(|left, right| left.key.cmp(&right.key));
+    members.dedup_by(|later, earlier| later.key == earlier.key);
+
+    output.push('{');
+    for (index, member) in members.iter().enumerate() {
+        if index > 0 {
+            output.push(',');
+        }
+        write_sjson_key(&member.key, output);
+        output.push(':');
+        output.push_str(member.value);
+    }
+    output.push('}');
+    Ok(())
 }
 
-fn write_go_compatible_json(value: &Value, output: &mut String) -> Result<(), Error> {
-    match value {
-        Value::Null => output.push_str("null"),
-        Value::Bool(value) => output.push_str(if *value { "true" } else { "false" }),
-        Value::Number(value) => {
-            let encoded = value.to_string();
-            if encoded_json_number_is_zero(&encoded)
-                && value.as_f64().is_some_and(f64::is_sign_negative)
-            {
-                output.push_str("-0");
-            } else {
-                output.push_str(&encoded);
-            }
+/// Writes selected paths into a new object in sorted path order, like River
+/// Go's `sjson` assembly of struct fields tagged `river:"unique"`.
+fn write_selected_args(
+    encoded_args: &str,
+    unique_fields: &[&str],
+    output: &mut String,
+) -> Result<(), Error> {
+    // Reject non-object arguments consistently with the all-arguments mode.
+    object_members(encoded_args)?;
+
+    let mut paths = unique_fields.to_vec();
+    paths.sort_unstable();
+    paths.dedup();
+    for (index, path) in paths.iter().enumerate() {
+        validate_unique_path(path)?;
+        if paths[index + 1..].iter().any(|other| {
+            other
+                .strip_prefix(path)
+                .is_some_and(|rest| rest.starts_with('.'))
+        }) {
+            return Err(unique_args_error(format!(
+                "unique path {path:?} contains another selected unique path"
+            )));
         }
-        Value::String(value) => output.push_str(&go_compatible_json_string(value)?),
-        Value::Array(values) => {
-            output.push('[');
-            for (index, value) in values.iter().enumerate() {
-                if index > 0 {
-                    output.push(',');
-                }
-                write_go_compatible_json(value, output)?;
-            }
-            output.push(']');
+    }
+
+    let mut selected = Vec::new();
+    for path in paths {
+        if let Some(value) = lookup_path(encoded_args, path)? {
+            insert_selected(&mut selected, path.split('.'), value);
         }
-        Value::Object(values) => {
-            output.push('{');
-            for (index, (key, value)) in values.iter().enumerate() {
-                if index > 0 {
-                    output.push(',');
-                }
-                output.push_str(&go_compatible_json_string(key)?);
-                output.push(':');
-                write_go_compatible_json(value, output)?;
-            }
-            output.push('}');
+    }
+    if !selected.is_empty() {
+        write_selected_object(&selected, output);
+    }
+    Ok(())
+}
+
+/// Validates a dotted unique path against the subset of `gjson`/`sjson` path
+/// syntax that River Go hashes deterministically.
+fn validate_unique_path(path: &str) -> Result<(), Error> {
+    for segment in path.split('.') {
+        validate_path_segment(segment, "unique path segment")?;
+        if segment.bytes().all(|byte| byte.is_ascii_digit()) || segment == "-1" {
+            return Err(unique_args_error(format!(
+                "unique path {path:?} contains array index segment {segment:?}"
+            )));
         }
     }
     Ok(())
 }
 
-fn encoded_json_number_is_zero(encoded: &str) -> bool {
-    let coefficient = encoded
-        .strip_prefix('-')
-        .unwrap_or(encoded)
-        .split_once(['e', 'E'])
-        .map_or(
-            encoded.strip_prefix('-').unwrap_or(encoded),
-            |(value, _)| value,
-        );
-    coefficient.bytes().all(|byte| matches!(byte, b'0' | b'.'))
+struct SelectedMember<'a> {
+    key: &'a str,
+    value: SelectedValue<'a>,
 }
 
-fn go_compatible_json_string(value: &str) -> Result<String, Error> {
-    Ok(serde_json::to_string(value)?
-        .replace('<', "\\u003c")
-        .replace('>', "\\u003e")
-        .replace('&', "\\u0026")
-        .replace('\u{2028}', "\\u2028")
-        .replace('\u{2029}', "\\u2029"))
+enum SelectedValue<'a> {
+    Object(Vec<SelectedMember<'a>>),
+    Raw(&'a str),
 }
 
-fn select_unique_args(value: &Value, paths: &[&str]) -> Result<Value, Error> {
-    let object = value.as_object().ok_or_else(|| {
-        Error::invalid_job_context(
-            "job uniqueness",
-            "job arguments must encode to a JSON object".to_owned(),
-        )
-    })?;
-    if paths.is_empty() {
-        let mut entries = object.iter().collect::<Vec<_>>();
-        entries.sort_unstable_by_key(|(key, _)| *key);
-        let sorted = entries
-            .into_iter()
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect::<Map<_, _>>();
-        return Ok(Value::Object(sorted));
-    }
-
-    let mut selected = Map::new();
-    let mut paths = paths.to_vec();
-    paths.sort_unstable();
-    for path in paths {
-        if let Some(value) = path
-            .split('.')
-            .try_fold(value, |value, segment| value.get(segment))
-        {
-            insert_path(&mut selected, path, value.clone());
-        }
-    }
-    Ok(Value::Object(selected))
-}
-
-fn insert_path(target: &mut Map<String, Value>, path: &str, value: Value) {
-    let mut segments = path.split('.');
-    let Some(first) = segments.next() else {
+fn insert_selected<'a>(
+    members: &mut Vec<SelectedMember<'a>>,
+    mut segments: std::str::Split<'a, char>,
+    value: &'a str,
+) {
+    let Some(segment) = segments.next() else {
         return;
     };
-    let remainder = segments.collect::<Vec<_>>();
-    if remainder.is_empty() {
-        target.insert(first.to_owned(), value);
+    let position = members.iter().position(|member| member.key == segment);
+    if segments.clone().next().is_none() {
+        let value = SelectedValue::Raw(value);
+        match position {
+            Some(position) => members[position].value = value,
+            None => members.push(SelectedMember {
+                key: segment,
+                value,
+            }),
+        }
         return;
     }
+    let position = position.unwrap_or_else(|| {
+        members.push(SelectedMember {
+            key: segment,
+            value: SelectedValue::Object(Vec::new()),
+        });
+        members.len() - 1
+    });
+    // Prefix conflicts are rejected before insertion, so an intermediate
+    // segment always names an object.
+    if let SelectedValue::Object(children) = &mut members[position].value {
+        insert_selected(children, segments, value);
+    }
+}
 
-    let child = target
-        .entry(first.to_owned())
-        .or_insert_with(|| Value::Object(Map::new()));
-    if let Value::Object(child) = child {
-        insert_path(child, &remainder.join("."), value);
+fn write_selected_object(members: &[SelectedMember<'_>], output: &mut String) {
+    output.push('{');
+    for (index, member) in members.iter().enumerate() {
+        if index > 0 {
+            output.push(',');
+        }
+        write_sjson_key(member.key, output);
+        output.push(':');
+        match &member.value {
+            SelectedValue::Object(children) => write_selected_object(children, output),
+            SelectedValue::Raw(raw) => output.push_str(raw),
+        }
+    }
+    output.push('}');
+}
+
+/// Resolves a dotted path to the raw text of its value, following `gjson`:
+/// each segment selects the first object member with that (unescaped) key.
+fn lookup_path<'a>(encoded_args: &'a str, path: &str) -> Result<Option<&'a str>, Error> {
+    let mut current = encoded_args;
+    for segment in path.split('.') {
+        if !current.trim_start().starts_with('{') {
+            return Ok(None);
+        }
+        match object_members(current)?
+            .into_iter()
+            .find(|member| member.key == segment)
+        {
+            Some(member) => current = member.value,
+            None => return Ok(None),
+        }
+    }
+    Ok(Some(current))
+}
+
+fn validate_path_segment(segment: &str, description: &str) -> Result<(), Error> {
+    if segment.is_empty() {
+        return Err(unique_args_error(format!(
+            "{description} is empty, which River Go cannot hash"
+        )));
+    }
+    if segment.starts_with(':')
+        || segment
+            .bytes()
+            .any(|byte| matches!(byte, b'.' | b'*' | b'?' | b'|' | b'#' | b'@' | b'\\'))
+    {
+        return Err(unique_args_error(format!(
+            "{description} {segment:?} contains JSON path syntax that River Go cannot hash \
+             deterministically; select unique fields that avoid `.`, `*`, `?`, `|`, `#`, `@`, \
+             `\\`, and a leading `:`"
+        )));
+    }
+    Ok(())
+}
+
+fn unique_args_error(message: String) -> Error {
+    Error::invalid_job_context("job uniqueness", message)
+}
+
+/// Writes an object key the way `sjson` does: verbatim when it is printable
+/// ASCII without `"` or `\`, otherwise with Go's `encoding/json` escaping.
+fn write_sjson_key(key: &str, output: &mut String) {
+    let verbatim = key
+        .bytes()
+        .all(|byte| (b' '..=0x7f).contains(&byte) && byte != b'"' && byte != b'\\');
+    if verbatim {
+        output.push('"');
+        output.push_str(key);
+        output.push('"');
+    } else {
+        crate::encoding::write_go_string(key, output);
+    }
+}
+
+/// One member of a JSON object with its unescaped key and raw value text.
+struct Member<'a> {
+    key: Cow<'a, str>,
+    value: &'a str,
+}
+
+/// Splits a JSON object into its members without reinterpreting values.
+fn object_members(source: &str) -> Result<Vec<Member<'_>>, Error> {
+    let not_object = || unique_args_error("job arguments must encode to a JSON object".to_owned());
+    let mut scanner = Scanner::new(source);
+    scanner.skip_whitespace();
+    if !scanner.eat(b'{') {
+        return Err(not_object());
+    }
+    let mut members = Vec::new();
+    scanner.skip_whitespace();
+    if scanner.eat(b'}') {
+        return Ok(members);
+    }
+    loop {
+        scanner.skip_whitespace();
+        let key = scanner.string().ok_or_else(not_object)?;
+        scanner.skip_whitespace();
+        if !scanner.eat(b':') {
+            return Err(not_object());
+        }
+        scanner.skip_whitespace();
+        let value = scanner.value().ok_or_else(not_object)?;
+        members.push(Member {
+            key: unescape_key(key)?,
+            value,
+        });
+        scanner.skip_whitespace();
+        if scanner.eat(b',') {
+            continue;
+        }
+        if scanner.eat(b'}') {
+            return Ok(members);
+        }
+        return Err(not_object());
+    }
+}
+
+fn unescape_key(token: &str) -> Result<Cow<'_, str>, Error> {
+    if token.contains('\\') {
+        return serde_json::from_str::<String>(token)
+            .map(Cow::Owned)
+            .map_err(Error::from);
+    }
+    Ok(Cow::Borrowed(&token[1..token.len() - 1]))
+}
+
+/// Minimal scanner over JSON text already validated by `serde_json`.
+struct Scanner<'a> {
+    bytes: &'a [u8],
+    position: usize,
+    source: &'a str,
+}
+
+impl<'a> Scanner<'a> {
+    const fn new(source: &'a str) -> Self {
+        Self {
+            bytes: source.as_bytes(),
+            position: 0,
+            source,
+        }
+    }
+
+    fn eat(&mut self, expected: u8) -> bool {
+        if self.bytes.get(self.position) == Some(&expected) {
+            self.position += 1;
+            return true;
+        }
+        false
+    }
+
+    fn skip_whitespace(&mut self) {
+        while matches!(
+            self.bytes.get(self.position),
+            Some(b' ' | b'\t' | b'\n' | b'\r')
+        ) {
+            self.position += 1;
+        }
+    }
+
+    /// Consumes a string token and returns it including its quotes.
+    fn string(&mut self) -> Option<&'a str> {
+        let start = self.position;
+        if !self.eat(b'"') {
+            return None;
+        }
+        while let Some(&byte) = self.bytes.get(self.position) {
+            self.position += 1;
+            match byte {
+                b'\\' => self.position += 1,
+                b'"' => return self.source.get(start..self.position),
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Consumes any JSON value and returns its raw text.
+    fn value(&mut self) -> Option<&'a str> {
+        let start = self.position;
+        match self.bytes.get(self.position)? {
+            b'"' => {
+                self.string()?;
+            }
+            b'{' | b'[' => {
+                let mut depth = 0_usize;
+                loop {
+                    match self.bytes.get(self.position)? {
+                        b'"' => {
+                            self.string()?;
+                            continue;
+                        }
+                        b'{' | b'[' => depth += 1,
+                        b'}' | b']' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                self.position += 1;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    self.position += 1;
+                }
+            }
+            _ => {
+                while !matches!(
+                    self.bytes.get(self.position),
+                    None | Some(b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r')
+                ) {
+                    self.position += 1;
+                }
+            }
+        }
+        self.source.get(start..self.position)
     }
 }
 
@@ -233,10 +445,13 @@ fn truncate_period(timestamp: DateTime<Utc>, period: Duration) -> Result<DateTim
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::JobArgs as JobArgsDerive;
+    use std::collections::BTreeMap;
+
     use chrono::TimeZone;
     use serde::{Deserialize, Serialize};
+
+    use super::*;
+    use crate::{JobArgs, JobArgs as JobArgsDerive, JobState, encoding::encode_args};
 
     #[derive(Deserialize)]
     struct Fixture {
@@ -246,7 +461,7 @@ mod tests {
 
     #[derive(Deserialize)]
     struct FixtureCase {
-        args: Value,
+        args: Box<RawValue>,
         expected_sha256: String,
         expected_state_mask: u8,
         kind: String,
@@ -258,201 +473,126 @@ mod tests {
         selected_unique_paths: Option<Vec<String>>,
     }
 
+    impl FixtureCase {
+        /// The fixture file is indented; Go hashed the compact encoding.
+        fn compact_args(&self) -> Box<RawValue> {
+            RawValue::from_string(compact_json(self.args.get())).unwrap()
+        }
+
+        fn unique_opts(&self) -> UniqueOpts {
+            UniqueOpts {
+                by_args: self.options.by_args,
+                by_period: (self.options.by_period_nanos > 0)
+                    .then(|| Duration::from_nanos(self.options.by_period_nanos)),
+                by_queue: self.options.by_queue,
+                by_state: self.options.by_state.clone(),
+                exclude_kind: self.options.exclude_kind,
+            }
+        }
+
+        fn expected_key(&self) -> [u8; 32] {
+            let mut decoded = [0_u8; 32];
+            for (index, byte) in decoded.iter_mut().enumerate() {
+                *byte = u8::from_str_radix(&self.expected_sha256[index * 2..index * 2 + 2], 16)
+                    .unwrap();
+            }
+            decoded
+        }
+    }
+
     #[derive(Deserialize)]
     struct FixtureOptions {
         by_args: bool,
         by_period_nanos: u64,
         by_queue: bool,
-        by_state: Option<Vec<crate::JobState>>,
+        by_state: Option<Vec<JobState>>,
         exclude_kind: bool,
     }
 
-    #[derive(Deserialize, JobArgsDerive, Serialize)]
-    #[river(kind = "unique_test")]
-    struct Args {
-        ignored: String,
-        #[river(unique)]
-        #[serde(rename = "selected_value")]
-        selected: String,
-    }
-
-    #[derive(Deserialize, JobArgsDerive, Serialize)]
-    #[river(kind = "optional_unique_test")]
-    struct ArgsWithOptionalUnique {
-        #[river(unique)]
-        #[serde(skip_serializing_if = "Option::is_none")]
-        selected: Option<String>,
-    }
-
-    #[derive(Deserialize, JobArgsDerive, Serialize)]
-    #[serde(rename_all(serialize = "kebab-case", deserialize = "camelCase"))]
-    #[river(kind = "serialize_name_test")]
-    struct ArgsWithSerializationNames {
-        #[river(unique)]
-        first_value: String,
-        #[river(unique)]
-        #[serde(rename(serialize = "wire-name", deserialize = "inputName"))]
-        r#type: String,
-    }
-
-    #[derive(Deserialize, JobArgsDerive, Serialize)]
-    #[river(
-        kind = "new_kind",
-        aliases("old_kind", "older_kind"),
-        max_attempts = 7,
-        pending = true,
-        priority = 3,
-        queue = "critical_jobs"
-    )]
-    struct ArgsWithDefaults {}
-
-    #[test]
-    fn hashes_selected_args_with_go_json_escaping() {
-        let args = Args {
-            ignored: "ignored".to_owned(),
-            selected: "<selected>".to_owned(),
-        };
-        let encoded = serde_json::to_value(&args).unwrap();
-        let key = build_unique_key(&UniqueKeyInput {
-            args: &args,
-            encoded_args: &encoded,
-            now: Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap(),
-            opts: &UniqueOpts {
-                by_args: true,
-                ..UniqueOpts::default()
-            },
-            queue: "default",
-            scheduled_at: None,
-        })
-        .unwrap()
+    fn fixture() -> Fixture {
+        let fixture: Fixture = serde_json::from_str(include_str!(
+            "../../../conformance/fixtures/unique_keys.json"
+        ))
         .unwrap();
-
-        let expected = Sha256::digest(
-            b"&kind=unique_test&args={\"selected_value\":\"\\u003cselected\\u003e\"}",
-        );
-        assert_eq!(key.as_slice(), expected.as_slice());
+        assert_eq!(fixture.protocol_revision, 1);
+        fixture
     }
 
-    #[test]
-    fn hashes_serde_serialization_names() {
-        let args = ArgsWithSerializationNames {
-            first_value: "first".to_owned(),
-            r#type: "second".to_owned(),
-        };
-        let encoded = serde_json::to_value(&args).unwrap();
-        let key = build_unique_key(&UniqueKeyInput {
-            args: &args,
-            encoded_args: &encoded,
-            now: Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap(),
-            opts: &UniqueOpts {
-                by_args: true,
-                ..UniqueOpts::default()
-            },
-            queue: "default",
-            scheduled_at: None,
-        })
-        .unwrap()
-        .unwrap();
-
-        let expected = Sha256::digest(
-            b"&kind=serialize_name_test&args={\"first-value\":\"first\",\"wire-name\":\"second\"}",
-        );
-        assert_eq!(key.as_slice(), expected.as_slice());
+    fn golden(name: &str) -> FixtureCase {
+        fixture()
+            .cases
+            .into_iter()
+            .find(|case| case.name == name)
+            .unwrap_or_else(|| panic!("missing golden {name}"))
     }
 
-    #[test]
-    fn hashes_absent_optional_unique_fields_as_omitted() {
-        let args = ArgsWithOptionalUnique { selected: None };
-        let encoded = serde_json::to_value(&args).unwrap();
-        let key = build_unique_key(&UniqueKeyInput {
-            args: &args,
-            encoded_args: &encoded,
-            now: Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap(),
-            opts: &UniqueOpts {
-                by_args: true,
-                ..UniqueOpts::default()
-            },
-            queue: "default",
-            scheduled_at: None,
-        })
-        .unwrap()
-        .unwrap();
-
-        let expected = Sha256::digest(b"&kind=optional_unique_test&args=");
-        assert_eq!(key.as_slice(), expected.as_slice());
-    }
-
-    #[test]
-    fn preserves_nested_struct_serialization_order() {
-        #[derive(Serialize)]
-        struct Nested {
-            z: i32,
-            a: i32,
+    /// Removes insignificant whitespace, as Go's `json.Compact` does.
+    fn compact_json(source: &str) -> String {
+        let mut output = String::with_capacity(source.len());
+        let mut in_string = false;
+        let mut escaped = false;
+        for character in source.chars() {
+            if in_string {
+                output.push(character);
+                if escaped {
+                    escaped = false;
+                } else if character == '\\' {
+                    escaped = true;
+                } else if character == '"' {
+                    in_string = false;
+                }
+            } else if character == '"' {
+                in_string = true;
+                output.push(character);
+            } else if !character.is_ascii_whitespace() {
+                output.push(character);
+            }
         }
-        #[derive(Serialize)]
-        struct Args {
-            nested: Nested,
-        }
-        let encoded = serde_json::to_value(Args {
-            nested: Nested { z: 1, a: 2 },
-        })
-        .unwrap();
-        let selected = select_unique_args(&encoded, &[]).unwrap();
-        assert_eq!(
-            go_compatible_json(&selected).unwrap(),
-            r#"{"nested":{"z":1,"a":2}}"#
-        );
+        output
     }
 
-    #[test]
-    fn selects_sibling_paths_and_literal_slashes_and_tildes() {
-        let args = serde_json::json!({"account": {"region": "west", "id": "acct"}, "path/key": "slash", "key~1": "tilde"});
-        let selected = select_unique_args(
-            &args,
-            &["path/key", "key~1", "account.region", "account.id"],
+    fn key_for(
+        kind: &str,
+        unique_fields: &[&str],
+        args: &RawValue,
+        opts: &UniqueOpts,
+    ) -> Result<[u8; 32], Error> {
+        build_unique_key_parts(
+            kind,
+            unique_fields,
+            args,
+            Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap(),
+            opts,
+            "default",
+            None,
         )
-        .unwrap();
-        assert_eq!(
-            go_compatible_json(&selected).unwrap(),
-            r#"{"account":{"id":"acct","region":"west"},"key~1":"tilde","path/key":"slash"}"#
-        );
+        .map(Option::unwrap)
     }
 
-    #[test]
-    fn job_args_derive_provides_aliases_and_insert_defaults() {
-        assert_eq!(ArgsWithDefaults::kind_aliases(), ["old_kind", "older_kind"]);
-        let opts = ArgsWithDefaults::default_insert_opts();
-        assert_eq!(opts.max_attempts(), Some(7));
-        assert_eq!(opts.pending(), Some(true));
-        assert_eq!(opts.priority(), Some(3));
-        assert_eq!(opts.queue(), Some("critical_jobs"));
+    /// Asserts that typed Rust arguments encode to the exact bytes Go encoded
+    /// for the golden case and hash to Go's key.
+    fn assert_typed_golden<A: JobArgs>(name: &str, args: &A) {
+        let case = golden(name);
+        let encoded = encode_args(args).unwrap();
+        assert_eq!(encoded.get(), case.compact_args().get(), "golden {name}");
+        assert_eq!(case.kind, A::KIND, "golden {name}");
+        assert_eq!(
+            key_for(A::KIND, A::unique_fields(), &encoded, &case.unique_opts()).unwrap(),
+            case.expected_key(),
+            "golden {name}"
+        );
     }
 
     #[test]
     fn matches_go_generated_golden_keys() {
-        // `serde_json`'s arbitrary-precision parser normalizes the integer
-        // token `-0` to `0`. Typed Rust arguments retain negative zero, so keep
-        // the fixture on that production path while preserving its sign.
-        let fixture_source = include_str!("../../../conformance/fixtures/unique_keys.json")
-            .replace("\"zero\": -0,", "\"zero\": -0.0,");
-        let fixture: Fixture = serde_json::from_str(&fixture_source).unwrap();
-        assert_eq!(fixture.protocol_revision, 1);
-
-        for case in fixture.cases {
-            let unique_paths = case.selected_unique_paths.unwrap_or_default();
+        for case in fixture().cases {
+            let unique_paths = case.selected_unique_paths.clone().unwrap_or_default();
             let unique_path_refs = unique_paths.iter().map(String::as_str).collect::<Vec<_>>();
-            let opts = UniqueOpts {
-                by_args: case.options.by_args,
-                by_period: (case.options.by_period_nanos > 0)
-                    .then(|| Duration::from_nanos(case.options.by_period_nanos)),
-                by_queue: case.options.by_queue,
-                by_state: case.options.by_state,
-                exclude_kind: case.options.exclude_kind,
-            };
+            let opts = case.unique_opts();
             let actual = build_unique_key_parts(
                 &case.kind,
                 &unique_path_refs,
-                &case.args,
+                &case.compact_args(),
                 case.now,
                 &opts,
                 &case.queue,
@@ -460,12 +600,7 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-            assert_eq!(
-                hex_to_bytes(&case.expected_sha256),
-                actual,
-                "fixture {}",
-                case.name
-            );
+            assert_eq!(case.expected_key(), actual, "fixture {}", case.name);
             assert_eq!(
                 case.expected_state_mask,
                 opts.state_bitmask(),
@@ -475,19 +610,442 @@ mod tests {
         }
     }
 
-    #[test]
-    fn preserves_negative_zero_for_go_json() {
-        let value = serde_json::to_value(-0.0_f64).unwrap();
-        assert_eq!(go_compatible_json(&value).unwrap(), "-0");
+    #[derive(Deserialize, JobArgsDerive, Serialize)]
+    #[river(kind = "conformance_all_args")]
+    struct AllArgs {
+        zeta: String,
+        alpha: String,
+        maximum: i64,
     }
 
-    fn hex_to_bytes(encoded: &str) -> [u8; 32] {
-        assert_eq!(encoded.len(), 64);
-        let mut decoded = [0_u8; 32];
-        for (index, byte) in decoded.iter_mut().enumerate() {
-            *byte = u8::from_str_radix(&encoded[index * 2..index * 2 + 2], 16).unwrap();
+    #[test]
+    fn typed_args_match_go_sorted_and_escaped_golden() {
+        assert_typed_golden(
+            "all_args_sorted_and_escaped",
+            &AllArgs {
+                alpha: "<alpha>&\u{2028}line".to_owned(),
+                maximum: 9_007_199_254_740_991,
+                zeta: r#"quoted \"value\" and \\ slash"#.to_owned(),
+            },
+        );
+    }
+
+    #[derive(Deserialize, JobArgsDerive, Serialize)]
+    #[river(kind = "conformance_all_args")]
+    struct CollectionsArgs {
+        empty: Vec<String>,
+        labels: BTreeMap<String, String>,
+        matrix: Vec<Vec<i64>>,
+        missing: Option<Vec<String>>,
+        objects: Vec<CollectionsItem>,
+        pointer: Option<String>,
+    }
+
+    #[derive(Deserialize, Serialize)]
+    struct CollectionsItem {
+        zulu: String,
+        alpha: Option<i64>,
+    }
+
+    #[test]
+    fn typed_args_match_go_collections_golden() {
+        assert_typed_golden(
+            "typed_collections_and_nulls",
+            &CollectionsArgs {
+                empty: Vec::new(),
+                labels: BTreeMap::from(
+                    [
+                        ("zulu", "last"),
+                        ("alpha", "first"),
+                        ("10", "ten"),
+                        ("2", "two"),
+                    ]
+                    .map(|(key, value)| (key.to_owned(), value.to_owned())),
+                ),
+                matrix: vec![vec![3, 1], vec![], vec![2]],
+                missing: None,
+                objects: vec![
+                    CollectionsItem {
+                        zulu: "z".to_owned(),
+                        alpha: Some(1),
+                    },
+                    CollectionsItem {
+                        zulu: "y".to_owned(),
+                        alpha: None,
+                    },
+                ],
+                pointer: None,
+            },
+        );
+    }
+
+    #[derive(Deserialize, JobArgsDerive, Serialize)]
+    #[river(kind = "conformance_all_args")]
+    struct EmptyArgs {}
+
+    #[test]
+    fn typed_args_match_go_empty_golden() {
+        assert_typed_golden("typed_empty_args", &EmptyArgs {});
+    }
+
+    #[derive(Deserialize, JobArgsDerive, Serialize)]
+    #[river(kind = "conformance_all_args")]
+    struct EscapingArgs {
+        #[serde(rename = "a<b>")]
+        angle: String,
+        controls: String,
+        html: String,
+        keys: BTreeMap<String, i64>,
+        separators: String,
+        unicode: String,
+        #[serde(rename = "é&")]
+        unicode_amp: String,
+    }
+
+    #[test]
+    fn typed_args_match_go_escaping_golden() {
+        assert_typed_golden(
+            "typed_escaping",
+            &EscapingArgs {
+                angle: "<angle>".to_owned(),
+                controls: "\u{8}\u{c}\n\r\t\u{0}\u{1}\u{1f}\u{7f}".to_owned(),
+                html: r#"<a href="x">&amp;</a>"#.to_owned(),
+                keys: BTreeMap::from(
+                    [("<k>", 1), ("a&b", 2), ("é", 3), ("é<", 4)]
+                        .map(|(key, value)| (key.to_owned(), value)),
+                ),
+                separators: "line\u{2028}paragraph\u{2029}end".to_owned(),
+                unicode: "é😀/\\".to_owned(),
+                unicode_amp: "unicode key".to_owned(),
+            },
+        );
+    }
+
+    #[derive(Deserialize, JobArgsDerive, Serialize)]
+    #[river(kind = "conformance_all_args")]
+    struct NestedOrderArgs {
+        nested: NestedOrder,
+    }
+
+    #[derive(Deserialize, Serialize)]
+    struct NestedOrder {
+        z: i64,
+        a: i64,
+    }
+
+    #[test]
+    fn typed_args_match_go_nested_order_golden() {
+        assert_typed_golden(
+            "nested_struct_wire_order",
+            &NestedOrderArgs {
+                nested: NestedOrder { z: 1, a: 2 },
+            },
+        );
+    }
+
+    #[derive(Deserialize, JobArgsDerive, Serialize)]
+    #[river(kind = "conformance_numeric_boundaries")]
+    struct NumericBoundaryArgs {
+        exponent: f64,
+        fraction: f64,
+        maximum: i64,
+        minimum: i64,
+        unsigned_maximum: u64,
+    }
+
+    #[test]
+    fn typed_args_match_go_numeric_boundaries_golden() {
+        assert_typed_golden(
+            "numeric_boundaries",
+            &NumericBoundaryArgs {
+                exponent: 1e100,
+                fraction: 1.25,
+                maximum: i64::MAX,
+                minimum: i64::MIN,
+                unsigned_maximum: u64::MAX,
+            },
+        );
+    }
+
+    #[derive(Default, Deserialize, Serialize)]
+    struct SelectedAccount {
+        #[serde(skip_serializing_if = "String::is_empty")]
+        id: String,
+        #[serde(skip_serializing_if = "String::is_empty")]
+        ignored: String,
+        #[serde(skip_serializing_if = "String::is_empty")]
+        region: String,
+    }
+
+    impl SelectedAccount {
+        fn is_zero(&self) -> bool {
+            self.id.is_empty() && self.ignored.is_empty() && self.region.is_empty()
         }
-        decoded
+    }
+
+    #[derive(Deserialize, JobArgsDerive, Serialize)]
+    #[river(
+        kind = "conformance_selected_args",
+        unique("account.id", "account.region", "label", "path/key")
+    )]
+    struct SelectedArgs {
+        #[serde(skip_serializing_if = "SelectedAccount::is_zero")]
+        account: SelectedAccount,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        ignored: bool,
+        #[serde(skip_serializing_if = "String::is_empty")]
+        label: String,
+        #[serde(rename = "path/key", skip_serializing_if = "String::is_empty")]
+        path_key: String,
+    }
+
+    #[test]
+    fn typed_args_match_go_selected_goldens() {
+        assert_typed_golden(
+            "all_selected_fields_omitted",
+            &SelectedArgs {
+                account: SelectedAccount::default(),
+                ignored: false,
+                label: String::new(),
+                path_key: String::new(),
+            },
+        );
+        assert_typed_golden(
+            "selected_siblings_and_slash_key",
+            &SelectedArgs {
+                account: SelectedAccount {
+                    id: "acct".to_owned(),
+                    ignored: "irrelevant".to_owned(),
+                    region: "west".to_owned(),
+                },
+                ignored: false,
+                label: String::new(),
+                path_key: "slash".to_owned(),
+            },
+        );
+        assert_typed_golden(
+            "selected_nested_args",
+            &SelectedArgs {
+                account: SelectedAccount {
+                    id: "acct-123".to_owned(),
+                    ignored: "not selected".to_owned(),
+                    region: String::new(),
+                },
+                ignored: true,
+                label: "selected".to_owned(),
+                path_key: String::new(),
+            },
+        );
+    }
+
+    #[derive(Deserialize, JobArgsDerive, Serialize)]
+    #[river(
+        kind = "conformance_selected_args",
+        unique("account.id", "account.region", "label", "path/key")
+    )]
+    struct SelectedNullArgs {
+        #[serde(skip_serializing_if = "SelectedAccount::is_zero")]
+        account: SelectedAccount,
+        label: Option<String>,
+        #[serde(rename = "path/key", skip_serializing_if = "String::is_empty")]
+        path_key: String,
+    }
+
+    #[test]
+    fn typed_args_match_go_selected_explicit_null_golden() {
+        assert_typed_golden(
+            "selected_explicit_null",
+            &SelectedNullArgs {
+                account: SelectedAccount::default(),
+                label: None,
+                path_key: String::new(),
+            },
+        );
+    }
+
+    #[derive(Deserialize, JobArgsDerive, Serialize)]
+    #[river(kind = "conformance_all_args")]
+    struct TimeArgs {
+        #[serde(with = "crate::encoding::go_time")]
+        fraction: DateTime<Utc>,
+        #[serde(with = "crate::encoding::go_time")]
+        micros: DateTime<Utc>,
+        #[serde(with = "crate::encoding::go_time")]
+        millis: DateTime<Utc>,
+        whole: DateTime<Utc>,
+    }
+
+    #[test]
+    fn typed_args_match_go_time_golden() {
+        let whole = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+        assert_typed_golden(
+            "typed_time_values",
+            &TimeArgs {
+                fraction: whole + chrono::Duration::milliseconds(500),
+                micros: whole + chrono::Duration::microseconds(123_456),
+                millis: whole + chrono::Duration::milliseconds(120),
+                // Whole seconds need no helper: chrono and Go agree.
+                whole,
+            },
+        );
+    }
+
+    #[derive(Deserialize, JobArgsDerive, Serialize)]
+    #[river(kind = "conformance_all_args")]
+    struct TypedFloatArgs {
+        below_large: f64,
+        large: f64,
+        large_boundary: f64,
+        largest: f64,
+        negative: f64,
+        negative_zero: f64,
+        one: f64,
+        single: f32,
+        single_large: f32,
+        single_small: f32,
+        small: f64,
+        small_boundary: f64,
+        smallest: f64,
+        tenth: f64,
+    }
+
+    #[test]
+    fn typed_args_match_go_float_golden() {
+        assert_typed_golden(
+            "typed_float_formatting",
+            &TypedFloatArgs {
+                below_large: f64::from_bits(1e21_f64.to_bits() - 1),
+                large: 1e20,
+                large_boundary: 1e21,
+                largest: f64::MAX,
+                negative: -1.5e-9,
+                negative_zero: -0.0,
+                one: 1.0,
+                single: 1.1,
+                single_large: 1e21,
+                single_small: 1e-7,
+                small: 1e-7,
+                small_boundary: 1e-6,
+                smallest: 5e-324,
+                tenth: 0.1,
+            },
+        );
+    }
+
+    #[derive(Deserialize, Serialize)]
+    #[serde(transparent)]
+    struct MapArgs(BTreeMap<String, f64>);
+
+    impl JobArgs for MapArgs {
+        const KIND: &'static str = "conformance_all_args";
+    }
+
+    #[test]
+    fn typed_map_args_hash_like_go_despite_member_order() {
+        // Go encoded these members in a custom order; the all-arguments hash
+        // sorts top-level keys, so a sorted Rust map hashes identically.
+        let case = golden("map_order_and_negative_zero");
+        let args = MapArgs(BTreeMap::from(
+            [
+                ("2", 2.0),
+                ("10", 10.0),
+                ("zero", -0.0),
+                ("😀", 1.0),
+                ("\u{e000}", 2.0),
+            ]
+            .map(|(key, value)| (key.to_owned(), value)),
+        ));
+        let encoded = encode_args(&args).unwrap();
+        assert_ne!(encoded.get(), case.compact_args().get());
+        assert_eq!(
+            key_for(MapArgs::KIND, &[], &encoded, &case.unique_opts()).unwrap(),
+            case.expected_key()
+        );
+    }
+
+    #[test]
+    fn hashes_raw_bytes_without_reinterpreting_values() {
+        let opts = UniqueOpts::new().by_args();
+        let raw = |json: &str| RawValue::from_string(json.to_owned()).unwrap();
+        let key = |json: &str| key_for("raw", &[], &raw(json), &opts).unwrap();
+        let expected =
+            |text: &str| -> [u8; 32] { Sha256::digest(format!("&kind=raw&args={text}")).into() };
+
+        // Number tokens, nested whitespace, and nested order are hashed as
+        // written; top-level whitespace is not.
+        assert_eq!(
+            key(r#"{"b":1.0,"a":1e2}"#),
+            expected(r#"{"a":1e2,"b":1.0}"#)
+        );
+        assert_eq!(
+            key(r#" { "a" : [1, {"z":1, "y":2}] , "b":null } "#),
+            expected(r#"{"a":[1, {"z":1, "y":2}],"b":null}"#)
+        );
+        // Duplicate keys resolve to their first value.
+        assert_eq!(key(r#"{"a":1,"a":2}"#), expected(r#"{"a":1}"#));
+        // Escaped printable ASCII keys are written verbatim, like sjson; other
+        // keys are re-encoded with Go's escaping.
+        assert_eq!(
+            key(r#"{"\u003ck\u003e":1,"a\"b":2,"é\u0026":3,"line\n":4}"#),
+            expected(r#"{"<k>":1,"a\"b":2,"line\n":4,"é\u0026":3}"#)
+        );
+    }
+
+    #[test]
+    fn selected_paths_follow_sjson_assembly() {
+        let raw = RawValue::from_string(
+            r#"{"b":{"y":2,"x":1},"a-b":3,"a":{"c":null},"ignored":true}"#.to_owned(),
+        )
+        .unwrap();
+        let mut output = String::new();
+        write_selected_args(
+            raw.get(),
+            &["b.x", "a.c", "a-b", "b.y", "missing.path"],
+            &mut output,
+        )
+        .unwrap();
+        // Paths are applied in sorted order ("a-b" < "a.c" < "b.x" < "b.y"),
+        // explicit nulls are kept, and missing paths are omitted.
+        assert_eq!(output, r#"{"a-b":3,"a":{"c":null},"b":{"x":1,"y":2}}"#);
+
+        let mut output = String::new();
+        write_selected_args(raw.get(), &["missing"], &mut output).unwrap();
+        assert_eq!(output, "");
+    }
+
+    #[test]
+    fn rejects_keys_go_cannot_hash_deterministically() {
+        let opts = UniqueOpts::new().by_args();
+        for json in [
+            r#"{"a.b":1}"#,
+            r#"{"a*":1}"#,
+            r#"{"a?":1}"#,
+            r#"{"a|b":1}"#,
+            r##"{"#":1}"##,
+            r#"{"@this":1}"#,
+            r#"{"a\\b":1}"#,
+            r#"{":a":1}"#,
+            r#"{"":1}"#,
+        ] {
+            let raw = RawValue::from_string(json.to_owned()).unwrap();
+            let error = key_for("raw", &[], &raw, &opts).unwrap_err();
+            assert!(error.to_string().contains("River Go"), "{json}: {error}");
+        }
+
+        let raw = RawValue::from_string(r#"{"a":{"b":1}}"#.to_owned()).unwrap();
+        for paths in [&["a.0"][..], &["a", "a.b"], &["a*"], &["a."]] {
+            assert!(key_for("raw", paths, &raw, &opts).is_err(), "{paths:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_non_object_args() {
+        let opts = UniqueOpts::new().by_args();
+        for json in ["[1]", "1", "null", r#""text""#] {
+            let raw = RawValue::from_string(json.to_owned()).unwrap();
+            assert!(key_for("raw", &[], &raw, &opts).is_err(), "{json}");
+            assert!(key_for("raw", &["a"], &raw, &opts).is_err(), "{json}");
+        }
     }
 
     #[test]

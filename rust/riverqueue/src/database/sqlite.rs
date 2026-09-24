@@ -73,7 +73,7 @@ pub(crate) struct InsertJob<'a> {
     pub attempted_by: &'a [String],
     pub attempt: i16,
     pub created_at: DateTime<Utc>,
-    pub encoded_args: &'a Value,
+    pub encoded_args: &'a serde_json::value::RawValue,
     pub errors: &'a [AttemptError],
     pub finalized_at: Option<DateTime<Utc>>,
     pub id: Option<i64>,
@@ -224,7 +224,7 @@ impl JobRecord {
             attempted_at: self.attempted_at,
             attempted_by: decode_json_or_default(self.attempted_by.as_deref())?,
             created_at: self.created_at,
-            encoded_args: serde_json::from_str(&self.encoded_args)?,
+            encoded_args: serde_json::value::RawValue::from_string(self.encoded_args)?,
             errors: decode_json_or_default(self.errors.as_deref())?,
             finalized_at: self.finalized_at,
             kind: self.kind,
@@ -1713,7 +1713,7 @@ mod tests {
             .unwrap()
             .with_nanosecond(123_800_000)
             .unwrap();
-        let args = json!({"message": "hello"});
+        let args = serde_json::value::to_raw_value(&json!({"message": "hello"})).unwrap();
         let metadata = Map::new();
         let tags = vec!["mail".to_owned()];
         let unique_key = [7_u8; 32];
@@ -1745,7 +1745,7 @@ mod tests {
 
         let inserted = insert(&mut connection, &insert_params).await.unwrap();
         assert!(!inserted.unique_skipped_as_duplicate);
-        assert_eq!(inserted.job.encoded_args, args);
+        assert_eq!(inserted.job.encoded_args.get(), args.get());
         assert_eq!(inserted.job.tags, tags);
         let (created_at, scheduled_at): (String, String) =
             sqlx::query_as("SELECT created_at, scheduled_at FROM river_job WHERE id = ?")
@@ -1836,7 +1836,7 @@ mod tests {
         let pool = setup().await;
         let mut connection = pool.acquire().await.unwrap();
         let now = Utc::now();
-        let args = json!({});
+        let args = serde_json::value::to_raw_value(&json!({})).unwrap();
         let metadata = Map::new();
         let scheduled = insert(
             &mut connection,
@@ -1967,7 +1967,7 @@ mod tests {
                 attempted_at: None,
                 attempted_by: &[],
                 created_at: now,
-                encoded_args: &json!({}),
+                encoded_args: &serde_json::value::to_raw_value(&json!({})).unwrap(),
                 errors: &[],
                 finalized_at: None,
                 id: None,
@@ -2023,7 +2023,7 @@ mod tests {
                 attempted_at: Some(now),
                 attempted_by: &["client".to_owned()],
                 created_at: now,
-                encoded_args: &json!({}),
+                encoded_args: &serde_json::value::to_raw_value(&json!({})).unwrap(),
                 errors: &[],
                 finalized_at: None,
                 id: None,

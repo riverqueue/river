@@ -9,16 +9,18 @@ extern crate self as riverqueue;
 
 mod client;
 pub mod database;
+pub mod encoding;
 pub mod error;
 pub mod event;
 pub mod extension;
 pub mod job;
 mod maintenance;
 pub mod periodic;
+pub mod protocol;
 pub mod query;
 pub mod queue;
 mod storage;
-pub mod unique;
+mod unique;
 pub mod worker;
 
 pub use client::{Client, ClientBuilder, MaintenanceConfig, QueueConfig, RunHandle, WeakClient};
@@ -40,6 +42,10 @@ pub use periodic::{
     CronSchedule, CronScheduleParseError, IntervalSchedule, NeverSchedule, PeriodicJob,
     PeriodicJobHandle, PeriodicJobOpts, PeriodicJobs, PeriodicSchedule,
 };
+#[allow(unused_imports, reason = "backend-specific modules use a subset")]
+pub(crate) use protocol::{
+    NOTIFICATION_TOPIC_CONTROL, NOTIFICATION_TOPIC_INSERT, NOTIFICATION_TOPIC_LEADERSHIP,
+};
 pub use query::{
     JobDeleteManyParams, JobListCursor, JobListCursorError, JobListOrderBy, JobListParams,
     JobUpdateParams, SortDirection,
@@ -58,7 +64,6 @@ pub use riverqueue_macros::JobArgs;
 /// as `tls-rustls` or `tls-native-tls`, in your own dependency on SQLx if your
 /// database connections use TLS.
 pub use sqlx;
-pub use unique::{UniqueKeyInput, build_unique_key};
 pub use worker::{WorkContext, WorkOutcome, Worker, WorkerRegistry, WorkerTimeout};
 
 /// Default maximum number of attempts for a job.
@@ -90,15 +95,6 @@ pub const PRIORITY_DEFAULT: i16 = 1;
 
 /// Default queue name.
 pub const QUEUE_DEFAULT: &str = "default";
-
-/// Notification topic for queue and job control messages.
-pub const NOTIFICATION_TOPIC_CONTROL: &str = "river_control";
-
-/// Notification topic for newly available jobs.
-pub const NOTIFICATION_TOPIC_INSERT: &str = "river_insert";
-
-/// Notification topic for leadership changes.
-pub const NOTIFICATION_TOPIC_LEADERSHIP: &str = "river_leadership";
 
 /// Reserved metadata key containing recorded job output.
 pub const METADATA_KEY_OUTPUT: &str = "output";

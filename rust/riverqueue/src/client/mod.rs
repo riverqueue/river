@@ -41,7 +41,7 @@ use std::{
 use chrono::SecondsFormat;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, value::RawValue};
 use sha2::{Digest, Sha256};
 use sqlx::AssertSqlSafe;
 #[cfg(feature = "sqlite")]

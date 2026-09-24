@@ -86,6 +86,86 @@ type simpleArgs struct {
 
 func (simpleArgs) Kind() string { return "conformance_simple" }
 
+// collectionsArgs exercises nested values, arrays, and nulls whose wire
+// order and representation are preserved in hashed arguments.
+type collectionsArgs struct {
+	Empty   []string          `json:"empty"`
+	Labels  map[string]string `json:"labels"`
+	Matrix  [][]int           `json:"matrix"`
+	Missing []string          `json:"missing"`
+	Objects []collectionsItem `json:"objects"`
+	Pointer *string           `json:"pointer"`
+}
+
+type collectionsItem struct {
+	// Deliberately non-alphabetical: nested struct wire order is significant.
+	Zulu  string `json:"zulu"`
+	Alpha *int   `json:"alpha"`
+}
+
+func (collectionsArgs) Kind() string { return "conformance_all_args" }
+
+type emptyArgs struct{}
+
+func (emptyArgs) Kind() string { return "conformance_all_args" }
+
+// escapingArgs exercises encoding/json string and key escaping, including
+// keys that gjson reports unescaped and sjson rewrites while hashing.
+type escapingArgs struct {
+	Angle      string         `json:"a<b>"`
+	Controls   string         `json:"controls"`
+	HTML       string         `json:"html"`
+	Keys       map[string]int `json:"keys"`
+	Separators string         `json:"separators"`
+	Unicode    string         `json:"unicode"`
+	UnicodeAmp string         `json:"é&"`
+}
+
+func (escapingArgs) Kind() string { return "conformance_all_args" }
+
+// selectedNullArgs selects an explicitly null field, which is retained in the
+// hashed arguments, while omitted selected fields are skipped.
+type selectedNullArgs struct {
+	Account selectedAccount `json:"account,omitzero"`
+	Label   *string         `json:"label"              river:"unique"`
+	PathKey string          `json:"path/key,omitempty" river:"unique"`
+}
+
+func (selectedNullArgs) Kind() string { return "conformance_selected_args" }
+
+// timeArgs exercises encoding/json time formatting, which trims fractional
+// seconds to their shortest form.
+type timeArgs struct {
+	Fraction time.Time `json:"fraction"`
+	Micros   time.Time `json:"micros"`
+	Millis   time.Time `json:"millis"`
+	Whole    time.Time `json:"whole"`
+}
+
+func (timeArgs) Kind() string { return "conformance_all_args" }
+
+// typedFloatArgs exercises encoding/json float formatting: 'f' notation
+// between 1e-6 and 1e21, exponent notation outside it, and shortest
+// round-trip digits for both 64- and 32-bit floats.
+type typedFloatArgs struct {
+	BelowLarge    float64 `json:"below_large"`
+	Large         float64 `json:"large"`
+	LargeBoundary float64 `json:"large_boundary"`
+	Largest       float64 `json:"largest"`
+	Negative      float64 `json:"negative"`
+	NegativeZero  float64 `json:"negative_zero"`
+	One           float64 `json:"one"`
+	Single        float32 `json:"single"`
+	SingleLarge   float32 `json:"single_large"`
+	SingleSmall   float32 `json:"single_small"`
+	Small         float64 `json:"small"`
+	SmallBoundary float64 `json:"small_boundary"`
+	Smallest      float64 `json:"smallest"`
+	Tenth         float64 `json:"tenth"`
+}
+
+func (typedFloatArgs) Kind() string { return "conformance_all_args" }
+
 type fixture struct {
 	Schema           string        `json:"$schema"`
 	Cases            []fixtureCase `json:"cases"`
@@ -240,6 +320,82 @@ func main() {
 			opts:                dbunique.UniqueOpts{ByArgs: true},
 			queue:               "default",
 			selectedUniquePaths: []string{"account.id", "account.region", "label", "path/key"},
+		},
+		{
+			args: collectionsArgs{
+				Empty:   []string{},
+				Labels:  map[string]string{"zulu": "last", "alpha": "first", "10": "ten", "2": "two"},
+				Matrix:  [][]int{{3, 1}, {}, {2}},
+				Objects: []collectionsItem{{Zulu: "z", Alpha: new(1)}, {Zulu: "y"}},
+			},
+			name:  "typed_collections_and_nulls",
+			now:   now,
+			opts:  dbunique.UniqueOpts{ByArgs: true},
+			queue: "default",
+		},
+		{
+			args:  emptyArgs{},
+			name:  "typed_empty_args",
+			now:   now,
+			opts:  dbunique.UniqueOpts{ByArgs: true},
+			queue: "default",
+		},
+		{
+			args: escapingArgs{
+				Angle:      "<angle>",
+				Controls:   "\b\f\n\r\t\x00\x01\x1f\x7f",
+				HTML:       `<a href="x">&amp;</a>`,
+				Keys:       map[string]int{"<k>": 1, "a&b": 2, "é": 3, "é<": 4},
+				Separators: "line\u2028paragraph\u2029end",
+				Unicode:    "é😀/\\",
+				UnicodeAmp: "unicode key",
+			},
+			name:  "typed_escaping",
+			now:   now,
+			opts:  dbunique.UniqueOpts{ByArgs: true},
+			queue: "default",
+		},
+		{
+			args:                selectedNullArgs{},
+			name:                "selected_explicit_null",
+			now:                 now,
+			opts:                dbunique.UniqueOpts{ByArgs: true},
+			queue:               "default",
+			selectedUniquePaths: []string{"account.id", "account.region", "label", "path/key"},
+		},
+		{
+			args: timeArgs{
+				Fraction: time.Date(2026, time.January, 2, 3, 4, 5, 500_000_000, time.UTC),
+				Micros:   time.Date(2026, time.January, 2, 3, 4, 5, 123_456_000, time.UTC),
+				Millis:   time.Date(2026, time.January, 2, 3, 4, 5, 120_000_000, time.UTC),
+				Whole:    time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC),
+			},
+			name:  "typed_time_values",
+			now:   now,
+			opts:  dbunique.UniqueOpts{ByArgs: true},
+			queue: "default",
+		},
+		{
+			args: typedFloatArgs{
+				BelowLarge:    math.Nextafter(1e21, 0),
+				Large:         1e20,
+				LargeBoundary: 1e21,
+				Largest:       math.MaxFloat64,
+				Negative:      -1.5e-9,
+				NegativeZero:  math.Copysign(0, -1),
+				One:           1,
+				Single:        1.1,
+				SingleLarge:   1e21,
+				SingleSmall:   1e-7,
+				Small:         1e-7,
+				SmallBoundary: 1e-6,
+				Smallest:      math.SmallestNonzeroFloat64,
+				Tenth:         0.1,
+			},
+			name:  "typed_float_formatting",
+			now:   now,
+			opts:  dbunique.UniqueOpts{ByArgs: true},
+			queue: "default",
 		},
 		{
 			args:  simpleArgs{ID: 42},
