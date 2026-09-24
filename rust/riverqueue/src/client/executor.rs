@@ -38,7 +38,7 @@ pub(super) async fn execute_job(
         let attempt_started_at = Utc::now();
         let (timeout_sender, timeout_receiver) = oneshot::channel();
         let mut worker_task = AbortOnDrop(tokio::spawn(async move {
-            worker_context.resumable_validate().await?;
+            worker_context.resumable_validate()?;
             for hook in &worker_inner.hooks {
                 hook.work_begin(&worker_context, &mut worker_row)
                     .await
@@ -124,7 +124,7 @@ pub(super) async fn execute_job(
 
         let run_duration = work_started.elapsed();
         let mut result = result;
-        if let Some(resumable_failure) = context.resumable_finish(result.is_err()).await
+        if let Some(resumable_failure) = context.resumable_finish(result.is_err())
             && result.is_ok()
         {
             result = Err(WorkerFailure {

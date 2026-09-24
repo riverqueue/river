@@ -4,7 +4,7 @@ use std::{
     collections::{HashMap, HashSet},
     error::Error as StdError,
     future::Future,
-    sync::{Arc, Mutex as StdMutex, MutexGuard, PoisonError},
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::Duration,
 };
 
@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -27,7 +27,7 @@ pub struct WorkContext {
     cancellation: CancellationToken,
     client: Option<Client>,
     job_id: Option<i64>,
-    metadata_updates: Arc<StdMutex<Map<String, Value>>>,
+    metadata_updates: Arc<Mutex<Map<String, Value>>>,
     resumable: Arc<Mutex<ResumableState>>,
 }
 
@@ -39,7 +39,7 @@ impl WorkContext {
             cancellation,
             client: None,
             job_id: None,
-            metadata_updates: Arc::new(StdMutex::new(Map::new())),
+            metadata_updates: Arc::new(Mutex::new(Map::new())),
             resumable: Arc::new(Mutex::new(ResumableState::default())),
         }
     }
@@ -108,6 +108,14 @@ impl WorkContext {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Like metadata, resumable state is never locked across an await, and
+    /// each update leaves it consistent, so a poisoned lock is still usable.
+    fn lock_resumable(&self) -> MutexGuard<'_, ResumableState> {
+        self.resumable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Runs a named resumable step, skipping work completed by an earlier
     /// failed attempt.
     ///
@@ -121,13 +129,13 @@ impl WorkContext {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<(), E>>,
     {
-        let previous_step_name = match self.begin_resumable_step(name, false).await? {
+        let previous_step_name = match self.begin_resumable_step(name, false)? {
             StepAction::Run(previous) => previous,
             StepAction::Skip => return Ok(()),
         };
 
         let result = step().await;
-        let mut state = self.resumable.lock().await;
+        let mut state = self.lock_resumable();
         state.step_name = previous_step_name;
         match result {
             Ok(()) => {
@@ -152,13 +160,13 @@ impl WorkContext {
         Fut: Future<Output = Result<(), E>>,
         T: Default + DeserializeOwned,
     {
-        let previous_step_name = match self.begin_resumable_step(name, true).await? {
+        let previous_step_name = match self.begin_resumable_step(name, true)? {
             StepAction::Run(previous) => previous,
             StepAction::Skip => return Ok(()),
         };
 
         let cursor = {
-            let state = self.resumable.lock().await;
+            let state = self.lock_resumable();
             state
                 .cursors
                 .get(name)
@@ -169,13 +177,13 @@ impl WorkContext {
         let cursor = match cursor {
             Ok(cursor) => cursor.unwrap_or_default(),
             Err(error) => {
-                let mut state = self.resumable.lock().await;
+                let mut state = self.lock_resumable();
                 state.step_name = previous_step_name;
                 return Err(state.fail_step(name, Box::new(error)));
             }
         };
         let result = step(cursor).await;
-        let mut state = self.resumable.lock().await;
+        let mut state = self.lock_resumable();
         state.step_name = previous_step_name;
         match result {
             Ok(()) => {
@@ -188,9 +196,14 @@ impl WorkContext {
     }
 
     /// Records progress for the currently running resumable cursor step.
-    pub async fn resumable_set_cursor<T: Serialize>(&self, cursor: &T) -> Result<(), Error> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when called outside a resumable step or when `cursor`
+    /// can't be serialized to JSON.
+    pub fn resumable_set_cursor<T: Serialize>(&self, cursor: &T) -> Result<(), Error> {
         let cursor = serde_json::to_value(cursor)?;
-        let mut state = self.resumable.lock().await;
+        let mut state = self.lock_resumable();
         let step_name = state.step_name.clone().ok_or_else(|| {
             Error::runtime_context(
                 "worker context",
@@ -233,7 +246,27 @@ impl WorkContext {
         E: DatabaseTransactionExecutor<'executor>,
         T: Serialize,
     {
-        let mut state = self.resumable.lock().await;
+        let metadata = self.resumable_checkpoint(cursor)?;
+        let (client, job_id) = self.current_job()?;
+        client
+            .job_update_tx(
+                connection,
+                job_id,
+                JobUpdateParams {
+                    metadata,
+                    output: None,
+                },
+            )
+            .await
+    }
+
+    /// Marks the current step complete, records `cursor` for it, and returns
+    /// the checkpoint metadata to persist.
+    fn resumable_checkpoint<T: Serialize>(
+        &self,
+        cursor: Option<&T>,
+    ) -> Result<Map<String, Value>, Error> {
+        let mut state = self.lock_resumable();
         let step_name = state.step_name.clone().ok_or_else(|| {
             Error::runtime_context(
                 "worker context",
@@ -257,32 +290,17 @@ impl WorkContext {
                 Value::Object(state.cursors.clone()),
             );
         }
-        drop(state);
-        let (client, job_id) = self.current_job()?;
-        client
-            .job_update_tx(
-                connection,
-                job_id,
-                JobUpdateParams {
-                    metadata,
-                    output: None,
-                },
-            )
-            .await
+        Ok(metadata)
     }
 
-    async fn begin_resumable_step(
-        &self,
-        name: &str,
-        cursor_step: bool,
-    ) -> Result<StepAction, Error> {
+    fn begin_resumable_step(&self, name: &str, cursor_step: bool) -> Result<StepAction, Error> {
         if name.is_empty() {
             return Err(Error::runtime_context(
                 "worker context",
                 "resumable step name cannot be empty".to_owned(),
             ));
         }
-        let mut state = self.resumable.lock().await;
+        let mut state = self.lock_resumable();
         if let Some(failure) = &state.failure {
             return Err(Error::runtime_source(
                 "worker context",
@@ -342,7 +360,7 @@ impl WorkContext {
             cancellation,
             client: Some(client),
             job_id: Some(job_id),
-            metadata_updates: Arc::new(StdMutex::new(Map::new())),
+            metadata_updates: Arc::new(Mutex::new(Map::new())),
             resumable: Arc::new(Mutex::new(state)),
         }
     }
@@ -356,16 +374,16 @@ impl WorkContext {
     }
 
     /// Validates checkpoint metadata before invoking user work.
-    pub(crate) async fn resumable_validate(&self) -> Result<(), WorkError> {
-        match &self.resumable.lock().await.failure {
+    pub(crate) fn resumable_validate(&self) -> Result<(), WorkError> {
+        match &self.lock_resumable().failure {
             Some(error) => Err(error.clone()),
             None => Ok(()),
         }
     }
 
     /// Resolves attempt-scoped resumable errors and metadata for runtime/test parity.
-    pub(crate) async fn resumable_finish(&self, worker_failed: bool) -> Option<WorkError> {
-        let state = self.resumable.lock().await;
+    pub(crate) fn resumable_finish(&self, worker_failed: bool) -> Option<WorkError> {
+        let state = self.lock_resumable();
         let failure = state.failure.clone().or_else(|| {
             (!worker_failed && !state.resume_matched).then(|| {
                 WorkError::new(Box::new(Error::runtime_context(
@@ -882,7 +900,7 @@ mod tests {
                 .await
                 .unwrap();
             assert!(ran);
-            assert!(context.resumable_finish(false).await.is_none());
+            assert!(context.resumable_finish(false).is_none());
         }
     }
 
@@ -914,8 +932,8 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("invalid type"));
-        assert!(context.resumable_set_cursor(&1).await.is_err());
-        assert!(context.resumable_finish(false).await.is_some());
+        assert!(context.resumable_set_cursor(&1).is_err());
+        assert!(context.resumable_finish(false).is_some());
         assert_eq!(
             context.metadata_updates()[crate::METADATA_KEY_RESUMABLE_STEP],
             "first"
@@ -930,7 +948,7 @@ mod tests {
                 context
                     .resumable_step("inner", || async { Ok::<_, Error>(()) })
                     .await?;
-                context.resumable_set_cursor(&7).await?;
+                context.resumable_set_cursor(&7)?;
                 Err::<(), _>(Error::ResumableStep {
                     name: "source".to_owned(),
                     source: Box::new(FunctionError),
@@ -942,7 +960,7 @@ mod tests {
         while !source.is::<FunctionError>() {
             source = source.source().expect("preserved source");
         }
-        let finished = context.resumable_finish(false).await.unwrap();
+        let finished = context.resumable_finish(false).unwrap();
         let mut source: &(dyn StdError + 'static) = &finished;
         while !source.is::<FunctionError>() {
             source = source.source().expect("preserved suppressed source");

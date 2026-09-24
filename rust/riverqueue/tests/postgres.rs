@@ -248,8 +248,7 @@ impl Worker<ResumableCheckpointArgs> for ResumableCheckpointWorker {
                             cursor_values.lock().unwrap().push(cursor.clone());
                             if attempt == 1 {
                                 cursor_context
-                                    .resumable_set_cursor(&ResumableCursor { offset: 42 })
-                                    .await?;
+                                    .resumable_set_cursor(&ResumableCursor { offset: 42 })?;
                                 return Err(riverqueue::Error::runtime(
                                     "intentional resumable cursor failure".to_owned(),
                                 ));
@@ -2017,7 +2016,6 @@ async fn resumable_cursor_and_transactional_checkpoints() {
     let detached_context = riverqueue::__private::work_context(CancellationToken::new());
     let cursor_error = detached_context
         .resumable_set_cursor(&ResumableCursor { offset: 1 })
-        .await
         .unwrap_err();
     assert!(
         cursor_error
