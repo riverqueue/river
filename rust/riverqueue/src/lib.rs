@@ -43,8 +43,8 @@ pub use job::{
     JobStateParseError, RawInsertResult, ScheduleOverride, UniqueOpts,
 };
 pub use periodic::{
-    CronSchedule, CronScheduleParseError, IntervalSchedule, NeverSchedule, PeriodicJob,
-    PeriodicJobHandle, PeriodicJobOpts, PeriodicJobs, PeriodicSchedule,
+    CronSchedule, CronScheduleParseError, CronTimeZone, IntervalSchedule, NeverSchedule,
+    PeriodicJob, PeriodicJobHandle, PeriodicJobOpts, PeriodicJobs, PeriodicSchedule,
 };
 #[allow(unused_imports, reason = "backend-specific modules use a subset")]
 pub(crate) use protocol::{

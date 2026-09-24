@@ -24,7 +24,6 @@ sqlite = ["riverqueue-internal/sqlite", "sqlx/sqlite"]
 async-trait.workspace = true
 base64.workspace = true
 chrono.workspace = true
-cron.workspace = true
 futures-util.workspace = true
 riverqueue-internal = { path = "../riverqueue-internal", version = "=0.47.0-alpha.1", default-features = false }
 riverqueue-macros = { path = "../riverqueue-macros", version = "=0.47.0-alpha.1" }
