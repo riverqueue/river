@@ -167,38 +167,8 @@ impl Supervisor {
         ready: ReadySender,
         shutdown_signal: Option<ShutdownSignal>,
     ) -> Result<(), Error> {
+        self.start_services(ready);
         let inner = Arc::clone(&self.inner);
-        let (completion_sender, completion_receiver) = mpsc::channel(10_000);
-        *inner
-            .completion_sender
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            Some(completion_sender.downgrade());
-        self.spawn_task(
-            Service::Queues,
-            run_dynamic_queues(
-                Arc::clone(&inner),
-                completion_sender,
-                self.fetch_cancel.child_token(),
-                self.work_cancel.child_token(),
-                inner.queue_notifications.clone(),
-                inner.queue_changes.subscribe(),
-            ),
-        );
-        self.spawn_task(
-            Service::Completer,
-            run_completion_batcher(Arc::clone(&inner), completion_receiver),
-        );
-        if inner.poll_only {
-            let _ = ready.send(Ok(()));
-        } else {
-            self.spawn_service(Service::Notifier, Duration::ZERO, Some(ready));
-        }
-        self.spawn_service(Service::Maintenance, Duration::ZERO, None);
-        for index in 0..inner.pilot.runtime_services().len() {
-            self.spawn_service(Service::Extension(index), Duration::ZERO, None);
-        }
-
         let stop_watch = watch_stop(
             self.fetch_cancel.clone(),
             self.work_cancel.clone(),
@@ -266,6 +236,60 @@ impl Supervisor {
             }
         }
         fatal.map_or(Ok(()), Err)
+    }
+
+    /// Starts the client's services and reports readiness to `ready` once
+    /// its queues are registered and its notification path is active.
+    fn start_services(&mut self, ready: ReadySender) {
+        let inner = Arc::clone(&self.inner);
+        let (completion_sender, completion_receiver) = mpsc::channel(10_000);
+        *inner
+            .completion_sender
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(completion_sender.downgrade());
+        let (queues_ready_sender, queues_ready) = oneshot::channel();
+        self.spawn_task(
+            Service::Queues,
+            run_dynamic_queues(
+                Arc::clone(&inner),
+                completion_sender,
+                self.fetch_cancel.child_token(),
+                self.work_cancel.child_token(),
+                inner.queue_notifications.clone(),
+                inner.queue_changes.subscribe(),
+                queues_ready_sender,
+            ),
+        );
+        self.spawn_task(
+            Service::Completer,
+            run_completion_batcher(Arc::clone(&inner), completion_receiver),
+        );
+        let (notifier_ready_sender, notifier_ready) = oneshot::channel();
+        if inner.poll_only {
+            let _ = notifier_ready_sender.send(Ok(()));
+        } else {
+            self.spawn_service(
+                Service::Notifier,
+                Duration::ZERO,
+                Some(notifier_ready_sender),
+            );
+        }
+        // Not a service: it ends once both parts report, or once either
+        // part stops first, which leaves the client not ready.
+        self.tasks.spawn(async move {
+            let result = match notifier_ready.await {
+                Ok(Ok(())) if queues_ready.await.is_ok() => Ok(()),
+                Ok(Err(message)) => Err(message),
+                Ok(Ok(())) | Err(_) => return Ok(()),
+            };
+            let _ = ready.send(result);
+            Ok(())
+        });
+        self.spawn_service(Service::Maintenance, Duration::ZERO, None);
+        for index in 0..inner.pilot.runtime_services().len() {
+            self.spawn_service(Service::Extension(index), Duration::ZERO, None);
+        }
     }
 
     fn spawn_task<F>(&mut self, service: Service, task: F)
@@ -590,10 +614,15 @@ impl RunHandle {
         join_client_result(result)
     }
 
-    /// Waits until the selected backend's notification path is active.
+    /// Waits until the client is ready: every queue configured at start has
+    /// created or refreshed its `river_queue` row, and the selected backend's
+    /// notification path is active.
     ///
-    /// Poll-only clients are ready immediately. Once readiness is observed,
-    /// later calls return the same result immediately.
+    /// Go's `Client.Start` returns once the same work is done, so a client
+    /// that awaited this can be relied on like a started Go client, for
+    /// example by a peer that pauses one of its queues. Poll-only clients skip
+    /// the notification path. Once readiness is observed, later calls return
+    /// the same result immediately.
     ///
     /// # Cancel safety
     ///

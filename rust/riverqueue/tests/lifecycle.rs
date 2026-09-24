@@ -414,3 +414,19 @@ async fn stop_now_from_another_task_interrupts_running_jobs() {
     assert_eq!(cancel_attempted.state, JobState::Cancelled);
     assert!(cancel_attempted.finalized_at.is_some());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn wait_ready_waits_for_queue_registration() {
+    let database = TestDatabase::new().await;
+    let client = database.client(&Gate::new(), 1);
+
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+    // Like Go's `Client.Start`, readiness means peers can manage the queue.
+    let queues: i64 = sqlx::query_scalar("SELECT count(*) FROM river_queue WHERE name = 'default'")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(queues, 1);
+    run.shutdown().await.unwrap();
+}

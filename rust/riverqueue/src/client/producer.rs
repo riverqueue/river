@@ -1,5 +1,7 @@
 //! Queue producers that fetch and dispatch jobs.
 
+use std::collections::HashSet;
+
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
@@ -10,6 +12,10 @@ use super::*;
 /// replacement starts only after the old producer's jobs have finished, so a
 /// queue never runs more than `max_workers` jobs. A producer that stops
 /// unexpectedly (for example after a panic) is restarted with backoff.
+///
+/// `queues_ready` is sent once every queue configured at startup has created
+/// or refreshed its `river_queue` row, as Go's `Client.Start` does before
+/// returning, so a peer can pause or inspect those queues right away.
 pub(super) async fn run_dynamic_queues(
     inner: Arc<ClientInner>,
     completion_sender: mpsc::Sender<CompletionUpdate>,
@@ -17,7 +23,9 @@ pub(super) async fn run_dynamic_queues(
     work_cancel: CancellationToken,
     notifications: broadcast::Sender<RuntimeNotification>,
     mut changes: watch::Receiver<u64>,
+    queues_ready: oneshot::Sender<()>,
 ) -> Result<(), Error> {
+    let (registered_sender, mut registered) = mpsc::unbounded_channel();
     let mut producers = Producers {
         active: HashMap::new(),
         completion_sender,
@@ -26,12 +34,18 @@ pub(super) async fn run_dynamic_queues(
         inner,
         next_generation: 0,
         notifications,
+        registered: registered_sender,
         restarts: HashMap::new(),
         task_queues: HashMap::new(),
         tasks: JoinSet::new(),
         work_cancel,
     };
     producers.reconcile()?;
+    let mut startup = Some((
+        producers.active.keys().cloned().collect::<HashSet<_>>(),
+        queues_ready,
+    ));
+    producers.report_startup(&mut startup);
 
     loop {
         tokio::select! {
@@ -48,7 +62,13 @@ pub(super) async fn run_dynamic_queues(
                 }
                 producers.reconcile()?;
             }
+            Some(queue) = registered.recv(), if startup.is_some() => {
+                if let Some((pending, _)) = &mut startup {
+                    pending.remove(&queue);
+                }
+            }
         }
+        producers.report_startup(&mut startup);
     }
 
     for (_, queue_cancel, _) in producers.active.values() {
@@ -71,6 +91,8 @@ struct Producers {
     inner: Arc<ClientInner>,
     next_generation: u64,
     notifications: broadcast::Sender<RuntimeNotification>,
+    /// Receives each queue name once its producer has registered the queue.
+    registered: mpsc::UnboundedSender<String>,
     restarts: HashMap<String, u32>,
     task_queues: HashMap<tokio::task::Id, (String, u64)>,
     tasks: JoinSet<ProducerOutcome>,
@@ -174,6 +196,7 @@ impl Producers {
             let inner = Arc::clone(&self.inner);
             let completion_sender = self.completion_sender.clone();
             let notifications = self.notifications.subscribe();
+            let registered = self.registered.clone();
             let task_cancel = queue_cancel.clone();
             let task_name = name.clone();
             let work_cancel = self.work_cancel.child_token();
@@ -194,6 +217,7 @@ impl Producers {
                     task_cancel.clone(),
                     work_cancel,
                     notifications,
+                    registered,
                 )
                 .await;
                 (task_name, generation, task_cancel, result)
@@ -202,9 +226,24 @@ impl Producers {
         }
         Ok(())
     }
+
+    /// Reports startup readiness once every startup queue that is still
+    /// configured has registered.
+    fn report_startup(&self, startup: &mut Option<(HashSet<String>, oneshot::Sender<()>)>) {
+        let Some((pending, _)) = startup else {
+            return;
+        };
+        pending
+            .retain(|queue| self.active.contains_key(queue) || self.draining.contains_key(queue));
+        if pending.is_empty()
+            && let Some((_, queues_ready)) = startup.take()
+        {
+            let _ = queues_ready.send(());
+        }
+    }
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(super) async fn run_queue(
     inner: Arc<ClientInner>,
     completion_sender: mpsc::Sender<CompletionUpdate>,
@@ -213,6 +252,7 @@ pub(super) async fn run_queue(
     fetch_cancel: CancellationToken,
     work_cancel: CancellationToken,
     mut notifications: broadcast::Receiver<RuntimeNotification>,
+    registered: mpsc::UnboundedSender<String>,
 ) -> Result<(), Error> {
     // Short write contention (common on SQLite) clears quickly. Longer
     // outages back off like River's other services; the producer keeps trying
@@ -247,6 +287,7 @@ pub(super) async fn run_queue(
             }
         }
     };
+    let _ = registered.send(queue.clone());
     let mut paused = initial_queue.paused_at.is_some();
     let mut metadata = initial_queue.metadata.clone();
     notify_queue_metadata(&inner, &queue, &metadata).await;
