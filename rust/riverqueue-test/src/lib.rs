@@ -13,6 +13,7 @@ use serde_json::{Map, Value};
 pub const PROTOCOL_REVISION: u32 = 1;
 
 /// Builder for a realistic persisted job value usable in worker unit tests.
+#[derive(Debug)]
 pub struct TestJobBuilder<A: JobArgs> {
     args: A,
     attempt: i16,
@@ -84,6 +85,7 @@ impl<A: JobArgs> TestJobBuilder<A> {
 }
 
 /// Result of running one worker directly in a unit test.
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct TestWorkResult<E> {
     /// Context used for the invocation, including output and metadata updates.

@@ -145,10 +145,26 @@ pub struct ErasedExecutor<'executor> {
     pub(super) inner: ExecutorInner<'executor>,
 }
 
+impl fmt::Debug for ErasedExecutor<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ErasedExecutor")
+            .finish_non_exhaustive()
+    }
+}
+
 /// Transaction-preserving exact-version executor erasure.
 #[doc(hidden)]
 pub struct ErasedTransaction<'executor> {
     pub(super) inner: ExecutorInner<'executor>,
+}
+
+impl fmt::Debug for ErasedTransaction<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ErasedTransaction")
+            .finish_non_exhaustive()
+    }
 }
 
 impl ErasedTransaction<'_> {

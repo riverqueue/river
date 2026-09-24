@@ -36,6 +36,7 @@ tokio-util = { version = "0.7.19", features = ["rt"] }
 tracing = "0.1.44"
 
 [workspace.lints.rust]
+missing_debug_implementations = "warn"
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
