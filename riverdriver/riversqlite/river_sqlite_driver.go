@@ -38,10 +38,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
-
-	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riversqlite/internal/dbsqlc"
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
@@ -293,6 +289,8 @@ func (e *Executor) IndexesExist(ctx context.Context, params *riverdriver.Indexes
 
 	return exists, nil
 }
+
+func (e *Executor) InitDriver(context.Context) error { return nil }
 
 func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error) {
 	// Unlike Postgres, this must be carried out in two operations because
@@ -599,7 +597,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.Jo
 
 		return &riverdriver.JobInsertFastResult{
 			Job:                      job,
-			UniqueSkippedAsDuplicate: gjson.GetBytes(job.Metadata, rivercommon.MetadataKeyUniqueNonce).Str != uniqueNonce,
+			UniqueSkippedAsDuplicate: riverdriver.UniqueInsertMetadataIsDuplicate(job.Metadata, uniqueNonce),
 		}, nil
 	})
 }
@@ -1201,6 +1199,10 @@ func (e *Executor) NotifyMany(ctx context.Context, params *riverdriver.NotifyMan
 	return dbsqlc.New().NotificationInsertMany(schemaTemplateParam(ctx, params.Schema), e.dbtx, notifications)
 }
 
+func (e *Executor) Ping(ctx context.Context) error {
+	return e.Exec(ctx, "SELECT 1")
+}
+
 func (e *Executor) PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}, error) {
 	return nil, riverdriver.ErrNotImplemented
 }
@@ -1531,7 +1533,7 @@ func sqliteJobInsertFastManyJobsParam(jobs []*riverdriver.JobInsertFastParams, u
 		metadata := sliceutil.FirstNonEmpty(job.Metadata, []byte("{}"))
 		if uniqueNonce != "" {
 			var err error
-			metadata, err = sjson.SetBytes(metadata, rivercommon.MetadataKeyUniqueNonce, uniqueNonce)
+			metadata, err = riverdriver.UniqueInsertMetadataWithNonce(metadata, uniqueNonce)
 			if err != nil {
 				return nil, err
 			}

@@ -224,6 +224,11 @@ type Executor interface {
 	IndexReindex(ctx context.Context, params *IndexReindexParams) error
 	IndexReindexArtifacts(ctx context.Context, params *IndexReindexArtifactsParams) ([]string, error)
 
+	// InitDriver initializes driver-specific state using information read from
+	// the database. Implementations must be safe to call concurrently and
+	// repeatedly, and should cache successfully initialized state.
+	InitDriver(ctx context.Context) error
+
 	JobCancel(ctx context.Context, params *JobCancelParams) (*rivertype.JobRow, error)
 	JobCountByAllStates(ctx context.Context, params *JobCountByAllStatesParams) (map[rivertype.JobState]int, error)
 	JobCountByQueueAndState(ctx context.Context, params *JobCountByQueueAndStateParams) ([]*JobCountByQueueAndStateResult, error)
@@ -289,6 +294,10 @@ type Executor interface {
 	NotificationDeleteBefore(ctx context.Context, params *NotificationDeleteBeforeParams) (int, error)
 
 	NotifyMany(ctx context.Context, params *NotifyManyParams) error
+
+	// Ping checks that the database is reachable.
+	Ping(ctx context.Context) error
+
 	PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}, error)
 
 	QueueCreateOrSetUpdatedAt(ctx context.Context, params *QueueCreateOrSetUpdatedAtParams) (*rivertype.Queue, error)

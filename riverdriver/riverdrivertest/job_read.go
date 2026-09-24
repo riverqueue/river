@@ -55,7 +55,7 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 
 			for _, state := range rivertype.JobStates() {
 				require.Contains(t, countsByState, state)
-				switch state { //nolint:exhaustive
+				switch state {
 				case rivertype.JobStateAvailable:
 					require.Equal(t, 2, countsByState[state])
 				case rivertype.JobStateCancelled:
@@ -64,8 +64,10 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 					require.Equal(t, 1, countsByState[state])
 				case rivertype.JobStateDiscarded:
 					require.Equal(t, 1, countsByState[state])
-				default:
+				case rivertype.JobStatePending, rivertype.JobStateRetryable, rivertype.JobStateRunning, rivertype.JobStateScheduled:
 					require.Equal(t, 0, countsByState[state])
+				default:
+					require.FailNow(t, "unknown job state", state)
 				}
 			}
 		})
