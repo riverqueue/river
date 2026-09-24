@@ -40,7 +40,7 @@ pub(super) async fn run_dynamic_queues(
         tasks: JoinSet::new(),
         work_cancel,
     };
-    producers.reconcile()?;
+    producers.reconcile();
     let mut startup = Some((
         producers.active.keys().cloned().collect::<HashSet<_>>(),
         queues_ready,
@@ -54,13 +54,13 @@ pub(super) async fn run_dynamic_queues(
                 if change_result.is_err() {
                     break;
                 }
-                producers.reconcile()?;
+                producers.reconcile();
             }
             joined = producers.tasks.join_next_with_id(), if !producers.tasks.is_empty() => {
                 if let Some(joined) = joined {
                     producers.finish(joined);
                 }
-                producers.reconcile()?;
+                producers.reconcile();
             }
             Some(queue) = registered.recv(), if startup.is_some() => {
                 if let Some((pending, _)) = &mut startup {
@@ -154,15 +154,15 @@ impl Producers {
         }
     }
 
-    fn reconcile(&mut self) -> Result<(), Error> {
+    fn reconcile(&mut self) {
         if self.fetch_cancel.is_cancelled() {
-            return Ok(());
+            return;
         }
         let configured = self
             .inner
             .queues
             .read()
-            .map_err(|_| Error::runtime("queue configuration lock poisoned".to_owned()))?
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
         let stale = self
             .active
@@ -224,7 +224,6 @@ impl Producers {
             });
             self.task_queues.insert(handle.id(), (name, generation));
         }
-        Ok(())
     }
 
     /// Reports startup readiness once every startup queue that is still

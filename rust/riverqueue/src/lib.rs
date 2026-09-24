@@ -30,8 +30,9 @@ pub use client::{
     Client, ClientBuilder, InsertBatchRequest, InsertManyFastRequest, InsertManyItem,
     InsertManyRequest, InsertRequest, JobCancelRequest, JobCompleteRequest, JobCompleteTxRequest,
     JobDeleteManyRequest, JobDeleteRequest, JobGetRequest, JobListRequest, JobRetryRequest,
-    JobUpdateRequest, Jobs, MaintenanceConfig, QueueConfig, QueueGetRequest, QueueListRequest,
-    QueuePauseRequest, QueueResumeRequest, QueueUpdateRequest, Queues, RunHandle, Stopper,
+    JobUpdateRequest, Jobs, LocalQueues, MaintenanceConfig, QueueConfig, QueueGetRequest,
+    QueueListRequest, QueuePauseRequest, QueueResumeRequest, QueueUpdateRequest, Queues, RunHandle,
+    Stopper,
 };
 pub(crate) use database::SchemaName;
 pub use error::{BoxError, ConfigurationError, Error, JobValidationError, RuntimeError};

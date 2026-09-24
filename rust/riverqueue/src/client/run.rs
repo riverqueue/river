@@ -81,7 +81,7 @@ impl Client {
             .inner
             .queues
             .read()
-            .map_err(|_| Error::runtime("queue configuration lock poisoned".to_owned()))?
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_empty()
         {
             return Err(Error::configuration(

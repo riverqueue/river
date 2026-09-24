@@ -6,9 +6,12 @@
 
 mod support;
 
+use std::{convert::Infallible, time::Duration};
+
 use riverqueue::{
-    Client, Error, JobArgs, JobDeleteManyParams, JobListParams, JobState, JobUpdateParams,
-    QueueListParams, QueueSelector, QueueUpdateParams,
+    Client, Error, InsertOpts, Job, JobArgs, JobDeleteManyParams, JobListParams, JobState,
+    JobUpdateParams, QueueConfig, QueueListParams, QueueSelector, QueueUpdateParams, WorkContext,
+    WorkOutcome, WorkerRegistry,
 };
 use serde::{Deserialize, Serialize};
 
@@ -251,7 +254,110 @@ macro_rules! scenarios {
 
             fixture.cleanup().await;
         }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn local_queues_change_configuration_without_lock_errors() {
+            let fixture = Fixture::new().await;
+            let client = fixture
+                .builder()
+                .workers(workers())
+                .queue("default", QueueConfig::new(1))
+                .build()
+                .unwrap();
+            let local = client.local_queues();
+            assert_eq!(
+                local.configs(),
+                [("default".to_owned(), QueueConfig::new(1))].into()
+            );
+
+            local.add("second", QueueConfig::new(2)).unwrap();
+            // Adding a configured queue reconfigures it.
+            local.add("default", QueueConfig::new(3)).unwrap();
+            assert_eq!(
+                local.configs(),
+                [
+                    ("default".to_owned(), QueueConfig::new(3)),
+                    ("second".to_owned(), QueueConfig::new(2)),
+                ]
+                .into()
+            );
+            assert!(matches!(
+                local.add("not a queue name", QueueConfig::new(1)),
+                Err(Error::InvalidJob(_))
+            ));
+            assert!(matches!(
+                local.add("third", QueueConfig::new(0)),
+                Err(Error::Configuration(_))
+            ));
+            assert_eq!(local.remove("second"), Some(QueueConfig::new(2)));
+            assert_eq!(local.remove("second"), None);
+            assert_eq!(local.configs().len(), 1);
+
+            // A client without workers can't run any queue.
+            assert!(matches!(
+                fixture
+                    .client
+                    .local_queues()
+                    .add("default", QueueConfig::new(1)),
+                Err(Error::Configuration(_))
+            ));
+
+            fixture.cleanup().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn local_queues_start_producers_while_running() {
+            let fixture = Fixture::new().await;
+            let client = fixture
+                .builder()
+                .workers(workers())
+                .queue("default", fast_queue())
+                .build()
+                .unwrap();
+            let mut run = client.start().unwrap();
+
+            client.local_queues().add("dynamic", fast_queue()).unwrap();
+            let job = client
+                .insert(args("dynamic"))
+                .opts(InsertOpts::default().with_queue("dynamic"))
+                .await
+                .unwrap();
+            wait_for_completion(&client, job.id()).await;
+            assert_eq!(client.local_queues().remove("dynamic"), Some(fast_queue()));
+            assert!(!client.local_queues().configs().contains_key("dynamic"));
+
+            run.shutdown().await.unwrap();
+            fixture.cleanup().await;
+        }
     };
+}
+
+fn workers() -> WorkerRegistry {
+    let mut workers = WorkerRegistry::new();
+    workers
+        .register_fn(|_context: WorkContext, _job: Job<HandleArgs>| async {
+            Ok::<_, Infallible>(WorkOutcome::Complete)
+        })
+        .unwrap();
+    workers
+}
+
+fn fast_queue() -> QueueConfig {
+    QueueConfig::new(1)
+        .with_fetch_cooldown(Duration::from_millis(1))
+        .with_fetch_poll_interval(Duration::from_millis(10))
+}
+
+/// Waits for a job to complete, failing after ten seconds.
+async fn wait_for_completion(client: &Client, id: i64) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while client.jobs().get(id).await.unwrap().state != JobState::Completed {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "job {id} did not complete"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 /// Returns the names of paused queues.
@@ -283,17 +389,16 @@ mod postgres {
     impl Fixture {
         async fn new() -> Self {
             let schema = PostgresSchema::new("river_handles").await;
-            let client = Client::builder(
-                riverqueue::database::PostgresDatabase::new(schema.pool.clone())
-                    .schema(schema.schema.clone()),
-            )
-            .build()
-            .unwrap();
+            let client = builder(&schema).build().unwrap();
             Self {
                 client,
                 pool: schema.pool.clone(),
                 schema,
             }
+        }
+
+        fn builder(&self) -> riverqueue::ClientBuilder {
+            builder(&self.schema)
         }
 
         async fn begin(&self) -> Transaction<'static, Postgres> {
@@ -317,6 +422,13 @@ mod postgres {
         }
     }
 
+    fn builder(schema: &PostgresSchema) -> riverqueue::ClientBuilder {
+        Client::builder(
+            riverqueue::database::PostgresDatabase::new(schema.pool.clone())
+                .schema(schema.schema.clone()),
+        )
+    }
+
     scenarios!();
 }
 
@@ -338,6 +450,10 @@ mod sqlite {
             let (pool, path) = sqlite_file_pool(4).await;
             let client = Client::builder(pool.clone()).build().unwrap();
             Self { client, path, pool }
+        }
+
+        fn builder(&self) -> riverqueue::ClientBuilder {
+            Client::builder(self.pool.clone())
         }
 
         async fn begin(&self) -> Transaction<'static, Sqlite> {

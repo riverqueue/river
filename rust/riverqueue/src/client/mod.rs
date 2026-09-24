@@ -8,6 +8,7 @@ mod executor;
 mod extension;
 mod insert;
 mod jobs;
+mod local_queues;
 mod notifier;
 mod producer;
 mod queues;
@@ -27,6 +28,7 @@ pub use self::jobs::{
     JobCancelRequest, JobCompleteRequest, JobCompleteTxRequest, JobDeleteManyRequest,
     JobDeleteRequest, JobGetRequest, JobListRequest, JobRetryRequest, JobUpdateRequest, Jobs,
 };
+pub use self::local_queues::LocalQueues;
 pub use self::queues::{
     QueueGetRequest, QueueListRequest, QueuePauseRequest, QueueResumeRequest, QueueUpdateRequest,
     Queues,
@@ -396,58 +398,6 @@ impl Client {
         self.inner.sqlite_pool()
     }
 
-    /// Adds or reconfigures a queue. A running client starts or restarts the
-    /// queue without restarting other queues.
-    pub fn queue_add(
-        &self,
-        name: impl Into<String>,
-        config: QueueConfig,
-    ) -> Result<Option<QueueConfig>, Error> {
-        let name = name.into();
-        config.validate(&name)?;
-        if self.inner.workers.kinds().is_empty() {
-            return Err(Error::configuration(
-                "workers must be configured when queues are configured".to_owned(),
-            ));
-        }
-        let previous = self
-            .inner
-            .queues
-            .write()
-            .map_err(|_| Error::runtime("queue configuration lock poisoned".to_owned()))?
-            .insert(name, config);
-        self.inner.queue_changes.send_modify(|generation| {
-            *generation = generation.wrapping_add(1);
-        });
-        Ok(previous)
-    }
-
-    /// Returns a stable snapshot of configured queues.
-    pub fn queue_configs(&self) -> Result<HashMap<String, QueueConfig>, Error> {
-        self.inner
-            .queues
-            .read()
-            .map(|queues| queues.clone())
-            .map_err(|_| Error::runtime("queue configuration lock poisoned".to_owned()))
-    }
-
-    /// Stops and removes a configured queue. Persisted jobs and queue rows are
-    /// left untouched for other clients.
-    pub fn queue_remove(&self, name: &str) -> Result<Option<QueueConfig>, Error> {
-        let previous = self
-            .inner
-            .queues
-            .write()
-            .map_err(|_| Error::runtime("queue configuration lock poisoned".to_owned()))?
-            .remove(name);
-        if previous.is_some() {
-            self.inner.queue_changes.send_modify(|generation| {
-                *generation = generation.wrapping_add(1);
-            });
-        }
-        Ok(previous)
-    }
-
     /// Subscribes to selected local client events with a bounded buffer.
     pub fn subscribe(&self, kinds: &[EventKind]) -> Result<EventReceiver, Error> {
         self.subscribe_config(SubscribeConfig::new(kinds.iter().copied())?)
@@ -461,7 +411,7 @@ impl Client {
             .inner
             .queues
             .read()
-            .map_err(|_| Error::runtime("queue configuration lock poisoned".to_owned()))?
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_empty()
         {
             return Err(Error::configuration(
