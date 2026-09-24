@@ -40,10 +40,15 @@ impl SchemaName {
 
     /// Validates an optional explicit schema.
     ///
+    /// Like Go's `SafeIdentifier` quoting, any name is accepted and quoted
+    /// when rendered, including mixed case and punctuation such as
+    /// `river-prod`. Names containing NUL are rejected, as are names too long
+    /// to prefix River's notification topics within PostgreSQL's identifier
+    /// limit.
+    ///
     /// # Errors
     ///
-    /// Returns an error when the schema is too long or is not a safe
-    /// PostgreSQL identifier.
+    /// Returns an error when the schema is too long or contains NUL.
     pub fn new(schema: impl Into<String>) -> Result<Self, SchemaNameError> {
         let schema = schema.into();
         if schema.is_empty() {
@@ -55,14 +60,7 @@ impl SchemaName {
                 maximum: SCHEMA_MAX_LEN,
             });
         }
-
-        let mut chars = schema.chars();
-        let starts_validly = chars
-            .next()
-            .is_some_and(|character| character == '_' || character.is_ascii_alphabetic());
-        let remainder_valid =
-            chars.all(|character| character == '_' || character.is_ascii_alphanumeric());
-        if !starts_validly || !remainder_valid {
+        if schema.contains('\0') {
             return Err(SchemaNameError::Invalid(schema));
         }
 
@@ -79,17 +77,17 @@ impl SchemaName {
     #[must_use]
     pub fn qualify(&self, object: &str) -> String {
         match &self.0 {
-            Some(schema) => format!("\"{schema}\".\"{object}\""),
-            None => format!("\"{object}\""),
+            Some(schema) => format!("{}.{}", quote_identifier(schema), quote_identifier(object)),
+            None => quote_identifier(object),
         }
     }
 
     /// Prefix used by River's canonical migration templates.
     #[must_use]
     pub fn migration_prefix(&self) -> String {
-        self.0
-            .as_ref()
-            .map_or_else(String::new, |schema| format!("\"{schema}\"."))
+        self.0.as_ref().map_or_else(String::new, |schema| {
+            format!("{}.", quote_identifier(schema))
+        })
     }
 
     /// Fully qualified PostgreSQL notification channel.
@@ -100,6 +98,12 @@ impl SchemaName {
             None => format!("public.{topic}"),
         }
     }
+}
+
+/// Quotes a PostgreSQL identifier, doubling embedded quotes like Go's
+/// `dbutil.SafeIdentifier`.
+fn quote_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
 impl Default for SchemaName {
@@ -541,10 +545,8 @@ impl Pilot for NoopPilot {}
 /// Invalid River schema name.
 #[derive(Debug, Error)]
 pub enum SchemaNameError {
-    /// Schema contains unsupported characters.
-    #[error(
-        "schema name can only contain letters, numbers, and underscores, and must start with a letter or underscore: {0:?}"
-    )]
+    /// Schema contains a NUL character, which PostgreSQL identifiers cannot.
+    #[error("schema name cannot contain NUL: {0:?}")]
     Invalid(String),
 
     /// Schema is too long to prefix River's notification topics.
@@ -570,7 +572,27 @@ mod tests {
             "river_test.river_insert"
         );
 
-        assert!(SchemaName::new("1bad").is_err());
-        assert!(SchemaName::new("bad-name").is_err());
+        // Go quotes any schema with `SafeIdentifier`, so Rust accepts the
+        // same names and escapes embedded quotes.
+        let hyphenated = SchemaName::new("river-prod").unwrap();
+        assert_eq!(
+            hyphenated.qualify("river_job"),
+            "\"river-prod\".\"river_job\""
+        );
+        assert_eq!(
+            hyphenated.notification_topic("river_insert"),
+            "river-prod.river_insert"
+        );
+        assert_eq!(
+            SchemaName::new("MyRiver").unwrap().migration_prefix(),
+            "\"MyRiver\"."
+        );
+        assert_eq!(
+            SchemaName::new("odd\"name").unwrap().qualify("river_job"),
+            "\"odd\"\"name\".\"river_job\""
+        );
+        assert!(SchemaName::new("1leading_digit").is_ok());
+        assert!(SchemaName::new("nul\0byte").is_err());
+        assert!(SchemaName::new("a".repeat(SCHEMA_MAX_LEN + 1)).is_err());
     }
 }
