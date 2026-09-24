@@ -174,9 +174,9 @@
       "args": {
         "empty": [],
         "labels": {
-          "10": "ten",
-          "2": "two",
           "alpha": "first",
+          "k10": "ten",
+          "k2": "two",
           "zulu": "last"
         },
         "matrix": [
@@ -202,7 +202,7 @@
         ],
         "pointer": null
       },
-      "expected_sha256": "78b2453ff6170cc91f53f988c023d7fc9dd31b3b490ff7614a25e98a0914a3d5",
+      "expected_sha256": "66d457888b4b71f0a0041251f75d494e1ac543717283d84633a274648559306d",
       "expected_state_mask": 245,
       "kind": "conformance_all_args",
       "name": "typed_collections_and_nulls",
@@ -464,5 +464,36 @@
       "selected_unique_paths": null
     }
   ],
-  "protocol_revision": 1
+  "protocol_revision": 1,
+  "typed_only_cases": [
+    {
+      "args": {
+        "empty": [],
+        "labels": {
+          "10": "ten",
+          "2": "two",
+          "alpha": "first",
+          "zulu": "last"
+        },
+        "matrix": [],
+        "missing": null,
+        "objects": [],
+        "pointer": null
+      },
+      "expected_sha256": "38406019aea1ea67f81186d845e983b197b2d919ded5eca871e4fef0c8b0ad30",
+      "expected_state_mask": 245,
+      "kind": "conformance_all_args",
+      "name": "typed_integer_like_map_keys",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": true,
+        "by_period_nanos": 0,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_paths": null
+    }
+  ]
 }

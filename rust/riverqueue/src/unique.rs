@@ -457,6 +457,7 @@ mod tests {
     struct Fixture {
         cases: Vec<FixtureCase>,
         protocol_revision: u32,
+        typed_only_cases: Vec<FixtureCase>,
     }
 
     #[derive(Deserialize)]
@@ -519,9 +520,11 @@ mod tests {
     }
 
     fn golden(name: &str) -> FixtureCase {
-        fixture()
+        let fixture = fixture();
+        fixture
             .cases
             .into_iter()
+            .chain(fixture.typed_only_cases)
             .find(|case| case.name == name)
             .unwrap_or_else(|| panic!("missing golden {name}"))
     }
@@ -657,8 +660,8 @@ mod tests {
                     [
                         ("zulu", "last"),
                         ("alpha", "first"),
-                        ("10", "ten"),
-                        ("2", "two"),
+                        ("k10", "ten"),
+                        ("k2", "two"),
                     ]
                     .map(|(key, value)| (key.to_owned(), value.to_owned())),
                 ),
@@ -674,6 +677,32 @@ mod tests {
                         alpha: None,
                     },
                 ],
+                pointer: None,
+            },
+        );
+    }
+
+    /// Go writes map keys in sorted byte order, so `"10"` precedes `"2"`.
+    /// Rust's `BTreeMap` matches; the shared adapter goldens avoid this case
+    /// because JavaScript objects enumerate integer-like keys numerically.
+    #[test]
+    fn typed_args_match_go_integer_like_map_keys_golden() {
+        assert_typed_golden(
+            "typed_integer_like_map_keys",
+            &CollectionsArgs {
+                empty: Vec::new(),
+                labels: BTreeMap::from(
+                    [
+                        ("zulu", "last"),
+                        ("alpha", "first"),
+                        ("10", "ten"),
+                        ("2", "two"),
+                    ]
+                    .map(|(key, value)| (key.to_owned(), value.to_owned())),
+                ),
+                matrix: Vec::new(),
+                missing: None,
+                objects: Vec::new(),
                 pointer: None,
             },
         );

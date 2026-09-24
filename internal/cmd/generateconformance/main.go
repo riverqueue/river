@@ -172,6 +172,13 @@ type fixture struct {
 	Schema           string        `json:"$schema"`
 	Cases            []fixtureCase `json:"cases"`
 	ProtocolRevision int           `json:"protocol_revision"`
+
+	// TypedOnlyCases are goldens for typed arguments whose encoded byte
+	// order a producer built on dynamic objects can't reproduce, such as a
+	// map with integer-like keys, which JavaScript objects enumerate first in
+	// ascending numeric order. Implementations with typed serializers assert
+	// them in their own tests; the shared adapter scenario uses only Cases.
+	TypedOnlyCases []fixtureCase `json:"typed_only_cases"`
 }
 
 type fixtureCase struct {
@@ -203,6 +210,7 @@ type referenceCase struct {
 	queue               string
 	scheduledAt         *time.Time
 	selectedUniquePaths []string
+	typedOnly           bool
 }
 
 type staticClock struct{ now time.Time }
@@ -340,7 +348,7 @@ func main() {
 		{
 			args: collectionsArgs{
 				Empty:   []string{},
-				Labels:  map[string]string{"zulu": "last", "alpha": "first", "10": "ten", "2": "two"},
+				Labels:  map[string]string{"zulu": "last", "alpha": "first", "k10": "ten", "k2": "two"},
 				Matrix:  [][]int{{3, 1}, {}, {2}},
 				Objects: []collectionsItem{{Zulu: "z", Alpha: new(1)}, {Zulu: "y"}},
 			},
@@ -348,6 +356,21 @@ func main() {
 			now:   now,
 			opts:  dbunique.UniqueOpts{ByArgs: true},
 			queue: "default",
+		},
+		{
+			// Go writes map keys in sorted byte order, so "10" precedes
+			// "2". A JavaScript object can't hold that order.
+			args: collectionsArgs{
+				Empty:   []string{},
+				Labels:  map[string]string{"zulu": "last", "alpha": "first", "10": "ten", "2": "two"},
+				Matrix:  [][]int{},
+				Objects: []collectionsItem{},
+			},
+			name:      "typed_integer_like_map_keys",
+			now:       now,
+			opts:      dbunique.UniqueOpts{ByArgs: true},
+			queue:     "default",
+			typedOnly: true,
 		},
 		{
 			args:  emptyArgs{},
@@ -487,7 +510,7 @@ func main() {
 		if err != nil {
 			fatal(err)
 		}
-		generated.Cases = append(generated.Cases, fixtureCase{
+		generatedCase := fixtureCase{
 			Args:              encodedArgs,
 			ExpectedSHA256:    hex.EncodeToString(key),
 			ExpectedStateMask: uniquestates.UniqueStatesToBitmask(states),
@@ -504,7 +527,12 @@ func main() {
 			Queue:              reference.queue,
 			ScheduledAt:        reference.scheduledAt,
 			SelectedUniquePath: reference.selectedUniquePaths,
-		})
+		}
+		if reference.typedOnly {
+			generated.TypedOnlyCases = append(generated.TypedOnlyCases, generatedCase)
+		} else {
+			generated.Cases = append(generated.Cases, generatedCase)
+		}
 	}
 
 	writeGenerated(*check, uniqueFixturePath, generated)

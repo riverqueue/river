@@ -4,6 +4,7 @@
   "properties": {
     "$schema": { "type": "string" },
     "cases": {
+      "description": "Goldens every implementation's adapter must reproduce.",
       "items": {
         "additionalProperties": false,
         "properties": {
@@ -50,9 +51,14 @@
       "minItems": 1,
       "type": "array"
     },
-    "protocol_revision": { "minimum": 1, "type": "integer" }
+    "protocol_revision": { "minimum": 1, "type": "integer" },
+    "typed_only_cases": {
+      "description": "Goldens for typed arguments whose encoded byte order a producer built on dynamic objects can't reproduce, such as a map with integer-like keys, which JavaScript objects enumerate first in ascending numeric order. Implementations with typed serializers assert them in their own tests; the shared adapter scenario uses only `cases`.",
+      "items": { "$ref": "#/properties/cases/items" },
+      "type": "array"
+    }
   },
-  "required": ["$schema", "cases", "protocol_revision"],
+  "required": ["$schema", "cases", "protocol_revision", "typed_only_cases"],
   "title": "River unique-key compatibility goldens",
   "type": "object"
 }
