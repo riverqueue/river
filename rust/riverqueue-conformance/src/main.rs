@@ -109,6 +109,20 @@ const ADAPTER_METHODS: &[&str] = &[
     "work",
 ];
 
+const INSERT_ONLY_CAPABILITIES: &[&str] = &["insert", "lifecycle", "transactions", "unique_jobs"];
+
+const INSERT_ONLY_METHODS: &[&str] = &[
+    "handshake",
+    "insert",
+    "insert_many",
+    "tx_begin",
+    "tx_commit",
+    "tx_insert",
+    "tx_insert_many",
+    "tx_rollback",
+    "unique_key",
+];
+
 const CAPABILITIES: &[&str] = &[
     "barriers",
     "cancel",
@@ -274,6 +288,171 @@ const SQLITE_RUNTIME_CAPABILITIES: &[&str] = &[
     "unique_jobs",
     "work",
 ];
+
+/// Stable JSON-RPC error codes from `conformance/adapter/contract.json`.
+mod error_code {
+    pub const DATABASE: i32 = -32_003;
+    pub const INVALID_PARAMS: i32 = -32_602;
+    pub const INVALID_REQUEST: i32 = -32_600;
+    pub const METHOD_NOT_FOUND: i32 = -32_601;
+    pub const NOT_FOUND: i32 = -32_001;
+    pub const PARSE: i32 = -32_700;
+    pub const REJECTED: i32 = -32_002;
+    pub const UNSUPPORTED: i32 = -32_004;
+}
+
+/// A failure the adapter classifies with a contract error code itself.
+#[derive(Debug)]
+struct AdapterError {
+    code: i32,
+    message: String,
+}
+
+impl AdapterError {
+    fn invalid_params(message: impl Into<String>) -> Self {
+        Self {
+            code: error_code::INVALID_PARAMS,
+            message: message.into(),
+        }
+    }
+
+    fn method_not_found(method: &str) -> Self {
+        Self {
+            code: error_code::METHOD_NOT_FOUND,
+            message: format!("method not found: {method}"),
+        }
+    }
+
+    fn not_found(message: impl Into<String>) -> Self {
+        Self {
+            code: error_code::NOT_FOUND,
+            message: message.into(),
+        }
+    }
+
+    fn unsupported(message: impl Into<String>) -> Self {
+        Self {
+            code: error_code::UNSUPPORTED,
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for AdapterError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for AdapterError {}
+
+/// Maps a failure to its contract error code. River reports missing rows as
+/// `Error::NotFound` and database failures as `Error::Database`; every other
+/// River failure is a rejection of the request.
+fn error_code(error: &(dyn std::error::Error + Send + Sync + 'static)) -> i32 {
+    if let Some(error) = error.downcast_ref::<AdapterError>() {
+        return error.code;
+    }
+    if let Some(error) = error.downcast_ref::<riverqueue::Error>() {
+        return match error {
+            riverqueue::Error::NotFound => error_code::NOT_FOUND,
+            riverqueue::Error::Database(_) => error_code::DATABASE,
+            _ => error_code::REJECTED,
+        };
+    }
+    if error.downcast_ref::<sqlx::Error>().is_some() {
+        return error_code::DATABASE;
+    }
+    if let Some(error) = error.downcast_ref::<io::Error>()
+        && error.kind() == io::ErrorKind::NotFound
+    {
+        return error_code::NOT_FOUND;
+    }
+    error_code::REJECTED
+}
+
+/// Parameter schemas from the adapter contract, used to reject parameters
+/// the contract does not define instead of silently ignoring them.
+struct ContractParams {
+    definitions: Map<String, Value>,
+    methods: HashMap<String, Value>,
+}
+
+impl ContractParams {
+    fn load() -> Result<Self, serde_json::Error> {
+        let contract: Value =
+            serde_json::from_str(include_str!("../../../conformance/adapter/contract.json"))?;
+        let definitions = contract["$defs"].as_object().cloned().unwrap_or_default();
+        let methods = contract["methods"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|method| {
+                Some((
+                    method["name"].as_str()?.to_owned(),
+                    method["params"].clone(),
+                ))
+            })
+            .collect();
+        Ok(Self {
+            definitions,
+            methods,
+        })
+    }
+
+    /// Rejects object keys that a closed contract schema does not declare.
+    fn check(&self, method: &str, params: &Value) -> Result<(), AdapterError> {
+        match self.methods.get(method) {
+            Some(schema) => self.check_value(schema, params, "params"),
+            None => Ok(()),
+        }
+    }
+
+    fn check_value(
+        &self,
+        schema: &Value,
+        value: &Value,
+        location: &str,
+    ) -> Result<(), AdapterError> {
+        if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+            return match reference
+                .strip_prefix("#/$defs/")
+                .and_then(|name| self.definitions.get(name))
+            {
+                Some(definition) => self.check_value(definition, value, location),
+                // References to other schema files describe results, which
+                // the adapter produces rather than receives.
+                None => Ok(()),
+            };
+        }
+        match value {
+            Value::Object(object) => {
+                let properties = schema.get("properties").and_then(Value::as_object);
+                for (key, child) in object {
+                    match properties.and_then(|properties| properties.get(key)) {
+                        Some(child_schema) => {
+                            self.check_value(child_schema, child, &format!("{location}.{key}"))?;
+                        }
+                        None if schema.get("additionalProperties") == Some(&Value::Bool(false)) => {
+                            return Err(AdapterError::invalid_params(format!(
+                                "unknown parameter {location}.{key}"
+                            )));
+                        }
+                        None => {}
+                    }
+                }
+                Ok(())
+            }
+            Value::Array(items) => match schema.get("items") {
+                Some(item_schema) => items.iter().enumerate().try_for_each(|(index, item)| {
+                    self.check_value(item_schema, item, &format!("{location}[{index}]"))
+                }),
+                None => Ok(()),
+            },
+            _ => Ok(()),
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct Request {
@@ -607,6 +786,7 @@ struct RuntimeProbeState {
     periodic_starts: usize,
     resumable_first_runs: usize,
     resumable_second_runs: usize,
+    stuck_jobs: usize,
     trace: Vec<String>,
 }
 
@@ -661,6 +841,14 @@ impl RuntimeProbe {
         Ok(())
     }
 
+    fn increment_stuck_jobs(&self) -> io::Result<()> {
+        self.state
+            .lock()
+            .map_err(|_| io::Error::other("runtime probe lock poisoned"))?
+            .stuck_jobs += 1;
+        Ok(())
+    }
+
     fn snapshot(&self) -> io::Result<Value> {
         let state = self
             .state
@@ -672,12 +860,18 @@ impl RuntimeProbe {
             "periodic_starts": state.periodic_starts,
             "resumable_first_runs": state.resumable_first_runs,
             "resumable_second_runs": state.resumable_second_runs,
+            "stuck_jobs": state.stuck_jobs,
             "trace": state.trace,
         }))
     }
 }
 
-struct ConformanceErrorHandler(Arc<RuntimeProbe>);
+/// Records stuck jobs and, when `cancel` is set, counts worker errors and
+/// cancels the failed job.
+struct ConformanceErrorHandler {
+    cancel: bool,
+    probe: Arc<RuntimeProbe>,
+}
 
 #[allow(
     clippy::unused_async_trait_impl,
@@ -690,10 +884,19 @@ impl ErrorHandler for ConformanceErrorHandler {
         _job: &JobRow,
         _result: &WorkResult,
     ) -> Result<ErrorHandlerDecision, BoxError> {
-        self.0
+        if !self.cancel {
+            return Ok(ErrorHandlerDecision::Continue);
+        }
+        self.probe
             .increment_error_handler_calls()
             .map_err(|error| BoxError::from(error.to_string()))?;
         Ok(ErrorHandlerDecision::Cancel)
+    }
+
+    async fn handle_stuck(&self, _job: &JobRow) -> Result<(), BoxError> {
+        self.probe
+            .increment_stuck_jobs()
+            .map_err(|error| BoxError::from(error.to_string()))
     }
 }
 
@@ -970,6 +1173,7 @@ struct Adapter {
     barriers: Arc<BarrierRegistry>,
     clock: Option<DateTime<Utc>>,
     pool: PgPool,
+    profile: String,
     rng_seed: u64,
     running: Option<RunningClient>,
     transactions: HashMap<String, Transaction<'static, Postgres>>,
@@ -1000,17 +1204,26 @@ async fn main() {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let database_url = std::env::var("RIVER_CONFORMANCE_DATABASE_URL")?;
+    let contract = ContractParams::load()?;
     let mut adapter = match std::env::var("RIVER_CONFORMANCE_DATABASE_KIND")
         .as_deref()
         .unwrap_or("postgres")
     {
         "postgres" => {
+            let profile = std::env::var("RIVER_CONFORMANCE_PROFILE")
+                .unwrap_or_else(|_| "postgres-full-v1".to_owned());
+            if !matches!(profile.as_str(), "insert-only-v1" | "postgres-full-v1") {
+                return Err(
+                    format!("unsupported PostgreSQL conformance profile {profile:?}").into(),
+                );
+            }
             let options =
                 postgres_connect_options(&database_url)?.application_name("river-conformance-rust");
             AdapterBackend::Postgres(Adapter {
                 barriers: Arc::new(BarrierRegistry::default()),
                 clock: None,
                 pool: PgPoolOptions::new().connect_with(options).await?,
+                profile,
                 rng_seed: 0,
                 running: None,
                 transactions: HashMap::new(),
@@ -1054,9 +1267,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
         let response = match serde_json::from_str::<Request>(&line) {
-            Ok(request) if request.jsonrpc == "2.0" => adapter.respond(request).await,
-            Ok(request) => Response::error(request.id, -32_600, "jsonrpc must be 2.0".to_owned()),
-            Err(error) => Response::error(Value::Null, -32_700, error.to_string()),
+            Ok(request) if request.jsonrpc == "2.0" => adapter.respond(request, &contract).await,
+            Ok(request) => Response::error(
+                request.id,
+                error_code::INVALID_REQUEST,
+                "jsonrpc must be 2.0".to_owned(),
+            ),
+            Err(error) => Response::error(Value::Null, error_code::PARSE, error.to_string()),
         };
         serde_json::to_writer(&mut stdout, &response)?;
         stdout.write_all(b"\n")?;
@@ -1097,27 +1314,47 @@ fn database_url_has_userinfo(database_url: &str) -> bool {
 }
 
 impl AdapterBackend {
-    async fn respond(&mut self, request: Request) -> Response {
+    async fn respond(&mut self, request: Request, contract: &ContractParams) -> Response {
         match self {
-            Self::Postgres(adapter) => adapter.respond(request).await,
-            Self::Sqlite(adapter) => adapter.respond(request).await,
+            Self::Postgres(adapter) => adapter.respond(request, contract).await,
+            Self::Sqlite(adapter) => adapter.respond(request, contract).await,
         }
     }
 }
 
 impl Adapter {
-    async fn respond(&mut self, request: Request) -> Response {
-        if request.method == "unique_key" {
-            return respond_unique_key(&request);
+    fn profile_methods(&self) -> (&'static [&'static str], &'static [&'static str]) {
+        if self.profile == "insert-only-v1" {
+            (INSERT_ONLY_METHODS, INSERT_ONLY_CAPABILITIES)
+        } else {
+            (ADAPTER_METHODS, CAPABILITIES)
         }
+    }
+
+    async fn respond(&mut self, request: Request, contract: &ContractParams) -> Response {
         let params = match decode_request_params(request.params.as_deref()) {
             Ok(params) => params,
-            Err(error) => return Response::error(request.id, -32_602, error.to_string()),
+            Err(error) => {
+                return Response::error(request.id, error_code::INVALID_PARAMS, error.to_string());
+            }
         };
+        if !self.profile_methods().0.contains(&request.method.as_str()) {
+            let error = AdapterError::method_not_found(&request.method);
+            return Response::error(request.id, error.code, error.message);
+        }
+        if let Err(error) = contract.check(&request.method, &params) {
+            return Response::error(request.id, error.code, error.message);
+        }
+        if request.method == "unique_key" {
+            // Hash the exact request bytes so numbers keep their encoding.
+            return respond_unique_key(&request);
+        }
         let result = self.handle(&request.method, params).await;
         match result {
             Ok(result) => Response::success(request.id, result),
-            Err(error) => Response::error(request.id, -32_000, error.to_string()),
+            Err(error) => {
+                Response::error(request.id, error_code(error.as_ref()), error.to_string())
+            }
         }
     }
 
@@ -1128,17 +1365,20 @@ impl Adapter {
         params: Value,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         match method {
-            "handshake" => Ok(json!({
-                "adapter_version": ADAPTER_VERSION,
-                "backend": "postgres",
-                "capabilities": CAPABILITIES,
-                "implementation": "rust",
-                "implementation_version": env!("CARGO_PKG_VERSION"),
-                "methods": ADAPTER_METHODS,
-                "migration_lines": {MIGRATION_LINE_MAIN: MIGRATION_VERSION_LATEST},
-                "profile": "postgres-full-v1",
-                "protocol_revision": PROTOCOL_REVISION,
-            })),
+            "handshake" => {
+                let (methods, capabilities) = self.profile_methods();
+                Ok(json!({
+                    "adapter_version": ADAPTER_VERSION,
+                    "backend": "postgres",
+                    "capabilities": capabilities,
+                    "implementation": "rust",
+                    "implementation_version": env!("CARGO_PKG_VERSION"),
+                    "methods": methods,
+                    "migration_lines": {MIGRATION_LINE_MAIN: MIGRATION_VERSION_LATEST},
+                    "profile": self.profile,
+                    "protocol_revision": PROTOCOL_REVISION,
+                }))
+            }
             "migrate" => {
                 let schema = schema_name(params.get("schema").and_then(Value::as_str))?;
                 if let Some(name) = schema.as_deref() {
@@ -1404,10 +1644,9 @@ impl Adapter {
             "request_resign" => {
                 if let Some(handle) = params.get("handle").and_then(Value::as_str) {
                     let client = self.client()?.clone();
-                    let transaction = self
-                        .transactions
-                        .get_mut(handle)
-                        .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                    let transaction = self.transactions.get_mut(handle).ok_or_else(|| {
+                        AdapterError::not_found(format!("transaction {handle:?} not found"))
+                    })?;
                     client.request_resign_tx(transaction).await?;
                 } else {
                     self.client()?.request_resign().await?;
@@ -1430,7 +1669,7 @@ impl Adapter {
             }
             "listener_count" => {
                 let count = sqlx::query_scalar::<_, i64>(
-                    "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'river-conformance-rust' AND query LIKE 'LISTEN %'",
+                    "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'river-conformance-rust' AND query LIKE 'LISTEN %'",
                 )
                 .fetch_one(&self.pool)
                 .await?;
@@ -1438,7 +1677,7 @@ impl Adapter {
             }
             "connection_count" => {
                 let count = sqlx::query_scalar::<_, i64>(
-                    "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'river-conformance-rust'",
+                    "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'river-conformance-rust'",
                 )
                 .fetch_one(&self.pool)
                 .await?;
@@ -1446,7 +1685,7 @@ impl Adapter {
             }
             "fault_disconnect_listeners" => {
                 let count = sqlx::query_scalar::<_, i64>(
-                    "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'river-conformance-rust' AND query LIKE 'LISTEN %' AND pid != pg_backend_pid()) AS terminated",
+                    "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'river-conformance-rust' AND query LIKE 'LISTEN %' AND pid != pg_backend_pid()) AS terminated",
                 )
                 .fetch_one(&self.pool)
                 .await?;
@@ -1463,7 +1702,7 @@ impl Adapter {
                     return Err("application_name must name a conformance adapter".into());
                 }
                 let count = sqlx::query_scalar::<_, i64>(
-                    "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = $1 AND pid != pg_backend_pid()) AS terminated",
+                    "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1 AND pid != pg_backend_pid()) AS terminated",
                 )
                 .bind(application_name)
                 .fetch_one(&self.pool)
@@ -1480,7 +1719,10 @@ impl Adapter {
                 let id = required_i64(&params, "id")?;
                 let state = required_string(&params, "state")?;
                 if !matches!(state.as_str(), "completed" | "discarded") {
-                    return Err("state must be completed or discarded".into());
+                    return Err(AdapterError::invalid_params(
+                        "state must be completed or discarded",
+                    )
+                    .into());
                 }
                 let metadata = params.get("metadata").cloned().unwrap_or_else(|| json!({}));
                 let result = sqlx::query(
@@ -1488,7 +1730,7 @@ impl Adapter {
                        SET errors = CASE WHEN $2 = 'discarded'
                                THEN array_append(errors, '{"at":"2026-02-03T04:05:06.789Z","attempt":1,"error":"external discard","trace":"external trace"}'::jsonb)
                                ELSE errors END,
-                           finalized_at = '2026-02-03T04:05:06.789Z'::timestamptz,
+                           finalized_at = now(),
                            metadata = metadata || $3::jsonb,
                            state = $2::river_job_state
                        WHERE id = $1 AND state = 'running'"#,
@@ -1499,7 +1741,7 @@ impl Adapter {
                 .execute(&self.pool)
                 .await?;
                 if result.rows_affected() != 1 {
-                    return Err("running job not found".into());
+                    return Err(AdapterError::not_found("running job not found").into());
                 }
                 Ok(normalize_job(&self.client()?.job_get(id).await?))
             }
@@ -1628,9 +1870,10 @@ impl Adapter {
                 {
                     builder = builder.plugin(ConformancePlugin(Arc::clone(&probe)));
                 }
-                if error_handler_cancel {
-                    builder = builder.error_handler(ConformanceErrorHandler(Arc::clone(&probe)));
-                }
+                builder = builder.error_handler(ConformanceErrorHandler {
+                    cancel: error_handler_cancel,
+                    probe: Arc::clone(&probe),
+                });
                 if let Some(milliseconds) = optional_i64(&params, "job_stuck_threshold_ms") {
                     builder = builder.job_stuck_threshold(duration_millis(milliseconds)?);
                 }
@@ -1765,10 +2008,9 @@ impl Adapter {
                 let insert: InsertParams =
                     serde_json::from_value(params.get("job").cloned().ok_or("missing job")?)?;
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 let row = client
                     .insert(insert.args())
                     .opts(insert.opts.into_opts())
@@ -1780,10 +2022,9 @@ impl Adapter {
                 let handle = required_string(&params, "handle")?;
                 let jobs = insert_many_params(params.get("jobs").ok_or("missing jobs")?)?;
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 if method == "tx_insert_many_fast" {
                     let count = client.insert_many(jobs).fast().tx(transaction).await?;
                     Ok(json!({"count": count}))
@@ -1796,40 +2037,36 @@ impl Adapter {
                 let handle = required_string(&params, "handle")?;
                 let id = required_i64(&params, "id")?;
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 Ok(normalize_job(&client.job_get_tx(transaction, id).await?))
             }
             "tx_cancel" => {
                 let handle = required_string(&params, "handle")?;
                 let id = required_i64(&params, "id")?;
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 Ok(normalize_job(&client.job_cancel_tx(transaction, id).await?))
             }
             "tx_delete" => {
                 let handle = required_string(&params, "handle")?;
                 let id = required_i64(&params, "id")?;
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 Ok(normalize_job(&client.job_delete_tx(transaction, id).await?))
             }
             "tx_retry" => {
                 let handle = required_string(&params, "handle")?;
                 let id = required_i64(&params, "id")?;
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 Ok(normalize_job(&client.job_retry_tx(transaction, id).await?))
             }
             "tx_update" => {
@@ -1843,10 +2080,9 @@ impl Adapter {
                     .unwrap_or_default();
                 let output = params.get("output").cloned();
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 let row = client
                     .job_update_tx(transaction, id, job_update_params(metadata, output))
                     .await?;
@@ -1856,10 +2092,9 @@ impl Adapter {
                 let handle = required_string(&params, "handle")?;
                 let list = list_params(&params)?;
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 let rows = client.job_list_tx(transaction, &list).await?;
                 normalize_job_list(&rows, &list)
             }
@@ -1873,10 +2108,9 @@ impl Adapter {
                     JobDeleteManyParams::matching(filter)
                 };
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 let rows = client.job_delete_many_tx(transaction, &delete).await?;
                 Ok(json!({"jobs": rows.iter().map(normalize_job).collect::<Vec<_>>() }))
             }
@@ -1884,10 +2118,9 @@ impl Adapter {
                 let handle = required_string(&params, "handle")?;
                 let name = required_string(&params, "name")?;
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 Ok(normalize_queue(
                     &client.queue_get_tx(transaction, &name).await?,
                 ))
@@ -1896,10 +2129,9 @@ impl Adapter {
                 let handle = required_string(&params, "handle")?;
                 let limit = optional_i64(&params, "limit").unwrap_or(100);
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 let queues = client
                     .queue_list_tx(transaction, &queue_list_params(i32::try_from(limit)?))
                     .await?;
@@ -1911,10 +2143,9 @@ impl Adapter {
                 let handle = required_string(&params, "handle")?;
                 let name = required_string(&params, "name")?;
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 if method == "tx_queue_pause" {
                     client.queue_pause_tx(transaction, &name).await?;
                 } else {
@@ -1932,20 +2163,18 @@ impl Adapter {
                     .transpose()?
                     .unwrap_or_default();
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 Ok(normalize_queue(
                     &client.queue_update_tx(transaction, &name, metadata).await?,
                 ))
             }
             "tx_fail" => {
                 let handle = required_string(&params, "handle")?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 sqlx::query("SELECT 1 / 0")
                     .execute(&mut **transaction)
                     .await?;
@@ -1953,10 +2182,9 @@ impl Adapter {
             }
             "tx_commit" | "tx_rollback" => {
                 let handle = required_string(&params, "handle")?;
-                let transaction = self
-                    .transactions
-                    .remove(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.remove(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 if method == "tx_commit" {
                     transaction.commit().await?;
                 } else {
@@ -1964,7 +2192,7 @@ impl Adapter {
                 }
                 Ok(json!({}))
             }
-            _ => Err(format!("method not found: {method}").into()),
+            _ => Err(AdapterError::method_not_found(method).into()),
         }
     }
 
@@ -1989,18 +2217,38 @@ impl Adapter {
 }
 
 impl SqliteAdapter {
-    async fn respond(&mut self, request: Request) -> Response {
-        if request.method == "unique_key" {
-            return respond_unique_key(&request);
+    fn profile_methods(&self) -> (&'static [&'static str], &'static [&'static str]) {
+        if self.profile == "sqlite-runtime-v1" {
+            (SQLITE_RUNTIME_METHODS, SQLITE_RUNTIME_CAPABILITIES)
+        } else {
+            (SQLITE_ADAPTER_METHODS, SQLITE_CAPABILITIES)
         }
+    }
+
+    async fn respond(&mut self, request: Request, contract: &ContractParams) -> Response {
         let params = match decode_request_params(request.params.as_deref()) {
             Ok(params) => params,
-            Err(error) => return Response::error(request.id, -32_602, error.to_string()),
+            Err(error) => {
+                return Response::error(request.id, error_code::INVALID_PARAMS, error.to_string());
+            }
         };
+        if !self.profile_methods().0.contains(&request.method.as_str()) {
+            let error = AdapterError::method_not_found(&request.method);
+            return Response::error(request.id, error.code, error.message);
+        }
+        if let Err(error) = contract.check(&request.method, &params) {
+            return Response::error(request.id, error.code, error.message);
+        }
+        if request.method == "unique_key" {
+            // Hash the exact request bytes so numbers keep their encoding.
+            return respond_unique_key(&request);
+        }
         let result = self.handle(&request.method, params).await;
         match result {
             Ok(result) => Response::success(request.id, result),
-            Err(error) => Response::error(request.id, -32_000, error.to_string()),
+            Err(error) => {
+                Response::error(request.id, error_code(error.as_ref()), error.to_string())
+            }
         }
     }
 
@@ -2012,11 +2260,7 @@ impl SqliteAdapter {
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         match method {
             "handshake" => {
-                let (methods, capabilities) = if self.profile == "sqlite-runtime-v1" {
-                    (SQLITE_RUNTIME_METHODS, SQLITE_RUNTIME_CAPABILITIES)
-                } else {
-                    (SQLITE_ADAPTER_METHODS, SQLITE_CAPABILITIES)
-                };
+                let (methods, capabilities) = self.profile_methods();
                 Ok(json!({
                     "adapter_version": ADAPTER_VERSION,
                     "backend": "sqlite",
@@ -2035,7 +2279,10 @@ impl SqliteAdapter {
                     .and_then(Value::as_str)
                     .is_some_and(|schema| !schema.is_empty())
                 {
-                    return Err("SQLite conformance does not support custom schemas".into());
+                    return Err(AdapterError::unsupported(
+                        "SQLite conformance does not support custom schemas",
+                    )
+                    .into());
                 }
                 let migrator = SqliteMigrator::new(self.pool.clone());
                 let direction = match params
@@ -2115,7 +2362,10 @@ impl SqliteAdapter {
             "insert" => {
                 let params: InsertParams = serde_json::from_value(params)?;
                 if !params.schema.is_empty() {
-                    return Err("SQLite conformance does not support custom schemas".into());
+                    return Err(AdapterError::unsupported(
+                        "SQLite conformance does not support custom schemas",
+                    )
+                    .into());
                 }
                 let result = self
                     .client()?
@@ -2179,7 +2429,10 @@ impl SqliteAdapter {
                     .and_then(Value::as_str)
                     .is_some_and(|schema| !schema.is_empty())
                 {
-                    return Err("SQLite conformance does not support custom schemas".into());
+                    return Err(AdapterError::unsupported(
+                        "SQLite conformance does not support custom schemas",
+                    )
+                    .into());
                 }
                 let row = self.client()?.job_get(required_i64(&params, "id")?).await?;
                 Ok(normalize_job(&row))
@@ -2239,7 +2492,10 @@ impl SqliteAdapter {
                 let id = required_i64(&params, "id")?;
                 let state = required_string(&params, "state")?;
                 if !matches!(state.as_str(), "completed" | "discarded") {
-                    return Err("state must be completed or discarded".into());
+                    return Err(AdapterError::invalid_params(
+                        "state must be completed or discarded",
+                    )
+                    .into());
                 }
                 let metadata = params.get("metadata").cloned().unwrap_or_else(|| json!({}));
                 let result = sqlx::query(
@@ -2247,7 +2503,7 @@ impl SqliteAdapter {
                        SET errors = CASE WHEN ?2 = 'discarded'
                                THEN jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json('{"at":"2026-02-03T04:05:06.789Z","attempt":1,"error":"external discard","trace":"external trace"}')))
                                ELSE errors END,
-                           finalized_at = '2026-02-03 04:05:06.789',
+                           finalized_at = strftime('%Y-%m-%d %H:%M:%f', 'now'),
                            metadata = jsonb_patch(json(metadata), json(?3)),
                            state = ?2
                        WHERE id = ?1 AND state = 'running'"#,
@@ -2258,7 +2514,7 @@ impl SqliteAdapter {
                 .execute(&self.pool)
                 .await?;
                 if result.rows_affected() != 1 {
-                    return Err("running job not found".into());
+                    return Err(AdapterError::not_found("running job not found").into());
                 }
                 Ok(normalize_job(&self.client()?.job_get(id).await?))
             }
@@ -2356,10 +2612,9 @@ impl SqliteAdapter {
             "request_resign" => {
                 if let Some(handle) = params.get("handle").and_then(Value::as_str) {
                     let client = self.client()?.clone();
-                    let transaction = self
-                        .transactions
-                        .get_mut(handle)
-                        .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                    let transaction = self.transactions.get_mut(handle).ok_or_else(|| {
+                        AdapterError::not_found(format!("transaction {handle:?} not found"))
+                    })?;
                     client.request_resign_tx(transaction).await?;
                 } else {
                     self.client()?.request_resign().await?;
@@ -2418,9 +2673,10 @@ impl SqliteAdapter {
                 {
                     builder = builder.plugin(ConformancePlugin(Arc::clone(&probe)));
                 }
-                if error_handler_cancel {
-                    builder = builder.error_handler(ConformanceErrorHandler(Arc::clone(&probe)));
-                }
+                builder = builder.error_handler(ConformanceErrorHandler {
+                    cancel: error_handler_cancel,
+                    probe: Arc::clone(&probe),
+                });
                 if let Some(milliseconds) = optional_i64(&params, "job_stuck_threshold_ms") {
                     builder = builder.job_stuck_threshold(duration_millis(milliseconds)?);
                 }
@@ -2553,10 +2809,9 @@ impl SqliteAdapter {
                 let insert: InsertParams =
                     serde_json::from_value(params.get("job").cloned().ok_or("missing job")?)?;
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 let row = client
                     .insert(insert.args())
                     .opts(insert.opts.into_opts())
@@ -2568,10 +2823,9 @@ impl SqliteAdapter {
                 let handle = required_string(&params, "handle")?;
                 let jobs = insert_many_params(params.get("jobs").ok_or("missing jobs")?)?;
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 if method == "tx_insert_many_fast" {
                     let count = client.insert_many(jobs).fast().tx(transaction).await?;
                     Ok(json!({"count": count}))
@@ -2584,40 +2838,36 @@ impl SqliteAdapter {
                 let handle = required_string(&params, "handle")?;
                 let id = required_i64(&params, "id")?;
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 Ok(normalize_job(&client.job_get_tx(transaction, id).await?))
             }
             "tx_cancel" => {
                 let handle = required_string(&params, "handle")?;
                 let id = required_i64(&params, "id")?;
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 Ok(normalize_job(&client.job_cancel_tx(transaction, id).await?))
             }
             "tx_delete" => {
                 let handle = required_string(&params, "handle")?;
                 let id = required_i64(&params, "id")?;
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 Ok(normalize_job(&client.job_delete_tx(transaction, id).await?))
             }
             "tx_retry" => {
                 let handle = required_string(&params, "handle")?;
                 let id = required_i64(&params, "id")?;
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 Ok(normalize_job(&client.job_retry_tx(transaction, id).await?))
             }
             "tx_update" => {
@@ -2631,10 +2881,9 @@ impl SqliteAdapter {
                     .unwrap_or_default();
                 let output = params.get("output").cloned();
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 let row = client
                     .job_update_tx(transaction, id, job_update_params(metadata, output))
                     .await?;
@@ -2644,10 +2893,9 @@ impl SqliteAdapter {
                 let handle = required_string(&params, "handle")?;
                 let list = list_params(&params)?;
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 let rows = client.job_list_tx(transaction, &list).await?;
                 normalize_job_list(&rows, &list)
             }
@@ -2661,10 +2909,9 @@ impl SqliteAdapter {
                     JobDeleteManyParams::matching(filter)
                 };
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 let rows = client.job_delete_many_tx(transaction, &delete).await?;
                 Ok(json!({"jobs": rows.iter().map(normalize_job).collect::<Vec<_>>() }))
             }
@@ -2672,10 +2919,9 @@ impl SqliteAdapter {
                 let handle = required_string(&params, "handle")?;
                 let name = required_string(&params, "name")?;
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 Ok(normalize_queue(
                     &client.queue_get_tx(transaction, &name).await?,
                 ))
@@ -2684,10 +2930,9 @@ impl SqliteAdapter {
                 let handle = required_string(&params, "handle")?;
                 let limit = optional_i64(&params, "limit").unwrap_or(100);
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 let queues = client
                     .queue_list_tx(transaction, &queue_list_params(i32::try_from(limit)?))
                     .await?;
@@ -2699,10 +2944,9 @@ impl SqliteAdapter {
                 let handle = required_string(&params, "handle")?;
                 let name = required_string(&params, "name")?;
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 if method == "tx_queue_pause" {
                     client.queue_pause_tx(transaction, &name).await?;
                 } else {
@@ -2720,20 +2964,18 @@ impl SqliteAdapter {
                     .transpose()?
                     .unwrap_or_default();
                 let client = self.client()?;
-                let transaction = self
-                    .transactions
-                    .get_mut(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 Ok(normalize_queue(
                     &client.queue_update_tx(transaction, &name, metadata).await?,
                 ))
             }
             "tx_commit" | "tx_rollback" => {
                 let handle = required_string(&params, "handle")?;
-                let transaction = self
-                    .transactions
-                    .remove(&handle)
-                    .ok_or_else(|| format!("transaction {handle:?} not found"))?;
+                let transaction = self.transactions.remove(&handle).ok_or_else(|| {
+                    AdapterError::not_found(format!("transaction {handle:?} not found"))
+                })?;
                 if method == "tx_commit" {
                     transaction.commit().await?;
                 } else {
@@ -2741,7 +2983,7 @@ impl SqliteAdapter {
                 }
                 Ok(json!({}))
             }
-            _ => Err(format!("method not found for SQLite profile: {method}").into()),
+            _ => Err(AdapterError::method_not_found(method).into()),
         }
     }
 

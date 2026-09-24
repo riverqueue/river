@@ -2,6 +2,8 @@ package harness_test
 
 import (
 	"encoding/json"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -100,6 +102,24 @@ func TestCompatibilityArtifacts(t *testing.T) {
 		}
 		require.True(t, slices.IsSorted(names))
 		require.Contains(t, names, "handshake")
+
+		parsed, err := parseAdapterContract(filepath.Join(root, "conformance/adapter/contract.json"))
+		require.NoError(t, err)
+		require.Len(t, parsed.errorNames, len(parsed.errorCodes), "error codes and names must be unique")
+		for _, name := range []string{
+			"database_error", "internal", "invalid_params", "invalid_request", "method_not_found",
+			"not_found", "parse_error", "rejected", "unsupported",
+		} {
+			require.Contains(t, parsed.errorCodes, name)
+		}
+		// Method schemas resolve, including references to shared schema
+		// files, and reject undeclared parameters.
+		require.NoError(t, parsed.validate("get", "params", map[string]any{"id": 1}))
+		require.ErrorContains(t, parsed.validate("get", "params", map[string]any{"id": 1, "extra": true}), "unknown property")
+		require.NoError(t, parsed.validate("queue_get", "result", map[string]any{
+			"created_at": "2026-01-02T03:04:05Z", "metadata": map[string]any{}, "name": "default",
+			"paused_at": nil, "updated_at": "2026-01-02T03:04:05Z",
+		}))
 	})
 
 	t.Run("AdapterProfilesAreContractSubsets", func(t *testing.T) {
@@ -226,35 +246,56 @@ func TestCompatibilityArtifacts(t *testing.T) {
 		}
 	})
 
-	t.Run("SchemaReferencesResolve", func(t *testing.T) {
+	t.Run("ArtifactsMatchSchemas", func(t *testing.T) {
 		t.Parallel()
 
-		for _, path := range []string{
+		// Every checked-in conformance artifact declares a local schema and
+		// must validate against it.
+		validator := newSchemaValidator()
+		var validated []string
+		err := filepath.WalkDir(filepath.Join(root, "conformance"), func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() || filepath.Ext(path) != ".json" {
+				return err
+			}
+			relative, err := filepath.Rel(root, path)
+			if err != nil || strings.HasPrefix(relative, "conformance/schema/") {
+				return err
+			}
+			contents, err := os.ReadFile(path) //nolint:gosec // Walks checked-in artifacts only.
+			if err != nil {
+				return err
+			}
+			document, err := decodeJSONWithNumbers(contents)
+			if err != nil {
+				return fmt.Errorf("%s: %w", relative, err)
+			}
+			object, _ := document.(map[string]any)
+			schema, _ := object["$schema"].(string)
+			if schema == "" {
+				// The migration inventories are checked by
+				// MigrationInventoryComplete and by their generator.
+				if strings.HasPrefix(relative, "conformance/migrations") {
+					return nil
+				}
+				return fmt.Errorf("%s must declare a local $schema", relative)
+			}
+			if err := validator.validateFile(document, filepath.Clean(filepath.Join(filepath.Dir(path), schema)), ""); err != nil {
+				return fmt.Errorf("%s: %w", relative, err)
+			}
+			validated = append(validated, relative)
+			return nil
+		})
+		require.NoError(t, err)
+		for _, required := range []string{
 			"conformance/adapter/candidates/rust.json",
 			"conformance/adapter/contract.json",
-			"conformance/adapter/profiles/sqlite-runtime.json",
-			"conformance/adapter/profiles/sqlite.json",
 			"conformance/fixtures/maintenance_values.json",
 			"conformance/fixtures/protocol_values.json",
 			"conformance/fixtures/unique_keys.json",
 			"conformance/manifest.json",
 			"conformance/scenarios/core.json",
-			"conformance/scenarios/sqlite-runtime.json",
-			"conformance/scenarios/sqlite-storage.json",
 		} {
-			contents, err := os.ReadFile(filepath.Join(root, path))
-			require.NoError(t, err)
-			var artifact struct {
-				Schema string `json:"$schema"`
-			}
-			require.NoError(t, json.Unmarshal(contents, &artifact))
-			require.NotEmpty(t, artifact.Schema, "%s must declare a schema", path)
-
-			schemaPath := filepath.Clean(filepath.Join(filepath.Dir(path), artifact.Schema))
-			schemaContents, err := os.ReadFile(filepath.Join(root, schemaPath))
-			require.NoError(t, err, "schema for %s", path)
-			var schema any
-			require.NoError(t, json.Unmarshal(schemaContents, &schema), "schema for %s", path)
+			require.Contains(t, validated, required)
 		}
 	})
 }
