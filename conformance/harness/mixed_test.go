@@ -328,6 +328,48 @@ func TestMixedConformance(t *testing.T) {
 
 		verifyIgnoredCancellationHardAbort(t, repositoryRoot, databaseURL, pair)
 	})
+	t.Run("candidate_process_kill_reference_rescue", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyProcessKillCrossEngineRescue(t, repositoryRoot, databaseURL, candidateAdapter, goAdapter)
+	})
+	t.Run("reference_process_kill_candidate_rescue", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyProcessKillCrossEngineRescue(t, repositoryRoot, databaseURL, goAdapter, candidateAdapter)
+	})
+	t.Run("mixed_leader_death_failover_both_directions", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(leaderKind, follower *adapter) {
+			verifyLeaderDeathFailover(t, repositoryRoot, databaseURL, leaderKind, follower)
+		})
+	})
+	t.Run("rolling_deployment_same_protocol", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyRollingDeployment(t, repositoryRoot, databaseURL, pair)
+	})
+	t.Run("clock_boundary_scheduling", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(inserter, worker *adapter) { verifyClockBoundaries(t, inserter, worker) })
+	})
+	t.Run("default_retry_policy_schedule", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(worker, observer *adapter) { verifyDefaultRetrySchedule(t, repositoryRoot, worker, observer) })
+	})
+	t.Run("stuck_job_detection", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachAdapter(func(kind *adapter) { verifyStuckJobDetection(t, repositoryRoot, databaseURL, kind) })
+	})
+	t.Run("pool_pressure_completion", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyPoolPressure(t, goAdapter, candidateAdapter)
+	})
 	t.Run("process_kill_restart_and_rescue", func(t *testing.T) {
 		defer scenarios.record(t)
 
