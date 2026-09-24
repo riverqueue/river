@@ -216,7 +216,9 @@ func Benchmark[TTx any](ctx context.Context, b *testing.B,
 		for _, tc := range testCases {
 			b.Run(tc.name, func(b *testing.B) {
 				largeMetadata := makeBenchmarkMetadataWithRiverLogSize(tc.metadataSizeBytes)
-				now := time.Now().UTC()
+				// Match PostgreSQL's timestamp precision so the inserted
+				// scheduled_at can't round past the fetch cutoff.
+				now := time.Now().UTC().Truncate(time.Microsecond)
 
 				insertedJobs, err := exec.JobInsertFullMany(ctx, &riverdriver.JobInsertFullManyParams{
 					Jobs: []*riverdriver.JobInsertFullParams{
