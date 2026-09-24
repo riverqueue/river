@@ -1,7 +1,8 @@
-use std::{convert::Infallible, error::Error};
+use std::error::Error;
 
 use riverqueue::{
-    Client, EventKind, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome, WorkerRegistry,
+    BoxError, Client, EventKind, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome,
+    WorkerRegistry,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -12,12 +13,9 @@ struct SendEmail {
     address: String,
 }
 
-async fn send_email(context: WorkContext, job: Job<SendEmail>) -> Result<WorkOutcome, Infallible> {
+async fn send_email(context: WorkContext, job: Job<SendEmail>) -> Result<WorkOutcome, BoxError> {
     println!("sending email to {}", job.args.address);
-    context
-        .record_output(&serde_json::json!({"delivered": true}))
-        .await
-        .expect("JSON output is serializable");
+    context.record_output(serde_json::json!({"delivered": true}))?;
     Ok(WorkOutcome::Complete)
 }
 

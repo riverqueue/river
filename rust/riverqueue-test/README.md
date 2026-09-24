@@ -9,8 +9,6 @@ and metadata. `work_once` invokes a typed worker with a detached
 snapshot of recorded output and metadata updates.
 
 ```rust,no_run
-use std::convert::Infallible;
-
 use riverqueue::{Job, JobArgs, WorkContext, WorkOutcome, Worker};
 use riverqueue_test::{TestJobBuilder, work_once};
 use serde::{Deserialize, Serialize};
@@ -24,17 +22,14 @@ struct Thumbnail {
 struct ThumbnailWorker;
 
 impl Worker<Thumbnail> for ThumbnailWorker {
-    type Error = Infallible;
+    type Error = serde_json::Error;
 
     async fn work(
         &self,
         context: WorkContext,
         job: Job<Thumbnail>,
     ) -> Result<WorkOutcome, Self::Error> {
-        context
-            .record_output(&serde_json::json!({"image_id": job.args.image_id}))
-            .await
-            .expect("static JSON is serializable");
+        context.record_output(serde_json::json!({"image_id": job.args.image_id}))?;
         Ok(WorkOutcome::Complete)
     }
 }

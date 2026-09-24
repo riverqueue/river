@@ -158,7 +158,7 @@ where
     {
         result = Err(TestWorkError::Resumable(error));
     }
-    let metadata_updates = context.metadata_updates().await;
+    let metadata_updates = context.metadata_updates();
     TestWorkResult {
         context,
         metadata_updates,
@@ -293,21 +293,18 @@ mod tests {
     impl Worker<TestArgs> for TestWorker {
         type Error = Infallible;
 
-        async fn work(
+        fn work(
             &self,
             context: WorkContext,
             job: Job<TestArgs>,
-        ) -> Result<WorkOutcome, Self::Error> {
+        ) -> impl Future<Output = Result<WorkOutcome, Self::Error>> + Send {
             assert_eq!(job.args.message, "work once");
             assert_eq!(job.row.id, 42);
             context
-                .record_output(&serde_json::json!({"worked": true}))
-                .await
+                .record_output(serde_json::json!({"worked": true}))
                 .unwrap();
-            context
-                .metadata_set("worker_metadata", serde_json::json!("set"))
-                .await;
-            Ok(WorkOutcome::Snooze(Duration::from_secs(30)))
+            context.metadata_set("worker_metadata", "set").unwrap();
+            std::future::ready(Ok(WorkOutcome::Snooze(Duration::from_secs(30))))
         }
     }
 

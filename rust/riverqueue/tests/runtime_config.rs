@@ -117,9 +117,7 @@ impl Worker<TerminalRaceArgs> for TerminalRaceWorker {
     ) -> Result<WorkOutcome, Self::Error> {
         self.started.add_permits(1);
         self.finish.acquire().await.unwrap().forget();
-        context
-            .metadata_set("worker_completion", serde_json::json!(true))
-            .await;
+        context.metadata_set("worker_completion", true).unwrap();
         Ok(WorkOutcome::Complete)
     }
 }
@@ -476,9 +474,7 @@ async fn extension_claimed_outcomes_use_postgres_completion_batcher() {
     .unwrap();
     let row = client.job_get(inserted.job.row.id).await.unwrap();
     let context = WorkContext::new(CancellationToken::new());
-    context
-        .metadata_set("shared_completion", serde_json::json!(true))
-        .await;
+    context.metadata_set("shared_completion", true).unwrap();
     client
         .extension_persist_claimed_outcomes(&context, vec![(row, Ok(WorkOutcome::Complete))])
         .await
