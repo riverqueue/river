@@ -329,6 +329,12 @@ pub(super) async fn run_queue(
         if let Some(remaining) = config.fetch_cooldown.checked_sub(since_fetch) {
             tokio::time::sleep(remaining).await;
         }
+        // A stop can be requested while another branch above was selected or
+        // during the cooldown. Go's fetch query fails once its context is
+        // cancelled, so no jobs are claimed after a stop; match that.
+        if fetch_cancel.is_cancelled() {
+            break;
+        }
         let available = permits.available_permits();
         if available == 0 {
             continue;
