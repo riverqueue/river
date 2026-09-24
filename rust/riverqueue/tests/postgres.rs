@@ -11,8 +11,8 @@ use std::{
 
 use async_trait::async_trait;
 use riverqueue::internal::{
-    CompletionAction, CompletionParams, DatabaseConfig, DatabaseConnection, DatabasePool,
-    FetchParams, MaintenanceService, Pilot, PilotError, RuntimeService, SchemaName,
+    DatabaseConfig, DatabaseConnection, DatabasePool, FetchParams, JobSetStateParams,
+    MaintenanceService, Pilot, PilotError, RuntimeService, SchemaName,
 };
 use riverqueue::{
     BoxError, Client, EventKind, ExtensionClaimParams, InsertBatch, InsertOpts, IntervalSchedule,
@@ -343,17 +343,18 @@ struct ContinueCompletionPilot {
 
 #[async_trait]
 impl Pilot for ContinueCompletionPilot {
-    fn intercepts_completion(&self) -> bool {
+    fn intercepts_job_set_state(&self) -> bool {
         true
     }
 
-    async fn before_job_completion(
+    async fn after_jobs_set_state(
         &self,
         _connection: DatabaseConnection<'_>,
-        _params: &CompletionParams,
-    ) -> Result<CompletionAction, PilotError> {
-        self.completions.fetch_add(1, Ordering::SeqCst);
-        Ok(CompletionAction::Continue)
+        params: &JobSetStateParams,
+    ) -> Result<(), PilotError> {
+        self.completions
+            .fetch_add(params.jobs.len(), Ordering::SeqCst);
+        Ok(())
     }
 }
 
@@ -372,11 +373,11 @@ impl RetryPolicy for LongRetryPolicy {
 
 #[async_trait]
 impl Pilot for TestPilot {
-    fn intercepts_completion(&self) -> bool {
+    fn intercepts_fetch(&self) -> bool {
         true
     }
 
-    fn intercepts_fetch(&self) -> bool {
+    fn intercepts_job_set_state(&self) -> bool {
         true
     }
 
@@ -405,28 +406,33 @@ impl Pilot for TestPilot {
         ))
     }
 
-    async fn before_job_completion(
+    async fn after_jobs_set_state(
         &self,
         connection: DatabaseConnection<'_>,
-        params: &CompletionParams,
-    ) -> Result<CompletionAction, PilotError> {
-        self.completions.fetch_add(1, Ordering::SeqCst);
+        params: &JobSetStateParams,
+    ) -> Result<(), PilotError> {
+        self.completions
+            .fetch_add(params.jobs.len(), Ordering::SeqCst);
         let table = params
             .database
             .postgres_schema()
             .unwrap()
             .qualify("river_job");
+        let completed = params
+            .jobs
+            .iter()
+            .filter(|job| job.state == "completed")
+            .map(|job| job.id)
+            .collect::<Vec<_>>();
         let sql = format!(
-            "UPDATE {table} SET state = 'completed', finalized_at = now(), \
-             metadata = metadata || $2::jsonb || '{{\"extension_handled\": true}}'::jsonb \
-             WHERE id = $1"
+            "UPDATE {table} SET metadata = metadata || '{{\"extension_handled\": true}}'::jsonb \
+             WHERE id = ANY($1)"
         );
         sqlx::query(AssertSqlSafe(sql))
-            .bind(params.job_id)
-            .bind(sqlx::types::Json(&params.metadata_updates))
+            .bind(completed)
             .execute(connection.into_postgres().unwrap())
             .await?;
-        Ok(CompletionAction::Handled)
+        Ok(())
     }
 
     fn maintenance_services(&self) -> Vec<Arc<dyn MaintenanceService>> {
@@ -528,7 +534,6 @@ impl Worker<TransactionalArgs> for TransactionalWorker {
         let completed = context.job_complete_tx(&mut transaction).await?;
         assert_eq!(completed.state, JobState::Completed);
         assert_eq!(completed.metadata["transactional_completion"], true);
-        assert_eq!(completed.metadata["extension_handled"], true);
         transaction.commit().await?;
         Ok(WorkOutcome::Complete)
     }

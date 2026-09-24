@@ -18,9 +18,10 @@ use std::{
 
 use async_trait::async_trait;
 use riverqueue::{
-    Client, ErrorHandler, InsertOpts, Job, JobArgs, JobRow, JobState, QueueConfig, WorkCancelled,
-    WorkContext, WorkOutcome, WorkerRegistry,
+    Client, ErrorHandler, EventKind, InsertOpts, Job, JobArgs, JobRow, JobState, QueueConfig,
+    WorkCancelled, WorkContext, WorkOutcome, WorkerRegistry,
     database::{PostgresDatabase, SchemaName},
+    internal::{DatabaseConnection, JobSetStateParams, Pilot, PilotError},
 };
 use riverqueue_migrate::PostgresMigrator;
 use serde::{Deserialize, Serialize};
@@ -1021,6 +1022,141 @@ async fn queue_reconfiguration_waits_for_the_previous_producer() {
         1,
         "reconfiguration exceeded max_workers"
     );
+
+    schema.drop().await;
+}
+
+/// An extension that observes completions inside River's transaction,
+/// failing its first call and deleting jobs marked for deletion.
+#[derive(Clone, Default)]
+struct SetStatePilot {
+    calls: Arc<AtomicUsize>,
+    seen: Arc<std::sync::Mutex<Vec<(i64, String)>>>,
+}
+
+#[async_trait]
+impl Pilot for SetStatePilot {
+    fn intercepts_job_set_state(&self) -> bool {
+        true
+    }
+
+    async fn after_jobs_set_state(
+        &self,
+        connection: DatabaseConnection<'_>,
+        params: &JobSetStateParams,
+    ) -> Result<(), PilotError> {
+        let connection = connection.into_postgres().unwrap();
+        let schema = params.database.postgres_schema().unwrap();
+        let ids = params.jobs.iter().map(|job| job.id).collect::<Vec<_>>();
+        sqlx::query(AssertSqlSafe(format!(
+            "INSERT INTO {} (job_id) SELECT unnest($1::bigint[])",
+            schema.qualify("hook_effect")
+        )))
+        .bind(&ids)
+        .execute(&mut *connection)
+        .await?;
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Err(std::io::Error::other("first set-state hook call fails").into());
+        }
+        self.seen
+            .lock()
+            .unwrap()
+            .extend(params.jobs.iter().map(|job| (job.id, job.state.clone())));
+        let deleted = params
+            .jobs
+            .iter()
+            .filter(|job| job.metadata.contains_key("delete_me"))
+            .map(|job| job.id)
+            .collect::<Vec<_>>();
+        sqlx::query(AssertSqlSafe(format!(
+            "DELETE FROM {} WHERE id = ANY($1)",
+            schema.qualify("river_job")
+        )))
+        .bind(deleted)
+        .execute(&mut *connection)
+        .await?;
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn extension_set_state_hook_runs_in_the_completion_transaction() {
+    let schema = TestSchema::new("hook").await;
+    schema
+        .execute(format!(
+            "CREATE TABLE {}.hook_effect (job_id bigint NOT NULL)",
+            schema.name
+        ))
+        .await;
+    let pilot = SetStatePilot::default();
+    let gate = Gate::default();
+    let client = Client::builder(schema.database())
+        .id("postgres-resilience-hook")
+        .pilot(pilot.clone())
+        .without_notifications()
+        .workers(gated_workers(&gate))
+        .queue("default", fast_queue())
+        .build()
+        .unwrap();
+    let mut events = client.subscribe(&[EventKind::JobCompleted]).unwrap();
+    let kept = client.insert(GatedArgs {}).await.unwrap();
+    let deleted = client
+        .insert_with(
+            GatedArgs {},
+            InsertOpts::default().with_metadata(serde_json::Map::from_iter([(
+                "delete_me".to_owned(),
+                serde_json::json!(true),
+            )])),
+        )
+        .await
+        .unwrap();
+
+    let run = client.start().unwrap();
+    gate.wait_started().await;
+    gate.wait_started().await;
+    // Release both together so they share one batch.
+    gate.release();
+    gate.release();
+    let mut completed = Vec::new();
+    for _ in 0..2 {
+        let event = tokio::time::timeout(Duration::from_secs(10), events.recv())
+            .await
+            .expect("completion events")
+            .unwrap();
+        completed.push(event.as_job().unwrap().job.id);
+    }
+    run.shutdown().await.unwrap();
+
+    completed.sort_unstable();
+    let mut expected = vec![kept.job.row.id, deleted.job.row.id];
+    expected.sort_unstable();
+    assert_eq!(
+        completed, expected,
+        "events come from rows River already holds"
+    );
+    assert_eq!(schema.job_state(kept.job.row.id).await, "completed");
+    assert!(matches!(
+        client.job_get(deleted.job.row.id).await,
+        Err(riverqueue::Error::NotFound)
+    ));
+    let mut seen = pilot.seen.lock().unwrap().clone();
+    seen.sort_unstable();
+    assert_eq!(
+        seen,
+        expected
+            .iter()
+            .map(|id| (*id, "completed".to_owned()))
+            .collect::<Vec<_>>()
+    );
+    // The failed first call's writes rolled back with its batch.
+    let effects: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
+        "SELECT count(*) FROM {}.hook_effect",
+        schema.name
+    )))
+    .fetch_one(&schema.pool)
+    .await
+    .unwrap();
+    assert_eq!(effects, 2);
 
     schema.drop().await;
 }

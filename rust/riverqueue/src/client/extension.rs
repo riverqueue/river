@@ -134,8 +134,9 @@ impl Client {
     ///
     /// The extension's handler context supplies metadata updates shared by the
     /// execution. Each failed outcome runs the error handler for its own job,
-    /// then every outcome uses ordinary retry selection, completion
-    /// interception, persistence batching, event delivery, and statistics.
+    /// then every outcome uses ordinary retry selection, persistence batching
+    /// (including the extension's set-state hook and retries), event
+    /// delivery, and statistics.
     /// Work middleware and work hooks are deliberately not invoked again: they
     /// surround the extension's handler once, before it reports these results.
     /// Outcomes racing an external terminal transition preserve the persisted
@@ -143,10 +144,10 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns an error when the client runtime is not accepting completions,
-    /// or when synchronous extension interception or result normalization
-    /// fails. Ordinary batched persistence failures are reported by the
-    /// running completion service, matching regular worker behavior.
+    /// Returns an error when the client runtime is not accepting completions.
+    /// Persistence failures, including errors from the extension's set-state
+    /// hook, are retried and reported by the running completion service,
+    /// matching regular worker behavior.
     #[doc(hidden)]
     pub async fn extension_persist_claimed_outcomes(
         &self,
@@ -240,7 +241,7 @@ impl Client {
                 run_duration: Duration::ZERO,
             },
         };
-        match persist_result(
+        persist_result(
             &self.inner,
             &row,
             Utc::now(),
@@ -250,26 +251,7 @@ impl Client {
             error_handler_result,
             completion_sender,
         )
-        .await?
-        {
-            PersistResult::Finished(Some(event)) => {
-                let Event::Job(event) = *event else {
-                    unreachable!("job persistence returns only job events")
-                };
-                let event = Event::job_with_statistics(
-                    event.kind,
-                    event.job,
-                    JobStatistics {
-                        complete_duration: completion.timing.completion_started.elapsed(),
-                        queue_wait_duration,
-                        run_duration: Duration::ZERO,
-                    },
-                );
-                let _ = self.inner.events.send(event);
-            }
-            PersistResult::Enqueued | PersistResult::Finished(None) => {}
-        }
-        Ok(())
+        .await
     }
 }
 

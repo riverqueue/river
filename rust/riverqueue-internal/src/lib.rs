@@ -9,6 +9,7 @@ compile_error!(
 use std::{fmt, time::Duration};
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 #[cfg(feature = "postgres")]
 use sqlx::{PgConnection, PgPool};
@@ -301,17 +302,60 @@ pub struct RescueParams {
     pub database: DatabaseConfig,
 }
 
-/// Data available before River persists a worker result.
+/// A job row as persisted by River's set-state-if-running update.
+///
+/// The fields match `riverqueue::JobRow`, which this crate cannot name;
+/// `riverqueue::JobRow::from_parts` rebuilds one when an extension needs it.
+/// States use River's wire strings (for example `"completed"`), and attempt
+/// errors keep their persisted JSON form.
 #[derive(Clone, Debug)]
-pub struct CompletionParams {
+pub struct JobSetStateRow {
+    /// Database-generated ID.
+    pub id: i64,
+    /// Current attempt number.
+    pub attempt: i16,
+    /// Last attempt time.
+    pub attempted_at: Option<DateTime<Utc>>,
+    /// IDs of clients that attempted the job.
+    pub attempted_by: Vec<String>,
+    /// Creation time.
+    pub created_at: DateTime<Utc>,
+    /// Encoded job arguments.
+    pub encoded_args: Box<serde_json::value::RawValue>,
+    /// Persisted attempt errors in chronological order.
+    pub errors: Vec<Value>,
+    /// Terminal-state time.
+    pub finalized_at: Option<DateTime<Utc>>,
+    /// Stable job kind.
+    pub kind: String,
+    /// Maximum attempts.
+    pub max_attempts: i16,
+    /// Arbitrary and River-reserved metadata.
+    pub metadata: Map<String, Value>,
+    /// Priority from one through four.
+    pub priority: i16,
+    /// Queue name.
+    pub queue: String,
+    /// Earliest run time.
+    pub scheduled_at: DateTime<Utc>,
+    /// Current state as River's wire string.
+    pub state: String,
+    /// Searchable tags.
+    pub tags: Vec<String>,
+    /// Unique hash, if any.
+    pub unique_key: Option<Vec<u8>>,
+    /// States, as wire strings, in which the unique key is enforced.
+    pub unique_states: Option<Vec<String>>,
+}
+
+/// Rows passed to [`Pilot::after_jobs_set_state`].
+#[derive(Clone, Debug)]
+pub struct JobSetStateParams {
     /// Selected database backend configuration.
     pub database: DatabaseConfig,
-    /// Job ID being finalized or rescheduled.
-    pub job_id: i64,
-    /// Metadata additions produced by work.
-    pub metadata_updates: Map<String, Value>,
-    /// Proposed River state string.
-    pub state: String,
+    /// Every job in the batch that still exists, as returned by the update,
+    /// including jobs that were no longer running and so kept their state.
+    pub jobs: Vec<JobSetStateRow>,
 }
 
 /// Mutable job insertion fields exposed to an exact-version extension.
@@ -339,16 +383,6 @@ impl fmt::Debug for JobInsertParams<'_> {
             .field("queue", self.queue)
             .finish_non_exhaustive()
     }
-}
-
-/// Whether the OSS completer should perform its normal row update.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum CompletionAction {
-    /// Continue through the OSS completion query.
-    #[default]
-    Continue,
-    /// The pilot handled completion transactionally.
-    Handled,
 }
 
 /// A leader-owned service supplied by an exact-version extension.
@@ -403,12 +437,24 @@ pub trait Pilot: Send + Sync + 'static {
         false
     }
 
-    /// Whether completion must enter the exact-version interception
-    /// transaction. Returning `false` lets OSS use its one-statement fast
-    /// path; implementations that override `before_job_completion` return
-    /// `true`.
-    fn intercepts_completion(&self) -> bool {
+    /// Whether job state transitions must run in a transaction that also
+    /// calls [`Pilot::after_jobs_set_state`], like River Go's
+    /// `Pilot.JobSetStateIfRunningMany`.
+    ///
+    /// Returning `false` keeps River's one-statement completion path.
+    /// Implementations that override `after_jobs_set_state` return `true`.
+    fn intercepts_job_set_state(&self) -> bool {
         false
+    }
+
+    /// How many intercepted completion batches may run concurrently, like
+    /// River Go's `PilotJobCompletionConcurrency`.
+    ///
+    /// River never exceeds its backend's own limit (two on PostgreSQL, one on
+    /// SQLite) and starts a second concurrent batch only when a full batch of
+    /// completions is waiting. The default allows one batch at a time.
+    fn job_set_state_concurrency(&self) -> usize {
+        1
     }
 
     /// Whether inserts must enter the exact-version interception transaction.
@@ -455,13 +501,24 @@ pub trait Pilot: Send + Sync + 'static {
         Ok(None)
     }
 
-    /// Intercepts completion within River's completion transaction.
-    async fn before_job_completion(
+    /// Observes a batch of job state transitions inside River's transaction.
+    ///
+    /// Called only when [`Pilot::intercepts_job_set_state`] returns `true`.
+    /// River keeps batching completions: each batch runs `BEGIN`, River's
+    /// set-state-if-running update (which returns full rows), this hook with
+    /// those rows, then `COMMIT`. The transactional `job_complete_tx` path
+    /// calls it with its one row inside the caller's transaction.
+    ///
+    /// The hook may write further state with the connection, including
+    /// deleting returned rows; River still reports events from the rows it
+    /// already holds. Returning an error rolls the batch back, and River
+    /// retries it like any other failed completion write.
+    async fn after_jobs_set_state(
         &self,
         _connection: DatabaseConnection<'_>,
-        _params: &CompletionParams,
-    ) -> Result<CompletionAction, PilotError> {
-        Ok(CompletionAction::Continue)
+        _params: &JobSetStateParams,
+    ) -> Result<(), PilotError> {
+        Ok(())
     }
 
     /// Leader-owned services contributed by the extension.

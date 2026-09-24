@@ -181,7 +181,7 @@ pub(super) async fn execute_job(
                 run_duration,
             },
         };
-        let completion_enqueued = match persist_result(
+        let persisted = persist_result(
             &inner,
             &row,
             attempt_started_at,
@@ -191,36 +191,14 @@ pub(super) async fn execute_job(
             error_handler_result,
             &completion_sender,
         )
-        .await
-        {
-            Ok(PersistResult::Finished(Some(event))) => {
-                let Event::Job(job_event) = *event else {
-                    unreachable!("job persistence returns only job events")
-                };
-                let event = Event::job_with_statistics(
-                    job_event.kind,
-                    job_event.job,
-                    JobStatistics {
-                        complete_duration: completion.timing.completion_started.elapsed(),
-                        queue_wait_duration,
-                        run_duration,
-                    },
-                );
-                let _ = inner.events.send(event);
-                false
-            }
-            Ok(PersistResult::Enqueued) => true,
-            Ok(PersistResult::Finished(None)) => false,
-            Err(operation_error) => {
-                error!(error = %operation_error, "failed to persist River job result");
-                false
-            }
-        };
+        .await;
         drop(worker_permit);
-        if completion_enqueued {
-            return;
+        // Once enqueued, the completer owns the running attempt until the
+        // result is written.
+        if let Err(operation_error) = persisted {
+            error!(error = %operation_error, "failed to persist River job result");
+            remove_running_attempt(&inner.running, row.id, &cancellation);
         }
-        remove_running_attempt(&inner.running, row.id, &cancellation);
     }
     .instrument(span)
     .await;
@@ -421,7 +399,7 @@ pub(super) async fn persist_result(
     metadata_updates: Map<String, Value>,
     error_handler_result: ErrorHandlerDecision,
     completion_sender: &mpsc::Sender<CompletionUpdate>,
-) -> Result<PersistResult, Error> {
+) -> Result<(), Error> {
     let now = Utc::now();
     let (state, finalized_at, scheduled_at, attempt, attempt_error, metadata, event_kind) =
         match result {
@@ -564,218 +542,21 @@ pub(super) async fn persist_result(
             }
         };
 
-    #[cfg(feature = "postgres")]
-    let table = inner.schema.qualify("river_job");
-    #[cfg(feature = "postgres")]
-    let state_type = inner.schema.qualify("river_job_state");
-    #[cfg(feature = "postgres")]
-    let sql = format!(
-        "UPDATE {table} AS job SET \
-            attempt = CASE WHEN state = 'running' \
-                                AND NOT ($7::text IN ('available', 'retryable', 'scheduled') \
-                                    AND metadata ? 'cancel_attempted_at') \
-                           THEN coalesce($2, attempt) ELSE attempt END, \
-            errors = CASE WHEN state != 'running' OR $3::jsonb IS NULL THEN errors ELSE array_append(coalesce(errors, '{{}}'), $3::jsonb) END, \
-            finalized_at = CASE WHEN state != 'running' THEN finalized_at \
-                                WHEN $7::text IN ('available', 'retryable', 'scheduled') AND metadata ? 'cancel_attempted_at' \
-                                THEN coalesce($4, now()) ELSE $4 END, \
-            metadata = metadata || $5::jsonb, \
-            scheduled_at = CASE WHEN state = 'running' \
-                                     AND NOT ($7::text IN ('available', 'retryable', 'scheduled') \
-                                         AND metadata ? 'cancel_attempted_at') \
-                                THEN coalesce($6, scheduled_at) ELSE scheduled_at END, \
-            state = CASE WHEN state != 'running' THEN state \
-                         WHEN $7::text IN ('available', 'retryable', 'scheduled') AND metadata ? 'cancel_attempted_at' \
-                         THEN 'cancelled'::{state_type} ELSE $7::text::{state_type} END \
-         WHERE id = $1 \
-         RETURNING {}, false AS unique_skipped_as_duplicate",
-        job_projection("job")
-    );
-    if !inner.pilot.intercepts_completion() {
-        completion_sender
-            .send(CompletionUpdate {
-                attempt,
-                cancellation: completion.cancellation.clone(),
-                error: attempt_error,
-                event_kind,
-                finalized_at,
-                job_id: row.id,
-                metadata,
-                scheduled_at,
-                state,
-                timing: completion.timing,
-            })
-            .await
-            .map_err(|_| Error::runtime("completion batcher stopped".to_owned()))?;
-        return Ok(PersistResult::Enqueued);
-    }
-
-    #[cfg(feature = "sqlite")]
-    if let Some(pool) = inner.sqlite_pool() {
-        let record = {
-            let mut transaction = crate::database::begin_sqlite_write(pool).await?;
-            let completion_action = inner
-                .pilot
-                .before_job_completion(
-                    PilotDatabaseConnection::Sqlite(&mut transaction),
-                    &CompletionParams {
-                        database: inner.pilot_database_config(),
-                        job_id: row.id,
-                        metadata_updates: metadata.clone(),
-                        state: state.as_str().to_owned(),
-                    },
-                )
-                .await
-                .map_err(|source| Error::Extension {
-                    phase: "job completion",
-                    source,
-                })?;
-            let record = match completion_action {
-                CompletionAction::Continue => {
-                    let updated = crate::database::sqlite::complete(
-                        &mut transaction,
-                        &crate::database::sqlite::CompleteJob {
-                            attempt,
-                            error: attempt_error.as_ref(),
-                            finalized_at,
-                            id: row.id,
-                            metadata_updates: Some(&metadata),
-                            now,
-                            scheduled_at,
-                            state,
-                        },
-                    )
-                    .await
-                    .map_err(sqlite_backend_error)?;
-                    match updated {
-                        Some(row) => Some(row),
-                        None => crate::database::sqlite::merge_metadata_if_not_running(
-                            &mut transaction,
-                            row.id,
-                            &metadata,
-                        )
-                        .await
-                        .map_err(sqlite_backend_error)?
-                        .map(|row| row.map_err(|job| Error::invalid_job(job.error)))
-                        .transpose()?,
-                    }
-                }
-                CompletionAction::Handled => crate::database::sqlite::get(&mut transaction, row.id)
-                    .await
-                    .map_err(sqlite_backend_error)?,
-            };
-            transaction.commit().await?;
-            record
-        };
-        let Some(row) = record else {
-            debug!(
-                job_id = row.id,
-                "job result ignored because the job no longer exists"
-            );
-            return Ok(PersistResult::Finished(None));
-        };
-        return Ok(PersistResult::Finished(
-            persisted_completion_event_kind(row.state, event_kind)
-                .map(|event_kind| Box::new(Event::job(event_kind, row))),
-        ));
-    }
-    #[cfg(feature = "postgres")]
-    if let Some(pool) = inner.postgres_pool() {
-        let record = {
-            let mut transaction = pool.begin().await?;
-            let completion_action = inner
-                .pilot
-                .before_job_completion(
-                    PilotDatabaseConnection::Postgres(&mut transaction),
-                    &CompletionParams {
-                        database: inner.pilot_database_config(),
-                        job_id: row.id,
-                        metadata_updates: metadata.clone(),
-                        state: state.as_str().to_owned(),
-                    },
-                )
-                .await
-                .map_err(|source| Error::Extension {
-                    phase: "job completion",
-                    source,
-                })?;
-            let record = match completion_action {
-                CompletionAction::Continue => {
-                    persist_completion_update(
-                        &mut *transaction,
-                        &sql,
-                        row.id,
-                        attempt,
-                        attempt_error.as_ref(),
-                        finalized_at,
-                        &metadata,
-                        scheduled_at,
-                        state,
-                    )
-                    .await?
-                }
-                CompletionAction::Handled => {
-                    let sql = format!(
-                        "SELECT {}, false AS unique_skipped_as_duplicate FROM {table} AS job \
-                 WHERE id = $1 LIMIT 1",
-                        job_projection("job")
-                    );
-                    sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
-                        .bind(row.id)
-                        .fetch_optional(&mut *transaction)
-                        .await?
-                }
-            };
-            transaction.commit().await?;
-            record
-        };
-        let Some(record) = record else {
-            debug!(
-                job_id = row.id,
-                "job result ignored because the job no longer exists"
-            );
-            return Ok(PersistResult::Finished(None));
-        };
-        let row = record.into_job_row()?;
-        return Ok(PersistResult::Finished(
-            persisted_completion_event_kind(row.state, event_kind)
-                .map(|event_kind| Box::new(Event::job(event_kind, row))),
-        ));
-    }
-    #[allow(unreachable_code)]
-    Err(Error::runtime(
-        "database dispatch selected no supported backend".to_owned(),
-    ))
-}
-
-#[allow(clippy::too_many_arguments)]
-#[cfg(feature = "postgres")]
-pub(super) async fn persist_completion_update<'executor, E>(
-    executor: E,
-    sql: &str,
-    job_id: i64,
-    attempt: Option<i16>,
-    attempt_error: Option<&AttemptError>,
-    finalized_at: Option<DateTime<Utc>>,
-    metadata: &Map<String, Value>,
-    scheduled_at: Option<DateTime<Utc>>,
-    state: JobState,
-) -> Result<Option<JobRecord>, Error>
-where
-    E: Executor<'executor, Database = Postgres>,
-{
-    Ok(
-        sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql.to_owned()))
-            .bind(job_id)
-            .bind(attempt)
-            .bind(attempt_error.map(Json))
-            .bind(finalized_at)
-            .bind(Json(metadata))
-            .bind(scheduled_at)
-            .bind(state.as_str())
-            .fetch_optional(executor)
-            .await?,
-    )
+    completion_sender
+        .send(CompletionUpdate {
+            attempt,
+            cancellation: completion.cancellation.clone(),
+            error: attempt_error,
+            event_kind,
+            finalized_at,
+            job_id: row.id,
+            metadata,
+            scheduled_at,
+            state,
+            timing: completion.timing,
+        })
+        .await
+        .map_err(|_| Error::runtime("completion batcher stopped".to_owned()))
 }
 
 /// Records a failed attempt for a claimed row that could not be decoded.

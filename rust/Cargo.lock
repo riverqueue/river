@@ -1015,6 +1015,7 @@ name = "riverqueue-internal"
 version = "0.47.0-alpha.1"
 dependencies = [
  "async-trait",
+ "chrono",
  "serde_json",
  "sqlx",
  "thiserror",

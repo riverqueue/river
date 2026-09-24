@@ -14,11 +14,11 @@ use riverqueue::{
     MaintenanceConfig, QueueConfig, UniqueOpts, WorkContext, WorkOutcome, WorkResult,
     WorkerRegistry, database::DatabaseKind,
 };
-use riverqueue_internal::{
-    CompletionAction, CompletionParams, DatabaseConnection, FetchParams, JobInsertParams, Pilot,
-    PilotError, RescueParams,
-};
 use riverqueue_internal::{DatabaseConfig, DatabasePool, MaintenanceService};
+use riverqueue_internal::{
+    DatabaseConnection, FetchParams, JobInsertParams, JobSetStateParams, Pilot, PilotError,
+    RescueParams,
+};
 use riverqueue_migrate::SqliteMigrator;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
@@ -126,7 +126,7 @@ enum CompletionBehavior {
     Continue,
     Fail,
     FailFirst,
-    Handled,
+    Mark,
 }
 
 #[derive(Clone, Copy)]
@@ -167,16 +167,16 @@ impl SqlitePilot {
 
 #[async_trait]
 impl Pilot for SqlitePilot {
-    fn intercepts_completion(&self) -> bool {
-        self.completion.is_some()
-    }
-
     fn intercepts_fetch(&self) -> bool {
         self.fetch.is_some()
     }
 
     fn intercepts_insert(&self) -> bool {
         self.insert.is_some()
+    }
+
+    fn intercepts_job_set_state(&self) -> bool {
+        self.completion.is_some()
     }
 
     fn intercepts_rescue(&self) -> bool {
@@ -192,19 +192,21 @@ impl Pilot for SqlitePilot {
             .unwrap_or_default()
     }
 
-    async fn before_job_completion(
+    async fn after_jobs_set_state(
         &self,
         connection: DatabaseConnection<'_>,
-        params: &CompletionParams,
-    ) -> Result<CompletionAction, PilotError> {
+        params: &JobSetStateParams,
+    ) -> Result<(), PilotError> {
         self.completion_calls.fetch_add(1, Ordering::SeqCst);
         let connection = connection
             .into_sqlite()
             .ok_or_else(|| std::io::Error::other("expected SQLite completion connection"))?;
-        sqlx::query("INSERT INTO pilot_effect (operation, job_id) VALUES ('completion', ?)")
-            .bind(params.job_id)
-            .execute(&mut *connection)
-            .await?;
+        for job in &params.jobs {
+            sqlx::query("INSERT INTO pilot_effect (operation, job_id) VALUES ('completion', ?)")
+                .bind(job.id)
+                .execute(&mut *connection)
+                .await?;
+        }
         match self.completion.expect("completion interception is enabled") {
             CompletionBehavior::Fail => {
                 Err(std::io::Error::other("completion interception failed").into())
@@ -212,20 +214,19 @@ impl Pilot for SqlitePilot {
             CompletionBehavior::FailFirst if self.completion_calls.load(Ordering::SeqCst) == 1 => {
                 Err(std::io::Error::other("first completion interception failed").into())
             }
-            CompletionBehavior::Continue | CompletionBehavior::FailFirst => {
-                Ok(CompletionAction::Continue)
-            }
-            CompletionBehavior::Handled => {
-                sqlx::query(
-                    "UPDATE river_job SET state = 'completed', \
-                     finalized_at = strftime('%Y-%m-%d %H:%M:%f', 'now'), \
-                     metadata = jsonb_set(metadata, '$.pilot_handled', jsonb('true')) \
-                     WHERE id = ?",
-                )
-                .bind(params.job_id)
-                .execute(&mut *connection)
-                .await?;
-                Ok(CompletionAction::Handled)
+            CompletionBehavior::Continue | CompletionBehavior::FailFirst => Ok(()),
+            CompletionBehavior::Mark => {
+                for job in &params.jobs {
+                    sqlx::query(
+                        "UPDATE river_job SET \
+                         metadata = jsonb_set(metadata, '$.pilot_handled', jsonb('true')) \
+                         WHERE id = ?",
+                    )
+                    .bind(job.id)
+                    .execute(&mut *connection)
+                    .await?;
+                }
+                Ok(())
             }
         }
     }
@@ -543,7 +544,7 @@ async fn extension_claimed_outcomes_use_canonical_completion_pipeline() {
 }
 
 #[tokio::test]
-async fn extension_claimed_outcomes_continue_after_interception_error() {
+async fn extension_claimed_outcomes_retry_after_interception_error() {
     let pool = setup().await;
     let mut pilot = SqlitePilot::new();
     pilot.completion = Some(CompletionBehavior::FailFirst);
@@ -582,7 +583,7 @@ async fn extension_claimed_outcomes_continue_after_interception_error() {
         rows.push(client.job_get(inserted.job.row.id).await.unwrap());
     }
     let context = WorkContext::new(tokio_util::sync::CancellationToken::new());
-    let error = client
+    client
         .extension_persist_claimed_outcomes(
             &context,
             rows.iter()
@@ -591,33 +592,40 @@ async fn extension_claimed_outcomes_continue_after_interception_error() {
                 .collect(),
         )
         .await
-        .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("first completion interception failed")
-    );
-    assert_eq!(
-        client.job_get(rows[0].id).await.unwrap().state,
-        JobState::Running
-    );
-    assert_eq!(
-        client.job_get(rows[1].id).await.unwrap().state,
-        JobState::Completed
-    );
-    let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
-        .await
-        .unwrap()
         .unwrap();
-    assert_eq!(event.as_job().unwrap().job.id, rows[1].id);
-    assert_eq!(pilot.completion_calls.load(Ordering::SeqCst), 2);
+    // The hook's first failure rolls the batch back; the completer retries it.
+    let mut completed = Vec::new();
+    for _ in 0..2 {
+        let event = tokio::time::timeout(Duration::from_secs(10), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        completed.push(event.as_job().unwrap().job.id);
+    }
+    completed.sort_unstable();
+    assert_eq!(completed, [rows[0].id, rows[1].id]);
+    for row in &rows {
+        assert_eq!(
+            client.job_get(row.id).await.unwrap().state,
+            JobState::Completed
+        );
+        let effects: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pilot_effect WHERE operation = 'completion' AND job_id = ?",
+        )
+        .bind(row.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(effects, 1, "the failed attempt's side effects rolled back");
+    }
+    assert!(pilot.completion_calls.load(Ordering::SeqCst) >= 2);
 
     run.shutdown_now().await.unwrap();
 }
 
 #[tokio::test]
-async fn sqlite_pilot_completion_continue_and_handled_are_atomic() {
-    for behavior in [CompletionBehavior::Continue, CompletionBehavior::Handled] {
+async fn sqlite_pilot_completion_continue_and_mark_are_atomic() {
+    for behavior in [CompletionBehavior::Continue, CompletionBehavior::Mark] {
         let pool = setup().await;
         let worked = Arc::new(Semaphore::new(0));
         let mut pilot = SqlitePilot::new();
@@ -660,7 +668,7 @@ async fn sqlite_pilot_completion_continue_and_handled_are_atomic() {
             row.metadata
                 .get("pilot_handled")
                 .and_then(serde_json::Value::as_bool),
-            matches!(behavior, CompletionBehavior::Handled).then_some(true)
+            matches!(behavior, CompletionBehavior::Mark).then_some(true)
         );
         let effects: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM pilot_effect WHERE operation = 'completion' AND job_id = ?",

@@ -291,3 +291,37 @@ async fn subscription_forwarder_stops_when_the_receiver_drops() {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }
+
+#[cfg(feature = "postgres")]
+#[tokio::test]
+async fn intercepting_extensions_can_only_lower_completion_concurrency() {
+    #[derive(Clone, Copy)]
+    struct ConcurrencyPilot(usize);
+
+    #[async_trait::async_trait]
+    impl riverqueue_internal::Pilot for ConcurrencyPilot {
+        fn intercepts_job_set_state(&self) -> bool {
+            true
+        }
+
+        fn job_set_state_concurrency(&self) -> usize {
+            self.0
+        }
+    }
+
+    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/unused").unwrap();
+    let concurrency = |pilot: Option<ConcurrencyPilot>| {
+        let builder = Client::builder(pool.clone());
+        let client = match pilot {
+            Some(pilot) => builder.pilot(pilot),
+            None => builder,
+        }
+        .build()
+        .unwrap();
+        CompletionBatcher::new(Arc::clone(&client.inner)).concurrency()
+    };
+    assert_eq!(concurrency(None), 2);
+    assert_eq!(concurrency(Some(ConcurrencyPilot(0))), 1);
+    assert_eq!(concurrency(Some(ConcurrencyPilot(1))), 1);
+    assert_eq!(concurrency(Some(ConcurrencyPilot(8))), 2);
+}
