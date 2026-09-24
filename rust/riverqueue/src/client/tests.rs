@@ -257,3 +257,37 @@ fn schedule_delays_clamp_like_go_durations() {
         "delays saturate at Go's maximum time.Duration"
     );
 }
+
+#[cfg(feature = "sqlite")]
+#[tokio::test(flavor = "multi_thread")]
+async fn subscription_forwarder_stops_when_the_receiver_drops() {
+    #[derive(Clone, Debug, serde::Deserialize, crate::JobArgs, serde::Serialize)]
+    #[river(kind = "subscription_forwarder_test")]
+    struct ForwarderArgs {}
+
+    let mut workers = WorkerRegistry::new();
+    workers
+        .register_fn(|_context: WorkContext, _job: Job<ForwarderArgs>| async {
+            Ok::<_, std::convert::Infallible>(WorkOutcome::Complete)
+        })
+        .unwrap();
+    let pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap();
+    let client = Client::builder(pool)
+        .workers(workers)
+        .queue("default", QueueConfig::new(1))
+        .build()
+        .unwrap();
+    let baseline = client.inner.events.receiver_count();
+    let receiver = client.subscribe(&[EventKind::JobCompleted]).unwrap();
+    assert_eq!(client.inner.events.receiver_count(), baseline + 1);
+
+    drop(receiver);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while client.inner.events.receiver_count() > baseline {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "forwarder outlived its receiver"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
