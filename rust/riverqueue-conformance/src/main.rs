@@ -19,8 +19,8 @@ use riverqueue::{
     IntervalSchedule, Job, JobArgs, JobDeleteManyParams, JobListCursor, JobListParams, JobRow,
     JobState, JobUpdateParams, MaintenanceConfig, PeriodicJob, PeriodicJobOpts, PeriodicJobs,
     Plugin, Queue, QueueConfig, QueueListParams, RetryPolicy, RunHandle, SortDirection,
-    SubscribeConfig, UniqueOpts, WorkContext, WorkMiddleware, WorkOutcome, WorkResult, Worker,
-    WorkerRegistry,
+    SubscribeConfig, UniqueOpts, WorkCancelled, WorkContext, WorkMiddleware, WorkOutcome,
+    WorkResult, Worker, WorkerRegistry,
     database::{PostgresDatabase, SqliteDatabase},
     encoding::encode_args,
     protocol::{UniqueKeyInput, unique_key, unique_states_bitmask},
@@ -501,7 +501,7 @@ impl Worker<ConformanceArgs> for ConformanceWorker {
             "cancel" => Ok(WorkOutcome::Cancel),
             "cooperative_cancel" => {
                 context.cancellation_token().cancelled().await;
-                Err(io::Error::other("work cancelled"))
+                Err(io::Error::other(WorkCancelled))
             }
             "discard" => Ok(WorkOutcome::Discard),
             "error" => Err(io::Error::other("conformance retryable error")),
@@ -524,7 +524,7 @@ impl Worker<ConformanceArgs> for ConformanceWorker {
             }
             "snooze_then_cancel" => {
                 context.cancellation_token().cancelled().await;
-                Err(io::Error::other("work cancelled"))
+                Err(io::Error::other(WorkCancelled))
             }
             "resumable_cursor" => {
                 work_resumable_cursor(&context, job.row.attempt).await;

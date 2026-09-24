@@ -79,8 +79,8 @@ use crate::{
     InsertContext, InsertMiddleware, InsertOpts, InsertParams, InsertResult,
     JOB_STUCK_THRESHOLD_DEFAULT, JOB_TIMEOUT_DEFAULT, Job, JobArgs, JobEventKind, JobRow, JobState,
     JobStatistics, MAX_ATTEMPTS_DEFAULT, Metric, Plugin, QUEUE_NUM_WORKERS_MAX, QueueEventKind,
-    RawInsertResult, RetryPolicy, SchemaName, SubscribeConfig, WorkContext, WorkError,
-    WorkMiddleware, WorkOutcome, WorkResult, WorkerRegistry, WorkerTimeout,
+    RawInsertResult, RetryPolicy, SchemaName, SubscribeConfig, WorkCancelled, WorkContext,
+    WorkError, WorkMiddleware, WorkOutcome, WorkResult, WorkerRegistry, WorkerTimeout,
     database::{
         Database, DatabaseExecutor, DatabaseKind, DatabasePool, DatabaseTransactionExecutor,
         ErasedExecutor, ExecutorInner, IntoDatabase,

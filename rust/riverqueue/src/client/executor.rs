@@ -129,6 +129,7 @@ pub(super) async fn execute_job(
         }
         if cancellation_cause == Some(CancellationCause::Shutdown)
             && let Err(failure) = &mut result
+            && is_soft_stop_failure(failure)
         {
             failure.error.clear();
             failure.error.push_str("job interrupted by client shutdown");
@@ -275,6 +276,26 @@ pub(super) async fn finish_cancelled_task(
             source: None,
             trace: String::new(),
         }),
+    }
+}
+
+/// Whether a failure during hard shutdown is the job stopping because the
+/// client cancelled it, mirroring River Go's `isSoftStopCancelError`.
+///
+/// A worker that returns [`WorkCancelled`] (anywhere in its error's source
+/// chain) stopped cooperatively, and a task River aborted after the stuck
+/// threshold was stopped by the client. Panics and other returned errors are
+/// genuine failures that are recorded and retried.
+pub(super) fn is_soft_stop_failure(failure: &WorkerFailure) -> bool {
+    match failure.kind {
+        WorkerFailureKind::Aborted => true,
+        WorkerFailureKind::Error => failure
+            .source
+            .as_ref()
+            .is_some_and(|error| WorkCancelled::is_in_chain(error.source_ref())),
+        WorkerFailureKind::Cancelled
+        | WorkerFailureKind::Interrupted
+        | WorkerFailureKind::Panic => false,
     }
 }
 
@@ -427,12 +448,20 @@ pub(super) async fn persist_result(
                     JobEventKind::Snoozed,
                 )
             }
+            // River Go's `JobSetStateInterrupted`: make the job available now
+            // without recording an error or counting the attempt. The
+            // completer keeps `attempted_at` and still honors a cancellation
+            // that was attempted while the job ran.
+            Err(failure) if matches!(failure.kind, WorkerFailureKind::Interrupted) => (
+                JobState::Available,
+                None,
+                Some(now),
+                Some((row.attempt - 1).max(0)),
+                None,
+                metadata_updates,
+                JobEventKind::Interrupted,
+            ),
             Err(failure) => {
-                if matches!(failure.kind, WorkerFailureKind::Interrupted) {
-                    return persist_interrupted(inner, row, metadata_updates)
-                        .await
-                        .map(|event| PersistResult::Finished(event.map(Box::new)));
-                }
                 let retry_error = failure.source.clone().unwrap_or_else(|| {
                     WorkError::new(Box::new(std::io::Error::other(failure.error.clone())))
                 });
@@ -710,93 +739,6 @@ where
             .fetch_optional(executor)
             .await?,
     )
-}
-
-pub(super) async fn persist_interrupted(
-    inner: &ClientInner,
-    row: &JobRow,
-    metadata_updates: Map<String, Value>,
-) -> Result<Option<Event>, Error> {
-    #[cfg(feature = "sqlite")]
-    if let Some(pool) = inner.sqlite_pool() {
-        let mut transaction = crate::database::begin_sqlite_write(pool).await?;
-        let updated = crate::database::sqlite::interrupt(
-            &mut transaction,
-            row.id,
-            &metadata_updates,
-            Utc::now(),
-        )
-        .await
-        .map_err(sqlite_backend_error)?;
-        let updated = match updated {
-            Some(row) => Some(row),
-            None => crate::database::sqlite::merge_metadata_if_not_running(
-                &mut transaction,
-                row.id,
-                &metadata_updates,
-            )
-            .await
-            .map_err(sqlite_backend_error)?
-            .map(|row| row.map_err(|job| Error::invalid_job(job.error)))
-            .transpose()?,
-        };
-        if let Some(updated) = &updated
-            && updated.state == JobState::Available
-        {
-            let payload = serde_json::json!({"queue": updated.queue}).to_string();
-            crate::database::sqlite::notification_insert(
-                &mut transaction,
-                &[crate::database::sqlite::NotificationInput {
-                    payload: &payload,
-                    topic: crate::NOTIFICATION_TOPIC_INSERT,
-                }],
-            )
-            .await
-            .map_err(sqlite_backend_error)?;
-        }
-        transaction.commit().await?;
-        return Ok(updated.and_then(|row| {
-            persisted_completion_event_kind(row.state, JobEventKind::Interrupted)
-                .map(|event_kind| Event::job(event_kind, row))
-        }));
-    }
-    #[cfg(feature = "postgres")]
-    {
-        let table = inner.schema.qualify("river_job");
-        let sql = format!(
-            "UPDATE {table} AS job SET \
-         attempt = CASE WHEN state = 'running' THEN greatest(job.attempt - 1, 0) ELSE attempt END, \
-         attempted_at = CASE WHEN state = 'running' THEN NULL ELSE attempted_at END, \
-         finalized_at = CASE WHEN state = 'running' THEN NULL ELSE finalized_at END, \
-         metadata = metadata || $2::jsonb, \
-         scheduled_at = CASE WHEN state = 'running' THEN now() ELSE scheduled_at END, \
-         state = CASE WHEN state = 'running' THEN 'available'::{state_type} ELSE state END \
-         WHERE id = $1 \
-         RETURNING {}, false AS unique_skipped_as_duplicate",
-            job_projection("job"),
-            state_type = inner.schema.qualify("river_job_state")
-        );
-        let record = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
-            .bind(row.id)
-            .bind(Json(metadata_updates))
-            .fetch_optional(
-                inner
-                    .postgres_pool()
-                    .expect("PostgreSQL completion path requires a PostgreSQL pool"),
-            )
-            .await?;
-        return Ok(record
-            .map(JobRecord::into_job_row)
-            .transpose()?
-            .and_then(|row| {
-                persisted_completion_event_kind(row.state, JobEventKind::Interrupted)
-                    .map(|event_kind| Event::job(event_kind, row))
-            }));
-    }
-    #[allow(unreachable_code)]
-    Err(Error::runtime(
-        "database dispatch selected no supported backend".to_owned(),
-    ))
 }
 
 /// Records a failed attempt for a claimed row that could not be decoded.

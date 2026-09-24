@@ -17,8 +17,8 @@ use std::{
 };
 
 use riverqueue::{
-    Client, InsertOpts, Job, JobArgs, JobState, QueueConfig, WorkContext, WorkOutcome,
-    WorkerRegistry,
+    Client, InsertOpts, Job, JobArgs, JobState, QueueConfig, WorkCancelled, WorkContext,
+    WorkOutcome, WorkerRegistry,
     database::{PostgresDatabase, SchemaName},
 };
 use riverqueue_migrate::PostgresMigrator;
@@ -33,6 +33,21 @@ struct ResilienceArgs {}
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
 #[river(kind = "rust_postgres_resilience_gated")]
 struct GatedArgs {}
+
+/// A job that waits for client shutdown and then stops in the given way.
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "rust_postgres_resilience_shutdown")]
+struct ShutdownArgs {
+    behavior: String,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ShutdownError {
+    #[error("stopped for shutdown")]
+    Cancelled(#[source] WorkCancelled),
+    #[error("real failure during shutdown")]
+    Real,
+}
 
 /// Lets a test hold a gated job inside its worker until released.
 #[derive(Clone)]
@@ -151,6 +166,22 @@ fn gated_workers(gate: &Gate) -> WorkerRegistry {
     workers
         .register_fn(|_context: WorkContext, _job: Job<ResilienceArgs>| async {
             Ok::<_, Infallible>(WorkOutcome::Complete)
+        })
+        .unwrap();
+    let shutdown_gate = gate.clone();
+    workers
+        .register_fn(move |context: WorkContext, job: Job<ShutdownArgs>| {
+            let gate = shutdown_gate.clone();
+            async move {
+                gate.started.add_permits(1);
+                context.cancellation_token().cancelled().await;
+                match job.args.behavior.as_str() {
+                    "cooperative" => Err(ShutdownError::Cancelled(WorkCancelled)),
+                    "error" => Err(ShutdownError::Real),
+                    "panic" => panic!("panic during shutdown"),
+                    behavior => unreachable!("unknown shutdown behavior {behavior}"),
+                }
+            }
         })
         .unwrap();
     let gate = gate.clone();
@@ -432,6 +463,80 @@ async fn completion_does_not_rewrite_a_newer_attempt_number() {
     run.shutdown().await.unwrap();
 
     assert_eq!(schema.job_attempt(job.job.row.id).await, 5);
+
+    schema.drop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hard_shutdown_interrupts_only_cooperative_cancellations() {
+    let schema = TestSchema::new("shutdown").await;
+    let gate = Gate::default();
+    let client = gated_client(&schema, "postgres-resilience-shutdown", &gate);
+    let insert = |behavior: &str| {
+        client.insert(ShutdownArgs {
+            behavior: behavior.to_owned(),
+        })
+    };
+    let cooperative = insert("cooperative").await.unwrap();
+    let cancel_attempted = insert("cooperative").await.unwrap();
+    let real_error = insert("error").await.unwrap();
+    let panicked = insert("panic").await.unwrap();
+
+    let mut listener = sqlx::postgres::PgListener::connect_with(&schema.pool)
+        .await
+        .unwrap();
+    listener
+        .listen(&format!("{}.river_insert", schema.name))
+        .await
+        .unwrap();
+    let run = client.start().unwrap();
+    for _ in 0..4 {
+        gate.wait_started().await;
+    }
+    // A cancellation whose notification never reached this client.
+    schema
+        .execute(format!(
+            "UPDATE {} SET metadata = jsonb_set(metadata, '{{cancel_attempted_at}}', \
+             to_jsonb('2026-01-02T03:04:05Z'::text)) WHERE id = {}",
+            schema.table(),
+            cancel_attempted.job.row.id
+        ))
+        .await;
+    tokio::time::timeout(Duration::from_secs(10), run.shutdown_now())
+        .await
+        .unwrap()
+        .unwrap();
+
+    let cooperative = client.job_get(cooperative.job.row.id).await.unwrap();
+    assert_eq!(cooperative.state, JobState::Available);
+    assert_eq!(cooperative.attempt, 0);
+    assert!(cooperative.attempted_at.is_some(), "attempted_at is kept");
+    assert!(cooperative.errors.is_empty());
+    let notification = tokio::time::timeout(Duration::from_secs(5), listener.recv())
+        .await
+        .expect("interrupted job did not notify peers")
+        .unwrap();
+    assert_eq!(notification.payload(), r#"{"queue" : "default"}"#);
+    drop(listener);
+
+    let cancel_attempted = client.job_get(cancel_attempted.job.row.id).await.unwrap();
+    assert_eq!(cancel_attempted.state, JobState::Cancelled);
+    assert!(cancel_attempted.finalized_at.is_some());
+
+    for (job, error) in [
+        (real_error, "real failure during shutdown"),
+        (panicked, "panic during shutdown"),
+    ] {
+        let job = client.job_get(job.job.row.id).await.unwrap();
+        assert!(
+            matches!(job.state, JobState::Available | JobState::Retryable),
+            "{:?}",
+            job.state
+        );
+        assert_eq!(job.attempt, 1, "a genuine failure consumes its attempt");
+        assert_eq!(job.errors.len(), 1);
+        assert!(job.errors[0].error.contains(error), "{:?}", job.errors);
+    }
 
     schema.drop().await;
 }

@@ -51,6 +51,57 @@ impl std::error::Error for WorkError {
     }
 }
 
+/// Error a worker returns when it stops because its
+/// [`WorkContext::cancellation_token`](crate::WorkContext::cancellation_token)
+/// was cancelled.
+///
+/// This is River's equivalent of Go's `context.Canceled`. When a client's hard
+/// shutdown cancels a job, a worker that returns this error (directly or
+/// anywhere in its error's source chain) is treated as interrupted: the job
+/// becomes available again with the attempt refunded and no error recorded.
+/// Any other error returned during shutdown is recorded and retried like an
+/// ordinary failure, so a job that genuinely fails while the client stops
+/// still consumes its attempt.
+///
+/// ```
+/// use riverqueue::{WorkCancelled, WorkContext, WorkOutcome};
+///
+/// async fn work(context: WorkContext) -> Result<WorkOutcome, WorkCancelled> {
+///     tokio::select! {
+///         () = context.cancellation_token().cancelled() => Err(WorkCancelled),
+///         () = tokio::time::sleep(std::time::Duration::from_secs(1)) => Ok(WorkOutcome::Complete),
+///     }
+/// }
+/// ```
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, thiserror::Error)]
+#[error("job work cancelled")]
+pub struct WorkCancelled;
+
+impl WorkCancelled {
+    /// Whether `error` or any error in its source chain is [`WorkCancelled`].
+    ///
+    /// Errors wrapped by `std::io::Error::other` are inspected as well,
+    /// because `io::Error` does not expose its payload as a source.
+    #[must_use]
+    pub fn is_in_chain(error: &(dyn std::error::Error + 'static)) -> bool {
+        let mut current = Some(error);
+        while let Some(error) = current {
+            if error.is::<Self>() {
+                return true;
+            }
+            if let Some(payload) = error
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::get_ref)
+                && Self::is_in_chain(payload)
+            {
+                return true;
+            }
+            current = error.source();
+        }
+        false
+    }
+}
+
 /// Name of an internal runtime metric emitted to hooks.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
