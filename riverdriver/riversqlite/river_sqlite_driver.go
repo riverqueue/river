@@ -525,8 +525,15 @@ func (e *Executor) JobDeleteMany(ctx context.Context, params *riverdriver.JobDel
 //
 // [1] https://github.com/sqlc-dev/sqlc/pull/3610
 //
+// An `attempted_by` that's been changed out of band to a value that isn't
+// valid JSON is left in place instead, because `json_each` would fail on it
+// and with it the whole fetch. The job is then returned as undecodable. The
+// value is also kept from `json_each` in the subquery because Turso evaluates
+// the subquery even when the `CASE` branch containing it isn't taken.
+//
 //nolint:gochecknoglobals
 var jobGetAvailableAttemptedBySQL = strings.TrimSpace(`
+    CASE WHEN typeof(attempted_by) = 'text' AND NOT json_valid(attempted_by) THEN attempted_by ELSE
     jsonb(json_insert(
         (
             SELECT jsonb_group_array(value)
@@ -534,7 +541,7 @@ var jobGetAvailableAttemptedBySQL = strings.TrimSpace(`
                 SELECT *
                 FROM (
                     SELECT *
-                    FROM json_each(coalesce(attempted_by, jsonb('[]')))
+                    FROM json_each(CASE WHEN typeof(attempted_by) = 'text' AND NOT json_valid(attempted_by) THEN jsonb('[]') ELSE coalesce(attempted_by, jsonb('[]')) END)
                     ORDER BY key DESC
                     LIMIT @max_attempted_by - 1
                 )
@@ -544,6 +551,7 @@ var jobGetAvailableAttemptedBySQL = strings.TrimSpace(`
         '$[#]',
         @attempted_by
     ))
+    END
 `)
 
 func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) (*riverdriver.JobGetAvailableResult, error) {
@@ -572,7 +580,7 @@ func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobG
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	return jobGetAvailableResultFromInternal(jobs), nil
+	return jobGetAvailableResultFromInternal(sliceutil.Map(jobs, jobFromReturningRow)), nil
 }
 
 func (e *Executor) JobGetByID(ctx context.Context, params *riverdriver.JobGetByIDParams) (*rivertype.JobRow, error) {
@@ -613,7 +621,9 @@ func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetSt
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	return jobRowsFromInternalPartial(jobs), nil
+	return jobRowsFromInternalPartial(sliceutil.Map(jobs, func(job *dbsqlc.JobGetStuckRow) *dbsqlc.RiverJob {
+		return (*dbsqlc.RiverJob)(job)
+	})), nil
 }
 
 func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.JobInsertFastManyParams) ([]*riverdriver.JobInsertFastResult, error) {
@@ -991,11 +1001,11 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 				setStateParams.ScheduledAt = timeString(*params.ScheduledAt[i])
 			}
 
-			job, err := dbsqlc.New().JobSetStateIfRunning(ctx, dbtx, setStateParams)
+			row, err := dbsqlc.New().JobSetStateIfRunning(ctx, dbtx, setStateParams)
 			if err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
-					var err error
-					job, err = dbsqlc.New().JobSetMetadataIfNotRunning(ctx, dbtx, &dbsqlc.JobSetMetadataIfNotRunningParams{
+					var metadataRow *dbsqlc.JobSetMetadataIfNotRunningRow
+					metadataRow, err = dbsqlc.New().JobSetMetadataIfNotRunning(ctx, dbtx, &dbsqlc.JobSetMetadataIfNotRunningParams{
 						ID:              params.ID[i],
 						MetadataUpdates: sliceutil.FirstNonEmpty(params.MetadataUpdates[i], []byte("{}")),
 					})
@@ -1006,6 +1016,7 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 
 						return fmt.Errorf("error setting job metadata: %w", err)
 					}
+					row = (*dbsqlc.JobSetStateIfRunningRow)(metadataRow)
 				} else {
 					return fmt.Errorf("error setting job state: %w", err)
 				}
@@ -1013,7 +1024,7 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 			// A job whose row can't be fully decoded is still returned (with
 			// the undecodable fields left empty) so that it doesn't roll back
 			// the state change for every other job in the batch.
-			jobRow, _ := jobRowFromInternalPartial(job)
+			jobRow, _ := jobRowFromInternalPartial(jobFromReturningRow((*dbsqlc.JobGetAvailableRow)(row)))
 			setRes = append(setRes, jobRow)
 		}
 
@@ -1687,6 +1698,36 @@ func sqliteJobInsertFullManyJobsParam(jobs []*riverdriver.JobInsertFullParams) (
 	return json.Marshal(jobsParam)
 }
 
+// jobFromReturningRow converts a row from one of the job queries that list out
+// the columns in their `RETURNING` clause to tolerate values that aren't valid
+// JSON (see JobGetAvailable in the SQL) into a job. sqlc's SQLite engine
+// ignores aliases in `RETURNING`, so these rows get their own types with
+// positional names for the JSON columns. The types have identical fields
+// though, so rows of JobSetMetadataIfNotRunning and JobSetStateIfRunning are
+// converted to JobGetAvailableRow to use this too.
+func jobFromReturningRow(row *dbsqlc.JobGetAvailableRow) *dbsqlc.RiverJob {
+	return &dbsqlc.RiverJob{
+		ID:           row.ID,
+		Args:         row.Column2,
+		Attempt:      row.Attempt,
+		AttemptedAt:  row.AttemptedAt,
+		AttemptedBy:  row.Column5,
+		CreatedAt:    row.CreatedAt,
+		Errors:       row.Column7,
+		FinalizedAt:  row.FinalizedAt,
+		Kind:         row.Kind,
+		MaxAttempts:  row.MaxAttempts,
+		Metadata:     row.Column11,
+		Priority:     row.Priority,
+		Queue:        row.Queue,
+		State:        row.State,
+		ScheduledAt:  row.ScheduledAt,
+		Tags:         row.Column16,
+		UniqueKey:    row.UniqueKey,
+		UniqueStates: row.UniqueStates,
+	}
+}
+
 // jobGetAvailableResultFromInternal decodes the job rows locked by
 // JobGetAvailable, retaining every row and recording decode errors by job ID
 // because they've all been moved to `running`.
@@ -1721,6 +1762,15 @@ func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
 func jobRowFromInternalPartial(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
 	var decodeErrs []error
 
+	// Args and metadata are passed through as raw JSON, but in case they've
+	// been changed out of band to something that isn't valid JSON, check that
+	// they are so the job isn't worked with them.
+	encodedArgs := internal.Args
+	if err := validateJSON(encodedArgs); err != nil {
+		decodeErrs = append(decodeErrs, fmt.Errorf("error unmarshaling `args`: %w", err))
+		encodedArgs = nil
+	}
+
 	var attemptedAt *time.Time
 	if internal.AttemptedAt != nil {
 		t := internal.AttemptedAt.UTC()
@@ -1749,6 +1799,12 @@ func jobRowFromInternalPartial(internal *dbsqlc.RiverJob) (*rivertype.JobRow, er
 		finalizedAt = &t
 	}
 
+	metadata := internal.Metadata
+	if err := validateJSON(metadata); err != nil {
+		decodeErrs = append(decodeErrs, fmt.Errorf("error unmarshaling `metadata`: %w", err))
+		metadata = nil
+	}
+
 	var tags []string
 	if err := json.Unmarshal(internal.Tags, &tags); err != nil {
 		decodeErrs = append(decodeErrs, fmt.Errorf("error unmarshaling `tags`: %w", err))
@@ -1770,12 +1826,12 @@ func jobRowFromInternalPartial(internal *dbsqlc.RiverJob) (*rivertype.JobRow, er
 		AttemptedAt:  attemptedAt,
 		AttemptedBy:  attemptedBy,
 		CreatedAt:    internal.CreatedAt.UTC(),
-		EncodedArgs:  internal.Args,
+		EncodedArgs:  encodedArgs,
 		Errors:       attemptErrors,
 		FinalizedAt:  finalizedAt,
 		Kind:         internal.Kind,
 		MaxAttempts:  max(int(internal.MaxAttempts), 0),
-		Metadata:     internal.Metadata,
+		Metadata:     metadata,
 		Priority:     max(int(internal.Priority), 0),
 		Queue:        internal.Queue,
 		ScheduledAt:  internal.ScheduledAt.UTC(),
@@ -1862,4 +1918,13 @@ func timeStringNullable(t *time.Time) *string {
 
 	str := timeString(*t)
 	return &str
+}
+
+// validateJSON returns an error describing why data isn't valid JSON, or nil if
+// it is.
+func validateJSON(data []byte) error {
+	if json.Valid(data) {
+		return nil
+	}
+	return json.Unmarshal(data, new(json.RawMessage))
 }
