@@ -127,6 +127,8 @@ pub(crate) struct ListJobs<'a> {
     pub after_id: Option<i64>,
     pub after_time: Option<DateTime<Utc>>,
     pub direction: SortDirection,
+    /// Excludes running jobs before applying the limit, as bulk deletion does.
+    pub exclude_running: bool,
     pub ids: &'a [i64],
     pub kinds: &'a [&'a str],
     pub limit: i32,
@@ -738,6 +740,9 @@ pub(crate) async fn list(
                 .push_bind(after_id)
                 .push("))");
         }
+    }
+    if params.exclude_running {
+        query.push(" AND state != 'running'");
     }
     if !params.ids.is_empty() {
         query.push(" AND id IN (");

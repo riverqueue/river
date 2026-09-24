@@ -308,7 +308,7 @@ impl Client {
         #[cfg(feature = "sqlite")]
         {
             let mut connection = sqlite_pool(self)?.acquire().await?;
-            return job_list_sqlite(&mut connection, params).await;
+            return job_list_sqlite(&mut connection, params, false).await;
         }
         #[allow(unreachable_code)]
         Err(Error::runtime_context(
@@ -333,7 +333,7 @@ impl Client {
             }
             #[cfg(feature = "sqlite")]
             ExecutorInner::SqliteConnection(connection) => {
-                job_list_sqlite(connection, params).await
+                job_list_sqlite(connection, params, false).await
             }
             #[cfg(feature = "postgres")]
             ExecutorInner::PostgresPool(_) => {
@@ -664,27 +664,31 @@ async fn job_delete_many_postgres(
     connection: &mut PgConnection,
     params: &JobDeleteManyParams,
 ) -> Result<Vec<JobRow>, Error> {
-    let jobs = job_list_postgres(client, &mut *connection, &params.filter).await?;
-    if jobs.is_empty() {
-        return Ok(Vec::new());
-    }
-    let ids = jobs.iter().map(|job| job.id).collect::<Vec<_>>();
+    params.filter.validate().map_err(Error::invalid_job)?;
     let table = client.inner.schema.qualify("river_job");
+    let parts = job_list_sql_parts(&client.inner.schema, &params.filter, false);
+    // Mirrors Go's `JobDeleteMany`: running jobs are excluded before the limit
+    // applies, candidates already locked by another transaction are skipped
+    // rather than waited on, and rows come back in the list order.
     let sql = format!(
-        "DELETE FROM {table} AS job WHERE id = ANY($1::bigint[]) AND state != 'running' \
-         RETURNING {}, false AS unique_skipped_as_duplicate",
-        job_projection("job")
+        "WITH jobs_to_delete AS (\
+            SELECT id FROM {table} AS job WHERE {where_sql} AND state != 'running' \
+            ORDER BY {order_sql} LIMIT $11 FOR UPDATE SKIP LOCKED\
+         ), deleted AS (\
+            DELETE FROM {table} WHERE id IN (SELECT id FROM jobs_to_delete) RETURNING *\
+         ) \
+         SELECT {}, false AS unique_skipped_as_duplicate FROM deleted AS job ORDER BY {order_sql}",
+        job_projection("job"),
+        where_sql = parts.where_sql,
+        order_sql = parts.order_sql,
     );
-    let records = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
-        .bind(ids)
-        .fetch_all(connection)
-        .await?;
-    let mut rows = records
-        .into_iter()
-        .map(JobRecord::into_job_row)
-        .collect::<Result<Vec<_>, _>>()?;
-    rows.sort_unstable_by_key(|row| row.id);
-    Ok(rows)
+    let records = bind_job_list(
+        sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql)),
+        &params.filter,
+    )
+    .fetch_all(connection)
+    .await?;
+    records.into_iter().map(JobRecord::into_job_row).collect()
 }
 
 #[cfg(feature = "postgres")]
@@ -721,7 +725,9 @@ async fn job_delete_many_sqlite(
     connection: &mut sqlx::SqliteConnection,
     params: &JobDeleteManyParams,
 ) -> Result<Vec<JobRow>, Error> {
-    let jobs = job_list_sqlite(connection, &params.filter).await?;
+    // Running jobs are excluded before the limit applies, like Go. SQLite's
+    // single writer makes the enclosing write transaction the lock.
+    let jobs = job_list_sqlite(connection, &params.filter, true).await?;
     let mut deleted = Vec::with_capacity(jobs.len());
     for job in jobs {
         if let Some(row) = sqlite::delete(connection, job.id)
@@ -731,7 +737,6 @@ async fn job_delete_many_sqlite(
             deleted.push(row);
         }
     }
-    deleted.sort_unstable_by_key(|row| row.id);
     Ok(deleted)
 }
 
@@ -782,7 +787,100 @@ where
 {
     params.validate().map_err(Error::invalid_job)?;
     let table = client.inner.schema.qualify("river_job");
-    let sort_field = match params.order_by {
+    let parts = job_list_sql_parts(&client.inner.schema, params, true);
+    let sql = format!(
+        "SELECT {}, false AS unique_skipped_as_duplicate FROM {table} AS job \
+         WHERE {} ORDER BY {} LIMIT $11",
+        job_projection("job"),
+        parts.where_sql,
+        parts.order_sql,
+    );
+    let records = bind_job_list(sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql)), params)
+        .fetch_all(executor)
+        .await?;
+    records.into_iter().map(JobRecord::into_job_row).collect()
+}
+
+/// SQL fragments shared by job listing and bulk deletion. Both bind the same
+/// eleven positional parameters through [`bind_job_list`].
+#[cfg(feature = "postgres")]
+struct JobListSqlParts {
+    order_sql: String,
+    where_sql: String,
+}
+
+#[cfg(feature = "postgres")]
+fn job_list_sql_parts(
+    schema: &crate::SchemaName,
+    params: &JobListParams,
+    optimize_single_state: bool,
+) -> JobListSqlParts {
+    let sort_field = job_list_sort_field(params);
+    let direction = match params.direction {
+        SortDirection::Ascending => "ASC",
+        SortDirection::Descending => "DESC",
+    };
+    let comparison = match params.direction {
+        SortDirection::Ascending => ">",
+        SortDirection::Descending => "<",
+    };
+    let cursor_predicate = if sort_field == "id" {
+        format!("($10::bigint IS NULL OR id {comparison} $10)")
+    } else {
+        format!(
+            "($9::timestamptz IS NULL OR ({sort_field} {comparison} $9 OR \
+             ({sort_field} = $9 AND id {comparison} $10)))"
+        )
+    };
+    let state_type = schema.qualify("river_job_state");
+    // Like Go (upstream 35c4eab8), a single-state list without metadata
+    // predicates compares state with equality so PostgreSQL can use the
+    // `(state, <time>)` index ordering, and a single finalized state ordered by
+    // `finalized_at` states the non-null invariant that the partial
+    // finalized-time index requires. Bulk deletion keeps the generic form.
+    let state_predicate =
+        if optimize_single_state && params.states.len() == 1 && params.metadata.is_none() {
+            let finalized = sort_field == "finalized_at"
+                && matches!(
+                    params.states[0],
+                    JobState::Cancelled | JobState::Completed | JobState::Discarded
+                );
+            format!(
+                "state = ($4::text[])[1]::{state_type}{}",
+                if finalized {
+                    " AND finalized_at IS NOT NULL"
+                } else {
+                    ""
+                }
+            )
+        } else {
+            format!("(cardinality($4::text[]) = 0 OR state = ANY($4::text[]::{state_type}[]))")
+        };
+    let where_sql = format!(
+        "(cardinality($1::bigint[]) = 0 OR id = ANY($1)) \
+         AND (cardinality($2::text[]) = 0 OR kind = ANY($2)) \
+         AND (cardinality($3::text[]) = 0 OR queue = ANY($3)) \
+         AND {state_predicate} \
+         AND (cardinality($5::smallint[]) = 0 OR priority = ANY($5)) \
+         AND (cardinality($6::varchar[]) = 0 OR tags @> $6::varchar[]) \
+         AND (cardinality($7::varchar[]) = 0 OR tags && $7::varchar[]) \
+         AND ($8::jsonb IS NULL OR metadata @> $8) \
+         AND {cursor_predicate}"
+    );
+    let order_sql = if sort_field == "id" {
+        format!("id {direction}")
+    } else {
+        format!("{sort_field} {direction}, id {direction}")
+    };
+    JobListSqlParts {
+        order_sql,
+        where_sql,
+    }
+}
+
+#[cfg(feature = "postgres")]
+fn job_list_sort_field(params: &JobListParams) -> &'static str {
+    match params.order_by {
         JobListOrderBy::FinalizedAt => "finalized_at",
         JobListOrderBy::Id => "id",
         JobListOrderBy::ScheduledAt => "scheduled_at",
@@ -794,48 +892,20 @@ where
             JobState::Running => "attempted_at",
             JobState::Cancelled | JobState::Completed | JobState::Discarded => "finalized_at",
         },
-    };
-    let direction = match params.direction {
-        SortDirection::Ascending => "ASC",
-        SortDirection::Descending => "DESC",
-    };
-    let comparison = match params.direction {
-        SortDirection::Ascending => ">",
-        SortDirection::Descending => "<",
-    };
+    }
+}
+
+#[cfg(feature = "postgres")]
+fn bind_job_list<'query>(
+    query: sqlx::query::QueryAs<'query, Postgres, JobRecord, sqlx::postgres::PgArguments>,
+    params: &'query JobListParams,
+) -> sqlx::query::QueryAs<'query, Postgres, JobRecord, sqlx::postgres::PgArguments> {
     let cursor_id = params
         .after
         .as_ref()
         .map(|cursor| cursor.id)
         .or(params.after_id);
     let cursor_time = params.after.as_ref().and_then(|cursor| cursor.sort_time);
-    let cursor_predicate = if sort_field == "id" {
-        format!("($10::bigint IS NULL OR id {comparison} $10)")
-    } else {
-        format!(
-            "($9::timestamptz IS NULL OR ({sort_field} {comparison} $9 OR \
-             ({sort_field} = $9 AND id {comparison} $10)))"
-        )
-    };
-    let order = if sort_field == "id" {
-        format!("id {direction}")
-    } else {
-        format!("{sort_field} {direction}, id {direction}")
-    };
-    let sql = format!(
-        "SELECT {}, false AS unique_skipped_as_duplicate FROM {table} AS job \
-         WHERE (cardinality($1::bigint[]) = 0 OR id = ANY($1)) \
-           AND (cardinality($2::text[]) = 0 OR kind = ANY($2)) \
-           AND (cardinality($3::text[]) = 0 OR queue = ANY($3)) \
-           AND (cardinality($4::text[]) = 0 OR state::text = ANY($4)) \
-           AND (cardinality($5::smallint[]) = 0 OR priority = ANY($5)) \
-           AND (cardinality($6::varchar[]) = 0 OR tags @> $6::varchar[]) \
-           AND (cardinality($7::varchar[]) = 0 OR tags && $7::varchar[]) \
-           AND ($8::jsonb IS NULL OR metadata @> $8) \
-           AND {cursor_predicate} \
-         ORDER BY {order} LIMIT $11",
-        job_projection("job")
-    );
     let states = params
         .states
         .iter()
@@ -845,7 +915,7 @@ where
         .metadata
         .as_ref()
         .map(|metadata| Json(Value::Object(metadata.clone())));
-    let records = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+    query
         .bind(&params.ids)
         .bind(&params.kinds)
         .bind(&params.queues)
@@ -857,15 +927,13 @@ where
         .bind(cursor_time)
         .bind(cursor_id)
         .bind(params.limit)
-        .fetch_all(executor)
-        .await?;
-    records.into_iter().map(JobRecord::into_job_row).collect()
 }
 
 #[cfg(feature = "sqlite")]
 async fn job_list_sqlite(
     connection: &mut sqlx::SqliteConnection,
     params: &JobListParams,
+    exclude_running: bool,
 ) -> Result<Vec<JobRow>, Error> {
     params.validate().map_err(Error::invalid_job)?;
     let kinds = params.kinds.iter().map(String::as_str).collect::<Vec<_>>();
@@ -891,6 +959,7 @@ async fn job_list_sqlite(
             after_id: cursor_id,
             after_time: params.after.as_ref().and_then(|cursor| cursor.sort_time),
             direction: params.direction,
+            exclude_running,
             ids: &params.ids,
             kinds: &kinds,
             limit: params.limit,
