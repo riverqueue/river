@@ -100,6 +100,7 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"release_worker_performance":                                     {owner: scenarioOwnerPerformance, tier: "performance"},
 	"remote_cancel_notification":                                     {owner: scenarioOwnerMixed, tier: "mixed"},
 	"remote_queue_subscription_events":                               {owner: scenarioOwnerMixed, tier: "mixed"},
+	"reserved_metadata_cross_engine":                                 {owner: scenarioOwnerMixed, tier: "mixed"},
 	"resumable_cross_engine_cursor":                                  {owner: scenarioOwnerMixed, tier: "mixed"},
 	"resumable_retry":                                                {owner: scenarioOwnerMixed, tier: "runtime"},
 	"resumable_validation":                                           {owner: scenarioOwnerMixed, tier: "runtime"},

@@ -370,6 +370,11 @@ func TestMixedConformance(t *testing.T) {
 
 		verifyPoolPressure(t, goAdapter, candidateAdapter)
 	})
+	t.Run("reserved_metadata_cross_engine", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(worker, controller *adapter) { verifyReservedMetadata(t, repositoryRoot, worker, controller) })
+	})
 	t.Run("process_kill_restart_and_rescue", func(t *testing.T) {
 		defer scenarios.record(t)
 

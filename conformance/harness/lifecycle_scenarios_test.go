@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -412,4 +413,61 @@ func verifyPoolPressure(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	for _, current := range adapters {
 		current.call(t, "stop", map[string]any{}, nil)
 	}
+}
+
+// verifyReservedMetadata has one implementation write each runtime-owned
+// reserved metadata key and the other read it back with its canonical name
+// and type. Every key an implementation writes must be in the reserved set
+// generated from Go, and user metadata must survive alongside it.
+func verifyReservedMetadata(t *testing.T, repositoryRoot string, worker, controller *adapter) {
+	t.Helper()
+
+	var fixture struct {
+		ReservedMetadataKeys []struct {
+			Key string `json:"key"`
+		} `json:"reserved_metadata_keys"`
+	}
+	contents, err := os.ReadFile(filepath.Join(repositoryRoot, "conformance/fixtures/protocol_values.json"))
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(contents, &fixture))
+	reserved := make([]string, 0, len(fixture.ReservedMetadataKeys))
+	for _, key := range fixture.ReservedMetadataKeys {
+		reserved = append(reserved, key.Key)
+	}
+	require.NotEmpty(t, reserved)
+
+	worker.call(t, "reset", map[string]any{}, nil)
+	worker.call(t, "start", map[string]any{"client_id": worker.name + "-reserved-metadata", "max_workers": 2}, nil)
+	userMetadata := map[string]any{"user": "kept"}
+	var output, snoozed, cancelled normalizedJob
+	controller.call(t, "insert", map[string]any{
+		"behavior": "output", "message": "reserved output", "opts": map[string]any{"metadata": userMetadata},
+	}, &output)
+	controller.call(t, "insert", map[string]any{
+		"behavior": "snooze_once", "duration_ms": 5, "message": "reserved snooze", "opts": map[string]any{"metadata": userMetadata},
+	}, &snoozed)
+	controller.call(t, "insert", map[string]any{
+		"behavior": "cooperative_cancel", "message": "reserved cancel", "opts": map[string]any{"metadata": userMetadata},
+	}, &cancelled)
+	controller.call(t, "wait", map[string]any{"id": cancelled.ID, "states": []string{"running"}}, &cancelled)
+	controller.call(t, "cancel", map[string]any{"id": cancelled.ID}, &cancelled)
+	for _, job := range []*normalizedJob{&output, &snoozed, &cancelled} {
+		controller.call(t, "wait", map[string]any{"id": job.ID}, job)
+		require.Equal(t, "kept", job.Metadata["user"], "user metadata lost on job %d", job.ID)
+		for key := range job.Metadata {
+			if key != "user" {
+				require.Contains(t, reserved, key, "job %d carries metadata key %q outside the reserved set", job.ID, key)
+			}
+		}
+	}
+	require.Equal(t, "completed", output.State)
+	require.Equal(t, map[string]any{"message": "reserved output"}, output.Metadata["output"])
+	require.Equal(t, "completed", snoozed.State)
+	require.EqualValues(t, 1, snoozed.Metadata["snoozes"])
+	require.Equal(t, "cancelled", cancelled.State)
+	cancelAttemptedAt, ok := cancelled.Metadata["cancel_attempted_at"].(string)
+	require.True(t, ok, "cancel_attempted_at must be a timestamp string")
+	require.False(t, strings.HasSuffix(cancelAttemptedAt, " "))
+	parseTime(t, cancelAttemptedAt)
+	worker.call(t, "stop", map[string]any{}, nil)
 }

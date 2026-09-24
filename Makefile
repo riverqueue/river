@@ -19,6 +19,7 @@ db/reset/test: ## Drop, create, and migrate test databases
 
 .PHONY: generate
 generate: ## Generate generated artifacts
+generate: generate/feature-inventory
 generate: generate/conformance
 generate: generate/migrations
 generate: generate/rust-migrations
@@ -27,6 +28,10 @@ generate: generate/sqlc
 .PHONY: generate/conformance
 generate/conformance: ## Generate language-neutral protocol fixtures
 	go run ./internal/cmd/generateconformance
+
+.PHONY: generate/feature-inventory
+generate/feature-inventory: ## Refresh the cross-language feature inventory and matrix
+	go run ./internal/cmd/generatefeatureinventory
 
 .PHONY: generate/migrations
 generate/migrations: ## Sync changes of pgxv5 migrations to database/sql
@@ -184,6 +189,7 @@ update-mod-version: ## Update River packages in all submodules to $VERSION
 .PHONY: verify
 verify: ## Verify generated artifacts
 verify: verify/conformance
+verify: verify/feature-inventory
 verify: verify/migrations
 verify: verify/rust-migrations
 verify: verify/sqlc
@@ -191,6 +197,10 @@ verify: verify/sqlc
 .PHONY: verify/conformance
 verify/conformance: ## Verify language-neutral protocol fixtures
 	go run ./internal/cmd/generateconformance -check
+
+.PHONY: verify/feature-inventory
+verify/feature-inventory: ## Fail on Go features missing from the cross-language inventory
+	go run ./internal/cmd/generatefeatureinventory -check
 
 .PHONY: verify/migrations
 verify/migrations: ## Verify synced migrations

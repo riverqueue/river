@@ -57,6 +57,20 @@
       "type": "array"
     },
     "protocol_revision": { "minimum": 1, "type": "integer" },
+    "reserved_metadata_keys": {
+      "description": "Job metadata keys River reads or writes, extracted from Go source and SQL through the feature inventory.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "applicability": { "enum": ["api_equivalent", "driver_specific", "internal", "not_applicable", "protocol_visible"] },
+          "key": { "minLength": 1, "type": "string" }
+        },
+        "required": ["applicability", "key"],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
     "retry_cases": {
       "description": "Bounds on the delay River's default retry policy schedules after error_count failures. Implementations with seedable jitter may use seed; any delay within the bounds conforms.",
       "items": {
@@ -76,7 +90,7 @@
     },
     "topics": { "additionalProperties": { "type": "string" }, "type": "object" }
   },
-  "required": ["$schema", "attempt_error", "job_states", "metadata_keys", "notifications", "protocol_revision", "retry_cases", "topics"],
+  "required": ["$schema", "attempt_error", "job_states", "metadata_keys", "notifications", "protocol_revision", "reserved_metadata_keys", "retry_cases", "topics"],
   "title": "River protocol value goldens",
   "type": "object"
 }
