@@ -46,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed SQLite reusing the ID of a deleted job when that job held the largest ID, which could cause an ID observed earlier to refer to an unrelated job later. [PR #1390](https://github.com/riverqueue/river/pull/1390).
 - Fixed the `Job appears to be stuck` log line reporting the client-level `JobTimeout` instead of the worker-level timeout when a worker overrides `Timeout`. [PR #1394](https://github.com/riverqueue/river/pull/1394).
 - Fixed `river bench` inserting every benchmark job with a `num` arg of `0` instead of numbering jobs sequentially. [PR #1379](https://github.com/riverqueue/river/pull/1379).
+- Fixed `rivermigrate` leaving `river_migration` rows behind after migrating a non-main migration line down through its version 1, which caused a later up migration of that line to skip version 1. With `MigrateTx`, rows for every removed version were left behind. [PR #1378](https://github.com/riverqueue/river/pull/1378).
 
 ## [0.47.0] - 2026-09-01
 
