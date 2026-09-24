@@ -450,7 +450,7 @@ async fn claimed_rows_decode_individually_and_leniently() {
         .await;
     let ordinary = client.insert(ResilienceArgs {}).await.unwrap();
 
-    let run = client.start().unwrap();
+    let mut run = client.start().unwrap();
     for id in [sparse_errors.job.row.id, ordinary.job.row.id] {
         wait_until(
             Duration::from_secs(10),
@@ -527,7 +527,7 @@ async fn completion_retries_a_transient_database_error() {
     let client = gated_client(&schema, "postgres-resilience-retry", &Gate::default());
     let job = client.insert(ResilienceArgs {}).await.unwrap();
 
-    let run = client.start().unwrap();
+    let mut run = client.start().unwrap();
     wait_until(
         Duration::from_secs(10),
         "completion after retry",
@@ -558,7 +558,7 @@ async fn completion_waits_for_a_row_lock() {
     let client = gated_client(&schema, "postgres-resilience-lock", &gate);
     let job = client.insert(GatedArgs {}).await.unwrap();
 
-    let run = client.start().unwrap();
+    let mut run = client.start().unwrap();
     gate.wait_started().await;
     let mut locker = schema.pool.begin().await.unwrap();
     sqlx::query(AssertSqlSafe(format!(
@@ -603,7 +603,7 @@ async fn completion_leaves_rows_moved_out_of_running_and_keeps_working() {
     let client = gated_client(&schema, "postgres-resilience-moved", &gate);
     let pending = client.insert(GatedArgs {}).await.unwrap();
 
-    let run = client.start().unwrap();
+    let mut run = client.start().unwrap();
     gate.wait_started().await;
     // An operator or extension moves the running job back to `pending`.
     schema
@@ -635,7 +635,7 @@ async fn completion_does_not_rewrite_a_newer_attempt_number() {
     let client = gated_client(&schema, "postgres-resilience-attempt", &gate);
     let job = client.insert(GatedArgs {}).await.unwrap();
 
-    let run = client.start().unwrap();
+    let mut run = client.start().unwrap();
     gate.wait_started().await;
     // Another client rescued and refetched the job while this attempt ran.
     schema
@@ -679,7 +679,7 @@ async fn hard_shutdown_interrupts_only_cooperative_cancellations() {
         .listen(&format!("{}.river_insert", schema.name))
         .await
         .unwrap();
-    let run = client.start().unwrap();
+    let mut run = client.start().unwrap();
     for _ in 0..4 {
         gate.wait_started().await;
     }
@@ -762,7 +762,7 @@ async fn stuck_job_keeps_its_worker_slot_until_it_ends() {
         .await
         .unwrap();
 
-    let run = client.start().unwrap();
+    let mut run = client.start().unwrap();
     gate.wait_started().await;
     tokio::time::timeout(Duration::from_secs(5), stuck.0.acquire())
         .await
@@ -813,7 +813,7 @@ async fn shutdown_leaves_a_job_still_stuck_after_abort_running() {
         .await
         .unwrap();
 
-    let run = client.start().unwrap();
+    let mut run = client.start().unwrap();
     gate.wait_started().await;
     let started = std::time::Instant::now();
     tokio::time::timeout(Duration::from_secs(1), run.shutdown_now())
@@ -833,7 +833,7 @@ async fn out_of_range_snooze_is_clamped_and_cancel_time_matches_go() {
     let client = gated_client(&schema, "postgres-resilience-wire", &Gate::default());
     let snoozed = client.insert(SnoozeForeverArgs {}).await.unwrap();
 
-    let run = client.start().unwrap();
+    let mut run = client.start().unwrap();
     wait_until(Duration::from_secs(10), "the snooze", || async {
         schema.job_state(snoozed.job.row.id).await == "scheduled"
     })
@@ -996,7 +996,7 @@ async fn queue_reconfiguration_waits_for_the_previous_producer() {
     let client = gated_client(&schema, "postgres-resilience-reconfigure", &gate);
     let first = client.insert(GatedArgs {}).await.unwrap();
 
-    let run = client.start().unwrap();
+    let mut run = client.start().unwrap();
     gate.wait_started().await;
     client
         .queue_add(
@@ -1116,7 +1116,7 @@ async fn extension_set_state_hook_runs_in_the_completion_transaction() {
         .await
         .unwrap();
 
-    let run = client.start().unwrap();
+    let mut run = client.start().unwrap();
     gate.wait_started().await;
     gate.wait_started().await;
     // Release both together so they share one batch.

@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .workers(workers)
         .queue("default", QueueConfig::new(1))
         .build()?;
-    let run = client.start()?;
+    let mut run = client.start()?;
     let job = client.insert(CancellableReport { report_id: 42 }).await?;
 
     client.job_cancel(job.id()).await?;

@@ -41,7 +41,7 @@ anyhow = "1.0.104"
 riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.47.0-alpha.1", features = ["postgres", "sqlite"] }
 serde.workspace = true
 # Fault-injection tests proxy database connections.
-tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "test-util"] }
+tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "signal", "test-util"] }
 
 [[example]]
 name = "basic_worker"
@@ -57,6 +57,10 @@ required-features = ["postgres"]
 
 [[example]]
 name = "events"
+required-features = ["postgres"]
+
+[[example]]
+name = "graceful_shutdown"
 required-features = ["postgres"]
 
 [[example]]
@@ -78,6 +82,10 @@ required-features = ["postgres"]
 [[example]]
 name = "unique"
 required-features = ["postgres"]
+
+[[test]]
+name = "lifecycle"
+required-features = ["sqlite"]
 
 [[test]]
 name = "postgres"

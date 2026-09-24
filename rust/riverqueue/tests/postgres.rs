@@ -1403,7 +1403,7 @@ async fn migrates_inserts_and_works_a_job() {
         .unwrap();
 
     let mut completed_events = client.subscribe(&[EventKind::JobCompleted]).unwrap();
-    let run_handle = client.start().unwrap();
+    let mut run_handle = client.start().unwrap();
     let row = wait_for_state(&client, inserted.job.row.id, JobState::Completed).await;
     assert_eq!(row.attempt, 1);
     assert_eq!(row.attempted_by, ["rust-conformance-client"]);
@@ -1522,7 +1522,7 @@ async fn migrates_inserts_and_works_a_job() {
     let mut interrupted_events = interrupt_client
         .subscribe(&[EventKind::JobInterrupted])
         .unwrap();
-    let interrupt_handle = interrupt_client.start().unwrap();
+    let mut interrupt_handle = interrupt_client.start().unwrap();
     wait_for_state(&interrupt_client, interrupted.job.row.id, JobState::Running).await;
     interrupt_handle.shutdown_now().await.unwrap();
     let interrupted_row = interrupt_client
@@ -1746,7 +1746,7 @@ async fn migrates_inserts_and_works_a_job() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    let maintenance_handle = maintenance_client.start().unwrap();
+    let mut maintenance_handle = maintenance_client.start().unwrap();
     let periodic = wait_for_job_matching(&maintenance_client, |row| {
         row.metadata.get("river:periodic_job_id") == Some(&serde_json::json!("rust-periodic"))
     })
@@ -1854,7 +1854,7 @@ async fn migrates_inserts_and_works_a_job() {
     .queue("cleanup_active", QueueConfig::new(1))
     .build()
     .unwrap();
-    let cleanup_handle = cleanup_client.start().unwrap();
+    let mut cleanup_handle = cleanup_client.start().unwrap();
     let cleanup_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let old_job_count: i64 =
@@ -1982,7 +1982,7 @@ async fn rescuer_honors_worker_timeout_and_retry_overrides() {
     .workers(workers)
     .build()
     .unwrap();
-    let handle = client.start().unwrap();
+    let mut handle = client.start().unwrap();
 
     let default_timeout = wait_for_state(&client, default_timeout_id, JobState::Discarded).await;
     assert_eq!(default_timeout.metadata["river:rescue_count"], 1);
@@ -2090,7 +2090,7 @@ async fn resumable_cursor_and_transactional_checkpoints() {
             .unwrap();
         job_ids.insert(mode, inserted.job.row.id);
     }
-    let handle = client.start().unwrap();
+    let mut handle = client.start().unwrap();
 
     let first_failure = wait_for_state(&client, job_ids["cursor_retry"], JobState::Retryable).await;
     assert_eq!(first_failure.metadata["river:resumable_step"], "validate");

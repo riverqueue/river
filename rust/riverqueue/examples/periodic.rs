@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         ))
         .build()?;
     let mut completed = client.subscribe(&[EventKind::JobCompleted])?;
-    let run = client.start()?;
+    let mut run = client.start()?;
 
     // Wait for the run-on-start job, then stop.
     loop {

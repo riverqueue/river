@@ -56,7 +56,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .queue("default", QueueConfig::new(4))
         .build()?;
     let mut completed = client.subscribe(&[EventKind::JobCompleted])?;
-    let run = client.start()?;
+    let mut run = client.start()?;
 
     let inserted = client
         .insert(ResizeImage {

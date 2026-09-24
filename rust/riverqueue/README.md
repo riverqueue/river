@@ -46,7 +46,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .workers(workers)
         .queue("default", QueueConfig::new(10))
         .build()?;
-    let run = client.start()?;
+    // Work jobs until Ctrl-C, then stop fetching and let running jobs finish.
+    let mut run = client.start_with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })?;
 
     client
         .insert(SendEmail {
@@ -54,15 +57,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .await?;
 
-    run.shutdown().await?;
+    run.wait().await?;
     Ok(())
 }
 ```
 
 Run River's migrations (with `riverqueue-migrate` or `riverqueue migrate-up`) before starting a producer or
 worker. `Client::start` must run inside a Tokio runtime. Keep its `RunHandle`
-and await `shutdown`, `shutdown_now`, or `wait`; dropping it requests immediate
-cancellation, while `detach` explicitly leaves the runtime unsupervised.
+and await `wait`, `shutdown` (soft stop), or `shutdown_now` (cancel running
+jobs); these take `&mut self` and are cancel safe. `RunHandle::stopper` returns
+a cloneable `Stopper` for stopping the client from another task, such as a
+signal handler. Dropping the handle requests a hard stop, while `detach`
+explicitly leaves the client running unsupervised.
 
 ## Inserting jobs
 

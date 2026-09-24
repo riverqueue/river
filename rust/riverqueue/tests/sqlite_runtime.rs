@@ -1767,7 +1767,7 @@ async fn sqlite_fetches_and_discards_unregistered_kinds() {
         )
         .build()
         .unwrap();
-    let run = worker.start().unwrap();
+    let mut run = worker.start().unwrap();
 
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {

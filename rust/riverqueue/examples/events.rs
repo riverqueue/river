@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .build()?;
     // Subscribe before starting so no event is missed.
     let mut events = client.subscribe(&[EventKind::JobCompleted, EventKind::JobFailed])?;
-    let run = client.start()?;
+    let mut run = client.start()?;
 
     let small = client.insert(ChargeCard { amount_cents: 500 }).await?;
     let large = client
