@@ -1253,6 +1253,50 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.Equal(t, job.ID, listRes.Jobs[0].ID)
 	})
 
+	t.Run("LeaderElectionDisabled", func(t *testing.T) {
+		t.Parallel()
+
+		for _, testCase := range []struct {
+			name     string
+			pollOnly bool
+		}{
+			{name: "Default"},
+			{name: "PollOnly", pollOnly: true},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				t.Parallel()
+
+				config, bundle := setupConfig(t)
+				config.LeaderElectionDisabled = true
+				config.PollOnly = testCase.pollOnly
+
+				client, err := river.NewClient(bundle.driver, config)
+				require.NoError(t, err)
+
+				// Exercise restart as well as initial startup, including shutdown
+				// without a queue maintainer or a leadership lease to resign.
+				for range 2 {
+					subscribeChan := subscribe(t, client)
+					startClient(ctx, t, client)
+
+					insertRes, err := client.Insert(ctx, noOpArgs{}, nil)
+					require.NoError(t, err)
+					event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+					require.Equal(t, river.EventKindJobCompleted, event.Kind)
+					require.Equal(t, insertRes.Job.ID, event.Job.ID)
+
+					_, err = bundle.exec.LeaderGetElectedLeader(ctx, &riverdriver.LeaderGetElectedLeaderParams{Schema: bundle.schema})
+					require.ErrorIs(t, err, rivertype.ErrNotFound)
+
+					stopCtx, cancelFunc := context.WithTimeout(ctx, 5*time.Second)
+					err = client.Stop(stopCtx)
+					cancelFunc()
+					require.NoError(t, err)
+				}
+			})
+		}
+	})
+
 	t.Run("QueueGet", func(t *testing.T) {
 		t.Parallel()
 

@@ -129,7 +129,8 @@ func newPeriodicJobBundle(config *Config, periodicJobEnqueuer *maintenance.Perio
 // Adding or removing periodic jobs has no effect unless this client is elected
 // leader because only the leader enqueues periodic jobs. To make sure that a
 // new periodic job is fully enabled or disabled, it should be added or removed
-// from _every_ active River client across all processes.
+// from every active River client eligible for leader election across all
+// processes.
 func (b *PeriodicJobBundle) Add(periodicJob *PeriodicJob) rivertype.PeriodicJobHandle {
 	handle, err := b.periodicJobEnqueuer.AddSafely(b.mapper.toInternal(periodicJob))
 	if err != nil {
@@ -153,7 +154,8 @@ func (b *PeriodicJobBundle) AddSafely(periodicJob *PeriodicJob) (rivertype.Perio
 // Adding or removing periodic jobs has no effect unless this client is elected
 // leader because only the leader enqueues periodic jobs. To make sure that a
 // new periodic job is fully enabled or disabled, it should be added or removed
-// from _every_ active River client across all processes.
+// from every active River client eligible for leader election across all
+// processes.
 func (b *PeriodicJobBundle) AddMany(periodicJobs []*PeriodicJob) []rivertype.PeriodicJobHandle {
 	handles, err := b.periodicJobEnqueuer.AddManySafely(sliceutil.Map(periodicJobs, b.mapper.toInternal))
 	if err != nil {
@@ -173,7 +175,8 @@ func (b *PeriodicJobBundle) AddManySafely(periodicJobs []*PeriodicJob) ([]rivert
 // Adding or removing periodic jobs has no effect unless this client is elected
 // leader because only the leader enqueues periodic jobs. To make sure that a
 // new periodic job is fully enabled or disabled, it should be added or removed
-// from _every_ active River client across all processes.
+// from every active River client eligible for leader election across all
+// processes.
 func (b *PeriodicJobBundle) Clear() {
 	b.periodicJobEnqueuer.Clear()
 }
@@ -186,7 +189,8 @@ func (b *PeriodicJobBundle) Clear() {
 // Adding or removing periodic jobs has no effect unless this client is elected
 // leader because only the leader enqueues periodic jobs. To make sure that a
 // new periodic job is fully enabled or disabled, it should be added or removed
-// from _every_ active River client across all processes.
+// from every active River client eligible for leader election across all
+// processes.
 func (b *PeriodicJobBundle) Remove(periodicJobHandle rivertype.PeriodicJobHandle) {
 	b.periodicJobEnqueuer.Remove(periodicJobHandle)
 }
@@ -196,7 +200,8 @@ func (b *PeriodicJobBundle) Remove(periodicJobHandle rivertype.PeriodicJobHandle
 // Adding or removing periodic jobs has no effect unless this client is elected
 // leader because only the leader enqueues periodic jobs. To make sure that a
 // new periodic job is fully enabled or disabled, it should be added or removed
-// from _every_ active River client across all processes.
+// from every active River client eligible for leader election across all
+// processes.
 //
 // Has no effect if no jobs with the given ID is configured.
 //
@@ -214,7 +219,8 @@ func (b *PeriodicJobBundle) RemoveByID(id string) bool {
 // Adding or removing periodic jobs has no effect unless this client is elected
 // leader because only the leader enqueues periodic jobs. To make sure that a
 // new periodic job is fully enabled or disabled, it should be added or removed
-// from _every_ active River client across all processes.
+// from every active River client eligible for leader election across all
+// processes.
 func (b *PeriodicJobBundle) RemoveMany(periodicJobHandles []rivertype.PeriodicJobHandle) {
 	b.periodicJobEnqueuer.RemoveMany(periodicJobHandles)
 }
@@ -225,7 +231,8 @@ func (b *PeriodicJobBundle) RemoveMany(periodicJobHandles []rivertype.PeriodicJo
 // Adding or removing periodic jobs has no effect unless this client is elected
 // leader because only the leader enqueues periodic jobs. To make sure that a
 // new periodic job is fully enabled or disabled, it should be added or removed
-// from _every_ active River client across all processes.
+// from every active River client eligible for leader election across all
+// processes.
 //
 // Has no effect if no jobs with the given IDs are configured.
 func (b *PeriodicJobBundle) RemoveManyByID(ids []string) {

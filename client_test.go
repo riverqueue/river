@@ -2397,6 +2397,100 @@ func (w *workerWithMiddleware[T]) Work(ctx context.Context, job *Job[T]) error {
 	return w.workFunc(ctx, job)
 }
 
+func Test_Client_LeaderElectionDisabled(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		driver *riverpgxv5.Driver
+		schema string
+	}
+
+	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+		t.Helper()
+
+		driver := riverpgxv5.New(riversharedtest.DBPool(ctx, t))
+		schema := riverdbtest.TestSchema(ctx, t, driver, nil)
+		config := newTestConfig(t, schema)
+		config.LeaderElectionDisabled = true
+
+		client, err := NewClient(driver, config)
+		require.NoError(t, err)
+
+		return client, &testBundle{driver: driver, schema: schema}
+	}
+
+	t.Run("PeriodicJobsPanic", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		require.PanicsWithValue(t, "cannot modify periodic jobs when LeaderElectionDisabled is true", func() {
+			client.PeriodicJobs()
+		})
+	})
+
+	t.Run("SkipsLeadershipServices", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		require.Nil(t, client.elector)
+		require.Nil(t, client.periodicJobs)
+		require.Nil(t, client.queueMaintainer)
+		require.Nil(t, client.queueMaintainerLeader)
+		require.NotNil(t, client.completer)
+		require.NotNil(t, client.notifier)
+		require.NotNil(t, client.subscriptionManager)
+	})
+
+	t.Run("StaysIneligibleAfterLeaderStops", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		leaderConfig := newTestConfig(t, bundle.schema)
+		leaderConfig.Queues = map[string]QueueConfig{"leader": {MaxWorkers: 1}}
+		leaderConfig.PeriodicJobs = []*PeriodicJob{
+			NewPeriodicJob(NeverSchedule(), func() (JobArgs, *InsertOpts) {
+				return noOpArgs{}, nil
+			}, &PeriodicJobOpts{RunOnStart: true}),
+		}
+		leader, err := NewClient(bundle.driver, leaderConfig)
+		require.NoError(t, err)
+		leader.testSignals.Init(t)
+		startClient(ctx, t, leader)
+		leader.testSignals.queueMaintainerLeader.ElectedLeader.WaitOrTimeout()
+
+		// The leader enqueues a periodic job on the default queue, which only
+		// the client with election disabled consumes.
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, []string{client.ID()}, event.Job.AttemptedBy)
+
+		getLeaderParams := &riverdriver.LeaderGetElectedLeaderParams{Schema: bundle.schema}
+		elected, err := bundle.driver.GetExecutor().LeaderGetElectedLeader(ctx, getLeaderParams)
+		require.NoError(t, err)
+		require.Equal(t, leader.ID(), elected.LeaderID)
+
+		stopCtx, cancelFunc := context.WithTimeout(ctx, 5*time.Second)
+		defer cancelFunc()
+		require.NoError(t, leader.Stop(stopCtx))
+
+		insertRes, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+		event = riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+
+		_, err = bundle.driver.GetExecutor().LeaderGetElectedLeader(ctx, getLeaderParams)
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+	})
+}
+
 func Test_Client_Stop_Common(t *testing.T) {
 	t.Parallel()
 
@@ -8457,6 +8551,7 @@ func Test_NewClient_Defaults(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Zero(t, client.config.AdvisoryLockPrefix)
+	require.False(t, client.config.LeaderElectionDisabled)
 
 	jobCleaner := maintenance.GetService[*maintenance.JobCleaner](client.queueMaintainer)
 	require.Equal(t, riversharedmaintenance.CancelledJobRetentionPeriodDefault, jobCleaner.Config.CancelledJobRetentionPeriod)
@@ -8924,6 +9019,18 @@ func Test_NewClient_Validations(t *testing.T) {
 			configFunc: func(config *Config) {
 				config.JobTimeout = 7 * 24 * time.Hour
 			},
+		},
+		{
+			name: "LeaderElectionDisabled rejects periodic jobs",
+			configFunc: func(config *Config) {
+				config.LeaderElectionDisabled = true
+				config.PeriodicJobs = []*PeriodicJob{
+					NewPeriodicJob(PeriodicInterval(time.Minute), func() (JobArgs, *InsertOpts) {
+						return noOpArgs{}, nil
+					}, nil),
+				}
+			},
+			wantErr: errors.New("PeriodicJobs must be empty when LeaderElectionDisabled is true"),
 		},
 		{
 			name: "MaxAttempts cannot be less than zero",
