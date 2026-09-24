@@ -29,11 +29,8 @@ type benchmarkGate struct {
 func TestPerformanceGate(t *testing.T) { //nolint:paralleltest // Owns the shared PostgreSQL database.
 	// This opt-in release gate owns the shared conformance database for the
 	// duration of all three same-host comparison runs.
-	if os.Getenv("RIVER_CONFORMANCE_PERFORMANCE") != "1" {
-		t.Skip("RIVER_CONFORMANCE_PERFORMANCE=1 is required")
-	}
-	databaseURL := os.Getenv("RIVER_CONFORMANCE_DATABASE_URL")
-	require.NotEmpty(t, databaseURL)
+	requireOptIn(t, "RIVER_CONFORMANCE_PERFORMANCE")
+	databaseURL := requireEnv(t, "RIVER_CONFORMANCE_DATABASE_URL")
 	scenarios := newScenarioTracker(t, scenarioOwnerPerformance)
 	jobs := 200
 	if value := os.Getenv("RIVER_CONFORMANCE_PERFORMANCE_JOBS"); value != "" {
@@ -44,7 +41,7 @@ func TestPerformanceGate(t *testing.T) { //nolint:paralleltest // Owns the share
 	require.GreaterOrEqual(t, jobs, 20)
 
 	root := repoRoot(t)
-	goAdapter := startAdapter(t, root, databaseURL, "go-performance", "go", "run", "./internal/cmd/riverconformanceadapter")
+	goAdapter := startReferenceAdapter(t, root, databaseURL, "go-performance")
 	candidateSpec := conformanceCandidateSpec(t, root, true)
 	candidateAdapter := startAdapterCommand(t, root, databaseURL, candidateSpec.Implementation+"-performance", candidateSpec.Command)
 	goAdapter.call(t, "migrate", map[string]any{}, nil)
@@ -94,19 +91,14 @@ func benchmarkGateForMode(mode, implementation string) benchmarkGate {
 func TestMixedSoak(t *testing.T) { //nolint:paralleltest // Owns the shared PostgreSQL database.
 	// This opt-in soak owns the shared conformance database. CI sets 10m,
 	// release candidates use 1h, and the scheduled job uses 6h.
-	durationString := os.Getenv("RIVER_CONFORMANCE_SOAK_DURATION")
-	if durationString == "" {
-		t.Skip("RIVER_CONFORMANCE_SOAK_DURATION is required")
-	}
-	duration, err := time.ParseDuration(durationString)
+	duration, err := time.ParseDuration(requireEnv(t, "RIVER_CONFORMANCE_SOAK_DURATION"))
 	require.NoError(t, err)
 	require.Positive(t, duration)
-	databaseURL := os.Getenv("RIVER_CONFORMANCE_DATABASE_URL")
-	require.NotEmpty(t, databaseURL)
+	databaseURL := requireEnv(t, "RIVER_CONFORMANCE_DATABASE_URL")
 	scenarios := newScenarioTracker(t, scenarioOwnerSoak)
 
 	root := repoRoot(t)
-	goAdapter := startAdapter(t, root, databaseURL, "go-soak", "go", "run", "./internal/cmd/riverconformanceadapter")
+	goAdapter := startReferenceAdapter(t, root, databaseURL, "go-soak")
 	candidateSpec := conformanceCandidateSpec(t, root, false)
 	candidateAdapter := startAdapterCommand(t, root, databaseURL, candidateSpec.Implementation+"-soak", candidateSpec.Command)
 	goAdapter.call(t, "migrate", map[string]any{}, nil)

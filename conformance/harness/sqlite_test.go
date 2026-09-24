@@ -15,10 +15,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//nolint:paralleltest,tparallel // Scenarios share one database and adapter processes, so they run sequentially.
 func TestMixedSQLiteConformance(t *testing.T) {
 	t.Parallel()
-	scenarios := newScenarioTracker(t, scenarioOwnerSQLiteStorage)
 
+	scenarios := newScenarioTracker(t, scenarioOwnerSQLiteStorage)
 	repositoryRoot := repoRoot(t)
 	databaseURL := filepath.Join(t.TempDir(), "river-conformance.sqlite")
 	goAdapter := startAdapterForBackend(
@@ -28,55 +29,68 @@ func TestMixedSQLiteConformance(t *testing.T) {
 	candidateAdapter := startAdapterCommandForBackend(
 		t, repositoryRoot, databaseURL, "sqlite", candidateSpec.Implementation, candidateSpec.Command,
 	)
+	scenarios.attach(goAdapter, candidateAdapter)
+	pair := mixedPair{candidate: candidateAdapter, candidateSpec: candidateSpec, reference: goAdapter}
 
-	var profile adapterProfile
-	profileBytes, err := os.ReadFile(filepath.Join(
-		repositoryRoot, "conformance/adapter/profiles/sqlite.json",
-	))
-	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal(profileBytes, &profile))
-	for _, testCase := range []struct {
-		adapter        *adapter
-		implementation string
-	}{
-		{adapter: goAdapter, implementation: "go"},
-		{adapter: candidateAdapter, implementation: candidateSpec.Implementation},
-	} {
-		var handshake adapterHandshake
-		testCase.adapter.call(t, "handshake", map[string]any{}, &handshake)
-		require.Equal(t, testCase.implementation, handshake.Implementation)
-		require.Equal(t, profile.Backend, handshake.Backend)
-		require.Equal(t, profile.Name, handshake.Profile)
-		require.Equal(t, profile.ProtocolRevision, handshake.ProtocolRevision)
-		require.Equal(t, profile.Capabilities, handshake.Capabilities)
-		require.Equal(t, profile.Methods, handshake.Methods)
-		require.Equal(t, map[string]int{"main": 7}, handshake.MigrationLines)
-	}
-	scenarios.pass("sqlite_profile_handshake")
+	t.Run("sqlite_profile_handshake", func(t *testing.T) {
+		defer scenarios.record(t)
 
-	verifyDeterministicControls(t, repositoryRoot, goAdapter, candidateAdapter)
-	verifyUniqueKeyGoldens(t, repositoryRoot, goAdapter, candidateAdapter)
-	scenarios.pass("sqlite_deterministic_retry_unique")
-	verifySQLiteMigrations(t, goAdapter, candidateAdapter)
-	scenarios.pass("sqlite_migration_cross_language")
-	verifySQLiteCrossLanguageInsertion(t, goAdapter, candidateAdapter)
-	scenarios.pass("sqlite_insert_get_unique_cross_language")
-	verifyBatchInsertion(t, goAdapter, candidateAdapter)
-	scenarios.pass("sqlite_batch_atomicity")
-	verifyDifferentialCRUD(t, goAdapter, candidateAdapter, false)
-	scenarios.pass("sqlite_job_crud")
-	verifyUnsafeInt64JobIDs(t, goAdapter, candidateAdapter)
-	scenarios.pass("sqlite_unsafe_int64_job_ids_rpc_list_cursors")
-	verifySQLiteTransactions(t, goAdapter, candidateAdapter)
-	scenarios.pass("sqlite_transactions")
-	verifySQLiteTimestampEncoding(t, goAdapter, candidateAdapter)
-	scenarios.pass("sqlite_timestamp_rounding_ordering")
+		verifyProfileHandshakes(t, repositoryRoot, "conformance/adapter/profiles/sqlite.json", candidateSpec, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_deterministic_retry_unique", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyDeterministicControls(t, repositoryRoot, goAdapter, candidateAdapter)
+		verifyUniqueKeyGoldens(t, repositoryRoot, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_migration_cross_language", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLiteMigrations(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_insert_get_unique_cross_language", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLiteCrossLanguageInsertion(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_batch_atomicity", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyBatchInsertion(t, goAdapter, candidateAdapter)
+		pair.eachDirection(func(actor, observer *adapter) {
+			verifyTransactionalBatchInsertion(t, actor, observer, false)
+			verifyTransactionalBatchInsertion(t, actor, observer, true)
+		})
+	})
+	t.Run("sqlite_job_crud", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyDifferentialJobCRUD(t, goAdapter, candidateAdapter)
+		verifyBulkDeleteSafety(t, goAdapter, candidateAdapter)
+		verifyDifferentialListCursors(t, goAdapter, candidateAdapter, false)
+	})
+	t.Run("sqlite_unsafe_int64_job_ids_rpc_list_cursors", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyUnsafeInt64JobIDs(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_transactions", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLiteTransactions(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_timestamp_rounding_ordering", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLiteTimestampEncoding(t, goAdapter, candidateAdapter)
+	})
 }
 
+//nolint:paralleltest,tparallel // Scenarios share one database and adapter processes, so they run sequentially.
 func TestMixedSQLiteRuntimeConformance(t *testing.T) {
 	t.Parallel()
-	scenarios := newScenarioTracker(t, scenarioOwnerSQLiteRuntime)
 
+	scenarios := newScenarioTracker(t, scenarioOwnerSQLiteRuntime)
 	repositoryRoot := repoRoot(t)
 	databaseURL := filepath.Join(t.TempDir(), "river-conformance-runtime.sqlite")
 	const profileName = "sqlite-runtime-v1"
@@ -89,13 +103,119 @@ func TestMixedSQLiteRuntimeConformance(t *testing.T) {
 		t, repositoryRoot, databaseURL, "sqlite", profileName,
 		candidateSpec.Implementation, candidateSpec.Command,
 	)
+	scenarios.attach(goAdapter, candidateAdapter)
+	pair := mixedPair{candidate: candidateAdapter, candidateSpec: candidateSpec, reference: goAdapter}
+
+	t.Run("sqlite_runtime_profile_handshake", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyProfileHandshakes(t, repositoryRoot, "conformance/adapter/profiles/sqlite-runtime.json", candidateSpec, goAdapter, candidateAdapter)
+	})
+	goAdapter.call(t, "migrate", map[string]any{}, nil)
+	t.Run("sqlite_runtime_cross_language_work", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLiteCrossLanguageWork(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_external_terminal_completion_race", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyExternalTerminalCompletionRace(t, goAdapter, candidateAdapter)
+		verifyExternalTerminalCompletionRace(t, candidateAdapter, goAdapter)
+	})
+	t.Run("sqlite_runtime_unknown_kind_error", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyUnknownKind(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_attempted_by_ordering", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLiteAttemptedByHistory(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_competing_workers", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLiteCompetingWorkers(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_queue_crud_reconfigure_pause", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLiteQueues(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_notification_wakeups", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(controller, worker *adapter) {
+			verifyInsertNotificationWakeup(t, controller, worker)
+			verifyPauseResumeNotification(t, controller, worker)
+		})
+	})
+	t.Run("sqlite_runtime_remote_cancellation", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(controller, worker *adapter) {
+			verifyRemoteCancelNotification(t, controller, worker)
+			verifyCooperativeRemoteCancellation(t, controller, worker)
+		})
+	})
+	t.Run("sqlite_runtime_remote_queue_subscription_events", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyRemoteQueueSubscriptionEvents(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_transactional_notification", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLiteTransactionalNotification(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_leadership_failover", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLiteLeadershipFailover(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_periodic_scheduler", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLitePeriodicScheduler(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_extensions_resumable_subscriptions", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachAdapter(func(current *adapter) { verifySQLiteAdvancedRuntime(t, current) })
+	})
+	t.Run("sqlite_runtime_resumable_validation", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachAdapter(func(current *adapter) { verifyResumableValidation(t, current) })
+	})
+	t.Run("sqlite_runtime_resumable_cross_engine_cursor", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyResumableInteroperability(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_poll_only_recovery", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLitePollOnly(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_lifecycle_shutdown", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLiteLifecycle(t, goAdapter, candidateAdapter)
+	})
+}
+
+// verifyProfileHandshakes checks that the reference and candidate advertise
+// exactly the named profile's capabilities and methods.
+func verifyProfileHandshakes(t *testing.T, repositoryRoot, profilePath string, candidateSpec adapterSpec, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
 
 	var profile adapterProfile
-	profileBytes, err := os.ReadFile(filepath.Join(
-		repositoryRoot, "conformance/adapter/profiles/sqlite-runtime.json",
-	))
+	profileBytes, err := os.ReadFile(filepath.Join(repositoryRoot, profilePath))
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(profileBytes, &profile))
+	manifest := readManifest(t, repositoryRoot)
 	for _, testCase := range []struct {
 		adapter        *adapter
 		implementation string
@@ -106,54 +226,14 @@ func TestMixedSQLiteRuntimeConformance(t *testing.T) {
 		var handshake adapterHandshake
 		testCase.adapter.call(t, "handshake", map[string]any{}, &handshake)
 		require.Equal(t, testCase.implementation, handshake.Implementation)
+		require.Equal(t, manifest.Implementations[testCase.implementation].Version, handshake.ImplementationVersion)
 		require.Equal(t, profile.Backend, handshake.Backend)
 		require.Equal(t, profile.Name, handshake.Profile)
 		require.Equal(t, profile.ProtocolRevision, handshake.ProtocolRevision)
 		require.Equal(t, profile.Capabilities, handshake.Capabilities)
 		require.Equal(t, profile.Methods, handshake.Methods)
-		require.Equal(t, map[string]int{"main": 7}, handshake.MigrationLines)
+		require.Equal(t, map[string]int{manifest.Migration.Line: manifest.Migration.Latest}, handshake.MigrationLines)
 	}
-	scenarios.pass("sqlite_runtime_profile_handshake")
-
-	goAdapter.call(t, "migrate", map[string]any{}, nil)
-	verifySQLiteCrossLanguageWork(t, goAdapter, candidateAdapter)
-	scenarios.pass("sqlite_runtime_cross_language_work")
-	verifyExternalTerminalCompletionRace(t, goAdapter, candidateAdapter)
-	verifyExternalTerminalCompletionRace(t, candidateAdapter, goAdapter)
-	scenarios.pass("sqlite_runtime_external_terminal_completion_race")
-	verifySQLiteUnknownKind(t, goAdapter, candidateAdapter)
-	scenarios.pass("sqlite_runtime_unknown_kind_error")
-	verifySQLiteAttemptedByHistory(t, goAdapter, candidateAdapter)
-	scenarios.pass("sqlite_runtime_attempted_by_ordering")
-	verifySQLiteCompetingWorkers(t, goAdapter, candidateAdapter)
-	scenarios.pass("sqlite_runtime_competing_workers")
-	verifySQLiteQueues(t, goAdapter, candidateAdapter)
-	scenarios.pass("sqlite_runtime_queue_crud_reconfigure_pause")
-	verifyNotificationWakeups(t, goAdapter, candidateAdapter)
-	scenarios.pass(
-		"sqlite_runtime_notification_wakeups",
-		"sqlite_runtime_remote_cancellation",
-	)
-	verifyRemoteQueueSubscriptionEvents(t, goAdapter, candidateAdapter)
-	scenarios.pass("sqlite_runtime_remote_queue_subscription_events")
-	verifySQLiteTransactionalNotification(t, goAdapter, candidateAdapter)
-	scenarios.pass("sqlite_runtime_transactional_notification")
-	verifySQLiteLeadershipFailover(t, goAdapter, candidateAdapter)
-	scenarios.pass("sqlite_runtime_leadership_failover")
-	verifySQLitePeriodicScheduler(t, goAdapter, candidateAdapter)
-	scenarios.pass("sqlite_runtime_periodic_scheduler")
-	for _, adapter := range []*adapter{goAdapter, candidateAdapter} {
-		verifySQLiteAdvancedRuntime(t, adapter)
-	}
-	scenarios.pass("sqlite_runtime_extensions_resumable_subscriptions")
-	verifyResumableValidation(t, goAdapter)
-	verifyResumableValidation(t, candidateAdapter)
-	verifyResumableInteroperability(t, goAdapter, candidateAdapter)
-	scenarios.pass("sqlite_runtime_resumable_cross_engine_cursor", "sqlite_runtime_resumable_validation")
-	verifySQLitePollOnly(t, goAdapter, candidateAdapter)
-	scenarios.pass("sqlite_runtime_poll_only_recovery")
-	verifySQLiteLifecycle(t, goAdapter, candidateAdapter)
-	scenarios.pass("sqlite_runtime_lifecycle_shutdown")
 }
 
 func verifySQLiteCompetingWorkers(t *testing.T, goAdapter, candidateAdapter *adapter) {
@@ -305,7 +385,7 @@ func verifySQLiteCrossLanguageWork(t *testing.T, goAdapter, candidateAdapter *ad
 func verifySQLiteLeadershipFailover(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
-	verifyLeadershipRequestLifecycle(t, goAdapter, candidateAdapter)
+	verifyLeadershipRequestLifecycle(t, nil, goAdapter, candidateAdapter)
 
 	goAdapter.call(t, "reset", map[string]any{}, nil)
 	goAdapter.call(t, "start", map[string]any{
@@ -455,7 +535,8 @@ func verifySQLiteQueues(t *testing.T, goAdapter, candidateAdapter *adapter) {
 		pair.writer.call(t, "queue_list", map[string]any{}, &queues)
 		require.Contains(t, queues.Queues, updated)
 	}
-	verifyTransactionalCRUD(t, goAdapter, candidateAdapter)
+	verifyTransactionalJobCRUD(t, goAdapter, candidateAdapter)
+	verifyTransactionalQueueOperations(t, goAdapter, candidateAdapter)
 	for _, worker := range []*adapter{goAdapter, candidateAdapter} {
 		worker.call(t, "reset", map[string]any{}, nil)
 		worker.call(t, "start", map[string]any{
@@ -475,16 +556,25 @@ func verifySQLiteQueues(t *testing.T, goAdapter, candidateAdapter *adapter) {
 		_ = waitForRuntimeStats(t, worker, func(stats runtimeStats) bool {
 			return slices.Contains(stats.Events, "queue_paused")
 		})
-		var job normalizedJob
+		// A default-queue marker inserted after the paused job proves the
+		// worker kept fetching while the dynamic queue held its job.
+		var job, marker normalizedJob
 		worker.call(t, "insert", map[string]any{
 			"message": "SQLite dynamic queue", "opts": map[string]any{"queue": "dynamic"},
 		}, &job)
-		time.Sleep(100 * time.Millisecond)
+		worker.call(t, "insert", map[string]any{"message": "SQLite default queue marker"}, &marker)
+		worker.call(t, "wait", map[string]any{"id": marker.ID}, &marker)
+		require.Equal(t, "completed", marker.State)
 		worker.call(t, "get", map[string]any{"id": job.ID}, &job)
 		require.Equal(t, "available", job.State)
 		worker.call(t, "queue_resume", map[string]any{"name": "dynamic"}, nil)
+		var queue normalizedQueue
+		worker.call(t, "queue_get", map[string]any{"name": "dynamic"}, &queue)
 		worker.call(t, "wait", map[string]any{"id": job.ID}, &job)
 		require.Equal(t, "completed", job.State)
+		require.NotNil(t, job.AttemptedAt)
+		require.False(t, parseTime(t, *job.AttemptedAt).Before(parseTime(t, queue.UpdatedAt)),
+			"paused dynamic queue job attempted before it resumed")
 		worker.call(t, "queue_remove", map[string]any{"name": "dynamic"}, nil)
 		worker.call(t, "stop", map[string]any{}, nil)
 	}
@@ -519,52 +609,14 @@ func verifySQLiteTransactionalNotification(t *testing.T, goAdapter, candidateAda
 			},
 		}, &inserted)
 		require.Len(t, inserted.Results, 2)
-		// Let any incorrectly early outbox notification propagate. Querying the
-		// running observer while the other adapter holds SQLite's write lock can
-		// starve its one-connection runtime pool; the 60-second poll interval and
-		// prompt post-commit completion below prove commit-bound delivery.
-		time.Sleep(100 * time.Millisecond)
+		// The worker polls once a minute, so prompt completion after commit
+		// proves the committed outbox notification woke it.
 		startedAt := time.Now()
 		pair.controller.call(t, "tx_commit", map[string]any{"handle": handle}, nil)
 		waitForListedJobCount(t, pair.worker, map[string]any{
 			"states": []string{"completed"}, "tags_all": []string{tag},
 		}, 2)
 		require.Less(t, time.Since(startedAt), 5*time.Second)
-		pair.worker.call(t, "stop", map[string]any{}, nil)
-	}
-}
-
-func verifySQLiteUnknownKind(t *testing.T, goAdapter, candidateAdapter *adapter) {
-	t.Helper()
-
-	for _, pair := range []struct {
-		inserter *adapter
-		worker   *adapter
-	}{
-		{inserter: goAdapter, worker: candidateAdapter},
-		{inserter: candidateAdapter, worker: goAdapter},
-	} {
-		pair.inserter.call(t, "reset", map[string]any{}, nil)
-		var unknown normalizedJob
-		pair.inserter.call(t, "raw_insert_no_notify", map[string]any{
-			"kind": "conformance_unregistered", "message": "must fail compatibly",
-			"opts": map[string]any{"max_attempts": 1},
-		}, &unknown)
-		workerID := pair.worker.name + "-sqlite-unknown-kind"
-		pair.worker.call(t, "start", map[string]any{
-			"client_id": workerID, "max_workers": 1,
-		}, nil)
-		pair.worker.call(t, "wait", map[string]any{
-			"id": unknown.ID, "states": []string{"discarded"},
-		}, &unknown)
-		require.Equal(t, "discarded", unknown.State)
-		require.Equal(t, 1, unknown.Attempt)
-		require.Equal(t, []string{workerID}, unknown.AttemptedBy)
-		require.Len(t, unknown.Errors, 1)
-		require.Equal(t,
-			"job kind is not registered in the client's Workers bundle: conformance_unregistered",
-			unknown.Errors[0].Error,
-		)
 		pair.worker.call(t, "stop", map[string]any{}, nil)
 	}
 }

@@ -20,13 +20,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// adapter is one running conformance adapter process. Requests are strictly
+// sequential within a process: a request is written, then its response is
+// read before the next request is sent.
 type adapter struct {
+	// applicationName is the PostgreSQL application_name the adapter uses,
+	// when known. Harness-side observations such as lock waits use it.
+	applicationName   string
 	command           *exec.Cmd
 	expectedExitError bool
 	input             io.WriteCloser
 	name              string
 	nextID            int
+	openHandles       map[string]bool
 	output            *bufio.Scanner
+	running           bool
 	stderr            lockedBuffer
 }
 
@@ -130,25 +138,12 @@ type normalizedQueue struct {
 	UpdatedAt string         `json:"updated_at"`
 }
 
+// call performs a request that must succeed and decodes its result.
 func (adapter *adapter) call(t *testing.T, method string, params any, result any) {
 	t.Helper()
 
-	adapter.nextID++
-	request := map[string]any{
-		"id":      adapter.nextID,
-		"jsonrpc": "2.0",
-		"method":  method,
-		"params":  params,
-	}
-	encoded, err := json.Marshal(request)
-	require.NoError(t, err)
-	_, err = adapter.input.Write(append(encoded, '\n'))
+	response, err := adapter.roundTrip(method, params)
 	require.NoErrorf(t, err, "%s adapter stderr: %s", adapter.name, adapter.stderr.String())
-	require.Truef(t, adapter.output.Scan(), "%s adapter stopped: %s", adapter.name, adapter.stderr.String())
-
-	var response rpcResponse
-	require.NoError(t, json.Unmarshal(adapter.output.Bytes(), &response))
-	require.Equal(t, adapter.nextID, response.ID)
 	if response.Error != nil {
 		t.Fatalf("%s adapter %s failed (%d): %s\nstderr: %s", adapter.name, method, response.Error.Code, response.Error.Message, adapter.stderr.String())
 	}
@@ -160,31 +155,9 @@ func (adapter *adapter) call(t *testing.T, method string, params any, result any
 // callWithoutTest performs a serialized adapter call without invoking testing.T
 // methods, so a deliberately blocking request can run in a helper goroutine.
 func (adapter *adapter) callWithoutTest(method string, params any, result any) error {
-	adapter.nextID++
-	requestID := adapter.nextID
-	request := map[string]any{
-		"id":      requestID,
-		"jsonrpc": "2.0",
-		"method":  method,
-		"params":  params,
-	}
-	encoded, err := json.Marshal(request)
+	response, err := adapter.roundTrip(method, params)
 	if err != nil {
 		return err
-	}
-	if _, err := adapter.input.Write(append(encoded, '\n')); err != nil {
-		return fmt.Errorf("write %s adapter request: %w", adapter.name, err)
-	}
-	if !adapter.output.Scan() {
-		return fmt.Errorf("%s adapter stopped: %s", adapter.name, adapter.stderr.String())
-	}
-
-	var response rpcResponse
-	if err := json.Unmarshal(adapter.output.Bytes(), &response); err != nil {
-		return err
-	}
-	if response.ID != requestID {
-		return fmt.Errorf("%s adapter response ID %d, expected %d", adapter.name, response.ID, requestID)
 	}
 	if response.Error != nil {
 		return fmt.Errorf("%s adapter %s failed (%d): %s", adapter.name, method, response.Error.Code, response.Error.Message)
@@ -202,6 +175,8 @@ func (adapter *adapter) kill(t *testing.T) {
 
 	adapter.expectedExitError = true
 	require.NoError(t, adapter.command.Process.Kill())
+	adapter.running = false
+	adapter.openHandles = nil
 }
 
 func (adapter *adapter) callError(t *testing.T, method string, params any) string {
@@ -215,23 +190,92 @@ func (adapter *adapter) callError(t *testing.T, method string, params any) strin
 func (adapter *adapter) callResponse(t *testing.T, method string, params any) rpcResponse {
 	t.Helper()
 
+	response, err := adapter.roundTrip(method, params)
+	require.NoErrorf(t, err, "%s adapter stderr: %s", adapter.name, adapter.stderr.String())
+	return response
+}
+
+// recover returns an adapter to a state where the next scenario can reset
+// the database after an earlier scenario failed midway: it stops a running
+// client and rolls back transactions the harness opened. Errors are ignored
+// because the process may already be unusable, in which case the following
+// scenario reports the failure.
+func (adapter *adapter) recover() {
+	if adapter.expectedExitError {
+		return
+	}
+	if adapter.running {
+		_, _ = adapter.roundTrip("stop", map[string]any{"cancel": true})
+	}
+	handles := mapKeys(adapter.openHandles)
+	slices.Sort(handles)
+	for _, handle := range handles {
+		_, _ = adapter.roundTrip("tx_rollback", map[string]any{"handle": handle})
+	}
+}
+
+// roundTrip writes one request and reads its response. It also tracks which
+// runtime client and transaction handles the adapter holds so recover can
+// release them.
+func (adapter *adapter) roundTrip(method string, params any) (rpcResponse, error) {
 	adapter.nextID++
-	request := map[string]any{
-		"id":      adapter.nextID,
+	requestID := adapter.nextID
+	encoded, err := json.Marshal(map[string]any{
+		"id":      requestID,
 		"jsonrpc": "2.0",
 		"method":  method,
 		"params":  params,
+	})
+	if err != nil {
+		return rpcResponse{}, err
 	}
-	encoded, err := json.Marshal(request)
-	require.NoError(t, err)
-	_, err = adapter.input.Write(append(encoded, '\n'))
-	require.NoErrorf(t, err, "%s adapter stderr: %s", adapter.name, adapter.stderr.String())
-	require.Truef(t, adapter.output.Scan(), "%s adapter stopped: %s", adapter.name, adapter.stderr.String())
+	if _, err := adapter.input.Write(append(encoded, '\n')); err != nil {
+		return rpcResponse{}, fmt.Errorf("write %s adapter request: %w", adapter.name, err)
+	}
+	if !adapter.output.Scan() {
+		return rpcResponse{}, fmt.Errorf("%s adapter stopped: %s", adapter.name, adapter.stderr.String())
+	}
 
 	var response rpcResponse
-	require.NoError(t, json.Unmarshal(adapter.output.Bytes(), &response))
-	require.Equal(t, adapter.nextID, response.ID)
-	return response
+	if err := json.Unmarshal(adapter.output.Bytes(), &response); err != nil {
+		return rpcResponse{}, fmt.Errorf("decode %s adapter response: %w", adapter.name, err)
+	}
+	if response.ID != requestID {
+		return rpcResponse{}, fmt.Errorf("%s adapter response ID %d, expected %d", adapter.name, response.ID, requestID)
+	}
+	// Commit and rollback consume a handle even when they report an error.
+	if response.Error == nil || method == "tx_commit" || method == "tx_rollback" {
+		adapter.trackState(method, params)
+	}
+	return response, nil
+}
+
+func (adapter *adapter) trackState(method string, params any) {
+	switch method {
+	case "start":
+		adapter.running = true
+	case "stop":
+		adapter.running = false
+	case "tx_begin", "tx_commit", "tx_rollback":
+		encoded, err := json.Marshal(params)
+		if err != nil {
+			return
+		}
+		var decoded struct {
+			Handle string `json:"handle"`
+		}
+		if err := json.Unmarshal(encoded, &decoded); err != nil || decoded.Handle == "" {
+			return
+		}
+		if adapter.openHandles == nil {
+			adapter.openHandles = make(map[string]bool)
+		}
+		if method == "tx_begin" {
+			adapter.openHandles[decoded.Handle] = true
+		} else {
+			delete(adapter.openHandles, decoded.Handle)
+		}
+	}
 }
 
 func repoRoot(t *testing.T) string {
@@ -280,6 +324,25 @@ func conformanceCandidateSpec(t *testing.T, root string, release bool) adapterSp
 	return spec
 }
 
+// startCandidateAdapter starts a candidate adapter from its descriptor on
+// PostgreSQL and records its application name for harness observations.
+func startCandidateAdapter(t *testing.T, root, databaseURL, name string, spec adapterSpec, command []string) *adapter {
+	t.Helper()
+
+	started := startAdapterCommand(t, root, databaseURL, name, command)
+	started.applicationName = spec.ApplicationName
+	return started
+}
+
+// startReferenceAdapter starts the Go reference adapter on PostgreSQL.
+func startReferenceAdapter(t *testing.T, root, databaseURL, name string) *adapter {
+	t.Helper()
+
+	started := startAdapter(t, root, databaseURL, name, "go", "run", "./internal/cmd/riverconformanceadapter")
+	started.applicationName = referenceApplicationName
+	return started
+}
+
 func startAdapterCommand(t *testing.T, root, databaseURL, name string, command []string) *adapter {
 	t.Helper()
 
@@ -310,7 +373,7 @@ func startAdapterCommandForProfile(
 	)
 }
 
-func startAdapter(t *testing.T, root, databaseURL, name, executable string, args ...string) *adapter { //nolint:unparam // Mirrors the backend/profile adapter entry points.
+func startAdapter(t *testing.T, root, databaseURL, name, executable string, args ...string) *adapter {
 	t.Helper()
 
 	return startAdapterForBackend(t, root, databaseURL, "postgres", name, executable, args...)

@@ -13,9 +13,16 @@ process-adapter contract live alongside them.
 
 `scenarios/core.json`, `scenarios/sqlite-storage.json`, and
 `scenarios/sqlite-runtime.json` are checked against an executable Go registry.
-Every ID has exactly one owning harness test, and an owning test can only pass
-after it reports its complete registered set. Missing, stale, duplicate,
-mis-tiered, or merely declarative entries therefore fail validation.
+Every ID has exactly one owning harness test, which runs the scenario as its
+own subtest named after the ID. An ID is credited only when that subtest's
+own assertions complete, and an owner fails unless every ID it owns ran.
+Missing, stale, duplicate, mis-tiered, or merely declarative entries therefore
+fail validation.
+
+Database-backed and opt-in tiers skip locally when their environment is
+missing. CI sets `RIVER_CONFORMANCE_REQUIRED=1`, which turns every such skip
+into a failure, rejects `-run` patterns that exclude registered scenarios, and
+fails a run in which no conformance test executed.
 
 An implementation may claim compatibility only when its protocol revision and
 capabilities match this manifest and its implementation-local and mixed adapter

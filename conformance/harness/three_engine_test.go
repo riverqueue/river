@@ -21,25 +21,25 @@ const (
 	threeEnginePeerID      = "peer-three-engine"
 )
 
-func TestThreeEngineConformance(t *testing.T) { //nolint:paralleltest // Owns the shared PostgreSQL database.
+//nolint:paralleltest // Scenarios share one database and adapter processes, so they run sequentially.
+func TestThreeEngineConformance(t *testing.T) {
 	// All three adapters intentionally compete in one externally supplied
 	// disposable database, so this test cannot run in parallel.
-	databaseURL := os.Getenv("RIVER_CONFORMANCE_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("RIVER_CONFORMANCE_DATABASE_URL is required")
-	}
+	databaseURL := requireEnv(t, "RIVER_CONFORMANCE_DATABASE_URL")
+	scenarios := newScenarioTracker(t, scenarioOwnerThreeEngine)
 	root := repoRoot(t)
 	candidateSpec := conformanceCandidateSpec(t, root, false)
 	peerSpec := conformancePeerSpec(t, root, false)
 	requireThreeImplementations(t, candidateSpec, peerSpec)
 
 	adapters := []*adapter{
-		startAdapter(t, root, databaseURL, "go-three-engine", "go", "run", "./internal/cmd/riverconformanceadapter"),
-		startAdapterCommand(t, root, databaseURL, candidateSpec.Implementation+"-three-engine", candidateSpec.Command),
-		startAdapterCommand(t, root, databaseURL, peerSpec.Implementation+"-three-engine", peerSpec.Command),
+		startReferenceAdapter(t, root, databaseURL, "go-three-engine"),
+		startCandidateAdapter(t, root, databaseURL, candidateSpec.Implementation+"-three-engine", candidateSpec, candidateSpec.Command),
+		startCandidateAdapter(t, root, databaseURL, peerSpec.Implementation+"-three-engine", peerSpec, peerSpec.Command),
 	}
+	scenarios.attach(adapters...)
 	specs := []adapterSpec{
-		{ApplicationName: "river-conformance-go", Implementation: "go"},
+		{ApplicationName: referenceApplicationName, Implementation: "go"},
 		candidateSpec,
 		peerSpec,
 	}
@@ -56,96 +56,125 @@ func TestThreeEngineConformance(t *testing.T) { //nolint:paralleltest // Owns th
 		require.Equal(t, specs[index].Implementation, handshake.Implementation)
 		require.Equal(t, "postgres-full-v1", handshake.Profile)
 	}
-
 	goAdapter := adapters[0]
 	goAdapter.call(t, "migrate", map[string]any{}, nil)
-	goAdapter.call(t, "reset", map[string]any{}, nil)
-	for index, current := range adapters {
-		current.call(t, "start", map[string]any{
-			"client_id": clientIDs[index], "max_workers": 1,
-		}, nil)
-	}
+	startAll := func(t *testing.T) {
+		t.Helper()
 
-	jobs := make([]normalizedJob, len(adapters))
-	for index, inserter := range adapters {
-		inserter.call(t, "insert", map[string]any{
-			"behavior": "sleep", "duration_ms": 1_000,
-			"message": fmt.Sprintf("three-engine competition %d", index),
-		}, &jobs[index])
-	}
-	workersSeen := make(map[string]bool)
-	for _, job := range jobs {
-		var running normalizedJob
-		goAdapter.call(t, "wait", map[string]any{
-			"id": job.ID, "states": []string{"running"},
-		}, &running)
-		require.Len(t, running.AttemptedBy, 1)
-		workersSeen[running.AttemptedBy[0]] = true
-	}
-	require.ElementsMatch(t, clientIDs, mapKeys(workersSeen))
-	for _, job := range jobs {
-		var completed normalizedJob
-		goAdapter.call(t, "wait", map[string]any{"id": job.ID}, &completed)
-		require.Equal(t, "completed", completed.State)
-		require.Equal(t, 1, completed.Attempt)
-	}
-
-	firstLeader := waitForLeader(t, goAdapter, "")
-	firstAdapter := adapterByClientID[firstLeader]
-	require.NotNil(t, firstAdapter)
-	firstAdapter.call(t, "stop", map[string]any{}, nil)
-	secondLeader := waitForLeader(t, goAdapter, firstLeader)
-	secondAdapter := adapterByClientID[secondLeader]
-	require.NotNil(t, secondAdapter)
-	secondAdapter.call(t, "stop", map[string]any{}, nil)
-	thirdLeader := waitForLeader(t, goAdapter, secondLeader)
-	require.NotEqual(t, firstLeader, thirdLeader)
-	require.NotEqual(t, secondLeader, thirdLeader)
-	for _, stoppedID := range []string{firstLeader, secondLeader} {
-		adapterByClientID[stoppedID].call(t, "start", map[string]any{
-			"client_id": stoppedID, "max_workers": 1,
-		}, nil)
-	}
-
-	for index, target := range adapters {
-		waitForListener(t, target)
-		var disconnected struct {
-			Count int `json:"count"`
+		goAdapter.call(t, "reset", map[string]any{}, nil)
+		for index, current := range adapters {
+			current.call(t, "start", map[string]any{
+				"client_id": clientIDs[index], "max_workers": 1,
+			}, nil)
 		}
-		goAdapter.call(t, "fault_disconnect_application", map[string]any{
-			"application_name": specs[index].ApplicationName,
-		}, &disconnected)
-		require.Positive(t, disconnected.Count)
-		waitForListener(t, target)
+	}
+	stopAll := func(t *testing.T) {
+		t.Helper()
+
+		for _, current := range adapters {
+			current.call(t, "stop", map[string]any{}, nil)
+		}
 	}
 
-	for index, inserter := range adapters {
-		var inserted, completed normalizedJob
-		inserter.call(t, "insert", map[string]any{
-			"message": fmt.Sprintf("three-engine fault recovery %d", index),
-		}, &inserted)
-		goAdapter.call(t, "wait", map[string]any{"id": inserted.ID}, &completed)
-		require.Equal(t, "completed", completed.State)
-		require.Equal(t, 1, completed.Attempt)
-	}
-	assertThreeEngineConnectionBounds(t, adapters)
-	for _, current := range adapters {
-		current.call(t, "stop", map[string]any{}, nil)
-	}
-	verifyThreeEngineDirectedJavaScriptRust(t, goAdapter, adapterByImplementation)
-	verifyResumableInteroperability(t, adapterByImplementation["javascript"], adapterByImplementation["rust"])
-	verifyThreeEngineProcessKillRescueFailover(t, root, databaseURL, goAdapter, specByImplementation)
+	t.Run("three_engine_competition", func(t *testing.T) {
+		defer scenarios.record(t)
 
-	scenarios := newScenarioTracker(t, scenarioOwnerThreeEngine)
-	scenarios.pass("three_engine_resumable_cursor")
-	scenarios.pass(
-		"three_engine_competition",
-		"three_engine_cross_engine_process_kill_rescue_failover",
-		"three_engine_directed_javascript_rust_work_notification_cancellation",
-		"three_engine_fault_recovery",
-		"three_engine_leader_failover",
-		"three_engine_resource_bound",
-	)
+		startAll(t)
+		jobs := make([]normalizedJob, len(adapters))
+		for index, inserter := range adapters {
+			inserter.call(t, "insert", map[string]any{
+				"behavior": "sleep", "duration_ms": 1_000,
+				"message": fmt.Sprintf("three-engine competition %d", index),
+			}, &jobs[index])
+		}
+		workersSeen := make(map[string]bool)
+		for _, job := range jobs {
+			var running normalizedJob
+			goAdapter.call(t, "wait", map[string]any{
+				"id": job.ID, "states": []string{"running"},
+			}, &running)
+			require.Len(t, running.AttemptedBy, 1)
+			workersSeen[running.AttemptedBy[0]] = true
+		}
+		require.ElementsMatch(t, clientIDs, mapKeys(workersSeen))
+		for _, job := range jobs {
+			var completed normalizedJob
+			goAdapter.call(t, "wait", map[string]any{"id": job.ID}, &completed)
+			require.Equal(t, "completed", completed.State)
+			require.Equal(t, 1, completed.Attempt)
+		}
+		stopAll(t)
+	})
+	t.Run("three_engine_leader_failover", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		startAll(t)
+		firstLeader := waitForLeader(t, goAdapter, "")
+		firstAdapter := adapterByClientID[firstLeader]
+		require.NotNil(t, firstAdapter)
+		firstAdapter.call(t, "stop", map[string]any{}, nil)
+		secondLeader := waitForLeader(t, goAdapter, firstLeader)
+		secondAdapter := adapterByClientID[secondLeader]
+		require.NotNil(t, secondAdapter)
+		secondAdapter.call(t, "stop", map[string]any{}, nil)
+		thirdLeader := waitForLeader(t, goAdapter, secondLeader)
+		require.NotEqual(t, firstLeader, thirdLeader)
+		require.NotEqual(t, secondLeader, thirdLeader)
+		for _, stoppedID := range []string{firstLeader, secondLeader} {
+			adapterByClientID[stoppedID].call(t, "start", map[string]any{
+				"client_id": stoppedID, "max_workers": 1,
+			}, nil)
+		}
+		stopAll(t)
+	})
+	t.Run("three_engine_fault_recovery", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		startAll(t)
+		for index, target := range adapters {
+			waitForListener(t, target)
+			var disconnected struct {
+				Count int `json:"count"`
+			}
+			goAdapter.call(t, "fault_disconnect_application", map[string]any{
+				"application_name": specs[index].ApplicationName,
+			}, &disconnected)
+			require.Positive(t, disconnected.Count)
+			waitForListener(t, target)
+		}
+		for index, inserter := range adapters {
+			var inserted, completed normalizedJob
+			inserter.call(t, "insert", map[string]any{
+				"message": fmt.Sprintf("three-engine fault recovery %d", index),
+			}, &inserted)
+			goAdapter.call(t, "wait", map[string]any{"id": inserted.ID}, &completed)
+			require.Equal(t, "completed", completed.State)
+			require.Equal(t, 1, completed.Attempt)
+		}
+		stopAll(t)
+	})
+	t.Run("three_engine_resource_bound", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		startAll(t)
+		assertThreeEngineConnectionBounds(t, adapters)
+		stopAll(t)
+	})
+	t.Run("three_engine_directed_javascript_rust_work_notification_cancellation", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyThreeEngineDirectedJavaScriptRust(t, goAdapter, adapterByImplementation)
+	})
+	t.Run("three_engine_resumable_cursor", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyResumableInteroperability(t, adapterByImplementation["javascript"], adapterByImplementation["rust"])
+	})
+	t.Run("three_engine_cross_engine_process_kill_rescue_failover", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyThreeEngineProcessKillRescueFailover(t, root, databaseURL, goAdapter, specByImplementation)
+	})
 }
 
 func verifyThreeEngineDirectedJavaScriptRust(
@@ -269,11 +298,9 @@ func verifyThreeEngineProcessKillRescueFailover(
 func TestThreeEnginePerformanceGate(t *testing.T) { //nolint:paralleltest // Owns the shared PostgreSQL database.
 	// All three release adapters intentionally share one externally supplied
 	// database, so this test cannot run in parallel.
-	if os.Getenv("RIVER_CONFORMANCE_THREE_ENGINE_PERFORMANCE") != "1" {
-		t.Skip("RIVER_CONFORMANCE_THREE_ENGINE_PERFORMANCE=1 is required")
-	}
-	databaseURL := os.Getenv("RIVER_CONFORMANCE_DATABASE_URL")
-	require.NotEmpty(t, databaseURL)
+	requireOptIn(t, "RIVER_CONFORMANCE_THREE_ENGINE_PERFORMANCE")
+	databaseURL := requireEnv(t, "RIVER_CONFORMANCE_DATABASE_URL")
+	scenarios := newScenarioTracker(t, scenarioOwnerThreeEnginePerformance)
 	jobs := 200
 	if value := os.Getenv("RIVER_CONFORMANCE_PERFORMANCE_JOBS"); value != "" {
 		parsed, err := strconv.Atoi(value)
@@ -287,7 +314,7 @@ func TestThreeEnginePerformanceGate(t *testing.T) { //nolint:paralleltest // Own
 	peerSpec := conformancePeerSpec(t, root, true)
 	requireThreeImplementations(t, candidateSpec, peerSpec)
 	adapters := []*adapter{
-		startAdapter(t, root, databaseURL, "go-three-engine-performance", "go", "run", "./internal/cmd/riverconformanceadapter"),
+		startReferenceAdapter(t, root, databaseURL, "go-three-engine-performance"),
 		startAdapterCommand(t, root, databaseURL, candidateSpec.Implementation+"-three-engine-performance", candidateSpec.Command),
 		startAdapterCommand(t, root, databaseURL, peerSpec.Implementation+"-three-engine-performance", peerSpec.Command),
 	}
@@ -319,27 +346,23 @@ func TestThreeEnginePerformanceGate(t *testing.T) { //nolint:paralleltest // Own
 			"%s p95 exceeds the %.2fx slower Go/peer bound in %s", candidateSpec.Implementation,
 			float64(gate.p95Numerator)/float64(gate.p95Denominator), mode)
 	}
-	newScenarioTracker(t, scenarioOwnerThreeEnginePerformance).pass("three_engine_release_performance")
+	scenarios.pass("three_engine_release_performance")
 }
 
 func TestThreeEngineSoak(t *testing.T) { //nolint:paralleltest // Owns the shared PostgreSQL database.
 	// All three adapters intentionally share one externally supplied database,
 	// so this test cannot run in parallel.
-	durationString := os.Getenv("RIVER_CONFORMANCE_THREE_ENGINE_SOAK_DURATION")
-	if durationString == "" {
-		t.Skip("RIVER_CONFORMANCE_THREE_ENGINE_SOAK_DURATION is required")
-	}
-	duration, err := time.ParseDuration(durationString)
+	duration, err := time.ParseDuration(requireEnv(t, "RIVER_CONFORMANCE_THREE_ENGINE_SOAK_DURATION"))
 	require.NoError(t, err)
 	require.Positive(t, duration)
-	databaseURL := os.Getenv("RIVER_CONFORMANCE_DATABASE_URL")
-	require.NotEmpty(t, databaseURL)
+	databaseURL := requireEnv(t, "RIVER_CONFORMANCE_DATABASE_URL")
+	scenarios := newScenarioTracker(t, scenarioOwnerThreeEngineSoak)
 	root := repoRoot(t)
 	candidateSpec := conformanceCandidateSpec(t, root, false)
 	peerSpec := conformancePeerSpec(t, root, false)
 	requireThreeImplementations(t, candidateSpec, peerSpec)
 	adapters := []*adapter{
-		startAdapter(t, root, databaseURL, "go-three-engine-soak", "go", "run", "./internal/cmd/riverconformanceadapter"),
+		startReferenceAdapter(t, root, databaseURL, "go-three-engine-soak"),
 		startAdapterCommand(t, root, databaseURL, candidateSpec.Implementation+"-three-engine-soak", candidateSpec.Command),
 		startAdapterCommand(t, root, databaseURL, peerSpec.Implementation+"-three-engine-soak", peerSpec.Command),
 	}
@@ -421,7 +444,7 @@ func TestThreeEngineSoak(t *testing.T) { //nolint:paralleltest // Owns the share
 	}
 	require.ElementsMatch(t, clientIDs, mapKeys(workersSeen))
 	t.Logf("completed %d three-engine jobs over %s", jobsCompleted, duration)
-	newScenarioTracker(t, scenarioOwnerThreeEngineSoak).pass("three_engine_soak")
+	scenarios.pass("three_engine_soak")
 }
 
 func assertThreeEngineConnectionBounds(t *testing.T, adapters []*adapter) {
