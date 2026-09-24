@@ -71,18 +71,18 @@ pub fn work_context_metadata_updates(context: &crate::WorkContext) -> Map<String
 /// # Errors
 ///
 /// Returns the resumable metadata failure recorded for the attempt.
-pub async fn work_context_resumable_validate(
+pub fn work_context_resumable_validate(
     context: &crate::WorkContext,
 ) -> Result<(), crate::WorkError> {
-    context.resumable_validate().await
+    context.resumable_validate()
 }
 
 /// Resolves attempt-scoped resumable errors and metadata after user work.
-pub async fn work_context_resumable_finish(
+pub fn work_context_resumable_finish(
     context: &crate::WorkContext,
     worker_failed: bool,
 ) -> Option<crate::WorkError> {
-    context.resumable_finish(worker_failed).await
+    context.resumable_finish(worker_failed)
 }
 
 /// Notification topic for queue and job control messages.

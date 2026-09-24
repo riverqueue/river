@@ -637,10 +637,7 @@ async fn work_resumable_cursor(context: &WorkContext, attempt: i16) {
     let _ = context
         .resumable_step_with_cursor("second", |cursor: i64| async move {
             if attempt == 1 {
-                context
-                    .resumable_set_cursor(&7)
-                    .await
-                    .map_err(io::Error::other)?;
+                context.resumable_set_cursor(&7).map_err(io::Error::other)?;
                 return Err(io::Error::other("retry with cursor"));
             }
             if cursor != 7 {

@@ -146,14 +146,14 @@ where
     W: Worker<A>,
 {
     let context = __private::work_context_for_job(&job.row);
-    let mut result = match __private::work_context_resumable_validate(&context).await {
+    let mut result = match __private::work_context_resumable_validate(&context) {
         Ok(()) => worker
             .work(context.clone(), job)
             .await
             .map_err(TestWorkError::Worker),
         Err(error) => Err(TestWorkError::Resumable(error)),
     };
-    if let Some(error) = __private::work_context_resumable_finish(&context, result.is_err()).await
+    if let Some(error) = __private::work_context_resumable_finish(&context, result.is_err())
         && result.is_ok()
     {
         result = Err(TestWorkError::Resumable(error));
