@@ -461,6 +461,49 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			), jobRow.AttemptedBy)
 			require.Len(t, jobRow.AttemptedBy, maxAttemptedBy)
 		})
+
+		// Attempt errors written by something other than River may not have the
+		// shape River expects. They're decoded leniently so that the job (and
+		// every other job locked alongside it) can still be worked.
+		t.Run("ErrorsWithUnexpectedShapesDecoded", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Errors: [][]byte{
+					[]byte(`{"at":"2024-01-02 03:04:05+00","attempt":"1","error":{"message":"boom"},"trace":["frame1","frame2"]}`),
+					[]byte(`42`),
+				},
+			})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+
+			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+				ClientID:       testClientID,
+				MaxAttemptedBy: maxAttemptedBy,
+				MaxToLock:      maxToLock,
+				Queue:          rivercommon.QueueDefault,
+			})
+			require.NoError(t, err)
+
+			// Result order isn't guaranteed by every driver.
+			sort.Slice(jobRows, func(i, j int) bool { return jobRows[i].ID < jobRows[j].ID })
+			require.Equal(t, []int64{job1.ID, job2.ID},
+				sliceutil.Map(jobRows, func(j *rivertype.JobRow) int64 { return j.ID }))
+
+			require.Equal(t, []rivertype.AttemptError{
+				{
+					At:      time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC),
+					Attempt: 1,
+					Error:   `{"message":"boom"}`,
+					Trace:   `["frame1","frame2"]`,
+				},
+				{Error: "42"},
+			}, sliceutil.Map(jobRows[0].Errors, func(e rivertype.AttemptError) rivertype.AttemptError {
+				e.At = e.At.UTC() // normalize location of the fixed +00 offset
+				return e
+			}))
+		})
 	})
 
 	t.Run("JobGetByID", func(t *testing.T) {
