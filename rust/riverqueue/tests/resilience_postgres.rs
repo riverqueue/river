@@ -24,8 +24,11 @@ use riverqueue::{
 };
 use riverqueue_migrate::PostgresMigrator;
 use serde::{Deserialize, Serialize};
-use sqlx::{AssertSqlSafe, PgPool};
-use tokio::sync::Semaphore;
+use sqlx::{
+    AssertSqlSafe, PgPool,
+    postgres::{PgConnectOptions, PgPoolOptions},
+};
+use tokio::{net::TcpListener, sync::Semaphore, task::AbortHandle};
 
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
 #[river(kind = "rust_postgres_resilience")]
@@ -120,6 +123,8 @@ struct SnoozeForeverArgs {}
 /// Lets a test hold a gated job inside its worker until released.
 #[derive(Clone)]
 struct Gate {
+    active: Arc<AtomicUsize>,
+    max_active: Arc<AtomicUsize>,
     release: Arc<Semaphore>,
     started: Arc<Semaphore>,
 }
@@ -127,6 +132,8 @@ struct Gate {
 impl Default for Gate {
     fn default() -> Self {
         Self {
+            active: Arc::new(AtomicUsize::new(0)),
+            max_active: Arc::new(AtomicUsize::new(0)),
             release: Arc::new(Semaphore::new(0)),
             started: Arc::new(Semaphore::new(0)),
         }
@@ -225,6 +232,108 @@ impl TestSchema {
     }
 }
 
+/// A TCP proxy between a client and PostgreSQL that can make the database
+/// unavailable: it resets open connections and refuses new ones until
+/// restored. Unlike terminating backends, this keeps the database down for
+/// the client while other connections still work.
+struct FaultProxy {
+    accept_task: AbortHandle,
+    connections: Arc<std::sync::Mutex<Vec<AbortHandle>>>,
+    options: PgConnectOptions,
+    rejected: Arc<AtomicUsize>,
+    up: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl FaultProxy {
+    async fn start() -> Self {
+        let upstream: PgConnectOptions = database_url().parse().unwrap();
+        let upstream_host = upstream.get_host().to_owned();
+        let upstream_port = upstream.get_port();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let connections = Arc::new(std::sync::Mutex::new(Vec::<AbortHandle>::new()));
+        let rejected = Arc::new(AtomicUsize::new(0));
+        let up = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let accept_connections = Arc::clone(&connections);
+        let accept_rejected = Arc::clone(&rejected);
+        let accept_up = Arc::clone(&up);
+        let accept_task = tokio::spawn(async move {
+            loop {
+                let Ok((mut client, _)) = listener.accept().await else {
+                    continue;
+                };
+                if !accept_up.load(Ordering::SeqCst) {
+                    accept_rejected.fetch_add(1, Ordering::SeqCst);
+                    drop(client);
+                    continue;
+                }
+                let host = upstream_host.clone();
+                let connection = tokio::spawn(async move {
+                    if host.starts_with('/') {
+                        let path = format!("{host}/.s.PGSQL.{upstream_port}");
+                        if let Ok(mut server) = tokio::net::UnixStream::connect(path).await {
+                            let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
+                        }
+                    } else if let Ok(mut server) =
+                        tokio::net::TcpStream::connect((host.as_str(), upstream_port)).await
+                    {
+                        let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
+                    }
+                });
+                accept_connections
+                    .lock()
+                    .unwrap()
+                    .push(connection.abort_handle());
+            }
+        })
+        .abort_handle();
+        let options = upstream.host("127.0.0.1").port(address.port());
+        Self {
+            accept_task,
+            connections,
+            options,
+            rejected,
+            up,
+        }
+    }
+
+    /// A pool that reaches PostgreSQL only through the proxy. A short acquire
+    /// timeout keeps operations failing quickly while the database is down.
+    fn pool(&self, max_connections: u32) -> PgPool {
+        PgPoolOptions::new()
+            .acquire_timeout(Duration::from_millis(500))
+            .max_connections(max_connections)
+            .connect_lazy_with(self.options.clone())
+    }
+
+    fn take_down(&self) {
+        self.up.store(false, Ordering::SeqCst);
+        for connection in self.connections.lock().unwrap().drain(..) {
+            connection.abort();
+        }
+    }
+
+    fn restore(&self) {
+        self.up.store(true, Ordering::SeqCst);
+    }
+
+    async fn wait_for_rejections(&self, count: usize) {
+        wait_until(Duration::from_secs(30), "reconnection attempts", || async {
+            self.rejected.load(Ordering::SeqCst) >= count
+        })
+        .await;
+    }
+}
+
+impl Drop for FaultProxy {
+    fn drop(&mut self) {
+        self.accept_task.abort();
+        for connection in self.connections.lock().unwrap().drain(..) {
+            connection.abort();
+        }
+    }
+}
+
 fn completing_workers() -> WorkerRegistry {
     gated_workers(&Gate::default())
 }
@@ -264,8 +373,11 @@ fn gated_workers(gate: &Gate) -> WorkerRegistry {
         .register_fn(move |_context: WorkContext, _job: Job<GatedArgs>| {
             let gate = gate.clone();
             async move {
+                let active = gate.active.fetch_add(1, Ordering::SeqCst) + 1;
+                gate.max_active.fetch_max(active, Ordering::SeqCst);
                 gate.started.add_permits(1);
                 gate.release.acquire().await.unwrap().forget();
+                gate.active.fetch_sub(1, Ordering::SeqCst);
                 Ok::<_, Infallible>(WorkOutcome::Complete)
             }
         })
@@ -738,6 +850,177 @@ async fn out_of_range_snooze_is_clamped_and_cancel_time_matches_go() {
         );
     }
     chrono::DateTime::parse_from_rfc3339(cancel_attempted_at).unwrap();
+
+    schema.drop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn client_survives_database_outage_and_catches_up() {
+    let schema = TestSchema::new("outage").await;
+    let proxy = FaultProxy::start().await;
+    let gate = Gate::default();
+    let client =
+        Client::builder(PostgresDatabase::new(proxy.pool(4)).schema(schema.schema.clone()))
+            .id("postgres-resilience-outage")
+            .workers(gated_workers(&gate))
+            // Notifications, not polling, must deliver work inserted during the
+            // outage once the listener reconnects.
+            .queue(
+                "default",
+                QueueConfig::new(4)
+                    .with_fetch_cooldown(Duration::from_millis(1))
+                    .with_fetch_poll_interval(Duration::from_secs(60)),
+            )
+            .build()
+            .unwrap();
+    // A second client inserts directly while the first is cut off.
+    let inserter = Client::builder(schema.database()).build().unwrap();
+
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+    let before = inserter.insert(ResilienceArgs {}).await.unwrap();
+    wait_until(
+        Duration::from_secs(10),
+        "work before the outage",
+        || async { schema.job_state(before.job.row.id).await == "completed" },
+    )
+    .await;
+    let in_flight = inserter.insert(GatedArgs {}).await.unwrap();
+    gate.wait_started().await;
+
+    proxy.take_down();
+    // The in-flight job finishes while its completion cannot be written.
+    gate.release();
+    let during = inserter.insert(ResilienceArgs {}).await.unwrap();
+    proxy.wait_for_rejections(3).await;
+    proxy.restore();
+
+    for (id, description) in [
+        (in_flight.job.row.id, "in-flight job completion"),
+        (during.job.row.id, "job inserted during the outage"),
+    ] {
+        wait_until(Duration::from_secs(30), description, || async {
+            schema.job_state(id).await == "completed"
+        })
+        .await;
+    }
+    tokio::time::timeout(Duration::from_secs(10), run.shutdown())
+        .await
+        .unwrap()
+        .unwrap();
+
+    let in_flight = inserter.job_get(in_flight.job.row.id).await.unwrap();
+    assert_eq!(in_flight.attempt, 1, "the in-flight job was not rescued");
+    assert!(in_flight.errors.is_empty());
+
+    drop(proxy);
+    schema.drop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn client_started_during_an_outage_becomes_ready_after_recovery() {
+    let schema = TestSchema::new("startdown").await;
+    let proxy = FaultProxy::start().await;
+    proxy.take_down();
+    let client =
+        Client::builder(PostgresDatabase::new(proxy.pool(2)).schema(schema.schema.clone()))
+            .id("postgres-resilience-start-outage")
+            .workers(completing_workers())
+            .queue("default", fast_queue())
+            .build()
+            .unwrap();
+    let job = Client::builder(schema.database())
+        .build()
+        .unwrap()
+        .insert(ResilienceArgs {})
+        .await
+        .unwrap();
+
+    let mut run = client.start().unwrap();
+    // Outlast the producer's fast startup retries, after which it backs off
+    // instead of stopping the client.
+    tokio::time::sleep(Duration::from_secs(11)).await;
+    proxy.restore();
+    tokio::time::timeout(Duration::from_secs(30), run.wait_ready())
+        .await
+        .expect("listener did not recover")
+        .unwrap();
+    wait_until(Duration::from_secs(30), "work after recovery", || async {
+        schema.job_state(job.job.row.id).await == "completed"
+    })
+    .await;
+    run.shutdown().await.unwrap();
+
+    drop(proxy);
+    schema.drop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn listener_does_not_occupy_a_pool_connection() {
+    let schema = TestSchema::new("listener").await;
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url())
+        .await
+        .unwrap();
+    let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.schema.clone()))
+        .id("postgres-resilience-listener-pool")
+        .workers(completing_workers())
+        .queue("default", fast_queue())
+        .build()
+        .unwrap();
+
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+    let job = client.insert(ResilienceArgs {}).await.unwrap();
+    wait_until(
+        Duration::from_secs(10),
+        "work through a one-connection pool",
+        || async { schema.job_state(job.job.row.id).await == "completed" },
+    )
+    .await;
+    run.shutdown().await.unwrap();
+    pool.close().await;
+
+    schema.drop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn queue_reconfiguration_waits_for_the_previous_producer() {
+    let schema = TestSchema::new("reconfig").await;
+    let gate = Gate::default();
+    let client = gated_client(&schema, "postgres-resilience-reconfigure", &gate);
+    let first = client.insert(GatedArgs {}).await.unwrap();
+
+    let run = client.start().unwrap();
+    gate.wait_started().await;
+    client
+        .queue_add(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .unwrap();
+    let second = client.insert(GatedArgs {}).await.unwrap();
+    // Hold the first job long enough that a replacement producer started
+    // too early would take the second job alongside it.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    gate.release();
+    gate.wait_started().await;
+    gate.release();
+    for id in [first.job.row.id, second.job.row.id] {
+        wait_until(Duration::from_secs(10), "both jobs", || async {
+            schema.job_state(id).await == "completed"
+        })
+        .await;
+    }
+    run.shutdown().await.unwrap();
+    assert_eq!(
+        gate.max_active.load(Ordering::SeqCst),
+        1,
+        "reconfiguration exceeded max_workers"
+    );
 
     schema.drop().await;
 }

@@ -452,3 +452,55 @@ async fn cancel_attempted_at_matches_go_time_json() {
     }
     chrono::DateTime::parse_from_rfc3339(cancel_attempted_at).unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn notification_poll_failures_do_not_stop_the_client() {
+    // In rollback-journal mode an exclusive writer blocks readers, so the
+    // outbox poll fails with `database is locked` while the lock is held.
+    static DATABASE_NONCE: AtomicUsize = AtomicUsize::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "river-sqlite-resilience-journal-{}-{}.sqlite",
+        std::process::id(),
+        DATABASE_NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let connect = |busy_timeout| {
+        SqlitePoolOptions::new().max_connections(2).connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true)
+                .journal_mode(SqliteJournalMode::Delete)
+                .busy_timeout(busy_timeout),
+        )
+    };
+    let pool = connect(Duration::from_millis(20)).await.unwrap();
+    SqliteMigrator::new(pool.clone())
+        .migrate_up()
+        .await
+        .unwrap();
+    let database = TestDatabase {
+        path: path.clone(),
+        pool,
+    };
+    let client = Client::builder(database.pool.clone())
+        .id("sqlite-resilience-outbox")
+        .workers(completing_workers())
+        .queue("default", fast_queue())
+        .build()
+        .unwrap();
+
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+    let foreign = connect(Duration::from_secs(5)).await.unwrap();
+    let writer = foreign.begin_with("BEGIN EXCLUSIVE").await.unwrap();
+    // Hold the lock across several 100 ms outbox polls.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    writer.rollback().await.unwrap();
+    foreign.close().await;
+
+    let job = client.insert(ResilienceArgs {}).await.unwrap();
+    wait_until(Duration::from_secs(15), "work after the lock", || async {
+        job_state(&database.pool, job.job.row.id).await == "completed"
+    })
+    .await;
+    run.shutdown().await.unwrap();
+}

@@ -3,6 +3,13 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
+/// Runs one producer per configured queue and reconciles them with runtime
+/// queue changes.
+///
+/// A reconfigured or removed queue stops fetching at once, but its
+/// replacement starts only after the old producer's jobs have finished, so a
+/// queue never runs more than `max_workers` jobs. A producer that stops
+/// unexpectedly (for example after a panic) is restarted with backoff.
 pub(super) async fn run_dynamic_queues(
     inner: Arc<ClientInner>,
     completion_sender: mpsc::Sender<CompletionUpdate>,
@@ -11,19 +18,20 @@ pub(super) async fn run_dynamic_queues(
     notifications: broadcast::Sender<RuntimeNotification>,
     mut changes: watch::Receiver<u64>,
 ) -> Result<(), Error> {
-    let mut active = HashMap::<String, (QueueConfig, CancellationToken, u64)>::new();
-    let mut next_generation = 0_u64;
-    let mut tasks = JoinSet::new();
-    reconcile_queues(
-        &inner,
-        &completion_sender,
-        &fetch_cancel,
-        &work_cancel,
-        &notifications,
-        &mut active,
-        &mut tasks,
-        &mut next_generation,
-    )?;
+    let mut producers = Producers {
+        active: HashMap::new(),
+        completion_sender,
+        draining: HashMap::new(),
+        fetch_cancel: fetch_cancel.clone(),
+        inner,
+        next_generation: 0,
+        notifications,
+        restarts: HashMap::new(),
+        task_queues: HashMap::new(),
+        tasks: JoinSet::new(),
+        work_cancel,
+    };
+    producers.reconcile()?;
 
     loop {
         tokio::select! {
@@ -32,103 +40,168 @@ pub(super) async fn run_dynamic_queues(
                 if change_result.is_err() {
                     break;
                 }
-                reconcile_queues(
-                    &inner,
-                    &completion_sender,
-                    &fetch_cancel,
-                    &work_cancel,
-                    &notifications,
-                    &mut active,
-                    &mut tasks,
-                    &mut next_generation,
-                )?;
+                producers.reconcile()?;
             }
-            result = tasks.join_next(), if !tasks.is_empty() => {
-                let (name, generation, queue_cancel, result) = result
-                    .ok_or_else(|| Error::runtime("dynamic queue task set closed".to_owned()))?
-                    .map_err(Error::from_join)?;
-                if active
-                    .get(&name)
-                    .is_some_and(|(_, _, current_generation)| *current_generation == generation)
-                {
-                    active.remove(&name);
+            joined = producers.tasks.join_next_with_id(), if !producers.tasks.is_empty() => {
+                if let Some(joined) = joined {
+                    producers.finish(joined);
                 }
-                if let Err(queue_error) = result
-                    && !queue_cancel.is_cancelled()
-                {
-                    return Err(queue_error);
-                }
+                producers.reconcile()?;
             }
         }
     }
 
-    for (_, queue_cancel, _) in active.values() {
+    for (_, queue_cancel, _) in producers.active.values() {
         queue_cancel.cancel();
     }
-    while let Some(result) = tasks.join_next().await {
-        let (_, _, _, queue_result) = result.map_err(Error::from_join)?;
-        if let Err(queue_error) = queue_result {
-            debug!(error = %queue_error, "dynamic queue stopped with an error during shutdown");
-        }
+    while let Some(joined) = producers.tasks.join_next_with_id().await {
+        producers.finish(joined);
     }
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn reconcile_queues(
-    inner: &Arc<ClientInner>,
-    completion_sender: &mpsc::Sender<CompletionUpdate>,
-    fetch_cancel: &CancellationToken,
-    work_cancel: &CancellationToken,
-    notifications: &broadcast::Sender<RuntimeNotification>,
-    active: &mut HashMap<String, (QueueConfig, CancellationToken, u64)>,
-    tasks: &mut JoinSet<(String, u64, CancellationToken, Result<(), Error>)>,
-    next_generation: &mut u64,
-) -> Result<(), Error> {
-    let configured = inner
-        .queues
-        .read()
-        .map_err(|_| Error::runtime("queue configuration lock poisoned".to_owned()))?
-        .clone();
-    for (name, (running_config, queue_cancel, _)) in &*active {
-        if configured.get(name) != Some(running_config) {
-            queue_cancel.cancel();
-        }
-    }
-    active.retain(|name, (running_config, _, _)| configured.get(name) == Some(running_config));
+type ProducerOutcome = (String, u64, CancellationToken, Result<(), Error>);
 
-    for (name, config) in configured {
-        if active.contains_key(&name) {
-            continue;
+struct Producers {
+    active: HashMap<String, (QueueConfig, CancellationToken, u64)>,
+    completion_sender: mpsc::Sender<CompletionUpdate>,
+    /// Producers stopped by reconfiguration whose jobs are still finishing.
+    draining: HashMap<String, u64>,
+    fetch_cancel: CancellationToken,
+    inner: Arc<ClientInner>,
+    next_generation: u64,
+    notifications: broadcast::Sender<RuntimeNotification>,
+    restarts: HashMap<String, u32>,
+    task_queues: HashMap<tokio::task::Id, (String, u64)>,
+    tasks: JoinSet<ProducerOutcome>,
+    work_cancel: CancellationToken,
+}
+
+impl Producers {
+    fn finish(
+        &mut self,
+        joined: Result<(tokio::task::Id, ProducerOutcome), tokio::task::JoinError>,
+    ) {
+        let (task_id, name, generation, failure) = match joined {
+            Ok((task_id, (name, generation, queue_cancel, result))) => {
+                let failure = match result {
+                    Err(queue_error) => Some(queue_error.to_string()),
+                    Ok(()) if !queue_cancel.is_cancelled() => {
+                        Some("producer exited unexpectedly".to_owned())
+                    }
+                    Ok(()) => None,
+                };
+                (task_id, name, generation, failure)
+            }
+            Err(join_error) => {
+                let Some((name, generation)) = self.task_queues.get(&join_error.id()).cloned()
+                else {
+                    error!(error = %join_error, "River queue producer failed");
+                    return;
+                };
+                (
+                    join_error.id(),
+                    name,
+                    generation,
+                    Some(join_error.to_string()),
+                )
+            }
+        };
+        self.task_queues.remove(&task_id);
+        if self.draining.get(&name) == Some(&generation) {
+            self.draining.remove(&name);
         }
-        let queue_cancel = fetch_cancel.child_token();
-        *next_generation = next_generation.wrapping_add(1);
-        let generation = *next_generation;
-        active.insert(
-            name.clone(),
-            (config.clone(), queue_cancel.clone(), generation),
-        );
-        let inner = Arc::clone(inner);
-        let completion_sender = completion_sender.clone();
-        let notifications = notifications.subscribe();
-        let task_cancel = queue_cancel.clone();
-        let task_name = name.clone();
-        let work_cancel = work_cancel.child_token();
-        tasks.spawn(async move {
-            let result = run_queue(
-                inner,
-                completion_sender,
-                task_name.clone(),
-                config,
-                task_cancel.clone(),
-                work_cancel,
-                notifications,
-            )
-            .await;
-            (task_name, generation, task_cancel, result)
-        });
+        if self
+            .active
+            .get(&name)
+            .is_some_and(|(_, _, active_generation)| *active_generation == generation)
+        {
+            self.active.remove(&name);
+            if let Some(failure) = failure
+                && !self.fetch_cancel.is_cancelled()
+            {
+                let restarts = self.restarts.entry(name.clone()).or_default();
+                *restarts += 1;
+                error!(
+                    queue = %name,
+                    error = %failure,
+                    attempt = *restarts,
+                    "River queue producer failed; restarting it after backoff"
+                );
+            }
+        }
     }
-    Ok(())
+
+    fn reconcile(&mut self) -> Result<(), Error> {
+        if self.fetch_cancel.is_cancelled() {
+            return Ok(());
+        }
+        let configured = self
+            .inner
+            .queues
+            .read()
+            .map_err(|_| Error::runtime("queue configuration lock poisoned".to_owned()))?
+            .clone();
+        let stale = self
+            .active
+            .iter()
+            .filter(|(name, (running_config, _, _))| configured.get(*name) != Some(running_config))
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        for name in stale {
+            if let Some((_, queue_cancel, generation)) = self.active.remove(&name) {
+                queue_cancel.cancel();
+                self.restarts.remove(&name);
+                self.draining.insert(name, generation);
+            }
+        }
+
+        for (name, config) in configured {
+            if self.active.contains_key(&name) || self.draining.contains_key(&name) {
+                continue;
+            }
+            let start_delay = self
+                .restarts
+                .get(&name)
+                .map_or(Duration::ZERO, |restarts| exponential_backoff(*restarts));
+            let queue_cancel = self.fetch_cancel.child_token();
+            self.next_generation = self.next_generation.wrapping_add(1);
+            let generation = self.next_generation;
+            self.active.insert(
+                name.clone(),
+                (config.clone(), queue_cancel.clone(), generation),
+            );
+            let inner = Arc::clone(&self.inner);
+            let completion_sender = self.completion_sender.clone();
+            let notifications = self.notifications.subscribe();
+            let task_cancel = queue_cancel.clone();
+            let task_name = name.clone();
+            let work_cancel = self.work_cancel.child_token();
+            let handle = self.tasks.spawn(async move {
+                if !start_delay.is_zero() {
+                    tokio::select! {
+                        () = task_cancel.cancelled() => {
+                            return (task_name, generation, task_cancel, Ok(()));
+                        }
+                        () = tokio::time::sleep(start_delay) => {}
+                    }
+                }
+                let result = run_queue(
+                    inner,
+                    completion_sender,
+                    task_name.clone(),
+                    config,
+                    task_cancel.clone(),
+                    work_cancel,
+                    notifications,
+                )
+                .await;
+                (task_name, generation, task_cancel, result)
+            });
+            self.task_queues.insert(handle.id(), (name, generation));
+        }
+        Ok(())
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -141,21 +214,37 @@ pub(super) async fn run_queue(
     work_cancel: CancellationToken,
     mut notifications: broadcast::Receiver<RuntimeNotification>,
 ) -> Result<(), Error> {
-    const START_RETRY_INTERVAL: Duration = Duration::from_millis(10);
-    const START_TIMEOUT: Duration = Duration::from_secs(10);
+    // Short write contention (common on SQLite) clears quickly. Longer
+    // outages back off like River's other services; the producer keeps trying
+    // for as long as the client runs rather than stopping the client.
+    const START_FAST_RETRY_INTERVAL: Duration = Duration::from_millis(10);
+    const START_FAST_RETRY_WINDOW: Duration = Duration::from_secs(10);
 
     let start_time = tokio::time::Instant::now();
+    let mut start_attempt = 0;
     let initial_queue = loop {
         match crate::storage::touch_queue(&inner, &queue).await {
             Ok(queue_row) => break queue_row,
-            Err(queue_error) if start_time.elapsed() < START_TIMEOUT => {
-                debug!(error = %queue_error, "River queue startup failed; retrying");
+            Err(queue_error) => {
+                let sleep = if start_time.elapsed() < START_FAST_RETRY_WINDOW {
+                    debug!(error = %queue_error, "River queue startup failed; retrying");
+                    START_FAST_RETRY_INTERVAL
+                } else {
+                    start_attempt += 1;
+                    let sleep = exponential_backoff(start_attempt);
+                    error!(
+                        queue = %queue,
+                        error = %queue_error,
+                        sleep_duration = ?sleep,
+                        "River queue startup failed (will retry after backoff)"
+                    );
+                    sleep
+                };
                 tokio::select! {
                     () = fetch_cancel.cancelled() => return Ok(()),
-                    () = tokio::time::sleep(START_RETRY_INTERVAL) => {}
+                    () = tokio::time::sleep(sleep) => {}
                 }
             }
-            Err(queue_error) => return Err(queue_error),
         }
     };
     let mut paused = initial_queue.paused_at.is_some();

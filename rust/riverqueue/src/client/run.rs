@@ -5,10 +5,19 @@ use super::*;
 
 impl Client {
     /// Starts configured queues and returns a lifecycle handle.
-    #[allow(
-        clippy::too_many_lines,
-        reason = "keeps startup ordering and ownership visible"
-    )]
+    ///
+    /// The client supervises its services: a notification listener, SQLite
+    /// outbox poller, maintenance, or extension service that fails is logged
+    /// and restarted with backoff, and producers keep polling meanwhile, so a
+    /// database outage never stops the client. Only a failure of the
+    /// producers or the completer, which would leave jobs unworked or
+    /// unpersisted, stops the client: work is then cancelled, every worker is
+    /// awaited, and [`RunHandle::wait`] returns the error.
+    ///
+    /// With notifications enabled on PostgreSQL, the client opens one
+    /// dedicated listener connection with the pool's connect options. It is
+    /// not taken from, and does not count against, the pool's
+    /// `max_connections`.
     pub fn start(&self) -> Result<RunHandle, Error> {
         let runtime =
             tokio::runtime::Handle::try_current().map_err(|_| Error::RuntimeUnavailable {
@@ -36,80 +45,17 @@ impl Client {
         let fetch_cancel = CancellationToken::new();
         let work_cancel = CancellationToken::new();
         let inner = Arc::clone(&self.inner);
-        let fetch_for_task = fetch_cancel.clone();
-        let work_for_task = work_cancel.clone();
         let (ready_sender, ready) = oneshot::channel();
+        let supervisor = Supervisor {
+            fetch_cancel: fetch_cancel.clone(),
+            inner: Arc::clone(&inner),
+            restarts: HashMap::new(),
+            services: HashMap::new(),
+            tasks: JoinSet::new(),
+            work_cancel: work_cancel.clone(),
+        };
         let join = runtime.spawn(async move {
-            let result = async {
-                let notifications = inner.queue_notifications.clone();
-                let (completion_sender, completion_receiver) = mpsc::channel(10_000);
-                *inner
-                    .completion_sender
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                    Some(completion_sender.downgrade());
-                let mut queues = JoinSet::new();
-                queues.spawn(run_dynamic_queues(
-                    Arc::clone(&inner),
-                    completion_sender,
-                    fetch_for_task.child_token(),
-                    work_for_task.child_token(),
-                    notifications.clone(),
-                    inner.queue_changes.subscribe(),
-                ));
-                if inner.poll_only {
-                    let _ = ready_sender.send(Ok(()));
-                } else {
-                    match inner.database.kind() {
-                        #[cfg(feature = "postgres")]
-                        DatabaseKind::Postgres => {
-                            queues.spawn(run_notifications(
-                                Arc::clone(&inner),
-                                fetch_for_task.child_token(),
-                                notifications.clone(),
-                                ready_sender,
-                            ));
-                        }
-                        #[cfg(feature = "sqlite")]
-                        DatabaseKind::Sqlite => {
-                            queues.spawn(run_sqlite_notifications(
-                                Arc::clone(&inner),
-                                fetch_for_task.child_token(),
-                                notifications.clone(),
-                                ready_sender,
-                            ));
-                        }
-                    }
-                }
-                queues.spawn(crate::maintenance::run_maintenance(
-                    Arc::clone(&inner),
-                    fetch_for_task.child_token(),
-                    notifications.subscribe(),
-                ));
-                for service in inner.pilot.runtime_services() {
-                    let pool = inner.pilot_database_pool();
-                    let database = inner.pilot_database_config();
-                    let service_cancel = fetch_for_task.child_token();
-                    queues.spawn(async move {
-                        service
-                            .run(pool, database, service_cancel)
-                            .await
-                            .map_err(|service_error| Error::Extension {
-                                phase: "runtime service",
-                                source: service_error,
-                            })
-                    });
-                }
-                queues.spawn(run_completion_batcher(
-                    Arc::clone(&inner),
-                    completion_receiver,
-                ));
-                while let Some(result) = queues.join_next().await {
-                    result.map_err(Error::from_join)??;
-                }
-                Ok(())
-            }
-            .await;
+            let result = supervisor.run(ready_sender).await;
             inner.started.store(false, Ordering::Release);
             result
         });
@@ -120,6 +66,200 @@ impl Client {
             soft_stop_timeout: self.inner.soft_stop_timeout,
             work_cancel: Some(work_cancel),
         })
+    }
+}
+
+/// A long-running service owned by a started client.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum Service {
+    Completer,
+    Maintenance,
+    Notifier,
+    Queues,
+    Extension(usize),
+}
+
+impl Service {
+    /// Services whose failure leaves jobs unworked or unpersisted. Every other
+    /// service is restarted after a failure.
+    const fn is_essential(self) -> bool {
+        matches!(self, Self::Completer | Self::Queues)
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Completer => "completer",
+            Self::Maintenance => "maintenance",
+            Self::Notifier => "notifier",
+            Self::Queues => "producers",
+            Self::Extension(_) => "extension runtime service",
+        }
+    }
+}
+
+/// Runs a started client's services and restarts the ones that fail.
+struct Supervisor {
+    fetch_cancel: CancellationToken,
+    inner: Arc<ClientInner>,
+    restarts: HashMap<Service, u32>,
+    services: HashMap<tokio::task::Id, Service>,
+    tasks: JoinSet<Result<(), Error>>,
+    work_cancel: CancellationToken,
+}
+
+impl Supervisor {
+    async fn run(mut self, ready: ReadySender) -> Result<(), Error> {
+        let inner = Arc::clone(&self.inner);
+        let (completion_sender, completion_receiver) = mpsc::channel(10_000);
+        *inner
+            .completion_sender
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(completion_sender.downgrade());
+        self.spawn_task(
+            Service::Queues,
+            run_dynamic_queues(
+                Arc::clone(&inner),
+                completion_sender,
+                self.fetch_cancel.child_token(),
+                self.work_cancel.child_token(),
+                inner.queue_notifications.clone(),
+                inner.queue_changes.subscribe(),
+            ),
+        );
+        self.spawn_task(
+            Service::Completer,
+            run_completion_batcher(Arc::clone(&inner), completion_receiver),
+        );
+        if inner.poll_only {
+            let _ = ready.send(Ok(()));
+        } else {
+            self.spawn_service(Service::Notifier, Duration::ZERO, Some(ready));
+        }
+        self.spawn_service(Service::Maintenance, Duration::ZERO, None);
+        for index in 0..inner.pilot.runtime_services().len() {
+            self.spawn_service(Service::Extension(index), Duration::ZERO, None);
+        }
+
+        let mut fatal = None;
+        while let Some(joined) = self.tasks.join_next_with_id().await {
+            let (task_id, outcome) = match joined {
+                Ok((task_id, outcome)) => (task_id, outcome),
+                Err(join_error) => (join_error.id(), Err(Error::from_join(join_error))),
+            };
+            let Some(service) = self.services.remove(&task_id) else {
+                continue;
+            };
+            let stopping = self.fetch_cancel.is_cancelled();
+            match outcome {
+                // The completer ends once every producer has dropped its sender.
+                Ok(()) if stopping || service == Service::Completer => {}
+                Err(service_error) if stopping && !service.is_essential() => {
+                    debug!(
+                        service = service.name(),
+                        error = %service_error,
+                        "River service stopped with an error during shutdown"
+                    );
+                }
+                outcome if service.is_essential() => {
+                    let service_error = outcome.err().unwrap_or_else(|| {
+                        Error::runtime_context(service.name(), "exited unexpectedly".to_owned())
+                    });
+                    error!(
+                        service = service.name(),
+                        error = %service_error,
+                        "River service failed; stopping the client after in-flight work"
+                    );
+                    fatal.get_or_insert(service_error);
+                    self.fetch_cancel.cancel();
+                    self.work_cancel.cancel();
+                }
+                outcome => {
+                    let attempt = self.restarts.entry(service).or_default();
+                    *attempt += 1;
+                    let delay = exponential_backoff(*attempt);
+                    error!(
+                        service = service.name(),
+                        attempt = *attempt,
+                        error = %outcome.err().map_or_else(|| "exited unexpectedly".to_owned(), |error| error.to_string()),
+                        sleep_duration = ?delay,
+                        "River service failed; restarting after backoff"
+                    );
+                    self.spawn_service(service, delay, None);
+                }
+            }
+        }
+        fatal.map_or(Ok(()), Err)
+    }
+
+    fn spawn_task<F>(&mut self, service: Service, task: F)
+    where
+        F: std::future::Future<Output = Result<(), Error>> + Send + 'static,
+    {
+        let handle = self.tasks.spawn(task);
+        self.services.insert(handle.id(), service);
+    }
+
+    /// Starts a restartable service after `delay`, unless the client stops
+    /// first.
+    fn spawn_service(&mut self, service: Service, delay: Duration, ready: Option<ReadySender>) {
+        let inner = Arc::clone(&self.inner);
+        let cancel = self.fetch_cancel.child_token();
+        let run: std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Error>> + Send>> =
+            match service {
+                Service::Maintenance => Box::pin(crate::maintenance::run_maintenance(
+                    Arc::clone(&inner),
+                    cancel.clone(),
+                    inner.queue_notifications.subscribe(),
+                )),
+                Service::Notifier => match inner.database.kind() {
+                    #[cfg(feature = "postgres")]
+                    DatabaseKind::Postgres => Box::pin(run_notifications(
+                        Arc::clone(&inner),
+                        cancel.clone(),
+                        inner.queue_notifications.clone(),
+                        ready,
+                    )),
+                    #[cfg(feature = "sqlite")]
+                    DatabaseKind::Sqlite => Box::pin(run_sqlite_notifications(
+                        Arc::clone(&inner),
+                        cancel.clone(),
+                        inner.queue_notifications.clone(),
+                        ready,
+                    )),
+                },
+                Service::Extension(index) => {
+                    let Some(runtime_service) =
+                        inner.pilot.runtime_services().into_iter().nth(index)
+                    else {
+                        return;
+                    };
+                    let pool = inner.pilot_database_pool();
+                    let database = inner.pilot_database_config();
+                    let service_cancel = cancel.clone();
+                    Box::pin(async move {
+                        runtime_service
+                            .run(pool, database, service_cancel)
+                            .await
+                            .map_err(|service_error| Error::Extension {
+                                phase: "runtime service",
+                                source: service_error,
+                            })
+                    })
+                }
+                Service::Completer | Service::Queues => {
+                    unreachable!("essential services are started once")
+                }
+            };
+        self.spawn_task(service, async move {
+            if !delay.is_zero() {
+                tokio::select! {
+                    () = cancel.cancelled() => return Ok(()),
+                    () = tokio::time::sleep(delay) => {}
+                }
+            }
+            run.await
+        });
     }
 }
 
