@@ -9,7 +9,8 @@ use crate::{Queue, QueueListParams, QueueSelector, QueueUpdateParams};
 ///
 /// A queue record exists for every queue a client has worked, and is shared
 /// by every client of the database, including River clients in other
-/// languages. Pausing a queue stops every client from fetching its jobs.
+/// languages. Pausing a queue stops every client from fetching its jobs. To
+/// change which queues this client works, use [`Client::local_queues`].
 ///
 /// Each method returns a request that runs on the client's own pool when
 /// awaited, or in a caller-managed transaction after `.tx(&mut tx)`:

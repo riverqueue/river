@@ -1465,7 +1465,8 @@ async fn migrates_inserts_and_works_a_job() {
     assert!(cancelled.metadata.contains_key("cancel_attempted_at"));
 
     client
-        .queue_add(
+        .local_queues()
+        .add(
             "dynamic",
             QueueConfig::new(1)
                 .with_fetch_cooldown(Duration::from_millis(1))
@@ -1480,7 +1481,7 @@ async fn migrates_inserts_and_works_a_job() {
         .await
         .unwrap();
     wait_for_state(&client, dynamic.job.row.id, JobState::Completed).await;
-    assert!(client.queue_remove("dynamic").unwrap().is_some());
+    assert!(client.local_queues().remove("dynamic").is_some());
 
     let unique_options = InsertOpts::default().with_unique(UniqueOpts::new().by_args());
     let unique_first = client

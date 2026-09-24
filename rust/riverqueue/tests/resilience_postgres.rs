@@ -156,6 +156,16 @@ impl Gate {
             .forget();
     }
 
+    /// Fails if a gated job starts within `window`.
+    async fn assert_none_started(&self, window: Duration) {
+        assert!(
+            tokio::time::timeout(window, self.started.acquire())
+                .await
+                .is_err(),
+            "a gated job started"
+        );
+    }
+
     fn release(&self) {
         self.release.add_permits(1);
     }
@@ -1111,27 +1121,37 @@ async fn listener_does_not_occupy_a_pool_connection() {
 async fn queue_reconfiguration_waits_for_the_previous_producer() {
     let schema = TestSchema::new("reconfig").await;
     let gate = Gate::default();
-    let client = gated_client(&schema, "postgres-resilience-reconfigure", &gate);
+    let one_worker = |poll_interval_ms| {
+        QueueConfig::new(1)
+            .with_fetch_cooldown(Duration::from_millis(1))
+            .with_fetch_poll_interval(Duration::from_millis(poll_interval_ms))
+    };
+    let client = Client::builder(schema.database())
+        .id("postgres-resilience-reconfigure")
+        .without_notifications()
+        .workers(gated_workers(&gate))
+        .queue("default", one_worker(20))
+        .build()
+        .unwrap();
+    // Both jobs exist before the client starts. The original producer has one
+    // worker slot, so it can't take the second job while the first runs, no
+    // matter when it observes the reconfiguration.
     let first = client.insert(GatedArgs {}).await.unwrap();
+    let second = client.insert(GatedArgs {}).await.unwrap();
 
     let mut run = client.start().unwrap();
     gate.wait_started().await;
     client
-        .queue_add(
-            "default",
-            QueueConfig::new(1)
-                .with_fetch_cooldown(Duration::from_millis(1))
-                .with_fetch_poll_interval(Duration::from_millis(10)),
-        )
+        .local_queues()
+        .add("default", one_worker(10))
         .unwrap();
-    let second = client.insert(GatedArgs {}).await.unwrap();
-    // Hold the first job long enough that a replacement producer started
-    // too early would take the second job alongside it.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // A replacement started before the original producer drained would take
+    // the second job while the first is still held.
+    gate.assert_none_started(Duration::from_millis(500)).await;
     gate.release();
     gate.wait_started().await;
     gate.release();
-    for id in [first.job.row.id, second.job.row.id] {
+    for id in [first.id(), second.id()] {
         wait_until(Duration::from_secs(10), "both jobs", || async {
             schema.job_state(id).await == "completed"
         })

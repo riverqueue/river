@@ -1587,7 +1587,7 @@ impl Adapter {
                     .as_ref()
                     .ok_or("queue_add requires a running client")?;
                 let max_workers = optional_i64(&params, "max_workers").unwrap_or(1);
-                running.client.queue_add(
+                running.client.local_queues().add(
                     required_string(&params, "name")?,
                     QueueConfig::new(usize::try_from(max_workers)?)
                         .with_fetch_cooldown(Duration::from_millis(1))
@@ -1630,7 +1630,7 @@ impl Adapter {
                     .as_ref()
                     .ok_or("queue_remove requires a running client")?;
                 let name = required_string(&params, "name")?;
-                if running.client.queue_remove(&name)?.is_none() {
+                if running.client.local_queues().remove(&name).is_none() {
                     return Err(format!("queue {name:?} is not configured").into());
                 }
                 Ok(json!({}))
@@ -2585,7 +2585,7 @@ impl SqliteAdapter {
                     .as_ref()
                     .ok_or("queue_add requires a running client")?;
                 let max_workers = optional_i64(&params, "max_workers").unwrap_or(1);
-                running.client.queue_add(
+                running.client.local_queues().add(
                     required_string(&params, "name")?,
                     QueueConfig::new(usize::try_from(max_workers)?)
                         .with_fetch_cooldown(Duration::from_millis(1))
@@ -2628,7 +2628,7 @@ impl SqliteAdapter {
                     .as_ref()
                     .ok_or("queue_remove requires a running client")?;
                 let name = required_string(&params, "name")?;
-                if running.client.queue_remove(&name)?.is_none() {
+                if running.client.local_queues().remove(&name).is_none() {
                     return Err(format!("queue {name:?} is not configured").into());
                 }
                 Ok(json!({}))
