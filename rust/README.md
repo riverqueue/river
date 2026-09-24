@@ -44,6 +44,12 @@ let client = Client::builder(pool).build()?;
 # }
 ```
 
+To run Rust clients alongside River Go against one database, including
+version matching, queue and kind layout, unique jobs, and rolling deployment
+and rollback, see the
+[mixed deployment guide](riverqueue/docs/mixed-deployments.md), also published
+as `riverqueue::guide::mixed_deployments`.
+
 Compiled examples cover workers and graceful stop, cancellation,
 transactions, custom schemas, and migrations under the workspace crates'
 `examples` directories.

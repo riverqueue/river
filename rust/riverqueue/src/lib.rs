@@ -15,6 +15,7 @@ pub mod encoding;
 pub mod error;
 pub mod event;
 pub mod extension;
+pub mod guide;
 pub mod job;
 mod maintenance;
 pub mod periodic;
