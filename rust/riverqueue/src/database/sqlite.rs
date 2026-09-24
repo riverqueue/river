@@ -1025,37 +1025,6 @@ pub(crate) async fn merge_metadata_if_not_running(
     Ok(row.as_ref().map(decode_job_row))
 }
 
-pub(crate) async fn interrupt(
-    connection: &mut SqliteConnection,
-    id: i64,
-    metadata_updates: &Map<String, Value>,
-    now: DateTime<Utc>,
-) -> Result<Option<JobRow>, BackendError> {
-    let metadata = json_text(metadata_updates)?;
-    let sql = format!(
-        r#"
-        UPDATE river_job
-        SET
-            attempt = max(attempt - 1, 0),
-            attempted_at = NULL,
-            finalized_at = NULL,
-            metadata = jsonb_patch(json(metadata), json(?)),
-            scheduled_at = ?,
-            state = 'available'
-        WHERE id = ? AND state = 'running'
-        RETURNING {JOB_COLUMNS}
-        "#
-    );
-    sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
-        .bind(metadata)
-        .bind(sqlite_time(now))
-        .bind(id)
-        .fetch_optional(&mut *connection)
-        .await?
-        .map(JobRecord::into_job)
-        .transpose()
-}
-
 pub(crate) async fn update(
     connection: &mut SqliteConnection,
     id: i64,

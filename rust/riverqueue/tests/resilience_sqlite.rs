@@ -14,8 +14,8 @@ use std::{
 };
 
 use riverqueue::{
-    Client, InsertOpts, Job, JobArgs, JobState, MaintenanceConfig, QueueConfig, WorkContext,
-    WorkOutcome, WorkerRegistry,
+    Client, InsertOpts, Job, JobArgs, JobState, MaintenanceConfig, QueueConfig, WorkCancelled,
+    WorkContext, WorkOutcome, WorkerRegistry,
 };
 use riverqueue_migrate::SqliteMigrator;
 use serde::{Deserialize, Serialize};
@@ -38,6 +38,21 @@ struct GatedArgs {
 #[derive(Debug, thiserror::Error)]
 #[error("gated job failed")]
 struct GatedError;
+
+/// A job that waits for client shutdown, then stops cooperatively or fails.
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "rust_sqlite_resilience_shutdown")]
+struct ShutdownArgs {
+    cooperative: bool,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ShutdownError {
+    #[error("stopped for shutdown")]
+    Cancelled(#[source] WorkCancelled),
+    #[error("real failure during shutdown")]
+    Real,
+}
 
 /// Lets a test hold a gated job inside its worker until released.
 #[derive(Clone)]
@@ -126,6 +141,21 @@ fn gated_workers(gate: &Gate) -> WorkerRegistry {
     workers
         .register_fn(|_context: WorkContext, _job: Job<ResilienceArgs>| async {
             Ok::<_, Infallible>(WorkOutcome::Complete)
+        })
+        .unwrap();
+    let shutdown_gate = gate.clone();
+    workers
+        .register_fn(move |context: WorkContext, job: Job<ShutdownArgs>| {
+            let gate = shutdown_gate.clone();
+            async move {
+                gate.started.add_permits(1);
+                context.cancellation_token().cancelled().await;
+                if job.args.cooperative {
+                    Err::<WorkOutcome, _>(ShutdownError::Cancelled(WorkCancelled))
+                } else {
+                    Err(ShutdownError::Real)
+                }
+            }
         })
         .unwrap();
     let gate = gate.clone();
@@ -329,4 +359,76 @@ async fn completion_cancels_on_a_null_cancel_attempted_at_key() {
     })
     .await;
     run.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hard_shutdown_interrupts_only_cooperative_cancellations() {
+    let database = TestDatabase::new(Duration::from_secs(5)).await;
+    let gate = Gate::default();
+    let client = Client::builder(database.pool.clone())
+        .id("sqlite-resilience-shutdown")
+        .without_notifications()
+        .workers(gated_workers(&gate))
+        .queue("default", fast_queue())
+        .build()
+        .unwrap();
+    let cooperative = client
+        .insert(ShutdownArgs { cooperative: true })
+        .await
+        .unwrap();
+    let cancel_attempted = client
+        .insert(ShutdownArgs { cooperative: true })
+        .await
+        .unwrap();
+    let real_error = client
+        .insert(ShutdownArgs { cooperative: false })
+        .await
+        .unwrap();
+
+    let run = client.start().unwrap();
+    for _ in 0..3 {
+        gate.wait_started().await;
+    }
+    let notifications_before: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM river_notification WHERE topic = 'river_insert'")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    sqlx::query(
+        "UPDATE river_job SET metadata = jsonb_set(metadata, '$.cancel_attempted_at', \
+         '2026-01-02T03:04:05Z') WHERE id = ?",
+    )
+    .bind(cancel_attempted.job.row.id)
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), run.shutdown_now())
+        .await
+        .unwrap()
+        .unwrap();
+
+    let cooperative = client.job_get(cooperative.job.row.id).await.unwrap();
+    assert_eq!(cooperative.state, JobState::Available);
+    assert_eq!(cooperative.attempt, 0);
+    assert!(cooperative.attempted_at.is_some(), "attempted_at is kept");
+    assert!(cooperative.errors.is_empty());
+    let notifications_after: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM river_notification WHERE topic = 'river_insert'")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert!(notifications_after > notifications_before);
+
+    let cancel_attempted = client.job_get(cancel_attempted.job.row.id).await.unwrap();
+    assert_eq!(cancel_attempted.state, JobState::Cancelled);
+    assert!(cancel_attempted.finalized_at.is_some());
+
+    let real_error = client.job_get(real_error.job.row.id).await.unwrap();
+    assert!(matches!(
+        real_error.state,
+        JobState::Available | JobState::Retryable
+    ));
+    assert_eq!(real_error.attempt, 1);
+    assert_eq!(real_error.errors.len(), 1);
+    assert_eq!(real_error.errors[0].error, "real failure during shutdown");
 }

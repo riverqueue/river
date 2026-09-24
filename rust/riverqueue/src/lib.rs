@@ -31,7 +31,7 @@ pub use event::{
 };
 pub use extension::{
     DefaultRetryPolicy, ErrorHandler, ErrorHandlerDecision, Hook, InsertContext, InsertMiddleware,
-    Metric, MetricName, Plugin, RetryPolicy, WorkError, WorkMiddleware, WorkResult,
+    Metric, MetricName, Plugin, RetryPolicy, WorkCancelled, WorkError, WorkMiddleware, WorkResult,
 };
 pub use job::{
     AttemptError, ExtensionClaimParams, ExtensionInsertParams, InsertBatch, InsertBatchResult,
