@@ -248,6 +248,17 @@ impl<'connection> DatabaseConnection<'connection> {
         }
     }
 
+    /// Reborrows the connection for one operation, leaving this value
+    /// usable afterwards.
+    pub(crate) fn reborrow(&mut self) -> DatabaseConnection<'_> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Postgres(connection) => DatabaseConnection::Postgres(connection),
+            #[cfg(feature = "sqlite")]
+            Self::Sqlite(connection) => DatabaseConnection::Sqlite(connection),
+        }
+    }
+
     /// Returns the PostgreSQL connection, if selected.
     #[must_use]
     #[cfg(feature = "postgres")]

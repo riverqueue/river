@@ -50,115 +50,21 @@ impl ExtensionClient<'_> {
     /// # Errors
     ///
     /// Returns an error when the claim query or its transaction fails.
-    ///
-    /// # Panics
-    ///
-    /// Panics if a PostgreSQL client has no PostgreSQL pool, which River's
-    /// builder never constructs.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "each backend's claim transaction reads best inline"
-    )]
     pub async fn claim_jobs(&self, params: ExtensionClaimParams) -> Result<Vec<JobRow>, Error> {
         if params.maximum <= 0 {
             return Ok(Vec::new());
         }
-        #[cfg(feature = "sqlite")]
-        if let Some(pool) = self.client.inner.sqlite_pool() {
-            let mut transaction = crate::database::begin_sqlite_write(pool).await?;
-            let rows = crate::database::sqlite::claim_filtered(
-                &mut transaction,
-                &crate::database::sqlite::ClaimFilteredJobs {
-                    client_id: &self.client.inner.id,
-                    excluded_job_id: params.excluded_job_id,
-                    kind: &params.kind,
-                    limit: params.maximum,
-                    max_attempted_by: ATTEMPTED_BY_MAX,
-                    metadata_matches: &params.metadata_matches,
-                    metadata_updates: &params.metadata_updates,
-                    now: Utc::now(),
-                    queue: &params.queue,
-                },
-            )
-            .await;
-            return match rows {
-                Ok(mut rows) => {
-                    sort_claimed_jobs(&mut rows);
-                    transaction.commit().await?;
-                    Ok(rows)
-                }
-                Err(error) => {
-                    transaction.rollback().await?;
-                    Err(sqlite_backend_error(error))
-                }
-            };
-        }
-        #[cfg(feature = "postgres")]
-        {
-            let pool = self
-                .client
-                .inner
-                .postgres_pool()
-                .expect("PostgreSQL claim path requires a PostgreSQL pool");
-            let table = self.client.inner.schema.qualify("river_job");
-            let sql = format!(
-                "WITH locked AS (\
-                    SELECT id FROM {table} \
-                    WHERE state = 'available' AND queue = $1 AND kind = $2 \
-                      AND id != $3 AND scheduled_at <= now() \
-                      AND metadata @> $4::jsonb \
-                    ORDER BY priority ASC, scheduled_at ASC, id ASC \
-                    LIMIT $5 FOR UPDATE SKIP LOCKED\
-                 ) UPDATE {table} AS job \
-                    SET state = 'running', attempt = job.attempt + 1, \
-                        attempted_at = now(), attempted_by = array_append(\
-                            CASE WHEN array_length(job.attempted_by, 1) >= $7 \
-                                 THEN job.attempted_by[array_length(job.attempted_by, 1) + 2 - $7:] \
-                                 ELSE job.attempted_by END, $6), \
-                        metadata = job.metadata || $8::jsonb \
-                    FROM locked WHERE job.id = locked.id \
-                    RETURNING {}, false AS unique_skipped_as_duplicate",
-                job_projection("job")
-            );
-            let mut transaction = crate::database::begin_postgres(pool).await?;
-            let records = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
-                .bind(&params.queue)
-                .bind(&params.kind)
-                .bind(params.excluded_job_id)
-                .bind(Json(&params.metadata_matches))
-                .bind(params.maximum)
-                .bind(&self.client.inner.id)
-                .bind(ATTEMPTED_BY_MAX)
-                .bind(Json(&params.metadata_updates))
-                .fetch_all(&mut *transaction)
-                .await;
-            let records = match records {
-                Ok(records) => records,
-                Err(error) => {
-                    transaction.rollback().await?;
-                    return Err(error.into());
-                }
-            };
-            let rows = records
-                .into_iter()
-                .map(JobRecord::into_job_row)
-                .collect::<Result<Vec<_>, _>>();
-            return match rows {
-                Ok(mut rows) => {
-                    sort_claimed_jobs(&mut rows);
-                    transaction.commit().await?;
-                    Ok(rows)
-                }
-                Err(error) => {
-                    transaction.rollback().await?;
-                    Err(error)
-                }
-            };
-        }
-        #[allow(unreachable_code)]
-        Err(Error::runtime(
-            "database dispatch selected no supported backend".to_owned(),
-        ))
+        let inner = &self.client.inner;
+        let mut session =
+            crate::storage::Session::begin(&inner.database, crate::storage::Access::Transaction)
+                .await?;
+        let mut rows = session
+            .storage(inner)
+            .jobs_claim_filtered(ATTEMPTED_BY_MAX, &params)
+            .await?;
+        sort_claimed_jobs(&mut rows);
+        session.commit().await?;
+        Ok(rows)
     }
 
     /// Computes the configured retry delay for an exact-version extension.
@@ -366,12 +272,7 @@ impl ExtensionClient<'_> {
     where
         E: DatabaseTransactionExecutor<'executor>,
     {
-        let executor = self
-            .client
-            .inner
-            .erase_executor(connection)
-            .map_err(Error::from)?
-            .into_inner();
+        let executor = self.client.inner.transaction_connection(connection)?;
         self.client.validate_known_kind(kind)?;
         let job =
             self.client
@@ -404,12 +305,7 @@ impl ExtensionClient<'_> {
     where
         E: DatabaseTransactionExecutor<'executor>,
     {
-        let executor = self
-            .client
-            .inner
-            .erase_executor(transaction)
-            .map_err(Error::from)?
-            .into_inner();
+        let executor = self.client.inner.transaction_connection(transaction)?;
         self.client.validate_known_kind(kind)?;
         let job = self.client.prepare_periodic(
             kind,
@@ -438,12 +334,7 @@ impl ExtensionClient<'_> {
     where
         E: DatabaseTransactionExecutor<'executor>,
     {
-        let executor = self
-            .client
-            .inner
-            .erase_executor(transaction)
-            .map_err(Error::from)?
-            .into_inner();
+        let executor = self.client.inner.transaction_connection(transaction)?;
         let mut source_row = JobRow {
             attempt: 0,
             attempted_at: None,
@@ -509,7 +400,7 @@ impl ExtensionClient<'_> {
 
     async fn insert_raw_job(
         &self,
-        executor: Option<ExecutorInner<'_>>,
+        executor: Option<PilotDatabaseConnection<'_>>,
         job: InsertContext,
     ) -> Result<RawInsertResult, Error> {
         let rows = self
