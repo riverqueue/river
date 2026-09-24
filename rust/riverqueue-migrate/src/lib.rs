@@ -231,8 +231,10 @@ impl PostgresMigrator {
     /// Returns applied main-line versions in ascending order.
     pub async fn existing_versions(&self) -> Result<Vec<i64>, Error> {
         let table = self.schema.qualify("river_migration");
+        // Pass the quoted, qualified name through unchanged like Go's
+        // `TableExists`, so a mixed-case schema is not folded to lowercase.
         let exists: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
-            .bind(table.replace('"', ""))
+            .bind(&table)
             .fetch_one(&self.pool)
             .await?;
         if !exists {
@@ -384,43 +386,54 @@ fn select_migrations(
     opts: MigrateOpts,
     applied: &[i64],
 ) -> Result<Vec<Migration>, Error> {
-    for version in applied {
-        if !migrations
-            .iter()
-            .any(|migration| migration.version == *version)
-        {
-            return Err(Error::Invalid(format!(
-                "database contains unknown River migration {version}"
-            )));
-        }
-    }
-
+    // Versions recorded by a newer River release are ignored like Go: up
+    // migrations apply only unapplied known versions, and down migrations
+    // revert only applied known versions.
     let mut selected = match direction {
         Direction::Up => migrations
             .iter()
             .filter(|migration| !applied.contains(&migration.version))
-            .filter(|migration| {
-                opts.target_version
-                    .is_none_or(|target| target == -1 || migration.version <= target)
-            })
             .copied()
             .collect::<Vec<_>>(),
         Direction::Down => migrations
             .iter()
             .rev()
             .filter(|migration| applied.contains(&migration.version))
-            .filter(|migration| {
-                opts.target_version
-                    .is_none_or(|target| target == -1 || migration.version > target)
-            })
             .copied()
             .collect::<Vec<_>>(),
     };
+
+    // Go limits steps before locating the target, so a target outside the
+    // step window is not reached.
     let maximum = opts
         .max_steps
         .or_else(|| (direction == Direction::Down && opts.target_version.is_none()).then_some(1));
     if let Some(maximum) = maximum {
         selected.truncate(maximum);
+    }
+
+    if let Some(target) = opts.target_version.filter(|target| *target != -1) {
+        match selected
+            .iter()
+            .position(|migration| migration.version == target)
+        {
+            Some(index) => {
+                selected.truncate(index + 1);
+                // A down target is the version that remains applied.
+                if direction == Direction::Down {
+                    selected.pop();
+                }
+            }
+            None if direction == Direction::Down => {
+                return Err(Error::Invalid(format!(
+                    "version {target} is not in target list of valid migrations to apply"
+                )));
+            }
+            // An up target that is already applied is a no-op. Unlike Go,
+            // which then applies every remaining migration despite
+            // documenting a no-op, versions past the target stay unapplied.
+            None => selected.retain(|migration| migration.version <= target),
+        }
     }
     Ok(selected)
 }
@@ -465,4 +478,153 @@ fn validate_target(
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Direction, Error, MigrateOpts, Migration, select_migrations};
+
+    const MIGRATIONS: [Migration; 7] = {
+        const fn migration(version: i64) -> Migration {
+            Migration {
+                down_sql: "",
+                name: "test",
+                up_sql: "",
+                version,
+            }
+        }
+        [
+            migration(1),
+            migration(2),
+            migration(3),
+            migration(4),
+            migration(5),
+            migration(6),
+            migration(7),
+        ]
+    };
+
+    fn versions(
+        direction: Direction,
+        opts: MigrateOpts,
+        applied: &[i64],
+    ) -> Result<Vec<i64>, Error> {
+        select_migrations(&MIGRATIONS, direction, opts, applied).map(|selected| {
+            selected
+                .into_iter()
+                .map(|migration| migration.version)
+                .collect()
+        })
+    }
+
+    #[test]
+    fn selection_matches_go_target_and_step_semantics() {
+        let all = [1, 2, 3, 4, 5, 6, 7];
+
+        // Down defaults to one step, and a target is the version left applied.
+        assert_eq!(
+            versions(Direction::Down, MigrateOpts::new(), &all).unwrap(),
+            [7]
+        );
+        assert_eq!(
+            versions(
+                Direction::Down,
+                MigrateOpts::new().with_target_version(4),
+                &all
+            )
+            .unwrap(),
+            [7, 6, 5]
+        );
+        assert!(
+            versions(
+                Direction::Down,
+                MigrateOpts::new().with_target_version(4),
+                &[1, 2, 3, 4]
+            )
+            .unwrap()
+            .is_empty()
+        );
+        assert_eq!(
+            versions(
+                Direction::Down,
+                MigrateOpts::new().with_target_version(-1),
+                &all
+            )
+            .unwrap(),
+            [7, 6, 5, 4, 3, 2, 1]
+        );
+
+        // Steps limit the list before the target is located, like Go.
+        assert_eq!(
+            versions(
+                Direction::Down,
+                MigrateOpts::new().with_target_version(5).with_max_steps(3),
+                &all
+            )
+            .unwrap(),
+            [7, 6]
+        );
+        assert!(matches!(
+            versions(
+                Direction::Down,
+                MigrateOpts::new().with_target_version(5).with_max_steps(2),
+                &all
+            ),
+            Err(Error::Invalid(message)) if message.contains("not in target list")
+        ));
+
+        // A down target that is not applied is an error rather than a no-op.
+        assert!(matches!(
+            versions(
+                Direction::Down,
+                MigrateOpts::new().with_target_version(5),
+                &[1, 2, 3]
+            ),
+            Err(Error::Invalid(message)) if message.contains("not in target list")
+        ));
+
+        // Up targets stop at the target and are no-ops once applied.
+        assert_eq!(
+            versions(
+                Direction::Up,
+                MigrateOpts::new().with_target_version(5),
+                &[1, 2]
+            )
+            .unwrap(),
+            [3, 4, 5]
+        );
+        assert!(
+            versions(
+                Direction::Up,
+                MigrateOpts::new().with_target_version(2),
+                &[1, 2, 3]
+            )
+            .unwrap()
+            .is_empty()
+        );
+        assert_eq!(
+            versions(
+                Direction::Up,
+                MigrateOpts::new().with_target_version(6).with_max_steps(2),
+                &[1]
+            )
+            .unwrap(),
+            [2, 3]
+        );
+
+        // Versions recorded by a newer release are ignored.
+        assert_eq!(
+            versions(Direction::Up, MigrateOpts::new(), &[1, 2, 3, 99]).unwrap(),
+            [4, 5, 6, 7]
+        );
+        assert_eq!(
+            versions(
+                Direction::Down,
+                MigrateOpts::new(),
+                &[1, 2, 3, 4, 5, 6, 7, 8]
+            )
+            .unwrap(),
+            [7]
+        );
+    }
 }
