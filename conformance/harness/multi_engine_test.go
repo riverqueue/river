@@ -281,9 +281,9 @@ func verifyCrossEngineProcessKillRescue(t *testing.T, root, databaseURL string, 
 	queue := "process_kill_" + crashingSpec.Implementation
 	crashingID := crashingSpec.Implementation + "-process-kill"
 	crashing := startCandidateAdapter(t, root, databaseURL, crashingID, crashingSpec, crashingSpec.RestartCommand)
-	crashing.call(t, "start", crashingSpec.withStartOptions(map[string]any{
+	crashing.startWithTuning(t, map[string]any{
 		"client_id": crashingID, "max_workers": 1, "queue": queue,
-	}, map[string]any{"elect_interval_ms": 20}), nil)
+	}, map[string]any{"elect_interval_ms": 20})
 	require.Equal(t, crashingID, waitForLeader(t, reference, ""))
 
 	var job normalizedJob
@@ -301,12 +301,12 @@ func verifyCrossEngineProcessKillRescue(t *testing.T, root, databaseURL string, 
 
 	recoveryID := recoverySpec.Implementation + "-process-recovery"
 	recovery := startCandidateAdapter(t, root, databaseURL, recoveryID, recoverySpec, recoverySpec.RestartCommand)
-	recovery.call(t, "start", recoverySpec.withStartOptions(map[string]any{
+	recovery.startWithTuning(t, map[string]any{
 		"client_id": recoveryID, "job_timeout_ms": 1_500, "max_workers": 1,
 		"queue": queue, "rescue_after_ms": 1_500,
 	}, map[string]any{
 		"elect_interval_ms": 20, "rescuer_interval_ms": 20, "scheduler_interval_ms": 20,
-	}), nil)
+	})
 	require.Equal(t, recoveryID, waitForLeader(t, reference, crashingID))
 	reference.call(t, "wait", map[string]any{"id": job.ID}, &job)
 	require.Equal(t, "completed", job.State)
@@ -337,7 +337,9 @@ func TestMultiEngineSQLiteConformance(t *testing.T) {
 					"%s and %s must both declare %s", first.Implementation, second.Implementation, profileSQLiteRuntime)
 				databaseURL := filepath.Join(t.TempDir(), first.Implementation+"-"+second.Implementation+".sqlite")
 				firstAdapter := startAdapterCommandForProfile(t, root, databaseURL, "sqlite", profileSQLiteRuntime, first.Implementation, first.Command)
+				firstAdapter.spec = first
 				secondAdapter := startAdapterCommandForProfile(t, root, databaseURL, "sqlite", profileSQLiteRuntime, second.Implementation, second.Command)
+				secondAdapter.spec = second
 				scenarios.attach(firstAdapter, secondAdapter)
 				verifySQLiteCandidatePair(t, firstAdapter, secondAdapter)
 			}

@@ -1,18 +1,46 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "json_schema": {
+      "description": "A JSON Schema using the subset the harness validator supports.",
+      "type": ["boolean", "object"]
+    }
+  },
   "additionalProperties": false,
   "properties": {
+    "$defs": {
+      "additionalProperties": { "$ref": "#/$defs/json_schema" },
+      "description": "Schemas shared by method params and results.",
+      "type": "object"
+    },
     "$schema": { "type": "string" },
     "adapter_version": { "minimum": 1, "type": "integer" },
+    "errors": {
+      "description": "Stable JSON-RPC error codes. Harness assertions use codes, never message text.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "code": { "type": "integer" },
+          "description": { "minLength": 1, "type": "string" },
+          "name": { "pattern": "^[a-z_]+$", "type": "string" }
+        },
+        "required": ["code", "description", "name"],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
     "methods": {
       "items": {
         "additionalProperties": false,
         "properties": {
           "capability": { "pattern": "^[a-z0-9_]+$", "type": "string" },
           "description": { "minLength": 1, "type": "string" },
-          "name": { "pattern": "^[a-z0-9_]+$", "type": "string" }
+          "name": { "pattern": "^[a-z0-9_]+$", "type": "string" },
+          "params": { "$ref": "#/$defs/json_schema" },
+          "result": { "$ref": "#/$defs/json_schema" }
         },
-        "required": ["capability", "description", "name"],
+        "required": ["capability", "description", "name", "params", "result"],
         "type": "object"
       },
       "minItems": 1,
@@ -20,7 +48,7 @@
     },
     "protocol_revision": { "minimum": 1, "type": "integer" }
   },
-  "required": ["$schema", "adapter_version", "methods", "protocol_revision"],
+  "required": ["$defs", "$schema", "adapter_version", "errors", "methods", "protocol_revision"],
   "title": "River language-neutral conformance adapter contract",
   "type": "object"
 }

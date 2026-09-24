@@ -17,6 +17,7 @@ type runtimeStats struct {
 	PeriodicStarts      int      `json:"periodic_starts"`
 	ResumableFirstRuns  int      `json:"resumable_first_runs"`
 	ResumableSecondRuns int      `json:"resumable_second_runs"`
+	StuckJobs           int      `json:"stuck_jobs"`
 	Trace               []string `json:"trace"`
 }
 

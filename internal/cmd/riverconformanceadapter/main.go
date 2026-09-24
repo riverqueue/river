@@ -23,9 +23,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/robfig/cron/v3"
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/internal/dbunique"
@@ -207,6 +208,33 @@ var sqliteRuntimeMethods = []string{ //nolint:gochecknoglobals
 	"tx_queue_update", "tx_retry", "tx_rollback", "tx_update", "unique_key", "update", "wait", "work",
 }
 
+// parameterlessMethods take no params; any param is rejected.
+var parameterlessMethods = []string{ //nolint:gochecknoglobals
+	"connection_count", "fault_disconnect_listeners", "fault_expire_leader", "handshake", "leader",
+	"listener_count", "raw_insert_full_row", "runtime_stats",
+}
+
+// insertOnlyCapabilities and insertOnlyMethods are the insert-only-v1
+// profile, for clients that only insert jobs.
+var insertOnlyCapabilities = []string{"insert", "lifecycle", "transactions", "unique_jobs"} //nolint:gochecknoglobals
+
+var insertOnlyMethods = []string{ //nolint:gochecknoglobals
+	"handshake", "insert", "insert_many", "tx_begin", "tx_commit", "tx_insert", "tx_insert_many",
+	"tx_rollback", "unique_key",
+}
+
+// checkRequest rejects methods outside the advertised profile and params on
+// methods that take none.
+func checkRequest(req *request, methods []string) error {
+	if !slices.Contains(methods, req.Method) {
+		return methodNotFound(req.Method)
+	}
+	if slices.Contains(parameterlessMethods, req.Method) {
+		return decodeParams(req.Params, &struct{}{})
+	}
+	return nil
+}
+
 type request struct {
 	ID      any             `json:"id"`
 	JSONRPC string          `json:"jsonrpc"`
@@ -224,6 +252,92 @@ type response struct {
 type responseError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+}
+
+// Stable JSON-RPC error codes from conformance/adapter/contract.json.
+const (
+	errorCodeDatabase       = -32003
+	errorCodeInvalidParams  = -32602
+	errorCodeInvalidRequest = -32600
+	errorCodeMethodNotFound = -32601
+	errorCodeNotFound       = -32001
+	errorCodeParse          = -32700
+	errorCodeRejected       = -32002
+	errorCodeUnsupported    = -32004
+)
+
+// adapterError carries the contract error code for a failure the adapter
+// classifies itself.
+type adapterError struct {
+	code int
+	err  error
+}
+
+func (e *adapterError) Error() string { return e.err.Error() }
+
+func (e *adapterError) Unwrap() error { return e.err }
+
+func invalidParams(err error) error { return &adapterError{code: errorCodeInvalidParams, err: err} }
+
+func methodNotFound(method string) error {
+	return &adapterError{code: errorCodeMethodNotFound, err: fmt.Errorf("method not found: %s", method)}
+}
+
+func notFound(err error) error { return &adapterError{code: errorCodeNotFound, err: err} }
+
+func rejected(err error) error { return &adapterError{code: errorCodeRejected, err: err} }
+
+func transactionNotFound(handle string) error {
+	return notFound(fmt.Errorf("transaction %q not found", handle))
+}
+
+func unsupported(err error) error { return &adapterError{code: errorCodeUnsupported, err: err} }
+
+// errorCode maps a failure to its contract error code. River reports missing
+// rows with rivertype.ErrNotFound and database failures with driver errors;
+// every other failure River returns is a rejection of the request.
+func errorCode(err error) int {
+	var classified *adapterError
+	var postgresErr *pgconn.PgError
+	var sqliteErr *sqlite.Error
+	switch {
+	case errors.As(err, &classified):
+		return classified.code
+	case errors.Is(err, rivertype.ErrNotFound):
+		return errorCodeNotFound
+	case errors.As(err, &postgresErr), errors.As(err, &sqliteErr):
+		return errorCodeDatabase
+	default:
+		return errorCodeRejected
+	}
+}
+
+// decodeParams decodes request params strictly: absent params decode as an
+// empty object and unknown fields are rejected, so a harness or protocol
+// mismatch fails loudly instead of being ignored.
+func decodeParams(raw json.RawMessage, target any) error {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		trimmed = []byte("{}")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return invalidParams(err)
+	}
+	return nil
+}
+
+// checkHandle rejects a transaction handle on a method that does not take
+// one and requires one on a method that does.
+func checkHandle(handle string, transactional bool) error {
+	switch {
+	case transactional && handle == "":
+		return invalidParams(errors.New("handle is required"))
+	case !transactional && handle != "":
+		return invalidParams(errors.New("unknown field \"handle\""))
+	}
+	return nil
 }
 
 type conformanceArgs struct {
@@ -398,6 +512,28 @@ func (w *conformanceWorker) Work(ctx context.Context, job *river.Job[conformance
 	return nil
 }
 
+// startTuningParams are the contract's optional start tuning parameters.
+// River Go keeps these intervals internal, so the reference adapter reports
+// them as unsupported rather than silently ignoring them.
+type startTuningParams struct {
+	ElectIntervalMS     *uint64 `json:"elect_interval_ms"`
+	RescuerIntervalMS   *uint64 `json:"rescuer_interval_ms"`
+	SchedulerIntervalMS *uint64 `json:"scheduler_interval_ms"`
+}
+
+func (p startTuningParams) reject() error {
+	for name, value := range map[string]*uint64{
+		"elect_interval_ms":     p.ElectIntervalMS,
+		"rescuer_interval_ms":   p.RescuerIntervalMS,
+		"scheduler_interval_ms": p.SchedulerIntervalMS,
+	} {
+		if value != nil {
+			return unsupported(fmt.Errorf("the Go reference does not expose %s as configuration", name))
+		}
+	}
+	return nil
+}
+
 type runtimeProbe struct {
 	errorHandlerCalls   int
 	events              []string
@@ -405,6 +541,7 @@ type runtimeProbe struct {
 	periodicStarts      int
 	resumableFirstRuns  int
 	resumableSecondRuns int
+	stuckJobs           int
 	trace               []string
 }
 
@@ -444,16 +581,23 @@ func (p *runtimeProbe) incrementResumableSecond() {
 	p.resumableSecondRuns++
 }
 
+func (p *runtimeProbe) incrementStuckJobs() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.stuckJobs++
+}
+
 func (p *runtimeProbe) snapshot() map[string]any {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return map[string]any{
 		"error_handler_calls":   p.errorHandlerCalls,
-		"events":                slices.Clone(p.events),
+		"events":                valueOrEmpty(slices.Clone(p.events)),
 		"periodic_starts":       p.periodicStarts,
 		"resumable_first_runs":  p.resumableFirstRuns,
 		"resumable_second_runs": p.resumableSecondRuns,
-		"trace":                 slices.Clone(p.trace),
+		"stuck_jobs":            p.stuckJobs,
+		"trace":                 valueOrEmpty(slices.Clone(p.trace)),
 	}
 }
 
@@ -555,7 +699,7 @@ func (r *barrierRegistry) release(name string) error {
 	defer r.mu.Unlock()
 	waiter, exists := r.waiters[name]
 	if !exists {
-		return fmt.Errorf("barrier %q not found", name)
+		return notFound(fmt.Errorf("barrier %q not found", name))
 	}
 	close(waiter)
 	delete(r.waiters, name)
@@ -567,7 +711,7 @@ func (r *barrierRegistry) wait(ctx context.Context, name string) error {
 	waiter, exists := r.waiters[name]
 	r.mu.Unlock()
 	if !exists {
-		return fmt.Errorf("barrier %q not found", name)
+		return notFound(fmt.Errorf("barrier %q not found", name))
 	}
 	select {
 	case <-ctx.Done():
@@ -584,6 +728,33 @@ type insertParams struct {
 	Message    string           `json:"message"`
 	Opts       insertOptsParams `json:"opts"`
 	Schema     string           `json:"schema"`
+}
+
+// conformanceBehaviors are the worker behaviors the contract defines.
+var conformanceBehaviors = []string{ //nolint:gochecknoglobals
+	"", "barrier_output", "barrier_wait", "cancel", "cooperative_cancel", "discard", "error",
+	"ignored_cancel", "output", "panic", "resumable", "resumable_cursor", "resumable_duplicate",
+	"sleep", "snooze_once", "snooze_then_cancel", "transactional_complete",
+}
+
+// rejectRawOnlyFields rejects the fields only raw inserts and single inserts
+// accept when they appear in batch or transactional job params, and
+// validates the worker behavior.
+func (p insertParams) rejectRawOnlyFields() error {
+	if p.Kind != "" {
+		return invalidParams(errors.New("unknown field \"kind\""))
+	}
+	if p.Schema != "" {
+		return invalidParams(errors.New("unknown field \"schema\""))
+	}
+	return p.validateBehavior()
+}
+
+func (p insertParams) validateBehavior() error {
+	if !slices.Contains(conformanceBehaviors, p.Behavior) {
+		return invalidParams(fmt.Errorf("unknown behavior %q", p.Behavior))
+	}
+	return nil
 }
 
 func (p insertParams) args() conformanceArgs {
@@ -622,6 +793,13 @@ type uniqueKeyParams struct {
 	} `json:"options"`
 	Queue       string     `json:"queue"`
 	ScheduledAt *time.Time `json:"scheduled_at"`
+
+	// Fixture expectations and documentation passed through unchanged by
+	// the harness; the adapter ignores them.
+	ExpectedSHA256      string   `json:"expected_sha256"`
+	ExpectedStateMask   int      `json:"expected_state_mask"`
+	Name                string   `json:"name"`
+	SelectedUniquePaths []string `json:"selected_unique_paths"`
 }
 
 func (p uniqueKeyParams) jobArgs() (rivertype.JobArgs, error) {
@@ -705,7 +883,7 @@ func (p insertOptsParams) opts() (*river.InsertOpts, error) {
 
 func handleUniqueKey(rawParams json.RawMessage) (any, error) {
 	var params uniqueKeyParams
-	if err := json.Unmarshal(rawParams, &params); err != nil {
+	if err := decodeParams(rawParams, &params); err != nil {
 		return nil, err
 	}
 	args, err := params.jobArgs()
@@ -746,7 +924,7 @@ func handleQueueAdd(
 		MaxWorkers int    `json:"max_workers"`
 		Name       string `json:"name"`
 	}
-	if err := json.Unmarshal(rawParams, &params); err != nil {
+	if err := decodeParams(rawParams, &params); err != nil {
 		return nil, err
 	}
 	if params.MaxWorkers == 0 {
@@ -773,6 +951,7 @@ type adapterState struct {
 	barriers     *barrierRegistry
 	clock        *time.Time
 	pool         *pgxpool.Pool
+	profile      string
 	rngSeed      uint64
 	running      *runningClient
 	transactions map[string]pgx.Tx
@@ -870,9 +1049,17 @@ func run(ctx context.Context) error {
 		return err
 	}
 	defer pool.Close()
+	profile := os.Getenv("RIVER_CONFORMANCE_PROFILE")
+	if profile == "" {
+		profile = "postgres-full-v1"
+	}
+	if profile != "postgres-full-v1" && profile != "insert-only-v1" {
+		return fmt.Errorf("unsupported PostgreSQL conformance profile %q", profile)
+	}
 	state := &adapterState{
 		barriers:     newBarrierRegistry(),
 		pool:         pool,
+		profile:      profile,
 		transactions: make(map[string]pgx.Tx),
 	}
 	err = runRequestLoop(ctx, state)
@@ -893,13 +1080,13 @@ func runRequestLoop(ctx context.Context, state requestHandler) error {
 	for scanner.Scan() {
 		var req request
 		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
-			if err := encoder.Encode(errorResponse(nil, -32700, err)); err != nil {
+			if err := encoder.Encode(errorResponse(nil, errorCodeParse, err)); err != nil {
 				return err
 			}
 			continue
 		}
 		if req.JSONRPC != "2.0" {
-			if err := encoder.Encode(errorResponse(req.ID, -32600, errors.New("jsonrpc must be 2.0"))); err != nil {
+			if err := encoder.Encode(errorResponse(req.ID, errorCodeInvalidRequest, errors.New("jsonrpc must be 2.0"))); err != nil {
 				return err
 			}
 			continue
@@ -907,7 +1094,7 @@ func runRequestLoop(ctx context.Context, state requestHandler) error {
 		result, err := state.handle(ctx, &req)
 		res := response{ID: req.ID, JSONRPC: "2.0", Result: result}
 		if err != nil {
-			res = errorResponse(req.ID, -32000, err)
+			res = errorResponse(req.ID, errorCode(err), err)
 		}
 		if err := encoder.Encode(&res); err != nil {
 			return err
@@ -918,17 +1105,24 @@ func runRequestLoop(ctx context.Context, state requestHandler) error {
 
 //nolint:cyclop,funlen,gocognit,maintidx
 func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
+	methods, profileCapabilities := adapterMethods, capabilities
+	if s.profile == "insert-only-v1" {
+		methods, profileCapabilities = insertOnlyMethods, insertOnlyCapabilities
+	}
+	if err := checkRequest(req, methods); err != nil {
+		return nil, err
+	}
 	switch req.Method {
 	case "handshake":
 		return map[string]any{
 			"adapter_version":        adapterVersion,
 			"backend":                "postgres",
-			"capabilities":           capabilities,
+			"capabilities":           profileCapabilities,
 			"implementation":         "go",
 			"implementation_version": implementationVersion,
-			"methods":                adapterMethods,
+			"methods":                methods,
 			"migration_lines":        map[string]int{"main": 7},
-			"profile":                "postgres-full-v1",
+			"profile":                s.profile,
 			"protocol_revision":      protocolRevision,
 		}, nil
 
@@ -940,7 +1134,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			Schema        string `json:"schema"`
 			TargetVersion *int   `json:"target_version"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		if params.Schema != "" {
@@ -999,7 +1193,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		var params struct {
 			Schema string `json:"schema"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		table := func(name string) string {
@@ -1015,7 +1209,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		var params struct {
 			Now time.Time `json:"now"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		s.clock = &params.Now
@@ -1025,7 +1219,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		var params struct {
 			Seed uint64 `json:"seed"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		s.rngSeed = params.Seed
@@ -1042,7 +1236,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			ErrorCount uint32 `json:"error_count"`
 			JobID      int64  `json:"job_id"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		if params.ErrorCount < 1 {
@@ -1058,7 +1252,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		var params struct {
 			Name string `json:"name"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		if req.Method == "barrier_create" {
@@ -1068,7 +1262,10 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 
 	case "insert":
 		var params insertParams
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if err := (insertParams{Behavior: params.Behavior, Kind: params.Kind}).rejectRawOnlyFields(); err != nil {
 			return nil, err
 		}
 		client, err := s.clientForSchema(params.Schema)
@@ -1104,7 +1301,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		var params struct {
 			Jobs int `json:"jobs"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		if params.Jobs < 1 {
@@ -1132,11 +1329,14 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		var params struct {
 			Jobs []insertParams `json:"jobs"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		jobs := make([]river.InsertManyParams, len(params.Jobs))
 		for i, job := range params.Jobs {
+			if err := job.rejectRawOnlyFields(); err != nil {
+				return nil, err
+			}
 			opts, err := job.Opts.opts()
 			if err != nil {
 				return nil, err
@@ -1155,7 +1355,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			ID     int64  `json:"id"`
 			Schema string `json:"schema"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		if params.ID < 1 {
@@ -1172,7 +1372,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		return normalizeJob(job), nil
 
 	case "list":
-		params, err := makeJobListParams(req.Params)
+		params, _, err := makeJobListParams(req.Params, false)
 		if err != nil {
 			return nil, err
 		}
@@ -1210,7 +1410,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		return normalizeJob(job), nil
 
 	case "delete_many":
-		params, err := makeJobDeleteManyParams(req.Params)
+		params, _, err := makeJobDeleteManyParams(req.Params, false)
 		if err != nil {
 			return nil, err
 		}
@@ -1229,7 +1429,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			ID     int64 `json:"id"`
 			Output any   `json:"output"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		client, err := s.client()
@@ -1248,11 +1448,11 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			Metadata map[string]any `json:"metadata"`
 			State    string         `json:"state"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		if params.State != "completed" && params.State != "discarded" {
-			return nil, errors.New("state must be completed or discarded")
+			return nil, invalidParams(errors.New("state must be completed or discarded"))
 		}
 		metadata, err := json.Marshal(params.Metadata)
 		if err != nil {
@@ -1267,20 +1467,22 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		// finalized_at is the current time so leader cleaners never delete
+		// the row while the scenario still observes it.
 		commandTag, err := s.pool.Exec(ctx, `
 			UPDATE river_job
 			SET errors = CASE WHEN $2 = 'discarded' THEN array_append(errors, $4::jsonb) ELSE errors END,
-				finalized_at = $5::timestamptz,
+				finalized_at = now(),
 				metadata = metadata || $3::jsonb,
 				state = $2::river_job_state
 			WHERE id = $1 AND state = 'running'`,
-			params.ID, params.State, metadata, attemptError, "2026-02-03T04:05:06.789Z",
+			params.ID, params.State, metadata, attemptError,
 		)
 		if err != nil {
 			return nil, err
 		}
 		if commandTag.RowsAffected() != 1 {
-			return nil, errors.New("running job not found")
+			return nil, notFound(errors.New("running job not found"))
 		}
 		client, err := s.client()
 		if err != nil {
@@ -1302,7 +1504,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		var params struct {
 			Name string `json:"name"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		client, err := s.client()
@@ -1319,7 +1521,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		var params struct {
 			Limit int `json:"limit"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		if params.Limit == 0 {
@@ -1343,7 +1545,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		var params struct {
 			Name string `json:"name"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		client, err := s.client()
@@ -1364,7 +1566,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		var params struct {
 			Name string `json:"name"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		return map[string]any{}, s.running.client.Queues().Remove(ctx, params.Name)
@@ -1374,7 +1576,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			Metadata json.RawMessage `json:"metadata"`
 			Name     string          `json:"name"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		client, err := s.client()
@@ -1391,7 +1593,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		var params struct {
 			Handle string `json:"handle"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		client, err := s.client()
@@ -1401,7 +1603,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		if params.Handle != "" {
 			tx, ok := s.transactions[params.Handle]
 			if !ok {
-				return nil, fmt.Errorf("transaction %q not found", params.Handle)
+				return nil, transactionNotFound(params.Handle)
 			}
 			return map[string]any{}, client.Notify().RequestResignTx(ctx, tx)
 		}
@@ -1418,24 +1620,24 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 
 	case "listener_count":
 		var count int
-		err := s.pool.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'river-conformance-go' AND query LIKE 'LISTEN %'").Scan(&count)
+		err := s.pool.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'river-conformance-go' AND query LIKE 'LISTEN %'").Scan(&count)
 		return map[string]any{"count": count}, err
 
 	case "connection_count":
 		var count int
-		err := s.pool.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'river-conformance-go'").Scan(&count)
+		err := s.pool.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'river-conformance-go'").Scan(&count)
 		return map[string]any{"count": count}, err
 
 	case "fault_disconnect_listeners":
 		var count int
-		err := s.pool.QueryRow(ctx, "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'river-conformance-go' AND query LIKE 'LISTEN %' AND pid != pg_backend_pid()) AS terminated").Scan(&count)
+		err := s.pool.QueryRow(ctx, "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'river-conformance-go' AND query LIKE 'LISTEN %' AND pid != pg_backend_pid()) AS terminated").Scan(&count)
 		return map[string]any{"count": count}, err
 
 	case "fault_disconnect_application":
 		var params struct {
 			ApplicationName string `json:"application_name"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		// Only conformance adapters may be disconnected. Every descriptor's
@@ -1446,7 +1648,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			return nil, errors.New("application_name must name a conformance adapter")
 		}
 		var count int
-		err := s.pool.QueryRow(ctx, "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = $1 AND pid != pg_backend_pid()) AS terminated", params.ApplicationName).Scan(&count)
+		err := s.pool.QueryRow(ctx, "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1 AND pid != pg_backend_pid()) AS terminated", params.ApplicationName).Scan(&count)
 		return map[string]any{"count": count}, err
 
 	case "fault_expire_leader":
@@ -1455,7 +1657,10 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 
 	case "raw_insert_no_notify":
 		var params insertParams
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if err := (insertParams{Behavior: params.Behavior, Schema: params.Schema}).rejectRawOnlyFields(); err != nil {
 			return nil, err
 		}
 		encodedArgs, err := json.Marshal(params.args())
@@ -1488,7 +1693,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		var params struct {
 			ID *int64 `json:"id"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		var id int64
@@ -1565,6 +1770,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		}
 		var params struct {
 			maintenanceParams
+			startTuningParams
 
 			ClientID            string  `json:"client_id"`
 			ErrorHandlerCancel  bool    `json:"error_handler_cancel"`
@@ -1576,10 +1782,14 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			PeriodicRunOnStart  bool    `json:"periodic_run_on_start"`
 			PollOnly            bool    `json:"poll_only"`
 			Queue               string  `json:"queue"`
+			RescueAfterMS       *uint64 `json:"rescue_after_ms"`
 			RetryDelayMS        *uint64 `json:"retry_delay_ms"`
 			Schema              string  `json:"schema"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if err := params.reject(); err != nil {
 			return nil, err
 		}
 		if params.MaxWorkers == 0 {
@@ -1602,6 +1812,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			pollOnly:            params.PollOnly,
 			probe:               probe,
 			queue:               params.Queue,
+			rescueAfterMS:       params.RescueAfterMS,
 			retryDelayMS:        params.RetryDelayMS,
 			schema:              params.Schema,
 		})
@@ -1636,7 +1847,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		var params struct {
 			Cancel bool `json:"cancel"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		stopCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -1672,7 +1883,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			ID     int64                `json:"id"`
 			States []rivertype.JobState `json:"states"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		client, err := s.client()
@@ -1691,7 +1902,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			ID       int64  `json:"id"`
 			Schema   string `json:"schema"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		if params.ID < 1 {
@@ -1746,12 +1957,15 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			Handle string       `json:"handle"`
 			Job    insertParams `json:"job"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if err := params.Job.rejectRawOnlyFields(); err != nil {
 			return nil, err
 		}
 		tx, ok := s.transactions[params.Handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+			return nil, transactionNotFound(params.Handle)
 		}
 		client, err := s.client()
 		if err != nil {
@@ -1772,12 +1986,12 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			Handle string          `json:"handle"`
 			Jobs   json.RawMessage `json:"jobs"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		tx, ok := s.transactions[params.Handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+			return nil, transactionNotFound(params.Handle)
 		}
 		jobs, err := decodeInsertManyParams(params.Jobs)
 		if err != nil {
@@ -1802,12 +2016,12 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			Handle string `json:"handle"`
 			ID     int64  `json:"id"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		tx, ok := s.transactions[params.Handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+			return nil, transactionNotFound(params.Handle)
 		}
 		client, err := s.client()
 		if err != nil {
@@ -1835,12 +2049,12 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			ID     int64  `json:"id"`
 			Output any    `json:"output"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		tx, ok := s.transactions[params.Handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+			return nil, transactionNotFound(params.Handle)
 		}
 		client, err := s.client()
 		if err != nil {
@@ -1853,17 +2067,13 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		return normalizeJob(job), nil
 
 	case "tx_list":
-		handle, err := requestHandle(req.Params)
+		params, handle, err := makeJobListParams(req.Params, true)
 		if err != nil {
 			return nil, err
 		}
 		tx, ok := s.transactions[handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", handle)
-		}
-		params, err := makeJobListParams(req.Params)
-		if err != nil {
-			return nil, err
+			return nil, transactionNotFound(handle)
 		}
 		client, err := s.client()
 		if err != nil {
@@ -1876,17 +2086,13 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		return normalizeJobListResult(result)
 
 	case "tx_delete_many":
-		handle, err := requestHandle(req.Params)
+		params, handle, err := makeJobDeleteManyParams(req.Params, true)
 		if err != nil {
 			return nil, err
 		}
 		tx, ok := s.transactions[handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", handle)
-		}
-		params, err := makeJobDeleteManyParams(req.Params)
-		if err != nil {
-			return nil, err
+			return nil, transactionNotFound(handle)
 		}
 		client, err := s.client()
 		if err != nil {
@@ -1903,12 +2109,12 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			Handle string `json:"handle"`
 			Name   string `json:"name"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		tx, ok := s.transactions[params.Handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+			return nil, transactionNotFound(params.Handle)
 		}
 		client, err := s.client()
 		if err != nil {
@@ -1925,7 +2131,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			Handle string `json:"handle"`
 			Limit  int    `json:"limit"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		if params.Limit == 0 {
@@ -1933,7 +2139,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		}
 		tx, ok := s.transactions[params.Handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+			return nil, transactionNotFound(params.Handle)
 		}
 		client, err := s.client()
 		if err != nil {
@@ -1954,12 +2160,12 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			Handle string `json:"handle"`
 			Name   string `json:"name"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		tx, ok := s.transactions[params.Handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+			return nil, transactionNotFound(params.Handle)
 		}
 		client, err := s.client()
 		if err != nil {
@@ -1978,12 +2184,12 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			Metadata json.RawMessage `json:"metadata"`
 			Name     string          `json:"name"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		tx, ok := s.transactions[params.Handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+			return nil, transactionNotFound(params.Handle)
 		}
 		client, err := s.client()
 		if err != nil {
@@ -2002,7 +2208,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		}
 		tx, ok := s.transactions[handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", handle)
+			return nil, transactionNotFound(handle)
 		}
 		_, err = tx.Exec(ctx, "SELECT 1 / 0")
 		return nil, err
@@ -2014,7 +2220,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		}
 		tx, ok := s.transactions[handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", handle)
+			return nil, transactionNotFound(handle)
 		}
 		delete(s.transactions, handle)
 		if req.Method == "tx_commit" {
@@ -2023,17 +2229,20 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		return map[string]any{}, tx.Rollback(ctx)
 	}
 
-	return nil, fmt.Errorf("method not found: %s", req.Method)
+	return nil, methodNotFound(req.Method)
 }
 
 //nolint:cyclop,funlen,gocognit,maintidx
 func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, error) {
+	methods, profileCapabilities := sqliteAdapterMethods, sqliteCapabilities
+	if s.profile == "sqlite-runtime-v1" {
+		methods, profileCapabilities = sqliteRuntimeMethods, sqliteRuntimeCapabilities
+	}
+	if err := checkRequest(req, methods); err != nil {
+		return nil, err
+	}
 	switch req.Method {
 	case "handshake":
-		methods, profileCapabilities := sqliteAdapterMethods, sqliteCapabilities
-		if s.profile == "sqlite-runtime-v1" {
-			methods, profileCapabilities = sqliteRuntimeMethods, sqliteRuntimeCapabilities
-		}
 		return map[string]any{
 			"adapter_version":        adapterVersion,
 			"backend":                "sqlite",
@@ -2054,11 +2263,11 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			Schema        string `json:"schema"`
 			TargetVersion *int   `json:"target_version"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		if params.Schema != "" {
-			return nil, errors.New("SQLite conformance does not support custom schemas")
+			return nil, unsupported(errors.New("SQLite conformance does not support custom schemas"))
 		}
 		migrator, err := rivermigrate.New(riversqlite.New(s.pool), &rivermigrate.Config{Logger: adapterLogger()})
 		if err != nil {
@@ -2118,7 +2327,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		var params struct {
 			Now time.Time `json:"now"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		s.clock = &params.Now
@@ -2128,7 +2337,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		var params struct {
 			Seed uint64 `json:"seed"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		s.rngSeed = params.Seed
@@ -2145,7 +2354,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			ErrorCount uint32 `json:"error_count"`
 			JobID      int64  `json:"job_id"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		if params.ErrorCount < 1 {
@@ -2159,11 +2368,14 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 
 	case "insert":
 		var params insertParams
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if err := (insertParams{Behavior: params.Behavior, Kind: params.Kind}).rejectRawOnlyFields(); err != nil {
 			return nil, err
 		}
 		if params.Schema != "" {
-			return nil, errors.New("SQLite conformance does not support custom schemas")
+			return nil, unsupported(errors.New("SQLite conformance does not support custom schemas"))
 		}
 		opts, err := params.Opts.opts()
 		if err != nil {
@@ -2192,7 +2404,10 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 
 	case "raw_insert_no_notify":
 		var params insertParams
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if err := (insertParams{Behavior: params.Behavior, Schema: params.Schema}).rejectRawOnlyFields(); err != nil {
 			return nil, err
 		}
 		encodedArgs, err := json.Marshal(params.args())
@@ -2225,7 +2440,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		var params struct {
 			ID *int64 `json:"id"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		var id int64
@@ -2244,11 +2459,11 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			ID     int64  `json:"id"`
 			Schema string `json:"schema"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		if params.Schema != "" {
-			return nil, errors.New("SQLite conformance does not support custom schemas")
+			return nil, unsupported(errors.New("SQLite conformance does not support custom schemas"))
 		}
 		job, err := s.client().JobGet(ctx, params.ID)
 		if err != nil {
@@ -2257,7 +2472,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		return normalizeJob(job), nil
 
 	case "list":
-		params, err := makeJobListParams(req.Params)
+		params, _, err := makeJobListParams(req.Params, false)
 		if err != nil {
 			return nil, err
 		}
@@ -2288,7 +2503,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		return normalizeJob(job), nil
 
 	case "delete_many":
-		params, err := makeJobDeleteManyParams(req.Params)
+		params, _, err := makeJobDeleteManyParams(req.Params, false)
 		if err != nil {
 			return nil, err
 		}
@@ -2303,7 +2518,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			ID     int64 `json:"id"`
 			Output any   `json:"output"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		job, err := s.client().JobUpdate(ctx, params.ID, &river.JobUpdateParams{Output: params.Output})
@@ -2318,11 +2533,11 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			Metadata map[string]any `json:"metadata"`
 			State    string         `json:"state"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		if params.State != "completed" && params.State != "discarded" {
-			return nil, errors.New("state must be completed or discarded")
+			return nil, invalidParams(errors.New("state must be completed or discarded"))
 		}
 		metadata, err := json.Marshal(params.Metadata)
 		if err != nil {
@@ -2342,11 +2557,11 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			SET errors = CASE WHEN ? = 'discarded'
 					THEN jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(?)))
 					ELSE errors END,
-				finalized_at = ?,
+				finalized_at = strftime('%Y-%m-%d %H:%M:%f', 'now'),
 				metadata = jsonb_patch(json(metadata), json(?)),
 				state = ?
 			WHERE id = ? AND state = 'running'`,
-			params.State, string(attemptError), "2026-02-03 04:05:06.789",
+			params.State, string(attemptError),
 			string(metadata), params.State, params.ID,
 		)
 		if err != nil {
@@ -2357,7 +2572,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			return nil, err
 		}
 		if rowsAffected != 1 {
-			return nil, errors.New("running job not found")
+			return nil, notFound(errors.New("running job not found"))
 		}
 		job, err := s.client().JobGet(ctx, params.ID)
 		if err != nil {
@@ -2392,7 +2607,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		var params struct {
 			Name string `json:"name"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		if req.Method == "barrier_create" {
@@ -2410,7 +2625,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		var params struct {
 			Name string `json:"name"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		queue, err := s.client().QueueGet(ctx, params.Name)
@@ -2423,7 +2638,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		var params struct {
 			Limit int `json:"limit"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		if params.Limit == 0 {
@@ -2443,7 +2658,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		var params struct {
 			Name string `json:"name"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		if req.Method == "queue_pause" {
@@ -2458,7 +2673,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		var params struct {
 			Name string `json:"name"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		return map[string]any{}, s.running.client.Queues().Remove(ctx, params.Name)
@@ -2468,7 +2683,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			Metadata json.RawMessage `json:"metadata"`
 			Name     string          `json:"name"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		queue, err := s.client().QueueUpdate(ctx, params.Name, &river.QueueUpdateParams{Metadata: params.Metadata})
@@ -2492,13 +2707,13 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		var params struct {
 			Handle string `json:"handle"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		if params.Handle != "" {
 			tx, ok := s.transactions[params.Handle]
 			if !ok {
-				return nil, fmt.Errorf("transaction %q not found", params.Handle)
+				return nil, transactionNotFound(params.Handle)
 			}
 			return map[string]any{}, s.client().Notify().RequestResignTx(ctx, tx)
 		}
@@ -2510,6 +2725,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		}
 		var params struct {
 			maintenanceParams
+			startTuningParams
 
 			ClientID            string  `json:"client_id"`
 			ErrorHandlerCancel  bool    `json:"error_handler_cancel"`
@@ -2521,10 +2737,18 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			PeriodicRunOnStart  bool    `json:"periodic_run_on_start"`
 			PollOnly            bool    `json:"poll_only"`
 			Queue               string  `json:"queue"`
+			RescueAfterMS       *uint64 `json:"rescue_after_ms"`
 			RetryDelayMS        *uint64 `json:"retry_delay_ms"`
+			Schema              string  `json:"schema"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
+		}
+		if err := params.reject(); err != nil {
+			return nil, err
+		}
+		if params.Schema != "" {
+			return nil, unsupported(errors.New("SQLite conformance does not support custom schemas"))
 		}
 		if params.MaxWorkers == 0 {
 			params.MaxWorkers = 4
@@ -2538,7 +2762,8 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			id: params.ClientID, instrumented: params.Instrumented,
 			jobStuckThresholdMS: params.JobStuckThresholdMS, jobTimeoutMS: params.JobTimeoutMS,
 			maintenance: params.maintenanceParams, maxWorkers: params.MaxWorkers, periodicRunOnStart: params.PeriodicRunOnStart,
-			pollOnly: params.PollOnly, probe: probe, queue: params.Queue, retryDelayMS: params.RetryDelayMS,
+			pollOnly: params.PollOnly, probe: probe, queue: params.Queue, rescueAfterMS: params.RescueAfterMS,
+			retryDelayMS: params.RetryDelayMS,
 		})
 		if err != nil {
 			return nil, err
@@ -2562,7 +2787,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		var params struct {
 			Cancel bool `json:"cancel"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		stopCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -2597,7 +2822,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			ID     int64                `json:"id"`
 			States []rivertype.JobState `json:"states"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		job, err := waitForStates(ctx, s.client(), params.ID, params.States)
@@ -2611,7 +2836,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			ClientID string `json:"client_id"`
 			ID       int64  `json:"id"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		if params.ClientID == "" {
@@ -2659,12 +2884,15 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			Handle string       `json:"handle"`
 			Job    insertParams `json:"job"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if err := params.Job.rejectRawOnlyFields(); err != nil {
 			return nil, err
 		}
 		tx, ok := s.transactions[params.Handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+			return nil, transactionNotFound(params.Handle)
 		}
 		opts, err := params.Job.Opts.opts()
 		if err != nil {
@@ -2681,12 +2909,12 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			Handle string          `json:"handle"`
 			Jobs   json.RawMessage `json:"jobs"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		tx, ok := s.transactions[params.Handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+			return nil, transactionNotFound(params.Handle)
 		}
 		jobs, err := decodeInsertManyParams(params.Jobs)
 		if err != nil {
@@ -2707,12 +2935,12 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			Handle string `json:"handle"`
 			ID     int64  `json:"id"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		tx, ok := s.transactions[params.Handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+			return nil, transactionNotFound(params.Handle)
 		}
 		client := s.client()
 		var job *rivertype.JobRow
@@ -2738,12 +2966,12 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			ID     int64  `json:"id"`
 			Output any    `json:"output"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		tx, ok := s.transactions[params.Handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+			return nil, transactionNotFound(params.Handle)
 		}
 		job, err := s.client().JobUpdateTx(ctx, tx, params.ID, &river.JobUpdateParams{Output: params.Output})
 		if err != nil {
@@ -2752,17 +2980,13 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		return normalizeJob(job), nil
 
 	case "tx_list":
-		handle, err := requestHandle(req.Params)
+		params, handle, err := makeJobListParams(req.Params, true)
 		if err != nil {
 			return nil, err
 		}
 		tx, ok := s.transactions[handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", handle)
-		}
-		params, err := makeJobListParams(req.Params)
-		if err != nil {
-			return nil, err
+			return nil, transactionNotFound(handle)
 		}
 		result, err := s.client().JobListTx(ctx, tx, params)
 		if err != nil {
@@ -2771,17 +2995,13 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		return normalizeJobListResult(result)
 
 	case "tx_delete_many":
-		handle, err := requestHandle(req.Params)
+		params, handle, err := makeJobDeleteManyParams(req.Params, true)
 		if err != nil {
 			return nil, err
 		}
 		tx, ok := s.transactions[handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", handle)
-		}
-		params, err := makeJobDeleteManyParams(req.Params)
-		if err != nil {
-			return nil, err
+			return nil, transactionNotFound(handle)
 		}
 		result, err := s.client().JobDeleteManyTx(ctx, tx, params)
 		if err != nil {
@@ -2794,12 +3014,12 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			Handle string `json:"handle"`
 			Name   string `json:"name"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		tx, ok := s.transactions[params.Handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+			return nil, transactionNotFound(params.Handle)
 		}
 		queue, err := s.client().QueueGetTx(ctx, tx, params.Name)
 		if err != nil {
@@ -2812,7 +3032,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			Handle string `json:"handle"`
 			Limit  int    `json:"limit"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		if params.Limit == 0 {
@@ -2820,7 +3040,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		}
 		tx, ok := s.transactions[params.Handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+			return nil, transactionNotFound(params.Handle)
 		}
 		result, err := s.client().QueueListTx(ctx, tx, river.NewQueueListParams().First(params.Limit))
 		if err != nil {
@@ -2837,12 +3057,12 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			Handle string `json:"handle"`
 			Name   string `json:"name"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		tx, ok := s.transactions[params.Handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+			return nil, transactionNotFound(params.Handle)
 		}
 		var err error
 		if req.Method == "tx_queue_pause" {
@@ -2858,12 +3078,12 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			Metadata json.RawMessage `json:"metadata"`
 			Name     string          `json:"name"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		tx, ok := s.transactions[params.Handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", params.Handle)
+			return nil, transactionNotFound(params.Handle)
 		}
 		queue, err := s.client().QueueUpdateTx(ctx, tx, params.Name, &river.QueueUpdateParams{Metadata: params.Metadata})
 		if err != nil {
@@ -2878,7 +3098,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		}
 		tx, ok := s.transactions[handle]
 		if !ok {
-			return nil, fmt.Errorf("transaction %q not found", handle)
+			return nil, transactionNotFound(handle)
 		}
 		delete(s.transactions, handle)
 		if req.Method == "tx_commit" {
@@ -2887,7 +3107,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		return map[string]any{}, tx.Rollback()
 	}
 
-	return nil, fmt.Errorf("method not found for SQLite profile: %s", req.Method)
+	return nil, methodNotFound(req.Method)
 }
 
 func (s *sqliteAdapterState) client() *river.Client[*sql.Tx] {
@@ -2963,6 +3183,7 @@ type workerClientConfig struct {
 	pollOnly            bool
 	probe               *runtimeProbe
 	queue               string
+	rescueAfterMS       *uint64
 	retryDelayMS        *uint64
 	schema              string
 }
@@ -2978,7 +3199,6 @@ type maintenanceParams struct {
 	JobTimeoutDisabled      bool     `json:"job_timeout_disabled"`
 	ReindexerIndexNames     []string `json:"reindexer_index_names"`
 	ReindexerIntervalMS     *uint64  `json:"reindexer_interval_ms"`
-	RescueAfterMS           *uint64  `json:"rescue_after_ms"`
 }
 
 func (p maintenanceParams) apply(config *river.Config) error {
@@ -3018,13 +3238,6 @@ func (p maintenanceParams) apply(config *river.Config) error {
 			return err
 		}
 		config.ReindexerSchedule = river.PeriodicInterval(interval)
-	}
-	if p.RescueAfterMS != nil {
-		rescueAfter, err := durationFromMilliseconds(*p.RescueAfterMS)
-		if err != nil {
-			return err
-		}
-		config.RescueStuckJobsAfter = rescueAfter
 	}
 	return nil
 }
@@ -3093,6 +3306,17 @@ func newWorkerConfig(pool *pgxpool.Pool, barriers *barrierRegistry, config worke
 		Schema:   config.schema,
 		TestOnly: true,
 		Workers:  workers,
+	}
+	riverConfig.JobStuckHandler = func(context.Context, river.JobStuckHandlerParams) river.JobStuckHandlerResult {
+		config.probe.incrementStuckJobs()
+		return river.JobStuckHandlerResult{}
+	}
+	if config.rescueAfterMS != nil {
+		duration, err := durationFromMilliseconds(*config.rescueAfterMS)
+		if err != nil {
+			return nil, err
+		}
+		riverConfig.RescueStuckJobsAfter = duration
 	}
 	if config.fetchPollIntervalMS != nil {
 		duration, err := durationFromMilliseconds(*config.fetchPollIntervalMS)
@@ -3256,14 +3480,17 @@ func decodeInsertManyParams(encoded json.RawMessage) ([]river.InsertManyParams, 
 		Jobs []insertParams `json:"jobs"`
 	}
 	if len(encoded) > 0 && encoded[0] == '[' {
-		if err := json.Unmarshal(encoded, &envelope.Jobs); err != nil {
+		if err := decodeParams(encoded, &envelope.Jobs); err != nil {
 			return nil, err
 		}
-	} else if err := json.Unmarshal(encoded, &envelope); err != nil {
+	} else if err := decodeParams(encoded, &envelope); err != nil {
 		return nil, err
 	}
 	jobs := make([]river.InsertManyParams, len(envelope.Jobs))
 	for i, job := range envelope.Jobs {
+		if err := job.rejectRawOnlyFields(); err != nil {
+			return nil, err
+		}
 		opts, err := job.Opts.opts()
 		if err != nil {
 			return nil, err
@@ -3323,11 +3550,11 @@ func requestID(paramsJSON json.RawMessage) (int64, error) {
 	var params struct {
 		ID int64 `json:"id"`
 	}
-	if err := json.Unmarshal(paramsJSON, &params); err != nil {
+	if err := decodeParams(paramsJSON, &params); err != nil {
 		return 0, err
 	}
 	if params.ID < 1 {
-		return 0, errors.New("id must be positive")
+		return 0, invalidParams(errors.New("id must be positive"))
 	}
 	return params.ID, nil
 }
@@ -3336,11 +3563,11 @@ func requestHandle(paramsJSON json.RawMessage) (string, error) {
 	var params struct {
 		Handle string `json:"handle"`
 	}
-	if err := json.Unmarshal(paramsJSON, &params); err != nil {
+	if err := decodeParams(paramsJSON, &params); err != nil {
 		return "", err
 	}
 	if params.Handle == "" {
-		return "", errors.New("handle is required")
+		return "", invalidParams(errors.New("handle is required"))
 	}
 	return params.Handle, nil
 }
@@ -3371,7 +3598,9 @@ func waitForStates[TTx any](ctx context.Context, client *river.Client[TTx], id i
 	}
 }
 
-func makeJobListParams(raw json.RawMessage) (*river.JobListParams, error) {
+// makeJobListParams decodes list filters and the transaction handle, which
+// only tx_list accepts.
+func makeJobListParams(raw json.RawMessage, transactional bool) (*river.JobListParams, string, error) {
 	var params struct {
 		After      string               `json:"after"`
 		Direction  string               `json:"direction"`
@@ -3383,11 +3612,15 @@ func makeJobListParams(raw json.RawMessage) (*river.JobListParams, error) {
 		Priorities []int16              `json:"priorities"`
 		Queues     []string             `json:"queues"`
 		States     []rivertype.JobState `json:"states"`
+		Handle     string               `json:"handle"`
 		TagsAll    []string             `json:"tags_all"`
 		TagsAny    []string             `json:"tags_any"`
 	}
-	if err := json.Unmarshal(raw, &params); err != nil {
-		return nil, err
+	if err := decodeParams(raw, &params); err != nil {
+		return nil, "", err
+	}
+	if err := checkHandle(params.Handle, transactional); err != nil {
+		return nil, "", err
 	}
 	if params.Limit == 0 {
 		params.Limit = 100
@@ -3413,7 +3646,7 @@ func makeJobListParams(raw json.RawMessage) (*river.JobListParams, error) {
 		case string(river.JobListOrderByTime):
 			field = river.JobListOrderByTime
 		default:
-			return nil, fmt.Errorf("unsupported order_by %q", params.OrderBy)
+			return nil, "", invalidParams(fmt.Errorf("unsupported order_by %q", params.OrderBy))
 		}
 		direction := river.SortOrderAsc
 		switch params.Direction {
@@ -3421,7 +3654,7 @@ func makeJobListParams(raw json.RawMessage) (*river.JobListParams, error) {
 		case "desc":
 			direction = river.SortOrderDesc
 		default:
-			return nil, fmt.Errorf("unsupported direction %q", params.Direction)
+			return nil, "", invalidParams(fmt.Errorf("unsupported direction %q", params.Direction))
 		}
 		result = result.OrderBy(field, direction)
 	}
@@ -3443,31 +3676,37 @@ func makeJobListParams(raw json.RawMessage) (*river.JobListParams, error) {
 	if params.After != "" {
 		var cursor river.JobListCursor
 		if err := cursor.UnmarshalText([]byte(params.After)); err != nil {
-			return nil, err
+			return nil, "", rejected(err)
 		}
 		result = result.After(&cursor)
 	}
-	return result, nil
+	return result, params.Handle, nil
 }
 
-func makeJobDeleteManyParams(raw json.RawMessage) (*river.JobDeleteManyParams, error) {
+// makeJobDeleteManyParams decodes bulk delete filters and the transaction
+// handle, which only tx_delete_many accepts.
+func makeJobDeleteManyParams(raw json.RawMessage, transactional bool) (*river.JobDeleteManyParams, string, error) {
 	var params struct {
 		All    bool                 `json:"all"`
+		Handle string               `json:"handle"`
 		IDs    []int64              `json:"ids"`
 		Kinds  []string             `json:"kinds"`
 		Limit  int                  `json:"limit"`
 		Queues []string             `json:"queues"`
 		States []rivertype.JobState `json:"states"`
 	}
-	if err := json.Unmarshal(raw, &params); err != nil {
-		return nil, err
+	if err := decodeParams(raw, &params); err != nil {
+		return nil, "", err
+	}
+	if err := checkHandle(params.Handle, transactional); err != nil {
+		return nil, "", err
 	}
 	if params.Limit == 0 {
 		params.Limit = 100
 	}
 	result := river.NewJobDeleteManyParams().First(params.Limit)
 	if params.All {
-		return result.UnsafeAll(), nil
+		return result.UnsafeAll(), params.Handle, nil
 	}
 	if params.IDs != nil {
 		result = result.IDs(params.IDs...)
@@ -3481,7 +3720,7 @@ func makeJobDeleteManyParams(raw json.RawMessage) (*river.JobDeleteManyParams, e
 	if params.States != nil {
 		result = result.States(params.States...)
 	}
-	return result, nil
+	return result, params.Handle, nil
 }
 
 func valueOrZero[T any](value *T) T {

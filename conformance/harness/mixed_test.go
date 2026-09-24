@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -429,6 +430,34 @@ func verifyPostgresHandshakes(t *testing.T, repositoryRoot string, candidateSpec
 	require.Equal(t, adapterContract.ProtocolRevision, goHandshake.ProtocolRevision)
 	require.Equal(t, expectedMethods, goHandshake.Methods)
 	require.Equal(t, goHandshake.Methods, candidateHandshake.Methods)
+	verifyRequestStrictness(t, goAdapter, candidateAdapter)
+}
+
+// verifyRequestStrictness requires adapters to reject unknown methods and
+// params with contract error codes instead of ignoring them, and to report
+// optional start tuning they do not declare as unsupported.
+func verifyRequestStrictness(t *testing.T, adapters ...*adapter) {
+	t.Helper()
+
+	for _, current := range adapters {
+		current.requireUnvalidatedCallError(t, "not_a_contract_method", map[string]any{}, "method_not_found")
+		current.requireUnvalidatedCallError(t, "handshake", map[string]any{"unexpected": true}, "invalid_params")
+		current.requireUnvalidatedCallError(t, "insert", map[string]any{
+			"message": "unknown option", "opts": map[string]any{"not_an_option": true},
+		}, "invalid_params")
+		var handshake adapterHandshake
+		current.call(t, "handshake", map[string]any{}, &handshake)
+		if !slices.Contains(handshake.Methods, "start") {
+			continue
+		}
+		for _, option := range []string{"elect_interval_ms", "rescuer_interval_ms", "scheduler_interval_ms"} {
+			if !current.spec.supportsStartOption(option) {
+				current.requireCallError(t, "start", map[string]any{
+					"client_id": current.name + "-unsupported-option", option: 20,
+				}, "unsupported")
+			}
+		}
+	}
 }
 
 // verifyMigratorRuntime rebuilds the default schema with one implementation's
@@ -570,7 +599,7 @@ func verifyTransactionAbortRollback(t *testing.T, goAdapter, candidateAdapter *a
 			"handle": handle,
 			"job":    map[string]any{"message": "must roll back after SQL failure"},
 		}, &failedTxJob)
-		require.NotEmpty(t, transactionAdapter.callError(t, "tx_fail", map[string]any{"handle": handle}))
+		transactionAdapter.requireCallError(t, "tx_fail", map[string]any{"handle": handle}, "database_error")
 		_ = transactionAdapter.callResponse(t, "tx_commit", map[string]any{"handle": handle})
 		requireJobNotFound(t, goAdapter, failedTxJob.ID)
 		requireJobNotFound(t, candidateAdapter, failedTxJob.ID)
@@ -580,6 +609,5 @@ func verifyTransactionAbortRollback(t *testing.T, goAdapter, candidateAdapter *a
 func requireJobNotFound(t *testing.T, observer *adapter, id int64) {
 	t.Helper()
 
-	require.Contains(t, observer.callError(t, "get", map[string]any{"id": id}), "not found",
-		"%s adapter unexpectedly found job %d", observer.name, id)
+	observer.requireCallError(t, "get", map[string]any{"id": id}, "not_found")
 }

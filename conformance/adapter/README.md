@@ -95,6 +95,37 @@ lifecycle behavior. PostgreSQL-specific schemas,
 reindexing, rescuer/cleaner maintenance, performance, and soak remain outside
 that profile.
 
+## Params, results, and errors
+
+`contract.json` gives every method a `params` and a `result` JSON Schema
+(shared shapes live in its `$defs`, and normalized jobs and queues reference
+`../schema/normalized-job.schema.json` and
+`../schema/normalized-queue.schema.json`). The harness validates every request
+it sends and every result it receives against them, so a response with a
+missing, extra, or mistyped field fails even when no scenario inspects it.
+Adapters must reject parameters their method does not declare, including
+nested ones, with `invalid_params` instead of ignoring them.
+
+Errors use the stable JSON-RPC codes listed under `errors` in `contract.json`.
+Scenarios assert codes, never message text:
+
+| Code | Name | Meaning |
+|---|---|---|
+| -32700 | `parse_error` | The request line is not JSON. |
+| -32600 | `invalid_request` | Not a JSON-RPC 2.0 request. |
+| -32601 | `method_not_found` | The method is outside the advertised profile. |
+| -32602 | `invalid_params` | Params do not match the method schema. |
+| -32000 | `internal` | The adapter itself failed. |
+| -32001 | `not_found` | A job, queue, transaction handle, or barrier does not exist. |
+| -32002 | `rejected` | The implementation refused or could not complete the request. |
+| -32003 | `database_error` | The database reported an error. |
+| -32004 | `unsupported` | A valid optional parameter the implementation cannot honor. |
+
+The optional `start` tuning parameters `elect_interval_ms`,
+`rescuer_interval_ms`, and `scheduler_interval_ms` return `unsupported` from
+an adapter whose implementation does not expose them; the Go reference is one.
+`rescue_after_ms` is required of every runtime adapter.
+
 ## Discovery and administration
 
 - `handshake`: protocol and adapter versions, implementation identity,
@@ -126,8 +157,9 @@ that profile.
   `queue_cleaner_interval_ms`, `rescuer_interval_ms`,
   `scheduler_interval_ms`) only shorten waits and may be ignored.
 - `runtime_stats` exposes normalized hook, middleware, periodic, resumable,
-  and event-subscription observations without exposing language-specific API
-  shapes. Version 1 observes delivered event kinds but does not expose
+  stuck-job, and event-subscription observations without exposing
+  language-specific API shapes. `stuck_jobs` counts jobs the runtime reported
+  as stuck after ignoring cancellation beyond the stuck threshold. Version 1 observes delivered event kinds but does not expose
   subscriber lag counters; adding normalized lag observations requires a
   contract revision.
 - `barrier_create` and `barrier_release` coordinate the `barrier_wait` and
@@ -180,9 +212,11 @@ other.
 
 - `raw_insert_no_notify` proves polling recovers work when notification
   delivery is lost.
-- `raw_finalize` forces a running row to an external terminal state so the
-  suite can prove late worker completion preserves that state and error while
-  merging worker metadata and delivering the canonical worker-outcome event.
+- `raw_finalize` forces a running row to an external terminal state, with
+  `finalized_at` set to the database's current time, so the suite can prove
+  late worker completion preserves that state and error while merging worker
+  metadata and delivering the canonical worker-outcome event. A current
+  timestamp keeps leader cleaners from deleting the row mid-scenario.
 - `fault_disconnect_listeners` terminates the adapter's PostgreSQL listener
   backends and the harness waits for reconnection.
 - `fault_disconnect_application` terminates all non-caller connections for one

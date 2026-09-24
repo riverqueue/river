@@ -605,15 +605,12 @@ func verifyProcessKillRestartAndRescue(t *testing.T, repositoryRoot, databaseURL
 
 	recovery := startCandidateAdapter(t, repositoryRoot, databaseURL, "candidate-recovery", pair.candidateSpec, pair.candidateSpec.RestartCommand)
 	recoveryClientID := pair.candidateSpec.Implementation + "-recovery-worker"
-	recovery.call(t, "start", map[string]any{
-		"client_id":             recoveryClientID,
-		"elect_interval_ms":     20,
-		"job_timeout_ms":        1_500,
-		"max_workers":           1,
-		"rescue_after_ms":       1_500,
-		"rescuer_interval_ms":   20,
-		"scheduler_interval_ms": 20,
-	}, nil)
+	recovery.startWithTuning(t, map[string]any{
+		"client_id":       recoveryClientID,
+		"job_timeout_ms":  1_500,
+		"max_workers":     1,
+		"rescue_after_ms": 1_500,
+	}, map[string]any{"elect_interval_ms": 20, "rescuer_interval_ms": 20, "scheduler_interval_ms": 20})
 	recovery.call(t, "wait", map[string]any{"id": crashJob.ID}, &crashJob)
 	require.Equal(t, "completed", crashJob.State)
 	require.Equal(t, 2, crashJob.Attempt)

@@ -47,12 +47,12 @@ func verifyCustomSchema(t *testing.T, schema string, migrator, worker *adapter) 
 		"message": "maximum portable schema", "schema": boundarySchema,
 	}, &boundaryJob)
 	require.Positive(t, boundaryJob.ID)
-	require.Contains(t, worker.callError(t, "insert", map[string]any{
+	worker.requireCallError(t, "insert", map[string]any{
 		"message": "schema too long", "schema": strings.Repeat("s", 47),
-	}), "46")
-	require.NotEmpty(t, worker.callError(t, "insert", map[string]any{
+	}, "rejected")
+	worker.requireCallError(t, "insert", map[string]any{
 		"message": "invalid schema", "schema": "river-invalid",
-	}))
+	}, "rejected")
 }
 
 // verifyConcurrentUniqueConflicts proves that a unique insert blocks on
@@ -191,9 +191,9 @@ func verifyBatchInsertion(t *testing.T, goAdapter, candidateAdapter *adapter) {
 		{actor: candidateAdapter, observer: goAdapter},
 	} {
 		pair.actor.call(t, "reset", map[string]any{}, nil)
-		require.Contains(t, pair.actor.callError(t, "insert_many", map[string]any{
+		pair.actor.requireCallError(t, "insert_many", map[string]any{
 			"jobs": []map[string]any{},
-		}), "no jobs to insert")
+		}, "rejected")
 		uniqueParams := map[string]any{
 			"message": "typed batch duplicate " + pair.actor.name,
 			"opts":    map[string]any{"unique": map[string]any{"by_args": true}},
@@ -244,10 +244,10 @@ func verifyBatchInsertion(t *testing.T, goAdapter, candidateAdapter *adapter) {
 		}
 
 		invalidTag := "invalid_batch_" + pair.actor.name
-		require.NotEmpty(t, pair.actor.callError(t, "insert_many", map[string]any{"jobs": []map[string]any{
+		pair.actor.requireCallError(t, "insert_many", map[string]any{"jobs": []map[string]any{
 			{"message": "must roll back", "opts": map[string]any{"tags": []string{invalidTag}}},
 			{"message": "invalid priority", "opts": map[string]any{"priority": 99}},
-		}}))
+		}}, "rejected")
 		var invalidRows struct {
 			Jobs []normalizedJob `json:"jobs"`
 		}
@@ -297,10 +297,10 @@ func verifyTransactionalBatchInsertion(t *testing.T, actor, observer *adapter, f
 		actor.call(t, "reset", map[string]any{}, nil)
 		handle := "batch-empty-" + actor.name
 		actor.call(t, "tx_begin", map[string]any{"handle": handle}, nil)
-		require.Contains(t, actor.callError(t, method, map[string]any{
+		actor.requireCallError(t, method, map[string]any{
 			"handle": handle,
 			"jobs":   []map[string]any{},
-		}), "no jobs to insert")
+		}, "rejected")
 		actor.call(t, "tx_commit", map[string]any{"handle": handle}, nil)
 	}
 	for _, commit := range []bool{false, true} {
@@ -521,7 +521,7 @@ func verifyBulkDeleteSafety(t *testing.T, goAdapter, candidateAdapter *adapter) 
 			requireJobNotFound(t, pair.writer, id)
 		}
 		for _, current := range []*adapter{pair.writer, pair.reader} {
-			require.NotEmpty(t, current.callError(t, "delete_many", map[string]any{}))
+			current.requireCallError(t, "delete_many", map[string]any{}, "rejected")
 		}
 		var observed normalizedJob
 		pair.writer.call(t, "get", map[string]any{"id": survivor.ID}, &observed)

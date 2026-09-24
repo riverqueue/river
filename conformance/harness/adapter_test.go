@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -35,7 +36,10 @@ type adapter struct {
 	openHandles       map[string]bool
 	output            *bufio.Scanner
 	running           bool
-	stderr            lockedBuffer
+	// spec describes the implementation behind the adapter, including the
+	// optional start tuning it honors.
+	spec   adapterSpec
+	stderr lockedBuffer
 }
 
 type adapterHandshake struct {
@@ -170,12 +174,34 @@ func (adapter *adapter) kill(t *testing.T) {
 	adapter.openHandles = nil
 }
 
-func (adapter *adapter) callError(t *testing.T, method string, params any) string {
+// requireCallError performs a request that must fail with the named contract
+// error code.
+func (adapter *adapter) requireCallError(t *testing.T, method string, params any, errorName string) {
 	t.Helper()
 
-	response := adapter.callResponse(t, method, params)
+	requireResponseError(t, adapter, method, adapter.callResponse(t, method, params), errorName)
+}
+
+// requireUnvalidatedCallError sends a deliberately invalid request, bypassing
+// the harness's own contract validation, and requires the named error code.
+func (adapter *adapter) requireUnvalidatedCallError(t *testing.T, method string, params any, errorName string) {
+	t.Helper()
+
+	response, err := adapter.unvalidatedRoundTrip(method, params)
+	require.NoErrorf(t, err, "%s adapter stderr: %s", adapter.name, adapter.stderr.String())
+	requireResponseError(t, adapter, method, response, errorName)
+}
+
+func requireResponseError(t *testing.T, adapter *adapter, method string, response rpcResponse, errorName string) {
+	t.Helper()
+
+	contract, err := sharedAdapterContract()
+	require.NoError(t, err)
+	code, ok := contract.errorCodes[errorName]
+	require.True(t, ok, "unknown contract error %q", errorName)
 	require.NotNil(t, response.Error, "%s adapter %s unexpectedly succeeded", adapter.name, method)
-	return response.Error.Message
+	require.Equal(t, code, response.Error.Code, "%s adapter %s returned %s (%d) instead of %s: %s",
+		adapter.name, method, contract.errorNames[response.Error.Code], response.Error.Code, errorName, response.Error.Message)
 }
 
 func (adapter *adapter) callResponse(t *testing.T, method string, params any) rpcResponse {
@@ -205,10 +231,44 @@ func (adapter *adapter) recover() {
 	}
 }
 
-// roundTrip writes one request and reads its response. It also tracks which
+// roundTrip writes one request and reads its response, validating params,
+// results, and error codes against the adapter contract. It also tracks which
 // runtime client and transaction handles the adapter holds so recover can
 // release them.
 func (adapter *adapter) roundTrip(method string, params any) (rpcResponse, error) {
+	contract, err := sharedAdapterContract()
+	if err != nil {
+		return rpcResponse{}, err
+	}
+	if err := contract.validate(method, "params", params); err != nil {
+		return rpcResponse{}, fmt.Errorf("harness request invalid: %w", err)
+	}
+	response, err := adapter.unvalidatedRoundTrip(method, params)
+	if err != nil {
+		return response, err
+	}
+	if response.Error != nil {
+		if _, known := contract.errorNames[response.Error.Code]; !known {
+			return response, fmt.Errorf("%s adapter %s returned error code %d, which the contract does not define: %s",
+				adapter.name, method, response.Error.Code, response.Error.Message)
+		}
+		return response, nil
+	}
+	var result any
+	if len(response.Result) > 0 {
+		if result, err = decodeJSONWithNumbers(response.Result); err != nil {
+			return response, fmt.Errorf("decode %s adapter %s result: %w", adapter.name, method, err)
+		}
+	}
+	if err := contract.validate(method, "result", result); err != nil {
+		return response, fmt.Errorf("%s adapter: %w", adapter.name, err)
+	}
+	return response, nil
+}
+
+// unvalidatedRoundTrip sends a request without contract validation, for
+// scenarios that deliberately send invalid requests.
+func (adapter *adapter) unvalidatedRoundTrip(method string, params any) (rpcResponse, error) {
 	adapter.nextID++
 	requestID := adapter.nextID
 	encoded, err := json.Marshal(map[string]any{
@@ -269,6 +329,26 @@ func (adapter *adapter) trackState(method string, params any) {
 	}
 }
 
+var loadedContract struct { //nolint:gochecknoglobals // parsed once per test process
+	contract *adapterContract
+	err      error
+	once     sync.Once
+}
+
+// sharedAdapterContract returns the parsed adapter contract.
+func sharedAdapterContract() (*adapterContract, error) {
+	loadedContract.once.Do(func() {
+		_, filename, _, ok := runtime.Caller(0)
+		if !ok {
+			loadedContract.err = errors.New("locate harness source")
+			return
+		}
+		path := filepath.Clean(filepath.Join(filepath.Dir(filename), "../adapter/contract.json"))
+		loadedContract.contract, loadedContract.err = parseAdapterContract(path)
+	})
+	return loadedContract.contract, loadedContract.err
+}
+
 func repoRoot(t *testing.T) string {
 	t.Helper()
 
@@ -284,6 +364,7 @@ func startCandidateAdapter(t *testing.T, root, databaseURL, name string, spec ad
 
 	started := startAdapterCommand(t, root, databaseURL, name, command)
 	started.applicationName = spec.ApplicationName
+	started.spec = spec
 	return started
 }
 
@@ -293,6 +374,7 @@ func startReferenceAdapter(t *testing.T, root, databaseURL, name string) *adapte
 
 	started := startAdapterCommand(t, root, databaseURL, name, referenceAdapterCommand(t, root))
 	started.applicationName = referenceApplicationName
+	started.spec = referenceSpec()
 	return started
 }
 
@@ -301,7 +383,17 @@ func startReferenceAdapter(t *testing.T, root, databaseURL, name string) *adapte
 func startReferenceAdapterForProfile(t *testing.T, root, databaseURL, databaseKind, profile, name string) *adapter {
 	t.Helper()
 
-	return startAdapterCommandForProfile(t, root, databaseURL, databaseKind, profile, name, referenceAdapterCommand(t, root))
+	started := startAdapterCommandForProfile(t, root, databaseURL, databaseKind, profile, name, referenceAdapterCommand(t, root))
+	started.spec = referenceSpec()
+	return started
+}
+
+// startWithTuning starts the adapter's client with params plus whichever
+// optional tuning parameters its implementation declares it honors.
+func (adapter *adapter) startWithTuning(t *testing.T, params, tuning map[string]any) {
+	t.Helper()
+
+	adapter.call(t, "start", adapter.spec.withStartOptions(params, tuning), nil)
 }
 
 func startAdapterCommand(t *testing.T, root, databaseURL, name string, command []string) *adapter {

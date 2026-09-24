@@ -73,7 +73,8 @@ func (observer *postgresObserver) waitForLockWait(t *testing.T, applicationName 
 		require.NoError(t, observer.pool.QueryRow(context.Background(), `
 			SELECT count(*)
 			FROM pg_stat_activity
-			WHERE application_name = $1
+			WHERE datname = current_database()
+				AND application_name = $1
 				AND state = 'active'
 				AND wait_event_type = 'Lock'`,
 			applicationName,

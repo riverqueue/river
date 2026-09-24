@@ -28,6 +28,7 @@ func TestMixedSQLiteConformance(t *testing.T) {
 	candidateAdapter := startAdapterCommandForBackend(
 		t, repositoryRoot, databaseURL, "sqlite", candidateSpec.Implementation, candidateSpec.Command,
 	)
+	candidateAdapter.spec = candidateSpec
 	scenarios.attach(goAdapter, candidateAdapter)
 	pair := mixedPair{candidate: candidateAdapter, candidateSpec: candidateSpec, reference: goAdapter}
 
@@ -100,6 +101,7 @@ func TestMixedSQLiteRuntimeConformance(t *testing.T) {
 		t, repositoryRoot, databaseURL, "sqlite", profileName,
 		candidateSpec.Implementation, candidateSpec.Command,
 	)
+	candidateAdapter.spec = candidateSpec
 	scenarios.attach(goAdapter, candidateAdapter)
 	pair := mixedPair{candidate: candidateAdapter, candidateSpec: candidateSpec, reference: goAdapter}
 
@@ -230,6 +232,16 @@ func verifyProfileHandshakes(t *testing.T, repositoryRoot, profilePath string, c
 		require.Equal(t, profile.Capabilities, handshake.Capabilities)
 		require.Equal(t, profile.Methods, handshake.Methods)
 		require.Equal(t, map[string]int{manifest.Migration.Line: manifest.Migration.Latest}, handshake.MigrationLines)
+	}
+	verifyRequestStrictness(t, goAdapter, candidateAdapter)
+	contract, err := sharedAdapterContract()
+	require.NoError(t, err)
+	for method := range contract.methods {
+		if !slices.Contains(profile.Methods, method) {
+			for _, current := range []*adapter{goAdapter, candidateAdapter} {
+				current.requireUnvalidatedCallError(t, method, map[string]any{}, "method_not_found")
+			}
+		}
 	}
 }
 
@@ -434,10 +446,10 @@ func verifySQLitePeriodicScheduler(t *testing.T, goAdapter, candidateAdapter *ad
 
 	for _, worker := range []*adapter{goAdapter, candidateAdapter} {
 		worker.call(t, "reset", map[string]any{}, nil)
-		worker.call(t, "start", map[string]any{
+		worker.startWithTuning(t, map[string]any{
 			"client_id": worker.name + "-sqlite-maintenance", "instrumented": true,
-			"max_workers": 1, "periodic_run_on_start": true, "scheduler_interval_ms": 20,
-		}, nil)
+			"max_workers": 1, "periodic_run_on_start": true,
+		}, map[string]any{"scheduler_interval_ms": 20})
 		var scheduled normalizedJob
 		worker.call(t, "insert", map[string]any{
 			"message": "SQLite scheduled job",
@@ -798,9 +810,7 @@ func verifySQLiteTransactions(t *testing.T, goAdapter, candidateAdapter *adapter
 			"handle": handle, "id": inserted.ID,
 		}, &inTransaction)
 		require.Equal(t, inserted, inTransaction)
-		require.Contains(t, pair.observer.callError(t, "get", map[string]any{
-			"id": inserted.ID,
-		}), "not found")
+		requireJobNotFound(t, pair.observer, inserted.ID)
 		pair.actor.call(t, "tx_update", map[string]any{
 			"handle": handle, "id": inserted.ID, "output": map[string]any{"committed": true},
 		}, &inTransaction)
@@ -830,20 +840,18 @@ func verifySQLiteTransactions(t *testing.T, goAdapter, candidateAdapter *adapter
 			"handle": handle, "job": map[string]any{"message": "SQLite transaction rollback"},
 		}, &inserted)
 		pair.actor.call(t, "tx_rollback", map[string]any{"handle": handle}, nil)
-		require.Contains(t, pair.observer.callError(t, "get", map[string]any{
-			"id": inserted.ID,
-		}), "not found")
+		requireJobNotFound(t, pair.observer, inserted.ID)
 
 		handle = "sqlite-batch-error-" + pair.actor.name
 		tag := strings.ReplaceAll(handle, "-", "_")
 		pair.actor.call(t, "tx_begin", map[string]any{"handle": handle}, nil)
-		require.NotEmpty(t, pair.actor.callError(t, "tx_insert_many", map[string]any{
+		pair.actor.requireCallError(t, "tx_insert_many", map[string]any{
 			"handle": handle,
 			"jobs": []map[string]any{
 				{"message": "must not partially commit", "opts": map[string]any{"tags": []string{tag}}},
 				{"message": "invalid", "opts": map[string]any{"priority": 99}},
 			},
-		}))
+		}, "rejected")
 		pair.actor.call(t, "tx_commit", map[string]any{"handle": handle}, nil)
 		pair.observer.call(t, "list", map[string]any{"tags_all": []string{tag}}, &listed)
 		require.Empty(t, listed.Jobs)
